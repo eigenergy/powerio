@@ -1,0 +1,50 @@
+//! LACPF block matrix from Talkington (May 2024).
+//!
+//! At flat start `u* = 1 + j0`, the linearized power-flow Jacobian is
+//!
+//! ```text
+//!   F(x*) = [[ G  -B  -I  0 ],
+//!            [-B  -G   0 -I ]],
+//! ```
+//!
+//! whose `2n × 2n` block (without the load-injection identity columns) is
+//!
+//! ```text
+//!   J = [[ G  -B ],
+//!        [-B  -G ]],
+//! ```
+//!
+//! satisfying `p = G ε - B θ`, `q = -B ε - G θ`. This block is **indefinite
+//! (saddle-point)** in general; we emit it for completeness and as a
+//! benchmark "hard input" alongside the SDDM-shaped B', B″, and ±Im(Y_bus).
+
+use sprs::CsMat;
+
+use crate::case::MpcCase;
+use crate::Result;
+
+use super::ybus::build_ybus;
+use super::BuildOptions;
+
+pub fn build_lacpf(case: &MpcCase, opts: &BuildOptions) -> Result<CsMat<f64>> {
+    let parts = build_ybus(case, opts)?;
+    let n = case.n();
+    let two_n = 2 * n;
+
+    // Walk both G and B once and emit the 4 blocks: [+G, -B; -B, -G].
+    let g_csr = parts.g.to_csr();
+    let b_csr = parts.b.to_csr();
+
+    let mut tri = sprs::TriMat::with_capacity((two_n, two_n), 2 * (g_csr.nnz() + b_csr.nnz()));
+
+    for (&v, (i, j)) in g_csr.iter() {
+        tri.add_triplet(i, j, v); // top-left:  +G
+        tri.add_triplet(n + i, n + j, -v); // bottom-right: -G
+    }
+    for (&v, (i, j)) in b_csr.iter() {
+        tri.add_triplet(i, n + j, -v); // top-right:    -B
+        tri.add_triplet(n + i, j, -v); // bottom-left:  -B
+    }
+
+    Ok(tri.to_csr())
+}

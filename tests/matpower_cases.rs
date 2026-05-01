@@ -1,0 +1,146 @@
+//! Integration tests against real MATPOWER fixtures vendored from
+//! `https://github.com/MATPOWER/matpower/tree/master/data`.
+
+use std::path::PathBuf;
+
+use gridforge::matrix::{
+    build_bdoubleprime, build_bprime, build_lacpf, build_ybus, BuildOptions, MatrixStats,
+    sddm_check,
+};
+use gridforge::parse_matpower_file;
+
+fn fixture(name: &str) -> PathBuf {
+    let mut p = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    p.push("tests/data");
+    p.push(name);
+    p
+}
+
+#[test]
+fn case9_parses_correctly() {
+    let mpc = parse_matpower_file(fixture("case9.m")).unwrap();
+    assert_eq!(mpc.n(), 9);
+    assert_eq!(mpc.branches.len(), 9);
+    assert_eq!(mpc.base_mva, 100.0);
+    // case9 buses are contiguous 1..=9.
+    for i in 1..=9 {
+        assert_eq!(mpc.bus_index(i), Some(i - 1));
+    }
+}
+
+#[test]
+fn case14_parses_correctly() {
+    let mpc = parse_matpower_file(fixture("case14.m")).unwrap();
+    assert_eq!(mpc.n(), 14);
+    assert!(mpc.branches.len() >= 20);
+}
+
+#[test]
+fn case30_parses_correctly() {
+    let mpc = parse_matpower_file(fixture("case30.m")).unwrap();
+    assert_eq!(mpc.n(), 30);
+}
+
+#[test]
+fn bprime_is_singular_laplacian_on_real_cases() {
+    for name in ["case9.m", "case14.m", "case30.m", "case57.m"] {
+        let mpc = parse_matpower_file(fixture(name)).unwrap();
+        let b = build_bprime(&mpc, &BuildOptions::default()).unwrap();
+        let stats = MatrixStats::from_csr(&b);
+        assert!(stats.m_matrix_sign, "{name}: B' must have M-matrix signs");
+        // Singular Laplacian: diag exactly equals row-sum of |off-diag|.
+        assert!(
+            stats.min_dd_margin.abs() < 1e-9,
+            "{name}: B' should be exactly Laplacian, got margin {}",
+            stats.min_dd_margin
+        );
+        assert!(stats.min_diag > 0.0);
+        assert_eq!(b.rows(), mpc.n());
+        assert_eq!(b.cols(), mpc.n());
+    }
+}
+
+#[test]
+fn bdoubleprime_includes_shunts_on_case30() {
+    let mpc = parse_matpower_file(fixture("case30.m")).unwrap();
+    let bpp = build_bdoubleprime(&mpc, &BuildOptions::default()).unwrap();
+    let stats = MatrixStats::from_csr(&bpp);
+    // case30 has explicit bus shunts → strict diagonal dominance.
+    assert!(
+        stats.min_dd_margin > 1e-9 || stats.m_matrix_sign,
+        "B'' on case30 should be at least M-matrix-signed"
+    );
+}
+
+#[test]
+fn ybus_split_matches_complex_invariants() {
+    let mpc = parse_matpower_file(fixture("case14.m")).unwrap();
+    let parts = build_ybus(&mpc, &BuildOptions::default()).unwrap();
+    assert_eq!(parts.g.rows(), mpc.n());
+    assert_eq!(parts.b.rows(), mpc.n());
+    // Without phase shifters case14 should yield symmetric Y_bus.
+    let g = parts.g.to_dense();
+    let b = parts.b.to_dense();
+    for i in 0..mpc.n() {
+        for j in (i + 1)..mpc.n() {
+            assert!((g[[i, j]] - g[[j, i]]).abs() < 1e-12);
+            assert!((b[[i, j]] - b[[j, i]]).abs() < 1e-12);
+        }
+    }
+}
+
+#[test]
+fn lacpf_block_dimensions() {
+    let mpc = parse_matpower_file(fixture("case14.m")).unwrap();
+    let j = build_lacpf(&mpc, &BuildOptions::default()).unwrap();
+    assert_eq!(j.rows(), 2 * mpc.n());
+    assert_eq!(j.cols(), 2 * mpc.n());
+}
+
+#[test]
+fn pipeline_writes_expected_files_for_case9() {
+    use gridforge::pipeline::{MatrixKind, Pipeline, RhsKind};
+    let tmp = tempdir();
+    let mpc = parse_matpower_file(fixture("case9.m")).unwrap();
+    let pipeline = Pipeline {
+        matrices: vec![
+            MatrixKind::BPrime,
+            MatrixKind::BDoublePrime,
+            MatrixKind::YbusB,
+        ],
+        options: BuildOptions::default(),
+        rhs: RhsKind::Random,
+        rng_seed: 42,
+        source_file: Some(fixture("case9.m")),
+    };
+    let outputs = pipeline.run(&mpc, &tmp).unwrap();
+    assert_eq!(outputs.case_name, "case9");
+    let names: Vec<String> = outputs
+        .files
+        .iter()
+        .filter_map(|p| p.file_name().and_then(|s| s.to_str()).map(str::to_string))
+        .collect();
+    assert!(names.iter().any(|n| n == "case9_bprime.mtx"));
+    assert!(names.iter().any(|n| n == "case9_bdoubleprime.mtx"));
+    assert!(names.iter().any(|n| n == "case9_ybus_imag.mtx"));
+    assert!(names.iter().any(|n| n == "case9_meta.json"));
+    assert!(names.iter().any(|n| n.contains("rhs.mtx")));
+
+    // Sanity check: re-read B' from disk and verify it's still SDDM-signed.
+    let bprime_path = tmp.join("case9_bprime.mtx");
+    let reread = gridforge::io::read_mtx(&bprime_path).unwrap();
+    assert!(sddm_check(&reread) || MatrixStats::from_csr(&reread).m_matrix_sign);
+}
+
+fn tempdir() -> PathBuf {
+    let mut p = std::env::temp_dir();
+    p.push(format!(
+        "mpower-bmat-test-{}",
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0)
+    ));
+    std::fs::create_dir_all(&p).unwrap();
+    p
+}

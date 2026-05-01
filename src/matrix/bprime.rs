@@ -1,0 +1,68 @@
+//! Fast Decoupled Power Flow (FDPF) B' matrix — shuntless.
+//!
+//! Per Stott & Alsac (1974) and the LACPF slides, B' is the susceptance
+//! Laplacian with all shunts removed and tap ratios / phase shifts ignored:
+//!
+//! - Off-diagonal `B'_ij = -x / (r² + x²)`  (BX scheme; default)
+//!         or `B'_ij = -1 / x`              (XB scheme)
+//! - Diagonal     `B'_ii = sum_j |B'_ij|`
+//!
+//! Result: positive diag, negative off-diag, diag = sum of |off-diag|.
+//! This is the positive-Laplacian convention used by the Scalable
+//! Approximate Cholesky solver.
+
+use sprs::CsMat;
+
+use crate::case::MpcCase;
+use crate::{Error, Result};
+
+use super::{BuildOptions, Scheme, triplet::CooBuilder};
+
+pub fn build_bprime(case: &MpcCase, opts: &BuildOptions) -> Result<CsMat<f64>> {
+    let n = case.n();
+    let mut coo = CooBuilder::with_capacity(n, 4 * case.branches.len() + n);
+
+    for (row_idx, br) in case.in_service_branches() {
+        let i = case.bus_index(br.from_id).ok_or(Error::UnknownBus {
+            bus_id: br.from_id,
+            row: row_idx,
+        })?;
+        let j = case.bus_index(br.to_id).ok_or(Error::UnknownBus {
+            bus_id: br.to_id,
+            row: row_idx,
+        })?;
+
+        let b_off = match opts.scheme {
+            Scheme::Bx => {
+                let denom = br.r * br.r + br.x * br.x;
+                if denom == 0.0 {
+                    if opts.skip_zero_impedance {
+                        continue;
+                    }
+                    return Err(Error::ZeroImpedance { row: row_idx });
+                }
+                -br.x / denom
+            }
+            Scheme::Xb => {
+                if br.x == 0.0 {
+                    if opts.skip_zero_impedance {
+                        continue;
+                    }
+                    return Err(Error::ZeroImpedance { row: row_idx });
+                }
+                -1.0 / br.x
+            }
+        };
+
+        if i == j {
+            // self-loop: contributes only as a shunt, has no place in B'
+            continue;
+        }
+
+        coo.add_sym(i, j, b_off);
+        coo.add(i, i, -b_off);
+        coo.add(j, j, -b_off);
+    }
+
+    Ok(coo.finish_csr())
+}

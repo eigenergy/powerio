@@ -1,0 +1,120 @@
+//! Sparse matrix builders for MATPOWER cases.
+//!
+//! Sign convention follows the LACPF slides (Talkington, May 2024):
+//! the Laplacian-shaped susceptance matrix has the form
+//! `B = Aᵀ diag(b) A` where `b_ij = -x_ij / (r²+x²)`. Resulting matrices
+//! satisfy: positive diagonal, negative off-diagonal, diag = sum of
+//! |off-diagonal|. This is exactly what the Scalable Approximate Cholesky
+//! solver expects.
+
+mod bdoubleprime;
+mod bprime;
+mod lacpf;
+pub mod triplet;
+mod ybus;
+
+#[cfg(test)]
+mod tests;
+
+pub use bdoubleprime::build_bdoubleprime;
+pub use bprime::build_bprime;
+pub use lacpf::build_lacpf;
+pub use ybus::{YbusParts, build_ybus};
+
+use sprs::CsMat;
+
+/// Which FDPF scheme to use for B'.
+///
+/// - `Bx`: B' uses `-x / (r² + x²)` (what most modern solvers do).
+/// - `Xb`: B' uses `-1 / x` (original Stott/Alsac 1974). Requires `x ≠ 0`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
+pub enum Scheme {
+    #[default]
+    Bx,
+    Xb,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct BuildOptions {
+    pub scheme: Scheme,
+    /// Apply tap ratios when building B″ and Y-bus. (B′ always ignores taps.)
+    pub include_taps: bool,
+    /// Apply phase shifts when building Y-bus. (B′/B″ always ignore shifts.)
+    pub include_shifts: bool,
+    /// Drop branches whose `r² + x² = 0` (true) or error out (false).
+    pub skip_zero_impedance: bool,
+}
+
+impl Default for BuildOptions {
+    fn default() -> Self {
+        Self {
+            scheme: Scheme::Bx,
+            include_taps: true,
+            include_shifts: true,
+            skip_zero_impedance: true,
+        }
+    }
+}
+
+/// Common stats over a sparse matrix used by the TUI and `meta.json`.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct MatrixStats {
+    pub n: usize,
+    pub nnz: usize,
+    pub min_diag: f64,
+    pub max_diag: f64,
+    /// Smallest `D_ii - sum_j |O_ij|` across all rows. Negative means
+    /// the matrix is not diagonally dominant.
+    pub min_dd_margin: f64,
+    /// Whether all off-diagonals are ≤ 0 (M-matrix sign pattern).
+    pub m_matrix_sign: bool,
+    pub frobenius_norm: f64,
+}
+
+impl MatrixStats {
+    pub fn from_csr(a: &CsMat<f64>) -> Self {
+        let n = a.rows();
+        let mut min_diag = f64::INFINITY;
+        let mut max_diag = f64::NEG_INFINITY;
+        let mut min_dd = f64::INFINITY;
+        let mut m_sign = true;
+        let mut fro_sq = 0.0_f64;
+
+        for row_idx in 0..n {
+            let row = a.outer_view(row_idx).expect("row exists");
+            let mut diag = 0.0_f64;
+            let mut off_abs = 0.0_f64;
+            for (col, &v) in row.iter() {
+                fro_sq += v * v;
+                if col == row_idx {
+                    diag = v;
+                } else {
+                    off_abs += v.abs();
+                    if v > 0.0 {
+                        m_sign = false;
+                    }
+                }
+            }
+            min_diag = min_diag.min(diag);
+            max_diag = max_diag.max(diag);
+            min_dd = min_dd.min(diag - off_abs);
+        }
+
+        Self {
+            n,
+            nnz: a.nnz(),
+            min_diag,
+            max_diag,
+            min_dd_margin: min_dd,
+            m_matrix_sign: m_sign,
+            frobenius_norm: fro_sq.sqrt(),
+        }
+    }
+}
+
+/// Whether a matrix is SDDM (symmetric diagonally dominant M-matrix).
+/// Useful as a quick sanity check before feeding it to the Cholesky solver.
+pub fn sddm_check(a: &CsMat<f64>) -> bool {
+    let stats = MatrixStats::from_csr(a);
+    stats.m_matrix_sign && stats.min_dd_margin >= -1e-12 && stats.min_diag > 0.0
+}
