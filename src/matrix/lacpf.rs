@@ -1,22 +1,21 @@
-//! LACPF block matrix from Talkington (May 2024).
+//! LACPF block matrix (Talkington, May 2024).
 //!
-//! At flat start `u* = 1 + j0`, the linearized power-flow Jacobian is
+//! At flat start `u* = 1 + j0`, the linearized power flow Jacobian is
 //!
 //! ```text
 //!   F(x*) = [[ G  -B  -I  0 ],
 //!            [-B  -G   0 -I ]],
 //! ```
 //!
-//! whose `2n × 2n` block (without the load-injection identity columns) is
+//! whose `2n × 2n` block (without the load injection identity columns) is
 //!
 //! ```text
 //!   J = [[ G  -B ],
-//!        [-B  -G ]],
+//!        [-B  -G ]].
 //! ```
 //!
-//! satisfying `p = G ε - B θ`, `q = -B ε - G θ`. This block is **indefinite
-//! (saddle-point)** in general; we emit it for completeness and as a
-//! benchmark "hard input" alongside the SDDM-shaped B', B″, and ±Im(Y_bus).
+//! Satisfies `p = G ε - B θ`, `q = -B ε - G θ`. Indefinite (saddle point);
+//! emitted as a hard input alongside the SDDM B', B'', and ±Im(Y_bus).
 
 use sprs::CsMat;
 

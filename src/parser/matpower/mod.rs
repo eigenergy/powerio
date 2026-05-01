@@ -1,15 +1,4 @@
-//! MATPOWER `.m` case-file parser.
-//!
-//! Supports the standard MATPOWER 7.x format as documented in the manual
-//! and demonstrated by every case in the matpower data directory:
-//!
-//! ```matlab
-//! function mpc = case9
-//! mpc.version = '2';
-//! mpc.baseMVA = 100;
-//! mpc.bus = [ ... ];
-//! mpc.branch = [ ... ];
-//! ```
+//! MATPOWER `.m` case file parser. Standard MATPOWER 7.x format.
 
 mod matlab;
 mod tokens;

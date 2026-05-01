@@ -1,12 +1,8 @@
-//! Format-agnostic parsing layer.
+//! Format dispatcher. One submodule per supported file format.
 //!
-//! Each supported file format gets its own submodule. The top-level
-//! `parse_file` will eventually sniff by extension and dispatch; for now
-//! callers should use the format-specific entry points.
-//!
-//! - [`matpower`] — MATPOWER 7.x `.m` files (transmission, balanced).
-//! - `opendss` — OpenDSS `.dss` feeders (distribution, unbalanced 3-phase). *(planned)*
-//! - `psse` — PSS/E `.raw` files (transmission planning). *(planned)*
+//! - [`matpower`] — MATPOWER 7.x `.m` (transmission, balanced).
+//! - `opendss` — OpenDSS `.dss` feeders. *(planned)*
+//! - `psse` — PSS/E `.raw`. *(planned)*
 //! - `pglib_json` — PowerModels.jl JSON. *(planned)*
 
 pub mod matpower;

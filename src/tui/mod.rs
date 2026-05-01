@@ -1,8 +1,7 @@
-//! ratatui-based interactive TUI.
+//! ratatui interactive TUI.
 //!
-//! Public entry point is [`run`]. The TUI lives behind the `tui`
-//! subcommand of the binary and is also the default when no subcommand
-//! is given.
+//! Public entry point: [`run`]. Reachable as the `tui` subcommand of the
+//! binary, and as the default when no subcommand is given.
 
 mod app;
 mod log_pane;

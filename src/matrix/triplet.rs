@@ -1,8 +1,7 @@
-//! `CooBuilder` — a small HashMap-backed coordinate-format accumulator that
-//! deduplicates `(i, j)` entries on insert (each `add` is O(1) amortized,
-//! independent of `nnz`). The previous Vec-based linear-search accumulator
-//! was O(nnz²) per case, which only worked because `case3.m` and `case9.m`
-//! are tiny.
+//! `CooBuilder` — a small HashMap backed coordinate format accumulator.
+//! Deduplicates `(i, j)` entries on insert (each `add` is O(1) amortized,
+//! independent of `nnz`). Replaces the previous Vec linear scan
+//! accumulator, which was O(nnz²) per case.
 
 use std::collections::HashMap;
 

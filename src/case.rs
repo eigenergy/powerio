@@ -26,7 +26,7 @@ impl BusType {
 }
 
 /// A single bus in MATPOWER form. Values stored in the natural MATPOWER
-/// units (MW, MVAr, p.u.). Conversion to per-unit happens at consumption.
+/// units (MW, MVAr, p.u.). Conversion to per unit happens at consumption.
 #[derive(Debug, Clone)]
 pub struct Bus {
     /// Original (1-based) MATPOWER bus id, possibly non-contiguous.
@@ -155,8 +155,8 @@ impl MpcCase {
     /// - **edge weights** are branch indices into `self.branches` (so the
     ///   caller can recover series impedance, charging, taps, etc.).
     ///
-    /// Out-of-service branches are skipped. Multi-edges (parallel branches
-    /// between the same pair of buses) are preserved as separate edges.
+    /// Out of service branches are skipped. Parallel branches between the
+    /// same pair of buses are preserved as separate edges.
     pub fn to_petgraph(&self) -> UnGraph<usize, usize> {
         let mut g = UnGraph::with_capacity(self.n(), self.branches.len());
         let nodes: Vec<_> = (0..self.n()).map(|i| g.add_node(i)).collect();
@@ -171,15 +171,15 @@ impl MpcCase {
     }
 
     /// Number of connected components in the in-service topology.
-    /// `1` for a healthy single-island case; `> 1` indicates electrical
-    /// islands that the user may not have intended.
+    /// `1` for a healthy single island case; `> 1` indicates electrical
+    /// islands the user may not have intended.
     pub fn n_connected_components(&self) -> usize {
         petgraph::algo::connected_components(&self.to_petgraph())
     }
 
     /// True iff the in-service topology is a forest (no cycles, possibly
     /// with multiple disconnected trees / isolated nodes). LinDist3Flow
-    /// and the closed-form Talkington inverse `[[R, X], [X, -R]]` require
+    /// and the closed form Talkington inverse `[[R, X], [X, -R]]` require
     /// radiality. Uses the forest invariant `|E| = |V| - n_components`.
     pub fn is_radial(&self) -> bool {
         let g = self.to_petgraph();
@@ -187,8 +187,8 @@ impl MpcCase {
         g.edge_count() == g.node_count().saturating_sub(n_components)
     }
 
-    /// One-shot diagnostic report covering the topological invariants the
-    /// TUI's Inspect screen and downstream solvers care about.
+    /// One shot diagnostic report covering the topological invariants the
+    /// TUI Inspect screen and downstream solvers care about.
     pub fn connectivity_report(&self) -> ConnectivityReport {
         let g = self.to_petgraph();
         let n_components = petgraph::algo::connected_components(&g);

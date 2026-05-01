@@ -1,11 +1,10 @@
 //! Sparse matrix builders for MATPOWER cases.
 //!
-//! Sign convention follows the LACPF slides (Talkington, May 2024):
-//! the Laplacian-shaped susceptance matrix has the form
-//! `B = Aᵀ diag(b) A` where `b_ij = -x_ij / (r²+x²)`. Resulting matrices
-//! satisfy: positive diagonal, negative off-diagonal, diag = sum of
-//! |off-diagonal|. This is exactly what the Scalable Approximate Cholesky
-//! solver expects.
+//! Sign convention follows the LACPF slides (Talkington, May 2024): the
+//! susceptance matrix has the form `B = Aᵀ diag(b) A` where
+//! `b_ij = -x_ij / (r²+x²)`. Resulting matrices satisfy: positive
+//! diagonal, negative off-diagonal, `diag = sum of |off-diagonal|`. This
+//! is what the Scalable Approximate Cholesky solver expects.
 
 mod bdoubleprime;
 mod bprime;

@@ -3,7 +3,7 @@
 //! Given a parsed `MpcCase`, builds the requested matrix family, writes
 //! `.mtx` files, and emits a `meta.json` sidecar describing what was
 //! produced. Used by both the `batch` CLI subcommand and the TUI's
-//! batch-export screen.
+//! batch export screen.
 
 use std::path::{Path, PathBuf};
 

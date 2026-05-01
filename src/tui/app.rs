@@ -1,7 +1,7 @@
-//! Top-level App state machine for the TUI.
+//! Top level App state machine for the TUI.
 //!
 //! State is intentionally a single struct with explicit screens (not an
-//! enum-based state machine) because nearly every screen needs access to
+//! enum based state machine) because nearly every screen needs access to
 //! the case list, the log buffer, and the output directory.
 
 use std::collections::{BTreeMap, HashSet};

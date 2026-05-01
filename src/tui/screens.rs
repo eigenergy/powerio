@@ -1,8 +1,8 @@
-//! Per-screen drawing.
+//! Per screen drawing.
 //!
 //! Each screen is a free function `draw_*(app, frame, area)`. Key handling
-//! lives in `mod.rs::handle_key` because input dispatch is small and
-//! benefits from being in one place.
+//! lives in `mod.rs::handle_key` since input dispatch is small enough to
+//! keep in one place.
 
 use ratatui::Frame;
 use ratatui::layout::{Alignment, Constraint, Direction, Layout, Rect};

@@ -1,6 +1,6 @@
-//! `mpower-bmat`: parse MATPOWER `.m` cases and emit Laplacian/SDDM-shaped
-//! matrices (FDPF B', B'', Y-bus G/B, LACPF block) for the Scalable
-//! Approximate Cholesky solver.
+//! `gridforge`: parses power network case files and emits sparse
+//! matrices (B', B'', Y_bus G/B, LACPF) and graph views for solver and
+//! ML pipelines.
 
 pub mod case;
 pub mod error;

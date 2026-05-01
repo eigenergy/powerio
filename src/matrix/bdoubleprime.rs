@@ -1,4 +1,4 @@
-//! FDPF `B''` matrix — reactive-power Jacobian.
+//! FDPF `B''` matrix. Reactive power Jacobian.
 //!
 //! Per MATPOWER `makeB.m`:
 //! - **XB scheme**: `B'' = -Im(Y_bus)` with phase shifts zeroed.

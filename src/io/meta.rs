@@ -1,6 +1,6 @@
-//! Per-case metadata: which matrices were emitted, their stats, source
-//! file digest, build options. Used by the TUI Inspect screen and as a
-//! sidecar for downstream tooling.
+//! Per case metadata: matrices emitted, their stats, source file digest,
+//! build options. Used by the TUI Inspect screen and as a sidecar for
+//! downstream tooling.
 
 use std::path::Path;
 

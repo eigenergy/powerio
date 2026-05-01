@@ -104,8 +104,7 @@ impl Widget for Sparsity<'_> {
     }
 }
 
-/// Compact two-line legend strip useful at the bottom of the sparsity
-/// preview pane.
+/// Two line legend strip for the bottom of the sparsity preview pane.
 pub fn legend_lines() -> Vec<Line<'static>> {
     vec![
         Line::from(vec![

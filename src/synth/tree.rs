@@ -1,5 +1,4 @@
-//! Random spanning-tree topology — the simplest connected case. Always
-//! produces a singular Laplacian B' (rank n-1).
+//! Random spanning tree topology. Produces a singular Laplacian B' (rank n-1).
 
 use rand::Rng;
 use rand::SeedableRng;

@@ -3,11 +3,11 @@ name = "gridforge"
 version = "0.1.0"
 edition = "2021"
 rust-version = "1.86"
-description = "Lightweight, format-agnostic parser and linear-algebra/graph extractor for power network data (MATPOWER, OpenDSS, PSS/E). Emits FDPF B', B'', Y-bus, LACPF, LinDist3Flow as sparse matrices and petgraph views."
+description = "Parses power network case files and emits sparse matrices (B', B'', Y_bus, LACPF) and graph views for solver and ML pipelines."
 license = "MIT OR Apache-2.0"
 repository = "https://github.com/samtalki/gridforge"
 readme = "README.md"
-keywords = ["power-systems", "power-flow", "matpower", "graph", "sparse"]
+keywords = ["power", "matpower", "graph", "sparse", "fdpf"]
 categories = ["science", "parsing", "command-line-utilities"]
 
 [lib]

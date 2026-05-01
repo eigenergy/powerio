@@ -1,9 +1,9 @@
 //! Extract `mpc.<field> = ...;` values (scalar, string, matrix) from a
-//! comment-stripped MATLAB-ish source. We do not parse arbitrary MATLAB —
-//! only the small subset MATPOWER case files actually use.
+//! comment stripped source. Parses only the small MATLAB subset MATPOWER
+//! case files use.
 //!
-//! Matrix values are returned row-by-row as `Vec<Vec<f64>>` so that the
-//! domain layer can map columns to `Bus`/`Branch` without further parsing.
+//! Matrix values come back row by row as `Vec<Vec<f64>>` so the domain
+//! layer can map columns to `Bus` / `Branch` without further parsing.
 
 use std::sync::OnceLock;
 

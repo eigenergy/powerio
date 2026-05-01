@@ -1,7 +1,6 @@
-//! Lexical preprocessing: strip MATLAB `%` line comments while respecting
-//! single- and double-quoted string literals. The output preserves line
-//! numbering (every line ends with `\n`), which keeps subsequent regex-based
-//! field extraction simple.
+//! Strips MATLAB `%` line comments. Respects single and double quoted
+//! string literals. Preserves line numbering so subsequent regex field
+//! extraction stays simple.
 
 pub(crate) fn strip_comments(input: &str) -> String {
     let mut out = String::with_capacity(input.len());

@@ -1,6 +1,6 @@
-//! `LogBuf`: a thread-safe ring buffer wired to a `tracing` `MakeWriter`.
-//! All log records produced anywhere in the program land here so the TUI's
-//! log pane can render them.
+//! `LogBuf`: thread safe ring buffer wired to a `tracing` `MakeWriter`.
+//! All log records anywhere in the program land here so the TUI log pane
+//! can render them.
 
 use std::collections::VecDeque;
 use std::io;
@@ -48,7 +48,7 @@ impl LogBuf {
 }
 
 /// `tracing-subscriber` writes records to this. We split on `\n` to keep
-/// the ring buffer line-oriented.
+/// the ring buffer line oriented.
 pub struct LogWriter {
     buf: LogBuf,
     partial: Vec<u8>,

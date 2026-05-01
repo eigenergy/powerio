@@ -25,7 +25,7 @@ enum Command {
         #[arg(short, long)]
         out_dir: Option<PathBuf>,
     },
-    /// Batch-export matrix datasets for every `.m` case in a directory.
+    /// Batch export matrix datasets for every `.m` case in a directory.
     Batch {
         /// Input directory (or single `.m` file).
         #[arg(short, long)]
@@ -33,7 +33,7 @@ enum Command {
         /// Output directory.
         #[arg(short, long)]
         output: PathBuf,
-        /// Comma-separated matrix kinds to emit.
+        /// Comma separated matrix kinds to emit.
         #[arg(short, long, value_delimiter = ',', default_values = ["bprime"])]
         matrices: Vec<MatrixKindArg>,
         #[arg(long, value_enum, default_value = "bx")]

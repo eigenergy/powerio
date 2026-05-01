@@ -1,6 +1,5 @@
-//! Hand-rolled NumPy `.npy` writer (v2.0 header). Adapted from the
-//! original `output.rs` and tested for shape compatibility with
-//! `numpy.load`.
+//! NumPy `.npy` writer (v2.0 header). Tested for shape compatibility
+//! with `numpy.load`.
 
 use std::io::Write;
 use std::path::Path;

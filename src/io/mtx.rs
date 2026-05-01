@@ -2,10 +2,10 @@
 //!
 //! `sprs::io::write_matrix_market_sym` writes the *upper* triangle, but the
 //! Matrix Market spec calls for the *lower* triangle (i ≥ j). To stay
-//! interoperable with strict readers (notably `fast_matrix_market` used by
-//! the Scalable Approximate Cholesky solver), we hand-roll the symmetric
-//! writer and only delegate to `sprs` for general (non-symmetric) output
-//! and for reading.
+//! compatible with strict readers (notably `fast_matrix_market` used by
+//! the Scalable Approximate Cholesky solver), we hand roll the symmetric
+//! writer. We delegate to `sprs` for general (non symmetric) output and
+//! for reading.
 
 use std::io::{BufWriter, Write};
 use std::path::Path;

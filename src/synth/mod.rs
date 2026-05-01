@@ -1,4 +1,4 @@
-//! Synthetic MATPOWER-style cases for stress-testing the Cholesky solver
+//! Synthetic MATPOWER style cases. Stress tests the Cholesky solver
 //! beyond the matpower test set.
 
 mod lattice;
