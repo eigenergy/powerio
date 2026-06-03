@@ -2,13 +2,14 @@ use std::path::PathBuf;
 
 use anyhow::Context;
 use clap::{Parser, Subcommand, ValueEnum};
-use gridforge::matrix::{BuildOptions, Scheme, sddm_check};
-use gridforge::pipeline::{MatrixKind, Pipeline, RhsKind};
-use gridforge::synth::{SynthSpec, Topology};
-use gridforge::tui;
+use netmat::matrix::{BuildOptions, DcConvention, Scheme, Units, sddm_check};
+use netmat::opf_pipeline::{DcOpfOptions, write_dcopf_bundle};
+use netmat::pipeline::{MatrixKind, Pipeline, RhsKind};
+use netmat::synth::{SynthSpec, Topology};
+use netmat::tui;
 
 #[derive(Parser, Debug)]
-#[command(name = "mpower-bmat", version, about)]
+#[command(name = "netmat", version, about)]
 struct Cli {
     #[command(subcommand)]
     command: Option<Command>,
@@ -69,6 +70,32 @@ enum Command {
         #[arg(long, value_enum, default_value = "bx")]
         scheme: SchemeArg,
     },
+    /// Emit the static DC-OPF matrix/vector bundle for one case.
+    #[command(name = "dcopf", visible_alias = "dc-opf")]
+    DcOpf {
+        /// MATPOWER `.m` file.
+        input: PathBuf,
+        /// Output directory; the bundle lands in `<output>/<case>_dcopf/`.
+        #[arg(short, long)]
+        output: PathBuf,
+        /// DC susceptance convention.
+        #[arg(long, value_enum, default_value = "paper-pure")]
+        convention: DcConvArg,
+        /// Unit system for power/cost quantities.
+        #[arg(long, value_enum, default_value = "per-unit")]
+        units: UnitsArg,
+    },
+    /// Emit DC sensitivity matrices (PTDF, LODF) for one case.
+    Sensitivities {
+        /// MATPOWER `.m` file.
+        input: PathBuf,
+        /// Output directory; writes `<case>_ptdf.mtx` and `<case>_lodf.mtx`.
+        #[arg(short, long)]
+        output: PathBuf,
+        /// DC susceptance convention.
+        #[arg(long, value_enum, default_value = "paper-pure")]
+        convention: DcConvArg,
+    },
 }
 
 #[derive(Clone, Copy, Debug, ValueEnum)]
@@ -83,6 +110,8 @@ enum MatrixKindArg {
     YbusB,
     #[value(name = "lacpf")]
     Lacpf,
+    #[value(name = "adjacency", alias = "adj")]
+    Adjacency,
 }
 
 impl From<MatrixKindArg> for MatrixKind {
@@ -93,6 +122,7 @@ impl From<MatrixKindArg> for MatrixKind {
             MatrixKindArg::YbusG => Self::YbusG,
             MatrixKindArg::YbusB => Self::YbusB,
             MatrixKindArg::Lacpf => Self::Lacpf,
+            MatrixKindArg::Adjacency => Self::Adjacency,
         }
     }
 }
@@ -108,6 +138,36 @@ impl From<SchemeArg> for Scheme {
         match value {
             SchemeArg::Bx => Self::Bx,
             SchemeArg::Xb => Self::Xb,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, ValueEnum)]
+enum DcConvArg {
+    PaperPure,
+    Matpower,
+}
+
+impl From<DcConvArg> for DcConvention {
+    fn from(value: DcConvArg) -> Self {
+        match value {
+            DcConvArg::PaperPure => Self::PaperPure,
+            DcConvArg::Matpower => Self::Matpower,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, ValueEnum)]
+enum UnitsArg {
+    PerUnit,
+    Native,
+}
+
+impl From<UnitsArg> for Units {
+    fn from(value: UnitsArg) -> Self {
+        match value {
+            UnitsArg::PerUnit => Self::PerUnit,
+            UnitsArg::Native => Self::Native,
         }
     }
 }
@@ -176,6 +236,17 @@ fn main() -> anyhow::Result<()> {
             kind,
             scheme,
         } => run_verify(input, kind.into(), scheme.into()),
+        Command::DcOpf {
+            input,
+            output,
+            convention,
+            units,
+        } => run_dcopf(input, output, convention.into(), units.into()),
+        Command::Sensitivities {
+            input,
+            output,
+            convention,
+        } => run_sensitivities(input, output, convention.into()),
     }
 }
 
@@ -224,7 +295,7 @@ fn run_batch(
     };
 
     for case_path in &cases {
-        let mpc = gridforge::parse_matpower_file(case_path)
+        let mpc = netmat::parse_matpower_file(case_path)
             .with_context(|| format!("parse {}", case_path.display()))?;
         let mut p = pipeline.clone();
         p.source_file = Some(case_path.clone());
@@ -257,7 +328,7 @@ fn run_gen(
         mean_x,
         seed,
     };
-    let case = gridforge::synth::generate(&spec);
+    let case = netmat::synth::generate(&spec);
     let pipeline = Pipeline {
         matrices: matrices.into_iter().map(MatrixKind::from).collect(),
         ..Default::default()
@@ -272,26 +343,72 @@ fn run_gen(
     Ok(())
 }
 
+fn run_sensitivities(
+    input: PathBuf,
+    output: PathBuf,
+    convention: DcConvention,
+) -> anyhow::Result<()> {
+    let mpc = netmat::parse_matpower_file(&input)
+        .with_context(|| format!("parse {}", input.display()))?;
+    std::fs::create_dir_all(&output)?;
+    let ptdf = netmat::build_ptdf(&mpc, convention)
+        .with_context(|| format!("PTDF for {}", input.display()))?;
+    let lodf = netmat::build_lodf(&mpc, convention)
+        .with_context(|| format!("LODF for {}", input.display()))?;
+    let ptdf_path = output.join(format!("{}_ptdf.mtx", mpc.name));
+    let lodf_path = output.join(format!("{}_lodf.mtx", mpc.name));
+    netmat::io::mtx::write_mtx(&ptdf, &ptdf_path)?;
+    netmat::io::mtx::write_mtx(&lodf, &lodf_path)?;
+    tracing::info!(
+        case = %mpc.name,
+        ptdf = %ptdf_path.display(),
+        lodf = %lodf_path.display(),
+        "wrote DC sensitivities"
+    );
+    Ok(())
+}
+
+fn run_dcopf(
+    input: PathBuf,
+    output: PathBuf,
+    convention: DcConvention,
+    units: Units,
+) -> anyhow::Result<()> {
+    let mpc = netmat::parse_matpower_file(&input)
+        .with_context(|| format!("parse {}", input.display()))?;
+    let opts = DcOpfOptions { convention, units };
+    let outputs = write_dcopf_bundle(&mpc, &output, &opts)
+        .with_context(|| format!("export DC-OPF bundle for {}", input.display()))?;
+    tracing::info!(
+        case = %mpc.name,
+        dir = %outputs.dir.display(),
+        files = outputs.files.len(),
+        "wrote DC-OPF bundle"
+    );
+    Ok(())
+}
+
 fn run_verify(input: PathBuf, kind: MatrixKind, scheme: Scheme) -> anyhow::Result<()> {
-    let mpc = gridforge::parse_matpower_file(&input)?;
+    let mpc = netmat::parse_matpower_file(&input)?;
     let opts = BuildOptions {
         scheme,
         ..Default::default()
     };
     let matrix = match kind {
-        MatrixKind::BPrime => gridforge::build_bprime(&mpc, &opts)?,
-        MatrixKind::BDoublePrime => gridforge::build_bdoubleprime(&mpc, &opts)?,
-        MatrixKind::YbusG => gridforge::build_ybus(&mpc, &opts)?.g,
+        MatrixKind::BPrime => netmat::build_bprime(&mpc, &opts)?,
+        MatrixKind::BDoublePrime => netmat::build_bdoubleprime(&mpc, &opts)?,
+        MatrixKind::YbusG => netmat::build_ybus(&mpc, &opts)?.g,
         MatrixKind::YbusB => {
-            let mut b = gridforge::build_ybus(&mpc, &opts)?.b;
+            let mut b = netmat::build_ybus(&mpc, &opts)?.b;
             for v in b.data_mut() {
                 *v = -*v;
             }
             b
         }
-        MatrixKind::Lacpf => gridforge::build_lacpf(&mpc, &opts)?,
+        MatrixKind::Lacpf => netmat::build_lacpf(&mpc, &opts)?,
+        MatrixKind::Adjacency => netmat::build_adjacency(&mpc)?,
     };
-    let stats = gridforge::matrix::MatrixStats::from_csr(&matrix);
+    let stats = netmat::matrix::MatrixStats::from_csr(&matrix);
     let sddm = sddm_check(&matrix);
     println!(
         "{} ({}): n={} nnz={} min_diag={:.3e} max_diag={:.3e} dd_margin={:.3e} M-sign={} ‖A‖_F={:.3e} SDDM={}",

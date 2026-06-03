@@ -34,6 +34,25 @@ pub enum Error {
     #[error("output dimension mismatch: matrix is {n}x{n} but RHS has length {b_len}")]
     DimensionMismatch { n: usize, b_len: usize },
 
+    #[error("case has no generators; DC-OPF requires an `mpc.gen` block")]
+    NoGenerators,
+
+    #[error("generator {gen} has no cost data or an unsupported cost model (need polynomial model 2)")]
+    MissingGenCost { gen: usize },
+
+    #[error("expected exactly one reference (slack) bus, found {found}")]
+    ReferenceBusCount { found: usize },
+
+    #[error("dimension mismatch: `{what}` expected length {expected}, got {got}")]
+    ShapeMismatch {
+        what: &'static str,
+        expected: usize,
+        got: usize,
+    },
+
+    #[error("DC sensitivity solve failed: the slack-grounded network is singular (likely disconnected)")]
+    SingularNetwork,
+
     #[error(transparent)]
     Io(#[from] std::io::Error),
 

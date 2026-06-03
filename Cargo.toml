@@ -1,21 +1,26 @@
 [package]
-name = "gridforge"
+name = "netmat"
 version = "0.1.0"
 edition = "2021"
 rust-version = "1.86"
-description = "Parses power network case files and emits sparse matrices (B', B'', Y_bus, LACPF) and graph views for solver and ML pipelines."
+description = "Turns power network case files into structured sparse matrices and graph views for any downstream solver: signed incidence, weighted Laplacian, B'/B'', Y_bus, PTDF, LODF, adjacency, and DC-OPF instance data."
 license = "MIT OR Apache-2.0"
-repository = "https://github.com/samtalki/gridforge"
+repository = "https://github.com/samtalki/netmat"
 readme = "README.md"
-keywords = ["power", "matpower", "graph", "sparse", "fdpf"]
+keywords = ["power-systems", "matpower", "sparse", "ptdf", "dc-opf"]
 categories = ["science", "parsing", "command-line-utilities"]
 
+[features]
+default = []
+# Experimental DC-OPF interior point operators (optional).
+kkt = []
+
 [lib]
-name = "gridforge"
+name = "netmat"
 path = "src/lib.rs"
 
 [[bin]]
-name = "gridforge"
+name = "netmat"
 path = "src/main.rs"
 
 [dependencies]

@@ -2,6 +2,9 @@
 //! Deduplicates `(i, j)` entries on insert (each `add` is O(1) amortized,
 //! independent of `nnz`). Replaces the previous Vec linear scan
 //! accumulator, which was O(nnz²) per case.
+//!
+//! Square by default (`new`), rectangular via `new_rect` for the incidence,
+//! flow map, and generator→bus matrices.
 
 use std::collections::HashMap;
 
@@ -9,28 +12,50 @@ use sprs::{CsMat, TriMat};
 
 #[derive(Debug, Clone)]
 pub struct CooBuilder {
-    n: usize,
+    rows: usize,
+    cols: usize,
     entries: HashMap<(usize, usize), f64>,
 }
 
 impl CooBuilder {
+    /// Square `n × n` accumulator.
     pub fn new(n: usize) -> Self {
+        Self::new_rect(n, n)
+    }
+
+    /// Square `n × n` accumulator with a pre-sized entry table.
+    pub fn with_capacity(n: usize, capacity: usize) -> Self {
+        Self::with_capacity_rect(n, n, capacity)
+    }
+
+    /// Rectangular `rows × cols` accumulator.
+    pub fn new_rect(rows: usize, cols: usize) -> Self {
         Self {
-            n,
+            rows,
+            cols,
             entries: HashMap::new(),
         }
     }
 
-    pub fn with_capacity(n: usize, capacity: usize) -> Self {
+    /// Rectangular `rows × cols` accumulator with a pre-sized entry table.
+    pub fn with_capacity_rect(rows: usize, cols: usize, capacity: usize) -> Self {
         Self {
-            n,
+            rows,
+            cols,
             entries: HashMap::with_capacity(capacity),
         }
     }
 
+    /// Side length for a square builder (row count in general).
     #[inline]
     pub fn n(&self) -> usize {
-        self.n
+        self.rows
+    }
+
+    /// `(rows, cols)`.
+    #[inline]
+    pub fn shape(&self) -> (usize, usize) {
+        (self.rows, self.cols)
     }
 
     /// Accumulate `v` into entry `(i, j)`. Skips the insert if `v == 0.0`.
@@ -39,11 +64,12 @@ impl CooBuilder {
         if v == 0.0 {
             return;
         }
-        debug_assert!(i < self.n && j < self.n);
+        debug_assert!(i < self.rows && j < self.cols);
         *self.entries.entry((i, j)).or_insert(0.0) += v;
     }
 
-    /// Symmetrically accumulate `v` into both `(i, j)` and `(j, i)`.
+    /// Symmetrically accumulate `v` into both `(i, j)` and `(j, i)`. Square
+    /// builders only.
     #[inline]
     pub fn add_sym(&mut self, i: usize, j: usize, v: f64) {
         if i == j {
@@ -56,8 +82,7 @@ impl CooBuilder {
 
     /// Materialize as a `CsMat<f64>` (CSR) with explicit zeros pruned.
     pub fn finish_csr(self) -> CsMat<f64> {
-        let n = self.n;
-        let mut tri = TriMat::with_capacity((n, n), self.entries.len());
+        let mut tri = TriMat::with_capacity((self.rows, self.cols), self.entries.len());
         for ((i, j), v) in self.entries {
             if v != 0.0 {
                 tri.add_triplet(i, j, v);

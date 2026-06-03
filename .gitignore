@@ -3,3 +3,6 @@
 /Cargo.lock.bak
 *.swp
 .DS_Store
+
+# Experimental local-only module (kkt feature)
+src/matrix/kkt.rs

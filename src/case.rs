@@ -99,6 +99,116 @@ impl Branch {
     }
 }
 
+/// A generator (`mpc.gen` row) with its cost curve (`mpc.gencost` row)
+/// folded in. MATPOWER guarantees one gencost row per gen row in the same
+/// order, so the cost rides along instead of living in a parallel vector.
+#[derive(Debug, Clone)]
+pub struct Generator {
+    /// Bus the generator sits on (1-based MATPOWER id).
+    pub bus_id: usize,
+    /// Real power dispatch set point (MW).
+    pub pg: f64,
+    /// Reactive power dispatch set point (MVAr).
+    pub qg: f64,
+    pub qmax: f64,
+    pub qmin: f64,
+    /// Voltage magnitude set point (p.u.).
+    pub vg: f64,
+    pub mbase: f64,
+    /// 1 = in service, 0 = out.
+    pub status: f64,
+    /// Real power upper bound (MW).
+    pub pmax: f64,
+    /// Real power lower bound (MW).
+    pub pmin: f64,
+    pub cost: Option<GenCost>,
+}
+
+impl Generator {
+    #[inline]
+    pub fn is_in_service(&self) -> bool {
+        self.status == 1.0
+    }
+
+    pub fn from_row(row: &[f64], row_idx: usize) -> crate::Result<Self> {
+        if row.len() < gen_col::REQUIRED {
+            return Err(crate::Error::ShortRow {
+                field: "gen",
+                row: row_idx,
+                expected: gen_col::REQUIRED,
+                got: row.len(),
+            });
+        }
+        Ok(Self {
+            bus_id: row[gen_col::GEN_BUS] as usize,
+            pg: row[gen_col::PG],
+            qg: row[gen_col::QG],
+            qmax: row[gen_col::QMAX],
+            qmin: row[gen_col::QMIN],
+            vg: row[gen_col::VG],
+            mbase: row[gen_col::MBASE],
+            status: row[gen_col::GEN_STATUS],
+            pmax: row[gen_col::PMAX],
+            pmin: row[gen_col::PMIN],
+            cost: None,
+        })
+    }
+}
+
+/// A generator cost curve (`mpc.gencost` row).
+#[derive(Debug, Clone)]
+pub struct GenCost {
+    /// 1 = piecewise linear, 2 = polynomial.
+    pub model: u8,
+    pub startup: f64,
+    pub shutdown: f64,
+    /// Number of cost coefficients (polynomial) or breakpoints (piecewise).
+    pub ncost: usize,
+    /// Raw coefficients, highest order first for the polynomial model:
+    /// `[c_{k-1}, …, c1, c0]`.
+    pub coeffs: Vec<f64>,
+}
+
+impl GenCost {
+    pub fn from_row(row: &[f64], row_idx: usize) -> crate::Result<Self> {
+        if row.len() < gencost_col::REQUIRED {
+            return Err(crate::Error::ShortRow {
+                field: "gencost",
+                row: row_idx,
+                expected: gencost_col::REQUIRED,
+                got: row.len(),
+            });
+        }
+        Ok(Self {
+            model: row[gencost_col::MODEL] as u8,
+            startup: row[gencost_col::STARTUP],
+            shutdown: row[gencost_col::SHUTDOWN],
+            ncost: row[gencost_col::NCOST] as usize,
+            coeffs: row[gencost_col::COEFF0..].to_vec(),
+        })
+    }
+
+    /// `(q, c)` for the quadratic cost `½ q p² + c p` from a polynomial
+    /// (model 2) row. MATPOWER stores `c2 p² + c1 p + c0`, so `q = 2·c2` and
+    /// `c = c1`. Linear rows (`ncost == 2`) give `q = 0`. Piecewise (model 1)
+    /// or cubic and higher return `None`.
+    pub fn quadratic(&self) -> Option<(f64, f64)> {
+        if self.model != 2 {
+            return None;
+        }
+        match self.ncost {
+            3 => {
+                let c2 = self.coeffs.first().copied()?;
+                let c1 = self.coeffs.get(1).copied()?;
+                Some((2.0 * c2, c1))
+            }
+            2 => self.coeffs.first().copied().map(|c1| (0.0, c1)),
+            1 => Some((0.0, 0.0)),
+            _ => None,
+        }
+    }
+}
+
 /// Parsed MATPOWER case with a stable mapping from MATPOWER bus ids to
 /// dense `[0, n)` indices.
 #[derive(Debug, Clone)]
@@ -107,6 +217,9 @@ pub struct MpcCase {
     pub base_mva: f64,
     pub buses: Vec<Bus>,
     pub branches: Vec<Branch>,
+    /// Generators (`mpc.gen` + `mpc.gencost`). Empty for a power-flow-only
+    /// case; the DC-OPF builders error if they need generators and find none.
+    pub gens: Vec<Generator>,
     /// MATPOWER bus id → dense index in [0, n).
     bus_id_to_idx: HashMap<usize, usize>,
 }
@@ -128,8 +241,39 @@ impl MpcCase {
             base_mva,
             buses,
             branches,
+            gens: Vec::new(),
             bus_id_to_idx,
         }
+    }
+
+    /// Attach generators (builder style) so `new` stays a 4-argument
+    /// constructor for the existing synth and test call sites.
+    #[must_use]
+    pub fn with_gens(mut self, gens: Vec<Generator>) -> Self {
+        self.gens = gens;
+        self
+    }
+
+    /// Dense index of the single reference (slack) bus. Errors unless exactly
+    /// one `BusType::Ref` exists.
+    pub fn reference_bus_index(&self) -> crate::Result<usize> {
+        let refs: Vec<usize> = self
+            .buses
+            .iter()
+            .enumerate()
+            .filter(|(_, b)| b.kind == BusType::Ref)
+            .map(|(i, _)| i)
+            .collect();
+        match refs.as_slice() {
+            [r] => Ok(*r),
+            other => Err(crate::Error::ReferenceBusCount { found: other.len() }),
+        }
+    }
+
+    /// Generators that are in service (`GEN_STATUS == 1`), with their index
+    /// into `self.gens`.
+    pub fn in_service_gens(&self) -> impl Iterator<Item = (usize, &Generator)> {
+        self.gens.iter().enumerate().filter(|(_, g)| g.is_in_service())
     }
 
     #[inline]
@@ -179,7 +323,7 @@ impl MpcCase {
 
     /// True iff the in-service topology is a forest (no cycles, possibly
     /// with multiple disconnected trees / isolated nodes). LinDist3Flow
-    /// and the closed form Talkington inverse `[[R, X], [X, -R]]` require
+    /// and the closed form radial inverse `[[R, X], [X, -R]]` require
     /// radiality. Uses the forest invariant `|E| = |V| - n_components`.
     pub fn is_radial(&self) -> bool {
         let g = self.to_petgraph();
@@ -338,6 +482,34 @@ pub mod branch_col {
     pub const ANGMIN: usize = 11;
     pub const ANGMAX: usize = 12;
     pub const REQUIRED: usize = 13;
+}
+
+/// Generator matrix column indices per the MATPOWER manual (0-based).
+pub mod gen_col {
+    pub const GEN_BUS: usize = 0;
+    pub const PG: usize = 1;
+    pub const QG: usize = 2;
+    pub const QMAX: usize = 3;
+    pub const QMIN: usize = 4;
+    pub const VG: usize = 5;
+    pub const MBASE: usize = 6;
+    pub const GEN_STATUS: usize = 7;
+    pub const PMAX: usize = 8;
+    pub const PMIN: usize = 9;
+    /// Need columns through PMIN.
+    pub const REQUIRED: usize = 10;
+}
+
+/// Generator cost matrix column indices per the MATPOWER manual (0-based).
+pub mod gencost_col {
+    pub const MODEL: usize = 0;
+    pub const STARTUP: usize = 1;
+    pub const SHUTDOWN: usize = 2;
+    pub const NCOST: usize = 3;
+    /// First cost coefficient; the rest follow contiguously.
+    pub const COEFF0: usize = 4;
+    /// Need at least the header columns before the coefficients.
+    pub const REQUIRED: usize = 4;
 }
 
 impl Bus {

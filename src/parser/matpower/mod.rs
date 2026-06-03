@@ -8,7 +8,7 @@ mod tests;
 
 use std::path::Path;
 
-use crate::case::{Branch, Bus, MpcCase};
+use crate::case::{Branch, Bus, GenCost, Generator, MpcCase};
 use crate::{Error, Result};
 
 /// Parse the MATPOWER case in `content` and return a domain `MpcCase`.
@@ -51,5 +51,32 @@ fn parse_matpower_named(content: &str, name: &str) -> Result<MpcCase> {
         .map(|(i, row)| Branch::from_row(row, i))
         .collect::<Result<_>>()?;
 
-    Ok(MpcCase::new(name, base_mva, buses, branches))
+    let gens = parse_gens(&stripped)?;
+
+    Ok(MpcCase::new(name, base_mva, buses, branches).with_gens(gens))
+}
+
+/// Parse `mpc.gen` and fold in the active-power block of `mpc.gencost`.
+/// Both are optional: a power-flow-only case has neither and gets no gens.
+fn parse_gens(stripped: &str) -> Result<Vec<Generator>> {
+    let gen_rows = match matlab::find_matrix(stripped, "gen")? {
+        Some(rows) => rows,
+        None => return Ok(Vec::new()),
+    };
+
+    let mut gens: Vec<Generator> = gen_rows
+        .iter()
+        .enumerate()
+        .map(|(i, row)| Generator::from_row(row, i))
+        .collect::<Result<_>>()?;
+
+    // MATPOWER lays the active-power costs first, one row per generator and in
+    // the same order; reactive-power costs (if any) follow and are ignored.
+    if let Some(cost_rows) = matlab::find_matrix(stripped, "gencost")? {
+        for (i, (gen, row)) in gens.iter_mut().zip(cost_rows.iter()).enumerate() {
+            gen.cost = Some(GenCost::from_row(row, i)?);
+        }
+    }
+
+    Ok(gens)
 }

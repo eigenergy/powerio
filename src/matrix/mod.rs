@@ -1,23 +1,36 @@
 //! Sparse matrix builders for MATPOWER cases.
 //!
-//! Sign convention follows the LACPF slides (Talkington, May 2024): the
-//! susceptance matrix has the form `B = Aᵀ diag(b) A` where
-//! `b_ij = -x_ij / (r²+x²)`. Resulting matrices satisfy: positive
-//! diagonal, negative off-diagonal, `diag = sum of |off-diagonal|`. This
-//! is what the Scalable Approximate Cholesky solver expects.
+//! Sign convention: the susceptance matrix has the form `B = Aᵀ diag(b) A`
+//! where `b_ij = -x_ij / (r²+x²)`. Resulting matrices satisfy positive
+//! diagonal, negative off-diagonal, `diag = sum of |off-diagonal|` — the
+//! positive (M-matrix) Laplacian form SDDM solvers expect.
 
+mod adjacency;
 mod bdoubleprime;
 mod bprime;
+pub mod incidence;
+#[cfg(feature = "kkt")]
+pub mod kkt;
+pub mod laplacian;
 mod lacpf;
+pub mod opf;
+pub mod sensitivity;
 pub mod triplet;
 mod ybus;
 
 #[cfg(test)]
 mod tests;
 
+pub use adjacency::build_adjacency;
 pub use bdoubleprime::build_bdoubleprime;
 pub use bprime::build_bprime;
+pub use incidence::{
+    DcConvention, IncidenceParts, build_flow_map, build_incidence, susceptance_diag,
+};
 pub use lacpf::build_lacpf;
+pub use laplacian::{GroundMap, build_weighted_laplacian, ground_at, unit_vector};
+pub use opf::{OpfInstance, Units, build_opf_instance};
+pub use sensitivity::{build_lodf, build_ptdf};
 pub use ybus::{YbusParts, build_ybus};
 
 use sprs::CsMat;
@@ -112,7 +125,7 @@ impl MatrixStats {
 }
 
 /// Whether a matrix is SDDM (symmetric diagonally dominant M-matrix).
-/// Useful as a quick sanity check before feeding it to the Cholesky solver.
+/// Useful as a quick sanity check before feeding it to an SDDM solver.
 pub fn sddm_check(a: &CsMat<f64>) -> bool {
     let stats = MatrixStats::from_csr(a);
     stats.m_matrix_sign && stats.min_dd_margin >= -1e-12 && stats.min_diag > 0.0
