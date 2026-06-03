@@ -85,6 +85,7 @@ impl MatrixKindOrd {
             MatrixKind::YbusG => 2,
             MatrixKind::YbusB => 3,
             MatrixKind::Lacpf => 4,
+            MatrixKind::Adjacency => 5,
         })
     }
 }
@@ -278,6 +279,7 @@ impl App {
                     b
                 }
                 MatrixKind::Lacpf => crate::build_lacpf(&case, &opts)?,
+                MatrixKind::Adjacency => crate::build_adjacency(&case)?,
             };
             let stats = MatrixStats::from_csr(&mat);
             let sddm = sddm_check(&mat);

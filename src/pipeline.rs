@@ -16,8 +16,8 @@ use crate::case::MpcCase;
 use crate::io::meta::{CaseMetadata, MatrixMetadata, write_meta_json};
 use crate::io::mtx::{write_mtx, write_vector_mtx};
 use crate::matrix::{
-    BuildOptions, MatrixStats, build_bdoubleprime, build_bprime, build_lacpf, build_ybus,
-    sddm_check,
+    BuildOptions, MatrixStats, build_adjacency, build_bdoubleprime, build_bprime, build_lacpf,
+    build_ybus, sddm_check,
 };
 use crate::Result;
 
@@ -33,6 +33,8 @@ pub enum MatrixKind {
     YbusB,
     /// LACPF block: `[[G, -B], [-B, -G]]`, 2n × 2n indefinite.
     Lacpf,
+    /// 0/1 bus adjacency matrix.
+    Adjacency,
 }
 
 impl MatrixKind {
@@ -42,6 +44,7 @@ impl MatrixKind {
         Self::YbusG,
         Self::YbusB,
         Self::Lacpf,
+        Self::Adjacency,
     ];
 
     pub fn slug(self) -> &'static str {
@@ -51,6 +54,7 @@ impl MatrixKind {
             Self::YbusG => "ybus_real",
             Self::YbusB => "ybus_imag",
             Self::Lacpf => "lacpf",
+            Self::Adjacency => "adjacency",
         }
     }
 
@@ -61,6 +65,7 @@ impl MatrixKind {
             Self::YbusG => "Re(Y_bus)",
             Self::YbusB => "-Im(Y_bus)",
             Self::Lacpf => "LACPF block (2n×2n)",
+            Self::Adjacency => "adjacency (0/1)",
         }
     }
 }
@@ -165,7 +170,7 @@ impl Pipeline {
             n_branches: case.branches.len(),
             build_options: self.options.clone(),
             matrices: matrices_meta,
-            gridforge_version: env!("CARGO_PKG_VERSION").to_string(),
+            netmat_version: env!("CARGO_PKG_VERSION").to_string(),
         };
         let meta_path = out_dir.join(format!("{}_meta.json", case.name));
         write_meta_json(&metadata, &meta_path)?;
@@ -188,11 +193,15 @@ impl Pipeline {
                 Ok(negate(&parts.b))
             }
             MatrixKind::Lacpf => build_lacpf(case, &self.options),
+            MatrixKind::Adjacency => build_adjacency(case),
         }
     }
 
     fn build_rhs(&self, case: &MpcCase, kind: MatrixKind) -> Result<Option<Vec<f64>>> {
-        if matches!(self.rhs, RhsKind::None) || matches!(kind, MatrixKind::Lacpf) {
+        // No meaningful RHS for the 2n LACPF block or the structural adjacency.
+        if matches!(self.rhs, RhsKind::None)
+            || matches!(kind, MatrixKind::Lacpf | MatrixKind::Adjacency)
+        {
             return Ok(None);
         }
         let n = case.n();
@@ -223,7 +232,7 @@ impl Pipeline {
                     .iter()
                     .map(|b| -b.qd / case.base_mva)
                     .collect(),
-                MatrixKind::Lacpf => unreachable!(),
+                MatrixKind::Lacpf | MatrixKind::Adjacency => unreachable!(),
             },
             RhsKind::None => unreachable!(),
         };
