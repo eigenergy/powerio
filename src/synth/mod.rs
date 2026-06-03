@@ -1,5 +1,5 @@
-//! Synthetic MATPOWER style cases. Stress tests the Cholesky solver
-//! beyond the matpower test set.
+//! Synthetic MATPOWER style cases. Stress tests the matrix builders beyond
+//! the vendored matpower test set.
 
 mod lattice;
 mod pegase_like;

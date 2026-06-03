@@ -1,15 +1,14 @@
 //! Fast Decoupled Power Flow (FDPF) B' matrix — shuntless.
 //!
-//! Per Stott & Alsac (1974) and the LACPF slides, B' is the susceptance
-//! Laplacian with all shunts removed and tap ratios / phase shifts ignored:
+//! Per Stott & Alsac (1974), B' is the susceptance Laplacian with all
+//! shunts removed and tap ratios / phase shifts ignored:
 //!
 //! - Off-diagonal `B'_ij = -x / (r² + x²)`  (BX scheme; default)
 //!         or `B'_ij = -1 / x`              (XB scheme)
 //! - Diagonal     `B'_ii = sum_j |B'_ij|`
 //!
-//! Result: positive diag, negative off-diag, diag = sum of |off-diag|.
-//! This is the positive-Laplacian convention used by the Scalable
-//! Approximate Cholesky solver.
+//! Result: positive diag, negative off-diag, diag = sum of |off-diag| — the
+//! positive (M-matrix) Laplacian convention SDDM solvers expect.
 
 use sprs::CsMat;
 

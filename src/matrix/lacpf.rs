@@ -1,4 +1,4 @@
-//! LACPF block matrix (Talkington, May 2024).
+//! Linear AC power flow (LACPF) block matrix.
 //!
 //! At flat start `u* = 1 + j0`, the linearized power flow Jacobian is
 //!

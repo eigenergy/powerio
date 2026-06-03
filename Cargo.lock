@@ -560,31 +560,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "gridforge"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "approx",
- "clap",
- "crossterm",
- "num-complex",
- "petgraph",
- "rand 0.9.4",
- "rand_chacha",
- "ratatui",
- "rayon",
- "regex",
- "serde",
- "serde_json",
- "sha2",
- "sprs",
- "thiserror 2.0.18",
- "tracing",
- "tracing-subscriber",
- "walkdir",
-]
-
-[[package]]
 name = "hashbrown"
 version = "0.15.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -862,6 +837,31 @@ dependencies = [
  "portable-atomic",
  "portable-atomic-util",
  "rawpointer",
+]
+
+[[package]]
+name = "netmat"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "approx",
+ "clap",
+ "crossterm",
+ "num-complex",
+ "petgraph",
+ "rand 0.9.4",
+ "rand_chacha",
+ "ratatui",
+ "rayon",
+ "regex",
+ "serde",
+ "serde_json",
+ "sha2",
+ "sprs",
+ "thiserror 2.0.18",
+ "tracing",
+ "tracing-subscriber",
+ "walkdir",
 ]
 
 [[package]]

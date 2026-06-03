@@ -3,11 +3,11 @@
 
 use std::path::PathBuf;
 
-use gridforge::matrix::{
+use netmat::matrix::{
     build_bdoubleprime, build_bprime, build_lacpf, build_ybus, BuildOptions, MatrixStats,
     sddm_check,
 };
-use gridforge::parse_matpower_file;
+use netmat::parse_matpower_file;
 
 fn fixture(name: &str) -> PathBuf {
     let mut p = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
@@ -99,7 +99,7 @@ fn lacpf_block_dimensions() {
 
 #[test]
 fn pipeline_writes_expected_files_for_case9() {
-    use gridforge::pipeline::{MatrixKind, Pipeline, RhsKind};
+    use netmat::pipeline::{MatrixKind, Pipeline, RhsKind};
     let tmp = tempdir();
     let mpc = parse_matpower_file(fixture("case9.m")).unwrap();
     let pipeline = Pipeline {
@@ -128,14 +128,14 @@ fn pipeline_writes_expected_files_for_case9() {
 
     // Sanity check: re-read B' from disk and verify it's still SDDM-signed.
     let bprime_path = tmp.join("case9_bprime.mtx");
-    let reread = gridforge::io::read_mtx(&bprime_path).unwrap();
+    let reread = netmat::io::read_mtx(&bprime_path).unwrap();
     assert!(sddm_check(&reread) || MatrixStats::from_csr(&reread).m_matrix_sign);
 }
 
 fn tempdir() -> PathBuf {
     let mut p = std::env::temp_dir();
     p.push(format!(
-        "mpower-bmat-test-{}",
+        "netmat-test-{}",
         std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .map(|d| d.as_nanos())

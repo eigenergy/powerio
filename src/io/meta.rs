@@ -19,7 +19,7 @@ pub struct CaseMetadata {
     pub n_branches: usize,
     pub build_options: BuildOptions,
     pub matrices: Vec<MatrixMetadata>,
-    pub gridforge_version: String,
+    pub netmat_version: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

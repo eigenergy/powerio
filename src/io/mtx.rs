@@ -2,10 +2,9 @@
 //!
 //! `sprs::io::write_matrix_market_sym` writes the *upper* triangle, but the
 //! Matrix Market spec calls for the *lower* triangle (i ≥ j). To stay
-//! compatible with strict readers (notably `fast_matrix_market` used by
-//! the Scalable Approximate Cholesky solver), we hand roll the symmetric
-//! writer. We delegate to `sprs` for general (non symmetric) output and
-//! for reading.
+//! compatible with strict readers (e.g. `fast_matrix_market`), we hand roll
+//! the symmetric writer. We delegate to `sprs` for general (non symmetric)
+//! output and for reading.
 
 use std::io::{BufWriter, Write};
 use std::path::Path;
@@ -27,7 +26,7 @@ fn write_symmetric_mtx(matrix: &CsMat<f64>, path: &Path) -> Result<()> {
     let f = std::fs::File::create(path)?;
     let mut w = BufWriter::new(f);
     writeln!(w, "%%MatrixMarket matrix coordinate real symmetric")?;
-    writeln!(w, "% written by mpower-bmat")?;
+    writeln!(w, "% written by netmat")?;
 
     // Two-pass: count entries first so the header can carry the exact nnz.
     let nnz = matrix
@@ -58,7 +57,7 @@ pub fn write_vector_mtx(values: &[f64], path: impl AsRef<Path>) -> Result<()> {
     let f = std::fs::File::create(path)?;
     let mut w = BufWriter::new(f);
     writeln!(w, "%%MatrixMarket matrix array real general")?;
-    writeln!(w, "% written by mpower-bmat")?;
+    writeln!(w, "% written by netmat")?;
     writeln!(w, "{} 1", values.len())?;
     for v in values {
         writeln!(w, "{v:.16e}")?;
