@@ -61,8 +61,9 @@ pub struct OpfInstance {
 }
 
 /// Build the OPF instance. Errors with [`Error::NoGenerators`] if the case has
-/// no in-service generators, or [`Error::MissingGenCost`] if a generator lacks
-/// a usable polynomial cost.
+/// no in-service generators, [`Error::MissingGenCost`] if a generator has no
+/// cost row, or [`Error::UnsupportedCostModel`] if its cost is present but not
+/// a polynomial of degree ≤ 2.
 pub fn build_opf_instance(
     case: &MpcCase,
     incidence: &IncidenceParts,
@@ -100,11 +101,15 @@ pub fn build_opf_instance(
         let bus = case
             .bus_index(gen.bus_id)
             .ok_or(Error::UnknownBus { bus_id: gen.bus_id, row: gidx })?;
-        let (q_raw, c_raw) = gen
-            .cost
-            .as_ref()
-            .and_then(crate::case::GenCost::quadratic)
-            .ok_or(Error::MissingGenCost { gen: gidx })?;
+        // Distinguish a genuinely absent cost from a present-but-unsupported
+        // one (piecewise model 1, or polynomial degree ≥ 3) so the error tells
+        // the truth about which case the file hit.
+        let cost = gen.cost.as_ref().ok_or(Error::MissingGenCost { gen: gidx })?;
+        let (q_raw, c_raw) = cost.quadratic().ok_or(Error::UnsupportedCostModel {
+            gen: gidx,
+            model: cost.model,
+            ncost: cost.ncost,
+        })?;
         q_gen.push(q_raw * q_scale);
         c_gen.push(c_raw * c_scale);
         pmax_gen.push(gen.pmax * p_scale);

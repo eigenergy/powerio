@@ -8,7 +8,7 @@ mod tests;
 
 use std::path::Path;
 
-use crate::case::{Branch, Bus, GenCost, Generator, MpcCase};
+use crate::case::{Branch, Bus, GenCost, Generator, MpcCase, Storage};
 use crate::{Error, Result};
 
 /// Parse the MATPOWER case in `content` and return a domain `MpcCase`.
@@ -52,8 +52,22 @@ fn parse_matpower_named(content: &str, name: &str) -> Result<MpcCase> {
         .collect::<Result<_>>()?;
 
     let gens = parse_gens(&stripped)?;
+    let storage = parse_storage(&stripped)?;
 
-    Ok(MpcCase::new(name, base_mva, buses, branches).with_gens(gens))
+    Ok(MpcCase::new(name, base_mva, buses, branches)
+        .with_gens(gens)
+        .with_storage(storage))
+}
+
+/// Parse the optional `mpc.storage` block. A case without storage gets none.
+fn parse_storage(stripped: &str) -> Result<Vec<Storage>> {
+    let Some(rows) = matlab::find_matrix(stripped, "storage")? else {
+        return Ok(Vec::new());
+    };
+    rows.iter()
+        .enumerate()
+        .map(|(i, row)| Storage::from_row(row, i))
+        .collect()
 }
 
 /// Parse `mpc.gen` and fold in the active-power block of `mpc.gencost`.
@@ -73,6 +87,16 @@ fn parse_gens(stripped: &str) -> Result<Vec<Generator>> {
     // MATPOWER lays the active-power costs first, one row per generator and in
     // the same order; reactive-power costs (if any) follow and are ignored.
     if let Some(cost_rows) = matlab::find_matrix(stripped, "gencost")? {
+        // Reject a count that is neither `n_gen` (active only) nor `2·n_gen`
+        // (active + reactive) so a truncated/garbled block is caught here
+        // instead of silently truncating via `zip` and surfacing later as a
+        // misleading per-generator `MissingGenCost`.
+        if cost_rows.len() != gens.len() && cost_rows.len() != 2 * gens.len() {
+            return Err(Error::GenCostCountMismatch {
+                gens: gens.len(),
+                gencost: cost_rows.len(),
+            });
+        }
         for (i, (gen, row)) in gens.iter_mut().zip(cost_rows.iter()).enumerate() {
             gen.cost = Some(GenCost::from_row(row, i)?);
         }

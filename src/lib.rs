@@ -14,7 +14,7 @@ pub mod pipeline;
 pub mod synth;
 pub mod tui;
 
-pub use case::{Branch, Bus, ConnectivityReport, GenCost, Generator, MpcCase};
+pub use case::{Branch, Bus, ConnectivityReport, GenCost, Generator, MpcCase, Storage};
 pub use error::{Error, Result};
 pub use matrix::{
     BuildOptions, DcConvention, GroundMap, IncidenceParts, MatrixStats, OpfInstance, Scheme,

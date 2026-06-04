@@ -52,6 +52,34 @@ pub fn read_mtx(path: impl AsRef<Path>) -> Result<CsMat<f64>> {
     Ok(tri.to_csr())
 }
 
+/// Read a dense vector written by [`write_vector_mtx`] (`array real general`):
+/// `%`-comment lines, a `<len> 1` dimensions line, then one value per line.
+pub fn read_vector_mtx(path: impl AsRef<Path>) -> Result<Vec<f64>> {
+    let text = std::fs::read_to_string(path)?;
+    let mut lines = text.lines().filter(|l| !l.starts_with('%'));
+    let header = lines.next().ok_or_else(|| Error::Mtx("empty vector file".into()))?;
+    let len: usize = header
+        .split_whitespace()
+        .next()
+        .and_then(|t| t.parse().ok())
+        .ok_or_else(|| Error::Mtx(format!("bad vector dimensions line: {header:?}")))?;
+    let values = lines
+        .take(len)
+        .map(|l| {
+            l.trim()
+                .parse::<f64>()
+                .map_err(|_| Error::Mtx(format!("bad vector entry: {l:?}")))
+        })
+        .collect::<Result<Vec<_>>>()?;
+    if values.len() != len {
+        return Err(Error::Mtx(format!(
+            "expected {len} entries, got {}",
+            values.len()
+        )));
+    }
+    Ok(values)
+}
+
 /// Write a dense vector as Matrix Market `array real general`.
 pub fn write_vector_mtx(values: &[f64], path: impl AsRef<Path>) -> Result<()> {
     let f = std::fs::File::create(path)?;

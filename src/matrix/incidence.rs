@@ -72,6 +72,11 @@ pub fn build_incidence(case: &MpcCase, conv: DcConvention) -> Result<IncidencePa
             DcConvention::PaperPure => 1.0 / br.x,
             DcConvention::Matpower => 1.0 / (br.x * br.effective_tap()),
         };
+        // A NaN reactance slips past the `x == 0.0` guard above, and a
+        // denormal `x` yields Inf; either poisons the whole Laplacian.
+        if !b_e.is_finite() {
+            return Err(Error::NonFiniteSusceptance { row: idx });
+        }
         let shift_rad = match conv {
             DcConvention::PaperPure => 0.0,
             DcConvention::Matpower => br.shift.to_radians(),

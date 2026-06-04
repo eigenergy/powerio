@@ -31,14 +31,23 @@ pub enum Error {
     #[error("branch row {row} has zero impedance (r=0, x=0); not representable in B'")]
     ZeroImpedance { row: usize },
 
+    #[error("branch row {row} has non-finite DC susceptance b = 1/x (x is NaN, Inf, or denormal)")]
+    NonFiniteSusceptance { row: usize },
+
     #[error("output dimension mismatch: matrix is {n}x{n} but RHS has length {b_len}")]
     DimensionMismatch { n: usize, b_len: usize },
 
     #[error("case has no generators; DC-OPF requires an `mpc.gen` block")]
     NoGenerators,
 
-    #[error("generator {gen} has no cost data or an unsupported cost model (need polynomial model 2)")]
+    #[error("generator {gen} has no cost data")]
     MissingGenCost { gen: usize },
+
+    #[error("generator {gen} has an unsupported cost model (model {model}, ncost {ncost}); need polynomial model 2 with degree ≤ 2")]
+    UnsupportedCostModel { gen: usize, model: u8, ncost: usize },
+
+    #[error("`gen` has {gens} rows but `gencost` has {gencost}; expected {gens} (active only) or {} (active + reactive)", gens * 2)]
+    GenCostCountMismatch { gens: usize, gencost: usize },
 
     #[error("expected exactly one reference (slack) bus, found {found}")]
     ReferenceBusCount { found: usize },
@@ -50,7 +59,10 @@ pub enum Error {
         got: usize,
     },
 
-    #[error("DC sensitivity solve failed: the slack-grounded network is singular (likely disconnected)")]
+    #[error("network has {components} connected components; DC sensitivities require a single island")]
+    DisconnectedNetwork { components: usize },
+
+    #[error("DC sensitivity solve failed: the slack-grounded Laplacian is singular for a connected network")]
     SingularNetwork,
 
     #[error(transparent)]
@@ -58,7 +70,4 @@ pub enum Error {
 
     #[error("matrix-market I/O: {0}")]
     Mtx(String),
-
-    #[error("regex compilation failed: {0}")]
-    Regex(#[from] regex::Error),
 }

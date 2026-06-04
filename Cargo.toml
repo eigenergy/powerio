@@ -25,7 +25,6 @@ path = "src/main.rs"
 
 [dependencies]
 clap = { version = "4", features = ["derive"] }
-regex = "1"
 thiserror = "2"
 anyhow = "1"
 sprs = { version = "0.11", default-features = false }
@@ -45,6 +44,11 @@ petgraph = "0.8"
 
 [dev-dependencies]
 approx = "0.5"
+criterion = { version = "0.5", default-features = false, features = ["cargo_bench_support"] }
+
+[[bench]]
+name = "parse"
+harness = false
 
 [profile.release]
 opt-level = 3

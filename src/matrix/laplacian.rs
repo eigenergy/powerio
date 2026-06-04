@@ -23,6 +23,10 @@ pub fn build_weighted_laplacian(a: &CsMat<f64>, w: &[f64]) -> CsMat<f64> {
 pub fn ground_at(matrix: &CsMat<f64>, r: usize) -> CsMat<f64> {
     let n = matrix.rows();
     debug_assert_eq!(n, matrix.cols(), "ground_at expects a square matrix");
+    // Hard assert (not debug-only): with `r >= n` no row/column is removed but
+    // the builder is sized `n-1`, silently producing a wrong-shaped matrix in
+    // release. `ground_at` is `pub`, so guard the contract unconditionally.
+    assert!(r < n, "ground_at: index {r} out of range for {n}x{n} matrix");
     let mut g = CooBuilder::new(n.saturating_sub(1));
     for (&v, (i, j)) in matrix.iter() {
         if i == r || j == r {

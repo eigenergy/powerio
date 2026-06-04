@@ -39,7 +39,8 @@ netmat sensitivities tests/data/case30.m -o out
 src/
 ├── lib.rs                   # public re-exports
 ├── error.rs                 # thiserror Error
-├── case.rs                  # MpcCase, Bus, Branch, ConnectivityReport
+├── case.rs                  # MpcCase, Bus, Branch, Generator, GenCost,
+│                            #   Storage, ConnectivityReport
 │                            #   + petgraph view: to_petgraph,
 │                            #     is_radial, n_connected_components,
 │                            #     connectivity_report

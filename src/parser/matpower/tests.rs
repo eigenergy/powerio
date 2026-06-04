@@ -89,6 +89,62 @@ mpc.branch = [
 }
 
 #[test]
+fn parses_storage_block() {
+    // Storage row values taken from pglib_opf_case5_pjm_storage (the
+    // PowerModels / pglib 17-column layout), plus a second out-of-service row.
+    let src = r#"
+mpc.baseMVA = 100;
+mpc.bus = [
+    1 3 0 0 0 0 1 1 0 345 1 1.1 0.9;
+    4 1 0 0 0 0 1 1 0 345 1 1.1 0.9;
+];
+mpc.branch = [
+    1 4 0.01 0.05 0.02 0 0 0 0 0 1 -360 360;
+];
+mpc.storage = [
+    4  0.0  0.0  1.00  600.0  300.0  216.0  0.9  0.85  1000  -1000  1000  0.1  0.01  0  0  1;
+    1  0.0  0.0  0.50  200.0  100.0  100.0  0.95 0.9   500   -500   500   0.2  0.02  0  0  0;
+];
+"#;
+    let mpc = parse_mpc(src).expect("parse storage");
+    assert_eq!(mpc.storage.len(), 2);
+    let s = &mpc.storage[0];
+    assert_eq!(s.bus_id, 4);
+    assert!((s.energy - 1.0).abs() < 1e-12);
+    assert!((s.energy_rating - 600.0).abs() < 1e-12);
+    assert!((s.charge_efficiency - 0.9).abs() < 1e-12);
+    assert!((s.discharge_efficiency - 0.85).abs() < 1e-12);
+    assert!((s.qmin - (-1000.0)).abs() < 1e-12);
+    assert!((s.x - 0.01).abs() < 1e-12);
+    assert!(s.is_in_service());
+    assert!(!mpc.storage[1].is_in_service());
+}
+
+#[test]
+fn absent_storage_is_empty() {
+    let mpc = parse_mpc(CASE_TINY).expect("parse tiny");
+    assert!(mpc.storage.is_empty());
+}
+
+#[test]
+fn rejects_short_storage_row() {
+    let src = r#"
+mpc.baseMVA = 100;
+mpc.bus = [
+    1 3 0 0 0 0 1 1 0 345 1 1.1 0.9;
+];
+mpc.branch = [
+    1 1 0.01 0.05 0.02 0 0 0 0 0 1 -360 360;
+];
+mpc.storage = [
+    1 0.0 0.0 1.0;
+];
+"#;
+    let err = parse_mpc(src).expect_err("short storage row should fail");
+    assert!(err.to_string().contains("storage"), "got: {err}");
+}
+
+#[test]
 fn handles_nan_inf() {
     let src = r#"
 mpc.baseMVA = 100;

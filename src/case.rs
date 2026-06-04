@@ -196,16 +196,88 @@ impl GenCost {
         if self.model != 2 {
             return None;
         }
+        // Reject a row whose coefficient slice is shorter than `ncost` claims,
+        // rather than reading the wrong powers by position. The guard makes the
+        // indexing below infallible.
+        if self.coeffs.len() < self.ncost {
+            return None;
+        }
         match self.ncost {
-            3 => {
-                let c2 = self.coeffs.first().copied()?;
-                let c1 = self.coeffs.get(1).copied()?;
-                Some((2.0 * c2, c1))
-            }
-            2 => self.coeffs.first().copied().map(|c1| (0.0, c1)),
+            3 => Some((2.0 * self.coeffs[0], self.coeffs[1])),
+            2 => Some((0.0, self.coeffs[0])),
             1 => Some((0.0, 0.0)),
             _ => None,
         }
+    }
+}
+
+/// A storage unit (`mpc.storage` row), PowerModels / pglib 17-column layout.
+/// Power values are in MATPOWER units (MW, MVAr), converted to per unit at
+/// consumption like every other quantity here.
+#[derive(Debug, Clone)]
+pub struct Storage {
+    /// Bus the unit sits on (1-based MATPOWER id).
+    pub bus_id: usize,
+    /// Real power output set point (MW).
+    pub ps: f64,
+    /// Reactive power output set point (MVAr).
+    pub qs: f64,
+    /// Stored energy (MWh).
+    pub energy: f64,
+    pub energy_rating: f64,
+    pub charge_rating: f64,
+    pub discharge_rating: f64,
+    pub charge_efficiency: f64,
+    pub discharge_efficiency: f64,
+    pub thermal_rating: f64,
+    pub qmin: f64,
+    pub qmax: f64,
+    /// Series resistance (p.u.).
+    pub r: f64,
+    /// Series reactance (p.u.).
+    pub x: f64,
+    /// Standby real power loss (MW).
+    pub p_loss: f64,
+    /// Standby reactive power loss (MVAr).
+    pub q_loss: f64,
+    /// 1 = in service, 0 = out.
+    pub status: f64,
+}
+
+impl Storage {
+    #[inline]
+    pub fn is_in_service(&self) -> bool {
+        self.status == 1.0
+    }
+
+    pub fn from_row(row: &[f64], row_idx: usize) -> crate::Result<Self> {
+        if row.len() < storage_col::REQUIRED {
+            return Err(crate::Error::ShortRow {
+                field: "storage",
+                row: row_idx,
+                expected: storage_col::REQUIRED,
+                got: row.len(),
+            });
+        }
+        Ok(Self {
+            bus_id: row[storage_col::STORAGE_BUS] as usize,
+            ps: row[storage_col::PS],
+            qs: row[storage_col::QS],
+            energy: row[storage_col::ENERGY],
+            energy_rating: row[storage_col::ENERGY_RATING],
+            charge_rating: row[storage_col::CHARGE_RATING],
+            discharge_rating: row[storage_col::DISCHARGE_RATING],
+            charge_efficiency: row[storage_col::CHARGE_EFFICIENCY],
+            discharge_efficiency: row[storage_col::DISCHARGE_EFFICIENCY],
+            thermal_rating: row[storage_col::THERMAL_RATING],
+            qmin: row[storage_col::QMIN],
+            qmax: row[storage_col::QMAX],
+            r: row[storage_col::R],
+            x: row[storage_col::X],
+            p_loss: row[storage_col::P_LOSS],
+            q_loss: row[storage_col::Q_LOSS],
+            status: row[storage_col::STATUS],
+        })
     }
 }
 
@@ -220,6 +292,8 @@ pub struct MpcCase {
     /// Generators (`mpc.gen` + `mpc.gencost`). Empty for a power-flow-only
     /// case; the DC-OPF builders error if they need generators and find none.
     pub gens: Vec<Generator>,
+    /// Storage units (`mpc.storage`). Empty when the case has no storage block.
+    pub storage: Vec<Storage>,
     /// MATPOWER bus id → dense index in [0, n).
     bus_id_to_idx: HashMap<usize, usize>,
 }
@@ -242,6 +316,7 @@ impl MpcCase {
             buses,
             branches,
             gens: Vec::new(),
+            storage: Vec::new(),
             bus_id_to_idx,
         }
     }
@@ -251,6 +326,13 @@ impl MpcCase {
     #[must_use]
     pub fn with_gens(mut self, gens: Vec<Generator>) -> Self {
         self.gens = gens;
+        self
+    }
+
+    /// Attach storage units (builder style).
+    #[must_use]
+    pub fn with_storage(mut self, storage: Vec<Storage>) -> Self {
+        self.storage = storage;
         self
     }
 
@@ -498,6 +580,28 @@ pub mod gen_col {
     pub const PMIN: usize = 9;
     /// Need columns through PMIN.
     pub const REQUIRED: usize = 10;
+}
+
+/// Storage matrix column indices (PowerModels / pglib 17-column layout, 0-based).
+pub mod storage_col {
+    pub const STORAGE_BUS: usize = 0;
+    pub const PS: usize = 1;
+    pub const QS: usize = 2;
+    pub const ENERGY: usize = 3;
+    pub const ENERGY_RATING: usize = 4;
+    pub const CHARGE_RATING: usize = 5;
+    pub const DISCHARGE_RATING: usize = 6;
+    pub const CHARGE_EFFICIENCY: usize = 7;
+    pub const DISCHARGE_EFFICIENCY: usize = 8;
+    pub const THERMAL_RATING: usize = 9;
+    pub const QMIN: usize = 10;
+    pub const QMAX: usize = 11;
+    pub const R: usize = 12;
+    pub const X: usize = 13;
+    pub const P_LOSS: usize = 14;
+    pub const Q_LOSS: usize = 15;
+    pub const STATUS: usize = 16;
+    pub const REQUIRED: usize = 17;
 }
 
 /// Generator cost matrix column indices per the MATPOWER manual (0-based).

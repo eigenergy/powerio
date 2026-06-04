@@ -25,16 +25,29 @@ const PRUNE: f64 = 1e-12;
 /// PTDF (`m × n`): branch flows from nodal injections, `f = PTDF · p`. The
 /// reference-bus column is zero.
 pub fn build_ptdf(case: &MpcCase, conv: DcConvention) -> Result<CsMat<f64>> {
+    check_connected(case)?;
     let inc = build_incidence(case, conv)?;
     let r = case.reference_bus_index()?;
     let (dense, m, n) = ptdf_dense(&inc, r)?;
     Ok(dense_to_csr(&dense, m, n))
 }
 
+/// Reject a disconnected network up front so the singular grounded Laplacian
+/// reports the real cause ([`Error::DisconnectedNetwork`]) instead of the
+/// generic [`Error::SingularNetwork`] the Cholesky would otherwise raise.
+fn check_connected(case: &MpcCase) -> Result<()> {
+    let components = case.n_connected_components();
+    if components > 1 {
+        return Err(Error::DisconnectedNetwork { components });
+    }
+    Ok(())
+}
+
 /// LODF (`m × m`): pre-outage flow on branch `k` redistributes onto branch `l`
 /// with factor `LODF[l, k]`. Diagonal is `−1`. A branch whose outage islands
 /// the network (denominator `≈ 0`) gets a zero column.
 pub fn build_lodf(case: &MpcCase, conv: DcConvention) -> Result<CsMat<f64>> {
+    check_connected(case)?;
     let inc = build_incidence(case, conv)?;
     let r = case.reference_bus_index()?;
     let (ptdf, m, n) = ptdf_dense(&inc, r)?;
@@ -152,7 +165,13 @@ impl DenseCholesky {
                     s -= l[i * n + k] * l[j * n + k];
                 }
                 if i == j {
-                    if s <= 0.0 {
+                    // `!(s > 0.0)` rejects negative, zero, AND NaN pivots:
+                    // `NaN <= 0.0` is false, so `s <= 0.0` would let a
+                    // NaN-poisoned matrix factor "successfully" into all-NaN.
+                    // The negated comparison is the point (NaN incomparability),
+                    // so the partial_cmp rewrite clippy suggests would obscure it.
+                    #[allow(clippy::neg_cmp_op_on_partial_ord)]
+                    if !(s > 0.0) {
                         return None;
                     }
                     l[i * n + i] = s.sqrt();

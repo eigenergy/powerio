@@ -2,34 +2,73 @@
 //! comment stripped source. Parses only the small MATLAB subset MATPOWER
 //! case files use.
 //!
-//! Matrix values come back row by row as `Vec<Vec<f64>>` so the domain
-//! layer can map columns to `Bus` / `Branch` without further parsing.
-
-use std::sync::OnceLock;
-
-use regex::Regex;
+//! A single linear scan per field locates `mpc.<field> =` and reads the RHS
+//! directly. No regex: the field finders are the parser hot path, and a hand
+//! scan over `&str` is several times faster than running a regex engine.
+//!
+//! Matrix values come back row by row as `Vec<Vec<f64>>` so the domain layer
+//! can map columns to `Bus` / `Branch` without further parsing.
 
 use crate::{Error, Result};
 
-/// Find `mpc.<field> = <number>;` and return the parsed value, if present.
-pub(crate) fn find_scalar(source: &str, field: &str) -> Result<Option<f64>> {
-    let re = scalar_regex();
-    for cap in re.captures_iter(source) {
-        if &cap[1] == field {
-            let raw = cap[2].trim();
-            // Strip surrounding quotes (e.g. mpc.version = '2';)
-            let value = raw.trim_matches(|c| c == '\'' || c == '"');
-            return value
-                .parse::<f64>()
-                .map(Some)
-                .map_err(|_| Error::BadFloat {
-                    field: leak_field(field),
-                    row: 0,
-                    value: value.to_string(),
-                });
+/// Which kind of right-hand side a finder wants. A scalar finder skips an
+/// assignment whose RHS opens with `[` (it's a matrix), and vice versa, so the
+/// two finders pick the first occurrence of the kind they care about.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Rhs {
+    Scalar,
+    Matrix,
+}
+
+/// Right-hand side of the first `mpc.<field> = …` assignment of the wanted
+/// kind. The returned slice starts at the first non-space character after `=`.
+fn find_rhs<'a>(source: &'a str, field: &str, want: Rhs) -> Option<&'a str> {
+    let mut from = 0;
+    while let Some(rel) = source[from..].find("mpc.") {
+        let after_dot = from + rel + "mpc.".len();
+        from = after_dot; // always advance past this `mpc.` to avoid re-finding it
+
+        // The identifier must be exactly `field`, not a longer name it prefixes,
+        // so a search for `gen` skips `gencost`.
+        let Some(tail) = source[after_dot..].strip_prefix(field) else {
+            continue;
+        };
+        if tail.bytes().next().is_some_and(|b| b.is_ascii_alphanumeric() || b == b'_') {
+            continue;
+        }
+        let Some(rhs) = tail.trim_start().strip_prefix('=') else {
+            continue; // `mpc.<field>` not used as an assignment target here
+        };
+        let rhs = rhs.trim_start();
+        let is_matrix = rhs.starts_with('[');
+        let wanted = match want {
+            Rhs::Matrix => is_matrix,
+            Rhs::Scalar => !is_matrix,
+        };
+        if wanted {
+            return Some(rhs);
         }
     }
-    Ok(None)
+    None
+}
+
+/// Find `mpc.<field> = <number>;` and return the parsed value, if present.
+pub(crate) fn find_scalar(source: &str, field: &str) -> Result<Option<f64>> {
+    let Some(rhs) = find_rhs(source, field, Rhs::Scalar) else {
+        return Ok(None);
+    };
+    // Value is everything up to the terminating `;`.
+    let Some(end) = rhs.find(';') else {
+        return Ok(None);
+    };
+    // `find_rhs` already trimmed the front; only the tail before `;` can have
+    // trailing space. Then strip surrounding quotes (e.g. mpc.version = '2';).
+    let value = rhs[..end].trim_end().trim_matches(|c| c == '\'' || c == '"');
+    value.parse::<f64>().map(Some).map_err(|_| Error::BadFloat {
+        field: leak_field(field),
+        row: 0,
+        value: value.to_string(),
+    })
 }
 
 /// Find `mpc.<field> = [ ... ];` and return parsed rows, if present.
@@ -37,37 +76,33 @@ pub(crate) fn find_scalar(source: &str, field: &str) -> Result<Option<f64>> {
 /// Each row is a `Vec<f64>`; rows are separated by `;` inside the brackets.
 /// Whitespace and newlines within a row are ignored.
 pub(crate) fn find_matrix(source: &str, field: &str) -> Result<Option<Vec<Vec<f64>>>> {
-    let re = matrix_open_regex();
-    let mut iter = re.captures_iter(source);
-
-    let cap = match iter.find(|c| &c[1] == field) {
-        Some(c) => c,
-        None => return Ok(None),
+    let Some(rhs) = find_rhs(source, field, Rhs::Matrix) else {
+        return Ok(None);
     };
 
-    let m = cap.get(0).expect("regex captures group 0");
-    let after_open = m.end();
-    // Walk forward tracking `[` / `]` balance. We've already consumed the
-    // opening `[`, so depth starts at 1.
-    let bytes = source.as_bytes();
-    let mut depth = 1i32;
-    let mut end = after_open;
-    while end < bytes.len() && depth > 0 {
-        match bytes[end] {
+    // `rhs` begins with the opening `[`. Walk forward tracking bracket balance
+    // (matrices can nest, e.g. a string column) until the matching close.
+    let bytes = rhs.as_bytes();
+    let mut depth = 0i32;
+    let mut close = None;
+    for (i, &b) in bytes.iter().enumerate() {
+        match b {
             b'[' => depth += 1,
-            b']' => depth -= 1,
+            b']' => {
+                depth -= 1;
+                if depth == 0 {
+                    close = Some(i);
+                    break;
+                }
+            }
             _ => {}
         }
-        if depth == 0 {
-            break;
-        }
-        end += 1;
     }
-    if depth != 0 {
+    let Some(close) = close else {
         return Err(Error::UnbalancedBrackets(leak_field(field)));
-    }
+    };
 
-    let body = &source[after_open..end];
+    let body = &rhs[1..close];
     Ok(Some(parse_matrix_body(body, field)?))
 }
 
@@ -107,26 +142,9 @@ fn parse_float(tok: &str) -> Option<f64> {
     }
 }
 
-fn scalar_regex() -> &'static Regex {
-    static RE: OnceLock<Regex> = OnceLock::new();
-    RE.get_or_init(|| {
-        // mpc.<field>  =  <value>  ;
-        // Value is anything up to the terminating ';'. We intentionally do
-        // not match `[...]` — matrices are handled separately.
-        Regex::new(r"mpc\.(\w+)\s*=\s*([^\[;]*?)\s*;").expect("scalar regex compiles")
-    })
-}
-
-fn matrix_open_regex() -> &'static Regex {
-    static RE: OnceLock<Regex> = OnceLock::new();
-    RE.get_or_init(|| {
-        Regex::new(r"mpc\.(\w+)\s*=\s*\[").expect("matrix-open regex compiles")
-    })
-}
-
 /// `Error::BadFloat`/`MissingField` want `&'static str`. We accept user
-/// input field names but only ever pass through known names here, so leak
-/// is bounded to the small set MATPOWER itself defines.
+/// input field names but only ever pass through known names here, so the
+/// fallback is bounded to the small set MATPOWER itself defines.
 fn leak_field(field: &str) -> &'static str {
     match field {
         "baseMVA" => "baseMVA",
@@ -134,6 +152,7 @@ fn leak_field(field: &str) -> &'static str {
         "branch" => "branch",
         "gen" => "gen",
         "gencost" => "gencost",
+        "storage" => "storage",
         "version" => "version",
         _ => "(unknown)",
     }
