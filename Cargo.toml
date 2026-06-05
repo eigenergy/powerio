@@ -10,8 +10,20 @@ readme = "README.md"
 keywords = ["power-systems", "matpower", "sparse", "ptdf", "dc-opf"]
 categories = ["science", "parsing", "command-line-utilities"]
 
+[workspace]
+members = [".", "netmat-ext"]
+# Bare `cargo build`/`test`/`clippy` from the root touch only netmat, so the
+# Rust toolchain never has to compile the PyO3 extension (which needs libpython).
+# Build the bindings explicitly with `-p netmat-ext`.
+default-members = ["."]
+resolver = "2"
+
 [features]
-default = []
+# `cli` carries the clap front end and the ratatui TUI. It is on by default so
+# `cargo build`/`test` behave as before; the Python wheel pulls netmat with
+# `default-features = false` to skip clap/ratatui/crossterm.
+default = ["cli"]
+cli = ["dep:clap", "dep:ratatui", "dep:crossterm", "dep:tracing-subscriber"]
 # Experimental DC-OPF interior point operators (optional).
 kkt = []
 
@@ -22,9 +34,10 @@ path = "src/lib.rs"
 [[bin]]
 name = "netmat"
 path = "src/main.rs"
+required-features = ["cli"]
 
 [dependencies]
-clap = { version = "4", features = ["derive"] }
+clap = { version = "4", features = ["derive"], optional = true }
 thiserror = "2"
 anyhow = "1"
 sprs = { version = "0.11", default-features = false }
@@ -36,9 +49,9 @@ rand_chacha = "0.9"
 walkdir = "2"
 rayon = "1"
 tracing = "0.1"
-tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
-ratatui = { version = "0.30", features = ["crossterm_0_29"] }
-crossterm = "0.29"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"], optional = true }
+ratatui = { version = "0.30", features = ["crossterm_0_29"], optional = true }
+crossterm = { version = "0.29", optional = true }
 sha2 = "0.10"
 petgraph = "0.8"
 

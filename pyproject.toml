@@ -1,0 +1,38 @@
+[build-system]
+requires = ["maturin>=1.7,<2.0"]
+build-backend = "maturin"
+
+[project]
+name = "netmat"
+# version is read from netmat-ext/Cargo.toml by maturin (kept single-source).
+dynamic = ["version"]
+description = "Power network case files into sparse matrices and graph views"
+readme = "README.md"
+requires-python = ">=3.9"
+license = { text = "MIT OR Apache-2.0" }
+keywords = ["power-systems", "matpower", "sparse", "ptdf", "dc-opf", "scipy"]
+classifiers = [
+    "Programming Language :: Rust",
+    "Programming Language :: Python :: 3",
+    "Topic :: Scientific/Engineering",
+    "Operating System :: OS Independent",
+]
+# numpy is a hard runtime dep: the extension hands back numpy arrays.
+# scipy assembles those arrays into sparse matrices in the matrix methods.
+dependencies = ["numpy>=1.21", "scipy>=1.7"]
+
+[project.optional-dependencies]
+networkx = ["networkx>=2.6"]
+bench = ["matpowercaseframes"]
+
+[project.urls]
+Repository = "https://github.com/eigenergy/netmat"
+
+[tool.maturin]
+# The Rust extension lives in a workspace member; the importable package is the
+# pure-Python tree under python/netmat/, into which `_netmat` is dropped.
+manifest-path = "netmat-ext/Cargo.toml"
+module-name = "netmat._netmat"
+python-source = "python"
+features = ["extension-module"]
+strip = true
