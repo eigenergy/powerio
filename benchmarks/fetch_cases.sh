@@ -1,17 +1,10 @@
 #!/usr/bin/env bash
-# Fetch the large benchmark cases into tests/data/large (gitignored, kept out of
-# the repo). BSD-3. MATPOWER cases from the MATPOWER repo; case99k/case193k from
-# goghino/opf_benchmarks. case193k is ~54 MB.
+# Fetch the large MATPOWER cases for the benchmark into tests/data/large
+# (gitignored, kept out of the repo). BSD-3, from the MATPOWER repo.
 set -euo pipefail
-mp=https://raw.githubusercontent.com/MATPOWER/matpower/master/data
-gg=https://raw.githubusercontent.com/goghino/opf_benchmarks/master/cases
+base=https://raw.githubusercontent.com/MATPOWER/matpower/master/data
 dir="$(cd "$(dirname "$0")/.." && pwd)/tests/data/large"
 mkdir -p "$dir"
-for c in case9241pegase case13659pegase \
-         case_ACTIVSg2000 case_ACTIVSg10k case_ACTIVSg25k case_ACTIVSg70k \
-         case_SyntheticUSA; do
-  curl -fsSL "$mp/$c.m" -o "$dir/$c.m" && echo "fetched $c"
-done
-for c in case99k case193k; do
-  curl -fsSL "$gg/$c.m" -o "$dir/$c.m" && echo "fetched $c"
+for c in case9241pegase case13659pegase case_ACTIVSg2000; do
+  curl -fsSL "$base/$c.m" -o "$dir/$c.m" && echo "fetched $c"
 done

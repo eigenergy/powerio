@@ -13,44 +13,41 @@
 //! interpretation of its own; the typed layer parses the values it needs from
 //! the same source separately.
 
-use std::ops::Range;
-
 use super::tokens;
 
-/// An ordered, re-serializable view of a MATPOWER case file. Holds one owned
-/// copy of the source `text` plus byte ranges into it — no per-line String
-/// allocations — so a large case round-trips with minimal copying.
+/// An ordered, re-serializable view of a MATPOWER case file.
 #[derive(Debug, Clone)]
 pub struct MatpowerDocument {
-    text: String,
-    items: Vec<Item>,
+    items: Vec<DocItem>,
 }
 
 #[derive(Debug, Clone)]
-enum Item {
-    /// A line round-tripped verbatim but not interpreted.
-    Verbatim(Range<usize>),
-    /// `mpc.<field> = <rhs>;`: the field-name range and the whole (possibly
-    /// multi-line) assignment range, both into `text`.
-    Assignment { field: Range<usize>, full: Range<usize> },
+enum DocItem {
+    /// A line we round-trip verbatim but don't interpret.
+    Verbatim(String),
+    /// `mpc.<field> = <rhs>;`, captured as its exact (possibly multi-line)
+    /// source text. `field` lets a future editor locate and rewrite a section
+    /// without disturbing the rest of the document.
+    Assignment { field: String, raw: String },
 }
 
-impl Item {
-    fn range(&self) -> Range<usize> {
+impl DocItem {
+    fn raw(&self) -> &str {
         match self {
-            Item::Verbatim(r) | Item::Assignment { full: r, .. } => r.clone(),
+            DocItem::Verbatim(s) => s,
+            DocItem::Assignment { raw, .. } => raw,
         }
     }
 }
 
 impl MatpowerDocument {
     /// The raw source text of the first `mpc.<field>` assignment, if present.
+    /// Used by the typed layer for fields it reads only for round-trip extras
+    /// (e.g. `bus_name`).
     #[must_use]
     pub fn assignment(&self, field: &str) -> Option<&str> {
         self.items.iter().find_map(|it| match it {
-            Item::Assignment { field: fr, full } if &self.text[fr.clone()] == field => {
-                Some(&self.text[full.clone()])
-            }
+            DocItem::Assignment { field: f, raw } if f == field => Some(raw.as_str()),
             _ => None,
         })
     }
@@ -61,8 +58,8 @@ impl MatpowerDocument {
         self.items
             .iter()
             .filter_map(|it| match it {
-                Item::Assignment { field, .. } => Some(&self.text[field.clone()]),
-                Item::Verbatim(_) => None,
+                DocItem::Assignment { field, .. } => Some(field.as_str()),
+                DocItem::Verbatim(_) => None,
             })
             .collect()
     }
@@ -71,67 +68,47 @@ impl MatpowerDocument {
 impl std::fmt::Display for MatpowerDocument {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         for item in &self.items {
-            writeln!(f, "{}", &self.text[item.range()])?;
+            writeln!(f, "{}", item.raw())?;
         }
         Ok(())
     }
 }
 
 /// Build the document from raw `.m` source. Infallible: a malformed file still
-/// yields a faithful document; the typed parser reports the actual errors.
+/// yields a faithful (if not semantically valid) document; the typed parser
+/// reports the actual errors.
 #[must_use]
-pub fn build_document(content: &str) -> MatpowerDocument {
-    let base = content.as_ptr() as usize;
-    // Logical lines as (range, slice) with terminators trimmed off the range,
-    // so `Display` reproduces the `\n`-joined, single-trailing-`\n` output the
-    // round-trip tests pin (matching `str::lines` semantics).
-    let lines: Vec<(Range<usize>, &str)> = {
-        let mut out = Vec::new();
-        let mut off = 0usize;
-        for piece in content.split_inclusive('\n') {
-            let start = off;
-            off += piece.len();
-            let trimmed = piece
-                .strip_suffix('\n')
-                .map_or(piece, |s| s.strip_suffix('\r').unwrap_or(s));
-            out.push((start..start + trimmed.len(), trimmed));
-        }
-        out
-    };
-
+pub fn build_document(source: &str) -> MatpowerDocument {
+    let lines: Vec<&str> = source.lines().collect();
     let mut items = Vec::with_capacity(lines.len());
     let mut i = 0;
     while i < lines.len() {
-        let (line_range, line) = (lines[i].0.clone(), lines[i].1);
+        let line = lines[i];
         let (code, _comment) = tokens::comment_split(line);
         if let Some((field, rhs)) = parse_assignment_start(code) {
-            // The field name borrows from `content`; its offset into `text`
-            // (== content byte-for-byte) is pointer arithmetic, not a re-search.
-            let field_off = field.as_ptr() as usize - base;
-            let mut full = line_range;
-            // A `[ … ]` / `{ … }` RHS can span lines; extend until balanced.
+            let mut raw = String::from(line);
+            // A `[ … ]` / `{ … }` right-hand side can span many lines; pull
+            // them in until the brackets balance.
             if rhs.starts_with('[') || rhs.starts_with('{') {
                 let mut depth = net_bracket_depth(code);
                 while depth > 0 && i + 1 < lines.len() {
                     i += 1;
-                    full.end = lines[i].0.end;
-                    depth += net_bracket_depth(tokens::comment_split(lines[i].1).0);
+                    let next = lines[i];
+                    raw.push('\n');
+                    raw.push_str(next);
+                    depth += net_bracket_depth(tokens::comment_split(next).0);
                 }
             }
-            items.push(Item::Assignment {
-                field: field_off..field_off + field.len(),
-                full,
+            items.push(DocItem::Assignment {
+                field: field.to_string(),
+                raw,
             });
         } else {
-            items.push(Item::Verbatim(line_range));
+            items.push(DocItem::Verbatim(line.to_string()));
         }
         i += 1;
     }
-
-    MatpowerDocument {
-        text: content.to_owned(),
-        items,
-    }
+    MatpowerDocument { items }
 }
 
 /// Extract the quoted strings from a `{ '...'; '...' }` cell array assignment,
@@ -148,27 +125,20 @@ pub(crate) fn parse_string_cell(raw: &str) -> Vec<String> {
         if q == b'\'' || q == b'"' {
             let start = i + 1;
             let mut j = start;
-            let mut escaped = false;
             // Close on a quote that isn't doubled; skip `''` escape pairs.
             while j < bytes.len() {
                 if bytes[j] == q {
                     if bytes.get(j + 1) == Some(&q) {
                         j += 2;
-                        escaped = true;
                         continue;
                     }
                     break;
                 }
                 j += 1;
             }
+            let qc = q as char;
             let content = &raw[start..j.min(bytes.len())];
-            // Common case (no `''`): one owned String, no format!/replace churn.
-            out.push(if escaped {
-                let qc = q as char;
-                content.replace(&format!("{qc}{qc}"), &qc.to_string())
-            } else {
-                content.to_owned()
-            });
+            out.push(content.replace(&format!("{qc}{qc}"), &qc.to_string()));
             i = (j + 1).min(bytes.len());
         } else {
             i += 1;

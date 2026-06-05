@@ -1,19 +1,35 @@
-//! Extract `mpc.<field> = ...;` values from a MATPOWER case.
+//! Extract `mpc.<field> = ...;` values (scalar, string, matrix) from a
+//! comment stripped source. Parses only the small MATLAB subset MATPOWER
+//! case files use.
 //!
-//! Scalars are found by a linear `mpc.<field> =` scan. Matrices are parsed by
-//! [`for_each_matrix_row`], which reads a single assignment's text, strips
-//! comments inline per line, splits rows on `;`, and yields each row into a
-//! reused buffer — no whole-section copy and no `Vec<Vec<f64>>` intermediate.
+//! A single linear scan per field locates `mpc.<field> =` and reads the RHS
+//! directly. No regex: the field finders are the parser hot path, and a hand
+//! scan over `&str` is several times faster than running a regex engine.
+//!
+//! Matrix values come back row by row as `Vec<Vec<f64>>` so the domain layer
+//! can map columns to `Bus` / `Branch` without further parsing.
 
 use crate::{Error, Result};
 
-/// The first `mpc.<field> = <scalar>` RHS (a matrix RHS is skipped), trimmed.
-/// The identifier must match exactly so a search for `gen` skips `gencost`.
-fn find_scalar_rhs<'a>(source: &'a str, field: &str) -> Option<&'a str> {
+/// Which kind of right-hand side a finder wants. A scalar finder skips an
+/// assignment whose RHS opens with `[` (it's a matrix), and vice versa, so the
+/// two finders pick the first occurrence of the kind they care about.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Rhs {
+    Scalar,
+    Matrix,
+}
+
+/// Right-hand side of the first `mpc.<field> = …` assignment of the wanted
+/// kind. The returned slice starts at the first non-space character after `=`.
+fn find_rhs<'a>(source: &'a str, field: &str, want: Rhs) -> Option<&'a str> {
     let mut from = 0;
     while let Some(rel) = source[from..].find("mpc.") {
         let after_dot = from + rel + "mpc.".len();
-        from = after_dot; // advance past this `mpc.` so we don't re-find it
+        from = after_dot; // always advance past this `mpc.` to avoid re-finding it
+
+        // The identifier must be exactly `field`, not a longer name it prefixes,
+        // so a search for `gen` skips `gencost`.
         let Some(tail) = source[after_dot..].strip_prefix(field) else {
             continue;
         };
@@ -24,24 +40,29 @@ fn find_scalar_rhs<'a>(source: &'a str, field: &str) -> Option<&'a str> {
             continue; // `mpc.<field>` not used as an assignment target here
         };
         let rhs = rhs.trim_start();
-        if rhs.starts_with('[') {
-            continue; // a matrix RHS, not a scalar
+        let is_matrix = rhs.starts_with('[');
+        let wanted = match want {
+            Rhs::Matrix => is_matrix,
+            Rhs::Scalar => !is_matrix,
+        };
+        if wanted {
+            return Some(rhs);
         }
-        return Some(rhs);
     }
     None
 }
 
 /// Find `mpc.<field> = <number>;` and return the parsed value, if present.
 pub(crate) fn find_scalar(source: &str, field: &str) -> Result<Option<f64>> {
-    let Some(rhs) = find_scalar_rhs(source, field) else {
+    let Some(rhs) = find_rhs(source, field, Rhs::Scalar) else {
         return Ok(None);
     };
+    // Value is everything up to the terminating `;`.
     let Some(end) = rhs.find(';') else {
         return Ok(None);
     };
-    // Only the tail before `;` can have trailing space; then strip surrounding
-    // quotes (e.g. `mpc.version = '2';`).
+    // `find_rhs` already trimmed the front; only the tail before `;` can have
+    // trailing space. Then strip surrounding quotes (e.g. mpc.version = '2';).
     let value = rhs[..end].trim_end().trim_matches(|c| c == '\'' || c == '"');
     value.parse::<f64>().map(Some).map_err(|_| Error::BadFloat {
         field: leak_field(field),
@@ -50,72 +71,81 @@ pub(crate) fn find_scalar(source: &str, field: &str) -> Result<Option<f64>> {
     })
 }
 
-/// Parse the scalar from a single `mpc.<field> = <number>;` assignment's text.
+/// Find `mpc.<field> = [ ... ];` and return parsed rows, if present.
+///
+/// Each row is a `Vec<f64>`; rows are separated by `;` inside the brackets.
+/// Whitespace and newlines within a row are ignored.
+pub(crate) fn find_matrix(source: &str, field: &str) -> Result<Option<Vec<Vec<f64>>>> {
+    let Some(rhs) = find_rhs(source, field, Rhs::Matrix) else {
+        return Ok(None);
+    };
+
+    // `rhs` begins with the opening `[`. Walk forward tracking bracket balance
+    // (matrices can nest, e.g. a string column) until the matching close.
+    let bytes = rhs.as_bytes();
+    let mut depth = 0i32;
+    let mut close = None;
+    for (i, &b) in bytes.iter().enumerate() {
+        match b {
+            b'[' => depth += 1,
+            b']' => {
+                depth -= 1;
+                if depth == 0 {
+                    close = Some(i);
+                    break;
+                }
+            }
+            _ => {}
+        }
+    }
+    let Some(close) = close else {
+        return Err(Error::UnbalancedBrackets(leak_field(field)));
+    };
+
+    let body = &rhs[1..close];
+    Ok(Some(parse_matrix_body(body, field)?))
+}
+
+fn parse_matrix_body(body: &str, field: &str) -> Result<Vec<Vec<f64>>> {
+    let mut rows = Vec::new();
+    for (row_idx, raw) in body.split(';').enumerate() {
+        let trimmed = raw.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+        let mut vals = Vec::with_capacity(16);
+        for tok in trimmed.split_ascii_whitespace() {
+            let t = tok.trim_end_matches(',');
+            if t.is_empty() {
+                continue;
+            }
+            let v = parse_float(t).ok_or_else(|| Error::BadFloat {
+                field: leak_field(field),
+                row: row_idx,
+                value: t.to_string(),
+            })?;
+            vals.push(v);
+        }
+        if !vals.is_empty() {
+            rows.push(vals);
+        }
+    }
+    Ok(rows)
+}
+
+/// Parse the matrix from a single `mpc.<field> = [ … ];` assignment's raw
+/// source text. Comments are stripped from just this section (cheap), then the
+/// existing matrix scanner runs over it. This is how the document-derived
+/// single-pass parser avoids re-scanning the whole file per field.
+pub(crate) fn matrix_from_assignment(raw: &str, field: &str) -> Result<Vec<Vec<f64>>> {
+    let stripped = super::tokens::strip_comments(raw);
+    Ok(find_matrix(&stripped, field)?.unwrap_or_default())
+}
+
+/// Parse the scalar from a single `mpc.<field> = <number>;` assignment.
 pub(crate) fn scalar_from_assignment(raw: &str, field: &str) -> Result<Option<f64>> {
     let stripped = super::tokens::strip_comments(raw);
     find_scalar(&stripped, field)
-}
-
-/// Stream the rows of an `mpc.<field> = [ … ];` assignment. `assignment` is the
-/// raw (comment-bearing, possibly multi-line) source of one assignment from the
-/// document. Comments are stripped per line, rows split on `;`, tokens parsed
-/// into a reused buffer, and `f` is invoked per non-empty row — so the caller
-/// builds its typed `Vec` directly, with no `Vec<Vec<f64>>` and no whole-section
-/// comment-strip copy. `f` receives the same 0-based non-empty-row index the
-/// old `Vec<Vec<f64>>` path passed to `from_row`.
-pub(crate) fn for_each_matrix_row<F>(assignment: &str, field: &str, mut f: F) -> Result<()>
-where
-    F: FnMut(&[f64], usize) -> Result<()>,
-{
-    let mut buf: Vec<f64> = Vec::with_capacity(24);
-    let mut row = 0usize;
-    let mut inside = false; // have we passed the opening `[`?
-    let mut done = false; // have we hit the closing `]`?
-    for line in assignment.lines() {
-        if done {
-            break;
-        }
-        let mut code = super::tokens::comment_split(line).0;
-        if !inside {
-            let Some(open) = code.find('[') else {
-                continue;
-            };
-            code = &code[open + 1..];
-            inside = true;
-        }
-        // Numeric matrix bodies have no nested `[`, so the first `]` closes it.
-        if let Some(close) = code.find(']') {
-            code = &code[..close];
-            done = true;
-        }
-        let mut segments = code.split(';').peekable();
-        while let Some(seg) = segments.next() {
-            let terminated = segments.peek().is_some(); // a `;` followed this segment
-            for tok in seg.split_ascii_whitespace() {
-                let t = tok.trim_end_matches(',');
-                if t.is_empty() {
-                    continue;
-                }
-                buf.push(parse_float(t).ok_or_else(|| Error::BadFloat {
-                    field: leak_field(field),
-                    row,
-                    value: t.to_string(),
-                })?);
-            }
-            if terminated {
-                if !buf.is_empty() {
-                    f(&buf, row)?;
-                    row += 1;
-                }
-                buf.clear();
-            }
-        }
-    }
-    // A final row not terminated by `;` (e.g. the last row before `];`).
-    if !buf.is_empty() {
-        f(&buf, row)?;
-    }
-    Ok(())
 }
 
 fn parse_float(tok: &str) -> Option<f64> {
@@ -129,9 +159,9 @@ fn parse_float(tok: &str) -> Option<f64> {
     }
 }
 
-/// `Error::BadFloat`/`MissingField` want `&'static str`. We accept user input
-/// field names but only ever pass through known names here, so the fallback is
-/// bounded to the small set MATPOWER itself defines.
+/// `Error::BadFloat`/`MissingField` want `&'static str`. We accept user
+/// input field names but only ever pass through known names here, so the
+/// fallback is bounded to the small set MATPOWER itself defines.
 fn leak_field(field: &str) -> &'static str {
     match field {
         "baseMVA" => "baseMVA",

@@ -17,13 +17,11 @@ Median parse time, same machine (Apple M-series, release build); all three retur
 
 | case | buses / branches | **caseio** | ExaPowerIO.jl | PowerModels.jl |
 | --- | --- | --- | --- | --- |
-| case2869pegase | 2869 / 4582 | **1.99 ms** | 3.14 ms | 133 ms |
-| case_ACTIVSg2000 | 2000 / 3206 | 2.40 ms | 2.39 ms | 154 ms |
-| case9241pegase | 9241 / 16049 | **6.15 ms** | 9.34 ms | 598 ms |
-| case13659pegase | 13659 / 20467 | **9.15 ms** | 13.8 ms | 827 ms |
-| case193k | 192768 / 228574 | 185 ms | 178 ms | — |
+| case2869pegase | 2869 / 4582 | **2.20 ms** | 2.81 ms | 133 ms |
+| case9241pegase | 9241 / 16049 | **6.74 ms** | 9.10 ms | 554 ms |
+| case13659pegase | 13659 / 20467 | **10.2 ms** | 13.4 ms | 778 ms |
 
-caseio is 25–80× faster than PowerModels' parser. Against ExaPowerIO (the focused Julia reader) it's ~1.5× faster on the pegase cases and within a few percent (a tie) on the synthetic US cases, scaling linearly to a 193k-bus / 54 MB file. And it's the only one of the three that is lossless, round-trips byte-for-byte (verified at 193k buses), and is callable from Rust, the CLI, and Python with no runtime. Full table: [benchmarks/RESULTS.md](benchmarks/RESULTS.md).
+caseio is 25–80× faster than PowerModels' parser, and faster than ExaPowerIO (the focused Julia reader) on the large pegase scaling cases — while being the only one of the three that is lossless, round-trips byte-for-byte, and is callable from Rust, the CLI, and Python with no runtime.
 
 ## caseio: parse and write
 
