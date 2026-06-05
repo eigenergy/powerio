@@ -34,15 +34,19 @@ pub fn parse_matpower_file(path: impl AsRef<Path>) -> Result<MpcCase> {
 }
 
 fn parse_matpower_named(content: &str, name: &str) -> Result<MpcCase> {
-    let stripped = tokens::strip_comments(content);
+    // One pass builds the faithful source document (for lossless round-trip);
+    // the typed structs are then derived from its located assignments, so the
+    // file is never re-scanned per field and never comment-stripped whole.
+    let source = document::build_document(content);
 
-    let base_mva = matlab::find_scalar(&stripped, "baseMVA")?
+    let base_mva = source
+        .assignment("baseMVA")
+        .and_then(|raw| matlab::scalar_from_assignment(raw, "baseMVA").transpose())
+        .transpose()?
         .ok_or(Error::MissingField("baseMVA"))?;
 
-    let bus_rows = matlab::find_matrix(&stripped, "bus")?
-        .ok_or(Error::MissingField("bus"))?;
-    let branch_rows = matlab::find_matrix(&stripped, "branch")?
-        .ok_or(Error::MissingField("branch"))?;
+    let bus_rows = matrix_field(&source, "bus")?.ok_or(Error::MissingField("bus"))?;
+    let branch_rows = matrix_field(&source, "branch")?.ok_or(Error::MissingField("branch"))?;
 
     let mut buses: Vec<Bus> = bus_rows
         .iter()
@@ -56,14 +60,9 @@ fn parse_matpower_named(content: &str, name: &str) -> Result<MpcCase> {
         .map(|(i, row)| Branch::from_row(row, i))
         .collect::<Result<_>>()?;
 
-    let gens = parse_gens(&stripped)?;
-    let storage = parse_storage(&stripped)?;
-    let dclines = parse_dclines(&stripped)?;
-
-    // Build the faithful source document from the *original* content (comments
-    // and all) so the case can round-trip losslessly. Typed parsing above runs
-    // on the comment-stripped copy and is unaffected.
-    let source = document::build_document(content);
+    let gens = parse_gens(&source)?;
+    let storage = parse_storage(&source)?;
+    let dclines = parse_dclines(&source)?;
 
     // Bus names live in a `{...}` cell array; pull them from the document
     // (which kept the quotes) and attach by position when the count matches.
@@ -83,9 +82,17 @@ fn parse_matpower_named(content: &str, name: &str) -> Result<MpcCase> {
         .with_source(source))
 }
 
+/// Parse a field's matrix from its document assignment, if the field is present.
+fn matrix_field(doc: &MatpowerDocument, field: &str) -> Result<Option<Vec<Vec<f64>>>> {
+    match doc.assignment(field) {
+        Some(raw) => Ok(Some(matlab::matrix_from_assignment(raw, field)?)),
+        None => Ok(None),
+    }
+}
+
 /// Parse the optional `mpc.dcline` block (two-terminal HVDC).
-fn parse_dclines(stripped: &str) -> Result<Vec<DcLine>> {
-    let Some(rows) = matlab::find_matrix(stripped, "dcline")? else {
+fn parse_dclines(doc: &MatpowerDocument) -> Result<Vec<DcLine>> {
+    let Some(rows) = matrix_field(doc, "dcline")? else {
         return Ok(Vec::new());
     };
     rows.iter()
@@ -95,8 +102,8 @@ fn parse_dclines(stripped: &str) -> Result<Vec<DcLine>> {
 }
 
 /// Parse the optional `mpc.storage` block. A case without storage gets none.
-fn parse_storage(stripped: &str) -> Result<Vec<Storage>> {
-    let Some(rows) = matlab::find_matrix(stripped, "storage")? else {
+fn parse_storage(doc: &MatpowerDocument) -> Result<Vec<Storage>> {
+    let Some(rows) = matrix_field(doc, "storage")? else {
         return Ok(Vec::new());
     };
     rows.iter()
@@ -107,10 +114,9 @@ fn parse_storage(stripped: &str) -> Result<Vec<Storage>> {
 
 /// Parse `mpc.gen` and fold in the active-power block of `mpc.gencost`.
 /// Both are optional: a power-flow-only case has neither and gets no gens.
-fn parse_gens(stripped: &str) -> Result<Vec<Generator>> {
-    let gen_rows = match matlab::find_matrix(stripped, "gen")? {
-        Some(rows) => rows,
-        None => return Ok(Vec::new()),
+fn parse_gens(doc: &MatpowerDocument) -> Result<Vec<Generator>> {
+    let Some(gen_rows) = matrix_field(doc, "gen")? else {
+        return Ok(Vec::new());
     };
 
     let mut gens: Vec<Generator> = gen_rows
@@ -120,8 +126,8 @@ fn parse_gens(stripped: &str) -> Result<Vec<Generator>> {
         .collect::<Result<_>>()?;
 
     // MATPOWER lays the active-power costs first, one row per generator and in
-    // the same order; reactive-power costs (if any) follow and are ignored.
-    if let Some(cost_rows) = matlab::find_matrix(stripped, "gencost")? {
+    // the same order; reactive-power costs (if any) follow in a second block.
+    if let Some(cost_rows) = matrix_field(doc, "gencost")? {
         // Reject a count that is neither `n_gen` (active only) nor `2·n_gen`
         // (active + reactive) so a truncated/garbled block is caught here
         // instead of silently truncating via `zip` and surfacing later as a
