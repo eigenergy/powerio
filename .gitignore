@@ -6,3 +6,14 @@
 
 # Experimental local-only module (kkt feature)
 src/matrix/kkt.rs
+
+# Python bindings (maturin / PyO3)
+*.so
+*.pyd
+dist/
+build/
+wheelhouse/
+*.egg-info/
+__pycache__/
+.pytest_cache/
+.venv/

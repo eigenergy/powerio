@@ -74,6 +74,55 @@ let l = build_weighted_laplacian(&inc.a, &inc.b);            // L = A diag(b) Aá
 let opf = build_opf_instance(&mpc, &inc, Units::PerUnit)?;   // Q, c, bounds, C_g, p_d
 ```
 
+## Python
+
+PyO3 bindings expose the parser and every matrix builder as `scipy.sparse` matrices and a networkx graph.
+
+```
+pip install netmat            # wheels for Linux / macOS / Windows, Python 3.9+
+```
+
+```python
+import netmat as nm
+
+case = nm.parse_matpower("tests/data/case9.m")
+B = case.bprime()             # scipy.sparse.csr_matrix, the FDPF B'
+Y = case.ybus()               # complex csr_matrix, G + jB
+A = case.adjacency()
+ptdf, lodf = case.ptdf(), case.lodf()
+inc = case.incidence()        # inc.A (csr), inc.b, inc.p_shift, inc.branch_of_col
+L = case.weighted_laplacian()
+g = case.to_networkx()        # needs networkx: pip install 'netmat[networkx]'
+
+case.write_dcopf_bundle("out/")   # the DC-OPF bundle, same as the `dcopf` subcommand
+```
+
+Case tables come back as plain dicts, one line from a DataFrame:
+
+```python
+import pandas as pd
+buses = pd.DataFrame(case.buses)
+```
+
+### Benchmark
+
+netmat parses *and* builds matrices; `matpowercaseframes` only parses into DataFrames. On case2869pegase (2869 buses, 4582 branches), release build, Apple M-series, best of 25 runs:
+
+| task                          | time   |
+| ----------------------------- | ------ |
+| netmat: parse                 | ~2 ms  |
+| netmat: parse + Y_bus + B'    | ~5 ms  |
+| matpowercaseframes: parse     | ~25 ms |
+
+The full parse + matrix path stays well under the 100 ms target. Reproduce with `python benchmarks/bench_parse.py` after `pip install 'netmat[bench]'`.
+
+Build from source with [maturin](https://www.maturin.rs):
+
+```
+maturin develop --release     # into the active venv
+pytest python/tests
+```
+
 ## Conventions
 
 - Positive Laplacian sign convention: negative off diagonal, positive diagonal, `diag = sum |off-diag|` for B'.

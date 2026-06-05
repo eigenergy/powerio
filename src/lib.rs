@@ -12,6 +12,7 @@ pub mod opf_pipeline;
 pub mod parser;
 pub mod pipeline;
 pub mod synth;
+#[cfg(feature = "cli")]
 pub mod tui;
 
 pub use case::{Branch, Bus, ConnectivityReport, GenCost, Generator, MpcCase, Storage};
