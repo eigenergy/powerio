@@ -38,6 +38,7 @@ pub(crate) fn make_bus(id: usize) -> Bus {
         zone: 1,
         vmax: 1.1,
         vmin: 0.9,
+        name: None,
     }
 }
 

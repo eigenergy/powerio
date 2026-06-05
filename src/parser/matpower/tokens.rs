@@ -12,6 +12,14 @@ pub(crate) fn strip_comments(input: &str) -> String {
 }
 
 fn strip_line_comment(line: &str) -> &str {
+    comment_split(line).0
+}
+
+/// Split a line into `(code, comment)` at the first `%` that starts a comment,
+/// respecting single/double quoted strings. The comment half keeps the leading
+/// `%`; when there is no comment it is empty. Same FSM as [`strip_line_comment`]
+/// but returns both halves so the document builder can round-trip comments.
+pub(crate) fn comment_split(line: &str) -> (&str, &str) {
     #[derive(Clone, Copy, PartialEq, Eq)]
     enum State {
         Code,
@@ -21,14 +29,14 @@ fn strip_line_comment(line: &str) -> &str {
     let mut state = State::Code;
     for (i, &b) in bytes.iter().enumerate() {
         match (state, b) {
-            (State::Code, b'%') => return &line[..i],
+            (State::Code, b'%') => return (&line[..i], &line[i..]),
             (State::Code, b'\'') => state = State::InString(b'\''),
             (State::Code, b'"') => state = State::InString(b'"'),
             (State::InString(q), c) if c == q => state = State::Code,
             _ => {}
         }
     }
-    line
+    (line, "")
 }
 
 #[cfg(test)]

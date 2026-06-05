@@ -49,6 +49,9 @@ pub struct Bus {
     pub zone: usize,
     pub vmax: f64,
     pub vmin: f64,
+    /// Human-readable label from `mpc.bus_name`, by position. `None` when the
+    /// case has no `bus_name` block or its length doesn't match the bus count.
+    pub name: Option<String>,
 }
 
 /// A single transmission element (line or transformer) in MATPOWER form.
@@ -99,6 +102,73 @@ impl Branch {
     }
 }
 
+/// A two-terminal HVDC line (`mpc.dcline` row, MATPOWER 17-column layout).
+#[derive(Debug, Clone)]
+pub struct DcLine {
+    pub from_id: usize,
+    pub to_id: usize,
+    /// 1 = in service, 0 = out.
+    pub status: f64,
+    /// Real power injected at the from / to ends (MW).
+    pub pf: f64,
+    pub pt: f64,
+    /// Reactive power at the from / to ends (MVAr).
+    pub qf: f64,
+    pub qt: f64,
+    /// Voltage set points at the from / to ends (p.u.).
+    pub vf: f64,
+    pub vt: f64,
+    pub pmin: f64,
+    pub pmax: f64,
+    pub qminf: f64,
+    pub qmaxf: f64,
+    pub qmint: f64,
+    pub qmaxt: f64,
+    /// Loss model `loss = loss0 + loss1·Pf`.
+    pub loss0: f64,
+    pub loss1: f64,
+    /// Columns past the 17-column layout (e.g. `mu_*` shadow prices), verbatim.
+    pub extra: Vec<f64>,
+}
+
+impl DcLine {
+    #[inline]
+    pub fn is_in_service(&self) -> bool {
+        self.status == 1.0
+    }
+
+    pub fn from_row(row: &[f64], row_idx: usize) -> crate::Result<Self> {
+        if row.len() < dcline_col::REQUIRED {
+            return Err(crate::Error::ShortRow {
+                field: "dcline",
+                row: row_idx,
+                expected: dcline_col::REQUIRED,
+                got: row.len(),
+            });
+        }
+        Ok(Self {
+            from_id: row[dcline_col::F_BUS] as usize,
+            to_id: row[dcline_col::T_BUS] as usize,
+            status: row[dcline_col::BR_STATUS],
+            pf: row[dcline_col::PF],
+            pt: row[dcline_col::PT],
+            qf: row[dcline_col::QF],
+            qt: row[dcline_col::QT],
+            vf: row[dcline_col::VF],
+            vt: row[dcline_col::VT],
+            pmin: row[dcline_col::PMIN],
+            pmax: row[dcline_col::PMAX],
+            qminf: row[dcline_col::QMINF],
+            qmaxf: row[dcline_col::QMAXF],
+            qmint: row[dcline_col::QMINT],
+            qmaxt: row[dcline_col::QMAXT],
+            loss0: row[dcline_col::LOSS0],
+            loss1: row[dcline_col::LOSS1],
+            extra: row[dcline_col::REQUIRED..].to_vec(),
+        })
+    }
+}
+
 /// A generator (`mpc.gen` row) with its cost curve (`mpc.gencost` row)
 /// folded in. MATPOWER guarantees one gencost row per gen row in the same
 /// order, so the cost rides along instead of living in a parallel vector.
@@ -122,6 +192,13 @@ pub struct Generator {
     /// Real power lower bound (MW).
     pub pmin: f64,
     pub cost: Option<GenCost>,
+    /// Reactive-power cost curve, present only when `mpc.gencost` carries the
+    /// optional second (reactive) block (`2·n_gen` rows).
+    pub reactive_cost: Option<GenCost>,
+    /// Columns past `PMIN` (`Pc1, Pc2, Qc1min, Qc1max, Qc2min, Qc2max,
+    /// ramp_agc, ramp_10, ramp_30, ramp_q, apf`), kept verbatim so unit
+    /// commitment / AGC data isn't silently dropped.
+    pub extra: Vec<f64>,
 }
 
 impl Generator {
@@ -151,6 +228,8 @@ impl Generator {
             pmax: row[gen_col::PMAX],
             pmin: row[gen_col::PMIN],
             cost: None,
+            reactive_cost: None,
+            extra: row[gen_col::REQUIRED..].to_vec(),
         })
     }
 }
@@ -294,8 +373,15 @@ pub struct MpcCase {
     pub gens: Vec<Generator>,
     /// Storage units (`mpc.storage`). Empty when the case has no storage block.
     pub storage: Vec<Storage>,
+    /// Two-terminal HVDC lines (`mpc.dcline`). Empty when absent.
+    pub dclines: Vec<DcLine>,
     /// MATPOWER bus id → dense index in [0, n).
     bus_id_to_idx: HashMap<usize, usize>,
+    /// Faithful source document, present when parsed from `.m` text. Enables
+    /// exact round-trip via `write_matpower` without bloating the typed structs;
+    /// `None` for cases built in memory (e.g. `synth`). Boxed to keep `MpcCase`
+    /// small on the matrix hot paths.
+    source: Option<Box<crate::parser::matpower::MatpowerDocument>>,
 }
 
 impl MpcCase {
@@ -317,7 +403,9 @@ impl MpcCase {
             branches,
             gens: Vec::new(),
             storage: Vec::new(),
+            dclines: Vec::new(),
             bus_id_to_idx,
+            source: None,
         }
     }
 
@@ -334,6 +422,27 @@ impl MpcCase {
     pub fn with_storage(mut self, storage: Vec<Storage>) -> Self {
         self.storage = storage;
         self
+    }
+
+    /// Attach HVDC lines (builder style).
+    #[must_use]
+    pub fn with_dclines(mut self, dclines: Vec<DcLine>) -> Self {
+        self.dclines = dclines;
+        self
+    }
+
+    /// Attach the faithful source document (builder style). Set by the parser
+    /// so the case can round-trip; `write_matpower` replays it verbatim.
+    #[must_use]
+    pub fn with_source(mut self, source: crate::parser::matpower::MatpowerDocument) -> Self {
+        self.source = Some(Box::new(source));
+        self
+    }
+
+    /// The source document, if this case was parsed from `.m` text.
+    #[must_use]
+    pub fn source(&self) -> Option<&crate::parser::matpower::MatpowerDocument> {
+        self.source.as_deref()
     }
 
     /// Dense index of the single reference (slack) bus. Errors unless exactly
@@ -485,6 +594,7 @@ mod tests {
             zone: 1,
             vmax: 1.1,
             vmin: 0.9,
+            name: None,
         }
     }
 
@@ -566,6 +676,28 @@ pub mod branch_col {
     pub const REQUIRED: usize = 13;
 }
 
+/// DC line matrix column indices per the MATPOWER manual (0-based).
+pub mod dcline_col {
+    pub const F_BUS: usize = 0;
+    pub const T_BUS: usize = 1;
+    pub const BR_STATUS: usize = 2;
+    pub const PF: usize = 3;
+    pub const PT: usize = 4;
+    pub const QF: usize = 5;
+    pub const QT: usize = 6;
+    pub const VF: usize = 7;
+    pub const VT: usize = 8;
+    pub const PMIN: usize = 9;
+    pub const PMAX: usize = 10;
+    pub const QMINF: usize = 11;
+    pub const QMAXF: usize = 12;
+    pub const QMINT: usize = 13;
+    pub const QMAXT: usize = 14;
+    pub const LOSS0: usize = 15;
+    pub const LOSS1: usize = 16;
+    pub const REQUIRED: usize = 17;
+}
+
 /// Generator matrix column indices per the MATPOWER manual (0-based).
 pub mod gen_col {
     pub const GEN_BUS: usize = 0;
@@ -640,6 +772,7 @@ impl Bus {
             zone: row[bus_col::ZONE] as usize,
             vmax: row[bus_col::VMAX],
             vmin: row[bus_col::VMIN],
+            name: None, // populated from `mpc.bus_name` by the parser
         })
     }
 }

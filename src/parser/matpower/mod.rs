@@ -1,14 +1,19 @@
 //! MATPOWER `.m` case file parser. Standard MATPOWER 7.x format.
 
+pub mod document;
 mod matlab;
 mod tokens;
+mod writer;
 
 #[cfg(test)]
 mod tests;
 
 use std::path::Path;
 
-use crate::case::{Branch, Bus, GenCost, Generator, MpcCase, Storage};
+pub use document::MatpowerDocument;
+pub use writer::{write_matpower, write_matpower_file};
+
+use crate::case::{Branch, Bus, DcLine, GenCost, Generator, MpcCase, Storage};
 use crate::{Error, Result};
 
 /// Parse the MATPOWER case in `content` and return a domain `MpcCase`.
@@ -39,7 +44,7 @@ fn parse_matpower_named(content: &str, name: &str) -> Result<MpcCase> {
     let branch_rows = matlab::find_matrix(&stripped, "branch")?
         .ok_or(Error::MissingField("branch"))?;
 
-    let buses: Vec<Bus> = bus_rows
+    let mut buses: Vec<Bus> = bus_rows
         .iter()
         .enumerate()
         .map(|(i, row)| Bus::from_row(row, i))
@@ -53,10 +58,40 @@ fn parse_matpower_named(content: &str, name: &str) -> Result<MpcCase> {
 
     let gens = parse_gens(&stripped)?;
     let storage = parse_storage(&stripped)?;
+    let dclines = parse_dclines(&stripped)?;
+
+    // Build the faithful source document from the *original* content (comments
+    // and all) so the case can round-trip losslessly. Typed parsing above runs
+    // on the comment-stripped copy and is unaffected.
+    let source = document::build_document(content);
+
+    // Bus names live in a `{...}` cell array; pull them from the document
+    // (which kept the quotes) and attach by position when the count matches.
+    if let Some(raw) = source.assignment("bus_name") {
+        let names = document::parse_string_cell(raw);
+        if names.len() == buses.len() {
+            for (bus, label) in buses.iter_mut().zip(names) {
+                bus.name = Some(label);
+            }
+        }
+    }
 
     Ok(MpcCase::new(name, base_mva, buses, branches)
         .with_gens(gens)
-        .with_storage(storage))
+        .with_storage(storage)
+        .with_dclines(dclines)
+        .with_source(source))
+}
+
+/// Parse the optional `mpc.dcline` block (two-terminal HVDC).
+fn parse_dclines(stripped: &str) -> Result<Vec<DcLine>> {
+    let Some(rows) = matlab::find_matrix(stripped, "dcline")? else {
+        return Ok(Vec::new());
+    };
+    rows.iter()
+        .enumerate()
+        .map(|(i, row)| DcLine::from_row(row, i))
+        .collect()
 }
 
 /// Parse the optional `mpc.storage` block. A case without storage gets none.
@@ -91,14 +126,21 @@ fn parse_gens(stripped: &str) -> Result<Vec<Generator>> {
         // (active + reactive) so a truncated/garbled block is caught here
         // instead of silently truncating via `zip` and surfacing later as a
         // misleading per-generator `MissingGenCost`.
-        if cost_rows.len() != gens.len() && cost_rows.len() != 2 * gens.len() {
+        let n = gens.len();
+        if cost_rows.len() != n && cost_rows.len() != 2 * n {
             return Err(Error::GenCostCountMismatch {
-                gens: gens.len(),
+                gens: n,
                 gencost: cost_rows.len(),
             });
         }
-        for (i, (gen, row)) in gens.iter_mut().zip(cost_rows.iter()).enumerate() {
+        for (i, (gen, row)) in gens.iter_mut().zip(&cost_rows[..n]).enumerate() {
             gen.cost = Some(GenCost::from_row(row, i)?);
+        }
+        // The optional second block holds reactive-power costs, one row per gen.
+        if cost_rows.len() == 2 * n {
+            for (i, (gen, row)) in gens.iter_mut().zip(&cost_rows[n..]).enumerate() {
+                gen.reactive_cost = Some(GenCost::from_row(row, n + i)?);
+            }
         }
     }
 

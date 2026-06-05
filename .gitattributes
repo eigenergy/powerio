@@ -3,4 +3,4 @@
 # out the Rust source in the language bar. Mark them vendored to drop them from
 # the language stats and collapse them in diffs. The files stay in the repo so
 # the test suite stays hermetic.
-tests/data/*.m linguist-vendored
+tests/data/**/*.m linguist-vendored
