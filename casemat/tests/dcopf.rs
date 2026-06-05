@@ -1,8 +1,8 @@
 //! DC-OPF matrix forge: incidence, Laplacian, OPF instance, and the export
 //! bundle. Run against vendored MATPOWER cases.
 
-use netmat::case::BusType;
-use netmat::{
+use casemat::case::BusType;
+use casemat::{
     Branch, Bus, DcConvention, Error, GenCost, Generator, MpcCase, Scheme, Units, build_adjacency,
     build_bprime, build_flow_map, build_incidence, build_lodf, build_opf_instance, build_ptdf,
     build_weighted_laplacian, ground_at, parse_matpower_file,
@@ -10,11 +10,11 @@ use netmat::{
 use sprs::CsMat;
 
 const CASES: &[&str] = &[
-    "tests/data/case9.m",
-    "tests/data/case14.m",
-    "tests/data/case30.m",
-    "tests/data/case57.m",
-    "tests/data/case118.m",
+    "../tests/data/case9.m",
+    "../tests/data/case14.m",
+    "../tests/data/case30.m",
+    "../tests/data/case57.m",
+    "../tests/data/case118.m",
 ];
 
 fn load(path: &str) -> MpcCase {
@@ -54,7 +54,7 @@ fn is_spd(a: &[Vec<f64>]) -> bool {
 
 #[test]
 fn parses_generators_and_costs() {
-    let case = load("tests/data/case9.m");
+    let case = load("../tests/data/case9.m");
     assert_eq!(case.gens.len(), 3);
     let quads: Vec<(f64, f64)> = case
         .gens
@@ -78,7 +78,7 @@ fn laplacian_equals_bprime_xb() {
         let l = build_weighted_laplacian(&inc.a, &inc.b);
         let bp = build_bprime(
             &case,
-            &netmat::BuildOptions {
+            &casemat::BuildOptions {
                 scheme: Scheme::Xb,
                 ..Default::default()
             },
@@ -213,17 +213,17 @@ fn opf_instance_shapes_and_cg() {
 
 #[test]
 fn bundle_round_trips() {
-    let case = load("tests/data/case14.m");
-    let dir = std::env::temp_dir().join("netmat_dcopf_test");
+    let case = load("../tests/data/case14.m");
+    let dir = std::env::temp_dir().join("casemat_dcopf_test");
     let _ = std::fs::remove_dir_all(&dir);
-    let out = netmat::write_dcopf_bundle(&case, &dir, &netmat::DcOpfOptions::default()).unwrap();
+    let out = casemat::write_dcopf_bundle(&case, &dir, &casemat::DcOpfOptions::default()).unwrap();
     assert!(out.dir.join("A.mtx").exists());
     assert!(out.dir.join("L.mtx").exists());
     assert!(out.dir.join("dcopf_meta.json").exists());
 
-    let a = netmat::io::read_mtx(out.dir.join("A.mtx")).unwrap();
+    let a = casemat::io::read_mtx(out.dir.join("A.mtx")).unwrap();
     assert_eq!(a.rows(), case.n());
-    let l = netmat::io::read_mtx(out.dir.join("L.mtx")).unwrap();
+    let l = casemat::io::read_mtx(out.dir.join("L.mtx")).unwrap();
     assert_eq!(l.rows(), case.n());
     assert_eq!(l.cols(), case.n());
     let _ = std::fs::remove_dir_all(&dir);
@@ -232,14 +232,14 @@ fn bundle_round_trips() {
 #[test]
 fn no_generators_errors() {
     // A synthetic case has branches but no generators.
-    let spec = netmat::synth::SynthSpec {
-        topology: netmat::synth::Topology::Tree,
+    let spec = casemat::synth::SynthSpec {
+        topology: casemat::synth::Topology::Tree,
         n: 16,
         r_over_x: 0.1,
         mean_x: 0.05,
         seed: 1,
     };
-    let case = netmat::synth::generate(&spec);
+    let case = casemat::synth::generate(&spec);
     let inc = build_incidence(&case, DcConvention::PaperPure).unwrap();
     let err = build_opf_instance(&case, &inc, Units::PerUnit).unwrap_err();
     assert!(matches!(err, Error::NoGenerators), "got {err:?}");
@@ -430,7 +430,7 @@ fn poly_gen(bus_id: usize, pmax: f64, c2: f64, c1: f64) -> Generator {
 
 /// DC-OPF instance for `case` under the default PaperPure convention. Returns
 /// the `Result` so error-path tests can assert on the failure.
-fn opf_of(case: &MpcCase, units: Units) -> netmat::Result<netmat::OpfInstance> {
+fn opf_of(case: &MpcCase, units: Units) -> casemat::Result<casemat::OpfInstance> {
     let inc = build_incidence(case, DcConvention::PaperPure)?;
     build_opf_instance(case, &inc, units)
 }
@@ -521,17 +521,17 @@ fn matpower_convention_tap_and_shift() {
 
 #[test]
 fn bundle_vectors_round_trip() {
-    let case = load("tests/data/case14.m");
-    let dir = std::env::temp_dir().join("netmat_dcopf_vectors_test");
+    let case = load("../tests/data/case14.m");
+    let dir = std::env::temp_dir().join("casemat_dcopf_vectors_test");
     let _ = std::fs::remove_dir_all(&dir);
-    let out = netmat::write_dcopf_bundle(&case, &dir, &netmat::DcOpfOptions::default()).unwrap();
+    let out = casemat::write_dcopf_bundle(&case, &dir, &casemat::DcOpfOptions::default()).unwrap();
 
     // Default options are PaperPure + PerUnit; rebuild the instance to compare.
     let inc = build_incidence(&case, DcConvention::PaperPure).unwrap();
     let opf = build_opf_instance(&case, &inc, Units::PerUnit).unwrap();
 
     let check = |name: &str, want: &[f64]| {
-        let got = netmat::io::read_vector_mtx(out.dir.join(name)).unwrap();
+        let got = casemat::io::read_vector_mtx(out.dir.join(name)).unwrap();
         assert_eq!(got.len(), want.len(), "{name}: length");
         for (i, (&g, &w)) in got.iter().zip(want).enumerate() {
             assert!((g - w).abs() < 1e-9, "{name}[{i}]={g} != {w}");
@@ -604,7 +604,7 @@ fn disconnected_network_errors() {
 
 #[test]
 fn perunit_scales_native_by_base() {
-    let case = load("tests/data/case9.m");
+    let case = load("../tests/data/case9.m");
     let base = case.base_mva;
     let native = opf_of(&case, Units::Native).unwrap();
     let pu = opf_of(&case, Units::PerUnit).unwrap();

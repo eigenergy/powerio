@@ -1,4 +1,4 @@
-# netmat
+# casemat
 
 Turns power network case files into structured sparse matrices and graph views for any downstream solver. Parse a case, get the matrix you want — incidence, admittance, Laplacian, PTDF/LODF, FDPF, DC-OPF data — as Matrix Market or NumPy, or in memory. No runtime, no ecosystem to buy into, single binary. The numerical analyst's "give me the matrix, now" tool.
 
@@ -9,7 +9,7 @@ Turns power network case files into structured sparse matrices and graph views f
 
 ### Versus other parsers
 
-ExaPowerIO.jl is a fast Julia MATPOWER reader but write-only-absent; PowerModels.jl is multi-format but drags in the JuMP/optimization stack and its MATPOWER export is lossy. netmat is the only one that is fast *and* byte-exact round-trip *and* callable from Rust, the CLI, and Python (`pip install netmat`) with no runtime. It captures `bus_name`, HVDC `dcline`, the full generator columns (ramp rates, Pc/Qc, apf), and the reactive-power `gencost` block — fields other lightweight parsers drop.
+ExaPowerIO.jl is a fast Julia MATPOWER reader but write-only-absent; PowerModels.jl is multi-format but drags in the JuMP/optimization stack and its MATPOWER export is lossy. casemat is the only one that is fast *and* byte-exact round-trip *and* callable from Rust, the CLI, and Python (`pip install casemat`) with no runtime. It captures `bus_name`, HVDC `dcline`, the full generator columns (ramp rates, Pc/Qc, apf), and the reactive-power `gencost` block — fields other lightweight parsers drop.
 
 ## Outputs
 
@@ -31,12 +31,12 @@ cargo build --release
 ## Run
 
 ```
-netmat                                                    # TUI
-netmat batch -i tests/data -o out --matrices bprime,bdoubleprime,lacpf --rhs random
-netmat gen --topology lattice --n 1024 -o out
-netmat verify tests/data/case30.m --kind bdoubleprime
-netmat dcopf tests/data/case30.m -o out                  # DC-OPF instance bundle
-netmat sensitivities tests/data/case30.m -o out          # PTDF + LODF
+casemat                                                    # TUI
+casemat batch -i tests/data -o out --matrices bprime,bdoubleprime,lacpf --rhs random
+casemat gen --topology lattice --n 1024 -o out
+casemat verify tests/data/case30.m --kind bdoubleprime
+casemat dcopf tests/data/case30.m -o out                  # DC-OPF instance bundle
+casemat sensitivities tests/data/case30.m -o out          # PTDF + LODF
 ```
 
 ## TUI keys
@@ -53,7 +53,7 @@ netmat sensitivities tests/data/case30.m -o out          # PTDF + LODF
 ## Library
 
 ```rust
-use netmat::{parse_matpower_file, build_bprime, BuildOptions, Pipeline, MatrixKind, RhsKind};
+use casemat::{parse_matpower_file, build_bprime, BuildOptions, Pipeline, MatrixKind, RhsKind};
 
 let mpc = parse_matpower_file("case14.m")?;
 let b = build_bprime(&mpc, &BuildOptions::default())?;
@@ -62,7 +62,7 @@ assert!(mpc.connectivity_report().is_single_island());
 
 // Lossless round-trip: reproduces the source (modulo the trailing newline),
 // bus_name and dcline included.
-let m = netmat::write_matpower(&mpc);
+let m = casemat::write_matpower(&mpc);
 
 Pipeline {
     matrices: vec![MatrixKind::BPrime, MatrixKind::Lacpf],
@@ -74,7 +74,7 @@ Pipeline {
 Incidence factorization and DC-OPF instance data:
 
 ```rust
-use netmat::{build_incidence, build_weighted_laplacian, build_opf_instance,
+use casemat::{build_incidence, build_weighted_laplacian, build_opf_instance,
              DcConvention, Units};
 
 let inc = build_incidence(&mpc, DcConvention::PaperPure)?;   // A, b
@@ -87,11 +87,11 @@ let opf = build_opf_instance(&mpc, &inc, Units::PerUnit)?;   // Q, c, bounds, C_
 PyO3 bindings expose the parser and every matrix builder as `scipy.sparse` matrices and a networkx graph.
 
 ```
-pip install netmat            # wheels for Linux / macOS / Windows, Python 3.9+
+pip install casemat            # wheels for Linux / macOS / Windows, Python 3.9+
 ```
 
 ```python
-import netmat as nm
+import casemat as nm
 
 case = nm.parse_matpower("tests/data/case9.m")
 B = case.bprime()             # scipy.sparse.csr_matrix, the FDPF B'
@@ -100,7 +100,7 @@ A = case.adjacency()
 ptdf, lodf = case.ptdf(), case.lodf()
 inc = case.incidence()        # inc.A (csr), inc.b, inc.p_shift, inc.branch_of_col
 L = case.weighted_laplacian()
-g = case.to_networkx()        # needs networkx: pip install 'netmat[networkx]'
+g = case.to_networkx()        # needs networkx: pip install 'casemat[networkx]'
 
 case.write_dcopf_bundle("out/")   # the DC-OPF bundle, same as the `dcopf` subcommand
 ```
@@ -114,15 +114,15 @@ buses = pd.DataFrame(case.buses)
 
 ### Benchmark
 
-netmat parses *and* builds matrices; `matpowercaseframes` only parses into DataFrames. On case2869pegase (2869 buses, 4582 branches), release build, Apple M-series, best of 25 runs:
+casemat parses *and* builds matrices; `matpowercaseframes` only parses into DataFrames. On case2869pegase (2869 buses, 4582 branches), release build, Apple M-series, best of 25 runs:
 
 | task                          | time   |
 | ----------------------------- | ------ |
-| netmat: parse                 | ~2 ms  |
-| netmat: parse + Y_bus + B'    | ~5 ms  |
+| casemat: parse                 | ~2 ms  |
+| casemat: parse + Y_bus + B'    | ~5 ms  |
 | matpowercaseframes: parse     | ~25 ms |
 
-The full parse + matrix path stays well under the 100 ms target. Reproduce with `python benchmarks/bench_parse.py` after `pip install 'netmat[bench]'`.
+The full parse + matrix path stays well under the 100 ms target. Reproduce with `python benchmarks/bench_parse.py` after `pip install 'casemat[bench]'`.
 
 Build from source with [maturin](https://www.maturin.rs):
 

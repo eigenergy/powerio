@@ -1,5 +1,5 @@
 # Cross-tool parse benchmark: PowerModels.jl and ExaPowerIO.jl on the same
-# MATPOWER files netmat is benchmarked on. Reports median time and allocations.
+# MATPOWER files casemat is benchmarked on. Reports median time and allocations.
 #
 #   julia --project=benchmarks benchmarks/bench_julia.jl [case.m ...]
 #

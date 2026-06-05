@@ -170,7 +170,7 @@ impl Pipeline {
             n_branches: case.branches.len(),
             build_options: self.options.clone(),
             matrices: matrices_meta,
-            netmat_version: env!("CARGO_PKG_VERSION").to_string(),
+            casemat_version: env!("CARGO_PKG_VERSION").to_string(),
         };
         let meta_path = out_dir.join(format!("{}_meta.json", case.name));
         write_meta_json(&metadata, &meta_path)?;

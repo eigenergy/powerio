@@ -23,10 +23,10 @@ cargo build --release
 cargo test
 cargo clippy --all-targets
 
-netmat                                                    # TUI
-netmat batch -i tests/data -o out --matrices bprime,bdoubleprime
-netmat gen --topology lattice --n 1024 -o out
-netmat verify tests/data/case30.m --kind bdoubleprime
+casemat                                                    # TUI
+casemat batch -i tests/data -o out --matrices bprime,bdoubleprime
+casemat gen --topology lattice --n 1024 -o out
+casemat verify tests/data/case30.m --kind bdoubleprime
 ```
 
 ## Layout
@@ -77,7 +77,7 @@ tests/
 - **B' ignores taps and shifts. B'' zeros only shifts. Y_bus keeps both.**
 - **MTX output is lower triangle, 1 based, spec compliant.** `sprs::io::write_matrix_market_sym` writes the *upper* triangle, so `io::mtx::write_mtx` ships its own writer.
 - **`CooBuilder`.** HashMap COO with O(nnz) inserts; replaces the old O(nnz²) Vec search.
-- **TUI lives in the library.** `src/tui/`. Testable via `ratatui::backend::TestBackend`. Binary calls `netmat::tui::run`.
+- **TUI lives in the library.** `src/tui/`. Testable via `ratatui::backend::TestBackend`. Binary calls `casemat::tui::run`.
 - **petgraph view.** `MpcCase::to_petgraph()` returns `UnGraph<usize, usize>` where node weight = dense bus index, edge weight = branch index. Use it for connectivity, radial detection, spanning trees (LinDist3Flow).
 - **Adding a format.** New `src/parser/<format>/mod.rs`, expose `parse_<format>(_file)`, re-export. Keep `MpcCase` as the unifying domain type.
 

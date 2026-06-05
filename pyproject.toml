@@ -3,8 +3,8 @@ requires = ["maturin>=1.7,<2.0"]
 build-backend = "maturin"
 
 [project]
-name = "netmat"
-# version is read from netmat-ext/Cargo.toml by maturin (kept single-source).
+name = "casemat"
+# version is read from casemat-ext/Cargo.toml by maturin (kept single-source).
 dynamic = ["version"]
 description = "Power network case files into sparse matrices and graph views"
 readme = "README.md"
@@ -26,13 +26,13 @@ networkx = ["networkx>=2.6"]
 bench = ["matpowercaseframes"]
 
 [project.urls]
-Repository = "https://github.com/eigenergy/netmat"
+Repository = "https://github.com/eigenergy/caseio"
 
 [tool.maturin]
 # The Rust extension lives in a workspace member; the importable package is the
-# pure-Python tree under python/netmat/, into which `_netmat` is dropped.
-manifest-path = "netmat-ext/Cargo.toml"
-module-name = "netmat._netmat"
+# pure-Python tree under python/casemat/, into which `_casemat` is dropped.
+manifest-path = "casemat-ext/Cargo.toml"
+module-name = "casemat._casemat"
 python-source = "python"
 features = ["extension-module"]
 strip = true

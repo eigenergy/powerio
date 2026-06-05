@@ -158,6 +158,51 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c8efb64bd706a16a1bdde310ae86b351e4d21550d98d056f22f8a7f7a2183fec"
 
 [[package]]
+name = "caseio"
+version = "0.1.0"
+dependencies = [
+ "criterion",
+ "fast-float",
+ "num-complex",
+ "petgraph",
+ "serde",
+ "thiserror 2.0.18",
+]
+
+[[package]]
+name = "casemat"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "approx",
+ "caseio",
+ "clap",
+ "crossterm",
+ "num-complex",
+ "rand 0.9.4",
+ "rand_chacha",
+ "ratatui",
+ "rayon",
+ "serde",
+ "serde_json",
+ "sha2",
+ "sprs",
+ "tracing",
+ "tracing-subscriber",
+ "walkdir",
+]
+
+[[package]]
+name = "casemat-ext"
+version = "0.1.0"
+dependencies = [
+ "casemat",
+ "numpy",
+ "pyo3",
+ "sprs",
+]
+
+[[package]]
 name = "cast"
 version = "0.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -959,42 +1004,6 @@ dependencies = [
  "portable-atomic",
  "portable-atomic-util",
  "rawpointer",
-]
-
-[[package]]
-name = "netmat"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "approx",
- "clap",
- "criterion",
- "crossterm",
- "fast-float",
- "num-complex",
- "petgraph",
- "rand 0.9.4",
- "rand_chacha",
- "ratatui",
- "rayon",
- "serde",
- "serde_json",
- "sha2",
- "sprs",
- "thiserror 2.0.18",
- "tracing",
- "tracing-subscriber",
- "walkdir",
-]
-
-[[package]]
-name = "netmat-ext"
-version = "0.1.0"
-dependencies = [
- "netmat",
- "numpy",
- "pyo3",
- "sprs",
 ]
 
 [[package]]

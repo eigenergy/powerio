@@ -1,14 +1,14 @@
 #!/usr/bin/env python3
-"""Benchmark netmat against matpowercaseframes on a large MATPOWER case.
+"""Benchmark casemat against matpowercaseframes on a large MATPOWER case.
 
-netmat parses *and* builds matrices (Y_bus, B'); matpowercaseframes only parses
+casemat parses *and* builds matrices (Y_bus, B'); matpowercaseframes only parses
 the case into pandas DataFrames. So the "parse" rows are the apples-to-apples
-comparison, and "parse + Y_bus + B'" is netmat's full path against issue #5's
+comparison, and "parse + Y_bus + B'" is casemat's full path against issue #5's
 100 ms target for case2869pegase.
 
     python benchmarks/bench_parse.py [path/to/case.m]
 
-Install the comparison baseline with `pip install 'netmat[bench]'`.
+Install the comparison baseline with `pip install 'casemat[bench]'`.
 """
 
 import statistics
@@ -16,7 +16,7 @@ import sys
 import time
 from pathlib import Path
 
-import netmat as nm
+import casemat as nm
 
 DEFAULT_CASE = (
     Path(__file__).resolve().parent.parent / "tests" / "data" / "case2869pegase.m"
@@ -43,7 +43,7 @@ def main():
     )
 
     rows = [
-        ("netmat: parse", *best_median(lambda: nm.parse_matpower(str(path)))),
+        ("casemat: parse", *best_median(lambda: nm.parse_matpower(str(path)))),
     ]
 
     def full_path():
@@ -51,7 +51,7 @@ def main():
         c.ybus()
         c.bprime()
 
-    rows.append(("netmat: parse + Y_bus + B'", *best_median(full_path)))
+    rows.append(("casemat: parse + Y_bus + B'", *best_median(full_path)))
 
     try:
         from matpowercaseframes import CaseFrames
@@ -64,7 +64,7 @@ def main():
         if getattr(exc, "name", None) not in ("matpowercaseframes", None):
             raise
         print("matpowercaseframes not installed; skipping the baseline row.")
-        print("  pip install 'netmat[bench]'\n")
+        print("  pip install 'casemat[bench]'\n")
 
     width = max(len(name) for name, *_ in rows)
     print(f"{'task':<{width}}  {'best (ms)':>10}  {'median (ms)':>12}")

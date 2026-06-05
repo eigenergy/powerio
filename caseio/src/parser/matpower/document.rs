@@ -5,7 +5,7 @@
 //! [`DocItem`]: either an `mpc.<field> = …;` assignment captured as its exact
 //! source text, or a verbatim line (comments, blanks, the `function` header,
 //! stray code). Concatenating the items reproduces the file modulo trailing
-//! whitespace — including fields netmat never interprets, in-matrix column
+//! whitespace — including fields caseio never interprets, in-matrix column
 //! header comments, and exact numeric tokens like `7e-05` that an `f64`
 //! round-trip would mangle.
 //!

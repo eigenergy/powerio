@@ -2,14 +2,14 @@ use std::path::PathBuf;
 
 use anyhow::Context;
 use clap::{Parser, Subcommand, ValueEnum};
-use netmat::matrix::{BuildOptions, DcConvention, Scheme, Units, sddm_check};
-use netmat::opf_pipeline::{DcOpfOptions, write_dcopf_bundle};
-use netmat::pipeline::{MatrixKind, Pipeline, RhsKind};
-use netmat::synth::{SynthSpec, Topology};
-use netmat::tui;
+use casemat::matrix::{BuildOptions, DcConvention, Scheme, Units, sddm_check};
+use casemat::opf_pipeline::{DcOpfOptions, write_dcopf_bundle};
+use casemat::pipeline::{MatrixKind, Pipeline, RhsKind};
+use casemat::synth::{SynthSpec, Topology};
+use casemat::tui;
 
 #[derive(Parser, Debug)]
-#[command(name = "netmat", version, about)]
+#[command(name = "casemat", version, about)]
 struct Cli {
     #[command(subcommand)]
     command: Option<Command>,
@@ -295,7 +295,7 @@ fn run_batch(
     };
 
     for case_path in &cases {
-        let mpc = netmat::parse_matpower_file(case_path)
+        let mpc = casemat::parse_matpower_file(case_path)
             .with_context(|| format!("parse {}", case_path.display()))?;
         let mut p = pipeline.clone();
         p.source_file = Some(case_path.clone());
@@ -328,7 +328,7 @@ fn run_gen(
         mean_x,
         seed,
     };
-    let case = netmat::synth::generate(&spec);
+    let case = casemat::synth::generate(&spec);
     let pipeline = Pipeline {
         matrices: matrices.into_iter().map(MatrixKind::from).collect(),
         ..Default::default()
@@ -348,17 +348,17 @@ fn run_sensitivities(
     output: PathBuf,
     convention: DcConvention,
 ) -> anyhow::Result<()> {
-    let mpc = netmat::parse_matpower_file(&input)
+    let mpc = casemat::parse_matpower_file(&input)
         .with_context(|| format!("parse {}", input.display()))?;
     std::fs::create_dir_all(&output)?;
-    let ptdf = netmat::build_ptdf(&mpc, convention)
+    let ptdf = casemat::build_ptdf(&mpc, convention)
         .with_context(|| format!("PTDF for {}", input.display()))?;
-    let lodf = netmat::build_lodf(&mpc, convention)
+    let lodf = casemat::build_lodf(&mpc, convention)
         .with_context(|| format!("LODF for {}", input.display()))?;
     let ptdf_path = output.join(format!("{}_ptdf.mtx", mpc.name));
     let lodf_path = output.join(format!("{}_lodf.mtx", mpc.name));
-    netmat::io::mtx::write_mtx(&ptdf, &ptdf_path)?;
-    netmat::io::mtx::write_mtx(&lodf, &lodf_path)?;
+    casemat::io::mtx::write_mtx(&ptdf, &ptdf_path)?;
+    casemat::io::mtx::write_mtx(&lodf, &lodf_path)?;
     tracing::info!(
         case = %mpc.name,
         ptdf = %ptdf_path.display(),
@@ -374,7 +374,7 @@ fn run_dcopf(
     convention: DcConvention,
     units: Units,
 ) -> anyhow::Result<()> {
-    let mpc = netmat::parse_matpower_file(&input)
+    let mpc = casemat::parse_matpower_file(&input)
         .with_context(|| format!("parse {}", input.display()))?;
     let opts = DcOpfOptions { convention, units };
     let outputs = write_dcopf_bundle(&mpc, &output, &opts)
@@ -389,26 +389,26 @@ fn run_dcopf(
 }
 
 fn run_verify(input: PathBuf, kind: MatrixKind, scheme: Scheme) -> anyhow::Result<()> {
-    let mpc = netmat::parse_matpower_file(&input)?;
+    let mpc = casemat::parse_matpower_file(&input)?;
     let opts = BuildOptions {
         scheme,
         ..Default::default()
     };
     let matrix = match kind {
-        MatrixKind::BPrime => netmat::build_bprime(&mpc, &opts)?,
-        MatrixKind::BDoublePrime => netmat::build_bdoubleprime(&mpc, &opts)?,
-        MatrixKind::YbusG => netmat::build_ybus(&mpc, &opts)?.g,
+        MatrixKind::BPrime => casemat::build_bprime(&mpc, &opts)?,
+        MatrixKind::BDoublePrime => casemat::build_bdoubleprime(&mpc, &opts)?,
+        MatrixKind::YbusG => casemat::build_ybus(&mpc, &opts)?.g,
         MatrixKind::YbusB => {
-            let mut b = netmat::build_ybus(&mpc, &opts)?.b;
+            let mut b = casemat::build_ybus(&mpc, &opts)?.b;
             for v in b.data_mut() {
                 *v = -*v;
             }
             b
         }
-        MatrixKind::Lacpf => netmat::build_lacpf(&mpc, &opts)?,
-        MatrixKind::Adjacency => netmat::build_adjacency(&mpc)?,
+        MatrixKind::Lacpf => casemat::build_lacpf(&mpc, &opts)?,
+        MatrixKind::Adjacency => casemat::build_adjacency(&mpc)?,
     };
-    let stats = netmat::matrix::MatrixStats::from_csr(&matrix);
+    let stats = casemat::matrix::MatrixStats::from_csr(&matrix);
     let sddm = sddm_check(&matrix);
     println!(
         "{} ({}): n={} nnz={} min_diag={:.3e} max_diag={:.3e} dd_margin={:.3e} M-sign={} ‖A‖_F={:.3e} SDDM={}",
