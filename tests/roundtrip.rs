@@ -106,6 +106,42 @@ fn captures_extra_generator_columns() {
 }
 
 #[test]
+fn unescapes_doubled_quotes_in_bus_names() {
+    let src = "function mpc = q\n\
+        mpc.baseMVA = 100;\n\
+        mpc.bus = [\n\t1\t3\t0\t0\t0\t0\t1\t1\t0\t230\t1\t1.1\t0.9;\n\t2\t1\t0\t0\t0\t0\t1\t1\t0\t230\t1\t1.1\t0.9;\n];\n\
+        mpc.branch = [\n\t1\t2\t0.01\t0.1\t0\t250\t250\t250\t0\t0\t1\t-360\t360;\n];\n\
+        mpc.bus_name = {\n\t'O''Brien';\n\t'Plain';\n};\n";
+    let case = parse_matpower(src).unwrap();
+    assert_eq!(case.buses[0].name.as_deref(), Some("O'Brien"));
+    assert_eq!(case.buses[1].name.as_deref(), Some("Plain"));
+    // The raw `''` is preserved on round-trip regardless of the typed unescape.
+    assert!(write_matpower(&case).contains("'O''Brien'"));
+}
+
+#[test]
+fn synth_case_round_trips_via_canonical_writer() {
+    use netmat::synth::{generate, SynthSpec, Topology};
+    let spec = SynthSpec {
+        topology: Topology::Tree,
+        n: 8,
+        r_over_x: 0.1,
+        mean_x: 0.05,
+        seed: 1,
+    };
+    let case = generate(&spec); // no source document → canonical writer
+    let reparsed = parse_matpower(&write_matpower(&case)).unwrap();
+    assert_eq!(reparsed.buses.len(), case.buses.len());
+    assert_eq!(reparsed.branches.len(), case.branches.len());
+
+    // A name that isn't a legal MATLAB identifier still produces parseable `.m`.
+    let bad = netmat::MpcCase::new("grid-1", case.base_mva, case.buses.clone(), case.branches.clone());
+    let written = write_matpower(&bad);
+    assert!(written.contains("function mpc = grid_1"));
+    assert!(parse_matpower(&written).is_ok());
+}
+
+#[test]
 fn preserves_scientific_notation_tokens() {
     // case2869pegase has 172 tokens like `7e-05`; an f64-based writer would
     // re-emit `0.00007`. The document keeps the original token.

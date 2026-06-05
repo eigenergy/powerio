@@ -30,9 +30,10 @@ pub fn write_matpower_file(case: &MpcCase, path: impl AsRef<Path>) -> Result<()>
 
 /// Canonical MATPOWER from typed data, for cases with no source document.
 /// Emits valid `.m` (values equal, formatting normalized); not byte-exact.
+#[allow(clippy::too_many_lines)] // flat per-section serializer; splitting adds noise
 fn canonical(case: &MpcCase) -> String {
     let mut s = String::new();
-    let _ = writeln!(s, "function mpc = {}", case.name);
+    let _ = writeln!(s, "function mpc = {}", matlab_ident(&case.name));
     let _ = writeln!(s, "mpc.version = '2';");
     let _ = writeln!(s, "mpc.baseMVA = {};", case.base_mva);
 
@@ -40,7 +41,7 @@ fn canonical(case: &MpcCase) -> String {
     for b in &case.buses {
         let _ = writeln!(
             s,
-            "\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}",
+            "\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{};",
             b.id,
             b.kind as u8,
             b.pd,
@@ -62,7 +63,7 @@ fn canonical(case: &MpcCase) -> String {
     for br in &case.branches {
         let _ = writeln!(
             s,
-            "\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}",
+            "\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{};",
             br.from_id,
             br.to_id,
             br.r,
@@ -85,7 +86,7 @@ fn canonical(case: &MpcCase) -> String {
         for g in &case.gens {
             let _ = writeln!(
                 s,
-                "\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}",
+                "\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{};",
                 g.bus_id, g.pg, g.qg, g.qmax, g.qmin, g.vg, g.mbase, g.status, g.pmax, g.pmin
             );
         }
@@ -103,7 +104,7 @@ fn canonical(case: &MpcCase) -> String {
                 for coeff in &c.coeffs {
                     let _ = write!(s, "\t{coeff}");
                 }
-                let _ = writeln!(s);
+                let _ = writeln!(s, ";");
             }
             let _ = writeln!(s, "];");
         }
@@ -114,7 +115,7 @@ fn canonical(case: &MpcCase) -> String {
         for st in &case.storage {
             let _ = writeln!(
                 s,
-                "\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}",
+                "\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{};",
                 st.bus_id,
                 st.ps,
                 st.qs,
@@ -138,4 +139,24 @@ fn canonical(case: &MpcCase) -> String {
     }
 
     s
+}
+
+/// Coerce a case name into a legal MATLAB identifier for the `function` header:
+/// non-alphanumeric chars become `_`, and a leading non-letter is prefixed so
+/// a synth case named e.g. `"grid-1"` still writes a parseable `.m`.
+fn matlab_ident(name: &str) -> String {
+    let mut ident: String = name
+        .chars()
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || c == '_' {
+                c
+            } else {
+                '_'
+            }
+        })
+        .collect();
+    if !ident.starts_with(|c: char| c.is_ascii_alphabetic()) {
+        ident.insert(0, 'c');
+    }
+    ident
 }

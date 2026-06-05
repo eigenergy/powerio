@@ -114,21 +114,32 @@ pub fn build_document(source: &str) -> MatpowerDocument {
 /// Extract the quoted strings from a `{ '...'; '...' }` cell array assignment,
 /// in order. Used for `mpc.bus_name` / `gentype` / `genfuel`. Tolerant: it
 /// scans the raw assignment text for `'…'` (or `"…"`) runs, so the field name
-/// and the braces/semicolons are simply skipped.
+/// and the braces/semicolons are simply skipped. A doubled quote (`''`) is the
+/// MATLAB escape for a literal quote inside the string and is unescaped.
 pub(crate) fn parse_string_cell(raw: &str) -> Vec<String> {
     let bytes = raw.as_bytes();
     let mut out = Vec::new();
     let mut i = 0;
     while i < bytes.len() {
-        let b = bytes[i];
-        if b == b'\'' || b == b'"' {
+        let q = bytes[i];
+        if q == b'\'' || q == b'"' {
             let start = i + 1;
             let mut j = start;
-            while j < bytes.len() && bytes[j] != b {
+            // Close on a quote that isn't doubled; skip `''` escape pairs.
+            while j < bytes.len() {
+                if bytes[j] == q {
+                    if bytes.get(j + 1) == Some(&q) {
+                        j += 2;
+                        continue;
+                    }
+                    break;
+                }
                 j += 1;
             }
-            out.push(raw[start..j].to_string());
-            i = j + 1;
+            let qc = q as char;
+            let content = &raw[start..j.min(bytes.len())];
+            out.push(content.replace(&format!("{qc}{qc}"), &qc.to_string()));
+            i = (j + 1).min(bytes.len());
         } else {
             i += 1;
         }

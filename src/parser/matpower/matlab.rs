@@ -133,12 +133,29 @@ fn parse_matrix_body(body: &str, field: &str) -> Result<Vec<Vec<f64>>> {
     Ok(rows)
 }
 
+/// Parse the matrix from a single `mpc.<field> = [ … ];` assignment's raw
+/// source text. Comments are stripped from just this section (cheap), then the
+/// existing matrix scanner runs over it. This is how the document-derived
+/// single-pass parser avoids re-scanning the whole file per field.
+pub(crate) fn matrix_from_assignment(raw: &str, field: &str) -> Result<Vec<Vec<f64>>> {
+    let stripped = super::tokens::strip_comments(raw);
+    Ok(find_matrix(&stripped, field)?.unwrap_or_default())
+}
+
+/// Parse the scalar from a single `mpc.<field> = <number>;` assignment.
+pub(crate) fn scalar_from_assignment(raw: &str, field: &str) -> Result<Option<f64>> {
+    let stripped = super::tokens::strip_comments(raw);
+    find_scalar(&stripped, field)
+}
+
 fn parse_float(tok: &str) -> Option<f64> {
     match tok {
         "Inf" | "inf" | "+Inf" | "+inf" => Some(f64::INFINITY),
         "-Inf" | "-inf" => Some(f64::NEG_INFINITY),
         "NaN" | "nan" => Some(f64::NAN),
-        _ => tok.parse::<f64>().ok(),
+        // fast-float is IEEE-correct (same value as std) but several times
+        // faster, and float tokens dominate large-case parse time.
+        _ => fast_float::parse(tok).ok(),
     }
 }
 
