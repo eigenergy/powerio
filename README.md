@@ -1,151 +1,97 @@
-# casemat
+# caseio
 
-Turns power network case files into structured sparse matrices and graph views for any downstream solver. Parse a case, get the matrix you want — incidence, admittance, Laplacian, PTDF/LODF, FDPF, DC-OPF data — as Matrix Market or NumPy, or in memory. No runtime, no ecosystem to buy into, single binary. The numerical analyst's "give me the matrix, now" tool.
+The fast, lossless parser and data layer for power-system case files. Parse a MATPOWER `.m` case, work with a typed model, and write it back out **byte-for-byte**. Dependency-light on purpose, so other tools can take it as a parser without dragging in a matrix or solver stack.
 
-## Inputs
+Two crates in this workspace:
 
-- MATPOWER `.m` (transmission). Done — **lossless**: `parse → write → parse` reproduces the file byte-for-byte, preserving every `mpc.*` field (including ones the typed model doesn't interpret), in-matrix column-header comments, and exact numeric tokens like `7e-05`. `write_matpower` replays the source in ~9 µs; the whole round-trip on case2869pegase is ~2.7 ms. See [benchmarks/RESULTS.md](benchmarks/RESULTS.md).
-- OpenDSS `.dss`, PSS/E `.raw`, PowerModels JSON. See issues.
+- **`caseio`** — the parser, the typed `MpcCase` (buses, branches, generators, storage, HVDC), the faithful source document, and the lossless writer. Five dependencies, no sparse-matrix or TUI baggage.
+- **`casemat`** — sparse matrices and graph views built on caseio: B'/B''/Y_bus, PTDF/LODF, incidence, weighted Laplacian, the LACPF block, adjacency, and the DC-OPF instance bundle, plus a CLI/TUI. Also the `casemat` Python package.
 
-### Versus other parsers
+## Lossless round-trip
 
-ExaPowerIO.jl is a fast Julia MATPOWER reader but write-only-absent; PowerModels.jl is multi-format but drags in the JuMP/optimization stack and its MATPOWER export is lossy. casemat is the only one that is fast *and* byte-exact round-trip *and* callable from Rust, the CLI, and Python (`pip install casemat`) with no runtime. It captures `bus_name`, HVDC `dcline`, the full generator columns (ramp rates, Pc/Qc, apf), and the reactive-power `gencost` block — fields other lightweight parsers drop.
+`parse → write → parse` reproduces the source file byte-for-byte — every `mpc.*` field (including ones the typed model doesn't interpret), in-matrix column-header comments, and exact numeric tokens like `7e-05` that an `f64`-based writer would mangle. The writer replays the source document in ~9 µs. This is the property other lightweight parsers lack: ExaPowerIO has no writer, and PowerModels' MATPOWER export is lossy.
 
-## Outputs
+## Benchmark
 
-- Signed incidence `A`, adjacency, weighted Laplacian `L = A diag(b) Aᵀ` (and slack-grounded)
-- PTDF and LODF (DC sensitivities)
-- B' (FDPF, shuntless) and B'' (FDPF, with shunts and taps)
-- `Re(Y_bus)` and `-Im(Y_bus)`
-- LACPF block `[[G, -B], [-B, -G]]` (linear AC power flow, flat start)
-- DC-OPF instance bundle: incidence `A`, susceptance `b`, the Laplacian `L` and its grounded form, the flow map `B Aᵀ`, generator cost `Q`/`c`, bounds, thermal limits, the generator→bus map `C_g`, and nodal load
-- petgraph view + radial / connectivity diagnostics
-- Matrix Market (lower triangle, 1 based), NumPy `.npy`, JSON metadata
+Median parse time, same machine (Apple M-series, release build); all three return identical bus/branch counts. Full table and method in [benchmarks/RESULTS.md](benchmarks/RESULTS.md).
 
-## Build
+| case | buses / branches | **caseio** | ExaPowerIO.jl | PowerModels.jl |
+| --- | --- | --- | --- | --- |
+| case2869pegase | 2869 / 4582 | **2.20 ms** | 2.81 ms | 133 ms |
+| case9241pegase | 9241 / 16049 | **6.74 ms** | 9.10 ms | 554 ms |
+| case13659pegase | 13659 / 20467 | **10.2 ms** | 13.4 ms | 778 ms |
 
-```
-cargo build --release
-```
+caseio is 25–80× faster than PowerModels' parser, and faster than ExaPowerIO (the focused Julia reader) on the large pegase scaling cases — while being the only one of the three that is lossless, round-trips byte-for-byte, and is callable from Rust, the CLI, and Python with no runtime.
 
-## Run
-
-```
-casemat                                                    # TUI
-casemat batch -i tests/data -o out --matrices bprime,bdoubleprime,lacpf --rhs random
-casemat gen --topology lattice --n 1024 -o out
-casemat verify tests/data/case30.m --kind bdoubleprime
-casemat dcopf tests/data/case30.m -o out                  # DC-OPF instance bundle
-casemat sensitivities tests/data/case30.m -o out          # PTDF + LODF
-```
-
-## TUI keys
-
-| screen   | action                                | key       |
-| -------- | ------------------------------------- | --------- |
-| Browse   | walk dir, multi select for batch      | `Space`   |
-| Inspect  | per matrix stats, sparsity preview    | `Tab`     |
-| Batch    | export queue with progress bars       | `b`, `e`  |
-| Synth    | tree, lattice, pegase like generator  | `g`, `e`  |
-
-`?` for full key reference.
-
-## Library
+## caseio: parse and write
 
 ```rust
-use casemat::{parse_matpower_file, build_bprime, BuildOptions, Pipeline, MatrixKind, RhsKind};
+use caseio::{parse_matpower_file, write_matpower};
 
-let mpc = parse_matpower_file("case14.m")?;
+let case = parse_matpower_file("case14.m")?;        // typed MpcCase
+assert!(case.connectivity_report().is_single_island());
+let bus0 = case.buses[0].name.as_deref();           // bus_name, dclines, ...
+
+let m = write_matpower(&case);                       // reproduces the source
+```
+
+`caseio` depends only on `thiserror`, `num-complex`, `petgraph`, `serde`, and `fast-float` — light enough to vendor as a parser.
+
+## casemat: matrices on top
+
+```rust
+use casemat::{parse_matpower_file, build_bprime, build_incidence, build_weighted_laplacian,
+              BuildOptions, DcConvention};
+
+let mpc = parse_matpower_file("case14.m")?;          // caseio, re-exported
 let b = build_bprime(&mpc, &BuildOptions::default())?;
-let g = mpc.to_petgraph();
-assert!(mpc.connectivity_report().is_single_island());
-
-// Lossless round-trip: reproduces the source (modulo the trailing newline),
-// bus_name and dcline included.
-let m = casemat::write_matpower(&mpc);
-
-Pipeline {
-    matrices: vec![MatrixKind::BPrime, MatrixKind::Lacpf],
-    rhs: RhsKind::Random,
-    ..Default::default()
-}.run(&mpc, "out/")?;
-```
-
-Incidence factorization and DC-OPF instance data:
-
-```rust
-use casemat::{build_incidence, build_weighted_laplacian, build_opf_instance,
-             DcConvention, Units};
-
 let inc = build_incidence(&mpc, DcConvention::PaperPure)?;   // A, b
 let l = build_weighted_laplacian(&inc.a, &inc.b);            // L = A diag(b) Aᵀ
-let opf = build_opf_instance(&mpc, &inc, Units::PerUnit)?;   // Q, c, bounds, C_g, p_d
 ```
 
-## Python
+Outputs: signed incidence `A`, adjacency, weighted Laplacian and its slack-grounded form, B'/B'', `Re(Y_bus)`/`-Im(Y_bus)`, PTDF/LODF, the LACPF block, the DC-OPF instance bundle, and a petgraph view — as Matrix Market, NumPy `.npy`, or in memory.
 
-PyO3 bindings expose the parser and every matrix builder as `scipy.sparse` matrices and a networkx graph.
+### CLI
+
+```
+casemat                                                  # TUI
+casemat batch -i tests/data -o out --matrices bprime,bdoubleprime
+casemat dcopf tests/data/case30.m -o out                 # DC-OPF instance bundle
+casemat sensitivities tests/data/case30.m -o out         # PTDF + LODF
+```
+
+### Python
 
 ```
 pip install casemat            # wheels for Linux / macOS / Windows, Python 3.9+
 ```
 
 ```python
-import casemat as nm
-
-case = nm.parse_matpower("tests/data/case9.m")
-B = case.bprime()             # scipy.sparse.csr_matrix, the FDPF B'
+import casemat as cm
+case = cm.parse_matpower("case9.m")
+B = case.bprime()             # scipy.sparse.csr_matrix
 Y = case.ybus()               # complex csr_matrix, G + jB
-A = case.adjacency()
-ptdf, lodf = case.ptdf(), case.lodf()
-inc = case.incidence()        # inc.A (csr), inc.b, inc.p_shift, inc.branch_of_col
-L = case.weighted_laplacian()
-g = case.to_networkx()        # needs networkx: pip install 'casemat[networkx]'
-
-case.write_dcopf_bundle("out/")   # the DC-OPF bundle, same as the `dcopf` subcommand
-```
-
-Case tables come back as plain dicts, one line from a DataFrame:
-
-```python
-import pandas as pd
-buses = pd.DataFrame(case.buses)
-```
-
-### Benchmark
-
-casemat parses *and* builds matrices; `matpowercaseframes` only parses into DataFrames. On case2869pegase (2869 buses, 4582 branches), release build, Apple M-series, best of 25 runs:
-
-| task                          | time   |
-| ----------------------------- | ------ |
-| casemat: parse                 | ~2 ms  |
-| casemat: parse + Y_bus + B'    | ~5 ms  |
-| matpowercaseframes: parse     | ~25 ms |
-
-The full parse + matrix path stays well under the 100 ms target. Reproduce with `python benchmarks/bench_parse.py` after `pip install 'casemat[bench]'`.
-
-Build from source with [maturin](https://www.maturin.rs):
-
-```
-maturin develop --release     # into the active venv
-pytest python/tests
+g = case.to_networkx()
 ```
 
 ## Conventions
 
-- Positive Laplacian sign convention: negative off diagonal, positive diagonal, `diag = sum |off-diag|` for B'.
-- MATPOWER 1 based bus IDs preserved; `MpcCase::bus_index(id)` maps to dense `[0, n)`.
+- Positive Laplacian: negative off-diagonal, positive diagonal, `diag = sum |off-diag|` for B'.
+- MATPOWER 1-based bus IDs preserved; `MpcCase::bus_index(id)` maps to dense `[0, n)`.
 - `tap == 0` ⇒ `tap = 1`. B' ignores taps and shifts; B'' zeros only shifts.
 - `BR_B` is already per unit; never divide by `base_mva` again.
-- DC-OPF is bus-indexed (`p_g ∈ ℝⁿ`, the paper's convention); generator-space data and `C_g` ride along. Default `b = 1/x` (paper-pure, taps/shifts ignored); `--convention matpower` uses `1/(x·τ)` plus a phase-shift injection. Per-unit by default (`--units native` for raw MW / native cost).
+- DC-OPF is bus-indexed (`p_g ∈ ℝⁿ`); default `b = 1/x` (paper-pure), `--convention matpower` uses `1/(x·τ)` plus a phase-shift injection.
+
+## Roadmap
+
+PSS/E `.raw` (v33–v35), OpenDSS, and PowerModels-JSON parsers; pandapower / PyPSA adapters; and a C ABI so Julia/C++ can consume `caseio` directly. See the issues.
 
 ## Tests
 
 ```
-cargo test
+cargo test            # caseio + casemat
+cargo run --release -p caseio --example timeparse -- tests/data/case2869pegase.m
 ```
-
-Parser edges, matrix algebra against a hand checked 3 bus reference, integration on case9 / 14 / 30 / 57 / 118, petgraph topology invariants, ratatui snapshot tests, and the DC-OPF builders (incidence structure, `L == B'` in the XB scheme, grounded SPD, PTDF reproduces DC flows, bundle round-trip).
 
 ## License
 

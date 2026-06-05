@@ -1,43 +1,30 @@
-# Cross-tool parse benchmark: PowerModels.jl and ExaPowerIO.jl on the same
-# MATPOWER files casemat is benchmarked on. Reports median time and allocations.
+# Cross-tool parse benchmark: ExaPowerIO.jl and PowerModels.jl on the same
+# MATPOWER files caseio is benchmarked on. Median time + bus/branch counts.
 #
+#   julia --project=benchmarks -e 'using Pkg; Pkg.instantiate()'   # once
 #   julia --project=benchmarks benchmarks/bench_julia.jl [case.m ...]
 #
-# Add the deps once:  julia --project=benchmarks -e 'using Pkg; Pkg.add(["PowerModels","ExaPowerIO","BenchmarkTools"])'
-# These numbers depend on the machine and package versions; record them in
-# RESULTS.md rather than committing hardcoded values.
+# Numbers are per-machine; record them in RESULTS.md rather than hardcoding.
 
-using BenchmarkTools
+using ExaPowerIO, PowerModels, BenchmarkTools
+PowerModels.silence()
 
-const DEFAULT = ["tests/data/case2869pegase.m", "tests/data/case118.m"]
+const DEFAULT = [
+    "tests/data/case118.m",
+    "tests/data/case2869pegase.m",
+    "tests/data/large/case_ACTIVSg2000.m",
+    "tests/data/large/case9241pegase.m",
+    "tests/data/large/case13659pegase.m",
+]
 
-function bench(label, f, path)
-    b = @benchmark $f($path) samples = 50 evals = 1
-    t_ms = median(b).time / 1e6
-    alloc_mb = median(b).memory / 2^20
-    println(rpad(label, 24), rpad(basename(path), 24),
-            rpad(string(round(t_ms, digits = 3), " ms"), 14),
-            round(alloc_mb, digits = 1), " MiB")
-end
-
-paths = isempty(ARGS) ? DEFAULT : ARGS
-println(rpad("tool", 24), rpad("case", 24), rpad("median", 14), "alloc")
-
-try
-    @eval using PowerModels
-    for p in paths
-        bench("PowerModels.parse_file", PowerModels.parse_file, p)
-    end
-catch e
-    @warn "PowerModels not available; skipping" exception = e
-end
-
-try
-    @eval using ExaPowerIO
-    for p in paths
-        # Entry point per ExaPowerIO's API; adjust if the package renames it.
-        bench("ExaPowerIO.parse", ExaPowerIO.parse_matpower, p)
-    end
-catch e
-    @warn "ExaPowerIO not available; skipping" exception = e
+paths = isempty(ARGS) ? filter(isfile, DEFAULT) : ARGS
+println(rpad("case", 26), rpad("ExaPowerIO", 14), rpad("PowerModels", 14), "buses/branches")
+for f in paths
+    ed = ExaPowerIO.parse_matpower(f)
+    be = @benchmark ExaPowerIO.parse_matpower($f) samples = 40 evals = 1
+    bp = @benchmark PowerModels.parse_file($f) samples = 10 evals = 1
+    e = round(median(be).time / 1e6, digits = 3)
+    p = round(median(bp).time / 1e6, digits = 3)
+    println(rpad(basename(f), 26), rpad("$(e) ms", 14), rpad("$(p) ms", 14),
+            "$(length(ed.bus))/$(length(ed.branch))")
 end

@@ -1,41 +1,50 @@
 # Parser benchmark
 
-casemat parses MATPOWER `.m` and can write the case back out **byte-for-byte**
-(lossless round-trip). The competitive point isn't only speed — it's being fast
-*and* lossless *and* round-trippable *and* callable from Rust / CLI / Python,
-which no single competitor offers.
+Measured head-to-head: `caseio` (Rust) vs the two Julia parsers it competes
+with. Median parse time, same machine (Apple M-series, release build), no
+warmup counted. caseio via `cargo run --release -p caseio --example timeparse`;
+the Julia numbers via `julia --project=benchmarks benchmarks/bench_julia.jl`
+(`BenchmarkTools.@benchmark`, 40/10 samples). All three return identical
+bus/branch counts — fast *and* correct.
 
-## casemat (measured)
-
-`cargo bench --bench parse` on case2869pegase (2869 buses, 4582 branches),
-release build, Apple M-series. Medians:
-
-| op | time |
-| --- | --- |
-| parse | 2.69 ms |
-| write (replay the source document) | 9.1 µs |
-| round-trip (parse + write) | 2.68 ms |
-
-Writing is document replay, so lossless round-trip adds ~0 over parse.
-
-## Cross-tool comparison
-
-The wall-clock comparison against the Julia tools needs a Julia install, so it
-isn't hardcoded here — run `julia --project=benchmarks benchmarks/bench_julia.jl`
-to time `PowerModels.parse_file` and `ExaPowerIO` on the same files and fill the
-`ms` / `alloc` columns. The two columns that matter for positioning are filled
-from this repo's test suite, not from timings:
-
-| tool | lang | formats | lossless round-trip | parse case2869pegase |
+| case | buses / branches | **caseio** (Rust) | ExaPowerIO.jl | PowerModels.jl |
 | --- | --- | --- | --- | --- |
-| **casemat** | Rust (+ CLI, Python) | MATPOWER | **yes** (byte-exact, `tests/roundtrip.rs`) | **2.69 ms** |
-| ExaPowerIO.jl | Julia | MATPOWER | no writer | run harness |
-| PowerModels.jl | Julia (+ JuMP stack) | MATPOWER, PSS/E v33 | no (lossy `export_matpower`) | run harness |
-| matpowercaseframes | Python | MATPOWER | no writer | ~25 ms (parse only) |
+| case118 | 118 / 186 | 0.20 ms | 0.19 ms | 5.4 ms |
+| case2869pegase | 2869 / 4582 | **2.20 ms** | 2.81 ms | 133 ms |
+| case_ACTIVSg2000 | 2000 / 3206 | 2.70 ms | 2.19 ms | 129 ms |
+| case9241pegase | 9241 / 16049 | **6.74 ms** | 9.10 ms | 554 ms |
+| case13659pegase | 13659 / 20467 | **10.2 ms** | 13.4 ms | 778 ms |
 
-"Lossless round-trip" means `parse → write → parse` reproduces the source
-modulo the trailing newline, preserving every `mpc.*` field (including ones the
-typed model doesn't interpret), in-matrix column-header comments, and exact
-numeric tokens like `7e-05`. ExaPowerIO is fast but write-only-absent;
-PowerModels carries the optimization stack and its MATPOWER export is lossy.
-casemat is the only one proven byte-exact (and the writer is ~9 µs).
+## Read
+
+- **vs PowerModels.jl**: 25–80× faster across the board. PowerModels' parser
+  carries the modeling/standardization machinery; if you only want the data,
+  it's the slow path.
+- **vs ExaPowerIO.jl** (the focused Julia reader, ~30–40× faster than
+  PowerModels): caseio is **faster on the large pegase scaling cases** (2869,
+  9241, 13659) by ~1.3×, a wash on small case118, and ~1.2× slower on
+  ACTIVSg2000. So caseio is competitive with, and on the headline large cases
+  faster than, the fastest existing parser — honestly mixed, not a blanket win.
+- **The durable edge is not raw speed.** caseio is the only one of the three
+  that is **lossless** and **round-trips byte-for-byte** (`parse → write →
+  parse`, proven in `caseio/tests/roundtrip.rs`) — ExaPowerIO has no writer and
+  PowerModels' export is lossy — and the only one callable from Rust, the CLI,
+  and Python with no runtime.
+
+The ACTIVSg case (more generators, `gentype`/`genfuel`/`bus_name` cell arrays)
+points at the remaining lever: caseio's per-section comment-strip and the
+document's owned copies are allocation-bound. A zero-copy pass (parse from byte
+ranges into the typed structs) is the path to winning ExaPowerIO outright on
+every case; the numbers above are the pre-optimization baseline.
+
+## Reproduce
+
+```
+# caseio (Rust)
+cargo run --release -p caseio --example timeparse -- tests/data/case2869pegase.m
+# fetch the large corpus first (gitignored)
+bash benchmarks/fetch_cases.sh
+# Julia (needs a Julia install)
+julia --project=benchmarks -e 'using Pkg; Pkg.instantiate()'
+julia --project=benchmarks benchmarks/bench_julia.jl
+```
