@@ -4,7 +4,8 @@ build-backend = "maturin"
 
 [project]
 name = "netmat"
-version = "0.1.0"
+# version is read from netmat-ext/Cargo.toml by maturin (kept single-source).
+dynamic = ["version"]
 description = "Power network case files into sparse matrices and graph views"
 readme = "README.md"
 requires-python = ">=3.9"

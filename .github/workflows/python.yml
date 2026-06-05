@@ -10,6 +10,23 @@ on:
   workflow_dispatch:
 
 jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.x"
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - uses: Swatinem/rust-cache@v2
+      # `cargo clippy` at the root skips netmat-ext (default-members = ["."]),
+      # so lint the extension explicitly. --no-deps keeps the gate on this
+      # crate only (the netmat lib carries its own pedantic-lint posture).
+      - name: Clippy (netmat-ext)
+        run: cargo clippy -p netmat-ext --no-deps --features extension-module -- -D warnings
+
   test:
     runs-on: ubuntu-latest
     strategy:
@@ -22,9 +39,11 @@ jobs:
         with:
           python-version: ${{ matrix.python }}
       - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
       # `pip install .` builds the extension via the maturin backend.
+      # Quote the extras so the shell doesn't glob `[networkx]`.
       - name: Install netmat + test deps
-        run: pip install .[networkx] pytest
+        run: pip install '.[networkx]' pytest
       - name: Run tests
         run: pytest python/tests -q
 

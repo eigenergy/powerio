@@ -7,10 +7,13 @@
 //! `scipy.sparse` matrices and networkx graphs, so scipy/networkx stay out of
 //! the Rust build and missing-dependency errors surface cleanly in Python.
 //!
-//! COO (not CSR triplets) is deliberate: it is storage-agnostic, so it can't
-//! transpose a matrix by handing scipy a CSC `indptr`, and it sidesteps the
+//! COO (not CSR/CSC triplets) is deliberate: explicit per-entry `(row, col)`
+//! can't be misread as the transpose the way a raw `indptr`/`indices` pair can
+//! if scipy and sprs disagree on row- vs column-major, and it sidesteps the
 //! sprs `IndPtr` slice API. Indices are emitted as `i32` to match scipy's
-//! default index width (bus/branch counts are far under 2³¹).
+//! default index width; the largest index value is bounded by
+//! `max(n_buses, n_branches)` (`2n` for the LACPF block), far under 2³¹, and
+//! `coo_triplets` guards the bound anyway.
 
 use numpy::IntoPyArray;
 use pyo3::exceptions::PyValueError;
@@ -33,13 +36,19 @@ pyo3::create_exception!(
     "Error raised by the netmat parser or matrix builders."
 );
 
+/// I/O failures map to the matching `OSError` subclass (`FileNotFoundError`,
+/// `PermissionError`, …) so Python callers can catch them the usual way; parse
+/// and data errors become [`NetmatError`].
 fn to_pyerr(e: netmat::Error) -> PyErr {
-    NetmatError::new_err(e.to_string())
+    match e {
+        netmat::Error::Io(io) => io.into(),
+        other => NetmatError::new_err(other.to_string()),
+    }
 }
 
-/// `bx` → `Bx`, `xb` → `Xb`.
+/// `bx` → `Bx`, `xb` → `Xb` (case- and separator-insensitive).
 fn parse_scheme(s: &str) -> PyResult<Scheme> {
-    match s.to_ascii_lowercase().as_str() {
+    match normalize(s).as_str() {
         "bx" => Ok(Scheme::Bx),
         "xb" => Ok(Scheme::Xb),
         other => Err(PyValueError::new_err(format!(
@@ -86,9 +95,17 @@ fn bus_type_str(kind: BusType) -> &'static str {
 
 /// Materialize a sparse matrix as a `(data, row, col, (nrows, ncols))` tuple of
 /// NumPy arrays. `to_csr()` first so `outer_iterator()` yields rows regardless
-/// of the source storage; indices narrow to `i32`.
-fn coo_triplets<'py>(py: Python<'py>, m: &CsMat<f64>) -> Bound<'py, PyAny> {
+/// of the source storage; indices narrow to `i32`. The narrowing is guarded:
+/// a dimension past `i32::MAX` raises rather than wrapping to negative indices.
+fn coo_triplets<'py>(py: Python<'py>, m: &CsMat<f64>) -> PyResult<Bound<'py, PyAny>> {
     let m = m.to_csr();
+    if m.rows() > i32::MAX as usize || m.cols() > i32::MAX as usize {
+        return Err(PyValueError::new_err(format!(
+            "matrix is {}x{}; an index exceeds i32 range — rebuild with i64 indices",
+            m.rows(),
+            m.cols()
+        )));
+    }
     let nnz = m.nnz();
     let mut data: Vec<f64> = Vec::with_capacity(nnz);
     let mut rows: Vec<i32> = Vec::with_capacity(nnz);
@@ -101,15 +118,14 @@ fn coo_triplets<'py>(py: Python<'py>, m: &CsMat<f64>) -> Bound<'py, PyAny> {
         }
     }
     let shape = (m.rows(), m.cols());
-    (
+    Ok((
         data.into_pyarray(py),
         rows.into_pyarray(py),
         cols.into_pyarray(py),
         shape,
     )
-        .into_pyobject(py)
-        .expect("COO tuple is infallible to convert")
-        .into_any()
+        .into_pyobject(py)?
+        .into_any())
 }
 
 fn build_options(scheme: Scheme, include_taps: bool, include_shifts: bool) -> BuildOptions {
@@ -268,18 +284,23 @@ impl PyCase {
             ..BuildOptions::default()
         };
         let m = build_bprime(&self.inner, &opts).map_err(to_pyerr)?;
-        Ok(coo_triplets(py, &m))
+        coo_triplets(py, &m)
     }
 
-    #[pyo3(signature = (include_taps=true))]
+    /// B'' always keeps tap ratios and zeroes phase shifts (MATPOWER `makeB`);
+    /// only the FDPF `scheme` (`"bx"`/`"xb"`) changes its result.
+    #[pyo3(signature = (scheme=None))]
     fn bdoubleprime<'py>(
         &self,
         py: Python<'py>,
-        include_taps: bool,
+        scheme: Option<&str>,
     ) -> PyResult<Bound<'py, PyAny>> {
-        let opts = build_options(Scheme::Bx, include_taps, false);
+        let opts = BuildOptions {
+            scheme: parse_scheme(scheme.unwrap_or("bx"))?,
+            ..BuildOptions::default()
+        };
         let m = build_bdoubleprime(&self.inner, &opts).map_err(to_pyerr)?;
-        Ok(coo_triplets(py, &m))
+        coo_triplets(py, &m)
     }
 
     #[pyo3(signature = (include_taps=true, include_shifts=true))]
@@ -291,12 +312,12 @@ impl PyCase {
     ) -> PyResult<Bound<'py, PyAny>> {
         let opts = build_options(Scheme::Bx, include_taps, include_shifts);
         let m = build_lacpf(&self.inner, &opts).map_err(to_pyerr)?;
-        Ok(coo_triplets(py, &m))
+        coo_triplets(py, &m)
     }
 
     fn adjacency<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
         let m = build_adjacency(&self.inner).map_err(to_pyerr)?;
-        Ok(coo_triplets(py, &m))
+        coo_triplets(py, &m)
     }
 
     /// `(Re(Y_bus), Im(Y_bus))` as two COO tuples.
@@ -309,26 +330,23 @@ impl PyCase {
     ) -> PyResult<Bound<'py, PyAny>> {
         let opts = build_options(Scheme::Bx, include_taps, include_shifts);
         let yb = build_ybus(&self.inner, &opts).map_err(to_pyerr)?;
-        let g = coo_triplets(py, &yb.g);
-        let b = coo_triplets(py, &yb.b);
-        Ok((g, b)
-            .into_pyobject(py)
-            .expect("pair is infallible to convert")
-            .into_any())
+        let g = coo_triplets(py, &yb.g)?;
+        let b = coo_triplets(py, &yb.b)?;
+        Ok((g, b).into_pyobject(py)?.into_any())
     }
 
     #[pyo3(signature = (convention=None))]
     fn ptdf<'py>(&self, py: Python<'py>, convention: Option<&str>) -> PyResult<Bound<'py, PyAny>> {
         let conv = parse_convention(convention.unwrap_or("paper"))?;
         let m = build_ptdf(&self.inner, conv).map_err(to_pyerr)?;
-        Ok(coo_triplets(py, &m))
+        coo_triplets(py, &m)
     }
 
     #[pyo3(signature = (convention=None))]
     fn lodf<'py>(&self, py: Python<'py>, convention: Option<&str>) -> PyResult<Bound<'py, PyAny>> {
         let conv = parse_convention(convention.unwrap_or("paper"))?;
         let m = build_lodf(&self.inner, conv).map_err(to_pyerr)?;
-        Ok(coo_triplets(py, &m))
+        coo_triplets(py, &m)
     }
 
     /// `(A_coo, b, p_shift, branch_of_col)`: signed incidence as a COO tuple,
@@ -342,15 +360,12 @@ impl PyCase {
     ) -> PyResult<Bound<'py, PyAny>> {
         let conv = parse_convention(convention.unwrap_or("paper"))?;
         let parts = build_incidence(&self.inner, conv).map_err(to_pyerr)?;
-        let a = coo_triplets(py, &parts.a);
+        let a = coo_triplets(py, &parts.a)?;
         let b = parts.b.into_pyarray(py);
         let p_shift = parts.p_shift.into_pyarray(py);
         let branch_of_col: Vec<i64> = parts.branch_of_col.iter().map(|&x| x as i64).collect();
         let branch_of_col = branch_of_col.into_pyarray(py);
-        Ok((a, b, p_shift, branch_of_col)
-            .into_pyobject(py)
-            .expect("incidence tuple is infallible to convert")
-            .into_any())
+        Ok((a, b, p_shift, branch_of_col).into_pyobject(py)?.into_any())
     }
 
     /// Weighted Laplacian `L = A diag(b) Aᵀ` for the chosen DC convention.
@@ -363,7 +378,7 @@ impl PyCase {
         let conv = parse_convention(convention.unwrap_or("paper"))?;
         let parts = build_incidence(&self.inner, conv).map_err(to_pyerr)?;
         let l = build_weighted_laplacian(&parts.a, &parts.b);
-        Ok(coo_triplets(py, &l))
+        coo_triplets(py, &l)
     }
 
     /// Write the DC-OPF bundle into `out_dir/<case>_dcopf/`. Returns

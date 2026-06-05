@@ -27,22 +27,41 @@ from ._netmat import NetmatError, __version__
 __all__ = [
     "Case",
     "Incidence",
+    "YbusParts",
     "NetmatError",
     "parse_matpower",
     "parse_matpower_string",
     "__version__",
 ]
 
-#: Output of :meth:`Case.incidence`: signed incidence ``A`` (csr), branch
-#: susceptances ``b``, phase-shift injection ``p_shift``, and the column→branch
-#: index map ``branch_of_col``.
 Incidence = namedtuple("Incidence", ["A", "b", "p_shift", "branch_of_col"])
+Incidence.__doc__ = """Output of :meth:`Case.incidence`.
+
+Shapes, with ``n`` buses and ``m`` in-service branches:
+- ``A``: signed incidence csr_matrix, ``(n, m)``.
+- ``b``: branch susceptances, ``(m,)``; ``b[k]`` is column ``k``.
+- ``p_shift``: phase-shift injection, ``(n,)`` (all zero unless
+  ``convention="matpower"``).
+- ``branch_of_col``: column→branch index map, ``(m,)``; ``branch_of_col[k]``
+  and ``b[k]`` are co-indexed by incidence column ``k``.
+"""
+
+YbusParts = namedtuple("YbusParts", ["g", "b"])
+YbusParts.__doc__ = (
+    "Output of :meth:`Case.ybus_parts`: ``g`` = Re(Y_bus), ``b`` = Im(Y_bus), "
+    "each a real csr_matrix. ``Case.ybus()`` returns ``g + 1j*b``."
+)
 
 
 def _require(module: str, extra: str):
     try:
         return importlib.import_module(module)
     except ImportError as exc:
+        # Only rewrite "module is absent". A present-but-broken install (e.g. a
+        # failed C-extension load) raises ImportError from a sub-import; let its
+        # own traceback through instead of misdirecting the user to reinstall.
+        if getattr(exc, "name", None) not in (module, module.split(".")[0]):
+            raise
         raise ImportError(
             f"netmat needs {module!r} for this call; install it with "
             f"`pip install 'netmat[{extra}]'` or `pip install {extra}`"
@@ -59,11 +78,14 @@ def _to_csr(coo):
 class Case:
     """A parsed MATPOWER case.
 
-    Data attributes (``name``, ``base_mva``, ``n``, ``n_branches``, ``n_gens``,
-    ``is_radial``, ``n_connected_components``, ``buses``, ``branches``,
-    ``gens``) and ``reference_bus_index()`` / ``connectivity_report()`` /
-    ``write_dcopf_bundle()`` delegate to the compiled handle. The matrix
-    methods return ``scipy.sparse`` objects.
+    The data attributes and the non-matrix methods (``reference_bus_index``,
+    ``connectivity_report``, ``write_dcopf_bundle``) delegate to the compiled
+    handle; the matrix methods below return ``scipy.sparse`` objects.
+
+    Errors: a bad file path raises the standard ``OSError`` subclass
+    (``FileNotFoundError``); malformed cases and unmet builder preconditions
+    (no generators, no reference bus) raise :class:`NetmatError`; an unknown
+    ``scheme``/``convention``/``units`` string raises ``ValueError``.
     """
 
     def __init__(self, inner: "_netmat.PyCase"):
@@ -71,9 +93,12 @@ class Case:
 
     def __getattr__(self, name: str):
         # Reached only when normal lookup misses, so the matrix methods below
-        # win. Guard private names to avoid recursing before _inner is set.
+        # win. Guard underscore names so a lookup before _inner exists raises
+        # AttributeError instead of recursing forever.
         if name.startswith("_"):
-            raise AttributeError(name)
+            raise AttributeError(
+                f"{type(self).__name__!r} object has no attribute {name!r}"
+            )
         return getattr(self._inner, name)
 
     def __repr__(self) -> str:
@@ -85,9 +110,10 @@ class Case:
         """FDPF B' (shuntless). ``scheme`` is ``"bx"`` or ``"xb"``."""
         return _to_csr(self._inner.bprime(scheme))
 
-    def bdoubleprime(self, include_taps: bool = True):
-        """FDPF B'' (with shunts; taps optional, shifts always zeroed)."""
-        return _to_csr(self._inner.bdoubleprime(include_taps))
+    def bdoubleprime(self, scheme: str = "bx"):
+        """FDPF B'' (with shunts and taps; shifts zeroed). ``scheme`` is
+        ``"bx"`` or ``"xb"``; taps are always kept (MATPOWER ``makeB``)."""
+        return _to_csr(self._inner.bdoubleprime(scheme))
 
     def lacpf(self, include_taps: bool = True, include_shifts: bool = True):
         """LACPF 2n×2n block ``[[G, -B], [-B, -G]]``."""
@@ -98,9 +124,10 @@ class Case:
         return _to_csr(self._inner.adjacency())
 
     def ybus_parts(self, include_taps: bool = True, include_shifts: bool = True):
-        """``(Re(Y_bus), Im(Y_bus))`` as two real csr_matrix."""
+        """:class:`YbusParts` ``(g, b)`` = ``(Re(Y_bus), Im(Y_bus))``, two real
+        csr_matrix."""
         g, b = self._inner.ybus_parts(include_taps, include_shifts)
-        return _to_csr(g), _to_csr(b)
+        return YbusParts(g=_to_csr(g), b=_to_csr(b))
 
     def ybus(self, include_taps: bool = True, include_shifts: bool = True):
         """``Y_bus = G + jB`` as a complex csr_matrix."""

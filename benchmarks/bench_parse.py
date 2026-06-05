@@ -59,7 +59,10 @@ def main():
         rows.append(
             ("matpowercaseframes: parse", *best_median(lambda: CaseFrames(str(path))))
         )
-    except ImportError:
+    except ImportError as exc:
+        # A present-but-broken install should show its own error, not "skipping".
+        if getattr(exc, "name", None) not in ("matpowercaseframes", None):
+            raise
         print("matpowercaseframes not installed; skipping the baseline row.")
         print("  pip install 'netmat[bench]'\n")
 
