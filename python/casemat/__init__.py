@@ -1,16 +1,16 @@
-"""netmat: power network case files into sparse matrices and graph views.
+"""casemat: power network case files into sparse matrices and graph views.
 
 Parse a MATPOWER ``.m`` case, then pull matrices as ``scipy.sparse`` or a
 networkx graph::
 
-    import netmat as nm
+    import casemat as nm
 
     case = nm.parse_matpower("case9.m")
     B = case.bprime()        # scipy.sparse.csr_matrix, the FDPF B'
     Y = case.ybus()          # complex csr_matrix, G + jB
     G = case.to_networkx()   # networkx.Graph keyed by MATPOWER bus id
 
-The compiled core (``netmat._netmat``) returns COO triplets of numpy arrays;
+The compiled core (``casemat._casemat``) returns COO triplets of numpy arrays;
 the wrappers here assemble them into scipy matrices, so a missing scipy or
 networkx surfaces as a clear ImportError rather than a link error.
 """
@@ -21,14 +21,14 @@ import importlib
 from collections import namedtuple
 from typing import Any, List, Optional
 
-from . import _netmat
-from ._netmat import NetmatError, __version__
+from . import _casemat
+from ._casemat import CasematError, __version__
 
 __all__ = [
     "Case",
     "Incidence",
     "YbusParts",
-    "NetmatError",
+    "CasematError",
     "parse_matpower",
     "parse_matpower_string",
     "__version__",
@@ -63,8 +63,8 @@ def _require(module: str, extra: str):
         if getattr(exc, "name", None) not in (module, module.split(".")[0]):
             raise
         raise ImportError(
-            f"netmat needs {module!r} for this call; install it with "
-            f"`pip install 'netmat[{extra}]'` or `pip install {extra}`"
+            f"casemat needs {module!r} for this call; install it with "
+            f"`pip install 'casemat[{extra}]'` or `pip install {extra}`"
         ) from exc
 
 
@@ -84,11 +84,11 @@ class Case:
 
     Errors: a bad file path raises the standard ``OSError`` subclass
     (``FileNotFoundError``); malformed cases and unmet builder preconditions
-    (no generators, no reference bus) raise :class:`NetmatError`; an unknown
+    (no generators, no reference bus) raise :class:`CasematError`; an unknown
     ``scheme``/``convention``/``units`` string raises ``ValueError``.
     """
 
-    def __init__(self, inner: "_netmat.PyCase"):
+    def __init__(self, inner: "_casemat.PyCase"):
         self._inner = inner
 
     def __getattr__(self, name: str):
@@ -177,9 +177,9 @@ class Case:
 
 def parse_matpower(path: Any) -> Case:
     """Parse a MATPOWER ``.m`` case from a file path."""
-    return Case(_netmat.parse_matpower(str(path)))
+    return Case(_casemat.parse_matpower(str(path)))
 
 
 def parse_matpower_string(content: str, name: Optional[str] = None) -> Case:
     """Parse a MATPOWER case from in-memory ``.m`` text."""
-    return Case(_netmat.parse_matpower_string(content, name))
+    return Case(_casemat.parse_matpower_string(content, name))

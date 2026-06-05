@@ -1,76 +1,12 @@
-[package]
-name = "netmat"
-version = "0.1.0"
-edition = "2021"
-rust-version = "1.86"
-description = "Turns power network case files into structured sparse matrices and graph views for any downstream solver: signed incidence, weighted Laplacian, B'/B'', Y_bus, PTDF, LODF, adjacency, and DC-OPF instance data."
-license = "MIT OR Apache-2.0"
-repository = "https://github.com/eigenergy/netmat"
-readme = "README.md"
-keywords = ["power-systems", "matpower", "sparse", "ptdf", "dc-opf"]
-categories = ["science", "parsing", "command-line-utilities"]
-
 [workspace]
-members = [".", "netmat-ext"]
-# Bare `cargo build`/`test`/`clippy` from the root touch only netmat, so the
-# Rust toolchain never has to compile the PyO3 extension (which needs libpython).
-# Build the bindings explicitly with `-p netmat-ext`.
-default-members = ["."]
+members = ["caseio", "casemat", "casemat-ext"]
+# Bare `cargo build`/`test`/`clippy` touch only the two Rust library crates, so
+# the toolchain never compiles the PyO3 extension (which needs libpython). Build
+# the bindings explicitly with `-p casemat-ext`.
+default-members = ["caseio", "casemat"]
 resolver = "2"
 
-[features]
-# `cli` carries the clap front end and the ratatui TUI. It is on by default so
-# `cargo build`/`test` behave as before; the Python wheel pulls netmat with
-# `default-features = false` to skip clap/ratatui/crossterm.
-default = ["cli"]
-cli = ["dep:clap", "dep:ratatui", "dep:crossterm", "dep:tracing-subscriber"]
-# Experimental DC-OPF interior point operators (optional).
-kkt = []
-
-[lib]
-name = "netmat"
-path = "src/lib.rs"
-
-[[bin]]
-name = "netmat"
-path = "src/main.rs"
-required-features = ["cli"]
-
-[dependencies]
-clap = { version = "4", features = ["derive"], optional = true }
-thiserror = "2"
-anyhow = "1"
-# SIMD-accelerated float parsing — the dominant cost in parsing large cases.
-fast-float = "0.2"
-sprs = { version = "0.11", default-features = false }
-num-complex = "0.4"
-serde = { version = "1", features = ["derive"] }
-serde_json = "1"
-rand = "0.9"
-rand_chacha = "0.9"
-walkdir = "2"
-rayon = "1"
-tracing = "0.1"
-tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"], optional = true }
-ratatui = { version = "0.30", features = ["crossterm_0_29"], optional = true }
-crossterm = { version = "0.29", optional = true }
-sha2 = "0.10"
-petgraph = "0.8"
-
-[dev-dependencies]
-approx = "0.5"
-criterion = { version = "0.5", default-features = false, features = ["cargo_bench_support"] }
-
-[[bench]]
-name = "parse"
-harness = false
-
-[profile.release]
-opt-level = 3
-lto = "thin"
-codegen-units = 1
-
-[lints.clippy]
+[workspace.lints.clippy]
 pedantic = { level = "warn", priority = -1 }
 module_name_repetitions = "allow"
 must_use_candidate = "allow"
@@ -79,3 +15,8 @@ cast_precision_loss = "allow"
 cast_possible_truncation = "allow"
 cast_sign_loss = "allow"
 similar_names = "allow"
+
+[profile.release]
+opt-level = 3
+lto = "thin"
+codegen-units = 1

@@ -1,9 +1,9 @@
-//! PyO3 extension module behind the `netmat` Python package.
+//! PyO3 extension module behind the `casemat` Python package.
 //!
 //! This crate is the thin Rust↔Python boundary. It does no numerics of its
-//! own: every method delegates to the `netmat` library and hands the result
+//! own: every method delegates to the `casemat` library and hands the result
 //! back as COO triplets (`data`, `row`, `col`, `shape`) of NumPy arrays. The
-//! pure-Python `netmat` package (python/netmat/) assembles those into
+//! pure-Python `casemat` package (python/casemat/) assembles those into
 //! `scipy.sparse` matrices and networkx graphs, so scipy/networkx stay out of
 //! the Rust build and missing-dependency errors surface cleanly in Python.
 //!
@@ -21,28 +21,28 @@ use pyo3::prelude::*;
 use pyo3::types::{PyDict, PyList};
 use sprs::CsMat;
 
-use netmat::case::BusType;
-use netmat::matrix::{
+use casemat::case::BusType;
+use casemat::matrix::{
     build_adjacency, build_bdoubleprime, build_bprime, build_incidence, build_lacpf, build_lodf,
     build_ptdf, build_weighted_laplacian, build_ybus, BuildOptions, DcConvention, Scheme, Units,
 };
-use netmat::opf_pipeline::{write_dcopf_bundle as write_bundle, DcOpfOptions};
-use netmat::MpcCase;
+use casemat::opf_pipeline::{write_dcopf_bundle as write_bundle, DcOpfOptions};
+use casemat::MpcCase;
 
 pyo3::create_exception!(
-    _netmat,
-    NetmatError,
+    _casemat,
+    CasematError,
     pyo3::exceptions::PyException,
-    "Error raised by the netmat parser or matrix builders."
+    "Error raised by the casemat parser or matrix builders."
 );
 
 /// I/O failures map to the matching `OSError` subclass (`FileNotFoundError`,
 /// `PermissionError`, …) so Python callers can catch them the usual way; parse
-/// and data errors become [`NetmatError`].
-fn to_pyerr(e: netmat::Error) -> PyErr {
+/// and data errors become [`CasematError`].
+fn to_pyerr(e: casemat::Error) -> PyErr {
     match e {
-        netmat::Error::Io(io) => io.into(),
-        other => NetmatError::new_err(other.to_string()),
+        casemat::Error::Io(io) => io.into(),
+        other => CasematError::new_err(other.to_string()),
     }
 }
 
@@ -137,7 +137,7 @@ fn build_options(scheme: Scheme, include_taps: bool, include_shifts: bool) -> Bu
     }
 }
 
-/// Low-level handle around a parsed `MpcCase`. The user-facing `netmat.Case`
+/// Low-level handle around a parsed `MpcCase`. The user-facing `casemat.Case`
 /// (pure Python) wraps this and turns the COO tuples into scipy matrices.
 #[pyclass(name = "PyCase")]
 pub struct PyCase {
@@ -421,7 +421,7 @@ impl PyCase {
 /// Parse a MATPOWER `.m` file from a path.
 #[pyfunction]
 fn parse_matpower(path: &str) -> PyResult<PyCase> {
-    let inner = netmat::parse_matpower_file(path).map_err(to_pyerr)?;
+    let inner = casemat::parse_matpower_file(path).map_err(to_pyerr)?;
     Ok(PyCase { inner })
 }
 
@@ -430,7 +430,7 @@ fn parse_matpower(path: &str) -> PyResult<PyCase> {
 #[pyfunction]
 #[pyo3(signature = (content, name=None))]
 fn parse_matpower_string(content: &str, name: Option<&str>) -> PyResult<PyCase> {
-    let mut inner = netmat::parse_matpower(content).map_err(to_pyerr)?;
+    let mut inner = casemat::parse_matpower(content).map_err(to_pyerr)?;
     if let Some(n) = name {
         inner.name = n.to_string();
     }
@@ -438,9 +438,9 @@ fn parse_matpower_string(content: &str, name: Option<&str>) -> PyResult<PyCase> 
 }
 
 #[pymodule]
-fn _netmat(m: &Bound<'_, PyModule>) -> PyResult<()> {
+fn _casemat(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add("__version__", env!("CARGO_PKG_VERSION"))?;
-    m.add("NetmatError", m.py().get_type::<NetmatError>())?;
+    m.add("CasematError", m.py().get_type::<CasematError>())?;
     m.add_class::<PyCase>()?;
     m.add_function(wrap_pyfunction!(parse_matpower, m)?)?;
     m.add_function(wrap_pyfunction!(parse_matpower_string, m)?)?;

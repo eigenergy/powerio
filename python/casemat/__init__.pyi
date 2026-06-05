@@ -6,7 +6,7 @@ Scheme = Literal["bx", "xb"]
 Convention = Literal["paper", "matpower"]
 Units = Literal["perunit", "native"]
 
-class NetmatError(Exception): ...
+class CasematError(Exception): ...
 
 class GenCost(TypedDict):
     model: int

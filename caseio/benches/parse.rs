@@ -8,13 +8,13 @@
 use std::hint::black_box;
 
 use criterion::{criterion_group, criterion_main, Criterion};
-use netmat::{parse_matpower, write_matpower};
+use caseio::{parse_matpower, write_matpower};
 
 const CASES: &[&str] = &["case57", "case118", "case2869pegase"];
 
 fn bench_parse(c: &mut Criterion) {
     for case in CASES {
-        let src = std::fs::read_to_string(format!("tests/data/{case}.m")).unwrap();
+        let src = std::fs::read_to_string(format!("../tests/data/{case}.m")).unwrap();
         c.bench_function(&format!("parse_{case}"), |b| {
             b.iter(|| parse_matpower(black_box(&src)).unwrap());
         });
@@ -23,7 +23,7 @@ fn bench_parse(c: &mut Criterion) {
 
 fn bench_roundtrip(c: &mut Criterion) {
     for case in CASES {
-        let src = std::fs::read_to_string(format!("tests/data/{case}.m")).unwrap();
+        let src = std::fs::read_to_string(format!("../tests/data/{case}.m")).unwrap();
         let parsed = parse_matpower(&src).unwrap();
         c.bench_function(&format!("write_{case}"), |b| {
             b.iter(|| write_matpower(black_box(&parsed)));

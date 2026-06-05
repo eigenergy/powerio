@@ -1,11 +1,11 @@
 # Parser benchmark
 
-netmat parses MATPOWER `.m` and can write the case back out **byte-for-byte**
+casemat parses MATPOWER `.m` and can write the case back out **byte-for-byte**
 (lossless round-trip). The competitive point isn't only speed — it's being fast
 *and* lossless *and* round-trippable *and* callable from Rust / CLI / Python,
 which no single competitor offers.
 
-## netmat (measured)
+## casemat (measured)
 
 `cargo bench --bench parse` on case2869pegase (2869 buses, 4582 branches),
 release build, Apple M-series. Medians:
@@ -28,7 +28,7 @@ from this repo's test suite, not from timings:
 
 | tool | lang | formats | lossless round-trip | parse case2869pegase |
 | --- | --- | --- | --- | --- |
-| **netmat** | Rust (+ CLI, Python) | MATPOWER | **yes** (byte-exact, `tests/roundtrip.rs`) | **2.69 ms** |
+| **casemat** | Rust (+ CLI, Python) | MATPOWER | **yes** (byte-exact, `tests/roundtrip.rs`) | **2.69 ms** |
 | ExaPowerIO.jl | Julia | MATPOWER | no writer | run harness |
 | PowerModels.jl | Julia (+ JuMP stack) | MATPOWER, PSS/E v33 | no (lossy `export_matpower`) | run harness |
 | matpowercaseframes | Python | MATPOWER | no writer | ~25 ms (parse only) |
@@ -38,4 +38,4 @@ modulo the trailing newline, preserving every `mpc.*` field (including ones the
 typed model doesn't interpret), in-matrix column-header comments, and exact
 numeric tokens like `7e-05`. ExaPowerIO is fast but write-only-absent;
 PowerModels carries the optimization stack and its MATPOWER export is lossy.
-netmat is the only one proven byte-exact (and the writer is ~9 µs).
+casemat is the only one proven byte-exact (and the writer is ~9 µs).

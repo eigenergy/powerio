@@ -1,16 +1,16 @@
 //! Round-trip fidelity: `parse → write → parse` must reproduce every vendored
-//! case losslessly. This is the property that makes netmat a *lossless* parser,
+//! case losslessly. This is the property that makes caseio a *lossless* parser,
 //! not just a fast one.
 
 use std::path::{Path, PathBuf};
 
-use netmat::{parse_matpower, parse_matpower_file, write_matpower};
+use caseio::{parse_matpower, parse_matpower_file, write_matpower};
 
 fn data_dir() -> PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/data")
+    Path::new(env!("CARGO_MANIFEST_DIR")).join("../tests/data")
 }
 
-/// Every `.m` file under `tests/data` (recursively).
+/// Every `.m` file under `../tests/data` (recursively).
 fn cases() -> Vec<PathBuf> {
     fn walk(dir: &Path, out: &mut Vec<PathBuf>) {
         for entry in std::fs::read_dir(dir).unwrap() {
@@ -117,28 +117,6 @@ fn unescapes_doubled_quotes_in_bus_names() {
     assert_eq!(case.buses[1].name.as_deref(), Some("Plain"));
     // The raw `''` is preserved on round-trip regardless of the typed unescape.
     assert!(write_matpower(&case).contains("'O''Brien'"));
-}
-
-#[test]
-fn synth_case_round_trips_via_canonical_writer() {
-    use netmat::synth::{generate, SynthSpec, Topology};
-    let spec = SynthSpec {
-        topology: Topology::Tree,
-        n: 8,
-        r_over_x: 0.1,
-        mean_x: 0.05,
-        seed: 1,
-    };
-    let case = generate(&spec); // no source document → canonical writer
-    let reparsed = parse_matpower(&write_matpower(&case)).unwrap();
-    assert_eq!(reparsed.buses.len(), case.buses.len());
-    assert_eq!(reparsed.branches.len(), case.branches.len());
-
-    // A name that isn't a legal MATLAB identifier still produces parseable `.m`.
-    let bad = netmat::MpcCase::new("grid-1", case.base_mva, case.buses.clone(), case.branches.clone());
-    let written = write_matpower(&bad);
-    assert!(written.contains("function mpc = grid_1"));
-    assert!(parse_matpower(&written).is_ok());
 }
 
 #[test]

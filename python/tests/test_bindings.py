@@ -1,4 +1,4 @@
-"""Tests for the netmat Python bindings.
+"""Tests for the casemat Python bindings.
 
 Run with `pytest python/tests` after `maturin develop`.
 """
@@ -11,7 +11,7 @@ import pytest
 import scipy.io
 import scipy.sparse as sp
 
-import netmat as nm
+import casemat as nm
 
 DATA = Path(__file__).resolve().parents[2] / "tests" / "data"
 SMALL = ["case9", "case30"]
@@ -89,7 +89,7 @@ def test_parse_string_roundtrip(case9):
 
 
 def test_parse_bad_path_raises():
-    # I/O failures map to the standard OSError subclass, not NetmatError.
+    # I/O failures map to the standard OSError subclass, not CasematError.
     with pytest.raises(FileNotFoundError):
         nm.parse_matpower(str(DATA / "does_not_exist.m"))
 
@@ -281,7 +281,7 @@ def test_reference_bus_index(case9):
 
 def test_reference_bus_error_on_two_refs():
     two_ref = TINY.replace("\t3\t2\t0", "\t3\t3\t0")  # bus 3: PV -> ref
-    with pytest.raises(nm.NetmatError):
+    with pytest.raises(nm.CasematError):
         nm.parse_matpower_string(two_ref).reference_bus_index()
 
 
@@ -319,7 +319,7 @@ def test_dcopf_requires_generators(tmp_path):
     genless = TINY[: TINY.index("mpc.gen = [")]
     case = nm.parse_matpower_string(genless)
     assert case.n_gens == 0
-    with pytest.raises(nm.NetmatError):
+    with pytest.raises(nm.CasematError):
         case.write_dcopf_bundle(str(tmp_path))
 
 
