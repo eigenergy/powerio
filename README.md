@@ -4,8 +4,12 @@ Turns power network case files into structured sparse matrices and graph views f
 
 ## Inputs
 
-- MATPOWER `.m` (transmission). Done.
+- MATPOWER `.m` (transmission). Done — **lossless**: `parse → write → parse` reproduces the file byte-for-byte, preserving every `mpc.*` field (including ones the typed model doesn't interpret), in-matrix column-header comments, and exact numeric tokens like `7e-05`. `write_matpower` replays the source in ~9 µs; the whole round-trip on case2869pegase is ~2.7 ms. See [benchmarks/RESULTS.md](benchmarks/RESULTS.md).
 - OpenDSS `.dss`, PSS/E `.raw`, PowerModels JSON. See issues.
+
+### Versus other parsers
+
+ExaPowerIO.jl is a fast Julia MATPOWER reader but write-only-absent; PowerModels.jl is multi-format but drags in the JuMP/optimization stack and its MATPOWER export is lossy. netmat is the only one that is fast *and* byte-exact round-trip *and* callable from Rust, the CLI, and Python (`pip install netmat`) with no runtime. It captures `bus_name`, HVDC `dcline`, the full generator columns (ramp rates, Pc/Qc, apf), and the reactive-power `gencost` block — fields other lightweight parsers drop.
 
 ## Outputs
 
@@ -55,6 +59,10 @@ let mpc = parse_matpower_file("case14.m")?;
 let b = build_bprime(&mpc, &BuildOptions::default())?;
 let g = mpc.to_petgraph();
 assert!(mpc.connectivity_report().is_single_island());
+
+// Lossless round-trip: reproduces the source (modulo the trailing newline),
+// bus_name and dcline included.
+let m = netmat::write_matpower(&mpc);
 
 Pipeline {
     matrices: vec![MatrixKind::BPrime, MatrixKind::Lacpf],

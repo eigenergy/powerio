@@ -15,7 +15,7 @@ pub mod synth;
 #[cfg(feature = "cli")]
 pub mod tui;
 
-pub use case::{Branch, Bus, ConnectivityReport, GenCost, Generator, MpcCase, Storage};
+pub use case::{Branch, Bus, ConnectivityReport, DcLine, GenCost, Generator, MpcCase, Storage};
 pub use error::{Error, Result};
 pub use matrix::{
     BuildOptions, DcConvention, GroundMap, IncidenceParts, MatrixStats, OpfInstance, Scheme,
@@ -24,5 +24,7 @@ pub use matrix::{
     build_ybus, ground_at, sddm_check, susceptance_diag, unit_vector,
 };
 pub use opf_pipeline::{DcOpfOptions, DcOpfOutputs, write_dcopf_bundle};
-pub use parser::{parse_matpower, parse_matpower_file};
+pub use parser::{
+    MatpowerDocument, parse_matpower, parse_matpower_file, write_matpower, write_matpower_file,
+};
 pub use pipeline::{MatrixKind, Pipeline, PipelineOutputs, RhsKind};

@@ -20,6 +20,7 @@ fn bus(id: usize, kind: BusType, gs: f64, bs: f64) -> Bus {
         zone: 1,
         vmax: 1.1,
         vmin: 0.9,
+        name: None,
     }
 }
 

@@ -261,6 +261,7 @@ fn reference_bus_count_errors() {
         zone: 1,
         vmax: 1.1,
         vmin: 0.9,
+        name: None,
     };
     // Two reference buses.
     let two = MpcCase::new(
@@ -367,6 +368,7 @@ fn bus(id: usize, kind: BusType) -> Bus {
         zone: 1,
         vmax: 1.1,
         vmin: 0.9,
+        name: None,
     }
 }
 
@@ -406,6 +408,8 @@ fn gen_with_cost(bus_id: usize, cost: Option<GenCost>) -> Generator {
         pmax: 100.0,
         pmin: 0.0,
         cost,
+        reactive_cost: None,
+        extra: Vec::new(),
     }
 }
 
