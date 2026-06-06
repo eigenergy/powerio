@@ -66,6 +66,18 @@ def main():
         print("matpowercaseframes not installed; skipping the baseline row.")
         print("  pip install 'casemat[bench]'\n")
 
+    # pandapower reads .m via matpowercaseframes, then builds its `net`. This is
+    # the apples-to-apples "convert a MATPOWER file into the tool's model" row.
+    try:
+        from pandapower.converter import from_mpc
+
+        rows.append(("pandapower: from_mpc", *best_median(lambda: from_mpc(str(path)))))
+    except ImportError:
+        print("pandapower not installed; skipping the pandapower row.")
+        print("  pip install pandapower matpowercaseframes\n")
+    except Exception as exc:  # noqa: BLE001 - from_mpc raises on some cases (pp 3.2.2)
+        print(f"pandapower from_mpc failed on this case: {type(exc).__name__}\n")
+
     width = max(len(name) for name, *_ in rows)
     print(f"{'task':<{width}}  {'best (ms)':>10}  {'median (ms)':>12}")
     print("-" * (width + 26))

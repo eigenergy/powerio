@@ -1,15 +1,38 @@
 # caseio
 
-The fast, lossless parser and data layer for power-system case files. Parse a MATPOWER `.m` case, work with a typed model, and write it back out **byte-for-byte**. Dependency-light on purpose, so other tools can take it as a parser without dragging in a matrix or solver stack.
+The fast, lossless parser, data layer, and **format converter** for power-system case files. Parse a MATPOWER `.m` case, work with a typed model, write it back **byte-for-byte**, or convert between formats through a neutral hub. Dependency-light on purpose, so other tools can embed it without dragging in a matrix or solver stack.
 
 Two crates in this workspace:
 
-- **`caseio`** — the parser, the typed `MpcCase` (buses, branches, generators, storage, HVDC), the retained source text, and the lossless writer. Five dependencies, no sparse-matrix or TUI baggage.
+- **`caseio`** — the parser, the typed `MpcCase`, the format-neutral `Network` hub (the converters meet here), the lossless writer, and the format converters (PowerModels / EGRET JSON writers + a PowerModels-JSON reader). Six dependencies, no sparse-matrix or TUI baggage.
 - **`casemat`** — sparse matrices and graph views built on caseio: B'/B''/Y_bus, PTDF/LODF, incidence, weighted Laplacian, the LACPF block, adjacency, and the DC-OPF instance bundle, plus a CLI/TUI. Also the `casemat` Python package.
 
 ## Lossless round-trip
 
 `parse → write → parse` reproduces the source file byte-for-byte — every `mpc.*` field (including ones the typed model doesn't interpret), in-matrix column-header comments, and exact numeric tokens like `7e-05` that an `f64`-based writer would mangle. The parse retains the original source text and the writer echoes it, so round-trip costs no extra parse pass. This is the property other lightweight parsers lack: ExaPowerIO has no writer, and PowerModels' MATPOWER export is lossy.
+
+## Convert
+
+Conversion goes through a format-neutral hub, `Network` (first-class buses, loads, shunts, branches, generators, storage, HVDC), with every reader producing it and every writer consuming it — N readers × M writers, not pairwise. caseio's contract is two-tier, and explicit about what survives:
+
+- **Same-format round-trip is byte-exact.** Each reader keeps its source text; writing back to that format echoes it.
+- **Cross-format is maximal-fidelity with itemized loss.** Anything the target can't represent is reported in `Conversion::warnings`, never dropped silently.
+
+Fully lossless any-to-any isn't possible (formats model different things), so the converter tells you exactly where a conversion loses information instead of pretending it doesn't. The PowerModels JSON writer is validated value-for-value against `PowerModels.jl`'s own parse.
+
+| from \ to | MATPOWER | PowerModels JSON | EGRET JSON |
+| --- | --- | --- | --- |
+| **MATPOWER** | byte-exact echo | validated vs PowerModels.jl | schema-faithful |
+| **PowerModels JSON** | canonical | byte-exact echo | schema-faithful |
+
+```rust
+use caseio::{parse_matpower_file, write_as, TargetFormat};
+
+let net = parse_matpower_file("case14.m")?.to_network();   // MATPOWER → neutral hub
+let conv = write_as(&net, TargetFormat::PowerModelsJson);  // → PowerModels JSON
+for w in &conv.warnings { eprintln!("fidelity: {w}"); }    // what couldn't be represented
+std::fs::write("case14.json", conv.text)?;
+```
 
 ## Benchmark
 
@@ -37,7 +60,7 @@ let bus0 = case.buses[0].name.as_deref();           // bus_name, dclines, ...
 let m = write_matpower(&case);                       // reproduces the source
 ```
 
-`caseio` depends only on `thiserror`, `num-complex`, `petgraph`, `serde`, and `fast-float` — light enough to vendor as a parser.
+`caseio` depends only on `thiserror`, `num-complex`, `petgraph`, `serde`, `serde_json`, and `fast-float` — light enough to vendor as a parser.
 
 ## casemat: matrices on top
 
@@ -86,7 +109,7 @@ g = case.to_networkx()
 
 ## Roadmap
 
-PSS/E `.raw` (v33–v35), OpenDSS, and PowerModels-JSON parsers; pandapower / PyPSA adapters; and a C ABI so Julia/C++ can consume `caseio` directly. See the issues.
+More readers and writers over the `Network` hub: EGRET-JSON and PSS/E `.raw` (v33–v35) readers, PSS/E and PowerWorld `.aux` writers, OpenDSS. Each is one reader/writer at the hub, not a pairwise converter. Then a `convert` CLI subcommand and a Python `convert()` binding, and a C ABI so Julia/C++ can consume `caseio` directly. See the issues.
 
 ## Tests
 

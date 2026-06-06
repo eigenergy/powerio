@@ -70,4 +70,10 @@ pub enum Error {
 
     #[error("matrix-market I/O: {0}")]
     Mtx(String),
+
+    #[error("{format} read error: {message}")]
+    FormatRead {
+        format: &'static str,
+        message: String,
+    },
 }
