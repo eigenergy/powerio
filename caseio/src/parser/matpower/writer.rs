@@ -1,11 +1,10 @@
 //! Write a [`MpcCase`] back out as a MATPOWER `.m` file.
 //!
-//! When the case was parsed from text it carries its source
-//! [`MatpowerDocument`](super::document::MatpowerDocument), and the writer
-//! replays it verbatim — an exact round-trip that preserves every field,
+//! When the case was parsed from text it carries its original source, and the
+//! writer echoes it verbatim — an exact round-trip that preserves every field,
 //! comment, and numeric token. A case built in memory (e.g. by `synth`) has no
-//! source document, so the writer falls back to canonical serialization from
-//! the typed data.
+//! source, so the writer falls back to canonical serialization from the typed
+//! data.
 
 use std::fmt::Write as _;
 use std::path::Path;
@@ -17,7 +16,7 @@ use crate::Result;
 #[must_use]
 pub fn write_matpower(case: &MpcCase) -> String {
     match case.source() {
-        Some(doc) => doc.to_string(),
+        Some(text) => text.to_owned(),
         None => canonical(case),
     }
 }
@@ -28,7 +27,7 @@ pub fn write_matpower_file(case: &MpcCase, path: impl AsRef<Path>) -> Result<()>
     Ok(())
 }
 
-/// Canonical MATPOWER from typed data, for cases with no source document.
+/// Canonical MATPOWER from typed data, for cases with no retained source text.
 /// Emits valid `.m` (values equal, formatting normalized); not byte-exact.
 #[allow(clippy::too_many_lines)] // flat per-section serializer; splitting adds noise
 fn canonical(case: &MpcCase) -> String {

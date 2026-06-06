@@ -1,6 +1,6 @@
 //! MATPOWER `.m` case file parser. Standard MATPOWER 7.x format.
 
-pub mod document;
+mod locate;
 mod matlab;
 mod tokens;
 mod writer;
@@ -10,7 +10,6 @@ mod tests;
 
 use std::path::Path;
 
-pub use document::MatpowerDocument;
 pub use writer::{write_matpower, write_matpower_file};
 
 use crate::case::{Branch, Bus, DcLine, GenCost, Generator, MpcCase, Storage};
@@ -34,38 +33,47 @@ pub fn parse_matpower_file(path: impl AsRef<Path>) -> Result<MpcCase> {
 }
 
 fn parse_matpower_named(content: &str, name: &str) -> Result<MpcCase> {
-    // One pass builds the faithful source document (for lossless round-trip);
-    // the typed structs are then derived from its located assignments, so the
-    // file is never re-scanned per field and never comment-stripped whole.
-    let source = document::build_document(content);
+    // Locate each assignment's text directly in `content` and build the typed
+    // case from those borrowed slices in one pass. The case keeps the original
+    // source text so the writer can echo it for a byte-exact round-trip.
+    let located = locate::locate_assignments(content);
+    let case = build_case(name, |field| {
+        located
+            .iter()
+            .find(|(f, _)| *f == field)
+            .map(|(_, full)| *full)
+    })?;
+    Ok(case.with_source(content))
+}
 
-    let base_mva = source
-        .assignment("baseMVA")
+/// Build the typed [`MpcCase`] from a per-field assignment-text accessor `get`,
+/// which returns the raw `mpc.<field> = …;` text for a field name. The caller
+/// attaches the source text afterward so the case can round-trip.
+fn build_case<'a>(name: &str, get: impl Fn(&str) -> Option<&'a str>) -> Result<MpcCase> {
+    let base_mva = get("baseMVA")
         .and_then(|raw| matlab::scalar_from_assignment(raw, "baseMVA").transpose())
         .transpose()?
         .ok_or(Error::MissingField("baseMVA"))?;
 
     let mut buses = parse_rows(
-        source.assignment("bus").ok_or(Error::MissingField("bus"))?,
+        get("bus").ok_or(Error::MissingField("bus"))?,
         "bus",
         Bus::from_row,
     )?;
     let branches = parse_rows(
-        source
-            .assignment("branch")
-            .ok_or(Error::MissingField("branch"))?,
+        get("branch").ok_or(Error::MissingField("branch"))?,
         "branch",
         Branch::from_row,
     )?;
 
-    let gens = parse_gens(&source)?;
-    let storage = parse_optional(&source, "storage", Storage::from_row)?;
-    let dclines = parse_optional(&source, "dcline", DcLine::from_row)?;
+    let gens = parse_gens(&get)?;
+    let storage = parse_optional(&get, "storage", Storage::from_row)?;
+    let dclines = parse_optional(&get, "dcline", DcLine::from_row)?;
 
-    // Bus names live in a `{...}` cell array; pull them from the document
-    // (which kept the quotes) and attach by position when the count matches.
-    if let Some(raw) = source.assignment("bus_name") {
-        let names = document::parse_string_cell(raw);
+    // Bus names live in a `{...}` cell array; pull them (quotes kept) and attach
+    // by position when the count matches.
+    if let Some(raw) = get("bus_name") {
+        let names = locate::parse_string_cell(raw);
         if names.len() == buses.len() {
             for (bus, label) in buses.iter_mut().zip(names) {
                 bus.name = Some(label);
@@ -76,8 +84,7 @@ fn parse_matpower_named(content: &str, name: &str) -> Result<MpcCase> {
     Ok(MpcCase::new(name, base_mva, buses, branches)
         .with_gens(gens)
         .with_storage(storage)
-        .with_dclines(dclines)
-        .with_source(source))
+        .with_dclines(dclines))
 }
 
 /// Stream the rows of one assignment, building a typed `T` per row via `ctor`.
@@ -95,12 +102,12 @@ fn parse_rows<T>(
 }
 
 /// Like [`parse_rows`] but for an optional `mpc.<field>` block (empty if absent).
-fn parse_optional<T>(
-    doc: &MatpowerDocument,
+fn parse_optional<'a, T>(
+    get: &impl Fn(&str) -> Option<&'a str>,
     field: &str,
     ctor: impl Fn(&[f64], usize) -> Result<T>,
 ) -> Result<Vec<T>> {
-    match doc.assignment(field) {
+    match get(field) {
         Some(raw) => parse_rows(raw, field, ctor),
         None => Ok(Vec::new()),
     }
@@ -108,15 +115,15 @@ fn parse_optional<T>(
 
 /// Parse `mpc.gen` and fold in the active-power block of `mpc.gencost`.
 /// Both are optional: a power-flow-only case has neither and gets no gens.
-fn parse_gens(doc: &MatpowerDocument) -> Result<Vec<Generator>> {
-    let Some(raw) = doc.assignment("gen") else {
+fn parse_gens<'a>(get: &impl Fn(&str) -> Option<&'a str>) -> Result<Vec<Generator>> {
+    let Some(raw) = get("gen") else {
         return Ok(Vec::new());
     };
     let mut gens = parse_rows(raw, "gen", Generator::from_row)?;
 
     // MATPOWER lays the active-power costs first, one row per generator and in
     // the same order; reactive-power costs (if any) follow in a second block.
-    if let Some(craw) = doc.assignment("gencost") {
+    if let Some(craw) = get("gencost") {
         let costs = parse_rows(craw, "gencost", GenCost::from_row)?;
         // Reject a count that is neither `n_gen` (active only) nor `2·n_gen`
         // (active + reactive). A per-row defect (e.g. a short row) surfaces as

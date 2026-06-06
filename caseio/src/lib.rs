@@ -13,6 +13,4 @@ pub mod parser;
 
 pub use case::{Branch, Bus, ConnectivityReport, DcLine, GenCost, Generator, MpcCase, Storage};
 pub use error::{Error, Result};
-pub use parser::{
-    parse_matpower, parse_matpower_file, write_matpower, write_matpower_file, MatpowerDocument,
-};
+pub use parser::{parse_matpower, parse_matpower_file, write_matpower, write_matpower_file};

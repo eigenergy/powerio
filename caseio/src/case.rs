@@ -1,6 +1,7 @@
 //! Domain types for a parsed power network case.
 
 use std::collections::HashMap;
+use std::sync::Arc;
 
 use petgraph::graph::UnGraph;
 
@@ -377,11 +378,11 @@ pub struct MpcCase {
     pub dclines: Vec<DcLine>,
     /// MATPOWER bus id → dense index in [0, n).
     bus_id_to_idx: HashMap<usize, usize>,
-    /// Faithful source document, present when parsed from `.m` text. Enables
-    /// exact round-trip via `write_matpower` without bloating the typed structs;
-    /// `None` for cases built in memory (e.g. `synth`). Boxed to keep `MpcCase`
-    /// small on the matrix hot paths.
-    source: Option<Box<crate::parser::matpower::MatpowerDocument>>,
+    /// Original `.m` source text, present when parsed from text. The writer
+    /// echoes it for a byte-exact round-trip; `None` for cases built in memory
+    /// (e.g. `synth`), which write canonical output. `Arc<str>` so cloning an
+    /// `MpcCase` shares the source instead of copying the whole file.
+    source: Option<Arc<str>>,
 }
 
 impl MpcCase {
@@ -431,17 +432,17 @@ impl MpcCase {
         self
     }
 
-    /// Attach the faithful source document (builder style). Set by the parser
-    /// so the case can round-trip; `write_matpower` replays it verbatim.
+    /// Attach the original source text (builder style). Set by the parser so the
+    /// case can round-trip; `write_matpower` echoes it verbatim.
     #[must_use]
-    pub fn with_source(mut self, source: crate::parser::matpower::MatpowerDocument) -> Self {
-        self.source = Some(Box::new(source));
+    pub fn with_source(mut self, source: impl Into<Arc<str>>) -> Self {
+        self.source = Some(source.into());
         self
     }
 
-    /// The source document, if this case was parsed from `.m` text.
+    /// The original source text, if this case was parsed from `.m` text.
     #[must_use]
-    pub fn source(&self) -> Option<&crate::parser::matpower::MatpowerDocument> {
+    pub fn source(&self) -> Option<&str> {
         self.source.as_deref()
     }
 
