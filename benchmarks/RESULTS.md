@@ -49,6 +49,27 @@ ExaPowerIO/PowerModels (which also return data) and the lossless number.
   buses** — and the only one callable from Rust, the CLI, and Python with no
   runtime. ExaPowerIO has no writer; PowerModels' export is lossy.
 
+## vs pandapower
+
+pandapower reads MATPOWER `.m` through `matpowercaseframes` (a pandas reader) and
+then `from_mpc` builds its `net` model. Measured this session on the same
+machine:
+
+| case | **caseio** parse | matpowercaseframes (pandapower's `.m` reader) |
+| --- | --- | --- |
+| case2869pegase | **1.90 ms** | 27.4 ms |
+| case9241pegase | **5.62 ms** | 84.9 ms |
+| case13659pegase | **8.34 ms** | 126.5 ms |
+| case193k | **169 ms** | 2197 ms |
+
+caseio is ~14–15× faster than pandapower's reader, and that's before `from_mpc`
+builds the `net` (case30: `from_mpc` ≈ 60 ms vs caseio < 1 ms; `from_mpc` also
+errored on case118/pegase in pandapower 3.2.2). The point isn't only speed:
+pandapower funnels every format through `net` and is import-only for
+PowerFactory / CIM / UCTE / JAO, with no stated losslessness. caseio's edge is
+the fidelity contract — byte-exact same-format round-trip, itemized loss
+cross-format — on top of the speed.
+
 ## Reproduce
 
 ```

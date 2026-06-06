@@ -23,7 +23,7 @@ dependencies = ["numpy>=1.21", "scipy>=1.7"]
 
 [project.optional-dependencies]
 networkx = ["networkx>=2.6"]
-bench = ["matpowercaseframes"]
+bench = ["matpowercaseframes", "pandapower"]
 
 [project.urls]
 Repository = "https://github.com/eigenergy/caseio"
