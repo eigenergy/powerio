@@ -28,11 +28,20 @@ __all__ = [
     "Case",
     "Incidence",
     "YbusParts",
+    "Conversion",
     "CasematError",
     "parse_matpower",
     "parse_matpower_string",
+    "convert",
     "__version__",
 ]
+
+Conversion = namedtuple("Conversion", ["text", "warnings"])
+Conversion.__doc__ = """Output of :func:`convert`.
+
+``text`` is the converted file contents; ``warnings`` lists the fields the
+target format could not represent (empty for a faithful conversion).
+"""
 
 Incidence = namedtuple("Incidence", ["A", "b", "p_shift", "branch_of_col"])
 Incidence.__doc__ = """Output of :meth:`Case.incidence`.
@@ -183,3 +192,16 @@ def parse_matpower(path: Any) -> Case:
 def parse_matpower_string(content: str, name: Optional[str] = None) -> Case:
     """Parse a MATPOWER case from in-memory ``.m`` text."""
     return Case(_casemat.parse_matpower_string(content, name))
+
+
+def convert(path: Any, to: str, from_: Optional[str] = None) -> Conversion:
+    """Convert a case file to another format through the neutral hub.
+
+    ``to`` / ``from_`` are format names: ``matpower``, ``powermodels-json``,
+    ``egret-json``, ``psse``, ``powerworld`` (aliases ``m``, ``pm``, ``egret``,
+    ``raw``, ``aux``). The input format is inferred from the file extension
+    unless ``from_`` overrides it. Returns a :class:`Conversion` with the text
+    and any fidelity warnings.
+    """
+    text, warnings = _casemat.convert(str(path), to, from_)
+    return Conversion(text, warnings)

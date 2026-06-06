@@ -13,9 +13,13 @@ use crate::network::{Network, SourceFormat};
 
 mod egret;
 mod powermodels;
+mod powerworld;
+mod psse;
 
 pub use egret::write_egret_json;
 pub use powermodels::{parse_powermodels_json, write_powermodels_json};
+pub use powerworld::{parse_powerworld, write_powerworld};
+pub use psse::{parse_psse, write_psse};
 
 /// A target interchange format. See [`write_as`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -24,6 +28,10 @@ pub enum TargetFormat {
     PowerModelsJson,
     /// EGRET `ModelData` JSON.
     EgretJson,
+    /// PSS/E `.raw` (v33).
+    Psse,
+    /// PowerWorld auxiliary `.aux`.
+    PowerWorld,
     /// MATPOWER `.m` (round-trip; byte-exact when the case kept its source).
     Matpower,
 }
@@ -34,6 +42,8 @@ impl TargetFormat {
     pub fn extension(self) -> &'static str {
         match self {
             TargetFormat::PowerModelsJson | TargetFormat::EgretJson => "json",
+            TargetFormat::Psse => "raw",
+            TargetFormat::PowerWorld => "aux",
             TargetFormat::Matpower => "m",
         }
     }
@@ -61,6 +71,8 @@ pub fn write_as(net: &Network, format: TargetFormat) -> Conversion {
     match format {
         TargetFormat::PowerModelsJson => write_powermodels_json(net),
         TargetFormat::EgretJson => write_egret_json(net),
+        TargetFormat::Psse => write_psse(net),
+        TargetFormat::PowerWorld => write_powerworld(net),
         // From another source (or no retained source): canonical MATPOWER from
         // the folded model.
         TargetFormat::Matpower => Conversion {
@@ -77,6 +89,8 @@ fn same_format(target: TargetFormat, source: SourceFormat) -> bool {
         (TargetFormat::Matpower, SourceFormat::Matpower)
             | (TargetFormat::PowerModelsJson, SourceFormat::PowerModelsJson)
             | (TargetFormat::EgretJson, SourceFormat::EgretJson)
+            | (TargetFormat::Psse, SourceFormat::Psse)
+            | (TargetFormat::PowerWorld, SourceFormat::PowerWorld)
     )
 }
 

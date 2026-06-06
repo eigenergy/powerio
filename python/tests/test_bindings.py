@@ -323,6 +323,33 @@ def test_dcopf_requires_generators(tmp_path):
         case.write_dcopf_bundle(str(tmp_path))
 
 
+# --- convert -----------------------------------------------------------
+
+
+def test_convert_matpower_to_each_format():
+    for fmt in ["powermodels-json", "egret-json", "psse", "powerworld"]:
+        r = nm.convert(str(DATA / "case30.m"), fmt)
+        assert isinstance(r.text, str) and len(r.text) > 0
+        assert isinstance(r.warnings, list)
+    # PowerModels JSON output parses as JSON and keeps the bus count.
+    pm = json.loads(nm.convert(str(DATA / "case30.m"), "powermodels-json").text)
+    assert len(pm["bus"]) == 30
+
+
+def test_convert_round_trip_through_psse(tmp_path):
+    raw = nm.convert(str(DATA / "case30.m"), "psse").text
+    p = tmp_path / "case30.raw"
+    p.write_text(raw)
+    back = nm.convert(str(p), "matpower")  # PSS/E inferred from .raw extension
+    case = nm.parse_matpower_string(back.text)
+    assert case.n == 30
+
+
+def test_convert_unknown_format_raises():
+    with pytest.raises(ValueError):
+        nm.convert(str(DATA / "case30.m"), "nonsense")
+
+
 # --- large case integration --------------------------------------------
 
 
