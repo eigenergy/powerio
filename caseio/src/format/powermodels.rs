@@ -289,10 +289,13 @@ pub fn parse_powermodels_json(content: &str) -> Result<Network> {
     let ascale = if per_unit { 180.0 / std::f64::consts::PI } else { 1.0 };
     let name = root.get("name").and_then(Value::as_str).unwrap_or("case").to_string();
 
-    Ok(Network {
+    let net = Network {
         name,
         base_mva,
-        buses: sorted(root, "bus", "index").iter().map(|v| read_bus(v, ascale)).collect(),
+        buses: sorted(root, "bus", "index")
+            .iter()
+            .map(|v| read_bus(v, ascale))
+            .collect::<Result<Vec<_>>>()?,
         loads: sorted(root, "load", "index").iter().map(|v| read_load(v, pscale)).collect(),
         shunts: sorted(root, "shunt", "index").iter().map(|v| read_shunt(v, pscale)).collect(),
         branches: sorted(root, "branch", "index").iter().map(|v| read_branch(v, pscale, ascale)).collect(),
@@ -301,7 +304,9 @@ pub fn parse_powermodels_json(content: &str) -> Result<Network> {
         hvdc: sorted(root, "dcline", "index").iter().map(|v| read_hvdc(v, pscale)).collect(),
         source_format: SourceFormat::PowerModelsJson,
         source: Some(Arc::from(content)),
-    })
+    };
+    net.check_references(FMT)?;
+    Ok(net)
 }
 
 /// Elements of a top-level section, ordered by their integer `idx_key` so a
@@ -349,9 +354,12 @@ fn extras_excluding(v: &Value, known: &[&str]) -> crate::network::Extras {
     })
 }
 
-fn read_bus(v: &Value, ascale: f64) -> Bus {
-    Bus {
-        id: uid(v, "bus_i"),
+fn read_bus(v: &Value, ascale: f64) -> Result<Bus> {
+    let id = v.get("bus_i").or_else(|| v.get("index")).and_then(Value::as_u64).ok_or_else(|| {
+        Error::FormatRead { format: FMT, message: "bus record missing integer `bus_i`".into() }
+    })? as usize;
+    Ok(Bus {
+        id,
         kind: bustype(v.get("bus_type").and_then(Value::as_i64).unwrap_or(1)),
         vm: f_or(v, "vm", 1.0),
         va: f(v, "va") * ascale,
@@ -365,7 +373,7 @@ fn read_bus(v: &Value, ascale: f64) -> Bus {
             v,
             &["bus_i", "index", "bus_type", "vm", "va", "vmax", "vmin", "base_kv", "area", "zone", "name", "source_id"],
         ),
-    }
+    })
 }
 
 fn read_load(v: &Value, pscale: f64) -> Load {
@@ -442,15 +450,19 @@ fn read_gen(v: &Value, pscale: f64, base_mva: f64, per_unit: bool) -> Generator 
 }
 
 fn read_cost(v: &Value, base_mva: f64, per_unit: bool) -> GenCost {
+    // Keep non-numeric entries as NaN rather than dropping them: silently filtering
+    // would shift every later coefficient's polynomial degree.
     let coeffs_raw: Vec<f64> = v
         .get("cost")
         .and_then(Value::as_array)
-        .map(|a| a.iter().filter_map(Value::as_f64).collect())
+        .map(|a| a.iter().map(|c| c.as_f64().unwrap_or(f64::NAN)).collect())
         .unwrap_or_default();
-    // PowerModels per-unit scales coeff i (of p^(k-1-i)) by baseMVA^(k-1-i);
-    // undo it to land on the neutral MW basis.
+    let model = v.get("model").and_then(Value::as_u64).unwrap_or(2) as u8;
     let k = coeffs_raw.len();
-    let coeffs = if per_unit {
+    // Polynomial (model 2) per-unit scales coeff i (of p^(k-1-i)) by
+    // baseMVA^(k-1-i); undo it for the neutral MW basis. Piecewise (model 1)
+    // breakpoints aren't scaled this way, so leave them.
+    let coeffs = if per_unit && model == 2 {
         coeffs_raw
             .iter()
             .enumerate()
@@ -459,11 +471,14 @@ fn read_cost(v: &Value, base_mva: f64, per_unit: bool) -> GenCost {
     } else {
         coeffs_raw
     };
+    // A polynomial's ncost is its coefficient count; a piecewise curve stores
+    // 2·ncost values ((mw, cost) pairs).
+    let default_ncost = if model == 1 { k / 2 } else { k };
     GenCost {
-        model: v.get("model").and_then(Value::as_u64).unwrap_or(2) as u8,
+        model,
         startup: f(v, "startup"),
         shutdown: f(v, "shutdown"),
-        ncost: v.get("ncost").and_then(Value::as_u64).unwrap_or(k as u64) as usize,
+        ncost: v.get("ncost").and_then(Value::as_u64).map_or(default_ncost, |n| n as usize),
         coeffs,
     }
 }

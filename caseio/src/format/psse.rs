@@ -1,9 +1,10 @@
 //! Read and write PSS/E `.raw` (revision 33).
 //!
 //! Covers the core sections — bus, load, fixed shunt, generator, branch, and
-//! 2-winding transformer — which together carry a transmission power-flow case.
+//! 2-winding transformer — which together carry a transmission power flow case.
 //! Impedances are written on the system base with per-unit turns ratios
-//! (`CZ = 1`, `CW = 1`); the reader assumes the same and warns otherwise.
+//! (`CZ = 1`, `CW = 1`); the reader assumes the same and does not convert other
+//! impedance/turns bases — a non-unit `CZ`/`CW` is read verbatim (so misread).
 //! 3-winding transformers, two-terminal DC, switched shunts, and the other
 //! advanced sections are not modeled: on write they're emitted as empty
 //! sections, on read they're skipped, and HVDC/storage carried on the `Network`
@@ -217,7 +218,7 @@ pub fn parse_psse(content: &str) -> Result<Network> {
         }
         let f = fields(line);
         match section {
-            Section::Bus => buses.push(read_bus(&f)),
+            Section::Bus => buses.push(read_bus(&f)?),
             Section::Load => loads.push(read_load(&f)),
             Section::FixedShunt => shunts.push(read_shunt(&f)),
             Section::Generator => generators.push(read_gen(&f)),
@@ -239,7 +240,7 @@ pub fn parse_psse(content: &str) -> Result<Network> {
         }
     }
 
-    Ok(Network {
+    let net = Network {
         name,
         base_mva,
         buses,
@@ -251,7 +252,9 @@ pub fn parse_psse(content: &str) -> Result<Network> {
         hvdc: Vec::new(),
         source_format: SourceFormat::Psse,
         source: Some(Arc::from(content)),
-    })
+    };
+    net.check_references(FMT)?;
+    Ok(net)
 }
 
 #[derive(Clone, Copy)]
@@ -332,11 +335,15 @@ fn bustype(code: i64) -> BusType {
     }
 }
 
-fn read_bus(f: &[String]) -> Bus {
+fn read_bus(f: &[String]) -> Result<Bus> {
     // I, NAME, BASKV, IDE, AREA, ZONE, OWNER, VM, VA, NVHI, NVLO, EVHI, EVLO
+    let id = f.first().and_then(|x| x.parse::<f64>().ok()).ok_or_else(|| Error::FormatRead {
+        format: FMT,
+        message: "bus record missing numeric id (field I)".into(),
+    })? as usize;
     let name = f.get(1).filter(|n| !n.is_empty()).map(|n| n.trim().to_string());
-    Bus {
-        id: id_at(f, 0),
+    Ok(Bus {
+        id,
         kind: bustype(f.get(3).and_then(|x| x.parse().ok()).unwrap_or(1)),
         vm: f.get(7).and_then(|x| x.parse().ok()).unwrap_or(1.0),
         va: num_at(f, 8),
@@ -347,7 +354,7 @@ fn read_bus(f: &[String]) -> Bus {
         zone: id_at(f, 5),
         name,
         extras: Extras::new(),
-    }
+    })
 }
 
 fn read_load(f: &[String]) -> Load {
