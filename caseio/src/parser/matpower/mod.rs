@@ -119,7 +119,8 @@ fn parse_gens(doc: &MatpowerDocument) -> Result<Vec<Generator>> {
     if let Some(craw) = doc.assignment("gencost") {
         let costs = parse_rows(craw, "gencost", GenCost::from_row)?;
         // Reject a count that is neither `n_gen` (active only) nor `2·n_gen`
-        // (active + reactive) so a truncated/garbled block is caught here.
+        // (active + reactive). A per-row defect (e.g. a short row) surfaces as
+        // `ShortRow` from the parse above before this count check runs.
         let n = gens.len();
         if costs.len() != n && costs.len() != 2 * n {
             return Err(Error::GenCostCountMismatch {
@@ -127,13 +128,15 @@ fn parse_gens(doc: &MatpowerDocument) -> Result<Vec<Generator>> {
                 gencost: costs.len(),
             });
         }
-        for (gen, cost) in gens.iter_mut().zip(&costs[..n]) {
-            gen.cost = Some(cost.clone());
+        // `costs` is consumed here, so move each row into its generator rather
+        // than cloning the `coeffs` Vec. The first `n` are active-power costs;
+        // the next `n` (when present) are reactive-power costs, in gen order.
+        let mut costs = costs.into_iter();
+        for (gen, cost) in gens.iter_mut().zip(costs.by_ref().take(n)) {
+            gen.cost = Some(cost);
         }
-        if costs.len() == 2 * n {
-            for (gen, cost) in gens.iter_mut().zip(&costs[n..]) {
-                gen.reactive_cost = Some(cost.clone());
-            }
+        for (gen, cost) in gens.iter_mut().zip(costs) {
+            gen.reactive_cost = Some(cost);
         }
     }
 

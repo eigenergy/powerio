@@ -33,9 +33,13 @@ vary a few percent run to run; the relative picture is stable.
     size.
   - **ACTIVSg / SyntheticUSA** (synthetic US, with `gentype`/`genfuel`/
     `bus_name` cell arrays): a tie at the small and the very largest end, and
-    caseio trails by **≤8%** in between. These cases spend their time on
-    per-generator metadata that caseio stores as owned `String`/`Vec` in its
-    typed model; ExaPowerIO's layout is leaner there.
+    caseio trails by **≤8%** in between. The reason is the lossless document:
+    caseio builds a re-serializable byte-range view of the whole file on top of
+    the typed parse, and ExaPowerIO builds no such thing. That document pass is
+    ~half of caseio's parse time (profiled: 38% at case118, 51% at case2869,
+    rising with size). The pegase cases are number-dense enough that fast float
+    parsing wins anyway; the synthetic cases carry relatively less number per
+    byte, so the fixed document cost is what lets ExaPowerIO close the gap.
   - So caseio is **as fast or faster than ExaPowerIO across the board** —
     decisively faster on pegase, within a few percent on the synthetic cases —
     and scales linearly to 193k buses (~1 µs/bus).
@@ -46,8 +50,10 @@ vary a few percent run to run; the relative picture is stable.
 
 The zero-copy parser (document byte-ranges + streaming row parse) closed the
 case_ACTIVSg2000 gap from 0.55 ms to a tie and widened the pegase lead. The
-residual on the synthetic cases is the typed output itself (owned bus names and
-per-generator `Vec`s), not parsing overhead.
+residual on the synthetic cases is the lossless document build itself — a second
+pass that locates and records every assignment's byte range so the file
+round-trips — not generator metadata. A data-only parse path that skips the
+document is the lever to win these cases outright.
 
 ## Reproduce
 
