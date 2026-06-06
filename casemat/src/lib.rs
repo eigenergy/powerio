@@ -10,8 +10,7 @@
 // resolve unchanged after the split.
 pub use caseio::{
     case, error, parser, parse_matpower, parse_matpower_file, write_matpower, write_matpower_file,
-    Branch, Bus, ConnectivityReport, DcLine, Error, GenCost, Generator, MatpowerDocument, MpcCase,
-    Result, Storage,
+    Branch, Bus, ConnectivityReport, DcLine, Error, GenCost, Generator, MpcCase, Result, Storage,
 };
 
 pub mod io;

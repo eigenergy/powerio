@@ -1,4 +1,6 @@
 use super::parse_matpower as parse_mpc;
+use crate::case::MpcCase;
+use super::write_matpower;
 
 const CASE_TINY: &str = r#"
 function mpc = tiny
@@ -173,6 +175,22 @@ fn accepts_last_row_without_trailing_semicolon() {
                ];\n";
     let mpc = parse_mpc(src).expect("closed matrix with unterminated last row");
     assert_eq!(mpc.buses.len(), 2);
+}
+
+#[test]
+fn parsed_case_keeps_source_in_memory_case_does_not() {
+    // A case parsed from text retains its source so the writer echoes it
+    // verbatim; a case built in memory has no source and writes canonically.
+    let parsed = parse_mpc(CASE_TINY).expect("parse tiny");
+    assert_eq!(parsed.source(), Some(CASE_TINY), "parsed case should echo its source");
+    assert_eq!(write_matpower(&parsed), CASE_TINY);
+
+    let built = MpcCase::new("m", 100.0, parsed.buses.clone(), parsed.branches.clone());
+    assert!(built.source().is_none(), "in-memory case should carry no source");
+    // Canonical output is parseable and keeps the headline values.
+    let reparsed = parse_mpc(&write_matpower(&built)).expect("canonical reparses");
+    assert_eq!(reparsed.base_mva, 100.0);
+    assert_eq!(reparsed.buses.len(), built.buses.len());
 }
 
 #[test]

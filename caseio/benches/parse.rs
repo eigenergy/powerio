@@ -1,7 +1,7 @@
 //! MATPOWER parse + round-trip throughput. Run with `cargo bench --bench parse`.
 //!
 //! Parse time is dominated by the field-finding scan over the source text;
-//! `write` replays the source document. The large pegase case is the headline
+//! `write` echoes the retained source. The large pegase case is the headline
 //! number for the "fast parser" claim — see `benchmarks/RESULTS.md` for the
 //! cross-tool comparison against PowerModels.jl and ExaPowerIO.jl.
 
