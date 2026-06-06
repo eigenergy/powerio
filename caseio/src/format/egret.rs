@@ -22,8 +22,8 @@ pub fn write_egret_json(net: &Network) -> Conversion {
         bus.insert(b.id.to_string(), bus_obj(b));
     }
 
-    // EGRET keys each load/shunt; use a per-bus running suffix so several loads
-    // on one bus stay distinct.
+    // EGRET keys each load/shunt; use a global running suffix (load_1, load_2, …)
+    // so several loads on one bus stay distinct.
     let mut load = Map::new();
     for (i, l) in net.loads.iter().enumerate() {
         load.insert(format!("load_{}", i + 1), load_obj(l));
@@ -197,7 +197,8 @@ fn cost_curve(cost: &GenCost) -> Option<Value> {
     curve.insert("data_type".into(), Value::String("cost_curve".into()));
     match cost.model {
         2 => {
-            // coeffs are highest-order first: coeffs[i] multiplies p^(ncost-1-i).
+            // coeffs are highest-order first: coeffs[i] multiplies p^(k-1-i),
+            // where k = coeffs.len() (== ncost for a well-formed polynomial).
             let mut values = Map::new();
             let k = cost.coeffs.len();
             for (i, &c) in cost.coeffs.iter().enumerate() {

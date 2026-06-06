@@ -149,7 +149,11 @@ pub fn parse_powerworld(content: &str) -> Result<Network> {
     for blk in DataBlocks::new(content) {
         saw_any = true;
         match blk.object.as_str() {
-            "Bus" => buses.extend(blk.rows().map(|r| read_bus(&r))),
+            "Bus" => {
+                for r in blk.rows() {
+                    buses.push(read_bus(&r)?);
+                }
+            }
             "Load" => loads.extend(blk.rows().map(|r| read_load(&r))),
             "Shunt" => shunts.extend(blk.rows().map(|r| read_shunt(&r))),
             "Gen" => generators.extend(blk.rows().map(|r| read_gen(&r))),
@@ -161,7 +165,7 @@ pub fn parse_powerworld(content: &str) -> Result<Network> {
         return Err(Error::FormatRead { format: FMT, message: "no DATA blocks found".into() });
     }
 
-    Ok(Network {
+    let net = Network {
         name,
         base_mva,
         buses,
@@ -173,7 +177,9 @@ pub fn parse_powerworld(content: &str) -> Result<Network> {
         hvdc: Vec::new(),
         source_format: SourceFormat::PowerWorld,
         source: Some(Arc::from(content)),
-    })
+    };
+    net.check_references(FMT)?;
+    Ok(net)
 }
 
 /// One `DATA (Object, [fields]) { … }` block: the object name, its field list,
@@ -305,10 +311,14 @@ fn bus_kind(cat: Option<&String>) -> BusType {
     }
 }
 
-fn read_bus(r: &Row) -> Bus {
+fn read_bus(r: &Row) -> Result<Bus> {
+    let id = r.get("BusNum").and_then(|v| v.parse::<f64>().ok()).ok_or_else(|| Error::FormatRead {
+        format: FMT,
+        message: "Bus block row missing numeric BusNum".into(),
+    })? as usize;
     let name = r.get("BusName").filter(|n| !n.is_empty()).cloned();
-    Bus {
-        id: uid(r, "BusNum"),
+    Ok(Bus {
+        id,
         kind: bus_kind(r.get("BusCat")),
         vm: f_or(r, "BusPUVolt", 1.0),
         va: f(r, "BusAngle"),
@@ -319,7 +329,7 @@ fn read_bus(r: &Row) -> Bus {
         zone: uid(r, "ZoneNum"),
         name,
         extras: Extras::new(),
-    }
+    })
 }
 
 fn read_load(r: &Row) -> Load {

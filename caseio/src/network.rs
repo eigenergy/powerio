@@ -23,6 +23,7 @@ use std::sync::Arc;
 use serde_json::Value;
 
 use crate::case::{BusType, DcLine, GenCost, Generator as MpcGen, MpcCase, Storage as MpcStorage};
+use crate::Error;
 
 /// Source-format fields the neutral model doesn't name, kept for round-trip and
 /// cross-format passthrough. Keys are the field names; values are JSON scalars.
@@ -291,6 +292,53 @@ impl MpcCase {
 }
 
 impl Network {
+    /// Error if two buses share an id, or if any element references a bus that
+    /// doesn't exist. Readers call this after parsing so a missing/garbled id
+    /// (which would otherwise default to a placeholder and silently re-wire the
+    /// network) fails loudly instead.
+    pub(crate) fn check_references(&self, format: &'static str) -> crate::Result<()> {
+        let mut ids = std::collections::BTreeSet::new();
+        for b in &self.buses {
+            if !ids.insert(b.id) {
+                return Err(Error::FormatRead {
+                    format,
+                    message: format!("duplicate bus id {}", b.id),
+                });
+            }
+        }
+        let check = |bus: usize, what: &str| -> crate::Result<()> {
+            if ids.contains(&bus) {
+                Ok(())
+            } else {
+                Err(Error::FormatRead {
+                    format,
+                    message: format!("{what} references unknown bus {bus}"),
+                })
+            }
+        };
+        for (i, br) in self.branches.iter().enumerate() {
+            check(br.from, &format!("branch {i}"))?;
+            check(br.to, &format!("branch {i}"))?;
+        }
+        for l in &self.loads {
+            check(l.bus, "load")?;
+        }
+        for s in &self.shunts {
+            check(s.bus, "shunt")?;
+        }
+        for g in &self.generators {
+            check(g.bus, "generator")?;
+        }
+        for d in &self.hvdc {
+            check(d.from, "dcline")?;
+            check(d.to, "dcline")?;
+        }
+        for s in &self.storage {
+            check(s.bus, "storage")?;
+        }
+        Ok(())
+    }
+
     /// Fold the neutral model back into the MATPOWER-shaped [`MpcCase`] the matrix
     /// layer and the MATPOWER writer use: loads and shunts are summed back onto
     /// their bus. Used to emit canonical MATPOWER from a non-MATPOWER source. The

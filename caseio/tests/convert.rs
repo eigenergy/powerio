@@ -6,8 +6,9 @@
 use std::path::{Path, PathBuf};
 
 use caseio::{
-    parse_matpower, parse_matpower_file, parse_powermodels_json, parse_psse, write_as,
-    write_egret_json, write_powermodels_json, SourceFormat, TargetFormat,
+    parse_matpower, parse_matpower_file, parse_powermodels_json, parse_powerworld, parse_psse,
+    write_as, write_egret_json, write_powermodels_json, write_powerworld, write_psse, SourceFormat,
+    TargetFormat,
 };
 use serde_json::Value;
 
@@ -154,6 +155,65 @@ fn psse_reads_real_pti_files() {
     assert_eq!(c5.buses.len(), 5);
     let transformers = c5.branches.iter().filter(|b| b.is_transformer()).count();
     assert!(transformers > 0, "case5.raw should have transformers");
+}
+
+#[test]
+fn hvdc_converts_and_round_trips() {
+    // t_case9_dcline.m carries HVDC dclines. PowerModels JSON round-trips them;
+    // EGRET/PSS-E/PowerWorld drop them, each with a warning.
+    let net = parse_matpower_file(data("t_case9_dcline.m")).unwrap().to_network();
+    assert!(!net.hvdc.is_empty(), "fixture should have dclines");
+
+    let pm = write_powermodels_json(&net);
+    assert!(pm.warnings.iter().any(|w| w.contains("dcline")), "PM should flag dcline best-effort");
+    let back = parse_powermodels_json(&pm.text).unwrap();
+    assert_eq!(back.hvdc.len(), net.hvdc.len());
+    assert_eq!(back.hvdc[0].from, net.hvdc[0].from);
+    assert_eq!(back.hvdc[0].to, net.hvdc[0].to);
+
+    for conv in [write_egret_json(&net), write_psse(&net), write_powerworld(&net)] {
+        assert!(
+            conv.warnings.iter().any(|w| w.contains("dcline")),
+            "expected a dropped-dcline warning, got {:?}",
+            conv.warnings
+        );
+    }
+}
+
+#[test]
+fn powermodels_reader_handles_per_unit_input() {
+    // A per_unit=true PowerModels file: powers in p.u., angles in radians, cost
+    // coefficients scaled by base powers. The reader must invert all three.
+    let json = r#"{
+      "baseMVA": 100.0, "per_unit": true, "name": "pu",
+      "bus": {"1": {"bus_i":1,"index":1,"bus_type":3,"vm":1.0,"va":0.0,"vmax":1.1,"vmin":0.9,"base_kv":230.0,"area":1,"zone":1}},
+      "branch": {"1": {"index":1,"f_bus":1,"t_bus":1,"br_r":0.0,"br_x":0.1,"b_fr":0.0,"b_to":0.0,"g_fr":0.0,"g_to":0.0,"tap":1.0,"shift":0.0,"br_status":1,"angmin":-0.5236,"angmax":0.5236,"transformer":false}},
+      "gen": {"1": {"index":1,"gen_bus":1,"pg":2.0,"qg":0.0,"qmax":1.0,"qmin":-1.0,"vg":1.0,"mbase":100.0,"gen_status":1,"pmax":3.0,"pmin":0.0,"model":2,"ncost":3,"startup":0.0,"shutdown":0.0,"cost":[430.293,2000.0,0.0]}},
+      "load": {}, "shunt": {}, "dcline": {}, "storage": {}
+    }"#;
+    let net = parse_powermodels_json(json).unwrap();
+    let g = &net.generators[0];
+    assert!((g.pg - 200.0).abs() < 1e-6, "pg p.u.→MW"); // 2.0 * 100
+    assert!((g.pmax - 300.0).abs() < 1e-6);
+    assert!((net.branches[0].angmax - 30.0).abs() < 1e-2, "rad→deg"); // 0.5236 rad
+    let cost = g.cost.as_ref().unwrap();
+    assert!((cost.coeffs[0] - 0.043_029_3).abs() < 1e-6, "c2 un-scaled by base²");
+    assert!((cost.coeffs[1] - 20.0).abs() < 1e-6, "c1 un-scaled by base");
+}
+
+#[test]
+fn readers_reject_malformed_input() {
+    // Identity/structure errors must surface, not silently default.
+    assert!(parse_powermodels_json("not json").is_err());
+    assert!(parse_powermodels_json(r#"{"per_unit":false}"#).is_err(), "missing baseMVA");
+    let no_id = r#"{"baseMVA":100,"bus":{"1":{"bus_type":1,"vm":1.0}},"branch":{},"gen":{},"load":{},"shunt":{}}"#;
+    assert!(parse_powermodels_json(no_id).is_err(), "bus missing id must error");
+    let dangling = r#"{"baseMVA":100,"bus":{"1":{"bus_i":1,"index":1,"bus_type":3,"vm":1.0,"va":0.0,"vmax":1.1,"vmin":0.9,"base_kv":1.0,"area":1,"zone":1}},
+      "branch":{"1":{"index":1,"f_bus":1,"t_bus":99,"br_r":0,"br_x":0.1,"b_fr":0,"b_to":0,"tap":1,"shift":0,"br_status":1,"angmin":-1,"angmax":1,"transformer":false}},
+      "gen":{},"load":{},"shunt":{}}"#;
+    assert!(parse_powermodels_json(dangling).is_err(), "dangling branch ref must error");
+    assert!(parse_psse("").is_err(), "empty PSS/E");
+    assert!(parse_powerworld("// only a comment\n").is_err(), "no DATA blocks");
 }
 
 #[test]
