@@ -145,6 +145,37 @@ mpc.storage = [
 }
 
 #[test]
+fn rejects_unterminated_matrix() {
+    // A `mpc.bus = [ … ` truncated at EOF with no closing `];`. The streaming
+    // row parser must reject this (old `find_matrix` returned UnbalancedBrackets)
+    // rather than silently accept the partial matrix.
+    let src = "mpc.baseMVA = 100;\n\
+               mpc.bus = [\n\
+               \t1 3 0 0 0 0 1 1 0 345 1 1.1 0.9;\n\
+               \t2 1 0 0 0 0 1 1 0 345 1 1.1 0.9;\n";
+    let err = parse_mpc(src).expect_err("unterminated bus matrix should fail");
+    let msg = err.to_string();
+    assert!(msg.contains("unbalanced"), "expected unbalanced error, got: {msg}");
+    assert!(msg.contains("bus"), "expected bus field named, got: {msg}");
+}
+
+#[test]
+fn accepts_last_row_without_trailing_semicolon() {
+    // A properly closed matrix whose final row has no trailing `;` before `];`
+    // must still parse — the unbalanced check keys on the missing `]`, not `;`.
+    let src = "mpc.baseMVA = 100;\n\
+               mpc.bus = [\n\
+               \t1 3 0 0 0 0 1 1 0 345 1 1.1 0.9;\n\
+               \t2 1 0 0 0 0 1 1 0 345 1 1.1 0.9\n\
+               ];\n\
+               mpc.branch = [\n\
+               \t1 2 0.01 0.05 0.02 0 0 0 0 0 1 -360 360;\n\
+               ];\n";
+    let mpc = parse_mpc(src).expect("closed matrix with unterminated last row");
+    assert_eq!(mpc.buses.len(), 2);
+}
+
+#[test]
 fn handles_nan_inf() {
     let src = r#"
 mpc.baseMVA = 100;

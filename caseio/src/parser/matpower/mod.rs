@@ -45,24 +45,22 @@ fn parse_matpower_named(content: &str, name: &str) -> Result<MpcCase> {
         .transpose()?
         .ok_or(Error::MissingField("baseMVA"))?;
 
-    let bus_rows = matrix_field(&source, "bus")?.ok_or(Error::MissingField("bus"))?;
-    let branch_rows = matrix_field(&source, "branch")?.ok_or(Error::MissingField("branch"))?;
-
-    let mut buses: Vec<Bus> = bus_rows
-        .iter()
-        .enumerate()
-        .map(|(i, row)| Bus::from_row(row, i))
-        .collect::<Result<_>>()?;
-
-    let branches: Vec<Branch> = branch_rows
-        .iter()
-        .enumerate()
-        .map(|(i, row)| Branch::from_row(row, i))
-        .collect::<Result<_>>()?;
+    let mut buses = parse_rows(
+        source.assignment("bus").ok_or(Error::MissingField("bus"))?,
+        "bus",
+        Bus::from_row,
+    )?;
+    let branches = parse_rows(
+        source
+            .assignment("branch")
+            .ok_or(Error::MissingField("branch"))?,
+        "branch",
+        Branch::from_row,
+    )?;
 
     let gens = parse_gens(&source)?;
-    let storage = parse_storage(&source)?;
-    let dclines = parse_dclines(&source)?;
+    let storage = parse_optional(&source, "storage", Storage::from_row)?;
+    let dclines = parse_optional(&source, "dcline", DcLine::from_row)?;
 
     // Bus names live in a `{...}` cell array; pull them from the document
     // (which kept the quotes) and attach by position when the count matches.
@@ -82,71 +80,63 @@ fn parse_matpower_named(content: &str, name: &str) -> Result<MpcCase> {
         .with_source(source))
 }
 
-/// Parse a field's matrix from its document assignment, if the field is present.
-fn matrix_field(doc: &MatpowerDocument, field: &str) -> Result<Option<Vec<Vec<f64>>>> {
+/// Stream the rows of one assignment, building a typed `T` per row via `ctor`.
+fn parse_rows<T>(
+    assignment: &str,
+    field: &str,
+    ctor: impl Fn(&[f64], usize) -> Result<T>,
+) -> Result<Vec<T>> {
+    let mut out = Vec::new();
+    matlab::for_each_matrix_row(assignment, field, |row, i| {
+        out.push(ctor(row, i)?);
+        Ok(())
+    })?;
+    Ok(out)
+}
+
+/// Like [`parse_rows`] but for an optional `mpc.<field>` block (empty if absent).
+fn parse_optional<T>(
+    doc: &MatpowerDocument,
+    field: &str,
+    ctor: impl Fn(&[f64], usize) -> Result<T>,
+) -> Result<Vec<T>> {
     match doc.assignment(field) {
-        Some(raw) => Ok(Some(matlab::matrix_from_assignment(raw, field)?)),
-        None => Ok(None),
+        Some(raw) => parse_rows(raw, field, ctor),
+        None => Ok(Vec::new()),
     }
-}
-
-/// Parse the optional `mpc.dcline` block (two-terminal HVDC).
-fn parse_dclines(doc: &MatpowerDocument) -> Result<Vec<DcLine>> {
-    let Some(rows) = matrix_field(doc, "dcline")? else {
-        return Ok(Vec::new());
-    };
-    rows.iter()
-        .enumerate()
-        .map(|(i, row)| DcLine::from_row(row, i))
-        .collect()
-}
-
-/// Parse the optional `mpc.storage` block. A case without storage gets none.
-fn parse_storage(doc: &MatpowerDocument) -> Result<Vec<Storage>> {
-    let Some(rows) = matrix_field(doc, "storage")? else {
-        return Ok(Vec::new());
-    };
-    rows.iter()
-        .enumerate()
-        .map(|(i, row)| Storage::from_row(row, i))
-        .collect()
 }
 
 /// Parse `mpc.gen` and fold in the active-power block of `mpc.gencost`.
 /// Both are optional: a power-flow-only case has neither and gets no gens.
 fn parse_gens(doc: &MatpowerDocument) -> Result<Vec<Generator>> {
-    let Some(gen_rows) = matrix_field(doc, "gen")? else {
+    let Some(raw) = doc.assignment("gen") else {
         return Ok(Vec::new());
     };
-
-    let mut gens: Vec<Generator> = gen_rows
-        .iter()
-        .enumerate()
-        .map(|(i, row)| Generator::from_row(row, i))
-        .collect::<Result<_>>()?;
+    let mut gens = parse_rows(raw, "gen", Generator::from_row)?;
 
     // MATPOWER lays the active-power costs first, one row per generator and in
     // the same order; reactive-power costs (if any) follow in a second block.
-    if let Some(cost_rows) = matrix_field(doc, "gencost")? {
+    if let Some(craw) = doc.assignment("gencost") {
+        let costs = parse_rows(craw, "gencost", GenCost::from_row)?;
         // Reject a count that is neither `n_gen` (active only) nor `2·n_gen`
-        // (active + reactive) so a truncated/garbled block is caught here
-        // instead of silently truncating via `zip` and surfacing later as a
-        // misleading per-generator `MissingGenCost`.
+        // (active + reactive). A per-row defect (e.g. a short row) surfaces as
+        // `ShortRow` from the parse above before this count check runs.
         let n = gens.len();
-        if cost_rows.len() != n && cost_rows.len() != 2 * n {
+        if costs.len() != n && costs.len() != 2 * n {
             return Err(Error::GenCostCountMismatch {
                 gens: n,
-                gencost: cost_rows.len(),
+                gencost: costs.len(),
             });
         }
-        for (i, (gen, row)) in gens.iter_mut().zip(&cost_rows[..n]).enumerate() {
-            gen.cost = Some(GenCost::from_row(row, i)?);
+        // `costs` is consumed here, so move each row into its generator rather
+        // than cloning the `coeffs` Vec. The first `n` are active-power costs;
+        // the next `n` (when present) are reactive-power costs, in gen order.
+        let mut costs = costs.into_iter();
+        for (gen, cost) in gens.iter_mut().zip(costs.by_ref().take(n)) {
+            gen.cost = Some(cost);
         }
-        // The optional second block holds reactive-power costs, one row per gen.
-        if cost_rows.len() == 2 * n {
-            for (i, (gen, row)) in gens.iter_mut().zip(&cost_rows[n..]).enumerate() {
-                gen.reactive_cost = Some(GenCost::from_row(row, n + i)?);
-            }
+        for (gen, cost) in gens.iter_mut().zip(costs) {
+            gen.reactive_cost = Some(cost);
         }
     }
 
