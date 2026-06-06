@@ -33,11 +33,20 @@ pub fn write_psse(net: &Network) -> Conversion {
     // numeric — no Inf/NaN).
     let mut num = |x: f64| -> String {
         if x.is_finite() {
-            format!("{x}")
+            let s = format!("{x}");
+            // PSS/E v33 readers treat a record whose first field is exactly "0" as
+            // a section terminator (PowerModels' pti.jl). A transformer impedance
+            // line can start with R = 0, so never emit a bare integer "0": give it
+            // a decimal, matching PSS/E's own numeric convention.
+            if s.bytes().all(|b| b.is_ascii_digit() || b == b'-') {
+                format!("{s}.0")
+            } else {
+                s
+            }
         } else {
             nonfinite = true;
             let sentinel = if x > 0.0 { 1.0e10 } else if x < 0.0 { -1.0e10 } else { 0.0 };
-            format!("{sentinel}")
+            format!("{sentinel}.0")
         }
     };
 
@@ -100,10 +109,13 @@ pub fn write_psse(net: &Network) -> Conversion {
     let _ = writeln!(s, "0 / END OF BRANCH DATA, BEGIN TRANSFORMER DATA");
 
     for br in net.branches.iter().filter(|b| b.is_transformer()) {
-        // 2-winding, 4-line record. CW=1 (turns ratio p.u.), CZ=1 (Z on system base).
+        // 2-winding, 4-line record. CW=1 (turns ratio p.u.), CZ=1 (Z on system
+        // base). Record 1 carries the full owner block (O1..O4,F1..F4) and the
+        // VECGRP string: PSS/E v33 readers count a 2-winding transformer as a
+        // fixed 43-field record (21 + 3 + 17 + 2), so the owner padding matters.
         let _ = writeln!(
             s,
-            "{}, {}, 0, '1', 1, 1, 1, 0, 0, 2, '            ', {}, 1, 1",
+            "{}, {}, 0, '1', 1, 1, 1, 0, 0, 2, '            ', {}, 1, 1, 0, 1, 0, 1, 0, 1, '            '",
             br.from, br.to, i32::from(br.in_service)
         );
         let _ = writeln!(s, "{}, {}, {}", num(br.r), num(br.x), net.base_mva);
