@@ -6,8 +6,8 @@
 use std::path::{Path, PathBuf};
 
 use caseio::{
-    parse_matpower, parse_matpower_file, parse_powermodels_json, write_as, write_egret_json,
-    write_powermodels_json, TargetFormat,
+    parse_matpower, parse_matpower_file, parse_powermodels_json, parse_psse, write_as,
+    write_egret_json, write_powermodels_json, SourceFormat, TargetFormat,
 };
 use serde_json::Value;
 
@@ -137,6 +137,23 @@ fn powermodels_json_to_matpower_two_way() {
     // Total demand survives the bus→load split and the fold back onto the bus.
     let load_of = |c: &caseio::MpcCase| c.buses.iter().map(|b| b.pd).sum::<f64>();
     assert!((load_of(&orig) - load_of(&reparsed)).abs() < 1e-9);
+}
+
+#[test]
+fn psse_reads_real_pti_files() {
+    // Real PSS/E v33 files from PowerModels' PTI test suite (vendored under
+    // tests/data/psse). Validates the reader against third-party input, not just
+    // caseio's own round-trip. Value-vs-PowerModels lives in validate_psse.jl.
+    let c14 = parse_psse(&std::fs::read_to_string(data("psse/case14.raw")).unwrap()).unwrap();
+    assert_eq!(c14.buses.len(), 14);
+    assert_eq!(c14.source_format, SourceFormat::Psse);
+    assert!(!c14.branches.is_empty() && !c14.generators.is_empty());
+
+    // case5 carries phase-shifting and 2-winding transformers.
+    let c5 = parse_psse(&std::fs::read_to_string(data("psse/case5.raw")).unwrap()).unwrap();
+    assert_eq!(c5.buses.len(), 5);
+    let transformers = c5.branches.iter().filter(|b| b.is_transformer()).count();
+    assert!(transformers > 0, "case5.raw should have transformers");
 }
 
 #[test]

@@ -18,7 +18,9 @@ Conversion goes through a format-neutral hub, `Network` (first-class buses, load
 - **Same-format round-trip is byte-exact.** Each reader keeps its source text; writing back to that format echoes it.
 - **Cross-format is maximal-fidelity with itemized loss.** Anything the target can't represent is reported in `Conversion::warnings`, never dropped silently.
 
-Fully lossless any-to-any isn't possible (formats model different things), so the converter tells you exactly where a conversion loses information instead of pretending it doesn't. The PowerModels JSON writer is validated value-for-value against `PowerModels.jl`'s own parse; the all-pairs round-trip harness (`caseio/tests/roundtrip_formats.rs`) pins core preservation, reader∘writer idempotence, and the byte-exact same-format echo for every reader.
+Fully lossless any-to-any isn't possible (formats model different things), so the converter tells you exactly where a conversion loses information instead of pretending it doesn't. PowerModels JSON and PSS/E are validated against `PowerModels.jl` (which reads both): the writers value-for-value on the vendored cases, and the PSS/E reader against real PTI `.raw` files (`benchmarks/validate_powermodels.jl`, `benchmarks/validate_psse.jl`, both need Julia). The all-pairs round-trip harness (`caseio/tests/roundtrip_formats.rs`) pins core preservation, reader∘writer idempotence, and the byte-exact same-format echo for every reader, in plain `cargo test`.
+
+caseio targets the **transmission planning / OPF** interchange formats. It is deliberately not a CIM tool and not a distribution-feeder modeler — CIM-based hubs (CIMHub, MG-RAVENS) own that, with heavyweight semantic models, a triplestore or schema stack, and Python/Java runtimes. caseio is the complement: a fast, embeddable, lossless converter for the bus/branch/gen/load/shunt family, suitable as the ingest/conversion layer feeding those hubs or a solver.
 
 **Readers**: MATPOWER `.m`, PowerModels JSON, PSS/E `.raw` (v33), PowerWorld `.aux`. **Writers**: those plus EGRET JSON. Every format reads to and writes from the same `Network`, so each new format is one reader/writer at the hub, not a pairwise converter.
 
@@ -129,7 +131,16 @@ g = case.to_networkx()
 
 ## Roadmap
 
-More readers and writers over the `Network` hub: an EGRET-JSON reader (write side is done), OpenDSS, and CIM. PSS/E transformer coverage beyond 2-winding, and base-aware impedance conventions (`CZ`/`CW` other than 1). A C ABI so Julia/C++ can consume `caseio` directly. See the issues.
+More over the `Network` hub, tracked in the issues:
+
+- An EGRET-JSON **reader** (the writer is done) to make EGRET two-way.
+- Broader format coverage: PSS/E `.rawx` (JSON v35), IIDM `.xiidm`, UCTE `.uct`, GE EPC `.epc`.
+- PSS/E fidelity: 3-winding transformers, non-unit `CZ`/`CW` impedance bases, switched shunts; and an external validation for PowerWorld `.aux`.
+- A RAVENS-JSON export sink (and positioning caseio as a fast ingest backend for MG-RAVENS).
+- An MCP `convert`/`validate` tool over the Python binding.
+- A C ABI so Julia/C++ can consume `caseio` directly.
+
+CIM stays out of scope — it's a different (much heavier) problem owned by the CIM hubs.
 
 ## Tests
 
