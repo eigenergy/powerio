@@ -17,6 +17,8 @@ fast-float = "0.2"
 # A power network is a graph; connectivity/radial diagnostics live on MpcCase.
 petgraph = "0.8"
 serde = { version = "1", features = ["derive"] }
+# Format converters (PowerModels / EGRET JSON) serialize the typed model.
+serde_json = "1"
 
 [dev-dependencies]
 criterion = { version = "0.5", default-features = false, features = ["cargo_bench_support"] }

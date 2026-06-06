@@ -166,6 +166,7 @@ dependencies = [
  "num-complex",
  "petgraph",
  "serde",
+ "serde_json",
  "thiserror 2.0.18",
 ]
 

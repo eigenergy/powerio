@@ -9,8 +9,15 @@
 
 pub mod case;
 pub mod error;
+pub mod format;
+pub mod network;
 pub mod parser;
 
 pub use case::{Branch, Bus, ConnectivityReport, DcLine, GenCost, Generator, MpcCase, Storage};
 pub use error::{Error, Result};
+pub use format::{
+    parse_powermodels_json, parse_powerworld, parse_psse, write_as, write_egret_json,
+    write_powermodels_json, write_powerworld, write_psse, Conversion, TargetFormat,
+};
+pub use network::{Network, SourceFormat};
 pub use parser::{parse_matpower, parse_matpower_file, write_matpower, write_matpower_file};
