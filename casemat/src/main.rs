@@ -96,6 +96,48 @@ enum Command {
         #[arg(long, value_enum, default_value = "paper-pure")]
         convention: DcConvArg,
     },
+    /// Convert a case file to another format through the neutral hub.
+    Convert {
+        /// Input case file. The format is inferred from the extension
+        /// (`.m`, `.json`, `.raw`, `.aux`) unless `--from` is given.
+        input: PathBuf,
+        /// Target format.
+        #[arg(long, value_enum)]
+        to: FormatArg,
+        /// Output file; `-` or omitted writes to stdout.
+        #[arg(short, long)]
+        output: Option<PathBuf>,
+        /// Override the inferred input format.
+        #[arg(long, value_enum)]
+        from: Option<FormatArg>,
+    },
+}
+
+/// A case interchange format, for `--to` / `--from`.
+#[derive(Clone, Copy, Debug, ValueEnum)]
+enum FormatArg {
+    #[value(name = "matpower", alias = "m")]
+    Matpower,
+    #[value(name = "powermodels-json", alias = "powermodels", alias = "pm")]
+    PowerModelsJson,
+    #[value(name = "egret-json", alias = "egret")]
+    EgretJson,
+    #[value(name = "psse", alias = "raw")]
+    Psse,
+    #[value(name = "powerworld", alias = "aux")]
+    PowerWorld,
+}
+
+impl From<FormatArg> for casemat::TargetFormat {
+    fn from(value: FormatArg) -> Self {
+        match value {
+            FormatArg::Matpower => Self::Matpower,
+            FormatArg::PowerModelsJson => Self::PowerModelsJson,
+            FormatArg::EgretJson => Self::EgretJson,
+            FormatArg::Psse => Self::Psse,
+            FormatArg::PowerWorld => Self::PowerWorld,
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, ValueEnum)]
@@ -247,6 +289,12 @@ fn main() -> anyhow::Result<()> {
             output,
             convention,
         } => run_sensitivities(input, output, convention.into()),
+        Command::Convert {
+            input,
+            to,
+            output,
+            from,
+        } => run_convert(&input, to.into(), output.as_deref(), from),
     }
 }
 
@@ -424,4 +472,57 @@ fn run_verify(input: PathBuf, kind: MatrixKind, scheme: Scheme) -> anyhow::Resul
         sddm
     );
     Ok(())
+}
+
+fn run_convert(
+    input: &std::path::Path,
+    to: casemat::TargetFormat,
+    output: Option<&std::path::Path>,
+    from: Option<FormatArg>,
+) -> anyhow::Result<()> {
+    let net = read_network(input, from)?;
+    let conv = casemat::write_as(&net, to);
+    for w in &conv.warnings {
+        eprintln!("fidelity: {w}");
+    }
+    match output {
+        Some(p) if p.as_os_str() != "-" => {
+            std::fs::write(p, &conv.text).with_context(|| format!("writing {}", p.display()))?;
+            eprintln!("wrote {}", p.display());
+        }
+        _ => print!("{}", conv.text),
+    }
+    Ok(())
+}
+
+/// Read `input` into the neutral [`casemat::Network`], picking the reader from
+/// `from` or the file extension.
+fn read_network(
+    input: &std::path::Path,
+    from: Option<FormatArg>,
+) -> anyhow::Result<casemat::Network> {
+    let fmt = match from {
+        Some(f) => f,
+        None => match input.extension().and_then(|e| e.to_str()) {
+            Some("m") => FormatArg::Matpower,
+            Some("json") => FormatArg::PowerModelsJson,
+            Some("raw") => FormatArg::Psse,
+            Some("aux") => FormatArg::PowerWorld,
+            other => anyhow::bail!(
+                "cannot infer input format from extension {other:?}; pass --from"
+            ),
+        },
+    };
+    let net = match fmt {
+        FormatArg::Matpower => casemat::parse_matpower_file(input)
+            .with_context(|| format!("reading MATPOWER {}", input.display()))?
+            .to_network(),
+        FormatArg::PowerModelsJson => {
+            casemat::parse_powermodels_json(&std::fs::read_to_string(input)?)?
+        }
+        FormatArg::Psse => casemat::parse_psse(&std::fs::read_to_string(input)?)?,
+        FormatArg::PowerWorld => casemat::parse_powerworld(&std::fs::read_to_string(input)?)?,
+        FormatArg::EgretJson => anyhow::bail!("reading EGRET JSON is not supported yet (write-only)"),
+    };
+    Ok(net)
 }

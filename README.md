@@ -18,12 +18,18 @@ Conversion goes through a format-neutral hub, `Network` (first-class buses, load
 - **Same-format round-trip is byte-exact.** Each reader keeps its source text; writing back to that format echoes it.
 - **Cross-format is maximal-fidelity with itemized loss.** Anything the target can't represent is reported in `Conversion::warnings`, never dropped silently.
 
-Fully lossless any-to-any isn't possible (formats model different things), so the converter tells you exactly where a conversion loses information instead of pretending it doesn't. The PowerModels JSON writer is validated value-for-value against `PowerModels.jl`'s own parse.
+Fully lossless any-to-any isn't possible (formats model different things), so the converter tells you exactly where a conversion loses information instead of pretending it doesn't. The PowerModels JSON writer is validated value-for-value against `PowerModels.jl`'s own parse; the all-pairs round-trip harness (`caseio/tests/roundtrip_formats.rs`) pins core preservation, reader∘writer idempotence, and the byte-exact same-format echo for every reader.
 
-| from \ to | MATPOWER | PowerModels JSON | EGRET JSON |
-| --- | --- | --- | --- |
-| **MATPOWER** | byte-exact echo | validated vs PowerModels.jl | schema-faithful |
-| **PowerModels JSON** | canonical | byte-exact echo | schema-faithful |
+**Readers**: MATPOWER `.m`, PowerModels JSON, PSS/E `.raw` (v33), PowerWorld `.aux`. **Writers**: those plus EGRET JSON. Every format reads to and writes from the same `Network`, so each new format is one reader/writer at the hub, not a pairwise converter.
+
+| reader ↓ \ writer → | MATPOWER | PowerModels JSON | EGRET JSON | PSS/E | PowerWorld |
+| --- | --- | --- | --- | --- | --- |
+| **MATPOWER** | byte-exact | validated vs PowerModels.jl | schema-faithful | core + warnings | core + warnings |
+| **PowerModels JSON** | core | byte-exact | schema-faithful | core + warnings | core + warnings |
+| **PSS/E** | core | core | schema-faithful | byte-exact | core + warnings |
+| **PowerWorld** | core | core | schema-faithful | core + warnings | byte-exact |
+
+*byte-exact* = same-format source echo; *core* = bus/branch/gen/load/shunt preserved, with anything the target can't hold reported in `warnings`.
 
 ```rust
 use caseio::{parse_matpower_file, write_as, TargetFormat};
@@ -32,6 +38,20 @@ let net = parse_matpower_file("case14.m")?.to_network();   // MATPOWER → neutr
 let conv = write_as(&net, TargetFormat::PowerModelsJson);  // → PowerModels JSON
 for w in &conv.warnings { eprintln!("fidelity: {w}"); }    // what couldn't be represented
 std::fs::write("case14.json", conv.text)?;
+```
+
+From the CLI and Python (input format inferred from the extension):
+
+```
+casemat convert case14.m --to psse -o case14.raw       # → PSS/E .raw
+casemat convert case14.raw --to powermodels-json       # PSS/E → PowerModels JSON, to stdout
+```
+
+```python
+import casemat as cm
+r = cm.convert("case14.m", "egret-json")
+print(r.warnings)            # fields EGRET couldn't represent
+open("case14.json", "w").write(r.text)
 ```
 
 ## Benchmark
@@ -109,7 +129,7 @@ g = case.to_networkx()
 
 ## Roadmap
 
-More readers and writers over the `Network` hub: EGRET-JSON and PSS/E `.raw` (v33–v35) readers, PSS/E and PowerWorld `.aux` writers, OpenDSS. Each is one reader/writer at the hub, not a pairwise converter. Then a `convert` CLI subcommand and a Python `convert()` binding, and a C ABI so Julia/C++ can consume `caseio` directly. See the issues.
+More readers and writers over the `Network` hub: an EGRET-JSON reader (write side is done), OpenDSS, and CIM. PSS/E transformer coverage beyond 2-winding, and base-aware impedance conventions (`CZ`/`CW` other than 1). A C ABI so Julia/C++ can consume `caseio` directly. See the issues.
 
 ## Tests
 

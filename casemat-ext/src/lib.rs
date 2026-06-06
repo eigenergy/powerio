@@ -437,6 +437,73 @@ fn parse_matpower_string(content: &str, name: Option<&str>) -> PyResult<PyCase> 
     Ok(PyCase { inner })
 }
 
+/// Convert a case file to another format through the neutral hub. Returns
+/// `(text, warnings)`: the converted file text and the list of fidelity warnings
+/// (fields the target couldn't represent). The input format is the file
+/// extension unless `from` overrides it.
+#[pyfunction]
+#[pyo3(signature = (path, to, from=None))]
+fn convert(path: &str, to: &str, from: Option<&str>) -> PyResult<(String, Vec<String>)> {
+    let target = fmt_from_str(to)
+        .ok_or_else(|| PyValueError::new_err(format!("unknown target format: {to}")))?;
+    let net = read_network_py(path, from)?;
+    let conv = casemat::write_as(&net, target);
+    Ok((conv.text, conv.warnings))
+}
+
+/// Map a format name (with common aliases) to a [`casemat::TargetFormat`].
+fn fmt_from_str(s: &str) -> Option<casemat::TargetFormat> {
+    use casemat::TargetFormat as T;
+    Some(match s.to_ascii_lowercase().as_str() {
+        "matpower" | "m" => T::Matpower,
+        "powermodels-json" | "powermodels" | "pm" => T::PowerModelsJson,
+        "egret-json" | "egret" => T::EgretJson,
+        "psse" | "raw" => T::Psse,
+        "powerworld" | "aux" => T::PowerWorld,
+        _ => return None,
+    })
+}
+
+/// Read `path` into the neutral network, choosing the reader from `from` or the
+/// file extension.
+fn read_network_py(path: &str, from: Option<&str>) -> PyResult<casemat::Network> {
+    let p = std::path::Path::new(path);
+    let fmt = match from {
+        Some(f) => fmt_from_str(f)
+            .ok_or_else(|| PyValueError::new_err(format!("unknown source format: {f}")))?,
+        None => match p.extension().and_then(|e| e.to_str()) {
+            Some("m") => casemat::TargetFormat::Matpower,
+            Some("json") => casemat::TargetFormat::PowerModelsJson,
+            Some("raw") => casemat::TargetFormat::Psse,
+            Some("aux") => casemat::TargetFormat::PowerWorld,
+            other => {
+                return Err(PyValueError::new_err(format!(
+                    "cannot infer input format from extension {other:?}; pass from="
+                )))
+            }
+        },
+    };
+    let read_str = || std::fs::read_to_string(p).map_err(|e| PyValueError::new_err(e.to_string()));
+    let net = match fmt {
+        casemat::TargetFormat::Matpower => {
+            casemat::parse_matpower_file(path).map_err(to_pyerr)?.to_network()
+        }
+        casemat::TargetFormat::PowerModelsJson => {
+            casemat::parse_powermodels_json(&read_str()?).map_err(to_pyerr)?
+        }
+        casemat::TargetFormat::Psse => casemat::parse_psse(&read_str()?).map_err(to_pyerr)?,
+        casemat::TargetFormat::PowerWorld => {
+            casemat::parse_powerworld(&read_str()?).map_err(to_pyerr)?
+        }
+        casemat::TargetFormat::EgretJson => {
+            return Err(PyValueError::new_err(
+                "reading EGRET JSON is not supported yet (write-only)",
+            ))
+        }
+    };
+    Ok(net)
+}
+
 #[pymodule]
 fn _casemat(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add("__version__", env!("CARGO_PKG_VERSION"))?;
@@ -444,5 +511,6 @@ fn _casemat(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PyCase>()?;
     m.add_function(wrap_pyfunction!(parse_matpower, m)?)?;
     m.add_function(wrap_pyfunction!(parse_matpower_string, m)?)?;
+    m.add_function(wrap_pyfunction!(convert, m)?)?;
     Ok(())
 }
