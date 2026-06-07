@@ -19,6 +19,9 @@ use caseio::{
     write_egret_json, write_powermodels_json, write_powerworld, write_psse, Network, TargetFormat,
 };
 
+mod common;
+use common::json_approx_eq;
+
 fn data(name: &str) -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("../tests/data").join(name)
 }
@@ -125,25 +128,6 @@ fn reader_writer_is_idempotent() {
                 assert_eq!(t0, t1, "{case} via {}: serialize→read→serialize not stable", fmt.name);
             }
         }
-    }
-}
-
-/// Structural + numeric (tolerant) equality of two JSON values.
-fn json_approx_eq(a: &serde_json::Value, b: &serde_json::Value) -> bool {
-    use serde_json::Value;
-    match (a, b) {
-        (Value::Number(x), Value::Number(y)) => match (x.as_f64(), y.as_f64()) {
-            (Some(xf), Some(yf)) => (xf - yf).abs() <= 1e-9 * xf.abs().max(yf.abs()).max(1.0),
-            _ => x == y,
-        },
-        (Value::Array(xs), Value::Array(ys)) => {
-            xs.len() == ys.len() && xs.iter().zip(ys).all(|(p, q)| json_approx_eq(p, q))
-        }
-        (Value::Object(xs), Value::Object(ys)) => {
-            xs.len() == ys.len()
-                && xs.iter().all(|(k, p)| ys.get(k).is_some_and(|q| json_approx_eq(p, q)))
-        }
-        _ => a == b,
     }
 }
 

@@ -12,6 +12,9 @@ use caseio::{
 };
 use serde_json::Value;
 
+mod common;
+use common::json_approx_eq;
+
 fn data(name: &str) -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("../tests/data").join(name)
 }
@@ -117,25 +120,6 @@ fn powermodels_json_reader_is_inverse_of_writer() {
         let v1: Value = serde_json::from_str(&json1).unwrap();
         let v2: Value = serde_json::from_str(&json2).unwrap();
         assert!(json_approx_eq(&v1, &v2), "{case}: PowerModels JSON not stable through read→write");
-    }
-}
-
-/// Structural + numeric (tolerant) equality of two JSON values: same shape and
-/// keys, numbers within a small relative tolerance.
-fn json_approx_eq(a: &Value, b: &Value) -> bool {
-    match (a, b) {
-        (Value::Number(x), Value::Number(y)) => match (x.as_f64(), y.as_f64()) {
-            (Some(xf), Some(yf)) => (xf - yf).abs() <= 1e-9 * xf.abs().max(yf.abs()).max(1.0),
-            _ => x == y,
-        },
-        (Value::Array(xs), Value::Array(ys)) => {
-            xs.len() == ys.len() && xs.iter().zip(ys).all(|(p, q)| json_approx_eq(p, q))
-        }
-        (Value::Object(xs), Value::Object(ys)) => {
-            xs.len() == ys.len()
-                && xs.iter().all(|(k, p)| ys.get(k).is_some_and(|q| json_approx_eq(p, q)))
-        }
-        _ => a == b,
     }
 }
 
@@ -254,4 +238,94 @@ fn matpower_target_round_trips() {
     // Matpower target is the lossless echo: byte-identical to the source.
     let src = std::fs::read_to_string(data("case14.m")).unwrap();
     assert_eq!(conv.text, src);
+}
+
+#[test]
+fn powermodels_phase_shifter_is_a_line_not_a_transformer() {
+    // A pure phase shifter (raw tap 0, nonzero shift in column 10) is a line under
+    // PowerModels' rule, while its shift is preserved and converted to radians.
+    // This is the case that distinguishes the raw-tap rule from the old
+    // tap-or-shift one; no vendored fixture carries it.
+    let src = "\
+function mpc = ps
+mpc.baseMVA = 100;
+mpc.bus = [
+\t1 3 0 0 0 0 1 1 0 345 1 1.1 0.9;
+\t2 1 10 5 0 0 1 1 0 345 1 1.1 0.9;
+];
+mpc.branch = [
+\t1 2 0.01 0.05 0.0 0 0 0 0 30 1 -360 360;
+];
+";
+    let net = parse_matpower(src).unwrap();
+    let v: Value = serde_json::from_str(&write_powermodels_json(&net).text).unwrap();
+    let b1 = &v["branch"]["1"];
+    assert_eq!(b1["transformer"], Value::Bool(false), "phase shifter must be a line");
+    let shift = b1["shift"].as_f64().unwrap();
+    assert!((shift - 30.0_f64.to_radians()).abs() < 1e-9, "shift converted to radians");
+}
+
+#[test]
+fn powermodels_dcline_flips_pt_qf_qt_sign() {
+    // PowerModels stores Pt/Qf/Qt with the opposite sign to MATPOWER. The writer
+    // emits the flipped sign; the reader un-flips it (so the round-trip cancels and
+    // can't catch a sign error on its own — this checks the absolute sign).
+    let net = parse_matpower_file(data("t_case9_dcline.m")).unwrap();
+    let dc = net.hvdc.iter().find(|d| d.pt != 0.0).expect("a dcline with nonzero Pt");
+    let v: Value = serde_json::from_str(&write_powermodels_json(&net).text).unwrap();
+    let obj = v["dcline"]
+        .as_object()
+        .unwrap()
+        .values()
+        .find(|d| {
+            d["f_bus"].as_u64() == Some(dc.from as u64) && d["t_bus"].as_u64() == Some(dc.to as u64)
+        })
+        .expect("emitted dcline with matching endpoints");
+    let emitted_pt = obj["pt"].as_f64().unwrap();
+    assert!(emitted_pt.signum() != dc.pt.signum(), "pt sign must flip on write");
+    assert!((emitted_pt + dc.pt / net.base_mva).abs() < 1e-9, "pt = -Pt / base");
+}
+
+#[test]
+fn powermodels_storage_ps_qs_stay_raw() {
+    // PowerModels' make_per_unit! leaves storage ps/qs as setpoints (raw) while
+    // scaling energy/ratings/limits by base. The reader must mirror that split.
+    // No vendored fixture has storage, so feed an inline per_unit=true record.
+    let json = r#"{
+      "baseMVA": 100.0, "per_unit": true, "name": "st",
+      "bus": {"1": {"bus_i":1,"index":1,"bus_type":3,"vm":1.0,"va":0.0,"vmax":1.1,"vmin":0.9,"base_kv":1.0,"area":1,"zone":1}},
+      "branch": {}, "gen": {}, "load": {}, "shunt": {}, "dcline": {},
+      "storage": {"1": {"index":1,"storage_bus":1,"ps":0.5,"qs":0.25,"energy":1.0,"energy_rating":6.0,"charge_rating":3.0,"discharge_rating":3.0,"charge_efficiency":0.9,"discharge_efficiency":0.9,"thermal_rating":3.0,"qmin":-1.0,"qmax":1.0,"r":0.0,"x":0.0,"p_loss":0.0,"q_loss":0.0,"status":1}}
+    }"#;
+    let net = parse_powermodels_json(json).unwrap();
+    let s = &net.storage[0];
+    assert!((s.ps - 0.5).abs() < 1e-9, "ps stays raw");
+    assert!((s.qs - 0.25).abs() < 1e-9, "qs stays raw");
+    assert!((s.energy_rating - 600.0).abs() < 1e-6, "energy_rating ×base"); // 6.0 · 100
+    assert!((s.qmax - 100.0).abs() < 1e-6, "qmax ×base"); // 1.0 · 100
+}
+
+#[test]
+fn powermodels_unbounded_limit_round_trips_as_infinity() {
+    // A gen qmax = Inf writes as JSON null (with a warning); the reader must read it
+    // back as unbounded, not as a binding 0.0.
+    let mut net = parse_matpower_file(data("case9.m")).unwrap();
+    net.generators[0].qmax = f64::INFINITY;
+    net.generators[0].qmin = f64::NEG_INFINITY;
+    let conv = write_powermodels_json(&net);
+    assert!(conv.warnings.iter().any(|w| w.contains("non-finite")), "expected null warning");
+    let back = parse_powermodels_json(&conv.text).unwrap();
+    assert!(back.generators[0].qmax.is_infinite() && back.generators[0].qmax > 0.0);
+    assert!(back.generators[0].qmin.is_infinite() && back.generators[0].qmin < 0.0);
+}
+
+#[test]
+fn oos_fixture_marks_out_of_service_elements() {
+    // t_case9_oos.m turns gen 2 and branch 5-6 out of service; the parse must carry
+    // those in_service=false flags (the basis for ExaPowerIO filtered=true parity).
+    // The fixture otherwise runs only in the Julia validators.
+    let net = parse_matpower_file(data("t_case9_oos.m")).unwrap();
+    assert_eq!(net.generators.iter().filter(|g| !g.in_service).count(), 1);
+    let br = net.branches.iter().find(|b| b.from == 5 && b.to == 6).expect("branch 5-6");
+    assert!(!br.in_service, "branch 5-6 is out of service");
 }
