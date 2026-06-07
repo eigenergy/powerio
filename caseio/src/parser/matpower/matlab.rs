@@ -111,7 +111,7 @@ where
                 continue;
             }
             let start = i;
-            while i < bytes.len() && !matches!(bytes[i], b';') && !bytes[i].is_ascii_whitespace() {
+            while i < bytes.len() && bytes[i] != b';' && !bytes[i].is_ascii_whitespace() {
                 i += 1;
             }
             let mut tok = &bytes[start..i];
