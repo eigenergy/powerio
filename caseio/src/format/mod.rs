@@ -98,11 +98,25 @@ pub fn read_path(path: &std::path::Path, from: Option<&str>) -> Result<Network> 
             }
         },
     };
+    // MATPOWER reads the file itself so the network name comes from the file
+    // stem and the buffer moves straight into the retained source (byte-exact
+    // round-trip); every other reader takes the file contents through the
+    // shared dispatch.
     match fmt {
         TargetFormat::Matpower => crate::parse_matpower_file(path),
-        TargetFormat::PowerModelsJson => parse_powermodels_json(&std::fs::read_to_string(path)?),
-        TargetFormat::Psse => parse_psse(&std::fs::read_to_string(path)?),
-        TargetFormat::PowerWorld => parse_powerworld(&std::fs::read_to_string(path)?),
+        _ => read_text(&std::fs::read_to_string(path)?, fmt),
+    }
+}
+
+/// Dispatch in-memory `content` to the reader for `fmt` — the single
+/// format→reader map, shared by [`read_path`] and [`parse_str`]. EGRET JSON is
+/// write-only.
+fn read_text(content: &str, fmt: TargetFormat) -> Result<Network> {
+    match fmt {
+        TargetFormat::Matpower => parse_matpower(content),
+        TargetFormat::PowerModelsJson => parse_powermodels_json(content),
+        TargetFormat::Psse => parse_psse(content),
+        TargetFormat::PowerWorld => parse_powerworld(content),
         TargetFormat::EgretJson => Err(Error::UnknownFormat(
             "EGRET JSON is write-only and cannot be read".to_string(),
         )),
@@ -129,15 +143,7 @@ pub fn parse(path: impl AsRef<std::path::Path>) -> Result<Network> {
 pub fn parse_str(text: &str, format: &str) -> Result<Network> {
     let fmt =
         target_format_from_name(format).ok_or_else(|| Error::UnknownFormat(format.to_string()))?;
-    match fmt {
-        TargetFormat::Matpower => parse_matpower(text),
-        TargetFormat::PowerModelsJson => parse_powermodels_json(text),
-        TargetFormat::Psse => parse_psse(text),
-        TargetFormat::PowerWorld => parse_powerworld(text),
-        TargetFormat::EgretJson => Err(Error::UnknownFormat(
-            "EGRET JSON is write-only and cannot be read".to_string(),
-        )),
-    }
+    read_text(text, fmt)
 }
 
 /// Output of a conversion: the serialized text plus any fidelity warnings —
