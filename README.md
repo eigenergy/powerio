@@ -63,13 +63,13 @@ Median parse time, same machine (Apple M-series, release build), all three timed
 
 | case | buses / branches | **caseio** | ExaPowerIO.jl | PowerModels.jl |
 | --- | --- | --- | --- | --- |
-| case2869pegase | 2869 / 4582 | **2.51 ms** | 3.31 ms | 161 ms |
-| case_ACTIVSg2000 | 2000 / 3206 | 2.71 ms | **2.26 ms** | 144 ms |
-| case9241pegase | 9241 / 16049 | **9.21 ms** | 9.74 ms | 640 ms |
-| case13659pegase | 13659 / 20467 | **14.2 ms** | 15.8 ms | 997 ms |
-| case193k | 192768 / 228574 | **224 ms** | 320 ms | — |
+| case2869pegase | 2869 / 4582 | **2.33 ms** | 2.92 ms | 123 ms |
+| case_ACTIVSg2000 | 2000 / 3206 | 2.48 ms | **2.12 ms** | 128 ms |
+| case9241pegase | 9241 / 16049 | **7.84 ms** | 9.12 ms | 547 ms |
+| case13659pegase | 13659 / 20467 | **11.8 ms** | 13.6 ms | 781 ms |
+| case193k | 192768 / 228574 | 200 ms | **180 ms** | — |
 
-caseio is 50–70× faster than PowerModels' parser and trades the lead with ExaPowerIO (the focused Julia reader): ahead on the pegase cases and the 193k / 56 MB file, a touch behind on the synthetic US cases (ACTIVSg / SyntheticUSA), where ExaPowerIO drops the `gentype` / `genfuel` / `bus_name` cell arrays caseio keeps for its byte-exact round-trip. It's also ~10× faster than pandapower's `.m` reader. The durable edge isn't speed: caseio is the only one of the three that is lossless, round-trips byte-for-byte (verified at 193k buses), and is callable from Rust, the CLI, Python, and C/Julia with no runtime — and its parse, conversions, and Y_bus are validated value-for-value against all three (`benchmarks/run_validation.sh`). Full table: [benchmarks/RESULTS.md](benchmarks/RESULTS.md).
+caseio is 50–70× faster than PowerModels' parser and trades the lead with ExaPowerIO (the focused Julia reader): ~20–25% faster on the pegase cases (European, number-dense), ~10–20% behind on the ACTIVSg / SyntheticUSA / US cases, where ExaPowerIO drops the `gentype` / `genfuel` / `bus_name` cell arrays caseio parses and keeps for its byte-exact round-trip. It's also ~10× faster than pandapower's `.m` reader. The durable edge isn't speed: caseio is the only one of the three that is lossless, round-trips byte-for-byte (verified at 193k buses), and is callable from Rust, the CLI, Python, and C/Julia with no runtime — and its parse, conversions, and Y_bus are validated value-for-value against all three (`benchmarks/run_validation.sh`). Full table: [benchmarks/RESULTS.md](benchmarks/RESULTS.md).
 
 ## caseio: parse and write
 

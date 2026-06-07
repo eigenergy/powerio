@@ -14,50 +14,51 @@ vary a few percent run to run; the relative picture is stable.
 ## Speed: parsers, head to head
 
 All three parsers are timed in one Julia process under the same
-`BenchmarkTools.@benchmark` harness (`benchmarks/bench_julia.jl`). caseio is
-called through its C ABI (`cio_parse`, built with
-`cargo build --release -p caseio-capi`), so it reads the file from disk and builds
-its case exactly as ExaPowerIO and PowerModels do — a like-for-like number rather
-than the old hand-pasted one from a separate Rust binary.
+`BenchmarkTools.@benchmark` harness (`benchmarks/bench_julia.jl`). caseio is called
+through its C ABI (`cio_parse`, built with `cargo build --release -p caseio-capi`),
+so it reads the file from disk and builds its case exactly as ExaPowerIO and
+PowerModels do. The caseio case is freed in an untimed teardown, matching the other
+two, whose returned data is collected after the sample rather than inside it.
 
 | case | buses / branches | **caseio** | ExaPowerIO.jl | PowerModels.jl |
 | --- | --- | --- | --- | --- |
-| case2869pegase | 2869 / 4582 | **2.51 ms** | 3.31 ms | 161 ms |
-| case_ACTIVSg2000 | 2000 / 3206 | 2.71 ms | **2.26 ms** | 144 ms |
-| case9241pegase | 9241 / 16049 | **9.21 ms** | 9.74 ms | 640 ms |
-| case13659pegase | 13659 / 20467 | **14.2 ms** | 15.8 ms | 997 ms |
-| case_ACTIVSg10k | 10000 / 12706 | 12.6 ms | **9.75 ms** | — |
-| case_ACTIVSg25k | 25000 / 32230 | 29.9 ms | **24.6 ms** | — |
-| case_ACTIVSg70k | 70000 / 88207 | 82.1 ms | **70.6 ms** | — |
-| case_SyntheticUSA | 82000 / 104121 | 98.9 ms | **86.5 ms** | — |
-| case99k | 99396 / 117860 | 115 ms | **96.5 ms** | — |
-| case193k | 192768 / 228574 | **224 ms** | 320 ms | — |
+| case2869pegase | 2869 / 4582 | **2.33 ms** | 2.92 ms | 123 ms |
+| case_ACTIVSg2000 | 2000 / 3206 | 2.48 ms | **2.12 ms** | 128 ms |
+| case9241pegase | 9241 / 16049 | **7.84 ms** | 9.12 ms | 547 ms |
+| case13659pegase | 13659 / 20467 | **11.8 ms** | 13.6 ms | 781 ms |
+| case_ACTIVSg10k | 10000 / 12706 | 10.8 ms | **9.21 ms** | — |
+| case_ACTIVSg25k | 25000 / 32230 | 26.4 ms | **22.6 ms** | — |
+| case_ACTIVSg70k | 70000 / 88207 | 73.4 ms | **60.6 ms** | — |
+| case_SyntheticUSA | 82000 / 104121 | 85.8 ms | **79.5 ms** | — |
+| case99k | 99396 / 117860 | 101 ms | **94.7 ms** | — |
+| case193k | 192768 / 228574 | 200 ms | **180 ms** | — |
 
 (PowerModels skipped past case13659 — it takes minutes there and the gap is settled.)
 
 ### Read
 
 - **vs PowerModels.jl**: 50–70× faster wherever PowerModels is practical to run
-  (64× on case2869pegase, 70× on case13659pegase).
-- **vs ExaPowerIO.jl**: a wash, and which way it falls tracks what's in the file.
-  caseio leads on the pegase cases (European, number-dense) and on the 193k file
-  (224 ms vs 320 ms). ExaPowerIO leads ~15–30% on the ACTIVSg / SyntheticUSA
-  synthetic cases — those carry large `gentype` / `genfuel` / `bus_name` cell
-  arrays, which ExaPowerIO skips (it logs "Unrecognized assignment" and drops
-  them) while caseio retains the full source text for a byte-exact round-trip.
-  caseio does strictly more work on those files and stays within a small constant
-  of a reader that throws the extra sections away.
-- **The pure parse is faster than the table shows.** `cio_parse` reads the file
-  from disk on every sample (matching ExaPowerIO / PowerModels). The Rust
-  `timeparse` example parses an already-in-memory string and so excludes the
-  per-sample read: 205 ms on case193k vs the C ABI's 224 ms. Either way the
-  source-retaining single parse path is what gives the round-trip for free — an
-  earlier design ran a second pass to record byte ranges (~38% of parse at
-  case118, 51% at case2869); the current path drops it.
-- **The durable edge isn't raw speed.** caseio is the only one of the three that
-  is lossless and round-trips byte for byte — verified at 56 MB / 193k buses — and
-  the only one callable from Rust, the CLI, Python, and C/Julia (the C ABI) with
-  no runtime. ExaPowerIO has no writer; PowerModels' export is lossy.
+  (53× on case2869pegase, 70× on case9241pegase).
+- **vs ExaPowerIO.jl**: split, and which way it falls tracks what's in the file.
+  caseio is ~20–25% faster on the pegase cases (European, number-dense decimals,
+  no cell arrays). ExaPowerIO is ~8–21% faster on the ACTIVSg / SyntheticUSA / US
+  cases: those carry large `gentype` / `genfuel` / `bus_name` cell arrays, which
+  ExaPowerIO skips (it logs "Unrecognized assignment" and drops them) while caseio
+  parses `bus_name` into the model and retains the full source for a byte-exact
+  round-trip. caseio does strictly more work there; it is a focused lossless reader
+  against a focused lossy one, and stays within a small constant either way.
+- **The pure parse is a touch faster than the table.** `cio_parse` reads the file
+  from disk on every sample (as ExaPowerIO / PowerModels do); the Rust `timeparse`
+  example parses an already-in-memory string and so excludes the per-sample read.
+  The single source-retaining parse path is what makes the byte-exact round-trip
+  free — an earlier design ran a second pass to record byte ranges (~38% of parse
+  at case118, 51% at case2869); the current path drops it and the file reader moves
+  its buffer straight into the retained source, so a parse never copies the whole
+  file twice.
+- **The durable edge isn't raw speed.** caseio is the only one of the three that is
+  lossless and round-trips byte for byte — verified at 56 MB / 193k buses — and the
+  only one callable from Rust, the CLI, Python, and C/Julia (the C ABI) with no
+  runtime. ExaPowerIO has no writer; PowerModels' export is lossy.
 
 ### vs pandapower
 
@@ -83,34 +84,37 @@ runs about 2× the parse alone.
 `bash benchmarks/run_validation.sh` runs every validator over every fixture and
 prints a pass/fail matrix. Latest run — all checks pass:
 
-| fixture | PowerModels JSON | PSS/E | ExaPowerIO | pandapower (+ Y_bus) |
-| --- | --- | --- | --- | --- |
-| case9 / 14 / 30 / 57 / 118 | ✓ | ✓ | ✓ | ✓ |
-| t_case9_dcline | skip¹ | ✓ | ✓ | ✓ |
-| pglib case5_pjm / case14_ieee | ✓ | ✓ | ✓ | ✓ |
-| case2869pegase | ✓ | ✓ | ✓ | ✓ |
-| psse/case5, psse/case14 (read side) | — | ✓ | — | — |
+| fixture | PMjson | PMread | PSS/E | ExaPowerIO | pandapower (+ Y_bus) |
+| --- | --- | --- | --- | --- | --- |
+| case9 / 14 / 30 / 57 / 118 | ✓ | ✓ | ✓ | ✓ | ✓ |
+| t_case9_dcline | ✓ | ✓ | ✓ | ✓ | ✓ |
+| t_case9_oos | ✓ | ✓ | ✓ | ✓ | ✓ |
+| pglib case5_pjm / case14_ieee | ✓ | ✓ | ✓ | ✓ | ✓ |
+| case2869pegase | ✓ | ✓ | ✓ | ✓ | ✓ |
+| psse/case5, psse/case14 (read side) | — | — | ✓ | — | — |
 
 What each column checks:
 
-- **PowerModels JSON** (`validate_powermodels.jl`) — caseio's PowerModels JSON vs
+- **PMjson** (`validate_powermodels.jl`) — caseio's PowerModels JSON *writer* vs
   PowerModels.jl's own parse of the `.m`, field by field over bus / branch / gen /
-  load / shunt after `make_per_unit!`. Parsed with `validate=false` so PowerModels'
-  correction pass doesn't divide the JSON `null` that an unbounded `Inf` bound
-  becomes; the nulls are restored before per-unit, and PowerModels' derived
-  `transformer` flag isn't compared (caseio labels a few unity-tap pegase branches
-  the other way — their tap/shift/r/x/b match, and the Y_bus check below confirms
-  the electrical result).
+  load / shunt. caseio emits idiomatic `per_unit=true` JSON (the form PowerModels
+  itself writes), so this runs on PowerModels' default `validate=true` with no
+  workarounds — including the dcline case, whose per-end bounds caseio now derives
+  the way PowerModels does.
+- **PMread** (`pm_export.jl` + `validate_powermodels.jl`) — caseio's PowerModels
+  JSON *reader*: PowerModels exports the `.m` to JSON, caseio reads that and
+  re-emits, and the two are compared. Exercises caseio reading real PowerModels
+  output, not just its own.
 - **PSS/E** (`validate_psse.jl`) — caseio's PSS/E `.raw` vs PowerModels.jl on the
   write side (`.m` → `.raw`), and caseio's PowerModels JSON of a real `.raw` on the
-  read side; counts and demand/generation totals, with switched shunts noted (not
+  read side; counts and demand/generation totals, switched shunts noted (not
   modeled).
 - **ExaPowerIO** (`validate_exapowerio.jl`) — caseio (through the C ABI) vs
-  `ExaPowerIO.parse_matpower(; filtered=false)`, value for value over bus / branch
-  / gen. Reconciles the encodings: ExaPowerIO returns per unit (×baseMVA), splits
-  line charging into `b_fr + b_to` (= total `b`), stores `shift` / angle limits in
-  radians (caseio degrees), and normalizes `tap` 0→1. Bus types aren't compared
-  (ExaPowerIO rewrites them from generator placement).
+  ExaPowerIO's default `filtered=true` parse, value for value over bus / branch /
+  gen. caseio's in-service rows are filtered to match ExaPowerIO's dropped
+  out-of-service elements (see `t_case9_oos`). Encodings reconciled: per unit
+  (×baseMVA), `b_fr + b_to` = total `b`, radians vs degrees, tap 0→1; bus types
+  aren't compared (ExaPowerIO rewrites them from generator placement).
 - **pandapower** (`validate_pandapower.py`) — caseio's parse and Y_bus vs
   pandapower's `_m2ppc` + `makeYbus` (PYPOWER's admittance kernel, the same one
   MATPOWER uses). Compares counts, per-branch r/x/b/tap/shift, per-bus demand and
@@ -119,10 +123,12 @@ What each column checks:
   ids). `_m2ppc` is used instead of `from_mpc` because it runs before the
   `from_ppc` step that raises on dclines and parallel branches.
 
-¹ caseio writes dcline limits under MATPOWER names (`mp_pmax`) rather than
-PowerModels' `pmaxf`, and its mixed-model gencost export for `t_case9_dcline`
-doesn't round-trip through PowerModels yet, so the PowerModels JSON check is
-skipped for dcline cases. The other three validators still cover them.
+**Coverage gaps.** PowerWorld `.aux` and EGRET JSON have no external validator here:
+there is no independent `.aux` reader to check against, EGRET has no caseio reader
+and the `egret` package isn't installed. Both are covered by the in-tree all-pairs
+round-trip tests (`caseio/tests/roundtrip_formats.rs`: core preservation,
+reader∘writer idempotence, byte-exact same-format echo), not against a third-party
+tool.
 
 ## Reproduce
 

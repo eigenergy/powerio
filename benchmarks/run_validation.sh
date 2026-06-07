@@ -2,8 +2,10 @@
 # Run every cross-tool correctness validator over every fixture and print a
 # pass/fail matrix. Each MATPOWER fixture is checked against:
 #
-#   PMjson  — caseio's PowerModels JSON vs PowerModels.jl's own parse (field by
-#             field, after make_per_unit!).        benchmarks/validate_powermodels.jl
+#   PMjson  — caseio's PowerModels JSON (writer) vs PowerModels.jl's own parse of
+#             the .m, field by field.              benchmarks/validate_powermodels.jl
+#   PMread  — caseio's PowerModels JSON reader: PowerModels exports the .m to JSON,
+#             caseio reads it and re-emits, the two are compared.  benchmarks/pm_export.jl
 #   PSSE    — caseio's PSS/E .raw vs PowerModels.jl (counts + demand/gen totals).
 #                                                   benchmarks/validate_psse.jl
 #   Exa     — caseio (via C ABI) vs ExaPowerIO.jl, value for value.
@@ -75,6 +77,17 @@ for m in "${MCASES[@]}"; do
         echo "  PMjson: convert failed"; cat "$TMP/err"; MARK="FAIL"; fails=$((fails + 1))
     fi
     row+="  PMjson:$MARK"
+
+    # PowerModels JSON reader: PowerModels exports the .m to JSON, caseio reads that
+    # and re-emits, and the two are compared — exercises caseio reading real
+    # PowerModels output, not only its own writer.
+    if "${JL[@]}" benchmarks/pm_export.jl "$m" "$TMP/$base.pmref.json" 2>"$TMP/err" \
+        && convert "$TMP/$base.pmref.json" powermodels-json "$TMP/$base.reemit.json" 2>>"$TMP/err"; then
+        mark "${JL[@]}" benchmarks/validate_powermodels.jl "$TMP/$base.pmref.json" "$TMP/$base.reemit.json"
+    else
+        echo "  PMread: setup failed"; cat "$TMP/err"; MARK="FAIL"; fails=$((fails + 1))
+    fi
+    row+="  PMread:$MARK"
 
     if convert "$m" psse "$TMP/$base.raw" 2>"$TMP/err"; then
         mark "${JL[@]}" benchmarks/validate_psse.jl "$m" "$TMP/$base.raw"
