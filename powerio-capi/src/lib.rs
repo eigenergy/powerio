@@ -219,12 +219,78 @@ pub unsafe extern "C" fn pio_convert(
     }
 }
 
-/// Free a string returned by [`pio_write_matpower`] or [`pio_convert`].
+/// Free a string returned by [`pio_write_matpower`], [`pio_convert`], or
+/// [`pio_to_json`].
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_string_free(s: *mut c_char) {
     unsafe {
         if !s.is_null() {
             drop(CString::from_raw(s));
+        }
+    }
+}
+
+/// Serialize the case to JSON — the structured-table transport every Julia
+/// bridge consumes. Carries the whole [`Network`] (buses, loads, shunts,
+/// branches, generators, storage, HVDC, extras) but not the retained source
+/// text, so it is structured data, not the byte-exact echo. Returns an owned C
+/// string (free with [`pio_string_free`]), `NULL` on error (message into
+/// `errbuf`).
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn pio_to_json(
+    case: *const PioCase,
+    errbuf: *mut c_char,
+    errlen: usize,
+) -> *mut c_char {
+    unsafe {
+        let r = catch_unwind(AssertUnwindSafe(|| {
+            let c = case_ref(case).ok_or_else(|| "case is NULL".to_string())?;
+            c.net.to_json().map_err(|e| e.to_string())
+        }));
+        match r {
+            Ok(Ok(json)) => into_cstring(json),
+            Ok(Err(msg)) => {
+                copy_to_buf(errbuf, errlen, &msg);
+                std::ptr::null_mut()
+            }
+            Err(_) => {
+                copy_to_buf(errbuf, errlen, "panic while serializing to JSON");
+                std::ptr::null_mut()
+            }
+        }
+    }
+}
+
+/// Rebuild a case handle from JSON produced by [`pio_to_json`]. Returns a new
+/// handle (free with [`pio_case_free`]), or `NULL` on error (message into
+/// `errbuf`). The handle has no retained source, so [`pio_write_matpower`]
+/// reformats it rather than echoing a byte-exact original.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn pio_from_json(
+    json: *const c_char,
+    errbuf: *mut c_char,
+    errlen: usize,
+) -> *mut PioCase {
+    unsafe {
+        let r = catch_unwind(AssertUnwindSafe(|| {
+            let json = cstr(json).ok_or_else(|| "json is NULL or not UTF-8".to_string())?;
+            Network::from_json(json)
+                .map_err(|e| e.to_string())
+                .map(|net| {
+                    let core = IndexCore::build(&net);
+                    Box::into_raw(Box::new(PioCase { net, core }))
+                })
+        }));
+        match r {
+            Ok(Ok(ptr)) => ptr,
+            Ok(Err(msg)) => {
+                copy_to_buf(errbuf, errlen, &msg);
+                std::ptr::null_mut()
+            }
+            Err(_) => {
+                copy_to_buf(errbuf, errlen, "panic while parsing JSON");
+                std::ptr::null_mut()
+            }
         }
     }
 }
@@ -585,6 +651,57 @@ mod tests {
             );
             pio_string_free(s);
         }
+    }
+
+    #[test]
+    fn json_round_trip_preserves_structure() {
+        // to_json -> from_json must reproduce the structured tables. case30
+        // carries loads, shunts, and gen costs, so a dropped field shows up.
+        let c = {
+            let path = data_path("case30.m");
+            let mut err = [0 as c_char; 256];
+            let h =
+                unsafe { pio_parse(path.as_ptr(), std::ptr::null(), err.as_mut_ptr(), err.len()) };
+            assert!(!h.is_null());
+            h
+        };
+        unsafe {
+            let mut err = [0 as c_char; 256];
+            let json = pio_to_json(c, err.as_mut_ptr(), err.len());
+            assert!(!json.is_null(), "to_json returned null");
+            let text = CStr::from_ptr(json).to_str().unwrap().to_owned();
+            assert!(text.contains("\"buses\""));
+
+            let back = pio_from_json(json.cast_const(), err.as_mut_ptr(), err.len());
+            assert!(!back.is_null(), "from_json returned null");
+            // Counts and base survive the round trip through JSON.
+            assert_eq!(pio_n_buses(back), pio_n_buses(c));
+            assert_eq!(pio_n_branches(back), pio_n_branches(c));
+            assert_eq!(pio_n_gens(back), pio_n_gens(c));
+            assert_eq!(pio_base_mva(back), pio_base_mva(c));
+            assert_eq!(pio_reference_bus(back), pio_reference_bus(c));
+
+            pio_string_free(json);
+            pio_case_free(back);
+            pio_case_free(c);
+        }
+    }
+
+    #[test]
+    fn from_json_rejects_garbage() {
+        let bad = CString::new("{ not json").unwrap();
+        let mut err = [0 as c_char; 256];
+        let h = unsafe { pio_from_json(bad.as_ptr(), err.as_mut_ptr(), err.len()) };
+        assert!(h.is_null());
+        let msg = unsafe { CStr::from_ptr(err.as_ptr()) }.to_str().unwrap();
+        assert!(!msg.is_empty(), "expected a JSON parse error message");
+    }
+
+    #[test]
+    fn to_json_null_handle_is_safe() {
+        let mut err = [0 as c_char; 256];
+        let s = unsafe { pio_to_json(std::ptr::null(), err.as_mut_ptr(), err.len()) };
+        assert!(s.is_null());
     }
 
     #[test]

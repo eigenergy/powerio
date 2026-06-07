@@ -56,6 +56,14 @@ char *pio_convert(const char *path, const char *to, const char *from,
                   char *warnbuf, size_t warnlen, char *errbuf, size_t errlen);
 void pio_string_free(char *s);
 
+/* Structured JSON transport — what the Julia bridge consumes. pio_to_json
+ * serializes the whole network (tables + extras, but not the retained source
+ * text) to an owned string (free with pio_string_free), NULL on error.
+ * pio_from_json rebuilds a handle from that JSON (free with pio_case_free); the
+ * handle has no source, so pio_write_matpower reformats rather than echoing. */
+char *pio_to_json(const PioCase *c, char *errbuf, size_t errlen);
+PioCase *pio_from_json(const char *json, char *errbuf, size_t errlen);
+
 /* Numeric table extractors. Each output buffer has the matching pio_n_* length;
  * pass NULL to skip it. `from`/`to`/`bus` are dense bus indices ([0,n), or -1 if
  * a referenced bus is unknown). */

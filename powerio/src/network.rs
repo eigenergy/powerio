@@ -22,6 +22,7 @@
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use crate::Error;
@@ -31,7 +32,8 @@ use crate::Error;
 pub type Extras = BTreeMap<String, Value>;
 
 /// Bus type per MATPOWER convention: 1=PQ, 2=PV, 3=ref/slack, 4=isolated.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "UPPERCASE")]
 #[repr(u8)]
 pub enum BusType {
     Pq = 1,
@@ -65,7 +67,7 @@ impl BusType {
 }
 
 /// A generator cost curve (`mpc.gencost` row).
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct GenCost {
     /// 1 = piecewise linear, 2 = polynomial.
     pub model: u8,
@@ -103,7 +105,7 @@ impl GenCost {
 
 /// Which format a [`Network`] was read from. Drives the same-format byte-exact
 /// echo on write.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum SourceFormat {
     Matpower,
     PowerModelsJson,
@@ -115,7 +117,7 @@ pub enum SourceFormat {
 }
 
 /// A format-neutral power network.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Network {
     pub name: String,
     pub base_mva: f64,
@@ -133,10 +135,15 @@ pub struct Network {
     /// with no second copy of the whole file. The trade is one extra indirection
     /// per access; don't "simplify" it back to `Arc<str>`, which would reintroduce
     /// the copy this avoids.
+    ///
+    /// Skipped in JSON: the structured tables are the transport, not the raw
+    /// echo, and skipping also keeps serde's `rc` feature out of the build. A
+    /// `from_json` round-trip returns this as `None`.
+    #[serde(skip)]
     pub source: Option<Arc<String>>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Bus {
     /// Stable bus id (1-based in MATPOWER; preserved verbatim).
     pub id: usize,
@@ -154,7 +161,7 @@ pub struct Bus {
     pub extras: Extras,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Load {
     pub bus: usize,
     /// Active demand (MW).
@@ -165,7 +172,7 @@ pub struct Load {
     pub extras: Extras,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Shunt {
     pub bus: usize,
     /// Shunt conductance (MW at V = 1 p.u.).
@@ -176,7 +183,7 @@ pub struct Shunt {
     pub extras: Extras,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Branch {
     pub from: usize,
     pub to: usize,
@@ -214,7 +221,7 @@ impl Branch {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Generator {
     pub bus: usize,
     /// Real power set point (MW).
@@ -241,7 +248,7 @@ pub struct Generator {
 /// A generator's capability / ramp columns, one slot per [`GEN_EXTRA_KEYS`] name.
 pub type GenCaps = [Option<f64>; GEN_EXTRA_KEYS.len()];
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Storage {
     pub bus: usize,
     pub ps: f64,
@@ -264,7 +271,7 @@ pub struct Storage {
 }
 
 /// A two-terminal HVDC line (MATPOWER `dcline`).
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Hvdc {
     pub from: usize,
     pub to: usize,
@@ -319,6 +326,26 @@ impl Network {
             source_format: SourceFormat::InMemory,
             source: None,
         }
+    }
+
+    /// Serialize the structured tables to JSON — the transport the C ABI
+    /// (`pio_to_json`) and the Julia bridge consume. The retained `source` text
+    /// is excluded (see the field's `#[serde(skip)]`), so the byte-exact echo
+    /// stays on the same-format write path; a [`from_json`](Network::from_json)
+    /// round-trip reproduces every field except `source`, which returns `None`.
+    pub fn to_json(&self) -> crate::Result<String> {
+        serde_json::to_string(self).map_err(|e| Error::FormatRead {
+            format: "JSON",
+            message: e.to_string(),
+        })
+    }
+
+    /// Rebuild a `Network` from JSON produced by [`to_json`](Network::to_json).
+    pub fn from_json(text: &str) -> crate::Result<Network> {
+        serde_json::from_str(text).map_err(|e| Error::FormatRead {
+            format: "JSON",
+            message: e.to_string(),
+        })
     }
 
     /// Error if two buses share an id, or if any element references a bus that

@@ -66,6 +66,16 @@ int main(int argc, char **argv) {
     CHECK(raw != NULL, err);
     pio_string_free(raw);
 
+    /* JSON transport: serialize, rebuild, and confirm the counts survive. */
+    char *json = pio_to_json(c, err, sizeof err);
+    CHECK(json != NULL, err);
+    PioCase *c2 = pio_from_json(json, err, sizeof err);
+    CHECK(c2 != NULL, err);
+    CHECK(pio_n_buses(c2) == nb && pio_n_branches(c2) == m && pio_n_gens(c2) == ng,
+          "JSON round-trip changed the table sizes");
+    pio_string_free(json);
+    pio_case_free(c2);
+
     /* NULL handle is the documented safe default. */
     CHECK(pio_n_buses(NULL) == 0, "NULL handle did not return 0");
     CHECK(pio_reference_bus(NULL) == -1, "NULL handle did not return -1");
