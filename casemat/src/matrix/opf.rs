@@ -9,7 +9,7 @@
 
 use sprs::CsMat;
 
-use crate::case::MpcCase;
+use crate::indexed::IndexedNetwork;
 use crate::matrix::incidence::{IncidenceParts, diagonal};
 use crate::matrix::triplet::CooBuilder;
 use crate::{Error, Result};
@@ -65,13 +65,13 @@ pub struct OpfInstance {
 /// cost row, or [`Error::UnsupportedCostModel`] if its cost is present but not
 /// a polynomial of degree ≤ 2.
 pub fn build_opf_instance(
-    case: &MpcCase,
+    case: &IndexedNetwork,
     incidence: &IncidenceParts,
     units: Units,
 ) -> Result<OpfInstance> {
     let n = case.n();
     let m = incidence.m();
-    let base = case.base_mva;
+    let base = case.base_mva();
 
     let p_scale = match units {
         Units::PerUnit => 1.0 / base,
@@ -84,7 +84,7 @@ pub fn build_opf_instance(
         Units::Native => (1.0, 1.0),
     };
 
-    let in_service: Vec<(usize, &crate::case::Generator)> = case.in_service_gens().collect();
+    let in_service: Vec<(usize, &crate::network::Generator)> = case.in_service_gens().collect();
     let n_gen = in_service.len();
     if n_gen == 0 {
         return Err(Error::NoGenerators);
@@ -99,8 +99,8 @@ pub fn build_opf_instance(
 
     for (col, &(gidx, gen)) in in_service.iter().enumerate() {
         let bus = case
-            .bus_index(gen.bus_id)
-            .ok_or(Error::UnknownBus { bus_id: gen.bus_id, row: gidx })?;
+            .bus_index(gen.bus)
+            .ok_or(Error::UnknownBus { bus_id: gen.bus, row: gidx })?;
         // Distinguish a genuinely absent cost from a present-but-unsupported
         // one (piecewise model 1, or polynomial degree ≥ 3) so the error tells
         // the truth about which case the file hit.
@@ -124,12 +124,12 @@ pub fn build_opf_instance(
     let pmax_bus = project_gen_to_bus(&c_g, &pmax_gen);
     let pmin_bus = project_gen_to_bus(&c_g, &pmin_gen);
 
-    let p_d: Vec<f64> = case.buses.iter().map(|b| b.pd * p_scale).collect();
+    let p_d: Vec<f64> = case.pd().iter().map(|&p| p * p_scale).collect();
 
     let f_max: Vec<f64> = incidence
         .branch_of_col
         .iter()
-        .map(|&k| case.branches[k].rate_a * p_scale)
+        .map(|&k| case.branches()[k].rate_a * p_scale)
         .collect();
 
     Ok(OpfInstance {

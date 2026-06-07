@@ -502,7 +502,9 @@ fn draw_synth(frame: &mut Frame, app: &App, area: Rect) {
         .border_style(border())
         .title(" Preview ");
     if let Some(case) = &app.synth.generated {
-        if let Ok(b) = crate::build_bprime(case, &Default::default()) {
+        let net = case.to_network();
+        let view = crate::IndexedNetwork::new(&net);
+        if let Ok(b) = crate::build_bprime(&view, &Default::default()) {
             let inner = preview_block.inner(split[1]);
             frame.render_widget(preview_block, split[1]);
             frame.render_widget(Sparsity::new(&b), inner);

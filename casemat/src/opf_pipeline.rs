@@ -11,6 +11,7 @@ use serde::Serialize;
 use sprs::CsMat;
 
 use crate::case::MpcCase;
+use crate::indexed::IndexedNetwork;
 use crate::io::mtx::{write_mtx, write_vector_mtx};
 use crate::matrix::incidence::{DcConvention, build_flow_map, build_incidence};
 use crate::matrix::laplacian::{build_weighted_laplacian, ground_at, unit_vector};
@@ -49,16 +50,19 @@ pub fn write_dcopf_bundle(
     out_dir: impl AsRef<Path>,
     opts: &DcOpfOptions,
 ) -> Result<DcOpfOutputs> {
-    let dir = out_dir.as_ref().join(format!("{}_dcopf", case.name));
+    let net = case.to_network();
+    let view = IndexedNetwork::new(&net);
+
+    let dir = out_dir.as_ref().join(format!("{}_dcopf", view.name()));
     std::fs::create_dir_all(&dir)?;
 
-    let r = case.reference_bus_index()?;
-    let inc = build_incidence(case, opts.convention)?;
+    let r = view.reference_bus_index()?;
+    let inc = build_incidence(&view, opts.convention)?;
     let l = build_weighted_laplacian(&inc.a, &inc.b);
     let l_grounded = ground_at(&l, r);
     let flow = build_flow_map(&inc.a, &inc.b);
-    let opf = build_opf_instance(case, &inc, opts.units)?;
-    let e_r = unit_vector(case.n(), r);
+    let opf = build_opf_instance(&view, &inc, opts.units)?;
+    let e_r = unit_vector(view.n(), r);
 
     let mut files = Vec::new();
 
@@ -87,9 +91,9 @@ pub fn write_dcopf_bundle(
     put_vec(&dir, "pmin_gen.mtx", &opf.pmin_gen, &mut files)?;
 
     let meta = DcOpfMeta {
-        case_name: case.name.clone(),
-        base_mva: case.base_mva,
-        n: case.n(),
+        case_name: view.name().to_string(),
+        base_mva: view.base_mva(),
+        n: view.n(),
         m: inc.m(),
         n_gen: opf.n_gen,
         reference_bus: r,

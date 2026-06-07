@@ -8,7 +8,7 @@
 
 use sprs::CsMat;
 
-use crate::case::MpcCase;
+use crate::indexed::IndexedNetwork;
 use crate::matrix::triplet::CooBuilder;
 use crate::{Error, Result};
 
@@ -53,18 +53,18 @@ impl IncidenceParts {
 ///
 /// Self-loops (from == to) and branches with `x == 0` (no DC susceptance)
 /// are dropped, so `m` counts only the branches that contribute a column.
-pub fn build_incidence(case: &MpcCase, conv: DcConvention) -> Result<IncidenceParts> {
+pub fn build_incidence(case: &IndexedNetwork, conv: DcConvention) -> Result<IncidenceParts> {
     let n = case.n();
 
     // Pass 1: resolve and filter, fixing the column order.
     let mut cols: Vec<Column> = Vec::new();
     for (idx, br) in case.in_service_branches() {
         let i = case
-            .bus_index(br.from_id)
-            .ok_or(Error::UnknownBus { bus_id: br.from_id, row: idx })?;
+            .bus_index(br.from)
+            .ok_or(Error::UnknownBus { bus_id: br.from, row: idx })?;
         let j = case
-            .bus_index(br.to_id)
-            .ok_or(Error::UnknownBus { bus_id: br.to_id, row: idx })?;
+            .bus_index(br.to)
+            .ok_or(Error::UnknownBus { bus_id: br.to, row: idx })?;
         if i == j || br.x == 0.0 {
             continue;
         }

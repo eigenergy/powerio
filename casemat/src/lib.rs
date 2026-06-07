@@ -9,11 +9,11 @@
 // the matrix modules' `crate::case` / `crate::Error` / `crate::parser` paths
 // resolve unchanged after the split.
 pub use caseio::{
-    case, error, format, network, parser, parse_matpower, parse_matpower_file,
+    case, error, format, indexed, network, parser, parse_matpower, parse_matpower_file,
     parse_powermodels_json, parse_powerworld, parse_psse, write_as, write_egret_json, write_matpower,
     write_powermodels_json, write_powerworld, write_psse, Branch, Bus,
-    ConnectivityReport, Conversion, DcLine, Error, GenCost, Generator, MpcCase, Network, Result,
-    SourceFormat, Storage, TargetFormat,
+    ConnectivityReport, Conversion, DcLine, Error, GenCost, Generator, IndexedNetwork, MpcCase,
+    Network, Result, SourceFormat, Storage, TargetFormat,
 };
 
 pub mod io;

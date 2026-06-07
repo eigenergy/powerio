@@ -13,7 +13,7 @@
 
 use sprs::CsMat;
 
-use crate::case::MpcCase;
+use crate::indexed::IndexedNetwork;
 use crate::matrix::incidence::{DcConvention, IncidenceParts, build_flow_map, build_incidence};
 use crate::matrix::laplacian::{build_weighted_laplacian, ground_at};
 use crate::matrix::triplet::CooBuilder;
@@ -24,7 +24,7 @@ const PRUNE: f64 = 1e-12;
 
 /// PTDF (`m × n`): branch flows from nodal injections, `f = PTDF · p`. The
 /// reference-bus column is zero.
-pub fn build_ptdf(case: &MpcCase, conv: DcConvention) -> Result<CsMat<f64>> {
+pub fn build_ptdf(case: &IndexedNetwork, conv: DcConvention) -> Result<CsMat<f64>> {
     check_connected(case)?;
     let inc = build_incidence(case, conv)?;
     let r = case.reference_bus_index()?;
@@ -35,7 +35,7 @@ pub fn build_ptdf(case: &MpcCase, conv: DcConvention) -> Result<CsMat<f64>> {
 /// Reject a disconnected network up front so the singular grounded Laplacian
 /// reports the real cause ([`Error::DisconnectedNetwork`]) instead of the
 /// generic [`Error::SingularNetwork`] the Cholesky would otherwise raise.
-fn check_connected(case: &MpcCase) -> Result<()> {
+fn check_connected(case: &IndexedNetwork) -> Result<()> {
     let components = case.n_connected_components();
     if components > 1 {
         return Err(Error::DisconnectedNetwork { components });
@@ -46,7 +46,7 @@ fn check_connected(case: &MpcCase) -> Result<()> {
 /// LODF (`m × m`): pre-outage flow on branch `k` redistributes onto branch `l`
 /// with factor `LODF[l, k]`. Diagonal is `−1`. A branch whose outage islands
 /// the network (denominator `≈ 0`) gets a zero column.
-pub fn build_lodf(case: &MpcCase, conv: DcConvention) -> Result<CsMat<f64>> {
+pub fn build_lodf(case: &IndexedNetwork, conv: DcConvention) -> Result<CsMat<f64>> {
     check_connected(case)?;
     let inc = build_incidence(case, conv)?;
     let r = case.reference_bus_index()?;

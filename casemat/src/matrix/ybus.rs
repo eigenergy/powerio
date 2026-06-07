@@ -15,7 +15,7 @@
 use num_complex::Complex64;
 use sprs::CsMat;
 
-use crate::case::MpcCase;
+use crate::indexed::IndexedNetwork;
 use crate::{Error, Result};
 
 use super::triplet::CooBuilder;
@@ -37,7 +37,7 @@ pub(crate) struct YbusFlags {
     pub skip_bus_shunts: bool,
 }
 
-pub fn build_ybus(case: &MpcCase, opts: &super::BuildOptions) -> Result<YbusParts> {
+pub fn build_ybus(case: &IndexedNetwork, opts: &super::BuildOptions) -> Result<YbusParts> {
     let flags = YbusFlags {
         zero_resistance: false,
         zero_charging: false,
@@ -48,18 +48,18 @@ pub fn build_ybus(case: &MpcCase, opts: &super::BuildOptions) -> Result<YbusPart
     build_ybus_with_flags(case, flags)
 }
 
-pub(crate) fn build_ybus_with_flags(case: &MpcCase, flags: YbusFlags) -> Result<YbusParts> {
+pub(crate) fn build_ybus_with_flags(case: &IndexedNetwork, flags: YbusFlags) -> Result<YbusParts> {
     let n = case.n();
-    let mut g_coo = CooBuilder::with_capacity(n, 4 * case.branches.len() + n);
-    let mut b_coo = CooBuilder::with_capacity(n, 4 * case.branches.len() + n);
+    let mut g_coo = CooBuilder::with_capacity(n, 4 * case.branches().len() + n);
+    let mut b_coo = CooBuilder::with_capacity(n, 4 * case.branches().len() + n);
 
     for (row_idx, br) in case.in_service_branches() {
-        let i = case.bus_index(br.from_id).ok_or(Error::UnknownBus {
-            bus_id: br.from_id,
+        let i = case.bus_index(br.from).ok_or(Error::UnknownBus {
+            bus_id: br.from,
             row: row_idx,
         })?;
-        let j = case.bus_index(br.to_id).ok_or(Error::UnknownBus {
-            bus_id: br.to_id,
+        let j = case.bus_index(br.to).ok_or(Error::UnknownBus {
+            bus_id: br.to,
             row: row_idx,
         })?;
 
@@ -111,9 +111,10 @@ pub(crate) fn build_ybus_with_flags(case: &MpcCase, flags: YbusFlags) -> Result<
     }
 
     if !flags.skip_bus_shunts {
-        for (idx, bus) in case.buses.iter().enumerate() {
-            g_coo.add(idx, idx, bus.gs / case.base_mva);
-            b_coo.add(idx, idx, bus.bs / case.base_mva);
+        let base = case.base_mva();
+        for idx in 0..n {
+            g_coo.add(idx, idx, case.gs()[idx] / base);
+            b_coo.add(idx, idx, case.bs()[idx] / base);
         }
     }
 

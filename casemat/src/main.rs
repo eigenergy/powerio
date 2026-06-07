@@ -399,16 +399,18 @@ fn run_sensitivities(
     let mpc = casemat::parse_matpower_file(&input)
         .with_context(|| format!("parse {}", input.display()))?;
     std::fs::create_dir_all(&output)?;
-    let ptdf = casemat::build_ptdf(&mpc, convention)
+    let net = mpc.to_network();
+    let view = casemat::IndexedNetwork::new(&net);
+    let ptdf = casemat::build_ptdf(&view, convention)
         .with_context(|| format!("PTDF for {}", input.display()))?;
-    let lodf = casemat::build_lodf(&mpc, convention)
+    let lodf = casemat::build_lodf(&view, convention)
         .with_context(|| format!("LODF for {}", input.display()))?;
-    let ptdf_path = output.join(format!("{}_ptdf.mtx", mpc.name));
-    let lodf_path = output.join(format!("{}_lodf.mtx", mpc.name));
+    let ptdf_path = output.join(format!("{}_ptdf.mtx", view.name()));
+    let lodf_path = output.join(format!("{}_lodf.mtx", view.name()));
     casemat::io::mtx::write_mtx(&ptdf, &ptdf_path)?;
     casemat::io::mtx::write_mtx(&lodf, &lodf_path)?;
     tracing::info!(
-        case = %mpc.name,
+        case = %view.name(),
         ptdf = %ptdf_path.display(),
         lodf = %lodf_path.display(),
         "wrote DC sensitivities"
@@ -442,19 +444,21 @@ fn run_verify(input: PathBuf, kind: MatrixKind, scheme: Scheme) -> anyhow::Resul
         scheme,
         ..Default::default()
     };
+    let net = mpc.to_network();
+    let view = casemat::IndexedNetwork::new(&net);
     let matrix = match kind {
-        MatrixKind::BPrime => casemat::build_bprime(&mpc, &opts)?,
-        MatrixKind::BDoublePrime => casemat::build_bdoubleprime(&mpc, &opts)?,
-        MatrixKind::YbusG => casemat::build_ybus(&mpc, &opts)?.g,
+        MatrixKind::BPrime => casemat::build_bprime(&view, &opts)?,
+        MatrixKind::BDoublePrime => casemat::build_bdoubleprime(&view, &opts)?,
+        MatrixKind::YbusG => casemat::build_ybus(&view, &opts)?.g,
         MatrixKind::YbusB => {
-            let mut b = casemat::build_ybus(&mpc, &opts)?.b;
+            let mut b = casemat::build_ybus(&view, &opts)?.b;
             for v in b.data_mut() {
                 *v = -*v;
             }
             b
         }
-        MatrixKind::Lacpf => casemat::build_lacpf(&mpc, &opts)?,
-        MatrixKind::Adjacency => casemat::build_adjacency(&mpc)?,
+        MatrixKind::Lacpf => casemat::build_lacpf(&view, &opts)?,
+        MatrixKind::Adjacency => casemat::build_adjacency(&view)?,
     };
     let stats = casemat::matrix::MatrixStats::from_csr(&matrix);
     let sddm = sddm_check(&matrix);

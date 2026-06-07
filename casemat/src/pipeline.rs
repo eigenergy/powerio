@@ -13,6 +13,7 @@ use rand_chacha::ChaCha8Rng;
 use serde::{Deserialize, Serialize};
 
 use crate::case::MpcCase;
+use crate::indexed::IndexedNetwork;
 use crate::io::meta::{CaseMetadata, MatrixMetadata, write_meta_json};
 use crate::io::mtx::{write_mtx, write_vector_mtx};
 use crate::matrix::{
@@ -114,12 +115,15 @@ impl Pipeline {
         let out_dir = out_dir.as_ref();
         std::fs::create_dir_all(out_dir)?;
 
+        let net = case.to_network();
+        let view = IndexedNetwork::new(&net);
+
         let mut files = Vec::new();
         let mut matrices_meta = Vec::new();
 
         for &kind in &self.matrices {
-            let matrix_path = out_dir.join(format!("{}_{}.mtx", case.name, kind.slug()));
-            let matrix = self.build(case, kind)?;
+            let matrix_path = out_dir.join(format!("{}_{}.mtx", view.name(), kind.slug()));
+            let matrix = self.build(&view, kind)?;
             write_mtx(&matrix, &matrix_path)?;
             let stats = MatrixStats::from_csr(&matrix);
             let sddm = sddm_check(&matrix);
@@ -136,25 +140,22 @@ impl Pipeline {
             files.push(matrix_path);
 
             // RHS for matrices that take a RHS of length n (skip LACPF which is 2n).
-            if let Some(rhs) = self.build_rhs(case, kind)? {
-                let rhs_path = out_dir.join(format!("{}_{}_rhs.mtx", case.name, kind.slug()));
+            if let Some(rhs) = self.build_rhs(&view, kind)? {
+                let rhs_path = out_dir.join(format!("{}_{}_rhs.mtx", view.name(), kind.slug()));
                 write_vector_mtx(&rhs, &rhs_path)?;
                 files.push(rhs_path);
             }
         }
 
         // Shunt vector as a sidecar (not always meaningful, but cheap).
-        let shunt_path = out_dir.join(format!("{}_shunt.mtx", case.name));
-        let shunt: Vec<f64> = case
-            .buses
-            .iter()
-            .map(|b| b.bs / case.base_mva)
-            .collect();
+        let shunt_path = out_dir.join(format!("{}_shunt.mtx", view.name()));
+        let base = view.base_mva();
+        let shunt: Vec<f64> = view.bs().iter().map(|&b| b / base).collect();
         write_vector_mtx(&shunt, &shunt_path)?;
         files.push(shunt_path);
 
         let metadata = CaseMetadata {
-            case_name: case.name.clone(),
+            case_name: view.name().to_string(),
             source_file: self
                 .source_file
                 .as_ref()
@@ -165,9 +166,9 @@ impl Pipeline {
                 .as_ref()
                 .and_then(|p| std::fs::read(p).ok())
                 .map(|b| sha256_hex(&b)),
-            base_mva: case.base_mva,
-            n_buses: case.n(),
-            n_branches: case.branches.len(),
+            base_mva: view.base_mva(),
+            n_buses: view.n(),
+            n_branches: view.branches().len(),
             build_options: self.options.clone(),
             matrices: matrices_meta,
             casemat_version: env!("CARGO_PKG_VERSION").to_string(),
@@ -177,13 +178,13 @@ impl Pipeline {
         files.push(meta_path);
 
         Ok(PipelineOutputs {
-            case_name: case.name.clone(),
+            case_name: view.name().to_string(),
             files,
             metadata,
         })
     }
 
-    fn build(&self, case: &MpcCase, kind: MatrixKind) -> Result<sprs::CsMat<f64>> {
+    fn build(&self, case: &IndexedNetwork, kind: MatrixKind) -> Result<sprs::CsMat<f64>> {
         match kind {
             MatrixKind::BPrime => build_bprime(case, &self.options),
             MatrixKind::BDoublePrime => build_bdoubleprime(case, &self.options),
@@ -197,7 +198,7 @@ impl Pipeline {
         }
     }
 
-    fn build_rhs(&self, case: &MpcCase, kind: MatrixKind) -> Result<Option<Vec<f64>>> {
+    fn build_rhs(&self, case: &IndexedNetwork, kind: MatrixKind) -> Result<Option<Vec<f64>>> {
         // No meaningful RHS for the 2n LACPF block or the structural adjacency.
         if matches!(self.rhs, RhsKind::None)
             || matches!(kind, MatrixKind::Lacpf | MatrixKind::Adjacency)
@@ -221,19 +222,18 @@ impl Pipeline {
                 }
                 v
             }
-            RhsKind::Injection => match kind {
-                MatrixKind::BPrime | MatrixKind::YbusG | MatrixKind::YbusB => case
-                    .buses
-                    .iter()
-                    .map(|b| -b.pd / case.base_mva)
-                    .collect(),
-                MatrixKind::BDoublePrime => case
-                    .buses
-                    .iter()
-                    .map(|b| -b.qd / case.base_mva)
-                    .collect(),
-                MatrixKind::Lacpf | MatrixKind::Adjacency => unreachable!(),
-            },
+            RhsKind::Injection => {
+                let base = case.base_mva();
+                match kind {
+                    MatrixKind::BPrime | MatrixKind::YbusG | MatrixKind::YbusB => {
+                        case.pd().iter().map(|&p| -p / base).collect()
+                    }
+                    MatrixKind::BDoublePrime => {
+                        case.qd().iter().map(|&q| -q / base).collect()
+                    }
+                    MatrixKind::Lacpf | MatrixKind::Adjacency => unreachable!(),
+                }
+            }
             RhsKind::None => unreachable!(),
         };
         Ok(Some(v))

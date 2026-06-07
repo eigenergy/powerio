@@ -5,6 +5,8 @@ use std::sync::Arc;
 
 use petgraph::graph::UnGraph;
 
+use crate::indexed::ConnectivityReport;
+
 /// Bus type per MATPOWER convention: 1=PQ, 2=PV, 3=ref/slack, 4=isolated.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(u8)]
@@ -538,21 +540,6 @@ impl MpcCase {
     }
 }
 
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
-pub struct ConnectivityReport {
-    pub n_buses: usize,
-    pub n_branches_in_service: usize,
-    pub n_components: usize,
-    /// Dense bus indices that have no incident in-service branches.
-    pub isolated_buses: Vec<usize>,
-}
-
-impl ConnectivityReport {
-    #[inline]
-    pub fn is_single_island(&self) -> bool {
-        self.n_components == 1 && self.isolated_buses.is_empty()
-    }
-}
 
 #[cfg(test)]
 mod tests {

@@ -12,22 +12,22 @@
 
 use sprs::CsMat;
 
-use crate::case::MpcCase;
+use crate::indexed::IndexedNetwork;
 use crate::{Error, Result};
 
 use super::{BuildOptions, Scheme, triplet::CooBuilder};
 
-pub fn build_bprime(case: &MpcCase, opts: &BuildOptions) -> Result<CsMat<f64>> {
+pub fn build_bprime(case: &IndexedNetwork, opts: &BuildOptions) -> Result<CsMat<f64>> {
     let n = case.n();
-    let mut coo = CooBuilder::with_capacity(n, 4 * case.branches.len() + n);
+    let mut coo = CooBuilder::with_capacity(n, 4 * case.branches().len() + n);
 
     for (row_idx, br) in case.in_service_branches() {
-        let i = case.bus_index(br.from_id).ok_or(Error::UnknownBus {
-            bus_id: br.from_id,
+        let i = case.bus_index(br.from).ok_or(Error::UnknownBus {
+            bus_id: br.from,
             row: row_idx,
         })?;
-        let j = case.bus_index(br.to_id).ok_or(Error::UnknownBus {
-            bus_id: br.to_id,
+        let j = case.bus_index(br.to).ok_or(Error::UnknownBus {
+            bus_id: br.to,
             row: row_idx,
         })?;
 
