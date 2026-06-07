@@ -42,10 +42,14 @@ println(rpad("case", 20), rpad("caseio", 13), rpad("ExaPowerIO", 13),
 for (name, f, run_pm) in CASES
     isfile(f) || continue
 
-    # caseio through the C ABI: time parse + free together so no handle leaks.
+    # caseio through the C ABI. Time only the parse (read + build the model) and
+    # free in an untimed teardown — matching ExaPowerIO/PowerModels, whose returned
+    # data is GC'd outside the @benchmark sample rather than freed inside it. The
+    # handle reaches teardown through a Ref, so no sample leaks.
     h = cio_parse(f); nbuses = cio_n_buses(h); cio_free(h)
     samples = nbuses > 30_000 ? 5 : 30
-    bc = @benchmark (h = cio_parse($f); cio_free(h)) samples = samples evals = 1
+    href = Ref{Ptr{Cvoid}}(C_NULL)
+    bc = @benchmark $href[] = cio_parse($f) teardown = (cio_free($href[])) samples = samples evals = 1
     c = ms(bc)
 
     ed = ExaPowerIO.parse_matpower(f)

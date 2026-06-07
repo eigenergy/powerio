@@ -128,8 +128,10 @@ pub struct Network {
     pub hvdc: Vec<Hvdc>,
     pub source_format: SourceFormat,
     /// Raw source text, when read from a textual format; enables a byte-exact
-    /// same-format round-trip.
-    pub source: Option<Arc<str>>,
+    /// same-format round-trip. Held as `Arc<String>` so a reader that already owns
+    /// the buffer (the MATPOWER file path) can move it in without a second copy of
+    /// the whole file.
+    pub source: Option<Arc<String>>,
 }
 
 #[derive(Debug, Clone)]

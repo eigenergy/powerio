@@ -376,7 +376,7 @@ pub fn parse_powermodels_json(content: &str) -> Result<Network> {
         storage: sorted(root, "storage", "index").iter().map(|v| read_storage(v, pscale)).collect(),
         hvdc: sorted(root, "dcline", "index").iter().map(|v| read_hvdc(v, pscale)).collect(),
         source_format: SourceFormat::PowerModelsJson,
-        source: Some(Arc::from(content)),
+        source: Some(Arc::new(content.to_owned())),
     };
     net.check_references(FMT)?;
     Ok(net)

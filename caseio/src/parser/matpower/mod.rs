@@ -19,7 +19,8 @@ use crate::{Error, Result};
 
 /// Parse the MATPOWER case in `content` into a [`Network`].
 pub fn parse_matpower(content: &str) -> Result<Network> {
-    parse_matpower_named(content, "case")
+    // The caller owns `content` as a borrow, so retention needs one copy.
+    parse_matpower_named(Arc::new(content.to_owned()), "case")
 }
 
 /// Parse the MATPOWER case at `path`, using the file stem as the network name.
@@ -31,21 +32,22 @@ pub fn parse_matpower_file(path: impl AsRef<Path>) -> Result<Network> {
         .and_then(|s| s.to_str())
         .unwrap_or("case")
         .to_string();
-    parse_matpower_named(&content, &name)
+    // We own the file buffer; move it straight into the retained source — no
+    // second copy of the whole file.
+    parse_matpower_named(Arc::new(content), &name)
 }
 
-fn parse_matpower_named(content: &str, name: &str) -> Result<Network> {
-    // Locate each assignment's text directly in `content` and build the network
-    // from those borrowed slices in one pass. The network keeps the original
-    // source text so the writer can echo it for a byte-exact round-trip.
-    let located = locate::locate_assignments(content);
-    let mut net = build_case(name, |field| {
-        located
-            .iter()
-            .find(|(f, _)| *f == field)
-            .map(|(_, full)| *full)
-    })?;
-    net.source = Some(Arc::from(content));
+fn parse_matpower_named(source: Arc<String>, name: &str) -> Result<Network> {
+    // Locate each assignment's text directly in `source` and build the network
+    // from those borrowed slices in one pass; the typed model owns its data, so
+    // the borrows end with `located` and the source Arc moves into the network.
+    let mut net = {
+        let located = locate::locate_assignments(&source);
+        build_case(name, |field| {
+            located.iter().find(|(f, _)| *f == field).map(|(_, full)| *full)
+        })?
+    };
+    net.source = Some(source);
     // The other format readers validate references; the MATPOWER path must too,
     // or a duplicate or dangling bus id reaches `IndexedNetwork` as silently
     // collapsed aggregates (the dense bus-id map only debug-asserts uniqueness).
