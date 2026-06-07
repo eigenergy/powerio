@@ -1,4 +1,4 @@
-/* powerio C ABI — parse any power-system case format, query it, convert
+/* powerio C ABI — parse any power system case format, query it, convert
  * losslessly, and extract the numeric tables for matrix assembly.
  *
  * Memory: strings returned by pio_write_matpower / pio_convert are owned by the

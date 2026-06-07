@@ -6,7 +6,7 @@ rust-version = "1.86"
 description = "Fast, lossless parser and typed data model for power system case files. Parse MATPOWER .m and write it back byte-for-byte."
 license = "MIT OR Apache-2.0"
 repository = "https://github.com/eigenergy/caseio"
-keywords = ["power-systems", "matpower", "parser", "lossless"]
+keywords = ["matpower", "parser", "lossless"]
 categories = ["science", "parsing"]
 
 [dependencies]

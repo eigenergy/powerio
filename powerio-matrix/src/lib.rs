@@ -1,4 +1,4 @@
-//! `powerio-matrix`: sparse matrices and graph views for power-system case files,
+//! `powerio-matrix`: sparse matrices and graph views for power system case files,
 //! built on [`powerio`].
 //!
 //! Signed incidence `A`, weighted Laplacian `L = A diag(b) Aᵀ` and its

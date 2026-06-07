@@ -6,7 +6,7 @@ rust-version = "1.86"
 description = "Sparse matrices and graph views for power system case files: B'/B'', Y_bus, PTDF, LODF, incidence, weighted Laplacian, adjacency, and DC-OPF instance data. Built on powerio."
 license = "MIT OR Apache-2.0"
 repository = "https://github.com/eigenergy/caseio"
-keywords = ["power-systems", "matpower", "sparse", "ptdf", "dc-opf"]
+keywords = ["matpower", "sparse", "ptdf", "dc-opf"]
 categories = ["science", "mathematics"]
 
 [features]

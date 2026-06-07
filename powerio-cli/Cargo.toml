@@ -6,7 +6,7 @@ rust-version = "1.86"
 description = "Command line interface and ratatui TUI for powerio: parse and convert power system case files and emit matrices."
 license = "MIT OR Apache-2.0"
 repository = "https://github.com/eigenergy/caseio"
-keywords = ["power-systems", "matpower", "cli", "tui"]
+keywords = ["matpower", "cli", "tui"]
 categories = ["command-line-utilities", "science"]
 
 [[bin]]

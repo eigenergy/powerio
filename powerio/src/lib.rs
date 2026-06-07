@@ -1,11 +1,12 @@
-//! `powerio`: fast, lossless parsing and a typed data model for power-system
+//! `powerio`: fast, lossless parsing and a typed data model for power system
 //! case files.
 //!
 //! Parse a MATPOWER `.m` case, work with the typed [`Network`], and write it
 //! back out byte-for-byte — `parse → write → parse` reproduces the source,
 //! preserving every `mpc.*` field, in-matrix comments, and exact numeric
 //! tokens. The crate is dependency-light on purpose so other tools can take it
-//! as a parser without a matrix/solver stack; the matrices live in `casemat`.
+//! as a parser without a matrix/solver stack; the matrices live in
+//! `powerio-matrix`.
 
 pub mod error;
 pub mod format;
