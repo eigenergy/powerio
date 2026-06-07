@@ -9,9 +9,10 @@ mod adjacency;
 mod bdoubleprime;
 mod bprime;
 pub mod incidence;
-// The DC-OPF interior-point operators are experimental and local-only: the file
-// lives at the repo-root `src/matrix/kkt.rs` (gitignored), so the declaration
-// points there. The feature is off by default and never enabled in CI.
+// The DC-OPF interior-point operators are experimental and off by default. The
+// file lives at the repo-root `src/matrix/kkt.rs` (a holdover from before the
+// workspace split), so the declaration reaches it with `#[path]`. Built only
+// under `--features kkt`, which the default build and the main CI jobs skip.
 #[cfg(feature = "kkt")]
 #[path = "../../../src/matrix/kkt.rs"]
 pub mod kkt;
