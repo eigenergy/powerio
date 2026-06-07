@@ -61,7 +61,7 @@ pub struct OpfInstance {
     /// Bus-indexed cost/bounds/load (length n).
     pub bus: BusCosts,
     /// Generator-space provenance (length n_gen).
-    pub gen_space: GenCosts,
+    pub gen_costs: GenCosts,
     /// Thermal limit `f̄` (`RATE_A`); `0` means unlimited per MATPOWER. Length m.
     pub f_max: Vec<f64>,
     /// Generator→bus incidence, `n × n_gen`, one `1` per column.
@@ -72,7 +72,7 @@ impl OpfInstance {
     /// Number of in-service generators (the generator-space vector length).
     #[must_use]
     pub fn n_gen(&self) -> usize {
-        self.gen_space.q.len()
+        self.gen_costs.q.len()
     }
 }
 
@@ -162,7 +162,7 @@ pub fn build_opf_instance(
             pmin: pmin_bus,
             p_d,
         },
-        gen_space: GenCosts {
+        gen_costs: GenCosts {
             q: q_gen,
             c: c_gen,
             pmax: pmax_gen,

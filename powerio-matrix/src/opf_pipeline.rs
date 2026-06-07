@@ -84,10 +84,10 @@ pub fn write_dcopf_bundle(
     put_vec(&dir, "pd.mtx", &opf.bus.p_d, &mut files)?;
 
     // Generator-space provenance.
-    put_vec(&dir, "q_gen.mtx", &opf.gen_space.q, &mut files)?;
-    put_vec(&dir, "c_gen.mtx", &opf.gen_space.c, &mut files)?;
-    put_vec(&dir, "pmax_gen.mtx", &opf.gen_space.pmax, &mut files)?;
-    put_vec(&dir, "pmin_gen.mtx", &opf.gen_space.pmin, &mut files)?;
+    put_vec(&dir, "q_gen.mtx", &opf.gen_costs.q, &mut files)?;
+    put_vec(&dir, "c_gen.mtx", &opf.gen_costs.c, &mut files)?;
+    put_vec(&dir, "pmax_gen.mtx", &opf.gen_costs.pmax, &mut files)?;
+    put_vec(&dir, "pmin_gen.mtx", &opf.gen_costs.pmin, &mut files)?;
 
     let meta = DcOpfMeta {
         case_name: view.name().to_string(),

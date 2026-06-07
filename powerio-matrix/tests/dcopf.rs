@@ -225,7 +225,7 @@ fn opf_instance_shapes_and_cg() {
         assert_eq!(opf.bus.pmax.len(), n);
         assert_eq!(opf.bus.p_d.len(), n);
         assert_eq!(opf.f_max.len(), m);
-        assert_eq!(opf.gen_space.q.len(), n_gen);
+        assert_eq!(opf.gen_costs.q.len(), n_gen);
         assert_eq!(opf.c_g.rows(), n);
         assert_eq!(opf.c_g.cols(), n_gen);
         // C_g: one 1 per generator column.
@@ -680,9 +680,9 @@ fn multi_generator_bus_sums_cost() {
     let opf = opf_of(&case, Units::Native).unwrap();
     assert_eq!(opf.n_gen(), 2);
     let b0 = IndexedNetwork::new(&case).bus_index(1).unwrap();
-    assert!((opf.bus.q[b0] - (opf.gen_space.q[0] + opf.gen_space.q[1])).abs() < 1e-12);
-    assert!((opf.bus.c[b0] - (opf.gen_space.c[0] + opf.gen_space.c[1])).abs() < 1e-12);
-    assert!((opf.bus.pmax[b0] - (opf.gen_space.pmax[0] + opf.gen_space.pmax[1])).abs() < 1e-12);
+    assert!((opf.bus.q[b0] - (opf.gen_costs.q[0] + opf.gen_costs.q[1])).abs() < 1e-12);
+    assert!((opf.bus.c[b0] - (opf.gen_costs.c[0] + opf.gen_costs.c[1])).abs() < 1e-12);
+    assert!((opf.bus.pmax[b0] - (opf.gen_costs.pmax[0] + opf.gen_costs.pmax[1])).abs() < 1e-12);
 }
 
 #[test]
