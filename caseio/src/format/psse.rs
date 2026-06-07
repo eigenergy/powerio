@@ -380,7 +380,7 @@ fn read_gen(f: &[String]) -> Generator {
         pmax: num_at(f, 16),
         pmin: num_at(f, 17),
         cost: None,
-        extras: Extras::new(),
+        caps: Default::default(),
     }
 }
 

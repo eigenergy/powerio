@@ -415,7 +415,7 @@ fn gen_with_cost(bus: usize, cost: Option<GenCost>) -> Generator {
         pmin: 0.0,
         in_service: true,
         cost,
-        extras: Extras::new(),
+        caps: Default::default(),
     }
 }
 
