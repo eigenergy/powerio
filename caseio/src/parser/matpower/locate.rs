@@ -12,7 +12,9 @@ use super::tokens;
 /// semantics) given a `split_inclusive('\n')` piece.
 #[inline]
 fn trim_eol(piece: &str) -> &str {
-    piece.strip_suffix('\n').map_or(piece, |s| s.strip_suffix('\r').unwrap_or(s))
+    piece
+        .strip_suffix('\n')
+        .map_or(piece, |s| s.strip_suffix('\r').unwrap_or(s))
 }
 
 /// Locate each `mpc.<field> = <rhs>;` assignment's text, borrowing `(field, full)`
@@ -165,7 +167,10 @@ mod tests {
                    \t2\t1;\n\
                    ];\n\
                    mpc.branch = [\n\t1\t2\t0.1;\n];\n";
-        let fields: Vec<&str> = locate_assignments(src).into_iter().map(|(f, _)| f).collect();
+        let fields: Vec<&str> = locate_assignments(src)
+            .into_iter()
+            .map(|(f, _)| f)
+            .collect();
         assert_eq!(fields, vec!["baseMVA", "bus", "branch"]);
         assert_eq!(located(src, "baseMVA"), Some("mpc.baseMVA = 100;"));
         let bus = located(src, "bus").unwrap();
@@ -194,7 +199,10 @@ mod tests {
         // `bus_name` holds a `]` inside a quoted string; the locator must skip the
         // whole `{ … }` and still find the field that follows it.
         let src = "mpc.bus_name = {\n\t'Bus ]1';\n\t'Bus 2';\n};\nmpc.baseMVA = 100;\n";
-        let fields: Vec<&str> = locate_assignments(src).into_iter().map(|(f, _)| f).collect();
+        let fields: Vec<&str> = locate_assignments(src)
+            .into_iter()
+            .map(|(f, _)| f)
+            .collect();
         assert_eq!(fields, vec!["bus_name", "baseMVA"]);
         assert!(located(src, "bus_name").unwrap().contains("Bus 2"));
     }
@@ -203,7 +211,10 @@ mod tests {
     fn locate_skips_commented_out_assignment() {
         // A `%`-commented line that looks like an assignment is not located.
         let src = "% mpc.bus = [fake];\nmpc.baseMVA = 100;\n";
-        let fields: Vec<&str> = locate_assignments(src).into_iter().map(|(f, _)| f).collect();
+        let fields: Vec<&str> = locate_assignments(src)
+            .into_iter()
+            .map(|(f, _)| f)
+            .collect();
         assert_eq!(fields, vec!["baseMVA"]);
     }
 }

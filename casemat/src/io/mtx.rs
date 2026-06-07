@@ -57,7 +57,9 @@ pub fn read_mtx(path: impl AsRef<Path>) -> Result<CsMat<f64>> {
 pub fn read_vector_mtx(path: impl AsRef<Path>) -> Result<Vec<f64>> {
     let text = std::fs::read_to_string(path)?;
     let mut lines = text.lines().filter(|l| !l.starts_with('%'));
-    let header = lines.next().ok_or_else(|| Error::Mtx("empty vector file".into()))?;
+    let header = lines
+        .next()
+        .ok_or_else(|| Error::Mtx("empty vector file".into()))?;
     let len: usize = header
         .split_whitespace()
         .next()

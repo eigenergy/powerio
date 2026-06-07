@@ -3,11 +3,12 @@
 
 use std::path::PathBuf;
 
+use casemat::IndexedNetwork;
 use casemat::matrix::{
-    build_bdoubleprime, build_bprime, build_lacpf, build_ybus, sddm_check, BuildOptions, MatrixStats,
+    BuildOptions, MatrixStats, build_bdoubleprime, build_bprime, build_lacpf, build_ybus,
+    sddm_check,
 };
 use casemat::parse_matpower_file;
-use casemat::IndexedNetwork;
 
 fn fixture(name: &str) -> PathBuf {
     let mut p = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
@@ -108,7 +109,11 @@ fn pipeline_writes_expected_files_for_case9() {
     let tmp = tempdir();
     let net = parse_matpower_file(fixture("case9.m")).unwrap();
     let pipeline = Pipeline {
-        matrices: vec![MatrixKind::BPrime, MatrixKind::BDoublePrime, MatrixKind::YbusB],
+        matrices: vec![
+            MatrixKind::BPrime,
+            MatrixKind::BDoublePrime,
+            MatrixKind::YbusB,
+        ],
         options: BuildOptions::default(),
         rhs: RhsKind::Random,
         rng_seed: 42,

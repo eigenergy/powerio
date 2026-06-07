@@ -19,11 +19,11 @@
 
 use sprs::CsMat;
 
-use crate::indexed::IndexedNetwork;
 use crate::Result;
+use crate::indexed::IndexedNetwork;
 
-use super::ybus::build_ybus;
 use super::BuildOptions;
+use super::ybus::build_ybus;
 
 pub fn build_lacpf(case: &IndexedNetwork, opts: &BuildOptions) -> Result<CsMat<f64>> {
     let parts = build_ybus(case, opts)?;

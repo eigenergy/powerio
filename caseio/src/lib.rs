@@ -15,9 +15,9 @@ pub mod parser;
 
 pub use error::{Error, Result};
 pub use format::{
-    parse_powermodels_json, parse_powerworld, parse_psse, read_path, target_format_from_name,
-    write_as, write_egret_json, write_powermodels_json, write_powerworld, write_psse, Conversion,
-    TargetFormat,
+    Conversion, TargetFormat, parse_powermodels_json, parse_powerworld, parse_psse, read_path,
+    target_format_from_name, write_as, write_egret_json, write_powermodels_json, write_powerworld,
+    write_psse,
 };
 pub use indexed::{ConnectivityReport, IndexCore, IndexedNetwork};
 pub use network::{

@@ -1,7 +1,7 @@
 [package]
 name = "caseio-capi"
 version = "0.1.0"
-edition = "2021"
+edition = "2024"
 rust-version = "1.86"
 description = "C ABI for caseio: parse any power-system case format, query it, convert losslessly, and extract the numeric tables. The polyglot substrate consumed by Julia (ccall), C, and C++."
 license = "MIT OR Apache-2.0"

@@ -11,8 +11,8 @@ use std::time::Instant;
 
 use sprs::CsMat;
 
-use crate::network::Network;
 use crate::matrix::{MatrixStats, sddm_check};
+use crate::network::Network;
 use crate::pipeline::{MatrixKind, RhsKind};
 use crate::synth::{SynthSpec, Topology};
 
@@ -94,9 +94,7 @@ impl MatrixKindOrd {
 pub enum BatchProgress {
     Pending,
     Running(f64),
-    Done {
-        files: usize,
-    },
+    Done { files: usize },
     Failed(String),
 }
 

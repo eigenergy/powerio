@@ -2,7 +2,7 @@ use approx::assert_relative_eq;
 
 use crate::indexed::IndexedNetwork;
 use crate::matrix::{
-    build_bdoubleprime, build_bprime, build_lacpf, build_ybus, BuildOptions, MatrixStats, Scheme,
+    BuildOptions, MatrixStats, Scheme, build_bdoubleprime, build_bprime, build_lacpf, build_ybus,
 };
 use crate::network::{Branch, Bus, BusType, Extras, Network, Shunt};
 
@@ -45,8 +45,16 @@ fn three_bus() -> Network {
     Network::in_memory(
         "tiny",
         100.0,
-        vec![bus(1, BusType::Ref), bus(2, BusType::Pq), bus(3, BusType::Pq)],
-        vec![br(1, 2, 0.0, 0.1, 0.0), br(1, 3, 0.0, 0.2, 0.0), br(2, 3, 0.0, 0.25, 0.0)],
+        vec![
+            bus(1, BusType::Ref),
+            bus(2, BusType::Pq),
+            bus(3, BusType::Pq),
+        ],
+        vec![
+            br(1, 2, 0.0, 0.1, 0.0),
+            br(1, 3, 0.0, 0.2, 0.0),
+            br(2, 3, 0.0, 0.25, 0.0),
+        ],
     )
 }
 
@@ -133,9 +141,27 @@ fn bdoubleprime_with_shunts_is_strictly_dominant() {
     // Add capacitive shunts to break the singularity (negative bs → positive
     // contribution to −Im(Y_bus)).
     net.shunts = vec![
-        Shunt { bus: 1, g: 0.0, b: -10.0, in_service: true, extras: Extras::new() },
-        Shunt { bus: 2, g: 0.0, b: -10.0, in_service: true, extras: Extras::new() },
-        Shunt { bus: 3, g: 0.0, b: -10.0, in_service: true, extras: Extras::new() },
+        Shunt {
+            bus: 1,
+            g: 0.0,
+            b: -10.0,
+            in_service: true,
+            extras: Extras::new(),
+        },
+        Shunt {
+            bus: 2,
+            g: 0.0,
+            b: -10.0,
+            in_service: true,
+            extras: Extras::new(),
+        },
+        Shunt {
+            bus: 3,
+            g: 0.0,
+            b: -10.0,
+            in_service: true,
+            extras: Extras::new(),
+        },
     ];
     let view = IndexedNetwork::new(&net);
     let bpp = build_bdoubleprime(&view, &BuildOptions::default()).unwrap();

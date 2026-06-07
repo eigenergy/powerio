@@ -6,8 +6,8 @@
 //! demand and shunts onto the bus row; the hub keeps them first-class).
 
 use crate::network::{
-    Branch, Bus, BusType, Extras, GenCaps, GenCost, Generator, Hvdc, Load, Shunt, Storage,
-    GEN_EXTRA_KEYS,
+    Branch, Bus, BusType, Extras, GEN_EXTRA_KEYS, GenCaps, GenCost, Generator, Hvdc, Load, Shunt,
+    Storage,
 };
 use crate::{Error, Result};
 
@@ -127,7 +127,12 @@ mod gencost_col {
 /// error; `i` is the row's 0-based position.
 fn require(field: &'static str, row: &[f64], i: usize, expected: usize) -> Result<()> {
     if row.len() < expected {
-        return Err(Error::ShortRow { field, row: i, expected, got: row.len() });
+        return Err(Error::ShortRow {
+            field,
+            row: i,
+            expected,
+            got: row.len(),
+        });
     }
     Ok(())
 }
@@ -155,11 +160,21 @@ pub(super) fn bus_row(row: &[f64], i: usize) -> Result<(Bus, Option<Load>, Optio
         extras: Extras::new(),
     };
     let (pd, qd) = (row[bus_col::PD], row[bus_col::QD]);
-    let load = (pd != 0.0 || qd != 0.0)
-        .then(|| Load { bus: id, p: pd, q: qd, in_service, extras: Extras::new() });
+    let load = (pd != 0.0 || qd != 0.0).then(|| Load {
+        bus: id,
+        p: pd,
+        q: qd,
+        in_service,
+        extras: Extras::new(),
+    });
     let (gs, bs) = (row[bus_col::GS], row[bus_col::BS]);
-    let shunt = (gs != 0.0 || bs != 0.0)
-        .then(|| Shunt { bus: id, g: gs, b: bs, in_service, extras: Extras::new() });
+    let shunt = (gs != 0.0 || bs != 0.0).then(|| Shunt {
+        bus: id,
+        g: gs,
+        b: bs,
+        in_service,
+        extras: Extras::new(),
+    });
     Ok((bus, load, shunt))
 }
 

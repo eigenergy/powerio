@@ -58,8 +58,12 @@ impl IndexCore {
     #[must_use]
     pub fn build(net: &Network) -> Self {
         let n = net.buses.len();
-        let bus_id_to_idx: HashMap<usize, usize> =
-            net.buses.iter().enumerate().map(|(idx, b)| (b.id, idx)).collect();
+        let bus_id_to_idx: HashMap<usize, usize> = net
+            .buses
+            .iter()
+            .enumerate()
+            .map(|(idx, b)| (b.id, idx))
+            .collect();
         debug_assert_eq!(
             bus_id_to_idx.len(),
             n,
@@ -81,7 +85,13 @@ impl IndexCore {
                 bs[idx] += s.b;
             }
         }
-        Self { bus_id_to_idx, pd, qd, gs, bs }
+        Self {
+            bus_id_to_idx,
+            pd,
+            qd,
+            gs,
+            bs,
+        }
     }
 }
 
@@ -100,14 +110,20 @@ impl<'n> IndexedNetwork<'n> {
     /// [`with_core`](Self::with_core) so the derivation isn't rebuilt per call.
     #[must_use]
     pub fn new(net: &'n Network) -> Self {
-        Self { net, core: Cow::Owned(IndexCore::build(net)) }
+        Self {
+            net,
+            core: Cow::Owned(IndexCore::build(net)),
+        }
     }
 
     /// Pair `net` with an already-built [`IndexCore`] — no allocation. The core
     /// must have been built from this same `net`.
     #[must_use]
     pub fn with_core(net: &'n Network, core: &'n IndexCore) -> Self {
-        Self { net, core: Cow::Borrowed(core) }
+        Self {
+            net,
+            core: Cow::Borrowed(core),
+        }
     }
 
     /// The underlying network.
@@ -186,12 +202,20 @@ impl<'n> IndexedNetwork<'n> {
 
     /// In-service branches with their index into [`branches`](Self::branches).
     pub fn in_service_branches(&self) -> impl Iterator<Item = (usize, &Branch)> {
-        self.net.branches.iter().enumerate().filter(|(_, b)| b.in_service)
+        self.net
+            .branches
+            .iter()
+            .enumerate()
+            .filter(|(_, b)| b.in_service)
     }
 
     /// In-service generators with their index into [`generators`](Self::generators).
     pub fn in_service_gens(&self) -> impl Iterator<Item = (usize, &Generator)> {
-        self.net.generators.iter().enumerate().filter(|(_, g)| g.in_service)
+        self.net
+            .generators
+            .iter()
+            .enumerate()
+            .filter(|(_, g)| g.in_service)
     }
 
     /// Dense index of the single reference (slack) bus. Errors unless exactly
@@ -295,12 +319,40 @@ mod tests {
     }
 
     fn agg_net() -> Network {
-        let mut net =
-            Network::in_memory("agg", 100.0, vec![bus(1, BusType::Ref), bus(2, BusType::Pq)], Vec::new());
-        net.loads.push(Load { bus: 1, p: 10.0, q: 5.0, in_service: true, extras: Extras::new() });
-        net.loads.push(Load { bus: 1, p: 3.0, q: 1.0, in_service: true, extras: Extras::new() });
-        net.shunts.push(Shunt { bus: 1, g: 0.2, b: 0.4, in_service: true, extras: Extras::new() });
-        net.shunts.push(Shunt { bus: 1, g: 0.1, b: 0.3, in_service: true, extras: Extras::new() });
+        let mut net = Network::in_memory(
+            "agg",
+            100.0,
+            vec![bus(1, BusType::Ref), bus(2, BusType::Pq)],
+            Vec::new(),
+        );
+        net.loads.push(Load {
+            bus: 1,
+            p: 10.0,
+            q: 5.0,
+            in_service: true,
+            extras: Extras::new(),
+        });
+        net.loads.push(Load {
+            bus: 1,
+            p: 3.0,
+            q: 1.0,
+            in_service: true,
+            extras: Extras::new(),
+        });
+        net.shunts.push(Shunt {
+            bus: 1,
+            g: 0.2,
+            b: 0.4,
+            in_service: true,
+            extras: Extras::new(),
+        });
+        net.shunts.push(Shunt {
+            bus: 1,
+            g: 0.1,
+            b: 0.3,
+            in_service: true,
+            extras: Extras::new(),
+        });
         net
     }
 

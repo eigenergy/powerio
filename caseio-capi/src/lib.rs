@@ -12,8 +12,8 @@
 
 #![allow(clippy::missing_safety_doc)]
 
-use std::ffi::{c_char, CStr, CString};
-use std::panic::{catch_unwind, AssertUnwindSafe};
+use std::ffi::{CStr, CString, c_char};
+use std::panic::{AssertUnwindSafe, catch_unwind};
 
 use caseio::{IndexCore, IndexedNetwork, Network};
 
@@ -28,20 +28,24 @@ pub struct CioCase {
 /// Copy `msg` (truncated to fit) into a caller `char[len]` buffer, always
 /// NUL-terminated. Shared by the error and warning outputs.
 unsafe fn copy_to_buf(buf: *mut c_char, len: usize, msg: &str) {
-    if buf.is_null() || len == 0 {
-        return;
+    unsafe {
+        if buf.is_null() || len == 0 {
+            return;
+        }
+        let bytes = msg.as_bytes();
+        let n = bytes.len().min(len - 1);
+        std::ptr::copy_nonoverlapping(bytes.as_ptr().cast::<c_char>(), buf, n);
+        *buf.add(n) = 0;
     }
-    let bytes = msg.as_bytes();
-    let n = bytes.len().min(len - 1);
-    std::ptr::copy_nonoverlapping(bytes.as_ptr().cast::<c_char>(), buf, n);
-    *buf.add(n) = 0;
 }
 
 unsafe fn cstr<'a>(p: *const c_char) -> Option<&'a str> {
-    if p.is_null() {
-        return None;
+    unsafe {
+        if p.is_null() {
+            return None;
+        }
+        CStr::from_ptr(p).to_str().ok()
     }
-    CStr::from_ptr(p).to_str().ok()
 }
 
 fn into_cstring(s: String) -> *mut c_char {
@@ -61,111 +65,122 @@ unsafe fn guard<R>(fallback: R, f: impl FnOnce() -> R) -> R {
 
 /// Parse `path` (format from extension, or `from` if non-NULL) into a case
 /// handle. Returns `NULL` on error and writes the message into `errbuf`.
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn cio_parse(
     path: *const c_char,
     from: *const c_char,
     errbuf: *mut c_char,
     errlen: usize,
 ) -> *mut CioCase {
-    let r = catch_unwind(AssertUnwindSafe(|| {
-        let path = cstr(path).ok_or_else(|| "path is NULL or not UTF-8".to_string())?;
-        let from = if from.is_null() { None } else { cstr(from) };
-        caseio::read_path(std::path::Path::new(path), from)
-            .map_err(|e| e.to_string())
-            .map(|net| {
-                let core = IndexCore::build(&net);
-                Box::into_raw(Box::new(CioCase { net, core }))
-            })
-    }));
-    match r {
-        Ok(Ok(ptr)) => ptr,
-        Ok(Err(msg)) => {
-            copy_to_buf(errbuf, errlen, &msg);
-            std::ptr::null_mut()
-        }
-        Err(_) => {
-            copy_to_buf(errbuf, errlen, "panic while parsing");
-            std::ptr::null_mut()
+    unsafe {
+        let r = catch_unwind(AssertUnwindSafe(|| {
+            let path = cstr(path).ok_or_else(|| "path is NULL or not UTF-8".to_string())?;
+            let from = if from.is_null() { None } else { cstr(from) };
+            caseio::read_path(std::path::Path::new(path), from)
+                .map_err(|e| e.to_string())
+                .map(|net| {
+                    let core = IndexCore::build(&net);
+                    Box::into_raw(Box::new(CioCase { net, core }))
+                })
+        }));
+        match r {
+            Ok(Ok(ptr)) => ptr,
+            Ok(Err(msg)) => {
+                copy_to_buf(errbuf, errlen, &msg);
+                std::ptr::null_mut()
+            }
+            Err(_) => {
+                copy_to_buf(errbuf, errlen, "panic while parsing");
+                std::ptr::null_mut()
+            }
         }
     }
 }
 
 /// Free a case handle from [`cio_parse`].
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn cio_case_free(case: *mut CioCase) {
-    if !case.is_null() {
-        drop(Box::from_raw(case));
+    unsafe {
+        if !case.is_null() {
+            drop(Box::from_raw(case));
+        }
     }
 }
 
 unsafe fn case_ref<'a>(case: *const CioCase) -> Option<&'a CioCase> {
-    case.as_ref()
+    unsafe { case.as_ref() }
 }
 
 /// View `case` through its cached [`IndexCore`] — no per-call rebuild.
 unsafe fn view<'a>(case: *const CioCase) -> Option<IndexedNetwork<'a>> {
-    case.as_ref().map(|c| IndexedNetwork::with_core(&c.net, &c.core))
+    unsafe {
+        case.as_ref()
+            .map(|c| IndexedNetwork::with_core(&c.net, &c.core))
+    }
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn cio_n_buses(case: *const CioCase) -> usize {
-    guard(0, || case_ref(case).map_or(0, |c| c.net.buses.len()))
+    unsafe { guard(0, || case_ref(case).map_or(0, |c| c.net.buses.len())) }
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn cio_n_branches(case: *const CioCase) -> usize {
-    guard(0, || case_ref(case).map_or(0, |c| c.net.branches.len()))
+    unsafe { guard(0, || case_ref(case).map_or(0, |c| c.net.branches.len())) }
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn cio_n_gens(case: *const CioCase) -> usize {
-    guard(0, || case_ref(case).map_or(0, |c| c.net.generators.len()))
+    unsafe { guard(0, || case_ref(case).map_or(0, |c| c.net.generators.len())) }
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn cio_base_mva(case: *const CioCase) -> f64 {
-    guard(0.0, || case_ref(case).map_or(0.0, |c| c.net.base_mva))
+    unsafe { guard(0.0, || case_ref(case).map_or(0.0, |c| c.net.base_mva)) }
 }
 
 /// Dense `[0, n)` index of the single reference bus, or `-1` if not exactly one
 /// (also `-1` if the index is too large for `isize`).
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn cio_reference_bus(case: *const CioCase) -> isize {
-    guard(-1, || match view(case) {
-        Some(v) => v
-            .reference_bus_index()
-            .map_or(-1, |i| isize::try_from(i).unwrap_or(-1)),
-        None => -1,
-    })
+    unsafe {
+        guard(-1, || match view(case) {
+            Some(v) => v
+                .reference_bus_index()
+                .map_or(-1, |i| isize::try_from(i).unwrap_or(-1)),
+            None => -1,
+        })
+    }
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn cio_n_components(case: *const CioCase) -> usize {
-    guard(0, || view(case).map_or(0, |v| v.n_connected_components()))
+    unsafe { guard(0, || view(case).map_or(0, |v| v.n_connected_components())) }
 }
 
 /// `1` if the in-service topology is a forest, else `0`.
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn cio_is_radial(case: *const CioCase) -> i32 {
-    guard(0, || view(case).map_or(0, |v| i32::from(v.is_radial())))
+    unsafe { guard(0, || view(case).map_or(0, |v| i32::from(v.is_radial()))) }
 }
 
 /// Serialize back to MATPOWER `.m` (byte-exact echo when parsed from MATPOWER).
 /// Returns an owned C string; free with [`cio_string_free`].
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn cio_write_matpower(case: *const CioCase) -> *mut c_char {
-    guard(std::ptr::null_mut(), || match case_ref(case) {
-        Some(c) => into_cstring(caseio::write_matpower(&c.net)),
-        None => std::ptr::null_mut(),
-    })
+    unsafe {
+        guard(std::ptr::null_mut(), || match case_ref(case) {
+            Some(c) => into_cstring(caseio::write_matpower(&c.net)),
+            None => std::ptr::null_mut(),
+        })
+    }
 }
 
 /// Convert `path` to format `to` (optionally forcing the source via `from`).
 /// Returns the converted text as an owned C string (free with
 /// [`cio_string_free`]), `NULL` on error. Fidelity warnings, if any, are written
 /// `\n`-joined into `warnbuf`.
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn cio_convert(
     path: *const c_char,
     to: *const c_char,
@@ -175,62 +190,77 @@ pub unsafe extern "C" fn cio_convert(
     errbuf: *mut c_char,
     errlen: usize,
 ) -> *mut c_char {
-    let r = catch_unwind(AssertUnwindSafe(|| {
-        let path = cstr(path).ok_or_else(|| "path is NULL or not UTF-8".to_string())?;
-        let to = cstr(to).ok_or_else(|| "to is NULL or not UTF-8".to_string())?;
-        let from = if from.is_null() { None } else { cstr(from) };
-        let target = caseio::target_format_from_name(to)
-            .ok_or_else(|| format!("unknown target format: {to}"))?;
-        let net = caseio::read_path(std::path::Path::new(path), from).map_err(|e| e.to_string())?;
-        let conv = caseio::write_as(&net, target);
-        Ok::<_, String>((conv.text, conv.warnings))
-    }));
-    match r {
-        Ok(Ok((text, warnings))) => {
-            copy_to_buf(warnbuf, warnlen, &warnings.join("\n"));
-            into_cstring(text)
-        }
-        Ok(Err(msg)) => {
-            copy_to_buf(errbuf, errlen, &msg);
-            std::ptr::null_mut()
-        }
-        Err(_) => {
-            copy_to_buf(errbuf, errlen, "panic while converting");
-            std::ptr::null_mut()
+    unsafe {
+        let r = catch_unwind(AssertUnwindSafe(|| {
+            let path = cstr(path).ok_or_else(|| "path is NULL or not UTF-8".to_string())?;
+            let to = cstr(to).ok_or_else(|| "to is NULL or not UTF-8".to_string())?;
+            let from = if from.is_null() { None } else { cstr(from) };
+            let target = caseio::target_format_from_name(to)
+                .ok_or_else(|| format!("unknown target format: {to}"))?;
+            let net =
+                caseio::read_path(std::path::Path::new(path), from).map_err(|e| e.to_string())?;
+            let conv = caseio::write_as(&net, target);
+            Ok::<_, String>((conv.text, conv.warnings))
+        }));
+        match r {
+            Ok(Ok((text, warnings))) => {
+                copy_to_buf(warnbuf, warnlen, &warnings.join("\n"));
+                into_cstring(text)
+            }
+            Ok(Err(msg)) => {
+                copy_to_buf(errbuf, errlen, &msg);
+                std::ptr::null_mut()
+            }
+            Err(_) => {
+                copy_to_buf(errbuf, errlen, "panic while converting");
+                std::ptr::null_mut()
+            }
         }
     }
 }
 
 /// Free a string returned by [`cio_write_matpower`] or [`cio_convert`].
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn cio_string_free(s: *mut c_char) {
-    if !s.is_null() {
-        drop(CString::from_raw(s));
+    unsafe {
+        if !s.is_null() {
+            drop(CString::from_raw(s));
+        }
     }
 }
 
 unsafe fn fill<T: Copy>(ptr: *mut T, vals: impl Iterator<Item = T>) {
-    if ptr.is_null() {
-        return;
-    }
-    for (i, v) in vals.enumerate() {
-        *ptr.add(i) = v;
+    unsafe {
+        if ptr.is_null() {
+            return;
+        }
+        for (i, v) in vals.enumerate() {
+            *ptr.add(i) = v;
+        }
     }
 }
 
 /// Fill `out` (length `cio_n_buses`) with the 1-based bus ids in dense order.
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn cio_bus_ids(case: *const CioCase, out: *mut i64) {
-    guard((), || {
-        if let Some(c) = case_ref(case) {
-            fill(out, c.net.buses.iter().map(|b| i64::try_from(b.id).unwrap_or(-1)));
-        }
-    })
+    unsafe {
+        guard((), || {
+            if let Some(c) = case_ref(case) {
+                fill(
+                    out,
+                    c.net
+                        .buses
+                        .iter()
+                        .map(|b| i64::try_from(b.id).unwrap_or(-1)),
+                );
+            }
+        })
+    }
 }
 
 /// Fill the branch tables (each length `cio_n_branches`, dense bus indices for
 /// `from`/`to` resolved against the case). Any pointer may be `NULL` to skip.
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn cio_branches(
     case: *const CioCase,
     from: *mut i64,
@@ -242,25 +272,33 @@ pub unsafe extern "C" fn cio_branches(
     shift: *mut f64,
     in_service: *mut u8,
 ) {
-    guard((), || {
-        let Some(c) = case_ref(case) else { return };
-        let view = IndexedNetwork::with_core(&c.net, &c.core);
-        let idx = |id: usize| view.bus_index(id).map_or(-1, |i| i64::try_from(i).unwrap_or(-1));
-        let net = &c.net;
-        fill(from, net.branches.iter().map(|br| idx(br.from)));
-        fill(to, net.branches.iter().map(|br| idx(br.to)));
-        fill(r, net.branches.iter().map(|br| br.r));
-        fill(x, net.branches.iter().map(|br| br.x));
-        fill(b, net.branches.iter().map(|br| br.b));
-        fill(tap, net.branches.iter().map(|br| br.tap));
-        fill(shift, net.branches.iter().map(|br| br.shift));
-        fill(in_service, net.branches.iter().map(|br| u8::from(br.in_service)));
-    })
+    unsafe {
+        guard((), || {
+            let Some(c) = case_ref(case) else { return };
+            let view = IndexedNetwork::with_core(&c.net, &c.core);
+            let idx = |id: usize| {
+                view.bus_index(id)
+                    .map_or(-1, |i| i64::try_from(i).unwrap_or(-1))
+            };
+            let net = &c.net;
+            fill(from, net.branches.iter().map(|br| idx(br.from)));
+            fill(to, net.branches.iter().map(|br| idx(br.to)));
+            fill(r, net.branches.iter().map(|br| br.r));
+            fill(x, net.branches.iter().map(|br| br.x));
+            fill(b, net.branches.iter().map(|br| br.b));
+            fill(tap, net.branches.iter().map(|br| br.tap));
+            fill(shift, net.branches.iter().map(|br| br.shift));
+            fill(
+                in_service,
+                net.branches.iter().map(|br| u8::from(br.in_service)),
+            );
+        })
+    }
 }
 
 /// Fill the generator tables (each length `cio_n_gens`; `bus` is a dense index).
 /// Any pointer may be `NULL` to skip.
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn cio_gens(
     case: *const CioCase,
     bus: *mut i64,
@@ -269,40 +307,52 @@ pub unsafe extern "C" fn cio_gens(
     pmin: *mut f64,
     in_service: *mut u8,
 ) {
-    guard((), || {
-        let Some(c) = case_ref(case) else { return };
-        let view = IndexedNetwork::with_core(&c.net, &c.core);
-        let idx = |id: usize| view.bus_index(id).map_or(-1, |i| i64::try_from(i).unwrap_or(-1));
-        let net = &c.net;
-        fill(bus, net.generators.iter().map(|g| idx(g.bus)));
-        fill(pg, net.generators.iter().map(|g| g.pg));
-        fill(pmax, net.generators.iter().map(|g| g.pmax));
-        fill(pmin, net.generators.iter().map(|g| g.pmin));
-        fill(in_service, net.generators.iter().map(|g| u8::from(g.in_service)));
-    })
+    unsafe {
+        guard((), || {
+            let Some(c) = case_ref(case) else { return };
+            let view = IndexedNetwork::with_core(&c.net, &c.core);
+            let idx = |id: usize| {
+                view.bus_index(id)
+                    .map_or(-1, |i| i64::try_from(i).unwrap_or(-1))
+            };
+            let net = &c.net;
+            fill(bus, net.generators.iter().map(|g| idx(g.bus)));
+            fill(pg, net.generators.iter().map(|g| g.pg));
+            fill(pmax, net.generators.iter().map(|g| g.pmax));
+            fill(pmin, net.generators.iter().map(|g| g.pmin));
+            fill(
+                in_service,
+                net.generators.iter().map(|g| u8::from(g.in_service)),
+            );
+        })
+    }
 }
 
 /// Fill nodal aggregates (each length `cio_n_buses`, dense order): active and
 /// reactive demand summed per bus. Any pointer may be `NULL`.
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn cio_nodal_demand(case: *const CioCase, pd: *mut f64, qd: *mut f64) {
-    guard((), || {
-        if let Some(v) = view(case) {
-            fill(pd, v.pd().iter().copied());
-            fill(qd, v.qd().iter().copied());
-        }
-    })
+    unsafe {
+        guard((), || {
+            if let Some(v) = view(case) {
+                fill(pd, v.pd().iter().copied());
+                fill(qd, v.qd().iter().copied());
+            }
+        })
+    }
 }
 
 /// Fill nodal shunt aggregates (each length `cio_n_buses`, dense order).
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn cio_nodal_shunt(case: *const CioCase, gs: *mut f64, bs: *mut f64) {
-    guard((), || {
-        if let Some(v) = view(case) {
-            fill(gs, v.gs().iter().copied());
-            fill(bs, v.bs().iter().copied());
-        }
-    })
+    unsafe {
+        guard((), || {
+            if let Some(v) = view(case) {
+                fill(gs, v.gs().iter().copied());
+                fill(bs, v.bs().iter().copied());
+            }
+        })
+    }
 }
 
 #[cfg(test)]
@@ -529,7 +579,10 @@ mod tests {
             );
             assert!(!s.is_null());
             let w = CStr::from_ptr(warn.as_ptr()).to_str().unwrap();
-            assert!(w.contains("dcline"), "expected an HVDC/dcline warning, got {w:?}");
+            assert!(
+                w.contains("dcline"),
+                "expected an HVDC/dcline warning, got {w:?}"
+            );
             cio_string_free(s);
         }
     }
@@ -542,7 +595,10 @@ mod tests {
         let mut err = [0x7f as c_char; 16]; // prefill nonzero so the NUL is visible
         let c = unsafe { cio_parse(path.as_ptr(), std::ptr::null(), err.as_mut_ptr(), err.len()) };
         assert!(c.is_null());
-        let nul = err.iter().position(|&b| b == 0).expect("buffer must be NUL-terminated");
+        let nul = err
+            .iter()
+            .position(|&b| b == 0)
+            .expect("buffer must be NUL-terminated");
         assert!(nul <= 15);
     }
 }

@@ -10,13 +10,13 @@ use std::path::{Path, PathBuf};
 use serde::Serialize;
 use sprs::CsMat;
 
+use crate::Result;
 use crate::indexed::IndexedNetwork;
-use crate::network::Network;
 use crate::io::mtx::{write_mtx, write_vector_mtx};
 use crate::matrix::incidence::{DcConvention, build_flow_map, build_incidence};
 use crate::matrix::laplacian::{build_weighted_laplacian, ground_at, unit_vector};
 use crate::matrix::opf::{Units, build_opf_instance};
-use crate::Result;
+use crate::network::Network;
 
 #[derive(Debug, Clone, Default)]
 pub struct DcOpfOptions {
@@ -84,10 +84,10 @@ pub fn write_dcopf_bundle(
     put_vec(&dir, "pd.mtx", &opf.bus.p_d, &mut files)?;
 
     // Generator-space provenance.
-    put_vec(&dir, "q_gen.mtx", &opf.gen.q, &mut files)?;
-    put_vec(&dir, "c_gen.mtx", &opf.gen.c, &mut files)?;
-    put_vec(&dir, "pmax_gen.mtx", &opf.gen.pmax, &mut files)?;
-    put_vec(&dir, "pmin_gen.mtx", &opf.gen.pmin, &mut files)?;
+    put_vec(&dir, "q_gen.mtx", &opf.gen_space.q, &mut files)?;
+    put_vec(&dir, "c_gen.mtx", &opf.gen_space.c, &mut files)?;
+    put_vec(&dir, "pmax_gen.mtx", &opf.gen_space.pmax, &mut files)?;
+    put_vec(&dir, "pmin_gen.mtx", &opf.gen_space.pmin, &mut files)?;
 
     let meta = DcOpfMeta {
         case_name: view.name().to_string(),

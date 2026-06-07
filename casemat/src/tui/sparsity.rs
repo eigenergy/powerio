@@ -106,14 +106,12 @@ impl Widget for Sparsity<'_> {
 
 /// Two line legend strip for the bottom of the sparsity preview pane.
 pub fn legend_lines() -> Vec<Line<'static>> {
-    vec![
-        Line::from(vec![
-            Span::styled("·░▒▓█", Style::default().fg(Color::LightBlue)),
-            Span::raw(" negative   "),
-            Span::styled("·░▒▓█", Style::default().fg(Color::LightRed)),
-            Span::raw(" positive   "),
-            Span::styled("·░▒▓█", Style::default().fg(T.accent)),
-            Span::raw(" diagonal"),
-        ]),
-    ]
+    vec![Line::from(vec![
+        Span::styled("·░▒▓█", Style::default().fg(Color::LightBlue)),
+        Span::raw(" negative   "),
+        Span::styled("·░▒▓█", Style::default().fg(Color::LightRed)),
+        Span::raw(" positive   "),
+        Span::styled("·░▒▓█", Style::default().fg(T.accent)),
+        Span::raw(" diagonal"),
+    ])]
 }

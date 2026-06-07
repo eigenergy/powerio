@@ -45,12 +45,22 @@ pub fn write_psse(net: &Network) -> Conversion {
             }
         } else {
             nonfinite = true;
-            let sentinel = if x > 0.0 { 1.0e10 } else if x < 0.0 { -1.0e10 } else { 0.0 };
+            let sentinel = if x > 0.0 {
+                1.0e10
+            } else if x < 0.0 {
+                -1.0e10
+            } else {
+                0.0
+            };
             format!("{sentinel}.0")
         }
     };
 
-    let _ = writeln!(s, "0, {}, {REV}, 0, 0, 60.00   / caseio export: {}", net.base_mva, net.name);
+    let _ = writeln!(
+        s,
+        "0, {}, {REV}, 0, 0, 60.00   / caseio export: {}",
+        net.base_mva, net.name
+    );
     let _ = writeln!(s, "{}", net.name);
     let _ = writeln!(s);
 
@@ -62,8 +72,18 @@ pub fn write_psse(net: &Network) -> Conversion {
         let _ = writeln!(
             s,
             "{}, '{:<12}', {}, {}, {}, {}, 1, {}, {}, {}, {}, {}, {}",
-            b.id, name, num(b.base_kv), ide(b.kind), b.area, b.zone,
-            num(b.vm), num(b.va), num(b.vmax), num(b.vmin), num(b.vmax), num(b.vmin)
+            b.id,
+            name,
+            num(b.base_kv),
+            ide(b.kind),
+            b.area,
+            b.zone,
+            num(b.vm),
+            num(b.va),
+            num(b.vmax),
+            num(b.vmin),
+            num(b.vmax),
+            num(b.vmin)
         );
     }
     let _ = writeln!(s, "0 / END OF BUS DATA, BEGIN LOAD DATA");
@@ -73,7 +93,12 @@ pub fn write_psse(net: &Network) -> Conversion {
         let _ = writeln!(
             s,
             "{}, '1', {}, {}, {}, {}, {}, 0, 0, 0, 0, 1, 1, 0",
-            l.bus, i32::from(l.in_service), area, zone, num(l.p), num(l.q)
+            l.bus,
+            i32::from(l.in_service),
+            area,
+            zone,
+            num(l.p),
+            num(l.q)
         );
     }
     let _ = writeln!(s, "0 / END OF LOAD DATA, BEGIN FIXED SHUNT DATA");
@@ -82,7 +107,10 @@ pub fn write_psse(net: &Network) -> Conversion {
         let _ = writeln!(
             s,
             "{}, '1', {}, {}, {}",
-            sh.bus, i32::from(sh.in_service), num(sh.g), num(sh.b)
+            sh.bus,
+            i32::from(sh.in_service),
+            num(sh.g),
+            num(sh.b)
         );
     }
     let _ = writeln!(s, "0 / END OF FIXED SHUNT DATA, BEGIN GENERATOR DATA");
@@ -91,8 +119,16 @@ pub fn write_psse(net: &Network) -> Conversion {
         let _ = writeln!(
             s,
             "{}, '1', {}, {}, {}, {}, {}, 0, {}, 0, 1, 0, 0, 1, {}, 100, {}, {}, 1, 1",
-            g.bus, num(g.pg), num(g.qg), num(g.qmax), num(g.qmin), num(g.vg),
-            num(g.mbase), i32::from(g.in_service), num(g.pmax), num(g.pmin)
+            g.bus,
+            num(g.pg),
+            num(g.qg),
+            num(g.qmax),
+            num(g.qmin),
+            num(g.vg),
+            num(g.mbase),
+            i32::from(g.in_service),
+            num(g.pmax),
+            num(g.pmin)
         );
     }
     let _ = writeln!(s, "0 / END OF GENERATOR DATA, BEGIN BRANCH DATA");
@@ -102,8 +138,15 @@ pub fn write_psse(net: &Network) -> Conversion {
         let _ = writeln!(
             s,
             "{}, {}, '1', {}, {}, {}, {}, {}, {}, 0, 0, 0, 0, {}, 1, 0, 1, 1",
-            br.from, br.to, num(br.r), num(br.x), num(br.b),
-            num(br.rate_a), num(br.rate_b), num(br.rate_c), i32::from(br.in_service)
+            br.from,
+            br.to,
+            num(br.r),
+            num(br.x),
+            num(br.b),
+            num(br.rate_a),
+            num(br.rate_b),
+            num(br.rate_c),
+            i32::from(br.in_service)
         );
     }
     let _ = writeln!(s, "0 / END OF BRANCH DATA, BEGIN TRANSFORMER DATA");
@@ -116,13 +159,19 @@ pub fn write_psse(net: &Network) -> Conversion {
         let _ = writeln!(
             s,
             "{}, {}, 0, '1', 1, 1, 1, 0, 0, 2, '            ', {}, 1, 1, 0, 1, 0, 1, 0, 1, '            '",
-            br.from, br.to, i32::from(br.in_service)
+            br.from,
+            br.to,
+            i32::from(br.in_service)
         );
         let _ = writeln!(s, "{}, {}, {}", num(br.r), num(br.x), net.base_mva);
         let _ = writeln!(
             s,
             "{}, 0, {}, {}, {}, {}, 0, 0, 1.1, 0.9, 1.1, 0.9, 33, 0, 0, 0, 0",
-            num(br.effective_tap()), num(br.shift), num(br.rate_a), num(br.rate_b), num(br.rate_c)
+            num(br.effective_tap()),
+            num(br.shift),
+            num(br.rate_a),
+            num(br.rate_b),
+            num(br.rate_c)
         );
         let _ = writeln!(s, "1.0, 0");
     }
@@ -136,10 +185,16 @@ pub fn write_psse(net: &Network) -> Conversion {
     let _ = writeln!(s, "Q");
 
     if !net.hvdc.is_empty() {
-        warnings.push(format!("{} dcline(s) dropped: PSS/E HVDC not modeled", net.hvdc.len()));
+        warnings.push(format!(
+            "{} dcline(s) dropped: PSS/E HVDC not modeled",
+            net.hvdc.len()
+        ));
     }
     if !net.storage.is_empty() {
-        warnings.push(format!("{} storage unit(s) dropped: PSS/E has no storage record", net.storage.len()));
+        warnings.push(format!(
+            "{} storage unit(s) dropped: PSS/E has no storage record",
+            net.storage.len()
+        ));
     }
     if net.generators.iter().any(|g| g.cost.is_some()) {
         warnings.push("generator cost curves dropped: PSS/E .raw has no cost data".into());
@@ -187,10 +242,17 @@ pub fn parse_psse(content: &str) -> Result<Network> {
     let base_mva = fields(header)
         .get(1)
         .and_then(|f| f.parse::<f64>().ok())
-        .ok_or_else(|| Error::FormatRead { format: FMT, message: "missing SBASE in header".into() })?;
+        .ok_or_else(|| Error::FormatRead {
+            format: FMT,
+            message: "missing SBASE in header".into(),
+        })?;
     // Line 2 is the case title; we write the network name there, so read it back.
     let title = lines.next().unwrap_or("").trim();
-    let name = if title.is_empty() { "case".to_string() } else { title.to_string() };
+    let name = if title.is_empty() {
+        "case".to_string()
+    } else {
+        title.to_string()
+    };
     lines.next(); // line 3: second comment
 
     let mut buses = Vec::new();
@@ -299,7 +361,9 @@ fn fields(line: &str) -> Vec<String> {
     for c in code.chars() {
         match c {
             '\'' => quoted = !quoted,
-            ',' if !quoted && comma_delimited => out.push(std::mem::take(&mut cur).trim().to_string()),
+            ',' if !quoted && comma_delimited => {
+                out.push(std::mem::take(&mut cur).trim().to_string())
+            }
             c if c.is_whitespace() && !quoted && !comma_delimited => {
                 if !cur.is_empty() {
                     out.push(std::mem::take(&mut cur));
@@ -336,11 +400,17 @@ fn bustype(code: i64) -> BusType {
 
 fn read_bus(f: &[String]) -> Result<Bus> {
     // I, NAME, BASKV, IDE, AREA, ZONE, OWNER, VM, VA, NVHI, NVLO, EVHI, EVLO
-    let id = f.first().and_then(|x| x.parse::<f64>().ok()).ok_or_else(|| Error::FormatRead {
-        format: FMT,
-        message: "bus record missing numeric id (field I)".into(),
-    })? as usize;
-    let name = f.get(1).filter(|n| !n.is_empty()).map(|n| n.trim().to_string());
+    let id = f
+        .first()
+        .and_then(|x| x.parse::<f64>().ok())
+        .ok_or_else(|| Error::FormatRead {
+            format: FMT,
+            message: "bus record missing numeric id (field I)".into(),
+        })? as usize;
+    let name = f
+        .get(1)
+        .filter(|n| !n.is_empty())
+        .map(|n| n.trim().to_string());
     Ok(Bus {
         id,
         kind: bustype(f.get(3).and_then(|x| x.parse().ok()).unwrap_or(1)),
@@ -358,12 +428,24 @@ fn read_bus(f: &[String]) -> Result<Bus> {
 
 fn read_load(f: &[String]) -> Load {
     // I, ID, STATUS, AREA, ZONE, PL, QL, ...
-    Load { bus: id_at(f, 0), p: num_at(f, 5), q: num_at(f, 6), in_service: on_at(f, 2), extras: Extras::new() }
+    Load {
+        bus: id_at(f, 0),
+        p: num_at(f, 5),
+        q: num_at(f, 6),
+        in_service: on_at(f, 2),
+        extras: Extras::new(),
+    }
 }
 
 fn read_shunt(f: &[String]) -> Shunt {
     // I, ID, STATUS, GL, BL
-    Shunt { bus: id_at(f, 0), g: num_at(f, 3), b: num_at(f, 4), in_service: on_at(f, 2), extras: Extras::new() }
+    Shunt {
+        bus: id_at(f, 0),
+        g: num_at(f, 3),
+        b: num_at(f, 4),
+        in_service: on_at(f, 2),
+        extras: Extras::new(),
+    }
 }
 
 fn read_gen(f: &[String]) -> Generator {

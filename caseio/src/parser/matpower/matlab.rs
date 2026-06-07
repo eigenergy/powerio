@@ -17,7 +17,11 @@ fn find_scalar_rhs<'a>(source: &'a str, field: &str) -> Option<&'a str> {
         let Some(tail) = source[after_dot..].strip_prefix(field) else {
             continue;
         };
-        if tail.bytes().next().is_some_and(|b| b.is_ascii_alphanumeric() || b == b'_') {
+        if tail
+            .bytes()
+            .next()
+            .is_some_and(|b| b.is_ascii_alphanumeric() || b == b'_')
+        {
             continue;
         }
         let Some(rhs) = tail.trim_start().strip_prefix('=') else {
@@ -42,7 +46,9 @@ pub(crate) fn find_scalar(source: &str, field: &str) -> Result<Option<f64>> {
     };
     // Only the tail before `;` can have trailing space; then strip surrounding
     // quotes (e.g. `mpc.version = '2';`).
-    let value = rhs[..end].trim_end().trim_matches(|c| c == '\'' || c == '"');
+    let value = rhs[..end]
+        .trim_end()
+        .trim_matches(|c| c == '\'' || c == '"');
     value.parse::<f64>().map(Some).map_err(|_| Error::BadFloat {
         field: leak_field(field),
         row: 0,

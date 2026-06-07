@@ -65,9 +65,21 @@ fn typed_data_survives_round_trip() {
         let where_ = path.display();
         assert_eq!(reparsed.base_mva, case.base_mva, "{where_}: baseMVA");
         assert_eq!(reparsed.buses.len(), case.buses.len(), "{where_}: buses");
-        assert_eq!(reparsed.branches.len(), case.branches.len(), "{where_}: branches");
-        assert_eq!(reparsed.generators.len(), case.generators.len(), "{where_}: gens");
-        assert_eq!(reparsed.storage.len(), case.storage.len(), "{where_}: storage");
+        assert_eq!(
+            reparsed.branches.len(),
+            case.branches.len(),
+            "{where_}: branches"
+        );
+        assert_eq!(
+            reparsed.generators.len(),
+            case.generators.len(),
+            "{where_}: gens"
+        );
+        assert_eq!(
+            reparsed.storage.len(),
+            case.storage.len(),
+            "{where_}: storage"
+        );
     }
 }
 

@@ -58,7 +58,9 @@ impl io::Write for LogWriter {
     fn write(&mut self, src: &[u8]) -> io::Result<usize> {
         for &b in src {
             if b == b'\n' {
-                let line = String::from_utf8_lossy(&self.partial).trim_end().to_string();
+                let line = String::from_utf8_lossy(&self.partial)
+                    .trim_end()
+                    .to_string();
                 if !line.is_empty() {
                     self.buf.push(line);
                 }

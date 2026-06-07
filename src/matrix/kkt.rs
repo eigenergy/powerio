@@ -20,7 +20,7 @@
 use sprs::CsMat;
 
 use crate::matrix::incidence::{build_flow_map, diagonal};
-use crate::matrix::laplacian::{build_weighted_laplacian, ground_at, GroundMap};
+use crate::matrix::laplacian::{GroundMap, build_weighted_laplacian, ground_at};
 use crate::matrix::triplet::CooBuilder;
 use crate::{Error, Result};
 

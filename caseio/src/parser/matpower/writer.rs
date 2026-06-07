@@ -117,7 +117,11 @@ fn canonical(net: &Network) -> String {
             let _ = writeln!(s, "mpc.gencost = [");
             for g in &net.generators {
                 let c = g.cost.as_ref().expect("checked all gens have cost");
-                let _ = write!(s, "\t{}\t{}\t{}\t{}", c.model, c.startup, c.shutdown, c.ncost);
+                let _ = write!(
+                    s,
+                    "\t{}\t{}\t{}\t{}",
+                    c.model, c.startup, c.shutdown, c.ncost
+                );
                 for coeff in &c.coeffs {
                     let _ = write!(s, "\t{coeff}");
                 }
@@ -164,7 +168,13 @@ fn canonical(net: &Network) -> String {
 fn matlab_ident(name: &str) -> String {
     let mut ident: String = name
         .chars()
-        .map(|c| if c.is_ascii_alphanumeric() || c == '_' { c } else { '_' })
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || c == '_' {
+                c
+            } else {
+                '_'
+            }
+        })
         .collect();
     if !ident.starts_with(|c: char| c.is_ascii_alphabetic()) {
         ident.insert(0, 'c');

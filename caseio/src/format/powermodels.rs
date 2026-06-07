@@ -15,7 +15,7 @@ use std::sync::Arc;
 
 use serde_json::{Map, Value};
 
-use super::{finish, jnum, Conversion};
+use super::{Conversion, finish, jnum};
 use crate::network::{
     Branch, Bus, BusType, GenCost, Generator, Hvdc, Load, Network, Shunt, SourceFormat, Storage,
 };
@@ -24,8 +24,8 @@ use crate::{Error, Result};
 /// PowerModels gen capability fields, in their conventional order. Emitted from
 /// the generator's extras when present (a row may stop at PMIN).
 const GEN_EXTRA_KEYS: [&str; 11] = [
-    "pc1", "pc2", "qc1min", "qc1max", "qc2min", "qc2max", "ramp_agc", "ramp_10",
-    "ramp_30", "ramp_q", "apf",
+    "pc1", "pc2", "qc1min", "qc1max", "qc2min", "qc2max", "ramp_agc", "ramp_10", "ramp_30",
+    "ramp_q", "apf",
 ];
 
 /// The gen capability columns PowerModels per-unitizes (the ramp rates). The PQ
@@ -54,10 +54,10 @@ pub fn write_powermodels_json(net: &Network) -> Conversion {
         branch.insert(idx.to_string(), branch_obj(br, idx, p, a));
     }
 
-    let mut gen = Map::new();
+    let mut gen_map = Map::new();
     for (i, g) in net.generators.iter().enumerate() {
         let idx = i + 1;
-        gen.insert(idx.to_string(), gen_obj(g, idx, p, base));
+        gen_map.insert(idx.to_string(), gen_obj(g, idx, p, base));
     }
 
     let mut load = Map::new();
@@ -102,7 +102,7 @@ pub fn write_powermodels_json(net: &Network) -> Conversion {
     root.insert("source_version".into(), Value::String("2".into()));
     root.insert("bus".into(), Value::Object(bus));
     root.insert("branch".into(), Value::Object(branch));
-    root.insert("gen".into(), Value::Object(gen));
+    root.insert("gen".into(), Value::Object(gen_map));
     root.insert("load".into(), Value::Object(load));
     root.insert("shunt".into(), Value::Object(shunt));
     root.insert("dcline".into(), Value::Object(dcline));
@@ -191,7 +191,11 @@ fn gen_obj(g: &Generator, idx: usize, p: f64, base: f64) -> Value {
     // the ramp rates are per-unitized; the PQ curve points and apf stay raw.
     for (i, key) in GEN_EXTRA_KEYS.iter().enumerate() {
         if let Some(v) = g.caps[i] {
-            let scaled = if GEN_PU_KEYS.contains(key) { jnum(v * p) } else { jnum(v) };
+            let scaled = if GEN_PU_KEYS.contains(key) {
+                jnum(v * p)
+            } else {
+                jnum(v)
+            };
             m.insert((*key).into(), scaled);
         }
     }
@@ -201,7 +205,11 @@ fn gen_obj(g: &Generator, idx: usize, p: f64, base: f64) -> Value {
         // un-scales by the array length, so a mismatched `ncost` (from a malformed
         // row that claimed more coefficients than it carried) would reconstruct the
         // wrong polynomial degree.
-        let ncost = if cost.model == 1 { coeffs.len() / 2 } else { coeffs.len() };
+        let ncost = if cost.model == 1 {
+            coeffs.len() / 2
+        } else {
+            coeffs.len()
+        };
         m.insert("model".into(), Value::from(u64::from(cost.model)));
         m.insert("ncost".into(), Value::from(ncost as u64));
         m.insert("startup".into(), jnum(cost.startup));
@@ -218,7 +226,11 @@ fn gen_obj(g: &Generator, idx: usize, p: f64, base: f64) -> Value {
 /// width with trailing zeros; emitting that padding makes PowerModels read a
 /// higher-degree polynomial and mis-scale it, so drop it here.
 fn cost_coeffs_pu(cost: &GenCost, base: f64) -> Vec<Value> {
-    let want = if cost.model == 1 { cost.ncost * 2 } else { cost.ncost };
+    let want = if cost.model == 1 {
+        cost.ncost * 2
+    } else {
+        cost.ncost
+    };
     let coeffs = &cost.coeffs[..want.min(cost.coeffs.len())];
     if cost.model == 2 {
         // Polynomial: coeff i is the term p^(k-1-i); per unit scales it by base^(k-1-i).
@@ -350,20 +362,37 @@ const FMT: &str = "PowerModels JSON";
 /// following PowerModels' own exceptions (storage `ps`/`qs` stay raw, dcline
 /// `pt`/`qf`/`qt` flip sign); `per_unit = false` is read as-is.
 pub fn parse_powermodels_json(content: &str) -> Result<Network> {
-    let root: Value = serde_json::from_str(content)
-        .map_err(|e| Error::FormatRead { format: FMT, message: e.to_string() })?;
+    let root: Value = serde_json::from_str(content).map_err(|e| Error::FormatRead {
+        format: FMT,
+        message: e.to_string(),
+    })?;
     let root = root.as_object().ok_or_else(|| Error::FormatRead {
         format: FMT,
         message: "top level is not a JSON object".into(),
     })?;
 
-    let base_mva = root.get("baseMVA").and_then(Value::as_f64).ok_or_else(|| {
-        Error::FormatRead { format: FMT, message: "missing numeric `baseMVA`".into() }
-    })?;
-    let per_unit = root.get("per_unit").and_then(Value::as_bool).unwrap_or(false);
+    let base_mva =
+        root.get("baseMVA")
+            .and_then(Value::as_f64)
+            .ok_or_else(|| Error::FormatRead {
+                format: FMT,
+                message: "missing numeric `baseMVA`".into(),
+            })?;
+    let per_unit = root
+        .get("per_unit")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
     let pscale = if per_unit { base_mva } else { 1.0 };
-    let ascale = if per_unit { 180.0 / std::f64::consts::PI } else { 1.0 };
-    let name = root.get("name").and_then(Value::as_str).unwrap_or("case").to_string();
+    let ascale = if per_unit {
+        180.0 / std::f64::consts::PI
+    } else {
+        1.0
+    };
+    let name = root
+        .get("name")
+        .and_then(Value::as_str)
+        .unwrap_or("case")
+        .to_string();
 
     let net = Network {
         name,
@@ -372,12 +401,30 @@ pub fn parse_powermodels_json(content: &str) -> Result<Network> {
             .iter()
             .map(|v| read_bus(v, ascale))
             .collect::<Result<Vec<_>>>()?,
-        loads: sorted(root, "load", "index").iter().map(|v| read_load(v, pscale)).collect(),
-        shunts: sorted(root, "shunt", "index").iter().map(|v| read_shunt(v, pscale)).collect(),
-        branches: sorted(root, "branch", "index").iter().map(|v| read_branch(v, pscale, ascale)).collect(),
-        generators: sorted(root, "gen", "index").iter().map(|v| read_gen(v, pscale, base_mva, per_unit)).collect(),
-        storage: sorted(root, "storage", "index").iter().map(|v| read_storage(v, pscale)).collect(),
-        hvdc: sorted(root, "dcline", "index").iter().map(|v| read_hvdc(v, pscale)).collect(),
+        loads: sorted(root, "load", "index")
+            .iter()
+            .map(|v| read_load(v, pscale))
+            .collect(),
+        shunts: sorted(root, "shunt", "index")
+            .iter()
+            .map(|v| read_shunt(v, pscale))
+            .collect(),
+        branches: sorted(root, "branch", "index")
+            .iter()
+            .map(|v| read_branch(v, pscale, ascale))
+            .collect(),
+        generators: sorted(root, "gen", "index")
+            .iter()
+            .map(|v| read_gen(v, pscale, base_mva, per_unit))
+            .collect(),
+        storage: sorted(root, "storage", "index")
+            .iter()
+            .map(|v| read_storage(v, pscale))
+            .collect(),
+        hvdc: sorted(root, "dcline", "index")
+            .iter()
+            .map(|v| read_hvdc(v, pscale))
+            .collect(),
         source_format: SourceFormat::PowerModelsJson,
         source: Some(Arc::new(content.to_owned())),
     };
@@ -431,9 +478,14 @@ fn extras_excluding(v: &Value, known: &[&str]) -> crate::network::Extras {
 }
 
 fn read_bus(v: &Value, ascale: f64) -> Result<Bus> {
-    let id = v.get("bus_i").or_else(|| v.get("index")).and_then(Value::as_u64).ok_or_else(|| {
-        Error::FormatRead { format: FMT, message: "bus record missing integer `bus_i`".into() }
-    })? as usize;
+    let id = v
+        .get("bus_i")
+        .or_else(|| v.get("index"))
+        .and_then(Value::as_u64)
+        .ok_or_else(|| Error::FormatRead {
+            format: FMT,
+            message: "bus record missing integer `bus_i`".into(),
+        })? as usize;
     Ok(Bus {
         id,
         kind: bustype(v.get("bus_type").and_then(Value::as_i64).unwrap_or(1)),
@@ -447,7 +499,20 @@ fn read_bus(v: &Value, ascale: f64) -> Result<Bus> {
         name: v.get("name").and_then(Value::as_str).map(str::to_string),
         extras: extras_excluding(
             v,
-            &["bus_i", "index", "bus_type", "vm", "va", "vmax", "vmin", "base_kv", "area", "zone", "name", "source_id"],
+            &[
+                "bus_i",
+                "index",
+                "bus_type",
+                "vm",
+                "va",
+                "vmax",
+                "vmin",
+                "base_kv",
+                "area",
+                "zone",
+                "name",
+                "source_id",
+            ],
         ),
     })
 }
@@ -468,7 +533,10 @@ fn read_shunt(v: &Value, pscale: f64) -> Shunt {
         g: f(v, "gs") * pscale,
         b: f(v, "bs") * pscale,
         in_service: flag(v, "status"),
-        extras: extras_excluding(v, &["shunt_bus", "gs", "bs", "status", "index", "source_id"]),
+        extras: extras_excluding(
+            v,
+            &["shunt_bus", "gs", "bs", "status", "index", "source_id"],
+        ),
     }
 }
 
@@ -476,8 +544,15 @@ fn read_branch(v: &Value, pscale: f64, ascale: f64) -> Branch {
     // PowerModels stores the effective tap (1.0 for a line); the `transformer`
     // flag disambiguates an explicit-tap transformer from a line, which is what
     // the neutral raw-tap convention (0 = line) needs.
-    let transformer = v.get("transformer").and_then(Value::as_bool).unwrap_or(false);
-    let tap = if transformer { f_or(v, "tap", 1.0) } else { 0.0 };
+    let transformer = v
+        .get("transformer")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    let tap = if transformer {
+        f_or(v, "tap", 1.0)
+    } else {
+        0.0
+    };
     Branch {
         from: uid(v, "f_bus"),
         to: uid(v, "t_bus"),
@@ -494,7 +569,27 @@ fn read_branch(v: &Value, pscale: f64, ascale: f64) -> Branch {
         angmax: f(v, "angmax") * ascale,
         extras: extras_excluding(
             v,
-            &["f_bus", "t_bus", "br_r", "br_x", "b_fr", "b_to", "g_fr", "g_to", "tap", "shift", "br_status", "angmin", "angmax", "transformer", "rate_a", "rate_b", "rate_c", "index", "source_id"],
+            &[
+                "f_bus",
+                "t_bus",
+                "br_r",
+                "br_x",
+                "b_fr",
+                "b_to",
+                "g_fr",
+                "g_to",
+                "tap",
+                "shift",
+                "br_status",
+                "angmin",
+                "angmax",
+                "transformer",
+                "rate_a",
+                "rate_b",
+                "rate_c",
+                "index",
+                "source_id",
+            ],
         ),
     }
 }
@@ -504,7 +599,11 @@ fn read_gen(v: &Value, pscale: f64, base_mva: f64, per_unit: bool) -> Generator 
     for (i, key) in GEN_EXTRA_KEYS.iter().enumerate() {
         if let Some(val) = v.get(*key).and_then(Value::as_f64) {
             // Only the ramp rates are per-unit; the PQ curve points and apf are raw.
-            caps[i] = Some(if GEN_PU_KEYS.contains(key) { val * pscale } else { val });
+            caps[i] = Some(if GEN_PU_KEYS.contains(key) {
+                val * pscale
+            } else {
+                val
+            });
         }
     }
     let cost = v.get("model").map(|_| read_cost(v, base_mva, per_unit));
@@ -562,7 +661,10 @@ fn read_cost(v: &Value, base_mva: f64, per_unit: bool) -> GenCost {
         model,
         startup: f(v, "startup"),
         shutdown: f(v, "shutdown"),
-        ncost: v.get("ncost").and_then(Value::as_u64).map_or(default_ncost, |n| n as usize),
+        ncost: v
+            .get("ncost")
+            .and_then(Value::as_u64)
+            .map_or(default_ncost, |n| n as usize),
         coeffs,
     }
 }
@@ -600,7 +702,33 @@ fn read_hvdc(v: &Value, pscale: f64) -> Hvdc {
         loss1: f(v, "loss1"),
         extras: extras_excluding(
             v,
-            &["f_bus", "t_bus", "br_status", "pf", "pt", "qf", "qt", "vf", "vt", "pmin", "pmax", "mp_pmin", "mp_pmax", "pminf", "pmaxf", "pmint", "pmaxt", "qminf", "qmaxf", "qmint", "qmaxt", "loss0", "loss1", "index", "source_id"],
+            &[
+                "f_bus",
+                "t_bus",
+                "br_status",
+                "pf",
+                "pt",
+                "qf",
+                "qt",
+                "vf",
+                "vt",
+                "pmin",
+                "pmax",
+                "mp_pmin",
+                "mp_pmax",
+                "pminf",
+                "pmaxf",
+                "pmint",
+                "pmaxt",
+                "qminf",
+                "qmaxf",
+                "qmint",
+                "qmaxt",
+                "loss0",
+                "loss1",
+                "index",
+                "source_id",
+            ],
         ),
     }
 }
@@ -627,7 +755,27 @@ fn read_storage(v: &Value, pscale: f64) -> Storage {
         in_service: flag(v, "status"),
         extras: extras_excluding(
             v,
-            &["storage_bus", "ps", "qs", "energy", "energy_rating", "charge_rating", "discharge_rating", "charge_efficiency", "discharge_efficiency", "thermal_rating", "qmin", "qmax", "r", "x", "p_loss", "q_loss", "status", "index", "source_id"],
+            &[
+                "storage_bus",
+                "ps",
+                "qs",
+                "energy",
+                "energy_rating",
+                "charge_rating",
+                "discharge_rating",
+                "charge_efficiency",
+                "discharge_efficiency",
+                "thermal_rating",
+                "qmin",
+                "qmax",
+                "r",
+                "x",
+                "p_loss",
+                "q_loss",
+                "status",
+                "index",
+                "source_id",
+            ],
         ),
     }
 }
@@ -646,7 +794,10 @@ mod tests {
         // columns; a key not in GEN_EXTRA_KEYS would never be written or scaled,
         // and a typo here silently mis-scales a ramp rate.
         for k in GEN_PU_KEYS {
-            assert!(GEN_EXTRA_KEYS.contains(&k), "{k} is not a GEN_EXTRA_KEYS column");
+            assert!(
+                GEN_EXTRA_KEYS.contains(&k),
+                "{k} is not a GEN_EXTRA_KEYS column"
+            );
         }
     }
 
@@ -655,16 +806,33 @@ mod tests {
         // loss0 = 1, loss1 = 0.1 ⇒ l = 0.9. Each sign quadrant of (pmin, pmax)
         // hand-computed against PowerModels' _mp2pm_dcline!.
         let q1 = dcline_p_bounds(2.0, 10.0, 1.0, 0.1);
-        assert!(approx(q1.0, 2.0) && approx(q1.1, 10.0) && approx(q1.2, -8.0) && approx(q1.3, -0.8));
+        assert!(
+            approx(q1.0, 2.0) && approx(q1.1, 10.0) && approx(q1.2, -8.0) && approx(q1.3, -0.8)
+        );
 
         let q2 = dcline_p_bounds(2.0, -5.0, 1.0, 0.1);
-        assert!(approx(q2.0, 2.0) && approx(q2.1, 6.0 / 0.9) && approx(q2.2, -5.0) && approx(q2.3, -0.8));
+        assert!(
+            approx(q2.0, 2.0)
+                && approx(q2.1, 6.0 / 0.9)
+                && approx(q2.2, -5.0)
+                && approx(q2.3, -0.8)
+        );
 
         let q3 = dcline_p_bounds(-3.0, 10.0, 1.0, 0.1);
-        assert!(approx(q3.0, -2.0 / 0.9) && approx(q3.1, 10.0) && approx(q3.2, -8.0) && approx(q3.3, 3.0));
+        assert!(
+            approx(q3.0, -2.0 / 0.9)
+                && approx(q3.1, 10.0)
+                && approx(q3.2, -8.0)
+                && approx(q3.3, 3.0)
+        );
 
         let q4 = dcline_p_bounds(-3.0, -5.0, 1.0, 0.1);
-        assert!(approx(q4.0, -2.0 / 0.9) && approx(q4.1, 6.0 / 0.9) && approx(q4.2, -5.0) && approx(q4.3, 3.0));
+        assert!(
+            approx(q4.0, -2.0 / 0.9)
+                && approx(q4.1, 6.0 / 0.9)
+                && approx(q4.2, -5.0)
+                && approx(q4.3, 3.0)
+        );
     }
 
     #[test]
@@ -678,8 +846,10 @@ mod tests {
             ncost: 2,
             coeffs: vec![24.035, -403.5, 0.0, 0.0, 0.0, 0.0],
         };
-        let out: Vec<f64> =
-            cost_coeffs_pu(&cost, 100.0).iter().map(|v| v.as_f64().unwrap()).collect();
+        let out: Vec<f64> = cost_coeffs_pu(&cost, 100.0)
+            .iter()
+            .map(|v| v.as_f64().unwrap())
+            .collect();
         assert_eq!(out.len(), 2, "padding dropped");
         assert!(approx(out[0], 2403.5)); // 24.035 · 100^1
         assert!(approx(out[1], -403.5)); // -403.5 · 100^0
@@ -693,12 +863,26 @@ mod tests {
             startup: 0.0,
             shutdown: 0.0,
             ncost: 4,
-            coeffs: vec![0.0, 0.0, 100.0, 2500.0, 200.0, 5500.0, 250.0, 7250.0, 0.0, 0.0],
+            coeffs: vec![
+                0.0, 0.0, 100.0, 2500.0, 200.0, 5500.0, 250.0, 7250.0, 0.0, 0.0,
+            ],
         };
-        let out: Vec<f64> =
-            cost_coeffs_pu(&cost, 100.0).iter().map(|v| v.as_f64().unwrap()).collect();
+        let out: Vec<f64> = cost_coeffs_pu(&cost, 100.0)
+            .iter()
+            .map(|v| v.as_f64().unwrap())
+            .collect();
         assert_eq!(out.len(), 8, "trimmed to 2·ncost, padding dropped");
-        assert!(approx(out[0], 0.0) && approx(out[2], 1.0) && approx(out[4], 2.0) && approx(out[6], 2.5));
-        assert!(approx(out[1], 0.0) && approx(out[3], 2500.0) && approx(out[5], 5500.0) && approx(out[7], 7250.0));
+        assert!(
+            approx(out[0], 0.0)
+                && approx(out[2], 1.0)
+                && approx(out[4], 2.0)
+                && approx(out[6], 2.5)
+        );
+        assert!(
+            approx(out[1], 0.0)
+                && approx(out[3], 2500.0)
+                && approx(out[5], 5500.0)
+                && approx(out[7], 7250.0)
+        );
     }
 }

@@ -6,9 +6,9 @@
 use std::path::{Path, PathBuf};
 
 use caseio::{
-    parse_matpower, parse_matpower_file, parse_powermodels_json, parse_powerworld, parse_psse,
-    write_as, write_egret_json, write_powermodels_json, write_powerworld, write_psse, SourceFormat,
-    TargetFormat,
+    SourceFormat, TargetFormat, parse_matpower, parse_matpower_file, parse_powermodels_json,
+    parse_powerworld, parse_psse, write_as, write_egret_json, write_powermodels_json,
+    write_powerworld, write_psse,
 };
 use serde_json::Value;
 
@@ -16,14 +16,20 @@ mod common;
 use common::json_approx_eq;
 
 fn data(name: &str) -> PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR")).join("../tests/data").join(name)
+    Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../tests/data")
+        .join(name)
 }
 
 #[test]
 fn powermodels_structure_and_split() {
     let case = parse_matpower_file(data("case30.m")).unwrap();
     let conv = write_powermodels_json(&case);
-    assert!(conv.warnings.is_empty(), "case30 should convert cleanly: {:?}", conv.warnings);
+    assert!(
+        conv.warnings.is_empty(),
+        "case30 should convert cleanly: {:?}",
+        conv.warnings
+    );
     let v: Value = serde_json::from_str(&conv.text).unwrap();
 
     assert_eq!(v["per_unit"], Value::Bool(true));
@@ -63,7 +69,10 @@ fn powermodels_transformer_flag_tracks_raw_tap() {
     let case = parse_matpower_file(data("case57.m")).unwrap();
     let v: Value = serde_json::from_str(&write_powermodels_json(&case).text).unwrap();
     let any_explicit_tap = case.branches.iter().any(|b| b.tap == 1.0);
-    assert!(any_explicit_tap, "fixture expectation: case57 has an explicit tap=1 branch");
+    assert!(
+        any_explicit_tap,
+        "fixture expectation: case57 has an explicit tap=1 branch"
+    );
     let xfmr = v["branch"]
         .as_object()
         .unwrap()
@@ -95,8 +104,14 @@ fn egret_structure() {
     let v: Value = serde_json::from_str(&write_egret_json(&case).text).unwrap();
     let elements = &v["elements"];
     assert_eq!(elements["bus"].as_object().unwrap().len(), case.buses.len());
-    assert_eq!(elements["branch"].as_object().unwrap().len(), case.branches.len());
-    assert_eq!(elements["generator"].as_object().unwrap().len(), case.generators.len());
+    assert_eq!(
+        elements["branch"].as_object().unwrap().len(),
+        case.branches.len()
+    );
+    assert_eq!(
+        elements["generator"].as_object().unwrap().len(),
+        case.generators.len()
+    );
     assert_eq!(v["system"]["baseMVA"], case.base_mva);
     assert!(v["system"].get("reference_bus").is_some());
     // A branch is typed line/transformer and a generator carries a cost curve.
@@ -119,7 +134,10 @@ fn powermodels_json_reader_is_inverse_of_writer() {
         let json2 = write_powermodels_json(&net2).text;
         let v1: Value = serde_json::from_str(&json1).unwrap();
         let v2: Value = serde_json::from_str(&json2).unwrap();
-        assert!(json_approx_eq(&v1, &v2), "{case}: PowerModels JSON not stable through read→write");
+        assert!(
+            json_approx_eq(&v1, &v2),
+            "{case}: PowerModels JSON not stable through read→write"
+        );
     }
 }
 
@@ -179,13 +197,20 @@ fn hvdc_converts_and_round_trips() {
     assert!(!net.hvdc.is_empty(), "fixture should have dclines");
 
     let pm = write_powermodels_json(&net);
-    assert!(pm.warnings.iter().any(|w| w.contains("dcline")), "PM should flag dcline best-effort");
+    assert!(
+        pm.warnings.iter().any(|w| w.contains("dcline")),
+        "PM should flag dcline best-effort"
+    );
     let back = parse_powermodels_json(&pm.text).unwrap();
     assert_eq!(back.hvdc.len(), net.hvdc.len());
     assert_eq!(back.hvdc[0].from, net.hvdc[0].from);
     assert_eq!(back.hvdc[0].to, net.hvdc[0].to);
 
-    for conv in [write_egret_json(&net), write_psse(&net), write_powerworld(&net)] {
+    for conv in [
+        write_egret_json(&net),
+        write_psse(&net),
+        write_powerworld(&net),
+    ] {
         assert!(
             conv.warnings.iter().any(|w| w.contains("dcline")),
             "expected a dropped-dcline warning, got {:?}",
@@ -211,7 +236,10 @@ fn powermodels_reader_handles_per_unit_input() {
     assert!((g.pmax - 300.0).abs() < 1e-6);
     assert!((net.branches[0].angmax - 30.0).abs() < 1e-2, "rad→deg"); // 0.5236 rad
     let cost = g.cost.as_ref().unwrap();
-    assert!((cost.coeffs[0] - 0.043_029_3).abs() < 1e-6, "c2 un-scaled by base²");
+    assert!(
+        (cost.coeffs[0] - 0.043_029_3).abs() < 1e-6,
+        "c2 un-scaled by base²"
+    );
     assert!((cost.coeffs[1] - 20.0).abs() < 1e-6, "c1 un-scaled by base");
 }
 
@@ -219,15 +247,27 @@ fn powermodels_reader_handles_per_unit_input() {
 fn readers_reject_malformed_input() {
     // Identity/structure errors must surface, not silently default.
     assert!(parse_powermodels_json("not json").is_err());
-    assert!(parse_powermodels_json(r#"{"per_unit":false}"#).is_err(), "missing baseMVA");
+    assert!(
+        parse_powermodels_json(r#"{"per_unit":false}"#).is_err(),
+        "missing baseMVA"
+    );
     let no_id = r#"{"baseMVA":100,"bus":{"1":{"bus_type":1,"vm":1.0}},"branch":{},"gen":{},"load":{},"shunt":{}}"#;
-    assert!(parse_powermodels_json(no_id).is_err(), "bus missing id must error");
+    assert!(
+        parse_powermodels_json(no_id).is_err(),
+        "bus missing id must error"
+    );
     let dangling = r#"{"baseMVA":100,"bus":{"1":{"bus_i":1,"index":1,"bus_type":3,"vm":1.0,"va":0.0,"vmax":1.1,"vmin":0.9,"base_kv":1.0,"area":1,"zone":1}},
       "branch":{"1":{"index":1,"f_bus":1,"t_bus":99,"br_r":0,"br_x":0.1,"b_fr":0,"b_to":0,"tap":1,"shift":0,"br_status":1,"angmin":-1,"angmax":1,"transformer":false}},
       "gen":{},"load":{},"shunt":{}}"#;
-    assert!(parse_powermodels_json(dangling).is_err(), "dangling branch ref must error");
+    assert!(
+        parse_powermodels_json(dangling).is_err(),
+        "dangling branch ref must error"
+    );
     assert!(parse_psse("").is_err(), "empty PSS/E");
-    assert!(parse_powerworld("// only a comment\n").is_err(), "no DATA blocks");
+    assert!(
+        parse_powerworld("// only a comment\n").is_err(),
+        "no DATA blocks"
+    );
 }
 
 #[test]
@@ -260,9 +300,16 @@ mpc.branch = [
     let net = parse_matpower(src).unwrap();
     let v: Value = serde_json::from_str(&write_powermodels_json(&net).text).unwrap();
     let b1 = &v["branch"]["1"];
-    assert_eq!(b1["transformer"], Value::Bool(false), "phase shifter must be a line");
+    assert_eq!(
+        b1["transformer"],
+        Value::Bool(false),
+        "phase shifter must be a line"
+    );
     let shift = b1["shift"].as_f64().unwrap();
-    assert!((shift - 30.0_f64.to_radians()).abs() < 1e-9, "shift converted to radians");
+    assert!(
+        (shift - 30.0_f64.to_radians()).abs() < 1e-9,
+        "shift converted to radians"
+    );
 }
 
 #[test]
@@ -271,7 +318,11 @@ fn powermodels_dcline_flips_pt_qf_qt_sign() {
     // emits the flipped sign; the reader un-flips it (so the round-trip cancels and
     // can't catch a sign error on its own — this checks the absolute sign).
     let net = parse_matpower_file(data("t_case9_dcline.m")).unwrap();
-    let dc = net.hvdc.iter().find(|d| d.pt != 0.0).expect("a dcline with nonzero Pt");
+    let dc = net
+        .hvdc
+        .iter()
+        .find(|d| d.pt != 0.0)
+        .expect("a dcline with nonzero Pt");
     let v: Value = serde_json::from_str(&write_powermodels_json(&net).text).unwrap();
     let obj = v["dcline"]
         .as_object()
@@ -282,8 +333,14 @@ fn powermodels_dcline_flips_pt_qf_qt_sign() {
         })
         .expect("emitted dcline with matching endpoints");
     let emitted_pt = obj["pt"].as_f64().unwrap();
-    assert!(emitted_pt.signum() != dc.pt.signum(), "pt sign must flip on write");
-    assert!((emitted_pt + dc.pt / net.base_mva).abs() < 1e-9, "pt = -Pt / base");
+    assert!(
+        emitted_pt.signum() != dc.pt.signum(),
+        "pt sign must flip on write"
+    );
+    assert!(
+        (emitted_pt + dc.pt / net.base_mva).abs() < 1e-9,
+        "pt = -Pt / base"
+    );
 }
 
 #[test]
@@ -301,7 +358,10 @@ fn powermodels_storage_ps_qs_stay_raw() {
     let s = &net.storage[0];
     assert!((s.ps - 0.5).abs() < 1e-9, "ps stays raw");
     assert!((s.qs - 0.25).abs() < 1e-9, "qs stays raw");
-    assert!((s.energy_rating - 600.0).abs() < 1e-6, "energy_rating ×base"); // 6.0 · 100
+    assert!(
+        (s.energy_rating - 600.0).abs() < 1e-6,
+        "energy_rating ×base"
+    ); // 6.0 · 100
     assert!((s.qmax - 100.0).abs() < 1e-6, "qmax ×base"); // 1.0 · 100
 }
 
@@ -313,7 +373,10 @@ fn powermodels_unbounded_limit_round_trips_as_infinity() {
     net.generators[0].qmax = f64::INFINITY;
     net.generators[0].qmin = f64::NEG_INFINITY;
     let conv = write_powermodels_json(&net);
-    assert!(conv.warnings.iter().any(|w| w.contains("non-finite")), "expected null warning");
+    assert!(
+        conv.warnings.iter().any(|w| w.contains("non-finite")),
+        "expected null warning"
+    );
     let back = parse_powermodels_json(&conv.text).unwrap();
     assert!(back.generators[0].qmax.is_infinite() && back.generators[0].qmax > 0.0);
     assert!(back.generators[0].qmin.is_infinite() && back.generators[0].qmin < 0.0);
@@ -326,6 +389,10 @@ fn oos_fixture_marks_out_of_service_elements() {
     // The fixture otherwise runs only in the Julia validators.
     let net = parse_matpower_file(data("t_case9_oos.m")).unwrap();
     assert_eq!(net.generators.iter().filter(|g| !g.in_service).count(), 1);
-    let br = net.branches.iter().find(|b| b.from == 5 && b.to == 6).expect("branch 5-6");
+    let br = net
+        .branches
+        .iter()
+        .find(|b| b.from == 5 && b.to == 6)
+        .expect("branch 5-6");
     assert!(!br.in_service, "branch 5-6 is out of service");
 }

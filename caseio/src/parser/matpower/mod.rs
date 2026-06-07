@@ -44,7 +44,10 @@ fn parse_matpower_named(source: Arc<String>, name: &str) -> Result<Network> {
     let mut net = {
         let located = locate::locate_assignments(&source);
         build_case(name, |field| {
-            located.iter().find(|(f, _)| *f == field).map(|(_, full)| *full)
+            located
+                .iter()
+                .find(|(f, _)| *f == field)
+                .map(|(_, full)| *full)
         })?
     };
     net.source = Some(source);
@@ -167,12 +170,15 @@ fn parse_gens<'a>(get: &impl Fn(&str) -> Option<&'a str>) -> Result<Vec<Generato
         // (active + reactive). A per-row defect surfaces as `ShortRow` first.
         let n = gens.len();
         if costs.len() != n && costs.len() != 2 * n {
-            return Err(Error::GenCostCountMismatch { gens: n, gencost: costs.len() });
+            return Err(Error::GenCostCountMismatch {
+                gens: n,
+                gencost: costs.len(),
+            });
         }
         // The first `n` rows are the active-power costs in gen order; any
         // reactive-power second block is accepted but not retained.
-        for (gen, cost) in gens.iter_mut().zip(costs) {
-            gen.cost = Some(cost);
+        for (generator, cost) in gens.iter_mut().zip(costs) {
+            generator.cost = Some(cost);
         }
     }
 

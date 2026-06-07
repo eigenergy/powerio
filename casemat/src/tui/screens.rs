@@ -8,7 +8,9 @@ use ratatui::Frame;
 use ratatui::layout::{Alignment, Constraint, Direction, Layout, Rect};
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, BorderType, Borders, Gauge, List, ListItem, ListState, Paragraph, Wrap};
+use ratatui::widgets::{
+    Block, BorderType, Borders, Gauge, List, ListItem, ListState, Paragraph, Wrap,
+};
 
 use super::app::{App, BatchJob, BatchProgress, ParseStatus, Screen, SynthField};
 use super::sparsity::{Sparsity, legend_lines};
@@ -44,7 +46,11 @@ fn draw_header(frame: &mut Frame, app: &App, area: Rect) {
         Span::styled(title_text, title()),
         Span::raw("  "),
         Span::styled(
-            format!("data={}  out={}", app.data_dir.display(), app.out_dir.display()),
+            format!(
+                "data={}  out={}",
+                app.data_dir.display(),
+                app.out_dir.display()
+            ),
             dim(),
         ),
     ]);
@@ -54,47 +60,78 @@ fn draw_header(frame: &mut Frame, app: &App, area: Rect) {
 fn draw_footer(frame: &mut Frame, app: &App, area: Rect) {
     let mut spans: Vec<Span> = match app.screen {
         Screen::Browse => vec![
-            kc("↑↓"), Span::raw(" select  "),
-            kc("Space"), Span::raw(" toggle  "),
-            kc("Enter"), Span::raw(" inspect  "),
-            kc("b"), Span::raw(" batch  "),
-            kc("g"), Span::raw(" synth  "),
-            kc("?"), Span::raw(" help  "),
-            kc("q"), Span::raw(" quit"),
+            kc("↑↓"),
+            Span::raw(" select  "),
+            kc("Space"),
+            Span::raw(" toggle  "),
+            kc("Enter"),
+            Span::raw(" inspect  "),
+            kc("b"),
+            Span::raw(" batch  "),
+            kc("g"),
+            Span::raw(" synth  "),
+            kc("?"),
+            Span::raw(" help  "),
+            kc("q"),
+            Span::raw(" quit"),
         ],
         Screen::Inspect => vec![
-            kc("Tab"), Span::raw(" matrix  "),
-            kc("e"), Span::raw(" export  "),
-            kc("s"), Span::raw(" toggle scheme  "),
-            kc("Esc"), Span::raw(" back  "),
-            kc("q"), Span::raw(" quit"),
+            kc("Tab"),
+            Span::raw(" matrix  "),
+            kc("e"),
+            Span::raw(" export  "),
+            kc("s"),
+            Span::raw(" toggle scheme  "),
+            kc("Esc"),
+            Span::raw(" back  "),
+            kc("q"),
+            Span::raw(" quit"),
         ],
         Screen::Batch => vec![
-            kc("e"), Span::raw(" run  "),
-            kc("m"), Span::raw(" cycle matrices  "),
-            kc("r"), Span::raw(" cycle rhs  "),
-            kc("Esc"), Span::raw(" back  "),
-            kc("q"), Span::raw(" quit"),
+            kc("e"),
+            Span::raw(" run  "),
+            kc("m"),
+            Span::raw(" cycle matrices  "),
+            kc("r"),
+            Span::raw(" cycle rhs  "),
+            kc("Esc"),
+            Span::raw(" back  "),
+            kc("q"),
+            Span::raw(" quit"),
         ],
         Screen::Synth => vec![
-            kc("↑↓"), Span::raw(" field  "),
-            kc("←→"), Span::raw(" tweak  "),
-            kc("g"), Span::raw(" generate  "),
-            kc("e"), Span::raw(" export  "),
-            kc("Esc"), Span::raw(" back  "),
-            kc("q"), Span::raw(" quit"),
+            kc("↑↓"),
+            Span::raw(" field  "),
+            kc("←→"),
+            Span::raw(" tweak  "),
+            kc("g"),
+            Span::raw(" generate  "),
+            kc("e"),
+            Span::raw(" export  "),
+            kc("Esc"),
+            Span::raw(" back  "),
+            kc("q"),
+            Span::raw(" quit"),
         ],
         Screen::Help => vec![kc("Esc"), Span::raw(" back  "), kc("q"), Span::raw(" quit")],
     };
     if let Some((msg, _)) = &app.status {
         spans.push(Span::raw("    "));
-        spans.push(Span::styled(format!("» {msg}"), Style::default().fg(T.accent)));
+        spans.push(Span::styled(
+            format!("» {msg}"),
+            Style::default().fg(T.accent),
+        ));
     }
     frame.render_widget(Paragraph::new(Line::from(spans)), area);
 }
 
 fn kc(label: &str) -> Span<'_> {
-    Span::styled(format!("[{label}]"), Style::default().fg(T.accent_alt).add_modifier(Modifier::BOLD))
+    Span::styled(
+        format!("[{label}]"),
+        Style::default()
+            .fg(T.accent_alt)
+            .add_modifier(Modifier::BOLD),
+    )
 }
 
 fn draw_browse(frame: &mut Frame, app: &App, area: Rect) {
@@ -108,9 +145,17 @@ fn draw_browse(frame: &mut Frame, app: &App, area: Rect) {
         .iter()
         .enumerate()
         .map(|(i, c)| {
-            let prefix = if app.multi_selected.contains(&i) { "[x] " } else { "[ ] " };
+            let prefix = if app.multi_selected.contains(&i) {
+                "[x] "
+            } else {
+                "[ ] "
+            };
             let parsed_marker = match &c.parsed {
-                ParseStatus::Loaded { n_buses, n_branches, .. } => {
+                ParseStatus::Loaded {
+                    n_buses,
+                    n_branches,
+                    ..
+                } => {
                     format!("  · {n_buses} buses / {n_branches} branches")
                 }
                 ParseStatus::Failed(_) => "  · parse failed".to_string(),
@@ -136,7 +181,11 @@ fn draw_browse(frame: &mut Frame, app: &App, area: Rect) {
         .highlight_style(highlight());
 
     let mut state = ListState::default();
-    state.select(if app.cases.is_empty() { None } else { Some(app.selected) });
+    state.select(if app.cases.is_empty() {
+        None
+    } else {
+        Some(app.selected)
+    });
     frame.render_stateful_widget(list, split[0], &mut state);
 
     draw_browse_detail(frame, app, split[1]);
@@ -163,7 +212,11 @@ fn draw_browse_detail(frame: &mut Frame, app: &App, area: Rect) {
             ]),
         ];
         match &entry.parsed {
-            ParseStatus::Loaded { n_buses, n_branches, base_mva } => {
+            ParseStatus::Loaded {
+                n_buses,
+                n_branches,
+                base_mva,
+            } => {
                 v.push(Line::from(vec![
                     Span::styled("buses:   ", dim()),
                     Span::raw(n_buses.to_string()),
@@ -216,10 +269,7 @@ fn draw_inspect(frame: &mut Frame, app: &App, area: Rect) {
     let kind_strip = MatrixKind::ALL
         .iter()
         .map(|k| {
-            let active = app
-                .inspect
-                .as_ref()
-                .is_some_and(|s| s.kind == *k);
+            let active = app.inspect.as_ref().is_some_and(|s| s.kind == *k);
             let style = if active { highlight() } else { dim() };
             Span::styled(format!(" {} ", k.label()), style)
         })
@@ -312,10 +362,7 @@ fn draw_stats_panel(frame: &mut Frame, app: &App, area: Rect) {
 }
 
 fn kv(k: &str, v: String) -> Line<'static> {
-    Line::from(vec![
-        Span::styled(format!("{k:<14}"), dim()),
-        Span::raw(v),
-    ])
+    Line::from(vec![Span::styled(format!("{k:<14}"), dim()), Span::raw(v)])
 }
 
 fn kv_styled(k: &str, v: String, st: Style) -> Line<'static> {
@@ -326,10 +373,7 @@ fn kv_styled(k: &str, v: String, st: Style) -> Line<'static> {
 }
 
 fn kv_inline<'a>(k: &str, span: Span<'a>) -> Line<'a> {
-    Line::from(vec![
-        Span::styled(format!("{k:<14}"), dim()),
-        span,
-    ])
+    Line::from(vec![Span::styled(format!("{k:<14}"), dim()), span])
 }
 
 fn draw_sparsity_panel(frame: &mut Frame, app: &App, area: Rect) {
@@ -404,10 +448,7 @@ fn draw_batch(frame: &mut Frame, app: &App, area: Rect) {
 
     if app.batch.is_empty() {
         frame.render_widget(
-            Paragraph::new(Line::from(Span::styled(
-                "press [e] to begin export",
-                dim(),
-            ))),
+            Paragraph::new(Line::from(Span::styled("press [e] to begin export", dim()))),
             inner,
         );
         return;
@@ -429,9 +470,10 @@ fn draw_batch_row(frame: &mut Frame, job: &BatchJob, row: Rect) {
         .direction(Direction::Horizontal)
         .constraints([Constraint::Length(20), Constraint::Min(0)])
         .split(row);
-    let label = Paragraph::new(Line::from(vec![
-        Span::styled(format!(" {} ", job.case_name), Style::default().fg(T.fg)),
-    ]));
+    let label = Paragraph::new(Line::from(vec![Span::styled(
+        format!(" {} ", job.case_name),
+        Style::default().fg(T.fg),
+    )]));
     frame.render_widget(label, split[0]);
     let (ratio, label_text, color) = match &job.progress {
         BatchProgress::Pending => (0.0, "queued".to_string(), T.fg_dim),
@@ -513,11 +555,8 @@ fn draw_synth(frame: &mut Frame, app: &App, area: Rect) {
         }
     } else {
         frame.render_widget(
-            Paragraph::new(Line::from(Span::styled(
-                "press [g] to generate",
-                dim(),
-            )))
-            .block(preview_block),
+            Paragraph::new(Line::from(Span::styled("press [g] to generate", dim())))
+                .block(preview_block),
             split[1],
         );
     }
@@ -525,7 +564,11 @@ fn draw_synth(frame: &mut Frame, app: &App, area: Rect) {
 
 fn synth_field_line(label: &str, value: String, focused: bool) -> Line<'static> {
     let marker = if focused { "▶ " } else { "  " };
-    let style = if focused { highlight() } else { Style::default() };
+    let style = if focused {
+        highlight()
+    } else {
+        Style::default()
+    };
     Line::from(vec![
         Span::styled(marker, Style::default().fg(T.accent_alt)),
         Span::styled(format!("{label:<10}"), dim()),
@@ -605,8 +648,5 @@ fn draw_help(frame: &mut Frame, _app: &App, area: Rect) {
         Line::raw("  ?          help (this screen)"),
         Line::raw("  q          quit"),
     ];
-    frame.render_widget(
-        Paragraph::new(lines).wrap(Wrap { trim: false }),
-        inner,
-    );
+    frame.render_widget(Paragraph::new(lines).wrap(Wrap { trim: false }), inner);
 }

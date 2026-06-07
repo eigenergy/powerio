@@ -1,7 +1,7 @@
 //! The canonical (no-source-document) writer path, exercised through a synth
 //! case. Lives in casemat because it needs the `synth` generators.
 
-use casemat::synth::{generate, SynthSpec, Topology};
+use casemat::synth::{SynthSpec, Topology, generate};
 use casemat::{parse_matpower, write_matpower};
 
 #[test]

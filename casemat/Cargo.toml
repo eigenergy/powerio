@@ -1,7 +1,7 @@
 [package]
 name = "casemat"
 version = "0.1.0"
-edition = "2021"
+edition = "2024"
 rust-version = "1.86"
 description = "Sparse matrices and graph views for power-system case files: B'/B'', Y_bus, PTDF, LODF, incidence, weighted Laplacian, adjacency, and DC-OPF instance data. Built on caseio."
 license = "MIT OR Apache-2.0"

@@ -30,9 +30,7 @@ pub const T: Theme = Theme {
 
 #[inline]
 pub fn title() -> Style {
-    Style::default()
-        .fg(T.accent)
-        .add_modifier(Modifier::BOLD)
+    Style::default().fg(T.accent).add_modifier(Modifier::BOLD)
 }
 
 #[inline]

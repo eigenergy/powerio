@@ -7,8 +7,8 @@ use rand_chacha::ChaCha8Rng;
 
 use crate::network::Network;
 
-use super::tree::{make_branch, make_bus, net};
 use super::SynthSpec;
+use super::tree::{make_branch, make_bus, net};
 
 pub fn generate_pegase_like(spec: &SynthSpec) -> Network {
     let n = spec.n.max(2);

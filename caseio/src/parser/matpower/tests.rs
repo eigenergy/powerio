@@ -162,7 +162,10 @@ fn rejects_unterminated_matrix() {
                \t2 1 0 0 0 0 1 1 0 345 1 1.1 0.9;\n";
     let err = parse_mpc(src).expect_err("unterminated bus matrix should fail");
     let msg = err.to_string();
-    assert!(msg.contains("unbalanced"), "expected unbalanced error, got: {msg}");
+    assert!(
+        msg.contains("unbalanced"),
+        "expected unbalanced error, got: {msg}"
+    );
     assert!(msg.contains("bus"), "expected bus field named, got: {msg}");
 }
 

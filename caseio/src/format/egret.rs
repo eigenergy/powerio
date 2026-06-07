@@ -9,7 +9,7 @@
 
 use serde_json::{Map, Value};
 
-use super::{finish, jnum, Conversion};
+use super::{Conversion, finish, jnum};
 use crate::network::{Branch, Bus, BusType, GenCost, Generator, Load, Network, Shunt};
 
 #[must_use]
@@ -102,7 +102,10 @@ fn bustype(kind: BusType) -> &'static str {
 fn bus_obj(b: &Bus) -> Value {
     let mut m = Map::new();
     m.insert("base_kv".into(), jnum(b.base_kv));
-    m.insert("matpower_bustype".into(), Value::String(bustype(b.kind).into()));
+    m.insert(
+        "matpower_bustype".into(),
+        Value::String(bustype(b.kind).into()),
+    );
     m.insert("vm".into(), jnum(b.vm));
     m.insert("va".into(), jnum(b.va));
     m.insert("v_min".into(), jnum(b.vmin));

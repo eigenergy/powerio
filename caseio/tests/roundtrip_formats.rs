@@ -15,15 +15,17 @@
 use std::path::{Path, PathBuf};
 
 use caseio::{
-    parse_matpower_file, parse_powermodels_json, parse_powerworld, parse_psse, write_as,
-    write_egret_json, write_powermodels_json, write_powerworld, write_psse, Network, TargetFormat,
+    Network, TargetFormat, parse_matpower_file, parse_powermodels_json, parse_powerworld,
+    parse_psse, write_as, write_egret_json, write_powermodels_json, write_powerworld, write_psse,
 };
 
 mod common;
 use common::json_approx_eq;
 
 fn data(name: &str) -> PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR")).join("../tests/data").join(name)
+    Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../tests/data")
+        .join(name)
 }
 
 const CASES: [&str; 5] = ["case9.m", "case14.m", "case30.m", "case57.m", "case118.m"];
@@ -125,7 +127,11 @@ fn reader_writer_is_idempotent() {
                     fmt.name
                 );
             } else {
-                assert_eq!(t0, t1, "{case} via {}: serialize→read→serialize not stable", fmt.name);
+                assert_eq!(
+                    t0, t1,
+                    "{case} via {}: serialize→read→serialize not stable",
+                    fmt.name
+                );
             }
         }
     }
@@ -155,8 +161,14 @@ fn cross_format_powermodels_to_psse_and_powerworld() {
     let pm = write_powermodels_json(&net0).text;
     let from_pm = parse_powermodels_json(&pm).unwrap();
     let fp = fingerprint(&net0);
-    assert_eq!(fingerprint(&parse_psse(&write_psse(&from_pm).text).unwrap()), fp);
-    assert_eq!(fingerprint(&parse_powerworld(&write_powerworld(&from_pm).text).unwrap()), fp);
+    assert_eq!(
+        fingerprint(&parse_psse(&write_psse(&from_pm).text).unwrap()),
+        fp
+    );
+    assert_eq!(
+        fingerprint(&parse_powerworld(&write_powerworld(&from_pm).text).unwrap()),
+        fp
+    );
 }
 
 #[test]
@@ -167,5 +179,9 @@ fn egret_write_side_only() {
     let conv = write_egret_json(&net0);
     let v: serde_json::Value = serde_json::from_str(&conv.text).unwrap();
     assert!(v["elements"]["bus"].as_object().unwrap().len() == net0.buses.len());
-    assert!(conv.warnings.is_empty(), "unexpected warnings: {:?}", conv.warnings);
+    assert!(
+        conv.warnings.is_empty(),
+        "unexpected warnings: {:?}",
+        conv.warnings
+    );
 }

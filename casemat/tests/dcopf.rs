@@ -26,8 +26,16 @@ fn net(name: &str, buses: Vec<Bus>, branches: Vec<Branch>) -> Network {
     Network::in_memory(name, 100.0, buses, branches)
 }
 
-fn net_with_gens(name: &str, buses: Vec<Bus>, branches: Vec<Branch>, generators: Vec<Generator>) -> Network {
-    Network { generators, ..net(name, buses, branches) }
+fn net_with_gens(
+    name: &str,
+    buses: Vec<Bus>,
+    branches: Vec<Branch>,
+    generators: Vec<Generator>,
+) -> Network {
+    Network {
+        generators,
+        ..net(name, buses, branches)
+    }
 }
 
 fn dense(m: &CsMat<f64>) -> Vec<Vec<f64>> {
@@ -217,7 +225,7 @@ fn opf_instance_shapes_and_cg() {
         assert_eq!(opf.bus.pmax.len(), n);
         assert_eq!(opf.bus.p_d.len(), n);
         assert_eq!(opf.f_max.len(), m);
-        assert_eq!(opf.gen.q.len(), n_gen);
+        assert_eq!(opf.gen_space.q.len(), n_gen);
         assert_eq!(opf.c_g.rows(), n);
         assert_eq!(opf.c_g.cols(), n_gen);
         // C_g: one 1 per generator column.
@@ -269,7 +277,11 @@ fn no_generators_errors() {
 #[test]
 fn reference_bus_count_errors() {
     // Two reference buses.
-    let two = net("two_ref", vec![bus(1, BusType::Ref), bus(2, BusType::Ref)], vec![]);
+    let two = net(
+        "two_ref",
+        vec![bus(1, BusType::Ref), bus(2, BusType::Ref)],
+        vec![],
+    );
     assert!(matches!(
         IndexedNetwork::new(&two).reference_bus_index(),
         Err(Error::ReferenceBusCount { found: 2 })
@@ -447,7 +459,11 @@ fn opf_of(case: &Network, units: Units) -> casemat::Result<casemat::OpfInstance>
 fn triangle() -> Network {
     net(
         "triangle",
-        vec![bus(1, BusType::Ref), bus(2, BusType::Pq), bus(3, BusType::Pq)],
+        vec![
+            bus(1, BusType::Ref),
+            bus(2, BusType::Pq),
+            bus(3, BusType::Pq),
+        ],
         vec![branch(1, 2, 1.0), branch(1, 3, 1.0), branch(2, 3, 1.0)],
     )
 }
@@ -489,11 +505,7 @@ fn lodf_matches_analytic_triangle() {
     let case = triangle();
     let view = IndexedNetwork::new(&case);
     let lodf = dense(&build_lodf(&view, DcConvention::PaperPure).unwrap());
-    let expected = [
-        [-1.0, 1.0, -1.0],
-        [1.0, -1.0, 1.0],
-        [-1.0, 1.0, -1.0],
-    ];
+    let expected = [[-1.0, 1.0, -1.0], [1.0, -1.0, 1.0], [-1.0, 1.0, -1.0]];
     for (l, row) in expected.iter().enumerate() {
         for (k, &want) in row.iter().enumerate() {
             assert!(
@@ -578,7 +590,11 @@ fn radial_lodf_is_negative_identity() {
     // and the LODF column zeroes out except the −1 diagonal.
     let case = net(
         "path",
-        vec![bus(1, BusType::Ref), bus(2, BusType::Pq), bus(3, BusType::Pq)],
+        vec![
+            bus(1, BusType::Ref),
+            bus(2, BusType::Pq),
+            bus(3, BusType::Pq),
+        ],
         vec![branch(1, 2, 0.1), branch(2, 3, 0.1)],
     );
     let view = IndexedNetwork::new(&case);
@@ -611,9 +627,15 @@ fn disconnected_network_errors() {
     let view = IndexedNetwork::new(&case);
     assert_eq!(view.n_connected_components(), 2);
     let p = build_ptdf(&view, DcConvention::PaperPure).unwrap_err();
-    assert!(matches!(p, Error::DisconnectedNetwork { components: 2 }), "ptdf: {p:?}");
+    assert!(
+        matches!(p, Error::DisconnectedNetwork { components: 2 }),
+        "ptdf: {p:?}"
+    );
     let l = build_lodf(&view, DcConvention::PaperPure).unwrap_err();
-    assert!(matches!(l, Error::DisconnectedNetwork { components: 2 }), "lodf: {l:?}");
+    assert!(
+        matches!(l, Error::DisconnectedNetwork { components: 2 }),
+        "lodf: {l:?}"
+    );
 }
 
 #[test]
@@ -623,10 +645,22 @@ fn perunit_scales_native_by_base() {
     let native = opf_of(&case, Units::Native).unwrap();
     let pu = opf_of(&case, Units::PerUnit).unwrap();
     for i in 0..case.buses.len() {
-        assert!((pu.bus.q[i] - native.bus.q[i] * base * base).abs() < 1e-6, "q[{i}]");
-        assert!((pu.bus.c[i] - native.bus.c[i] * base).abs() < 1e-6, "c[{i}]");
-        assert!((pu.bus.pmax[i] - native.bus.pmax[i] / base).abs() < 1e-9, "pmax[{i}]");
-        assert!((pu.bus.p_d[i] - native.bus.p_d[i] / base).abs() < 1e-9, "pd[{i}]");
+        assert!(
+            (pu.bus.q[i] - native.bus.q[i] * base * base).abs() < 1e-6,
+            "q[{i}]"
+        );
+        assert!(
+            (pu.bus.c[i] - native.bus.c[i] * base).abs() < 1e-6,
+            "c[{i}]"
+        );
+        assert!(
+            (pu.bus.pmax[i] - native.bus.pmax[i] / base).abs() < 1e-9,
+            "pmax[{i}]"
+        );
+        assert!(
+            (pu.bus.p_d[i] - native.bus.p_d[i] / base).abs() < 1e-9,
+            "pd[{i}]"
+        );
     }
 }
 
@@ -642,9 +676,9 @@ fn multi_generator_bus_sums_cost() {
     let opf = opf_of(&case, Units::Native).unwrap();
     assert_eq!(opf.n_gen(), 2);
     let b0 = IndexedNetwork::new(&case).bus_index(1).unwrap();
-    assert!((opf.bus.q[b0] - (opf.gen.q[0] + opf.gen.q[1])).abs() < 1e-12);
-    assert!((opf.bus.c[b0] - (opf.gen.c[0] + opf.gen.c[1])).abs() < 1e-12);
-    assert!((opf.bus.pmax[b0] - (opf.gen.pmax[0] + opf.gen.pmax[1])).abs() < 1e-12);
+    assert!((opf.bus.q[b0] - (opf.gen_space.q[0] + opf.gen_space.q[1])).abs() < 1e-12);
+    assert!((opf.bus.c[b0] - (opf.gen_space.c[0] + opf.gen_space.c[1])).abs() < 1e-12);
+    assert!((opf.bus.pmax[b0] - (opf.gen_space.pmax[0] + opf.gen_space.pmax[1])).abs() < 1e-12);
 }
 
 #[test]
@@ -684,7 +718,7 @@ fn opf_distinguishes_missing_from_unsupported_cost() {
     // No cost row → MissingGenCost.
     assert!(matches!(
         opf_of(&case("nocost", None), Units::Native).unwrap_err(),
-        Error::MissingGenCost { gen: 0 }
+        Error::MissingGenCost { gen_index: 0 }
     ));
 
     // Present but piecewise-linear → UnsupportedCostModel.
@@ -697,6 +731,10 @@ fn opf_distinguishes_missing_from_unsupported_cost() {
     };
     assert!(matches!(
         opf_of(&case("pwl", Some(pwl)), Units::Native).unwrap_err(),
-        Error::UnsupportedCostModel { gen: 0, model: 1, .. }
+        Error::UnsupportedCostModel {
+            gen_index: 0,
+            model: 1,
+            ..
+        }
     ));
 }

@@ -6,8 +6,8 @@ use std::path::Path;
 
 use serde::{Deserialize, Serialize};
 
-use crate::matrix::{BuildOptions, MatrixStats};
 use crate::Result;
+use crate::matrix::{BuildOptions, MatrixStats};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CaseMetadata {

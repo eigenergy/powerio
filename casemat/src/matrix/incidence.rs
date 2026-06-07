@@ -59,12 +59,14 @@ pub fn build_incidence(case: &IndexedNetwork, conv: DcConvention) -> Result<Inci
     // Pass 1: resolve and filter, fixing the column order.
     let mut cols: Vec<Column> = Vec::new();
     for (idx, br) in case.in_service_branches() {
-        let i = case
-            .bus_index(br.from)
-            .ok_or(Error::UnknownBus { bus_id: br.from, row: idx })?;
-        let j = case
-            .bus_index(br.to)
-            .ok_or(Error::UnknownBus { bus_id: br.to, row: idx })?;
+        let i = case.bus_index(br.from).ok_or(Error::UnknownBus {
+            bus_id: br.from,
+            row: idx,
+        })?;
+        let j = case.bus_index(br.to).ok_or(Error::UnknownBus {
+            bus_id: br.to,
+            row: idx,
+        })?;
         if i == j || br.x == 0.0 {
             continue;
         }
@@ -81,7 +83,13 @@ pub fn build_incidence(case: &IndexedNetwork, conv: DcConvention) -> Result<Inci
             DcConvention::PaperPure => 0.0,
             DcConvention::Matpower => br.shift.to_radians(),
         };
-        cols.push(Column { i, j, b_e, shift_rad, branch: idx });
+        cols.push(Column {
+            i,
+            j,
+            b_e,
+            shift_rad,
+            branch: idx,
+        });
     }
 
     // Pass 2: assemble.

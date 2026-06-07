@@ -14,9 +14,7 @@ use std::sync::mpsc::channel;
 use std::time::{Duration, Instant};
 
 use anyhow::Context;
-use ratatui::crossterm::event::{
-    self, Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers,
-};
+use ratatui::crossterm::event::{self, Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 
 use app::{App, BatchJob, BatchProgress, Screen, SynthField, WorkerEvent};
 use log_pane::LogBuf;
@@ -90,10 +88,12 @@ pub fn run(opts: TuiOptions) -> anyhow::Result<()> {
 }
 
 fn install_tui_tracing(buf: LogBuf) -> Result<(), tracing::dispatcher::SetGlobalDefaultError> {
-    use tracing_subscriber::fmt;
     use tracing_subscriber::EnvFilter;
+    use tracing_subscriber::fmt;
     let subscriber = fmt()
-        .with_env_filter(EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info")))
+        .with_env_filter(
+            EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info")),
+        )
         .with_writer(buf)
         .with_ansi(false)
         .without_time()
@@ -134,9 +134,7 @@ fn handle_browse(app: &mut App, key: KeyEvent) {
             app.selected += 1;
             app.parse_selected();
         }
-        KeyCode::Char(' ')
-            if !app.cases.is_empty() && !app.multi_selected.insert(app.selected) =>
-        {
+        KeyCode::Char(' ') if !app.cases.is_empty() && !app.multi_selected.insert(app.selected) => {
             app.multi_selected.remove(&app.selected);
         }
         KeyCode::Char('R') | KeyCode::F(5) => {
@@ -271,7 +269,10 @@ fn cycle_matrices(app: &mut App) {
     ];
     let cur_idx = presets
         .iter()
-        .position(|p| p.len() == app.matrices_to_export.len() && p.iter().zip(&app.matrices_to_export).all(|(a, b)| a == b))
+        .position(|p| {
+            p.len() == app.matrices_to_export.len()
+                && p.iter().zip(&app.matrices_to_export).all(|(a, b)| a == b)
+        })
         .unwrap_or(0);
     let next = presets[(cur_idx + 1) % presets.len()];
     app.matrices_to_export = next.to_vec();
@@ -494,7 +495,10 @@ mod tests {
         let mut terminal = Terminal::new(backend).unwrap();
         terminal.draw(|f| screens::draw(f, &app)).unwrap();
         let s = buffer_text(terminal.backend().buffer());
-        assert!(s.contains("Browse"), "expected screen header to contain Browse:\n{s}");
+        assert!(
+            s.contains("Browse"),
+            "expected screen header to contain Browse:\n{s}"
+        );
         assert!(s.contains("Cases"), "expected case panel title:\n{s}");
     }
 

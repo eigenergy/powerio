@@ -88,7 +88,7 @@ pub fn read_path(path: &std::path::Path, from: Option<&str>) -> Result<Network> 
             other => {
                 return Err(Error::UnknownFormat(format!(
                     "cannot infer from file extension {other:?}; pass an explicit source format"
-                )))
+                )));
             }
         },
     };
@@ -119,7 +119,10 @@ pub struct Conversion {
 pub fn write_as(net: &Network, format: TargetFormat) -> Conversion {
     if same_format(format, net.source_format) {
         if let Some(src) = &net.source {
-            return Conversion { text: src.to_string(), warnings: Vec::new() };
+            return Conversion {
+                text: src.to_string(),
+                warnings: Vec::new(),
+            };
         }
     }
     match format {
@@ -166,8 +169,7 @@ pub(crate) fn finish(root: Map<String, Value>, mut warnings: Vec<String>) -> Con
             nulls.into_iter().collect::<Vec<_>>().join(", ")
         ));
     }
-    let text =
-        serde_json::to_string_pretty(&value).expect("a serde_json::Value always serializes");
+    let text = serde_json::to_string_pretty(&value).expect("a serde_json::Value always serializes");
     Conversion { text, warnings }
 }
 

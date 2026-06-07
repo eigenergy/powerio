@@ -61,7 +61,7 @@ pub struct OpfInstance {
     /// Bus-indexed cost/bounds/load (length n).
     pub bus: BusCosts,
     /// Generator-space provenance (length n_gen).
-    pub gen: GenCosts,
+    pub gen_space: GenCosts,
     /// Thermal limit `f̄` (`RATE_A`); `0` means unlimited per MATPOWER. Length m.
     pub f_max: Vec<f64>,
     /// Generator→bus incidence, `n × n_gen`, one `1` per column.
@@ -72,7 +72,7 @@ impl OpfInstance {
     /// Number of in-service generators (the generator-space vector length).
     #[must_use]
     pub fn n_gen(&self) -> usize {
-        self.gen.q.len()
+        self.gen_space.q.len()
     }
 }
 
@@ -113,23 +113,27 @@ pub fn build_opf_instance(
     let mut gen_of_col = Vec::with_capacity(n_gen);
     let mut cg = CooBuilder::with_capacity_rect(n, n_gen, n_gen);
 
-    for (col, &(gidx, gen)) in in_service.iter().enumerate() {
-        let bus = case
-            .bus_index(gen.bus)
-            .ok_or(Error::UnknownBus { bus_id: gen.bus, row: gidx })?;
+    for (col, &(gidx, generator)) in in_service.iter().enumerate() {
+        let bus = case.bus_index(generator.bus).ok_or(Error::UnknownBus {
+            bus_id: generator.bus,
+            row: gidx,
+        })?;
         // Distinguish a genuinely absent cost from a present-but-unsupported
         // one (piecewise model 1, or polynomial degree ≥ 3) so the error tells
         // the truth about which case the file hit.
-        let cost = gen.cost.as_ref().ok_or(Error::MissingGenCost { gen: gidx })?;
+        let cost = generator
+            .cost
+            .as_ref()
+            .ok_or(Error::MissingGenCost { gen_index: gidx })?;
         let (q_raw, c_raw) = cost.quadratic().ok_or(Error::UnsupportedCostModel {
-            gen: gidx,
+            gen_index: gidx,
             model: cost.model,
             ncost: cost.ncost,
         })?;
         q_gen.push(q_raw * q_scale);
         c_gen.push(c_raw * c_scale);
-        pmax_gen.push(gen.pmax * p_scale);
-        pmin_gen.push(gen.pmin * p_scale);
+        pmax_gen.push(generator.pmax * p_scale);
+        pmin_gen.push(generator.pmin * p_scale);
         gen_of_col.push(gidx);
         cg.add(bus, col, 1.0);
     }
@@ -158,7 +162,7 @@ pub fn build_opf_instance(
             pmin: pmin_bus,
             p_d,
         },
-        gen: GenCosts {
+        gen_space: GenCosts {
             q: q_gen,
             c: c_gen,
             pmax: pmax_gen,
@@ -174,8 +178,8 @@ pub fn build_opf_instance(
 /// several generators get the sum; one generator per bus is exact.
 pub fn project_gen_to_bus(c_g: &CsMat<f64>, v: &[f64]) -> Vec<f64> {
     let mut out = vec![0.0; c_g.rows()];
-    for (&val, (bus, gen)) in c_g {
-        out[bus] += val * v[gen];
+    for (&val, (bus, g)) in c_g {
+        out[bus] += val * v[g];
     }
     out
 }

@@ -22,10 +22,10 @@ use pyo3::types::{PyDict, PyList};
 use sprs::CsMat;
 
 use casemat::matrix::{
-    build_adjacency, build_bdoubleprime, build_bprime, build_incidence, build_lacpf, build_lodf,
-    build_ptdf, build_weighted_laplacian, build_ybus, BuildOptions, DcConvention, Scheme, Units,
+    BuildOptions, DcConvention, Scheme, Units, build_adjacency, build_bdoubleprime, build_bprime,
+    build_incidence, build_lacpf, build_lodf, build_ptdf, build_weighted_laplacian, build_ybus,
 };
-use casemat::opf_pipeline::{write_dcopf_bundle as write_bundle, DcOpfOptions};
+use casemat::opf_pipeline::{DcOpfOptions, write_dcopf_bundle as write_bundle};
 use casemat::{IndexCore, IndexedNetwork, Network};
 
 pyo3::create_exception!(

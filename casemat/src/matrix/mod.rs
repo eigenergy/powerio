@@ -16,8 +16,8 @@ pub mod incidence;
 #[cfg(feature = "kkt")]
 #[path = "../../../src/matrix/kkt.rs"]
 pub mod kkt;
-pub mod laplacian;
 mod lacpf;
+pub mod laplacian;
 pub mod opf;
 pub mod sensitivity;
 pub mod triplet;

@@ -15,12 +15,14 @@ pub fn build_adjacency(case: &IndexedNetwork) -> Result<CsMat<f64>> {
     let n = case.n();
     let mut edges: HashSet<(usize, usize)> = HashSet::new();
     for (idx, br) in case.in_service_branches() {
-        let i = case
-            .bus_index(br.from)
-            .ok_or(Error::UnknownBus { bus_id: br.from, row: idx })?;
-        let j = case
-            .bus_index(br.to)
-            .ok_or(Error::UnknownBus { bus_id: br.to, row: idx })?;
+        let i = case.bus_index(br.from).ok_or(Error::UnknownBus {
+            bus_id: br.from,
+            row: idx,
+        })?;
+        let j = case.bus_index(br.to).ok_or(Error::UnknownBus {
+            bus_id: br.to,
+            row: idx,
+        })?;
         if i != j {
             edges.insert(if i < j { (i, j) } else { (j, i) });
         }

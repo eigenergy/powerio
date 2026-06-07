@@ -10,11 +10,11 @@
 
 use sprs::CsMat;
 
-use crate::indexed::IndexedNetwork;
 use crate::Result;
+use crate::indexed::IndexedNetwork;
 
 use super::ybus::{YbusFlags, build_ybus_with_flags};
-use super::{negate_into, BuildOptions, Scheme};
+use super::{BuildOptions, Scheme, negate_into};
 
 pub fn build_bdoubleprime(case: &IndexedNetwork, opts: &BuildOptions) -> Result<CsMat<f64>> {
     let flags = YbusFlags {

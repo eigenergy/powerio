@@ -289,8 +289,8 @@ pub struct Hvdc {
 /// The MATPOWER gen capability / ramp columns past `PMIN`, in order. The index
 /// into this array is the slot index into a [`GenCaps`].
 pub(crate) const GEN_EXTRA_KEYS: [&str; 11] = [
-    "pc1", "pc2", "qc1min", "qc1max", "qc2min", "qc2max", "ramp_agc", "ramp_10",
-    "ramp_30", "ramp_q", "apf",
+    "pc1", "pc2", "qc1min", "qc1max", "qc2min", "qc2max", "ramp_agc", "ramp_10", "ramp_30",
+    "ramp_q", "apf",
 ];
 
 impl Network {

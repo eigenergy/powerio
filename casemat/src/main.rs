@@ -1,12 +1,12 @@
 use std::path::{Path, PathBuf};
 
 use anyhow::Context;
-use clap::{Parser, Subcommand, ValueEnum};
 use casemat::matrix::{BuildOptions, DcConvention, Scheme, Units, sddm_check};
 use casemat::opf_pipeline::{DcOpfOptions, write_dcopf_bundle};
 use casemat::pipeline::{MatrixKind, Pipeline, RhsKind};
 use casemat::synth::{SynthSpec, Topology};
 use casemat::tui;
+use clap::{Parser, Subcommand, ValueEnum};
 
 #[derive(Parser, Debug)]
 #[command(name = "casemat", version, about)]
@@ -272,7 +272,15 @@ fn main() -> anyhow::Result<()> {
             seed,
             output,
             matrices,
-        } => run_gen(topology.into(), n, r_over_x, mean_x, seed, &output, matrices),
+        } => run_gen(
+            topology.into(),
+            n,
+            r_over_x,
+            mean_x,
+            seed,
+            &output,
+            matrices,
+        ),
         Command::Verify {
             input,
             kind,
@@ -301,7 +309,9 @@ fn main() -> anyhow::Result<()> {
 fn install_tracing() {
     use tracing_subscriber::EnvFilter;
     let _ = tracing_subscriber::fmt()
-        .with_env_filter(EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info")))
+        .with_env_filter(
+            EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info")),
+        )
         .with_writer(std::io::stderr)
         .try_init();
 }
@@ -391,11 +401,7 @@ fn run_gen(
     Ok(())
 }
 
-fn run_sensitivities(
-    input: &Path,
-    output: &Path,
-    convention: DcConvention,
-) -> anyhow::Result<()> {
+fn run_sensitivities(input: &Path, output: &Path, convention: DcConvention) -> anyhow::Result<()> {
     let mpc = casemat::parse_matpower_file(input)
         .with_context(|| format!("parse {}", input.display()))?;
     std::fs::create_dir_all(output)?;
@@ -495,9 +501,9 @@ fn read_network(
             Some("json") => FormatArg::PowerModelsJson,
             Some("raw") => FormatArg::Psse,
             Some("aux") => FormatArg::PowerWorld,
-            other => anyhow::bail!(
-                "cannot infer input format from extension {other:?}; pass --from"
-            ),
+            other => {
+                anyhow::bail!("cannot infer input format from extension {other:?}; pass --from")
+            }
         },
     };
     let net = match fmt {
@@ -508,7 +514,9 @@ fn read_network(
         }
         FormatArg::Psse => casemat::parse_psse(&std::fs::read_to_string(input)?)?,
         FormatArg::PowerWorld => casemat::parse_powerworld(&std::fs::read_to_string(input)?)?,
-        FormatArg::EgretJson => anyhow::bail!("reading EGRET JSON is not supported yet (write-only)"),
+        FormatArg::EgretJson => {
+            anyhow::bail!("reading EGRET JSON is not supported yet (write-only)")
+        }
     };
     Ok(net)
 }

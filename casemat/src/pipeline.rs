@@ -12,15 +12,15 @@ use rand::distr::{Distribution, StandardUniform};
 use rand_chacha::ChaCha8Rng;
 use serde::{Deserialize, Serialize};
 
+use crate::Result;
 use crate::indexed::IndexedNetwork;
-use crate::network::Network;
 use crate::io::meta::{CaseMetadata, MatrixMetadata, write_meta_json};
 use crate::io::mtx::{write_mtx, write_vector_mtx};
 use crate::matrix::{
     BuildOptions, MatrixStats, build_adjacency, build_bdoubleprime, build_bprime, build_lacpf,
     build_ybus, negate_into, sddm_check,
 };
-use crate::Result;
+use crate::network::Network;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum MatrixKind {
@@ -217,9 +217,7 @@ impl Pipeline {
                     MatrixKind::BPrime | MatrixKind::YbusG | MatrixKind::YbusB => {
                         case.pd().iter().map(|&p| -p / base).collect()
                     }
-                    MatrixKind::BDoublePrime => {
-                        case.qd().iter().map(|&q| -q / base).collect()
-                    }
+                    MatrixKind::BDoublePrime => case.qd().iter().map(|&q| -q / base).collect(),
                     MatrixKind::Lacpf | MatrixKind::Adjacency => unreachable!(),
                 }
             }

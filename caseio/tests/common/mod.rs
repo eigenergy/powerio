@@ -17,7 +17,9 @@ pub fn json_approx_eq(a: &Value, b: &Value) -> bool {
         }
         (Value::Object(xs), Value::Object(ys)) => {
             xs.len() == ys.len()
-                && xs.iter().all(|(k, p)| ys.get(k).is_some_and(|q| json_approx_eq(p, q)))
+                && xs
+                    .iter()
+                    .all(|(k, p)| ys.get(k).is_some_and(|q| json_approx_eq(p, q)))
         }
         _ => a == b,
     }
