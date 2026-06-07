@@ -52,7 +52,7 @@ impl IndexCore {
     /// # Correctness
     /// Bus ids must be unique; a duplicate collapses two buses onto one dense
     /// index and silently corrupts every aggregate. All format readers and the
-    /// MATPOWER reader run [`Network::check_references`] before this, so a parsed
+    /// MATPOWER reader run `Network::check_references` before this, so a parsed
     /// network always satisfies it; a hand-built [`Network`] must too. Checked
     /// with a `debug_assert`.
     #[must_use]
@@ -169,7 +169,7 @@ impl<'n> IndexedNetwork<'n> {
     /// [`bus_index`](Self::bus_index).
     ///
     /// # Panics
-    /// Panics if `idx >= n`. Pass a dense index (e.g. from [`bus_index`] or a
+    /// Panics if `idx >= n`. Pass a dense index (e.g. from [`bus_index`](Self::bus_index) or a
     /// matrix row), not a raw bus id.
     #[inline]
     pub fn bus_id(&self, idx: usize) -> usize {

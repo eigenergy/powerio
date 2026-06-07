@@ -54,6 +54,10 @@ int main(void) {
 
 ## Julia (`ccall`)
 
+For a typed Julia API, use [PowerIO.jl](https://github.com/eigenergy/PowerIO.jl),
+which wraps this ABI (`set_library!`, `parse_case`, `convert_case`, and ecosystem
+bridges). The raw `ccall` below is the low-level reference it builds on.
+
 ```julia
 const LIB = "libpowerio_capi"  # on the load path
 

@@ -16,8 +16,8 @@
 # PSS/E .raw fixtures are checked on the read side only (powerio reads the .raw,
 # emits PowerModels JSON, compared against PowerModels.jl reading the same .raw).
 #
-# Prereqs: `cargo build --release -p powerio-capi`, the casemat/powerio Python
-# extensions built into .venv (`maturin develop --release`), and the Julia env
+# Prereqs: `cargo build --release -p powerio-capi`, the powerio Python extension
+# built into .venv (`maturin develop --release`), and the Julia env
 # instantiated (`julia --project=benchmarks -e 'using Pkg; Pkg.instantiate()'`).
 #
 #   bash benchmarks/run_validation.sh
@@ -49,14 +49,14 @@ RAWCASES=(tests/data/psse/case5.raw tests/data/psse/case14.raw)
 fails=0
 rows=()
 
-# Convert a case to another format via the casemat Python package (no CLI build).
+# Convert a case to another format via the powerio Python package (no CLI build).
 convert() { # <in> <to> <out>
     "$PY" - "$@" <<'EOF'
 import sys, warnings
 warnings.filterwarnings("ignore")
-import casemat
+import powerio
 inp, to, out = sys.argv[1], sys.argv[2], sys.argv[3]
-open(out, "w").write(casemat.convert(inp, to).text)
+open(out, "w").write(powerio.convert(inp, to).text)
 EOF
     local rc=$?
     # Guard against a silent success that wrote nothing — validating an empty file

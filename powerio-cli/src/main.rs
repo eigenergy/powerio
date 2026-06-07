@@ -1,3 +1,9 @@
+//! The `powerio` binary: a clap CLI and a ratatui TUI over `powerio-matrix`.
+//!
+//! Subcommands: `batch` (matrix families), `gen` (synthetic cases), `verify`,
+//! `dcopf` (DC-OPF bundle), `sensitivities` (PTDF/LODF), and `convert`. With no
+//! subcommand it launches the TUI. Run `powerio --help` for the full surface.
+
 use std::path::{Path, PathBuf};
 
 use anyhow::Context;
