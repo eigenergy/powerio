@@ -250,7 +250,7 @@ pub fn parse_psse(content: &str) -> Result<Network> {
         storage: Vec::new(),
         hvdc: Vec::new(),
         source_format: SourceFormat::Psse,
-        source: Some(Arc::from(content)),
+        source: Some(Arc::new(content.to_owned())),
     };
     net.check_references(FMT)?;
     Ok(net)

@@ -59,17 +59,17 @@ open("case14.json", "w").write(r.text)
 
 ## Benchmark
 
-Median parse time (`parse_matpower`), same machine (Apple M-series, release build); all three return identical bus/branch counts. Full table and method in [benchmarks/RESULTS.md](benchmarks/RESULTS.md).
+Median parse time, same machine (Apple M-series, release build), all three timed in one process under the same harness — caseio through its C ABI, so every parser reads the file from disk alike. Full table, method, and the cross-tool correctness checks in [benchmarks/RESULTS.md](benchmarks/RESULTS.md).
 
 | case | buses / branches | **caseio** | ExaPowerIO.jl | PowerModels.jl |
 | --- | --- | --- | --- | --- |
-| case2869pegase | 2869 / 4582 | **1.90 ms** | 3.86 ms | 133 ms |
-| case_ACTIVSg2000 | 2000 / 3206 | **2.08 ms** | 3.06 ms | 148 ms |
-| case9241pegase | 9241 / 16049 | **5.62 ms** | 9.85 ms | 620 ms |
-| case13659pegase | 13659 / 20467 | **8.34 ms** | 15.1 ms | 893 ms |
-| case193k | 192768 / 228574 | **169 ms** | 194 ms | — |
+| case2869pegase | 2869 / 4582 | **2.33 ms** | 2.92 ms | 123 ms |
+| case_ACTIVSg2000 | 2000 / 3206 | 2.48 ms | **2.12 ms** | 128 ms |
+| case9241pegase | 9241 / 16049 | **7.84 ms** | 9.12 ms | 547 ms |
+| case13659pegase | 13659 / 20467 | **11.8 ms** | 13.6 ms | 781 ms |
+| case193k | 192768 / 228574 | 200 ms | **180 ms** | — |
 
-caseio is 25–70× faster than PowerModels' parser and faster than ExaPowerIO (the focused Julia reader) on every case — ~1.5–2× on the pegase cases, 7–15% on the synthetic US cases — scaling linearly to a 193k-bus / 54 MB file, and it does this on the same single parse path that gives a byte-exact round-trip. caseio is the only one of the three that is lossless, round-trips byte-for-byte (verified at 193k buses), and is callable from Rust, the CLI, and Python with no runtime. Full table: [benchmarks/RESULTS.md](benchmarks/RESULTS.md).
+caseio is 50–70× faster than PowerModels' parser and trades the lead with ExaPowerIO (the focused Julia reader): ~20–25% faster on the pegase cases (European, number-dense), ~10–20% behind on the ACTIVSg / SyntheticUSA / US cases, where ExaPowerIO drops the `gentype` / `genfuel` / `bus_name` cell arrays caseio parses and keeps for its byte-exact round-trip. It's also ~10× faster than pandapower's `.m` reader. The durable edge isn't speed: caseio is the only one of the three that is lossless, round-trips byte-for-byte (verified at 193k buses), and is callable from Rust, the CLI, Python, and C/Julia with no runtime — and its parse, conversions, and Y_bus are validated value for value against PowerModels, ExaPowerIO, and pandapower (`benchmarks/run_validation.sh`, which spells out what each tool checks). Full table: [benchmarks/RESULTS.md](benchmarks/RESULTS.md).
 
 ## caseio: parse and write
 
@@ -139,9 +139,8 @@ More over the `Network` hub, tracked in the issues:
 - PSS/E fidelity: 3-winding transformers, non-unit `CZ`/`CW` impedance bases, switched shunts; and an external validation for PowerWorld `.aux`.
 - A RAVENS-JSON export sink (and positioning caseio as a fast ingest backend for MG-RAVENS).
 - An MCP `convert`/`validate` tool over the Python binding.
-- A C ABI so Julia/C++ can consume `caseio` directly.
 
-CIM stays out of scope — it's a different (much heavier) problem owned by the CIM hubs.
+The C ABI (`caseio-capi`) for C/C++/Julia is done — it's also what the benchmark harness times caseio through. CIM stays out of scope — it's a different (much heavier) problem owned by the CIM hubs.
 
 ## Tests
 

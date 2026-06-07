@@ -189,7 +189,11 @@ fn parsed_case_keeps_source_in_memory_case_does_not() {
     // A network parsed from text retains its source so the writer echoes it
     // verbatim; one built in memory has no source and writes canonically.
     let parsed = parse_mpc(CASE_TINY).expect("parse tiny");
-    assert_eq!(parsed.source.as_deref(), Some(CASE_TINY), "parsed network should echo its source");
+    assert_eq!(
+        parsed.source.as_ref().map(|s| s.as_str()),
+        Some(CASE_TINY),
+        "parsed network should echo its source"
+    );
     assert_eq!(write_matpower(&parsed), CASE_TINY);
 
     let mut built = parsed.clone();

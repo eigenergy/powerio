@@ -19,6 +19,9 @@ use caseio::{
     write_egret_json, write_powermodels_json, write_powerworld, write_psse, Network, TargetFormat,
 };
 
+mod common;
+use common::json_approx_eq;
+
 fn data(name: &str) -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("../tests/data").join(name)
 }
@@ -111,7 +114,19 @@ fn reader_writer_is_idempotent() {
         for fmt in roundtrippable() {
             let t0 = (fmt.write)(&net0);
             let t1 = (fmt.write)(&(fmt.read)(&t0));
-            assert_eq!(t0, t1, "{case} via {}: serialize→read→serialize not stable", fmt.name);
+            if fmt.format == TargetFormat::PowerModelsJson {
+                // PowerModels JSON is per-unit; the ÷base / ×base round-trip is not
+                // bit-exact in f64, so compare structure and values with a tolerance.
+                let v0: serde_json::Value = serde_json::from_str(&t0).unwrap();
+                let v1: serde_json::Value = serde_json::from_str(&t1).unwrap();
+                assert!(
+                    json_approx_eq(&v0, &v1),
+                    "{case} via {}: serialize→read→serialize not stable",
+                    fmt.name
+                );
+            } else {
+                assert_eq!(t0, t1, "{case} via {}: serialize→read→serialize not stable", fmt.name);
+            }
         }
     }
 }

@@ -175,7 +175,7 @@ pub fn parse_powerworld(content: &str) -> Result<Network> {
         storage: Vec::new(),
         hvdc: Vec::new(),
         source_format: SourceFormat::PowerWorld,
-        source: Some(Arc::from(content)),
+        source: Some(Arc::new(content.to_owned())),
     };
     net.check_references(FMT)?;
     Ok(net)

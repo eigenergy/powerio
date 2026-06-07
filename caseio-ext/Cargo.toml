@@ -9,8 +9,8 @@ repository = "https://github.com/eigenergy/caseio"
 publish = false
 
 # The compiled module is imported as `caseio._caseio`; the `caseio` Python
-# package (python/caseio/) wraps it. No numpy/scipy: parse/write/convert hand
-# back plain dicts and strings, so the wheel has no runtime dependency.
+# package (caseio-ext/python/caseio/) wraps it. No numpy/scipy: parse/write/convert
+# hand back plain dicts and strings, so the wheel has no runtime dependency.
 [lib]
 name = "_caseio"
 crate-type = ["cdylib"]
