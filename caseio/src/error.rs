@@ -76,4 +76,7 @@ pub enum Error {
         format: &'static str,
         message: String,
     },
+
+    #[error("unknown or unsupported case format: {0}")]
+    UnknownFormat(String),
 }

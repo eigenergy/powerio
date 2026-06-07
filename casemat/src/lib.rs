@@ -10,11 +10,11 @@
 // resolve unchanged after the split.
 pub use caseio::{
     error, format, indexed, network, parser, parse_matpower, parse_matpower_file,
-    parse_powermodels_json, parse_powerworld, parse_psse, target_format_from_name, write_as,
-    write_egret_json, write_matpower, write_powermodels_json, write_powerworld, write_psse, Branch,
-    Bus, BusType, ConnectivityReport,
-    Conversion, Error, Extras, GenCost, Generator, Hvdc, IndexedNetwork, Load, Network, Result,
-    Shunt, SourceFormat, Storage, TargetFormat,
+    parse_powermodels_json, parse_powerworld, parse_psse, read_path, target_format_from_name,
+    write_as, write_egret_json, write_matpower, write_powermodels_json, write_powerworld,
+    write_psse, Branch, Bus, BusType, ConnectivityReport, Conversion, Error, Extras, GenCost,
+    Generator, Hvdc, IndexCore, IndexedNetwork, Load, Network, Result, Shunt, SourceFormat, Storage,
+    TargetFormat,
 };
 
 pub mod io;

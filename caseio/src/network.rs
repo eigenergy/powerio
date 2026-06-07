@@ -50,6 +50,18 @@ impl BusType {
             _ => Self::Pq,
         }
     }
+
+    /// The canonical short name (`"PQ"`, `"PV"`, `"REF"`, `"ISOLATED"`), shared
+    /// by the bindings so their bus-type strings can't drift.
+    #[must_use]
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Pq => "PQ",
+            Self::Pv => "PV",
+            Self::Ref => "REF",
+            Self::Isolated => "ISOLATED",
+        }
+    }
 }
 
 /// A generator cost curve (`mpc.gencost` row).
