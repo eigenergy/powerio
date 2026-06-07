@@ -1,9 +1,13 @@
-//! Convert a parsed [`Network`](crate::Network) into other interchange formats.
+//! The format hub: readers and writers for every supported file format, all
+//! meeting at the shared [`Network`](crate::Network).
 //!
-//! Each converter is an independent writer over the shared `Network`: every
-//! input format and every output format meet at the hub, so a new target is
-//! one writer here, not a change to any parser. Non-finite numeric values (a
-//! MATPOWER `Inf`/`NaN` angle limit, say) are written as JSON `null`.
+//! Each format is one module here, owning its reader and/or writer — MATPOWER
+//! `.m`, PowerModels JSON, PSS/E `.raw`, PowerWorld `.aux`, plus the write-only
+//! EGRET sink. Every input and output format meets at the hub, so adding a
+//! format is one module, not a change to any other. [`parse`] reads a file,
+//! detecting the format from its extension; [`write_as`] serializes a `Network`
+//! to a target. Non-finite numeric values (a MATPOWER `Inf`/`NaN` angle limit,
+//! say) are written as JSON `null`.
 
 use std::collections::BTreeSet;
 
@@ -13,11 +17,13 @@ use crate::network::{Network, SourceFormat};
 use crate::{Error, Result};
 
 mod egret;
+mod matpower;
 mod powermodels;
 mod powerworld;
 mod psse;
 
 pub use egret::write_egret_json;
+pub use matpower::{parse_matpower, parse_matpower_file, write_matpower};
 pub use powermodels::{parse_powermodels_json, write_powermodels_json};
 pub use powerworld::{parse_powerworld, write_powerworld};
 pub use psse::{parse_psse, write_psse};
@@ -97,6 +103,37 @@ pub fn read_path(path: &std::path::Path, from: Option<&str>) -> Result<Network> 
         TargetFormat::PowerModelsJson => parse_powermodels_json(&std::fs::read_to_string(path)?),
         TargetFormat::Psse => parse_psse(&std::fs::read_to_string(path)?),
         TargetFormat::PowerWorld => parse_powerworld(&std::fs::read_to_string(path)?),
+        TargetFormat::EgretJson => Err(Error::UnknownFormat(
+            "EGRET JSON is write-only and cannot be read".to_string(),
+        )),
+    }
+}
+
+/// Parse the case file at `path` into a [`Network`], detecting the format from
+/// the file extension (`m`/`json`/`raw`/`aux`). The single high-level read
+/// entry point; use [`read_path`] to force a specific source format, or
+/// [`parse_str`] for in-memory text.
+///
+/// # Errors
+/// As [`read_path`] with `from = None`.
+pub fn parse(path: impl AsRef<std::path::Path>) -> Result<Network> {
+    read_path(path.as_ref(), None)
+}
+
+/// Parse in-memory case `text` of the named `format` (see
+/// [`target_format_from_name`]) into a [`Network`]. EGRET JSON is write-only.
+///
+/// # Errors
+/// [`Error::UnknownFormat`] if `format` is unrecognized or write-only; the
+/// reader's own [`Error`] on malformed input.
+pub fn parse_str(text: &str, format: &str) -> Result<Network> {
+    let fmt =
+        target_format_from_name(format).ok_or_else(|| Error::UnknownFormat(format.to_string()))?;
+    match fmt {
+        TargetFormat::Matpower => parse_matpower(text),
+        TargetFormat::PowerModelsJson => parse_powermodels_json(text),
+        TargetFormat::Psse => parse_psse(text),
+        TargetFormat::PowerWorld => parse_powerworld(text),
         TargetFormat::EgretJson => Err(Error::UnknownFormat(
             "EGRET JSON is write-only and cannot be read".to_string(),
         )),
