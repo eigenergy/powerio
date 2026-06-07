@@ -2,10 +2,11 @@
 
 The fast, lossless parser, data layer, and **format converter** for power-system case files. Parse a MATPOWER `.m` case, work with a typed model, write it back **byte-for-byte**, or convert between formats through a neutral hub. Dependency-light on purpose, so other tools can embed it without dragging in a matrix or solver stack.
 
-Two crates in this workspace:
+Three crates in this workspace (the third builds the Python wheel):
 
-- **`caseio`** — the parser, the typed `MpcCase`, the format-neutral `Network` hub (the converters meet here), the lossless writer, and the format converters (PowerModels / EGRET JSON writers + a PowerModels-JSON reader). Six dependencies, no sparse-matrix or TUI baggage.
-- **`casemat`** — sparse matrices and graph views built on caseio: B'/B''/Y_bus, PTDF/LODF, incidence, weighted Laplacian, the LACPF block, adjacency, and the DC-OPF instance bundle, plus a CLI/TUI. Also the `casemat` Python package.
+- **`caseio`** — the parser, the typed `MpcCase`, the format-neutral `Network` hub (the converters meet here), the lossless writer, and the format converters. Readers for MATPOWER, PowerModels JSON, PSS/E, and PowerWorld; writers for those plus EGRET JSON. Six dependencies, no sparse-matrix or TUI baggage.
+- **`casemat`** — sparse matrices and graph views built on caseio: B'/B''/Y_bus, PTDF/LODF, incidence, weighted Laplacian, the LACPF block, adjacency, and the DC-OPF instance bundle, plus a CLI/TUI.
+- **`casemat-ext`** — the PyO3 extension behind the `casemat` Python package. maturin compiles it to the native module `casemat._casemat`; the pure-Python wrapper in `python/casemat/` assembles the results into `scipy.sparse` matrices and networkx graphs, so scipy/networkx stay out of the Rust build. `pip install casemat` gets parsing, conversion, and the matrices under one import.
 
 ## Lossless round-trip
 
