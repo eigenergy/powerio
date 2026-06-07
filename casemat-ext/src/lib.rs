@@ -27,7 +27,7 @@ use casemat::matrix::{
     build_ptdf, build_weighted_laplacian, build_ybus, BuildOptions, DcConvention, Scheme, Units,
 };
 use casemat::opf_pipeline::{write_dcopf_bundle as write_bundle, DcOpfOptions};
-use casemat::MpcCase;
+use casemat::{IndexedNetwork, MpcCase};
 
 pyo3::create_exception!(
     _casemat,
@@ -283,7 +283,9 @@ impl PyCase {
             scheme: parse_scheme(scheme.unwrap_or("bx"))?,
             ..BuildOptions::default()
         };
-        let m = build_bprime(&self.inner, &opts).map_err(to_pyerr)?;
+        let net = self.inner.to_network();
+        let view = IndexedNetwork::new(&net);
+        let m = build_bprime(&view, &opts).map_err(to_pyerr)?;
         coo_triplets(py, &m)
     }
 
@@ -299,7 +301,9 @@ impl PyCase {
             scheme: parse_scheme(scheme.unwrap_or("bx"))?,
             ..BuildOptions::default()
         };
-        let m = build_bdoubleprime(&self.inner, &opts).map_err(to_pyerr)?;
+        let net = self.inner.to_network();
+        let view = IndexedNetwork::new(&net);
+        let m = build_bdoubleprime(&view, &opts).map_err(to_pyerr)?;
         coo_triplets(py, &m)
     }
 
@@ -311,12 +315,16 @@ impl PyCase {
         include_shifts: bool,
     ) -> PyResult<Bound<'py, PyAny>> {
         let opts = build_options(Scheme::Bx, include_taps, include_shifts);
-        let m = build_lacpf(&self.inner, &opts).map_err(to_pyerr)?;
+        let net = self.inner.to_network();
+        let view = IndexedNetwork::new(&net);
+        let m = build_lacpf(&view, &opts).map_err(to_pyerr)?;
         coo_triplets(py, &m)
     }
 
     fn adjacency<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
-        let m = build_adjacency(&self.inner).map_err(to_pyerr)?;
+        let net = self.inner.to_network();
+        let view = IndexedNetwork::new(&net);
+        let m = build_adjacency(&view).map_err(to_pyerr)?;
         coo_triplets(py, &m)
     }
 
@@ -329,7 +337,9 @@ impl PyCase {
         include_shifts: bool,
     ) -> PyResult<Bound<'py, PyAny>> {
         let opts = build_options(Scheme::Bx, include_taps, include_shifts);
-        let yb = build_ybus(&self.inner, &opts).map_err(to_pyerr)?;
+        let net = self.inner.to_network();
+        let view = IndexedNetwork::new(&net);
+        let yb = build_ybus(&view, &opts).map_err(to_pyerr)?;
         let g = coo_triplets(py, &yb.g)?;
         let b = coo_triplets(py, &yb.b)?;
         Ok((g, b).into_pyobject(py)?.into_any())
@@ -338,14 +348,18 @@ impl PyCase {
     #[pyo3(signature = (convention=None))]
     fn ptdf<'py>(&self, py: Python<'py>, convention: Option<&str>) -> PyResult<Bound<'py, PyAny>> {
         let conv = parse_convention(convention.unwrap_or("paper"))?;
-        let m = build_ptdf(&self.inner, conv).map_err(to_pyerr)?;
+        let net = self.inner.to_network();
+        let view = IndexedNetwork::new(&net);
+        let m = build_ptdf(&view, conv).map_err(to_pyerr)?;
         coo_triplets(py, &m)
     }
 
     #[pyo3(signature = (convention=None))]
     fn lodf<'py>(&self, py: Python<'py>, convention: Option<&str>) -> PyResult<Bound<'py, PyAny>> {
         let conv = parse_convention(convention.unwrap_or("paper"))?;
-        let m = build_lodf(&self.inner, conv).map_err(to_pyerr)?;
+        let net = self.inner.to_network();
+        let view = IndexedNetwork::new(&net);
+        let m = build_lodf(&view, conv).map_err(to_pyerr)?;
         coo_triplets(py, &m)
     }
 
@@ -359,7 +373,9 @@ impl PyCase {
         convention: Option<&str>,
     ) -> PyResult<Bound<'py, PyAny>> {
         let conv = parse_convention(convention.unwrap_or("paper"))?;
-        let parts = build_incidence(&self.inner, conv).map_err(to_pyerr)?;
+        let net = self.inner.to_network();
+        let view = IndexedNetwork::new(&net);
+        let parts = build_incidence(&view, conv).map_err(to_pyerr)?;
         let a = coo_triplets(py, &parts.a)?;
         let b = parts.b.into_pyarray(py);
         let p_shift = parts.p_shift.into_pyarray(py);
@@ -376,7 +392,9 @@ impl PyCase {
         convention: Option<&str>,
     ) -> PyResult<Bound<'py, PyAny>> {
         let conv = parse_convention(convention.unwrap_or("paper"))?;
-        let parts = build_incidence(&self.inner, conv).map_err(to_pyerr)?;
+        let net = self.inner.to_network();
+        let view = IndexedNetwork::new(&net);
+        let parts = build_incidence(&view, conv).map_err(to_pyerr)?;
         let l = build_weighted_laplacian(&parts.a, &parts.b);
         coo_triplets(py, &l)
     }

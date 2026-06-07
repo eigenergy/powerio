@@ -19,13 +19,13 @@
 
 use sprs::CsMat;
 
-use crate::case::MpcCase;
+use crate::indexed::IndexedNetwork;
 use crate::Result;
 
 use super::ybus::build_ybus;
 use super::BuildOptions;
 
-pub fn build_lacpf(case: &MpcCase, opts: &BuildOptions) -> Result<CsMat<f64>> {
+pub fn build_lacpf(case: &IndexedNetwork, opts: &BuildOptions) -> Result<CsMat<f64>> {
     let parts = build_ybus(case, opts)?;
     let n = case.n();
     let two_n = 2 * n;

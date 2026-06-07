@@ -2,6 +2,7 @@
 //! bundle. Run against vendored MATPOWER cases.
 
 use casemat::case::BusType;
+use casemat::IndexedNetwork;
 use casemat::{
     Branch, Bus, DcConvention, Error, GenCost, Generator, MpcCase, Scheme, Units, build_adjacency,
     build_bprime, build_flow_map, build_incidence, build_lodf, build_opf_instance, build_ptdf,
@@ -74,10 +75,12 @@ fn laplacian_equals_bprime_xb() {
     // L = A diag(1/x) Aᵀ is exactly B' in the XB scheme.
     for path in CASES {
         let case = load(path);
-        let inc = build_incidence(&case, DcConvention::PaperPure).unwrap();
+        let net = case.to_network();
+        let view = IndexedNetwork::new(&net);
+        let inc = build_incidence(&view, DcConvention::PaperPure).unwrap();
         let l = build_weighted_laplacian(&inc.a, &inc.b);
         let bp = build_bprime(
-            &case,
+            &view,
             &casemat::BuildOptions {
                 scheme: Scheme::Xb,
                 ..Default::default()
@@ -103,7 +106,9 @@ fn laplacian_equals_bprime_xb() {
 fn incidence_structure() {
     for path in CASES {
         let case = load(path);
-        let inc = build_incidence(&case, DcConvention::PaperPure).unwrap();
+        let net = case.to_network();
+        let view = IndexedNetwork::new(&net);
+        let inc = build_incidence(&view, DcConvention::PaperPure).unwrap();
         let (n, m) = (inc.n(), inc.m());
         assert_eq!(inc.a.rows(), n);
         assert_eq!(inc.a.cols(), m);
@@ -130,7 +135,9 @@ fn incidence_structure() {
 fn laplacian_is_psd_with_constant_kernel() {
     for path in CASES {
         let case = load(path);
-        let inc = build_incidence(&case, DcConvention::PaperPure).unwrap();
+        let net = case.to_network();
+        let view = IndexedNetwork::new(&net);
+        let inc = build_incidence(&view, DcConvention::PaperPure).unwrap();
         let l = build_weighted_laplacian(&inc.a, &inc.b);
         let d = dense(&l);
         let n = d.len();
@@ -149,12 +156,14 @@ fn laplacian_is_psd_with_constant_kernel() {
 fn grounded_laplacian_is_spd() {
     for path in CASES {
         let case = load(path);
-        let r = case.reference_bus_index().unwrap();
-        let inc = build_incidence(&case, DcConvention::PaperPure).unwrap();
+        let net = case.to_network();
+        let view = IndexedNetwork::new(&net);
+        let r = view.reference_bus_index().unwrap();
+        let inc = build_incidence(&view, DcConvention::PaperPure).unwrap();
         let l = build_weighted_laplacian(&inc.a, &inc.b);
         let lg = ground_at(&l, r);
-        assert_eq!(lg.rows(), case.n() - 1);
-        assert_eq!(lg.cols(), case.n() - 1);
+        assert_eq!(lg.rows(), view.n() - 1);
+        assert_eq!(lg.cols(), view.n() - 1);
         assert!(is_spd(&dense(&lg)), "{path}: grounded L not SPD");
     }
 }
@@ -163,7 +172,9 @@ fn grounded_laplacian_is_spd() {
 fn flow_map_reconstructs_laplacian() {
     for path in CASES {
         let case = load(path);
-        let inc = build_incidence(&case, DcConvention::PaperPure).unwrap();
+        let net = case.to_network();
+        let view = IndexedNetwork::new(&net);
+        let inc = build_incidence(&view, DcConvention::PaperPure).unwrap();
         let flow = build_flow_map(&inc.a, &inc.b); // B Aᵀ, m×n
         assert_eq!(flow.rows(), inc.m());
         assert_eq!(flow.cols(), inc.n());
@@ -189,9 +200,11 @@ fn flow_map_reconstructs_laplacian() {
 fn opf_instance_shapes_and_cg() {
     for path in CASES {
         let case = load(path);
-        let inc = build_incidence(&case, DcConvention::PaperPure).unwrap();
-        let opf = build_opf_instance(&case, &inc, Units::PerUnit).unwrap();
-        let (n, m, n_gen) = (case.n(), inc.m(), opf.n_gen);
+        let net = case.to_network();
+        let view = IndexedNetwork::new(&net);
+        let inc = build_incidence(&view, DcConvention::PaperPure).unwrap();
+        let opf = build_opf_instance(&view, &inc, Units::PerUnit).unwrap();
+        let (n, m, n_gen) = (view.n(), inc.m(), opf.n_gen);
         assert_eq!(opf.q_bus.len(), n);
         assert_eq!(opf.c_bus.len(), n);
         assert_eq!(opf.pmax_bus.len(), n);
@@ -240,8 +253,10 @@ fn no_generators_errors() {
         seed: 1,
     };
     let case = casemat::synth::generate(&spec);
-    let inc = build_incidence(&case, DcConvention::PaperPure).unwrap();
-    let err = build_opf_instance(&case, &inc, Units::PerUnit).unwrap_err();
+    let net = case.to_network();
+    let view = IndexedNetwork::new(&net);
+    let inc = build_incidence(&view, DcConvention::PaperPure).unwrap();
+    let err = build_opf_instance(&view, &inc, Units::PerUnit).unwrap_err();
     assert!(matches!(err, Error::NoGenerators), "got {err:?}");
 }
 
@@ -286,9 +301,11 @@ fn reference_bus_count_errors() {
 fn adjacency_is_symmetric_01() {
     for path in CASES {
         let case = load(path);
-        let a = build_adjacency(&case).unwrap();
-        assert_eq!(a.rows(), case.n());
-        assert_eq!(a.cols(), case.n());
+        let net = case.to_network();
+        let view = IndexedNetwork::new(&net);
+        let a = build_adjacency(&view).unwrap();
+        assert_eq!(a.rows(), view.n());
+        assert_eq!(a.cols(), view.n());
         let d = dense(&a);
         for i in 0..d.len() {
             assert!((d[i][i]).abs() < 1e-12, "{path}: nonzero diagonal");
@@ -305,13 +322,15 @@ fn ptdf_satisfies_kcl() {
     // A · PTDF = I − e_r·1ᵀ: nodal balance for every injection.
     for path in CASES {
         let case = load(path);
-        let r = case.reference_bus_index().unwrap();
-        let inc = build_incidence(&case, DcConvention::PaperPure).unwrap();
-        let ptdf = build_ptdf(&case, DcConvention::PaperPure).unwrap();
+        let net = case.to_network();
+        let view = IndexedNetwork::new(&net);
+        let r = view.reference_bus_index().unwrap();
+        let inc = build_incidence(&view, DcConvention::PaperPure).unwrap();
+        let ptdf = build_ptdf(&view, DcConvention::PaperPure).unwrap();
         assert_eq!(ptdf.rows(), inc.m());
-        assert_eq!(ptdf.cols(), case.n());
+        assert_eq!(ptdf.cols(), view.n());
         let m = dense(&(&inc.a * &ptdf)); // n × n
-        let n = case.n();
+        let n = view.n();
         for i in 0..n {
             for k in 0..n {
                 let expected = f64::from(i == k) - f64::from(i == r);
@@ -334,8 +353,10 @@ fn ptdf_satisfies_kcl() {
 fn lodf_diagonal_is_minus_one() {
     for path in CASES {
         let case = load(path);
-        let lodf = build_lodf(&case, DcConvention::PaperPure).unwrap();
-        let inc = build_incidence(&case, DcConvention::PaperPure).unwrap();
+        let net = case.to_network();
+        let view = IndexedNetwork::new(&net);
+        let lodf = build_lodf(&view, DcConvention::PaperPure).unwrap();
+        let inc = build_incidence(&view, DcConvention::PaperPure).unwrap();
         assert_eq!(lodf.rows(), inc.m());
         assert_eq!(lodf.cols(), inc.m());
         let d = dense(&lodf);
@@ -430,8 +451,10 @@ fn poly_gen(bus_id: usize, pmax: f64, c2: f64, c1: f64) -> Generator {
 /// DC-OPF instance for `case` under the default PaperPure convention. Returns
 /// the `Result` so error-path tests can assert on the failure.
 fn opf_of(case: &MpcCase, units: Units) -> casemat::Result<casemat::OpfInstance> {
-    let inc = build_incidence(case, DcConvention::PaperPure)?;
-    build_opf_instance(case, &inc, units)
+    let net = case.to_network();
+    let view = IndexedNetwork::new(&net);
+    let inc = build_incidence(&view, DcConvention::PaperPure)?;
+    build_opf_instance(&view, &inc, units)
 }
 
 /// Symmetric 3-bus triangle, slack at bus 1, unit susceptance on every branch.
@@ -455,7 +478,10 @@ fn triangle() -> MpcCase {
 fn ptdf_matches_analytic_triangle() {
     // Hand-derived for the unit triangle, slack = bus 1 (column 0).
     // Inject at bus j, withdraw at slack; read the flow on each branch.
-    let ptdf = dense(&build_ptdf(&triangle(), DcConvention::PaperPure).unwrap());
+    let case = triangle();
+    let net = case.to_network();
+    let view = IndexedNetwork::new(&net);
+    let ptdf = dense(&build_ptdf(&view, DcConvention::PaperPure).unwrap());
     let expected = [
         [0.0, -2.0 / 3.0, -1.0 / 3.0], // e0: 1→2
         [0.0, -1.0 / 3.0, -2.0 / 3.0], // e1: 1→3
@@ -477,7 +503,10 @@ fn lodf_matches_analytic_triangle() {
     // Column k = outage of branch k; row l = the flow it pushes onto branch l.
     // Tripping any one edge of the triangle reroutes its flow around the other
     // two, giving ±1 entries.
-    let lodf = dense(&build_lodf(&triangle(), DcConvention::PaperPure).unwrap());
+    let case = triangle();
+    let net = case.to_network();
+    let view = IndexedNetwork::new(&net);
+    let lodf = dense(&build_lodf(&view, DcConvention::PaperPure).unwrap());
     let expected = [
         [-1.0, 1.0, -1.0],
         [1.0, -1.0, 1.0],
@@ -504,13 +533,16 @@ fn matpower_convention_tap_and_shift() {
         vec![branch_xts(1, 2, x, tap, shift_deg)],
     );
 
+    let net = case.to_network();
+    let view = IndexedNetwork::new(&net);
+
     // PaperPure ignores tap and shift: b = 1/x, no phase injection.
-    let pp = build_incidence(&case, DcConvention::PaperPure).unwrap();
+    let pp = build_incidence(&view, DcConvention::PaperPure).unwrap();
     assert!((pp.b[0] - 1.0 / x).abs() < 1e-12);
     assert!(pp.p_shift.iter().all(|&v| v == 0.0));
 
     // Matpower: b = 1/(x·τ); makeBdc injection ±b·shift at from/to.
-    let mp = build_incidence(&case, DcConvention::Matpower).unwrap();
+    let mp = build_incidence(&view, DcConvention::Matpower).unwrap();
     let b_e = 1.0 / (x * tap);
     let shift_rad = shift_deg.to_radians();
     assert!((mp.b[0] - b_e).abs() < 1e-12, "b_e {} != {b_e}", mp.b[0]);
@@ -526,8 +558,10 @@ fn bundle_vectors_round_trip() {
     let out = casemat::write_dcopf_bundle(&case, &dir, &casemat::DcOpfOptions::default()).unwrap();
 
     // Default options are PaperPure + PerUnit; rebuild the instance to compare.
-    let inc = build_incidence(&case, DcConvention::PaperPure).unwrap();
-    let opf = build_opf_instance(&case, &inc, Units::PerUnit).unwrap();
+    let net = case.to_network();
+    let view = IndexedNetwork::new(&net);
+    let inc = build_incidence(&view, DcConvention::PaperPure).unwrap();
+    let opf = build_opf_instance(&view, &inc, Units::PerUnit).unwrap();
 
     let check = |name: &str, want: &[f64]| {
         let got = casemat::io::read_vector_mtx(out.dir.join(name)).unwrap();
@@ -567,7 +601,9 @@ fn radial_lodf_is_negative_identity() {
         vec![bus(1, BusType::Ref), bus(2, BusType::Pq), bus(3, BusType::Pq)],
         vec![branch(1, 2, 0.1), branch(2, 3, 0.1)],
     );
-    let lodf = dense(&build_lodf(&case, DcConvention::PaperPure).unwrap());
+    let net = case.to_network();
+    let view = IndexedNetwork::new(&net);
+    let lodf = dense(&build_lodf(&view, DcConvention::PaperPure).unwrap());
     for l in 0..2 {
         for k in 0..2 {
             let want = if l == k { -1.0 } else { 0.0 };
@@ -594,10 +630,12 @@ fn disconnected_network_errors() {
         ],
         vec![branch(1, 2, 0.1), branch(3, 4, 0.1)],
     );
-    assert_eq!(case.n_connected_components(), 2);
-    let p = build_ptdf(&case, DcConvention::PaperPure).unwrap_err();
+    let net = case.to_network();
+    let view = IndexedNetwork::new(&net);
+    assert_eq!(view.n_connected_components(), 2);
+    let p = build_ptdf(&view, DcConvention::PaperPure).unwrap_err();
     assert!(matches!(p, Error::DisconnectedNetwork { components: 2 }), "ptdf: {p:?}");
-    let l = build_lodf(&case, DcConvention::PaperPure).unwrap_err();
+    let l = build_lodf(&view, DcConvention::PaperPure).unwrap_err();
     assert!(matches!(l, Error::DisconnectedNetwork { components: 2 }), "lodf: {l:?}");
 }
 

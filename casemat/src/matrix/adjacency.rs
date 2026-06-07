@@ -6,21 +6,21 @@ use std::collections::HashSet;
 
 use sprs::CsMat;
 
-use crate::case::MpcCase;
+use crate::indexed::IndexedNetwork;
 use crate::matrix::triplet::CooBuilder;
 use crate::{Error, Result};
 
 /// Build the `n × n` 0/1 adjacency matrix.
-pub fn build_adjacency(case: &MpcCase) -> Result<CsMat<f64>> {
+pub fn build_adjacency(case: &IndexedNetwork) -> Result<CsMat<f64>> {
     let n = case.n();
     let mut edges: HashSet<(usize, usize)> = HashSet::new();
     for (idx, br) in case.in_service_branches() {
         let i = case
-            .bus_index(br.from_id)
-            .ok_or(Error::UnknownBus { bus_id: br.from_id, row: idx })?;
+            .bus_index(br.from)
+            .ok_or(Error::UnknownBus { bus_id: br.from, row: idx })?;
         let j = case
-            .bus_index(br.to_id)
-            .ok_or(Error::UnknownBus { bus_id: br.to_id, row: idx })?;
+            .bus_index(br.to)
+            .ok_or(Error::UnknownBus { bus_id: br.to, row: idx })?;
         if i != j {
             edges.insert(if i < j { (i, j) } else { (j, i) });
         }

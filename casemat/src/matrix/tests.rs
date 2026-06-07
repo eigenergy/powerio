@@ -1,6 +1,7 @@
 use approx::assert_relative_eq;
 
 use crate::case::{Branch, Bus, BusType, MpcCase};
+use crate::indexed::IndexedNetwork;
 use crate::matrix::{
     build_bdoubleprime, build_bprime, build_lacpf, build_ybus, BuildOptions, MatrixStats, Scheme,
 };
@@ -62,7 +63,9 @@ fn three_bus() -> MpcCase {
 #[test]
 fn bprime_three_bus_has_correct_structure() {
     let case = three_bus();
-    let b = build_bprime(&case, &BuildOptions::default()).unwrap();
+    let net = case.to_network();
+    let view = IndexedNetwork::new(&net);
+    let b = build_bprime(&view, &BuildOptions::default()).unwrap();
     assert_eq!(b.rows(), 3);
     assert_eq!(b.cols(), 3);
 
@@ -84,7 +87,9 @@ fn bprime_three_bus_has_correct_structure() {
 #[test]
 fn bprime_is_symmetric_and_laplacian() {
     let case = three_bus();
-    let b = build_bprime(&case, &BuildOptions::default()).unwrap();
+    let net = case.to_network();
+    let view = IndexedNetwork::new(&net);
+    let b = build_bprime(&view, &BuildOptions::default()).unwrap();
     let stats = MatrixStats::from_csr(&b);
     // M-matrix sign pattern, exactly singular Laplacian (diag = sum).
     assert!(stats.m_matrix_sign);
@@ -96,7 +101,9 @@ fn bprime_is_symmetric_and_laplacian() {
 fn bprime_ignores_out_of_service() {
     let mut case = three_bus();
     case.branches[0].status = 0.0;
-    let b = build_bprime(&case, &BuildOptions::default()).unwrap();
+    let net = case.to_network();
+    let view = IndexedNetwork::new(&net);
+    let b = build_bprime(&view, &BuildOptions::default()).unwrap();
     let dense = b.to_dense();
     // Bus 1 only connects via branch 1-3 (x=0.2 → 1/x=5)
     assert_relative_eq!(dense[[0, 0]], 5.0, max_relative = 1e-12);
@@ -109,8 +116,10 @@ fn xb_and_bx_disagree_when_resistance_present() {
     for b in &mut case.branches {
         b.r = 0.05;
     }
+    let net = case.to_network();
+    let view = IndexedNetwork::new(&net);
     let xb = build_bprime(
-        &case,
+        &view,
         &BuildOptions {
             scheme: Scheme::Xb,
             ..Default::default()
@@ -118,7 +127,7 @@ fn xb_and_bx_disagree_when_resistance_present() {
     )
     .unwrap();
     let bx = build_bprime(
-        &case,
+        &view,
         &BuildOptions {
             scheme: Scheme::Bx,
             ..Default::default()
@@ -139,7 +148,9 @@ fn bdoubleprime_with_shunts_is_strictly_dominant() {
     case.buses[0].bs = -10.0; // negative bs → -bs/baseMVA > 0 contribution
     case.buses[1].bs = -10.0;
     case.buses[2].bs = -10.0;
-    let bpp = build_bdoubleprime(&case, &BuildOptions::default()).unwrap();
+    let net = case.to_network();
+    let view = IndexedNetwork::new(&net);
+    let bpp = build_bdoubleprime(&view, &BuildOptions::default()).unwrap();
     let stats = MatrixStats::from_csr(&bpp);
     assert!(stats.min_dd_margin > 0.0, "expected strict dominance");
 }
@@ -148,7 +159,9 @@ fn bdoubleprime_with_shunts_is_strictly_dominant() {
 fn ybus_reciprocity_and_symmetry() {
     // Without taps and shifts, Y_ij == Y_ji.
     let case = three_bus();
-    let parts = build_ybus(&case, &BuildOptions::default()).unwrap();
+    let net = case.to_network();
+    let view = IndexedNetwork::new(&net);
+    let parts = build_ybus(&view, &BuildOptions::default()).unwrap();
     let g = parts.g.to_dense();
     let b = parts.b.to_dense();
     for i in 0..3 {
@@ -162,7 +175,9 @@ fn ybus_reciprocity_and_symmetry() {
 #[test]
 fn lacpf_block_is_2n_by_2n() {
     let case = three_bus();
-    let j = build_lacpf(&case, &BuildOptions::default()).unwrap();
+    let net = case.to_network();
+    let view = IndexedNetwork::new(&net);
+    let j = build_lacpf(&view, &BuildOptions::default()).unwrap();
     assert_eq!(j.rows(), 6);
     assert_eq!(j.cols(), 6);
 }

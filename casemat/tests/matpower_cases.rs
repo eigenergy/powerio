@@ -8,6 +8,7 @@ use casemat::matrix::{
     sddm_check,
 };
 use casemat::parse_matpower_file;
+use casemat::IndexedNetwork;
 
 fn fixture(name: &str) -> PathBuf {
     let mut p = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
@@ -45,7 +46,9 @@ fn case30_parses_correctly() {
 fn bprime_is_singular_laplacian_on_real_cases() {
     for name in ["case9.m", "case14.m", "case30.m", "case57.m"] {
         let mpc = parse_matpower_file(fixture(name)).unwrap();
-        let b = build_bprime(&mpc, &BuildOptions::default()).unwrap();
+        let net = mpc.to_network();
+        let view = IndexedNetwork::new(&net);
+        let b = build_bprime(&view, &BuildOptions::default()).unwrap();
         let stats = MatrixStats::from_csr(&b);
         assert!(stats.m_matrix_sign, "{name}: B' must have M-matrix signs");
         // Singular Laplacian: diag exactly equals row-sum of |off-diag|.
@@ -63,7 +66,9 @@ fn bprime_is_singular_laplacian_on_real_cases() {
 #[test]
 fn bdoubleprime_includes_shunts_on_case30() {
     let mpc = parse_matpower_file(fixture("case30.m")).unwrap();
-    let bpp = build_bdoubleprime(&mpc, &BuildOptions::default()).unwrap();
+    let net = mpc.to_network();
+    let view = IndexedNetwork::new(&net);
+    let bpp = build_bdoubleprime(&view, &BuildOptions::default()).unwrap();
     let stats = MatrixStats::from_csr(&bpp);
     // case30 has explicit bus shunts → strict diagonal dominance.
     assert!(
@@ -75,7 +80,9 @@ fn bdoubleprime_includes_shunts_on_case30() {
 #[test]
 fn ybus_split_matches_complex_invariants() {
     let mpc = parse_matpower_file(fixture("case14.m")).unwrap();
-    let parts = build_ybus(&mpc, &BuildOptions::default()).unwrap();
+    let net = mpc.to_network();
+    let view = IndexedNetwork::new(&net);
+    let parts = build_ybus(&view, &BuildOptions::default()).unwrap();
     assert_eq!(parts.g.rows(), mpc.n());
     assert_eq!(parts.b.rows(), mpc.n());
     // Without phase shifters case14 should yield symmetric Y_bus.
@@ -92,7 +99,9 @@ fn ybus_split_matches_complex_invariants() {
 #[test]
 fn lacpf_block_dimensions() {
     let mpc = parse_matpower_file(fixture("case14.m")).unwrap();
-    let j = build_lacpf(&mpc, &BuildOptions::default()).unwrap();
+    let net = mpc.to_network();
+    let view = IndexedNetwork::new(&net);
+    let j = build_lacpf(&view, &BuildOptions::default()).unwrap();
     assert_eq!(j.rows(), 2 * mpc.n());
     assert_eq!(j.cols(), 2 * mpc.n());
 }
