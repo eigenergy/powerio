@@ -1,14 +1,15 @@
 //! Write a [`Network`] as PowerModels.jl network data JSON.
 //!
-//! Output is the PowerModels data model with `per_unit = false`: powers stay in
-//! MW/MVAr and PowerModels per-unitizes on load, exactly as it does for the `.m`
-//! it parses, so `parse_file(out.json)` and `parse_file(case.m)` land on the same
-//! network. Angles stay in degrees (PowerModels' matpower loader, keyed by
-//! `source_type`, converts them). Loads and shunts are already first-class on the
-//! `Network`, line charging `b` splits half to each end, and a branch with a
-//! nonzero raw tap or a phase shift is marked `transformer`. `hvdc`/`storage` are
-//! mapped best-effort — PowerModels' `.m` parser derives loss-adjusted dcline
-//! bounds that aren't reproduced here — and a warning is emitted when present.
+//! Output is idiomatic PowerModels data with `per_unit = true`, the same form
+//! PowerModels itself exports: powers are divided by `baseMVA`, angles are in
+//! radians, and gen cost coefficients are rescaled to the per-unit basis (a
+//! polynomial term `p^j` by `baseMVA^j`, a piecewise curve's MW breakpoints by
+//! `1/baseMVA`). Because the data already declares per unit, `parse_file(out.json)`
+//! reads it with PowerModels' default `validate = true` without rerunning
+//! `make_per_unit!`, so it lands on the same network as `parse_file(case.m)`.
+//! Loads and shunts are first-class on the `Network`, line charging `b` splits
+//! half to each end, and `transformer` follows PowerModels' rule (raw tap `≠ 0`).
+//! `hvdc`/`storage` are mapped best-effort and a warning is emitted when present.
 
 use std::sync::Arc;
 
@@ -27,47 +28,58 @@ const GEN_EXTRA_KEYS: [&str; 11] = [
     "ramp_30", "ramp_q", "apf",
 ];
 
+/// The gen capability columns PowerModels per-unitizes (the ramp rates). The PQ
+/// curve points (pc1/pc2/qc*) and apf are left raw by `make_per_unit!`, so we
+/// leave them raw too — matching PowerModels field for field.
+const GEN_PU_KEYS: [&str; 4] = ["ramp_agc", "ramp_10", "ramp_30", "ramp_q"];
+
 #[must_use]
 pub fn write_powermodels_json(net: &Network) -> Conversion {
     let mut warnings = Vec::new();
 
+    // Per-unit write factors, the exact inverse of the reader's pscale/ascale:
+    // powers ÷ baseMVA, angles degrees → radians. Cost rescale needs the base.
+    let base = net.base_mva;
+    let p = 1.0 / base;
+    let a = std::f64::consts::PI / 180.0;
+
     let mut bus = Map::new();
     for b in &net.buses {
-        bus.insert(b.id.to_string(), bus_obj(b));
+        bus.insert(b.id.to_string(), bus_obj(b, a));
     }
 
     let mut branch = Map::new();
     for (i, br) in net.branches.iter().enumerate() {
         let idx = i + 1;
-        branch.insert(idx.to_string(), branch_obj(br, idx));
+        branch.insert(idx.to_string(), branch_obj(br, idx, p, a));
     }
 
     let mut gen = Map::new();
     for (i, g) in net.generators.iter().enumerate() {
         let idx = i + 1;
-        gen.insert(idx.to_string(), gen_obj(g, idx));
+        gen.insert(idx.to_string(), gen_obj(g, idx, p, base));
     }
 
     let mut load = Map::new();
     for (i, l) in net.loads.iter().enumerate() {
         let idx = i + 1;
-        load.insert(idx.to_string(), load_obj(l, idx));
+        load.insert(idx.to_string(), load_obj(l, idx, p));
     }
     let mut shunt = Map::new();
     for (i, s) in net.shunts.iter().enumerate() {
         let idx = i + 1;
-        shunt.insert(idx.to_string(), shunt_obj(s, idx));
+        shunt.insert(idx.to_string(), shunt_obj(s, idx, p));
     }
 
     let mut dcline = Map::new();
     for (i, dc) in net.hvdc.iter().enumerate() {
         let idx = i + 1;
-        dcline.insert(idx.to_string(), dcline_obj(dc, idx));
+        dcline.insert(idx.to_string(), dcline_obj(dc, idx, p));
     }
     let mut storage = Map::new();
     for (i, st) in net.storage.iter().enumerate() {
         let idx = i + 1;
-        storage.insert(idx.to_string(), storage_obj(st, idx));
+        storage.insert(idx.to_string(), storage_obj(st, idx, p));
     }
     if !dcline.is_empty() {
         warnings.push(format!(
@@ -85,7 +97,7 @@ pub fn write_powermodels_json(net: &Network) -> Conversion {
     let mut root = Map::new();
     root.insert("name".into(), Value::String(net.name.clone()));
     root.insert("baseMVA".into(), jnum(net.base_mva));
-    root.insert("per_unit".into(), Value::Bool(false));
+    root.insert("per_unit".into(), Value::Bool(true));
     root.insert("source_type".into(), Value::String("matpower".into()));
     root.insert("source_version".into(), Value::String("2".into()));
     root.insert("bus".into(), Value::Object(bus));
@@ -109,13 +121,13 @@ fn status_int(in_service: bool) -> Value {
     Value::from(u64::from(in_service))
 }
 
-fn bus_obj(b: &Bus) -> Value {
+fn bus_obj(b: &Bus, a: f64) -> Value {
     let mut m = Map::new();
     m.insert("bus_i".into(), Value::from(b.id as u64));
     m.insert("index".into(), Value::from(b.id as u64));
     m.insert("bus_type".into(), Value::from(u64::from(b.kind as u8)));
     m.insert("vm".into(), jnum(b.vm));
-    m.insert("va".into(), jnum(b.va));
+    m.insert("va".into(), jnum(b.va * a));
     m.insert("vmax".into(), jnum(b.vmax));
     m.insert("vmin".into(), jnum(b.vmin));
     m.insert("base_kv".into(), jnum(b.base_kv));
@@ -128,7 +140,7 @@ fn bus_obj(b: &Bus) -> Value {
     Value::Object(m)
 }
 
-fn branch_obj(br: &Branch, idx: usize) -> Value {
+fn branch_obj(br: &Branch, idx: usize, p: f64, a: f64) -> Value {
     let mut m = Map::new();
     m.insert("index".into(), Value::from(idx as u64));
     m.insert("f_bus".into(), Value::from(br.from as u64));
@@ -141,42 +153,50 @@ fn branch_obj(br: &Branch, idx: usize) -> Value {
     m.insert("g_fr".into(), jnum(0.0));
     m.insert("g_to".into(), jnum(0.0));
     m.insert("tap".into(), jnum(br.effective_tap()));
-    m.insert("shift".into(), jnum(br.shift));
+    m.insert("shift".into(), jnum(br.shift * a));
     m.insert("br_status".into(), status_int(br.in_service));
-    m.insert("angmin".into(), jnum(br.angmin));
-    m.insert("angmax".into(), jnum(br.angmax));
-    m.insert("transformer".into(), Value::Bool(br.is_transformer()));
+    m.insert("angmin".into(), jnum(br.angmin * a));
+    m.insert("angmax".into(), jnum(br.angmax * a));
+    // PowerModels' rule: a transformer is a branch with an off-nominal raw tap.
+    // A pure phase shifter (tap 0, shift ≠ 0) is not flagged, matching matpower.jl.
+    m.insert("transformer".into(), Value::Bool(br.tap != 0.0));
     // PowerModels omits a rate when it is 0 (unlimited).
     if br.rate_a != 0.0 {
-        m.insert("rate_a".into(), jnum(br.rate_a));
+        m.insert("rate_a".into(), jnum(br.rate_a * p));
     }
     if br.rate_b != 0.0 {
-        m.insert("rate_b".into(), jnum(br.rate_b));
+        m.insert("rate_b".into(), jnum(br.rate_b * p));
     }
     if br.rate_c != 0.0 {
-        m.insert("rate_c".into(), jnum(br.rate_c));
+        m.insert("rate_c".into(), jnum(br.rate_c * p));
     }
     m.insert("source_id".into(), source_id("branch", idx));
     Value::Object(m)
 }
 
-fn gen_obj(g: &Generator, idx: usize) -> Value {
+fn gen_obj(g: &Generator, idx: usize, p: f64, base: f64) -> Value {
     let mut m = Map::new();
     m.insert("index".into(), Value::from(idx as u64));
     m.insert("gen_bus".into(), Value::from(g.bus as u64));
-    m.insert("pg".into(), jnum(g.pg));
-    m.insert("qg".into(), jnum(g.qg));
-    m.insert("qmax".into(), jnum(g.qmax));
-    m.insert("qmin".into(), jnum(g.qmin));
+    m.insert("pg".into(), jnum(g.pg * p));
+    m.insert("qg".into(), jnum(g.qg * p));
+    m.insert("qmax".into(), jnum(g.qmax * p));
+    m.insert("qmin".into(), jnum(g.qmin * p));
     m.insert("vg".into(), jnum(g.vg));
     m.insert("mbase".into(), jnum(g.mbase));
     m.insert("gen_status".into(), status_int(g.in_service));
-    m.insert("pmax".into(), jnum(g.pmax));
-    m.insert("pmin".into(), jnum(g.pmin));
-    // Gen capability columns, in PowerModels' field order, for those present.
+    m.insert("pmax".into(), jnum(g.pmax * p));
+    m.insert("pmin".into(), jnum(g.pmin * p));
+    // Gen capability columns, in PowerModels' field order, for those present. Only
+    // the ramp rates are per-unitized; the PQ curve points and apf stay raw.
     for key in GEN_EXTRA_KEYS {
         if let Some(v) = g.extras.get(key) {
-            m.insert(key.into(), v.clone());
+            let scaled = if GEN_PU_KEYS.contains(&key) {
+                jnum(v.as_f64().unwrap_or(f64::NAN) * p)
+            } else {
+                v.clone()
+            };
+            m.insert(key.into(), scaled);
         }
     }
     if let Some(cost) = &g.cost {
@@ -184,82 +204,133 @@ fn gen_obj(g: &Generator, idx: usize) -> Value {
         m.insert("ncost".into(), Value::from(cost.ncost as u64));
         m.insert("startup".into(), jnum(cost.startup));
         m.insert("shutdown".into(), jnum(cost.shutdown));
-        m.insert(
-            "cost".into(),
-            Value::Array(cost.coeffs.iter().map(|&c| jnum(c)).collect()),
-        );
+        m.insert("cost".into(), Value::Array(cost_coeffs_pu(cost, base)));
     }
     m.insert("source_id".into(), source_id("gen", idx));
     Value::Object(m)
 }
 
-fn load_obj(l: &Load, idx: usize) -> Value {
+/// Gen cost coefficients in PowerModels' per-unit basis, trimmed to the length the
+/// model implies (a polynomial keeps `ncost` coeffs; a piecewise curve keeps
+/// `2·ncost` `(mw, cost)` values). MATPOWER pads every gencost row to the matrix
+/// width with trailing zeros; emitting that padding makes PowerModels read a
+/// higher-degree polynomial and mis-scale it, so drop it here.
+fn cost_coeffs_pu(cost: &GenCost, base: f64) -> Vec<Value> {
+    let want = if cost.model == 1 { cost.ncost * 2 } else { cost.ncost };
+    let coeffs = &cost.coeffs[..want.min(cost.coeffs.len())];
+    if cost.model == 2 {
+        // Polynomial: coeff i is the term p^(k-1-i); per unit scales it by base^(k-1-i).
+        let k = coeffs.len();
+        coeffs
+            .iter()
+            .enumerate()
+            .map(|(i, &c)| jnum(c * base.powi((k - 1 - i) as i32)))
+            .collect()
+    } else {
+        // Piecewise: (mw, cost) pairs. Per unit divides the MW breakpoints (even
+        // positions) by base; the cost values (odd positions) stay in dollars.
+        coeffs
+            .iter()
+            .enumerate()
+            .map(|(i, &c)| if i % 2 == 0 { jnum(c / base) } else { jnum(c) })
+            .collect()
+    }
+}
+
+fn load_obj(l: &Load, idx: usize, p: f64) -> Value {
     let mut m = Map::new();
     m.insert("index".into(), Value::from(idx as u64));
     m.insert("load_bus".into(), Value::from(l.bus as u64));
-    m.insert("pd".into(), jnum(l.p));
-    m.insert("qd".into(), jnum(l.q));
+    m.insert("pd".into(), jnum(l.p * p));
+    m.insert("qd".into(), jnum(l.q * p));
     m.insert("status".into(), status_int(l.in_service));
     m.insert("source_id".into(), source_id("bus", l.bus));
     Value::Object(m)
 }
 
-fn shunt_obj(s: &Shunt, idx: usize) -> Value {
+fn shunt_obj(s: &Shunt, idx: usize, p: f64) -> Value {
     let mut m = Map::new();
     m.insert("index".into(), Value::from(idx as u64));
     m.insert("shunt_bus".into(), Value::from(s.bus as u64));
-    m.insert("gs".into(), jnum(s.g));
-    m.insert("bs".into(), jnum(s.b));
+    m.insert("gs".into(), jnum(s.g * p));
+    m.insert("bs".into(), jnum(s.b * p));
     m.insert("status".into(), status_int(s.in_service));
     m.insert("source_id".into(), source_id("bus", s.bus));
     Value::Object(m)
 }
 
-fn dcline_obj(dc: &Hvdc, idx: usize) -> Value {
+fn dcline_obj(dc: &Hvdc, idx: usize, p: f64) -> Value {
     let mut m = Map::new();
     m.insert("index".into(), Value::from(idx as u64));
     m.insert("f_bus".into(), Value::from(dc.from as u64));
     m.insert("t_bus".into(), Value::from(dc.to as u64));
     m.insert("br_status".into(), status_int(dc.in_service));
-    m.insert("pf".into(), jnum(dc.pf));
-    m.insert("pt".into(), jnum(dc.pt));
-    m.insert("qf".into(), jnum(dc.qf));
-    m.insert("qt".into(), jnum(dc.qt));
+    m.insert("pf".into(), jnum(dc.pf * p));
+    // MATPOWER uses the opposite sign for Pt/Qf/Qt; PowerModels flips them.
+    m.insert("pt".into(), jnum(-dc.pt * p));
+    m.insert("qf".into(), jnum(-dc.qf * p));
+    m.insert("qt".into(), jnum(-dc.qt * p));
     m.insert("vf".into(), jnum(dc.vf));
     m.insert("vt".into(), jnum(dc.vt));
-    // Original active-power bounds; PowerModels names these `mp_*` and derives
-    // loss-adjusted per-end bounds we do not reproduce.
+    // Per-end active-power bounds, derived from the aggregate Pmin/Pmax and the
+    // loss model exactly as PowerModels' matpower loader does (_mp2pm_dcline!), so
+    // the line reads back through PowerModels' own correct_dclines! pass. Derived
+    // in raw MW, then per-unitized like everything else.
+    let (pminf, pmaxf, pmint, pmaxt) = dcline_p_bounds(dc.pmin, dc.pmax, dc.loss0, dc.loss1);
+    m.insert("pminf".into(), jnum(pminf * p));
+    m.insert("pmaxf".into(), jnum(pmaxf * p));
+    m.insert("pmint".into(), jnum(pmint * p));
+    m.insert("pmaxt".into(), jnum(pmaxt * p));
+    // The original aggregate bounds, kept raw, as PowerModels does.
     m.insert("mp_pmin".into(), jnum(dc.pmin));
     m.insert("mp_pmax".into(), jnum(dc.pmax));
-    m.insert("qminf".into(), jnum(dc.qminf));
-    m.insert("qmaxf".into(), jnum(dc.qmaxf));
-    m.insert("qmint".into(), jnum(dc.qmint));
-    m.insert("qmaxt".into(), jnum(dc.qmaxt));
-    m.insert("loss0".into(), jnum(dc.loss0));
+    m.insert("qminf".into(), jnum(dc.qminf * p));
+    m.insert("qmaxf".into(), jnum(dc.qmaxf * p));
+    m.insert("qmint".into(), jnum(dc.qmint * p));
+    m.insert("qmaxt".into(), jnum(dc.qmaxt * p));
+    m.insert("loss0".into(), jnum(dc.loss0 * p));
     m.insert("loss1".into(), jnum(dc.loss1));
     m.insert("source_id".into(), source_id("dcline", idx));
     Value::Object(m)
 }
 
-fn storage_obj(st: &Storage, idx: usize) -> Value {
+/// Per-end active-power bounds `(pminf, pmaxf, pmint, pmaxt)` for an HVDC line,
+/// from the aggregate Pmin/Pmax and the loss model, branching on the bound signs
+/// exactly as PowerModels' `_mp2pm_dcline!` does. Inputs and outputs are raw MW.
+fn dcline_p_bounds(pmin: f64, pmax: f64, loss0: f64, loss1: f64) -> (f64, f64, f64, f64) {
+    let l = 1.0 - loss1;
+    if pmin >= 0.0 && pmax >= 0.0 {
+        (pmin, pmax, loss0 - pmax * l, loss0 - pmin * l)
+    } else if pmin >= 0.0 {
+        (pmin, (-pmax + loss0) / l, pmax, loss0 - pmin * l)
+    } else if pmax >= 0.0 {
+        ((pmin + loss0) / l, pmax, loss0 - pmax * l, -pmin)
+    } else {
+        ((pmin + loss0) / l, (-pmax + loss0) / l, pmax, -pmin)
+    }
+}
+
+fn storage_obj(st: &Storage, idx: usize, p: f64) -> Value {
     let mut m = Map::new();
     m.insert("index".into(), Value::from(idx as u64));
     m.insert("storage_bus".into(), Value::from(st.bus as u64));
+    // ps/qs are the dispatch setpoint; PowerModels' make_per_unit! leaves them raw
+    // (it rescales the energy/ratings/limits below), so we do too.
     m.insert("ps".into(), jnum(st.ps));
     m.insert("qs".into(), jnum(st.qs));
-    m.insert("energy".into(), jnum(st.energy));
-    m.insert("energy_rating".into(), jnum(st.energy_rating));
-    m.insert("charge_rating".into(), jnum(st.charge_rating));
-    m.insert("discharge_rating".into(), jnum(st.discharge_rating));
+    m.insert("energy".into(), jnum(st.energy * p));
+    m.insert("energy_rating".into(), jnum(st.energy_rating * p));
+    m.insert("charge_rating".into(), jnum(st.charge_rating * p));
+    m.insert("discharge_rating".into(), jnum(st.discharge_rating * p));
     m.insert("charge_efficiency".into(), jnum(st.charge_efficiency));
     m.insert("discharge_efficiency".into(), jnum(st.discharge_efficiency));
-    m.insert("thermal_rating".into(), jnum(st.thermal_rating));
-    m.insert("qmin".into(), jnum(st.qmin));
-    m.insert("qmax".into(), jnum(st.qmax));
+    m.insert("thermal_rating".into(), jnum(st.thermal_rating * p));
+    m.insert("qmin".into(), jnum(st.qmin * p));
+    m.insert("qmax".into(), jnum(st.qmax * p));
     m.insert("r".into(), jnum(st.r));
     m.insert("x".into(), jnum(st.x));
-    m.insert("p_loss".into(), jnum(st.p_loss));
-    m.insert("q_loss".into(), jnum(st.q_loss));
+    m.insert("p_loss".into(), jnum(st.p_loss * p));
+    m.insert("q_loss".into(), jnum(st.q_loss * p));
     m.insert("status".into(), status_int(st.in_service));
     m.insert("source_id".into(), source_id("storage", idx));
     Value::Object(m)
@@ -271,9 +342,10 @@ const FMT: &str = "PowerModels JSON";
 
 /// Parse PowerModels.jl network data JSON into a [`Network`]. Loads and shunts
 /// are read as first-class elements and the raw text is retained, so writing back
-/// to PowerModels JSON is a byte-exact echo. `per_unit = true` input is converted
-/// to the neutral MW/degree convention (powers ×baseMVA, angles to degrees, cost
-/// coefficients un-scaled); `per_unit = false` (caseio's own output) is read as-is.
+/// to PowerModels JSON is a byte-exact echo. `per_unit = true` input (caseio's own
+/// output, and PowerModels' own export) is converted to the neutral MW/degree
+/// convention (powers ×baseMVA, angles to degrees, cost coefficients un-scaled);
+/// `per_unit = false` is read as-is.
 pub fn parse_powermodels_json(content: &str) -> Result<Network> {
     let root: Value = serde_json::from_str(content)
         .map_err(|e| Error::FormatRead { format: FMT, message: e.to_string() })?;
@@ -428,8 +500,8 @@ fn read_gen(v: &Value, pscale: f64, base_mva: f64, per_unit: bool) -> Generator 
     let mut extras = crate::network::Extras::new();
     for key in GEN_EXTRA_KEYS {
         if let Some(val) = v.get(key).and_then(Value::as_f64) {
-            // apf is dimensionless; the rest are powers.
-            let scaled = if key == "apf" { val } else { val * pscale };
+            // Only the ramp rates are per-unit; the PQ curve points and apf are raw.
+            let scaled = if GEN_PU_KEYS.contains(&key) { val * pscale } else { val };
             extras.insert(key.to_string(), jnum(scaled));
         }
     }
@@ -460,14 +532,21 @@ fn read_cost(v: &Value, base_mva: f64, per_unit: bool) -> GenCost {
         .unwrap_or_default();
     let model = v.get("model").and_then(Value::as_u64).unwrap_or(2) as u8;
     let k = coeffs_raw.len();
-    // Polynomial (model 2) per-unit scales coeff i (of p^(k-1-i)) by
-    // baseMVA^(k-1-i); undo it for the neutral MW basis. Piecewise (model 1)
-    // breakpoints aren't scaled this way, so leave them.
+    // Undo PowerModels' per-unit cost scaling for the neutral MW basis. A
+    // polynomial (model 2) scales coeff i (of p^(k-1-i)) by baseMVA^(k-1-i); a
+    // piecewise curve (model 1) divides its MW breakpoints (even positions) by
+    // baseMVA and leaves the dollar costs (odd positions).
     let coeffs = if per_unit && model == 2 {
         coeffs_raw
             .iter()
             .enumerate()
             .map(|(i, &c)| c / base_mva.powf((k - 1 - i) as f64))
+            .collect()
+    } else if per_unit && model == 1 {
+        coeffs_raw
+            .iter()
+            .enumerate()
+            .map(|(i, &c)| if i % 2 == 0 { c * base_mva } else { c })
             .collect()
     } else {
         coeffs_raw
@@ -485,18 +564,29 @@ fn read_cost(v: &Value, base_mva: f64, per_unit: bool) -> GenCost {
 }
 
 fn read_hvdc(v: &Value, pscale: f64) -> Hvdc {
+    // Aggregate bounds come from PowerModels' raw originals (mp_pmin/mp_pmax); fall
+    // back to the from-end per-unit bounds for input that lacks them.
+    let pmin = v
+        .get("mp_pmin")
+        .and_then(Value::as_f64)
+        .unwrap_or_else(|| f(v, "pminf") * pscale);
+    let pmax = v
+        .get("mp_pmax")
+        .and_then(Value::as_f64)
+        .unwrap_or_else(|| f(v, "pmaxf") * pscale);
     Hvdc {
         from: uid(v, "f_bus"),
         to: uid(v, "t_bus"),
         in_service: flag(v, "br_status"),
         pf: f(v, "pf") * pscale,
-        pt: f(v, "pt") * pscale,
-        qf: f(v, "qf") * pscale,
-        qt: f(v, "qt") * pscale,
+        // PowerModels flips Pt/Qf/Qt vs MATPOWER; undo it for the neutral model.
+        pt: -f(v, "pt") * pscale,
+        qf: -f(v, "qf") * pscale,
+        qt: -f(v, "qt") * pscale,
         vf: f_or(v, "vf", 1.0),
         vt: f_or(v, "vt", 1.0),
-        pmin: f(v, "mp_pmin") * pscale,
-        pmax: f(v, "mp_pmax") * pscale,
+        pmin,
+        pmax,
         qminf: f(v, "qminf") * pscale,
         qmaxf: f(v, "qmaxf") * pscale,
         qmint: f(v, "qmint") * pscale,
@@ -505,7 +595,7 @@ fn read_hvdc(v: &Value, pscale: f64) -> Hvdc {
         loss1: f(v, "loss1"),
         extras: extras_excluding(
             v,
-            &["f_bus", "t_bus", "br_status", "pf", "pt", "qf", "qt", "vf", "vt", "mp_pmin", "mp_pmax", "qminf", "qmaxf", "qmint", "qmaxt", "loss0", "loss1", "index", "source_id"],
+            &["f_bus", "t_bus", "br_status", "pf", "pt", "qf", "qt", "vf", "vt", "pmin", "pmax", "mp_pmin", "mp_pmax", "pminf", "pmaxf", "pmint", "pmaxt", "qminf", "qmaxf", "qmint", "qmaxt", "loss0", "loss1", "index", "source_id"],
         ),
     }
 }
@@ -513,8 +603,8 @@ fn read_hvdc(v: &Value, pscale: f64) -> Hvdc {
 fn read_storage(v: &Value, pscale: f64) -> Storage {
     Storage {
         bus: uid(v, "storage_bus"),
-        ps: f(v, "ps") * pscale,
-        qs: f(v, "qs") * pscale,
+        ps: f(v, "ps"),
+        qs: f(v, "qs"),
         energy: f(v, "energy") * pscale,
         energy_rating: f(v, "energy_rating") * pscale,
         charge_rating: f(v, "charge_rating") * pscale,

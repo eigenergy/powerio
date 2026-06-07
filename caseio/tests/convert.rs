@@ -23,7 +23,7 @@ fn powermodels_structure_and_split() {
     assert!(conv.warnings.is_empty(), "case30 should convert cleanly: {:?}", conv.warnings);
     let v: Value = serde_json::from_str(&conv.text).unwrap();
 
-    assert_eq!(v["per_unit"], Value::Bool(false));
+    assert_eq!(v["per_unit"], Value::Bool(true));
     assert_eq!(v["source_type"], "matpower");
     // Buses are keyed by their MATPOWER id; loads/shunts are split out of the bus.
     assert_eq!(v["bus"].as_object().unwrap().len(), case.buses.len());
@@ -53,8 +53,10 @@ fn powermodels_structure_and_split() {
 // Detecting an explicit tap of exactly 1.0 from the file is the point, so the exact compare is intended.
 #[allow(clippy::float_cmp)]
 fn powermodels_transformer_flag_tracks_raw_tap() {
-    // case57 has branches with an explicit tap of 1.0 — a transformer in MATPOWER,
-    // even though the effective ratio is 1.
+    // PowerModels' rule (io/matpower.jl): a branch is a transformer iff its raw tap
+    // is nonzero. case57 has branches with an explicit tap of 1.0 — a transformer,
+    // even though the effective ratio is 1 — while a pure phase shifter (tap 0,
+    // shift ≠ 0) is a line. The writer must emit that same flag.
     let case = parse_matpower_file(data("case57.m")).unwrap();
     let v: Value = serde_json::from_str(&write_powermodels_json(&case).text).unwrap();
     let any_explicit_tap = case.branches.iter().any(|b| b.tap == 1.0);
@@ -65,7 +67,7 @@ fn powermodels_transformer_flag_tracks_raw_tap() {
         .values()
         .filter(|b| b["transformer"] == Value::Bool(true))
         .count();
-    let raw_xfmr = case.branches.iter().filter(|b| b.tap != 0.0 || b.shift != 0.0).count();
+    let raw_xfmr = case.branches.iter().filter(|b| b.tap != 0.0).count();
     assert_eq!(xfmr, raw_xfmr);
 }
 
@@ -102,14 +104,38 @@ fn egret_structure() {
 
 #[test]
 fn powermodels_json_reader_is_inverse_of_writer() {
-    // read→write is the identity on caseio's own PowerModels JSON, across cases:
-    // proves the reader captures every field the writer emits.
+    // read→write reproduces caseio's own PowerModels JSON across cases: same keys,
+    // same structure, same values — proving the reader captures every field the
+    // writer emits. Compared field-by-field with a float tolerance rather than
+    // byte-exact, because the per-unit round-trip (÷base on write, ×base on read)
+    // is not bit-exact in f64.
     for case in ["case9", "case14", "case30", "case57", "case118"] {
         let net = parse_matpower_file(data(&format!("{case}.m"))).unwrap();
         let json1 = write_powermodels_json(&net).text;
         let net2 = parse_powermodels_json(&json1).unwrap();
         let json2 = write_powermodels_json(&net2).text;
-        assert_eq!(json1, json2, "{case}: PowerModels JSON not stable through read→write");
+        let v1: Value = serde_json::from_str(&json1).unwrap();
+        let v2: Value = serde_json::from_str(&json2).unwrap();
+        assert!(json_approx_eq(&v1, &v2), "{case}: PowerModels JSON not stable through read→write");
+    }
+}
+
+/// Structural + numeric (tolerant) equality of two JSON values: same shape and
+/// keys, numbers within a small relative tolerance.
+fn json_approx_eq(a: &Value, b: &Value) -> bool {
+    match (a, b) {
+        (Value::Number(x), Value::Number(y)) => match (x.as_f64(), y.as_f64()) {
+            (Some(xf), Some(yf)) => (xf - yf).abs() <= 1e-9 * xf.abs().max(yf.abs()).max(1.0),
+            _ => x == y,
+        },
+        (Value::Array(xs), Value::Array(ys)) => {
+            xs.len() == ys.len() && xs.iter().zip(ys).all(|(p, q)| json_approx_eq(p, q))
+        }
+        (Value::Object(xs), Value::Object(ys)) => {
+            xs.len() == ys.len()
+                && xs.iter().all(|(k, p)| ys.get(k).is_some_and(|q| json_approx_eq(p, q)))
+        }
+        _ => a == b,
     }
 }
 

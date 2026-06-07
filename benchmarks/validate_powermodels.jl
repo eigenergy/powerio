@@ -1,28 +1,22 @@
 # Validate caseio's PowerModels JSON against PowerModels' own parse of the .m,
-# value for value over bus/branch/gen/load/shunt after per-unit normalization.
+# value for value over bus/branch/gen/load/shunt.
 # Usage: julia --project=benchmarks validate_powermodels.jl case.m our.json
 #
-# validate=false skips PowerModels' correct_network_data! pass on parse. Needed
-# because caseio writes unbounded limits (a pegase gen qmax=Inf) as JSON null,
-# which PowerModels reads as `nothing`; correct_network_data!'s in-parse
-# make_per_unit! then divides nothing/base and throws before we can restore it.
-# We restore the nulls below and run make_per_unit! ourselves, which is exactly
-# what the original two-step (restore, then per-unit) was written for.
-#
-# Cases carrying MATPOWER dclines are skipped by run_validation.sh: caseio writes
-# dcline limits under MATPOWER names (mp_pmax) not PowerModels' pmaxf, and its
-# mixed-model gencost export for those cases doesn't round-trip; the PSS/E,
-# ExaPowerIO, and pandapower checks still cover them.
+# Both sides parse with PowerModels' default validate=true. caseio writes
+# idiomatic per_unit=true JSON (the same form PowerModels exports), so parse_file
+# reads it without rerunning make_per_unit! and the .m reference is per-unitized
+# by the same pass — both land in per unit and compare directly. dcline cases work
+# too: caseio derives PowerModels' per-end bounds, so correct_dclines! is happy.
 using PowerModels
 PowerModels.silence()
 
 ref_m, our_json = ARGS[1], ARGS[2]
-ref  = PowerModels.parse_file(ref_m; validate=false)
-ours = PowerModels.parse_file(our_json; validate=false)
+ref  = PowerModels.parse_file(ref_m)
+ours = PowerModels.parse_file(our_json)
 
 # JSON has no ±Inf/NaN, so an unbounded ref value (e.g. a pegase gen qmax=Inf)
-# arrives as `nothing` on our side. Accept that as a match and restore the
-# value so make_per_unit! (which divides by the base) doesn't trip on nothing.
+# arrives as `nothing` on our side. Restore it from the reference so the two
+# compare equal (both mean unbounded).
 for et in ["bus", "branch", "gen", "load", "shunt"]
     haskey(ref, et) || continue
     for (k, ov) in get(ours, et, Dict())
@@ -36,16 +30,10 @@ for et in ["bus", "branch", "gen", "load", "shunt"]
     end
 end
 
-PowerModels.make_per_unit!(ref)
-PowerModels.make_per_unit!(ours)
-
 approx(a, b) = (a isa Number && b isa Number) ? isapprox(float(a), float(b); atol=1e-9, rtol=1e-7) : a == b
 
-# source_id/index are bookkeeping. `transformer` is a flag PowerModels derives
-# from tap/shift; caseio labels a handful of unity-tap pegase branches the other
-# way, but the tap/shift/r/x/b those branches carry are compared below and match
-# (and the pandapower Y_bus check agrees), so the derived label isn't compared.
-const SKIP = ("source_id", "index", "transformer")
+# source_id/index are bookkeeping, not network data.
+const SKIP = ("source_id", "index")
 
 mismatches = String[]
 for et in ["bus", "branch", "gen", "load", "shunt"]

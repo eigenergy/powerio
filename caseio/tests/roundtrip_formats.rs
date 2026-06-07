@@ -111,8 +111,39 @@ fn reader_writer_is_idempotent() {
         for fmt in roundtrippable() {
             let t0 = (fmt.write)(&net0);
             let t1 = (fmt.write)(&(fmt.read)(&t0));
-            assert_eq!(t0, t1, "{case} via {}: serialize→read→serialize not stable", fmt.name);
+            if fmt.format == TargetFormat::PowerModelsJson {
+                // PowerModels JSON is per-unit; the ÷base / ×base round-trip is not
+                // bit-exact in f64, so compare structure and values with a tolerance.
+                let v0: serde_json::Value = serde_json::from_str(&t0).unwrap();
+                let v1: serde_json::Value = serde_json::from_str(&t1).unwrap();
+                assert!(
+                    json_approx_eq(&v0, &v1),
+                    "{case} via {}: serialize→read→serialize not stable",
+                    fmt.name
+                );
+            } else {
+                assert_eq!(t0, t1, "{case} via {}: serialize→read→serialize not stable", fmt.name);
+            }
         }
+    }
+}
+
+/// Structural + numeric (tolerant) equality of two JSON values.
+fn json_approx_eq(a: &serde_json::Value, b: &serde_json::Value) -> bool {
+    use serde_json::Value;
+    match (a, b) {
+        (Value::Number(x), Value::Number(y)) => match (x.as_f64(), y.as_f64()) {
+            (Some(xf), Some(yf)) => (xf - yf).abs() <= 1e-9 * xf.abs().max(yf.abs()).max(1.0),
+            _ => x == y,
+        },
+        (Value::Array(xs), Value::Array(ys)) => {
+            xs.len() == ys.len() && xs.iter().zip(ys).all(|(p, q)| json_approx_eq(p, q))
+        }
+        (Value::Object(xs), Value::Object(ys)) => {
+            xs.len() == ys.len()
+                && xs.iter().all(|(k, p)| ys.get(k).is_some_and(|q| json_approx_eq(p, q)))
+        }
+        _ => a == b,
     }
 }
 

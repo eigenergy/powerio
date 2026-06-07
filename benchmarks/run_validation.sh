@@ -68,13 +68,7 @@ for m in "${MCASES[@]}"; do
     echo "--- $base ---"
     row="$(printf '%-26s' "$base")"
 
-    if grep -q 'mpc\.dcline' "$m"; then
-        # caseio writes dcline limits under MATPOWER names (mp_pmax) instead of
-        # PowerModels' pmaxf, so PowerModels' correct_dclines! KeyErrors on parse.
-        # PSS/E, ExaPowerIO, and pandapower below still validate this case.
-        echo "  PMjson: skip (MATPOWER dcline fields PowerModels can't correct)"
-        MARK="skip"
-    elif convert "$m" powermodels-json "$TMP/$base.json" 2>"$TMP/err"; then
+    if convert "$m" powermodels-json "$TMP/$base.json" 2>"$TMP/err"; then
         mark "${JL[@]}" benchmarks/validate_powermodels.jl "$m" "$TMP/$base.json"
     else
         echo "  PMjson: convert failed"; cat "$TMP/err"; MARK="FAIL"; fails=$((fails + 1))
