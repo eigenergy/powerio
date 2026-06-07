@@ -1,12 +1,12 @@
-# Validate caseio's PSS/E support against PowerModels (which reads PSS/E `.raw`).
+# Validate powerio's PSS/E support against PowerModels (which reads PSS/E `.raw`).
 # Generic comparator: parse two PowerModels-readable files, make_per_unit both,
 # and compare the electrical core. bus/branch/gen/load and the demand/generation
-# totals are strict; shunt count is informational (caseio models fixed shunts but
+# totals are strict; shunt count is informational (powerio models fixed shunts but
 # not PSS/E switched shunts).
 #
-# Two uses, driven by `casemat convert` (see the loop in the PR's validation run):
-#   write side:  ref = case.m         test = caseio's case.raw
-#   read side:   ref = real.raw       test = caseio's PowerModels JSON of real.raw
+# Two uses, driven by `powerio convert` (see the loop in the PR's validation run):
+#   write side:  ref = case.m         test = powerio's case.raw
+#   read side:   ref = real.raw       test = powerio's PowerModels JSON of real.raw
 #
 #   julia --project=benchmarks benchmarks/validate_psse.jl <ref> <test>
 using PowerModels

@@ -1,6 +1,6 @@
 # powerio-capi
 
-A C ABI over `powerio`: parse any supported power-system case format, query it,
+A C ABI over `powerio`: parse any supported power system case format, query it,
 convert losslessly, and pull out the numeric tables a solver needs to assemble
 matrices. This is the polyglot substrate — anything that speaks C (C, C++,
 Julia, Python ctypes, …) can drive powerio through it.
@@ -54,6 +54,10 @@ int main(void) {
 
 ## Julia (`ccall`)
 
+For a typed Julia API, use [PowerIO.jl](https://github.com/eigenergy/PowerIO.jl),
+which wraps this ABI (`set_library!`, `parse_case`, `convert_case`, and ecosystem
+bridges). The raw `ccall` below is the low-level reference it builds on.
+
 ```julia
 const LIB = "libpowerio_capi"  # on the load path
 
@@ -79,10 +83,20 @@ ccall((:pio_branches, LIB), Cvoid,
 ccall((:pio_case_free, LIB), Cvoid, (Ptr{Cvoid},), h)
 ```
 
+## JSON transport
+
+For consumers that want the whole case rather than the dense table slices,
+`pio_to_json` serializes the entire `Network` (buses, loads, shunts, branches,
+generators, storage, HVDC, and extras) to a string, and `pio_from_json` rebuilds
+a handle from it. This is the transport the Julia package consumes — one call
+instead of stitching the ~dozen table extractors together. The retained source
+text is not part of the JSON, so a `from_json` handle reformats on write rather
+than echoing a byte-exact original.
+
 ## Scope
 
 powerio-capi covers the `powerio` surface: parse / write / convert / query / table
-extraction. It deliberately has no matrix builders — those live in `casemat`. A
-future `casemat-capi` can hand back assembled CSR matrices (B', Y_bus, PTDF,
-DC-OPF) over the same ABI style; for now a consumer builds matrices from the
-extracted tables.
+and JSON extraction. It deliberately has no matrix builders — those live in
+`powerio-matrix`. A future `powerio-matrix-capi` can hand back assembled CSR
+matrices (B', Y_bus, PTDF, DC-OPF) over the same ABI style; for now a consumer
+builds matrices from the extracted tables.

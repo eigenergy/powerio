@@ -1,5 +1,5 @@
 //! The format hub: readers and writers for every supported file format, all
-//! meeting at the shared [`Network`](crate::Network).
+//! meeting at the shared [`Network`].
 //!
 //! Each format is one module here, owning its reader and/or writer — MATPOWER
 //! `.m`, PowerModels JSON, PSS/E `.raw`, PowerWorld `.aux`, plus the write-only
@@ -8,6 +8,17 @@
 //! detecting the format from its extension; [`write_as`] serializes a `Network`
 //! to a target. Non-finite numeric values (a MATPOWER `Inf`/`NaN` angle limit,
 //! say) are written as JSON `null`.
+//!
+//! # Fidelity contract
+//!
+//! Conversion is two-tier:
+//!
+//! - **Same-format round-trip is byte-exact.** A reader keeps its source text
+//!   (see [`Network`]), so writing back to the *same* format echoes it
+//!   verbatim — every field, comment, and numeric token.
+//! - **Cross-format keeps maximal fidelity with itemized loss.** Whatever the
+//!   target format cannot represent is reported in the [`Conversion`] `warnings`,
+//!   never dropped silently.
 
 use std::collections::BTreeSet;
 use std::sync::Arc;

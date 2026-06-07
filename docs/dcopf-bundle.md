@@ -1,6 +1,6 @@
 # DC-OPF bundle schema
 
-`casemat dcopf <case>.m -o <out>` (or `opf_pipeline::write_dcopf_bundle`) writes
+`powerio dcopf <case>.m -o <out>` (or `opf_pipeline::write_dcopf_bundle`) writes
 `<out>/<case>_dcopf/`: a set of Matrix Market files plus `dcopf_meta.json`.
 Everything is a pure function of the case. This documents what each file is and
 the conventions a consumer (e.g. a C++ Laplacian solver) needs.
@@ -46,7 +46,7 @@ unlimited per MATPOWER). Generator-space provenance (length n_gen): `q_gen`,
 ## Manifest (`dcopf_meta.json`)
 
 `case_name, base_mva, n, m, n_gen, reference_bus` (0-based), `convention`,
-`units`, `files[]`, `casemat_version`.
+`units`, `files[]`, `powerio_version`.
 
 ## Solving with it
 

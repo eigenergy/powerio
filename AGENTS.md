@@ -4,25 +4,31 @@ Guidance for Codex working in this repo.
 
 ## Purpose
 
-A Cargo workspace of three Rust crates plus a Python package. Parses power
-network case files, converts losslessly between formats, and emits sparse
-matrices and graph views for any downstream solver. (Planned) feeds the GridFM
-ML pipeline.
+A Cargo workspace of Rust crates plus a Python package. Parses power network
+case files, converts losslessly between formats, and emits sparse matrices and
+graph views for any downstream solver. (Planned) feeds the GridFM ML pipeline.
 
-- **`caseio`** — the parser, typed `MpcCase`, the format-neutral `Network` hub,
-  the lossless writer, and the format converters. Light deps (thiserror,
-  num-complex, petgraph, serde, serde_json, fast-float); no matrix or TUI stack.
-- **`casemat`** — sparse matrices and graph views built on `caseio` (which it
-  re-exports), plus the `casemat` CLI/TUI.
-- **`casemat-ext`** — PyO3 extension behind the `casemat` Python package
-  (`python/casemat/`); hands back COO triplets that scipy assembles.
+- **`powerio`** — the parser, the format-neutral `Network` hub, the lossless
+  writer, and the format converters. Light deps (thiserror, num-complex,
+  petgraph, serde, serde_json, fast-float); no matrix or TUI stack.
+- **`powerio-matrix`** — sparse matrices and graph views built on `powerio`
+  (which it re-exports).
+- **`powerio-cli`** — the `powerio` binary: the clap CLI and the ratatui TUI
+  over `powerio-matrix`.
+- **`powerio-py`** — PyO3 extension behind the `powerio` Python package
+  (`python/powerio/`); hands back COO triplets that scipy assembles.
+- **`powerio-capi`** — C ABI over `powerio` (`pio_*`, header `powerio.h`); the
+  polyglot substrate for C/C++/Julia.
+
+`Network` is the one canonical model (format-neutral, loads/shunts first-class);
+`IndexedNetwork` is the dense-indexed analysis view derived from it.
 
 Formats. Readers: MATPOWER `.m`, PowerModels JSON, PSS/E `.raw` (v33),
 PowerWorld `.aux`. Writers: those plus EGRET JSON. Every format meets at
 `Network`, so a new format is one reader/writer at the hub, not a pairwise
 converter.
 
-Matrix outputs (casemat):
+Matrix outputs (powerio-matrix):
 - B' (FDPF, shuntless). Singular positive Laplacian, rank n-1.
 - B'' (FDPF, with shunts and taps). SDDM when bus shunts are present.
 - `Re(Y_bus)`, `-Im(Y_bus)` (full).
@@ -35,51 +41,55 @@ Matrix outputs (casemat):
 ## Commands
 
 ```
-cargo build --release        # caseio + casemat (default-members)
-cargo test                   # caseio + casemat
+cargo build --release        # powerio + powerio-matrix + powerio-cli (default-members)
+cargo test                   # powerio + powerio-matrix
 cargo clippy --all-targets
+cargo fmt --all --check      # rustfmt is enforced (edition 2024)
 
-# casemat CLI (binary is `casemat`):
-casemat                                                   # TUI
-casemat batch -i tests/data -o out --matrices bprime,bdoubleprime
-casemat gen --topology lattice --n 1024 -o out
-casemat verify tests/data/case30.m --kind bdoubleprime
-casemat dcopf tests/data/case30.m -o out
-casemat sensitivities tests/data/case30.m -o out
-casemat convert tests/data/case14.m --to psse -o case14.raw
+# CLI (the binary is `powerio`):
+powerio                                                   # TUI
+powerio batch -i tests/data -o out --matrices bprime,bdoubleprime
+powerio gen --topology lattice --n 1024 -o out
+powerio verify tests/data/case30.m --kind bdoubleprime
+powerio dcopf tests/data/case30.m -o out
+powerio sensitivities tests/data/case30.m -o out
+powerio convert tests/data/case14.m --to psse -o case14.raw
 
-# Python bindings (PyO3 crate needs libpython, so it is NOT in default-members):
-cargo build -p casemat-ext   # plain cargo build of the extension
-maturin develop              # build + install into the active venv
+# C ABI (cdylib + staticlib; header powerio-capi/include/powerio.h):
+cargo build -p powerio-capi
+
+# Python (PyO3 crate needs libpython, so it is NOT in default-members):
+cargo build -p powerio-py    # plain cargo build of the extension
+maturin develop              # build + install the `powerio` wheel into the active venv
+maturin develop -E all       # also pull scipy/numpy/networkx for the matrix + graph paths
 pytest python/tests
 ```
 
 ## Layout
 
 ```
-caseio/                       # parser + Network hub + converters
+powerio/                      # parser + Network hub + converters
 ├── src/lib.rs               # public re-exports
 ├── src/error.rs             # thiserror Error
-├── src/case.rs              # MpcCase, Bus, Branch, Generator, GenCost,
-│                            #   Storage, DcLine, ConnectivityReport
-│                            #   + petgraph view: to_petgraph, is_radial,
-│                            #     n_connected_components, connectivity_report
-├── src/network.rs           # Network, SourceFormat (format-neutral hub)
-├── src/parser/
-│   ├── mod.rs               # format dispatcher
-│   └── matpower/            # parse_matpower(_file), tokens, matlab, locate,
-│                            #   writer (the lossless source-retaining path)
-├── src/format/             # converters at the hub
-│   ├── mod.rs              # write_as, TargetFormat, Conversion
-│   ├── powermodels.rs     # PowerModels JSON reader + writer
-│   ├── psse.rs            # PSS/E .raw reader + writer
-│   ├── powerworld.rs      # PowerWorld .aux reader + writer
-│   └── egret.rs           # EGRET JSON writer
-└── tests/                  # convert, roundtrip, roundtrip_formats
+├── src/network.rs           # Network, Bus, Load, Shunt, Branch, Generator,
+│                            #   GenCost, Storage, Hvdc, BusType, SourceFormat;
+│                            #   to_json / from_json (the structured transport)
+├── src/indexed.rs           # IndexCore, IndexedNetwork (dense-indexed analysis
+│                            #   view), ConnectivityReport; petgraph view:
+│                            #   to_petgraph, is_radial, connectivity_report
+├── src/format/
+│   ├── mod.rs               # hub: parse, parse_str, read_path, write_as,
+│   │                        #   TargetFormat, Conversion, target_format_from_name
+│   ├── matpower/            # tokens, matlab, locate, rows, writer
+│   │                        #   (the lossless source-retaining path)
+│   ├── powermodels.rs       # PowerModels JSON reader + writer
+│   ├── psse.rs              # PSS/E .raw reader + writer
+│   ├── powerworld.rs        # PowerWorld .aux reader + writer
+│   └── egret.rs             # EGRET JSON writer
+└── tests/                   # convert, roundtrip, roundtrip_formats
 
-casemat/                      # matrices + CLI/TUI on caseio
-├── src/lib.rs               # re-exports caseio + matrix builders
-├── src/main.rs              # clap CLI: tui/batch/gen/verify/dcopf/sensitivities/convert
+powerio-matrix/               # matrices + graph views on powerio
+├── src/lib.rs               # re-exports powerio + matrix builders
 ├── src/matrix/
 │   ├── mod.rs               # BuildOptions, Scheme, MatrixStats, sddm_check
 │   ├── triplet.rs           # CooBuilder (HashMap, O(nnz); new_rect for rectangular)
@@ -87,34 +97,43 @@ casemat/                      # matrices + CLI/TUI on caseio
 │   ├── incidence.rs         # A, b, B Aᵀ, P_shift; DcConvention
 │   ├── laplacian.rs         # L = A diag(w) Aᵀ, ground_at, GroundMap, e_r
 │   ├── sensitivity.rs       # PTDF, LODF (self-contained dense Cholesky)
-│   └── opf.rs               # OpfInstance: Q, c, bounds, f̄, C_g, p_d; Units
+│   ├── opf.rs               # OpfInstance: Q, c, bounds, f̄, C_g, p_d; Units
+│   └── kkt.rs               # DC-OPF interior point operators (feature = "kkt")
 ├── src/io/                  # mtx (lower-triangle symmetric), meta
 ├── src/pipeline.rs          # case → square MatrixKind family
 ├── src/opf_pipeline.rs      # case → DC-OPF bundle directory + manifest
-├── src/synth/               # tree, lattice, pegase-like generators
-└── src/tui/                 # ratatui app (in lib so it's testable)
+└── src/synth/               # tree, lattice, pegase-like generators
 
-casemat-ext/src/lib.rs       # PyO3 extension → COO triplets
-python/casemat/              # importable package (scipy/networkx assembly)
-python/tests/test_bindings.py
+powerio-cli/                  # the `powerio` binary (CLI + TUI)
+├── src/main.rs              # clap CLI: tui/batch/gen/verify/dcopf/sensitivities/convert
+└── src/tui/                 # ratatui app (app.rs, screens.rs, log_pane.rs, sparsity.rs, theme.rs)
+
+powerio-py/src/lib.rs        # PyO3 extension → COO triplets (module `_powerio`)
+python/powerio/              # importable package (scipy/networkx assembly, lazy)
+python/tests/test_powerio.py
+powerio-capi/                # C ABI (pio_*, include/powerio.h, examples/smoke.c)
 tests/data/                  # shared fixtures (used by CLI examples)
 benchmarks/                  # parse benchmarks + Julia validation harnesses
 ```
 
 ## Things to know before editing
 
-- **Workspace split.** `casemat` depends on `caseio` and re-exports it, so the
-  matrix modules' `crate::case` / `crate::Error` / `crate::parser` paths resolve
-  unchanged and a single `use casemat::...` pulls in both layers. Keep the
-  parser/converter in `caseio` (light deps) and matrices in `casemat`.
-- **Python packaging is two halves (maturin mixed layout).** `casemat-ext/` is
-  the Rust PyO3 crate; it compiles to one native module, `casemat._casemat`
-  (`[lib] name = _casemat`, `crate-type = cdylib`). `python/casemat/` is the
-  pure-Python wrapper (`python-source = python` in pyproject) that turns the
-  extension's COO triplets into `scipy.sparse`/networkx, keeping scipy out of
-  the Rust build. `maturin develop` builds the crate and drops the `.so` into
-  `python/casemat/`. One binding only: the `casemat` package surfaces caseio's
-  parse/convert plus the matrices — there is no separate `caseio` Python package.
+- **Workspace split.** `powerio-matrix` depends on `powerio` and re-exports it,
+  so the matrix modules' `crate::network` / `crate::Error` / `crate::format`
+  paths resolve unchanged and a single `use powerio_matrix::...` pulls in both
+  layers. Keep the parser/converter in `powerio` (light deps) and matrices in
+  `powerio-matrix`.
+- **One Python wheel (maturin mixed layout).** `powerio-py/` is the Rust PyO3
+  crate; it compiles to one native module, `powerio._powerio` (`[lib] name =
+  _powerio`, `crate-type = cdylib`). `python/powerio/` is the pure-Python
+  wrapper (`python-source = python` in the root pyproject) that turns the
+  extension's COO triplets into `scipy.sparse`/networkx. No numpy at the Rust
+  layer: the triplets cross as plain Python lists, so `import powerio` and
+  parse/write/convert pull in nothing but the interpreter. scipy/numpy/networkx
+  are optional extras (`powerio[matrix]`, `[graph]`, `[all]`); a missing one
+  raises a clear ImportError. `maturin develop` drops the `.so` into
+  `python/powerio/`. One package surfaces both halves: parse/convert and the
+  matrices.
 - **Lossless round-trip.** The MATPOWER parse retains the original source text
   and the writer echoes it, so `parse → write → parse` is byte-for-byte —
   every `mpc.*` field, in-matrix comments, and exact tokens like `7e-05`. Don't
@@ -122,25 +141,29 @@ benchmarks/                  # parse benchmarks + Julia validation harnesses
 - **Two-tier fidelity contract.** Same-format round-trip is byte-exact.
   Cross-format conversion keeps maximal fidelity and reports anything the target
   can't represent in `Conversion::warnings` — never drop it silently.
-- **Adding a format.** A reader and/or writer in `caseio/src/format/<name>.rs`
+- **Adding a format.** A reader and/or writer in `powerio/src/format/<name>.rs`
   that produces/consumes `Network`; register in `format/mod.rs`, re-export from
-  `caseio/src/lib.rs`, add a CLI/`TargetFormat` arm. `Network` is the unifying
-  hub; `MpcCase` is the MATPOWER-faithful typed model.
+  `powerio/src/lib.rs`, add a CLI/`TargetFormat` arm. `Network` is the unifying
+  hub.
+- **JSON transport.** `Network::to_json`/`from_json` (serde) is the structured
+  transport; over the C ABI it is `pio_to_json`/`pio_from_json`. The retained
+  `source` text is `#[serde(skip)]`, so JSON carries the tables, not the
+  byte-exact echo, and a `from_json` round-trip returns `source` as `None`.
 - **Sign convention.** Positive Laplacian: off diag negative, diag positive, `diag = sum |off-diag|` for B'. The positive (M-matrix) Laplacian form SDDM solvers expect.
-- **Bus IDs.** MATPOWER 1 based; `MpcCase::bus_index(id)` is the only mapping into dense `[0, n)`. Don't clamp out of range — return `Error::UnknownBus`.
+- **Bus IDs.** MATPOWER 1 based; `IndexedNetwork::bus_index(id)` is the only mapping into dense `[0, n)`. Don't clamp out of range — return `Error::UnknownBus`.
 - **`BR_B` is already per unit.** Never divide by `base_mva` again.
 - **`tap == 0` ⇒ `tap = 1`.** Use `Branch::effective_tap()`.
 - **B' ignores taps and shifts. B'' zeros only shifts. Y_bus keeps both.**
 - **DC-OPF Laplacian.** `L = A diag(b) Aᵀ` is built from the same `A`, `b` factors `build_incidence` returns (so `L` and the reweighted `L₁` share a factorization), and equals `build_bprime` in the XB scheme. Default `b = 1/x` (paper-pure); `DcConvention::Matpower` uses `1/(x·τ)` plus a phase-shift injection.
-- **DC-OPF is bus-indexed.** Generation is nodal (`p_g ∈ ℝⁿ`), so `Q`, `c`, and bounds are length-n (zero at load buses), scattered from generator space through `C_g`; gen-space vectors ride along as provenance. Cost map: MATPOWER `c2 p² + c1 p` → `q = 2c2`, `c = c1`. Per-unit by default (`Units::PerUnit` scales `q` by `base²`, `c` by `base`).
-- **`gen`/`gencost` are optional.** A power-flow-only case parses with `gens` empty; the OPF builders return `Error::NoGenerators`. Exactly one `BusType::Ref` is required (`MpcCase::reference_bus_index`).
+- **DC-OPF is bus-indexed.** Generation is nodal (`p_g ∈ ℝⁿ`), so `Q`, `c`, and bounds are length-n (zero at load buses), scattered from generator space through `C_g`; gen-space vectors (`OpfInstance::gen_costs`) ride along as provenance. Cost map: MATPOWER `c2 p² + c1 p` → `q = 2c2`, `c = c1`. Per-unit by default (`Units::PerUnit` scales `q` by `base²`, `c` by `base`).
+- **`gen`/`gencost` are optional.** A power flow case with no `mpc.gen` parses with `gens` empty; the OPF builders return `Error::NoGenerators`. Exactly one `BusType::Ref` is required (`IndexedNetwork::reference_bus_index`).
 - **PTDF/LODF need a solve.** They factor the slack-grounded Laplacian `ground_at(L, r)` (SPD) with a self-contained dense Cholesky (`matrix::sensitivity`) — no external solver dep. PTDF is dense `m×n`; large-scale sparse PTDF is future work.
 - **MTX output is lower triangle, 1 based, spec compliant.** `sprs::io::write_matrix_market_sym` writes the *upper* triangle, so `io::mtx::write_mtx` ships its own writer.
 - **`CooBuilder`.** HashMap COO with O(nnz) inserts; replaces the old O(nnz²) Vec search.
-- **TUI lives in the library.** `casemat/src/tui/`, behind the `cli` feature. Testable via `ratatui::backend::TestBackend`. Binary calls `casemat::tui::run`.
-- **petgraph view.** `MpcCase::to_petgraph()` returns `UnGraph<usize, usize>` where node weight = dense bus index, edge weight = branch index. Use it for connectivity, radial detection, spanning trees (LinDist3Flow).
-- **`kkt` feature is experimental and local-only.** `src/matrix/kkt.rs` (repo root) is gitignored; the DC-OPF interior point operators behind `--features kkt` are not part of the default build.
-- **Format validation needs Julia.** `benchmarks/validate_powermodels.jl` and `validate_psse.jl` check the writers/reader against PowerModels.jl; they don't run in plain `cargo test` (the all-pairs `caseio/tests/roundtrip_formats.rs` does).
+- **TUI lives in the CLI crate.** `powerio-cli/src/tui/`, part of the `powerio` binary. Testable via `ratatui::backend::TestBackend`.
+- **petgraph view.** `IndexedNetwork::to_petgraph()` returns `UnGraph<usize, usize>` where node weight = dense bus index, edge weight = branch index. Use it for connectivity, radial detection, spanning trees (LinDist3Flow).
+- **`kkt` feature is experimental and off by default.** `powerio-matrix/src/matrix/kkt.rs` holds the DC-OPF interior point operators behind `--features kkt`; not part of the default build or the main CI jobs.
+- **Format validation needs Julia.** `benchmarks/validate_powermodels.jl` and `validate_psse.jl` check the writers/reader against PowerModels.jl; they don't run in plain `cargo test` (the all-pairs `powerio/tests/roundtrip_formats.rs` does).
 
 ## Test fixtures
 

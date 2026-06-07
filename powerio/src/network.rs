@@ -238,14 +238,14 @@ pub struct Generator {
     pub in_service: bool,
     pub cost: Option<GenCost>,
     /// The MATPOWER gen capability / ramp columns past `PMIN`, aligned to
-    /// [`GEN_EXTRA_KEYS`] by index (`None` for a column the source omitted).
+    /// `GEN_EXTRA_KEYS` by index (`None` for a column the source omitted).
     /// A fixed array, not an [`Extras`] map: a string-keyed map per generator
     /// costs 11 heap allocations each, which dominates the parse of a large
     /// generator-heavy case. Surfaced into formats that name them (PowerModels).
     pub caps: GenCaps,
 }
 
-/// A generator's capability / ramp columns, one slot per [`GEN_EXTRA_KEYS`] name.
+/// A generator's capability / ramp columns, one slot per `GEN_EXTRA_KEYS` name.
 pub type GenCaps = [Option<f64>; GEN_EXTRA_KEYS.len()];
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

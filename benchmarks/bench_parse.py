@@ -1,20 +1,21 @@
 #!/usr/bin/env python3
-"""Benchmark the caseio/casemat Python packages against pandapower's stack.
+"""Benchmark the powerio Python package against pandapower's stack.
 
 Four rows, from leanest to fullest:
 
-- ``caseio: parse`` — the zero-dependency parser (no numpy/scipy). This is the
+- ``powerio: parse`` — the zero-dependency parser (no numpy/scipy). This is the
   apples-to-apples number against matpowercaseframes: parse a MATPOWER file into
   the tool's in-memory model, nothing more.
-- ``casemat: parse + Y_bus + B'`` — caseio's parse plus building the two matrices
-  scipy callers usually want, against issue #5's 100 ms target for case2869pegase.
+- ``powerio[matrix]: parse + Y_bus + B'`` — powerio's parse plus building the two
+  matrices scipy callers usually want, against issue #5's 100 ms target for
+  case2869pegase.
 - ``matpowercaseframes: parse`` — pandapower's ``.m`` reader (pandas DataFrames).
 - ``pandapower: from_mpc`` — the full convert-into-``net`` path.
 
     python benchmarks/bench_parse.py [path/to/case.m ...]
 
 Run it with the venv that has the extensions built (`maturin develop --release`).
-Install the comparison baselines with `pip install 'casemat[bench]'`.
+Install the comparison baselines with `pip install 'powerio[bench]'`.
 """
 
 import logging
@@ -24,8 +25,7 @@ import time
 import warnings
 from pathlib import Path
 
-import caseio
-import casemat
+import powerio
 
 # pandapower/matpowercaseframes emit a wall of dtype FutureWarnings, mixed-cost
 # UserWarnings, and logger lines that drown the table; none are ours to fix.
@@ -63,7 +63,7 @@ def samples_for(nbuses):
 
 
 def bench_case(path: Path):
-    case = caseio.parse(str(path))
+    case = powerio.parse(str(path))
     print(
         f"case {path.name}: {case.n} buses, {case.n_branches} branches, "
         f"{case.n_gens} gens"
@@ -73,14 +73,14 @@ def bench_case(path: Path):
     def timed(fn):
         return best_median(fn, n, warm)
 
-    rows = [("caseio: parse", *timed(lambda: caseio.parse(str(path))))]
+    rows = [("powerio: parse", *timed(lambda: powerio.parse(str(path))))]
 
     def full_path():
-        c = casemat.parse_matpower(str(path))
+        c = powerio.parse_matpower(str(path))
         c.ybus()
         c.bprime()
 
-    rows.append(("casemat: parse + Y_bus + B'", *timed(full_path)))
+    rows.append(("powerio[matrix]: parse + Y_bus + B'", *timed(full_path)))
 
     try:
         from matpowercaseframes import CaseFrames
@@ -91,7 +91,7 @@ def bench_case(path: Path):
         if getattr(exc, "name", None) not in ("matpowercaseframes", None):
             raise
         print("matpowercaseframes not installed; skipping the baseline row.")
-        print("  pip install 'casemat[bench]'")
+        print("  pip install 'powerio[bench]'")
 
     # pandapower reads .m via matpowercaseframes, then builds its `net`. This is
     # the apples-to-apples "convert a MATPOWER file into the tool's model" row.

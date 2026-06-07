@@ -1,7 +1,7 @@
 function mpc = t_case9_oos
 %T_CASE9_OOS  case9 with one out-of-service generator and branch, for testing.
 %   Derived from case9.m: generator 2 (bus 2) and branch 5-6 are set
-%   out of service (status 0). Used to check that caseio's in-service
+%   out of service (status 0). Used to check that powerio's in-service
 %   filtering reproduces ExaPowerIO's filtered=true parse.
 %   Please see CASEFORMAT for details on the case file format.
 %

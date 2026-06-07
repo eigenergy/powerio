@@ -1,6 +1,6 @@
 //! C ABI for `powerio` — the polyglot substrate.
 //!
-//! Parse any supported power-system case format into an opaque handle, query it,
+//! Parse any supported power system case format into an opaque handle, query it,
 //! convert losslessly to another format, and pull out the numeric tables a
 //! downstream solver needs to assemble matrices. Every entry point is `extern
 //! "C"`, catches panics at the boundary, and returns error text into a

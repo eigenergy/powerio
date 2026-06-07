@@ -1,6 +1,6 @@
 # Export a case to PowerModels JSON the way PowerModels itself writes it
-# (per_unit=true). Used by run_validation.sh to test caseio's PowerModels JSON
-# *reader* against real PowerModels output: PowerModels writes the JSON, caseio
+# (per_unit=true). Used by run_validation.sh to test powerio's PowerModels JSON
+# *reader* against real PowerModels output: PowerModels writes the JSON, powerio
 # reads it and re-emits, and the two are compared.
 #
 #   julia --project=benchmarks pm_export.jl <case.m> <out.json>

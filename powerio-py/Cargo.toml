@@ -5,7 +5,7 @@ edition = "2024"
 rust-version = "1.86"
 description = "PyO3 extension module for powerio (builds the `powerio` Python wheel; not published to crates.io)."
 license = "MIT OR Apache-2.0"
-repository = "https://github.com/eigenergy/caseio"
+repository = "https://github.com/eigenergy/powerio"
 publish = false
 
 # The compiled module is imported as `powerio._powerio`; the `powerio` Python

@@ -1,9 +1,9 @@
-# Validate caseio's PowerModels JSON against PowerModels' own parse of the .m,
+# Validate powerio's PowerModels JSON against PowerModels' own parse of the .m,
 # value for value over bus/branch/gen/load/shunt.
 # Usage: julia --project=benchmarks validate_powermodels.jl case.m our.json
 #
 # Two checks:
-#  1. Consumability — caseio writes idiomatic per_unit=true JSON, so PowerModels'
+#  1. Consumability — powerio writes idiomatic per_unit=true JSON, so PowerModels'
 #     default parse_file (validate=true, which runs correct_network_data! and the
 #     dcline correction) must load it without error. This is the interop property
 #     that motivated emitting per_unit=true.
@@ -11,18 +11,18 @@
 #     explicitly. validate=false matters: correct_network_data! clamps angmin/angmax
 #     to ±60° (default_pad) and normalizes branch direction / thermal limits, which
 #     would rewrite BOTH sides into agreement and hide a scaling bug. make_per_unit!
-#     is a no-op on data already flagged per_unit=true (caseio's JSON), so it only
+#     is a no-op on data already flagged per_unit=true (powerio's JSON), so it only
 #     per-unitizes the native .m reference.
 using PowerModels
 PowerModels.silence()
 
 ref_m, our_json = ARGS[1], ARGS[2]
 
-# 1. Consumability: the caseio JSON must load under PowerModels' default validate=true.
+# 1. Consumability: the powerio JSON must load under PowerModels' default validate=true.
 try
     PowerModels.parse_file(our_json)
 catch e
-    println("MISMATCH: ", basename(ref_m), " — caseio JSON rejected by PowerModels validate=true: ", e)
+    println("MISMATCH: ", basename(ref_m), " — powerio JSON rejected by PowerModels validate=true: ", e)
     exit(1)
 end
 
