@@ -88,27 +88,44 @@ where
             code = &code[..close];
             done = true;
         }
-        let mut segments = code.split(';').peekable();
-        while let Some(seg) = segments.next() {
-            let terminated = segments.peek().is_some(); // a `;` followed this segment
-            for tok in seg.split_ascii_whitespace() {
-                let t = tok.trim_end_matches(',');
-                if t.is_empty() {
-                    continue;
-                }
-                buf.push(parse_float(t).ok_or_else(|| Error::BadFloat {
-                    field: leak_field(field),
-                    row,
-                    value: t.to_string(),
-                })?);
-            }
-            if terminated {
+        // One byte-level pass over the line's code: `;` ends a row, ASCII
+        // whitespace separates tokens, and a trailing comma is stripped (MATPOWER
+        // rows are space/semicolon-delimited). This replaces split(';') +
+        // split_ascii_whitespace — the generic Unicode searcher was the dominant
+        // tokenizing cost — and feeds the raw bytes straight to fast-float.
+        let bytes = code.as_bytes();
+        let mut i = 0;
+        while i < bytes.len() {
+            let b = bytes[i];
+            if b == b';' {
                 if !buf.is_empty() {
                     f(&buf, row)?;
                     row += 1;
+                    buf.clear();
                 }
-                buf.clear();
+                i += 1;
+                continue;
             }
+            if b.is_ascii_whitespace() {
+                i += 1;
+                continue;
+            }
+            let start = i;
+            while i < bytes.len() && !matches!(bytes[i], b';') && !bytes[i].is_ascii_whitespace() {
+                i += 1;
+            }
+            let mut tok = &bytes[start..i];
+            while tok.last() == Some(&b',') {
+                tok = &tok[..tok.len() - 1];
+            }
+            if tok.is_empty() {
+                continue;
+            }
+            buf.push(parse_float(tok).ok_or_else(|| Error::BadFloat {
+                field: leak_field(field),
+                row,
+                value: String::from_utf8_lossy(tok).into_owned(),
+            })?);
         }
     }
     // Entered the matrix (`[`) but never saw the closing `]`: the assignment is
@@ -126,13 +143,14 @@ where
     Ok(())
 }
 
-fn parse_float(tok: &str) -> Option<f64> {
+fn parse_float(tok: &[u8]) -> Option<f64> {
     match tok {
-        "Inf" | "inf" | "+Inf" | "+inf" => Some(f64::INFINITY),
-        "-Inf" | "-inf" => Some(f64::NEG_INFINITY),
-        "NaN" | "nan" => Some(f64::NAN),
+        b"Inf" | b"inf" | b"+Inf" | b"+inf" => Some(f64::INFINITY),
+        b"-Inf" | b"-inf" => Some(f64::NEG_INFINITY),
+        b"NaN" | b"nan" => Some(f64::NAN),
         // fast-float is IEEE-correct (same value as std) but several times
-        // faster, and float tokens dominate large-case parse time.
+        // faster, and float tokens dominate large-case parse time. It takes the
+        // raw bytes, so the tokenizer passes a slice with no &str round-trip.
         _ => fast_float::parse(tok).ok(),
     }
 }
