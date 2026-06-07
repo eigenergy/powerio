@@ -20,6 +20,11 @@ pub fn build_weighted_laplacian(a: &CsMat<f64>, w: &[f64]) -> CsMat<f64> {
 /// Delete row `r` and column `r` from a square matrix, returning the
 /// `(n−1)×(n−1)` grounded matrix. Used to remove the slack bus so a singular
 /// Laplacian becomes SPD.
+///
+/// # Panics
+///
+/// Panics if `r >= matrix.rows()`: with no row/column to remove the result
+/// would be silently the wrong shape.
 pub fn ground_at(matrix: &CsMat<f64>, r: usize) -> CsMat<f64> {
     let n = matrix.rows();
     debug_assert_eq!(n, matrix.cols(), "ground_at expects a square matrix");
@@ -28,7 +33,7 @@ pub fn ground_at(matrix: &CsMat<f64>, r: usize) -> CsMat<f64> {
     // release. `ground_at` is `pub`, so guard the contract unconditionally.
     assert!(r < n, "ground_at: index {r} out of range for {n}x{n} matrix");
     let mut g = CooBuilder::new(n.saturating_sub(1));
-    for (&v, (i, j)) in matrix.iter() {
+    for (&v, (i, j)) in matrix {
         if i == r || j == r {
             continue;
         }

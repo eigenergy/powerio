@@ -3,7 +3,7 @@ use super::write_matpower;
 use crate::indexed::IndexedNetwork;
 use crate::network::SourceFormat;
 
-const CASE_TINY: &str = r#"
+const CASE_TINY: &str = r"
 function mpc = tiny
 %TINY  3-bus test
 mpc.version = '2';
@@ -21,9 +21,11 @@ mpc.branch = [
     1  2  0.02  0.06  0.01  0  0  0  0  0  1  -360  360;
     2  3  0.01  0.04  0.015 0  0  0  1  0  1  -360  360;
 ];
-"#;
+";
 
 #[test]
+// base_mva is `100` verbatim in the source, so the exact compare is intended.
+#[allow(clippy::float_cmp)]
 fn parses_tiny_case() {
     let net = parse_mpc(CASE_TINY).expect("parse tiny");
     assert_eq!(net.base_mva, 100.0);
@@ -43,7 +45,7 @@ fn parses_tiny_case() {
 
 #[test]
 fn maps_non_contiguous_bus_ids() {
-    let src = r#"
+    let src = r"
 function mpc = sparse_ids
 mpc.baseMVA = 100;
 mpc.bus = [
@@ -53,7 +55,7 @@ mpc.bus = [
 mpc.branch = [
     7  42  0.01  0.05  0.02  0  0  0  0  0  1  -360  360;
 ];
-"#;
+";
     let net = parse_mpc(src).expect("parse sparse-ids");
     assert_eq!(net.buses.len(), 2);
     let g = IndexedNetwork::new(&net);
@@ -64,7 +66,7 @@ mpc.branch = [
 
 #[test]
 fn rejects_short_bus_row() {
-    let src = r#"
+    let src = r"
 mpc.baseMVA = 100;
 mpc.bus = [
     1 3 0;
@@ -72,7 +74,7 @@ mpc.bus = [
 mpc.branch = [
     1 1 0.01 0.05 0.02 0 0 0 0 0 1 -360 360;
 ];
-"#;
+";
     let err = parse_mpc(src).expect_err("should fail on short bus row");
     let msg = err.to_string();
     assert!(msg.contains("bus"), "expected bus error, got: {msg}");
@@ -80,7 +82,7 @@ mpc.branch = [
 
 #[test]
 fn handles_inline_percent_in_string() {
-    let src = r#"
+    let src = r"
 mpc.baseMVA = 100;
 mpc.version = '2 (50% capacity)';
 mpc.bus = [
@@ -89,7 +91,7 @@ mpc.bus = [
 mpc.branch = [
     1 1 0.01 0.05 0.02 0 0 0 0 0 1 -360 360;
 ];
-"#;
+";
     parse_mpc(src).expect("string with embedded % shouldn't break parse");
 }
 
@@ -97,7 +99,7 @@ mpc.branch = [
 fn parses_storage_block() {
     // Storage row values taken from pglib_opf_case5_pjm_storage (the
     // PowerModels / pglib 17-column layout), plus a second out-of-service row.
-    let src = r#"
+    let src = r"
 mpc.baseMVA = 100;
 mpc.bus = [
     1 3 0 0 0 0 1 1 0 345 1 1.1 0.9;
@@ -110,7 +112,7 @@ mpc.storage = [
     4  0.0  0.0  1.00  600.0  300.0  216.0  0.9  0.85  1000  -1000  1000  0.1  0.01  0  0  1;
     1  0.0  0.0  0.50  200.0  100.0  100.0  0.95 0.9   500   -500   500   0.2  0.02  0  0  0;
 ];
-"#;
+";
     let net = parse_mpc(src).expect("parse storage");
     assert_eq!(net.storage.len(), 2);
     let s = &net.storage[0];
@@ -133,7 +135,7 @@ fn absent_storage_is_empty() {
 
 #[test]
 fn rejects_short_storage_row() {
-    let src = r#"
+    let src = r"
 mpc.baseMVA = 100;
 mpc.bus = [
     1 3 0 0 0 0 1 1 0 345 1 1.1 0.9;
@@ -144,7 +146,7 @@ mpc.branch = [
 mpc.storage = [
     1 0.0 0.0 1.0;
 ];
-"#;
+";
     let err = parse_mpc(src).expect_err("short storage row should fail");
     assert!(err.to_string().contains("storage"), "got: {err}");
 }
@@ -181,6 +183,8 @@ fn accepts_last_row_without_trailing_semicolon() {
 }
 
 #[test]
+// base_mva is `100` verbatim in the source, so the exact compare is intended.
+#[allow(clippy::float_cmp)]
 fn parsed_case_keeps_source_in_memory_case_does_not() {
     // A network parsed from text retains its source so the writer echoes it
     // verbatim; one built in memory has no source and writes canonically.
@@ -199,7 +203,7 @@ fn parsed_case_keeps_source_in_memory_case_does_not() {
 
 #[test]
 fn handles_nan_inf() {
-    let src = r#"
+    let src = r"
 mpc.baseMVA = 100;
 mpc.bus = [
     1 3 0 0 0 0 1 1 0 345 1 1.1 0.9;
@@ -207,7 +211,7 @@ mpc.bus = [
 mpc.branch = [
     1 1 0.01 0.05 0.02 0 0 0 0 0 1 NaN Inf;
 ];
-"#;
+";
     let net = parse_mpc(src).expect("NaN/Inf should parse");
     assert!(net.branches[0].angmin.is_nan());
     assert!(net.branches[0].angmax.is_infinite());

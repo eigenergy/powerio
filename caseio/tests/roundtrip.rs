@@ -55,6 +55,8 @@ fn round_trip_is_idempotent() {
 }
 
 #[test]
+// The round-trip must preserve base_mva bit for bit, so the exact compare is the assertion.
+#[allow(clippy::float_cmp)]
 fn typed_data_survives_round_trip() {
     for path in cases() {
         let case = parse_matpower_file(&path).unwrap();
@@ -83,6 +85,8 @@ fn parses_bus_names() {
 }
 
 #[test]
+// pf is `10` verbatim in the dcline fixture, so the exact compare is intended.
+#[allow(clippy::float_cmp)]
 fn parses_hvdc_dclines() {
     let case = parse_matpower_file(data_dir().join("t_case9_dcline.m")).unwrap();
     assert!(!case.hvdc.is_empty(), "mpc.dcline not parsed");

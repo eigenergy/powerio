@@ -97,7 +97,7 @@ impl Default for Pipeline {
             matrices: vec![MatrixKind::BPrime],
             options: BuildOptions::default(),
             rhs: RhsKind::None,
-            rng_seed: 0xC0FFEE,
+            rng_seed: 0x00C0_FFEE,
             source_file: None,
         }
     }
@@ -139,7 +139,7 @@ impl Pipeline {
             files.push(matrix_path);
 
             // RHS for matrices that take a RHS of length n (skip LACPF which is 2n).
-            if let Some(rhs) = self.build_rhs(&view, kind)? {
+            if let Some(rhs) = self.build_rhs(&view, kind) {
                 let rhs_path = out_dir.join(format!("{}_{}_rhs.mtx", view.name(), kind.slug()));
                 write_vector_mtx(&rhs, &rhs_path)?;
                 files.push(rhs_path);
@@ -187,12 +187,12 @@ impl Pipeline {
         build_kind(case, kind, &self.options)
     }
 
-    fn build_rhs(&self, case: &IndexedNetwork, kind: MatrixKind) -> Result<Option<Vec<f64>>> {
+    fn build_rhs(&self, case: &IndexedNetwork, kind: MatrixKind) -> Option<Vec<f64>> {
         // No meaningful RHS for the 2n LACPF block or the structural adjacency.
         if matches!(self.rhs, RhsKind::None)
             || matches!(kind, MatrixKind::Lacpf | MatrixKind::Adjacency)
         {
-            return Ok(None);
+            return None;
         }
         let n = case.n();
         let v = match self.rhs {
@@ -225,7 +225,7 @@ impl Pipeline {
             }
             RhsKind::None => unreachable!(),
         };
-        Ok(Some(v))
+        Some(v)
     }
 }
 

@@ -32,13 +32,16 @@ fn net_with_gens(name: &str, buses: Vec<Bus>, branches: Vec<Branch>, generators:
 
 fn dense(m: &CsMat<f64>) -> Vec<Vec<f64>> {
     let mut d = vec![vec![0.0; m.cols()]; m.rows()];
-    for (&v, (i, j)) in m.iter() {
+    for (&v, (i, j)) in m {
         d[i][j] = v;
     }
     d
 }
 
 /// Positive definiteness via dense Cholesky; small matrices only.
+// k indexes l[i][k] and l[j][k] in the same inner product; an iterator rewrite
+// would only obscure the Cholesky recurrence.
+#[allow(clippy::needless_range_loop)]
 fn is_spd(a: &[Vec<f64>]) -> bool {
     let n = a.len();
     let mut l = vec![vec![0.0_f64; n]; n];
@@ -125,7 +128,7 @@ fn incidence_structure() {
         // Each column sums to 0 with one +1 and one −1.
         let mut col_sum = vec![0.0; m];
         let mut col_cnt = vec![0usize; m];
-        for (&v, (_, j)) in inc.a.iter() {
+        for (&v, (_, j)) in &inc.a {
             col_sum[j] += v;
             col_cnt[j] += 1;
             assert!((v.abs() - 1.0).abs() < 1e-12, "{path}: |A entry| != 1");
@@ -138,6 +141,8 @@ fn incidence_structure() {
 }
 
 #[test]
+// i/j index d[i][j] and d[j][i] for the symmetry check; the index pair is the point.
+#[allow(clippy::needless_range_loop)]
 fn laplacian_is_psd_with_constant_kernel() {
     for path in CASES {
         let case = load(path);
@@ -218,7 +223,7 @@ fn opf_instance_shapes_and_cg() {
         // C_g: one 1 per generator column.
         assert_eq!(opf.c_g.nnz(), n_gen);
         let mut col_sum = vec![0.0; n_gen];
-        for (&v, (_, g)) in opf.c_g.iter() {
+        for (&v, (_, g)) in &opf.c_g {
             assert!((v - 1.0).abs() < 1e-12);
             col_sum[g] += v;
         }
@@ -278,6 +283,8 @@ fn reference_bus_count_errors() {
 }
 
 #[test]
+// i/j index d[i][j] and d[j][i] for symmetry; adjacency entries are exact 0/1.
+#[allow(clippy::needless_range_loop, clippy::float_cmp)]
 fn adjacency_is_symmetric_01() {
     for path in CASES {
         let case = load(path);
@@ -297,6 +304,8 @@ fn adjacency_is_symmetric_01() {
 }
 
 #[test]
+// i/k/l index entries of (A·PTDF) and PTDF; the indices are the assertion.
+#[allow(clippy::needless_range_loop)]
 fn ptdf_satisfies_kcl() {
     // A · PTDF = I − e_r·1ᵀ: nodal balance for every injection.
     for path in CASES {
@@ -328,6 +337,8 @@ fn ptdf_satisfies_kcl() {
 }
 
 #[test]
+// k/l index LODF entries d[k][k] and d[l][k]; the indices are the assertion.
+#[allow(clippy::needless_range_loop)]
 fn lodf_diagonal_is_minus_one() {
     for path in CASES {
         let case = load(path);
@@ -560,6 +571,8 @@ fn bundle_vectors_round_trip() {
 }
 
 #[test]
+// l/k index lodf[l][k] against the expected −1 diagonal; the indices are the assertion.
+#[allow(clippy::needless_range_loop)]
 fn radial_lodf_is_negative_identity() {
     // Path 1-2-3: every branch is a bridge, so each outage islands the network
     // and the LODF column zeroes out except the −1 diagonal.

@@ -16,6 +16,13 @@ fn num(x: f64) -> Value {
     serde_json::Number::from_f64(x).map_or(Value::Null, Value::Number)
 }
 
+/// MATPOWER in-service flag: the status column is exactly 0 or 1 in the file,
+/// so the equality is the intended exact compare.
+#[allow(clippy::float_cmp)]
+fn is_in_service(status: f64) -> bool {
+    status == 1.0
+}
+
 /// Bus matrix column indices.
 mod bus_col {
     pub const BUS_I: usize = 0;
@@ -174,7 +181,7 @@ pub(super) fn branch_row(row: &[f64], i: usize) -> Result<Branch> {
         rate_c: row[branch_col::RATE_C],
         tap: row[branch_col::TAP],
         shift: row[branch_col::SHIFT],
-        in_service: row[branch_col::BR_STATUS] == 1.0,
+        in_service: is_in_service(row[branch_col::BR_STATUS]),
         angmin: row[branch_col::ANGMIN],
         angmax: row[branch_col::ANGMAX],
         extras: Extras::new(),
@@ -203,7 +210,7 @@ pub(super) fn gen_row(row: &[f64], i: usize) -> Result<Generator> {
         mbase: row[gen_col::MBASE],
         pmax: row[gen_col::PMAX],
         pmin: row[gen_col::PMIN],
-        in_service: row[gen_col::GEN_STATUS] == 1.0,
+        in_service: is_in_service(row[gen_col::GEN_STATUS]),
         cost: None,
         extras,
     })
@@ -239,7 +246,7 @@ pub(super) fn storage_row(row: &[f64], i: usize) -> Result<Storage> {
         x: row[storage_col::X],
         p_loss: row[storage_col::P_LOSS],
         q_loss: row[storage_col::Q_LOSS],
-        in_service: row[storage_col::STATUS] == 1.0,
+        in_service: is_in_service(row[storage_col::STATUS]),
         extras: Extras::new(),
     })
 }
@@ -249,7 +256,7 @@ pub(super) fn hvdc_row(row: &[f64], i: usize) -> Result<Hvdc> {
     Ok(Hvdc {
         from: row[dcline_col::F_BUS] as usize,
         to: row[dcline_col::T_BUS] as usize,
-        in_service: row[dcline_col::BR_STATUS] == 1.0,
+        in_service: is_in_service(row[dcline_col::BR_STATUS]),
         pf: row[dcline_col::PF],
         pt: row[dcline_col::PT],
         qf: row[dcline_col::QF],

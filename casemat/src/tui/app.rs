@@ -249,9 +249,8 @@ impl App {
     }
 
     pub fn open_inspect(&mut self) -> crate::Result<()> {
-        let entry = match self.cases.get(self.selected) {
-            Some(e) => e,
-            None => return Ok(()),
+        let Some(entry) = self.cases.get(self.selected) else {
+            return Ok(());
         };
         let case = crate::parse_matpower_file(&entry.path)?;
         self.inspect = Some(self.build_inspect(case)?);

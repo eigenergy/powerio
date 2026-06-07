@@ -21,7 +21,7 @@ fn case9_parses_correctly() {
     let net = parse_matpower_file(fixture("case9.m")).unwrap();
     assert_eq!(net.buses.len(), 9);
     assert_eq!(net.branches.len(), 9);
-    assert_eq!(net.base_mva, 100.0);
+    assert!((net.base_mva - 100.0).abs() < 1e-12);
     // case9 buses are contiguous 1..=9.
     let g = IndexedNetwork::new(&net);
     for i in 1..=9 {
@@ -139,8 +139,7 @@ fn tempdir() -> PathBuf {
         "casemat-test-{}",
         std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
-            .map(|d| d.as_nanos())
-            .unwrap_or(0)
+            .map_or(0, |d| d.as_nanos())
     ));
     std::fs::create_dir_all(&p).unwrap();
     p

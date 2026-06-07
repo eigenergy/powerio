@@ -28,6 +28,9 @@ pub struct YbusParts {
 }
 
 /// Internal flags used to derive B', B'' from `Y_bus` per MATPOWER `makeB`.
+// Five independent on/off switches into one Y_bus kernel; an enum per pair
+// would just spread the same state across more types.
+#[allow(clippy::struct_excessive_bools)]
 #[derive(Debug, Clone, Copy, Default)]
 pub(crate) struct YbusFlags {
     pub zero_resistance: bool,
@@ -48,6 +51,9 @@ pub fn build_ybus(case: &IndexedNetwork, opts: &super::BuildOptions) -> Result<Y
     build_ybus_with_flags(case, flags)
 }
 
+// i/j bus indices, r/x impedance, a complex tap: the single-letter names are
+// the standard makeYbus notation and the math reads worse spelled out.
+#[allow(clippy::many_single_char_names)]
 pub(crate) fn build_ybus_with_flags(case: &IndexedNetwork, flags: YbusFlags) -> Result<YbusParts> {
     let n = case.n();
     let mut g_coo = CooBuilder::with_capacity(n, 4 * case.branches().len() + n);

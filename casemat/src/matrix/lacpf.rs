@@ -35,11 +35,11 @@ pub fn build_lacpf(case: &IndexedNetwork, opts: &BuildOptions) -> Result<CsMat<f
     // than deep-copying through `to_csr()`.
     let mut tri = sprs::TriMat::with_capacity((two_n, two_n), 2 * (parts.g.nnz() + parts.b.nnz()));
 
-    for (&v, (i, j)) in parts.g.iter() {
+    for (&v, (i, j)) in &parts.g {
         tri.add_triplet(i, j, v); // top-left:  +G
         tri.add_triplet(n + i, n + j, -v); // bottom-right: -G
     }
-    for (&v, (i, j)) in parts.b.iter() {
+    for (&v, (i, j)) in &parts.b {
         tri.add_triplet(i, n + j, -v); // top-right:    -B
         tri.add_triplet(n + i, j, -v); // bottom-left:  -B
     }

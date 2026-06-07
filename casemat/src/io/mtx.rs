@@ -36,7 +36,7 @@ fn write_symmetric_mtx(matrix: &CsMat<f64>, path: &Path) -> Result<()> {
         .count();
     writeln!(w, "{} {} {}", matrix.rows(), matrix.cols(), nnz)?;
 
-    for (&v, (i, j)) in matrix.iter() {
+    for (&v, (i, j)) in matrix {
         if i < j || v == 0.0 {
             continue;
         }

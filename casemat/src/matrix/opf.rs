@@ -174,7 +174,7 @@ pub fn build_opf_instance(
 /// several generators get the sum; one generator per bus is exact.
 pub fn project_gen_to_bus(c_g: &CsMat<f64>, v: &[f64]) -> Vec<f64> {
     let mut out = vec![0.0; c_g.rows()];
-    for (&val, (bus, gen)) in c_g.iter() {
+    for (&val, (bus, gen)) in c_g {
         out[bus] += val * v[gen];
     }
     out
