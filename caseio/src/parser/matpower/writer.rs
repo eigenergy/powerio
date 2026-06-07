@@ -7,10 +7,8 @@
 //! data.
 
 use std::fmt::Write as _;
-use std::path::Path;
 
 use crate::case::MpcCase;
-use crate::Result;
 
 /// Serialize `case` to MATPOWER `.m` text.
 #[must_use]
@@ -19,12 +17,6 @@ pub fn write_matpower(case: &MpcCase) -> String {
         Some(text) => text.to_owned(),
         None => canonical(case),
     }
-}
-
-/// Write `case` to `path` as MATPOWER `.m`.
-pub fn write_matpower_file(case: &MpcCase, path: impl AsRef<Path>) -> Result<()> {
-    std::fs::write(path, write_matpower(case))?;
-    Ok(())
 }
 
 /// Canonical MATPOWER from typed data, for cases with no retained source text.

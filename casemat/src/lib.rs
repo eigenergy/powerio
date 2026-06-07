@@ -11,7 +11,7 @@
 pub use caseio::{
     case, error, format, network, parser, parse_matpower, parse_matpower_file,
     parse_powermodels_json, parse_powerworld, parse_psse, write_as, write_egret_json, write_matpower,
-    write_matpower_file, write_powermodels_json, write_powerworld, write_psse, Branch, Bus,
+    write_powermodels_json, write_powerworld, write_psse, Branch, Bus,
     ConnectivityReport, Conversion, DcLine, Error, GenCost, Generator, MpcCase, Network, Result,
     SourceFormat, Storage, TargetFormat,
 };

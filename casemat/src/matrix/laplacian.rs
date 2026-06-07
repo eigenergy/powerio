@@ -2,7 +2,7 @@
 //! index bookkeeping for round-tripping a grounded solve back to full size.
 //!
 //! Built from the same `A`, `w` factors the incidence module produces, so
-//! `L` and the reweighted Laplacians in `kkt` share an exact factorization.
+//! `L` and its slack-grounded form share an exact factorization.
 
 use sprs::CsMat;
 
@@ -40,7 +40,8 @@ pub fn ground_at(matrix: &CsMat<f64>, r: usize) -> CsMat<f64> {
 }
 
 /// Maps indices between the full `[0, n)` space and the grounded `[0, n−1)`
-/// space (row/column `r` removed).
+/// space (row/column `r` removed). Used by the DC-OPF interior-point operators
+/// (the `kkt` feature) to round-trip a grounded solve back to full size.
 #[derive(Debug, Clone, Copy)]
 pub struct GroundMap {
     pub n: usize,

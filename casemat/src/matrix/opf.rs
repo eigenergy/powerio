@@ -10,7 +10,7 @@
 use sprs::CsMat;
 
 use crate::case::MpcCase;
-use crate::matrix::incidence::{IncidenceParts, diagonal};
+use crate::matrix::incidence::IncidenceParts;
 use crate::matrix::triplet::CooBuilder;
 use crate::{Error, Result};
 
@@ -159,9 +159,4 @@ pub fn project_gen_to_bus(c_g: &CsMat<f64>, v: &[f64]) -> Vec<f64> {
         out[bus] += val * v[gen];
     }
     out
-}
-
-/// `Q = diag(q)` as a sparse matrix.
-pub fn cost_quadratic_diag(q: &[f64]) -> CsMat<f64> {
-    diagonal(q)
 }

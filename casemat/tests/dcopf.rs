@@ -408,7 +408,6 @@ fn gen_with_cost(bus_id: usize, cost: Option<GenCost>) -> Generator {
         pmax: 100.0,
         pmin: 0.0,
         cost,
-        reactive_cost: None,
         extra: Vec::new(),
     }
 }

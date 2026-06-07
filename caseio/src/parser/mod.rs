@@ -7,6 +7,4 @@
 
 pub mod matpower;
 
-pub use matpower::{
-    parse_matpower, parse_matpower_file, write_matpower, write_matpower_file,
-};
+pub use matpower::{parse_matpower, parse_matpower_file, write_matpower};
