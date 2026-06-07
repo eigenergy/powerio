@@ -1,8 +1,8 @@
 [workspace]
-members = ["powerio", "powerio-matrix", "powerio-cli", "casemat-ext", "caseio-ext", "powerio-capi"]
-# Bare `cargo build`/`test`/`clippy` touch only the two Rust library crates, so
-# the toolchain never compiles the PyO3 extensions (which need libpython). Build
-# the bindings explicitly with `-p casemat-ext` / `-p caseio-ext`.
+members = ["powerio", "powerio-matrix", "powerio-cli", "powerio-py", "powerio-capi"]
+# Bare `cargo build`/`test`/`clippy` touch only the library + CLI crates, so the
+# toolchain never compiles the PyO3 extension (which needs libpython). Build the
+# binding explicitly with `-p powerio-py`.
 default-members = ["powerio", "powerio-matrix", "powerio-cli"]
 resolver = "2"
 

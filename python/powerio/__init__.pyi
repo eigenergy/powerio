@@ -1,4 +1,4 @@
-from typing import Any, Dict, List, Literal, NamedTuple, Optional, Tuple, TypedDict
+from typing import Any, Dict, List, Literal, NamedTuple, Optional, TypedDict
 
 __version__: str
 
@@ -6,7 +6,8 @@ Scheme = Literal["bx", "xb"]
 Convention = Literal["paper", "matpower"]
 Units = Literal["perunit", "native"]
 
-class CasematError(Exception): ...
+class PowerIOError(Exception):
+    """Raised by the powerio parser, converter, or matrix builders."""
 
 class GenCost(TypedDict):
     model: int
@@ -18,17 +19,25 @@ class GenCost(TypedDict):
 class Bus(TypedDict):
     id: int
     type: Literal["PQ", "PV", "REF", "ISOLATED"]
-    pd: float
-    qd: float
-    gs: float
-    bs: float
-    area: int
     vm: float
     va: float
     base_kv: float
+    area: int
     zone: int
     vmax: float
     vmin: float
+
+class Load(TypedDict):
+    bus: int
+    p: float
+    q: float
+    in_service: bool
+
+class Shunt(TypedDict):
+    bus: int
+    g: float
+    b: float
+    in_service: bool
 
 class Branch(TypedDict):
     from_id: int
@@ -41,21 +50,21 @@ class Branch(TypedDict):
     rate_c: float
     tap: float
     shift: float
-    status: float
+    in_service: bool
     angmin: float
     angmax: float
 
 class Gen(TypedDict):
-    bus_id: int
+    bus: int
     pg: float
     qg: float
+    pmax: float
+    pmin: float
     qmax: float
     qmin: float
     vg: float
     mbase: float
-    status: float
-    pmax: float
-    pmin: float
+    in_service: bool
     cost: Optional[GenCost]
 
 class Incidence(NamedTuple):
@@ -70,19 +79,25 @@ class YbusParts(NamedTuple):
 
 class Case:
     # Data attributes and the non-matrix methods delegate to the compiled
-    # `_casemat.PyCase` handle at runtime via `Case.__getattr__`.
+    # `_powerio.PyCase` handle at runtime via `Case.__getattr__`.
     name: str
     base_mva: float
+    source_format: str
     n: int
     n_branches: int
     n_gens: int
+    n_loads: int
+    n_shunts: int
     is_radial: bool
     n_connected_components: int
     buses: List[Bus]
+    loads: List[Load]
+    shunts: List[Shunt]
     branches: List[Branch]
     gens: List[Gen]
     def reference_bus_index(self) -> int: ...
     def connectivity_report(self) -> Dict[str, Any]: ...
+    def write(self) -> str: ...
     def bprime(self, scheme: Scheme = ...) -> Any: ...
     def bdoubleprime(self, scheme: Scheme = ...) -> Any: ...
     def lacpf(self, include_taps: bool = ..., include_shifts: bool = ...) -> Any: ...
@@ -108,6 +123,9 @@ class Conversion(NamedTuple):
 # "psse"/"raw"). Kept as `str` so aliases type-check; the binding validates it.
 Format = str
 
+def parse(path: Any) -> Case: ...
+def parse_str(text: str, format: Format = ...) -> Case: ...
 def parse_matpower(path: Any) -> Case: ...
 def parse_matpower_string(content: str, name: Optional[str] = ...) -> Case: ...
+def write(case: Case) -> str: ...
 def convert(path: Any, to: Format, from_: Optional[Format] = ...) -> Conversion: ...

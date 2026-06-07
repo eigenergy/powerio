@@ -1,9 +1,12 @@
-"""Tests for the casemat Python bindings.
+"""Tests for the powerio Python bindings.
 
-Run with `pytest python/tests` after `maturin develop`.
+Run with `pytest python/tests` after `maturin develop`. The matrix and graph
+tests need the optional extras: `pip install '.[all]'`.
 """
 
 import json
+import subprocess
+import sys
 from pathlib import Path
 
 import numpy as np
@@ -11,7 +14,7 @@ import pytest
 import scipy.io
 import scipy.sparse as sp
 
-import casemat as nm
+import powerio
 
 DATA = Path(__file__).resolve().parents[2] / "tests" / "data"
 SMALL = ["case9", "case30"]
@@ -41,7 +44,7 @@ mpc.gencost = [
 
 
 def load(name):
-    return nm.parse_matpower(str(DATA / f"{name}.m"))
+    return powerio.parse_matpower(str(DATA / f"{name}.m"))
 
 
 def is_symmetric(m, tol=1e-9):
@@ -66,13 +69,21 @@ def test_parse_metadata(case9):
     assert case9.n_branches == 9
     assert case9.n_gens == 3
     assert case9.base_mva == 100.0
+    assert not case9.is_radial  # case9 is meshed
     assert case9.n_connected_components == 1
+
+
+def test_parse_infers_format_from_extension():
+    # powerio.parse dispatches on the extension; a .m file lands on MATPOWER.
+    case = powerio.parse(DATA / "case9.m")
+    assert case.n == 9
+    assert case.source_format == "Matpower"
 
 
 def test_case_tables(case9):
     assert len(case9.buses) == 9
     assert len(case9.branches) == 9
-    assert len(case9.gens) == 3
+    assert len(case9.gens) == 9 - 6  # 3 gens
     bus = case9.buses[0]
     assert bus["id"] == 1 and bus["type"] == "REF"
     gen = case9.gens[0]
@@ -80,18 +91,45 @@ def test_case_tables(case9):
     assert gen["cost"]["coeffs"] == [0.11, 5.0, 150.0]
 
 
-def test_parse_string_roundtrip(case9):
+def test_loads_and_shunts_are_first_class():
+    case = powerio.parse(DATA / "case30.m")
+    # MATPOWER folds demand onto the bus row; powerio splits it back out.
+    assert case.n_loads > 0
+    assert all({"bus", "p", "q", "in_service"} <= set(l) for l in case.loads)
+    # buses carry no pd/qd (that's what loads are for)
+    assert "pd" not in case.buses[0]
+
+
+def test_parse_matpower_string_roundtrip(case9):
     text = (DATA / "case9.m").read_text()
-    c = nm.parse_matpower_string(text, name="from_string")
+    c = powerio.parse_matpower_string(text, name="from_string")
     assert c.name == "from_string"
     assert c.n == case9.n
     assert np.allclose(c.bprime().toarray(), case9.bprime().toarray())
 
 
+def test_parse_str_general():
+    text = (DATA / "case9.m").read_text()
+    c = powerio.parse_str(text, "matpower")
+    assert c.n == 9
+
+
+def test_write_is_byte_exact():
+    src = (DATA / "case9.m").read_text()
+    case = powerio.parse(DATA / "case9.m")
+    assert case.write() == src
+    assert powerio.write(case) == src
+
+
 def test_parse_bad_path_raises():
-    # I/O failures map to the standard OSError subclass, not CasematError.
+    # I/O failures map to the standard OSError subclass, not PowerIOError.
     with pytest.raises(FileNotFoundError):
-        nm.parse_matpower(str(DATA / "does_not_exist.m"))
+        powerio.parse_matpower(str(DATA / "does_not_exist.m"))
+
+
+def test_bad_parse_raises_powerio_error():
+    with pytest.raises(powerio.PowerIOError):
+        powerio.parse_matpower_string("this is not a matpower case")
 
 
 def test_delegated_surface_resolves(case9):
@@ -100,21 +138,42 @@ def test_delegated_surface_resolves(case9):
     for attr in [
         "name",
         "base_mva",
+        "source_format",
         "n",
         "n_branches",
         "n_gens",
+        "n_loads",
+        "n_shunts",
         "is_radial",
         "n_connected_components",
         "buses",
+        "loads",
+        "shunts",
         "branches",
         "gens",
         "reference_bus_index",
         "connectivity_report",
+        "write",
         "write_dcopf_bundle",
     ]:
         assert hasattr(case9, attr), attr
     with pytest.raises(AttributeError):
         case9.does_not_exist
+
+
+def test_import_and_parse_pull_in_no_numpy_or_scipy():
+    # The zero-dep promise: parse/convert/write need nothing but the
+    # interpreter. Run in a fresh process so another test importing scipy can't
+    # pollute it, and parse + write a real case so the whole IO path is covered.
+    code = (
+        "import sys, powerio\n"
+        f"c = powerio.parse_matpower(r'{DATA / 'case9.m'}')\n"
+        "assert c.write()\n"
+        "assert 'numpy' not in sys.modules, 'powerio dragged in numpy'\n"
+        "assert 'scipy' not in sys.modules, 'powerio dragged in scipy'\n"
+    )
+    r = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True)
+    assert r.returncode == 0, r.stderr
 
 
 # --- matrix structure & values -----------------------------------------
@@ -251,7 +310,7 @@ def test_bad_enum_strings_raise(case9, tmp_path):
 
 
 def test_to_networkx_attrs_and_status_filter():
-    c = nm.parse_matpower_string(TINY)
+    c = powerio.parse_matpower_string(TINY)
     g = c.to_networkx()
     assert g.number_of_nodes() == 3 and g.number_of_edges() == 2
     # Edge attributes mirror the branch table.
@@ -262,7 +321,7 @@ def test_to_networkx_attrs_and_status_filter():
         "2\t3\t0.01\t0.1\t0\t250\t250\t250\t0\t0\t1\t-360\t360",
         "2\t3\t0.01\t0.1\t0\t250\t250\t250\t0\t0\t0\t-360\t360",
     )
-    assert nm.parse_matpower_string(oos).to_networkx().number_of_edges() == 1
+    assert powerio.parse_matpower_string(oos).to_networkx().number_of_edges() == 1
 
 
 # --- connectivity & reference bus --------------------------------------
@@ -281,8 +340,8 @@ def test_reference_bus_index(case9):
 
 def test_reference_bus_error_on_two_refs():
     two_ref = TINY.replace("\t3\t2\t0", "\t3\t3\t0")  # bus 3: PV -> ref
-    with pytest.raises(nm.CasematError):
-        nm.parse_matpower_string(two_ref).reference_bus_index()
+    with pytest.raises(powerio.PowerIOError):
+        powerio.parse_matpower_string(two_ref).reference_bus_index()
 
 
 # --- DC-OPF bundle ------------------------------------------------------
@@ -317,37 +376,51 @@ def _bundle_file(case, out_dir, name, **kw):
 
 def test_dcopf_requires_generators(tmp_path):
     genless = TINY[: TINY.index("mpc.gen = [")]
-    case = nm.parse_matpower_string(genless)
+    case = powerio.parse_matpower_string(genless)
     assert case.n_gens == 0
-    with pytest.raises(nm.CasematError):
+    with pytest.raises(powerio.PowerIOError):
         case.write_dcopf_bundle(str(tmp_path))
 
 
 # --- convert -----------------------------------------------------------
 
 
+def test_convert_matpower_echo_is_byte_exact():
+    src = (DATA / "case14.m").read_text()
+    conv = powerio.convert(DATA / "case14.m", "matpower")
+    assert conv.text == src
+    assert conv.warnings == []
+
+
 def test_convert_matpower_to_each_format():
     for fmt in ["powermodels-json", "egret-json", "psse", "powerworld"]:
-        r = nm.convert(str(DATA / "case30.m"), fmt)
+        r = powerio.convert(str(DATA / "case30.m"), fmt)
         assert isinstance(r.text, str) and len(r.text) > 0
         assert isinstance(r.warnings, list)
     # PowerModels JSON output parses as JSON and keeps the bus count.
-    pm = json.loads(nm.convert(str(DATA / "case30.m"), "powermodels-json").text)
+    pm = json.loads(powerio.convert(str(DATA / "case30.m"), "powermodels-json").text)
     assert len(pm["bus"]) == 30
 
 
 def test_convert_round_trip_through_psse(tmp_path):
-    raw = nm.convert(str(DATA / "case30.m"), "psse").text
+    raw = powerio.convert(str(DATA / "case30.m"), "psse").text
     p = tmp_path / "case30.raw"
     p.write_text(raw)
-    back = nm.convert(str(p), "matpower")  # PSS/E inferred from .raw extension
-    case = nm.parse_matpower_string(back.text)
+    back = powerio.convert(str(p), "matpower")  # PSS/E inferred from .raw extension
+    case = powerio.parse_matpower_string(back.text)
     assert case.n == 30
 
 
 def test_convert_unknown_format_raises():
     with pytest.raises(ValueError):
-        nm.convert(str(DATA / "case30.m"), "nonsense")
+        powerio.convert(str(DATA / "case30.m"), "nonsense")
+
+
+def test_missing_json_file_raises_oserror():
+    # The non-MATPOWER read path must raise OSError too: a missing file is a
+    # missing file, not a ValueError, regardless of the inferred format.
+    with pytest.raises(OSError):
+        powerio.convert(DATA / "definitely_missing.json", "matpower")
 
 
 # --- large case integration --------------------------------------------
@@ -357,7 +430,7 @@ def test_large_case_pegase():
     path = DATA / "case2869pegase.m"
     if not path.is_file():
         pytest.skip("case2869pegase.m not vendored")
-    c = nm.parse_matpower(str(path))
+    c = powerio.parse_matpower(str(path))
     assert c.n == 2869
     b = c.bprime()
     assert b.shape == (2869, 2869)

@@ -1,21 +1,25 @@
-//! PyO3 extension module behind the `casemat` Python package.
+//! PyO3 extension behind the `powerio` Python package.
 //!
-//! This crate is the thin Rust↔Python boundary. It does no numerics of its
-//! own: every method delegates to the `casemat` library and hands the result
-//! back as COO triplets (`data`, `row`, `col`, `shape`) of NumPy arrays. The
-//! pure-Python `casemat` package (python/casemat/) assembles those into
-//! `scipy.sparse` matrices and networkx graphs, so scipy/networkx stay out of
-//! the Rust build and missing-dependency errors surface cleanly in Python.
+//! One Rust↔Python boundary for both halves of PowerIO: the dependency-light IO
+//! surface (parse, lossless write, cross-format convert) and the matrix surface
+//! (B'/B''/Y_bus, PTDF/LODF, incidence, weighted Laplacian, adjacency, DC-OPF).
+//! Parse and convert cross the boundary as plain dicts and strings, so
+//! `import powerio` pulls in nothing but the interpreter.
+//!
+//! The matrix methods hand back COO triplets as plain Python lists
+//! (`data`, `row`, `col`, `shape`) — there is no numpy at this layer. The
+//! pure-Python `powerio` package (python/powerio/) assembles those into
+//! `scipy.sparse` matrices and networkx graphs lazily, so scipy/numpy/networkx
+//! stay out of the Rust build and a missing extra surfaces as a clean
+//! `ImportError` in Python rather than a link error.
 //!
 //! COO (not CSR/CSC triplets) is deliberate: explicit per-entry `(row, col)`
-//! can't be misread as the transpose the way a raw `indptr`/`indices` pair can
-//! if scipy and sprs disagree on row- vs column-major, and it sidesteps the
-//! sprs `IndPtr` slice API. Indices are emitted as `i32` to match scipy's
-//! default index width; the largest index value is bounded by
+//! can't be misread as the transpose the way a raw `indptr`/`indices` pair can,
+//! and it sidesteps the sprs `IndPtr` slice API. Indices narrow to `i32` to
+//! match scipy's default index width; the largest index is bounded by
 //! `max(n_buses, n_branches)` (`2n` for the LACPF block), far under 2³¹, and
 //! `coo_triplets` guards the bound anyway.
 
-use numpy::IntoPyArray;
 use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
 use pyo3::types::{PyDict, PyList};
@@ -29,21 +33,21 @@ use powerio_matrix::opf_pipeline::{DcOpfOptions, write_dcopf_bundle as write_bun
 use powerio_matrix::{IndexCore, IndexedNetwork, Network};
 
 pyo3::create_exception!(
-    _casemat,
-    CasematError,
+    _powerio,
+    PowerIOError,
     pyo3::exceptions::PyException,
-    "Error raised by the casemat parser or matrix builders."
+    "Error raised by the powerio parser, converter, or matrix builders."
 );
 
 /// I/O failures map to the matching `OSError` subclass (`FileNotFoundError`,
 /// `PermissionError`, …) so Python callers can catch them the usual way; an
 /// unknown/uninferable format becomes a `ValueError`; other parse and data
-/// errors become [`CasematError`].
+/// errors become [`PowerIOError`].
 fn to_pyerr(e: powerio_matrix::Error) -> PyErr {
     match e {
         powerio_matrix::Error::Io(io) => io.into(),
         powerio_matrix::Error::UnknownFormat(msg) => PyValueError::new_err(msg),
-        other => CasematError::new_err(other.to_string()),
+        other => PowerIOError::new_err(other.to_string()),
     }
 }
 
@@ -86,10 +90,10 @@ fn normalize(s: &str) -> String {
 }
 
 /// Materialize a sparse matrix as a `(data, row, col, (nrows, ncols))` tuple of
-/// NumPy arrays. A CSR input is walked borrowed; any other storage is converted
-/// to CSR once so `outer_iterator()` yields rows. Indices narrow to `i32`. The
-/// narrowing is guarded: a dimension past `i32::MAX` raises rather than wrapping
-/// to negative indices.
+/// plain Python lists. A CSR input is walked borrowed; any other storage is
+/// converted to CSR once so `outer_iterator()` yields rows. Indices narrow to
+/// `i32`. The narrowing is guarded: a dimension past `i32::MAX` raises rather
+/// than wrapping to negative indices.
 fn coo_triplets<'py>(py: Python<'py>, m: &CsMat<f64>) -> PyResult<Bound<'py, PyAny>> {
     if m.rows() > i32::MAX as usize || m.cols() > i32::MAX as usize {
         return Err(PyValueError::new_err(format!(
@@ -118,14 +122,7 @@ fn coo_triplets<'py>(py: Python<'py>, m: &CsMat<f64>) -> PyResult<Bound<'py, PyA
         }
     }
     let shape = (view.rows(), view.cols());
-    Ok((
-        data.into_pyarray(py),
-        rows.into_pyarray(py),
-        cols.into_pyarray(py),
-        shape,
-    )
-        .into_pyobject(py)?
-        .into_any())
+    Ok((data, rows, cols, shape).into_pyobject(py)?.into_any())
 }
 
 fn build_options(scheme: Scheme, include_taps: bool, include_shifts: bool) -> BuildOptions {
@@ -137,8 +134,9 @@ fn build_options(scheme: Scheme, include_taps: bool, include_shifts: bool) -> Bu
     }
 }
 
-/// Low-level handle around a parsed `Network`. The user-facing `casemat.Case`
-/// (pure Python) wraps this and turns the COO tuples into scipy matrices.
+/// Low-level handle around a parsed [`Network`]. The user-facing `powerio.Case`
+/// (pure Python) wraps this: the IO getters and topology methods delegate
+/// straight to it, and the matrix methods turn its COO tuples into scipy.
 ///
 /// The derived [`IndexCore`] is built once and cached alongside `inner`, so the
 /// matrix builders and topology getters reuse it instead of rebuilding the
@@ -151,6 +149,8 @@ pub struct PyCase {
 
 #[pymethods]
 impl PyCase {
+    // --- metadata -------------------------------------------------------
+
     #[getter]
     fn name(&self) -> String {
         self.inner.name.clone()
@@ -159,6 +159,11 @@ impl PyCase {
     #[getter]
     fn base_mva(&self) -> f64 {
         self.inner.base_mva
+    }
+
+    #[getter]
+    fn source_format(&self) -> String {
+        format!("{:?}", self.inner.source_format)
     }
 
     #[getter]
@@ -174,6 +179,16 @@ impl PyCase {
     #[getter]
     fn n_gens(&self) -> usize {
         self.inner.generators.len()
+    }
+
+    #[getter]
+    fn n_loads(&self) -> usize {
+        self.inner.loads.len()
+    }
+
+    #[getter]
+    fn n_shunts(&self) -> usize {
+        self.inner.shunts.len()
     }
 
     #[getter]
@@ -194,26 +209,50 @@ impl PyCase {
             .map_err(to_pyerr)
     }
 
+    // --- tables (the format-neutral Network, as dict rows) --------------
+
     #[getter]
     fn buses<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyList>> {
-        let g = IndexedNetwork::with_core(&self.inner, &self.core);
-        let (pd, qd, gs, bs) = (g.pd(), g.qd(), g.gs(), g.bs());
         let mut rows: Vec<Bound<'py, PyDict>> = Vec::with_capacity(self.inner.buses.len());
-        for (i, b) in self.inner.buses.iter().enumerate() {
+        for b in &self.inner.buses {
             let d = PyDict::new(py);
             d.set_item("id", b.id)?;
             d.set_item("type", b.kind.as_str())?;
-            d.set_item("pd", pd[i])?;
-            d.set_item("qd", qd[i])?;
-            d.set_item("gs", gs[i])?;
-            d.set_item("bs", bs[i])?;
-            d.set_item("area", b.area)?;
             d.set_item("vm", b.vm)?;
             d.set_item("va", b.va)?;
             d.set_item("base_kv", b.base_kv)?;
+            d.set_item("area", b.area)?;
             d.set_item("zone", b.zone)?;
             d.set_item("vmax", b.vmax)?;
             d.set_item("vmin", b.vmin)?;
+            rows.push(d);
+        }
+        PyList::new(py, rows)
+    }
+
+    #[getter]
+    fn loads<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyList>> {
+        let mut rows: Vec<Bound<'py, PyDict>> = Vec::with_capacity(self.inner.loads.len());
+        for l in &self.inner.loads {
+            let d = PyDict::new(py);
+            d.set_item("bus", l.bus)?;
+            d.set_item("p", l.p)?;
+            d.set_item("q", l.q)?;
+            d.set_item("in_service", l.in_service)?;
+            rows.push(d);
+        }
+        PyList::new(py, rows)
+    }
+
+    #[getter]
+    fn shunts<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyList>> {
+        let mut rows: Vec<Bound<'py, PyDict>> = Vec::with_capacity(self.inner.shunts.len());
+        for s in &self.inner.shunts {
+            let d = PyDict::new(py);
+            d.set_item("bus", s.bus)?;
+            d.set_item("g", s.g)?;
+            d.set_item("b", s.b)?;
+            d.set_item("in_service", s.in_service)?;
             rows.push(d);
         }
         PyList::new(py, rows)
@@ -234,7 +273,7 @@ impl PyCase {
             d.set_item("rate_c", br.rate_c)?;
             d.set_item("tap", br.tap)?;
             d.set_item("shift", br.shift)?;
-            d.set_item("status", f64::from(br.in_service))?;
+            d.set_item("in_service", br.in_service)?;
             d.set_item("angmin", br.angmin)?;
             d.set_item("angmax", br.angmax)?;
             rows.push(d);
@@ -247,16 +286,16 @@ impl PyCase {
         let mut rows: Vec<Bound<'py, PyDict>> = Vec::with_capacity(self.inner.generators.len());
         for g in &self.inner.generators {
             let d = PyDict::new(py);
-            d.set_item("bus_id", g.bus)?;
+            d.set_item("bus", g.bus)?;
             d.set_item("pg", g.pg)?;
             d.set_item("qg", g.qg)?;
+            d.set_item("pmax", g.pmax)?;
+            d.set_item("pmin", g.pmin)?;
             d.set_item("qmax", g.qmax)?;
             d.set_item("qmin", g.qmin)?;
             d.set_item("vg", g.vg)?;
             d.set_item("mbase", g.mbase)?;
-            d.set_item("status", f64::from(g.in_service))?;
-            d.set_item("pmax", g.pmax)?;
-            d.set_item("pmin", g.pmin)?;
+            d.set_item("in_service", g.in_service)?;
             match &g.cost {
                 Some(c) => {
                     let cd = PyDict::new(py);
@@ -282,6 +321,12 @@ impl PyCase {
         d.set_item("n_components", r.n_components)?;
         d.set_item("isolated_buses", r.isolated_buses)?;
         Ok(d)
+    }
+
+    /// Serialize back to MATPOWER `.m`. For a MATPOWER-parsed case this is the
+    /// byte-exact source echo.
+    fn write(&self) -> String {
+        powerio_matrix::write_matpower(&self.inner)
     }
 
     // --- matrix builders: each returns a COO tuple ----------------------
@@ -367,7 +412,7 @@ impl PyCase {
 
     /// `(A_coo, b, p_shift, branch_of_col)`: signed incidence as a COO tuple,
     /// then the branch susceptances, phase-shift injection, and column→branch
-    /// map as 1-D arrays.
+    /// map as plain lists (the wrapper turns them into 1-D numpy arrays).
     #[pyo3(signature = (convention=None))]
     fn incidence<'py>(
         &self,
@@ -378,10 +423,9 @@ impl PyCase {
         let view = IndexedNetwork::with_core(&self.inner, &self.core);
         let parts = build_incidence(&view, conv).map_err(to_pyerr)?;
         let a = coo_triplets(py, &parts.a)?;
-        let b = parts.b.into_pyarray(py);
-        let p_shift = parts.p_shift.into_pyarray(py);
+        let b = parts.b;
+        let p_shift = parts.p_shift;
         let branch_of_col: Vec<i64> = parts.branch_of_col.iter().map(|&x| x as i64).collect();
-        let branch_of_col = branch_of_col.into_pyarray(py);
         Ok((a, b, p_shift, branch_of_col).into_pyobject(py)?.into_any())
     }
 
@@ -436,7 +480,25 @@ impl PyCase {
     }
 }
 
-/// Parse a MATPOWER `.m` file from a path.
+/// Parse a case file from a path, inferring the format from the extension.
+#[pyfunction]
+fn parse(path: &str) -> PyResult<PyCase> {
+    let inner = powerio_matrix::read_path(std::path::Path::new(path), None).map_err(to_pyerr)?;
+    let core = IndexCore::build(&inner);
+    Ok(PyCase { inner, core })
+}
+
+/// Parse a case from in-memory text in the named `format` (`matpower`,
+/// `powermodels-json`, `psse`, `powerworld`; aliases `m`/`pm`/`raw`/`aux`).
+#[pyfunction]
+#[pyo3(signature = (text, format=None))]
+fn parse_str(text: &str, format: Option<&str>) -> PyResult<PyCase> {
+    let inner = powerio_matrix::parse_str(text, format.unwrap_or("matpower")).map_err(to_pyerr)?;
+    let core = IndexCore::build(&inner);
+    Ok(PyCase { inner, core })
+}
+
+/// Parse a MATPOWER `.m` file from a path (the fast, format-explicit path).
 #[pyfunction]
 fn parse_matpower(path: &str) -> PyResult<PyCase> {
     let inner = powerio_matrix::parse_matpower_file(path).map_err(to_pyerr)?;
@@ -457,6 +519,13 @@ fn parse_matpower_string(content: &str, name: Option<&str>) -> PyResult<PyCase> 
     Ok(PyCase { inner, core })
 }
 
+/// Serialize `case` back to MATPOWER `.m` text (byte-exact echo for a
+/// MATPOWER-parsed case).
+#[pyfunction]
+fn write(case: &PyCase) -> String {
+    case.write()
+}
+
 /// Convert a case file to another format through the neutral hub. Returns
 /// `(text, warnings)`: the converted file text and the list of fidelity warnings
 /// (fields the target couldn't represent). The input format is the file
@@ -472,12 +541,15 @@ fn convert(path: &str, to: &str, from: Option<&str>) -> PyResult<(String, Vec<St
 }
 
 #[pymodule]
-fn _casemat(m: &Bound<'_, PyModule>) -> PyResult<()> {
+fn _powerio(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add("__version__", env!("CARGO_PKG_VERSION"))?;
-    m.add("CasematError", m.py().get_type::<CasematError>())?;
+    m.add("PowerIOError", m.py().get_type::<PowerIOError>())?;
     m.add_class::<PyCase>()?;
+    m.add_function(wrap_pyfunction!(parse, m)?)?;
+    m.add_function(wrap_pyfunction!(parse_str, m)?)?;
     m.add_function(wrap_pyfunction!(parse_matpower, m)?)?;
     m.add_function(wrap_pyfunction!(parse_matpower_string, m)?)?;
+    m.add_function(wrap_pyfunction!(write, m)?)?;
     m.add_function(wrap_pyfunction!(convert, m)?)?;
     Ok(())
 }

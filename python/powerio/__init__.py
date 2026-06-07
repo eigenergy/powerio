@@ -1,37 +1,48 @@
-"""casemat: power network case files into sparse matrices and graph views.
+"""powerio: fast, lossless power system case file IO, conversion, and matrices.
 
-Parse a MATPOWER ``.m`` case, then pull matrices as ``scipy.sparse`` or a
-networkx graph::
+Parse MATPOWER, PSS/E, PowerWorld, and PowerModels JSON into one format-neutral
+case; write it back byte-exact; convert between formats; and pull the sparse
+matrices and graph views solvers need::
 
-    import casemat as nm
+    import powerio
 
-    case = nm.parse_matpower("case9.m")
-    B = case.bprime()        # scipy.sparse.csr_matrix, the FDPF B'
-    Y = case.ybus()          # complex csr_matrix, G + jB
-    G = case.to_networkx()   # networkx.Graph keyed by MATPOWER bus id
+    case = powerio.parse("case9.m")          # format inferred from the extension
+    print(case.n, case.base_mva)             # 9 100.0
+    text = case.write()                      # byte-exact MATPOWER echo
+    raw, warnings = powerio.convert("case9.m", "psse")
 
-The compiled core (``casemat._casemat``) returns COO triplets of numpy arrays;
-the wrappers here assemble them into scipy matrices, so a missing scipy or
-networkx surfaces as a clear ImportError rather than a link error.
+    B = case.bprime()                        # scipy.sparse, the FDPF B'
+    Y = case.ybus()                          # complex csr, G + jB
+    G = case.to_networkx()                   # networkx.Graph keyed by bus id
+
+``import powerio`` and parse/write/convert pull in nothing but the interpreter.
+The matrix methods need scipy/numpy and the graph view needs networkx; add them
+with ``pip install 'powerio[matrix]'``, ``[graph]``, or ``[all]``. A missing
+extra raises a clear ImportError, never a link error: the compiled core
+(``powerio._powerio``) returns COO triplets as plain Python lists, and the
+wrappers here assemble scipy matrices and networkx graphs lazily.
 """
 
 from __future__ import annotations
 
 import importlib
 from collections import namedtuple
-from typing import Any, List, Optional
+from typing import Any, Optional
 
-from . import _casemat
-from ._casemat import CasematError, __version__
+from . import _powerio
+from ._powerio import PowerIOError, __version__
 
 __all__ = [
     "Case",
     "Incidence",
     "YbusParts",
     "Conversion",
-    "CasematError",
+    "PowerIOError",
+    "parse",
+    "parse_str",
     "parse_matpower",
     "parse_matpower_string",
+    "write",
     "convert",
     "__version__",
 ]
@@ -63,6 +74,7 @@ YbusParts.__doc__ = (
 
 
 def _require(module: str, extra: str):
+    """Import ``module`` or raise a clear ImportError naming the extra to install."""
     try:
         return importlib.import_module(module)
     except ImportError as exc:
@@ -72,32 +84,33 @@ def _require(module: str, extra: str):
         if getattr(exc, "name", None) not in (module, module.split(".")[0]):
             raise
         raise ImportError(
-            f"casemat needs {module!r} for this call; install it with "
-            f"`pip install 'casemat[{extra}]'` or `pip install {extra}`"
+            f"powerio needs {module!r} for this call; install it with "
+            f"`pip install 'powerio[{extra}]'`"
         ) from exc
 
 
 def _to_csr(coo):
     """Assemble a ``(data, row, col, shape)`` COO tuple into a csr_matrix."""
-    sparse = _require("scipy.sparse", "scipy")
+    sparse = _require("scipy.sparse", "matrix")
     data, row, col, shape = coo
     return sparse.coo_matrix((data, (row, col)), shape=shape).tocsr()
 
 
 class Case:
-    """A parsed MATPOWER case.
+    """A parsed power network case.
 
-    The data attributes and the non-matrix methods (``reference_bus_index``,
+    The data attributes (``buses``, ``branches``, ``gens``, ``loads``,
+    ``shunts``) and the non-matrix methods (``write``, ``reference_bus_index``,
     ``connectivity_report``, ``write_dcopf_bundle``) delegate to the compiled
     handle; the matrix methods below return ``scipy.sparse`` objects.
 
     Errors: a bad file path raises the standard ``OSError`` subclass
     (``FileNotFoundError``); malformed cases and unmet builder preconditions
-    (no generators, no reference bus) raise :class:`CasematError`; an unknown
+    (no generators, no reference bus) raise :class:`PowerIOError`; an unknown
     ``scheme``/``convention``/``units`` string raises ``ValueError``.
     """
 
-    def __init__(self, inner: "_casemat.PyCase"):
+    def __init__(self, inner: "_powerio.PyCase"):
         self._inner = inner
 
     def __getattr__(self, name: str):
@@ -157,22 +170,26 @@ class Case:
 
     def incidence(self, convention: str = "paper") -> "Incidence":
         """Signed incidence factorization as an :data:`Incidence` tuple."""
+        np = _require("numpy", "matrix")
         a, b, p_shift, branch_of_col = self._inner.incidence(convention)
         return Incidence(
-            A=_to_csr(a), b=b, p_shift=p_shift, branch_of_col=branch_of_col
+            A=_to_csr(a),
+            b=np.asarray(b, dtype=float),
+            p_shift=np.asarray(p_shift, dtype=float),
+            branch_of_col=np.asarray(branch_of_col, dtype=np.int64),
         )
 
     def to_networkx(self):
-        """Undirected networkx graph keyed by MATPOWER bus id.
+        """Undirected networkx graph keyed by bus id.
 
         In-service branches become edges carrying ``branch`` (index), ``r``,
         ``x``, and ``b``.
         """
-        nx = _require("networkx", "networkx")
+        nx = _require("networkx", "graph")
         g = nx.Graph()
         g.add_nodes_from(bus["id"] for bus in self._inner.buses)
         for k, br in enumerate(self._inner.branches):
-            if br["status"] == 1.0:
+            if br["in_service"]:
                 g.add_edge(
                     br["from_id"],
                     br["to_id"],
@@ -184,14 +201,31 @@ class Case:
         return g
 
 
+def parse(path: Any) -> Case:
+    """Parse a case file from a path, inferring the format from the extension."""
+    return Case(_powerio.parse(str(path)))
+
+
+def parse_str(text: str, format: str = "matpower") -> Case:
+    """Parse a case from in-memory text in the named ``format``."""
+    return Case(_powerio.parse_str(text, format))
+
+
 def parse_matpower(path: Any) -> Case:
     """Parse a MATPOWER ``.m`` case from a file path."""
-    return Case(_casemat.parse_matpower(str(path)))
+    return Case(_powerio.parse_matpower(str(path)))
 
 
 def parse_matpower_string(content: str, name: Optional[str] = None) -> Case:
-    """Parse a MATPOWER case from in-memory ``.m`` text."""
-    return Case(_casemat.parse_matpower_string(content, name))
+    """Parse a MATPOWER case from in-memory ``.m`` text; ``name`` overrides the
+    parsed case name."""
+    return Case(_powerio.parse_matpower_string(content, name))
+
+
+def write(case: Case) -> str:
+    """Serialize ``case`` to MATPOWER ``.m`` (byte-exact echo when it was parsed
+    from MATPOWER)."""
+    return _powerio.write(case._inner)
 
 
 def convert(path: Any, to: str, from_: Optional[str] = None) -> Conversion:
@@ -203,5 +237,5 @@ def convert(path: Any, to: str, from_: Optional[str] = None) -> Conversion:
     unless ``from_`` overrides it. Returns a :class:`Conversion` with the text
     and any fidelity warnings.
     """
-    text, warnings = _casemat.convert(str(path), to, from_)
+    text, warnings = _powerio.convert(str(path), to, from_)
     return Conversion(text, warnings)
