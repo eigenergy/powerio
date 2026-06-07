@@ -54,7 +54,7 @@ impl Widget for Sparsity<'_> {
         let row_scale = cells_h as f64 / n as f64;
         let col_scale = cells_w as f64 / m as f64;
 
-        for (&v, (i, j)) in self.matrix.iter() {
+        for (&v, (i, j)) in self.matrix {
             if v == 0.0 {
                 continue;
             }
@@ -82,7 +82,7 @@ impl Widget for Sparsity<'_> {
                 if total == 0 {
                     continue;
                 }
-                let density = (total as f64 / cap).clamp(0.0, 1.0);
+                let density = (f64::from(total) / cap).clamp(0.0, 1.0);
                 let level = (density * (RAMP.len() - 1) as f64).ceil() as usize;
                 let glyph = RAMP[level.min(RAMP.len() - 1)];
                 let color = if r == c {

@@ -10,6 +10,7 @@ use std::collections::BTreeSet;
 use serde_json::{Map, Value};
 
 use crate::network::{Network, SourceFormat};
+use crate::{Error, Result};
 
 mod egret;
 mod powermodels;
@@ -46,6 +47,59 @@ impl TargetFormat {
             TargetFormat::PowerWorld => "aux",
             TargetFormat::Matpower => "m",
         }
+    }
+}
+
+/// Map a format name (with the common aliases) to a [`TargetFormat`], or `None`
+/// if unrecognized. Accepts `matpower`/`m`, `powermodels-json`/`powermodels`/`pm`,
+/// `egret-json`/`egret`, `psse`/`raw`, `powerworld`/`aux`. Case-insensitive. The
+/// one place the bindings (Python, C ABI) share, so a new format means one new
+/// arm here, not three.
+#[must_use]
+pub fn target_format_from_name(name: &str) -> Option<TargetFormat> {
+    Some(match name.to_ascii_lowercase().as_str() {
+        "matpower" | "m" => TargetFormat::Matpower,
+        "powermodels-json" | "powermodels" | "pm" => TargetFormat::PowerModelsJson,
+        "egret-json" | "egret" => TargetFormat::EgretJson,
+        "psse" | "raw" => TargetFormat::Psse,
+        "powerworld" | "aux" => TargetFormat::PowerWorld,
+        _ => return None,
+    })
+}
+
+/// Read the case at `path` into a [`Network`], choosing the reader from `from`
+/// (a format name, see [`target_format_from_name`]) or, when `None`, from the
+/// file extension (`m`/`json`/`raw`/`aux`). EGRET JSON is write-only. The one
+/// reader the CLI and the Python/C bindings share, so adding a source format is
+/// one edit here, not one per binding.
+///
+/// # Errors
+/// [`Error::UnknownFormat`] if `from` is unrecognized or the extension can't be
+/// mapped (and for the write-only EGRET format); [`Error::Io`] if the file
+/// can't be read; the reader's own [`Error`] on malformed input.
+pub fn read_path(path: &std::path::Path, from: Option<&str>) -> Result<Network> {
+    let fmt = match from {
+        Some(f) => target_format_from_name(f).ok_or_else(|| Error::UnknownFormat(f.to_string()))?,
+        None => match path.extension().and_then(|e| e.to_str()) {
+            Some("m") => TargetFormat::Matpower,
+            Some("json") => TargetFormat::PowerModelsJson,
+            Some("raw") => TargetFormat::Psse,
+            Some("aux") => TargetFormat::PowerWorld,
+            other => {
+                return Err(Error::UnknownFormat(format!(
+                    "cannot infer from file extension {other:?}; pass an explicit source format"
+                )))
+            }
+        },
+    };
+    match fmt {
+        TargetFormat::Matpower => crate::parse_matpower_file(path),
+        TargetFormat::PowerModelsJson => parse_powermodels_json(&std::fs::read_to_string(path)?),
+        TargetFormat::Psse => parse_psse(&std::fs::read_to_string(path)?),
+        TargetFormat::PowerWorld => parse_powerworld(&std::fs::read_to_string(path)?),
+        TargetFormat::EgretJson => Err(Error::UnknownFormat(
+            "EGRET JSON is write-only and cannot be read".to_string(),
+        )),
     }
 }
 

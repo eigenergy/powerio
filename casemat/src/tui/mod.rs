@@ -116,33 +116,28 @@ fn handle_key(app: &mut App, key: KeyEvent) -> anyhow::Result<()> {
     }
     match app.screen {
         Screen::Browse => handle_browse(app, key),
-        Screen::Inspect => handle_inspect(app, key),
+        Screen::Inspect => return handle_inspect(app, key),
         Screen::Batch => handle_batch(app, key),
         Screen::Synth => handle_synth(app, key),
         Screen::Help => handle_help(app, key),
     }
+    Ok(())
 }
 
-fn handle_browse(app: &mut App, key: KeyEvent) -> anyhow::Result<()> {
+fn handle_browse(app: &mut App, key: KeyEvent) {
     match key.code {
-        KeyCode::Up => {
-            if app.selected > 0 {
-                app.selected -= 1;
-                app.parse_selected();
-            }
+        KeyCode::Up if app.selected > 0 => {
+            app.selected -= 1;
+            app.parse_selected();
         }
-        KeyCode::Down => {
-            if app.selected + 1 < app.cases.len() {
-                app.selected += 1;
-                app.parse_selected();
-            }
+        KeyCode::Down if app.selected + 1 < app.cases.len() => {
+            app.selected += 1;
+            app.parse_selected();
         }
-        KeyCode::Char(' ') => {
-            if !app.cases.is_empty() {
-                if !app.multi_selected.insert(app.selected) {
-                    app.multi_selected.remove(&app.selected);
-                }
-            }
+        KeyCode::Char(' ')
+            if !app.cases.is_empty() && !app.multi_selected.insert(app.selected) =>
+        {
+            app.multi_selected.remove(&app.selected);
         }
         KeyCode::Char('R') | KeyCode::F(5) => {
             app.refresh_cases();
@@ -164,7 +159,6 @@ fn handle_browse(app: &mut App, key: KeyEvent) -> anyhow::Result<()> {
         }
         _ => {}
     }
-    Ok(())
 }
 
 fn handle_inspect(app: &mut App, key: KeyEvent) -> anyhow::Result<()> {
@@ -206,9 +200,8 @@ fn handle_inspect(app: &mut App, key: KeyEvent) -> anyhow::Result<()> {
 }
 
 fn export_inspect(app: &mut App) -> anyhow::Result<()> {
-    let state = match &app.inspect {
-        Some(s) => s,
-        None => return Ok(()),
+    let Some(state) = &app.inspect else {
+        return Ok(());
     };
     let pipeline = Pipeline {
         matrices: vec![state.kind],
@@ -217,7 +210,7 @@ fn export_inspect(app: &mut App) -> anyhow::Result<()> {
             ..Default::default()
         },
         rhs: app.rhs,
-        rng_seed: 0xC0FFEE,
+        rng_seed: 0x00C0_FFEE,
         source_file: None,
     };
     let outputs = pipeline.run(&state.case, &app.out_dir)?;
@@ -236,7 +229,7 @@ fn export_inspect(app: &mut App) -> anyhow::Result<()> {
     Ok(())
 }
 
-fn handle_batch(app: &mut App, key: KeyEvent) -> anyhow::Result<()> {
+fn handle_batch(app: &mut App, key: KeyEvent) {
     match key.code {
         KeyCode::Esc => {
             app.screen = app.previous_screen;
@@ -257,7 +250,6 @@ fn handle_batch(app: &mut App, key: KeyEvent) -> anyhow::Result<()> {
         }
         _ => {}
     }
-    Ok(())
 }
 
 fn cycle_matrices(app: &mut App) {
@@ -317,7 +309,7 @@ fn spawn_batch(app: &mut App) {
             ..Default::default()
         },
         rhs: app.rhs,
-        rng_seed: 0xC0FFEE,
+        rng_seed: 0x00C0_FFEE,
         source_file: None,
     };
     let out_dir = app.out_dir.clone();
@@ -376,7 +368,7 @@ fn spawn_batch(app: &mut App) {
     app.set_status(format!("running {} jobs", app.batch.len()));
 }
 
-fn handle_synth(app: &mut App, key: KeyEvent) -> anyhow::Result<()> {
+fn handle_synth(app: &mut App, key: KeyEvent) {
     match key.code {
         KeyCode::Esc => {
             app.screen = app.previous_screen;
@@ -419,7 +411,6 @@ fn handle_synth(app: &mut App, key: KeyEvent) -> anyhow::Result<()> {
         }
         _ => {}
     }
-    Ok(())
 }
 
 fn synth_tweak(app: &mut App, increase: bool) {
@@ -427,7 +418,10 @@ fn synth_tweak(app: &mut App, increase: bool) {
     let direction = if increase { 1.0 } else { -1.0 };
     match app.synth.field {
         SynthField::Topology => {
-            s.topology = match (s.topology, increase) {
+            // One arm per (state, direction) keeps the forward/backward 3-cycle
+            // readable; merging equal-body arms with `|` would hide the symmetry.
+            #[allow(clippy::match_same_arms)]
+            let next = match (s.topology, increase) {
                 (Topology::Tree, true) => Topology::Lattice2D,
                 (Topology::Lattice2D, true) => Topology::PegaseLike,
                 (Topology::PegaseLike, true) => Topology::Tree,
@@ -435,6 +429,7 @@ fn synth_tweak(app: &mut App, increase: bool) {
                 (Topology::Lattice2D, false) => Topology::Tree,
                 (Topology::PegaseLike, false) => Topology::Lattice2D,
             };
+            s.topology = next;
         }
         SynthField::N => {
             let step = (s.n as f64 * 0.25).round() as usize;
@@ -457,11 +452,10 @@ fn synth_tweak(app: &mut App, increase: bool) {
     }
 }
 
-fn handle_help(app: &mut App, key: KeyEvent) -> anyhow::Result<()> {
+fn handle_help(app: &mut App, key: KeyEvent) {
     if matches!(key.code, KeyCode::Esc | KeyCode::Char('?')) {
         app.screen = app.previous_screen;
     }
-    Ok(())
 }
 
 #[cfg(test)]

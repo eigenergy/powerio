@@ -2,17 +2,21 @@
 //!
 //! [`Network`] is the canonical data record — format-neutral tables with no
 //! analysis behavior. The matrix builders, connectivity diagnostics, and the
-//! DC-OPF instance need things a plain table doesn't carry: a dense `[0, n)`
-//! bus index, demand and shunts aggregated per bus, the in-service subsets, and
-//! the reference bus. `IndexedNetwork` computes those once from a borrowed
-//! `&Network` and hands them to the numerics. Keeping this on a separate view
-//! (rather than on `Network`) is what stops `Network` from turning into a god
+//! DC-OPF instance need things a plain table doesn't carry: a dense `[0, n)` bus
+//! index, demand and shunts aggregated per bus, the in-service subsets, and the
+//! reference bus. [`IndexCore`] derives those once from a borrowed `&Network`;
+//! [`IndexedNetwork`] pairs that core with the network and answers the queries.
+//! Keeping this off `Network` is what stops `Network` from turning into a god
 //! type: data on one side, derived analysis on the other.
 //!
-//! It is cheap — one `HashMap` and four `Vec<f64>` — and built lazily, only
-//! when a matrix or a connectivity query is asked for, so the parse path never
-//! pays for it.
+//! The derived core is one `HashMap` and four `Vec<f64>`. One-shot callers use
+//! [`IndexedNetwork::new`], which builds and owns a throwaway core. A long-lived
+//! handle (the Python and C ABI wrappers) builds an [`IndexCore`] once at parse
+//! time and rebinds a borrowing view per query with
+//! [`IndexedNetwork::with_core`], so repeated queries never re-fold the loads
+//! and shunts.
 
+use std::borrow::Cow;
 use std::collections::HashMap;
 
 use petgraph::graph::UnGraph;
@@ -20,11 +24,12 @@ use petgraph::graph::UnGraph;
 use crate::network::{Branch, BusType, Generator, Network};
 use crate::{Error, Result};
 
-/// A `Network` plus the dense bus index and per-bus aggregates the numerics
-/// need. Borrows the network; build with [`IndexedNetwork::new`].
-#[derive(Debug)]
-pub struct IndexedNetwork<'n> {
-    net: &'n Network,
+/// The owned, network-independent derivation behind [`IndexedNetwork`]: the
+/// dense bus-id map plus the per-bus demand/shunt aggregates. Build it once with
+/// [`IndexCore::build`] and reuse it across many [`IndexedNetwork::with_core`]
+/// views of the same [`Network`].
+#[derive(Debug, Clone)]
+pub struct IndexCore {
     /// Stable bus id → dense index in `[0, n)`.
     bus_id_to_idx: HashMap<usize, usize>,
     /// Active demand summed per bus (dense index order, MW).
@@ -37,23 +42,24 @@ pub struct IndexedNetwork<'n> {
     bs: Vec<f64>,
 }
 
-impl<'n> IndexedNetwork<'n> {
+impl IndexCore {
     /// Index `net`: map bus ids to dense indices and fold every load/shunt onto
     /// its bus. Loads and shunts are summed regardless of their `in_service`
     /// flag, matching the folded `pd/qd/gs/bs` the MATPOWER-shaped model carried
     /// on the bus row (the matrices key off topology and these aggregates, not
     /// per-element service status).
+    ///
+    /// # Correctness
+    /// Bus ids must be unique; a duplicate collapses two buses onto one dense
+    /// index and silently corrupts every aggregate. All format readers and the
+    /// MATPOWER reader run [`Network::check_references`] before this, so a parsed
+    /// network always satisfies it; a hand-built [`Network`] must too. Checked
+    /// with a `debug_assert`.
     #[must_use]
-    pub fn new(net: &'n Network) -> Self {
+    pub fn build(net: &Network) -> Self {
         let n = net.buses.len();
-        let mut bus_id_to_idx = HashMap::with_capacity(n);
-        for (idx, b) in net.buses.iter().enumerate() {
-            bus_id_to_idx.insert(b.id, idx);
-        }
-        // A duplicate bus id would collapse two buses onto one dense index and
-        // silently corrupt every aggregate. The format readers run
-        // `check_references`; the MATPOWER reader and in-memory networks don't,
-        // so guard it in debug builds.
+        let bus_id_to_idx: HashMap<usize, usize> =
+            net.buses.iter().enumerate().map(|(idx, b)| (b.id, idx)).collect();
         debug_assert_eq!(
             bus_id_to_idx.len(),
             n,
@@ -75,7 +81,33 @@ impl<'n> IndexedNetwork<'n> {
                 bs[idx] += s.b;
             }
         }
-        Self { net, bus_id_to_idx, pd, qd, gs, bs }
+        Self { bus_id_to_idx, pd, qd, gs, bs }
+    }
+}
+
+/// A `Network` paired with its derived [`IndexCore`]. Borrows the network; the
+/// core is either owned (the one-shot [`IndexedNetwork::new`]) or borrowed from a
+/// cached [`IndexCore`] ([`IndexedNetwork::with_core`]).
+#[derive(Debug)]
+pub struct IndexedNetwork<'n> {
+    net: &'n Network,
+    core: Cow<'n, IndexCore>,
+}
+
+impl<'n> IndexedNetwork<'n> {
+    /// Build a one-shot view that owns a freshly derived [`IndexCore`]. For
+    /// repeated queries on a long-lived handle, cache an [`IndexCore`] and use
+    /// [`with_core`](Self::with_core) so the derivation isn't rebuilt per call.
+    #[must_use]
+    pub fn new(net: &'n Network) -> Self {
+        Self { net, core: Cow::Owned(IndexCore::build(net)) }
+    }
+
+    /// Pair `net` with an already-built [`IndexCore`] — no allocation. The core
+    /// must have been built from this same `net`.
+    #[must_use]
+    pub fn with_core(net: &'n Network, core: &'n IndexCore) -> Self {
+        Self { net, core: Cow::Borrowed(core) }
     }
 
     /// The underlying network.
@@ -114,7 +146,7 @@ impl<'n> IndexedNetwork<'n> {
     /// Resolve a bus id to its dense `[0, n)` index.
     #[inline]
     pub fn bus_index(&self, bus_id: usize) -> Option<usize> {
-        self.bus_id_to_idx.get(&bus_id).copied()
+        self.core.bus_id_to_idx.get(&bus_id).copied()
     }
 
     /// The bus id at dense index `idx` — the inverse of
@@ -131,25 +163,25 @@ impl<'n> IndexedNetwork<'n> {
     /// Nodal active demand, length `n`.
     #[inline]
     pub fn pd(&self) -> &[f64] {
-        &self.pd
+        &self.core.pd
     }
 
     /// Nodal reactive demand, length `n`.
     #[inline]
     pub fn qd(&self) -> &[f64] {
-        &self.qd
+        &self.core.qd
     }
 
     /// Nodal shunt conductance, length `n`.
     #[inline]
     pub fn gs(&self) -> &[f64] {
-        &self.gs
+        &self.core.gs
     }
 
     /// Nodal shunt susceptance, length `n`.
     #[inline]
     pub fn bs(&self) -> &[f64] {
-        &self.bs
+        &self.core.bs
     }
 
     /// In-service branches with their index into [`branches`](Self::branches).
@@ -238,5 +270,65 @@ impl ConnectivityReport {
     #[inline]
     pub fn is_single_island(&self) -> bool {
         self.n_components == 1 && self.isolated_buses.is_empty()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{IndexCore, IndexedNetwork};
+    use crate::network::{Bus, BusType, Extras, Load, Network, Shunt};
+
+    fn bus(id: usize, kind: BusType) -> Bus {
+        Bus {
+            id,
+            kind,
+            vm: 1.0,
+            va: 0.0,
+            base_kv: 1.0,
+            vmax: 1.1,
+            vmin: 0.9,
+            area: 1,
+            zone: 1,
+            name: None,
+            extras: Extras::new(),
+        }
+    }
+
+    fn agg_net() -> Network {
+        let mut net =
+            Network::in_memory("agg", 100.0, vec![bus(1, BusType::Ref), bus(2, BusType::Pq)], Vec::new());
+        net.loads.push(Load { bus: 1, p: 10.0, q: 5.0, in_service: true, extras: Extras::new() });
+        net.loads.push(Load { bus: 1, p: 3.0, q: 1.0, in_service: true, extras: Extras::new() });
+        net.shunts.push(Shunt { bus: 1, g: 0.2, b: 0.4, in_service: true, extras: Extras::new() });
+        net.shunts.push(Shunt { bus: 1, g: 0.1, b: 0.3, in_service: true, extras: Extras::new() });
+        net
+    }
+
+    fn assert_aggregates(view: &IndexedNetwork) {
+        let i = view.bus_index(1).unwrap();
+        assert!((view.pd()[i] - 13.0).abs() < 1e-12);
+        assert!((view.qd()[i] - 6.0).abs() < 1e-12);
+        assert!((view.gs()[i] - 0.3).abs() < 1e-12);
+        assert!((view.bs()[i] - 0.7).abs() < 1e-12);
+        let j = view.bus_index(2).unwrap();
+        assert!(view.pd()[j].abs() < 1e-12);
+        assert!(view.gs()[j].abs() < 1e-12);
+    }
+
+    #[test]
+    fn aggregates_sum_multiple_loads_and_shunts_per_bus() {
+        // PSS/E and PowerModels admit several loads/shunts on one bus; the
+        // per-bus fold must add them, not overwrite (last-writer-wins would pass
+        // every MATPOWER fixture, which folds one load per bus).
+        let net = agg_net();
+        assert_aggregates(&IndexedNetwork::new(&net));
+    }
+
+    #[test]
+    fn with_core_matches_one_shot_view() {
+        // A view over a cached core sees the same aggregates as a fresh one.
+        let net = agg_net();
+        let core = IndexCore::build(&net);
+        assert_aggregates(&IndexedNetwork::with_core(&net, &core));
     }
 }

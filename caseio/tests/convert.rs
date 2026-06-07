@@ -50,6 +50,8 @@ fn powermodels_structure_and_split() {
 }
 
 #[test]
+// Detecting an explicit tap of exactly 1.0 from the file is the point, so the exact compare is intended.
+#[allow(clippy::float_cmp)]
 fn powermodels_transformer_flag_tracks_raw_tap() {
     // case57 has branches with an explicit tap of 1.0 — a transformer in MATPOWER,
     // even though the effective ratio is 1.
@@ -121,6 +123,8 @@ fn powermodels_json_same_format_is_byte_exact_echo() {
 }
 
 #[test]
+// The hub round-trip must preserve base_mva exactly, so the exact compare is the assertion.
+#[allow(clippy::float_cmp)]
 fn powermodels_json_to_matpower_two_way() {
     // PowerModels JSON in → neutral hub → MATPOWER out. Proves the hub isn't
     // MATPOWER-only on the read side. Source is PowerModels, so the MATPOWER

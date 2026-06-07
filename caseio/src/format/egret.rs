@@ -10,8 +10,7 @@
 use serde_json::{Map, Value};
 
 use super::{finish, jnum, Conversion};
-use crate::network::{BusType, GenCost};
-use crate::network::{Branch, Bus, Generator, Load, Network, Shunt};
+use crate::network::{Branch, Bus, BusType, GenCost, Generator, Load, Network, Shunt};
 
 #[must_use]
 pub fn write_egret_json(net: &Network) -> Conversion {

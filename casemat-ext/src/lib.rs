@@ -21,13 +21,12 @@ use pyo3::prelude::*;
 use pyo3::types::{PyDict, PyList};
 use sprs::CsMat;
 
-use casemat::BusType;
 use casemat::matrix::{
     build_adjacency, build_bdoubleprime, build_bprime, build_incidence, build_lacpf, build_lodf,
     build_ptdf, build_weighted_laplacian, build_ybus, BuildOptions, DcConvention, Scheme, Units,
 };
 use casemat::opf_pipeline::{write_dcopf_bundle as write_bundle, DcOpfOptions};
-use casemat::{IndexedNetwork, Network};
+use casemat::{IndexCore, IndexedNetwork, Network};
 
 pyo3::create_exception!(
     _casemat,
@@ -37,11 +36,13 @@ pyo3::create_exception!(
 );
 
 /// I/O failures map to the matching `OSError` subclass (`FileNotFoundError`,
-/// `PermissionError`, …) so Python callers can catch them the usual way; parse
-/// and data errors become [`CasematError`].
+/// `PermissionError`, …) so Python callers can catch them the usual way; an
+/// unknown/uninferable format becomes a `ValueError`; other parse and data
+/// errors become [`CasematError`].
 fn to_pyerr(e: casemat::Error) -> PyErr {
     match e {
         casemat::Error::Io(io) => io.into(),
+        casemat::Error::UnknownFormat(msg) => PyValueError::new_err(msg),
         other => CasematError::new_err(other.to_string()),
     }
 }
@@ -84,21 +85,12 @@ fn normalize(s: &str) -> String {
     s.to_ascii_lowercase().replace(['-', '_'], "")
 }
 
-fn bus_type_str(kind: BusType) -> &'static str {
-    match kind {
-        BusType::Pq => "PQ",
-        BusType::Pv => "PV",
-        BusType::Ref => "REF",
-        BusType::Isolated => "ISOLATED",
-    }
-}
-
 /// Materialize a sparse matrix as a `(data, row, col, (nrows, ncols))` tuple of
-/// NumPy arrays. `to_csr()` first so `outer_iterator()` yields rows regardless
-/// of the source storage; indices narrow to `i32`. The narrowing is guarded:
-/// a dimension past `i32::MAX` raises rather than wrapping to negative indices.
+/// NumPy arrays. A CSR input is walked borrowed; any other storage is converted
+/// to CSR once so `outer_iterator()` yields rows. Indices narrow to `i32`. The
+/// narrowing is guarded: a dimension past `i32::MAX` raises rather than wrapping
+/// to negative indices.
 fn coo_triplets<'py>(py: Python<'py>, m: &CsMat<f64>) -> PyResult<Bound<'py, PyAny>> {
-    let m = m.to_csr();
     if m.rows() > i32::MAX as usize || m.cols() > i32::MAX as usize {
         return Err(PyValueError::new_err(format!(
             "matrix is {}x{}; an index exceeds i32 range — rebuild with i64 indices",
@@ -106,18 +98,26 @@ fn coo_triplets<'py>(py: Python<'py>, m: &CsMat<f64>) -> PyResult<Bound<'py, PyA
             m.cols()
         )));
     }
-    let nnz = m.nnz();
+    // Walk a CSR view borrowed; only deep-copy when the storage isn't already CSR.
+    let csr;
+    let view = if m.is_csr() {
+        m.view()
+    } else {
+        csr = m.to_csr();
+        csr.view()
+    };
+    let nnz = view.nnz();
     let mut data: Vec<f64> = Vec::with_capacity(nnz);
     let mut rows: Vec<i32> = Vec::with_capacity(nnz);
     let mut cols: Vec<i32> = Vec::with_capacity(nnz);
-    for (r, row) in m.outer_iterator().enumerate() {
+    for (r, row) in view.outer_iterator().enumerate() {
         for (c, &v) in row.iter() {
             data.push(v);
             rows.push(r as i32);
             cols.push(c as i32);
         }
     }
-    let shape = (m.rows(), m.cols());
+    let shape = (view.rows(), view.cols());
     Ok((
         data.into_pyarray(py),
         rows.into_pyarray(py),
@@ -139,9 +139,14 @@ fn build_options(scheme: Scheme, include_taps: bool, include_shifts: bool) -> Bu
 
 /// Low-level handle around a parsed `Network`. The user-facing `casemat.Case`
 /// (pure Python) wraps this and turns the COO tuples into scipy matrices.
+///
+/// The derived [`IndexCore`] is built once and cached alongside `inner`, so the
+/// matrix builders and topology getters reuse it instead of rebuilding the
+/// bus-id map per call.
 #[pyclass(name = "PyCase")]
 pub struct PyCase {
     inner: Network,
+    core: IndexCore,
 }
 
 #[pymethods]
@@ -173,32 +178,35 @@ impl PyCase {
 
     #[getter]
     fn is_radial(&self) -> bool {
-        IndexedNetwork::new(&self.inner).is_radial()
+        IndexedNetwork::with_core(&self.inner, &self.core).is_radial()
     }
 
     #[getter]
     fn n_connected_components(&self) -> usize {
-        IndexedNetwork::new(&self.inner).n_connected_components()
+        IndexedNetwork::with_core(&self.inner, &self.core).n_connected_components()
     }
 
     /// Dense `[0, n)` index of the single reference bus. Raises if not exactly
     /// one reference bus is present.
     fn reference_bus_index(&self) -> PyResult<usize> {
-        IndexedNetwork::new(&self.inner).reference_bus_index().map_err(to_pyerr)
+        IndexedNetwork::with_core(&self.inner, &self.core)
+            .reference_bus_index()
+            .map_err(to_pyerr)
     }
 
     #[getter]
     fn buses<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyList>> {
-        let g = IndexedNetwork::new(&self.inner);
-        let list = PyList::empty(py);
+        let g = IndexedNetwork::with_core(&self.inner, &self.core);
+        let (pd, qd, gs, bs) = (g.pd(), g.qd(), g.gs(), g.bs());
+        let mut rows: Vec<Bound<'py, PyDict>> = Vec::with_capacity(self.inner.buses.len());
         for (i, b) in self.inner.buses.iter().enumerate() {
             let d = PyDict::new(py);
             d.set_item("id", b.id)?;
-            d.set_item("type", bus_type_str(b.kind))?;
-            d.set_item("pd", g.pd()[i])?;
-            d.set_item("qd", g.qd()[i])?;
-            d.set_item("gs", g.gs()[i])?;
-            d.set_item("bs", g.bs()[i])?;
+            d.set_item("type", b.kind.as_str())?;
+            d.set_item("pd", pd[i])?;
+            d.set_item("qd", qd[i])?;
+            d.set_item("gs", gs[i])?;
+            d.set_item("bs", bs[i])?;
             d.set_item("area", b.area)?;
             d.set_item("vm", b.vm)?;
             d.set_item("va", b.va)?;
@@ -206,14 +214,14 @@ impl PyCase {
             d.set_item("zone", b.zone)?;
             d.set_item("vmax", b.vmax)?;
             d.set_item("vmin", b.vmin)?;
-            list.append(d)?;
+            rows.push(d);
         }
-        Ok(list)
+        PyList::new(py, rows)
     }
 
     #[getter]
     fn branches<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyList>> {
-        let list = PyList::empty(py);
+        let mut rows: Vec<Bound<'py, PyDict>> = Vec::with_capacity(self.inner.branches.len());
         for br in &self.inner.branches {
             let d = PyDict::new(py);
             d.set_item("from_id", br.from)?;
@@ -229,14 +237,14 @@ impl PyCase {
             d.set_item("status", f64::from(br.in_service))?;
             d.set_item("angmin", br.angmin)?;
             d.set_item("angmax", br.angmax)?;
-            list.append(d)?;
+            rows.push(d);
         }
-        Ok(list)
+        PyList::new(py, rows)
     }
 
     #[getter]
     fn gens<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyList>> {
-        let list = PyList::empty(py);
+        let mut rows: Vec<Bound<'py, PyDict>> = Vec::with_capacity(self.inner.generators.len());
         for g in &self.inner.generators {
             let d = PyDict::new(py);
             d.set_item("bus_id", g.bus)?;
@@ -256,18 +264,18 @@ impl PyCase {
                     cd.set_item("startup", c.startup)?;
                     cd.set_item("shutdown", c.shutdown)?;
                     cd.set_item("ncost", c.ncost)?;
-                    cd.set_item("coeffs", c.coeffs.clone())?;
+                    cd.set_item("coeffs", &c.coeffs)?;
                     d.set_item("cost", cd)?;
                 }
                 None => d.set_item("cost", py.None())?,
             }
-            list.append(d)?;
+            rows.push(d);
         }
-        Ok(list)
+        PyList::new(py, rows)
     }
 
     fn connectivity_report<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyDict>> {
-        let r = IndexedNetwork::new(&self.inner).connectivity_report();
+        let r = IndexedNetwork::with_core(&self.inner, &self.core).connectivity_report();
         let d = PyDict::new(py);
         d.set_item("n_buses", r.n_buses)?;
         d.set_item("n_branches_in_service", r.n_branches_in_service)?;
@@ -284,7 +292,7 @@ impl PyCase {
             scheme: parse_scheme(scheme.unwrap_or("bx"))?,
             ..BuildOptions::default()
         };
-        let view = IndexedNetwork::new(&self.inner);
+        let view = IndexedNetwork::with_core(&self.inner, &self.core);
         let m = build_bprime(&view, &opts).map_err(to_pyerr)?;
         coo_triplets(py, &m)
     }
@@ -301,7 +309,7 @@ impl PyCase {
             scheme: parse_scheme(scheme.unwrap_or("bx"))?,
             ..BuildOptions::default()
         };
-        let view = IndexedNetwork::new(&self.inner);
+        let view = IndexedNetwork::with_core(&self.inner, &self.core);
         let m = build_bdoubleprime(&view, &opts).map_err(to_pyerr)?;
         coo_triplets(py, &m)
     }
@@ -314,13 +322,13 @@ impl PyCase {
         include_shifts: bool,
     ) -> PyResult<Bound<'py, PyAny>> {
         let opts = build_options(Scheme::Bx, include_taps, include_shifts);
-        let view = IndexedNetwork::new(&self.inner);
+        let view = IndexedNetwork::with_core(&self.inner, &self.core);
         let m = build_lacpf(&view, &opts).map_err(to_pyerr)?;
         coo_triplets(py, &m)
     }
 
     fn adjacency<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
-        let view = IndexedNetwork::new(&self.inner);
+        let view = IndexedNetwork::with_core(&self.inner, &self.core);
         let m = build_adjacency(&view).map_err(to_pyerr)?;
         coo_triplets(py, &m)
     }
@@ -334,7 +342,7 @@ impl PyCase {
         include_shifts: bool,
     ) -> PyResult<Bound<'py, PyAny>> {
         let opts = build_options(Scheme::Bx, include_taps, include_shifts);
-        let view = IndexedNetwork::new(&self.inner);
+        let view = IndexedNetwork::with_core(&self.inner, &self.core);
         let yb = build_ybus(&view, &opts).map_err(to_pyerr)?;
         let g = coo_triplets(py, &yb.g)?;
         let b = coo_triplets(py, &yb.b)?;
@@ -344,7 +352,7 @@ impl PyCase {
     #[pyo3(signature = (convention=None))]
     fn ptdf<'py>(&self, py: Python<'py>, convention: Option<&str>) -> PyResult<Bound<'py, PyAny>> {
         let conv = parse_convention(convention.unwrap_or("paper"))?;
-        let view = IndexedNetwork::new(&self.inner);
+        let view = IndexedNetwork::with_core(&self.inner, &self.core);
         let m = build_ptdf(&view, conv).map_err(to_pyerr)?;
         coo_triplets(py, &m)
     }
@@ -352,7 +360,7 @@ impl PyCase {
     #[pyo3(signature = (convention=None))]
     fn lodf<'py>(&self, py: Python<'py>, convention: Option<&str>) -> PyResult<Bound<'py, PyAny>> {
         let conv = parse_convention(convention.unwrap_or("paper"))?;
-        let view = IndexedNetwork::new(&self.inner);
+        let view = IndexedNetwork::with_core(&self.inner, &self.core);
         let m = build_lodf(&view, conv).map_err(to_pyerr)?;
         coo_triplets(py, &m)
     }
@@ -367,7 +375,7 @@ impl PyCase {
         convention: Option<&str>,
     ) -> PyResult<Bound<'py, PyAny>> {
         let conv = parse_convention(convention.unwrap_or("paper"))?;
-        let view = IndexedNetwork::new(&self.inner);
+        let view = IndexedNetwork::with_core(&self.inner, &self.core);
         let parts = build_incidence(&view, conv).map_err(to_pyerr)?;
         let a = coo_triplets(py, &parts.a)?;
         let b = parts.b.into_pyarray(py);
@@ -385,7 +393,7 @@ impl PyCase {
         convention: Option<&str>,
     ) -> PyResult<Bound<'py, PyAny>> {
         let conv = parse_convention(convention.unwrap_or("paper"))?;
-        let view = IndexedNetwork::new(&self.inner);
+        let view = IndexedNetwork::with_core(&self.inner, &self.core);
         let parts = build_incidence(&view, conv).map_err(to_pyerr)?;
         let l = build_weighted_laplacian(&parts.a, &parts.b);
         coo_triplets(py, &l)
@@ -432,11 +440,12 @@ impl PyCase {
 #[pyfunction]
 fn parse_matpower(path: &str) -> PyResult<PyCase> {
     let inner = casemat::parse_matpower_file(path).map_err(to_pyerr)?;
-    Ok(PyCase { inner })
+    let core = IndexCore::build(&inner);
+    Ok(PyCase { inner, core })
 }
 
-/// Parse a MATPOWER case from in-memory `.m` text. `name` overrides the case
-/// name (defaults to "case").
+/// Parse a MATPOWER case from in-memory `.m` text. When `name` is given it
+/// overrides the parsed case name.
 #[pyfunction]
 #[pyo3(signature = (content, name=None))]
 fn parse_matpower_string(content: &str, name: Option<&str>) -> PyResult<PyCase> {
@@ -444,7 +453,8 @@ fn parse_matpower_string(content: &str, name: Option<&str>) -> PyResult<PyCase> 
     if let Some(n) = name {
         inner.name = n.to_string();
     }
-    Ok(PyCase { inner })
+    let core = IndexCore::build(&inner);
+    Ok(PyCase { inner, core })
 }
 
 /// Convert a case file to another format through the neutral hub. Returns
@@ -454,64 +464,11 @@ fn parse_matpower_string(content: &str, name: Option<&str>) -> PyResult<PyCase> 
 #[pyfunction]
 #[pyo3(signature = (path, to, from=None))]
 fn convert(path: &str, to: &str, from: Option<&str>) -> PyResult<(String, Vec<String>)> {
-    let target = fmt_from_str(to)
+    let target = casemat::target_format_from_name(to)
         .ok_or_else(|| PyValueError::new_err(format!("unknown target format: {to}")))?;
-    let net = read_network_py(path, from)?;
+    let net = casemat::read_path(std::path::Path::new(path), from).map_err(to_pyerr)?;
     let conv = casemat::write_as(&net, target);
     Ok((conv.text, conv.warnings))
-}
-
-/// Map a format name (with common aliases) to a [`casemat::TargetFormat`].
-fn fmt_from_str(s: &str) -> Option<casemat::TargetFormat> {
-    use casemat::TargetFormat as T;
-    Some(match s.to_ascii_lowercase().as_str() {
-        "matpower" | "m" => T::Matpower,
-        "powermodels-json" | "powermodels" | "pm" => T::PowerModelsJson,
-        "egret-json" | "egret" => T::EgretJson,
-        "psse" | "raw" => T::Psse,
-        "powerworld" | "aux" => T::PowerWorld,
-        _ => return None,
-    })
-}
-
-/// Read `path` into the neutral network, choosing the reader from `from` or the
-/// file extension.
-fn read_network_py(path: &str, from: Option<&str>) -> PyResult<casemat::Network> {
-    let p = std::path::Path::new(path);
-    let fmt = match from {
-        Some(f) => fmt_from_str(f)
-            .ok_or_else(|| PyValueError::new_err(format!("unknown source format: {f}")))?,
-        None => match p.extension().and_then(|e| e.to_str()) {
-            Some("m") => casemat::TargetFormat::Matpower,
-            Some("json") => casemat::TargetFormat::PowerModelsJson,
-            Some("raw") => casemat::TargetFormat::Psse,
-            Some("aux") => casemat::TargetFormat::PowerWorld,
-            other => {
-                return Err(PyValueError::new_err(format!(
-                    "cannot infer input format from extension {other:?}; pass from="
-                )))
-            }
-        },
-    };
-    let read_str = || std::fs::read_to_string(p).map_err(|e| PyValueError::new_err(e.to_string()));
-    let net = match fmt {
-        casemat::TargetFormat::Matpower => {
-            casemat::parse_matpower_file(path).map_err(to_pyerr)?
-        }
-        casemat::TargetFormat::PowerModelsJson => {
-            casemat::parse_powermodels_json(&read_str()?).map_err(to_pyerr)?
-        }
-        casemat::TargetFormat::Psse => casemat::parse_psse(&read_str()?).map_err(to_pyerr)?,
-        casemat::TargetFormat::PowerWorld => {
-            casemat::parse_powerworld(&read_str()?).map_err(to_pyerr)?
-        }
-        casemat::TargetFormat::EgretJson => {
-            return Err(PyValueError::new_err(
-                "reading EGRET JSON is not supported yet (write-only)",
-            ))
-        }
-    };
-    Ok(net)
 }
 
 #[pymodule]

@@ -9,9 +9,10 @@ mod adjacency;
 mod bdoubleprime;
 mod bprime;
 pub mod incidence;
-// The DC-OPF interior-point operators are experimental and local-only: the file
-// lives at the repo-root `src/matrix/kkt.rs` (gitignored), so the declaration
-// points there. The feature is off by default and never enabled in CI.
+// The DC-OPF interior-point operators are experimental and off by default. The
+// file lives at the repo-root `src/matrix/kkt.rs` (a holdover from before the
+// workspace split), so the declaration reaches it with `#[path]`. Built only
+// under `--features kkt`, which the default build and the main CI jobs skip.
 #[cfg(feature = "kkt")]
 #[path = "../../../src/matrix/kkt.rs"]
 pub mod kkt;
@@ -33,8 +34,8 @@ pub use incidence::{
 };
 pub use lacpf::build_lacpf;
 pub use laplacian::{GroundMap, build_weighted_laplacian, ground_at, unit_vector};
-pub use opf::{OpfInstance, Units, build_opf_instance};
-pub use sensitivity::{build_lodf, build_ptdf};
+pub use opf::{BusCosts, GenCosts, OpfInstance, Units, build_opf_instance};
+pub use sensitivity::{build_lodf, build_ptdf, build_ptdf_lodf};
 pub use ybus::{YbusParts, build_ybus};
 
 use sprs::CsMat;
@@ -96,8 +97,7 @@ impl MatrixStats {
         let mut m_sign = true;
         let mut fro_sq = 0.0_f64;
 
-        for row_idx in 0..n {
-            let row = a.outer_view(row_idx).expect("row exists");
+        for (row_idx, row) in a.outer_iterator().enumerate() {
             let mut diag = 0.0_f64;
             let mut off_abs = 0.0_f64;
             for (col, &v) in row.iter() {
@@ -126,6 +126,14 @@ impl MatrixStats {
             frobenius_norm: fro_sq.sqrt(),
         }
     }
+}
+
+/// Negate every stored value of a sparse matrix in place. Used where the input
+/// is owned and consumed straight away (B″ and the `YbusB` pipeline arm), so no
+/// clone of the structure is needed.
+pub(crate) fn negate_into(mut a: CsMat<f64>) -> CsMat<f64> {
+    a.data_mut().iter_mut().for_each(|v| *v = -*v);
+    a
 }
 
 /// Whether a matrix is SDDM (symmetric diagonally dominant M-matrix).

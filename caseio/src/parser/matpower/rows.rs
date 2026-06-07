@@ -16,6 +16,13 @@ fn num(x: f64) -> Value {
     serde_json::Number::from_f64(x).map_or(Value::Null, Value::Number)
 }
 
+/// MATPOWER in-service flag: the status column is exactly 0 or 1 in the file,
+/// so the equality is the intended exact compare.
+#[allow(clippy::float_cmp)]
+fn is_in_service(status: f64) -> bool {
+    status == 1.0
+}
+
 /// Bus matrix column indices.
 mod bus_col {
     pub const BUS_I: usize = 0;
@@ -117,12 +124,17 @@ mod gencost_col {
     pub const STARTUP: usize = 1;
     pub const SHUTDOWN: usize = 2;
     pub const NCOST: usize = 3;
-    pub const COEFF0: usize = 4;
+    /// Minimum width; the cost coefficients are everything from here on.
     pub const REQUIRED: usize = 4;
 }
 
-fn short_row(field: &'static str, row: usize, expected: usize, got: usize) -> Error {
-    Error::ShortRow { field, row, expected, got }
+/// Guard a row's width before indexing it. `field` names the matrix for the
+/// error; `i` is the row's 0-based position.
+fn require(field: &'static str, row: &[f64], i: usize, expected: usize) -> Result<()> {
+    if row.len() < expected {
+        return Err(Error::ShortRow { field, row: i, expected, got: row.len() });
+    }
+    Ok(())
 }
 
 /// Parse a bus row into a [`Bus`] plus an optional [`Load`] and [`Shunt`].
@@ -130,9 +142,7 @@ fn short_row(field: &'static str, row: usize, expected: usize, got: usize) -> Er
 /// a bus with `Pd = Qd = 0` carries no load. `in_service` follows the bus type
 /// (an isolated bus is out of service).
 pub(super) fn bus_row(row: &[f64], i: usize) -> Result<(Bus, Option<Load>, Option<Shunt>)> {
-    if row.len() < bus_col::REQUIRED {
-        return Err(short_row("bus", i, bus_col::REQUIRED, row.len()));
-    }
+    require("bus", row, i, bus_col::REQUIRED)?;
     let id = row[bus_col::BUS_I] as usize;
     let kind = BusType::from_f64(row[bus_col::BUS_TYPE]);
     let in_service = kind != BusType::Isolated;
@@ -159,9 +169,7 @@ pub(super) fn bus_row(row: &[f64], i: usize) -> Result<(Bus, Option<Load>, Optio
 }
 
 pub(super) fn branch_row(row: &[f64], i: usize) -> Result<Branch> {
-    if row.len() < branch_col::REQUIRED {
-        return Err(short_row("branch", i, branch_col::REQUIRED, row.len()));
-    }
+    require("branch", row, i, branch_col::REQUIRED)?;
     Ok(Branch {
         from: row[branch_col::F_BUS] as usize,
         to: row[branch_col::T_BUS] as usize,
@@ -173,7 +181,7 @@ pub(super) fn branch_row(row: &[f64], i: usize) -> Result<Branch> {
         rate_c: row[branch_col::RATE_C],
         tap: row[branch_col::TAP],
         shift: row[branch_col::SHIFT],
-        in_service: row[branch_col::BR_STATUS] == 1.0,
+        in_service: is_in_service(row[branch_col::BR_STATUS]),
         angmin: row[branch_col::ANGMIN],
         angmax: row[branch_col::ANGMAX],
         extras: Extras::new(),
@@ -186,9 +194,7 @@ pub(super) fn branch_row(row: &[f64], i: usize) -> Result<Branch> {
 /// cross-format writes. Any columns beyond those are not retained — same as the
 /// pre-dissolution path; the byte-exact MATPOWER round-trip echoes the source.
 pub(super) fn gen_row(row: &[f64], i: usize) -> Result<Generator> {
-    if row.len() < gen_col::REQUIRED {
-        return Err(short_row("gen", i, gen_col::REQUIRED, row.len()));
-    }
+    require("gen", row, i, gen_col::REQUIRED)?;
     let extras: Extras = GEN_EXTRA_KEYS
         .iter()
         .zip(&row[gen_col::REQUIRED..])
@@ -204,29 +210,25 @@ pub(super) fn gen_row(row: &[f64], i: usize) -> Result<Generator> {
         mbase: row[gen_col::MBASE],
         pmax: row[gen_col::PMAX],
         pmin: row[gen_col::PMIN],
-        in_service: row[gen_col::GEN_STATUS] == 1.0,
+        in_service: is_in_service(row[gen_col::GEN_STATUS]),
         cost: None,
         extras,
     })
 }
 
 pub(super) fn gencost_row(row: &[f64], i: usize) -> Result<GenCost> {
-    if row.len() < gencost_col::REQUIRED {
-        return Err(short_row("gencost", i, gencost_col::REQUIRED, row.len()));
-    }
+    require("gencost", row, i, gencost_col::REQUIRED)?;
     Ok(GenCost {
         model: row[gencost_col::MODEL] as u8,
         startup: row[gencost_col::STARTUP],
         shutdown: row[gencost_col::SHUTDOWN],
         ncost: row[gencost_col::NCOST] as usize,
-        coeffs: row[gencost_col::COEFF0..].to_vec(),
+        coeffs: row[gencost_col::REQUIRED..].to_vec(),
     })
 }
 
 pub(super) fn storage_row(row: &[f64], i: usize) -> Result<Storage> {
-    if row.len() < storage_col::REQUIRED {
-        return Err(short_row("storage", i, storage_col::REQUIRED, row.len()));
-    }
+    require("storage", row, i, storage_col::REQUIRED)?;
     Ok(Storage {
         bus: row[storage_col::STORAGE_BUS] as usize,
         ps: row[storage_col::PS],
@@ -244,19 +246,17 @@ pub(super) fn storage_row(row: &[f64], i: usize) -> Result<Storage> {
         x: row[storage_col::X],
         p_loss: row[storage_col::P_LOSS],
         q_loss: row[storage_col::Q_LOSS],
-        in_service: row[storage_col::STATUS] == 1.0,
+        in_service: is_in_service(row[storage_col::STATUS]),
         extras: Extras::new(),
     })
 }
 
 pub(super) fn hvdc_row(row: &[f64], i: usize) -> Result<Hvdc> {
-    if row.len() < dcline_col::REQUIRED {
-        return Err(short_row("dcline", i, dcline_col::REQUIRED, row.len()));
-    }
+    require("dcline", row, i, dcline_col::REQUIRED)?;
     Ok(Hvdc {
         from: row[dcline_col::F_BUS] as usize,
         to: row[dcline_col::T_BUS] as usize,
-        in_service: row[dcline_col::BR_STATUS] == 1.0,
+        in_service: is_in_service(row[dcline_col::BR_STATUS]),
         pf: row[dcline_col::PF],
         pt: row[dcline_col::PT],
         qf: row[dcline_col::QF],

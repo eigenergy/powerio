@@ -69,6 +69,8 @@ class YbusParts(NamedTuple):
     b: Any  # scipy.sparse.csr_matrix, Im(Y_bus)
 
 class Case:
+    # Data attributes and the non-matrix methods delegate to the compiled
+    # `_casemat.PyCase` handle at runtime via `Case.__getattr__`.
     name: str
     base_mva: float
     n: int
@@ -102,7 +104,9 @@ class Conversion(NamedTuple):
     text: str
     warnings: List[str]
 
-Format = Literal["matpower", "powermodels-json", "egret-json", "psse", "powerworld"]
+# Any reader/writer name or alias the Rust hub accepts (e.g. "matpower"/"m",
+# "psse"/"raw"). Kept as `str` so aliases type-check; the binding validates it.
+Format = str
 
 def parse_matpower(path: Any) -> Case: ...
 def parse_matpower_string(content: str, name: Optional[str] = ...) -> Case: ...

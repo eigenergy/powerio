@@ -3,9 +3,9 @@
 
 use casemat::IndexedNetwork;
 use casemat::{
-    Branch, Bus, BusType, DcConvention, Error, Extras, GenCost, Generator, Network, Scheme,
-    SourceFormat, Units, build_adjacency, build_bprime, build_flow_map, build_incidence, build_lodf,
-    build_opf_instance, build_ptdf, build_weighted_laplacian, ground_at, parse_matpower_file,
+    Branch, Bus, BusType, DcConvention, Error, Extras, GenCost, Generator, Network, Scheme, Units,
+    build_adjacency, build_bprime, build_flow_map, build_incidence, build_lodf, build_opf_instance,
+    build_ptdf, build_weighted_laplacian, ground_at, parse_matpower_file,
 };
 use sprs::CsMat;
 
@@ -23,19 +23,7 @@ fn load(path: &str) -> Network {
 
 /// In-memory network from hand-built buses/branches (no loads/shunts/source).
 fn net(name: &str, buses: Vec<Bus>, branches: Vec<Branch>) -> Network {
-    Network {
-        name: name.into(),
-        base_mva: 100.0,
-        buses,
-        loads: Vec::new(),
-        shunts: Vec::new(),
-        branches,
-        generators: Vec::new(),
-        storage: Vec::new(),
-        hvdc: Vec::new(),
-        source_format: SourceFormat::InMemory,
-        source: None,
-    }
+    Network::in_memory(name, 100.0, buses, branches)
 }
 
 fn net_with_gens(name: &str, buses: Vec<Bus>, branches: Vec<Branch>, generators: Vec<Generator>) -> Network {
@@ -44,13 +32,16 @@ fn net_with_gens(name: &str, buses: Vec<Bus>, branches: Vec<Branch>, generators:
 
 fn dense(m: &CsMat<f64>) -> Vec<Vec<f64>> {
     let mut d = vec![vec![0.0; m.cols()]; m.rows()];
-    for (&v, (i, j)) in m.iter() {
+    for (&v, (i, j)) in m {
         d[i][j] = v;
     }
     d
 }
 
 /// Positive definiteness via dense Cholesky; small matrices only.
+// k indexes l[i][k] and l[j][k] in the same inner product; an iterator rewrite
+// would only obscure the Cholesky recurrence.
+#[allow(clippy::needless_range_loop)]
 fn is_spd(a: &[Vec<f64>]) -> bool {
     let n = a.len();
     let mut l = vec![vec![0.0_f64; n]; n];
@@ -137,7 +128,7 @@ fn incidence_structure() {
         // Each column sums to 0 with one +1 and one −1.
         let mut col_sum = vec![0.0; m];
         let mut col_cnt = vec![0usize; m];
-        for (&v, (_, j)) in inc.a.iter() {
+        for (&v, (_, j)) in &inc.a {
             col_sum[j] += v;
             col_cnt[j] += 1;
             assert!((v.abs() - 1.0).abs() < 1e-12, "{path}: |A entry| != 1");
@@ -150,6 +141,8 @@ fn incidence_structure() {
 }
 
 #[test]
+// i/j index d[i][j] and d[j][i] for the symmetry check; the index pair is the point.
+#[allow(clippy::needless_range_loop)]
 fn laplacian_is_psd_with_constant_kernel() {
     for path in CASES {
         let case = load(path);
@@ -218,19 +211,19 @@ fn opf_instance_shapes_and_cg() {
         let view = IndexedNetwork::new(&case);
         let inc = build_incidence(&view, DcConvention::PaperPure).unwrap();
         let opf = build_opf_instance(&view, &inc, Units::PerUnit).unwrap();
-        let (n, m, n_gen) = (view.n(), inc.m(), opf.n_gen);
-        assert_eq!(opf.q_bus.len(), n);
-        assert_eq!(opf.c_bus.len(), n);
-        assert_eq!(opf.pmax_bus.len(), n);
-        assert_eq!(opf.p_d.len(), n);
+        let (n, m, n_gen) = (view.n(), inc.m(), opf.n_gen());
+        assert_eq!(opf.bus.q.len(), n);
+        assert_eq!(opf.bus.c.len(), n);
+        assert_eq!(opf.bus.pmax.len(), n);
+        assert_eq!(opf.bus.p_d.len(), n);
         assert_eq!(opf.f_max.len(), m);
-        assert_eq!(opf.q_gen.len(), n_gen);
+        assert_eq!(opf.gen.q.len(), n_gen);
         assert_eq!(opf.c_g.rows(), n);
         assert_eq!(opf.c_g.cols(), n_gen);
         // C_g: one 1 per generator column.
         assert_eq!(opf.c_g.nnz(), n_gen);
         let mut col_sum = vec![0.0; n_gen];
-        for (&v, (_, g)) in opf.c_g.iter() {
+        for (&v, (_, g)) in &opf.c_g {
             assert!((v - 1.0).abs() < 1e-12);
             col_sum[g] += v;
         }
@@ -290,6 +283,8 @@ fn reference_bus_count_errors() {
 }
 
 #[test]
+// i/j index d[i][j] and d[j][i] for symmetry; adjacency entries are exact 0/1.
+#[allow(clippy::needless_range_loop, clippy::float_cmp)]
 fn adjacency_is_symmetric_01() {
     for path in CASES {
         let case = load(path);
@@ -309,6 +304,8 @@ fn adjacency_is_symmetric_01() {
 }
 
 #[test]
+// i/k/l index entries of (A·PTDF) and PTDF; the indices are the assertion.
+#[allow(clippy::needless_range_loop)]
 fn ptdf_satisfies_kcl() {
     // A · PTDF = I − e_r·1ᵀ: nodal balance for every injection.
     for path in CASES {
@@ -340,6 +337,8 @@ fn ptdf_satisfies_kcl() {
 }
 
 #[test]
+// k/l index LODF entries d[k][k] and d[l][k]; the indices are the assertion.
+#[allow(clippy::needless_range_loop)]
 fn lodf_diagonal_is_minus_one() {
     for path in CASES {
         let case = load(path);
@@ -550,17 +549,17 @@ fn bundle_vectors_round_trip() {
             assert!((g - w).abs() < 1e-9, "{name}[{i}]={g} != {w}");
         }
     };
-    check("q.mtx", &opf.q_bus);
-    check("c.mtx", &opf.c_bus);
+    check("q.mtx", &opf.bus.q);
+    check("c.mtx", &opf.bus.c);
     check("fmax.mtx", &opf.f_max);
-    check("pd.mtx", &opf.p_d);
+    check("pd.mtx", &opf.bus.p_d);
     check("b.mtx", &inc.b);
 
     // Manifest agrees with the case.
     let meta: serde_json::Value =
         serde_json::from_str(&std::fs::read_to_string(out.dir.join("dcopf_meta.json")).unwrap())
             .unwrap();
-    assert_eq!(meta["n_gen"].as_u64().unwrap() as usize, opf.n_gen);
+    assert_eq!(meta["n_gen"].as_u64().unwrap() as usize, opf.n_gen());
     assert_eq!(
         meta["reference_bus"].as_u64().unwrap() as usize,
         IndexedNetwork::new(&case).reference_bus_index().unwrap()
@@ -572,6 +571,8 @@ fn bundle_vectors_round_trip() {
 }
 
 #[test]
+// l/k index lodf[l][k] against the expected −1 diagonal; the indices are the assertion.
+#[allow(clippy::needless_range_loop)]
 fn radial_lodf_is_negative_identity() {
     // Path 1-2-3: every branch is a bridge, so each outage islands the network
     // and the LODF column zeroes out except the −1 diagonal.
@@ -622,10 +623,10 @@ fn perunit_scales_native_by_base() {
     let native = opf_of(&case, Units::Native).unwrap();
     let pu = opf_of(&case, Units::PerUnit).unwrap();
     for i in 0..case.buses.len() {
-        assert!((pu.q_bus[i] - native.q_bus[i] * base * base).abs() < 1e-6, "q[{i}]");
-        assert!((pu.c_bus[i] - native.c_bus[i] * base).abs() < 1e-6, "c[{i}]");
-        assert!((pu.pmax_bus[i] - native.pmax_bus[i] / base).abs() < 1e-9, "pmax[{i}]");
-        assert!((pu.p_d[i] - native.p_d[i] / base).abs() < 1e-9, "pd[{i}]");
+        assert!((pu.bus.q[i] - native.bus.q[i] * base * base).abs() < 1e-6, "q[{i}]");
+        assert!((pu.bus.c[i] - native.bus.c[i] * base).abs() < 1e-6, "c[{i}]");
+        assert!((pu.bus.pmax[i] - native.bus.pmax[i] / base).abs() < 1e-9, "pmax[{i}]");
+        assert!((pu.bus.p_d[i] - native.bus.p_d[i] / base).abs() < 1e-9, "pd[{i}]");
     }
 }
 
@@ -639,11 +640,11 @@ fn multi_generator_bus_sums_cost() {
         vec![poly_gen(1, 100.0, 1.0, 2.0), poly_gen(1, 50.0, 3.0, 4.0)],
     );
     let opf = opf_of(&case, Units::Native).unwrap();
-    assert_eq!(opf.n_gen, 2);
+    assert_eq!(opf.n_gen(), 2);
     let b0 = IndexedNetwork::new(&case).bus_index(1).unwrap();
-    assert!((opf.q_bus[b0] - (opf.q_gen[0] + opf.q_gen[1])).abs() < 1e-12);
-    assert!((opf.c_bus[b0] - (opf.c_gen[0] + opf.c_gen[1])).abs() < 1e-12);
-    assert!((opf.pmax_bus[b0] - (opf.pmax_gen[0] + opf.pmax_gen[1])).abs() < 1e-12);
+    assert!((opf.bus.q[b0] - (opf.gen.q[0] + opf.gen.q[1])).abs() < 1e-12);
+    assert!((opf.bus.c[b0] - (opf.gen.c[0] + opf.gen.c[1])).abs() < 1e-12);
+    assert!((opf.bus.pmax[b0] - (opf.gen.pmax[0] + opf.gen.pmax[1])).abs() < 1e-12);
 }
 
 #[test]

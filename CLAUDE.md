@@ -139,7 +139,7 @@ benchmarks/                  # parse benchmarks + Julia validation harnesses
 - **`CooBuilder`.** HashMap COO with O(nnz) inserts; replaces the old O(nnz²) Vec search.
 - **TUI lives in the library.** `casemat/src/tui/`, behind the `cli` feature. Testable via `ratatui::backend::TestBackend`. Binary calls `casemat::tui::run`.
 - **petgraph view.** `MpcCase::to_petgraph()` returns `UnGraph<usize, usize>` where node weight = dense bus index, edge weight = branch index. Use it for connectivity, radial detection, spanning trees (LinDist3Flow).
-- **`kkt` feature is experimental and local-only.** `src/matrix/kkt.rs` (repo root) is gitignored; the DC-OPF interior point operators behind `--features kkt` are not part of the default build.
+- **`kkt` feature is experimental and off by default.** `src/matrix/kkt.rs` (repo root, a pre-workspace-split holdover reached via `#[path]`) holds the DC-OPF interior point operators behind `--features kkt`; not part of the default build or the main CI jobs.
 - **Format validation needs Julia.** `benchmarks/validate_powermodels.jl` and `validate_psse.jl` check the writers/reader against PowerModels.jl; they don't run in plain `cargo test` (the all-pairs `caseio/tests/roundtrip_formats.rs` does).
 
 ## Test fixtures

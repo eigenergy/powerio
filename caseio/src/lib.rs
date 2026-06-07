@@ -15,10 +15,11 @@ pub mod parser;
 
 pub use error::{Error, Result};
 pub use format::{
-    parse_powermodels_json, parse_powerworld, parse_psse, write_as, write_egret_json,
-    write_powermodels_json, write_powerworld, write_psse, Conversion, TargetFormat,
+    parse_powermodels_json, parse_powerworld, parse_psse, read_path, target_format_from_name,
+    write_as, write_egret_json, write_powermodels_json, write_powerworld, write_psse, Conversion,
+    TargetFormat,
 };
-pub use indexed::{ConnectivityReport, IndexedNetwork};
+pub use indexed::{ConnectivityReport, IndexCore, IndexedNetwork};
 pub use network::{
     Branch, Bus, BusType, Extras, GenCost, Generator, Hvdc, Load, Network, Shunt, SourceFormat,
     Storage,

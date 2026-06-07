@@ -8,6 +8,8 @@ import subprocess
 import sys
 from pathlib import Path
 
+import pytest
+
 import caseio
 
 DATA = Path(__file__).resolve().parents[2] / "tests" / "data"
@@ -76,3 +78,34 @@ def test_import_pulls_in_no_numpy_or_scipy():
     )
     r = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True)
     assert r.returncode == 0, r.stderr
+
+
+def test_bad_format_name_raises_value_error():
+    with pytest.raises(ValueError):
+        caseio.convert(DATA / "case9.m", "bogus")
+
+
+def test_bad_parse_raises_caseio_error():
+    with pytest.raises(caseio.CaseioError):
+        caseio.parse_string("this is not a matpower case")
+
+
+def test_missing_matpower_file_raises_oserror():
+    with pytest.raises(OSError):
+        caseio.parse(DATA / "definitely_missing_case.m")
+
+
+def test_missing_json_file_raises_oserror():
+    # The non-MATPOWER read path must raise OSError too: a missing file is a
+    # missing file, not a ValueError, regardless of the inferred format.
+    with pytest.raises(OSError):
+        caseio.convert(DATA / "definitely_missing.json", "matpower")
+
+
+def test_gens_carry_cost_dict():
+    case = caseio.parse(DATA / "case30.m")
+    costed = [g for g in case.gens if g.get("cost")]
+    assert costed, "case30 generators carry cost curves"
+    cost = costed[0]["cost"]
+    assert isinstance(cost["coeffs"], list) and cost["coeffs"]
+    assert "model" in cost

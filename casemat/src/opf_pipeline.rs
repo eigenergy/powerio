@@ -76,25 +76,25 @@ pub fn write_dcopf_bundle(
     put_vec(&dir, "b.mtx", &inc.b, &mut files)?;
     put_vec(&dir, "p_shift.mtx", &inc.p_shift, &mut files)?;
     put_vec(&dir, "e_r.mtx", &e_r, &mut files)?;
-    put_vec(&dir, "q.mtx", &opf.q_bus, &mut files)?;
-    put_vec(&dir, "c.mtx", &opf.c_bus, &mut files)?;
-    put_vec(&dir, "pmax.mtx", &opf.pmax_bus, &mut files)?;
-    put_vec(&dir, "pmin.mtx", &opf.pmin_bus, &mut files)?;
+    put_vec(&dir, "q.mtx", &opf.bus.q, &mut files)?;
+    put_vec(&dir, "c.mtx", &opf.bus.c, &mut files)?;
+    put_vec(&dir, "pmax.mtx", &opf.bus.pmax, &mut files)?;
+    put_vec(&dir, "pmin.mtx", &opf.bus.pmin, &mut files)?;
     put_vec(&dir, "fmax.mtx", &opf.f_max, &mut files)?;
-    put_vec(&dir, "pd.mtx", &opf.p_d, &mut files)?;
+    put_vec(&dir, "pd.mtx", &opf.bus.p_d, &mut files)?;
 
     // Generator-space provenance.
-    put_vec(&dir, "q_gen.mtx", &opf.q_gen, &mut files)?;
-    put_vec(&dir, "c_gen.mtx", &opf.c_gen, &mut files)?;
-    put_vec(&dir, "pmax_gen.mtx", &opf.pmax_gen, &mut files)?;
-    put_vec(&dir, "pmin_gen.mtx", &opf.pmin_gen, &mut files)?;
+    put_vec(&dir, "q_gen.mtx", &opf.gen.q, &mut files)?;
+    put_vec(&dir, "c_gen.mtx", &opf.gen.c, &mut files)?;
+    put_vec(&dir, "pmax_gen.mtx", &opf.gen.pmax, &mut files)?;
+    put_vec(&dir, "pmin_gen.mtx", &opf.gen.pmin, &mut files)?;
 
     let meta = DcOpfMeta {
         case_name: view.name().to_string(),
         base_mva: view.base_mva(),
         n: view.n(),
         m: inc.m(),
-        n_gen: opf.n_gen,
+        n_gen: opf.n_gen(),
         reference_bus: r,
         convention: opts.convention,
         units: opts.units,

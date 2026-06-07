@@ -219,8 +219,7 @@ fn draw_inspect(frame: &mut Frame, app: &App, area: Rect) {
             let active = app
                 .inspect
                 .as_ref()
-                .map(|s| s.kind == *k)
-                .unwrap_or(false);
+                .is_some_and(|s| s.kind == *k);
             let style = if active { highlight() } else { dim() };
             Span::styled(format!(" {} ", k.label()), style)
         })
@@ -275,9 +274,8 @@ fn draw_stats_panel(frame: &mut Frame, app: &App, area: Rect) {
     let inner = block.inner(area);
     frame.render_widget(block, area);
 
-    let cell = match app.current_matrix() {
-        Some(c) => c,
-        None => return,
+    let Some(cell) = app.current_matrix() else {
+        return;
     };
     let s = &cell.stats;
     let sddm_span = if cell.sddm {
@@ -503,7 +501,7 @@ fn draw_synth(frame: &mut Frame, app: &App, area: Rect) {
         .title(" Preview ");
     if let Some(case) = &app.synth.generated {
         let view = crate::IndexedNetwork::new(case);
-        if let Ok(b) = crate::build_bprime(&view, &Default::default()) {
+        if let Ok(b) = crate::build_bprime(&view, &crate::BuildOptions::default()) {
             let inner = preview_block.inner(split[1]);
             frame.render_widget(preview_block, split[1]);
             frame.render_widget(Sparsity::new(&b), inner);

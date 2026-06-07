@@ -171,6 +171,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "caseio-capi"
+version = "0.1.0"
+dependencies = [
+ "caseio",
+]
+
+[[package]]
 name = "caseio-ext"
 version = "0.1.0"
 dependencies = [

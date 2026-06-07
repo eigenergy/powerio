@@ -18,7 +18,7 @@ use crate::io::meta::{CaseMetadata, MatrixMetadata, write_meta_json};
 use crate::io::mtx::{write_mtx, write_vector_mtx};
 use crate::matrix::{
     BuildOptions, MatrixStats, build_adjacency, build_bdoubleprime, build_bprime, build_lacpf,
-    build_ybus, sddm_check,
+    build_ybus, negate_into, sddm_check,
 };
 use crate::Result;
 
@@ -97,7 +97,7 @@ impl Default for Pipeline {
             matrices: vec![MatrixKind::BPrime],
             options: BuildOptions::default(),
             rhs: RhsKind::None,
-            rng_seed: 0xC0FFEE,
+            rng_seed: 0x00C0_FFEE,
             source_file: None,
         }
     }
@@ -139,7 +139,7 @@ impl Pipeline {
             files.push(matrix_path);
 
             // RHS for matrices that take a RHS of length n (skip LACPF which is 2n).
-            if let Some(rhs) = self.build_rhs(&view, kind)? {
+            if let Some(rhs) = self.build_rhs(&view, kind) {
                 let rhs_path = out_dir.join(format!("{}_{}_rhs.mtx", view.name(), kind.slug()));
                 write_vector_mtx(&rhs, &rhs_path)?;
                 files.push(rhs_path);
@@ -184,25 +184,15 @@ impl Pipeline {
     }
 
     fn build(&self, case: &IndexedNetwork, kind: MatrixKind) -> Result<sprs::CsMat<f64>> {
-        match kind {
-            MatrixKind::BPrime => build_bprime(case, &self.options),
-            MatrixKind::BDoublePrime => build_bdoubleprime(case, &self.options),
-            MatrixKind::YbusG => build_ybus(case, &self.options).map(|p| p.g),
-            MatrixKind::YbusB => {
-                let parts = build_ybus(case, &self.options)?;
-                Ok(negate(&parts.b))
-            }
-            MatrixKind::Lacpf => build_lacpf(case, &self.options),
-            MatrixKind::Adjacency => build_adjacency(case),
-        }
+        build_kind(case, kind, &self.options)
     }
 
-    fn build_rhs(&self, case: &IndexedNetwork, kind: MatrixKind) -> Result<Option<Vec<f64>>> {
+    fn build_rhs(&self, case: &IndexedNetwork, kind: MatrixKind) -> Option<Vec<f64>> {
         // No meaningful RHS for the 2n LACPF block or the structural adjacency.
         if matches!(self.rhs, RhsKind::None)
             || matches!(kind, MatrixKind::Lacpf | MatrixKind::Adjacency)
         {
-            return Ok(None);
+            return None;
         }
         let n = case.n();
         let v = match self.rhs {
@@ -235,16 +225,26 @@ impl Pipeline {
             }
             RhsKind::None => unreachable!(),
         };
-        Ok(Some(v))
+        Some(v)
     }
 }
 
-fn negate(a: &sprs::CsMat<f64>) -> sprs::CsMat<f64> {
-    let mut out = a.clone();
-    for v in out.data_mut() {
-        *v = -*v;
+/// Build the square matrix for one [`MatrixKind`] from an indexed network. The
+/// single dispatch shared by the [`Pipeline`], the `verify` CLI command, and the
+/// TUI inspect screen, so the `YbusB = -Im(Y_bus)` sign lives in one place.
+pub fn build_kind(
+    view: &IndexedNetwork,
+    kind: MatrixKind,
+    opts: &BuildOptions,
+) -> Result<sprs::CsMat<f64>> {
+    match kind {
+        MatrixKind::BPrime => build_bprime(view, opts),
+        MatrixKind::BDoublePrime => build_bdoubleprime(view, opts),
+        MatrixKind::YbusG => build_ybus(view, opts).map(|p| p.g),
+        MatrixKind::YbusB => build_ybus(view, opts).map(|p| negate_into(p.b)),
+        MatrixKind::Lacpf => build_lacpf(view, opts),
+        MatrixKind::Adjacency => build_adjacency(view),
     }
-    out
 }
 
 fn sha256_hex(bytes: &[u8]) -> String {

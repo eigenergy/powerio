@@ -10,10 +10,11 @@
 // resolve unchanged after the split.
 pub use caseio::{
     error, format, indexed, network, parser, parse_matpower, parse_matpower_file,
-    parse_powermodels_json, parse_powerworld, parse_psse, write_as, write_egret_json, write_matpower,
-    write_powermodels_json, write_powerworld, write_psse, Branch, Bus, BusType, ConnectivityReport,
-    Conversion, Error, Extras, GenCost, Generator, Hvdc, IndexedNetwork, Load, Network, Result,
-    Shunt, SourceFormat, Storage, TargetFormat,
+    parse_powermodels_json, parse_powerworld, parse_psse, read_path, target_format_from_name,
+    write_as, write_egret_json, write_matpower, write_powermodels_json, write_powerworld,
+    write_psse, Branch, Bus, BusType, ConnectivityReport, Conversion, Error, Extras, GenCost,
+    Generator, Hvdc, IndexCore, IndexedNetwork, Load, Network, Result, Shunt, SourceFormat, Storage,
+    TargetFormat,
 };
 
 pub mod io;
@@ -26,9 +27,10 @@ pub mod tui;
 
 pub use matrix::{
     build_adjacency, build_bdoubleprime, build_bprime, build_flow_map, build_incidence,
-    build_lacpf, build_lodf, build_opf_instance, build_ptdf, build_weighted_laplacian, build_ybus,
-    ground_at, sddm_check, susceptance_diag, unit_vector, BuildOptions, DcConvention, GroundMap,
-    IncidenceParts, MatrixStats, OpfInstance, Scheme, Units,
+    build_lacpf, build_lodf, build_opf_instance, build_ptdf, build_ptdf_lodf,
+    build_weighted_laplacian, build_ybus,
+    ground_at, sddm_check, susceptance_diag, unit_vector, BuildOptions, BusCosts, DcConvention,
+    GenCosts, GroundMap, IncidenceParts, MatrixStats, OpfInstance, Scheme, Units,
 };
 pub use opf_pipeline::{write_dcopf_bundle, DcOpfOptions, DcOpfOutputs};
-pub use pipeline::{MatrixKind, Pipeline, PipelineOutputs, RhsKind};
+pub use pipeline::{build_kind, MatrixKind, Pipeline, PipelineOutputs, RhsKind};

@@ -37,7 +37,7 @@ impl Default for SynthSpec {
             n: 64,
             r_over_x: 0.1,
             mean_x: 0.05,
-            seed: 0xC0FFEE,
+            seed: 0x00C0_FFEE,
         }
     }
 }

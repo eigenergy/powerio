@@ -4,7 +4,7 @@
 //! shunts removed and tap ratios / phase shifts ignored:
 //!
 //! - Off-diagonal `B'_ij = -x / (r² + x²)`  (BX scheme; default)
-//!         or `B'_ij = -1 / x`              (XB scheme)
+//!   or `B'_ij = -1 / x`              (XB scheme)
 //! - Diagonal     `B'_ii = sum_j |B'_ij|`
 //!
 //! Result: positive diag, negative off-diag, diag = sum of |off-diag| — the

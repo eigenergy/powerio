@@ -145,6 +145,7 @@ fn leak_field(field: &str) -> &'static str {
         "baseMVA" => "baseMVA",
         "bus" => "bus",
         "branch" => "branch",
+        "dcline" => "dcline",
         "gen" => "gen",
         "gencost" => "gencost",
         "storage" => "storage",

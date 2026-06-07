@@ -14,7 +14,7 @@ use crate::indexed::IndexedNetwork;
 use crate::Result;
 
 use super::ybus::{YbusFlags, build_ybus_with_flags};
-use super::{BuildOptions, Scheme};
+use super::{negate_into, BuildOptions, Scheme};
 
 pub fn build_bdoubleprime(case: &IndexedNetwork, opts: &BuildOptions) -> Result<CsMat<f64>> {
     let flags = YbusFlags {
@@ -24,14 +24,8 @@ pub fn build_bdoubleprime(case: &IndexedNetwork, opts: &BuildOptions) -> Result<
         zero_shifts: true,
         skip_bus_shunts: false,
     };
+    // `parts.b` is owned and discarded here, so negate it in place rather than
+    // cloning the structure.
     let parts = build_ybus_with_flags(case, flags)?;
-    Ok(negate_matrix(&parts.b))
-}
-
-fn negate_matrix(a: &CsMat<f64>) -> CsMat<f64> {
-    let mut out = a.clone();
-    for v in out.data_mut() {
-        *v = -*v;
-    }
-    out
+    Ok(negate_into(parts.b))
 }

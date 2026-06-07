@@ -1,4 +1,4 @@
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use anyhow::Context;
 use clap::{Parser, Subcommand, ValueEnum};
@@ -263,7 +263,7 @@ fn main() -> anyhow::Result<()> {
             scheme,
             rhs,
             seed,
-        } => run_batch(input, output, matrices, scheme.into(), rhs.into(), seed),
+        } => run_batch(&input, &output, matrices, scheme.into(), rhs.into(), seed),
         Command::Gen {
             topology,
             n,
@@ -272,23 +272,23 @@ fn main() -> anyhow::Result<()> {
             seed,
             output,
             matrices,
-        } => run_gen(topology.into(), n, r_over_x, mean_x, seed, output, matrices),
+        } => run_gen(topology.into(), n, r_over_x, mean_x, seed, &output, matrices),
         Command::Verify {
             input,
             kind,
             scheme,
-        } => run_verify(input, kind.into(), scheme.into()),
+        } => run_verify(&input, kind.into(), scheme.into()),
         Command::DcOpf {
             input,
             output,
             convention,
             units,
-        } => run_dcopf(input, output, convention.into(), units.into()),
+        } => run_dcopf(&input, &output, convention.into(), units.into()),
         Command::Sensitivities {
             input,
             output,
             convention,
-        } => run_sensitivities(input, output, convention.into()),
+        } => run_sensitivities(&input, &output, convention.into()),
         Command::Convert {
             input,
             to,
@@ -307,17 +307,17 @@ fn install_tracing() {
 }
 
 fn run_batch(
-    input: PathBuf,
-    output: PathBuf,
+    input: &Path,
+    output: &Path,
     matrices: Vec<MatrixKindArg>,
     scheme: Scheme,
     rhs: RhsKind,
     seed: u64,
 ) -> anyhow::Result<()> {
     let cases: Vec<PathBuf> = if input.is_file() {
-        vec![input.clone()]
+        vec![input.to_path_buf()]
     } else {
-        walkdir::WalkDir::new(&input)
+        walkdir::WalkDir::new(input)
             .max_depth(2)
             .into_iter()
             .filter_map(std::result::Result::ok)
@@ -348,7 +348,7 @@ fn run_batch(
         let mut p = pipeline.clone();
         p.source_file = Some(case_path.clone());
         let outputs = p
-            .run(&mpc, &output)
+            .run(&mpc, output)
             .with_context(|| format!("export {}", case_path.display()))?;
         tracing::info!(
             case = %outputs.case_name,
@@ -366,7 +366,7 @@ fn run_gen(
     r_over_x: f64,
     mean_x: f64,
     seed: u64,
-    output: PathBuf,
+    output: &Path,
     matrices: Vec<MatrixKindArg>,
 ) -> anyhow::Result<()> {
     let spec = SynthSpec {
@@ -381,7 +381,7 @@ fn run_gen(
         matrices: matrices.into_iter().map(MatrixKind::from).collect(),
         ..Default::default()
     };
-    let outputs = pipeline.run(&case, &output)?;
+    let outputs = pipeline.run(&case, output)?;
     tracing::info!(
         case = %outputs.case_name,
         n = outputs.metadata.n_buses,
@@ -392,18 +392,16 @@ fn run_gen(
 }
 
 fn run_sensitivities(
-    input: PathBuf,
-    output: PathBuf,
+    input: &Path,
+    output: &Path,
     convention: DcConvention,
 ) -> anyhow::Result<()> {
-    let mpc = casemat::parse_matpower_file(&input)
+    let mpc = casemat::parse_matpower_file(input)
         .with_context(|| format!("parse {}", input.display()))?;
-    std::fs::create_dir_all(&output)?;
+    std::fs::create_dir_all(output)?;
     let view = casemat::IndexedNetwork::new(&mpc);
-    let ptdf = casemat::build_ptdf(&view, convention)
-        .with_context(|| format!("PTDF for {}", input.display()))?;
-    let lodf = casemat::build_lodf(&view, convention)
-        .with_context(|| format!("LODF for {}", input.display()))?;
+    let (ptdf, lodf) = casemat::build_ptdf_lodf(&view, convention)
+        .with_context(|| format!("DC sensitivities for {}", input.display()))?;
     let ptdf_path = output.join(format!("{}_ptdf.mtx", view.name()));
     let lodf_path = output.join(format!("{}_lodf.mtx", view.name()));
     casemat::io::mtx::write_mtx(&ptdf, &ptdf_path)?;
@@ -418,15 +416,15 @@ fn run_sensitivities(
 }
 
 fn run_dcopf(
-    input: PathBuf,
-    output: PathBuf,
+    input: &Path,
+    output: &Path,
     convention: DcConvention,
     units: Units,
 ) -> anyhow::Result<()> {
-    let mpc = casemat::parse_matpower_file(&input)
+    let mpc = casemat::parse_matpower_file(input)
         .with_context(|| format!("parse {}", input.display()))?;
     let opts = DcOpfOptions { convention, units };
-    let outputs = write_dcopf_bundle(&mpc, &output, &opts)
+    let outputs = write_dcopf_bundle(&mpc, output, &opts)
         .with_context(|| format!("export DC-OPF bundle for {}", input.display()))?;
     tracing::info!(
         case = %mpc.name,
@@ -437,27 +435,14 @@ fn run_dcopf(
     Ok(())
 }
 
-fn run_verify(input: PathBuf, kind: MatrixKind, scheme: Scheme) -> anyhow::Result<()> {
-    let mpc = casemat::parse_matpower_file(&input)?;
+fn run_verify(input: &Path, kind: MatrixKind, scheme: Scheme) -> anyhow::Result<()> {
+    let mpc = casemat::parse_matpower_file(input)?;
     let opts = BuildOptions {
         scheme,
         ..Default::default()
     };
     let view = casemat::IndexedNetwork::new(&mpc);
-    let matrix = match kind {
-        MatrixKind::BPrime => casemat::build_bprime(&view, &opts)?,
-        MatrixKind::BDoublePrime => casemat::build_bdoubleprime(&view, &opts)?,
-        MatrixKind::YbusG => casemat::build_ybus(&view, &opts)?.g,
-        MatrixKind::YbusB => {
-            let mut b = casemat::build_ybus(&view, &opts)?.b;
-            for v in b.data_mut() {
-                *v = -*v;
-            }
-            b
-        }
-        MatrixKind::Lacpf => casemat::build_lacpf(&view, &opts)?,
-        MatrixKind::Adjacency => casemat::build_adjacency(&view)?,
-    };
+    let matrix = casemat::build_kind(&view, kind, &opts)?;
     let stats = casemat::matrix::MatrixStats::from_csr(&matrix);
     let sddm = sddm_check(&matrix);
     println!(
