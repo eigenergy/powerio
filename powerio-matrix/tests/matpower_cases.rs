@@ -3,12 +3,12 @@
 
 use std::path::PathBuf;
 
-use casemat::IndexedNetwork;
-use casemat::matrix::{
+use powerio_matrix::IndexedNetwork;
+use powerio_matrix::matrix::{
     BuildOptions, MatrixStats, build_bdoubleprime, build_bprime, build_lacpf, build_ybus,
     sddm_check,
 };
-use casemat::parse_matpower_file;
+use powerio_matrix::parse_matpower_file;
 
 fn fixture(name: &str) -> PathBuf {
     let mut p = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
@@ -105,7 +105,7 @@ fn lacpf_block_dimensions() {
 
 #[test]
 fn pipeline_writes_expected_files_for_case9() {
-    use casemat::pipeline::{MatrixKind, Pipeline, RhsKind};
+    use powerio_matrix::pipeline::{MatrixKind, Pipeline, RhsKind};
     let tmp = tempdir();
     let net = parse_matpower_file(fixture("case9.m")).unwrap();
     let pipeline = Pipeline {
@@ -134,14 +134,14 @@ fn pipeline_writes_expected_files_for_case9() {
 
     // Sanity check: re-read B' from disk and verify it's still SDDM-signed.
     let bprime_path = tmp.join("case9_bprime.mtx");
-    let reread = casemat::io::read_mtx(&bprime_path).unwrap();
+    let reread = powerio_matrix::io::read_mtx(&bprime_path).unwrap();
     assert!(sddm_check(&reread) || MatrixStats::from_csr(&reread).m_matrix_sign);
 }
 
 fn tempdir() -> PathBuf {
     let mut p = std::env::temp_dir();
     p.push(format!(
-        "casemat-test-{}",
+        "powerio-test-{}",
         std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .map_or(0, |d| d.as_nanos())

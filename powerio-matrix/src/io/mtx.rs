@@ -26,7 +26,7 @@ fn write_symmetric_mtx(matrix: &CsMat<f64>, path: &Path) -> Result<()> {
     let f = std::fs::File::create(path)?;
     let mut w = BufWriter::new(f);
     writeln!(w, "%%MatrixMarket matrix coordinate real symmetric")?;
-    writeln!(w, "% written by casemat")?;
+    writeln!(w, "% written by powerio")?;
 
     // Two-pass: count entries first so the header can carry the exact nnz.
     let nnz = matrix
@@ -87,7 +87,7 @@ pub fn write_vector_mtx(values: &[f64], path: impl AsRef<Path>) -> Result<()> {
     let f = std::fs::File::create(path)?;
     let mut w = BufWriter::new(f);
     writeln!(w, "%%MatrixMarket matrix array real general")?;
-    writeln!(w, "% written by casemat")?;
+    writeln!(w, "% written by powerio")?;
     writeln!(w, "{} 1", values.len())?;
     for v in values {
         writeln!(w, "{v:.16e}")?;

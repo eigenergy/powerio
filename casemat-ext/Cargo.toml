@@ -20,10 +20,10 @@ crate-type = ["cdylib"]
 extension-module = ["pyo3/extension-module"]
 
 [dependencies]
-casemat = { path = "../casemat", default-features = false }
+powerio-matrix = { path = "../powerio-matrix", default-features = false }
 pyo3 = { version = "0.27", features = ["abi3-py39"] }
 numpy = "0.27"
-# Must track casemat's sprs so `CsMat<f64>` is the same type across the boundary.
+# Must track powerio-matrix's sprs so `CsMat<f64>` is the same type across the boundary.
 sprs = { version = "0.11", default-features = false }
 
 # No workspace pedantic lints here: pyo3 macro-generated code trips them, and

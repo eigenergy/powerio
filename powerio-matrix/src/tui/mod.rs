@@ -470,7 +470,7 @@ mod tests {
         let log = LogBuf::default();
         App::new(
             PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/data"),
-            std::env::temp_dir().join("casemat-tui-test"),
+            std::env::temp_dir().join("powerio-tui-test"),
             log,
         )
     }

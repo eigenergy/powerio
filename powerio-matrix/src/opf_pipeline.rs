@@ -41,7 +41,7 @@ struct DcOpfMeta {
     convention: DcConvention,
     units: Units,
     files: Vec<String>,
-    casemat_version: String,
+    powerio_version: String,
 }
 
 /// Build and write the DC-OPF bundle into `out_dir/<case>_dcopf/`.
@@ -102,7 +102,7 @@ pub fn write_dcopf_bundle(
             .iter()
             .filter_map(|p| p.file_name().and_then(|s| s.to_str()).map(str::to_string))
             .collect(),
-        casemat_version: env!("CARGO_PKG_VERSION").to_string(),
+        powerio_version: env!("CARGO_PKG_VERSION").to_string(),
     };
     let meta_path = dir.join("dcopf_meta.json");
     let json = serde_json::to_string_pretty(&meta).map_err(|e| crate::Error::Mtx(e.to_string()))?;

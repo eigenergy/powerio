@@ -41,7 +41,7 @@ pub fn draw(frame: &mut Frame, app: &App) {
 }
 
 fn draw_header(frame: &mut Frame, app: &App, area: Rect) {
-    let title_text = format!(" casemat · {} ", app.screen.label());
+    let title_text = format!(" powerio · {} ", app.screen.label());
     let line = Line::from(vec![
         Span::styled(title_text, title()),
         Span::raw("  "),
@@ -617,7 +617,7 @@ fn draw_help(frame: &mut Frame, _app: &App, area: Rect) {
     frame.render_widget(block, area);
 
     let lines = vec![
-        Line::from(Span::styled("casemat — TUI cheatsheet", title())),
+        Line::from(Span::styled("powerio — TUI cheatsheet", title())),
         Line::raw(""),
         Line::raw("Browse"),
         Line::raw("  ↑/↓        move selection"),

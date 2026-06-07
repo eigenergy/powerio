@@ -166,34 +166,11 @@ dependencies = [
 ]
 
 [[package]]
-name = "casemat"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "approx",
- "clap",
- "crossterm",
- "num-complex",
- "powerio",
- "rand 0.9.4",
- "rand_chacha",
- "ratatui",
- "rayon",
- "serde",
- "serde_json",
- "sha2",
- "sprs",
- "tracing",
- "tracing-subscriber",
- "walkdir",
-]
-
-[[package]]
 name = "casemat-ext"
 version = "0.1.0"
 dependencies = [
- "casemat",
  "numpy",
+ "powerio-matrix",
  "pyo3",
  "sprs",
 ]
@@ -1305,6 +1282,29 @@ name = "powerio-capi"
 version = "0.1.0"
 dependencies = [
  "powerio",
+]
+
+[[package]]
+name = "powerio-matrix"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "approx",
+ "clap",
+ "crossterm",
+ "num-complex",
+ "powerio",
+ "rand 0.9.4",
+ "rand_chacha",
+ "ratatui",
+ "rayon",
+ "serde",
+ "serde_json",
+ "sha2",
+ "sprs",
+ "tracing",
+ "tracing-subscriber",
+ "walkdir",
 ]
 
 [[package]]

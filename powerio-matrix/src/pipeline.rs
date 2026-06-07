@@ -170,7 +170,7 @@ impl Pipeline {
             n_branches: view.branches().len(),
             build_options: self.options.clone(),
             matrices: matrices_meta,
-            casemat_version: env!("CARGO_PKG_VERSION").to_string(),
+            powerio_version: env!("CARGO_PKG_VERSION").to_string(),
         };
         let meta_path = out_dir.join(format!("{}_meta.json", view.name()));
         write_meta_json(&metadata, &meta_path)?;

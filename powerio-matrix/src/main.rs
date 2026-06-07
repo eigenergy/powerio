@@ -1,15 +1,15 @@
 use std::path::{Path, PathBuf};
 
 use anyhow::Context;
-use casemat::matrix::{BuildOptions, DcConvention, Scheme, Units, sddm_check};
-use casemat::opf_pipeline::{DcOpfOptions, write_dcopf_bundle};
-use casemat::pipeline::{MatrixKind, Pipeline, RhsKind};
-use casemat::synth::{SynthSpec, Topology};
-use casemat::tui;
 use clap::{Parser, Subcommand, ValueEnum};
+use powerio_matrix::matrix::{BuildOptions, DcConvention, Scheme, Units, sddm_check};
+use powerio_matrix::opf_pipeline::{DcOpfOptions, write_dcopf_bundle};
+use powerio_matrix::pipeline::{MatrixKind, Pipeline, RhsKind};
+use powerio_matrix::synth::{SynthSpec, Topology};
+use powerio_matrix::tui;
 
 #[derive(Parser, Debug)]
-#[command(name = "casemat", version, about)]
+#[command(name = "powerio", version, about)]
 struct Cli {
     #[command(subcommand)]
     command: Option<Command>,
@@ -128,7 +128,7 @@ enum FormatArg {
     PowerWorld,
 }
 
-impl From<FormatArg> for casemat::TargetFormat {
+impl From<FormatArg> for powerio_matrix::TargetFormat {
     fn from(value: FormatArg) -> Self {
         match value {
             FormatArg::Matpower => Self::Matpower,
@@ -353,7 +353,7 @@ fn run_batch(
     };
 
     for case_path in &cases {
-        let mpc = casemat::parse_matpower_file(case_path)
+        let mpc = powerio_matrix::parse_matpower_file(case_path)
             .with_context(|| format!("parse {}", case_path.display()))?;
         let mut p = pipeline.clone();
         p.source_file = Some(case_path.clone());
@@ -386,7 +386,7 @@ fn run_gen(
         mean_x,
         seed,
     };
-    let case = casemat::synth::generate(&spec);
+    let case = powerio_matrix::synth::generate(&spec);
     let pipeline = Pipeline {
         matrices: matrices.into_iter().map(MatrixKind::from).collect(),
         ..Default::default()
@@ -402,16 +402,16 @@ fn run_gen(
 }
 
 fn run_sensitivities(input: &Path, output: &Path, convention: DcConvention) -> anyhow::Result<()> {
-    let mpc = casemat::parse_matpower_file(input)
+    let mpc = powerio_matrix::parse_matpower_file(input)
         .with_context(|| format!("parse {}", input.display()))?;
     std::fs::create_dir_all(output)?;
-    let view = casemat::IndexedNetwork::new(&mpc);
-    let (ptdf, lodf) = casemat::build_ptdf_lodf(&view, convention)
+    let view = powerio_matrix::IndexedNetwork::new(&mpc);
+    let (ptdf, lodf) = powerio_matrix::build_ptdf_lodf(&view, convention)
         .with_context(|| format!("DC sensitivities for {}", input.display()))?;
     let ptdf_path = output.join(format!("{}_ptdf.mtx", view.name()));
     let lodf_path = output.join(format!("{}_lodf.mtx", view.name()));
-    casemat::io::mtx::write_mtx(&ptdf, &ptdf_path)?;
-    casemat::io::mtx::write_mtx(&lodf, &lodf_path)?;
+    powerio_matrix::io::mtx::write_mtx(&ptdf, &ptdf_path)?;
+    powerio_matrix::io::mtx::write_mtx(&lodf, &lodf_path)?;
     tracing::info!(
         case = %view.name(),
         ptdf = %ptdf_path.display(),
@@ -427,7 +427,7 @@ fn run_dcopf(
     convention: DcConvention,
     units: Units,
 ) -> anyhow::Result<()> {
-    let mpc = casemat::parse_matpower_file(input)
+    let mpc = powerio_matrix::parse_matpower_file(input)
         .with_context(|| format!("parse {}", input.display()))?;
     let opts = DcOpfOptions { convention, units };
     let outputs = write_dcopf_bundle(&mpc, output, &opts)
@@ -442,14 +442,14 @@ fn run_dcopf(
 }
 
 fn run_verify(input: &Path, kind: MatrixKind, scheme: Scheme) -> anyhow::Result<()> {
-    let mpc = casemat::parse_matpower_file(input)?;
+    let mpc = powerio_matrix::parse_matpower_file(input)?;
     let opts = BuildOptions {
         scheme,
         ..Default::default()
     };
-    let view = casemat::IndexedNetwork::new(&mpc);
-    let matrix = casemat::build_kind(&view, kind, &opts)?;
-    let stats = casemat::matrix::MatrixStats::from_csr(&matrix);
+    let view = powerio_matrix::IndexedNetwork::new(&mpc);
+    let matrix = powerio_matrix::build_kind(&view, kind, &opts)?;
+    let stats = powerio_matrix::matrix::MatrixStats::from_csr(&matrix);
     let sddm = sddm_check(&matrix);
     println!(
         "{} ({}): n={} nnz={} min_diag={:.3e} max_diag={:.3e} dd_margin={:.3e} M-sign={} ‖A‖_F={:.3e} SDDM={}",
@@ -469,12 +469,12 @@ fn run_verify(input: &Path, kind: MatrixKind, scheme: Scheme) -> anyhow::Result<
 
 fn run_convert(
     input: &std::path::Path,
-    to: casemat::TargetFormat,
+    to: powerio_matrix::TargetFormat,
     output: Option<&std::path::Path>,
     from: Option<FormatArg>,
 ) -> anyhow::Result<()> {
     let net = read_network(input, from)?;
-    let conv = casemat::write_as(&net, to);
+    let conv = powerio_matrix::write_as(&net, to);
     for w in &conv.warnings {
         eprintln!("fidelity: {w}");
     }
@@ -488,12 +488,12 @@ fn run_convert(
     Ok(())
 }
 
-/// Read `input` into the neutral [`casemat::Network`], picking the reader from
+/// Read `input` into the neutral [`powerio_matrix::Network`], picking the reader from
 /// `from` or the file extension.
 fn read_network(
     input: &std::path::Path,
     from: Option<FormatArg>,
-) -> anyhow::Result<casemat::Network> {
+) -> anyhow::Result<powerio_matrix::Network> {
     let fmt = match from {
         Some(f) => f,
         None => match input.extension().and_then(|e| e.to_str()) {
@@ -507,13 +507,15 @@ fn read_network(
         },
     };
     let net = match fmt {
-        FormatArg::Matpower => casemat::parse_matpower_file(input)
+        FormatArg::Matpower => powerio_matrix::parse_matpower_file(input)
             .with_context(|| format!("reading MATPOWER {}", input.display()))?,
         FormatArg::PowerModelsJson => {
-            casemat::parse_powermodels_json(&std::fs::read_to_string(input)?)?
+            powerio_matrix::parse_powermodels_json(&std::fs::read_to_string(input)?)?
         }
-        FormatArg::Psse => casemat::parse_psse(&std::fs::read_to_string(input)?)?,
-        FormatArg::PowerWorld => casemat::parse_powerworld(&std::fs::read_to_string(input)?)?,
+        FormatArg::Psse => powerio_matrix::parse_psse(&std::fs::read_to_string(input)?)?,
+        FormatArg::PowerWorld => {
+            powerio_matrix::parse_powerworld(&std::fs::read_to_string(input)?)?
+        }
         FormatArg::EgretJson => {
             anyhow::bail!("reading EGRET JSON is not supported yet (write-only)")
         }

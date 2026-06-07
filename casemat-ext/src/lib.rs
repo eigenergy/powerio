@@ -21,12 +21,12 @@ use pyo3::prelude::*;
 use pyo3::types::{PyDict, PyList};
 use sprs::CsMat;
 
-use casemat::matrix::{
+use powerio_matrix::matrix::{
     BuildOptions, DcConvention, Scheme, Units, build_adjacency, build_bdoubleprime, build_bprime,
     build_incidence, build_lacpf, build_lodf, build_ptdf, build_weighted_laplacian, build_ybus,
 };
-use casemat::opf_pipeline::{DcOpfOptions, write_dcopf_bundle as write_bundle};
-use casemat::{IndexCore, IndexedNetwork, Network};
+use powerio_matrix::opf_pipeline::{DcOpfOptions, write_dcopf_bundle as write_bundle};
+use powerio_matrix::{IndexCore, IndexedNetwork, Network};
 
 pyo3::create_exception!(
     _casemat,
@@ -39,10 +39,10 @@ pyo3::create_exception!(
 /// `PermissionError`, …) so Python callers can catch them the usual way; an
 /// unknown/uninferable format becomes a `ValueError`; other parse and data
 /// errors become [`CasematError`].
-fn to_pyerr(e: casemat::Error) -> PyErr {
+fn to_pyerr(e: powerio_matrix::Error) -> PyErr {
     match e {
-        casemat::Error::Io(io) => io.into(),
-        casemat::Error::UnknownFormat(msg) => PyValueError::new_err(msg),
+        powerio_matrix::Error::Io(io) => io.into(),
+        powerio_matrix::Error::UnknownFormat(msg) => PyValueError::new_err(msg),
         other => CasematError::new_err(other.to_string()),
     }
 }
@@ -439,7 +439,7 @@ impl PyCase {
 /// Parse a MATPOWER `.m` file from a path.
 #[pyfunction]
 fn parse_matpower(path: &str) -> PyResult<PyCase> {
-    let inner = casemat::parse_matpower_file(path).map_err(to_pyerr)?;
+    let inner = powerio_matrix::parse_matpower_file(path).map_err(to_pyerr)?;
     let core = IndexCore::build(&inner);
     Ok(PyCase { inner, core })
 }
@@ -449,7 +449,7 @@ fn parse_matpower(path: &str) -> PyResult<PyCase> {
 #[pyfunction]
 #[pyo3(signature = (content, name=None))]
 fn parse_matpower_string(content: &str, name: Option<&str>) -> PyResult<PyCase> {
-    let mut inner = casemat::parse_matpower(content).map_err(to_pyerr)?;
+    let mut inner = powerio_matrix::parse_matpower(content).map_err(to_pyerr)?;
     if let Some(n) = name {
         inner.name = n.to_string();
     }
@@ -464,10 +464,10 @@ fn parse_matpower_string(content: &str, name: Option<&str>) -> PyResult<PyCase> 
 #[pyfunction]
 #[pyo3(signature = (path, to, from=None))]
 fn convert(path: &str, to: &str, from: Option<&str>) -> PyResult<(String, Vec<String>)> {
-    let target = casemat::target_format_from_name(to)
+    let target = powerio_matrix::target_format_from_name(to)
         .ok_or_else(|| PyValueError::new_err(format!("unknown target format: {to}")))?;
-    let net = casemat::read_path(std::path::Path::new(path), from).map_err(to_pyerr)?;
-    let conv = casemat::write_as(&net, target);
+    let net = powerio_matrix::read_path(std::path::Path::new(path), from).map_err(to_pyerr)?;
+    let conv = powerio_matrix::write_as(&net, target);
     Ok((conv.text, conv.warnings))
 }
 

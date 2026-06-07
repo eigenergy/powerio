@@ -1,8 +1,8 @@
 //! DC-OPF matrix forge: incidence, Laplacian, OPF instance, and the export
 //! bundle. Run against vendored MATPOWER cases.
 
-use casemat::IndexedNetwork;
-use casemat::{
+use powerio_matrix::IndexedNetwork;
+use powerio_matrix::{
     Branch, Bus, BusType, DcConvention, Error, Extras, GenCost, Generator, Network, Scheme, Units,
     build_adjacency, build_bprime, build_flow_map, build_incidence, build_lodf, build_opf_instance,
     build_ptdf, build_weighted_laplacian, ground_at, parse_matpower_file,
@@ -99,7 +99,7 @@ fn laplacian_equals_bprime_xb() {
         let l = build_weighted_laplacian(&inc.a, &inc.b);
         let bp = build_bprime(
             &view,
-            &casemat::BuildOptions {
+            &powerio_matrix::BuildOptions {
                 scheme: Scheme::Xb,
                 ..Default::default()
             },
@@ -242,16 +242,18 @@ fn opf_instance_shapes_and_cg() {
 #[test]
 fn bundle_round_trips() {
     let case = load("../tests/data/case14.m");
-    let dir = std::env::temp_dir().join("casemat_dcopf_test");
+    let dir = std::env::temp_dir().join("powerio_dcopf_test");
     let _ = std::fs::remove_dir_all(&dir);
-    let out = casemat::write_dcopf_bundle(&case, &dir, &casemat::DcOpfOptions::default()).unwrap();
+    let out =
+        powerio_matrix::write_dcopf_bundle(&case, &dir, &powerio_matrix::DcOpfOptions::default())
+            .unwrap();
     assert!(out.dir.join("A.mtx").exists());
     assert!(out.dir.join("L.mtx").exists());
     assert!(out.dir.join("dcopf_meta.json").exists());
 
-    let a = casemat::io::read_mtx(out.dir.join("A.mtx")).unwrap();
+    let a = powerio_matrix::io::read_mtx(out.dir.join("A.mtx")).unwrap();
     assert_eq!(a.rows(), case.buses.len());
-    let l = casemat::io::read_mtx(out.dir.join("L.mtx")).unwrap();
+    let l = powerio_matrix::io::read_mtx(out.dir.join("L.mtx")).unwrap();
     assert_eq!(l.rows(), case.buses.len());
     assert_eq!(l.cols(), case.buses.len());
     let _ = std::fs::remove_dir_all(&dir);
@@ -260,14 +262,14 @@ fn bundle_round_trips() {
 #[test]
 fn no_generators_errors() {
     // A synthetic case has branches but no generators.
-    let spec = casemat::synth::SynthSpec {
-        topology: casemat::synth::Topology::Tree,
+    let spec = powerio_matrix::synth::SynthSpec {
+        topology: powerio_matrix::synth::Topology::Tree,
         n: 16,
         r_over_x: 0.1,
         mean_x: 0.05,
         seed: 1,
     };
-    let case = casemat::synth::generate(&spec);
+    let case = powerio_matrix::synth::generate(&spec);
     let view = IndexedNetwork::new(&case);
     let inc = build_incidence(&view, DcConvention::PaperPure).unwrap();
     let err = build_opf_instance(&view, &inc, Units::PerUnit).unwrap_err();
@@ -448,7 +450,7 @@ fn poly_gen(bus_id: usize, pmax: f64, c2: f64, c1: f64) -> Generator {
 
 /// DC-OPF instance for `case` under the default PaperPure convention. Returns
 /// the `Result` so error-path tests can assert on the failure.
-fn opf_of(case: &Network, units: Units) -> casemat::Result<casemat::OpfInstance> {
+fn opf_of(case: &Network, units: Units) -> powerio_matrix::Result<powerio_matrix::OpfInstance> {
     let view = IndexedNetwork::new(case);
     let inc = build_incidence(&view, DcConvention::PaperPure)?;
     build_opf_instance(&view, &inc, units)
@@ -545,9 +547,11 @@ fn matpower_convention_tap_and_shift() {
 #[test]
 fn bundle_vectors_round_trip() {
     let case = load("../tests/data/case14.m");
-    let dir = std::env::temp_dir().join("casemat_dcopf_vectors_test");
+    let dir = std::env::temp_dir().join("powerio_dcopf_vectors_test");
     let _ = std::fs::remove_dir_all(&dir);
-    let out = casemat::write_dcopf_bundle(&case, &dir, &casemat::DcOpfOptions::default()).unwrap();
+    let out =
+        powerio_matrix::write_dcopf_bundle(&case, &dir, &powerio_matrix::DcOpfOptions::default())
+            .unwrap();
 
     // Default options are PaperPure + PerUnit; rebuild the instance to compare.
     let view = IndexedNetwork::new(&case);
@@ -555,7 +559,7 @@ fn bundle_vectors_round_trip() {
     let opf = build_opf_instance(&view, &inc, Units::PerUnit).unwrap();
 
     let check = |name: &str, want: &[f64]| {
-        let got = casemat::io::read_vector_mtx(out.dir.join(name)).unwrap();
+        let got = powerio_matrix::io::read_vector_mtx(out.dir.join(name)).unwrap();
         assert_eq!(got.len(), want.len(), "{name}: length");
         for (i, (&g, &w)) in got.iter().zip(want).enumerate() {
             assert!((g - w).abs() < 1e-9, "{name}[{i}]={g} != {w}");

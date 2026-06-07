@@ -19,7 +19,7 @@ pub struct CaseMetadata {
     pub n_branches: usize,
     pub build_options: BuildOptions,
     pub matrices: Vec<MatrixMetadata>,
-    pub casemat_version: String,
+    pub powerio_version: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

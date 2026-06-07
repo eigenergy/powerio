@@ -1,9 +1,9 @@
 [package]
-name = "casemat"
+name = "powerio-matrix"
 version = "0.1.0"
 edition = "2024"
 rust-version = "1.86"
-description = "Sparse matrices and graph views for power-system case files: B'/B'', Y_bus, PTDF, LODF, incidence, weighted Laplacian, adjacency, and DC-OPF instance data. Built on caseio."
+description = "Sparse matrices and graph views for power-system case files: B'/B'', Y_bus, PTDF, LODF, incidence, weighted Laplacian, adjacency, and DC-OPF instance data. Built on powerio."
 license = "MIT OR Apache-2.0"
 repository = "https://github.com/eigenergy/caseio"
 keywords = ["power-systems", "matpower", "sparse", "ptdf", "dc-opf"]
@@ -18,11 +18,11 @@ cli = ["dep:clap", "dep:ratatui", "dep:crossterm", "dep:tracing-subscriber"]
 kkt = []
 
 [lib]
-name = "casemat"
+name = "powerio_matrix"
 path = "src/lib.rs"
 
 [[bin]]
-name = "casemat"
+name = "powerio"
 path = "src/main.rs"
 required-features = ["cli"]
 
