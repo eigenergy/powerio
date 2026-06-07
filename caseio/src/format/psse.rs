@@ -25,6 +25,9 @@ const REV: u32 = 33;
 // ---- Writer -----------------------------------------------------------------
 
 #[must_use]
+// A flat serializer: one stanza per PSS/E record type; splitting it would add
+// indirection without clarity.
+#[expect(clippy::too_many_lines)]
 pub fn write_psse(net: &Network) -> Conversion {
     let mut warnings = Vec::new();
     let mut nonfinite = false;
@@ -362,7 +365,7 @@ fn fields(line: &str) -> Vec<String> {
         match c {
             '\'' => quoted = !quoted,
             ',' if !quoted && comma_delimited => {
-                out.push(std::mem::take(&mut cur).trim().to_string())
+                out.push(std::mem::take(&mut cur).trim().to_string());
             }
             c if c.is_whitespace() && !quoted && !comma_delimited => {
                 if !cur.is_empty() {

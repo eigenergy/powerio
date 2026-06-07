@@ -20,6 +20,9 @@ const FMT: &str = "PowerWorld .aux";
 // ---- Writer -----------------------------------------------------------------
 
 #[must_use]
+// A flat serializer: one section per PowerWorld object type; splitting it would
+// add indirection without clarity.
+#[expect(clippy::too_many_lines)]
 pub fn write_powerworld(net: &Network) -> Conversion {
     let mut warnings = Vec::new();
     let mut nonfinite = false;
