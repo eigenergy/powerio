@@ -193,9 +193,6 @@ pub struct Generator {
     /// Real power lower bound (MW).
     pub pmin: f64,
     pub cost: Option<GenCost>,
-    /// Reactive-power cost curve, present only when `mpc.gencost` carries the
-    /// optional second (reactive) block (`2·n_gen` rows).
-    pub reactive_cost: Option<GenCost>,
     /// Columns past `PMIN` (`Pc1, Pc2, Qc1min, Qc1max, Qc2min, Qc2max,
     /// ramp_agc, ramp_10, ramp_30, ramp_q, apf`), kept verbatim so unit
     /// commitment / AGC data isn't silently dropped.
@@ -229,7 +226,6 @@ impl Generator {
             pmax: row[gen_col::PMAX],
             pmin: row[gen_col::PMIN],
             cost: None,
-            reactive_cost: None,
             extra: row[gen_col::REQUIRED..].to_vec(),
         })
     }

@@ -161,7 +161,9 @@ pub fn project_gen_to_bus(c_g: &CsMat<f64>, v: &[f64]) -> Vec<f64> {
     out
 }
 
-/// `Q = diag(q)` as a sparse matrix.
+/// `Q = diag(q)` as a sparse matrix — the quadratic-cost analog of
+/// [`susceptance_diag`](crate::matrix::susceptance_diag). Feeds the DC-OPF QP
+/// objective `½ pᵀ Q p + cᵀ p` consumed by the `kkt` interior-point operators.
 pub fn cost_quadratic_diag(q: &[f64]) -> CsMat<f64> {
     diagonal(q)
 }

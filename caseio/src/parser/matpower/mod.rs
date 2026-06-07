@@ -10,7 +10,7 @@ mod tests;
 
 use std::path::Path;
 
-pub use writer::{write_matpower, write_matpower_file};
+pub use writer::write_matpower;
 
 use crate::case::{Branch, Bus, DcLine, GenCost, Generator, MpcCase, Storage};
 use crate::{Error, Result};
@@ -136,14 +136,11 @@ fn parse_gens<'a>(get: &impl Fn(&str) -> Option<&'a str>) -> Result<Vec<Generato
             });
         }
         // `costs` is consumed here, so move each row into its generator rather
-        // than cloning the `coeffs` Vec. The first `n` are active-power costs;
-        // the next `n` (when present) are reactive-power costs, in gen order.
-        let mut costs = costs.into_iter();
-        for (gen, cost) in gens.iter_mut().zip(costs.by_ref().take(n)) {
-            gen.cost = Some(cost);
-        }
+        // than cloning the `coeffs` Vec. The first `n` rows are the active-power
+        // costs in gen order; any reactive-power second block is accepted by the
+        // count check above but not retained (nothing downstream consumes it).
         for (gen, cost) in gens.iter_mut().zip(costs) {
-            gen.reactive_cost = Some(cost);
+            gen.cost = Some(cost);
         }
     }
 

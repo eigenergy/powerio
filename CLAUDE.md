@@ -88,7 +88,7 @@ casemat/                      # matrices + CLI/TUI on caseio
 │   ├── laplacian.rs         # L = A diag(w) Aᵀ, ground_at, GroundMap, e_r
 │   ├── sensitivity.rs       # PTDF, LODF (self-contained dense Cholesky)
 │   └── opf.rs               # OpfInstance: Q, c, bounds, f̄, C_g, p_d; Units
-├── src/io/                  # mtx (lower-triangle symmetric), npy, meta
+├── src/io/                  # mtx (lower-triangle symmetric), meta
 ├── src/pipeline.rs          # case → square MatrixKind family
 ├── src/opf_pipeline.rs      # case → DC-OPF bundle directory + manifest
 ├── src/synth/               # tree, lattice, pegase-like generators

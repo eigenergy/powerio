@@ -316,9 +316,16 @@ impl Network {
                 })
             }
         };
+        // Format the context only on the error path, not once per branch.
         for (i, br) in self.branches.iter().enumerate() {
-            check(br.from, &format!("branch {i}"))?;
-            check(br.to, &format!("branch {i}"))?;
+            for bus in [br.from, br.to] {
+                if !ids.contains(&bus) {
+                    return Err(Error::FormatRead {
+                        format,
+                        message: format!("branch {i} references unknown bus {bus}"),
+                    });
+                }
+            }
         }
         for l in &self.loads {
             check(l.bus, "load")?;
@@ -439,7 +446,6 @@ fn gen_to_mpc(g: &Generator) -> MpcGen {
         pmax: g.pmax,
         pmin: g.pmin,
         cost: g.cost.clone(),
-        reactive_cost: None,
         extra,
     }
 }
