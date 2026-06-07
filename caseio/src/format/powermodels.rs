@@ -362,6 +362,17 @@ const FMT: &str = "PowerModels JSON";
 /// following PowerModels' own exceptions (storage `ps`/`qs` stay raw, dcline
 /// `pt`/`qf`/`qt` flip sign); `per_unit = false` is read as-is.
 pub fn parse_powermodels_json(content: &str) -> Result<Network> {
+    parse_powermodels_json_source(Arc::new(content.to_owned()), None)
+}
+
+/// Owned-source entry used by the format hub: parse by borrowing `source`, then
+/// move the buffer into the retained source (no copy). `name_hint` (e.g. a file
+/// stem) names the network when the JSON carries no `name`.
+pub(crate) fn parse_powermodels_json_source(
+    source: Arc<String>,
+    name_hint: Option<&str>,
+) -> Result<Network> {
+    let content: &str = &source;
     let root: Value = serde_json::from_str(content).map_err(|e| Error::FormatRead {
         format: FMT,
         message: e.to_string(),
@@ -391,6 +402,7 @@ pub fn parse_powermodels_json(content: &str) -> Result<Network> {
     let name = root
         .get("name")
         .and_then(Value::as_str)
+        .or(name_hint)
         .unwrap_or("case")
         .to_string();
 
@@ -426,7 +438,7 @@ pub fn parse_powermodels_json(content: &str) -> Result<Network> {
             .map(|v| read_hvdc(v, pscale))
             .collect(),
         source_format: SourceFormat::PowerModelsJson,
-        source: Some(Arc::new(content.to_owned())),
+        source: Some(source),
     };
     net.check_references(FMT)?;
     Ok(net)

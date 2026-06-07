@@ -235,6 +235,14 @@ const EMPTY_SECTIONS: [&str; 13] = [
 /// Parse a PSS/E v33 `.raw` into a [`Network`]. Reads bus/load/fixed-shunt/
 /// generator/branch/2-winding-transformer; skips the advanced sections.
 pub fn parse_psse(content: &str) -> Result<Network> {
+    parse_psse_source(Arc::new(content.to_owned()), None)
+}
+
+/// Owned-source entry used by the format hub: parse by borrowing `source`, then
+/// move the buffer into the retained source (no copy). `name_hint` (e.g. a file
+/// stem) names the network when the title line is blank.
+pub(crate) fn parse_psse_source(source: Arc<String>, name_hint: Option<&str>) -> Result<Network> {
+    let content: &str = &source;
     let mut lines = content.lines();
 
     // Header line 1: IC, SBASE, REV, ...
@@ -252,7 +260,7 @@ pub fn parse_psse(content: &str) -> Result<Network> {
     // Line 2 is the case title; we write the network name there, so read it back.
     let title = lines.next().unwrap_or("").trim();
     let name = if title.is_empty() {
-        "case".to_string()
+        name_hint.unwrap_or("case").to_string()
     } else {
         title.to_string()
     };
@@ -315,7 +323,7 @@ pub fn parse_psse(content: &str) -> Result<Network> {
         storage: Vec::new(),
         hvdc: Vec::new(),
         source_format: SourceFormat::Psse,
-        source: Some(Arc::new(content.to_owned())),
+        source: Some(source),
     };
     net.check_references(FMT)?;
     Ok(net)

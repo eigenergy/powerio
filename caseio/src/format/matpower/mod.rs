@@ -37,6 +37,16 @@ pub fn parse_matpower_file(path: impl AsRef<Path>) -> Result<Network> {
     parse_matpower_named(Arc::new(content), &name)
 }
 
+/// Owned-source entry used by the format hub: move the buffer straight into the
+/// retained source (no copy) and take `name_hint` (e.g. the file stem) as the
+/// network name.
+pub(crate) fn parse_matpower_source(
+    source: Arc<String>,
+    name_hint: Option<&str>,
+) -> Result<Network> {
+    parse_matpower_named(source, name_hint.unwrap_or("case"))
+}
+
 fn parse_matpower_named(source: Arc<String>, name: &str) -> Result<Network> {
     // Locate each assignment's text directly in `source` and build the network
     // from those borrowed slices in one pass; the typed model owns its data, so

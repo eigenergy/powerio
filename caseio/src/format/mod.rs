@@ -10,6 +10,7 @@
 //! say) are written as JSON `null`.
 
 use std::collections::BTreeSet;
+use std::sync::Arc;
 
 use serde_json::{Map, Value};
 
@@ -98,25 +99,28 @@ pub fn read_path(path: &std::path::Path, from: Option<&str>) -> Result<Network> 
             }
         },
     };
-    // MATPOWER reads the file itself so the network name comes from the file
-    // stem and the buffer moves straight into the retained source (byte-exact
-    // round-trip); every other reader takes the file contents through the
-    // shared dispatch.
-    match fmt {
-        TargetFormat::Matpower => crate::parse_matpower_file(path),
-        _ => read_text(&std::fs::read_to_string(path)?, fmt),
-    }
+    // Read the file once into an owned buffer and hand it to the format's reader
+    // through the shared dispatch; the reader moves it straight into the
+    // retained source (byte-exact round-trip) with no copy. The file stem is the
+    // name hint for formats that don't carry their own name.
+    let stem = path.file_stem().and_then(|s| s.to_str());
+    read_source(Arc::new(std::fs::read_to_string(path)?), fmt, stem)
 }
 
-/// Dispatch in-memory `content` to the reader for `fmt` — the single
-/// format→reader map, shared by [`read_path`] and [`parse_str`]. EGRET JSON is
-/// write-only.
-fn read_text(content: &str, fmt: TargetFormat) -> Result<Network> {
+/// Read an owned `source` buffer as `fmt`, using `name_hint` (e.g. the file
+/// stem) when the format carries no name of its own. The single format→reader
+/// map: [`parse`], [`parse_str`], and [`read_path`] all funnel through it, so
+/// every format is dispatched the same way. Each reader takes the owned `Arc` so
+/// it moves the buffer straight into the retained source (no copy) and is free
+/// to specialize its parse internally. EGRET JSON is write-only.
+fn read_source(source: Arc<String>, fmt: TargetFormat, name_hint: Option<&str>) -> Result<Network> {
     match fmt {
-        TargetFormat::Matpower => parse_matpower(content),
-        TargetFormat::PowerModelsJson => parse_powermodels_json(content),
-        TargetFormat::Psse => parse_psse(content),
-        TargetFormat::PowerWorld => parse_powerworld(content),
+        TargetFormat::Matpower => matpower::parse_matpower_source(source, name_hint),
+        TargetFormat::PowerModelsJson => {
+            powermodels::parse_powermodels_json_source(source, name_hint)
+        }
+        TargetFormat::Psse => psse::parse_psse_source(source, name_hint),
+        TargetFormat::PowerWorld => powerworld::parse_powerworld_source(source, name_hint),
         TargetFormat::EgretJson => Err(Error::UnknownFormat(
             "EGRET JSON is write-only and cannot be read".to_string(),
         )),
@@ -143,7 +147,7 @@ pub fn parse(path: impl AsRef<std::path::Path>) -> Result<Network> {
 pub fn parse_str(text: &str, format: &str) -> Result<Network> {
     let fmt =
         target_format_from_name(format).ok_or_else(|| Error::UnknownFormat(format.to_string()))?;
-    read_text(text, fmt)
+    read_source(Arc::new(text.to_owned()), fmt, None)
 }
 
 /// Output of a conversion: the serialized text plus any fidelity warnings —

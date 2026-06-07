@@ -217,8 +217,19 @@ fn bus_cat(kind: BusType) -> &'static str {
 /// Parse a PowerWorld `.aux` into a [`Network`], reading the Bus/Load/Shunt/Gen/
 /// Branch `DATA` blocks by their declared field lists.
 pub fn parse_powerworld(content: &str) -> Result<Network> {
+    parse_powerworld_source(Arc::new(content.to_owned()), None)
+}
+
+/// Owned-source entry used by the format hub: parse by borrowing `source`, then
+/// move the buffer into the retained source (no copy). `name_hint` (e.g. a file
+/// stem) names the network when the `.aux` carries no export marker.
+pub(crate) fn parse_powerworld_source(
+    source: Arc<String>,
+    name_hint: Option<&str>,
+) -> Result<Network> {
+    let content: &str = &source;
     let mut base_mva = 100.0;
-    let mut name = "case".to_string();
+    let mut name = name_hint.unwrap_or("case").to_string();
     for line in content.lines() {
         let t = line.trim();
         if let Some(rest) = t.strip_prefix("// baseMVA ") {
@@ -270,7 +281,7 @@ pub fn parse_powerworld(content: &str) -> Result<Network> {
         storage: Vec::new(),
         hvdc: Vec::new(),
         source_format: SourceFormat::PowerWorld,
-        source: Some(Arc::new(content.to_owned())),
+        source: Some(source),
     };
     net.check_references(FMT)?;
     Ok(net)
