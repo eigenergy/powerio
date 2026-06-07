@@ -83,7 +83,7 @@ pub fn write_powermodels_json(net: &Network) -> Conversion {
     }
     if !dcline.is_empty() {
         warnings.push(format!(
-            "{} dcline(s) mapped best-effort; PowerModels' loss-adjusted flow bounds are not derived",
+            "{} dcline(s) mapped best-effort to the PowerModels dcline schema",
             dcline.len()
         ));
     }
@@ -200,11 +200,17 @@ fn gen_obj(g: &Generator, idx: usize, p: f64, base: f64) -> Value {
         }
     }
     if let Some(cost) = &g.cost {
+        let coeffs = cost_coeffs_pu(cost, base);
+        // Emit `ncost` consistent with the coefficients actually written. The reader
+        // un-scales by the array length, so a mismatched `ncost` (from a malformed
+        // row that claimed more coefficients than it carried) would reconstruct the
+        // wrong polynomial degree.
+        let ncost = if cost.model == 1 { coeffs.len() / 2 } else { coeffs.len() };
         m.insert("model".into(), Value::from(u64::from(cost.model)));
-        m.insert("ncost".into(), Value::from(cost.ncost as u64));
+        m.insert("ncost".into(), Value::from(ncost as u64));
         m.insert("startup".into(), jnum(cost.startup));
         m.insert("shutdown".into(), jnum(cost.shutdown));
-        m.insert("cost".into(), Value::Array(cost_coeffs_pu(cost, base)));
+        m.insert("cost".into(), Value::Array(coeffs));
     }
     m.insert("source_id".into(), source_id("gen", idx));
     Value::Object(m)
@@ -224,7 +230,7 @@ fn cost_coeffs_pu(cost: &GenCost, base: f64) -> Vec<Value> {
         coeffs
             .iter()
             .enumerate()
-            .map(|(i, &c)| jnum(c * base.powi((k - 1 - i) as i32)))
+            .map(|(i, &c)| jnum(c * base.powi(i32::try_from(k - 1 - i).unwrap_or(i32::MAX))))
             .collect()
     } else {
         // Piecewise: (mw, cost) pairs. Per unit divides the MW breakpoints (even
@@ -344,8 +350,9 @@ const FMT: &str = "PowerModels JSON";
 /// are read as first-class elements and the raw text is retained, so writing back
 /// to PowerModels JSON is a byte-exact echo. `per_unit = true` input (caseio's own
 /// output, and PowerModels' own export) is converted to the neutral MW/degree
-/// convention (powers ×baseMVA, angles to degrees, cost coefficients un-scaled);
-/// `per_unit = false` is read as-is.
+/// convention (powers ×baseMVA, angles to degrees, cost coefficients un-scaled),
+/// following PowerModels' own exceptions (storage `ps`/`qs` stay raw, dcline
+/// `pt`/`qf`/`qt` flip sign); `per_unit = false` is read as-is.
 pub fn parse_powermodels_json(content: &str) -> Result<Network> {
     let root: Value = serde_json::from_str(content)
         .map_err(|e| Error::FormatRead { format: FMT, message: e.to_string() })?;
@@ -510,10 +517,12 @@ fn read_gen(v: &Value, pscale: f64, base_mva: f64, per_unit: bool) -> Generator 
         bus: uid(v, "gen_bus"),
         pg: f(v, "pg") * pscale,
         qg: f(v, "qg") * pscale,
-        pmax: f(v, "pmax") * pscale,
-        pmin: f(v, "pmin") * pscale,
-        qmax: f(v, "qmax") * pscale,
-        qmin: f(v, "qmin") * pscale,
+        // The writer emits an unbounded limit (±Inf) as JSON null; read a missing
+        // limit back as unbounded, not as a binding 0.0. (±Inf · pscale stays ±Inf.)
+        pmax: f_or(v, "pmax", f64::INFINITY) * pscale,
+        pmin: f_or(v, "pmin", f64::NEG_INFINITY) * pscale,
+        qmax: f_or(v, "qmax", f64::INFINITY) * pscale,
+        qmin: f_or(v, "qmin", f64::NEG_INFINITY) * pscale,
         vg: f_or(v, "vg", 1.0),
         mbase: f_or(v, "mbase", base_mva),
         in_service: flag(v, "gen_status"),
@@ -587,10 +596,11 @@ fn read_hvdc(v: &Value, pscale: f64) -> Hvdc {
         vt: f_or(v, "vt", 1.0),
         pmin,
         pmax,
-        qminf: f(v, "qminf") * pscale,
-        qmaxf: f(v, "qmaxf") * pscale,
-        qmint: f(v, "qmint") * pscale,
-        qmaxt: f(v, "qmaxt") * pscale,
+        // Unbounded reactive limits (±Inf) write as null; read them back unbounded.
+        qminf: f_or(v, "qminf", f64::NEG_INFINITY) * pscale,
+        qmaxf: f_or(v, "qmaxf", f64::INFINITY) * pscale,
+        qmint: f_or(v, "qmint", f64::NEG_INFINITY) * pscale,
+        qmaxt: f_or(v, "qmaxt", f64::INFINITY) * pscale,
         loss0: f(v, "loss0") * pscale,
         loss1: f(v, "loss1"),
         extras: extras_excluding(
@@ -612,8 +622,9 @@ fn read_storage(v: &Value, pscale: f64) -> Storage {
         charge_efficiency: f_or(v, "charge_efficiency", 1.0),
         discharge_efficiency: f_or(v, "discharge_efficiency", 1.0),
         thermal_rating: f(v, "thermal_rating") * pscale,
-        qmin: f(v, "qmin") * pscale,
-        qmax: f(v, "qmax") * pscale,
+        // Unbounded reactive limits (±Inf) write as null; read them back unbounded.
+        qmin: f_or(v, "qmin", f64::NEG_INFINITY) * pscale,
+        qmax: f_or(v, "qmax", f64::INFINITY) * pscale,
         r: f(v, "r"),
         x: f(v, "x"),
         p_loss: f(v, "p_loss") * pscale,
@@ -623,5 +634,76 @@ fn read_storage(v: &Value, pscale: f64) -> Storage {
             v,
             &["storage_bus", "ps", "qs", "energy", "energy_rating", "charge_rating", "discharge_rating", "charge_efficiency", "discharge_efficiency", "thermal_rating", "qmin", "qmax", "r", "x", "p_loss", "q_loss", "status", "index", "source_id"],
         ),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn approx(a: f64, b: f64) -> bool {
+        (a - b).abs() <= 1e-9 * a.abs().max(b.abs()).max(1.0)
+    }
+
+    #[test]
+    fn gen_pu_keys_subset_of_extra_keys() {
+        // The per-unitized columns must be a subset of the emitted capability
+        // columns; a key not in GEN_EXTRA_KEYS would never be written or scaled,
+        // and a typo here silently mis-scales a ramp rate.
+        for k in GEN_PU_KEYS {
+            assert!(GEN_EXTRA_KEYS.contains(&k), "{k} is not a GEN_EXTRA_KEYS column");
+        }
+    }
+
+    #[test]
+    fn dcline_p_bounds_four_quadrants() {
+        // loss0 = 1, loss1 = 0.1 ⇒ l = 0.9. Each sign quadrant of (pmin, pmax)
+        // hand-computed against PowerModels' _mp2pm_dcline!.
+        let q1 = dcline_p_bounds(2.0, 10.0, 1.0, 0.1);
+        assert!(approx(q1.0, 2.0) && approx(q1.1, 10.0) && approx(q1.2, -8.0) && approx(q1.3, -0.8));
+
+        let q2 = dcline_p_bounds(2.0, -5.0, 1.0, 0.1);
+        assert!(approx(q2.0, 2.0) && approx(q2.1, 6.0 / 0.9) && approx(q2.2, -5.0) && approx(q2.3, -0.8));
+
+        let q3 = dcline_p_bounds(-3.0, 10.0, 1.0, 0.1);
+        assert!(approx(q3.0, -2.0 / 0.9) && approx(q3.1, 10.0) && approx(q3.2, -8.0) && approx(q3.3, 3.0));
+
+        let q4 = dcline_p_bounds(-3.0, -5.0, 1.0, 0.1);
+        assert!(approx(q4.0, -2.0 / 0.9) && approx(q4.1, 6.0 / 0.9) && approx(q4.2, -5.0) && approx(q4.3, 3.0));
+    }
+
+    #[test]
+    fn cost_coeffs_pu_polynomial_scales_and_trims() {
+        // Model 2: the coeff of p^j scales by base^j; MATPOWER's trailing-zero
+        // padding (beyond ncost) is dropped.
+        let cost = GenCost {
+            model: 2,
+            startup: 0.0,
+            shutdown: 0.0,
+            ncost: 2,
+            coeffs: vec![24.035, -403.5, 0.0, 0.0, 0.0, 0.0],
+        };
+        let out: Vec<f64> =
+            cost_coeffs_pu(&cost, 100.0).iter().map(|v| v.as_f64().unwrap()).collect();
+        assert_eq!(out.len(), 2, "padding dropped");
+        assert!(approx(out[0], 2403.5)); // 24.035 · 100^1
+        assert!(approx(out[1], -403.5)); // -403.5 · 100^0
+    }
+
+    #[test]
+    fn cost_coeffs_pu_piecewise_scales_mw_only_and_trims() {
+        // Model 1: MW breakpoints (even positions) ÷ base; dollar costs (odd) raw.
+        let cost = GenCost {
+            model: 1,
+            startup: 0.0,
+            shutdown: 0.0,
+            ncost: 4,
+            coeffs: vec![0.0, 0.0, 100.0, 2500.0, 200.0, 5500.0, 250.0, 7250.0, 0.0, 0.0],
+        };
+        let out: Vec<f64> =
+            cost_coeffs_pu(&cost, 100.0).iter().map(|v| v.as_f64().unwrap()).collect();
+        assert_eq!(out.len(), 8, "trimmed to 2·ncost, padding dropped");
+        assert!(approx(out[0], 0.0) && approx(out[2], 1.0) && approx(out[4], 2.0) && approx(out[6], 2.5));
+        assert!(approx(out[1], 0.0) && approx(out[3], 2500.0) && approx(out[5], 5500.0) && approx(out[7], 7250.0));
     }
 }
