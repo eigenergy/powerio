@@ -5,12 +5,12 @@ use rand::Rng;
 use rand::SeedableRng;
 use rand_chacha::ChaCha8Rng;
 
-use crate::case::MpcCase;
+use crate::network::Network;
 
-use super::tree::{make_branch, make_bus};
+use super::tree::{make_branch, make_bus, net};
 use super::SynthSpec;
 
-pub fn generate_pegase_like(spec: &SynthSpec) -> MpcCase {
+pub fn generate_pegase_like(spec: &SynthSpec) -> Network {
     let n = spec.n.max(2);
     let mut rng = ChaCha8Rng::seed_from_u64(spec.seed);
 
@@ -33,5 +33,5 @@ pub fn generate_pegase_like(spec: &SynthSpec) -> MpcCase {
         branches.push(make_branch(i + 1, j + 1, spec, &mut rng));
     }
 
-    MpcCase::new(format!("synth_pegase_n{n}"), 100.0, buses, branches)
+    net(format!("synth_pegase_n{n}"), buses, branches)
 }

@@ -4,12 +4,12 @@
 use rand::SeedableRng;
 use rand_chacha::ChaCha8Rng;
 
-use crate::case::MpcCase;
+use crate::network::Network;
 
-use super::tree::{make_branch, make_bus};
+use super::tree::{make_branch, make_bus, net};
 use super::SynthSpec;
 
-pub fn generate_lattice(spec: &SynthSpec) -> MpcCase {
+pub fn generate_lattice(spec: &SynthSpec) -> Network {
     let side = ((spec.n as f64).sqrt().ceil() as usize).max(2);
     let n = side * side;
     let mut rng = ChaCha8Rng::seed_from_u64(spec.seed);
@@ -28,10 +28,5 @@ pub fn generate_lattice(spec: &SynthSpec) -> MpcCase {
         }
     }
 
-    MpcCase::new(
-        format!("synth_lattice_{side}x{side}"),
-        100.0,
-        buses,
-        branches,
-    )
+    net(format!("synth_lattice_{side}x{side}"), buses, branches)
 }

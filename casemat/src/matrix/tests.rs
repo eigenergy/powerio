@@ -1,34 +1,31 @@
 use approx::assert_relative_eq;
 
-use crate::case::{Branch, Bus, BusType, MpcCase};
 use crate::indexed::IndexedNetwork;
 use crate::matrix::{
     build_bdoubleprime, build_bprime, build_lacpf, build_ybus, BuildOptions, MatrixStats, Scheme,
 };
+use crate::network::{Branch, Bus, BusType, Extras, Network, Shunt, SourceFormat};
 
-fn bus(id: usize, kind: BusType, gs: f64, bs: f64) -> Bus {
+fn bus(id: usize, kind: BusType) -> Bus {
     Bus {
         id,
         kind,
-        pd: 0.0,
-        qd: 0.0,
-        gs,
-        bs,
-        area: 1,
         vm: 1.0,
         va: 0.0,
         base_kv: 345.0,
-        zone: 1,
         vmax: 1.1,
         vmin: 0.9,
+        area: 1,
+        zone: 1,
         name: None,
+        extras: Extras::new(),
     }
 }
 
 fn br(from: usize, to: usize, r: f64, x: f64, b: f64) -> Branch {
     Branch {
-        from_id: from,
-        to_id: to,
+        from,
+        to,
         r,
         x,
         b,
@@ -37,33 +34,32 @@ fn br(from: usize, to: usize, r: f64, x: f64, b: f64) -> Branch {
         rate_c: 0.0,
         tap: 0.0,
         shift: 0.0,
-        status: 1.0,
+        in_service: true,
         angmin: -360.0,
         angmax: 360.0,
+        extras: Extras::new(),
     }
 }
 
-fn three_bus() -> MpcCase {
-    MpcCase::new(
-        "tiny",
-        100.0,
-        vec![
-            bus(1, BusType::Ref, 0.0, 0.0),
-            bus(2, BusType::Pq, 0.0, 0.0),
-            bus(3, BusType::Pq, 0.0, 0.0),
-        ],
-        vec![
-            br(1, 2, 0.0, 0.1, 0.0),
-            br(1, 3, 0.0, 0.2, 0.0),
-            br(2, 3, 0.0, 0.25, 0.0),
-        ],
-    )
+fn three_bus() -> Network {
+    Network {
+        name: "tiny".into(),
+        base_mva: 100.0,
+        buses: vec![bus(1, BusType::Ref), bus(2, BusType::Pq), bus(3, BusType::Pq)],
+        loads: Vec::new(),
+        shunts: Vec::new(),
+        branches: vec![br(1, 2, 0.0, 0.1, 0.0), br(1, 3, 0.0, 0.2, 0.0), br(2, 3, 0.0, 0.25, 0.0)],
+        generators: Vec::new(),
+        storage: Vec::new(),
+        hvdc: Vec::new(),
+        source_format: SourceFormat::InMemory,
+        source: None,
+    }
 }
 
 #[test]
 fn bprime_three_bus_has_correct_structure() {
-    let case = three_bus();
-    let net = case.to_network();
+    let net = three_bus();
     let view = IndexedNetwork::new(&net);
     let b = build_bprime(&view, &BuildOptions::default()).unwrap();
     assert_eq!(b.rows(), 3);
@@ -86,8 +82,7 @@ fn bprime_three_bus_has_correct_structure() {
 
 #[test]
 fn bprime_is_symmetric_and_laplacian() {
-    let case = three_bus();
-    let net = case.to_network();
+    let net = three_bus();
     let view = IndexedNetwork::new(&net);
     let b = build_bprime(&view, &BuildOptions::default()).unwrap();
     let stats = MatrixStats::from_csr(&b);
@@ -99,9 +94,8 @@ fn bprime_is_symmetric_and_laplacian() {
 
 #[test]
 fn bprime_ignores_out_of_service() {
-    let mut case = three_bus();
-    case.branches[0].status = 0.0;
-    let net = case.to_network();
+    let mut net = three_bus();
+    net.branches[0].in_service = false;
     let view = IndexedNetwork::new(&net);
     let b = build_bprime(&view, &BuildOptions::default()).unwrap();
     let dense = b.to_dense();
@@ -112,11 +106,10 @@ fn bprime_ignores_out_of_service() {
 
 #[test]
 fn xb_and_bx_disagree_when_resistance_present() {
-    let mut case = three_bus();
-    for b in &mut case.branches {
+    let mut net = three_bus();
+    for b in &mut net.branches {
         b.r = 0.05;
     }
-    let net = case.to_network();
     let view = IndexedNetwork::new(&net);
     let xb = build_bprime(
         &view,
@@ -143,12 +136,14 @@ fn xb_and_bx_disagree_when_resistance_present() {
 
 #[test]
 fn bdoubleprime_with_shunts_is_strictly_dominant() {
-    let mut case = three_bus();
-    // Add capacitive shunts to break the singularity.
-    case.buses[0].bs = -10.0; // negative bs → -bs/baseMVA > 0 contribution
-    case.buses[1].bs = -10.0;
-    case.buses[2].bs = -10.0;
-    let net = case.to_network();
+    let mut net = three_bus();
+    // Add capacitive shunts to break the singularity (negative bs → positive
+    // contribution to −Im(Y_bus)).
+    net.shunts = vec![
+        Shunt { bus: 1, g: 0.0, b: -10.0, in_service: true, extras: Extras::new() },
+        Shunt { bus: 2, g: 0.0, b: -10.0, in_service: true, extras: Extras::new() },
+        Shunt { bus: 3, g: 0.0, b: -10.0, in_service: true, extras: Extras::new() },
+    ];
     let view = IndexedNetwork::new(&net);
     let bpp = build_bdoubleprime(&view, &BuildOptions::default()).unwrap();
     let stats = MatrixStats::from_csr(&bpp);
@@ -158,8 +153,7 @@ fn bdoubleprime_with_shunts_is_strictly_dominant() {
 #[test]
 fn ybus_reciprocity_and_symmetry() {
     // Without taps and shifts, Y_ij == Y_ji.
-    let case = three_bus();
-    let net = case.to_network();
+    let net = three_bus();
     let view = IndexedNetwork::new(&net);
     let parts = build_ybus(&view, &BuildOptions::default()).unwrap();
     let g = parts.g.to_dense();
@@ -174,8 +168,7 @@ fn ybus_reciprocity_and_symmetry() {
 
 #[test]
 fn lacpf_block_is_2n_by_2n() {
-    let case = three_bus();
-    let net = case.to_network();
+    let net = three_bus();
     let view = IndexedNetwork::new(&net);
     let j = build_lacpf(&view, &BuildOptions::default()).unwrap();
     assert_eq!(j.rows(), 6);

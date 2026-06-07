@@ -64,7 +64,7 @@ fn typed_data_survives_round_trip() {
         assert_eq!(reparsed.base_mva, case.base_mva, "{where_}: baseMVA");
         assert_eq!(reparsed.buses.len(), case.buses.len(), "{where_}: buses");
         assert_eq!(reparsed.branches.len(), case.branches.len(), "{where_}: branches");
-        assert_eq!(reparsed.gens.len(), case.gens.len(), "{where_}: gens");
+        assert_eq!(reparsed.generators.len(), case.generators.len(), "{where_}: gens");
         assert_eq!(reparsed.storage.len(), case.storage.len(), "{where_}: storage");
     }
 }
@@ -85,13 +85,13 @@ fn parses_bus_names() {
 #[test]
 fn parses_hvdc_dclines() {
     let case = parse_matpower_file(data_dir().join("t_case9_dcline.m")).unwrap();
-    assert!(!case.dclines.is_empty(), "mpc.dcline not parsed");
-    let dc = &case.dclines[0];
-    assert_eq!((dc.from_id, dc.to_id), (30, 4));
+    assert!(!case.hvdc.is_empty(), "mpc.dcline not parsed");
+    let dc = &case.hvdc[0];
+    assert_eq!((dc.from, dc.to), (30, 4));
     assert_eq!(dc.pf, 10.0);
     // HVDC survives the round-trip (document passthrough).
     let reparsed = parse_matpower(&write_matpower(&case)).unwrap();
-    assert_eq!(reparsed.dclines.len(), case.dclines.len());
+    assert_eq!(reparsed.hvdc.len(), case.hvdc.len());
 }
 
 #[test]
@@ -100,7 +100,7 @@ fn captures_extra_generator_columns() {
     // be silently dropped.
     let case = parse_matpower_file(data_dir().join("case9.m")).unwrap();
     assert!(
-        !case.gens[0].extra.is_empty(),
+        !case.generators[0].extras.is_empty(),
         "generator columns past PMIN were dropped"
     );
 }

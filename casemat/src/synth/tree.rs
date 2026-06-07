@@ -4,11 +4,11 @@ use rand::Rng;
 use rand::SeedableRng;
 use rand_chacha::ChaCha8Rng;
 
-use crate::case::{Branch, Bus, BusType, MpcCase};
+use crate::network::{Branch, Bus, BusType, Extras, Network, SourceFormat};
 
 use super::SynthSpec;
 
-pub fn generate_tree(spec: &SynthSpec) -> MpcCase {
+pub fn generate_tree(spec: &SynthSpec) -> Network {
     let n = spec.n.max(2);
     let mut rng = ChaCha8Rng::seed_from_u64(spec.seed);
     let buses: Vec<Bus> = (0..n).map(|i| make_bus(i + 1)).collect();
@@ -20,31 +20,46 @@ pub fn generate_tree(spec: &SynthSpec) -> MpcCase {
         branches.push(make_branch(parent + 1, k + 1, spec, &mut rng));
     }
 
-    MpcCase::new(format!("synth_tree_n{n}"), 100.0, buses, branches)
+    net(format!("synth_tree_n{n}"), buses, branches)
+}
+
+/// Wrap synthesized buses and branches into an in-memory [`Network`]: no loads,
+/// shunts, generators, or source document.
+pub(super) fn net(name: String, buses: Vec<Bus>, branches: Vec<Branch>) -> Network {
+    Network {
+        name,
+        base_mva: 100.0,
+        buses,
+        loads: Vec::new(),
+        shunts: Vec::new(),
+        branches,
+        generators: Vec::new(),
+        storage: Vec::new(),
+        hvdc: Vec::new(),
+        source_format: SourceFormat::InMemory,
+        source: None,
+    }
 }
 
 pub(crate) fn make_bus(id: usize) -> Bus {
     Bus {
         id,
         kind: BusType::Pq,
-        pd: 0.0,
-        qd: 0.0,
-        gs: 0.0,
-        bs: 0.0,
-        area: 1,
         vm: 1.0,
         va: 0.0,
         base_kv: 345.0,
-        zone: 1,
         vmax: 1.1,
         vmin: 0.9,
+        area: 1,
+        zone: 1,
         name: None,
+        extras: Extras::new(),
     }
 }
 
 pub(crate) fn make_branch(
-    from_id: usize,
-    to_id: usize,
+    from: usize,
+    to: usize,
     spec: &SynthSpec,
     rng: &mut ChaCha8Rng,
 ) -> Branch {
@@ -55,8 +70,8 @@ pub(crate) fn make_branch(
     let x = log_x.exp().max(1e-6);
     let r = spec.r_over_x * x;
     Branch {
-        from_id,
-        to_id,
+        from,
+        to,
         r,
         x,
         b: 0.0,
@@ -65,8 +80,9 @@ pub(crate) fn make_branch(
         rate_c: 0.0,
         tap: 0.0,
         shift: 0.0,
-        status: 1.0,
+        in_service: true,
         angmin: -360.0,
         angmax: 360.0,
+        extras: Extras::new(),
     }
 }

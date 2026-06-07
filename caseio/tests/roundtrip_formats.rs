@@ -90,7 +90,7 @@ fn roundtrippable() -> Vec<Roundtrippable> {
 #[test]
 fn core_preserved_through_each_format() {
     for case in CASES {
-        let net0 = parse_matpower_file(data(case)).unwrap().to_network();
+        let net0 = parse_matpower_file(data(case)).unwrap();
         let fp0 = fingerprint(&net0);
         for fmt in roundtrippable() {
             let net1 = (fmt.read)(&(fmt.write)(&net0));
@@ -107,7 +107,7 @@ fn core_preserved_through_each_format() {
 #[test]
 fn reader_writer_is_idempotent() {
     for case in CASES {
-        let net0 = parse_matpower_file(data(case)).unwrap().to_network();
+        let net0 = parse_matpower_file(data(case)).unwrap();
         for fmt in roundtrippable() {
             let t0 = (fmt.write)(&net0);
             let t1 = (fmt.write)(&(fmt.read)(&t0));
@@ -119,7 +119,7 @@ fn reader_writer_is_idempotent() {
 #[test]
 fn same_format_round_trip_is_byte_exact() {
     for case in CASES {
-        let net0 = parse_matpower_file(data(case)).unwrap().to_network();
+        let net0 = parse_matpower_file(data(case)).unwrap();
         for fmt in roundtrippable() {
             let text = (fmt.write)(&net0);
             let net_from_text = (fmt.read)(&text); // carries source = text, format = fmt
@@ -136,7 +136,7 @@ fn same_format_round_trip_is_byte_exact() {
 #[test]
 fn cross_format_powermodels_to_psse_and_powerworld() {
     // A non-MATPOWER source through the hub to two other formats, core preserved.
-    let net0 = parse_matpower_file(data("case30.m")).unwrap().to_network();
+    let net0 = parse_matpower_file(data("case30.m")).unwrap();
     let pm = write_powermodels_json(&net0).text;
     let from_pm = parse_powermodels_json(&pm).unwrap();
     let fp = fingerprint(&net0);
@@ -148,7 +148,7 @@ fn cross_format_powermodels_to_psse_and_powerworld() {
 fn egret_write_side_only() {
     // No EGRET reader yet: confirm valid JSON and clean warnings (case30 has no
     // dcline/storage to drop).
-    let net0 = parse_matpower_file(data("case30.m")).unwrap().to_network();
+    let net0 = parse_matpower_file(data("case30.m")).unwrap();
     let conv = write_egret_json(&net0);
     let v: serde_json::Value = serde_json::from_str(&conv.text).unwrap();
     assert!(v["elements"]["bus"].as_object().unwrap().len() == net0.buses.len());

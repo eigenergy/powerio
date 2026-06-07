@@ -10,8 +10,8 @@ use std::path::{Path, PathBuf};
 use serde::Serialize;
 use sprs::CsMat;
 
-use crate::case::MpcCase;
 use crate::indexed::IndexedNetwork;
+use crate::network::Network;
 use crate::io::mtx::{write_mtx, write_vector_mtx};
 use crate::matrix::incidence::{DcConvention, build_flow_map, build_incidence};
 use crate::matrix::laplacian::{build_weighted_laplacian, ground_at, unit_vector};
@@ -46,12 +46,11 @@ struct DcOpfMeta {
 
 /// Build and write the DC-OPF bundle into `out_dir/<case>_dcopf/`.
 pub fn write_dcopf_bundle(
-    case: &MpcCase,
+    net: &Network,
     out_dir: impl AsRef<Path>,
     opts: &DcOpfOptions,
 ) -> Result<DcOpfOutputs> {
-    let net = case.to_network();
-    let view = IndexedNetwork::new(&net);
+    let view = IndexedNetwork::new(net);
 
     let dir = out_dir.as_ref().join(format!("{}_dcopf", view.name()));
     std::fs::create_dir_all(&dir)?;

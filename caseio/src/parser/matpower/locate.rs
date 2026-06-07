@@ -2,7 +2,7 @@
 //!
 //! The parser borrows each assignment's raw text straight from the source and
 //! hands it to the typed row/scalar/cell parsers. Lossless round-trip needs no
-//! structured model here: [`MpcCase`](crate::MpcCase) keeps the original source
+//! structured model here: [`Network`](crate::Network) keeps the original source
 //! text and the writer echoes it, so this module only has to find where each
 //! field's text begins and ends.
 

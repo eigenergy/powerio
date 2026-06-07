@@ -10,7 +10,7 @@
 use serde_json::{Map, Value};
 
 use super::{finish, jnum, Conversion};
-use crate::case::{BusType, GenCost};
+use crate::network::{BusType, GenCost};
 use crate::network::{Branch, Bus, Generator, Load, Network, Shunt};
 
 #[must_use]

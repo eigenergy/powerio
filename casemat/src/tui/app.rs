@@ -11,7 +11,7 @@ use std::time::Instant;
 
 use sprs::CsMat;
 
-use crate::case::MpcCase;
+use crate::network::Network;
 use crate::matrix::{MatrixStats, sddm_check};
 use crate::pipeline::{MatrixKind, RhsKind};
 use crate::synth::{SynthSpec, Topology};
@@ -66,7 +66,7 @@ pub struct MatrixCell {
 
 #[derive(Debug, Clone)]
 pub struct InspectState {
-    pub case: MpcCase,
+    pub case: Network,
     pub kind: MatrixKind,
     pub kind_idx: usize,
     pub matrices: BTreeMap<MatrixKindOrd, MatrixCell>,
@@ -149,7 +149,7 @@ impl SynthField {
 pub struct SynthState {
     pub spec: SynthSpec,
     pub field: SynthField,
-    pub generated: Option<MpcCase>,
+    pub generated: Option<Network>,
 }
 
 impl Default for SynthState {
@@ -238,7 +238,7 @@ impl App {
             if matches!(entry.parsed, ParseStatus::NotLoaded) {
                 entry.parsed = match crate::parse_matpower_file(&entry.path) {
                     Ok(case) => ParseStatus::Loaded {
-                        n_buses: case.n(),
+                        n_buses: case.buses.len(),
                         n_branches: case.branches.len(),
                         base_mva: case.base_mva,
                     },
@@ -260,13 +260,12 @@ impl App {
         Ok(())
     }
 
-    pub fn build_inspect(&self, case: MpcCase) -> crate::Result<InspectState> {
+    pub fn build_inspect(&self, case: Network) -> crate::Result<InspectState> {
         let opts = crate::matrix::BuildOptions {
             scheme: self.scheme,
             ..Default::default()
         };
-        let net = case.to_network();
-        let view = crate::IndexedNetwork::new(&net);
+        let view = crate::IndexedNetwork::new(&case);
         let mut matrices = BTreeMap::new();
         for &kind in MatrixKind::ALL {
             let mat = match kind {

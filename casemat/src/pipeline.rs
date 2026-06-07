@@ -1,6 +1,6 @@
 //! Orchestrates a single case → output directory.
 //!
-//! Given a parsed `MpcCase`, builds the requested matrix family, writes
+//! Given a parsed `Network`, builds the requested matrix family, writes
 //! `.mtx` files, and emits a `meta.json` sidecar describing what was
 //! produced. Used by both the `batch` CLI subcommand and the TUI's
 //! batch export screen.
@@ -12,8 +12,8 @@ use rand::distr::{Distribution, StandardUniform};
 use rand_chacha::ChaCha8Rng;
 use serde::{Deserialize, Serialize};
 
-use crate::case::MpcCase;
 use crate::indexed::IndexedNetwork;
+use crate::network::Network;
 use crate::io::meta::{CaseMetadata, MatrixMetadata, write_meta_json};
 use crate::io::mtx::{write_mtx, write_vector_mtx};
 use crate::matrix::{
@@ -111,12 +111,11 @@ pub struct PipelineOutputs {
 }
 
 impl Pipeline {
-    pub fn run(&self, case: &MpcCase, out_dir: impl AsRef<Path>) -> Result<PipelineOutputs> {
+    pub fn run(&self, net: &Network, out_dir: impl AsRef<Path>) -> Result<PipelineOutputs> {
         let out_dir = out_dir.as_ref();
         std::fs::create_dir_all(out_dir)?;
 
-        let net = case.to_network();
-        let view = IndexedNetwork::new(&net);
+        let view = IndexedNetwork::new(net);
 
         let mut files = Vec::new();
         let mut matrices_meta = Vec::new();
@@ -173,7 +172,7 @@ impl Pipeline {
             matrices: matrices_meta,
             casemat_version: env!("CARGO_PKG_VERSION").to_string(),
         };
-        let meta_path = out_dir.join(format!("{}_meta.json", case.name));
+        let meta_path = out_dir.join(format!("{}_meta.json", view.name()));
         write_meta_json(&metadata, &meta_path)?;
         files.push(meta_path);
 
