@@ -10,6 +10,18 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
+  fmt:
+    name: rustfmt
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+    - uses: dtolnay/rust-toolchain@stable
+      with:
+        components: rustfmt
+    # The tree is rustfmt-clean (style_edition 2024); keep it that way.
+    - name: Check formatting
+      run: cargo fmt --all --check
+
   build:
     runs-on: ubuntu-latest
     steps:
