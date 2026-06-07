@@ -1,5 +1,5 @@
 //! Median parse time for one `.m` file. `cargo run --release --example timeparse -- <path>`.
-//! `parse_matpower` builds the typed `MpcCase` and retains the source text for a
+//! `parse_matpower` builds the typed `Network` and retains the source text for a
 //! byte-exact round-trip; this is the single parse path benchmarked against
 //! other parsers.
 fn median(f: impl Fn()) -> f64 {
@@ -28,7 +28,7 @@ fn main() {
     let case = caseio::parse_matpower(&src).unwrap();
     println!(
         "{parse:.3} ms  buses={} branches={}",
-        case.n(),
+        case.buses.len(),
         case.branches.len()
     );
 }

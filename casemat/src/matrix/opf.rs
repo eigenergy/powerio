@@ -56,7 +56,7 @@ pub struct OpfInstance {
     pub pmin_gen: Vec<f64>,
     /// Generator→bus incidence, `n × n_gen`, one `1` per column.
     pub c_g: CsMat<f64>,
-    /// Column `g` → index into `case.gens`.
+    /// Column `g` → index into the in-service generators.
     pub gen_of_col: Vec<usize>,
 }
 

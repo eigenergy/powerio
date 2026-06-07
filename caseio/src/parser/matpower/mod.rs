@@ -2,6 +2,7 @@
 
 mod locate;
 mod matlab;
+mod rows;
 mod tokens;
 mod writer;
 
@@ -9,19 +10,20 @@ mod writer;
 mod tests;
 
 use std::path::Path;
+use std::sync::Arc;
 
 pub use writer::write_matpower;
 
-use crate::case::{Branch, Bus, DcLine, GenCost, Generator, MpcCase, Storage};
+use crate::network::{Generator, Network, SourceFormat};
 use crate::{Error, Result};
 
-/// Parse the MATPOWER case in `content` and return a domain `MpcCase`.
-pub fn parse_matpower(content: &str) -> Result<MpcCase> {
+/// Parse the MATPOWER case in `content` into a [`Network`].
+pub fn parse_matpower(content: &str) -> Result<Network> {
     parse_matpower_named(content, "case")
 }
 
-/// Parse the MATPOWER case at `path`, using the file stem as `MpcCase::name`.
-pub fn parse_matpower_file(path: impl AsRef<Path>) -> Result<MpcCase> {
+/// Parse the MATPOWER case at `path`, using the file stem as the network name.
+pub fn parse_matpower_file(path: impl AsRef<Path>) -> Result<Network> {
     let path = path.as_ref();
     let content = std::fs::read_to_string(path)?;
     let name = path
@@ -32,43 +34,58 @@ pub fn parse_matpower_file(path: impl AsRef<Path>) -> Result<MpcCase> {
     parse_matpower_named(&content, &name)
 }
 
-fn parse_matpower_named(content: &str, name: &str) -> Result<MpcCase> {
-    // Locate each assignment's text directly in `content` and build the typed
-    // case from those borrowed slices in one pass. The case keeps the original
+fn parse_matpower_named(content: &str, name: &str) -> Result<Network> {
+    // Locate each assignment's text directly in `content` and build the network
+    // from those borrowed slices in one pass. The network keeps the original
     // source text so the writer can echo it for a byte-exact round-trip.
     let located = locate::locate_assignments(content);
-    let case = build_case(name, |field| {
+    let mut net = build_case(name, |field| {
         located
             .iter()
             .find(|(f, _)| *f == field)
             .map(|(_, full)| *full)
     })?;
-    Ok(case.with_source(content))
+    net.source = Some(Arc::from(content));
+    Ok(net)
 }
 
-/// Build the typed [`MpcCase`] from a per-field assignment-text accessor `get`,
-/// which returns the raw `mpc.<field> = …;` text for a field name. The caller
-/// attaches the source text afterward so the case can round-trip.
-fn build_case<'a>(name: &str, get: impl Fn(&str) -> Option<&'a str>) -> Result<MpcCase> {
+/// Build a [`Network`] from a per-field assignment-text accessor `get`, which
+/// returns the raw `mpc.<field> = …;` text for a field name. MATPOWER folds
+/// demand and shunts onto the bus row; [`rows::bus_row`] splits them back out
+/// into the hub's first-class [`Load`](crate::network::Load) /
+/// [`Shunt`](crate::network::Shunt). The caller attaches the source afterward.
+fn build_case<'a>(name: &str, get: impl Fn(&str) -> Option<&'a str>) -> Result<Network> {
     let base_mva = get("baseMVA")
         .and_then(|raw| matlab::scalar_from_assignment(raw, "baseMVA").transpose())
         .transpose()?
         .ok_or(Error::MissingField("baseMVA"))?;
 
-    let mut buses = parse_rows(
-        get("bus").ok_or(Error::MissingField("bus"))?,
-        "bus",
-        Bus::from_row,
-    )?;
+    let bus_raw = get("bus").ok_or(Error::MissingField("bus"))?;
+    let n_bus = estimate_rows(bus_raw);
+    let mut buses = Vec::with_capacity(n_bus);
+    let mut loads = Vec::with_capacity(n_bus);
+    let mut shunts = Vec::with_capacity(n_bus);
+    matlab::for_each_matrix_row(bus_raw, "bus", |row, i| {
+        let (bus, load, shunt) = rows::bus_row(row, i)?;
+        buses.push(bus);
+        if let Some(l) = load {
+            loads.push(l);
+        }
+        if let Some(s) = shunt {
+            shunts.push(s);
+        }
+        Ok(())
+    })?;
+
     let branches = parse_rows(
         get("branch").ok_or(Error::MissingField("branch"))?,
         "branch",
-        Branch::from_row,
+        rows::branch_row,
     )?;
 
-    let gens = parse_gens(&get)?;
-    let storage = parse_optional(&get, "storage", Storage::from_row)?;
-    let dclines = parse_optional(&get, "dcline", DcLine::from_row)?;
+    let generators = parse_gens(&get)?;
+    let storage = parse_optional(&get, "storage", rows::storage_row)?;
+    let hvdc = parse_optional(&get, "dcline", rows::hvdc_row)?;
 
     // Bus names live in a `{...}` cell array; pull them (quotes kept) and attach
     // by position when the count matches.
@@ -81,10 +98,25 @@ fn build_case<'a>(name: &str, get: impl Fn(&str) -> Option<&'a str>) -> Result<M
         }
     }
 
-    Ok(MpcCase::new(name, base_mva, buses, branches)
-        .with_gens(gens)
-        .with_storage(storage)
-        .with_dclines(dclines))
+    Ok(Network {
+        name: name.to_string(),
+        base_mva,
+        buses,
+        loads,
+        shunts,
+        branches,
+        generators,
+        storage,
+        hvdc,
+        source_format: SourceFormat::Matpower,
+        source: None,
+    })
+}
+
+/// A cheap upper-bound row count for an assignment (one `;` per row), used to
+/// pre-size the typed vectors so parsing doesn't reallocate as it streams.
+fn estimate_rows(assignment: &str) -> usize {
+    assignment.bytes().filter(|&b| b == b';').count()
 }
 
 /// Stream the rows of one assignment, building a typed `T` per row via `ctor`.
@@ -93,7 +125,7 @@ fn parse_rows<T>(
     field: &str,
     ctor: impl Fn(&[f64], usize) -> Result<T>,
 ) -> Result<Vec<T>> {
-    let mut out = Vec::new();
+    let mut out = Vec::with_capacity(estimate_rows(assignment));
     matlab::for_each_matrix_row(assignment, field, |row, i| {
         out.push(ctor(row, i)?);
         Ok(())
@@ -119,26 +151,20 @@ fn parse_gens<'a>(get: &impl Fn(&str) -> Option<&'a str>) -> Result<Vec<Generato
     let Some(raw) = get("gen") else {
         return Ok(Vec::new());
     };
-    let mut gens = parse_rows(raw, "gen", Generator::from_row)?;
+    let mut gens = parse_rows(raw, "gen", rows::gen_row)?;
 
     // MATPOWER lays the active-power costs first, one row per generator and in
     // the same order; reactive-power costs (if any) follow in a second block.
     if let Some(craw) = get("gencost") {
-        let costs = parse_rows(craw, "gencost", GenCost::from_row)?;
+        let costs = parse_rows(craw, "gencost", rows::gencost_row)?;
         // Reject a count that is neither `n_gen` (active only) nor `2·n_gen`
-        // (active + reactive). A per-row defect (e.g. a short row) surfaces as
-        // `ShortRow` from the parse above before this count check runs.
+        // (active + reactive). A per-row defect surfaces as `ShortRow` first.
         let n = gens.len();
         if costs.len() != n && costs.len() != 2 * n {
-            return Err(Error::GenCostCountMismatch {
-                gens: n,
-                gencost: costs.len(),
-            });
+            return Err(Error::GenCostCountMismatch { gens: n, gencost: costs.len() });
         }
-        // `costs` is consumed here, so move each row into its generator rather
-        // than cloning the `coeffs` Vec. The first `n` rows are the active-power
-        // costs in gen order; any reactive-power second block is accepted by the
-        // count check above but not retained (nothing downstream consumes it).
+        // The first `n` rows are the active-power costs in gen order; any
+        // reactive-power second block is accepted but not retained.
         for (gen, cost) in gens.iter_mut().zip(costs) {
             gen.cost = Some(cost);
         }

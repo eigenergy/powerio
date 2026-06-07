@@ -1,6 +1,7 @@
 use super::parse_matpower as parse_mpc;
-use crate::case::MpcCase;
 use super::write_matpower;
+use crate::indexed::IndexedNetwork;
+use crate::network::SourceFormat;
 
 const CASE_TINY: &str = r#"
 function mpc = tiny
@@ -24,19 +25,20 @@ mpc.branch = [
 
 #[test]
 fn parses_tiny_case() {
-    let mpc = parse_mpc(CASE_TINY).expect("parse tiny");
-    assert_eq!(mpc.base_mva, 100.0);
-    assert_eq!(mpc.buses.len(), 3);
-    assert_eq!(mpc.branches.len(), 2);
-    // First bus
-    assert_eq!(mpc.buses[0].id, 1);
-    assert_eq!(mpc.buses[0].pd, 0.0);
-    // Branch 0: 1->2, r=0.02, x=0.06
-    assert_eq!(mpc.branches[0].from_id, 1);
-    assert_eq!(mpc.branches[0].to_id, 2);
-    assert!((mpc.branches[0].r - 0.02).abs() < 1e-12);
-    assert!((mpc.branches[0].x - 0.06).abs() < 1e-12);
-    assert_eq!(mpc.branches[0].status, 1.0);
+    let net = parse_mpc(CASE_TINY).expect("parse tiny");
+    assert_eq!(net.base_mva, 100.0);
+    assert_eq!(net.buses.len(), 3);
+    assert_eq!(net.branches.len(), 2);
+    // First bus has zero demand, so it produces no load; buses 2 and 3 do.
+    assert_eq!(net.buses[0].id, 1);
+    assert_eq!(net.loads.len(), 2);
+    assert!(net.loads.iter().all(|l| l.bus != 1));
+    // Branch 0: 1->2, r=0.02, x=0.06, in service.
+    assert_eq!(net.branches[0].from, 1);
+    assert_eq!(net.branches[0].to, 2);
+    assert!((net.branches[0].r - 0.02).abs() < 1e-12);
+    assert!((net.branches[0].x - 0.06).abs() < 1e-12);
+    assert!(net.branches[0].in_service);
 }
 
 #[test]
@@ -52,11 +54,12 @@ mpc.branch = [
     7  42  0.01  0.05  0.02  0  0  0  0  0  1  -360  360;
 ];
 "#;
-    let mpc = parse_mpc(src).expect("parse sparse-ids");
-    assert_eq!(mpc.n(), 2);
-    assert_eq!(mpc.bus_index(7), Some(0));
-    assert_eq!(mpc.bus_index(42), Some(1));
-    assert_eq!(mpc.bus_index(99), None);
+    let net = parse_mpc(src).expect("parse sparse-ids");
+    assert_eq!(net.buses.len(), 2);
+    let g = IndexedNetwork::new(&net);
+    assert_eq!(g.bus_index(7), Some(0));
+    assert_eq!(g.bus_index(42), Some(1));
+    assert_eq!(g.bus_index(99), None);
 }
 
 #[test]
@@ -108,24 +111,24 @@ mpc.storage = [
     1  0.0  0.0  0.50  200.0  100.0  100.0  0.95 0.9   500   -500   500   0.2  0.02  0  0  0;
 ];
 "#;
-    let mpc = parse_mpc(src).expect("parse storage");
-    assert_eq!(mpc.storage.len(), 2);
-    let s = &mpc.storage[0];
-    assert_eq!(s.bus_id, 4);
+    let net = parse_mpc(src).expect("parse storage");
+    assert_eq!(net.storage.len(), 2);
+    let s = &net.storage[0];
+    assert_eq!(s.bus, 4);
     assert!((s.energy - 1.0).abs() < 1e-12);
     assert!((s.energy_rating - 600.0).abs() < 1e-12);
     assert!((s.charge_efficiency - 0.9).abs() < 1e-12);
     assert!((s.discharge_efficiency - 0.85).abs() < 1e-12);
     assert!((s.qmin - (-1000.0)).abs() < 1e-12);
     assert!((s.x - 0.01).abs() < 1e-12);
-    assert!(s.is_in_service());
-    assert!(!mpc.storage[1].is_in_service());
+    assert!(s.in_service);
+    assert!(!net.storage[1].in_service);
 }
 
 #[test]
 fn absent_storage_is_empty() {
-    let mpc = parse_mpc(CASE_TINY).expect("parse tiny");
-    assert!(mpc.storage.is_empty());
+    let net = parse_mpc(CASE_TINY).expect("parse tiny");
+    assert!(net.storage.is_empty());
 }
 
 #[test]
@@ -173,20 +176,21 @@ fn accepts_last_row_without_trailing_semicolon() {
                mpc.branch = [\n\
                \t1 2 0.01 0.05 0.02 0 0 0 0 0 1 -360 360;\n\
                ];\n";
-    let mpc = parse_mpc(src).expect("closed matrix with unterminated last row");
-    assert_eq!(mpc.buses.len(), 2);
+    let net = parse_mpc(src).expect("closed matrix with unterminated last row");
+    assert_eq!(net.buses.len(), 2);
 }
 
 #[test]
 fn parsed_case_keeps_source_in_memory_case_does_not() {
-    // A case parsed from text retains its source so the writer echoes it
-    // verbatim; a case built in memory has no source and writes canonically.
+    // A network parsed from text retains its source so the writer echoes it
+    // verbatim; one built in memory has no source and writes canonically.
     let parsed = parse_mpc(CASE_TINY).expect("parse tiny");
-    assert_eq!(parsed.source(), Some(CASE_TINY), "parsed case should echo its source");
+    assert_eq!(parsed.source.as_deref(), Some(CASE_TINY), "parsed network should echo its source");
     assert_eq!(write_matpower(&parsed), CASE_TINY);
 
-    let built = MpcCase::new("m", 100.0, parsed.buses.clone(), parsed.branches.clone());
-    assert!(built.source().is_none(), "in-memory case should carry no source");
+    let mut built = parsed.clone();
+    built.source = None;
+    built.source_format = SourceFormat::InMemory;
     // Canonical output is parseable and keeps the headline values.
     let reparsed = parse_mpc(&write_matpower(&built)).expect("canonical reparses");
     assert_eq!(reparsed.base_mva, 100.0);
@@ -204,7 +208,7 @@ mpc.branch = [
     1 1 0.01 0.05 0.02 0 0 0 0 0 1 NaN Inf;
 ];
 "#;
-    let mpc = parse_mpc(src).expect("NaN/Inf should parse");
-    assert!(mpc.branches[0].angmin.is_nan());
-    assert!(mpc.branches[0].angmax.is_infinite());
+    let net = parse_mpc(src).expect("NaN/Inf should parse");
+    assert!(net.branches[0].angmin.is_nan());
+    assert!(net.branches[0].angmax.is_infinite());
 }

@@ -1,10 +1,12 @@
 //! Format-neutral network model — the hub every converter meets at.
 //!
 //! Readers map their format into a [`Network`]; writers map a `Network` back out.
-//! Unlike [`MpcCase`](crate::MpcCase) (the MATPOWER-shaped view the matrix layer
-//! uses, with demand and shunts folded into the bus row), `Network` makes loads
-//! and shunts first-class, so a format that carries several loads per bus (PSS/E,
-//! PowerModels) maps without losing them. Two things make conversion honest:
+//! It is the one canonical data model: format-neutral tables with loads and
+//! shunts first-class, so a format that carries several loads per bus (PSS/E,
+//! PowerModels) maps without losing them, while MATPOWER (which folds demand and
+//! shunts onto the bus row) splits them out on read. The dense-indexed analysis
+//! view the matrix builders consume is [`IndexedNetwork`](crate::IndexedNetwork),
+//! derived from a `Network`. Two things make conversion honest:
 //!
 //! - **Retained source.** A `Network` keeps the raw text it was read from plus
 //!   its [`SourceFormat`], so writing back to the *same* format echoes it
@@ -22,12 +24,70 @@ use std::sync::Arc;
 
 use serde_json::Value;
 
-use crate::case::{BusType, DcLine, GenCost, Generator as MpcGen, MpcCase, Storage as MpcStorage};
 use crate::Error;
 
 /// Source-format fields the neutral model doesn't name, kept for round-trip and
 /// cross-format passthrough. Keys are the field names; values are JSON scalars.
 pub type Extras = BTreeMap<String, Value>;
+
+/// Bus type per MATPOWER convention: 1=PQ, 2=PV, 3=ref/slack, 4=isolated.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[repr(u8)]
+pub enum BusType {
+    Pq = 1,
+    Pv = 2,
+    Ref = 3,
+    Isolated = 4,
+}
+
+impl BusType {
+    /// Map a MATPOWER bus-type code to the enum; unknown codes fall back to PQ.
+    pub(crate) fn from_f64(v: f64) -> Self {
+        match v as i32 {
+            2 => Self::Pv,
+            3 => Self::Ref,
+            4 => Self::Isolated,
+            _ => Self::Pq,
+        }
+    }
+}
+
+/// A generator cost curve (`mpc.gencost` row).
+#[derive(Debug, Clone)]
+pub struct GenCost {
+    /// 1 = piecewise linear, 2 = polynomial.
+    pub model: u8,
+    pub startup: f64,
+    pub shutdown: f64,
+    /// Number of cost coefficients (polynomial) or breakpoints (piecewise).
+    pub ncost: usize,
+    /// Raw coefficients, highest order first for the polynomial model:
+    /// `[c_{k-1}, …, c1, c0]`.
+    pub coeffs: Vec<f64>,
+}
+
+impl GenCost {
+    /// `(q, c)` for the quadratic cost `½ q p² + c p` from a polynomial
+    /// (model 2) row. MATPOWER stores `c2 p² + c1 p + c0`, so `q = 2·c2` and
+    /// `c = c1`. Linear rows (`ncost == 2`) give `q = 0`. Piecewise (model 1)
+    /// or cubic and higher return `None`.
+    pub fn quadratic(&self) -> Option<(f64, f64)> {
+        if self.model != 2 {
+            return None;
+        }
+        // Reject a row whose coefficient slice is shorter than `ncost` claims,
+        // rather than reading the wrong powers by position.
+        if self.coeffs.len() < self.ncost {
+            return None;
+        }
+        match self.ncost {
+            3 => Some((2.0 * self.coeffs[0], self.coeffs[1])),
+            2 => Some((0.0, self.coeffs[0])),
+            1 => Some((0.0, 0.0)),
+            _ => None,
+        }
+    }
+}
 
 /// Which format a [`Network`] was read from. Drives the same-format byte-exact
 /// echo on write.
@@ -204,92 +264,10 @@ pub struct Hvdc {
 
 /// The MATPOWER gen capability / ramp columns past `PMIN`, in order. Carried as
 /// generator extras so they survive into formats that name them (PowerModels).
-const GEN_EXTRA_KEYS: [&str; 11] = [
+pub(crate) const GEN_EXTRA_KEYS: [&str; 11] = [
     "pc1", "pc2", "qc1min", "qc1max", "qc2min", "qc2max", "ramp_agc", "ramp_10",
     "ramp_30", "ramp_q", "apf",
 ];
-
-fn num(x: f64) -> Value {
-    serde_json::Number::from_f64(x).map_or(Value::Null, Value::Number)
-}
-
-impl MpcCase {
-    /// Lift this MATPOWER-shaped case into the neutral [`Network`]: split bus
-    /// demand into [`Load`]s and bus shunts into [`Shunt`]s, carry the gen
-    /// capability columns as extras, and keep the source for a byte-exact
-    /// MATPOWER round-trip. MATPOWER is just one reader into the hub.
-    #[must_use]
-    pub fn to_network(&self) -> Network {
-        let buses = self
-            .buses
-            .iter()
-            .map(|b| Bus {
-                id: b.id,
-                kind: b.kind,
-                vm: b.vm,
-                va: b.va,
-                base_kv: b.base_kv,
-                vmax: b.vmax,
-                vmin: b.vmin,
-                area: b.area,
-                zone: b.zone,
-                name: b.name.clone(),
-                extras: Extras::new(),
-            })
-            .collect();
-
-        let mut loads = Vec::new();
-        let mut shunts = Vec::new();
-        for b in &self.buses {
-            let in_service = b.kind != BusType::Isolated;
-            if b.pd != 0.0 || b.qd != 0.0 {
-                loads.push(Load { bus: b.id, p: b.pd, q: b.qd, in_service, extras: Extras::new() });
-            }
-            if b.gs != 0.0 || b.bs != 0.0 {
-                shunts.push(Shunt { bus: b.id, g: b.gs, b: b.bs, in_service, extras: Extras::new() });
-            }
-        }
-
-        let branches = self
-            .branches
-            .iter()
-            .map(|br| Branch {
-                from: br.from_id,
-                to: br.to_id,
-                r: br.r,
-                x: br.x,
-                b: br.b,
-                rate_a: br.rate_a,
-                rate_b: br.rate_b,
-                rate_c: br.rate_c,
-                tap: br.tap,
-                shift: br.shift,
-                in_service: br.is_in_service(),
-                angmin: br.angmin,
-                angmax: br.angmax,
-                extras: Extras::new(),
-            })
-            .collect();
-
-        let generators = self.gens.iter().map(gen_to_network).collect();
-        let storage = self.storage.iter().map(storage_to_network).collect();
-        let hvdc = self.dclines.iter().map(hvdc_to_network).collect();
-
-        Network {
-            name: self.name.clone(),
-            base_mva: self.base_mva,
-            buses,
-            loads,
-            shunts,
-            branches,
-            generators,
-            storage,
-            hvdc,
-            source_format: SourceFormat::Matpower,
-            source: self.source().map(Arc::from),
-        }
-    }
-}
 
 impl Network {
     /// Error if two buses share an id, or if any element references a bus that
@@ -344,221 +322,5 @@ impl Network {
             check(s.bus, "storage")?;
         }
         Ok(())
-    }
-
-    /// Fold the neutral model back into the MATPOWER-shaped [`MpcCase`] the matrix
-    /// layer and the MATPOWER writer use: loads and shunts are summed back onto
-    /// their bus. Used to emit canonical MATPOWER from a non-MATPOWER source. The
-    /// result carries no source document, so the MATPOWER writer serializes
-    /// canonically.
-    #[must_use]
-    pub fn to_mpc_case(&self) -> MpcCase {
-        use crate::case::{Branch as McBranch, Bus as McBus, DcLine as McDcLine};
-
-        // Aggregate demand and shunts onto their bus (MATPOWER allows one of each).
-        let mut demand: BTreeMap<usize, (f64, f64)> = BTreeMap::new();
-        for l in &self.loads {
-            let e = demand.entry(l.bus).or_default();
-            e.0 += l.p;
-            e.1 += l.q;
-        }
-        let mut shunt: BTreeMap<usize, (f64, f64)> = BTreeMap::new();
-        for s in &self.shunts {
-            let e = shunt.entry(s.bus).or_default();
-            e.0 += s.g;
-            e.1 += s.b;
-        }
-
-        let buses = self
-            .buses
-            .iter()
-            .map(|b| {
-                let (pd, qd) = demand.get(&b.id).copied().unwrap_or((0.0, 0.0));
-                let (gs, bs) = shunt.get(&b.id).copied().unwrap_or((0.0, 0.0));
-                McBus {
-                    id: b.id,
-                    kind: b.kind,
-                    pd,
-                    qd,
-                    gs,
-                    bs,
-                    area: b.area,
-                    vm: b.vm,
-                    va: b.va,
-                    base_kv: b.base_kv,
-                    zone: b.zone,
-                    vmax: b.vmax,
-                    vmin: b.vmin,
-                    name: b.name.clone(),
-                }
-            })
-            .collect();
-
-        let branches = self
-            .branches
-            .iter()
-            .map(|br| McBranch {
-                from_id: br.from,
-                to_id: br.to,
-                r: br.r,
-                x: br.x,
-                b: br.b,
-                rate_a: br.rate_a,
-                rate_b: br.rate_b,
-                rate_c: br.rate_c,
-                tap: br.tap,
-                shift: br.shift,
-                status: f64::from(br.in_service),
-                angmin: br.angmin,
-                angmax: br.angmax,
-            })
-            .collect();
-
-        let gens = self.generators.iter().map(gen_to_mpc).collect();
-        let storage = self.storage.iter().map(storage_to_mpc).collect();
-        let dclines: Vec<McDcLine> = self.hvdc.iter().map(hvdc_to_mpc).collect();
-
-        MpcCase::new(self.name.clone(), self.base_mva, buses, branches)
-            .with_gens(gens)
-            .with_storage(storage)
-            .with_dclines(dclines)
-    }
-}
-
-fn gen_to_mpc(g: &Generator) -> MpcGen {
-    // Reconstruct the contiguous MATPOWER capability-column prefix from extras.
-    let mut extra = Vec::new();
-    for k in GEN_EXTRA_KEYS {
-        match g.extras.get(k).and_then(Value::as_f64) {
-            Some(v) => extra.push(v),
-            None => break,
-        }
-    }
-    MpcGen {
-        bus_id: g.bus,
-        pg: g.pg,
-        qg: g.qg,
-        qmax: g.qmax,
-        qmin: g.qmin,
-        vg: g.vg,
-        mbase: g.mbase,
-        status: f64::from(g.in_service),
-        pmax: g.pmax,
-        pmin: g.pmin,
-        cost: g.cost.clone(),
-        extra,
-    }
-}
-
-fn storage_to_mpc(s: &Storage) -> MpcStorage {
-    MpcStorage {
-        bus_id: s.bus,
-        ps: s.ps,
-        qs: s.qs,
-        energy: s.energy,
-        energy_rating: s.energy_rating,
-        charge_rating: s.charge_rating,
-        discharge_rating: s.discharge_rating,
-        charge_efficiency: s.charge_efficiency,
-        discharge_efficiency: s.discharge_efficiency,
-        thermal_rating: s.thermal_rating,
-        qmin: s.qmin,
-        qmax: s.qmax,
-        r: s.r,
-        x: s.x,
-        p_loss: s.p_loss,
-        q_loss: s.q_loss,
-        status: f64::from(s.in_service),
-    }
-}
-
-fn hvdc_to_mpc(d: &Hvdc) -> DcLine {
-    DcLine {
-        from_id: d.from,
-        to_id: d.to,
-        status: f64::from(d.in_service),
-        pf: d.pf,
-        pt: d.pt,
-        qf: d.qf,
-        qt: d.qt,
-        vf: d.vf,
-        vt: d.vt,
-        pmin: d.pmin,
-        pmax: d.pmax,
-        qminf: d.qminf,
-        qmaxf: d.qmaxf,
-        qmint: d.qmint,
-        qmaxt: d.qmaxt,
-        loss0: d.loss0,
-        loss1: d.loss1,
-        extra: Vec::new(),
-    }
-}
-
-fn gen_to_network(g: &MpcGen) -> Generator {
-    let extras = GEN_EXTRA_KEYS
-        .iter()
-        .zip(&g.extra)
-        .map(|(&k, &v)| (k.to_string(), num(v)))
-        .collect();
-    Generator {
-        bus: g.bus_id,
-        pg: g.pg,
-        qg: g.qg,
-        pmax: g.pmax,
-        pmin: g.pmin,
-        qmax: g.qmax,
-        qmin: g.qmin,
-        vg: g.vg,
-        mbase: g.mbase,
-        in_service: g.is_in_service(),
-        cost: g.cost.clone(),
-        extras,
-    }
-}
-
-fn storage_to_network(s: &MpcStorage) -> Storage {
-    Storage {
-        bus: s.bus_id,
-        ps: s.ps,
-        qs: s.qs,
-        energy: s.energy,
-        energy_rating: s.energy_rating,
-        charge_rating: s.charge_rating,
-        discharge_rating: s.discharge_rating,
-        charge_efficiency: s.charge_efficiency,
-        discharge_efficiency: s.discharge_efficiency,
-        thermal_rating: s.thermal_rating,
-        qmin: s.qmin,
-        qmax: s.qmax,
-        r: s.r,
-        x: s.x,
-        p_loss: s.p_loss,
-        q_loss: s.q_loss,
-        in_service: s.is_in_service(),
-        extras: Extras::new(),
-    }
-}
-
-fn hvdc_to_network(d: &DcLine) -> Hvdc {
-    Hvdc {
-        from: d.from_id,
-        to: d.to_id,
-        in_service: d.is_in_service(),
-        pf: d.pf,
-        pt: d.pt,
-        qf: d.qf,
-        qt: d.qt,
-        vf: d.vf,
-        vt: d.vt,
-        pmin: d.pmin,
-        pmax: d.pmax,
-        qminf: d.qminf,
-        qmaxf: d.qmaxf,
-        qmint: d.qmint,
-        qmaxt: d.qmaxt,
-        loss0: d.loss0,
-        loss1: d.loss1,
-        extras: Extras::new(),
     }
 }

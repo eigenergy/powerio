@@ -16,7 +16,7 @@ use std::fmt::Write as _;
 use std::sync::Arc;
 
 use super::Conversion;
-use crate::case::BusType;
+use crate::network::BusType;
 use crate::network::{Branch, Bus, Extras, Generator, Load, Network, Shunt, SourceFormat};
 use crate::{Error, Result};
 

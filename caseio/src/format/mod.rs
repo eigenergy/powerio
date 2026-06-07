@@ -1,7 +1,7 @@
-//! Convert a parsed [`MpcCase`] into other interchange formats.
+//! Convert a parsed [`Network`](crate::Network) into other interchange formats.
 //!
-//! Each converter is an independent writer over the shared [`MpcCase`]: every
-//! input format and every output format meet at `MpcCase`, so a new target is
+//! Each converter is an independent writer over the shared `Network`: every
+//! input format and every output format meet at the hub, so a new target is
 //! one writer here, not a change to any parser. Non-finite numeric values (a
 //! MATPOWER `Inf`/`NaN` angle limit, say) are written as JSON `null`.
 
@@ -76,7 +76,7 @@ pub fn write_as(net: &Network, format: TargetFormat) -> Conversion {
         // From another source (or no retained source): canonical MATPOWER from
         // the folded model.
         TargetFormat::Matpower => Conversion {
-            text: crate::write_matpower(&net.to_mpc_case()),
+            text: crate::write_matpower(net),
             warnings: Vec::new(),
         },
     }

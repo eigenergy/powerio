@@ -42,7 +42,7 @@ impl Default for SynthSpec {
     }
 }
 
-pub fn generate(spec: &SynthSpec) -> crate::case::MpcCase {
+pub fn generate(spec: &SynthSpec) -> crate::network::Network {
     match spec.topology {
         Topology::Tree => generate_tree(spec),
         Topology::Lattice2D => generate_lattice(spec),

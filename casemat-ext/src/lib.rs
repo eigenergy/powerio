@@ -21,13 +21,13 @@ use pyo3::prelude::*;
 use pyo3::types::{PyDict, PyList};
 use sprs::CsMat;
 
-use casemat::case::BusType;
+use casemat::BusType;
 use casemat::matrix::{
     build_adjacency, build_bdoubleprime, build_bprime, build_incidence, build_lacpf, build_lodf,
     build_ptdf, build_weighted_laplacian, build_ybus, BuildOptions, DcConvention, Scheme, Units,
 };
 use casemat::opf_pipeline::{write_dcopf_bundle as write_bundle, DcOpfOptions};
-use casemat::{IndexedNetwork, MpcCase};
+use casemat::{IndexedNetwork, Network};
 
 pyo3::create_exception!(
     _casemat,
@@ -137,11 +137,11 @@ fn build_options(scheme: Scheme, include_taps: bool, include_shifts: bool) -> Bu
     }
 }
 
-/// Low-level handle around a parsed `MpcCase`. The user-facing `casemat.Case`
+/// Low-level handle around a parsed `Network`. The user-facing `casemat.Case`
 /// (pure Python) wraps this and turns the COO tuples into scipy matrices.
 #[pyclass(name = "PyCase")]
 pub struct PyCase {
-    inner: MpcCase,
+    inner: Network,
 }
 
 #[pymethods]
@@ -158,7 +158,7 @@ impl PyCase {
 
     #[getter]
     fn n(&self) -> usize {
-        self.inner.n()
+        self.inner.buses.len()
     }
 
     #[getter]
@@ -168,36 +168,37 @@ impl PyCase {
 
     #[getter]
     fn n_gens(&self) -> usize {
-        self.inner.gens.len()
+        self.inner.generators.len()
     }
 
     #[getter]
     fn is_radial(&self) -> bool {
-        self.inner.is_radial()
+        IndexedNetwork::new(&self.inner).is_radial()
     }
 
     #[getter]
     fn n_connected_components(&self) -> usize {
-        self.inner.n_connected_components()
+        IndexedNetwork::new(&self.inner).n_connected_components()
     }
 
     /// Dense `[0, n)` index of the single reference bus. Raises if not exactly
     /// one reference bus is present.
     fn reference_bus_index(&self) -> PyResult<usize> {
-        self.inner.reference_bus_index().map_err(to_pyerr)
+        IndexedNetwork::new(&self.inner).reference_bus_index().map_err(to_pyerr)
     }
 
     #[getter]
     fn buses<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyList>> {
+        let g = IndexedNetwork::new(&self.inner);
         let list = PyList::empty(py);
-        for b in &self.inner.buses {
+        for (i, b) in self.inner.buses.iter().enumerate() {
             let d = PyDict::new(py);
             d.set_item("id", b.id)?;
             d.set_item("type", bus_type_str(b.kind))?;
-            d.set_item("pd", b.pd)?;
-            d.set_item("qd", b.qd)?;
-            d.set_item("gs", b.gs)?;
-            d.set_item("bs", b.bs)?;
+            d.set_item("pd", g.pd()[i])?;
+            d.set_item("qd", g.qd()[i])?;
+            d.set_item("gs", g.gs()[i])?;
+            d.set_item("bs", g.bs()[i])?;
             d.set_item("area", b.area)?;
             d.set_item("vm", b.vm)?;
             d.set_item("va", b.va)?;
@@ -215,8 +216,8 @@ impl PyCase {
         let list = PyList::empty(py);
         for br in &self.inner.branches {
             let d = PyDict::new(py);
-            d.set_item("from_id", br.from_id)?;
-            d.set_item("to_id", br.to_id)?;
+            d.set_item("from_id", br.from)?;
+            d.set_item("to_id", br.to)?;
             d.set_item("r", br.r)?;
             d.set_item("x", br.x)?;
             d.set_item("b", br.b)?;
@@ -225,7 +226,7 @@ impl PyCase {
             d.set_item("rate_c", br.rate_c)?;
             d.set_item("tap", br.tap)?;
             d.set_item("shift", br.shift)?;
-            d.set_item("status", br.status)?;
+            d.set_item("status", f64::from(br.in_service))?;
             d.set_item("angmin", br.angmin)?;
             d.set_item("angmax", br.angmax)?;
             list.append(d)?;
@@ -236,16 +237,16 @@ impl PyCase {
     #[getter]
     fn gens<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyList>> {
         let list = PyList::empty(py);
-        for g in &self.inner.gens {
+        for g in &self.inner.generators {
             let d = PyDict::new(py);
-            d.set_item("bus_id", g.bus_id)?;
+            d.set_item("bus_id", g.bus)?;
             d.set_item("pg", g.pg)?;
             d.set_item("qg", g.qg)?;
             d.set_item("qmax", g.qmax)?;
             d.set_item("qmin", g.qmin)?;
             d.set_item("vg", g.vg)?;
             d.set_item("mbase", g.mbase)?;
-            d.set_item("status", g.status)?;
+            d.set_item("status", f64::from(g.in_service))?;
             d.set_item("pmax", g.pmax)?;
             d.set_item("pmin", g.pmin)?;
             match &g.cost {
@@ -266,7 +267,7 @@ impl PyCase {
     }
 
     fn connectivity_report<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyDict>> {
-        let r = self.inner.connectivity_report();
+        let r = IndexedNetwork::new(&self.inner).connectivity_report();
         let d = PyDict::new(py);
         d.set_item("n_buses", r.n_buses)?;
         d.set_item("n_branches_in_service", r.n_branches_in_service)?;
@@ -283,8 +284,7 @@ impl PyCase {
             scheme: parse_scheme(scheme.unwrap_or("bx"))?,
             ..BuildOptions::default()
         };
-        let net = self.inner.to_network();
-        let view = IndexedNetwork::new(&net);
+        let view = IndexedNetwork::new(&self.inner);
         let m = build_bprime(&view, &opts).map_err(to_pyerr)?;
         coo_triplets(py, &m)
     }
@@ -301,8 +301,7 @@ impl PyCase {
             scheme: parse_scheme(scheme.unwrap_or("bx"))?,
             ..BuildOptions::default()
         };
-        let net = self.inner.to_network();
-        let view = IndexedNetwork::new(&net);
+        let view = IndexedNetwork::new(&self.inner);
         let m = build_bdoubleprime(&view, &opts).map_err(to_pyerr)?;
         coo_triplets(py, &m)
     }
@@ -315,15 +314,13 @@ impl PyCase {
         include_shifts: bool,
     ) -> PyResult<Bound<'py, PyAny>> {
         let opts = build_options(Scheme::Bx, include_taps, include_shifts);
-        let net = self.inner.to_network();
-        let view = IndexedNetwork::new(&net);
+        let view = IndexedNetwork::new(&self.inner);
         let m = build_lacpf(&view, &opts).map_err(to_pyerr)?;
         coo_triplets(py, &m)
     }
 
     fn adjacency<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
-        let net = self.inner.to_network();
-        let view = IndexedNetwork::new(&net);
+        let view = IndexedNetwork::new(&self.inner);
         let m = build_adjacency(&view).map_err(to_pyerr)?;
         coo_triplets(py, &m)
     }
@@ -337,8 +334,7 @@ impl PyCase {
         include_shifts: bool,
     ) -> PyResult<Bound<'py, PyAny>> {
         let opts = build_options(Scheme::Bx, include_taps, include_shifts);
-        let net = self.inner.to_network();
-        let view = IndexedNetwork::new(&net);
+        let view = IndexedNetwork::new(&self.inner);
         let yb = build_ybus(&view, &opts).map_err(to_pyerr)?;
         let g = coo_triplets(py, &yb.g)?;
         let b = coo_triplets(py, &yb.b)?;
@@ -348,8 +344,7 @@ impl PyCase {
     #[pyo3(signature = (convention=None))]
     fn ptdf<'py>(&self, py: Python<'py>, convention: Option<&str>) -> PyResult<Bound<'py, PyAny>> {
         let conv = parse_convention(convention.unwrap_or("paper"))?;
-        let net = self.inner.to_network();
-        let view = IndexedNetwork::new(&net);
+        let view = IndexedNetwork::new(&self.inner);
         let m = build_ptdf(&view, conv).map_err(to_pyerr)?;
         coo_triplets(py, &m)
     }
@@ -357,8 +352,7 @@ impl PyCase {
     #[pyo3(signature = (convention=None))]
     fn lodf<'py>(&self, py: Python<'py>, convention: Option<&str>) -> PyResult<Bound<'py, PyAny>> {
         let conv = parse_convention(convention.unwrap_or("paper"))?;
-        let net = self.inner.to_network();
-        let view = IndexedNetwork::new(&net);
+        let view = IndexedNetwork::new(&self.inner);
         let m = build_lodf(&view, conv).map_err(to_pyerr)?;
         coo_triplets(py, &m)
     }
@@ -373,8 +367,7 @@ impl PyCase {
         convention: Option<&str>,
     ) -> PyResult<Bound<'py, PyAny>> {
         let conv = parse_convention(convention.unwrap_or("paper"))?;
-        let net = self.inner.to_network();
-        let view = IndexedNetwork::new(&net);
+        let view = IndexedNetwork::new(&self.inner);
         let parts = build_incidence(&view, conv).map_err(to_pyerr)?;
         let a = coo_triplets(py, &parts.a)?;
         let b = parts.b.into_pyarray(py);
@@ -392,8 +385,7 @@ impl PyCase {
         convention: Option<&str>,
     ) -> PyResult<Bound<'py, PyAny>> {
         let conv = parse_convention(convention.unwrap_or("paper"))?;
-        let net = self.inner.to_network();
-        let view = IndexedNetwork::new(&net);
+        let view = IndexedNetwork::new(&self.inner);
         let parts = build_incidence(&view, conv).map_err(to_pyerr)?;
         let l = build_weighted_laplacian(&parts.a, &parts.b);
         coo_triplets(py, &l)
@@ -429,9 +421,9 @@ impl PyCase {
         format!(
             "PyCase(name={:?}, n_buses={}, n_branches={}, n_gens={})",
             self.inner.name,
-            self.inner.n(),
+            self.inner.buses.len(),
             self.inner.branches.len(),
-            self.inner.gens.len()
+            self.inner.generators.len()
         )
     }
 }
@@ -504,7 +496,7 @@ fn read_network_py(path: &str, from: Option<&str>) -> PyResult<casemat::Network>
     let read_str = || std::fs::read_to_string(p).map_err(|e| PyValueError::new_err(e.to_string()));
     let net = match fmt {
         casemat::TargetFormat::Matpower => {
-            casemat::parse_matpower_file(path).map_err(to_pyerr)?.to_network()
+            casemat::parse_matpower_file(path).map_err(to_pyerr)?
         }
         casemat::TargetFormat::PowerModelsJson => {
             casemat::parse_powermodels_json(&read_str()?).map_err(to_pyerr)?

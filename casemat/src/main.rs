@@ -399,8 +399,7 @@ fn run_sensitivities(
     let mpc = casemat::parse_matpower_file(&input)
         .with_context(|| format!("parse {}", input.display()))?;
     std::fs::create_dir_all(&output)?;
-    let net = mpc.to_network();
-    let view = casemat::IndexedNetwork::new(&net);
+    let view = casemat::IndexedNetwork::new(&mpc);
     let ptdf = casemat::build_ptdf(&view, convention)
         .with_context(|| format!("PTDF for {}", input.display()))?;
     let lodf = casemat::build_lodf(&view, convention)
@@ -444,8 +443,7 @@ fn run_verify(input: PathBuf, kind: MatrixKind, scheme: Scheme) -> anyhow::Resul
         scheme,
         ..Default::default()
     };
-    let net = mpc.to_network();
-    let view = casemat::IndexedNetwork::new(&net);
+    let view = casemat::IndexedNetwork::new(&mpc);
     let matrix = match kind {
         MatrixKind::BPrime => casemat::build_bprime(&view, &opts)?,
         MatrixKind::BDoublePrime => casemat::build_bdoubleprime(&view, &opts)?,
@@ -519,8 +517,7 @@ fn read_network(
     };
     let net = match fmt {
         FormatArg::Matpower => casemat::parse_matpower_file(input)
-            .with_context(|| format!("reading MATPOWER {}", input.display()))?
-            .to_network(),
+            .with_context(|| format!("reading MATPOWER {}", input.display()))?,
         FormatArg::PowerModelsJson => {
             casemat::parse_powermodels_json(&std::fs::read_to_string(input)?)?
         }

@@ -233,7 +233,7 @@ fn draw_inspect(frame: &mut Frame, app: &App, area: Rect) {
             Span::styled(state.case.name.clone(), title()),
             Span::raw("    "),
             Span::styled("buses: ", dim()),
-            Span::raw(state.case.n().to_string()),
+            Span::raw(state.case.buses.len().to_string()),
             Span::raw("   "),
             Span::styled("branches: ", dim()),
             Span::raw(state.case.branches.len().to_string()),
@@ -502,8 +502,7 @@ fn draw_synth(frame: &mut Frame, app: &App, area: Rect) {
         .border_style(border())
         .title(" Preview ");
     if let Some(case) = &app.synth.generated {
-        let net = case.to_network();
-        let view = crate::IndexedNetwork::new(&net);
+        let view = crate::IndexedNetwork::new(case);
         if let Ok(b) = crate::build_bprime(&view, &Default::default()) {
             let inner = preview_block.inner(split[1]);
             frame.render_widget(preview_block, split[1]);

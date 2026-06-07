@@ -4,8 +4,7 @@
 use std::path::PathBuf;
 
 use casemat::matrix::{
-    build_bdoubleprime, build_bprime, build_lacpf, build_ybus, BuildOptions, MatrixStats,
-    sddm_check,
+    build_bdoubleprime, build_bprime, build_lacpf, build_ybus, sddm_check, BuildOptions, MatrixStats,
 };
 use casemat::parse_matpower_file;
 use casemat::IndexedNetwork;
@@ -19,34 +18,34 @@ fn fixture(name: &str) -> PathBuf {
 
 #[test]
 fn case9_parses_correctly() {
-    let mpc = parse_matpower_file(fixture("case9.m")).unwrap();
-    assert_eq!(mpc.n(), 9);
-    assert_eq!(mpc.branches.len(), 9);
-    assert_eq!(mpc.base_mva, 100.0);
+    let net = parse_matpower_file(fixture("case9.m")).unwrap();
+    assert_eq!(net.buses.len(), 9);
+    assert_eq!(net.branches.len(), 9);
+    assert_eq!(net.base_mva, 100.0);
     // case9 buses are contiguous 1..=9.
+    let g = IndexedNetwork::new(&net);
     for i in 1..=9 {
-        assert_eq!(mpc.bus_index(i), Some(i - 1));
+        assert_eq!(g.bus_index(i), Some(i - 1));
     }
 }
 
 #[test]
 fn case14_parses_correctly() {
-    let mpc = parse_matpower_file(fixture("case14.m")).unwrap();
-    assert_eq!(mpc.n(), 14);
-    assert!(mpc.branches.len() >= 20);
+    let net = parse_matpower_file(fixture("case14.m")).unwrap();
+    assert_eq!(net.buses.len(), 14);
+    assert!(net.branches.len() >= 20);
 }
 
 #[test]
 fn case30_parses_correctly() {
-    let mpc = parse_matpower_file(fixture("case30.m")).unwrap();
-    assert_eq!(mpc.n(), 30);
+    let net = parse_matpower_file(fixture("case30.m")).unwrap();
+    assert_eq!(net.buses.len(), 30);
 }
 
 #[test]
 fn bprime_is_singular_laplacian_on_real_cases() {
     for name in ["case9.m", "case14.m", "case30.m", "case57.m"] {
-        let mpc = parse_matpower_file(fixture(name)).unwrap();
-        let net = mpc.to_network();
+        let net = parse_matpower_file(fixture(name)).unwrap();
         let view = IndexedNetwork::new(&net);
         let b = build_bprime(&view, &BuildOptions::default()).unwrap();
         let stats = MatrixStats::from_csr(&b);
@@ -58,15 +57,14 @@ fn bprime_is_singular_laplacian_on_real_cases() {
             stats.min_dd_margin
         );
         assert!(stats.min_diag > 0.0);
-        assert_eq!(b.rows(), mpc.n());
-        assert_eq!(b.cols(), mpc.n());
+        assert_eq!(b.rows(), net.buses.len());
+        assert_eq!(b.cols(), net.buses.len());
     }
 }
 
 #[test]
 fn bdoubleprime_includes_shunts_on_case30() {
-    let mpc = parse_matpower_file(fixture("case30.m")).unwrap();
-    let net = mpc.to_network();
+    let net = parse_matpower_file(fixture("case30.m")).unwrap();
     let view = IndexedNetwork::new(&net);
     let bpp = build_bdoubleprime(&view, &BuildOptions::default()).unwrap();
     let stats = MatrixStats::from_csr(&bpp);
@@ -79,17 +77,16 @@ fn bdoubleprime_includes_shunts_on_case30() {
 
 #[test]
 fn ybus_split_matches_complex_invariants() {
-    let mpc = parse_matpower_file(fixture("case14.m")).unwrap();
-    let net = mpc.to_network();
+    let net = parse_matpower_file(fixture("case14.m")).unwrap();
     let view = IndexedNetwork::new(&net);
     let parts = build_ybus(&view, &BuildOptions::default()).unwrap();
-    assert_eq!(parts.g.rows(), mpc.n());
-    assert_eq!(parts.b.rows(), mpc.n());
+    assert_eq!(parts.g.rows(), net.buses.len());
+    assert_eq!(parts.b.rows(), net.buses.len());
     // Without phase shifters case14 should yield symmetric Y_bus.
     let g = parts.g.to_dense();
     let b = parts.b.to_dense();
-    for i in 0..mpc.n() {
-        for j in (i + 1)..mpc.n() {
+    for i in 0..net.buses.len() {
+        for j in (i + 1)..net.buses.len() {
             assert!((g[[i, j]] - g[[j, i]]).abs() < 1e-12);
             assert!((b[[i, j]] - b[[j, i]]).abs() < 1e-12);
         }
@@ -98,31 +95,26 @@ fn ybus_split_matches_complex_invariants() {
 
 #[test]
 fn lacpf_block_dimensions() {
-    let mpc = parse_matpower_file(fixture("case14.m")).unwrap();
-    let net = mpc.to_network();
+    let net = parse_matpower_file(fixture("case14.m")).unwrap();
     let view = IndexedNetwork::new(&net);
     let j = build_lacpf(&view, &BuildOptions::default()).unwrap();
-    assert_eq!(j.rows(), 2 * mpc.n());
-    assert_eq!(j.cols(), 2 * mpc.n());
+    assert_eq!(j.rows(), 2 * net.buses.len());
+    assert_eq!(j.cols(), 2 * net.buses.len());
 }
 
 #[test]
 fn pipeline_writes_expected_files_for_case9() {
     use casemat::pipeline::{MatrixKind, Pipeline, RhsKind};
     let tmp = tempdir();
-    let mpc = parse_matpower_file(fixture("case9.m")).unwrap();
+    let net = parse_matpower_file(fixture("case9.m")).unwrap();
     let pipeline = Pipeline {
-        matrices: vec![
-            MatrixKind::BPrime,
-            MatrixKind::BDoublePrime,
-            MatrixKind::YbusB,
-        ],
+        matrices: vec![MatrixKind::BPrime, MatrixKind::BDoublePrime, MatrixKind::YbusB],
         options: BuildOptions::default(),
         rhs: RhsKind::Random,
         rng_seed: 42,
         source_file: Some(fixture("case9.m")),
     };
-    let outputs = pipeline.run(&mpc, &tmp).unwrap();
+    let outputs = pipeline.run(&net, &tmp).unwrap();
     assert_eq!(outputs.case_name, "case9");
     let names: Vec<String> = outputs
         .files

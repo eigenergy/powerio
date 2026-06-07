@@ -19,7 +19,7 @@ fn data(name: &str) -> PathBuf {
 #[test]
 fn powermodels_structure_and_split() {
     let case = parse_matpower_file(data("case30.m")).unwrap();
-    let conv = write_powermodels_json(&case.to_network());
+    let conv = write_powermodels_json(&case);
     assert!(conv.warnings.is_empty(), "case30 should convert cleanly: {:?}", conv.warnings);
     let v: Value = serde_json::from_str(&conv.text).unwrap();
 
@@ -28,11 +28,11 @@ fn powermodels_structure_and_split() {
     // Buses are keyed by their MATPOWER id; loads/shunts are split out of the bus.
     assert_eq!(v["bus"].as_object().unwrap().len(), case.buses.len());
     assert_eq!(v["branch"].as_object().unwrap().len(), case.branches.len());
-    assert_eq!(v["gen"].as_object().unwrap().len(), case.gens.len());
+    assert_eq!(v["gen"].as_object().unwrap().len(), case.generators.len());
 
     // A load/shunt exists for each bus that carries demand / a shunt.
-    let want_loads = case.buses.iter().filter(|b| b.pd != 0.0 || b.qd != 0.0).count();
-    let want_shunts = case.buses.iter().filter(|b| b.gs != 0.0 || b.bs != 0.0).count();
+    let want_loads = case.loads.len();
+    let want_shunts = case.shunts.len();
     assert_eq!(v["load"].as_object().unwrap().len(), want_loads);
     assert_eq!(v["shunt"].as_object().unwrap().len(), want_shunts);
     assert!(want_loads > 0, "case30 has loads");
@@ -54,7 +54,7 @@ fn powermodels_transformer_flag_tracks_raw_tap() {
     // case57 has branches with an explicit tap of 1.0 — a transformer in MATPOWER,
     // even though the effective ratio is 1.
     let case = parse_matpower_file(data("case57.m")).unwrap();
-    let v: Value = serde_json::from_str(&write_powermodels_json(&case.to_network()).text).unwrap();
+    let v: Value = serde_json::from_str(&write_powermodels_json(&case).text).unwrap();
     let any_explicit_tap = case.branches.iter().any(|b| b.tap == 1.0);
     assert!(any_explicit_tap, "fixture expectation: case57 has an explicit tap=1 branch");
     let xfmr = v["branch"]
@@ -72,7 +72,7 @@ fn powermodels_warns_on_non_finite() {
     // pegase carries Inf reactive limits; JSON can't hold ±Inf, so we emit null
     // and must say so rather than fail silently.
     let case = parse_matpower_file(data("case2869pegase.m")).unwrap();
-    let conv = write_powermodels_json(&case.to_network());
+    let conv = write_powermodels_json(&case);
     let v: Value = serde_json::from_str(&conv.text).unwrap();
     assert!(
         conv.warnings.iter().any(|w| w.contains("non-finite")),
@@ -85,11 +85,11 @@ fn powermodels_warns_on_non_finite() {
 #[test]
 fn egret_structure() {
     let case = parse_matpower_file(data("case30.m")).unwrap();
-    let v: Value = serde_json::from_str(&write_egret_json(&case.to_network()).text).unwrap();
+    let v: Value = serde_json::from_str(&write_egret_json(&case).text).unwrap();
     let elements = &v["elements"];
     assert_eq!(elements["bus"].as_object().unwrap().len(), case.buses.len());
     assert_eq!(elements["branch"].as_object().unwrap().len(), case.branches.len());
-    assert_eq!(elements["generator"].as_object().unwrap().len(), case.gens.len());
+    assert_eq!(elements["generator"].as_object().unwrap().len(), case.generators.len());
     assert_eq!(v["system"]["baseMVA"], case.base_mva);
     assert!(v["system"].get("reference_bus").is_some());
     // A branch is typed line/transformer and a generator carries a cost curve.
@@ -103,7 +103,7 @@ fn powermodels_json_reader_is_inverse_of_writer() {
     // read→write is the identity on caseio's own PowerModels JSON, across cases:
     // proves the reader captures every field the writer emits.
     for case in ["case9", "case14", "case30", "case57", "case118"] {
-        let net = parse_matpower_file(data(&format!("{case}.m"))).unwrap().to_network();
+        let net = parse_matpower_file(data(&format!("{case}.m"))).unwrap();
         let json1 = write_powermodels_json(&net).text;
         let net2 = parse_powermodels_json(&json1).unwrap();
         let json2 = write_powermodels_json(&net2).text;
@@ -114,7 +114,7 @@ fn powermodels_json_reader_is_inverse_of_writer() {
 #[test]
 fn powermodels_json_same_format_is_byte_exact_echo() {
     // Same-format round-trip echoes the retained source byte-for-byte.
-    let net = parse_matpower_file(data("case30.m")).unwrap().to_network();
+    let net = parse_matpower_file(data("case30.m")).unwrap();
     let json = write_powermodels_json(&net).text;
     let net2 = parse_powermodels_json(&json).unwrap();
     assert_eq!(write_as(&net2, TargetFormat::PowerModelsJson).text, json);
@@ -126,17 +126,17 @@ fn powermodels_json_to_matpower_two_way() {
     // MATPOWER-only on the read side. Source is PowerModels, so the MATPOWER
     // target is canonical (not an echo).
     let orig = parse_matpower_file(data("case30.m")).unwrap();
-    let json = write_powermodels_json(&orig.to_network()).text;
+    let json = write_powermodels_json(&orig).text;
     let net = parse_powermodels_json(&json).unwrap();
     assert_eq!(net.source_format, caseio::SourceFormat::PowerModelsJson);
 
     let reparsed = parse_matpower(&write_as(&net, TargetFormat::Matpower).text).unwrap();
     assert_eq!(reparsed.buses.len(), orig.buses.len());
     assert_eq!(reparsed.branches.len(), orig.branches.len());
-    assert_eq!(reparsed.gens.len(), orig.gens.len());
+    assert_eq!(reparsed.generators.len(), orig.generators.len());
     assert_eq!(reparsed.base_mva, orig.base_mva);
     // Total demand survives the bus→load split and the fold back onto the bus.
-    let load_of = |c: &caseio::MpcCase| c.buses.iter().map(|b| b.pd).sum::<f64>();
+    let load_of = |c: &caseio::Network| c.loads.iter().map(|l| l.p).sum::<f64>();
     assert!((load_of(&orig) - load_of(&reparsed)).abs() < 1e-9);
 }
 
@@ -161,7 +161,7 @@ fn psse_reads_real_pti_files() {
 fn hvdc_converts_and_round_trips() {
     // t_case9_dcline.m carries HVDC dclines. PowerModels JSON round-trips them;
     // EGRET/PSS-E/PowerWorld drop them, each with a warning.
-    let net = parse_matpower_file(data("t_case9_dcline.m")).unwrap().to_network();
+    let net = parse_matpower_file(data("t_case9_dcline.m")).unwrap();
     assert!(!net.hvdc.is_empty(), "fixture should have dclines");
 
     let pm = write_powermodels_json(&net);
@@ -218,7 +218,7 @@ fn readers_reject_malformed_input() {
 
 #[test]
 fn matpower_target_round_trips() {
-    let net = parse_matpower_file(data("case14.m")).unwrap().to_network();
+    let net = parse_matpower_file(data("case14.m")).unwrap();
     let conv = write_as(&net, TargetFormat::Matpower);
     assert!(conv.warnings.is_empty());
     // Matpower target is the lossless echo: byte-identical to the source.

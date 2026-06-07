@@ -17,8 +17,7 @@ use std::collections::HashMap;
 
 use petgraph::graph::UnGraph;
 
-use crate::case::BusType;
-use crate::network::{Branch, Generator, Network};
+use crate::network::{Branch, BusType, Generator, Network};
 use crate::{Error, Result};
 
 /// A `Network` plus the dense bus index and per-bus aggregates the numerics
@@ -52,8 +51,9 @@ impl<'n> IndexedNetwork<'n> {
             bus_id_to_idx.insert(b.id, idx);
         }
         // A duplicate bus id would collapse two buses onto one dense index and
-        // silently corrupt every aggregate. Readers run `check_references`, but
-        // an in-memory `Network` might not, so guard it in debug builds.
+        // silently corrupt every aggregate. The format readers run
+        // `check_references`; the MATPOWER reader and in-memory networks don't,
+        // so guard it in debug builds.
         debug_assert_eq!(
             bus_id_to_idx.len(),
             n,
