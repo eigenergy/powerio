@@ -206,13 +206,13 @@ fn opf_instance_shapes_and_cg() {
         let view = IndexedNetwork::new(&case);
         let inc = build_incidence(&view, DcConvention::PaperPure).unwrap();
         let opf = build_opf_instance(&view, &inc, Units::PerUnit).unwrap();
-        let (n, m, n_gen) = (view.n(), inc.m(), opf.n_gen);
-        assert_eq!(opf.q_bus.len(), n);
-        assert_eq!(opf.c_bus.len(), n);
-        assert_eq!(opf.pmax_bus.len(), n);
-        assert_eq!(opf.p_d.len(), n);
+        let (n, m, n_gen) = (view.n(), inc.m(), opf.n_gen());
+        assert_eq!(opf.bus.q.len(), n);
+        assert_eq!(opf.bus.c.len(), n);
+        assert_eq!(opf.bus.pmax.len(), n);
+        assert_eq!(opf.bus.p_d.len(), n);
         assert_eq!(opf.f_max.len(), m);
-        assert_eq!(opf.q_gen.len(), n_gen);
+        assert_eq!(opf.gen.q.len(), n_gen);
         assert_eq!(opf.c_g.rows(), n);
         assert_eq!(opf.c_g.cols(), n_gen);
         // C_g: one 1 per generator column.
@@ -538,17 +538,17 @@ fn bundle_vectors_round_trip() {
             assert!((g - w).abs() < 1e-9, "{name}[{i}]={g} != {w}");
         }
     };
-    check("q.mtx", &opf.q_bus);
-    check("c.mtx", &opf.c_bus);
+    check("q.mtx", &opf.bus.q);
+    check("c.mtx", &opf.bus.c);
     check("fmax.mtx", &opf.f_max);
-    check("pd.mtx", &opf.p_d);
+    check("pd.mtx", &opf.bus.p_d);
     check("b.mtx", &inc.b);
 
     // Manifest agrees with the case.
     let meta: serde_json::Value =
         serde_json::from_str(&std::fs::read_to_string(out.dir.join("dcopf_meta.json")).unwrap())
             .unwrap();
-    assert_eq!(meta["n_gen"].as_u64().unwrap() as usize, opf.n_gen);
+    assert_eq!(meta["n_gen"].as_u64().unwrap() as usize, opf.n_gen());
     assert_eq!(
         meta["reference_bus"].as_u64().unwrap() as usize,
         IndexedNetwork::new(&case).reference_bus_index().unwrap()
@@ -610,10 +610,10 @@ fn perunit_scales_native_by_base() {
     let native = opf_of(&case, Units::Native).unwrap();
     let pu = opf_of(&case, Units::PerUnit).unwrap();
     for i in 0..case.buses.len() {
-        assert!((pu.q_bus[i] - native.q_bus[i] * base * base).abs() < 1e-6, "q[{i}]");
-        assert!((pu.c_bus[i] - native.c_bus[i] * base).abs() < 1e-6, "c[{i}]");
-        assert!((pu.pmax_bus[i] - native.pmax_bus[i] / base).abs() < 1e-9, "pmax[{i}]");
-        assert!((pu.p_d[i] - native.p_d[i] / base).abs() < 1e-9, "pd[{i}]");
+        assert!((pu.bus.q[i] - native.bus.q[i] * base * base).abs() < 1e-6, "q[{i}]");
+        assert!((pu.bus.c[i] - native.bus.c[i] * base).abs() < 1e-6, "c[{i}]");
+        assert!((pu.bus.pmax[i] - native.bus.pmax[i] / base).abs() < 1e-9, "pmax[{i}]");
+        assert!((pu.bus.p_d[i] - native.bus.p_d[i] / base).abs() < 1e-9, "pd[{i}]");
     }
 }
 
@@ -627,11 +627,11 @@ fn multi_generator_bus_sums_cost() {
         vec![poly_gen(1, 100.0, 1.0, 2.0), poly_gen(1, 50.0, 3.0, 4.0)],
     );
     let opf = opf_of(&case, Units::Native).unwrap();
-    assert_eq!(opf.n_gen, 2);
+    assert_eq!(opf.n_gen(), 2);
     let b0 = IndexedNetwork::new(&case).bus_index(1).unwrap();
-    assert!((opf.q_bus[b0] - (opf.q_gen[0] + opf.q_gen[1])).abs() < 1e-12);
-    assert!((opf.c_bus[b0] - (opf.c_gen[0] + opf.c_gen[1])).abs() < 1e-12);
-    assert!((opf.pmax_bus[b0] - (opf.pmax_gen[0] + opf.pmax_gen[1])).abs() < 1e-12);
+    assert!((opf.bus.q[b0] - (opf.gen.q[0] + opf.gen.q[1])).abs() < 1e-12);
+    assert!((opf.bus.c[b0] - (opf.gen.c[0] + opf.gen.c[1])).abs() < 1e-12);
+    assert!((opf.bus.pmax[b0] - (opf.gen.pmax[0] + opf.gen.pmax[1])).abs() < 1e-12);
 }
 
 #[test]

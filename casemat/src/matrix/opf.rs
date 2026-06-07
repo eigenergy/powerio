@@ -26,38 +26,54 @@ pub enum Units {
     Native,
 }
 
+/// Length-n bus-indexed cost and bound vectors (paper form). All share index
+/// space; each is zero at buses with no generator.
+#[derive(Debug, Clone)]
+pub struct BusCosts {
+    /// Quadratic cost diagonal `q`, `cost = ½ q p² + c p`.
+    pub q: Vec<f64>,
+    /// Linear cost `c`.
+    pub c: Vec<f64>,
+    /// Upper generation bound (summed over generators at the bus).
+    pub pmax: Vec<f64>,
+    /// Lower generation bound.
+    pub pmin: Vec<f64>,
+    /// Nodal load `p_d`.
+    pub p_d: Vec<f64>,
+}
+
+/// Generator-space provenance (length n_gen, in `C_g` column order).
+#[derive(Debug, Clone)]
+pub struct GenCosts {
+    pub q: Vec<f64>,
+    pub c: Vec<f64>,
+    pub pmax: Vec<f64>,
+    pub pmin: Vec<f64>,
+    /// Column `g` → index into the in-service generators.
+    pub gen_of_col: Vec<usize>,
+}
+
 /// Static DC-OPF instance data for a case.
 #[derive(Debug, Clone)]
 pub struct OpfInstance {
     pub n: usize,
     pub m: usize,
-    pub n_gen: usize,
-
-    // Bus-indexed (paper form, length n). Zero at buses with no generator.
-    /// Quadratic cost diagonal `q`, `cost = ½ q p² + c p`.
-    pub q_bus: Vec<f64>,
-    /// Linear cost `c`.
-    pub c_bus: Vec<f64>,
-    /// Upper generation bound (summed over generators at the bus).
-    pub pmax_bus: Vec<f64>,
-    /// Lower generation bound.
-    pub pmin_bus: Vec<f64>,
-    /// Nodal load `p_d`.
-    pub p_d: Vec<f64>,
-
-    // Branch-indexed (length m, incidence column order).
-    /// Thermal limit `f̄` (`RATE_A`); `0` means unlimited per MATPOWER.
+    /// Bus-indexed cost/bounds/load (length n).
+    pub bus: BusCosts,
+    /// Generator-space provenance (length n_gen).
+    pub gen: GenCosts,
+    /// Thermal limit `f̄` (`RATE_A`); `0` means unlimited per MATPOWER. Length m.
     pub f_max: Vec<f64>,
-
-    // Generator-space provenance (length n_gen, in-service generators).
-    pub q_gen: Vec<f64>,
-    pub c_gen: Vec<f64>,
-    pub pmax_gen: Vec<f64>,
-    pub pmin_gen: Vec<f64>,
     /// Generator→bus incidence, `n × n_gen`, one `1` per column.
     pub c_g: CsMat<f64>,
-    /// Column `g` → index into the in-service generators.
-    pub gen_of_col: Vec<usize>,
+}
+
+impl OpfInstance {
+    /// Number of in-service generators (the generator-space vector length).
+    #[must_use]
+    pub fn n_gen(&self) -> usize {
+        self.gen.q.len()
+    }
 }
 
 /// Build the OPF instance. Errors with [`Error::NoGenerators`] if the case has
@@ -135,19 +151,22 @@ pub fn build_opf_instance(
     Ok(OpfInstance {
         n,
         m,
-        n_gen,
-        q_bus,
-        c_bus,
-        pmax_bus,
-        pmin_bus,
-        p_d,
+        bus: BusCosts {
+            q: q_bus,
+            c: c_bus,
+            pmax: pmax_bus,
+            pmin: pmin_bus,
+            p_d,
+        },
+        gen: GenCosts {
+            q: q_gen,
+            c: c_gen,
+            pmax: pmax_gen,
+            pmin: pmin_gen,
+            gen_of_col,
+        },
         f_max,
-        q_gen,
-        c_gen,
-        pmax_gen,
-        pmin_gen,
         c_g,
-        gen_of_col,
     })
 }
 

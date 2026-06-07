@@ -33,7 +33,7 @@ pub use incidence::{
 };
 pub use lacpf::build_lacpf;
 pub use laplacian::{GroundMap, build_weighted_laplacian, ground_at, unit_vector};
-pub use opf::{OpfInstance, Units, build_opf_instance};
+pub use opf::{BusCosts, GenCosts, OpfInstance, Units, build_opf_instance};
 pub use sensitivity::{build_lodf, build_ptdf, build_ptdf_lodf};
 pub use ybus::{YbusParts, build_ybus};
 
