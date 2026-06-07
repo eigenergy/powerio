@@ -318,7 +318,11 @@ impl Network {
     /// (which would otherwise default to a placeholder and silently re-wire the
     /// network) fails loudly instead.
     pub(crate) fn check_references(&self, format: &'static str) -> crate::Result<()> {
-        let mut ids = std::collections::BTreeSet::new();
+        // HashSet, not BTreeSet: building the id set and probing it once per branch
+        // endpoint / load / shunt / gen is the dominant cost of a large parse, and
+        // a BTreeSet pays a log-n pointer-chasing probe each time. Pre-size to skip
+        // rehashing.
+        let mut ids = std::collections::HashSet::with_capacity(self.buses.len());
         for b in &self.buses {
             if !ids.insert(b.id) {
                 return Err(Error::FormatRead {
