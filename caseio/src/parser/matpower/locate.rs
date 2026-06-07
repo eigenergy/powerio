@@ -6,25 +6,13 @@
 //! text and the writer echoes it, so this module only has to find where each
 //! field's text begins and ends.
 
-use std::ops::Range;
-
 use super::tokens;
 
-/// Logical lines of `content` as `(range, slice)` with the line terminator
-/// trimmed off the range — `str::lines` semantics, but keeping each line's byte
-/// offsets into `content`.
-fn logical_lines(content: &str) -> Vec<(Range<usize>, &str)> {
-    let mut out = Vec::new();
-    let mut off = 0usize;
-    for piece in content.split_inclusive('\n') {
-        let start = off;
-        off += piece.len();
-        let trimmed = piece
-            .strip_suffix('\n')
-            .map_or(piece, |s| s.strip_suffix('\r').unwrap_or(s));
-        out.push((start..start + trimmed.len(), trimmed));
-    }
-    out
+/// A line's text with its `\n`/`\r\n` terminator trimmed off (`str::lines`
+/// semantics) given a `split_inclusive('\n')` piece.
+#[inline]
+fn trim_eol(piece: &str) -> &str {
+    piece.strip_suffix('\n').map_or(piece, |s| s.strip_suffix('\r').unwrap_or(s))
 }
 
 /// Locate each `mpc.<field> = <rhs>;` assignment's text, borrowing `(field, full)`
@@ -33,38 +21,50 @@ fn logical_lines(content: &str) -> Vec<(Range<usize>, &str)> {
 /// the quote-aware depth FSM only for `{ … }` cell arrays (whose strings may hold
 /// `]`/`}`). Infallible: an unclosed block runs to EOF and
 /// [`super::matlab::for_each_matrix_row`] reports the truncation.
+///
+/// One forward pass over `content.split_inclusive('\n')` with a running byte
+/// offset — no materialized `Vec` of every line (which on a 56 MB / 192k-bus case
+/// is tens of MB written before a single field is found). A multi-line block
+/// consumes following lines from the same iterator, so the next assignment starts
+/// after the block's closing line.
 pub(crate) fn locate_assignments(content: &str) -> Vec<(&str, &str)> {
-    let lines = logical_lines(content);
     let mut out = Vec::new();
-    let mut i = 0;
-    while i < lines.len() {
-        let (code, _comment) = tokens::comment_split(lines[i].1);
+    let mut off = 0usize;
+    let mut lines = content.split_inclusive('\n');
+    while let Some(piece) = lines.next() {
+        let start = off;
+        off += piece.len();
+        let line = trim_eol(piece);
+        let mut end = start + line.len();
+        let (code, _comment) = tokens::comment_split(line);
         if let Some((field, rhs)) = parse_assignment_start(code) {
-            let start = lines[i].0.start;
-            let mut end = lines[i].0.end;
             if rhs.starts_with('[') {
-                // Numeric matrix: the first un-commented `]` closes it. Reuse the
-                // opening line's `code` (it holds the `]` for a single-line matrix).
+                // Numeric matrix: the first un-commented `]` closes it. The opening
+                // line's `code` already holds the `]` for a single-line matrix.
                 if !code.contains(']') {
-                    while i + 1 < lines.len() {
-                        i += 1;
-                        end = lines[i].0.end;
-                        if tokens::comment_split(lines[i].1).0.contains(']') {
+                    for piece in lines.by_ref() {
+                        let s = off;
+                        off += piece.len();
+                        let l = trim_eol(piece);
+                        end = s + l.len();
+                        if tokens::comment_split(l).0.contains(']') {
                             break;
                         }
                     }
                 }
             } else if rhs.starts_with('{') {
                 let mut depth = net_bracket_depth(code);
-                while depth > 0 && i + 1 < lines.len() {
-                    i += 1;
-                    end = lines[i].0.end;
-                    depth += net_bracket_depth(tokens::comment_split(lines[i].1).0);
+                while depth > 0 {
+                    let Some(piece) = lines.next() else { break };
+                    let s = off;
+                    off += piece.len();
+                    let l = trim_eol(piece);
+                    end = s + l.len();
+                    depth += net_bracket_depth(tokens::comment_split(l).0);
                 }
             }
             out.push((field, &content[start..end]));
         }
-        i += 1;
     }
     out
 }
