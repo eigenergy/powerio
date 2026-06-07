@@ -30,7 +30,7 @@ all = ["numpy>=1.21", "scipy>=1.7", "networkx>=2.6"]
 bench = ["matpowercaseframes", "pandapower"]
 
 [project.urls]
-Repository = "https://github.com/eigenergy/caseio"
+Repository = "https://github.com/eigenergy/powerio"
 
 [tool.maturin]
 # The Rust extension lives in the powerio-py workspace member; the importable
