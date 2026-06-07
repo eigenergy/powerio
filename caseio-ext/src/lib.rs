@@ -9,7 +9,7 @@ use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
 use pyo3::types::{PyDict, PyList};
 
-use caseio::{BusType, IndexedNetwork, Network, TargetFormat};
+use caseio::{IndexCore, IndexedNetwork, Network};
 
 pyo3::create_exception!(
     _caseio,
@@ -18,29 +18,26 @@ pyo3::create_exception!(
     "Error raised by the caseio parser or converter."
 );
 
-/// I/O failures map to the matching `OSError` subclass; parse and data errors
-/// become [`CaseioError`].
+/// I/O failures map to the matching `OSError` subclass; an unknown/uninferable
+/// format becomes a `ValueError`; other parse and data errors become
+/// [`CaseioError`].
 fn to_pyerr(e: caseio::Error) -> PyErr {
     match e {
         caseio::Error::Io(io) => io.into(),
+        caseio::Error::UnknownFormat(msg) => PyValueError::new_err(msg),
         other => CaseioError::new_err(other.to_string()),
-    }
-}
-
-fn bus_type_str(kind: BusType) -> &'static str {
-    match kind {
-        BusType::Pq => "PQ",
-        BusType::Pv => "PV",
-        BusType::Ref => "REF",
-        BusType::Isolated => "ISOLATED",
     }
 }
 
 /// A parsed power network: the format-neutral [`Network`] exposed to Python as
 /// dict tables plus topology diagnostics. No matrices — those are in `casemat`.
+///
+/// The derived [`IndexCore`] is built once and cached alongside `inner`, so the
+/// topology getters reuse it instead of rebuilding the bus-id map per call.
 #[pyclass(name = "PyCase")]
 pub struct PyCase {
     inner: Network,
+    core: IndexCore,
 }
 
 #[pymethods]
@@ -87,27 +84,29 @@ impl PyCase {
 
     #[getter]
     fn is_radial(&self) -> bool {
-        IndexedNetwork::new(&self.inner).is_radial()
+        IndexedNetwork::with_core(&self.inner, &self.core).is_radial()
     }
 
     #[getter]
     fn n_connected_components(&self) -> usize {
-        IndexedNetwork::new(&self.inner).n_connected_components()
+        IndexedNetwork::with_core(&self.inner, &self.core).n_connected_components()
     }
 
     /// Dense `[0, n)` index of the single reference bus. Raises if not exactly
     /// one reference bus is present.
     fn reference_bus_index(&self) -> PyResult<usize> {
-        IndexedNetwork::new(&self.inner).reference_bus_index().map_err(to_pyerr)
+        IndexedNetwork::with_core(&self.inner, &self.core)
+            .reference_bus_index()
+            .map_err(to_pyerr)
     }
 
     #[getter]
     fn buses<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyList>> {
-        let list = PyList::empty(py);
+        let mut rows: Vec<Bound<'py, PyDict>> = Vec::with_capacity(self.inner.buses.len());
         for b in &self.inner.buses {
             let d = PyDict::new(py);
             d.set_item("id", b.id)?;
-            d.set_item("type", bus_type_str(b.kind))?;
+            d.set_item("type", b.kind.as_str())?;
             d.set_item("vm", b.vm)?;
             d.set_item("va", b.va)?;
             d.set_item("base_kv", b.base_kv)?;
@@ -115,42 +114,42 @@ impl PyCase {
             d.set_item("zone", b.zone)?;
             d.set_item("vmax", b.vmax)?;
             d.set_item("vmin", b.vmin)?;
-            list.append(d)?;
+            rows.push(d);
         }
-        Ok(list)
+        PyList::new(py, rows)
     }
 
     #[getter]
     fn loads<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyList>> {
-        let list = PyList::empty(py);
+        let mut rows: Vec<Bound<'py, PyDict>> = Vec::with_capacity(self.inner.loads.len());
         for l in &self.inner.loads {
             let d = PyDict::new(py);
             d.set_item("bus", l.bus)?;
             d.set_item("p", l.p)?;
             d.set_item("q", l.q)?;
             d.set_item("in_service", l.in_service)?;
-            list.append(d)?;
+            rows.push(d);
         }
-        Ok(list)
+        PyList::new(py, rows)
     }
 
     #[getter]
     fn shunts<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyList>> {
-        let list = PyList::empty(py);
+        let mut rows: Vec<Bound<'py, PyDict>> = Vec::with_capacity(self.inner.shunts.len());
         for s in &self.inner.shunts {
             let d = PyDict::new(py);
             d.set_item("bus", s.bus)?;
             d.set_item("g", s.g)?;
             d.set_item("b", s.b)?;
             d.set_item("in_service", s.in_service)?;
-            list.append(d)?;
+            rows.push(d);
         }
-        Ok(list)
+        PyList::new(py, rows)
     }
 
     #[getter]
     fn branches<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyList>> {
-        let list = PyList::empty(py);
+        let mut rows: Vec<Bound<'py, PyDict>> = Vec::with_capacity(self.inner.branches.len());
         for br in &self.inner.branches {
             let d = PyDict::new(py);
             d.set_item("from", br.from)?;
@@ -166,14 +165,14 @@ impl PyCase {
             d.set_item("in_service", br.in_service)?;
             d.set_item("angmin", br.angmin)?;
             d.set_item("angmax", br.angmax)?;
-            list.append(d)?;
+            rows.push(d);
         }
-        Ok(list)
+        PyList::new(py, rows)
     }
 
     #[getter]
     fn gens<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyList>> {
-        let list = PyList::empty(py);
+        let mut rows: Vec<Bound<'py, PyDict>> = Vec::with_capacity(self.inner.generators.len());
         for g in &self.inner.generators {
             let d = PyDict::new(py);
             d.set_item("bus", g.bus)?;
@@ -193,18 +192,18 @@ impl PyCase {
                     cd.set_item("startup", c.startup)?;
                     cd.set_item("shutdown", c.shutdown)?;
                     cd.set_item("ncost", c.ncost)?;
-                    cd.set_item("coeffs", c.coeffs.clone())?;
+                    cd.set_item("coeffs", &c.coeffs)?;
                     d.set_item("cost", cd)?;
                 }
                 None => d.set_item("cost", py.None())?,
             }
-            list.append(d)?;
+            rows.push(d);
         }
-        Ok(list)
+        PyList::new(py, rows)
     }
 
     fn connectivity_report<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyDict>> {
-        let r = IndexedNetwork::new(&self.inner).connectivity_report();
+        let r = IndexedNetwork::with_core(&self.inner, &self.core).connectivity_report();
         let d = PyDict::new(py);
         d.set_item("n_buses", r.n_buses)?;
         d.set_item("n_branches_in_service", r.n_branches_in_service)?;
@@ -234,11 +233,12 @@ impl PyCase {
 #[pyfunction]
 fn parse(path: &str) -> PyResult<PyCase> {
     let inner = caseio::parse_matpower_file(path).map_err(to_pyerr)?;
-    Ok(PyCase { inner })
+    let core = IndexCore::build(&inner);
+    Ok(PyCase { inner, core })
 }
 
-/// Parse a MATPOWER case from in-memory `.m` text. `name` overrides the case
-/// name (defaults to "case").
+/// Parse a MATPOWER case from in-memory `.m` text. When `name` is given it
+/// overrides the parsed case name.
 #[pyfunction]
 #[pyo3(signature = (content, name=None))]
 fn parse_string(content: &str, name: Option<&str>) -> PyResult<PyCase> {
@@ -246,7 +246,8 @@ fn parse_string(content: &str, name: Option<&str>) -> PyResult<PyCase> {
     if let Some(n) = name {
         inner.name = n.to_string();
     }
-    Ok(PyCase { inner })
+    let core = IndexCore::build(&inner);
+    Ok(PyCase { inner, core })
 }
 
 /// Serialize `case` back to MATPOWER `.m` text (byte-exact echo for a
@@ -264,47 +265,9 @@ fn write(case: &PyCase) -> String {
 fn convert(path: &str, to: &str, from: Option<&str>) -> PyResult<(String, Vec<String>)> {
     let target = caseio::target_format_from_name(to)
         .ok_or_else(|| PyValueError::new_err(format!("unknown target format: {to}")))?;
-    let net = read_network(path, from)?;
+    let net = caseio::read_path(std::path::Path::new(path), from).map_err(to_pyerr)?;
     let conv = caseio::write_as(&net, target);
     Ok((conv.text, conv.warnings))
-}
-
-/// Read `path` into a [`Network`], choosing the reader from `from` or the file
-/// extension. EGRET is write-only.
-fn read_network(path: &str, from: Option<&str>) -> PyResult<Network> {
-    let p = std::path::Path::new(path);
-    let fmt = match from {
-        Some(f) => caseio::target_format_from_name(f)
-            .ok_or_else(|| PyValueError::new_err(format!("unknown source format: {f}")))?,
-        None => match p.extension().and_then(|e| e.to_str()) {
-            Some("m") => TargetFormat::Matpower,
-            Some("json") => TargetFormat::PowerModelsJson,
-            Some("raw") => TargetFormat::Psse,
-            Some("aux") => TargetFormat::PowerWorld,
-            other => {
-                return Err(PyValueError::new_err(format!(
-                    "cannot infer input format from extension {other:?}; pass from="
-                )))
-            }
-        },
-    };
-    // Preserve the io::Error kind so a missing/unreadable file raises the
-    // matching OSError subclass, like the MATPOWER path's `to_pyerr` does.
-    let read_str = || std::fs::read_to_string(p).map_err(PyErr::from);
-    let net = match fmt {
-        TargetFormat::Matpower => caseio::parse_matpower_file(path).map_err(to_pyerr)?,
-        TargetFormat::PowerModelsJson => {
-            caseio::parse_powermodels_json(&read_str()?).map_err(to_pyerr)?
-        }
-        TargetFormat::Psse => caseio::parse_psse(&read_str()?).map_err(to_pyerr)?,
-        TargetFormat::PowerWorld => caseio::parse_powerworld(&read_str()?).map_err(to_pyerr)?,
-        TargetFormat::EgretJson => {
-            return Err(PyValueError::new_err(
-                "reading EGRET JSON is not supported yet (write-only)",
-            ))
-        }
-    };
-    Ok(net)
 }
 
 #[pymodule]
