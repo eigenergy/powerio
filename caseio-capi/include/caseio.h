@@ -6,6 +6,13 @@
  * with cio_case_free. Array extractors fill caller-allocated buffers whose
  * length is the matching cio_n_* count; pass NULL to skip an output.
  *
+ * Message buffers: errbuf/warnbuf may be NULL (or length 0) to discard the
+ * message. A message longer than the buffer is truncated to fit and is always
+ * NUL-terminated. CIO_ERRBUF_MIN is a comfortable size for any error string.
+ *
+ * Every entry point catches Rust panics at the boundary and returns the failure
+ * default (NULL, 0, -1, 0.0, or no-op) rather than unwinding across the ABI.
+ *
  * This header is checked in; regenerate from the Rust source with
  *   cbindgen --config cbindgen.toml --crate caseio-capi --output include/caseio.h
  */
@@ -14,6 +21,8 @@
 
 #include <stddef.h>
 #include <stdint.h>
+
+#define CIO_ERRBUF_MIN 256
 
 #ifdef __cplusplus
 extern "C" {
@@ -54,6 +63,8 @@ void cio_bus_ids(const CioCase *c, int64_t *out);
 void cio_branches(const CioCase *c, int64_t *from, int64_t *to, double *r,
                   double *x, double *b, double *tap, double *shift,
                   uint8_t *in_service);
+/* One row per generator (not per bus): `bus` repeats when two generators share
+ * a bus, unlike the per-bus cio_nodal_* tables below. */
 void cio_gens(const CioCase *c, int64_t *bus, double *pg, double *pmax,
               double *pmin, uint8_t *in_service);
 /* Demand / shunt summed per bus, dense order, length cio_n_buses. */

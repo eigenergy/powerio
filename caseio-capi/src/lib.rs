@@ -15,11 +15,14 @@
 use std::ffi::{c_char, CStr, CString};
 use std::panic::{catch_unwind, AssertUnwindSafe};
 
-use caseio::{IndexedNetwork, Network, TargetFormat};
+use caseio::{IndexCore, IndexedNetwork, Network};
 
-/// Opaque parsed case handle.
+/// Opaque parsed case handle. Carries the parsed [`Network`] plus the
+/// [`IndexCore`] derived from it once at parse time, so every indexed query
+/// reuses the same bus-id map and nodal aggregates instead of rebuilding them.
 pub struct CioCase {
     net: Network,
+    core: IndexCore,
 }
 
 /// Copy `msg` (truncated to fit) into a caller `char[len]` buffer, always
@@ -50,31 +53,10 @@ fn into_cstring(s: String) -> *mut c_char {
     }
 }
 
-fn read_network(path: &str, from: Option<&str>) -> Result<Network, String> {
-    let p = std::path::Path::new(path);
-    let fmt = match from {
-        Some(f) => caseio::target_format_from_name(f)
-            .ok_or_else(|| format!("unknown source format: {f}"))?,
-        None => match p.extension().and_then(|e| e.to_str()) {
-            Some("m") => TargetFormat::Matpower,
-            Some("json") => TargetFormat::PowerModelsJson,
-            Some("raw") => TargetFormat::Psse,
-            Some("aux") => TargetFormat::PowerWorld,
-            other => return Err(format!("cannot infer input format from extension {other:?}")),
-        },
-    };
-    let read = || std::fs::read_to_string(p).map_err(|e| e.to_string());
-    match fmt {
-        TargetFormat::Matpower => caseio::parse_matpower_file(path).map_err(|e| e.to_string()),
-        TargetFormat::PowerModelsJson => {
-            caseio::parse_powermodels_json(&read()?).map_err(|e| e.to_string())
-        }
-        TargetFormat::Psse => caseio::parse_psse(&read()?).map_err(|e| e.to_string()),
-        TargetFormat::PowerWorld => caseio::parse_powerworld(&read()?).map_err(|e| e.to_string()),
-        TargetFormat::EgretJson => {
-            Err("reading EGRET JSON is not supported yet (write-only)".into())
-        }
-    }
+/// Run `f` at the FFI boundary, catching any panic so it can't unwind across
+/// `extern "C"` (UB). Returns `fallback` if `f` panics.
+unsafe fn guard<R>(fallback: R, f: impl FnOnce() -> R) -> R {
+    catch_unwind(AssertUnwindSafe(f)).unwrap_or(fallback)
 }
 
 /// Parse `path` (format from extension, or `from` if non-NULL) into a case
@@ -89,7 +71,12 @@ pub unsafe extern "C" fn cio_parse(
     let r = catch_unwind(AssertUnwindSafe(|| {
         let path = cstr(path).ok_or_else(|| "path is NULL or not UTF-8".to_string())?;
         let from = if from.is_null() { None } else { cstr(from) };
-        read_network(path, from).map(|net| Box::into_raw(Box::new(CioCase { net })))
+        caseio::read_path(std::path::Path::new(path), from)
+            .map_err(|e| e.to_string())
+            .map(|net| {
+                let core = IndexCore::build(&net);
+                Box::into_raw(Box::new(CioCase { net, core }))
+            })
     }));
     match r {
         Ok(Ok(ptr)) => ptr,
@@ -112,60 +99,66 @@ pub unsafe extern "C" fn cio_case_free(case: *mut CioCase) {
     }
 }
 
-unsafe fn case_ref<'a>(case: *const CioCase) -> Option<&'a Network> {
-    case.as_ref().map(|c| &c.net)
+unsafe fn case_ref<'a>(case: *const CioCase) -> Option<&'a CioCase> {
+    case.as_ref()
+}
+
+/// View `case` through its cached [`IndexCore`] — no per-call rebuild.
+unsafe fn view<'a>(case: *const CioCase) -> Option<IndexedNetwork<'a>> {
+    case.as_ref().map(|c| IndexedNetwork::with_core(&c.net, &c.core))
 }
 
 #[no_mangle]
 pub unsafe extern "C" fn cio_n_buses(case: *const CioCase) -> usize {
-    case_ref(case).map_or(0, |n| n.buses.len())
+    guard(0, || case_ref(case).map_or(0, |c| c.net.buses.len()))
 }
 
 #[no_mangle]
 pub unsafe extern "C" fn cio_n_branches(case: *const CioCase) -> usize {
-    case_ref(case).map_or(0, |n| n.branches.len())
+    guard(0, || case_ref(case).map_or(0, |c| c.net.branches.len()))
 }
 
 #[no_mangle]
 pub unsafe extern "C" fn cio_n_gens(case: *const CioCase) -> usize {
-    case_ref(case).map_or(0, |n| n.generators.len())
+    guard(0, || case_ref(case).map_or(0, |c| c.net.generators.len()))
 }
 
 #[no_mangle]
 pub unsafe extern "C" fn cio_base_mva(case: *const CioCase) -> f64 {
-    case_ref(case).map_or(0.0, |n| n.base_mva)
+    guard(0.0, || case_ref(case).map_or(0.0, |c| c.net.base_mva))
 }
 
-/// Dense `[0, n)` index of the single reference bus, or `-1` if not exactly one.
+/// Dense `[0, n)` index of the single reference bus, or `-1` if not exactly one
+/// (also `-1` if the index is too large for `isize`).
 #[no_mangle]
 pub unsafe extern "C" fn cio_reference_bus(case: *const CioCase) -> isize {
-    match case_ref(case) {
-        Some(net) => IndexedNetwork::new(net)
+    guard(-1, || match view(case) {
+        Some(v) => v
             .reference_bus_index()
-            .map_or(-1, |i| i as isize),
+            .map_or(-1, |i| isize::try_from(i).unwrap_or(-1)),
         None => -1,
-    }
+    })
 }
 
 #[no_mangle]
 pub unsafe extern "C" fn cio_n_components(case: *const CioCase) -> usize {
-    case_ref(case).map_or(0, |net| IndexedNetwork::new(net).n_connected_components())
+    guard(0, || view(case).map_or(0, |v| v.n_connected_components()))
 }
 
 /// `1` if the in-service topology is a forest, else `0`.
 #[no_mangle]
 pub unsafe extern "C" fn cio_is_radial(case: *const CioCase) -> i32 {
-    case_ref(case).map_or(0, |net| i32::from(IndexedNetwork::new(net).is_radial()))
+    guard(0, || view(case).map_or(0, |v| i32::from(v.is_radial())))
 }
 
 /// Serialize back to MATPOWER `.m` (byte-exact echo when parsed from MATPOWER).
 /// Returns an owned C string; free with [`cio_string_free`].
 #[no_mangle]
 pub unsafe extern "C" fn cio_write_matpower(case: *const CioCase) -> *mut c_char {
-    match case_ref(case) {
-        Some(net) => into_cstring(caseio::write_matpower(net)),
+    guard(std::ptr::null_mut(), || match case_ref(case) {
+        Some(c) => into_cstring(caseio::write_matpower(&c.net)),
         None => std::ptr::null_mut(),
-    }
+    })
 }
 
 /// Convert `path` to format `to` (optionally forcing the source via `from`).
@@ -188,7 +181,7 @@ pub unsafe extern "C" fn cio_convert(
         let from = if from.is_null() { None } else { cstr(from) };
         let target = caseio::target_format_from_name(to)
             .ok_or_else(|| format!("unknown target format: {to}"))?;
-        let net = read_network(path, from)?;
+        let net = caseio::read_path(std::path::Path::new(path), from).map_err(|e| e.to_string())?;
         let conv = caseio::write_as(&net, target);
         Ok::<_, String>((conv.text, conv.warnings))
     }));
@@ -228,9 +221,11 @@ unsafe fn fill<T: Copy>(ptr: *mut T, vals: impl Iterator<Item = T>) {
 /// Fill `out` (length `cio_n_buses`) with the 1-based bus ids in dense order.
 #[no_mangle]
 pub unsafe extern "C" fn cio_bus_ids(case: *const CioCase, out: *mut i64) {
-    if let Some(net) = case_ref(case) {
-        fill(out, net.buses.iter().map(|b| b.id as i64));
-    }
+    guard((), || {
+        if let Some(c) = case_ref(case) {
+            fill(out, c.net.buses.iter().map(|b| i64::try_from(b.id).unwrap_or(-1)));
+        }
+    })
 }
 
 /// Fill the branch tables (each length `cio_n_branches`, dense bus indices for
@@ -247,17 +242,20 @@ pub unsafe extern "C" fn cio_branches(
     shift: *mut f64,
     in_service: *mut u8,
 ) {
-    let Some(net) = case_ref(case) else { return };
-    let view = IndexedNetwork::new(net);
-    let idx = |id: usize| view.bus_index(id).map_or(-1i64, |i| i as i64);
-    fill(from, net.branches.iter().map(|br| idx(br.from)));
-    fill(to, net.branches.iter().map(|br| idx(br.to)));
-    fill(r, net.branches.iter().map(|br| br.r));
-    fill(x, net.branches.iter().map(|br| br.x));
-    fill(b, net.branches.iter().map(|br| br.b));
-    fill(tap, net.branches.iter().map(|br| br.tap));
-    fill(shift, net.branches.iter().map(|br| br.shift));
-    fill(in_service, net.branches.iter().map(|br| u8::from(br.in_service)));
+    guard((), || {
+        let Some(c) = case_ref(case) else { return };
+        let view = IndexedNetwork::with_core(&c.net, &c.core);
+        let idx = |id: usize| view.bus_index(id).map_or(-1, |i| i64::try_from(i).unwrap_or(-1));
+        let net = &c.net;
+        fill(from, net.branches.iter().map(|br| idx(br.from)));
+        fill(to, net.branches.iter().map(|br| idx(br.to)));
+        fill(r, net.branches.iter().map(|br| br.r));
+        fill(x, net.branches.iter().map(|br| br.x));
+        fill(b, net.branches.iter().map(|br| br.b));
+        fill(tap, net.branches.iter().map(|br| br.tap));
+        fill(shift, net.branches.iter().map(|br| br.shift));
+        fill(in_service, net.branches.iter().map(|br| u8::from(br.in_service)));
+    })
 }
 
 /// Fill the generator tables (each length `cio_n_gens`; `bus` is a dense index).
@@ -271,35 +269,40 @@ pub unsafe extern "C" fn cio_gens(
     pmin: *mut f64,
     in_service: *mut u8,
 ) {
-    let Some(net) = case_ref(case) else { return };
-    let view = IndexedNetwork::new(net);
-    let idx = |id: usize| view.bus_index(id).map_or(-1i64, |i| i as i64);
-    fill(bus, net.generators.iter().map(|g| idx(g.bus)));
-    fill(pg, net.generators.iter().map(|g| g.pg));
-    fill(pmax, net.generators.iter().map(|g| g.pmax));
-    fill(pmin, net.generators.iter().map(|g| g.pmin));
-    fill(in_service, net.generators.iter().map(|g| u8::from(g.in_service)));
+    guard((), || {
+        let Some(c) = case_ref(case) else { return };
+        let view = IndexedNetwork::with_core(&c.net, &c.core);
+        let idx = |id: usize| view.bus_index(id).map_or(-1, |i| i64::try_from(i).unwrap_or(-1));
+        let net = &c.net;
+        fill(bus, net.generators.iter().map(|g| idx(g.bus)));
+        fill(pg, net.generators.iter().map(|g| g.pg));
+        fill(pmax, net.generators.iter().map(|g| g.pmax));
+        fill(pmin, net.generators.iter().map(|g| g.pmin));
+        fill(in_service, net.generators.iter().map(|g| u8::from(g.in_service)));
+    })
 }
 
 /// Fill nodal aggregates (each length `cio_n_buses`, dense order): active and
 /// reactive demand summed per bus. Any pointer may be `NULL`.
 #[no_mangle]
 pub unsafe extern "C" fn cio_nodal_demand(case: *const CioCase, pd: *mut f64, qd: *mut f64) {
-    if let Some(net) = case_ref(case) {
-        let view = IndexedNetwork::new(net);
-        fill(pd, view.pd().iter().copied());
-        fill(qd, view.qd().iter().copied());
-    }
+    guard((), || {
+        if let Some(v) = view(case) {
+            fill(pd, v.pd().iter().copied());
+            fill(qd, v.qd().iter().copied());
+        }
+    })
 }
 
 /// Fill nodal shunt aggregates (each length `cio_n_buses`, dense order).
 #[no_mangle]
 pub unsafe extern "C" fn cio_nodal_shunt(case: *const CioCase, gs: *mut f64, bs: *mut f64) {
-    if let Some(net) = case_ref(case) {
-        let view = IndexedNetwork::new(net);
-        fill(gs, view.gs().iter().copied());
-        fill(bs, view.bs().iter().copied());
-    }
+    guard((), || {
+        if let Some(v) = view(case) {
+            fill(gs, v.gs().iter().copied());
+            fill(bs, v.bs().iter().copied());
+        }
+    })
 }
 
 #[cfg(test)]
