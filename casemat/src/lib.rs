@@ -27,7 +27,8 @@ pub mod tui;
 
 pub use matrix::{
     build_adjacency, build_bdoubleprime, build_bprime, build_flow_map, build_incidence,
-    build_lacpf, build_lodf, build_opf_instance, build_ptdf, build_weighted_laplacian, build_ybus,
+    build_lacpf, build_lodf, build_opf_instance, build_ptdf, build_ptdf_lodf,
+    build_weighted_laplacian, build_ybus,
     ground_at, sddm_check, susceptance_diag, unit_vector, BuildOptions, DcConvention, GroundMap,
     IncidenceParts, MatrixStats, OpfInstance, Scheme, Units,
 };

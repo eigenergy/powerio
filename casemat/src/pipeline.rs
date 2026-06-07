@@ -18,7 +18,7 @@ use crate::io::meta::{CaseMetadata, MatrixMetadata, write_meta_json};
 use crate::io::mtx::{write_mtx, write_vector_mtx};
 use crate::matrix::{
     BuildOptions, MatrixStats, build_adjacency, build_bdoubleprime, build_bprime, build_lacpf,
-    build_ybus, sddm_check,
+    build_ybus, negate_into, sddm_check,
 };
 use crate::Result;
 
@@ -241,18 +241,10 @@ pub fn build_kind(
         MatrixKind::BPrime => build_bprime(view, opts),
         MatrixKind::BDoublePrime => build_bdoubleprime(view, opts),
         MatrixKind::YbusG => build_ybus(view, opts).map(|p| p.g),
-        MatrixKind::YbusB => build_ybus(view, opts).map(|p| negate(&p.b)),
+        MatrixKind::YbusB => build_ybus(view, opts).map(|p| negate_into(p.b)),
         MatrixKind::Lacpf => build_lacpf(view, opts),
         MatrixKind::Adjacency => build_adjacency(view),
     }
-}
-
-fn negate(a: &sprs::CsMat<f64>) -> sprs::CsMat<f64> {
-    let mut out = a.clone();
-    for v in out.data_mut() {
-        *v = -*v;
-    }
-    out
 }
 
 fn sha256_hex(bytes: &[u8]) -> String {

@@ -34,7 +34,7 @@ pub use incidence::{
 pub use lacpf::build_lacpf;
 pub use laplacian::{GroundMap, build_weighted_laplacian, ground_at, unit_vector};
 pub use opf::{OpfInstance, Units, build_opf_instance};
-pub use sensitivity::{build_lodf, build_ptdf};
+pub use sensitivity::{build_lodf, build_ptdf, build_ptdf_lodf};
 pub use ybus::{YbusParts, build_ybus};
 
 use sprs::CsMat;
@@ -96,8 +96,7 @@ impl MatrixStats {
         let mut m_sign = true;
         let mut fro_sq = 0.0_f64;
 
-        for row_idx in 0..n {
-            let row = a.outer_view(row_idx).expect("row exists");
+        for (row_idx, row) in a.outer_iterator().enumerate() {
             let mut diag = 0.0_f64;
             let mut off_abs = 0.0_f64;
             for (col, &v) in row.iter() {
@@ -126,6 +125,14 @@ impl MatrixStats {
             frobenius_norm: fro_sq.sqrt(),
         }
     }
+}
+
+/// Negate every stored value of a sparse matrix in place. Used where the input
+/// is owned and consumed straight away (B″ and the `YbusB` pipeline arm), so no
+/// clone of the structure is needed.
+pub(crate) fn negate_into(mut a: CsMat<f64>) -> CsMat<f64> {
+    a.data_mut().iter_mut().for_each(|v| *v = -*v);
+    a
 }
 
 /// Whether a matrix is SDDM (symmetric diagonally dominant M-matrix).

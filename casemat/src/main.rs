@@ -400,10 +400,8 @@ fn run_sensitivities(
         .with_context(|| format!("parse {}", input.display()))?;
     std::fs::create_dir_all(&output)?;
     let view = casemat::IndexedNetwork::new(&mpc);
-    let ptdf = casemat::build_ptdf(&view, convention)
-        .with_context(|| format!("PTDF for {}", input.display()))?;
-    let lodf = casemat::build_lodf(&view, convention)
-        .with_context(|| format!("LODF for {}", input.display()))?;
+    let (ptdf, lodf) = casemat::build_ptdf_lodf(&view, convention)
+        .with_context(|| format!("DC sensitivities for {}", input.display()))?;
     let ptdf_path = output.join(format!("{}_ptdf.mtx", view.name()));
     let lodf_path = output.join(format!("{}_lodf.mtx", view.name()));
     casemat::io::mtx::write_mtx(&ptdf, &ptdf_path)?;

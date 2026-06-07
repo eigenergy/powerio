@@ -51,9 +51,32 @@ pub fn build_lodf(case: &IndexedNetwork, conv: DcConvention) -> Result<CsMat<f64
     let inc = build_incidence(case, conv)?;
     let r = case.reference_bus_index()?;
     let (ptdf, m, n) = ptdf_dense(&inc, r)?;
+    Ok(lodf_from_dense(&ptdf, &inc.a, m, n))
+}
 
+/// Both DC sensitivity matrices `(PTDF, LODF)` from a single Laplacian
+/// factorization. When a caller needs both for the same case (the
+/// `sensitivities` bundle), this factors and inverts the grounded Laplacian
+/// once instead of paying the O(n³) twice across separate
+/// [`build_ptdf`]/[`build_lodf`] calls.
+pub fn build_ptdf_lodf(
+    case: &IndexedNetwork,
+    conv: DcConvention,
+) -> Result<(CsMat<f64>, CsMat<f64>)> {
+    check_connected(case)?;
+    let inc = build_incidence(case, conv)?;
+    let r = case.reference_bus_index()?;
+    let (dense, m, n) = ptdf_dense(&inc, r)?;
+    let ptdf = dense_to_csr(&dense, m, n);
+    let lodf = lodf_from_dense(&dense, &inc.a, m, n);
+    Ok((ptdf, lodf))
+}
+
+/// LODF from a dense PTDF and the signed incidence (the shared tail of
+/// [`build_lodf`] and [`build_ptdf_lodf`]).
+fn lodf_from_dense(ptdf: &[f64], a: &CsMat<f64>, m: usize, n: usize) -> CsMat<f64> {
     // Branch endpoints (dense bus indices), recovered from the incidence.
-    let (from, to) = endpoints(&inc.a, m);
+    let (from, to) = endpoints(a, m);
 
     // δ[l,k] = PTDF[l, from_k] − PTDF[l, to_k]: flow on l from a unit transfer
     // along branch k.
@@ -76,7 +99,7 @@ pub fn build_lodf(case: &IndexedNetwork, conv: DcConvention) -> Result<CsMat<f64
             }
         }
     }
-    Ok(lodf.finish_csr())
+    lodf.finish_csr()
 }
 
 /// Dense PTDF (`m × n`, row-major) plus its shape.

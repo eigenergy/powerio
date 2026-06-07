@@ -31,16 +31,15 @@ pub fn build_lacpf(case: &IndexedNetwork, opts: &BuildOptions) -> Result<CsMat<f
     let two_n = 2 * n;
 
     // Walk both G and B once and emit the 4 blocks: [+G, -B; -B, -G].
-    let g_csr = parts.g.to_csr();
-    let b_csr = parts.b.to_csr();
+    // `build_ybus` already returns CSR, so iterate the parts directly rather
+    // than deep-copying through `to_csr()`.
+    let mut tri = sprs::TriMat::with_capacity((two_n, two_n), 2 * (parts.g.nnz() + parts.b.nnz()));
 
-    let mut tri = sprs::TriMat::with_capacity((two_n, two_n), 2 * (g_csr.nnz() + b_csr.nnz()));
-
-    for (&v, (i, j)) in g_csr.iter() {
+    for (&v, (i, j)) in parts.g.iter() {
         tri.add_triplet(i, j, v); // top-left:  +G
         tri.add_triplet(n + i, n + j, -v); // bottom-right: -G
     }
-    for (&v, (i, j)) in b_csr.iter() {
+    for (&v, (i, j)) in parts.b.iter() {
         tri.add_triplet(i, n + j, -v); // top-right:    -B
         tri.add_triplet(n + i, j, -v); // bottom-left:  -B
     }
