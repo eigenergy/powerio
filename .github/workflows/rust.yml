@@ -11,12 +11,48 @@ env:
 
 jobs:
   build:
-
     runs-on: ubuntu-latest
-
     steps:
     - uses: actions/checkout@v4
+    - uses: dtolnay/rust-toolchain@stable
+      with:
+        components: clippy
+    - uses: Swatinem/rust-cache@v2
     - name: Build
       run: cargo build --verbose
+    # Deny the workspace pedantic lints on the non-extension crates. The PyO3
+    # ext crates are linted in the Python workflow with their feature enabled.
+    - name: Clippy
+      run: cargo clippy --all-targets -p caseio -p casemat -p caseio-capi -- -D warnings
+    # Bare `cargo test` only covers caseio + casemat (the default-members); name
+    # the C ABI crate explicitly so its end-to-end ABI tests run in CI too.
     - name: Run tests
-      run: cargo test --verbose
+      run: cargo test -p caseio -p casemat -p caseio-capi --verbose
+
+  c-abi:
+    name: C ABI (header parity + C smoke test)
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+    - uses: dtolnay/rust-toolchain@stable
+    - uses: Swatinem/rust-cache@v2
+    - name: Build caseio-capi (cdylib + staticlib)
+      run: cargo build -p caseio-capi --release
+    # Every `cio_` export in the Rust source must be declared in the checked-in
+    # header, so a new, renamed, or removed entry point can't silently drift out
+    # of sync with include/caseio.h.
+    - name: Header symbol parity
+      run: |
+        grep -oE 'extern "C" fn cio_[a-z_]+' caseio-capi/src/lib.rs \
+          | grep -oE 'cio_[a-z_]+' | sort -u > rs_syms
+        grep -oE 'cio_[a-z_]+ *\(' caseio-capi/include/caseio.h \
+          | grep -oE 'cio_[a-z_]+' | sort -u > h_syms
+        diff rs_syms h_syms
+    # Drive the ABI from C against the built library: proves the header is valid
+    # C, the symbols link, and the exercised signatures match. Dynamic-linked so
+    # the platform resolves the Rust runtime deps.
+    - name: Compile and run the C smoke test
+      run: |
+        cc -I caseio-capi/include caseio-capi/examples/smoke.c \
+           -L target/release -lcaseio_capi -o cio_smoke
+        LD_LIBRARY_PATH=target/release ./cio_smoke tests/data/case9.m
