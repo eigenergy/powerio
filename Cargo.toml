@@ -1,8 +1,8 @@
 [workspace]
-members = ["caseio", "casemat", "casemat-ext"]
+members = ["caseio", "casemat", "casemat-ext", "caseio-ext"]
 # Bare `cargo build`/`test`/`clippy` touch only the two Rust library crates, so
-# the toolchain never compiles the PyO3 extension (which needs libpython). Build
-# the bindings explicitly with `-p casemat-ext`.
+# the toolchain never compiles the PyO3 extensions (which need libpython). Build
+# the bindings explicitly with `-p casemat-ext` / `-p caseio-ext`.
 default-members = ["caseio", "casemat"]
 resolver = "2"
 

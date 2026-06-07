@@ -171,6 +171,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "caseio-ext"
+version = "0.1.0"
+dependencies = [
+ "caseio",
+ "pyo3",
+]
+
+[[package]]
 name = "casemat"
 version = "0.1.0"
 dependencies = [

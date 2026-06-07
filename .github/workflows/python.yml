@@ -26,6 +26,8 @@ jobs:
       # gate on this crate only.
       - name: Clippy (casemat-ext)
         run: cargo clippy -p casemat-ext --no-deps --features extension-module -- -D warnings
+      - name: Clippy (caseio-ext)
+        run: cargo clippy -p caseio-ext --no-deps --features extension-module -- -D warnings
 
   test:
     runs-on: ubuntu-latest
@@ -44,6 +46,9 @@ jobs:
       # Quote the extras so the shell doesn't glob `[networkx]`.
       - name: Install casemat + test deps
         run: pip install '.[networkx]' pytest
+      # The caseio wheel (no numpy/scipy) builds from its own pyproject.
+      - name: Install caseio
+        run: pip install ./caseio-ext
       - name: Run tests
         run: pytest python/tests -q
 
@@ -66,11 +71,17 @@ jobs:
         with:
           python-version: "3.x"
       # abi3-py39 → one wheel per platform covers Python 3.9+.
-      - name: Build wheels
+      - name: Build casemat wheels
         uses: PyO3/maturin-action@v1
         with:
           target: ${{ matrix.platform.target }}
           args: --release --out dist
+          manylinux: auto
+      - name: Build caseio wheels
+        uses: PyO3/maturin-action@v1
+        with:
+          target: ${{ matrix.platform.target }}
+          args: --release --out dist -m caseio-ext/pyproject.toml
           manylinux: auto
       - uses: actions/upload-artifact@v4
         with:
@@ -82,11 +93,16 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Build sdist
+      - name: Build casemat sdist
         uses: PyO3/maturin-action@v1
         with:
           command: sdist
           args: --out dist
+      - name: Build caseio sdist
+        uses: PyO3/maturin-action@v1
+        with:
+          command: sdist
+          args: --out dist -m caseio-ext/pyproject.toml
       - uses: actions/upload-artifact@v4
         with:
           name: sdist
