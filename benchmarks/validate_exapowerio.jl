@@ -1,7 +1,10 @@
 # Validate caseio's parse against ExaPowerIO.jl, value for value, on a MATPOWER
 # case. caseio's numbers come through its C ABI (see caseio_ffi.jl); ExaPowerIO is
-# the reference Julia reader. Both read the same .m, so every electrical quantity
-# must agree once the two encodings are reconciled:
+# the reference Julia reader, parsed with its default filtered=true. That default
+# drops out-of-service branches/gens and isolated (type-4) buses and renumbers the
+# survivors, so we filter caseio's tables to the in-service rows and compare those
+# — the genuine test that caseio reproduces ExaPowerIO's filtered view. Encodings
+# reconciled:
 #
 #   - ExaPowerIO returns per-unit MW/MVAr (÷baseMVA); caseio returns raw MW. ×base.
 #   - ExaPowerIO splits line charging into b_fr + b_to (each = b/2); caseio's b is
@@ -11,9 +14,8 @@
 #   - ExaPowerIO rewrites bus types (PV/PQ/ref) from generator placement, so the
 #     bus `type` is deliberately not compared.
 #
-# Parse ExaPowerIO with filtered=false so it keeps every bus/branch/gen (its
-# default drops isolated buses and out-of-service elements, which would shift the
-# counts away from caseio's lossless parse).
+# Bus filtering on type 4 isn't exercised here (no fixture has isolated buses, and
+# the C ABI doesn't surface the bus type); the in-service branch/gen filtering is.
 #
 #   julia --project=benchmarks benchmarks/validate_exapowerio.jl tests/data/case14.m
 #
@@ -31,21 +33,26 @@ eff_tap(t) = t == 0.0 ? 1.0 : float(t)
 function main(path)
     name = basename(path)
     c = caseio_load(path)
-    ed = ExaPowerIO.parse_matpower(path; filtered = false)
+    ed = ExaPowerIO.parse_matpower(path)   # default filtered=true
     base = ed.baseMVA
+
+    # caseio's in-service survivors, in file order, to line up with ExaPowerIO's
+    # filtered, renumbered branch/gen lists.
+    kb = [k for k in 1:c.m if c.branch.in_service[k] != 0]
+    kg = [k for k in 1:c.ng if c.gen.in_service[k] != 0]
 
     problems = String[]
     push_count(label, a, b) = a == b || push!(problems, "$label count: caseio=$a exapowerio=$b")
     push_count("bus", c.n, length(ed.bus))
-    push_count("branch", c.m, length(ed.branch))
-    push_count("gen", c.ng, length(ed.gen))
+    push_count("branch (in service)", length(kb), length(ed.branch))
+    push_count("gen (in service)", length(kg), length(ed.gen))
     isempty(problems) || return report(name, problems)
 
     if abs(c.base_mva - base) > ATOL
         push!(problems, "baseMVA: caseio=$(c.base_mva) exapowerio=$base")
     end
 
-    # Bus order should be file order on both sides; check the id vectors line up.
+    # Buses aren't dropped here (no type-4 fixtures), so they stay in file order.
     exa_bus_id = [b.bus_i for b in ed.bus]
     if exa_bus_id != c.bus_ids
         push!(problems, "bus id order differs (caseio vs exapowerio)")
@@ -60,8 +67,9 @@ function main(path)
         approx(c.shunt.bs[k], b.bs * base)  || push!(problems, "bus[$(b.bus_i)].bs: caseio=$(c.shunt.bs[k]) exa=$(b.bs*base)")
     end
 
-    # Per-branch (file order). caseio from/to are dense 0-based; map to ids.
-    for (k, br) in enumerate(ed.branch)
+    # Per in-service branch. caseio from/to are dense 0-based; map to bus ids.
+    for (j, k) in enumerate(kb)
+        br = ed.branch[j]
         cf_id = c.bus_ids[c.branch.from[k] + 1]
         ct_id = c.bus_ids[c.branch.to[k] + 1]
         ef_id = ed.bus[br.f_bus].bus_i
@@ -77,8 +85,9 @@ function main(path)
         approx(c.branch.shift[k], rad2deg(br.shift)) || push!(problems, "branch[$k].shift: caseio=$(c.branch.shift[k]) exa(deg)=$(rad2deg(br.shift))")
     end
 
-    # Per-gen (file order). caseio gen.bus dense 0-based; ExaPowerIO g.bus dense 1-based.
-    for (k, g) in enumerate(ed.gen)
+    # Per in-service gen. caseio gen.bus dense 0-based; ExaPowerIO g.bus dense 1-based.
+    for (j, k) in enumerate(kg)
+        g = ed.gen[j]
         cg_id = c.bus_ids[c.gen.bus[k] + 1]
         eg_id = ed.bus[g.bus].bus_i
         cg_id == eg_id || push!(problems, "gen[$k] bus: caseio=$cg_id exa=$eg_id")

@@ -37,6 +37,7 @@ MCASES=(
     tests/data/case57.m
     tests/data/case118.m
     tests/data/t_case9_dcline.m
+    tests/data/t_case9_oos.m
     tests/data/pglib/pglib_opf_case5_pjm.m
     tests/data/pglib/pglib_opf_case14_ieee.m
     tests/data/case2869pegase.m
