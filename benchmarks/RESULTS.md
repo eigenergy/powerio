@@ -1,5 +1,13 @@
 # Parser benchmark and cross-tool validation
 
+Benchmarks live in two places, and they don't overlap. `powerio/benches/parse.rs`
+(`cargo bench --bench parse`) is the in-process micro-benchmark: it times the
+Rust parser and writers against themselves, with no other tool in the loop. This
+directory is the cross-tool comparison: it times powerio against the other
+parsers and checks its output value for value against theirs, calling each
+through its own runtime (Julia, Python). Use the micro-benchmark to catch a
+regression in our own code; use this suite to compare against the field.
+
 Two things measured here, both on the vendored and large MATPOWER cases:
 
 1. **Speed** — caseio against the parsers it competes with (ExaPowerIO.jl,

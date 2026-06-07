@@ -6,7 +6,7 @@ build-backend = "maturin"
 name = "powerio"
 # version is read from powerio-py/Cargo.toml by maturin (kept single-source).
 dynamic = ["version"]
-description = "Fast, lossless power system case file IO, format conversion, and sparse-matrix/graph views"
+description = "Fast, lossless power system case file IO, format conversion, and sparse matrix and graph views"
 readme = "README.md"
 requires-python = ">=3.9"
 license = { text = "MIT OR Apache-2.0" }
