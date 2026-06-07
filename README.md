@@ -97,7 +97,7 @@ let inc = build_incidence(&mpc, DcConvention::PaperPure)?;   // A, b
 let l = build_weighted_laplacian(&inc.a, &inc.b);            // L = A diag(b) Aᵀ
 ```
 
-Outputs: signed incidence `A`, adjacency, weighted Laplacian and its slack-grounded form, B'/B'', `Re(Y_bus)`/`-Im(Y_bus)`, PTDF/LODF, the LACPF block, the DC-OPF instance bundle, and a petgraph view — as Matrix Market, NumPy `.npy`, or in memory.
+Outputs: signed incidence `A`, adjacency, weighted Laplacian and its slack-grounded form, B'/B'', `Re(Y_bus)`/`-Im(Y_bus)`, PTDF/LODF, the LACPF block, the DC-OPF instance bundle, and a petgraph view — as Matrix Market or in memory.
 
 ### CLI
 
