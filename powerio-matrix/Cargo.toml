@@ -7,13 +7,9 @@ description = "Sparse matrices and graph views for power-system case files: B'/B
 license = "MIT OR Apache-2.0"
 repository = "https://github.com/eigenergy/caseio"
 keywords = ["power-systems", "matpower", "sparse", "ptdf", "dc-opf"]
-categories = ["science", "command-line-utilities"]
+categories = ["science", "mathematics"]
 
 [features]
-# `cli` carries the clap front end and the ratatui TUI. On by default so
-# `cargo build`/`test` behave normally; the Python wheel skips it.
-default = ["cli"]
-cli = ["dep:clap", "dep:ratatui", "dep:crossterm", "dep:tracing-subscriber"]
 # Experimental DC-OPF interior point operators (optional).
 kkt = []
 
@@ -21,15 +17,8 @@ kkt = []
 name = "powerio_matrix"
 path = "src/lib.rs"
 
-[[bin]]
-name = "powerio"
-path = "src/main.rs"
-required-features = ["cli"]
-
 [dependencies]
 powerio = { path = "../powerio" }
-clap = { version = "4", features = ["derive"], optional = true }
-anyhow = "1"
 sprs = { version = "0.11", default-features = false }
 num-complex = "0.4"
 serde = { version = "1", features = ["derive"] }
@@ -38,10 +27,6 @@ rand = "0.9"
 rand_chacha = "0.9"
 walkdir = "2"
 rayon = "1"
-tracing = "0.1"
-tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"], optional = true }
-ratatui = { version = "0.30", features = ["crossterm_0_29"], optional = true }
-crossterm = { version = "0.29", optional = true }
 sha2 = "0.10"
 
 [dev-dependencies]

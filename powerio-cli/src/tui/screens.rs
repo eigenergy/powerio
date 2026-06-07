@@ -15,7 +15,7 @@ use ratatui::widgets::{
 use super::app::{App, BatchJob, BatchProgress, ParseStatus, Screen, SynthField};
 use super::sparsity::{Sparsity, legend_lines};
 use super::theme::{T, bad, border, dim, good, highlight, title, warn};
-use crate::pipeline::MatrixKind;
+use powerio_matrix::pipeline::MatrixKind;
 
 pub fn draw(frame: &mut Frame, app: &App) {
     let layout = Layout::default()
@@ -542,8 +542,9 @@ fn draw_synth(frame: &mut Frame, app: &App, area: Rect) {
         .border_style(border())
         .title(" Preview ");
     if let Some(case) = &app.synth.generated {
-        let view = crate::IndexedNetwork::new(case);
-        if let Ok(b) = crate::build_bprime(&view, &crate::BuildOptions::default()) {
+        let view = powerio_matrix::IndexedNetwork::new(case);
+        if let Ok(b) = powerio_matrix::build_bprime(&view, &powerio_matrix::BuildOptions::default())
+        {
             let inner = preview_block.inner(split[1]);
             frame.render_widget(preview_block, split[1]);
             frame.render_widget(Sparsity::new(&b), inner);

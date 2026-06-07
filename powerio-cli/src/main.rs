@@ -6,7 +6,7 @@ use powerio_matrix::matrix::{BuildOptions, DcConvention, Scheme, Units, sddm_che
 use powerio_matrix::opf_pipeline::{DcOpfOptions, write_dcopf_bundle};
 use powerio_matrix::pipeline::{MatrixKind, Pipeline, RhsKind};
 use powerio_matrix::synth::{SynthSpec, Topology};
-use powerio_matrix::tui;
+mod tui;
 
 #[derive(Parser, Debug)]
 #[command(name = "powerio", version, about)]

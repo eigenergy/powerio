@@ -23,11 +23,11 @@ jobs:
     # Deny the workspace pedantic lints on the non-extension crates. The PyO3
     # ext crates are linted in the Python workflow with their feature enabled.
     - name: Clippy
-      run: cargo clippy --all-targets -p powerio -p powerio-matrix -p powerio-capi -- -D warnings
+      run: cargo clippy --all-targets -p powerio -p powerio-matrix -p powerio-cli -p powerio-capi -- -D warnings
     # Bare `cargo test` only covers powerio + powerio-matrix (the default-members); name
     # the C ABI crate explicitly so its end-to-end ABI tests run in CI too.
     - name: Run tests
-      run: cargo test -p powerio -p powerio-matrix -p powerio-capi --verbose
+      run: cargo test -p powerio -p powerio-matrix -p powerio-cli -p powerio-capi --verbose
 
   c-abi:
     name: C ABI (header parity + C smoke test)

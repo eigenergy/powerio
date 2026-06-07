@@ -19,8 +19,8 @@ use ratatui::crossterm::event::{self, Event, KeyCode, KeyEvent, KeyEventKind, Ke
 use app::{App, BatchJob, BatchProgress, Screen, SynthField, WorkerEvent};
 use log_pane::LogBuf;
 
-use crate::pipeline::{MatrixKind, Pipeline, RhsKind};
-use crate::synth::Topology;
+use powerio_matrix::pipeline::{MatrixKind, Pipeline, RhsKind};
+use powerio_matrix::synth::Topology;
 
 #[derive(Debug, Default)]
 pub struct TuiOptions {
@@ -169,8 +169,8 @@ fn handle_inspect(app: &mut App, key: KeyEvent) -> anyhow::Result<()> {
         KeyCode::BackTab => app.cycle_matrix_kind(false),
         KeyCode::Char('s') => {
             app.scheme = match app.scheme {
-                crate::matrix::Scheme::Bx => crate::matrix::Scheme::Xb,
-                crate::matrix::Scheme::Xb => crate::matrix::Scheme::Bx,
+                powerio_matrix::matrix::Scheme::Bx => powerio_matrix::matrix::Scheme::Xb,
+                powerio_matrix::matrix::Scheme::Xb => powerio_matrix::matrix::Scheme::Bx,
             };
             if let Some(state) = app.inspect.take() {
                 let case = state.case;
@@ -203,7 +203,7 @@ fn export_inspect(app: &mut App) -> anyhow::Result<()> {
     };
     let pipeline = Pipeline {
         matrices: vec![state.kind],
-        options: crate::matrix::BuildOptions {
+        options: powerio_matrix::matrix::BuildOptions {
             scheme: app.scheme,
             ..Default::default()
         },
@@ -305,7 +305,7 @@ fn spawn_batch(app: &mut App) {
         .collect();
     let pipeline = Pipeline {
         matrices: app.matrices_to_export.clone(),
-        options: crate::matrix::BuildOptions {
+        options: powerio_matrix::matrix::BuildOptions {
             scheme: app.scheme,
             ..Default::default()
         },
@@ -324,7 +324,7 @@ fn spawn_batch(app: &mut App) {
                 case_idx: i,
                 progress: BatchProgress::Running(0.05),
             });
-            let parsed = match crate::parse_matpower_file(path) {
+            let parsed = match powerio_matrix::parse_matpower_file(path) {
                 Ok(p) => p,
                 Err(e) => {
                     let _ = tx.send(WorkerEvent::Progress {
@@ -379,7 +379,7 @@ fn handle_synth(app: &mut App, key: KeyEvent) {
         KeyCode::Left => synth_tweak(app, false),
         KeyCode::Right => synth_tweak(app, true),
         KeyCode::Char('g') => {
-            let case = crate::synth::generate(&app.synth.spec);
+            let case = powerio_matrix::synth::generate(&app.synth.spec);
             app.synth.generated = Some(case);
             app.set_status("regenerated synthetic case");
         }
@@ -387,7 +387,7 @@ fn handle_synth(app: &mut App, key: KeyEvent) {
             if let Some(case) = &app.synth.generated {
                 let pipeline = Pipeline {
                     matrices: app.matrices_to_export.clone(),
-                    options: crate::matrix::BuildOptions {
+                    options: powerio_matrix::matrix::BuildOptions {
                         scheme: app.scheme,
                         ..Default::default()
                     },

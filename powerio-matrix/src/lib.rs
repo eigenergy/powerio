@@ -22,8 +22,6 @@ pub mod matrix;
 pub mod opf_pipeline;
 pub mod pipeline;
 pub mod synth;
-#[cfg(feature = "cli")]
-pub mod tui;
 
 pub use matrix::{
     BuildOptions, BusCosts, DcConvention, GenCosts, GroundMap, IncidenceParts, MatrixStats,

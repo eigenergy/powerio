@@ -11,10 +11,10 @@ use std::time::Instant;
 
 use sprs::CsMat;
 
-use crate::matrix::{MatrixStats, sddm_check};
-use crate::network::Network;
-use crate::pipeline::{MatrixKind, RhsKind};
-use crate::synth::{SynthSpec, Topology};
+use powerio_matrix::matrix::{MatrixStats, sddm_check};
+use powerio_matrix::network::Network;
+use powerio_matrix::pipeline::{MatrixKind, RhsKind};
+use powerio_matrix::synth::{SynthSpec, Topology};
 
 use super::log_pane::LogBuf;
 
@@ -176,7 +176,7 @@ pub struct App {
     pub should_quit: bool,
     pub worker_rx: Option<Receiver<WorkerEvent>>,
     pub matrices_to_export: Vec<MatrixKind>,
-    pub scheme: crate::matrix::Scheme,
+    pub scheme: powerio_matrix::matrix::Scheme,
     pub rhs: RhsKind,
 }
 
@@ -198,7 +198,7 @@ impl App {
             should_quit: false,
             worker_rx: None,
             matrices_to_export: vec![MatrixKind::BPrime, MatrixKind::BDoublePrime],
-            scheme: crate::matrix::Scheme::default(),
+            scheme: powerio_matrix::matrix::Scheme::default(),
             rhs: RhsKind::Random,
         }
     }
@@ -234,7 +234,7 @@ impl App {
     pub fn parse_selected(&mut self) {
         if let Some(entry) = self.cases.get_mut(self.selected) {
             if matches!(entry.parsed, ParseStatus::NotLoaded) {
-                entry.parsed = match crate::parse_matpower_file(&entry.path) {
+                entry.parsed = match powerio_matrix::parse_matpower_file(&entry.path) {
                     Ok(case) => ParseStatus::Loaded {
                         n_buses: case.buses.len(),
                         n_branches: case.branches.len(),
@@ -246,26 +246,26 @@ impl App {
         }
     }
 
-    pub fn open_inspect(&mut self) -> crate::Result<()> {
+    pub fn open_inspect(&mut self) -> powerio_matrix::Result<()> {
         let Some(entry) = self.cases.get(self.selected) else {
             return Ok(());
         };
-        let case = crate::parse_matpower_file(&entry.path)?;
+        let case = powerio_matrix::parse_matpower_file(&entry.path)?;
         self.inspect = Some(self.build_inspect(case)?);
         self.previous_screen = self.screen;
         self.screen = Screen::Inspect;
         Ok(())
     }
 
-    pub fn build_inspect(&self, case: Network) -> crate::Result<InspectState> {
-        let opts = crate::matrix::BuildOptions {
+    pub fn build_inspect(&self, case: Network) -> powerio_matrix::Result<InspectState> {
+        let opts = powerio_matrix::matrix::BuildOptions {
             scheme: self.scheme,
             ..Default::default()
         };
-        let view = crate::IndexedNetwork::new(&case);
+        let view = powerio_matrix::IndexedNetwork::new(&case);
         let mut matrices = BTreeMap::new();
         for &kind in MatrixKind::ALL {
-            let mat = crate::build_kind(&view, kind, &opts)?;
+            let mat = powerio_matrix::build_kind(&view, kind, &opts)?;
             let stats = MatrixStats::from_csr(&mat);
             let sddm = sddm_check(&mat);
             matrices.insert(
