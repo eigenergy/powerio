@@ -27,7 +27,7 @@ path = "src/main.rs"
 required-features = ["cli"]
 
 [dependencies]
-caseio = { path = "../caseio" }
+powerio = { path = "../powerio" }
 clap = { version = "4", features = ["derive"], optional = true }
 anyhow = "1"
 sprs = { version = "0.11", default-features = false }

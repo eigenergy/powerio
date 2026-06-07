@@ -356,7 +356,7 @@ const FMT: &str = "PowerModels JSON";
 
 /// Parse PowerModels.jl network data JSON into a [`Network`]. Loads and shunts
 /// are read as first-class elements and the raw text is retained, so writing back
-/// to PowerModels JSON is a byte-exact echo. `per_unit = true` input (caseio's own
+/// to PowerModels JSON is a byte-exact echo. `per_unit = true` input (powerio's own
 /// output, and PowerModels' own export) is converted to the neutral MW/degree
 /// convention (powers ×baseMVA, angles to degrees, cost coefficients un-scaled),
 /// following PowerModels' own exceptions (storage `ps`/`qs` stay raw, dcline

@@ -158,30 +158,17 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c8efb64bd706a16a1bdde310ae86b351e4d21550d98d056f22f8a7f7a2183fec"
 
 [[package]]
-name = "caseio"
-version = "0.1.0"
-dependencies = [
- "criterion",
- "fast-float",
- "num-complex",
- "petgraph",
- "serde",
- "serde_json",
- "thiserror 2.0.18",
-]
-
-[[package]]
 name = "caseio-capi"
 version = "0.1.0"
 dependencies = [
- "caseio",
+ "powerio",
 ]
 
 [[package]]
 name = "caseio-ext"
 version = "0.1.0"
 dependencies = [
- "caseio",
+ "powerio",
  "pyo3",
 ]
 
@@ -191,10 +178,10 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "approx",
- "caseio",
  "clap",
  "crossterm",
  "num-complex",
+ "powerio",
  "rand 0.9.4",
  "rand_chacha",
  "ratatui",
@@ -1306,6 +1293,19 @@ name = "powerfmt"
 version = "0.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "439ee305def115ba05938db6eb1644ff94165c5ab5e9420d1c1bcedbba909391"
+
+[[package]]
+name = "powerio"
+version = "0.1.0"
+dependencies = [
+ "criterion",
+ "fast-float",
+ "num-complex",
+ "petgraph",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.18",
+]
 
 [[package]]
 name = "ppv-lite86"

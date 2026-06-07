@@ -1,14 +1,14 @@
 //! `casemat`: sparse matrices and graph views for power-system case files,
-//! built on [`caseio`].
+//! built on [`powerio`].
 //!
 //! Signed incidence `A`, weighted Laplacian `L = A diag(b) Aᵀ` and its
 //! slack-grounded form, B'/B''/Y_bus, PTDF/LODF, adjacency, the LACPF block,
 //! and the DC-OPF instance bundle, plus a petgraph view and a TUI.
 
-// Re-export the caseio data layer so this crate is a one-stop import, and so
+// Re-export the powerio data layer so this crate is a one-stop import, and so
 // the matrix modules' `crate::Error` / `crate::network` / `crate::format` paths
 // resolve unchanged after the split.
-pub use caseio::{
+pub use powerio::{
     Branch, Bus, BusType, ConnectivityReport, Conversion, Error, Extras, GenCost, Generator, Hvdc,
     IndexCore, IndexedNetwork, Load, Network, Result, Shunt, SourceFormat, Storage, TargetFormat,
     error, format, indexed, network, parse, parse_matpower, parse_matpower_file,

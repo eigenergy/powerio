@@ -7,8 +7,8 @@
 
 use std::hint::black_box;
 
-use caseio::{parse_matpower, write_matpower};
 use criterion::{Criterion, criterion_group, criterion_main};
+use powerio::{parse_matpower, write_matpower};
 
 const CASES: &[&str] = &["case57", "case118", "case2869pegase"];
 

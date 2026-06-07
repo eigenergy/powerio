@@ -1,5 +1,5 @@
 [package]
-name = "caseio"
+name = "powerio"
 version = "0.1.0"
 edition = "2024"
 rust-version = "1.86"
@@ -14,7 +14,7 @@ thiserror = "2"
 num-complex = "0.4"
 # SIMD-accelerated float parsing — the dominant cost in parsing large cases.
 fast-float = "0.2"
-# A power network is a graph; connectivity/radial diagnostics live on MpcCase.
+# A power network is a graph; connectivity/radial diagnostics live on Network.
 petgraph = "0.8"
 serde = { version = "1", features = ["derive"] }
 # Format converters (PowerModels / EGRET JSON) serialize the typed model.

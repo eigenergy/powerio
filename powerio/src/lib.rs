@@ -1,4 +1,4 @@
-//! `caseio`: fast, lossless parsing and a typed data model for power-system
+//! `powerio`: fast, lossless parsing and a typed data model for power-system
 //! case files.
 //!
 //! Parse a MATPOWER `.m` case, work with the typed [`Network`], and write it

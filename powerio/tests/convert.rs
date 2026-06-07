@@ -5,7 +5,7 @@
 
 use std::path::{Path, PathBuf};
 
-use caseio::{
+use powerio::{
     SourceFormat, TargetFormat, parse_matpower, parse_matpower_file, parse_powermodels_json,
     parse_powerworld, parse_psse, write_as, write_egret_json, write_powermodels_json,
     write_powerworld, write_psse,
@@ -122,7 +122,7 @@ fn egret_structure() {
 
 #[test]
 fn powermodels_json_reader_is_inverse_of_writer() {
-    // read→write reproduces caseio's own PowerModels JSON across cases: same keys,
+    // read→write reproduces powerio's own PowerModels JSON across cases: same keys,
     // same structure, same values — proving the reader captures every field the
     // writer emits. Compared field-by-field with a float tolerance rather than
     // byte-exact, because the per-unit round-trip (÷base on write, ×base on read)
@@ -160,7 +160,7 @@ fn powermodels_json_to_matpower_two_way() {
     let orig = parse_matpower_file(data("case30.m")).unwrap();
     let json = write_powermodels_json(&orig).text;
     let net = parse_powermodels_json(&json).unwrap();
-    assert_eq!(net.source_format, caseio::SourceFormat::PowerModelsJson);
+    assert_eq!(net.source_format, powerio::SourceFormat::PowerModelsJson);
 
     let reparsed = parse_matpower(&write_as(&net, TargetFormat::Matpower).text).unwrap();
     assert_eq!(reparsed.buses.len(), orig.buses.len());
@@ -168,7 +168,7 @@ fn powermodels_json_to_matpower_two_way() {
     assert_eq!(reparsed.generators.len(), orig.generators.len());
     assert_eq!(reparsed.base_mva, orig.base_mva);
     // Total demand survives the bus→load split and the fold back onto the bus.
-    let load_of = |c: &caseio::Network| c.loads.iter().map(|l| l.p).sum::<f64>();
+    let load_of = |c: &powerio::Network| c.loads.iter().map(|l| l.p).sum::<f64>();
     assert!((load_of(&orig) - load_of(&reparsed)).abs() < 1e-9);
 }
 
@@ -176,7 +176,7 @@ fn powermodels_json_to_matpower_two_way() {
 fn psse_reads_real_pti_files() {
     // Real PSS/E v33 files from PowerModels' PTI test suite (vendored under
     // tests/data/psse). Validates the reader against third-party input, not just
-    // caseio's own round-trip. Value-vs-PowerModels lives in validate_psse.jl.
+    // powerio's own round-trip. Value-vs-PowerModels lives in validate_psse.jl.
     let c14 = parse_psse(&std::fs::read_to_string(data("psse/case14.raw")).unwrap()).unwrap();
     assert_eq!(c14.buses.len(), 14);
     assert_eq!(c14.source_format, SourceFormat::Psse);

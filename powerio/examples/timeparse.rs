@@ -22,10 +22,10 @@ fn main() {
     let src = std::fs::read_to_string(&path).unwrap();
 
     let parse = median(|| {
-        std::hint::black_box(caseio::parse_matpower(std::hint::black_box(&src)).unwrap());
+        std::hint::black_box(powerio::parse_matpower(std::hint::black_box(&src)).unwrap());
     });
 
-    let case = caseio::parse_matpower(&src).unwrap();
+    let case = powerio::parse_matpower(&src).unwrap();
     println!(
         "{parse:.3} ms  buses={} branches={}",
         case.buses.len(),

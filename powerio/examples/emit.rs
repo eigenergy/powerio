@@ -6,10 +6,10 @@ fn main() {
         .get(1)
         .expect("usage: emit <file.m> [powermodels|egret]");
     let fmt = args.get(2).map_or("powermodels", String::as_str);
-    let net = caseio::parse_matpower_file(path).unwrap();
+    let net = powerio::parse_matpower_file(path).unwrap();
     let conv = match fmt {
-        "egret" => caseio::write_egret_json(&net),
-        _ => caseio::write_powermodels_json(&net),
+        "egret" => powerio::write_egret_json(&net),
+        _ => powerio::write_powermodels_json(&net),
     };
     if !conv.warnings.is_empty() {
         eprintln!("warnings: {:?}", conv.warnings);

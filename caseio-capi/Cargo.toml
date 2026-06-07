@@ -15,4 +15,4 @@ name = "caseio_capi"
 crate-type = ["cdylib", "staticlib", "rlib"]
 
 [dependencies]
-caseio = { path = "../caseio" }
+powerio = { path = "../powerio" }

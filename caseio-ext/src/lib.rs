@@ -9,7 +9,7 @@ use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
 use pyo3::types::{PyDict, PyList};
 
-use caseio::{IndexCore, IndexedNetwork, Network};
+use powerio::{IndexCore, IndexedNetwork, Network};
 
 pyo3::create_exception!(
     _caseio,
@@ -21,10 +21,10 @@ pyo3::create_exception!(
 /// I/O failures map to the matching `OSError` subclass; an unknown/uninferable
 /// format becomes a `ValueError`; other parse and data errors become
 /// [`CaseioError`].
-fn to_pyerr(e: caseio::Error) -> PyErr {
+fn to_pyerr(e: powerio::Error) -> PyErr {
     match e {
-        caseio::Error::Io(io) => io.into(),
-        caseio::Error::UnknownFormat(msg) => PyValueError::new_err(msg),
+        powerio::Error::Io(io) => io.into(),
+        powerio::Error::UnknownFormat(msg) => PyValueError::new_err(msg),
         other => CaseioError::new_err(other.to_string()),
     }
 }
@@ -215,7 +215,7 @@ impl PyCase {
     /// Serialize back to the source format. For a MATPOWER-parsed case this is
     /// the byte-exact source echo.
     fn write(&self) -> String {
-        caseio::write_matpower(&self.inner)
+        powerio::write_matpower(&self.inner)
     }
 
     fn __repr__(&self) -> String {
@@ -232,7 +232,7 @@ impl PyCase {
 /// Parse a MATPOWER `.m` file from a path.
 #[pyfunction]
 fn parse(path: &str) -> PyResult<PyCase> {
-    let inner = caseio::parse_matpower_file(path).map_err(to_pyerr)?;
+    let inner = powerio::parse_matpower_file(path).map_err(to_pyerr)?;
     let core = IndexCore::build(&inner);
     Ok(PyCase { inner, core })
 }
@@ -242,7 +242,7 @@ fn parse(path: &str) -> PyResult<PyCase> {
 #[pyfunction]
 #[pyo3(signature = (content, name=None))]
 fn parse_string(content: &str, name: Option<&str>) -> PyResult<PyCase> {
-    let mut inner = caseio::parse_matpower(content).map_err(to_pyerr)?;
+    let mut inner = powerio::parse_matpower(content).map_err(to_pyerr)?;
     if let Some(n) = name {
         inner.name = n.to_string();
     }
@@ -263,10 +263,10 @@ fn write(case: &PyCase) -> String {
 #[pyfunction]
 #[pyo3(signature = (path, to, from=None))]
 fn convert(path: &str, to: &str, from: Option<&str>) -> PyResult<(String, Vec<String>)> {
-    let target = caseio::target_format_from_name(to)
+    let target = powerio::target_format_from_name(to)
         .ok_or_else(|| PyValueError::new_err(format!("unknown target format: {to}")))?;
-    let net = caseio::read_path(std::path::Path::new(path), from).map_err(to_pyerr)?;
-    let conv = caseio::write_as(&net, target);
+    let net = powerio::read_path(std::path::Path::new(path), from).map_err(to_pyerr)?;
+    let conv = powerio::write_as(&net, target);
     Ok((conv.text, conv.warnings))
 }
 

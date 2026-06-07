@@ -46,7 +46,7 @@ pub fn write_powerworld(net: &Network) -> Conversion {
     let mut s = String::new();
     let _ = writeln!(
         s,
-        "// PowerWorld auxiliary file — caseio export: {}",
+        "// PowerWorld auxiliary file — powerio export: {}",
         net.name
     );
     let _ = writeln!(s, "// baseMVA {}", net.base_mva);
@@ -236,7 +236,7 @@ pub(crate) fn parse_powerworld_source(
             if let Ok(v) = rest.trim().parse::<f64>() {
                 base_mva = v;
             }
-        } else if let Some((_, n)) = t.split_once("caseio export: ") {
+        } else if let Some((_, n)) = t.split_once("powerio export: ") {
             name = n.trim().to_string();
         }
     }

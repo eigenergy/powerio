@@ -1,10 +1,10 @@
 //! Round-trip fidelity: `parse → write → parse` must reproduce every vendored
-//! case losslessly. This is the property that makes caseio a *lossless* parser,
+//! case losslessly. This is the property that makes powerio a *lossless* parser,
 //! not just a fast one.
 
 use std::path::{Path, PathBuf};
 
-use caseio::{parse_matpower, parse_matpower_file, write_matpower};
+use powerio::{parse_matpower, parse_matpower_file, write_matpower};
 
 fn data_dir() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("../tests/data")

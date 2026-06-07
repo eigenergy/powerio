@@ -14,7 +14,7 @@
 
 use std::path::{Path, PathBuf};
 
-use caseio::{
+use powerio::{
     Network, TargetFormat, parse_matpower_file, parse_powermodels_json, parse_powerworld,
     parse_psse, write_as, write_egret_json, write_powermodels_json, write_powerworld, write_psse,
 };

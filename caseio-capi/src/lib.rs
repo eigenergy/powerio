@@ -15,7 +15,7 @@
 use std::ffi::{CStr, CString, c_char};
 use std::panic::{AssertUnwindSafe, catch_unwind};
 
-use caseio::{IndexCore, IndexedNetwork, Network};
+use powerio::{IndexCore, IndexedNetwork, Network};
 
 /// Opaque parsed case handle. Carries the parsed [`Network`] plus the
 /// [`IndexCore`] derived from it once at parse time, so every indexed query
@@ -76,7 +76,7 @@ pub unsafe extern "C" fn cio_parse(
         let r = catch_unwind(AssertUnwindSafe(|| {
             let path = cstr(path).ok_or_else(|| "path is NULL or not UTF-8".to_string())?;
             let from = if from.is_null() { None } else { cstr(from) };
-            caseio::read_path(std::path::Path::new(path), from)
+            powerio::read_path(std::path::Path::new(path), from)
                 .map_err(|e| e.to_string())
                 .map(|net| {
                     let core = IndexCore::build(&net);
@@ -170,7 +170,7 @@ pub unsafe extern "C" fn cio_is_radial(case: *const CioCase) -> i32 {
 pub unsafe extern "C" fn cio_write_matpower(case: *const CioCase) -> *mut c_char {
     unsafe {
         guard(std::ptr::null_mut(), || match case_ref(case) {
-            Some(c) => into_cstring(caseio::write_matpower(&c.net)),
+            Some(c) => into_cstring(powerio::write_matpower(&c.net)),
             None => std::ptr::null_mut(),
         })
     }
@@ -195,11 +195,11 @@ pub unsafe extern "C" fn cio_convert(
             let path = cstr(path).ok_or_else(|| "path is NULL or not UTF-8".to_string())?;
             let to = cstr(to).ok_or_else(|| "to is NULL or not UTF-8".to_string())?;
             let from = if from.is_null() { None } else { cstr(from) };
-            let target = caseio::target_format_from_name(to)
+            let target = powerio::target_format_from_name(to)
                 .ok_or_else(|| format!("unknown target format: {to}"))?;
             let net =
-                caseio::read_path(std::path::Path::new(path), from).map_err(|e| e.to_string())?;
-            let conv = caseio::write_as(&net, target);
+                powerio::read_path(std::path::Path::new(path), from).map_err(|e| e.to_string())?;
+            let conv = powerio::write_as(&net, target);
             Ok::<_, String>((conv.text, conv.warnings))
         }));
         match r {

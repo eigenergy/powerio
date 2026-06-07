@@ -61,7 +61,7 @@ pub fn write_psse(net: &Network) -> Conversion {
 
     let _ = writeln!(
         s,
-        "0, {}, {REV}, 0, 0, 60.00   / caseio export: {}",
+        "0, {}, {REV}, 0, 0, 60.00   / powerio export: {}",
         net.base_mva, net.name
     );
     let _ = writeln!(s, "{}", net.name);
