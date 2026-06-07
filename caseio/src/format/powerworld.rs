@@ -352,7 +352,7 @@ fn read_gen(r: &Row) -> Generator {
         mbase: f_or(r, "GenMVABase", 100.0),
         in_service: on(r, "GenStatus"),
         cost: None,
-        extras: Extras::new(),
+        caps: Default::default(),
     }
 }
 

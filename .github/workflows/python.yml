@@ -81,7 +81,7 @@ jobs:
         uses: PyO3/maturin-action@v1
         with:
           target: ${{ matrix.platform.target }}
-          args: --release --out dist -m caseio-ext/pyproject.toml
+          args: --release --out dist -m caseio-ext/Cargo.toml
           manylinux: auto
       - uses: actions/upload-artifact@v4
         with:
@@ -102,7 +102,7 @@ jobs:
         uses: PyO3/maturin-action@v1
         with:
           command: sdist
-          args: --out dist -m caseio-ext/pyproject.toml
+          args: --out dist -m caseio-ext/Cargo.toml
       - uses: actions/upload-artifact@v4
         with:
           name: sdist

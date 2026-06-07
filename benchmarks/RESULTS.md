@@ -22,31 +22,36 @@ two, whose returned data is collected after the sample rather than inside it.
 
 | case | buses / branches | **caseio** | ExaPowerIO.jl | PowerModels.jl |
 | --- | --- | --- | --- | --- |
-| case2869pegase | 2869 / 4582 | **2.33 ms** | 2.92 ms | 123 ms |
-| case_ACTIVSg2000 | 2000 / 3206 | 2.48 ms | **2.12 ms** | 128 ms |
-| case9241pegase | 9241 / 16049 | **7.84 ms** | 9.12 ms | 547 ms |
-| case13659pegase | 13659 / 20467 | **11.8 ms** | 13.6 ms | 781 ms |
-| case_ACTIVSg10k | 10000 / 12706 | 10.8 ms | **9.21 ms** | — |
-| case_ACTIVSg25k | 25000 / 32230 | 26.4 ms | **22.6 ms** | — |
-| case_ACTIVSg70k | 70000 / 88207 | 73.4 ms | **60.6 ms** | — |
-| case_SyntheticUSA | 82000 / 104121 | 85.8 ms | **79.5 ms** | — |
-| case99k | 99396 / 117860 | 101 ms | **94.7 ms** | — |
-| case193k | 192768 / 228574 | 200 ms | **180 ms** | — |
+| case2869pegase | 2869 / 4582 | **1.78 ms** | 2.72 ms | 121 ms |
+| case_ACTIVSg2000 | 2000 / 3206 | **2.07 ms** | 2.07 ms | 122 ms |
+| case9241pegase | 9241 / 16049 | **5.67 ms** | 8.94 ms | 558 ms |
+| case13659pegase | 13659 / 20467 | **8.57 ms** | 13.1 ms | 781 ms |
+| case_ACTIVSg10k | 10000 / 12706 | **8.93 ms** | 9.09 ms | — |
+| case_ACTIVSg25k | 25000 / 32230 | **22.0 ms** | 22.3 ms | — |
+| case_ACTIVSg70k | 70000 / 88207 | **59.5 ms** | 64.5 ms | — |
+| case_SyntheticUSA | 82000 / 104121 | **71.3 ms** | 76.6 ms | — |
+| case99k | 99396 / 117860 | **80.7 ms** | 90.2 ms | — |
+| case193k | 192768 / 228574 | **158 ms** | 169 ms | — |
 
 (PowerModels skipped past case13659 — it takes minutes there and the gap is settled.)
 
 ### Read
 
 - **vs PowerModels.jl**: 50–70× faster wherever PowerModels is practical to run
-  (53× on case2869pegase, 70× on case9241pegase).
-- **vs ExaPowerIO.jl**: split, and which way it falls tracks what's in the file.
-  caseio is ~20–25% faster on the pegase cases (European, number-dense decimals,
-  no cell arrays). ExaPowerIO is ~8–21% faster on the ACTIVSg / SyntheticUSA / US
-  cases: those carry large `gentype` / `genfuel` / `bus_name` cell arrays, which
-  ExaPowerIO skips (it logs "Unrecognized assignment" and drops them) while caseio
-  parses `bus_name` into the model and retains the full source for a byte-exact
-  round-trip. caseio does strictly more work there; it is a focused lossless reader
-  against a focused lossy one, and stays within a small constant either way.
+  (68× on case2869pegase, 98× on case9241pegase).
+- **vs ExaPowerIO.jl**: caseio is faster or tied on every case — ~35% on the pegase
+  cases (European, number-dense decimals, no cell arrays) and ~2–12% on the ACTIVSg
+  / SyntheticUSA / US cases, where it does *more* work: those carry large `gentype`
+  / `genfuel` / `bus_name` cell arrays that ExaPowerIO skips (it logs "Unrecognized
+  assignment" and drops them), while caseio parses `bus_name` into the model and
+  retains the full source for a byte-exact round-trip. The earlier read of these
+  cases had caseio a few percent behind, which looked like the cost of losslessness.
+  It wasn't: profiling found the gap was overhead unrelated to what caseio keeps — a
+  `BTreeSet` reference-validation pass, a `split_ascii_whitespace` row tokenizer, a
+  per-generator string-keyed map, and a materialized line index. Replacing those
+  (HashSet, a byte tokenizer, a typed `[Option<f64>; 11]` for the gen capability
+  columns, a streamed locate) cut parse time ~25–35% and put caseio ahead while it
+  keeps strictly more of the file than ExaPowerIO does.
 - **The pure parse is a touch faster than the table.** `cio_parse` reads the file
   from disk on every sample (as ExaPowerIO / PowerModels do); the Rust `timeparse`
   example parses an already-in-memory string and so excludes the per-sample read.
@@ -55,7 +60,7 @@ two, whose returned data is collected after the sample rather than inside it.
   at case118, 51% at case2869); the current path drops it and the file reader moves
   its buffer straight into the retained source, so a parse never copies the whole
   file twice.
-- **The durable edge isn't raw speed.** caseio is the only one of the three that is
+- **And the edge isn't only speed.** caseio is the only one of the three that is
   lossless and round-trips byte for byte — verified at 56 MB / 193k buses — and the
   only one callable from Rust, the CLI, Python, and C/Julia (the C ABI) with no
   runtime. ExaPowerIO has no writer; PowerModels' export is lossy.

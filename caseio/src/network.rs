@@ -230,8 +230,16 @@ pub struct Generator {
     pub mbase: f64,
     pub in_service: bool,
     pub cost: Option<GenCost>,
-    pub extras: Extras,
+    /// The MATPOWER gen capability / ramp columns past `PMIN`, aligned to
+    /// [`GEN_EXTRA_KEYS`] by index (`None` for a column the source omitted).
+    /// A fixed array, not an [`Extras`] map: a string-keyed map per generator
+    /// costs 11 heap allocations each, which dominates the parse of a large
+    /// generator-heavy case. Surfaced into formats that name them (PowerModels).
+    pub caps: GenCaps,
 }
+
+/// A generator's capability / ramp columns, one slot per [`GEN_EXTRA_KEYS`] name.
+pub type GenCaps = [Option<f64>; GEN_EXTRA_KEYS.len()];
 
 #[derive(Debug, Clone)]
 pub struct Storage {
@@ -278,8 +286,8 @@ pub struct Hvdc {
     pub extras: Extras,
 }
 
-/// The MATPOWER gen capability / ramp columns past `PMIN`, in order. Carried as
-/// generator extras so they survive into formats that name them (PowerModels).
+/// The MATPOWER gen capability / ramp columns past `PMIN`, in order. The index
+/// into this array is the slot index into a [`GenCaps`].
 pub(crate) const GEN_EXTRA_KEYS: [&str; 11] = [
     "pc1", "pc2", "qc1min", "qc1max", "qc2min", "qc2max", "ramp_agc", "ramp_10",
     "ramp_30", "ramp_q", "apf",
@@ -318,7 +326,11 @@ impl Network {
     /// (which would otherwise default to a placeholder and silently re-wire the
     /// network) fails loudly instead.
     pub(crate) fn check_references(&self, format: &'static str) -> crate::Result<()> {
-        let mut ids = std::collections::BTreeSet::new();
+        // HashSet, not BTreeSet: building the id set and probing it once per branch
+        // endpoint / load / shunt / gen is the dominant cost of a large parse, and
+        // a BTreeSet pays a log-n pointer-chasing probe each time. Pre-size to skip
+        // rehashing.
+        let mut ids = std::collections::HashSet::with_capacity(self.buses.len());
         for b in &self.buses {
             if !ids.insert(b.id) {
                 return Err(Error::FormatRead {

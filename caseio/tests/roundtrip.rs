@@ -104,7 +104,7 @@ fn captures_extra_generator_columns() {
     // be silently dropped.
     let case = parse_matpower_file(data_dir().join("case9.m")).unwrap();
     assert!(
-        !case.generators[0].extras.is_empty(),
+        case.generators[0].caps.iter().any(Option::is_some),
         "generator columns past PMIN were dropped"
     );
 }

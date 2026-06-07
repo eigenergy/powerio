@@ -189,14 +189,10 @@ fn gen_obj(g: &Generator, idx: usize, p: f64, base: f64) -> Value {
     m.insert("pmin".into(), jnum(g.pmin * p));
     // Gen capability columns, in PowerModels' field order, for those present. Only
     // the ramp rates are per-unitized; the PQ curve points and apf stay raw.
-    for key in GEN_EXTRA_KEYS {
-        if let Some(v) = g.extras.get(key) {
-            let scaled = if GEN_PU_KEYS.contains(&key) {
-                jnum(v.as_f64().unwrap_or(f64::NAN) * p)
-            } else {
-                v.clone()
-            };
-            m.insert(key.into(), scaled);
+    for (i, key) in GEN_EXTRA_KEYS.iter().enumerate() {
+        if let Some(v) = g.caps[i] {
+            let scaled = if GEN_PU_KEYS.contains(key) { jnum(v * p) } else { jnum(v) };
+            m.insert((*key).into(), scaled);
         }
     }
     if let Some(cost) = &g.cost {
@@ -504,12 +500,11 @@ fn read_branch(v: &Value, pscale: f64, ascale: f64) -> Branch {
 }
 
 fn read_gen(v: &Value, pscale: f64, base_mva: f64, per_unit: bool) -> Generator {
-    let mut extras = crate::network::Extras::new();
-    for key in GEN_EXTRA_KEYS {
-        if let Some(val) = v.get(key).and_then(Value::as_f64) {
+    let mut caps: crate::network::GenCaps = [None; GEN_EXTRA_KEYS.len()];
+    for (i, key) in GEN_EXTRA_KEYS.iter().enumerate() {
+        if let Some(val) = v.get(*key).and_then(Value::as_f64) {
             // Only the ramp rates are per-unit; the PQ curve points and apf are raw.
-            let scaled = if GEN_PU_KEYS.contains(&key) { val * pscale } else { val };
-            extras.insert(key.to_string(), jnum(scaled));
+            caps[i] = Some(if GEN_PU_KEYS.contains(key) { val * pscale } else { val });
         }
     }
     let cost = v.get("model").map(|_| read_cost(v, base_mva, per_unit));
@@ -527,7 +522,7 @@ fn read_gen(v: &Value, pscale: f64, base_mva: f64, per_unit: bool) -> Generator 
         mbase: f_or(v, "mbase", base_mva),
         in_service: flag(v, "gen_status"),
         cost,
-        extras,
+        caps,
     }
 }
 

@@ -5,16 +5,11 @@
 //! into a [`Bus`] plus an optional [`Load`] and [`Shunt`] (MATPOWER folds
 //! demand and shunts onto the bus row; the hub keeps them first-class).
 
-use serde_json::Value;
-
 use crate::network::{
-    Branch, Bus, BusType, Extras, GenCost, Generator, Hvdc, Load, Shunt, Storage, GEN_EXTRA_KEYS,
+    Branch, Bus, BusType, Extras, GenCaps, GenCost, Generator, Hvdc, Load, Shunt, Storage,
+    GEN_EXTRA_KEYS,
 };
 use crate::{Error, Result};
-
-fn num(x: f64) -> Value {
-    serde_json::Number::from_f64(x).map_or(Value::Null, Value::Number)
-}
 
 /// MATPOWER in-service flag: the status column is exactly 0 or 1 in the file,
 /// so the equality is the intended exact compare.
@@ -195,11 +190,13 @@ pub(super) fn branch_row(row: &[f64], i: usize) -> Result<Branch> {
 /// pre-dissolution path; the byte-exact MATPOWER round-trip echoes the source.
 pub(super) fn gen_row(row: &[f64], i: usize) -> Result<Generator> {
     require("gen", row, i, gen_col::REQUIRED)?;
-    let extras: Extras = GEN_EXTRA_KEYS
-        .iter()
-        .zip(&row[gen_col::REQUIRED..])
-        .map(|(&k, &v)| (k.to_string(), num(v)))
-        .collect();
+    // The capability/ramp columns past PMIN, by position, into the fixed GenCaps
+    // array — no per-key string allocation. A row that stops early leaves the
+    // remaining slots `None`.
+    let mut caps: GenCaps = [None; GEN_EXTRA_KEYS.len()];
+    for (slot, &v) in caps.iter_mut().zip(&row[gen_col::REQUIRED..]) {
+        *slot = Some(v);
+    }
     Ok(Generator {
         bus: row[gen_col::GEN_BUS] as usize,
         pg: row[gen_col::PG],
@@ -212,7 +209,7 @@ pub(super) fn gen_row(row: &[f64], i: usize) -> Result<Generator> {
         pmin: row[gen_col::PMIN],
         in_service: is_in_service(row[gen_col::GEN_STATUS]),
         cost: None,
-        extras,
+        caps,
     })
 }
 
