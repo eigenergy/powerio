@@ -46,10 +46,8 @@ impl<'n> IndexedNetwork<'n> {
     #[must_use]
     pub fn new(net: &'n Network) -> Self {
         let n = net.buses.len();
-        let mut bus_id_to_idx = HashMap::with_capacity(n);
-        for (idx, b) in net.buses.iter().enumerate() {
-            bus_id_to_idx.insert(b.id, idx);
-        }
+        let bus_id_to_idx: HashMap<usize, usize> =
+            net.buses.iter().enumerate().map(|(idx, b)| (b.id, idx)).collect();
         // A duplicate bus id would collapse two buses onto one dense index and
         // silently corrupt every aggregate. The format readers run
         // `check_references`; the MATPOWER reader and in-memory networks don't,

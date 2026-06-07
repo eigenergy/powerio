@@ -268,20 +268,7 @@ impl App {
         let view = crate::IndexedNetwork::new(&case);
         let mut matrices = BTreeMap::new();
         for &kind in MatrixKind::ALL {
-            let mat = match kind {
-                MatrixKind::BPrime => crate::build_bprime(&view, &opts)?,
-                MatrixKind::BDoublePrime => crate::build_bdoubleprime(&view, &opts)?,
-                MatrixKind::YbusG => crate::build_ybus(&view, &opts)?.g,
-                MatrixKind::YbusB => {
-                    let mut b = crate::build_ybus(&view, &opts)?.b;
-                    for v in b.data_mut() {
-                        *v = -*v;
-                    }
-                    b
-                }
-                MatrixKind::Lacpf => crate::build_lacpf(&view, &opts)?,
-                MatrixKind::Adjacency => crate::build_adjacency(&view)?,
-            };
+            let mat = crate::build_kind(&view, kind, &opts)?;
             let stats = MatrixStats::from_csr(&mat);
             let sddm = sddm_check(&mat);
             matrices.insert(

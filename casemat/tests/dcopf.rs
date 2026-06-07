@@ -3,9 +3,9 @@
 
 use casemat::IndexedNetwork;
 use casemat::{
-    Branch, Bus, BusType, DcConvention, Error, Extras, GenCost, Generator, Network, Scheme,
-    SourceFormat, Units, build_adjacency, build_bprime, build_flow_map, build_incidence, build_lodf,
-    build_opf_instance, build_ptdf, build_weighted_laplacian, ground_at, parse_matpower_file,
+    Branch, Bus, BusType, DcConvention, Error, Extras, GenCost, Generator, Network, Scheme, Units,
+    build_adjacency, build_bprime, build_flow_map, build_incidence, build_lodf, build_opf_instance,
+    build_ptdf, build_weighted_laplacian, ground_at, parse_matpower_file,
 };
 use sprs::CsMat;
 
@@ -23,19 +23,7 @@ fn load(path: &str) -> Network {
 
 /// In-memory network from hand-built buses/branches (no loads/shunts/source).
 fn net(name: &str, buses: Vec<Bus>, branches: Vec<Branch>) -> Network {
-    Network {
-        name: name.into(),
-        base_mva: 100.0,
-        buses,
-        loads: Vec::new(),
-        shunts: Vec::new(),
-        branches,
-        generators: Vec::new(),
-        storage: Vec::new(),
-        hvdc: Vec::new(),
-        source_format: SourceFormat::InMemory,
-        source: None,
-    }
+    Network::in_memory(name, 100.0, buses, branches)
 }
 
 fn net_with_gens(name: &str, buses: Vec<Bus>, branches: Vec<Branch>, generators: Vec<Generator>) -> Network {

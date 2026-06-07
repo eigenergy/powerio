@@ -184,17 +184,7 @@ impl Pipeline {
     }
 
     fn build(&self, case: &IndexedNetwork, kind: MatrixKind) -> Result<sprs::CsMat<f64>> {
-        match kind {
-            MatrixKind::BPrime => build_bprime(case, &self.options),
-            MatrixKind::BDoublePrime => build_bdoubleprime(case, &self.options),
-            MatrixKind::YbusG => build_ybus(case, &self.options).map(|p| p.g),
-            MatrixKind::YbusB => {
-                let parts = build_ybus(case, &self.options)?;
-                Ok(negate(&parts.b))
-            }
-            MatrixKind::Lacpf => build_lacpf(case, &self.options),
-            MatrixKind::Adjacency => build_adjacency(case),
-        }
+        build_kind(case, kind, &self.options)
     }
 
     fn build_rhs(&self, case: &IndexedNetwork, kind: MatrixKind) -> Result<Option<Vec<f64>>> {
@@ -236,6 +226,24 @@ impl Pipeline {
             RhsKind::None => unreachable!(),
         };
         Ok(Some(v))
+    }
+}
+
+/// Build the square matrix for one [`MatrixKind`] from an indexed network. The
+/// single dispatch shared by the [`Pipeline`], the `verify` CLI command, and the
+/// TUI inspect screen, so the `YbusB = -Im(Y_bus)` sign lives in one place.
+pub fn build_kind(
+    view: &IndexedNetwork,
+    kind: MatrixKind,
+    opts: &BuildOptions,
+) -> Result<sprs::CsMat<f64>> {
+    match kind {
+        MatrixKind::BPrime => build_bprime(view, opts),
+        MatrixKind::BDoublePrime => build_bdoubleprime(view, opts),
+        MatrixKind::YbusG => build_ybus(view, opts).map(|p| p.g),
+        MatrixKind::YbusB => build_ybus(view, opts).map(|p| negate(&p.b)),
+        MatrixKind::Lacpf => build_lacpf(view, opts),
+        MatrixKind::Adjacency => build_adjacency(view),
     }
 }
 

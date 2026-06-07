@@ -22,15 +22,16 @@ pub struct CioCase {
     net: Network,
 }
 
-/// Copy `msg` (truncated) into a caller `char[errlen]` buffer, NUL-terminated.
-unsafe fn set_err(errbuf: *mut c_char, errlen: usize, msg: &str) {
-    if errbuf.is_null() || errlen == 0 {
+/// Copy `msg` (truncated to fit) into a caller `char[len]` buffer, always
+/// NUL-terminated. Shared by the error and warning outputs.
+unsafe fn copy_to_buf(buf: *mut c_char, len: usize, msg: &str) {
+    if buf.is_null() || len == 0 {
         return;
     }
     let bytes = msg.as_bytes();
-    let n = bytes.len().min(errlen - 1);
-    std::ptr::copy_nonoverlapping(bytes.as_ptr().cast::<c_char>(), errbuf, n);
-    *errbuf.add(n) = 0;
+    let n = bytes.len().min(len - 1);
+    std::ptr::copy_nonoverlapping(bytes.as_ptr().cast::<c_char>(), buf, n);
+    *buf.add(n) = 0;
 }
 
 unsafe fn cstr<'a>(p: *const c_char) -> Option<&'a str> {
@@ -43,27 +44,17 @@ unsafe fn cstr<'a>(p: *const c_char) -> Option<&'a str> {
 fn into_cstring(s: String) -> *mut c_char {
     match CString::new(s) {
         Ok(c) => c.into_raw(),
-        // A NUL in the text (shouldn't happen for `.m`/JSON) would truncate;
-        // strip NULs rather than fail.
-        Err(_) => CString::new("").unwrap().into_raw(),
+        // A NUL in the text (shouldn't happen for `.m`/JSON) can't go in a C
+        // string; hand back an empty string rather than fail.
+        Err(_) => CString::default().into_raw(),
     }
-}
-
-fn fmt_from_str(s: &str) -> Option<TargetFormat> {
-    Some(match s.to_ascii_lowercase().as_str() {
-        "matpower" | "m" => TargetFormat::Matpower,
-        "powermodels-json" | "powermodels" | "pm" => TargetFormat::PowerModelsJson,
-        "egret-json" | "egret" => TargetFormat::EgretJson,
-        "psse" | "raw" => TargetFormat::Psse,
-        "powerworld" | "aux" => TargetFormat::PowerWorld,
-        _ => return None,
-    })
 }
 
 fn read_network(path: &str, from: Option<&str>) -> Result<Network, String> {
     let p = std::path::Path::new(path);
     let fmt = match from {
-        Some(f) => fmt_from_str(f).ok_or_else(|| format!("unknown source format: {f}"))?,
+        Some(f) => caseio::target_format_from_name(f)
+            .ok_or_else(|| format!("unknown source format: {f}"))?,
         None => match p.extension().and_then(|e| e.to_str()) {
             Some("m") => TargetFormat::Matpower,
             Some("json") => TargetFormat::PowerModelsJson,
@@ -80,7 +71,9 @@ fn read_network(path: &str, from: Option<&str>) -> Result<Network, String> {
         }
         TargetFormat::Psse => caseio::parse_psse(&read()?).map_err(|e| e.to_string()),
         TargetFormat::PowerWorld => caseio::parse_powerworld(&read()?).map_err(|e| e.to_string()),
-        TargetFormat::EgretJson => Err("reading EGRET JSON is not supported (write-only)".into()),
+        TargetFormat::EgretJson => {
+            Err("reading EGRET JSON is not supported yet (write-only)".into())
+        }
     }
 }
 
@@ -101,11 +94,11 @@ pub unsafe extern "C" fn cio_parse(
     match r {
         Ok(Ok(ptr)) => ptr,
         Ok(Err(msg)) => {
-            set_err(errbuf, errlen, &msg);
+            copy_to_buf(errbuf, errlen, &msg);
             std::ptr::null_mut()
         }
         Err(_) => {
-            set_err(errbuf, errlen, "panic while parsing");
+            copy_to_buf(errbuf, errlen, "panic while parsing");
             std::ptr::null_mut()
         }
     }
@@ -193,22 +186,23 @@ pub unsafe extern "C" fn cio_convert(
         let path = cstr(path).ok_or_else(|| "path is NULL or not UTF-8".to_string())?;
         let to = cstr(to).ok_or_else(|| "to is NULL or not UTF-8".to_string())?;
         let from = if from.is_null() { None } else { cstr(from) };
-        let target = fmt_from_str(to).ok_or_else(|| format!("unknown target format: {to}"))?;
+        let target = caseio::target_format_from_name(to)
+            .ok_or_else(|| format!("unknown target format: {to}"))?;
         let net = read_network(path, from)?;
         let conv = caseio::write_as(&net, target);
         Ok::<_, String>((conv.text, conv.warnings))
     }));
     match r {
         Ok(Ok((text, warnings))) => {
-            set_err(warnbuf, warnlen, &warnings.join("\n"));
+            copy_to_buf(warnbuf, warnlen, &warnings.join("\n"));
             into_cstring(text)
         }
         Ok(Err(msg)) => {
-            set_err(errbuf, errlen, &msg);
+            copy_to_buf(errbuf, errlen, &msg);
             std::ptr::null_mut()
         }
         Err(_) => {
-            set_err(errbuf, errlen, "panic while converting");
+            copy_to_buf(errbuf, errlen, "panic while converting");
             std::ptr::null_mut()
         }
     }

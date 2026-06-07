@@ -190,15 +190,16 @@ impl PyCase {
     #[getter]
     fn buses<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyList>> {
         let g = IndexedNetwork::new(&self.inner);
+        let (pd, qd, gs, bs) = (g.pd(), g.qd(), g.gs(), g.bs());
         let list = PyList::empty(py);
         for (i, b) in self.inner.buses.iter().enumerate() {
             let d = PyDict::new(py);
             d.set_item("id", b.id)?;
             d.set_item("type", bus_type_str(b.kind))?;
-            d.set_item("pd", g.pd()[i])?;
-            d.set_item("qd", g.qd()[i])?;
-            d.set_item("gs", g.gs()[i])?;
-            d.set_item("bs", g.bs()[i])?;
+            d.set_item("pd", pd[i])?;
+            d.set_item("qd", qd[i])?;
+            d.set_item("gs", gs[i])?;
+            d.set_item("bs", bs[i])?;
             d.set_item("area", b.area)?;
             d.set_item("vm", b.vm)?;
             d.set_item("va", b.va)?;
@@ -454,24 +455,11 @@ fn parse_matpower_string(content: &str, name: Option<&str>) -> PyResult<PyCase> 
 #[pyfunction]
 #[pyo3(signature = (path, to, from=None))]
 fn convert(path: &str, to: &str, from: Option<&str>) -> PyResult<(String, Vec<String>)> {
-    let target = fmt_from_str(to)
+    let target = casemat::target_format_from_name(to)
         .ok_or_else(|| PyValueError::new_err(format!("unknown target format: {to}")))?;
     let net = read_network_py(path, from)?;
     let conv = casemat::write_as(&net, target);
     Ok((conv.text, conv.warnings))
-}
-
-/// Map a format name (with common aliases) to a [`casemat::TargetFormat`].
-fn fmt_from_str(s: &str) -> Option<casemat::TargetFormat> {
-    use casemat::TargetFormat as T;
-    Some(match s.to_ascii_lowercase().as_str() {
-        "matpower" | "m" => T::Matpower,
-        "powermodels-json" | "powermodels" | "pm" => T::PowerModelsJson,
-        "egret-json" | "egret" => T::EgretJson,
-        "psse" | "raw" => T::Psse,
-        "powerworld" | "aux" => T::PowerWorld,
-        _ => return None,
-    })
 }
 
 /// Read `path` into the neutral network, choosing the reader from `from` or the
@@ -479,7 +467,7 @@ fn fmt_from_str(s: &str) -> Option<casemat::TargetFormat> {
 fn read_network_py(path: &str, from: Option<&str>) -> PyResult<casemat::Network> {
     let p = std::path::Path::new(path);
     let fmt = match from {
-        Some(f) => fmt_from_str(f)
+        Some(f) => casemat::target_format_from_name(f)
             .ok_or_else(|| PyValueError::new_err(format!("unknown source format: {f}")))?,
         None => match p.extension().and_then(|e| e.to_str()) {
             Some("m") => casemat::TargetFormat::Matpower,

@@ -262,23 +262,11 @@ fn write(case: &PyCase) -> String {
 #[pyfunction]
 #[pyo3(signature = (path, to, from=None))]
 fn convert(path: &str, to: &str, from: Option<&str>) -> PyResult<(String, Vec<String>)> {
-    let target = fmt_from_str(to)
+    let target = caseio::target_format_from_name(to)
         .ok_or_else(|| PyValueError::new_err(format!("unknown target format: {to}")))?;
     let net = read_network(path, from)?;
     let conv = caseio::write_as(&net, target);
     Ok((conv.text, conv.warnings))
-}
-
-/// Map a format name (with common aliases) to a [`TargetFormat`].
-fn fmt_from_str(s: &str) -> Option<TargetFormat> {
-    Some(match s.to_ascii_lowercase().as_str() {
-        "matpower" | "m" => TargetFormat::Matpower,
-        "powermodels-json" | "powermodels" | "pm" => TargetFormat::PowerModelsJson,
-        "egret-json" | "egret" => TargetFormat::EgretJson,
-        "psse" | "raw" => TargetFormat::Psse,
-        "powerworld" | "aux" => TargetFormat::PowerWorld,
-        _ => return None,
-    })
 }
 
 /// Read `path` into a [`Network`], choosing the reader from `from` or the file
@@ -286,7 +274,7 @@ fn fmt_from_str(s: &str) -> Option<TargetFormat> {
 fn read_network(path: &str, from: Option<&str>) -> PyResult<Network> {
     let p = std::path::Path::new(path);
     let fmt = match from {
-        Some(f) => fmt_from_str(f)
+        Some(f) => caseio::target_format_from_name(f)
             .ok_or_else(|| PyValueError::new_err(format!("unknown source format: {f}")))?,
         None => match p.extension().and_then(|e| e.to_str()) {
             Some("m") => TargetFormat::Matpower,

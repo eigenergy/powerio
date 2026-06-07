@@ -15,8 +15,9 @@ use std::sync::Arc;
 use serde_json::{Map, Value};
 
 use super::{finish, jnum, Conversion};
-use crate::network::{BusType, GenCost};
-use crate::network::{Branch, Bus, Generator, Hvdc, Load, Network, Shunt, SourceFormat, Storage};
+use crate::network::{
+    Branch, Bus, BusType, GenCost, Generator, Hvdc, Load, Network, Shunt, SourceFormat, Storage,
+};
 use crate::{Error, Result};
 
 /// PowerModels gen capability fields, in their conventional order. Emitted from

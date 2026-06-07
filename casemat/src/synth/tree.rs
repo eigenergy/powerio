@@ -4,7 +4,7 @@ use rand::Rng;
 use rand::SeedableRng;
 use rand_chacha::ChaCha8Rng;
 
-use crate::network::{Branch, Bus, BusType, Extras, Network, SourceFormat};
+use crate::network::{Branch, Bus, BusType, Extras, Network};
 
 use super::SynthSpec;
 
@@ -26,19 +26,7 @@ pub fn generate_tree(spec: &SynthSpec) -> Network {
 /// Wrap synthesized buses and branches into an in-memory [`Network`]: no loads,
 /// shunts, generators, or source document.
 pub(super) fn net(name: String, buses: Vec<Bus>, branches: Vec<Branch>) -> Network {
-    Network {
-        name,
-        base_mva: 100.0,
-        buses,
-        loads: Vec::new(),
-        shunts: Vec::new(),
-        branches,
-        generators: Vec::new(),
-        storage: Vec::new(),
-        hvdc: Vec::new(),
-        source_format: SourceFormat::InMemory,
-        source: None,
-    }
+    Network::in_memory(name, 100.0, buses, branches)
 }
 
 pub(crate) fn make_bus(id: usize) -> Bus {

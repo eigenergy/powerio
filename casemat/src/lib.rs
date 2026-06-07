@@ -10,8 +10,9 @@
 // resolve unchanged after the split.
 pub use caseio::{
     error, format, indexed, network, parser, parse_matpower, parse_matpower_file,
-    parse_powermodels_json, parse_powerworld, parse_psse, write_as, write_egret_json, write_matpower,
-    write_powermodels_json, write_powerworld, write_psse, Branch, Bus, BusType, ConnectivityReport,
+    parse_powermodels_json, parse_powerworld, parse_psse, target_format_from_name, write_as,
+    write_egret_json, write_matpower, write_powermodels_json, write_powerworld, write_psse, Branch,
+    Bus, BusType, ConnectivityReport,
     Conversion, Error, Extras, GenCost, Generator, Hvdc, IndexedNetwork, Load, Network, Result,
     Shunt, SourceFormat, Storage, TargetFormat,
 };
@@ -31,4 +32,4 @@ pub use matrix::{
     IncidenceParts, MatrixStats, OpfInstance, Scheme, Units,
 };
 pub use opf_pipeline::{write_dcopf_bundle, DcOpfOptions, DcOpfOutputs};
-pub use pipeline::{MatrixKind, Pipeline, PipelineOutputs, RhsKind};
+pub use pipeline::{build_kind, MatrixKind, Pipeline, PipelineOutputs, RhsKind};

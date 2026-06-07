@@ -16,8 +16,7 @@ use std::fmt::Write as _;
 use std::sync::Arc;
 
 use super::Conversion;
-use crate::network::BusType;
-use crate::network::{Branch, Bus, Extras, Generator, Load, Network, Shunt, SourceFormat};
+use crate::network::{Branch, Bus, BusType, Extras, Generator, Load, Network, Shunt, SourceFormat};
 use crate::{Error, Result};
 
 const FMT: &str = "PSS/E .raw";

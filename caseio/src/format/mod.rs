@@ -49,6 +49,23 @@ impl TargetFormat {
     }
 }
 
+/// Map a format name (with the common aliases) to a [`TargetFormat`], or `None`
+/// if unrecognized. Accepts `matpower`/`m`, `powermodels-json`/`powermodels`/`pm`,
+/// `egret-json`/`egret`, `psse`/`raw`, `powerworld`/`aux`. Case-insensitive. The
+/// one place the bindings (Python, C ABI) share, so a new format means one new
+/// arm here, not three.
+#[must_use]
+pub fn target_format_from_name(name: &str) -> Option<TargetFormat> {
+    Some(match name.to_ascii_lowercase().as_str() {
+        "matpower" | "m" => TargetFormat::Matpower,
+        "powermodels-json" | "powermodels" | "pm" => TargetFormat::PowerModelsJson,
+        "egret-json" | "egret" => TargetFormat::EgretJson,
+        "psse" | "raw" => TargetFormat::Psse,
+        "powerworld" | "aux" => TargetFormat::PowerWorld,
+        _ => return None,
+    })
+}
+
 /// Output of a conversion: the serialized text plus any fidelity warnings —
 /// data the target can't represent, defaults synthesized, or blocks mapped
 /// best-effort. An empty `warnings` means a faithful conversion.

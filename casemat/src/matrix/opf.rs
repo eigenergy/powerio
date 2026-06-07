@@ -1,5 +1,5 @@
-//! DC-OPF instance data derived from `mpc.gen` / `mpc.gencost`: cost,
-//! bounds, thermal limits, the generator→bus map, and nodal load.
+//! DC-OPF instance data derived from the network's generators and their cost
+//! curves: cost, bounds, thermal limits, the generator→bus map, and nodal load.
 //!
 //! The paper treats generation as a nodal variable `p_g ∈ ℝⁿ`, so the
 //! canonical vectors here are bus-indexed (length `n`), formed by scattering

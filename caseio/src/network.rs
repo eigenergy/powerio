@@ -270,6 +270,33 @@ pub(crate) const GEN_EXTRA_KEYS: [&str; 11] = [
 ];
 
 impl Network {
+    /// A network assembled in memory from buses and branches, with no loads,
+    /// shunts, generators, storage, HVDC, or retained source document. Synthetic
+    /// topology generators and tests use it instead of repeating the struct
+    /// literal. The caller owns reference integrity (run `check_references` if
+    /// the ids might be inconsistent).
+    #[must_use]
+    pub fn in_memory(
+        name: impl Into<String>,
+        base_mva: f64,
+        buses: Vec<Bus>,
+        branches: Vec<Branch>,
+    ) -> Network {
+        Network {
+            name: name.into(),
+            base_mva,
+            buses,
+            loads: Vec::new(),
+            shunts: Vec::new(),
+            branches,
+            generators: Vec::new(),
+            storage: Vec::new(),
+            hvdc: Vec::new(),
+            source_format: SourceFormat::InMemory,
+            source: None,
+        }
+    }
+
     /// Error if two buses share an id, or if any element references a bus that
     /// doesn't exist. Readers call this after parsing so a missing/garbled id
     /// (which would otherwise default to a placeholder and silently re-wire the

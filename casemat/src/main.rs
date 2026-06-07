@@ -444,20 +444,7 @@ fn run_verify(input: PathBuf, kind: MatrixKind, scheme: Scheme) -> anyhow::Resul
         ..Default::default()
     };
     let view = casemat::IndexedNetwork::new(&mpc);
-    let matrix = match kind {
-        MatrixKind::BPrime => casemat::build_bprime(&view, &opts)?,
-        MatrixKind::BDoublePrime => casemat::build_bdoubleprime(&view, &opts)?,
-        MatrixKind::YbusG => casemat::build_ybus(&view, &opts)?.g,
-        MatrixKind::YbusB => {
-            let mut b = casemat::build_ybus(&view, &opts)?.b;
-            for v in b.data_mut() {
-                *v = -*v;
-            }
-            b
-        }
-        MatrixKind::Lacpf => casemat::build_lacpf(&view, &opts)?,
-        MatrixKind::Adjacency => casemat::build_adjacency(&view)?,
-    };
+    let matrix = casemat::build_kind(&view, kind, &opts)?;
     let stats = casemat::matrix::MatrixStats::from_csr(&matrix);
     let sddm = sddm_check(&matrix);
     println!(

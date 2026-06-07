@@ -4,7 +4,7 @@ use crate::indexed::IndexedNetwork;
 use crate::matrix::{
     build_bdoubleprime, build_bprime, build_lacpf, build_ybus, BuildOptions, MatrixStats, Scheme,
 };
-use crate::network::{Branch, Bus, BusType, Extras, Network, Shunt, SourceFormat};
+use crate::network::{Branch, Bus, BusType, Extras, Network, Shunt};
 
 fn bus(id: usize, kind: BusType) -> Bus {
     Bus {
@@ -42,19 +42,12 @@ fn br(from: usize, to: usize, r: f64, x: f64, b: f64) -> Branch {
 }
 
 fn three_bus() -> Network {
-    Network {
-        name: "tiny".into(),
-        base_mva: 100.0,
-        buses: vec![bus(1, BusType::Ref), bus(2, BusType::Pq), bus(3, BusType::Pq)],
-        loads: Vec::new(),
-        shunts: Vec::new(),
-        branches: vec![br(1, 2, 0.0, 0.1, 0.0), br(1, 3, 0.0, 0.2, 0.0), br(2, 3, 0.0, 0.25, 0.0)],
-        generators: Vec::new(),
-        storage: Vec::new(),
-        hvdc: Vec::new(),
-        source_format: SourceFormat::InMemory,
-        source: None,
-    }
+    Network::in_memory(
+        "tiny",
+        100.0,
+        vec![bus(1, BusType::Ref), bus(2, BusType::Pq), bus(3, BusType::Pq)],
+        vec![br(1, 2, 0.0, 0.1, 0.0), br(1, 3, 0.0, 0.2, 0.0), br(2, 3, 0.0, 0.25, 0.0)],
+    )
 }
 
 #[test]
