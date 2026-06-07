@@ -288,7 +288,9 @@ fn read_network(path: &str, from: Option<&str>) -> PyResult<Network> {
             }
         },
     };
-    let read_str = || std::fs::read_to_string(p).map_err(|e| PyValueError::new_err(e.to_string()));
+    // Preserve the io::Error kind so a missing/unreadable file raises the
+    // matching OSError subclass, like the MATPOWER path's `to_pyerr` does.
+    let read_str = || std::fs::read_to_string(p).map_err(PyErr::from);
     let net = match fmt {
         TargetFormat::Matpower => caseio::parse_matpower_file(path).map_err(to_pyerr)?,
         TargetFormat::PowerModelsJson => {

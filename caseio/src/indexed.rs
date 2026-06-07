@@ -238,3 +238,49 @@ impl ConnectivityReport {
         self.n_components == 1 && self.isolated_buses.is_empty()
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::IndexedNetwork;
+    use crate::network::{Bus, BusType, Extras, Load, Network, Shunt};
+
+    fn bus(id: usize, kind: BusType) -> Bus {
+        Bus {
+            id,
+            kind,
+            vm: 1.0,
+            va: 0.0,
+            base_kv: 1.0,
+            vmax: 1.1,
+            vmin: 0.9,
+            area: 1,
+            zone: 1,
+            name: None,
+            extras: Extras::new(),
+        }
+    }
+
+    #[test]
+    fn aggregates_sum_multiple_loads_and_shunts_per_bus() {
+        // PSS/E and PowerModels admit several loads/shunts on one bus; the
+        // per-bus fold must add them, not overwrite (last-writer-wins would pass
+        // every MATPOWER fixture, which folds one load per bus).
+        let mut net =
+            Network::in_memory("agg", 100.0, vec![bus(1, BusType::Ref), bus(2, BusType::Pq)], Vec::new());
+        net.loads.push(Load { bus: 1, p: 10.0, q: 5.0, in_service: true, extras: Extras::new() });
+        net.loads.push(Load { bus: 1, p: 3.0, q: 1.0, in_service: true, extras: Extras::new() });
+        net.shunts.push(Shunt { bus: 1, g: 0.2, b: 0.4, in_service: true, extras: Extras::new() });
+        net.shunts.push(Shunt { bus: 1, g: 0.1, b: 0.3, in_service: true, extras: Extras::new() });
+
+        let view = IndexedNetwork::new(&net);
+        let i = view.bus_index(1).unwrap();
+        assert!((view.pd()[i] - 13.0).abs() < 1e-12);
+        assert!((view.qd()[i] - 6.0).abs() < 1e-12);
+        assert!((view.gs()[i] - 0.3).abs() < 1e-12);
+        assert!((view.bs()[i] - 0.7).abs() < 1e-12);
+        // The bus with no load/shunt stays zero.
+        let j = view.bus_index(2).unwrap();
+        assert_eq!(view.pd()[j], 0.0);
+        assert_eq!(view.gs()[j], 0.0);
+    }
+}

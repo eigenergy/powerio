@@ -307,6 +307,17 @@ mod tests {
     use super::*;
     use std::ffi::CString;
 
+    fn data_path(name: &str) -> CString {
+        CString::new(
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("../tests/data")
+                .join(name)
+                .to_str()
+                .unwrap(),
+        )
+        .unwrap()
+    }
+
     fn case9() -> *mut CioCase {
         let path = CString::new(
             std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -418,5 +429,117 @@ mod tests {
         assert!(c.is_null());
         let msg = unsafe { CStr::from_ptr(err.as_ptr()) }.to_str().unwrap();
         assert!(!msg.is_empty(), "expected an error message");
+    }
+
+    #[test]
+    fn extract_gen_and_nodal_tables() {
+        // case30 carries generators, loads, and shunts: cross-check the table
+        // extractors against known counts and aggregate signs (a column swap in
+        // cio_gens/cio_nodal_* would otherwise ship silently).
+        let path = data_path("case30.m");
+        let mut err = [0 as c_char; 256];
+        let c = unsafe { cio_parse(path.as_ptr(), std::ptr::null(), err.as_mut_ptr(), err.len()) };
+        assert!(!c.is_null());
+        unsafe {
+            let nb = cio_n_buses(c);
+            let ng = cio_n_gens(c);
+            assert_eq!(nb, 30);
+            assert!(ng > 0);
+
+            let mut gbus = vec![-9i64; ng];
+            let mut pmax = vec![0f64; ng];
+            cio_gens(
+                c,
+                gbus.as_mut_ptr(),
+                std::ptr::null_mut(),
+                pmax.as_mut_ptr(),
+                std::ptr::null_mut(),
+                std::ptr::null_mut(),
+            );
+            assert!(gbus.iter().all(|&b| b >= 0 && (b as usize) < nb));
+            assert!(pmax.iter().any(|&p| p > 0.0));
+
+            let mut ids = vec![0i64; nb];
+            cio_bus_ids(c, ids.as_mut_ptr());
+            assert!(ids.iter().all(|&id| id >= 1)); // MATPOWER bus ids are 1-based
+
+            let mut pd = vec![0f64; nb];
+            let mut qd = vec![0f64; nb];
+            cio_nodal_demand(c, pd.as_mut_ptr(), qd.as_mut_ptr());
+            assert!(pd.iter().sum::<f64>() > 0.0, "case30 has active demand");
+
+            let mut gs = vec![0f64; nb];
+            let mut bs = vec![0f64; nb];
+            cio_nodal_shunt(c, gs.as_mut_ptr(), bs.as_mut_ptr());
+            assert!(gs.iter().chain(bs.iter()).all(|x| x.is_finite()));
+
+            cio_case_free(c);
+        }
+    }
+
+    #[test]
+    fn null_handle_and_null_out_are_safe() {
+        // Every query tolerates a NULL handle (the documented safe default), and
+        // a NULL output pointer on a valid case is skipped, not dereferenced.
+        unsafe {
+            let nil: *const CioCase = std::ptr::null();
+            assert_eq!(cio_n_buses(nil), 0);
+            assert_eq!(cio_n_branches(nil), 0);
+            assert_eq!(cio_n_gens(nil), 0);
+            assert_eq!(cio_base_mva(nil), 0.0);
+            assert_eq!(cio_reference_bus(nil), -1);
+            assert_eq!(cio_is_radial(nil), 0);
+            assert_eq!(cio_n_components(nil), 0);
+
+            let c = case9();
+            cio_bus_ids(c, std::ptr::null_mut());
+            cio_nodal_demand(c, std::ptr::null_mut(), std::ptr::null_mut());
+            cio_gens(
+                c,
+                std::ptr::null_mut(),
+                std::ptr::null_mut(),
+                std::ptr::null_mut(),
+                std::ptr::null_mut(),
+                std::ptr::null_mut(),
+            );
+            cio_case_free(c);
+        }
+    }
+
+    #[test]
+    fn convert_emits_warning_into_buffer() {
+        // t_case9_dcline carries an HVDC dcline PSS/E can't represent; the drop
+        // must reach the caller's warning buffer, not vanish.
+        let path = data_path("t_case9_dcline.m");
+        let to = CString::new("psse").unwrap();
+        let mut warn = [0 as c_char; 512];
+        let mut err = [0 as c_char; 256];
+        unsafe {
+            let s = cio_convert(
+                path.as_ptr(),
+                to.as_ptr(),
+                std::ptr::null(),
+                warn.as_mut_ptr(),
+                warn.len(),
+                err.as_mut_ptr(),
+                err.len(),
+            );
+            assert!(!s.is_null());
+            let w = CStr::from_ptr(warn.as_ptr()).to_str().unwrap();
+            assert!(w.contains("dcline"), "expected an HVDC/dcline warning, got {w:?}");
+            cio_string_free(s);
+        }
+    }
+
+    #[test]
+    fn error_buffer_truncates_and_nul_terminates() {
+        // copy_to_buf must truncate an oversized message to fit and keep the
+        // trailing NUL (the one piece of pointer arithmetic in the file).
+        let path = CString::new("/no/such/directory/deeply/nested/missing/case.m").unwrap();
+        let mut err = [0x7f as c_char; 16]; // prefill nonzero so the NUL is visible
+        let c = unsafe { cio_parse(path.as_ptr(), std::ptr::null(), err.as_mut_ptr(), err.len()) };
+        assert!(c.is_null());
+        let nul = err.iter().position(|&b| b == 0).expect("buffer must be NUL-terminated");
+        assert!(nul <= 15);
     }
 }

@@ -46,6 +46,10 @@ fn parse_matpower_named(content: &str, name: &str) -> Result<Network> {
             .map(|(_, full)| *full)
     })?;
     net.source = Some(Arc::from(content));
+    // The other format readers validate references; the MATPOWER path must too,
+    // or a duplicate or dangling bus id reaches `IndexedNetwork` as silently
+    // collapsed aggregates (the dense bus-id map only debug-asserts uniqueness).
+    net.check_references("MATPOWER")?;
     Ok(net)
 }
 
