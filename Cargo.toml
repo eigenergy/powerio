@@ -1,5 +1,5 @@
 [workspace]
-members = ["powerio", "casemat", "casemat-ext", "caseio-ext", "caseio-capi"]
+members = ["powerio", "casemat", "casemat-ext", "caseio-ext", "powerio-capi"]
 # Bare `cargo build`/`test`/`clippy` touch only the two Rust library crates, so
 # the toolchain never compiles the PyO3 extensions (which need libpython). Build
 # the bindings explicitly with `-p casemat-ext` / `-p caseio-ext`.

@@ -1,5 +1,5 @@
 language = "C"
-include_guard = "CASEIO_H"
+include_guard = "POWERIO_H"
 pragma_once = false
 cpp_compat = true
 tab_width = 4
@@ -7,7 +7,7 @@ style = "type"
 
 [export]
 prefix = ""
-include = ["CioCase"]
+include = ["PioCase"]
 
 [parse]
 parse_deps = false
