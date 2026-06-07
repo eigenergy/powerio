@@ -50,6 +50,18 @@ for (et, f) in [("load", "pd"), ("load", "qd"), ("gen", "pg")]
     end
 end
 
+# When the shunt counts agree (no switched-shunt discrepancy), the shunt
+# admittances must match too — a dropped or mis-scaled fixed shunt would otherwise
+# slip past the count-only check.
+if count(ref, "shunt") == count(test, "shunt")
+    for f in ["gs", "bs"]
+        r, t = total(ref, "shunt", f), total(test, "shunt", f)
+        if !isapprox(r, t; atol = 1e-6, rtol = 1e-6)
+            push!(problems, "Σshunt.$f: ref=$r test=$t")
+        end
+    end
+end
+
 name = basename(ref_path)
 sref, stest = count(ref, "shunt"), count(test, "shunt")
 shunt_note = sref == stest ? "" : "  (shunt: ref=$sref test=$stest — switched shunts not modeled)"

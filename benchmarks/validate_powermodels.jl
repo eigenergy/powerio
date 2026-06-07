@@ -2,17 +2,35 @@
 # value for value over bus/branch/gen/load/shunt.
 # Usage: julia --project=benchmarks validate_powermodels.jl case.m our.json
 #
-# Both sides parse with PowerModels' default validate=true. caseio writes
-# idiomatic per_unit=true JSON (the same form PowerModels exports), so parse_file
-# reads it without rerunning make_per_unit! and the .m reference is per-unitized
-# by the same pass — both land in per unit and compare directly. dcline cases work
-# too: caseio derives PowerModels' per-end bounds, so correct_dclines! is happy.
+# Two checks:
+#  1. Consumability — caseio writes idiomatic per_unit=true JSON, so PowerModels'
+#     default parse_file (validate=true, which runs correct_network_data! and the
+#     dcline correction) must load it without error. This is the interop property
+#     that motivated emitting per_unit=true.
+#  2. Value-for-value — parse both sides with validate=false and per-unitize them
+#     explicitly. validate=false matters: correct_network_data! clamps angmin/angmax
+#     to ±60° (default_pad) and normalizes branch direction / thermal limits, which
+#     would rewrite BOTH sides into agreement and hide a scaling bug. make_per_unit!
+#     is a no-op on data already flagged per_unit=true (caseio's JSON), so it only
+#     per-unitizes the native .m reference.
 using PowerModels
 PowerModels.silence()
 
 ref_m, our_json = ARGS[1], ARGS[2]
-ref  = PowerModels.parse_file(ref_m)
-ours = PowerModels.parse_file(our_json)
+
+# 1. Consumability: the caseio JSON must load under PowerModels' default validate=true.
+try
+    PowerModels.parse_file(our_json)
+catch e
+    println("MISMATCH: ", basename(ref_m), " — caseio JSON rejected by PowerModels validate=true: ", e)
+    exit(1)
+end
+
+# 2. Strict comparison on un-normalized, explicitly per-unitized data.
+ref  = PowerModels.parse_file(ref_m; validate=false)
+ours = PowerModels.parse_file(our_json; validate=false)
+PowerModels.make_per_unit!(ref)
+PowerModels.make_per_unit!(ours)
 
 # JSON has no ±Inf/NaN, so an unbounded ref value (e.g. a pegase gen qmax=Inf)
 # arrives as `nothing` on our side. Restore it from the reference so the two
@@ -61,7 +79,7 @@ for et in ["bus", "branch", "gen", "load", "shunt"]
 end
 
 if isempty(mismatches)
-    println("MATCH: ", basename(ref_m), " — bus/branch/gen/load/shunt identical after per-unit")
+    println("MATCH: ", basename(ref_m), " — loads under validate=true; bus/branch/gen/load/shunt identical per-unit")
 else
     println("MISMATCH: ", basename(ref_m), " (", length(mismatches), ")")
     for m in first(mismatches, 40); println("  ", m); end

@@ -137,11 +137,19 @@ def main():
     if yc.shape != yp.shape:
         problems.append(f"ybus shape: caseio={yc.shape} pandapower={yp.shape}")
     else:
+        # Elementwise relative check, not a single global-max scale: a localized
+        # error on a small admittance entry can't hide under the largest diagonal.
         d = (yc - yp).tocoo()
-        err = float(np.abs(d.data).max()) if d.nnz else 0.0
-        scale = float(np.abs(yc.tocoo().data).max()) if yc.nnz else 1.0
-        if err > YTOL_ABS + YTOL_REL * scale:
-            problems.append(f"ybus max|Δ|={err:.3e} (scale {scale:.3e})")
+        if d.nnz:
+            ref_mag = np.abs(np.asarray(yc.tocsr()[d.row, d.col]).ravel())
+            tol = YTOL_ABS + YTOL_REL * ref_mag
+            bad = np.abs(d.data) > tol
+            if bad.any():
+                i = int(np.argmax(np.abs(d.data) - tol))
+                problems.append(
+                    f"ybus: {int(bad.sum())} entries exceed tol, "
+                    f"worst |Δ|={float(np.abs(d.data)[i]):.3e} at ref|{float(ref_mag[i]):.3e}|"
+                )
 
     report(name, problems)
     return 1 if problems else 0

@@ -58,6 +58,14 @@ import casemat
 inp, to, out = sys.argv[1], sys.argv[2], sys.argv[3]
 open(out, "w").write(casemat.convert(inp, to).text)
 EOF
+    local rc=$?
+    # Guard against a silent success that wrote nothing — validating an empty file
+    # would otherwise look like a pass.
+    if [ "$rc" -eq 0 ] && [ ! -s "$3" ]; then
+        echo "convert: $1 → $2 produced empty output" >&2
+        return 1
+    fi
+    return "$rc"
 }
 
 # Run a check, echo its output, return a one-word mark for the summary row.
