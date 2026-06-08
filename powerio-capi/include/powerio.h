@@ -31,6 +31,16 @@
 extern "C" {
 #endif
 
+/* ABI version of this interface. pio_abi_version() returns the value the library
+ * was built with; compare it against PIO_ABI_VERSION (the value you compiled
+ * against) and refuse a mismatched library. Bump on any breaking change to an
+ * existing pio_* signature or the JSON transport schema (additive symbols don't
+ * bump it). pio_version() is the informational crate version string ("0.1.0"):
+ * 'static and NUL-terminated, do NOT free it. */
+#define PIO_ABI_VERSION 1
+uint32_t pio_abi_version(void);
+const char *pio_version(void);
+
 typedef struct PioCase PioCase;
 
 /* Parse `path`; format from the file extension, or forced by `from`

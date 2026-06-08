@@ -1,0 +1,24 @@
+{
+    "version": 1,
+    "project": "powerio",
+    "project_url": "https://github.com/eigenergy/powerio",
+    "repo": "../..",
+    "branches": ["main"],
+    "show_commit_url": "https://github.com/eigenergy/powerio/commit/",
+    "environment_type": "virtualenv",
+    "pythons": ["3.12"],
+    "matrix": {
+        "req": {
+            "numpy": [],
+            "scipy": []
+        }
+    },
+    "build_command": [
+        "python -m pip install maturin",
+        "maturin build --release --out {build_cache_dir}"
+    ],
+    "benchmark_dir": "benchmarks",
+    "env_dir": "env",
+    "results_dir": "results",
+    "html_dir": "html"
+}

@@ -15,3 +15,11 @@ __pycache__/
 .pytest_cache/
 .venv/
 tests/data/large/
+
+# Machine-readable bench output (render_tables.py reads it; numbers are per-machine)
+benchmarks/results/
+
+# asv working dirs (built envs, raw results, generated dashboard)
+benchmarks/asv/env/
+benchmarks/asv/results/
+benchmarks/asv/html/

@@ -28,6 +28,7 @@ ExaPowerIO and PowerModels do. The powerio handle is freed in an untimed
 teardown, matching the other two, whose returned data is collected after the
 sample rather than inside it.
 
+<!-- BENCH:speed-julia START -->
 | case | buses / branches | powerio | ExaPowerIO.jl | PowerModels.jl |
 | --- | --- | --- | --- | --- |
 | case2869pegase | 2869 / 4582 | 1.73 ms | 2.86 ms | 122.2 ms |
@@ -40,6 +41,7 @@ sample rather than inside it.
 | case_SyntheticUSA | 82000 / 104121 | 73.1 ms | 82.65 ms | n/a |
 | case99k | 99396 / 117860 | 84.27 ms | 94.88 ms | n/a |
 | case193k | 192768 / 228574 | 161.9 ms | 174.98 ms | n/a |
+<!-- BENCH:speed-julia END -->
 
 (PowerModels is skipped past case13659, where it takes minutes and the gap is
 already settled.)
@@ -65,12 +67,14 @@ pandapower reads MATPOWER `.m` through `matpowercaseframes` (a pandas reader) an
 then `from_mpc` builds its `net`. `benchmarks/bench_parse.py`, same machine,
 median wall time:
 
+<!-- BENCH:speed-pandapower START -->
 | case | powerio parse | matpowercaseframes (pandapower's `.m` reader) |
 | --- | --- | --- |
 | case2869pegase | 1.8 ms | 25.6 ms |
 | case9241pegase | 5.7 ms | 85.9 ms |
 | case13659pegase | 8.9 ms | 139.9 ms |
 | case193k | 165.4 ms | 2214.3 ms |
+<!-- BENCH:speed-pandapower END -->
 
 powerio's parse is ~14× faster than pandapower's `.m` reader, and that is before
 `from_mpc` builds the `net` (case30: `from_mpc` ≈ 59 ms vs powerio under 1 ms).
@@ -92,9 +96,13 @@ prints a pass/fail matrix. Latest run, all checks pass:
 | t_case9_dcline | ✓ | ✓ | ✓ | ✓ | ✓ |
 | t_case9_oos | ✓ | ✓ | ✓ | ✓ | ✓ |
 | pglib case5_pjm / case14_ieee | ✓ | ✓ | ✓ | ✓ | ✓ |
-| case2869pegase | ✓ | ✓ | ✓ | ✓ | ✓ |
+| case2869pegase | ✓ | ✓ | ✓ | ✓ | n/a† |
 | psse/case5, psse/case14 (read side) | n/a | n/a | ✓ | n/a | n/a |
 | egret/case9, case14, case30 (read side) | ✓ | n/a | n/a | n/a | n/a |
+
+† pandapower's reader (matpowercaseframes) does `int(float(tok))` and raises on the
+`Inf` limits MATPOWER uses for "unlimited", which case2869pegase carries; the pp
+validator reports n/a there (powerio, PowerModels, and ExaPowerIO all read the case).
 
 What each column checks:
 
