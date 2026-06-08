@@ -4,8 +4,12 @@ name: Docs
 # four library crates, including powerio-capi and powerio-py (publish = false),
 # whose //! docs docs.rs would never host. docs.rs takes over for powerio and
 # powerio-matrix once those are published to crates.io.
+# PRs build the docs too (so a broken intra-doc link fails review, not main),
+# but only push-to-main / dispatch deploys to Pages — see the `deploy` gate.
 on:
   push:
+    branches: [ "main" ]
+  pull_request:
     branches: [ "main" ]
   workflow_dispatch:
 
@@ -14,9 +18,10 @@ permissions:
   pages: write
   id-token: write
 
-# One Pages deploy at a time; a newer push supersedes an in-flight build.
+# Serialize per ref: main's Pages deploys supersede each other, and a PR's doc
+# build can't cancel main's in-flight deploy.
 concurrency:
-  group: pages
+  group: pages-${{ github.ref }}
   cancel-in-progress: true
 
 env:
@@ -44,6 +49,8 @@ jobs:
 
   deploy:
     needs: build
+    # PR runs build to catch doc breakage but never publish; only main / dispatch deploy.
+    if: github.event_name != 'pull_request'
     runs-on: ubuntu-latest
     environment:
       name: github-pages
