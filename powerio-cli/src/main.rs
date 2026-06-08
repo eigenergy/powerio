@@ -146,6 +146,19 @@ impl From<FormatArg> for powerio_matrix::TargetFormat {
     }
 }
 
+impl FormatArg {
+    /// The canonical name `target_format_from_name` accepts, for forcing a reader.
+    fn name(self) -> &'static str {
+        match self {
+            FormatArg::Matpower => "matpower",
+            FormatArg::PowerModelsJson => "powermodels-json",
+            FormatArg::EgretJson => "egret-json",
+            FormatArg::Psse => "psse",
+            FormatArg::PowerWorld => "powerworld",
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug, ValueEnum)]
 enum MatrixKindArg {
     #[value(name = "bprime", alias = "b1", alias = "b")]
@@ -494,37 +507,13 @@ fn run_convert(
     Ok(())
 }
 
-/// Read `input` into the neutral [`powerio_matrix::Network`], picking the reader from
-/// `from` or the file extension.
+/// Read `input` into the neutral [`powerio_matrix::Network`] through the shared
+/// format hub, which picks the reader from `from` or the extension (sniffing a
+/// `.json` for the EGRET vs PowerModels shape).
 fn read_network(
     input: &std::path::Path,
     from: Option<FormatArg>,
 ) -> anyhow::Result<powerio_matrix::Network> {
-    let fmt = match from {
-        Some(f) => f,
-        None => match input.extension().and_then(|e| e.to_str()) {
-            Some("m") => FormatArg::Matpower,
-            Some("json") => FormatArg::PowerModelsJson,
-            Some("raw") => FormatArg::Psse,
-            Some("aux") => FormatArg::PowerWorld,
-            other => {
-                anyhow::bail!("cannot infer input format from extension {other:?}; pass --from")
-            }
-        },
-    };
-    let net = match fmt {
-        FormatArg::Matpower => powerio_matrix::parse_matpower_file(input)
-            .with_context(|| format!("reading MATPOWER {}", input.display()))?,
-        FormatArg::PowerModelsJson => {
-            powerio_matrix::parse_powermodels_json(&std::fs::read_to_string(input)?)?
-        }
-        FormatArg::Psse => powerio_matrix::parse_psse(&std::fs::read_to_string(input)?)?,
-        FormatArg::PowerWorld => {
-            powerio_matrix::parse_powerworld(&std::fs::read_to_string(input)?)?
-        }
-        FormatArg::EgretJson => {
-            anyhow::bail!("reading EGRET JSON is not supported yet (write-only)")
-        }
-    };
-    Ok(net)
+    powerio_matrix::read_path(input, from.map(FormatArg::name))
+        .with_context(|| format!("reading {}", input.display()))
 }

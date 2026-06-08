@@ -230,12 +230,23 @@ pub(super) fn gen_row(row: &[f64], i: usize) -> Result<Generator> {
 
 pub(super) fn gencost_row(row: &[f64], i: usize) -> Result<GenCost> {
     require("gencost", row, i, gencost_col::REQUIRED)?;
+    let model = row[gencost_col::MODEL] as u8;
+    let ncost = row[gencost_col::NCOST] as usize;
+    // This row's own cost values: `2·ncost` (mw, cost) breakpoints for piecewise
+    // (model 1), `ncost` polynomial coefficients (model 2). A gencost matrix that
+    // mixes the two is padded with trailing zeros to stay rectangular, so take
+    // only this row's values, not the padding. Require the row to actually hold
+    // them: a NCOST larger than the row is malformed, and silently truncating it
+    // would misrepresent the cost curve.
+    let want = if model == 1 { 2 * ncost } else { ncost };
+    let start = gencost_col::REQUIRED;
+    require("gencost", row, i, start + want)?;
     Ok(GenCost {
-        model: row[gencost_col::MODEL] as u8,
+        model,
         startup: row[gencost_col::STARTUP],
         shutdown: row[gencost_col::SHUTDOWN],
-        ncost: row[gencost_col::NCOST] as usize,
-        coeffs: row[gencost_col::REQUIRED..].to_vec(),
+        ncost,
+        coeffs: row[start..start + want].to_vec(),
     })
 }
 

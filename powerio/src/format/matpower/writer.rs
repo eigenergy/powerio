@@ -115,6 +115,16 @@ fn canonical(net: &Network) -> String {
 
         if net.generators.iter().all(|g| g.cost.is_some()) {
             let _ = writeln!(s, "mpc.gencost = [");
+            // MATPOWER's gencost is a rectangular matrix: pad every row's cost
+            // values to the widest one with trailing zeros (a case that mixes
+            // piecewise and polynomial models has rows of different lengths).
+            let width = net
+                .generators
+                .iter()
+                .filter_map(|g| g.cost.as_ref())
+                .map(|c| c.coeffs.len())
+                .max()
+                .unwrap_or(0);
             for g in &net.generators {
                 let c = g.cost.as_ref().expect("checked all gens have cost");
                 let _ = write!(
@@ -122,8 +132,8 @@ fn canonical(net: &Network) -> String {
                     "\t{}\t{}\t{}\t{}",
                     c.model, c.startup, c.shutdown, c.ncost
                 );
-                for coeff in &c.coeffs {
-                    let _ = write!(s, "\t{coeff}");
+                for j in 0..width {
+                    let _ = write!(s, "\t{}", c.coeffs.get(j).copied().unwrap_or(0.0));
                 }
                 let _ = writeln!(s, ";");
             }

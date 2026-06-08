@@ -8,15 +8,17 @@
 //! - **same-format byte-exact echo** — reading a format then writing it back
 //!   reproduces the bytes.
 //!
-//! EGRET has no reader yet, so it gets the write-side checks only. PowerModels'
-//! value-for-value check against PowerModels.jl lives in
-//! `benchmarks/validate_powermodels.jl`.
+//! All five formats (MATPOWER, PowerModels JSON, PSS/E, PowerWorld, EGRET) have a
+//! reader and a writer, so each runs the full set. PowerModels' and EGRET's
+//! value-for-value checks against the reference tools live in
+//! `benchmarks/validate_powermodels.jl` and `benchmarks/validate_egret.py`.
 
 use std::path::{Path, PathBuf};
 
 use powerio::{
-    Network, TargetFormat, parse_matpower_file, parse_powermodels_json, parse_powerworld,
-    parse_psse, write_as, write_egret_json, write_powermodels_json, write_powerworld, write_psse,
+    Network, TargetFormat, parse_egret_json, parse_matpower_file, parse_powermodels_json,
+    parse_powerworld, parse_psse, write_as, write_egret_json, write_powermodels_json,
+    write_powerworld, write_psse,
 };
 
 mod common;
@@ -88,6 +90,12 @@ fn roundtrippable() -> Vec<Roundtrippable> {
             format: TargetFormat::PowerWorld,
             write: |n| write_powerworld(n).text,
             read: |s| parse_powerworld(s).unwrap(),
+        },
+        Roundtrippable {
+            name: "EGRET JSON",
+            format: TargetFormat::EgretJson,
+            write: |n| write_egret_json(n).text,
+            read: |s| parse_egret_json(s).unwrap(),
         },
     ]
 }
@@ -172,16 +180,27 @@ fn cross_format_powermodels_to_psse_and_powerworld() {
 }
 
 #[test]
-fn egret_write_side_only() {
-    // No EGRET reader yet: confirm valid JSON and clean warnings (case30 has no
-    // dcline/storage to drop).
-    let net0 = parse_matpower_file(data("case30.m")).unwrap();
-    let conv = write_egret_json(&net0);
-    let v: serde_json::Value = serde_json::from_str(&conv.text).unwrap();
-    assert!(v["elements"]["bus"].as_object().unwrap().len() == net0.buses.len());
-    assert!(
-        conv.warnings.is_empty(),
-        "unexpected warnings: {:?}",
-        conv.warnings
-    );
+fn egret_fixtures_round_trip_byte_exact() {
+    // EGRET ModelData files (case9/14/30 from egret's own serializer, dcline3
+    // hand-authored) read and echo back byte for byte; dcline3 exercises the
+    // dc_branch path.
+    for f in [
+        "egret/case9.json",
+        "egret/case14.json",
+        "egret/case30.json",
+        "egret/dcline3.json",
+    ] {
+        let text = std::fs::read_to_string(data(f)).unwrap();
+        let net = parse_egret_json(&text).unwrap();
+        assert_eq!(
+            write_as(&net, TargetFormat::EgretJson).text,
+            text,
+            "{f}: EGRET same-format write is not a byte-exact echo"
+        );
+    }
+    // dc_branch maps to an hvdc line on read.
+    let hv =
+        parse_egret_json(&std::fs::read_to_string(data("egret/dcline3.json")).unwrap()).unwrap();
+    assert_eq!(hv.hvdc.len(), 1, "dc_branch should map to one hvdc line");
+    assert_eq!(hv.buses.len(), 3);
 }

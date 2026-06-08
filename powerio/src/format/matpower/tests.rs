@@ -223,3 +223,63 @@ mpc.branch = [
     assert!(net.branches[0].angmin.is_nan());
     assert!(net.branches[0].angmax.is_infinite());
 }
+
+#[test]
+fn mixed_model_gencost_drops_padding_and_writes_rectangular() {
+    // A gencost matrix that mixes piecewise (model 1) and polynomial (model 2)
+    // rows is padded with trailing zeros to stay rectangular. The parser must take
+    // each row's own values (2·ncost / ncost), not the padding, and the canonical
+    // writer must pad back so the emitted matrix is rectangular (PowerModels and
+    // MATPOWER both reject a ragged one). This mirrors t_case9_dcline's gencost.
+    let src = r"
+mpc.baseMVA = 100;
+mpc.bus = [
+    1 3 0 0 0 0 1 1 0 345 1 1.1 0.9;
+    2 2 0 0 0 0 1 1 0 345 1 1.1 0.9;
+];
+mpc.branch = [
+    1 2 0.01 0.05 0.02 0 0 0 0 0 1 -360 360;
+];
+mpc.gen = [
+    1 0 0 300 -300 1 100 1 250 10 0 0 0 0 0 0 0 0 0 0 0;
+    2 0 0 300 -300 1 100 1 250 10 0 0 0 0 0 0 0 0 0 0 0;
+];
+mpc.gencost = [
+    1 0 0 3 0 0 100 2500 200 5500;
+    2 0 0 2 24.035 -403.5 0 0 0 0;
+];
+";
+    let net = parse_mpc(src).expect("parse mixed gencost");
+    let c0 = net.generators[0].cost.as_ref().unwrap();
+    let c1 = net.generators[1].cost.as_ref().unwrap();
+    // Piecewise: 2·ncost = 6 breakpoint values; polynomial: ncost = 2 coefficients
+    // (the four padding zeros are dropped, not read as degree-2..5 terms).
+    assert_eq!((c0.model, c0.coeffs.len()), (1, 6));
+    assert_eq!((c1.model, c1.coeffs.len()), (2, 2));
+    assert!((c1.coeffs[0] - 24.035).abs() < 1e-9 && (c1.coeffs[1] + 403.5).abs() < 1e-9);
+
+    // Canonical write pads both gencost rows to the same width.
+    let mut built = net.clone();
+    built.source = None;
+    built.source_format = SourceFormat::InMemory;
+    let text = write_matpower(&built);
+    let rows: Vec<usize> = text
+        .lines()
+        .skip_while(|l| !l.contains("mpc.gencost"))
+        .skip(1)
+        .take_while(|l| !l.contains("];"))
+        .map(|l| l.matches('\t').count())
+        .collect();
+    assert_eq!(rows.len(), 2);
+    assert_eq!(rows[0], rows[1], "gencost rows must be equal width");
+    // And it re-parses to the same trimmed costs.
+    let reparsed = parse_mpc(&text).expect("canonical mixed gencost reparses");
+    assert_eq!(
+        reparsed.generators[0].cost.as_ref().unwrap().coeffs.len(),
+        6
+    );
+    assert_eq!(
+        reparsed.generators[1].cost.as_ref().unwrap().coeffs.len(),
+        2
+    );
+}

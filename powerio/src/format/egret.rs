@@ -1,16 +1,28 @@
-//! Write a [`Network`] as EGRET `ModelData` JSON.
+//! Read and write a [`Network`] as EGRET `ModelData` JSON.
 //!
 //! EGRET groups the network under `elements` (bus, load, branch, generator,
-//! shunt) with a small `system` block; values stay in MW/MVAr, degrees, with the
-//! base in `system.baseMVA`. Loads and shunts are first-class on the `Network`,
-//! generator cost becomes a polynomial/piecewise `cost_curve`, and a branch with
-//! a nonzero raw tap or a phase shift is typed `transformer`. Schema-faithful;
-//! validate against EGRET's own loader when it is in the toolchain.
+//! shunt, dc_branch) with a small `system` block; values stay in MW/MVAr,
+//! degrees, with the base in `system.baseMVA`. Loads and shunts are first-class
+//! on the `Network`, generator cost becomes a polynomial/piecewise `cost_curve`,
+//! and a branch with a nonzero raw tap or a phase shift is typed `transformer`.
+//!
+//! The reader takes the power-flow ModelData subset: numeric bus ids (as
+//! matpower- and pglib-derived files have), scalar element values. Unit
+//! commitment cases (`system.time_keys`, time-series values) are rejected. A
+//! byte-exact round-trip rides on the retained source like every other format.
+
+use std::sync::Arc;
 
 use serde_json::{Map, Value};
 
 use super::{Conversion, finish, jnum};
-use crate::network::{Branch, Bus, BusType, GenCost, Generator, Load, Network, Shunt};
+use crate::network::{
+    Branch, Bus, BusId, BusType, Extras, GenCost, Generator, Hvdc, Load, Network, Shunt,
+    SourceFormat,
+};
+use crate::{Error, Result};
+
+const FMT: &str = "EGRET JSON";
 
 #[must_use]
 pub fn write_egret_json(net: &Network) -> Conversion {
@@ -221,5 +233,441 @@ fn cost_curve(cost: &GenCost) -> Option<Value> {
             Some(Value::Object(curve))
         }
         _ => None,
+    }
+}
+
+/// Parse EGRET `ModelData` JSON into a [`Network`].
+///
+/// Inverts [`write_egret_json`]: the `elements` blocks map back to the typed
+/// model and `system.baseMVA`/`reference_bus` to the base and bus types. Takes
+/// the power-flow subset (numeric bus ids, scalar values); a unit commitment
+/// case (`system.time_keys`) is rejected with a clear error.
+pub fn parse_egret_json(content: &str) -> Result<Network> {
+    parse_egret_source(Arc::new(content.to_owned()), None)
+}
+
+/// Owned-source entry used by the format hub: parse by borrowing `source`, then
+/// move the buffer into the retained source (no copy, byte-exact round-trip).
+/// `name_hint` (e.g. a file stem) names the network when the JSON has no
+/// `model_name`.
+pub(crate) fn parse_egret_source(source: Arc<String>, name_hint: Option<&str>) -> Result<Network> {
+    let content: &str = &source;
+    let root: Value = serde_json::from_str(content).map_err(|e| bad(e.to_string()))?;
+    let root = root
+        .as_object()
+        .ok_or_else(|| bad("top level is not a JSON object"))?;
+
+    let system = obj(root, "system").ok_or_else(|| bad("missing `system` object"))?;
+    if system.contains_key("time_keys") {
+        return Err(bad(
+            "EGRET unit commitment cases (system.time_keys) are not supported; expected a power-flow ModelData",
+        ));
+    }
+    let base_mva = system
+        .get("baseMVA")
+        .and_then(Value::as_f64)
+        .ok_or_else(|| bad("missing numeric system.baseMVA"))?;
+    let elements = obj(root, "elements").ok_or_else(|| bad("missing `elements` object"))?;
+    let name = root
+        .get("model_name")
+        .and_then(Value::as_str)
+        .or(name_hint)
+        .unwrap_or("case")
+        .to_string();
+
+    let mut buses = Vec::new();
+    if let Some(m) = obj(elements, "bus") {
+        for (k, v) in sorted_kv(m) {
+            buses.push(read_bus(k, v)?);
+        }
+    }
+    let mut loads = Vec::new();
+    if let Some(m) = obj(elements, "load") {
+        for v in sorted_vals(m) {
+            loads.push(read_load(v)?);
+        }
+    }
+    let mut shunts = Vec::new();
+    if let Some(m) = obj(elements, "shunt") {
+        for v in sorted_vals(m) {
+            shunts.push(read_shunt(v)?);
+        }
+    }
+    let mut branches = Vec::new();
+    if let Some(m) = obj(elements, "branch") {
+        for v in sorted_vals(m) {
+            branches.push(read_branch(v)?);
+        }
+    }
+    let mut generators = Vec::new();
+    if let Some(m) = obj(elements, "generator") {
+        for v in sorted_vals(m) {
+            generators.push(read_gen(v)?);
+        }
+    }
+    let mut hvdc = Vec::new();
+    if let Some(m) = obj(elements, "dc_branch") {
+        for v in sorted_vals(m) {
+            hvdc.push(read_dc_branch(v)?);
+        }
+    }
+
+    let net = Network {
+        name,
+        base_mva,
+        buses,
+        loads,
+        shunts,
+        branches,
+        generators,
+        storage: Vec::new(),
+        hvdc,
+        source_format: SourceFormat::EgretJson,
+        source: Some(source),
+    };
+    net.check_references(FMT)?;
+    Ok(net)
+}
+
+fn bad(message: impl Into<String>) -> Error {
+    Error::FormatRead {
+        format: FMT,
+        message: message.into(),
+    }
+}
+
+fn obj<'a>(v: &'a Map<String, Value>, key: &str) -> Option<&'a Map<String, Value>> {
+    v.get(key).and_then(Value::as_object)
+}
+
+/// Element entries sorted by the integer in the key: a bare id (`"1".."m"`, the
+/// bus/branch/generator keys) or the trailing index of a labeled key
+/// (`"load_10"` → 10). Keeps `load_2` before `load_10` so a re-emit reproduces
+/// the writer's element order (which keys by enumeration index).
+fn sorted_kv(map: &Map<String, Value>) -> Vec<(&String, &Value)> {
+    let mut items: Vec<(&String, &Value)> = map.iter().collect();
+    items.sort_by(|(a, _), (b, _)| num_key(a).cmp(&num_key(b)).then_with(|| a.cmp(b)));
+    items
+}
+
+fn sorted_vals(map: &Map<String, Value>) -> Vec<&Value> {
+    sorted_kv(map).into_iter().map(|(_, v)| v).collect()
+}
+
+/// The trailing run of digits as an integer (`"5"` → 5, `"load_10"` → 10); a key
+/// with no trailing digits sorts last. Scans bytes from the end, no allocation.
+fn num_key(k: &str) -> i64 {
+    let start = k.len() - k.bytes().rev().take_while(u8::is_ascii_digit).count();
+    k[start..].parse::<i64>().unwrap_or(i64::MAX)
+}
+
+/// A non-negative integer bus id from an f64 (EGRET writes some ids as numbers).
+/// Rejects negative, fractional, or out-of-range values rather than truncating or
+/// wrapping them onto the wrong bus.
+fn id_from_f64(x: f64) -> Option<usize> {
+    (x >= 0.0 && x.fract() == 0.0 && x <= usize::MAX as f64).then_some(x as usize)
+}
+
+/// A bus id from a JSON value: a numeric string (EGRET's convention) or a bare
+/// number. `None` for a non-integer, negative, or non-numeric value (named buses
+/// aren't representable in the integer `BusId` space).
+fn parse_id(v: &Value) -> Option<usize> {
+    match v {
+        Value::String(s) => {
+            let s = s.trim();
+            s.parse::<usize>()
+                .ok()
+                .or_else(|| s.parse::<f64>().ok().and_then(id_from_f64))
+        }
+        Value::Number(n) => n
+            .as_u64()
+            .map(|x| x as usize)
+            .or_else(|| n.as_f64().and_then(id_from_f64)),
+        _ => None,
+    }
+}
+
+fn id_field(v: &Value, key: &str) -> Result<BusId> {
+    let raw = v
+        .get(key)
+        .ok_or_else(|| bad(format!("element missing `{key}`")))?;
+    parse_id(raw)
+        .map(BusId)
+        .ok_or_else(|| bad(format!("`{key}` is not a numeric bus id: {raw}")))
+}
+
+/// Field `key` as f64, `0.0` when absent. A present-but-non-numeric value is a
+/// hard error, not a silent default — the contract the PSS/E and PowerWorld
+/// readers also hold, so a garbled number can't quietly become a plausible `0.0`
+/// and corrupt the matrices downstream.
+fn f(v: &Value, key: &str) -> Result<f64> {
+    f_or(v, key, 0.0)
+}
+/// Field `key` as f64: absent or null ⇒ `default`, present but not a number ⇒ error.
+fn f_or(v: &Value, key: &str, default: f64) -> Result<f64> {
+    match v.get(key) {
+        None | Some(Value::Null) => Ok(default),
+        Some(x) => x
+            .as_f64()
+            .ok_or_else(|| bad(format!("`{key}` is not a number: {x}"))),
+    }
+}
+/// Field `key` as usize, accepting a number or a numeric string (EGRET writes
+/// `area`/`zone` as strings; its own parser writes them as numbers). Absent ⇒
+/// `default`; present but not a non-negative integer ⇒ error.
+fn usize_or(v: &Value, key: &str, default: usize) -> Result<usize> {
+    match v.get(key) {
+        None | Some(Value::Null) => Ok(default),
+        Some(x) => {
+            parse_id(x).ok_or_else(|| bad(format!("`{key}` is not a non-negative integer: {x}")))
+        }
+    }
+}
+/// Field `key` as bool: absent or null ⇒ `default`, present but not a bool ⇒ error.
+fn flag(v: &Value, key: &str, default: bool) -> Result<bool> {
+    match v.get(key) {
+        None | Some(Value::Null) => Ok(default),
+        Some(Value::Bool(b)) => Ok(*b),
+        Some(x) => Err(bad(format!("`{key}` is not a boolean: {x}"))),
+    }
+}
+
+fn bustype_from_str(s: &str) -> BusType {
+    match s {
+        "PV" => BusType::Pv,
+        "ref" => BusType::Ref,
+        "isolated" => BusType::Isolated,
+        _ => BusType::Pq,
+    }
+}
+
+fn read_bus(key: &str, v: &Value) -> Result<Bus> {
+    let id = key
+        .trim()
+        .parse::<usize>()
+        .map_err(|_| bad(format!("bus key is not a numeric id: {key:?}")))?;
+    Ok(Bus {
+        id: BusId(id),
+        kind: bustype_from_str(
+            v.get("matpower_bustype")
+                .and_then(Value::as_str)
+                .unwrap_or("PQ"),
+        ),
+        vm: f_or(v, "vm", 1.0)?,
+        va: f(v, "va")?,
+        base_kv: f(v, "base_kv")?,
+        vmax: f_or(v, "v_max", 1.1)?,
+        vmin: f_or(v, "v_min", 0.9)?,
+        area: usize_or(v, "area", 0)?,
+        zone: usize_or(v, "zone", 0)?,
+        name: v.get("name").and_then(Value::as_str).map(str::to_string),
+        extras: Extras::new(),
+    })
+}
+
+fn read_load(v: &Value) -> Result<Load> {
+    Ok(Load {
+        bus: id_field(v, "bus")?,
+        p: f(v, "p_load")?,
+        q: f(v, "q_load")?,
+        in_service: flag(v, "in_service", true)?,
+        extras: Extras::new(),
+    })
+}
+
+fn read_shunt(v: &Value) -> Result<Shunt> {
+    Ok(Shunt {
+        bus: id_field(v, "bus")?,
+        g: f(v, "gs")?,
+        b: f(v, "bs")?,
+        in_service: flag(v, "in_service", true)?,
+        extras: Extras::new(),
+    })
+}
+
+fn read_branch(v: &Value) -> Result<Branch> {
+    let is_xf = v.get("branch_type").and_then(Value::as_str) == Some("transformer");
+    Ok(Branch {
+        from: id_field(v, "from_bus")?,
+        to: id_field(v, "to_bus")?,
+        r: f(v, "resistance")?,
+        x: f(v, "reactance")?,
+        b: f(v, "charging_susceptance")?,
+        rate_a: f(v, "rating_long_term")?,
+        rate_b: f(v, "rating_short_term")?,
+        rate_c: f(v, "rating_emergency")?,
+        tap: if is_xf {
+            f_or(v, "transformer_tap_ratio", 1.0)?
+        } else {
+            0.0
+        },
+        shift: f(v, "transformer_phase_shift")?,
+        in_service: flag(v, "in_service", true)?,
+        angmin: f_or(v, "angle_diff_min", -360.0)?,
+        angmax: f_or(v, "angle_diff_max", 360.0)?,
+        extras: Extras::new(),
+    })
+}
+
+fn read_gen(v: &Value) -> Result<Generator> {
+    let startup = f_or(v, "startup_cost", 0.0)?;
+    let shutdown = f_or(v, "shutdown_cost", 0.0)?;
+    let cost = v
+        .get("p_cost")
+        .and_then(|pc| read_cost(pc, startup, shutdown));
+    Ok(Generator {
+        bus: id_field(v, "bus")?,
+        pg: f(v, "pg")?,
+        qg: f(v, "qg")?,
+        pmax: f(v, "p_max")?,
+        pmin: f(v, "p_min")?,
+        qmax: f(v, "q_max")?,
+        qmin: f(v, "q_min")?,
+        vg: f_or(v, "vg", 1.0)?,
+        mbase: f_or(v, "mbase", 100.0)?,
+        in_service: flag(v, "in_service", true)?,
+        cost,
+        caps: Default::default(),
+    })
+}
+
+fn read_dc_branch(v: &Value) -> Result<Hvdc> {
+    Ok(Hvdc {
+        from: id_field(v, "from_bus")?,
+        to: id_field(v, "to_bus")?,
+        in_service: flag(v, "in_service", true)?,
+        pf: f(v, "pf")?,
+        pt: f(v, "pt")?,
+        qf: f(v, "qf")?,
+        qt: f(v, "qt")?,
+        vf: f_or(v, "vf", 1.0)?,
+        vt: f_or(v, "vt", 1.0)?,
+        pmin: f(v, "pmin")?,
+        pmax: f(v, "pmax")?,
+        qminf: f(v, "qminf")?,
+        qmaxf: f(v, "qmaxf")?,
+        qmint: f(v, "qmint")?,
+        qmaxt: f(v, "qmaxt")?,
+        loss0: f(v, "loss0")?,
+        loss1: f_or(v, "loss_factor", 0.0)?,
+        extras: Extras::new(),
+    })
+}
+
+/// EGRET `p_cost` → [`GenCost`]. Polynomial `{exp: coeff}` becomes the
+/// highest-order-first coefficient vector (gaps filled with zeros); piecewise
+/// `[[p, c], ...]` becomes the flat `(mw, cost)` breakpoints.
+fn read_cost(p_cost: &Value, startup: f64, shutdown: f64) -> Option<GenCost> {
+    let m = p_cost.as_object()?;
+    match m.get("cost_curve_type").and_then(Value::as_str)? {
+        "polynomial" => {
+            let values = m.get("values")?.as_object()?;
+            let pairs: Vec<(usize, f64)> = values
+                .iter()
+                .filter_map(|(k, c)| Some((k.parse().ok()?, c.as_f64()?)))
+                .collect();
+            let max_exp = pairs.iter().map(|(e, _)| *e).max()?;
+            let mut coeffs = vec![0.0; max_exp + 1]; // index 0 = highest order
+            for (e, c) in pairs {
+                coeffs[max_exp - e] = c;
+            }
+            let ncost = coeffs.len();
+            Some(GenCost {
+                model: 2,
+                startup,
+                shutdown,
+                ncost,
+                coeffs,
+            })
+        }
+        "piecewise" => {
+            let values = m.get("values")?.as_array()?;
+            let mut coeffs = Vec::with_capacity(values.len() * 2);
+            for pt in values {
+                let pair = pt.as_array()?;
+                coeffs.push(pair.first()?.as_f64()?);
+                coeffs.push(pair.get(1)?.as_f64()?);
+            }
+            Some(GenCost {
+                model: 1,
+                startup,
+                shutdown,
+                ncost: values.len(),
+                coeffs,
+            })
+        }
+        _ => None,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::network::BusType;
+
+    fn fixture(name: &str) -> String {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../tests/data/egret")
+            .join(name);
+        std::fs::read_to_string(path).unwrap()
+    }
+
+    #[test]
+    fn reads_buses_loads_branches_and_reference() {
+        let net = parse_egret_json(&fixture("case30.json")).unwrap();
+        assert!((net.base_mva - 100.0).abs() < 1e-9);
+        assert_eq!(net.buses.len(), 30);
+        assert_eq!(net.loads.len(), 20);
+        assert_eq!(net.shunts.len(), 2);
+        assert_eq!(net.branches.len(), 41);
+        assert_eq!(net.generators.len(), 6);
+        // Exactly one reference bus, parsed from matpower_bustype.
+        let refs = net.buses.iter().filter(|b| b.kind == BusType::Ref).count();
+        assert_eq!(refs, 1);
+    }
+
+    #[test]
+    fn inverts_transformer_and_polynomial_cost() {
+        let net = parse_egret_json(&fixture("case14.json")).unwrap();
+        // case14 has tap-changing transformers (raw tap != 0 ⇒ is_transformer).
+        assert!(net.branches.iter().any(Branch::is_transformer));
+        // Generators carry a polynomial cost, highest order first.
+        let cost = net
+            .generators
+            .iter()
+            .find_map(|g| g.cost.as_ref())
+            .expect("a generator cost");
+        assert_eq!(cost.model, 2);
+        assert_eq!(cost.coeffs.len(), cost.ncost);
+    }
+
+    #[test]
+    fn maps_dc_branch_to_hvdc() {
+        let net = parse_egret_json(&fixture("dcline3.json")).unwrap();
+        assert_eq!(net.hvdc.len(), 1);
+        let dc = &net.hvdc[0];
+        assert_eq!((dc.from, dc.to), (BusId(1), BusId(3)));
+        assert!((dc.loss1 - 0.1).abs() < 1e-12); // loss_factor → loss1
+    }
+
+    #[test]
+    fn rejects_unit_commitment_time_series() {
+        let uc =
+            r#"{"elements":{"bus":{"1":{}}},"system":{"baseMVA":100.0,"time_keys":["1","2"]}}"#;
+        let err = parse_egret_json(uc).unwrap_err();
+        assert!(matches!(err, Error::FormatRead { .. }));
+    }
+
+    #[test]
+    fn rejects_present_but_malformed_numeric_field() {
+        // A present-but-non-numeric value must error, not silently default to 0.0
+        // (which for a reactance would drop the branch from every matrix). Absent
+        // fields still default, so the baseline parses.
+        let base = r#"{"elements":{"bus":{"1":{"matpower_bustype":"ref"},
+            "2":{"matpower_bustype":"PQ"}},"branch":{"1":{"from_bus":"1","to_bus":"2",
+            "reactance":REACT}}},"system":{"baseMVA":100.0,"reference_bus":"1"}}"#;
+        assert!(parse_egret_json(&base.replace("REACT", "0.1")).is_ok());
+        let err = parse_egret_json(&base.replace("REACT", "\"oops\"")).unwrap_err();
+        assert!(matches!(err, Error::FormatRead { .. }));
     }
 }

@@ -96,3 +96,19 @@ fn psse_rejects_malformed_numeric_field() {
     assert_ne!(good, bad, "corruption target not found in fixture");
     assert!(matches!(parse_psse(&bad), Err(Error::FormatRead { .. })));
 }
+
+#[test]
+fn psse_reads_switched_shunt_as_fixed() {
+    // case14.raw carries its only shunt in the SWITCHED SHUNT section (BINIT = 19
+    // MVAr at bus 9). powerio reads it as a fixed shunt (gs = 0, bs = BINIT), the
+    // same reduction PowerModels makes, so the susceptance isn't silently dropped.
+    let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("../tests/data/psse/case14.raw");
+    let net = parse_psse(&std::fs::read_to_string(path).unwrap()).unwrap();
+    let s = net
+        .shunts
+        .iter()
+        .find(|s| s.bus == BusId(9))
+        .expect("switched shunt at bus 9 read as a fixed shunt");
+    assert!((s.b - 19.0).abs() < 1e-9, "BINIT susceptance, got {}", s.b);
+    assert!((s.g).abs() < 1e-12, "switched shunt has no conductance");
+}

@@ -2,14 +2,16 @@
 //!
 //! Covers the core sections — bus, load, fixed shunt, generator, branch, and
 //! 2-winding transformer — which together carry a transmission power flow case.
-//! Impedances are written on the system base with per-unit turns ratios
-//! (`CZ = 1`, `CW = 1`); the reader assumes the same and does not convert other
-//! impedance/turns bases — a non-unit `CZ`/`CW` is read verbatim (so misread).
-//! 3-winding transformers, two-terminal DC, switched shunts, and the other
-//! advanced sections are not modeled: on write they're emitted as empty
-//! sections, on read they're skipped, and HVDC/storage carried on the `Network`
-//! are reported as dropped. Same-format round-trip is byte-exact via the retained
-//! source (see [`crate::write_as`]); this serializer is the cross-format path.
+//! A switched shunt is read as a fixed shunt at its steady-state susceptance
+//! `BINIT` (the same reduction PowerModels makes); the block/step control detail
+//! is not modeled. Impedances are written on the system base with per-unit turns
+//! ratios (`CZ = 1`, `CW = 1`); the reader assumes the same and does not convert
+//! other impedance/turns bases — a non-unit `CZ`/`CW` is read verbatim (so
+//! misread). 3-winding transformers, two-terminal DC, and the other advanced
+//! sections are not modeled: on write they're emitted as empty sections, on read
+//! they're skipped, and HVDC/storage carried on the `Network` are reported as
+//! dropped. Same-format round-trip is byte-exact via the retained source (see
+//! [`crate::write_as`]); this serializer is the cross-format path.
 
 use std::collections::BTreeMap;
 use std::fmt::Write as _;
@@ -297,7 +299,11 @@ pub(crate) fn parse_psse_source(source: Arc<String>, name_hint: Option<&str>) ->
             break;
         }
         if is_terminator(line) {
-            section = section.next();
+            // The terminator names the section that begins next ("…, BEGIN
+            // SWITCHED SHUNT DATA"); read that rather than counting, so the many
+            // unmodeled sections between transformers and switched shunts don't
+            // throw off the position.
+            section = section_after_marker(line);
             continue;
         }
         let f = fields(line);
@@ -305,6 +311,7 @@ pub(crate) fn parse_psse_source(source: Arc<String>, name_hint: Option<&str>) ->
             Section::Bus => buses.push(read_bus(&f)?),
             Section::Load => loads.push(read_load(&f)?),
             Section::FixedShunt => shunts.push(read_shunt(&f)?),
+            Section::SwitchedShunt => shunts.push(read_switched_shunt(&f)?),
             Section::Generator => generators.push(read_gen(&f)?),
             Section::Branch => branches.push(read_branch(&f)?),
             Section::Transformer => {
@@ -346,23 +353,32 @@ enum Section {
     Bus,
     Load,
     FixedShunt,
+    SwitchedShunt,
     Generator,
     Branch,
     Transformer,
     Skip,
 }
 
-impl Section {
-    fn next(self) -> Self {
-        match self {
-            Section::Bus => Section::Load,
-            Section::Load => Section::FixedShunt,
-            Section::FixedShunt => Section::Generator,
-            Section::Generator => Section::Branch,
-            Section::Branch => Section::Transformer,
-            // Everything past transformers is skipped.
-            Section::Transformer | Section::Skip => Section::Skip,
-        }
+/// The section a `BEGIN <name> DATA` terminator introduces. Sections we don't
+/// model map to [`Section::Skip`]. Case-insensitive on the marker text, so the
+/// number of skipped sections between the modeled ones doesn't matter.
+fn section_after_marker(line: &str) -> Section {
+    let u = line.to_ascii_uppercase();
+    if u.contains("BEGIN LOAD DATA") {
+        Section::Load
+    } else if u.contains("BEGIN FIXED SHUNT DATA") {
+        Section::FixedShunt
+    } else if u.contains("BEGIN SWITCHED SHUNT DATA") {
+        Section::SwitchedShunt
+    } else if u.contains("BEGIN GENERATOR DATA") {
+        Section::Generator
+    } else if u.contains("BEGIN BRANCH DATA") {
+        Section::Branch
+    } else if u.contains("BEGIN TRANSFORMER DATA") {
+        Section::Transformer
+    } else {
+        Section::Skip
     }
 }
 
@@ -503,6 +519,19 @@ fn read_shunt(f: &[String]) -> Result<Shunt> {
         g: num_at(f, 3, 0.0)?,
         b: num_at(f, 4, 0.0)?,
         in_service: on_at(f, 2, true)?,
+        extras: Extras::new(),
+    })
+}
+
+fn read_switched_shunt(f: &[String]) -> Result<Shunt> {
+    // I, MODSW, ADJM, STAT, VSWHI, VSWLO, SWREM, RMPCT, RMIDNT, BINIT(9), N1, B1, ...
+    // Model the steady-state susceptance BINIT as a fixed shunt (gs = 0), the same
+    // reduction PowerModels makes; the block/step control detail isn't modeled.
+    Ok(Shunt {
+        bus: BusId(id_at(f, 0, 0)?),
+        g: 0.0,
+        b: num_at(f, 9, 0.0)?,
+        in_service: on_at(f, 3, true)?,
         extras: Extras::new(),
     })
 }

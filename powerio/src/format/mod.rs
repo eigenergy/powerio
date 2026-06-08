@@ -34,7 +34,7 @@ mod powermodels;
 mod powerworld;
 mod psse;
 
-pub use egret::write_egret_json;
+pub use egret::{parse_egret_json, write_egret_json};
 pub use matpower::{parse_matpower, parse_matpower_file, write_matpower};
 pub use powermodels::{parse_powermodels_json, write_powermodels_json};
 pub use powerworld::{parse_powerworld, write_powerworld};
@@ -88,20 +88,25 @@ pub fn target_format_from_name(name: &str) -> Option<TargetFormat> {
 
 /// Read the case at `path` into a [`Network`], choosing the reader from `from`
 /// (a format name, see [`target_format_from_name`]) or, when `None`, from the
-/// file extension (`m`/`json`/`raw`/`aux`). EGRET JSON is write-only. The one
-/// reader the CLI and the Python/C bindings share, so adding a source format is
-/// one edit here, not one per binding.
+/// file extension (`m`/`json`/`raw`/`aux`). A `.json` file is sniffed for the
+/// EGRET vs PowerModels shape (see [`sniff_json`]); pass `from` to force one.
+/// The one reader the CLI and the Python/C bindings share, so adding a source
+/// format is one edit here, not one per binding.
 ///
 /// # Errors
 /// [`Error::UnknownFormat`] if `from` is unrecognized or the extension can't be
-/// mapped (and for the write-only EGRET format); [`Error::Io`] if the file
-/// can't be read; the reader's own [`Error`] on malformed input.
+/// mapped; [`Error::Io`] if the file can't be read; the reader's own [`Error`]
+/// on malformed input.
 pub fn read_path(path: &std::path::Path, from: Option<&str>) -> Result<Network> {
+    // Read the file once into an owned buffer; the reader moves it straight into
+    // the retained source (byte-exact round-trip) with no copy. Sniffing a
+    // `.json` borrows the text before the move.
+    let text = std::fs::read_to_string(path)?;
     let fmt = match from {
         Some(f) => target_format_from_name(f).ok_or_else(|| Error::UnknownFormat(f.to_string()))?,
         None => match path.extension().and_then(|e| e.to_str()) {
             Some("m") => TargetFormat::Matpower,
-            Some("json") => TargetFormat::PowerModelsJson,
+            Some("json") => sniff_json(&text),
             Some("raw") => TargetFormat::Psse,
             Some("aux") => TargetFormat::PowerWorld,
             other => {
@@ -111,12 +116,9 @@ pub fn read_path(path: &std::path::Path, from: Option<&str>) -> Result<Network> 
             }
         },
     };
-    // Read the file once into an owned buffer and hand it to the format's reader
-    // through the shared dispatch; the reader moves it straight into the
-    // retained source (byte-exact round-trip) with no copy. The file stem is the
-    // name hint for formats that don't carry their own name.
+    // The file stem is the name hint for formats that don't carry their own name.
     let stem = path.file_stem().and_then(|s| s.to_str());
-    read_source(Arc::new(std::fs::read_to_string(path)?), fmt, stem)
+    read_source(Arc::new(text), fmt, stem)
 }
 
 /// Read an owned `source` buffer as `fmt`, using `name_hint` (e.g. the file
@@ -124,7 +126,7 @@ pub fn read_path(path: &std::path::Path, from: Option<&str>) -> Result<Network> 
 /// map: [`parse`], [`parse_str`], and [`read_path`] all funnel through it, so
 /// every format is dispatched the same way. Each reader takes the owned `Arc` so
 /// it moves the buffer straight into the retained source (no copy) and is free
-/// to specialize its parse internally. EGRET JSON is write-only.
+/// to specialize its parse internally.
 fn read_source(source: Arc<String>, fmt: TargetFormat, name_hint: Option<&str>) -> Result<Network> {
     match fmt {
         TargetFormat::Matpower => matpower::parse_matpower_source(source, name_hint),
@@ -133,9 +135,32 @@ fn read_source(source: Arc<String>, fmt: TargetFormat, name_hint: Option<&str>) 
         }
         TargetFormat::Psse => psse::parse_psse_source(source, name_hint),
         TargetFormat::PowerWorld => powerworld::parse_powerworld_source(source, name_hint),
-        TargetFormat::EgretJson => Err(Error::UnknownFormat(
-            "EGRET JSON is write-only and cannot be read".to_string(),
-        )),
+        TargetFormat::EgretJson => egret::parse_egret_source(source, name_hint),
+    }
+}
+
+/// Both interchange JSON formats use the `.json` extension, so an explicit
+/// source format isn't always given. EGRET `ModelData` has top-level `elements`
+/// and `system`; PowerModels network data does not. Sniff that and fall back to
+/// PowerModels (the more common input) when the text isn't EGRET-shaped.
+///
+/// Deserializing into [`IgnoredAny`] fields scans the JSON to find the two
+/// top-level keys without building the whole `Value` tree, so a large
+/// PowerModels file isn't fully allocated here only to be parsed again by its
+/// reader.
+fn sniff_json(text: &str) -> TargetFormat {
+    use serde::de::IgnoredAny;
+    #[derive(serde::Deserialize)]
+    struct Shape {
+        elements: Option<IgnoredAny>,
+        system: Option<IgnoredAny>,
+    }
+    match serde_json::from_str::<Shape>(text) {
+        Ok(Shape {
+            elements: Some(_),
+            system: Some(_),
+        }) => TargetFormat::EgretJson,
+        _ => TargetFormat::PowerModelsJson,
     }
 }
 
@@ -151,11 +176,11 @@ pub fn parse(path: impl AsRef<std::path::Path>) -> Result<Network> {
 }
 
 /// Parse in-memory case `text` of the named `format` (see
-/// [`target_format_from_name`]) into a [`Network`]. EGRET JSON is write-only.
+/// [`target_format_from_name`]) into a [`Network`].
 ///
 /// # Errors
-/// [`Error::UnknownFormat`] if `format` is unrecognized or write-only; the
-/// reader's own [`Error`] on malformed input.
+/// [`Error::UnknownFormat`] if `format` is unrecognized; the reader's own
+/// [`Error`] on malformed input.
 pub fn parse_str(text: &str, format: &str) -> Result<Network> {
     let fmt =
         target_format_from_name(format).ok_or_else(|| Error::UnknownFormat(format.to_string()))?;

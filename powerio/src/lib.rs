@@ -8,8 +8,8 @@
 //! as a parser without a matrix or solver stack; the matrices live in the
 //! `powerio-matrix` crate.
 //!
-//! Readers cover MATPOWER `.m`, PowerModels JSON, PSS/E `.raw`, and PowerWorld
-//! `.aux`; writers add EGRET JSON. Every format meets at [`Network`], and
+//! Readers and writers cover MATPOWER `.m`, PowerModels JSON, PSS/E `.raw`,
+//! PowerWorld `.aux`, and EGRET JSON. Every format meets at [`Network`], and
 //! [`write_as`] reports whatever a target format cannot represent — see the
 //! [`crate::format`] module for the two-tier fidelity contract.
 //!
@@ -41,9 +41,10 @@ pub mod network;
 
 pub use error::{Error, Result};
 pub use format::{
-    Conversion, TargetFormat, parse, parse_matpower, parse_matpower_file, parse_powermodels_json,
-    parse_powerworld, parse_psse, parse_str, read_path, target_format_from_name, write_as,
-    write_egret_json, write_matpower, write_powermodels_json, write_powerworld, write_psse,
+    Conversion, TargetFormat, parse, parse_egret_json, parse_matpower, parse_matpower_file,
+    parse_powermodels_json, parse_powerworld, parse_psse, parse_str, read_path,
+    target_format_from_name, write_as, write_egret_json, write_matpower, write_powermodels_json,
+    write_powerworld, write_psse,
 };
 pub use indexed::{ConnectivityReport, IndexCore, IndexedNetwork};
 pub use network::{
