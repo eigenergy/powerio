@@ -199,16 +199,19 @@ def test_delegated_surface_resolves(case9):
         case9.does_not_exist
 
 
-def test_import_and_parse_pull_in_no_numpy_or_scipy():
+def test_import_and_parse_pull_in_no_optional_deps():
     # The zero-dep promise: parse/convert/write need nothing but the
     # interpreter. Run in a fresh process so another test importing scipy can't
     # pollute it, and parse + write a real case so the whole IO path is covered.
+    # `mcp` is checked too: the powerio.mcp submodule must never be imported from
+    # powerio/__init__.py, so the optional MCP SDK stays out of `import powerio`.
     code = (
         "import sys, powerio\n"
         f"c = powerio.parse_matpower(r'{DATA / 'case9.m'}')\n"
         "assert c.write()\n"
         "assert 'numpy' not in sys.modules, 'powerio dragged in numpy'\n"
         "assert 'scipy' not in sys.modules, 'powerio dragged in scipy'\n"
+        "assert 'mcp' not in sys.modules, 'powerio dragged in the mcp SDK'\n"
     )
     r = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True)
     assert r.returncode == 0, r.stderr

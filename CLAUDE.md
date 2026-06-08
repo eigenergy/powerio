@@ -69,6 +69,9 @@ cargo build -p powerio-py    # plain cargo build of the extension
 maturin develop              # build + install the `powerio` wheel into the active venv
 maturin develop -E all       # also pull scipy/numpy/networkx for the matrix + graph paths
 pytest python/tests
+
+# MCP server (optional; the `mcp` SDK needs Python 3.10+):
+pip install '.[mcp]' && powerio-mcp    # serve convert_case + case_summary over stdio
 ```
 
 ## Layout
@@ -117,6 +120,7 @@ powerio-cli/                  # the `powerio` binary (CLI + TUI)
 
 powerio-py/src/lib.rs        # PyO3 extension → COO triplets (module `_powerio`)
 python/powerio/              # importable package (scipy/networkx assembly, lazy)
+python/powerio/mcp/          # optional FastMCP server (convert_case + case_summary)
 python/tests/test_powerio.py
 powerio-capi/                # C ABI (pio_*, include/powerio.h, examples/smoke.c)
 │                            #   src/arrow_export.rs: pio_export_arrow (feature = "arrow")
@@ -142,6 +146,15 @@ benchmarks/                  # parse benchmarks + Julia validation harnesses
   raises a clear ImportError. `maturin develop` drops the `.so` into
   `python/powerio/`. One package surfaces both halves: parse/convert and the
   matrices.
+- **MCP server is optional and isolated.** `python/powerio/mcp/` is a FastMCP
+  server wrapping `parse`/`convert` as two tools (`convert_case`,
+  `case_summary`); entry point `powerio-mcp`. It is gated behind the
+  `powerio[mcp]` extra, which carries a `python_version >= '3.10'` marker (the
+  `mcp` SDK needs 3.10+, the core stays 3.9). It reuses the existing
+  parser/converter — don't reimplement parsing there — and **must never be
+  imported from `powerio/__init__.py`**, so `import powerio` stays zero-dep
+  (the subprocess test in `test_powerio.py` enforces this). `convert` is
+  path-only, so `convert_case` stages inline content to a temp file.
 - **Lossless round-trip.** Every reader retains the original source text and the
   same-format writer echoes it, so `parse → write → parse` is byte-for-byte for
   all five formats (`write_as` returns the retained source when the target
