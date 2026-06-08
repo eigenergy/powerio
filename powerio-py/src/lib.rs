@@ -58,9 +58,9 @@ pyo3::create_exception!(
     PowerIODataError,
     PowerIOError,
     "A well-formed case cannot satisfy a requested operation (no generators, \
-     wrong reference-bus count, an unknown bus reference, zero/non-finite \
-     branch impedance, a disconnected or singular network, or a dimension/cost \
-     mismatch)."
+     wrong reference bus count, an unknown bus reference, zero/non-finite \
+     branch impedance, a disconnected or singular network, a scenario batch \
+     shape mismatch, or a dimension/cost mismatch)."
 );
 
 /// Map a [`powerio_matrix::Error`] onto the right Python exception, driven by

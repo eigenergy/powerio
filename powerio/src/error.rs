@@ -161,7 +161,7 @@ impl Error {
             | Error::FormatRead { .. } => C::Parse,
             // A well-formed case that can't satisfy a requested operation. These
             // surface mid-build (matrix/OPF/gridfm), not at parse time —
-            // `UnknownBus` and the scenario-batch checks included: the file
+            // `UnknownBus` and the scenario batch checks included: the file
             // parsed, the operation can't proceed.
             Error::UnknownBus { .. }
             | Error::ZeroImpedance { .. }
@@ -254,7 +254,7 @@ mod tests {
             Parse
         );
         // An unmet operation precondition on an already-parsed case. UnknownBus
-        // and the scenario-batch checks surface mid-build, not at parse time, so
+        // and the scenario batch checks surface mid-build, not at parse time, so
         // they are Data, not Parse — regression guard for that classification.
         assert_eq!(Error::NoGenerators.category(), Data);
         assert_eq!(
