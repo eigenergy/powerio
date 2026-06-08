@@ -7,4 +7,5 @@
 # (The Julia oracle, PowerModels.jl, is likewise benchmark-scoped in
 # benchmarks/Project.toml, not in any crate.)
 pandapower>=3       # validate_pandapower.py: parse + Y_bus cross-check
+matpowercaseframes  # pandapower's .m reader (from_mpc/_m2ppc), needed by validate_pandapower.py
 gridx-egret>=0.6    # validate_egret.py / validate_matrix.py: the EGRET oracle
