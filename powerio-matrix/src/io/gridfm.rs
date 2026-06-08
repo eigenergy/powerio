@@ -402,9 +402,12 @@ fn bus_batch(snaps: &[SnapshotView]) -> Result<RecordBatch> {
         bs.extend(view.bs().iter().map(|b| b / base));
     }
 
+    // `scenario` and `load_scenario_idx` hold identical values; build the array
+    // once and share the Arc rather than cloning the whole Vec.
+    let scenario = i64s(scenario);
     batch(vec![
-        ("scenario", i64s(scenario.clone())),
-        ("load_scenario_idx", i64s(scenario)),
+        ("scenario", scenario.clone()),
+        ("load_scenario_idx", scenario),
         ("bus", i64s(bus_idx)),
         ("Pd", f64s(pd)),
         ("Qd", f64s(qd)),
@@ -466,9 +469,12 @@ fn gen_batch(snaps: &[SnapshotView]) -> Result<RecordBatch> {
         in_service.extend(gens.iter().map(|g| i64::from(g.in_service)));
     }
 
+    // `scenario` and `load_scenario_idx` hold identical values; build the array
+    // once and share the Arc rather than cloning the whole Vec.
+    let scenario = i64s(scenario);
     batch(vec![
-        ("scenario", i64s(scenario.clone())),
-        ("load_scenario_idx", i64s(scenario)),
+        ("scenario", scenario.clone()),
+        ("load_scenario_idx", scenario),
         ("idx", i64s(idx)),
         ("bus", i64s(bus)),
         ("p_mw", f64s(p_mw)),
@@ -580,9 +586,12 @@ fn branch_batch(snaps: &[SnapshotView], opts: &GridfmOptions) -> Result<RecordBa
         }
     }
 
+    // `scenario` and `load_scenario_idx` hold identical values; build the array
+    // once and share the Arc rather than cloning the whole Vec.
+    let scenario = i64s(scenario);
     batch(vec![
-        ("scenario", i64s(scenario.clone())),
-        ("load_scenario_idx", i64s(scenario)),
+        ("scenario", scenario.clone()),
+        ("load_scenario_idx", scenario),
         ("idx", i64s(idx)),
         ("from_bus", i64s(from_bus)),
         ("to_bus", i64s(to_bus)),
@@ -649,9 +658,12 @@ fn y_bus_batch(snaps: &[SnapshotView], opts: &GridfmOptions) -> Result<RecordBat
         }
     }
 
+    // `scenario` and `load_scenario_idx` hold identical values; build the array
+    // once and share the Arc rather than cloning the whole Vec.
+    let scenario = i64s(scenario);
     batch(vec![
-        ("scenario", i64s(scenario.clone())),
-        ("load_scenario_idx", i64s(scenario)),
+        ("scenario", scenario.clone()),
+        ("load_scenario_idx", scenario),
         ("index1", i64s(index1)),
         ("index2", i64s(index2)),
         ("G", f64s(g_vals)),
