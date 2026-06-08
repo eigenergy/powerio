@@ -9,5 +9,12 @@ style = "type"
 prefix = ""
 include = ["PioCase"]
 
+# Gate the optional Arrow export behind `#ifdef PIO_ARROW` (the `arrow` feature).
+# The Arrow C Data Interface block in include/powerio.h (forward declarations of
+# ArrowArray/ArrowSchema, the PIO_ARROW_TABLE_* selectors, and pio_export_arrow)
+# is hand-maintained alongside the other doc comments in that header.
+[defines]
+"feature = arrow" = "PIO_ARROW"
+
 [parse]
 parse_deps = false

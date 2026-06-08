@@ -70,40 +70,10 @@ pub(crate) fn build_ybus_with_flags(case: &IndexedNetwork, flags: YbusFlags) -> 
             element_index: row_idx,
         })?;
 
-        let r = if flags.zero_resistance { 0.0 } else { br.r };
-        let x = br.x;
-        let denom = r * r + x * x;
-        if denom == 0.0 {
+        let Some([y_ii, y_ij, y_ji, y_jj]) = branch_admittance(br, flags, row_idx)? else {
+            // Zero-impedance branch (r² + x² = 0): no admittance to scatter.
             continue;
-        }
-        // NaN/Inf r or x makes `denom` non-finite (and slips past `== 0.0`),
-        // which would write NaN into Y_bus and silently break the downstream
-        // M-matrix/SDDM checks. Reject it the same way `incidence` does.
-        if !denom.is_finite() {
-            return Err(Error::NonFiniteSusceptance { row: row_idx });
-        }
-        let y_series = Complex64::new(r / denom, -x / denom);
-
-        let b_charging = if flags.zero_charging { 0.0 } else { br.b };
-        let y_shunt_half = Complex64::new(0.0, b_charging / 2.0);
-
-        let tap_mag = if flags.unity_taps {
-            1.0
-        } else {
-            br.effective_tap()
         };
-        let shift_rad = if flags.zero_shifts {
-            0.0
-        } else {
-            br.shift.to_radians()
-        };
-        let a = Complex64::from_polar(tap_mag, shift_rad);
-        let a_norm_sqr = tap_mag * tap_mag;
-
-        let y_ii = (y_series + y_shunt_half) / a_norm_sqr;
-        let y_jj = y_series + y_shunt_half;
-        let y_ij = -y_series / a.conj();
-        let y_ji = -y_series / a;
 
         if i == j {
             // Self-loop branch: combine all four contributions onto bus i.
@@ -135,4 +105,82 @@ pub(crate) fn build_ybus_with_flags(case: &IndexedNetwork, flags: YbusFlags) -> 
         g: g_coo.finish_csr(),
         b: b_coo.finish_csr(),
     })
+}
+
+/// The four entries of a branch's 2×2 nodal admittance block, in per-unit:
+/// `[Yff, Yft, Ytf, Ytt]` (= `[y_ii, y_ij, y_ji, y_jj]` in `makeYbus` notation).
+/// A pure function of the branch — no bus indexing, no shunt fold — so the Y_bus
+/// assembly and the gridfm branch table compute the same numbers from one place.
+/// `flags` lets the Y_bus builder zero taps/shifts/charging; pass
+/// [`YbusFlags::default`] for the physical admittances (taps and shifts on).
+///
+/// Returns `Ok(None)` for a zero-impedance branch (`r² + x² = 0`), which the
+/// callers skip (Y_bus) or zero out (gridfm). `row` only labels the error.
+///
+/// # Errors
+/// [`Error::NonFiniteSusceptance`] when `r`/`x` are NaN/Inf, so a bad value can't
+/// slip a NaN into Y_bus or a Parquet column.
+#[allow(clippy::many_single_char_names)]
+pub(crate) fn branch_admittance(
+    br: &crate::network::Branch,
+    flags: YbusFlags,
+    row: usize,
+) -> Result<Option<[Complex64; 4]>> {
+    let r = if flags.zero_resistance { 0.0 } else { br.r };
+    let x = br.x;
+    let denom = r * r + x * x;
+    if denom == 0.0 {
+        return Ok(None);
+    }
+    // NaN/Inf r or x makes `denom` non-finite (and slips past `== 0.0`), which
+    // would write NaN into Y_bus and silently break the downstream M-matrix/SDDM
+    // checks. Reject it the same way `incidence` does.
+    if !denom.is_finite() {
+        return Err(Error::NonFiniteSusceptance { row });
+    }
+    let y_series = Complex64::new(r / denom, -x / denom);
+
+    let b_charging = if flags.zero_charging { 0.0 } else { br.b };
+    let y_shunt_half = Complex64::new(0.0, b_charging / 2.0);
+
+    let tap_mag = if flags.unity_taps {
+        1.0
+    } else {
+        br.effective_tap()
+    };
+    let shift_rad = if flags.zero_shifts {
+        0.0
+    } else {
+        br.shift.to_radians()
+    };
+    let a = Complex64::from_polar(tap_mag, shift_rad);
+    let a_norm_sqr = tap_mag * tap_mag;
+
+    let y_ff = (y_series + y_shunt_half) / a_norm_sqr;
+    let y_tt = y_series + y_shunt_half;
+    let y_ft = -y_series / a.conj();
+    let y_tf = -y_series / a;
+    Ok(Some([y_ff, y_ft, y_tf, y_tt]))
+}
+
+/// Complex from/to power injections for one branch at the given bus voltages, in
+/// MVA before the per-unit → MW scaling the caller applies. `vi`/`vj` are complex
+/// bus voltages `vm·e^{jθ}` (θ in radians) and `y = [Yff, Yft, Ytf, Ytt]`:
+///
+/// ```text
+/// S_from = vi · conj(Yff·vi + Yft·vj)
+/// S_to   = vj · conj(Ytf·vi + Ytt·vj)
+/// ```
+///
+/// At a converged operating point these are the line flows; powerio computes them
+/// at the case's stored voltages (the parsed snapshot), not from a fresh solve.
+#[cfg(feature = "gridfm")]
+pub(crate) fn branch_flows(
+    y: &[Complex64; 4],
+    vi: Complex64,
+    vj: Complex64,
+) -> (Complex64, Complex64) {
+    let i_from = y[0] * vi + y[1] * vj;
+    let i_to = y[2] * vi + y[3] * vj;
+    (vi * i_from.conj(), vj * i_to.conj())
 }

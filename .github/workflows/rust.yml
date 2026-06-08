@@ -40,6 +40,12 @@ jobs:
     # the C ABI crate explicitly so its end-to-end ABI tests run in CI too.
     - name: Run tests
       run: cargo test -p powerio -p powerio-matrix -p powerio-cli -p powerio-capi --verbose
+    # The gridfm Parquet export is behind a cargo feature; exercise it (and its
+    # clippy) explicitly so coverage doesn't depend on CLI feature unification.
+    - name: Clippy + tests (gridfm feature)
+      run: |
+        cargo clippy -p powerio-matrix --all-targets --features gridfm -- -D warnings
+        cargo test -p powerio-matrix --features gridfm --verbose
 
   c-abi:
     name: C ABI (header parity + C smoke test)
@@ -68,3 +74,35 @@ jobs:
         cc -I powerio-capi/include powerio-capi/examples/smoke.c \
            -L target/release -lpowerio_capi -o pio_smoke
         LD_LIBRARY_PATH=target/release ./pio_smoke tests/data/case9.m
+
+  c-abi-arrow:
+    name: C ABI (arrow feature)
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+    - uses: dtolnay/rust-toolchain@stable
+      with:
+        components: clippy
+    - uses: Swatinem/rust-cache@v2
+    - name: Build powerio-capi --features arrow
+      run: cargo build -p powerio-capi --release --features arrow
+    # The cfg-gated pio_export_arrow still appears in the source symbol grep, so
+    # it must be declared in the header (inside #ifdef PIO_ARROW); parity holds.
+    - name: Header symbol parity
+      run: |
+        grep -oE 'extern "C" fn pio_[a-z_]+' powerio-capi/src/lib.rs \
+          | grep -oE 'pio_[a-z_]+' | sort -u > rs_syms
+        grep -oE 'pio_[a-z_]+ *\(' powerio-capi/include/powerio.h \
+          | grep -oE 'pio_[a-z_]+' | sort -u > h_syms
+        diff rs_syms h_syms
+    # Compile the smoke test with -DPIO_ARROW so it exercises the Arrow C Data
+    # Interface export against the arrow-featured library.
+    - name: Compile and run the C smoke test (arrow)
+      run: |
+        cc -DPIO_ARROW -I powerio-capi/include powerio-capi/examples/smoke.c \
+           -L target/release -lpowerio_capi -o pio_smoke_arrow
+        LD_LIBRARY_PATH=target/release ./pio_smoke_arrow tests/data/case9.m
+    - name: Tests + clippy (arrow feature)
+      run: |
+        cargo test -p powerio-capi --features arrow --verbose
+        cargo clippy -p powerio-capi --all-targets --features arrow -- -D warnings

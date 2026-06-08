@@ -11,6 +11,10 @@
  */
 #include "powerio.h"
 
+#ifdef PIO_ARROW
+#include "arrow_c_data_interface.h" /* full ArrowArray/ArrowSchema definitions */
+#endif
+
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -76,6 +80,24 @@ int main(int argc, char **argv) {
           "JSON round-trip changed the table sizes");
     pio_string_free(json);
     pio_case_free(c2);
+
+#ifdef PIO_ARROW
+    /* Zero-copy Arrow C Data Interface export: pull the bus table, check the row
+     * count, then release the producer-owned buffers. */
+    {
+        struct ArrowArray arr;
+        struct ArrowSchema sch;
+        memset(&arr, 0, sizeof arr);
+        memset(&sch, 0, sizeof sch);
+        int rc = pio_export_arrow(c, PIO_ARROW_TABLE_BUS, &arr, &sch, err, sizeof err);
+        CHECK(rc == 0, err);
+        CHECK(arr.length == (int64_t)nb, "arrow bus table row count mismatch");
+        CHECK(arr.release != NULL && sch.release != NULL, "missing arrow release callbacks");
+        arr.release(&arr);
+        sch.release(&sch);
+        printf("arrow export OK: %zu bus rows\n", nb);
+    }
+#endif
 
     /* NULL handle is the documented safe default. */
     CHECK(pio_n_buses(NULL) == 0, "NULL handle did not return 0");

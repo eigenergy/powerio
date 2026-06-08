@@ -86,6 +86,9 @@ pub enum Error {
     #[error("matrix-market I/O: {0}")]
     Mtx(String),
 
+    #[error("gridfm Parquet export: {0}")]
+    Parquet(String),
+
     #[error("{format} read error: {message}")]
     FormatRead {
         format: &'static str,

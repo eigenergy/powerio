@@ -1,13 +1,15 @@
 //! The `powerio` binary: a clap CLI and a ratatui TUI over `powerio-matrix`.
 //!
 //! Subcommands: `batch` (matrix families), `gen` (synthetic cases), `verify`,
-//! `dcopf` (DC-OPF bundle), `sensitivities` (PTDF/LODF), and `convert`. With no
-//! subcommand it launches the TUI. Run `powerio --help` for the full surface.
+//! `dcopf` (DC-OPF bundle), `sensitivities` (PTDF/LODF), `gridfm` (gridfm-datakit
+//! Parquet), and `convert`. With no subcommand it launches the TUI. Run
+//! `powerio --help` for the full surface.
 
 use std::path::{Path, PathBuf};
 
 use anyhow::Context;
 use clap::{Parser, Subcommand, ValueEnum};
+use powerio_matrix::io::gridfm::{GridfmOptions, write_gridfm_dataset};
 use powerio_matrix::matrix::{BuildOptions, DcConvention, Scheme, Units, sddm_check};
 use powerio_matrix::opf_pipeline::{DcOpfOptions, write_dcopf_bundle};
 use powerio_matrix::pipeline::{MatrixKind, Pipeline, RhsKind};
@@ -101,6 +103,20 @@ enum Command {
         /// DC susceptance convention.
         #[arg(long, value_enum, default_value = "paper-pure")]
         convention: DcConvArg,
+    },
+    /// Write the gridfm-datakit Parquet dataset for one case.
+    Gridfm {
+        /// Input case file (format inferred from the extension unless `--from`).
+        input: PathBuf,
+        /// Output directory; the dataset lands in `<output>/<case>/raw/`.
+        #[arg(short, long)]
+        output: PathBuf,
+        /// Override the inferred input format.
+        #[arg(long, value_enum)]
+        from: Option<FormatArg>,
+        /// Scenario id stamped into the rows (a parsed case is one snapshot).
+        #[arg(long, default_value_t = 0)]
+        scenario: i64,
     },
     /// Convert a case file to another format through the neutral hub.
     Convert {
@@ -316,6 +332,12 @@ fn main() -> anyhow::Result<()> {
             output,
             convention,
         } => run_sensitivities(&input, &output, convention.into()),
+        Command::Gridfm {
+            input,
+            output,
+            from,
+            scenario,
+        } => run_gridfm(&input, &output, from, scenario),
         Command::Convert {
             input,
             to,
@@ -456,6 +478,35 @@ fn run_dcopf(
         dir = %outputs.dir.display(),
         files = outputs.files.len(),
         "wrote DC-OPF bundle"
+    );
+    Ok(())
+}
+
+fn run_gridfm(
+    input: &Path,
+    output: &Path,
+    from: Option<FormatArg>,
+    scenario: i64,
+) -> anyhow::Result<()> {
+    let net = read_network(input, from)?;
+    let opts = GridfmOptions {
+        scenario,
+        ..Default::default()
+    };
+    let outputs = write_gridfm_dataset(&net, output, &opts)
+        .with_context(|| format!("export gridfm dataset for {}", input.display()))?;
+    if outputs.dropped_zero_impedance > 0 || outputs.degenerate_cost_gens > 0 {
+        tracing::warn!(
+            zeroed_branches = outputs.dropped_zero_impedance,
+            degenerate_cost_gens = outputs.degenerate_cost_gens,
+            "gridfm: some columns were zeroed; see gridfm_meta.json"
+        );
+    }
+    tracing::info!(
+        case = %net.name,
+        dir = %outputs.dir.display(),
+        files = outputs.files.len(),
+        "wrote gridfm dataset"
     );
     Ok(())
 }

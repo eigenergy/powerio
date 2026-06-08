@@ -28,6 +28,8 @@ matrix = ["numpy>=1.21", "scipy>=1.7"]
 graph = ["networkx>=2.6"]
 all = ["numpy>=1.21", "scipy>=1.7", "networkx>=2.6"]
 bench = ["matpowercaseframes", "pandapower"]
+# Reading the gridfm Parquet export (`powerio gridfm`) in the test suite.
+gridfm = ["pandas>=2", "pyarrow>=14"]
 
 [project.urls]
 Repository = "https://github.com/eigenergy/powerio"

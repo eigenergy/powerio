@@ -92,8 +92,30 @@ raw, warnings = powerio.convert("case9.m", "psse")
 powerio convert case14.m --to psse -o case14.raw   # convert
 powerio dcopf case30.m -o out                       # DC-OPF instance bundle
 powerio sensitivities case30.m -o out               # PTDF + LODF
+powerio gridfm case14.m -o out                      # gridfm-datakit Parquet dataset
 powerio                                              # TUI
 ```
+
+## GridFM
+
+`powerio gridfm <case> -o <dir>` (the `gridfm` cargo feature) writes the
+gridfm-datakit Parquet schema — `bus_data`, `gen_data`, `branch_data`,
+`y_bus_data` under `<dir>/<case>/raw/` — so [gridfm-graphkit](https://github.com/gridfm)'s
+`HeteroGridDatasetDisk` trains on powerio output directly. A parsed case is one
+snapshot (`scenario 0`): voltages and dispatch are the case's stored values, and
+branch flows are computed from them. Per-scenario expansion is future work
+(issue #14).
+
+## C ABI
+
+`powerio-capi` exposes the parser over a C ABI (`pio_*`, header
+`powerio-capi/include/powerio.h`) for C, C++, and Julia: parse, query, convert,
+the byte-exact echo, the JSON transport (`pio_to_json`/`pio_from_json`), and the
+numeric table extractors. Built with `--features arrow`, it also offers
+`pio_export_arrow` — a zero-copy export of the raw network tables
+(bus/branch/gen/load/shunt) over the [Arrow C Data Interface](https://arrow.apache.org/docs/format/CDataInterface.html),
+so pyarrow / Arrow.jl / Arrow C++ / polars / DuckDB pull a whole table in process
+with no copy and no temp file (the typed, in-memory sibling of `pio_to_json`).
 
 ## Benchmark
 
@@ -125,7 +147,8 @@ Tracked in the issues, all over the `Network` hub:
 - A RAVENS-JSON export sink (positioning PowerIO as an ingest backend for MG-RAVENS).
 - A registered [PowerIO.jl](https://github.com/eigenergy/PowerIO.jl) over the C ABI, with
   native bridges to PowerModels.jl, ExaModelsPower.jl, and PowerDiff.jl (scaffolded there now).
-- LinDist3Flow and Parquet output (gridfm-datakit schema).
+- LinDist3Flow matrices, and the scenario-batch path that stacks many perturbed
+  scenarios into the gridfm Parquet tables (issue #14).
 
 CIM stays out of scope; it's a heavier problem owned by the CIM hubs (CIMHub,
 MG-RAVENS), which PowerIO can feed as an ingest layer.
