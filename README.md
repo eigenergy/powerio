@@ -83,6 +83,8 @@ import powerio
 case = powerio.parse("case9.m")        # format inferred from the extension
 B = case.bprime()                      # scipy.sparse FDPF B'  (needs powerio[matrix])
 raw, warnings = powerio.convert("case9.m", "psse")
+# Errors: a bad file is PowerIOParseError, a valid case an operation can't run on
+# is PowerIODataError (both subclass PowerIOError); a missing path is OSError.
 ```
 
 ```
