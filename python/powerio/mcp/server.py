@@ -1,6 +1,6 @@
 """A FastMCP server exposing powerio's lossless converter and case summary.
 
-Two tools for LLM-agent tooling, both accepting either a filesystem ``path`` or
+Two tools for LLM agent tooling, both accepting either a filesystem ``path`` or
 inline ``content``:
 
 - ``convert_case`` — convert a case file between formats, returning the text and
@@ -30,7 +30,7 @@ mcp = FastMCP("powerio")
 # pass ``from_`` explicitly for inline input. Mirrors the canonical Rust tables
 # (`target_format_from_name` + `TargetFormat::extension` in
 # `powerio/src/format/mod.rs`); the temp file goes away once powerio grows an
-# in-memory `convert_str` (see issue tracker) and this map with it.
+# in-memory `convert_str` (issue #66) and this map with it.
 _EXT = {
     "matpower": ".m",
     "m": ".m",
@@ -44,6 +44,16 @@ _EXT = {
     "powerworld": ".aux",
     "aux": ".aux",
 }
+
+
+def _unlink_quietly(path: str) -> None:
+    """Remove ``path``, ignoring a missing or locked file. Cleanup runs next to
+    an in-flight exception (a failed write, a conversion error), so it must
+    never raise and mask the error the caller actually cares about."""
+    try:
+        os.unlink(path)
+    except OSError:
+        pass
 
 
 def _stage(content: str, fmt: str) -> str:
@@ -62,7 +72,7 @@ def _stage(content: str, fmt: str) -> str:
         with os.fdopen(fd, "w", encoding="utf-8") as fh:
             fh.write(content)
     except Exception:
-        os.unlink(path)
+        _unlink_quietly(path)
         raise
     return path
 
@@ -79,7 +89,7 @@ def convert_case(
     content: Optional[str] = None,
     from_: Optional[str] = None,
 ) -> dict:
-    """Convert a power-system case file to another format, losslessly where the
+    """Convert a power system case file to another format, losslessly where the
     target allows.
 
     Provide exactly one of ``path`` (a file on disk) or ``content`` (inline file
@@ -103,7 +113,7 @@ def convert_case(
             try:
                 conv = powerio.convert(tmp, to, from_)
             finally:
-                os.unlink(tmp)
+                _unlink_quietly(tmp)
     except powerio.PowerIOError as exc:
         raise ValueError(f"conversion failed: {exc}") from exc
     except FileNotFoundError as exc:
@@ -117,7 +127,7 @@ def case_summary(
     content: Optional[str] = None,
     format: str = "matpower",
 ) -> dict:
-    """Summarize a power-system case: name, base MVA, source format, element
+    """Summarize a power system case: name, base MVA, source format, element
     counts, and connectivity.
 
     Provide exactly one of ``path`` or ``content``. For inline ``content``,

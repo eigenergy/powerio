@@ -129,10 +129,10 @@ copy or a temp file. It is the in memory form of `pio_to_json`.
 ## MCP server
 
 powerio ships an optional [MCP](https://modelcontextprotocol.io) server so
-LLM-agent tooling gets a fast, lossless converter over the case-file family. It
-exposes two tools over stdio — `convert_case` (to a target format, with fidelity
-warnings) and `case_summary` (counts, base MVA, source format, connectivity) —
-each accepting either a file `path` or inline `content`.
+LLM agent tooling gets a lossless converter and a case summary over the case
+file family. It exposes two tools over stdio — `convert_case` (to a target
+format, with fidelity warnings) and `case_summary` (counts, base MVA, source
+format, connectivity) — each accepting either a file `path` or inline `content`.
 
 ```
 pip install 'powerio[mcp]'   # the MCP extra (needs Python 3.10+; the core is 3.9+)
