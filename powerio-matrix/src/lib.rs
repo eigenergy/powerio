@@ -36,12 +36,12 @@
 // the matrix modules' `crate::Error` / `crate::network` / `crate::format` paths
 // resolve unchanged after the split.
 pub use powerio::{
-    Branch, Bus, BusId, BusType, ConnectivityReport, Conversion, Error, Extras, GenCost, Generator,
-    Hvdc, IndexCore, IndexedNetwork, Load, Network, Result, Shunt, SourceFormat, Storage,
-    TargetFormat, error, format, indexed, network, parse, parse_matpower, parse_matpower_file,
-    parse_powermodels_json, parse_powerworld, parse_psse, parse_str, read_path,
-    target_format_from_name, write_as, write_egret_json, write_matpower, write_powermodels_json,
-    write_powerworld, write_psse,
+    Branch, Bus, BusId, BusType, ConnectivityReport, Conversion, ElementCounts, Error, Extras,
+    GenCost, Generator, Hvdc, IndexCore, IndexedNetwork, Load, Network, Result, ScenarioMismatch,
+    Shunt, SourceFormat, Storage, TargetFormat, error, format, indexed, network, parse,
+    parse_matpower, parse_matpower_file, parse_powermodels_json, parse_powerworld, parse_psse,
+    parse_str, read_path, target_format_from_name, write_as, write_egret_json, write_matpower,
+    write_powermodels_json, write_powerworld, write_psse,
 };
 
 pub mod io;
@@ -60,4 +60,7 @@ pub use opf_pipeline::{DcOpfOptions, DcOpfOutputs, write_dcopf_bundle};
 pub use pipeline::{MatrixKind, Pipeline, PipelineOutputs, RhsKind, build_kind};
 
 #[cfg(feature = "gridfm")]
-pub use io::gridfm::{GridfmOptions, GridfmOutputs, GridfmTables, write_gridfm_dataset};
+pub use io::gridfm::{
+    GridfmOptions, GridfmOutputs, GridfmSnapshot, GridfmTables, gridfm_record_batches,
+    gridfm_record_batches_batch, numbered_snapshots, write_gridfm_batch, write_gridfm_dataset,
+};

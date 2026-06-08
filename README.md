@@ -103,7 +103,17 @@ gridfm-datakit Parquet schema — `bus_data`, `gen_data`, `branch_data`,
 `y_bus_data` under `<dir>/<case>/raw/` — so [gridfm-graphkit](https://github.com/gridfm)'s
 `HeteroGridDatasetDisk` trains on powerio output directly. A parsed case is one
 snapshot (`scenario 0`): voltages and dispatch are the case's stored values, and
-branch flows are computed from them. Per-scenario expansion is future work
+branch flows are computed from them.
+
+Pass several inputs — `powerio gridfm <case-0> <case-1> … -o <dir>` — to
+row-stack a **scenario batch** into one dataset, keyed by the `scenario` column
+(the k-th input is stamped `--scenario` + k). The inputs share a base element set
+— the same bus, branch, and generator counts in the same bus order — so the
+dense bus index lines up across scenarios; within that, load, dispatch,
+voltages, branch status, bus type, and costs may vary, the same way datakit's topology
+variants toggle line status on a fixed element set. powerio stacks the snapshots,
+it doesn't generate them. From Python (the `gridfm` extra):
+`case.write_gridfm(dir)` and `powerio.write_gridfm_batch([case0, case1], dir)`
 (issue #14).
 
 ## C ABI
@@ -147,8 +157,11 @@ Tracked in the issues, all over the `Network` hub:
 - A RAVENS-JSON export sink (positioning PowerIO as an ingest backend for MG-RAVENS).
 - A registered [PowerIO.jl](https://github.com/eigenergy/PowerIO.jl) over the C ABI, with
   native bridges to PowerModels.jl, ExaModelsPower.jl, and PowerDiff.jl (scaffolded there now).
-- LinDist3Flow matrices, and the scenario-batch path that stacks many perturbed
-  scenarios into the gridfm Parquet tables (issue #14).
+- LinDist3Flow matrices.
+
+The scenario-batch path that stacks many perturbed scenarios into the gridfm
+Parquet tables (issue #14) has shipped — `write_gridfm_batch` in Rust, multiple
+inputs to `powerio gridfm`, and `powerio.write_gridfm_batch` in Python.
 
 CIM stays out of scope; it's a heavier problem owned by the CIM hubs (CIMHub,
 MG-RAVENS), which PowerIO can feed as an ingest layer.

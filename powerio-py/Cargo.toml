@@ -19,6 +19,10 @@ crate-type = ["cdylib"]
 # Opt-in so `cargo test`/`cargo check -p powerio-py` don't link libpython.
 # maturin turns it on via pyproject `[tool.maturin] features`.
 extension-module = ["pyo3/extension-module"]
+# Compile in the gridfm-datakit Parquet surface (`PyCase.write_gridfm`,
+# `write_gridfm_batch`). Pulls arrow + parquet into the wheel, so it is opt-in
+# (the `powerio[gridfm]` extra) and the default wheel stays interpreter-only.
+gridfm = ["powerio-matrix/gridfm"]
 
 [dependencies]
 powerio-matrix = { path = "../powerio-matrix", default-features = false }

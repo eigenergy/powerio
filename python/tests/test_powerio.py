@@ -435,3 +435,84 @@ def test_large_case_pegase():
     b = c.bprime()
     assert b.shape == (2869, 2869)
     assert is_symmetric(b)
+
+
+# --- gridfm Parquet surface --------------------------------------------
+
+HAS_GRIDFM = bool(getattr(powerio._powerio, "_has_gridfm", False))
+gridfm_only = pytest.mark.skipif(
+    not HAS_GRIDFM, reason="extension built without the gridfm feature"
+)
+
+
+def test_gridfm_absent_raises_clean_importerror(case9, tmp_path):
+    # On a default (light) build the write path is compiled out, so it must raise
+    # a clear ImportError naming the extra — never an AttributeError.
+    if HAS_GRIDFM:
+        pytest.skip("extension built with gridfm; the absent-path is not exercised")
+    with pytest.raises(ImportError, match="gridfm"):
+        case9.write_gridfm(str(tmp_path))
+
+
+@gridfm_only
+def test_gridfm_write_single(case9, tmp_path):
+    pd = pytest.importorskip("pandas")
+    out = case9.write_gridfm(str(tmp_path))
+    raw = Path(out["dir"])
+    assert raw.is_dir()
+    names = {Path(f).name for f in out["files"]}
+    assert {
+        "bus_data.parquet",
+        "gen_data.parquet",
+        "branch_data.parquet",
+        "y_bus_data.parquet",
+        "gridfm_meta.json",
+    } <= names
+
+    bus = pd.read_parquet(raw / "bus_data.parquet")
+    assert len(bus) == case9.n
+    assert (bus["scenario"] == 0).all()
+    assert list(bus["bus"]) == list(range(case9.n))
+
+
+@gridfm_only
+def test_gridfm_include_y_bus_false_omits_table(case9, tmp_path):
+    # The include_y_bus kwarg crosses the native boundary: disabling it must drop
+    # y_bus_data.parquet (the other three tables stay).
+    out = case9.write_gridfm(str(tmp_path), include_y_bus=False)
+    names = {Path(f).name for f in out["files"]}
+    assert "y_bus_data.parquet" not in names
+    assert {"bus_data.parquet", "gen_data.parquet", "branch_data.parquet"} <= names
+
+
+@gridfm_only
+def test_gridfm_batch_stacks_and_keys_by_scenario(tmp_path):
+    pd = pytest.importorskip("pandas")
+    # Same topology twice → two scenarios stacked in one dataset. (The Python
+    # Case is read-only, so the two snapshots share values; the test pins the
+    # row-stack and scenario keying, which the Rust tests pair with perturbation.)
+    case = load("case9")
+    out = powerio.write_gridfm_batch([case, case], str(tmp_path))
+    raw = Path(out["dir"])
+
+    bus = pd.read_parquet(raw / "bus_data.parquet")
+    assert len(bus) == 2 * case.n
+    assert list(bus["scenario"]) == [0] * case.n + [1] * case.n
+    # Same case twice → the two scenario blocks carry identical per-bus values
+    # and the dense bus index resets to 0..n within each scenario.
+    n = case.n
+    for col in ["Pd", "Qd", "Pg", "Qg", "Vm", "Va"]:
+        assert list(bus[col][:n]) == list(bus[col][n:])
+    assert list(bus["bus"][:n]) == list(range(n))
+    assert list(bus["bus"][n:]) == list(range(n))
+
+    meta = json.loads((raw / "gridfm_meta.json").read_text())
+    assert meta["n_scenarios"] == 2
+    assert meta["scenario"] == 0
+
+
+@gridfm_only
+def test_gridfm_in_all_export():
+    # The batch function is part of the package's public surface.
+    assert "write_gridfm_batch" in powerio.__all__
+    assert hasattr(powerio, "write_gridfm_batch")

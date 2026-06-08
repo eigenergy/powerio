@@ -32,6 +32,12 @@ use powerio_matrix::matrix::{
 use powerio_matrix::opf_pipeline::{DcOpfOptions, write_dcopf_bundle as write_bundle};
 use powerio_matrix::{IndexCore, IndexedNetwork, Network};
 
+#[cfg(feature = "gridfm")]
+use powerio_matrix::io::gridfm::{
+    GridfmOptions, GridfmOutputs, numbered_snapshots, write_gridfm_batch as gridfm_write_batch,
+    write_gridfm_dataset as gridfm_write_dataset,
+};
+
 pyo3::create_exception!(
     _powerio,
     PowerIOError,
@@ -458,15 +464,33 @@ impl PyCase {
             units: parse_units(units.unwrap_or("perunit"))?,
         };
         let outputs = write_bundle(&self.inner, out_dir, &opts).map_err(to_pyerr)?;
-        let d = PyDict::new(py);
-        d.set_item("dir", outputs.dir.to_string_lossy().into_owned())?;
-        let files: Vec<String> = outputs
-            .files
-            .iter()
-            .map(|p| p.to_string_lossy().into_owned())
-            .collect();
-        d.set_item("files", files)?;
-        Ok(d)
+        dir_files_dict(py, &outputs.dir, &outputs.files)
+    }
+
+    /// Write the gridfm-datakit Parquet dataset for this case under
+    /// `out_dir/<case>/raw/`. Returns
+    /// `{"dir", "files", "dropped_zero_impedance", "degenerate_cost_gens"}`.
+    /// Available only when the extension is built with the `gridfm` feature
+    /// (the `powerio[gridfm]` extra).
+    #[cfg(feature = "gridfm")]
+    #[pyo3(signature = (out_dir, scenario=0, include_y_bus=true, include_taps=true, include_shifts=true))]
+    fn write_gridfm<'py>(
+        &self,
+        py: Python<'py>,
+        out_dir: &str,
+        scenario: i64,
+        include_y_bus: bool,
+        include_taps: bool,
+        include_shifts: bool,
+    ) -> PyResult<Bound<'py, PyDict>> {
+        let opts = GridfmOptions {
+            include_y_bus,
+            include_taps,
+            include_shifts,
+        };
+        let outputs =
+            gridfm_write_dataset(&self.inner, scenario, out_dir, &opts).map_err(to_pyerr)?;
+        gridfm_outputs_to_dict(py, &outputs)
     }
 
     fn __repr__(&self) -> String {
@@ -540,6 +564,66 @@ fn convert(path: &str, to: &str, from: Option<&str>) -> PyResult<(String, Vec<St
     Ok((conv.text, conv.warnings))
 }
 
+/// Build a `{dir, files}` dict from an outputs directory and its written files.
+/// Shared by the DC-OPF and gridfm write paths.
+fn dir_files_dict<'py>(
+    py: Python<'py>,
+    dir: &std::path::Path,
+    files: &[std::path::PathBuf],
+) -> PyResult<Bound<'py, PyDict>> {
+    let d = PyDict::new(py);
+    d.set_item("dir", dir.to_string_lossy().into_owned())?;
+    let files: Vec<String> = files
+        .iter()
+        .map(|p| p.to_string_lossy().into_owned())
+        .collect();
+    d.set_item("files", files)?;
+    Ok(d)
+}
+
+/// Build the `{dir, files, dropped_zero_impedance, degenerate_cost_gens}` dict a
+/// gridfm write returns.
+#[cfg(feature = "gridfm")]
+fn gridfm_outputs_to_dict<'py>(
+    py: Python<'py>,
+    outputs: &GridfmOutputs,
+) -> PyResult<Bound<'py, PyDict>> {
+    let d = dir_files_dict(py, &outputs.dir, &outputs.files)?;
+    d.set_item("dropped_zero_impedance", outputs.dropped_zero_impedance)?;
+    d.set_item("degenerate_cost_gens", outputs.degenerate_cost_gens)?;
+    Ok(d)
+}
+
+/// Write a batch of cases as one gridfm-datakit dataset, row-stacked and keyed by
+/// the `scenario` column. The k-th case is stamped `base_scenario + k`; all cases
+/// must share one base element set (same bus/branch/gen counts and bus-id order).
+/// Available only when the extension is built with the `gridfm` feature (the
+/// `powerio[gridfm]` extra).
+#[cfg(feature = "gridfm")]
+#[pyfunction]
+#[pyo3(signature = (cases, out_dir, base_scenario=0, include_y_bus=true, include_taps=true, include_shifts=true))]
+fn write_gridfm_batch<'py>(
+    py: Python<'py>,
+    cases: Vec<PyRef<'py, PyCase>>,
+    out_dir: &str,
+    base_scenario: i64,
+    include_y_bus: bool,
+    include_taps: bool,
+    include_shifts: bool,
+) -> PyResult<Bound<'py, PyDict>> {
+    let opts = GridfmOptions {
+        include_y_bus,
+        include_taps,
+        include_shifts,
+    };
+    // The shared numbering builder stamps the k-th case `base_scenario + k`, the
+    // same rule (and checked arithmetic) the CLI uses.
+    let net_refs: Vec<_> = cases.iter().map(|c| &c.inner).collect();
+    let snapshots = numbered_snapshots(&net_refs, base_scenario).map_err(to_pyerr)?;
+    let outputs = gridfm_write_batch(&snapshots, out_dir, &opts).map_err(to_pyerr)?;
+    gridfm_outputs_to_dict(py, &outputs)
+}
+
 #[pymodule]
 fn _powerio(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add("__version__", env!("CARGO_PKG_VERSION"))?;
@@ -551,5 +635,10 @@ fn _powerio(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(parse_matpower_string, m)?)?;
     m.add_function(wrap_pyfunction!(write, m)?)?;
     m.add_function(wrap_pyfunction!(convert, m)?)?;
+    // Whether the gridfm Parquet surface (arrow/parquet) was compiled in, so the
+    // pure-Python layer can raise a clean error instead of an AttributeError.
+    m.add("_has_gridfm", cfg!(feature = "gridfm"))?;
+    #[cfg(feature = "gridfm")]
+    m.add_function(wrap_pyfunction!(write_gridfm_batch, m)?)?;
     Ok(())
 }

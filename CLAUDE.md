@@ -24,8 +24,8 @@ graph views for any downstream solver. (Planned) feeds the GridFM ML pipeline.
 `Network` is the one canonical model (format-neutral, loads/shunts first-class);
 `IndexedNetwork` is the dense-indexed analysis view derived from it.
 
-Formats. Readers: MATPOWER `.m`, PowerModels JSON, PSS/E `.raw` (v33),
-PowerWorld `.aux`. Writers: those plus EGRET JSON. Every format meets at
+Formats. MATPOWER `.m`, PowerModels JSON, PSS/E `.raw` (v33), PowerWorld
+`.aux`, and EGRET JSON all read and write. Every format meets at
 `Network`, so a new format is one reader/writer at the hub, not a pairwise
 converter.
 
@@ -37,7 +37,7 @@ Matrix outputs (powerio-matrix):
 - Adjacency (`MatrixKind::Adjacency`); PTDF and LODF (DC sensitivities, `sensitivities` subcommand).
 - DC-OPF instance bundle (`dcopf` subcommand, `opf_pipeline::write_dcopf_bundle`): signed incidence `A` (n×m), branch susceptance `b`, weighted Laplacian `L = A diag(b) Aᵀ` and its slack-grounded form, flow map `B Aᵀ`, generator cost `Q`/`c`, bounds, thermal limits `f̄`, generator→bus `C_g`, nodal load `p_d`, `e_r`.
 - petgraph `UnGraph<bus_idx, branch_idx>` view + connectivity / radial diagnostics.
-- gridfm-datakit Parquet dataset (`gridfm` subcommand, `io::gridfm::write_gridfm_dataset`, `--features gridfm`): the `bus_data`/`gen_data`/`branch_data`/`y_bus_data` tables a single parsed case maps to, matching gridfm-datakit's column schema so gridfm-graphkit trains on it directly.
+- gridfm-datakit Parquet dataset (`gridfm` subcommand, `io::gridfm::write_gridfm_dataset` / `write_gridfm_batch`, `--features gridfm`): the `bus_data`/`gen_data`/`branch_data`/`y_bus_data` tables a parsed case maps to, matching gridfm-datakit's column schema so gridfm-graphkit trains on it directly. A scenario batch (`GridfmSnapshot` list, or multiple CLI inputs) row-stacks many snapshots sharing one base element set (same bus/branch/gen counts and bus-id order), keyed by the `scenario` column; load, dispatch, branch status, and costs may vary per scenario (issue #14).
 - Planned: LinDist3Flow.
 
 ## Commands
@@ -89,7 +89,7 @@ powerio/                      # parser + Network hub + converters
 │   ├── powermodels.rs       # PowerModels JSON reader + writer
 │   ├── psse.rs              # PSS/E .raw reader + writer
 │   ├── powerworld.rs        # PowerWorld .aux reader + writer
-│   └── egret.rs             # EGRET JSON writer
+│   └── egret.rs             # EGRET JSON reader + writer
 └── tests/                   # convert, roundtrip, roundtrip_formats
 
 powerio-matrix/               # matrices + graph views on powerio
@@ -140,10 +140,12 @@ benchmarks/                  # parse benchmarks + Julia validation harnesses
   raises a clear ImportError. `maturin develop` drops the `.so` into
   `python/powerio/`. One package surfaces both halves: parse/convert and the
   matrices.
-- **Lossless round-trip.** The MATPOWER parse retains the original source text
-  and the writer echoes it, so `parse → write → parse` is byte-for-byte —
-  every `mpc.*` field, in-matrix comments, and exact tokens like `7e-05`. Don't
-  reformat through `f64` round-trips; don't drop fields the typed model ignores.
+- **Lossless round-trip.** Every reader retains the original source text and the
+  same-format writer echoes it, so `parse → write → parse` is byte-for-byte for
+  all five formats (`write_as` returns the retained source when the target
+  matches `source_format`). For MATPOWER that means every `mpc.*` field,
+  in-matrix comments, and exact tokens like `7e-05`. Don't reformat through
+  `f64` round-trips; don't drop fields the typed model ignores.
 - **Two-tier fidelity contract.** Same-format round-trip is byte-exact.
   Cross-format conversion keeps maximal fidelity and reports anything the target
   can't represent in `Conversion::warnings` — never drop it silently.
@@ -180,4 +182,4 @@ new sizes by curl from upstream.
 
 ## Relationship to GridFM
 
-Intended as the fast Rust data layer beneath `gridfm-datakit` (Python, scenario generation) and `gridfm-graphkit` (PyTorch Geometric, GNN training). The `gridfm` subcommand (`io::gridfm`, `--features gridfm`, issue #4) writes the `bus_data`/`gen_data`/`branch_data`/`y_bus_data` Parquet tables matching gridfm-datakit's column schema, under `<out>/<case>/raw/`, so gridfm-graphkit's `HeteroGridDatasetDisk` loads powerio output directly. powerio has no solver, so a case is one snapshot (`scenario 0`): voltages/dispatch are the case's stored values and branch flows are computed from them. Per-scenario expansion is the scenario-batch path (issue #14).
+Intended as the fast Rust data layer beneath `gridfm-datakit` (Python, scenario generation) and `gridfm-graphkit` (PyTorch Geometric, GNN training). The `gridfm` subcommand (`io::gridfm`, `--features gridfm`, issue #4) writes the `bus_data`/`gen_data`/`branch_data`/`y_bus_data` Parquet tables matching gridfm-datakit's column schema, under `<out>/<case>/raw/`, so gridfm-graphkit's `HeteroGridDatasetDisk` loads powerio output directly. powerio has no solver, so a case is one snapshot (`scenario 0`): voltages/dispatch are the case's stored values and branch flows are computed from them. A scenario batch (`write_gridfm_batch` / `GridfmSnapshot`, or multiple `gridfm` CLI inputs) row-stacks many snapshots that share one base element set (same bus/branch/gen counts and bus-id order), keyed by the `scenario` column (issue #14); `snapshot_views` enforces that shape (`Error::ScenarioShapeMismatch` otherwise, distinguishing a count mismatch from a bus-order mismatch). Load, dispatch, branch status, bus type, and costs may vary per scenario, matching datakit's topology variants and graphkit's per-scenario graph rebuild; the manifest's dropped/degenerate counts are batch totals while `reference_bus`/`n_branches_in_service` describe the first snapshot. The Python wheel exposes this behind the `gridfm` feature/extra (`Case.write_gridfm`, `powerio.write_gridfm_batch`); the default wheel stays interpreter-only.
