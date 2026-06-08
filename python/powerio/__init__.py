@@ -44,6 +44,7 @@ __all__ = [
     "parse_matpower_string",
     "write",
     "convert",
+    "write_gridfm_batch",
     "__version__",
 ]
 
@@ -94,6 +95,21 @@ def _to_csr(coo):
     sparse = _require("scipy.sparse", "matrix")
     data, row, col, shape = coo
     return sparse.coo_matrix((data, (row, col)), shape=shape).tocsr()
+
+
+def _require_gridfm() -> None:
+    """Raise a clear ImportError if the extension lacks the gridfm Parquet surface.
+
+    The gridfm write path pulls arrow + parquet into the native module, so it is
+    an opt-in build (the ``powerio[gridfm]`` extra); the default wheel stays
+    interpreter-only.
+    """
+    if not getattr(_powerio, "_has_gridfm", False):
+        raise ImportError(
+            "powerio was built without the gridfm Parquet surface; install the "
+            "gridfm build with `pip install 'powerio[gridfm]'` (or rebuild with "
+            "`maturin develop --features gridfm`)."
+        )
 
 
 class Case:
@@ -179,6 +195,28 @@ class Case:
             branch_of_col=np.asarray(branch_of_col, dtype=np.int64),
         )
 
+    def write_gridfm(
+        self,
+        out_dir: Any,
+        scenario: int = 0,
+        include_y_bus: bool = True,
+        include_taps: bool = True,
+        include_shifts: bool = True,
+    ) -> dict:
+        """Write the gridfm-datakit Parquet dataset for this case under
+        ``<out_dir>/<case>/raw/``.
+
+        Returns a dict with ``dir``, ``files``, ``dropped_zero_impedance``, and
+        ``degenerate_cost_gens``. Requires the gridfm build of the extension
+        (``pip install 'powerio[gridfm]'``); otherwise raises ``ImportError``.
+        For many perturbed snapshots in one dataset, see
+        :func:`write_gridfm_batch`.
+        """
+        _require_gridfm()
+        return self._inner.write_gridfm(
+            str(out_dir), scenario, include_y_bus, include_taps, include_shifts
+        )
+
     def to_networkx(self):
         """Undirected networkx graph keyed by bus id.
 
@@ -239,3 +277,27 @@ def convert(path: Any, to: str, from_: Optional[str] = None) -> Conversion:
     """
     text, warnings = _powerio.convert(str(path), to, from_)
     return Conversion(text, warnings)
+
+
+def write_gridfm_batch(
+    cases: "list[Case]",
+    out_dir: Any,
+    base_scenario: int = 0,
+    include_y_bus: bool = True,
+    include_taps: bool = True,
+    include_shifts: bool = True,
+) -> dict:
+    """Write several cases as one gridfm-datakit dataset, row-stacked and keyed by
+    the ``scenario`` column.
+
+    Each case is one perturbed operating point on a shared topology; the k-th is
+    stamped ``base_scenario + k``. All cases must share the same buses, branches,
+    and generators (otherwise :class:`PowerIOError` is raised). Returns the same
+    dict as :meth:`Case.write_gridfm`. Requires the gridfm build
+    (``pip install 'powerio[gridfm]'``); otherwise raises ``ImportError``.
+    """
+    _require_gridfm()
+    inners = [c._inner for c in cases]
+    return _powerio.write_gridfm_batch(
+        inners, str(out_dir), base_scenario, include_y_bus, include_taps, include_shifts
+    )

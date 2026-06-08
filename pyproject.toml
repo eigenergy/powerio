@@ -28,7 +28,11 @@ matrix = ["numpy>=1.21", "scipy>=1.7"]
 graph = ["networkx>=2.6"]
 all = ["numpy>=1.21", "scipy>=1.7", "networkx>=2.6"]
 bench = ["matpowercaseframes", "pandapower"]
-# Reading the gridfm Parquet export (`powerio gridfm`) in the test suite.
+# The gridfm-datakit Parquet surface (`Case.write_gridfm`, `write_gridfm_batch`).
+# These are the Python deps for reading/inspecting the output; the *write* path
+# lives in the native module and is compiled in only when the extension is built
+# with the Rust `gridfm` feature (`maturin develop -E gridfm --features gridfm`),
+# so the default wheel stays interpreter-only.
 gridfm = ["pandas>=2", "pyarrow>=14"]
 
 [project.urls]
