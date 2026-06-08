@@ -116,7 +116,9 @@ generate them. From Python (the `gridfm` extra): `case.write_gridfm(dir)` and
 
 `powerio-capi` is the C ABI (`pio_*`, header `powerio-capi/include/powerio.h`) for
 C, C++, and Julia: parse, query, convert, the byte-exact echo, the JSON transport
-(`pio_to_json`/`pio_from_json`), and the numeric table extractors. `--features
+(`pio_to_json`/`pio_from_json`), and the numeric table extractors. `pio_abi_version`
+(and the `PIO_ABI_VERSION` header macro) lets a consumer reject a stale or
+mismatched library at load; `pio_version` reports the crate version. `--features
 arrow` adds `pio_export_arrow`, which exports the raw network tables (bus, branch,
 gen, load, shunt) over the [Arrow C Data Interface](https://arrow.apache.org/docs/format/CDataInterface.html).
 pyarrow, Arrow.jl, Arrow C++, polars, and DuckDB read a table in process without a

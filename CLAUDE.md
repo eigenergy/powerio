@@ -18,8 +18,10 @@ graph views for any downstream solver. (Planned) feeds the GridFM ML pipeline.
 - **`powerio-py`** — PyO3 extension behind the `powerio` Python package
   (`python/powerio/`); hands back COO triplets that scipy assembles.
 - **`powerio-capi`** — C ABI over `powerio` (`pio_*`, header `powerio.h`); the
-  polyglot substrate for C/C++/Julia. `--features arrow` adds `pio_export_arrow`,
-  a zero-copy raw network export over the Arrow C Data Interface.
+  polyglot substrate for C/C++/Julia. `pio_abi_version` (+ the `PIO_ABI_VERSION`
+  header macro) is the load-time compatibility check; `pio_version` is the crate
+  version string. `--features arrow` adds `pio_export_arrow`, a zero-copy raw
+  network export over the Arrow C Data Interface.
 
 `Network` is the one canonical model (format-neutral, loads/shunts first-class);
 `IndexedNetwork` is the dense-indexed analysis view derived from it.
