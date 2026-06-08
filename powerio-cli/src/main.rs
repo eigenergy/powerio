@@ -9,7 +9,7 @@ use std::path::{Path, PathBuf};
 
 use anyhow::Context;
 use clap::{Parser, Subcommand, ValueEnum};
-use powerio_matrix::io::gridfm::{GridfmOptions, GridfmSnapshot, write_gridfm_batch};
+use powerio_matrix::io::gridfm::{GridfmOptions, numbered_snapshots, write_gridfm_batch};
 use powerio_matrix::matrix::{BuildOptions, DcConvention, Scheme, Units, sddm_check};
 use powerio_matrix::opf_pipeline::{DcOpfOptions, write_dcopf_bundle};
 use powerio_matrix::pipeline::{MatrixKind, Pipeline, RhsKind};
@@ -496,19 +496,14 @@ fn run_gridfm(
     base_scenario: i64,
 ) -> anyhow::Result<()> {
     // Parse every input first so the snapshots can borrow the owned networks for
-    // the batch. Each input becomes one scenario, stamped `base + position`.
+    // the batch. Each input becomes one scenario, stamped `base + position` by the
+    // shared `numbered_snapshots` builder (same rule as the Python binding).
     let nets = inputs
         .iter()
         .map(|p| read_network(p, from))
         .collect::<anyhow::Result<Vec<_>>>()?;
-    let snapshots: Vec<GridfmSnapshot> = nets
-        .iter()
-        .enumerate()
-        .map(|(k, net)| GridfmSnapshot {
-            net,
-            scenario: base_scenario + i64::try_from(k).expect("scenario index fits in i64"),
-        })
-        .collect();
+    let net_refs: Vec<_> = nets.iter().collect();
+    let snapshots = numbered_snapshots(&net_refs, base_scenario)?;
 
     let opts = GridfmOptions::default();
     let outputs = write_gridfm_batch(&snapshots, output, &opts)

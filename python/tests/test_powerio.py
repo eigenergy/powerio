@@ -488,6 +488,13 @@ def test_gridfm_batch_stacks_and_keys_by_scenario(tmp_path):
     bus = pd.read_parquet(raw / "bus_data.parquet")
     assert len(bus) == 2 * case.n
     assert list(bus["scenario"]) == [0] * case.n + [1] * case.n
+    # Same case twice → the two scenario blocks carry identical per-bus values
+    # and the dense bus index resets to 0..n within each scenario.
+    n = case.n
+    for col in ["Pd", "Qd", "Pg", "Qg", "Vm", "Va"]:
+        assert list(bus[col][:n]) == list(bus[col][n:])
+    assert list(bus["bus"][:n]) == list(range(n))
+    assert list(bus["bus"][n:]) == list(range(n))
 
     meta = json.loads((raw / "gridfm_meta.json").read_text())
     assert meta["n_scenarios"] == 2

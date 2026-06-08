@@ -7,7 +7,7 @@
 //! parsed [`Network`], so graphkit can train on powerio output directly and the
 //! scenario-batch path (issue #14) has its on-disk format.
 //!
-//! # The snapshot contract
+//! # Snapshots and scenarios
 //!
 //! powerio has no power flow solver. One parsed case is one snapshot
 //! (`scenario = 0`): voltages and generator dispatch are the case's stored
@@ -16,6 +16,18 @@
 //! stored voltages are the converged operating point, so the flows match what a
 //! solver would report to float tolerance; for an unsolved/flat start case they
 //! are the flows at the stored voltages, not a re-solved dispatch.
+//!
+//! A scenario batch ([`write_gridfm_batch`] / [`gridfm_record_batches_batch`])
+//! row-stacks many snapshots into the four tables, keyed by the `scenario`
+//! column. The snapshots share a base element set — the same bus/branch/gen
+//! counts and bus-id ordering, so the dense bus index means the same bus across
+//! scenarios — enforced by the shape check ([`Error::ScenarioShapeMismatch`]).
+//! Within that, load, dispatch, voltages, branch status, bus type, and costs may
+//! all differ per snapshot. This matches datakit, whose topology variants (N-K,
+//! random component drop) toggle `BR_STATUS`/`GEN_STATUS` on a fixed element set,
+//! and graphkit's `HeteroGridDatasetDisk`, which groups by `scenario` and
+//! rebuilds the graph independently for each one. powerio doesn't generate the
+//! perturbations; a caller (e.g. a scenario generator) supplies the snapshots.
 //!
 //! # Units
 //!
@@ -55,17 +67,14 @@ use serde::Serialize;
 use crate::indexed::IndexedNetwork;
 use crate::matrix::{BuildOptions, YbusFlags, branch_admittance, branch_flows, build_ybus};
 use crate::network::{BusId, BusType};
-use crate::{Error, GenCost, Network, Result};
+use crate::{Error, GenCost, Network, Result, ScenarioMismatch};
 
-/// Options for the gridfm export.
+/// Options for the gridfm export — the batch-wide knobs. The scenario id is a
+/// per-snapshot property ([`GridfmSnapshot::scenario`], or the explicit argument
+/// to the single-case [`write_gridfm_dataset`] / [`gridfm_record_batches`]), not
+/// an option here.
 #[derive(Debug, Clone)]
 pub struct GridfmOptions {
-    /// Scenario id the single-case path stamps into the `scenario` and
-    /// `load_scenario_idx` columns. A parsed case is one snapshot, so the default
-    /// is `0`. The batch path ([`write_gridfm_batch`] /
-    /// [`gridfm_record_batches_batch`]) ignores this and stamps each snapshot's
-    /// own [`GridfmSnapshot::scenario`].
-    pub scenario: i64,
     /// Also write `y_bus_data.parquet`. graphkit reconstructs admittances from
     /// the branch table and ignores it, but datakit emits it, so the default is
     /// `true` for parity.
@@ -80,7 +89,6 @@ pub struct GridfmOptions {
 impl Default for GridfmOptions {
     fn default() -> Self {
         Self {
-            scenario: 0,
             include_y_bus: true,
             include_taps: true,
             include_shifts: true,
@@ -101,14 +109,19 @@ impl GridfmOptions {
     }
 }
 
-/// One operating-point snapshot in a gridfm scenario batch: a parsed [`Network`]
-/// and the scenario id stamped into its rows.
+/// One snapshot in a gridfm scenario batch: a parsed [`Network`] and the scenario
+/// id stamped into its rows.
 ///
-/// powerio has no solver, so each snapshot is a perturbed operating point that a
-/// caller (e.g. a scenario generator) has already produced — varied load,
-/// dispatch, and voltages on **one fixed topology**. Every snapshot in a batch
-/// must share the same buses, branches, and generators in the same order; the
-/// builders enforce this and otherwise return [`Error::ScenarioShapeMismatch`].
+/// powerio has no solver, so each snapshot is an operating point a caller (e.g. a
+/// scenario generator) has already produced. Snapshots in one batch share a base
+/// element set — the same bus/branch/gen counts and bus-id ordering — so the
+/// dense bus index means the same bus across snapshots and the tables stay
+/// schema-consistent. The builders enforce that and otherwise return
+/// [`Error::ScenarioShapeMismatch`]. Within that, load, dispatch, voltages,
+/// branch status, bus type, and costs may all vary per snapshot — this mirrors
+/// gridfm-datakit, whose topology variants (N-K, random component drop) toggle
+/// `BR_STATUS`/`GEN_STATUS` on a fixed element set, and gridfm-graphkit, which
+/// rebuilds the graph independently for every scenario.
 #[derive(Debug, Clone, Copy)]
 pub struct GridfmSnapshot<'a> {
     /// The parsed case for this scenario.
@@ -131,7 +144,9 @@ pub struct GridfmTables {
     pub bus: RecordBatch,
     pub generator: RecordBatch,
     pub branch: RecordBatch,
-    pub y_bus: RecordBatch,
+    /// `None` when [`GridfmOptions::include_y_bus`] is off — the table isn't
+    /// built (graphkit reconstructs admittances from the branch table anyway).
+    pub y_bus: Option<RecordBatch>,
 }
 
 /// What [`write_gridfm_dataset`] wrote, plus the counts of columns it had to zero
@@ -156,45 +171,55 @@ struct GridfmMeta {
     /// Number of stacked scenarios (1 for a single case).
     n_scenarios: usize,
     schema: &'static str,
+    /// Shared base element set (equal across all snapshots by the shape check).
     n_buses: usize,
     n_branches: usize,
+    /// In-service branch count of the **first** snapshot; branch status may
+    /// differ per scenario, so this describes scenario 0, not the whole batch.
     n_branches_in_service: usize,
     n_gens: usize,
+    /// Reference (slack) bus of the **first** snapshot. Each snapshot resolves
+    /// its own reference and carries it in the bus `REF` / gen `is_slack_gen`
+    /// columns; this records scenario 0's.
     reference_bus: usize,
-    /// Branches with `r² + x² = 0`: their admittance/flow columns are zeroed.
+    /// Branches with `r² + x² = 0` (admittance/flow columns zeroed), summed over
+    /// every snapshot in the batch.
     dropped_zero_impedance: usize,
     /// Generators whose cost row gridfm can't represent (piecewise, missing,
-    /// malformed, or cubic and higher): their `cp*` columns are zeroed.
+    /// malformed, or cubic and higher; `cp*` columns zeroed), summed over every
+    /// snapshot in the batch.
     degenerate_cost_gens: usize,
     files: Vec<String>,
     powerio_version: String,
 }
 
-/// Build the four gridfm tables for one network (`scenario` from `opts`). Pure
-/// (no I/O). A thin wrapper over [`gridfm_record_batches_batch`] for one snapshot.
+/// Build the four gridfm tables for one network, stamping `scenario` into the id
+/// columns. Pure (no I/O). A thin wrapper over [`gridfm_record_batches_batch`]
+/// for one snapshot.
 ///
 /// # Errors
 /// [`Error::ReferenceBusCount`] unless the case has exactly one reference bus
 /// (graphkit needs a slack), [`Error::NonFiniteSusceptance`] for a branch with
 /// NaN/Inf impedance, and [`Error::UnknownBus`] if a generator or branch
 /// references a bus the network doesn't define.
-pub fn gridfm_record_batches(net: &Network, opts: &GridfmOptions) -> Result<GridfmTables> {
-    let snap = GridfmSnapshot {
-        net,
-        scenario: opts.scenario,
-    };
+pub fn gridfm_record_batches(
+    net: &Network,
+    scenario: i64,
+    opts: &GridfmOptions,
+) -> Result<GridfmTables> {
+    let snap = GridfmSnapshot { net, scenario };
     gridfm_record_batches_batch(std::slice::from_ref(&snap), opts)
 }
 
 /// Build the four gridfm tables for a batch of scenarios, row-stacked and keyed
 /// by the `scenario` column. Pure (no I/O). Each snapshot carries its own
-/// scenario id; `opts.scenario` is ignored (the taps/shifts/`include_y_bus`
-/// flags still apply to every snapshot).
+/// scenario id; the `include_y_bus`/taps/shifts flags apply to every snapshot.
 ///
 /// # Errors
 /// [`Error::EmptyScenarioBatch`] for an empty batch,
-/// [`Error::ScenarioShapeMismatch`] if the snapshots don't share one topology,
-/// plus everything [`gridfm_record_batches`] can return.
+/// [`Error::ScenarioShapeMismatch`] if the snapshots don't share one base element
+/// set (counts + bus-id order), plus everything [`gridfm_record_batches`] can
+/// return.
 pub fn gridfm_record_batches_batch(
     snapshots: &[GridfmSnapshot],
     opts: &GridfmOptions,
@@ -203,13 +228,19 @@ pub fn gridfm_record_batches_batch(
     tables_from_views(&views, opts)
 }
 
-/// The four tables from already-built, shape-checked snapshot views.
+/// The four tables from already-built, shape-checked snapshot views. The Y_bus
+/// table is built only when [`GridfmOptions::include_y_bus`] is set — otherwise
+/// it's `None` and the per-snapshot `build_ybus` is skipped entirely.
 fn tables_from_views(views: &[SnapshotView], opts: &GridfmOptions) -> Result<GridfmTables> {
     Ok(GridfmTables {
         bus: bus_batch(views)?,
         generator: gen_batch(views)?,
         branch: branch_batch(views, opts)?,
-        y_bus: y_bus_batch(views, opts)?,
+        y_bus: if opts.include_y_bus {
+            Some(y_bus_batch(views, opts)?)
+        } else {
+            None
+        },
     })
 }
 
@@ -232,17 +263,22 @@ fn snapshot_views<'a>(snapshots: &'a [GridfmSnapshot<'a>]) -> Result<Vec<Snapsho
     let mut views = Vec::with_capacity(snapshots.len());
     for (k, snap) in snapshots.iter().enumerate() {
         let got = shape_of(snap.net);
+        if got != expected {
+            return Err(Error::ScenarioShapeMismatch {
+                index: k,
+                reason: ScenarioMismatch::Counts { expected, got },
+            });
+        }
         let ids_match = snap
             .net
             .buses
             .iter()
             .map(|b| b.id)
             .eq(expected_ids.iter().copied());
-        if got != expected || !ids_match {
+        if !ids_match {
             return Err(Error::ScenarioShapeMismatch {
                 index: k,
-                expected,
-                got,
+                reason: ScenarioMismatch::BusOrder,
             });
         }
         let view = IndexedNetwork::new(snap.net);
@@ -256,35 +292,57 @@ fn snapshot_views<'a>(snapshots: &'a [GridfmSnapshot<'a>]) -> Result<Vec<Snapsho
     Ok(views)
 }
 
-/// `(buses, branches, generators)` — the topology shape a scenario batch shares.
+/// `(buses, branches, generators)` — the base element shape a scenario batch
+/// shares.
 fn shape_of(net: &Network) -> (usize, usize, usize) {
     (net.buses.len(), net.branches.len(), net.generators.len())
 }
 
+/// Number a list of networks into snapshots, stamping the k-th `base + k` — the
+/// one place the "k-th input is scenario `base + k`" rule lives, so the CLI and
+/// the Python binding can't drift. Checked: returns [`Error::ScenarioIdOverflow`]
+/// rather than wrapping or panicking if a scenario id exceeds `i64`.
+pub fn numbered_snapshots<'a>(nets: &[&'a Network], base: i64) -> Result<Vec<GridfmSnapshot<'a>>> {
+    nets.iter()
+        .enumerate()
+        .map(|(k, &net)| {
+            let scenario = i64::try_from(k)
+                .ok()
+                .and_then(|offset| base.checked_add(offset))
+                .ok_or(Error::ScenarioIdOverflow {
+                    base,
+                    count: nets.len(),
+                })?;
+            Ok(GridfmSnapshot { net, scenario })
+        })
+        .collect()
+}
+
 /// Write the gridfm-datakit Parquet dataset for one case under
-/// `out_dir/<network_name>/raw/`, matching datakit's directory layout. Writes
-/// `bus_data.parquet`, `gen_data.parquet`, `branch_data.parquet`, optionally
-/// `y_bus_data.parquet`, and a `gridfm_meta.json` manifest.
+/// `out_dir/<network_name>/raw/`, matching datakit's directory layout. Stamps
+/// `scenario` into the id columns. Writes `bus_data.parquet`, `gen_data.parquet`,
+/// `branch_data.parquet`, optionally `y_bus_data.parquet`, and a
+/// `gridfm_meta.json` manifest.
 ///
 /// # Errors
 /// Propagates [`gridfm_record_batches`] and any filesystem/Parquet error.
 pub fn write_gridfm_dataset(
     net: &Network,
+    scenario: i64,
     out_dir: impl AsRef<Path>,
     opts: &GridfmOptions,
 ) -> Result<GridfmOutputs> {
-    let snap = GridfmSnapshot {
-        net,
-        scenario: opts.scenario,
-    };
+    let snap = GridfmSnapshot { net, scenario };
     write_gridfm_batch(std::slice::from_ref(&snap), out_dir, opts)
 }
 
 /// Write a batch of scenarios as one gridfm-datakit dataset under
 /// `out_dir/<network_name>/raw/`, row-stacking every snapshot's tables and keying
-/// them by the `scenario` column. The dataset name and the topology-level
-/// manifest fields (reference bus, dropped/degenerate counts) come from the first
-/// snapshot, which all snapshots share by the [`snapshot_views`] shape check.
+/// them by the `scenario` column. The dataset name and the base element counts
+/// come from the first snapshot (shared across the batch by the
+/// [`snapshot_views`] shape check); the dropped/degenerate counts are summed over
+/// every snapshot, while `reference_bus` / `n_branches_in_service` record the
+/// first snapshot only (they can differ per scenario — see [`GridfmMeta`]).
 ///
 /// # Errors
 /// Propagates [`gridfm_record_batches_batch`] and any filesystem/Parquet error.
@@ -296,8 +354,8 @@ pub fn write_gridfm_batch(
     let views = snapshot_views(snapshots)?;
     let tables = tables_from_views(&views, opts)?;
 
-    // The shape check guarantees every snapshot shares this topology, so the
-    // name, reference bus, and structural counts come from the first.
+    // The shape check guarantees every snapshot shares the base element set, so
+    // the name and structural counts come from the first.
     let net = views[0].view.network();
     let dir = out_dir.as_ref().join(&net.name).join("raw");
     std::fs::create_dir_all(&dir)?;
@@ -306,18 +364,20 @@ pub fn write_gridfm_batch(
     put_parquet(&dir, "bus_data.parquet", &tables.bus, &mut files)?;
     put_parquet(&dir, "gen_data.parquet", &tables.generator, &mut files)?;
     put_parquet(&dir, "branch_data.parquet", &tables.branch, &mut files)?;
-    if opts.include_y_bus {
-        put_parquet(&dir, "y_bus_data.parquet", &tables.y_bus, &mut files)?;
+    if let Some(y_bus) = &tables.y_bus {
+        put_parquet(&dir, "y_bus_data.parquet", y_bus, &mut files)?;
     }
 
-    let dropped_zero_impedance = net
-        .branches
+    // Branch status and costs may differ per scenario, so count the zeroed rows
+    // across every snapshot — the totals describe the whole stacked dataset.
+    let dropped_zero_impedance: usize = views
         .iter()
+        .flat_map(|v| v.view.network().branches.iter())
         .filter(|br| br.r * br.r + br.x * br.x == 0.0)
         .count();
-    let degenerate_cost_gens = net
-        .generators
+    let degenerate_cost_gens: usize = views
         .iter()
+        .flat_map(|v| v.view.network().generators.iter())
         .filter(|g| !cost_representable(g.cost.as_ref()))
         .count();
 
@@ -405,28 +465,26 @@ fn bus_batch(snaps: &[SnapshotView]) -> Result<RecordBatch> {
         bs.extend(view.bs().iter().map(|b| b / base));
     }
 
-    // `scenario` and `load_scenario_idx` hold identical values; build the array
-    // once and share the Arc rather than cloning the whole Vec.
-    let scenario = i64s(scenario);
-    batch(vec![
-        ("scenario", scenario.clone()),
-        ("load_scenario_idx", scenario),
-        ("bus", i64s(bus_idx)),
-        ("Pd", f64s(pd)),
-        ("Qd", f64s(qd)),
-        ("Pg", f64s(pg_col)),
-        ("Qg", f64s(qg_col)),
-        ("Vm", f64s(vm)),
-        ("Va", f64s(va)),
-        ("PQ", i64s(pq)),
-        ("PV", i64s(pv)),
-        ("REF", i64s(refc)),
-        ("vn_kv", f64s(vn_kv)),
-        ("min_vm_pu", f64s(min_vm)),
-        ("max_vm_pu", f64s(max_vm)),
-        ("GS", f64s(gs)),
-        ("BS", f64s(bs)),
-    ])
+    batch(with_scenario_pair(
+        scenario,
+        vec![
+            ("bus", i64s(bus_idx)),
+            ("Pd", f64s(pd)),
+            ("Qd", f64s(qd)),
+            ("Pg", f64s(pg_col)),
+            ("Qg", f64s(qg_col)),
+            ("Vm", f64s(vm)),
+            ("Va", f64s(va)),
+            ("PQ", i64s(pq)),
+            ("PV", i64s(pv)),
+            ("REF", i64s(refc)),
+            ("vn_kv", f64s(vn_kv)),
+            ("min_vm_pu", f64s(min_vm)),
+            ("max_vm_pu", f64s(max_vm)),
+            ("GS", f64s(gs)),
+            ("BS", f64s(bs)),
+        ],
+    ))
 }
 
 fn gen_batch(snaps: &[SnapshotView]) -> Result<RecordBatch> {
@@ -447,51 +505,49 @@ fn gen_batch(snaps: &[SnapshotView]) -> Result<RecordBatch> {
 
     for s in snaps {
         let view = &s.view;
-        let gens = view.generators();
-        let m = gens.len();
-        for (row, g) in gens.iter().enumerate() {
+        // One pass over the snapshot's generators: every column gets one push per
+        // generator, in dense source order.
+        for (row, g) in view.generators().iter().enumerate() {
             let i = view.bus_index(g.bus).ok_or(Error::UnknownBus {
                 bus_id: g.bus,
                 element_index: row,
             })?;
+            scenario.push(s.scenario);
+            idx.push(row as i64);
             bus.push(i as i64);
             is_slack.push(i64::from(i == s.ref_bus));
             let (c0, c1, c2) = gridfm_cost(g.cost.as_ref());
             cp0.push(c0);
             cp1.push(c1);
             cp2.push(c2);
+            p_mw.push(g.pg);
+            q_mvar.push(g.qg);
+            min_p.push(g.pmin);
+            max_p.push(g.pmax);
+            min_q.push(g.qmin);
+            max_q.push(g.qmax);
+            in_service.push(i64::from(g.in_service));
         }
-        scenario.resize(scenario.len() + m, s.scenario);
-        idx.extend(0..m as i64);
-        p_mw.extend(gens.iter().map(|g| g.pg));
-        q_mvar.extend(gens.iter().map(|g| g.qg));
-        min_p.extend(gens.iter().map(|g| g.pmin));
-        max_p.extend(gens.iter().map(|g| g.pmax));
-        min_q.extend(gens.iter().map(|g| g.qmin));
-        max_q.extend(gens.iter().map(|g| g.qmax));
-        in_service.extend(gens.iter().map(|g| i64::from(g.in_service)));
     }
 
-    // `scenario` and `load_scenario_idx` hold identical values; build the array
-    // once and share the Arc rather than cloning the whole Vec.
-    let scenario = i64s(scenario);
-    batch(vec![
-        ("scenario", scenario.clone()),
-        ("load_scenario_idx", scenario),
-        ("idx", i64s(idx)),
-        ("bus", i64s(bus)),
-        ("p_mw", f64s(p_mw)),
-        ("q_mvar", f64s(q_mvar)),
-        ("min_p_mw", f64s(min_p)),
-        ("max_p_mw", f64s(max_p)),
-        ("min_q_mvar", f64s(min_q)),
-        ("max_q_mvar", f64s(max_q)),
-        ("cp0_eur", f64s(cp0)),
-        ("cp1_eur_per_mw", f64s(cp1)),
-        ("cp2_eur_per_mw2", f64s(cp2)),
-        ("in_service", i64s(in_service)),
-        ("is_slack_gen", i64s(is_slack)),
-    ])
+    batch(with_scenario_pair(
+        scenario,
+        vec![
+            ("idx", i64s(idx)),
+            ("bus", i64s(bus)),
+            ("p_mw", f64s(p_mw)),
+            ("q_mvar", f64s(q_mvar)),
+            ("min_p_mw", f64s(min_p)),
+            ("max_p_mw", f64s(max_p)),
+            ("min_q_mvar", f64s(min_q)),
+            ("max_q_mvar", f64s(max_q)),
+            ("cp0_eur", f64s(cp0)),
+            ("cp1_eur_per_mw", f64s(cp1)),
+            ("cp2_eur_per_mw2", f64s(cp2)),
+            ("in_service", i64s(in_service)),
+            ("is_slack_gen", i64s(is_slack)),
+        ],
+    ))
 }
 
 #[allow(clippy::too_many_lines, clippy::many_single_char_names)]
@@ -499,7 +555,8 @@ fn branch_batch(snaps: &[SnapshotView], opts: &GridfmOptions) -> Result<RecordBa
     let total: usize = snaps.iter().map(|s| s.view.branches().len()).sum();
 
     // Same flags the Y_bus builder derives, so the branch admittance columns and
-    // y_bus_data come from one kernel. The topology is fixed across snapshots.
+    // y_bus_data come from one kernel. The taps/shifts flags are batch-wide (from
+    // `opts`); the admittances themselves are recomputed per snapshot.
     let flags = YbusFlags {
         unity_taps: !opts.include_taps,
         zero_shifts: !opts.include_shifts,
@@ -589,45 +646,50 @@ fn branch_batch(snaps: &[SnapshotView], opts: &GridfmOptions) -> Result<RecordBa
         }
     }
 
-    // `scenario` and `load_scenario_idx` hold identical values; build the array
-    // once and share the Arc rather than cloning the whole Vec.
-    let scenario = i64s(scenario);
-    batch(vec![
-        ("scenario", scenario.clone()),
-        ("load_scenario_idx", scenario),
-        ("idx", i64s(idx)),
-        ("from_bus", i64s(from_bus)),
-        ("to_bus", i64s(to_bus)),
-        ("pf", f64s(pf)),
-        ("qf", f64s(qf)),
-        ("pt", f64s(pt)),
-        ("qt", f64s(qt)),
-        ("r", f64s(r_col)),
-        ("x", f64s(x_col)),
-        ("b", f64s(b_col)),
-        ("Yff_r", f64s(yff_r)),
-        ("Yff_i", f64s(yff_i)),
-        ("Yft_r", f64s(yft_r)),
-        ("Yft_i", f64s(yft_i)),
-        ("Ytf_r", f64s(ytf_r)),
-        ("Ytf_i", f64s(ytf_i)),
-        ("Ytt_r", f64s(ytt_r)),
-        ("Ytt_i", f64s(ytt_i)),
-        ("tap", f64s(tap)),
-        ("shift", f64s(shift)),
-        ("ang_min", f64s(ang_min)),
-        ("ang_max", f64s(ang_max)),
-        ("rate_a", f64s(rate_a)),
-        ("br_status", i64s(br_status)),
-    ])
+    batch(with_scenario_pair(
+        scenario,
+        vec![
+            ("idx", i64s(idx)),
+            ("from_bus", i64s(from_bus)),
+            ("to_bus", i64s(to_bus)),
+            ("pf", f64s(pf)),
+            ("qf", f64s(qf)),
+            ("pt", f64s(pt)),
+            ("qt", f64s(qt)),
+            ("r", f64s(r_col)),
+            ("x", f64s(x_col)),
+            ("b", f64s(b_col)),
+            ("Yff_r", f64s(yff_r)),
+            ("Yff_i", f64s(yff_i)),
+            ("Yft_r", f64s(yft_r)),
+            ("Yft_i", f64s(yft_i)),
+            ("Ytf_r", f64s(ytf_r)),
+            ("Ytf_i", f64s(ytf_i)),
+            ("Ytt_r", f64s(ytt_r)),
+            ("Ytt_i", f64s(ytt_i)),
+            ("tap", f64s(tap)),
+            ("shift", f64s(shift)),
+            ("ang_min", f64s(ang_min)),
+            ("ang_max", f64s(ang_max)),
+            ("rate_a", f64s(rate_a)),
+            ("br_status", i64s(br_status)),
+        ],
+    ))
 }
 
 fn y_bus_batch(snaps: &[SnapshotView], opts: &GridfmOptions) -> Result<RecordBatch> {
-    let mut scenario = Vec::new();
-    let mut index1 = Vec::new();
-    let mut index2 = Vec::new();
-    let mut g_vals = Vec::new();
-    let mut b_vals = Vec::new();
+    // Upper bound on stacked nnz: each snapshot's Y_bus has at most 4 entries per
+    // branch plus a diagonal. The exact count varies (lossless branches, dropped
+    // zeros, per-scenario branch status), so this only sizes the allocation.
+    let est: usize = snaps
+        .iter()
+        .map(|s| 4 * s.view.branches().len() + s.view.n())
+        .sum();
+    let mut scenario = Vec::with_capacity(est);
+    let mut index1 = Vec::with_capacity(est);
+    let mut index2 = Vec::with_capacity(est);
+    let mut g_vals = Vec::with_capacity(est);
+    let mut b_vals = Vec::with_capacity(est);
 
     for s in snaps {
         let parts = build_ybus(&s.view, &opts.build_options())?;
@@ -661,17 +723,15 @@ fn y_bus_batch(snaps: &[SnapshotView], opts: &GridfmOptions) -> Result<RecordBat
         }
     }
 
-    // `scenario` and `load_scenario_idx` hold identical values; build the array
-    // once and share the Arc rather than cloning the whole Vec.
-    let scenario = i64s(scenario);
-    batch(vec![
-        ("scenario", scenario.clone()),
-        ("load_scenario_idx", scenario),
-        ("index1", i64s(index1)),
-        ("index2", i64s(index2)),
-        ("G", f64s(g_vals)),
-        ("B", f64s(b_vals)),
-    ])
+    batch(with_scenario_pair(
+        scenario,
+        vec![
+            ("index1", i64s(index1)),
+            ("index2", i64s(index2)),
+            ("G", f64s(g_vals)),
+            ("B", f64s(b_vals)),
+        ],
+    ))
 }
 
 // --- small helpers ---------------------------------------------------------
@@ -736,6 +796,21 @@ fn i64s(v: Vec<i64>) -> ArrayRef {
 
 fn f64s(v: Vec<f64>) -> ArrayRef {
     Arc::new(Float64Array::from(v))
+}
+
+/// Prepend the `scenario` / `load_scenario_idx` id columns (which hold identical
+/// values) to a table's other columns. The Int64 array is built once and the Arc
+/// shared, so the duplicate column costs a pointer, not a second `Vec`.
+fn with_scenario_pair(
+    scenario: Vec<i64>,
+    rest: Vec<(&'static str, ArrayRef)>,
+) -> Vec<(&'static str, ArrayRef)> {
+    let scenario = i64s(scenario);
+    let mut cols = Vec::with_capacity(rest.len() + 2);
+    cols.push(("scenario", scenario.clone()));
+    cols.push(("load_scenario_idx", scenario));
+    cols.extend(rest);
+    cols
 }
 
 #[cfg(test)]
@@ -860,12 +935,12 @@ mod tests {
     #[test]
     fn schema_and_row_counts_match_case14() {
         let net = case14();
-        let tables = gridfm_record_batches(&net, &GridfmOptions::default()).unwrap();
+        let tables = gridfm_record_batches(&net, 0, &GridfmOptions::default()).unwrap();
 
         assert_eq!(names(&tables.bus), BUS_COLS);
         assert_eq!(names(&tables.generator), GEN_COLS);
         assert_eq!(names(&tables.branch), BRANCH_COLS);
-        assert_eq!(names(&tables.y_bus), YBUS_COLS);
+        assert_eq!(names(tables.y_bus.as_ref().unwrap()), YBUS_COLS);
 
         assert_eq!(tables.bus.num_rows(), net.buses.len()); // 14
         assert_eq!(tables.generator.num_rows(), net.generators.len()); // 5
@@ -876,7 +951,7 @@ mod tests {
     fn parquet_round_trips_through_reader() {
         let net = case14();
         let dir = tempfile::tempdir().unwrap();
-        let out = write_gridfm_dataset(&net, dir.path(), &GridfmOptions::default()).unwrap();
+        let out = write_gridfm_dataset(&net, 0, dir.path(), &GridfmOptions::default()).unwrap();
 
         let raw = dir.path().join("case14").join("raw");
         assert_eq!(out.dir, raw);
@@ -897,7 +972,7 @@ mod tests {
     fn bus_table_values_are_consistent() {
         let net = case14();
         let view = IndexedNetwork::new(&net);
-        let tables = gridfm_record_batches(&net, &GridfmOptions::default()).unwrap();
+        let tables = gridfm_record_batches(&net, 0, &GridfmOptions::default()).unwrap();
         let bus = &tables.bus;
 
         // Exactly one reference bus; PQ/PV/REF partition every bus.
@@ -926,7 +1001,7 @@ mod tests {
         // The branch table's Y** columns are the same kernel build_ybus scatters,
         // so a known in-service branch's block must equal branch_admittance.
         let net = case14();
-        let tables = gridfm_record_batches(&net, &GridfmOptions::default()).unwrap();
+        let tables = gridfm_record_batches(&net, 0, &GridfmOptions::default()).unwrap();
         let br = &tables.branch;
 
         let yff_r = col_f64(br, "Yff_r");
@@ -944,7 +1019,7 @@ mod tests {
         let net = case14();
         let view = IndexedNetwork::new(&net);
         let ref_bus = view.reference_bus_index().unwrap();
-        let tables = gridfm_record_batches(&net, &GridfmOptions::default()).unwrap();
+        let tables = gridfm_record_batches(&net, 0, &GridfmOptions::default()).unwrap();
         let g = &tables.generator;
 
         let bus = col_i64(g, "bus");
@@ -963,7 +1038,7 @@ mod tests {
         // wrong conj would break it). Every branch's real loss is also ≥ 0.
         let net = case14();
         let view = IndexedNetwork::new(&net);
-        let tables = gridfm_record_batches(&net, &GridfmOptions::default()).unwrap();
+        let tables = gridfm_record_batches(&net, 0, &GridfmOptions::default()).unwrap();
         let br = &tables.branch;
         let (pf, pt, status) = (
             col_f64(br, "pf"),
@@ -1014,7 +1089,7 @@ mod tests {
             ],
             vec![branch(1, 2, 0.0, 0.0), branch(2, 3, 0.01, 0.1)],
         );
-        let tables = gridfm_record_batches(&net, &GridfmOptions::default()).unwrap();
+        let tables = gridfm_record_batches(&net, 0, &GridfmOptions::default()).unwrap();
         let br = &tables.branch;
         for col in [
             "Yff_r", "Yff_i", "Yft_r", "Yft_i", "Ytf_r", "Ytf_i", "Ytt_r", "Ytt_i", "pf", "qf",
@@ -1028,7 +1103,7 @@ mod tests {
         }
 
         let dir = tempfile::tempdir().unwrap();
-        let out = write_gridfm_dataset(&net, dir.path(), &GridfmOptions::default()).unwrap();
+        let out = write_gridfm_dataset(&net, 0, dir.path(), &GridfmOptions::default()).unwrap();
         assert_eq!(out.dropped_zero_impedance, 1);
         let meta: serde_json::Value = serde_json::from_str(
             &std::fs::read_to_string(out.dir.join("gridfm_meta.json")).unwrap(),
@@ -1077,7 +1152,7 @@ mod tests {
             vec![bus(1, BusType::Pq), bus(2, BusType::Pq)],
             vec![branch(1, 2, 0.01, 0.1)],
         );
-        let err = gridfm_record_batches(&net, &GridfmOptions::default()).unwrap_err();
+        let err = gridfm_record_batches(&net, 0, &GridfmOptions::default()).unwrap_err();
         assert!(
             matches!(err, Error::ReferenceBusCount { .. }),
             "got {err:?}"
@@ -1144,15 +1219,34 @@ mod tests {
 
         // The first scenario's rows match the standalone single-case tables, so
         // batching is a pure row-stack over the established single-snapshot path.
-        let single = gridfm_record_batches(&base, &GridfmOptions::default()).unwrap();
-        let pd_single = col_f64(&single.bus, "Pd");
-        let pd_batch = col_f64(&tables.bus, "Pd");
-        for i in 0..n {
-            // Bit-exact: scenario 0 is the same network through the same kernel.
-            assert_eq!(pd_batch.value(i).to_bits(), pd_single.value(i).to_bits());
+        // Compare every column bit-exactly (not just one), so a per-column offset
+        // or ordering regression in the row-stack can't slip through.
+        let single = gridfm_record_batches(&base, 0, &GridfmOptions::default()).unwrap();
+        let bit_exact = |b: &RecordBatch, s: &RecordBatch, col: &str, rows: usize| {
+            let (bb, ss) = (col_f64(b, col), col_f64(s, col));
+            for i in 0..rows {
+                assert_eq!(
+                    bb.value(i).to_bits(),
+                    ss.value(i).to_bits(),
+                    "scenario-0 {col}[{i}] differs from the single-case path"
+                );
+            }
+        };
+        for col in ["Pd", "Qd", "Pg", "Qg", "Vm", "Va", "GS", "BS"] {
+            bit_exact(&tables.bus, &single.bus, col, n);
         }
+        bit_exact(
+            &tables.generator,
+            &single.generator,
+            "p_mw",
+            base.generators.len(),
+        );
+        bit_exact(&tables.branch, &single.branch, "pf", base.branches.len());
+
         // The perturbed scenario's load really differs (guards against stamping
         // the same network three times).
+        let pd_batch = col_f64(&tables.bus, "Pd");
+        let pd_single = col_f64(&single.bus, "Pd");
         assert!((pd_batch.value(n) - 1.1 * pd_single.value(0)).abs() < 1e-9);
     }
 
@@ -1214,8 +1308,93 @@ mod tests {
         ];
         let err = gridfm_record_batches_batch(&snaps, &GridfmOptions::default()).unwrap_err();
         assert!(
-            matches!(err, Error::ScenarioShapeMismatch { index: 1, .. }),
+            matches!(
+                err,
+                Error::ScenarioShapeMismatch {
+                    index: 1,
+                    reason: ScenarioMismatch::Counts { .. }
+                }
+            ),
             "got {err:?}"
+        );
+    }
+
+    #[test]
+    fn bus_order_mismatch_is_reported_distinctly() {
+        // Same counts and the same bus-id set, but a different ordering: the dense
+        // bus index would mean different buses across snapshots, so the batch is
+        // rejected with the BusOrder reason (not the same-tuple Counts message).
+        let base = case14();
+        let mut reordered = base.clone();
+        reordered.buses.swap(0, 1);
+        let snaps = [
+            GridfmSnapshot {
+                net: &base,
+                scenario: 0,
+            },
+            GridfmSnapshot {
+                net: &reordered,
+                scenario: 1,
+            },
+        ];
+        let err = gridfm_record_batches_batch(&snaps, &GridfmOptions::default()).unwrap_err();
+        assert!(
+            matches!(
+                err,
+                Error::ScenarioShapeMismatch {
+                    index: 1,
+                    reason: ScenarioMismatch::BusOrder
+                }
+            ),
+            "got {err:?}"
+        );
+    }
+
+    #[test]
+    fn manifest_counts_sum_over_the_batch() {
+        // Two snapshots on the same element set, but only the second has a zeroed
+        // branch impedance. The manifest's dropped count describes the whole
+        // dataset (a total of 1), not just the first snapshot — branch status and
+        // impedance may legitimately differ per scenario.
+        let base = case14();
+        let mut perturbed = base.clone();
+        perturbed.branches[0].r = 0.0;
+        perturbed.branches[0].x = 0.0;
+        let snaps = [
+            GridfmSnapshot {
+                net: &base,
+                scenario: 0,
+            },
+            GridfmSnapshot {
+                net: &perturbed,
+                scenario: 1,
+            },
+        ];
+        let dir = tempfile::tempdir().unwrap();
+        let out = write_gridfm_batch(&snaps, dir.path(), &GridfmOptions::default()).unwrap();
+        assert_eq!(out.dropped_zero_impedance, 1);
+        let meta: serde_json::Value = serde_json::from_str(
+            &std::fs::read_to_string(out.dir.join("gridfm_meta.json")).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(meta["dropped_zero_impedance"], 1);
+    }
+
+    #[test]
+    fn y_bus_table_is_absent_when_disabled() {
+        let net = case14();
+        let opts = GridfmOptions {
+            include_y_bus: false,
+            ..Default::default()
+        };
+        let tables = gridfm_record_batches(&net, 0, &opts).unwrap();
+        assert!(tables.y_bus.is_none(), "y_bus should not be built");
+
+        let dir = tempfile::tempdir().unwrap();
+        let out = write_gridfm_dataset(&net, 0, dir.path(), &opts).unwrap();
+        assert!(
+            !out.dir.join("y_bus_data.parquet").exists(),
+            "y_bus_data.parquet should not be written"
         );
     }
 
@@ -1296,7 +1475,7 @@ mod tests {
         net.generators
             .push(gen_at(2, gencost(2, 3, vec![0.01, 5.0, 0.0]))); // polynomial
 
-        let tables = gridfm_record_batches(&net, &GridfmOptions::default()).unwrap();
+        let tables = gridfm_record_batches(&net, 0, &GridfmOptions::default()).unwrap();
         let g = &tables.generator;
         let (cp0, cp1, cp2) = (
             col_f64(g, "cp0_eur"),
@@ -1307,7 +1486,7 @@ mod tests {
         assert_eq!((cp0.value(1), cp1.value(1), cp2.value(1)), (0.0, 5.0, 0.01));
 
         let dir = tempfile::tempdir().unwrap();
-        let out = write_gridfm_dataset(&net, dir.path(), &GridfmOptions::default()).unwrap();
+        let out = write_gridfm_dataset(&net, 0, dir.path(), &GridfmOptions::default()).unwrap();
         assert_eq!(out.degenerate_cost_gens, 1);
         let meta: serde_json::Value = serde_json::from_str(
             &std::fs::read_to_string(out.dir.join("gridfm_meta.json")).unwrap(),
@@ -1320,21 +1499,20 @@ mod tests {
     fn scenario_id_and_tap_toggle_take_effect() {
         let net = case14();
 
-        // The scenario id reaches both id columns.
-        let opts = GridfmOptions {
-            scenario: 7,
-            ..Default::default()
-        };
-        let bus = gridfm_record_batches(&net, &opts).unwrap().bus;
+        // The scenario id (an explicit argument now) reaches both id columns.
+        let bus = gridfm_record_batches(&net, 7, &GridfmOptions::default())
+            .unwrap()
+            .bus;
         assert_eq!(col_i64(&bus, "scenario").value(0), 7);
         assert_eq!(col_i64(&bus, "load_scenario_idx").value(0), 7);
 
         // Turning taps off changes a transformer's admittance columns.
-        let on = gridfm_record_batches(&net, &GridfmOptions::default())
+        let on = gridfm_record_batches(&net, 0, &GridfmOptions::default())
             .unwrap()
             .branch;
         let off = gridfm_record_batches(
             &net,
+            0,
             &GridfmOptions {
                 include_taps: false,
                 ..Default::default()

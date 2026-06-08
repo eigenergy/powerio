@@ -290,10 +290,11 @@ def write_gridfm_batch(
     """Write several cases as one gridfm-datakit dataset, row-stacked and keyed by
     the ``scenario`` column.
 
-    Each case is one perturbed operating point on a shared topology; the k-th is
-    stamped ``base_scenario + k``. All cases must share the same buses, branches,
-    and generators (otherwise :class:`PowerIOError` is raised). Returns the same
-    dict as :meth:`Case.write_gridfm`. Requires the gridfm build
+    Each case is one snapshot; the k-th is stamped ``base_scenario + k``. The
+    cases must share a base element set — the same bus/branch/gen counts and
+    bus-id order (otherwise :class:`PowerIOError` is raised) — but load, dispatch,
+    branch status, and costs may vary per scenario. Returns the same dict as
+    :meth:`Case.write_gridfm`. Requires the gridfm build
     (``pip install 'powerio[gridfm]'``); otherwise raises ``ImportError``.
     """
     _require_gridfm()
