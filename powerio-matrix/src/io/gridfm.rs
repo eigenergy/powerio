@@ -60,8 +60,11 @@ use crate::{Error, GenCost, Network, Result};
 /// Options for the gridfm export.
 #[derive(Debug, Clone)]
 pub struct GridfmOptions {
-    /// Scenario id stamped into the `scenario` and `load_scenario_idx` columns.
-    /// A parsed case is one snapshot, so the default is `0`.
+    /// Scenario id the single-case path stamps into the `scenario` and
+    /// `load_scenario_idx` columns. A parsed case is one snapshot, so the default
+    /// is `0`. The batch path ([`write_gridfm_batch`] /
+    /// [`gridfm_record_batches_batch`]) ignores this and stamps each snapshot's
+    /// own [`GridfmSnapshot::scenario`].
     pub scenario: i64,
     /// Also write `y_bus_data.parquet`. graphkit reconstructs admittances from
     /// the branch table and ignores it, but datakit emits it, so the default is
@@ -237,7 +240,7 @@ fn snapshot_views<'a>(snapshots: &'a [GridfmSnapshot<'a>]) -> Result<Vec<Snapsho
             .eq(expected_ids.iter().copied());
         if got != expected || !ids_match {
             return Err(Error::ScenarioShapeMismatch {
-                scenario: k,
+                index: k,
                 expected,
                 got,
             });
@@ -1211,7 +1214,7 @@ mod tests {
         ];
         let err = gridfm_record_batches_batch(&snaps, &GridfmOptions::default()).unwrap_err();
         assert!(
-            matches!(err, Error::ScenarioShapeMismatch { scenario: 1, .. }),
+            matches!(err, Error::ScenarioShapeMismatch { index: 1, .. }),
             "got {err:?}"
         );
     }

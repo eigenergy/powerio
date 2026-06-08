@@ -609,11 +609,13 @@ fn write_gridfm_batch<'py>(
     include_taps: bool,
     include_shifts: bool,
 ) -> PyResult<Bound<'py, PyDict>> {
+    // The batch path stamps each snapshot's own scenario id, so `opts.scenario`
+    // is unused here; leave it at the default.
     let opts = GridfmOptions {
-        scenario: base_scenario,
         include_y_bus,
         include_taps,
         include_shifts,
+        ..Default::default()
     };
     let snapshots: Vec<GridfmSnapshot> = cases
         .iter()

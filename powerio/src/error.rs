@@ -93,11 +93,13 @@ pub enum Error {
     EmptyScenarioBatch,
 
     #[error(
-        "gridfm scenario {scenario} has a different topology than scenario 0 \
+        "gridfm snapshot {index} has a different topology than the first snapshot \
          ((buses, branches, gens) = {got:?} vs {expected:?}); a scenario batch must share one fixed topology"
     )]
     ScenarioShapeMismatch {
-        scenario: usize,
+        /// 0-based position of the offending snapshot in the batch (independent
+        /// of the snapshot's scenario id).
+        index: usize,
         expected: (usize, usize, usize),
         got: (usize, usize, usize),
     },
