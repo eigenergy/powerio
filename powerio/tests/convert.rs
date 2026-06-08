@@ -245,9 +245,10 @@ fn surge_radians_tap_cost_and_storage_mapping() {
     let net = parse_surge_json(json).unwrap();
     assert!((net.buses[0].va - 30.0).abs() < 1e-9);
     assert!(
-        (net.branches[0].tap - 1.0).abs() < 1e-12,
-        "nonzero shift makes this a transformer-like branch"
+        net.branches[0].tap.abs() < 1e-12,
+        "surge Line tap=1.0 maps to MATPOWER raw tap=0.0 even with phase shift"
     );
+    assert!((net.branches[0].effective_tap() - 1.0).abs() < 1e-12);
     assert!((net.branches[0].shift - 15.0).abs() < 1e-9);
     assert!((net.branches[0].angmin + 30.0).abs() < 1e-9);
     assert!((net.branches[0].angmax - 30.0).abs() < 1e-9);

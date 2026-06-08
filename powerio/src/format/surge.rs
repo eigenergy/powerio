@@ -544,7 +544,7 @@ fn read_branch(value: &Value) -> Result<Branch> {
     let branch_type = string_map(obj, "branch_type").unwrap_or("Line");
     let tap_value = f_map_or(obj, "tap", 1.0)?;
     let shift = f_map_or(obj, "phase_shift_rad", 0.0)? * DEG_PER_RAD;
-    let tap = if branch_type == "Line" && (tap_value - 1.0).abs() < EPS && shift.abs() < EPS {
+    let tap = if branch_type == "Line" && (tap_value - 1.0).abs() < EPS {
         0.0
     } else {
         tap_value
@@ -1088,9 +1088,16 @@ fn value_to_f64(value: &Value, key: &str) -> Result<f64> {
         Value::Number(number) => number
             .as_f64()
             .ok_or_else(|| format_error(format!("`{key}` is not a finite f64"))),
-        Value::String(value) => value
-            .parse::<f64>()
-            .map_err(|_| format_error(format!("`{key}` string is not a f64"))),
+        Value::String(value) => {
+            let parsed = value
+                .parse::<f64>()
+                .map_err(|_| format_error(format!("`{key}` string is not a f64")))?;
+            if parsed.is_finite() {
+                Ok(parsed)
+            } else {
+                Err(format_error(format!("`{key}` string is not a finite f64")))
+            }
+        }
         Value::Object(obj) if obj.contains_key("$surge_float") => Err(format_error(format!(
             "`{key}` uses Surge tagged non-finite float values, which powerio does not support"
         ))),
@@ -1217,10 +1224,39 @@ mod tests {
         let branch = read_branch(&serde_json::json!({
             "from_bus": 1,
             "to_bus": 2,
+            "branch_type": "Line",
+            "tap": 1.0,
+            "phase_shift_rad": 0.1
+        }))
+        .unwrap();
+        assert!(branch.tap.abs() < EPS);
+        assert!((branch.shift - 0.1 * DEG_PER_RAD).abs() < EPS);
+
+        let branch = read_branch(&serde_json::json!({
+            "from_bus": 1,
+            "to_bus": 2,
             "branch_type": "Transformer",
             "tap": 1.0
         }))
         .unwrap();
         assert!((branch.tap - 1.0).abs() < EPS);
+    }
+
+    #[test]
+    fn rejects_nonfinite_numeric_strings() {
+        let err = parse_surge_json(
+            r#"{
+              "format": "surge-json",
+              "schema_version": "0.1.0",
+              "meta": {},
+              "network": {
+                "buses": [
+                  {"number": 1, "voltage_angle_rad": "NaN"}
+                ]
+              }
+            }"#,
+        )
+        .unwrap_err();
+        assert!(matches!(err, Error::FormatRead { .. }));
     }
 }
