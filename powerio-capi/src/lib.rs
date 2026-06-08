@@ -436,7 +436,7 @@ pub unsafe extern "C" fn pio_nodal_shunt(case: *const PioCase, gs: *mut f64, bs:
     }
 }
 
-/// Export one raw-network table over the Arrow C Data Interface (zero-copy).
+/// Export one raw network table over the Arrow C Data Interface (zero-copy).
 ///
 /// `table` is one of the `PIO_ARROW_TABLE_*` selectors (bus/branch/gen/load/
 /// shunt); the columns are the parsed network fields with EXTERNAL bus ids (the

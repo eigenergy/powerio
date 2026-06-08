@@ -15,7 +15,7 @@ name = "powerio_capi"
 crate-type = ["cdylib", "staticlib", "rlib"]
 
 [features]
-# Zero-copy raw-network export over the Arrow C Data Interface (`pio_export_arrow`).
+# Zero-copy raw network export over the Arrow C Data Interface (`pio_export_arrow`).
 # Off by default so the base ABI pulls in nothing but `powerio`.
 arrow = ["dep:arrow"]
 

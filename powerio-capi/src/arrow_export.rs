@@ -1,4 +1,4 @@
-//! Raw-network tables over the Arrow C Data Interface.
+//! Raw network tables over the Arrow C Data Interface.
 //!
 //! Builds the parsed [`Network`] element tables (bus/branch/gen/load/shunt) as
 //! Arrow record batches and lends them across the C ABI zero-copy via

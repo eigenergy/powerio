@@ -100,7 +100,7 @@ impl GridfmOptions {
 
 /// The gridfm-datakit tables as Arrow record batches. The Parquet writer builds
 /// from these; a deferred gridfm-schema Arrow C Data Interface export (issue #38)
-/// would reuse them. (The raw-network Arrow export that ships in powerio-capi is
+/// would reuse them. (The raw network Arrow export that ships in powerio-capi is
 /// a different, lighter schema.)
 #[derive(Debug, Clone)]
 #[non_exhaustive]
@@ -553,7 +553,7 @@ fn one_hot(buses: &[Bus], kind: BusType) -> ArrayRef {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::network::{BusId, Extras};
+    use crate::network::{BusId, Extras, Generator};
     use arrow::array::{Float64Array, Int64Array};
     use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
 
@@ -939,5 +939,95 @@ mod tests {
             ncost,
             coeffs,
         }
+    }
+
+    fn gen_at(bus: usize, cost: GenCost) -> Generator {
+        Generator {
+            bus: BusId(bus),
+            pg: 0.0,
+            qg: 0.0,
+            pmax: 100.0,
+            pmin: 0.0,
+            qmax: 50.0,
+            qmin: -50.0,
+            vg: 1.0,
+            mbase: 100.0,
+            in_service: true,
+            cost: Some(cost),
+            caps: [None; 11],
+        }
+    }
+
+    #[test]
+    fn degenerate_cost_gen_zeros_columns_and_is_counted() {
+        // Counterpart to the zero-impedance test: a piecewise (model 1) cost row
+        // gets zeroed cp* columns and is counted; a polynomial row is kept.
+        let mut net = Network::in_memory(
+            "degen",
+            100.0,
+            vec![bus(1, BusType::Ref), bus(2, BusType::Pq)],
+            vec![branch(1, 2, 0.01, 0.1)],
+        );
+        net.generators
+            .push(gen_at(1, gencost(1, 2, vec![0.0, 0.0, 1.0, 1.0]))); // piecewise
+        net.generators
+            .push(gen_at(2, gencost(2, 3, vec![0.01, 5.0, 0.0]))); // polynomial
+
+        let tables = gridfm_record_batches(&net, &GridfmOptions::default()).unwrap();
+        let g = &tables.generator;
+        let (cp0, cp1, cp2) = (
+            col_f64(g, "cp0_eur"),
+            col_f64(g, "cp1_eur_per_mw"),
+            col_f64(g, "cp2_eur_per_mw2"),
+        );
+        assert_eq!((cp0.value(0), cp1.value(0), cp2.value(0)), (0.0, 0.0, 0.0));
+        assert_eq!((cp0.value(1), cp1.value(1), cp2.value(1)), (0.0, 5.0, 0.01));
+
+        let dir = tempfile::tempdir().unwrap();
+        let out = write_gridfm_dataset(&net, dir.path(), &GridfmOptions::default()).unwrap();
+        assert_eq!(out.degenerate_cost_gens, 1);
+        let meta: serde_json::Value = serde_json::from_str(
+            &std::fs::read_to_string(out.dir.join("gridfm_meta.json")).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(meta["degenerate_cost_gens"], 1);
+    }
+
+    #[test]
+    fn scenario_id_and_tap_toggle_take_effect() {
+        let net = case14();
+
+        // The scenario id reaches both id columns.
+        let opts = GridfmOptions {
+            scenario: 7,
+            ..Default::default()
+        };
+        let bus = gridfm_record_batches(&net, &opts).unwrap().bus;
+        assert_eq!(col_i64(&bus, "scenario").value(0), 7);
+        assert_eq!(col_i64(&bus, "load_scenario_idx").value(0), 7);
+
+        // Turning taps off changes a transformer's admittance columns.
+        let on = gridfm_record_batches(&net, &GridfmOptions::default())
+            .unwrap()
+            .branch;
+        let off = gridfm_record_batches(
+            &net,
+            &GridfmOptions {
+                include_taps: false,
+                ..Default::default()
+            },
+        )
+        .unwrap()
+        .branch;
+        let tap = col_f64(&on, "tap");
+        let xfmr = (0..on.num_rows())
+            .find(|&i| (tap.value(i) - 1.0).abs() > 1e-9)
+            .expect("case14 has off-nominal transformers");
+        // case14 transformers are lossless (r = 0), so compare the susceptance
+        // (imaginary) part, which scales with 1/tap².
+        assert!(
+            (col_f64(&on, "Yff_i").value(xfmr) - col_f64(&off, "Yff_i").value(xfmr)).abs() > 1e-9,
+            "taps off should change the transformer's Yff"
+        );
     }
 }

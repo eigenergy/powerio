@@ -14,7 +14,7 @@
  * default (NULL, 0, -1, 0.0, or no-op) rather than unwinding across the ABI.
  *
  * Optional: build with `--features arrow` to get pio_export_arrow, a zero-copy
- * raw-network export over the Arrow C Data Interface (guarded by PIO_ARROW).
+ * raw network export over the Arrow C Data Interface (guarded by PIO_ARROW).
  *
  * This header is checked in; regenerate from the Rust source with
  *   cbindgen --config cbindgen.toml --crate powerio-capi --output include/powerio.h
@@ -84,7 +84,7 @@ void pio_nodal_demand(const PioCase *c, double *pd, double *qd);
 void pio_nodal_shunt(const PioCase *c, double *gs, double *bs);
 
 #ifdef PIO_ARROW
-/* Zero-copy raw-network export over the Arrow C Data Interface (powerio-capi
+/* Zero-copy raw network export over the Arrow C Data Interface (powerio-capi
  * built with `--features arrow`). ArrowArray / ArrowSchema are the standard C
  * Data Interface structs; include the Arrow ABI header (arrow/c/abi.h, or the
  * vendored examples/arrow_c_data_interface.h) for their definitions — this
@@ -98,7 +98,7 @@ struct ArrowSchema;
 #define PIO_ARROW_TABLE_LOAD   3
 #define PIO_ARROW_TABLE_SHUNT  4
 
-/* Export raw-network table `table` (one of PIO_ARROW_TABLE_*) as a single Arrow
+/* Export raw network table `table` (one of PIO_ARROW_TABLE_*) as a single Arrow
  * array + schema, zero-copy. Columns are the parsed network fields with EXTERNAL
  * bus ids (the pio_bus_ids id space), not the gridfm schema. On success (0)
  * *out_array and *out_schema are populated and owned by the caller — release
