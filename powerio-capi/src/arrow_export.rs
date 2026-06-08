@@ -28,6 +28,17 @@ pub const PIO_ARROW_TABLE_GEN: i32 = 2;
 pub const PIO_ARROW_TABLE_LOAD: i32 = 3;
 pub const PIO_ARROW_TABLE_SHUNT: i32 = 4;
 
+// These values are the ABI: the `PIO_ARROW_TABLE_*` macros in include/powerio.h
+// are hand-synced to them. Pin them so a Rust-side edit that drifts from the
+// header fails the build instead of silently exporting the wrong table.
+const _: () = assert!(
+    PIO_ARROW_TABLE_BUS == 0
+        && PIO_ARROW_TABLE_BRANCH == 1
+        && PIO_ARROW_TABLE_GEN == 2
+        && PIO_ARROW_TABLE_LOAD == 3
+        && PIO_ARROW_TABLE_SHUNT == 4
+);
+
 /// Build the requested table and export it over the C Data Interface. The
 /// returned FFI structs own the columnar buffers until the consumer releases
 /// them.
@@ -192,7 +203,23 @@ mod tests {
             .as_any()
             .downcast_ref::<Int64Array>()
             .unwrap();
-        assert_eq!(ids.value(0), i64::try_from(n.buses[0].id.0).unwrap());
+        // The whole id column survives, in order (a reversed/offset column would
+        // pass a single-cell check).
+        let expected: Vec<i64> = n
+            .buses
+            .iter()
+            .map(|b| i64::try_from(b.id.0).unwrap())
+            .collect();
+        assert_eq!(ids.values(), expected.as_slice());
+    }
+
+    #[test]
+    fn empty_table_exports_zero_rows() {
+        // case9 has no shunts: a length-0 table must cross the C Data Interface
+        // and import back without faulting (a common producer mishandling).
+        let n = net("case9.m");
+        assert_eq!(n.shunts.len(), 0);
+        assert_eq!(round_trip(&n, PIO_ARROW_TABLE_SHUNT).len(), 0);
     }
 
     #[test]

@@ -14,21 +14,26 @@
 //! values, and branch flows `pf/qf/pt/qt` are computed from those voltages and
 //! the branch admittances ([`branch_flows`]). For a solved MATPOWER case the
 //! stored voltages are the converged operating point, so the flows match what a
-//! solver would report to float tolerance; for an unsolved/flat-start case they
+//! solver would report to float tolerance; for an unsolved/flat start case they
 //! are the flows at the stored voltages, not a re-solved dispatch.
 //!
 //! # Units
 //!
-//! - `Pd, Qd, Pg, Qg, p_mw, q_mvar, pf, qf, pt, qt` in MW/MVAr (per-unit ×
-//!   `base_mva`).
+//! - `Pd, Qd, Pg, Qg, p_mw, q_mvar` are MW/MVAr, passed through from the case
+//!   (loads and generator setpoints are already MW/MVAr). The branch flows
+//!   `pf, qf, pt, qt` are MW/MVAr too, computed in per-unit and scaled by
+//!   `base_mva`.
 //! - `Vm` per-unit, `Va` degrees; `r, x, b` and the `Y**` admittances per-unit.
 //! - `GS, BS` are the MATPOWER shunt values (MW/MVAr at V = 1) divided by
 //!   `base_mva`, matching datakit's normalization.
 //! - Costs are the raw MATPOWER coefficients: `cp2 = c2`, `cp1 = c1`,
-//!   `cp0 = c0`. Piecewise or missing cost rows emit zeros (graphkit ignores the
-//!   cost columns) and are counted in the manifest.
+//!   `cp0 = c0`. A cost row gridfm can't represent (piecewise, missing,
+//!   malformed, or cubic and higher) emits zeros — graphkit ignores the cost
+//!   columns — and is counted in the manifest. The `_eur` suffixes are
+//!   datakit's column names, not a unit powerio converts to.
 //! - `bus`, `from_bus`, `to_bus` are dense `[0, n)` indices; `idx` is the
-//!   0-based generator/branch row.
+//!   0-based generator/branch row. An out-of-service branch keeps its physical
+//!   `Y**` admittances but carries zero flows (its `br_status` is 0).
 
 // Bus/branch indices and Y_bus nnz counts cast to `i64` for the Arrow columns;
 // they are bounded far below `i64::MAX`, so the wrap clippy warns about can't
@@ -93,8 +98,10 @@ impl GridfmOptions {
     }
 }
 
-/// The gridfm-datakit tables as Arrow record batches. Both the Parquet writer
-/// and (later) the Arrow C Data Interface export build from these.
+/// The gridfm-datakit tables as Arrow record batches. The Parquet writer builds
+/// from these; a deferred gridfm-schema Arrow C Data Interface export (issue #38)
+/// would reuse them. (The raw-network Arrow export that ships in powerio-capi is
+/// a different, lighter schema.)
 #[derive(Debug, Clone)]
 #[non_exhaustive]
 pub struct GridfmTables {
@@ -104,11 +111,17 @@ pub struct GridfmTables {
     pub y_bus: RecordBatch,
 }
 
-/// What [`write_gridfm_dataset`] wrote.
+/// What [`write_gridfm_dataset`] wrote, plus the counts of columns it had to zero
+/// (see the manifest) so a caller can surface them.
 #[derive(Debug, Clone)]
 pub struct GridfmOutputs {
     pub dir: PathBuf,
     pub files: Vec<PathBuf>,
+    /// Branches with `r² + x² = 0`, whose admittance/flow columns were zeroed.
+    pub dropped_zero_impedance: usize,
+    /// Generators whose cost row gridfm couldn't represent, whose `cp*` columns
+    /// were zeroed.
+    pub degenerate_cost_gens: usize,
 }
 
 #[derive(Serialize)]
@@ -124,8 +137,8 @@ struct GridfmMeta {
     reference_bus: usize,
     /// Branches with `r² + x² = 0`: their admittance/flow columns are zeroed.
     dropped_zero_impedance: usize,
-    /// Generators whose cost row gridfm can't represent (piecewise or missing):
-    /// their `cp*` columns are zeroed.
+    /// Generators whose cost row gridfm can't represent (piecewise, missing,
+    /// malformed, or cubic and higher): their `cp*` columns are zeroed.
     degenerate_cost_gens: usize,
     files: Vec<String>,
     powerio_version: String,
@@ -135,8 +148,9 @@ struct GridfmMeta {
 ///
 /// # Errors
 /// [`Error::ReferenceBusCount`] unless the case has exactly one reference bus
-/// (graphkit needs a slack), and [`Error::NonFiniteSusceptance`] for a branch
-/// with NaN/Inf impedance.
+/// (graphkit needs a slack), [`Error::NonFiniteSusceptance`] for a branch with
+/// NaN/Inf impedance, and [`Error::UnknownBus`] if a generator or branch
+/// references a bus the network doesn't define.
 pub fn gridfm_record_batches(net: &Network, opts: &GridfmOptions) -> Result<GridfmTables> {
     let view = IndexedNetwork::new(net);
     let ref_bus = view.reference_bus_index()?;
@@ -185,6 +199,17 @@ pub fn write_gridfm_dataset(
         put_parquet(&dir, "y_bus_data.parquet", &tables.y_bus, &mut files)?;
     }
 
+    let dropped_zero_impedance = net
+        .branches
+        .iter()
+        .filter(|br| br.r * br.r + br.x * br.x == 0.0)
+        .count();
+    let degenerate_cost_gens = net
+        .generators
+        .iter()
+        .filter(|g| !cost_representable(g.cost.as_ref()))
+        .count();
+
     let meta = GridfmMeta {
         case_name: net.name.clone(),
         base_mva: net.base_mva,
@@ -195,16 +220,8 @@ pub fn write_gridfm_dataset(
         n_branches_in_service: net.branches.iter().filter(|b| b.in_service).count(),
         n_gens: net.generators.len(),
         reference_bus: ref_bus,
-        dropped_zero_impedance: net
-            .branches
-            .iter()
-            .filter(|br| br.r * br.r + br.x * br.x == 0.0)
-            .count(),
-        degenerate_cost_gens: net
-            .generators
-            .iter()
-            .filter(|g| !cost_representable(g.cost.as_ref()))
-            .count(),
+        dropped_zero_impedance,
+        degenerate_cost_gens,
         files: files
             .iter()
             .filter_map(|p| p.file_name().and_then(|s| s.to_str()).map(str::to_string))
@@ -216,7 +233,12 @@ pub fn write_gridfm_dataset(
     std::fs::write(&meta_path, json)?;
     files.push(meta_path);
 
-    Ok(GridfmOutputs { dir, files })
+    Ok(GridfmOutputs {
+        dir,
+        files,
+        dropped_zero_impedance,
+        degenerate_cost_gens,
+    })
 }
 
 // --- table builders --------------------------------------------------------
@@ -531,6 +553,7 @@ fn one_hot(buses: &[Bus], kind: BusType) -> ArrayRef {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::network::{BusId, Extras};
     use arrow::array::{Float64Array, Int64Array};
     use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
 
@@ -742,5 +765,179 @@ mod tests {
             assert_eq!(slack.value(i) == 1, bus.value(i) as usize == ref_bus);
         }
         assert!(slack.values().contains(&1), "no slack generator");
+    }
+
+    #[test]
+    fn branch_flows_close_the_power_balance_on_a_solved_case() {
+        // case14 ships a converged operating point, so the active flows must obey
+        // KCL: total branch loss = generation - demand - shunt draw. This is the
+        // value-level guard on branch_flows (a missing ×base, a sign flip, or a
+        // wrong conj would break it). Every branch's real loss is also ≥ 0.
+        let net = case14();
+        let view = IndexedNetwork::new(&net);
+        let tables = gridfm_record_batches(&net, &GridfmOptions::default()).unwrap();
+        let br = &tables.branch;
+        let (pf, pt, status) = (
+            col_f64(br, "pf"),
+            col_f64(br, "pt"),
+            col_i64(br, "br_status"),
+        );
+
+        let mut loss = 0.0;
+        for i in 0..br.num_rows() {
+            if status.value(i) == 1 {
+                let l = pf.value(i) + pt.value(i);
+                assert!(l >= -1e-6, "branch {i} has negative real loss {l}");
+                loss += l;
+            }
+        }
+        assert!(loss > 1.0, "case14 has ~13 MW of real loss, got {loss}");
+
+        let gen_p: f64 = net
+            .generators
+            .iter()
+            .filter(|g| g.in_service)
+            .map(|g| g.pg)
+            .sum();
+        let load_p: f64 = net.loads.iter().map(|l| l.p).sum();
+        // Real shunt draw at the stored voltages: gs() is MW at V = 1.
+        let shunt_p: f64 = (0..view.n())
+            .map(|i| view.gs()[i] * net.buses[i].vm.powi(2))
+            .sum();
+        assert!(
+            (loss - (gen_p - load_p - shunt_p)).abs() < 0.5,
+            "power balance off: loss {loss} vs gen-load-shunt {}",
+            gen_p - load_p - shunt_p
+        );
+    }
+
+    #[test]
+    fn zero_impedance_branch_zeros_columns_and_is_counted() {
+        // No vendored fixture has r = x = 0, so build one: branch 0 is a zero-
+        // impedance tie, branch 1 is normal. The tie's admittance and flow columns
+        // must be zero (never NaN), and the manifest must count it.
+        let net = Network::in_memory(
+            "zeroimp",
+            100.0,
+            vec![
+                bus(1, BusType::Ref),
+                bus(2, BusType::Pq),
+                bus(3, BusType::Pq),
+            ],
+            vec![branch(1, 2, 0.0, 0.0), branch(2, 3, 0.01, 0.1)],
+        );
+        let tables = gridfm_record_batches(&net, &GridfmOptions::default()).unwrap();
+        let br = &tables.branch;
+        for col in [
+            "Yff_r", "Yff_i", "Yft_r", "Yft_i", "Ytf_r", "Ytf_i", "Ytt_r", "Ytt_i", "pf", "qf",
+            "pt", "qt",
+        ] {
+            let v = col_f64(br, col).value(0);
+            assert!(
+                v == 0.0,
+                "{col} should be 0 for the zero-impedance branch, got {v}"
+            );
+        }
+
+        let dir = tempfile::tempdir().unwrap();
+        let out = write_gridfm_dataset(&net, dir.path(), &GridfmOptions::default()).unwrap();
+        assert_eq!(out.dropped_zero_impedance, 1);
+        let meta: serde_json::Value = serde_json::from_str(
+            &std::fs::read_to_string(out.dir.join("gridfm_meta.json")).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(meta["dropped_zero_impedance"], 1);
+    }
+
+    #[test]
+    fn gridfm_cost_maps_every_arm_to_raw_coefficients() {
+        // Polynomial coeffs are highest-order first: [c2, c1, c0] -> (cp0, cp1, cp2).
+        assert_eq!(
+            gridfm_cost(Some(&gencost(2, 3, vec![2.0, 3.0, 4.0]))),
+            (4.0, 3.0, 2.0)
+        );
+        assert_eq!(
+            gridfm_cost(Some(&gencost(2, 2, vec![3.0, 4.0]))),
+            (4.0, 3.0, 0.0)
+        );
+        assert_eq!(
+            gridfm_cost(Some(&gencost(2, 1, vec![4.0]))),
+            (4.0, 0.0, 0.0)
+        );
+        // Unrepresentable rows collapse to zeros and report as not representable.
+        let piecewise = gencost(1, 2, vec![0.0, 0.0, 1.0, 1.0]);
+        let malformed = gencost(2, 3, vec![1.0]); // fewer coeffs than ncost claims
+        assert_eq!(gridfm_cost(Some(&piecewise)), (0.0, 0.0, 0.0));
+        assert_eq!(gridfm_cost(Some(&malformed)), (0.0, 0.0, 0.0));
+        assert_eq!(gridfm_cost(None), (0.0, 0.0, 0.0));
+        assert!(!cost_representable(Some(&piecewise)));
+        assert!(!cost_representable(Some(&malformed)));
+        assert!(!cost_representable(None));
+        assert!(cost_representable(Some(&gencost(
+            2,
+            3,
+            vec![1.0, 2.0, 3.0]
+        ))));
+    }
+
+    #[test]
+    fn missing_reference_bus_errors() {
+        // gridfm_record_batches' documented precondition: exactly one ref bus.
+        let net = Network::in_memory(
+            "noref",
+            100.0,
+            vec![bus(1, BusType::Pq), bus(2, BusType::Pq)],
+            vec![branch(1, 2, 0.01, 0.1)],
+        );
+        let err = gridfm_record_batches(&net, &GridfmOptions::default()).unwrap_err();
+        assert!(
+            matches!(err, Error::ReferenceBusCount { .. }),
+            "got {err:?}"
+        );
+    }
+
+    fn bus(id: usize, kind: BusType) -> Bus {
+        Bus {
+            id: BusId(id),
+            kind,
+            vm: 1.0,
+            va: 0.0,
+            base_kv: 1.0,
+            vmax: 1.1,
+            vmin: 0.9,
+            area: 1,
+            zone: 1,
+            name: None,
+            extras: Extras::new(),
+        }
+    }
+
+    fn branch(from: usize, to: usize, r: f64, x: f64) -> Branch {
+        Branch {
+            from: BusId(from),
+            to: BusId(to),
+            r,
+            x,
+            b: 0.0,
+            rate_a: 0.0,
+            rate_b: 0.0,
+            rate_c: 0.0,
+            tap: 0.0,
+            shift: 0.0,
+            in_service: true,
+            angmin: -360.0,
+            angmax: 360.0,
+            extras: Extras::new(),
+        }
+    }
+
+    fn gencost(model: u8, ncost: usize, coeffs: Vec<f64>) -> GenCost {
+        GenCost {
+            model,
+            startup: 0.0,
+            shutdown: 0.0,
+            ncost,
+            coeffs,
+        }
     }
 }

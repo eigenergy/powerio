@@ -495,6 +495,13 @@ fn run_gridfm(
     };
     let outputs = write_gridfm_dataset(&net, output, &opts)
         .with_context(|| format!("export gridfm dataset for {}", input.display()))?;
+    if outputs.dropped_zero_impedance > 0 || outputs.degenerate_cost_gens > 0 {
+        tracing::warn!(
+            zeroed_branches = outputs.dropped_zero_impedance,
+            degenerate_cost_gens = outputs.degenerate_cost_gens,
+            "gridfm: some columns were zeroed; see gridfm_meta.json"
+        );
+    }
     tracing::info!(
         case = %net.name,
         dir = %outputs.dir.display(),

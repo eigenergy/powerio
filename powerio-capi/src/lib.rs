@@ -783,4 +783,26 @@ mod tests {
             .expect("buffer must be NUL-terminated");
         assert!(nul <= 15);
     }
+
+    #[cfg(feature = "arrow")]
+    #[test]
+    fn export_arrow_null_out_params_return_error() {
+        // A NULL out_array/out_schema must be reported (-1), not dereferenced.
+        let c = case9();
+        let mut err = [0 as c_char; 256];
+        let rc = unsafe {
+            pio_export_arrow(
+                c,
+                PIO_ARROW_TABLE_BUS,
+                std::ptr::null_mut(),
+                std::ptr::null_mut(),
+                err.as_mut_ptr(),
+                err.len(),
+            )
+        };
+        assert_eq!(rc, -1);
+        let msg = unsafe { CStr::from_ptr(err.as_ptr()) }.to_str().unwrap();
+        assert!(!msg.is_empty(), "expected an error message");
+        unsafe { pio_case_free(c) };
+    }
 }
