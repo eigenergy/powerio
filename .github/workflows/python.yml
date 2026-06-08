@@ -59,6 +59,37 @@ jobs:
           assert "numpy" not in sys.modules and "scipy" not in sys.modules
           PY
 
+  # The gridfm Parquet write surface compiles in only with the Rust `gridfm`
+  # feature, which the default `pip install .` (features = ["extension-module"])
+  # omits — so the `test` job above skips the gridfm write tests (they guard the
+  # absent path there). Build the feature wheel explicitly here and run the gridfm
+  # tests for real. Same on:[pull_request, push→main] triggers as every other
+  # job, so the gridfm path is covered both before merge and on main.
+  test-gridfm:
+    name: test (gridfm feature)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Install maturin
+        run: pip install maturin
+      # Build a wheel with the gridfm feature, then install it (not `develop`):
+      # a regular site-packages install wins the `import powerio` race against the
+      # repo's `powerio/` crate directory, where an editable install would not.
+      - name: Build the gridfm-enabled wheel
+        run: maturin build --features gridfm --out dist
+      - name: Install wheel + test deps
+        run: |
+          wheel=$(ls dist/*.whl)
+          pip install "${wheel}[all,gridfm]" pytest
+      # `_has_gridfm` is now true, so the @gridfm_only tests run instead of skipping.
+      - name: Run gridfm tests
+        run: pytest python/tests -q -k gridfm
+
   wheels:
     name: wheels (${{ matrix.platform.target }} on ${{ matrix.platform.runner }})
     if: github.event_name == 'release' || github.event_name == 'workflow_dispatch'
