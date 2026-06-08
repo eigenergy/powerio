@@ -1,0 +1,53 @@
+name: Docs
+
+# Build the workspace rustdoc and publish it to GitHub Pages. This renders all
+# four library crates, including powerio-capi and powerio-py (publish = false),
+# whose //! docs docs.rs would never host. docs.rs takes over for powerio and
+# powerio-matrix once those are published to crates.io.
+on:
+  push:
+    branches: [ "main" ]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+# One Pages deploy at a time; a newer push supersedes an in-flight build.
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+    - uses: dtolnay/rust-toolchain@stable
+    - uses: Swatinem/rust-cache@v2
+    # -D warnings turns a broken intra-doc link into a failed build, so the docs
+    # can't rot silently. --all-features renders the gridfm/arrow/kkt surface.
+    - name: Build docs
+      env:
+        RUSTDOCFLAGS: "-D warnings"
+      run: cargo doc --no-deps --all-features -p powerio -p powerio-matrix -p powerio-capi -p powerio-py
+    # cargo doc leaves target/doc with no top-level index; redirect to the main crate.
+    - name: Landing redirect
+      run: echo '<meta http-equiv="refresh" content="0; url=powerio/index.html">' > target/doc/index.html
+    - uses: actions/upload-pages-artifact@v3
+      with:
+        path: target/doc
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+    - id: deployment
+      uses: actions/deploy-pages@v4

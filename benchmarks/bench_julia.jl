@@ -37,6 +37,30 @@ const CASES = [
 
 ms(b) = round(median(b).time / 1e6, digits = 2)
 
+# `--json`: also write benchmarks/results/speed_julia.json for render_tables.py.
+# Case names are plain ASCII and values are numbers or null, so a hand-rolled
+# writer keeps the bench env free of a JSON dependency.
+const JSON_OUT = "--json" in ARGS
+jrows = NamedTuple[]
+
+function write_speed_julia(path, rows)
+    mkpath(dirname(path))
+    open(path, "w") do io
+        println(io, "{")
+        println(io, "  \"rows\": [")
+        for (i, r) in enumerate(rows)
+            pm = r.powermodels_ms === nothing ? "null" : string(r.powermodels_ms)
+            tail = i < length(rows) ? "," : ""
+            println(io, "    {\"case\": \"$(r.case)\", \"buses\": $(r.buses), \"branches\": $(r.branches), " *
+                        "\"powerio_ms\": $(r.powerio_ms), \"exapowerio_ms\": $(r.exapowerio_ms), " *
+                        "\"powermodels_ms\": $pm}$tail")
+        end
+        println(io, "  ]")
+        println(io, "}")
+    end
+    println("wrote $path ($(length(rows)) rows)")
+end
+
 println(rpad("case", 20), rpad("powerio", 13), rpad("ExaPowerIO", 13),
         rpad("PowerModels", 13), "buses (powerio / ExaPowerIO)")
 for (name, f, run_pm) in CASES
@@ -46,7 +70,7 @@ for (name, f, run_pm) in CASES
     # free in an untimed teardown — matching ExaPowerIO/PowerModels, whose returned
     # data is GC'd outside the @benchmark sample rather than freed inside it. The
     # handle reaches teardown through a Ref, so no sample leaks.
-    h = pio_parse(f); nbuses = pio_n_buses(h); pio_free(h)
+    h = pio_parse(f); nbuses = pio_n_buses(h); nbranch = pio_n_branches(h); pio_free(h)
     samples = nbuses > 30_000 ? 5 : 30
     href = Ref{Ptr{Cvoid}}(C_NULL)
     bc = @benchmark $href[] = pio_parse($f) teardown = (pio_free($href[])) samples = samples evals = 1
@@ -56,13 +80,19 @@ for (name, f, run_pm) in CASES
     be = @benchmark ExaPowerIO.parse_matpower($f) samples = samples evals = 1
     e = ms(be)
 
+    pm_ms = nothing
     p = "skip"
     if run_pm
         bp = @benchmark PowerModels.parse_file($f) samples = 5 evals = 1
-        p = string(round(median(bp).time / 1e6, digits = 1)) * " ms"
+        pm_ms = round(median(bp).time / 1e6, digits = 1)
+        p = "$(pm_ms) ms"
     end
 
     count = nbuses == length(ed.bus) ? string(nbuses) : "$nbuses / $(length(ed.bus))"
     println(rpad(name, 20), rpad("$(c) ms", 13), rpad("$(e) ms", 13),
             rpad(p, 13), count)
+    push!(jrows, (case = name, buses = nbuses, branches = nbranch,
+                  powerio_ms = c, exapowerio_ms = e, powermodels_ms = pm_ms))
 end
+
+JSON_OUT && write_speed_julia(joinpath(@__DIR__, "results", "speed_julia.json"), jrows)

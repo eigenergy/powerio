@@ -89,7 +89,7 @@ pub fn target_format_from_name(name: &str) -> Option<TargetFormat> {
 /// Read the case at `path` into a [`Network`], choosing the reader from `from`
 /// (a format name, see [`target_format_from_name`]) or, when `None`, from the
 /// file extension (`m`/`json`/`raw`/`aux`). A `.json` file is sniffed for the
-/// EGRET vs PowerModels shape (see [`sniff_json`]); pass `from` to force one.
+/// EGRET vs PowerModels shape; pass `from` to force one.
 /// The one reader the CLI and the Python/C bindings share, so adding a source
 /// format is one edit here, not one per binding.
 ///

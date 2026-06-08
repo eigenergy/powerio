@@ -1,0 +1,42 @@
+name: Julia binding
+
+# Contract test: build this commit's C ABI and run PowerIO.jl's suite against it,
+# so a change to the pio_* surface or the Network JSON schema that breaks the Julia
+# binding fails here, in the repo that caused it. Path-filtered to the code that
+# can affect the ABI, so doc-only PRs skip it.
+on:
+  push:
+    branches: [ "main" ]
+    paths: [ "powerio/**", "powerio-capi/**", ".github/workflows/julia-binding.yml" ]
+  pull_request:
+    branches: [ "main" ]
+    paths: [ "powerio/**", "powerio-capi/**", ".github/workflows/julia-binding.yml" ]
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  contract:
+    name: PowerIO.jl against this capi
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+    - uses: dtolnay/rust-toolchain@stable
+    - uses: Swatinem/rust-cache@v2
+    - name: Build powerio-capi
+      run: cargo build -p powerio-capi --release
+    - name: Check out PowerIO.jl
+      uses: actions/checkout@v4
+      with:
+        repository: eigenergy/PowerIO.jl
+        path: PowerIO.jl
+    - uses: julia-actions/setup-julia@v2
+      with:
+        version: '1'
+    - uses: julia-actions/cache@v2
+    # PowerIO.jl's ccall tests auto-skip when the cdylib is absent; POWERIO_CAPI
+    # points them at the library just built, so they run for real.
+    - name: Test PowerIO.jl against the built library
+      env:
+        POWERIO_CAPI: ${{ github.workspace }}/target/release/libpowerio_capi.so
+      run: julia --project=PowerIO.jl -e 'using Pkg; Pkg.instantiate(); Pkg.test()'

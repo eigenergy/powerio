@@ -20,17 +20,15 @@
 //!
 //! # Conventions
 //!
-//! - **Positive Laplacian.** Off-diagonal negative, diagonal positive, with
-//!   `diag = sum |off-diag|` for B' — the M-matrix form SDDM/Cholesky solvers
-//!   expect.
-//! - **Bus indexing.** MATPOWER 1-based bus ids are preserved on the model;
-//!   [`IndexedNetwork`] maps them to a dense `[0, n)` for the builders.
-//! - **Taps and shifts.** `tap == 0` means `tap = 1`. B' ignores taps and
-//!   shifts; B'' keeps taps and zeros only shifts; Y_bus keeps both.
-//! - **`BR_B` is already per unit** — never divide by `base_mva` again.
-//! - **DC-OPF is bus-indexed** (`p_g ∈ ℝⁿ`); the default susceptance is
-//!   `b = 1/x` (paper-pure), and [`DcConvention::Matpower`] uses `1/(x·τ)` plus
-//!   a phase-shift injection.
+//! B' and the Laplacians use the positive (M-matrix) form: off-diagonal `< 0`,
+//! diagonal `> 0`, `diag = Σ|off-diag|`. Bus ids are MATPOWER 1-based on the
+//! model; [`IndexedNetwork`] maps them to a dense `[0, n)`. `tap == 0` means
+//! `tap = 1`; B' ignores taps and shifts, B'' keeps taps and zeros shifts,
+//! Y_bus keeps both. `BR_B` is already per unit. DC-OPF is bus-indexed
+//! (`p_g ∈ ℝⁿ`), default susceptance `b = 1/x`, with [`DcConvention::Matpower`]
+//! the `1/(x·τ)` plus phase-shift variant. The full reference across every
+//! matrix is in
+//! [docs/matrices.md](https://github.com/eigenergy/powerio/blob/main/docs/matrices.md).
 
 // Re-export the powerio data layer so this crate is a one-stop import, and so
 // the matrix modules' `crate::Error` / `crate::network` / `crate::format` paths

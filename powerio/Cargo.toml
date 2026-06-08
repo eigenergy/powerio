@@ -9,6 +9,12 @@ repository = "https://github.com/eigenergy/powerio"
 keywords = ["matpower", "parser", "lossless"]
 categories = ["science", "parsing"]
 
+# powerio has no features, so this just pins the docs.rs build to the same flags
+# the Pages build uses; the block is here so a future `cargo publish` renders
+# identically on docs.rs.
+[package.metadata.docs.rs]
+all-features = true
+
 [dependencies]
 thiserror = "2"
 num-complex = "0.4"

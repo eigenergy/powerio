@@ -1,12 +1,12 @@
 # PowerIO
 
-Lossless IO and format conversion for power system case files. Parse MATPOWER
-`.m`, PSS/E `.raw`, PowerWorld `.aux`, PowerModels JSON, and EGRET JSON into one
-format neutral `Network`; write any of them back (same-format round trips are byte
-for byte); convert between them with explicit fidelity reporting; and emit the
-sparse matrices and graph views a solver needs. The same Rust core is callable
-from Rust, Python, C/C++, and Julia. The core crate has six dependencies and no
-matrix or solver stack.
+Lossless IO and format conversion for power system case files. Reads MATPOWER
+`.m`, PSS/E `.raw`, PowerWorld `.aux`, PowerModels JSON, and EGRET JSON into a
+format neutral `Network` and writes any of them back. Same format round trips are
+byte for byte. Cross format conversion reports what the target drops. Emits the
+sparse matrices and graph views a solver needs. Callable from Rust, Python, C,
+C++, and Julia. The `powerio` crate has six dependencies and no matrix or solver
+stack.
 
 ## Workspace
 
@@ -18,22 +18,21 @@ powerio-py       PyO3 extension behind the one `powerio` Python wheel.
 powerio-capi     C ABI (`pio_*`), the substrate for C, C++, and Julia.
 ```
 
-Full API docs are on [docs.rs/powerio](https://docs.rs/powerio) and
-[docs.rs/powerio-matrix](https://docs.rs/powerio-matrix).
+API docs: <https://eigenergy.github.io/powerio/> (moves to docs.rs on a crates.io release).
 
 ## Install
 
 ```
 cargo add powerio            # the parser + converters
 cargo install powerio-cli    # the `powerio` command + TUI
-pip install powerio          # zero-dependency parse + convert, Python 3.9+
+pip install powerio          # parse + convert, no extra deps, Python 3.9+
 pip install 'powerio[all]'   # + scipy/numpy/networkx for the matrices and graph view
 ```
 
 ## Formats
 
-Every reader produces a `Network` and every writer consumes one, so a new format
-is one module at the hub, not an N×M matrix of pairwise converters.
+Every reader produces a `Network` and every writer consumes one; a new format is
+one module at the hub, not a converter for each pair.
 
 **Readers and writers**: MATPOWER `.m`, PowerModels JSON, PSS/E `.raw` (v33),
 PowerWorld `.aux`, and EGRET JSON.
@@ -50,25 +49,23 @@ Legend: 🟩 byte-exact · 🟦 full · 🟨 partial (drops are logged in `Conve
 
 **🟩 byte-exact**: writing back to the source format reproduces the file verbatim,
 comments and exact tokens like `7e-05` included. **🟦 full**: every field the source
-carries survives. **🟨 partial**: the target cannot represent some fields (PSS/E and
-PowerWorld have no cost curves; EGRET has no HVDC or storage), and each dropped
-field is reported in `Conversion::warnings`, not dropped silently. Two target
-caveats fold into this: canonical MATPOWER output omits dcline and storage, and the
-PowerModels writer maps them best-effort.
+carries survives. **🟨 partial**: the target can't represent some fields (PSS/E and
+PowerWorld have no cost curves; EGRET has no HVDC or storage); each dropped field is
+reported in `Conversion::warnings`, not dropped silently. Canonical MATPOWER output
+omits dcline and storage; the PowerModels writer maps both.
 
-Every reader and writer is validated against an independent tool, PowerModels.jl,
-the EGRET package, ExaPowerIO.jl, and pandapower, over the full conversion matrix.
-See [benchmarks/RESULTS.md](benchmarks/RESULTS.md) and
-[docs/format-fidelity.md](docs/format-fidelity.md).
+Validated against PowerModels.jl, the EGRET package, ExaPowerIO.jl, and pandapower,
+over the full conversion matrix. See [benchmarks/RESULTS.md](benchmarks/RESULTS.md)
+and [docs/format-fidelity.md](docs/format-fidelity.md).
 
 ## Matrices
 
-`powerio-matrix` builds, from the dense-indexed `IndexedNetwork` view: signed
-incidence `A`, the weighted Laplacian `L = A diag(b) Aᵀ` and its slack-grounded
-form, B'/B''/`Re(Y_bus)`/`-Im(Y_bus)`, the LACPF block, PTDF/LODF, the DC-OPF
-instance bundle, adjacency, and a petgraph view, as Matrix Market or in memory.
-The sign, tap, per unit, and DC-OPF conventions are documented in the
-[crate docs](https://docs.rs/powerio-matrix).
+From the dense-indexed `IndexedNetwork` view, `powerio-matrix` builds signed
+incidence `A`, the weighted Laplacian `L = A diag(b) Aᵀ` and the same matrix
+grounded at the slack, B'/B''/`Re(Y_bus)`/`-Im(Y_bus)`, the LACPF block, PTDF/LODF,
+the DC-OPF instance bundle, adjacency, and a petgraph view, as Matrix Market or in
+memory. The sign, tap, per unit, and DC conventions are in
+[docs/matrices.md](docs/matrices.md).
 
 ## Use
 
@@ -100,40 +97,38 @@ powerio                                              # TUI
 
 `powerio gridfm <case> -o <dir>` (the `gridfm` cargo feature) writes the
 gridfm-datakit Parquet schema — `bus_data`, `gen_data`, `branch_data`,
-`y_bus_data` under `<dir>/<case>/raw/` — so [gridfm-graphkit](https://github.com/gridfm)'s
-`HeteroGridDatasetDisk` trains on powerio output directly. A parsed case is one
-snapshot (`scenario 0`): voltages and dispatch are the case's stored values, and
-branch flows are computed from them.
+`y_bus_data` under `<dir>/<case>/raw/`, which [gridfm-graphkit](https://github.com/gridfm)'s
+`HeteroGridDatasetDisk` loads directly. powerio has no solver, so a case is one
+snapshot (`scenario 0`): voltages and dispatch are the stored values, branch flows
+computed from them.
 
 Pass several inputs — `powerio gridfm <case-0> <case-1> … -o <dir>` — to
 row-stack a **scenario batch** into one dataset, keyed by the `scenario` column
 (the k-th input is stamped `--scenario` + k). The inputs share a base element set
-— the same bus, branch, and generator counts in the same bus order — so the
-dense bus index lines up across scenarios; within that, load, dispatch,
-voltages, branch status, bus type, and costs may vary, the same way datakit's topology
-variants toggle line status on a fixed element set. powerio stacks the snapshots,
-it doesn't generate them. From Python (the `gridfm` extra):
-`case.write_gridfm(dir)` and `powerio.write_gridfm_batch([case0, case1], dir)`
-(issue #14).
+— the same bus, branch, and generator counts in the same bus order — so the dense
+bus index lines up across scenarios; within that, load, dispatch, voltages, branch
+status, bus type, and costs may vary, the way datakit's topology variants toggle
+line status on a fixed element set. powerio stacks the snapshots, it doesn't
+generate them. From Python (the `gridfm` extra): `case.write_gridfm(dir)` and
+`powerio.write_gridfm_batch([case0, case1], dir)`.
 
 ## C ABI
 
-`powerio-capi` exposes the parser over a C ABI (`pio_*`, header
-`powerio-capi/include/powerio.h`) for C, C++, and Julia: parse, query, convert,
-the byte-exact echo, the JSON transport (`pio_to_json`/`pio_from_json`), and the
-numeric table extractors. Built with `--features arrow`, it also offers
-`pio_export_arrow` — a zero-copy export of the raw network tables
-(bus/branch/gen/load/shunt) over the [Arrow C Data Interface](https://arrow.apache.org/docs/format/CDataInterface.html),
-so pyarrow / Arrow.jl / Arrow C++ / polars / DuckDB pull a whole table in process
-with no copy and no temp file (the typed, in-memory sibling of `pio_to_json`).
+`powerio-capi` is the C ABI (`pio_*`, header `powerio-capi/include/powerio.h`) for
+C, C++, and Julia: parse, query, convert, the byte-exact echo, the JSON transport
+(`pio_to_json`/`pio_from_json`), and the numeric table extractors. `--features
+arrow` adds `pio_export_arrow`, which exports the raw network tables (bus, branch,
+gen, load, shunt) over the [Arrow C Data Interface](https://arrow.apache.org/docs/format/CDataInterface.html).
+pyarrow, Arrow.jl, Arrow C++, polars, and DuckDB read a table in process without a
+copy or a temp file. It is the in memory form of `pio_to_json`.
 
 ## Benchmark
 
-Median parse time, one Apple M-series laptop, release build, all timed in one
-process under the same harness, powerio through its C ABI, so every parser reads
-from disk alike. Full table and method in
-[benchmarks/RESULTS.md](benchmarks/RESULTS.md).
+Median parse time, one Apple M-series laptop, release build. Every parser runs in
+one process under the same harness, powerio through its C ABI, so all read from
+disk alike. Method and full table: [benchmarks/RESULTS.md](benchmarks/RESULTS.md).
 
+<!-- BENCH:speed-main START -->
 | case | buses / branches | powerio | ExaPowerIO.jl | PowerModels.jl |
 | --- | --- | --- | --- | --- |
 | case2869pegase | 2869 / 4582 | 1.73 ms | 2.86 ms | 122.2 ms |
@@ -141,30 +136,26 @@ from disk alike. Full table and method in
 | case9241pegase | 9241 / 16049 | 5.81 ms | 9.15 ms | 553.2 ms |
 | case13659pegase | 13659 / 20467 | 8.6 ms | 13.76 ms | 822.2 ms |
 | case193k | 192768 / 228574 | 161.9 ms | 174.98 ms | n/a |
+<!-- BENCH:speed-main END -->
 
-powerio is faster than ExaPowerIO on every case measured, 62–96× PowerModels'
-parser, and ~14× pandapower's `.m` reader. It is also the only one of the three
-that round trips byte for byte (verified at 54 MB / 192768 buses) and is callable
-from Rust, the CLI, Python, and C/Julia with no runtime. Parse, conversions, and
-Y_bus are validated value for value against all three (`benchmarks/run_validation.sh`).
+Across these cases powerio parses faster than ExaPowerIO, 62–96× PowerModels'
+parser, and ~14× pandapower's `.m` reader. It round trips byte for byte (verified at
+54 MB, 192768 buses); the other two don't. Parse, conversions, and Y_bus are checked
+value for value against all three (`benchmarks/run_validation.sh`).
 
 ## Roadmap
 
-Tracked in the issues, all over the `Network` hub:
+Tracked in the issues, all on the `Network` hub:
 
-- Broader format coverage: PSS/E `.rawx` (v35), IIDM `.xiidm`, UCTE `.uct`, GE EPC `.epc`.
+- More formats: PSS/E `.rawx` (v35), IIDM `.xiidm`, UCTE `.uct`, GE EPC `.epc`.
 - PSS/E fidelity: 3-winding transformers and non-unit `CZ`/`CW` impedance bases.
-- A RAVENS-JSON export sink (positioning PowerIO as an ingest backend for MG-RAVENS).
-- A registered [PowerIO.jl](https://github.com/eigenergy/PowerIO.jl) over the C ABI, with
-  native bridges to PowerModels.jl, ExaModelsPower.jl, and PowerDiff.jl (scaffolded there now).
+- A RAVENS-JSON export sink, so powerio feeds MG-RAVENS.
+- A registered [PowerIO.jl](https://github.com/eigenergy/PowerIO.jl) over the C ABI,
+  with bridges to PowerModels.jl, ExaModelsPower.jl, and PowerDiff.jl.
 - LinDist3Flow matrices.
 
-The scenario-batch path that stacks many perturbed scenarios into the gridfm
-Parquet tables (issue #14) has shipped — `write_gridfm_batch` in Rust, multiple
-inputs to `powerio gridfm`, and `powerio.write_gridfm_batch` in Python.
-
-CIM stays out of scope; it's a heavier problem owned by the CIM hubs (CIMHub,
-MG-RAVENS), which PowerIO can feed as an ingest layer.
+CIM stays out of scope: a heavier problem owned by the CIM hubs (CIMHub,
+MG-RAVENS), which powerio can feed.
 
 ## Tests
 

@@ -9,6 +9,11 @@ repository = "https://github.com/eigenergy/powerio"
 keywords = ["matpower", "sparse", "ptdf", "dc-opf"]
 categories = ["science", "mathematics"]
 
+# Render the feature-gated surface (gridfm Parquet export, the kkt operators) on
+# docs.rs when this crate is published.
+[package.metadata.docs.rs]
+all-features = true
+
 [features]
 # Experimental DC-OPF interior point operators (optional).
 kkt = []

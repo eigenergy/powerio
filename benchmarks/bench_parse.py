@@ -18,6 +18,7 @@ Run it with the venv that has the extensions built (`maturin develop --release`)
 Install the comparison baselines with `pip install 'powerio[bench]'`.
 """
 
+import json
 import logging
 import statistics
 import sys
@@ -115,11 +116,28 @@ def bench_case(path: Path):
         print(f"{name:<{width}}  {best:>10.1f}  {median:>12.1f}")
     print()
 
+    # The two rows render_tables.py needs for the RESULTS pandapower table; round to
+    # the 1 decimal the published table shows. matpowercaseframes is None when its
+    # baseline isn't installed.
+    medians = {name: median for name, _, median in rows}
+    return {
+        "case": path.stem,
+        "powerio_parse_ms": round(medians["powerio: parse"], 1),
+        "matpowercaseframes_ms": round(medians["matpowercaseframes: parse"], 1)
+        if "matpowercaseframes: parse" in medians else None,
+    }
+
 
 def main():
-    paths = [Path(a) for a in sys.argv[1:]] or DEFAULT_CASES
-    for path in paths:
-        bench_case(path)
+    args = sys.argv[1:]
+    json_out = "--json" in args
+    paths = [Path(a) for a in args if a != "--json"] or DEFAULT_CASES
+    results = [bench_case(path) for path in paths]
+    if json_out:
+        out = Path(__file__).resolve().parent / "results" / "speed_python.json"
+        out.parent.mkdir(parents=True, exist_ok=True)
+        out.write_text(json.dumps({"rows": results}, indent=2) + "\n")
+        print(f"wrote {out} ({len(results)} rows)")
 
 
 if __name__ == "__main__":

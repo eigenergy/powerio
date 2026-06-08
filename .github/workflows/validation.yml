@@ -1,0 +1,53 @@
+name: Validation
+
+# Cross-tool correctness gate: run benchmarks/run_validation.sh (the same pass/fail
+# matrix the maintainer runs locally) and fail the PR on any regression. Only the
+# machine-independent correctness checks run here — the speed benchmarks are
+# per-machine and stay a local on-demand task (the refresh-benchmarks skill).
+#
+# This pulls a Julia + Python oracle stack (PowerModels.jl, ExaPowerIO.jl,
+# pandapower, egret), so it's heavier than the other jobs; the path filter keeps it
+# off doc-only PRs. The fixtures are all vendored, so no large-case fetch is needed.
+on:
+  pull_request:
+    branches: [ "main" ]
+    paths:
+      - "powerio/**"
+      - "powerio-matrix/**"
+      - "powerio-capi/**"
+      - "powerio-py/**"
+      - "benchmarks/**"
+      - ".github/workflows/validation.yml"
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+    - uses: dtolnay/rust-toolchain@stable
+    - uses: Swatinem/rust-cache@v2
+    - name: Build powerio-capi
+      run: cargo build --release -p powerio-capi
+    - uses: julia-actions/setup-julia@v2
+      with:
+        version: '1'
+    - uses: julia-actions/cache@v2
+    - name: Instantiate the Julia oracle env
+      run: julia --project=benchmarks -e 'using Pkg; Pkg.instantiate()'
+    - uses: actions/setup-python@v5
+      with:
+        python-version: '3.12'
+    # run_validation.sh defaults to .venv/bin/python; build the powerio wheel into
+    # that venv and add the pandapower + egret oracles (egret is optional — the
+    # matrix leg skips if it's absent).
+    - name: Build the powerio wheel and oracles into .venv
+      run: |
+        python -m venv .venv
+        .venv/bin/pip install --upgrade pip maturin
+        .venv/bin/maturin develop --release
+        .venv/bin/pip install -r benchmarks/requirements.txt
+    - name: Run the validation matrix
+      run: bash benchmarks/run_validation.sh
