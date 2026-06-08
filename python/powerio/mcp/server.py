@@ -27,7 +27,10 @@ mcp = FastMCP("powerio")
 # Format name (and alias) → file extension, for staging inline content to a temp
 # file. ``convert`` is path-only, so inline conversion writes the text to disk
 # first; a matching extension keeps the format obvious even though we always
-# pass ``from_`` explicitly for inline input.
+# pass ``from_`` explicitly for inline input. Mirrors the canonical Rust tables
+# (`target_format_from_name` + `TargetFormat::extension` in
+# `powerio/src/format/mod.rs`); the temp file goes away once powerio grows an
+# in-memory `convert_str` (see issue tracker) and this map with it.
 _EXT = {
     "matpower": ".m",
     "m": ".m",
@@ -45,12 +48,21 @@ _EXT = {
 def _stage(content: str, fmt: str) -> str:
     """Write ``content`` to a temp file whose extension matches ``fmt``.
 
-    Returns the path; the caller is responsible for deleting it.
+    Returns the path; the caller is responsible for deleting it. Writes UTF-8
+    regardless of the platform's default text encoding, because the case
+    readers decode as UTF-8 (a non-UTF-8 locale would otherwise corrupt
+    non-ASCII content or fail the parse). If the write fails, the temp file
+    `mkstemp` already created on disk is removed before re-raising — the caller
+    only learns the path on success, so it can't clean up after a failed stage.
     """
     suffix = _EXT.get(fmt.strip().lower(), ".txt")
     fd, path = tempfile.mkstemp(suffix=suffix)
-    with os.fdopen(fd, "w") as fh:
-        fh.write(content)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as fh:
+            fh.write(content)
+    except Exception:
+        os.unlink(path)
+        raise
     return path
 
 

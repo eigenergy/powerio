@@ -7,12 +7,15 @@ stay ordinary callables, so we exercise them in-process without a transport.
 """
 
 import json
+import os
 from pathlib import Path
 
 import pytest
 
 pytest.importorskip("mcp", reason="powerio[mcp] not installed (needs Python 3.10+)")
 
+import powerio  # noqa: E402
+from powerio.mcp import server  # noqa: E402
 from powerio.mcp.server import case_summary, convert_case  # noqa: E402
 
 DATA = Path(__file__).resolve().parents[2] / "tests" / "data"
@@ -68,3 +71,53 @@ def test_errors_map_cleanly():
         case_summary(path=str(DATA / "does_not_exist.m"))
     with pytest.raises(ValueError):  # PowerIOError → ValueError
         case_summary(content="not a case", format="matpower")
+
+
+def test_convert_case_errors_map_cleanly():
+    # convert_case has its own except arms, separate from case_summary's.
+    with pytest.raises(ValueError):  # FileNotFoundError → ValueError
+        convert_case(to="psse", path=str(DATA / "does_not_exist.m"))
+    with pytest.raises(ValueError):  # PowerIOError → ValueError
+        convert_case(to="psse", content="not a case", from_="matpower")
+
+
+def test_convert_case_reports_lossy_warnings():
+    # PSS/E has no cost curves, so case30 (which carries gencost) drops them and
+    # the warning rides through conv.warnings → the tool's "warnings" list;
+    # PowerModels JSON represents everything, so its conversion is warning-free.
+    text = (DATA / "case30.m").read_text()
+    lossy = convert_case(to="psse", content=text, from_="matpower")
+    assert lossy["warnings"]
+    assert any("cost" in w.lower() for w in lossy["warnings"])
+    faithful = convert_case(to="powermodels-json", content=text, from_="matpower")
+    assert faithful["warnings"] == []
+
+
+def test_inline_convert_removes_temp_file(monkeypatch):
+    # The inline path stages content to a temp file and unlinks it in a finally.
+    # Capture the staged path and assert it's gone on both the success and the
+    # failure path — the finally is the only guard against leaking temp files.
+    staged = []
+    real_mkstemp = server.tempfile.mkstemp
+
+    def spy_mkstemp(*args, **kwargs):
+        fd, path = real_mkstemp(*args, **kwargs)
+        staged.append(path)
+        return fd, path
+
+    monkeypatch.setattr(server.tempfile, "mkstemp", spy_mkstemp)
+    text = (DATA / "case30.m").read_text()
+
+    r = convert_case(to="psse", content=text, from_="matpower")
+    assert r["text"]
+    assert staged and not os.path.exists(staged[-1])
+
+    staged.clear()
+
+    def boom(*args, **kwargs):
+        raise powerio.PowerIOError("boom")
+
+    monkeypatch.setattr(powerio, "convert", boom)
+    with pytest.raises(ValueError):
+        convert_case(to="psse", content=text, from_="matpower")
+    assert staged and not os.path.exists(staged[-1])
