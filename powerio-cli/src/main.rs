@@ -9,7 +9,7 @@ use std::path::{Path, PathBuf};
 
 use anyhow::Context;
 use clap::{Parser, Subcommand, ValueEnum};
-use powerio_matrix::io::gridfm::{GridfmOptions, write_gridfm_dataset};
+use powerio_matrix::io::gridfm::{GridfmOptions, GridfmSnapshot, write_gridfm_batch};
 use powerio_matrix::matrix::{BuildOptions, DcConvention, Scheme, Units, sddm_check};
 use powerio_matrix::opf_pipeline::{DcOpfOptions, write_dcopf_bundle};
 use powerio_matrix::pipeline::{MatrixKind, Pipeline, RhsKind};
@@ -104,17 +104,24 @@ enum Command {
         #[arg(long, value_enum, default_value = "paper-pure")]
         convention: DcConvArg,
     },
-    /// Write the gridfm-datakit Parquet dataset for one case.
+    /// Write the gridfm-datakit Parquet dataset for one or more cases.
+    ///
+    /// Each input is one scenario (a perturbed operating point on a shared
+    /// topology); multiple inputs stack into one dataset keyed by the `scenario`
+    /// column. A single input reproduces the one-snapshot dataset.
     Gridfm {
-        /// Input case file (format inferred from the extension unless `--from`).
-        input: PathBuf,
+        /// Input case files; the k-th is stamped `scenario + k` (format inferred
+        /// from each extension unless `--from`). All inputs must share one
+        /// topology (same buses, branches, and generators).
+        #[arg(required = true, num_args = 1..)]
+        inputs: Vec<PathBuf>,
         /// Output directory; the dataset lands in `<output>/<case>/raw/`.
         #[arg(short, long)]
         output: PathBuf,
-        /// Override the inferred input format.
+        /// Override the inferred input format (applied to every input).
         #[arg(long, value_enum)]
         from: Option<FormatArg>,
-        /// Scenario id stamped into the rows (a parsed case is one snapshot).
+        /// Base scenario id; the k-th input is stamped `scenario + k`.
         #[arg(long, default_value_t = 0)]
         scenario: i64,
     },
@@ -333,11 +340,11 @@ fn main() -> anyhow::Result<()> {
             convention,
         } => run_sensitivities(&input, &output, convention.into()),
         Command::Gridfm {
-            input,
+            inputs,
             output,
             from,
             scenario,
-        } => run_gridfm(&input, &output, from, scenario),
+        } => run_gridfm(&inputs, &output, from, scenario),
         Command::Convert {
             input,
             to,
@@ -483,18 +490,29 @@ fn run_dcopf(
 }
 
 fn run_gridfm(
-    input: &Path,
+    inputs: &[PathBuf],
     output: &Path,
     from: Option<FormatArg>,
-    scenario: i64,
+    base_scenario: i64,
 ) -> anyhow::Result<()> {
-    let net = read_network(input, from)?;
-    let opts = GridfmOptions {
-        scenario,
-        ..Default::default()
-    };
-    let outputs = write_gridfm_dataset(&net, output, &opts)
-        .with_context(|| format!("export gridfm dataset for {}", input.display()))?;
+    // Parse every input first so the snapshots can borrow the owned networks for
+    // the batch. Each input becomes one scenario, stamped `base + position`.
+    let nets = inputs
+        .iter()
+        .map(|p| read_network(p, from))
+        .collect::<anyhow::Result<Vec<_>>>()?;
+    let snapshots: Vec<GridfmSnapshot> = nets
+        .iter()
+        .enumerate()
+        .map(|(k, net)| GridfmSnapshot {
+            net,
+            scenario: base_scenario + i64::try_from(k).expect("scenario index fits in i64"),
+        })
+        .collect();
+
+    let opts = GridfmOptions::default();
+    let outputs = write_gridfm_batch(&snapshots, output, &opts)
+        .with_context(|| format!("export gridfm dataset for {} scenario(s)", snapshots.len()))?;
     if outputs.dropped_zero_impedance > 0 || outputs.degenerate_cost_gens > 0 {
         tracing::warn!(
             zeroed_branches = outputs.dropped_zero_impedance,
@@ -503,7 +521,8 @@ fn run_gridfm(
         );
     }
     tracing::info!(
-        case = %net.name,
+        case = %nets[0].name,
+        scenarios = snapshots.len(),
         dir = %outputs.dir.display(),
         files = outputs.files.len(),
         "wrote gridfm dataset"
