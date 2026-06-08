@@ -96,9 +96,13 @@ prints a pass/fail matrix. Latest run, all checks pass:
 | t_case9_dcline | ✓ | ✓ | ✓ | ✓ | ✓ |
 | t_case9_oos | ✓ | ✓ | ✓ | ✓ | ✓ |
 | pglib case5_pjm / case14_ieee | ✓ | ✓ | ✓ | ✓ | ✓ |
-| case2869pegase | ✓ | ✓ | ✓ | ✓ | ✓ |
+| case2869pegase | ✓ | ✓ | ✓ | ✓ | n/a† |
 | psse/case5, psse/case14 (read side) | n/a | n/a | ✓ | n/a | n/a |
 | egret/case9, case14, case30 (read side) | ✓ | n/a | n/a | n/a | n/a |
+
+† pandapower's reader (matpowercaseframes) does `int(float(tok))` and raises on the
+`Inf` limits MATPOWER uses for "unlimited", which case2869pegase carries; the pp
+validator reports n/a there (powerio, PowerModels, and ExaPowerIO all read the case).
 
 What each column checks:
 

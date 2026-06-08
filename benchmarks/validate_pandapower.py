@@ -71,7 +71,16 @@ def main():
     name = path.name
 
     case = powerio.parse_matpower(str(path))
-    ppc = _m2ppc(str(path), "mpc")
+    try:
+        ppc = _m2ppc(str(path), "mpc")
+    except OverflowError as exc:
+        # pandapower's reader (matpowercaseframes) does int(float(tok)) and raises on
+        # the `Inf` limit tokens MATPOWER uses for "unlimited" (e.g. pegase branch
+        # limits). That's an oracle limitation, not a powerio discrepancy — skip this
+        # case (exit 77 -> n/a) rather than report a false mismatch. powerio, PowerModels,
+        # and ExaPowerIO all read the case, so it stays covered by the other validators.
+        print(f"SKIP: {name} — pandapower's matpowercaseframes reader can't parse Inf limits ({exc})")
+        return 77
     bus, branch, gen = ppc["bus"], ppc["branch"], ppc["gen"]
     base_mva = float(ppc["baseMVA"])
 

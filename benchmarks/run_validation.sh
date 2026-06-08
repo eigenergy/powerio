@@ -123,7 +123,12 @@ for m in "${MCASES[@]}"; do
     mark "${JL[@]}" benchmarks/validate_exapowerio.jl "$m"
     row+="  Exa:$MARK"
 
-    mark "$PY" benchmarks/validate_pandapower.py "$m"
+    # The pp validator exits 77 when its oracle (matpowercaseframes) can't read the
+    # case — e.g. pegase's `Inf` branch limits; treat that as n/a, not a failure.
+    "$PY" benchmarks/validate_pandapower.py "$m"; pp_rc=$?
+    if [ "$pp_rc" -eq 0 ]; then MARK="ok"
+    elif [ "$pp_rc" -eq 77 ]; then MARK="n/a"
+    else MARK="FAIL"; fails=$((fails + 1)); fi
     row+="  pp:$MARK"
 
     rows+=("$row")
