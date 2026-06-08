@@ -393,13 +393,29 @@ def test_convert_matpower_echo_is_byte_exact():
 
 
 def test_convert_matpower_to_each_format():
-    for fmt in ["powermodels-json", "egret-json", "psse", "powerworld"]:
+    for fmt in ["powermodels-json", "egret-json", "surge-json", "psse", "powerworld"]:
         r = powerio.convert(str(DATA / "case30.m"), fmt)
         assert isinstance(r.text, str) and len(r.text) > 0
         assert isinstance(r.warnings, list)
     # PowerModels JSON output parses as JSON and keeps the bus count.
     pm = json.loads(powerio.convert(str(DATA / "case30.m"), "powermodels-json").text)
     assert len(pm["bus"]) == 30
+    surge = json.loads(powerio.convert(str(DATA / "case30.m"), "surge").text)
+    assert surge["format"] == "surge-json"
+    assert len(surge["network"]["buses"]) == 30
+
+
+def test_parse_and_convert_surge_json(tmp_path):
+    path = DATA / "surge" / "case14.surge.json"
+    case = powerio.parse(path)
+    assert case.source_format == "Surge"
+    assert case.n == 14
+
+    raw = powerio.convert(path, "matpower", from_="surge")
+    out = tmp_path / "case14.m"
+    out.write_text(raw.text)
+    back = powerio.parse_matpower(out)
+    assert back.n == 14
 
 
 def test_convert_round_trip_through_psse(tmp_path):

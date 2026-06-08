@@ -2,11 +2,12 @@
 //! meeting at the shared [`Network`].
 //!
 //! Each format is one module here, owning its reader and/or writer — MATPOWER
-//! `.m`, PowerModels JSON, PSS/E `.raw`, PowerWorld `.aux`, and EGRET
-//! `ModelData` JSON. Every input and output format meets at the hub, so adding a
-//! format is one module, not a change to any other. [`parse`] reads a file,
-//! detecting the format from its extension; [`write_as`] serializes a `Network`
-//! to a target. Non-finite numeric values (a MATPOWER `Inf`/`NaN` angle limit,
+//! `.m`, PowerModels JSON, PSS/E `.raw`, PowerWorld `.aux`, EGRET
+//! `ModelData` JSON, and Surge JSON. Every input and output format meets at the
+//! hub, so adding a format is one module, not a change to any other.
+//! [`parse`] reads a file, detecting the format from its extension;
+//! [`write_as`] serializes a `Network` to a target. Non-finite numeric values
+//! (a MATPOWER `Inf`/`NaN` angle limit,
 //! say) are written as JSON `null`.
 //!
 //! # Fidelity contract
@@ -33,12 +34,14 @@ mod matpower;
 mod powermodels;
 mod powerworld;
 mod psse;
+mod surge;
 
 pub use egret::{parse_egret_json, write_egret_json};
 pub use matpower::{parse_matpower, parse_matpower_file, write_matpower};
 pub use powermodels::{parse_powermodels_json, write_powermodels_json};
 pub use powerworld::{parse_powerworld, write_powerworld};
 pub use psse::{parse_psse, write_psse};
+pub use surge::{parse_surge_json, write_surge_json};
 
 /// A target interchange format. See [`write_as`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -48,6 +51,8 @@ pub enum TargetFormat {
     PowerModelsJson,
     /// EGRET `ModelData` JSON.
     EgretJson,
+    /// Surge native network JSON.
+    SurgeJson,
     /// PSS/E `.raw` (v33).
     Psse,
     /// PowerWorld auxiliary `.aux`.
@@ -62,6 +67,7 @@ impl TargetFormat {
     pub fn extension(self) -> &'static str {
         match self {
             TargetFormat::PowerModelsJson | TargetFormat::EgretJson => "json",
+            TargetFormat::SurgeJson => "surge.json",
             TargetFormat::Psse => "raw",
             TargetFormat::PowerWorld => "aux",
             TargetFormat::Matpower => "m",
@@ -71,15 +77,16 @@ impl TargetFormat {
 
 /// Map a format name (with the common aliases) to a [`TargetFormat`], or `None`
 /// if unrecognized. Accepts `matpower`/`m`, `powermodels-json`/`powermodels`/`pm`,
-/// `egret-json`/`egret`, `psse`/`raw`, `powerworld`/`aux`. Case-insensitive. The
-/// one place the bindings (Python, C ABI) share, so a new format means one new
-/// arm here, not three.
+/// `egret-json`/`egret`, `surge-json`/`surge`, `psse`/`raw`,
+/// `powerworld`/`aux`. Case-insensitive. The one place the bindings (Python, C
+/// ABI) share, so a new format means one new arm here, not three.
 #[must_use]
 pub fn target_format_from_name(name: &str) -> Option<TargetFormat> {
     Some(match name.to_ascii_lowercase().as_str() {
         "matpower" | "m" => TargetFormat::Matpower,
         "powermodels-json" | "powermodels" | "pm" => TargetFormat::PowerModelsJson,
         "egret-json" | "egret" => TargetFormat::EgretJson,
+        "surge-json" | "surge" => TargetFormat::SurgeJson,
         "psse" | "raw" => TargetFormat::Psse,
         "powerworld" | "aux" => TargetFormat::PowerWorld,
         _ => return None,
@@ -89,7 +96,8 @@ pub fn target_format_from_name(name: &str) -> Option<TargetFormat> {
 /// Read the case at `path` into a [`Network`], choosing the reader from `from`
 /// (a format name, see [`target_format_from_name`]) or, when `None`, from the
 /// file extension (`m`/`json`/`raw`/`aux`). A `.json` file is sniffed for the
-/// EGRET vs PowerModels shape (see [`sniff_json`]); pass `from` to force one.
+/// Surge vs EGRET vs PowerModels shape (see [`sniff_json`]); pass `from` to
+/// force one.
 /// The one reader the CLI and the Python/C bindings share, so adding a source
 /// format is one edit here, not one per binding.
 ///
@@ -136,13 +144,15 @@ fn read_source(source: Arc<String>, fmt: TargetFormat, name_hint: Option<&str>) 
         TargetFormat::Psse => psse::parse_psse_source(source, name_hint),
         TargetFormat::PowerWorld => powerworld::parse_powerworld_source(source, name_hint),
         TargetFormat::EgretJson => egret::parse_egret_source(source, name_hint),
+        TargetFormat::SurgeJson => surge::parse_surge_json_source(source, name_hint),
     }
 }
 
-/// Both interchange JSON formats use the `.json` extension, so an explicit
-/// source format isn't always given. EGRET `ModelData` has top-level `elements`
-/// and `system`; PowerModels network data does not. Sniff that and fall back to
-/// PowerModels (the more common input) when the text isn't EGRET-shaped.
+/// The interchange JSON formats share the `.json` extension, so an explicit
+/// source format isn't always given. Surge has top-level `format =
+/// "surge-json"` plus `network`; EGRET `ModelData` has top-level `elements` and
+/// `system`; PowerModels network data does not. Sniff those and fall back to
+/// PowerModels when the text is neither Surge nor EGRET shaped.
 ///
 /// Deserializing into [`IgnoredAny`] fields scans the JSON to find the two
 /// top-level keys without building the whole `Value` tree, so a large
@@ -152,13 +162,21 @@ fn sniff_json(text: &str) -> TargetFormat {
     use serde::de::IgnoredAny;
     #[derive(serde::Deserialize)]
     struct Shape {
+        format: Option<String>,
+        network: Option<IgnoredAny>,
         elements: Option<IgnoredAny>,
         system: Option<IgnoredAny>,
     }
     match serde_json::from_str::<Shape>(text) {
         Ok(Shape {
+            format: Some(format),
+            network: Some(_),
+            ..
+        }) if format == "surge-json" => TargetFormat::SurgeJson,
+        Ok(Shape {
             elements: Some(_),
             system: Some(_),
+            ..
         }) => TargetFormat::EgretJson,
         _ => TargetFormat::PowerModelsJson,
     }
@@ -214,16 +232,18 @@ pub fn write_as(net: &Network, format: TargetFormat) -> Conversion {
             };
         }
     }
-    match format {
+    let conversion = match format {
         TargetFormat::PowerModelsJson => write_powermodels_json(net),
         TargetFormat::EgretJson => write_egret_json(net),
+        TargetFormat::SurgeJson => write_surge_json(net),
         TargetFormat::Psse => write_psse(net),
         TargetFormat::PowerWorld => write_powerworld(net),
         // From another source (or no retained source): canonical MATPOWER from
         // the folded model, which itemizes what it can't carry (HVDC, gen caps,
         // extras, a partial-cost case).
         TargetFormat::Matpower => matpower::write_matpower_conversion(net),
-    }
+    };
+    with_source_warnings(conversion, net, format)
 }
 
 /// Whether a write target is the same format the network was read from.
@@ -233,9 +253,26 @@ fn same_format(target: TargetFormat, source: SourceFormat) -> bool {
         (TargetFormat::Matpower, SourceFormat::Matpower)
             | (TargetFormat::PowerModelsJson, SourceFormat::PowerModelsJson)
             | (TargetFormat::EgretJson, SourceFormat::EgretJson)
+            | (TargetFormat::SurgeJson, SourceFormat::Surge)
             | (TargetFormat::Psse, SourceFormat::Psse)
             | (TargetFormat::PowerWorld, SourceFormat::PowerWorld)
     )
+}
+
+fn with_source_warnings(
+    mut conversion: Conversion,
+    net: &Network,
+    target: TargetFormat,
+) -> Conversion {
+    if same_format(target, net.source_format) {
+        return conversion;
+    }
+    if matches!(net.source_format, SourceFormat::Surge) {
+        conversion.warnings.extend(surge::source_loss_warnings(net));
+        conversion.warnings.sort();
+        conversion.warnings.dedup();
+    }
+    conversion
 }
 
 /// JSON number for a finite `f64`; `Value::Null` for `NaN`/`±Inf`.

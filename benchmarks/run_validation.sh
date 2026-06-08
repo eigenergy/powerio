@@ -12,13 +12,17 @@
 #                                                   benchmarks/validate_exapowerio.jl
 #   pp      — powerio's parse + Y_bus vs pandapower (_m2ppc + makeYbus).
 #                                                   benchmarks/validate_pandapower.py
+#   Surge   — optional: powerio's Surge JSON writer vs Surge's own parser.
+#             Set SURGE_BIN=/path/to/surge-solve or SURGE_CHECKOUT=/path/to/surge.
+#                                                   benchmarks/validate_surge.py
 #
 # Then the read sides and the full conversion matrix:
 #   PSSE-read   — powerio reads a real PSS/E .raw, emits PowerModels JSON, compared
 #                 against PowerModels.jl reading the same .raw.
 #   EGRET-read  — powerio reads a real EGRET .json (egret's own output), emits
 #                 PowerModels JSON, checked against the matching MATPOWER case.
-#   matrix(5x5) — every reader -> every writer over the fixtures, each output's
+#   matrix(5x5) — every reader -> every writer over the fixtures covered by the
+#                 independent PowerModels and egret oracles, each output's
 #                 electrical core checked against the ground-truth MATPOWER case
 #                 (PowerModels.jl for MATPOWER/PowerModels/PSS-E/PowerWorld, the
 #                 egret package for EGRET), byte-exact on the diagonal.
@@ -28,7 +32,8 @@
 # built into .venv (`maturin develop --release`), the Julia env instantiated
 # (`julia --project=benchmarks -e 'using Pkg; Pkg.instantiate()'`), and the Python
 # oracle tools (`pip install -r benchmarks/requirements.txt`, for the pandapower
-# and EGRET checks). All oracle tools are benchmark-scoped, not powerio deps.
+# and EGRET checks). Surge is optional through SURGE_BIN or SURGE_CHECKOUT. All
+# oracle tools are benchmark-scoped, not powerio deps.
 #
 #   bash benchmarks/run_validation.sh
 #
@@ -47,6 +52,11 @@ trap 'rm -rf "$TMP"' EXIT
 # leg with a notice if it isn't installed, rather than failing the whole run.
 HAVE_EGRET=1
 "$PY" -c "import egret" 2>/dev/null || HAVE_EGRET=0
+
+HAVE_SURGE=0
+if [ -n "${SURGE_BIN:-}" ] || [ -n "${SURGE_CHECKOUT:-}" ]; then
+    HAVE_SURGE=1
+fi
 
 MCASES=(
     tests/data/case9.m
@@ -125,6 +135,17 @@ for m in "${MCASES[@]}"; do
 
     mark "$PY" benchmarks/validate_pandapower.py "$m"
     row+="  pp:$MARK"
+
+    if [ "$HAVE_SURGE" -eq 0 ]; then
+        MARK="SKIP"
+    elif [ "$base" = "case2869pegase" ]; then
+        MARK="SKIP(nonfinite)"
+    elif convert "$m" surge-json "$TMP/$base.surge.json" 2>"$TMP/err"; then
+        mark "$PY" benchmarks/validate_surge.py "$m" "$TMP/$base.surge.json"
+    else
+        echo "  Surge: convert failed"; cat "$TMP/err"; MARK="FAIL"; fails=$((fails + 1))
+    fi
+    row+="  Surge:$MARK"
 
     rows+=("$row")
 done

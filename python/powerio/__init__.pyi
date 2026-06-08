@@ -120,7 +120,7 @@ class Conversion(NamedTuple):
     warnings: List[str]
 
 # Any reader/writer name or alias the Rust hub accepts (e.g. "matpower"/"m",
-# "psse"/"raw"). Kept as `str` so aliases type-check; the binding validates it.
+# "surge-json"/"surge"). Kept as `str` so aliases type-check; the binding validates it.
 Format = str
 
 def parse(path: Any) -> Case: ...

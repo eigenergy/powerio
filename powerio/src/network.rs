@@ -133,6 +133,7 @@ pub enum SourceFormat {
     Matpower,
     PowerModelsJson,
     EgretJson,
+    Surge,
     Psse,
     PowerWorld,
     /// Built in memory (e.g. from synth or an edited case); no source text.

@@ -7,6 +7,9 @@ Python ctypes, …) can drive powerio through it.
 
 The header is [`include/powerio.h`](include/powerio.h).
 
+Format names are the same aliases the Rust hub accepts, including `matpower`,
+`powermodels-json`, `egret-json`, `surge-json`, `psse`, and `powerworld`.
+
 ## Build
 
 ```
