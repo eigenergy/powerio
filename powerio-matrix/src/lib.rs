@@ -58,3 +58,6 @@ pub use matrix::{
 };
 pub use opf_pipeline::{DcOpfOptions, DcOpfOutputs, write_dcopf_bundle};
 pub use pipeline::{MatrixKind, Pipeline, PipelineOutputs, RhsKind, build_kind};
+
+#[cfg(feature = "gridfm")]
+pub use io::gridfm::{GridfmOptions, GridfmOutputs, GridfmTables, write_gridfm_dataset};

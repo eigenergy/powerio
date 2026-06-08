@@ -36,6 +36,10 @@ pub use laplacian::{GroundMap, build_weighted_laplacian, ground_at, unit_vector}
 pub use opf::{BusCosts, GenCosts, OpfInstance, Units, build_opf_instance};
 pub use sensitivity::{build_lodf, build_ptdf, build_ptdf_lodf};
 pub use ybus::{YbusParts, build_ybus};
+// Crate-internal: the gridfm columnar export reuses the per-branch admittance and
+// flow kernels so its branch table and Y_bus agree with `build_ybus` by construction.
+#[cfg(feature = "gridfm")]
+pub(crate) use ybus::{YbusFlags, branch_admittance, branch_flows};
 
 use sprs::CsMat;
 

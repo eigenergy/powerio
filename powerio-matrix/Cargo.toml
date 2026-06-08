@@ -12,6 +12,9 @@ categories = ["science", "mathematics"]
 [features]
 # Experimental DC-OPF interior point operators (optional).
 kkt = []
+# GridFM interchange: write the gridfm-datakit Parquet schema (and the shared
+# Arrow record batches behind it). Pulls in arrow + parquet, off by default.
+gridfm = ["dep:arrow", "dep:parquet"]
 
 [lib]
 name = "powerio_matrix"
@@ -28,9 +31,14 @@ rand_chacha = "0.9"
 walkdir = "2"
 rayon = "1"
 sha2 = "0.10"
+# arrow and parquet release in lockstep and share `RecordBatch`; keep both on the
+# same major. `snap` matches the Snappy compression pandas/datakit write by default.
+arrow = { version = "58", default-features = false, optional = true }
+parquet = { version = "58", default-features = false, features = ["arrow", "snap"], optional = true }
 
 [dev-dependencies]
 approx = "0.5"
+tempfile = "3"
 
 [lints]
 workspace = true
