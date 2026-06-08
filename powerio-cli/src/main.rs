@@ -106,13 +106,14 @@ enum Command {
     },
     /// Write the gridfm-datakit Parquet dataset for one or more cases.
     ///
-    /// Each input is one scenario (a perturbed operating point on a shared
-    /// topology); multiple inputs stack into one dataset keyed by the `scenario`
+    /// Each input is one scenario (an operating point on a shared base element
+    /// set); multiple inputs stack into one dataset keyed by the `scenario`
     /// column. A single input reproduces the one-snapshot dataset.
     Gridfm {
         /// Input case files; the k-th is stamped `scenario + k` (format inferred
-        /// from each extension unless `--from`). All inputs must share one
-        /// topology (same buses, branches, and generators).
+        /// from each extension unless `--from`). All inputs must share the same
+        /// bus, branch, and generator counts in the same bus order; load,
+        /// dispatch, branch status, and costs may vary per scenario.
         #[arg(required = true, num_args = 1..)]
         inputs: Vec<PathBuf>,
         /// Output directory; the dataset lands in `<output>/<case>/raw/`.

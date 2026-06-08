@@ -67,7 +67,7 @@ use serde::Serialize;
 use crate::indexed::IndexedNetwork;
 use crate::matrix::{BuildOptions, YbusFlags, branch_admittance, branch_flows, build_ybus};
 use crate::network::{BusId, BusType};
-use crate::{Error, GenCost, Network, Result, ScenarioMismatch};
+use crate::{ElementCounts, Error, GenCost, Network, Result, ScenarioMismatch};
 
 /// Options for the gridfm export — the batch-wide knobs. The scenario id is a
 /// per-snapshot property ([`GridfmSnapshot::scenario`], or the explicit argument
@@ -125,9 +125,19 @@ impl GridfmOptions {
 #[derive(Debug, Clone, Copy)]
 pub struct GridfmSnapshot<'a> {
     /// The parsed case for this scenario.
-    pub net: &'a Network,
+    net: &'a Network,
     /// The scenario id stamped into the `scenario`/`load_scenario_idx` columns.
-    pub scenario: i64,
+    scenario: i64,
+}
+
+impl<'a> GridfmSnapshot<'a> {
+    /// A snapshot pairing a network with the scenario id stamped into its rows.
+    /// For the common "k-th input is `base + k`" numbering, prefer
+    /// [`numbered_snapshots`], which assigns ids with checked arithmetic.
+    #[must_use]
+    pub fn new(net: &'a Network, scenario: i64) -> Self {
+        Self { net, scenario }
+    }
 }
 
 /// The gridfm-datakit tables as Arrow record batches. The Parquet writer builds
@@ -207,7 +217,7 @@ pub fn gridfm_record_batches(
     scenario: i64,
     opts: &GridfmOptions,
 ) -> Result<GridfmTables> {
-    let snap = GridfmSnapshot { net, scenario };
+    let snap = GridfmSnapshot::new(net, scenario);
     gridfm_record_batches_batch(std::slice::from_ref(&snap), opts)
 }
 
@@ -252,9 +262,9 @@ struct SnapshotView<'a> {
 }
 
 /// Build and shape-check the views for a scenario batch. Every snapshot must
-/// resolve to exactly one reference bus and share the first snapshot's topology
-/// (bus / branch / generator counts and bus-id ordering), so the row-stacked
-/// tables stay schema-consistent.
+/// resolve to exactly one reference bus and share the first snapshot's base
+/// element set (bus / branch / generator counts and bus-id ordering), so the
+/// row-stacked tables stay schema-consistent.
 fn snapshot_views<'a>(snapshots: &'a [GridfmSnapshot<'a>]) -> Result<Vec<SnapshotView<'a>>> {
     let first = snapshots.first().ok_or(Error::EmptyScenarioBatch)?;
     let expected = shape_of(first.net);
@@ -292,10 +302,13 @@ fn snapshot_views<'a>(snapshots: &'a [GridfmSnapshot<'a>]) -> Result<Vec<Snapsho
     Ok(views)
 }
 
-/// `(buses, branches, generators)` — the base element shape a scenario batch
-/// shares.
-fn shape_of(net: &Network) -> (usize, usize, usize) {
-    (net.buses.len(), net.branches.len(), net.generators.len())
+/// The base element shape a scenario batch shares.
+fn shape_of(net: &Network) -> ElementCounts {
+    ElementCounts {
+        buses: net.buses.len(),
+        branches: net.branches.len(),
+        gens: net.generators.len(),
+    }
 }
 
 /// Number a list of networks into snapshots, stamping the k-th `base + k` — the
@@ -309,11 +322,8 @@ pub fn numbered_snapshots<'a>(nets: &[&'a Network], base: i64) -> Result<Vec<Gri
             let scenario = i64::try_from(k)
                 .ok()
                 .and_then(|offset| base.checked_add(offset))
-                .ok_or(Error::ScenarioIdOverflow {
-                    base,
-                    count: nets.len(),
-                })?;
-            Ok(GridfmSnapshot { net, scenario })
+                .ok_or(Error::ScenarioIdOverflow { base, index: k })?;
+            Ok(GridfmSnapshot::new(net, scenario))
         })
         .collect()
 }
@@ -332,7 +342,7 @@ pub fn write_gridfm_dataset(
     out_dir: impl AsRef<Path>,
     opts: &GridfmOptions,
 ) -> Result<GridfmOutputs> {
-    let snap = GridfmSnapshot { net, scenario };
+    let snap = GridfmSnapshot::new(net, scenario);
     write_gridfm_batch(std::slice::from_ref(&snap), out_dir, opts)
 }
 
@@ -1395,6 +1405,74 @@ mod tests {
         assert!(
             !out.dir.join("y_bus_data.parquet").exists(),
             "y_bus_data.parquet should not be written"
+        );
+    }
+
+    #[test]
+    fn numbered_snapshots_stamps_base_plus_k_and_checks_overflow() {
+        // The shared builder both bindings use: the k-th network is scenario
+        // `base + k`, in order.
+        let net = case14();
+        let snaps = numbered_snapshots(&[&net, &net, &net], 5).unwrap();
+        assert_eq!(snaps.len(), 3);
+        assert_eq!(snaps[0].scenario, 5);
+        assert_eq!(snaps[1].scenario, 6);
+        assert_eq!(snaps[2].scenario, 7);
+
+        // Overflow is checked (not wrapped to a negative id, not a panic) and names
+        // the offending index.
+        let err = numbered_snapshots(&[&net, &net], i64::MAX).unwrap_err();
+        assert!(
+            matches!(err, Error::ScenarioIdOverflow { index: 1, .. }),
+            "got {err:?}"
+        );
+    }
+
+    #[test]
+    fn out_of_service_branch_zeros_flows_but_keeps_admittance() {
+        // An out-of-service branch keeps its physical Y** admittances but carries
+        // zero flows and `br_status = 0` — the path datakit's topology variants
+        // exercise. Use non-flat voltages so an *in-service* branch carries real
+        // flow, which makes the zero on the tripped branch meaningful (not just an
+        // artifact of a flat start).
+        let mut net = Network::in_memory(
+            "outage",
+            100.0,
+            vec![
+                bus(1, BusType::Ref),
+                bus(2, BusType::Pq),
+                bus(3, BusType::Pq),
+            ],
+            vec![branch(1, 2, 0.01, 0.1), branch(2, 3, 0.02, 0.2)],
+        );
+        net.buses[1].va = -3.0;
+        net.buses[2].va = -6.0;
+        net.branches[0].in_service = false; // trip branch 0
+
+        let tables = gridfm_record_batches(&net, 0, &GridfmOptions::default()).unwrap();
+        let br = &tables.branch;
+        let status = col_i64(br, "br_status");
+        assert_eq!(status.value(0), 0, "tripped branch reports br_status 0");
+        assert_eq!(status.value(1), 1, "in-service branch reports br_status 1");
+
+        for col in ["pf", "qf", "pt", "qt"] {
+            let v = col_f64(br, col).value(0);
+            assert!(
+                v == 0.0,
+                "{col} must be zero on the out-of-service branch, got {v}"
+            );
+        }
+        // The in-service branch really carries flow at these voltages — guards
+        // against a flat-start false pass that would zero every branch anyway.
+        assert!(
+            col_f64(br, "pf").value(1).abs() > 1e-6,
+            "in-service branch should carry nonzero flow"
+        );
+        // Admittances are retained for the tripped branch (unlike a zero-impedance
+        // branch, which zeroes them).
+        assert!(
+            col_f64(br, "Yff_i").value(0).abs() > 0.0,
+            "out-of-service branch keeps its physical Y** admittances"
         );
     }
 

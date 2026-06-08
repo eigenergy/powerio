@@ -39,7 +39,7 @@ pub mod format;
 pub mod indexed;
 pub mod network;
 
-pub use error::{Error, Result, ScenarioMismatch};
+pub use error::{ElementCounts, Error, Result, ScenarioMismatch};
 pub use format::{
     Conversion, TargetFormat, parse, parse_egret_json, parse_matpower, parse_matpower_file,
     parse_powermodels_json, parse_powerworld, parse_psse, parse_str, read_path,

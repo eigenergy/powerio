@@ -110,7 +110,7 @@ row-stack a **scenario batch** into one dataset, keyed by the `scenario` column
 (the k-th input is stamped `--scenario` + k). The inputs share a base element set
 — the same bus, branch, and generator counts in the same bus order — so the
 dense bus index lines up across scenarios; within that, load, dispatch,
-voltages, branch status, and costs may vary, the same way datakit's topology
+voltages, branch status, bus type, and costs may vary, the same way datakit's topology
 variants toggle line status on a fixed element set. powerio stacks the snapshots,
 it doesn't generate them. From Python (the `gridfm` extra):
 `case.write_gridfm(dir)` and `powerio.write_gridfm_batch([case0, case1], dir)`

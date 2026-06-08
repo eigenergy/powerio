@@ -476,6 +476,16 @@ def test_gridfm_write_single(case9, tmp_path):
 
 
 @gridfm_only
+def test_gridfm_include_y_bus_false_omits_table(case9, tmp_path):
+    # The include_y_bus kwarg crosses the native boundary: disabling it must drop
+    # y_bus_data.parquet (the other three tables stay).
+    out = case9.write_gridfm(str(tmp_path), include_y_bus=False)
+    names = {Path(f).name for f in out["files"]}
+    assert "y_bus_data.parquet" not in names
+    assert {"bus_data.parquet", "gen_data.parquet", "branch_data.parquet"} <= names
+
+
+@gridfm_only
 def test_gridfm_batch_stacks_and_keys_by_scenario(tmp_path):
     pd = pytest.importorskip("pandas")
     # Same topology twice → two scenarios stacked in one dataset. (The Python

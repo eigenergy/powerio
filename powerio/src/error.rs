@@ -92,8 +92,12 @@ pub enum Error {
     #[error("gridfm scenario batch is empty; provide at least one snapshot")]
     EmptyScenarioBatch,
 
-    #[error("gridfm scenario id overflows i64 numbering {count} snapshot(s) from base {base}")]
-    ScenarioIdOverflow { base: i64, count: usize },
+    #[error("gridfm scenario id overflows i64 when numbering snapshot {index} from base {base}")]
+    ScenarioIdOverflow {
+        base: i64,
+        /// 0-based position of the snapshot whose `base + index` overflowed.
+        index: usize,
+    },
 
     #[error(
         "gridfm snapshot {index} doesn't match the first snapshot's element set: {reason}; \
@@ -116,15 +120,39 @@ pub enum Error {
     UnknownFormat(String),
 }
 
+/// The element counts that define a scenario batch's shared base shape. Named
+/// (rather than a bare `(usize, usize, usize)`) so the three same-typed fields
+/// can't be transposed silently in an error message or a comparison.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ElementCounts {
+    pub buses: usize,
+    pub branches: usize,
+    pub gens: usize,
+}
+
+impl std::fmt::Display for ElementCounts {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "{} buses, {} branches, {} gens",
+            self.buses, self.branches, self.gens
+        )
+    }
+}
+
 /// Why a gridfm scenario snapshot doesn't line up with the first snapshot's
 /// base element set (the row-stack keeps every table schema-consistent by
 /// requiring the same element counts and bus-id ordering across snapshots).
-#[derive(Debug, Clone, PartialEq, Eq)]
+///
+/// `#[non_exhaustive]`: future checks (e.g. branch endpoints, voltage base) may
+/// add variants, so downstream matches must keep a wildcard arm.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum ScenarioMismatch {
-    /// Element counts differ: `(buses, branches, gens)`.
+    /// Element counts differ.
     Counts {
-        expected: (usize, usize, usize),
-        got: (usize, usize, usize),
+        expected: ElementCounts,
+        got: ElementCounts,
     },
     /// Counts match, but the buses are listed in a different order (so the dense
     /// bus index wouldn't mean the same bus across snapshots).
@@ -135,7 +163,7 @@ impl std::fmt::Display for ScenarioMismatch {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::Counts { expected, got } => {
-                write!(f, "(buses, branches, gens) = {got:?} vs {expected:?}")
+                write!(f, "got ({got}) vs the first snapshot's ({expected})")
             }
             Self::BusOrder => {
                 write!(f, "counts match but the bus ids are in a different order")
