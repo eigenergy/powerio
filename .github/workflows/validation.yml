@@ -40,6 +40,14 @@ jobs:
     - uses: actions/setup-python@v5
       with:
         python-version: '3.12'
+    # Cache the pip wheels (pandapower + scipy/numpy, egret + pyomo, matpowercaseframes);
+    # setup-python's own cache only covers the interpreter, not site-packages. Keyed on
+    # the requirements file so a dependency bump re-resolves.
+    - uses: actions/cache@v4
+      with:
+        path: ~/.cache/pip
+        key: pip-validate-${{ runner.os }}-${{ hashFiles('benchmarks/requirements.txt') }}
+        restore-keys: pip-validate-${{ runner.os }}-
     # run_validation.sh defaults to .venv/bin/python; build the powerio wheel into
     # that venv and add the pandapower + egret oracles (egret is optional — the
     # matrix leg skips if it's absent).

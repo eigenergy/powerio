@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Validate powerio's parse and Y_bus against pandapower on a MATPOWER case.
+"""Validate powerio's parse and Y_bus against pandapower on MATPOWER cases.
 
 pandapower is an independent MATPOWER reader (via matpowercaseframes) and carries
 PYPOWER's `makeYbus`, the same admittance kernel MATPOWER uses. We compare the two
@@ -16,13 +16,17 @@ auxiliary buses, and raises on dclines / parallel branches inside `from_ppc`.
 `_m2ppc` runs before any of that, so it works on every case (pegase included) and
 keeps the bus order aligned with powerio's file order.
 
-    python benchmarks/validate_pandapower.py tests/data/case14.m
+    python benchmarks/validate_pandapower.py tests/data/case14.m [case.m ...]
 
-Exit 0 on a full match, 1 on any mismatch. Needs the `powerio` package and
-pandapower (`pip install 'powerio[bench]'`).
+Imports pandapower once and loops every case (the validation matrix runs all
+fixtures in one process to amortize the import). Per case the mark is `ok`, `FAIL`,
+or `n/a` (pandapower's reader can't parse the case — an oracle limit, not a powerio
+discrepancy). Appends `<stem>\tpp\t<mark>` to $PIO_RESULTS_TSV when set. Exits
+nonzero only on a real mismatch. Needs the `powerio` package and pandapower.
 """
 
 import logging
+import os
 import sys
 import warnings
 from collections import defaultdict
@@ -63,24 +67,20 @@ def sum_by_bus(elems, ka, kb):
     return a, b
 
 
-def main():
-    if len(sys.argv) != 2:
-        print("usage: validate_pandapower.py <case.m>", file=sys.stderr)
-        return 2
-    path = Path(sys.argv[1])
+def check_case(path):
+    """Validate one case. Returns the mark: "ok", "FAIL", or "n/a"."""
     name = path.name
-
     case = powerio.parse_matpower(str(path))
     try:
         ppc = _m2ppc(str(path), "mpc")
     except OverflowError as exc:
         # pandapower's reader (matpowercaseframes) does int(float(tok)) and raises on
         # the `Inf` limit tokens MATPOWER uses for "unlimited" (e.g. pegase branch
-        # limits). That's an oracle limitation, not a powerio discrepancy — skip this
-        # case (exit 77 -> n/a) rather than report a false mismatch. powerio, PowerModels,
-        # and ExaPowerIO all read the case, so it stays covered by the other validators.
+        # limits). That's an oracle limitation, not a powerio discrepancy — mark it
+        # n/a rather than report a false mismatch. powerio, PowerModels, and
+        # ExaPowerIO all read the case, so it stays covered by the other validators.
         print(f"SKIP: {name} — pandapower's matpowercaseframes reader can't parse Inf limits ({exc})")
-        return 77
+        return "n/a"
     bus, branch, gen = ppc["bus"], ppc["branch"], ppc["gen"]
     base_mva = float(ppc["baseMVA"])
 
@@ -98,7 +98,7 @@ def main():
         problems.append(f"gen count: powerio={ng} pandapower={gen.shape[0]}")
     if problems:
         report(name, problems)
-        return 1
+        return "FAIL"
 
     # --- bus-id alignment (both should be file order) -------------------
     powerio_ids = [b["id"] for b in case.buses]
@@ -106,7 +106,7 @@ def main():
     if sorted(powerio_ids) != sorted(pp_ids):
         problems.append("bus id sets differ between powerio and pandapower")
         report(name, problems)
-        return 1
+        return "FAIL"
     pp_row_of_id = {bid: r for r, bid in enumerate(pp_ids)}
     order = np.array([pp_row_of_id[bid] for bid in powerio_ids])  # pp rows, powerio order
 
@@ -175,7 +175,7 @@ def main():
                 )
 
     report(name, problems)
-    return 1 if problems else 0
+    return "FAIL" if problems else "ok"
 
 
 def check_vec(problems, label, a, b, atol=ATOL, rtol=RTOL):
@@ -197,6 +197,25 @@ def report(name, problems):
         print(f"MISMATCH: {name} ({len(problems)})")
         for p in problems[:40]:
             print("  ", p)
+
+
+def main():
+    cases = sys.argv[1:]
+    if not cases:
+        print("usage: validate_pandapower.py <case.m> [case.m ...]", file=sys.stderr)
+        return 2
+    results = os.environ.get("PIO_RESULTS_TSV")
+    fails = 0
+    for arg in cases:
+        path = Path(arg)
+        print(f"--- pp {path.stem} ---")
+        mark = check_case(path)
+        if mark == "FAIL":
+            fails += 1
+        if results:
+            with open(results, "a") as fh:
+                fh.write(f"{path.stem}\tpp\t{mark}\n")
+    return 1 if fails else 0
 
 
 if __name__ == "__main__":

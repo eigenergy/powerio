@@ -71,6 +71,33 @@ unsafe fn guard<R>(fallback: R, f: impl FnOnce() -> R) -> R {
     catch_unwind(AssertUnwindSafe(f)).unwrap_or(fallback)
 }
 
+/// ABI version of this C interface. Bump on any breaking change to an existing
+/// `pio_*` signature or to the JSON transport schema (new additive symbols don't
+/// require a bump). A consumer compares [`pio_abi_version`] against the value it
+/// was built against (the `PIO_ABI_VERSION` macro in `powerio.h`) and refuses a
+/// mismatched library instead of calling in blind.
+pub const PIO_ABI_VERSION: u32 = 1;
+
+/// The ABI version the library was built with (see [`PIO_ABI_VERSION`]). Lets a
+/// consumer detect a stale or incompatible library at load time. Infallible.
+#[unsafe(no_mangle)]
+pub extern "C" fn pio_abi_version() -> u32 {
+    PIO_ABI_VERSION
+}
+
+/// The crate version string (e.g. `"0.1.0"`), `'static` and NUL-terminated — do
+/// NOT free it. Informational; pair it with [`pio_abi_version`] for the actual
+/// compatibility check.
+#[unsafe(no_mangle)]
+pub extern "C" fn pio_version() -> *const c_char {
+    // env! is resolved at compile time; the trailing NUL makes it a valid C
+    // string and the 'static lifetime means the pointer is always valid and
+    // never owned by the caller.
+    concat!(env!("CARGO_PKG_VERSION"), "\0")
+        .as_ptr()
+        .cast::<c_char>()
+}
+
 /// Parse `path` (format from extension, or `from` if non-NULL) into a case
 /// handle. Returns `NULL` on error and writes the message into `errbuf`.
 #[unsafe(no_mangle)]
@@ -513,6 +540,16 @@ mod tests {
         let c = unsafe { pio_parse(path.as_ptr(), std::ptr::null(), err.as_mut_ptr(), err.len()) };
         assert!(!c.is_null(), "parse returned null");
         c
+    }
+
+    #[test]
+    fn version_surface() {
+        // The ABI version is the compatibility contract a consumer checks at
+        // load; the version string is static, NUL-terminated, and non-empty.
+        assert_eq!(pio_abi_version(), PIO_ABI_VERSION);
+        let v = unsafe { CStr::from_ptr(pio_version()) }.to_str().unwrap();
+        assert_eq!(v, env!("CARGO_PKG_VERSION"));
+        assert!(!v.is_empty());
     }
 
     #[test]

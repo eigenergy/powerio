@@ -36,7 +36,9 @@ jobs:
       if: env.TANDEM_TOKEN != ''
     - name: Build powerio-capi
       if: env.TANDEM_TOKEN != ''
-      run: cargo build -p powerio-capi --release
+      # --features arrow so PowerIO.jl's zero-copy Arrow tests run against a real
+      # pio_export_arrow symbol rather than skipping.
+      run: cargo build -p powerio-capi --release --features arrow
     - name: Check out PowerIO.jl
       if: env.TANDEM_TOKEN != ''
       uses: actions/checkout@v4

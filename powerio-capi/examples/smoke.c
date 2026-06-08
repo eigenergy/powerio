@@ -34,6 +34,11 @@ int main(int argc, char **argv) {
         return 2;
     }
 
+    /* ABI handshake: a consumer refuses a library whose ABI version differs from
+     * the header it compiled against. pio_version() is a static, non-owned string. */
+    CHECK(pio_abi_version() == PIO_ABI_VERSION, "ABI version mismatch");
+    printf("powerio %s (ABI %u)\n", pio_version(), pio_abi_version());
+
     char err[PIO_ERRBUF_MIN];
     PioCase *c = pio_parse(argv[1], NULL, err, sizeof err);
     CHECK(c != NULL, err);
