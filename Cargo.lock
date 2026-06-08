@@ -252,6 +252,9 @@ name = "arrow-schema"
 version = "58.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f633dbfdf39c039ada1bf9e34c694816eb71fbb7dc78f613993b7245e078a1ed"
+dependencies = [
+ "bitflags 2.13.0",
+]
 
 [[package]]
 name = "arrow-select"
@@ -1739,6 +1742,7 @@ dependencies = [
 name = "powerio-capi"
 version = "0.1.0"
 dependencies = [
+ "arrow",
  "powerio",
 ]
 

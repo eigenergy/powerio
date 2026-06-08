@@ -18,7 +18,8 @@ graph views for any downstream solver. (Planned) feeds the GridFM ML pipeline.
 - **`powerio-py`** — PyO3 extension behind the `powerio` Python package
   (`python/powerio/`); hands back COO triplets that scipy assembles.
 - **`powerio-capi`** — C ABI over `powerio` (`pio_*`, header `powerio.h`); the
-  polyglot substrate for C/C++/Julia.
+  polyglot substrate for C/C++/Julia. `--features arrow` adds `pio_export_arrow`,
+  a zero-copy raw-network export over the Arrow C Data Interface.
 
 `Network` is the one canonical model (format-neutral, loads/shunts first-class);
 `IndexedNetwork` is the dense-indexed analysis view derived from it.
@@ -59,6 +60,7 @@ powerio gridfm tests/data/case14.m -o out      # gridfm-datakit Parquet dataset
 
 # C ABI (cdylib + staticlib; header powerio-capi/include/powerio.h):
 cargo build -p powerio-capi
+cargo build -p powerio-capi --features arrow   # + pio_export_arrow (Arrow C Data Interface)
 
 # Python (PyO3 crate needs libpython, so it is NOT in default-members):
 cargo build -p powerio-py    # plain cargo build of the extension
@@ -115,6 +117,7 @@ powerio-py/src/lib.rs        # PyO3 extension → COO triplets (module `_powerio
 python/powerio/              # importable package (scipy/networkx assembly, lazy)
 python/tests/test_powerio.py
 powerio-capi/                # C ABI (pio_*, include/powerio.h, examples/smoke.c)
+│                            #   src/arrow_export.rs: pio_export_arrow (feature = "arrow")
 tests/data/                  # shared fixtures (used by CLI examples)
 benchmarks/                  # parse benchmarks + Julia validation harnesses
 ```

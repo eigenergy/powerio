@@ -106,6 +106,17 @@ snapshot (`scenario 0`): voltages and dispatch are the case's stored values, and
 branch flows are computed from them. Per-scenario expansion is future work
 (issue #14).
 
+## C ABI
+
+`powerio-capi` exposes the parser over a C ABI (`pio_*`, header
+`powerio-capi/include/powerio.h`) for C, C++, and Julia: parse, query, convert,
+the byte-exact echo, the JSON transport (`pio_to_json`/`pio_from_json`), and the
+numeric table extractors. Built with `--features arrow`, it also offers
+`pio_export_arrow` — a zero-copy export of the raw network tables
+(bus/branch/gen/load/shunt) over the [Arrow C Data Interface](https://arrow.apache.org/docs/format/CDataInterface.html),
+so pyarrow / Arrow.jl / Arrow C++ / polars / DuckDB pull a whole table in process
+with no copy and no temp file (the typed, in-memory sibling of `pio_to_json`).
+
 ## Benchmark
 
 Median parse time, one Apple M-series laptop, release build, all timed in one

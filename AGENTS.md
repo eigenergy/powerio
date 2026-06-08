@@ -18,7 +18,8 @@ graph views for any downstream solver. (Planned) feeds the GridFM ML pipeline.
 - **`powerio-py`** — PyO3 extension behind the `powerio` Python package
   (`python/powerio/`); hands back COO triplets that scipy assembles.
 - **`powerio-capi`** — C ABI over `powerio` (`pio_*`, header `powerio.h`); the
-  polyglot substrate for C/C++/Julia.
+  polyglot substrate for C/C++/Julia. `--features arrow` adds `pio_export_arrow`,
+  a zero-copy raw-network export over the Arrow C Data Interface.
 
 `Network` is the one canonical model (format-neutral, loads/shunts first-class);
 `IndexedNetwork` is the dense-indexed analysis view derived from it.
@@ -36,7 +37,8 @@ Matrix outputs (powerio-matrix):
 - Adjacency (`MatrixKind::Adjacency`); PTDF and LODF (DC sensitivities, `sensitivities` subcommand).
 - DC-OPF instance bundle (`dcopf` subcommand, `opf_pipeline::write_dcopf_bundle`): signed incidence `A` (n×m), branch susceptance `b`, weighted Laplacian `L = A diag(b) Aᵀ` and its slack-grounded form, flow map `B Aᵀ`, generator cost `Q`/`c`, bounds, thermal limits `f̄`, generator→bus `C_g`, nodal load `p_d`, `e_r`.
 - petgraph `UnGraph<bus_idx, branch_idx>` view + connectivity / radial diagnostics.
-- Planned: LinDist3Flow, Parquet (gridfm-datakit schema).
+- gridfm-datakit Parquet dataset (`gridfm` subcommand, `io::gridfm::write_gridfm_dataset`, `--features gridfm`): the `bus_data`/`gen_data`/`branch_data`/`y_bus_data` tables a single parsed case maps to, matching gridfm-datakit's column schema so gridfm-graphkit trains on it directly.
+- Planned: LinDist3Flow.
 
 ## Commands
 
@@ -54,9 +56,11 @@ powerio verify tests/data/case30.m --kind bdoubleprime
 powerio dcopf tests/data/case30.m -o out
 powerio sensitivities tests/data/case30.m -o out
 powerio convert tests/data/case14.m --to psse -o case14.raw
+powerio gridfm tests/data/case14.m -o out      # gridfm-datakit Parquet dataset
 
 # C ABI (cdylib + staticlib; header powerio-capi/include/powerio.h):
 cargo build -p powerio-capi
+cargo build -p powerio-capi --features arrow   # + pio_export_arrow (Arrow C Data Interface)
 
 # Python (PyO3 crate needs libpython, so it is NOT in default-members):
 cargo build -p powerio-py    # plain cargo build of the extension
@@ -99,7 +103,8 @@ powerio-matrix/               # matrices + graph views on powerio
 │   ├── sensitivity.rs       # PTDF, LODF (self-contained dense Cholesky)
 │   ├── opf.rs               # OpfInstance: Q, c, bounds, f̄, C_g, p_d; Units
 │   └── kkt.rs               # DC-OPF interior point operators (feature = "kkt")
-├── src/io/                  # mtx (lower-triangle symmetric), meta
+├── src/io/                  # mtx (lower-triangle symmetric), meta,
+│                            #   gridfm (gridfm-datakit Parquet, feature = "gridfm")
 ├── src/pipeline.rs          # case → square MatrixKind family
 ├── src/opf_pipeline.rs      # case → DC-OPF bundle directory + manifest
 └── src/synth/               # tree, lattice, pegase-like generators
@@ -112,6 +117,7 @@ powerio-py/src/lib.rs        # PyO3 extension → COO triplets (module `_powerio
 python/powerio/              # importable package (scipy/networkx assembly, lazy)
 python/tests/test_powerio.py
 powerio-capi/                # C ABI (pio_*, include/powerio.h, examples/smoke.c)
+│                            #   src/arrow_export.rs: pio_export_arrow (feature = "arrow")
 tests/data/                  # shared fixtures (used by CLI examples)
 benchmarks/                  # parse benchmarks + Julia validation harnesses
 ```
@@ -174,4 +180,4 @@ new sizes by curl from upstream.
 
 ## Relationship to GridFM
 
-Intended as the fast Rust data layer beneath `gridfm-datakit` (Python, scenario generation) and `gridfm-graphkit` (PyTorch Geometric, GNN training). Planned Parquet output (issue #4) matches gridfm-datakit's column schemas.
+Intended as the fast Rust data layer beneath `gridfm-datakit` (Python, scenario generation) and `gridfm-graphkit` (PyTorch Geometric, GNN training). The `gridfm` subcommand (`io::gridfm`, `--features gridfm`, issue #4) writes the `bus_data`/`gen_data`/`branch_data`/`y_bus_data` Parquet tables matching gridfm-datakit's column schema, under `<out>/<case>/raw/`, so gridfm-graphkit's `HeteroGridDatasetDisk` loads powerio output directly. powerio has no solver, so a case is one snapshot (`scenario 0`): voltages/dispatch are the case's stored values and branch flows are computed from them. Per-scenario expansion is the scenario-batch path (issue #14).

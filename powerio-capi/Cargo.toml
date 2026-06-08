@@ -14,5 +14,12 @@ publish = false
 name = "powerio_capi"
 crate-type = ["cdylib", "staticlib", "rlib"]
 
+[features]
+# Zero-copy raw-network export over the Arrow C Data Interface (`pio_export_arrow`).
+# Off by default so the base ABI pulls in nothing but `powerio`.
+arrow = ["dep:arrow"]
+
 [dependencies]
 powerio = { path = "../powerio" }
+# Only the C Data Interface (`ffi`) is needed; the heavy arrow defaults stay off.
+arrow = { version = "58", default-features = false, features = ["ffi"], optional = true }

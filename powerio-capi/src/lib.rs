@@ -17,6 +17,14 @@ use std::panic::{AssertUnwindSafe, catch_unwind};
 
 use powerio::{IndexCore, IndexedNetwork, Network};
 
+#[cfg(feature = "arrow")]
+mod arrow_export;
+#[cfg(feature = "arrow")]
+pub use arrow_export::{
+    PIO_ARROW_TABLE_BRANCH, PIO_ARROW_TABLE_BUS, PIO_ARROW_TABLE_GEN, PIO_ARROW_TABLE_LOAD,
+    PIO_ARROW_TABLE_SHUNT,
+};
+
 /// Opaque parsed case handle. Carries the parsed [`Network`] plus the
 /// [`IndexCore`] derived from it once at parse time, so every indexed query
 /// reuses the same bus-id map and nodal aggregates instead of rebuilding them.
@@ -425,6 +433,55 @@ pub unsafe extern "C" fn pio_nodal_shunt(case: *const PioCase, gs: *mut f64, bs:
                 fill(bs, v.bs().iter().copied());
             }
         })
+    }
+}
+
+/// Export one raw-network table over the Arrow C Data Interface (zero-copy).
+///
+/// `table` is one of the `PIO_ARROW_TABLE_*` selectors (bus/branch/gen/load/
+/// shunt); the columns are the parsed network fields with EXTERNAL bus ids (the
+/// `pio_bus_ids` id space), not the gridfm schema. On success (returns `0`),
+/// `out_array` and `out_schema` are populated with owned C Data Interface structs
+/// and the caller MUST release each via its `release` callback. On error
+/// (returns `-1`) the message is written into `errbuf` and the out-params are
+/// left untouched. Only built with the `arrow` cargo feature.
+#[cfg(feature = "arrow")]
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn pio_export_arrow(
+    case: *const PioCase,
+    table: i32,
+    out_array: *mut arrow::ffi::FFI_ArrowArray,
+    out_schema: *mut arrow::ffi::FFI_ArrowSchema,
+    errbuf: *mut c_char,
+    errlen: usize,
+) -> i32 {
+    unsafe {
+        let r = catch_unwind(AssertUnwindSafe(|| {
+            if out_array.is_null() || out_schema.is_null() {
+                return Err("out_array or out_schema is NULL".to_string());
+            }
+            let c = case_ref(case).ok_or_else(|| "case is NULL".to_string())?;
+            arrow_export::export(&c.net, table)
+        }));
+        match r {
+            Ok(Ok((array, schema))) => {
+                // Move the FFI structs into caller memory: ptr::write does not
+                // drop the (caller-zeroed) destination and does not run Drop on
+                // `array`/`schema`, so the producer release callbacks transfer to
+                // the caller — exactly one owner.
+                std::ptr::write(out_array, array);
+                std::ptr::write(out_schema, schema);
+                0
+            }
+            Ok(Err(msg)) => {
+                copy_to_buf(errbuf, errlen, &msg);
+                -1
+            }
+            Err(_) => {
+                copy_to_buf(errbuf, errlen, "panic while exporting Arrow");
+                -1
+            }
+        }
     }
 }
 
