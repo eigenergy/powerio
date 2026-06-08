@@ -10,7 +10,7 @@
           },
           {
             "type": "command",
-            "command": "file=$(jq -r '.tool_input.file_path // empty'); case \"$file\" in */powerio-capi/src/lib.rs) root=\"${file%/powerio-capi/src/lib.rs}\"; command -v cbindgen >/dev/null 2>&1 && (cd \"$root\" && cbindgen --config powerio-capi/cbindgen.toml --crate powerio-capi --output powerio-capi/include/powerio.h >/dev/null 2>&1) || true ;; esac"
+            "command": "file=$(jq -r '.tool_input.file_path // empty'); case \"$file\" in */powerio-capi/src/*.rs) root=\"${file%/powerio-capi/src/*}\"; command -v cbindgen >/dev/null 2>&1 && (cd \"$root\" && cbindgen --config powerio-capi/cbindgen.toml --crate powerio-capi --output powerio-capi/include/powerio.h >/dev/null) || true ;; esac"
           }
         ]
       }

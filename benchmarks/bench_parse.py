@@ -107,7 +107,7 @@ def bench_case(path: Path):
             print("pandapower not installed; skipping the pandapower row.")
             print("  pip install pandapower matpowercaseframes")
         except Exception as exc:  # noqa: BLE001 - from_mpc raises on some cases (pp 3.2.2)
-            print(f"pandapower from_mpc failed on this case: {type(exc).__name__}")
+            print(f"pandapower from_mpc failed on this case: {type(exc).__name__}: {exc}")
 
     width = max(len(name) for name, *_ in rows)
     print(f"{'task':<{width}}  {'best (ms)':>10}  {'median (ms)':>12}")

@@ -76,6 +76,11 @@ def panda_rows(rows, cases):
     selected, missing = _select(rows, cases)
     if selected is None:
         return None, missing
+    # The published table always carries the matpowercaseframes baseline; if a run
+    # lacked it (None), fail closed rather than publish an `n/a` cell.
+    no_baseline = [r["case"] for r in selected if r["matpowercaseframes_ms"] is None]
+    if no_baseline:
+        return None, [f"{c} (matpowercaseframes baseline)" for c in no_baseline]
     lines = [
         f"| {r['case']} | {ms(r['powerio_parse_ms'])} | {ms(r['matpowercaseframes_ms'])} |"
         for r in selected

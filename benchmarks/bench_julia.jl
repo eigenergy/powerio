@@ -64,7 +64,10 @@ end
 println(rpad("case", 20), rpad("powerio", 13), rpad("ExaPowerIO", 13),
         rpad("PowerModels", 13), "buses (powerio / ExaPowerIO)")
 for (name, f, run_pm) in CASES
-    isfile(f) || continue
+    if !isfile(f)
+        @warn "bench_julia: fixture missing, dropping it from the run" case = name path = f
+        continue
+    end
 
     # powerio through the C ABI. Time only the parse (read + build the model) and
     # free in an untimed teardown — matching ExaPowerIO/PowerModels, whose returned

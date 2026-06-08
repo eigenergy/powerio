@@ -1,6 +1,6 @@
 # Matrix outputs and conventions
 
-`powerio-matrix` builds sparse matrices and graph views from a [`Network`]. The
+`powerio-matrix` builds sparse matrices and graph views from a `Network`. The
 builders take the dense-indexed `IndexedNetwork`, which maps MATPOWER bus ids to a
 contiguous `[0, n)`. This document is the convention reference; the DC-OPF bundle
 has its own schema in [dcopf-bundle.md](dcopf-bundle.md), and per-builder API
@@ -41,8 +41,9 @@ dense `m×n`; sparse large-scale PTDF is future work. The DC-OPF instance bundle
 - **`BR_B` is already per unit.** Line charging susceptance is per unit on `baseMVA`
   in MATPOWER; never divide by `base_mva` again.
 - **DC susceptance.** The default is `b = 1/x` (`DcConvention::PaperPure`, taps and
-  shifts ignored), which makes `L = A diag(b) Aᵀ` equal `build_bprime`.
-  `DcConvention::Matpower` uses `b = 1/(x·τ)` plus a phase-shift injection `p_shift`.
+  shifts ignored), which makes `L = A diag(b) Aᵀ` equal `build_bprime` in the XB
+  scheme. `DcConvention::Matpower` uses `b = 1/(x·τ)` plus a phase shift injection
+  `p_shift`.
 
 ## Output
 
