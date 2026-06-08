@@ -39,11 +39,13 @@ jobs:
           python-version: ${{ matrix.python }}
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
-      # `pip install .[all]` builds the extension via the maturin backend and
-      # pulls scipy/numpy/networkx so the matrix and graph tests run. Quote the
-      # extras so the shell doesn't glob `[all]`.
+      # `pip install .[all,mcp]` builds the extension via the maturin backend and
+      # pulls scipy/numpy/networkx (matrix + graph tests) plus the MCP SDK. The
+      # `mcp` extra carries a `python_version >= '3.10'` marker, so it installs
+      # the SDK on 3.12 (test_mcp runs) and resolves to nothing on 3.9 (test_mcp
+      # skips). Quote the extras so the shell doesn't glob `[all,mcp]`.
       - name: Install powerio + test deps
-        run: pip install '.[all]' pytest
+        run: pip install '.[all,mcp]' pytest
       - name: Run tests
         run: pytest python/tests -q
       # The zero-dep promise: parse/convert/write import nothing but the
