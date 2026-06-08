@@ -34,6 +34,14 @@ bench = ["matpowercaseframes", "pandapower"]
 # with the Rust `gridfm` feature (`maturin develop -E gridfm --features gridfm`),
 # so the default wheel stays interpreter-only.
 gridfm = ["pandas>=2", "pyarrow>=14"]
+# The MCP server (powerio.mcp) wraps parse/convert as two MCP tools. The
+# official `mcp` SDK (FastMCP) requires Python >=3.10; the env marker keeps this
+# extra a no-op on 3.9 so `import powerio` stays zero-dep and 3.9-compatible.
+mcp = ["mcp>=1.2; python_version >= '3.10'"]
+
+[project.scripts]
+# Serves the convert_case + case_summary tools over stdio. Needs the `mcp` extra.
+powerio-mcp = "powerio.mcp.server:main"
 
 [project.urls]
 Repository = "https://github.com/eigenergy/powerio"
