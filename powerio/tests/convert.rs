@@ -6,9 +6,10 @@
 use std::path::{Path, PathBuf};
 
 use powerio::{
-    BusId, SourceFormat, TargetFormat, parse_matpower, parse_matpower_file, parse_powermodels_json,
-    parse_powerworld, parse_psse, write_as, write_egret_json, write_powermodels_json,
-    write_powerworld, write_psse,
+    BusId, SourceFormat, TargetFormat, parse, parse_matpower, parse_matpower_file,
+    parse_powermodels_json, parse_powerworld, parse_psse, parse_str, parse_surge_json,
+    target_format_from_name, write_as, write_egret_json, write_powermodels_json, write_powerworld,
+    write_psse, write_surge_json,
 };
 use serde_json::Value;
 
@@ -148,6 +149,163 @@ fn powermodels_json_same_format_is_byte_exact_echo() {
     let json = write_powermodels_json(&net).text;
     let net2 = parse_powermodels_json(&json).unwrap();
     assert_eq!(write_as(&net2, TargetFormat::PowerModelsJson).text, json);
+}
+
+#[test]
+fn surge_fixtures_parse_sniff_and_echo() {
+    for f in [
+        "surge/case14.surge.json",
+        "surge/case30.surge.json",
+        "surge/case57.surge.json",
+        "surge/market30.surge.json",
+    ] {
+        let text = std::fs::read_to_string(data(f)).unwrap();
+        let net = parse_surge_json(&text).unwrap();
+        assert_eq!(net.source_format, SourceFormat::Surge, "{f}");
+        assert_eq!(
+            write_as(&net, TargetFormat::SurgeJson).text,
+            text,
+            "{f}: same-format write should echo the source"
+        );
+
+        let inferred = parse(data(f)).unwrap();
+        assert_eq!(
+            inferred.source_format,
+            SourceFormat::Surge,
+            "{f}: JSON sniffer should detect surge-json envelope"
+        );
+    }
+
+    let case14 =
+        parse_surge_json(&std::fs::read_to_string(data("surge/case14.surge.json")).unwrap())
+            .unwrap();
+    assert_eq!(case14.buses.len(), 14);
+    assert!(
+        case14
+            .shunts
+            .iter()
+            .any(|s| s.bus == BusId(9) && (s.b - 19.0).abs() < 1e-9),
+        "inline bus shunts should become first-class shunts"
+    );
+
+    let market =
+        parse_surge_json(&std::fs::read_to_string(data("surge/market30.surge.json")).unwrap())
+            .unwrap();
+    assert!(
+        market.storage.len() >= 2,
+        "storage generators should map to storage records"
+    );
+    assert_eq!(
+        market.hvdc.len(),
+        1,
+        "VSC HVDC link should map to one dcline"
+    );
+}
+
+#[test]
+fn surge_aliases_parse_and_convert() {
+    let text = std::fs::read_to_string(data("surge/case14.surge.json")).unwrap();
+    assert_eq!(
+        target_format_from_name("surge"),
+        Some(TargetFormat::SurgeJson)
+    );
+    assert_eq!(
+        target_format_from_name("surge-json"),
+        Some(TargetFormat::SurgeJson)
+    );
+    assert_eq!(
+        parse_str(&text, "surge").unwrap().source_format,
+        SourceFormat::Surge
+    );
+}
+
+#[test]
+fn surge_radians_tap_cost_and_storage_mapping() {
+    let json = r#"{
+      "format": "surge-json",
+      "schema_version": "0.1.0",
+      "meta": {"producer": "surge", "profile": "network"},
+      "network": {
+        "name": "tiny",
+        "base_mva": 100.0,
+        "buses": [
+          {"number": 1, "bus_type": "Slack", "voltage_magnitude_pu": 1.0, "voltage_angle_rad": 0.5235987755982988, "base_kv": 230.0, "area": 1, "zone": 1},
+          {"number": 2, "bus_type": "PQ", "voltage_magnitude_pu": 1.0, "voltage_angle_rad": 0.0, "base_kv": 230.0, "area": 1, "zone": 1}
+        ],
+        "branches": [
+          {"from_bus": 1, "to_bus": 2, "branch_type": "Line", "tap": 1.0, "phase_shift_rad": 0.2617993877991494, "angle_diff_min_rad": -0.5235987755982988, "angle_diff_max_rad": 0.5235987755982988, "r": 0.01, "x": 0.05, "b": 0.0}
+        ],
+        "generators": [
+          {"bus": 1, "p": 10.0, "q": 1.0, "pmax": 20.0, "pmin": -5.0, "qmax": 3.0, "qmin": -2.0, "voltage_setpoint_pu": 1.0, "machine_base_mva": 100.0, "cost": {"Polynomial": {"coeffs": [3.0, 2.0, 1.0]}}, "storage": {"energy_capacity_mwh": 50.0, "soc_initial_mwh": 25.0, "efficiency": 0.81}}
+        ],
+        "loads": [],
+        "fixed_shunts": []
+      }
+    }"#;
+    let net = parse_surge_json(json).unwrap();
+    assert!((net.buses[0].va - 30.0).abs() < 1e-9);
+    assert!(
+        (net.branches[0].tap - 1.0).abs() < 1e-12,
+        "nonzero shift makes this a transformer-like branch"
+    );
+    assert!((net.branches[0].shift - 15.0).abs() < 1e-9);
+    assert!((net.branches[0].angmin + 30.0).abs() < 1e-9);
+    assert!((net.branches[0].angmax - 30.0).abs() < 1e-9);
+    assert_eq!(
+        net.generators[0].cost.as_ref().unwrap().coeffs,
+        vec![3.0, 2.0, 1.0]
+    );
+    assert_eq!(net.storage.len(), 1);
+    assert!((net.storage[0].charge_rating - 5.0).abs() < 1e-9);
+    assert!((net.storage[0].charge_efficiency - 0.9).abs() < 1e-9);
+}
+
+#[test]
+fn matpower_surge_matpower_preserves_core() {
+    let orig = parse_matpower_file(data("case30.m")).unwrap();
+    let surge = write_surge_json(&orig);
+    let from_surge = parse_surge_json(&surge.text).unwrap();
+    let back = parse_matpower(&write_as(&from_surge, TargetFormat::Matpower).text).unwrap();
+    assert_eq!(back.buses.len(), orig.buses.len());
+    assert_eq!(back.branches.len(), orig.branches.len());
+    assert_eq!(back.generators.len(), orig.generators.len());
+    assert_eq!(back.loads.len(), orig.loads.len());
+    assert_eq!(back.shunts.len(), orig.shunts.len());
+    assert!((back.base_mva - orig.base_mva).abs() < 1e-9);
+    let load_p = |net: &powerio::Network| net.loads.iter().map(|l| l.p).sum::<f64>();
+    let gen_p = |net: &powerio::Network| net.generators.iter().map(|g| g.pg).sum::<f64>();
+    assert!((load_p(&back) - load_p(&orig)).abs() < 1e-9);
+    assert!((gen_p(&back) - gen_p(&orig)).abs() < 1e-9);
+}
+
+#[test]
+fn surge_cross_format_reports_source_only_fields() {
+    let net =
+        parse_surge_json(&std::fs::read_to_string(data("surge/market30.surge.json")).unwrap())
+            .unwrap();
+    let to_matpower = write_as(&net, TargetFormat::Matpower);
+    assert!(
+        to_matpower
+            .warnings
+            .iter()
+            .any(|w| w.contains("surge network sections dropped")),
+        "expected source section warning, got {:?}",
+        to_matpower.warnings
+    );
+    assert!(
+        to_matpower
+            .warnings
+            .iter()
+            .any(|w| w.contains("surge HVDC")),
+        "expected HVDC source warning, got {:?}",
+        to_matpower.warnings
+    );
+
+    let to_pm = write_as(&net, TargetFormat::PowerModelsJson);
+    assert!(
+        to_pm.warnings.iter().any(|w| w.contains("surge")),
+        "cross-format PowerModels conversion should carry surge source warnings"
+    );
 }
 
 #[test]

@@ -1,12 +1,12 @@
 # PowerIO
 
 Lossless IO and format conversion for power system case files. Parse MATPOWER
-`.m`, PSS/E `.raw`, PowerWorld `.aux`, PowerModels JSON, and EGRET JSON into one
-format neutral `Network`; write any of them back (same-format round trips are byte
-for byte); convert between them with explicit fidelity reporting; and emit the
-sparse matrices and graph views a solver needs. The same Rust core is callable
-from Rust, Python, C/C++, and Julia. The core crate has six dependencies and no
-matrix or solver stack.
+`.m`, PSS/E `.raw`, PowerWorld `.aux`, PowerModels JSON, EGRET JSON, and Surge
+JSON into one format neutral `Network`; write any of them back (same format
+round trips are byte for byte); convert between them with explicit fidelity
+reporting; and emit the sparse matrices and graph views a solver needs. The
+same Rust core is callable from Rust, Python, C/C++, and Julia. The core crate
+has six dependencies and no matrix or solver stack.
 
 ## Workspace
 
@@ -36,29 +36,34 @@ Every reader produces a `Network` and every writer consumes one, so a new format
 is one module at the hub, not an N×M matrix of pairwise converters.
 
 **Readers and writers**: MATPOWER `.m`, PowerModels JSON, PSS/E `.raw` (v33),
-PowerWorld `.aux`, and EGRET JSON.
+PowerWorld `.aux`, EGRET JSON, and Surge JSON.
 
 Legend: 🟩 byte-exact · 🟦 full · 🟨 partial (drops are logged in `Conversion::warnings`)
 
-| reader ↓ \ writer → | MATPOWER | PowerModels JSON | PSS/E | PowerWorld | EGRET JSON |
-| --- | --- | --- | --- | --- | --- |
-| **MATPOWER** | 🟩 | 🟦 | 🟨 | 🟨 | 🟨 |
-| **PowerModels JSON** | 🟦 | 🟩 | 🟨 | 🟨 | 🟨 |
-| **PSS/E** | 🟦 | 🟦 | 🟩 | 🟨 | 🟨 |
-| **PowerWorld** | 🟦 | 🟦 | 🟨 | 🟩 | 🟨 |
-| **EGRET JSON** | 🟦 | 🟦 | 🟨 | 🟨 | 🟩 |
+| reader ↓ \ writer → | MATPOWER | PowerModels JSON | PSS/E | PowerWorld | EGRET JSON | Surge JSON |
+| --- | --- | --- | --- | --- | --- | --- |
+| **MATPOWER** | 🟩 | 🟦 | 🟨 | 🟨 | 🟨 | 🟨 |
+| **PowerModels JSON** | 🟦 | 🟩 | 🟨 | 🟨 | 🟨 | 🟨 |
+| **PSS/E** | 🟦 | 🟦 | 🟩 | 🟨 | 🟨 | 🟦 |
+| **PowerWorld** | 🟦 | 🟦 | 🟨 | 🟩 | 🟨 | 🟦 |
+| **EGRET JSON** | 🟦 | 🟦 | 🟨 | 🟨 | 🟩 | 🟦 |
+| **Surge JSON** | 🟨 | 🟨 | 🟨 | 🟨 | 🟨 | 🟩 |
 
 **🟩 byte-exact**: writing back to the source format reproduces the file verbatim,
 comments and exact tokens like `7e-05` included. **🟦 full**: every field the source
 carries survives. **🟨 partial**: the target cannot represent some fields (PSS/E and
 PowerWorld have no cost curves; EGRET has no HVDC or storage), and each dropped
-field is reported in `Conversion::warnings`, not dropped silently. Two target
-caveats fold into this: canonical MATPOWER output omits dcline and storage, and the
-PowerModels writer maps them best-effort.
+field is reported in `Conversion::warnings`, not dropped silently. Three target
+caveats fold into this: canonical MATPOWER output omits dcline and storage, the
+PowerModels writer maps them best-effort, and Surge JSON carries the core network
+profile only. Rich Surge dispatch, result, market, controls, ZIP load,
+converter, and DC grid data are reported on cross format writes. Compressed
+`.surge.json.zst` and `.surge.bin` files are out of scope for the runtime reader.
 
-Every reader and writer is validated against an independent tool, PowerModels.jl,
-the EGRET package, ExaPowerIO.jl, and pandapower, over the full conversion matrix.
-See [benchmarks/RESULTS.md](benchmarks/RESULTS.md) and
+Every reader and writer is validated against an independent tool where one exists:
+PowerModels.jl, the EGRET package, ExaPowerIO.jl, pandapower, and an optional
+Surge CLI oracle through `SURGE_BIN` or `SURGE_CHECKOUT`. See
+[benchmarks/RESULTS.md](benchmarks/RESULTS.md) and
 [docs/format-fidelity.md](docs/format-fidelity.md).
 
 ## Matrices

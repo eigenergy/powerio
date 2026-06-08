@@ -152,6 +152,8 @@ enum FormatArg {
     PowerModelsJson,
     #[value(name = "egret-json", alias = "egret")]
     EgretJson,
+    #[value(name = "surge-json", alias = "surge")]
+    SurgeJson,
     #[value(name = "psse", alias = "raw")]
     Psse,
     #[value(name = "powerworld", alias = "aux")]
@@ -164,6 +166,7 @@ impl From<FormatArg> for powerio_matrix::TargetFormat {
             FormatArg::Matpower => Self::Matpower,
             FormatArg::PowerModelsJson => Self::PowerModelsJson,
             FormatArg::EgretJson => Self::EgretJson,
+            FormatArg::SurgeJson => Self::SurgeJson,
             FormatArg::Psse => Self::Psse,
             FormatArg::PowerWorld => Self::PowerWorld,
         }
@@ -177,6 +180,7 @@ impl FormatArg {
             FormatArg::Matpower => "matpower",
             FormatArg::PowerModelsJson => "powermodels-json",
             FormatArg::EgretJson => "egret-json",
+            FormatArg::SurgeJson => "surge-json",
             FormatArg::Psse => "psse",
             FormatArg::PowerWorld => "powerworld",
         }

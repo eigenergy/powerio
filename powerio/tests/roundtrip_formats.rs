@@ -8,17 +8,16 @@
 //! - **same-format byte-exact echo** — reading a format then writing it back
 //!   reproduces the bytes.
 //!
-//! All five formats (MATPOWER, PowerModels JSON, PSS/E, PowerWorld, EGRET) have a
-//! reader and a writer, so each runs the full set. PowerModels' and EGRET's
-//! value-for-value checks against the reference tools live in
-//! `benchmarks/validate_powermodels.jl` and `benchmarks/validate_egret.py`.
+//! MATPOWER, PowerModels JSON, PSS/E, PowerWorld, EGRET, and Surge have readers
+//! and writers, so each runs the full set. PowerModels', EGRET's, and Surge's
+//! value-for-value checks against reference tools live under `benchmarks/`.
 
 use std::path::{Path, PathBuf};
 
 use powerio::{
     Network, TargetFormat, parse_egret_json, parse_matpower_file, parse_powermodels_json,
-    parse_powerworld, parse_psse, write_as, write_egret_json, write_powermodels_json,
-    write_powerworld, write_psse,
+    parse_powerworld, parse_psse, parse_surge_json, write_as, write_egret_json,
+    write_powermodels_json, write_powerworld, write_psse, write_surge_json,
 };
 
 mod common;
@@ -97,6 +96,12 @@ fn roundtrippable() -> Vec<Roundtrippable> {
             write: |n| write_egret_json(n).text,
             read: |s| parse_egret_json(s).unwrap(),
         },
+        Roundtrippable {
+            name: "Surge JSON",
+            format: TargetFormat::SurgeJson,
+            write: |n| write_surge_json(n).text,
+            read: |s| parse_surge_json(s).unwrap(),
+        },
     ]
 }
 
@@ -124,9 +129,12 @@ fn reader_writer_is_idempotent() {
         for fmt in roundtrippable() {
             let t0 = (fmt.write)(&net0);
             let t1 = (fmt.write)(&(fmt.read)(&t0));
-            if fmt.format == TargetFormat::PowerModelsJson {
-                // PowerModels JSON is per-unit; the ÷base / ×base round-trip is not
-                // bit-exact in f64, so compare structure and values with a tolerance.
+            if matches!(
+                fmt.format,
+                TargetFormat::PowerModelsJson | TargetFormat::SurgeJson
+            ) {
+                // These JSON formats convert angles or per-unit quantities through
+                // f64 math, so compare structure and values with a tolerance.
                 let v0: serde_json::Value = serde_json::from_str(&t0).unwrap();
                 let v1: serde_json::Value = serde_json::from_str(&t1).unwrap();
                 assert!(

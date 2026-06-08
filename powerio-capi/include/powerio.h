@@ -34,8 +34,9 @@ extern "C" {
 typedef struct PioCase PioCase;
 
 /* Parse `path`; format from the file extension, or forced by `from`
- * ("matpower","powermodels","psse","powerworld") when non-NULL. Returns NULL on
- * error and writes the message into errbuf (a char[errlen]). */
+ * ("matpower","powermodels","egret","surge","psse","powerworld") when
+ * non-NULL. Returns NULL on error and writes the message into errbuf
+ * (a char[errlen]). */
 PioCase *pio_parse(const char *path, const char *from, char *errbuf, size_t errlen);
 void pio_case_free(PioCase *c);
 

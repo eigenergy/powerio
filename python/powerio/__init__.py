@@ -1,7 +1,7 @@
 """powerio: lossless power system case file IO, conversion, and matrices.
 
-Parse MATPOWER, PSS/E, PowerWorld, and PowerModels JSON into one format-neutral
-case; write it back byte-exact; convert between formats; and pull the sparse
+Parse MATPOWER, PSS/E, PowerWorld, PowerModels JSON, EGRET JSON, and Surge JSON
+into one format-neutral case; write it back byte-exact; convert between formats; and pull the sparse
 matrices and graph views solvers need::
 
     import powerio
@@ -270,10 +270,10 @@ def convert(path: Any, to: str, from_: Optional[str] = None) -> Conversion:
     """Convert a case file to another format through the neutral hub.
 
     ``to`` / ``from_`` are format names: ``matpower``, ``powermodels-json``,
-    ``egret-json``, ``psse``, ``powerworld`` (aliases ``m``, ``pm``, ``egret``,
-    ``raw``, ``aux``). The input format is inferred from the file extension
-    unless ``from_`` overrides it. Returns a :class:`Conversion` with the text
-    and any fidelity warnings.
+    ``egret-json``, ``surge-json``, ``psse``, ``powerworld`` (aliases ``m``,
+    ``pm``, ``egret``, ``surge``, ``raw``, ``aux``). The input format is
+    inferred from the file extension unless ``from_`` overrides it. Returns a
+    :class:`Conversion` with the text and any fidelity warnings.
     """
     text, warnings = _powerio.convert(str(path), to, from_)
     return Conversion(text, warnings)

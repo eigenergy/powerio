@@ -40,8 +40,8 @@ pub use powerio::{
     GenCost, Generator, Hvdc, IndexCore, IndexedNetwork, Load, Network, Result, ScenarioMismatch,
     Shunt, SourceFormat, Storage, TargetFormat, error, format, indexed, network, parse,
     parse_matpower, parse_matpower_file, parse_powermodels_json, parse_powerworld, parse_psse,
-    parse_str, read_path, target_format_from_name, write_as, write_egret_json, write_matpower,
-    write_powermodels_json, write_powerworld, write_psse,
+    parse_str, parse_surge_json, read_path, target_format_from_name, write_as, write_egret_json,
+    write_matpower, write_powermodels_json, write_powerworld, write_psse, write_surge_json,
 };
 
 pub mod io;

@@ -513,7 +513,8 @@ fn parse(path: &str) -> PyResult<PyCase> {
 }
 
 /// Parse a case from in-memory text in the named `format` (`matpower`,
-/// `powermodels-json`, `psse`, `powerworld`; aliases `m`/`pm`/`raw`/`aux`).
+/// `powermodels-json`, `egret-json`, `surge-json`, `psse`, `powerworld`;
+/// aliases `m`/`pm`/`egret`/`surge`/`raw`/`aux`).
 #[pyfunction]
 #[pyo3(signature = (text, format=None))]
 fn parse_str(text: &str, format: Option<&str>) -> PyResult<PyCase> {
