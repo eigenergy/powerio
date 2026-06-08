@@ -101,13 +101,13 @@ function compare_psse(ref_path::AbstractString, test_path::AbstractString)
         isapprox(r, t; atol = 1e-6, rtol = 1e-6) || push!(problems, "Σ$et.$f: ref=$r test=$t")
     end
     # When the shunt counts agree, the admittances must match too.
-    if _count(ref, "shunt") == _count(test, "shunt")
+    sref, stest = _count(ref, "shunt"), _count(test, "shunt")
+    if sref == stest
         for f in ("gs", "bs")
             r, t = _total(ref, "shunt", f), _total(test, "shunt", f)
             isapprox(r, t; atol = 1e-6, rtol = 1e-6) || push!(problems, "Σshunt.$f: ref=$r test=$t")
         end
     end
-    sref, stest = _count(ref, "shunt"), _count(test, "shunt")
     note = sref == stest ? "" : "  (shunt: ref=$sref test=$stest — switched shunts not modeled)"
     return problems, note
 end

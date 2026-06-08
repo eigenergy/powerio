@@ -118,7 +118,8 @@ awk -F'\t' '
 # A FAIL mark is a real discrepancy; n/a and SKIP are not. A short results file
 # (fewer rows than legs run) means a phase crashed before recording — fail loudly.
 mark_fails=$(awk -F'\t' '$3 == "FAIL" { c++ } END { print c + 0 }' "$PIO_RESULTS_TSV")
-expected=$((${#MCASES[@]} * 4 + ${#RAWCASES[@]} + ${#EGCASES[@]} + ${#MCASES[@]} + 1))
+# 5 legs per .m case (PMjson, PMread, PSSE, Exa, pp) + 1 per raw + 1 per egret + 1 matrix.
+expected=$((${#MCASES[@]} * 5 + ${#RAWCASES[@]} + ${#EGCASES[@]} + 1))
 got=$(wc -l <"$PIO_RESULTS_TSV")
 short=0
 [ "$got" -lt "$expected" ] && short=1
