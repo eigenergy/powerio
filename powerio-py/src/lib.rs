@@ -62,40 +62,28 @@ pyo3::create_exception!(
      disconnected or singular network, or a dimension/cost mismatch)."
 );
 
-/// I/O failures map to the matching `OSError` subclass (`FileNotFoundError`,
-/// `PermissionError`, …) so Python callers can catch them the usual way; an
-/// unknown/uninferable format becomes a `ValueError`. The remaining errors split
-/// into [`PowerIOParseError`] (a bad input file) and [`PowerIODataError`] (an
-/// unmet operation precondition); both subclass [`PowerIOError`], so existing
-/// `except PowerIOError` handlers keep working. Anything not yet categorized
-/// (the enum is `#[non_exhaustive]`) falls back to the [`PowerIOError`] base.
+/// Map a [`powerio_matrix::Error`] onto the right Python exception, driven by
+/// [`Error::category`]. I/O failures become the matching `OSError` subclass
+/// (`FileNotFoundError`, `PermissionError`, …); an unknown/uninferable format
+/// becomes a `ValueError`; malformed input becomes [`PowerIOParseError`] and an
+/// unmet operation precondition becomes [`PowerIODataError`]. Both subclass
+/// [`PowerIOError`], so existing `except PowerIOError` handlers keep working;
+/// output-side write failures fall back to the [`PowerIOError`] base.
 fn to_pyerr(e: powerio_matrix::Error) -> PyErr {
-    use powerio_matrix::Error as E;
+    use powerio_matrix::{Error as E, ErrorCategory as C};
+    // `Io` carries the underlying `std::io::Error`; hand it to PyO3 by value so
+    // it picks the precise `OSError` subclass. (Returning here also keeps the
+    // `to_string()` below off the I/O path.)
+    if let E::Io(io) = e {
+        return io.into();
+    }
     let msg = e.to_string();
-    match e {
-        E::Io(io) => io.into(),
-        E::UnknownFormat(_) => PyValueError::new_err(msg),
-        // Malformed/unparseable input file.
-        E::MissingField(_)
-        | E::ShortRow { .. }
-        | E::BadFloat { .. }
-        | E::UnbalancedBrackets(_)
-        | E::UnknownBus { .. }
-        | E::FormatRead { .. } => PowerIOParseError::new_err(msg),
-        // Well-formed data that can't satisfy the requested operation.
-        E::ZeroImpedance { .. }
-        | E::NonFiniteSusceptance { .. }
-        | E::DimensionMismatch { .. }
-        | E::NoGenerators
-        | E::MissingGenCost { .. }
-        | E::UnsupportedCostModel { .. }
-        | E::GenCostCountMismatch { .. }
-        | E::ReferenceBusCount { .. }
-        | E::ShapeMismatch { .. }
-        | E::DisconnectedNetwork { .. }
-        | E::SingularNetwork => PowerIODataError::new_err(msg),
-        // Output-side I/O (mtx/parquet) and any future variant: the base class.
-        _ => PowerIOError::new_err(msg),
+    match e.category() {
+        C::UnknownFormat => PyValueError::new_err(msg),
+        C::Parse => PowerIOParseError::new_err(msg),
+        C::Data => PowerIODataError::new_err(msg),
+        // `Io` is handled above; `Output` (mtx/parquet) maps to the base.
+        C::Io | C::Output => PowerIOError::new_err(msg),
     }
 }
 
@@ -618,9 +606,8 @@ fn convert(path: &str, to: &str, from: Option<&str>) -> PyResult<(String, Vec<St
 }
 
 /// Build a `{dir, files}` dict from an outputs directory and its written files.
-/// Shared by the DC-OPF and gridfm write paths. Paths go through [`path_to_str`],
-/// so a non-UTF8 output path raises rather than returning a lossily mangled
-/// string that no longer opens the file that was written.
+/// Shared by the DC-OPF and gridfm write paths. Paths go through [`path_to_str`]
+/// (so a non-UTF8 path raises instead of being mangled).
 fn dir_files_dict<'py>(
     py: Python<'py>,
     dir: &std::path::Path,
