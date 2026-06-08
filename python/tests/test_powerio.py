@@ -132,6 +132,44 @@ def test_bad_parse_raises_powerio_error():
         powerio.parse_matpower_string("this is not a matpower case")
 
 
+def test_error_subclasses_are_powerio_errors():
+    # The categorized errors subclass PowerIOError, so existing `except
+    # PowerIOError` keeps catching them (backward compatible).
+    assert issubclass(powerio.PowerIOParseError, powerio.PowerIOError)
+    assert issubclass(powerio.PowerIODataError, powerio.PowerIOError)
+
+
+def test_malformed_case_raises_parse_error():
+    # A malformed/unparseable case file is a parse-category error.
+    with pytest.raises(powerio.PowerIOParseError):
+        powerio.parse_matpower_string("this is not a matpower case")
+
+
+def test_unmet_precondition_raises_data_error(tmp_path):
+    # A well-formed case that can't satisfy an operation (here: DC-OPF with no
+    # generators) is a data-category error, not a parse error.
+    genless = TINY[: TINY.index("mpc.gen = [")]
+    case = powerio.parse_matpower_string(genless)
+    with pytest.raises(powerio.PowerIODataError):
+        case.write_dcopf_bundle(str(tmp_path))
+
+
+def test_reference_bus_count_is_data_error():
+    two_ref = TINY.replace("\t3\t2\t0", "\t3\t3\t0")  # bus 3: PV -> ref
+    with pytest.raises(powerio.PowerIODataError):
+        powerio.parse_matpower_string(two_ref).reference_bus_index()
+
+
+def test_dcopf_bundle_paths_are_clean_unicode(case9, tmp_path):
+    # The returned dir/files must be exact strings that re-open the written
+    # files, never lossily mangled (no U+FFFD).
+    out = case9.write_dcopf_bundle(str(tmp_path))
+    assert "�" not in out["dir"]
+    for f in out["files"]:
+        assert "�" not in f
+        assert Path(f).exists()
+
+
 def test_delegated_surface_resolves(case9):
     # Pin the attributes/methods that reach through __getattr__ to the compiled
     # handle, so a Rust-side getter rename can't silently desync the API.

@@ -120,6 +120,70 @@ pub enum Error {
     UnknownFormat(String),
 }
 
+/// Coarse classification of an [`Error`], for callers that map onto their own
+/// taxonomy (the Python layer's exception subclasses, C ABI status codes, a
+/// CLI exit code). Distinguishing "the input file is bad" from "the operation
+/// can't run on this otherwise-valid case" is the split callers actually branch
+/// on, and it's a property of the error, not of the binding that surfaces it.
+///
+/// Deliberately *not* `#[non_exhaustive]` (unlike [`Error`]): a category-mapping
+/// match should fail to compile when a category is added, so every binding is
+/// forced to decide how to surface it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ErrorCategory {
+    /// Underlying I/O failure reading or writing a file.
+    Io,
+    /// The requested format is unknown or can't be inferred from the path.
+    UnknownFormat,
+    /// The input is malformed or unparseable.
+    Parse,
+    /// A well-formed case can't satisfy the requested operation.
+    Data,
+    /// An output serialization step (matrix-market, Parquet) failed.
+    Output,
+}
+
+impl Error {
+    /// Classify this error. The match is exhaustive over the variant set (no
+    /// wildcard), so adding an `Error` variant is a compile error here until it
+    /// is categorized — categorization can't silently drift as the enum grows.
+    pub fn category(&self) -> ErrorCategory {
+        use ErrorCategory as C;
+        match self {
+            Error::Io(_) => C::Io,
+            Error::UnknownFormat(_) => C::UnknownFormat,
+            // Malformed or unparseable input. Only the parser/format readers
+            // raise these.
+            Error::MissingField(_)
+            | Error::ShortRow { .. }
+            | Error::BadFloat { .. }
+            | Error::UnbalancedBrackets(_)
+            | Error::FormatRead { .. } => C::Parse,
+            // A well-formed case that can't satisfy a requested operation. These
+            // surface mid-build (matrix/OPF/gridfm), not at parse time —
+            // `UnknownBus` and the scenario batch checks included: the file
+            // parsed, the operation can't proceed.
+            Error::UnknownBus { .. }
+            | Error::ZeroImpedance { .. }
+            | Error::NonFiniteSusceptance { .. }
+            | Error::DimensionMismatch { .. }
+            | Error::NoGenerators
+            | Error::MissingGenCost { .. }
+            | Error::UnsupportedCostModel { .. }
+            | Error::GenCostCountMismatch { .. }
+            | Error::ReferenceBusCount { .. }
+            | Error::ShapeMismatch { .. }
+            | Error::DisconnectedNetwork { .. }
+            | Error::SingularNetwork
+            | Error::EmptyScenarioBatch
+            | Error::ScenarioIdOverflow { .. }
+            | Error::ScenarioShapeMismatch { .. } => C::Data,
+            // Output-side serialization write failures.
+            Error::Mtx(_) | Error::Parquet(_) => C::Output,
+        }
+    }
+}
+
 /// The element counts that define a scenario batch's shared base shape. Named
 /// (rather than a bare `(usize, usize, usize)`) so the three same-typed fields
 /// can't be transposed silently in an error message or a comparison.
@@ -169,5 +233,53 @@ impl std::fmt::Display for ScenarioMismatch {
                 write!(f, "counts match but the bus ids are in a different order")
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn category_pins_the_intended_buckets() {
+        use ErrorCategory::*;
+        // The parser/format readers raise these.
+        assert_eq!(Error::MissingField("bus").category(), Parse);
+        assert_eq!(
+            Error::FormatRead {
+                format: "psse",
+                message: "bad record".into()
+            }
+            .category(),
+            Parse
+        );
+        // An unmet operation precondition on an already-parsed case. UnknownBus
+        // and the scenario batch checks surface mid-build, not at parse time, so
+        // they are Data, not Parse — regression guard for that classification.
+        assert_eq!(Error::NoGenerators.category(), Data);
+        assert_eq!(
+            Error::UnknownBus {
+                bus_id: BusId(7),
+                element_index: 0
+            }
+            .category(),
+            Data
+        );
+        assert_eq!(Error::EmptyScenarioBatch.category(), Data);
+        assert_eq!(
+            Error::ScenarioShapeMismatch {
+                index: 1,
+                reason: ScenarioMismatch::BusOrder
+            }
+            .category(),
+            Data
+        );
+        // Format selection, output serialization, and underlying I/O.
+        assert_eq!(Error::UnknownFormat("xyz".into()).category(), UnknownFormat);
+        assert_eq!(Error::Mtx("write failed".into()).category(), Output);
+        assert_eq!(
+            Error::Io(std::io::Error::from(std::io::ErrorKind::NotFound)).category(),
+            Io
+        );
     }
 }

@@ -42,19 +42,61 @@ pyo3::create_exception!(
     _powerio,
     PowerIOError,
     pyo3::exceptions::PyException,
-    "Error raised by the powerio parser, converter, or matrix builders."
+    "Base error raised by the powerio parser, converter, or matrix builders."
 );
 
-/// I/O failures map to the matching `OSError` subclass (`FileNotFoundError`,
-/// `PermissionError`, …) so Python callers can catch them the usual way; an
-/// unknown/uninferable format becomes a `ValueError`; other parse and data
-/// errors become [`PowerIOError`].
+pyo3::create_exception!(
+    _powerio,
+    PowerIOParseError,
+    PowerIOError,
+    "A case file is malformed or unparseable (missing/short rows, bad numbers, \
+     unbalanced brackets, format read failures)."
+);
+
+pyo3::create_exception!(
+    _powerio,
+    PowerIODataError,
+    PowerIOError,
+    "A well-formed case cannot satisfy a requested operation (no generators, \
+     wrong reference bus count, an unknown bus reference, zero/non-finite \
+     branch impedance, a disconnected or singular network, a scenario batch \
+     shape mismatch, or a dimension/cost mismatch)."
+);
+
+/// Map a [`powerio_matrix::Error`] onto the right Python exception, driven by
+/// [`Error::category`]. I/O failures become the matching `OSError` subclass
+/// (`FileNotFoundError`, `PermissionError`, …); an unknown/uninferable format
+/// becomes a `ValueError`; malformed input becomes [`PowerIOParseError`] and an
+/// unmet operation precondition becomes [`PowerIODataError`]. Both subclass
+/// [`PowerIOError`], so existing `except PowerIOError` handlers keep working;
+/// output-side write failures fall back to the [`PowerIOError`] base.
 fn to_pyerr(e: powerio_matrix::Error) -> PyErr {
-    match e {
-        powerio_matrix::Error::Io(io) => io.into(),
-        powerio_matrix::Error::UnknownFormat(msg) => PyValueError::new_err(msg),
-        other => PowerIOError::new_err(other.to_string()),
+    use powerio_matrix::{Error as E, ErrorCategory as C};
+    // `Io` carries the underlying `std::io::Error`; hand it to PyO3 by value so
+    // it picks the precise `OSError` subclass. (Returning here also keeps the
+    // `to_string()` below off the I/O path.)
+    if let E::Io(io) = e {
+        return io.into();
     }
+    let msg = e.to_string();
+    match e.category() {
+        C::UnknownFormat => PyValueError::new_err(msg),
+        C::Parse => PowerIOParseError::new_err(msg),
+        C::Data => PowerIODataError::new_err(msg),
+        // `Io` is handled above; `Output` (mtx/parquet) maps to the base.
+        C::Io | C::Output => PowerIOError::new_err(msg),
+    }
+}
+
+/// Convert an output path to a `String`, raising rather than returning a lossily
+/// mangled path that no longer opens the file that was written.
+fn path_to_str(p: &std::path::Path) -> PyResult<String> {
+    p.to_str().map(str::to_owned).ok_or_else(|| {
+        PowerIOError::new_err(format!(
+            "output path is not valid UTF-8 and cannot be returned as a string: {}",
+            p.display()
+        ))
+    })
 }
 
 /// `bx` → `Bx`, `xb` → `Xb` (case- and separator-insensitive).
@@ -565,18 +607,19 @@ fn convert(path: &str, to: &str, from: Option<&str>) -> PyResult<(String, Vec<St
 }
 
 /// Build a `{dir, files}` dict from an outputs directory and its written files.
-/// Shared by the DC-OPF and gridfm write paths.
+/// Shared by the DC-OPF and gridfm write paths. Paths go through [`path_to_str`]
+/// (so a non-UTF8 path raises instead of being mangled).
 fn dir_files_dict<'py>(
     py: Python<'py>,
     dir: &std::path::Path,
     files: &[std::path::PathBuf],
 ) -> PyResult<Bound<'py, PyDict>> {
     let d = PyDict::new(py);
-    d.set_item("dir", dir.to_string_lossy().into_owned())?;
+    d.set_item("dir", path_to_str(dir)?)?;
     let files: Vec<String> = files
         .iter()
-        .map(|p| p.to_string_lossy().into_owned())
-        .collect();
+        .map(|p| path_to_str(p))
+        .collect::<PyResult<_>>()?;
     d.set_item("files", files)?;
     Ok(d)
 }
@@ -628,6 +671,8 @@ fn write_gridfm_batch<'py>(
 fn _powerio(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add("__version__", env!("CARGO_PKG_VERSION"))?;
     m.add("PowerIOError", m.py().get_type::<PowerIOError>())?;
+    m.add("PowerIOParseError", m.py().get_type::<PowerIOParseError>())?;
+    m.add("PowerIODataError", m.py().get_type::<PowerIODataError>())?;
     m.add_class::<PyCase>()?;
     m.add_function(wrap_pyfunction!(parse, m)?)?;
     m.add_function(wrap_pyfunction!(parse_str, m)?)?;

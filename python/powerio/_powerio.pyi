@@ -11,7 +11,13 @@ from typing import Any, Optional, Tuple
 __version__: str
 
 class PowerIOError(Exception):
-    """Raised by the powerio parser, converter, or matrix builders."""
+    """Base error from the powerio parser, converter, or matrix builders."""
+
+class PowerIOParseError(PowerIOError):
+    """A case file is malformed or unparseable."""
+
+class PowerIODataError(PowerIOError):
+    """A well-formed case cannot satisfy a requested operation."""
 
 class PyCase:
     @property

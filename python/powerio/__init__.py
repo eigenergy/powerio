@@ -30,7 +30,7 @@ from collections import namedtuple
 from typing import Any, Optional
 
 from . import _powerio
-from ._powerio import PowerIOError, __version__
+from ._powerio import PowerIODataError, PowerIOError, PowerIOParseError, __version__
 
 __all__ = [
     "Case",
@@ -38,6 +38,8 @@ __all__ = [
     "YbusParts",
     "Conversion",
     "PowerIOError",
+    "PowerIOParseError",
+    "PowerIODataError",
     "parse",
     "parse_str",
     "parse_matpower",
@@ -121,8 +123,10 @@ class Case:
     handle; the matrix methods below return ``scipy.sparse`` objects.
 
     Errors: a bad file path raises the standard ``OSError`` subclass
-    (``FileNotFoundError``); malformed cases and unmet builder preconditions
-    (no generators, no reference bus) raise :class:`PowerIOError`; an unknown
+    (``FileNotFoundError``); a malformed case raises :class:`PowerIOParseError`
+    and an unmet builder precondition (no generators, no reference bus) raises
+    :class:`PowerIODataError` — both subclass :class:`PowerIOError`, so
+    ``except PowerIOError`` catches either; an unknown
     ``scheme``/``convention``/``units`` string raises ``ValueError``.
     """
 
@@ -292,7 +296,7 @@ def write_gridfm_batch(
 
     Each case is one snapshot; the k-th is stamped ``base_scenario + k``. The
     cases must share a base element set — the same bus/branch/gen counts and
-    bus-id order (otherwise :class:`PowerIOError` is raised) — but load, dispatch,
+    bus-id order (otherwise :class:`PowerIODataError` is raised) — but load, dispatch,
     branch status, and costs may vary per scenario. Returns the same dict as
     :meth:`Case.write_gridfm`. Requires the gridfm build
     (``pip install 'powerio[gridfm]'``); otherwise raises ``ImportError``.

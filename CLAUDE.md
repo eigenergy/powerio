@@ -161,6 +161,7 @@ benchmarks/                  # parse benchmarks + Julia validation harnesses
   byte-exact echo, and a `from_json` round-trip returns `source` as `None`.
 - **Sign convention.** Positive Laplacian: off diag negative, diag positive, `diag = sum |off-diag|` for B'. The positive (M-matrix) Laplacian form SDDM solvers expect.
 - **Bus IDs.** MATPOWER 1 based; `IndexedNetwork::bus_index(id)` is the only mapping into dense `[0, n)`. Don't clamp out of range — return `Error::UnknownBus`.
+- **Error classification has one home.** `Error::category()` (`powerio/src/error.rs`) is the single source of truth, an exhaustive `match` (no wildcard) onto `ErrorCategory` (Io/UnknownFormat/Parse/Data/Output) — a new `Error` variant won't compile until it's categorized. Bindings map the category, they don't reclassify: the Python layer's `to_pyerr` turns Parse → `PowerIOParseError`, Data → `PowerIODataError` (both subclass `PowerIOError`). Don't reintroduce a per-binding `match` on `Error` variants.
 - **`BR_B` is already per unit.** Never divide by `base_mva` again.
 - **`tap == 0` ⇒ `tap = 1`.** Use `Branch::effective_tap()`.
 - **B' ignores taps and shifts. B'' zeros only shifts. Y_bus keeps both.**
