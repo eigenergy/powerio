@@ -42,19 +42,72 @@ pyo3::create_exception!(
     _powerio,
     PowerIOError,
     pyo3::exceptions::PyException,
-    "Error raised by the powerio parser, converter, or matrix builders."
+    "Base error raised by the powerio parser, converter, or matrix builders."
+);
+
+pyo3::create_exception!(
+    _powerio,
+    PowerIOParseError,
+    PowerIOError,
+    "A case file is malformed or unparseable (missing/short rows, bad numbers, \
+     unbalanced brackets, unknown bus references, format read failures)."
+);
+
+pyo3::create_exception!(
+    _powerio,
+    PowerIODataError,
+    PowerIOError,
+    "A well-formed case cannot satisfy a requested operation (no generators, \
+     wrong reference-bus count, zero/non-finite branch impedance, a \
+     disconnected or singular network, or a dimension/cost mismatch)."
 );
 
 /// I/O failures map to the matching `OSError` subclass (`FileNotFoundError`,
 /// `PermissionError`, …) so Python callers can catch them the usual way; an
-/// unknown/uninferable format becomes a `ValueError`; other parse and data
-/// errors become [`PowerIOError`].
+/// unknown/uninferable format becomes a `ValueError`. The remaining errors split
+/// into [`PowerIOParseError`] (a bad input file) and [`PowerIODataError`] (an
+/// unmet operation precondition); both subclass [`PowerIOError`], so existing
+/// `except PowerIOError` handlers keep working. Anything not yet categorized
+/// (the enum is `#[non_exhaustive]`) falls back to the [`PowerIOError`] base.
 fn to_pyerr(e: powerio_matrix::Error) -> PyErr {
+    use powerio_matrix::Error as E;
+    let msg = e.to_string();
     match e {
-        powerio_matrix::Error::Io(io) => io.into(),
-        powerio_matrix::Error::UnknownFormat(msg) => PyValueError::new_err(msg),
-        other => PowerIOError::new_err(other.to_string()),
+        E::Io(io) => io.into(),
+        E::UnknownFormat(_) => PyValueError::new_err(msg),
+        // Malformed/unparseable input file.
+        E::MissingField(_)
+        | E::ShortRow { .. }
+        | E::BadFloat { .. }
+        | E::UnbalancedBrackets(_)
+        | E::UnknownBus { .. }
+        | E::FormatRead { .. } => PowerIOParseError::new_err(msg),
+        // Well-formed data that can't satisfy the requested operation.
+        E::ZeroImpedance { .. }
+        | E::NonFiniteSusceptance { .. }
+        | E::DimensionMismatch { .. }
+        | E::NoGenerators
+        | E::MissingGenCost { .. }
+        | E::UnsupportedCostModel { .. }
+        | E::GenCostCountMismatch { .. }
+        | E::ReferenceBusCount { .. }
+        | E::ShapeMismatch { .. }
+        | E::DisconnectedNetwork { .. }
+        | E::SingularNetwork => PowerIODataError::new_err(msg),
+        // Output-side I/O (mtx/parquet) and any future variant: the base class.
+        _ => PowerIOError::new_err(msg),
     }
+}
+
+/// Convert an output path to a `String`, raising rather than returning a lossily
+/// mangled path that no longer opens the file that was written.
+fn path_to_str(p: &std::path::Path) -> PyResult<String> {
+    p.to_str().map(str::to_owned).ok_or_else(|| {
+        PowerIOError::new_err(format!(
+            "output path is not valid UTF-8 and cannot be returned as a string: {}",
+            p.display()
+        ))
+    })
 }
 
 /// `bx` → `Bx`, `xb` → `Xb` (case- and separator-insensitive).
@@ -565,18 +618,20 @@ fn convert(path: &str, to: &str, from: Option<&str>) -> PyResult<(String, Vec<St
 }
 
 /// Build a `{dir, files}` dict from an outputs directory and its written files.
-/// Shared by the DC-OPF and gridfm write paths.
+/// Shared by the DC-OPF and gridfm write paths. Paths go through [`path_to_str`],
+/// so a non-UTF8 output path raises rather than returning a lossily mangled
+/// string that no longer opens the file that was written.
 fn dir_files_dict<'py>(
     py: Python<'py>,
     dir: &std::path::Path,
     files: &[std::path::PathBuf],
 ) -> PyResult<Bound<'py, PyDict>> {
     let d = PyDict::new(py);
-    d.set_item("dir", dir.to_string_lossy().into_owned())?;
+    d.set_item("dir", path_to_str(dir)?)?;
     let files: Vec<String> = files
         .iter()
-        .map(|p| p.to_string_lossy().into_owned())
-        .collect();
+        .map(|p| path_to_str(p))
+        .collect::<PyResult<_>>()?;
     d.set_item("files", files)?;
     Ok(d)
 }
@@ -628,6 +683,8 @@ fn write_gridfm_batch<'py>(
 fn _powerio(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add("__version__", env!("CARGO_PKG_VERSION"))?;
     m.add("PowerIOError", m.py().get_type::<PowerIOError>())?;
+    m.add("PowerIOParseError", m.py().get_type::<PowerIOParseError>())?;
+    m.add("PowerIODataError", m.py().get_type::<PowerIODataError>())?;
     m.add_class::<PyCase>()?;
     m.add_function(wrap_pyfunction!(parse, m)?)?;
     m.add_function(wrap_pyfunction!(parse_str, m)?)?;

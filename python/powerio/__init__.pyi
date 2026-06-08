@@ -7,7 +7,13 @@ Convention = Literal["paper", "matpower"]
 Units = Literal["perunit", "native"]
 
 class PowerIOError(Exception):
-    """Raised by the powerio parser, converter, or matrix builders."""
+    """Base error from the powerio parser, converter, or matrix builders."""
+
+class PowerIOParseError(PowerIOError):
+    """A case file is malformed or unparseable."""
+
+class PowerIODataError(PowerIOError):
+    """A well-formed case cannot satisfy a requested operation."""
 
 class GenCost(TypedDict):
     model: int

@@ -30,7 +30,7 @@ from collections import namedtuple
 from typing import Any, Optional
 
 from . import _powerio
-from ._powerio import PowerIOError, __version__
+from ._powerio import PowerIODataError, PowerIOError, PowerIOParseError, __version__
 
 __all__ = [
     "Case",
@@ -38,6 +38,8 @@ __all__ = [
     "YbusParts",
     "Conversion",
     "PowerIOError",
+    "PowerIOParseError",
+    "PowerIODataError",
     "parse",
     "parse_str",
     "parse_matpower",
@@ -121,8 +123,10 @@ class Case:
     handle; the matrix methods below return ``scipy.sparse`` objects.
 
     Errors: a bad file path raises the standard ``OSError`` subclass
-    (``FileNotFoundError``); malformed cases and unmet builder preconditions
-    (no generators, no reference bus) raise :class:`PowerIOError`; an unknown
+    (``FileNotFoundError``); a malformed case raises :class:`PowerIOParseError`
+    and an unmet builder precondition (no generators, no reference bus) raises
+    :class:`PowerIODataError` — both subclass :class:`PowerIOError`, so
+    ``except PowerIOError`` catches either; an unknown
     ``scheme``/``convention``/``units`` string raises ``ValueError``.
     """
 
