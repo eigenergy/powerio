@@ -24,8 +24,8 @@ graph views for any downstream solver. (Planned) feeds the GridFM ML pipeline.
 `Network` is the one canonical model (format-neutral, loads/shunts first-class);
 `IndexedNetwork` is the dense-indexed analysis view derived from it.
 
-Formats. Readers: MATPOWER `.m`, PowerModels JSON, PSS/E `.raw` (v33),
-PowerWorld `.aux`. Writers: those plus EGRET JSON. Every format meets at
+Formats. MATPOWER `.m`, PowerModels JSON, PSS/E `.raw` (v33), PowerWorld
+`.aux`, and EGRET JSON all read and write. Every format meets at
 `Network`, so a new format is one reader/writer at the hub, not a pairwise
 converter.
 
@@ -89,7 +89,7 @@ powerio/                      # parser + Network hub + converters
 │   ├── powermodels.rs       # PowerModels JSON reader + writer
 │   ├── psse.rs              # PSS/E .raw reader + writer
 │   ├── powerworld.rs        # PowerWorld .aux reader + writer
-│   └── egret.rs             # EGRET JSON writer
+│   └── egret.rs             # EGRET JSON reader + writer
 └── tests/                   # convert, roundtrip, roundtrip_formats
 
 powerio-matrix/               # matrices + graph views on powerio
@@ -140,10 +140,12 @@ benchmarks/                  # parse benchmarks + Julia validation harnesses
   raises a clear ImportError. `maturin develop` drops the `.so` into
   `python/powerio/`. One package surfaces both halves: parse/convert and the
   matrices.
-- **Lossless round-trip.** The MATPOWER parse retains the original source text
-  and the writer echoes it, so `parse → write → parse` is byte-for-byte —
-  every `mpc.*` field, in-matrix comments, and exact tokens like `7e-05`. Don't
-  reformat through `f64` round-trips; don't drop fields the typed model ignores.
+- **Lossless round-trip.** Every reader retains the original source text and the
+  same-format writer echoes it, so `parse → write → parse` is byte-for-byte for
+  all five formats (`write_as` returns the retained source when the target
+  matches `source_format`). For MATPOWER that means every `mpc.*` field,
+  in-matrix comments, and exact tokens like `7e-05`. Don't reformat through
+  `f64` round-trips; don't drop fields the typed model ignores.
 - **Two-tier fidelity contract.** Same-format round-trip is byte-exact.
   Cross-format conversion keeps maximal fidelity and reports anything the target
   can't represent in `Conversion::warnings` — never drop it silently.
