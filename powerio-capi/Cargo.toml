@@ -1,0 +1,18 @@
+[package]
+name = "powerio-capi"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.86"
+description = "C ABI for powerio: parse any power system case format, query it, convert losslessly, and extract the numeric tables. The polyglot substrate consumed by Julia (ccall), C, and C++."
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/eigenergy/powerio"
+publish = false
+
+# A C-consumable shared + static library. The header is checked in at
+# powerio-capi/include/powerio.h (regenerate with `cbindgen` via cbindgen.toml).
+[lib]
+name = "powerio_capi"
+crate-type = ["cdylib", "staticlib", "rlib"]
+
+[dependencies]
+powerio = { path = "../powerio" }

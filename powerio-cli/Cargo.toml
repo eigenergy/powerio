@@ -1,0 +1,31 @@
+[package]
+name = "powerio-cli"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.86"
+description = "Command line interface and ratatui TUI for powerio: parse and convert power system case files and emit matrices."
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/eigenergy/powerio"
+keywords = ["matpower", "cli", "tui"]
+categories = ["command-line-utilities", "science"]
+
+[[bin]]
+name = "powerio"
+path = "src/main.rs"
+# The binary shares its name with the `powerio` lib crate, which collides in
+# `cargo doc`'s output tree (rust-lang/cargo#6313). The CLI's docs are `--help`.
+doc = false
+
+[dependencies]
+powerio-matrix = { path = "../powerio-matrix" }
+sprs = { version = "0.11", default-features = false }
+anyhow = "1"
+clap = { version = "4", features = ["derive"] }
+ratatui = { version = "0.30", features = ["crossterm_0_29"] }
+crossterm = "0.29"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
+walkdir = "2"
+
+[lints]
+workspace = true

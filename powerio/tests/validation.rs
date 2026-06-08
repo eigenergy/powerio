@@ -1,0 +1,141 @@
+//! Input-validation and reader-robustness guarantees: malformed input must fail
+//! loudly, never silently default into a structurally valid but wrong network.
+
+use std::path::Path;
+
+use powerio::network::{Branch, Bus, BusId, BusType, Extras, Network};
+use powerio::{Error, parse_powerworld, parse_psse, write_powerworld};
+
+fn bus(id: usize, kind: BusType) -> Bus {
+    Bus {
+        id: BusId(id),
+        kind,
+        vm: 1.0,
+        va: 0.0,
+        base_kv: 1.0,
+        vmax: 1.1,
+        vmin: 0.9,
+        area: 1,
+        zone: 1,
+        name: None,
+        extras: Extras::new(),
+    }
+}
+
+fn branch(from: usize, to: usize) -> Branch {
+    Branch {
+        from: BusId(from),
+        to: BusId(to),
+        r: 0.0,
+        x: 0.1,
+        b: 0.0,
+        rate_a: 0.0,
+        rate_b: 0.0,
+        rate_c: 0.0,
+        tap: 0.0,
+        shift: 0.0,
+        in_service: true,
+        angmin: -360.0,
+        angmax: 360.0,
+        extras: Extras::new(),
+    }
+}
+
+#[test]
+fn validate_rejects_duplicate_bus_id() {
+    // Two buses share id 1: dense indexing would collapse them onto one index
+    // and silently corrupt every nodal aggregate, so validate() must reject it.
+    let net = Network::in_memory(
+        "dup",
+        100.0,
+        vec![bus(1, BusType::Ref), bus(1, BusType::Pq)],
+        Vec::new(),
+    );
+    assert!(matches!(net.validate(), Err(Error::FormatRead { .. })));
+}
+
+#[test]
+fn validate_rejects_dangling_branch_endpoint() {
+    let net = Network::in_memory(
+        "dangling",
+        100.0,
+        vec![bus(1, BusType::Ref), bus(2, BusType::Pq)],
+        vec![branch(1, 99)],
+    );
+    assert!(matches!(net.validate(), Err(Error::FormatRead { .. })));
+}
+
+#[test]
+fn from_json_rejects_dangling_reference() {
+    // to_json does not validate, so a hand-built (or hand-edited) invalid network
+    // serializes fine; from_json must reject it on the way back in, since the
+    // C ABI and Julia bridge ride on this transport.
+    let bad = Network::in_memory(
+        "bad",
+        100.0,
+        vec![bus(1, BusType::Ref), bus(2, BusType::Pq)],
+        vec![branch(1, 99)],
+    );
+    let json = bad.to_json().unwrap();
+    assert!(matches!(
+        Network::from_json(&json),
+        Err(Error::FormatRead { .. })
+    ));
+}
+
+#[test]
+fn psse_rejects_malformed_numeric_field() {
+    // The pristine fixture parses; corrupting one numeric field (a bus voltage
+    // magnitude) must error rather than silently default it — a present-but-
+    // garbage number that becomes 0.0 would corrupt the matrices downstream.
+    let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("../tests/data/psse/case14.raw");
+    let good = std::fs::read_to_string(&path).unwrap();
+    assert!(parse_psse(&good).is_ok(), "pristine fixture should parse");
+
+    let bad = good.replacen("1.05999994", "1.0xx99994", 1);
+    assert_ne!(good, bad, "corruption target not found in fixture");
+    assert!(matches!(parse_psse(&bad), Err(Error::FormatRead { .. })));
+}
+
+#[test]
+fn powerworld_rejects_malformed_numeric_field() {
+    // Same contract as PSS/E, for the sibling .aux reader: write a valid file,
+    // corrupt one numeric field (a branch reactance), and the reader must error
+    // rather than silently default it to 0.0.
+    let mut br = branch(1, 2);
+    br.x = 0.123_45; // distinctive token to corrupt
+    let net = Network::in_memory(
+        "pw",
+        100.0,
+        vec![bus(1, BusType::Ref), bus(2, BusType::Pq)],
+        vec![br],
+    );
+    let good = write_powerworld(&net).text;
+    assert!(
+        parse_powerworld(&good).is_ok(),
+        "pristine .aux should parse"
+    );
+
+    let bad = good.replacen("0.12345", "0.1x345", 1);
+    assert_ne!(good, bad, "corruption target not found in .aux");
+    assert!(matches!(
+        parse_powerworld(&bad),
+        Err(Error::FormatRead { .. })
+    ));
+}
+
+#[test]
+fn psse_reads_switched_shunt_as_fixed() {
+    // case14.raw carries its only shunt in the SWITCHED SHUNT section (BINIT = 19
+    // MVAr at bus 9). powerio reads it as a fixed shunt (gs = 0, bs = BINIT), the
+    // same reduction PowerModels makes, so the susceptance isn't silently dropped.
+    let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("../tests/data/psse/case14.raw");
+    let net = parse_psse(&std::fs::read_to_string(path).unwrap()).unwrap();
+    let s = net
+        .shunts
+        .iter()
+        .find(|s| s.bus == BusId(9))
+        .expect("switched shunt at bus 9 read as a fixed shunt");
+    assert!((s.b - 19.0).abs() < 1e-9, "BINIT susceptance, got {}", s.b);
+    assert!((s.g).abs() < 1e-12, "switched shunt has no conductance");
+}

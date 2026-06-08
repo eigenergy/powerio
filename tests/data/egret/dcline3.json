@@ -1,0 +1,28 @@
+{
+  "elements": {
+    "bus": {
+      "1": {"matpower_bustype": "ref", "base_kv": 240.0, "vm": 1.0, "va": 0.0, "v_min": 0.9, "v_max": 1.1, "area": 1, "zone": 1},
+      "2": {"matpower_bustype": "PQ", "base_kv": 240.0, "vm": 1.0, "va": 0.0, "v_min": 0.9, "v_max": 1.1, "area": 1, "zone": 1},
+      "3": {"matpower_bustype": "PV", "base_kv": 240.0, "vm": 1.0, "va": 0.0, "v_min": 0.9, "v_max": 1.1, "area": 1, "zone": 1}
+    },
+    "branch": {
+      "1": {"from_bus": "1", "to_bus": "2", "resistance": 0.01, "reactance": 0.1, "charging_susceptance": 0.02, "branch_type": "line", "rating_long_term": 250.0, "in_service": true, "angle_diff_min": -30.0, "angle_diff_max": 30.0, "pf": null, "qf": null, "pt": null, "qt": null},
+      "2": {"from_bus": "2", "to_bus": "3", "resistance": 0.0, "reactance": 0.08, "charging_susceptance": 0.0, "branch_type": "transformer", "transformer_tap_ratio": 0.98, "transformer_phase_shift": 0.0, "rating_long_term": 250.0, "in_service": true, "angle_diff_min": -30.0, "angle_diff_max": 30.0}
+    },
+    "dc_branch": {
+      "1": {"from_bus": "1", "to_bus": "3", "rating_long_term": 100.0, "loss_factor": 0.1, "in_service": true}
+    },
+    "generator": {
+      "1": {"bus": "1", "pg": 50.0, "qg": 0.0, "vg": 1.0, "mbase": 100.0, "in_service": true, "p_min": 0.0, "p_max": 200.0, "q_min": -100.0, "q_max": 100.0, "p_cost": {"data_type": "cost_curve", "cost_curve_type": "polynomial", "values": {"0": 0.0, "1": 14.0, "2": 0.01}}},
+      "3": {"bus": "3", "pg": 30.0, "qg": 0.0, "vg": 1.0, "mbase": 100.0, "in_service": true, "p_min": 0.0, "p_max": 150.0, "q_min": -80.0, "q_max": 80.0, "p_cost": {"data_type": "cost_curve", "cost_curve_type": "polynomial", "values": {"0": 0.0, "1": 18.0, "2": 0.02}}}
+    },
+    "load": {
+      "load_1": {"bus": "2", "p_load": 70.0, "q_load": 20.0, "in_service": true},
+      "load_2": {"bus": "3", "p_load": 10.0, "q_load": 5.0, "in_service": true}
+    },
+    "shunt": {
+      "shunt_1": {"bus": "2", "shunt_type": "fixed", "gs": 0.0, "bs": 5.0}
+    }
+  },
+  "system": {"model_name": "dcline3", "baseMVA": 100.0, "reference_bus": "1", "reference_bus_angle": 0.0}
+}

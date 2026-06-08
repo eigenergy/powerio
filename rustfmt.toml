@@ -1,0 +1,6 @@
+# Parser edition (cargo fmt reads this from Cargo.toml too; set here so a direct
+# `rustfmt` invocation doesn't fall back to the 2015 default).
+edition = "2024"
+# Formatting rules. style_edition is the modern replacement for `version`;
+# "2024" is the current style for a 2024-edition crate.
+style_edition = "2024"

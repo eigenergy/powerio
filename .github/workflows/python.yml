@@ -21,13 +21,10 @@ jobs:
         with:
           components: clippy
       - uses: Swatinem/rust-cache@v2
-      # `cargo clippy` at the root skips casemat-ext (it's not in
-      # default-members), so lint the extension explicitly. --no-deps keeps the
-      # gate on this crate only.
-      - name: Clippy (casemat-ext)
-        run: cargo clippy -p casemat-ext --no-deps --features extension-module -- -D warnings
-      - name: Clippy (caseio-ext)
-        run: cargo clippy -p caseio-ext --no-deps --features extension-module -- -D warnings
+      # `cargo clippy` at the root skips powerio-py (it's not in default-members),
+      # so lint the extension explicitly. --no-deps keeps the gate on this crate.
+      - name: Clippy (powerio-py)
+        run: cargo clippy -p powerio-py --no-deps --features extension-module -- -D warnings
 
   test:
     runs-on: ubuntu-latest
@@ -42,15 +39,25 @@ jobs:
           python-version: ${{ matrix.python }}
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
-      # `pip install .` builds the extension via the maturin backend.
-      # Quote the extras so the shell doesn't glob `[networkx]`.
-      - name: Install casemat + test deps
-        run: pip install '.[networkx]' pytest
-      # The caseio wheel (no numpy/scipy) builds from its own pyproject.
-      - name: Install caseio
-        run: pip install ./caseio-ext
+      # `pip install .[all]` builds the extension via the maturin backend and
+      # pulls scipy/numpy/networkx so the matrix and graph tests run. Quote the
+      # extras so the shell doesn't glob `[all]`.
+      - name: Install powerio + test deps
+        run: pip install '.[all]' pytest
       - name: Run tests
         run: pytest python/tests -q
+      # The zero-dep promise: parse/convert/write import nothing but the
+      # interpreter. Build in a clean venv with no extras and assert it holds.
+      - name: Zero-dep parse path
+        run: |
+          python -m venv /tmp/zerodep
+          /tmp/zerodep/bin/pip install .
+          /tmp/zerodep/bin/python - <<'PY'
+          import sys, powerio
+          c = powerio.parse("tests/data/case14.m")
+          assert c.write() == open("tests/data/case14.m").read()
+          assert "numpy" not in sys.modules and "scipy" not in sys.modules
+          PY
 
   wheels:
     name: wheels (${{ matrix.platform.target }} on ${{ matrix.platform.runner }})
@@ -71,17 +78,11 @@ jobs:
         with:
           python-version: "3.x"
       # abi3-py39 → one wheel per platform covers Python 3.9+.
-      - name: Build casemat wheels
+      - name: Build powerio wheels
         uses: PyO3/maturin-action@v1
         with:
           target: ${{ matrix.platform.target }}
           args: --release --out dist
-          manylinux: auto
-      - name: Build caseio wheels
-        uses: PyO3/maturin-action@v1
-        with:
-          target: ${{ matrix.platform.target }}
-          args: --release --out dist -m caseio-ext/Cargo.toml
           manylinux: auto
       - uses: actions/upload-artifact@v4
         with:
@@ -93,16 +94,11 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Build casemat sdist
+      - name: Build powerio sdist
         uses: PyO3/maturin-action@v1
         with:
           command: sdist
           args: --out dist
-      - name: Build caseio sdist
-        uses: PyO3/maturin-action@v1
-        with:
-          command: sdist
-          args: --out dist -m caseio-ext/Cargo.toml
       - uses: actions/upload-artifact@v4
         with:
           name: sdist

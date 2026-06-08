@@ -1,0 +1,36 @@
+[package]
+name = "powerio-matrix"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.86"
+description = "Sparse matrices and graph views for power system case files: B'/B'', Y_bus, PTDF, LODF, incidence, weighted Laplacian, adjacency, and DC-OPF instance data. Built on powerio."
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/eigenergy/powerio"
+keywords = ["matpower", "sparse", "ptdf", "dc-opf"]
+categories = ["science", "mathematics"]
+
+[features]
+# Experimental DC-OPF interior point operators (optional).
+kkt = []
+
+[lib]
+name = "powerio_matrix"
+path = "src/lib.rs"
+
+[dependencies]
+powerio = { path = "../powerio" }
+sprs = { version = "0.11", default-features = false }
+num-complex = "0.4"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+rand = "0.9"
+rand_chacha = "0.9"
+walkdir = "2"
+rayon = "1"
+sha2 = "0.10"
+
+[dev-dependencies]
+approx = "0.5"
+
+[lints]
+workspace = true
