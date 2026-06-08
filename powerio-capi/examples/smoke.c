@@ -44,13 +44,14 @@ int main(int argc, char **argv) {
     CHECK(pio_n_components(c) >= 1, "bad component count");
     CHECK(pio_reference_bus(c) >= 0, "no single reference bus");
 
-    /* Pull branch endpoints (dense indices) and reactances, as a solver would. */
+    /* Pull branch endpoints (1-based bus ids, same space as pio_bus_ids) and
+     * reactances, as a solver would. */
     int64_t *from = malloc(m * sizeof *from);
     double *x = malloc(m * sizeof *x);
     CHECK(from && x, "out of memory");
     pio_branches(c, from, NULL, NULL, x, NULL, NULL, NULL, NULL);
     for (size_t k = 0; k < m; k++) {
-        CHECK(from[k] >= 0 && (size_t)from[k] < nb, "branch from-index out of range");
+        CHECK(from[k] >= 1, "branch from-id should be a valid 1-based bus id");
         CHECK(x[k] != 0.0, "zero reactance");
     }
     free(from);

@@ -4,6 +4,7 @@
 
 use std::path::{Path, PathBuf};
 
+use powerio::network::BusId;
 use powerio::{parse_matpower, parse_matpower_file, write_matpower};
 
 fn data_dir() -> PathBuf {
@@ -103,7 +104,7 @@ fn parses_hvdc_dclines() {
     let case = parse_matpower_file(data_dir().join("t_case9_dcline.m")).unwrap();
     assert!(!case.hvdc.is_empty(), "mpc.dcline not parsed");
     let dc = &case.hvdc[0];
-    assert_eq!((dc.from, dc.to), (30, 4));
+    assert_eq!((dc.from, dc.to), (BusId(30), BusId(4)));
     assert_eq!(dc.pf, 10.0);
     // HVDC survives the round-trip (document passthrough).
     let reparsed = parse_matpower(&write_matpower(&case)).unwrap();

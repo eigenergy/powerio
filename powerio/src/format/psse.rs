@@ -16,7 +16,9 @@ use std::fmt::Write as _;
 use std::sync::Arc;
 
 use super::Conversion;
-use crate::network::{Branch, Bus, BusType, Extras, Generator, Load, Network, Shunt, SourceFormat};
+use crate::network::{
+    Branch, Bus, BusId, BusType, Extras, Generator, Load, Network, Shunt, SourceFormat,
+};
 use crate::{Error, Result};
 
 const FMT: &str = "PSS/E .raw";
@@ -68,7 +70,7 @@ pub fn write_psse(net: &Network) -> Conversion {
     let _ = writeln!(s);
 
     // Bus, with area/zone kept for the load records that reference them.
-    let mut bus_area: BTreeMap<usize, (usize, usize)> = BTreeMap::new();
+    let mut bus_area: BTreeMap<BusId, (usize, usize)> = BTreeMap::new();
     for b in &net.buses {
         bus_area.insert(b.id, (b.area, b.zone));
         let name = b.name.as_deref().unwrap_or("");
@@ -202,6 +204,16 @@ pub fn write_psse(net: &Network) -> Conversion {
     if net.generators.iter().any(|g| g.cost.is_some()) {
         warnings.push("generator cost curves dropped: PSS/E .raw has no cost data".into());
     }
+    if net.branches.iter().any(Branch::has_angle_limits) {
+        warnings.push(
+            "branch angle limits (angmin/angmax) dropped: PSS/E branch records carry none".into(),
+        );
+    }
+    if net.generators.iter().any(Generator::has_caps) {
+        warnings.push(
+            "generator ramp/capability columns dropped: PSS/E .raw has no equivalent fields".into(),
+        );
+    }
     if nonfinite {
         warnings.push("non-finite values written as ±1e10 sentinels (PSS/E has no Inf/NaN)".into());
     }
@@ -291,10 +303,10 @@ pub(crate) fn parse_psse_source(source: Arc<String>, name_hint: Option<&str>) ->
         let f = fields(line);
         match section {
             Section::Bus => buses.push(read_bus(&f)?),
-            Section::Load => loads.push(read_load(&f)),
-            Section::FixedShunt => shunts.push(read_shunt(&f)),
-            Section::Generator => generators.push(read_gen(&f)),
-            Section::Branch => branches.push(read_branch(&f)),
+            Section::Load => loads.push(read_load(&f)?),
+            Section::FixedShunt => shunts.push(read_shunt(&f)?),
+            Section::Generator => generators.push(read_gen(&f)?),
+            Section::Branch => branches.push(read_branch(&f)?),
             Section::Transformer => {
                 // 2-winding = 4 lines (K field == 0); 3-winding = 5 lines (skip).
                 let two_winding = f.get(2).and_then(|x| x.parse::<i64>().ok()) == Some(0);
@@ -302,7 +314,7 @@ pub(crate) fn parse_psse_source(source: Arc<String>, name_hint: Option<&str>) ->
                 let l3 = lines.next().map_or("", str::trim);
                 let l4 = lines.next().map_or("", str::trim);
                 if two_winding {
-                    branches.push(read_transformer(&f, &fields(l2), &fields(l3), &fields(l4)));
+                    branches.push(read_transformer(&f, &fields(l2), &fields(l3), &fields(l4))?);
                 } else {
                     // 3-winding: consume its 5th line and skip (not modeled).
                     lines.next();
@@ -390,14 +402,50 @@ fn fields(line: &str) -> Vec<String> {
     out
 }
 
-fn num_at(f: &[String], i: usize) -> f64 {
-    f.get(i).and_then(|x| x.parse::<f64>().ok()).unwrap_or(0.0)
+fn bad_field(i: usize, tok: &str) -> Error {
+    Error::FormatRead {
+        format: FMT,
+        message: format!("field {i} {tok:?} is not a number"),
+    }
 }
-fn id_at(f: &[String], i: usize) -> usize {
-    f.get(i).and_then(|x| x.parse::<f64>().ok()).unwrap_or(0.0) as usize
+
+/// Field `i` as f64. Absent or empty → `default` (a genuinely optional column).
+/// Present but unparseable → a hard error: a malformed number must not silently
+/// become a plausible default (e.g. a garbled reactance collapsing to 0.0, which
+/// would drop the branch from every matrix) and corrupt the result.
+fn num_at(f: &[String], i: usize, default: f64) -> Result<f64> {
+    match f.get(i).map(String::as_str) {
+        None | Some("") => Ok(default),
+        Some(s) => s.parse().map_err(|_| bad_field(i, s)),
+    }
 }
-fn on_at(f: &[String], i: usize) -> bool {
-    f.get(i).and_then(|x| x.parse::<f64>().ok()).unwrap_or(1.0) != 0.0
+/// Field `i` as a bus id (parsed as f64 then truncated, the PSS/E convention).
+fn id_at(f: &[String], i: usize, default: usize) -> Result<usize> {
+    match f.get(i).map(String::as_str) {
+        None | Some("") => Ok(default),
+        #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+        Some(s) => s
+            .parse::<f64>()
+            .map(|v| v as usize)
+            .map_err(|_| bad_field(i, s)),
+    }
+}
+/// Field `i` as a status flag (nonzero = in service).
+fn on_at(f: &[String], i: usize, default: bool) -> Result<bool> {
+    match f.get(i).map(String::as_str) {
+        None | Some("") => Ok(default),
+        Some(s) => s
+            .parse::<f64>()
+            .map(|v| v != 0.0)
+            .map_err(|_| bad_field(i, s)),
+    }
+}
+/// Field `i` as an integer code (bus type, etc.).
+fn int_at(f: &[String], i: usize, default: i64) -> Result<i64> {
+    match f.get(i).map(String::as_str) {
+        None | Some("") => Ok(default),
+        Some(s) => s.parse().map_err(|_| bad_field(i, s)),
+    }
 }
 
 fn bustype(code: i64) -> BusType {
@@ -423,99 +471,98 @@ fn read_bus(f: &[String]) -> Result<Bus> {
         .filter(|n| !n.is_empty())
         .map(|n| n.trim().to_string());
     Ok(Bus {
-        id,
-        kind: bustype(f.get(3).and_then(|x| x.parse().ok()).unwrap_or(1)),
-        vm: f.get(7).and_then(|x| x.parse().ok()).unwrap_or(1.0),
-        va: num_at(f, 8),
-        base_kv: num_at(f, 2),
-        vmax: f.get(9).and_then(|x| x.parse().ok()).unwrap_or(1.1),
-        vmin: f.get(10).and_then(|x| x.parse().ok()).unwrap_or(0.9),
-        area: id_at(f, 4),
-        zone: id_at(f, 5),
+        id: BusId(id),
+        kind: bustype(int_at(f, 3, 1)?),
+        vm: num_at(f, 7, 1.0)?,
+        va: num_at(f, 8, 0.0)?,
+        base_kv: num_at(f, 2, 0.0)?,
+        vmax: num_at(f, 9, 1.1)?,
+        vmin: num_at(f, 10, 0.9)?,
+        area: id_at(f, 4, 0)?,
+        zone: id_at(f, 5, 0)?,
         name,
         extras: Extras::new(),
     })
 }
 
-fn read_load(f: &[String]) -> Load {
+fn read_load(f: &[String]) -> Result<Load> {
     // I, ID, STATUS, AREA, ZONE, PL, QL, ...
-    Load {
-        bus: id_at(f, 0),
-        p: num_at(f, 5),
-        q: num_at(f, 6),
-        in_service: on_at(f, 2),
+    Ok(Load {
+        bus: BusId(id_at(f, 0, 0)?),
+        p: num_at(f, 5, 0.0)?,
+        q: num_at(f, 6, 0.0)?,
+        in_service: on_at(f, 2, true)?,
         extras: Extras::new(),
-    }
+    })
 }
 
-fn read_shunt(f: &[String]) -> Shunt {
+fn read_shunt(f: &[String]) -> Result<Shunt> {
     // I, ID, STATUS, GL, BL
-    Shunt {
-        bus: id_at(f, 0),
-        g: num_at(f, 3),
-        b: num_at(f, 4),
-        in_service: on_at(f, 2),
+    Ok(Shunt {
+        bus: BusId(id_at(f, 0, 0)?),
+        g: num_at(f, 3, 0.0)?,
+        b: num_at(f, 4, 0.0)?,
+        in_service: on_at(f, 2, true)?,
         extras: Extras::new(),
-    }
+    })
 }
 
-fn read_gen(f: &[String]) -> Generator {
+fn read_gen(f: &[String]) -> Result<Generator> {
     // I, ID, PG, QG, QT, QB, VS, IREG, MBASE, ..., STAT(14), ..., PT(16), PB(17)
-    Generator {
-        bus: id_at(f, 0),
-        pg: num_at(f, 2),
-        qg: num_at(f, 3),
-        qmax: num_at(f, 4),
-        qmin: num_at(f, 5),
-        vg: f.get(6).and_then(|x| x.parse().ok()).unwrap_or(1.0),
-        mbase: f.get(8).and_then(|x| x.parse().ok()).unwrap_or(100.0),
-        in_service: on_at(f, 14),
-        pmax: num_at(f, 16),
-        pmin: num_at(f, 17),
+    Ok(Generator {
+        bus: BusId(id_at(f, 0, 0)?),
+        pg: num_at(f, 2, 0.0)?,
+        qg: num_at(f, 3, 0.0)?,
+        qmax: num_at(f, 4, 0.0)?,
+        qmin: num_at(f, 5, 0.0)?,
+        vg: num_at(f, 6, 1.0)?,
+        mbase: num_at(f, 8, 100.0)?,
+        in_service: on_at(f, 14, true)?,
+        pmax: num_at(f, 16, 0.0)?,
+        pmin: num_at(f, 17, 0.0)?,
         cost: None,
         caps: Default::default(),
-    }
+    })
 }
 
-fn read_branch(f: &[String]) -> Branch {
+fn read_branch(f: &[String]) -> Result<Branch> {
     // I, J, CKT, R, X, B, RATEA, RATEB, RATEC, GI,BI,GJ,BJ, ST(13)
-    Branch {
-        from: id_at(f, 0),
-        to: id_at(f, 1),
-        r: num_at(f, 3),
-        x: num_at(f, 4),
-        b: num_at(f, 5),
-        rate_a: num_at(f, 6),
-        rate_b: num_at(f, 7),
-        rate_c: num_at(f, 8),
+    Ok(Branch {
+        from: BusId(id_at(f, 0, 0)?),
+        to: BusId(id_at(f, 1, 0)?),
+        r: num_at(f, 3, 0.0)?,
+        x: num_at(f, 4, 0.0)?,
+        b: num_at(f, 5, 0.0)?,
+        rate_a: num_at(f, 6, 0.0)?,
+        rate_b: num_at(f, 7, 0.0)?,
+        rate_c: num_at(f, 8, 0.0)?,
         tap: 0.0,
         shift: 0.0,
-        in_service: on_at(f, 13),
+        in_service: on_at(f, 13, true)?,
         angmin: -360.0,
         angmax: 360.0,
         extras: Extras::new(),
-    }
+    })
 }
 
-fn read_transformer(l1: &[String], l2: &[String], l3: &[String], _l4: &[String]) -> Branch {
+fn read_transformer(l1: &[String], l2: &[String], l3: &[String], _l4: &[String]) -> Result<Branch> {
     // l1: I, J, K, CKT, CW, CZ, CM, MAG1, MAG2, NMETR, NAME, STAT(11)
     // l2: R1-2, X1-2, SBASE1-2
     // l3: WINDV1, NOMV1, ANG1, RATA1, RATB1, RATC1, ...
-    let tap = l3.first().and_then(|x| x.parse().ok()).unwrap_or(1.0);
-    Branch {
-        from: id_at(l1, 0),
-        to: id_at(l1, 1),
-        r: num_at(l2, 0),
-        x: num_at(l2, 1),
+    Ok(Branch {
+        from: BusId(id_at(l1, 0, 0)?),
+        to: BusId(id_at(l1, 1, 0)?),
+        r: num_at(l2, 0, 0.0)?,
+        x: num_at(l2, 1, 0.0)?,
         b: 0.0,
-        rate_a: num_at(l3, 3),
-        rate_b: num_at(l3, 4),
-        rate_c: num_at(l3, 5),
-        tap,
-        shift: num_at(l3, 2),
-        in_service: on_at(l1, 11),
+        rate_a: num_at(l3, 3, 0.0)?,
+        rate_b: num_at(l3, 4, 0.0)?,
+        rate_c: num_at(l3, 5, 0.0)?,
+        tap: num_at(l3, 0, 1.0)?,
+        shift: num_at(l3, 2, 0.0)?,
+        in_service: on_at(l1, 11, true)?,
         angmin: -360.0,
         angmax: 360.0,
         extras: Extras::new(),
-    }
+    })
 }

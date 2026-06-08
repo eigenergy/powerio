@@ -1,5 +1,5 @@
 //! DC network primitives: the signed incidence matrix `A`, branch
-//! susceptances `b`, the flow map `B Aᵀ`, and the phase-shift injection.
+//! susceptances `b`, the flow map `B Aᵀ`, and the phase shift injection.
 //!
 //! Edge orientation is fixed to MATPOWER's from→to: column `e` of `A` has
 //! `+1` at the from bus (tail) and `−1` at the to bus (head). Columns run
@@ -14,23 +14,25 @@ use crate::{Error, Result};
 
 /// DC susceptance convention for `b_e` and the Laplacian.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
+#[non_exhaustive]
 pub enum DcConvention {
     /// `b_e = 1/x_e`; taps and phase shifts ignored. Matches the paper.
     #[default]
     PaperPure,
-    /// `b_e = 1/(x_e·τ_e)` with a phase-shift injection vector, matching
+    /// `b_e = 1/(x_e·τ_e)` with a phase shift injection vector, matching
     /// MATPOWER `makeBdc`.
     Matpower,
 }
 
 /// The incidence factorization of a case under one DC convention.
 #[derive(Debug, Clone)]
+#[non_exhaustive]
 pub struct IncidenceParts {
     /// Signed incidence `A`, shape `n × m`.
     pub a: CsMat<f64>,
     /// Branch susceptances `b_e`, length `m`.
     pub b: Vec<f64>,
-    /// Phase-shift bus injection, length `n`. All zeros unless the MATPOWER
+    /// Phase shift bus injection, length `n`. All zeros unless the MATPOWER
     /// convention is used and shifters are present.
     pub p_shift: Vec<f64>,
     /// Column `k` → index into `case.branches`.
@@ -49,7 +51,7 @@ impl IncidenceParts {
     }
 }
 
-/// Build `A`, `b`, the phase-shift injection, and the column→branch map.
+/// Build `A`, `b`, the phase shift injection, and the column→branch map.
 ///
 /// Self-loops (from == to) and branches with `x == 0` (no DC susceptance)
 /// are dropped, so `m` counts only the branches that contribute a column.

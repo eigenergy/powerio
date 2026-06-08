@@ -1,4 +1,4 @@
-"""powerio: fast, lossless power system case file IO, conversion, and matrices.
+"""powerio: lossless power system case file IO, conversion, and matrices.
 
 Parse MATPOWER, PSS/E, PowerWorld, and PowerModels JSON into one format-neutral
 case; write it back byte-exact; convert between formats; and pull the sparse

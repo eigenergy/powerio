@@ -6,7 +6,7 @@
 use std::path::{Path, PathBuf};
 
 use powerio::{
-    SourceFormat, TargetFormat, parse_matpower, parse_matpower_file, parse_powermodels_json,
+    BusId, SourceFormat, TargetFormat, parse_matpower, parse_matpower_file, parse_powermodels_json,
     parse_powerworld, parse_psse, write_as, write_egret_json, write_powermodels_json,
     write_powerworld, write_psse,
 };
@@ -329,7 +329,8 @@ fn powermodels_dcline_flips_pt_qf_qt_sign() {
         .unwrap()
         .values()
         .find(|d| {
-            d["f_bus"].as_u64() == Some(dc.from as u64) && d["t_bus"].as_u64() == Some(dc.to as u64)
+            d["f_bus"].as_u64() == Some(dc.from.0 as u64)
+                && d["t_bus"].as_u64() == Some(dc.to.0 as u64)
         })
         .expect("emitted dcline with matching endpoints");
     let emitted_pt = obj["pt"].as_f64().unwrap();
@@ -392,7 +393,7 @@ fn oos_fixture_marks_out_of_service_elements() {
     let br = net
         .branches
         .iter()
-        .find(|b| b.from == 5 && b.to == 6)
+        .find(|b| b.from == BusId(5) && b.to == BusId(6))
         .expect("branch 5-6");
     assert!(!br.in_service, "branch 5-6 is out of service");
 }

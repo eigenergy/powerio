@@ -12,7 +12,9 @@ use std::fmt::Write as _;
 use std::sync::Arc;
 
 use super::Conversion;
-use crate::network::{Branch, Bus, BusType, Extras, Generator, Load, Network, Shunt, SourceFormat};
+use crate::network::{
+    Branch, Bus, BusId, BusType, Extras, Generator, Load, Network, Shunt, SourceFormat,
+};
 use crate::{Error, Result};
 
 const FMT: &str = "PowerWorld .aux";
@@ -180,6 +182,16 @@ pub fn write_powerworld(net: &Network) -> Conversion {
             net.storage.len()
         ));
     }
+    if net.branches.iter().any(Branch::has_angle_limits) {
+        warnings.push(
+            "branch angle limits (angmin/angmax) dropped: not written to PowerWorld .aux".into(),
+        );
+    }
+    if net.generators.iter().any(Generator::has_caps) {
+        warnings.push(
+            "generator ramp/capability columns dropped: not written to PowerWorld .aux".into(),
+        );
+    }
     if nonfinite {
         warnings.push("non-finite values written as ±1e10 sentinels".into());
     }
@@ -228,6 +240,11 @@ pub(crate) fn parse_powerworld_source(
     name_hint: Option<&str>,
 ) -> Result<Network> {
     let content: &str = &source;
+    // PowerWorld `.aux` does not carry the system base in the case data, so we
+    // default to 100 MVA (the de-facto standard, and what our own writer records
+    // in the `// baseMVA` marker below). Reading a real base from PowerWorld's
+    // project files is tracked separately; defaulting here is deliberate, not a
+    // silent guess — erroring would reject every base-less third-party `.aux`.
     let mut base_mva = 100.0;
     let mut name = name_hint.unwrap_or("case").to_string();
     for line in content.lines() {
@@ -256,10 +273,26 @@ pub(crate) fn parse_powerworld_source(
                     buses.push(read_bus(&r)?);
                 }
             }
-            "Load" => loads.extend(blk.rows().map(|r| read_load(&r))),
-            "Shunt" => shunts.extend(blk.rows().map(|r| read_shunt(&r))),
-            "Gen" => generators.extend(blk.rows().map(|r| read_gen(&r))),
-            "Branch" => branches.extend(blk.rows().map(|r| read_branch(&r))),
+            "Load" => {
+                for r in blk.rows() {
+                    loads.push(read_load(&r)?);
+                }
+            }
+            "Shunt" => {
+                for r in blk.rows() {
+                    shunts.push(read_shunt(&r)?);
+                }
+            }
+            "Gen" => {
+                for r in blk.rows() {
+                    generators.push(read_gen(&r)?);
+                }
+            }
+            "Branch" => {
+                for r in blk.rows() {
+                    branches.push(read_branch(&r)?);
+                }
+            }
             _ => {} // unmodeled object block: skipped
         }
     }
@@ -400,20 +433,37 @@ fn split_values(line: &str) -> Vec<String> {
 
 type Row<'a> = std::collections::HashMap<&'a str, String>;
 
-fn f(r: &Row, key: &str) -> f64 {
-    r.get(key)
-        .and_then(|v| v.parse::<f64>().ok())
-        .unwrap_or(0.0)
+fn bad_field(key: &str, tok: &str) -> Error {
+    Error::FormatRead {
+        format: FMT,
+        message: format!("field {key} {tok:?} is not a number"),
+    }
 }
-fn f_or(r: &Row, key: &str, default: f64) -> f64 {
-    r.get(key)
-        .and_then(|v| v.parse::<f64>().ok())
-        .unwrap_or(default)
+
+/// Field `key` as f64, defaulting to 0.0 when absent. Present but unparseable is
+/// a hard error: a malformed number must not silently become a plausible default
+/// and corrupt the matrices downstream.
+fn f(r: &Row, key: &str) -> Result<f64> {
+    f_or(r, key, 0.0)
 }
-fn uid(r: &Row, key: &str) -> usize {
-    r.get(key)
-        .and_then(|v| v.parse::<f64>().ok())
-        .unwrap_or(0.0) as usize
+/// Field `key` as f64, absent → `default`, present-but-unparseable → error.
+fn f_or(r: &Row, key: &str, default: f64) -> Result<f64> {
+    match r.get(key).map(String::as_str) {
+        None | Some("") => Ok(default),
+        Some(s) => s.parse().map_err(|_| bad_field(key, s)),
+    }
+}
+/// Field `key` as a bus id (parsed as f64 then truncated). Absent → 0;
+/// present-but-unparseable → error.
+fn uid(r: &Row, key: &str) -> Result<usize> {
+    match r.get(key).map(String::as_str) {
+        None | Some("") => Ok(0),
+        #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+        Some(s) => s
+            .parse::<f64>()
+            .map(|v| v as usize)
+            .map_err(|_| bad_field(key, s)),
+    }
 }
 fn on(r: &Row, key: &str) -> bool {
     !matches!(r.get(key).map(String::as_str), Some("Open" | "OPEN" | "0"))
@@ -438,77 +488,77 @@ fn read_bus(r: &Row) -> Result<Bus> {
         })? as usize;
     let name = r.get("BusName").filter(|n| !n.is_empty()).cloned();
     Ok(Bus {
-        id,
+        id: BusId(id),
         kind: bus_kind(r.get("BusCat")),
-        vm: f_or(r, "BusPUVolt", 1.0),
-        va: f(r, "BusAngle"),
-        base_kv: f(r, "BusNomVolt"),
-        vmax: f_or(r, "BusVMax", 1.1),
-        vmin: f_or(r, "BusVMin", 0.9),
-        area: uid(r, "AreaNum"),
-        zone: uid(r, "ZoneNum"),
+        vm: f_or(r, "BusPUVolt", 1.0)?,
+        va: f(r, "BusAngle")?,
+        base_kv: f(r, "BusNomVolt")?,
+        vmax: f_or(r, "BusVMax", 1.1)?,
+        vmin: f_or(r, "BusVMin", 0.9)?,
+        area: uid(r, "AreaNum")?,
+        zone: uid(r, "ZoneNum")?,
         name,
         extras: Extras::new(),
     })
 }
 
-fn read_load(r: &Row) -> Load {
-    Load {
-        bus: uid(r, "BusNum"),
-        p: f(r, "LoadMW"),
-        q: f(r, "LoadMVR"),
+fn read_load(r: &Row) -> Result<Load> {
+    Ok(Load {
+        bus: BusId(uid(r, "BusNum")?),
+        p: f(r, "LoadMW")?,
+        q: f(r, "LoadMVR")?,
         in_service: on(r, "LoadStatus"),
         extras: Extras::new(),
-    }
+    })
 }
 
-fn read_shunt(r: &Row) -> Shunt {
-    Shunt {
-        bus: uid(r, "BusNum"),
-        g: f(r, "ShuntMW"),
-        b: f(r, "ShuntMVR"),
+fn read_shunt(r: &Row) -> Result<Shunt> {
+    Ok(Shunt {
+        bus: BusId(uid(r, "BusNum")?),
+        g: f(r, "ShuntMW")?,
+        b: f(r, "ShuntMVR")?,
         in_service: on(r, "ShuntStatus"),
         extras: Extras::new(),
-    }
+    })
 }
 
-fn read_gen(r: &Row) -> Generator {
-    Generator {
-        bus: uid(r, "BusNum"),
-        pg: f(r, "GenMW"),
-        qg: f(r, "GenMVR"),
-        pmax: f(r, "GenMWMax"),
-        pmin: f(r, "GenMWMin"),
-        qmax: f(r, "GenMVRMax"),
-        qmin: f(r, "GenMVRMin"),
-        vg: f_or(r, "GenVoltSet", 1.0),
-        mbase: f_or(r, "GenMVABase", 100.0),
+fn read_gen(r: &Row) -> Result<Generator> {
+    Ok(Generator {
+        bus: BusId(uid(r, "BusNum")?),
+        pg: f(r, "GenMW")?,
+        qg: f(r, "GenMVR")?,
+        pmax: f(r, "GenMWMax")?,
+        pmin: f(r, "GenMWMin")?,
+        qmax: f(r, "GenMVRMax")?,
+        qmin: f(r, "GenMVRMin")?,
+        vg: f_or(r, "GenVoltSet", 1.0)?,
+        mbase: f_or(r, "GenMVABase", 100.0)?,
         in_service: on(r, "GenStatus"),
         cost: None,
         caps: Default::default(),
-    }
+    })
 }
 
-fn read_branch(r: &Row) -> Branch {
+fn read_branch(r: &Row) -> Result<Branch> {
     let is_xf = matches!(
         r.get("BranchDeviceType").map(String::as_str),
         Some("Transformer")
     );
-    let tap = f_or(r, "LineXFRatio", 1.0);
-    Branch {
-        from: uid(r, "BusNum"),
-        to: uid(r, "BusNum:1"),
-        r: f(r, "LineR"),
-        x: f(r, "LineX"),
-        b: f(r, "LineC"),
-        rate_a: f(r, "LineAMVA"),
-        rate_b: f(r, "LineBMVA"),
-        rate_c: f(r, "LineCMVA"),
+    let tap = f_or(r, "LineXFRatio", 1.0)?;
+    Ok(Branch {
+        from: BusId(uid(r, "BusNum")?),
+        to: BusId(uid(r, "BusNum:1")?),
+        r: f(r, "LineR")?,
+        x: f(r, "LineX")?,
+        b: f(r, "LineC")?,
+        rate_a: f(r, "LineAMVA")?,
+        rate_b: f(r, "LineBMVA")?,
+        rate_c: f(r, "LineCMVA")?,
         tap: if is_xf { tap } else { 0.0 },
-        shift: f(r, "LinePhase"),
+        shift: f(r, "LinePhase")?,
         in_service: on(r, "LineStatus"),
         angmin: -360.0,
         angmax: 360.0,
         extras: Extras::new(),
-    }
+    })
 }

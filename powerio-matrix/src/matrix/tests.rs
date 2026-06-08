@@ -4,11 +4,11 @@ use crate::indexed::IndexedNetwork;
 use crate::matrix::{
     BuildOptions, MatrixStats, Scheme, build_bdoubleprime, build_bprime, build_lacpf, build_ybus,
 };
-use crate::network::{Branch, Bus, BusType, Extras, Network, Shunt};
+use crate::network::{Branch, Bus, BusId, BusType, Extras, Network, Shunt};
 
 fn bus(id: usize, kind: BusType) -> Bus {
     Bus {
-        id,
+        id: BusId(id),
         kind,
         vm: 1.0,
         va: 0.0,
@@ -24,8 +24,8 @@ fn bus(id: usize, kind: BusType) -> Bus {
 
 fn br(from: usize, to: usize, r: f64, x: f64, b: f64) -> Branch {
     Branch {
-        from,
-        to,
+        from: BusId(from),
+        to: BusId(to),
         r,
         x,
         b,
@@ -142,21 +142,21 @@ fn bdoubleprime_with_shunts_is_strictly_dominant() {
     // contribution to −Im(Y_bus)).
     net.shunts = vec![
         Shunt {
-            bus: 1,
+            bus: BusId(1),
             g: 0.0,
             b: -10.0,
             in_service: true,
             extras: Extras::new(),
         },
         Shunt {
-            bus: 2,
+            bus: BusId(2),
             g: 0.0,
             b: -10.0,
             in_service: true,
             extras: Extras::new(),
         },
         Shunt {
-            bus: 3,
+            bus: BusId(3),
             g: 0.0,
             b: -10.0,
             in_service: true,
@@ -192,4 +192,72 @@ fn lacpf_block_is_2n_by_2n() {
     let j = build_lacpf(&view, &BuildOptions::default()).unwrap();
     assert_eq!(j.rows(), 6);
     assert_eq!(j.cols(), 6);
+}
+
+#[test]
+fn lacpf_blocks_equal_g_and_minus_b() {
+    // LACPF is the 2n×2n block `[[G, -B], [-B, -G]]` from Y_bus = G + jB. Tie the
+    // four n×n quadrants to build_ybus entrywise: a sign flip or a swapped block
+    // (the one failure the 2n×2n shape check above cannot see) trips here.
+    let net = three_bus();
+    let view = IndexedNetwork::new(&net);
+    let opts = BuildOptions::default();
+    let ybus = build_ybus(&view, &opts).unwrap();
+    let g = ybus.g.to_dense();
+    let b = ybus.b.to_dense();
+    let j = build_lacpf(&view, &opts).unwrap().to_dense();
+    let n = 3;
+    for r in 0..n {
+        for c in 0..n {
+            assert_relative_eq!(j[[r, c]], g[[r, c]], epsilon = 1e-12); // top-left = +G
+            assert_relative_eq!(j[[r, c + n]], -b[[r, c]], epsilon = 1e-12); // top-right = -B
+            assert_relative_eq!(j[[r + n, c]], -b[[r, c]], epsilon = 1e-12); // bottom-left = -B
+            assert_relative_eq!(j[[r + n, c + n]], -g[[r, c]], epsilon = 1e-12); // bottom-right = -G
+        }
+    }
+}
+
+#[test]
+fn ybus_tap_scales_from_diagonal_only() {
+    // makeYbus puts |a|² (the tap magnitude squared) on the FROM-bus diagonal
+    // only: Y[from,from] = (y + jb/2)/|a|², Y[to,to] = y + jb/2, off-diag = -y/a.
+    // Reciprocity/symmetry tests cannot see this asymmetric scaling.
+    let mut branch = br(1, 2, 0.0, 0.2, 0.0); // x = 0.2, r = 0, no line charging
+    branch.tap = 1.25;
+    let net = Network::in_memory(
+        "tap2",
+        100.0,
+        vec![bus(1, BusType::Ref), bus(2, BusType::Pq)],
+        vec![branch],
+    );
+    let view = IndexedNetwork::new(&net);
+    let b = build_ybus(&view, &BuildOptions::default())
+        .unwrap()
+        .b
+        .to_dense();
+    // y = 1/(j·0.2) = -j5, so Im(y) = -5; |a|² = 1.5625; real tap ⇒ -y/a is j4.
+    assert_relative_eq!(b[[0, 0]], -5.0 / 1.5625, max_relative = 1e-12); // -3.2
+    assert_relative_eq!(b[[1, 1]], -5.0, max_relative = 1e-12);
+    assert_relative_eq!(b[[0, 1]], 4.0, max_relative = 1e-12);
+    assert_relative_eq!(b[[1, 0]], 4.0, max_relative = 1e-12);
+}
+
+#[test]
+fn bprime_rejects_nan_reactance() {
+    // A NaN reactance (the MATPOWER tokenizer accepts `NaN`) must error, not
+    // write a non-finite entry that silently breaks the M-matrix/SDDM checks.
+    let mut net = three_bus();
+    net.branches[0].x = f64::NAN;
+    let view = IndexedNetwork::new(&net);
+    let err = build_bprime(&view, &BuildOptions::default()).unwrap_err();
+    assert!(matches!(err, crate::Error::NonFiniteSusceptance { .. }));
+}
+
+#[test]
+fn ybus_rejects_nan_reactance() {
+    let mut net = three_bus();
+    net.branches[0].x = f64::NAN;
+    let view = IndexedNetwork::new(&net);
+    let err = build_ybus(&view, &BuildOptions::default()).unwrap_err();
+    assert!(matches!(err, crate::Error::NonFiniteSusceptance { .. }));
 }

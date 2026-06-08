@@ -31,10 +31,32 @@ use crate::Error;
 /// cross-format passthrough. Keys are the field names; values are JSON scalars.
 pub type Extras = BTreeMap<String, Value>;
 
+/// A bus identifier as it appears in the source file: the external, stable id
+/// (1-based in MATPOWER, and possibly sparse — pegase has gaps in its ids).
+/// Distinct from the dense `[0, n)` analysis index, which only
+/// [`IndexedNetwork`](crate::IndexedNetwork) produces, via
+/// [`bus_index`](crate::IndexedNetwork::bus_index). The two are both integers
+/// and trivially confused; making the id its own type stops one being used where
+/// the other is meant (using a 1-based id to index a matrix is off-by-one on a
+/// contiguous case and pure garbage on a sparse one).
+///
+/// `#[serde(transparent)]` so the JSON transport carries a bare integer, not a
+/// wrapper object — the wire format is unchanged.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(transparent)]
+pub struct BusId(pub usize);
+
+impl std::fmt::Display for BusId {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        self.0.fmt(f)
+    }
+}
+
 /// Bus type per MATPOWER convention: 1=PQ, 2=PV, 3=ref/slack, 4=isolated.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "UPPERCASE")]
 #[repr(u8)]
+#[non_exhaustive]
 pub enum BusType {
     Pq = 1,
     Pv = 2,
@@ -106,6 +128,7 @@ impl GenCost {
 /// Which format a [`Network`] was read from. Drives the same-format byte-exact
 /// echo on write.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[non_exhaustive]
 pub enum SourceFormat {
     Matpower,
     PowerModelsJson,
@@ -146,7 +169,7 @@ pub struct Network {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Bus {
     /// Stable bus id (1-based in MATPOWER; preserved verbatim).
-    pub id: usize,
+    pub id: BusId,
     pub kind: BusType,
     /// Voltage magnitude (p.u.).
     pub vm: f64,
@@ -163,7 +186,7 @@ pub struct Bus {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Load {
-    pub bus: usize,
+    pub bus: BusId,
     /// Active demand (MW).
     pub p: f64,
     /// Reactive demand (MVAr).
@@ -174,7 +197,7 @@ pub struct Load {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Shunt {
-    pub bus: usize,
+    pub bus: BusId,
     /// Shunt conductance (MW at V = 1 p.u.).
     pub g: f64,
     /// Shunt susceptance (MVAr at V = 1 p.u.).
@@ -185,8 +208,8 @@ pub struct Shunt {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Branch {
-    pub from: usize,
-    pub to: usize,
+    pub from: BusId,
+    pub to: BusId,
     /// Series resistance (p.u.).
     pub r: f64,
     /// Series reactance (p.u.).
@@ -219,11 +242,19 @@ impl Branch {
     pub fn is_transformer(&self) -> bool {
         self.tap != 0.0 || self.shift != 0.0
     }
+
+    /// True when the branch constrains its angle difference, i.e. the limits
+    /// deviate from the ±360° "unconstrained" default. Formats without angle
+    /// limit fields (PSS/E, PowerWorld) use this to warn on what they drop.
+    #[must_use]
+    pub fn has_angle_limits(&self) -> bool {
+        self.angmin > -360.0 || self.angmax < 360.0
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Generator {
-    pub bus: usize,
+    pub bus: BusId,
     /// Real power set point (MW).
     pub pg: f64,
     /// Reactive power set point (MVAr).
@@ -245,12 +276,21 @@ pub struct Generator {
     pub caps: GenCaps,
 }
 
+impl Generator {
+    /// True when any capability / ramp column is present. Formats without those
+    /// fields (PSS/E, PowerWorld) use this to warn on what they drop.
+    #[must_use]
+    pub fn has_caps(&self) -> bool {
+        self.caps.iter().any(Option::is_some)
+    }
+}
+
 /// A generator's capability / ramp columns, one slot per `GEN_EXTRA_KEYS` name.
 pub type GenCaps = [Option<f64>; GEN_EXTRA_KEYS.len()];
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Storage {
-    pub bus: usize,
+    pub bus: BusId,
     pub ps: f64,
     pub qs: f64,
     pub energy: f64,
@@ -273,8 +313,8 @@ pub struct Storage {
 /// A two-terminal HVDC line (MATPOWER `dcline`).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Hvdc {
-    pub from: usize,
-    pub to: usize,
+    pub from: BusId,
+    pub to: BusId,
     pub in_service: bool,
     pub pf: f64,
     pub pt: f64,
@@ -341,11 +381,26 @@ impl Network {
     }
 
     /// Rebuild a `Network` from JSON produced by [`to_json`](Network::to_json).
+    ///
+    /// Validates the result (unique bus ids, no dangling references) before
+    /// returning, so the JSON transport — the C ABI and Julia bridge ride on it —
+    /// can't hand back a network the file readers would have rejected.
     pub fn from_json(text: &str) -> crate::Result<Network> {
-        serde_json::from_str(text).map_err(|e| Error::FormatRead {
+        let net: Network = serde_json::from_str(text).map_err(|e| Error::FormatRead {
             format: "JSON",
             message: e.to_string(),
-        })
+        })?;
+        net.check_references("JSON")?;
+        Ok(net)
+    }
+
+    /// Check structural integrity: bus ids are unique and every element
+    /// references an existing bus. The file readers and [`from_json`](Network::from_json)
+    /// run this; a `Network` built by hand (or mutated, e.g. by a scenario
+    /// generator) should call it before handing the network to
+    /// [`IndexedNetwork`](crate::IndexedNetwork), whose dense indexing assumes it.
+    pub fn validate(&self) -> crate::Result<()> {
+        self.check_references("network")
     }
 
     /// Error if two buses share an id, or if any element references a bus that
@@ -366,7 +421,7 @@ impl Network {
                 });
             }
         }
-        let check = |bus: usize, what: &str| -> crate::Result<()> {
+        let check = |bus: BusId, what: &str| -> crate::Result<()> {
             if ids.contains(&bus) {
                 Ok(())
             } else {

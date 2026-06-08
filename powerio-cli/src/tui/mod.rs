@@ -170,7 +170,7 @@ fn handle_inspect(app: &mut App, key: KeyEvent) -> anyhow::Result<()> {
         KeyCode::Char('s') => {
             app.scheme = match app.scheme {
                 powerio_matrix::matrix::Scheme::Bx => powerio_matrix::matrix::Scheme::Xb,
-                powerio_matrix::matrix::Scheme::Xb => powerio_matrix::matrix::Scheme::Bx,
+                _ => powerio_matrix::matrix::Scheme::Bx,
             };
             if let Some(state) = app.inspect.take() {
                 let case = state.case;

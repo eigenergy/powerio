@@ -1,8 +1,11 @@
 use thiserror::Error;
 
+use crate::network::BusId;
+
 pub type Result<T> = std::result::Result<T, Error>;
 
 #[derive(Debug, Error)]
+#[non_exhaustive]
 pub enum Error {
     #[error("missing required MATPOWER field `{0}`")]
     MissingField(&'static str),
@@ -28,7 +31,7 @@ pub enum Error {
     UnbalancedBrackets(&'static str),
 
     #[error("branch references unknown bus id {bus_id} (branch row {row})")]
-    UnknownBus { bus_id: usize, row: usize },
+    UnknownBus { bus_id: BusId, row: usize },
 
     #[error("branch row {row} has zero impedance (r=0, x=0); not representable in B'")]
     ZeroImpedance { row: usize },

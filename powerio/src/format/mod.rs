@@ -42,6 +42,7 @@ pub use psse::{parse_psse, write_psse};
 
 /// A target interchange format. See [`write_as`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum TargetFormat {
     /// PowerModels.jl network data JSON.
     PowerModelsJson,

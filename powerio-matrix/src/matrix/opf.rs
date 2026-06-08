@@ -16,10 +16,11 @@ use crate::{Error, Result};
 
 /// Unit system for the emitted quantities.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
+#[non_exhaustive]
 pub enum Units {
     /// Power divided by `baseMVA`; cost coefficients scaled so the cost is a
-    /// function of per-unit power (`q ← 2c₂·base²`, `c ← c₁·base`). Keeps the
-    /// whole instance dimensionally consistent with the per-unit Laplacian.
+    /// function of per unit power (`q ← 2c₂·base²`, `c ← c₁·base`). Keeps the
+    /// whole instance dimensionally consistent with the per unit Laplacian.
     #[default]
     PerUnit,
     /// Raw MATPOWER units: power in MW, cost in native `$·MWh⁻¹` coefficients.
@@ -29,6 +30,7 @@ pub enum Units {
 /// Length-n bus-indexed cost and bound vectors (paper form). All share index
 /// space; each is zero at buses with no generator.
 #[derive(Debug, Clone)]
+#[non_exhaustive]
 pub struct BusCosts {
     /// Quadratic cost diagonal `q`, `cost = ½ q p² + c p`.
     pub q: Vec<f64>,
@@ -44,6 +46,7 @@ pub struct BusCosts {
 
 /// Generator-space provenance (length n_gen, in `C_g` column order).
 #[derive(Debug, Clone)]
+#[non_exhaustive]
 pub struct GenCosts {
     pub q: Vec<f64>,
     pub c: Vec<f64>,
@@ -55,6 +58,7 @@ pub struct GenCosts {
 
 /// Static DC-OPF instance data for a case.
 #[derive(Debug, Clone)]
+#[non_exhaustive]
 pub struct OpfInstance {
     pub n: usize,
     pub m: usize,
@@ -93,7 +97,7 @@ pub fn build_opf_instance(
         Units::PerUnit => 1.0 / base,
         Units::Native => 1.0,
     };
-    // Native cost is c₂p² + c₁p with p in MW. For per-unit p (p_MW = base·p_pu),
+    // Native cost is c₂p² + c₁p with p in MW. For per unit p (p_MW = base·p_pu),
     // q_pu = 2c₂·base² and c_pu = c₁·base.
     let (q_scale, c_scale) = match units {
         Units::PerUnit => (base * base, base),

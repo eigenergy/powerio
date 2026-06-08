@@ -17,7 +17,8 @@ use serde_json::{Map, Value};
 
 use super::{Conversion, finish, jnum};
 use crate::network::{
-    Branch, Bus, BusType, GenCost, Generator, Hvdc, Load, Network, Shunt, SourceFormat, Storage,
+    Branch, Bus, BusId, BusType, GenCost, Generator, Hvdc, Load, Network, Shunt, SourceFormat,
+    Storage,
 };
 use crate::{Error, Result};
 
@@ -123,8 +124,8 @@ fn status_int(in_service: bool) -> Value {
 
 fn bus_obj(b: &Bus, a: f64) -> Value {
     let mut m = Map::new();
-    m.insert("bus_i".into(), Value::from(b.id as u64));
-    m.insert("index".into(), Value::from(b.id as u64));
+    m.insert("bus_i".into(), Value::from(b.id.0 as u64));
+    m.insert("index".into(), Value::from(b.id.0 as u64));
     m.insert("bus_type".into(), Value::from(u64::from(b.kind as u8)));
     m.insert("vm".into(), jnum(b.vm));
     m.insert("va".into(), jnum(b.va * a));
@@ -136,15 +137,15 @@ fn bus_obj(b: &Bus, a: f64) -> Value {
     if let Some(name) = &b.name {
         m.insert("name".into(), Value::String(name.clone()));
     }
-    m.insert("source_id".into(), source_id("bus", b.id));
+    m.insert("source_id".into(), source_id("bus", b.id.0));
     Value::Object(m)
 }
 
 fn branch_obj(br: &Branch, idx: usize, p: f64, a: f64) -> Value {
     let mut m = Map::new();
     m.insert("index".into(), Value::from(idx as u64));
-    m.insert("f_bus".into(), Value::from(br.from as u64));
-    m.insert("t_bus".into(), Value::from(br.to as u64));
+    m.insert("f_bus".into(), Value::from(br.from.0 as u64));
+    m.insert("t_bus".into(), Value::from(br.to.0 as u64));
     m.insert("br_r".into(), jnum(br.r));
     m.insert("br_x".into(), jnum(br.x));
     // MATPOWER's single line-charging `b` splits half to each end; no branch `g`.
@@ -177,7 +178,7 @@ fn branch_obj(br: &Branch, idx: usize, p: f64, a: f64) -> Value {
 fn gen_obj(g: &Generator, idx: usize, p: f64, base: f64) -> Value {
     let mut m = Map::new();
     m.insert("index".into(), Value::from(idx as u64));
-    m.insert("gen_bus".into(), Value::from(g.bus as u64));
+    m.insert("gen_bus".into(), Value::from(g.bus.0 as u64));
     m.insert("pg".into(), jnum(g.pg * p));
     m.insert("qg".into(), jnum(g.qg * p));
     m.insert("qmax".into(), jnum(g.qmax * p));
@@ -254,30 +255,30 @@ fn cost_coeffs_pu(cost: &GenCost, base: f64) -> Vec<Value> {
 fn load_obj(l: &Load, idx: usize, p: f64) -> Value {
     let mut m = Map::new();
     m.insert("index".into(), Value::from(idx as u64));
-    m.insert("load_bus".into(), Value::from(l.bus as u64));
+    m.insert("load_bus".into(), Value::from(l.bus.0 as u64));
     m.insert("pd".into(), jnum(l.p * p));
     m.insert("qd".into(), jnum(l.q * p));
     m.insert("status".into(), status_int(l.in_service));
-    m.insert("source_id".into(), source_id("bus", l.bus));
+    m.insert("source_id".into(), source_id("bus", l.bus.0));
     Value::Object(m)
 }
 
 fn shunt_obj(s: &Shunt, idx: usize, p: f64) -> Value {
     let mut m = Map::new();
     m.insert("index".into(), Value::from(idx as u64));
-    m.insert("shunt_bus".into(), Value::from(s.bus as u64));
+    m.insert("shunt_bus".into(), Value::from(s.bus.0 as u64));
     m.insert("gs".into(), jnum(s.g * p));
     m.insert("bs".into(), jnum(s.b * p));
     m.insert("status".into(), status_int(s.in_service));
-    m.insert("source_id".into(), source_id("bus", s.bus));
+    m.insert("source_id".into(), source_id("bus", s.bus.0));
     Value::Object(m)
 }
 
 fn dcline_obj(dc: &Hvdc, idx: usize, p: f64) -> Value {
     let mut m = Map::new();
     m.insert("index".into(), Value::from(idx as u64));
-    m.insert("f_bus".into(), Value::from(dc.from as u64));
-    m.insert("t_bus".into(), Value::from(dc.to as u64));
+    m.insert("f_bus".into(), Value::from(dc.from.0 as u64));
+    m.insert("t_bus".into(), Value::from(dc.to.0 as u64));
     m.insert("br_status".into(), status_int(dc.in_service));
     m.insert("pf".into(), jnum(dc.pf * p));
     // MATPOWER uses the opposite sign for Pt/Qf/Qt; PowerModels flips them.
@@ -327,7 +328,7 @@ fn dcline_p_bounds(pmin: f64, pmax: f64, loss0: f64, loss1: f64) -> (f64, f64, f
 fn storage_obj(st: &Storage, idx: usize, p: f64) -> Value {
     let mut m = Map::new();
     m.insert("index".into(), Value::from(idx as u64));
-    m.insert("storage_bus".into(), Value::from(st.bus as u64));
+    m.insert("storage_bus".into(), Value::from(st.bus.0 as u64));
     // ps/qs are the dispatch setpoint; PowerModels' make_per_unit! leaves them raw
     // (it rescales the energy/ratings/limits below), so we do too.
     m.insert("ps".into(), jnum(st.ps));
@@ -499,7 +500,7 @@ fn read_bus(v: &Value, ascale: f64) -> Result<Bus> {
             message: "bus record missing integer `bus_i`".into(),
         })? as usize;
     Ok(Bus {
-        id,
+        id: BusId(id),
         kind: bustype(v.get("bus_type").and_then(Value::as_i64).unwrap_or(1)),
         vm: f_or(v, "vm", 1.0),
         va: f(v, "va") * ascale,
@@ -531,7 +532,7 @@ fn read_bus(v: &Value, ascale: f64) -> Result<Bus> {
 
 fn read_load(v: &Value, pscale: f64) -> Load {
     Load {
-        bus: uid(v, "load_bus"),
+        bus: BusId(uid(v, "load_bus")),
         p: f(v, "pd") * pscale,
         q: f(v, "qd") * pscale,
         in_service: flag(v, "status"),
@@ -541,7 +542,7 @@ fn read_load(v: &Value, pscale: f64) -> Load {
 
 fn read_shunt(v: &Value, pscale: f64) -> Shunt {
     Shunt {
-        bus: uid(v, "shunt_bus"),
+        bus: BusId(uid(v, "shunt_bus")),
         g: f(v, "gs") * pscale,
         b: f(v, "bs") * pscale,
         in_service: flag(v, "status"),
@@ -566,8 +567,8 @@ fn read_branch(v: &Value, pscale: f64, ascale: f64) -> Branch {
         0.0
     };
     Branch {
-        from: uid(v, "f_bus"),
-        to: uid(v, "t_bus"),
+        from: BusId(uid(v, "f_bus")),
+        to: BusId(uid(v, "t_bus")),
         r: f(v, "br_r"),
         x: f(v, "br_x"),
         b: f(v, "b_fr") + f(v, "b_to"),
@@ -620,7 +621,7 @@ fn read_gen(v: &Value, pscale: f64, base_mva: f64, per_unit: bool) -> Generator 
     }
     let cost = v.get("model").map(|_| read_cost(v, base_mva, per_unit));
     Generator {
-        bus: uid(v, "gen_bus"),
+        bus: BusId(uid(v, "gen_bus")),
         pg: f(v, "pg") * pscale,
         qg: f(v, "qg") * pscale,
         // The writer emits an unbounded limit (±Inf) as JSON null; read a missing
@@ -693,8 +694,8 @@ fn read_hvdc(v: &Value, pscale: f64) -> Hvdc {
         .and_then(Value::as_f64)
         .unwrap_or_else(|| f(v, "pmaxf") * pscale);
     Hvdc {
-        from: uid(v, "f_bus"),
-        to: uid(v, "t_bus"),
+        from: BusId(uid(v, "f_bus")),
+        to: BusId(uid(v, "t_bus")),
         in_service: flag(v, "br_status"),
         pf: f(v, "pf") * pscale,
         // PowerModels flips Pt/Qf/Qt vs MATPOWER; undo it for the neutral model.
@@ -747,7 +748,7 @@ fn read_hvdc(v: &Value, pscale: f64) -> Hvdc {
 
 fn read_storage(v: &Value, pscale: f64) -> Storage {
     Storage {
-        bus: uid(v, "storage_bus"),
+        bus: BusId(uid(v, "storage_bus")),
         ps: f(v, "ps"),
         qs: f(v, "qs"),
         energy: f(v, "energy") * pscale,

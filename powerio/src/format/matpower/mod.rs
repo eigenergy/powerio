@@ -165,7 +165,7 @@ fn parse_optional<'a, T>(
 }
 
 /// Parse `mpc.gen` and fold in the active-power block of `mpc.gencost`.
-/// Both are optional: a power-flow-only case has neither and gets no gens.
+/// Both are optional: a case with only power flow data has neither and gets no gens.
 fn parse_gens<'a>(get: &impl Fn(&str) -> Option<&'a str>) -> Result<Vec<Generator>> {
     let Some(raw) = get("gen") else {
         return Ok(Vec::new());

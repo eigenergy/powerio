@@ -47,6 +47,6 @@ pub use format::{
 };
 pub use indexed::{ConnectivityReport, IndexCore, IndexedNetwork};
 pub use network::{
-    Branch, Bus, BusType, Extras, GenCost, Generator, Hvdc, Load, Network, Shunt, SourceFormat,
-    Storage,
+    Branch, Bus, BusId, BusType, Extras, GenCaps, GenCost, Generator, Hvdc, Load, Network, Shunt,
+    SourceFormat, Storage,
 };

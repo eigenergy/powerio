@@ -8,13 +8,13 @@ use rand_chacha::ChaCha8Rng;
 use crate::network::Network;
 
 use super::SynthSpec;
-use super::tree::{make_branch, make_bus, net};
+use super::tree::{make_branch, make_buses, net};
 
 pub fn generate_pegase_like(spec: &SynthSpec) -> Network {
     let n = spec.n.max(2);
     let mut rng = ChaCha8Rng::seed_from_u64(spec.seed);
 
-    let buses = (0..n).map(|i| make_bus(i + 1)).collect();
+    let buses = make_buses(n);
     let mut branches = Vec::with_capacity((n as f64 * 1.3) as usize);
 
     // Spanning tree backbone.

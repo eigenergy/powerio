@@ -1,7 +1,8 @@
 //! Sparse matrix builders for MATPOWER cases.
 //!
-//! Sign convention: the susceptance matrix has the form `B = Aᵀ diag(b) A`
-//! where `b_ij = -x_ij / (r²+x²)`. Resulting matrices satisfy positive
+//! Sign convention: the susceptance matrix has the form `B = A diag(b) Aᵀ`
+//! with the node-by-edge incidence `A` (n×m) and per-edge weight `b_e = x/(r²+x²)`
+//! (see `bprime.rs` for the entry-level form). Resulting matrices satisfy positive
 //! diagonal, negative off-diagonal, `diag = sum of |off-diagonal|` — the
 //! positive (M-matrix) Laplacian form SDDM solvers expect.
 
@@ -43,6 +44,7 @@ use sprs::CsMat;
 /// - `Bx`: B' uses `-x / (r² + x²)` (what most modern solvers do).
 /// - `Xb`: B' uses `-1 / x` (original Stott/Alsac 1974). Requires `x ≠ 0`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
+#[non_exhaustive]
 pub enum Scheme {
     #[default]
     Bx,
@@ -73,6 +75,7 @@ impl Default for BuildOptions {
 
 /// Common stats over a sparse matrix used by the TUI and `meta.json`.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[non_exhaustive]
 pub struct MatrixStats {
     pub n: usize,
     pub nnz: usize,

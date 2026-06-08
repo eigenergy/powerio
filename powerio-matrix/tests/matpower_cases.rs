@@ -3,12 +3,11 @@
 
 use std::path::PathBuf;
 
-use powerio_matrix::IndexedNetwork;
 use powerio_matrix::matrix::{
     BuildOptions, MatrixStats, build_bdoubleprime, build_bprime, build_lacpf, build_ybus,
     sddm_check,
 };
-use powerio_matrix::parse_matpower_file;
+use powerio_matrix::{BusId, IndexedNetwork, parse_matpower_file};
 
 fn fixture(name: &str) -> PathBuf {
     let mut p = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
@@ -26,7 +25,7 @@ fn case9_parses_correctly() {
     // case9 buses are contiguous 1..=9.
     let g = IndexedNetwork::new(&net);
     for i in 1..=9 {
-        assert_eq!(g.bus_index(i), Some(i - 1));
+        assert_eq!(g.bus_index(BusId(i)), Some(i - 1));
     }
 }
 

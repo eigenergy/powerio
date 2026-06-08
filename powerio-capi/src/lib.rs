@@ -317,15 +317,17 @@ pub unsafe extern "C" fn pio_bus_ids(case: *const PioCase, out: *mut i64) {
                     c.net
                         .buses
                         .iter()
-                        .map(|b| i64::try_from(b.id).unwrap_or(-1)),
+                        .map(|b| i64::try_from(b.id.0).unwrap_or(-1)),
                 );
             }
         })
     }
 }
 
-/// Fill the branch tables (each length `pio_n_branches`, dense bus indices for
-/// `from`/`to` resolved against the case). Any pointer may be `NULL` to skip.
+/// Fill the branch tables (each length `pio_n_branches`). `from`/`to` are the
+/// 1-based bus ids (the same id space as [`pio_bus_ids`], not dense indices);
+/// map them to dense matrix rows with the [`pio_bus_ids`] ordering. Any pointer
+/// may be `NULL` to skip.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_branches(
     case: *const PioCase,
@@ -341,14 +343,19 @@ pub unsafe extern "C" fn pio_branches(
     unsafe {
         guard((), || {
             let Some(c) = case_ref(case) else { return };
-            let view = IndexedNetwork::with_core(&c.net, &c.core);
-            let idx = |id: usize| {
-                view.bus_index(id)
-                    .map_or(-1, |i| i64::try_from(i).unwrap_or(-1))
-            };
             let net = &c.net;
-            fill(from, net.branches.iter().map(|br| idx(br.from)));
-            fill(to, net.branches.iter().map(|br| idx(br.to)));
+            fill(
+                from,
+                net.branches
+                    .iter()
+                    .map(|br| i64::try_from(br.from.0).unwrap_or(-1)),
+            );
+            fill(
+                to,
+                net.branches
+                    .iter()
+                    .map(|br| i64::try_from(br.to.0).unwrap_or(-1)),
+            );
             fill(r, net.branches.iter().map(|br| br.r));
             fill(x, net.branches.iter().map(|br| br.x));
             fill(b, net.branches.iter().map(|br| br.b));
@@ -362,8 +369,8 @@ pub unsafe extern "C" fn pio_branches(
     }
 }
 
-/// Fill the generator tables (each length `pio_n_gens`; `bus` is a dense index).
-/// Any pointer may be `NULL` to skip.
+/// Fill the generator tables (each length `pio_n_gens`; `bus` is the 1-based bus
+/// id, the same id space as [`pio_bus_ids`]). Any pointer may be `NULL` to skip.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_gens(
     case: *const PioCase,
@@ -376,13 +383,13 @@ pub unsafe extern "C" fn pio_gens(
     unsafe {
         guard((), || {
             let Some(c) = case_ref(case) else { return };
-            let view = IndexedNetwork::with_core(&c.net, &c.core);
-            let idx = |id: usize| {
-                view.bus_index(id)
-                    .map_or(-1, |i| i64::try_from(i).unwrap_or(-1))
-            };
             let net = &c.net;
-            fill(bus, net.generators.iter().map(|g| idx(g.bus)));
+            fill(
+                bus,
+                net.generators
+                    .iter()
+                    .map(|g| i64::try_from(g.bus.0).unwrap_or(-1)),
+            );
             fill(pg, net.generators.iter().map(|g| g.pg));
             fill(pmax, net.generators.iter().map(|g| g.pmax));
             fill(pmin, net.generators.iter().map(|g| g.pmin));
@@ -500,8 +507,9 @@ mod tests {
                 std::ptr::null_mut(),
                 std::ptr::null_mut(),
             );
-            // case9 is connected: every branch resolves to real dense indices.
-            assert!(from.iter().all(|&f| f >= 0));
+            // `from` carries the 1-based bus ids (case9 buses are 1..=9), the
+            // same id space as pio_bus_ids — not dense indices.
+            assert!(from.iter().all(|&f| f >= 1));
             assert!(x.iter().all(|&xx| xx > 0.0));
             pio_case_free(c);
         }

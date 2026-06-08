@@ -2,10 +2,10 @@
 //!
 //! Downsamples an `n × n` sparse matrix into a `H × W` cell grid where
 //! each cell renders as a half/quarter block proportional to the local
-//! nonzero density. Cell intensity uses a 4-step ramp:
+//! nonzero density. Cell intensity uses a five-level ramp (plus blank):
 //!
 //! ```text
-//!     ' '   .   ░   ▒   ▓   █
+//!     ' '   ·   ░   ▒   ▓   █
 //! ```
 //!
 //! Negative values render with one color (the M-matrix off-diagonal pattern

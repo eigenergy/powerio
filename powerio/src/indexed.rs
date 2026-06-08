@@ -21,7 +21,7 @@ use std::collections::HashMap;
 
 use petgraph::graph::UnGraph;
 
-use crate::network::{Branch, BusType, Generator, Network};
+use crate::network::{Branch, BusId, BusType, Generator, Network};
 use crate::{Error, Result};
 
 /// The owned, network-independent derivation behind [`IndexedNetwork`]: the
@@ -31,7 +31,7 @@ use crate::{Error, Result};
 #[derive(Debug, Clone)]
 pub struct IndexCore {
     /// Stable bus id → dense index in `[0, n)`.
-    bus_id_to_idx: HashMap<usize, usize>,
+    bus_id_to_idx: HashMap<BusId, usize>,
     /// Active demand summed per bus (dense index order, MW).
     pd: Vec<f64>,
     /// Reactive demand summed per bus (MVAr).
@@ -51,14 +51,15 @@ impl IndexCore {
     ///
     /// # Correctness
     /// Bus ids must be unique; a duplicate collapses two buses onto one dense
-    /// index and silently corrupts every aggregate. All format readers and the
-    /// MATPOWER reader run `Network::check_references` before this, so a parsed
-    /// network always satisfies it; a hand-built [`Network`] must too. Checked
-    /// with a `debug_assert`.
+    /// index and silently corrupts every aggregate. The format readers and
+    /// [`Network::from_json`](crate::Network::from_json) run
+    /// [`Network::validate`](crate::Network::validate) before this, so a parsed
+    /// or JSON-sourced network always satisfies it; a hand-built [`Network`] must
+    /// call `validate` itself. Backstopped here by a `debug_assert`.
     #[must_use]
     pub fn build(net: &Network) -> Self {
         let n = net.buses.len();
-        let bus_id_to_idx: HashMap<usize, usize> = net
+        let bus_id_to_idx: HashMap<BusId, usize> = net
             .buses
             .iter()
             .enumerate()
@@ -161,7 +162,7 @@ impl<'n> IndexedNetwork<'n> {
 
     /// Resolve a bus id to its dense `[0, n)` index.
     #[inline]
-    pub fn bus_index(&self, bus_id: usize) -> Option<usize> {
+    pub fn bus_index(&self, bus_id: BusId) -> Option<usize> {
         self.core.bus_id_to_idx.get(&bus_id).copied()
     }
 
@@ -172,7 +173,7 @@ impl<'n> IndexedNetwork<'n> {
     /// Panics if `idx >= n`. Pass a dense index (e.g. from [`bus_index`](Self::bus_index) or a
     /// matrix row), not a raw bus id.
     #[inline]
-    pub fn bus_id(&self, idx: usize) -> usize {
+    pub fn bus_id(&self, idx: usize) -> BusId {
         self.net.buses[idx].id
     }
 
@@ -282,6 +283,7 @@ impl<'n> IndexedNetwork<'n> {
 /// Topological invariants the TUI Inspect screen and downstream solvers care
 /// about.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[non_exhaustive]
 pub struct ConnectivityReport {
     pub n_buses: usize,
     pub n_branches_in_service: usize,
@@ -300,11 +302,11 @@ impl ConnectivityReport {
 #[cfg(test)]
 mod tests {
     use super::{IndexCore, IndexedNetwork};
-    use crate::network::{Bus, BusType, Extras, Load, Network, Shunt};
+    use crate::network::{Bus, BusId, BusType, Extras, Load, Network, Shunt};
 
     fn bus(id: usize, kind: BusType) -> Bus {
         Bus {
-            id,
+            id: BusId(id),
             kind,
             vm: 1.0,
             va: 0.0,
@@ -326,28 +328,28 @@ mod tests {
             Vec::new(),
         );
         net.loads.push(Load {
-            bus: 1,
+            bus: BusId(1),
             p: 10.0,
             q: 5.0,
             in_service: true,
             extras: Extras::new(),
         });
         net.loads.push(Load {
-            bus: 1,
+            bus: BusId(1),
             p: 3.0,
             q: 1.0,
             in_service: true,
             extras: Extras::new(),
         });
         net.shunts.push(Shunt {
-            bus: 1,
+            bus: BusId(1),
             g: 0.2,
             b: 0.4,
             in_service: true,
             extras: Extras::new(),
         });
         net.shunts.push(Shunt {
-            bus: 1,
+            bus: BusId(1),
             g: 0.1,
             b: 0.3,
             in_service: true,
@@ -357,12 +359,12 @@ mod tests {
     }
 
     fn assert_aggregates(view: &IndexedNetwork) {
-        let i = view.bus_index(1).unwrap();
+        let i = view.bus_index(BusId(1)).unwrap();
         assert!((view.pd()[i] - 13.0).abs() < 1e-12);
         assert!((view.qd()[i] - 6.0).abs() < 1e-12);
         assert!((view.gs()[i] - 0.3).abs() < 1e-12);
         assert!((view.bs()[i] - 0.7).abs() < 1e-12);
-        let j = view.bus_index(2).unwrap();
+        let j = view.bus_index(BusId(2)).unwrap();
         assert!(view.pd()[j].abs() < 1e-12);
         assert!(view.gs()[j].abs() < 1e-12);
     }

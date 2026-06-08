@@ -7,14 +7,14 @@ use rand_chacha::ChaCha8Rng;
 use crate::network::Network;
 
 use super::SynthSpec;
-use super::tree::{make_branch, make_bus, net};
+use super::tree::{make_branch, make_buses, net};
 
 pub fn generate_lattice(spec: &SynthSpec) -> Network {
     let side = ((spec.n as f64).sqrt().ceil() as usize).max(2);
     let n = side * side;
     let mut rng = ChaCha8Rng::seed_from_u64(spec.seed);
 
-    let buses = (0..n).map(|i| make_bus(i + 1)).collect();
+    let buses = make_buses(n);
     let mut branches = Vec::with_capacity(2 * side * (side - 1));
     for r in 0..side {
         for c in 0..side {

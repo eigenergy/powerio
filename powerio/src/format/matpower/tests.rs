@@ -1,7 +1,7 @@
 use super::parse_matpower as parse_mpc;
 use super::write_matpower;
 use crate::indexed::IndexedNetwork;
-use crate::network::SourceFormat;
+use crate::network::{BusId, SourceFormat};
 
 const CASE_TINY: &str = r"
 function mpc = tiny
@@ -32,12 +32,12 @@ fn parses_tiny_case() {
     assert_eq!(net.buses.len(), 3);
     assert_eq!(net.branches.len(), 2);
     // First bus has zero demand, so it produces no load; buses 2 and 3 do.
-    assert_eq!(net.buses[0].id, 1);
+    assert_eq!(net.buses[0].id, BusId(1));
     assert_eq!(net.loads.len(), 2);
-    assert!(net.loads.iter().all(|l| l.bus != 1));
+    assert!(net.loads.iter().all(|l| l.bus != BusId(1)));
     // Branch 0: 1->2, r=0.02, x=0.06, in service.
-    assert_eq!(net.branches[0].from, 1);
-    assert_eq!(net.branches[0].to, 2);
+    assert_eq!(net.branches[0].from, BusId(1));
+    assert_eq!(net.branches[0].to, BusId(2));
     assert!((net.branches[0].r - 0.02).abs() < 1e-12);
     assert!((net.branches[0].x - 0.06).abs() < 1e-12);
     assert!(net.branches[0].in_service);
@@ -59,9 +59,9 @@ mpc.branch = [
     let net = parse_mpc(src).expect("parse sparse-ids");
     assert_eq!(net.buses.len(), 2);
     let g = IndexedNetwork::new(&net);
-    assert_eq!(g.bus_index(7), Some(0));
-    assert_eq!(g.bus_index(42), Some(1));
-    assert_eq!(g.bus_index(99), None);
+    assert_eq!(g.bus_index(BusId(7)), Some(0));
+    assert_eq!(g.bus_index(BusId(42)), Some(1));
+    assert_eq!(g.bus_index(BusId(99)), None);
 }
 
 #[test]
@@ -116,7 +116,7 @@ mpc.storage = [
     let net = parse_mpc(src).expect("parse storage");
     assert_eq!(net.storage.len(), 2);
     let s = &net.storage[0];
-    assert_eq!(s.bus, 4);
+    assert_eq!(s.bus, BusId(4));
     assert!((s.energy - 1.0).abs() < 1e-12);
     assert!((s.energy_rating - 600.0).abs() < 1e-12);
     assert!((s.charge_efficiency - 0.9).abs() < 1e-12);

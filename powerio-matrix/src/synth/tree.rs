@@ -4,14 +4,14 @@ use rand::Rng;
 use rand::SeedableRng;
 use rand_chacha::ChaCha8Rng;
 
-use crate::network::{Branch, Bus, BusType, Extras, Network};
+use crate::network::{Branch, Bus, BusId, BusType, Extras, Network};
 
 use super::SynthSpec;
 
 pub fn generate_tree(spec: &SynthSpec) -> Network {
     let n = spec.n.max(2);
     let mut rng = ChaCha8Rng::seed_from_u64(spec.seed);
-    let buses: Vec<Bus> = (0..n).map(|i| make_bus(i + 1)).collect();
+    let buses = make_buses(n);
 
     // For each new node k in [1, n), connect it to a uniformly chosen ancestor.
     let mut branches = Vec::with_capacity(n - 1);
@@ -29,9 +29,19 @@ pub(super) fn net(name: String, buses: Vec<Bus>, branches: Vec<Branch>) -> Netwo
     Network::in_memory(name, 100.0, buses, branches)
 }
 
+/// Build `n` synthetic buses with ids `1..=n` and bus 1 designated reference.
+/// Every synthetic case needs exactly one reference bus, or the DC sensitivity
+/// and DC-OPF paths reject it with `ReferenceBusCount { found: 0 }`. Centralized
+/// here so each topology generator can't forget it. Requires `n >= 1`.
+pub(crate) fn make_buses(n: usize) -> Vec<Bus> {
+    let mut buses: Vec<Bus> = (0..n).map(|i| make_bus(i + 1)).collect();
+    buses[0].kind = BusType::Ref;
+    buses
+}
+
 pub(crate) fn make_bus(id: usize) -> Bus {
     Bus {
-        id,
+        id: BusId(id),
         kind: BusType::Pq,
         vm: 1.0,
         va: 0.0,
@@ -58,8 +68,8 @@ pub(crate) fn make_branch(
     let x = log_x.exp().max(1e-6);
     let r = spec.r_over_x * x;
     Branch {
-        from,
-        to,
+        from: BusId(from),
+        to: BusId(to),
         r,
         x,
         b: 0.0,

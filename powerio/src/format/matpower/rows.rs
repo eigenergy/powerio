@@ -6,8 +6,8 @@
 //! demand and shunts onto the bus row; the hub keeps them first-class).
 
 use crate::network::{
-    Branch, Bus, BusType, Extras, GEN_EXTRA_KEYS, GenCaps, GenCost, Generator, Hvdc, Load, Shunt,
-    Storage,
+    Branch, Bus, BusId, BusType, Extras, GEN_EXTRA_KEYS, GenCaps, GenCost, Generator, Hvdc, Load,
+    Shunt, Storage,
 };
 use crate::{Error, Result};
 
@@ -143,7 +143,7 @@ fn require(field: &'static str, row: &[f64], i: usize, expected: usize) -> Resul
 /// (an isolated bus is out of service).
 pub(super) fn bus_row(row: &[f64], i: usize) -> Result<(Bus, Option<Load>, Option<Shunt>)> {
     require("bus", row, i, bus_col::REQUIRED)?;
-    let id = row[bus_col::BUS_I] as usize;
+    let id = BusId(row[bus_col::BUS_I] as usize);
     let kind = BusType::from_f64(row[bus_col::BUS_TYPE]);
     let in_service = kind != BusType::Isolated;
     let bus = Bus {
@@ -181,8 +181,8 @@ pub(super) fn bus_row(row: &[f64], i: usize) -> Result<(Bus, Option<Load>, Optio
 pub(super) fn branch_row(row: &[f64], i: usize) -> Result<Branch> {
     require("branch", row, i, branch_col::REQUIRED)?;
     Ok(Branch {
-        from: row[branch_col::F_BUS] as usize,
-        to: row[branch_col::T_BUS] as usize,
+        from: BusId(row[branch_col::F_BUS] as usize),
+        to: BusId(row[branch_col::T_BUS] as usize),
         r: row[branch_col::BR_R],
         x: row[branch_col::BR_X],
         b: row[branch_col::BR_B],
@@ -199,10 +199,10 @@ pub(super) fn branch_row(row: &[f64], i: usize) -> Result<Branch> {
 }
 
 /// Parse a generator row. The cost curve is folded in later from `mpc.gencost`.
-/// The MATPOWER capability/ramp columns past `PMIN` ride along as `extras` under
-/// their canonical names (the 11 in [`GEN_EXTRA_KEYS`]) so they survive
-/// cross-format writes. Any columns beyond those are not retained — same as the
-/// pre-dissolution path; the byte-exact MATPOWER round-trip echoes the source.
+/// The MATPOWER capability/ramp columns past `PMIN` go into the fixed
+/// [`GenCaps`] array, one slot per name in [`GEN_EXTRA_KEYS`] (the 11 of them),
+/// so they survive cross-format writes. Any columns beyond those are not
+/// retained — the byte-exact MATPOWER round-trip echoes the source.
 pub(super) fn gen_row(row: &[f64], i: usize) -> Result<Generator> {
     require("gen", row, i, gen_col::REQUIRED)?;
     // The capability/ramp columns past PMIN, by position, into the fixed GenCaps
@@ -213,7 +213,7 @@ pub(super) fn gen_row(row: &[f64], i: usize) -> Result<Generator> {
         *slot = Some(v);
     }
     Ok(Generator {
-        bus: row[gen_col::GEN_BUS] as usize,
+        bus: BusId(row[gen_col::GEN_BUS] as usize),
         pg: row[gen_col::PG],
         qg: row[gen_col::QG],
         qmax: row[gen_col::QMAX],
@@ -242,7 +242,7 @@ pub(super) fn gencost_row(row: &[f64], i: usize) -> Result<GenCost> {
 pub(super) fn storage_row(row: &[f64], i: usize) -> Result<Storage> {
     require("storage", row, i, storage_col::REQUIRED)?;
     Ok(Storage {
-        bus: row[storage_col::STORAGE_BUS] as usize,
+        bus: BusId(row[storage_col::STORAGE_BUS] as usize),
         ps: row[storage_col::PS],
         qs: row[storage_col::QS],
         energy: row[storage_col::ENERGY],
@@ -266,8 +266,8 @@ pub(super) fn storage_row(row: &[f64], i: usize) -> Result<Storage> {
 pub(super) fn hvdc_row(row: &[f64], i: usize) -> Result<Hvdc> {
     require("dcline", row, i, dcline_col::REQUIRED)?;
     Ok(Hvdc {
-        from: row[dcline_col::F_BUS] as usize,
-        to: row[dcline_col::T_BUS] as usize,
+        from: BusId(row[dcline_col::F_BUS] as usize),
+        to: BusId(row[dcline_col::T_BUS] as usize),
         in_service: is_in_service(row[dcline_col::BR_STATUS]),
         pf: row[dcline_col::PF],
         pt: row[dcline_col::PT],

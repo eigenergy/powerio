@@ -216,7 +216,7 @@ impl PyCase {
         let mut rows: Vec<Bound<'py, PyDict>> = Vec::with_capacity(self.inner.buses.len());
         for b in &self.inner.buses {
             let d = PyDict::new(py);
-            d.set_item("id", b.id)?;
+            d.set_item("id", b.id.0)?;
             d.set_item("type", b.kind.as_str())?;
             d.set_item("vm", b.vm)?;
             d.set_item("va", b.va)?;
@@ -235,7 +235,7 @@ impl PyCase {
         let mut rows: Vec<Bound<'py, PyDict>> = Vec::with_capacity(self.inner.loads.len());
         for l in &self.inner.loads {
             let d = PyDict::new(py);
-            d.set_item("bus", l.bus)?;
+            d.set_item("bus", l.bus.0)?;
             d.set_item("p", l.p)?;
             d.set_item("q", l.q)?;
             d.set_item("in_service", l.in_service)?;
@@ -249,7 +249,7 @@ impl PyCase {
         let mut rows: Vec<Bound<'py, PyDict>> = Vec::with_capacity(self.inner.shunts.len());
         for s in &self.inner.shunts {
             let d = PyDict::new(py);
-            d.set_item("bus", s.bus)?;
+            d.set_item("bus", s.bus.0)?;
             d.set_item("g", s.g)?;
             d.set_item("b", s.b)?;
             d.set_item("in_service", s.in_service)?;
@@ -263,8 +263,8 @@ impl PyCase {
         let mut rows: Vec<Bound<'py, PyDict>> = Vec::with_capacity(self.inner.branches.len());
         for br in &self.inner.branches {
             let d = PyDict::new(py);
-            d.set_item("from_id", br.from)?;
-            d.set_item("to_id", br.to)?;
+            d.set_item("from_id", br.from.0)?;
+            d.set_item("to_id", br.to.0)?;
             d.set_item("r", br.r)?;
             d.set_item("x", br.x)?;
             d.set_item("b", br.b)?;
@@ -286,7 +286,7 @@ impl PyCase {
         let mut rows: Vec<Bound<'py, PyDict>> = Vec::with_capacity(self.inner.generators.len());
         for g in &self.inner.generators {
             let d = PyDict::new(py);
-            d.set_item("bus", g.bus)?;
+            d.set_item("bus", g.bus.0)?;
             d.set_item("pg", g.pg)?;
             d.set_item("qg", g.qg)?;
             d.set_item("pmax", g.pmax)?;

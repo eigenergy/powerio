@@ -65,8 +65,9 @@ char *pio_to_json(const PioCase *c, char *errbuf, size_t errlen);
 PioCase *pio_from_json(const char *json, char *errbuf, size_t errlen);
 
 /* Numeric table extractors. Each output buffer has the matching pio_n_* length;
- * pass NULL to skip it. `from`/`to`/`bus` are dense bus indices ([0,n), or -1 if
- * a referenced bus is unknown). */
+ * pass NULL to skip it. `from`/`to`/`bus` are 1-based bus ids in the same id
+ * space as pio_bus_ids (NOT dense [0,n) indices); pio_bus_ids gives the id at
+ * each dense index, so invert it to map an endpoint id to a matrix row. */
 void pio_bus_ids(const PioCase *c, int64_t *out);
 void pio_branches(const PioCase *c, int64_t *from, int64_t *to, double *r,
                   double *x, double *b, double *tap, double *shift,

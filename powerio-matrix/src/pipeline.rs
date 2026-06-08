@@ -23,6 +23,7 @@ use crate::matrix::{
 use crate::network::Network;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[non_exhaustive]
 pub enum MatrixKind {
     /// FDPF B' (shuntless, taps=1, shifts=0).
     BPrime,

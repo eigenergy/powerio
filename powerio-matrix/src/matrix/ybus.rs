@@ -22,6 +22,7 @@ use super::triplet::CooBuilder;
 
 /// `Re(Y_bus)` and `Im(Y_bus)` as separate CSR matrices.
 #[derive(Debug, Clone)]
+#[non_exhaustive]
 pub struct YbusParts {
     pub g: CsMat<f64>,
     pub b: CsMat<f64>,
@@ -74,6 +75,12 @@ pub(crate) fn build_ybus_with_flags(case: &IndexedNetwork, flags: YbusFlags) -> 
         let denom = r * r + x * x;
         if denom == 0.0 {
             continue;
+        }
+        // NaN/Inf r or x makes `denom` non-finite (and slips past `== 0.0`),
+        // which would write NaN into Y_bus and silently break the downstream
+        // M-matrix/SDDM checks. Reject it the same way `incidence` does.
+        if !denom.is_finite() {
+            return Err(Error::NonFiniteSusceptance { row: row_idx });
         }
         let y_series = Complex64::new(r / denom, -x / denom);
 

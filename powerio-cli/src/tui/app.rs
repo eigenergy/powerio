@@ -86,6 +86,9 @@ impl MatrixKindOrd {
             MatrixKind::YbusB => 3,
             MatrixKind::Lacpf => 4,
             MatrixKind::Adjacency => 5,
+            // A future MatrixKind sorts after the current set until given an
+            // explicit ordinal here.
+            _ => 6,
         })
     }
 }
@@ -341,8 +344,8 @@ impl App {
     pub fn topology_label(t: Topology) -> &'static str {
         match t {
             Topology::Tree => "tree",
-            Topology::Lattice2D => "lattice-2D",
-            Topology::PegaseLike => "pegase-like",
+            Topology::Lattice2D => "lattice 2D",
+            Topology::PegaseLike => "pegase",
         }
     }
 }

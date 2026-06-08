@@ -3,9 +3,9 @@
 
 use powerio_matrix::IndexedNetwork;
 use powerio_matrix::{
-    Branch, Bus, BusType, DcConvention, Error, Extras, GenCost, Generator, Network, Scheme, Units,
-    build_adjacency, build_bprime, build_flow_map, build_incidence, build_lodf, build_opf_instance,
-    build_ptdf, build_weighted_laplacian, ground_at, parse_matpower_file,
+    Branch, Bus, BusId, BusType, DcConvention, Error, Extras, GenCost, Generator, Network, Scheme,
+    Units, build_adjacency, build_bprime, build_flow_map, build_incidence, build_lodf,
+    build_opf_instance, build_ptdf, build_weighted_laplacian, ground_at, parse_matpower_file,
 };
 use sprs::CsMat;
 
@@ -378,7 +378,7 @@ fn lodf_diagonal_is_minus_one() {
 
 fn bus(id: usize, kind: BusType) -> Bus {
     Bus {
-        id,
+        id: BusId(id),
         kind,
         vm: 1.0,
         va: 0.0,
@@ -398,8 +398,8 @@ fn branch(from: usize, to: usize, x: f64) -> Branch {
 
 fn branch_xts(from: usize, to: usize, x: f64, tap: f64, shift: f64) -> Branch {
     Branch {
-        from,
-        to,
+        from: BusId(from),
+        to: BusId(to),
         r: 0.0,
         x,
         b: 0.0,
@@ -418,7 +418,7 @@ fn branch_xts(from: usize, to: usize, x: f64, tap: f64, shift: f64) -> Branch {
 /// Generator on `bus_id` with the given cost curve (pmax = 100 MW).
 fn gen_with_cost(bus: usize, cost: Option<GenCost>) -> Generator {
     Generator {
-        bus,
+        bus: BusId(bus),
         pg: 0.0,
         qg: 0.0,
         qmax: 0.0,
@@ -679,7 +679,7 @@ fn multi_generator_bus_sums_cost() {
     );
     let opf = opf_of(&case, Units::Native).unwrap();
     assert_eq!(opf.n_gen(), 2);
-    let b0 = IndexedNetwork::new(&case).bus_index(1).unwrap();
+    let b0 = IndexedNetwork::new(&case).bus_index(BusId(1)).unwrap();
     assert!((opf.bus.q[b0] - (opf.gen_costs.q[0] + opf.gen_costs.q[1])).abs() < 1e-12);
     assert!((opf.bus.c[b0] - (opf.gen_costs.c[0] + opf.gen_costs.c[1])).abs() < 1e-12);
     assert!((opf.bus.pmax[b0] - (opf.gen_costs.pmax[0] + opf.gen_costs.pmax[1])).abs() < 1e-12);

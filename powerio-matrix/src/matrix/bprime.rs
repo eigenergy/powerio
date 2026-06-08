@@ -53,6 +53,13 @@ pub fn build_bprime(case: &IndexedNetwork, opts: &BuildOptions) -> Result<CsMat<
             }
         };
 
+        // A NaN/Inf reactance (the MATPOWER tokenizer accepts `NaN`/`Inf`) slips
+        // past the `== 0.0` checks above and would write a non-finite entry that
+        // silently poisons MatrixStats / sddm_check. Reject it loudly instead.
+        if !b_off.is_finite() {
+            return Err(Error::NonFiniteSusceptance { row: row_idx });
+        }
+
         if i == j {
             // self-loop: contributes only as a shunt, has no place in B'
             continue;

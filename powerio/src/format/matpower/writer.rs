@@ -10,7 +10,7 @@
 use std::collections::BTreeMap;
 use std::fmt::Write as _;
 
-use crate::network::{Network, SourceFormat};
+use crate::network::{BusId, Network, SourceFormat};
 
 /// Serialize `net` to MATPOWER `.m` text. Echoes the retained source verbatim
 /// when `net` came from MATPOWER; otherwise emits canonical `.m`.
@@ -29,13 +29,13 @@ pub fn write_matpower(net: &Network) -> String {
 #[allow(clippy::too_many_lines)] // flat per-section serializer; splitting adds noise
 fn canonical(net: &Network) -> String {
     // Aggregate demand and shunts onto their bus.
-    let mut demand: BTreeMap<usize, (f64, f64)> = BTreeMap::new();
+    let mut demand: BTreeMap<BusId, (f64, f64)> = BTreeMap::new();
     for l in &net.loads {
         let e = demand.entry(l.bus).or_default();
         e.0 += l.p;
         e.1 += l.q;
     }
-    let mut shunt: BTreeMap<usize, (f64, f64)> = BTreeMap::new();
+    let mut shunt: BTreeMap<BusId, (f64, f64)> = BTreeMap::new();
     for s in &net.shunts {
         let e = shunt.entry(s.bus).or_default();
         e.0 += s.g;

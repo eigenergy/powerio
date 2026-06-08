@@ -1,5 +1,5 @@
 //! Color palette. The TUI uses a single muted dark palette inspired by
-//! Solarized Dark — no theme switching, no surprises.
+//! Solarized Dark; no theme switching.
 
 use ratatui::style::{Color, Modifier, Style};
 
