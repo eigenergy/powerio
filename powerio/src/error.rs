@@ -89,6 +89,19 @@ pub enum Error {
     #[error("gridfm Parquet export: {0}")]
     Parquet(String),
 
+    #[error("gridfm scenario batch is empty; provide at least one snapshot")]
+    EmptyScenarioBatch,
+
+    #[error(
+        "gridfm scenario {scenario} has a different topology than scenario 0 \
+         ((buses, branches, gens) = {got:?} vs {expected:?}); a scenario batch must share one fixed topology"
+    )]
+    ScenarioShapeMismatch {
+        scenario: usize,
+        expected: (usize, usize, usize),
+        got: (usize, usize, usize),
+    },
+
     #[error("{format} read error: {message}")]
     FormatRead {
         format: &'static str,
