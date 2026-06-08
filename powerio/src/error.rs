@@ -120,13 +120,13 @@ pub enum Error {
     UnknownFormat(String),
 }
 
-/// Coarse classification of an [`Error`], for callers that map onto their own
+/// Coarse classification of an [`enum@Error`], for callers that map onto their own
 /// taxonomy (the Python layer's exception subclasses, C ABI status codes, a
 /// CLI exit code). Distinguishing "the input file is bad" from "the operation
 /// can't run on this otherwise-valid case" is the split callers actually branch
 /// on, and it's a property of the error, not of the binding that surfaces it.
 ///
-/// Deliberately *not* `#[non_exhaustive]` (unlike [`Error`]): a category-mapping
+/// Deliberately *not* `#[non_exhaustive]` (unlike [`enum@Error`]): a category-mapping
 /// match should fail to compile when a category is added, so every binding is
 /// forced to decide how to surface it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
