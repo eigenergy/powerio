@@ -1,0 +1,10 @@
+# Python oracle dependencies for the validation harness. These are benchmark-only
+# tools, NOT dependencies of the powerio package or wheel. Install them into the
+# same virtualenv that holds the powerio wheel:
+#
+#   pip install -r benchmarks/requirements.txt
+#
+# (The Julia oracle, PowerModels.jl, is likewise benchmark-scoped in
+# benchmarks/Project.toml, not in any crate.)
+pandapower>=3       # validate_pandapower.py: parse + Y_bus cross-check
+gridx-egret>=0.6    # validate_egret.py / validate_matrix.py: the EGRET oracle

@@ -67,11 +67,12 @@ function main(path)
         approx(c.shunt.bs[k], b.bs * base)  || push!(problems, "bus[$(b.bus_i)].bs: powerio=$(c.shunt.bs[k]) exa=$(b.bs*base)")
     end
 
-    # Per in-service branch. powerio from/to are dense 0-based; map to bus ids.
+    # Per in-service branch. powerio from/to are 1-based bus ids (same id space as
+    # pio_bus_ids), so compare them to ExaPowerIO's bus ids directly.
     for (j, k) in enumerate(kb)
         br = ed.branch[j]
-        cf_id = c.bus_ids[c.branch.from[k] + 1]
-        ct_id = c.bus_ids[c.branch.to[k] + 1]
+        cf_id = c.branch.from[k]
+        ct_id = c.branch.to[k]
         ef_id = ed.bus[br.f_bus].bus_i
         et_id = ed.bus[br.t_bus].bus_i
         if (cf_id, ct_id) != (ef_id, et_id)
@@ -85,10 +86,11 @@ function main(path)
         approx(c.branch.shift[k], rad2deg(br.shift)) || push!(problems, "branch[$k].shift: powerio=$(c.branch.shift[k]) exa(deg)=$(rad2deg(br.shift))")
     end
 
-    # Per in-service gen. powerio gen.bus dense 0-based; ExaPowerIO g.bus dense 1-based.
+    # Per in-service gen. powerio gen.bus is a 1-based bus id; ExaPowerIO g.bus is a
+    # dense 1-based index into ed.bus.
     for (j, k) in enumerate(kg)
         g = ed.gen[j]
-        cg_id = c.bus_ids[c.gen.bus[k] + 1]
+        cg_id = c.gen.bus[k]
         eg_id = ed.bus[g.bus].bus_i
         cg_id == eg_id || push!(problems, "gen[$k] bus: powerio=$cg_id exa=$eg_id")
         approx(c.gen.pg[k], g.pg * base)     || push!(problems, "gen[$k].pg: powerio=$(c.gen.pg[k]) exa=$(g.pg*base)")
