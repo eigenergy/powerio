@@ -2,8 +2,8 @@
 //! meeting at the shared [`Network`].
 //!
 //! Each format is one module here, owning its reader and/or writer — MATPOWER
-//! `.m`, PowerModels JSON, PSS/E `.raw`, PowerWorld `.aux`, plus the write-only
-//! EGRET sink. Every input and output format meets at the hub, so adding a
+//! `.m`, PowerModels JSON, PSS/E `.raw`, PowerWorld `.aux`, and EGRET
+//! `ModelData` JSON. Every input and output format meets at the hub, so adding a
 //! format is one module, not a change to any other. [`parse`] reads a file,
 //! detecting the format from its extension; [`write_as`] serializes a `Network`
 //! to a target. Non-finite numeric values (a MATPOWER `Inf`/`NaN` angle limit,
@@ -190,7 +190,12 @@ pub fn parse_str(text: &str, format: &str) -> Result<Network> {
 /// Output of a conversion: the serialized text plus any fidelity warnings —
 /// data the target can't represent, defaults synthesized, or blocks mapped
 /// best-effort. An empty `warnings` means a faithful conversion.
+///
+/// `#[non_exhaustive]`: a returns-only type, so downstream code reads it but
+/// never constructs it, leaving room to add fidelity metadata without a breaking
+/// change.
 #[derive(Debug, Clone)]
+#[non_exhaustive]
 pub struct Conversion {
     pub text: String,
     pub warnings: Vec<String>,
@@ -215,11 +220,9 @@ pub fn write_as(net: &Network, format: TargetFormat) -> Conversion {
         TargetFormat::Psse => write_psse(net),
         TargetFormat::PowerWorld => write_powerworld(net),
         // From another source (or no retained source): canonical MATPOWER from
-        // the folded model.
-        TargetFormat::Matpower => Conversion {
-            text: crate::write_matpower(net),
-            warnings: Vec::new(),
-        },
+        // the folded model, which itemizes what it can't carry (HVDC, gen caps,
+        // extras, a partial-cost case).
+        TargetFormat::Matpower => matpower::write_matpower_conversion(net),
     }
 }
 

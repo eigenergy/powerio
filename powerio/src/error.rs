@@ -30,8 +30,8 @@ pub enum Error {
     #[error("unbalanced brackets in MATPOWER `{0}` matrix")]
     UnbalancedBrackets(&'static str),
 
-    #[error("branch references unknown bus id {bus_id} (branch row {row})")]
-    UnknownBus { bus_id: BusId, row: usize },
+    #[error("element references unknown bus id {bus_id} (in-service index {element_index})")]
+    UnknownBus { bus_id: BusId, element_index: usize },
 
     #[error("branch row {row} has zero impedance (r=0, x=0); not representable in B'")]
     ZeroImpedance { row: usize },

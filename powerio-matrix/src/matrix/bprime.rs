@@ -24,11 +24,11 @@ pub fn build_bprime(case: &IndexedNetwork, opts: &BuildOptions) -> Result<CsMat<
     for (row_idx, br) in case.in_service_branches() {
         let i = case.bus_index(br.from).ok_or(Error::UnknownBus {
             bus_id: br.from,
-            row: row_idx,
+            element_index: row_idx,
         })?;
         let j = case.bus_index(br.to).ok_or(Error::UnknownBus {
             bus_id: br.to,
-            row: row_idx,
+            element_index: row_idx,
         })?;
 
         let b_off = match opts.scheme {

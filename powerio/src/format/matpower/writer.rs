@@ -10,6 +10,7 @@
 use std::collections::BTreeMap;
 use std::fmt::Write as _;
 
+use crate::format::Conversion;
 use crate::network::{BusId, Network, SourceFormat};
 
 /// Serialize `net` to MATPOWER `.m` text. Echoes the retained source verbatim
@@ -20,6 +21,56 @@ pub fn write_matpower(net: &Network) -> String {
         Some(text) if net.source_format == SourceFormat::Matpower => text.to_string(),
         _ => canonical(net),
     }
+}
+
+/// MATPOWER conversion with fidelity warnings. The byte-exact echo path (a
+/// network that kept its MATPOWER source) drops nothing; the canonical path
+/// can't carry everything the neutral model holds, so it itemizes what it leaves
+/// out — the cross-format leg of the fidelity contract (see [`Conversion`]).
+pub(crate) fn write_matpower_conversion(net: &Network) -> Conversion {
+    let text = write_matpower(net);
+    // Echoed retained MATPOWER source: byte-exact, nothing dropped.
+    if net.source.is_some() && net.source_format == SourceFormat::Matpower {
+        return Conversion {
+            text,
+            warnings: Vec::new(),
+        };
+    }
+
+    // The canonical writer (see `canonical`) emits the standard bus/branch/gen/
+    // gencost/storage blocks only. Report every neutral-model field it can't.
+    let mut warnings = Vec::new();
+    if !net.hvdc.is_empty() {
+        warnings.push(format!(
+            "{} HVDC dcline(s) dropped: the canonical MATPOWER writer emits no `mpc.dcline` block",
+            net.hvdc.len()
+        ));
+    }
+    let with_caps = net.generators.iter().filter(|g| g.has_caps()).count();
+    if with_caps > 0 {
+        warnings.push(format!(
+            "generator capability/ramp columns dropped for {with_caps} generator(s): the canonical MATPOWER writer emits only the standard gen columns"
+        ));
+    }
+    let with_cost = net.generators.iter().filter(|g| g.cost.is_some()).count();
+    if with_cost > 0 && with_cost < net.generators.len() {
+        warnings.push(format!(
+            "gen cost dropped: {with_cost} of {} generators carry cost data, but MATPOWER's `mpc.gencost` block is all-or-nothing",
+            net.generators.len()
+        ));
+    }
+    let has_extras = net.buses.iter().any(|b| !b.extras.is_empty())
+        || net.branches.iter().any(|b| !b.extras.is_empty())
+        || net.loads.iter().any(|l| !l.extras.is_empty())
+        || net.shunts.iter().any(|s| !s.extras.is_empty())
+        || net.storage.iter().any(|s| !s.extras.is_empty())
+        || net.hvdc.iter().any(|d| !d.extras.is_empty());
+    if has_extras {
+        warnings.push(
+            "source-format passthrough fields (extras) dropped: the canonical MATPOWER writer emits only named columns".to_string(),
+        );
+    }
+    Conversion { text, warnings }
 }
 
 /// Canonical MATPOWER from the neutral model, for networks with no MATPOWER

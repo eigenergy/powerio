@@ -217,6 +217,18 @@ fn hvdc_converts_and_round_trips() {
             conv.warnings
         );
     }
+
+    // Cross-format → MATPOWER also drops HVDC (the canonical writer emits no
+    // dcline block), so it must warn too. `net` itself is MATPOWER-sourced, so
+    // write_as would echo its source; convert through PowerModels first to reach
+    // the canonical MATPOWER path with HVDC still present.
+    assert_eq!(back.source_format, SourceFormat::PowerModelsJson);
+    let to_mp = write_as(&back, TargetFormat::Matpower);
+    assert!(
+        to_mp.warnings.iter().any(|w| w.contains("dcline")),
+        "cross-format → MATPOWER should warn on dropped dclines, got {:?}",
+        to_mp.warnings
+    );
 }
 
 #[test]

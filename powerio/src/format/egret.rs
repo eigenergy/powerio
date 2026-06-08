@@ -6,7 +6,7 @@
 //! on the `Network`, generator cost becomes a polynomial/piecewise `cost_curve`,
 //! and a branch with a nonzero raw tap or a phase shift is typed `transformer`.
 //!
-//! The reader takes the power-flow ModelData subset: numeric bus ids (as
+//! The reader takes the power flow ModelData subset: numeric bus ids (as
 //! matpower- and pglib-derived files have), scalar element values. Unit
 //! commitment cases (`system.time_keys`, time-series values) are rejected. A
 //! byte-exact round-trip rides on the retained source like every other format.
@@ -240,7 +240,7 @@ fn cost_curve(cost: &GenCost) -> Option<Value> {
 ///
 /// Inverts [`write_egret_json`]: the `elements` blocks map back to the typed
 /// model and `system.baseMVA`/`reference_bus` to the base and bus types. Takes
-/// the power-flow subset (numeric bus ids, scalar values); a unit commitment
+/// the power flow subset (numeric bus ids, scalar values); a unit commitment
 /// case (`system.time_keys`) is rejected with a clear error.
 pub fn parse_egret_json(content: &str) -> Result<Network> {
     parse_egret_source(Arc::new(content.to_owned()), None)
@@ -260,7 +260,7 @@ pub(crate) fn parse_egret_source(source: Arc<String>, name_hint: Option<&str>) -
     let system = obj(root, "system").ok_or_else(|| bad("missing `system` object"))?;
     if system.contains_key("time_keys") {
         return Err(bad(
-            "EGRET unit commitment cases (system.time_keys) are not supported; expected a power-flow ModelData",
+            "EGRET unit commitment cases (system.time_keys) are not supported; expected a power flow ModelData",
         ));
     }
     let base_mva = system
@@ -365,7 +365,9 @@ fn num_key(k: &str) -> i64 {
 /// Rejects negative, fractional, or out-of-range values rather than truncating or
 /// wrapping them onto the wrong bus.
 fn id_from_f64(x: f64) -> Option<usize> {
-    (x >= 0.0 && x.fract() == 0.0 && x <= usize::MAX as f64).then_some(x as usize)
+    // Strict `<`: `usize::MAX as f64` rounds up to 2^64, so values in the gap just
+    // below it would pass `<=` and then saturate on the `as usize` cast.
+    (x >= 0.0 && x.fract() == 0.0 && x < usize::MAX as f64).then_some(x as usize)
 }
 
 /// A bus id from a JSON value: a numeric string (EGRET's convention) or a bare
@@ -512,9 +514,15 @@ fn read_branch(v: &Value) -> Result<Branch> {
 fn read_gen(v: &Value) -> Result<Generator> {
     let startup = f_or(v, "startup_cost", 0.0)?;
     let shutdown = f_or(v, "shutdown_cost", 0.0)?;
-    let cost = v
-        .get("p_cost")
-        .and_then(|pc| read_cost(pc, startup, shutdown));
+    // A present `p_cost` that doesn't parse is a hard error, not a silent drop:
+    // the same stance the scalar field helpers take, so a malformed cost curve
+    // can't quietly become a free generator.
+    let cost = match v.get("p_cost") {
+        None | Some(Value::Null) => None,
+        Some(pc) => Some(read_cost(pc, startup, shutdown).ok_or_else(|| {
+            bad("`p_cost` is present but has an unrecognized or malformed cost_curve")
+        })?),
+    };
     Ok(Generator {
         bus: id_field(v, "bus")?,
         pg: f(v, "pg")?,
@@ -669,5 +677,59 @@ mod tests {
         assert!(parse_egret_json(&base.replace("REACT", "0.1")).is_ok());
         let err = parse_egret_json(&base.replace("REACT", "\"oops\"")).unwrap_err();
         assert!(matches!(err, Error::FormatRead { .. }));
+    }
+
+    #[test]
+    fn piecewise_cost_round_trips() {
+        // The piecewise (model 1) path has its own (mw, cost) breakpoint layout,
+        // distinct from the polynomial path, and no vendored fixture exercises it.
+        // Round-trip it through cost_curve + read_cost so a transposed or dropped
+        // breakpoint can't slip by.
+        let cost = GenCost {
+            model: 1,
+            startup: 10.0,
+            shutdown: 5.0,
+            ncost: 3,
+            coeffs: vec![0.0, 0.0, 50.0, 1000.0, 100.0, 2500.0],
+        };
+        let curve = cost_curve(&cost).expect("model 1 maps to a piecewise curve");
+        let back = read_cost(&curve, 10.0, 5.0).expect("piecewise curve reads back");
+        assert_eq!(back.model, 1);
+        assert_eq!(back.ncost, 3);
+        assert_eq!(back.coeffs, cost.coeffs);
+        assert_eq!((back.startup, back.shutdown), (10.0, 5.0));
+    }
+
+    #[test]
+    fn dc_branch_reads_every_power_field() {
+        // dcline3.json leaves most dc_branch fields at their defaults, so pin the
+        // full field-name → Hvdc mapping here; a swapped key (pmax read into pmin)
+        // would otherwise ship silently.
+        let v = serde_json::json!({
+            "from_bus": "1", "to_bus": "2", "in_service": true,
+            "pf": 10.0, "pt": -9.5, "qf": 1.5, "qt": -1.0,
+            "vf": 1.02, "vt": 0.99, "pmin": -50.0, "pmax": 60.0,
+            "qminf": -5.0, "qmaxf": 5.0, "qmint": -4.0, "qmaxt": 4.5,
+            "loss0": 0.2, "loss_factor": 0.03
+        });
+        let h = read_dc_branch(&v).unwrap();
+        assert_eq!((h.from, h.to), (BusId(1), BusId(2)));
+        assert_eq!((h.pf, h.pt, h.qf, h.qt), (10.0, -9.5, 1.5, -1.0));
+        assert_eq!((h.vf, h.vt), (1.02, 0.99));
+        assert_eq!((h.pmin, h.pmax), (-50.0, 60.0));
+        assert_eq!((h.qminf, h.qmaxf, h.qmint, h.qmaxt), (-5.0, 5.0, -4.0, 4.5));
+        assert_eq!((h.loss0, h.loss1), (0.2, 0.03));
+    }
+
+    #[test]
+    fn rejects_present_but_malformed_cost() {
+        // A present `p_cost` the reader can't interpret is an error, not a silently
+        // free generator (cost dropped to None).
+        let v = serde_json::json!({
+            "bus": "1", "pg": 0.0, "qg": 0.0,
+            "p_max": 1.0, "p_min": 0.0, "q_max": 1.0, "q_min": -1.0,
+            "p_cost": {"data_type": "cost_curve", "cost_curve_type": "bogus", "values": {}}
+        });
+        assert!(matches!(read_gen(&v), Err(Error::FormatRead { .. })));
     }
 }

@@ -17,11 +17,11 @@ pub fn build_adjacency(case: &IndexedNetwork) -> Result<CsMat<f64>> {
     for (idx, br) in case.in_service_branches() {
         let i = case.bus_index(br.from).ok_or(Error::UnknownBus {
             bus_id: br.from,
-            row: idx,
+            element_index: idx,
         })?;
         let j = case.bus_index(br.to).ok_or(Error::UnknownBus {
             bus_id: br.to,
-            row: idx,
+            element_index: idx,
         })?;
         if i != j {
             edges.insert(if i < j { (i, j) } else { (j, i) });

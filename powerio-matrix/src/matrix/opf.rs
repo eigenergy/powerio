@@ -120,7 +120,7 @@ pub fn build_opf_instance(
     for (col, &(gidx, generator)) in in_service.iter().enumerate() {
         let bus = case.bus_index(generator.bus).ok_or(Error::UnknownBus {
             bus_id: generator.bus,
-            row: gidx,
+            element_index: gidx,
         })?;
         // Distinguish a genuinely absent cost from a present-but-unsupported
         // one (piecewise model 1, or polynomial degree ≥ 3) so the error tells

@@ -63,11 +63,11 @@ pub(crate) fn build_ybus_with_flags(case: &IndexedNetwork, flags: YbusFlags) -> 
     for (row_idx, br) in case.in_service_branches() {
         let i = case.bus_index(br.from).ok_or(Error::UnknownBus {
             bus_id: br.from,
-            row: row_idx,
+            element_index: row_idx,
         })?;
         let j = case.bus_index(br.to).ok_or(Error::UnknownBus {
             bus_id: br.to,
-            row: row_idx,
+            element_index: row_idx,
         })?;
 
         let r = if flags.zero_resistance { 0.0 } else { br.r };

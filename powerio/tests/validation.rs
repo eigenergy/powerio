@@ -4,7 +4,7 @@
 use std::path::Path;
 
 use powerio::network::{Branch, Bus, BusId, BusType, Extras, Network};
-use powerio::{Error, parse_psse};
+use powerio::{Error, parse_powerworld, parse_psse, write_powerworld};
 
 fn bus(id: usize, kind: BusType) -> Bus {
     Bus {
@@ -95,6 +95,33 @@ fn psse_rejects_malformed_numeric_field() {
     let bad = good.replacen("1.05999994", "1.0xx99994", 1);
     assert_ne!(good, bad, "corruption target not found in fixture");
     assert!(matches!(parse_psse(&bad), Err(Error::FormatRead { .. })));
+}
+
+#[test]
+fn powerworld_rejects_malformed_numeric_field() {
+    // Same contract as PSS/E, for the sibling .aux reader: write a valid file,
+    // corrupt one numeric field (a branch reactance), and the reader must error
+    // rather than silently default it to 0.0.
+    let mut br = branch(1, 2);
+    br.x = 0.123_45; // distinctive token to corrupt
+    let net = Network::in_memory(
+        "pw",
+        100.0,
+        vec![bus(1, BusType::Ref), bus(2, BusType::Pq)],
+        vec![br],
+    );
+    let good = write_powerworld(&net).text;
+    assert!(
+        parse_powerworld(&good).is_ok(),
+        "pristine .aux should parse"
+    );
+
+    let bad = good.replacen("0.12345", "0.1x345", 1);
+    assert_ne!(good, bad, "corruption target not found in .aux");
+    assert!(matches!(
+        parse_powerworld(&bad),
+        Err(Error::FormatRead { .. })
+    ));
 }
 
 #[test]

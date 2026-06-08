@@ -17,17 +17,10 @@ use serde_json::{Map, Value};
 
 use super::{Conversion, finish, jnum};
 use crate::network::{
-    Branch, Bus, BusId, BusType, GenCost, Generator, Hvdc, Load, Network, Shunt, SourceFormat,
-    Storage,
+    Branch, Bus, BusId, BusType, GEN_EXTRA_KEYS, GenCost, Generator, Hvdc, Load, Network, Shunt,
+    SourceFormat, Storage,
 };
 use crate::{Error, Result};
-
-/// PowerModels gen capability fields, in their conventional order. Emitted from
-/// the generator's extras when present (a row may stop at PMIN).
-const GEN_EXTRA_KEYS: [&str; 11] = [
-    "pc1", "pc2", "qc1min", "qc1max", "qc2min", "qc2max", "ramp_agc", "ramp_10", "ramp_30",
-    "ramp_q", "apf",
-];
 
 /// The gen capability columns PowerModels per-unitizes (the ramp rates). The PQ
 /// curve points (pc1/pc2/qc*) and apf are left raw by `make_per_unit!`, so we

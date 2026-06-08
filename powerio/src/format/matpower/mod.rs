@@ -13,6 +13,7 @@ use std::path::Path;
 use std::sync::Arc;
 
 pub use writer::write_matpower;
+pub(crate) use writer::write_matpower_conversion;
 
 use crate::network::{Generator, Network, SourceFormat};
 use crate::{Error, Result};
