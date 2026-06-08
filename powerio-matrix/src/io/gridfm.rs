@@ -12,7 +12,7 @@
 //! powerio has no power flow solver. One parsed case is one snapshot
 //! (`scenario = 0`): voltages and generator dispatch are the case's stored
 //! values, and branch flows `pf/qf/pt/qt` are computed from those voltages and
-//! the branch admittances ([`branch_flows`]). For a solved MATPOWER case the
+//! the branch admittances (`branch_flows`). For a solved MATPOWER case the
 //! stored voltages are the converged operating point, so the flows match what a
 //! solver would report to float tolerance; for an unsolved/flat start case they
 //! are the flows at the stored voltages, not a re-solved dispatch.
@@ -70,9 +70,9 @@ use crate::network::{BusId, BusType};
 use crate::{ElementCounts, Error, GenCost, Network, Result, ScenarioMismatch};
 
 /// Options for the gridfm export — the batch-wide knobs. The scenario id is a
-/// per-snapshot property ([`GridfmSnapshot::scenario`], or the explicit argument
-/// to the single-case [`write_gridfm_dataset`] / [`gridfm_record_batches`]), not
-/// an option here.
+/// per-snapshot property (set via [`GridfmSnapshot::new`] / [`numbered_snapshots`],
+/// or the explicit argument to the single-case [`write_gridfm_dataset`] /
+/// [`gridfm_record_batches`]), not an option here.
 #[derive(Debug, Clone)]
 pub struct GridfmOptions {
     /// Also write `y_bus_data.parquet`. graphkit reconstructs admittances from
@@ -349,10 +349,10 @@ pub fn write_gridfm_dataset(
 /// Write a batch of scenarios as one gridfm-datakit dataset under
 /// `out_dir/<network_name>/raw/`, row-stacking every snapshot's tables and keying
 /// them by the `scenario` column. The dataset name and the base element counts
-/// come from the first snapshot (shared across the batch by the
-/// [`snapshot_views`] shape check); the dropped/degenerate counts are summed over
-/// every snapshot, while `reference_bus` / `n_branches_in_service` record the
-/// first snapshot only (they can differ per scenario — see [`GridfmMeta`]).
+/// come from the first snapshot (shared across the batch by the shape check); the
+/// dropped/degenerate counts are summed over every snapshot, while `reference_bus`
+/// / `n_branches_in_service` record the first snapshot only (they can differ per
+/// scenario, so the manifest documents them as scenario 0's).
 ///
 /// # Errors
 /// Propagates [`gridfm_record_batches_batch`] and any filesystem/Parquet error.
@@ -1425,6 +1425,54 @@ mod tests {
         assert!(
             matches!(err, Error::ScenarioIdOverflow { index: 1, .. }),
             "got {err:?}"
+        );
+    }
+
+    #[test]
+    fn out_of_service_generator_is_listed_but_excluded_from_bus_aggregate() {
+        // Two paths react to `g.in_service`: gen_data emits an `in_service` column
+        // for every generator (keeping its setpoint), while bus `Pg`/`Qg` aggregate
+        // only in-service generation (`view.in_service_gens()`). Exercise the
+        // `false` case on both.
+        let mut net = Network::in_memory(
+            "genoutage",
+            100.0,
+            vec![bus(1, BusType::Ref), bus(2, BusType::Pq)],
+            vec![branch(1, 2, 0.01, 0.1)],
+        );
+        let mut g_on = gen_at(1, gencost(2, 3, vec![0.0, 1.0, 0.0]));
+        g_on.pg = 50.0;
+        let mut g_off = gen_at(2, gencost(2, 3, vec![0.0, 1.0, 0.0]));
+        g_off.pg = 30.0;
+        g_off.in_service = false;
+        net.generators.push(g_on);
+        net.generators.push(g_off);
+
+        let tables = gridfm_record_batches(&net, 0, &GridfmOptions::default()).unwrap();
+
+        // gen_data lists both gens in source order, flags the out-of-service one,
+        // and keeps its setpoint.
+        let g = &tables.generator;
+        assert_eq!(g.num_rows(), 2);
+        let in_service = col_i64(g, "in_service");
+        assert_eq!(in_service.value(0), 1, "in-service gen flagged 1");
+        assert_eq!(in_service.value(1), 0, "out-of-service gen flagged 0");
+        assert!(
+            (col_f64(g, "p_mw").value(1) - 30.0).abs() < 1e-12,
+            "gen_data keeps the out-of-service setpoint"
+        );
+
+        // bus Pg aggregates only in-service generation: bus 1 (dense 0) gets 50,
+        // bus 2 (dense 1) excludes the out-of-service gen's 30.
+        let pg = col_f64(&tables.bus, "Pg");
+        assert!(
+            (pg.value(0) - 50.0).abs() < 1e-12,
+            "in-service gen folded into bus Pg"
+        );
+        assert!(
+            pg.value(1) == 0.0,
+            "out-of-service gen excluded from bus Pg, got {}",
+            pg.value(1)
         );
     }
 
