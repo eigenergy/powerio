@@ -2,8 +2,8 @@
 
 A C ABI over `powerio`: parse any supported power system case format, query it,
 convert losslessly, and pull out the numeric tables a solver needs to assemble
-matrices. This is the polyglot substrate — anything that speaks C (C, C++,
-Julia, Python ctypes, …) can drive powerio through it.
+matrices. This is the polyglot substrate: anything that speaks C (C, C++, Julia,
+Python ctypes, …) can drive powerio through it.
 
 The header is [`include/powerio.h`](include/powerio.h).
 
@@ -88,7 +88,7 @@ ccall((:pio_case_free, LIB), Cvoid, (Ptr{Cvoid},), h)
 For consumers that want the whole case rather than the dense table slices,
 `pio_to_json` serializes the entire `Network` (buses, loads, shunts, branches,
 generators, storage, HVDC, and extras) to a string, and `pio_from_json` rebuilds
-a handle from it. This is the transport the Julia package consumes — one call
+a handle from it. This is the transport the Julia package consumes: one call
 instead of stitching the ~dozen table extractors together. The retained source
 text is not part of the JSON, so a `from_json` handle reformats on write rather
 than echoing a byte-exact original.
@@ -96,7 +96,7 @@ than echoing a byte-exact original.
 ## Scope
 
 powerio-capi covers the `powerio` surface: parse / write / convert / query / table
-and JSON extraction. It deliberately has no matrix builders — those live in
+and JSON extraction. It deliberately has no matrix builders; those live in
 `powerio-matrix`. A future `powerio-matrix-capi` can hand back assembled CSR
 matrices (B', Y_bus, PTDF, DC-OPF) over the same ABI style; for now a consumer
 builds matrices from the extracted tables.
