@@ -142,6 +142,12 @@ pub enum SourceFormat {
     /// so consumers can tell a per-unit product from a raw in-memory network; it
     /// has no source text and a different unit basis than a parsed network.
     Normalized,
+    /// Read back from a gridfm-datakit Parquet dataset (the ML→classical bridge,
+    /// `powerio-matrix`'s `read_gridfm_dataset`). A lossy, power-flow-complete
+    /// reconstruction with no retained source text: original bus ids are
+    /// synthesized `1..n`, per-element load/shunt granularity is folded to one
+    /// synthetic element per bus, and HVDC/storage/piecewise costs are absent.
+    Gridfm,
 }
 
 /// A format-neutral power network.

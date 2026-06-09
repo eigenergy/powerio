@@ -128,8 +128,9 @@ enum Command {
     },
     /// Convert a case file to another format through the neutral hub.
     Convert {
-        /// Input case file. The format is inferred from the extension
-        /// (`.m`, `.json`, `.raw`, `.aux`) unless `--from` is given.
+        /// Input case file, or a gridfm dataset directory with `--from gridfm`.
+        /// The format is inferred from the extension (`.m`, `.json`, `.raw`,
+        /// `.aux`) unless `--from` is given.
         input: PathBuf,
         /// Target format.
         #[arg(long, value_enum)]
@@ -137,14 +138,20 @@ enum Command {
         /// Output file; `-` or omitted writes to stdout.
         #[arg(short, long)]
         output: Option<PathBuf>,
-        /// Override the inferred input format.
+        /// Override the inferred input format. `gridfm` reads a Parquet dataset
+        /// directory (see `--scenario`).
         #[arg(long, value_enum)]
         from: Option<FormatArg>,
+        /// With `--from gridfm`, which scenario to read from the dataset.
+        #[arg(long, default_value_t = 0)]
+        scenario: i64,
     },
 }
 
-/// A case interchange format, for `--to` / `--from`.
-#[derive(Clone, Copy, Debug, ValueEnum)]
+/// A case interchange format, for `--to` / `--from`. `gridfm` is read-only here:
+/// `convert --from gridfm` reads a Parquet dataset, but writing a gridfm dataset
+/// is the dedicated `gridfm` subcommand, so `--to gridfm` is rejected.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, ValueEnum)]
 enum FormatArg {
     #[value(name = "matpower", alias = "m")]
     Matpower,
@@ -156,21 +163,28 @@ enum FormatArg {
     Psse,
     #[value(name = "powerworld", alias = "aux")]
     PowerWorld,
-}
-
-impl From<FormatArg> for powerio_matrix::TargetFormat {
-    fn from(value: FormatArg) -> Self {
-        match value {
-            FormatArg::Matpower => Self::Matpower,
-            FormatArg::PowerModelsJson => Self::PowerModelsJson,
-            FormatArg::EgretJson => Self::EgretJson,
-            FormatArg::Psse => Self::Psse,
-            FormatArg::PowerWorld => Self::PowerWorld,
-        }
-    }
+    /// Read a gridfm-datakit Parquet dataset directory (read-only).
+    #[value(name = "gridfm")]
+    Gridfm,
 }
 
 impl FormatArg {
+    /// The write target this format maps to. `gridfm` has no convert-writer (use
+    /// the `gridfm` subcommand), so it errors here rather than silently misrouting.
+    fn to_target(self) -> anyhow::Result<powerio_matrix::TargetFormat> {
+        use powerio_matrix::TargetFormat;
+        Ok(match self {
+            FormatArg::Matpower => TargetFormat::Matpower,
+            FormatArg::PowerModelsJson => TargetFormat::PowerModelsJson,
+            FormatArg::EgretJson => TargetFormat::EgretJson,
+            FormatArg::Psse => TargetFormat::Psse,
+            FormatArg::PowerWorld => TargetFormat::PowerWorld,
+            FormatArg::Gridfm => anyhow::bail!(
+                "`convert` cannot write a gridfm dataset; use the `gridfm` subcommand"
+            ),
+        })
+    }
+
     /// The canonical name `target_format_from_name` accepts, for forcing a reader.
     fn name(self) -> &'static str {
         match self {
@@ -179,6 +193,7 @@ impl FormatArg {
             FormatArg::EgretJson => "egret-json",
             FormatArg::Psse => "psse",
             FormatArg::PowerWorld => "powerworld",
+            FormatArg::Gridfm => "gridfm",
         }
     }
 }
@@ -351,7 +366,8 @@ fn main() -> anyhow::Result<()> {
             to,
             output,
             from,
-        } => run_convert(&input, to.into(), output.as_deref(), from),
+            scenario,
+        } => run_convert(&input, to, output.as_deref(), from, scenario),
     }
 }
 
@@ -554,12 +570,25 @@ fn run_verify(input: &Path, kind: MatrixKind, scheme: Scheme) -> anyhow::Result<
 
 fn run_convert(
     input: &std::path::Path,
-    to: powerio_matrix::TargetFormat,
+    to: FormatArg,
     output: Option<&std::path::Path>,
     from: Option<FormatArg>,
+    scenario: i64,
 ) -> anyhow::Result<()> {
-    let net = read_network(input, from)?;
-    let conv = powerio_matrix::write_as(&net, to);
+    let target = to.to_target()?;
+    // gridfm reads a Parquet dataset directory (parquet-free `read_path` can't),
+    // so it routes through powerio-matrix's reader, surfacing its fidelity notes.
+    let net = if from == Some(FormatArg::Gridfm) {
+        let read = powerio_matrix::read_gridfm_dataset(input, scenario)
+            .with_context(|| format!("reading gridfm dataset {}", input.display()))?;
+        for w in &read.warnings {
+            eprintln!("fidelity: {w}");
+        }
+        read.network
+    } else {
+        read_network(input, from)?
+    };
+    let conv = powerio_matrix::write_as(&net, target);
     for w in &conv.warnings {
         eprintln!("fidelity: {w}");
     }
