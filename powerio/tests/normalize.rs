@@ -224,6 +224,94 @@ mpc.branch = [
 }
 
 #[test]
+fn collapses_multiple_refs_to_largest_gen() {
+    // Two file REF buses: the slack becomes the larger-pmax gen's bus and the
+    // other former REF (still hosting a gen) is demoted to PV.
+    let src = "\
+function mpc = tworef
+mpc.version = '2';
+mpc.baseMVA = 100;
+mpc.bus = [
+\t1\t3\t0\t0\t0\t0\t1\t1\t0\t230\t1\t1.1\t0.9;
+\t2\t3\t0\t0\t0\t0\t1\t1\t0\t230\t1\t1.1\t0.9;
+\t3\t1\t50\t10\t0\t0\t1\t1\t0\t230\t1\t1.1\t0.9;
+];
+mpc.gen = [
+\t1\t0\t0\t100\t-100\t1\t100\t1\t100\t0\t0\t0\t0\t0\t0\t0\t0\t0\t0\t0\t0;
+\t2\t0\t0\t100\t-100\t1\t100\t1\t300\t0\t0\t0\t0\t0\t0\t0\t0\t0\t0\t0\t0;
+];
+mpc.branch = [
+\t1\t2\t0.01\t0.1\t0\t0\t0\t0\t0\t0\t1\t-360\t360;
+\t2\t3\t0.01\t0.1\t0\t0\t0\t0\t0\t0\t1\t-360\t360;
+];
+";
+    let n = parse_str(src, "matpower").unwrap().to_normalized().unwrap();
+    assert_eq!(n.buses.iter().filter(|b| b.kind == BusType::Ref).count(), 1);
+    // bus 2 has the larger pmax (300 vs 100) -> REF; bus 1 -> PV; bus 3 -> PQ.
+    assert_eq!(n.buses[1].kind, BusType::Ref);
+    assert_eq!(n.buses[0].kind, BusType::Pv);
+    assert_eq!(n.buses[2].kind, BusType::Pq);
+}
+
+#[test]
+fn promotes_largest_gen_when_no_file_ref() {
+    // No file REF (the gen bus is PV): the largest-pmax in-service gen's bus is
+    // promoted to slack.
+    let src = "\
+function mpc = norefgen
+mpc.version = '2';
+mpc.baseMVA = 100;
+mpc.bus = [
+\t1\t2\t0\t0\t0\t0\t1\t1\t0\t230\t1\t1.1\t0.9;
+\t2\t1\t50\t10\t0\t0\t1\t1\t0\t230\t1\t1.1\t0.9;
+];
+mpc.gen = [
+\t1\t0\t0\t100\t-100\t1\t100\t1\t200\t0\t0\t0\t0\t0\t0\t0\t0\t0\t0\t0\t0;
+];
+mpc.branch = [
+\t1\t2\t0.01\t0.1\t0\t0\t0\t0\t0\t0\t1\t-360\t360;
+];
+";
+    let n = parse_str(src, "matpower").unwrap().to_normalized().unwrap();
+    assert_eq!(n.buses.iter().filter(|b| b.kind == BusType::Ref).count(), 1);
+    assert_eq!(n.buses[0].kind, BusType::Ref, "gen bus promoted to slack");
+    assert_eq!(n.buses[1].kind, BusType::Pq);
+}
+
+#[test]
+fn piecewise_cost_per_unit_through_to_normalized() {
+    // Model-1 (piecewise) gen cost end to end: the MW breakpoints (even positions)
+    // divide by base, the dollar costs (odd positions) stay — verified through
+    // to_normalized, not just the standalone helper.
+    let src = "\
+function mpc = pw
+mpc.version = '2';
+mpc.baseMVA = 100;
+mpc.bus = [
+\t1\t3\t0\t0\t0\t0\t1\t1\t0\t230\t1\t1.1\t0.9;
+\t2\t1\t50\t10\t0\t0\t1\t1\t0\t230\t1\t1.1\t0.9;
+];
+mpc.gen = [
+\t1\t0\t0\t100\t-100\t1\t100\t1\t200\t0\t0\t0\t0\t0\t0\t0\t0\t0\t0\t0\t0;
+];
+mpc.gencost = [
+\t1\t0\t0\t2\t0\t0\t100\t2000;
+];
+mpc.branch = [
+\t1\t2\t0.01\t0.1\t0\t0\t0\t0\t0\t0\t1\t-360\t360;
+];
+";
+    let n = parse_str(src, "matpower").unwrap().to_normalized().unwrap();
+    let c = n.generators[0].cost.as_ref().unwrap();
+    assert_eq!(c.model, 1);
+    // [0, 0, 100, 2000] -> [0/100, 0, 100/100, 2000]
+    assert!(approx(c.coeffs[0], 0.0));
+    assert!(approx(c.coeffs[1], 0.0));
+    assert!(approx(c.coeffs[2], 1.0));
+    assert!(approx(c.coeffs[3], 2000.0));
+}
+
+#[test]
 fn parse_str_matches_parse() {
     for case in ["case9.m", "case14.m", "case30.m"] {
         let text = std::fs::read_to_string(data(case)).unwrap();

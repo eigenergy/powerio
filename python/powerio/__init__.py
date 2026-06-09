@@ -226,8 +226,8 @@ class Case:
         out-of-service filtered, densely reindexed (1-based), bus types
         canonicalized. The original case is unchanged; the result carries no
         retained source, so :meth:`write` serializes the per-unit model rather
-        than echoing it. Raises :class:`PowerIODataError` if no reference bus can
-        be chosen.
+        than echoing it. Raises :class:`PowerIODataError` if the case can't be
+        normalized (no reference bus can be chosen, or a non-positive base MVA).
         """
         return Case(self._inner.to_normalized())
 

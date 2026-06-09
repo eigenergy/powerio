@@ -68,8 +68,9 @@ pub(crate) fn cost_to_pu(cost: &GenCost, base: f64) -> Vec<f64> {
 
 /// Undo [`cost_to_pu`] for the neutral MW basis: a polynomial (model 2) divides
 /// coeff `i` by `base^(k-1-i)`, a piecewise curve (model 1) multiplies its MW
-/// breakpoints (even positions) by `base`. Operates on the coefficients as read
-/// (no trimming); other models pass through unchanged.
+/// breakpoints (even positions) by `base`. The exact inverse of [`cost_to_pu`] on
+/// the trimmed coefficient vector — JSON-sourced coefficients arrive already
+/// trimmed, so this does no trimming; other models pass through unchanged.
 pub(crate) fn cost_from_pu(coeffs: &[f64], model: u8, base: f64) -> Vec<f64> {
     let k = coeffs.len();
     if model == 2 {
@@ -246,8 +247,8 @@ impl Network {
     ///   survivors), and every endpoint is remapped to match.
     /// - **Bus types**: the chosen reference bus is `REF`; any other bus hosting a
     ///   surviving generator is `PV`; the rest are `PQ`. The reference is the file's
-    ///   bus if it has exactly one `REF`, otherwise the bus of the largest-`pmax`
-    ///   in-service generator.
+    ///   bus when exactly one surviving (non-isolated) bus is `REF`, otherwise the
+    ///   bus of the largest-`pmax` in-service generator.
     ///
     /// This is a derived product, not a source for write-back: `source` is dropped
     /// and `source_format` is [`SourceFormat::InMemory`], so writing it serializes
