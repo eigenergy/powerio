@@ -73,10 +73,10 @@ for (name, f, run_pm) in CASES
     # free in an untimed teardown — matching ExaPowerIO/PowerModels, whose returned
     # data is GC'd outside the @benchmark sample rather than freed inside it. The
     # handle reaches teardown through a Ref, so no sample leaks.
-    h = pio_parse(f); nbuses = pio_n_buses(h); nbranch = pio_n_branches(h); pio_free(h)
+    h = pio_parse_file(f); nbuses = pio_n_buses(h); nbranch = pio_n_branches(h); pio_free(h)
     samples = nbuses > 30_000 ? 5 : 30
     href = Ref{Ptr{Cvoid}}(C_NULL)
-    bc = @benchmark $href[] = pio_parse($f) teardown = (pio_free($href[])) samples = samples evals = 1
+    bc = @benchmark $href[] = pio_parse_file($f) teardown = (pio_free($href[])) samples = samples evals = 1
     c = ms(bc)
 
     ed = ExaPowerIO.parse_matpower(f)

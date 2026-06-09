@@ -28,6 +28,7 @@ mpc.branch = [
 #[allow(clippy::float_cmp)]
 fn parses_tiny_case() {
     let net = parse_mpc(CASE_TINY).expect("parse tiny");
+    assert_eq!(net.name, "tiny");
     assert_eq!(net.base_mva, 100.0);
     assert_eq!(net.buses.len(), 3);
     assert_eq!(net.branches.len(), 2);

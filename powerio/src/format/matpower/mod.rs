@@ -21,7 +21,7 @@ use crate::{Error, Result};
 /// Parse the MATPOWER case in `content` into a [`Network`].
 pub fn parse_matpower(content: &str) -> Result<Network> {
     // The caller owns `content` as a borrow, so retention needs one copy.
-    parse_matpower_named(Arc::new(content.to_owned()), "case")
+    parse_matpower_source(Arc::new(content.to_owned()), None)
 }
 
 /// Parse the MATPOWER case at `path`, using the file stem as the network name.
@@ -45,7 +45,35 @@ pub(crate) fn parse_matpower_source(
     source: Arc<String>,
     name_hint: Option<&str>,
 ) -> Result<Network> {
-    parse_matpower_named(source, name_hint.unwrap_or("case"))
+    let name = name_hint
+        .map(str::to_owned)
+        .or_else(|| matpower_function_name(&source).map(str::to_owned))
+        .unwrap_or_else(|| "case".to_string());
+    parse_matpower_named(source, &name)
+}
+
+fn matpower_function_name(source: &str) -> Option<&str> {
+    for line in source.lines() {
+        let line = line.trim_start();
+        if !line.starts_with("function") {
+            continue;
+        }
+        let Some((_, rhs)) = line.split_once('=') else {
+            continue;
+        };
+        let rhs = rhs.trim_start();
+        let end = rhs
+            .find(|c: char| !(c.is_ascii_alphanumeric() || c == '_'))
+            .unwrap_or(rhs.len());
+        let starts_ident = rhs
+            .as_bytes()
+            .first()
+            .is_some_and(|b| b.is_ascii_alphabetic() || *b == b'_');
+        if end > 0 && starts_ident {
+            return Some(&rhs[..end]);
+        }
+    }
+    None
 }
 
 fn parse_matpower_named(source: Arc<String>, name: &str) -> Result<Network> {
@@ -135,8 +163,17 @@ fn build_case<'a>(name: &str, get: impl Fn(&str) -> Option<&'a str>) -> Result<N
 
 /// A cheap upper-bound row count for an assignment (one `;` per row), used to
 /// pre-size the typed vectors so parsing doesn't reallocate as it streams.
+/// Capped: each `;` byte would otherwise pre-allocate a full element (~100
+/// bytes), letting a small crafted file demand ~100x its size in memory up
+/// front. Real cases sit far below the cap (largest vendored case: 13659
+/// buses); beyond it the vectors just grow as rows actually parse.
 fn estimate_rows(assignment: &str) -> usize {
-    assignment.bytes().filter(|&b| b == b';').count()
+    const MAX_ROW_HINT: usize = 1 << 20;
+    assignment
+        .bytes()
+        .filter(|&b| b == b';')
+        .count()
+        .min(MAX_ROW_HINT)
 }
 
 /// Stream the rows of one assignment, building a typed `T` per row via `ctor`.

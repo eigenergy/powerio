@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Regenerate the benchmark speed tables in README.md and benchmarks/RESULTS.md
+"""Regenerate the benchmark speed tables in benchmarks/RESULTS.md
 from the JSON the bench scripts emit, so the numbers stop being copy-pasted by hand.
 
 Reads benchmarks/results/{speed_julia,speed_python}.json (written by
@@ -7,7 +7,7 @@ Reads benchmarks/results/{speed_julia,speed_python}.json (written by
 fenced by `<!-- BENCH:<id> START -->` / `<!-- BENCH:<id> END -->`. Prose outside the
 markers is never touched.
 
-Scope: the three speed tables only. The correctness matrix and the version block in
+Scope: the speed tables only. The correctness matrix and the version block in
 RESULTS.md stay hand-written — correctness is a boolean gated in CI (run_validation.sh),
 not a table that drifts every run.
 
@@ -38,9 +38,6 @@ PANDA_HEADER = (
 
 # Canonical case order per region. A region renders only when its JSON carries
 # every case listed here.
-SPEED_MAIN_CASES = [
-    "case2869pegase", "case_ACTIVSg2000", "case9241pegase", "case13659pegase", "case193k",
-]
 SPEED_JULIA_CASES = [
     "case2869pegase", "case_ACTIVSg2000", "case9241pegase", "case13659pegase",
     "case_ACTIVSg10k", "case_ACTIVSg25k", "case_ACTIVSg70k", "case_SyntheticUSA",
@@ -76,11 +73,6 @@ def panda_rows(rows, cases):
     selected, missing = _select(rows, cases)
     if selected is None:
         return None, missing
-    # The published table always carries the matpowercaseframes baseline; if a run
-    # lacked it (None), fail closed rather than publish an `n/a` cell.
-    no_baseline = [r["case"] for r in selected if r["matpowercaseframes_ms"] is None]
-    if no_baseline:
-        return None, [f"{c} (matpowercaseframes baseline)" for c in no_baseline]
     lines = [
         f"| {r['case']} | {ms(r['powerio_parse_ms'])} | {ms(r['matpowercaseframes_ms'])} |"
         for r in selected
@@ -113,10 +105,8 @@ def main():
     # (region id, target file, table body or None, list of missing cases)
     plan = []
     if speed_julia is not None:
-        for region, cases in (("speed-main", SPEED_MAIN_CASES), ("speed-julia", SPEED_JULIA_CASES)):
-            body, missing = julia_rows(speed_julia["rows"], cases)
-            target = "README.md" if region == "speed-main" else "benchmarks/RESULTS.md"
-            plan.append((region, target, SPEED_HEADER, body, missing))
+        body, missing = julia_rows(speed_julia["rows"], SPEED_JULIA_CASES)
+        plan.append(("speed-julia", "benchmarks/RESULTS.md", SPEED_HEADER, body, missing))
     if speed_python is not None:
         body, missing = panda_rows(speed_python["rows"], PANDA_CASES)
         plan.append(("speed-pandapower", "benchmarks/RESULTS.md", PANDA_HEADER, body, missing))

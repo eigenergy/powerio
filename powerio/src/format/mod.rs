@@ -1,8 +1,8 @@
 //! The format hub: readers and writers for every supported file format, all
 //! meeting at the shared [`Network`].
 //!
-//! Each format is one module here, owning its reader and/or writer — MATPOWER
-//! `.m`, PowerModels JSON, PSS/E `.raw`, PowerWorld `.aux`, and EGRET
+//! Each format is one module here, owning its reader and/or writer: MATPOWER
+//! `.m`, PowerModels JSON, PSS/E `.raw`, PowerWorld `.aux`, and egret
 //! `ModelData` JSON. Every input and output format meets at the hub, so adding a
 //! format is one module, not a change to any other. [`parse`] reads a file,
 //! detecting the format from its extension; [`write_as`] serializes a `Network`
@@ -13,14 +13,16 @@
 //!
 //! Conversion is two-tier:
 //!
-//! - **Same-format round-trip is byte-exact.** A reader keeps its source text
-//!   (see [`Network`]), so writing back to the *same* format echoes it
-//!   verbatim — every field, comment, and numeric token.
+//! - **Same format writes return the original text.** A reader keeps its source
+//!   text (see [`Network`]), so writing back to the same format returns every
+//!   field, comment, and numeric token.
 //! - **Cross-format keeps maximal fidelity with itemized loss.** Whatever the
 //!   target format cannot represent is reported in the [`Conversion`] `warnings`,
 //!   never dropped silently.
 
 use std::collections::BTreeSet;
+use std::fmt;
+use std::str::FromStr;
 use std::sync::Arc;
 
 use serde_json::{Map, Value};
@@ -46,7 +48,7 @@ pub use psse::{parse_psse, write_psse};
 pub enum TargetFormat {
     /// PowerModels.jl network data JSON.
     PowerModelsJson,
-    /// EGRET `ModelData` JSON.
+    /// egret `ModelData` JSON.
     EgretJson,
     /// PSS/E `.raw` (v33).
     Psse,
@@ -73,11 +75,37 @@ impl TargetFormat {
     pub fn label(self) -> &'static str {
         match self {
             TargetFormat::PowerModelsJson => "PowerModels JSON",
-            TargetFormat::EgretJson => "EGRET JSON",
+            TargetFormat::EgretJson => "egret JSON",
             TargetFormat::Psse => "PSS/E .raw",
             TargetFormat::PowerWorld => "PowerWorld .aux",
             TargetFormat::Matpower => "MATPOWER .m",
         }
+    }
+
+    /// Canonical API token for this format.
+    #[must_use]
+    pub fn token(self) -> &'static str {
+        match self {
+            TargetFormat::PowerModelsJson => "powermodels-json",
+            TargetFormat::EgretJson => "egret-json",
+            TargetFormat::Psse => "psse",
+            TargetFormat::PowerWorld => "powerworld",
+            TargetFormat::Matpower => "matpower",
+        }
+    }
+}
+
+impl fmt::Display for TargetFormat {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.token())
+    }
+}
+
+impl FromStr for TargetFormat {
+    type Err = Error;
+
+    fn from_str(name: &str) -> Result<Self> {
+        target_format_from_name(name).ok_or_else(|| Error::UnknownFormat(name.to_string()))
     }
 }
 
@@ -101,7 +129,7 @@ pub fn target_format_from_name(name: &str) -> Option<TargetFormat> {
 /// Read the case at `path` into a [`Network`], choosing the reader from `from`
 /// (a format name, see [`target_format_from_name`]) or, when `None`, from the
 /// file extension (`m`/`json`/`raw`/`aux`). A `.json` file is sniffed for the
-/// EGRET vs PowerModels shape; pass `from` to force one.
+/// egret vs PowerModels shape; pass `from` to force one.
 /// The one reader the CLI and the Python/C bindings share, so adding a source
 /// format is one edit here, not one per binding.
 ///
@@ -163,9 +191,9 @@ fn read_source(source: Arc<String>, fmt: TargetFormat, name_hint: Option<&str>) 
 }
 
 /// Both interchange JSON formats use the `.json` extension, so an explicit
-/// source format isn't always given. EGRET `ModelData` has top-level `elements`
+/// source format isn't always given. egret `ModelData` has top-level `elements`
 /// and `system`; PowerModels network data does not. Sniff that and fall back to
-/// PowerModels (the more common input) when the text isn't EGRET-shaped.
+/// PowerModels (the more common input) when the text is not egret shaped.
 ///
 /// Deserializing into [`IgnoredAny`] fields scans the JSON to find the two
 /// top-level keys without building the whole `Value` tree, so a large
@@ -198,6 +226,17 @@ pub fn parse(path: impl AsRef<std::path::Path>) -> Result<Network> {
     read_path(path.as_ref(), None)
 }
 
+/// Parse the case file at `path` into a [`Network`].
+///
+/// This is the canonical path-based parser name shared by the language
+/// bindings. It is equivalent to [`parse`].
+///
+/// # Errors
+/// As [`read_path`] with `from = None`.
+pub fn parse_file(path: impl AsRef<std::path::Path>) -> Result<Network> {
+    read_path(path.as_ref(), None)
+}
+
 /// Parse in-memory case `text` of the named `format` (see
 /// [`target_format_from_name`]) into a [`Network`].
 ///
@@ -210,9 +249,9 @@ pub fn parse_str(text: &str, format: &str) -> Result<Network> {
     read_source(Arc::new(text.to_owned()), fmt, None)
 }
 
-/// Output of a conversion: the serialized text plus any fidelity warnings —
-/// data the target can't represent, defaults synthesized, or blocks mapped
-/// best-effort. An empty `warnings` means a faithful conversion.
+/// Output of a conversion: the serialized text plus any fidelity warnings:
+/// data the target can't represent, defaults synthesized, or blocks mapped best
+/// effort. An empty `warnings` means a faithful conversion.
 ///
 /// `#[non_exhaustive]`: a returns-only type, so downstream code reads it but
 /// never constructs it, leaving room to add fidelity metadata without a breaking
@@ -224,9 +263,8 @@ pub struct Conversion {
     pub warnings: Vec<String>,
 }
 
-/// Convert a [`Network`] to `format`. Writing back to the source format echoes
-/// the retained source byte-for-byte (the same-format leg of the fidelity
-/// contract); otherwise the network is serialized into the target.
+/// Convert a [`Network`] to `format`. Writing back to the source format returns
+/// the retained source text; otherwise the network is serialized into the target.
 #[must_use]
 pub fn write_as(net: &Network, format: TargetFormat) -> Conversion {
     if same_format(format, net.source_format) {
@@ -251,9 +289,27 @@ pub fn write_as(net: &Network, format: TargetFormat) -> Conversion {
     conv
 }
 
+/// Convert a case file to `to`, optionally forcing the source format with
+/// `from`.
+///
+/// This is the canonical file-conversion helper shared by the bindings. It
+/// parses `path` once, writes the resulting [`Network`] to `to`, and returns the
+/// converted text plus any fidelity warnings.
+///
+/// # Errors
+/// As [`read_path`].
+pub fn convert_file(
+    path: impl AsRef<std::path::Path>,
+    to: TargetFormat,
+    from: Option<&str>,
+) -> Result<Conversion> {
+    let net = read_path(path.as_ref(), from)?;
+    Ok(write_as(&net, to))
+}
+
 /// A normalized network has its tap canonicalized to `1.0` on every line (the
-/// `0 → 1` rule), but [`Branch::is_transformer`](crate::network::Branch::is_transformer)
-/// — the test these writers use to split lines from transformers — keys off
+/// `0 → 1` rule), but [`Branch::is_transformer`](crate::network::Branch::is_transformer),
+/// the test these writers use to split lines from transformers, keys off
 /// `tap != 0`. So a normalized line is written into the transformer section/type.
 /// The power flow is identical (a unity-ratio, zero-shift transformer equals a
 /// line), but the label is not, so report the fidelity loss rather than relabel
@@ -268,7 +324,7 @@ fn warn_normalized_tap(net: &Network, format: TargetFormat, conv: &mut Conversio
         return;
     }
     // After normalization a line (raw tap 0) and a unity-ratio transformer (raw
-    // tap 1) both read as tap 1.0 / shift 0.0, so they can't be told apart — count
+    // tap 1) both read as tap 1.0 / shift 0.0, so they cannot be told apart. Count
     // them together as the branches whose line/transformer label is now ambiguous.
     let ambiguous = net
         .branches

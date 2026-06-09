@@ -33,7 +33,7 @@ pub use incidence::{
 };
 pub use lacpf::build_lacpf;
 pub use laplacian::{
-    GroundMap, build_weighted_laplacian, ground_at, ground_at_each, reference_indicator,
+    GroundedIndexMap, build_weighted_laplacian, ground_at, ground_at_each, reference_indicator,
     unit_vector,
 };
 pub use opf::{BusCosts, GenCosts, OpfInstance, Units, build_opf_instance};

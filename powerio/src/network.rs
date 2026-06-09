@@ -391,6 +391,22 @@ impl Network {
         })
     }
 
+    /// Serialize this network to `format`, preserving the retained source text
+    /// on same-format writes and reporting any target-format fidelity warnings.
+    #[must_use]
+    pub fn to_format(&self, format: crate::TargetFormat) -> crate::Conversion {
+        crate::write_as(self, format)
+    }
+
+    /// Serialize this network to MATPOWER `.m` text.
+    ///
+    /// This is byte-exact when the network was parsed from MATPOWER and still
+    /// carries its retained source text.
+    #[must_use]
+    pub fn to_matpower(&self) -> String {
+        crate::write_matpower(self)
+    }
+
     /// Rebuild a `Network` from JSON produced by [`to_json`](Network::to_json).
     ///
     /// Validates the result (no buses, unique bus ids, no dangling references)
@@ -419,6 +435,21 @@ impl Network {
     #[must_use]
     pub fn is_normalized(&self) -> bool {
         self.source_format == SourceFormat::Normalized
+    }
+
+    /// Error unless `base_mva` is a positive, finite number. It is every
+    /// per-unit divisor, so a malformed base would otherwise silently poison
+    /// downstream values with `NaN`/`Inf` or flipped signs. The per-unit
+    /// consumers ([`to_normalized`](Network::to_normalized), the gridfm
+    /// export) call this; any other unit-sensitive consumer should too.
+    pub fn check_base_mva(&self) -> crate::Result<()> {
+        if self.base_mva.is_finite() && self.base_mva > 0.0 {
+            Ok(())
+        } else {
+            Err(crate::Error::InvalidBaseMva {
+                base: self.base_mva,
+            })
+        }
     }
 
     /// Check structural integrity: bus ids are unique and every element

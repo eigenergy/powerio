@@ -2,13 +2,15 @@
 //!
 //! PTDF maps nodal injections to branch flows (`f = PTDF · p`); LODF maps a
 //! branch outage to the flow it redistributes onto the others. Both come from
-//! the reference-grounded DC Laplacian `ABA = ground_with(L, refs)` — one
-//! row/column removed per reference bus — factored once with a dense Cholesky.
+//! the reference-grounded DC Laplacian `ABA = ground_with(L, refs)`: one
+//! row/column removed per reference bus, factored once with a dense Cholesky.
 //! It is SPD as long as every connected component carries a reference (the
-//! [`check_groundable`](crate::indexed::IndexedNetwork::check_groundable)
-//! precondition), so multi-island and distributed-slack cases are supported, not
-//! just a single connected slack. PTDF is inherently dense `m × n`; for very
-//! large networks an iterative/sparse path is future work.
+//! [`check_reference_coverage`](crate::indexed::IndexedNetwork::check_reference_coverage)
+//! precondition), so disconnected networks with one reference per island are
+//! supported. Several references in one island are fixed angle buses; this is
+//! not a participation factor based distributed slack model. PTDF is dense
+//! `m × n`; a future sparse path would compute selected columns or use sparse
+//! factors rather than make PTDF itself sparse.
 
 // Dense linear algebra: indexed triangular-solve loops and the `.iter()`
 // sparse traversal read clearer than the iterator rewrites clippy suggests.
@@ -27,11 +29,11 @@ const PRUNE: f64 = 1e-12;
 
 /// PTDF (`m × n`): branch flows from nodal injections, `f = PTDF · p`. Every
 /// reference-bus column is zero. The Laplacian is grounded at the whole
-/// reference set (`reference_bus_indices`), one row/column per slack: one per
-/// island handles disconnected networks; several within one island is the
-/// distributed-slack solve.
+/// reference set (`reference_bus_indices`), one row/column per slack. One
+/// reference per island handles disconnected networks; several references within
+/// one island fixes all of those bus angles to zero.
 pub fn build_ptdf(case: &IndexedNetwork, conv: DcConvention) -> Result<CsMat<f64>> {
-    case.check_groundable()?;
+    case.check_reference_coverage()?;
     let refs = case.reference_bus_indices();
     let inc = build_incidence(case, conv)?;
     let (dense, m, n) = ptdf_dense(&inc, &refs)?;
@@ -42,7 +44,7 @@ pub fn build_ptdf(case: &IndexedNetwork, conv: DcConvention) -> Result<CsMat<f64
 /// with factor `LODF[l, k]`. Diagonal is `−1`. A branch whose outage islands
 /// the network (denominator `≈ 0`) gets a zero column.
 pub fn build_lodf(case: &IndexedNetwork, conv: DcConvention) -> Result<CsMat<f64>> {
-    case.check_groundable()?;
+    case.check_reference_coverage()?;
     let refs = case.reference_bus_indices();
     let inc = build_incidence(case, conv)?;
     let (ptdf, m, n) = ptdf_dense(&inc, &refs)?;
@@ -58,7 +60,7 @@ pub fn build_ptdf_lodf(
     case: &IndexedNetwork,
     conv: DcConvention,
 ) -> Result<(CsMat<f64>, CsMat<f64>)> {
-    case.check_groundable()?;
+    case.check_reference_coverage()?;
     let refs = case.reference_bus_indices();
     let inc = build_incidence(case, conv)?;
     let (dense, m, n) = ptdf_dense(&inc, &refs)?;

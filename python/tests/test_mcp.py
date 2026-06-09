@@ -117,7 +117,7 @@ def test_inline_convert_removes_temp_file(monkeypatch):
     def boom(*args, **kwargs):
         raise powerio.PowerIOError("boom")
 
-    monkeypatch.setattr(powerio, "convert", boom)
+    monkeypatch.setattr(powerio, "convert_file", boom)
     with pytest.raises(ValueError):
         convert_case(to="psse", content=text, from_="matpower")
     assert staged and not os.path.exists(staged[-1])

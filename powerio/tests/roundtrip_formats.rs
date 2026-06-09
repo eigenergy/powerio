@@ -8,8 +8,8 @@
 //! - **same-format byte-exact echo** — reading a format then writing it back
 //!   reproduces the bytes.
 //!
-//! All five formats (MATPOWER, PowerModels JSON, PSS/E, PowerWorld, EGRET) have a
-//! reader and a writer, so each runs the full set. PowerModels' and EGRET's
+//! All five formats (MATPOWER, PowerModels JSON, PSS/E, PowerWorld, egret) have a
+//! reader and a writer, so each runs the full set. PowerModels' and egret's
 //! value-for-value checks against the reference tools live in
 //! `benchmarks/validate_powermodels.jl` and `benchmarks/validate_egret.py`.
 
@@ -92,7 +92,7 @@ fn roundtrippable() -> Vec<Roundtrippable> {
             read: |s| parse_powerworld(s).unwrap(),
         },
         Roundtrippable {
-            name: "EGRET JSON",
+            name: "egret JSON",
             format: TargetFormat::EgretJson,
             write: |n| write_egret_json(n).text,
             read: |s| parse_egret_json(s).unwrap(),
@@ -181,7 +181,7 @@ fn cross_format_powermodels_to_psse_and_powerworld() {
 
 #[test]
 fn egret_fixtures_round_trip_byte_exact() {
-    // EGRET ModelData files (case9/14/30 from egret's own serializer, dcline3
+    // egret ModelData files (case9/14/30 from egret's own serializer, dcline3
     // hand-authored) read and echo back byte for byte; dcline3 exercises the
     // dc_branch path.
     for f in [
@@ -195,7 +195,7 @@ fn egret_fixtures_round_trip_byte_exact() {
         assert_eq!(
             write_as(&net, TargetFormat::EgretJson).text,
             text,
-            "{f}: EGRET same-format write is not a byte-exact echo"
+            "{f}: egret same-format write is not a byte-exact echo"
         );
     }
     // dc_branch maps to an hvdc line on read.

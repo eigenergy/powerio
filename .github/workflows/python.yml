@@ -22,9 +22,9 @@ jobs:
           components: clippy
       - uses: Swatinem/rust-cache@v2
       # `cargo clippy` at the root skips powerio-py (it's not in default-members),
-      # so lint the extension explicitly. --no-deps keeps the gate on this crate.
+      # so lint the extension explicitly with the same native features as wheels.
       - name: Clippy (powerio-py)
-        run: cargo clippy -p powerio-py --no-deps --features extension-module -- -D warnings
+        run: cargo clippy -p powerio-py --no-deps --features extension-module,gridfm -- -D warnings
 
   test:
     runs-on: ubuntu-latest
@@ -39,36 +39,47 @@ jobs:
           python-version: ${{ matrix.python }}
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
+      # This job is the gridfm-absent build: compile the extension without the
+      # gridfm cargo feature so `test_gridfm_absent_raises_clean_importerror` and
+      # the `_require_gridfm()` ImportError fallback actually run (every other
+      # job builds the full released wheel, where they skip).
+      - name: Compile the gridfm feature out
+        run: sed -i 's/features = \["extension-module", "gridfm"\]/features = ["extension-module"]/' pyproject.toml
       # `pip install .[all,mcp]` builds the extension via the maturin backend and
-      # pulls scipy/numpy/networkx (matrix + graph tests) plus the MCP SDK. The
-      # `mcp` extra carries a `python_version >= '3.10'` marker, so it installs
-      # the SDK on 3.12 (test_mcp runs) and resolves to nothing on 3.9 (test_mcp
-      # skips). Quote the extras so the shell doesn't glob `[all,mcp]`.
+      # pulls scipy/numpy/networkx and Polars (matrix + graph tests) plus the MCP
+      # SDK. The `mcp` extra carries a `python_version >= '3.10'` marker, so it
+      # installs the SDK on 3.12 (test_mcp runs) and resolves to nothing on 3.9
+      # (test_mcp skips). Quote the extras so the shell doesn't glob `[all,mcp]`.
       - name: Install powerio + test deps
         run: pip install '.[all,mcp]' pytest
       - name: Run tests
         run: pytest python/tests -q
-      # The zero-dep promise: parse/convert/write import nothing but the
-      # interpreter. Build in a clean venv with no extras and assert it holds.
+      # The core import path: parse/convert/write import nothing but the
+      # interpreter. Without the gridfm feature the wrapper must fail with a
+      # clear ImportError, not an AttributeError from the missing native symbol.
       - name: Zero-dep parse path
         run: |
           python -m venv /tmp/zerodep
           /tmp/zerodep/bin/pip install .
           /tmp/zerodep/bin/python - <<'PY'
+          import tempfile
           import sys, powerio
-          c = powerio.parse("tests/data/case14.m")
-          assert c.write() == open("tests/data/case14.m").read()
+          c = powerio.parse_file("tests/data/case14.m")
+          assert c.to_matpower() == open("tests/data/case14.m").read()
           assert "numpy" not in sys.modules and "scipy" not in sys.modules
+          assert not powerio._powerio._has_gridfm
+          try:
+              c.write_gridfm(tempfile.mkdtemp(prefix="powerio-gridfm-"))
+          except ImportError as e:
+              assert "gridfm" in str(e)
+          else:
+              raise SystemExit("expected ImportError without the gridfm feature")
           PY
 
-  # The gridfm Parquet write surface compiles in only with the Rust `gridfm`
-  # feature, which the default `pip install .` (features = ["extension-module"])
-  # omits — so the `test` job above skips the gridfm write tests (they guard the
-  # absent path there). Build the feature wheel explicitly here and run the gridfm
-  # tests for real. Same on:[pull_request, push→main] triggers as every other
-  # job, so the gridfm path is covered both before merge and on main.
+  # Build the same wheel users get, install the GridFM and pandas compatibility
+  # extras, and run the Parquet read/write tests before merge and on main.
   test-gridfm:
-    name: test (gridfm feature)
+    name: test (gridfm extra)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -79,15 +90,15 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - name: Install maturin
         run: pip install maturin
-      # Build a wheel with the gridfm feature, then install it (not `develop`):
-      # a regular site-packages install wins the `import powerio` race against the
-      # repo's `powerio/` crate directory, where an editable install would not.
-      - name: Build the gridfm-enabled wheel
-        run: maturin build --features gridfm --out dist
+      # Install a wheel (not `develop`): a regular site-packages install wins the
+      # `import powerio` race against the repo's `powerio/` crate directory, where
+      # an editable install would not.
+      - name: Build the wheel
+        run: maturin build --release --out dist
       - name: Install wheel + test deps
         run: |
           wheel=$(ls dist/*.whl)
-          pip install "${wheel}[all,gridfm]" pytest
+          pip install "${wheel}[all,gridfm,pandas]" pytest
       # `_has_gridfm` is now true, so the @gridfm_only tests run instead of skipping.
       - name: Run gridfm tests
         run: pytest python/tests -q -k gridfm
@@ -140,8 +151,9 @@ jobs:
   publish:
     name: publish to PyPI
     if: github.event_name == 'release'
-    needs: [ test, wheels, sdist ]
+    needs: [ lint, test, test-gridfm, wheels, sdist ]
     runs-on: ubuntu-latest
+    # Protect this environment with required reviewers before launch.
     environment: pypi
     permissions:
       id-token: write  # PyPI trusted publishing; no stored token
@@ -150,6 +162,13 @@ jobs:
         with:
           path: dist
           merge-multiple: true
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.x"
+      - name: Check distributions
+        run: |
+          python -m pip install twine
+          python -m twine check dist/*
       - uses: pypa/gh-action-pypi-publish@release/v1
         with:
           packages-dir: dist

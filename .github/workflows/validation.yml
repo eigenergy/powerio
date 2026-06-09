@@ -2,8 +2,9 @@ name: Validation
 
 # Cross-tool correctness gate: run benchmarks/run_validation.sh (the same pass/fail
 # matrix the maintainer runs locally) and fail the PR on any regression. Only the
-# machine-independent correctness checks run here — the speed benchmarks are
-# per-machine and stay a local on-demand task (the refresh-benchmarks skill).
+# machine independent correctness checks run here. The speed benchmarks are
+# per-machine and stay a local on-demand task (benchmarks/render_tables.py
+# splices their results into benchmarks/RESULTS.md).
 #
 # This pulls a Julia + Python oracle stack (PowerModels.jl, ExaPowerIO.jl,
 # pandapower, egret), so it's heavier than the other jobs; the path filter keeps it
@@ -49,8 +50,8 @@ jobs:
         key: pip-validate-${{ runner.os }}-${{ hashFiles('benchmarks/requirements.txt') }}
         restore-keys: pip-validate-${{ runner.os }}-
     # run_validation.sh defaults to .venv/bin/python; build the powerio wheel into
-    # that venv and add the pandapower + egret oracles (egret is optional — the
-    # matrix leg skips if it's absent).
+    # that venv and add the pandapower + egret oracles. Local runs may skip egret,
+    # but CI verifies imports below.
     - name: Build the powerio wheel and oracles into .venv
       env:
         VIRTUAL_ENV: ${{ github.workspace }}/.venv

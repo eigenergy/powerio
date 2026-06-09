@@ -20,7 +20,7 @@
 use sprs::CsMat;
 
 use crate::matrix::incidence::{build_flow_map, diagonal};
-use crate::matrix::laplacian::{GroundMap, build_weighted_laplacian, ground_at};
+use crate::matrix::laplacian::{GroundedIndexMap, build_weighted_laplacian, ground_at};
 use crate::matrix::triplet::CooBuilder;
 use crate::{Error, Result};
 
@@ -41,7 +41,7 @@ pub struct KktOperators {
     /// `L_eff = L₁ + L₂ D L₂` grounded at the slack bus, SPD. Present only
     /// when requested.
     pub l_eff_grounded: Option<CsMat<f64>>,
-    pub map: GroundMap,
+    pub map: GroundedIndexMap,
 }
 
 /// Assemble the reduced KKT operators from the case factors and the
@@ -95,7 +95,7 @@ pub fn assemble_kkt(
         l1_grounded,
         l2_grounded,
         l_eff_grounded,
-        map: GroundMap::new(n, r),
+        map: GroundedIndexMap::new(n, r),
     })
 }
 

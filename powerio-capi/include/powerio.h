@@ -1,20 +1,23 @@
-/* powerio C ABI — parse any power system case format, query it, convert
- * losslessly, and extract the numeric tables for matrix assembly.
+/* powerio C ABI: parse any power system case format, query it, convert
+ * it, and extract the numeric tables for matrix assembly.
  *
- * Memory: strings returned by pio_write_matpower / pio_convert are owned by the
- * library; free them with pio_string_free. Case handles from pio_parse are freed
- * with pio_case_free. Array extractors fill caller-allocated buffers whose
- * length is the matching pio_n_* count; pass NULL to skip an output.
+ * Memory: strings returned by pio_to_matpower / pio_to_format /
+ * pio_convert_file / pio_to_json are owned by the library; free them with
+ * pio_string_free. Case handles from pio_parse_file / pio_parse_str /
+ * pio_from_json / pio_to_normalized are freed with pio_case_free. Array
+ * extractors fill caller-allocated buffers whose length is the matching pio_n_*
+ * count; pass NULL to skip an output.
  *
  * Message buffers: errbuf/warnbuf may be NULL (or length 0) to discard the
  * message. A message longer than the buffer is truncated to fit and is always
  * NUL-terminated. PIO_ERRBUF_MIN is a comfortable size for any error string.
  *
- * Every entry point catches Rust panics at the boundary and returns the failure
- * default (NULL, 0, -1, 0.0, or no-op) rather than unwinding across the ABI.
+ * Every entry point catches Rust panics at the boundary and returns the documented
+ * failure value (NULL, 0, -1, 0.0, or unchanged output) rather than unwinding
+ * across the ABI.
  *
- * Optional: build with `--features arrow` to get pio_export_arrow, a zero-copy
- * raw network export over the Arrow C Data Interface (guarded by PIO_ARROW).
+ * Optional: build with `--features arrow` to get pio_export_arrow, a raw
+ * network export over the Arrow C Data Interface (guarded by PIO_ARROW).
  *
  * Checked in and generated; regenerate from the Rust source with
  *   cbindgen --config cbindgen.toml --crate powerio-capi --output include/powerio.h
@@ -40,7 +43,7 @@ struct ArrowSchema;
  * was built against (the `PIO_ABI_VERSION` macro in `powerio.h`) and refuses a
  * mismatched library instead of calling in blind.
  */
-#define PIO_ABI_VERSION 1
+#define PIO_ABI_VERSION 2
 
 /**
  * A comfortable error-buffer size: pass a `char[PIO_ERRBUF_MIN]` to any
@@ -90,7 +93,7 @@ extern "C" {
 uint32_t pio_abi_version(void);
 
 /**
- * The crate version string (e.g. `"0.1.0"`), `'static` and NUL-terminated — do
+ * The crate version string (e.g. `"0.1.0"`), `'static` and NUL-terminated. Do
  * NOT free it. Informational; pair it with [`pio_abi_version`] for the actual
  * compatibility check.
  */
@@ -100,27 +103,27 @@ const char *pio_version(void);
  * Parse `path` (format from extension, or `from` if non-NULL) into a case
  * handle. Returns `NULL` on error and writes the message into `errbuf`.
  */
-PioCase *pio_parse(const char *path, const char *from, char *errbuf, size_t errlen);
+PioCase *pio_parse_file(const char *path, const char *from, char *errbuf, size_t errlen);
 
 /**
  * Parse in-memory case `text` of the named `format` into a case handle. Unlike
- * [`pio_parse`] there is no path to infer from, so `format` is required: one of
+ * [`pio_parse_file`] there is no path to infer from, so `format` is required: one of
  * `matpower`/`m`, `powermodels`/`pm`, `egret`, `psse`/`raw`, `powerworld`/`aux`
- * (see `powerio::target_format_from_name`). Returns `NULL` on error and writes
- * the message into `errbuf`. Free the handle with [`pio_case_free`].
+ * (see `TargetFormat::from_str`). Returns `NULL` on error and writes the
+ * message into `errbuf`. Free the handle with [`pio_case_free`].
  */
 PioCase *pio_parse_str(const char *text, const char *format, char *errbuf, size_t errlen);
 
 /**
- * Free a case handle from [`pio_parse`].
+ * Free a case handle from [`pio_parse_file`].
  */
 void pio_case_free(PioCase *case_);
 
 /**
  * Normalize `case` into a NEW per-unit case handle: per unit, radians,
  * out-of-service filtered, densely reindexed, bus types canonicalized (see
- * `Network::to_normalized`). The result is independent of `case` — free both
- * with [`pio_case_free`] — and every extractor and [`pio_to_json`] works on it
+ * `Network::to_normalized`). The result is independent of `case`; free both
+ * with [`pio_case_free`]. Every extractor and [`pio_to_json`] works on it
  * unchanged (the handle is per-unit, not MW). Returns `NULL` on error (no
  * reference bus can be chosen, or a non-positive base MVA) and writes the
  * message into `errbuf`.
@@ -138,15 +141,16 @@ double pio_base_mva(const PioCase *case_);
 /**
  * Dense `[0, n)` index of the single reference bus, or `-1` if not exactly one
  * (also `-1` if the index is too large for `isize`). A network may carry
- * several references (a slack per island, or a normalized case that kept the
- * file's multiple `REF` buses); use [`pio_n_reference_buses`] to tell zero from
- * many, and [`pio_reference_buses`] to read them all.
+ * several references (one per island, or a normalized case that kept the file's
+ * multiple `REF` buses); use [`pio_n_reference_buses`] to tell zero from many,
+ * and [`pio_reference_buses`] to read them all.
  */
 ptrdiff_t pio_reference_bus(const PioCase *case_);
 
 /**
- * Number of reference (slack) buses. `0` means none; `> 1` means a slack per
- * island or a distributed slack. A normalized case always reports `>= 1`.
+ * Number of reference (slack) buses. `0` means none; `> 1` means one reference
+ * per island or several fixed reference buses in one island. A normalized case
+ * always reports `>= 1`.
  */
 size_t pio_n_reference_buses(const PioCase *case_);
 
@@ -164,10 +168,25 @@ size_t pio_n_components(const PioCase *case_);
 int32_t pio_is_radial(const PioCase *case_);
 
 /**
- * Serialize back to MATPOWER `.m` (byte-exact echo when parsed from MATPOWER).
- * Returns an owned C string; free with [`pio_string_free`].
+ * Serialize `case` to MATPOWER `.m` text (byte-exact echo when parsed from
+ * MATPOWER). Returns an owned C string; free with [`pio_string_free`]. Returns
+ * `NULL` on error and writes the message into `errbuf`.
  */
-char *pio_write_matpower(const PioCase *case_);
+char *pio_to_matpower(const PioCase *case_, char *errbuf, size_t errlen);
+
+/**
+ * Serialize `case` to format `to`.
+ *
+ * Returns the converted text as an owned C string (free with
+ * [`pio_string_free`]), `NULL` on error. Fidelity warnings, if any, are written
+ * `\n`-joined into `warnbuf`.
+ */
+char *pio_to_format(const PioCase *case_,
+                    const char *to,
+                    char *warnbuf,
+                    size_t warnlen,
+                    char *errbuf,
+                    size_t errlen);
 
 /**
  * Convert `path` to format `to` (optionally forcing the source via `from`).
@@ -175,22 +194,23 @@ char *pio_write_matpower(const PioCase *case_);
  * [`pio_string_free`]), `NULL` on error. Fidelity warnings, if any, are written
  * `\n`-joined into `warnbuf`.
  */
-char *pio_convert(const char *path,
-                  const char *to,
-                  const char *from,
-                  char *warnbuf,
-                  size_t warnlen,
-                  char *errbuf,
-                  size_t errlen);
+char *pio_convert_file(const char *path,
+                       const char *to,
+                       const char *from,
+                       char *warnbuf,
+                       size_t warnlen,
+                       char *errbuf,
+                       size_t errlen);
 
 /**
- * Free a string returned by [`pio_write_matpower`], [`pio_convert`], or
+ * Free a string returned by [`pio_to_matpower`], [`pio_to_format`],
+ * [`pio_convert_file`], or
  * [`pio_to_json`].
  */
 void pio_string_free(char *s);
 
 /**
- * Serialize the case to JSON — the structured-table transport every Julia
+ * Serialize the case to JSON: the structured-table transport every Julia
  * bridge consumes. Carries the whole [`Network`] (buses, loads, shunts,
  * branches, generators, storage, HVDC, extras) but not the retained source
  * text, so it is structured data, not the byte-exact echo. Returns an owned C
@@ -202,7 +222,7 @@ char *pio_to_json(const PioCase *case_, char *errbuf, size_t errlen);
 /**
  * Rebuild a case handle from JSON produced by [`pio_to_json`]. Returns a new
  * handle (free with [`pio_case_free`]), or `NULL` on error (message into
- * `errbuf`). The handle has no retained source, so [`pio_write_matpower`]
+ * `errbuf`). The handle has no retained source, so [`pio_to_matpower`]
  * reformats it rather than echoing a byte-exact original.
  */
 PioCase *pio_from_json(const char *json, char *errbuf, size_t errlen);
@@ -252,15 +272,17 @@ void pio_nodal_shunt(const PioCase *case_, double *gs, double *bs);
 
 #if defined(PIO_ARROW)
 /**
- * Export one raw network table over the Arrow C Data Interface (zero-copy).
+ * Export one raw network table over the Arrow C Data Interface.
  *
  * `table` is one of the `PIO_ARROW_TABLE_*` selectors (bus/branch/gen/load/
  * shunt); the columns are the parsed network fields with EXTERNAL bus ids (the
  * `pio_bus_ids` id space), not the gridfm schema. On success (returns `0`),
- * `out_array` and `out_schema` are populated with owned C Data Interface structs
- * and the caller MUST release each via its `release` callback. On error
- * (returns `-1`) the message is written into `errbuf` and the out-params are
- * left untouched. Only built with the `arrow` cargo feature.
+ * `out_array` and `out_schema` are populated with owned C Data Interface
+ * structs: ownership of the Arrow buffers transfers to the caller, both
+ * `release` callbacks are non-NULL, and the caller MUST invoke each exactly
+ * once when done (skipping one leaks; the structs outlive `pio_case_free`).
+ * On error (returns `-1`) the message is written into `errbuf` and the
+ * out-params are left untouched. Only built with the `arrow` cargo feature.
  */
 int32_t pio_export_arrow(const PioCase *case_,
                          int32_t table,

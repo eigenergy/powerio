@@ -2,7 +2,7 @@
 
 `powerio-matrix` builds sparse matrices and graph views from a `Network`. The
 builders take the dense-indexed `IndexedNetwork`, which maps MATPOWER bus ids to a
-contiguous `[0, n)`. This document is the convention reference; the DC-OPF bundle
+contiguous `[0, n)`. This document is the convention reference; the DC OPF bundle
 has its own schema in [dcopf-bundle.md](dcopf-bundle.md), and per-builder API
 detail is in the [crate docs](https://eigenergy.github.io/powerio/powerio_matrix/).
 
@@ -17,15 +17,17 @@ detail is in the [crate docs](https://eigenergy.github.io/powerio/powerio_matrix
 | signed incidence `A` | n×m | `build_incidence` | column `e`: `+1` at from-bus, `−1` at to-bus |
 | weighted Laplacian `L` | n×n | `build_weighted_laplacian` | `L = A diag(w) Aᵀ`, `ground_at` removes a row/col |
 | flow map `B Aᵀ` | m×n | `build_flow_map` | `f = B Aᵀ θ` |
-| PTDF | m×n | `build_ptdf` | dense; factors the Laplacian grounded at the slack |
+| PTDF | m×n | `build_ptdf` | dense; factors the Laplacian grounded at the reference buses |
 | LODF | m×m | `build_lodf` | dense DC line-outage factors |
 | adjacency | n×n | `build_adjacency` | `MatrixKind::Adjacency` |
-| petgraph view | — | `IndexedNetwork::to_petgraph` | `UnGraph<bus_idx, branch_idx>` |
+| petgraph view | n/a | `IndexedNetwork::to_petgraph` | `UnGraph<bus_idx, branch_idx>` |
 
-PTDF and LODF need a linear solve; both factor `ground_at(L, r)` (SPD) with the
-self-contained dense Cholesky in `matrix::sensitivity`, no external solver. PTDF is
-dense `m×n`; sparse large-scale PTDF is future work. The DC-OPF instance bundle (`A`,
-`b`, `L`, costs, bounds, thermal limits, `C_g`) is documented in
+PTDF and LODF need a linear solve. Both factor the Laplacian with one row and
+column removed for each reference bus, using the dense Cholesky in
+`matrix::sensitivity`. Every connected component must contain at least one
+reference bus. PTDF is dense `m×n`; sparse work would mean selected column
+computation or sparse factorization, not a sparse PTDF matrix. The DC OPF
+instance bundle (`A`, `b`, `L`, costs, bounds, thermal limits, `C_g`) is documented in
 [dcopf-bundle.md](dcopf-bundle.md).
 
 ## Conventions
@@ -40,6 +42,9 @@ dense `m×n`; sparse large-scale PTDF is future work. The DC-OPF instance bundle
   ignores taps and shifts; B'' keeps taps and zeros only shifts; Y_bus keeps both.
 - **`BR_B` is already per unit.** Line charging susceptance is per unit on `baseMVA`
   in MATPOWER; never divide by `base_mva` again.
+- **Reference coverage.** `IndexedNetwork::check_reference_coverage` verifies that
+  every in service island has a reference bus before DC sensitivity or DC OPF
+  builders ground the Laplacian.
 - **DC susceptance.** The default is `b = 1/x` (`DcConvention::PaperPure`, taps and
   shifts ignored), which makes `L = A diag(b) Aᵀ` equal `build_bprime` in the XB
   scheme. `DcConvention::Matpower` uses `b = 1/(x·τ)` plus a phase shift injection

@@ -1,8 +1,8 @@
 """Tests for the gridfm Parquet export (`powerio gridfm`).
 
-These drive the `powerio` CLI binary and read its Parquet with pandas/pyarrow,
-so they need the `gridfm` extra (`pip install '.[gridfm]'`) and a built binary.
-Both are optional: the module skips cleanly when either is missing.
+These drive the `powerio` CLI binary and read its Parquet with Polars, so they
+need the `gridfm` extra (`pip install '.[gridfm]'`) and a built binary. Both are
+optional: the module skips cleanly when either is missing.
 
 The binary is found via `$POWERIO_BIN`, else `target/{release,debug}/powerio`
 under the repo root. Build it with `cargo build -p powerio-cli` (the CLI always
@@ -15,8 +15,7 @@ from pathlib import Path
 
 import pytest
 
-pd = pytest.importorskip("pandas")
-pytest.importorskip("pyarrow")
+pl = pytest.importorskip("polars")
 
 ROOT = Path(__file__).resolve().parents[2]
 DATA = ROOT / "tests" / "data"
@@ -75,21 +74,21 @@ def test_schema_matches_datakit(case14_raw):
         "y_bus_data": (YBUS_COLS, None),
     }
     for name, (cols, rows) in cases.items():
-        df = pd.read_parquet(case14_raw / f"{name}.parquet")
+        df = pl.read_parquet(case14_raw / f"{name}.parquet")
         assert list(df.columns) == cols, name
         if rows is not None:
             assert len(df) == rows, name
 
 
 def test_basic_invariants(case14_raw):
-    bus = pd.read_parquet(case14_raw / "bus_data.parquet")
+    bus = pl.read_parquet(case14_raw / "bus_data.parquet")
     # PQ/PV/REF one-hot partitions every bus; exactly one reference.
-    assert ((bus[["PQ", "PV", "REF"]].sum(axis=1)) == 1).all()
+    assert ((bus["PQ"] + bus["PV"] + bus["REF"]) == 1).all()
     assert int(bus["REF"].sum()) == 1
     # Dense, contiguous bus index.
-    assert bus["bus"].tolist() == list(range(14))
+    assert bus["bus"].to_list() == list(range(14))
 
-    gen = pd.read_parquet(case14_raw / "gen_data.parquet")
+    gen = pl.read_parquet(case14_raw / "gen_data.parquet")
     assert gen["is_slack_gen"].sum() >= 1
 
 
@@ -100,9 +99,9 @@ def test_satisfies_graphkit_feature_contract(case14_raw):
     Replicates graphkit's column selection (powergrid_hetero_dataset.py) without
     importing torch, so it proves the contract without the training stack.
     """
-    bus = pd.read_parquet(case14_raw / "bus_data.parquet")
-    gen = pd.read_parquet(case14_raw / "gen_data.parquet")
-    branch = pd.read_parquet(case14_raw / "branch_data.parquet")
+    bus = pl.read_parquet(case14_raw / "bus_data.parquet")
+    gen = pl.read_parquet(case14_raw / "gen_data.parquet")
+    branch = pl.read_parquet(case14_raw / "branch_data.parquet")
 
     # Columns graphkit reads straight off bus_data (it derives min/max_q_mvar
     # itself, below).
@@ -122,9 +121,13 @@ def test_satisfies_graphkit_feature_contract(case14_raw):
 
     # graphkit's bus-level reactive limits: sum gen min/max_q_mvar per (scenario,
     # bus). Must yield a finite value for every bus that has a generator.
-    agg = gen.groupby(["scenario", "bus"])[["min_q_mvar", "max_q_mvar"]].sum()
-    assert not agg.empty
-    assert agg.to_numpy().sum() != 0 or (gen[["min_q_mvar", "max_q_mvar"]] == 0).all().all()
+    agg = gen.group_by(["scenario", "bus"]).agg(
+        pl.col(["min_q_mvar", "max_q_mvar"]).sum()
+    )
+    assert len(agg) > 0
+    total = (gen["min_q_mvar"] + gen["max_q_mvar"]).sum()
+    all_zero = ((gen["min_q_mvar"] == 0) & (gen["max_q_mvar"] == 0)).all()
+    assert total != 0 or all_zero
 
 
 def test_graphkit_loads_dataset(case14_raw):

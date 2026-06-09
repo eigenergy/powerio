@@ -209,9 +209,12 @@ struct GridfmMeta {
 ///
 /// # Errors
 /// [`Error::ReferenceBusCount`] unless the case has exactly one reference bus
-/// (graphkit needs a slack), [`Error::NonFiniteSusceptance`] for a branch with
-/// NaN/Inf impedance, and [`Error::UnknownBus`] if a generator or branch
-/// references a bus the network doesn't define.
+/// (graphkit needs a slack), [`Error::NormalizedGridfmSnapshot`] for a normalized
+/// input, [`Error::NonFiniteGridfmValue`] for a NaN/Inf physical quantity (or a
+/// NaN limit — `±Inf` limits are the valid unbounded sentinel) that would reach
+/// Parquet, [`Error::NonFiniteSusceptance`] if a finite branch impedance still
+/// yields a non-finite admittance, and [`Error::UnknownBus`] if a generator or
+/// branch references a bus the network doesn't define.
 pub fn gridfm_record_batches(
     net: &Network,
     scenario: i64,
@@ -291,15 +294,7 @@ fn snapshot_views<'a>(snapshots: &'a [GridfmSnapshot<'a>]) -> Result<Vec<Snapsho
                 reason: ScenarioMismatch::BusOrder,
             });
         }
-        // gridfm exports a raw snapshot: powers in MW, angles in degrees, shunts
-        // ÷ base. A normalized network is per unit / radians, so its fields would
-        // be mislabeled (and per_unit_base can't recover the MW it never kept) —
-        // it is not a valid snapshot source.
-        debug_assert!(
-            !snap.net.is_normalized(),
-            "write_gridfm: snapshot {k} is a normalized (per-unit) network; gridfm \
-             expects a raw MW/degree snapshot"
-        );
+        validate_snapshot_inputs(snap.net, snap.scenario)?;
         let view = IndexedNetwork::new(snap.net);
         let ref_bus = view.reference_bus_index()?;
         views.push(SnapshotView {
@@ -309,6 +304,99 @@ fn snapshot_views<'a>(snapshots: &'a [GridfmSnapshot<'a>]) -> Result<Vec<Snapsho
         });
     }
     Ok(views)
+}
+
+fn validate_snapshot_inputs(net: &Network, scenario: i64) -> Result<()> {
+    if net.is_normalized() {
+        return Err(Error::NormalizedGridfmSnapshot { scenario });
+    }
+    net.check_base_mva()?;
+
+    // Two tiers: physical quantities must be finite, while limit fields admit
+    // `±Inf` as the unbounded sentinel (the PowerModels reader defaults absent
+    // gen limits to `±Inf`, MATPOWER files carry literal `Inf` tokens, and
+    // Parquet stores `±Inf` natively) — only `NaN` is corrupt there.
+    for (row, b) in net.buses.iter().enumerate() {
+        finite(scenario, "bus", row, "vm", b.vm)?;
+        finite(scenario, "bus", row, "va", b.va)?;
+        finite(scenario, "bus", row, "base_kv", b.base_kv)?;
+        not_nan(scenario, "bus", row, "vmax", b.vmax)?;
+        not_nan(scenario, "bus", row, "vmin", b.vmin)?;
+    }
+    for (row, l) in net.loads.iter().enumerate() {
+        finite(scenario, "load", row, "p", l.p)?;
+        finite(scenario, "load", row, "q", l.q)?;
+    }
+    for (row, s) in net.shunts.iter().enumerate() {
+        finite(scenario, "shunt", row, "g", s.g)?;
+        finite(scenario, "shunt", row, "b", s.b)?;
+    }
+    for (row, br) in net.branches.iter().enumerate() {
+        finite(scenario, "branch", row, "r", br.r)?;
+        finite(scenario, "branch", row, "x", br.x)?;
+        finite(scenario, "branch", row, "b", br.b)?;
+        finite(scenario, "branch", row, "tap", br.tap)?;
+        finite(scenario, "branch", row, "shift", br.shift)?;
+        not_nan(scenario, "branch", row, "angmin", br.angmin)?;
+        not_nan(scenario, "branch", row, "angmax", br.angmax)?;
+        not_nan(scenario, "branch", row, "rate_a", br.rate_a)?;
+    }
+    for (row, g) in net.generators.iter().enumerate() {
+        finite(scenario, "generator", row, "pg", g.pg)?;
+        finite(scenario, "generator", row, "qg", g.qg)?;
+        not_nan(scenario, "generator", row, "pmax", g.pmax)?;
+        not_nan(scenario, "generator", row, "pmin", g.pmin)?;
+        not_nan(scenario, "generator", row, "qmax", g.qmax)?;
+        not_nan(scenario, "generator", row, "qmin", g.qmin)?;
+        // Validate exactly what lands in the `cp0/cp1/cp2` columns, not the
+        // raw coefficient list (non-representable rows export as zeros).
+        let (cp0, cp1, cp2) = gridfm_cost(g.cost.as_ref());
+        finite(scenario, "gencost", row, "cp0", cp0)?;
+        finite(scenario, "gencost", row, "cp1", cp1)?;
+        finite(scenario, "gencost", row, "cp2", cp2)?;
+    }
+    Ok(())
+}
+
+fn finite(
+    scenario: i64,
+    element: &'static str,
+    row: usize,
+    field: &'static str,
+    value: f64,
+) -> Result<()> {
+    if value.is_finite() {
+        Ok(())
+    } else {
+        Err(Error::NonFiniteGridfmValue {
+            scenario,
+            element,
+            row,
+            field,
+            value,
+        })
+    }
+}
+
+/// Limit fields: `±Inf` is the valid unbounded sentinel, only `NaN` is corrupt.
+fn not_nan(
+    scenario: i64,
+    element: &'static str,
+    row: usize,
+    field: &'static str,
+    value: f64,
+) -> Result<()> {
+    if value.is_nan() {
+        Err(Error::NonFiniteGridfmValue {
+            scenario,
+            element,
+            row,
+            field,
+            value,
+        })
+    } else {
+        Ok(())
+    }
 }
 
 /// The base element shape a scenario batch shares.
@@ -1187,6 +1275,125 @@ mod tests {
         let err = gridfm_record_batches(&net, 0, &GridfmOptions::default()).unwrap_err();
         assert!(
             matches!(err, Error::ReferenceBusCount { .. }),
+            "got {err:?}"
+        );
+    }
+
+    #[test]
+    fn non_finite_bus_voltage_errors_before_parquet() {
+        let mut net = case14();
+        net.buses[0].vm = f64::NAN;
+        let err = gridfm_record_batches(&net, 7, &GridfmOptions::default()).unwrap_err();
+        match err {
+            Error::NonFiniteGridfmValue {
+                scenario,
+                element,
+                row,
+                field,
+                value,
+            } => {
+                assert_eq!(scenario, 7);
+                assert_eq!(element, "bus");
+                assert_eq!(row, 0);
+                assert_eq!(field, "vm");
+                assert!(value.is_nan());
+            }
+            other => panic!("expected NonFiniteGridfmValue, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn non_finite_tap_errors_even_without_y_bus_table() {
+        let mut net = case14();
+        net.branches[0].tap = f64::NAN;
+        let opts = GridfmOptions {
+            include_y_bus: false,
+            ..Default::default()
+        };
+        let err = gridfm_record_batches(&net, 0, &opts).unwrap_err();
+        assert!(
+            matches!(
+                err,
+                Error::NonFiniteGridfmValue {
+                    element: "branch",
+                    row: 0,
+                    field: "tap",
+                    ..
+                }
+            ),
+            "got {err:?}"
+        );
+    }
+
+    #[test]
+    fn normalized_snapshot_is_rejected_in_release_builds() {
+        let net = case14().to_normalized().unwrap();
+        let err = gridfm_record_batches(&net, 3, &GridfmOptions::default()).unwrap_err();
+        assert!(
+            matches!(err, Error::NormalizedGridfmSnapshot { scenario: 3 }),
+            "got {err:?}"
+        );
+    }
+
+    #[test]
+    fn non_finite_representable_cost_errors() {
+        let mut net = Network::in_memory(
+            "badcost",
+            100.0,
+            vec![bus(1, BusType::Ref), bus(2, BusType::Pq)],
+            vec![branch(1, 2, 0.01, 0.1)],
+        );
+        net.generators
+            .push(gen_at(1, gencost(2, 3, vec![f64::NAN, 1.0, 0.0])));
+
+        // coeffs are highest-order first, so the NaN lands in the cp2 column.
+        let err = gridfm_record_batches(&net, 0, &GridfmOptions::default()).unwrap_err();
+        assert!(
+            matches!(
+                err,
+                Error::NonFiniteGridfmValue {
+                    element: "gencost",
+                    row: 0,
+                    field: "cp2",
+                    ..
+                }
+            ),
+            "got {err:?}"
+        );
+    }
+
+    #[test]
+    fn unbounded_limits_export_as_infinity() {
+        // PowerModels defaults absent gen limits to ±Inf and MATPOWER carries
+        // literal Inf tokens; the unbounded sentinel must reach the Parquet
+        // columns, not abort the export (only NaN is corrupt in a limit).
+        let mut net = case14();
+        net.generators[0].qmax = f64::INFINITY;
+        net.generators[0].qmin = f64::NEG_INFINITY;
+        net.generators[1].pmax = f64::INFINITY;
+        net.branches[0].angmin = f64::NEG_INFINITY;
+        net.branches[0].angmax = f64::INFINITY;
+        net.branches[1].rate_a = f64::INFINITY;
+        net.buses[0].vmax = f64::INFINITY;
+        let tables = gridfm_record_batches(&net, 0, &GridfmOptions::default()).unwrap();
+        let qmax = col_f64(&tables.generator, "max_q_mvar");
+        assert!(qmax.value(0).is_infinite() && qmax.value(0) > 0.0);
+    }
+
+    #[test]
+    fn nan_limit_still_errors() {
+        let mut net = case14();
+        net.generators[0].qmax = f64::NAN;
+        let err = gridfm_record_batches(&net, 0, &GridfmOptions::default()).unwrap_err();
+        assert!(
+            matches!(
+                err,
+                Error::NonFiniteGridfmValue {
+                    element: "generator",
+                    field: "qmax",
+                    ..
+                }
+            ),
             "got {err:?}"
         );
     }

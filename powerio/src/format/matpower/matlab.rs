@@ -98,7 +98,7 @@ where
         // whitespace separates tokens, and a trailing comma is stripped (MATPOWER
         // rows are space/semicolon-delimited). This replaces split(';') +
         // split_ascii_whitespace — the generic Unicode searcher was the dominant
-        // tokenizing cost — and feeds the raw bytes straight to fast-float.
+        // tokenizing cost — and feeds raw bytes straight to the float parser.
         let bytes = code.as_bytes();
         let mut i = 0;
         while i < bytes.len() {
@@ -154,10 +154,9 @@ fn parse_float(tok: &[u8]) -> Option<f64> {
         b"Inf" | b"inf" | b"+Inf" | b"+inf" => Some(f64::INFINITY),
         b"-Inf" | b"-inf" => Some(f64::NEG_INFINITY),
         b"NaN" | b"nan" => Some(f64::NAN),
-        // fast-float is IEEE-correct (same value as std) but several times
-        // faster, and float tokens dominate large-case parse time. It takes the
-        // raw bytes, so the tokenizer passes a slice with no &str round-trip.
-        _ => fast_float::parse(tok).ok(),
+        // Float tokens dominate large case parse time. `lexical_core` takes raw
+        // bytes, so the tokenizer passes a slice with no &str round trip.
+        _ => lexical_core::parse::<f64>(tok).ok(),
     }
 }
 

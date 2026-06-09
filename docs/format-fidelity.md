@@ -18,13 +18,13 @@ implementations and the matching powerio code:
 | Phase shift, angle | degrees in the model; PowerModels JSON carries radians | PowerModels `make_per_unit!` | `format::powermodels` |
 | Angle limits | `angmin`/`angmax` default ±360 (unconstrained) | MATPOWER `idx_brch` `ANGMIN`/`ANGMAX` | `Branch::has_angle_limits` |
 | dcline `Pt`/`Qf`/`Qt` | sign flips vs MATPOWER | PowerModels `matpower.jl` | `format::powermodels` |
-| Generator cost | `c2 p² + c1 p` → `q = 2c2`, `c = c1`; coefficients high order first | MATPOWER `idx_cost`, EGRET `matpower_parser` | `GenCost::quadratic` |
+| Generator cost | `c2 p² + c1 p` → `q = 2c2`, `c = c1`; coefficients high order first | MATPOWER `idx_cost`, egret `matpower_parser` | `GenCost::quadratic` |
 | `source_id` | `["bus", id]` for bus-tied elements | PowerModels `matpower.jl` | `format::powermodels` |
 
-EGRET's own MATPOWER parser uses the same reductions (bus type as
+egret's own MATPOWER parser uses the same reductions (bus type as
 `matpower_bustype`, polynomial coefficients reversed to a `{degree: coefficient}`
 map, piecewise to `[[mw, cost], ...]`, impedances left per unit), which is why a
-MATPOWER case taken through powerio to EGRET matches egret's direct import.
+MATPOWER case taken through powerio to egret JSON matches egret's direct import.
 
 ## Validation
 
@@ -35,8 +35,8 @@ tools. Every reader and writer, and every conversion pair, is exercised.
   `core_json.jl`). Reads MATPOWER, PowerModels JSON, and PSS/E. The MATPOWER to
   PowerModels JSON path is checked field by field after per unit normalization;
   the others by element counts and demand/generation/shunt totals.
-- **egret** (`validate_egret.py`). The oracle for EGRET output, which PowerModels
-  cannot read: it loads powerio's EGRET JSON with `egret.data.model_data.ModelData`
+- **egret** (`validate_egret.py`). The oracle for egret output, which PowerModels
+  cannot read: it loads powerio's egret JSON with `egret.data.model_data.ModelData`
   and compares counts, totals, and generator cost curves.
 - **ExaPowerIO.jl** (`validate_exapowerio.jl`). Reads MATPOWER through powerio's C
   ABI and compares value for value.
@@ -49,7 +49,7 @@ the electrical core of the output (bus/branch/generator counts and the per unit
 demand, generation, and shunt totals) against the source's own core, read by an
 independent oracle. The diagonal is checked byte-exact: writing back to the source
 format reproduces the file. Sources use the real native files where they exist
-(the vendored PSS/E `.raw` and EGRET `.json`) and representative MATPOWER cases
+(the vendored PSS/E `.raw` and egret `.json`) and representative MATPOWER cases
 otherwise: basic (`case9`), shunts and transformers (`case14`, `case30`), size
 (`case118`, `case2869pegase`), HVDC with a mixed piecewise/polynomial gencost
 (`t_case9_dcline`), and a piecewise-cost case (`pglib_opf_case5_pjm`).
@@ -87,6 +87,6 @@ These are reported in `Conversion::warnings`, not dropped silently.
 - **MATPOWER** canonical output (for a case that did not originate as MATPOWER)
   omits dcline and storage; the byte-exact echo path keeps them when the case was
   read from MATPOWER.
-- **EGRET** output drops HVDC and storage. The reader takes the power flow
+- **egret** output drops HVDC and storage. The reader takes the power flow
   ModelData subset (numeric bus ids, scalar values); unit commitment cases
   (`system.time_keys`) are rejected.

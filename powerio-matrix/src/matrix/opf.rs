@@ -94,7 +94,7 @@ pub fn build_opf_instance(
     let n = case.n();
     let m = incidence.m();
     // per_unit_base is 1.0 for an already-normalized network, so Units::PerUnit
-    // on a normalized case is a no-op divide rather than a second scaling.
+    // on a normalized case divides by 1 instead of scaling a second time.
     let base = case.per_unit_base();
 
     let p_scale = match units {

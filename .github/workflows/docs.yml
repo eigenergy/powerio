@@ -5,7 +5,7 @@ name: Docs
 # whose //! docs docs.rs would never host. docs.rs takes over for powerio and
 # powerio-matrix once those are published to crates.io.
 # PRs build the docs too (so a broken intra-doc link fails review, not main),
-# but only push-to-main / dispatch deploys to Pages — see the `deploy` gate.
+# but only push to main / dispatch deploys to Pages; see the `deploy` gate.
 on:
   push:
     branches: [ "main" ]
@@ -32,6 +32,9 @@ jobs:
     runs-on: ubuntu-latest
     steps:
     - uses: actions/checkout@v4
+    - uses: actions/setup-python@v5
+      with:
+        python-version: "3.12"
     - uses: dtolnay/rust-toolchain@stable
     - uses: Swatinem/rust-cache@v2
     # -D warnings turns a broken intra-doc link into a failed build, so the docs
@@ -40,9 +43,28 @@ jobs:
       env:
         RUSTDOCFLAGS: "-D warnings"
       run: cargo doc --no-deps --all-features -p powerio -p powerio-matrix -p powerio-capi -p powerio-py
-    # cargo doc leaves target/doc with no top-level index; redirect to the main crate.
-    - name: Landing redirect
-      run: echo '<meta http-equiv="refresh" content="0; url=powerio/index.html">' > target/doc/index.html
+    - name: Build Python API docs
+      run: |
+        python -m pip install --upgrade pip
+        python -m pip install '.[all]' pdoc
+        python -m pdoc powerio -o target/doc/python
+    - name: Landing page
+      run: |
+        cat > target/doc/index.html <<'HTML'
+        <!doctype html>
+        <meta charset="utf-8">
+        <title>PowerIO docs</title>
+        <style>
+          body { font-family: system-ui, sans-serif; max-width: 720px; margin: 4rem auto; padding: 0 1rem; line-height: 1.5; }
+          a { color: #0b5cad; }
+        </style>
+        <h1>PowerIO docs</h1>
+          <ul>
+          <li><a href="powerio/index.html">Rust crate docs</a></li>
+          <li><a href="python/powerio.html">Python API docs</a></li>
+          <li><a href="https://github.com/eigenergy/PowerIO.jl">Julia bindings</a></li>
+          </ul>
+          HTML
     - uses: actions/upload-pages-artifact@v3
       with:
         path: target/doc

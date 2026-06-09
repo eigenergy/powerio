@@ -9,8 +9,8 @@ inline ``content``:
   scipy/numpy in the loop.
 
 Run over stdio with the ``powerio-mcp`` console script (or ``python -m
-powerio.mcp``). The server reuses ``powerio.convert``/``parse``/``parse_str`` —
-it never reimplements parsing.
+powerio.mcp``). The server reuses ``powerio.convert_file``/``parse_file``/
+``parse_str``; it never reimplements parsing.
 """
 
 from __future__ import annotations
@@ -25,7 +25,7 @@ from mcp.server.fastmcp import FastMCP
 mcp = FastMCP("powerio")
 
 # Format name (and alias) → file extension, for staging inline content to a temp
-# file. ``convert`` is path-only, so inline conversion writes the text to disk
+# file. ``convert_file`` is path-only, so inline conversion writes the text to disk
 # first; a matching extension keeps the format obvious even though we always
 # pass ``from_`` explicitly for inline input. Mirrors the canonical Rust tables
 # (`target_format_from_name` + `TargetFormat::extension` in
@@ -99,19 +99,19 @@ def convert_case(
     file extension for ``path``; ``from_`` is REQUIRED with inline ``content``.
 
     Returns ``{"text": <converted file>, "warnings": [<fidelity notes: data the
-    target can't represent, defaults synthesized, or blocks mapped
-    best-effort>]}`` (empty for a faithful conversion).
+    target can't represent, defaults synthesized, or blocks mapped to the nearest
+    supported target representation>]}`` (empty for a faithful conversion).
     """
     _one_input(path, content)
     if content is not None and not from_:
         raise ValueError("`from_` is required when converting inline `content`")
     try:
         if path is not None:
-            conv = powerio.convert(path, to, from_)
+            conv = powerio.convert_file(path, to, from_)
         else:
             tmp = _stage(content, from_)
             try:
-                conv = powerio.convert(tmp, to, from_)
+                conv = powerio.convert_file(tmp, to, from_)
             finally:
                 _unlink_quietly(tmp)
     except powerio.PowerIOError as exc:
@@ -137,7 +137,9 @@ def case_summary(
     _one_input(path, content)
     try:
         case = (
-            powerio.parse(path) if path is not None else powerio.parse_str(content, format)
+            powerio.parse_file(path)
+            if path is not None
+            else powerio.parse_str(content, format)
         )
     except powerio.PowerIOError as exc:
         raise ValueError(f"parse failed: {exc}") from exc

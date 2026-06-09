@@ -1,4 +1,4 @@
-//! Input-validation and reader-robustness guarantees: malformed input must fail
+//! Input validation and reader behavior guarantees: malformed input must fail
 //! loudly, never silently default into a structurally valid but wrong network.
 
 use std::path::Path;

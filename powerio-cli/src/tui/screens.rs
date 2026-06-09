@@ -479,7 +479,7 @@ fn draw_batch_row(frame: &mut Frame, job: &BatchJob, row: Rect) {
         BatchProgress::Pending => (0.0, "queued".to_string(), T.fg_dim),
         &BatchProgress::Running(f) => (f, format!("{:>3}%", (f * 100.0) as i32), T.accent),
         BatchProgress::Done { files } => (1.0, format!("{files} files"), T.good),
-        BatchProgress::Failed(msg) => (1.0, format!("FAIL — {msg}"), T.bad),
+        BatchProgress::Failed(msg) => (1.0, format!("FAIL: {msg}"), T.bad),
     };
     let gauge = Gauge::default()
         .gauge_style(Style::default().fg(color))
@@ -618,7 +618,7 @@ fn draw_help(frame: &mut Frame, _app: &App, area: Rect) {
     frame.render_widget(block, area);
 
     let lines = vec![
-        Line::from(Span::styled("powerio — TUI cheatsheet", title())),
+        Line::from(Span::styled("powerio TUI cheatsheet", title())),
         Line::raw(""),
         Line::raw("Browse"),
         Line::raw("  ↑/↓        move selection"),

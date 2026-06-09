@@ -262,8 +262,8 @@ mpc.branch = [
 
 #[test]
 fn keeps_multiple_file_refs() {
-    // Two gen-backed file REF buses are kept (not collapsed to one) — the consumer
-    // picks the slack, matching ExaPowerIO/PowerDiff. The gen-less bus is PQ.
+    // Two gen-backed file REF buses are kept; the consumer picks the slack.
+    // The gen-less bus is PQ.
     let src = "\
 function mpc = tworef
 mpc.version = '2';
