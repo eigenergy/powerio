@@ -137,6 +137,11 @@ pub enum SourceFormat {
     PowerWorld,
     /// Built in memory (e.g. from synth or an edited case); no source text.
     InMemory,
+    /// A normalized derived view ([`Network::to_normalized`]): per unit, radians,
+    /// filtered, densely reindexed. Distinct from [`InMemory`](SourceFormat::InMemory)
+    /// so consumers can tell a per-unit product from a raw in-memory network; it
+    /// has no source text and a different unit basis than a parsed network.
+    Normalized,
 }
 
 /// A format-neutral power network.
@@ -311,6 +316,12 @@ pub struct Storage {
 }
 
 /// A two-terminal HVDC line (MATPOWER `dcline`).
+///
+/// `pf`/`pt`/`qf`/`qt` are stored in MATPOWER's sign convention regardless of
+/// source: the PowerModels reader un-flips `pt`/`qf`/`qt` on the way in, and the
+/// PowerModels writer re-flips them on the way out (PowerModels.jl uses the
+/// opposite sign). The flip is a format-boundary translation, so a derived view
+/// like `to_normalized` keeps the MATPOWER convention and only scales to per unit.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Hvdc {
     pub from: BusId,
@@ -382,16 +393,32 @@ impl Network {
 
     /// Rebuild a `Network` from JSON produced by [`to_json`](Network::to_json).
     ///
-    /// Validates the result (unique bus ids, no dangling references) before
-    /// returning, so the JSON transport — the C ABI and Julia bridge ride on it —
-    /// can't hand back a network the file readers would have rejected.
+    /// Validates the result (no buses, unique bus ids, no dangling references)
+    /// before returning, so the JSON transport — the C ABI and Julia bridge ride
+    /// on it — can't hand back a network the file readers would have rejected
+    /// (the same no-buses guard `read_source` applies to every parse path).
     pub fn from_json(text: &str) -> crate::Result<Network> {
         let net: Network = serde_json::from_str(text).map_err(|e| Error::FormatRead {
             format: "JSON",
             message: e.to_string(),
         })?;
         net.check_references("JSON")?;
+        if net.buses.is_empty() {
+            return Err(Error::FormatRead {
+                format: "JSON",
+                message: "case has no buses".into(),
+            });
+        }
         Ok(net)
+    }
+
+    /// Whether this is a normalized (per-unit, radian, filtered, reindexed)
+    /// derived product from [`to_normalized`](Network::to_normalized), rather
+    /// than a raw network at the file's unit basis. Unit-sensitive code that
+    /// takes a `&Network` can check this instead of silently assuming MW.
+    #[must_use]
+    pub fn is_normalized(&self) -> bool {
+        self.source_format == SourceFormat::Normalized
     }
 
     /// Check structural integrity: bus ids are unique and every element

@@ -20,12 +20,8 @@ use crate::network::{
     Branch, Bus, BusId, BusType, GEN_EXTRA_KEYS, GenCost, Generator, Hvdc, Load, Network, Shunt,
     SourceFormat, Storage,
 };
+use crate::normalize::{self, GEN_PU_KEYS};
 use crate::{Error, Result};
-
-/// The gen capability columns PowerModels per-unitizes (the ramp rates). The PQ
-/// curve points (pc1/pc2/qc*) and apf are left raw by `make_per_unit!`, so we
-/// leave them raw too — matching PowerModels field for field.
-const GEN_PU_KEYS: [&str; 4] = ["ramp_agc", "ramp_10", "ramp_30", "ramp_q"];
 
 #[must_use]
 pub fn write_powermodels_json(net: &Network) -> Conversion {
@@ -35,7 +31,7 @@ pub fn write_powermodels_json(net: &Network) -> Conversion {
     // powers ÷ baseMVA, angles degrees → radians. Cost rescale needs the base.
     let base = net.base_mva;
     let p = 1.0 / base;
-    let a = std::f64::consts::PI / 180.0;
+    let a = normalize::DEG_TO_RAD;
 
     let mut bus = Map::new();
     for b in &net.buses {
@@ -194,7 +190,10 @@ fn gen_obj(g: &Generator, idx: usize, p: f64, base: f64) -> Value {
         }
     }
     if let Some(cost) = &g.cost {
-        let coeffs = cost_coeffs_pu(cost, base);
+        let coeffs: Vec<Value> = normalize::cost_to_pu(cost, base)
+            .into_iter()
+            .map(jnum)
+            .collect();
         // Emit `ncost` consistent with the coefficients actually written. The reader
         // un-scales by the array length, so a mismatched `ncost` (from a malformed
         // row that claimed more coefficients than it carried) would reconstruct the
@@ -212,37 +211,6 @@ fn gen_obj(g: &Generator, idx: usize, p: f64, base: f64) -> Value {
     }
     m.insert("source_id".into(), source_id("gen", idx));
     Value::Object(m)
-}
-
-/// Gen cost coefficients in PowerModels' per-unit basis, trimmed to the length the
-/// model implies (a polynomial keeps `ncost` coeffs; a piecewise curve keeps
-/// `2·ncost` `(mw, cost)` values). MATPOWER pads every gencost row to the matrix
-/// width with trailing zeros; emitting that padding makes PowerModels read a
-/// higher-degree polynomial and mis-scale it, so drop it here.
-fn cost_coeffs_pu(cost: &GenCost, base: f64) -> Vec<Value> {
-    let want = if cost.model == 1 {
-        cost.ncost * 2
-    } else {
-        cost.ncost
-    };
-    let coeffs = &cost.coeffs[..want.min(cost.coeffs.len())];
-    if cost.model == 2 {
-        // Polynomial: coeff i is the term p^(k-1-i); per unit scales it by base^(k-1-i).
-        let k = coeffs.len();
-        coeffs
-            .iter()
-            .enumerate()
-            .map(|(i, &c)| jnum(c * base.powi(i32::try_from(k - 1 - i).unwrap_or(i32::MAX))))
-            .collect()
-    } else {
-        // Piecewise: (mw, cost) pairs. Per unit divides the MW breakpoints (even
-        // positions) by base; the cost values (odd positions) stay in dollars.
-        coeffs
-            .iter()
-            .enumerate()
-            .map(|(i, &c)| if i % 2 == 0 { jnum(c / base) } else { jnum(c) })
-            .collect()
-    }
 }
 
 fn load_obj(l: &Load, idx: usize, p: f64) -> Value {
@@ -388,11 +356,7 @@ pub(crate) fn parse_powermodels_json_source(
         .and_then(Value::as_bool)
         .unwrap_or(false);
     let pscale = if per_unit { base_mva } else { 1.0 };
-    let ascale = if per_unit {
-        180.0 / std::f64::consts::PI
-    } else {
-        1.0
-    };
+    let ascale = if per_unit { normalize::RAD_TO_DEG } else { 1.0 };
     let name = root
         .get("name")
         .and_then(Value::as_str)
@@ -641,22 +605,11 @@ fn read_cost(v: &Value, base_mva: f64, per_unit: bool) -> GenCost {
         .unwrap_or_default();
     let model = v.get("model").and_then(Value::as_u64).unwrap_or(2) as u8;
     let k = coeffs_raw.len();
-    // Undo PowerModels' per-unit cost scaling for the neutral MW basis. A
-    // polynomial (model 2) scales coeff i (of p^(k-1-i)) by baseMVA^(k-1-i); a
-    // piecewise curve (model 1) divides its MW breakpoints (even positions) by
-    // baseMVA and leaves the dollar costs (odd positions).
-    let coeffs = if per_unit && model == 2 {
-        coeffs_raw
-            .iter()
-            .enumerate()
-            .map(|(i, &c)| c / base_mva.powf((k - 1 - i) as f64))
-            .collect()
-    } else if per_unit && model == 1 {
-        coeffs_raw
-            .iter()
-            .enumerate()
-            .map(|(i, &c)| if i % 2 == 0 { c * base_mva } else { c })
-            .collect()
+    // Undo PowerModels' per-unit cost scaling for the neutral MW basis (the
+    // inverse of the writer's per-unit rescale); a non-per-unit source is read
+    // as-is.
+    let coeffs = if per_unit {
+        normalize::cost_from_pu(&coeffs_raw, model, base_mva)
     } else {
         coeffs_raw
     };
@@ -838,57 +791,6 @@ mod tests {
                 && approx(q4.1, 6.0 / 0.9)
                 && approx(q4.2, -5.0)
                 && approx(q4.3, 3.0)
-        );
-    }
-
-    #[test]
-    fn cost_coeffs_pu_polynomial_scales_and_trims() {
-        // Model 2: the coeff of p^j scales by base^j; MATPOWER's trailing-zero
-        // padding (beyond ncost) is dropped.
-        let cost = GenCost {
-            model: 2,
-            startup: 0.0,
-            shutdown: 0.0,
-            ncost: 2,
-            coeffs: vec![24.035, -403.5, 0.0, 0.0, 0.0, 0.0],
-        };
-        let out: Vec<f64> = cost_coeffs_pu(&cost, 100.0)
-            .iter()
-            .map(|v| v.as_f64().unwrap())
-            .collect();
-        assert_eq!(out.len(), 2, "padding dropped");
-        assert!(approx(out[0], 2403.5)); // 24.035 · 100^1
-        assert!(approx(out[1], -403.5)); // -403.5 · 100^0
-    }
-
-    #[test]
-    fn cost_coeffs_pu_piecewise_scales_mw_only_and_trims() {
-        // Model 1: MW breakpoints (even positions) ÷ base; dollar costs (odd) raw.
-        let cost = GenCost {
-            model: 1,
-            startup: 0.0,
-            shutdown: 0.0,
-            ncost: 4,
-            coeffs: vec![
-                0.0, 0.0, 100.0, 2500.0, 200.0, 5500.0, 250.0, 7250.0, 0.0, 0.0,
-            ],
-        };
-        let out: Vec<f64> = cost_coeffs_pu(&cost, 100.0)
-            .iter()
-            .map(|v| v.as_f64().unwrap())
-            .collect();
-        assert_eq!(out.len(), 8, "trimmed to 2·ncost, padding dropped");
-        assert!(
-            approx(out[0], 0.0)
-                && approx(out[2], 1.0)
-                && approx(out[4], 2.0)
-                && approx(out[6], 2.5)
-        );
-        assert!(
-            approx(out[1], 0.0)
-                && approx(out[3], 2500.0)
-                && approx(out[5], 5500.0)
-                && approx(out[7], 7250.0)
         );
     }
 }

@@ -291,6 +291,15 @@ fn snapshot_views<'a>(snapshots: &'a [GridfmSnapshot<'a>]) -> Result<Vec<Snapsho
                 reason: ScenarioMismatch::BusOrder,
             });
         }
+        // gridfm exports a raw snapshot: powers in MW, angles in degrees, shunts
+        // ÷ base. A normalized network is per unit / radians, so its fields would
+        // be mislabeled (and per_unit_base can't recover the MW it never kept) —
+        // it is not a valid snapshot source.
+        debug_assert!(
+            !snap.net.is_normalized(),
+            "write_gridfm: snapshot {k} is a normalized (per-unit) network; gridfm \
+             expects a raw MW/degree snapshot"
+        );
         let view = IndexedNetwork::new(snap.net);
         let ref_bus = view.reference_bus_index()?;
         views.push(SnapshotView {
@@ -333,6 +342,10 @@ pub fn numbered_snapshots<'a>(nets: &[&'a Network], base: i64) -> Result<Vec<Gri
 /// `scenario` into the id columns. Writes `bus_data.parquet`, `gen_data.parquet`,
 /// `branch_data.parquet`, optionally `y_bus_data.parquet`, and a
 /// `gridfm_meta.json` manifest.
+///
+/// Expects a raw snapshot (powers in MW, angles in degrees); pass the parsed
+/// `Network`, not a [`to_normalized`](powerio::Network::to_normalized) per-unit
+/// product, whose fields would be mislabeled.
 ///
 /// # Errors
 /// Propagates [`gridfm_record_batches`] and any filesystem/Parquet error.
@@ -623,7 +636,12 @@ fn branch_batch(snaps: &[SnapshotView], opts: &GridfmOptions) -> Result<RecordBa
             to_bus.push(j as i64);
 
             // Zero-impedance branch → `None` → zeroed admittance/flow columns (never NaN).
-            let block = branch_admittance(br, flags, row)?;
+            let shift_rad = if flags.zero_shifts {
+                0.0
+            } else {
+                view.angle_radians(br.shift)
+            };
+            let block = branch_admittance(br, flags, shift_rad, row)?;
             let [y_ff, y_ft, y_tf, y_tt] = block.unwrap_or([Complex64::new(0.0, 0.0); 4]);
             yff_r.push(y_ff.re);
             yff_i.push(y_ff.im);
@@ -1017,7 +1035,11 @@ mod tests {
         let yff_r = col_f64(br, "Yff_r");
         let yff_i = col_f64(br, "Yff_i");
         for (row, branch) in net.branches.iter().enumerate() {
-            if let Some(block) = branch_admittance(branch, YbusFlags::default(), row).unwrap() {
+            // Raw fixture, so the shift is in degrees — convert as build_ybus does.
+            let shift_rad = branch.shift.to_radians();
+            if let Some(block) =
+                branch_admittance(branch, YbusFlags::default(), shift_rad, row).unwrap()
+            {
                 assert!((yff_r.value(row) - block[0].re).abs() < 1e-12);
                 assert!((yff_i.value(row) - block[0].im).abs() < 1e-12);
             }

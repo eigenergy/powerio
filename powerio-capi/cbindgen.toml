@@ -4,15 +4,57 @@ pragma_once = false
 cpp_compat = true
 tab_width = 4
 style = "type"
+# Emit `size_t`/`ptrdiff_t` for `usize`/`isize` (not `uintptr_t`), so the count
+# and length parameters read as the C integer types a consumer expects.
+usize_is_size_t = true
+
+# File preamble. cbindgen generates the rest from the Rust source, so the only
+# hand-written prose lives here; per-symbol docs come from the Rust doc comments.
+header = """
+/* powerio C ABI — parse any power system case format, query it, convert
+ * losslessly, and extract the numeric tables for matrix assembly.
+ *
+ * Memory: strings returned by pio_write_matpower / pio_convert are owned by the
+ * library; free them with pio_string_free. Case handles from pio_parse are freed
+ * with pio_case_free. Array extractors fill caller-allocated buffers whose
+ * length is the matching pio_n_* count; pass NULL to skip an output.
+ *
+ * Message buffers: errbuf/warnbuf may be NULL (or length 0) to discard the
+ * message. A message longer than the buffer is truncated to fit and is always
+ * NUL-terminated. PIO_ERRBUF_MIN is a comfortable size for any error string.
+ *
+ * Every entry point catches Rust panics at the boundary and returns the failure
+ * default (NULL, 0, -1, 0.0, or no-op) rather than unwinding across the ABI.
+ *
+ * Optional: build with `--features arrow` to get pio_export_arrow, a zero-copy
+ * raw network export over the Arrow C Data Interface (guarded by PIO_ARROW).
+ *
+ * Checked in and generated; regenerate from the Rust source with
+ *   cbindgen --config cbindgen.toml --crate powerio-capi --output include/powerio.h
+ */"""
+
+# pio_export_arrow takes arrow-rs's FFI_ArrowArray/FFI_ArrowSchema, which are
+# #[repr(C)] and layout-identical to the Arrow C Data Interface structs. Present
+# them under the standard ArrowArray/ArrowSchema names so a consumer can pass the
+# structs from arrow_c_data_interface.h (forward-declared below, gated on
+# PIO_ARROW since the dep isn't parsed).
+after_includes = """
+#if defined(PIO_ARROW)
+struct ArrowArray;
+struct ArrowSchema;
+#endif"""
 
 [export]
 prefix = ""
 include = ["PioCase"]
 
-# Gate the optional Arrow export behind `#ifdef PIO_ARROW` (the `arrow` feature).
-# The Arrow C Data Interface block in include/powerio.h (forward declarations of
-# ArrowArray/ArrowSchema, the PIO_ARROW_TABLE_* selectors, and pio_export_arrow)
-# is hand-maintained alongside the other doc comments in that header.
+[export.rename]
+"FFI_ArrowArray" = "struct ArrowArray"
+"FFI_ArrowSchema" = "struct ArrowSchema"
+
+# Gate the optional Arrow export behind `#ifdef PIO_ARROW` (the `arrow` feature):
+# cbindgen emits the cfg-gated PIO_ARROW_TABLE_* selectors and pio_export_arrow
+# inside `#if defined(PIO_ARROW)` even on a default (no-feature) generation.
 [defines]
 "feature = arrow" = "PIO_ARROW"
 

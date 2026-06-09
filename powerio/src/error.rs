@@ -63,6 +63,9 @@ pub enum Error {
     #[error("expected exactly one reference (slack) bus, found {found}")]
     ReferenceBusCount { found: usize },
 
+    #[error("base MVA must be a positive, finite number, got {base}")]
+    InvalidBaseMva { base: f64 },
+
     #[error("dimension mismatch: `{what}` expected length {expected}, got {got}")]
     ShapeMismatch {
         what: &'static str,
@@ -71,14 +74,14 @@ pub enum Error {
     },
 
     #[error(
-        "network has {components} connected components; DC sensitivities require a single island"
-    )]
-    DisconnectedNetwork { components: usize },
-
-    #[error(
-        "DC sensitivity solve failed: the slack-grounded Laplacian is singular for a connected network"
+        "DC sensitivity solve failed: the reference-grounded Laplacian is singular even though every component is grounded"
     )]
     SingularNetwork,
+
+    #[error(
+        "{components} connected component(s) have no reference (slack) bus to ground; DC sensitivities need at least one reference per island"
+    )]
+    UngroundedComponent { components: usize },
 
     #[error(transparent)]
     Io(#[from] std::io::Error),
@@ -172,9 +175,10 @@ impl Error {
             | Error::UnsupportedCostModel { .. }
             | Error::GenCostCountMismatch { .. }
             | Error::ReferenceBusCount { .. }
+            | Error::InvalidBaseMva { .. }
             | Error::ShapeMismatch { .. }
-            | Error::DisconnectedNetwork { .. }
             | Error::SingularNetwork
+            | Error::UngroundedComponent { .. }
             | Error::EmptyScenarioBatch
             | Error::ScenarioIdOverflow { .. }
             | Error::ScenarioShapeMismatch { .. } => C::Data,
@@ -257,6 +261,11 @@ mod tests {
         // and the scenario batch checks surface mid-build, not at parse time, so
         // they are Data, not Parse — regression guard for that classification.
         assert_eq!(Error::NoGenerators.category(), Data);
+        assert_eq!(Error::InvalidBaseMva { base: 0.0 }.category(), Data);
+        assert_eq!(
+            Error::UngroundedComponent { components: 1 }.category(),
+            Data
+        );
         assert_eq!(
             Error::UnknownBus {
                 bus_id: BusId(7),

@@ -250,11 +250,19 @@ impl PyCase {
     }
 
     /// Dense `[0, n)` index of the single reference bus. Raises if not exactly
-    /// one reference bus is present.
+    /// one reference bus is present; for the multi-reference case use
+    /// :meth:`reference_bus_indices`.
     fn reference_bus_index(&self) -> PyResult<usize> {
         IndexedNetwork::with_core(&self.inner, &self.core)
             .reference_bus_index()
             .map_err(to_pyerr)
+    }
+
+    /// Dense `[0, n)` indices of every reference (slack) bus, ascending. May be
+    /// empty (no reference) or hold several (a slack per island, or a normalized
+    /// case that kept the file's multiple references).
+    fn reference_bus_indices(&self) -> Vec<usize> {
+        IndexedNetwork::with_core(&self.inner, &self.core).reference_bus_indices()
     }
 
     // --- tables (the format-neutral Network, as dict rows) --------------
@@ -375,6 +383,16 @@ impl PyCase {
     /// byte-exact source echo.
     fn write(&self) -> String {
         powerio_matrix::write_matpower(&self.inner)
+    }
+
+    /// A normalized, computation-ready copy of this case: per unit, radians,
+    /// out-of-service filtered, densely reindexed (1-based), bus types
+    /// canonicalized. The raw case is unchanged; the result carries no retained
+    /// source, so writing it serializes the per-unit model rather than echoing.
+    fn to_normalized(&self) -> PyResult<PyCase> {
+        let inner = self.inner.to_normalized().map_err(to_pyerr)?;
+        let core = IndexCore::build(&inner);
+        Ok(PyCase { inner, core })
     }
 
     // --- matrix builders: each returns a COO tuple ----------------------

@@ -67,6 +67,18 @@ impl TargetFormat {
             TargetFormat::Matpower => "m",
         }
     }
+
+    /// Human-readable format name for diagnostics.
+    #[must_use]
+    pub fn label(self) -> &'static str {
+        match self {
+            TargetFormat::PowerModelsJson => "PowerModels JSON",
+            TargetFormat::EgretJson => "EGRET JSON",
+            TargetFormat::Psse => "PSS/E .raw",
+            TargetFormat::PowerWorld => "PowerWorld .aux",
+            TargetFormat::Matpower => "MATPOWER .m",
+        }
+    }
 }
 
 /// Map a format name (with the common aliases) to a [`TargetFormat`], or `None`
@@ -128,7 +140,7 @@ pub fn read_path(path: &std::path::Path, from: Option<&str>) -> Result<Network> 
 /// it moves the buffer straight into the retained source (no copy) and is free
 /// to specialize its parse internally.
 fn read_source(source: Arc<String>, fmt: TargetFormat, name_hint: Option<&str>) -> Result<Network> {
-    match fmt {
+    let net = match fmt {
         TargetFormat::Matpower => matpower::parse_matpower_source(source, name_hint),
         TargetFormat::PowerModelsJson => {
             powermodels::parse_powermodels_json_source(source, name_hint)
@@ -136,7 +148,18 @@ fn read_source(source: Arc<String>, fmt: TargetFormat, name_hint: Option<&str>) 
         TargetFormat::Psse => psse::parse_psse_source(source, name_hint),
         TargetFormat::PowerWorld => powerworld::parse_powerworld_source(source, name_hint),
         TargetFormat::EgretJson => egret::parse_egret_source(source, name_hint),
+    }?;
+    // A case with no buses is content-free for every consumer. Most readers
+    // already reject it on a missing required table, but a JSON carrying only
+    // `baseMVA` would otherwise parse to a hollow network; reject it here so the
+    // one funnel guards every parse path (file and in-memory).
+    if net.buses.is_empty() {
+        return Err(Error::FormatRead {
+            format: fmt.label(),
+            message: "case has no buses".into(),
+        });
     }
+    Ok(net)
 }
 
 /// Both interchange JSON formats use the `.json` extension, so an explicit
@@ -214,7 +237,7 @@ pub fn write_as(net: &Network, format: TargetFormat) -> Conversion {
             };
         }
     }
-    match format {
+    let mut conv = match format {
         TargetFormat::PowerModelsJson => write_powermodels_json(net),
         TargetFormat::EgretJson => write_egret_json(net),
         TargetFormat::Psse => write_psse(net),
@@ -223,6 +246,42 @@ pub fn write_as(net: &Network, format: TargetFormat) -> Conversion {
         // the folded model, which itemizes what it can't carry (HVDC, gen caps,
         // extras, a partial-cost case).
         TargetFormat::Matpower => matpower::write_matpower_conversion(net),
+    };
+    warn_normalized_tap(net, format, &mut conv);
+    conv
+}
+
+/// A normalized network has its tap canonicalized to `1.0` on every line (the
+/// `0 → 1` rule), but [`Branch::is_transformer`](crate::network::Branch::is_transformer)
+/// — the test these writers use to split lines from transformers — keys off
+/// `tap != 0`. So a normalized line is written into the transformer section/type.
+/// The power flow is identical (a unity-ratio, zero-shift transformer equals a
+/// line), but the label is not, so report the fidelity loss rather than relabel
+/// it silently. MATPOWER has no separate transformer representation (just a `TAP`
+/// column), so it is exempt.
+// `tap == 1.0` / `shift == 0.0` are exact by construction: normalization sets a
+// line's tap from `effective_tap()` (the literal `1.0`) and its shift from
+// `0.0 * DEG_TO_RAD` (exactly `0.0`), so an epsilon compare would be wrong here.
+#[allow(clippy::float_cmp)]
+fn warn_normalized_tap(net: &Network, format: TargetFormat, conv: &mut Conversion) {
+    if !net.is_normalized() || matches!(format, TargetFormat::Matpower) {
+        return;
+    }
+    // After normalization a line (raw tap 0) and a unity-ratio transformer (raw
+    // tap 1) both read as tap 1.0 / shift 0.0, so they can't be told apart — count
+    // them together as the branches whose line/transformer label is now ambiguous.
+    let ambiguous = net
+        .branches
+        .iter()
+        .filter(|b| b.tap == 1.0 && b.shift == 0.0)
+        .count();
+    if ambiguous > 0 {
+        conv.warnings.push(format!(
+            "normalized network: {ambiguous} branch(es) have unit tap and no phase \
+             shift and are written as transformers; a normalized line is indistinguishable \
+             from a transformer whose tap is exactly 1, so the line/transformer label is \
+             not preserved (the power flow is identical)"
+        ));
     }
 }
 

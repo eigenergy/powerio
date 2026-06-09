@@ -86,6 +86,9 @@ powerio/                      # parser + Network hub + converters
 ├── src/indexed.rs           # IndexCore, IndexedNetwork (dense-indexed analysis
 │                            #   view), ConnectivityReport; petgraph view:
 │                            #   to_petgraph, is_radial, connectivity_report
+├── src/normalize.rs         # Network::to_normalized (per-unit/radian/filtered/
+│                            #   reindexed derived view); shared per-unit scaling
+│                            #   (cost_to_pu/cost_from_pu, DEG_TO_RAD, GEN_PU_KEYS)
 ├── src/format/
 │   ├── mod.rs               # hub: parse, parse_str, read_path, write_as,
 │   │                        #   TargetFormat, Conversion, target_format_from_name
@@ -164,6 +167,35 @@ benchmarks/                  # parse benchmarks + Julia validation harnesses
 - **Two-tier fidelity contract.** Same-format round-trip is byte-exact.
   Cross-format conversion keeps maximal fidelity and reports anything the target
   can't represent in `Conversion::warnings` — never drop it silently.
+- **Normalized view (`normalize.rs`).** `Network::to_normalized` is the universal
+  canonicalization: per unit (÷`base_mva`), radians, `tap 0 → 1`, out-of-service
+  and isolated elements dropped, survivors reindexed to a dense 1-based id space,
+  bus types inferred ExaPowerIO/PowerDiff-style (gen bus → `Pv`, or `Ref` if the
+  file marked it; gen-less → `Pq`; promote the largest gen only if no `Ref`
+  survives; multiple `Ref` kept, not collapsed). It is a
+  derived product, NOT for write-back: it drops `source` and sets
+  `source_format = Normalized` (a distinct `SourceFormat` variant, so a per-unit
+  product is tellable from a raw in-memory network), so `write_as` serializes the
+  per-unit model instead of falsely echoing the raw bytes. The per-unit scaling has one home — the
+  cost rescale `cost_to_pu`/`cost_from_pu`, `DEG_TO_RAD`/`RAD_TO_DEG`, and
+  `GEN_PU_KEYS` are shared by `to_normalized` and the PowerModels reader/writer;
+  don't re-derive them. It does NOT apply solver-prep opinions (angle-bound
+  padding, `rate_a` synthesis, gen-cost model restriction) — those stay
+  downstream. Exposed as `pio_to_normalized` (C ABI) and `Case.to_normalized`
+  (Python). In-memory parse: `parse_str`/`pio_parse_str`.
+- **A normalized network round-trips through the matrix builders.**
+  `to_normalized` changes exactly two conventions the square builders re-derive:
+  powers (÷`base`) and angles (deg→rad). `IndexedNetwork::per_unit_base()` (`1.0`
+  if normalized, else `base_mva`) and `angle_radians()` (identity if normalized,
+  else `.to_radians()`) are the divisor/converter those builders use, so `Y_bus`,
+  `B'`, `B''`, LACPF, and the DC operators come out identical from a network or
+  its normalized form. Use them, **not** raw `base_mva` / `.to_radians()`, wherever
+  the intent is "÷ base to get per unit" or "angle to radians" (raw `base_mva`
+  stays for metadata and MW recovery). `gridfm` is the exception: it exports a raw
+  MW/degree snapshot and debug-asserts a non-normalized input. Writing a normalized
+  network to a transformer-distinguishing format adds a `Conversion` fidelity
+  warning, since `tap 0 → 1` makes a line and a unity-ratio transformer
+  indistinguishable.
 - **Adding a format.** A reader and/or writer in `powerio/src/format/<name>.rs`
   that produces/consumes `Network`; register in `format/mod.rs`, re-export from
   `powerio/src/lib.rs`, add a CLI/`TargetFormat` arm. `Network` is the unifying
@@ -180,8 +212,9 @@ benchmarks/                  # parse benchmarks + Julia validation harnesses
 - **B' ignores taps and shifts. B'' zeros only shifts. Y_bus keeps both.**
 - **DC-OPF Laplacian.** `L = A diag(b) Aᵀ` is built from the same `A`, `b` factors `build_incidence` returns (so `L` and the reweighted `L₁` share a factorization), and equals `build_bprime` in the XB scheme. Default `b = 1/x` (paper-pure); `DcConvention::Matpower` uses `1/(x·τ)` plus a phase-shift injection.
 - **DC-OPF is bus-indexed.** Generation is nodal (`p_g ∈ ℝⁿ`), so `Q`, `c`, and bounds are length-n (zero at load buses), scattered from generator space through `C_g`; gen-space vectors (`OpfInstance::gen_costs`) ride along as provenance. Cost map: MATPOWER `c2 p² + c1 p` → `q = 2c2`, `c = c1`. Per-unit by default (`Units::PerUnit` scales `q` by `base²`, `c` by `base`).
-- **`gen`/`gencost` are optional.** A power flow case with no `mpc.gen` parses with `gens` empty; the OPF builders return `Error::NoGenerators`. Exactly one `BusType::Ref` is required (`IndexedNetwork::reference_bus_index`).
-- **PTDF/LODF need a solve.** They factor the slack-grounded Laplacian `ground_at(L, r)` (SPD) with a self-contained dense Cholesky (`matrix::sensitivity`) — no external solver dep. PTDF is dense `m×n`; large-scale sparse PTDF is future work.
+- **`gen`/`gencost` are optional.** A power flow case with no `mpc.gen` parses with `gens` empty; the OPF builders return `Error::NoGenerators`.
+- **Reference (slack) buses are a set, grounded one row/column each.** `IndexedNetwork::reference_bus_indices` returns every `BusType::Ref`; the matrix builders ground the whole set (`ground_at_each(L, refs)`), so a network needs one reference *per connected component* (`IndexedNetwork::check_groundable`, else `Error::UngroundedComponent`). One per island handles disconnected networks; several within one island is a distributed-slack solve. `reference_bus_index` is the exactly-one convenience query (errors otherwise) for the single-slack C/Python/gridfm paths. Exposed as `pio_n_reference_buses`/`pio_reference_buses` (C ABI) and `reference_bus_indices` (Python).
+- **PTDF/LODF need a solve.** They factor the reference-grounded Laplacian `ground_at_each(L, refs)` (SPD when every component is grounded) with a self-contained dense Cholesky (`matrix::sensitivity`) — no external solver dep. Every reference column of the PTDF is zero. PTDF is dense `m×n`; large-scale sparse PTDF is future work.
 - **MTX output is lower triangle, 1 based, spec compliant.** `sprs::io::write_matrix_market_sym` writes the *upper* triangle, so `io::mtx::write_mtx` ships its own writer.
 - **`CooBuilder`.** HashMap COO with O(nnz) inserts; replaces the old O(nnz²) Vec search.
 - **TUI lives in the CLI crate.** `powerio-cli/src/tui/`, part of the `powerio` binary. Testable via `ratatui::backend::TestBackend`.

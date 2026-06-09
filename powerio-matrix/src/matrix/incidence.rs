@@ -83,7 +83,9 @@ pub fn build_incidence(case: &IndexedNetwork, conv: DcConvention) -> Result<Inci
         }
         let shift_rad = match conv {
             DcConvention::PaperPure => 0.0,
-            DcConvention::Matpower => br.shift.to_radians(),
+            // angle_radians, not to_radians: a normalized network's shift is
+            // already in radians, so converting again would double-scale it.
+            DcConvention::Matpower => case.angle_radians(br.shift),
         };
         cols.push(Column {
             i,

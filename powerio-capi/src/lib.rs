@@ -56,12 +56,24 @@ unsafe fn cstr<'a>(p: *const c_char) -> Option<&'a str> {
     }
 }
 
-fn into_cstring(s: String) -> *mut c_char {
-    match CString::new(s) {
-        Ok(c) => c.into_raw(),
-        // A NUL in the text (shouldn't happen for `.m`/JSON) can't go in a C
-        // string; hand back an empty string rather than fail.
-        Err(_) => CString::default().into_raw(),
+/// Move `s` into an owned C string, or `None` if it holds an interior NUL byte
+/// (which can't cross as a C string). Callers surface the `None` as a real error
+/// rather than silently handing back an empty string.
+fn into_cstring(s: String) -> Option<*mut c_char> {
+    CString::new(s).ok().map(CString::into_raw)
+}
+
+/// Finish a `*mut c_char` entry point: hand back the owned C string, or on an
+/// interior NUL write the error into `errbuf` (NULL/0 to skip — `pio_write_matpower`
+/// has no error buffer) and return NULL. The shared tail of the string-returning
+/// functions.
+fn finish_cstring(s: String, errbuf: *mut c_char, errlen: usize) -> *mut c_char {
+    match into_cstring(s) {
+        Some(p) => p,
+        None => {
+            unsafe { copy_to_buf(errbuf, errlen, "output contained an interior NUL byte") };
+            std::ptr::null_mut()
+        }
     }
 }
 
@@ -71,12 +83,49 @@ unsafe fn guard<R>(fallback: R, f: impl FnOnce() -> R) -> R {
     catch_unwind(AssertUnwindSafe(f)).unwrap_or(fallback)
 }
 
+/// Box a `Network` into an owned case handle, building its [`IndexCore`] once so
+/// every indexed query reuses it. The one constructor for `*mut PioCase`.
+fn make_case(net: Network) -> *mut PioCase {
+    let core = IndexCore::build(&net);
+    Box::into_raw(Box::new(PioCase { net, core }))
+}
+
+/// Finish a `*mut PioCase` entry point: run `f` (producing a `Network` or an
+/// error message) under the panic guard, hand back an owned handle, or write the
+/// error — `panic_msg` if `f` panicked — into `errbuf` and return NULL. The
+/// shared tail of every handle-returning function (`pio_parse`, `pio_parse_str`,
+/// `pio_to_normalized`, `pio_from_json`).
+unsafe fn finish_case(
+    errbuf: *mut c_char,
+    errlen: usize,
+    panic_msg: &str,
+    f: impl FnOnce() -> Result<Network, String>,
+) -> *mut PioCase {
+    unsafe {
+        match catch_unwind(AssertUnwindSafe(f)) {
+            Ok(Ok(net)) => make_case(net),
+            Ok(Err(msg)) => {
+                copy_to_buf(errbuf, errlen, &msg);
+                std::ptr::null_mut()
+            }
+            Err(_) => {
+                copy_to_buf(errbuf, errlen, panic_msg);
+                std::ptr::null_mut()
+            }
+        }
+    }
+}
+
 /// ABI version of this C interface. Bump on any breaking change to an existing
 /// `pio_*` signature or to the JSON transport schema (new additive symbols don't
 /// require a bump). A consumer compares [`pio_abi_version`] against the value it
 /// was built against (the `PIO_ABI_VERSION` macro in `powerio.h`) and refuses a
 /// mismatched library instead of calling in blind.
 pub const PIO_ABI_VERSION: u32 = 1;
+
+/// A comfortable error-buffer size: pass a `char[PIO_ERRBUF_MIN]` to any
+/// `errbuf`/`warnbuf` parameter and a message always fits without truncation.
+pub const PIO_ERRBUF_MIN: usize = 256;
 
 /// The ABI version the library was built with (see [`PIO_ABI_VERSION`]). Lets a
 /// consumer detect a stale or incompatible library at load time. Infallible.
@@ -108,27 +157,32 @@ pub unsafe extern "C" fn pio_parse(
     errlen: usize,
 ) -> *mut PioCase {
     unsafe {
-        let r = catch_unwind(AssertUnwindSafe(|| {
+        finish_case(errbuf, errlen, "panic while parsing", || {
             let path = cstr(path).ok_or_else(|| "path is NULL or not UTF-8".to_string())?;
             let from = if from.is_null() { None } else { cstr(from) };
-            powerio::read_path(std::path::Path::new(path), from)
-                .map_err(|e| e.to_string())
-                .map(|net| {
-                    let core = IndexCore::build(&net);
-                    Box::into_raw(Box::new(PioCase { net, core }))
-                })
-        }));
-        match r {
-            Ok(Ok(ptr)) => ptr,
-            Ok(Err(msg)) => {
-                copy_to_buf(errbuf, errlen, &msg);
-                std::ptr::null_mut()
-            }
-            Err(_) => {
-                copy_to_buf(errbuf, errlen, "panic while parsing");
-                std::ptr::null_mut()
-            }
-        }
+            powerio::read_path(std::path::Path::new(path), from).map_err(|e| e.to_string())
+        })
+    }
+}
+
+/// Parse in-memory case `text` of the named `format` into a case handle. Unlike
+/// [`pio_parse`] there is no path to infer from, so `format` is required: one of
+/// `matpower`/`m`, `powermodels`/`pm`, `egret`, `psse`/`raw`, `powerworld`/`aux`
+/// (see `powerio::target_format_from_name`). Returns `NULL` on error and writes
+/// the message into `errbuf`. Free the handle with [`pio_case_free`].
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn pio_parse_str(
+    text: *const c_char,
+    format: *const c_char,
+    errbuf: *mut c_char,
+    errlen: usize,
+) -> *mut PioCase {
+    unsafe {
+        finish_case(errbuf, errlen, "panic while parsing", || {
+            let text = cstr(text).ok_or_else(|| "text is NULL or not UTF-8".to_string())?;
+            let format = cstr(format).ok_or_else(|| "format is NULL or not UTF-8".to_string())?;
+            powerio::parse_str(text, format).map_err(|e| e.to_string())
+        })
     }
 }
 
@@ -154,6 +208,27 @@ unsafe fn view<'a>(case: *const PioCase) -> Option<IndexedNetwork<'a>> {
     }
 }
 
+/// Normalize `case` into a NEW per-unit case handle: per unit, radians,
+/// out-of-service filtered, densely reindexed, bus types canonicalized (see
+/// `Network::to_normalized`). The result is independent of `case` — free both
+/// with [`pio_case_free`] — and every extractor and [`pio_to_json`] works on it
+/// unchanged (the handle is per-unit, not MW). Returns `NULL` on error (no
+/// reference bus can be chosen, or a non-positive base MVA) and writes the
+/// message into `errbuf`.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn pio_to_normalized(
+    case: *const PioCase,
+    errbuf: *mut c_char,
+    errlen: usize,
+) -> *mut PioCase {
+    unsafe {
+        finish_case(errbuf, errlen, "panic while normalizing", || {
+            let c = case_ref(case).ok_or_else(|| "case is NULL".to_string())?;
+            c.net.to_normalized().map_err(|e| e.to_string())
+        })
+    }
+}
+
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_n_buses(case: *const PioCase) -> usize {
     unsafe { guard(0, || case_ref(case).map_or(0, |c| c.net.buses.len())) }
@@ -175,7 +250,10 @@ pub unsafe extern "C" fn pio_base_mva(case: *const PioCase) -> f64 {
 }
 
 /// Dense `[0, n)` index of the single reference bus, or `-1` if not exactly one
-/// (also `-1` if the index is too large for `isize`).
+/// (also `-1` if the index is too large for `isize`). A network may carry
+/// several references (a slack per island, or a normalized case that kept the
+/// file's multiple `REF` buses); use [`pio_n_reference_buses`] to tell zero from
+/// many, and [`pio_reference_buses`] to read them all.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_reference_bus(case: *const PioCase) -> isize {
     unsafe {
@@ -184,6 +262,35 @@ pub unsafe extern "C" fn pio_reference_bus(case: *const PioCase) -> isize {
                 .reference_bus_index()
                 .map_or(-1, |i| isize::try_from(i).unwrap_or(-1)),
             None => -1,
+        })
+    }
+}
+
+/// Number of reference (slack) buses. `0` means none; `> 1` means a slack per
+/// island or a distributed slack. A normalized case always reports `>= 1`.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn pio_n_reference_buses(case: *const PioCase) -> usize {
+    unsafe {
+        guard(0, || {
+            view(case).map_or(0, |v| v.reference_bus_indices().len())
+        })
+    }
+}
+
+/// Fill `out` (length [`pio_n_reference_buses`]) with the dense `[0, n)` indices
+/// of the reference buses, ascending.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn pio_reference_buses(case: *const PioCase, out: *mut i64) {
+    unsafe {
+        guard((), || {
+            if let Some(v) = view(case) {
+                fill(
+                    out,
+                    v.reference_bus_indices()
+                        .into_iter()
+                        .map(|i| i64::try_from(i).unwrap_or(-1)),
+                );
+            }
         })
     }
 }
@@ -205,7 +312,9 @@ pub unsafe extern "C" fn pio_is_radial(case: *const PioCase) -> i32 {
 pub unsafe extern "C" fn pio_write_matpower(case: *const PioCase) -> *mut c_char {
     unsafe {
         guard(std::ptr::null_mut(), || match case_ref(case) {
-            Some(c) => into_cstring(powerio::write_matpower(&c.net)),
+            // No errbuf in this signature: a NUL in the output (or a NULL case)
+            // is reported by the NULL return, the only failure channel here.
+            Some(c) => finish_cstring(powerio::write_matpower(&c.net), std::ptr::null_mut(), 0),
             None => std::ptr::null_mut(),
         })
     }
@@ -240,7 +349,7 @@ pub unsafe extern "C" fn pio_convert(
         match r {
             Ok(Ok((text, warnings))) => {
                 copy_to_buf(warnbuf, warnlen, &warnings.join("\n"));
-                into_cstring(text)
+                finish_cstring(text, errbuf, errlen)
             }
             Ok(Err(msg)) => {
                 copy_to_buf(errbuf, errlen, &msg);
@@ -283,7 +392,7 @@ pub unsafe extern "C" fn pio_to_json(
             c.net.to_json().map_err(|e| e.to_string())
         }));
         match r {
-            Ok(Ok(json)) => into_cstring(json),
+            Ok(Ok(json)) => finish_cstring(json, errbuf, errlen),
             Ok(Err(msg)) => {
                 copy_to_buf(errbuf, errlen, &msg);
                 std::ptr::null_mut()
@@ -307,26 +416,10 @@ pub unsafe extern "C" fn pio_from_json(
     errlen: usize,
 ) -> *mut PioCase {
     unsafe {
-        let r = catch_unwind(AssertUnwindSafe(|| {
+        finish_case(errbuf, errlen, "panic while parsing JSON", || {
             let json = cstr(json).ok_or_else(|| "json is NULL or not UTF-8".to_string())?;
-            Network::from_json(json)
-                .map_err(|e| e.to_string())
-                .map(|net| {
-                    let core = IndexCore::build(&net);
-                    Box::into_raw(Box::new(PioCase { net, core }))
-                })
-        }));
-        match r {
-            Ok(Ok(ptr)) => ptr,
-            Ok(Err(msg)) => {
-                copy_to_buf(errbuf, errlen, &msg);
-                std::ptr::null_mut()
-            }
-            Err(_) => {
-                copy_to_buf(errbuf, errlen, "panic while parsing JSON");
-                std::ptr::null_mut()
-            }
-        }
+            Network::from_json(json).map_err(|e| e.to_string())
+        })
     }
 }
 
@@ -709,11 +802,22 @@ mod tests {
             assert_eq!(pio_n_gens(nil), 0);
             assert_eq!(pio_base_mva(nil), 0.0);
             assert_eq!(pio_reference_bus(nil), -1);
+            assert_eq!(pio_n_reference_buses(nil), 0);
             assert_eq!(pio_is_radial(nil), 0);
             assert_eq!(pio_n_components(nil), 0);
 
+            // The two FFI constructors reject a NULL input rather than crash.
+            let mut err = [0 as c_char; 128];
+            assert!(pio_to_normalized(nil, err.as_mut_ptr(), err.len()).is_null());
+            let fmt = CString::new("matpower").unwrap();
+            assert!(
+                pio_parse_str(std::ptr::null(), fmt.as_ptr(), err.as_mut_ptr(), err.len())
+                    .is_null()
+            );
+
             let c = case9();
             pio_bus_ids(c, std::ptr::null_mut());
+            pio_reference_buses(c, std::ptr::null_mut());
             pio_nodal_demand(c, std::ptr::null_mut(), std::ptr::null_mut());
             pio_gens(
                 c,
@@ -724,6 +828,51 @@ mod tests {
                 std::ptr::null_mut(),
             );
             pio_case_free(c);
+        }
+    }
+
+    #[test]
+    fn normalized_multi_ref_is_legible() {
+        // A two-slack case (both gen-backed file REF buses) normalizes to a
+        // handle that keeps both references. `pio_reference_bus` can't name a
+        // single slack (returns -1), but the reference-set accessors do, so a C
+        // consumer can tell "two slacks, you pick" from "no slack, broken".
+        let src = "\
+function mpc = tworef
+mpc.version = '2';
+mpc.baseMVA = 100;
+mpc.bus = [
+\t1\t3\t0\t0\t0\t0\t1\t1\t0\t230\t1\t1.1\t0.9;
+\t2\t3\t0\t0\t0\t0\t1\t1\t0\t230\t1\t1.1\t0.9;
+\t3\t1\t50\t10\t0\t0\t1\t1\t0\t230\t1\t1.1\t0.9;
+];
+mpc.gen = [
+\t1\t0\t0\t100\t-100\t1\t100\t1\t100\t0\t0\t0\t0\t0\t0\t0\t0\t0\t0\t0\t0;
+\t2\t0\t0\t100\t-100\t1\t100\t1\t300\t0\t0\t0\t0\t0\t0\t0\t0\t0\t0\t0\t0;
+];
+mpc.branch = [
+\t1\t2\t0.01\t0.1\t0\t0\t0\t0\t0\t0\t1\t-360\t360;
+\t2\t3\t0.01\t0.1\t0\t0\t0\t0\t0\t0\t1\t-360\t360;
+];
+";
+        let text = CString::new(src).unwrap();
+        let fmt = CString::new("matpower").unwrap();
+        let mut err = [0 as c_char; 256];
+        unsafe {
+            let cs = pio_parse_str(text.as_ptr(), fmt.as_ptr(), err.as_mut_ptr(), err.len());
+            assert!(!cs.is_null(), "parse_str returned null");
+            let cn = pio_to_normalized(cs, err.as_mut_ptr(), err.len());
+            assert!(!cn.is_null(), "to_normalized returned null");
+
+            assert_eq!(pio_n_reference_buses(cn), 2);
+            // Multiple references: the single-slack query reports -1, by design.
+            assert_eq!(pio_reference_bus(cn), -1);
+            let mut refs = vec![0i64; pio_n_reference_buses(cn)];
+            pio_reference_buses(cn, refs.as_mut_ptr());
+            assert_eq!(refs, vec![0, 1]);
+
+            pio_case_free(cn);
+            pio_case_free(cs);
         }
     }
 

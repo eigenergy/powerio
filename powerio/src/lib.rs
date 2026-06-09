@@ -38,6 +38,7 @@ pub mod error;
 pub mod format;
 pub mod indexed;
 pub mod network;
+mod normalize;
 
 pub use error::{ElementCounts, Error, ErrorCategory, Result, ScenarioMismatch};
 pub use format::{

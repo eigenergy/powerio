@@ -3,9 +3,10 @@
 
 use powerio_matrix::IndexedNetwork;
 use powerio_matrix::{
-    Branch, Bus, BusId, BusType, DcConvention, Error, Extras, GenCost, Generator, Network, Scheme,
-    Units, build_adjacency, build_bprime, build_flow_map, build_incidence, build_lodf,
-    build_opf_instance, build_ptdf, build_weighted_laplacian, ground_at, parse_matpower_file,
+    Branch, BuildOptions, Bus, BusId, BusType, DcConvention, Error, Extras, GenCost, Generator,
+    Network, Scheme, Units, build_adjacency, build_bprime, build_flow_map, build_incidence,
+    build_lodf, build_opf_instance, build_ptdf, build_weighted_laplacian, build_ybus, ground_at,
+    parse_matpower_file,
 };
 use sprs::CsMat;
 
@@ -576,9 +577,15 @@ fn bundle_vectors_round_trip() {
         serde_json::from_str(&std::fs::read_to_string(out.dir.join("dcopf_meta.json")).unwrap())
             .unwrap();
     assert_eq!(meta["n_gen"].as_u64().unwrap() as usize, opf.n_gen());
+    let ref_buses: Vec<usize> = meta["reference_buses"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|v| v.as_u64().unwrap() as usize)
+        .collect();
     assert_eq!(
-        meta["reference_bus"].as_u64().unwrap() as usize,
-        IndexedNetwork::new(&case).reference_bus_index().unwrap()
+        ref_buses,
+        IndexedNetwork::new(&case).reference_bus_indices()
     );
     assert_eq!(meta["units"], "PerUnit");
     assert_eq!(meta["convention"], "PaperPure");
@@ -616,10 +623,11 @@ fn radial_lodf_is_negative_identity() {
 }
 
 #[test]
-fn disconnected_network_errors() {
-    // Two islands (1-2 and 3-4) with a single reference bus.
+fn ungrounded_island_errors() {
+    // Two islands (1-2 and 3-4), but only island 1-2 carries a reference: the
+    // 3-4 island has no slack to ground, so its all-ones null vector survives.
     let case = net(
-        "islands",
+        "ungrounded",
         vec![
             bus(1, BusType::Ref),
             bus(2, BusType::Pq),
@@ -632,13 +640,188 @@ fn disconnected_network_errors() {
     assert_eq!(view.n_connected_components(), 2);
     let p = build_ptdf(&view, DcConvention::PaperPure).unwrap_err();
     assert!(
-        matches!(p, Error::DisconnectedNetwork { components: 2 }),
+        matches!(p, Error::UngroundedComponent { components: 1 }),
         "ptdf: {p:?}"
     );
     let l = build_lodf(&view, DcConvention::PaperPure).unwrap_err();
     assert!(
-        matches!(l, Error::DisconnectedNetwork { components: 2 }),
+        matches!(l, Error::UngroundedComponent { components: 1 }),
         "lodf: {l:?}"
+    );
+}
+
+#[test]
+fn two_grounded_islands_solve_block_diagonal() {
+    // Two islands (1-2 and 3-4), each with its own reference bus. Grounding one
+    // slack per island makes the Laplacian invertible, and the PTDF is block
+    // diagonal: an injection in one island moves no flow in the other.
+    let case = net(
+        "grounded-islands",
+        vec![
+            bus(1, BusType::Ref),
+            bus(2, BusType::Pq),
+            bus(3, BusType::Ref),
+            bus(4, BusType::Pq),
+        ],
+        vec![branch(1, 2, 0.1), branch(3, 4, 0.1)],
+    );
+    let view = IndexedNetwork::new(&case);
+    assert_eq!(view.reference_bus_indices(), vec![0, 2]);
+    let ptdf = dense(&build_ptdf(&view, DcConvention::PaperPure).unwrap());
+    // Branch 0 is in island {0,1}; its only nonzero sensitivity is to that
+    // island's non-slack bus (col 1). Branch 1 is in island {2,3} → col 3.
+    // Both reference columns (0 and 2) are zero. The sign is −1: a unit
+    // injection at the branch's "to"-side bus returns against its 1→2
+    // orientation toward the slack (matches the analytic-triangle convention).
+    for (l, row) in ptdf.iter().enumerate() {
+        assert!(row[0].abs() < 1e-12, "ref col 0 nonzero on branch {l}");
+        assert!(row[2].abs() < 1e-12, "ref col 2 nonzero on branch {l}");
+    }
+    assert!(
+        (ptdf[0][1] + 1.0).abs() < 1e-9,
+        "branch0 vs bus1: {}",
+        ptdf[0][1]
+    );
+    assert!(ptdf[0][3].abs() < 1e-12, "branch0 leaked into island 2");
+    assert!(
+        (ptdf[1][3] + 1.0).abs() < 1e-9,
+        "branch1 vs bus3: {}",
+        ptdf[1][3]
+    );
+    assert!(ptdf[1][1].abs() < 1e-12, "branch1 leaked into island 1");
+}
+
+#[test]
+fn distributed_slack_two_refs_one_island() {
+    // One connected island, two reference buses: grounding both is a distributed
+    // slack. Both reference columns are zero, and a unit injection at the middle
+    // bus splits its return between the two slacks by electrical distance —
+    // symmetric here (equal reactances), so each branch carries half.
+    let case = net(
+        "distributed",
+        vec![
+            bus(1, BusType::Ref),
+            bus(2, BusType::Pq),
+            bus(3, BusType::Ref),
+        ],
+        vec![branch(1, 2, 0.1), branch(2, 3, 0.1)],
+    );
+    let view = IndexedNetwork::new(&case);
+    assert_eq!(view.reference_bus_indices(), vec![0, 2]);
+    let ptdf = dense(&build_ptdf(&view, DcConvention::PaperPure).unwrap());
+    // Both slack columns (0 and 2) are zero; the middle bus (col 1) splits.
+    for (l, row) in ptdf.iter().enumerate() {
+        assert!(row[0].abs() < 1e-12, "ref col 0 nonzero on branch {l}");
+        assert!(row[2].abs() < 1e-12, "ref col 2 nonzero on branch {l}");
+    }
+    // An injection at bus 2 returns half to each slack: branch 0 (1→2) carries
+    // −1/2 (back toward slack 1, against its orientation); branch 1 (2→3)
+    // carries +1/2 (out toward slack 3, with its orientation).
+    assert!(
+        (ptdf[0][1] + 0.5).abs() < 1e-9,
+        "branch0 split: {}",
+        ptdf[0][1]
+    );
+    assert!(
+        (ptdf[1][1] - 0.5).abs() < 1e-9,
+        "branch1 split: {}",
+        ptdf[1][1]
+    );
+}
+
+#[test]
+fn lodf_two_refs_distributed_slack_triangle() {
+    // The unit triangle with buses 1 and 3 as references (distributed slack).
+    // LODF differs from the single-slack triangle because each slack balances
+    // independently: tripping branch 1-3 (between the two slacks) redistributes
+    // nothing, while tripping 1-2 or 2-3 reroutes bus 2's flow fully onto the
+    // other slack-connected branch. Hand-derived against the reduced 1x1 system
+    // (only bus 2 survives grounding, diag = 2, so PTDF col for bus 2 is
+    // [-1/2, 0, +1/2]). This pins the multi-grounded ptdf_dense -> build_lodf path.
+    let case = net(
+        "triangle-2ref",
+        vec![
+            bus(1, BusType::Ref),
+            bus(2, BusType::Pq),
+            bus(3, BusType::Ref),
+        ],
+        vec![branch(1, 2, 1.0), branch(1, 3, 1.0), branch(2, 3, 1.0)],
+    );
+    let view = IndexedNetwork::new(&case);
+    assert_eq!(view.reference_bus_indices(), vec![0, 2]);
+    let lodf = dense(&build_lodf(&view, DcConvention::PaperPure).unwrap());
+    let expected = [[-1.0, 0.0, -1.0], [0.0, -1.0, 0.0], [-1.0, 0.0, -1.0]];
+    for (l, row) in expected.iter().enumerate() {
+        for (k, &want) in row.iter().enumerate() {
+            assert!(
+                (lodf[l][k] - want).abs() < 1e-9,
+                "LODF[{l}][{k}]={} != {want}",
+                lodf[l][k]
+            );
+        }
+    }
+}
+
+#[test]
+fn ybus_shift_invariant_to_normalization() {
+    // A 30-degree phase shifter: shift is in degrees on the raw network and in
+    // radians on its normalized form. Y_bus must be identical — branch_admittance
+    // takes the shift via angle_radians, converting degrees->rad for the raw case
+    // and leaving the already-radian normalized case alone (no double conversion).
+    let raw = net_with_gens(
+        "shifter",
+        vec![bus(1, BusType::Ref), bus(2, BusType::Pq)],
+        vec![branch_xts(1, 2, 0.1, 1.0, 30.0)],
+        vec![poly_gen(1, 100.0, 0.0, 1.0)],
+    );
+    let norm = raw.to_normalized().unwrap();
+    let opts = BuildOptions::default();
+    let yr = build_ybus(&IndexedNetwork::new(&raw), &opts).unwrap();
+    let yn = build_ybus(&IndexedNetwork::new(&norm), &opts).unwrap();
+    let (gr, gn) = (yr.g.to_dense(), yn.g.to_dense());
+    let (br, bn) = (yr.b.to_dense(), yn.b.to_dense());
+    for i in 0..2 {
+        for j in 0..2 {
+            assert!(
+                (gr[[i, j]] - gn[[i, j]]).abs() < 1e-12,
+                "G[{i},{j}] differs"
+            );
+            assert!(
+                (br[[i, j]] - bn[[i, j]]).abs() < 1e-12,
+                "B[{i},{j}] differs"
+            );
+        }
+    }
+    // The shift makes Y_bus non-symmetric, so a dropped or doubled conversion
+    // would change these off-diagonals and the test would catch it.
+    assert!(
+        (gr[[0, 1]] - gr[[1, 0]]).abs() > 1e-6,
+        "a real phase shift should break Y_bus symmetry"
+    );
+}
+
+#[test]
+fn incidence_matpower_pshift_invariant_to_normalization() {
+    // The MATPOWER DC convention injects a phase-shift term `p_shift` that scales
+    // with the shift angle. Built from the raw (degrees) or normalized (radians)
+    // network it must match, since incidence reads the shift via angle_radians.
+    let raw = net_with_gens(
+        "shifter",
+        vec![bus(1, BusType::Ref), bus(2, BusType::Pq)],
+        vec![branch_xts(1, 2, 0.1, 1.0, 30.0)],
+        vec![poly_gen(1, 100.0, 0.0, 1.0)],
+    );
+    let norm = raw.to_normalized().unwrap();
+    let ir = build_incidence(&IndexedNetwork::new(&raw), DcConvention::Matpower).unwrap();
+    let in_ = build_incidence(&IndexedNetwork::new(&norm), DcConvention::Matpower).unwrap();
+    assert_eq!(ir.p_shift.len(), in_.p_shift.len());
+    for (a, b) in ir.p_shift.iter().zip(&in_.p_shift) {
+        assert!((a - b).abs() < 1e-12, "p_shift differs: {a} vs {b}");
+    }
+    // A nonzero shift produces a nonzero injection, so the test isn't vacuous.
+    assert!(
+        ir.p_shift.iter().any(|&v| v.abs() > 1e-6),
+        "30-degree shift should produce a nonzero p_shift"
     );
 }
 

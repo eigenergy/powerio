@@ -2,10 +2,13 @@
 //!
 //! PTDF maps nodal injections to branch flows (`f = PTDF · p`); LODF maps a
 //! branch outage to the flow it redistributes onto the others. Both come from
-//! the slack-grounded DC Laplacian `ABA = ground_at(L, r)`, factored once with
-//! a dense Cholesky (the matrix is SPD for a connected network). PTDF is
-//! inherently dense `m × n`; for very large networks an iterative/sparse path
-//! is future work.
+//! the reference-grounded DC Laplacian `ABA = ground_with(L, refs)` — one
+//! row/column removed per reference bus — factored once with a dense Cholesky.
+//! It is SPD as long as every connected component carries a reference (the
+//! [`check_groundable`](crate::indexed::IndexedNetwork::check_groundable)
+//! precondition), so multi-island and distributed-slack cases are supported, not
+//! just a single connected slack. PTDF is inherently dense `m × n`; for very
+//! large networks an iterative/sparse path is future work.
 
 // Dense linear algebra: indexed triangular-solve loops and the `.iter()`
 // sparse traversal read clearer than the iterator rewrites clippy suggests.
@@ -15,42 +18,34 @@ use sprs::CsMat;
 
 use crate::indexed::IndexedNetwork;
 use crate::matrix::incidence::{DcConvention, IncidenceParts, build_flow_map, build_incidence};
-use crate::matrix::laplacian::{build_weighted_laplacian, ground_at};
+use crate::matrix::laplacian::{Grounding, build_weighted_laplacian, ground_with};
 use crate::matrix::triplet::CooBuilder;
 use crate::{Error, Result};
 
 /// Entries below this magnitude are dropped from the emitted sparse matrices.
 const PRUNE: f64 = 1e-12;
 
-/// PTDF (`m × n`): branch flows from nodal injections, `f = PTDF · p`. The
-/// reference-bus column is zero.
+/// PTDF (`m × n`): branch flows from nodal injections, `f = PTDF · p`. Every
+/// reference-bus column is zero. The Laplacian is grounded at the whole
+/// reference set (`reference_bus_indices`), one row/column per slack: one per
+/// island handles disconnected networks; several within one island is the
+/// distributed-slack solve.
 pub fn build_ptdf(case: &IndexedNetwork, conv: DcConvention) -> Result<CsMat<f64>> {
-    check_connected(case)?;
+    case.check_groundable()?;
+    let refs = case.reference_bus_indices();
     let inc = build_incidence(case, conv)?;
-    let r = case.reference_bus_index()?;
-    let (dense, m, n) = ptdf_dense(&inc, r)?;
+    let (dense, m, n) = ptdf_dense(&inc, &refs)?;
     Ok(dense_to_csr(&dense, m, n))
-}
-
-/// Reject a disconnected network up front so the singular grounded Laplacian
-/// reports the real cause ([`Error::DisconnectedNetwork`]) instead of the
-/// generic [`Error::SingularNetwork`] the Cholesky would otherwise raise.
-fn check_connected(case: &IndexedNetwork) -> Result<()> {
-    let components = case.n_connected_components();
-    if components > 1 {
-        return Err(Error::DisconnectedNetwork { components });
-    }
-    Ok(())
 }
 
 /// LODF (`m × m`): pre-outage flow on branch `k` redistributes onto branch `l`
 /// with factor `LODF[l, k]`. Diagonal is `−1`. A branch whose outage islands
 /// the network (denominator `≈ 0`) gets a zero column.
 pub fn build_lodf(case: &IndexedNetwork, conv: DcConvention) -> Result<CsMat<f64>> {
-    check_connected(case)?;
+    case.check_groundable()?;
+    let refs = case.reference_bus_indices();
     let inc = build_incidence(case, conv)?;
-    let r = case.reference_bus_index()?;
-    let (ptdf, m, n) = ptdf_dense(&inc, r)?;
+    let (ptdf, m, n) = ptdf_dense(&inc, &refs)?;
     Ok(lodf_from_dense(&ptdf, &inc.a, m, n))
 }
 
@@ -63,10 +58,10 @@ pub fn build_ptdf_lodf(
     case: &IndexedNetwork,
     conv: DcConvention,
 ) -> Result<(CsMat<f64>, CsMat<f64>)> {
-    check_connected(case)?;
+    case.check_groundable()?;
+    let refs = case.reference_bus_indices();
     let inc = build_incidence(case, conv)?;
-    let r = case.reference_bus_index()?;
-    let (dense, m, n) = ptdf_dense(&inc, r)?;
+    let (dense, m, n) = ptdf_dense(&inc, &refs)?;
     let ptdf = dense_to_csr(&dense, m, n);
     let lodf = lodf_from_dense(&dense, &inc.a, m, n);
     Ok((ptdf, lodf))
@@ -102,34 +97,29 @@ fn lodf_from_dense(ptdf: &[f64], a: &CsMat<f64>, m: usize, n: usize) -> CsMat<f6
     lodf.finish_csr()
 }
 
-/// Dense PTDF (`m × n`, row-major) plus its shape.
-fn ptdf_dense(inc: &IncidenceParts, r: usize) -> Result<(Vec<f64>, usize, usize)> {
+/// Dense PTDF (`m × n`, row-major) plus its shape. `refs` is the reference set;
+/// the Laplacian is grounded at every entry (one row/column each).
+fn ptdf_dense(inc: &IncidenceParts, refs: &[usize]) -> Result<(Vec<f64>, usize, usize)> {
     let n = inc.n();
     let m = inc.m();
-    let nr = n - 1;
+    let g = Grounding::new(refs);
+    let nr = n - g.len();
 
-    // Reduced inverse of the grounded Laplacian: Rinv = (ABA_r)^{-1}.
-    let lr = ground_at(&build_weighted_laplacian(&inc.a, &inc.b), r);
+    // Reduced inverse of the grounded Laplacian: Rinv = (ABA_refs)^{-1}.
+    let lr = ground_with(&build_weighted_laplacian(&inc.a, &inc.b), &g);
     let chol = DenseCholesky::factor(&densify(&lr, nr), nr).ok_or(Error::SingularNetwork)?;
     let rinv = chol.inverse(); // nr × nr, row-major
 
-    // Minv (n × n) is Rinv padded with a zero row/col at the slack bus r.
-    let reduced = |i: usize| -> Option<usize> {
-        match i {
-            _ if i == r => None,
-            _ if i > r => Some(i - 1),
-            _ => Some(i),
-        }
-    };
-
-    // PTDF = (B Aᵀ) · Minv, computed sparse-times-dense: each nonzero of the
-    // flow map scatters a scaled Minv row into a PTDF row.
+    // Minv (n × n) is Rinv padded with a zero row/col at every grounded bus, so
+    // each reference's PTDF column comes out zero. PTDF = (B Aᵀ) · Minv, computed
+    // sparse-times-dense: each nonzero of the flow map scatters a scaled Minv row
+    // into a PTDF row.
     let flow = build_flow_map(&inc.a, &inc.b); // m × n
     let mut ptdf = vec![0.0; m * n];
     for (&w, (l, c)) in flow.iter() {
-        let Some(rc) = reduced(c) else { continue }; // Minv row at slack is 0
+        let Some(rc) = g.reduced(c) else { continue }; // Minv row at a slack is 0
         for k in 0..n {
-            if let Some(rk) = reduced(k) {
+            if let Some(rk) = g.reduced(k) {
                 ptdf[l * n + k] += w * rinv[rc * nr + rk];
             }
         }

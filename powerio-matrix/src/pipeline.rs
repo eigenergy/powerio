@@ -149,7 +149,7 @@ impl Pipeline {
 
         // Shunt vector as a sidecar (not always meaningful, but cheap).
         let shunt_path = out_dir.join(format!("{}_shunt.mtx", view.name()));
-        let base = view.base_mva();
+        let base = view.per_unit_base();
         let shunt: Vec<f64> = view.bs().iter().map(|&b| b / base).collect();
         write_vector_mtx(&shunt, &shunt_path)?;
         files.push(shunt_path);
@@ -213,7 +213,7 @@ impl Pipeline {
                 v
             }
             RhsKind::Injection => {
-                let base = case.base_mva();
+                let base = case.per_unit_base();
                 match kind {
                     MatrixKind::BPrime | MatrixKind::YbusG | MatrixKind::YbusB => {
                         case.pd().iter().map(|&p| -p / base).collect()
