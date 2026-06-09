@@ -3,8 +3,8 @@
 //! both layers).
 //!
 //! Signed incidence `A`, weighted Laplacian `L = A diag(b) Aᵀ` and its
-//! slack-grounded form, B'/B''/Y_bus, PTDF/LODF, adjacency, the LACPF block,
-//! and the DC-OPF instance bundle, plus a petgraph view. The builders take the
+//! reference-grounded form, B'/B''/Y_bus, PTDF/LODF, adjacency, the LACPF block,
+//! and the DC OPF instance bundle, plus a petgraph view. The builders take the
 //! dense-indexed [`IndexedNetwork`] view of a [`Network`].
 //!
 //! ```
@@ -24,7 +24,7 @@
 //! diagonal `> 0`, `diag = Σ|off-diag|`. Bus ids are MATPOWER 1-based on the
 //! model; [`IndexedNetwork`] maps them to a dense `[0, n)`. `tap == 0` means
 //! `tap = 1`; B' ignores taps and shifts, B'' keeps taps and zeros shifts,
-//! Y_bus keeps both. `BR_B` is already per unit. DC-OPF is bus-indexed
+//! Y_bus keeps both. `BR_B` is already per unit. DC OPF is bus-indexed
 //! (`p_g ∈ ℝⁿ`), default susceptance `b = 1/x`, with [`DcConvention::Matpower`]
 //! the `1/(x·τ)` plus phase-shift variant. The full reference across every
 //! matrix is in
@@ -49,7 +49,7 @@ pub mod pipeline;
 pub mod synth;
 
 pub use matrix::{
-    BuildOptions, BusCosts, DcConvention, GenCosts, GroundMap, IncidenceParts, MatrixStats,
+    BuildOptions, BusCosts, DcConvention, GenCosts, GroundedIndexMap, IncidenceParts, MatrixStats,
     OpfInstance, Scheme, Units, build_adjacency, build_bdoubleprime, build_bprime, build_flow_map,
     build_incidence, build_lacpf, build_lodf, build_opf_instance, build_ptdf, build_ptdf_lodf,
     build_weighted_laplacian, build_ybus, ground_at, ground_at_each, reference_indicator,

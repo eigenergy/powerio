@@ -8,4 +8,4 @@
 # benchmarks/Project.toml, not in any crate.)
 pandapower==3.2.2      # validate_pandapower.py: parse + Y_bus cross-check (pinned; 3.4 needs the broken matpowercaseframes 2.x)
 matpowercaseframes<2   # pandapower's .m reader; 2.x's reader is broken (loadcase bug), 1.x works
-gridx-egret>=0.6       # validate_egret.py / validate_matrix.py: the EGRET oracle
+gridx-egret>=0.6       # validate_egret.py / validate_matrix.py: the egret oracle

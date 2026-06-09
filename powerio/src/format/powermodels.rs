@@ -9,7 +9,8 @@
 //! `make_per_unit!`, so it lands on the same network as `parse_file(case.m)`.
 //! Loads and shunts are first-class on the `Network`, line charging `b` splits
 //! half to each end, and `transformer` follows PowerModels' rule (raw tap `≠ 0`).
-//! `hvdc`/`storage` are mapped best-effort and a warning is emitted when present.
+//! `hvdc`/`storage` are mapped to the closest PowerModels blocks and emit a
+//! warning when present.
 
 use std::sync::Arc;
 
@@ -73,13 +74,13 @@ pub fn write_powermodels_json(net: &Network) -> Conversion {
     }
     if !dcline.is_empty() {
         warnings.push(format!(
-            "{} dcline(s) mapped best-effort to the PowerModels dcline schema",
+            "{} dcline(s) mapped with warnings to the PowerModels dcline schema",
             dcline.len()
         ));
     }
     if !storage.is_empty() {
         warnings.push(format!(
-            "{} storage unit(s) mapped best-effort to the PowerModels storage schema",
+            "{} storage unit(s) mapped with warnings to the PowerModels storage schema",
             storage.len()
         ));
     }

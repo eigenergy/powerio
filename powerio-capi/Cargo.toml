@@ -3,7 +3,7 @@ name = "powerio-capi"
 version = "0.1.0"
 edition = "2024"
 rust-version = "1.86"
-description = "C ABI for powerio: parse any power system case format, query it, convert losslessly, and extract the numeric tables. The polyglot substrate consumed by Julia (ccall), C, and C++."
+description = "C ABI for powerio: parse, query, convert, and extract numeric tables."
 license = "MIT OR Apache-2.0"
 repository = "https://github.com/eigenergy/powerio"
 publish = false
@@ -20,6 +20,6 @@ crate-type = ["cdylib", "staticlib", "rlib"]
 arrow = ["dep:arrow"]
 
 [dependencies]
-powerio = { path = "../powerio" }
+powerio = { path = "../powerio", version = "0.1.0" }
 # Only the C Data Interface (`ffi`) is needed; the heavy arrow defaults stay off.
 arrow = { version = "58", default-features = false, features = ["ffi"], optional = true }

@@ -73,6 +73,12 @@ def test_parse_metadata(case9):
     assert case9.n_connected_components == 1
 
 
+def test_public_type_is_network(case9):
+    assert isinstance(case9, powerio.Network)
+    assert powerio.Case is powerio.Network
+    assert repr(case9).startswith("Network(")
+
+
 def test_parse_infers_format_from_extension():
     # powerio.parse dispatches on the extension; a .m file lands on MATPOWER.
     case = powerio.parse(DATA / "case9.m")
@@ -131,7 +137,7 @@ def test_to_normalized_is_per_unit_and_in_memory(case9):
     # Powers are per unit (divided by baseMVA).
     g, rg = n.gens[0], case9.gens[0]
     assert abs(g["pmax"] - rg["pmax"] / case9.base_mva) < 1e-9
-    # The result is a full Case, so the matrix builders work on it.
+    # The result is a full Network, so the matrix builders work on it.
     assert n.bprime().shape == (n.n, n.n)
 
 
@@ -518,8 +524,8 @@ gridfm_only = pytest.mark.skipif(
 
 
 def test_gridfm_absent_raises_clean_importerror(case9, tmp_path):
-    # On a default (light) build the write path is compiled out, so it must raise
-    # a clear ImportError naming the extra — never an AttributeError.
+    # Custom native builds can compile the write path out, so the wrapper must
+    # still raise ImportError rather than AttributeError.
     if HAS_GRIDFM:
         pytest.skip("extension built with gridfm; the absent-path is not exercised")
     with pytest.raises(ImportError, match="gridfm"):
@@ -561,7 +567,7 @@ def test_gridfm_include_y_bus_false_omits_table(case9, tmp_path):
 def test_gridfm_batch_stacks_and_keys_by_scenario(tmp_path):
     pd = pytest.importorskip("pandas")
     # Same topology twice → two scenarios stacked in one dataset. (The Python
-    # Case is read-only, so the two snapshots share values; the test pins the
+    # Network is read-only, so the two snapshots share values; the test pins the
     # row-stack and scenario keying, which the Rust tests pair with perturbation.)
     case = load("case9")
     out = powerio.write_gridfm_batch([case, case], str(tmp_path))

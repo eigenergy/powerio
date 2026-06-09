@@ -1,8 +1,8 @@
-//! Writes the static DC-OPF bundle for a case: one directory of named
+//! Writes the static DC OPF bundle for a case: one directory of named
 //! Matrix Market files plus a JSON manifest.
 //!
-//! Everything here is a pure function of the case — the incidence `A`, the
-//! DC Laplacian `L` and its slack-grounded form, the flow map `B Aᵀ`, the
+//! Everything here is a pure function of the case: the incidence `A`, the
+//! DC Laplacian `L` and its reference-grounded form, the flow map `B Aᵀ`, the
 //! generator cost and limit data, the generator→bus map, and nodal load.
 
 use std::path::{Path, PathBuf};
@@ -38,8 +38,9 @@ struct DcOpfMeta {
     m: usize,
     n_gen: usize,
     /// Dense indices of every grounded reference (slack) bus. Several entries
-    /// mean a slack per island or a distributed slack; the solver grounds the
-    /// Laplacian at all of them (matching `L_grounded` and `e_r`).
+    /// mean one reference per island, or several reference buses fixed in one
+    /// island. The solver grounds the Laplacian at all of them, matching
+    /// `L_grounded` and `e_r`.
     reference_buses: Vec<usize>,
     convention: DcConvention,
     units: Units,
@@ -47,7 +48,7 @@ struct DcOpfMeta {
     powerio_version: String,
 }
 
-/// Build and write the DC-OPF bundle into `out_dir/<case>_dcopf/`.
+/// Build and write the DC OPF bundle into `out_dir/<case>_dcopf/`.
 pub fn write_dcopf_bundle(
     net: &Network,
     out_dir: impl AsRef<Path>,
@@ -58,7 +59,7 @@ pub fn write_dcopf_bundle(
     let dir = out_dir.as_ref().join(format!("{}_dcopf", view.name()));
     std::fs::create_dir_all(&dir)?;
 
-    view.check_groundable()?;
+    view.check_reference_coverage()?;
     let refs = view.reference_bus_indices();
     let inc = build_incidence(&view, opts.convention)?;
     let l = build_weighted_laplacian(&inc.a, &inc.b);

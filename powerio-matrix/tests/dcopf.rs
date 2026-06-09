@@ -1,4 +1,4 @@
-//! DC-OPF matrix forge: incidence, Laplacian, OPF instance, and the export
+//! DC OPF matrix forge: incidence, Laplacian, OPF instance, and the export
 //! bundle. Run against vendored MATPOWER cases.
 
 use powerio_matrix::IndexedNetwork;
@@ -449,7 +449,7 @@ fn poly_gen(bus_id: usize, pmax: f64, c2: f64, c1: f64) -> Generator {
     }
 }
 
-/// DC-OPF instance for `case` under the default PaperPure convention. Returns
+/// DC OPF instance for `case` under the default PaperPure convention. Returns
 /// the `Result` so error-path tests can assert on the failure.
 fn opf_of(case: &Network, units: Units) -> powerio_matrix::Result<powerio_matrix::OpfInstance> {
     let view = IndexedNetwork::new(case);
@@ -692,10 +692,10 @@ fn two_grounded_islands_solve_block_diagonal() {
 }
 
 #[test]
-fn distributed_slack_two_refs_one_island() {
+fn multi_reference_two_refs_one_island() {
     // One connected island, two reference buses: grounding both is a distributed
     // slack. Both reference columns are zero, and a unit injection at the middle
-    // bus splits its return between the two slacks by electrical distance —
+    // bus splits its return between the two references by electrical distance:
     // symmetric here (equal reactances), so each branch carries half.
     let case = net(
         "distributed",
@@ -709,12 +709,12 @@ fn distributed_slack_two_refs_one_island() {
     let view = IndexedNetwork::new(&case);
     assert_eq!(view.reference_bus_indices(), vec![0, 2]);
     let ptdf = dense(&build_ptdf(&view, DcConvention::PaperPure).unwrap());
-    // Both slack columns (0 and 2) are zero; the middle bus (col 1) splits.
+    // Both reference columns (0 and 2) are zero; the middle bus (col 1) splits.
     for (l, row) in ptdf.iter().enumerate() {
         assert!(row[0].abs() < 1e-12, "ref col 0 nonzero on branch {l}");
         assert!(row[2].abs() < 1e-12, "ref col 2 nonzero on branch {l}");
     }
-    // An injection at bus 2 returns half to each slack: branch 0 (1→2) carries
+    // An injection at bus 2 returns half to each reference: branch 0 (1→2) carries
     // −1/2 (back toward slack 1, against its orientation); branch 1 (2→3)
     // carries +1/2 (out toward slack 3, with its orientation).
     assert!(
@@ -730,10 +730,10 @@ fn distributed_slack_two_refs_one_island() {
 }
 
 #[test]
-fn lodf_two_refs_distributed_slack_triangle() {
-    // The unit triangle with buses 1 and 3 as references (distributed slack).
+fn lodf_two_refs_multi_reference_triangle() {
+    // The unit triangle with buses 1 and 3 as references.
     // LODF differs from the single-slack triangle because each slack balances
-    // independently: tripping branch 1-3 (between the two slacks) redistributes
+    // independently: tripping branch 1-3 (between the two references) redistributes
     // nothing, while tripping 1-2 or 2-3 reroutes bus 2's flow fully onto the
     // other slack-connected branch. Hand-derived against the reduced 1x1 system
     // (only bus 2 survives grounding, diag = 2, so PTDF col for bus 2 is
@@ -765,7 +765,7 @@ fn lodf_two_refs_distributed_slack_triangle() {
 #[test]
 fn ybus_shift_invariant_to_normalization() {
     // A 30-degree phase shifter: shift is in degrees on the raw network and in
-    // radians on its normalized form. Y_bus must be identical — branch_admittance
+    // radians on its normalized form. Y_bus must be identical: branch_admittance
     // takes the shift via angle_radians, converting degrees->rad for the raw case
     // and leaving the already-radian normalized case alone (no double conversion).
     let raw = net_with_gens(

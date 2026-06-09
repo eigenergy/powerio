@@ -3,9 +3,12 @@ name = "powerio"
 version = "0.1.0"
 edition = "2024"
 rust-version = "1.86"
-description = "Fast, lossless parser and typed data model for power system case files. Parse MATPOWER .m and write it back byte-for-byte."
+description = "Parser, typed data model, and format converters for power system case files."
+readme = "README.md"
 license = "MIT OR Apache-2.0"
 repository = "https://github.com/eigenergy/powerio"
+homepage = "https://github.com/eigenergy/powerio"
+documentation = "https://docs.rs/powerio"
 keywords = ["matpower", "parser", "lossless"]
 categories = ["science", "parsing"]
 
@@ -18,12 +21,12 @@ all-features = true
 [dependencies]
 thiserror = "2"
 num-complex = "0.4"
-# SIMD-accelerated float parsing — the dominant cost in parsing large cases.
+# SIMD accelerated float parsing for numeric matrix rows.
 fast-float = "0.2"
 # A power network is a graph; connectivity/radial diagnostics live on Network.
 petgraph = "0.8"
 serde = { version = "1", features = ["derive"] }
-# Format converters (PowerModels / EGRET JSON) serialize the typed model.
+# Format converters (PowerModels / egret JSON) serialize the typed model.
 serde_json = "1"
 
 [dev-dependencies]

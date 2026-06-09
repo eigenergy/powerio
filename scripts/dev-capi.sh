@@ -7,8 +7,8 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
-# --features arrow so the sibling PowerIO.jl build gets the zero-copy
-# pio_export_arrow symbol; the base ABI is identical with or without it.
+# --features arrow so the sibling PowerIO.jl build gets pio_export_arrow; the
+# base ABI is identical with or without it.
 cargo build -p powerio-capi --release --features arrow >&2
 
 case "$(uname -s)" in

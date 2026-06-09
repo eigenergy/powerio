@@ -1,6 +1,6 @@
-//! Read and write a [`Network`] as EGRET `ModelData` JSON.
+//! Read and write a [`Network`] as egret `ModelData` JSON.
 //!
-//! EGRET groups the network under `elements` (bus, load, branch, generator,
+//! egret groups the network under `elements` (bus, load, branch, generator,
 //! shunt, dc_branch) with a small `system` block; values stay in MW/MVAr,
 //! degrees, with the base in `system.baseMVA`. Loads and shunts are first-class
 //! on the `Network`, generator cost becomes a polynomial/piecewise `cost_curve`,
@@ -9,7 +9,7 @@
 //! The reader takes the power flow ModelData subset: numeric bus ids (as
 //! matpower- and pglib-derived files have), scalar element values. Unit
 //! commitment cases (`system.time_keys`, time-series values) are rejected. A
-//! byte-exact round-trip rides on the retained source like every other format.
+//! same format writes return the retained source like every other format.
 
 use std::sync::Arc;
 
@@ -22,7 +22,7 @@ use crate::network::{
 };
 use crate::{Error, Result};
 
-const FMT: &str = "EGRET JSON";
+const FMT: &str = "egret JSON";
 
 #[must_use]
 pub fn write_egret_json(net: &Network) -> Conversion {
@@ -33,7 +33,7 @@ pub fn write_egret_json(net: &Network) -> Conversion {
         bus.insert(b.id.to_string(), bus_obj(b));
     }
 
-    // EGRET keys each load/shunt; use a global running suffix (load_1, load_2, …)
+    // egret keys each load/shunt; use a global running suffix (load_1, load_2, …)
     // so several loads on one bus stay distinct.
     let mut load = Map::new();
     for (i, l) in net.loads.iter().enumerate() {
@@ -56,13 +56,13 @@ pub fn write_egret_json(net: &Network) -> Conversion {
 
     if !net.hvdc.is_empty() {
         warnings.push(format!(
-            "{} dcline(s) dropped: EGRET HVDC mapping not implemented",
+            "{} dcline(s) dropped: egret HVDC mapping not implemented",
             net.hvdc.len()
         ));
     }
     if !net.storage.is_empty() {
         warnings.push(format!(
-            "{} storage unit(s) dropped: EGRET storage mapping not implemented",
+            "{} storage unit(s) dropped: egret storage mapping not implemented",
             net.storage.len()
         ));
     }
@@ -165,7 +165,7 @@ fn branch_obj(br: &Branch) -> Value {
     } else {
         m.insert("branch_type".into(), Value::String("line".into()));
     }
-    // EGRET treats a zero rating as "unset"; emit only nonzero limits.
+    // egret treats a zero rating as "unset"; emit only nonzero limits.
     if br.rate_a != 0.0 {
         m.insert("rating_long_term".into(), jnum(br.rate_a));
     }
@@ -196,7 +196,7 @@ fn gen_obj(g: &Generator, warnings: &mut Vec<String>) -> Value {
             m.insert("p_cost".into(), curve);
         } else {
             warnings.push(format!(
-                "generator at bus {} has a cost model EGRET's writer can't express; cost dropped",
+                "generator at bus {} has a cost model egret's writer can't express; cost dropped",
                 g.bus
             ));
         }
@@ -204,7 +204,7 @@ fn gen_obj(g: &Generator, warnings: &mut Vec<String>) -> Value {
     Value::Object(m)
 }
 
-/// EGRET `cost_curve`. MATPOWER model 2 (polynomial) maps to a degree→coefficient
+/// egret `cost_curve`. MATPOWER model 2 (polynomial) maps to a degree→coefficient
 /// map; model 1 (piecewise linear) maps to `(mw, cost)` breakpoints.
 fn cost_curve(cost: &GenCost) -> Option<Value> {
     let mut curve = Map::new();
@@ -236,7 +236,7 @@ fn cost_curve(cost: &GenCost) -> Option<Value> {
     }
 }
 
-/// Parse EGRET `ModelData` JSON into a [`Network`].
+/// Parse egret `ModelData` JSON into a [`Network`].
 ///
 /// Inverts [`write_egret_json`]: the `elements` blocks map back to the typed
 /// model and `system.baseMVA`/`reference_bus` to the base and bus types. Takes
@@ -260,7 +260,7 @@ pub(crate) fn parse_egret_source(source: Arc<String>, name_hint: Option<&str>) -
     let system = obj(root, "system").ok_or_else(|| bad("missing `system` object"))?;
     if system.contains_key("time_keys") {
         return Err(bad(
-            "EGRET unit commitment cases (system.time_keys) are not supported; expected a power flow ModelData",
+            "egret unit commitment cases (system.time_keys) are not supported; expected a power flow ModelData",
         ));
     }
     let base_mva = system
@@ -361,7 +361,7 @@ fn num_key(k: &str) -> i64 {
     k[start..].parse::<i64>().unwrap_or(i64::MAX)
 }
 
-/// A non-negative integer bus id from an f64 (EGRET writes some ids as numbers).
+/// A non-negative integer bus id from an f64 (egret writes some ids as numbers).
 /// Rejects negative, fractional, or out-of-range values rather than truncating or
 /// wrapping them onto the wrong bus.
 fn id_from_f64(x: f64) -> Option<usize> {
@@ -370,7 +370,7 @@ fn id_from_f64(x: f64) -> Option<usize> {
     (x >= 0.0 && x.fract() == 0.0 && x < usize::MAX as f64).then_some(x as usize)
 }
 
-/// A bus id from a JSON value: a numeric string (EGRET's convention) or a bare
+/// A bus id from a JSON value: a numeric string (egret's convention) or a bare
 /// number. `None` for a non-integer, negative, or non-numeric value (named buses
 /// aren't representable in the integer `BusId` space).
 fn parse_id(v: &Value) -> Option<usize> {
@@ -399,7 +399,7 @@ fn id_field(v: &Value, key: &str) -> Result<BusId> {
 }
 
 /// Field `key` as f64, `0.0` when absent. A present-but-non-numeric value is a
-/// hard error, not a silent default — the contract the PSS/E and PowerWorld
+/// hard error, not a silent default. The PSS/E and PowerWorld
 /// readers also hold, so a garbled number can't quietly become a plausible `0.0`
 /// and corrupt the matrices downstream.
 fn f(v: &Value, key: &str) -> Result<f64> {
@@ -414,7 +414,7 @@ fn f_or(v: &Value, key: &str, default: f64) -> Result<f64> {
             .ok_or_else(|| bad(format!("`{key}` is not a number: {x}"))),
     }
 }
-/// Field `key` as usize, accepting a number or a numeric string (EGRET writes
+/// Field `key` as usize, accepting a number or a numeric string (egret writes
 /// `area`/`zone` as strings; its own parser writes them as numbers). Absent ⇒
 /// `default`; present but not a non-negative integer ⇒ error.
 fn usize_or(v: &Value, key: &str, default: usize) -> Result<usize> {
@@ -562,7 +562,7 @@ fn read_dc_branch(v: &Value) -> Result<Hvdc> {
     })
 }
 
-/// EGRET `p_cost` → [`GenCost`]. Polynomial `{exp: coeff}` becomes the
+/// egret `p_cost` → [`GenCost`]. Polynomial `{exp: coeff}` becomes the
 /// highest-order-first coefficient vector (gaps filled with zeros); piecewise
 /// `[[p, c], ...]` becomes the flat `(mw, cost)` breakpoints.
 fn read_cost(p_cost: &Value, startup: f64, shutdown: f64) -> Option<GenCost> {

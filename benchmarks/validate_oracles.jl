@@ -10,7 +10,7 @@
 # `export` writes <tmp>/<base>.pmref.json (PowerModels' own per_unit JSON) for the
 # PMread leg — it must run before powerio re-emits it. `compare` runs PMjson /
 # PMread / PSSE / Exa over the MATPOWER cases, PSSE-read over the .raw cases, and
-# EGRET-read over the EGRET cases, reading powerio's conversions from <tmp> (named
+# egret-read over the egret cases, reading powerio's conversions from <tmp> (named
 # by convention, see run_validation.sh). It appends one `<case>\t<leg>\t<mark>`
 # line per leg to <tmp>/results.tsv and prints detail; exits nonzero on any FAIL.
 using PowerModels
@@ -85,7 +85,7 @@ function do_compare(tmp, groups)
             b = stem(e)
             json = joinpath(tmp, "egret_$b.json")
             mref = joinpath(@__DIR__, "..", "tests", "data", "$b.m")
-            leg!(io, "egret/$b", "EGRET-read", [json], () -> compare_core(mref, json)) || (fails += 1)
+            leg!(io, "egret/$b", "egret-read", [json], () -> compare_core(mref, json)) || (fails += 1)
         end
     end
     return fails

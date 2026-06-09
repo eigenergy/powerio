@@ -6,10 +6,10 @@ to every target format, and the electrical core of each output is checked agains
 the core of the source itself, read by an independent oracle:
 
   - the source core comes from PowerModels.jl (MATPOWER, PSS/E) or the egret
-    package (EGRET);
+    package (egret);
   - each output core comes from PowerModels.jl (MATPOWER / PowerModels JSON /
     PSS/E, and PowerWorld via a powerio .aux -> PowerModels JSON bridge, since no
-    third-party .aux reader exists) or egret (EGRET);
+    third-party .aux reader exists) or egret;
   - the diagonal (same-format) is checked byte-exact: the write echoes the source.
 
 The core (bus/branch/gen counts and the per-unit demand/generation/shunt totals)
@@ -20,7 +20,7 @@ fidelity-tier specific and are covered by the dedicated checks
 
 Source suites use representative cases per pair: basic, shunts, transformers,
 size, an HVDC + mixed-gencost case, and a piecewise-cost case for MATPOWER; the
-vendored real PSS/E `.raw` and EGRET `.json` files for those readers.
+vendored real PSS/E `.raw` and egret `.json` files for those readers.
 
   egret must be importable (pip install gridx-egret). Run from anywhere:
 
@@ -49,7 +49,7 @@ LABEL = {
     "powermodels-json": "PM",
     "psse": "PSS/E",
     "powerworld": "PWLD",
-    "egret-json": "EGRET",
+    "egret-json": "egret",
 }
 EXT = {
     "matpower": "m",

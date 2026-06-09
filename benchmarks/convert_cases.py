@@ -7,7 +7,7 @@ by the naming convention validate_oracles.jl expects:
     <stem>.psse.raw      <m>  -> PSS/E .raw         (PSSE writer leg)
     <stem>.reemit.json   <stem>.pmref.json -> PowerModels JSON  (PMread reader leg)
     psse_<stem>.json     <raw> -> PowerModels JSON  (PSSE read side)
-    egret_<stem>.json    <egret.json> -> PowerModels JSON (EGRET read side)
+    egret_<stem>.json    <egret.json> -> PowerModels JSON (egret read side)
 
 A failed or empty conversion is reported and the output left absent, so the
 matching comparison leg fails on a missing file rather than on stale data.

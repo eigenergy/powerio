@@ -7,7 +7,7 @@
 //! `import powerio` pulls in nothing but the interpreter.
 //!
 //! The matrix methods hand back COO triplets as plain Python lists
-//! (`data`, `row`, `col`, `shape`) — there is no numpy at this layer. The
+//! (`data`, `row`, `col`, `shape`); there is no numpy at this layer. The
 //! pure-Python `powerio` package (python/powerio/) assembles those into
 //! `scipy.sparse` matrices and networkx graphs lazily, so scipy/numpy/networkx
 //! stay out of the Rust build and a missing extra surfaces as a clean
@@ -145,7 +145,7 @@ fn normalize(s: &str) -> String {
 fn coo_triplets<'py>(py: Python<'py>, m: &CsMat<f64>) -> PyResult<Bound<'py, PyAny>> {
     if m.rows() > i32::MAX as usize || m.cols() > i32::MAX as usize {
         return Err(PyValueError::new_err(format!(
-            "matrix is {}x{}; an index exceeds i32 range — rebuild with i64 indices",
+            "matrix is {}x{}; an index exceeds i32 range; rebuild with i64 indices",
             m.rows(),
             m.cols()
         )));
@@ -182,7 +182,7 @@ fn build_options(scheme: Scheme, include_taps: bool, include_shifts: bool) -> Bu
     }
 }
 
-/// Low-level handle around a parsed [`Network`]. The user-facing `powerio.Case`
+/// Low-level handle around a parsed [`Network`]. The user-facing `powerio.Network`
 /// (pure Python) wraps this: the IO getters and topology methods delegate
 /// straight to it, and the matrix methods turn its COO tuples into scipy.
 ///
@@ -530,8 +530,7 @@ impl PyCase {
     /// Write the gridfm-datakit Parquet dataset for this case under
     /// `out_dir/<case>/raw/`. Returns
     /// `{"dir", "files", "dropped_zero_impedance", "degenerate_cost_gens"}`.
-    /// Available only when the extension is built with the `gridfm` feature
-    /// (the `powerio[gridfm]` extra).
+    /// Available when the extension is built with the Rust `gridfm` feature.
     #[cfg(feature = "gridfm")]
     #[pyo3(signature = (out_dir, scenario=0, include_y_bus=true, include_taps=true, include_shifts=true))]
     fn write_gridfm<'py>(
@@ -658,8 +657,7 @@ fn gridfm_outputs_to_dict<'py>(
 /// Write a batch of cases as one gridfm-datakit dataset, row-stacked and keyed by
 /// the `scenario` column. The k-th case is stamped `base_scenario + k`; all cases
 /// must share one base element set (same bus/branch/gen counts and bus-id order).
-/// Available only when the extension is built with the `gridfm` feature (the
-/// `powerio[gridfm]` extra).
+/// Available when the extension is built with the Rust `gridfm` feature.
 #[cfg(feature = "gridfm")]
 #[pyfunction]
 #[pyo3(signature = (cases, out_dir, base_scenario=0, include_y_bus=true, include_taps=true, include_shifts=true))]

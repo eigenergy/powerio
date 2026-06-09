@@ -1,8 +1,8 @@
-//! The weighted Laplacian `L = A diag(w) Aᵀ`, slack grounding, and the
-//! index bookkeeping for round-tripping a grounded solve back to full size.
+//! The weighted Laplacian `L = A diag(w) Aᵀ`, reference grounding, and the
+//! index bookkeeping for mapping a grounded solve back to full size.
 //!
 //! Built from the same `A`, `w` factors the incidence module produces, so
-//! `L` and its slack-grounded form share an exact factorization.
+//! `L` and its reference-grounded form share an exact factorization.
 
 use sprs::CsMat;
 
@@ -32,9 +32,8 @@ pub fn ground_at(matrix: &CsMat<f64>, r: usize) -> CsMat<f64> {
 /// Delete every row and column in `refs` from a square matrix, returning the
 /// grounded matrix of side `n − k`, where `k` is the count of distinct
 /// in-range references. Grounding one bus per connected component turns a
-/// singular Laplacian SPD; grounding several buses within one component is the
-/// distributed-slack solve (their angles are tied to the same reference and the
-/// absorbed power splits by electrical distance).
+/// singular Laplacian SPD. Grounding several buses within one component fixes
+/// several angles to zero; this is not a participation factor based slack model.
 ///
 /// # Panics
 ///
@@ -92,7 +91,7 @@ impl Grounding {
 pub(crate) fn ground_with(matrix: &CsMat<f64>, g: &Grounding) -> CsMat<f64> {
     let n = matrix.rows();
     debug_assert_eq!(n, matrix.cols(), "ground_with expects a square matrix");
-    // Hard assert (not debug-only): an out-of-range index removes no row/column
+    // Hard assert: an out-of-range index removes no row/column
     // yet shrinks the builder. These are `pub` entry points, so guard the
     // contract unconditionally.
     if let Some(last) = g.max() {
@@ -111,15 +110,15 @@ pub(crate) fn ground_with(matrix: &CsMat<f64>, g: &Grounding) -> CsMat<f64> {
 }
 
 /// Maps indices between the full `[0, n)` space and the grounded `[0, n−1)`
-/// space (row/column `r` removed). Used by the DC-OPF interior-point operators
-/// (the `kkt` feature) to round-trip a grounded solve back to full size.
+/// space (row/column `r` removed). Used by the DC OPF interior point operators
+/// (the `kkt` feature) to place a grounded solve back into full bus order.
 #[derive(Debug, Clone, Copy)]
-pub struct GroundMap {
+pub struct GroundedIndexMap {
     pub n: usize,
     pub r: usize,
 }
 
-impl GroundMap {
+impl GroundedIndexMap {
     #[inline]
     pub fn new(n: usize, r: usize) -> Self {
         Self { n, r }

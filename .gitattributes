@@ -4,3 +4,6 @@
 # the language stats and collapse them in diffs. The files stay in the repo so
 # the test suite stays hermetic.
 tests/data/**/*.m linguist-vendored
+
+# Julia appears here only as a validation harness, not as the package language.
+benchmarks/**/*.jl linguist-vendored

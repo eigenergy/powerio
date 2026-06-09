@@ -313,14 +313,14 @@ impl<'n> IndexedNetwork<'n> {
     /// Error unless every connected component of the in-service topology carries
     /// at least one reference (slack) bus. This is the grounding precondition
     /// for the DC Laplacian: an island with no reference leaves its all-ones
-    /// null vector in the system, so the slack-grounded Laplacian stays
+    /// null vector in the system, so the reference-grounded Laplacian stays
     /// singular. With one reference in a single island it reduces to the
-    /// single-slack requirement. Reports the count of ungrounded components.
-    pub fn check_groundable(&self) -> Result<()> {
+    /// single slack requirement. Reports the count of ungrounded components.
+    pub fn check_reference_coverage(&self) -> Result<()> {
         let labels = self.connected_component_labels();
         // Mark each component (by its representative index in `[0, n)`) that holds
-        // a reference. A Vec<bool> keyed by label beats two HashSets: no hashing,
-        // one flat allocation.
+        // a reference. A Vec<bool> keyed by label avoids hashing and uses one
+        // flat allocation.
         let mut grounded = vec![false; labels.len()];
         for r in self.reference_bus_indices() {
             grounded[labels[r]] = true;

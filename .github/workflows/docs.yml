@@ -5,7 +5,7 @@ name: Docs
 # whose //! docs docs.rs would never host. docs.rs takes over for powerio and
 # powerio-matrix once those are published to crates.io.
 # PRs build the docs too (so a broken intra-doc link fails review, not main),
-# but only push-to-main / dispatch deploys to Pages — see the `deploy` gate.
+# but only push to main / dispatch deploys to Pages; see the `deploy` gate.
 on:
   push:
     branches: [ "main" ]

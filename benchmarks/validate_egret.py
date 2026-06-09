@@ -1,14 +1,14 @@
 #!/usr/bin/env python
-"""Validate powerio's EGRET writer against the egret package (the oracle).
+"""Validate powerio's egret writer against the egret package (the oracle).
 
-EGRET has no PowerModels reader, so PowerModels.jl can't check this leg the way it
+egret has no PowerModels reader, so PowerModels.jl can't check this leg the way it
 checks the MATPOWER/PSS/E paths. Instead we use egret itself: load both sides as
 `egret.data.model_data.ModelData` and compare the electrical core (bus/branch/gen/
 load/shunt counts, demand and generation totals, shunt admittance totals, and the
 generator cost coefficients summed by polynomial degree).
 
-  ref  = a MATPOWER `.m` (loaded with egret's own matpower parser) or an EGRET JSON
-  test = powerio's EGRET JSON output
+  ref  = a MATPOWER `.m` (loaded with egret's own matpower parser) or an egret JSON
+  test = powerio's egret JSON output
 
   python validate_egret.py <ref.m|ref.json> <test.json>
 
@@ -117,7 +117,7 @@ def close(a, b):
 def compare(ref_path, test_path, check_cost=True):
     """Problems (empty list == match) comparing two cases' cores via the egret
     oracle. `check_cost=False` skips the generator cost curve, for sources that
-    don't carry cost (PSS/E, PowerWorld), whose EGRET output legitimately has none.
+    don't carry cost (PSS/E, PowerWorld), whose egret output legitimately has none.
     """
     r, t = core(load(ref_path)), core(load(test_path))
     problems = []

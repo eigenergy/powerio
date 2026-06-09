@@ -257,10 +257,9 @@ impl Network {
     /// - **Bus types**: a bus hosting a surviving generator keeps `REF` if the file
     ///   marked it `REF`, otherwise becomes `PV`; a generator-less bus is `PQ` (so a
     ///   generator-less `REF` is demoted). The file's `REF` buses are kept, several
-    ///   included — the consumer picks the slack — and only when none survives is
-    ///   the largest-`pmax` in-service generator's bus promoted to `REF`. This is the
-    ///   bus-type inference of ExaPowerIO.jl and PowerDiff.jl, not the single-slack
-    ///   collapse of PowerModels' `make_basic_network`.
+    ///   included, and the consumer picks the slack. Only when no reference bus
+    ///   survives is the largest-`pmax` in-service generator's bus promoted to
+    ///   `REF`.
     ///
     /// This is a derived product, not a source for write-back: `source` is dropped
     /// and `source_format` is [`SourceFormat::Normalized`], so writing it serializes
@@ -308,11 +307,9 @@ impl Network {
         let storage = norm_storage(&self.storage, base, &id_map);
         let hvdc = norm_hvdc(&self.hvdc, base, &id_map);
 
-        // Bus types, following the ExaPowerIO/PowerDiff inference (not
-        // make_basic_network's collapse): a bus hosting an in-service generator
-        // keeps `Ref` if the file marked it `Ref`, else becomes `Pv`; a gen-less
-        // bus is `Pq` (so a gen-less `Ref` is demoted). Multiple file `Ref` buses
-        // are kept as-is — the consumer picks the slack — and only when no `Ref`
+        // Bus types: a bus hosting an in-service generator keeps `Ref` if the
+        // file marked it `Ref`, else becomes `Pv`; a gen-less bus is `Pq`.
+        // Multiple file `Ref` buses are kept as-is, and only when no `Ref`
         // survives is the largest-pmax generator's bus promoted.
         let gen_buses: HashSet<BusId> = generators.iter().map(|g| g.bus).collect();
         for b in &mut buses {

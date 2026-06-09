@@ -103,6 +103,22 @@ pub enum Error {
     },
 
     #[error(
+        "gridfm snapshot scenario {scenario} is normalized; gridfm export expects raw MW and degree fields"
+    )]
+    NormalizedGridfmSnapshot { scenario: i64 },
+
+    #[error(
+        "gridfm snapshot scenario {scenario} has non-finite {element} row {row} field `{field}`: {value}"
+    )]
+    NonFiniteGridfmValue {
+        scenario: i64,
+        element: &'static str,
+        row: usize,
+        field: &'static str,
+        value: f64,
+    },
+
+    #[error(
         "gridfm snapshot {index} doesn't match the first snapshot's element set: {reason}; \
          a scenario batch shares one base element set (same bus/branch/gen counts and bus-id order)"
     )]
@@ -181,6 +197,8 @@ impl Error {
             | Error::UngroundedComponent { .. }
             | Error::EmptyScenarioBatch
             | Error::ScenarioIdOverflow { .. }
+            | Error::NormalizedGridfmSnapshot { .. }
+            | Error::NonFiniteGridfmValue { .. }
             | Error::ScenarioShapeMismatch { .. } => C::Data,
             // Output-side serialization write failures.
             Error::Mtx(_) | Error::Parquet(_) => C::Output,

@@ -1,7 +1,7 @@
-//! C ABI for `powerio` — the polyglot substrate.
+//! C ABI for `powerio`.
 //!
 //! Parse any supported power system case format into an opaque handle, query it,
-//! convert losslessly to another format, and pull out the numeric tables a
+//! convert it to another format, and pull out the numeric tables a
 //! downstream solver needs to assemble matrices. Every entry point is `extern
 //! "C"`, catches panics at the boundary, and returns error text into a
 //! caller-provided buffer. Strings handed back are owned by the library; free
@@ -64,7 +64,7 @@ fn into_cstring(s: String) -> Option<*mut c_char> {
 }
 
 /// Finish a `*mut c_char` entry point: hand back the owned C string, or on an
-/// interior NUL write the error into `errbuf` (NULL/0 to skip — `pio_write_matpower`
+/// interior NUL write the error into `errbuf` (NULL/0 to skip; `pio_write_matpower`
 /// has no error buffer) and return NULL. The shared tail of the string-returning
 /// functions.
 fn finish_cstring(s: String, errbuf: *mut c_char, errlen: usize) -> *mut c_char {
@@ -92,7 +92,7 @@ fn make_case(net: Network) -> *mut PioCase {
 
 /// Finish a `*mut PioCase` entry point: run `f` (producing a `Network` or an
 /// error message) under the panic guard, hand back an owned handle, or write the
-/// error — `panic_msg` if `f` panicked — into `errbuf` and return NULL. The
+/// error, `panic_msg` if `f` panicked, into `errbuf` and return NULL. The
 /// shared tail of every handle-returning function (`pio_parse`, `pio_parse_str`,
 /// `pio_to_normalized`, `pio_from_json`).
 unsafe fn finish_case(
@@ -134,7 +134,7 @@ pub extern "C" fn pio_abi_version() -> u32 {
     PIO_ABI_VERSION
 }
 
-/// The crate version string (e.g. `"0.1.0"`), `'static` and NUL-terminated — do
+/// The crate version string (e.g. `"0.1.0"`), `'static` and NUL-terminated. Do
 /// NOT free it. Informational; pair it with [`pio_abi_version`] for the actual
 /// compatibility check.
 #[unsafe(no_mangle)]
@@ -200,7 +200,7 @@ unsafe fn case_ref<'a>(case: *const PioCase) -> Option<&'a PioCase> {
     unsafe { case.as_ref() }
 }
 
-/// View `case` through its cached [`IndexCore`] — no per-call rebuild.
+/// View `case` through its cached [`IndexCore`] with no per-call rebuild.
 unsafe fn view<'a>(case: *const PioCase) -> Option<IndexedNetwork<'a>> {
     unsafe {
         case.as_ref()
@@ -210,8 +210,8 @@ unsafe fn view<'a>(case: *const PioCase) -> Option<IndexedNetwork<'a>> {
 
 /// Normalize `case` into a NEW per-unit case handle: per unit, radians,
 /// out-of-service filtered, densely reindexed, bus types canonicalized (see
-/// `Network::to_normalized`). The result is independent of `case` — free both
-/// with [`pio_case_free`] — and every extractor and [`pio_to_json`] works on it
+/// `Network::to_normalized`). The result is independent of `case`; free both
+/// with [`pio_case_free`]. Every extractor and [`pio_to_json`] works on it
 /// unchanged (the handle is per-unit, not MW). Returns `NULL` on error (no
 /// reference bus can be chosen, or a non-positive base MVA) and writes the
 /// message into `errbuf`.
@@ -251,9 +251,9 @@ pub unsafe extern "C" fn pio_base_mva(case: *const PioCase) -> f64 {
 
 /// Dense `[0, n)` index of the single reference bus, or `-1` if not exactly one
 /// (also `-1` if the index is too large for `isize`). A network may carry
-/// several references (a slack per island, or a normalized case that kept the
-/// file's multiple `REF` buses); use [`pio_n_reference_buses`] to tell zero from
-/// many, and [`pio_reference_buses`] to read them all.
+/// several references (one per island, or a normalized case that kept the file's
+/// multiple `REF` buses); use [`pio_n_reference_buses`] to tell zero from many,
+/// and [`pio_reference_buses`] to read them all.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_reference_bus(case: *const PioCase) -> isize {
     unsafe {
@@ -266,8 +266,9 @@ pub unsafe extern "C" fn pio_reference_bus(case: *const PioCase) -> isize {
     }
 }
 
-/// Number of reference (slack) buses. `0` means none; `> 1` means a slack per
-/// island or a distributed slack. A normalized case always reports `>= 1`.
+/// Number of reference (slack) buses. `0` means none; `> 1` means one reference
+/// per island or several fixed reference buses in one island. A normalized case
+/// always reports `>= 1`.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_n_reference_buses(case: *const PioCase) -> usize {
     unsafe {
@@ -374,7 +375,7 @@ pub unsafe extern "C" fn pio_string_free(s: *mut c_char) {
     }
 }
 
-/// Serialize the case to JSON — the structured-table transport every Julia
+/// Serialize the case to JSON: the structured-table transport every Julia
 /// bridge consumes. Carries the whole [`Network`] (buses, loads, shunts,
 /// branches, generators, storage, HVDC, extras) but not the retained source
 /// text, so it is structured data, not the byte-exact echo. Returns an owned C
@@ -556,7 +557,7 @@ pub unsafe extern "C" fn pio_nodal_shunt(case: *const PioCase, gs: *mut f64, bs:
     }
 }
 
-/// Export one raw network table over the Arrow C Data Interface (zero-copy).
+/// Export one raw network table over the Arrow C Data Interface.
 ///
 /// `table` is one of the `PIO_ARROW_TABLE_*` selectors (bus/branch/gen/load/
 /// shunt); the columns are the parsed network fields with EXTERNAL bus ids (the
@@ -588,7 +589,7 @@ pub unsafe extern "C" fn pio_export_arrow(
                 // Move the FFI structs into caller memory: ptr::write does not
                 // drop the (caller-zeroed) destination and does not run Drop on
                 // `array`/`schema`, so the producer release callbacks transfer to
-                // the caller — exactly one owner.
+                // the caller. Exactly one owner.
                 std::ptr::write(out_array, array);
                 std::ptr::write(out_schema, schema);
                 0
@@ -695,7 +696,7 @@ mod tests {
                 std::ptr::null_mut(),
             );
             // `from` carries the 1-based bus ids (case9 buses are 1..=9), the
-            // same id space as pio_bus_ids — not dense indices.
+            // same id space as pio_bus_ids, not dense indices.
             assert!(from.iter().all(|&f| f >= 1));
             assert!(x.iter().all(|&xx| xx > 0.0));
             pio_case_free(c);

@@ -4,16 +4,16 @@ Parse MATPOWER, PSS/E, PowerWorld, and PowerModels JSON into one format-neutral
 case; write it back byte-exact; convert between formats; and pull the sparse
 matrices and graph views solvers need::
 
-    import powerio
+    import powerio as pio
 
-    case = powerio.parse("case9.m")          # format inferred from the extension
-    print(case.n, case.base_mva)             # 9 100.0
-    text = case.write()                      # byte-exact MATPOWER echo
-    raw, warnings = powerio.convert("case9.m", "psse")
+    net = pio.parse("case9.m")               # format inferred from the extension
+    print(net.n, net.base_mva)               # 9 100.0
+    text = net.write()                       # byte-exact MATPOWER echo
+    raw, warnings = pio.convert("case9.m", "psse")
 
-    B = case.bprime()                        # scipy.sparse, the FDPF B'
-    Y = case.ybus()                          # complex csr, G + jB
-    G = case.to_networkx()                   # networkx.Graph keyed by bus id
+    B = net.bprime()                         # scipy.sparse, the FDPF B'
+    Y = net.ybus()                           # complex csr, G + jB
+    G = net.to_networkx()                    # networkx.Graph keyed by bus id
 
 ``import powerio`` and parse/write/convert pull in nothing but the interpreter.
 The matrix methods need scipy/numpy and the graph view needs networkx; add them
@@ -33,6 +33,7 @@ from . import _powerio
 from ._powerio import PowerIODataError, PowerIOError, PowerIOParseError, __version__
 
 __all__ = [
+    "Network",
     "Case",
     "Incidence",
     "YbusParts",
@@ -58,7 +59,7 @@ target format could not represent (empty for a faithful conversion).
 """
 
 Incidence = namedtuple("Incidence", ["A", "b", "p_shift", "branch_of_col"])
-Incidence.__doc__ = """Output of :meth:`Case.incidence`.
+Incidence.__doc__ = """Output of :meth:`Network.incidence`.
 
 Shapes, with ``n`` buses and ``m`` in-service branches:
 - ``A``: signed incidence csr_matrix, ``(n, m)``.
@@ -71,8 +72,8 @@ Shapes, with ``n`` buses and ``m`` in-service branches:
 
 YbusParts = namedtuple("YbusParts", ["g", "b"])
 YbusParts.__doc__ = (
-    "Output of :meth:`Case.ybus_parts`: ``g`` = Re(Y_bus), ``b`` = Im(Y_bus), "
-    "each a real csr_matrix. ``Case.ybus()`` returns ``g + 1j*b``."
+    "Output of :meth:`Network.ybus_parts`: ``g`` = Re(Y_bus), ``b`` = Im(Y_bus), "
+    "each a real csr_matrix. ``Network.ybus()`` returns ``g + 1j*b``."
 )
 
 
@@ -102,19 +103,19 @@ def _to_csr(coo):
 def _require_gridfm() -> None:
     """Raise a clear ImportError if the extension lacks the gridfm Parquet surface.
 
-    The gridfm write path pulls arrow + parquet into the native module, so it is
-    an opt-in build (the ``powerio[gridfm]`` extra); the default wheel stays
-    interpreter-only.
+    Published wheels include this surface. A custom source build can omit the
+    Rust feature, in which case the method names still raise a direct error
+    instead of failing with ``AttributeError``.
     """
     if not getattr(_powerio, "_has_gridfm", False):
         raise ImportError(
-            "powerio was built without the gridfm Parquet surface; install the "
-            "gridfm build with `pip install 'powerio[gridfm]'` (or rebuild with "
-            "`maturin develop --features gridfm`)."
+            "powerio was built without the gridfm Parquet surface; reinstall a "
+            "wheel built with gridfm support or rebuild from source with "
+            "`maturin develop --features gridfm`."
         )
 
 
-class Case:
+class Network:
     """A parsed power network case.
 
     The data attributes (``buses``, ``branches``, ``gens``, ``loads``,
@@ -125,7 +126,7 @@ class Case:
     Errors: a bad file path raises the standard ``OSError`` subclass
     (``FileNotFoundError``); a malformed case raises :class:`PowerIOParseError`
     and an unmet builder precondition (no generators, no reference bus) raises
-    :class:`PowerIODataError` — both subclass :class:`PowerIOError`, so
+    :class:`PowerIODataError`; both subclass :class:`PowerIOError`, so
     ``except PowerIOError`` catches either; an unknown
     ``scheme``/``convention``/``units`` string raises ``ValueError``.
     """
@@ -144,7 +145,7 @@ class Case:
         return getattr(self._inner, name)
 
     def __repr__(self) -> str:
-        return repr(self._inner).replace("PyCase", "Case", 1)
+        return repr(self._inner).replace("PyCase", "Network", 1)
 
     # --- matrix builders (scipy.sparse) ---------------------------------
 
@@ -211,9 +212,9 @@ class Case:
         ``<out_dir>/<case>/raw/``.
 
         Returns a dict with ``dir``, ``files``, ``dropped_zero_impedance``, and
-        ``degenerate_cost_gens``. Requires the gridfm build of the extension
-        (``pip install 'powerio[gridfm]'``); otherwise raises ``ImportError``.
-        For many perturbed snapshots in one dataset, see
+        ``degenerate_cost_gens``. Published wheels include the native writer;
+        custom source builds without the Rust ``gridfm`` feature raise
+        ``ImportError``. For many perturbed snapshots in one dataset, see
         :func:`write_gridfm_batch`.
         """
         _require_gridfm()
@@ -221,7 +222,7 @@ class Case:
             str(out_dir), scenario, include_y_bus, include_taps, include_shifts
         )
 
-    def to_normalized(self) -> "Case":
+    def to_normalized(self) -> "Network":
         """A normalized, computation-ready copy of this case: per unit, radians,
         out-of-service filtered, densely reindexed (1-based), bus types
         canonicalized. The original case is unchanged; the result carries no
@@ -229,7 +230,7 @@ class Case:
         than echoing it. Raises :class:`PowerIODataError` if the case can't be
         normalized (no reference bus can be chosen, or a non-positive base MVA).
         """
-        return Case(self._inner.to_normalized())
+        return Network(self._inner.to_normalized())
 
     def to_networkx(self):
         """Undirected networkx graph keyed by bus id.
@@ -253,28 +254,31 @@ class Case:
         return g
 
 
-def parse(path: Any) -> Case:
+Case = Network
+
+
+def parse(path: Any) -> Network:
     """Parse a case file from a path, inferring the format from the extension."""
-    return Case(_powerio.parse(str(path)))
+    return Network(_powerio.parse(str(path)))
 
 
-def parse_str(text: str, format: str = "matpower") -> Case:
+def parse_str(text: str, format: str = "matpower") -> Network:
     """Parse a case from in-memory text in the named ``format``."""
-    return Case(_powerio.parse_str(text, format))
+    return Network(_powerio.parse_str(text, format))
 
 
-def parse_matpower(path: Any) -> Case:
+def parse_matpower(path: Any) -> Network:
     """Parse a MATPOWER ``.m`` case from a file path."""
-    return Case(_powerio.parse_matpower(str(path)))
+    return Network(_powerio.parse_matpower(str(path)))
 
 
-def parse_matpower_string(content: str, name: Optional[str] = None) -> Case:
+def parse_matpower_string(content: str, name: Optional[str] = None) -> Network:
     """Parse a MATPOWER case from in-memory ``.m`` text; ``name`` overrides the
     parsed case name."""
-    return Case(_powerio.parse_matpower_string(content, name))
+    return Network(_powerio.parse_matpower_string(content, name))
 
 
-def write(case: Case) -> str:
+def write(case: Network) -> str:
     """Serialize ``case`` to MATPOWER ``.m`` (byte-exact echo when it was parsed
     from MATPOWER)."""
     return _powerio.write(case._inner)
@@ -294,7 +298,7 @@ def convert(path: Any, to: str, from_: Optional[str] = None) -> Conversion:
 
 
 def write_gridfm_batch(
-    cases: "list[Case]",
+    cases: "list[Network]",
     out_dir: Any,
     base_scenario: int = 0,
     include_y_bus: bool = True,
@@ -305,11 +309,12 @@ def write_gridfm_batch(
     the ``scenario`` column.
 
     Each case is one snapshot; the k-th is stamped ``base_scenario + k``. The
-    cases must share a base element set — the same bus/branch/gen counts and
-    bus-id order (otherwise :class:`PowerIODataError` is raised) — but load, dispatch,
+    cases must share a base element set: the same bus/branch/gen counts and
+    bus id order (otherwise :class:`PowerIODataError` is raised). Load, dispatch,
     branch status, and costs may vary per scenario. Returns the same dict as
-    :meth:`Case.write_gridfm`. Requires the gridfm build
-    (``pip install 'powerio[gridfm]'``); otherwise raises ``ImportError``.
+    :meth:`Network.write_gridfm`. Published wheels include the native writer;
+    custom source builds without the Rust ``gridfm`` feature raise
+    ``ImportError``.
     """
     _require_gridfm()
     inners = [c._inner for c in cases]

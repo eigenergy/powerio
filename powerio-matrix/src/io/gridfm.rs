@@ -209,9 +209,11 @@ struct GridfmMeta {
 ///
 /// # Errors
 /// [`Error::ReferenceBusCount`] unless the case has exactly one reference bus
-/// (graphkit needs a slack), [`Error::NonFiniteSusceptance`] for a branch with
-/// NaN/Inf impedance, and [`Error::UnknownBus`] if a generator or branch
-/// references a bus the network doesn't define.
+/// (graphkit needs a slack), [`Error::NormalizedGridfmSnapshot`] for a normalized
+/// input, [`Error::NonFiniteGridfmValue`] for a NaN/Inf field that would reach
+/// Parquet, [`Error::NonFiniteSusceptance`] if a finite branch impedance still
+/// yields a non-finite admittance, and [`Error::UnknownBus`] if a generator or
+/// branch references a bus the network doesn't define.
 pub fn gridfm_record_batches(
     net: &Network,
     scenario: i64,
@@ -291,15 +293,7 @@ fn snapshot_views<'a>(snapshots: &'a [GridfmSnapshot<'a>]) -> Result<Vec<Snapsho
                 reason: ScenarioMismatch::BusOrder,
             });
         }
-        // gridfm exports a raw snapshot: powers in MW, angles in degrees, shunts
-        // ÷ base. A normalized network is per unit / radians, so its fields would
-        // be mislabeled (and per_unit_base can't recover the MW it never kept) —
-        // it is not a valid snapshot source.
-        debug_assert!(
-            !snap.net.is_normalized(),
-            "write_gridfm: snapshot {k} is a normalized (per-unit) network; gridfm \
-             expects a raw MW/degree snapshot"
-        );
+        validate_snapshot_inputs(snap.net, snap.scenario)?;
         let view = IndexedNetwork::new(snap.net);
         let ref_bus = view.reference_bus_index()?;
         views.push(SnapshotView {
@@ -309,6 +303,86 @@ fn snapshot_views<'a>(snapshots: &'a [GridfmSnapshot<'a>]) -> Result<Vec<Snapsho
         });
     }
     Ok(views)
+}
+
+fn validate_snapshot_inputs(net: &Network, scenario: i64) -> Result<()> {
+    if net.is_normalized() {
+        return Err(Error::NormalizedGridfmSnapshot { scenario });
+    }
+    if !net.base_mva.is_finite() || net.base_mva <= 0.0 {
+        return Err(Error::InvalidBaseMva { base: net.base_mva });
+    }
+
+    for (row, b) in net.buses.iter().enumerate() {
+        finite(scenario, "bus", row, "vm", b.vm)?;
+        finite(scenario, "bus", row, "va", b.va)?;
+        finite(scenario, "bus", row, "base_kv", b.base_kv)?;
+        finite(scenario, "bus", row, "vmax", b.vmax)?;
+        finite(scenario, "bus", row, "vmin", b.vmin)?;
+    }
+    for (row, l) in net.loads.iter().enumerate() {
+        finite(scenario, "load", row, "p", l.p)?;
+        finite(scenario, "load", row, "q", l.q)?;
+    }
+    for (row, s) in net.shunts.iter().enumerate() {
+        finite(scenario, "shunt", row, "g", s.g)?;
+        finite(scenario, "shunt", row, "b", s.b)?;
+    }
+    for (row, br) in net.branches.iter().enumerate() {
+        finite(scenario, "branch", row, "r", br.r)?;
+        finite(scenario, "branch", row, "x", br.x)?;
+        finite(scenario, "branch", row, "b", br.b)?;
+        finite(scenario, "branch", row, "tap", br.tap)?;
+        finite(scenario, "branch", row, "shift", br.shift)?;
+        finite(scenario, "branch", row, "angmin", br.angmin)?;
+        finite(scenario, "branch", row, "angmax", br.angmax)?;
+        finite(scenario, "branch", row, "rate_a", br.rate_a)?;
+    }
+    for (row, g) in net.generators.iter().enumerate() {
+        finite(scenario, "generator", row, "pg", g.pg)?;
+        finite(scenario, "generator", row, "qg", g.qg)?;
+        finite(scenario, "generator", row, "pmax", g.pmax)?;
+        finite(scenario, "generator", row, "pmin", g.pmin)?;
+        finite(scenario, "generator", row, "qmax", g.qmax)?;
+        finite(scenario, "generator", row, "qmin", g.qmin)?;
+        if let Some(cost) = &g.cost {
+            if cost_representable(Some(cost)) {
+                for (k, &coeff) in cost.coeffs.iter().take(cost.ncost).enumerate() {
+                    finite(scenario, "gencost", row, coeff_field(k), coeff)?;
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
+fn finite(
+    scenario: i64,
+    element: &'static str,
+    row: usize,
+    field: &'static str,
+    value: f64,
+) -> Result<()> {
+    if value.is_finite() {
+        Ok(())
+    } else {
+        Err(Error::NonFiniteGridfmValue {
+            scenario,
+            element,
+            row,
+            field,
+            value,
+        })
+    }
+}
+
+fn coeff_field(index: usize) -> &'static str {
+    match index {
+        0 => "coeffs[0]",
+        1 => "coeffs[1]",
+        2 => "coeffs[2]",
+        _ => "coeffs",
+    }
 }
 
 /// The base element shape a scenario batch shares.
@@ -1187,6 +1261,88 @@ mod tests {
         let err = gridfm_record_batches(&net, 0, &GridfmOptions::default()).unwrap_err();
         assert!(
             matches!(err, Error::ReferenceBusCount { .. }),
+            "got {err:?}"
+        );
+    }
+
+    #[test]
+    fn non_finite_bus_voltage_errors_before_parquet() {
+        let mut net = case14();
+        net.buses[0].vm = f64::NAN;
+        let err = gridfm_record_batches(&net, 7, &GridfmOptions::default()).unwrap_err();
+        match err {
+            Error::NonFiniteGridfmValue {
+                scenario,
+                element,
+                row,
+                field,
+                value,
+            } => {
+                assert_eq!(scenario, 7);
+                assert_eq!(element, "bus");
+                assert_eq!(row, 0);
+                assert_eq!(field, "vm");
+                assert!(value.is_nan());
+            }
+            other => panic!("expected NonFiniteGridfmValue, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn non_finite_tap_errors_even_without_y_bus_table() {
+        let mut net = case14();
+        net.branches[0].tap = f64::NAN;
+        let opts = GridfmOptions {
+            include_y_bus: false,
+            ..Default::default()
+        };
+        let err = gridfm_record_batches(&net, 0, &opts).unwrap_err();
+        assert!(
+            matches!(
+                err,
+                Error::NonFiniteGridfmValue {
+                    element: "branch",
+                    row: 0,
+                    field: "tap",
+                    ..
+                }
+            ),
+            "got {err:?}"
+        );
+    }
+
+    #[test]
+    fn normalized_snapshot_is_rejected_in_release_builds() {
+        let net = case14().to_normalized().unwrap();
+        let err = gridfm_record_batches(&net, 3, &GridfmOptions::default()).unwrap_err();
+        assert!(
+            matches!(err, Error::NormalizedGridfmSnapshot { scenario: 3 }),
+            "got {err:?}"
+        );
+    }
+
+    #[test]
+    fn non_finite_representable_cost_errors() {
+        let mut net = Network::in_memory(
+            "badcost",
+            100.0,
+            vec![bus(1, BusType::Ref), bus(2, BusType::Pq)],
+            vec![branch(1, 2, 0.01, 0.1)],
+        );
+        net.generators
+            .push(gen_at(1, gencost(2, 3, vec![f64::NAN, 1.0, 0.0])));
+
+        let err = gridfm_record_batches(&net, 0, &GridfmOptions::default()).unwrap_err();
+        assert!(
+            matches!(
+                err,
+                Error::NonFiniteGridfmValue {
+                    element: "gencost",
+                    row: 0,
+                    field: "coeffs[0]",
+                    ..
+                }
+            ),
             "got {err:?}"
         );
     }

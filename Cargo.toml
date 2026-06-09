@@ -15,7 +15,7 @@ cast_precision_loss = "allow"
 cast_possible_truncation = "allow"
 cast_sign_loss = "allow"
 similar_names = "allow"
-# The domain is full of proper nouns (MATPOWER, PowerModels, EGRET, PSS/E, MVAr);
+# The domain is full of proper nouns (MATPOWER, PowerModels, egret, PSS/E, MVAr);
 # doc_markdown flags them as missing backticks, which is noise here.
 doc_markdown = "allow"
 

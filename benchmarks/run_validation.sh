@@ -13,7 +13,7 @@
 # Then the read sides and the full conversion matrix:
 #   PSSE-read   — powerio reads a real PSS/E .raw, emits PowerModels JSON, compared
 #                 against PowerModels.jl reading the same .raw.
-#   EGRET-read  — powerio reads a real EGRET .json, emits PowerModels JSON, checked
+#   egret-read  — powerio reads a real egret .json, emits PowerModels JSON, checked
 #                 against the matching MATPOWER case.
 #   matrix(5x5) — every reader -> every writer over the fixtures, each output's
 #                 electrical core checked against the ground-truth MATPOWER case.
@@ -45,12 +45,12 @@ trap 'rm -rf "$TMP"' EXIT
 export PIO_RESULTS_TSV="$TMP/results.tsv"
 : > "$PIO_RESULTS_TSV"
 
-# The full 5x5 matrix needs the egret package (the EGRET oracle); it's a benchmark
+# The full 5x5 matrix needs the egret package (the egret oracle); it's a benchmark
 # dependency, not a powerio one. Skip that one leg with a notice if it isn't
-# installed, rather than failing the whole run. The EGRET *read-side* leg below
+# installed, rather than failing the whole run. The egret read-side leg below
 # needs only powerio + PowerModels, so it runs regardless.
-HAVE_EGRET=1
-"$PY" -c "import egret" 2>/dev/null || HAVE_EGRET=0
+have_egret=1
+"$PY" -c "import egret" 2>/dev/null || have_egret=0
 
 MCASES=(
     tests/data/case9.m
@@ -97,7 +97,7 @@ echo "=== pandapower (parse + Y_bus) ==="
 
 # 5. Full reader x writer matrix (its own batched process).
 echo "=== full reader x writer matrix (PowerModels + egret oracles) ==="
-if [ "$HAVE_EGRET" -eq 0 ]; then
+if [ "$have_egret" -eq 0 ]; then
     echo "  skipped: egret not installed (pip install -r benchmarks/requirements.txt)"
     printf 'matrix(5x5)\tall-cells\tSKIP(egret)\n' >>"$PIO_RESULTS_TSV"
 elif "$PY" benchmarks/validate_matrix.py; then

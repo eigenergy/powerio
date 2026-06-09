@@ -1,11 +1,11 @@
 # powerio-capi
 
 A C ABI over `powerio`: parse any supported power system case format, query it,
-convert losslessly, and pull out the numeric tables a solver needs to assemble
-matrices. This is the polyglot substrate: anything that speaks C (C, C++, Julia,
-Python ctypes, …) can drive powerio through it.
+convert it, and pull out the numeric tables a solver needs to assemble matrices.
+Any language with a C foreign function interface can call it.
 
-The header is [`include/powerio.h`](include/powerio.h).
+The header is
+[`include/powerio.h`](https://github.com/eigenergy/powerio/blob/main/powerio-capi/include/powerio.h).
 
 ## Build
 
@@ -98,5 +98,5 @@ than echoing a byte-exact original.
 powerio-capi covers the `powerio` surface: parse / write / convert / query / table
 and JSON extraction. It deliberately has no matrix builders; those live in
 `powerio-matrix`. A future `powerio-matrix-capi` can hand back assembled CSR
-matrices (B', Y_bus, PTDF, DC-OPF) over the same ABI style; for now a consumer
+matrices (B', Y_bus, PTDF, DC OPF) over the same ABI style; for now a consumer
 builds matrices from the extracted tables.

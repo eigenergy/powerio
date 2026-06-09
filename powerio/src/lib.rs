@@ -9,7 +9,7 @@
 //! `powerio-matrix` crate.
 //!
 //! Readers and writers cover MATPOWER `.m`, PowerModels JSON, PSS/E `.raw`,
-//! PowerWorld `.aux`, and EGRET JSON. Every format meets at [`Network`], and
+//! PowerWorld `.aux`, and egret JSON. Every format meets at [`Network`], and
 //! [`write_as`] reports whatever a target format cannot represent — see the
 //! [`crate::format`] module for the two-tier fidelity contract.
 //!

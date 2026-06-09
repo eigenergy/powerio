@@ -575,7 +575,7 @@ fn run_convert(
 
 /// Read `input` into the neutral [`powerio_matrix::Network`] through the shared
 /// format hub, which picks the reader from `from` or the extension (sniffing a
-/// `.json` for the EGRET vs PowerModels shape).
+/// `.json` for the egret vs PowerModels shape).
 fn read_network(
     input: &std::path::Path,
     from: Option<FormatArg>,

@@ -192,14 +192,14 @@ fn psse_reads_real_pti_files() {
 #[test]
 fn hvdc_converts_and_round_trips() {
     // t_case9_dcline.m carries HVDC dclines. PowerModels JSON round-trips them;
-    // EGRET/PSS-E/PowerWorld drop them, each with a warning.
+    // egret/PSS-E/PowerWorld drop them, each with a warning.
     let net = parse_matpower_file(data("t_case9_dcline.m")).unwrap();
     assert!(!net.hvdc.is_empty(), "fixture should have dclines");
 
     let pm = write_powermodels_json(&net);
     assert!(
         pm.warnings.iter().any(|w| w.contains("dcline")),
-        "PM should flag dcline best-effort"
+        "PM should warn about dcline mapping"
     );
     let back = parse_powermodels_json(&pm.text).unwrap();
     assert_eq!(back.hvdc.len(), net.hvdc.len());
@@ -398,7 +398,7 @@ fn powermodels_unbounded_limit_round_trips_as_infinity() {
 #[test]
 fn oos_fixture_marks_out_of_service_elements() {
     // t_case9_oos.m turns gen 2 and branch 5-6 out of service; the parse must carry
-    // those in_service=false flags (the basis for ExaPowerIO filtered=true parity).
+    // those in_service=false flags.
     // The fixture otherwise runs only in the Julia validators.
     let net = parse_matpower_file(data("t_case9_oos.m")).unwrap();
     assert_eq!(net.generators.iter().filter(|g| !g.in_service).count(), 1);

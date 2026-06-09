@@ -99,8 +99,8 @@ def convert_case(
     file extension for ``path``; ``from_`` is REQUIRED with inline ``content``.
 
     Returns ``{"text": <converted file>, "warnings": [<fidelity notes: data the
-    target can't represent, defaults synthesized, or blocks mapped
-    best-effort>]}`` (empty for a faithful conversion).
+    target can't represent, defaults synthesized, or blocks mapped with
+    warnings>]}`` (empty for a faithful conversion).
     """
     _one_input(path, content)
     if content is not None and not from_:
