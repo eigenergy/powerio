@@ -47,7 +47,7 @@ tools. Every reader and writer, and every conversion pair, is exercised.
 `benchmarks/validate_matrix.py` converts each source to every target and checks
 the electrical core of the output (bus/branch/generator counts and the per unit
 demand, generation, and shunt totals) against the source's own core, read by an
-independent oracle. The diagonal is checked byte-exact: writing back to the source
+independent oracle. The diagonal is checked byte exact: writing back to the source
 format reproduces the file. Sources use the real native files where they exist
 (the vendored PSS/E `.raw` and egret `.json`) and representative MATPOWER cases
 otherwise: basic (`case9`), shunts and transformers (`case14`, `case30`), size
@@ -56,7 +56,7 @@ otherwise: basic (`case9`), shunts and transformers (`case14`, `case30`), size
 
 All 65 cells pass (13 source cases × 5 targets). The core is preserved by every
 writer regardless of fidelity tier, so it is the invariant checked across the
-whole matrix; cost, HVDC, and angle limits are tier-specific and covered by the
+whole matrix; cost, HVDC, and angle limits are tier specific and covered by the
 dedicated checks above and the Rust suite.
 
 ### Running it
@@ -70,7 +70,7 @@ bash benchmarks/run_validation.sh
 ```
 
 The oracle tools (PowerModels.jl, egret, ExaPowerIO.jl, pandapower) are
-benchmark-scoped: they are declared in `benchmarks/Project.toml` and
+benchmark scoped: they are declared in `benchmarks/Project.toml` and
 `benchmarks/requirements.txt`, never as dependencies of the powerio package.
 
 ## Known limits

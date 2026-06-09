@@ -115,7 +115,8 @@ PioCase *pio_parse_file(const char *path, const char *from, char *errbuf, size_t
 PioCase *pio_parse_str(const char *text, const char *format, char *errbuf, size_t errlen);
 
 /**
- * Free a case handle from [`pio_parse_file`].
+ * Free a case handle from [`pio_parse_file`], [`pio_parse_str`],
+ * [`pio_to_normalized`], or [`pio_from_json`].
  */
 void pio_case_free(PioCase *case_);
 
@@ -124,7 +125,7 @@ void pio_case_free(PioCase *case_);
  * out-of-service filtered, densely reindexed, bus types canonicalized (see
  * `Network::to_normalized`). The result is independent of `case`; free both
  * with [`pio_case_free`]. Every extractor and [`pio_to_json`] works on it
- * unchanged (the handle is per-unit, not MW). Returns `NULL` on error (no
+ * unchanged (the handle is per unit, not MW). Returns `NULL` on error (no
  * reference bus can be chosen, or a non-positive base MVA) and writes the
  * message into `errbuf`.
  */

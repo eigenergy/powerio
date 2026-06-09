@@ -205,7 +205,8 @@ pub unsafe extern "C" fn pio_parse_str(
     }
 }
 
-/// Free a case handle from [`pio_parse_file`].
+/// Free a case handle from [`pio_parse_file`], [`pio_parse_str`],
+/// [`pio_to_normalized`], or [`pio_from_json`].
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_case_free(case: *mut PioCase) {
     unsafe {
@@ -231,7 +232,7 @@ unsafe fn view<'a>(case: *const PioCase) -> Option<IndexedNetwork<'a>> {
 /// out-of-service filtered, densely reindexed, bus types canonicalized (see
 /// `Network::to_normalized`). The result is independent of `case`; free both
 /// with [`pio_case_free`]. Every extractor and [`pio_to_json`] works on it
-/// unchanged (the handle is per-unit, not MW). Returns `NULL` on error (no
+/// unchanged (the handle is per unit, not MW). Returns `NULL` on error (no
 /// reference bus can be chosen, or a non-positive base MVA) and writes the
 /// message into `errbuf`.
 #[unsafe(no_mangle)]

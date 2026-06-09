@@ -3,9 +3,9 @@
 Two tools for LLM agent tooling, both accepting either a filesystem ``path`` or
 inline ``content``:
 
-- ``convert_case`` — convert a case file between formats, returning the text and
+- ``convert_case``: convert a case file between formats, returning the text and
   any fidelity warnings.
-- ``case_summary`` — counts, base MVA, source format, and connectivity, with no
+- ``case_summary``: counts, base MVA, source format, and connectivity, with no
   scipy/numpy in the loop.
 
 Run over stdio with the ``powerio-mcp`` console script (or ``python -m

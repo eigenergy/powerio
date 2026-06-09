@@ -15,13 +15,12 @@ the conventions a consumer (e.g. a C++ Laplacian solver) needs.
 - **Sign convention.** The Laplacians are the **positive (M-matrix) form**:
   diagonal `> 0`, off-diagonal `< 0`, with `L[i,i] = Σ_j |L[i,j]|` for `L`. An
   off-diagonal entry is `L[i,j] = −b_e` for the branch between `i` and `j`, so a
-  consumer recovers the edge weight as `−L[i,j] > 0` (this is exactly what the
-  apx-Cholesky `make_graph` expects).
+  consumer recovers the edge weight as `−L[i,j] > 0`.
 - **Units.** `PerUnit` by default: power divided by `base_mva`, cost scaled so
   it is a function of per unit power (`q ← 2c₂·base²`, `c ← c₁·base`). `Native`
   keeps MW / native cost. The choice is recorded in the manifest.
 - **Reference buses.** `reference_buses` in the manifest lists every grounded bus
-  as a 0 based dense index. Each in service island needs at least one reference.
+  as a 0-based dense index. Each in-service island needs at least one reference.
   If several references lie in one island, the bundle fixes all of those voltage
   angles to zero; it is not a participation factor slack model.
 - **DC convention.** `PaperPure` by default (`b_e = 1/x`, taps and phase shifts
@@ -49,7 +48,7 @@ unlimited per MATPOWER). Generator-space provenance (length n_gen): `q_gen`,
 
 ## Manifest (`dcopf_meta.json`)
 
-`case_name, base_mva, n, m, n_gen, reference_buses` (0 based), `convention`,
+`case_name, base_mva, n, m, n_gen, reference_buses` (0-based), `convention`,
 `units`, `files[]`, `powerio_version`.
 
 ## Solving with it

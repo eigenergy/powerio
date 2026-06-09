@@ -1,7 +1,7 @@
 //! The `powerio` binary: a clap CLI and a ratatui TUI over `powerio-matrix`.
 //!
 //! Subcommands: `batch` (matrix families), `gen` (synthetic cases), `verify`,
-//! `dcopf` (DC-OPF bundle), `sensitivities` (PTDF/LODF), `gridfm` (gridfm-datakit
+//! `dcopf` (DC OPF bundle), `sensitivities` (PTDF/LODF), `gridfm` (gridfm-datakit
 //! Parquet), and `convert`. With no subcommand it launches the TUI. Run
 //! `powerio --help` for the full surface.
 
@@ -42,7 +42,7 @@ enum Command {
         /// Output directory.
         #[arg(short, long)]
         output: PathBuf,
-        /// Comma separated matrix kinds to emit.
+        /// Comma-separated matrix kinds to emit.
         #[arg(short, long, value_delimiter = ',', default_values = ["bprime"])]
         matrices: Vec<MatrixKindArg>,
         #[arg(long, value_enum, default_value = "bx")]
@@ -69,7 +69,7 @@ enum Command {
         #[arg(short, long, value_delimiter = ',', default_values = ["bprime"])]
         matrices: Vec<MatrixKindArg>,
     },
-    /// Print B' / B'' / Y_bus stats and SDDM check for one case.
+    /// Print matrix stats and the SDDM check for one case.
     Verify {
         /// MATPOWER `.m` file.
         input: PathBuf,
@@ -78,7 +78,7 @@ enum Command {
         #[arg(long, value_enum, default_value = "bx")]
         scheme: SchemeArg,
     },
-    /// Emit the static DC-OPF matrix/vector bundle for one case.
+    /// Emit the static DC OPF matrix/vector bundle for one case.
     #[command(name = "dcopf", visible_alias = "dc-opf")]
     DcOpf {
         /// MATPOWER `.m` file.
@@ -480,12 +480,12 @@ fn run_dcopf(
         .with_context(|| format!("parse {}", input.display()))?;
     let opts = DcOpfOptions { convention, units };
     let outputs = write_dcopf_bundle(&mpc, output, &opts)
-        .with_context(|| format!("export DC-OPF bundle for {}", input.display()))?;
+        .with_context(|| format!("export DC OPF bundle for {}", input.display()))?;
     tracing::info!(
         case = %mpc.name,
         dir = %outputs.dir.display(),
         files = outputs.files.len(),
-        "wrote DC-OPF bundle"
+        "wrote DC OPF bundle"
     );
     Ok(())
 }

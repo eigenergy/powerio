@@ -15,7 +15,7 @@ used by analysis and solver code.
 Supported formats:
 
 - [MATPOWER](https://matpower.org/) `.m`
-- [PSS/E](https://www.siemens.com/psscape) `.raw` revision 33
+- [PSS/E](https://www.siemens.com/global/en/products/energy/grid-software/planning/pss-software/pss-e.html) `.raw` revision 33
 - [PowerWorld](https://www.powerworld.com/WebHelp/Content/MainDocumentation_HTML/Case_Formats.htm) `.aux`
 - [PowerModels.jl](https://github.com/lanl-ansi/PowerModels.jl) network data JSON
 - [egret](https://pypi.org/project/gridx-egret/) `ModelData` JSON
@@ -135,12 +135,12 @@ DC susceptance are in
 
 `Network::to_normalized` derives a solver oriented copy of a case: powers in per
 unit, angles in radians, inactive elements removed, `tap == 0` replaced with `1`,
-surviving buses reindexed to a dense 1 based id space, and bus types made
+surviving buses reindexed to a dense 1-based id space, and bus types made
 consistent with generator placement and reference buses. It carries no retained
 source text, so writing it emits the derived model rather than the original file.
 
-Python exposes this as `case.to_normalized()`. The C ABI exposes it as
-`pio_to_normalized`. Julia exposes it as `to_normalized(case)`.
+Python exposes it as `case.to_normalized()`, the C ABI as `pio_to_normalized`,
+and Julia as `to_normalized(case)`.
 
 ## GridFM
 

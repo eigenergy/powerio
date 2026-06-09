@@ -43,7 +43,7 @@ instance bundle (`A`, `b`, `L`, costs, bounds, thermal limits, `C_g`) is documen
 - **`BR_B` is already per unit.** Line charging susceptance is per unit on `baseMVA`
   in MATPOWER; never divide by `base_mva` again.
 - **Reference coverage.** `IndexedNetwork::check_reference_coverage` verifies that
-  every in service island has a reference bus before DC sensitivity or DC OPF
+  every in-service island has a reference bus before DC sensitivity or DC OPF
   builders ground the Laplacian.
 - **DC susceptance.** The default is `b = 1/x` (`DcConvention::PaperPure`, taps and
   shifts ignored), which makes `L = A diag(b) Aᵀ` equal `build_bprime` in the XB
