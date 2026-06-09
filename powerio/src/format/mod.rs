@@ -67,6 +67,18 @@ impl TargetFormat {
             TargetFormat::Matpower => "m",
         }
     }
+
+    /// Human-readable format name for diagnostics.
+    #[must_use]
+    pub fn label(self) -> &'static str {
+        match self {
+            TargetFormat::PowerModelsJson => "PowerModels JSON",
+            TargetFormat::EgretJson => "EGRET JSON",
+            TargetFormat::Psse => "PSS/E .raw",
+            TargetFormat::PowerWorld => "PowerWorld .aux",
+            TargetFormat::Matpower => "MATPOWER .m",
+        }
+    }
 }
 
 /// Map a format name (with the common aliases) to a [`TargetFormat`], or `None`
@@ -128,7 +140,7 @@ pub fn read_path(path: &std::path::Path, from: Option<&str>) -> Result<Network> 
 /// it moves the buffer straight into the retained source (no copy) and is free
 /// to specialize its parse internally.
 fn read_source(source: Arc<String>, fmt: TargetFormat, name_hint: Option<&str>) -> Result<Network> {
-    match fmt {
+    let net = match fmt {
         TargetFormat::Matpower => matpower::parse_matpower_source(source, name_hint),
         TargetFormat::PowerModelsJson => {
             powermodels::parse_powermodels_json_source(source, name_hint)
@@ -136,7 +148,18 @@ fn read_source(source: Arc<String>, fmt: TargetFormat, name_hint: Option<&str>) 
         TargetFormat::Psse => psse::parse_psse_source(source, name_hint),
         TargetFormat::PowerWorld => powerworld::parse_powerworld_source(source, name_hint),
         TargetFormat::EgretJson => egret::parse_egret_source(source, name_hint),
+    }?;
+    // A case with no buses is content-free for every consumer. Most readers
+    // already reject it on a missing required table, but a JSON carrying only
+    // `baseMVA` would otherwise parse to a hollow network; reject it here so the
+    // one funnel guards every parse path (file and in-memory).
+    if net.buses.is_empty() {
+        return Err(Error::FormatRead {
+            format: fmt.label(),
+            message: "case has no buses".into(),
+        });
     }
+    Ok(net)
 }
 
 /// Both interchange JSON formats use the `.json` extension, so an explicit

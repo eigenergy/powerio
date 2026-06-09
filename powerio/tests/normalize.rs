@@ -4,7 +4,8 @@
 use std::path::{Path, PathBuf};
 
 use powerio::{
-    BusType, Error, SourceFormat, TargetFormat, parse, parse_matpower_file, parse_str, write_as,
+    BusId, BusType, Error, Extras, IndexedNetwork, SourceFormat, Storage, TargetFormat, parse,
+    parse_matpower_file, parse_str, write_as,
 };
 
 const DEG_TO_RAD: f64 = std::f64::consts::PI / 180.0;
@@ -46,7 +47,9 @@ fn per_unit_and_radians_on_case9() {
     for (b, rb) in n.branches.iter().zip(&raw.branches) {
         assert!(approx(b.angmin, rb.angmin * DEG_TO_RAD));
         assert!(approx(b.angmax, rb.angmax * DEG_TO_RAD));
-        assert!(b.tap != 0.0, "tap 0 normalized to 1");
+        // A 0 tap normalizes to exactly 1; an explicit tap rides through.
+        let want_tap = if rb.tap == 0.0 { 1.0 } else { rb.tap };
+        assert!(approx(b.tap, want_tap), "tap 0→1 / explicit tap preserved");
     }
     // Polynomial gen cost: the p^2 coeff scales by base^2, p^1 by base, the
     // constant is unchanged.
@@ -251,6 +254,15 @@ mpc.branch = [
     assert_eq!(n.buses[0].kind, BusType::Ref);
     assert_eq!(n.buses[1].kind, BusType::Ref);
     assert_eq!(n.buses[2].kind, BusType::Pq);
+
+    // The reference set query returns both (dense, ascending); the single-ref
+    // query refuses to pick one and reports the count.
+    let view = IndexedNetwork::new(&n);
+    assert_eq!(view.reference_bus_indices(), vec![0, 1]);
+    assert!(matches!(
+        view.reference_bus_index(),
+        Err(Error::ReferenceBusCount { found: 2 })
+    ));
 }
 
 #[test]
@@ -328,4 +340,162 @@ fn parse_str_matches_parse() {
             "{case}: parse_str disagrees with parse"
         );
     }
+}
+
+#[test]
+fn parse_str_rejects_contentless_input() {
+    // Empty or table-free text must not parse to a hollow network. Empty input
+    // and `{}` fail on the missing required tables; a JSON carrying only
+    // `baseMVA` would slip past those, so the zero-bus guard in `read_source`
+    // catches it. Every format funnels through that guard.
+    for fmt in ["matpower", "powermodels", "egret"] {
+        assert!(parse_str("", fmt).is_err(), "{fmt}: empty input parsed");
+    }
+    assert!(parse_str("{}", "powermodels").is_err());
+    assert!(parse_str("{}", "egret").is_err());
+    // baseMVA present but no `bus` table: the zero-bus guard, not a missing
+    // required field, is what rejects this.
+    let err = parse_str(r#"{"baseMVA": 100}"#, "powermodels").unwrap_err();
+    assert!(
+        matches!(&err, Error::FormatRead { message, .. } if message.contains("no buses")),
+        "expected a no-buses error, got {err:?}"
+    );
+}
+
+#[test]
+fn nonzero_field_transforms() {
+    // The vendored cases leave bus angle, branch shift, explicit tap, and ramp
+    // caps at zero, so those transforms are never witnessed. This inline fixture
+    // carries nonzero values in each, so a wrong factor or a dropped line fails.
+    let src = "\
+function mpc = nz
+mpc.version = '2';
+mpc.baseMVA = 100;
+mpc.bus = [
+\t1\t3\t0\t0\t0\t0\t1\t1\t30\t230\t1\t1.1\t0.9;
+\t2\t1\t50\t10\t0\t0\t1\t1\t0\t230\t1\t1.1\t0.9;
+];
+mpc.gen = [
+\t1\t0\t0\t100\t-100\t1\t100\t1\t200\t0\t0\t0\t5\t15\t0\t0\t0\t0\t60\t0\t0;
+];
+mpc.branch = [
+\t1\t2\t0.01\t0.1\t0\t0\t0\t0\t0.978\t15\t1\t-30\t30;
+];
+";
+    let n = parse_str(src, "matpower").unwrap().to_normalized().unwrap();
+    let base = 100.0;
+    // Bus angle: degrees → radians.
+    assert!(
+        approx(n.buses[0].va, 30.0 * DEG_TO_RAD),
+        "va: {}",
+        n.buses[0].va
+    );
+    // Branch: an explicit tap rides through unscaled; shift and angle bounds go
+    // to radians.
+    let br = &n.branches[0];
+    assert!(approx(br.tap, 0.978), "explicit tap kept: {}", br.tap);
+    assert!(approx(br.shift, 15.0 * DEG_TO_RAD), "shift: {}", br.shift);
+    assert!(approx(br.angmin, -30.0 * DEG_TO_RAD));
+    assert!(approx(br.angmax, 30.0 * DEG_TO_RAD));
+    // Gen caps: ramp_30 (GEN_EXTRA_KEYS index 8) is per-unitized; qc1min (index
+    // 2) stays raw — the split GEN_PU_KEYS encodes.
+    let caps = &n.generators[0].caps;
+    assert!(
+        approx(caps[8].unwrap(), 60.0 / base),
+        "ramp_30 scaled: {:?}",
+        caps[8]
+    );
+    assert!(
+        approx(caps[2].unwrap(), 5.0),
+        "qc1min stays raw: {:?}",
+        caps[2]
+    );
+}
+
+#[test]
+fn largest_pmax_gen_wins_slack_among_several() {
+    // No file REF; two PV gen buses. The slack promotion must pick the larger
+    // pmax even when it is listed second — exercising the argmax, not first-wins.
+    let src = "\
+function mpc = twogen
+mpc.version = '2';
+mpc.baseMVA = 100;
+mpc.bus = [
+\t1\t2\t0\t0\t0\t0\t1\t1\t0\t230\t1\t1.1\t0.9;
+\t2\t2\t0\t0\t0\t0\t1\t1\t0\t230\t1\t1.1\t0.9;
+\t3\t1\t50\t10\t0\t0\t1\t1\t0\t230\t1\t1.1\t0.9;
+];
+mpc.gen = [
+\t1\t0\t0\t100\t-100\t1\t100\t1\t100\t0\t0\t0\t0\t0\t0\t0\t0\t0\t0\t0\t0;
+\t2\t0\t0\t100\t-100\t1\t100\t1\t300\t0\t0\t0\t0\t0\t0\t0\t0\t0\t0\t0\t0;
+];
+mpc.branch = [
+\t1\t2\t0.01\t0.1\t0\t0\t0\t0\t0\t0\t1\t-360\t360;
+\t2\t3\t0.01\t0.1\t0\t0\t0\t0\t0\t0\t1\t-360\t360;
+];
+";
+    let n = parse_str(src, "matpower").unwrap().to_normalized().unwrap();
+    // Bus 2's gen has pmax 300 > bus 1's 100, so bus 2 (dense index 1) is slack.
+    assert_eq!(n.buses[0].kind, BusType::Pv);
+    assert_eq!(
+        n.buses[1].kind,
+        BusType::Ref,
+        "largest-pmax gen bus is slack"
+    );
+    assert_eq!(n.buses[2].kind, BusType::Pq);
+    assert_eq!(IndexedNetwork::new(&n).reference_bus_indices(), vec![1]);
+}
+
+#[test]
+fn storage_per_units_ratings_but_keeps_dispatch_setpoint() {
+    // norm_storage scales energy/ratings/limits/losses by base but leaves the
+    // ps/qs dispatch setpoint raw (matching PowerModels' make_per_unit!). No
+    // vendored case carries storage, so attach one to a parsed 2-bus case.
+    let src = "\
+function mpc = st
+mpc.version = '2';
+mpc.baseMVA = 100;
+mpc.bus = [
+\t1\t3\t0\t0\t0\t0\t1\t1\t0\t230\t1\t1.1\t0.9;
+\t2\t1\t50\t10\t0\t0\t1\t1\t0\t230\t1\t1.1\t0.9;
+];
+mpc.gen = [
+\t1\t0\t0\t100\t-100\t1\t100\t1\t200\t0\t0\t0\t0\t0\t0\t0\t0\t0\t0\t0\t0;
+];
+mpc.branch = [
+\t1\t2\t0.01\t0.1\t0\t0\t0\t0\t0\t0\t1\t-360\t360;
+];
+";
+    let mut net = parse_str(src, "matpower").unwrap();
+    net.storage.push(Storage {
+        bus: BusId(2),
+        ps: 5.0,
+        qs: 3.0,
+        energy: 100.0,
+        energy_rating: 200.0,
+        charge_rating: 40.0,
+        discharge_rating: 40.0,
+        charge_efficiency: 0.95,
+        discharge_efficiency: 0.95,
+        thermal_rating: 60.0,
+        qmin: -30.0,
+        qmax: 30.0,
+        r: 0.0,
+        x: 0.0,
+        p_loss: 2.0,
+        q_loss: 1.0,
+        in_service: true,
+        extras: Extras::new(),
+    });
+    let base = 100.0;
+    let s = &net.to_normalized().unwrap().storage[0];
+    // Energy, ratings, reactive limits, and losses divide by base...
+    assert!(approx(s.energy, 100.0 / base));
+    assert!(approx(s.thermal_rating, 60.0 / base));
+    assert!(approx(s.charge_rating, 40.0 / base));
+    assert!(approx(s.qmax, 30.0 / base));
+    assert!(approx(s.p_loss, 2.0 / base));
+    // ...but the ps/qs dispatch setpoint stays raw.
+    assert!(approx(s.ps, 5.0), "ps stays raw: {}", s.ps);
+    assert!(approx(s.qs, 3.0), "qs stays raw: {}", s.qs);
 }

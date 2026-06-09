@@ -52,10 +52,12 @@ pub(crate) fn cost_to_pu(cost: &GenCost, base: f64) -> Vec<f64> {
     let coeffs = &cost.coeffs[..want.min(cost.coeffs.len())];
     if cost.model == 2 {
         let k = coeffs.len();
+        // The exponent k-1-i is in [0, k-1]; a polynomial never has i32::MAX-many
+        // terms, so the conversion can't fail (loud, not silent, if it ever did).
         coeffs
             .iter()
             .enumerate()
-            .map(|(i, &c)| c * base.powi(i32::try_from(k - 1 - i).unwrap_or(i32::MAX)))
+            .map(|(i, &c)| c * base.powi(i32::try_from(k - 1 - i).expect("cost degree fits i32")))
             .collect()
     } else {
         coeffs
@@ -77,7 +79,7 @@ pub(crate) fn cost_from_pu(coeffs: &[f64], model: u8, base: f64) -> Vec<f64> {
         coeffs
             .iter()
             .enumerate()
-            .map(|(i, &c)| c / base.powf((k - 1 - i) as f64))
+            .map(|(i, &c)| c / base.powi(i32::try_from(k - 1 - i).expect("cost degree fits i32")))
             .collect()
     } else if model == 1 {
         coeffs
@@ -338,7 +340,7 @@ impl Network {
             }
         }
 
-        Ok(Network {
+        let net = Network {
             name: self.name.clone(),
             base_mva: base,
             buses,
@@ -350,7 +352,15 @@ impl Network {
             hvdc,
             source_format: SourceFormat::Normalized,
             source: None,
-        })
+        };
+        // The filter+remap drops every reference to a dropped bus by
+        // construction, so the result is reference-consistent. Assert it in
+        // debug builds to catch a future regression in the remap logic.
+        debug_assert!(
+            net.validate().is_ok(),
+            "to_normalized produced a dangling reference"
+        );
+        Ok(net)
     }
 }
 
@@ -425,6 +435,25 @@ mod tests {
         let back = cost_from_pu(&pu, 2, 100.0);
         for (a, b) in back.iter().zip(&cost.coeffs) {
             assert!((a - b).abs() < 1e-9);
+        }
+    }
+
+    #[test]
+    fn cost_rescale_round_trips_piecewise() {
+        // Model 1: cost_from_pu multiplies the MW breakpoints back by base and
+        // leaves the dollar costs, the exact inverse of cost_to_pu's even/odd
+        // split. (cost_to_pu trims, cost_from_pu doesn't, so feed a trimmed row.)
+        let cost = GenCost {
+            model: 1,
+            startup: 0.0,
+            shutdown: 0.0,
+            ncost: 4,
+            coeffs: vec![0.0, 0.0, 100.0, 2500.0, 200.0, 5500.0, 250.0, 7250.0],
+        };
+        let pu = cost_to_pu(&cost, 100.0);
+        let back = cost_from_pu(&pu, 1, 100.0);
+        for (a, b) in back.iter().zip(&cost.coeffs) {
+            assert!((a - b).abs() < 1e-9, "{a} != {b}");
         }
     }
 }

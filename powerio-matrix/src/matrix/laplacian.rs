@@ -19,32 +19,95 @@ pub fn build_weighted_laplacian(a: &CsMat<f64>, w: &[f64]) -> CsMat<f64> {
 
 /// Delete row `r` and column `r` from a square matrix, returning the
 /// `(n−1)×(n−1)` grounded matrix. Used to remove the slack bus so a singular
-/// Laplacian becomes SPD.
+/// Laplacian becomes SPD. The single-reference case of [`ground_at_each`].
 ///
 /// # Panics
 ///
 /// Panics if `r >= matrix.rows()`: with no row/column to remove the result
 /// would be silently the wrong shape.
 pub fn ground_at(matrix: &CsMat<f64>, r: usize) -> CsMat<f64> {
-    let n = matrix.rows();
-    debug_assert_eq!(n, matrix.cols(), "ground_at expects a square matrix");
-    // Hard assert (not debug-only): with `r >= n` no row/column is removed but
-    // the builder is sized `n-1`, silently producing a wrong-shaped matrix in
-    // release. `ground_at` is `pub`, so guard the contract unconditionally.
-    assert!(
-        r < n,
-        "ground_at: index {r} out of range for {n}x{n} matrix"
-    );
-    let mut g = CooBuilder::new(n.saturating_sub(1));
-    for (&v, (i, j)) in matrix {
-        if i == r || j == r {
-            continue;
-        }
-        let ii = if i > r { i - 1 } else { i };
-        let jj = if j > r { j - 1 } else { j };
-        g.add(ii, jj, v);
+    ground_at_each(matrix, &[r])
+}
+
+/// Delete every row and column in `refs` from a square matrix, returning the
+/// grounded matrix of side `n − k`, where `k` is the count of distinct
+/// in-range references. Grounding one bus per connected component turns a
+/// singular Laplacian SPD; grounding several buses within one component is the
+/// distributed-slack solve (their angles are tied to the same reference and the
+/// absorbed power splits by electrical distance).
+///
+/// # Panics
+///
+/// Panics if any reference is `>= matrix.rows()`: the builder is sized `n − k`,
+/// so an out-of-range index would silently yield the wrong shape.
+pub fn ground_at_each(matrix: &CsMat<f64>, refs: &[usize]) -> CsMat<f64> {
+    ground_with(matrix, &Grounding::new(refs))
+}
+
+/// A sorted, de-duplicated set of grounded indices and the reduced-index map it
+/// induces: drop the grounded rows/columns and shift the survivors down to a
+/// dense `[0, n − k)` range. The PTDF builder shares it, so the row/column
+/// removal lives in one place.
+pub(crate) struct Grounding {
+    grounds: Vec<usize>,
+}
+
+impl Grounding {
+    pub(crate) fn new(refs: &[usize]) -> Self {
+        let mut grounds = refs.to_vec();
+        // Sorted + de-duplicated so the shift is monotone and a repeated
+        // reference doesn't over-count the removal.
+        grounds.sort_unstable();
+        grounds.dedup();
+        Self { grounds }
     }
-    g.finish_csr()
+
+    /// Number of grounded indices `k`.
+    pub(crate) fn len(&self) -> usize {
+        self.grounds.len()
+    }
+
+    /// The largest grounded index, or `None` if nothing is grounded.
+    pub(crate) fn max(&self) -> Option<usize> {
+        self.grounds.last().copied()
+    }
+
+    /// Full index → reduced index, or `None` for a grounded index. The shift is
+    /// `i − (number of grounds strictly below i)`.
+    pub(crate) fn reduced(&self, i: usize) -> Option<usize> {
+        if self.grounds.binary_search(&i).is_ok() {
+            None
+        } else {
+            Some(i - self.grounds.partition_point(|&g| g < i))
+        }
+    }
+}
+
+/// Drop the rows and columns a [`Grounding`] marks, shifting survivors down.
+///
+/// # Panics
+///
+/// Panics if a grounded index is `>= matrix.rows()`: the builder is sized
+/// `n − k`, so an out-of-range index would silently yield the wrong shape.
+pub(crate) fn ground_with(matrix: &CsMat<f64>, g: &Grounding) -> CsMat<f64> {
+    let n = matrix.rows();
+    debug_assert_eq!(n, matrix.cols(), "ground_with expects a square matrix");
+    // Hard assert (not debug-only): an out-of-range index removes no row/column
+    // yet shrinks the builder. These are `pub` entry points, so guard the
+    // contract unconditionally.
+    if let Some(last) = g.max() {
+        assert!(
+            last < n,
+            "ground_with: index {last} out of range for {n}x{n} matrix"
+        );
+    }
+    let mut out = CooBuilder::new(n.saturating_sub(g.len()));
+    for (&v, (i, j)) in matrix {
+        if let (Some(ri), Some(rj)) = (g.reduced(i), g.reduced(j)) {
+            out.add(ri, rj, v);
+        }
+    }
+    out.finish_csr()
 }
 
 /// Maps indices between the full `[0, n)` space and the grounded `[0, n−1)`
@@ -84,6 +147,19 @@ pub fn unit_vector(n: usize, r: usize) -> Vec<f64> {
     let mut e = vec![0.0; n];
     if r < n {
         e[r] = 1.0;
+    }
+    e
+}
+
+/// The reference indicator, length `n`: `1` at every grounded (slack) bus, `0`
+/// elsewhere. The multi-reference form of [`unit_vector`]; a downstream solver
+/// reads it to recover which buses were grounded.
+pub fn reference_indicator(n: usize, refs: &[usize]) -> Vec<f64> {
+    let mut e = vec![0.0; n];
+    for &r in refs {
+        if r < n {
+            e[r] = 1.0;
+        }
     }
     e
 }

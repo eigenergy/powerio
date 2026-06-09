@@ -107,12 +107,14 @@ int main(int argc, char **argv) {
         free(buf);
 
         /* Normalize into a NEW handle: per unit, radians, filtered, reindexed.
-         * It has no more buses than the raw case, keeps a reference bus, and
-         * still serializes through the JSON transport. */
+         * It has no more buses than the raw case, has at least one reference bus
+         * (several if the file marked several), and still serializes through the
+         * JSON transport. Use pio_n_reference_buses, not pio_reference_bus >= 0:
+         * the latter returns -1 for a multi-slack case, which is valid here. */
         PioCase *cn = pio_to_normalized(cs, err, sizeof err);
         CHECK(cn != NULL, err);
         CHECK(pio_n_buses(cn) <= nb && pio_n_buses(cn) > 0, "normalized bus count out of range");
-        CHECK(pio_reference_bus(cn) >= 0, "normalized case lost its reference bus");
+        CHECK(pio_n_reference_buses(cn) >= 1, "normalized case lost its reference bus");
         char *njson = pio_to_json(cn, err, sizeof err);
         CHECK(njson != NULL, err);
         pio_string_free(njson);

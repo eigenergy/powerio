@@ -405,6 +405,15 @@ impl Network {
         Ok(net)
     }
 
+    /// Whether this is a normalized (per-unit, radian, filtered, reindexed)
+    /// derived product from [`to_normalized`](Network::to_normalized), rather
+    /// than a raw network at the file's unit basis. Unit-sensitive code that
+    /// takes a `&Network` can check this instead of silently assuming MW.
+    #[must_use]
+    pub fn is_normalized(&self) -> bool {
+        self.source_format == SourceFormat::Normalized
+    }
+
     /// Check structural integrity: bus ids are unique and every element
     /// references an existing bus. The file readers and [`from_json`](Network::from_json)
     /// run this; a `Network` built by hand (or mutated, e.g. by a scenario

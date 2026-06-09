@@ -14,7 +14,7 @@ use crate::Result;
 use crate::indexed::IndexedNetwork;
 use crate::io::mtx::{write_mtx, write_vector_mtx};
 use crate::matrix::incidence::{DcConvention, build_flow_map, build_incidence};
-use crate::matrix::laplacian::{build_weighted_laplacian, ground_at, unit_vector};
+use crate::matrix::laplacian::{build_weighted_laplacian, ground_at_each, reference_indicator};
 use crate::matrix::opf::{Units, build_opf_instance};
 use crate::network::Network;
 
@@ -37,7 +37,10 @@ struct DcOpfMeta {
     n: usize,
     m: usize,
     n_gen: usize,
-    reference_bus: usize,
+    /// Dense indices of every grounded reference (slack) bus. Several entries
+    /// mean a slack per island or a distributed slack; the solver grounds the
+    /// Laplacian at all of them (matching `L_grounded` and `e_r`).
+    reference_buses: Vec<usize>,
     convention: DcConvention,
     units: Units,
     files: Vec<String>,
@@ -55,13 +58,14 @@ pub fn write_dcopf_bundle(
     let dir = out_dir.as_ref().join(format!("{}_dcopf", view.name()));
     std::fs::create_dir_all(&dir)?;
 
-    let r = view.reference_bus_index()?;
+    view.check_groundable()?;
+    let refs = view.reference_bus_indices();
     let inc = build_incidence(&view, opts.convention)?;
     let l = build_weighted_laplacian(&inc.a, &inc.b);
-    let l_grounded = ground_at(&l, r);
+    let l_grounded = ground_at_each(&l, &refs);
     let flow = build_flow_map(&inc.a, &inc.b);
     let opf = build_opf_instance(&view, &inc, opts.units)?;
-    let e_r = unit_vector(view.n(), r);
+    let e_r = reference_indicator(view.n(), &refs);
 
     let mut files = Vec::new();
 
@@ -95,7 +99,7 @@ pub fn write_dcopf_bundle(
         n: view.n(),
         m: inc.m(),
         n_gen: opf.n_gen(),
-        reference_bus: r,
+        reference_buses: refs.clone(),
         convention: opts.convention,
         units: opts.units,
         files: files

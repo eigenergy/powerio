@@ -103,8 +103,9 @@ source byte for byte. `Network::to_normalized` derives the form a solver or ML
 pipeline consumes: powers per unit (÷`baseMVA`), angles in radians, `tap 0 → 1`,
 out-of-service elements and isolated buses dropped, the survivors reindexed to a
 dense 1-based id space, bus types canonicalized (generator buses PV, the file's
-reference buses kept, gen-less buses PQ; a reference is established if the file
-has none). It carries no retained source, so writing it serializes
+reference buses kept, gen-less buses PQ; the largest generator's bus is promoted
+to reference if the file marks none, and a case with neither a reference nor a
+generator is rejected). It carries no retained source, so writing it serializes
 the per-unit model rather than echoing — a derived product, not a source for
 write-back. Python: `case.to_normalized()`. C ABI: `pio_to_normalized`. Parse a
 case from memory with no temp file via `parse_str(text, format)` /

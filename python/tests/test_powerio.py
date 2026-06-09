@@ -215,6 +215,7 @@ def test_delegated_surface_resolves(case9):
         "branches",
         "gens",
         "reference_bus_index",
+        "reference_bus_indices",
         "connectivity_report",
         "write",
         "write_dcopf_bundle",
@@ -402,12 +403,17 @@ def test_connectivity_report(case9):
 
 def test_reference_bus_index(case9):
     assert case9.reference_bus_index() == 0
+    assert case9.reference_bus_indices() == [0]
 
 
 def test_reference_bus_error_on_two_refs():
     two_ref = TINY.replace("\t3\t2\t0", "\t3\t3\t0")  # bus 3: PV -> ref
+    case = powerio.parse_matpower_string(two_ref)
+    # The single-ref query raises; the reference-set query returns both, so a
+    # multi-slack case stays legible from Python.
     with pytest.raises(powerio.PowerIOError):
-        powerio.parse_matpower_string(two_ref).reference_bus_index()
+        case.reference_bus_index()
+    assert len(case.reference_bus_indices()) == 2
 
 
 # --- DC-OPF bundle ------------------------------------------------------

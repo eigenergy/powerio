@@ -74,14 +74,14 @@ pub enum Error {
     },
 
     #[error(
-        "network has {components} connected components; DC sensitivities require a single island"
-    )]
-    DisconnectedNetwork { components: usize },
-
-    #[error(
         "DC sensitivity solve failed: the slack-grounded Laplacian is singular for a connected network"
     )]
     SingularNetwork,
+
+    #[error(
+        "{components} connected component(s) have no reference (slack) bus to ground; DC sensitivities need at least one reference per island"
+    )]
+    UngroundedComponent { components: usize },
 
     #[error(transparent)]
     Io(#[from] std::io::Error),
@@ -177,8 +177,8 @@ impl Error {
             | Error::ReferenceBusCount { .. }
             | Error::InvalidBaseMva { .. }
             | Error::ShapeMismatch { .. }
-            | Error::DisconnectedNetwork { .. }
             | Error::SingularNetwork
+            | Error::UngroundedComponent { .. }
             | Error::EmptyScenarioBatch
             | Error::ScenarioIdOverflow { .. }
             | Error::ScenarioShapeMismatch { .. } => C::Data,
@@ -262,6 +262,10 @@ mod tests {
         // they are Data, not Parse — regression guard for that classification.
         assert_eq!(Error::NoGenerators.category(), Data);
         assert_eq!(Error::InvalidBaseMva { base: 0.0 }.category(), Data);
+        assert_eq!(
+            Error::UngroundedComponent { components: 1 }.category(),
+            Data
+        );
         assert_eq!(
             Error::UnknownBus {
                 bus_id: BusId(7),

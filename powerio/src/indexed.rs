@@ -17,7 +17,7 @@
 //! and shunts.
 
 use std::borrow::Cow;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use petgraph::graph::UnGraph;
 
@@ -219,18 +219,25 @@ impl<'n> IndexedNetwork<'n> {
             .filter(|(_, g)| g.in_service)
     }
 
-    /// Dense index of the single reference (slack) bus. Errors unless exactly
-    /// one [`BusType::Ref`] exists.
-    pub fn reference_bus_index(&self) -> Result<usize> {
-        let refs: Vec<usize> = self
-            .net
+    /// Dense indices of every reference (slack) bus, in ascending order. A
+    /// network may carry more than one [`BusType::Ref`] (a slack per island, or
+    /// several the source file marked) — the matrix layer grounds one row/column
+    /// per entry. Empty when the network has no reference bus.
+    pub fn reference_bus_indices(&self) -> Vec<usize> {
+        self.net
             .buses
             .iter()
             .enumerate()
             .filter(|(_, b)| b.kind == BusType::Ref)
             .map(|(i, _)| i)
-            .collect();
-        match refs.as_slice() {
+            .collect()
+    }
+
+    /// Dense index of the single reference (slack) bus. Errors unless exactly
+    /// one [`BusType::Ref`] exists; for the multi-reference case use
+    /// [`reference_bus_indices`](Self::reference_bus_indices).
+    pub fn reference_bus_index(&self) -> Result<usize> {
+        match self.reference_bus_indices().as_slice() {
             [r] => Ok(*r),
             other => Err(Error::ReferenceBusCount { found: other.len() }),
         }
@@ -253,6 +260,47 @@ impl<'n> IndexedNetwork<'n> {
     /// Number of connected components in the in-service topology.
     pub fn n_connected_components(&self) -> usize {
         petgraph::algo::connected_components(&self.to_petgraph())
+    }
+
+    /// Connected-component label per dense bus index (in-service topology): two
+    /// buses share a label iff an in-service branch path joins them, and an
+    /// isolated bus is its own component. Labels are representative indices in
+    /// `[0, n)`, not a dense `[0, k)` range — use them for equality grouping
+    /// (e.g. checking every island carries a reference bus to ground).
+    pub fn connected_component_labels(&self) -> Vec<usize> {
+        let mut uf = petgraph::unionfind::UnionFind::new(self.n());
+        for (_, br) in self.in_service_branches() {
+            if let (Some(i), Some(j)) = (self.bus_index(br.from), self.bus_index(br.to)) {
+                uf.union(i, j);
+            }
+        }
+        uf.into_labeling()
+    }
+
+    /// Error unless every connected component of the in-service topology carries
+    /// at least one reference (slack) bus. This is the grounding precondition
+    /// for the DC Laplacian: an island with no reference leaves its all-ones
+    /// null vector in the system, so the slack-grounded Laplacian stays
+    /// singular. With one reference in a single island it reduces to the
+    /// single-slack requirement. Reports the count of ungrounded components.
+    pub fn check_groundable(&self) -> Result<()> {
+        let labels = self.connected_component_labels();
+        let grounded: HashSet<usize> = self
+            .reference_bus_indices()
+            .iter()
+            .map(|&r| labels[r])
+            .collect();
+        let ungrounded: HashSet<usize> = labels
+            .iter()
+            .copied()
+            .filter(|l| !grounded.contains(l))
+            .collect();
+        if !ungrounded.is_empty() {
+            return Err(Error::UngroundedComponent {
+                components: ungrounded.len(),
+            });
+        }
+        Ok(())
     }
 
     /// True iff the in-service topology is a forest (`|E| = |V| - components`).
