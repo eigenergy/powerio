@@ -17,7 +17,7 @@ detail is in the [crate docs](https://eigenergy.github.io/powerio/powerio_matrix
 | signed incidence `A` | n×m | `build_incidence` | column `e`: `+1` at from-bus, `−1` at to-bus |
 | weighted Laplacian `L` | n×n | `build_weighted_laplacian` | `L = A diag(w) Aᵀ`, `ground_at` removes a row/col |
 | flow map `B Aᵀ` | m×n | `build_flow_map` | `f = B Aᵀ θ` |
-| PTDF | m×n | `build_ptdf` | dense; factors the Laplacian grounded at the slack |
+| PTDF | m×n | `build_ptdf` | dense; factors the Laplacian grounded at the reference buses |
 | LODF | m×m | `build_lodf` | dense DC line-outage factors |
 | adjacency | n×n | `build_adjacency` | `MatrixKind::Adjacency` |
 | petgraph view | n/a | `IndexedNetwork::to_petgraph` | `UnGraph<bus_idx, branch_idx>` |

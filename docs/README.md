@@ -1,6 +1,6 @@
 # powerio docs
 
-Reference material that does not fit in the top level [README](../README.md) or a
+Reference material that does not fit in the top-level [README](../README.md) or a
 crate doc comment.
 
 - [format-fidelity.md](format-fidelity.md): numeric conventions every reader
@@ -16,8 +16,8 @@ Rendered API docs (rustdoc) for all crates:
 
 ## Architecture
 
-`Network` is the canonical model: format neutral, with loads, shunts, branches,
-and generators as first class records. Every reader produces a `Network` and every
+`Network` is the canonical model: format-neutral, with loads, shunts, branches,
+and generators as first-class records. Every reader produces a `Network` and every
 writer consumes one, so a format is one reader/writer at the hub rather than a
 pairwise converter, and adding one touches a single module. `IndexedNetwork` is the
 dense `[0, n)` analysis view derived from a `Network`; the matrix builders work from

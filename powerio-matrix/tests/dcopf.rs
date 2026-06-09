@@ -693,12 +693,13 @@ fn two_grounded_islands_solve_block_diagonal() {
 
 #[test]
 fn multi_reference_two_refs_one_island() {
-    // One connected island, two reference buses: grounding both is a distributed
-    // slack. Both reference columns are zero, and a unit injection at the middle
-    // bus splits its return between the two references by electrical distance:
-    // symmetric here (equal reactances), so each branch carries half.
+    // One connected island, two reference buses: grounding both fixes both
+    // reference angles to zero. Both reference columns are zero, and a unit
+    // injection at the middle bus splits its return between the two references by
+    // electrical distance: symmetric here (equal reactances), so each branch
+    // carries half.
     let case = net(
-        "distributed",
+        "multi-reference",
         vec![
             bus(1, BusType::Ref),
             bus(2, BusType::Pq),
@@ -732,11 +733,11 @@ fn multi_reference_two_refs_one_island() {
 #[test]
 fn lodf_two_refs_multi_reference_triangle() {
     // The unit triangle with buses 1 and 3 as references.
-    // LODF differs from the single-slack triangle because each slack balances
-    // independently: tripping branch 1-3 (between the two references) redistributes
+    // LODF differs from the single reference triangle because two voltage angles
+    // are fixed: tripping branch 1-3 (between the two references) redistributes
     // nothing, while tripping 1-2 or 2-3 reroutes bus 2's flow fully onto the
-    // other slack-connected branch. Hand-derived against the reduced 1x1 system
-    // (only bus 2 survives grounding, diag = 2, so PTDF col for bus 2 is
+    // other reference-connected branch. Hand-derived against the reduced 1x1
+    // system (only bus 2 survives grounding, diag = 2, so PTDF col for bus 2 is
     // [-1/2, 0, +1/2]). This pins the multi-grounded ptdf_dense -> build_lodf path.
     let case = net(
         "triangle-2ref",
