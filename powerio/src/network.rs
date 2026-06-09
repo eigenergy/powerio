@@ -311,6 +311,12 @@ pub struct Storage {
 }
 
 /// A two-terminal HVDC line (MATPOWER `dcline`).
+///
+/// `pf`/`pt`/`qf`/`qt` are stored in MATPOWER's sign convention regardless of
+/// source: the PowerModels reader un-flips `pt`/`qf`/`qt` on the way in, and the
+/// PowerModels writer re-flips them on the way out (PowerModels.jl uses the
+/// opposite sign). The flip is a format-boundary translation, so a derived view
+/// like `to_normalized` keeps the MATPOWER convention and only scales to per unit.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Hvdc {
     pub from: BusId,

@@ -74,6 +74,31 @@ fn per_unit_shunts_on_case30() {
 }
 
 #[test]
+fn per_unit_hvdc_keeps_matpower_sign() {
+    // t_case9_dcline carries HVDC lines. to_normalized per-unitizes pf/pt/qf/qt
+    // but must NOT flip their sign (that flip is a PowerModels-output convention,
+    // not part of normalization) and leaves the aggregate pmin/pmax raw.
+    let raw = parse_matpower_file(data("t_case9_dcline.m")).unwrap();
+    let base = raw.base_mva;
+    let n = raw.to_normalized().unwrap();
+
+    let raw_in: Vec<_> = raw.hvdc.iter().filter(|d| d.in_service).collect();
+    assert!(!raw_in.is_empty(), "fixture has in-service dclines");
+    assert_eq!(n.hvdc.len(), raw_in.len());
+    for (d, rd) in n.hvdc.iter().zip(raw_in) {
+        assert!(approx(d.pf, rd.pf / base));
+        assert!(approx(d.pt, rd.pt / base));
+        assert!(approx(d.qf, rd.qf / base));
+        assert!(approx(d.qt, rd.qt / base));
+        // Same sign (product positive) ⇒ no flip; a negation would make it < 0.
+        assert!(d.pt * rd.pt > 0.0, "pt sign preserved, no flip");
+        // Aggregate bounds stay raw, matching the PowerModels per-unit convention.
+        assert!(approx(d.pmin, rd.pmin));
+        assert!(approx(d.pmax, rd.pmax));
+    }
+}
+
+#[test]
 fn no_false_write_back() {
     let src = std::fs::read_to_string(data("case9.m")).unwrap();
     let raw = parse_matpower_file(data("case9.m")).unwrap();
