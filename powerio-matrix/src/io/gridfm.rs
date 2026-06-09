@@ -1302,7 +1302,22 @@ fn build_network_from_columns(
     let br_status = &branch.status;
 
     let mut branches = Vec::with_capacity(br_rows.len());
+    // The writer stores the *effective* tap (`Branch::effective_tap`), so a line
+    // (raw tap 0) lands as 1.0. Map unit tap + no shift back to the raw `tap == 0`
+    // line convention, otherwise every line reads as a transformer
+    // (`is_transformer` keys off `tap != 0`) and a read→write to a format that
+    // splits lines from transformers (PSS/E, PowerWorld) misclassifies them. A
+    // genuine unity-ratio, zero-shift transformer is electrically identical to a
+    // line and is (unavoidably) read as one.
+    let mut unit_tap_lines = 0usize;
     for &row in &br_rows {
+        let shift_v = shift[row];
+        let tap_out = if tap[row] == 1.0 && shift_v == 0.0 {
+            unit_tap_lines += 1;
+            0.0
+        } else {
+            tap[row]
+        };
         branches.push(Branch {
             from: dense_bus_id(from_bus[row])?,
             to: dense_bus_id(to_bus[row])?,
@@ -1312,8 +1327,8 @@ fn build_network_from_columns(
             rate_a: rate_a[row],
             rate_b: 0.0,
             rate_c: 0.0,
-            tap: tap[row],
-            shift: shift[row],
+            tap: tap_out,
+            shift: shift_v,
             in_service: br_status[row] != 0,
             angmin: ang_min[row],
             angmax: ang_max[row],
@@ -1356,15 +1371,11 @@ fn build_network_from_columns(
             net.shunts.len()
         ));
     }
-    let unit_tap = net
-        .branches
-        .iter()
-        .filter(|b| b.tap == 1.0 && b.shift == 0.0)
-        .count();
-    if unit_tap > 0 {
+    if unit_tap_lines > 0 {
         warnings.push(format!(
-            "{unit_tap} branch(es) read with unit tap and no phase shift; gridfm stores the \
-             effective tap, so the line/transformer distinction is not recoverable"
+            "{unit_tap_lines} branch(es) had unit effective tap and no phase shift and were read \
+             as lines (raw tap 0); a unity-ratio, zero-shift transformer in the source is \
+             indistinguishable from a line and is read as one (the power flow is identical)"
         ));
     }
     warnings.push(
@@ -1443,18 +1454,25 @@ fn read_meta(raw: &Path) -> (f64, String, Vec<String>) {
             .and_then(|s| s.to_str())
             .map_or_else(|| "gridfm".to_string(), str::to_string)
     };
-    let Ok(text) = std::fs::read_to_string(raw.join("gridfm_meta.json")) else {
-        return (
-            100.0,
-            case_from_path(),
-            vec!["gridfm_meta.json not found; base_mva defaulted to 100".to_string()],
-        );
+    let text = match std::fs::read_to_string(raw.join("gridfm_meta.json")) {
+        Ok(text) => text,
+        // Not just "not found": surface the underlying error (permissions, non-UTF-8,
+        // etc.) so a dataset problem is diagnosable, while still defaulting base_mva.
+        Err(e) => {
+            return (
+                100.0,
+                case_from_path(),
+                vec![format!(
+                    "gridfm_meta.json could not be read ({e}); base_mva defaulted to 100"
+                )],
+            );
+        }
     };
     let Ok(meta) = serde_json::from_str::<serde_json::Value>(&text) else {
         return (
             100.0,
             case_from_path(),
-            vec!["gridfm_meta.json is unreadable; base_mva defaulted to 100".to_string()],
+            vec!["gridfm_meta.json is not valid JSON; base_mva defaulted to 100".to_string()],
         );
     };
     let name = meta
@@ -2823,6 +2841,50 @@ mod tests {
                 .iter()
                 .any(|g| (g.vg - 1.0).abs() > 1e-3),
             "expected a generator with vg != 1.0 (case14's slack is at 1.06)"
+        );
+    }
+
+    #[test]
+    fn read_maps_unit_tap_lines_back_to_zero() {
+        // The writer stores effective tap (a line's raw 0 becomes 1.0). The reader
+        // must map unit tap + no shift back to raw tap 0 so lines stay lines;
+        // otherwise every line reads as a transformer and a read→write to PSS/E /
+        // PowerWorld misclassifies them. case14 has both lines and off-nominal
+        // transformers, so the line/transformer split must survive the round trip.
+        let net = case14();
+        let n_lines = net.branches.iter().filter(|b| !b.is_transformer()).count();
+        let n_xfmr = net.branches.iter().filter(|b| b.is_transformer()).count();
+        assert!(
+            n_lines > 0 && n_xfmr > 0,
+            "fixture needs both lines and transformers"
+        );
+
+        let tables = gridfm_record_batches(&net, 0, &GridfmOptions::default()).unwrap();
+        let read = read_gridfm_network(&tables, 0, net.base_mva, &net.name).unwrap();
+        let read_lines = read
+            .network
+            .branches
+            .iter()
+            .filter(|b| !b.is_transformer())
+            .count();
+        let read_xfmr = read
+            .network
+            .branches
+            .iter()
+            .filter(|b| b.is_transformer())
+            .count();
+        assert_eq!(
+            read_lines, n_lines,
+            "lines must read back as lines (raw tap 0)"
+        );
+        assert_eq!(
+            read_xfmr, n_xfmr,
+            "transformers must keep their off-nominal ratio"
+        );
+        assert!(
+            read.warnings.iter().any(|w| w.contains("read as lines")),
+            "expected the unit-tap warning, got {:?}",
+            read.warnings
         );
     }
 
