@@ -28,7 +28,7 @@ MATPOWER case taken through powerio to egret JSON matches egret's direct import.
 
 ## Validation
 
-The harness `benchmarks/run_validation.sh` checks powerio against four independent
+The harness script `benchmarks/run_validation.sh` checks powerio against four independent
 tools. Every reader and writer, and every conversion pair, is exercised.
 
 - **PowerModels.jl** (`validate_powermodels.jl`, `validate_psse.jl`,

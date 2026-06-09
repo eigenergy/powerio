@@ -1,7 +1,7 @@
 # Python API
 
 Install the base package for parsing, writing, JSON transport, and file
-conversion:
+conversion with zero dependencies:
 
 ```bash
 pip install powerio
@@ -60,20 +60,3 @@ bus = pl.read_parquet(f"{out['dir']}/bus_data.parquet")
 ```
 
 Use `powerio[pandas]` only for downstream code that expects pandas DataFrames.
-
-## Release to PyPI
-
-Publishing uses PyPI trusted publishing from the `publish` job in
-`.github/workflows/python.yml`.
-
-Before launch:
-
-- Create the PyPI project and configure a trusted publisher for
-  `eigenergy/powerio`, workflow `python.yml`, environment `pypi`.
-- Protect the GitHub `pypi` environment with required reviewers, so a GitHub
-  release cannot upload without approval.
-- Confirm all wheel artifacts and the sdist pass `twine check`; the workflow
-  runs this before upload.
-- Publish only from a GitHub release after explicit approval.
-- Do not store a PyPI token in GitHub; the job uses the OIDC `id-token`
-  permission.

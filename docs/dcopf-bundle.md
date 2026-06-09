@@ -1,4 +1,4 @@
-# DC OPF Bundle Schema
+# DC OPF Bundle Schema (experimental)
 
 `powerio dcopf <case>.m -o <out>` (or `opf_pipeline::write_dcopf_bundle`) writes
 `<out>/<case>_dcopf/`: a set of Matrix Market files plus `dcopf_meta.json`.
@@ -32,7 +32,7 @@ the conventions a consumer (e.g. a C++ Laplacian solver) needs.
 | file | shape | what |
 |------|-------|------|
 | `A.mtx` | n×m | signed incidence; column `e` has `+1` at from-bus, `−1` at to-bus |
-| `L.mtx` | n×n | DC Laplacian `L = A diag(b) Aᵀ`, singular (rank n−1), `1 ∈ ker L` |
+| `L.mtx` | n×n | generic Laplacian matrix `L = A diag(b) Aᵀ`, singular (rank n−1), `1 ∈ ker L` |
 | `L_grounded.mtx` | (n−k)×(n−k) | `L` with `k` reference rows and columns removed; SPD when every island is grounded |
 | `BAt.mtx` | m×n | flow map `B Aᵀ` (`f = B Aᵀ θ`) |
 | `Cg.mtx` | n×n_gen | generator→bus incidence, one `1` per column |
@@ -60,6 +60,6 @@ each reference angle to `0`. `e_r` identifies the grounded buses without parsing
 the manifest. The full singular `L` can be used instead with a consistent
 zero-sum RHS.
 
-The interior point DC OPF solver builds *reweighted* Laplacians each Newton step
+An interior point DC OPF solver builds *reweighted* Laplacians each Newton step
 from the same `A` and `b` (only the edge weights change), so `A` is the durable
 operator to hand over.

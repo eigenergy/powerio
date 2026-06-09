@@ -1,7 +1,7 @@
 # Language APIs
 
-PowerIO keeps one canonical naming system across Rust, Python, Julia, and the C
-ABI while still using each language's own style.
+PowerIO attempts to propose a canonical naming system for IO across Rust, Python, Julia, and the C
+ABI while still using each language's own style. **PowerIO is under active development and this system is subject to change.**
 
 Verb taxonomy:
 
@@ -14,9 +14,6 @@ Verb taxonomy:
   not mirror
 - `export_*`: handoff to external memory or interface protocols
 
-Do not use Julia `convert` / `convert!` for format conversion. `Base.convert`
-means type conversion, and `!` means mutating an argument. PowerIO format
-conversion returns new values.
 
 | Concept | Rust | Python | Julia | C ABI |
 |---|---|---|---|---|
@@ -32,9 +29,6 @@ conversion returns new values.
 | Dense tables | typed table API | `to_dense` | `to_dense` | `pio_*` extractors |
 | Arrow handoff | internal/C ABI | later | `to_arrow` | `pio_export_arrow` |
 
-`pio_export_arrow` keeps `export` because it fills Arrow C Data Interface
+**Note:** `pio_export_arrow` keeps `export` because it fills Arrow C Data Interface
 structs with release callbacks. It is not an owned string or handle return like
 the `to_*` functions.
-
-Aliases can exist where they improve interoperability with downstream parser
-surfaces, but docs should present the table above as the canonical API.

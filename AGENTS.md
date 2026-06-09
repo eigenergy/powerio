@@ -1,6 +1,6 @@
 # AGENTS.md
 
-Guidance for Codex working in this repo.
+Guidance for agents working in this repo.
 
 ## Purpose
 

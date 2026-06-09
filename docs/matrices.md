@@ -1,12 +1,12 @@
 # Matrix outputs and conventions
 
-`powerio-matrix` builds sparse matrices and graph views from a `Network`. The
-builders take the dense-indexed `IndexedNetwork`, which maps MATPOWER bus ids to a
-contiguous `[0, n)`. This document is the convention reference; the DC OPF bundle
-has its own schema in [dcopf-bundle.md](dcopf-bundle.md), and per-builder API
+The `powerio-matrix` crate exposes efficient sparse matrix and graph views for common power system representations. The views are derived from a parsed `Network`. The builders take the densely indexed `IndexedNetwork`, which maps bus ids to a
+contiguous `[0, n)`. 
+
+**Note:** The experimental DC OPF bundle currently has its own schema in [dcopf-bundle.md](dcopf-bundle.md), and per-builder API
 detail is in the [crate docs](https://eigenergy.github.io/powerio/powerio_matrix/).
 
-## What it builds
+## Current capabilities
 
 | matrix | shape | builder | notes |
 | --- | --- | --- | --- |
@@ -22,8 +22,7 @@ detail is in the [crate docs](https://eigenergy.github.io/powerio/powerio_matrix
 | adjacency | n×n | `build_adjacency` | `MatrixKind::Adjacency` |
 | petgraph view | n/a | `IndexedNetwork::to_petgraph` | `UnGraph<bus_idx, branch_idx>` |
 
-PTDF and LODF need a linear solve. Both factor the Laplacian with one row and
-column removed for each reference bus, using the dense Cholesky in
+Computing PTDF and LODF matrices requires a linear solve, which is not the focus of powerio. Both factor the Laplacian with one row and column removed for each reference bus, using the dense Cholesky in
 `matrix::sensitivity`. Every connected component must contain at least one
 reference bus. PTDF is dense `m×n`; sparse work would mean selected column
 computation or sparse factorization, not a sparse PTDF matrix. The DC OPF
@@ -32,12 +31,11 @@ instance bundle (`A`, `b`, `L`, costs, bounds, thermal limits, `C_g`) is documen
 
 ## Conventions
 
-- **Positive Laplacian.** Off-diagonal `< 0`, diagonal `> 0`, with `diag = Σ|off-diag|`
-  for B'. This is the M-matrix form an SDDM or Cholesky solver expects; a consumer
-  recovers an edge weight as `−L[i,j] > 0`.
-- **Bus indexing.** MATPOWER bus ids are 1-based and preserved on the model.
+- **Positive Laplacian matrices.** Off-diagonal `< 0`, diagonal `> 0`, with `diag = Σ|off-diag|`
+  for B' susceptance matrices. This is the M-matrix form an SDDM or Cholesky solver expects; a consumer can recover an edge weight as `−L[i,j] > 0`.
+- **Bus indexing.** Bus ids are 1-based and preserved on the model, refer to the Rust [New Type Idiom](https://doc.rust-lang.org/rust-by-example/generics/new_types.html).
   `IndexedNetwork::bus_index(id)` is the only mapping into the dense `[0, n)`; an id
-  out of range is an `Error::UnknownBus`, never clamped.
+  out of range is an `Error::UnknownBus`.
 - **Taps and shifts.** `tap == 0` means `tap = 1` (`Branch::effective_tap`). B'
   ignores taps and shifts; B'' keeps taps and zeros only shifts; Y_bus keeps both.
 - **`BR_B` is already per unit.** Line charging susceptance is per unit on `baseMVA`
@@ -49,9 +47,8 @@ instance bundle (`A`, `b`, `L`, costs, bounds, thermal limits, `C_g`) is documen
   counts the drops (`dropped_zero_impedance` in `gridfm_meta.json`); surfacing a
   drop count on the matrix builders is tracked in #50.
 - **Reference coverage.** `IndexedNetwork::check_reference_coverage` verifies that
-  every in-service island has a reference bus before DC sensitivity or DC OPF
-  builders ground the Laplacian.
-- **DC susceptance.** The default is `b = 1/x` (`DcConvention::PaperPure`, taps and
+  every in-service island has a reference bus.
+- **Susceptance conventions for the DC approximation.** The default is `b = 1/x` (`DcConvention::PaperPure`, taps and
   shifts ignored), which makes `L = A diag(b) Aᵀ` equal `build_bprime` in the XB
   scheme. `DcConvention::Matpower` uses `b = 1/(x·τ)` plus a phase shift injection
   `p_shift`.
