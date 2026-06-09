@@ -16,7 +16,8 @@ use crate::{Error, Result};
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
 #[non_exhaustive]
 pub enum DcConvention {
-    /// `b_e = 1/x_e`; taps and phase shifts ignored. Matches the paper.
+    /// `b_e = 1/x_e`; taps and phase shifts ignored: the textbook DC power
+    /// flow weight.
     #[default]
     PaperPure,
     /// `b_e = 1/(x_e·τ_e)` with a phase shift injection vector, matching

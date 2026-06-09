@@ -13,9 +13,7 @@
 //! stay out of the Rust build and a missing extra surfaces as an
 //! `ImportError` in Python rather than a link error.
 //!
-//! COO (not CSR/CSC triplets) is deliberate: explicit per-entry `(row, col)`
-//! can't be misread as the transpose the way a raw `indptr`/`indices` pair can,
-//! and it sidesteps the sprs `IndPtr` slice API. Indices narrow to `i32` to
+//! Indices narrow to `i32` to
 //! match scipy's default index width; the largest index is bounded by
 //! `max(n_buses, n_branches)` (`2n` for the LACPF block), far under 2³¹, and
 //! `coo_triplets` guards the bound anyway.

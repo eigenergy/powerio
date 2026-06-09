@@ -29,7 +29,12 @@ MATPOWER case taken through powerio to egret JSON matches egret's direct import.
 ## Validation
 
 The harness script `benchmarks/run_validation.sh` checks powerio against four independent
-tools. Every reader and writer, and every conversion pair, is exercised.
+tools. Every reader and every writer runs under an oracle: the conversion matrix
+covers MATPOWER, PSS/E, and egret sources against all five targets, every
+PowerWorld output is read back and bridged to PowerModels JSON, and the PMread
+leg covers the PowerModels JSON read side. The remaining source/target pairs
+(PowerModels JSON and PowerWorld sources into the non-PowerModels targets) have
+no external oracle and rest on the Rust round trip suite.
 
 - **PowerModels.jl** (`validate_powermodels.jl`, `validate_psse.jl`,
   `core_json.jl`). Reads MATPOWER, PowerModels JSON, and PSS/E. The MATPOWER to

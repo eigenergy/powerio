@@ -11,8 +11,7 @@ crate doc comment.
 - [dcopf-bundle.md](dcopf-bundle.md): the Matrix Market + manifest schema the
   `dcopf` subcommand writes for a downstream solver.
 - [languages.md](languages.md): canonical Rust, Python, Julia, and C ABI names.
-- [python.md](python.md): Python install extras, API examples, and PyPI release
-  checklist.
+- [python.md](python.md): Python install extras and API examples.
 - Julia bindings: <https://github.com/eigenergy/PowerIO.jl>.
 
 Rendered API docs (rustdoc) for all crates:

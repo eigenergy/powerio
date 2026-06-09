@@ -113,10 +113,10 @@ powerio
 | reader / writer | MATPOWER | PowerModels JSON | PSS/E | PowerWorld | egret JSON |
 | --- | --- | --- | --- | --- | --- |
 | MATPOWER | original text | full | partial | partial | partial |
-| PowerModels JSON | full | original text | partial | partial | partial |
+| PowerModels JSON | partial | original text | partial | partial | partial |
 | PSS/E | full | full | original text | partial | partial |
 | PowerWorld | full | full | partial | original text | partial |
-| egret JSON | full | full | partial | partial | original text |
+| egret JSON | partial | full | partial | partial | original text |
 
 `partial` means the target lacks fields present in the source. The writer reports
 those cases in `Conversion::warnings`. Known limits are documented in

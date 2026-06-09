@@ -14,7 +14,6 @@ Verb taxonomy:
   not mirror
 - `export_*`: handoff to external memory or interface protocols
 
-
 | Concept | Rust | Python | Julia | C ABI |
 |---|---|---|---|---|
 | Parse path | `parse_file(path)` | `parse_file(path, from_=None)` | `parse_file(path; from=nothing)` | `pio_parse_file` |
