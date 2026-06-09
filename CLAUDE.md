@@ -170,10 +170,13 @@ benchmarks/                  # parse benchmarks + Julia validation harnesses
 - **Normalized view (`normalize.rs`).** `Network::to_normalized` is the universal
   canonicalization: per unit (÷`base_mva`), radians, `tap 0 → 1`, out-of-service
   and isolated elements dropped, survivors reindexed to a dense 1-based id space,
-  bus types canonicalized (one `Ref`; gen buses `Pv`, the rest `Pq`). It is a
+  bus types inferred ExaPowerIO/PowerDiff-style (gen bus → `Pv`, or `Ref` if the
+  file marked it; gen-less → `Pq`; promote the largest gen only if no `Ref`
+  survives; multiple `Ref` kept, not collapsed). It is a
   derived product, NOT for write-back: it drops `source` and sets
-  `source_format = InMemory`, so `write_as` serializes the per-unit model instead
-  of falsely echoing the raw bytes. The per-unit scaling has one home — the
+  `source_format = Normalized` (a distinct `SourceFormat` variant, so a per-unit
+  product is tellable from a raw in-memory network), so `write_as` serializes the
+  per-unit model instead of falsely echoing the raw bytes. The per-unit scaling has one home — the
   cost rescale `cost_to_pu`/`cost_from_pu`, `DEG_TO_RAD`/`RAD_TO_DEG`, and
   `GEN_PU_KEYS` are shared by `to_normalized` and the PowerModels reader/writer;
   don't re-derive them. It does NOT apply solver-prep opinions (angle-bound

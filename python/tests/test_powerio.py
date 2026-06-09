@@ -127,7 +127,7 @@ def test_to_normalized_is_per_unit_and_in_memory(case9):
     assert n.n == case9.n
     assert n.n_gens == case9.n_gens
     # A derived product with no retained source: it serializes from the model.
-    assert n.source_format == "InMemory"
+    assert n.source_format == "Normalized"
     # Powers are per unit (divided by baseMVA).
     g, rg = n.gens[0], case9.gens[0]
     assert abs(g["pmax"] - rg["pmax"] / case9.base_mva) < 1e-9
@@ -143,7 +143,7 @@ def test_to_normalized_filters_out_of_service():
     assert n.n_gens == case.n_gens - 1
     assert n.n_branches == case.n_branches - 1
     assert n.n == 9
-    assert n.source_format == "InMemory"
+    assert n.source_format == "Normalized"
 
 
 def test_parse_bad_path_raises():

@@ -137,6 +137,11 @@ pub enum SourceFormat {
     PowerWorld,
     /// Built in memory (e.g. from synth or an edited case); no source text.
     InMemory,
+    /// A normalized derived view ([`Network::to_normalized`]): per unit, radians,
+    /// filtered, densely reindexed. Distinct from [`InMemory`](SourceFormat::InMemory)
+    /// so consumers can tell a per-unit product from a raw in-memory network; it
+    /// has no source text and a different unit basis than a parsed network.
+    Normalized,
 }
 
 /// A format-neutral power network.

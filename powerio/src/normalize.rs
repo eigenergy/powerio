@@ -245,14 +245,18 @@ impl Network {
     ///   drop any element left referencing a dropped bus.
     /// - **Reindexed**: kept buses get a dense 1-based id (their position among the
     ///   survivors), and every endpoint is remapped to match.
-    /// - **Bus types**: the chosen reference bus is `REF`; any other bus hosting a
-    ///   surviving generator is `PV`; the rest are `PQ`. The reference is the file's
-    ///   bus when exactly one surviving (non-isolated) bus is `REF`, otherwise the
-    ///   bus of the largest-`pmax` in-service generator.
+    /// - **Bus types**: a bus hosting a surviving generator keeps `REF` if the file
+    ///   marked it `REF`, otherwise becomes `PV`; a generator-less bus is `PQ` (so a
+    ///   generator-less `REF` is demoted). The file's `REF` buses are kept, several
+    ///   included — the consumer picks the slack — and only when none survives is
+    ///   the largest-`pmax` in-service generator's bus promoted to `REF`. This is the
+    ///   bus-type inference of ExaPowerIO.jl and PowerDiff.jl, not the single-slack
+    ///   collapse of PowerModels' `make_basic_network`.
     ///
     /// This is a derived product, not a source for write-back: `source` is dropped
-    /// and `source_format` is [`SourceFormat::InMemory`], so writing it serializes
-    /// the per-unit/radian model instead of echoing the raw bytes.
+    /// and `source_format` is [`SourceFormat::Normalized`], so writing it serializes
+    /// the per-unit/radian model instead of echoing the raw bytes, and a consumer
+    /// can tell it apart from a raw in-memory network.
     ///
     /// Scope is the universal canonicalization only. It does not pad angle bounds,
     /// synthesize a missing `rate_a`, or restrict the gen-cost model — those are
@@ -263,8 +267,8 @@ impl Network {
     /// [`Error::InvalidBaseMva`] if `base_mva` is not a positive, finite number
     /// (every per-unit divisor), so a malformed base can't silently poison the
     /// whole network with `NaN`/`Inf` or sign-flipped values.
-    /// [`Error::ReferenceBusCount`] if no reference bus can be chosen — the file has
-    /// no unique `REF` and there is no in-service generator to fall back to.
+    /// [`Error::ReferenceBusCount`] if no reference bus can be established — no `REF`
+    /// survives and there is no in-service generator to anchor one.
     pub fn to_normalized(&self) -> Result<Network> {
         let base = self.base_mva;
         if !(base.is_finite() && base > 0.0) {
@@ -295,16 +299,30 @@ impl Network {
         let storage = norm_storage(&self.storage, base, &id_map);
         let hvdc = norm_hvdc(&self.hvdc, base, &id_map);
 
-        // Bus types. The reference is the file's `REF` when there is exactly one
-        // among the survivors, else the bus of the largest-pmax surviving gen.
-        let file_refs: Vec<BusId> = buses
-            .iter()
-            .filter(|b| b.kind == BusType::Ref)
-            .map(|b| b.id)
-            .collect();
-        let ref_id = match file_refs.as_slice() {
-            [only] => *only,
-            _ => generators
+        // Bus types, following the ExaPowerIO/PowerDiff inference (not
+        // make_basic_network's collapse): a bus hosting an in-service generator
+        // keeps `Ref` if the file marked it `Ref`, else becomes `Pv`; a gen-less
+        // bus is `Pq` (so a gen-less `Ref` is demoted). Multiple file `Ref` buses
+        // are kept as-is — the consumer picks the slack — and only when no `Ref`
+        // survives is the largest-pmax generator's bus promoted.
+        let gen_buses: HashSet<BusId> = generators.iter().map(|g| g.bus).collect();
+        let mut any_ref = false;
+        for b in &mut buses {
+            b.kind = if gen_buses.contains(&b.id) {
+                if b.kind == BusType::Ref {
+                    BusType::Ref
+                } else {
+                    BusType::Pv
+                }
+            } else {
+                BusType::Pq
+            };
+            any_ref |= b.kind == BusType::Ref;
+        }
+        if !any_ref {
+            // No reference survived: anchor the slack at the largest-pmax in-service
+            // generator's bus, or error when there is no generator to anchor it.
+            let slack = generators
                 .iter()
                 .max_by(|a, b| {
                     // A NaN pmax must never win the slack: map it below every real
@@ -314,19 +332,10 @@ impl Network {
                     key(a.pmax).total_cmp(&key(b.pmax))
                 })
                 .map(|g| g.bus)
-                .ok_or(Error::ReferenceBusCount {
-                    found: file_refs.len(),
-                })?,
-        };
-        let gen_buses: HashSet<BusId> = generators.iter().map(|g| g.bus).collect();
-        for b in &mut buses {
-            b.kind = if b.id == ref_id {
-                BusType::Ref
-            } else if gen_buses.contains(&b.id) {
-                BusType::Pv
-            } else {
-                BusType::Pq
-            };
+                .ok_or(Error::ReferenceBusCount { found: 0 })?;
+            if let Some(b) = buses.iter_mut().find(|b| b.id == slack) {
+                b.kind = BusType::Ref;
+            }
         }
 
         Ok(Network {
@@ -339,7 +348,7 @@ impl Network {
             generators,
             storage,
             hvdc,
-            source_format: SourceFormat::InMemory,
+            source_format: SourceFormat::Normalized,
             source: None,
         })
     }

@@ -106,7 +106,7 @@ fn no_false_write_back() {
 
     // A derived product, not a source for write-back.
     assert!(n.source.is_none());
-    assert_eq!(n.source_format, SourceFormat::InMemory);
+    assert_eq!(n.source_format, SourceFormat::Normalized);
 
     // Writing it serializes the per-unit/radian model, so it must NOT echo the
     // raw MATPOWER bytes.
@@ -224,9 +224,9 @@ mpc.branch = [
 }
 
 #[test]
-fn collapses_multiple_refs_to_largest_gen() {
-    // Two file REF buses: the slack becomes the larger-pmax gen's bus and the
-    // other former REF (still hosting a gen) is demoted to PV.
+fn keeps_multiple_file_refs() {
+    // Two gen-backed file REF buses are kept (not collapsed to one) — the consumer
+    // picks the slack, matching ExaPowerIO/PowerDiff. The gen-less bus is PQ.
     let src = "\
 function mpc = tworef
 mpc.version = '2';
@@ -246,10 +246,10 @@ mpc.branch = [
 ];
 ";
     let n = parse_str(src, "matpower").unwrap().to_normalized().unwrap();
-    assert_eq!(n.buses.iter().filter(|b| b.kind == BusType::Ref).count(), 1);
-    // bus 2 has the larger pmax (300 vs 100) -> REF; bus 1 -> PV; bus 3 -> PQ.
+    // Both gen-backed REF buses stay REF; the gen-less load bus is PQ.
+    assert_eq!(n.buses.iter().filter(|b| b.kind == BusType::Ref).count(), 2);
+    assert_eq!(n.buses[0].kind, BusType::Ref);
     assert_eq!(n.buses[1].kind, BusType::Ref);
-    assert_eq!(n.buses[0].kind, BusType::Pv);
     assert_eq!(n.buses[2].kind, BusType::Pq);
 }
 
