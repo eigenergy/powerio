@@ -74,7 +74,7 @@ pub enum Error {
     },
 
     #[error(
-        "DC sensitivity solve failed: the slack-grounded Laplacian is singular for a connected network"
+        "DC sensitivity solve failed: the reference-grounded Laplacian is singular even though every component is grounded"
     )]
     SingularNetwork,
 

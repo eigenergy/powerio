@@ -107,9 +107,18 @@ reference buses kept, gen-less buses PQ; the largest generator's bus is promoted
 to reference if the file marks none, and a case with neither a reference nor a
 generator is rejected). It carries no retained source, so writing it serializes
 the per-unit model rather than echoing — a derived product, not a source for
-write-back. Python: `case.to_normalized()`. C ABI: `pio_to_normalized`. Parse a
-case from memory with no temp file via `parse_str(text, format)` /
-`pio_parse_str`.
+write-back. Writing it to a format that separates lines from transformers reports
+a fidelity warning: `tap 0 → 1` leaves a line indistinguishable from a unity-ratio
+transformer (the power flow is identical).
+
+The matrix builders consume it directly: `IndexedNetwork` derives per-unit powers
+and radian angles the same way whether handed a raw network or its normalized form
+(`per_unit_base`/`angle_radians`), so `Y_bus`, `B'`, `B''`, LACPF, and the DC
+operators come out identical either way. The `gridfm` snapshot exporter is the
+exception — it wants a raw MW/degree case and rejects a normalized one.
+
+Python: `case.to_normalized()`. C ABI: `pio_to_normalized`. Parse a case from
+memory with no temp file via `parse_str(text, format)` / `pio_parse_str`.
 
 ## GridFM
 

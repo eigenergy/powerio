@@ -183,6 +183,19 @@ benchmarks/                  # parse benchmarks + Julia validation harnesses
   padding, `rate_a` synthesis, gen-cost model restriction) — those stay
   downstream. Exposed as `pio_to_normalized` (C ABI) and `Case.to_normalized`
   (Python). In-memory parse: `parse_str`/`pio_parse_str`.
+- **A normalized network round-trips through the matrix builders.**
+  `to_normalized` changes exactly two conventions the square builders re-derive:
+  powers (÷`base`) and angles (deg→rad). `IndexedNetwork::per_unit_base()` (`1.0`
+  if normalized, else `base_mva`) and `angle_radians()` (identity if normalized,
+  else `.to_radians()`) are the divisor/converter those builders use, so `Y_bus`,
+  `B'`, `B''`, LACPF, and the DC operators come out identical from a network or
+  its normalized form. Use them, **not** raw `base_mva` / `.to_radians()`, wherever
+  the intent is "÷ base to get per unit" or "angle to radians" (raw `base_mva`
+  stays for metadata and MW recovery). `gridfm` is the exception: it exports a raw
+  MW/degree snapshot and debug-asserts a non-normalized input. Writing a normalized
+  network to a transformer-distinguishing format adds a `Conversion` fidelity
+  warning, since `tap 0 → 1` makes a line and a unity-ratio transformer
+  indistinguishable.
 - **Adding a format.** A reader and/or writer in `powerio/src/format/<name>.rs`
   that produces/consumes `Network`; register in `format/mod.rs`, re-export from
   `powerio/src/lib.rs`, add a CLI/`TargetFormat` arm. `Network` is the unifying
