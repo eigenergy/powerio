@@ -974,15 +974,10 @@ pub fn read_gridfm_network(
     base_mva: f64,
     name: &str,
 ) -> Result<GridfmRead> {
-    build_gridfm_network(
-        std::slice::from_ref(&tables.bus),
-        std::slice::from_ref(&tables.generator),
-        std::slice::from_ref(&tables.branch),
-        scenario,
-        base_mva,
-        name,
-        Vec::new(),
-    )
+    let bus = bus_columns(std::slice::from_ref(&tables.bus))?;
+    let gens = gen_columns(std::slice::from_ref(&tables.generator))?;
+    let branch = branch_columns(std::slice::from_ref(&tables.branch))?;
+    build_network_from_columns(&bus, &gens, &branch, scenario, base_mva, name, Vec::new())
 }
 
 /// Read one `scenario` from a gridfm dataset on disk and rebuild a [`Network`].
@@ -998,10 +993,10 @@ pub fn read_gridfm_network(
 pub fn read_gridfm_dataset(dir: impl AsRef<Path>, scenario: i64) -> Result<GridfmRead> {
     let raw = resolve_raw_dir(dir.as_ref())?;
     let (base_mva, name, warnings) = read_meta(&raw);
-    let bus = read_parquet(&raw.join("bus_data.parquet"))?;
-    let gens = read_parquet(&raw.join("gen_data.parquet"))?;
-    let branch = read_parquet(&raw.join("branch_data.parquet"))?;
-    build_gridfm_network(&bus, &gens, &branch, scenario, base_mva, &name, warnings)
+    let bus = bus_columns(&read_parquet(&raw.join("bus_data.parquet"))?)?;
+    let gens = gen_columns(&read_parquet(&raw.join("gen_data.parquet"))?)?;
+    let branch = branch_columns(&read_parquet(&raw.join("branch_data.parquet"))?)?;
+    build_network_from_columns(&bus, &gens, &branch, scenario, base_mva, &name, warnings)
 }
 
 /// Read every scenario from a gridfm dataset, one [`Network`] per `scenario` id
@@ -1014,16 +1009,21 @@ pub fn read_gridfm_dataset(dir: impl AsRef<Path>, scenario: i64) -> Result<Gridf
 pub fn read_gridfm_scenarios(dir: impl AsRef<Path>) -> Result<Vec<GridfmRead>> {
     let raw = resolve_raw_dir(dir.as_ref())?;
     let (base_mva, name, warnings) = read_meta(&raw);
-    let bus = read_parquet(&raw.join("bus_data.parquet"))?;
-    let gens = read_parquet(&raw.join("gen_data.parquet"))?;
-    let branch = read_parquet(&raw.join("branch_data.parquet"))?;
+    // Extract every column once and reuse across scenarios; rebuilding each
+    // scenario from the raw batches would re-concatenate each table n_scenarios
+    // times (O(n_scenarios × table_size)).
+    let bus = bus_columns(&read_parquet(&raw.join("bus_data.parquet"))?)?;
+    let gens = gen_columns(&read_parquet(&raw.join("gen_data.parquet"))?)?;
+    let branch = branch_columns(&read_parquet(&raw.join("branch_data.parquet"))?)?;
 
-    let mut ids = i64_col(&bus, "scenario")?;
+    let mut ids = bus.scenario.clone();
     ids.sort_unstable();
     ids.dedup();
 
     ids.into_iter()
-        .map(|s| build_gridfm_network(&bus, &gens, &branch, s, base_mva, &name, warnings.clone()))
+        .map(|s| {
+            build_network_from_columns(&bus, &gens, &branch, s, base_mva, &name, warnings.clone())
+        })
         .collect()
 }
 
@@ -1038,29 +1038,130 @@ pub fn gridfm_base_case(dir: impl AsRef<Path>) -> Result<GridfmRead> {
     read_gridfm_dataset(dir, 0)
 }
 
-/// The shared core: rebuild one scenario's [`Network`] from already-loaded record
-/// batches. `bus_batches` / `gen_batches` / `branch_batches` are each one Parquet
-/// file's batches (one per file from disk, or a single in-memory batch); the
-/// `scenario` column selects the rows. `warnings` is seeded with any
-/// manifest-level notes (e.g. a defaulted `base_mva`) and extended with the
-/// per-read fidelity notes.
+/// Every `bus_data` column the reader uses, concatenated across all batches once.
+/// Extracting columns up front lets a multi-scenario read reuse them rather than
+/// re-concatenating the whole table for each scenario.
+struct BusColumns {
+    scenario: Vec<i64>,
+    bus: Vec<i64>,
+    pv: Vec<i64>,
+    refc: Vec<i64>,
+    vm: Vec<f64>,
+    va: Vec<f64>,
+    vn_kv: Vec<f64>,
+    min_vm: Vec<f64>,
+    max_vm: Vec<f64>,
+    pd: Vec<f64>,
+    qd: Vec<f64>,
+    gs: Vec<f64>,
+    bs: Vec<f64>,
+}
+
+fn bus_columns(batches: &[RecordBatch]) -> Result<BusColumns> {
+    Ok(BusColumns {
+        scenario: i64_col(batches, "scenario")?,
+        bus: i64_col(batches, "bus")?,
+        pv: i64_col(batches, "PV")?,
+        refc: i64_col(batches, "REF")?,
+        vm: f64_col(batches, "Vm")?,
+        va: f64_col(batches, "Va")?,
+        vn_kv: f64_col(batches, "vn_kv")?,
+        min_vm: f64_col(batches, "min_vm_pu")?,
+        max_vm: f64_col(batches, "max_vm_pu")?,
+        pd: f64_col(batches, "Pd")?,
+        qd: f64_col(batches, "Qd")?,
+        gs: f64_col(batches, "GS")?,
+        bs: f64_col(batches, "BS")?,
+    })
+}
+
+/// Every `gen_data` column the reader uses (cost is `cp0`/`cp1`/`cp2`).
+struct GenColumns {
+    scenario: Vec<i64>,
+    bus: Vec<i64>,
+    p_mw: Vec<f64>,
+    q_mvar: Vec<f64>,
+    min_p: Vec<f64>,
+    max_p: Vec<f64>,
+    min_q: Vec<f64>,
+    max_q: Vec<f64>,
+    cp0: Vec<f64>,
+    cp1: Vec<f64>,
+    cp2: Vec<f64>,
+    in_service: Vec<i64>,
+}
+
+fn gen_columns(batches: &[RecordBatch]) -> Result<GenColumns> {
+    Ok(GenColumns {
+        scenario: i64_col(batches, "scenario")?,
+        bus: i64_col(batches, "bus")?,
+        p_mw: f64_col(batches, "p_mw")?,
+        q_mvar: f64_col(batches, "q_mvar")?,
+        min_p: f64_col(batches, "min_p_mw")?,
+        max_p: f64_col(batches, "max_p_mw")?,
+        min_q: f64_col(batches, "min_q_mvar")?,
+        max_q: f64_col(batches, "max_q_mvar")?,
+        cp0: f64_col(batches, "cp0_eur")?,
+        cp1: f64_col(batches, "cp1_eur_per_mw")?,
+        cp2: f64_col(batches, "cp2_eur_per_mw2")?,
+        in_service: i64_col(batches, "in_service")?,
+    })
+}
+
+/// Every `branch_data` column the reader uses (`Y**` / flow columns are ignored).
+struct BranchColumns {
+    scenario: Vec<i64>,
+    from_bus: Vec<i64>,
+    to_bus: Vec<i64>,
+    r: Vec<f64>,
+    x: Vec<f64>,
+    b: Vec<f64>,
+    tap: Vec<f64>,
+    shift: Vec<f64>,
+    ang_min: Vec<f64>,
+    ang_max: Vec<f64>,
+    rate_a: Vec<f64>,
+    status: Vec<i64>,
+}
+
+fn branch_columns(batches: &[RecordBatch]) -> Result<BranchColumns> {
+    Ok(BranchColumns {
+        scenario: i64_col(batches, "scenario")?,
+        from_bus: i64_col(batches, "from_bus")?,
+        to_bus: i64_col(batches, "to_bus")?,
+        r: f64_col(batches, "r")?,
+        x: f64_col(batches, "x")?,
+        b: f64_col(batches, "b")?,
+        tap: f64_col(batches, "tap")?,
+        shift: f64_col(batches, "shift")?,
+        ang_min: f64_col(batches, "ang_min")?,
+        ang_max: f64_col(batches, "ang_max")?,
+        rate_a: f64_col(batches, "rate_a")?,
+        status: i64_col(batches, "br_status")?,
+    })
+}
+
+/// The shared core: rebuild one scenario's [`Network`] from already-extracted
+/// columns. The columns are concatenated once by the caller and reused across
+/// scenarios, so a multi-scenario read doesn't re-copy each table per scenario.
+/// `warnings` is seeded with any manifest-level notes (e.g. a defaulted
+/// `base_mva`) and extended with the per-read fidelity notes.
 // tap == 1.0 / != 0.0 reads are exact, not approximate; the builder is one long
 // linear pass over the three tables, so the length is inherent.
 #[allow(clippy::float_cmp, clippy::too_many_lines)]
-fn build_gridfm_network(
-    bus_batches: &[RecordBatch],
-    gen_batches: &[RecordBatch],
-    branch_batches: &[RecordBatch],
+fn build_network_from_columns(
+    bus: &BusColumns,
+    gens: &GenColumns,
+    branch: &BranchColumns,
     scenario: i64,
     base_mva: f64,
     name: &str,
     mut warnings: Vec<String>,
 ) -> Result<GridfmRead> {
     // --- buses, loads, shunts (bus_data) ---
-    let bus_scen = i64_col(bus_batches, "scenario")?;
-    let bus_rows = scenario_rows(&bus_scen, scenario);
+    let bus_rows = scenario_rows(&bus.scenario, scenario);
     if bus_rows.is_empty() {
-        let mut avail = bus_scen.clone();
+        let mut avail = bus.scenario.clone();
         avail.sort_unstable();
         avail.dedup();
         return Err(Error::FormatRead {
@@ -1069,18 +1170,18 @@ fn build_gridfm_network(
         });
     }
 
-    let bus_id = i64_col(bus_batches, "bus")?;
-    let pv = i64_col(bus_batches, "PV")?;
-    let refc = i64_col(bus_batches, "REF")?;
-    let vm = f64_col(bus_batches, "Vm")?;
-    let va = f64_col(bus_batches, "Va")?;
-    let vn_kv = f64_col(bus_batches, "vn_kv")?;
-    let min_vm = f64_col(bus_batches, "min_vm_pu")?;
-    let max_vm = f64_col(bus_batches, "max_vm_pu")?;
-    let pd = f64_col(bus_batches, "Pd")?;
-    let qd = f64_col(bus_batches, "Qd")?;
-    let gs = f64_col(bus_batches, "GS")?;
-    let bs = f64_col(bus_batches, "BS")?;
+    let bus_id = &bus.bus;
+    let pv = &bus.pv;
+    let refc = &bus.refc;
+    let vm = &bus.vm;
+    let va = &bus.va;
+    let vn_kv = &bus.vn_kv;
+    let min_vm = &bus.min_vm;
+    let max_vm = &bus.max_vm;
+    let pd = &bus.pd;
+    let qd = &bus.qd;
+    let gs = &bus.gs;
+    let bs = &bus.bs;
 
     let mut buses = Vec::with_capacity(bus_rows.len());
     let mut loads = Vec::new();
@@ -1137,20 +1238,19 @@ fn build_gridfm_network(
     }
 
     // --- generators (gen_data) ---
-    let gen_scen = i64_col(gen_batches, "scenario")?;
-    let gen_rows = scenario_rows(&gen_scen, scenario);
-    require_scenario_block(&gen_scen, scenario, &gen_rows, "gen_data")?;
-    let g_bus = i64_col(gen_batches, "bus")?;
-    let p_mw = f64_col(gen_batches, "p_mw")?;
-    let q_mvar = f64_col(gen_batches, "q_mvar")?;
-    let min_p = f64_col(gen_batches, "min_p_mw")?;
-    let max_p = f64_col(gen_batches, "max_p_mw")?;
-    let min_q = f64_col(gen_batches, "min_q_mvar")?;
-    let max_q = f64_col(gen_batches, "max_q_mvar")?;
-    let cp0 = f64_col(gen_batches, "cp0_eur")?;
-    let cp1 = f64_col(gen_batches, "cp1_eur_per_mw")?;
-    let cp2 = f64_col(gen_batches, "cp2_eur_per_mw2")?;
-    let g_in = i64_col(gen_batches, "in_service")?;
+    let gen_rows = scenario_rows(&gens.scenario, scenario);
+    require_scenario_block(&gens.scenario, scenario, &gen_rows, "gen_data")?;
+    let g_bus = &gens.bus;
+    let p_mw = &gens.p_mw;
+    let q_mvar = &gens.q_mvar;
+    let min_p = &gens.min_p;
+    let max_p = &gens.max_p;
+    let min_q = &gens.min_q;
+    let max_q = &gens.max_q;
+    let cp0 = &gens.cp0;
+    let cp1 = &gens.cp1;
+    let cp2 = &gens.cp2;
+    let g_in = &gens.in_service;
 
     let mut generators = Vec::with_capacity(gen_rows.len());
     for &r in &gen_rows {
@@ -1187,20 +1287,19 @@ fn build_gridfm_network(
     }
 
     // --- branches (branch_data); Y** and pf/qf/pt/qt are ignored ---
-    let br_scen = i64_col(branch_batches, "scenario")?;
-    let br_rows = scenario_rows(&br_scen, scenario);
-    require_scenario_block(&br_scen, scenario, &br_rows, "branch_data")?;
-    let from_bus = i64_col(branch_batches, "from_bus")?;
-    let to_bus = i64_col(branch_batches, "to_bus")?;
-    let r_col = f64_col(branch_batches, "r")?;
-    let x_col = f64_col(branch_batches, "x")?;
-    let b_col = f64_col(branch_batches, "b")?;
-    let tap = f64_col(branch_batches, "tap")?;
-    let shift = f64_col(branch_batches, "shift")?;
-    let ang_min = f64_col(branch_batches, "ang_min")?;
-    let ang_max = f64_col(branch_batches, "ang_max")?;
-    let rate_a = f64_col(branch_batches, "rate_a")?;
-    let br_status = i64_col(branch_batches, "br_status")?;
+    let br_rows = scenario_rows(&branch.scenario, scenario);
+    require_scenario_block(&branch.scenario, scenario, &br_rows, "branch_data")?;
+    let from_bus = &branch.from_bus;
+    let to_bus = &branch.to_bus;
+    let r_col = &branch.r;
+    let x_col = &branch.x;
+    let b_col = &branch.b;
+    let tap = &branch.tap;
+    let shift = &branch.shift;
+    let ang_min = &branch.ang_min;
+    let ang_max = &branch.ang_max;
+    let rate_a = &branch.rate_a;
+    let br_status = &branch.status;
 
     let mut branches = Vec::with_capacity(br_rows.len());
     for &row in &br_rows {
@@ -1296,13 +1395,22 @@ fn resolve_raw_dir(dir: &Path) -> Result<PathBuf> {
     if has_bus(&nested) {
         return Ok(nested);
     }
+    // Parent-of-<case> fallback: scan for exactly one `*/raw/bus_data.parquet`.
+    // Surface read_dir / entry IO errors (missing dir, permissions) rather than
+    // masking them as "no dataset found".
     let mut matches: Vec<PathBuf> = Vec::new();
-    if let Ok(entries) = std::fs::read_dir(dir) {
-        for e in entries.flatten() {
-            let raw = e.path().join("raw");
-            if has_bus(&raw) {
-                matches.push(raw);
-            }
+    let entries = std::fs::read_dir(dir).map_err(|e| Error::FormatRead {
+        format: "gridfm",
+        message: format!("reading directory {}: {e}", dir.display()),
+    })?;
+    for entry in entries {
+        let entry = entry.map_err(|e| Error::FormatRead {
+            format: "gridfm",
+            message: format!("reading an entry of {}: {e}", dir.display()),
+        })?;
+        let raw = entry.path().join("raw");
+        if has_bus(&raw) {
+            matches.push(raw);
         }
     }
     match matches.len() {
@@ -1349,16 +1457,25 @@ fn read_meta(raw: &Path) -> (f64, String, Vec<String>) {
             vec!["gridfm_meta.json is unreadable; base_mva defaulted to 100".to_string()],
         );
     };
-    let base = meta.get("base_mva").and_then(serde_json::Value::as_f64);
     let name = meta
         .get("case_name")
         .and_then(serde_json::Value::as_str)
         .map_or_else(case_from_path, str::to_string);
     let mut warnings = Vec::new();
-    if base.is_none() {
-        warnings.push("gridfm_meta.json has no base_mva; defaulted to 100".to_string());
-    }
-    (base.unwrap_or(100.0), name, warnings)
+    // base_mva must be a positive, finite number; anything else (absent, zero,
+    // negative, NaN) defaults to 100 with a note — shunt recovery scales by it.
+    let base = match meta.get("base_mva").and_then(serde_json::Value::as_f64) {
+        Some(b) if b.is_finite() && b > 0.0 => b,
+        _ => {
+            warnings.push(
+                "gridfm_meta.json has no usable base_mva (absent or not a positive number); \
+                 defaulted to 100"
+                    .to_string(),
+            );
+            100.0
+        }
+    };
+    (base, name, warnings)
 }
 
 /// Open a parquet file and collect every record batch (one for powerio-written
@@ -2605,6 +2722,7 @@ mod tests {
 
     #[test]
     fn read_no_dataset_errors() {
+        // An empty (but existing) directory: read_dir succeeds, finds nothing.
         let dir = tempfile::tempdir().unwrap();
         let err = read_gridfm_dataset(dir.path(), 0).unwrap_err();
         assert!(
@@ -2616,6 +2734,46 @@ mod tests {
                 }
             ),
             "got {err:?}"
+        );
+        // A non-existent directory: read_dir's IO error is surfaced, not masked.
+        let missing = dir.path().join("does-not-exist");
+        let err = read_gridfm_dataset(&missing, 0).unwrap_err();
+        assert!(
+            matches!(
+                err,
+                Error::FormatRead {
+                    format: "gridfm",
+                    ..
+                }
+            ),
+            "got {err:?}"
+        );
+    }
+
+    #[test]
+    fn read_defaults_unusable_base_mva_to_100() {
+        // A manifest base_mva of 0 (or negative/NaN) is unusable — shunt recovery
+        // scales by it — so the reader defaults to 100 and warns instead of
+        // silently producing a network with zeroed shunts.
+        let net = case14();
+        let dir = tempfile::tempdir().unwrap();
+        let out = write_gridfm_dataset(&net, 0, dir.path(), &GridfmOptions::default()).unwrap();
+        let meta_path = out.dir.join("gridfm_meta.json");
+        let mut meta: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(&meta_path).unwrap()).unwrap();
+        meta["base_mva"] = serde_json::json!(0.0);
+        std::fs::write(&meta_path, serde_json::to_string(&meta).unwrap()).unwrap();
+
+        let read = read_gridfm_dataset(&out.dir, 0).unwrap();
+        assert!(
+            (read.network.base_mva - 100.0).abs() < 1e-9,
+            "base_mva should default to 100, got {}",
+            read.network.base_mva
+        );
+        assert!(
+            read.warnings.iter().any(|w| w.contains("base_mva")),
+            "expected a base_mva warning, got {:?}",
+            read.warnings
         );
     }
 
