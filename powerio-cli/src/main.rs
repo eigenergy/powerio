@@ -185,7 +185,10 @@ impl FormatArg {
         })
     }
 
-    /// The canonical name `target_format_from_name` accepts, for forcing a reader.
+    /// The canonical format name. For the five classical formats this is the name
+    /// `target_format_from_name` accepts, used to force a text reader; `gridfm` is
+    /// parquet-only and never routes through that hub (the callers guard it first),
+    /// so its name is for diagnostics only.
     fn name(self) -> &'static str {
         match self {
             FormatArg::Matpower => "matpower",
@@ -512,6 +515,16 @@ fn run_gridfm(
     from: Option<FormatArg>,
     base_scenario: i64,
 ) -> anyhow::Result<()> {
+    // The `gridfm` subcommand writes a dataset from classical cases; `--from gridfm`
+    // (reading a dataset) is the inverse and belongs to `convert`. Reject it with a
+    // pointer instead of the opaque `UnknownFormat("gridfm")` the text hub would
+    // raise (the mirror of `convert`'s `--to gridfm` guard in `FormatArg::to_target`).
+    if from == Some(FormatArg::Gridfm) {
+        anyhow::bail!(
+            "the `gridfm` subcommand writes a gridfm dataset from classical cases; \
+             to read a gridfm dataset back, use `convert --from gridfm`"
+        );
+    }
     // Parse every input first so the snapshots can borrow the owned networks for
     // the batch. Each input becomes one scenario, stamped `base + position` by the
     // shared `numbered_snapshots` builder (same rule as the Python binding).

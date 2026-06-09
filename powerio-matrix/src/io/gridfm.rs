@@ -1254,8 +1254,10 @@ fn build_network_from_columns(
 
     let mut generators = Vec::with_capacity(gen_rows.len());
     for &r in &gen_rows {
-        // A nonzero coefficient means a real polynomial cost; all-zero is the
-        // writer's "couldn't represent" sentinel and reads back as `None`.
+        // Any nonzero coefficient is a real polynomial cost. An all-zero triple is
+        // ambiguous in the schema — a generator with no cost, a genuine zero
+        // polynomial cost, or a piecewise/cubic+ cost the writer couldn't represent
+        // (all written as `(0, 0, 0)`) — so it reads back as `None` (see warnings).
         let cost = if cp0[r] != 0.0 || cp1[r] != 0.0 || cp2[r] != 0.0 {
             Some(GenCost {
                 model: 2,
@@ -1378,10 +1380,17 @@ fn build_network_from_columns(
              indistinguishable from a line and is read as one (the power flow is identical)"
         ));
     }
+    let no_cost_gens = net.generators.iter().filter(|g| g.cost.is_none()).count();
+    if no_cost_gens > 0 {
+        warnings.push(format!(
+            "{no_cost_gens} generator(s) read with no cost: an all-zero cost triple in the dataset \
+             is the writer's encoding for a generator with no cost, a genuine zero polynomial \
+             cost, or a piecewise/cubic+ cost it couldn't represent — indistinguishable on read"
+        ));
+    }
     warnings.push(
         "HVDC, storage, areas/zones, bus names, rate_b/rate_c, generator mbase/ramp limits, \
-         and startup/shutdown costs are absent from the gridfm schema; piecewise or cubic+ \
-         generator costs were zeroed by the writer and read back as no cost"
+         and startup/shutdown costs are absent from the gridfm schema"
             .to_string(),
     );
 
@@ -2903,6 +2912,34 @@ mod tests {
         let read = read_gridfm_network(&tables, 0, net.base_mva, &net.name).unwrap();
         assert!(read.network.generators.is_empty());
         assert_eq!(read.network.branches.len(), 1);
+    }
+
+    #[test]
+    fn read_all_zero_cost_reads_as_none_with_ambiguity_warning() {
+        // A genuine zero polynomial cost writes (0,0,0), indistinguishable from a
+        // no-cost generator or a zeroed unrepresentable cost; the reader reads None
+        // and the warning describes the ambiguity (not a false "piecewise/cubic").
+        let mut net = Network::in_memory(
+            "zerocost",
+            100.0,
+            vec![bus(1, BusType::Ref), bus(2, BusType::Pq)],
+            vec![branch(1, 2, 0.01, 0.1)],
+        );
+        net.generators
+            .push(gen_at(1, gencost(2, 3, vec![0.0, 0.0, 0.0])));
+        let tables = gridfm_record_batches(&net, 0, &GridfmOptions::default()).unwrap();
+        let read = read_gridfm_network(&tables, 0, net.base_mva, &net.name).unwrap();
+        assert!(
+            read.network.generators[0].cost.is_none(),
+            "all-zero cost should read back as None"
+        );
+        assert!(
+            read.warnings
+                .iter()
+                .any(|w| w.contains("read with no cost")),
+            "expected the no-cost ambiguity warning, got {:?}",
+            read.warnings
+        );
     }
 
     #[test]
