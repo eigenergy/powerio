@@ -636,7 +636,12 @@ fn branch_batch(snaps: &[SnapshotView], opts: &GridfmOptions) -> Result<RecordBa
             to_bus.push(j as i64);
 
             // Zero-impedance branch → `None` → zeroed admittance/flow columns (never NaN).
-            let block = branch_admittance(br, flags, row)?;
+            let shift_rad = if flags.zero_shifts {
+                0.0
+            } else {
+                view.angle_radians(br.shift)
+            };
+            let block = branch_admittance(br, flags, shift_rad, row)?;
             let [y_ff, y_ft, y_tf, y_tt] = block.unwrap_or([Complex64::new(0.0, 0.0); 4]);
             yff_r.push(y_ff.re);
             yff_i.push(y_ff.im);
@@ -1030,7 +1035,11 @@ mod tests {
         let yff_r = col_f64(br, "Yff_r");
         let yff_i = col_f64(br, "Yff_i");
         for (row, branch) in net.branches.iter().enumerate() {
-            if let Some(block) = branch_admittance(branch, YbusFlags::default(), row).unwrap() {
+            // Raw fixture, so the shift is in degrees — convert as build_ybus does.
+            let shift_rad = branch.shift.to_radians();
+            if let Some(block) =
+                branch_admittance(branch, YbusFlags::default(), shift_rad, row).unwrap()
+            {
                 assert!((yff_r.value(row) - block[0].re).abs() < 1e-12);
                 assert!((yff_i.value(row) - block[0].im).abs() < 1e-12);
             }

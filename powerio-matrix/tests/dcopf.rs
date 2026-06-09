@@ -3,9 +3,10 @@
 
 use powerio_matrix::IndexedNetwork;
 use powerio_matrix::{
-    Branch, Bus, BusId, BusType, DcConvention, Error, Extras, GenCost, Generator, Network, Scheme,
-    Units, build_adjacency, build_bprime, build_flow_map, build_incidence, build_lodf,
-    build_opf_instance, build_ptdf, build_weighted_laplacian, ground_at, parse_matpower_file,
+    Branch, BuildOptions, Bus, BusId, BusType, DcConvention, Error, Extras, GenCost, Generator,
+    Network, Scheme, Units, build_adjacency, build_bprime, build_flow_map, build_incidence,
+    build_lodf, build_opf_instance, build_ptdf, build_weighted_laplacian, build_ybus, ground_at,
+    parse_matpower_file,
 };
 use sprs::CsMat;
 
@@ -759,6 +760,69 @@ fn lodf_two_refs_distributed_slack_triangle() {
             );
         }
     }
+}
+
+#[test]
+fn ybus_shift_invariant_to_normalization() {
+    // A 30-degree phase shifter: shift is in degrees on the raw network and in
+    // radians on its normalized form. Y_bus must be identical — branch_admittance
+    // takes the shift via angle_radians, converting degrees->rad for the raw case
+    // and leaving the already-radian normalized case alone (no double conversion).
+    let raw = net_with_gens(
+        "shifter",
+        vec![bus(1, BusType::Ref), bus(2, BusType::Pq)],
+        vec![branch_xts(1, 2, 0.1, 1.0, 30.0)],
+        vec![poly_gen(1, 100.0, 0.0, 1.0)],
+    );
+    let norm = raw.to_normalized().unwrap();
+    let opts = BuildOptions::default();
+    let yr = build_ybus(&IndexedNetwork::new(&raw), &opts).unwrap();
+    let yn = build_ybus(&IndexedNetwork::new(&norm), &opts).unwrap();
+    let (gr, gn) = (yr.g.to_dense(), yn.g.to_dense());
+    let (br, bn) = (yr.b.to_dense(), yn.b.to_dense());
+    for i in 0..2 {
+        for j in 0..2 {
+            assert!(
+                (gr[[i, j]] - gn[[i, j]]).abs() < 1e-12,
+                "G[{i},{j}] differs"
+            );
+            assert!(
+                (br[[i, j]] - bn[[i, j]]).abs() < 1e-12,
+                "B[{i},{j}] differs"
+            );
+        }
+    }
+    // The shift makes Y_bus non-symmetric, so a dropped or doubled conversion
+    // would change these off-diagonals and the test would catch it.
+    assert!(
+        (gr[[0, 1]] - gr[[1, 0]]).abs() > 1e-6,
+        "a real phase shift should break Y_bus symmetry"
+    );
+}
+
+#[test]
+fn incidence_matpower_pshift_invariant_to_normalization() {
+    // The MATPOWER DC convention injects a phase-shift term `p_shift` that scales
+    // with the shift angle. Built from the raw (degrees) or normalized (radians)
+    // network it must match, since incidence reads the shift via angle_radians.
+    let raw = net_with_gens(
+        "shifter",
+        vec![bus(1, BusType::Ref), bus(2, BusType::Pq)],
+        vec![branch_xts(1, 2, 0.1, 1.0, 30.0)],
+        vec![poly_gen(1, 100.0, 0.0, 1.0)],
+    );
+    let norm = raw.to_normalized().unwrap();
+    let ir = build_incidence(&IndexedNetwork::new(&raw), DcConvention::Matpower).unwrap();
+    let in_ = build_incidence(&IndexedNetwork::new(&norm), DcConvention::Matpower).unwrap();
+    assert_eq!(ir.p_shift.len(), in_.p_shift.len());
+    for (a, b) in ir.p_shift.iter().zip(&in_.p_shift) {
+        assert!((a - b).abs() < 1e-12, "p_shift differs: {a} vs {b}");
+    }
+    // A nonzero shift produces a nonzero injection, so the test isn't vacuous.
+    assert!(
+        ir.p_shift.iter().any(|&v| v.abs() > 1e-6),
+        "30-degree shift should produce a nonzero p_shift"
+    );
 }
 
 #[test]

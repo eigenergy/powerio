@@ -70,7 +70,13 @@ pub(crate) fn build_ybus_with_flags(case: &IndexedNetwork, flags: YbusFlags) -> 
             element_index: row_idx,
         })?;
 
-        let Some([y_ii, y_ij, y_ji, y_jj]) = branch_admittance(br, flags, row_idx)? else {
+        let shift_rad = if flags.zero_shifts {
+            0.0
+        } else {
+            case.angle_radians(br.shift)
+        };
+        let Some([y_ii, y_ij, y_ji, y_jj]) = branch_admittance(br, flags, shift_rad, row_idx)?
+        else {
             // Zero-impedance branch (r² + x² = 0): no admittance to scatter.
             continue;
         };
@@ -126,6 +132,7 @@ pub(crate) fn build_ybus_with_flags(case: &IndexedNetwork, flags: YbusFlags) -> 
 pub(crate) fn branch_admittance(
     br: &crate::network::Branch,
     flags: YbusFlags,
+    shift_rad: f64,
     row: usize,
 ) -> Result<Option<[Complex64; 4]>> {
     let r = if flags.zero_resistance { 0.0 } else { br.r };
@@ -150,11 +157,9 @@ pub(crate) fn branch_admittance(
     } else {
         br.effective_tap()
     };
-    let shift_rad = if flags.zero_shifts {
-        0.0
-    } else {
-        br.shift.to_radians()
-    };
+    // `shift_rad` is supplied already in radians and already zeroed when
+    // `flags.zero_shifts` is set (the caller has the network, so it knows whether
+    // the source angle is degrees or — for a normalized network — radians).
     let a = Complex64::from_polar(tap_mag, shift_rad);
     let a_norm_sqr = tap_mag * tap_mag;
 

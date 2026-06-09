@@ -160,6 +160,22 @@ impl<'n> IndexedNetwork<'n> {
         }
     }
 
+    /// A branch/bus angle field (`shift`, `va`) in radians. The raw model stores
+    /// angles in degrees; a normalized network already stores radians, so for it
+    /// this is the identity. The angle analogue of
+    /// [`per_unit_base`](Self::per_unit_base): a builder gets the same radians
+    /// whether it is handed a network or its
+    /// [`to_normalized`](Network::to_normalized) form, so the matrix comes out
+    /// the same.
+    #[inline]
+    pub fn angle_radians(&self, angle: f64) -> f64 {
+        if self.net.is_normalized() {
+            angle
+        } else {
+            angle.to_radians()
+        }
+    }
+
     #[inline]
     pub fn name(&self) -> &str {
         &self.net.name
