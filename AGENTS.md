@@ -81,6 +81,9 @@ powerio/                      # parser + Network hub + converters
 ├── src/indexed.rs           # IndexCore, IndexedNetwork (dense indexed analysis
 │                            #   view), ConnectivityReport; petgraph view:
 │                            #   to_petgraph, is_radial, connectivity_report
+├── src/normalize.rs         # Network::to_normalized (per unit/radian/filtered/
+│                            #   reindexed derived view); shared per unit scaling
+│                            #   (cost_to_pu/cost_from_pu, DEG_TO_RAD, GEN_PU_KEYS)
 ├── src/format/
 │   ├── mod.rs               # hub: parse, parse_str, read_path, write_as,
 │   │                        #   TargetFormat, Conversion, target_format_from_name
@@ -115,7 +118,7 @@ powerio-cli/                  # the `powerio` binary (CLI + TUI)
 
 powerio-py/src/lib.rs        # PyO3 extension → COO triplets (module `_powerio`)
 python/powerio/              # importable package (scipy/networkx assembly, lazy)
-python/tests/test_powerio.py
+python/tests/               # test_powerio.py, test_gridfm.py, test_mcp.py
 powerio-capi/                # C ABI (pio_*, include/powerio.h, examples/smoke.c)
 │                            #   src/arrow_export.rs: pio_export_arrow (feature = "arrow")
 tests/data/                  # shared fixtures (used by CLI examples)
