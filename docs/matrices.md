@@ -42,6 +42,12 @@ instance bundle (`A`, `b`, `L`, costs, bounds, thermal limits, `C_g`) is documen
   ignores taps and shifts; B'' keeps taps and zeros only shifts; Y_bus keeps both.
 - **`BR_B` is already per unit.** Line charging susceptance is per unit on `baseMVA`
   in MATPOWER; never divide by `base_mva` again.
+- **Zero impedance branches.** B' skips them by default
+  (`BuildOptions::skip_zero_impedance`; set it `false` to get
+  `Error::ZeroImpedance`). Y_bus scatters no admittance for them (`r² + x² = 0`)
+  and the incidence builder drops them, both unconditionally. The gridfm export
+  counts the drops (`dropped_zero_impedance` in `gridfm_meta.json`); surfacing a
+  drop count on the matrix builders is tracked in #50.
 - **Reference coverage.** `IndexedNetwork::check_reference_coverage` verifies that
   every in-service island has a reference bus before DC sensitivity or DC OPF
   builders ground the Laplacian.

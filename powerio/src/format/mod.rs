@@ -4,7 +4,7 @@
 //! Each format is one module here, owning its reader and/or writer: MATPOWER
 //! `.m`, PowerModels JSON, PSS/E `.raw`, PowerWorld `.aux`, and egret
 //! `ModelData` JSON. Every input and output format meets at the hub, so adding a
-//! format is one module, not a change to any other. [`parse`] reads a file,
+//! format is one module, not a change to any other. [`parse_file`] reads a file,
 //! detecting the format from its extension; [`write_as`] serializes a `Network`
 //! to a target. Non-finite numeric values (a MATPOWER `Inf`/`NaN` angle limit,
 //! say) are written as JSON `null`.
@@ -216,9 +216,9 @@ fn sniff_json(text: &str) -> TargetFormat {
 }
 
 /// Parse the case file at `path` into a [`Network`], detecting the format from
-/// the file extension (`m`/`json`/`raw`/`aux`). The single high-level read
-/// entry point; use [`read_path`] to force a specific source format, or
-/// [`parse_str`] for in-memory text.
+/// the file extension (`m`/`json`/`raw`/`aux`). Alias of [`parse_file`]; use
+/// [`read_path`] to force a specific source format, or [`parse_str`] for
+/// in-memory text.
 ///
 /// # Errors
 /// As [`read_path`] with `from = None`.
@@ -228,8 +228,9 @@ pub fn parse(path: impl AsRef<std::path::Path>) -> Result<Network> {
 
 /// Parse the case file at `path` into a [`Network`].
 ///
-/// This is the canonical path-based parser name shared by the language
-/// bindings. It is equivalent to [`parse`].
+/// The canonical path parser name shared by the language bindings; detects
+/// the format from the file extension. Use [`read_path`] to force a source
+/// format, or [`parse_str`] for in-memory text.
 ///
 /// # Errors
 /// As [`read_path`] with `from = None`.

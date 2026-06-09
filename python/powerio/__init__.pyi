@@ -128,7 +128,9 @@ class Network:
     # `_powerio.PyCase` handle at runtime via `Network.__getattr__`.
     name: str
     base_mva: float
-    source_format: str
+    source_format: Literal[
+        "Matpower", "PowerModelsJson", "EgretJson", "Psse", "PowerWorld", "InMemory", "Normalized"
+    ]
     n: int
     n_branches: int
     n_gens: int

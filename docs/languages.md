@@ -8,7 +8,10 @@ Verb taxonomy:
 - `parse_*`: bytes, paths, or text to `Network`
 - `to_*`: `Network` to a new value
 - `convert_file`: path to target text convenience
-- `write_*`: filesystem side effects only
+- `write_*`: filesystem outputs (`write_gridfm`, `write_dcopf_bundle`); the Rust
+  hub also keeps `write_as` and per-format `write_*` text builders, the
+  internals behind `to_format` and the `to_*` writers, which the bindings do
+  not mirror
 - `export_*`: handoff to external memory or interface protocols
 
 Do not use Julia `convert` / `convert!` for format conversion. `Base.convert`

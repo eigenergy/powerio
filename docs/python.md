@@ -37,7 +37,7 @@ bprime = net.bprime()        # needs powerio[matrix]
 graph = net.to_networkx()    # needs powerio[graph]
 ```
 
-Useful compatibility aliases stay available:
+Shorthand aliases:
 
 ```python
 pio.parse("case9.m")
