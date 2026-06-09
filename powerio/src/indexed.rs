@@ -143,6 +143,23 @@ impl<'n> IndexedNetwork<'n> {
         self.net.base_mva
     }
 
+    /// The divisor for turning a power quantity (shunt, load, generation) into
+    /// per unit. `base_mva` for a raw network; `1.0` for a normalized one, whose
+    /// powers are already per unit (so a second division would scale them twice).
+    /// `base_mva` itself stays at the system base — for MW recovery and
+    /// write-back — so use this, not `base_mva`, wherever the intent is "÷ base
+    /// to get per unit". The effect is that a per-unit matrix builder yields the
+    /// same matrix for a network and its [`to_normalized`](Network::to_normalized)
+    /// form.
+    #[inline]
+    pub fn per_unit_base(&self) -> f64 {
+        if self.net.is_normalized() {
+            1.0
+        } else {
+            self.net.base_mva
+        }
+    }
+
     #[inline]
     pub fn name(&self) -> &str {
         &self.net.name

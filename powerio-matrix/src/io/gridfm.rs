@@ -291,6 +291,15 @@ fn snapshot_views<'a>(snapshots: &'a [GridfmSnapshot<'a>]) -> Result<Vec<Snapsho
                 reason: ScenarioMismatch::BusOrder,
             });
         }
+        // gridfm exports a raw snapshot: powers in MW, angles in degrees, shunts
+        // ÷ base. A normalized network is per unit / radians, so its fields would
+        // be mislabeled (and per_unit_base can't recover the MW it never kept) —
+        // it is not a valid snapshot source.
+        debug_assert!(
+            !snap.net.is_normalized(),
+            "write_gridfm: snapshot {k} is a normalized (per-unit) network; gridfm \
+             expects a raw MW/degree snapshot"
+        );
         let view = IndexedNetwork::new(snap.net);
         let ref_bus = view.reference_bus_index()?;
         views.push(SnapshotView {
@@ -333,6 +342,10 @@ pub fn numbered_snapshots<'a>(nets: &[&'a Network], base: i64) -> Result<Vec<Gri
 /// `scenario` into the id columns. Writes `bus_data.parquet`, `gen_data.parquet`,
 /// `branch_data.parquet`, optionally `y_bus_data.parquet`, and a
 /// `gridfm_meta.json` manifest.
+///
+/// Expects a raw snapshot (powers in MW, angles in degrees); pass the parsed
+/// `Network`, not a [`to_normalized`](powerio::Network::to_normalized) per-unit
+/// product, whose fields would be mislabeled.
 ///
 /// # Errors
 /// Propagates [`gridfm_record_batches`] and any filesystem/Parquet error.

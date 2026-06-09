@@ -94,6 +94,36 @@ fn ybus_split_matches_complex_invariants() {
 }
 
 #[test]
+fn ybus_invariant_to_normalization_on_case30() {
+    // The per-unit Y_bus is identical whether built from the raw case or its
+    // normalized (already per-unit) form: per_unit_base() is 1.0 for a normalized
+    // network, so its shunts aren't divided by base a second time. case30 has
+    // explicit bus shunts, so this exercises the diagonal shunt path that would
+    // double-scale (~base x) without per_unit_base.
+    let raw = parse_matpower_file(fixture("case30.m")).unwrap();
+    let norm = raw.to_normalized().unwrap();
+    assert_eq!(norm.buses.len(), raw.buses.len(), "no buses dropped");
+    let opts = BuildOptions::default();
+    let yr = build_ybus(&IndexedNetwork::new(&raw), &opts).unwrap();
+    let yn = build_ybus(&IndexedNetwork::new(&norm), &opts).unwrap();
+    let (gr, gn) = (yr.g.to_dense(), yn.g.to_dense());
+    let (br, bn) = (yr.b.to_dense(), yn.b.to_dense());
+    let n = raw.buses.len();
+    for i in 0..n {
+        for j in 0..n {
+            assert!(
+                (gr[[i, j]] - gn[[i, j]]).abs() < 1e-12,
+                "G[{i},{j}] differs"
+            );
+            assert!(
+                (br[[i, j]] - bn[[i, j]]).abs() < 1e-12,
+                "B[{i},{j}] differs"
+            );
+        }
+    }
+}
+
+#[test]
 fn lacpf_block_dimensions() {
     let net = parse_matpower_file(fixture("case14.m")).unwrap();
     let view = IndexedNetwork::new(&net);

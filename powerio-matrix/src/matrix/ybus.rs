@@ -94,7 +94,9 @@ pub(crate) fn build_ybus_with_flags(case: &IndexedNetwork, flags: YbusFlags) -> 
     }
 
     if !flags.skip_bus_shunts {
-        let base = case.base_mva();
+        // ÷ per-unit base (1.0 if the network is already normalized), so a
+        // normalized network's shunts aren't divided by base a second time.
+        let base = case.per_unit_base();
         for idx in 0..n {
             g_coo.add(idx, idx, case.gs()[idx] / base);
             b_coo.add(idx, idx, case.bs()[idx] / base);
