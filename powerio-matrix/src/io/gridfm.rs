@@ -1085,8 +1085,14 @@ fn build_gridfm_network(
     let mut buses = Vec::with_capacity(bus_rows.len());
     let mut loads = Vec::new();
     let mut shunts = Vec::new();
+    // Dense bus index -> voltage magnitude, so a generator recovers its `vg`
+    // setpoint from its bus (gridfm has no separate gen voltage column, but a
+    // generator's setpoint is its bus's regulated `Vm`).
+    let mut bus_vm: std::collections::HashMap<i64, f64> =
+        std::collections::HashMap::with_capacity(bus_rows.len());
     for &r in &bus_rows {
         let id = dense_bus_id(bus_id[r])?;
+        bus_vm.insert(bus_id[r], vm[r]);
         // REF / PV / PQ one-hot; the writer guarantees exactly one set, but read
         // defensively (REF wins, then PV, else PQ).
         let kind = if refc[r] != 0 {
@@ -1133,6 +1139,7 @@ fn build_gridfm_network(
     // --- generators (gen_data) ---
     let gen_scen = i64_col(gen_batches, "scenario")?;
     let gen_rows = scenario_rows(&gen_scen, scenario);
+    require_scenario_block(&gen_scen, scenario, &gen_rows, "gen_data")?;
     let g_bus = i64_col(gen_batches, "bus")?;
     let p_mw = f64_col(gen_batches, "p_mw")?;
     let q_mvar = f64_col(gen_batches, "q_mvar")?;
@@ -1168,7 +1175,10 @@ fn build_gridfm_network(
             pmin: min_p[r],
             qmax: max_q[r],
             qmin: min_q[r],
-            vg: 1.0,
+            // The schema has no gen vg; recover the setpoint from the bus's Vm
+            // (falls back to 1.0 only if the gen references an absent bus, which
+            // `validate()` below then rejects).
+            vg: bus_vm.get(&g_bus[r]).copied().unwrap_or(1.0),
             mbase: base_mva,
             in_service: g_in[r] != 0,
             cost,
@@ -1179,6 +1189,7 @@ fn build_gridfm_network(
     // --- branches (branch_data); Y** and pf/qf/pt/qt are ignored ---
     let br_scen = i64_col(branch_batches, "scenario")?;
     let br_rows = scenario_rows(&br_scen, scenario);
+    require_scenario_block(&br_scen, scenario, &br_rows, "branch_data")?;
     let from_bus = i64_col(branch_batches, "from_bus")?;
     let to_bus = i64_col(branch_batches, "to_bus")?;
     let r_col = f64_col(branch_batches, "r")?;
@@ -1258,7 +1269,7 @@ fn build_gridfm_network(
         ));
     }
     warnings.push(
-        "HVDC, storage, areas/zones, bus names, rate_b/rate_c, generator vg/mbase/ramp limits, \
+        "HVDC, storage, areas/zones, bus names, rate_b/rate_c, generator mbase/ramp limits, \
          and startup/shutdown costs are absent from the gridfm schema; piecewise or cubic+ \
          generator costs were zeroed by the writer and read back as no cost"
             .to_string(),
@@ -1379,6 +1390,29 @@ fn scenario_rows(scen: &[i64], scenario: i64) -> Vec<usize> {
         .collect()
 }
 
+/// Guard a gen/branch table: empty `rows` is fine when the whole table is empty
+/// (a case legitimately has no generators, or no branches), but if the table
+/// holds rows for *other* scenarios yet none for this one, the dataset is partial
+/// or corrupt and would silently yield a wrong-but-valid network — error instead.
+fn require_scenario_block(
+    scen_col: &[i64],
+    scenario: i64,
+    rows: &[usize],
+    table: &str,
+) -> Result<()> {
+    if rows.is_empty() && !scen_col.is_empty() {
+        return Err(Error::FormatRead {
+            format: "gridfm",
+            message: format!(
+                "scenario {scenario} has no {table} rows, but the table holds {} row(s) for other \
+                 scenarios — a partial or corrupt dataset",
+                scen_col.len()
+            ),
+        });
+    }
+    Ok(())
+}
+
 /// A dense `[0, n)` parquet index → 1-based [`BusId`]. Errors on a negative index.
 fn dense_bus_id(v: i64) -> Result<BusId> {
     let idx = usize::try_from(v).map_err(|_| Error::FormatRead {
@@ -1398,7 +1432,7 @@ fn column<'a>(b: &'a RecordBatch, name: &str) -> Result<&'a ArrayRef> {
 
 /// Concatenate a named non-null `Int64` column across all batches.
 fn i64_col(batches: &[RecordBatch], name: &str) -> Result<Vec<i64>> {
-    let mut out = Vec::new();
+    let mut out = Vec::with_capacity(batches.iter().map(RecordBatch::num_rows).sum());
     for b in batches {
         let arr = column(b, name)?;
         let col = arr
@@ -1414,14 +1448,14 @@ fn i64_col(batches: &[RecordBatch], name: &str) -> Result<Vec<i64>> {
                 message: format!("column `{name}` has nulls"),
             });
         }
-        out.extend(col.values().iter().copied());
+        out.extend_from_slice(col.values());
     }
     Ok(out)
 }
 
 /// Concatenate a named non-null `Float64` column across all batches.
 fn f64_col(batches: &[RecordBatch], name: &str) -> Result<Vec<f64>> {
-    let mut out = Vec::new();
+    let mut out = Vec::with_capacity(batches.iter().map(RecordBatch::num_rows).sum());
     for b in batches {
         let arr = column(b, name)?;
         let col = arr
@@ -1437,7 +1471,7 @@ fn f64_col(batches: &[RecordBatch], name: &str) -> Result<Vec<f64>> {
                 message: format!("column `{name}` has nulls"),
             });
         }
-        out.extend(col.values().iter().copied());
+        out.extend_from_slice(col.values());
     }
     Ok(out)
 }
@@ -2601,5 +2635,72 @@ mod tests {
         // case14 has loads and a shunt, so those folding warnings appear too.
         assert!(read.warnings.iter().any(|w| w.contains("nodal load")));
         assert!(read.warnings.iter().any(|w| w.contains("nodal shunts")));
+    }
+
+    #[test]
+    fn read_recovers_gen_vg_from_bus_vm() {
+        // gridfm has no gen vg column; vg is recovered from the gen's bus Vm.
+        // case14's slack bus 1 sits at Vm = 1.06, so its generator reads vg ≈ 1.06
+        // (not the old hard-coded 1.0).
+        let net = case14();
+        let tables = gridfm_record_batches(&net, 0, &GridfmOptions::default()).unwrap();
+        let read = read_gridfm_network(&tables, 0, net.base_mva, &net.name).unwrap();
+        for g in &read.network.generators {
+            let bus = read
+                .network
+                .buses
+                .iter()
+                .find(|b| b.id == g.bus)
+                .expect("gen references a known bus");
+            assert!(
+                (g.vg - bus.vm).abs() < 1e-12,
+                "vg should equal the bus Vm: {} vs {}",
+                g.vg,
+                bus.vm
+            );
+        }
+        assert!(
+            read.network
+                .generators
+                .iter()
+                .any(|g| (g.vg - 1.0).abs() > 1e-3),
+            "expected a generator with vg != 1.0 (case14's slack is at 1.06)"
+        );
+    }
+
+    #[test]
+    fn read_allows_a_case_with_no_generators() {
+        // gen_data may be legitimately empty (a power-flow case with no mpc.gen);
+        // the scenario guard must not reject it — only a *partial* table (rows for
+        // other scenarios but not this one) is an error.
+        let net = Network::in_memory(
+            "nogen",
+            100.0,
+            vec![bus(1, BusType::Ref), bus(2, BusType::Pq)],
+            vec![branch(1, 2, 0.01, 0.1)],
+        );
+        let tables = gridfm_record_batches(&net, 0, &GridfmOptions::default()).unwrap();
+        let read = read_gridfm_network(&tables, 0, net.base_mva, &net.name).unwrap();
+        assert!(read.network.generators.is_empty());
+        assert_eq!(read.network.branches.len(), 1);
+    }
+
+    #[test]
+    fn require_scenario_block_flags_partial_tables() {
+        // Empty table → ok (a legitimately element-less case). Present → ok. Absent
+        // from a non-empty table → error (the partial/corrupt dataset Copilot flagged).
+        assert!(require_scenario_block(&[], 0, &[], "gen_data").is_ok());
+        assert!(require_scenario_block(&[0, 0, 1], 0, &[0, 1], "gen_data").is_ok());
+        let err = require_scenario_block(&[0, 0], 1, &[], "branch_data").unwrap_err();
+        assert!(
+            matches!(
+                err,
+                Error::FormatRead {
+                    format: "gridfm",
+                    ..
+                }
+            ),
+            "got {err:?}"
+        );
     }
 }
