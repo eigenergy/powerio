@@ -237,7 +237,7 @@ pub fn write_as(net: &Network, format: TargetFormat) -> Conversion {
             };
         }
     }
-    match format {
+    let mut conv = match format {
         TargetFormat::PowerModelsJson => write_powermodels_json(net),
         TargetFormat::EgretJson => write_egret_json(net),
         TargetFormat::Psse => write_psse(net),
@@ -246,6 +246,38 @@ pub fn write_as(net: &Network, format: TargetFormat) -> Conversion {
         // the folded model, which itemizes what it can't carry (HVDC, gen caps,
         // extras, a partial-cost case).
         TargetFormat::Matpower => matpower::write_matpower_conversion(net),
+    };
+    warn_normalized_tap(net, format, &mut conv);
+    conv
+}
+
+/// A normalized network has its tap canonicalized to `1.0` on every line (the
+/// `0 → 1` rule), but [`Branch::is_transformer`](crate::network::Branch::is_transformer)
+/// — the test these writers use to split lines from transformers — keys off
+/// `tap != 0`. So a normalized line is written into the transformer section/type.
+/// The power flow is identical (a unity-ratio, zero-shift transformer equals a
+/// line), but the label is not, so report the fidelity loss rather than relabel
+/// it silently. MATPOWER has no separate transformer representation (just a `TAP`
+/// column), so it is exempt.
+// `tap == 1.0` / `shift == 0.0` are exact by construction: normalization sets a
+// line's tap from `effective_tap()` (the literal `1.0`) and its shift from
+// `0.0 * DEG_TO_RAD` (exactly `0.0`), so an epsilon compare would be wrong here.
+#[allow(clippy::float_cmp)]
+fn warn_normalized_tap(net: &Network, format: TargetFormat, conv: &mut Conversion) {
+    if !net.is_normalized() || matches!(format, TargetFormat::Matpower) {
+        return;
+    }
+    let lines = net
+        .branches
+        .iter()
+        .filter(|b| b.tap == 1.0 && b.shift == 0.0)
+        .count();
+    if lines > 0 {
+        conv.warnings.push(format!(
+            "normalized network: {lines} branch(es) with unit tap and no phase shift \
+             are written as unity-ratio transformers; the line/transformer distinction \
+             is not preserved (the power flow is identical)"
+        ));
     }
 }
 

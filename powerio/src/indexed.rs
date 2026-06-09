@@ -17,7 +17,7 @@
 //! and shunts.
 
 use std::borrow::Cow;
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 
 use petgraph::graph::UnGraph;
 
@@ -285,19 +285,21 @@ impl<'n> IndexedNetwork<'n> {
     /// single-slack requirement. Reports the count of ungrounded components.
     pub fn check_groundable(&self) -> Result<()> {
         let labels = self.connected_component_labels();
-        let grounded: HashSet<usize> = self
-            .reference_bus_indices()
-            .iter()
-            .map(|&r| labels[r])
-            .collect();
-        let ungrounded: HashSet<usize> = labels
-            .iter()
-            .copied()
-            .filter(|l| !grounded.contains(l))
-            .collect();
-        if !ungrounded.is_empty() {
+        // Mark each component (by its representative index in `[0, n)`) that holds
+        // a reference. A Vec<bool> keyed by label beats two HashSets: no hashing,
+        // one flat allocation.
+        let mut grounded = vec![false; labels.len()];
+        for r in self.reference_bus_indices() {
+            grounded[labels[r]] = true;
+        }
+        // A component shows up once at its root (`labels[i] == i`); count the
+        // roots whose component was never grounded.
+        let ungrounded = (0..labels.len())
+            .filter(|&i| labels[i] == i && !grounded[i])
+            .count();
+        if ungrounded > 0 {
             return Err(Error::UngroundedComponent {
-                components: ungrounded.len(),
+                components: ungrounded,
             });
         }
         Ok(())

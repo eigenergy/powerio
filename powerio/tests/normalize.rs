@@ -122,6 +122,40 @@ fn no_false_write_back() {
 }
 
 #[test]
+fn warns_when_writing_normalized_lines_as_transformers() {
+    // case9 is all lines (raw tap 0); to_normalized canonicalizes tap to 1.0,
+    // which collides with the `tap != 0` transformer sentinel the PSS/E writer
+    // uses to split lines from transformers. The conversion must report the lost
+    // line/transformer distinction instead of relabeling silently.
+    let raw = parse_matpower_file(data("case9.m")).unwrap();
+    let n = raw.to_normalized().unwrap();
+    assert!(
+        n.branches
+            .iter()
+            .all(|b| approx(b.tap, 1.0) && approx(b.shift, 0.0))
+    );
+
+    let out = write_as(&n, TargetFormat::Psse);
+    assert!(
+        out.warnings
+            .iter()
+            .any(|w| w.contains("unity-ratio transformers")),
+        "expected a normalized line/transformer fidelity warning, got {:?}",
+        out.warnings
+    );
+
+    // A raw network keeps lines at tap 0, so the warning must not fire for it.
+    let raw_out = write_as(&raw, TargetFormat::Psse);
+    assert!(
+        !raw_out
+            .warnings
+            .iter()
+            .any(|w| w.contains("unity-ratio transformers")),
+        "raw network must not trigger the normalized-tap warning"
+    );
+}
+
+#[test]
 fn filters_and_retypes_out_of_service_case() {
     let raw = parse_matpower_file(data("t_case9_oos.m")).unwrap();
     let n = raw.to_normalized().unwrap();

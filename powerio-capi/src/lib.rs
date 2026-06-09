@@ -83,6 +83,39 @@ unsafe fn guard<R>(fallback: R, f: impl FnOnce() -> R) -> R {
     catch_unwind(AssertUnwindSafe(f)).unwrap_or(fallback)
 }
 
+/// Box a `Network` into an owned case handle, building its [`IndexCore`] once so
+/// every indexed query reuses it. The one constructor for `*mut PioCase`.
+fn make_case(net: Network) -> *mut PioCase {
+    let core = IndexCore::build(&net);
+    Box::into_raw(Box::new(PioCase { net, core }))
+}
+
+/// Finish a `*mut PioCase` entry point: run `f` (producing a `Network` or an
+/// error message) under the panic guard, hand back an owned handle, or write the
+/// error — `panic_msg` if `f` panicked — into `errbuf` and return NULL. The
+/// shared tail of every handle-returning function (`pio_parse`, `pio_parse_str`,
+/// `pio_to_normalized`, `pio_from_json`).
+unsafe fn finish_case(
+    errbuf: *mut c_char,
+    errlen: usize,
+    panic_msg: &str,
+    f: impl FnOnce() -> Result<Network, String>,
+) -> *mut PioCase {
+    unsafe {
+        match catch_unwind(AssertUnwindSafe(f)) {
+            Ok(Ok(net)) => make_case(net),
+            Ok(Err(msg)) => {
+                copy_to_buf(errbuf, errlen, &msg);
+                std::ptr::null_mut()
+            }
+            Err(_) => {
+                copy_to_buf(errbuf, errlen, panic_msg);
+                std::ptr::null_mut()
+            }
+        }
+    }
+}
+
 /// ABI version of this C interface. Bump on any breaking change to an existing
 /// `pio_*` signature or to the JSON transport schema (new additive symbols don't
 /// require a bump). A consumer compares [`pio_abi_version`] against the value it
@@ -124,27 +157,11 @@ pub unsafe extern "C" fn pio_parse(
     errlen: usize,
 ) -> *mut PioCase {
     unsafe {
-        let r = catch_unwind(AssertUnwindSafe(|| {
+        finish_case(errbuf, errlen, "panic while parsing", || {
             let path = cstr(path).ok_or_else(|| "path is NULL or not UTF-8".to_string())?;
             let from = if from.is_null() { None } else { cstr(from) };
-            powerio::read_path(std::path::Path::new(path), from)
-                .map_err(|e| e.to_string())
-                .map(|net| {
-                    let core = IndexCore::build(&net);
-                    Box::into_raw(Box::new(PioCase { net, core }))
-                })
-        }));
-        match r {
-            Ok(Ok(ptr)) => ptr,
-            Ok(Err(msg)) => {
-                copy_to_buf(errbuf, errlen, &msg);
-                std::ptr::null_mut()
-            }
-            Err(_) => {
-                copy_to_buf(errbuf, errlen, "panic while parsing");
-                std::ptr::null_mut()
-            }
-        }
+            powerio::read_path(std::path::Path::new(path), from).map_err(|e| e.to_string())
+        })
     }
 }
 
@@ -161,27 +178,11 @@ pub unsafe extern "C" fn pio_parse_str(
     errlen: usize,
 ) -> *mut PioCase {
     unsafe {
-        let r = catch_unwind(AssertUnwindSafe(|| {
+        finish_case(errbuf, errlen, "panic while parsing", || {
             let text = cstr(text).ok_or_else(|| "text is NULL or not UTF-8".to_string())?;
             let format = cstr(format).ok_or_else(|| "format is NULL or not UTF-8".to_string())?;
-            powerio::parse_str(text, format)
-                .map_err(|e| e.to_string())
-                .map(|net| {
-                    let core = IndexCore::build(&net);
-                    Box::into_raw(Box::new(PioCase { net, core }))
-                })
-        }));
-        match r {
-            Ok(Ok(ptr)) => ptr,
-            Ok(Err(msg)) => {
-                copy_to_buf(errbuf, errlen, &msg);
-                std::ptr::null_mut()
-            }
-            Err(_) => {
-                copy_to_buf(errbuf, errlen, "panic while parsing");
-                std::ptr::null_mut()
-            }
-        }
+            powerio::parse_str(text, format).map_err(|e| e.to_string())
+        })
     }
 }
 
@@ -221,24 +222,10 @@ pub unsafe extern "C" fn pio_to_normalized(
     errlen: usize,
 ) -> *mut PioCase {
     unsafe {
-        let r = catch_unwind(AssertUnwindSafe(|| {
+        finish_case(errbuf, errlen, "panic while normalizing", || {
             let c = case_ref(case).ok_or_else(|| "case is NULL".to_string())?;
-            c.net.to_normalized().map_err(|e| e.to_string()).map(|net| {
-                let core = IndexCore::build(&net);
-                Box::into_raw(Box::new(PioCase { net, core }))
-            })
-        }));
-        match r {
-            Ok(Ok(ptr)) => ptr,
-            Ok(Err(msg)) => {
-                copy_to_buf(errbuf, errlen, &msg);
-                std::ptr::null_mut()
-            }
-            Err(_) => {
-                copy_to_buf(errbuf, errlen, "panic while normalizing");
-                std::ptr::null_mut()
-            }
-        }
+            c.net.to_normalized().map_err(|e| e.to_string())
+        })
     }
 }
 
@@ -429,26 +416,10 @@ pub unsafe extern "C" fn pio_from_json(
     errlen: usize,
 ) -> *mut PioCase {
     unsafe {
-        let r = catch_unwind(AssertUnwindSafe(|| {
+        finish_case(errbuf, errlen, "panic while parsing JSON", || {
             let json = cstr(json).ok_or_else(|| "json is NULL or not UTF-8".to_string())?;
-            Network::from_json(json)
-                .map_err(|e| e.to_string())
-                .map(|net| {
-                    let core = IndexCore::build(&net);
-                    Box::into_raw(Box::new(PioCase { net, core }))
-                })
-        }));
-        match r {
-            Ok(Ok(ptr)) => ptr,
-            Ok(Err(msg)) => {
-                copy_to_buf(errbuf, errlen, &msg);
-                std::ptr::null_mut()
-            }
-            Err(_) => {
-                copy_to_buf(errbuf, errlen, "panic while parsing JSON");
-                std::ptr::null_mut()
-            }
-        }
+            Network::from_json(json).map_err(|e| e.to_string())
+        })
     }
 }
 

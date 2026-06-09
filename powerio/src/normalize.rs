@@ -42,29 +42,33 @@ pub(crate) const GEN_PU_KEYS: [&str; 4] = ["ramp_agc", "ramp_10", "ramp_30", "ra
 ///
 /// Polynomial (model 2): coeff `i` is the term `p^(k-1-i)`, so per unit scales it
 /// by `base^(k-1-i)`. Piecewise (model 1): the MW breakpoints (even positions) are
-/// divided by `base`; the dollar costs (odd positions) stay.
+/// divided by `base`; the dollar costs (odd positions) stay. Any other model has
+/// unknown coefficient semantics, so it passes through untouched — the exact
+/// inverse of [`cost_from_pu`]'s own passthrough.
 pub(crate) fn cost_to_pu(cost: &GenCost, base: f64) -> Vec<f64> {
-    let want = if cost.model == 1 {
-        cost.ncost * 2
-    } else {
-        cost.ncost
-    };
-    let coeffs = &cost.coeffs[..want.min(cost.coeffs.len())];
-    if cost.model == 2 {
-        let k = coeffs.len();
-        // The exponent k-1-i is in [0, k-1]; a polynomial never has i32::MAX-many
-        // terms, so the conversion can't fail (loud, not silent, if it ever did).
-        coeffs
-            .iter()
-            .enumerate()
-            .map(|(i, &c)| c * base.powi(i32::try_from(k - 1 - i).expect("cost degree fits i32")))
-            .collect()
-    } else {
-        coeffs
-            .iter()
-            .enumerate()
-            .map(|(i, &c)| if i % 2 == 0 { c / base } else { c })
-            .collect()
+    match cost.model {
+        2 => {
+            let coeffs = &cost.coeffs[..cost.ncost.min(cost.coeffs.len())];
+            let k = coeffs.len();
+            // The exponent k-1-i is in [0, k-1]; a polynomial never has i32::MAX-many
+            // terms, so the conversion can't fail (loud, not silent, if it ever did).
+            coeffs
+                .iter()
+                .enumerate()
+                .map(|(i, &c)| {
+                    c * base.powi(i32::try_from(k - 1 - i).expect("cost degree fits i32"))
+                })
+                .collect()
+        }
+        1 => {
+            let coeffs = &cost.coeffs[..(cost.ncost * 2).min(cost.coeffs.len())];
+            coeffs
+                .iter()
+                .enumerate()
+                .map(|(i, &c)| if i % 2 == 0 { c / base } else { c })
+                .collect()
+        }
+        _ => cost.coeffs.clone(),
     }
 }
 
@@ -308,20 +312,14 @@ impl Network {
         // are kept as-is — the consumer picks the slack — and only when no `Ref`
         // survives is the largest-pmax generator's bus promoted.
         let gen_buses: HashSet<BusId> = generators.iter().map(|g| g.bus).collect();
-        let mut any_ref = false;
         for b in &mut buses {
-            b.kind = if gen_buses.contains(&b.id) {
-                if b.kind == BusType::Ref {
-                    BusType::Ref
-                } else {
-                    BusType::Pv
-                }
-            } else {
-                BusType::Pq
+            b.kind = match (gen_buses.contains(&b.id), b.kind) {
+                (true, BusType::Ref) => BusType::Ref,
+                (true, _) => BusType::Pv,
+                (false, _) => BusType::Pq,
             };
-            any_ref |= b.kind == BusType::Ref;
         }
-        if !any_ref {
+        if !buses.iter().any(|b| b.kind == BusType::Ref) {
             // No reference survived: anchor the slack at the largest-pmax in-service
             // generator's bus, or error when there is no generator to anchor it.
             let slack = generators
@@ -436,6 +434,24 @@ mod tests {
         for (a, b) in back.iter().zip(&cost.coeffs) {
             assert!((a - b).abs() < 1e-9);
         }
+    }
+
+    #[test]
+    fn cost_rescale_passes_through_unknown_model() {
+        // A model outside {1,2} has unknown coefficient semantics, so neither
+        // direction may touch it; to_pu and from_pu must both be the identity,
+        // or the round trip silently corrupts a curve we don't understand.
+        let cost = GenCost {
+            model: 0,
+            startup: 0.0,
+            shutdown: 0.0,
+            ncost: 2,
+            coeffs: vec![3.0, 7.0, 9.0],
+        };
+        let pu = cost_to_pu(&cost, 100.0);
+        assert_eq!(pu, cost.coeffs, "to_pu must not scale an unknown model");
+        let back = cost_from_pu(&pu, cost.model, 100.0);
+        assert_eq!(back, cost.coeffs, "from_pu must not scale an unknown model");
     }
 
     #[test]

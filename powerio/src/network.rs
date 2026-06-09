@@ -393,15 +393,22 @@ impl Network {
 
     /// Rebuild a `Network` from JSON produced by [`to_json`](Network::to_json).
     ///
-    /// Validates the result (unique bus ids, no dangling references) before
-    /// returning, so the JSON transport — the C ABI and Julia bridge ride on it —
-    /// can't hand back a network the file readers would have rejected.
+    /// Validates the result (no buses, unique bus ids, no dangling references)
+    /// before returning, so the JSON transport — the C ABI and Julia bridge ride
+    /// on it — can't hand back a network the file readers would have rejected
+    /// (the same no-buses guard `read_source` applies to every parse path).
     pub fn from_json(text: &str) -> crate::Result<Network> {
         let net: Network = serde_json::from_str(text).map_err(|e| Error::FormatRead {
             format: "JSON",
             message: e.to_string(),
         })?;
         net.check_references("JSON")?;
+        if net.buses.is_empty() {
+            return Err(Error::FormatRead {
+                format: "JSON",
+                message: "case has no buses".into(),
+            });
+        }
         Ok(net)
     }
 
