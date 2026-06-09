@@ -28,8 +28,13 @@ MATPOWER case taken through powerio to egret JSON matches egret's direct import.
 
 ## Validation
 
-The harness `benchmarks/run_validation.sh` checks powerio against four independent
-tools. Every reader and writer, and every conversion pair, is exercised.
+The harness script `benchmarks/run_validation.sh` checks powerio against four independent
+tools. Every reader and every writer runs under an oracle: the conversion matrix
+covers MATPOWER, PSS/E, and egret sources against all five targets, every
+PowerWorld output is read back and bridged to PowerModels JSON, and the PMread
+leg covers the PowerModels JSON read side. The remaining source/target pairs
+(PowerModels JSON and PowerWorld sources into the non-PowerModels targets) have
+no external oracle and rest on the Rust round trip suite.
 
 - **PowerModels.jl** (`validate_powermodels.jl`, `validate_psse.jl`,
   `core_json.jl`). Reads MATPOWER, PowerModels JSON, and PSS/E. The MATPOWER to
@@ -47,7 +52,7 @@ tools. Every reader and writer, and every conversion pair, is exercised.
 `benchmarks/validate_matrix.py` converts each source to every target and checks
 the electrical core of the output (bus/branch/generator counts and the per unit
 demand, generation, and shunt totals) against the source's own core, read by an
-independent oracle. The diagonal is checked byte-exact: writing back to the source
+independent oracle. The diagonal is checked byte exact: writing back to the source
 format reproduces the file. Sources use the real native files where they exist
 (the vendored PSS/E `.raw` and egret `.json`) and representative MATPOWER cases
 otherwise: basic (`case9`), shunts and transformers (`case14`, `case30`), size
@@ -56,7 +61,7 @@ otherwise: basic (`case9`), shunts and transformers (`case14`, `case30`), size
 
 All 65 cells pass (13 source cases × 5 targets). The core is preserved by every
 writer regardless of fidelity tier, so it is the invariant checked across the
-whole matrix; cost, HVDC, and angle limits are tier-specific and covered by the
+whole matrix; cost, HVDC, and angle limits are tier specific and covered by the
 dedicated checks above and the Rust suite.
 
 ### Running it
@@ -70,7 +75,7 @@ bash benchmarks/run_validation.sh
 ```
 
 The oracle tools (PowerModels.jl, egret, ExaPowerIO.jl, pandapower) are
-benchmark-scoped: they are declared in `benchmarks/Project.toml` and
+benchmark scoped: they are declared in `benchmarks/Project.toml` and
 `benchmarks/requirements.txt`, never as dependencies of the powerio package.
 
 ## Known limits
@@ -85,8 +90,8 @@ These are reported in `Conversion::warnings`, not dropped silently.
   No third-party `.aux` reader exists, so that writer is validated by powerio's own
   read-back plus a PowerModels JSON bridge.
 - **MATPOWER** canonical output (for a case that did not originate as MATPOWER)
-  omits dcline and storage; the byte-exact echo path keeps them when the case was
-  read from MATPOWER.
+  omits dcline; the byte-exact echo path keeps it when the case was read from
+  MATPOWER. Storage is written as an `mpc.storage` block.
 - **egret** output drops HVDC and storage. The reader takes the power flow
   ModelData subset (numeric bus ids, scalar values); unit commitment cases
   (`system.time_keys`) are rejected.

@@ -3,9 +3,9 @@
 Two tools for LLM agent tooling, both accepting either a filesystem ``path`` or
 inline ``content``:
 
-- ``convert_case`` — convert a case file between formats, returning the text and
+- ``convert_case``: convert a case file between formats, returning the text and
   any fidelity warnings.
-- ``case_summary`` — counts, base MVA, source format, and connectivity, with no
+- ``case_summary``: counts, base MVA, source format, and connectivity, with no
   scipy/numpy in the loop.
 
 Run over stdio with the ``powerio-mcp`` console script (or ``python -m
@@ -63,7 +63,7 @@ def _stage(content: str, fmt: str) -> str:
     regardless of the platform's default text encoding, because the case
     readers decode as UTF-8 (a non-UTF-8 locale would otherwise corrupt
     non-ASCII content or fail the parse). If the write fails, the temp file
-    `mkstemp` already created on disk is removed before re-raising — the caller
+    `mkstemp` already created on disk is removed before re-raising; the caller
     only learns the path on success, so it can't clean up after a failed stage.
     """
     suffix = _EXT.get(fmt.strip().lower(), ".txt")

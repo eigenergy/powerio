@@ -2,7 +2,7 @@
 //!
 //! One Rust↔Python boundary for both halves of PowerIO: the dependency-light IO
 //! surface (parse, lossless write, cross-format convert) and the matrix surface
-//! (B'/B''/Y_bus, PTDF/LODF, incidence, weighted Laplacian, adjacency, DC-OPF).
+//! (B'/B''/Y_bus, PTDF/LODF, incidence, weighted Laplacian, adjacency, DC OPF).
 //! Parse and convert cross the boundary as plain dicts and strings, so
 //! `import powerio` pulls in nothing but the interpreter.
 //!
@@ -10,12 +10,10 @@
 //! (`data`, `row`, `col`, `shape`); there is no numpy at this layer. The
 //! pure-Python `powerio` package (python/powerio/) assembles those into
 //! `scipy.sparse` matrices and networkx graphs lazily, so scipy/numpy/networkx
-//! stay out of the Rust build and a missing extra surfaces as a clean
+//! stay out of the Rust build and a missing extra surfaces as an
 //! `ImportError` in Python rather than a link error.
 //!
-//! COO (not CSR/CSC triplets) is deliberate: explicit per-entry `(row, col)`
-//! can't be misread as the transpose the way a raw `indptr`/`indices` pair can,
-//! and it sidesteps the sprs `IndPtr` slice API. Indices narrow to `i32` to
+//! Indices narrow to `i32` to
 //! match scipy's default index width; the largest index is bounded by
 //! `max(n_buses, n_branches)` (`2n` for the LACPF block), far under 2³¹, and
 //! `coo_triplets` guards the bound anyway.
@@ -265,7 +263,7 @@ impl PyCase {
         IndexedNetwork::with_core(&self.inner, &self.core).reference_bus_indices()
     }
 
-    // --- tables (the format neutral Network, as dict rows) --------------
+    // --- tables (the format-neutral Network, as dict rows) --------------
 
     #[getter]
     fn buses<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyList>> {
@@ -528,7 +526,7 @@ impl PyCase {
         coo_triplets(py, &l)
     }
 
-    /// Write the DC-OPF bundle into `out_dir/<case>_dcopf/`. Returns
+    /// Write the DC OPF bundle into `out_dir/<case>_dcopf/`. Returns
     /// `{"dir": str, "files": [str, ...]}`.
     #[pyo3(signature = (out_dir, convention=None, units=None))]
     fn write_dcopf_bundle<'py>(
@@ -668,7 +666,7 @@ fn convert(path: &str, to: &str, from_: Option<&str>) -> PyResult<(String, Vec<S
 }
 
 /// Build a `{dir, files}` dict from an outputs directory and its written files.
-/// Shared by the DC-OPF and gridfm write paths. Paths go through [`path_to_str`]
+/// Shared by the DC OPF and gridfm write paths. Paths go through [`path_to_str`]
 /// (so a non-UTF8 path raises instead of being mangled).
 fn dir_files_dict<'py>(
     py: Python<'py>,
@@ -744,7 +742,7 @@ fn _powerio(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(convert_file, m)?)?;
     m.add_function(wrap_pyfunction!(convert, m)?)?;
     // Whether the gridfm Parquet surface (arrow/parquet) was compiled in, so the
-    // pure-Python layer can raise a clean error instead of an AttributeError.
+    // pure-Python layer can raise an ImportError instead of an AttributeError.
     m.add("_has_gridfm", cfg!(feature = "gridfm"))?;
     #[cfg(feature = "gridfm")]
     m.add_function(wrap_pyfunction!(write_gridfm_batch, m)?)?;

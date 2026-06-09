@@ -1,6 +1,6 @@
 # AGENTS.md
 
-Guidance for Codex working in this repo.
+Guidance for agents working in this repo.
 
 ## Purpose
 
@@ -8,7 +8,7 @@ A Cargo workspace of Rust crates plus a Python package. Parses power network
 case files, converts losslessly between formats, and emits sparse matrices and
 graph views for any downstream solver. (Planned) feeds the GridFM ML pipeline.
 
-- **`powerio`**: the parser, the format neutral `Network` hub, the lossless
+- **`powerio`**: the parser, the format-neutral `Network` hub, the lossless
   writer, and the format converters. Light deps (thiserror, num-complex,
   petgraph, serde, serde_json, lexical-core); no matrix or TUI stack.
 - **`powerio-matrix`**: sparse matrices and graph views built on `powerio`
@@ -81,6 +81,9 @@ powerio/                      # parser + Network hub + converters
 ├── src/indexed.rs           # IndexCore, IndexedNetwork (dense indexed analysis
 │                            #   view), ConnectivityReport; petgraph view:
 │                            #   to_petgraph, is_radial, connectivity_report
+├── src/normalize.rs         # Network::to_normalized (per unit/radian/filtered/
+│                            #   reindexed derived view); shared per unit scaling
+│                            #   (cost_to_pu/cost_from_pu, DEG_TO_RAD, GEN_PU_KEYS)
 ├── src/format/
 │   ├── mod.rs               # hub: parse, parse_str, read_path, write_as,
 │   │                        #   TargetFormat, Conversion, target_format_from_name
@@ -115,7 +118,7 @@ powerio-cli/                  # the `powerio` binary (CLI + TUI)
 
 powerio-py/src/lib.rs        # PyO3 extension → COO triplets (module `_powerio`)
 python/powerio/              # importable package (scipy/networkx assembly, lazy)
-python/tests/test_powerio.py
+python/tests/               # test_powerio.py, test_gridfm.py, test_mcp.py
 powerio-capi/                # C ABI (pio_*, include/powerio.h, examples/smoke.c)
 │                            #   src/arrow_export.rs: pio_export_arrow (feature = "arrow")
 tests/data/                  # shared fixtures (used by CLI examples)
@@ -181,4 +184,4 @@ new sizes by curl from upstream.
 
 ## Relationship to GridFM
 
-Intended as the fast Rust data layer beneath `gridfm-datakit` (Python, scenario generation) and `gridfm-graphkit` (PyTorch Geometric, GNN training). The `gridfm` subcommand (`io::gridfm`, `--features gridfm`, issue #4) writes the `bus_data`/`gen_data`/`branch_data`/`y_bus_data` Parquet tables matching gridfm-datakit's column schema, under `<out>/<case>/raw/`, so gridfm-graphkit's `HeteroGridDatasetDisk` loads powerio output directly. powerio has no solver, so a case is one snapshot (`scenario 0`): voltages/dispatch are the case's stored values and branch flows are computed from them. Per scenario expansion is the scenario batch path (issue #14).
+Intended as the fast Rust data layer beneath `gridfm-datakit` (Python, scenario generation) and `gridfm-graphkit` (PyTorch Geometric, GNN training). The `gridfm` subcommand (`io::gridfm`, `--features gridfm`, issue #4) writes the `bus_data`/`gen_data`/`branch_data`/`y_bus_data` Parquet tables matching gridfm-datakit's column schema, under `<out>/<case>/raw/`, so gridfm-graphkit's `HeteroGridDatasetDisk` loads powerio output directly. powerio has no solver, so a case is one snapshot (`scenario 0`): voltages/dispatch are the case's stored values and branch flows are computed from them. A scenario batch (`write_gridfm_batch` / `GridfmSnapshot`, or multiple `gridfm` CLI inputs) row-stacks snapshots that share one base element set, keyed by the `scenario` column.

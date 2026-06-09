@@ -10,7 +10,6 @@ use powerio_matrix::{BuildOptions, IndexedNetwork, build_bprime, parse_matpower_
 let net = parse_matpower_file("case14.m")?;
 let view = IndexedNetwork::new(&net);
 let bprime = build_bprime(&view, &BuildOptions::default())?;
-# Ok::<(), powerio_matrix::Error>(())
 ```
 
 Outputs include B', B'', Y_bus components, LACPF, incidence, weighted

@@ -82,12 +82,13 @@ h = parse_file("case9.m")
 n = ccall((:pio_n_buses, LIB), Csize_t, (Ptr{Cvoid},), h)
 m = ccall((:pio_n_branches, LIB), Csize_t, (Ptr{Cvoid},), h)
 
-from = Vector{Int64}(undef, m); x = Vector{Float64}(undef, m)
+from = Vector{Int64}(undef, m); to = Vector{Int64}(undef, m)
+x = Vector{Float64}(undef, m)
 ccall((:pio_branches, LIB), Cvoid,
       (Ptr{Cvoid}, Ptr{Int64}, Ptr{Int64}, Ptr{Float64}, Ptr{Float64},
        Ptr{Float64}, Ptr{Float64}, Ptr{Float64}, Ptr{UInt8}),
-      h, from, C_NULL, C_NULL, x, C_NULL, C_NULL, C_NULL, C_NULL)
-# build your matrices from (from, x), then:
+      h, from, to, C_NULL, x, C_NULL, C_NULL, C_NULL, C_NULL)
+# build your matrices from (from, to, x), then:
 ccall((:pio_case_free, LIB), Cvoid, (Ptr{Cvoid},), h)
 ```
 
@@ -108,7 +109,7 @@ The release ABI uses the same verb taxonomy as the Rust, Python, and Julia APIs:
 - `pio_parse_file` and `pio_parse_str` turn files or text into handles.
 - `pio_to_format`, `pio_to_matpower`, `pio_to_json`, and `pio_to_normalized`
   derive new values from a handle.
-- `pio_convert_file` is the path to text convenience wrapper.
+- `pio_convert_file` converts a file path to output text in one call.
 - `pio_export_arrow` uses `export` because it fills Arrow C Data Interface
   structs with release callbacks.
 

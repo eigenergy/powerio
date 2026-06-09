@@ -2,7 +2,7 @@
 //! files.
 //!
 //! Parse a MATPOWER `.m` case, work with the typed [`Network`], and write it
-//! back out byte-for-byte: `parse → write → parse` reproduces the source,
+//! back out byte for byte: `parse → write → parse` reproduces the source,
 //! preserving every `mpc.*` field, in-matrix comments, and exact numeric
 //! tokens. The crate keeps a small dependency set so other tools can embed it
 //! as a parser without a matrix or solver stack; the matrices live in the

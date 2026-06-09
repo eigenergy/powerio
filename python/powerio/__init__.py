@@ -1,8 +1,8 @@
 """powerio: lossless power system case file IO, conversion, and matrices.
 
-Parse MATPOWER, PSS/E, PowerWorld, and PowerModels JSON into one format neutral
-case; write it back byte-exact; convert between formats; and pull the sparse
-matrices and graph views solvers need::
+Parse MATPOWER, PSS/E, PowerWorld, PowerModels JSON, and egret JSON into one
+format-neutral case; write it back byte exact; convert between formats; and
+pull the sparse matrices and graph views solvers need::
 
     import powerio as pio
 
@@ -64,7 +64,7 @@ __all__ = [
 ]
 
 Conversion = namedtuple("Conversion", ["text", "warnings"])
-Conversion.__doc__ = """Output of :func:`convert`.
+Conversion.__doc__ = """Output of :func:`convert_file`.
 
 ``text`` is the converted file contents; ``warnings`` lists the fields the
 target format could not represent (empty for a faithful conversion).
@@ -198,7 +198,7 @@ class Network:
         """Serialize to MATPOWER ``.m`` text.
 
         A case parsed from MATPOWER keeps its original source, so this returns a
-        byte-exact echo. Derived cases serialize from the format neutral model.
+        byte-exact echo. Derived cases serialize from the format-neutral model.
         """
         return self._inner.to_matpower()
 

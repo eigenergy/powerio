@@ -59,12 +59,14 @@ jobs:
           a { color: #0b5cad; }
         </style>
         <h1>PowerIO docs</h1>
-          <ul>
-          <li><a href="powerio/index.html">Rust crate docs</a></li>
-          <li><a href="python/powerio.html">Python API docs</a></li>
-          <li><a href="https://github.com/eigenergy/PowerIO.jl">Julia bindings</a></li>
-          </ul>
-          HTML
+        <ul>
+        <li><a href="powerio/index.html">powerio (Rust crate docs)</a></li>
+        <li><a href="powerio_matrix/index.html">powerio-matrix (Rust crate docs)</a></li>
+        <li><a href="powerio_capi/index.html">powerio-capi (C ABI crate docs)</a></li>
+        <li><a href="python/powerio.html">powerio (Python API docs)</a></li>
+        <li><a href="https://eigenergy.github.io/PowerIO.jl/dev/">PowerIO.jl (Julia API docs)</a></li>
+        </ul>
+        HTML
     - uses: actions/upload-pages-artifact@v3
       with:
         path: target/doc

@@ -10,7 +10,6 @@ use powerio::{TargetFormat, parse_file};
 let net = parse_file("case14.m")?;
 let converted = net.to_format(TargetFormat::PowerModelsJson);
 std::fs::write("case14.json", converted.text)?;
-# Ok::<(), powerio::Error>(())
 ```
 
 The workspace README covers the CLI, Python package, C ABI, matrix builders, and
