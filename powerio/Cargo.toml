@@ -21,8 +21,8 @@ all-features = true
 [dependencies]
 thiserror = "2"
 num-complex = "0.4"
-# SIMD accelerated float parsing for numeric matrix rows.
-fast-float = "0.2"
+# Byte-slice float parsing for numeric matrix rows, avoiding UTF-8 allocation.
+lexical-core = "1"
 # A power network is a graph; connectivity/radial diagnostics live on Network.
 petgraph = "0.8"
 serde = { version = "1", features = ["derive"] }

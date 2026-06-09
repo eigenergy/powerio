@@ -6,9 +6,9 @@
 use std::path::{Path, PathBuf};
 
 use powerio::{
-    BusId, SourceFormat, TargetFormat, parse_matpower, parse_matpower_file, parse_powermodels_json,
-    parse_powerworld, parse_psse, write_as, write_egret_json, write_powermodels_json,
-    write_powerworld, write_psse,
+    BusId, SourceFormat, TargetFormat, convert_file, parse_file, parse_matpower,
+    parse_matpower_file, parse_powermodels_json, parse_powerworld, parse_psse, write_as,
+    write_egret_json, write_powermodels_json, write_powerworld, write_psse,
 };
 use serde_json::Value;
 
@@ -19,6 +19,30 @@ fn data(name: &str) -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../tests/data")
         .join(name)
+}
+
+#[test]
+fn canonical_api_names_parse_and_convert() {
+    let path = data("case14.m");
+    let src = std::fs::read_to_string(&path).unwrap();
+    let net = parse_file(&path).unwrap();
+
+    assert_eq!(
+        "powermodels-json".parse::<TargetFormat>().unwrap(),
+        TargetFormat::PowerModelsJson
+    );
+    assert_eq!(TargetFormat::Psse.to_string(), "psse");
+    assert_eq!(net.to_matpower(), src);
+
+    let pm = net.to_format(TargetFormat::PowerModelsJson);
+    assert_eq!(
+        serde_json::from_str::<Value>(&pm.text).unwrap()["name"],
+        "case14"
+    );
+
+    let same = convert_file(&path, TargetFormat::Matpower, None).unwrap();
+    assert_eq!(same.text, src);
+    assert!(same.warnings.is_empty());
 }
 
 #[test]

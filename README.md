@@ -40,29 +40,34 @@ powerio-matrix   sparse matrices, DC sensitivity factors, graph views
 powerio-cli      the `powerio` command and ratatui TUI
 powerio-py       PyO3 extension for the Python `powerio` package
 powerio-capi     C ABI for C, C++, Julia, and other foreign function interfaces
+PowerIO.jl       Julia bindings over the C ABI
 ```
 
 API docs: <https://eigenergy.github.io/powerio/>.
+Language API map: [docs/languages.md](https://github.com/eigenergy/powerio/blob/main/docs/languages.md).
 
 ## Install
 
 ```
-cargo add powerio
-cargo add powerio-matrix
-cargo install powerio-cli
+cargo add --git https://github.com/eigenergy/powerio powerio
+cargo add --git https://github.com/eigenergy/powerio powerio-matrix
+cargo install --git https://github.com/eigenergy/powerio powerio-cli
 
 pip install powerio
-pip install 'powerio[all]'   # scipy, numpy, networkx extras
-pip install 'powerio[gridfm]'  # pandas, pyarrow for Parquet inspection
+pip install 'powerio[all]'   # scipy, numpy, networkx, polars extras
+pip install 'powerio[gridfm]'  # polars for Parquet inspection
+pip install 'powerio[pandas]'  # pandas, pyarrow compatibility reads (Python 3.10+)
+
+julia -e 'using Pkg; Pkg.add(url="https://github.com/eigenergy/PowerIO.jl")'
 ```
 
 ## Use
 
 ```rust
-use powerio::{TargetFormat, parse_matpower_file, write_as};
+use powerio::{TargetFormat, parse_file};
 
-let net = parse_matpower_file("case14.m")?;
-let conv = write_as(&net, TargetFormat::PowerModelsJson);
+let net = parse_file("case14.m")?;
+let conv = net.to_format(TargetFormat::PowerModelsJson);
 
 for warning in &conv.warnings {
     eprintln!("conversion warning: {warning}");
@@ -74,9 +79,17 @@ std::fs::write("case14.json", conv.text)?;
 ```python
 import powerio as pio
 
-case = pio.parse("case9.m")
+case = pio.parse_file("case9.m")
 bprime = case.bprime()            # scipy.sparse, needs powerio[matrix]
-raw, warnings = pio.convert("case9.m", "psse")
+raw, warnings = pio.convert_file("case9.m", "psse")
+```
+
+```julia
+using PowerIO
+
+case = parse_file("case9.m")
+text = to_matpower(case)
+json, warnings = to_format(case, "powermodels-json")
 ```
 
 ```
@@ -127,7 +140,7 @@ consistent with generator placement and reference buses. It carries no retained
 source text, so writing it emits the derived model rather than the original file.
 
 Python exposes this as `case.to_normalized()`. The C ABI exposes it as
-`pio_to_normalized`.
+`pio_to_normalized`. Julia exposes it as `to_normalized(case)`.
 
 ## GridFM
 

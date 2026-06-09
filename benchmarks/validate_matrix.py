@@ -94,7 +94,7 @@ SUITES = [
 
 
 def convert(inp, to, frm):
-    return powerio.convert(inp, to, frm).text
+    return powerio.convert_file(inp, to, frm).text
 
 
 def write(text, path):

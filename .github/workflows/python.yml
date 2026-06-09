@@ -40,9 +40,9 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
       # `pip install .[all,mcp]` builds the extension via the maturin backend and
-      # pulls scipy/numpy/networkx (matrix + graph tests) plus the MCP SDK. The
-      # native gridfm writer is compiled in through pyproject.toml; the pandas and
-      # pyarrow read checks run in the gridfm job below. The `mcp` extra carries a
+      # pulls scipy/numpy/networkx and Polars (matrix + graph + GridFM read tests)
+      # plus the MCP SDK. The native gridfm writer is compiled in through
+      # pyproject.toml. The `mcp` extra carries a
       # `python_version >= '3.10'` marker, so it installs the SDK on 3.12
       # (test_mcp runs) and resolves to nothing on 3.9 (test_mcp skips). Quote the
       # extras so the shell doesn't glob `[all,mcp]`.
@@ -51,8 +51,8 @@ jobs:
       - name: Run tests
         run: pytest python/tests -q
       # The core import path: parse/convert/write import nothing but the
-      # interpreter. The native gridfm writer is present in the wheel too; pandas
-      # and pyarrow are needed only to read the Parquet output from Python.
+      # interpreter. The native gridfm writer is present in the wheel too; Polars
+      # is needed only to read the Parquet output from Python.
       - name: Zero-dep parse path
         run: |
           python -m venv /tmp/zerodep
@@ -61,17 +61,16 @@ jobs:
           from pathlib import Path
           import tempfile
           import sys, powerio
-          c = powerio.parse("tests/data/case14.m")
-          assert c.write() == open("tests/data/case14.m").read()
+          c = powerio.parse_file("tests/data/case14.m")
+          assert c.to_matpower() == open("tests/data/case14.m").read()
           assert "numpy" not in sys.modules and "scipy" not in sys.modules
           assert powerio._powerio._has_gridfm
           out = c.write_gridfm(tempfile.mkdtemp(prefix="powerio-gridfm-"))
           assert Path(out["dir"], "gridfm_meta.json").is_file()
           PY
 
-  # The main Python test matrix does not install pandas/pyarrow. Build the same
-  # wheel users get, install the gridfm extra, and run the Parquet read/write
-  # tests before merge and on main.
+  # Build the same wheel users get, install the GridFM and pandas compatibility
+  # extras, and run the Parquet read/write tests before merge and on main.
   test-gridfm:
     name: test (gridfm extra)
     runs-on: ubuntu-latest
@@ -88,11 +87,11 @@ jobs:
       # `import powerio` race against the repo's `powerio/` crate directory, where
       # an editable install would not.
       - name: Build the wheel
-        run: maturin build --out dist
+        run: maturin build --release --out dist
       - name: Install wheel + test deps
         run: |
           wheel=$(ls dist/*.whl)
-          pip install "${wheel}[all,gridfm]" pytest
+          pip install "${wheel}[all,gridfm,pandas]" pytest
       # `_has_gridfm` is now true, so the @gridfm_only tests run instead of skipping.
       - name: Run gridfm tests
         run: pytest python/tests -q -k gridfm
@@ -147,6 +146,7 @@ jobs:
     if: github.event_name == 'release'
     needs: [ lint, test, test-gridfm, wheels, sdist ]
     runs-on: ubuntu-latest
+    # Protect this environment with required reviewers before launch.
     environment: pypi
     permissions:
       id-token: write  # PyPI trusted publishing; no stored token
@@ -155,6 +155,13 @@ jobs:
         with:
           path: dist
           merge-multiple: true
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.x"
+      - name: Check distributions
+        run: |
+          python -m pip install twine
+          python -m twine check dist/*
       - uses: pypa/gh-action-pypi-publish@release/v1
         with:
           packages-dir: dist

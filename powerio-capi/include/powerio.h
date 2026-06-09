@@ -1,10 +1,12 @@
-/* powerio C ABI: parse any power system case format, query it, convert it,
- * and extract the numeric tables for matrix assembly.
+/* powerio C ABI: parse any power system case format, query it, convert
+ * it, and extract the numeric tables for matrix assembly.
  *
- * Memory: strings returned by pio_write_matpower / pio_convert are owned by the
- * library; free them with pio_string_free. Case handles from pio_parse are freed
- * with pio_case_free. Array extractors fill caller-allocated buffers whose
- * length is the matching pio_n_* count; pass NULL to skip an output.
+ * Memory: strings returned by pio_to_matpower / pio_to_format /
+ * pio_convert_file / pio_to_json are owned by the library; free them with
+ * pio_string_free. Case handles from pio_parse_file / pio_parse_str /
+ * pio_from_json / pio_to_normalized are freed with pio_case_free. Array
+ * extractors fill caller-allocated buffers whose length is the matching pio_n_*
+ * count; pass NULL to skip an output.
  *
  * Message buffers: errbuf/warnbuf may be NULL (or length 0) to discard the
  * message. A message longer than the buffer is truncated to fit and is always
@@ -14,8 +16,8 @@
  * failure value (NULL, 0, -1, 0.0, or unchanged output) rather than unwinding
  * across the ABI.
  *
- * Optional: build with `--features arrow` to get pio_export_arrow, a raw network
- * export over the Arrow C Data Interface (guarded by PIO_ARROW).
+ * Optional: build with `--features arrow` to get pio_export_arrow, a raw
+ * network export over the Arrow C Data Interface (guarded by PIO_ARROW).
  *
  * Checked in and generated; regenerate from the Rust source with
  *   cbindgen --config cbindgen.toml --crate powerio-capi --output include/powerio.h
@@ -41,7 +43,7 @@ struct ArrowSchema;
  * was built against (the `PIO_ABI_VERSION` macro in `powerio.h`) and refuses a
  * mismatched library instead of calling in blind.
  */
-#define PIO_ABI_VERSION 1
+#define PIO_ABI_VERSION 2
 
 /**
  * A comfortable error-buffer size: pass a `char[PIO_ERRBUF_MIN]` to any
@@ -101,19 +103,19 @@ const char *pio_version(void);
  * Parse `path` (format from extension, or `from` if non-NULL) into a case
  * handle. Returns `NULL` on error and writes the message into `errbuf`.
  */
-PioCase *pio_parse(const char *path, const char *from, char *errbuf, size_t errlen);
+PioCase *pio_parse_file(const char *path, const char *from, char *errbuf, size_t errlen);
 
 /**
  * Parse in-memory case `text` of the named `format` into a case handle. Unlike
- * [`pio_parse`] there is no path to infer from, so `format` is required: one of
+ * [`pio_parse_file`] there is no path to infer from, so `format` is required: one of
  * `matpower`/`m`, `powermodels`/`pm`, `egret`, `psse`/`raw`, `powerworld`/`aux`
- * (see `powerio::target_format_from_name`). Returns `NULL` on error and writes
- * the message into `errbuf`. Free the handle with [`pio_case_free`].
+ * (see `TargetFormat::from_str`). Returns `NULL` on error and writes the
+ * message into `errbuf`. Free the handle with [`pio_case_free`].
  */
 PioCase *pio_parse_str(const char *text, const char *format, char *errbuf, size_t errlen);
 
 /**
- * Free a case handle from [`pio_parse`].
+ * Free a case handle from [`pio_parse_file`].
  */
 void pio_case_free(PioCase *case_);
 
@@ -166,10 +168,25 @@ size_t pio_n_components(const PioCase *case_);
 int32_t pio_is_radial(const PioCase *case_);
 
 /**
- * Serialize back to MATPOWER `.m` (byte-exact echo when parsed from MATPOWER).
- * Returns an owned C string; free with [`pio_string_free`].
+ * Serialize `case` to MATPOWER `.m` text (byte-exact echo when parsed from
+ * MATPOWER). Returns an owned C string; free with [`pio_string_free`]. Returns
+ * `NULL` on error and writes the message into `errbuf`.
  */
-char *pio_write_matpower(const PioCase *case_);
+char *pio_to_matpower(const PioCase *case_, char *errbuf, size_t errlen);
+
+/**
+ * Serialize `case` to format `to`.
+ *
+ * Returns the converted text as an owned C string (free with
+ * [`pio_string_free`]), `NULL` on error. Fidelity warnings, if any, are written
+ * `\n`-joined into `warnbuf`.
+ */
+char *pio_to_format(const PioCase *case_,
+                    const char *to,
+                    char *warnbuf,
+                    size_t warnlen,
+                    char *errbuf,
+                    size_t errlen);
 
 /**
  * Convert `path` to format `to` (optionally forcing the source via `from`).
@@ -177,16 +194,17 @@ char *pio_write_matpower(const PioCase *case_);
  * [`pio_string_free`]), `NULL` on error. Fidelity warnings, if any, are written
  * `\n`-joined into `warnbuf`.
  */
-char *pio_convert(const char *path,
-                  const char *to,
-                  const char *from,
-                  char *warnbuf,
-                  size_t warnlen,
-                  char *errbuf,
-                  size_t errlen);
+char *pio_convert_file(const char *path,
+                       const char *to,
+                       const char *from,
+                       char *warnbuf,
+                       size_t warnlen,
+                       char *errbuf,
+                       size_t errlen);
 
 /**
- * Free a string returned by [`pio_write_matpower`], [`pio_convert`], or
+ * Free a string returned by [`pio_to_matpower`], [`pio_to_format`],
+ * [`pio_convert_file`], or
  * [`pio_to_json`].
  */
 void pio_string_free(char *s);
@@ -204,7 +222,7 @@ char *pio_to_json(const PioCase *case_, char *errbuf, size_t errlen);
 /**
  * Rebuild a case handle from JSON produced by [`pio_to_json`]. Returns a new
  * handle (free with [`pio_case_free`]), or `NULL` on error (message into
- * `errbuf`). The handle has no retained source, so [`pio_write_matpower`]
+ * `errbuf`). The handle has no retained source, so [`pio_to_matpower`]
  * reformats it rather than echoing a byte-exact original.
  */
 PioCase *pio_from_json(const char *json, char *errbuf, size_t errlen);

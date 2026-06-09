@@ -1,15 +1,15 @@
 """powerio: lossless power system case file IO, conversion, and matrices.
 
-Parse MATPOWER, PSS/E, PowerWorld, and PowerModels JSON into one format-neutral
+Parse MATPOWER, PSS/E, PowerWorld, and PowerModels JSON into one format neutral
 case; write it back byte-exact; convert between formats; and pull the sparse
 matrices and graph views solvers need::
 
     import powerio as pio
 
-    net = pio.parse("case9.m")               # format inferred from the extension
+    net = pio.parse_file("case9.m")          # format inferred from the extension
     print(net.n, net.base_mva)               # 9 100.0
-    text = net.write()                       # byte-exact MATPOWER echo
-    raw, warnings = pio.convert("case9.m", "psse")
+    text = net.to_matpower()                 # byte-exact MATPOWER echo
+    raw, warnings = pio.convert_file("case9.m", "psse")
 
     B = net.bprime()                         # scipy.sparse, the FDPF B'
     Y = net.ybus()                           # complex csr, G + jB
@@ -38,15 +38,27 @@ __all__ = [
     "Incidence",
     "YbusParts",
     "Conversion",
+    "DenseNetwork",
+    "DenseBranch",
+    "DenseGen",
+    "DenseDemand",
+    "DenseShunt",
     "PowerIOError",
     "PowerIOParseError",
     "PowerIODataError",
+    "parse_file",
     "parse",
     "parse_str",
+    "from_json",
     "parse_matpower",
     "parse_matpower_string",
     "write",
+    "convert_file",
     "convert",
+    "to_format",
+    "to_matpower",
+    "to_json",
+    "to_dense",
     "write_gridfm_batch",
     "__version__",
 ]
@@ -75,6 +87,39 @@ YbusParts.__doc__ = (
     "Output of :meth:`Network.ybus_parts`: ``g`` = Re(Y_bus), ``b`` = Im(Y_bus), "
     "each a real csr_matrix. ``Network.ybus()`` returns ``g + 1j*b``."
 )
+
+DenseBranch = namedtuple(
+    "DenseBranch", ["from_id", "to_id", "r", "x", "b", "tap", "shift", "in_service"]
+)
+DenseBranch.__doc__ = """Branch arrays in source order."""
+
+DenseGen = namedtuple("DenseGen", ["bus", "pg", "pmax", "pmin", "in_service"])
+DenseGen.__doc__ = """Generator arrays in source order."""
+
+DenseDemand = namedtuple("DenseDemand", ["pd", "qd"])
+DenseDemand.__doc__ = """Nodal active and reactive demand arrays in bus order."""
+
+DenseShunt = namedtuple("DenseShunt", ["gs", "bs"])
+DenseShunt.__doc__ = """Nodal shunt conductance and susceptance arrays in bus order."""
+
+DenseNetwork = namedtuple(
+    "DenseNetwork",
+    [
+        "n",
+        "m",
+        "ng",
+        "base_mva",
+        "bus_ids",
+        "branch",
+        "gen",
+        "demand",
+        "shunt",
+        "reference_bus",
+        "n_components",
+        "is_radial",
+    ],
+)
+DenseNetwork.__doc__ = """Dense NumPy table view of a parsed :class:`Network`."""
 
 
 def _require(module: str, extra: str):
@@ -146,6 +191,95 @@ class Network:
 
     def __repr__(self) -> str:
         return repr(self._inner).replace("PyCase", "Network", 1)
+
+    # --- canonical format and table views -------------------------------
+
+    def to_matpower(self) -> str:
+        """Serialize to MATPOWER ``.m`` text.
+
+        A case parsed from MATPOWER keeps its original source, so this returns a
+        byte-exact echo. Derived cases serialize from the format neutral model.
+        """
+        return self._inner.to_matpower()
+
+    def write(self) -> str:
+        """Compatibility alias for :meth:`to_matpower`."""
+        return self.to_matpower()
+
+    def to_json(self) -> str:
+        """Serialize to the JSON transport."""
+        return self._inner.to_json()
+
+    def to_format(self, to: str) -> Conversion:
+        """Serialize this parsed case to another format.
+
+        ``to`` is one of the format names accepted by :func:`convert_file`.
+        Returns a :class:`Conversion` with output text and fidelity warnings.
+        """
+        text, warnings = self._inner.to_format(to)
+        return Conversion(text, warnings)
+
+    def to_dense(self) -> DenseNetwork:
+        """Dense NumPy arrays for solver and adapter code.
+
+        This view preserves bus and branch source order. Loads and shunts are
+        summed per bus, matching the Rust indexed analysis view.
+        """
+        np = _require("numpy", "matrix")
+        buses = self._inner.buses
+        branches = self._inner.branches
+        gens = self._inner.gens
+        bus_ids = np.asarray([b["id"] for b in buses], dtype=np.int64)
+        id_to_idx = {int(bus_id): idx for idx, bus_id in enumerate(bus_ids)}
+
+        pd = np.zeros(len(buses), dtype=float)
+        qd = np.zeros(len(buses), dtype=float)
+        for load in self._inner.loads:
+            idx = id_to_idx.get(load["bus"])
+            if idx is not None:
+                pd[idx] += load["p"]
+                qd[idx] += load["q"]
+
+        gs = np.zeros(len(buses), dtype=float)
+        bs = np.zeros(len(buses), dtype=float)
+        for shunt in self._inner.shunts:
+            idx = id_to_idx.get(shunt["bus"])
+            if idx is not None:
+                gs[idx] += shunt["g"]
+                bs[idx] += shunt["b"]
+
+        branch = DenseBranch(
+            from_id=np.asarray([br["from_id"] for br in branches], dtype=np.int64),
+            to_id=np.asarray([br["to_id"] for br in branches], dtype=np.int64),
+            r=np.asarray([br["r"] for br in branches], dtype=float),
+            x=np.asarray([br["x"] for br in branches], dtype=float),
+            b=np.asarray([br["b"] for br in branches], dtype=float),
+            tap=np.asarray([br["tap"] for br in branches], dtype=float),
+            shift=np.asarray([br["shift"] for br in branches], dtype=float),
+            in_service=np.asarray([br["in_service"] for br in branches], dtype=bool),
+        )
+        gen = DenseGen(
+            bus=np.asarray([g["bus"] for g in gens], dtype=np.int64),
+            pg=np.asarray([g["pg"] for g in gens], dtype=float),
+            pmax=np.asarray([g["pmax"] for g in gens], dtype=float),
+            pmin=np.asarray([g["pmin"] for g in gens], dtype=float),
+            in_service=np.asarray([g["in_service"] for g in gens], dtype=bool),
+        )
+        refs = self.reference_bus_indices()
+        return DenseNetwork(
+            n=len(buses),
+            m=len(branches),
+            ng=len(gens),
+            base_mva=self.base_mva,
+            bus_ids=bus_ids,
+            branch=branch,
+            gen=gen,
+            demand=DenseDemand(pd=pd, qd=qd),
+            shunt=DenseShunt(gs=gs, bs=bs),
+            reference_bus=refs[0] if len(refs) == 1 else None,
+            n_components=self.n_connected_components,
+            is_radial=self.is_radial,
+        )
 
     # --- matrix builders (scipy.sparse) ---------------------------------
 
@@ -257,14 +391,24 @@ class Network:
 Case = Network
 
 
-def parse(path: Any) -> Network:
+def parse_file(path: Any, from_: Optional[str] = None) -> Network:
     """Parse a case file from a path, inferring the format from the extension."""
-    return Network(_powerio.parse(str(path)))
+    return Network(_powerio.parse_file(str(path), from_))
+
+
+def parse(path: Any) -> Network:
+    """Compatibility alias for :func:`parse_file`."""
+    return parse_file(path)
 
 
 def parse_str(text: str, format: str = "matpower") -> Network:
     """Parse a case from in-memory text in the named ``format``."""
     return Network(_powerio.parse_str(text, format))
+
+
+def from_json(text: str) -> Network:
+    """Rebuild a case from JSON produced by :meth:`Network.to_json`."""
+    return Network(_powerio.from_json(text))
 
 
 def parse_matpower(path: Any) -> Network:
@@ -279,12 +423,11 @@ def parse_matpower_string(content: str, name: Optional[str] = None) -> Network:
 
 
 def write(case: Network) -> str:
-    """Serialize ``case`` to MATPOWER ``.m`` (byte-exact echo when it was parsed
-    from MATPOWER)."""
-    return _powerio.write(case._inner)
+    """Compatibility alias for ``case.to_matpower()``."""
+    return case.to_matpower()
 
 
-def convert(path: Any, to: str, from_: Optional[str] = None) -> Conversion:
+def convert_file(path: Any, to: str, from_: Optional[str] = None) -> Conversion:
     """Convert a case file to another format through the neutral hub.
 
     ``to`` / ``from_`` are format names: ``matpower``, ``powermodels-json``,
@@ -293,8 +436,33 @@ def convert(path: Any, to: str, from_: Optional[str] = None) -> Conversion:
     unless ``from_`` overrides it. Returns a :class:`Conversion` with the text
     and any fidelity warnings.
     """
-    text, warnings = _powerio.convert(str(path), to, from_)
+    text, warnings = _powerio.convert_file(str(path), to, from_)
     return Conversion(text, warnings)
+
+
+def convert(path: Any, to: str, from_: Optional[str] = None) -> Conversion:
+    """Compatibility alias for :func:`convert_file`."""
+    return convert_file(path, to, from_)
+
+
+def to_format(case: Network, to: str) -> Conversion:
+    """Serialize ``case`` to another format."""
+    return case.to_format(to)
+
+
+def to_matpower(case: Network) -> str:
+    """Serialize ``case`` to MATPOWER ``.m`` text."""
+    return case.to_matpower()
+
+
+def to_json(case: Network) -> str:
+    """Serialize ``case`` to the JSON transport."""
+    return case.to_json()
+
+
+def to_dense(case: Network) -> DenseNetwork:
+    """Return the dense NumPy table view of ``case``."""
+    return case.to_dense()
 
 
 def write_gridfm_batch(

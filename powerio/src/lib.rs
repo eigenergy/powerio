@@ -1,5 +1,5 @@
-//! `powerio`: fast, lossless parsing and a typed data model for power system
-//! case files.
+//! `powerio`: lossless parsing and a typed data model for power system case
+//! files.
 //!
 //! Parse a MATPOWER `.m` case, work with the typed [`Network`], and write it
 //! back out byte-for-byte: `parse → write → parse` reproduces the source,
@@ -10,11 +10,11 @@
 //!
 //! Readers and writers cover MATPOWER `.m`, PowerModels JSON, PSS/E `.raw`,
 //! PowerWorld `.aux`, and egret JSON. Every format meets at [`Network`], and
-//! [`write_as`] reports whatever a target format cannot represent — see the
-//! [`crate::format`] module for the two-tier fidelity contract.
+//! [`Network::to_format`] reports whatever a target format cannot represent.
+//! See the [`crate::format`] module for the two-tier fidelity contract.
 //!
 //! ```
-//! use powerio::{parse_matpower, write_matpower};
+//! use powerio::{parse_str, TargetFormat};
 //!
 //! let src = "\
 //! function mpc = example
@@ -28,9 +28,9 @@
 //! \t1\t2\t0.01\t0.1\t0\t0\t0\t0\t0\t0\t1\t-360\t360;
 //! ];
 //! ";
-//! let net = parse_matpower(src)?;
+//! let net = parse_str(src, "matpower")?;
 //! assert_eq!(net.buses.len(), 2);
-//! assert_eq!(write_matpower(&net), src); // byte-exact echo of the retained source
+//! assert_eq!(net.to_format(TargetFormat::Matpower).text, src);
 //! # Ok::<(), powerio::Error>(())
 //! ```
 
@@ -42,10 +42,10 @@ mod normalize;
 
 pub use error::{ElementCounts, Error, ErrorCategory, Result, ScenarioMismatch};
 pub use format::{
-    Conversion, TargetFormat, parse, parse_egret_json, parse_matpower, parse_matpower_file,
-    parse_powermodels_json, parse_powerworld, parse_psse, parse_str, read_path,
-    target_format_from_name, write_as, write_egret_json, write_matpower, write_powermodels_json,
-    write_powerworld, write_psse,
+    Conversion, TargetFormat, convert_file, parse, parse_egret_json, parse_file, parse_matpower,
+    parse_matpower_file, parse_powermodels_json, parse_powerworld, parse_psse, parse_str,
+    read_path, target_format_from_name, write_as, write_egret_json, write_matpower,
+    write_powermodels_json, write_powerworld, write_psse,
 };
 pub use indexed::{ConnectivityReport, IndexCore, IndexedNetwork};
 pub use network::{

@@ -84,6 +84,45 @@ class YbusParts(NamedTuple):
     g: Any  # scipy.sparse.csr_matrix, Re(Y_bus)
     b: Any  # scipy.sparse.csr_matrix, Im(Y_bus)
 
+class DenseBranch(NamedTuple):
+    from_id: Any  # numpy.ndarray
+    to_id: Any  # numpy.ndarray
+    r: Any  # numpy.ndarray
+    x: Any  # numpy.ndarray
+    b: Any  # numpy.ndarray
+    tap: Any  # numpy.ndarray
+    shift: Any  # numpy.ndarray
+    in_service: Any  # numpy.ndarray
+
+class DenseGen(NamedTuple):
+    bus: Any  # numpy.ndarray
+    pg: Any  # numpy.ndarray
+    pmax: Any  # numpy.ndarray
+    pmin: Any  # numpy.ndarray
+    in_service: Any  # numpy.ndarray
+
+class DenseDemand(NamedTuple):
+    pd: Any  # numpy.ndarray
+    qd: Any  # numpy.ndarray
+
+class DenseShunt(NamedTuple):
+    gs: Any  # numpy.ndarray
+    bs: Any  # numpy.ndarray
+
+class DenseNetwork(NamedTuple):
+    n: int
+    m: int
+    ng: int
+    base_mva: float
+    bus_ids: Any  # numpy.ndarray
+    branch: DenseBranch
+    gen: DenseGen
+    demand: DenseDemand
+    shunt: DenseShunt
+    reference_bus: Optional[int]
+    n_components: int
+    is_radial: bool
+
 class Network:
     # Data attributes and the non-matrix methods delegate to the compiled
     # `_powerio.PyCase` handle at runtime via `Network.__getattr__`.
@@ -106,6 +145,10 @@ class Network:
     def reference_bus_indices(self) -> List[int]: ...
     def connectivity_report(self) -> Dict[str, Any]: ...
     def write(self) -> str: ...
+    def to_matpower(self) -> str: ...
+    def to_json(self) -> str: ...
+    def to_format(self, to: str) -> "Conversion": ...
+    def to_dense(self) -> DenseNetwork: ...
     def bprime(self, scheme: Scheme = ...) -> Any: ...
     def bdoubleprime(self, scheme: Scheme = ...) -> Any: ...
     def lacpf(self, include_taps: bool = ..., include_shifts: bool = ...) -> Any: ...
@@ -142,12 +185,19 @@ class Conversion(NamedTuple):
 # "psse"/"raw"). Kept as `str` so aliases type-check; the binding validates it.
 Format = str
 
+def parse_file(path: Any, from_: Optional[Format] = ...) -> Network: ...
 def parse(path: Any) -> Network: ...
 def parse_str(text: str, format: Format = ...) -> Network: ...
+def from_json(text: str) -> Network: ...
 def parse_matpower(path: Any) -> Network: ...
 def parse_matpower_string(content: str, name: Optional[str] = ...) -> Network: ...
 def write(case: Network) -> str: ...
+def convert_file(path: Any, to: Format, from_: Optional[Format] = ...) -> Conversion: ...
 def convert(path: Any, to: Format, from_: Optional[Format] = ...) -> Conversion: ...
+def to_format(case: Network, to: Format) -> Conversion: ...
+def to_matpower(case: Network) -> str: ...
+def to_json(case: Network) -> str: ...
+def to_dense(case: Network) -> DenseNetwork: ...
 def write_gridfm_batch(
     cases: List[Network],
     out_dir: Any,

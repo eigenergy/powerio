@@ -265,7 +265,7 @@ impl PyCase {
         IndexedNetwork::with_core(&self.inner, &self.core).reference_bus_indices()
     }
 
-    // --- tables (the format-neutral Network, as dict rows) --------------
+    // --- tables (the format neutral Network, as dict rows) --------------
 
     #[getter]
     fn buses<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyList>> {
@@ -382,7 +382,26 @@ impl PyCase {
     /// Serialize back to MATPOWER `.m`. For a MATPOWER-parsed case this is the
     /// byte-exact source echo.
     fn write(&self) -> String {
-        powerio_matrix::write_matpower(&self.inner)
+        self.to_matpower()
+    }
+
+    /// Serialize this case to MATPOWER `.m` text.
+    fn to_matpower(&self) -> String {
+        self.inner.to_matpower()
+    }
+
+    /// Serialize this case to the JSON transport.
+    fn to_json(&self) -> PyResult<String> {
+        self.inner.to_json().map_err(to_pyerr)
+    }
+
+    /// Serialize this case to another format. Returns `(text, warnings)`.
+    fn to_format(&self, to: &str) -> PyResult<(String, Vec<String>)> {
+        let target = to
+            .parse::<powerio_matrix::TargetFormat>()
+            .map_err(to_pyerr)?;
+        let conv = self.inner.to_format(target);
+        Ok((conv.text, conv.warnings))
     }
 
     /// A normalized, computation-ready copy of this case: per unit, radians,
@@ -563,16 +582,25 @@ impl PyCase {
     }
 }
 
-/// Parse a case file from a path, inferring the format from the extension.
+/// Parse a case file from a path, inferring the format from the extension unless
+/// `from_` is given.
 #[pyfunction]
-fn parse(path: &str) -> PyResult<PyCase> {
-    let inner = powerio_matrix::read_path(std::path::Path::new(path), None).map_err(to_pyerr)?;
+#[pyo3(signature = (path, from_=None))]
+fn parse_file(path: &str, from_: Option<&str>) -> PyResult<PyCase> {
+    let inner = powerio_matrix::read_path(std::path::Path::new(path), from_).map_err(to_pyerr)?;
     let core = IndexCore::build(&inner);
     Ok(PyCase { inner, core })
 }
 
+/// Parse a case file from a path, inferring the format from the extension.
+#[pyfunction]
+fn parse(path: &str) -> PyResult<PyCase> {
+    parse_file(path, None)
+}
+
 /// Parse a case from in-memory text in the named `format` (`matpower`,
-/// `powermodels-json`, `psse`, `powerworld`; aliases `m`/`pm`/`raw`/`aux`).
+/// `powermodels-json`, `egret-json`, `psse`, `powerworld`; aliases
+/// `m`/`pm`/`egret`/`raw`/`aux`).
 #[pyfunction]
 #[pyo3(signature = (text, format=None))]
 fn parse_str(text: &str, format: Option<&str>) -> PyResult<PyCase> {
@@ -602,6 +630,14 @@ fn parse_matpower_string(content: &str, name: Option<&str>) -> PyResult<PyCase> 
     Ok(PyCase { inner, core })
 }
 
+/// Rebuild a case from JSON produced by `Network.to_json()`.
+#[pyfunction]
+fn from_json(text: &str) -> PyResult<PyCase> {
+    let inner = powerio_matrix::Network::from_json(text).map_err(to_pyerr)?;
+    let core = IndexCore::build(&inner);
+    Ok(PyCase { inner, core })
+}
+
 /// Serialize `case` back to MATPOWER `.m` text (byte-exact echo for a
 /// MATPOWER-parsed case).
 #[pyfunction]
@@ -614,13 +650,21 @@ fn write(case: &PyCase) -> String {
 /// (fields the target couldn't represent). The input format is the file
 /// extension unless `from` overrides it.
 #[pyfunction]
-#[pyo3(signature = (path, to, from=None))]
-fn convert(path: &str, to: &str, from: Option<&str>) -> PyResult<(String, Vec<String>)> {
-    let target = powerio_matrix::target_format_from_name(to)
-        .ok_or_else(|| PyValueError::new_err(format!("unknown target format: {to}")))?;
-    let net = powerio_matrix::read_path(std::path::Path::new(path), from).map_err(to_pyerr)?;
-    let conv = powerio_matrix::write_as(&net, target);
+#[pyo3(signature = (path, to, from_=None))]
+fn convert_file(path: &str, to: &str, from_: Option<&str>) -> PyResult<(String, Vec<String>)> {
+    let target = to
+        .parse::<powerio_matrix::TargetFormat>()
+        .map_err(to_pyerr)?;
+    let conv = powerio_matrix::convert_file(std::path::Path::new(path), target, from_)
+        .map_err(to_pyerr)?;
     Ok((conv.text, conv.warnings))
+}
+
+/// Compatibility alias for `convert_file`.
+#[pyfunction]
+#[pyo3(signature = (path, to, from_=None))]
+fn convert(path: &str, to: &str, from_: Option<&str>) -> PyResult<(String, Vec<String>)> {
+    convert_file(path, to, from_)
 }
 
 /// Build a `{dir, files}` dict from an outputs directory and its written files.
@@ -690,11 +734,14 @@ fn _powerio(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add("PowerIOParseError", m.py().get_type::<PowerIOParseError>())?;
     m.add("PowerIODataError", m.py().get_type::<PowerIODataError>())?;
     m.add_class::<PyCase>()?;
+    m.add_function(wrap_pyfunction!(parse_file, m)?)?;
     m.add_function(wrap_pyfunction!(parse, m)?)?;
     m.add_function(wrap_pyfunction!(parse_str, m)?)?;
     m.add_function(wrap_pyfunction!(parse_matpower, m)?)?;
     m.add_function(wrap_pyfunction!(parse_matpower_string, m)?)?;
+    m.add_function(wrap_pyfunction!(from_json, m)?)?;
     m.add_function(wrap_pyfunction!(write, m)?)?;
+    m.add_function(wrap_pyfunction!(convert_file, m)?)?;
     m.add_function(wrap_pyfunction!(convert, m)?)?;
     // Whether the gridfm Parquet surface (arrow/parquet) was compiled in, so the
     // pure-Python layer can raise a clean error instead of an AttributeError.

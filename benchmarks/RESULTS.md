@@ -20,7 +20,7 @@ release note, or package page.
 
 All three parsers run in one Julia process under the same
 `BenchmarkTools.@benchmark` harness (`benchmarks/bench_julia.jl`). powerio is
-called through its C ABI (`pio_parse`, built with `cargo build --release -p
+called through its C ABI (`pio_parse_file`, built with `cargo build --release -p
 powerio-capi`), so it reads the file from disk and builds its case the way
 ExaPowerIO and PowerModels do. The powerio handle is freed in an untimed
 teardown, matching the other two, whose returned data is collected after the
@@ -29,16 +29,16 @@ sample rather than inside it.
 <!-- BENCH:speed-julia START -->
 | case | buses / branches | powerio | ExaPowerIO.jl | PowerModels.jl |
 | --- | --- | --- | --- | --- |
-| case2869pegase | 2869 / 4582 | 1.73 ms | 2.86 ms | 122.2 ms |
-| case_ACTIVSg2000 | 2000 / 3206 | 2.07 ms | 2.11 ms | 127.8 ms |
-| case9241pegase | 9241 / 16049 | 5.81 ms | 9.15 ms | 553.2 ms |
-| case13659pegase | 13659 / 20467 | 8.6 ms | 13.76 ms | 822.2 ms |
-| case_ACTIVSg10k | 10000 / 12706 | 9.22 ms | 9.35 ms | n/a |
-| case_ACTIVSg25k | 25000 / 32230 | 22.58 ms | 22.75 ms | n/a |
-| case_ACTIVSg70k | 70000 / 88207 | 60.95 ms | 62.75 ms | n/a |
-| case_SyntheticUSA | 82000 / 104121 | 73.1 ms | 82.65 ms | n/a |
-| case99k | 99396 / 117860 | 84.27 ms | 94.88 ms | n/a |
-| case193k | 192768 / 228574 | 161.9 ms | 174.98 ms | n/a |
+| case2869pegase | 2869 / 4582 | 1.83 ms | 2.93 ms | 133.0 ms |
+| case_ACTIVSg2000 | 2000 / 3206 | 2.21 ms | 2.31 ms | 134.4 ms |
+| case9241pegase | 9241 / 16049 | 5.97 ms | 9.43 ms | 586.8 ms |
+| case13659pegase | 13659 / 20467 | 8.98 ms | 13.84 ms | 847.7 ms |
+| case_ACTIVSg10k | 10000 / 12706 | 9.57 ms | 9.79 ms | n/a |
+| case_ACTIVSg25k | 25000 / 32230 | 23.52 ms | 23.6 ms | n/a |
+| case_ACTIVSg70k | 70000 / 88207 | 63.82 ms | 62.65 ms | n/a |
+| case_SyntheticUSA | 82000 / 104121 | 76.81 ms | 81.92 ms | n/a |
+| case99k | 99396 / 117860 | 87.66 ms | 96.5 ms | n/a |
+| case193k | 192768 / 228574 | 169.35 ms | 180.4 ms | n/a |
 <!-- BENCH:speed-julia END -->
 
 PowerModels is skipped past case13659 because those runs take minutes on this
@@ -54,17 +54,19 @@ median wall time:
 <!-- BENCH:speed-pandapower START -->
 | case | powerio parse | matpowercaseframes (pandapower's `.m` reader) |
 | --- | --- | --- |
-| case2869pegase | 1.8 ms | 25.6 ms |
-| case9241pegase | 5.7 ms | 85.9 ms |
-| case13659pegase | 8.9 ms | 139.9 ms |
-| case193k | 165.4 ms | 2214.3 ms |
+| case2869pegase | 1.8 ms | n/a |
+| case9241pegase | 5.9 ms | n/a |
+| case13659pegase | 8.9 ms | 132.6 ms |
+| case193k | 168.2 ms | 2387.7 ms |
 <!-- BENCH:speed-pandapower END -->
 
 `from_mpc` raises `IndexError` on case118 and the pegase cases in pandapower
-3.2.2, so the table reports `matpowercaseframes` as the reader path. The
-`powerio: parse` row uses the base Python package and reads from disk. The scipy
-matrix path `powerio[matrix]: parse + Y_bus + B'` measured 9.2 / 27.2 / 34.6 /
-533 ms on the same four cases.
+3.2.2, so the table reports `matpowercaseframes` as the reader path where that
+reader works. With current `matpowercaseframes` 1.1.6, case2869pegase and
+case9241pegase raise `OverflowError` on `Inf` limits, so those baselines are
+recorded as n/a. The `powerio: parse` row uses the base Python package and reads
+from disk. The scipy matrix path `powerio[matrix]: parse + Y_bus + B'` measured
+9.0 / 26.0 / 36.1 / 565.1 ms on the same four cases.
 
 ## Correctness: validated against four tools
 

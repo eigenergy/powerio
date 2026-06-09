@@ -391,6 +391,22 @@ impl Network {
         })
     }
 
+    /// Serialize this network to `format`, preserving the retained source text
+    /// on same-format writes and reporting any target-format fidelity warnings.
+    #[must_use]
+    pub fn to_format(&self, format: crate::TargetFormat) -> crate::Conversion {
+        crate::write_as(self, format)
+    }
+
+    /// Serialize this network to MATPOWER `.m` text.
+    ///
+    /// This is byte-exact when the network was parsed from MATPOWER and still
+    /// carries its retained source text.
+    #[must_use]
+    pub fn to_matpower(&self) -> String {
+        crate::write_matpower(self)
+    }
+
     /// Rebuild a `Network` from JSON produced by [`to_json`](Network::to_json).
     ///
     /// Validates the result (no buses, unique bus ids, no dangling references)

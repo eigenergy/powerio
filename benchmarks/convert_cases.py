@@ -25,7 +25,7 @@ import powerio
 
 def convert(inp, to, out):
     try:
-        text = powerio.convert(str(inp), to).text
+        text = powerio.convert_file(str(inp), to).text
     except Exception as exc:  # noqa: BLE001 — report any reader/writer failure, keep going
         print(f"  convert FAIL {Path(inp).name} -> {to}: {exc}", file=sys.stderr)
         return

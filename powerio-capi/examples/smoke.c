@@ -40,7 +40,7 @@ int main(int argc, char **argv) {
     printf("powerio %s (ABI %u)\n", pio_version(), pio_abi_version());
 
     char err[PIO_ERRBUF_MIN];
-    PioCase *c = pio_parse(argv[1], NULL, err, sizeof err);
+    PioCase *c = pio_parse_file(argv[1], NULL, err, sizeof err);
     CHECK(c != NULL, err);
 
     size_t nb = pio_n_buses(c);
@@ -67,12 +67,12 @@ int main(int argc, char **argv) {
     free(x);
 
     /* Byte-exact MATPOWER echo comes back as an owned string. */
-    char *echo = pio_write_matpower(c);
-    CHECK(echo != NULL && strlen(echo) > 0, "write_matpower returned empty");
+    char *echo = pio_to_matpower(c, err, sizeof err);
+    CHECK(echo != NULL && strlen(echo) > 0, err);
     pio_string_free(echo);
 
     /* Cross-format convert reaches the converter and returns owned text. */
-    char *raw = pio_convert(argv[1], "psse", NULL, NULL, 0, err, sizeof err);
+    char *raw = pio_convert_file(argv[1], "psse", NULL, NULL, 0, err, sizeof err);
     CHECK(raw != NULL, err);
     pio_string_free(raw);
 
@@ -103,7 +103,7 @@ int main(int argc, char **argv) {
         PioCase *cs = pio_parse_str(buf, "matpower", err, sizeof err);
         CHECK(cs != NULL, err);
         CHECK(pio_n_buses(cs) == nb && pio_n_branches(cs) == m && pio_n_gens(cs) == ng,
-              "pio_parse_str disagrees with pio_parse on table sizes");
+              "pio_parse_str disagrees with pio_parse_file on table sizes");
         free(buf);
 
         /* Normalize into a NEW handle: per unit, radians, filtered, reindexed.

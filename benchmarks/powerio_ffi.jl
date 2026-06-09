@@ -15,9 +15,9 @@ isfile(LIBPOWERIO) || error("libpowerio_capi not found at $LIBPOWERIO — run `c
 
 # Parse `path` (format inferred from the extension); returns an opaque handle.
 # Free it with pio_free. Errors with the C message on failure.
-function pio_parse(path::AbstractString)
+function pio_parse_file(path::AbstractString)
     errbuf = Vector{UInt8}(undef, 256)
-    h = ccall((:pio_parse, LIBPOWERIO), Ptr{Cvoid},
+    h = ccall((:pio_parse_file, LIBPOWERIO), Ptr{Cvoid},
               (Cstring, Ptr{Cvoid}, Ptr{UInt8}, Csize_t),
               path, C_NULL, errbuf, length(errbuf))
     h == C_NULL && error("powerio parse failed for $path: " * unsafe_string(pointer(errbuf)))
@@ -75,7 +75,7 @@ end
 
 # Parse and extract every table into one NamedTuple, then free the handle.
 function powerio_load(path::AbstractString)
-    h = pio_parse(path)
+    h = pio_parse_file(path)
     try
         n, m, ng = pio_n_buses(h), pio_n_branches(h), pio_n_gens(h)
         (; base_mva = pio_base_mva(h),

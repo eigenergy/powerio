@@ -28,11 +28,15 @@ dependencies = []
 # returns; the graph view builds a networkx graph. Install only what you use.
 matrix = ["numpy>=1.21", "scipy>=1.7"]
 graph = ["networkx>=2.6"]
-all = ["numpy>=1.21", "scipy>=1.7", "networkx>=2.6"]
+all = ["numpy>=1.21", "scipy>=1.7", "networkx>=2.6", "polars>=1"]
 bench = ["matpowercaseframes", "pandapower"]
 # The published wheel includes the native gridfm writer. This extra installs
 # Python packages for reading and inspecting the Parquet output.
-gridfm = ["pandas>=2", "pyarrow>=14"]
+gridfm = ["polars>=1"]
+# Compatibility read path for downstream code that expects pandas DataFrames.
+# pyarrow fixes current advisories in 23.0.1, which does not publish Python 3.9
+# wheels; use the Polars gridfm extra on Python 3.9.
+pandas = ["pandas>=2; python_version >= '3.10'", "pyarrow>=23.0.1; python_version >= '3.10'"]
 # The MCP server wraps parse/convert as two MCP tools. The official `mcp` SDK
 # requires Python >=3.10; the env marker keeps this extra empty on 3.9.
 mcp = ["mcp>=1.2; python_version >= '3.10'"]

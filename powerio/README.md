@@ -5,10 +5,10 @@ source text back to the same format, and converts between MATPOWER, PSS/E,
 PowerWorld, PowerModels JSON, and egret JSON.
 
 ```rust
-use powerio::{TargetFormat, parse_matpower_file, write_as};
+use powerio::{TargetFormat, parse_file};
 
-let net = parse_matpower_file("case14.m")?;
-let converted = write_as(&net, TargetFormat::PowerModelsJson);
+let net = parse_file("case14.m")?;
+let converted = net.to_format(TargetFormat::PowerModelsJson);
 std::fs::write("case14.json", converted.text)?;
 # Ok::<(), powerio::Error>(())
 ```

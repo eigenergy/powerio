@@ -21,6 +21,8 @@
 //!   never dropped silently.
 
 use std::collections::BTreeSet;
+use std::fmt;
+use std::str::FromStr;
 use std::sync::Arc;
 
 use serde_json::{Map, Value};
@@ -78,6 +80,32 @@ impl TargetFormat {
             TargetFormat::PowerWorld => "PowerWorld .aux",
             TargetFormat::Matpower => "MATPOWER .m",
         }
+    }
+
+    /// Canonical API token for this format.
+    #[must_use]
+    pub fn token(self) -> &'static str {
+        match self {
+            TargetFormat::PowerModelsJson => "powermodels-json",
+            TargetFormat::EgretJson => "egret-json",
+            TargetFormat::Psse => "psse",
+            TargetFormat::PowerWorld => "powerworld",
+            TargetFormat::Matpower => "matpower",
+        }
+    }
+}
+
+impl fmt::Display for TargetFormat {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.token())
+    }
+}
+
+impl FromStr for TargetFormat {
+    type Err = Error;
+
+    fn from_str(name: &str) -> Result<Self> {
+        target_format_from_name(name).ok_or_else(|| Error::UnknownFormat(name.to_string()))
     }
 }
 
@@ -198,6 +226,17 @@ pub fn parse(path: impl AsRef<std::path::Path>) -> Result<Network> {
     read_path(path.as_ref(), None)
 }
 
+/// Parse the case file at `path` into a [`Network`].
+///
+/// This is the canonical path-based parser name shared by the language
+/// bindings. It is equivalent to [`parse`].
+///
+/// # Errors
+/// As [`read_path`] with `from = None`.
+pub fn parse_file(path: impl AsRef<std::path::Path>) -> Result<Network> {
+    read_path(path.as_ref(), None)
+}
+
 /// Parse in-memory case `text` of the named `format` (see
 /// [`target_format_from_name`]) into a [`Network`].
 ///
@@ -211,8 +250,8 @@ pub fn parse_str(text: &str, format: &str) -> Result<Network> {
 }
 
 /// Output of a conversion: the serialized text plus any fidelity warnings:
-/// data the target can't represent, defaults synthesized, or blocks mapped
-/// with warnings. An empty `warnings` means a faithful conversion.
+/// data the target can't represent, defaults synthesized, or blocks mapped best
+/// effort. An empty `warnings` means a faithful conversion.
 ///
 /// `#[non_exhaustive]`: a returns-only type, so downstream code reads it but
 /// never constructs it, leaving room to add fidelity metadata without a breaking
@@ -248,6 +287,24 @@ pub fn write_as(net: &Network, format: TargetFormat) -> Conversion {
     };
     warn_normalized_tap(net, format, &mut conv);
     conv
+}
+
+/// Convert a case file to `to`, optionally forcing the source format with
+/// `from`.
+///
+/// This is the canonical file-conversion helper shared by the bindings. It
+/// parses `path` once, writes the resulting [`Network`] to `to`, and returns the
+/// converted text plus any fidelity warnings.
+///
+/// # Errors
+/// As [`read_path`].
+pub fn convert_file(
+    path: impl AsRef<std::path::Path>,
+    to: TargetFormat,
+    from: Option<&str>,
+) -> Result<Conversion> {
+    let net = read_path(path.as_ref(), from)?;
+    Ok(write_as(&net, to))
 }
 
 /// A normalized network has its tap canonicalized to `1.0` on every line (the

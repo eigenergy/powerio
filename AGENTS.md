@@ -10,7 +10,7 @@ graph views for any downstream solver. (Planned) feeds the GridFM ML pipeline.
 
 - **`powerio`**: the parser, the format neutral `Network` hub, the lossless
   writer, and the format converters. Light deps (thiserror, num-complex,
-  petgraph, serde, serde_json, fast-float); no matrix or TUI stack.
+  petgraph, serde, serde_json, lexical-core); no matrix or TUI stack.
 - **`powerio-matrix`**: sparse matrices and graph views built on `powerio`
   (which it re-exports).
 - **`powerio-cli`**: the `powerio` binary: the clap CLI and the ratatui TUI
@@ -21,8 +21,8 @@ graph views for any downstream solver. (Planned) feeds the GridFM ML pipeline.
   C, C++, Julia, and other FFI users. `--features arrow` adds
   `pio_export_arrow`, an Arrow C Data Interface export.
 
-`Network` is the one canonical model (format-neutral, loads/shunts first-class);
-`IndexedNetwork` is the dense-indexed analysis view derived from it.
+`Network` is the one canonical model (format neutral, loads/shunts first class);
+`IndexedNetwork` is the dense indexed analysis view derived from it.
 
 Formats. Readers: MATPOWER `.m`, PowerModels JSON, PSS/E `.raw` (v33),
 PowerWorld `.aux`. Writers: those plus egret JSON. Every format meets at
@@ -78,14 +78,14 @@ powerio/                      # parser + Network hub + converters
 ├── src/network.rs           # Network, Bus, Load, Shunt, Branch, Generator,
 │                            #   GenCost, Storage, Hvdc, BusType, SourceFormat;
 │                            #   to_json / from_json (the structured transport)
-├── src/indexed.rs           # IndexCore, IndexedNetwork (dense-indexed analysis
+├── src/indexed.rs           # IndexCore, IndexedNetwork (dense indexed analysis
 │                            #   view), ConnectivityReport; petgraph view:
 │                            #   to_petgraph, is_radial, connectivity_report
 ├── src/format/
 │   ├── mod.rs               # hub: parse, parse_str, read_path, write_as,
 │   │                        #   TargetFormat, Conversion, target_format_from_name
 │   ├── matpower/            # tokens, matlab, locate, rows, writer
-│   │                        #   (the lossless source-retaining path)
+│   │                        #   (the lossless source retaining path)
 │   ├── powermodels.rs       # PowerModels JSON reader + writer
 │   ├── psse.rs              # PSS/E .raw reader + writer
 │   ├── powerworld.rs        # PowerWorld .aux reader + writer
@@ -100,7 +100,7 @@ powerio-matrix/               # matrices + graph views on powerio
 │   ├── bprime.rs / bdoubleprime.rs / ybus.rs / lacpf.rs / adjacency.rs
 │   ├── incidence.rs         # A, b, B Aᵀ, P_shift; DcConvention
 │   ├── laplacian.rs         # L = A diag(w) Aᵀ, ground_at, GroundedIndexMap, e_r
-│   ├── sensitivity.rs       # PTDF, LODF (self-contained dense Cholesky)
+│   ├── sensitivity.rs       # PTDF, LODF (self contained dense Cholesky)
 │   ├── opf.rs               # OpfInstance: Q, c, bounds, f̄, C_g, p_d; Units
 │   └── kkt.rs               # DC OPF interior point operators (feature = "kkt")
 ├── src/io/                  # mtx (lower-triangle symmetric), meta,
@@ -144,7 +144,7 @@ benchmarks/                  # parse benchmarks + Julia validation harnesses
   and the writer returns it, so `parse → write → parse` keeps the exact bytes:
   every `mpc.*` field, in-matrix comments, and exact tokens like `7e-05`. Don't
   reformat through `f64` round-trips; don't drop fields the typed model ignores.
-- **Two-tier fidelity contract.** Same-format round-trip is byte-exact.
+- **Two-tier fidelity contract.** Same format round trip is byte exact.
   Cross-format conversion keeps maximal fidelity and reports anything the target
   can't represent in `Conversion::warnings`; never drop it silently.
 - **Adding a format.** A reader and/or writer in `powerio/src/format/<name>.rs`
@@ -154,7 +154,7 @@ benchmarks/                  # parse benchmarks + Julia validation harnesses
 - **JSON transport.** `Network::to_json`/`from_json` (serde) is the structured
   transport; over the C ABI it is `pio_to_json`/`pio_from_json`. The retained
   `source` text is `#[serde(skip)]`, so JSON carries the tables, not the
-  byte-exact echo, and a `from_json` round-trip returns `source` as `None`.
+  byte exact echo, and a `from_json` round trip returns `source` as `None`.
 - **Sign convention.** Positive Laplacian: off diag negative, diag positive, `diag = sum |off-diag|` for B'. The positive (M-matrix) Laplacian form SDDM solvers expect.
 - **Bus IDs.** MATPOWER 1 based; `IndexedNetwork::bus_index(id)` is the only mapping into dense `[0, n)`. Don't clamp out of range; return `Error::UnknownBus`.
 - **`BR_B` is already per unit.** Never divide by `base_mva` again.
@@ -180,4 +180,4 @@ new sizes by curl from upstream.
 
 ## Relationship to GridFM
 
-Intended as the fast Rust data layer beneath `gridfm-datakit` (Python, scenario generation) and `gridfm-graphkit` (PyTorch Geometric, GNN training). The `gridfm` subcommand (`io::gridfm`, `--features gridfm`, issue #4) writes the `bus_data`/`gen_data`/`branch_data`/`y_bus_data` Parquet tables matching gridfm-datakit's column schema, under `<out>/<case>/raw/`, so gridfm-graphkit's `HeteroGridDatasetDisk` loads powerio output directly. powerio has no solver, so a case is one snapshot (`scenario 0`): voltages/dispatch are the case's stored values and branch flows are computed from them. Per-scenario expansion is the scenario-batch path (issue #14).
+Intended as the fast Rust data layer beneath `gridfm-datakit` (Python, scenario generation) and `gridfm-graphkit` (PyTorch Geometric, GNN training). The `gridfm` subcommand (`io::gridfm`, `--features gridfm`, issue #4) writes the `bus_data`/`gen_data`/`branch_data`/`y_bus_data` Parquet tables matching gridfm-datakit's column schema, under `<out>/<case>/raw/`, so gridfm-graphkit's `HeteroGridDatasetDisk` loads powerio output directly. powerio has no solver, so a case is one snapshot (`scenario 0`): voltages/dispatch are the case's stored values and branch flows are computed from them. Per scenario expansion is the scenario batch path (issue #14).

@@ -44,7 +44,7 @@ mpc.gencost = [
 
 
 def load(name):
-    return powerio.parse_matpower(str(DATA / f"{name}.m"))
+    return powerio.parse_file(DATA / f"{name}.m")
 
 
 def is_symmetric(m, tol=1e-9):
@@ -80,10 +80,14 @@ def test_public_type_is_network(case9):
 
 
 def test_parse_infers_format_from_extension():
-    # powerio.parse dispatches on the extension; a .m file lands on MATPOWER.
-    case = powerio.parse(DATA / "case9.m")
+    # parse_file dispatches on the extension; a .m file lands on MATPOWER.
+    case = powerio.parse_file(DATA / "case9.m")
     assert case.n == 9
     assert case.source_format == "Matpower"
+
+
+def test_parse_alias_stays_available():
+    assert powerio.parse(DATA / "case9.m").n == 9
 
 
 def test_case_tables(case9):
@@ -120,9 +124,34 @@ def test_parse_str_general():
     assert c.n == 9
 
 
+def test_json_roundtrip_and_parsed_conversion():
+    c = powerio.parse_file(DATA / "case9.m")
+    back = powerio.from_json(c.to_json())
+    assert back.n == c.n
+    assert back.base_mva == c.base_mva
+
+    conv = c.to_format("powermodels-json")
+    assert json.loads(conv.text)["name"] == "case9"
+    assert conv.warnings == []
+    assert powerio.to_matpower(c) == c.to_matpower()
+
+
+def test_to_dense(case9):
+    dense = case9.to_dense()
+    assert dense.n == case9.n
+    assert dense.m == case9.n_branches
+    assert dense.ng == case9.n_gens
+    assert list(dense.bus_ids) == [bus["id"] for bus in case9.buses]
+    assert dense.branch.from_id.shape == (case9.n_branches,)
+    assert dense.gen.pg.shape == (case9.n_gens,)
+    assert dense.demand.pd.shape == (case9.n,)
+    assert dense.reference_bus == case9.reference_bus_index()
+
+
 def test_write_is_byte_exact():
     src = (DATA / "case9.m").read_text()
-    case = powerio.parse(DATA / "case9.m")
+    case = powerio.parse_file(DATA / "case9.m")
+    assert case.to_matpower() == src
     assert case.write() == src
     assert powerio.write(case) == src
 
@@ -155,7 +184,7 @@ def test_to_normalized_filters_out_of_service():
 def test_parse_bad_path_raises():
     # I/O failures map to the standard OSError subclass, not PowerIOError.
     with pytest.raises(FileNotFoundError):
-        powerio.parse_matpower(str(DATA / "does_not_exist.m"))
+        powerio.parse_file(DATA / "does_not_exist.m")
 
 
 def test_bad_parse_raises_powerio_error():
@@ -239,7 +268,7 @@ def test_import_and_parse_pull_in_no_optional_deps():
     # powerio/__init__.py, so the optional MCP SDK stays out of `import powerio`.
     code = (
         "import sys, powerio\n"
-        f"c = powerio.parse_matpower(r'{DATA / 'case9.m'}')\n"
+        f"c = powerio.parse_file(r'{DATA / 'case9.m'}')\n"
         "assert c.write()\n"
         "assert 'numpy' not in sys.modules, 'powerio dragged in numpy'\n"
         "assert 'scipy' not in sys.modules, 'powerio dragged in scipy'\n"
@@ -465,40 +494,44 @@ def test_dcopf_requires_generators(tmp_path):
 
 def test_convert_matpower_echo_is_byte_exact():
     src = (DATA / "case14.m").read_text()
-    conv = powerio.convert(DATA / "case14.m", "matpower")
+    conv = powerio.convert_file(DATA / "case14.m", "matpower")
     assert conv.text == src
     assert conv.warnings == []
 
 
 def test_convert_matpower_to_each_format():
     for fmt in ["powermodels-json", "egret-json", "psse", "powerworld"]:
-        r = powerio.convert(str(DATA / "case30.m"), fmt)
+        r = powerio.convert_file(str(DATA / "case30.m"), fmt)
         assert isinstance(r.text, str) and len(r.text) > 0
         assert isinstance(r.warnings, list)
     # PowerModels JSON output parses as JSON and keeps the bus count.
-    pm = json.loads(powerio.convert(str(DATA / "case30.m"), "powermodels-json").text)
+    pm = json.loads(powerio.convert_file(str(DATA / "case30.m"), "powermodels-json").text)
     assert len(pm["bus"]) == 30
 
 
 def test_convert_round_trip_through_psse(tmp_path):
-    raw = powerio.convert(str(DATA / "case30.m"), "psse").text
+    raw = powerio.convert_file(str(DATA / "case30.m"), "psse").text
     p = tmp_path / "case30.raw"
     p.write_text(raw)
-    back = powerio.convert(str(p), "matpower")  # PSS/E inferred from .raw extension
+    back = powerio.convert_file(str(p), "matpower")  # PSS/E inferred from .raw extension
     case = powerio.parse_matpower_string(back.text)
     assert case.n == 30
 
 
 def test_convert_unknown_format_raises():
     with pytest.raises(ValueError):
-        powerio.convert(str(DATA / "case30.m"), "nonsense")
+        powerio.convert_file(str(DATA / "case30.m"), "nonsense")
+
+
+def test_convert_alias_stays_available():
+    assert powerio.convert(DATA / "case9.m", "matpower").warnings == []
 
 
 def test_missing_json_file_raises_oserror():
     # The non-MATPOWER read path must raise OSError too: a missing file is a
     # missing file, not a ValueError, regardless of the inferred format.
     with pytest.raises(OSError):
-        powerio.convert(DATA / "definitely_missing.json", "matpower")
+        powerio.convert_file(DATA / "definitely_missing.json", "matpower")
 
 
 # --- large case integration --------------------------------------------
@@ -534,7 +567,7 @@ def test_gridfm_absent_raises_clean_importerror(case9, tmp_path):
 
 @gridfm_only
 def test_gridfm_write_single(case9, tmp_path):
-    pd = pytest.importorskip("pandas")
+    pl = pytest.importorskip("polars")
     out = case9.write_gridfm(str(tmp_path))
     raw = Path(out["dir"])
     assert raw.is_dir()
@@ -547,10 +580,10 @@ def test_gridfm_write_single(case9, tmp_path):
         "gridfm_meta.json",
     } <= names
 
-    bus = pd.read_parquet(raw / "bus_data.parquet")
+    bus = pl.read_parquet(raw / "bus_data.parquet")
     assert len(bus) == case9.n
     assert (bus["scenario"] == 0).all()
-    assert list(bus["bus"]) == list(range(case9.n))
+    assert bus["bus"].to_list() == list(range(case9.n))
 
 
 @gridfm_only
@@ -565,7 +598,7 @@ def test_gridfm_include_y_bus_false_omits_table(case9, tmp_path):
 
 @gridfm_only
 def test_gridfm_batch_stacks_and_keys_by_scenario(tmp_path):
-    pd = pytest.importorskip("pandas")
+    pl = pytest.importorskip("polars")
     # Same topology twice → two scenarios stacked in one dataset. (The Python
     # Network is read-only, so the two snapshots share values; the test pins the
     # row-stack and scenario keying, which the Rust tests pair with perturbation.)
@@ -573,16 +606,16 @@ def test_gridfm_batch_stacks_and_keys_by_scenario(tmp_path):
     out = powerio.write_gridfm_batch([case, case], str(tmp_path))
     raw = Path(out["dir"])
 
-    bus = pd.read_parquet(raw / "bus_data.parquet")
+    bus = pl.read_parquet(raw / "bus_data.parquet")
     assert len(bus) == 2 * case.n
-    assert list(bus["scenario"]) == [0] * case.n + [1] * case.n
+    assert bus["scenario"].to_list() == [0] * case.n + [1] * case.n
     # Same case twice → the two scenario blocks carry identical per-bus values
     # and the dense bus index resets to 0..n within each scenario.
     n = case.n
     for col in ["Pd", "Qd", "Pg", "Qg", "Vm", "Va"]:
-        assert list(bus[col][:n]) == list(bus[col][n:])
-    assert list(bus["bus"][:n]) == list(range(n))
-    assert list(bus["bus"][n:]) == list(range(n))
+        assert bus[col][:n].to_list() == bus[col][n:].to_list()
+    assert bus["bus"][:n].to_list() == list(range(n))
+    assert bus["bus"][n:].to_list() == list(range(n))
 
     meta = json.loads((raw / "gridfm_meta.json").read_text())
     assert meta["n_scenarios"] == 2

@@ -6,6 +6,10 @@
 #
 # (The Julia oracle, PowerModels.jl, is likewise benchmark-scoped in
 # benchmarks/Project.toml, not in any crate.)
+# CI runs these oracles on Python 3.12. Python 3.9 is still supported for the
+# package, but current fixed Pillow/Pytest oracle versions do not publish for 3.9.
 pandapower==3.2.2      # validate_pandapower.py: parse + Y_bus cross-check (pinned; 3.4 needs the broken matpowercaseframes 2.x)
 matpowercaseframes<2   # pandapower's .m reader; 2.x's reader is broken (loadcase bug), 1.x works
 gridx-egret>=0.6       # validate_egret.py / validate_matrix.py: the egret oracle
+pillow>=12.2.0; python_version >= "3.10"
+pytest>=9.0.3; python_version >= "3.10"

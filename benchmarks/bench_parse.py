@@ -64,7 +64,7 @@ def samples_for(nbuses):
 
 
 def bench_case(path: Path):
-    case = powerio.parse(str(path))
+    case = powerio.parse_file(str(path))
     print(
         f"case {path.name}: {case.n} buses, {case.n_branches} branches, "
         f"{case.n_gens} gens"
@@ -74,10 +74,10 @@ def bench_case(path: Path):
     def timed(fn):
         return best_median(fn, n, warm)
 
-    rows = [("powerio: parse", *timed(lambda: powerio.parse(str(path))))]
+    rows = [("powerio: parse", *timed(lambda: powerio.parse_file(str(path))))]
 
     def full_path():
-        c = powerio.parse_matpower(str(path))
+        c = powerio.parse_file(str(path))
         c.ybus()
         c.bprime()
 
@@ -93,6 +93,11 @@ def bench_case(path: Path):
             raise
         print("matpowercaseframes not installed; skipping the baseline row.")
         print("  pip install 'powerio[bench]'")
+    except Exception as exc:  # noqa: BLE001 - baseline readers raise on some cases
+        print(
+            "matpowercaseframes failed on this case: "
+            f"{type(exc).__name__}: {exc}"
+        )
 
     # pandapower reads .m via matpowercaseframes, then builds its `net`. This is
     # the apples-to-apples "convert a MATPOWER file into the tool's model" row.
@@ -118,7 +123,7 @@ def bench_case(path: Path):
 
     # The two rows render_tables.py needs for the RESULTS pandapower table; round to
     # the 1 decimal the published table shows. matpowercaseframes is None when its
-    # baseline isn't installed.
+    # baseline is unavailable for this case.
     medians = {name: median for name, _, median in rows}
     return {
         "case": path.stem,
