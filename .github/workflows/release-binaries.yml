@@ -40,7 +40,9 @@ jobs:
             triplet: aarch64-linux-gnu
             lib: libpowerio_capi.so
             cross_gcc: gcc-aarch64-linux-gnu
-          - runner: macos-13
+          # Cross-compiled: the macos-13 x86_64 runners are retired, and an
+          # arm64 runner with the x86_64 toolchain target links fine.
+          - runner: macos-14
             rust_target: x86_64-apple-darwin
             triplet: x86_64-apple-darwin
             lib: libpowerio_capi.dylib

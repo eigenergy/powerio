@@ -113,7 +113,9 @@ jobs:
         platform:
           - { runner: ubuntu-latest,  target: x86_64 }
           - { runner: ubuntu-latest,  target: aarch64 }
-          - { runner: macos-13,       target: x86_64 }
+          # macos-13 (the last x86_64 image) is retired; maturin-action
+          # cross-compiles the x86_64 wheel on the arm64 runner.
+          - { runner: macos-14,       target: x86_64 }
           - { runner: macos-14,       target: aarch64 }
           - { runner: windows-latest, target: x64 }
     steps:
