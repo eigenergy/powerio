@@ -7,3 +7,13 @@ tests/data/**/*.m linguist-vendored
 
 # Julia appears here only as a validation harness, not as the package language.
 benchmarks/**/*.jl linguist-vendored
+
+# Vendored case fixtures are byte-exact round-trip references: the `parse → write`
+# tests (e.g. powerio/tests/roundtrip.rs) compare the writer output to the file
+# verbatim. `-text` checks them out byte-identical to the committed blob on every
+# platform (no CRLF/LF conversion), so the comparison holds on Windows
+# (`core.autocrlf=true`) too — where the `.m` fixtures (LF in the repo) would
+# otherwise materialize as CRLF while the lossless writer echoes that CRLF and the
+# test (which normalizes only the read side) fails. The PSS/E `.raw` fixtures are
+# intentionally CRLF (the format's native DOS line ending) and stay CRLF. #72.
+tests/data/** -text
