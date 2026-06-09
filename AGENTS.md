@@ -8,7 +8,7 @@ A Cargo workspace of Rust crates plus a Python package. Parses power network
 case files, converts losslessly between formats, and emits sparse matrices and
 graph views for any downstream solver. (Planned) feeds the GridFM ML pipeline.
 
-- **`powerio`**: the parser, the format neutral `Network` hub, the lossless
+- **`powerio`**: the parser, the format-neutral `Network` hub, the lossless
   writer, and the format converters. Light deps (thiserror, num-complex,
   petgraph, serde, serde_json, lexical-core); no matrix or TUI stack.
 - **`powerio-matrix`**: sparse matrices and graph views built on `powerio`

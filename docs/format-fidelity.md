@@ -85,8 +85,8 @@ These are reported in `Conversion::warnings`, not dropped silently.
   No third-party `.aux` reader exists, so that writer is validated by powerio's own
   read-back plus a PowerModels JSON bridge.
 - **MATPOWER** canonical output (for a case that did not originate as MATPOWER)
-  omits dcline and storage; the byte-exact echo path keeps them when the case was
-  read from MATPOWER.
+  omits dcline; the byte-exact echo path keeps it when the case was read from
+  MATPOWER. Storage is written as an `mpc.storage` block.
 - **egret** output drops HVDC and storage. The reader takes the power flow
   ModelData subset (numeric bus ids, scalar values); unit commitment cases
   (`system.time_keys`) are rejected.

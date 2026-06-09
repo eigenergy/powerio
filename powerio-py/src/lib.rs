@@ -265,7 +265,7 @@ impl PyCase {
         IndexedNetwork::with_core(&self.inner, &self.core).reference_bus_indices()
     }
 
-    // --- tables (the format neutral Network, as dict rows) --------------
+    // --- tables (the format-neutral Network, as dict rows) --------------
 
     #[getter]
     fn buses<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyList>> {
