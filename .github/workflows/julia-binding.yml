@@ -2,9 +2,10 @@ name: Julia binding
 
 # Contract test: build this commit's C ABI and run PowerIO.jl's suite against it.
 # A change to the pio_* surface or the Network JSON schema then fails in the repo
-# that caused it. Add a token with read access to eigenergy/PowerIO.jl as the
-# POWERIO_JL_REPO_TOKEN secret to enable the checkout. Without the token this job
-# prints a skip notice and passes, so missing external access never blocks a PR.
+# that caused it. The probe step checks out eigenergy/PowerIO.jl anonymously when
+# it is public; while it is private, add a token with read access to it as the
+# POWERIO_JL_REPO_TOKEN secret. With neither, the job prints a skip notice and
+# passes, so missing external access never blocks a PR.
 on:
   push:
     branches: [ "main" ]
@@ -20,41 +21,49 @@ jobs:
   contract:
     name: PowerIO.jl against this C ABI
     runs-on: ubuntu-latest
-    env:
-      # secrets can't be read in `if:` directly; surface it as an env var to gate on.
-      POWERIO_JL_TOKEN: ${{ secrets.POWERIO_JL_REPO_TOKEN }}
     steps:
-    - name: Skip notice (no PowerIO.jl token)
-      if: env.POWERIO_JL_TOKEN == ''
-      run: echo "POWERIO_JL_REPO_TOKEN is not set; skipping the PowerIO.jl contract test. Add a token with read access to eigenergy/PowerIO.jl as the POWERIO_JL_REPO_TOKEN secret to enable it."
+    - name: Probe PowerIO.jl access
+      id: powerio-jl
+      env:
+        POWERIO_JL_TOKEN: ${{ secrets.POWERIO_JL_REPO_TOKEN }}
+      run: |
+        if [ -n "${POWERIO_JL_TOKEN}" ]; then
+          echo "available=true" >> "$GITHUB_OUTPUT"
+        elif git ls-remote https://github.com/eigenergy/PowerIO.jl.git HEAD >/dev/null 2>&1; then
+          echo "available=true" >> "$GITHUB_OUTPUT"
+        else
+          echo "available=false" >> "$GITHUB_OUTPUT"
+          echo "eigenergy/PowerIO.jl is unreachable (no POWERIO_JL_REPO_TOKEN secret, and the repo is not public); skipping the contract test."
+        fi
     - uses: actions/checkout@v4
-      if: env.POWERIO_JL_TOKEN != ''
+      if: steps.powerio-jl.outputs.available == 'true'
     - uses: dtolnay/rust-toolchain@stable
-      if: env.POWERIO_JL_TOKEN != ''
+      if: steps.powerio-jl.outputs.available == 'true'
     - uses: Swatinem/rust-cache@v2
-      if: env.POWERIO_JL_TOKEN != ''
+      if: steps.powerio-jl.outputs.available == 'true'
     - name: Build powerio-capi
-      if: env.POWERIO_JL_TOKEN != ''
+      if: steps.powerio-jl.outputs.available == 'true'
       # --features arrow so PowerIO.jl's Arrow export tests run against a real
       # pio_export_arrow symbol rather than skipping.
       run: cargo build -p powerio-capi --release --features arrow
     - name: Check out PowerIO.jl
-      if: env.POWERIO_JL_TOKEN != ''
+      if: steps.powerio-jl.outputs.available == 'true'
       uses: actions/checkout@v4
       with:
         repository: eigenergy/PowerIO.jl
         path: PowerIO.jl
-        token: ${{ secrets.POWERIO_JL_REPO_TOKEN }}
+        # Falls back to the workflow token, which suffices once the repo is public.
+        token: ${{ secrets.POWERIO_JL_REPO_TOKEN || github.token }}
     - uses: julia-actions/setup-julia@v2
-      if: env.POWERIO_JL_TOKEN != ''
+      if: steps.powerio-jl.outputs.available == 'true'
       with:
         version: '1'
     - uses: julia-actions/cache@v2
-      if: env.POWERIO_JL_TOKEN != ''
+      if: steps.powerio-jl.outputs.available == 'true'
     # PowerIO.jl's ccall tests skip themselves when the cdylib is absent.
     # POWERIO_CAPI points them at the library just built.
     - name: Test PowerIO.jl against the built library
-      if: env.POWERIO_JL_TOKEN != ''
+      if: steps.powerio-jl.outputs.available == 'true'
       env:
         POWERIO_CAPI: ${{ github.workspace }}/target/release/libpowerio_capi.so
       run: julia --project=PowerIO.jl -e 'using Pkg; Pkg.instantiate(); Pkg.test()'

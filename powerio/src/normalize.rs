@@ -278,10 +278,8 @@ impl Network {
     /// [`Error::ReferenceBusCount`] if no reference bus can be established — no `REF`
     /// survives and there is no in-service generator to anchor one.
     pub fn to_normalized(&self) -> Result<Network> {
+        self.check_base_mva()?;
         let base = self.base_mva;
-        if !(base.is_finite() && base > 0.0) {
-            return Err(Error::InvalidBaseMva { base });
-        }
 
         // Kept buses keep their original `kind` for now (the reference scan below
         // reads it); the new id is the 1-based position among survivors. Isolated

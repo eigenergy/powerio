@@ -1,0 +1,104 @@
+name: Release binaries
+
+# Build the powerio-capi cdylib (with the arrow feature) for the five platforms
+# PowerIO.jl's Artifacts.toml covers, package each as the artifact tarball that
+# file references (lib/ or bin/ layout, Julia platform triplet in the name), and
+# attach them to the GitHub release on a version tag. A workflow_dispatch run
+# builds the same tarballs as workflow artifacts only — the pre-release dry run.
+#
+# After tagging, run PowerIO.jl's gen/update_artifacts.jl <tag> to rewrite its
+# Artifacts.toml with the real sha256/git-tree-sha1 of these tarballs.
+#
+# linux builds run on ubuntu-22.04 for the older glibc floor (2.35); aarch64
+# linux is cross-compiled so the job doesn't need an ARM runner label.
+
+on:
+  push:
+    tags: [ "v*" ]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  build:
+    name: ${{ matrix.triplet }}
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-22.04
+            rust_target: x86_64-unknown-linux-gnu
+            triplet: x86_64-linux-gnu
+            lib: libpowerio_capi.so
+          - runner: ubuntu-22.04
+            rust_target: aarch64-unknown-linux-gnu
+            triplet: aarch64-linux-gnu
+            lib: libpowerio_capi.so
+            cross_gcc: gcc-aarch64-linux-gnu
+          - runner: macos-13
+            rust_target: x86_64-apple-darwin
+            triplet: x86_64-apple-darwin
+            lib: libpowerio_capi.dylib
+          - runner: macos-14
+            rust_target: aarch64-apple-darwin
+            triplet: aarch64-apple-darwin
+            lib: libpowerio_capi.dylib
+          - runner: windows-latest
+            rust_target: x86_64-pc-windows-msvc
+            triplet: x86_64-w64-mingw32
+            lib: powerio_capi.dll
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.rust_target }}
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.rust_target }}
+      - name: Install cross linker
+        if: matrix.cross_gcc != ''
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ${{ matrix.cross_gcc }}
+          echo "CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER=aarch64-linux-gnu-gcc" >> "$GITHUB_ENV"
+      - name: Build powerio-capi
+        run: cargo build -p powerio-capi --release --features arrow --target ${{ matrix.rust_target }}
+      # Artifact layout PowerIO.jl's _artifact_lib() resolves: the cdylib under
+      # lib/ (bin/ on Windows, renamed to the lib-prefixed name BinaryBuilder
+      # would produce), the C header under include/, licenses at the root.
+      - name: Package tarball
+        shell: bash
+        run: |
+          stage=stage/libpowerio_capi
+          built="target/${{ matrix.rust_target }}/release/${{ matrix.lib }}"
+          case "${{ matrix.triplet }}" in
+            *-mingw32)
+              mkdir -p "$stage/bin"
+              cp "$built" "$stage/bin/libpowerio_capi.dll"
+              ;;
+            *)
+              mkdir -p "$stage/lib"
+              cp "$built" "$stage/lib/${{ matrix.lib }}"
+              ;;
+          esac
+          mkdir -p "$stage/include"
+          cp powerio-capi/include/powerio.h "$stage/include/"
+          cp LICENSE-MIT LICENSE-APACHE "$stage/"
+          tar -czf "libpowerio_capi.${{ matrix.triplet }}.tar.gz" -C "$stage" .
+          # informational; gen/update_artifacts.jl recomputes from the release assets
+          shasum -a 256 "libpowerio_capi.${{ matrix.triplet }}.tar.gz" \
+            || sha256sum "libpowerio_capi.${{ matrix.triplet }}.tar.gz"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: libpowerio_capi.${{ matrix.triplet }}
+          path: libpowerio_capi.${{ matrix.triplet }}.tar.gz
+      - name: Attach to release
+        if: github.ref_type == 'tag'
+        uses: softprops/action-gh-release@v2
+        with:
+          files: libpowerio_capi.${{ matrix.triplet }}.tar.gz

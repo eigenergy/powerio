@@ -163,8 +163,17 @@ fn build_case<'a>(name: &str, get: impl Fn(&str) -> Option<&'a str>) -> Result<N
 
 /// A cheap upper-bound row count for an assignment (one `;` per row), used to
 /// pre-size the typed vectors so parsing doesn't reallocate as it streams.
+/// Capped: each `;` byte would otherwise pre-allocate a full element (~100
+/// bytes), letting a small crafted file demand ~100x its size in memory up
+/// front. Real cases sit far below the cap (largest vendored case: 13659
+/// buses); beyond it the vectors just grow as rows actually parse.
 fn estimate_rows(assignment: &str) -> usize {
-    assignment.bytes().filter(|&b| b == b';').count()
+    const MAX_ROW_HINT: usize = 1 << 20;
+    assignment
+        .bytes()
+        .filter(|&b| b == b';')
+        .count()
+        .min(MAX_ROW_HINT)
 }
 
 /// Stream the rows of one assignment, building a typed `T` per row via `ctor`.

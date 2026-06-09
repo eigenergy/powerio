@@ -1,13 +1,13 @@
 [package]
 name = "powerio-matrix"
-version = "0.1.0"
-edition = "2024"
-rust-version = "1.86"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
 description = "Sparse matrices and graph views for power system case files, built on powerio."
 readme = "README.md"
-license = "MIT OR Apache-2.0"
-repository = "https://github.com/eigenergy/powerio"
-homepage = "https://github.com/eigenergy/powerio"
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
 documentation = "https://docs.rs/powerio-matrix"
 keywords = ["matpower", "sparse", "ptdf", "dc-opf"]
 categories = ["science", "mathematics"]
@@ -29,11 +29,11 @@ name = "powerio_matrix"
 path = "src/lib.rs"
 
 [dependencies]
-powerio = { path = "../powerio", version = "0.1.0" }
-sprs = { version = "0.11", default-features = false }
-num-complex = "0.4"
-serde = { version = "1", features = ["derive"] }
-serde_json = "1"
+powerio.workspace = true
+sprs.workspace = true
+num-complex.workspace = true
+serde.workspace = true
+serde_json.workspace = true
 rand = "0.9"
 rand_chacha = "0.9"
 walkdir = "2"
@@ -41,7 +41,7 @@ rayon = "1"
 sha2 = "0.10"
 # arrow and parquet release in lockstep and share `RecordBatch`; keep both on the
 # same major. `snap` matches the Snappy compression pandas/datakit write by default.
-arrow = { version = "58", default-features = false, optional = true }
+arrow = { workspace = true, optional = true }
 parquet = { version = "58", default-features = false, features = ["arrow", "snap"], optional = true }
 
 [dev-dependencies]

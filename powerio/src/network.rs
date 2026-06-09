@@ -437,6 +437,21 @@ impl Network {
         self.source_format == SourceFormat::Normalized
     }
 
+    /// Error unless `base_mva` is a positive, finite number. It is every
+    /// per-unit divisor, so a malformed base would otherwise silently poison
+    /// downstream values with `NaN`/`Inf` or flipped signs. The per-unit
+    /// consumers ([`to_normalized`](Network::to_normalized), the gridfm
+    /// export) call this; any other unit-sensitive consumer should too.
+    pub fn check_base_mva(&self) -> crate::Result<()> {
+        if self.base_mva.is_finite() && self.base_mva > 0.0 {
+            Ok(())
+        } else {
+            Err(crate::Error::InvalidBaseMva {
+                base: self.base_mva,
+            })
+        }
+    }
+
     /// Check structural integrity: bus ids are unique and every element
     /// references an existing bus. The file readers and [`from_json`](Network::from_json)
     /// run this; a `Network` built by hand (or mutated, e.g. by a scenario

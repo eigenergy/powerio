@@ -1,13 +1,13 @@
 [package]
 name = "powerio"
-version = "0.1.0"
-edition = "2024"
-rust-version = "1.86"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
 description = "Parser, typed data model, and format converters for power system case files."
 readme = "README.md"
-license = "MIT OR Apache-2.0"
-repository = "https://github.com/eigenergy/powerio"
-homepage = "https://github.com/eigenergy/powerio"
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
 documentation = "https://docs.rs/powerio"
 keywords = ["matpower", "parser", "lossless"]
 categories = ["science", "parsing"]
@@ -20,14 +20,14 @@ all-features = true
 
 [dependencies]
 thiserror = "2"
-num-complex = "0.4"
+num-complex.workspace = true
 # Byte-slice float parsing for numeric matrix rows, avoiding UTF-8 allocation.
 lexical-core = "1"
 # A power network is a graph; connectivity/radial diagnostics live on Network.
 petgraph = "0.8"
-serde = { version = "1", features = ["derive"] }
+serde.workspace = true
 # Format converters (PowerModels / egret JSON) serialize the typed model.
-serde_json = "1"
+serde_json.workspace = true
 
 [dev-dependencies]
 criterion = { version = "0.5", default-features = false, features = ["cargo_bench_support"] }

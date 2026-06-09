@@ -1,11 +1,11 @@
 [package]
 name = "powerio-py"
-version = "0.1.0"
-edition = "2024"
-rust-version = "1.86"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
 description = "PyO3 extension module for powerio (builds the `powerio` Python wheel; not published to crates.io)."
-license = "MIT OR Apache-2.0"
-repository = "https://github.com/eigenergy/powerio"
+license.workspace = true
+repository.workspace = true
 publish = false
 
 # The compiled module is imported as `powerio._powerio`; the `powerio` Python
@@ -25,12 +25,12 @@ extension-module = ["pyo3/extension-module"]
 gridfm = ["powerio-matrix/gridfm"]
 
 [dependencies]
-powerio-matrix = { path = "../powerio-matrix", version = "0.1.0", default-features = false }
+powerio-matrix.workspace = true
 pyo3 = { version = "0.27", features = ["abi3-py39"] }
 # Must track powerio-matrix's sprs so `CsMat<f64>` is the same type across the
 # boundary. No numpy: the matrix methods hand back COO triplets as plain Python
 # lists, which the pure-Python layer assembles into scipy.sparse.
-sprs = { version = "0.11", default-features = false }
+sprs.workspace = true
 
 # No workspace pedantic lints here: pyo3 macro-generated code trips them, and
 # the i32 index narrowing is deliberate (and guarded) for scipy compatibility.

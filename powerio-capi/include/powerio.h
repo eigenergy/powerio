@@ -277,10 +277,12 @@ void pio_nodal_shunt(const PioCase *case_, double *gs, double *bs);
  * `table` is one of the `PIO_ARROW_TABLE_*` selectors (bus/branch/gen/load/
  * shunt); the columns are the parsed network fields with EXTERNAL bus ids (the
  * `pio_bus_ids` id space), not the gridfm schema. On success (returns `0`),
- * `out_array` and `out_schema` are populated with owned C Data Interface structs
- * and the caller MUST release each via its `release` callback. On error
- * (returns `-1`) the message is written into `errbuf` and the out-params are
- * left untouched. Only built with the `arrow` cargo feature.
+ * `out_array` and `out_schema` are populated with owned C Data Interface
+ * structs: ownership of the Arrow buffers transfers to the caller, both
+ * `release` callbacks are non-NULL, and the caller MUST invoke each exactly
+ * once when done (skipping one leaks; the structs outlive `pio_case_free`).
+ * On error (returns `-1`) the message is written into `errbuf` and the
+ * out-params are left untouched. Only built with the `arrow` cargo feature.
  */
 int32_t pio_export_arrow(const PioCase *case_,
                          int32_t table,

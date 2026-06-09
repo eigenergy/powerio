@@ -35,6 +35,11 @@ pub struct PioCase {
 
 /// Copy `msg` (truncated to fit) into a caller `char[len]` buffer, always
 /// NUL-terminated. Shared by the error and warning outputs.
+///
+/// # Safety
+/// A non-NULL `buf` must point to at least `len` writable bytes; the write
+/// stays within `len` (at most `len - 1` message bytes plus the terminating
+/// NUL). NULL or `len == 0` is a no-op.
 unsafe fn copy_to_buf(buf: *mut c_char, len: usize, msg: &str) {
     unsafe {
         if buf.is_null() || len == 0 {
@@ -626,10 +631,12 @@ pub unsafe extern "C" fn pio_nodal_shunt(case: *const PioCase, gs: *mut f64, bs:
 /// `table` is one of the `PIO_ARROW_TABLE_*` selectors (bus/branch/gen/load/
 /// shunt); the columns are the parsed network fields with EXTERNAL bus ids (the
 /// `pio_bus_ids` id space), not the gridfm schema. On success (returns `0`),
-/// `out_array` and `out_schema` are populated with owned C Data Interface structs
-/// and the caller MUST release each via its `release` callback. On error
-/// (returns `-1`) the message is written into `errbuf` and the out-params are
-/// left untouched. Only built with the `arrow` cargo feature.
+/// `out_array` and `out_schema` are populated with owned C Data Interface
+/// structs: ownership of the Arrow buffers transfers to the caller, both
+/// `release` callbacks are non-NULL, and the caller MUST invoke each exactly
+/// once when done (skipping one leaks; the structs outlive `pio_case_free`).
+/// On error (returns `-1`) the message is written into `errbuf` and the
+/// out-params are left untouched. Only built with the `arrow` cargo feature.
 #[cfg(feature = "arrow")]
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_export_arrow(

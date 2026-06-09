@@ -112,6 +112,29 @@ The release ABI uses the same verb taxonomy as the Rust, Python, and Julia APIs:
 - `pio_export_arrow` uses `export` because it fills Arrow C Data Interface
   structs with release callbacks.
 
+## Safety contract
+
+Every entry point is hardened at the boundary:
+
+- Panics never cross the FFI boundary: each function catches unwinds and turns
+  them into an error return (NULL handle, `-1`, or a zero count) with a message
+  in `errbuf`.
+- NULL is safe everywhere: a NULL handle returns the documented default, NULL
+  output pointers are skipped rather than written, and a NULL/zero-length
+  `errbuf` suppresses the message.
+- Error and warning buffers are always NUL-terminated; a message longer than
+  the buffer is truncated to fit. `PIO_ERRBUF_MIN` (256) is a comfortable size.
+- Input strings must be valid UTF-8; anything else is rejected as an error,
+  never dereferenced past its NUL.
+- Ownership is symmetric: handles from `pio_parse_*`/`pio_from_json`/
+  `pio_to_normalized` are freed with `pio_case_free`, strings from the `pio_to_*`
+  functions with `pio_string_free`, each exactly once. The Arrow export hands
+  the caller two C Data Interface structs whose non-NULL `release` callbacks
+  must each be invoked exactly once.
+- The table extractors (`pio_branches`, `pio_gens`, ...) write exactly the
+  matching `pio_n_*` count of elements into each non-NULL buffer; the caller
+  must size them accordingly.
+
 ## Scope
 
 powerio-capi covers the `powerio` surface: parse / convert / query / table

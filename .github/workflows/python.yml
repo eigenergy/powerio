@@ -39,34 +39,41 @@ jobs:
           python-version: ${{ matrix.python }}
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
+      # This job is the gridfm-absent build: compile the extension without the
+      # gridfm cargo feature so `test_gridfm_absent_raises_clean_importerror` and
+      # the `_require_gridfm()` ImportError fallback actually run (every other
+      # job builds the full released wheel, where they skip).
+      - name: Compile the gridfm feature out
+        run: sed -i 's/features = \["extension-module", "gridfm"\]/features = ["extension-module"]/' pyproject.toml
       # `pip install .[all,mcp]` builds the extension via the maturin backend and
-      # pulls scipy/numpy/networkx and Polars (matrix + graph + GridFM read tests)
-      # plus the MCP SDK. The native gridfm writer is compiled in through
-      # pyproject.toml. The `mcp` extra carries a
-      # `python_version >= '3.10'` marker, so it installs the SDK on 3.12
-      # (test_mcp runs) and resolves to nothing on 3.9 (test_mcp skips). Quote the
-      # extras so the shell doesn't glob `[all,mcp]`.
+      # pulls scipy/numpy/networkx and Polars (matrix + graph tests) plus the MCP
+      # SDK. The `mcp` extra carries a `python_version >= '3.10'` marker, so it
+      # installs the SDK on 3.12 (test_mcp runs) and resolves to nothing on 3.9
+      # (test_mcp skips). Quote the extras so the shell doesn't glob `[all,mcp]`.
       - name: Install powerio + test deps
         run: pip install '.[all,mcp]' pytest
       - name: Run tests
         run: pytest python/tests -q
       # The core import path: parse/convert/write import nothing but the
-      # interpreter. The native gridfm writer is present in the wheel too; Polars
-      # is needed only to read the Parquet output from Python.
+      # interpreter. Without the gridfm feature the wrapper must fail with a
+      # clear ImportError, not an AttributeError from the missing native symbol.
       - name: Zero-dep parse path
         run: |
           python -m venv /tmp/zerodep
           /tmp/zerodep/bin/pip install .
           /tmp/zerodep/bin/python - <<'PY'
-          from pathlib import Path
           import tempfile
           import sys, powerio
           c = powerio.parse_file("tests/data/case14.m")
           assert c.to_matpower() == open("tests/data/case14.m").read()
           assert "numpy" not in sys.modules and "scipy" not in sys.modules
-          assert powerio._powerio._has_gridfm
-          out = c.write_gridfm(tempfile.mkdtemp(prefix="powerio-gridfm-"))
-          assert Path(out["dir"], "gridfm_meta.json").is_file()
+          assert not powerio._powerio._has_gridfm
+          try:
+              c.write_gridfm(tempfile.mkdtemp(prefix="powerio-gridfm-"))
+          except ImportError as e:
+              assert "gridfm" in str(e)
+          else:
+              raise SystemExit("expected ImportError without the gridfm feature")
           PY
 
   # Build the same wheel users get, install the GridFM and pandas compatibility

@@ -75,6 +75,8 @@ class PyCase:
     def write_dcopf_bundle(
         self, out_dir: str, convention: Optional[str] = ..., units: Optional[str] = ...
     ) -> dict: ...
+    # Only present when the extension was compiled with the `gridfm` cargo
+    # feature (the released wheel is); without it, access raises AttributeError.
     def write_gridfm(
         self,
         out_dir: str,
@@ -96,6 +98,8 @@ def convert_file(
     path: str, to: str, from_: Optional[str] = ...
 ) -> Tuple[str, list[str]]: ...
 def convert(path: str, to: str, from_: Optional[str] = ...) -> Tuple[str, list[str]]: ...
+# Only present when the extension was compiled with the `gridfm` cargo feature
+# (the released wheel is); without it, access raises AttributeError.
 def write_gridfm_batch(
     cases: list[PyCase],
     out_dir: str,

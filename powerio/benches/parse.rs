@@ -48,11 +48,12 @@ fn bench_roundtrip(c: &mut Criterion) {
 }
 
 // The readable non-MATPOWER formats, paired with the writer that produces a
-// fixture for them. egret JSON is write-only, so it isn't here.
+// fixture for them.
 const FORMATS: &[(&str, TargetFormat)] = &[
     ("powermodels-json", TargetFormat::PowerModelsJson),
     ("psse", TargetFormat::Psse),
     ("powerworld", TargetFormat::PowerWorld),
+    ("egret-json", TargetFormat::EgretJson),
 ];
 
 fn bench_parse_formats(c: &mut Criterion) {

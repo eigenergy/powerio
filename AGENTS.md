@@ -24,10 +24,9 @@ graph views for any downstream solver. (Planned) feeds the GridFM ML pipeline.
 `Network` is the one canonical model (format neutral, loads/shunts first class);
 `IndexedNetwork` is the dense indexed analysis view derived from it.
 
-Formats. Readers: MATPOWER `.m`, PowerModels JSON, PSS/E `.raw` (v33),
-PowerWorld `.aux`. Writers: those plus egret JSON. Every format meets at
-`Network`, so a new format is one reader/writer at the hub, not a pairwise
-converter.
+Formats. MATPOWER `.m`, PowerModels JSON, PSS/E `.raw` (v33), PowerWorld
+`.aux`, and egret JSON all read and write. Every format meets at `Network`,
+so a new format is one reader/writer at the hub, not a pairwise converter.
 
 Matrix outputs (powerio-matrix):
 - B' (FDPF, shuntless). Singular positive Laplacian, rank n-1.
@@ -44,7 +43,8 @@ Matrix outputs (powerio-matrix):
 
 ```
 cargo build --release        # powerio + powerio-matrix + powerio-cli (default-members)
-cargo test                   # powerio + powerio-matrix
+cargo test                   # powerio + powerio-matrix (default-members)
+cargo test -p powerio-capi   # the C ABI tests (not in default-members)
 cargo clippy --all-targets
 cargo fmt --all --check      # rustfmt is enforced (edition 2024)
 
@@ -89,7 +89,7 @@ powerio/                      # parser + Network hub + converters
 │   ├── powermodels.rs       # PowerModels JSON reader + writer
 │   ├── psse.rs              # PSS/E .raw reader + writer
 │   ├── powerworld.rs        # PowerWorld .aux reader + writer
-│   └── egret.rs             # egret JSON writer
+│   └── egret.rs             # egret JSON reader + writer
 └── tests/                   # convert, roundtrip, roundtrip_formats
 
 powerio-matrix/               # matrices + graph views on powerio
@@ -162,7 +162,8 @@ benchmarks/                  # parse benchmarks + Julia validation harnesses
 - **B' ignores taps and shifts. B'' zeros only shifts. Y_bus keeps both.**
 - **DC OPF Laplacian.** `L = A diag(b) Aᵀ` is built from the same `A`, `b` factors `build_incidence` returns (so `L` and the reweighted `L₁` share a factorization), and equals `build_bprime` in the XB scheme. Default `b = 1/x` (paper-pure); `DcConvention::Matpower` uses `1/(x·τ)` plus a phase-shift injection.
 - **DC OPF is bus indexed.** Generation is nodal (`p_g ∈ ℝⁿ`), so `Q`, `c`, and bounds are length n (zero at load buses), scattered from generator space through `C_g`; gen-space vectors (`OpfInstance::gen_costs`) ride along as provenance. Cost map: MATPOWER `c2 p² + c1 p` → `q = 2c2`, `c = c1`. Per-unit by default (`Units::PerUnit` scales `q` by `base²`, `c` by `base`).
-- **`gen`/`gencost` are optional.** A power flow case with no `mpc.gen` parses with `gens` empty; the OPF builders return `Error::NoGenerators`. Exactly one `BusType::Ref` is required (`IndexedNetwork::reference_bus_index`).
+- **`gen`/`gencost` are optional.** A power flow case with no `mpc.gen` parses with `gens` empty; the OPF builders return `Error::NoGenerators`.
+- **Reference (slack) buses are a set, grounded one row/column each.** `IndexedNetwork::reference_bus_indices` returns every `BusType::Ref`; the matrix builders ground the whole set, so a network needs one reference *per connected component* (`IndexedNetwork::check_reference_coverage`). Several within one island is a distributed-slack solve. `reference_bus_index` is the exactly-one convenience query (errors otherwise) for the single-slack C/Python/gridfm paths.
 - **PTDF/LODF need a solve.** They factor the reference grounded Laplacian (SPD when every island has a reference) with a self contained dense Cholesky (`matrix::sensitivity`); no external solver dep. PTDF is dense `m×n`; sparse work would compute selected columns or use sparse factors, not make PTDF itself sparse.
 - **MTX output is lower triangle, 1 based, spec compliant.** `sprs::io::write_matrix_market_sym` writes the *upper* triangle, so `io::mtx::write_mtx` ships its own writer.
 - **`CooBuilder`.** HashMap COO with O(nnz) inserts; replaces the old O(nnz²) Vec search.

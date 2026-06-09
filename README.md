@@ -171,13 +171,15 @@ powerio-mcp
 ## Validation
 
 The Rust test suite covers parsers, writers, format conversion, matrix builders,
-normalization, C ABI behavior, and Python bindings. The benchmark validation
-suite compares selected outputs against PowerModels.jl, egret, ExaPowerIO.jl, and
-pandapower.
+and normalization; the C ABI crate carries its own tests (it is outside the
+default members, so it needs an explicit `-p powerio-capi`), and `pytest` covers
+the Python bindings. The benchmark validation suite compares selected outputs
+against PowerModels.jl, egret, ExaPowerIO.jl, and pandapower.
 
 ```
 cargo fmt --all --check
 cargo test
+cargo test -p powerio-capi
 cargo clippy --all-targets
 pytest python/tests
 bash benchmarks/run_validation.sh

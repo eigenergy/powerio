@@ -3,7 +3,8 @@ name: Validation
 # Cross-tool correctness gate: run benchmarks/run_validation.sh (the same pass/fail
 # matrix the maintainer runs locally) and fail the PR on any regression. Only the
 # machine independent correctness checks run here. The speed benchmarks are
-# per-machine and stay a local on-demand task (the refresh-benchmarks skill).
+# per-machine and stay a local on-demand task (benchmarks/render_tables.py
+# splices their results into benchmarks/RESULTS.md).
 #
 # This pulls a Julia + Python oracle stack (PowerModels.jl, ExaPowerIO.jl,
 # pandapower, egret), so it's heavier than the other jobs; the path filter keeps it

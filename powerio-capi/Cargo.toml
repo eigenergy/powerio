@@ -1,11 +1,11 @@
 [package]
 name = "powerio-capi"
-version = "0.1.0"
-edition = "2024"
-rust-version = "1.86"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
 description = "C ABI for powerio: parse, query, convert, and extract numeric tables."
-license = "MIT OR Apache-2.0"
-repository = "https://github.com/eigenergy/powerio"
+license.workspace = true
+repository.workspace = true
 publish = false
 
 # A C-consumable shared + static library. The header is checked in at
@@ -20,6 +20,6 @@ crate-type = ["cdylib", "staticlib", "rlib"]
 arrow = ["dep:arrow"]
 
 [dependencies]
-powerio = { path = "../powerio", version = "0.1.0" }
+powerio.workspace = true
 # Only the C Data Interface (`ffi`) is needed; the heavy arrow defaults stay off.
-arrow = { version = "58", default-features = false, features = ["ffi"], optional = true }
+arrow = { workspace = true, features = ["ffi"], optional = true }
