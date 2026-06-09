@@ -47,6 +47,10 @@ typedef struct PioCase PioCase;
  * ("matpower","powermodels","psse","powerworld") when non-NULL. Returns NULL on
  * error and writes the message into errbuf (a char[errlen]). */
 PioCase *pio_parse(const char *path, const char *from, char *errbuf, size_t errlen);
+/* Parse in-memory case `text` of `format` ("matpower"/"m", "powermodels"/"pm",
+ * "egret", "psse"/"raw", "powerworld"/"aux"); `format` is required (no path to
+ * infer from). Returns NULL on error and writes the message into errbuf. */
+PioCase *pio_parse_str(const char *text, const char *format, char *errbuf, size_t errlen);
 void pio_case_free(PioCase *c);
 
 size_t pio_n_buses(const PioCase *c);
@@ -76,6 +80,12 @@ void pio_string_free(char *s);
  * handle has no source, so pio_write_matpower reformats rather than echoing. */
 char *pio_to_json(const PioCase *c, char *errbuf, size_t errlen);
 PioCase *pio_from_json(const char *json, char *errbuf, size_t errlen);
+
+/* Normalize `c` into a NEW handle: per unit, radians, out-of-service filtered,
+ * densely reindexed, bus types canonicalized. Independent of the input handle
+ * (free both with pio_case_free); every extractor and pio_to_json works on it.
+ * Returns NULL on error (e.g. no reference bus), message into errbuf. */
+PioCase *pio_to_normalized(const PioCase *c, char *errbuf, size_t errlen);
 
 /* Numeric table extractors. Each output buffer has the matching pio_n_* length;
  * pass NULL to skip it. `from`/`to`/`bus` are 1-based bus ids in the same id

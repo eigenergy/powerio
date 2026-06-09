@@ -86,6 +86,41 @@ int main(int argc, char **argv) {
     pio_string_free(json);
     pio_case_free(c2);
 
+    /* In-memory parse: read the bytes ourselves and parse them with an explicit
+     * format, then confirm it agrees with the path-based parse. */
+    {
+        FILE *fp = fopen(argv[1], "rb");
+        CHECK(fp != NULL, "could not reopen case file");
+        fseek(fp, 0, SEEK_END);
+        long sz = ftell(fp);
+        fseek(fp, 0, SEEK_SET);
+        char *buf = malloc((size_t)sz + 1);
+        CHECK(buf != NULL, "out of memory");
+        size_t rd = fread(buf, 1, (size_t)sz, fp);
+        buf[rd] = '\0';
+        fclose(fp);
+
+        PioCase *cs = pio_parse_str(buf, "matpower", err, sizeof err);
+        CHECK(cs != NULL, err);
+        CHECK(pio_n_buses(cs) == nb && pio_n_branches(cs) == m && pio_n_gens(cs) == ng,
+              "pio_parse_str disagrees with pio_parse on table sizes");
+        free(buf);
+
+        /* Normalize into a NEW handle: per unit, radians, filtered, reindexed.
+         * It has no more buses than the raw case, keeps a reference bus, and
+         * still serializes through the JSON transport. */
+        PioCase *cn = pio_to_normalized(cs, err, sizeof err);
+        CHECK(cn != NULL, err);
+        CHECK(pio_n_buses(cn) <= nb && pio_n_buses(cn) > 0, "normalized bus count out of range");
+        CHECK(pio_reference_bus(cn) >= 0, "normalized case lost its reference bus");
+        char *njson = pio_to_json(cn, err, sizeof err);
+        CHECK(njson != NULL, err);
+        pio_string_free(njson);
+        pio_case_free(cn);
+        pio_case_free(cs);
+        printf("parse_str + to_normalized OK\n");
+    }
+
 #ifdef PIO_ARROW
     /* Zero-copy Arrow C Data Interface export: pull the bus table, check the row
      * count, then release the producer-owned buffers. */

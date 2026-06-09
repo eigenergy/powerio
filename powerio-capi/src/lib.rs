@@ -132,6 +132,43 @@ pub unsafe extern "C" fn pio_parse(
     }
 }
 
+/// Parse in-memory case `text` of the named `format` into a case handle. Unlike
+/// [`pio_parse`] there is no path to infer from, so `format` is required: one of
+/// `matpower`/`m`, `powermodels`/`pm`, `egret`, `psse`/`raw`, `powerworld`/`aux`
+/// (see `powerio::target_format_from_name`). Returns `NULL` on error and writes
+/// the message into `errbuf`. Free the handle with [`pio_case_free`].
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn pio_parse_str(
+    text: *const c_char,
+    format: *const c_char,
+    errbuf: *mut c_char,
+    errlen: usize,
+) -> *mut PioCase {
+    unsafe {
+        let r = catch_unwind(AssertUnwindSafe(|| {
+            let text = cstr(text).ok_or_else(|| "text is NULL or not UTF-8".to_string())?;
+            let format = cstr(format).ok_or_else(|| "format is NULL or not UTF-8".to_string())?;
+            powerio::parse_str(text, format)
+                .map_err(|e| e.to_string())
+                .map(|net| {
+                    let core = IndexCore::build(&net);
+                    Box::into_raw(Box::new(PioCase { net, core }))
+                })
+        }));
+        match r {
+            Ok(Ok(ptr)) => ptr,
+            Ok(Err(msg)) => {
+                copy_to_buf(errbuf, errlen, &msg);
+                std::ptr::null_mut()
+            }
+            Err(_) => {
+                copy_to_buf(errbuf, errlen, "panic while parsing");
+                std::ptr::null_mut()
+            }
+        }
+    }
+}
+
 /// Free a case handle from [`pio_parse`].
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_case_free(case: *mut PioCase) {
@@ -151,6 +188,40 @@ unsafe fn view<'a>(case: *const PioCase) -> Option<IndexedNetwork<'a>> {
     unsafe {
         case.as_ref()
             .map(|c| IndexedNetwork::with_core(&c.net, &c.core))
+    }
+}
+
+/// Normalize `case` into a NEW case handle: per unit, radians, out-of-service
+/// filtered, densely reindexed, bus types canonicalized (see
+/// `Network::to_normalized`). The result is independent of `case` — free both
+/// with [`pio_case_free`] — and every extractor and [`pio_to_json`] works on it
+/// unchanged. Returns `NULL` on error (e.g. no reference bus) and writes the
+/// message into `errbuf`.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn pio_to_normalized(
+    case: *const PioCase,
+    errbuf: *mut c_char,
+    errlen: usize,
+) -> *mut PioCase {
+    unsafe {
+        let r = catch_unwind(AssertUnwindSafe(|| {
+            let c = case_ref(case).ok_or_else(|| "case is NULL".to_string())?;
+            c.net.to_normalized().map_err(|e| e.to_string()).map(|net| {
+                let core = IndexCore::build(&net);
+                Box::into_raw(Box::new(PioCase { net, core }))
+            })
+        }));
+        match r {
+            Ok(Ok(ptr)) => ptr,
+            Ok(Err(msg)) => {
+                copy_to_buf(errbuf, errlen, &msg);
+                std::ptr::null_mut()
+            }
+            Err(_) => {
+                copy_to_buf(errbuf, errlen, "panic while normalizing");
+                std::ptr::null_mut()
+            }
+        }
     }
 }
 

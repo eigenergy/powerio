@@ -121,6 +121,31 @@ def test_write_is_byte_exact():
     assert powerio.write(case) == src
 
 
+def test_to_normalized_is_per_unit_and_in_memory(case9):
+    n = case9.to_normalized()
+    # case9 is fully in service with one reference bus, so nothing is dropped.
+    assert n.n == case9.n
+    assert n.n_gens == case9.n_gens
+    # A derived product with no retained source: it serializes from the model.
+    assert n.source_format == "InMemory"
+    # Powers are per unit (divided by baseMVA).
+    g, rg = n.gens[0], case9.gens[0]
+    assert abs(g["pmax"] - rg["pmax"] / case9.base_mva) < 1e-9
+    # The result is a full Case, so the matrix builders work on it.
+    assert n.bprime().shape == (n.n, n.n)
+
+
+def test_to_normalized_filters_out_of_service():
+    case = powerio.parse_matpower(str(DATA / "t_case9_oos.m"))
+    n = case.to_normalized()
+    # The fixture marks one generator and one branch out of service; no isolated
+    # buses, so every bus survives.
+    assert n.n_gens == case.n_gens - 1
+    assert n.n_branches == case.n_branches - 1
+    assert n.n == 9
+    assert n.source_format == "InMemory"
+
+
 def test_parse_bad_path_raises():
     # I/O failures map to the standard OSError subclass, not PowerIOError.
     with pytest.raises(FileNotFoundError):

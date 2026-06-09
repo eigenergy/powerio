@@ -86,6 +86,9 @@ powerio/                      # parser + Network hub + converters
 ├── src/indexed.rs           # IndexCore, IndexedNetwork (dense-indexed analysis
 │                            #   view), ConnectivityReport; petgraph view:
 │                            #   to_petgraph, is_radial, connectivity_report
+├── src/normalize.rs         # Network::to_normalized (per-unit/radian/filtered/
+│                            #   reindexed derived view); shared per-unit scaling
+│                            #   (cost_to_pu/cost_from_pu, DEG_TO_RAD, GEN_PU_KEYS)
 ├── src/format/
 │   ├── mod.rs               # hub: parse, parse_str, read_path, write_as,
 │   │                        #   TargetFormat, Conversion, target_format_from_name
@@ -164,6 +167,19 @@ benchmarks/                  # parse benchmarks + Julia validation harnesses
 - **Two-tier fidelity contract.** Same-format round-trip is byte-exact.
   Cross-format conversion keeps maximal fidelity and reports anything the target
   can't represent in `Conversion::warnings` — never drop it silently.
+- **Normalized view (`normalize.rs`).** `Network::to_normalized` is the universal
+  canonicalization: per unit (÷`base_mva`), radians, `tap 0 → 1`, out-of-service
+  and isolated elements dropped, survivors reindexed to a dense 1-based id space,
+  bus types canonicalized (one `Ref`; gen buses `Pv`, the rest `Pq`). It is a
+  derived product, NOT for write-back: it drops `source` and sets
+  `source_format = InMemory`, so `write_as` serializes the per-unit model instead
+  of falsely echoing the raw bytes. The per-unit scaling has one home — the
+  cost rescale `cost_to_pu`/`cost_from_pu`, `DEG_TO_RAD`/`RAD_TO_DEG`, and
+  `GEN_PU_KEYS` are shared by `to_normalized` and the PowerModels reader/writer;
+  don't re-derive them. It does NOT apply solver-prep opinions (angle-bound
+  padding, `rate_a` synthesis, gen-cost model restriction) — those stay
+  downstream. Exposed as `pio_to_normalized` (C ABI) and `Case.to_normalized`
+  (Python). In-memory parse: `parse_str`/`pio_parse_str`.
 - **Adding a format.** A reader and/or writer in `powerio/src/format/<name>.rs`
   that produces/consumes `Network`; register in `format/mod.rs`, re-export from
   `powerio/src/lib.rs`, add a CLI/`TargetFormat` arm. `Network` is the unifying

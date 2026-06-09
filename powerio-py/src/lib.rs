@@ -377,6 +377,16 @@ impl PyCase {
         powerio_matrix::write_matpower(&self.inner)
     }
 
+    /// A normalized, computation-ready copy of this case: per unit, radians,
+    /// out-of-service filtered, densely reindexed (1-based), bus types
+    /// canonicalized. The raw case is unchanged; the result carries no retained
+    /// source, so writing it serializes the per-unit model rather than echoing.
+    fn to_normalized(&self) -> PyResult<PyCase> {
+        let inner = self.inner.to_normalized().map_err(to_pyerr)?;
+        let core = IndexCore::build(&inner);
+        Ok(PyCase { inner, core })
+    }
+
     // --- matrix builders: each returns a COO tuple ----------------------
 
     #[pyo3(signature = (scheme=None))]

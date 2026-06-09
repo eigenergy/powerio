@@ -95,6 +95,20 @@ powerio gridfm case14.m -o out                      # gridfm-datakit Parquet dat
 powerio                                              # TUI
 ```
 
+## Normalized view
+
+The parsed `Network` is raw and lossless — MATPOWER units (MW/MVAr, degrees),
+1-based ids, out-of-service elements kept — so a same-format write echoes the
+source byte for byte. `Network::to_normalized` derives the form a solver or ML
+pipeline consumes: powers per unit (÷`baseMVA`), angles in radians, `tap 0 → 1`,
+out-of-service elements and isolated buses dropped, the survivors reindexed to a
+dense 1-based id space, bus types canonicalized (one reference bus; generator
+buses PV, the rest PQ). It carries no retained source, so writing it serializes
+the per-unit model rather than echoing — a derived product, not a source for
+write-back. Python: `case.to_normalized()`. C ABI: `pio_to_normalized`. Parse a
+case from memory with no temp file via `parse_str(text, format)` /
+`pio_parse_str`.
+
 ## GridFM
 
 `powerio gridfm <case> -o <dir>` (the `gridfm` cargo feature) writes the
@@ -117,8 +131,9 @@ generate them. From Python (the `gridfm` extra): `case.write_gridfm(dir)` and
 ## C ABI
 
 `powerio-capi` is the C ABI (`pio_*`, header `powerio-capi/include/powerio.h`) for
-C, C++, and Julia: parse, query, convert, the byte-exact echo, the JSON transport
-(`pio_to_json`/`pio_from_json`), and the numeric table extractors. `pio_abi_version`
+C, C++, and Julia: parse (from a path, or from memory with `pio_parse_str`), query,
+convert, the byte-exact echo, the JSON transport (`pio_to_json`/`pio_from_json`),
+the normalized view (`pio_to_normalized`), and the numeric table extractors. `pio_abi_version`
 (and the `PIO_ABI_VERSION` header macro) lets a consumer reject a stale or
 mismatched library at load; `pio_version` reports the crate version. `--features
 arrow` adds `pio_export_arrow`, which exports the raw network tables (bus, branch,

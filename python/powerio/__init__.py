@@ -221,6 +221,16 @@ class Case:
             str(out_dir), scenario, include_y_bus, include_taps, include_shifts
         )
 
+    def to_normalized(self) -> "Case":
+        """A normalized, computation-ready copy of this case: per unit, radians,
+        out-of-service filtered, densely reindexed (1-based), bus types
+        canonicalized. The original case is unchanged; the result carries no
+        retained source, so :meth:`write` serializes the per-unit model rather
+        than echoing it. Raises :class:`PowerIODataError` if no reference bus can
+        be chosen.
+        """
+        return Case(self._inner.to_normalized())
+
     def to_networkx(self):
         """Undirected networkx graph keyed by bus id.
 
