@@ -247,8 +247,11 @@ impl Network {
     ///   dimensionless.
     /// - **Radians**: bus `va`; branch `shift/angmin/angmax`.
     /// - **Tap**: `0 → 1.0` (an explicit `1` is kept).
-    /// - **Filtered**: drop isolated buses and every out-of-service element, then
-    ///   drop any element left referencing a dropped bus.
+    /// - **Filtered**: drop buses typed isolated (`BusType::Isolated`) and every
+    ///   out-of-service element, then drop any element left referencing a dropped
+    ///   bus. A bus orphaned by the out-of-service filter (no in-service branch,
+    ///   but not typed isolated) is kept — its load is real — and surfaces as its
+    ///   own island, which the grounding check reports if it has no reference.
     /// - **Reindexed**: kept buses get a dense 1-based id (their position among the
     ///   survivors), and every endpoint is remapped to match.
     /// - **Bus types**: a bus hosting a surviving generator keeps `REF` if the file

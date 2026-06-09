@@ -729,6 +729,39 @@ fn distributed_slack_two_refs_one_island() {
 }
 
 #[test]
+fn lodf_two_refs_distributed_slack_triangle() {
+    // The unit triangle with buses 1 and 3 as references (distributed slack).
+    // LODF differs from the single-slack triangle because each slack balances
+    // independently: tripping branch 1-3 (between the two slacks) redistributes
+    // nothing, while tripping 1-2 or 2-3 reroutes bus 2's flow fully onto the
+    // other slack-connected branch. Hand-derived against the reduced 1x1 system
+    // (only bus 2 survives grounding, diag = 2, so PTDF col for bus 2 is
+    // [-1/2, 0, +1/2]). This pins the multi-grounded ptdf_dense -> build_lodf path.
+    let case = net(
+        "triangle-2ref",
+        vec![
+            bus(1, BusType::Ref),
+            bus(2, BusType::Pq),
+            bus(3, BusType::Ref),
+        ],
+        vec![branch(1, 2, 1.0), branch(1, 3, 1.0), branch(2, 3, 1.0)],
+    );
+    let view = IndexedNetwork::new(&case);
+    assert_eq!(view.reference_bus_indices(), vec![0, 2]);
+    let lodf = dense(&build_lodf(&view, DcConvention::PaperPure).unwrap());
+    let expected = [[-1.0, 0.0, -1.0], [0.0, -1.0, 0.0], [-1.0, 0.0, -1.0]];
+    for (l, row) in expected.iter().enumerate() {
+        for (k, &want) in row.iter().enumerate() {
+            assert!(
+                (lodf[l][k] - want).abs() < 1e-9,
+                "LODF[{l}][{k}]={} != {want}",
+                lodf[l][k]
+            );
+        }
+    }
+}
+
+#[test]
 fn perunit_scales_native_by_base() {
     let case = load("../tests/data/case9.m");
     let base = case.base_mva;

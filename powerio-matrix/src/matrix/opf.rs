@@ -21,9 +21,12 @@ pub enum Units {
     /// Power divided by `baseMVA`; cost coefficients scaled so the cost is a
     /// function of per unit power (`q ← 2c₂·base²`, `c ← c₁·base`). Keeps the
     /// whole instance dimensionally consistent with the per unit Laplacian.
+    /// A network from [`to_normalized`](powerio::Network::to_normalized) is
+    /// already per unit, so it wants [`Native`](Units::Native) here, not this.
     #[default]
     PerUnit,
-    /// Raw MATPOWER units: power in MW, cost in native `$·MWh⁻¹` coefficients.
+    /// Raw MATPOWER units: power in MW, cost in native `$·MWh⁻¹` coefficients
+    /// (also the right choice for an already-per-unit normalized network).
     Native,
 }
 
@@ -92,6 +95,16 @@ pub fn build_opf_instance(
     let n = case.n();
     let m = incidence.m();
     let base = case.base_mva();
+
+    // A normalized network is already per unit (powers ÷ base, costs scaled) but
+    // keeps base_mva at the system base so it stays a faithful Network. Scaling it
+    // again with Units::PerUnit divides by base twice; a consumer of a normalized
+    // network wants Units::Native. Catch the misuse in debug builds.
+    debug_assert!(
+        !(case.network().is_normalized() && units == Units::PerUnit),
+        "build_opf_instance: network is already per unit (is_normalized); pass \
+         Units::Native, not Units::PerUnit, or the per-unit scaling is applied twice"
+    );
 
     let p_scale = match units {
         Units::PerUnit => 1.0 / base,

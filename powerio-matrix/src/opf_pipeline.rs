@@ -79,6 +79,8 @@ pub fn write_dcopf_bundle(
     // Network / OPF vectors (bus or branch indexed).
     put_vec(&dir, "b.mtx", &inc.b, &mut files)?;
     put_vec(&dir, "p_shift.mtx", &inc.p_shift, &mut files)?;
+    // e_r is 1 at every reference bus, not a single-slack one-hot: read it
+    // alongside `reference_buses` in the manifest (one entry ⇒ the old one-hot).
     put_vec(&dir, "e_r.mtx", &e_r, &mut files)?;
     put_vec(&dir, "q.mtx", &opf.bus.q, &mut files)?;
     put_vec(&dir, "c.mtx", &opf.bus.c, &mut files)?;

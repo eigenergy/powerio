@@ -267,16 +267,20 @@ fn warn_normalized_tap(net: &Network, format: TargetFormat, conv: &mut Conversio
     if !net.is_normalized() || matches!(format, TargetFormat::Matpower) {
         return;
     }
-    let lines = net
+    // After normalization a line (raw tap 0) and a unity-ratio transformer (raw
+    // tap 1) both read as tap 1.0 / shift 0.0, so they can't be told apart — count
+    // them together as the branches whose line/transformer label is now ambiguous.
+    let ambiguous = net
         .branches
         .iter()
         .filter(|b| b.tap == 1.0 && b.shift == 0.0)
         .count();
-    if lines > 0 {
+    if ambiguous > 0 {
         conv.warnings.push(format!(
-            "normalized network: {lines} branch(es) with unit tap and no phase shift \
-             are written as unity-ratio transformers; the line/transformer distinction \
-             is not preserved (the power flow is identical)"
+            "normalized network: {ambiguous} branch(es) have unit tap and no phase \
+             shift and are written as transformers; a normalized line is indistinguishable \
+             from a transformer whose tap is exactly 1, so the line/transformer label is \
+             not preserved (the power flow is identical)"
         ));
     }
 }

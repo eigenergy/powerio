@@ -163,3 +163,64 @@ pub fn reference_indicator(n: usize, refs: &[usize]) -> Vec<f64> {
     }
     e
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn grounding_reduced_shifts_survivors() {
+        // Ground indices 1 and 3 of a 5-wide space: survivors 0,2,4 -> 0,1,2.
+        let g = Grounding::new(&[1, 3]);
+        assert_eq!(g.len(), 2);
+        assert_eq!(g.reduced(0), Some(0));
+        assert_eq!(g.reduced(1), None);
+        assert_eq!(g.reduced(2), Some(1));
+        assert_eq!(g.reduced(3), None);
+        assert_eq!(g.reduced(4), Some(2));
+    }
+
+    #[test]
+    fn grounding_sorts_and_dedups() {
+        // Unsorted, repeated input collapses so the shift stays monotone and a
+        // repeated reference doesn't over-remove a row/column.
+        let g = Grounding::new(&[3, 1, 3]);
+        assert_eq!(g.len(), 2);
+        assert_eq!(g.max(), Some(3));
+        assert_eq!(g.reduced(2), Some(1));
+        assert_eq!(g.reduced(4), Some(2));
+    }
+
+    fn diag_matrix(vals: &[f64]) -> CsMat<f64> {
+        let mut b = CooBuilder::new(vals.len());
+        for (i, &v) in vals.iter().enumerate() {
+            b.add(i, i, v);
+        }
+        b.finish_csr()
+    }
+
+    #[test]
+    fn ground_at_each_removes_rows_and_cols() {
+        let m = diag_matrix(&[10.0, 20.0, 30.0, 40.0]);
+        // Ground index 1: a 3x3 with diag 10,30,40 (survivors shifted down).
+        let g1 = ground_at_each(&m, &[1]);
+        assert_eq!((g1.rows(), g1.cols()), (3, 3));
+        assert_eq!(g1.get(0, 0), Some(&10.0));
+        assert_eq!(g1.get(1, 1), Some(&30.0));
+        assert_eq!(g1.get(2, 2), Some(&40.0));
+        // Ground 0 and 2 from an unsorted set: a 2x2 with diag 20,40.
+        let g2 = ground_at_each(&m, &[2, 0]);
+        assert_eq!((g2.rows(), g2.cols()), (2, 2));
+        assert_eq!(g2.get(0, 0), Some(&20.0));
+        assert_eq!(g2.get(1, 1), Some(&40.0));
+    }
+
+    #[test]
+    fn reference_indicator_marks_each_ref() {
+        assert_eq!(reference_indicator(4, &[0, 2]), vec![1.0, 0.0, 1.0, 0.0]);
+        // Out-of-range refs are ignored, not a panic.
+        assert_eq!(reference_indicator(3, &[5]), vec![0.0, 0.0, 0.0]);
+        // The single-reference case is exactly unit_vector.
+        assert_eq!(reference_indicator(3, &[1]), unit_vector(3, 1));
+    }
+}

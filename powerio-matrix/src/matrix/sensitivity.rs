@@ -2,10 +2,13 @@
 //!
 //! PTDF maps nodal injections to branch flows (`f = PTDF · p`); LODF maps a
 //! branch outage to the flow it redistributes onto the others. Both come from
-//! the slack-grounded DC Laplacian `ABA = ground_at(L, r)`, factored once with
-//! a dense Cholesky (the matrix is SPD for a connected network). PTDF is
-//! inherently dense `m × n`; for very large networks an iterative/sparse path
-//! is future work.
+//! the reference-grounded DC Laplacian `ABA = ground_with(L, refs)` — one
+//! row/column removed per reference bus — factored once with a dense Cholesky.
+//! It is SPD as long as every connected component carries a reference (the
+//! [`check_groundable`](crate::indexed::IndexedNetwork::check_groundable)
+//! precondition), so multi-island and distributed-slack cases are supported, not
+//! just a single connected slack. PTDF is inherently dense `m × n`; for very
+//! large networks an iterative/sparse path is future work.
 
 // Dense linear algebra: indexed triangular-solve loops and the `.iter()`
 // sparse traversal read clearer than the iterator rewrites clippy suggests.

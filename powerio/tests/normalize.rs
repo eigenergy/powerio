@@ -139,7 +139,7 @@ fn warns_when_writing_normalized_lines_as_transformers() {
     assert!(
         out.warnings
             .iter()
-            .any(|w| w.contains("unity-ratio transformers")),
+            .any(|w| w.contains("line/transformer label is not preserved")),
         "expected a normalized line/transformer fidelity warning, got {:?}",
         out.warnings
     );
@@ -150,7 +150,7 @@ fn warns_when_writing_normalized_lines_as_transformers() {
         !raw_out
             .warnings
             .iter()
-            .any(|w| w.contains("unity-ratio transformers")),
+            .any(|w| w.contains("line/transformer label is not preserved")),
         "raw network must not trigger the normalized-tap warning"
     );
 }
