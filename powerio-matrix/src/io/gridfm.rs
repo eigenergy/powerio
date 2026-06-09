@@ -7,6 +7,13 @@
 //! parsed [`Network`], so graphkit can train on powerio output directly and the
 //! scenario-batch path (issue #14) has its on-disk format.
 //!
+//! The reverse — [`read_gridfm_dataset`] / [`read_gridfm_scenarios`] /
+//! [`gridfm_base_case`], with the pure [`read_gridfm_network`] over in-memory
+//! batches — rebuilds a [`Network`] from such a dataset (lossy but
+//! power-flow-complete; see [`GridfmRead`]), the ML→classical return leg
+//! (issue #60). One reader plus the existing writers means gridfm → any classical
+//! format. `y_bus_data` is ignored on read; branches carry raw `r/x/b`.
+//!
 //! # Snapshots and scenarios
 //!
 //! powerio has no power flow solver. One parsed case is one snapshot
@@ -981,11 +988,10 @@ pub fn read_gridfm_network(
 /// Read one `scenario` from a gridfm dataset on disk and rebuild a [`Network`].
 /// The inverse of [`write_gridfm_dataset`].
 ///
-/// `dir` is resolved leniently ([`resolve_raw_dir`]): the leaf `raw/` directory
-/// holding the parquet files, a `<case>/` directory with a `raw/` child, or a
-/// parent directory with exactly one `*/raw/` child all work. `base_mva` and the
-/// case name come from `gridfm_meta.json` (a missing manifest defaults `base_mva`
-/// to 100 and warns).
+/// `dir` is resolved leniently: the leaf `raw/` directory holding the parquet
+/// files, a `<case>/` directory with a `raw/` child, or a parent directory with
+/// exactly one `*/raw/` child all work. `base_mva` and the case name come from
+/// `gridfm_meta.json` (a missing manifest defaults `base_mva` to 100 and warns).
 ///
 /// # Errors
 /// Propagates [`read_gridfm_network`] plus any filesystem / Parquet read error.
