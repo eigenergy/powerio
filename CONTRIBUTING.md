@@ -36,15 +36,16 @@ version. Additive symbols don't bump it. The history is in
 
 The release version lives in `[workspace.package]` plus the two intra-workspace
 dependency pins in `[workspace.dependencies]`; a bump touches exactly those
-three lines of the root Cargo.toml. Then:
+three lines of the root Cargo.toml (Cargo.lock follows on the next build). Then:
 
 1. Merge the bump, tag the commit `vX.Y.Z`, push the tag. The release-binaries
    workflow builds the C ABI tarballs and stages a draft GitHub release.
 2. Publish the draft release. The release event fires the PyPI publish
    (python.yml) and the crates.io publish (crates.yml: powerio, powerio-matrix,
-   powerio-cli, in dependency order). Both run behind protected environments
-   and skip already-uploaded files, so a partial failure is recovered by
-   re-running.
+   powerio-cli, in dependency order). Both deploy through reviewer-protected
+   environments (`pypi`, `crates-io`; the protection lives in the repo
+   settings). PyPI skips already-uploaded files and crates.io skips versions
+   already in the index, so a partial failure is recovered by re-running.
 3. Follow up in PowerIO.jl: regenerate Artifacts.toml from the new tag and
    register the new version (see its CONTRIBUTING.md). A breaking C ABI change
    bumps `PIO_ABI_VERSION` first; see "C ABI changes" above.

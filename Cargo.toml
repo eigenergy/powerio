@@ -7,7 +7,8 @@ default-members = ["powerio", "powerio-matrix", "powerio-cli"]
 resolver = "2"
 
 # Single source for the release version and shared metadata; the crates inherit
-# via `key.workspace = true`, so a release bump touches exactly this block.
+# via `key.workspace = true`, so a release bump touches this version and the
+# two dependency pins below.
 [workspace.package]
 version = "0.0.1"
 edition = "2024"
