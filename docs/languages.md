@@ -12,6 +12,9 @@ Verb taxonomy:
   hub also keeps `write_as` and per-format `write_*` text builders, the
   internals behind `to_format` and the `to_*` writers, which the bindings do
   not mirror
+- `read_*`: filesystem dataset inputs (`read_gridfm`), the inverse of
+  `write_*`. Datasets are multi-file directories, so they read and write;
+  single documents parse and serialize (`parse_*`/`to_*`)
 - `export_*`: handoff to external memory or interface protocols
 
 | Concept | Rust | Python | Julia | C ABI |
