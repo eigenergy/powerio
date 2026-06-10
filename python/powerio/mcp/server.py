@@ -7,6 +7,8 @@ inline ``content``:
   any fidelity warnings.
 - ``case_summary``: counts, base MVA, source format, and connectivity, with no
   scipy/numpy in the loop.
+- ``generate_case``: a synthetic tree/lattice/pegase-like case as the JSON
+  transport, deterministic per seed.
 
 Run over stdio with the ``powerio-mcp`` console script (or ``python -m
 powerio.mcp``). The server reuses ``powerio.convert_file``/``convert_str``/
@@ -103,6 +105,41 @@ def case_summary(
     }
 
 
+@mcp.tool()
+def generate_case(
+    topology: str = "tree",
+    n: int = 64,
+    r_over_x: float = 0.1,
+    mean_x: float = 0.05,
+    seed: int = 0x00C0_FFEE,
+) -> dict:
+    """Generate a synthetic power system case and return its JSON transport
+    plus a summary.
+
+    ``topology`` is ``tree`` (radial spanning tree), ``lattice`` (2-D grid;
+    ``n`` rounds up to a perfect square), or ``pegase-like`` (tree plus ~30%
+    extra edges, transmission-like meshing). ``n`` below 2 is raised to 2
+    (lattice: at least a 2×2 grid). Identical arguments (including ``seed``)
+    generate the identical case; bus 1 is the reference. The case carries
+    buses and branches only — no loads, shunts, or generators.
+
+    The returned ``json`` is the same transport ``Network.to_json`` emits, so
+    any tool that accepts a parsed case accepts it.
+    """
+    case = powerio.generate_case(topology, n, r_over_x, mean_x, seed)
+    return {
+        "json": case.to_json(),
+        "summary": {
+            "name": case.name,
+            "base_mva": case.base_mva,
+            "n_buses": case.n_buses,
+            "n_branches": case.n_branches,
+            "is_radial": case.is_radial,
+            "n_connected_components": case.n_connected_components,
+        },
+    }
+
+
 def main() -> None:
-    """Console-script entry point: serve the two tools over stdio."""
+    """Console-script entry point: serve the tools over stdio."""
     mcp.run()

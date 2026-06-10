@@ -121,6 +121,20 @@ fn parse_convention(s: &str) -> PyResult<DcConvention> {
     }
 }
 
+/// Accepts `tree`, `lattice`/`lattice2d`, and `pegase`/`pegase-like` (case- and
+/// separator-insensitive).
+fn parse_topology(s: &str) -> PyResult<powerio_matrix::synth::Topology> {
+    use powerio_matrix::synth::Topology;
+    match normalize(s).as_str() {
+        "tree" => Ok(Topology::Tree),
+        "lattice" | "lattice2d" => Ok(Topology::Lattice2D),
+        "pegase" | "pegaselike" => Ok(Topology::PegaseLike),
+        other => Err(PyValueError::new_err(format!(
+            "unknown topology {other:?}; expected 'tree', 'lattice', or 'pegase-like'"
+        ))),
+    }
+}
+
 /// Accepts `perunit`/`pu`/`per-unit` and `native`.
 fn parse_units(s: &str) -> PyResult<Units> {
     match normalize(s).as_str() {
@@ -634,6 +648,32 @@ fn convert_str(text: &str, to: &str, format: Option<&str>) -> PyResult<(String, 
     Ok((conv.text, conv.warnings))
 }
 
+/// Generate a synthetic case: a spanning `tree`, a 2-D `lattice` (`n` rounds up
+/// to a perfect square), or a `pegase-like` mesh (tree plus ~30% extra edges).
+/// `n` below 2 is raised to 2 (lattice: at least a 2×2 grid). Identical
+/// arguments (including `seed`) generate the identical case; bus 1 is the
+/// reference. Buses and branches only — no loads, shunts, or generators.
+#[pyfunction]
+#[pyo3(signature = (topology=None, n=64, r_over_x=0.1, mean_x=0.05, seed=0x00C0_FFEE))]
+fn generate_case(
+    topology: Option<&str>,
+    n: usize,
+    r_over_x: f64,
+    mean_x: f64,
+    seed: u64,
+) -> PyResult<PyCase> {
+    let spec = powerio_matrix::synth::SynthSpec {
+        topology: parse_topology(topology.unwrap_or("tree"))?,
+        n,
+        r_over_x,
+        mean_x,
+        seed,
+    };
+    let inner = powerio_matrix::synth::generate(&spec);
+    let core = IndexCore::build(&inner);
+    Ok(PyCase { inner, core })
+}
+
 /// Build a `{dir, files}` dict from an outputs directory and its written files.
 /// Shared by the DC OPF and gridfm write paths. Paths go through [`path_to_str`]
 /// (so a non-UTF8 path raises instead of being mangled).
@@ -749,6 +789,7 @@ fn _powerio(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(from_json, m)?)?;
     m.add_function(wrap_pyfunction!(convert_file, m)?)?;
     m.add_function(wrap_pyfunction!(convert_str, m)?)?;
+    m.add_function(wrap_pyfunction!(generate_case, m)?)?;
     // Whether the gridfm Parquet surface (arrow/parquet) was compiled in, so the
     // pure-Python layer can raise an ImportError instead of an AttributeError.
     m.add("_has_gridfm", cfg!(feature = "gridfm"))?;

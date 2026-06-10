@@ -112,3 +112,16 @@ def test_inline_convert_str_error_maps_cleanly(monkeypatch):
     monkeypatch.setattr(powerio, "convert_str", boom)
     with pytest.raises(ValueError):
         convert_case(to="psse", content="whatever", from_="matpower")
+
+
+def test_generate_case_tool():
+    from powerio.mcp.server import generate_case
+
+    r = generate_case(topology="lattice", n=9, seed=1)
+    assert r["summary"]["n_buses"] == 9
+    assert r["summary"]["n_connected_components"] == 1
+    assert powerio.from_json(r["json"]).n_buses == 9
+    # deterministic per seed
+    assert generate_case(topology="lattice", n=9, seed=1)["json"] == r["json"]
+    with pytest.raises(ValueError):
+        generate_case(topology="torus")
