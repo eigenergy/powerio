@@ -15,7 +15,8 @@ First release.
 - Python bindings (`pip install powerio`) with `matrix`, `graph`, and
   `gridfm` extras, plus an MCP convert/validate server.
 - `powerio-matrix`: admittance and Laplacian builders over the parsed
-  tables; gridfm Parquet export behind `--features gridfm`.
+  tables; gridfm-datakit Parquet export and a lossy, power-flow-complete
+  reader behind `--features gridfm`.
 - `powerio-cli`: convert and validate from the shell.
 
 The C ABI history (versions 1 through 3) is tracked in

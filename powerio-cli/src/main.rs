@@ -589,8 +589,9 @@ fn run_convert(
     scenario: i64,
 ) -> anyhow::Result<()> {
     let target = to.to_target()?;
-    // gridfm reads a Parquet dataset directory (parquet-free `read_path` can't),
-    // so it routes through powerio-matrix's reader, surfacing its fidelity notes.
+    // gridfm reads a Parquet dataset directory (the parquet-free `parse_file`
+    // can't), so it routes through powerio-matrix's reader, surfacing its fidelity
+    // notes.
     let net = if from == Some(FormatArg::Gridfm) {
         let read = powerio_matrix::read_gridfm_dataset(input, scenario)
             .with_context(|| format!("reading gridfm dataset {}", input.display()))?;
