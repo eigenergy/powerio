@@ -75,7 +75,7 @@ GridfmRead.__doc__ = """Output of :func:`read_gridfm` / :func:`read_gridfm_scena
 ``network`` is the reconstructed :class:`Network`; ``scenario`` is the scenario
 id these rows came from; ``warnings`` lists what the gridfm schema could not
 round-trip (synthesized bus ids, folded per-bus load/shunt, dropped HVDC/storage,
-piecewise costs). The read is lossy but power-flow-complete.
+piecewise costs). The read is lossy but recovers everything a power flow needs.
 """
 
 Incidence = namedtuple("Incidence", ["A", "b", "p_shift", "branch_of_col"])
@@ -490,13 +490,14 @@ def read_gridfm(dir: Any, scenario: int = 0) -> GridfmRead:
     ``scenario`` selects one snapshot from a batch (``0``, the base case, by
     default). Returns a :class:`GridfmRead` ``(network, scenario, warnings)``.
 
-    The read is lossy but power-flow-complete: it recovers bus types, voltages and
-    limits, nodal load and shunt totals, generator dispatch and bounds, branch
-    ``r/x/b/tap/shift/rate_a``/angle-limits, and ``baseMVA`` — enough to write a
-    runnable case — but not original bus ids, per-element load/shunt granularity,
-    piecewise/cubic costs, or HVDC/storage; what it can't recover is listed in
-    ``warnings``. Published wheels include the native reader; custom source builds
-    without the Rust ``gridfm`` feature raise ``ImportError``.
+    The read is lossy but recovers everything a power flow needs: bus types,
+    voltages and limits, nodal load and shunt totals, generator dispatch and
+    bounds, branch ``r/x/b/tap/shift/rate_a``/angle limits, and ``baseMVA``,
+    enough to write a runnable case. It cannot recover original bus ids,
+    per-element load/shunt granularity, piecewise/cubic costs, or HVDC/storage;
+    what it can't recover is listed in ``warnings``. Published wheels include the
+    native reader; custom source builds without the Rust ``gridfm`` feature raise
+    ``ImportError``.
     """
     _require_gridfm()
     case, scen, warnings = _powerio.read_gridfm(str(dir), scenario)
@@ -505,7 +506,7 @@ def read_gridfm(dir: Any, scenario: int = 0) -> GridfmRead:
 
 def read_gridfm_scenarios(dir: Any) -> "list[GridfmRead]":
     """Read every scenario of a gridfm dataset, one :class:`GridfmRead` per
-    scenario id (ascending) over the shared topology — the read side of
+    scenario id (ascending) over the shared topology, the read side of
     :func:`write_gridfm_batch`.
 
     Each scenario is rebuilt independently, so two scenarios may differ in branch
