@@ -64,7 +64,10 @@ julia -e 'using Pkg; Pkg.add(url="https://github.com/eigenergy/PowerIO.jl")'
 ```
 
 ## Use
-PowerIO is implemented in Rust and features a low-level [C ABI](https://github.com/eigenergy/powerio/tree/main/powerio-capi). This lets PowerIO talk to many of your favorite languages. Any language with a C foreign function interface can call it.
+
+PowerIO is implemented in Rust with a low-level
+[C ABI](https://github.com/eigenergy/powerio/tree/main/powerio-capi); any
+language with a C foreign function interface can call it.
 
 **Rust**
 ```rust
@@ -152,33 +155,20 @@ and Julia as `to_normalized(case)`.
 
 ### GridFM
 
-PowerIO supports the GridFM framework. The command `powerio gridfm <case> -o <dir>` writes the Parquet tables consumed by
+`powerio gridfm <case> -o <dir>` writes the Parquet tables
 [gridfm-datakit](https://gridfm.github.io/gridfm-datakit/) and
-`gridfm-graphkit`: `bus_data`, `gen_data`, `branch_data`, and `y_bus_data` under
-`<dir>/<case>/raw/`. A case file is one scenario. Passing several compatible
-cases stacks them by scenario id.
-
-The inverse — `read_gridfm_dataset` / `read_gridfm_scenarios` / `gridfm_base_case`
-in `powerio-matrix` (same `gridfm` feature) — turns a gridfm dataset back into a
-`Network`, the ML→classical return leg. Because every classical writer meets at
-the hub, one reader yields **gridfm → any classical format for free**: take a
-perturbed training scenario or a GNN-predicted state serialized to the schema,
-emit a `.m` or `.raw`, and run it in MATPOWER / pandapower / PowerModels to
-sanity-check it.
+`gridfm-graphkit` consume under `<dir>/<case>/raw/`; several compatible cases
+stack by scenario id. The same `gridfm` feature reads a dataset back into a
+`Network` (`read_gridfm_dataset` in `powerio-matrix`, `pio.read_gridfm` in
+Python), so a perturbed training scenario or a GNN predicted state comes back
+out in any classical format:
 
 ```
 powerio convert out/case14/raw --from gridfm --to matpower -o case14.m
 ```
 
-The read is lossy but **power-flow-complete**: it recovers bus types, voltages and
-limits, nodal load and shunt totals, generator dispatch and bounds, branch
-`r/x/b/tap/shift/rate_a`/angle-limits, and `baseMVA` — enough to write a runnable
-case — but not original bus ids (synthesized `1..n`), per-element load/shunt
-granularity (folded one per bus), piecewise/cubic costs, or HVDC/storage. What it
-can't recover is returned as a warnings list. `--scenario N` picks one scenario
-from a batch; the directory argument accepts the `raw/`, `<case>/`, or parent dir.
-From Python, `pio.read_gridfm(dir)` and `pio.read_gridfm_scenarios(dir)` return a
-`GridfmRead(network, scenario, warnings)`.
+The read is lossy; what it recovers, what it drops, and the warnings contract
+are in [docs/format-fidelity.md](https://github.com/eigenergy/powerio/blob/main/docs/format-fidelity.md).
 
 ### C ABI
 
@@ -190,8 +180,11 @@ Build with `--features arrow` to enable `pio_export_arrow` over the
 
 ### MCP Server
 
-The Python package includes an optional MCP server with `convert_case` and
-`case_summary` tools. Interoperability with the [PowerAgent](https://github.com/Power-Agent) project is planned.
+The Python package includes an optional MCP server exposing conversion,
+summaries, the JSON transport, the matrix views, and file staging as tools.
+The [PowerMCP](https://github.com/Power-Agent/PowerMCP) bundle ships the same
+tool surface alongside its simulator servers, whose bridges ingest the
+transport directly.
 
 ```
 pip install 'powerio[mcp]'
@@ -200,11 +193,10 @@ powerio-mcp
 
 ## Validation
 
-The Rust test suite covers parsers, writers, format conversion, matrix builders,
-and normalization; the C ABI crate carries its own tests (it is outside the
-default members, so it needs an explicit `-p powerio-capi`), and `pytest` covers
-the Python bindings. The benchmark validation suite compares selected outputs
-against PowerModels.jl, egret, ExaPowerIO.jl, and pandapower.
+The Rust test suite covers parsers, writers, format conversion, matrix
+builders, and normalization; the C ABI crate carries its own tests, and
+`pytest` covers the Python bindings. The benchmark validation suite compares
+selected outputs against PowerModels.jl, egret, ExaPowerIO.jl, and pandapower.
 
 ```
 cargo fmt --all --check

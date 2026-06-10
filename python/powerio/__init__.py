@@ -75,7 +75,7 @@ GridfmRead.__doc__ = """Output of :func:`read_gridfm` / :func:`read_gridfm_scena
 ``network`` is the reconstructed :class:`Network`; ``scenario`` is the scenario
 id these rows came from; ``warnings`` lists what the gridfm schema could not
 round-trip (synthesized bus ids, folded per-bus load/shunt, dropped HVDC/storage,
-piecewise costs). The read is lossy but power-flow-complete.
+piecewise costs). The read is lossy but recovers everything a power flow needs.
 """
 
 Incidence = namedtuple("Incidence", ["A", "b", "p_shift", "branch_of_col"])

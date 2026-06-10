@@ -1,5 +1,25 @@
 # Changelog
 
+## 0.0.2
+
+- gridfm read path (#70): `read_gridfm_dataset` / `read_gridfm_scenarios` /
+  `gridfm_base_case` in `powerio-matrix`, `pio_read_gridfm` /
+  `pio_gridfm_scenario_ids` in the C ABI behind `--features gridfm`, and
+  `powerio.read_gridfm` / `read_gridfm_scenarios` in Python. Release tarballs
+  now build the C ABI with the gridfm feature, so the symbols ship to the
+  Julia bindings.
+- `convert_str` (#88): in-memory conversion through the hub in Rust and
+  Python; the MCP server's inline conversion no longer stages temp files.
+  Closes #66.
+- The MCP server grows from two tools to eight (#90): `parse_case`,
+  `normalize_case`, and `case_to_json` emit the JSON transport,
+  `compute_matrix` returns nine sparse kinds in COO form, `dense_view`
+  returns the dense table view, and `save_case` writes converted cases to
+  disk; `convert_case` and `case_summary` are unchanged.
+- Docs (#92): Pages landing page with the released/development split, guide
+  links, and the logo; the crate homepage points at the docs site; release
+  drafts carry the CHANGELOG section instead of a bare title.
+
 ## 0.0.1
 
 First release.
