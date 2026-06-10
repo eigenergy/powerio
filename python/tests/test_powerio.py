@@ -529,6 +529,35 @@ def test_convert_unknown_format_raises():
         powerio.convert_file(str(DATA / "case30.m"), "nonsense")
 
 
+def test_convert_str_matches_convert_file():
+    text = (DATA / "case30.m").read_text()
+    for fmt in ["powermodels-json", "egret-json", "psse", "powerworld"]:
+        from_str = powerio.convert_str(text, fmt)
+        from_file = powerio.convert_file(str(DATA / "case30.m"), fmt)
+        assert from_str.text == from_file.text
+        assert from_str.warnings == from_file.warnings
+
+
+def test_convert_str_matpower_echo_is_byte_exact():
+    src = (DATA / "case14.m").read_text()
+    conv = powerio.convert_str(src, "matpower")
+    assert conv.text == src
+    assert conv.warnings == []
+
+
+def test_convert_str_named_input_format():
+    raw = powerio.convert_file(str(DATA / "case30.m"), "psse").text
+    back = powerio.convert_str(raw, "matpower", format="psse")
+    assert powerio.parse_str(back.text).n_buses == 30
+
+
+def test_convert_str_errors():
+    with pytest.raises(powerio.PowerIOError):
+        powerio.convert_str("not a case", "psse")
+    with pytest.raises(ValueError):
+        powerio.convert_str((DATA / "case14.m").read_text(), "nonsense")
+
+
 def test_missing_json_file_raises_oserror():
     # The non-MATPOWER read path must raise OSError too: a missing file is a
     # missing file, not a ValueError, regardless of the inferred format.

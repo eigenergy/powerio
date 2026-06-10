@@ -50,6 +50,7 @@ __all__ = [
     "parse_str",
     "from_json",
     "convert_file",
+    "convert_str",
     "to_format",
     "to_matpower",
     "to_json",
@@ -420,6 +421,18 @@ def convert_file(path: Any, to: str, from_: Optional[str] = None) -> Conversion:
     """
     text, warnings = _powerio.convert_file(str(path), to, from_)
     return Conversion(text, warnings)
+
+
+def convert_str(text: str, to: str, format: str = "matpower") -> Conversion:
+    """Convert in-memory case ``text`` to another format through the neutral
+    hub, with no file staging.
+
+    ``to`` and ``format`` are format names as in :func:`convert_file`;
+    ``format`` names the input (default ``matpower``). Returns a
+    :class:`Conversion` with the converted text and any fidelity warnings.
+    """
+    out, warnings = _powerio.convert_str(text, to, format)
+    return Conversion(out, warnings)
 
 
 def to_format(case: Network, to: str) -> Conversion:

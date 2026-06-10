@@ -9,72 +9,19 @@ inline ``content``:
   scipy/numpy in the loop.
 
 Run over stdio with the ``powerio-mcp`` console script (or ``python -m
-powerio.mcp``). The server reuses ``powerio.convert_file``/``parse_file``/
-``parse_str``; it never reimplements parsing.
+powerio.mcp``). The server reuses ``powerio.convert_file``/``convert_str``/
+``parse_file``/``parse_str``; it never reimplements parsing, and inline
+content converts in memory with no temp file staging.
 """
 
 from __future__ import annotations
 
-import os
-import tempfile
 from typing import Optional
 
 import powerio
 from mcp.server.fastmcp import FastMCP
 
 mcp = FastMCP("powerio")
-
-# Format name (and alias) → file extension, for staging inline content to a temp
-# file. ``convert_file`` is path-only, so inline conversion writes the text to disk
-# first; a matching extension keeps the format obvious even though we always
-# pass ``from_`` explicitly for inline input. Mirrors the canonical Rust tables
-# (`target_format_from_name` + `TargetFormat::extension` in
-# `powerio/src/format/mod.rs`); the temp file goes away once powerio grows an
-# in-memory `convert_str` (issue #66) and this map with it.
-_EXT = {
-    "matpower": ".m",
-    "m": ".m",
-    "powermodels-json": ".json",
-    "powermodels": ".json",
-    "pm": ".json",
-    "egret-json": ".json",
-    "egret": ".json",
-    "psse": ".raw",
-    "raw": ".raw",
-    "powerworld": ".aux",
-    "aux": ".aux",
-}
-
-
-def _unlink_quietly(path: str) -> None:
-    """Remove ``path``, ignoring a missing or locked file. Cleanup runs next to
-    an in-flight exception (a failed write, a conversion error), so it must
-    never raise and mask the error the caller actually cares about."""
-    try:
-        os.unlink(path)
-    except OSError:
-        pass
-
-
-def _stage(content: str, fmt: str) -> str:
-    """Write ``content`` to a temp file whose extension matches ``fmt``.
-
-    Returns the path; the caller is responsible for deleting it. Writes UTF-8
-    regardless of the platform's default text encoding, because the case
-    readers decode as UTF-8 (a non-UTF-8 locale would otherwise corrupt
-    non-ASCII content or fail the parse). If the write fails, the temp file
-    `mkstemp` already created on disk is removed before re-raising; the caller
-    only learns the path on success, so it can't clean up after a failed stage.
-    """
-    suffix = _EXT.get(fmt.strip().lower(), ".txt")
-    fd, path = tempfile.mkstemp(suffix=suffix)
-    try:
-        with os.fdopen(fd, "w", encoding="utf-8") as fh:
-            fh.write(content)
-    except Exception:
-        _unlink_quietly(path)
-        raise
-    return path
 
 
 def _one_input(path: Optional[str], content: Optional[str]) -> None:
@@ -109,11 +56,7 @@ def convert_case(
         if path is not None:
             conv = powerio.convert_file(path, to, from_)
         else:
-            tmp = _stage(content, from_)
-            try:
-                conv = powerio.convert_file(tmp, to, from_)
-            finally:
-                _unlink_quietly(tmp)
+            conv = powerio.convert_str(content, to, from_)
     except powerio.PowerIOError as exc:
         raise ValueError(f"conversion failed: {exc}") from exc
     except FileNotFoundError as exc:

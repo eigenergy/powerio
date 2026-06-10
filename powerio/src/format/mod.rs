@@ -294,6 +294,20 @@ pub fn convert_file(
     Ok(write_as(&net, to))
 }
 
+/// Convert in-memory case `text` of the named `format` (see
+/// [`target_format_from_name`]) to `to`.
+///
+/// The in-memory sibling of [`convert_file`], shared by the bindings: parses
+/// `text` once and writes the resulting [`Network`] to `to`, with no file
+/// staging in between.
+///
+/// # Errors
+/// As [`parse_str`].
+pub fn convert_str(text: &str, to: TargetFormat, format: &str) -> Result<Conversion> {
+    let net = parse_str(text, format)?;
+    Ok(write_as(&net, to))
+}
+
 /// A normalized network has its tap canonicalized to `1.0` on every line (the
 /// `0 → 1` rule), but [`Branch::is_transformer`](crate::network::Branch::is_transformer),
 /// the test these writers use to split lines from transformers, keys off
