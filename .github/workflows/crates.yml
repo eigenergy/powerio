@@ -1,0 +1,54 @@
+name: crates.io
+
+# Releases created by workflows (the GITHUB_TOKEN recursion guard) never fire
+# the release event, so manual dispatch is the recovery path; the crates-io
+# environment's deployment rules gate both.
+on:
+  release:
+    types: [ published ]
+  workflow_dispatch:
+
+jobs:
+  publish:
+    name: publish to crates.io
+    runs-on: ubuntu-latest
+    # Protect this environment with required reviewers before launch.
+    environment: crates-io
+    permissions:
+      id-token: write  # crates.io trusted publishing; no stored token
+      contents: read
+    steps:
+      - uses: actions/checkout@v6
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Read the workspace version
+        run: |
+          version="$(cargo metadata --no-deps --format-version 1 | jq -r '.packages[] | select(.name == "powerio") | .version')"
+          echo "VERSION=$version" >> "$GITHUB_ENV"
+      - name: Check the release tag against the workspace version
+        if: github.event_name == 'release'
+        env:
+          TAG: ${{ github.event.release.tag_name }}
+        run: |
+          if [ "v$VERSION" != "$TAG" ]; then
+            echo "release tag $TAG does not match workspace version $VERSION" >&2
+            exit 1
+          fi
+      - uses: rust-lang/crates-io-auth-action@v1
+        id: auth
+      - name: Publish in dependency order
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ steps.auth.outputs.token }}
+        # `cargo publish` blocks until the published crate is live in the
+        # index, so each dependent resolves its predecessor. Already-published
+        # versions are skipped (the analog of pypi-publish's skip-existing),
+        # which makes a re-run after a partial publish safe. The list is every
+        # workspace member without `publish = false`, in dependency order.
+        run: |
+          for crate in powerio powerio-matrix powerio-cli; do
+            if curl -fsS "https://crates.io/api/v1/crates/$crate/$VERSION" >/dev/null 2>&1; then
+              echo "$crate $VERSION is already on crates.io; skipping"
+              continue
+            fi
+            cargo publish -p "$crate"
+          done
