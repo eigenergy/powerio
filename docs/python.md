@@ -17,8 +17,9 @@ pip install 'powerio[pandas]'   # pandas and pyarrow compatibility reads (Python
 pip install 'powerio[all]'      # matrix, graph, and gridfm reads
 ```
 
-`import powerio`, `parse_file`, `parse_str`, `convert_file`, `to_matpower`, and
-`to_json` do not import NumPy, SciPy, NetworkX, Polars, pandas, or pyarrow.
+`import powerio`, `parse_file`, `parse_str`, `convert_file`, `convert_str`,
+`to_matpower`, and `to_json` do not import NumPy, SciPy, NetworkX, Polars,
+pandas, or pyarrow.
 
 ## Canonical use
 
@@ -30,6 +31,7 @@ same_text = net.to_matpower()
 json_text = net.to_json()
 pm = net.to_format("powermodels-json")
 raw = pio.convert_file("case9.m", "psse")
+aux = pio.convert_str(json_text, "powerworld", format="powermodels-json")
 
 normalized = net.to_normalized()
 dense = net.to_dense()       # needs powerio[matrix]

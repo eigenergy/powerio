@@ -19,7 +19,7 @@ Supported formats:
 - [PowerWorld](https://www.powerworld.com/WebHelp/Content/MainDocumentation_HTML/Case_Formats.htm) `.aux`
 - [PowerModels.jl](https://github.com/lanl-ansi/PowerModels.jl) network data JSON
 - [egret](https://pypi.org/project/gridx-egret/) `ModelData` JSON
-- [GridFM](https://github.com/gridfm) `.parquet` (WIP)
+- [GridFM](https://github.com/gridfm) `.parquet`
 - [surge](https://github.com/amptimal/surge) `.surge.json` (WIP)
 
 When writing back to the source format, PowerIO **returns the original file exactly** when the parser
@@ -122,7 +122,9 @@ powerio
 | egret JSON | partial | full | partial | partial | original text |
 
 `partial` means the target lacks fields present in the source. The writer reports
-those cases in `Conversion::warnings`. Known limits are documented in
+those cases in `Conversion::warnings`. GridFM Parquet sits outside the table: it
+reads and writes through the same hub, partial in both directions. Known limits
+for every format are documented in
 [docs/format-fidelity.md](https://github.com/eigenergy/powerio/blob/main/docs/format-fidelity.md).
 
 ## Matrices
