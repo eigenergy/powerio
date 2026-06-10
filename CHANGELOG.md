@@ -10,8 +10,9 @@ First release.
 - `Network`, the one canonical model, with `to_normalized` deriving a
   per-unit / radian / filtered / reindexed view.
 - C ABI (`powerio-capi`, ABI version 3): parse, query, convert, JSON
-  transport, and Arrow C Data Interface export behind `--features arrow`;
-  cbindgen-generated header, version handshake, panic-safe boundary.
+  transport, an Arrow C Data Interface export behind `--features arrow`, and a
+  gridfm-datakit Parquet reader behind `--features gridfm`; cbindgen-generated
+  header, version handshake, panic-safe boundary.
 - Python bindings (`pip install powerio`) with `matrix`, `graph`, and
   `gridfm` extras, plus an MCP convert/validate server.
 - `powerio-matrix`: admittance and Laplacian builders over the parsed

@@ -1016,15 +1016,33 @@ pub fn read_gridfm_scenarios(dir: impl AsRef<Path>) -> Result<Vec<GridfmRead>> {
     let gens = gen_columns(&read_parquet(&raw.join("gen_data.parquet"))?)?;
     let branch = branch_columns(&read_parquet(&raw.join("branch_data.parquet"))?)?;
 
-    let mut ids = bus.scenario.clone();
-    ids.sort_unstable();
-    ids.dedup();
-
-    ids.into_iter()
+    distinct_sorted(&bus.scenario)
+        .into_iter()
         .map(|s| {
             build_network_from_columns(&bus, &gens, &branch, s, base_mva, &name, warnings.clone())
         })
         .collect()
+}
+
+/// The distinct scenario ids in a gridfm dataset, ascending — the keys
+/// [`read_gridfm_scenarios`] rebuilds a [`Network`] for. Reads only `bus_data`'s
+/// scenario column, so it enumerates a dataset's scenarios without rebuilding
+/// every network; the C ABI's `pio_gridfm_scenario_ids` is a thin wrapper over it.
+///
+/// # Errors
+/// Propagates the directory resolution and `bus_data.parquet` read errors.
+pub fn gridfm_scenario_ids(dir: impl AsRef<Path>) -> Result<Vec<i64>> {
+    let raw = resolve_raw_dir(dir.as_ref())?;
+    let bus = bus_columns(&read_parquet(&raw.join("bus_data.parquet"))?)?;
+    Ok(distinct_sorted(&bus.scenario))
+}
+
+/// The distinct values of `scenario`, ascending.
+fn distinct_sorted(scenario: &[i64]) -> Vec<i64> {
+    let mut ids = scenario.to_vec();
+    ids.sort_unstable();
+    ids.dedup();
+    ids
 }
 
 /// The unperturbed base case: [`read_gridfm_dataset`] at `scenario = 0` (datakit's

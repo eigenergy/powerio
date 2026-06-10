@@ -19,7 +19,10 @@ graph views for any downstream solver. (Planned) feeds the GridFM ML pipeline.
   (`python/powerio/`); hands back COO triplets that scipy assembles.
 - **`powerio-capi`**: C ABI over `powerio` (`pio_*`, header `powerio.h`) for
   C, C++, Julia, and other FFI users. `--features arrow` adds
-  `pio_export_arrow`, an Arrow C Data Interface export.
+  `pio_export_arrow`, an Arrow C Data Interface export; `--features gridfm` adds
+  `pio_read_gridfm` / `pio_gridfm_scenario_ids` (the gridfm-datakit Parquet
+  reader, pulling in `powerio-matrix`). Both are additive/feature-gated, so no
+  ABI bump.
 
 `Network` is the one canonical model (format neutral, loads/shunts first class);
 `IndexedNetwork` is the dense indexed analysis view derived from it.

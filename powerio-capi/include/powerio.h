@@ -19,6 +19,9 @@
  * Optional: build with `--features arrow` to get pio_export_arrow, a raw
  * network export over the Arrow C Data Interface (guarded by PIO_ARROW).
  *
+ * Optional: build with `--features gridfm` to get pio_read_gridfm and
+ * pio_gridfm_scenario_ids, the gridfm-datakit Parquet reader (guarded by PIO_GRIDFM).
+ *
  * Checked in and generated; regenerate from the Rust source with
  *   cbindgen --config cbindgen.toml --crate powerio-capi --output include/powerio.h
  */
@@ -202,6 +205,39 @@ char *pio_convert_file(const char *path,
                        size_t warnlen,
                        char *errbuf,
                        size_t errlen);
+
+#if defined(PIO_GRIDFM)
+/**
+ * Read one scenario of a gridfm-datakit Parquet dataset into a network handle —
+ * the inverse of the gridfm writer. `dir` resolves leniently: the `raw/` leaf
+ * holding the parquet files, a `<case>/` directory with a `raw/` child, or a
+ * parent with one `*/raw/` child. Returns `NULL` on error and writes the message
+ * into `errbuf`; the lossy read's fidelity warnings (what the gridfm schema
+ * couldn't round-trip) are written `\n`-joined into `warnbuf`. Free the handle
+ * with [`pio_network_free`]. Built `--features gridfm`.
+ */
+PioNetwork *pio_read_gridfm(const char *dir,
+                            int64_t scenario,
+                            char *warnbuf,
+                            size_t warnlen,
+                            char *errbuf,
+                            size_t errlen);
+#endif
+
+#if defined(PIO_GRIDFM)
+/**
+ * Write a gridfm dataset's distinct scenario ids (ascending) into `out`, up to
+ * `cap` entries, and return the total count. Call once with `cap == 0` (or `out`
+ * NULL) to size, allocate, then call again to fill — the standard count/buffer
+ * pattern of [`pio_bus_ids`]. Returns `-1` on error and writes the message into
+ * `errbuf`. Built `--features gridfm`.
+ */
+ptrdiff_t pio_gridfm_scenario_ids(const char *dir,
+                                  int64_t *out,
+                                  size_t cap,
+                                  char *errbuf,
+                                  size_t errlen);
+#endif
 
 /**
  * Free a string returned by [`pio_to_matpower`], [`pio_to_format`],

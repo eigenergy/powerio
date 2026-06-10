@@ -1738,6 +1738,8 @@ version = "0.0.1"
 dependencies = [
  "arrow",
  "powerio",
+ "powerio-matrix",
+ "tempfile",
 ]
 
 [[package]]
