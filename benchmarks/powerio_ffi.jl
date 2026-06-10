@@ -24,7 +24,7 @@ function pio_parse_file(path::AbstractString)
     return h
 end
 
-pio_free(h::Ptr{Cvoid}) = ccall((:pio_case_free, LIBPOWERIO), Cvoid, (Ptr{Cvoid},), h)
+pio_free(h::Ptr{Cvoid}) = ccall((:pio_network_free, LIBPOWERIO), Cvoid, (Ptr{Cvoid},), h)
 
 pio_n_buses(h)    = Int(ccall((:pio_n_buses, LIBPOWERIO),    Csize_t, (Ptr{Cvoid},), h))
 pio_n_branches(h) = Int(ccall((:pio_n_branches, LIBPOWERIO), Csize_t, (Ptr{Cvoid},), h))

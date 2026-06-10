@@ -89,7 +89,7 @@ def check_case(path):
     # --- counts ---------------------------------------------------------
     n = len(case.buses)
     m = len(case.branches)
-    ng = len(case.gens)
+    ng = len(case.generators)
     if n != bus.shape[0]:
         problems.append(f"bus count: powerio={n} pandapower={bus.shape[0]}")
     if m != branch.shape[0]:
@@ -133,7 +133,7 @@ def check_case(path):
     check_vec(problems, "branch.shift", [b["shift"] for b in br], branch[:, SHIFT])
 
     # --- generators (file order) ----------------------------------------
-    gn = case.gens
+    gn = case.generators
     for k in range(ng):
         cgb = gn[k]["bus"]
         pgb = int(gen[k, GEN_BUS]) + 1
