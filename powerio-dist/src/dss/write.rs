@@ -330,13 +330,15 @@ impl DssWriter {
             let r = take_seq("rs", &mut extras);
             let x = take_seq("xs", &mut extras);
             if let (Some((r1, r0)), Some((x1, x0))) = (r, x) {
+                // Lowercase keys in sorted order: a reparse keeps these in
+                // extras and the next write emits them from there verbatim.
                 let _ = write!(
                     s,
-                    " Z1=({}, {}) Z0=({}, {})",
-                    num(r1),
-                    num(x1),
+                    " z0=({}, {}) z1=({}, {})",
                     num(r0),
-                    num(x0)
+                    num(x0),
+                    num(r1),
+                    num(x1)
                 );
             }
             s.push_str(&self.extras_tail("vsource", &vs.name, &extras));
