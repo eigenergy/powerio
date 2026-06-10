@@ -43,7 +43,7 @@ struct ArrowSchema;
  * was built against (the `PIO_ABI_VERSION` macro in `powerio.h`) and refuses a
  * mismatched library instead of calling in blind.
  */
-#define PIO_ABI_VERSION 2
+#define PIO_ABI_VERSION 3
 
 /**
  * A comfortable error-buffer size: pass a `char[PIO_ERRBUF_MIN]` to any

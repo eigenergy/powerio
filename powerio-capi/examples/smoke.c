@@ -1,8 +1,8 @@
-﻿/* C ABI smoke test: drive powerio-capi from C the way a real consumer would.
+/* C ABI smoke test: drive powerio-capi from C the way a real consumer would.
  *
  * Built and run in CI against the checked-in static library, so a break in the
  * ABI (or the header drifting from the Rust source) fails the build rather than
- * silently shipping. Not a unit test â€” it asserts the calls work end to end and
+ * silently shipping. Not a unit test — it asserts the calls work end to end and
  * returns non-zero on any failure.
  *
  *   cc -I powerio-capi/include powerio-capi/examples/smoke.c \

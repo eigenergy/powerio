@@ -125,7 +125,7 @@ unsafe fn finish_network(
 /// require a bump). A consumer compares [`pio_abi_version`] against the value it
 /// was built against (the `PIO_ABI_VERSION` macro in `powerio.h`) and refuses a
 /// mismatched library instead of calling in blind.
-pub const PIO_ABI_VERSION: u32 = 2;
+pub const PIO_ABI_VERSION: u32 = 3;
 
 /// A comfortable error-buffer size: pass a `char[PIO_ERRBUF_MIN]` to any
 /// `errbuf`/`warnbuf` parameter and a message always fits without truncation.

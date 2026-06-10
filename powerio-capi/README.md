@@ -1,4 +1,4 @@
-﻿# powerio-capi
+# powerio-capi
 
 A C ABI over `powerio`: parse any supported power system case format, query it,
 convert it, and pull out the numeric tables a solver needs to assemble matrices.
@@ -11,7 +11,7 @@ The header is
 
 ```
 cargo build -p powerio-capi --release
-# â†’ target/release/libpowerio_capi.{so,dylib}  (cdylib)
+# → target/release/libpowerio_capi.{so,dylib}  (cdylib)
 #   target/release/libpowerio_capi.a            (staticlib)
 ```
 
@@ -135,6 +135,23 @@ Every entry point is hardened at the boundary:
 - The table extractors (`pio_branches`, `pio_gens`, ...) write exactly the
   matching `pio_n_*` count of elements into each non-NULL buffer; the caller
   must size them accordingly.
+
+## ABI history
+
+Compare `pio_abi_version()` against the `PIO_ABI_VERSION` your binary was
+compiled against before any other call; a mismatch means the library and the
+header disagree on the contract below. Breaking changes bump the version,
+additive symbols do not.
+
+| ABI | Breaking change |
+|---|---|
+| 1 | First versioned surface: opaque handles, typed extractors, JSON transport (#54). |
+| 2 | `pio_parse` → `pio_parse_file`, `pio_convert` → `pio_convert_file`, `pio_write_matpower` → `pio_to_matpower` with an `errbuf` (#69). |
+| 3 | `pio_case_free` → `pio_network_free`; `PioCase` → `PioNetwork` (opaque typedef) (#77). |
+
+From v0.1.0 the ABI is additive only: new symbols may appear, but an existing
+signature never changes or disappears without a `PIO_ABI_VERSION` bump released
+in lockstep with PowerIO.jl.
 
 ## Scope
 
