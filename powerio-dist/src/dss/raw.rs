@@ -356,21 +356,32 @@ impl<L: Loader> Executor<'_, L> {
         }
     }
 
-    /// `var @name=value ...` defines parser variables.
+    /// `var @name=value ...` defines parser variables. TParserVar::Add
+    /// stores every value brace wrapped unless it begins with `@`;
+    /// CheckforVar unwraps the braces into a quoted token, so a definition
+    /// like `var @z=(8 1000 /)` still evaluates as RPN where it is used.
     fn do_var(&mut self, scan: &mut Scanner) {
         while let Some(p) = scan.next_param() {
             if p.value.text.is_empty() && p.name.is_none() {
                 break;
             }
             if let Some(name) = p.name {
-                self.raw
-                    .vars
-                    .insert(name.to_ascii_lowercase(), p.value.text);
+                let stored = if p.value.text.starts_with('@') {
+                    p.value.text
+                } else {
+                    format!("{{{}}}", p.value.text)
+                };
+                self.raw.vars.insert(name.to_ascii_lowercase(), stored);
             }
         }
     }
 
-    /// `Class.Name.Prop=value ...`: set props on an existing object.
+    /// A leading `name=value` parameter is a property reference
+    /// (ExecCommands ProcessCommand): `Class.Name.Prop=value`,
+    /// `Name.Prop=value` with the class omitted, or `Prop=value` on the
+    /// active object. ParseObjName cuts the object part at the second dot;
+    /// SetObject resolves an omitted class to the last referenced one,
+    /// which here is the active object's class.
     fn edit_property_reference(
         &mut self,
         spec: &str,
@@ -378,34 +389,70 @@ impl<L: Loader> Executor<'_, L> {
         scan: &mut Scanner,
         ctx: &dyn Fn(String) -> String,
     ) {
-        let parts: Vec<&str> = spec.split('.').collect();
-        if parts.len() < 3 {
-            self.raw.warn(ctx(format!(
-                "cannot interpret `{spec}=` as object property"
-            )));
-            return;
-        }
-        let class = parts[0];
-        let name = parts[1..parts.len() - 1].join(".");
-        let prop = parts[parts.len() - 1];
-        let Some(idx) = self
-            .raw
-            .index
-            .get(&(class.to_ascii_lowercase(), name.to_ascii_lowercase()))
-            .copied()
-        else {
-            self.raw.warn(ctx(format!(
-                "property reference to unknown object `{class}.{name}`"
-            )));
-            return;
+        let (object, prop) = match spec.split_once('.') {
+            None => (None, spec),
+            Some((first, rest)) => match rest.split_once('.') {
+                None => (Some((None, first)), rest),
+                Some((name, prop)) => (Some((Some(first), name)), prop),
+            },
+        };
+        let active_or = |raw: &mut RawDss| {
+            let active = raw.active;
+            if active.is_none() {
+                raw.warn(ctx(format!("`{spec}=` with no active object")));
+            }
+            active
+        };
+        let idx = match object {
+            None => match active_or(&mut self.raw) {
+                Some(idx) => idx,
+                None => return,
+            },
+            Some((class, name)) => {
+                let class = match class {
+                    Some(c) => c.to_ascii_lowercase(),
+                    None => match active_or(&mut self.raw) {
+                        Some(idx) => self.raw.objects[idx].class.clone(),
+                        None => return,
+                    },
+                };
+                if let Some(idx) = self
+                    .raw
+                    .index
+                    .get(&(class.clone(), name.to_ascii_lowercase()))
+                    .copied()
+                {
+                    idx
+                } else {
+                    self.raw.warn(ctx(format!(
+                        "property reference to unknown object `{class}.{name}`"
+                    )));
+                    return;
+                }
+            }
         };
         self.raw.active = Some(idx);
+        let table = prop_table(&self.raw.objects[idx].class);
+        let name = match table {
+            Some(c) => {
+                if let Some(i) = c.prop_index(prop) {
+                    c.props[i].to_string()
+                } else {
+                    self.raw.warn(ctx(format!(
+                        "unknown property `{prop}` on {}; kept as written",
+                        c.name
+                    )));
+                    prop.to_ascii_lowercase()
+                }
+            }
+            None => prop.to_ascii_lowercase(),
+        };
         let mut props = vec![RawProp {
-            name: Some(prop.to_ascii_lowercase()),
+            name: Some(name),
             value,
         }];
         props.extend(collect_props_for(
-            prop_table(&self.raw.objects[idx].class),
+            table,
             scan,
             Some(prop),
             &mut self.raw.warnings,
@@ -510,7 +557,15 @@ impl<L: Loader> Executor<'_, L> {
                 let dir = path.parent().map(Path::to_path_buf).unwrap_or_default();
                 self.dirs.push(dir);
                 self.run_script(&text, &path.display().to_string());
-                self.dirs.pop();
+                // The engine keeps one current directory: Redirect restores
+                // the caller's on return, Compile leaves it wherever the
+                // compiled script ended (ExecHelper DoRedirect restores
+                // SaveDir only when not compiling), so the caller's later
+                // relative paths follow the compiled file.
+                let ended = self.dirs.pop().unwrap_or_default();
+                if compile && let Some(top) = self.dirs.last_mut() {
+                    *top = ended;
+                }
             }
             Err(e) => {
                 let verb = if compile { "compile" } else { "redirect" };
@@ -664,6 +719,10 @@ fn collect_props_for(
                     pointer = Some(i);
                     Some(c.props[i].to_string())
                 } else {
+                    // Getcommand yields 0 for an unknown name, so the next
+                    // positional lands on property 1 (the class Edit loops:
+                    // `ParamPointer = CommandList.Getcommand(ParamName)`).
+                    pointer = None;
                     warnings.push(ctx(format!(
                         "unknown property `{written}` on {}; kept as written",
                         c.name
@@ -760,6 +819,17 @@ mod tests {
     }
 
     #[test]
+    fn unknown_property_resets_the_positional_pointer() {
+        // `ParamPointer = Getcommand("bogus")` is 0 in the engine, so the
+        // next positional gets property 1 (bus1), not the one after r1.
+        let raw = parse("New Line.l1 r1=0.1 bogus=2 0.5");
+        let l = raw.find("line", "l1").unwrap();
+        assert_eq!(l.get("bus1").unwrap().text, "0.5");
+        assert!(l.get("x1").is_none());
+        assert_eq!(raw.warnings.len(), 1);
+    }
+
+    #[test]
     fn tilde_continues_the_active_object() {
         let raw = parse("New Load.ld bus1=b1\n~ kW=15 kvar=3\nMore pf=0.9");
         let ld = raw.find("load", "ld").unwrap();
@@ -795,6 +865,34 @@ mod tests {
         let l = raw.find("line", "l1").unwrap();
         assert_eq!(l.get("length").unwrap().text, "3");
         assert_eq!(l.get("phases").unwrap().text, "2");
+    }
+
+    #[test]
+    fn property_reference_resolves_abbreviations() {
+        let raw = parse("New Line.l1 bus1=a\nLine.l1.Len=2.5");
+        let l = raw.find("line", "l1").unwrap();
+        assert_eq!(l.get("length").unwrap().text, "2.5");
+        assert!(raw.warnings.is_empty());
+    }
+
+    #[test]
+    fn bare_property_edits_the_active_object() {
+        let raw = parse("New Line.l1 bus1=a bus2=b\nlength=2.5");
+        let l = raw.find("line", "l1").unwrap();
+        assert_eq!(l.get("length").unwrap().text, "2.5");
+        assert!(raw.warnings.is_empty());
+    }
+
+    #[test]
+    fn classless_reference_uses_the_active_class() {
+        // SetObject with no dot in the spec looks the name up in the last
+        // referenced class, line here via the active object.
+        let raw = parse("New Line.l1 bus1=a\nNew Line.l2 bus1=b\nl1.length=7 phases=2");
+        let l1 = raw.find("line", "l1").unwrap();
+        assert_eq!(l1.get("length").unwrap().text, "7");
+        assert_eq!(l1.get("phases").unwrap().text, "2");
+        assert!(raw.find("line", "l2").unwrap().get("length").is_none());
+        assert!(raw.warnings.is_empty());
     }
 
     #[test]
@@ -880,10 +978,55 @@ mod tests {
     }
 
     #[test]
+    fn compile_moves_the_directory_redirect_restores_it() {
+        // After `Compile sub/feeder.dss`, the caller's relative paths
+        // resolve against sub/; after a Redirect they resolve against the
+        // caller's own directory again. Both directories carry a lines.dss
+        // so the wrong resolution shows up as the wrong object.
+        let root = std::env::temp_dir().join(format!("powerio-dist-raw-{}", std::process::id()));
+        let sub = root.join("sub");
+        std::fs::create_dir_all(&sub).unwrap();
+        std::fs::write(sub.join("feeder.dss"), "New Linecode.lc1 nphases=3").unwrap();
+        std::fs::write(sub.join("lines.dss"), "New Line.fromsub bus1=a").unwrap();
+        std::fs::write(root.join("lines.dss"), "New Line.fromroot bus1=a").unwrap();
+        std::fs::write(
+            root.join("compile.dss"),
+            "Compile sub/feeder.dss\nRedirect lines.dss",
+        )
+        .unwrap();
+        std::fs::write(
+            root.join("redirect.dss"),
+            "Redirect sub/feeder.dss\nRedirect lines.dss",
+        )
+        .unwrap();
+
+        let compiled = parse_raw_file(root.join("compile.dss")).unwrap();
+        assert_eq!(compiled.warnings, Vec::<String>::new());
+        assert!(compiled.find("line", "fromsub").is_some());
+
+        let redirected = parse_raw_file(root.join("redirect.dss")).unwrap();
+        assert_eq!(redirected.warnings, Vec::<String>::new());
+        assert!(redirected.find("line", "fromroot").is_some());
+
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
     fn var_definition_and_use() {
         let raw = parse("var @kv=12.47\nNew Load.ld kv=@kv");
         let ld = raw.find("load", "ld").unwrap();
         assert_eq!(ld.get("kv").unwrap().text, "12.47");
+    }
+
+    #[test]
+    fn quoted_var_value_stays_rpn() {
+        // The braces TParserVar::Add wraps around the stored value come
+        // back off as a quoted token, so the substituted expression still
+        // evaluates as RPN.
+        let raw = parse("var @z=(8 1000 /)\nNew Load.ld kW=@z");
+        let v = raw.find("load", "ld").unwrap().get("kw").unwrap();
+        assert!(v.quoted);
+        assert_eq!(v.to_f64(None), Ok(0.008));
     }
 
     #[test]

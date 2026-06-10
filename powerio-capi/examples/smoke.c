@@ -137,8 +137,9 @@ int main(int argc, char **argv) {
         CHECK(d != NULL, err);
 
         char warn[1024];
-        ptrdiff_t nw = pio_dist_warnings(d, warn, sizeof warn);
-        CHECK(nw >= 0, "pio_dist_warnings failed on a valid handle");
+        char *w = pio_dist_warnings(d, err, sizeof err);
+        CHECK(w != NULL, err);
+        pio_string_free(w);
 
         char *bmopf = pio_dist_to_format(d, "bmopf", warn, sizeof warn, err, sizeof err);
         CHECK(bmopf != NULL, err);
@@ -152,15 +153,17 @@ int main(int argc, char **argv) {
         pio_string_free(echo2);
         pio_dist_network_free(d);
 
-        /* One-shot string conversion into PMD ENGINEERING JSON. */
-        char *pmd = pio_dist_convert_str(dss, "dss", "pmd", warn, sizeof warn, err, sizeof err);
+        /* One-shot string conversion into PMD ENGINEERING JSON; parameter
+         * order is input, target, source, like pio_dist_convert_file. */
+        char *pmd = pio_dist_convert_str(dss, "pmd", "dss", warn, sizeof warn, err, sizeof err);
         CHECK(pmd != NULL, err);
         CHECK(strstr(pmd, "\"data_model\": \"ENGINEERING\"") != NULL,
               "PMD output lost the data_model marker");
         pio_string_free(pmd);
 
         /* NULL handle is the documented safe default. */
-        CHECK(pio_dist_warnings(NULL, NULL, 0) == -1, "NULL dist handle did not return -1");
+        CHECK(pio_dist_warnings(NULL, err, sizeof err) == NULL,
+              "NULL dist handle did not return NULL");
         printf("dist surface OK\n");
     }
 #endif

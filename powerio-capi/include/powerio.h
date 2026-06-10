@@ -220,7 +220,7 @@ char *pio_convert_file(const char *path,
 
 /**
  * Free a string returned by [`pio_to_matpower`], [`pio_to_format`],
- * [`pio_convert_file`], [`pio_to_json`], or any `pio_dist_*` converter.
+ * [`pio_convert_file`], [`pio_to_json`], or any `pio_dist_*` string output.
  */
 void pio_string_free(char *s);
 
@@ -348,10 +348,12 @@ void pio_dist_network_free(PioDistNetwork *net);
 /**
  * Parse warnings retained on the handle: everything the reader could not
  * represent or had to assume (the loud half of the fidelity contract).
- * Writes them `\n`-joined into `warnbuf` (NULL/0 to skip) and returns the
- * warning count, or `-1` if `net` is NULL.
+ * Returns them `\n`-joined as an owned C string (free with
+ * [`pio_string_free`]; empty string when there are none), `NULL` on error.
+ * Warning text is unbounded, so this is an owned string, never a fixed
+ * caller buffer.
  */
-ptrdiff_t pio_dist_warnings(const PioDistNetwork *net, char *warnbuf, size_t warnlen);
+char *pio_dist_warnings(const PioDistNetwork *net, char *errbuf, size_t errlen);
 #endif
 
 #if defined(PIO_DIST)
@@ -390,15 +392,17 @@ char *pio_dist_convert_file(const char *path,
 
 #if defined(PIO_DIST)
 /**
- * Convert in-memory distribution case `text` from format `from` to format
- * `to` (both required; `dss`, `pmd`, or `bmopf`). Returns the converted text
- * as an owned C string (free with [`pio_string_free`]), `NULL` on error. The
- * warnings written `\n`-joined into `warnbuf` carry both the parse warnings
- * and the writer's fidelity losses (there is no handle to query them from).
+ * Convert in-memory distribution case `text` of format `from` to format
+ * `to` (both required; `dss`, `pmd`, or `bmopf`). The parameter order is
+ * input, target, source, matching [`pio_dist_convert_file`]. Returns the
+ * converted text as an owned C string (free with [`pio_string_free`]),
+ * `NULL` on error. The warnings written `\n`-joined into `warnbuf` carry
+ * both the parse warnings and the writer's fidelity losses (there is no
+ * handle to query them from).
  */
 char *pio_dist_convert_str(const char *text,
-                           const char *from,
                            const char *to,
+                           const char *from,
                            char *warnbuf,
                            size_t warnlen,
                            char *errbuf,

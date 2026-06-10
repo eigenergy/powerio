@@ -141,6 +141,7 @@ class!(
         "zipv",
         "%seriesrl",
         "relweight",
+        "vlowpu",
         "puxharm",
         "xrharm",
         // inherited
@@ -469,6 +470,18 @@ mod tests {
         assert_eq!(TRANSFORMER.prop_index("%R"), Some(8));
         assert_eq!(TRANSFORMER.prop_index("%Rs"), Some(36));
         assert_eq!(TRANSFORMER.prop_index("%loadloss"), Some(25));
+    }
+
+    #[test]
+    fn load_positions_match_the_engine() {
+        // Load.cpp DefineProperties: RelWeight 35, Vlowpu 36, puXharm 37,
+        // XRharm 38 (1-based); a missing slot would shift every later
+        // positional assignment.
+        assert_eq!(LOAD.prop_index("relweight"), Some(34));
+        assert_eq!(LOAD.prop_index("vlowpu"), Some(35));
+        assert_eq!(LOAD.prop_index("puxharm"), Some(36));
+        assert_eq!(LOAD.prop_index("xrharm"), Some(37));
+        assert_eq!(LOAD.props.len(), 38 + 4); // 38 own + spectrum, basefreq, enabled, like
     }
 
     #[test]

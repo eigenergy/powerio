@@ -218,6 +218,271 @@ fn dss_to_pmd_reproduces_the_reference_essentials() {
     }
 }
 
+fn rewrite(text: &str) -> serde_json::Value {
+    let net = parse_pmd_str(text).unwrap();
+    serde_json::from_str(&write_pmd_json(&net).text).unwrap()
+}
+
+/// A non ENABLED status survives the round trip on every component class
+/// instead of silently re-enabling.
+#[test]
+fn disabled_status_round_trips() {
+    let text = r#"{
+        "data_model": "ENGINEERING",
+        "bus": {
+            "b1": {"terminals": [1, 2, 3, 4], "grounded": [4], "rg": [0.0], "xg": [0.0], "status": "DISABLED"},
+            "b2": {"terminals": [1, 2, 3, 4], "grounded": [4], "rg": [0.0], "xg": [0.0], "status": "ENABLED"}
+        },
+        "linecode": {"lc": {"rs": [[0.1]], "xs": [[0.1]], "g_fr": [[0.0]], "g_to": [[0.0]], "b_fr": [[0.0]], "b_to": [[0.0]]}},
+        "line": {"ln": {"f_bus": "b1", "t_bus": "b2", "f_connections": [1], "t_connections": [1],
+            "linecode": "lc", "length": 10.0, "status": "DISABLED"}},
+        "switch": {"sw": {"f_bus": "b1", "t_bus": "b2", "f_connections": [1], "t_connections": [1],
+            "state": "CLOSED", "status": "DISABLED"}},
+        "load": {"ld": {"bus": "b1", "connections": [1, 4], "configuration": "WYE",
+            "pd_nom": [5.0], "qd_nom": [1.0], "status": "DISABLED"}},
+        "generator": {"gn": {"bus": "b1", "connections": [1, 2, 3, 4], "configuration": "WYE",
+            "pg": [10.0, 10.0, 10.0], "qg": [0.0, 0.0, 0.0], "status": "DISABLED"}},
+        "shunt": {"sh": {"bus": "b1", "connections": [1, 4], "gs": [[0.0]], "bs": [[1.0]], "status": "DISABLED"}},
+        "voltage_source": {"src": {"bus": "b1", "connections": [1, 2, 3, 4],
+            "vm": [7.2, 7.2, 7.2, 0.0], "va": [0.0, -120.0, 120.0, 0.0], "status": "DISABLED"}},
+        "transformer": {"tr": {"bus": ["b1", "b2"], "connections": [[1, 2, 3, 4], [1, 2, 3, 4]],
+            "configuration": ["WYE", "WYE"], "polarity": [1, 1], "rw": [0.01, 0.01], "xsc": [0.05],
+            "sm_nom": [500.0, 500.0], "vm_nom": [12.47, 4.16],
+            "tm_set": [[1.0, 1.0, 1.0], [1.0, 1.0, 1.0]], "status": "DISABLED"}}
+    }"#;
+    let net = parse_pmd_str(text).unwrap();
+    assert!(
+        net.warnings
+            .iter()
+            .any(|w| w.contains("status DISABLED kept in extras"))
+    );
+    let out = rewrite(text);
+    for (class, name) in [
+        ("bus", "b1"),
+        ("line", "ln"),
+        ("switch", "sw"),
+        ("load", "ld"),
+        ("generator", "gn"),
+        ("shunt", "sh"),
+        ("voltage_source", "src"),
+        ("transformer", "tr"),
+    ] {
+        assert_eq!(out[class][name]["status"], "DISABLED", "{class} {name}");
+    }
+    // Untouched elements stay enabled.
+    assert_eq!(out["bus"]["b2"]["status"], "ENABLED");
+}
+
+/// A euro (lead) Dy transformer: polarity [1, 1] with unrolled secondary
+/// connections must come back verbatim, not flipped to the ANSI lag roll.
+#[test]
+fn euro_lead_transformer_round_trips() {
+    let text = r#"{
+        "data_model": "ENGINEERING",
+        "transformer": {"tr": {"bus": ["b1", "b2"],
+            "connections": [[1, 2, 3], [1, 2, 3, 4]],
+            "configuration": ["DELTA", "WYE"], "polarity": [1, 1],
+            "rw": [0.01, 0.01], "xsc": [0.05],
+            "sm_nom": [500.0, 500.0], "vm_nom": [12.47, 4.16],
+            "tm_set": [[1.0, 1.0, 1.0], [1.0, 1.0, 1.0]], "status": "ENABLED"}}
+    }"#;
+    let net = parse_pmd_str(text).unwrap();
+    // No undo: the file is not in the lag convention, so the model holds
+    // the connections as written and the raw polarity rides in extras.
+    let t = &net.transformers[0];
+    assert_eq!(t.windings[1].terminal_map, vec!["1", "2", "3", "4"]);
+    assert!(t.extras.contains_key("pmd_polarity"));
+
+    let out = rewrite(text);
+    assert_eq!(
+        out["transformer"]["tr"]["polarity"],
+        serde_json::json!([1, 1])
+    );
+    assert_eq!(
+        out["transformer"]["tr"]["connections"],
+        serde_json::json!([[1, 2, 3], [1, 2, 3, 4]])
+    );
+}
+
+/// The ANSI lag Dy transformer (the dss2eng output: polarity -1 with the
+/// barrel rolled secondary) reproduces its input through the model.
+#[test]
+fn ansi_lag_transformer_round_trips() {
+    let text = r#"{
+        "data_model": "ENGINEERING",
+        "transformer": {"tr": {"bus": ["b1", "b2"],
+            "connections": [[1, 2, 3], [2, 3, 1, 4]],
+            "configuration": ["DELTA", "WYE"], "polarity": [1, -1],
+            "rw": [0.01, 0.01], "xsc": [0.05],
+            "sm_nom": [500.0, 500.0], "vm_nom": [12.47, 4.16],
+            "tm_set": [[1.0, 1.0, 1.0], [1.0, 1.0, 1.0]], "status": "ENABLED"}}
+    }"#;
+    let net = parse_pmd_str(text).unwrap();
+    // The roll is undone in the model (the dss source order) and nothing
+    // needs a stash: the writer's lag convention reproduces the file.
+    let t = &net.transformers[0];
+    assert_eq!(t.windings[1].terminal_map, vec!["1", "2", "3", "4"]);
+    assert!(!t.extras.contains_key("pmd_polarity"));
+
+    let out = rewrite(text);
+    assert_eq!(
+        out["transformer"]["tr"]["polarity"],
+        serde_json::json!([1, -1])
+    );
+    assert_eq!(
+        out["transformer"]["tr"]["connections"],
+        serde_json::json!([[1, 2, 3], [2, 3, 1, 4]])
+    );
+}
+
+/// A line with inline impedance (the dss2eng output for rmatrix defined
+/// lines) keeps its matrices: the reader materializes a linecode and the
+/// writer re-inlines it without a linecode key.
+#[test]
+fn inline_line_impedance_round_trips() {
+    let text = r#"{
+        "data_model": "ENGINEERING",
+        "bus": {
+            "b1": {"terminals": [1, 2], "grounded": [], "rg": [], "xg": [], "status": "ENABLED"},
+            "b2": {"terminals": [1, 2], "grounded": [], "rg": [], "xg": [], "status": "ENABLED"}
+        },
+        "line": {"ln1": {"f_bus": "b1", "t_bus": "b2",
+            "f_connections": [1, 2], "t_connections": [1, 2], "length": 304.8,
+            "rs": [[0.1, 0.02], [0.02, 0.1]], "xs": [[0.2, 0.05], [0.05, 0.2]],
+            "g_fr": [[0.0, 0.0], [0.0, 0.0]], "g_to": [[0.0, 0.0], [0.0, 0.0]],
+            "b_fr": [[1.7, -0.4], [-0.4, 1.7]], "b_to": [[1.7, -0.4], [-0.4, 1.7]],
+            "cm_ub": [400.0, 400.0], "status": "ENABLED"}}
+    }"#;
+    let net = parse_pmd_str(text).unwrap();
+    let l = &net.lines[0];
+    assert_eq!(l.linecode, "ln1_z");
+    assert_eq!(l.extras.get("pmd_inline"), Some(&serde_json::json!(true)));
+    let c = net.linecode("ln1_z").unwrap();
+    assert!((c.r_series[0][1] - 0.02).abs() < 1e-15);
+    assert_eq!(c.i_max.as_deref(), Some(&[400.0, 400.0][..]));
+    assert!(net.warnings.iter().any(|w| w.contains("materialized")));
+
+    let input: serde_json::Value = serde_json::from_str(text).unwrap();
+    let out = rewrite(text);
+    let line = &out["line"]["ln1"];
+    for key in ["rs", "xs", "g_fr", "g_to", "b_fr", "b_to", "cm_ub"] {
+        assert_eq!(line[key], input["line"]["ln1"][key], "{key}");
+    }
+    assert!(line.get("linecode").is_none());
+    // The materialized linecode does not leak into the linecode section.
+    assert!(out.get("linecode").is_none());
+}
+
+/// Per phase taps and custom bounds survive: the raw tm_* arrays ride in
+/// extras and the writer prefers them over the engine defaults.
+#[test]
+#[allow(clippy::float_cmp)]
+fn per_phase_taps_round_trip() {
+    let text = r#"{
+        "data_model": "ENGINEERING",
+        "transformer": {"reg": {"bus": ["b1", "b2"],
+            "connections": [[1, 2, 3, 4], [1, 2, 3, 4]],
+            "configuration": ["WYE", "WYE"], "polarity": [1, 1],
+            "rw": [0.005, 0.005], "xsc": [0.01],
+            "sm_nom": [1666.0, 1666.0], "vm_nom": [2.4, 2.4],
+            "tm_set": [[1.0, 1.0, 1.0], [1.05625, 1.04375, 1.05]],
+            "tm_lb": [[0.85, 0.85, 0.85], [0.85, 0.85, 0.85]],
+            "tm_ub": [[1.15, 1.15, 1.15], [1.15, 1.15, 1.15]],
+            "tm_fix": [[true, true, true], [false, false, false]],
+            "tm_step": [[0.0625, 0.0625, 0.0625], [0.0625, 0.0625, 0.0625]],
+            "status": "ENABLED"}}
+    }"#;
+    let net = parse_pmd_str(text).unwrap();
+    assert_eq!(net.transformers[0].windings[1].tap, 1.05625);
+    assert!(net.warnings.iter().any(|w| w.contains("per phase taps")));
+
+    let input: serde_json::Value = serde_json::from_str(text).unwrap();
+    let out = rewrite(text);
+    for key in ["tm_set", "tm_lb", "tm_ub", "tm_fix", "tm_step"] {
+        assert_eq!(
+            out["transformer"]["reg"][key], input["transformer"]["reg"][key],
+            "{key}"
+        );
+    }
+}
+
+/// The settings object and files array come back verbatim from the
+/// reader's stash instead of being resynthesized.
+#[test]
+fn settings_and_files_round_trip() {
+    let text = r#"{
+        "data_model": "ENGINEERING",
+        "files": ["a.dss", "b.dss"],
+        "settings": {"base_frequency": 50.0, "power_scale_factor": 1000.0,
+            "voltage_scale_factor": 1000.0, "sbase_default": 500.0,
+            "vbases_default": {"slack": 7.2}},
+        "bus": {"slack": {"terminals": [1], "grounded": [], "rg": [], "xg": [], "status": "ENABLED"}}
+    }"#;
+    let input: serde_json::Value = serde_json::from_str(text).unwrap();
+    let out = rewrite(text);
+    assert_eq!(out["settings"], input["settings"]);
+    assert_eq!(out["files"], input["files"]);
+}
+
+/// dss sourced settings synthesize with the dss2eng conventions: the vbase
+/// is basekv over sqrt(phases) without the pu factor, sbase the basemva
+/// default — matching the reference export bit for bit.
+#[test]
+fn dss_settings_match_the_reference() {
+    let net = parse_dss_file(fixture("opendss/ieee13/IEEE13Nodeckt.dss")).unwrap();
+    let out: serde_json::Value = serde_json::from_str(&write_pmd_json(&net).text).unwrap();
+    let reference: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(fixture("pmd/ieee13.json")).unwrap())
+            .unwrap();
+    // IEEE13 sets pu=1.0001; the vbase must not fold it in.
+    assert_eq!(
+        out["settings"]["vbases_default"],
+        reference["settings"]["vbases_default"]
+    );
+    assert_eq!(
+        out["settings"]["sbase_default"],
+        reference["settings"]["sbase_default"]
+    );
+}
+
+/// Nonzero bus grounding impedance comes back from the extras stash
+/// instead of zero vectors.
+#[test]
+fn grounding_impedance_round_trips() {
+    let text = r#"{
+        "data_model": "ENGINEERING",
+        "bus": {"b1": {"terminals": [1, 2, 3, 4], "grounded": [4],
+            "rg": [5.0], "xg": [12.0], "status": "ENABLED"}}
+    }"#;
+    let out = rewrite(text);
+    assert_eq!(out["bus"]["b1"]["rg"], serde_json::json!([5.0]));
+    assert_eq!(out["bus"]["b1"]["xg"], serde_json::json!([12.0]));
+}
+
+/// A switch's real series matrices win over the engine's 1e-7 dummy, and
+/// a linecode's sm_ub survives through s_max.
+#[test]
+fn switch_impedance_and_sm_ub_round_trip() {
+    let text = r#"{
+        "data_model": "ENGINEERING",
+        "linecode": {"lc": {"rs": [[0.1]], "xs": [[0.1]],
+            "g_fr": [[0.0]], "g_to": [[0.0]], "b_fr": [[0.0]], "b_to": [[0.0]],
+            "cm_ub": [400.0], "sm_ub": [600.0]}},
+        "switch": {"sw": {"f_bus": "b1", "t_bus": "b2",
+            "f_connections": [1, 2], "t_connections": [1, 2], "state": "CLOSED",
+            "rs": [[0.03, 0.01], [0.01, 0.03]], "xs": [[0.04, 0.02], [0.02, 0.04]],
+            "status": "ENABLED"}}
+    }"#;
+    let input: serde_json::Value = serde_json::from_str(text).unwrap();
+    let out = rewrite(text);
+    assert_eq!(out["switch"]["sw"]["rs"], input["switch"]["sw"]["rs"]);
+    assert_eq!(out["switch"]["sw"]["xs"], input["switch"]["sw"]["xs"]);
+    assert_eq!(
+        out["linecode"]["lc"]["sm_ub"],
+        input["linecode"]["lc"]["sm_ub"]
+    );
+}
+
 #[test]
 fn null_suffix_restoration() {
     let text = r#"{

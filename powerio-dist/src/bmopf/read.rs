@@ -77,12 +77,32 @@ fn string(v: Option<&Value>) -> String {
     v.and_then(Value::as_str).unwrap_or_default().to_string()
 }
 
-fn config(v: Option<&Value>) -> Configuration {
-    match v.and_then(Value::as_str) {
-        Some("DELTA") => Configuration::Delta,
-        Some("SINGLE_PHASE") => Configuration::SinglePhase,
-        _ => Configuration::Wye,
+/// Case insensitive on the recognized values (the dss reader's tolerance);
+/// a present but unrecognized string warns and reads as WYE.
+fn config(v: Option<&Value>, what: &str, warnings: &mut Vec<String>) -> Configuration {
+    let Some(s) = v.and_then(Value::as_str) else {
+        return Configuration::Wye;
+    };
+    match s.to_ascii_uppercase().as_str() {
+        "WYE" => Configuration::Wye,
+        "DELTA" => Configuration::Delta,
+        "SINGLE_PHASE" => Configuration::SinglePhase,
+        _ => {
+            warnings.push(format!(
+                "{what}: configuration `{s}` is not WYE, DELTA, or SINGLE_PHASE; read as WYE"
+            ));
+            Configuration::Wye
+        }
     }
+}
+
+/// Parses the `_i_j` tail of a `prefix_i_j` matrix key (1 based). None
+/// when the key is not a well formed entry for this prefix.
+fn matrix_indices(key: &str, prefix: &str) -> Option<(usize, usize)> {
+    let rest = key.strip_prefix(prefix)?.strip_prefix('_')?;
+    let (i, j) = rest.split_once('_')?;
+    let (i, j) = (i.parse::<usize>().ok()?, j.parse::<usize>().ok()?);
+    (i >= 1 && j >= 1).then_some((i, j))
 }
 
 /// Collects `prefix_i_j` keys into a square matrix; `n` is the largest
@@ -91,18 +111,9 @@ fn flat_matrix(o: &Map<String, Value>, prefix: &str) -> Option<Mat> {
     let mut entries: Vec<(usize, usize, f64)> = Vec::new();
     let mut n = 0;
     for (k, v) in o {
-        let Some(rest) = k.strip_prefix(prefix).and_then(|r| r.strip_prefix('_')) else {
+        let Some((i, j)) = matrix_indices(k, prefix) else {
             continue;
         };
-        let Some((i, j)) = rest.split_once('_') else {
-            continue;
-        };
-        let (Ok(i), Ok(j)) = (i.parse::<usize>(), j.parse::<usize>()) else {
-            continue;
-        };
-        if i == 0 || j == 0 {
-            continue;
-        }
         entries.push((i - 1, j - 1, f(v)));
         n = n.max(i).max(j);
     }
@@ -114,6 +125,20 @@ fn flat_matrix(o: &Map<String, Value>, prefix: &str) -> Option<Mat> {
         m[i][j] = v;
     }
     Some(m)
+}
+
+/// Grows `m` to `n` by `n`, preserving the existing entries.
+fn pad_to(m: Mat, n: usize) -> Mat {
+    if m.len() >= n {
+        return m;
+    }
+    let mut out = vec![vec![0.0; n]; n];
+    for (i, row) in m.into_iter().enumerate() {
+        for (j, v) in row.into_iter().enumerate() {
+            out[i][j] = v;
+        }
+    }
+    out
 }
 
 /// Element fields outside `known` go to extras with a warning.
@@ -131,7 +156,7 @@ fn take_extras(
         }
         if matrix_prefixes
             .iter()
-            .any(|p| k.strip_prefix(p).is_some_and(|r| r.starts_with('_')))
+            .any(|p| matrix_indices(k, p).is_some())
         {
             continue;
         }
@@ -214,18 +239,33 @@ impl Reader<'_> {
     fn linecodes(&mut self, items: &Map<String, Value>) {
         for (name, v) in items {
             let Value::Object(o) = v else { continue };
-            let r = flat_matrix(o, "R_series").unwrap_or_default();
-            let n = r.len();
-            let zero = || vec![vec![0.0; n]; n];
+            let mats = [
+                flat_matrix(o, "R_series"),
+                flat_matrix(o, "X_series"),
+                flat_matrix(o, "G_from"),
+                flat_matrix(o, "B_from"),
+                flat_matrix(o, "G_to"),
+                flat_matrix(o, "B_to"),
+            ];
+            // Conductor count is the widest matrix present; absent matrices
+            // read as zero, smaller ones pad without losing entries.
+            let n = mats.iter().flatten().map(Vec::len).max().unwrap_or(0);
+            if mats.iter().flatten().any(|m| m.len() < n) {
+                self.net.warnings.push(format!(
+                    "linecode {name}: matrix sizes disagree; smaller ones padded \
+                     with zeros to {n}x{n}"
+                ));
+            }
+            let [r, x, gf, bf, gt, bt] = mats.map(|m| pad_to(m.unwrap_or_default(), n));
             let code = DistLineCode {
                 name: name.clone(),
                 n_conductors: n,
-                x_series: flat_matrix(o, "X_series").unwrap_or_else(zero),
-                g_from: flat_matrix(o, "G_from").unwrap_or_else(zero),
-                b_from: flat_matrix(o, "B_from").unwrap_or_else(zero),
-                g_to: flat_matrix(o, "G_to").unwrap_or_else(zero),
-                b_to: flat_matrix(o, "B_to").unwrap_or_else(zero),
                 r_series: r,
+                x_series: x,
+                g_from: gf,
+                b_from: bf,
+                g_to: gt,
+                b_to: bt,
                 i_max: floats(o.get("i_max")),
                 s_max: floats(o.get("s_max")),
                 extras: take_extras(
@@ -311,7 +351,11 @@ impl Reader<'_> {
                 name: name.clone(),
                 bus: string(o.get("bus")),
                 terminal_map: strings(o.get("terminal_map")),
-                configuration: config(o.get("configuration")),
+                configuration: config(
+                    o.get("configuration"),
+                    &format!("load {name}"),
+                    &mut self.net.warnings,
+                ),
                 p_nom: floats(o.get("p_nom")).unwrap_or_default(),
                 q_nom: floats(o.get("q_nom")).unwrap_or_default(),
                 extras: take_extras(
@@ -352,7 +396,11 @@ impl Reader<'_> {
                 name: name.clone(),
                 bus: string(o.get("bus")),
                 terminal_map: strings(o.get("terminal_map")),
-                configuration: config(o.get("configuration")),
+                configuration: config(
+                    o.get("configuration"),
+                    &format!("generator {name}"),
+                    &mut self.net.warnings,
+                ),
                 p_nom: pinned(&p_min, &p_max),
                 q_nom: pinned(&q_min, &q_max),
                 p_min,
@@ -377,18 +425,20 @@ impl Reader<'_> {
             let g = flat_matrix(o, "G").unwrap_or_default();
             let b = flat_matrix(o, "B").unwrap_or_default();
             let n = g.len().max(b.len());
-            let pad = |mut m: Mat| {
-                if m.len() < n {
-                    m = vec![vec![0.0; n]; n];
-                }
-                m
-            };
+            if g.len() != b.len() {
+                self.net.warnings.push(format!(
+                    "shunt {name}: G is {gx}x{gx} but B is {bx}x{bx}; the smaller \
+                     padded with zeros to {n}x{n}",
+                    gx = g.len(),
+                    bx = b.len(),
+                ));
+            }
             self.net.shunts.push(DistShunt {
                 name: name.clone(),
                 bus: string(o.get("bus")),
                 terminal_map: strings(o.get("terminal_map")),
-                g: pad(g),
-                b: pad(b),
+                g: pad_to(g, n),
+                b: pad_to(b, n),
                 extras: take_extras(
                     o,
                     &["bus", "terminal_map"],
@@ -455,6 +505,15 @@ impl Reader<'_> {
             "x_series_from",
             "x_series_to",
         ];
+        if !matches!(
+            subtype,
+            "single_phase" | "center_tap" | "wye_delta" | "delta_wye"
+        ) {
+            self.net.warnings.push(format!(
+                "transformer {name}: subtype `{subtype}` is outside the schema; \
+                 read as a single phase pair"
+            ));
+        }
         let s = o.get("s_rating").map_or(f64::NAN, f);
         let v_from = o.get("v_ref_from").map_or(f64::NAN, f);
         let v_to = o.get("v_ref_to").map_or(f64::NAN, f);

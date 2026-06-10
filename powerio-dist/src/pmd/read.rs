@@ -119,6 +119,92 @@ fn take_extras(o: &Map<String, Value>, known: &[&str]) -> Extras {
         .collect()
 }
 
+/// The model has no status field; a non ENABLED status rides in extras so
+/// the PMD writer reproduces it instead of silently re-enabling.
+fn stash_status(
+    o: &Map<String, Value>,
+    extras: &mut Extras,
+    what: &str,
+    warnings: &mut Vec<String>,
+) {
+    if let Some(s) = o.get("status").and_then(Value::as_str)
+        && s != "ENABLED"
+    {
+        extras.insert("pmd_status".into(), Value::String(s.to_string()));
+        warnings.push(format!(
+            "{what}: status {s} kept in extras; other formats emit the element enabled"
+        ));
+    }
+}
+
+/// A linecode from an object carrying the linecode matrix fields: a
+/// `linecode` entry, or a line with inline impedance (the dss2eng output
+/// for rmatrix defined lines). Extras hold only the raw `b_fr`/`b_to`
+/// stash; the caller merges anything else.
+fn linecode_from(name: &str, o: &Map<String, Value>, base_frequency: f64) -> DistLineCode {
+    let r = matrix("rs", o.get("rs")).unwrap_or_default();
+    let n = r.len();
+    let zero = || vec![vec![0.0; n]; n];
+    // b_fr/b_to numbers are cmatrix halves in nF per meter; the model
+    // holds siemens per meter.
+    let omega = std::f64::consts::TAU * base_frequency * 1e-9;
+    let to_b = |m: Option<Mat>| {
+        m.map(|m| {
+            m.iter()
+                .map(|row| row.iter().map(|v| v * omega).collect())
+                .collect()
+        })
+    };
+    DistLineCode {
+        name: name.to_string(),
+        n_conductors: n,
+        x_series: matrix("xs", o.get("xs")).unwrap_or_else(zero),
+        g_from: matrix("g_fr", o.get("g_fr")).unwrap_or_else(zero),
+        g_to: matrix("g_to", o.get("g_to")).unwrap_or_else(zero),
+        b_from: to_b(matrix("b_fr", o.get("b_fr"))).unwrap_or_else(zero),
+        b_to: to_b(matrix("b_to", o.get("b_to"))).unwrap_or_else(zero),
+        r_series: r,
+        i_max: floats("cm_ub", o.get("cm_ub")).filter(|v| v.iter().all(|x| x.is_finite())),
+        s_max: floats("sm_ub", o.get("sm_ub")).filter(|v| v.iter().all(|x| x.is_finite())),
+        extras: {
+            // The raw arrays make writing back bit exact across the
+            // capacitance to susceptance basis change.
+            let mut extras = Extras::new();
+            if let Some(b) = o.get("b_fr") {
+                extras.insert("pmd_b_fr".into(), b.clone());
+            }
+            if let Some(b) = o.get("b_to") {
+                extras.insert("pmd_b_to".into(), b.clone());
+            }
+            extras
+        },
+    }
+}
+
+/// `Winding.tap` is a scalar; the first phase tap represents each winding
+/// (the raw per phase arrays ride in extras). The flag reports whether any
+/// winding's phases disagree, which exact comparison detects: a copied
+/// default differs by zero bits.
+#[allow(clippy::float_cmp)]
+fn representative_taps(tm_set: Option<&Value>) -> (Vec<f64>, bool) {
+    let mut firsts = Vec::new();
+    let mut differ = false;
+    for w in tm_set
+        .and_then(Value::as_array)
+        .map(Vec::as_slice)
+        .unwrap_or_default()
+    {
+        let taps: Vec<f64> = w
+            .as_array()
+            .map(|p| p.iter().map(|v| restore("tm_set", v)).collect())
+            .unwrap_or_default();
+        let first = taps.first().copied().unwrap_or(1.0);
+        differ |= taps.iter().any(|&t| t != first);
+        firsts.push(first);
+    }
+    (firsts, differ)
+}
+
 struct WindingNums<'a> {
     rw: &'a [f64],
     xsc: &'a [f64],
@@ -128,17 +214,20 @@ struct WindingNums<'a> {
 }
 
 /// Windings from the parallel per winding arrays; undoes the lag
-/// connection's barrel roll so the model holds the source case's order.
+/// connection's barrel roll (`polarity` -1 on a wye winding under a delta
+/// primary) so the model holds the source case's order. The flag reports
+/// whether any winding was unrolled.
 fn build_windings(
     buses: &[String],
     configs: &[WindingConn],
     polarity: &[i64],
     o: &Map<String, Value>,
     nums: &WindingNums,
-) -> (Vec<Winding>, usize) {
+) -> (Vec<Winding>, usize, bool) {
     let _ = nums.xsc;
     let mut windings = Vec::with_capacity(buses.len());
     let mut phases = 1;
+    let mut unrolled = false;
     for (w, bus) in buses.iter().enumerate() {
         let mut map = ints_as_strings(
             o.get("connections")
@@ -153,6 +242,7 @@ fn build_windings(
         {
             let phases_part = map.len() - 1;
             map[..phases_part].rotate_right(1);
+            unrolled = true;
         }
         if conn == WindingConn::Wye {
             phases = phases.max(map.len().saturating_sub(1));
@@ -169,7 +259,7 @@ fn build_windings(
             tap: nums.tm_set.get(w).copied().unwrap_or(1.0),
         });
     }
-    (windings, phases)
+    (windings, phases, unrolled)
 }
 
 impl Reader<'_> {
@@ -244,6 +334,7 @@ impl Reader<'_> {
                 extras.insert("rg".into(), o.get("rg").cloned().unwrap_or(Value::Null));
                 extras.insert("xg".into(), o.get("xg").cloned().unwrap_or(Value::Null));
             }
+            stash_status(o, &mut extras, &format!("bus {id}"), &mut self.net.warnings);
             self.net.buses.push(DistBus {
                 id: id.clone(),
                 terminals: ints_as_strings(o.get("terminals")),
@@ -257,73 +348,70 @@ impl Reader<'_> {
     fn linecodes(&mut self, items: &Map<String, Value>) {
         for (name, v) in items {
             let Value::Object(o) = v else { continue };
-            let r = matrix("rs", o.get("rs")).unwrap_or_default();
-            let n = r.len();
-            let zero = || vec![vec![0.0; n]; n];
-            // b_fr/b_to numbers are cmatrix halves in nF per meter; the
-            // model holds siemens per meter.
-            let omega = std::f64::consts::TAU * self.net.base_frequency * 1e-9;
-            let to_b = |m: Option<Mat>| {
-                m.map(|m| {
-                    m.iter()
-                        .map(|row| row.iter().map(|v| v * omega).collect())
-                        .collect()
-                })
-            };
-            self.net.linecodes.push(DistLineCode {
-                name: name.clone(),
-                n_conductors: n,
-                x_series: matrix("xs", o.get("xs")).unwrap_or_else(zero),
-                g_from: matrix("g_fr", o.get("g_fr")).unwrap_or_else(zero),
-                g_to: matrix("g_to", o.get("g_to")).unwrap_or_else(zero),
-                b_from: to_b(matrix("b_fr", o.get("b_fr"))).unwrap_or_else(zero),
-                b_to: to_b(matrix("b_to", o.get("b_to"))).unwrap_or_else(zero),
-                r_series: r,
-                i_max: floats("cm_ub", o.get("cm_ub")).filter(|v| v.iter().all(|x| x.is_finite())),
-                s_max: floats("sm_ub", o.get("sm_ub")).filter(|v| v.iter().all(|x| x.is_finite())),
-                extras: {
-                    let mut extras = take_extras(
-                        o,
-                        &["rs", "xs", "g_fr", "g_to", "b_fr", "b_to", "cm_ub", "sm_ub"],
-                    );
-                    // The raw arrays make writing back bit exact across the
-                    // capacitance to susceptance basis change.
-                    if let Some(b) = o.get("b_fr") {
-                        extras.insert("pmd_b_fr".into(), b.clone());
-                    }
-                    if let Some(b) = o.get("b_to") {
-                        extras.insert("pmd_b_to".into(), b.clone());
-                    }
-                    extras
-                },
-            });
+            let mut lc = linecode_from(name, o, self.net.base_frequency);
+            let mut extras = take_extras(
+                o,
+                &["rs", "xs", "g_fr", "g_to", "b_fr", "b_to", "cm_ub", "sm_ub"],
+            );
+            extras.append(&mut lc.extras);
+            lc.extras = extras;
+            self.net.linecodes.push(lc);
         }
     }
 
     fn lines(&mut self, items: &Map<String, Value>) {
         for (name, v) in items {
             let Value::Object(o) = v else { continue };
+            let mut known = vec![
+                "f_bus",
+                "t_bus",
+                "f_connections",
+                "t_connections",
+                "linecode",
+                "length",
+                "status",
+                "source_id",
+            ];
+            let mut linecode = string(o.get("linecode"));
+            let mut extras;
+            // Inline impedance (the dss2eng output for rmatrix defined
+            // lines): materialize a linecode so the matrices survive, and
+            // mark the line so the PMD writer re-inlines them.
+            if linecode.is_empty() && o.get("rs").is_some() {
+                known.extend(["rs", "xs", "g_fr", "g_to", "b_fr", "b_to", "cm_ub"]);
+                extras = take_extras(o, &known);
+                let mut lc_name = format!("{name}_z");
+                let mut k = 2;
+                while self.net.linecode(&lc_name).is_some() {
+                    lc_name = format!("{name}_z{k}");
+                    k += 1;
+                }
+                self.net
+                    .linecodes
+                    .push(linecode_from(&lc_name, o, self.net.base_frequency));
+                self.net.warnings.push(format!(
+                    "line {name}: inline impedance materialized as linecode {lc_name}; the PMD writer re-inlines it"
+                ));
+                extras.insert("pmd_inline".into(), Value::Bool(true));
+                linecode = lc_name;
+            } else {
+                extras = take_extras(o, &known);
+            }
+            stash_status(
+                o,
+                &mut extras,
+                &format!("line {name}"),
+                &mut self.net.warnings,
+            );
             self.net.lines.push(DistLine {
                 name: name.clone(),
                 bus_from: string(o.get("f_bus")),
                 bus_to: string(o.get("t_bus")),
                 terminal_map_from: ints_as_strings(o.get("f_connections")),
                 terminal_map_to: ints_as_strings(o.get("t_connections")),
-                linecode: string(o.get("linecode")),
+                linecode,
                 length: o.get("length").map_or(f64::NAN, |v| restore("length", v)),
-                extras: take_extras(
-                    o,
-                    &[
-                        "f_bus",
-                        "t_bus",
-                        "f_connections",
-                        "t_connections",
-                        "linecode",
-                        "length",
-                        "status",
-                        "source_id",
-                    ],
-                ),
+                extras,
             });
         }
     }
@@ -331,6 +419,40 @@ impl Reader<'_> {
     fn switches(&mut self, items: &Map<String, Value>) {
         for (name, v) in items {
             let Value::Object(o) = v else { continue };
+            let mut extras = take_extras(
+                o,
+                &[
+                    "f_bus",
+                    "t_bus",
+                    "f_connections",
+                    "t_connections",
+                    "state",
+                    "cm_ub",
+                    "status",
+                    "source_id",
+                    "dispatchable",
+                    "rs",
+                    "xs",
+                    "g_fr",
+                    "g_to",
+                    "b_fr",
+                    "b_to",
+                ],
+            );
+            // The series matrices ride along raw so a dss regeneration can
+            // override the engine's switch dummy impedance with the real
+            // one, and the PMD writer can reproduce them.
+            for key in ["rs", "xs"] {
+                if let Some(m) = o.get(key) {
+                    extras.insert(format!("pmd_{key}"), m.clone());
+                }
+            }
+            stash_status(
+                o,
+                &mut extras,
+                &format!("switch {name}"),
+                &mut self.net.warnings,
+            );
             self.net.switches.push(DistSwitch {
                 name: name.clone(),
                 bus_from: string(o.get("f_bus")),
@@ -339,37 +461,7 @@ impl Reader<'_> {
                 terminal_map_to: ints_as_strings(o.get("t_connections")),
                 open: o.get("state").and_then(Value::as_str) == Some("OPEN"),
                 i_max: floats("cm_ub", o.get("cm_ub")),
-                extras: {
-                    let mut extras = take_extras(
-                        o,
-                        &[
-                            "f_bus",
-                            "t_bus",
-                            "f_connections",
-                            "t_connections",
-                            "state",
-                            "cm_ub",
-                            "status",
-                            "source_id",
-                            "dispatchable",
-                            "rs",
-                            "xs",
-                            "g_fr",
-                            "g_to",
-                            "b_fr",
-                            "b_to",
-                        ],
-                    );
-                    // The series matrices ride along raw so a dss
-                    // regeneration can override the engine's switch dummy
-                    // impedance with the real one.
-                    for key in ["rs", "xs"] {
-                        if let Some(m) = o.get(key) {
-                            extras.insert(format!("pmd_{key}"), m.clone());
-                        }
-                    }
-                    extras
-                },
+                extras,
             });
         }
     }
@@ -420,6 +512,12 @@ impl Reader<'_> {
                     extras.insert("model".into(), dss_model.into());
                 }
             }
+            stash_status(
+                o,
+                &mut extras,
+                &format!("load {name}"),
+                &mut self.net.warnings,
+            );
             self.net.loads.push(DistLoad {
                 name: name.clone(),
                 bus: string(o.get("bus")),
@@ -438,6 +536,28 @@ impl Reader<'_> {
             let scale = |key: &str| {
                 floats(key, o.get(key)).map(|v| v.iter().map(|x| x * 1e3).collect::<Vec<f64>>())
             };
+            let mut extras = take_extras(
+                o,
+                &[
+                    "bus",
+                    "connections",
+                    "configuration",
+                    "pg",
+                    "qg",
+                    "pg_lb",
+                    "pg_ub",
+                    "qg_lb",
+                    "qg_ub",
+                    "status",
+                    "source_id",
+                ],
+            );
+            stash_status(
+                o,
+                &mut extras,
+                &format!("generator {name}"),
+                &mut self.net.warnings,
+            );
             self.net.generators.push(DistGenerator {
                 name: name.clone(),
                 bus: string(o.get("bus")),
@@ -453,22 +573,7 @@ impl Reader<'_> {
                 q_min: scale("qg_lb").filter(|v| v.iter().all(|x| x.is_finite())),
                 q_max: scale("qg_ub").filter(|v| v.iter().all(|x| x.is_finite())),
                 cost: None,
-                extras: take_extras(
-                    o,
-                    &[
-                        "bus",
-                        "connections",
-                        "configuration",
-                        "pg",
-                        "qg",
-                        "pg_lb",
-                        "pg_ub",
-                        "qg_lb",
-                        "qg_ub",
-                        "status",
-                        "source_id",
-                    ],
-                ),
+                extras,
             });
         }
     }
@@ -478,16 +583,23 @@ impl Reader<'_> {
             let Value::Object(o) = v else { continue };
             let g = matrix("gs", o.get("gs")).unwrap_or_default();
             let b = matrix("bs", o.get("bs")).unwrap_or_default();
+            let mut extras = take_extras(
+                o,
+                &["bus", "connections", "gs", "bs", "status", "source_id"],
+            );
+            stash_status(
+                o,
+                &mut extras,
+                &format!("shunt {name}"),
+                &mut self.net.warnings,
+            );
             self.net.shunts.push(DistShunt {
                 name: name.clone(),
                 bus: string(o.get("bus")),
                 terminal_map: ints_as_strings(o.get("connections")),
                 g,
                 b,
-                extras: take_extras(
-                    o,
-                    &["bus", "connections", "gs", "bs", "status", "source_id"],
-                ),
+                extras,
             });
         }
     }
@@ -495,6 +607,16 @@ impl Reader<'_> {
     fn sources(&mut self, items: &Map<String, Value>) {
         for (name, v) in items {
             let Value::Object(o) = v else { continue };
+            let mut extras = take_extras(
+                o,
+                &["bus", "connections", "vm", "va", "status", "source_id"],
+            );
+            stash_status(
+                o,
+                &mut extras,
+                &format!("voltage source {name}"),
+                &mut self.net.warnings,
+            );
             self.net.sources.push(VoltageSource {
                 name: name.clone(),
                 bus: string(o.get("bus")),
@@ -509,10 +631,7 @@ impl Reader<'_> {
                     .iter()
                     .map(|a| a.to_radians())
                     .collect(),
-                extras: take_extras(
-                    o,
-                    &["bus", "connections", "vm", "va", "status", "source_id"],
-                ),
+                extras,
             });
         }
     }
@@ -523,6 +642,38 @@ impl Reader<'_> {
             let t = self.transformer(name, o);
             self.net.transformers.push(t);
         }
+    }
+
+    /// The writer recomputes polarity from the lag convention; when the
+    /// file disagrees (a euro/lead or reversed winding), the raw arrays
+    /// ride in extras and the writer emits them verbatim.
+    fn stash_polarity(
+        &mut self,
+        name: &str,
+        o: &Map<String, Value>,
+        windings: &[Winding],
+        polarity: &[i64],
+        unrolled: bool,
+        extras: &mut Extras,
+    ) {
+        let file_polarity: Vec<i64> = (0..windings.len())
+            .map(|w| polarity.get(w).copied().unwrap_or(1))
+            .collect();
+        if file_polarity == super::write::lag_polarity(windings) {
+            return;
+        }
+        extras.insert(
+            "pmd_polarity".into(),
+            o.get("polarity")
+                .cloned()
+                .unwrap_or_else(|| file_polarity.clone().into()),
+        );
+        if unrolled && let Some(c) = o.get("connections") {
+            extras.insert("pmd_connections".into(), c.clone());
+        }
+        self.net.warnings.push(format!(
+            "transformer {name}: polarity {file_polarity:?} is not the lag convention; kept in extras (other formats assume lag)"
+        ));
     }
 
     fn transformer(&mut self, name: &str, o: &Map<String, Value>) -> DistTransformer {
@@ -551,21 +702,14 @@ impl Reader<'_> {
         let xsc = floats("xsc", o.get("xsc")).unwrap_or_default();
         let sm_nom = floats("sm_nom", o.get("sm_nom")).unwrap_or_default();
         let vm_nom = floats("vm_nom", o.get("vm_nom")).unwrap_or_default();
-        let tm_set: Vec<f64> = o
-            .get("tm_set")
-            .and_then(Value::as_array)
-            .map(|a| {
-                a.iter()
-                    .map(|w| {
-                        w.as_array()
-                            .and_then(|p| p.first())
-                            .map_or(1.0, |v| restore("tm_set", v))
-                    })
-                    .collect()
-            })
-            .unwrap_or_default();
+        let (tm_set, taps_differ) = representative_taps(o.get("tm_set"));
+        if taps_differ {
+            self.net.warnings.push(format!(
+                "transformer {name}: per phase taps differ; the winding tap keeps the first phase (full arrays in extras)"
+            ));
+        }
 
-        let (windings, phases) = build_windings(
+        let (windings, phases, unrolled) = build_windings(
             &buses,
             &configs,
             &polarity,
@@ -584,34 +728,47 @@ impl Reader<'_> {
                 "transformer {name}: regulator controls are not typed; kept in extras"
             ));
         }
+        let mut extras = take_extras(
+            o,
+            &[
+                "bus",
+                "connections",
+                "configuration",
+                "polarity",
+                "rw",
+                "xsc",
+                "sm_nom",
+                "vm_nom",
+                "tm_set",
+                "tm_fix",
+                "tm_lb",
+                "tm_ub",
+                "tm_step",
+                "status",
+                "source_id",
+                "noloadloss",
+                "cmag",
+                "sm_ub",
+            ],
+        );
+        for key in ["tm_set", "tm_lb", "tm_ub", "tm_fix", "tm_step"] {
+            if let Some(v) = o.get(key) {
+                extras.insert(format!("pmd_{key}"), v.clone());
+            }
+        }
+        self.stash_polarity(name, o, &windings, &polarity, unrolled, &mut extras);
+        stash_status(
+            o,
+            &mut extras,
+            &format!("transformer {name}"),
+            &mut self.net.warnings,
+        );
         DistTransformer {
             name: name.to_string(),
             windings,
             xsc_pct: xsc.iter().map(|x| x * 100.0).collect(),
             phases,
-            extras: take_extras(
-                o,
-                &[
-                    "bus",
-                    "connections",
-                    "configuration",
-                    "polarity",
-                    "rw",
-                    "xsc",
-                    "sm_nom",
-                    "vm_nom",
-                    "tm_set",
-                    "tm_fix",
-                    "tm_lb",
-                    "tm_ub",
-                    "tm_step",
-                    "status",
-                    "source_id",
-                    "noloadloss",
-                    "cmag",
-                    "sm_ub",
-                ],
-            ),
+            extras,
         }
     }
 }

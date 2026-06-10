@@ -214,7 +214,7 @@ pub struct UntypedObject {
 /// `source` retains the original text for the byte exact echo tier;
 /// `defaulted` records, per element (`"class.name"` key), the fields the
 /// reader materialized from format defaults rather than the source text.
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug)]
 pub struct DistNetwork {
     pub name: Option<String>,
     /// Hz.
@@ -240,6 +240,35 @@ pub struct DistNetwork {
     pub source: Option<Arc<String>>,
     pub source_format: Option<DistSourceFormat>,
     pub extras: Extras,
+}
+
+impl Default for DistNetwork {
+    /// An empty network at the OpenDSS default frequency. A derived 0 Hz
+    /// default would put NaN into every capacitance the dss writer converts
+    /// through omega.
+    fn default() -> Self {
+        DistNetwork {
+            name: None,
+            base_frequency: crate::dss::defaults::BASE_FREQUENCY,
+            buses: Vec::new(),
+            linecodes: Vec::new(),
+            lines: Vec::new(),
+            switches: Vec::new(),
+            transformers: Vec::new(),
+            loads: Vec::new(),
+            generators: Vec::new(),
+            shunts: Vec::new(),
+            sources: Vec::new(),
+            untyped: Vec::new(),
+            commands: Vec::new(),
+            options: Vec::new(),
+            defaulted: BTreeMap::new(),
+            warnings: Vec::new(),
+            source: None,
+            source_format: None,
+            extras: Extras::new(),
+        }
+    }
 }
 
 impl DistNetwork {

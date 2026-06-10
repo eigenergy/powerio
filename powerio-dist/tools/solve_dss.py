@@ -4,7 +4,10 @@ Usage: <python-with-opendssdirect> solve_dss.py case.dss
 
 Output: {"converged": bool, "voltages": {"<bus>.<node>": [re, im]}, ...} with
 voltages in volts. Run it under an interpreter that has opendssdirect
-installed; the test harness locates one via the PIO_DSS_PYTHON env var.
+installed (the repo's .venv works). Nothing in the test suite shells out to
+this script; it exists for hand checks and for regenerating the engine bus
+maps pinned in tests/dss_reader.rs (print AllBusNames + Bus.Nodes per bus
+with the same staging as physics_check.py).
 """
 
 import json

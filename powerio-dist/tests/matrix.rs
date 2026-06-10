@@ -249,6 +249,18 @@ fn assert_projection_eq(a: &DistNetwork, b: &DistNetwork, what: &str, transforme
         .iter()
         .zip(&by_name(&b.lines, |l| &l.name))
     {
+        assert!(
+            x.name.eq_ignore_ascii_case(&y.name),
+            "{what}: line set ({} vs {})",
+            x.name,
+            y.name
+        );
+        assert!(
+            x.bus_from.eq_ignore_ascii_case(&y.bus_from)
+                && x.bus_to.eq_ignore_ascii_case(&y.bus_to),
+            "{what}: line {} endpoints",
+            x.name
+        );
         assert_eq!(
             x.length.to_bits(),
             y.length.to_bits(),
@@ -257,7 +269,12 @@ fn assert_projection_eq(a: &DistNetwork, b: &DistNetwork, what: &str, transforme
         );
         assert_eq!(
             x.terminal_map_from, y.terminal_map_from,
-            "{what}: line {}",
+            "{what}: line {} from map",
+            x.name
+        );
+        assert_eq!(
+            x.terminal_map_to, y.terminal_map_to,
+            "{what}: line {} to map",
             x.name
         );
     }
@@ -302,14 +319,33 @@ fn assert_linecodes_close(a: &DistNetwork, b: &DistNetwork, what: &str) {
     xs.sort_by_key(|c| c.name.to_ascii_lowercase());
     ys.sort_by_key(|c| c.name.to_ascii_lowercase());
     for (x, y) in xs.iter().zip(&ys) {
-        for (rx, ry) in x.r_series.iter().zip(&y.r_series) {
-            for (vx, vy) in rx.iter().zip(ry) {
-                assert!(close(*vx, *vy), "{what}: linecode {} r", x.name);
-            }
-        }
-        for (bx, by) in x.b_from.iter().zip(&y.b_from) {
-            for (vx, vy) in bx.iter().zip(by) {
-                assert!(close(*vx, *vy), "{what}: linecode {} b", x.name);
+        assert!(
+            x.name.eq_ignore_ascii_case(&y.name),
+            "{what}: linecode set ({} vs {})",
+            x.name,
+            y.name
+        );
+        assert_eq!(
+            x.n_conductors, y.n_conductors,
+            "{what}: linecode {} size",
+            x.name
+        );
+        let mats = [
+            ("r", &x.r_series, &y.r_series),
+            ("x", &x.x_series, &y.x_series),
+            ("b", &x.b_from, &y.b_from),
+        ];
+        for (label, mx, my) in mats {
+            assert_eq!(mx.len(), my.len(), "{what}: linecode {} {label}", x.name);
+            for (rx, ry) in mx.iter().zip(my) {
+                assert_eq!(rx.len(), ry.len(), "{what}: linecode {} {label}", x.name);
+                for (vx, vy) in rx.iter().zip(ry) {
+                    assert!(
+                        close(*vx, *vy),
+                        "{what}: linecode {} {label} {vx} vs {vy}",
+                        x.name
+                    );
+                }
             }
         }
     }

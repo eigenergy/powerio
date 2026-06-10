@@ -28,8 +28,9 @@ vendored via the dss-extensions mirror of the EPRI test case tree.
   `Version8/Distrib/IEEETestCases/`.
 - `ieee13/`: `IEEE13Nodeckt.dss`, `IEEELineCodes.DSS`, `IEEE13Node_BusXY.csv`
   (from `13Bus/`).
-- `ieee34/`: `ieee34Mod1.dss`, `Run_IEEE34Mod1.dss`, `IEEELineCodes.DSS`
-  (from `34Bus/`).
+- `ieee34/`: `ieee34Mod1.dss`, `IEEELineCodes.DSS` (from `34Bus/`; the
+  upstream Run wrapper is not vendored, it references a coordinates csv and
+  show/plot commands outside the converter's scope).
 - `ieee123/`: `IEEE123Master.dss`, `IEEE123Loads.DSS`,
   `IEEE123Regulators.DSS`, `IEEELineCodes.DSS` (from `123Bus/`).
 - `IEEELineCodes.DSS` at this directory's root is the shared linecode file

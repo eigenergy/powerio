@@ -43,6 +43,7 @@ handle type; the two families do not mix. Julia bindings are not wired up yet
 | Parse path | `powerio_dist::parse_file(path, from)` | `dist.parse_file(path, from_=None)` | `pio_dist_parse_file` |
 | Parse text | `powerio_dist::parse_str(text, format)` | `dist.parse_str(text, format)` | `pio_dist_parse_str` |
 | File conversion | `powerio_dist::convert_file(path, to, from)` | `dist.convert_file(path, to, from_=None)` | `pio_dist_convert_file` |
-| Text conversion | `powerio_dist::convert_str(text, from, to)` | `dist.convert_str(text, from_, to)` | `pio_dist_convert_str` |
+| Target format type | `DistTargetFormat` (`FromStr`, `name()`) | format name strings | format name strings |
+| Text conversion | `powerio_dist::convert_str(text, to, from)` | `dist.convert_str(text, to, from_)` | `pio_dist_convert_str` |
 | Parsed conversion | `net.to_format(to)` | `case.to_format(to)` | `pio_dist_to_format` |
 | Parse warnings | `net.warnings` | `case.warnings` | `pio_dist_warnings` |

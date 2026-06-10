@@ -4,14 +4,22 @@
 //! wherever the model carries the data: terminal integers, `ENABLED`
 //! status, `source_id`, the materialized grounded neutral with zero
 //! `rg`/`xg`, linecode `cm_ub` from the emergency rating, transformer
-//! `tm_*` tap fields, the delta-wye barrel roll with `polarity` -1 on the
+//! `tm_*` tap fields, the delta wye barrel roll with `polarity` -1 on the
 //! lagging wye winding, and the voltage source Thevenin matrices computed
-//! from the short circuit data when the source format carried it.
+//! from the short circuit data when the source format carried it. The
+//! reader's `pmd_*` stashes (status, settings, files, grounding and switch
+//! impedance, tap arrays, polarity, inline line impedance) win over the
+//! recomputed defaults, so PMD in, PMD out does not alter fields.
+
+use std::collections::BTreeSet;
 
 use serde_json::{Map, Value, json};
 
 use crate::convert::Conversion;
-use crate::model::{Configuration, DistNetwork, DistTransformer, Mat, VoltageSource, WindingConn};
+use crate::model::{
+    Configuration, DistLineCode, DistNetwork, DistTransformer, Extras, Mat, VoltageSource, Winding,
+    WindingConn,
+};
 
 /// Writes the ENGINEERING document.
 ///
@@ -90,11 +98,20 @@ impl Writer {
         }
     }
 
-    fn extras_f64(extras: &crate::model::Extras, key: &str) -> Option<f64> {
+    fn extras_f64(extras: &Extras, key: &str) -> Option<f64> {
         extras.get(key).and_then(|v| {
             v.as_f64()
                 .or_else(|| v.as_str().and_then(|s| s.parse().ok()))
         })
+    }
+
+    /// The element status: the reader's stash when the source carried a non
+    /// ENABLED status, `ENABLED` otherwise.
+    fn status(extras: &Extras) -> Value {
+        extras
+            .get("pmd_status")
+            .cloned()
+            .unwrap_or_else(|| json!("ENABLED"))
     }
 
     fn document(&mut self, net: &DistNetwork) -> Value {
@@ -104,20 +121,22 @@ impl Writer {
             "name".into(),
             json!(net.name.clone().unwrap_or_default().to_lowercase()),
         );
-        doc.insert("files".into(), json!([]));
+        doc.insert(
+            "files".into(),
+            net.extras
+                .get("pmd_files")
+                .cloned()
+                .unwrap_or_else(|| json!([])),
+        );
 
-        let mut settings = Map::new();
-        settings.insert("base_frequency".into(), json!(net.base_frequency));
-        settings.insert("power_scale_factor".into(), json!(1000.0));
-        settings.insert("voltage_scale_factor".into(), json!(1000.0));
-        settings.insert("sbase_default".into(), json!(100_000.0));
-        let mut vbases = Map::new();
-        for vs in &net.sources {
-            let vln_kv = vs.v_magnitude.first().copied().unwrap_or(0.0) / 1e3;
-            vbases.insert(vs.bus.to_lowercase(), json!(vln_kv));
-        }
-        settings.insert("vbases_default".into(), Value::Object(vbases));
-        doc.insert("settings".into(), Value::Object(settings));
+        // The reader's stash wins; synthesis covers dss/bmopf sourced
+        // models.
+        let settings = net
+            .extras
+            .get("pmd_settings")
+            .cloned()
+            .unwrap_or_else(|| synthesized_settings(net));
+        doc.insert("settings".into(), settings);
 
         let max_conductor = net
             .buses
@@ -144,10 +163,18 @@ impl Writer {
                 )),
             );
             let grounded = conns(&b.grounded, &mut self.warnings, &format!("bus {}", b.id));
-            o.insert("rg".into(), json!(vec![0.0; grounded.len()]));
-            o.insert("xg".into(), json!(vec![0.0; grounded.len()]));
+            // Nonzero grounding impedance rides in extras (the reader's
+            // stash); zero vectors are the materialized default.
+            for key in ["rg", "xg"] {
+                let v = b
+                    .extras
+                    .get(key)
+                    .cloned()
+                    .unwrap_or_else(|| json!(vec![0.0; grounded.len()]));
+                o.insert(key.into(), v);
+            }
             o.insert("grounded".into(), json!(grounded));
-            o.insert("status".into(), json!("ENABLED"));
+            o.insert("status".into(), Self::status(&b.extras));
             if let Some(x) = Self::extras_f64(&b.extras, "x") {
                 o.insert("lon".into(), json!(x));
             }
@@ -192,33 +219,28 @@ impl Writer {
     }
 
     fn linecodes(net: &DistNetwork, doc: &mut Map<String, Value>) {
-        if net.linecodes.is_empty() {
-            return;
-        }
-        // The ENGINEERING b_fr/b_to numbers are the dss cmatrix halves in
-        // nanofarads per meter (the susceptance follows as 2 pi f C); the
-        // model holds true siemens per meter, so divide the omega back out.
-        let to_nf = 1.0 / (std::f64::consts::TAU * net.base_frequency * 1e-9);
+        // Linecodes the reader materialized from inline line impedance
+        // re-inline on the line; they are skipped here unless a line
+        // without the marker also references them.
+        let inlined = inlined_codes(net);
         let mut codes = Map::new();
         for c in &net.linecodes {
-            let mut o = Map::new();
-            o.insert("rs".into(), matrix(&c.r_series));
-            o.insert("xs".into(), matrix(&c.x_series));
-            o.insert("g_fr".into(), matrix(&c.g_from));
-            o.insert("g_to".into(), matrix(&c.g_to));
-            if let (Some(fr), Some(to)) = (c.extras.get("pmd_b_fr"), c.extras.get("pmd_b_to")) {
-                o.insert("b_fr".into(), fr.clone());
-                o.insert("b_to".into(), to.clone());
-            } else {
-                o.insert("b_fr".into(), matrix(&scale(&c.b_from, to_nf)));
-                o.insert("b_to".into(), matrix(&scale(&c.b_to, to_nf)));
+            if inlined.contains(&c.name.to_lowercase()) {
+                continue;
             }
+            let mut o = Map::new();
+            insert_impedance_matrices(&mut o, c, net.base_frequency);
             if let Some(i_max) = &c.i_max {
                 o.insert("cm_ub".into(), json!(i_max));
             }
+            if let Some(s_max) = &c.s_max {
+                o.insert("sm_ub".into(), json!(s_max));
+            }
             codes.insert(c.name.to_lowercase(), Value::Object(o));
         }
-        doc.insert("linecode".into(), Value::Object(codes));
+        if !codes.is_empty() {
+            doc.insert("linecode".into(), Value::Object(codes));
+        }
     }
 
     fn branches(&mut self, net: &DistNetwork, doc: &mut Map<String, Value>) {
@@ -238,8 +260,28 @@ impl Writer {
                     json!(conns(&l.terminal_map_to, &mut self.warnings, &what)),
                 );
                 o.insert("length".into(), json!(l.length));
-                o.insert("linecode".into(), json!(l.linecode.to_lowercase()));
-                o.insert("status".into(), json!("ENABLED"));
+                // A line the reader materialized a linecode for re-inlines
+                // its impedance, the dss2eng shape for rmatrix defined
+                // lines: matrices on the line, no linecode key.
+                let inline = l.extras.get("pmd_inline").and_then(Value::as_bool) == Some(true);
+                match net.linecode(&l.linecode) {
+                    Some(c) if inline => {
+                        insert_impedance_matrices(&mut o, c, net.base_frequency);
+                        if let Some(i_max) = &c.i_max {
+                            o.insert("cm_ub".into(), json!(i_max));
+                        }
+                    }
+                    _ => {
+                        if inline {
+                            self.warn(format!(
+                                "{what}: linecode `{}` is missing; emitted the reference instead of inline impedance",
+                                l.linecode
+                            ));
+                        }
+                        o.insert("linecode".into(), json!(l.linecode.to_lowercase()));
+                    }
+                }
+                o.insert("status".into(), Self::status(&l.extras));
                 o.insert(
                     "source_id".into(),
                     json!(format!("line.{}", l.name.to_lowercase())),
@@ -266,15 +308,24 @@ impl Writer {
                     "t_connections".into(),
                     json!(conns(&s.terminal_map_to, &mut self.warnings, &what)),
                 );
-                // PMD models a dss switch as a tiny series resistance,
-                // computed as 1e-4 ohm/m over the forced 0.001 m length;
-                // the product form keeps the value bit identical.
-                let mut rs = zero_matrix(n);
-                for (i, row) in rs.iter_mut().enumerate() {
-                    row[i] = 1e-4 * 0.001;
-                }
-                o.insert("rs".into(), matrix(&rs));
-                o.insert("xs".into(), matrix(&zero_matrix(n)));
+                // The reader's stash carries the source's series matrices;
+                // otherwise PMD models a dss switch as a tiny series
+                // resistance, 1e-4 ohm/m over the forced 0.001 m length
+                // (the product form keeps the value bit identical).
+                let rs = s.extras.get("pmd_rs").cloned().unwrap_or_else(|| {
+                    let mut rs = zero_matrix(n);
+                    for (i, row) in rs.iter_mut().enumerate() {
+                        row[i] = 1e-4 * 0.001;
+                    }
+                    matrix(&rs)
+                });
+                o.insert("rs".into(), rs);
+                let xs = s
+                    .extras
+                    .get("pmd_xs")
+                    .cloned()
+                    .unwrap_or_else(|| matrix(&zero_matrix(n)));
+                o.insert("xs".into(), xs);
                 o.insert("g_fr".into(), matrix(&zero_matrix(n)));
                 o.insert("g_to".into(), matrix(&zero_matrix(n)));
                 o.insert("b_fr".into(), matrix(&zero_matrix(n)));
@@ -287,7 +338,7 @@ impl Writer {
                     json!(if s.open { "OPEN" } else { "CLOSED" }),
                 );
                 o.insert("dispatchable".into(), json!("YES"));
-                o.insert("status".into(), json!("ENABLED"));
+                o.insert("status".into(), Self::status(&s.extras));
                 o.insert(
                     "source_id".into(),
                     json!(format!("line.{}", s.name.to_lowercase())),
@@ -342,7 +393,7 @@ impl Writer {
                 };
                 o.insert("model".into(), json!(model));
                 o.insert("dispatchable".into(), json!("NO"));
-                o.insert("status".into(), json!("ENABLED"));
+                o.insert("status".into(), Self::status(&l.extras));
                 o.insert(
                     "source_id".into(),
                     json!(format!("load.{}", l.name.to_lowercase())),
@@ -393,7 +444,7 @@ impl Writer {
                     ));
                 }
                 o.insert("control_mode".into(), json!("FREQUENCYDROOP"));
-                o.insert("status".into(), json!("ENABLED"));
+                o.insert("status".into(), Self::status(&g.extras));
                 o.insert(
                     "source_id".into(),
                     json!(format!("generator.{}", g.name.to_lowercase())),
@@ -423,7 +474,7 @@ impl Writer {
                 o.insert("configuration".into(), json!("WYE"));
                 o.insert("model".into(), json!("CAPACITOR"));
                 o.insert("dispatchable".into(), json!("NO"));
-                o.insert("status".into(), json!("ENABLED"));
+                o.insert("status".into(), Self::status(&s.extras));
                 o.insert(
                     "source_id".into(),
                     json!(format!("capacitor.{}", s.name.to_lowercase())),
@@ -478,7 +529,7 @@ impl Writer {
             o.insert("rs".into(), matrix(&rs));
             o.insert("xs".into(), matrix(&xs));
         }
-        o.insert("status".into(), json!("ENABLED"));
+        o.insert("status".into(), Self::status(&vs.extras));
         o.insert(
             "source_id".into(),
             json!(format!("vsource.{}", vs.name.to_lowercase())),
@@ -489,6 +540,7 @@ impl Writer {
             &vs.extras,
             &[
                 "basekv",
+                "basemva",
                 "pu",
                 "angle",
                 "mvasc1",
@@ -520,38 +572,45 @@ impl Writer {
     fn transformer(&mut self, t: &DistTransformer) -> Value {
         let mut o = Map::new();
         let what = format!("transformer {}", t.name);
-        let nw = t.windings.len();
         let phases = t.phases;
 
+        // The reader's stash carries a source polarity/connections pair the
+        // lag convention does not reproduce (euro/lead, reversed windings);
+        // emit it verbatim. Otherwise apply the ANSI lag convention the
+        // reference dss2eng uses: barrel roll the wye phase conductors
+        // under a delta primary and reverse the winding polarity.
+        let stashed = t.extras.contains_key("pmd_polarity");
         let mut buses = Vec::new();
         let mut connections: Vec<Value> = Vec::new();
-        let mut polarity = vec![1i64; nw];
         for (w_idx, w) in t.windings.iter().enumerate() {
             buses.push(json!(w.bus.to_lowercase()));
             let mut c = conns(&w.terminal_map, &mut self.warnings, &what);
-            if w_idx > 0 {
-                let prim_delta = t.windings[0].conn == WindingConn::Delta;
-                if prim_delta && w.conn == WindingConn::Wye && c.len() > 1 {
-                    // The lag (ansi) connection: barrel roll the phase
-                    // conductors by one and reverse the winding polarity,
-                    // as the reference dss2eng does.
-                    let phases_part = c.len() - 1;
-                    c[..phases_part].rotate_left(1);
-                    polarity[w_idx] = -1;
-                }
-                // Center tap: the second half winding is reversed.
-                if w_idx == 2
-                    && nw == 3
-                    && t.windings[1].terminal_map.last() == w.terminal_map.first()
-                {
-                    polarity[w_idx] = -1;
-                }
+            if !stashed
+                && w_idx > 0
+                && t.windings[0].conn == WindingConn::Delta
+                && w.conn == WindingConn::Wye
+                && c.len() > 1
+            {
+                let phases_part = c.len() - 1;
+                c[..phases_part].rotate_left(1);
             }
             connections.push(json!(c));
         }
         o.insert("bus".into(), Value::Array(buses));
-        o.insert("connections".into(), Value::Array(connections));
-        o.insert("polarity".into(), json!(polarity));
+        o.insert(
+            "connections".into(),
+            t.extras
+                .get("pmd_connections")
+                .cloned()
+                .unwrap_or(Value::Array(connections)),
+        );
+        o.insert(
+            "polarity".into(),
+            t.extras
+                .get("pmd_polarity")
+                .cloned()
+                .unwrap_or_else(|| json!(lag_polarity(&t.windings))),
+        );
         o.insert(
             "configuration".into(),
             Value::Array(
@@ -603,7 +662,7 @@ impl Writer {
         let cmag = Self::extras_f64(&t.extras, "%imag").unwrap_or(0.0) / 100.0;
         o.insert("noloadloss".into(), json!(noloadloss));
         o.insert("cmag".into(), json!(cmag));
-        o.insert("status".into(), json!("ENABLED"));
+        o.insert("status".into(), Self::status(&t.extras));
         o.insert(
             "source_id".into(),
             json!(format!("transformer.{}", t.name.to_lowercase())),
@@ -617,35 +676,132 @@ impl Writer {
     }
 }
 
-/// The per winding per phase tap arrays, with the engine's defaults for the
-/// bounds (0.9..1.1) and step (1/32).
+/// The per winding per phase tap arrays. The reader's `pmd_tm_*` stashes
+/// win (per phase taps, custom bounds, regulator fix flags); the defaults
+/// for the rest are the engine's bounds (0.9..1.1) and step (1/32).
 fn insert_tap_fields(o: &mut Map<String, Value>, t: &DistTransformer, phases: usize) {
     let nw = t.windings.len();
-    o.insert(
-        "tm_set".into(),
+    let mut insert = |key: &str, default: fn(&DistTransformer, usize, usize) -> Value| {
+        let v = t
+            .extras
+            .get(&format!("pmd_{key}"))
+            .cloned()
+            .unwrap_or_else(|| default(t, nw, phases));
+        o.insert(key.into(), v);
+    };
+    insert("tm_set", |t, _, phases| {
         Value::Array(
             t.windings
                 .iter()
                 .map(|w| json!(vec![w.tap; phases]))
                 .collect(),
-        ),
-    );
-    o.insert(
-        "tm_fix".into(),
-        Value::Array((0..nw).map(|_| json!(vec![true; phases])).collect()),
-    );
-    o.insert(
-        "tm_lb".into(),
-        Value::Array((0..nw).map(|_| json!(vec![0.9; phases])).collect()),
-    );
-    o.insert(
-        "tm_ub".into(),
-        Value::Array((0..nw).map(|_| json!(vec![1.1; phases])).collect()),
-    );
-    o.insert(
-        "tm_step".into(),
-        Value::Array((0..nw).map(|_| json!(vec![1.0 / 32.0; phases])).collect()),
-    );
+        )
+    });
+    insert("tm_fix", |_, nw, phases| {
+        Value::Array((0..nw).map(|_| json!(vec![true; phases])).collect())
+    });
+    insert("tm_lb", |_, nw, phases| {
+        Value::Array((0..nw).map(|_| json!(vec![0.9; phases])).collect())
+    });
+    insert("tm_ub", |_, nw, phases| {
+        Value::Array((0..nw).map(|_| json!(vec![1.1; phases])).collect())
+    });
+    insert("tm_step", |_, nw, phases| {
+        Value::Array((0..nw).map(|_| json!(vec![1.0 / 32.0; phases])).collect())
+    });
+}
+
+/// The ENGINEERING settings for a model without the reader's stash (dss or
+/// bmopf sourced), following the dss2eng conventions: the per bus vbase is
+/// the source's nominal line to neutral kV without the pu factor folded
+/// in, and sbase is basemva in kVA (default 100 MVA).
+fn synthesized_settings(net: &DistNetwork) -> Value {
+    let mut settings = Map::new();
+    settings.insert("base_frequency".into(), json!(net.base_frequency));
+    settings.insert("power_scale_factor".into(), json!(1000.0));
+    settings.insert("voltage_scale_factor".into(), json!(1000.0));
+    let sbase = net
+        .sources
+        .first()
+        .and_then(|vs| Writer::extras_f64(&vs.extras, "basemva"))
+        .map_or(100_000.0, |mva| mva * 1e3);
+    settings.insert("sbase_default".into(), json!(sbase));
+    let mut vbases = Map::new();
+    for vs in &net.sources {
+        let phases = count_phases(vs).max(1) as f64;
+        let vln_kv = Writer::extras_f64(&vs.extras, "basekv").map_or_else(
+            || {
+                let pu = Writer::extras_f64(&vs.extras, "pu").unwrap_or(1.0);
+                vs.v_magnitude.first().copied().unwrap_or(0.0) / 1e3 / pu
+            },
+            |kv| kv / phases.sqrt(),
+        );
+        vbases.insert(vs.bus.to_lowercase(), json!(vln_kv));
+    }
+    settings.insert("vbases_default".into(), Value::Object(vbases));
+    Value::Object(settings)
+}
+
+/// The polarity vector the ANSI lag convention produces for these windings:
+/// -1 with a barrel roll on each wye winding under a delta primary, -1 on
+/// the reversed second half of a center tap secondary, 1 elsewhere. The
+/// reader compares the source against this to decide whether the file's
+/// polarity needs an extras stash.
+pub(super) fn lag_polarity(windings: &[Winding]) -> Vec<i64> {
+    let nw = windings.len();
+    let mut polarity = vec![1i64; nw];
+    for (w_idx, w) in windings.iter().enumerate().skip(1) {
+        if windings[0].conn == WindingConn::Delta
+            && w.conn == WindingConn::Wye
+            && w.terminal_map.len() > 1
+        {
+            polarity[w_idx] = -1;
+        }
+        // Center tap: the second half winding is reversed.
+        if w_idx == 2 && nw == 3 && windings[1].terminal_map.last() == w.terminal_map.first() {
+            polarity[w_idx] = -1;
+        }
+    }
+    polarity
+}
+
+/// Names (lowercased) of linecodes that re-inline on their lines: every
+/// referencing line carries the reader's `pmd_inline` marker.
+fn inlined_codes(net: &DistNetwork) -> BTreeSet<String> {
+    let mut inlined = BTreeSet::new();
+    for c in &net.linecodes {
+        let mut refs = net
+            .lines
+            .iter()
+            .filter(|l| l.linecode.eq_ignore_ascii_case(&c.name))
+            .peekable();
+        if refs.peek().is_some()
+            && refs.all(|l| l.extras.get("pmd_inline").and_then(Value::as_bool) == Some(true))
+        {
+            inlined.insert(c.name.to_lowercase());
+        }
+    }
+    inlined
+}
+
+/// The six ENGINEERING impedance matrices of a linecode, emitted onto a
+/// `linecode` entry or re-inlined onto a line. The b_fr/b_to numbers are
+/// the dss cmatrix halves in nanofarads per meter (the susceptance follows
+/// as 2 pi f C); the model holds true siemens per meter, so divide the
+/// omega back out — or emit the reader's raw stash, which is bit exact.
+fn insert_impedance_matrices(o: &mut Map<String, Value>, c: &DistLineCode, base_frequency: f64) {
+    o.insert("rs".into(), matrix(&c.r_series));
+    o.insert("xs".into(), matrix(&c.x_series));
+    o.insert("g_fr".into(), matrix(&c.g_from));
+    o.insert("g_to".into(), matrix(&c.g_to));
+    if let (Some(fr), Some(to)) = (c.extras.get("pmd_b_fr"), c.extras.get("pmd_b_to")) {
+        o.insert("b_fr".into(), fr.clone());
+        o.insert("b_to".into(), to.clone());
+    } else {
+        let to_nf = 1.0 / (std::f64::consts::TAU * base_frequency * 1e-9);
+        o.insert("b_fr".into(), matrix(&scale(&c.b_from, to_nf)));
+        o.insert("b_to".into(), matrix(&scale(&c.b_to, to_nf)));
+    }
 }
 
 /// The engine's Thevenin computation from MVAsc3/MVAsc1 and the X/R ratios

@@ -39,13 +39,20 @@ def solve(path):
     # inject the option right after the circuit line on both sides.
     text = open(path, encoding="utf-8", errors="replace").read()
     lines = text.splitlines()
+    injected = False
     for i, line in enumerate(lines):
-        if line.lower().lstrip().startswith("new circuit"):
+        head = line.lower().lstrip()
+        # Both circuit spellings appear in the vendored masters: the writer
+        # emits "New Circuit.x", ieee34/ieee123 use "New object=circuit.x".
+        if head.startswith("new circuit") or head.startswith("new object=circuit"):
             # Tight solver tolerance: the default 1e-4 pu would swamp the
             # 1e-8 conversion bound with convergence noise.
             lines.insert(i + 1, "Set Controlmode=OFF")
             lines.insert(i + 2, "Set tolerance=0.0000000001")
+            injected = True
             break
+    if not injected:
+        raise SystemExit(f"{path}: no circuit definition found to stage")
     staged = os.path.join(os.path.dirname(os.path.abspath(path)), "_staged_" + os.path.basename(path))
     with open(staged, "w") as f:
         f.write("\n".join(lines) + "\n")
@@ -99,13 +106,10 @@ def compare(base, emitted):
 # load seeds VBase 7200 V; writing kv=12.47 computes 12470/sqrt(3)),
 # amplified near vminpu boundaries.
 DOCUMENTED = {
-    ("opendss_ieee34_ieee34Mod1", "canonical"): (1e-5, "engine seeding asymmetry"),
-    ("opendss_ieee123_IEEE123Master", "canonical"): (1e-5, "engine seeding asymmetry"),
     ("micro_defaults_degenerate", "canonical"): (1e-6, "engine seeding asymmetry"),
     ("micro_defaults_degenerate", "via_pmd"): (1e-6, "engine seeding asymmetry"),
     ("micro_defaults_degenerate", "via_bmopf"): (1e-2, "BMOPF: constant power loads only"),
     ("opendss_ieee13_IEEE13Nodeckt", "via_bmopf"): (1e-1, "BMOPF: constant power loads only"),
-    ("opendss_ieee13_IEEE13Nodeckt", "via_pmd"): (1e-5, "engine seeding asymmetry"),
     ("opendss_ieee34_ieee34Mod1", "via_bmopf"): (1e-1, "BMOPF: constant power loads only"),
     ("opendss_ieee34_ieee34Mod1", "via_pmd"): (1e-1, "no vminpu field in ENGINEERING"),
     ("opendss_ieee123_IEEE123Master", "via_bmopf"): (None, "transformer shape outside the four BMOPF subtypes"),
@@ -122,12 +126,19 @@ DOCUMENTED = {
 def main():
     failures = 0
     for stem, original in ORIGINALS.items():
+        emitted_paths = sorted(glob.glob(f"target/physics/{stem}.*.dss"))
+        if not emitted_paths:
+            # An empty glob must fail, or the gate silently checks nothing
+            # (forgotten emit step, renamed fixture).
+            print(f"{stem}: NO EMITTED CASES under target/physics (run the emit test first)")
+            failures += 1
+            continue
         base = solve(original)
         if base is None:
             print(f"{stem}: ORIGINAL DID NOT CONVERGE")
             failures += 1
             continue
-        for emitted_path in sorted(glob.glob(f"target/physics/{stem}.*.dss")):
+        for emitted_path in emitted_paths:
             kind = emitted_path.rsplit(".", 2)[-2]
             bound, reason = DOCUMENTED.get((stem, kind), (1e-8, None))
             emitted = solve(emitted_path)

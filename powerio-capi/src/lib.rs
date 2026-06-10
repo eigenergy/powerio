@@ -454,7 +454,7 @@ pub unsafe extern "C" fn pio_convert_file(
 }
 
 /// Free a string returned by [`pio_to_matpower`], [`pio_to_format`],
-/// [`pio_convert_file`], [`pio_to_json`], or any `pio_dist_*` converter.
+/// [`pio_convert_file`], [`pio_to_json`], or any `pio_dist_*` string output.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_string_free(s: *mut c_char) {
     unsafe {
@@ -770,25 +770,24 @@ pub unsafe extern "C" fn pio_dist_network_free(net: *mut PioDistNetwork) {
 
 /// Parse warnings retained on the handle: everything the reader could not
 /// represent or had to assume (the loud half of the fidelity contract).
-/// Writes them `\n`-joined into `warnbuf` (NULL/0 to skip) and returns the
-/// warning count, or `-1` if `net` is NULL.
+/// Returns them `\n`-joined as an owned C string (free with
+/// [`pio_string_free`]; empty string when there are none), `NULL` on error.
+/// Warning text is unbounded, so this is an owned string, never a fixed
+/// caller buffer.
 #[cfg(feature = "dist")]
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_dist_warnings(
     net: *const PioDistNetwork,
-    warnbuf: *mut c_char,
-    warnlen: usize,
-) -> isize {
+    errbuf: *mut c_char,
+    errlen: usize,
+) -> *mut c_char {
     unsafe {
-        guard(-1, || match net.as_ref() {
-            Some(c) => {
-                // Skip the join on a count-only probe (NULL/0 buffer).
-                if !warnbuf.is_null() && warnlen > 0 {
-                    copy_to_buf(warnbuf, warnlen, &c.net.warnings.join("\n"));
-                }
-                c.net.warnings.len() as isize
+        guard(std::ptr::null_mut(), || match net.as_ref() {
+            Some(c) => finish_cstring(c.net.warnings.join("\n"), errbuf, errlen),
+            None => {
+                copy_to_buf(errbuf, errlen, "network handle is NULL");
+                std::ptr::null_mut()
             }
-            None => -1,
         })
     }
 }
@@ -841,7 +840,7 @@ pub unsafe extern "C" fn pio_dist_convert_file(
         finish_conversion(warnbuf, warnlen, errbuf, errlen, || {
             let path = required_cstr(path, "path")?;
             let from = optional_cstr(from, "from")?;
-            let to = required_cstr(to, "to")?;
+            let to = dist_target_from_c(to)?;
             let conv = powerio_dist::convert_file(std::path::Path::new(path), to, from)
                 .map_err(|e| e.to_string())?;
             Ok((conv.text, conv.warnings))
@@ -849,17 +848,19 @@ pub unsafe extern "C" fn pio_dist_convert_file(
     }
 }
 
-/// Convert in-memory distribution case `text` from format `from` to format
-/// `to` (both required; `dss`, `pmd`, or `bmopf`). Returns the converted text
-/// as an owned C string (free with [`pio_string_free`]), `NULL` on error. The
-/// warnings written `\n`-joined into `warnbuf` carry both the parse warnings
-/// and the writer's fidelity losses (there is no handle to query them from).
+/// Convert in-memory distribution case `text` of format `from` to format
+/// `to` (both required; `dss`, `pmd`, or `bmopf`). The parameter order is
+/// input, target, source, matching [`pio_dist_convert_file`]. Returns the
+/// converted text as an owned C string (free with [`pio_string_free`]),
+/// `NULL` on error. The warnings written `\n`-joined into `warnbuf` carry
+/// both the parse warnings and the writer's fidelity losses (there is no
+/// handle to query them from).
 #[cfg(feature = "dist")]
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_dist_convert_str(
     text: *const c_char,
-    from: *const c_char,
     to: *const c_char,
+    from: *const c_char,
     warnbuf: *mut c_char,
     warnlen: usize,
     errbuf: *mut c_char,
@@ -868,9 +869,9 @@ pub unsafe extern "C" fn pio_dist_convert_str(
     unsafe {
         finish_conversion(warnbuf, warnlen, errbuf, errlen, || {
             let text = required_cstr(text, "text")?;
+            let to = dist_target_from_c(to)?;
             let from = required_cstr(from, "from")?;
-            let to = required_cstr(to, "to")?;
-            let conv = powerio_dist::convert_str(text, from, to).map_err(|e| e.to_string())?;
+            let conv = powerio_dist::convert_str(text, to, from).map_err(|e| e.to_string())?;
             Ok((conv.text, conv.warnings))
         })
     }
@@ -881,8 +882,8 @@ fn dist_target_from_c(to: *const c_char) -> Result<powerio_dist::DistTargetForma
     let to = required_cstr(to, "to")?;
     // The message comes from the real error so it can't drift from what the
     // powerio-dist dispatchers report for the same mistake.
-    powerio_dist::dist_target_from_name(to)
-        .ok_or_else(|| powerio_dist::Error::UnknownFormat(to.to_string()).to_string())
+    to.parse::<powerio_dist::DistTargetFormat>()
+        .map_err(|e| e.to_string())
 }
 
 #[cfg(test)]
@@ -1429,8 +1430,8 @@ mpc.branch = [
             let s = unsafe {
                 pio_dist_convert_str(
                     text.as_ptr(),
-                    from.as_ptr(),
                     to.as_ptr(),
+                    from.as_ptr(),
                     warn.as_mut_ptr(),
                     warn.len(),
                     err.as_mut_ptr(),
@@ -1461,13 +1462,46 @@ mpc.branch = [
                 pio_dist_parse_str(text.as_ptr(), fmt.as_ptr(), err.as_mut_ptr(), err.len())
             };
             assert!(!net.is_null());
-            let mut warn = [0 as c_char; 4096];
-            let n = unsafe { pio_dist_warnings(net, warn.as_mut_ptr(), warn.len()) };
-            assert!(n > 0, "expected at least one parse warning");
-            let msg = unsafe { CStr::from_ptr(warn.as_ptr()) }.to_str().unwrap();
-            assert_eq!(msg.lines().count(), n as usize);
-            assert!(unsafe { pio_dist_warnings(std::ptr::null(), std::ptr::null_mut(), 0) } == -1);
+            let s = unsafe { pio_dist_warnings(net, err.as_mut_ptr(), err.len()) };
+            assert!(!s.is_null());
+            let msg = unsafe { CStr::from_ptr(s) }.to_str().unwrap();
+            assert!(
+                msg.lines().any(|w| w.contains("furlong")),
+                "expected the units warning, got: {msg}"
+            );
+            unsafe { pio_string_free(s) };
+            assert!(
+                unsafe { pio_dist_warnings(std::ptr::null(), err.as_mut_ptr(), err.len()) }
+                    .is_null()
+            );
             unsafe { pio_dist_network_free(net) };
+        }
+
+        #[test]
+        fn convert_file_round_trips_through_bmopf() {
+            let path = fourwire_cstr();
+            let to = CString::new("bmopf-json").unwrap();
+            let mut warn = [0 as c_char; 4096];
+            let mut err = [0 as c_char; PIO_ERRBUF_MIN];
+            let s = unsafe {
+                pio_dist_convert_file(
+                    path.as_ptr(),
+                    to.as_ptr(),
+                    std::ptr::null(),
+                    warn.as_mut_ptr(),
+                    warn.len(),
+                    err.as_mut_ptr(),
+                    err.len(),
+                )
+            };
+            assert!(
+                !s.is_null(),
+                "{}",
+                unsafe { CStr::from_ptr(err.as_ptr()) }.to_str().unwrap()
+            );
+            let text = unsafe { CStr::from_ptr(s) }.to_str().unwrap();
+            assert!(text.contains("\"bus\""));
+            unsafe { pio_string_free(s) };
         }
 
         #[test]

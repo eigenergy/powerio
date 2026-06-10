@@ -48,7 +48,7 @@ def test_json_sniffing_round_trip(tmp_path):
 
 def test_convert_str_and_convert_file():
     text = FOURWIRE.read_text()
-    via_str = dist.convert_str(text, "dss", "pmd-json")
+    via_str = dist.convert_str(text, "pmd-json", "dss")
     via_file = dist.convert_file(FOURWIRE, "pmd-json")
     assert via_str.text == via_file.text
     assert isinstance(via_str, powerio.Conversion)
@@ -78,10 +78,10 @@ def test_malformed_json_raises_parse_error():
 
 
 def test_missing_file_raises_precise_oserror():
-    # Matches the transmission surface: io errors map to the precise OSError
-    # subclass, not the package base error.
-    with pytest.raises(FileNotFoundError):
+    # Io errors map to the precise OSError subclass with the path attached.
+    with pytest.raises(FileNotFoundError) as exc:
         dist.parse_file(DATA / "does_not_exist.dss")
+    assert exc.value.filename and "does_not_exist.dss" in str(exc.value.filename)
 
 
 def test_one_shot_convert_carries_parse_warnings():
@@ -89,8 +89,8 @@ def test_one_shot_convert_carries_parse_warnings():
         "clear\n"
         "new circuit.w basekv=12.47 bus1=src\n"
         "new line.l1 bus1=src bus2=b2 length=1 units=furlong\n",
-        "dss",
         "bmopf-json",
+        "dss",
     )
     assert any("furlong" in w for w in conv.warnings)
 

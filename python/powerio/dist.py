@@ -111,11 +111,12 @@ def convert_file(path: Any, to: str, from_: Optional[str] = None) -> Conversion:
     return Conversion(text, warnings)
 
 
-def convert_str(text: str, from_: str, to: str) -> Conversion:
-    """Convert an in-memory distribution case from ``from_`` to ``to`` in one call.
+def convert_str(text: str, to: str, from_: str) -> Conversion:
+    """Convert an in-memory distribution case of format ``from_`` to ``to``.
 
+    The argument order matches :func:`convert_file`: input, target, source.
     The warnings carry both the parse warnings and the writer's fidelity
     losses (there is no :class:`DistCase` to query them from).
     """
-    text, warnings = _powerio.dist_convert_str(text, from_, to)
+    text, warnings = _powerio.dist_convert_str(text, to, from_)
     return Conversion(text, warnings)

@@ -117,8 +117,24 @@ impl Writer {
                         c.name
                     ));
                 }
-                self.flat_matrix(&mut o, "R_series", &c.r_series, &c.name);
-                self.flat_matrix(&mut o, "X_series", &c.x_series, &c.name);
+                // The schema requires R_series_1_1 and X_series_1_1; an
+                // empty matrix would drop them and invalidate the output.
+                let dim = c.r_series.len().max(c.x_series.len()).max(1);
+                if c.r_series.is_empty() && c.x_series.is_empty() {
+                    self.warn(format!(
+                        "linecode {}: no series matrix; emitted as 1 conductor \
+                         zero impedance",
+                        c.name
+                    ));
+                } else if c.r_series.is_empty() || c.x_series.is_empty() {
+                    self.warn(format!(
+                        "linecode {}: R_series and X_series sizes disagree; the \
+                         empty one emitted as zeros",
+                        c.name
+                    ));
+                }
+                self.required_matrix(&mut o, "R_series", &c.r_series, dim, &c.name);
+                self.required_matrix(&mut o, "X_series", &c.x_series, dim, &c.name);
                 self.flat_matrix(&mut o, "G_from", &c.g_from, &c.name);
                 self.flat_matrix(&mut o, "G_to", &c.g_to, &c.name);
                 self.flat_matrix(&mut o, "B_from", &c.b_from, &c.name);
@@ -217,14 +233,32 @@ impl Writer {
                 let mut o = Map::new();
                 o.insert("bus".into(), json!(s.bus));
                 o.insert("terminal_map".into(), json!(s.terminal_map));
-                self.flat_matrix(&mut o, "G", &s.g, &s.name);
-                self.flat_matrix(&mut o, "B", &s.b, &s.name);
+                // The schema requires G_1_1 and B_1_1.
+                let dim = s.g.len().max(s.b.len()).max(1);
+                if s.g.is_empty() && s.b.is_empty() {
+                    self.warn(format!(
+                        "shunt {}: no admittance matrix; emitted as 1 conductor \
+                         zero admittance",
+                        s.name
+                    ));
+                } else if s.g.is_empty() || s.b.is_empty() {
+                    self.warn(format!(
+                        "shunt {}: G and B sizes disagree; the empty one emitted \
+                         as zeros",
+                        s.name
+                    ));
+                }
+                self.required_matrix(&mut o, "G", &s.g, dim, &s.name);
+                self.required_matrix(&mut o, "B", &s.b, dim, &s.name);
                 self.extras_dropped(&s.extras, &format!("shunt {}", s.name));
                 shunts.insert(s.name.clone(), Value::Object(o));
             }
             doc.insert("shunt".into(), Value::Object(shunts));
         }
         let mut sources = Map::new();
+        if net.sources.is_empty() {
+            self.warn("network has no voltage source; BMOPF requires exactly one");
+        }
         for (i, vs) in net.sources.iter().enumerate() {
             if i > 0 {
                 self.warn(format!(
@@ -417,6 +451,15 @@ impl Writer {
                 hots.push(term.clone());
             }
         }
+        // Percent resistance does not transfer to the doubled voltage at a
+        // fixed s rating (the base scales 4x): convert each half to ohms on
+        // its own base, sum the series path, and express the total on the
+        // new base. The shared s_rating cancels, leaving a v^2 weighting.
+        // The leakage reactance needs no such move: two_winding applies
+        // xsc_pct at the from side, whose base the collapse does not touch.
+        let v_new = w2.v_ref + w3.v_ref;
+        let r_pct_new =
+            (w2.r_pct * w2.v_ref * w2.v_ref + w3.r_pct * w3.v_ref * w3.v_ref) / (v_new * v_new);
         let to = Winding {
             bus: w2.bus.clone(),
             terminal_map: {
@@ -425,9 +468,9 @@ impl Writer {
                 m
             },
             conn: WindingConn::Wye,
-            v_ref: w2.v_ref + w3.v_ref,
+            v_ref: v_new,
             s_rating: from.s_rating,
-            r_pct: w2.r_pct + w3.r_pct,
+            r_pct: r_pct_new,
             tap: 1.0,
         };
         self.warn(format!(
@@ -477,7 +520,10 @@ impl Writer {
 
     /// A three phase wye-wye unit becomes one single_phase entry per phase
     /// (`name_1`..), each at line to neutral voltage and a third of the
-    /// rating, the convention the public example networks use.
+    /// rating. That keeps the impedance base v^2/s, so the percent values
+    /// carry over unchanged. The public IEEE13 example records the line to
+    /// line voltage on its decomposed units instead; both are self
+    /// consistent, they differ in the v_ref convention.
     fn decompose_wye_wye(&mut self, t: &DistTransformer) -> Vec<(String, Value)> {
         let mut out = Vec::new();
         let (from, to) = (&t.windings[0], &t.windings[1]);
@@ -520,6 +566,23 @@ impl Writer {
         }
     }
 
+    /// Emits a matrix whose `_1_1` entry the schema requires; an empty one
+    /// becomes `dim` by `dim` zeros so the required key exists.
+    fn required_matrix(
+        &mut self,
+        o: &mut Map<String, Value>,
+        prefix: &str,
+        m: &Mat,
+        dim: usize,
+        name: &str,
+    ) {
+        if m.is_empty() {
+            self.flat_matrix(o, prefix, &vec![vec![0.0; dim]; dim], name);
+        } else {
+            self.flat_matrix(o, prefix, m, name);
+        }
+    }
+
     fn flat_matrix(&mut self, o: &mut Map<String, Value>, prefix: &str, m: &Mat, name: &str) {
         for (i, row) in m.iter().enumerate() {
             for (j, &v) in row.iter().enumerate() {
@@ -547,10 +610,14 @@ enum Kind {
 fn classify(t: &DistTransformer) -> Kind {
     // A network read from BMOPF records its subtype; trust it so writing
     // back reproduces the grouping (center tap reads as two windings).
-    if let Some(sub) = t.extras.get("bmopf_subtype").and_then(|v| v.as_str()) {
+    // An unknown or shape mismatched subtype falls through to the shape
+    // based classification below.
+    if let Some(sub) = t.extras.get("bmopf_subtype").and_then(|v| v.as_str())
+        && t.windings.len() == 2
+    {
         match sub {
             "single_phase" => return Kind::SinglePhase,
-            "center_tap" if t.windings.len() == 2 => return Kind::SinglePhaseShape("center_tap"),
+            "center_tap" => return Kind::SinglePhaseShape("center_tap"),
             "wye_delta" => return Kind::WyeDelta,
             "delta_wye" => return Kind::DeltaWye,
             _ => {}
@@ -562,7 +629,18 @@ fn classify(t: &DistTransformer) -> Kind {
         (1, [WindingConn::Wye, WindingConn::Wye, WindingConn::Wye]) => Kind::CenterTap,
         (3, [WindingConn::Wye, WindingConn::Delta]) => Kind::WyeDelta,
         (3, [WindingConn::Delta, WindingConn::Wye]) => Kind::DeltaWye,
-        (3, [WindingConn::Wye, WindingConn::Wye]) => Kind::WyeWye3,
+        // The decomposition indexes terminal_map[phase] and takes the last
+        // entry as the neutral; anything else is not safely decomposable.
+        (3, [WindingConn::Wye, WindingConn::Wye])
+            if t.windings
+                .iter()
+                .all(|w| w.terminal_map.len() == t.phases + 1) =>
+        {
+            Kind::WyeWye3
+        }
+        (3, [WindingConn::Wye, WindingConn::Wye]) => Kind::Unsupported(
+            "three phase wye-wye whose terminal maps do not list each phase plus a neutral".into(),
+        ),
         _ => Kind::Unsupported(format!(
             "{} phase with {} windings ({:?})",
             t.phases,

@@ -70,19 +70,27 @@ pub mod generator {
     pub const KV: f64 = 12.47;
     pub const KW: f64 = 1000.0;
     pub const KVAR: f64 = 60.0;
+    /// Constructor PFNominal; kw/pf writes resync kvar from it.
+    pub const PF: f64 = 0.88;
 }
 
 /// Base frequency when no `Set DefaultBaseFrequency` appears.
 pub const BASE_FREQUENCY: f64 = 60.0;
 
-/// `To_Meters` from Shared/LineUnits.cpp; `none` has no factor and callers
-/// treat the number as meters.
+/// `GetUnitsCode` + `To_Meters` from Shared/LineUnits.cpp. The engine
+/// matches on the first two characters; `no*` and anything unrecognized
+/// are UNITS_NONE, which has no conversion factor.
 pub fn unit_to_meters(code: &str) -> Option<f64> {
-    Some(match code.to_ascii_lowercase().as_str() {
-        "mi" | "miles" => 1609.344,
-        "kft" => 304.8,
+    let two: String = code
+        .chars()
+        .take(2)
+        .map(|c| c.to_ascii_lowercase())
+        .collect();
+    Some(match two.as_str() {
+        "mi" => 1609.344,
+        "kf" => 304.8,
         "km" => 1000.0,
-        "m" => 1.0,
+        "m" | "me" => 1.0,
         "ft" => 0.3048,
         "in" => 0.0254,
         "cm" => 0.01,

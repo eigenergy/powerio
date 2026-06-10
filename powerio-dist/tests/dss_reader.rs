@@ -1,7 +1,8 @@
 //! Typed model from the vendored fixtures, checked against the OpenDSS
 //! engine's own bus and node sets (dumped with opendssdirect 0.9.4 via
-//! `dss.Circuit.AllBusNames()` and `dss.Bus.Nodes()`; regenerate with the
-//! snippet in tools/solve_dss.py's module docs if the engine changes).
+//! `dss.Circuit.AllBusNames()` and `dss.Bus.Nodes()` per bus after a
+//! Redirect; tools/solve_dss.py documents the staging to reuse when the
+//! engine changes).
 
 use std::collections::BTreeMap;
 use std::path::PathBuf;

@@ -58,6 +58,7 @@ pub fn network_from_raw(raw: &RawDss, source: Arc<String>) -> DistNetwork {
         },
         buses: BTreeMap::new(),
         bus_order: Vec::new(),
+        linecode_units: BTreeMap::new(),
         vars: &raw.vars,
     };
 
@@ -245,6 +246,10 @@ struct Reader<'a> {
     net: DistNetwork,
     buses: BTreeMap<String, BusState>,
     bus_order: Vec<String>,
+    /// Linecode name (lowercase) → meters per its length unit, `None` when
+    /// the linecode has no units. Lines need it: `ConvertLineUnits` couples
+    /// the two sides' units.
+    linecode_units: BTreeMap<String, Option<f64>>,
     vars: &'a VarMap,
 }
 
@@ -310,19 +315,56 @@ impl Reader<'_> {
             .map(|i| usize::try_from(i).unwrap_or(0))
     }
 
-    /// Meters per source length unit; `none` and missing stay at 1 (the
-    /// value is taken as meters), unknown codes warn.
-    fn units_factor(&mut self, units: Option<&str>, class: &str, name: &str) -> f64 {
-        match units {
-            None => 1.0,
-            Some(u) => dd::unit_to_meters(u).unwrap_or_else(|| {
-                if !u.eq_ignore_ascii_case("none") {
-                    self.net.warnings.push(format!(
-                        "{class} {name}: unknown units `{u}`; treated as meters"
-                    ));
-                }
-                1.0
-            }),
+    /// Meters per source length unit, or `None` when no conversion applies:
+    /// the property is missing, `none`, or a code `GetUnitsCode`
+    /// (Shared/LineUnits.cpp) does not recognize — the engine maps unknown
+    /// codes to UNITS_NONE. Unknown codes warn.
+    fn units_code(&mut self, units: Option<&str>, class: &str, name: &str) -> Option<f64> {
+        let u = units?;
+        if let Some(f) = dd::unit_to_meters(u) {
+            return Some(f);
+        }
+        if !u.to_ascii_lowercase().starts_with("no") {
+            self.net.warnings.push(format!(
+                "{class} {name}: unknown units `{u}`; treated as none"
+            ));
+        }
+        None
+    }
+
+    /// Extras value for a written numeric token: the literal text when it
+    /// is already a plain number, otherwise the evaluated value — RPN or
+    /// `@var` text is no use to the dss writer, which needs an argument the
+    /// engine can read back.
+    fn stash_numeric(&self, v: &Value) -> serde_json::Value {
+        if v.text.parse::<f64>().is_ok() {
+            v.text.clone().into()
+        } else {
+            match v.to_f64(Some(self.vars)) {
+                Ok(n) => n.into(),
+                Err(_) => v.text.clone().into(),
+            }
+        }
+    }
+
+    /// `kv` and `phases` for the dss writer: the written token (evaluated
+    /// when not a plain number), the materialized default otherwise.
+    fn stash_kv_and_phases(&self, props: &Props, extras: &mut Extras, kv: f64, phases: usize) {
+        let kv_value = match props.by_name.get("kv") {
+            Some(written) => self.stash_numeric(written),
+            None => kv.into(),
+        };
+        extras.insert("kv".into(), kv_value);
+        let phases_value = match props.by_name.get("phases") {
+            Some(written) => self.stash_numeric(written),
+            None => (phases as u64).into(),
+        };
+        extras.insert("phases".into(), phases_value);
+        // A 1 phase delta types as SinglePhase, indistinguishable from a wye
+        // spot load without the written token; the writer reads this stash to
+        // re-emit conn=delta.
+        if let Some(written) = props.by_name.get("conn") {
+            extras.insert("conn".into(), written.text.clone().into());
         }
     }
 
@@ -404,15 +446,20 @@ impl Reader<'_> {
             dd::linecode::NPHASES,
         );
         let units = props.get("units").map(|v| v.text.clone());
-        let per_meter = self.units_factor(units.as_deref(), "linecode", &obj.name);
+        let units_m = self.units_code(units.as_deref(), "linecode", &obj.name);
+        let per_meter = units_m.unwrap_or(1.0);
+        self.linecode_units
+            .insert(obj.name.to_ascii_lowercase(), units_m);
 
         let freq = self
             .f64_prop(props.get("basefreq"))
             .unwrap_or(self.net.base_frequency);
 
-        let (r, x, c_nf, matrix_defaulted) = self.impedance_matrices(
+        let z = self.impedance_matrices(
             &props,
             n,
+            "linecode",
+            &obj.name,
             dd::line::R1,
             dd::line::X1,
             dd::line::R0,
@@ -420,13 +467,16 @@ impl Reader<'_> {
             dd::line::C1_NF,
             dd::line::C0_NF,
         );
-        if matrix_defaulted {
+        if z.all_default {
             self.defaulted("linecode", &obj.name, "rmatrix");
         }
 
         // Half the total line charging susceptance at each end; OpenDSS
         // carries one C matrix for the whole pi section.
-        let b_half = scale_mat(&c_nf, std::f64::consts::TAU * freq * 1e-9 / per_meter / 2.0);
+        let b_half = scale_mat(
+            &z.c_nf,
+            std::f64::consts::TAU * freq * 1e-9 / per_meter / 2.0,
+        );
         let zero = vec![vec![0.0; n]; n];
 
         // i_max carries the emergency rating: PMD's cm_ub and the public
@@ -444,11 +494,14 @@ impl Reader<'_> {
         if let Some(u) = units {
             extras.insert("units".into(), u.into());
         }
+        for (key, text) in z.malformed {
+            extras.insert(key.to_string(), text.into());
+        }
         DistLineCode {
             name: obj.name.clone(),
             n_conductors: n,
-            r_series: scale_mat(&r, 1.0 / per_meter),
-            x_series: scale_mat(&x, 1.0 / per_meter),
+            r_series: scale_mat(&z.r, 1.0 / per_meter),
+            x_series: scale_mat(&z.x, 1.0 / per_meter),
             g_from: zero.clone(),
             b_from: b_half.clone(),
             g_to: zero,
@@ -460,31 +513,50 @@ impl Reader<'_> {
     }
 
     /// R, X (ohm per unit length) and C (nF per unit length) matrices from
-    /// either explicit matrices or sequence values. Returns whether the
-    /// impedance came entirely from defaults.
+    /// either explicit matrices or sequence values.
     #[allow(clippy::too_many_arguments)]
     fn impedance_matrices(
         &mut self,
         props: &Props,
         n: usize,
+        class: &str,
+        name: &str,
         r1d: f64,
         x1d: f64,
         r0d: f64,
         x0d: f64,
         c1d: f64,
         c0d: f64,
-    ) -> (Mat, Mat, Mat, bool) {
-        let rows = |v: Option<&Value>| -> Option<Mat> {
-            v.and_then(|v| v.to_rows(Some(self.vars)).ok())
-                .and_then(|rows| square_from_rows(&rows, n))
+    ) -> SeriesImpedance {
+        let mut malformed: Vec<(&'static str, String)> = Vec::new();
+        let mut rows = |key: &'static str| -> Option<Mat> {
+            let v = props.get(key)?;
+            let parsed = v
+                .to_rows(Some(self.vars))
+                .ok()
+                .and_then(|rows| square_from_rows(&rows, n));
+            if parsed.is_none() {
+                malformed.push((key, v.text.clone()));
+            }
+            parsed
         };
-        let rm = rows(props.get("rmatrix"));
-        let xm = rows(props.get("xmatrix"));
-        let cm = rows(props.get("cmatrix"));
-        let any_matrix = rm.is_some() || xm.is_some() || cm.is_some();
-        let any_seq = ["r1", "x1", "r0", "x0", "c1", "c0", "b1", "b0"]
-            .iter()
-            .any(|k| props.by_name.contains_key(*k));
+        let rm = rows("rmatrix");
+        let xm = rows("xmatrix");
+        let cm = rows("cmatrix");
+        // The engine rejects the whole script on a bad matrix; the liberal
+        // reader falls back to the sequence values but says so and keeps
+        // the text. A written property is never reported as defaulted.
+        for (key, _) in &malformed {
+            self.warn(format!(
+                "{class} {name}: `{key}` does not parse as a {n}x{n} matrix; \
+                 sequence values apply and the text is kept in extras"
+            ));
+        }
+        let any_written = [
+            "rmatrix", "xmatrix", "cmatrix", "r1", "x1", "r0", "x0", "c1", "c0", "b1", "b0",
+        ]
+        .iter()
+        .any(|k| props.by_name.contains_key(*k));
 
         let seq = |props: &Props, k1: &'static str, k0: &'static str, d1: f64, d0: f64| {
             let v1 = props
@@ -506,24 +578,29 @@ impl Reader<'_> {
             mat
         };
 
-        let r = rm.unwrap_or_else(|| seq(props, "r1", "r0", r1d, r0d));
-        let x = xm.unwrap_or_else(|| seq(props, "x1", "x0", x1d, x0d));
-        let c = cm.unwrap_or_else(|| seq(props, "c1", "c0", c1d, c0d));
-        (r, x, c, !any_matrix && !any_seq)
+        SeriesImpedance {
+            r: rm.unwrap_or_else(|| seq(props, "r1", "r0", r1d, r0d)),
+            x: xm.unwrap_or_else(|| seq(props, "x1", "x0", x1d, x0d)),
+            c_nf: cm.unwrap_or_else(|| seq(props, "c1", "c0", c1d, c0d)),
+            all_default: !any_written,
+            malformed,
+        }
     }
 
     // ----- vsource -------------------------------------------------------
 
     fn vsource(&mut self, obj: &RawObject) -> VoltageSource {
         let props = Props::new(obj);
-        let phases = self
-            .usize_prop(props.get("phases"))
-            .unwrap_or(dd::vsource::PHASES);
+        let phases = self.usize_or(&props, "phases", "vsource", &obj.name, dd::vsource::PHASES);
         let basekv = self.f64_or(&props, "basekv", "vsource", &obj.name, dd::vsource::BASEKV);
-        let pu = self.f64_prop(props.get("pu")).unwrap_or(dd::vsource::PU);
-        let angle_deg = self
-            .f64_prop(props.get("angle"))
-            .unwrap_or(dd::vsource::ANGLE_DEG);
+        let pu = self.f64_or(&props, "pu", "vsource", &obj.name, dd::vsource::PU);
+        let angle_deg = self.f64_or(
+            &props,
+            "angle",
+            "vsource",
+            &obj.name,
+            dd::vsource::ANGLE_DEG,
+        );
         let spec = if let Some(v) = props.get("bus1") {
             v.to_bus_spec()
         } else {
@@ -532,10 +609,16 @@ impl Reader<'_> {
         };
         let map = self.terminals(&spec, phases, phases + 1, phases + 1);
 
-        // The engine's convention: per phase magnitude basekv/sqrt(phases),
-        // angles spaced -360/phases degrees, wrapped to (-180, 180] (the
-        // wrap is in radians, matching the reference conversion).
-        let v_ln = basekv * 1e3 / (phases as f64).sqrt() * pu;
+        // VSource.cpp ~995-1003: one phase takes basekv outright, otherwise
+        // the per phase magnitude is basekv / (2 sin(pi/n)) — the chord of
+        // the n-gon, which is sqrt(3) only at n = 3. Angles space at
+        // -360/n degrees (positive sequence, ~1272), wrapped to (-180, 180]
+        // in radians, matching the reference conversion.
+        let v_ln = if phases == 1 {
+            basekv * 1e3 * pu
+        } else {
+            basekv * 1e3 * pu / (2.0 * (std::f64::consts::PI / phases as f64).sin())
+        };
         let mut v_magnitude = vec![v_ln; phases];
         let mut v_angle: Vec<f64> = (0..phases)
             .map(|k| {
@@ -616,18 +699,41 @@ impl Reader<'_> {
         }
 
         let length_units = props.get("units").map(|v| v.text.clone());
-        let length_factor = self.units_factor(length_units.as_deref(), "line", &obj.name);
+        let line_units_m = self.units_code(length_units.as_deref(), "line", &obj.name);
         let length = self.f64_or(&props, "length", "line", &obj.name, dd::line::LENGTH);
 
-        let linecode = if let Some(code) = props.get("linecode") {
-            code.text.clone()
+        // ConvertLineUnits (Shared/LineUnits.cpp ~166) is 1.0 when either
+        // side is UNITS_NONE, and the engine scales the linecode matrices
+        // by Len / FUnitsConvert (Line.cpp ~1177). A unitless line length
+        // is therefore in the linecode's units, and a unitless linecode is
+        // per line length unit, so the raw length preserves the Z·length
+        // product.
+        let mut malformed: Vec<(&'static str, String)> = Vec::new();
+        let (linecode, length_factor) = if let Some(code) = props.get("linecode") {
+            let lc_units_m = self
+                .linecode_units
+                .get(&code.text.to_ascii_lowercase())
+                .copied()
+                .flatten();
+            let factor = match (lc_units_m, line_units_m) {
+                (Some(_), Some(lf)) => lf,
+                (Some(lcf), None) => lcf,
+                (None, _) => 1.0,
+            };
+            (code.text.clone(), factor)
         } else {
-            self.synthesize_linecode(&props, phases, length_factor, &obj.name)
+            let factor = line_units_m.unwrap_or(1.0);
+            let (code, bad) = self.synthesize_linecode(&props, phases, factor, &obj.name);
+            malformed = bad;
+            (code, factor)
         };
 
         let mut extras = extras_from_leftovers(&props);
         if let Some(u) = length_units {
             extras.insert("units".into(), u.into());
+        }
+        for (key, text) in malformed {
+            extras.insert(key.to_string(), text.into());
         }
         self.net.lines.push(DistLine {
             name: obj.name.clone(),
@@ -643,17 +749,19 @@ impl Reader<'_> {
 
     /// A line without `linecode=` carries inline or default impedance;
     /// materialize it as a linecode named `_line_<name>` in the line's own
-    /// length units.
+    /// length units. Malformed matrix texts return for the line's extras.
     fn synthesize_linecode(
         &mut self,
         props: &Props,
         phases: usize,
         length_factor: f64,
         line_name: &str,
-    ) -> String {
-        let (r, x, c_nf, all_default) = self.impedance_matrices(
+    ) -> (String, Vec<(&'static str, String)>) {
+        let z = self.impedance_matrices(
             props,
             phases,
+            "line",
+            line_name,
             dd::line::R1,
             dd::line::X1,
             dd::line::R0,
@@ -661,12 +769,12 @@ impl Reader<'_> {
             dd::line::C1_NF,
             dd::line::C0_NF,
         );
-        if all_default {
+        if z.all_default {
             self.defaulted("line", line_name, "r1");
             self.defaulted("line", line_name, "x1");
         }
         let b_half = scale_mat(
-            &c_nf,
+            &z.c_nf,
             std::f64::consts::TAU * self.net.base_frequency * 1e-9 / length_factor / 2.0,
         );
         let zero = vec![vec![0.0; phases]; phases];
@@ -676,8 +784,8 @@ impl Reader<'_> {
         self.net.linecodes.push(DistLineCode {
             name: name.clone(),
             n_conductors: phases,
-            r_series: scale_mat(&r, 1.0 / length_factor),
-            x_series: scale_mat(&x, 1.0 / length_factor),
+            r_series: scale_mat(&z.r, 1.0 / length_factor),
+            x_series: scale_mat(&z.x, 1.0 / length_factor),
             g_from: zero.clone(),
             b_from: b_half.clone(),
             g_to: zero,
@@ -686,7 +794,7 @@ impl Reader<'_> {
             s_max: None,
             extras: Extras::new(),
         });
-        name
+        (name, z.malformed)
     }
 
     // ----- load ----------------------------------------------------------
@@ -699,18 +807,37 @@ impl Reader<'_> {
         });
         let kw = self.f64_or(&props, "kw", "load", &obj.name, dd::load::KW);
         let kv = self.f64_or(&props, "kv", "load", &obj.name, dd::load::KV);
+        // Load.cpp Edit side effects: kw (case 4, ~691) sets LoadSpecType 0
+        // (kW + PF) and kvar (case 12, ~753) sets 1 (kW + kvar); pf
+        // (case 5, ~699) updates PFNominal without touching the spec.
+        // RecalcElementData (~1342) then derives kvar from kW and PF under
+        // spec 0 and keeps the written kvar under spec 1, so the LAST
+        // written of kw/kvar decides.
+        let mut spec_kvar = false;
+        for p in &obj.props {
+            match p.name.as_deref() {
+                Some("kw") => spec_kvar = false,
+                Some("kvar") => spec_kvar = true,
+                _ => {}
+            }
+        }
         let kvar = self.f64_prop(props.get("kvar"));
+        let pf_written = self.f64_prop(props.get("pf"));
         // When q derives from the power factor, the source pf rides in
         // extras so the dss writer can emit pf= and let the engine do its
         // own trigonometry; transcendental rounding across implementations
         // would otherwise leak into regenerated cases.
         let mut pf_source: Option<f64> = None;
-        let q_total = if let Some(q) = kvar {
-            q
-        } else {
-            let pf = self.f64_or(&props, "pf", "load", &obj.name, dd::load::PF);
-            pf_source = Some(pf);
-            kw * (pf.acos().tan()).copysign(pf)
+        let q_total = match kvar {
+            Some(q) if spec_kvar => q,
+            _ => {
+                let pf = pf_written.unwrap_or_else(|| {
+                    self.defaulted("load", &obj.name, "pf");
+                    dd::load::PF
+                });
+                pf_source = Some(pf);
+                kw * (pf.acos().tan()).copysign(pf)
+            }
         };
         let model = self
             .usize_prop(props.get("model"))
@@ -741,16 +868,11 @@ impl Reader<'_> {
         // kv is the load's own base and model its dss load model code;
         // both ride in extras for the writers (the kv default materializes
         // here like every other constructor default), while the typed
-        // fields hold explicit power per phase.
+        // fields hold explicit power per phase. phases rides too: a 2
+        // phase delta load also has 3 conductors, so the terminal map
+        // alone cannot reconstruct `phases=`.
         let mut extras = extras_from_leftovers(&props);
-        match props.by_name.get("kv") {
-            Some(written) => {
-                extras.insert("kv".into(), written.text.clone().into());
-            }
-            None => {
-                extras.insert("kv".into(), kv.into());
-            }
-        }
+        self.stash_kv_and_phases(&props, &mut extras, kv, phases);
         if let Some(pf) = pf_source {
             extras.insert("pf".into(), pf.into());
         }
@@ -934,9 +1056,10 @@ impl Reader<'_> {
             &obj.name,
             dd::capacitor::PHASES,
         );
-        let conn_delta = props
-            .get("conn")
-            .is_some_and(|v| v.text.to_ascii_lowercase().starts_with('d'));
+        // InterpretConnection (Capacitor.cpp ~180): `d*` and `ll` are delta.
+        let conn_delta = props.get("conn").is_some_and(|v| {
+            v.text.to_ascii_lowercase().starts_with('d') || v.text.eq_ignore_ascii_case("ll")
+        });
         if conn_delta {
             self.warn(format!(
                 "capacitor {}: delta connection is not typed yet; kept untyped",
@@ -956,7 +1079,9 @@ impl Reader<'_> {
             dd::capacitor::KVAR
         };
         let kv = self.f64_or(&props, "kv", "capacitor", &obj.name, dd::capacitor::KV);
-        let v_phase = if phases == 3 {
+        // Capacitor.cpp ~620-630: a wye bank's kv is line to line for 2 or
+        // 3 phases, line to neutral otherwise.
+        let v_phase = if phases == 2 || phases == 3 {
             kv * 1e3 / 3f64.sqrt()
         } else {
             kv * 1e3
@@ -976,7 +1101,7 @@ impl Reader<'_> {
         // The written pair regenerates verbatim in the dss writer; the b
         // matrix is the model truth either way.
         let mut extras = extras_from_leftovers(&props);
-        extras.insert("kv".into(), kv.into());
+        self.stash_kv_and_phases(&props, &mut extras, kv, phases);
         extras.insert("kvar".into(), kvar.into());
         self.net.shunts.push(DistShunt {
             name: obj.name.clone(),
@@ -999,21 +1124,58 @@ impl Reader<'_> {
             &obj.name,
             dd::generator::PHASES,
         );
-        let conn_delta = props
-            .get("conn")
-            .is_some_and(|v| v.text.to_ascii_lowercase().starts_with('d'));
-        let kw = self.f64_or(&props, "kw", "generator", &obj.name, dd::generator::KW);
-        let kvar = match (
-            self.f64_prop(props.get("kvar")),
-            self.f64_prop(props.get("pf")),
-        ) {
-            (Some(q), _) => q,
-            (None, Some(pf)) => kw * (pf.acos().tan()).copysign(pf),
-            (None, None) => {
-                self.defaulted("generator", &obj.name, "kvar");
-                dd::generator::KVAR
+        // InterpretConnection (generator.cpp ~299): `d*` and `ll` are delta.
+        let conn_delta = props.get("conn").is_some_and(|v| {
+            v.text.to_ascii_lowercase().starts_with('d') || v.text.eq_ignore_ascii_case("ll")
+        });
+        // generator.cpp: kw and pf writes (props 4-5, side effect ~588)
+        // call SyncUpPowerQuantities (~3879), rederiving kvar from kW and
+        // PF; a kvar write (Set_Presentkvar, ~3857) stores kvar and
+        // rederives PF from kW and kvar. The state carries across writes
+        // in source order, seeded by the constructor values.
+        let mut kw = dd::generator::KW;
+        let mut kvar = dd::generator::KVAR;
+        let mut pf = dd::generator::PF;
+        let (mut kw_written, mut q_written) = (false, false);
+        for p in &obj.props {
+            let Some(key @ ("kw" | "kvar" | "pf")) = p.name.as_deref() else {
+                continue;
+            };
+            let Some(v) = self.f64_prop(Some(&p.value)) else {
+                continue;
+            };
+            match key {
+                "kw" | "pf" => {
+                    if key == "kw" {
+                        kw = v;
+                        kw_written = true;
+                    } else {
+                        pf = v;
+                        q_written = true;
+                    }
+                    if pf != 0.0 {
+                        kvar = kw * (pf.acos().tan()).copysign(pf);
+                    }
+                }
+                _ => {
+                    kvar = v;
+                    q_written = true;
+                    let kva = kw.hypot(kvar);
+                    pf = if kva == 0.0 { 1.0 } else { kw / kva };
+                    if kw * kvar < 0.0 {
+                        pf = -pf;
+                    }
+                }
             }
-        };
+        }
+        if !kw_written {
+            self.defaulted("generator", &obj.name, "kw");
+        }
+        if !q_written {
+            self.defaulted("generator", &obj.name, "kvar");
+        }
+        // Mark the walked properties consumed so they stay out of extras.
+        let _ = (props.get("kw"), props.get("kvar"), props.get("pf"));
         let kv = self.f64_or(&props, "kv", "generator", &obj.name, dd::generator::KV);
         let maxkvar = self.f64_prop(props.get("maxkvar"));
         let minkvar = self.f64_prop(props.get("minkvar"));
@@ -1028,14 +1190,7 @@ impl Reader<'_> {
 
         let per_phase = |total_kw: f64| vec![total_kw * 1e3 / phases as f64; phases];
         let mut extras = extras_from_leftovers(&props);
-        match props.by_name.get("kv") {
-            Some(written) => {
-                extras.insert("kv".into(), written.text.clone().into());
-            }
-            None => {
-                extras.insert("kv".into(), kv.into());
-            }
-        }
+        self.stash_kv_and_phases(&props, &mut extras, kv, phases);
         DistGenerator {
             name: obj.name.clone(),
             bus: spec.name,
@@ -1066,10 +1221,12 @@ impl Reader<'_> {
             self.warn(format!("swtcontrol {}: no SwitchedObj; ignored", obj.name));
             return;
         };
-        let line_name = target
-            .strip_prefix("Line.")
-            .or_else(|| target.strip_prefix("line."))
-            .unwrap_or(&target);
+        // Element references compare class names case insensitively, like
+        // every dss identifier.
+        let line_name = match target.split_once('.') {
+            Some((class, rest)) if class.eq_ignore_ascii_case("line") => rest,
+            _ => target.as_str(),
+        };
         // The present state follows the last `action`/`state` assignment in
         // source order; `normal` applies only when neither was written.
         let mut open = None;
@@ -1168,6 +1325,19 @@ fn apply_winding_numbers(windings: &mut [WindingRaw], name: &str, items: &[f64])
     }
 }
 
+/// Series impedance of a linecode or inline line, per source length unit.
+struct SeriesImpedance {
+    r: Mat,
+    x: Mat,
+    c_nf: Mat,
+    /// No matrix or sequence property was written at all.
+    all_default: bool,
+    /// Matrix properties written but unparseable as n x n, with their raw
+    /// text (the engine rejects the whole script; the reader keeps them
+    /// in extras).
+    malformed: Vec<(&'static str, String)>,
+}
+
 #[derive(Clone)]
 struct WindingRaw {
     bus: Option<BusSpec>,
@@ -1200,5 +1370,279 @@ fn grow(windings: &mut Vec<WindingRaw>, n: usize, count: &mut usize) {
     if n > windings.len() {
         windings.resize(n, WindingRaw::default());
         *count = n;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn has_warning(net: &DistNetwork, needle: &str) -> bool {
+        net.warnings.iter().any(|w| w.contains(needle))
+    }
+
+    #[test]
+    fn vsource_magnitude_is_the_polygon_chord() {
+        // VSource.cpp ~999-1002: one phase takes basekv outright, n > 1
+        // divides by 2 sin(pi/n); sqrt(3) is the n = 3 special case.
+        let net = parse_dss_str(
+            "New Circuit.c basekv=12.47 pu=1.05 phases=2 bus1=src.1.2\n\
+             New Vsource.aux basekv=12.47 phases=4 bus1=b2\n\
+             New Vsource.solo basekv=2.4 phases=1 bus1=b3.1",
+        );
+        let two = &net.sources[0];
+        assert!((two.v_magnitude[0] - 12.47e3 * 1.05 / 2.0).abs() < 1e-9);
+        // Spacing is -360/n degrees: the second phase of a 2 phase source
+        // wraps to +pi.
+        assert!((two.v_angle[1] - std::f64::consts::PI).abs() < 1e-12);
+        let four = &net.sources[1];
+        let chord = 2.0 * (std::f64::consts::PI / 4.0).sin();
+        assert!((four.v_magnitude[0] - 12.47e3 / chord).abs() < 1e-9);
+        let solo = &net.sources[2];
+        assert!((solo.v_magnitude[0] - 2.4e3).abs() < 1e-9);
+    }
+
+    #[test]
+    fn vsource_defaults_are_recorded() {
+        let net = parse_dss_str("New Circuit.c1");
+        let fields = net.defaulted.get("vsource.source").expect("entry");
+        for key in ["phases", "pu", "angle", "basekv", "bus1"] {
+            assert!(fields.contains(&key), "missing {key}");
+        }
+    }
+
+    /// One single phase linecode + line; (r per meter, length meters).
+    fn r_and_length(lc_tail: &str, line_tail: &str) -> (f64, f64) {
+        let net = parse_dss_str(&format!(
+            "New Circuit.c\n\
+             New Linecode.lc nphases=1 rmatrix=(0.5){lc_tail}\n\
+             New Line.l1 bus1=a.1 bus2=b.1 phases=1 linecode=lc{line_tail}"
+        ));
+        let line = net.lines.iter().find(|l| l.name == "l1").unwrap();
+        let code = net.linecode(&line.linecode).unwrap();
+        (code.r_series[0][0], line.length)
+    }
+
+    #[test]
+    fn unitless_line_length_is_in_linecode_units() {
+        // ConvertLineUnits is 1.0 when the line has no units, so the
+        // engine reads `length=2` against a km linecode as 2 km:
+        // 0.5 ohm/km * 2 km = 1 ohm total.
+        let (r, len) = r_and_length(" units=km", " length=2");
+        assert!((len - 2000.0).abs() < 1e-9);
+        assert!((r * len - 1.0).abs() < 1e-12);
+    }
+
+    #[test]
+    fn unitless_linecode_is_per_line_unit() {
+        // The mirror case: a unitless linecode is per line length unit,
+        // so the raw length carries and the total is again 1 ohm.
+        let (r, len) = r_and_length("", " length=2 units=km");
+        assert!((len - 2.0).abs() < 1e-12);
+        assert!((r * len - 1.0).abs() < 1e-12);
+    }
+
+    #[test]
+    fn written_units_on_both_sides_convert() {
+        // 0.5 ohm/km over 500 m = 0.25 ohm.
+        let (r, len) = r_and_length(" units=km", " length=500 units=m");
+        assert!((len - 500.0).abs() < 1e-9);
+        assert!((r * len - 0.25).abs() < 1e-12);
+    }
+
+    #[test]
+    fn no_units_anywhere_takes_the_raw_product() {
+        let (r, len) = r_and_length("", " length=2");
+        assert!((len - 2.0).abs() < 1e-12);
+        assert!((r * len - 1.0).abs() < 1e-12);
+    }
+
+    #[test]
+    fn two_phase_wye_capacitor_kv_is_line_to_line() {
+        // Capacitor.cpp ~621-630: PhasekV = kv/sqrt(3) for 2 AND 3 phase
+        // wye banks, kv outright otherwise.
+        let net = parse_dss_str(
+            "New Circuit.c\n\
+             New Capacitor.c2 bus1=b.1.2 phases=2 kv=12.47 kvar=600\n\
+             New Capacitor.c1 bus1=b.3 phases=1 kv=7.2 kvar=300",
+        );
+        let c2 = net.shunts.iter().find(|s| s.name == "c2").unwrap();
+        let v2 = 12.47e3 / 3f64.sqrt();
+        assert!((c2.b[0][0] * v2 * v2 / 300e3 - 1.0).abs() < 1e-12);
+        let c1 = net.shunts.iter().find(|s| s.name == "c1").unwrap();
+        let v1 = 7.2e3;
+        assert!((c1.b[0][0] * v1 * v1 / 300e3 - 1.0).abs() < 1e-12);
+    }
+
+    #[test]
+    fn ll_connection_means_delta() {
+        // InterpretConnection maps `ll` to delta for every class.
+        let net = parse_dss_str(
+            "New Circuit.c\n\
+             New Generator.g bus1=b.1.2.3 phases=3 conn=ll kw=90 kvar=30 kv=4.16\n\
+             New Capacitor.cap bus1=b.1.2.3 phases=3 conn=ll kvar=600 kv=4.16",
+        );
+        assert_eq!(net.generators[0].configuration, Configuration::Delta);
+        // Delta capacitors stay untyped, same as conn=delta.
+        assert!(net.shunts.is_empty());
+        assert!(
+            net.untyped
+                .iter()
+                .any(|u| u.class.eq_ignore_ascii_case("capacitor") && u.name == "cap")
+        );
+    }
+
+    #[test]
+    fn load_kw_after_kvar_reverts_to_pf() {
+        // Load.cpp: kw flips LoadSpecType back to 0 (kW + PF), so the
+        // earlier kvar is discarded and q comes from the default pf 0.88.
+        let net =
+            parse_dss_str("New Circuit.c\nNew Load.l bus1=b.1 phases=1 kv=2.4 kvar=20 kw=100");
+        let l = &net.loads[0];
+        let q: f64 = l.q_nom.iter().sum();
+        assert!((q - 100e3 * 0.88f64.acos().tan()).abs() < 1e-6);
+        assert_eq!(
+            l.extras.get("pf").and_then(serde_json::Value::as_f64),
+            Some(0.88)
+        );
+        assert!(
+            net.defaulted
+                .get("load.l")
+                .is_some_and(|f| f.contains(&"pf"))
+        );
+    }
+
+    #[test]
+    fn load_kvar_after_kw_stays() {
+        let net =
+            parse_dss_str("New Circuit.c\nNew Load.l bus1=b.1 phases=1 kv=2.4 kw=100 kvar=20");
+        let l = &net.loads[0];
+        let q: f64 = l.q_nom.iter().sum();
+        assert!((q - 20e3).abs() < 1e-9);
+        // The writer must emit kvar=, not pf=.
+        assert!(!l.extras.contains_key("pf"));
+    }
+
+    #[test]
+    fn generator_kw_after_kvar_resyncs_q() {
+        // Set_Presentkvar rederives PF from kW and kvar; the later kw
+        // write resyncs kvar from that PF. Constructor kW is 1000, so
+        // kvar=20 kw=100 scales q to 100 * 20/1000 = 2 kvar.
+        let net =
+            parse_dss_str("New Circuit.c\nNew Generator.g bus1=b.1 phases=1 kv=2.4 kvar=20 kw=100");
+        let q: f64 = net.generators[0].q_nom.iter().sum();
+        assert!((q - 2e3).abs() < 1e-6);
+    }
+
+    #[test]
+    fn generator_kvar_after_kw_stays() {
+        let net =
+            parse_dss_str("New Circuit.c\nNew Generator.g bus1=b.1 phases=1 kv=2.4 kw=100 kvar=20");
+        let q: f64 = net.generators[0].q_nom.iter().sum();
+        assert!((q - 20e3).abs() < 1e-9);
+    }
+
+    #[test]
+    fn generator_pf_after_kvar_wins() {
+        // pf calls SyncUpPowerQuantities: kvar = kW tan(acos(pf)) with the
+        // constructor kW 1000.
+        let net = parse_dss_str(
+            "New Circuit.c\nNew Generator.g bus1=b.1.2.3 phases=3 kv=4.16 kvar=20 pf=0.9",
+        );
+        let q: f64 = net.generators[0].q_nom.iter().sum();
+        assert!((q - 1000e3 * 0.9f64.acos().tan()).abs() < 1e-3);
+    }
+
+    #[test]
+    fn malformed_matrix_warns_and_keeps_text() {
+        // The engine rejects a bad rmatrix outright; the reader keeps
+        // going on sequence values but must not call the property
+        // defaulted, and the text must survive in extras.
+        let net = parse_dss_str(
+            "New Circuit.c\n\
+             New Linecode.bad nphases=2 rmatrix=(1 2 3) units=m\n\
+             New Line.l2 bus1=a.1.2 bus2=b.1.2 phases=2 rmatrix=(bogus) length=10",
+        );
+        assert!(has_warning(&net, "linecode bad") && has_warning(&net, "rmatrix"));
+        assert!(
+            !net.defaulted
+                .get("linecode.bad")
+                .is_some_and(|f| f.contains(&"rmatrix"))
+        );
+        let code = net.linecode("bad").unwrap();
+        assert!(
+            code.extras
+                .get("rmatrix")
+                .and_then(serde_json::Value::as_str)
+                .is_some_and(|s| s.contains("1 2 3"))
+        );
+        // Sequence defaults filled in: diag (2 r1 + r0) / 3.
+        let diag = (2.0 * dd::line::R1 + dd::line::R0) / 3.0;
+        assert!((code.r_series[0][0] - diag).abs() < 1e-12);
+        // The inline line path lands the text on the line's extras.
+        assert!(has_warning(&net, "line l2"));
+        let l2 = net.lines.iter().find(|l| l.name == "l2").unwrap();
+        assert!(
+            l2.extras
+                .get("rmatrix")
+                .and_then(serde_json::Value::as_str)
+                .is_some_and(|s| s.contains("bogus"))
+        );
+    }
+
+    #[test]
+    fn switchedobj_class_prefix_is_case_insensitive() {
+        let net = parse_dss_str(
+            "New Circuit.c\n\
+             New Line.sw1 bus1=a.1 bus2=b.1 phases=1 switch=y\n\
+             New SwtControl.s1 SwitchedObj=LINE.sw1 Action=open",
+        );
+        assert!(net.switches[0].open);
+    }
+
+    #[test]
+    fn phases_token_rides_in_extras() {
+        // A 2 phase delta load has 3 conductors, indistinguishable from a
+        // 3 phase delta by terminal map alone.
+        let net = parse_dss_str(
+            "New Circuit.c\n\
+             New Load.l bus1=b.1.2 phases=2 conn=delta kw=50 kvar=10 kv=4.8\n\
+             New Generator.g bus1=b.1.2.3 kw=10 kvar=2 kv=4.16\n\
+             New Capacitor.cap bus1=b.1.2.3 phases=3 kvar=600 kv=4.16",
+        );
+        let l = &net.loads[0];
+        assert_eq!(l.terminal_map.len(), 3);
+        assert_eq!(
+            l.extras.get("phases").and_then(serde_json::Value::as_str),
+            Some("2")
+        );
+        // An unwritten phases= materializes the class default.
+        assert_eq!(
+            net.generators[0]
+                .extras
+                .get("phases")
+                .and_then(serde_json::Value::as_u64),
+            Some(3)
+        );
+        assert_eq!(
+            net.shunts[0]
+                .extras
+                .get("phases")
+                .and_then(serde_json::Value::as_str),
+            Some("3")
+        );
+    }
+
+    #[test]
+    fn rpn_kv_token_stashes_the_evaluated_value() {
+        // The writer needs a number; RPN text would not read back.
+        let net = parse_dss_str("New Circuit.c\nNew Load.l bus1=b.1 phases=1 kw=10 kv={4.8 2 /}");
+        assert_eq!(
+            net.loads[0]
+                .extras
+                .get("kv")
+                .and_then(serde_json::Value::as_f64),
+            Some(2.4)
+        );
     }
 }

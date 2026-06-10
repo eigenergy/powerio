@@ -617,7 +617,30 @@ fn run_convert(
         );
     }
     let (text, warnings) = if let Some(target) = to.transmission() {
-        let net = read_network(input, from)?;
+        // A .json input is undecided above. When the transmission reader
+        // rejects it but the distribution reader accepts it, the input is a
+        // distribution case aimed at a transmission target: say so instead
+        // of presenting the transmission parse error as the problem.
+        let net = read_network(input, from).map_err(|err| {
+            // The liberal BMOPF reader accepts almost any JSON, so a bare
+            // parse success is no signal; a typed voltage source is (both
+            // distribution layouts carry one, transmission JSON does not).
+            if from.is_none()
+                && input
+                    .extension()
+                    .is_some_and(|e| e.eq_ignore_ascii_case("json"))
+                && powerio_dist::parse_file(input, None).is_ok_and(|n| !n.sources.is_empty())
+            {
+                anyhow::anyhow!(
+                    "no conversion path between the transmission and distribution format \
+                     families (`{}` is a distribution case, `{}` is a transmission format)",
+                    input.display(),
+                    to.name()
+                )
+            } else {
+                err
+            }
+        })?;
         let conv = powerio_matrix::write_as(&net, target);
         (conv.text, conv.warnings)
     } else {

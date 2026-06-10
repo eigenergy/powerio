@@ -6,6 +6,7 @@ use crate::model::{DistNetwork, DistSourceFormat};
 /// Nothing drops silently: a field the target cannot represent appears
 /// here as a warning naming the element and field.
 #[derive(Debug, Clone)]
+#[non_exhaustive]
 pub struct Conversion {
     pub text: String,
     pub warnings: Vec<String>,
@@ -30,10 +31,26 @@ pub fn dist_target_from_name(name: &str) -> Option<DistTargetFormat> {
     }
 }
 
-/// [`dist_target_from_name`] as a `Result`, for the dispatchers that must
-/// reject an unknown name before doing any work.
-fn target(name: &str) -> crate::Result<DistTargetFormat> {
-    dist_target_from_name(name).ok_or_else(|| crate::Error::UnknownFormat(name.to_string()))
+impl std::str::FromStr for DistTargetFormat {
+    type Err = crate::Error;
+
+    /// [`dist_target_from_name`] as a `Result`, matching the transmission
+    /// hub's `TargetFormat: FromStr`.
+    fn from_str(s: &str) -> crate::Result<Self> {
+        dist_target_from_name(s).ok_or_else(|| crate::Error::UnknownFormat(s.to_string()))
+    }
+}
+
+impl DistTargetFormat {
+    /// The canonical format name (`dss`, `pmd-json`, `bmopf-json`), accepted
+    /// back by [`dist_target_from_name`].
+    pub fn name(self) -> &'static str {
+        match self {
+            DistTargetFormat::Dss => "dss",
+            DistTargetFormat::PmdJson => "pmd-json",
+            DistTargetFormat::BmopfJson => "bmopf-json",
+        }
+    }
 }
 
 fn read(path: &std::path::Path) -> crate::Result<String> {
@@ -57,7 +74,7 @@ fn is_pmd_json(text: &str) -> bool {
 
 /// Parses `text` in the named format (see [`dist_target_from_name`]).
 pub fn parse_str(text: &str, format: &str) -> crate::Result<DistNetwork> {
-    match target(format)? {
+    match format.parse::<DistTargetFormat>()? {
         DistTargetFormat::Dss => Ok(crate::dss::parse_dss_str(text)),
         DistTargetFormat::BmopfJson => crate::bmopf::parse_bmopf_str(text),
         DistTargetFormat::PmdJson => crate::pmd::parse_pmd_str(text),
@@ -75,7 +92,7 @@ pub fn parse_file(
     // Dss goes through the path-based parser (Redirect/Compile resolve
     // against the file's directory); the JSON readers take text.
     let format = if let Some(from) = from {
-        target(from)?
+        from.parse::<DistTargetFormat>()?
     } else {
         let ext = path
             .extension()
@@ -117,8 +134,7 @@ fn convert(net: &DistNetwork, target: DistTargetFormat) -> Conversion {
 
 /// Parses `text` as `from` and writes it as `to` in one call. The warnings
 /// carry both the parse warnings and the writer's fidelity losses.
-pub fn convert_str(text: &str, from: &str, to: &str) -> crate::Result<Conversion> {
-    let to = target(to)?;
+pub fn convert_str(text: &str, to: DistTargetFormat, from: &str) -> crate::Result<Conversion> {
     Ok(convert(&parse_str(text, from)?, to))
 }
 
@@ -127,10 +143,9 @@ pub fn convert_str(text: &str, from: &str, to: &str) -> crate::Result<Conversion
 /// writer's fidelity losses.
 pub fn convert_file(
     path: impl AsRef<std::path::Path>,
-    to: &str,
+    to: DistTargetFormat,
     from: Option<&str>,
 ) -> crate::Result<Conversion> {
-    let to = target(to)?;
     Ok(convert(&parse_file(path, from)?, to))
 }
 
@@ -150,7 +165,12 @@ impl DistNetwork {
     ///
     /// Writing back to the source format echoes the retained source text
     /// byte for byte; every cross format write regenerates from the typed
-    /// model and reports each fidelity loss in the warnings.
+    /// model and reports each fidelity loss in the warnings. The returned
+    /// warnings hold only the writer's losses: parse warnings stay on
+    /// [`DistNetwork::warnings`] (the one-shot [`convert_str`]/[`convert_file`]
+    /// merge the two). After mutating a parsed model, set `source = None`
+    /// (and `source_format`), or the echo tier returns the original text
+    /// and silently discards the edits.
     pub fn to_format(&self, format: DistTargetFormat) -> Conversion {
         if let (Some(source), Some(source_format)) = (&self.source, self.source_format) {
             if format.matches(source_format) {
@@ -188,7 +208,7 @@ mod tests {
             Err(crate::Error::UnknownFormat(_))
         ));
         assert!(matches!(
-            convert_str("clear\n", "dss", "matpower"),
+            "matpower".parse::<DistTargetFormat>(),
             Err(crate::Error::UnknownFormat(_))
         ));
         assert!(matches!(
@@ -201,7 +221,7 @@ mod tests {
     fn one_shot_convert_carries_parse_warnings() {
         let dss = "clear\nnew circuit.w basekv=12.47 bus1=src\n\
                    new line.l1 bus1=src bus2=b2 length=1 units=furlong\n";
-        let conv = convert_str(dss, "dss", "bmopf").unwrap();
+        let conv = convert_str(dss, DistTargetFormat::BmopfJson, "dss").unwrap();
         assert!(
             conv.warnings.iter().any(|w| w.contains("furlong")),
             "parse warnings must surface through the one-shot converter: {:?}",

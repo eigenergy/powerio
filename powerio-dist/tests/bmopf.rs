@@ -5,7 +5,10 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use powerio_dist::dss::parse_dss_file;
-use powerio_dist::{DistNetwork, parse_bmopf_file, parse_bmopf_str, write_bmopf_json};
+use powerio_dist::{
+    Configuration, DistNetwork, DistTransformer, Extras, Winding, WindingConn, parse_bmopf_file,
+    parse_bmopf_str, write_bmopf_json,
+};
 
 fn fixture(rel: &str) -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
@@ -142,9 +145,16 @@ fn ieee13_conversion_warnings_name_every_loss() {
             .any(|w| w.contains("XFM1") && w.contains("single_phase"))
     );
     assert!(out.warnings.iter().any(|w| w.contains("regcontrol")));
-    // No silent extras: every dropped field names its element.
+    // No silent extras: every warning leads with a `class name:` element
+    // identifier ("load 671: ...", "voltage source source: ...").
     for w in &out.warnings {
-        assert!(!w.is_empty());
+        let Some((head, _)) = w.split_once(": ") else {
+            panic!("warning has no `class name:` prefix: {w}");
+        };
+        assert!(
+            head.split_whitespace().count() >= 2,
+            "warning does not name its element: {w}"
+        );
     }
 }
 
@@ -237,6 +247,213 @@ fn negative_validation_cases() {
         let text = serde_json::to_string(&doc).unwrap();
         assert!(!errors(&v, &text).is_empty(), "schema accepted: {what}");
     }
+}
+
+/// A bus plus one source, the minimum the schema requires; element
+/// snippets splice in after the source.
+fn doc_with(extra: &str) -> String {
+    format!(
+        r#"{{
+        "bus": {{"a": {{"terminal_names": ["1", "2"]}}}},
+        "voltage_source": {{"src": {{"v_magnitude": [240.0], "v_angle": [0.0],
+            "bus": "a", "terminal_map": ["1"]}}}}{extra}
+    }}"#
+    )
+}
+
+#[test]
+fn shunt_size_mismatch_pads_the_smaller_matrix() {
+    let text = doc_with(
+        r#", "shunt": {"c1": {"bus": "a", "terminal_map": ["1", "2"],
+            "G_1_1": 0.5,
+            "B_1_1": 1.0, "B_1_2": -1.0, "B_2_1": -1.0, "B_2_2": 1.0}}"#,
+    );
+    let net = parse_bmopf_str(&text).unwrap();
+    let s = &net.shunts[0];
+    // G grew to B's size; its entry survived the padding.
+    assert_eq!(s.g, vec![vec![0.5, 0.0], vec![0.0, 0.0]]);
+    assert_eq!(s.b, vec![vec![1.0, -1.0], vec![-1.0, 1.0]]);
+    assert!(
+        net.warnings
+            .iter()
+            .any(|w| w.contains("shunt c1") && w.contains("padded")),
+        "{:?}",
+        net.warnings
+    );
+    // The padded form writes back schema valid.
+    let out = write_bmopf_json(&net);
+    assert_eq!(errors(&schema_validator(), &out.text), Vec::<String>::new());
+}
+
+#[test]
+fn center_tap_collapse_converts_resistance_through_ohms() {
+    // Each 120 V half carries %R=1.2 on 25 kVA: 0.012 * 120^2/25000 =
+    // 0.006912 ohm, so the series path across the outer terminals is
+    // 0.013824 ohm. Percent does not transfer to the 240 V base (zb
+    // scales 4x), so the collapse converts through ohms.
+    let net = parse_dss_file(fixture("micro/xfmr_center_tap.dss")).unwrap();
+    let out = write_bmopf_json(&net);
+    let doc: serde_json::Value = serde_json::from_str(&out.text).unwrap();
+    let t = &doc["transformer"]["center_tap"]["t1"];
+    assert_eq!(t["v_ref_to"], 240.0);
+    let r_to = t["r_series_to"].as_f64().unwrap();
+    assert!((r_to - 0.013_824).abs() < 1e-12, "r_series_to = {r_to}");
+    // The primary is untouched by the collapse: %R=0.6 on 7.2 kV/25 kVA.
+    let r_from = t["r_series_from"].as_f64().unwrap();
+    assert!((r_from - 12.4416).abs() < 1e-9, "r_series_from = {r_from}");
+}
+
+#[test]
+fn x_only_linecode_sizes_from_x_and_keeps_required_keys() {
+    let text = doc_with(
+        r#", "linecode": {"lc": {
+            "X_series_1_1": 0.4, "X_series_1_2": 0.1,
+            "X_series_2_1": 0.1, "X_series_2_2": 0.4}}"#,
+    );
+    let net = parse_bmopf_str(&text).unwrap();
+    let lc = net.linecode("lc").unwrap();
+    assert_eq!(lc.n_conductors, 2);
+    assert_eq!(lc.r_series, vec![vec![0.0; 2]; 2]);
+    assert!((lc.x_series[0][1] - 0.1).abs() < 1e-15);
+    // The output carries the schema required R_series_1_1 (zero).
+    let out = write_bmopf_json(&net);
+    assert_eq!(errors(&schema_validator(), &out.text), Vec::<String>::new());
+    let doc: serde_json::Value = serde_json::from_str(&out.text).unwrap();
+    assert_eq!(doc["linecode"]["lc"]["R_series_1_1"], 0.0);
+}
+
+#[test]
+fn matrixless_linecode_and_shunt_emit_required_zero_matrices_loudly() {
+    let text = doc_with(
+        r#", "linecode": {"bare": {"i_max": [400.0]}},
+        "shunt": {"empty": {"bus": "a", "terminal_map": ["1"]}}"#,
+    );
+    let net = parse_bmopf_str(&text).unwrap();
+    assert_eq!(net.linecode("bare").unwrap().n_conductors, 0);
+    let out = write_bmopf_json(&net);
+    assert_eq!(errors(&schema_validator(), &out.text), Vec::<String>::new());
+    let doc: serde_json::Value = serde_json::from_str(&out.text).unwrap();
+    assert_eq!(doc["linecode"]["bare"]["R_series_1_1"], 0.0);
+    assert_eq!(doc["linecode"]["bare"]["X_series_1_1"], 0.0);
+    assert_eq!(doc["shunt"]["empty"]["G_1_1"], 0.0);
+    assert_eq!(doc["shunt"]["empty"]["B_1_1"], 0.0);
+    assert!(
+        out.warnings
+            .iter()
+            .any(|w| w.contains("linecode bare") && w.contains("no series matrix"))
+    );
+    assert!(
+        out.warnings
+            .iter()
+            .any(|w| w.contains("shunt empty") && w.contains("no admittance matrix"))
+    );
+}
+
+#[test]
+fn malformed_matrix_keys_land_in_extras_with_warnings() {
+    let text = doc_with(
+        r#", "linecode": {"lc": {"R_series_1_1": 0.2, "X_series_1_1": 0.4,
+            "X_series_note": "an aside"}},
+        "shunt": {"c1": {"bus": "a", "terminal_map": ["1"],
+            "G_1_1": 0.5, "B_1_1": 1.0, "B_total": 5.0, "G_0_1": 9.0}}"#,
+    );
+    let net = parse_bmopf_str(&text).unwrap();
+    let lc = net.linecode("lc").unwrap();
+    assert_eq!(lc.n_conductors, 1);
+    assert!(lc.extras.contains_key("X_series_note"));
+    let s = &net.shunts[0];
+    // Only well formed `_i_j` keys (1 based) count as matrix entries.
+    assert_eq!(s.g, vec![vec![0.5]]);
+    assert_eq!(s.b, vec![vec![1.0]]);
+    assert!(s.extras.contains_key("B_total"));
+    assert!(s.extras.contains_key("G_0_1"));
+    for key in ["X_series_note", "B_total", "G_0_1"] {
+        assert!(
+            net.warnings.iter().any(|w| w.contains(&format!("`{key}`"))),
+            "no warning for {key}: {:?}",
+            net.warnings
+        );
+    }
+    // Writing drops them, again loudly.
+    let out = write_bmopf_json(&net);
+    assert!(
+        out.warnings
+            .iter()
+            .any(|w| w.contains("shunt c1") && w.contains("`B_total`"))
+    );
+}
+
+#[test]
+fn unrecognized_configuration_and_subtype_warn() {
+    let text = doc_with(
+        r#", "load": {
+            "l1": {"p_nom": [1000.0], "q_nom": [0.0], "bus": "a",
+                "configuration": "delta", "terminal_map": ["1", "2"]},
+            "l2": {"p_nom": [1000.0], "q_nom": [0.0], "bus": "a",
+                "configuration": "zigzag", "terminal_map": ["1", "2"]}},
+        "transformer": {"open_delta": {"t1": {"bus_from": "a", "bus_to": "a",
+            "terminal_map_from": ["1", "2"], "terminal_map_to": ["1", "2"],
+            "s_rating": 5000.0, "v_ref_from": 240.0, "v_ref_to": 240.0}}}"#,
+    );
+    let net = parse_bmopf_str(&text).unwrap();
+    // A recognized value in the wrong case is tolerated without a warning.
+    assert_eq!(net.loads[0].configuration, Configuration::Delta);
+    assert!(!net.warnings.iter().any(|w| w.contains("load l1")));
+    // A truly unknown one coerces to WYE, loudly.
+    assert_eq!(net.loads[1].configuration, Configuration::Wye);
+    assert!(
+        net.warnings
+            .iter()
+            .any(|w| w.contains("load l2") && w.contains("zigzag"))
+    );
+    // An unknown transformer subtype group reads, with a warning.
+    assert_eq!(net.transformers.len(), 1);
+    assert!(
+        net.warnings
+            .iter()
+            .any(|w| w.contains("transformer t1") && w.contains("open_delta"))
+    );
+}
+
+#[test]
+fn missing_voltage_source_warns() {
+    let net = parse_bmopf_str(r#"{"bus": {"a": {"terminal_names": ["1"]}}}"#).unwrap();
+    let out = write_bmopf_json(&net);
+    assert!(out.warnings.iter().any(|w| w.contains("no voltage source")));
+    // Still schema valid: the required key exists, empty.
+    assert_eq!(errors(&schema_validator(), &out.text), Vec::<String>::new());
+}
+
+#[test]
+fn three_wire_wye_wye_is_unsupported_not_a_panic() {
+    // Terminal maps without a trailing neutral cannot decompose per phase;
+    // a map shorter than the phase count used to index out of bounds.
+    let mut net = parse_bmopf_str(&doc_with("")).unwrap();
+    let winding = |map: &[&str]| Winding {
+        bus: "a".into(),
+        terminal_map: map.iter().map(ToString::to_string).collect(),
+        conn: WindingConn::Wye,
+        v_ref: 4160.0,
+        s_rating: 500_000.0,
+        r_pct: 0.5,
+        tap: 1.0,
+    };
+    net.transformers.push(DistTransformer {
+        name: "t3w".into(),
+        windings: vec![winding(&["1", "2", "3"]), winding(&["1", "2"])],
+        xsc_pct: vec![2.0],
+        phases: 3,
+        extras: Extras::new(),
+    });
+    let out = write_bmopf_json(&net);
+    assert!(!out.text.contains("t3w"));
+    assert!(
+        out.warnings
+            .iter()
+            .any(|w| w.contains("transformer t3w") && w.contains("dropped")),
+        "{:?}",
+        out.warnings
+    );
 }
 
 #[test]

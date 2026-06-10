@@ -623,9 +623,13 @@ fn dist_to_pyerr(e: powerio_dist::Error) -> PyErr {
     use powerio_dist::Error as E;
     let msg = e.to_string();
     match e {
-        // Hand the io::Error to PyO3 by value so it picks the precise OSError
-        // subclass (FileNotFoundError etc.), matching the transmission surface.
-        E::Io { source, .. } => source.into(),
+        // OSError(errno, strerror, filename) lets CPython pick the precise
+        // subclass (FileNotFoundError etc.) while keeping the path on
+        // e.filename, which a bare io::Error conversion would drop.
+        E::Io { path, source } => match source.raw_os_error() {
+            Some(errno) => pyo3::exceptions::PyOSError::new_err((errno, source.to_string(), path)),
+            None => PowerIOError::new_err(msg),
+        },
         E::UnknownFormat(_) => PyValueError::new_err(msg),
         E::Json { .. } => PowerIOParseError::new_err(msg),
         _ => PowerIOError::new_err(msg),
@@ -677,8 +681,9 @@ impl PyDistCase {
     /// `(text, warnings)`. Writing back to the source format echoes the
     /// retained source byte for byte.
     fn to_format(&self, to: &str) -> PyResult<(String, Vec<String>)> {
-        let target = powerio_dist::dist_target_from_name(to)
-            .ok_or_else(|| dist_to_pyerr(powerio_dist::Error::UnknownFormat(to.to_string())))?;
+        let target = to
+            .parse::<powerio_dist::DistTargetFormat>()
+            .map_err(dist_to_pyerr)?;
         let conv = self.net.to_format(target);
         Ok((conv.text, conv.warnings))
     }
@@ -719,17 +724,23 @@ fn dist_parse_str(text: &str, format: &str) -> PyResult<PyDistCase> {
 #[pyfunction]
 #[pyo3(signature = (path, to, from_=None))]
 fn dist_convert_file(path: &str, to: &str, from_: Option<&str>) -> PyResult<(String, Vec<String>)> {
+    let to = to
+        .parse::<powerio_dist::DistTargetFormat>()
+        .map_err(dist_to_pyerr)?;
     let conv =
         powerio_dist::convert_file(std::path::Path::new(path), to, from_).map_err(dist_to_pyerr)?;
     Ok((conv.text, conv.warnings))
 }
 
-/// Convert an in-memory distribution case from `from_` to `to`. Returns
+/// Convert an in-memory distribution case of format `from_` to `to`. Returns
 /// `(text, warnings)`; the warnings carry both the parse warnings and the
 /// writer's fidelity losses.
 #[pyfunction]
-fn dist_convert_str(text: &str, from_: &str, to: &str) -> PyResult<(String, Vec<String>)> {
-    let conv = powerio_dist::convert_str(text, from_, to).map_err(dist_to_pyerr)?;
+fn dist_convert_str(text: &str, to: &str, from_: &str) -> PyResult<(String, Vec<String>)> {
+    let to = to
+        .parse::<powerio_dist::DistTargetFormat>()
+        .map_err(dist_to_pyerr)?;
+    let conv = powerio_dist::convert_str(text, to, from_).map_err(dist_to_pyerr)?;
     Ok((conv.text, conv.warnings))
 }
 
