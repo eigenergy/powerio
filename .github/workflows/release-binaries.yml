@@ -55,7 +55,7 @@ jobs:
             triplet: x86_64-w64-mingw32
             lib: powerio_capi.dll
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: ${{ matrix.rust_target }}
@@ -95,13 +95,13 @@ jobs:
           # informational; gen/update_artifacts.jl recomputes from the release assets
           shasum -a 256 "libpowerio_capi.${{ matrix.triplet }}.tar.gz" \
             || sha256sum "libpowerio_capi.${{ matrix.triplet }}.tar.gz"
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: libpowerio_capi.${{ matrix.triplet }}
           path: libpowerio_capi.${{ matrix.triplet }}.tar.gz
       - name: Attach to release
         if: github.ref_type == 'tag'
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3
         with:
           files: libpowerio_capi.${{ matrix.triplet }}.tar.gz
           # Stage the release as a draft a human publishes: the release event
