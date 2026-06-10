@@ -18,8 +18,12 @@ crate-type = ["cdylib", "staticlib", "rlib"]
 # Zero-copy raw network export over the Arrow C Data Interface (`pio_export_arrow`).
 # Off by default so the base ABI pulls in nothing but `powerio`.
 arrow = ["dep:arrow"]
+# Multiconductor distribution formats (OpenDSS, PMD ENGINEERING JSON, BMOPF
+# JSON): the pio_dist_* entry points. Off by default for the same reason.
+dist = ["dep:powerio-dist"]
 
 [dependencies]
 powerio.workspace = true
+powerio-dist = { workspace = true, optional = true }
 # Only the C Data Interface (`ffi`) is needed; the heavy arrow defaults stay off.
 arrow = { workspace = true, features = ["ffi"], optional = true }

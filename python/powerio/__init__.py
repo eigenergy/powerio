@@ -55,6 +55,7 @@ __all__ = [
     "to_json",
     "to_dense",
     "write_gridfm_batch",
+    "dist",
     "__version__",
 ]
 
@@ -454,3 +455,6 @@ def write_gridfm_batch(
     return _powerio.write_gridfm_batch(
         inners, str(out_dir), base_scenario, include_y_bus, include_taps, include_shifts
     )
+
+
+from . import dist  # noqa: E402  (needs Conversion defined above)

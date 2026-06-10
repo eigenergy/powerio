@@ -17,4 +17,7 @@ pub enum Error {
         format: &'static str,
         message: String,
     },
+
+    #[error("unknown distribution format `{0}` (expected dss, bmopf, or pmd)")]
+    UnknownFormat(String),
 }

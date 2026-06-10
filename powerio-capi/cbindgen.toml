@@ -31,6 +31,10 @@ header = """
  *
  * Optional: build with `--features arrow` to get pio_export_arrow, a raw
  * network export over the Arrow C Data Interface (guarded by PIO_ARROW).
+ * Build with `--features dist` to get the pio_dist_* entry points (guarded by
+ * PIO_DIST): multiconductor distribution cases (OpenDSS, PMD ENGINEERING JSON,
+ * BMOPF JSON) behind their own PioDistNetwork handle, freed with
+ * pio_dist_network_free; their string outputs are freed with pio_string_free.
  *
  * Checked in and generated; regenerate from the Rust source with
  *   cbindgen --config cbindgen.toml --crate powerio-capi --output include/powerio.h
@@ -49,17 +53,18 @@ struct ArrowSchema;
 
 [export]
 prefix = ""
-include = ["PioNetwork"]
+include = ["PioNetwork", "PioDistNetwork"]
 
 [export.rename]
 "FFI_ArrowArray" = "struct ArrowArray"
 "FFI_ArrowSchema" = "struct ArrowSchema"
 
-# Gate the optional Arrow export behind `#ifdef PIO_ARROW` (the `arrow` feature):
-# cbindgen emits the cfg-gated PIO_ARROW_TABLE_* selectors and pio_export_arrow
-# inside `#if defined(PIO_ARROW)` even on a default (no-feature) generation.
+# Gate the optional features behind #ifdef (PIO_ARROW for `arrow`, PIO_DIST for
+# `dist`): cbindgen emits the cfg-gated symbols inside `#if defined(...)` even
+# on a default (no-feature) generation.
 [defines]
 "feature = arrow" = "PIO_ARROW"
+"feature = dist" = "PIO_DIST"
 
 [parse]
 parse_deps = false

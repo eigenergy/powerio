@@ -18,6 +18,10 @@
  *
  * Optional: build with `--features arrow` to get pio_export_arrow, a raw
  * network export over the Arrow C Data Interface (guarded by PIO_ARROW).
+ * Build with `--features dist` to get the pio_dist_* entry points (guarded by
+ * PIO_DIST): multiconductor distribution cases (OpenDSS, PMD ENGINEERING JSON,
+ * BMOPF JSON) behind their own PioDistNetwork handle, freed with
+ * pio_dist_network_free; their string outputs are freed with pio_string_free.
  *
  * Checked in and generated; regenerate from the Rust source with
  *   cbindgen --config cbindgen.toml --crate powerio-capi --output include/powerio.h
@@ -73,6 +77,17 @@ struct ArrowSchema;
 
 #if defined(PIO_ARROW)
 #define PIO_ARROW_TABLE_SHUNT 4
+#endif
+
+#if defined(PIO_DIST)
+/**
+ * Opaque multiconductor distribution network handle: a parsed OpenDSS, PMD
+ * ENGINEERING JSON, or BMOPF JSON case in wire coordinates. Distinct from
+ * [`PioNetwork`] (the positive sequence transmission model); none of the
+ * `pio_n_*`/extractor functions accept it. Only built with the `dist` cargo
+ * feature.
+ */
+typedef struct PioDistNetwork PioDistNetwork;
 #endif
 
 /**
@@ -205,8 +220,7 @@ char *pio_convert_file(const char *path,
 
 /**
  * Free a string returned by [`pio_to_matpower`], [`pio_to_format`],
- * [`pio_convert_file`], or
- * [`pio_to_json`].
+ * [`pio_convert_file`], [`pio_to_json`], or any `pio_dist_*` converter.
  */
 void pio_string_free(char *s);
 
@@ -291,6 +305,104 @@ int32_t pio_export_arrow(const PioNetwork *net,
                          struct ArrowSchema *out_schema,
                          char *errbuf,
                          size_t errlen);
+#endif
+
+#if defined(PIO_DIST)
+/**
+ * Parse a distribution case file into a [`PioDistNetwork`] handle. The format
+ * comes from `from` if non-NULL (`dss`, `pmd`, or `bmopf`), else from the
+ * file itself: `.dss` is OpenDSS, and `.json` holding the ENGINEERING
+ * `data_model` key is PMD JSON, otherwise BMOPF JSON. Returns `NULL` on error
+ * and writes the message into `errbuf`. Free the handle with
+ * [`pio_dist_network_free`].
+ */
+PioDistNetwork *pio_dist_parse_file(const char *path,
+                                    const char *from,
+                                    char *errbuf,
+                                    size_t errlen);
+#endif
+
+#if defined(PIO_DIST)
+/**
+ * Parse in-memory distribution case `text` of the named `format` (`dss`,
+ * `pmd`, or `bmopf`; required, since there is no path to infer from). An
+ * OpenDSS `Redirect`/`Compile` in `text` resolves against the current working
+ * directory. Returns `NULL` on error and writes the message into `errbuf`.
+ * Free the handle with [`pio_dist_network_free`].
+ */
+PioDistNetwork *pio_dist_parse_str(const char *text,
+                                   const char *format,
+                                   char *errbuf,
+                                   size_t errlen);
+#endif
+
+#if defined(PIO_DIST)
+/**
+ * Free a distribution network handle from [`pio_dist_parse_file`] or
+ * [`pio_dist_parse_str`].
+ */
+void pio_dist_network_free(PioDistNetwork *net);
+#endif
+
+#if defined(PIO_DIST)
+/**
+ * Parse warnings retained on the handle: everything the reader could not
+ * represent or had to assume (the loud half of the fidelity contract).
+ * Writes them `\n`-joined into `warnbuf` (NULL/0 to skip) and returns the
+ * warning count, or `-1` if `net` is NULL.
+ */
+ptrdiff_t pio_dist_warnings(const PioDistNetwork *net, char *warnbuf, size_t warnlen);
+#endif
+
+#if defined(PIO_DIST)
+/**
+ * Serialize `net` to distribution format `to` (`dss`, `pmd`, or `bmopf`).
+ * Writing back to the format the handle was parsed from echoes the source
+ * text byte for byte; a cross format write reports every fidelity loss in
+ * `warnbuf` (`\n`-joined). Returns the text as an owned C string (free with
+ * [`pio_string_free`]), `NULL` on error.
+ */
+char *pio_dist_to_format(const PioDistNetwork *net,
+                         const char *to,
+                         char *warnbuf,
+                         size_t warnlen,
+                         char *errbuf,
+                         size_t errlen);
+#endif
+
+#if defined(PIO_DIST)
+/**
+ * Convert distribution case `path` to format `to` (optionally forcing the
+ * source via `from`; see [`pio_dist_parse_file`] for the inference rules).
+ * Returns the converted text as an owned C string (free with
+ * [`pio_string_free`]), `NULL` on error. The warnings written `\n`-joined
+ * into `warnbuf` carry both the parse warnings and the writer's fidelity
+ * losses (there is no handle to query them from).
+ */
+char *pio_dist_convert_file(const char *path,
+                            const char *to,
+                            const char *from,
+                            char *warnbuf,
+                            size_t warnlen,
+                            char *errbuf,
+                            size_t errlen);
+#endif
+
+#if defined(PIO_DIST)
+/**
+ * Convert in-memory distribution case `text` from format `from` to format
+ * `to` (both required; `dss`, `pmd`, or `bmopf`). Returns the converted text
+ * as an owned C string (free with [`pio_string_free`]), `NULL` on error. The
+ * warnings written `\n`-joined into `warnbuf` carry both the parse warnings
+ * and the writer's fidelity losses (there is no handle to query them from).
+ */
+char *pio_dist_convert_str(const char *text,
+                           const char *from,
+                           const char *to,
+                           char *warnbuf,
+                           size_t warnlen,
+                           char *errbuf,
+                           size_t errlen);
 #endif
 
 #ifdef __cplusplus

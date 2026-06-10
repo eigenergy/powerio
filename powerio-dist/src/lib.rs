@@ -21,7 +21,10 @@ pub mod model;
 pub mod pmd;
 
 pub use bmopf::{parse_bmopf_file, parse_bmopf_str, write_bmopf_json};
-pub use convert::{Conversion, DistTargetFormat, dist_target_from_name};
+pub use convert::{
+    Conversion, DistTargetFormat, convert_file, convert_str, dist_target_from_name, parse_file,
+    parse_str,
+};
 pub use dss::{parse_dss_file, parse_dss_str, write_dss};
 pub use error::{Error, Result};
 pub use model::{

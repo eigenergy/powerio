@@ -2031,6 +2031,7 @@ version = "0.0.1"
 dependencies = [
  "arrow",
  "powerio",
+ "powerio-dist",
 ]
 
 [[package]]
@@ -2040,6 +2041,7 @@ dependencies = [
  "anyhow",
  "clap",
  "crossterm",
+ "powerio-dist",
  "powerio-matrix",
  "ratatui",
  "sprs",
@@ -2082,6 +2084,7 @@ dependencies = [
 name = "powerio-py"
 version = "0.0.1"
 dependencies = [
+ "powerio-dist",
  "powerio-matrix",
  "pyo3",
  "sprs",

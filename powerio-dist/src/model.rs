@@ -30,6 +30,18 @@ pub enum DistSourceFormat {
     PmdJson,
 }
 
+impl DistSourceFormat {
+    /// The canonical format name (`dss`, `pmd-json`, `bmopf-json`), accepted
+    /// back by [`crate::dist_target_from_name`].
+    pub fn name(self) -> &'static str {
+        match self {
+            DistSourceFormat::Dss => "dss",
+            DistSourceFormat::PmdJson => "pmd-json",
+            DistSourceFormat::BmopfJson => "bmopf-json",
+        }
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Default)]
 pub struct DistBus {
     pub id: String,

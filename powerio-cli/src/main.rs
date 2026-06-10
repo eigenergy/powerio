@@ -126,10 +126,13 @@ enum Command {
         #[arg(long, default_value_t = 0)]
         scenario: i64,
     },
-    /// Convert a case file to another format through the neutral hub.
+    /// Convert a case file to another format. Transmission formats convert
+    /// through the neutral hub; distribution formats (dss, pmd-json,
+    /// bmopf-json) through the wire coordinate distribution model. The two
+    /// families do not mix.
     Convert {
         /// Input case file. The format is inferred from the extension
-        /// (`.m`, `.json`, `.raw`, `.aux`) unless `--from` is given.
+        /// (`.m`, `.json`, `.raw`, `.aux`, `.dss`) unless `--from` is given.
         input: PathBuf,
         /// Target format.
         #[arg(long, value_enum)]
@@ -156,22 +159,47 @@ enum FormatArg {
     Psse,
     #[value(name = "powerworld", alias = "aux")]
     PowerWorld,
-}
-
-impl From<FormatArg> for powerio_matrix::TargetFormat {
-    fn from(value: FormatArg) -> Self {
-        match value {
-            FormatArg::Matpower => Self::Matpower,
-            FormatArg::PowerModelsJson => Self::PowerModelsJson,
-            FormatArg::EgretJson => Self::EgretJson,
-            FormatArg::Psse => Self::Psse,
-            FormatArg::PowerWorld => Self::PowerWorld,
-        }
-    }
+    #[value(name = "dss", alias = "opendss")]
+    Dss,
+    #[value(name = "pmd-json", alias = "pmd", alias = "engineering")]
+    PmdJson,
+    #[value(name = "bmopf-json", alias = "bmopf")]
+    BmopfJson,
 }
 
 impl FormatArg {
-    /// The canonical name `target_format_from_name` accepts, for forcing a reader.
+    /// The transmission hub target, or `None` for a distribution format.
+    fn transmission(self) -> Option<powerio_matrix::TargetFormat> {
+        use powerio_matrix::TargetFormat;
+        match self {
+            FormatArg::Matpower => Some(TargetFormat::Matpower),
+            FormatArg::PowerModelsJson => Some(TargetFormat::PowerModelsJson),
+            FormatArg::EgretJson => Some(TargetFormat::EgretJson),
+            FormatArg::Psse => Some(TargetFormat::Psse),
+            FormatArg::PowerWorld => Some(TargetFormat::PowerWorld),
+            FormatArg::Dss | FormatArg::PmdJson | FormatArg::BmopfJson => None,
+        }
+    }
+
+    /// The distribution target, or `None` for a transmission format. Exactly
+    /// one of this and [`FormatArg::transmission`] is `Some` for every
+    /// variant, so adding a format without wiring its family is a compile
+    /// error, not a runtime panic.
+    fn distribution(self) -> Option<powerio_dist::DistTargetFormat> {
+        use powerio_dist::DistTargetFormat;
+        match self {
+            FormatArg::Dss => Some(DistTargetFormat::Dss),
+            FormatArg::PmdJson => Some(DistTargetFormat::PmdJson),
+            FormatArg::BmopfJson => Some(DistTargetFormat::BmopfJson),
+            FormatArg::Matpower
+            | FormatArg::PowerModelsJson
+            | FormatArg::EgretJson
+            | FormatArg::Psse
+            | FormatArg::PowerWorld => None,
+        }
+    }
+
+    /// The canonical name the format dispatchers accept, for forcing a reader.
     fn name(self) -> &'static str {
         match self {
             FormatArg::Matpower => "matpower",
@@ -179,6 +207,9 @@ impl FormatArg {
             FormatArg::EgretJson => "egret-json",
             FormatArg::Psse => "psse",
             FormatArg::PowerWorld => "powerworld",
+            FormatArg::Dss => "dss",
+            FormatArg::PmdJson => "pmd-json",
+            FormatArg::BmopfJson => "bmopf-json",
         }
     }
 }
@@ -351,7 +382,7 @@ fn main() -> anyhow::Result<()> {
             to,
             output,
             from,
-        } => run_convert(&input, to.into(), output.as_deref(), from),
+        } => run_convert(&input, to, output.as_deref(), from),
     }
 }
 
@@ -554,32 +585,84 @@ fn run_verify(input: &Path, kind: MatrixKind, scheme: Scheme) -> anyhow::Result<
 
 fn run_convert(
     input: &std::path::Path,
-    to: powerio_matrix::TargetFormat,
+    to: FormatArg,
     output: Option<&std::path::Path>,
     from: Option<FormatArg>,
 ) -> anyhow::Result<()> {
-    let net = read_network(input, from)?;
-    let conv = powerio_matrix::write_as(&net, to);
-    for w in &conv.warnings {
+    // The two families share no conversion path; say so directly instead of
+    // letting the wrong family's reader produce a confusing format error. The
+    // input family comes from --from, or from an unambiguous extension
+    // (.json is shared, so it stays undecided and the reader sniffs it).
+    let input_is_dist = from.map(|f| f.transmission().is_none()).or_else(|| {
+        match input
+            .extension()
+            .and_then(|e| e.to_str())
+            .map(str::to_ascii_lowercase)
+            .as_deref()
+        {
+            Some("m" | "raw" | "aux") => Some(false),
+            Some("dss") => Some(true),
+            _ => None,
+        }
+    });
+    if input_is_dist.is_some_and(|dist| dist != to.transmission().is_none()) {
+        anyhow::bail!(
+            "no conversion path between the transmission and distribution format families \
+             ({} to `{}`)",
+            from.map_or_else(
+                || format!("`{}` input", input.display()),
+                |f| format!("`{}`", f.name())
+            ),
+            to.name()
+        );
+    }
+    let (text, warnings) = if let Some(target) = to.transmission() {
+        let net = read_network(input, from)?;
+        let conv = powerio_matrix::write_as(&net, target);
+        (conv.text, conv.warnings)
+    } else {
+        let net = powerio_dist::parse_file(input, from.map(FormatArg::name))
+            .with_context(|| format!("reading {}", input.display()))?;
+        for w in &net.warnings {
+            eprintln!("parse: {w}");
+        }
+        let target = to
+            .distribution()
+            .expect("the family check routed a transmission target here");
+        let conv = net.to_format(target);
+        (conv.text, conv.warnings)
+    };
+    for w in &warnings {
         eprintln!("fidelity: {w}");
     }
     match output {
         Some(p) if p.as_os_str() != "-" => {
-            std::fs::write(p, &conv.text).with_context(|| format!("writing {}", p.display()))?;
+            std::fs::write(p, &text).with_context(|| format!("writing {}", p.display()))?;
             eprintln!("wrote {}", p.display());
         }
-        _ => print!("{}", conv.text),
+        _ => print!("{text}"),
     }
     Ok(())
 }
 
 /// Read `input` into the neutral [`powerio_matrix::Network`] through the shared
 /// format hub, which picks the reader from `from` or the extension (sniffing a
-/// `.json` for the egret vs PowerModels shape).
+/// `.json` for the egret vs PowerModels shape). Distribution formats are
+/// rejected up front: every caller of this function consumes the transmission
+/// model, and clap can't express the restriction on the shared `FormatArg`.
 fn read_network(
     input: &std::path::Path,
     from: Option<FormatArg>,
 ) -> anyhow::Result<powerio_matrix::Network> {
+    if let Some(f) = from {
+        if f.transmission().is_none() {
+            anyhow::bail!(
+                "`{}` is a distribution format; this command reads transmission cases \
+                 (matpower, powermodels-json, egret-json, psse, powerworld)",
+                f.name()
+            );
+        }
+    }
     powerio_matrix::parse_file(input, from.map(FormatArg::name))
         .with_context(|| format!("reading {}", input.display()))
 }
