@@ -85,7 +85,7 @@ powerio/                      # parser + Network hub + converters
 │                            #   reindexed derived view); shared per unit scaling
 │                            #   (cost_to_pu/cost_from_pu, DEG_TO_RAD, GEN_PU_KEYS)
 ├── src/format/
-│   ├── mod.rs               # hub: parse, parse_str, read_path, write_as,
+│   ├── mod.rs               # hub: parse_file, parse_str, convert_file, write_as,
 │   │                        #   TargetFormat, Conversion, target_format_from_name
 │   ├── matpower/            # tokens, matlab, locate, rows, writer
 │   │                        #   (the lossless source retaining path)

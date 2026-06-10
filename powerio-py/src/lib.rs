@@ -213,7 +213,7 @@ impl PyCase {
     }
 
     #[getter]
-    fn n(&self) -> usize {
+    fn n_buses(&self) -> usize {
         self.inner.buses.len()
     }
 
@@ -271,7 +271,7 @@ impl PyCase {
         for b in &self.inner.buses {
             let d = PyDict::new(py);
             d.set_item("id", b.id.0)?;
-            d.set_item("type", b.kind.as_str())?;
+            d.set_item("kind", b.kind.as_str())?;
             d.set_item("vm", b.vm)?;
             d.set_item("va", b.va)?;
             d.set_item("base_kv", b.base_kv)?;
@@ -336,7 +336,7 @@ impl PyCase {
     }
 
     #[getter]
-    fn gens<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyList>> {
+    fn generators<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyList>> {
         let mut rows: Vec<Bound<'py, PyDict>> = Vec::with_capacity(self.inner.generators.len());
         for g in &self.inner.generators {
             let d = PyDict::new(py);
@@ -377,13 +377,8 @@ impl PyCase {
         Ok(d)
     }
 
-    /// Serialize back to MATPOWER `.m`. For a MATPOWER-parsed case this is the
-    /// byte-exact source echo.
-    fn write(&self) -> String {
-        self.to_matpower()
-    }
-
-    /// Serialize this case to MATPOWER `.m` text.
+    /// Serialize this case to MATPOWER `.m` text. For a MATPOWER-parsed case this
+    /// is the byte-exact source echo.
     fn to_matpower(&self) -> String {
         self.inner.to_matpower()
     }
@@ -585,15 +580,9 @@ impl PyCase {
 #[pyfunction]
 #[pyo3(signature = (path, from_=None))]
 fn parse_file(path: &str, from_: Option<&str>) -> PyResult<PyCase> {
-    let inner = powerio_matrix::read_path(std::path::Path::new(path), from_).map_err(to_pyerr)?;
+    let inner = powerio_matrix::parse_file(std::path::Path::new(path), from_).map_err(to_pyerr)?;
     let core = IndexCore::build(&inner);
     Ok(PyCase { inner, core })
-}
-
-/// Parse a case file from a path, inferring the format from the extension.
-#[pyfunction]
-fn parse(path: &str) -> PyResult<PyCase> {
-    parse_file(path, None)
 }
 
 /// Parse a case from in-memory text in the named `format` (`matpower`,
@@ -607,40 +596,12 @@ fn parse_str(text: &str, format: Option<&str>) -> PyResult<PyCase> {
     Ok(PyCase { inner, core })
 }
 
-/// Parse a MATPOWER `.m` file from a path (the fast, format-explicit path).
-#[pyfunction]
-fn parse_matpower(path: &str) -> PyResult<PyCase> {
-    let inner = powerio_matrix::parse_matpower_file(path).map_err(to_pyerr)?;
-    let core = IndexCore::build(&inner);
-    Ok(PyCase { inner, core })
-}
-
-/// Parse a MATPOWER case from in-memory `.m` text. When `name` is given it
-/// overrides the parsed case name.
-#[pyfunction]
-#[pyo3(signature = (content, name=None))]
-fn parse_matpower_string(content: &str, name: Option<&str>) -> PyResult<PyCase> {
-    let mut inner = powerio_matrix::parse_matpower(content).map_err(to_pyerr)?;
-    if let Some(n) = name {
-        inner.name = n.to_string();
-    }
-    let core = IndexCore::build(&inner);
-    Ok(PyCase { inner, core })
-}
-
 /// Rebuild a case from JSON produced by `Network.to_json()`.
 #[pyfunction]
 fn from_json(text: &str) -> PyResult<PyCase> {
     let inner = powerio_matrix::Network::from_json(text).map_err(to_pyerr)?;
     let core = IndexCore::build(&inner);
     Ok(PyCase { inner, core })
-}
-
-/// Serialize `case` back to MATPOWER `.m` text (byte-exact echo for a
-/// MATPOWER-parsed case).
-#[pyfunction]
-fn write(case: &PyCase) -> String {
-    case.write()
 }
 
 /// Convert a case file to another format through the neutral hub. Returns
@@ -656,13 +617,6 @@ fn convert_file(path: &str, to: &str, from_: Option<&str>) -> PyResult<(String, 
     let conv = powerio_matrix::convert_file(std::path::Path::new(path), target, from_)
         .map_err(to_pyerr)?;
     Ok((conv.text, conv.warnings))
-}
-
-/// Compatibility alias for `convert_file`.
-#[pyfunction]
-#[pyo3(signature = (path, to, from_=None))]
-fn convert(path: &str, to: &str, from_: Option<&str>) -> PyResult<(String, Vec<String>)> {
-    convert_file(path, to, from_)
 }
 
 /// Build a `{dir, files}` dict from an outputs directory and its written files.
@@ -733,14 +687,9 @@ fn _powerio(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add("PowerIODataError", m.py().get_type::<PowerIODataError>())?;
     m.add_class::<PyCase>()?;
     m.add_function(wrap_pyfunction!(parse_file, m)?)?;
-    m.add_function(wrap_pyfunction!(parse, m)?)?;
     m.add_function(wrap_pyfunction!(parse_str, m)?)?;
-    m.add_function(wrap_pyfunction!(parse_matpower, m)?)?;
-    m.add_function(wrap_pyfunction!(parse_matpower_string, m)?)?;
     m.add_function(wrap_pyfunction!(from_json, m)?)?;
-    m.add_function(wrap_pyfunction!(write, m)?)?;
     m.add_function(wrap_pyfunction!(convert_file, m)?)?;
-    m.add_function(wrap_pyfunction!(convert, m)?)?;
     // Whether the gridfm Parquet surface (arrow/parquet) was compiled in, so the
     // pure-Python layer can raise an ImportError instead of an AttributeError.
     m.add("_has_gridfm", cfg!(feature = "gridfm"))?;

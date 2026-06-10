@@ -10,6 +10,27 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
+  encoding:
+    name: Encoding (no BOM, no mojibake)
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+    # Windows editors have twice corrupted text files in PRs: CRLF in vendored
+    # fixtures (#73, now pinned via .gitattributes) and UTF-8 re-encoded as
+    # cp1252 plus a BOM (#77). .gitattributes can't catch the latter two, so
+    # reject them here. tests/data is exempt: vendored fixtures keep their
+    # committed bytes.
+    - name: No UTF-8 BOM
+      run: |
+        if git grep -Iln $'\xef\xbb\xbf' -- .; then
+          echo "UTF-8 BOM found in the files above"; exit 1
+        fi
+    - name: No cp1252 mojibake
+      run: |
+        if git grep -Iln $'\xc3\xa2' -- ':!tests/data'; then
+          echo "mojibake (UTF-8 read as cp1252 and re-encoded) found in the files above"; exit 1
+        fi
+
   fmt:
     name: rustfmt
     runs-on: ubuntu-latest

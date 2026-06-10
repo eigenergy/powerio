@@ -3,8 +3,8 @@
  *
  * Memory: strings returned by pio_to_matpower / pio_to_format /
  * pio_convert_file / pio_to_json are owned by the library; free them with
- * pio_string_free. Case handles from pio_parse_file / pio_parse_str /
- * pio_from_json / pio_to_normalized are freed with pio_case_free. Array
+ * pio_string_free. Network handles from pio_parse_file / pio_parse_str /
+ * pio_from_json / pio_to_normalized are freed with pio_network_free. Array
  * extractors fill caller-allocated buffers whose length is the matching pio_n_*
  * count; pass NULL to skip an output.
  *
@@ -43,7 +43,7 @@ struct ArrowSchema;
  * was built against (the `PIO_ABI_VERSION` macro in `powerio.h`) and refuses a
  * mismatched library instead of calling in blind.
  */
-#define PIO_ABI_VERSION 2
+#define PIO_ABI_VERSION 3
 
 /**
  * A comfortable error-buffer size: pass a `char[PIO_ERRBUF_MIN]` to any
@@ -76,11 +76,11 @@ struct ArrowSchema;
 #endif
 
 /**
- * Opaque parsed case handle. Carries the parsed [`Network`] plus the
+ * Opaque parsed network handle. Carries the parsed [`Network`] plus the
  * [`IndexCore`] derived from it once at parse time, so every indexed query
  * reuses the same bus-id map and nodal aggregates instead of rebuilding them.
  */
-typedef struct PioCase PioCase;
+typedef struct PioNetwork PioNetwork;
 
 #ifdef __cplusplus
 extern "C" {
@@ -103,41 +103,41 @@ const char *pio_version(void);
  * Parse `path` (format from extension, or `from` if non-NULL) into a case
  * handle. Returns `NULL` on error and writes the message into `errbuf`.
  */
-PioCase *pio_parse_file(const char *path, const char *from, char *errbuf, size_t errlen);
+PioNetwork *pio_parse_file(const char *path, const char *from, char *errbuf, size_t errlen);
 
 /**
- * Parse in-memory case `text` of the named `format` into a case handle. Unlike
+ * Parse in-memory case `text` of the named `format` into a network handle. Unlike
  * [`pio_parse_file`] there is no path to infer from, so `format` is required: one of
  * `matpower`/`m`, `powermodels`/`pm`, `egret`, `psse`/`raw`, `powerworld`/`aux`
  * (see `TargetFormat::from_str`). Returns `NULL` on error and writes the
- * message into `errbuf`. Free the handle with [`pio_case_free`].
+ * message into `errbuf`. Free the handle with [`pio_network_free`].
  */
-PioCase *pio_parse_str(const char *text, const char *format, char *errbuf, size_t errlen);
+PioNetwork *pio_parse_str(const char *text, const char *format, char *errbuf, size_t errlen);
 
 /**
- * Free a case handle from [`pio_parse_file`], [`pio_parse_str`],
+ * Free a network handle from [`pio_parse_file`], [`pio_parse_str`],
  * [`pio_to_normalized`], or [`pio_from_json`].
  */
-void pio_case_free(PioCase *case_);
+void pio_network_free(PioNetwork *net);
 
 /**
- * Normalize `case` into a NEW per-unit case handle: per unit, radians,
+ * Normalize `net` into a NEW per-unit network handle: per unit, radians,
  * out-of-service filtered, densely reindexed, bus types canonicalized (see
- * `Network::to_normalized`). The result is independent of `case`; free both
- * with [`pio_case_free`]. Every extractor and [`pio_to_json`] works on it
+ * `Network::to_normalized`). The result is independent of `net`; free both
+ * with [`pio_network_free`]. Every extractor and [`pio_to_json`] works on it
  * unchanged (the handle is per unit, not MW). Returns `NULL` on error (no
  * reference bus can be chosen, or a non-positive base MVA) and writes the
  * message into `errbuf`.
  */
-PioCase *pio_to_normalized(const PioCase *case_, char *errbuf, size_t errlen);
+PioNetwork *pio_to_normalized(const PioNetwork *net, char *errbuf, size_t errlen);
 
-size_t pio_n_buses(const PioCase *case_);
+size_t pio_n_buses(const PioNetwork *net);
 
-size_t pio_n_branches(const PioCase *case_);
+size_t pio_n_branches(const PioNetwork *net);
 
-size_t pio_n_gens(const PioCase *case_);
+size_t pio_n_gens(const PioNetwork *net);
 
-double pio_base_mva(const PioCase *case_);
+double pio_base_mva(const PioNetwork *net);
 
 /**
  * Dense `[0, n)` index of the single reference bus, or `-1` if not exactly one
@@ -146,43 +146,43 @@ double pio_base_mva(const PioCase *case_);
  * multiple `REF` buses); use [`pio_n_reference_buses`] to tell zero from many,
  * and [`pio_reference_buses`] to read them all.
  */
-ptrdiff_t pio_reference_bus(const PioCase *case_);
+ptrdiff_t pio_reference_bus(const PioNetwork *net);
 
 /**
  * Number of reference (slack) buses. `0` means none; `> 1` means one reference
  * per island or several fixed reference buses in one island. A normalized case
  * always reports `>= 1`.
  */
-size_t pio_n_reference_buses(const PioCase *case_);
+size_t pio_n_reference_buses(const PioNetwork *net);
 
 /**
  * Fill `out` (length [`pio_n_reference_buses`]) with the dense `[0, n)` indices
  * of the reference buses, ascending.
  */
-void pio_reference_buses(const PioCase *case_, int64_t *out);
+void pio_reference_buses(const PioNetwork *net, int64_t *out);
 
-size_t pio_n_components(const PioCase *case_);
+size_t pio_n_components(const PioNetwork *net);
 
 /**
  * `1` if the in-service topology is a forest, else `0`.
  */
-int32_t pio_is_radial(const PioCase *case_);
+int32_t pio_is_radial(const PioNetwork *net);
 
 /**
- * Serialize `case` to MATPOWER `.m` text (byte-exact echo when parsed from
+ * Serialize `net` to MATPOWER `.m` text (byte-exact echo when parsed from
  * MATPOWER). Returns an owned C string; free with [`pio_string_free`]. Returns
  * `NULL` on error and writes the message into `errbuf`.
  */
-char *pio_to_matpower(const PioCase *case_, char *errbuf, size_t errlen);
+char *pio_to_matpower(const PioNetwork *net, char *errbuf, size_t errlen);
 
 /**
- * Serialize `case` to format `to`.
+ * Serialize `net` to format `to`.
  *
  * Returns the converted text as an owned C string (free with
  * [`pio_string_free`]), `NULL` on error. Fidelity warnings, if any, are written
  * `\n`-joined into `warnbuf`.
  */
-char *pio_to_format(const PioCase *case_,
+char *pio_to_format(const PioNetwork *net,
                     const char *to,
                     char *warnbuf,
                     size_t warnlen,
@@ -218,20 +218,20 @@ void pio_string_free(char *s);
  * string (free with [`pio_string_free`]), `NULL` on error (message into
  * `errbuf`).
  */
-char *pio_to_json(const PioCase *case_, char *errbuf, size_t errlen);
+char *pio_to_json(const PioNetwork *net, char *errbuf, size_t errlen);
 
 /**
- * Rebuild a case handle from JSON produced by [`pio_to_json`]. Returns a new
- * handle (free with [`pio_case_free`]), or `NULL` on error (message into
+ * Rebuild a network handle from JSON produced by [`pio_to_json`]. Returns a new
+ * handle (free with [`pio_network_free`]), or `NULL` on error (message into
  * `errbuf`). The handle has no retained source, so [`pio_to_matpower`]
  * reformats it rather than echoing a byte-exact original.
  */
-PioCase *pio_from_json(const char *json, char *errbuf, size_t errlen);
+PioNetwork *pio_from_json(const char *json, char *errbuf, size_t errlen);
 
 /**
  * Fill `out` (length `pio_n_buses`) with the 1-based bus ids in dense order.
  */
-void pio_bus_ids(const PioCase *case_, int64_t *out);
+void pio_bus_ids(const PioNetwork *net, int64_t *out);
 
 /**
  * Fill the branch tables (each length `pio_n_branches`). `from`/`to` are the
@@ -239,7 +239,7 @@ void pio_bus_ids(const PioCase *case_, int64_t *out);
  * map them to dense matrix rows with the [`pio_bus_ids`] ordering. Any pointer
  * may be `NULL` to skip.
  */
-void pio_branches(const PioCase *case_,
+void pio_branches(const PioNetwork *net,
                   int64_t *from,
                   int64_t *to,
                   double *r,
@@ -253,7 +253,7 @@ void pio_branches(const PioCase *case_,
  * Fill the generator tables (each length `pio_n_gens`; `bus` is the 1-based bus
  * id, the same id space as [`pio_bus_ids`]). Any pointer may be `NULL` to skip.
  */
-void pio_gens(const PioCase *case_,
+void pio_gens(const PioNetwork *net,
               int64_t *bus,
               double *pg,
               double *pmax,
@@ -264,12 +264,12 @@ void pio_gens(const PioCase *case_,
  * Fill nodal aggregates (each length `pio_n_buses`, dense order): active and
  * reactive demand summed per bus. Any pointer may be `NULL`.
  */
-void pio_nodal_demand(const PioCase *case_, double *pd, double *qd);
+void pio_nodal_demand(const PioNetwork *net, double *pd, double *qd);
 
 /**
  * Fill nodal shunt aggregates (each length `pio_n_buses`, dense order).
  */
-void pio_nodal_shunt(const PioCase *case_, double *gs, double *bs);
+void pio_nodal_shunt(const PioNetwork *net, double *gs, double *bs);
 
 #if defined(PIO_ARROW)
 /**
@@ -281,11 +281,11 @@ void pio_nodal_shunt(const PioCase *case_, double *gs, double *bs);
  * `out_array` and `out_schema` are populated with owned C Data Interface
  * structs: ownership of the Arrow buffers transfers to the caller, both
  * `release` callbacks are non-NULL, and the caller MUST invoke each exactly
- * once when done (skipping one leaks; the structs outlive `pio_case_free`).
+ * once when done (skipping one leaks; the structs outlive `pio_network_free`).
  * On error (returns `-1`) the message is written into `errbuf` and the
  * out-params are left untouched. Only built with the `arrow` cargo feature.
  */
-int32_t pio_export_arrow(const PioCase *case_,
+int32_t pio_export_arrow(const PioNetwork *net,
                          int32_t table,
                          struct ArrowArray *out_array,
                          struct ArrowSchema *out_schema,

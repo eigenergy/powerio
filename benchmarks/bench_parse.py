@@ -66,10 +66,10 @@ def samples_for(nbuses):
 def bench_case(path: Path):
     case = powerio.parse_file(str(path))
     print(
-        f"case {path.name}: {case.n} buses, {case.n_branches} branches, "
+        f"case {path.name}: {case.n_buses} buses, {case.n_branches} branches, "
         f"{case.n_gens} gens"
     )
-    n, warm = samples_for(case.n)
+    n, warm = samples_for(case.n_buses)
 
     def timed(fn):
         return best_median(fn, n, warm)
@@ -101,7 +101,7 @@ def bench_case(path: Path):
 
     # pandapower reads .m via matpowercaseframes, then builds its `net`. This is
     # the apples-to-apples "convert a MATPOWER file into the tool's model" row.
-    if case.n > FROM_MPC_MAX_BUSES:
+    if case.n_buses > FROM_MPC_MAX_BUSES:
         print(f"pandapower from_mpc skipped above {FROM_MPC_MAX_BUSES} buses.")
     else:
         try:

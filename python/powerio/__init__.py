@@ -7,7 +7,7 @@ pull the sparse matrices and graph views solvers need::
     import powerio as pio
 
     net = pio.parse_file("case9.m")          # format inferred from the extension
-    print(net.n, net.base_mva)               # 9 100.0
+    print(net.n_buses, net.base_mva)         # 9 100.0
     text = net.to_matpower()                 # byte-exact MATPOWER echo
     raw, warnings = pio.convert_file("case9.m", "psse")
 
@@ -15,8 +15,8 @@ pull the sparse matrices and graph views solvers need::
     Y = net.ybus()                           # complex csr, G + jB
     G = net.to_networkx()                    # networkx.Graph keyed by bus id
 
-``import powerio`` and parse/write/convert pull in nothing but the interpreter.
-The matrix methods need scipy/numpy and the graph view needs networkx; add them
+``import powerio`` and parsing/writing/converting pull in nothing but the
+interpreter. The matrix methods need scipy/numpy and the graph view needs networkx; add them
 with ``pip install 'powerio[matrix]'``, ``[graph]``, or ``[all]``. A missing
 extra raises a clear ImportError, never a link error: the compiled core
 (``powerio._powerio``) returns COO triplets as plain Python lists, and the
@@ -47,14 +47,9 @@ __all__ = [
     "PowerIOParseError",
     "PowerIODataError",
     "parse_file",
-    "parse",
     "parse_str",
     "from_json",
-    "parse_matpower",
-    "parse_matpower_string",
-    "write",
     "convert_file",
-    "convert",
     "to_format",
     "to_matpower",
     "to_json",
@@ -202,10 +197,6 @@ class Network:
         """
         return self._inner.to_matpower()
 
-    def write(self) -> str:
-        """Compatibility alias for :meth:`to_matpower`."""
-        return self.to_matpower()
-
     def to_json(self) -> str:
         """Serialize to the JSON transport."""
         return self._inner.to_json()
@@ -228,7 +219,7 @@ class Network:
         np = _require("numpy", "matrix")
         buses = self._inner.buses
         branches = self._inner.branches
-        gens = self._inner.gens
+        generators = self._inner.generators
         bus_ids = np.asarray([b["id"] for b in buses], dtype=np.int64)
         id_to_idx = {int(bus_id): idx for idx, bus_id in enumerate(bus_ids)}
 
@@ -259,17 +250,17 @@ class Network:
             in_service=np.asarray([br["in_service"] for br in branches], dtype=bool),
         )
         gen = DenseGen(
-            bus=np.asarray([g["bus"] for g in gens], dtype=np.int64),
-            pg=np.asarray([g["pg"] for g in gens], dtype=float),
-            pmax=np.asarray([g["pmax"] for g in gens], dtype=float),
-            pmin=np.asarray([g["pmin"] for g in gens], dtype=float),
-            in_service=np.asarray([g["in_service"] for g in gens], dtype=bool),
+            bus=np.asarray([g["bus"] for g in generators], dtype=np.int64),
+            pg=np.asarray([g["pg"] for g in generators], dtype=float),
+            pmax=np.asarray([g["pmax"] for g in generators], dtype=float),
+            pmin=np.asarray([g["pmin"] for g in generators], dtype=float),
+            in_service=np.asarray([g["in_service"] for g in generators], dtype=bool),
         )
         refs = self.reference_bus_indices()
         return DenseNetwork(
             n=len(buses),
             m=len(branches),
-            ng=len(gens),
+            ng=len(generators),
             base_mva=self.base_mva,
             bus_ids=bus_ids,
             branch=branch,
@@ -396,11 +387,6 @@ def parse_file(path: Any, from_: Optional[str] = None) -> Network:
     return Network(_powerio.parse_file(str(path), from_))
 
 
-def parse(path: Any) -> Network:
-    """Compatibility alias for :func:`parse_file`."""
-    return parse_file(path)
-
-
 def parse_str(text: str, format: str = "matpower") -> Network:
     """Parse a case from in-memory text in the named ``format``."""
     return Network(_powerio.parse_str(text, format))
@@ -409,22 +395,6 @@ def parse_str(text: str, format: str = "matpower") -> Network:
 def from_json(text: str) -> Network:
     """Rebuild a case from JSON produced by :meth:`Network.to_json`."""
     return Network(_powerio.from_json(text))
-
-
-def parse_matpower(path: Any) -> Network:
-    """Parse a MATPOWER ``.m`` case from a file path."""
-    return Network(_powerio.parse_matpower(str(path)))
-
-
-def parse_matpower_string(content: str, name: Optional[str] = None) -> Network:
-    """Parse a MATPOWER case from in-memory ``.m`` text; ``name`` overrides the
-    parsed case name."""
-    return Network(_powerio.parse_matpower_string(content, name))
-
-
-def write(case: Network) -> str:
-    """Compatibility alias for ``case.to_matpower()``."""
-    return case.to_matpower()
 
 
 def convert_file(path: Any, to: str, from_: Optional[str] = None) -> Conversion:
@@ -438,11 +408,6 @@ def convert_file(path: Any, to: str, from_: Optional[str] = None) -> Conversion:
     """
     text, warnings = _powerio.convert_file(str(path), to, from_)
     return Conversion(text, warnings)
-
-
-def convert(path: Any, to: str, from_: Optional[str] = None) -> Conversion:
-    """Compatibility alias for :func:`convert_file`."""
-    return convert_file(path, to, from_)
 
 
 def to_format(case: Network, to: str) -> Conversion:

@@ -37,14 +37,8 @@ bprime = net.bprime()        # needs powerio[matrix]
 graph = net.to_networkx()    # needs powerio[graph]
 ```
 
-Shorthand aliases:
-
-```python
-pio.parse("case9.m")
-pio.convert("case9.m", "psse")
-pio.parse_matpower("case9.m")
-pio.parse_matpower_string(text)
-```
+`parse_file(path, from_=None)` reads any format (inferred from the extension, or
+forced with `from_`); `parse_str(text, format)` reads in-memory text.
 
 ## GridFM reads
 

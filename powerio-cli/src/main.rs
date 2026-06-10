@@ -580,6 +580,6 @@ fn read_network(
     input: &std::path::Path,
     from: Option<FormatArg>,
 ) -> anyhow::Result<powerio_matrix::Network> {
-    powerio_matrix::read_path(input, from.map(FormatArg::name))
+    powerio_matrix::parse_file(input, from.map(FormatArg::name))
         .with_context(|| format!("reading {}", input.display()))
 }

@@ -16,7 +16,7 @@ Verb taxonomy:
 
 | Concept | Rust | Python | Julia | C ABI |
 |---|---|---|---|---|
-| Parse path | `parse_file(path)` | `parse_file(path, from_=None)` | `parse_file(path; from=nothing)` | `pio_parse_file` |
+| Parse path | `parse_file(path, from)` | `parse_file(path, from_=None)` | `parse_file(path; from=nothing)` | `pio_parse_file` |
 | Parse text | `parse_str(text, format)` | `parse_str(text, format)` | `parse_str(text, format)` | `pio_parse_str` |
 | Parse IO | n/a | file object later | `parse_file(io, format)` | n/a |
 | JSON to Network | `Network::from_json` | `from_json` | `from_json` | `pio_from_json` |

@@ -4,7 +4,7 @@
 use std::path::{Path, PathBuf};
 
 use powerio::{
-    BusId, BusType, Error, Extras, IndexedNetwork, SourceFormat, Storage, TargetFormat, parse,
+    BusId, BusType, Error, Extras, IndexedNetwork, SourceFormat, Storage, TargetFormat, parse_file,
     parse_matpower_file, parse_str, write_as,
 };
 
@@ -358,12 +358,12 @@ mpc.branch = [
 }
 
 #[test]
-fn parse_str_matches_parse() {
+fn parse_str_matches_parse_file() {
     for case in ["case9.m", "case14.m", "case30.m"] {
         let text = std::fs::read_to_string(data(case)).unwrap();
-        let from_path = parse(data(case)).unwrap();
+        let from_path = parse_file(data(case), None).unwrap();
         let mut from_text = parse_str(&text, "matpower").unwrap();
-        // The only legitimate difference is the network name, which `parse`
+        // The only legitimate difference is the network name, which `parse_file`
         // derives from the file stem and `parse_str` cannot (it has no path).
         from_text.name = from_path.name.clone();
         // to_json skips the retained source, so equal JSON means field-for-field
@@ -371,7 +371,7 @@ fn parse_str_matches_parse() {
         assert_eq!(
             from_path.to_json().unwrap(),
             from_text.to_json().unwrap(),
-            "{case}: parse_str disagrees with parse"
+            "{case}: parse_str disagrees with parse_file"
         );
     }
 }

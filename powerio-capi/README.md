@@ -31,7 +31,7 @@ cbindgen --config powerio-capi/cbindgen.toml --crate powerio-capi \
 
 int main(void) {
     char err[256];
-    PioCase *c = pio_parse_file("case9.m", NULL, err, sizeof err);
+    PioNetwork *c = pio_parse_file("case9.m", NULL, err, sizeof err);
     if (!c) { fprintf(stderr, "parse: %s\n", err); return 1; }
 
     size_t n = pio_n_buses(c), m = pio_n_branches(c);
@@ -54,7 +54,7 @@ int main(void) {
     if (raw) { /* ... use PSS/E text ... */ pio_string_free(raw); }
 
     free(from); free(to); free(x);
-    pio_case_free(c);
+    pio_network_free(c);
     return 0;
 }
 ```
@@ -89,7 +89,7 @@ ccall((:pio_branches, LIB), Cvoid,
        Ptr{Float64}, Ptr{Float64}, Ptr{Float64}, Ptr{UInt8}),
       h, from, to, C_NULL, x, C_NULL, C_NULL, C_NULL, C_NULL)
 # build your matrices from (from, to, x), then:
-ccall((:pio_case_free, LIB), Cvoid, (Ptr{Cvoid},), h)
+ccall((:pio_network_free, LIB), Cvoid, (Ptr{Cvoid},), h)
 ```
 
 ## JSON transport
@@ -128,13 +128,30 @@ Every entry point is hardened at the boundary:
 - Input strings must be valid UTF-8; anything else is rejected as an error,
   never dereferenced past its NUL.
 - Ownership is symmetric: handles from `pio_parse_*`/`pio_from_json`/
-  `pio_to_normalized` are freed with `pio_case_free`, strings from the `pio_to_*`
+  `pio_to_normalized` are freed with `pio_network_free`, strings from the `pio_to_*`
   functions with `pio_string_free`, each exactly once. The Arrow export hands
   the caller two C Data Interface structs whose non-NULL `release` callbacks
   must each be invoked exactly once.
 - The table extractors (`pio_branches`, `pio_gens`, ...) write exactly the
   matching `pio_n_*` count of elements into each non-NULL buffer; the caller
   must size them accordingly.
+
+## ABI history
+
+Compare `pio_abi_version()` against the `PIO_ABI_VERSION` your binary was
+compiled against before any other call; a mismatch means the library and the
+header disagree on the contract below. Breaking changes bump the version,
+additive symbols do not.
+
+| ABI | Breaking change |
+|---|---|
+| 1 | First versioned surface: opaque handles, typed extractors, JSON transport (#54). |
+| 2 | `pio_parse` → `pio_parse_file`, `pio_convert` → `pio_convert_file`, `pio_write_matpower` → `pio_to_matpower` with an `errbuf` (#69). |
+| 3 | `pio_case_free` → `pio_network_free`; `PioCase` → `PioNetwork` (opaque typedef) (#77). |
+
+From v0.1.0 the ABI is additive only: new symbols may appear, but an existing
+signature never changes or disappears without a `PIO_ABI_VERSION` bump released
+in lockstep with PowerIO.jl.
 
 ## Scope
 
