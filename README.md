@@ -54,9 +54,9 @@ Language API map: [docs/languages.md](https://github.com/eigenergy/powerio/blob/
 ## Install
 
 ```
-cargo add --git https://github.com/eigenergy/powerio powerio
-cargo add --git https://github.com/eigenergy/powerio powerio-matrix
-cargo install --git https://github.com/eigenergy/powerio powerio-cli
+cargo add powerio
+cargo add powerio-matrix
+cargo install powerio-cli
 
 pip install powerio
 pip install 'powerio[all]'     # scipy, numpy, networkx, polars extras
