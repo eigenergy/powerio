@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.0.2
+## 0.1.0
 
 - gridfm read path (#70): `read_gridfm_dataset` / `read_gridfm_scenarios` /
   `gridfm_base_case` in `powerio-matrix`, `pio_read_gridfm` /

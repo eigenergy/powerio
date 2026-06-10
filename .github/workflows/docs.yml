@@ -48,11 +48,67 @@ jobs:
         python -m pip install --upgrade pip
         python -m pip install '.[all]' pdoc
         python -m pdoc powerio -o target/doc/python
+    # The guides render on this site (docs/*.md to guides/*.html) so readers
+    # stay on one domain; sibling .md links become .html, links that leave
+    # docs/ go to GitHub.
+    - name: Render guides
+      run: |
+        python -m pip install markdown
+        python - <<'PY'
+        import pathlib
+        import re
+
+        import markdown
+
+        TPL = """<!doctype html>
+        <html lang="en">
+        <meta charset="utf-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1">
+        <title>{title}</title>
+        <link rel="icon" href="../_assets/powerio-logo.svg">
+        <style>
+          :root {{ --fg:#1a1f24; --muted:#5c6770; --bg:#fff; --link:#0b5cad; --line:#d9dee3; --code:#f6f8fa; }}
+          @media (prefers-color-scheme: dark) {{
+            :root {{ --fg:#e6edf3; --muted:#9aa7b1; --bg:#0d1117; --link:#58a6ff; --line:#30363d; --code:#161b22; }}
+          }}
+          body {{ font-family: system-ui, sans-serif; color: var(--fg); background: var(--bg);
+                 max-width: 760px; margin: 3rem auto; padding: 0 1rem; line-height: 1.6; }}
+          a {{ color: var(--link); }}
+          pre, code {{ background: var(--code); border-radius: 4px; }}
+          pre {{ padding: .7rem; overflow-x: auto; }}
+          code {{ padding: .1rem .3rem; }}
+          pre code {{ padding: 0; }}
+          table {{ border-collapse: collapse; }}
+          th, td {{ border: 1px solid var(--line); padding: .3rem .6rem; text-align: left; }}
+          nav {{ color: var(--muted); margin-bottom: 1.5rem; }}
+        </style>
+        <nav><a href="../index.html">PowerIO docs</a></nav>
+        {body}
+        """
+
+        def rewrite(m):
+            target, anchor = m.group(1), m.group(2) or ""
+            if target.startswith(".."):
+                path = target.lstrip("./")
+                return f"](https://github.com/eigenergy/powerio/blob/main/{path}.md{anchor})"
+            return f"]({target}.html{anchor})"
+
+        out = pathlib.Path("target/doc/guides")
+        out.mkdir(parents=True, exist_ok=True)
+        for src in sorted(pathlib.Path("docs").glob("*.md")):
+            text = re.sub(r"\]\((?!https?://)([^)#]+?)\.md(#[^)]*)?\)", rewrite, src.read_text())
+            body = markdown.markdown(text, extensions=["tables", "fenced_code"])
+            heading = re.search(r"<h1>(.*?)</h1>", body)
+            title = heading.group(1) if heading else src.stem
+            name = "index" if src.stem == "README" else src.stem
+            (out / f"{name}.html").write_text(TPL.format(title=title, body=body))
+            print("rendered", name)
+        PY
     # The landing page separates the two doc deployments so neither shadows the
     # other: docs.rs renders the crates.io releases of powerio/powerio-matrix,
     # while this site renders main (all four crates, including the publish=false
     # powerio-capi and powerio-py that docs.rs never hosts) plus the Python API
-    # reference (PyPI hosts no API docs) and links to the docs/ guides.
+    # reference (PyPI hosts no API docs) and the rendered docs/ guides.
     - name: Landing page
       run: |
         mkdir -p target/doc/_assets
@@ -65,84 +121,47 @@ jobs:
         <title>PowerIO docs</title>
         <link rel="icon" href="_assets/powerio-logo.svg">
         <style>
-          :root {
-            --fg: #1a1f24; --muted: #5c6770; --bg: #ffffff;
-            --card: #f6f8fa; --line: #d9dee3; --link: #0b5cad;
-          }
+          :root { --fg:#1a1f24; --muted:#5c6770; --bg:#fff; --link:#0b5cad; }
           @media (prefers-color-scheme: dark) {
-            :root {
-              --fg: #e6edf3; --muted: #9aa7b1; --bg: #0d1117;
-              --card: #161b22; --line: #30363d; --link: #58a6ff;
-            }
+            :root { --fg:#e6edf3; --muted:#9aa7b1; --bg:#0d1117; --link:#58a6ff; }
           }
-          body {
-            font-family: system-ui, sans-serif; color: var(--fg); background: var(--bg);
-            max-width: 720px; margin: 4rem auto; padding: 0 1rem; line-height: 1.55;
-          }
-          header { display: flex; align-items: center; gap: 1rem; }
-          header img { width: 64px; height: 64px; }
-          h1 { margin: 0; font-size: 1.9rem; }
-          .tagline { color: var(--muted); margin: .4rem 0 2rem; }
-          h2 {
-            font-size: .85rem; text-transform: uppercase; letter-spacing: .07em;
-            color: var(--muted); margin: 2rem 0 .6rem;
-          }
-          ul { list-style: none; margin: 0; padding: 0; }
-          li {
-            border: 1px solid var(--line); border-radius: 8px;
-            background: var(--card); margin: .5rem 0;
-          }
-          li a { display: block; padding: .55rem .9rem; text-decoration: none; color: var(--link); }
-          li a:hover { text-decoration: underline; }
-          li p { color: var(--muted); font-size: .85rem; margin: 0; padding: 0 .9rem .55rem; }
-          footer { margin-top: 2.5rem; color: var(--muted); font-size: .9rem; }
-          footer a { color: var(--link); }
+          body { font-family: system-ui, sans-serif; color: var(--fg); background: var(--bg);
+                 max-width: 640px; margin: 4rem auto; padding: 0 1rem; line-height: 1.7; }
+          header { display: flex; align-items: center; gap: .75rem; }
+          header img { width: 48px; height: 48px; }
+          h1 { margin: 0; font-size: 1.5rem; }
+          .tagline { color: var(--muted); margin: .3rem 0 1.6rem; }
+          dt { font-weight: 600; margin-top: .9rem; }
+          dd { margin: 0; }
+          a { color: var(--link); text-decoration: none; }
+          a:hover { text-decoration: underline; }
+          .sep { color: var(--muted); }
+          footer { margin-top: 2rem; }
         </style>
         <header>
           <img src="_assets/powerio-logo.svg" alt="PowerIO logo">
           <h1>PowerIO docs</h1>
         </header>
         <p class="tagline">Fast case parsing and conversion: &ldquo;pandoc for power systems&rdquo;</p>
-
-        <h2>Released &middot; docs.rs</h2>
-        <ul>
-          <li><a href="https://docs.rs/powerio">powerio</a>
-            <p>Rust API of the latest crates.io release</p></li>
-          <li><a href="https://docs.rs/powerio-matrix">powerio-matrix</a>
-            <p>matrices and graph views, latest release</p></li>
-        </ul>
-
-        <h2>Development &middot; built from main</h2>
-        <ul>
-          <li><a href="powerio/index.html">powerio (Rust)</a></li>
-          <li><a href="powerio_matrix/index.html">powerio-matrix (Rust)</a></li>
-          <li><a href="powerio_capi/index.html">powerio-capi (C ABI)</a>
-            <p>unpublished crate; rendered only here</p></li>
-          <li><a href="python/powerio.html">powerio (Python)</a>
-            <p>the Python API reference; PyPI hosts none</p></li>
-        </ul>
-
-        <h2>Guides</h2>
-        <ul>
-          <li><a href="https://github.com/eigenergy/powerio/tree/main/docs">docs/ index</a>
-            <p>reference material that fits neither the README nor a doc comment</p></li>
-          <li><a href="https://github.com/eigenergy/powerio/blob/main/docs/format-fidelity.md">format-fidelity</a>
-            <p>numeric conventions, validation, per format conversion limits</p></li>
-          <li><a href="https://github.com/eigenergy/powerio/blob/main/docs/matrices.md">matrices</a>
-            <p>the matrix family and its sign, tap, per unit, and DC conventions</p></li>
-          <li><a href="https://github.com/eigenergy/powerio/blob/main/docs/dcopf-bundle.md">dcopf-bundle</a>
-            <p>the Matrix Market + manifest schema the dcopf subcommand writes</p></li>
-          <li><a href="https://github.com/eigenergy/powerio/blob/main/docs/languages.md">languages</a>
-            <p>canonical Rust, Python, Julia, and C ABI names</p></li>
-          <li><a href="https://github.com/eigenergy/powerio/blob/main/docs/python.md">python</a>
-            <p>install extras and API examples</p></li>
-        </ul>
-
-        <h2>Bindings</h2>
-        <ul>
-          <li><a href="https://eigenergy.github.io/PowerIO.jl/dev/">PowerIO.jl (Julia)</a></li>
-        </ul>
-
+        <dl>
+          <dt>Released on <a href="https://docs.rs">docs.rs</a></dt>
+          <dd><a href="https://docs.rs/powerio">powerio</a> <span class="sep">&middot;</span>
+              <a href="https://docs.rs/powerio-matrix">powerio-matrix</a></dd>
+          <dt>Development, built from main</dt>
+          <dd><a href="powerio/index.html">powerio</a> <span class="sep">&middot;</span>
+              <a href="powerio_matrix/index.html">powerio-matrix</a> <span class="sep">&middot;</span>
+              <a href="powerio_capi/index.html">powerio-capi</a> <span class="sep">&middot;</span>
+              <a href="python/powerio.html">Python</a></dd>
+          <dt>Guides</dt>
+          <dd><a href="guides/index.html">overview</a> <span class="sep">&middot;</span>
+              <a href="guides/format-fidelity.html">format fidelity</a> <span class="sep">&middot;</span>
+              <a href="guides/matrices.html">matrices</a> <span class="sep">&middot;</span>
+              <a href="guides/dcopf-bundle.html">DC OPF bundle</a> <span class="sep">&middot;</span>
+              <a href="guides/languages.html">language APIs</a> <span class="sep">&middot;</span>
+              <a href="guides/python.html">Python</a></dd>
+          <dt>Bindings</dt>
+          <dd><a href="https://eigenergy.github.io/PowerIO.jl/dev/">PowerIO.jl</a></dd>
+        </dl>
         <footer><a href="https://github.com/eigenergy/powerio">github.com/eigenergy/powerio</a></footer>
         HTML
     - uses: actions/upload-pages-artifact@v5
