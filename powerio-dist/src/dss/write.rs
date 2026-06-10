@@ -207,16 +207,15 @@ fn name_breaks_dss(name: &str, is_bus_id: bool) -> bool {
 /// `false` means nothing reparses to the value — every closer appears in
 /// it and bare scanning splits it — and the caller must warn.
 fn dss_value_out(value: &str) -> (String, bool) {
+    // An empty value is never bare representable: `key=` makes the lexer
+    // eat the next token as the value. `()` strips back to the empty string.
+    if value.is_empty() {
+        return ("()".to_string(), true);
+    }
     let mut scan = lex::Scanner::new(value, None);
-    let bare = match scan.next_param() {
-        None => value.is_empty(),
-        Some(p) => {
-            p.name.is_none()
-                && !p.value.quoted
-                && p.value.text == value
-                && scan.next_param().is_none()
-        }
-    };
+    let bare = scan.next_param().is_some_and(|p| {
+        p.name.is_none() && !p.value.quoted && p.value.text == value && scan.next_param().is_none()
+    });
     if bare {
         return (value.to_string(), true);
     }
@@ -527,16 +526,17 @@ impl DssWriter {
                 ));
                 continue;
             }
-            // The engine resolves Set names exact-then-unique-prefix
-            // (Command.cpp Getcommand → HashList FindAbbrev), so `Set volt=`
-            // already IS Voltagebases and `Set defaultb=` DefaultBaseFrequency.
-            // Very short prefixes bind by the engine's option table order;
-            // this check intentionally covers only the three keys the writer
-            // derives itself.
+            // The engine resolves Set names by first match in option table
+            // order (Command.cpp Getcommand → HashList FindAbbrev). Every
+            // prefix of "voltagebases" binds Voltagebases (it precedes the
+            // other v options), but prefixes of "defaultbasefrequency"
+            // shorter than "defaultb" bind DefaultDaily, so the frequency
+            // skip is bounded at the engine's unique resolution point.
+            // Calcvoltagebases is a command, never a Set option, so it does
+            // not belong here.
             let key_lc = key.to_ascii_lowercase();
-            if ["voltagebases", "defaultbasefrequency", "calcvoltagebases"]
-                .iter()
-                .any(|derived| derived.starts_with(&key_lc))
+            if "voltagebases".starts_with(&key_lc)
+                || (key_lc.len() >= "defaultb".len() && "defaultbasefrequency".starts_with(&key_lc))
             {
                 continue;
             }
@@ -1573,6 +1573,38 @@ mod tests {
         };
         assert!(warned("option `foo`"), "{:?}", out.warnings);
         assert!(warned("`daily`"), "{:?}", out.warnings);
+    }
+
+    #[test]
+    fn empty_extras_values_wrap_instead_of_eating_the_next_token() {
+        let dss = "clear\nnew circuit.c basekv=12.47 bus1=sb\n\
+                   new load.ld bus1=sb.1 phases=1 kv=7.2 kw=10 daily=() duty=sh\nsolve\n";
+        let net = parse_dss_str(dss);
+        let load = &net.loads[0];
+        assert_eq!(load.extras.get("daily").and_then(|v| v.as_str()), Some(""));
+        let w1 = write_dss(&net).text;
+        let again = parse_dss_str(&w1);
+        let load2 = &again.loads[0];
+        assert_eq!(load2.extras.get("daily").and_then(|v| v.as_str()), Some(""));
+        assert_eq!(
+            load2.extras.get("duty").and_then(|v| v.as_str()),
+            Some("sh")
+        );
+        assert_eq!(w1, write_dss(&again).text);
+    }
+
+    #[test]
+    fn sub_unique_option_prefixes_re_emit_instead_of_vanishing() {
+        // "ca" is CapkVAR and "default" is DefaultDaily in the engine's
+        // option table; neither may be skipped as a derived key, and
+        // `Set default=2.5` must not change the base frequency.
+        let dss = "clear\nnew circuit.c basekv=12.47 bus1=sb\n\
+                   Set ca=600\nSet default=2.5\nsolve\n";
+        let net = parse_dss_str(dss);
+        assert!((net.base_frequency - 60.0).abs() < 1e-12);
+        let out = write_dss(&net).text;
+        assert!(out.contains("Set ca=600"), "{out}");
+        assert!(out.contains("Set default=2.5"), "{out}");
     }
 
     #[test]

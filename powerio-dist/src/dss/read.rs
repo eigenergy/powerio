@@ -63,11 +63,12 @@ pub fn network_from_raw(raw: &RawDss, source: Arc<String>) -> DistNetwork {
     };
 
     for (name, value) in &raw.options {
-        // Set option names resolve exact-then-unique-prefix in the engine
-        // (Command.cpp Getcommand → HashList FindAbbrev), so `Set defaultb=50`
-        // is DefaultBaseFrequency; accept any prefix, matching the dss
-        // writer's derived-key skip.
-        if !name.is_empty() && "defaultbasefrequency".starts_with(name.as_str()) {
+        // Set option names resolve by first match in the engine's option
+        // table order (Command.cpp Getcommand → HashList FindAbbrev), so
+        // `Set defaultb=50` is DefaultBaseFrequency but anything shorter
+        // ("default", "d") binds DefaultDaily; the bound sits at the unique
+        // resolution point.
+        if name.len() >= "defaultb".len() && "defaultbasefrequency".starts_with(name.as_str()) {
             if let Ok(f) = value.to_f64(Some(rd.vars)) {
                 rd.net.base_frequency = f;
             }
