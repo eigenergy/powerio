@@ -18,7 +18,7 @@ use std::fmt::Write as _;
 use crate::convert::Conversion;
 use crate::model::{Configuration, DistBus, DistNetwork, Extras, Mat, WindingConn};
 
-use super::prop;
+use super::{lex, prop};
 
 /// Writes canonical `.dss` text from the model.
 pub fn write_dss(net: &DistNetwork) -> Conversion {
@@ -70,7 +70,7 @@ struct DssWriter {
 fn estimate_bus_kv(net: &DistNetwork) -> BTreeMap<String, f64> {
     let mut kv: BTreeMap<String, f64> = BTreeMap::new();
     for vs in &net.sources {
-        let phases = vs.v_magnitude.iter().filter(|&&v| v > 0.0).count().max(1);
+        let phases = source_phases(net, vs);
         let basekv = extras_f64(&vs.extras, "basekv").unwrap_or_else(|| source_basekv(vs, phases));
         let pu = extras_f64(&vs.extras, "pu").unwrap_or(1.0);
         let vln = basekv * 1e3 * pu / source_chord(phases);
@@ -197,6 +197,59 @@ fn name_breaks_dss(name: &str, is_bus_id: bool) -> bool {
         })
 }
 
+/// A `key=value` value as dss text. A value the lexer scans back as one
+/// bare token emits bare; anything else wraps in the first quote pair
+/// whose closer is absent from the value. The lexer honors all five pairs,
+/// and its quoted scan runs to the closer without checking delimiters or
+/// comment openers, so the wrapper protects spaces, commas, `=`, `!`, and
+/// `//`. The choice depends only on the value: the reader strips the
+/// wrapper, so the next write sees the bare value and picks the same form.
+/// `false` means nothing reparses to the value — every closer appears in
+/// it and bare scanning splits it — and the caller must warn.
+fn dss_value_out(value: &str) -> (String, bool) {
+    let mut scan = lex::Scanner::new(value, None);
+    let bare = match scan.next_param() {
+        None => value.is_empty(),
+        Some(p) => {
+            p.name.is_none()
+                && !p.value.quoted
+                && p.value.text == value
+                && scan.next_param().is_none()
+        }
+    };
+    if bare {
+        return (value.to_string(), true);
+    }
+    for (open, close) in [('(', ')'), ('[', ']'), ('{', '}'), ('"', '"'), ('\'', '\'')] {
+        if !value.contains(close) {
+            return (format!("{open}{value}{close}"), true);
+        }
+    }
+    (value.to_string(), false)
+}
+
+/// Emitted source `phases=`: the stashed token when the source carried
+/// one, otherwise the terminal map entries outside the bus's grounded
+/// set. The engine counts conductors, not energized phases, so a phase
+/// at v_magnitude 0 keeps its place on the dot list; the emission site
+/// warns about the disagreement.
+fn source_phases(net: &DistNetwork, vs: &crate::model::VoltageSource) -> usize {
+    if let Some(p) = extras_usize(&vs.extras, "phases") {
+        return p.max(1);
+    }
+    let grounded = net
+        .buses
+        .iter()
+        .find(|b| b.id.eq_ignore_ascii_case(&vs.bus))
+        .map(|b| b.grounded.as_slice())
+        .unwrap_or_default();
+    vs.terminal_map
+        .iter()
+        .filter(|t| !grounded.contains(t))
+        .count()
+        .max(1)
+}
+
 /// First row (self, mutual) of a series matrix extra, without consuming it.
 fn seq_parts(extras: &Extras, key: &str) -> Option<(f64, f64)> {
     let row = extras.get(key)?.as_array()?.first()?.as_array()?;
@@ -211,6 +264,38 @@ fn seq_parts(extras: &Extras, key: &str) -> Option<(f64, f64)> {
 impl DssWriter {
     fn warn(&mut self, msg: impl Into<String>) {
         self.warnings.push(msg.into());
+    }
+
+    /// The engine's bus fill rule gives every conductor the dot list does
+    /// not cover a default — nodes 1..=phases for the phase conductors,
+    /// ground for the rest — so a map shorter than the class's conductor
+    /// count comes back from a reparse one grounded neutral longer. The
+    /// first write of such a model is not a fixed point; the second is.
+    fn warn_short_map(&mut self, class: &str, name: &str, map_len: usize, nconds: usize) {
+        if map_len < nconds {
+            self.warn(format!(
+                "{class} {name}: terminal map lists {map_len} of {nconds} conductors; \
+                 dss materializes a grounded neutral terminal and the reparsed model \
+                 gains one"
+            ));
+        }
+    }
+
+    /// A numeric source extra. A present token that does not parse warns;
+    /// the derived value substitutes and the extra is consumed either way.
+    fn source_extra_f64(&mut self, vs: &crate::model::VoltageSource, key: &str) -> Option<f64> {
+        let v = vs.extras.get(key)?;
+        let parsed = v
+            .as_f64()
+            .or_else(|| v.as_str().and_then(|s| s.parse().ok()));
+        if parsed.is_none() {
+            self.warn(format!(
+                "vsource {}: {key} extra `{v}` does not parse as a number; \
+                 using the derived value",
+                vs.name
+            ));
+        }
+        parsed
     }
 
     fn line_out(&mut self, s: &str) {
@@ -285,12 +370,15 @@ impl DssWriter {
                 .or_else(|| value.as_i64().map(|v| v.to_string()));
             match (known, text) {
                 (true, Some(text)) => {
-                    let quoted = if text.contains(' ') || text.contains(',') {
-                        format!("({text})")
-                    } else {
-                        text
-                    };
-                    let _ = write!(tail, " {key}={quoted}");
+                    let (out, representable) = dss_value_out(&text);
+                    if !representable {
+                        self.warn(format!(
+                            "{class} {name}: extra `{key}` value `{text}` contains every \
+                             dss quote closer and splits when scanned bare; emitted as \
+                             written and a reparse will not see the same value"
+                        ));
+                    }
+                    let _ = write!(tail, " {key}={out}");
                 }
                 _ => self.warn(format!(
                     "{class} {name}: extra `{key}` is not a dss property; dropped from the output"
@@ -439,17 +527,28 @@ impl DssWriter {
                 ));
                 continue;
             }
+            // The engine resolves Set names exact-then-unique-prefix
+            // (Command.cpp Getcommand → HashList FindAbbrev), so `Set volt=`
+            // already IS Voltagebases and `Set defaultb=` DefaultBaseFrequency.
+            // Very short prefixes bind by the engine's option table order;
+            // this check intentionally covers only the three keys the writer
+            // derives itself.
+            let key_lc = key.to_ascii_lowercase();
             if ["voltagebases", "defaultbasefrequency", "calcvoltagebases"]
                 .iter()
-                .any(|skip| key.eq_ignore_ascii_case(skip))
+                .any(|derived| derived.starts_with(&key_lc))
             {
                 continue;
             }
-            if value.chars().any(|c| matches!(c, ' ' | '\t' | ',' | '=')) {
-                self.line_out(&format!("Set {key}=[{value}]"));
-            } else {
-                self.line_out(&format!("Set {key}={value}"));
+            let (text, representable) = dss_value_out(value);
+            if !representable {
+                self.warn(format!(
+                    "option `{key}`: value `{value}` contains every dss quote closer \
+                     and splits when scanned bare; emitted as written and a reparse \
+                     will not see the same value"
+                ));
             }
+            self.line_out(&format!("Set {key}={text}"));
         }
         for (verb, args) in &net.commands {
             if verb.eq_ignore_ascii_case("calcvoltagebases") || verb.eq_ignore_ascii_case("solve") {
@@ -510,11 +609,22 @@ impl DssWriter {
 
     fn sources(&mut self, net: &DistNetwork) {
         for (i, vs) in net.sources.iter().enumerate() {
-            let phases = vs.v_magnitude.iter().filter(|&&v| v > 0.0).count().max(1);
-            let basekv =
-                extras_f64(&vs.extras, "basekv").unwrap_or_else(|| source_basekv(vs, phases));
-            let pu = extras_f64(&vs.extras, "pu").unwrap_or(1.0);
-            let angle = extras_f64(&vs.extras, "angle")
+            let phases = source_phases(net, vs);
+            let energized = vs.v_magnitude.iter().filter(|&&v| v > 0.0).count();
+            if energized > 0 && energized != phases {
+                self.warn(format!(
+                    "vsource {}: emitted phases={phases} but {energized} v_magnitude \
+                     entries are positive; a reparse energizes all {phases}",
+                    vs.name
+                ));
+            }
+            self.warn_short_map("vsource", &vs.name, vs.terminal_map.len(), phases + 1);
+            let basekv = self
+                .source_extra_f64(vs, "basekv")
+                .unwrap_or_else(|| source_basekv(vs, phases));
+            let pu = self.source_extra_f64(vs, "pu").unwrap_or(1.0);
+            let angle = self
+                .source_extra_f64(vs, "angle")
                 .unwrap_or_else(|| vs.v_angle.first().copied().unwrap_or(0.0).to_degrees());
             let head = if i == 0 {
                 let name = net.name.clone().unwrap_or_else(|| "converted".into());
@@ -535,6 +645,7 @@ impl DssWriter {
             extras.remove("basekv");
             extras.remove("pu");
             extras.remove("angle");
+            extras.remove("phases"); // the head already prints phases=
             // A source that came through the ENGINEERING model carries its
             // Thevenin impedance as rs/xs matrices; sequence values
             // reconstruct exactly (z1 = self - mutual, z0 = self + 2 mutual).
@@ -727,6 +838,14 @@ impl DssWriter {
             let phases =
                 self.element_phases(&l.extras, &l.terminal_map, l.configuration, "load", &l.name);
             let conn = element_conn(&l.extras, l.configuration);
+            // The reader's nconds: a 3 phase delta has no neutral conductor,
+            // every other connection carries phases + 1.
+            let nconds = if conn == "delta" && phases == 3 {
+                phases
+            } else {
+                phases + 1
+            };
+            self.warn_short_map("load", &l.name, l.terminal_map.len(), nconds);
             let kw: f64 = l.p_nom.iter().sum::<f64>() / 1e3;
             let kvar: f64 = l.q_nom.iter().sum::<f64>() / 1e3;
             let kv = self.element_kv(&l.extras, &l.bus, phases, l.configuration, &l.name, "load");
@@ -869,6 +988,12 @@ impl DssWriter {
                 &g.name,
             );
             let conn = element_conn(&g.extras, g.configuration);
+            let nconds = if conn == "delta" && phases == 3 {
+                phases
+            } else {
+                phases + 1
+            };
+            self.warn_short_map("generator", &g.name, g.terminal_map.len(), nconds);
             let kw: f64 = g.p_nom.iter().sum::<f64>() / 1e3;
             let kvar: f64 = g.q_nom.iter().sum::<f64>() / 1e3;
             let kv = self.element_kv(
@@ -1343,6 +1468,263 @@ mod tests {
             .find(|l| l.contains("Capacitor.c1"))
             .unwrap();
         assert!(line.contains(&format!("kvar={}", num(expected))), "{line}");
+    }
+
+    #[test]
+    fn option_values_choose_a_wrapper_the_lexer_undoes() {
+        let src = "Clear\n\
+                   New Circuit.c1 basekv=12.47 pu=1 angle=0 phases=3 bus1=sb\n\
+                   Set foo=[a!b]\n\
+                   Set bar=[(abc]\n\
+                   Set baz=(x ] y)\n\
+                   Set qux=[a ) b]\n\
+                   Solve\n";
+        let net = parse_dss_str(src);
+        let first = write_dss(&net);
+        for line in [
+            "Set foo=(a!b)",
+            "Set bar=((abc)",
+            "Set baz=(x ] y)",
+            "Set qux=[a ) b]",
+        ] {
+            assert!(
+                first.text.contains(line),
+                "{line} missing in {}",
+                first.text
+            );
+        }
+        assert!(
+            !first
+                .warnings
+                .iter()
+                .any(|w| w.contains("emitted as written")),
+            "{:?}",
+            first.warnings
+        );
+        // The reader strips the wrapper back off...
+        let reparsed = parse_dss_str(&first.text);
+        let opt = |k: &str| {
+            reparsed
+                .options
+                .iter()
+                .find(|(name, _)| name == k)
+                .map(|(_, v)| v.as_str())
+        };
+        assert_eq!(opt("foo"), Some("a!b"));
+        assert_eq!(opt("bar"), Some("(abc"));
+        assert_eq!(opt("baz"), Some("x ] y"));
+        assert_eq!(opt("qux"), Some("a ) b"));
+        // ...and the second write picks the same wrapper from the bare value.
+        let second = write_dss(&reparsed);
+        assert_eq!(first.text, second.text);
+    }
+
+    #[test]
+    fn extras_tail_values_wrap_like_options() {
+        let (b, vs) = three_phase_source(2400.0);
+        let mut load = load_on("sb", &["1", "2", "3", "4"], Configuration::Wye);
+        load.extras
+            .insert("daily".into(), serde_json::json!("a ) b"));
+        let net = DistNetwork {
+            base_frequency: 60.0,
+            buses: vec![b],
+            sources: vec![vs],
+            loads: vec![load],
+            ..DistNetwork::default()
+        };
+        let (first, second) = roundtrip(&net);
+        // A paren wrapper would close at the `)` and land `b)` on the next
+        // positional property (duty); brackets survive.
+        assert!(first.contains("daily=[a ) b]"), "{first}");
+        assert_eq!(first, second);
+        let back = parse_dss_str(&first);
+        assert_eq!(
+            back.loads[0]
+                .extras
+                .get("daily")
+                .and_then(serde_json::Value::as_str),
+            Some("a ) b")
+        );
+    }
+
+    #[test]
+    fn unrepresentable_values_emit_as_written_and_warn() {
+        // Every quote closer appears, and the spaces split a bare scan: no
+        // emitted form reparses to this value.
+        let bad = "a )]}\"' b";
+        let (b, vs) = three_phase_source(2400.0);
+        let mut load = load_on("sb", &["1", "2", "3", "4"], Configuration::Wye);
+        load.extras.insert("daily".into(), serde_json::json!(bad));
+        let mut net = DistNetwork {
+            base_frequency: 60.0,
+            buses: vec![b],
+            sources: vec![vs],
+            loads: vec![load],
+            ..DistNetwork::default()
+        };
+        net.options.push(("foo".into(), bad.into()));
+        let out = write_dss(&net);
+        assert!(out.text.contains(&format!("Set foo={bad}")), "{}", out.text);
+        assert!(out.text.contains(&format!("daily={bad}")), "{}", out.text);
+        let warned = |needle: &str| {
+            out.warnings
+                .iter()
+                .any(|w| w.contains(needle) && w.contains("emitted as written"))
+        };
+        assert!(warned("option `foo`"), "{:?}", out.warnings);
+        assert!(warned("`daily`"), "{:?}", out.warnings);
+    }
+
+    #[test]
+    fn abbreviated_derived_options_skip_and_set_the_frequency() {
+        // The engine resolves Set names by unique prefix, so volt= IS
+        // Voltagebases and defaultb= IS DefaultBaseFrequency.
+        let src = "Clear\n\
+                   New Circuit.c1 basekv=12.47 pu=1 angle=0 phases=3 bus1=sb\n\
+                   Set volt=[115, 132]\n\
+                   Set defaultb=50\n\
+                   Solve\n";
+        let net = parse_dss_str(src);
+        assert!((net.base_frequency - 50.0).abs() < 1e-12);
+        let out = write_dss(&net);
+        assert!(
+            out.text.contains("Set DefaultBaseFrequency=50"),
+            "{}",
+            out.text
+        );
+        assert_eq!(
+            out.text
+                .to_lowercase()
+                .matches("defaultbasefrequency")
+                .count(),
+            1,
+            "{}",
+            out.text
+        );
+        assert_eq!(
+            out.text.matches("Set VoltageBases").count(),
+            1,
+            "{}",
+            out.text
+        );
+        assert!(!out.text.contains("Set volt="), "{}", out.text);
+        assert!(!out.text.contains("Set defaultb="), "{}", out.text);
+        let second = write_dss(&parse_dss_str(&out.text));
+        assert_eq!(out.text, second.text);
+    }
+
+    #[test]
+    fn non_numeric_source_extras_warn_before_falling_back() {
+        let (b, mut vs) = three_phase_source(2400.0);
+        vs.extras
+            .insert("basekv".into(), serde_json::json!("@base"));
+        vs.extras.insert("pu".into(), serde_json::json!("unity"));
+        vs.extras.insert("angle".into(), serde_json::json!([0.0]));
+        let net = DistNetwork {
+            base_frequency: 60.0,
+            buses: vec![b],
+            sources: vec![vs],
+            ..DistNetwork::default()
+        };
+        let out = write_dss(&net);
+        for key in ["basekv", "pu", "angle"] {
+            assert!(
+                out.warnings
+                    .iter()
+                    .any(|w| w.contains(&format!("{key} extra")) && w.contains("does not parse")),
+                "{key}: {:?}",
+                out.warnings
+            );
+        }
+        // The derived values substitute.
+        let line = out.text.lines().find(|l| l.contains("Circuit.")).unwrap();
+        assert!(line.contains("pu=1 angle=0"), "{line}");
+    }
+
+    #[test]
+    fn de_energized_source_phase_keeps_its_conductor() {
+        let (b, mut vs) = three_phase_source(2400.0);
+        vs.v_magnitude[2] = 0.0; // de-energized, but still a phase conductor
+        let net = DistNetwork {
+            name: Some("t".into()),
+            base_frequency: 60.0,
+            buses: vec![b],
+            sources: vec![vs],
+            ..DistNetwork::default()
+        };
+        let (first, second) = roundtrip(&net);
+        let line = first.lines().find(|l| l.contains("Circuit.")).unwrap();
+        // phases=2 against the 4 node dot list would drop a node on reparse.
+        assert!(line.contains("phases=3"), "{line}");
+        assert!(line.contains("bus1=sb.1.2.3.0"), "{line}");
+        assert_eq!(first, second);
+        let out = write_dss(&net);
+        assert!(
+            out.warnings
+                .iter()
+                .any(|w| w.contains("phases=3") && w.contains("positive")),
+            "{:?}",
+            out.warnings
+        );
+    }
+
+    #[test]
+    fn source_phases_stash_wins_and_does_not_double_emit() {
+        let (b, mut vs) = three_phase_source(2400.0);
+        vs.extras.insert("phases".into(), serde_json::json!("3"));
+        let net = DistNetwork {
+            base_frequency: 60.0,
+            buses: vec![b],
+            sources: vec![vs],
+            ..DistNetwork::default()
+        };
+        let out = write_dss(&net);
+        let line = out.text.lines().find(|l| l.contains("Circuit.")).unwrap();
+        assert!(line.contains("phases=3"), "{line}");
+        assert_eq!(line.matches("phases=").count(), 1, "{line}");
+    }
+
+    #[test]
+    fn foreign_maps_without_a_neutral_warn_and_converge_at_write2() {
+        // A vsource/wye load map with no grounded terminal: the engine's
+        // nconds fill extends the reparsed bus with a grounded neutral, so
+        // write1 is not a fixed point. The writer must say so.
+        let third = 2.0 * std::f64::consts::FRAC_PI_3;
+        let vs = VoltageSource {
+            name: "source".into(),
+            bus: "sb".into(),
+            terminal_map: strings(&["1", "2", "3"]),
+            v_magnitude: vec![2400.0; 3],
+            v_angle: vec![0.0, -third, third],
+            extras: Extras::new(),
+        };
+        let load = load_on("sb", &["1"], Configuration::Wye);
+        let net = DistNetwork {
+            name: Some("t".into()),
+            base_frequency: 60.0,
+            buses: vec![bus("sb", &["1", "2", "3"], &[])],
+            sources: vec![vs],
+            loads: vec![load],
+            ..DistNetwork::default()
+        };
+        let first = write_dss(&net);
+        let hits = |warnings: &[String], name: &str| {
+            warnings
+                .iter()
+                .any(|w| w.contains(name) && w.contains("materializes a grounded neutral"))
+        };
+        assert!(
+            hits(&first.warnings, "vsource source"),
+            "{:?}",
+            first.warnings
+        );
+        assert!(hits(&first.warnings, "load ld"), "{:?}", first.warnings);
+        let second = write_dss(&parse_dss_str(&first.text));
+        assert_ne!(first.text, second.text);
+        assert!(!hits(&second.warnings, "vsource"), "{:?}", second.warnings);
+        assert!(!hits(&second.warnings, "load"), "{:?}", second.warnings);
+        let third_write = write_dss(&parse_dss_str(&second.text));
+        assert_eq!(second.text, third_write.text);
     }
 
     #[test]

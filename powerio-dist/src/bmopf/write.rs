@@ -451,15 +451,19 @@ impl Writer {
                 hots.push(term.clone());
             }
         }
-        // Percent resistance does not transfer to the doubled voltage at a
-        // fixed s rating (the base scales 4x): convert each half to ohms on
-        // its own base, sum the series path, and express the total on the
-        // new base. The shared s_rating cancels, leaving a v^2 weighting.
-        // The leakage reactance needs no such move: two_winding applies
-        // xsc_pct at the from side, whose base the collapse does not touch.
+        // Percent resistance does not transfer to the doubled voltage:
+        // each winding's impedance base is its own v^2/s (PMD eng2math
+        // builds zbase per winding from vnom^2/snom). Convert each half to
+        // ohms on its own base, sum the series path, and express the total
+        // on the base two_winding gives the combined winding,
+        // v_new^2/from.s_rating. Equal ratings make the s factors exactly
+        // 1, leaving the plain v^2 weighting. The leakage reactance needs
+        // no such move: two_winding applies xsc_pct at the from side,
+        // whose base the collapse does not touch.
         let v_new = w2.v_ref + w3.v_ref;
-        let r_pct_new =
-            (w2.r_pct * w2.v_ref * w2.v_ref + w3.r_pct * w3.v_ref * w3.v_ref) / (v_new * v_new);
+        let r_pct_new = (w2.r_pct * w2.v_ref * w2.v_ref * (from.s_rating / w2.s_rating)
+            + w3.r_pct * w3.v_ref * w3.v_ref * (from.s_rating / w3.s_rating))
+            / (v_new * v_new);
         let to = Winding {
             bus: w2.bus.clone(),
             terminal_map: {
@@ -478,6 +482,16 @@ impl Writer {
              xht/xlt impedance split is not representable and was dropped",
             t.name
         ));
+        if w2.s_rating.to_bits() != from.s_rating.to_bits()
+            || w3.s_rating.to_bits() != from.s_rating.to_bits()
+        {
+            self.warn(format!(
+                "transformer {}: center tap half winding s_ratings ({}, {}) differ \
+                 from the primary's {}; the collapsed winding keeps the primary \
+                 rating, the half ratings only survive in the resistance conversion",
+                t.name, w2.s_rating, w3.s_rating, from.s_rating
+            ));
+        }
         self.two_winding(t, from, &to, 1.0)
     }
 

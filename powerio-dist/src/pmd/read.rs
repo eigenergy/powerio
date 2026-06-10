@@ -108,6 +108,20 @@ fn string(v: Option<&Value>) -> String {
     v.and_then(Value::as_str).unwrap_or_default().to_string()
 }
 
+/// Grows `m` to `n` by `n`, preserving the existing entries.
+fn pad_to(m: Mat, n: usize) -> Mat {
+    if m.len() >= n {
+        return m;
+    }
+    let mut out = vec![vec![0.0; n]; n];
+    for (i, row) in m.into_iter().enumerate() {
+        for (j, v) in row.into_iter().enumerate() {
+            out[i][j] = v;
+        }
+    }
+    out
+}
+
 /// Keeps fields outside `known` in extras verbatim (no warning: the
 /// ENGINEERING model legitimately carries fields the hub does not type,
 /// and the PMD writer reproduces the typed ones).
@@ -141,28 +155,46 @@ fn stash_status(
 /// `linecode` entry, or a line with inline impedance (the dss2eng output
 /// for rmatrix defined lines). Extras hold only the raw `b_fr`/`b_to`
 /// stash; the caller merges anything else.
-fn linecode_from(name: &str, o: &Map<String, Value>, base_frequency: f64) -> DistLineCode {
-    let r = matrix("rs", o.get("rs")).unwrap_or_default();
-    let n = r.len();
-    let zero = || vec![vec![0.0; n]; n];
+fn linecode_from(
+    name: &str,
+    o: &Map<String, Value>,
+    base_frequency: f64,
+    warnings: &mut Vec<String>,
+) -> DistLineCode {
+    let mats = [
+        matrix("rs", o.get("rs")),
+        matrix("xs", o.get("xs")),
+        matrix("g_fr", o.get("g_fr")),
+        matrix("g_to", o.get("g_to")),
+        matrix("b_fr", o.get("b_fr")),
+        matrix("b_to", o.get("b_to")),
+    ];
+    // Conductor count is the widest matrix present; absent matrices read
+    // as zero, smaller ones pad without losing entries.
+    let n = mats.iter().flatten().map(Vec::len).max().unwrap_or(0);
+    if mats.iter().flatten().any(|m| m.len() < n) {
+        warnings.push(format!(
+            "linecode {name}: matrix sizes disagree; smaller ones padded \
+             with zeros to {n}x{n}"
+        ));
+    }
+    let [r, x, gf, gt, bf, bt] = mats.map(|m| pad_to(m.unwrap_or_default(), n));
     // b_fr/b_to numbers are cmatrix halves in nF per meter; the model
     // holds siemens per meter.
     let omega = std::f64::consts::TAU * base_frequency * 1e-9;
-    let to_b = |m: Option<Mat>| {
-        m.map(|m| {
-            m.iter()
-                .map(|row| row.iter().map(|v| v * omega).collect())
-                .collect()
-        })
+    let to_b = |m: Mat| -> Mat {
+        m.into_iter()
+            .map(|row| row.into_iter().map(|v| v * omega).collect())
+            .collect()
     };
     DistLineCode {
         name: name.to_string(),
         n_conductors: n,
-        x_series: matrix("xs", o.get("xs")).unwrap_or_else(zero),
-        g_from: matrix("g_fr", o.get("g_fr")).unwrap_or_else(zero),
-        g_to: matrix("g_to", o.get("g_to")).unwrap_or_else(zero),
-        b_from: to_b(matrix("b_fr", o.get("b_fr"))).unwrap_or_else(zero),
-        b_to: to_b(matrix("b_to", o.get("b_to"))).unwrap_or_else(zero),
+        x_series: x,
+        g_from: gf,
+        g_to: gt,
+        b_from: to_b(bf),
+        b_to: to_b(bt),
         r_series: r,
         i_max: floats("cm_ub", o.get("cm_ub")).filter(|v| v.iter().all(|x| x.is_finite())),
         s_max: floats("sm_ub", o.get("sm_ub")).filter(|v| v.iter().all(|x| x.is_finite())),
@@ -262,6 +294,24 @@ fn build_windings(
     (windings, phases, unrolled)
 }
 
+/// The known sections process in a fixed order, not the document's
+/// (serde_json maps iterate sorted, which puts "line" before "linecode"):
+/// `lines` consults the already materialized linecodes for the inline
+/// impedance `{name}_z` collision check, so "linecode" must come first.
+/// The other sections do not consult each other; unknown sections follow
+/// in document order.
+const SECTIONS: &[&str] = &[
+    "bus",
+    "linecode",
+    "line",
+    "switch",
+    "load",
+    "generator",
+    "shunt",
+    "voltage_source",
+    "transformer",
+];
+
 impl Reader<'_> {
     fn document(&mut self, doc: &Map<String, Value>) {
         if let Some(name) = doc.get("name").and_then(Value::as_str) {
@@ -281,11 +331,11 @@ impl Reader<'_> {
             }
         }
 
-        for (key, value) in doc {
-            let Value::Object(items) = value else {
+        for &key in SECTIONS {
+            let Some(Value::Object(items)) = doc.get(key) else {
                 continue;
             };
-            match key.as_str() {
+            match key {
                 "bus" => self.buses(items),
                 "linecode" => self.linecodes(items),
                 "line" => self.lines(items),
@@ -295,19 +345,25 @@ impl Reader<'_> {
                 "shunt" => self.shunts(items),
                 "voltage_source" => self.sources(items),
                 "transformer" => self.transformers(items),
-                "settings" | "name" => {}
-                other => {
-                    self.net.warnings.push(format!(
-                        "ENGINEERING `{other}` components are not typed; kept untyped"
-                    ));
-                    for (name, v) in items {
-                        self.net.untyped.push(UntypedObject {
-                            class: other.to_string(),
-                            name: name.clone(),
-                            props: vec![(None, v.to_string())],
-                        });
-                    }
-                }
+                _ => unreachable!(),
+            }
+        }
+        for (key, value) in doc {
+            if SECTIONS.contains(&key.as_str()) || key == "settings" || key == "name" {
+                continue;
+            }
+            let Value::Object(items) = value else {
+                continue;
+            };
+            self.net.warnings.push(format!(
+                "ENGINEERING `{key}` components are not typed; kept untyped"
+            ));
+            for (name, v) in items {
+                self.net.untyped.push(UntypedObject {
+                    class: key.clone(),
+                    name: name.clone(),
+                    props: vec![(None, v.to_string())],
+                });
             }
         }
     }
@@ -348,7 +404,7 @@ impl Reader<'_> {
     fn linecodes(&mut self, items: &Map<String, Value>) {
         for (name, v) in items {
             let Value::Object(o) = v else { continue };
-            let mut lc = linecode_from(name, o, self.net.base_frequency);
+            let mut lc = linecode_from(name, o, self.net.base_frequency, &mut self.net.warnings);
             let mut extras = take_extras(
                 o,
                 &["rs", "xs", "g_fr", "g_to", "b_fr", "b_to", "cm_ub", "sm_ub"],
@@ -386,9 +442,9 @@ impl Reader<'_> {
                     lc_name = format!("{name}_z{k}");
                     k += 1;
                 }
-                self.net
-                    .linecodes
-                    .push(linecode_from(&lc_name, o, self.net.base_frequency));
+                let lc =
+                    linecode_from(&lc_name, o, self.net.base_frequency, &mut self.net.warnings);
+                self.net.linecodes.push(lc);
                 self.net.warnings.push(format!(
                     "line {name}: inline impedance materialized as linecode {lc_name}; the PMD writer re-inlines it"
                 ));

@@ -63,7 +63,11 @@ pub fn network_from_raw(raw: &RawDss, source: Arc<String>) -> DistNetwork {
     };
 
     for (name, value) in &raw.options {
-        if name == "defaultbasefrequency" {
+        // Set option names resolve exact-then-unique-prefix in the engine
+        // (Command.cpp Getcommand → HashList FindAbbrev), so `Set defaultb=50`
+        // is DefaultBaseFrequency; accept any prefix, matching the dss
+        // writer's derived-key skip.
+        if !name.is_empty() && "defaultbasefrequency".starts_with(name.as_str()) {
             if let Ok(f) = value.to_f64(Some(rd.vars)) {
                 rd.net.base_frequency = f;
             }
@@ -799,46 +803,107 @@ impl Reader<'_> {
 
     // ----- load ----------------------------------------------------------
 
+    /// Final (kWBase, kvarBase, PFNominal, LoadSpecType) after the last
+    /// edit boundary, with write provenance for kw and pf.
+    ///
+    /// Load.cpp runs RecalcElementData at the end of EVERY Edit (~773), so
+    /// kw/kvar/pf fold per edit, not flat. Within an edit, kw (case 4,
+    /// ~691) sets LoadSpecType 0 (kW + PF), kvar (case 12, ~753) sets 1
+    /// (kW + kvar), and pf (case 5, ~699) updates PFNominal without
+    /// touching the spec. The boundary recalc (~1342) rederives kvar from
+    /// kW and PF under spec 0, and PFNominal from kW and kvar under spec 1
+    /// (~1352-1360). like= splices the source's boundaries in the raw
+    /// layer, matching MakeLike's copy of the recalced state.
+    fn load_power(&mut self, obj: &RawObject) -> LoadPower {
+        let mut s = LoadPower {
+            kw: dd::load::KW,
+            // Constructor kvarBase is 5.0, never observable: spec 1
+            // requires a kvar write and the first spec 0 boundary
+            // overwrites the seed.
+            kvar: 0.0,
+            pf: dd::load::PF,
+            spec_kvar: false, // LoadSpecType: false = 0, true = 1
+            kw_written: false,
+            pf_written: false,
+        };
+        let mut start = 0;
+        for end in obj.edit_bounds() {
+            for p in &obj.props[start..end] {
+                let Some(key @ ("kw" | "kvar" | "pf")) = p.name.as_deref() else {
+                    continue;
+                };
+                let Some(v) = self.f64_prop(Some(&p.value)) else {
+                    continue;
+                };
+                match key {
+                    "kw" => {
+                        s.kw = v;
+                        s.spec_kvar = false;
+                        s.kw_written = true;
+                    }
+                    "kvar" => {
+                        s.kvar = v;
+                        s.spec_kvar = true;
+                    }
+                    _ => {
+                        s.pf = v;
+                        s.pf_written = true;
+                    }
+                }
+            }
+            start = end;
+            // RecalcElementData at the edit boundary.
+            if s.spec_kvar {
+                let kva = s.kw.hypot(s.kvar);
+                if kva > 0.0 {
+                    s.pf = s.kw / kva;
+                    // Mixed signs make PF negative (Sign(kWBase*kvarBase)).
+                    if s.kw * s.kvar < 0.0 {
+                        s.pf = -s.pf;
+                    }
+                }
+            } else {
+                s.kvar = s.kw * (1.0 / (s.pf * s.pf) - 1.0).sqrt();
+                if s.pf < 0.0 {
+                    s.kvar = -s.kvar;
+                }
+            }
+        }
+        s
+    }
+
     fn load(&mut self, obj: &RawObject) -> DistLoad {
         let props = Props::new(obj);
         let phases = self.usize_or(&props, "phases", "load", &obj.name, dd::load::PHASES);
         let conn_delta = props.get("conn").is_some_and(|v| {
             v.text.to_ascii_lowercase().starts_with('d') || v.text.eq_ignore_ascii_case("ll")
         });
-        let kw = self.f64_or(&props, "kw", "load", &obj.name, dd::load::KW);
         let kv = self.f64_or(&props, "kv", "load", &obj.name, dd::load::KV);
-        // Load.cpp Edit side effects: kw (case 4, ~691) sets LoadSpecType 0
-        // (kW + PF) and kvar (case 12, ~753) sets 1 (kW + kvar); pf
-        // (case 5, ~699) updates PFNominal without touching the spec.
-        // RecalcElementData (~1342) then derives kvar from kW and PF under
-        // spec 0 and keeps the written kvar under spec 1, so the LAST
-        // written of kw/kvar decides.
-        let mut spec_kvar = false;
-        for p in &obj.props {
-            match p.name.as_deref() {
-                Some("kw") => spec_kvar = false,
-                Some("kvar") => spec_kvar = true,
-                _ => {}
-            }
+        let LoadPower {
+            kw,
+            kvar: q_total,
+            pf,
+            spec_kvar,
+            kw_written,
+            pf_written,
+        } = self.load_power(obj);
+        if !kw_written {
+            self.defaulted("load", &obj.name, "kw");
         }
-        let kvar = self.f64_prop(props.get("kvar"));
-        let pf_written = self.f64_prop(props.get("pf"));
-        // When q derives from the power factor, the source pf rides in
-        // extras so the dss writer can emit pf= and let the engine do its
-        // own trigonometry; transcendental rounding across implementations
-        // would otherwise leak into regenerated cases.
+        // Mark the walked properties consumed so they stay out of extras.
+        let _ = (props.get("kw"), props.get("kvar"), props.get("pf"));
+        // When the final spec is 0, q derives from the power factor; the
+        // source pf rides in extras so the dss writer can emit pf= and let
+        // the engine do its own trigonometry — transcendental rounding
+        // across implementations would otherwise leak into regenerated
+        // cases. Under spec 1 the writer emits kvar=.
         let mut pf_source: Option<f64> = None;
-        let q_total = match kvar {
-            Some(q) if spec_kvar => q,
-            _ => {
-                let pf = pf_written.unwrap_or_else(|| {
-                    self.defaulted("load", &obj.name, "pf");
-                    dd::load::PF
-                });
-                pf_source = Some(pf);
-                kw * (pf.acos().tan()).copysign(pf)
+        if !spec_kvar {
+            if !pf_written {
+                self.defaulted("load", &obj.name, "pf");
             }
-        };
+            pf_source = Some(pf);
+        }
         let model = self
             .usize_prop(props.get("model"))
             .map_or(dd::load::MODEL, |m| i64::try_from(m).unwrap_or(i64::MAX));
@@ -1132,7 +1197,10 @@ impl Reader<'_> {
         // call SyncUpPowerQuantities (~3879), rederiving kvar from kW and
         // PF; a kvar write (Set_Presentkvar, ~3857) stores kvar and
         // rederives PF from kW and kvar. The state carries across writes
-        // in source order, seeded by the constructor values.
+        // in source order, seeded by the constructor values. Verified
+        // asymmetry with Load: the generator resyncs eagerly AT each write
+        // and has no end-of-edit recalc, so a flat fold over all writes is
+        // correct here while loads need the per edit boundary walk above.
         let mut kw = dd::generator::KW;
         let mut kvar = dd::generator::KVAR;
         let mut pf = dd::generator::PF;
@@ -1325,6 +1393,19 @@ fn apply_winding_numbers(windings: &mut [WindingRaw], name: &str, items: &[f64])
     }
 }
 
+/// A load's power state after the last edit boundary: the engine's
+/// (kWBase, kvarBase, PFNominal, LoadSpecType), plus which of kw/pf were
+/// ever written (for default provenance).
+struct LoadPower {
+    kw: f64,
+    kvar: f64,
+    pf: f64,
+    /// LoadSpecType: false = 0 (kW + PF), true = 1 (kW + kvar).
+    spec_kvar: bool,
+    kw_written: bool,
+    pf_written: bool,
+}
+
 /// Series impedance of a linecode or inline line, per source length unit.
 struct SeriesImpedance {
     r: Mat,
@@ -1507,6 +1588,68 @@ mod tests {
         );
         assert!(
             net.defaulted
+                .get("load.l")
+                .is_some_and(|f| f.contains(&"pf"))
+        );
+    }
+
+    #[test]
+    fn load_like_replays_the_sources_recalced_pf() {
+        // Load.a ends its New under spec 1: recalc derives
+        // PFNominal = 10/sqrt(10² + 20²) = 0.4472 (kw still the constructor
+        // 10). MakeLike copies that recalced state, so b's kw=100 flips to
+        // spec 0 and the end-of-edit recalc lands kvar =
+        // 100·tan(acos(0.4472)) = 200, not the 53.97 a flat walk against
+        // pf 0.88 would give. Confirmed against opendssdirect.
+        let net = parse_dss_str(
+            "New Circuit.c\n\
+             New Load.a bus1=b.1 phases=1 kv=2.4 kvar=20\n\
+             New Load.b like=a kw=100",
+        );
+        let b = net.loads.iter().find(|l| l.name == "b").unwrap();
+        let q: f64 = b.q_nom.iter().sum();
+        assert!((q - 200e3).abs() < 1e-6);
+        // Final spec is 0: the writer emits pf=, the recalced 0.4472.
+        let pf = b.extras.get("pf").and_then(serde_json::Value::as_f64);
+        assert!((pf.unwrap() - 0.447_213_595_499_957_9).abs() < 1e-12);
+        // The source itself keeps its written kvar.
+        let a = net.loads.iter().find(|l| l.name == "a").unwrap();
+        let qa: f64 = a.q_nom.iter().sum();
+        assert!((qa - 20e3).abs() < 1e-9);
+    }
+
+    #[test]
+    fn load_tilde_continuation_recalcs_at_each_edit() {
+        // Same numbers via `~`: the New line's recalc fixes pf at 0.4472,
+        // the continuation's kw=100 reverts to spec 0 and its own recalc
+        // gives kvar = 200. A flat last-write walk would say 53.97.
+        let net = parse_dss_str(
+            "New Circuit.c\n\
+             New Load.l bus1=b.1 phases=1 kv=2.4 kvar=20\n\
+             ~ kw=100",
+        );
+        let q: f64 = net.loads[0].q_nom.iter().sum();
+        assert!((q - 200e3).abs() < 1e-6);
+    }
+
+    #[test]
+    fn load_pf_between_kvar_and_kw_applies() {
+        // pf (case 5) updates PFNominal without touching the spec; the
+        // later kw sets spec 0, so the single recalc uses pf 0.95:
+        // q = 100·tan(acos(0.95)) = 32.868. Confirmed against
+        // opendssdirect.
+        let net = parse_dss_str(
+            "New Circuit.c\nNew Load.l bus1=b.1 phases=1 kv=2.4 kvar=20 pf=0.95 kw=100",
+        );
+        let l = &net.loads[0];
+        let q: f64 = l.q_nom.iter().sum();
+        assert!((q - 100e3 * 0.95f64.acos().tan()).abs() < 1e-6);
+        assert_eq!(
+            l.extras.get("pf").and_then(serde_json::Value::as_f64),
+            Some(0.95)
+        );
+        assert!(
+            !net.defaulted
                 .get("load.l")
                 .is_some_and(|f| f.contains(&"pf"))
         );

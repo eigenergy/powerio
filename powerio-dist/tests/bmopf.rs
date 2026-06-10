@@ -4,7 +4,7 @@
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use powerio_dist::dss::parse_dss_file;
+use powerio_dist::dss::{parse_dss_file, parse_dss_str};
 use powerio_dist::{
     Configuration, DistNetwork, DistTransformer, Extras, Winding, WindingConn, parse_bmopf_file,
     parse_bmopf_str, write_bmopf_json,
@@ -301,6 +301,34 @@ fn center_tap_collapse_converts_resistance_through_ohms() {
     // The primary is untouched by the collapse: %R=0.6 on 7.2 kV/25 kVA.
     let r_from = t["r_series_from"].as_f64().unwrap();
     assert!((r_from - 12.4416).abs() < 1e-9, "r_series_from = {r_from}");
+}
+
+#[test]
+fn center_tap_collapse_uses_each_half_windings_own_s_rating() {
+    // Legal OpenDSS: the two 120 V halves carry different kva ratings, so
+    // each half's impedance base is its own v^2/s. The series path across
+    // the outer terminals is the sum of the per half ohms.
+    let net = parse_dss_str(
+        "Clear\n\
+         New Circuit.ct basekv=7.2 pu=1.0 phases=1 bus1=src.1\n\
+         New Transformer.t1 phases=1 windings=3 buses=(src.1.0, lv.1.0, lv.0.2) \
+         kvs=(7.2 0.12 0.12) kvas=(25 50 25) %Rs=(1 2 4) xhl=2.04 xht=2.04 xlt=1.36\n",
+    );
+    let out = write_bmopf_json(&net);
+    let doc: serde_json::Value = serde_json::from_str(&out.text).unwrap();
+    let t = &doc["transformer"]["center_tap"]["t1"];
+    assert_eq!(t["v_ref_to"], 240.0);
+    let expected = 0.02 * 120.0 * 120.0 / 50e3 + 0.04 * 120.0 * 120.0 / 25e3;
+    let r_to = t["r_series_to"].as_f64().unwrap();
+    assert!((r_to - expected).abs() < 1e-12, "r_series_to = {r_to}");
+    // The collapsed winding keeps one s_rating; the half ratings drop loudly.
+    assert!(
+        out.warnings
+            .iter()
+            .any(|w| w.contains("transformer t1") && w.contains("s_rating")),
+        "{:?}",
+        out.warnings
+    );
 }
 
 #[test]

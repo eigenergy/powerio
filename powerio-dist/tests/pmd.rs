@@ -7,7 +7,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use powerio_dist::dss::parse_dss_file;
-use powerio_dist::{DistNetwork, parse_pmd_file, parse_pmd_str, write_pmd_json};
+use powerio_dist::{DistNetwork, parse_pmd_file, parse_pmd_str, write_bmopf_json, write_pmd_json};
 
 fn fixture(rel: &str) -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
@@ -480,6 +480,90 @@ fn switch_impedance_and_sm_ub_round_trip() {
     assert_eq!(
         out["linecode"]["lc"]["sm_ub"],
         input["linecode"]["lc"]["sm_ub"]
+    );
+}
+
+/// An inline impedance line whose `{name}_z` collides with a code in the
+/// document's own linecode section. The fixed section order processes
+/// "linecode" before "line" (serde_json's sorted maps would visit "line"
+/// first and miss the collision), so the materialized inline code takes
+/// the `_z2` suffix instead of duplicating the name.
+#[test]
+fn inline_linecode_collision_with_document_linecode() {
+    let text = r#"{
+        "data_model": "ENGINEERING",
+        "linecode": {"foo_z": {"rs": [[0.5]], "xs": [[0.9]]}},
+        "line": {
+            "bar": {"f_bus": "b2", "t_bus": "b3", "f_connections": [1], "t_connections": [1],
+                "linecode": "foo_z", "length": 1.0, "status": "ENABLED"},
+            "foo": {"f_bus": "b1", "t_bus": "b2", "f_connections": [1], "t_connections": [1],
+                "length": 1.0, "rs": [[0.111]], "xs": [[0.222]], "status": "ENABLED"}
+        }
+    }"#;
+    let net = parse_pmd_str(text).unwrap();
+
+    let names: BTreeSet<&str> = net.linecodes.iter().map(|c| c.name.as_str()).collect();
+    assert_eq!(net.linecodes.len(), 2);
+    assert!(names.contains("foo_z") && names.contains("foo_z2"));
+
+    let foo = net.lines.iter().find(|l| l.name == "foo").unwrap();
+    assert_eq!(foo.linecode, "foo_z2");
+    assert!((net.linecode("foo_z2").unwrap().r_series[0][0] - 0.111).abs() < 1e-15);
+    let bar = net.lines.iter().find(|l| l.name == "bar").unwrap();
+    assert_eq!(bar.linecode, "foo_z");
+    assert!((net.linecode("foo_z").unwrap().r_series[0][0] - 0.5).abs() < 1e-15);
+
+    // The BMOPF projection keys linecodes by name; line foo must carry its
+    // own 0.111, not the document code's 0.5.
+    let out = write_bmopf_json(&net);
+    let doc: serde_json::Value = serde_json::from_str(&out.text).unwrap();
+    let code = doc["line"]["foo"]["linecode"].as_str().unwrap();
+    assert_eq!(code, "foo_z2");
+    assert_eq!(
+        doc["linecode"][code]["R_series_1_1"],
+        serde_json::json!(0.111)
+    );
+}
+
+/// A linecode carrying only a 10x10 xs sizes from the widest matrix, not
+/// rs alone: n_conductors is 10, rs reads as zero padding, and the BMOPF
+/// emission fires the double digit schema warning. Present matrices that
+/// disagree in size pad with a warning naming the code.
+#[test]
+#[allow(clippy::float_cmp)]
+fn linecode_sized_from_widest_matrix() {
+    let xs: Vec<Vec<f64>> = (0..10)
+        .map(|i| (0..10).map(|j| if i == j { 0.9 } else { 0.1 }).collect())
+        .collect();
+    let text = serde_json::json!({
+        "data_model": "ENGINEERING",
+        "linecode": {
+            "wide": {"xs": xs},
+            "ragged": {"rs": [[0.1]], "xs": [[0.2, 0.0], [0.0, 0.2]]}
+        }
+    })
+    .to_string();
+    let net = parse_pmd_str(&text).unwrap();
+
+    let c = net.linecode("wide").unwrap();
+    assert_eq!(c.n_conductors, 10);
+    assert_eq!(c.r_series, vec![vec![0.0; 10]; 10]);
+    assert_eq!(c.x_series[9][9], 0.9);
+
+    let r = net.linecode("ragged").unwrap();
+    assert_eq!(r.n_conductors, 2);
+    assert_eq!(r.r_series, vec![vec![0.1, 0.0], vec![0.0, 0.0]]);
+    assert!(
+        net.warnings
+            .iter()
+            .any(|w| w.contains("linecode ragged: matrix sizes disagree"))
+    );
+
+    let out = write_bmopf_json(&net);
+    assert!(
+        out.warnings
+            .iter()
+            .any(|w| w.contains("10 conductors produce double digit matrix keys"))
     );
 }
 

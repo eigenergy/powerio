@@ -179,6 +179,13 @@ pub struct RawObject {
     /// Object name as written; lookup is case insensitive.
     pub name: String,
     pub props: Vec<RawProp>,
+    /// Prop-count checkpoints at edit boundaries. Every object command line
+    /// (`New`/`Edit`/`~`/`More`/property reference) is one engine Edit, and
+    /// the class Edit ends in RecalcElementData; readers with end-of-edit
+    /// side effects (Load) segment `props` on these. `like=` splices the
+    /// source's checkpoints too: MakeLike copies the source's recalced
+    /// state, so its boundaries must replay.
+    pub edits: Vec<usize>,
 }
 
 impl RawObject {
@@ -189,6 +196,15 @@ impl RawObject {
             .rev()
             .find(|p| p.name.as_deref() == Some(name))
             .map(|p| &p.value)
+    }
+
+    /// Edit boundary checkpoints, closed over the full prop list: a
+    /// trailing segment without a recorded boundary counts as one more
+    /// edit, so callers always see `props.len()` last.
+    pub fn edit_bounds(&self) -> impl Iterator<Item = usize> + '_ {
+        let tail =
+            (self.edits.last().copied() != Some(self.props.len())).then_some(self.props.len());
+        self.edits.iter().copied().chain(tail)
     }
 }
 
@@ -555,16 +571,18 @@ impl<L: Loader> Executor<'_, L> {
         match self.loader.load(&path) {
             Ok(text) => {
                 let dir = path.parent().map(Path::to_path_buf).unwrap_or_default();
-                self.dirs.push(dir);
+                self.dirs.push(dir.clone());
                 self.run_script(&text, &path.display().to_string());
+                self.dirs.pop();
                 // The engine keeps one current directory: Redirect restores
-                // the caller's on return, Compile leaves it wherever the
-                // compiled script ended (ExecHelper DoRedirect restores
-                // SaveDir only when not compiling), so the caller's later
-                // relative paths follow the compiled file.
-                let ended = self.dirs.pop().unwrap_or_default();
+                // the caller's on return (SetCurrentDir(SaveDir)), Compile
+                // pins it to the compiled file's OWN directory — ExecHelper
+                // DoRedirect sets CurrDir once from the file path (~:300)
+                // and compile exit reapplies it via SetDataPath (~:361) —
+                // even when the compiled script itself compiled deeper. The
+                // caller's later relative paths follow the compiled file.
                 if compile && let Some(top) = self.dirs.last_mut() {
-                    *top = ended;
+                    *top = dir;
                 }
             }
             Err(e) => {
@@ -648,6 +666,7 @@ impl<L: Loader> Executor<'_, L> {
             class: class_lc,
             name,
             props: Vec::new(),
+            edits: Vec::new(),
         });
         idx
     }
@@ -671,14 +690,24 @@ impl<L: Loader> Executor<'_, L> {
     fn apply_props(&mut self, idx: usize, props: Vec<RawProp>, ctx: &dyn Fn(String) -> String) {
         self.raw.active = Some(idx);
         for p in props {
-            // `like=<name>` splices the source object's accumulated props.
+            // `like=<name>` splices the source object's accumulated props,
+            // checkpoints included: MakeLike copies the source's recalced
+            // state (Load.cpp ~810-815 takes kWBase, kvarBase, LoadSpecType,
+            // AND PFNominal), which equals replaying the source's writes
+            // with its own edit boundaries.
             if p.name.as_deref() == Some("like") {
                 let class = self.raw.objects[idx].class.clone();
                 let key = (class.clone(), p.value.text.to_ascii_lowercase());
                 match self.raw.index.get(&key).copied() {
                     Some(src) => {
+                        let base = self.raw.objects[idx].props.len();
                         let cloned = self.raw.objects[src].props.clone();
+                        let bounds: Vec<usize> = self.raw.objects[src]
+                            .edit_bounds()
+                            .map(|e| base + e)
+                            .collect();
                         self.raw.objects[idx].props.extend(cloned);
+                        self.raw.objects[idx].edits.extend(bounds);
                     }
                     None => self.raw.warn(ctx(format!(
                         "like={} names an unknown {class}",
@@ -689,6 +718,10 @@ impl<L: Loader> Executor<'_, L> {
             }
             self.raw.objects[idx].props.push(p);
         }
+        // This command line was one engine Edit; it ends in
+        // RecalcElementData, so record the boundary.
+        let end = self.raw.objects[idx].props.len();
+        self.raw.objects[idx].edits.push(end);
     }
 }
 
@@ -1009,6 +1042,51 @@ mod tests {
         assert!(redirected.find("line", "fromroot").is_some());
 
         std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn compile_inside_compile_pins_the_compiled_files_directory() {
+        // ExecHelper DoRedirect sets CurrDir from the file path once at
+        // entry and compile exit reapplies it (SetDataPath → ChDir), so a
+        // Compile that itself compiles deeper still leaves the caller in
+        // the directly compiled file's directory, not the innermost one.
+        // probe.dss exists in both sub/ and sub/inner/; the engine resolves
+        // sub/probe.dss.
+        let root =
+            std::env::temp_dir().join(format!("powerio-dist-rawnest-{}", std::process::id()));
+        let sub = root.join("sub");
+        let inner = sub.join("inner");
+        std::fs::create_dir_all(&inner).unwrap();
+        std::fs::write(
+            root.join("main.dss"),
+            "Compile sub/a.dss\nRedirect probe.dss",
+        )
+        .unwrap();
+        std::fs::write(sub.join("a.dss"), "Compile inner/b.dss").unwrap();
+        std::fs::write(inner.join("b.dss"), "New Linecode.lc1 nphases=1").unwrap();
+        std::fs::write(sub.join("probe.dss"), "New Line.fromsub bus1=a").unwrap();
+        std::fs::write(inner.join("probe.dss"), "New Line.frominner bus1=a").unwrap();
+
+        let raw = parse_raw_file(root.join("main.dss")).unwrap();
+        assert_eq!(raw.warnings, Vec::<String>::new());
+        assert!(raw.find("linecode", "lc1").is_some());
+        assert!(raw.find("line", "fromsub").is_some());
+        assert!(raw.find("line", "frominner").is_none());
+
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn edit_boundaries_are_recorded() {
+        // One checkpoint per command line; like= splices the source's
+        // boundaries (offset) before the splicing edit's own.
+        let raw = parse("New Load.a kW=10 pf=0.9\n~ kvar=5\nNew Load.b like=a kw=20");
+        let a = raw.find("load", "a").unwrap();
+        assert_eq!(a.edits, vec![2, 3]);
+        let b = raw.find("load", "b").unwrap();
+        assert_eq!(b.props.len(), 4);
+        assert_eq!(b.edits, vec![2, 3, 4]);
+        assert_eq!(b.edit_bounds().collect::<Vec<_>>(), vec![2, 3, 4]);
     }
 
     #[test]
