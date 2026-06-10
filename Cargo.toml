@@ -15,7 +15,7 @@ edition = "2024"
 rust-version = "1.86"
 license = "MIT OR Apache-2.0"
 repository = "https://github.com/eigenergy/powerio"
-homepage = "https://github.com/eigenergy/powerio"
+homepage = "https://eigenergy.github.io/powerio/"
 
 [workspace.dependencies]
 # The intra-workspace deps carry the version pin `cargo publish` needs; keeping
