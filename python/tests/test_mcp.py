@@ -112,3 +112,104 @@ def test_inline_convert_str_error_maps_cleanly(monkeypatch):
     monkeypatch.setattr(powerio, "convert_str", boom)
     with pytest.raises(ValueError):
         convert_case(to="psse", content="whatever", from_="matpower")
+
+
+# --- the full tool surface (parse_case .. save_case) -----------------------
+
+
+def test_parse_case_json_round_trips():
+    from powerio.mcp.server import parse_case
+
+    r = parse_case(path=str(DATA / "case9.m"))
+    assert r["summary"]["n_buses"] == 9
+    assert powerio.from_json(r["json"]).n_buses == 9
+
+
+def test_normalize_case_returns_dense_one_based_ids():
+    from powerio.mcp.server import normalize_case
+
+    r = normalize_case(path=str(DATA / "case9.m"))
+    case = powerio.from_json(r["json"])
+    assert [b["id"] for b in case.buses] == list(range(1, 10))
+
+
+def test_case_to_json_accepted_downstream():
+    from powerio.mcp.server import case_to_json, compute_matrix
+
+    transport = case_to_json(path=str(DATA / "case9.m"))["json"]
+    m = compute_matrix("bprime", json=transport)
+    assert m["shape"] == [9, 9]
+
+
+def test_compute_matrix_kinds_and_plain_types():
+    from powerio.mcp.server import compute_matrix
+
+    m = compute_matrix("bprime", path=str(DATA / "case9.m"))
+    assert m["format"] == "coo"
+    assert m["shape"] == [9, 9]
+    assert m["nnz"] > 0 and isinstance(m["nnz"], int)
+    assert type(m["data"][0]) is float
+    assert type(m["row"][0]) is int
+    lacpf = compute_matrix("lacpf", path=str(DATA / "case9.m"))
+    assert lacpf["shape"] == [18, 18]
+    for kind in ("bdoubleprime", "ybus_real", "ybus_imag", "adjacency",
+                 "ptdf", "lodf", "laplacian"):
+        assert compute_matrix(kind, path=str(DATA / "case9.m"))["nnz"] > 0
+    with pytest.raises(ValueError):
+        compute_matrix("nope", path=str(DATA / "case9.m"))
+
+
+def test_dense_view_counts():
+    from powerio.mcp.server import dense_view
+
+    d = dense_view(path=str(DATA / "case9.m"))
+    assert d["n"] == 9 and d["m"] == 9
+    assert d["base_mva"] == 100.0
+    assert type(d["bus_ids"][0]) is int
+    assert type(d["branch"]["r"][0]) is float
+    assert type(d["is_radial"]) is bool
+
+
+def test_save_case_writes_and_refuses_overwrite(tmp_path):
+    from powerio.mcp.server import save_case
+
+    out = tmp_path / "case9.json"
+    r = save_case(to="powermodels-json", out_path=str(out), path=str(DATA / "case9.m"))
+    assert r["path"] == str(out)
+    assert r["bytes_written"] == out.stat().st_size
+    assert len(json.loads(out.read_text())["bus"]) == 9
+    with pytest.raises(ValueError):
+        save_case(to="powermodels-json", out_path=str(out), path=str(DATA / "case9.m"))
+    r2 = save_case(
+        to="matpower", out_path=str(out), path=str(DATA / "case9.m"), overwrite=True
+    )
+    assert r2["bytes_written"] == out.stat().st_size
+
+
+def test_exactly_one_of_path_content_json():
+    from powerio.mcp.server import compute_matrix, dense_view, parse_case
+
+    with pytest.raises(ValueError):
+        parse_case()
+    with pytest.raises(ValueError):
+        compute_matrix("bprime")
+    with pytest.raises(ValueError):
+        compute_matrix("bprime", path="x", json="{}")
+    with pytest.raises(ValueError):
+        dense_view(path="x", content="y")
+
+
+def test_tool_surface_parity():
+    # The PowerMCP bundle ships a standalone copy of this server
+    # (powerio/powerio_mcp.py in Power-Agent/PowerMCP); powerio.mcp.server is
+    # canonical. The set below is the shared surface; a tool added or removed
+    # here fails this test until the set, and the PowerMCP copy, move with it.
+    import asyncio
+
+    from powerio.mcp import server
+
+    names = {t.name for t in asyncio.run(server.mcp.list_tools())}
+    assert names == {
+        "convert_case", "save_case", "case_summary", "parse_case",
+        "normalize_case", "case_to_json", "compute_matrix", "dense_view",
+    }

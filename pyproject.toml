@@ -37,12 +37,12 @@ gridfm = ["polars>=1"]
 # pyarrow fixes current advisories in 23.0.1, which does not publish Python 3.9
 # wheels; use the Polars gridfm extra on Python 3.9.
 pandas = ["pandas>=2; python_version >= '3.10'", "pyarrow>=23.0.1; python_version >= '3.10'"]
-# The MCP server wraps parse/convert as two MCP tools. The official `mcp` SDK
+# The MCP server exposes the powerio.mcp tool surface. The official `mcp` SDK
 # requires Python >=3.10; the env marker keeps this extra empty on 3.9.
 mcp = ["mcp>=1.2; python_version >= '3.10'"]
 
 [project.scripts]
-# Serves the convert_case + case_summary tools over stdio. Needs the `mcp` extra.
+# Serves the powerio.mcp tool surface over stdio. Needs the `mcp` extra.
 powerio-mcp = "powerio.mcp.server:main"
 
 [project.urls]
