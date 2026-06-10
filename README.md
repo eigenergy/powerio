@@ -2,7 +2,7 @@
 
 <p align="center">
   <img
-    src="https://raw.githubusercontent.com/eigenergy/powerio/main/docs/assets/powerio-logo.png"
+    src="https://raw.githubusercontent.com/eigenergy/powerio/main/docs/assets/powerio-logo.svg"
     alt="PowerIO logo"
     width="120"
   >

@@ -1,17 +1,17 @@
 //! `powerio`: lossless parsing and a typed data model for power system case
 //! files.
 //!
-//! Parse a MATPOWER `.m` case, work with the typed [`Network`], and write it
-//! back out byte for byte: `parse → write → parse` reproduces the source,
-//! preserving every `mpc.*` field, in-matrix comments, and exact numeric
-//! tokens. The crate keeps a small dependency set so other tools can embed it
-//! as a parser without a matrix or solver stack; the matrices live in the
-//! `powerio-matrix` crate.
-//!
 //! Readers and writers cover MATPOWER `.m`, PowerModels JSON, PSS/E `.raw`,
-//! PowerWorld `.aux`, and egret JSON. Every format meets at [`Network`], and
-//! [`Network::to_format`] reports whatever a target format cannot represent.
-//! See the [`crate::format`] module for the two-tier fidelity contract.
+//! PowerWorld `.aux`, and egret JSON. Every format meets at the typed
+//! [`Network`], and [`Network::to_format`] reports whatever a target format
+//! cannot represent. See the [`crate::format`] module for the two-tier
+//! fidelity contract.
+//!
+//! Writing back to the source format reproduces the file byte for byte:
+//! `parse → write → parse` returns the original text, down to comments and
+//! exact numeric tokens. The crate keeps a small dependency set so other
+//! tools can embed it as a parser without a matrix or solver stack; the
+//! matrices live in the `powerio-matrix` crate.
 //!
 //! ```
 //! use powerio::{parse_str, TargetFormat};
