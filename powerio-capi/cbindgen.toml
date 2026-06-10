@@ -32,6 +32,9 @@ header = """
  * Optional: build with `--features arrow` to get pio_export_arrow, a raw
  * network export over the Arrow C Data Interface (guarded by PIO_ARROW).
  *
+ * Optional: build with `--features gridfm` to get pio_read_gridfm and
+ * pio_gridfm_scenario_ids, the gridfm-datakit Parquet reader (guarded by PIO_GRIDFM).
+ *
  * Checked in and generated; regenerate from the Rust source with
  *   cbindgen --config cbindgen.toml --crate powerio-capi --output include/powerio.h
  */"""
@@ -55,11 +58,13 @@ include = ["PioNetwork"]
 "FFI_ArrowArray" = "struct ArrowArray"
 "FFI_ArrowSchema" = "struct ArrowSchema"
 
-# Gate the optional Arrow export behind `#ifdef PIO_ARROW` (the `arrow` feature):
-# cbindgen emits the cfg-gated PIO_ARROW_TABLE_* selectors and pio_export_arrow
-# inside `#if defined(PIO_ARROW)` even on a default (no-feature) generation.
+# Gate the optional Arrow export behind `#ifdef PIO_ARROW` (the `arrow` feature)
+# and the optional gridfm reader behind `#ifdef PIO_GRIDFM` (the `gridfm` feature):
+# cbindgen emits the cfg-gated symbols inside `#if defined(...)` even on a default
+# (no-feature) generation, so the checked-in header always carries both blocks.
 [defines]
 "feature = arrow" = "PIO_ARROW"
+"feature = gridfm" = "PIO_GRIDFM"
 
 [parse]
 parse_deps = false

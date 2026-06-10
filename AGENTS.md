@@ -19,7 +19,10 @@ graph views for any downstream solver. (Planned) feeds the GridFM ML pipeline.
   (`python/powerio/`); hands back COO triplets that scipy assembles.
 - **`powerio-capi`**: C ABI over `powerio` (`pio_*`, header `powerio.h`) for
   C, C++, Julia, and other FFI users. `--features arrow` adds
-  `pio_export_arrow`, an Arrow C Data Interface export.
+  `pio_export_arrow`, an Arrow C Data Interface export; `--features gridfm` adds
+  `pio_read_gridfm` / `pio_gridfm_scenario_ids` (the gridfm-datakit Parquet
+  reader, pulling in `powerio-matrix`). Both are additive/feature-gated, so no
+  ABI bump.
 
 `Network` is the one canonical model (format neutral, loads/shunts first class);
 `IndexedNetwork` is the dense indexed analysis view derived from it.
@@ -37,6 +40,7 @@ Matrix outputs (powerio-matrix):
 - DC OPF instance bundle (`dcopf` subcommand, `opf_pipeline::write_dcopf_bundle`): signed incidence `A` (n×m), branch susceptance `b`, weighted Laplacian `L = A diag(b) Aᵀ` and its reference-grounded form, flow map `B Aᵀ`, generator cost `Q`/`c`, bounds, thermal limits `f̄`, generator→bus `C_g`, nodal load `p_d`, `e_r`.
 - petgraph `UnGraph<bus_idx, branch_idx>` view + connectivity / radial diagnostics.
 - gridfm-datakit Parquet dataset (`gridfm` subcommand, `io::gridfm::write_gridfm_dataset`, `--features gridfm`): the `bus_data`/`gen_data`/`branch_data`/`y_bus_data` tables a single parsed case maps to, matching gridfm-datakit's column schema so gridfm-graphkit trains on it directly.
+- gridfm dataset → `Network` reader, the ML→classical return leg (`io::gridfm::read_gridfm_dataset` / `read_gridfm_scenarios` / `gridfm_base_case`, pure inverse `read_gridfm_network`; `--features gridfm`, issue #60). Lossy but power-flow-complete: recovers bus types/voltages/limits, nodal load & shunt totals, generator dispatch & bounds (`vg` from bus `Vm`), branch `r/x/b/tap/shift/rate_a/angle-limits`, and `base_mva`; can't recover original bus ids (synthesized `1..n`), per-element granularity (folded to one synthetic `Load`/`Shunt` per bus), piecewise/cubic costs, or HVDC/storage. Unit effective-tap/zero-shift branches read back as lines (raw `tap 0`). Returns `GridfmRead { network, scenario, warnings }`; sets `SourceFormat::Gridfm`. One reader ⇒ gridfm → any classical writer for free. CLI: `convert <dataset-dir> --from gridfm [--scenario N] --to <fmt>` (stays out of the parquet-free `parse_file` hub). `y_bus_data` is ignored on read (branches carry raw `r/x/b`). Python: `read_gridfm(dir, scenario=0)` / `read_gridfm_scenarios(dir)` → `GridfmRead(network, scenario, warnings)`.
 - Planned: LinDist3Flow.
 
 ## Commands

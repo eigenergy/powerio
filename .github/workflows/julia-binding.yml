@@ -43,9 +43,10 @@ jobs:
       if: steps.powerio-jl.outputs.available == 'true'
     - name: Build powerio-capi
       if: steps.powerio-jl.outputs.available == 'true'
-      # --features arrow so PowerIO.jl's Arrow export tests run against a real
-      # pio_export_arrow symbol rather than skipping.
-      run: cargo build -p powerio-capi --release --features arrow
+      # --features arrow,gridfm so PowerIO.jl's Arrow export and gridfm reader
+      # tests run against real pio_export_arrow / pio_read_gridfm symbols rather
+      # than skipping (arrow_available() / gridfm_available() gate them).
+      run: cargo build -p powerio-capi --release --features arrow,gridfm
     - name: Check out PowerIO.jl
       if: steps.powerio-jl.outputs.available == 'true'
       uses: actions/checkout@v6

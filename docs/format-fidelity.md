@@ -95,3 +95,15 @@ These are reported in `Conversion::warnings`, not dropped silently.
 - **egret** output drops HVDC and storage. The reader takes the power flow
   ModelData subset (numeric bus ids, scalar values); unit commitment cases
   (`system.time_keys`) are rejected.
+- **gridfm** (read, the `gridfm` feature in `powerio-matrix`) reconstructs a
+  `Network` from the gridfm-datakit Parquet dataset — lossy but power-flow-complete.
+  It recovers bus types/voltages/limits, nodal load and shunt totals, generator
+  dispatch and bounds, branch `r/x/b/tap/shift/rate_a`/angle-limits, and `baseMVA`;
+  it can't recover original bus ids (synthesized `1..n`), per-element load/shunt
+  granularity (folded one synthetic element per bus), piecewise/cubic gen costs
+  (read as none), or HVDC/storage. Because the writer stores the *effective* tap,
+  a branch with unit tap and no phase shift is read back as a line (raw `tap = 0`);
+  a unity-ratio, zero-shift transformer in the source is thus read as a line (the
+  power flow is identical). The losses are returned as a warnings list on
+  `GridfmRead`, mirroring `Conversion::warnings`. The same-direction writer is
+  documented in the [README](../README.md#gridfm).

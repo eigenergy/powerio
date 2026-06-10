@@ -55,6 +55,9 @@ __all__ = [
     "to_json",
     "to_dense",
     "write_gridfm_batch",
+    "read_gridfm",
+    "read_gridfm_scenarios",
+    "GridfmRead",
     "__version__",
 ]
 
@@ -63,6 +66,15 @@ Conversion.__doc__ = """Output of :func:`convert_file`.
 
 ``text`` is the converted file contents; ``warnings`` lists the fields the
 target format could not represent (empty for a faithful conversion).
+"""
+
+GridfmRead = namedtuple("GridfmRead", ["network", "scenario", "warnings"])
+GridfmRead.__doc__ = """Output of :func:`read_gridfm` / :func:`read_gridfm_scenarios`.
+
+``network`` is the reconstructed :class:`Network`; ``scenario`` is the scenario
+id these rows came from; ``warnings`` lists what the gridfm schema could not
+round-trip (synthesized bus ids, folded per-bus load/shunt, dropped HVDC/storage,
+piecewise costs). The read is lossy but power-flow-complete.
 """
 
 Incidence = namedtuple("Incidence", ["A", "b", "p_shift", "branch_of_col"])
@@ -454,3 +466,41 @@ def write_gridfm_batch(
     return _powerio.write_gridfm_batch(
         inners, str(out_dir), base_scenario, include_y_bus, include_taps, include_shifts
     )
+
+
+def read_gridfm(dir: Any, scenario: int = 0) -> GridfmRead:
+    """Read one scenario of a gridfm-datakit Parquet dataset back into a case.
+
+    The inverse of :meth:`Network.write_gridfm`. ``dir`` is resolved leniently:
+    the ``raw/`` directory holding the parquet files, a ``<case>/`` directory with
+    a ``raw/`` child, or a parent directory with one ``*/raw/`` child all work.
+    ``scenario`` selects one snapshot from a batch (``0``, the base case, by
+    default). Returns a :class:`GridfmRead` ``(network, scenario, warnings)``.
+
+    The read is lossy but power-flow-complete: it recovers bus types, voltages and
+    limits, nodal load and shunt totals, generator dispatch and bounds, branch
+    ``r/x/b/tap/shift/rate_a``/angle-limits, and ``baseMVA`` — enough to write a
+    runnable case — but not original bus ids, per-element load/shunt granularity,
+    piecewise/cubic costs, or HVDC/storage; what it can't recover is listed in
+    ``warnings``. Published wheels include the native reader; custom source builds
+    without the Rust ``gridfm`` feature raise ``ImportError``.
+    """
+    _require_gridfm()
+    case, scen, warnings = _powerio.read_gridfm(str(dir), scenario)
+    return GridfmRead(Network(case), scen, warnings)
+
+
+def read_gridfm_scenarios(dir: Any) -> "list[GridfmRead]":
+    """Read every scenario of a gridfm dataset, one :class:`GridfmRead` per
+    scenario id (ascending) over the shared topology — the read side of
+    :func:`write_gridfm_batch`.
+
+    Each scenario is rebuilt independently, so two scenarios may differ in branch
+    status, bus types, and reference bus. See :func:`read_gridfm` for the lenient
+    directory resolution and the fidelity contract.
+    """
+    _require_gridfm()
+    return [
+        GridfmRead(Network(case), scen, warnings)
+        for case, scen, warnings in _powerio.read_gridfm_scenarios(str(dir))
+    ]

@@ -112,6 +112,10 @@ The release ABI uses the same verb taxonomy as the Rust, Python, and Julia APIs:
 - `pio_convert_file` converts a file path to output text in one call.
 - `pio_export_arrow` uses `export` because it fills Arrow C Data Interface
   structs with release callbacks.
+- `pio_read_gridfm` and `pio_gridfm_scenario_ids` read a gridfm-datakit Parquet
+  dataset back into a handle (built `--features gridfm`; the reader itself lives
+  in `powerio-matrix`). Lossy but power-flow-complete — the fidelity notes come
+  back `\n`-joined in `warnbuf`, like `pio_to_format`'s warnings.
 
 ## Safety contract
 
@@ -157,6 +161,8 @@ in lockstep with PowerIO.jl.
 
 powerio-capi covers the `powerio` surface: parse / convert / query / table
 and JSON extraction. It deliberately has no matrix builders; those live in
-`powerio-matrix`. A future `powerio-matrix-capi` can hand back assembled CSR
-matrices (B', Y_bus, PTDF, DC OPF) over the same ABI style; for now a consumer
-builds matrices from the extracted tables.
+`powerio-matrix`. The one `powerio-matrix` surface it does expose is the gridfm
+reader (`--features gridfm`), because it just returns a plain network handle. A
+future `powerio-matrix-capi` can hand back assembled CSR matrices (B', Y_bus,
+PTDF, DC OPF) over the same ABI style; for now a consumer builds matrices from
+the extracted tables.

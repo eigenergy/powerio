@@ -158,6 +158,28 @@ PowerIO supports the GridFM framework. The command `powerio gridfm <case> -o <di
 `<dir>/<case>/raw/`. A case file is one scenario. Passing several compatible
 cases stacks them by scenario id.
 
+The inverse — `read_gridfm_dataset` / `read_gridfm_scenarios` / `gridfm_base_case`
+in `powerio-matrix` (same `gridfm` feature) — turns a gridfm dataset back into a
+`Network`, the ML→classical return leg. Because every classical writer meets at
+the hub, one reader yields **gridfm → any classical format for free**: take a
+perturbed training scenario or a GNN-predicted state serialized to the schema,
+emit a `.m` or `.raw`, and run it in MATPOWER / pandapower / PowerModels to
+sanity-check it.
+
+```
+powerio convert out/case14/raw --from gridfm --to matpower -o case14.m
+```
+
+The read is lossy but **power-flow-complete**: it recovers bus types, voltages and
+limits, nodal load and shunt totals, generator dispatch and bounds, branch
+`r/x/b/tap/shift/rate_a`/angle-limits, and `baseMVA` — enough to write a runnable
+case — but not original bus ids (synthesized `1..n`), per-element load/shunt
+granularity (folded one per bus), piecewise/cubic costs, or HVDC/storage. What it
+can't recover is returned as a warnings list. `--scenario N` picks one scenario
+from a batch; the directory argument accepts the `raw/`, `<case>/`, or parent dir.
+From Python, `pio.read_gridfm(dir)` and `pio.read_gridfm_scenarios(dir)` return a
+`GridfmRead(network, scenario, warnings)`.
+
 ### C ABI
 
 `powerio-capi` exposes parse, query, conversion, JSON transport, normalization,
