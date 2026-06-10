@@ -1,0 +1,24 @@
+[package]
+name = "powerio-dist"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+description = "Multiconductor distribution network model and lossless converters for OpenDSS, PMD JSON, and BMOPF JSON."
+readme = "README.md"
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+documentation = "https://docs.rs/powerio-dist"
+keywords = ["opendss", "distribution", "parser", "lossless"]
+categories = ["science", "parsing"]
+
+[package.metadata.docs.rs]
+all-features = true
+
+[dependencies]
+thiserror = "2"
+serde.workspace = true
+serde_json.workspace = true
+
+[lints]
+workspace = true

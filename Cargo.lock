@@ -1756,6 +1756,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "powerio-dist"
+version = "0.0.1"
+dependencies = [
+ "serde",
+ "serde_json",
+ "thiserror 2.0.18",
+]
+
+[[package]]
 name = "powerio-matrix"
 version = "0.0.1"
 dependencies = [
