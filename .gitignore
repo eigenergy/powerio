@@ -5,17 +5,21 @@
 .DS_Store
 .claude/
 
-# Python bindings (maturin / PyO3)
+# Python bindings (maturin / PyO3). dist/ and build/ are anchored to the
+# repo root: tests/data/dist holds fixtures, not build output.
 *.so
 *.pyd
-dist/
-build/
+/dist/
+/build/
 wheelhouse/
 *.egg-info/
 __pycache__/
 .pytest_cache/
 .venv/
 tests/data/large/
+
+# Scratch Julia project for the PMD oracle; its Manifest pins local paths.
+powerio-dist/tools/pmd/Manifest.toml
 
 # Machine-readable bench output (render_tables.py reads it; numbers are per-machine)
 benchmarks/results/

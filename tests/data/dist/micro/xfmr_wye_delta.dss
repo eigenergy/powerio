@@ -1,0 +1,14 @@
+! Three phase wye-delta step down transformer, 12.47 kV wye primary to 480 V
+! delta secondary, with a delta connected load.
+Clear
+Set DefaultBaseFrequency=60
+
+New Circuit.xfmr_wye_delta basekv=12.47 pu=1.0 phases=3 bus1=sourcebus MVAsc3=2000 MVAsc1=2100
+
+New Transformer.t1 phases=3 windings=2 buses=(sourcebus, secondary) conns=(wye, delta) kvs=(12.47, 0.48) kvas=(500, 500) xhl=5.75 %Rs=(0.5, 0.5)
+
+New Load.l1 bus1=secondary phases=3 conn=delta kv=0.48 kw=300 pf=0.9 model=1 vminpu=0.8 vmaxpu=1.2
+
+Set VoltageBases=[12.47, 0.48]
+Calcvoltagebases
+Solve
