@@ -49,7 +49,7 @@ struct ArrowSchema;
 
 [export]
 prefix = ""
-include = ["PioCase"]
+include = ["PioNetwork"]
 
 [export.rename]
 "FFI_ArrowArray" = "struct ArrowArray"

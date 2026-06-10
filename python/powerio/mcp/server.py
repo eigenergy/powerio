@@ -149,7 +149,7 @@ def case_summary(
         "name": case.name,
         "base_mva": case.base_mva,
         "source_format": case.source_format,
-        "n_buses": case.n,
+        "n_buses": case.n_buses,
         "n_branches": case.n_branches,
         "n_gens": case.n_gens,
         "n_loads": case.n_loads,

@@ -31,7 +31,7 @@ cbindgen --config powerio-capi/cbindgen.toml --crate powerio-capi \
 
 int main(void) {
     char err[256];
-    PioCase *c = pio_parse_file("case9.m", NULL, err, sizeof err);
+    PioNetwork *c = pio_parse_file("case9.m", NULL, err, sizeof err);
     if (!c) { fprintf(stderr, "parse: %s\n", err); return 1; }
 
     size_t n = pio_n_buses(c), m = pio_n_branches(c);

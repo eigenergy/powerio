@@ -25,7 +25,7 @@ fn data(name: &str) -> PathBuf {
 fn canonical_api_names_parse_and_convert() {
     let path = data("case14.m");
     let src = std::fs::read_to_string(&path).unwrap();
-    let net = parse_file(&path).unwrap();
+    let net = parse_file(&path, None).unwrap();
 
     assert_eq!(
         "powermodels-json".parse::<TargetFormat>().unwrap(),

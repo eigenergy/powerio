@@ -114,30 +114,39 @@ impl FromStr for TargetFormat {
 /// `egret-json`/`egret`, `psse`/`raw`, `powerworld`/`aux`. Case-insensitive. The
 /// one place the bindings (Python, C ABI) share, so a new format means one new
 /// arm here, not three.
+///
+/// The `powermodelsjson`/`egretjson` aliases let a [`SourceFormat`]'s string form
+/// (`{:?}` lowercased, e.g. `"PowerModelsJson"`) round-trip back to a target, so
+/// `net.to_format(other.source_format)` works for every format.
 #[must_use]
 pub fn target_format_from_name(name: &str) -> Option<TargetFormat> {
     Some(match name.to_ascii_lowercase().as_str() {
         "matpower" | "m" => TargetFormat::Matpower,
-        "powermodels-json" | "powermodels" | "pm" => TargetFormat::PowerModelsJson,
-        "egret-json" | "egret" => TargetFormat::EgretJson,
+        "powermodels-json" | "powermodels" | "powermodelsjson" | "pm" => {
+            TargetFormat::PowerModelsJson
+        }
+        "egret-json" | "egret" | "egretjson" => TargetFormat::EgretJson,
         "psse" | "raw" => TargetFormat::Psse,
         "powerworld" | "aux" => TargetFormat::PowerWorld,
         _ => return None,
     })
 }
 
-/// Read the case at `path` into a [`Network`], choosing the reader from `from`
-/// (a format name, see [`target_format_from_name`]) or, when `None`, from the
-/// file extension (`m`/`json`/`raw`/`aux`). A `.json` file is sniffed for the
+/// Parse the case file at `path` into a [`Network`], choosing the reader from
+/// `from` (a format name, see [`target_format_from_name`]) or, when `None`, from
+/// the file extension (`m`/`json`/`raw`/`aux`). A `.json` file is sniffed for the
 /// egret vs PowerModels shape; pass `from` to force one.
-/// The one reader the CLI and the Python/C bindings share, so adding a source
-/// format is one edit here, not one per binding.
+///
+/// The one path-based parser the CLI and the Python/C/Julia bindings share (each
+/// exposes the same `parse_file(path, from)` shape), so adding a source format is
+/// one edit here, not one per binding. For in-memory text use [`parse_str`].
 ///
 /// # Errors
 /// [`Error::UnknownFormat`] if `from` is unrecognized or the extension can't be
 /// mapped; [`Error::Io`] if the file can't be read; the reader's own [`Error`]
 /// on malformed input.
-pub fn read_path(path: &std::path::Path, from: Option<&str>) -> Result<Network> {
+pub fn parse_file(path: impl AsRef<std::path::Path>, from: Option<&str>) -> Result<Network> {
+    let path = path.as_ref();
     // Read the file once into an owned buffer; the reader moves it straight into
     // the retained source (byte-exact round-trip) with no copy. Sniffing a
     // `.json` borrows the text before the move.
@@ -163,8 +172,8 @@ pub fn read_path(path: &std::path::Path, from: Option<&str>) -> Result<Network> 
 
 /// Read an owned `source` buffer as `fmt`, using `name_hint` (e.g. the file
 /// stem) when the format carries no name of its own. The single format→reader
-/// map: [`parse`], [`parse_str`], and [`read_path`] all funnel through it, so
-/// every format is dispatched the same way. Each reader takes the owned `Arc` so
+/// map: [`parse_file`] and [`parse_str`] both funnel through it, so every format
+/// is dispatched the same way. Each reader takes the owned `Arc` so
 /// it moves the buffer straight into the retained source (no copy) and is free
 /// to specialize its parse internally.
 fn read_source(source: Arc<String>, fmt: TargetFormat, name_hint: Option<&str>) -> Result<Network> {
@@ -213,29 +222,6 @@ fn sniff_json(text: &str) -> TargetFormat {
         }) => TargetFormat::EgretJson,
         _ => TargetFormat::PowerModelsJson,
     }
-}
-
-/// Parse the case file at `path` into a [`Network`], detecting the format from
-/// the file extension (`m`/`json`/`raw`/`aux`). Alias of [`parse_file`]; use
-/// [`read_path`] to force a specific source format, or [`parse_str`] for
-/// in-memory text.
-///
-/// # Errors
-/// As [`read_path`] with `from = None`.
-pub fn parse(path: impl AsRef<std::path::Path>) -> Result<Network> {
-    read_path(path.as_ref(), None)
-}
-
-/// Parse the case file at `path` into a [`Network`].
-///
-/// The canonical path parser name shared by the language bindings; detects
-/// the format from the file extension. Use [`read_path`] to force a source
-/// format, or [`parse_str`] for in-memory text.
-///
-/// # Errors
-/// As [`read_path`] with `from = None`.
-pub fn parse_file(path: impl AsRef<std::path::Path>) -> Result<Network> {
-    read_path(path.as_ref(), None)
 }
 
 /// Parse in-memory case `text` of the named `format` (see
@@ -298,13 +284,13 @@ pub fn write_as(net: &Network, format: TargetFormat) -> Conversion {
 /// converted text plus any fidelity warnings.
 ///
 /// # Errors
-/// As [`read_path`].
+/// As [`parse_file`].
 pub fn convert_file(
     path: impl AsRef<std::path::Path>,
     to: TargetFormat,
     from: Option<&str>,
 ) -> Result<Conversion> {
-    let net = read_path(path.as_ref(), from)?;
+    let net = parse_file(path, from)?;
     Ok(write_as(&net, to))
 }
 
@@ -390,5 +376,38 @@ fn collect_null_keys(value: &Value, out: &mut BTreeSet<String>) {
         }
         Value::Array(items) => items.iter().for_each(|v| collect_null_keys(v, out)),
         _ => {}
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::network::SourceFormat;
+
+    #[test]
+    fn source_format_strings_round_trip_to_a_target() {
+        // The bindings expose `source_format` as its `{:?}` form, and
+        // `to_format` routes that string back through `target_format_from_name`.
+        // Every writable source format must resolve — including PowerModelsJson /
+        // EgretJson, whose camel-case names need the `powermodelsjson` /
+        // `egretjson` aliases (issue #75).
+        for (sf, want) in [
+            (SourceFormat::Matpower, TargetFormat::Matpower),
+            (SourceFormat::PowerModelsJson, TargetFormat::PowerModelsJson),
+            (SourceFormat::EgretJson, TargetFormat::EgretJson),
+            (SourceFormat::Psse, TargetFormat::Psse),
+            (SourceFormat::PowerWorld, TargetFormat::PowerWorld),
+        ] {
+            let token = format!("{sf:?}");
+            assert_eq!(
+                target_format_from_name(&token),
+                Some(want),
+                "source_format {token:?} did not round-trip"
+            );
+        }
+        // The derived/in-memory source formats have no writer target.
+        for sf in [SourceFormat::InMemory, SourceFormat::Normalized] {
+            assert_eq!(target_format_from_name(&format!("{sf:?}")), None);
+        }
     }
 }

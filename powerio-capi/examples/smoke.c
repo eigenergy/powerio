@@ -40,7 +40,7 @@ int main(int argc, char **argv) {
     printf("powerio %s (ABI %u)\n", pio_version(), pio_abi_version());
 
     char err[PIO_ERRBUF_MIN];
-    PioCase *c = pio_parse_file(argv[1], NULL, err, sizeof err);
+    PioNetwork *c = pio_parse_file(argv[1], NULL, err, sizeof err);
     CHECK(c != NULL, err);
 
     size_t nb = pio_n_buses(c);
@@ -79,7 +79,7 @@ int main(int argc, char **argv) {
     /* JSON transport: serialize, rebuild, and confirm the counts survive. */
     char *json = pio_to_json(c, err, sizeof err);
     CHECK(json != NULL, err);
-    PioCase *c2 = pio_from_json(json, err, sizeof err);
+    PioNetwork *c2 = pio_from_json(json, err, sizeof err);
     CHECK(c2 != NULL, err);
     CHECK(pio_n_buses(c2) == nb && pio_n_branches(c2) == m && pio_n_gens(c2) == ng,
           "JSON round-trip changed the table sizes");
@@ -100,7 +100,7 @@ int main(int argc, char **argv) {
         buf[rd] = '\0';
         fclose(fp);
 
-        PioCase *cs = pio_parse_str(buf, "matpower", err, sizeof err);
+        PioNetwork *cs = pio_parse_str(buf, "matpower", err, sizeof err);
         CHECK(cs != NULL, err);
         CHECK(pio_n_buses(cs) == nb && pio_n_branches(cs) == m && pio_n_gens(cs) == ng,
               "pio_parse_str disagrees with pio_parse_file on table sizes");
@@ -111,7 +111,7 @@ int main(int argc, char **argv) {
          * (several if the file marked several), and still serializes through the
          * JSON transport. Use pio_n_reference_buses, not pio_reference_bus >= 0:
          * the latter returns -1 for a multi-slack case, which is valid here. */
-        PioCase *cn = pio_to_normalized(cs, err, sizeof err);
+        PioNetwork *cn = pio_to_normalized(cs, err, sizeof err);
         CHECK(cn != NULL, err);
         CHECK(pio_n_buses(cn) <= nb && pio_n_buses(cn) > 0, "normalized bus count out of range");
         CHECK(pio_n_reference_buses(cn) >= 1, "normalized case lost its reference bus");

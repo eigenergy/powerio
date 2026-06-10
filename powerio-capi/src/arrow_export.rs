@@ -182,7 +182,7 @@ mod tests {
         let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("../tests/data")
             .join(name);
-        powerio::read_path(&path, None).unwrap()
+        powerio::parse_file(&path, None).unwrap()
     }
 
     fn round_trip(net: &Network, table: i32) -> StructArray {

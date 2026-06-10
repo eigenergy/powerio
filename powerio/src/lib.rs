@@ -42,10 +42,10 @@ mod normalize;
 
 pub use error::{ElementCounts, Error, ErrorCategory, Result, ScenarioMismatch};
 pub use format::{
-    Conversion, TargetFormat, convert_file, parse, parse_egret_json, parse_file, parse_matpower,
+    Conversion, TargetFormat, convert_file, parse_egret_json, parse_file, parse_matpower,
     parse_matpower_file, parse_powermodels_json, parse_powerworld, parse_psse, parse_str,
-    read_path, target_format_from_name, write_as, write_egret_json, write_matpower,
-    write_powermodels_json, write_powerworld, write_psse,
+    target_format_from_name, write_as, write_egret_json, write_matpower, write_powermodels_json,
+    write_powerworld, write_psse,
 };
 pub use indexed::{ConnectivityReport, IndexCore, IndexedNetwork};
 pub use network::{
