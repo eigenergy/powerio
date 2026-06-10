@@ -1,4 +1,4 @@
-# powerio-capi
+﻿# powerio-capi
 
 A C ABI over `powerio`: parse any supported power system case format, query it,
 convert it, and pull out the numeric tables a solver needs to assemble matrices.
@@ -11,7 +11,7 @@ The header is
 
 ```
 cargo build -p powerio-capi --release
-# → target/release/libpowerio_capi.{so,dylib}  (cdylib)
+# â†’ target/release/libpowerio_capi.{so,dylib}  (cdylib)
 #   target/release/libpowerio_capi.a            (staticlib)
 ```
 
@@ -54,7 +54,7 @@ int main(void) {
     if (raw) { /* ... use PSS/E text ... */ pio_string_free(raw); }
 
     free(from); free(to); free(x);
-    pio_case_free(c);
+    pio_network_free(c);
     return 0;
 }
 ```
@@ -89,7 +89,7 @@ ccall((:pio_branches, LIB), Cvoid,
        Ptr{Float64}, Ptr{Float64}, Ptr{Float64}, Ptr{UInt8}),
       h, from, to, C_NULL, x, C_NULL, C_NULL, C_NULL, C_NULL)
 # build your matrices from (from, to, x), then:
-ccall((:pio_case_free, LIB), Cvoid, (Ptr{Cvoid},), h)
+ccall((:pio_network_free, LIB), Cvoid, (Ptr{Cvoid},), h)
 ```
 
 ## JSON transport
@@ -128,7 +128,7 @@ Every entry point is hardened at the boundary:
 - Input strings must be valid UTF-8; anything else is rejected as an error,
   never dereferenced past its NUL.
 - Ownership is symmetric: handles from `pio_parse_*`/`pio_from_json`/
-  `pio_to_normalized` are freed with `pio_case_free`, strings from the `pio_to_*`
+  `pio_to_normalized` are freed with `pio_network_free`, strings from the `pio_to_*`
   functions with `pio_string_free`, each exactly once. The Arrow export hands
   the caller two C Data Interface structs whose non-NULL `release` callbacks
   must each be invoked exactly once.

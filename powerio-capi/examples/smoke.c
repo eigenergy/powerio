@@ -1,8 +1,8 @@
-/* C ABI smoke test: drive powerio-capi from C the way a real consumer would.
+﻿/* C ABI smoke test: drive powerio-capi from C the way a real consumer would.
  *
  * Built and run in CI against the checked-in static library, so a break in the
  * ABI (or the header drifting from the Rust source) fails the build rather than
- * silently shipping. Not a unit test — it asserts the calls work end to end and
+ * silently shipping. Not a unit test â€” it asserts the calls work end to end and
  * returns non-zero on any failure.
  *
  *   cc -I powerio-capi/include powerio-capi/examples/smoke.c \
@@ -84,7 +84,7 @@ int main(int argc, char **argv) {
     CHECK(pio_n_buses(c2) == nb && pio_n_branches(c2) == m && pio_n_gens(c2) == ng,
           "JSON round-trip changed the table sizes");
     pio_string_free(json);
-    pio_case_free(c2);
+    pio_network_free(c2);
 
     /* In-memory parse: read the bytes ourselves and parse them with an explicit
      * format, then confirm it agrees with the path-based parse. */
@@ -118,8 +118,8 @@ int main(int argc, char **argv) {
         char *njson = pio_to_json(cn, err, sizeof err);
         CHECK(njson != NULL, err);
         pio_string_free(njson);
-        pio_case_free(cn);
-        pio_case_free(cs);
+        pio_network_free(cn);
+        pio_network_free(cs);
         printf("parse_str + to_normalized OK\n");
     }
 
@@ -145,7 +145,7 @@ int main(int argc, char **argv) {
     CHECK(pio_n_buses(NULL) == 0, "NULL handle did not return 0");
     CHECK(pio_reference_bus(NULL) == -1, "NULL handle did not return -1");
 
-    pio_case_free(c);
+    pio_network_free(c);
     printf("C ABI smoke test OK\n");
     return 0;
 }

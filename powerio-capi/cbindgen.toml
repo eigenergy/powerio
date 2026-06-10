@@ -16,8 +16,8 @@ header = """
  *
  * Memory: strings returned by pio_to_matpower / pio_to_format /
  * pio_convert_file / pio_to_json are owned by the library; free them with
- * pio_string_free. Case handles from pio_parse_file / pio_parse_str /
- * pio_from_json / pio_to_normalized are freed with pio_case_free. Array
+ * pio_string_free. Network handles from pio_parse_file / pio_parse_str /
+ * pio_from_json / pio_to_normalized are freed with pio_network_free. Array
  * extractors fill caller-allocated buffers whose length is the matching pio_n_*
  * count; pass NULL to skip an output.
  *

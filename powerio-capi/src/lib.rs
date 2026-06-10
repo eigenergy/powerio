@@ -25,7 +25,7 @@ pub use arrow_export::{
     PIO_ARROW_TABLE_SHUNT,
 };
 
-/// Opaque parsed case handle. Carries the parsed [`Network`] plus the
+/// Opaque parsed network handle. Carries the parsed [`Network`] plus the
 /// [`IndexCore`] derived from it once at parse time, so every indexed query
 /// reuses the same bus-id map and nodal aggregates instead of rebuilding them.
 pub struct PioNetwork {
@@ -87,9 +87,9 @@ unsafe fn guard<R>(fallback: R, f: impl FnOnce() -> R) -> R {
     catch_unwind(AssertUnwindSafe(f)).unwrap_or(fallback)
 }
 
-/// Box a `Network` into an owned case handle, building its [`IndexCore`] once so
+/// Box a `Network` into an owned network handle, building its [`IndexCore`] once so
 /// every indexed query reuses it. The one constructor for `*mut PioNetwork`.
-fn make_case(net: Network) -> *mut PioNetwork {
+fn make_network(net: Network) -> *mut PioNetwork {
     let core = IndexCore::build(&net);
     Box::into_raw(Box::new(PioNetwork { net, core }))
 }
@@ -99,7 +99,7 @@ fn make_case(net: Network) -> *mut PioNetwork {
 /// error, `panic_msg` if `f` panicked, into `errbuf` and return NULL. The
 /// shared tail of every handle-returning function (`pio_parse_file`,
 /// `pio_parse_str`, `pio_to_normalized`, `pio_from_json`).
-unsafe fn finish_case(
+unsafe fn finish_network(
     errbuf: *mut c_char,
     errlen: usize,
     panic_msg: &str,
@@ -107,7 +107,7 @@ unsafe fn finish_case(
 ) -> *mut PioNetwork {
     unsafe {
         match catch_unwind(AssertUnwindSafe(f)) {
-            Ok(Ok(net)) => make_case(net),
+            Ok(Ok(net)) => make_network(net),
             Ok(Err(msg)) => {
                 copy_to_buf(errbuf, errlen, &msg);
                 std::ptr::null_mut()
@@ -176,7 +176,7 @@ pub unsafe extern "C" fn pio_parse_file(
     errlen: usize,
 ) -> *mut PioNetwork {
     unsafe {
-        finish_case(errbuf, errlen, "panic while parsing", || {
+        finish_network(errbuf, errlen, "panic while parsing", || {
             let path = cstr(path).ok_or_else(|| "path is NULL or not UTF-8".to_string())?;
             let from = optional_cstr(from, "from")?;
             powerio::parse_file(std::path::Path::new(path), from).map_err(|e| e.to_string())
@@ -184,11 +184,11 @@ pub unsafe extern "C" fn pio_parse_file(
     }
 }
 
-/// Parse in-memory case `text` of the named `format` into a case handle. Unlike
+/// Parse in-memory case `text` of the named `format` into a network handle. Unlike
 /// [`pio_parse_file`] there is no path to infer from, so `format` is required: one of
 /// `matpower`/`m`, `powermodels`/`pm`, `egret`, `psse`/`raw`, `powerworld`/`aux`
 /// (see `TargetFormat::from_str`). Returns `NULL` on error and writes the
-/// message into `errbuf`. Free the handle with [`pio_case_free`].
+/// message into `errbuf`. Free the handle with [`pio_network_free`].
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_parse_str(
     text: *const c_char,
@@ -197,7 +197,7 @@ pub unsafe extern "C" fn pio_parse_str(
     errlen: usize,
 ) -> *mut PioNetwork {
     unsafe {
-        finish_case(errbuf, errlen, "panic while parsing", || {
+        finish_network(errbuf, errlen, "panic while parsing", || {
             let text = cstr(text).ok_or_else(|| "text is NULL or not UTF-8".to_string())?;
             let format = cstr(format).ok_or_else(|| "format is NULL or not UTF-8".to_string())?;
             powerio::parse_str(text, format).map_err(|e| e.to_string())
@@ -205,68 +205,68 @@ pub unsafe extern "C" fn pio_parse_str(
     }
 }
 
-/// Free a case handle from [`pio_parse_file`], [`pio_parse_str`],
+/// Free a network handle from [`pio_parse_file`], [`pio_parse_str`],
 /// [`pio_to_normalized`], or [`pio_from_json`].
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn pio_case_free(case: *mut PioNetwork) {
+pub unsafe extern "C" fn pio_network_free(net: *mut PioNetwork) {
     unsafe {
-        if !case.is_null() {
-            drop(Box::from_raw(case));
+        if !net.is_null() {
+            drop(Box::from_raw(net));
         }
     }
 }
 
-unsafe fn case_ref<'a>(case: *const PioNetwork) -> Option<&'a PioNetwork> {
-    unsafe { case.as_ref() }
+unsafe fn network_ref<'a>(net: *const PioNetwork) -> Option<&'a PioNetwork> {
+    unsafe { net.as_ref() }
 }
 
-/// View `case` through its cached [`IndexCore`] with no per-call rebuild.
-unsafe fn view<'a>(case: *const PioNetwork) -> Option<IndexedNetwork<'a>> {
+/// View `net` through its cached [`IndexCore`] with no per-call rebuild.
+unsafe fn view<'a>(net: *const PioNetwork) -> Option<IndexedNetwork<'a>> {
     unsafe {
-        case.as_ref()
+        net.as_ref()
             .map(|c| IndexedNetwork::with_core(&c.net, &c.core))
     }
 }
 
-/// Normalize `case` into a NEW per-unit case handle: per unit, radians,
+/// Normalize `net` into a NEW per-unit network handle: per unit, radians,
 /// out-of-service filtered, densely reindexed, bus types canonicalized (see
-/// `Network::to_normalized`). The result is independent of `case`; free both
-/// with [`pio_case_free`]. Every extractor and [`pio_to_json`] works on it
+/// `Network::to_normalized`). The result is independent of `net`; free both
+/// with [`pio_network_free`]. Every extractor and [`pio_to_json`] works on it
 /// unchanged (the handle is per unit, not MW). Returns `NULL` on error (no
 /// reference bus can be chosen, or a non-positive base MVA) and writes the
 /// message into `errbuf`.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_to_normalized(
-    case: *const PioNetwork,
+    net: *const PioNetwork,
     errbuf: *mut c_char,
     errlen: usize,
 ) -> *mut PioNetwork {
     unsafe {
-        finish_case(errbuf, errlen, "panic while normalizing", || {
-            let c = case_ref(case).ok_or_else(|| "case is NULL".to_string())?;
+        finish_network(errbuf, errlen, "panic while normalizing", || {
+            let c = network_ref(net).ok_or_else(|| "network handle is NULL".to_string())?;
             c.net.to_normalized().map_err(|e| e.to_string())
         })
     }
 }
 
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn pio_n_buses(case: *const PioNetwork) -> usize {
-    unsafe { guard(0, || case_ref(case).map_or(0, |c| c.net.buses.len())) }
+pub unsafe extern "C" fn pio_n_buses(net: *const PioNetwork) -> usize {
+    unsafe { guard(0, || network_ref(net).map_or(0, |c| c.net.buses.len())) }
 }
 
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn pio_n_branches(case: *const PioNetwork) -> usize {
-    unsafe { guard(0, || case_ref(case).map_or(0, |c| c.net.branches.len())) }
+pub unsafe extern "C" fn pio_n_branches(net: *const PioNetwork) -> usize {
+    unsafe { guard(0, || network_ref(net).map_or(0, |c| c.net.branches.len())) }
 }
 
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn pio_n_gens(case: *const PioNetwork) -> usize {
-    unsafe { guard(0, || case_ref(case).map_or(0, |c| c.net.generators.len())) }
+pub unsafe extern "C" fn pio_n_gens(net: *const PioNetwork) -> usize {
+    unsafe { guard(0, || network_ref(net).map_or(0, |c| c.net.generators.len())) }
 }
 
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn pio_base_mva(case: *const PioNetwork) -> f64 {
-    unsafe { guard(0.0, || case_ref(case).map_or(0.0, |c| c.net.base_mva)) }
+pub unsafe extern "C" fn pio_base_mva(net: *const PioNetwork) -> f64 {
+    unsafe { guard(0.0, || network_ref(net).map_or(0.0, |c| c.net.base_mva)) }
 }
 
 /// Dense `[0, n)` index of the single reference bus, or `-1` if not exactly one
@@ -275,9 +275,9 @@ pub unsafe extern "C" fn pio_base_mva(case: *const PioNetwork) -> f64 {
 /// multiple `REF` buses); use [`pio_n_reference_buses`] to tell zero from many,
 /// and [`pio_reference_buses`] to read them all.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn pio_reference_bus(case: *const PioNetwork) -> isize {
+pub unsafe extern "C" fn pio_reference_bus(net: *const PioNetwork) -> isize {
     unsafe {
-        guard(-1, || match view(case) {
+        guard(-1, || match view(net) {
             Some(v) => v
                 .reference_bus_index()
                 .map_or(-1, |i| isize::try_from(i).unwrap_or(-1)),
@@ -290,10 +290,10 @@ pub unsafe extern "C" fn pio_reference_bus(case: *const PioNetwork) -> isize {
 /// per island or several fixed reference buses in one island. A normalized case
 /// always reports `>= 1`.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn pio_n_reference_buses(case: *const PioNetwork) -> usize {
+pub unsafe extern "C" fn pio_n_reference_buses(net: *const PioNetwork) -> usize {
     unsafe {
         guard(0, || {
-            view(case).map_or(0, |v| v.reference_bus_indices().len())
+            view(net).map_or(0, |v| v.reference_bus_indices().len())
         })
     }
 }
@@ -301,10 +301,10 @@ pub unsafe extern "C" fn pio_n_reference_buses(case: *const PioNetwork) -> usize
 /// Fill `out` (length [`pio_n_reference_buses`]) with the dense `[0, n)` indices
 /// of the reference buses, ascending.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn pio_reference_buses(case: *const PioNetwork, out: *mut i64) {
+pub unsafe extern "C" fn pio_reference_buses(net: *const PioNetwork, out: *mut i64) {
     unsafe {
         guard((), || {
-            if let Some(v) = view(case) {
+            if let Some(v) = view(net) {
                 fill(
                     out,
                     v.reference_bus_indices()
@@ -317,28 +317,28 @@ pub unsafe extern "C" fn pio_reference_buses(case: *const PioNetwork, out: *mut 
 }
 
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn pio_n_components(case: *const PioNetwork) -> usize {
-    unsafe { guard(0, || view(case).map_or(0, |v| v.n_connected_components())) }
+pub unsafe extern "C" fn pio_n_components(net: *const PioNetwork) -> usize {
+    unsafe { guard(0, || view(net).map_or(0, |v| v.n_connected_components())) }
 }
 
 /// `1` if the in-service topology is a forest, else `0`.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn pio_is_radial(case: *const PioNetwork) -> i32 {
-    unsafe { guard(0, || view(case).map_or(0, |v| i32::from(v.is_radial()))) }
+pub unsafe extern "C" fn pio_is_radial(net: *const PioNetwork) -> i32 {
+    unsafe { guard(0, || view(net).map_or(0, |v| i32::from(v.is_radial()))) }
 }
 
-/// Serialize `case` to MATPOWER `.m` text (byte-exact echo when parsed from
+/// Serialize `net` to MATPOWER `.m` text (byte-exact echo when parsed from
 /// MATPOWER). Returns an owned C string; free with [`pio_string_free`]. Returns
 /// `NULL` on error and writes the message into `errbuf`.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_to_matpower(
-    case: *const PioNetwork,
+    net: *const PioNetwork,
     errbuf: *mut c_char,
     errlen: usize,
 ) -> *mut c_char {
     unsafe {
         let r = catch_unwind(AssertUnwindSafe(|| {
-            let c = case_ref(case).ok_or_else(|| "case is NULL".to_string())?;
+            let c = network_ref(net).ok_or_else(|| "network handle is NULL".to_string())?;
             Ok::<_, String>(c.net.to_matpower())
         }));
         match r {
@@ -355,14 +355,14 @@ pub unsafe extern "C" fn pio_to_matpower(
     }
 }
 
-/// Serialize `case` to format `to`.
+/// Serialize `net` to format `to`.
 ///
 /// Returns the converted text as an owned C string (free with
 /// [`pio_string_free`]), `NULL` on error. Fidelity warnings, if any, are written
 /// `\n`-joined into `warnbuf`.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_to_format(
-    case: *const PioNetwork,
+    net: *const PioNetwork,
     to: *const c_char,
     warnbuf: *mut c_char,
     warnlen: usize,
@@ -371,7 +371,7 @@ pub unsafe extern "C" fn pio_to_format(
 ) -> *mut c_char {
     unsafe {
         let r = catch_unwind(AssertUnwindSafe(|| {
-            let c = case_ref(case).ok_or_else(|| "case is NULL".to_string())?;
+            let c = network_ref(net).ok_or_else(|| "network handle is NULL".to_string())?;
             let target = target_format_from_c(to)?;
             let conv = c.net.to_format(target);
             Ok::<_, String>((conv.text, conv.warnings))
@@ -453,13 +453,13 @@ pub unsafe extern "C" fn pio_string_free(s: *mut c_char) {
 /// `errbuf`).
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_to_json(
-    case: *const PioNetwork,
+    net: *const PioNetwork,
     errbuf: *mut c_char,
     errlen: usize,
 ) -> *mut c_char {
     unsafe {
         let r = catch_unwind(AssertUnwindSafe(|| {
-            let c = case_ref(case).ok_or_else(|| "case is NULL".to_string())?;
+            let c = network_ref(net).ok_or_else(|| "network handle is NULL".to_string())?;
             c.net.to_json().map_err(|e| e.to_string())
         }));
         match r {
@@ -476,8 +476,8 @@ pub unsafe extern "C" fn pio_to_json(
     }
 }
 
-/// Rebuild a case handle from JSON produced by [`pio_to_json`]. Returns a new
-/// handle (free with [`pio_case_free`]), or `NULL` on error (message into
+/// Rebuild a network handle from JSON produced by [`pio_to_json`]. Returns a new
+/// handle (free with [`pio_network_free`]), or `NULL` on error (message into
 /// `errbuf`). The handle has no retained source, so [`pio_to_matpower`]
 /// reformats it rather than echoing a byte-exact original.
 #[unsafe(no_mangle)]
@@ -487,7 +487,7 @@ pub unsafe extern "C" fn pio_from_json(
     errlen: usize,
 ) -> *mut PioNetwork {
     unsafe {
-        finish_case(errbuf, errlen, "panic while parsing JSON", || {
+        finish_network(errbuf, errlen, "panic while parsing JSON", || {
             let json = cstr(json).ok_or_else(|| "json is NULL or not UTF-8".to_string())?;
             Network::from_json(json).map_err(|e| e.to_string())
         })
@@ -507,10 +507,10 @@ unsafe fn fill<T: Copy>(ptr: *mut T, vals: impl Iterator<Item = T>) {
 
 /// Fill `out` (length `pio_n_buses`) with the 1-based bus ids in dense order.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn pio_bus_ids(case: *const PioNetwork, out: *mut i64) {
+pub unsafe extern "C" fn pio_bus_ids(net: *const PioNetwork, out: *mut i64) {
     unsafe {
         guard((), || {
-            if let Some(c) = case_ref(case) {
+            if let Some(c) = network_ref(net) {
                 fill(
                     out,
                     c.net
@@ -529,7 +529,7 @@ pub unsafe extern "C" fn pio_bus_ids(case: *const PioNetwork, out: *mut i64) {
 /// may be `NULL` to skip.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_branches(
-    case: *const PioNetwork,
+    net: *const PioNetwork,
     from: *mut i64,
     to: *mut i64,
     r: *mut f64,
@@ -541,7 +541,7 @@ pub unsafe extern "C" fn pio_branches(
 ) {
     unsafe {
         guard((), || {
-            let Some(c) = case_ref(case) else { return };
+            let Some(c) = network_ref(net) else { return };
             let net = &c.net;
             fill(
                 from,
@@ -572,7 +572,7 @@ pub unsafe extern "C" fn pio_branches(
 /// id, the same id space as [`pio_bus_ids`]). Any pointer may be `NULL` to skip.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_gens(
-    case: *const PioNetwork,
+    net: *const PioNetwork,
     bus: *mut i64,
     pg: *mut f64,
     pmax: *mut f64,
@@ -581,7 +581,7 @@ pub unsafe extern "C" fn pio_gens(
 ) {
     unsafe {
         guard((), || {
-            let Some(c) = case_ref(case) else { return };
+            let Some(c) = network_ref(net) else { return };
             let net = &c.net;
             fill(
                 bus,
@@ -603,10 +603,10 @@ pub unsafe extern "C" fn pio_gens(
 /// Fill nodal aggregates (each length `pio_n_buses`, dense order): active and
 /// reactive demand summed per bus. Any pointer may be `NULL`.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn pio_nodal_demand(case: *const PioNetwork, pd: *mut f64, qd: *mut f64) {
+pub unsafe extern "C" fn pio_nodal_demand(net: *const PioNetwork, pd: *mut f64, qd: *mut f64) {
     unsafe {
         guard((), || {
-            if let Some(v) = view(case) {
+            if let Some(v) = view(net) {
                 fill(pd, v.pd().iter().copied());
                 fill(qd, v.qd().iter().copied());
             }
@@ -616,10 +616,10 @@ pub unsafe extern "C" fn pio_nodal_demand(case: *const PioNetwork, pd: *mut f64,
 
 /// Fill nodal shunt aggregates (each length `pio_n_buses`, dense order).
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn pio_nodal_shunt(case: *const PioNetwork, gs: *mut f64, bs: *mut f64) {
+pub unsafe extern "C" fn pio_nodal_shunt(net: *const PioNetwork, gs: *mut f64, bs: *mut f64) {
     unsafe {
         guard((), || {
-            if let Some(v) = view(case) {
+            if let Some(v) = view(net) {
                 fill(gs, v.gs().iter().copied());
                 fill(bs, v.bs().iter().copied());
             }
@@ -635,13 +635,13 @@ pub unsafe extern "C" fn pio_nodal_shunt(case: *const PioNetwork, gs: *mut f64, 
 /// `out_array` and `out_schema` are populated with owned C Data Interface
 /// structs: ownership of the Arrow buffers transfers to the caller, both
 /// `release` callbacks are non-NULL, and the caller MUST invoke each exactly
-/// once when done (skipping one leaks; the structs outlive `pio_case_free`).
+/// once when done (skipping one leaks; the structs outlive `pio_network_free`).
 /// On error (returns `-1`) the message is written into `errbuf` and the
 /// out-params are left untouched. Only built with the `arrow` cargo feature.
 #[cfg(feature = "arrow")]
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_export_arrow(
-    case: *const PioNetwork,
+    net: *const PioNetwork,
     table: i32,
     out_array: *mut arrow::ffi::FFI_ArrowArray,
     out_schema: *mut arrow::ffi::FFI_ArrowSchema,
@@ -653,7 +653,7 @@ pub unsafe extern "C" fn pio_export_arrow(
             if out_array.is_null() || out_schema.is_null() {
                 return Err("out_array or out_schema is NULL".to_string());
             }
-            let c = case_ref(case).ok_or_else(|| "case is NULL".to_string())?;
+            let c = network_ref(net).ok_or_else(|| "network handle is NULL".to_string())?;
             arrow_export::export(&c.net, table)
         }));
         match r {
@@ -729,7 +729,7 @@ mod tests {
             assert_eq!(pio_base_mva(c), 100.0);
             assert_eq!(pio_n_components(c), 1);
             assert!(pio_reference_bus(c) >= 0);
-            pio_case_free(c);
+            pio_network_free(c);
         }
     }
 
@@ -752,9 +752,9 @@ mod tests {
             assert!(null.is_null());
             assert_eq!(
                 CStr::from_ptr(err.as_ptr()).to_str().unwrap(),
-                "case is NULL"
+                "network handle is NULL"
             );
-            pio_case_free(c);
+            pio_network_free(c);
         }
     }
 
@@ -780,7 +780,7 @@ mod tests {
             // same id space as pio_bus_ids, not dense indices.
             assert!(from.iter().all(|&f| f >= 1));
             assert!(x.iter().all(|&xx| xx > 0.0));
-            pio_case_free(c);
+            pio_network_free(c);
         }
     }
 
@@ -836,7 +836,7 @@ mod tests {
             let text = CStr::from_ptr(s).to_str().unwrap();
             assert!(text.contains("\"bus\""));
             pio_string_free(s);
-            pio_case_free(c);
+            pio_network_free(c);
         }
     }
 
@@ -934,7 +934,7 @@ mod tests {
             pio_nodal_shunt(c, gs.as_mut_ptr(), bs.as_mut_ptr());
             assert!(gs.iter().chain(bs.iter()).all(|x| x.is_finite()));
 
-            pio_case_free(c);
+            pio_network_free(c);
         }
     }
 
@@ -974,7 +974,7 @@ mod tests {
                 std::ptr::null_mut(),
                 std::ptr::null_mut(),
             );
-            pio_case_free(c);
+            pio_network_free(c);
         }
     }
 
@@ -1018,8 +1018,8 @@ mpc.branch = [
             pio_reference_buses(cn, refs.as_mut_ptr());
             assert_eq!(refs, vec![0, 1]);
 
-            pio_case_free(cn);
-            pio_case_free(cs);
+            pio_network_free(cn);
+            pio_network_free(cs);
         }
     }
 
@@ -1081,8 +1081,8 @@ mpc.branch = [
             assert_eq!(pio_reference_bus(back), pio_reference_bus(c));
 
             pio_string_free(json);
-            pio_case_free(back);
-            pio_case_free(c);
+            pio_network_free(back);
+            pio_network_free(c);
         }
     }
 
@@ -1138,6 +1138,6 @@ mpc.branch = [
         assert_eq!(rc, -1);
         let msg = unsafe { CStr::from_ptr(err.as_ptr()) }.to_str().unwrap();
         assert!(!msg.is_empty(), "expected an error message");
-        unsafe { pio_case_free(c) };
+        unsafe { pio_network_free(c) };
     }
 }
