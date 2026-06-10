@@ -1,0 +1,94 @@
+name: crates.io
+
+# release-binaries.yml stages each release as a draft a human publishes, so the
+# release event fires with a user actor (events from a workflow's GITHUB_TOKEN
+# are swallowed by the recursion guard). Manual dispatch is the recovery path
+# for a missed event; both paths deploy through the crates-io environment.
+on:
+  release:
+    types: [ published ]
+  workflow_dispatch:
+
+jobs:
+  publish:
+    name: publish to crates.io
+    runs-on: ubuntu-latest
+    # Deployment protection (required reviewers, branch/tag rules) lives on the
+    # crates-io environment in the repo settings, not in this file.
+    environment: crates-io
+    permissions:
+      id-token: write  # crates.io trusted publishing; no stored token
+      contents: read
+    steps:
+      - uses: actions/checkout@v6
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Read the workspace version
+        run: |
+          set -o pipefail
+          version="$(cargo metadata --no-deps --format-version 1 \
+            | jq -er '.packages[] | select(.name == "powerio") | .version')" \
+            || { echo "could not read the powerio version from cargo metadata" >&2; exit 1; }
+          echo "VERSION=$version" >> "$GITHUB_ENV"
+      - name: Check the publish list against the workspace
+        # A publishable crate added to the workspace without updating the list
+        # in the publish step would silently never ship; fail here instead.
+        run: |
+          set -o pipefail
+          actual="$(cargo metadata --no-deps --format-version 1 \
+            | jq -r '[.packages[] | select(.publish == null) | .name] | sort | join(" ")')"
+          if [ "$actual" != "powerio powerio-cli powerio-matrix" ]; then
+            echo "publishable workspace members ($actual) do not match the publish list in crates.yml" >&2
+            exit 1
+          fi
+      - name: Check the ref against the workspace version
+        env:
+          RELEASE_TAG: ${{ github.event.release.tag_name }}
+        # On a release event the tag must match the workspace version. On
+        # dispatch the version must at least be tagged, so a stray version bump
+        # on a branch cannot publish an untagged version; content drift between
+        # the dispatched ref and the tag is what the environment reviewer is
+        # approving.
+        run: |
+          if [ -n "$RELEASE_TAG" ]; then
+            if [ "v$VERSION" != "$RELEASE_TAG" ]; then
+              echo "release tag $RELEASE_TAG does not match workspace version $VERSION" >&2
+              exit 1
+            fi
+          else
+            git ls-remote --exit-code --tags origin "refs/tags/v$VERSION" >/dev/null \
+              || { echo "v$VERSION is not a tag; tag the release before dispatching" >&2; exit 1; }
+          fi
+      - uses: rust-lang/crates-io-auth-action@v1
+        id: auth
+      - name: Publish in dependency order
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ steps.auth.outputs.token }}
+          # crates.io's data access policy 403s requests without an
+          # identifying User-Agent (curl's default is blocked).
+          UA: powerio release workflow (https://github.com/eigenergy/powerio)
+        # `cargo publish` blocks until the published crate is live in the
+        # index, so each dependent resolves its predecessor. Versions already
+        # in the index are skipped (the analog of pypi-publish's
+        # skip-existing), so a re-run after a partial publish only publishes
+        # what's missing.
+        run: |
+          for crate in powerio powerio-matrix powerio-cli; do
+            resp="$RUNNER_TEMP/$crate.json"
+            code="$(curl -sS -A "$UA" --max-time 30 -o "$resp" -w '%{http_code}' \
+              "https://crates.io/api/v1/crates/$crate/$VERSION")" || code=unreachable
+            case "$code" in
+              200)
+                if jq -e '.version.yanked' "$resp" >/dev/null; then
+                  echo "$crate $VERSION is on crates.io but yanked; un-yank it or bump the version" >&2
+                  exit 1
+                fi
+                echo "$crate $VERSION is already on crates.io; skipping"
+                continue ;;
+              404) ;;  # not published; fall through to cargo publish
+              *)
+                echo "crates.io returned $code for $crate $VERSION; re-run once it is reachable" >&2
+                exit 1 ;;
+            esac
+            cargo publish -p "$crate"
+          done
