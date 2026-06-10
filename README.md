@@ -22,6 +22,12 @@ Supported formats:
 - [GridFM](https://github.com/gridfm) `.parquet` (WIP)
 - [surge](https://github.com/amptimal/surge) `.surge.json` (WIP)
 
+Distribution formats, in wire coordinates via [`powerio-dist`](powerio-dist/):
+
+- [OpenDSS](https://www.epri.com/pages/sa/opendss) `.dss`
+- [PowerModelsDistribution.jl](https://github.com/lanl-ansi/PowerModelsDistribution.jl) ENGINEERING JSON
+- the draft [BMOPF task force](https://github.com/frederikgeth/bmopf-report) JSON schema
+
 When writing back to the source format, PowerIO **returns the original file exactly** when the parser
 retained it. Cross format conversion obeys sane defaults, and emits `Conversion::warnings` for fields the
 target format cannot represent.
@@ -39,6 +45,7 @@ target format cannot represent.
 ```
 powerio          parser, Network model, source retaining writers, converters
 powerio-matrix   sparse matrices, DC sensitivity factors, graph views
+powerio-dist     multiconductor distribution model, dss/PMD/BMOPF converters
 powerio-cli      the `powerio` command and ratatui TUI
 powerio-py       PyO3 extension for the Python `powerio` package
 powerio-capi     C ABI for C, C++, Julia, and other foreign function interfaces
@@ -121,6 +128,8 @@ powerio
 `partial` means the target lacks fields present in the source. The writer reports
 those cases in `Conversion::warnings`. Known limits are documented in
 [docs/format-fidelity.md](https://github.com/eigenergy/powerio/blob/main/docs/format-fidelity.md).
+The distribution matrix (dss, PMD JSON, BMOPF JSON, per fixture) is generated into
+[powerio-dist/docs/conversion-matrix.md](https://github.com/eigenergy/powerio/blob/main/powerio-dist/docs/conversion-matrix.md).
 
 ## Matrices
 
