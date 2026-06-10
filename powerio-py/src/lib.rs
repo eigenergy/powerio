@@ -619,6 +619,20 @@ fn convert_file(path: &str, to: &str, from_: Option<&str>) -> PyResult<(String, 
     Ok((conv.text, conv.warnings))
 }
 
+/// Convert in-memory case `text` to another format through the neutral hub,
+/// with no file staging. Returns `(text, warnings)` like `convert_file`.
+/// `format` names the input format (default `matpower`).
+#[pyfunction]
+#[pyo3(signature = (text, to, format=None))]
+fn convert_str(text: &str, to: &str, format: Option<&str>) -> PyResult<(String, Vec<String>)> {
+    let target = to
+        .parse::<powerio_matrix::TargetFormat>()
+        .map_err(to_pyerr)?;
+    let conv = powerio_matrix::convert_str(text, target, format.unwrap_or("matpower"))
+        .map_err(to_pyerr)?;
+    Ok((conv.text, conv.warnings))
+}
+
 /// Build a `{dir, files}` dict from an outputs directory and its written files.
 /// Shared by the DC OPF and gridfm write paths. Paths go through [`path_to_str`]
 /// (so a non-UTF8 path raises instead of being mangled).
@@ -690,6 +704,7 @@ fn _powerio(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(parse_str, m)?)?;
     m.add_function(wrap_pyfunction!(from_json, m)?)?;
     m.add_function(wrap_pyfunction!(convert_file, m)?)?;
+    m.add_function(wrap_pyfunction!(convert_str, m)?)?;
     // Whether the gridfm Parquet surface (arrow/parquet) was compiled in, so the
     // pure-Python layer can raise an ImportError instead of an AttributeError.
     m.add("_has_gridfm", cfg!(feature = "gridfm"))?;
