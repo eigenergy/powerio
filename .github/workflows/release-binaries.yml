@@ -104,3 +104,8 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           files: libpowerio_capi.${{ matrix.triplet }}.tar.gz
+          # Stage the release as a draft a human publishes: the release event
+          # then has a user actor, so it actually triggers python.yml (the
+          # GITHUB_TOKEN recursion guard swallows bot-published events), and
+          # nothing ships until the maintainer clicks publish.
+          draft: true

@@ -152,7 +152,10 @@ jobs:
 
   publish:
     name: publish to PyPI
-    if: github.event_name == 'release'
+    # Releases created by workflows (the GITHUB_TOKEN recursion guard) never
+    # fire the release event, so manual dispatch is the recovery path; the
+    # pypi environment's deployment rules still gate both.
+    if: github.event_name == 'release' || github.event_name == 'workflow_dispatch'
     needs: [ lint, test, test-gridfm, wheels, sdist ]
     runs-on: ubuntu-latest
     # Protect this environment with required reviewers before launch.
@@ -174,3 +177,6 @@ jobs:
       - uses: pypa/gh-action-pypi-publish@release/v1
         with:
           packages-dir: dist
+          # A partially failed upload (e.g. wheels in, sdist rejected) is
+          # recovered by re-running; already-uploaded files are skipped.
+          skip-existing: true

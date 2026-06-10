@@ -59,3 +59,11 @@ module-name = "powerio._powerio"
 python-source = "python"
 features = ["extension-module", "gridfm"]
 strip = true
+# maturin resolves the workspace-root license files into the wheel and the
+# package metadata, but does not copy them into the sdist on its own (the
+# manifest lives in the powerio-py subcrate); without these, PyPI rejects the
+# sdist for declaring a License-File it doesn't carry.
+include = [
+    { path = "LICENSE-APACHE", format = "sdist" },
+    { path = "LICENSE-MIT", format = "sdist" },
+]
