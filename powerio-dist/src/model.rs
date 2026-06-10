@@ -35,6 +35,17 @@ pub struct DistBus {
     pub terminals: Vec<String>,
     /// Terminals tied to ground with zero impedance.
     pub grounded: Vec<String>,
+    /// Voltage magnitude bounds, volts: the scalar pair plus the phase to
+    /// neutral, phase to phase, and symmetrical component families (the
+    /// four BMOPF bound families).
+    pub v_min: Option<f64>,
+    pub v_max: Option<f64>,
+    pub vpn_min: Option<Vec<f64>>,
+    pub vpn_max: Option<Vec<f64>>,
+    pub vpp_min: Option<Vec<f64>>,
+    pub vpp_max: Option<Vec<f64>>,
+    pub vsym_min: Option<Vec<f64>>,
+    pub vsym_max: Option<Vec<f64>>,
     pub extras: Extras,
 }
 

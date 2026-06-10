@@ -11,4 +11,10 @@ pub enum Error {
         #[source]
         source: std::io::Error,
     },
+
+    #[error("malformed {format} JSON: {message}")]
+    Json {
+        format: &'static str,
+        message: String,
+    },
 }

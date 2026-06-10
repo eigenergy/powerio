@@ -163,8 +163,7 @@ fn finish_buses(mut rd: Reader, raw: &RawDss) -> DistNetwork {
         let mut bus = DistBus {
             id: st.display.clone(),
             terminals: terminals.iter().map(ToString::to_string).collect(),
-            grounded: Vec::new(),
-            extras: Extras::new(),
+            ..DistBus::default()
         };
         if st.nodes.contains(&0) {
             bus.terminals.push("0".to_string());

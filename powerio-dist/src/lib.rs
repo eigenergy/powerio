@@ -13,10 +13,14 @@
 //! cross-format conversion reports each field the target cannot represent.
 //! Nothing drops silently.
 
+pub mod bmopf;
+pub mod convert;
 pub mod dss;
 pub mod error;
 pub mod model;
 
+pub use bmopf::{parse_bmopf_file, parse_bmopf_str, write_bmopf_json};
+pub use convert::Conversion;
 pub use dss::{parse_dss_file, parse_dss_str};
 pub use error::{Error, Result};
 pub use model::{
