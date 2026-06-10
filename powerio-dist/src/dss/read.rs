@@ -559,6 +559,7 @@ impl Reader<'_> {
         // and downstream writers need the unscaled base.
         let mut extras = extras_from_leftovers(&props);
         extras.insert("basekv".into(), basekv.into());
+        extras.insert("angle".into(), angle_deg.into());
         if (pu - 1.0).abs() > 0.0 {
             extras.insert("pu".into(), pu.into());
         }
@@ -669,10 +670,8 @@ impl Reader<'_> {
             std::f64::consts::TAU * self.net.base_frequency * 1e-9 / length_factor / 2.0,
         );
         let zero = vec![vec![0.0; phases]; phases];
-        let i_max = props
-            .get("emergamps")
-            .and_then(|v| v.to_f64(Some(self.vars)).ok())
-            .map(|a| vec![a; phases]);
+        let amps = self.f64_or(props, "emergamps", "line", line_name, dd::line::EMERGAMPS);
+        let i_max = Some(vec![amps; phases]);
         let name = format!("_line_{line_name}");
         self.net.linecodes.push(DistLineCode {
             name: name.clone(),
@@ -699,10 +698,7 @@ impl Reader<'_> {
             v.text.to_ascii_lowercase().starts_with('d') || v.text.eq_ignore_ascii_case("ll")
         });
         let kw = self.f64_or(&props, "kw", "load", &obj.name, dd::load::KW);
-        if self.f64_prop(props.get("kv")).is_none() {
-            self.defaulted("load", &obj.name, "kv");
-            props.consumed.borrow_mut().push("kv");
-        }
+        let kv = self.f64_or(&props, "kv", "load", &obj.name, dd::load::KV);
         let kvar = self.f64_prop(props.get("kvar"));
         let q_total = if let Some(q) = kvar {
             q
@@ -737,11 +733,17 @@ impl Reader<'_> {
         };
 
         // kv is the load's own base and model its dss load model code;
-        // both ride in extras for the writers, while the typed fields hold
-        // explicit power per phase.
+        // both ride in extras for the writers (the kv default materializes
+        // here like every other constructor default), while the typed
+        // fields hold explicit power per phase.
         let mut extras = extras_from_leftovers(&props);
-        if let Some(kv) = props.by_name.get("kv") {
-            extras.insert("kv".into(), kv.text.clone().into());
+        match props.by_name.get("kv") {
+            Some(written) => {
+                extras.insert("kv".into(), written.text.clone().into());
+            }
+            None => {
+                extras.insert("kv".into(), kv.into());
+            }
         }
         if model != 1 {
             extras.insert("model".into(), model.into());
@@ -950,7 +952,11 @@ impl Reader<'_> {
         for (i, row) in b.iter_mut().enumerate().take(phases) {
             row[i] = b_phase;
         }
-        let extras = extras_from_leftovers(&props);
+        // The written pair regenerates verbatim in the dss writer; the b
+        // matrix is the model truth either way.
+        let mut extras = extras_from_leftovers(&props);
+        extras.insert("kv".into(), kv.into());
+        extras.insert("kvar".into(), kvar.into());
         self.net.shunts.push(DistShunt {
             name: obj.name.clone(),
             bus: spec.name,
@@ -987,9 +993,7 @@ impl Reader<'_> {
                 dd::generator::KVAR
             }
         };
-        if self.f64_prop(props.get("kv")).is_none() {
-            self.defaulted("generator", &obj.name, "kv");
-        }
+        let kv = self.f64_or(&props, "kv", "generator", &obj.name, dd::generator::KV);
         let maxkvar = self.f64_prop(props.get("maxkvar"));
         let minkvar = self.f64_prop(props.get("minkvar"));
 
@@ -1002,6 +1006,15 @@ impl Reader<'_> {
         let map = self.terminals(&spec, phases, nconds, nconds);
 
         let per_phase = |total_kw: f64| vec![total_kw * 1e3 / phases as f64; phases];
+        let mut extras = extras_from_leftovers(&props);
+        match props.by_name.get("kv") {
+            Some(written) => {
+                extras.insert("kv".into(), written.text.clone().into());
+            }
+            None => {
+                extras.insert("kv".into(), kv.into());
+            }
+        }
         DistGenerator {
             name: obj.name.clone(),
             bus: spec.name,
@@ -1020,7 +1033,7 @@ impl Reader<'_> {
             q_min: minkvar.map(per_phase),
             q_max: maxkvar.map(per_phase),
             cost: None,
-            extras: extras_from_leftovers(&props),
+            extras,
         }
     }
 

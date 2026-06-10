@@ -11,7 +11,9 @@ pub mod prop;
 pub mod raw;
 pub mod read;
 mod rpn;
+mod write;
 
 pub use lex::{BusSpec, Param, Scanner, Value, VarMap};
 pub use raw::{BusCoord, RawCommand, RawDss, RawObject, RawProp, parse_raw_file, parse_raw_with};
 pub use read::{network_from_raw, parse_dss_file, parse_dss_str};
+pub use write::write_dss;
