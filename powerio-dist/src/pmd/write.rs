@@ -75,6 +75,21 @@ impl Writer {
         self.warnings.push(msg.into());
     }
 
+    /// Reports extras the ENGINEERING model has no field for. `consumed`
+    /// names keys a field already represents; `pmd_*` bookkeeping and the
+    /// BMOPF subtype marker pass silently.
+    fn extras_dropped(&mut self, extras: &crate::model::Extras, consumed: &[&str], what: &str) {
+        for key in extras.keys() {
+            if consumed.contains(&key.as_str()) || key.starts_with("pmd_") || key == "bmopf_subtype"
+            {
+                continue;
+            }
+            self.warn(format!(
+                "{what}: `{key}` has no ENGINEERING field; dropped from the output"
+            ));
+        }
+    }
+
     fn extras_f64(extras: &crate::model::Extras, key: &str) -> Option<f64> {
         extras.get(key).and_then(|v| {
             v.as_f64()
@@ -229,6 +244,7 @@ impl Writer {
                     "source_id".into(),
                     json!(format!("line.{}", l.name.to_lowercase())),
                 );
+                self.extras_dropped(&l.extras, &["units"], &what);
                 lines.insert(l.name.to_lowercase(), Value::Object(o));
             }
             doc.insert("line".into(), Value::Object(lines));
@@ -276,6 +292,7 @@ impl Writer {
                     "source_id".into(),
                     json!(format!("line.{}", s.name.to_lowercase())),
                 );
+                self.extras_dropped(&s.extras, &[], &what);
                 switches.insert(s.name.to_lowercase(), Value::Object(o));
             }
             doc.insert("switch".into(), Value::Object(switches));
@@ -330,6 +347,7 @@ impl Writer {
                     "source_id".into(),
                     json!(format!("load.{}", l.name.to_lowercase())),
                 );
+                self.extras_dropped(&l.extras, &["kv", "model", "pf"], &what);
                 loads.insert(l.name.to_lowercase(), Value::Object(o));
             }
             doc.insert("load".into(), Value::Object(loads));
@@ -380,6 +398,7 @@ impl Writer {
                     "source_id".into(),
                     json!(format!("generator.{}", g.name.to_lowercase())),
                 );
+                self.extras_dropped(&g.extras, &["kv"], &what);
                 gens.insert(g.name.to_lowercase(), Value::Object(o));
             }
             doc.insert("generator".into(), Value::Object(gens));
@@ -409,6 +428,7 @@ impl Writer {
                     "source_id".into(),
                     json!(format!("capacitor.{}", s.name.to_lowercase())),
                 );
+                self.extras_dropped(&s.extras, &["kv", "kvar"], &what);
                 shunts.insert(s.name.to_lowercase(), Value::Object(o));
             }
             doc.insert("shunt".into(), Value::Object(shunts));
@@ -462,6 +482,26 @@ impl Writer {
         o.insert(
             "source_id".into(),
             json!(format!("vsource.{}", vs.name.to_lowercase())),
+        );
+        // The short circuit form (basekv/pu/angle/MVAsc/X-R ratios) is
+        // represented by vm/va and the Thevenin matrices.
+        self.extras_dropped(
+            &vs.extras,
+            &[
+                "basekv",
+                "pu",
+                "angle",
+                "mvasc1",
+                "mvasc3",
+                "x1r1",
+                "x0r0",
+                "rs",
+                "xs",
+                "isc1",
+                "isc3",
+                "configuration",
+            ],
+            &what,
         );
         Value::Object(o)
     }
@@ -567,6 +607,11 @@ impl Writer {
         o.insert(
             "source_id".into(),
             json!(format!("transformer.{}", t.name.to_lowercase())),
+        );
+        self.extras_dropped(
+            &t.extras,
+            &["controls", "%loadloss", "%noloadloss", "%imag", "emerghkva"],
+            &what,
         );
         Value::Object(o)
     }

@@ -339,26 +339,37 @@ impl Reader<'_> {
                 terminal_map_to: ints_as_strings(o.get("t_connections")),
                 open: o.get("state").and_then(Value::as_str) == Some("OPEN"),
                 i_max: floats("cm_ub", o.get("cm_ub")),
-                extras: take_extras(
-                    o,
-                    &[
-                        "f_bus",
-                        "t_bus",
-                        "f_connections",
-                        "t_connections",
-                        "state",
-                        "cm_ub",
-                        "status",
-                        "source_id",
-                        "dispatchable",
-                        "rs",
-                        "xs",
-                        "g_fr",
-                        "g_to",
-                        "b_fr",
-                        "b_to",
-                    ],
-                ),
+                extras: {
+                    let mut extras = take_extras(
+                        o,
+                        &[
+                            "f_bus",
+                            "t_bus",
+                            "f_connections",
+                            "t_connections",
+                            "state",
+                            "cm_ub",
+                            "status",
+                            "source_id",
+                            "dispatchable",
+                            "rs",
+                            "xs",
+                            "g_fr",
+                            "g_to",
+                            "b_fr",
+                            "b_to",
+                        ],
+                    );
+                    // The series matrices ride along raw so a dss
+                    // regeneration can override the engine's switch dummy
+                    // impedance with the real one.
+                    for key in ["rs", "xs"] {
+                        if let Some(m) = o.get(key) {
+                            extras.insert(format!("pmd_{key}"), m.clone());
+                        }
+                    }
+                    extras
+                },
             });
         }
     }

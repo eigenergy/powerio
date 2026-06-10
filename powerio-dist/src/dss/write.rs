@@ -410,7 +410,35 @@ impl DssWriter {
             if let Some(i_max) = &sw.i_max {
                 let _ = write!(s, " emergamps={}", num(i_max[0]));
             }
-            s.push_str(&self.extras_tail("line", &sw.name, &sw.extras));
+            // A switch that came through the ENGINEERING model carries its
+            // total series matrices; sequence overrides reproduce them over
+            // the forced 0.001 length (the engine's switch dummy values
+            // would otherwise apply).
+            let mut extras = sw.extras.clone();
+            let seq_per_len =
+                |key: &str, extras: &mut crate::model::Extras| -> Option<(f64, f64)> {
+                    let m = extras.remove(key)?;
+                    let row = m.as_array()?.first()?.as_array()?;
+                    let self_v = row.first()?.as_f64()?;
+                    let mutual = row
+                        .get(1)
+                        .and_then(serde_json::Value::as_f64)
+                        .unwrap_or(0.0);
+                    Some(((self_v - mutual) / 0.001, (self_v + 2.0 * mutual) / 0.001))
+                };
+            let r = seq_per_len("pmd_rs", &mut extras);
+            let x = seq_per_len("pmd_xs", &mut extras);
+            if let (Some((r1, r0)), Some((x1, x0))) = (r, x) {
+                let _ = write!(
+                    s,
+                    " c0=0 c1=0 r0={} r1={} x0={} x1={}",
+                    num(r0),
+                    num(r1),
+                    num(x0),
+                    num(x1)
+                );
+            }
+            s.push_str(&self.extras_tail("line", &sw.name, &extras));
             self.line_out(&s);
             self.line_out(&format!(
                 "New SwtControl.{}_state SwitchedObj=Line.{} Action={}",
