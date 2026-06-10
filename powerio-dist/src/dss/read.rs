@@ -700,10 +700,16 @@ impl Reader<'_> {
         let kw = self.f64_or(&props, "kw", "load", &obj.name, dd::load::KW);
         let kv = self.f64_or(&props, "kv", "load", &obj.name, dd::load::KV);
         let kvar = self.f64_prop(props.get("kvar"));
+        // When q derives from the power factor, the source pf rides in
+        // extras so the dss writer can emit pf= and let the engine do its
+        // own trigonometry; transcendental rounding across implementations
+        // would otherwise leak into regenerated cases.
+        let mut pf_source: Option<f64> = None;
         let q_total = if let Some(q) = kvar {
             q
         } else {
             let pf = self.f64_or(&props, "pf", "load", &obj.name, dd::load::PF);
+            pf_source = Some(pf);
             kw * (pf.acos().tan()).copysign(pf)
         };
         let model = self
@@ -744,6 +750,9 @@ impl Reader<'_> {
             None => {
                 extras.insert("kv".into(), kv.into());
             }
+        }
+        if let Some(pf) = pf_source {
+            extras.insert("pf".into(), pf.into());
         }
         if model != 1 {
             extras.insert("model".into(), model.into());
@@ -822,6 +831,18 @@ impl Reader<'_> {
                     }
                     Err(e) => self.warn(format!("transformer {}: {name}: {e}", obj.name)),
                 },
+                "%loadloss" => {
+                    // The engine splits load loss across the first two
+                    // windings: %R each = %loadloss / 2 (Transformer.cpp,
+                    // property 26). The written value also rides in extras
+                    // for the canonical echo.
+                    if let Some(ll) = self.f64_prop(Some(v)) {
+                        for w in windings.iter_mut().take(2) {
+                            w.r_pct = ll / 2.0;
+                        }
+                    }
+                    extras.insert("%loadloss".to_string(), v.text.clone().into());
+                }
                 "xhl" | "x12" => {
                     xhl = self.f64_prop(Some(v)).unwrap_or(xhl);
                     xhl_specified = true;

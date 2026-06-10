@@ -314,6 +314,31 @@ impl DssWriter {
             extras.remove("basekv");
             extras.remove("pu");
             extras.remove("angle");
+            // A source that came through the ENGINEERING model carries its
+            // Thevenin impedance as rs/xs matrices; sequence values
+            // reconstruct exactly (z1 = self - mutual, z0 = self + 2 mutual).
+            let take_seq = |key: &str, extras: &mut crate::model::Extras| -> Option<(f64, f64)> {
+                let m = extras.remove(key)?;
+                let row = m.as_array()?.first()?.as_array()?;
+                let self_v = row.first()?.as_f64()?;
+                let mutual = row
+                    .get(1)
+                    .and_then(serde_json::Value::as_f64)
+                    .unwrap_or(0.0);
+                Some((self_v - mutual, self_v + 2.0 * mutual))
+            };
+            let r = take_seq("rs", &mut extras);
+            let x = take_seq("xs", &mut extras);
+            if let (Some((r1, r0)), Some((x1, x0))) = (r, x) {
+                let _ = write!(
+                    s,
+                    " Z1=({}, {}) Z0=({}, {})",
+                    num(r1),
+                    num(x1),
+                    num(r0),
+                    num(x0)
+                );
+            }
             s.push_str(&self.extras_tail("vsource", &vs.name, &extras));
             self.line_out(&s);
         }
@@ -452,13 +477,18 @@ impl DssWriter {
             let kv = self.element_kv(&l.extras, &l.bus, phases, l.configuration, &l.name, "load");
             let mut extras = l.extras.clone();
             extras.remove("kv");
+            // q that came from a power factor goes back as pf=, so the
+            // engine recomputes its own kvar bit for bit.
+            let reactive = match extras.remove("pf").and_then(|v| v.as_f64()) {
+                Some(pf) => format!("pf={}", num(pf)),
+                None => format!("kvar={}", num(kvar)),
+            };
             let mut s = format!(
-                "New Load.{} bus1={} phases={phases} conn={conn} kv={} kw={} kvar={}",
+                "New Load.{} bus1={} phases={phases} conn={conn} kv={} kw={} {reactive}",
                 l.name,
                 self.bus_ref(&l.bus, &l.terminal_map),
                 num(kv),
                 num(kw),
-                num(kvar),
             );
             s.push_str(&self.extras_tail("load", &l.name, &extras));
             self.line_out(&s);

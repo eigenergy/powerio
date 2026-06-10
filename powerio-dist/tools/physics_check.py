@@ -41,7 +41,10 @@ def solve(path):
     lines = text.splitlines()
     for i, line in enumerate(lines):
         if line.lower().lstrip().startswith("new circuit"):
+            # Tight solver tolerance: the default 1e-4 pu would swamp the
+            # 1e-8 conversion bound with convergence noise.
             lines.insert(i + 1, "Set Controlmode=OFF")
+            lines.insert(i + 2, "Set tolerance=0.0000000001")
             break
     staged = os.path.join(os.path.dirname(os.path.abspath(path)), "_staged_" + os.path.basename(path))
     with open(staged, "w") as f:
