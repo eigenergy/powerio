@@ -13,6 +13,7 @@
 //! cross-format conversion reports each field the target cannot represent.
 //! Nothing drops silently.
 
+pub mod dss;
 pub mod error;
 
 pub use error::{Error, Result};
