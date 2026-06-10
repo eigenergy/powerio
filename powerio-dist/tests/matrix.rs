@@ -36,11 +36,20 @@ impl Fmt {
     fn parse(self, text: &str) -> Result<DistNetwork> {
         match self {
             Fmt::Dss => {
+                // Unique path per call: the harness tests run in parallel
+                // threads and must not race on a shared temp file.
+                use std::sync::atomic::{AtomicU64, Ordering};
+                static COUNTER: AtomicU64 = AtomicU64::new(0);
                 let dir = std::env::temp_dir().join("powerio-dist-matrix");
                 std::fs::create_dir_all(&dir).unwrap();
-                let path = dir.join("roundtrip.dss");
+                let path = dir.join(format!(
+                    "roundtrip-{}.dss",
+                    COUNTER.fetch_add(1, Ordering::Relaxed)
+                ));
                 std::fs::write(&path, text).unwrap();
-                powerio_dist::dss::parse_dss_file(&path)
+                let parsed = powerio_dist::dss::parse_dss_file(&path);
+                let _ = std::fs::remove_file(&path);
+                parsed
             }
             Fmt::Bmopf => parse_bmopf_str(text),
             Fmt::Pmd => parse_pmd_str(text),

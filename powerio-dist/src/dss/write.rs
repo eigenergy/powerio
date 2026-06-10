@@ -137,15 +137,23 @@ impl DssWriter {
     }
 
     /// `bus.1.2.0` syntax: terminals in the bus's perfectly grounded set
-    /// emit as node 0, the inverse of the reader's neutral naming.
-    fn bus_ref(&self, bus: &str, map: &[String]) -> String {
-        let grounded = self.grounded.get(&bus.to_ascii_lowercase());
+    /// emit as node 0, the inverse of the reader's neutral naming. dss
+    /// nodes are integers; a non numeric terminal name cannot survive the
+    /// trip and is reported.
+    fn bus_ref(&mut self, bus: &str, map: &[String]) -> String {
+        let grounded = self.grounded.get(&bus.to_ascii_lowercase()).cloned();
         let nodes: Vec<String> = map
             .iter()
             .map(|t| {
-                if grounded.is_some_and(|g| g.contains(t)) {
+                if grounded.as_ref().is_some_and(|g| g.contains(t)) {
                     "0".to_string()
                 } else {
+                    if t.parse::<u32>().is_err() {
+                        self.warn(format!(
+                            "bus {bus}: terminal `{t}` is not a dss node number; \
+                             emitted as written"
+                        ));
+                    }
                     t.clone()
                 }
             })

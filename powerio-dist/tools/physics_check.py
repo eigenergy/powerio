@@ -50,11 +50,13 @@ def solve(path):
     with open(staged, "w") as f:
         f.write("\n".join(lines) + "\n")
 
-    dss.Text.Command("Clear")
-    dss.Text.Command(f'Redirect "{os.path.abspath(staged)}"')
-    dss.Text.Command("Set Controlmode=OFF")
-    dss.Text.Command("Solve")
-    os.unlink(staged)
+    try:
+        dss.Text.Command("Clear")
+        dss.Text.Command(f'Redirect "{os.path.abspath(staged)}"')
+        dss.Text.Command("Set Controlmode=OFF")
+        dss.Text.Command("Solve")
+    finally:
+        os.unlink(staged)
     if not dss.Solution.Converged():
         return None
     volts = {}
