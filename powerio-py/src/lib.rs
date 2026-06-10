@@ -32,8 +32,9 @@ use powerio_matrix::{IndexCore, IndexedNetwork, Network};
 
 #[cfg(feature = "gridfm")]
 use powerio_matrix::io::gridfm::{
-    GridfmOptions, GridfmOutputs, numbered_snapshots, write_gridfm_batch as gridfm_write_batch,
-    write_gridfm_dataset as gridfm_write_dataset,
+    GridfmOptions, GridfmOutputs, GridfmRead, numbered_snapshots,
+    read_gridfm_dataset as gridfm_read_dataset, read_gridfm_scenarios as gridfm_read_scenarios,
+    write_gridfm_batch as gridfm_write_batch, write_gridfm_dataset as gridfm_write_dataset,
 };
 
 pyo3::create_exception!(
@@ -679,6 +680,49 @@ fn write_gridfm_batch<'py>(
     gridfm_outputs_to_dict(py, &outputs)
 }
 
+/// Turn a [`GridfmRead`] into the `(case, scenario, warnings)` triple the Python
+/// `read_gridfm*` functions return: the reconstructed network wrapped as a
+/// `PyCase` (with its index core, exactly as `parse_file` does), the scenario id,
+/// and the fidelity warnings the lossy read surfaced.
+#[cfg(feature = "gridfm")]
+fn gridfm_read_to_py(read: GridfmRead) -> (PyCase, i64, Vec<String>) {
+    let core = IndexCore::build(&read.network);
+    (
+        PyCase {
+            inner: read.network,
+            core,
+        },
+        read.scenario,
+        read.warnings,
+    )
+}
+
+/// Read one scenario of a gridfm-datakit Parquet dataset back into a case,
+/// returning `(case, scenario, warnings)` (the pure-Python layer wraps it as a
+/// `GridfmRead` namedtuple). `dir` resolves leniently: the `raw/` leaf, a
+/// `<case>/` directory, or a parent with one `*/raw/` child. The read is lossy but
+/// power-flow-complete; `warnings` lists what the gridfm schema couldn't
+/// round-trip. Available when the extension is built with the Rust `gridfm` feature.
+#[cfg(feature = "gridfm")]
+#[pyfunction]
+#[pyo3(signature = (dir, scenario=0))]
+fn read_gridfm(dir: &str, scenario: i64) -> PyResult<(PyCase, i64, Vec<String>)> {
+    gridfm_read_dataset(dir, scenario)
+        .map(gridfm_read_to_py)
+        .map_err(to_pyerr)
+}
+
+/// Read every scenario of a gridfm dataset, one `(case, scenario, warnings)`
+/// triple per scenario id (ascending) over the shared topology — the read side of
+/// the scenario batch. Available when the extension is built with the Rust
+/// `gridfm` feature.
+#[cfg(feature = "gridfm")]
+#[pyfunction]
+fn read_gridfm_scenarios(dir: &str) -> PyResult<Vec<(PyCase, i64, Vec<String>)>> {
+    let reads = gridfm_read_scenarios(dir).map_err(to_pyerr)?;
+    Ok(reads.into_iter().map(gridfm_read_to_py).collect())
+}
+
 #[pymodule]
 fn _powerio(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add("__version__", env!("CARGO_PKG_VERSION"))?;
@@ -695,5 +739,9 @@ fn _powerio(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add("_has_gridfm", cfg!(feature = "gridfm"))?;
     #[cfg(feature = "gridfm")]
     m.add_function(wrap_pyfunction!(write_gridfm_batch, m)?)?;
+    #[cfg(feature = "gridfm")]
+    m.add_function(wrap_pyfunction!(read_gridfm, m)?)?;
+    #[cfg(feature = "gridfm")]
+    m.add_function(wrap_pyfunction!(read_gridfm_scenarios, m)?)?;
     Ok(())
 }

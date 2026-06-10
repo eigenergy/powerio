@@ -84,6 +84,11 @@ class YbusParts(NamedTuple):
     g: Any  # scipy.sparse.csr_matrix, Re(Y_bus)
     b: Any  # scipy.sparse.csr_matrix, Im(Y_bus)
 
+class GridfmRead(NamedTuple):
+    network: "Network"
+    scenario: int
+    warnings: List[str]
+
 class DenseBranch(NamedTuple):
     from_id: Any  # numpy.ndarray
     to_id: Any  # numpy.ndarray
@@ -202,3 +207,5 @@ def write_gridfm_batch(
     include_taps: bool = ...,
     include_shifts: bool = ...,
 ) -> GridfmOutputs: ...
+def read_gridfm(dir: Any, scenario: int = ...) -> GridfmRead: ...
+def read_gridfm_scenarios(dir: Any) -> List[GridfmRead]: ...

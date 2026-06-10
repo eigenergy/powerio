@@ -177,6 +177,8 @@ case — but not original bus ids (synthesized `1..n`), per-element load/shunt
 granularity (folded one per bus), piecewise/cubic costs, or HVDC/storage. What it
 can't recover is returned as a warnings list. `--scenario N` picks one scenario
 from a batch; the directory argument accepts the `raw/`, `<case>/`, or parent dir.
+From Python, `pio.read_gridfm(dir)` and `pio.read_gridfm_scenarios(dir)` return a
+`GridfmRead(network, scenario, warnings)`.
 
 ### C ABI
 

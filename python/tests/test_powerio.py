@@ -565,6 +565,8 @@ def test_gridfm_absent_raises_clean_importerror(case9, tmp_path):
         pytest.skip("extension built with gridfm; the absent-path is not exercised")
     with pytest.raises(ImportError, match="gridfm"):
         case9.write_gridfm(str(tmp_path))
+    with pytest.raises(ImportError, match="gridfm"):
+        powerio.read_gridfm(str(tmp_path))
 
 
 @gridfm_only
@@ -625,7 +627,73 @@ def test_gridfm_batch_stacks_and_keys_by_scenario(tmp_path):
 
 
 @gridfm_only
+def test_read_gridfm_round_trips(case9, tmp_path):
+    # write → read back: the recovered Network mirrors the source's element counts
+    # and base_mva, surfaces fidelity warnings, sets source_format Gridfm, and is
+    # runnable (serializes to MATPOWER and re-parses).
+    out = case9.write_gridfm(str(tmp_path))
+    r = powerio.read_gridfm(out["dir"])
+    assert isinstance(r.network, powerio.Network)
+    assert r.scenario == 0
+    assert r.warnings and all(isinstance(w, str) for w in r.warnings)
+    net = r.network
+    assert (net.n_buses, net.n_branches, net.n_gens) == (
+        case9.n_buses,
+        case9.n_branches,
+        case9.n_gens,
+    )
+    assert net.base_mva == case9.base_mva
+    assert net.source_format == "Gridfm"
+    text = net.to_matpower()
+    assert text.startswith("function mpc")
+    assert powerio.parse_str(text, "matpower").n_buses == case9.n_buses
+
+
+@gridfm_only
+def test_read_gridfm_is_unpackable(case9, tmp_path):
+    # GridfmRead is a namedtuple: tuple-unpack and attribute access both work.
+    out = case9.write_gridfm(str(tmp_path))
+    net, scenario, warnings = powerio.read_gridfm(out["dir"])
+    assert isinstance(net, powerio.Network)
+    assert scenario == 0
+    assert isinstance(warnings, list)
+
+
+@gridfm_only
+def test_read_gridfm_scenarios_round_trips_each(tmp_path):
+    # The batch write stacks two scenarios; the read side rebuilds one Network per
+    # scenario id, ascending.
+    case = load("case9")
+    out = powerio.write_gridfm_batch([case, case], str(tmp_path))
+    reads = powerio.read_gridfm_scenarios(out["dir"])
+    assert [r.scenario for r in reads] == [0, 1]
+    for r in reads:
+        assert isinstance(r.network, powerio.Network)
+        assert r.network.n_buses == case.n_buses
+
+
+@gridfm_only
+def test_read_gridfm_selects_scenario(tmp_path):
+    case = load("case9")
+    out = powerio.write_gridfm_batch([case, case], str(tmp_path))
+    assert powerio.read_gridfm(out["dir"], scenario=1).scenario == 1
+
+
+@gridfm_only
+def test_read_gridfm_missing_dir_raises(tmp_path):
+    # A nonexistent dataset directory surfaces as a powerio error, not a panic.
+    with pytest.raises(powerio.PowerIOError):
+        powerio.read_gridfm(tmp_path / "does_not_exist")
+
+
+@gridfm_only
 def test_gridfm_in_all_export():
-    # The batch function is part of the package's public surface.
-    assert "write_gridfm_batch" in powerio.__all__
-    assert hasattr(powerio, "write_gridfm_batch")
+    # The gridfm read/write surface is part of the package's public API.
+    for name in (
+        "write_gridfm_batch",
+        "read_gridfm",
+        "read_gridfm_scenarios",
+        "GridfmRead",
+    ):
+        assert name in powerio.__all__
+        assert hasattr(powerio, name)
