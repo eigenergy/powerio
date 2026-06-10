@@ -1,30 +1,5 @@
 # PowerIO
 
-<p align="center">
-  <img
-    src="https://raw.githubusercontent.com/eigenergy/powerio/main/docs/assets/powerio-logo.svg"
-    alt="PowerIO logo"
-    width="120"
-  >
-</p>
-
-PowerIO reads power system case files into a typed `Network`, writes them back,
-converts between common formats, and builds the sparse matrices and graph views
-used by analysis and solver code. It aspires to be "the [pandoc](https://pandoc.org) for power systems."
-
-Supported formats:
-
-- [MATPOWER](https://matpower.org/) `.m`
-- [PSS/E](https://www.siemens.com/global/en/products/energy/grid-software/planning/pss-software/pss-e.html) `.raw` revision 33
-- [PowerWorld](https://www.powerworld.com/WebHelp/Content/MainDocumentation_HTML/Case_Formats.htm) `.aux`
-- [PowerModels.jl](https://github.com/lanl-ansi/PowerModels.jl) network data JSON
-- [egret](https://pypi.org/project/gridx-egret/) `ModelData` JSON
-- [GridFM](https://github.com/gridfm) `.parquet`
-- [surge](https://github.com/amptimal/surge) `.surge.json` (WIP)
-
-When writing back to the source format, PowerIO **returns the original file exactly** when the parser
-retained it. Cross format conversion obeys sane defaults and emits `Conversion::warnings` for fields the
-target format cannot represent.
 
 <p align="center">
   <img
@@ -34,16 +9,44 @@ target format cannot represent.
   >
 </p>
 
+PowerIO is a fast, universal parser and converter for power system case files. It aspires to be "the [pandoc](https://pandoc.org) for power systems." 
+
+Using PowerIO, you can build sparse matrices and graph views for downstream analysis and solver code. PowerIO can serve as a drop-in replacement for the data layers of many popular community libraries, enhancing interoperability between diverse packages and formats. 
+
+
+PowerIO is implemented in [Rust](https://rust-lang.org) with a low-level [C ABI](https://github.com/eigenergy/powerio/tree/main/powerio-capi); any
+language with a C foreign function interface (FFI) can call it, including [Python](#python) and [Julia](#julia). You can also use it directly in [Rust itself](#rust) or through the [command line](#command-line-interface-cli).
+
+## Capabilities
+
+When writing back to the source format, PowerIO **returns the original file exactly** when the parser retained it. Cross format conversion obeys **sane defaults** and explicitly emits `Conversion::warnings` for fields the target format cannot represent.
+
+### Formats
+
+
+- [MATPOWER](https://matpower.org/) `.m`
+- [PSS/E](https://www.siemens.com/global/en/products/energy/grid-software/planning/pss-software/pss-e.html) `.raw` revision 33
+- [PowerWorld](https://www.powerworld.com/WebHelp/Content/MainDocumentation_HTML/Case_Formats.htm) `.aux`
+- [PowerModels.jl](https://github.com/lanl-ansi/PowerModels.jl) network data JSON
+- [egret](https://pypi.org/project/gridx-egret/) `ModelData` JSON
+- [GridFM](https://github.com/gridfm) `.parquet`
+- [surge](https://github.com/amptimal/surge) `.surge.json` (WIP)
+
+
 ## Packages
 
+This repository contains multiple packages. 
+
 ```
-powerio          parser, Network model, source retaining writers, converters
-powerio-matrix   sparse matrices, DC sensitivity factors, graph views
-powerio-cli      the `powerio` command and ratatui TUI
-powerio-py       PyO3 extension for the Python `powerio` package
-powerio-capi     C ABI for C, C++, Julia, and other foreign function interfaces
-PowerIO.jl       Julia bindings over the C ABI
+powerio          # parser, Network model, source retaining writers, converters
+powerio-matrix   # sparse matrices, DC sensitivity factors, graph views
+powerio-cli      # the `powerio` command and ratatui TUI
+powerio-py       # PyO3 extension for the Python `powerio` package
+powerio-capi     # C ABI for C, C++, Julia, and other foreign function interfaces
+PowerIO.jl       # Julia bindings over the C ABI
 ```
+
+The core powerio [Rust crate](https://crates.io/crates/powerio) is as dependency light as possible, with its companion [Python package](https://pypi.org/project/powerio/) requiring **zero dependencies**.
 
 API docs: <https://eigenergy.github.io/powerio/>.
 Language API map: [docs/languages.md](https://github.com/eigenergy/powerio/blob/main/docs/languages.md).
@@ -56,7 +59,7 @@ cargo add --git https://github.com/eigenergy/powerio powerio-matrix
 cargo install --git https://github.com/eigenergy/powerio powerio-cli
 
 pip install powerio
-pip install 'powerio[all]'   # scipy, numpy, networkx, polars extras
+pip install 'powerio[all]'     # scipy, numpy, networkx, polars extras
 pip install 'powerio[gridfm]'  # polars for Parquet inspection
 pip install 'powerio[pandas]'  # pandas, pyarrow compatibility reads (Python 3.10+)
 
@@ -65,11 +68,7 @@ julia -e 'using Pkg; Pkg.add(url="https://github.com/eigenergy/PowerIO.jl")'
 
 ## Use
 
-PowerIO is implemented in Rust with a low-level
-[C ABI](https://github.com/eigenergy/powerio/tree/main/powerio-capi); any
-language with a C foreign function interface can call it.
-
-**Rust**
+### Rust
 ```rust
 use powerio::{TargetFormat, parse_file};
 
@@ -83,7 +82,7 @@ for warning in &conv.warnings {
 std::fs::write("case14.json", conv.text)?;
 ```
 
-**Python**
+### Python
 ```python
 import powerio as pio
 
@@ -92,7 +91,7 @@ bprime = case.bprime()            # scipy.sparse, needs powerio[matrix]
 raw, warnings = pio.convert_file("case9.m", "psse")
 ```
 
-**Julia**
+### Julia
 ```julia
 using PowerIO
 
@@ -101,7 +100,7 @@ text = to_matpower(case)
 json, warnings = to_format(case, "powermodels-json")
 ```
 
-**Command line interface (CLI)**
+### Command line interface (CLI)
 ```
 powerio convert tests/data/case14.m --to psse -o case14.raw
 powerio verify tests/data/case30.m --kind bdoubleprime
@@ -110,8 +109,9 @@ powerio sensitivities tests/data/case30.m -o out
 powerio gridfm tests/data/case14.m -o out
 powerio
 ```
+## Formats
 
-## Current Format Fidelity
+### Current Format Fidelity
 
 | reader / writer | MATPOWER | PowerModels JSON | PSS/E | PowerWorld | egret JSON |
 | --- | --- | --- | --- | --- | --- |
@@ -127,7 +127,7 @@ reads and writes through the same hub, partial in both directions. Known limits
 for every format are documented in
 [docs/format-fidelity.md](https://github.com/eigenergy/powerio/blob/main/docs/format-fidelity.md).
 
-## Matrices
+### Matrices
 
 `powerio-matrix` derives an `IndexedNetwork` with dense bus indices and builds:
 
@@ -142,7 +142,7 @@ for every format are documented in
 Current conventions for signs, taps, phase shifts, per unit scaling, reference buses, and
 DC susceptance are documented in [docs/matrices.md](https://github.com/eigenergy/powerio/blob/main/docs/matrices.md).
 
-## Normalized View
+### Normalized View
 
 `Network::to_normalized` derives a solver oriented copy of a case: powers in per unit,
 voltage phase angles in radians, inactive elements removed, `tap == 0` replaced with `1`,
@@ -153,24 +153,7 @@ source text, so writing it emits the derived model rather than the original file
 Python exposes the normalized view as `case.to_normalized()`, the C ABI as `pio_to_normalized`,
 and Julia as `to_normalized(case)`.
 
-## Special features
-
-### GridFM
-
-`powerio gridfm <case> -o <dir>` writes the Parquet tables
-[gridfm-datakit](https://gridfm.github.io/gridfm-datakit/) and
-`gridfm-graphkit` consume under `<dir>/<case>/raw/`; several compatible cases
-stack by scenario id. The same `gridfm` feature reads a dataset back into a
-`Network` (`read_gridfm_dataset` in `powerio-matrix`, `pio.read_gridfm` in
-Python), so a perturbed training scenario or a GNN predicted state comes back
-out in any classical format:
-
-```
-powerio convert out/case14/raw --from gridfm --to matpower -o case14.m
-```
-
-The read is lossy; what it recovers, what it drops, and the warnings contract
-are in [docs/format-fidelity.md](https://github.com/eigenergy/powerio/blob/main/docs/format-fidelity.md).
+## Special Features
 
 ### C ABI
 
@@ -180,18 +163,38 @@ and numeric table extraction through `pio_*` functions. The public header is
 Build with `--features arrow` to enable `pio_export_arrow` over the
 [Arrow C Data Interface](https://arrow.apache.org/docs/format/CDataInterface.html).
 
-### MCP Server
+### PowerAgent
 
-The Python package includes an optional MCP server exposing conversion,
-summaries, the JSON transport, the matrix views, and file staging as tools.
-The [PowerMCP](https://github.com/Power-Agent/PowerMCP) bundle ships the same
-tool surface alongside its simulator servers, whose bridges ingest the
-transport directly.
+
+PowerIO is part of the [PowerAgent](https://github.com/Power-Agent) community. The Python interface for PowerIO currently includes an optional MCP server exposing low-level conversion, summaries, JSON transport, matrix views, and file staging as tools.
+
 
 ```
 pip install 'powerio[mcp]'
 powerio-mcp
 ```
+
+The PowerIO MCP server is currently being integrated as the low-level data exchange substrate for the MCP server bundle in [PowerMCP](https://github.com/Power-Agent/PowerMCP). The [PowerMCP](https://github.com/Power-Agent/PowerMCP) bundle ships the same
+tool surface as PowerIO alongside a wide array of simulator servers, whose bridges ingest the transport directly.
+
+### GridFM
+PowerIO ships first-class support for the Linux Foundation Open [Grid Foundation Model (GridFM)](https://github.com/gridfm) project.
+`powerio gridfm <case> -o <dir>` *writes* the Parquet tables
+[gridfm-datakit](https://gridfm.github.io/gridfm-datakit/) and
+`gridfm-graphkit` consume under `<dir>/<case>/raw/`; several compatible cases
+stack by scenario id. 
+
+The `gridfm` feature also *reads* a dataset back into a `Network` (`read_gridfm_dataset` in `powerio-matrix`, `pio.read_gridfm` in
+Python), so a perturbed training scenario or a GNN predicted state can be extracted and converted back
+out in any classical format:
+
+```
+powerio convert out/case14/raw --from gridfm --to matpower -o case14.m
+```
+
+The read functionality is currently lossy. What it recovers, what it drops, and the warnings contract
+are in [docs/format-fidelity.md](https://github.com/eigenergy/powerio/blob/main/docs/format-fidelity.md). Improving GridFM read/write functionality is a key priority for the initial development of PowerIO.
+
 
 ## Validation
 
@@ -218,3 +221,12 @@ PowerIO is distributed under either of:
 
 - [Apache License, Version 2.0](https://github.com/eigenergy/powerio/blob/main/LICENSE-APACHE)
 - [MIT license](https://github.com/eigenergy/powerio/blob/main/LICENSE-MIT)
+
+
+<p align="center">
+  <img
+    src="https://raw.githubusercontent.com/eigenergy/powerio/main/docs/assets/powerio-logo.svg"
+    alt="PowerIO logo"
+    width="120"
+  >
+</p>
