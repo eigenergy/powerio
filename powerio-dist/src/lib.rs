@@ -15,5 +15,12 @@
 
 pub mod dss;
 pub mod error;
+pub mod model;
 
+pub use dss::{parse_dss_file, parse_dss_str};
 pub use error::{Error, Result};
+pub use model::{
+    Configuration, DistBus, DistGenerator, DistLine, DistLineCode, DistLoad, DistNetwork,
+    DistShunt, DistSourceFormat, DistSwitch, DistTransformer, Extras, UntypedObject, VoltageSource,
+    Winding, WindingConn,
+};
