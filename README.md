@@ -23,7 +23,7 @@ Supported formats:
 - [surge](https://github.com/amptimal/surge) `.surge.json` (WIP)
 
 When writing back to the source format, PowerIO **returns the original file exactly** when the parser
-retained it. Cross format conversion obeys sane defaults, and emits `Conversion::warnings` for fields the
+retained it. Cross format conversion obeys sane defaults and emits `Conversion::warnings` for fields the
 target format cannot represent.
 
 <p align="center">
@@ -142,11 +142,11 @@ DC susceptance are documented in [docs/matrices.md](https://github.com/eigenergy
 
 ## Normalized View
 
-`Network::to_normalized` derives a solver oriented copy of a case with sane defaults. Powers are provided in per
-unit, voltage phase angles are in radians, inactive elements are removed, `tap == 0` replaced with `1`,
-surviving buses are reindexed to a dense 1-based id space, and bus types are made
-consistent with generator placement and reference buses. Computing it carries no retained
-source text, so writing the normalized network emits the derived model rather than the original file.
+`Network::to_normalized` derives a solver oriented copy of a case: powers in per unit,
+voltage phase angles in radians, inactive elements removed, `tap == 0` replaced with `1`,
+surviving buses reindexed to a dense 1-based id space, and bus types made consistent
+with generator placement and reference buses. The normalized copy carries no retained
+source text, so writing it emits the derived model rather than the original file.
 
 Python exposes the normalized view as `case.to_normalized()`, the C ABI as `pio_to_normalized`,
 and Julia as `to_normalized(case)`.

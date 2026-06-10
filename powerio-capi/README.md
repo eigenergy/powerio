@@ -114,8 +114,9 @@ The release ABI uses the same verb taxonomy as the Rust, Python, and Julia APIs:
   structs with release callbacks.
 - `pio_read_gridfm` and `pio_gridfm_scenario_ids` read a gridfm-datakit Parquet
   dataset back into a handle (built `--features gridfm`; the reader itself lives
-  in `powerio-matrix`). Lossy but power-flow-complete — the fidelity notes come
-  back `\n`-joined in `warnbuf`, like `pio_to_format`'s warnings.
+  in `powerio-matrix`). Lossy, but it recovers everything a power flow needs;
+  the fidelity notes come back `\n`-joined in `warnbuf`, like `pio_to_format`'s
+  warnings.
 
 ## Safety contract
 

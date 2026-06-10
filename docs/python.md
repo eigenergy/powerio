@@ -44,13 +44,14 @@ forced with `from_`); `parse_str(text, format)` reads in-memory text.
 
 The native wheel includes the GridFM Parquet writer and reader.
 
-`read_gridfm(dir, scenario=0)` rebuilds a `Network` from a dataset — the inverse
-of `Network.write_gridfm` — returning a `GridfmRead(network, scenario, warnings)`
-namedtuple. The read is lossy but power-flow-complete; `warnings` lists what the
-gridfm schema couldn't round-trip (synthesized bus ids, folded per-bus
-load/shunt, dropped HVDC/storage, piecewise costs). `read_gridfm_scenarios(dir)`
-returns one `GridfmRead` per scenario. `dir` resolves the `raw/` leaf, a `<case>/`
-directory, or a parent with one `*/raw/` child.
+`read_gridfm(dir, scenario=0)` rebuilds a `Network` from a dataset, the inverse
+of `Network.write_gridfm`, returning a `GridfmRead(network, scenario, warnings)`
+namedtuple. The read is lossy but recovers everything a power flow needs;
+`warnings` lists what the gridfm schema couldn't round-trip (synthesized bus
+ids, folded per-bus load/shunt, dropped HVDC/storage, piecewise costs).
+`read_gridfm_scenarios(dir)` returns one `GridfmRead` per scenario. `dir`
+resolves the `raw/` leaf, a `<case>/` directory, or a parent with one `*/raw/`
+child.
 
 ```python
 import powerio as pio
