@@ -49,6 +49,7 @@ __all__ = [
     "parse_file",
     "parse_str",
     "from_json",
+    "generate_case",
     "convert_file",
     "convert_str",
     "to_format",
@@ -408,6 +409,27 @@ def parse_str(text: str, format: str = "matpower") -> Network:
 def from_json(text: str) -> Network:
     """Rebuild a case from JSON produced by :meth:`Network.to_json`."""
     return Network(_powerio.from_json(text))
+
+
+def generate_case(
+    topology: str = "tree",
+    n: int = 64,
+    r_over_x: float = 0.1,
+    mean_x: float = 0.05,
+    seed: int = 0x00C0_FFEE,
+) -> Network:
+    """Generate a synthetic case: a spanning ``tree``, a 2-D ``lattice`` (``n``
+    rounds up to a perfect square), or a ``pegase-like`` mesh (tree plus ~30%
+    extra edges).
+
+    ``n`` below 2 is raised to 2 (lattice: at least a 2×2 grid). Identical
+    arguments (including ``seed``) generate the identical case; bus 1 is the
+    reference. The case carries buses and branches only — no loads, shunts, or
+    generators — so it exercises topology and matrix paths. The result is a
+    full :class:`Network`: the matrix builders, converters, and the JSON
+    transport all work on it.
+    """
+    return Network(_powerio.generate_case(topology, n, r_over_x, mean_x, seed))
 
 
 def convert_file(path: Any, to: str, from_: Optional[str] = None) -> Conversion:

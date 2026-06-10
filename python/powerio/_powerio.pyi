@@ -99,6 +99,13 @@ def convert_file(
 def convert_str(
     text: str, to: str, format: Optional[str] = ...
 ) -> Tuple[str, list[str]]: ...
+def generate_case(
+    topology: Optional[str] = ...,
+    n: int = ...,
+    r_over_x: float = ...,
+    mean_x: float = ...,
+    seed: int = ...,
+) -> PyCase: ...
 # Only present when the extension was compiled with the `gridfm` cargo feature
 # (the released wheel is); without it, access raises AttributeError.
 def write_gridfm_batch(
