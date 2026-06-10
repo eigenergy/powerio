@@ -6,8 +6,10 @@
 //! verbatim (string values), so a later writer can reproduce them. Bus specs
 //! resolve with the engine's fill rule: phase conductors default to nodes
 //! `1..=phases`, every remaining conductor to ground (node 0), and the
-//! written dot list overrides from the left. Ground connections become the
-//! terminal name `"0"`, listed in the bus's `grounded` set.
+//! written dot list overrides from the left. Ground connections become an
+//! explicit perfectly grounded neutral terminal on the bus, named
+//! `max(4, highest node + 1)` to match PowerModelsDistribution and the
+//! public BMOPF examples.
 
 use std::collections::BTreeMap;
 use std::path::Path;
@@ -148,6 +150,12 @@ pub fn network_from_raw(raw: &RawDss, source: Arc<String>) -> DistNetwork {
 }
 
 /// Materializes the accumulated bus states, ground markers, and coordinates.
+///
+/// Element processing records ground connections (node 0) verbatim; here
+/// each grounded bus gains an explicit perfectly grounded neutral terminal
+/// named `max(4, highest node + 1)`, the number PowerModelsDistribution
+/// and the public BMOPF examples give the materialized neutral, and every
+/// element terminal map is rewritten from "0" to it.
 fn finish_buses(mut rd: Reader, raw: &RawDss) -> DistNetwork {
     let mut coords: BTreeMap<String, (f64, f64)> = BTreeMap::new();
     for c in &raw.buscoords {
@@ -156,6 +164,7 @@ fn finish_buses(mut rd: Reader, raw: &RawDss) -> DistNetwork {
     let buses = std::mem::take(&mut rd.bus_order);
     let states = std::mem::take(&mut rd.buses);
     let mut net = rd.net;
+    let mut neutral_names: BTreeMap<String, String> = BTreeMap::new();
     for id in buses {
         let st = &states[&id];
         let mut terminals: Vec<i32> = st.nodes.iter().copied().filter(|&n| n != 0).collect();
@@ -166,14 +175,49 @@ fn finish_buses(mut rd: Reader, raw: &RawDss) -> DistNetwork {
             ..DistBus::default()
         };
         if st.nodes.contains(&0) {
-            bus.terminals.push("0".to_string());
-            bus.grounded.push("0".to_string());
+            let neutral = terminals.last().map_or(4, |&n| n.max(3) + 1);
+            bus.terminals.push(neutral.to_string());
+            bus.grounded.push(neutral.to_string());
+            neutral_names.insert(id.clone(), neutral.to_string());
         }
         if let Some((x, y)) = coords.get(&id) {
             bus.extras.insert("x".into(), (*x).into());
             bus.extras.insert("y".into(), (*y).into());
         }
         net.buses.push(bus);
+    }
+
+    let rewrite = |bus: &str, map: &mut [String]| {
+        if let Some(neutral) = neutral_names.get(&bus.to_ascii_lowercase()) {
+            for t in map.iter_mut().filter(|t| *t == "0") {
+                t.clone_from(neutral);
+            }
+        }
+    };
+    for l in &mut net.lines {
+        rewrite(&l.bus_from, &mut l.terminal_map_from);
+        rewrite(&l.bus_to, &mut l.terminal_map_to);
+    }
+    for s in &mut net.switches {
+        rewrite(&s.bus_from, &mut s.terminal_map_from);
+        rewrite(&s.bus_to, &mut s.terminal_map_to);
+    }
+    for l in &mut net.loads {
+        rewrite(&l.bus, &mut l.terminal_map);
+    }
+    for g in &mut net.generators {
+        rewrite(&g.bus, &mut g.terminal_map);
+    }
+    for s in &mut net.shunts {
+        rewrite(&s.bus, &mut s.terminal_map);
+    }
+    for v in &mut net.sources {
+        rewrite(&v.bus, &mut v.terminal_map);
+    }
+    for t in &mut net.transformers {
+        for w in &mut t.windings {
+            rewrite(&w.bus, &mut w.terminal_map);
+        }
     }
     net
 }
@@ -385,12 +429,14 @@ impl Reader<'_> {
         let b_half = scale_mat(&c_nf, std::f64::consts::TAU * freq * 1e-9 / per_meter / 2.0);
         let zero = vec![vec![0.0; n]; n];
 
+        // i_max carries the emergency rating: PMD's cm_ub and the public
+        // BMOPF examples both use emergamps. normamps stays in extras.
         let amps = self.f64_or(
             &props,
-            "normamps",
+            "emergamps",
             "linecode",
             &obj.name,
-            dd::line::NORMAMPS,
+            dd::line::EMERGAMPS,
         );
         let i_max = Some(vec![amps; n]);
 
@@ -486,26 +532,43 @@ impl Reader<'_> {
         };
         let map = self.terminals(&spec, phases, phases + 1, phases + 1);
 
-        let v_ln = if phases == 3 {
-            basekv * 1e3 / 3f64.sqrt() * pu
-        } else {
-            basekv * 1e3 * pu
-        };
+        // The engine's convention: per phase magnitude basekv/sqrt(phases),
+        // angles spaced -360/phases degrees, wrapped to (-180, 180] (the
+        // wrap is in radians, matching the reference conversion).
+        let v_ln = basekv * 1e3 / (phases as f64).sqrt() * pu;
         let mut v_magnitude = vec![v_ln; phases];
         let mut v_angle: Vec<f64> = (0..phases)
-            .map(|k| (angle_deg - 120.0 * k as f64).to_radians())
+            .map(|k| {
+                let deg = angle_deg - 360.0 / phases as f64 * k as f64;
+                let a = deg.to_radians();
+                // rem_euclid yields [0, tau); shifting puts the result in
+                // [-pi, pi), and the reference maps the open end to +pi.
+                let shifted = (a + std::f64::consts::PI).rem_euclid(std::f64::consts::TAU);
+                if shifted <= 0.0 {
+                    std::f64::consts::PI
+                } else {
+                    shifted - std::f64::consts::PI
+                }
+            })
             .collect();
         // The neutral conductor rides at ground.
         v_magnitude.push(0.0);
         v_angle.push(0.0);
 
+        // The raw base voltage rides in extras: the magnitudes fold in pu,
+        // and downstream writers need the unscaled base.
+        let mut extras = extras_from_leftovers(&props);
+        extras.insert("basekv".into(), basekv.into());
+        if (pu - 1.0).abs() > 0.0 {
+            extras.insert("pu".into(), pu.into());
+        }
         VoltageSource {
             name: obj.name.clone(),
             bus: spec.name,
             terminal_map: map,
             v_magnitude,
             v_angle,
-            extras: extras_from_leftovers(&props),
+            extras,
         }
     }
 
@@ -524,9 +587,8 @@ impl Reader<'_> {
 
         let is_switch = props.get("switch").is_some_and(super::lex::Value::to_bool);
         if is_switch {
-            let i_max = self
-                .f64_prop(props.get("normamps"))
-                .map(|a| vec![a; phases]);
+            let amps = self.f64_or(&props, "emergamps", "line", &obj.name, dd::line::EMERGAMPS);
+            let i_max = Some(vec![amps; phases]);
             let mut extras = extras_from_leftovers(&props);
             // OpenDSS replaces a switch line's impedance with fixed dummy
             // values; record anything written so nothing drops silently.
@@ -607,8 +669,9 @@ impl Reader<'_> {
             std::f64::consts::TAU * self.net.base_frequency * 1e-9 / length_factor / 2.0,
         );
         let zero = vec![vec![0.0; phases]; phases];
-        let i_max = self
-            .f64_prop(props.get("normamps"))
+        let i_max = props
+            .get("emergamps")
+            .and_then(|v| v.to_f64(Some(self.vars)).ok())
             .map(|a| vec![a; phases]);
         let name = format!("_line_{line_name}");
         self.net.linecodes.push(DistLineCode {
@@ -673,11 +736,15 @@ impl Reader<'_> {
             Configuration::Wye
         };
 
-        // kv is the load's own base, kept in extras for the dss writer; the
-        // model carries explicit power per phase.
+        // kv is the load's own base and model its dss load model code;
+        // both ride in extras for the writers, while the typed fields hold
+        // explicit power per phase.
         let mut extras = extras_from_leftovers(&props);
         if let Some(kv) = props.by_name.get("kv") {
             extras.insert("kv".into(), kv.text.clone().into());
+        }
+        if model != 1 {
+            extras.insert("model".into(), model.into());
         }
         DistLoad {
             name: obj.name.clone(),

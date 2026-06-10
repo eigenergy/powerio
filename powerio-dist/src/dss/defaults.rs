@@ -23,6 +23,7 @@ pub mod line {
     pub const LENGTH: f64 = 1.0;
     pub const PHASES: usize = 3;
     pub const NORMAMPS: f64 = 400.0;
+    pub const EMERGAMPS: f64 = 600.0;
 }
 
 pub mod linecode {

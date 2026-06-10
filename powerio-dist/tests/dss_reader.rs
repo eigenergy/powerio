@@ -19,15 +19,19 @@ fn parse(rel: &str) -> DistNetwork {
     parse_dss_file(fixture(rel)).expect("fixture parses")
 }
 
-/// Bus id (lowercased) → phase terminal names, excluding the ground
-/// terminal "0", matching what the engine reports as the bus's nodes.
+/// Bus id (lowercased) → phase terminal names, excluding the materialized
+/// grounded neutral, matching what the engine reports as the bus's nodes.
 fn phase_terminals(net: &DistNetwork) -> BTreeMap<String, Vec<String>> {
     net.buses
         .iter()
         .map(|b| {
             (
                 b.id.to_ascii_lowercase(),
-                b.terminals.iter().filter(|t| *t != "0").cloned().collect(),
+                b.terminals
+                    .iter()
+                    .filter(|t| !b.grounded.contains(t))
+                    .cloned()
+                    .collect(),
             )
         })
         .collect()
@@ -103,9 +107,9 @@ fn ieee13_matches_the_engine_bus_map() {
     // Load 611 is single phase wye on node 3 with grounded return.
     let l611 = net.loads.iter().find(|l| l.name == "611").unwrap();
     assert_eq!(l611.configuration, Configuration::SinglePhase);
-    assert_eq!(l611.terminal_map, vec!["3", "0"]);
+    assert_eq!(l611.terminal_map, vec!["3", "4"]);
     let b611 = net.bus("611").unwrap();
-    assert_eq!(b611.grounded, vec!["0"]);
+    assert_eq!(b611.grounded, vec!["4"]);
 
     // Substation transformer: delta primary, wye secondary.
     let sub = net
@@ -193,8 +197,8 @@ fn micro_transformers_type_correctly() {
     assert!((t.windings[0].v_ref - 7200.0).abs() < 1e-9);
     assert!((t.windings[1].v_ref - 120.0).abs() < 1e-9);
     // Winding 2 is secondary.1.0, winding 3 is secondary.0.2 (reversed).
-    assert_eq!(t.windings[1].terminal_map, vec!["1", "0"]);
-    assert_eq!(t.windings[2].terminal_map, vec!["0", "2"]);
+    assert_eq!(t.windings[1].terminal_map, vec!["1", "4"]);
+    assert_eq!(t.windings[2].terminal_map, vec!["4", "2"]);
     assert_eq!(t.xsc_pct.len(), 3);
 
     let net = parse("micro/xfmr_wye_delta.dss");
@@ -204,7 +208,7 @@ fn micro_transformers_type_correctly() {
     // Delta side lists only the phase conductors.
     assert_eq!(t.windings[1].terminal_map, vec!["1", "2", "3"]);
     // Wye side default neutral is grounded.
-    assert_eq!(t.windings[0].terminal_map, vec!["1", "2", "3", "0"]);
+    assert_eq!(t.windings[0].terminal_map, vec!["1", "2", "3", "4"]);
 }
 
 #[test]
@@ -246,13 +250,13 @@ fn swtcontrol_last_action_or_state_wins() {
 fn four_wire_line_keeps_the_neutral() {
     let net = parse("micro/fourwire_linecode.dss");
     let line = net.lines.iter().find(|l| l.name == "l1").unwrap();
-    assert_eq!(line.terminal_map_from, vec!["1", "2", "3", "0"]);
+    assert_eq!(line.terminal_map_from, vec!["1", "2", "3", "4"]);
     assert_eq!(line.terminal_map_to, vec!["1", "2", "3", "4"]);
     let code = net.linecode("lc4").unwrap();
     assert_eq!(code.n_conductors, 4);
     // km units: 0.211 ohm/km = 2.11e-4 ohm/m on the diagonal.
     assert!((code.r_series[0][0] - 0.211e-3).abs() < 1e-12);
-    assert_eq!(code.i_max.as_ref().unwrap()[0], 185.0);
+    assert_eq!(code.i_max.as_ref().unwrap()[0], 240.0);
     // The load on phase 1 returns through terminal 4, not ground.
     let la = net.loads.iter().find(|l| l.name == "la").unwrap();
     assert_eq!(la.terminal_map, vec!["1", "4"]);

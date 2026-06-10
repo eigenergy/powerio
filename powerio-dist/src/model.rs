@@ -3,8 +3,10 @@
 //! Wire coordinates with BMOPF semantics: string bus ids, ordered string
 //! terminal names per bus, explicit grounding on buses, terminal maps on
 //! every element, SI units (V, W, var, ohm, S, meters) and radians. Terminal
-//! names are the OpenDSS node numbers as strings; ground connections map to
-//! the terminal name `"0"`, recorded in the bus's `grounded` list.
+//! names are the OpenDSS node numbers as strings; implicit ground
+//! connections materialize as an explicit perfectly grounded neutral
+//! terminal on the bus (named 4 on a three phase bus), the convention
+//! PowerModelsDistribution and the public BMOPF examples share.
 //!
 //! Transformer impedances stay in the per unit form the source formats use
 //! (`r_pct`, `xsc_pct` as percent of the winding base); the BMOPF writer

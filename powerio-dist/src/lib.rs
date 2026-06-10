@@ -18,6 +18,7 @@ pub mod convert;
 pub mod dss;
 pub mod error;
 pub mod model;
+pub mod pmd;
 
 pub use bmopf::{parse_bmopf_file, parse_bmopf_str, write_bmopf_json};
 pub use convert::Conversion;
@@ -28,3 +29,4 @@ pub use model::{
     DistShunt, DistSourceFormat, DistSwitch, DistTransformer, Extras, UntypedObject, VoltageSource,
     Winding, WindingConn,
 };
+pub use pmd::{parse_pmd_file, parse_pmd_str, write_pmd_json};

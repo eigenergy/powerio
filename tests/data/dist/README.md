@@ -46,3 +46,17 @@ OpenDSS constructor defaults (`defaults_degenerate`), and a ten conductor
 linecode with double digit matrix indices (`linecode_10x10`). All eight solve
 in OpenDSS (opendssdirect 0.9.4); `powerio-dist/tools/solve_dss.py` reproduces
 the reference solutions.
+
+## pmd/
+
+ENGINEERING model JSON generated from the fixtures above with
+PowerModelsDistribution v0.16.0 (lanl-ansi/PowerModelsDistribution.jl,
+commit 87dc18b0) via the committed oracle:
+
+    julia powerio-dist/tools/pmd/pmdtool.jl dss2json \
+        tests/data/dist/opendss/ieee13/IEEE13Nodeckt.dss \
+        tests/data/dist/pmd/ieee13.json
+
+`fourwire_linecode.json` comes from `micro/fourwire_linecode.dss` the same
+way. PMD's `parse_file` ran with `kron_reduce=false`; `print_file` wrote the
+dict. Regenerate with the same command when bumping the PMD version.
