@@ -59,7 +59,7 @@ jobs:
             git ls-remote --exit-code --tags origin "refs/tags/v$VERSION" >/dev/null \
               || { echo "v$VERSION is not a tag; tag the release before dispatching" >&2; exit 1; }
           fi
-      - uses: rust-lang/crates-io-auth-action@v1
+      - uses: rust-lang/crates-io-auth-action@v1.0.4
         id: auth
       - name: Publish in dependency order
         env:
