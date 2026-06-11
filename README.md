@@ -26,7 +26,7 @@ When writing back to the source format, PowerIO **returns the original file exac
 The following formats are currently supported with read/write functionality:
 - [MATPOWER](https://matpower.org/) `.m`
 - [PSS/E](https://www.siemens.com/global/en/products/energy/grid-software/planning/pss-software/pss-e.html) `.raw` revision 33
-- [PowerWorld](https://www.powerworld.com/WebHelp/Content/MainDocumentation_HTML/Case_Formats.htm) `.aux` (all three field naming generations through Simulator 21+), plus a read only `.pwb` binary reader (2016 through 2022 era exports under the six decoded header constants 425, 483, 508, 537, 550, and 551, parity tested against sibling formats up to the 6717 bus Texas7k; unsupported writer vintages are detected and rejected with the format constant named), and a read only `.pwd` display reader for substation diagram coordinates (matched 1-1 against the aux substations on every probed save with a same vintage aux; the v19 resave matches 1248/1250 against the published case, a vintage skew)
+- [PowerWorld](https://www.powerworld.com/WebHelp/Content/MainDocumentation_HTML/Case_Formats.htm) `.aux`, plus read only `.pwb` (binary case) and `.pwd` (display) readers; vintage coverage and decode evidence in [docs/powerworld.md](docs/powerworld.md)
 - [PowerModels.jl](https://github.com/lanl-ansi/PowerModels.jl) network data JSON
 - [egret](https://pypi.org/project/gridx-egret/) `ModelData` JSON
 - [GridFM](https://github.com/gridfm) `.parquet`
