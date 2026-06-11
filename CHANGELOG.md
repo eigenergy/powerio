@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.1.1
+
+- File extension detection is case-insensitive (#97, #101): `parse_file`
+  accepts `.RAW`/`.M`/`.JSON`/`.AUX` and any mixed case alongside the
+  lowercase forms, and the CLI batch discovery and TUI file browser find
+  such files too. Reported by @jd-foster.
+- MCP server error hardening (#93): an unreadable input file surfaces as
+  the documented ValueError shape instead of a raw `PermissionError`, with
+  defensive guards on the JSON load and matrix dispatch paths.
+
 ## 0.1.0
 
 - gridfm read path (#70): `read_gridfm_dataset` / `read_gridfm_scenarios` /
