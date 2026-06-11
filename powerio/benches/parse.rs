@@ -76,8 +76,9 @@ fn bench_parse_formats(c: &mut Criterion) {
 /// PowerWorld aux against pwb on the same case at each scale the fixtures
 /// provide: the vendored 200 bus pair, the fetched 2000 bus pair and the
 /// RTS-GMLC binary when present (benchmarks/fetch_powerworld.sh; absent
-/// files skip silently). `POWERIO_BENCH_AUX`/`POWERIO_BENCH_PWB` add one
-/// more file each, for cases that cannot be fetched (the 7k bus TAMU aux).
+/// fixtures skip silently). `POWERIO_BENCH_AUX`/`POWERIO_BENCH_PWB` add one
+/// more file each, for cases that cannot be fetched (the 7k bus TAMU aux);
+/// those are explicit requests, so a missing path fails loudly.
 fn bench_powerworld_pwb(c: &mut Criterion) {
     let pairs: &[(&str, &str, &str)] = &[
         (
