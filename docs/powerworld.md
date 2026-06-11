@@ -229,19 +229,32 @@ Newer writers widen the family with bits 6 and 8: Texas7k_20210804.PWB
 (header constant 483) carries 0x66 ×481, 0x166 ×187, 0x167 ×6049 over its
 6717 buses, and the current era ACTIVSg2000.PWB export (header constant
 425!) carries 0x66/0x67/0x166/0x167/0x177. The head layout still matches
-through the solved voltage, with bit 8 varying per record like bit 0 and
-bit 6 file constant. The Texas7k chain behind the bus table, probed
-against its same day aux: loads (count 5095, layout unchanged, P total
-exact), then generators (count 731 in aux row order; the leading u32
-equals the aux BusNum on roughly three quarters of the records, but the
-rest store a nearby bus and regroup unit IDs, e.g. units the aux puts at
-111208 and 111209 stored as units 1 and 2 of 111207, and no encoding of
-the aux bus appears elsewhere in those records, which suggests node level
-storage that the aux consolidation maps differently), then shunts (count 634, MVAr at +24, total exact), then branches
-(count 9140, the three inline rating 0xEC layout, first records parse).
-The generator record blocks the 483 decode; these files classify and
-reject until its differential fit lands. The 39 bus sample case (header
-425) shows no recognized bus record layout at all in a 44 KiB file.
+through the solved voltage, with bits 0 and 8 varying per record. Bit 6
+looked file constant until the Texas7k v21 resave, which clears it on
+exactly one of its 6717 records, the slack bus; the bit 6 records carry a
+location string block (city, county, state text) in their tails that the
+slack record lacks, so bit 6 is a per record presence bit like 0, 4, and
+8, and the reader's family rule treats it as one. The 2030 build adds the
+other tail surprise: its bit 4 count prefixed lists run to 149 nine byte
+entries (1341 bytes) on one record, past the bounded resync window, so a
+bit 4 bus record extends the scan to the buffer end exactly as a bit 4
+branch record does. The 39 bus sample case (header 425) shows no
+recognized bus record layout at all in a 44 KiB file.
+
+An earlier draft of this section read the Texas7k generator table as "the
+leading u32 equals the aux BusNum on roughly three quarters of the
+records, the rest store a nearby bus and regroup unit IDs", and concluded
+node level storage was blocking the 483 decode. The actual story is a
+four byte field insertion: the 2021 era generator record carries the
+regulated bus number as a second u32 after the terminal bus, and the
+probe had keyed the record start one field late, reading the regulated
+bus as the terminal bus. Plants regulating a remote bus (184 of 731
+machines) are what made "a quarter" of the records look wrong. With the
+boundary re-fit, every Texas7k table decodes against the same day aux:
+buses (6717), loads (5095, values exact at f32 precision), generators
+(731, every field plus the in service bit), shunts (634), branches
+(9140, every identity, impedance, rating, and tap). The generator record
+layout is in its own section below.
 
 The TAMU repository sets re-downloaded in June 2026 supply what that fit
 was missing, same source aux siblings for the bit 6/8 family: ACTIVSg500
@@ -260,10 +273,21 @@ record; two forged record heads were found inside blobs and both fail
 it). With that rule ACTIVSg500 decodes with full value parity against
 its aux. Hawaii40 (2022, header constant 508) decodes with full parity
 the same way, which is the evidence admitting the 508 header era; its
-aux uses the 2022 concise vocabulary (see the mapping notes). The 508
-saves of node level cases (Texas7k v21) still die in the table chain
-like their 483 originals, after an exhausted chain search (0.85 s on
-the 13 MiB resave) rather than a named header rejection.
+aux uses the 2022 concise vocabulary (see the mapping notes).
+
+The header constants past 508 fell with the Texas7k saves. The v21
+resave (508) needed the bus bit 6 family fix and a 52 byte bus table
+glue plus an 86 byte generator table glue (string metadata sits between
+the count word and the first record); with those, the whole sibling
+family decodes through one record model set: the v22 save (551), the
+2030 build (550, 7132 buses with the pres bit 5 generator records and
+the long bit 4 bus lists), the 2030 v22 save (537), and the November
+2021 scenario snapshot (537). v21 and v22 carry committed parity tests
+against their same day 2022 aux; the 2030 saves were value checked by
+strict offline alignment against their aux (1058 of 1058 generators,
+bus, regulated bus, ID, MW, and status each) and their name keyed aux
+export (BusName_NomVolt keys instead of BusNum) keeps them out of the
+committed aux comparison until the aux reader learns that vocabulary.
 
 ### Load record (validated on all 160 + 1417 + 1350 + 5095 loads of four files)
 
@@ -272,8 +296,9 @@ f32 values in per unit on the system base: LoadSMW/100, LoadSMVR/100.
 Remainder undecoded (I/Z components are zero in every available case). The
 byte after the ID is 0x00 in every 425 era record and 0x01 in every 483
 era one while both auxes mark every load Closed, so it is not a status
-byte; an earlier draft treated it as one. The 483 era layout is otherwise
-identical: all 5095 Texas7k loads sum to the aux total exactly.
+byte; an earlier draft treated it as one. The 2021 era layout is otherwise
+identical: the Texas7k exports and every later save of the family carry
+per load value parity against their auxes at f32 precision.
 
 ### Generator record (validated on all 49 + 282 + 545 machines of three files)
 
@@ -285,7 +310,29 @@ GenVoltSet (p.u., scale 1), GenMVABase (MVA, scale 1), MWMax, MWMin. The
 voltage setpoint and MVA base ranges pick the anchor per record. In the
 2018 file also verified: GenRMPCT at +53, GenZR/GenZX as f64 near
 +147/+193. Record length varies with embedded strings; the status byte is
-unlocated within the flag bytes (every available machine is Closed).
+unlocated within the flag bytes (every machine in these files is Closed).
+
+### Generator record, 2021 era (validated on 731 ×3 + 1058 ×2 machines of five files)
+
+The 2021 era writer (Texas7k export and every later save of the family)
+inserts the regulated bus and pins the layout to fixed offsets:
+
+| offset | type | field |
+|---|---|---|
+| +0 | u32 | BusNum (terminal bus) |
+| +4 | u32 | GenRegNum (the inserted field; equals BusNum except on the 184 remote regulating machines) |
+| +8 | ShortString[2] | GenID |
+| +11 | u8 | constant 1 |
+| +12 | u8 | varies per record (7 through 37 observed), undecoded |
+| +13 | u8 | presence byte: bit 0 inserts an f32, bit 1 one byte (the 2021 export), bit 5 another f32 (the 2030 build); the inserted values are undecoded |
+| +14.. | f32 ×8 | the same block as the older eras: MW setpoint, MVAr setpoint, MVRMax, MVRMin, GenVoltSet, GenMVABase, MWMax, MWMin |
+| block +32 | u8 | constant 0 |
+| block +33 | u8 | status: 9 in service, 8 open; bit 0 validated against the aux on 637 Closed + 94 Open machines per file, the corpus's only located device status |
+| block +34 | f32 | GenRMPCT (100.0 on every record), a structural anchor |
+
+The record tail (undecoded) carries the piecewise cost curve as f32
+pairs and per record strings; tail lengths run 238 to 274 bytes in the
+2021 export.
 
 ### Branch records (validated on all 246 + 3043 + 3202 branches of three files)
 
@@ -302,11 +349,17 @@ u32 from bus, u32 to bus, u16 flags, then in order:
 - one zero byte, then the kind byte: 0x01 line, 0x00 transformer, with the
   transformer's LineTap as f32 immediately after.
 
-The flags word is the Delphi field presence bitmask, base bits 0xEC: bit 0
+The flags word is the Delphi field presence bitmask, base bits 0x6C: bit 0
 omits the circuit ID, bit 1 selects two inline ratings instead of three,
 bit 4 appends a count prefixed list to the record tail (as in the bus
-records). Observed words: 0xEC/0xFC (2016, 2899 + 144 records), 0xEE/0xEF
-(2018 and v19), 0xFE/0xFF (v19, 195 + 5). In the 2018 file also verified,
+records), and bit 7, set on every record of every 425/508 era export, is
+per record in the 2021 era: the Texas7k export clears it on 7135 of its
+7173 lines while setting it on every transformer and the remaining 38
+lines, with the head layout identical either way (its field is in the
+undecoded tail; the transformer tails carry a regulation block with the
+tap limits and the to bus echoed). Observed words: 0xEC/0xFC (2016,
+2899 + 144 records), 0xEE/0xEF (2018 and v19), 0xFE/0xFF (v19, 195 + 5),
+0x6C and 0xEC/0xED (Texas7k: 7135 + 2000 + 5). In the 2018 file also verified,
 within the transformer tail: tap limits +104/+108, step +122, nominal kV
 pair +169/+173, XFMVABase +177 from the record start. The branch status is
 unlocated (every available record is in service); an earlier draft of this
@@ -334,17 +387,27 @@ case stores zero shunt MW and the reader sets G = 0.
 
 ### Open questions (inventoried, not guessed)
 
-- Status bytes: every device in every available case is Closed/in service,
-  so no status offset is validated anywhere; devices read as in service.
+- Status bytes: the 2021 era generator status is located and validated
+  (bit 0 of the byte one past the f32 block, against 94 open machines);
+  every other device in every available case is Closed/in service, so no
+  other status offset is validated and those devices read as in service.
+  Whether the older era generator records carry the same byte after their
+  block is untested for the open state (no 425 era case has one).
 - The meaning of the bit 4 tail lists (u32 count, then 9 byte entries
   observed as u8 = 3, u32 number, u32 = 1) and of the constant u32 12 tag
   in branch records.
 - The eleven zero f32 slots after the branch rating tag, and the bus and
-  branch record tail bytes beyond the fields above.
+  branch record tail bytes beyond the fields above (the 2021 era
+  transformer tails hold a regulation block and the generator tails the
+  piecewise cost curve, both undecoded; branch flag bit 7's field).
+- The 2021 era generator record's presence gated values (bits 0 and 5
+  insert f32s, bit 1 a byte; observed values 4.0/5.0 and 1.17) and its
+  constant +11/+12 bytes.
 - The gen record's variable flag byte gap (+9/+10 within one 2016 file).
 - Whether load IDs are also fixed capacity (every observed load ID already
   fills two characters or parses either way).
-- Table glue blocks between count and first record.
+- Table glue blocks between count and first record (the v21 resave's bus
+  and generator glues carry 52 and 86 bytes including string metadata).
 - Substation, area/zone names, contingency tables: present after the
   branches, undecoded in this pass.
 
@@ -431,8 +494,12 @@ checksum and recorded URL by `benchmarks/fetch_powerworld.sh`.
 | Texas2000_June2016.pwb | fetched (TAMU) | 425 | 0x06-0x17 | same day aux | decoded, parity on every quantity | 2007 buses, 3043 branches |
 | ACTIV_SG_2000_v19.pwb | fetched (powerworld.com) | 425 | 0x26-0x37 | published case .m, deltas pinned | decoded, parity | 2000 buses, 3202 branches |
 | RTS-GMLC.PWB | fetched (GridMod/RTS-GMLC @3ece0d3) | 425 | 0x06/0x07 | same commit .m + .RAW | decoded, parity | 73 buses, 120 branches |
-| Texas7k 2021 export | local only | 483 | 0x66-0x167 | aux sibling available | rejected: header constant; buses, loads, shunts, branches decode in probes, the generator record is a new layout | 6717 buses, 5095 loads, 634 shunts probe exactly |
-| Texas7k v21/v22/2030 saves | local only | 508/537/550/551 | unprobed | — | rejected: header constant (537/550/551) or table chain (508) | |
+| Texas7k 2021 export | local only | 483 | 0x66-0x167 | same day aux + .m | decoded, parity on every quantity including the 94 open machines and the .m topology | 6717 buses, 9140 branches |
+| Texas7k saved as v21 | local only | 508 | 0x26-0x167 | same day 2022 aux | decoded, parity (the bus bit 6 evidence) | 6717 buses, 9140 branches |
+| Texas7k saved as v22 | local only | 551 | 0x26-0x167 | same day 2022 aux | decoded, parity | 6717 buses, 9140 branches |
+| Texas7k 2030 build | local only | 550 | 0x66-0x167 | aux, offline strict alignment (name keyed export) | decoded, counts committed; 1058/1058 generators value checked offline | 7132 buses, 9555 branches |
+| Texas7k 2030 saved as v22 | local only | 537 | 0x66-0x167 | aux, offline strict alignment | decoded, counts committed | 7132 buses, 9555 branches |
+| Texas7k 2021 scenario snapshot | local only | 537 | 0x66-0x167 | same grid as the 2021 export | decoded, counts match the 2021 case | 6717 buses, 9140 branches |
 | 39 bus sample case | local only | 425 | none found | — | rejected: no recognized bus record layout | |
 | 118 bus sample case | local only | 338 | — | — | rejected: header constant | |
 | 12 bus course case | local only | 134 | — | — | rejected: header constant | |

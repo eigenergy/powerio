@@ -13,21 +13,25 @@
 //! must be values this reader has seen and verified). A file that does not
 //! match the validated layout fails loudly; nothing is guessed silently.
 //!
-//! Supported vintages, behind header format constants 425 and 508: the
-//! Simulator 19 era writer (bus record flag family `0x06`, the June 2016
+//! Supported vintages, behind header format constants 425, 483, and 508:
+//! the Simulator 19 era writer (bus record flag family `0x06`, the June 2016
 //! ACTIVSg2000 export, validated field by field against its same day aux
 //! sibling), the Simulator 20 era writer (flag family `0x26`: the 2018
 //! ACTIVSg200 export validated against its aux, the 2017 v19 ACTIVSg2000
-//! export validated against the published case), and the 2019+ era writers
+//! export validated against the published case), the 2019+ era writers
 //! (flag bits 6 and 8 added over family `0x26`, header 425 or 508: the
 //! current era ACTIVSg2000, ACTIVSg500, and 2022 Hawaii40 exports, each
-//! validated against its aux). Record layouts are self
-//! describing through their flag words, a Delphi field presence bitmask:
-//! one record model decodes every observed flag word (see [`BusHead::unk`]
-//! and [`read_branch_head`]), and structural anchors (the rating block tag)
-//! turn any unobserved variant into a loud error instead of a misread.
-//! Newer writers (header constants 483 through 551) are classified and
-//! rejected with the constant named. Evidence in `docs/powerworld.md`.
+//! validated against its aux), and the 2021 era writer (header 483, the
+//! Texas7k export validated against its same day aux at 6717 bus scale;
+//! its generator record inserts the regulated bus number and carries a
+//! validated in service bit, see [`read_gen_reg_record`]). Record layouts
+//! are self describing through their flag words, a Delphi field presence
+//! bitmask: one record model decodes every observed flag word (see
+//! [`BusHead::unk`] and [`read_branch_head`]), and structural anchors (the
+//! rating block tag) turn any unobserved variant into a loud error instead
+//! of a misread. Newer writers (header constants 537 through 551) are
+//! classified and rejected with the constant named. Evidence in
+//! `docs/powerworld.md`.
 //!
 //! The table search prices the format's structure (no field dictionary, so
 //! every table is located by validating record walks behind count word
@@ -41,12 +45,15 @@
 //!
 //! Known limits, documented rather than guessed:
 //!
-//! - Status bytes: every device in every available case is in service, so
-//!   no out of service encoding is validated anywhere and every device
-//!   reads as in service. The load record's post ID byte, once treated as
-//!   a status, is 0x00 in the 425 era files and 0x01 in the 483 era one
-//!   with every load Closed in both, so it is no status byte; the
-//!   generator, shunt, and branch status bytes are unlocated.
+//! - Status bytes: the 483 era generator record is the one located,
+//!   validated status in the corpus (bit 0 of the byte one past the f32
+//!   block, proven against the 94 open machines in the Texas7k aux). Every
+//!   other device in every available case is in service, so no other out of
+//!   service encoding is validated and those devices read as in service.
+//!   The load record's post ID byte, once treated as a status, is 0x00 in
+//!   the 425 era files and 0x01 in the 483 era one with every load Closed
+//!   in both, so it is no status byte; the 425 era generator, the shunt,
+//!   and the branch status bytes are unlocated.
 //! - Transformer phase shift: every available case has zero phase, so the
 //!   field's offset is unknown; transformers read with `shift = 0`.
 //! - The slack designation is not stored in the bus record; buses read as
@@ -116,17 +123,40 @@ pub fn parse_pwb(bytes: &[u8], name_hint: Option<&str>) -> Result<Network> {
         // caches are scoped to one bus table candidate.
         let load_runs = RefCell::new(HashMap::new());
         let gen_runs = RefCell::new(HashMap::new());
+        let gen_reg_runs = RefCell::new(HashMap::new());
         let shunt_runs = RefCell::new(HashMap::new());
         let branch_runs = RefCell::new(HashMap::new());
         for (loads, l_end) in
-            device_table_candidates(bytes, bus_end, &bus_ids, read_load, &load_runs)
+            device_table_candidates(bytes, bus_end, &bus_ids, read_load_record, &load_runs, 48)
         {
+            // The generator table reads through one of two validated record
+            // layouts: the 425/508 era shape and the 2021 era shape with the
+            // regulated bus inserted (see read_gen_reg_record). A file's
+            // table uses exactly one; each gets its own run cache and the
+            // structural gauntlets keep the wrong one from parsing. The
+            // newer layout's glue runs to 86 bytes (string metadata between
+            // the count and the first record in the v21 resave); the older
+            // tables all sit within 48, and widening their window admits
+            // forged count words, so each reader carries its own bound.
             for (generators, g_end) in
-                device_table_candidates(bytes, l_end, &bus_ids, read_gen, &gen_runs)
+                device_table_candidates(bytes, l_end, &bus_ids, read_gen_record, &gen_runs, 48)
+                    .chain(device_table_candidates(
+                        bytes,
+                        l_end,
+                        &bus_ids,
+                        read_gen_reg_record,
+                        &gen_reg_runs,
+                        96,
+                    ))
             {
-                for (shunts, s_end) in
-                    device_table_candidates(bytes, g_end, &bus_ids, read_shunt, &shunt_runs)
-                {
+                for (shunts, s_end) in device_table_candidates(
+                    bytes,
+                    g_end,
+                    &bus_ids,
+                    read_shunt_record,
+                    &shunt_runs,
+                    48,
+                ) {
                     let Some(branches) = find_branch_table(bytes, s_end, &bus_ids, &branch_runs)
                     else {
                         continue;
@@ -229,6 +259,7 @@ fn printable(s: &[u8]) -> bool {
 }
 
 fn expect_header(b: &[u8]) -> Result<()> {
+    const DECODED: [u64; 6] = [425, 483, 508, 537, 550, 551];
     let bad = || Error::FormatRead {
         format: FMT,
         message: "not a recognized PowerWorld binary case (header magic mismatch); \
@@ -244,16 +275,19 @@ fn expect_header(b: &[u8]) -> Result<()> {
         return Err(bad());
     }
     // Every known PowerWorld binary starts with 15000; the next words
-    // identify the writer. The decoded eras are 425 (2016 through 2019
-    // era record families) and 508 (validated by parity on the 2022
-    // Hawaii40 export, whose records use the same bit 6/8 family);
-    // 483/537/550/551 exports carry structures the record models do
-    // not cover yet, and older Simulators use other constants or a
-    // different header shape entirely.
-    if c != 20 || !(v == 425 || v == 508) {
+    // identify the writer. The decoded constants: 425 (2016 through 2019
+    // era record families), 483 (the 2021 Texas7k export, validated by
+    // same day aux parity), 508 (the 2022 Hawaii40 export and the Texas7k
+    // v21 resave, both aux validated), and 551/550/537 (the Texas7k v22,
+    // 2030, and 2030 v22 saves, whose tables walk the same record models
+    // against their aux siblings). Older Simulators use other constants or
+    // a different header shape entirely; those reject here, and a known
+    // constant with unrecognized records still dies at the bus layout gate
+    // below.
+    if c != 20 || !DECODED.contains(&v) {
         return Err(unsupported_vintage(format!(
             "header format words ({v}, {c}); the decoded eras are \
-             (425, 20) and (508, 20)"
+             425/483/508/537/550/551 with 20"
         )));
     }
     Ok(())
@@ -290,8 +324,8 @@ fn unsupported_vintage(detail: impl std::fmt::Display) -> Error {
     Error::FormatRead {
         format: FMT,
         message: format!(
-            "unsupported PowerWorld .pwb vintage: {detail}; only the validated 425 era \
-             record layouts are decoded (see docs/powerworld.md)"
+            "unsupported PowerWorld .pwb vintage: {detail}; only the validated 425/483/508 \
+             era record layouts are decoded (see docs/powerworld.md)"
         ),
     }
 }
@@ -405,41 +439,53 @@ fn known_bus_flags(unk: u32) -> bool {
 }
 
 /// The record family bits of a bus flag word: everything but the per record
-/// presence bits 0, 4, and 8. One file's bus table never mixes families.
+/// presence bits 0, 4, 6, and 8. One file's bus table never mixes families.
+/// Bit 6 was a file constant in every export until the Texas7k v21 resave,
+/// which clears it on exactly one record (the slack bus, whose tail lacks
+/// the location string block the other records carry), so it is a per
+/// record presence bit like 0, 4, and 8.
 fn bus_family(unk: u32) -> u32 {
-    unk & !0x111
+    unk & !0x151
 }
 
 /// Bus table candidates: each `(count, glue)` position after the header whose
 /// record walk succeeds, in scan order. The caller validates each candidate
 /// by parsing the tables that must follow it.
+/// The bus run cache: keyed by first record offset, each entry carrying the
+/// walked `(bus, flag word)` records and the table's family bits.
+type BusRuns = HashMap<usize, (Run<(Bus, u32)>, u32)>;
+
 fn bus_table_candidates<'a>(
     b: &'a [u8],
-    runs: &'a RefCell<HashMap<usize, (Run<Bus>, u32)>>,
+    runs: &'a RefCell<BusRuns>,
 ) -> impl Iterator<Item = (Vec<Bus>, usize)> + 'a {
     let limit = b.len().saturating_sub(4).min(0x10000);
     (0x20..limit).flat_map(move |at| {
         let count = u32::from_le_bytes(b[at..at + 4].try_into().unwrap()) as usize;
         // Table glue between the count and the first record varies by a few
-        // bytes per table and vintage; scan a small window for the record.
-        let glues = (count != 0 && count <= 2_000_000).then_some(0..=48);
+        // bytes per table and vintage (52 on the v21 resave's bus table);
+        // scan a small window for the record.
+        let glues = (count != 0 && count <= 2_000_000).then_some(0..=96);
         glues
             .into_iter()
             .flatten()
             .filter_map(move |glue| bus_run(b, runs, at + 4 + glue, count))
+            .map(|(heads, end)| (heads.into_iter().map(|(bus, _)| bus).collect(), end))
     })
 }
 
 /// The bus record run from `first`, extended to `count` records if the bytes
 /// allow. The run remembers the first record's family: one file's bus table
 /// never mixes families, so the scan for each next record skips heads of the
-/// other family (see [`bus_family`]).
+/// other family (see [`bus_family`]). The items keep their flag words: the
+/// scan window for the next record depends on the preceding record's bit 4,
+/// as in the branch run.
 fn bus_run(
     b: &[u8],
-    runs: &RefCell<HashMap<usize, (Run<Bus>, u32)>>,
+    runs: &RefCell<BusRuns>,
     first: usize,
     count: usize,
-) -> Option<(Vec<Bus>, usize)> {
+) -> Option<(Vec<(Bus, u32)>, usize)> {
     let mut map = runs.borrow_mut();
     let (run, family) = match map.entry(first) {
         Entry::Occupied(e) => e.into_mut(),
@@ -449,19 +495,27 @@ fn bus_run(
         Entry::Vacant(e) => {
             let (head, end) = read_bus_head(b, first).ok()?;
             let family = bus_family(head.unk);
-            e.insert((Run::start(head.bus, end), family))
+            e.insert((Run::start((head.bus, head.unk), end), family))
         }
     };
     let family = *family;
-    run.prefix(count, |after, _| {
-        // The record tail (undecoded; longer when flag bit 4 inserts a count
-        // prefixed list) separates this record from the next; find the next
-        // head by bounded scan.
-        (after..after + RESYNC_WINDOW).find_map(|p| {
+    run.prefix(count, |after, prev| {
+        // The record tail (undecoded; longer when flag bit 4 inserts a
+        // count prefixed list) separates this record from the next; find
+        // the next head by bounded scan. The 2030 build's lists run past
+        // the bounded window (149 nine byte entries on one record), so the
+        // scan extends to the buffer end after a bit 4 record, exactly as
+        // in the branch run.
+        let window_end = if prev.1 & 0x10 != 0 {
+            b.len()
+        } else {
+            after + RESYNC_WINDOW
+        };
+        (after..window_end).find_map(|p| {
             read_bus_head(b, p)
                 .ok()
                 .filter(|(h, _)| bus_family(h.unk) == family)
-                .map(|(h, end)| (h.bus, end))
+                .map(|(h, end)| ((h.bus, h.unk), end))
         })
     })
 }
@@ -519,18 +573,21 @@ fn read_bus_head(b: &[u8], at: usize) -> Probe<(BusHead, usize)> {
     Ok((BusHead { bus, unk }, c.pos))
 }
 
-// ---- Bus + ShortString ID tables (loads, generators, shunts) ----------------
+// ---- Device tables (loads, generators, shunts) -------------------------------
 
-/// One record of a device table keyed by bus + ShortString ID. `read` parses
-/// the record head at the cursor (bus and ID already consumed) and returns
-/// the element.
-type ReadDevice<T> = fn(&mut Cur, BusId, &[u8]) -> Probe<T>;
+/// One whole device record: parse at `at`, return the element and the offset
+/// just past the decoded head (undecoded tail bytes are the resync scan's to
+/// skip). One function per validated record layout.
+type ReadRecord<T> = fn(&[u8], usize, &BusIdSet) -> Probe<(T, usize)>;
 
+/// The bus + ShortString ID prefix the 425/508 era device records share.
+/// `read` parses the rest of the record head at the cursor and returns the
+/// element.
 fn read_device_head<T>(
     b: &[u8],
     at: usize,
     bus_ids: &BusIdSet,
-    read: ReadDevice<T>,
+    read: fn(&mut Cur, BusId, &[u8]) -> Probe<T>,
 ) -> Probe<(T, usize)> {
     let mut c = Cur { b, pos: at };
     let bus = c.u32()? as usize;
@@ -545,6 +602,18 @@ fn read_device_head<T>(
     Ok((v, c.pos))
 }
 
+fn read_load_record(b: &[u8], at: usize, bus_ids: &BusIdSet) -> Probe<(Load, usize)> {
+    read_device_head(b, at, bus_ids, read_load)
+}
+
+fn read_gen_record(b: &[u8], at: usize, bus_ids: &BusIdSet) -> Probe<(Generator, usize)> {
+    read_device_head(b, at, bus_ids, read_gen)
+}
+
+fn read_shunt_record(b: &[u8], at: usize, bus_ids: &BusIdSet) -> Probe<(Shunt, usize)> {
+    read_device_head(b, at, bus_ids, read_shunt)
+}
+
 /// Candidates for a count prefixed device table after `from`: every
 /// `(count, glue)` whose full record walk succeeds, in scan order. The caller
 /// keeps a candidate only if the tables that must follow it parse too.
@@ -552,13 +621,14 @@ fn device_table_candidates<'a, T: Clone + 'a>(
     b: &'a [u8],
     from: usize,
     bus_ids: &'a BusIdSet,
-    read: ReadDevice<T>,
+    read: ReadRecord<T>,
     runs: &'a RefCell<HashMap<usize, Run<T>>>,
+    max_glue: usize,
 ) -> impl Iterator<Item = (Vec<T>, usize)> + 'a {
     let limit = (from + RESYNC_WINDOW).min(b.len().saturating_sub(4));
     (from..limit).flat_map(move |at| {
         let count = u32::from_le_bytes(b[at..at + 4].try_into().unwrap()) as usize;
-        let glues = (count != 0 && count <= 10_000_000).then_some(0..=48);
+        let glues = (count != 0 && count <= 10_000_000).then_some(0..=max_glue);
         glues
             .into_iter()
             .flatten()
@@ -574,20 +644,20 @@ fn device_run<T: Clone>(
     first: usize,
     count: usize,
     bus_ids: &BusIdSet,
-    read: ReadDevice<T>,
+    read: ReadRecord<T>,
 ) -> Option<(Vec<T>, usize)> {
     let mut map = runs.borrow_mut();
     let run = match map.entry(first) {
         Entry::Occupied(e) => e.into_mut(),
         // A failed head parse is not cached, as in the sibling run lookups.
         Entry::Vacant(e) => {
-            let (item, end) = read_device_head(b, first, bus_ids, read).ok()?;
+            let (item, end) = read(b, first, bus_ids).ok()?;
             e.insert(Run::start(item, end))
         }
     };
     run.prefix(count, |after, _| {
         // The undecoded record tail separates this record from the next.
-        (after..after + RESYNC_WINDOW).find_map(|p| read_device_head(b, p, bus_ids, read).ok())
+        (after..after + RESYNC_WINDOW).find_map(|p| read(b, p, bus_ids).ok())
     })
 }
 
@@ -668,6 +738,98 @@ fn read_gen(c: &mut Cur, bus: BusId, id: &[u8]) -> Probe<Generator> {
     })
 }
 
+/// 2021 era generator record (header constant 483, the Texas7k export),
+/// validated against all 731 machines of the same day aux: u32 terminal
+/// bus, u32 regulated bus (the inserted field that distinguishes this
+/// layout; on plants regulating a remote bus the two differ, which is what
+/// made the older record model misread until the boundary was re-fit), a
+/// fixed capacity ShortString[2] ID, a constant 0x01 byte, one undecoded
+/// byte, then a presence byte whose bit 0 inserts an f32 and bit 1 one
+/// byte, then the same eight f32 block as the older eras. One past the
+/// block sit a zero byte and the status byte: bit 0 is the in service bit,
+/// validated against the aux's 637 Closed and 94 Open machines (the
+/// corpus's first out of service devices). The f32 after it reads as
+/// GenRMPCT in the aux (100.0 on every record) and anchors the layout.
+fn read_gen_reg_record(b: &[u8], at: usize, bus_ids: &BusIdSet) -> Probe<(Generator, usize)> {
+    let mut c = Cur { b, pos: at };
+    let bus = c.u32()? as usize;
+    if !bus_ids.contains(bus) {
+        return Err("record references an unknown bus");
+    }
+    let reg = c.u32()? as usize;
+    if !bus_ids.contains(reg) {
+        return Err("regulated bus is not a known bus");
+    }
+    // ShortString[2]: one length byte plus a fixed two byte text area, as
+    // in the branch circuit ID.
+    let n = c.u8()? as usize;
+    if n == 0 || n > 2 {
+        return Err("generator ID length not 1 or 2");
+    }
+    let text = c.take(2)?;
+    if !printable(&text[..n]) {
+        return Err("generator ID has non printable bytes");
+    }
+    if c.u8()? != 1 {
+        return Err("generator record lead byte not 1");
+    }
+    let _ = c.u8()?; // varies per record (7 through 37 observed); undecoded
+    // Presence byte: bit 0 inserts an f32, bit 1 one byte (both in the
+    // 2021 export), bit 5 another f32 (the 2030 build); the eight f32
+    // block follows whatever the bits insert.
+    let pres = c.u8()?;
+    if pres & !0x23 != 0 {
+        return Err("generator presence byte not in the validated set");
+    }
+    for bit in [0x01, 0x20] {
+        if pres & bit != 0 {
+            let v = c.f32()?;
+            if !v.is_finite() || v.abs() > 1.0e6 {
+                return Err("implausible presence gated generator value");
+            }
+        }
+    }
+    if pres & 2 != 0 {
+        let _ = c.u8()?;
+    }
+    let mut v = [0.0f64; 8];
+    for slot in &mut v {
+        *slot = c.f32()?;
+    }
+    let plausible = v.iter().all(|x| x.is_finite() && x.abs() < 1.0e6)
+        && (0.5..=1.6).contains(&v[4])
+        && (0.1..=1.0e5).contains(&v[5]);
+    if !plausible {
+        return Err("generator record does not match the validated layouts");
+    }
+    if c.u8()? != 0 {
+        return Err("generator record separator byte not zero");
+    }
+    let status = c.u8()?;
+    if status & !0x01 != 0x08 {
+        return Err("generator status byte not in the validated set");
+    }
+    let rmpct = c.f32()?;
+    if !rmpct.is_finite() || !(0.0..=1000.0).contains(&rmpct) {
+        return Err("implausible remote regulation percentage");
+    }
+    let machine = Generator {
+        bus: BusId(bus),
+        pg: v[0] * MVA_BASE,
+        qg: v[1] * MVA_BASE,
+        qmax: v[2] * MVA_BASE,
+        qmin: v[3] * MVA_BASE,
+        vg: v[4],
+        mbase: v[5],
+        pmax: v[6] * MVA_BASE,
+        pmin: v[7] * MVA_BASE,
+        in_service: status & 1 == 1,
+        cost: None,
+        caps: Default::default(),
+    };
+    Ok((machine, c.pos))
+}
+
 /// Shunt record: nominal MVAr as f32 at +24 from the record start, validated
 /// on all 199 shunts across the three sibling cases. The slot at +20 is 0.0
 /// in the Simulator 20 era files but 0.99 in the 2016 export, so it is not
@@ -702,16 +864,21 @@ fn read_shunt(c: &mut Cur, bus: BusId, id: &[u8]) -> Probe<Shunt> {
 // ---- Branch table ------------------------------------------------------------
 
 /// Whether a branch record flag word is one this reader decodes: base bits
-/// `0xEC` plus any combination of bits 0, 1, and 4, a Delphi field presence
-/// bitmask like the bus record's. Bit 0 set omits the circuit ID string and
-/// its status byte (the PowerWorld default " 1" applies), bit 1 set means
-/// two inline rating slots instead of three (the Simulator 19 era writer
-/// inlines three), bit 4 marks a count prefixed list in the record tail.
+/// `0x6C` plus any combination of bits 0, 1, 4, and 7, a Delphi field
+/// presence bitmask like the bus record's. Bit 0 set omits the circuit ID
+/// string and its status byte (the PowerWorld default " 1" applies), bit 1
+/// set means two inline rating slots instead of three (the Simulator 19
+/// era writer inlines three), bit 4 marks a count prefixed list in the
+/// record tail. Bit 7 is set on every 425/508 era record; the 2021 era
+/// Texas7k export clears it on most lines while setting it on every
+/// transformer and a few dozen lines, and the head layout through the kind
+/// byte is identical either way (its field lives in the undecoded tail).
 /// Observed words: 0xEC/0xFC (2016), 0xEE/0xEF (2018 and v19), 0xFE/0xFF
-/// (v19); the remaining two combinations are admitted by the same bit
-/// logic and guarded by the structural anchors in [`read_branch_head`].
+/// (v19), 0x6C/0x6D/0xEC/0xED (Texas7k); other combinations of the same
+/// bits are admitted by the bit logic and guarded by the structural
+/// anchors in [`read_branch_head`].
 fn known_branch_flags(flags: u16) -> bool {
-    flags & !0x13 == 0x00EC
+    flags & !0x93 == 0x006C
 }
 
 /// Locate and walk the branch table after `from`: the first `(count, glue)`
