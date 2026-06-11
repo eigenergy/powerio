@@ -629,8 +629,12 @@ fn read_bus_head(b: &[u8], at: usize) -> Probe<(BusHead, usize)> {
 
 /// One whole device record: parse at `at`, return the element and the offset
 /// just past the decoded head (undecoded tail bytes are the resync scan's to
-/// skip). One function per validated record layout.
-type ReadRecord<T> = fn(&[u8], usize, &BusIdSet) -> Probe<(T, usize)>;
+/// skip). One function per validated record layout. The bound is generic
+/// rather than a `fn` pointer so each table's probe monomorphizes and the
+/// early rejection checks inline into the resync scans, the hottest loops
+/// in the search.
+trait ReadRecord<T>: Fn(&[u8], usize, &BusIdSet) -> Probe<(T, usize)> + Copy {}
+impl<T, F: Fn(&[u8], usize, &BusIdSet) -> Probe<(T, usize)> + Copy> ReadRecord<T> for F {}
 
 /// The bus + ShortString ID prefix the 425/508 era device records share.
 /// `read` parses the rest of the record head at the cursor and returns the
@@ -673,7 +677,7 @@ fn device_table_candidates<'a, T: Clone + 'a>(
     b: &'a [u8],
     from: usize,
     bus_ids: &'a BusIdSet,
-    read: ReadRecord<T>,
+    read: impl ReadRecord<T> + 'a,
     runs: &'a RefCell<HashMap<usize, Run<T>>>,
     max_glue: usize,
 ) -> impl Iterator<Item = (Vec<T>, usize)> + 'a {
@@ -696,7 +700,7 @@ fn device_run<T: Clone>(
     first: usize,
     count: usize,
     bus_ids: &BusIdSet,
-    read: ReadRecord<T>,
+    read: impl ReadRecord<T>,
 ) -> Option<(Vec<T>, usize)> {
     let mut map = runs.borrow_mut();
     let run = match map.entry(first) {
