@@ -16,18 +16,31 @@ mod common;
 use common::{activsg2000_fetched, powerworld_vendored, rts_gmlc_fetched};
 
 enum Expect {
-    Decoded { buses: usize, branches: usize },
-    Rejected { evidence: String },
+    Decoded {
+        buses: usize,
+        branches: usize,
+        generators: Option<usize>,
+    },
+    Rejected {
+        evidence: String,
+    },
 }
 
 fn check(label: &str, path: &Path, expect: &Expect) {
     let bytes = std::fs::read(path).unwrap_or_else(|e| panic!("{label}: {e}"));
     let outcome = parse_pwb(&bytes, None);
     match expect {
-        Expect::Decoded { buses, branches } => {
+        Expect::Decoded {
+            buses,
+            branches,
+            generators,
+        } => {
             let net = outcome.unwrap_or_else(|e| panic!("{label}: expected a decode, got: {e}"));
             assert_eq!(net.buses.len(), *buses, "{label} buses");
             assert_eq!(net.branches.len(), *branches, "{label} branches");
+            if let Some(generators) = generators {
+                assert_eq!(net.generators.len(), *generators, "{label} generators");
+            }
         }
         Expect::Rejected { evidence } => {
             let err = match outcome {
@@ -56,6 +69,7 @@ fn every_available_pwb_lands_in_its_tier() {
             Expect::Decoded {
                 buses: 200,
                 branches: 246,
+                generators: None,
             },
         ),
         (
@@ -64,6 +78,7 @@ fn every_available_pwb_lands_in_its_tier() {
             Expect::Decoded {
                 buses: 2007,
                 branches: 3043,
+                generators: None,
             },
         ),
         (
@@ -72,6 +87,7 @@ fn every_available_pwb_lands_in_its_tier() {
             Expect::Decoded {
                 buses: 2000,
                 branches: 3202,
+                generators: None,
             },
         ),
         (
@@ -80,6 +96,7 @@ fn every_available_pwb_lands_in_its_tier() {
             Expect::Decoded {
                 buses: 73,
                 branches: 120,
+                generators: None,
             },
         ),
     ];
@@ -112,10 +129,17 @@ fn every_available_pwb_lands_in_its_tier() {
             continue;
         }
         let expect = if let Some(rest) = exp.strip_prefix("decoded:") {
-            let (b, br) = rest.split_once(':').expect("decoded:<buses>:<branches>");
+            let mut parts = rest.split(':');
+            let b = parts
+                .next()
+                .expect("decoded:<buses>:<branches>[:<generators>]");
+            let br = parts
+                .next()
+                .expect("decoded:<buses>:<branches>[:<generators>]");
             Expect::Decoded {
                 buses: b.parse().unwrap(),
                 branches: br.parse().unwrap(),
+                generators: parts.next().map(|g| g.parse().unwrap()),
             }
         } else if let Some(evidence) = exp.strip_prefix("rejected:") {
             Expect::Rejected {

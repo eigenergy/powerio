@@ -576,6 +576,24 @@ fn rejects_unrecognized_binaries() {
         msg.contains("unsupported PowerWorld .pwb vintage") && msg.contains("338"),
         "{err}"
     );
+
+    // A decoded constant over a garbage body dies at the bus layout gate,
+    // through the same loud vintage path; pinned for each constant the
+    // header gate admits.
+    for v in [425u64, 483, 508, 537, 550, 551] {
+        let mut garbage = Vec::new();
+        garbage.extend_from_slice(&15000u64.to_le_bytes());
+        garbage.extend_from_slice(&v.to_le_bytes());
+        garbage.extend_from_slice(&20u64.to_le_bytes());
+        garbage.extend_from_slice(&[0u8; 4096]);
+        let err = parse_pwb(&garbage, None).unwrap_err();
+        let msg = err.to_string();
+        assert!(
+            msg.contains("unsupported PowerWorld .pwb vintage")
+                && msg.contains("no recognized bus record layout"),
+            "constant {v}: {err}"
+        );
+    }
 }
 
 /// RTS-GMLC (NREL/GMLC Reliability Test System): the first cross format

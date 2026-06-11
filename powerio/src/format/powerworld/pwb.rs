@@ -106,7 +106,32 @@ type Probe<T> = std::result::Result<T, &'static str>;
 pub fn parse_pwb(bytes: &[u8], name_hint: Option<&str>) -> Result<Network> {
     expect_header(bytes)?;
     reject_unsupported_vintage(bytes)?;
+    // The narrow bus glue window prices the common files (see
+    // bus_table_candidates); the wide retry exists so a small node level
+    // resave (a bus table under 256 records with the v21 writer's 52 byte
+    // glue) is a second slower search instead of a coverage cliff. The
+    // retry only runs on files the narrow search already failed.
+    match search_table_chain(bytes, name_hint, false) {
+        Some(net) => net,
+        None => search_table_chain(bytes, name_hint, true).unwrap_or_else(|| {
+            Err(Error::FormatRead {
+                format: FMT,
+                message: "no table chain matches the validated .pwb layouts \
+                          (buses, loads, generators, shunts, branches in sequence)"
+                    .into(),
+            })
+        }),
+    }
+}
 
+/// One full depth first search for the table chain; `None` when no chain
+/// matches. `wide_bus_glue` lifts the bus table's count gated glue window
+/// (see [`bus_table_candidates`]) for the retry pass.
+fn search_table_chain(
+    bytes: &[u8],
+    name_hint: Option<&str>,
+    wide_bus_glue: bool,
+) -> Option<Result<Network>> {
     // A count word can be forged by record interiors and the case
     // description, so table location is a depth first search: a candidate at
     // any stage is kept only if every later table parses behind it, and the
@@ -116,7 +141,7 @@ pub fn parse_pwb(bytes: &[u8], name_hint: Option<&str>) -> Result<Network> {
     // record share one walk however many count words and search retries
     // reach it.
     let bus_runs = RefCell::new(HashMap::new());
-    for (buses, bus_end) in bus_table_candidates(bytes, &bus_runs) {
+    for (buses, bus_end) in bus_table_candidates(bytes, &bus_runs, wide_bus_glue) {
         let Some(bus_ids) = BusIdSet::new(&buses) else {
             continue; // duplicate ids: not a real bus table
         };
@@ -178,18 +203,12 @@ pub fn parse_pwb(bytes: &[u8], name_hint: Option<&str>) -> Result<Network> {
                         source_format: SourceFormat::PowerWorldBinary,
                         source: None,
                     };
-                    net.check_references(FMT)?;
-                    return Ok(net);
+                    return Some(net.check_references(FMT).map(|()| net));
                 }
             }
         }
     }
-    Err(Error::FormatRead {
-        format: FMT,
-        message: "no table chain matches the validated .pwb layouts \
-                  (buses, loads, generators, shunts, branches in sequence)"
-            .into(),
-    })
+    None
 }
 
 // ---- Cursor -----------------------------------------------------------------
@@ -253,6 +272,35 @@ impl<'a> Cur<'a> {
             return Err("device ID has non printable bytes");
         }
         Ok(s)
+    }
+
+    /// A fixed capacity Delphi `string[2]`: one length byte plus a fixed two
+    /// byte text area (a one character value leaves the second byte unused).
+    /// Branch circuit IDs and generator IDs are stored this way; the fixed
+    /// capacity was established by the v19 file's parallel circuit records.
+    fn short_string_2(&mut self) -> Probe<&'a [u8]> {
+        let n = self.u8()? as usize;
+        if n == 0 || n > 2 {
+            return Err("fixed capacity ID length not 1 or 2");
+        }
+        let text = self.take(2)?;
+        if !printable(&text[..n]) {
+            return Err("fixed capacity ID has non printable bytes");
+        }
+        Ok(&text[..n])
+    }
+}
+
+/// How far the scan for the next record may look past `after`: one bounded
+/// window normally, the buffer end when the preceding record's flag bit 4
+/// inserted a count prefixed list (the 2019+ era branch blobs run to 406 KiB
+/// and the 2030 build's bus lists past one window; the record head gauntlets
+/// keep blob bytes from forging a record).
+fn resync_end(b: &[u8], after: usize, prev_bit4: bool) -> usize {
+    if prev_bit4 {
+        b.len()
+    } else {
+        after + RESYNC_WINDOW
     }
 }
 
@@ -422,10 +470,12 @@ struct BusHead {
     /// bitmask, not a per file constant. Bit 5 set marks the Simulator 20
     /// era record family (clear on the Simulator 19 era 0x06/0x07 family,
     /// whose tails are shorter), bit 4 set marks a count prefixed list in
-    /// the record tail (2016/2017 era exports), bit 0 clear means one extra
-    /// u16 sits before the nominal kV (observed on generator buses). The
-    /// 2019+ era writers add bit 6 (constant within a file) and the per
-    /// record bit 8; both put their fields in the undecoded tail.
+    /// the record tail (2016/2017 era exports and the 2030 build), bit 0
+    /// clear means one extra u16 sits before the nominal kV (observed on
+    /// generator buses). The 2019+ era writers add bits 6 and 8, both per
+    /// record (the v21 resave clears bit 6 on its slack bus record; the
+    /// bit 6 tails carry a location string block), with their fields in
+    /// the undecoded tail.
     unk: u32,
 }
 
@@ -450,16 +500,17 @@ fn bus_family(unk: u32) -> u32 {
     unk & !0x151
 }
 
-/// Bus table candidates: each `(count, glue)` position after the header whose
-/// record walk succeeds, in scan order. The caller validates each candidate
-/// by parsing the tables that must follow it.
 /// The bus run cache: keyed by first record offset, each entry carrying the
 /// walked `(bus, flag word)` records and the table's family bits.
 type BusRuns = HashMap<usize, (Run<(Bus, u32)>, u32)>;
 
+/// Bus table candidates: each `(count, glue)` position after the header whose
+/// record walk succeeds, in scan order. The caller validates each candidate
+/// by parsing the tables that must follow it.
 fn bus_table_candidates<'a>(
     b: &'a [u8],
     runs: &'a RefCell<BusRuns>,
+    wide_glue: bool,
 ) -> impl Iterator<Item = (Vec<Bus>, usize)> + 'a {
     let limit = b.len().saturating_sub(4).min(0x10000);
     (0x20..limit).flat_map(move |at| {
@@ -467,11 +518,13 @@ fn bus_table_candidates<'a>(
         // Table glue between the count and the first record varies by a few
         // bytes per table and vintage; scan a small window for the record.
         // The v21 resave's bus glue runs 52 bytes, past the 48 every other
-        // export observes; the wide window applies only to large counts
-        // (every observed wide glue table is a node level resave with
-        // thousands of buses), since forged count words are overwhelmingly
-        // small values and widening their window prices every file.
-        let max_glue = if count >= 256 { 96 } else { 48 };
+        // export observes; the first search pass widens the window only for
+        // large counts (every observed wide glue table is a node level
+        // resave with thousands of buses, and forged count words are
+        // overwhelmingly small values, so widening their window prices
+        // every file). The retry pass widens it unconditionally so a small
+        // table with wide glue is found rather than rejected.
+        let max_glue = if wide_glue || count >= 256 { 96 } else { 48 };
         let glues = (count != 0 && count <= 2_000_000).then_some(0..=max_glue);
         glues
             .into_iter()
@@ -509,16 +562,8 @@ fn bus_run(
     run.prefix(count, |after, prev| {
         // The record tail (undecoded; longer when flag bit 4 inserts a
         // count prefixed list) separates this record from the next; find
-        // the next head by bounded scan. The 2030 build's lists run past
-        // the bounded window (149 nine byte entries on one record), so the
-        // scan extends to the buffer end after a bit 4 record, exactly as
-        // in the branch run.
-        let window_end = if prev.1 & 0x10 != 0 {
-            b.len()
-        } else {
-            after + RESYNC_WINDOW
-        };
-        (after..window_end).find_map(|p| {
+        // the next head by bounded scan (see resync_end).
+        (after..resync_end(b, after, prev.1 & 0x10 != 0)).find_map(|p| {
             read_bus_head(b, p)
                 .ok()
                 .filter(|(h, _)| bus_family(h.unk) == family)
@@ -712,13 +757,7 @@ fn read_gen(c: &mut Cur, bus: BusId, id: &[u8]) -> Probe<Generator> {
             b: c.b,
             pos: record_start + anchor,
         };
-        let Ok(vals) = (0..8).map(|_| probe.f32()).collect::<Probe<Vec<_>>>() else {
-            continue;
-        };
-        let plausible = vals.iter().all(|x| x.is_finite() && x.abs() < 1.0e6)
-            && (0.5..=1.6).contains(&vals[4])
-            && (0.1..=1.0e5).contains(&vals[5]);
-        if plausible {
+        if let Ok(vals) = read_gen_f32_block(&mut probe) {
             chosen = Some((vals, probe.pos));
             break;
         }
@@ -727,7 +766,32 @@ fn read_gen(c: &mut Cur, bus: BusId, id: &[u8]) -> Probe<Generator> {
         return Err("generator record does not match the validated layouts");
     };
     c.pos = end;
-    Ok(Generator {
+    // The status byte is unlocated within the flag bytes of this era's
+    // record; every available machine is Closed (see the module docs).
+    Ok(gen_from_block(bus, &v, true))
+}
+
+/// The eight consecutive f32 per unit values both generator record eras
+/// share: MW setpoint, MVAr setpoint, MVRMax, MVRMin, GenVoltSet, GenMVABase,
+/// MWMax, MWMin. The voltage setpoint and MVA base ranges anchor the layout;
+/// a block that fails them is not a generator record.
+fn read_gen_f32_block(c: &mut Cur) -> Probe<[f64; 8]> {
+    let mut v = [0.0f64; 8];
+    for slot in &mut v {
+        *slot = c.f32()?;
+    }
+    let plausible = v.iter().all(|x| x.is_finite() && x.abs() < 1.0e6)
+        && (0.5..=1.6).contains(&v[4])
+        && (0.1..=1.0e5).contains(&v[5]);
+    if !plausible {
+        return Err("generator record does not match the validated layouts");
+    }
+    Ok(v)
+}
+
+/// A [`Generator`] from the shared f32 block (see [`read_gen_f32_block`]).
+fn gen_from_block(bus: BusId, v: &[f64; 8], in_service: bool) -> Generator {
+    Generator {
         bus,
         pg: v[0] * MVA_BASE,
         qg: v[1] * MVA_BASE,
@@ -737,12 +801,10 @@ fn read_gen(c: &mut Cur, bus: BusId, id: &[u8]) -> Probe<Generator> {
         mbase: v[5],
         pmax: v[6] * MVA_BASE,
         pmin: v[7] * MVA_BASE,
-        // The status byte is unlocated within the +7 flag bytes; every
-        // available machine is Closed (see the module docs).
-        in_service: true,
+        in_service,
         cost: None,
         caps: Default::default(),
-    })
+    }
 }
 
 /// 2021 era generator record (header constant 483, the Texas7k export),
@@ -767,16 +829,7 @@ fn read_gen_reg_record(b: &[u8], at: usize, bus_ids: &BusIdSet) -> Probe<(Genera
     if !bus_ids.contains(reg) {
         return Err("regulated bus is not a known bus");
     }
-    // ShortString[2]: one length byte plus a fixed two byte text area, as
-    // in the branch circuit ID.
-    let n = c.u8()? as usize;
-    if n == 0 || n > 2 {
-        return Err("generator ID length not 1 or 2");
-    }
-    let text = c.take(2)?;
-    if !printable(&text[..n]) {
-        return Err("generator ID has non printable bytes");
-    }
+    let _id = c.short_string_2()?;
     if c.u8()? != 1 {
         return Err("generator record lead byte not 1");
     }
@@ -787,6 +840,12 @@ fn read_gen_reg_record(b: &[u8], at: usize, bus_ids: &BusIdSet) -> Probe<(Genera
     let pres = c.u8()?;
     if pres & !0x23 != 0 {
         return Err("generator presence byte not in the validated set");
+    }
+    if pres & 0x22 == 0x22 {
+        // Bits 1 and 5 never co-occur in the corpus, so the order of their
+        // inserted fields is unestablished; guessing it risks reading a
+        // misaligned f32, so the combination rejects until a file shows it.
+        return Err("generator presence bits 1 and 5 together are unobserved");
     }
     for bit in [0x01, 0x20] {
         if pres & bit != 0 {
@@ -799,16 +858,7 @@ fn read_gen_reg_record(b: &[u8], at: usize, bus_ids: &BusIdSet) -> Probe<(Genera
     if pres & 2 != 0 {
         let _ = c.u8()?;
     }
-    let mut v = [0.0f64; 8];
-    for slot in &mut v {
-        *slot = c.f32()?;
-    }
-    let plausible = v.iter().all(|x| x.is_finite() && x.abs() < 1.0e6)
-        && (0.5..=1.6).contains(&v[4])
-        && (0.1..=1.0e5).contains(&v[5]);
-    if !plausible {
-        return Err("generator record does not match the validated layouts");
-    }
+    let v = read_gen_f32_block(&mut c)?;
     if c.u8()? != 0 {
         return Err("generator record separator byte not zero");
     }
@@ -820,21 +870,7 @@ fn read_gen_reg_record(b: &[u8], at: usize, bus_ids: &BusIdSet) -> Probe<(Genera
     if !rmpct.is_finite() || !(0.0..=1000.0).contains(&rmpct) {
         return Err("implausible remote regulation percentage");
     }
-    let machine = Generator {
-        bus: BusId(bus),
-        pg: v[0] * MVA_BASE,
-        qg: v[1] * MVA_BASE,
-        qmax: v[2] * MVA_BASE,
-        qmin: v[3] * MVA_BASE,
-        vg: v[4],
-        mbase: v[5],
-        pmax: v[6] * MVA_BASE,
-        pmin: v[7] * MVA_BASE,
-        in_service: status & 1 == 1,
-        cost: None,
-        caps: Default::default(),
-    };
-    Ok((machine, c.pos))
+    Ok((gen_from_block(BusId(bus), &v, status & 1 == 1), c.pos))
 }
 
 /// Shunt record: nominal MVAr as f32 at +24 from the record start, validated
@@ -871,8 +907,8 @@ fn read_shunt(c: &mut Cur, bus: BusId, id: &[u8]) -> Probe<Shunt> {
 // ---- Branch table ------------------------------------------------------------
 
 /// Whether a branch record flag word is one this reader decodes: base bits
-/// `0x6C` plus any combination of bits 0, 1, 4, and (behind `wide`) 7, a
-/// Delphi field presence bitmask like the bus record's. Bit 0 set omits
+/// `0x6C` plus any combination of bits 0, 1, 4, and 7, a Delphi field
+/// presence bitmask like the bus record's. Bit 0 set omits
 /// the circuit ID string and its status byte (the PowerWorld default " 1"
 /// applies), bit 1 set means two inline rating slots instead of three
 /// (the Simulator 19 era writer inlines three), bit 4 marks a count
@@ -950,18 +986,9 @@ fn branch_run(
         }
     };
     run.prefix(count, |after, prev| {
-        // Flag bit 4 appends a variable structure to the record tail; the
-        // 2019+ era writers store per bus f64 vectors and contingency label
-        // text there, hundreds of KiB on some records, so the bounded
-        // window cannot cover it. The scan extends to the buffer end for
-        // those records only; the ~90 byte structural gauntlet of
-        // read_branch_head keeps blob content from forging a record.
-        let window_end = if prev.1 & 0x10 != 0 {
-            b.len()
-        } else {
-            after + RESYNC_WINDOW
-        };
-        (after..window_end).find_map(|p| {
+        // The undecoded record tail separates this record from the next;
+        // find the next head by bounded scan (see resync_end).
+        (after..resync_end(b, after, prev.1 & 0x10 != 0)).find_map(|p| {
             read_branch_head(b, p, bus_ids)
                 .ok()
                 .map(|(br, end, flags)| ((br, flags), end))
@@ -989,19 +1016,7 @@ fn read_branch_head(b: &[u8], at: usize, bus_ids: &BusIdSet) -> Probe<(Branch, u
         return Err("branch record flags not in the validated set");
     }
     let circuit = if flags & 1 == 0 {
-        // The circuit ID is a Delphi ShortString[2]: one length byte and a
-        // fixed two byte text area (a one character ID leaves the second
-        // byte unused). Establishing this took the v19 file's parallel
-        // circuit records, the first in the corpus with two character IDs.
-        let n = c.u8()? as usize;
-        if n == 0 || n > 2 {
-            return Err("circuit ID length not 1 or 2");
-        }
-        let text = c.take(2)?;
-        if !printable(&text[..n]) {
-            return Err("circuit ID has non printable bytes");
-        }
-        Some(&text[..n])
+        Some(c.short_string_2()?)
     } else {
         // Omitted circuit: PowerWorld's default, observed as " 1" in the
         // sibling aux.
