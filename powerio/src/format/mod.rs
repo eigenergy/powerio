@@ -33,7 +33,7 @@ use crate::{Error, Result};
 mod egret;
 mod matpower;
 mod powermodels;
-mod powerworld;
+pub mod powerworld;
 mod psse;
 
 pub use egret::{parse_egret_json, write_egret_json};

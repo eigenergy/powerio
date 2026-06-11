@@ -99,6 +99,17 @@ where
         // rows are space/semicolon-delimited). This replaces split(';') +
         // split_ascii_whitespace — the generic Unicode searcher was the dominant
         // tokenizing cost — and feeds raw bytes straight to the float parser.
+        //
+        // MATLAB also ends a matrix row at the line break itself unless the
+        // line ends with a `...` continuation; PowerWorld's `.m` exports write
+        // no semicolons at all, so the end-of-line flush below is what splits
+        // their rows.
+        let mut continuation = false;
+        let trimmed = code.trim_end();
+        if let Some(stripped) = trimmed.strip_suffix("...") {
+            code = stripped;
+            continuation = true;
+        }
         let bytes = code.as_bytes();
         let mut i = 0;
         while i < bytes.len() {
@@ -132,6 +143,12 @@ where
                 row,
                 value: String::from_utf8_lossy(tok).into_owned(),
             })?);
+        }
+        // End of line ends the row, unless continued with `...`.
+        if !continuation && !buf.is_empty() {
+            f(&buf, row)?;
+            row += 1;
+            buf.clear();
         }
     }
     // Entered the matrix (`[`) but never saw the closing `]`: the assignment is

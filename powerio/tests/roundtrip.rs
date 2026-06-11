@@ -38,7 +38,7 @@ fn writer_reproduces_source_modulo_trailing_newline() {
         // Compare modulo the final newline and `\r\n`; everything else —
         // comments, column headers, exact tokens — is byte-for-byte.
         assert_eq!(
-            written.trim_end_matches('\n'),
+            written.replace("\r\n", "\n").trim_end_matches('\n'),
             original.replace("\r\n", "\n").trim_end_matches('\n'),
             "{}: writer did not reproduce the source",
             path.display()
