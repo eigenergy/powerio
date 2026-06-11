@@ -219,21 +219,29 @@ the 2018 one, plus the bit 4 lists) are skipped by the record resync.
 Newer writers widen the family with bits 6 and 8: Texas7k_20210804.PWB
 (header constant 483) carries 0x66 ×481, 0x166 ×187, 0x167 ×6049 over its
 6717 buses, and the current era ACTIVSg2000.PWB export (header constant
-425!) carries 0x66/0x67/0x166/0x167/0x177. The head layout STILL matches
-through the solved voltage (kV, area/zone/BA, label, vm, va verified by
-eye against the Texas7k aux values), with bit 8 varying per record like
-bit 0; bit 6 looks file constant. The device chains behind these bus
-tables carry further structure the validated models do not cover (the
-Texas7k load walk loses sync mid table), so these files classify and
-reject until that evidence pass lands. The 39 bus sample case (header 425)
-shows no recognized bus record layout at all in a 44 KiB file.
+425!) carries 0x66/0x67/0x166/0x167/0x177. The head layout still matches
+through the solved voltage, with bit 8 varying per record like bit 0 and
+bit 6 file constant. The Texas7k chain behind the bus table, probed
+against its same day aux: loads (count 5095, layout unchanged, P total
+exact), then generators (count 731, a NEW record layout: the leading u32
+is not the device bus, two records can share it and it can name a bus
+that has no machine, so it is probably the regulated bus with the device
+bus deeper in the record; 246 records coincidentally parse like 425 era
+ones), then shunts (count 634, MVAr at +24, total exact), then branches
+(count 9140, the three inline rating 0xEC layout, first records parse).
+The generator record blocks the 483 decode; these files classify and
+reject until its differential fit lands. The 39 bus sample case (header
+425) shows no recognized bus record layout at all in a 44 KiB file.
 
-### Load record (validated on all 160 + 1417 + 1350 loads of three files)
+### Load record (validated on all 160 + 1417 + 1350 + 5095 loads of four files)
 
-u32 BusNum, variable length ShortString LoadID, one byte (0 in every
-available record; treated as the Delphi status convention), then f32 values
-in per unit on the system base: LoadSMW/100, LoadSMVR/100. Remainder
-undecoded (I/Z components are zero in every available case).
+u32 BusNum, variable length ShortString LoadID, one undecoded byte, then
+f32 values in per unit on the system base: LoadSMW/100, LoadSMVR/100.
+Remainder undecoded (I/Z components are zero in every available case). The
+byte after the ID is 0x00 in every 425 era record and 0x01 in every 483
+era one while both auxes mark every load Closed, so it is not a status
+byte; an earlier draft treated it as one. The 483 era layout is otherwise
+identical: all 5095 Texas7k loads sum to the aux total exactly.
 
 ### Generator record (validated on all 49 + 282 + 545 machines of three files)
 
@@ -323,7 +331,7 @@ checksum and recorded URL by `benchmarks/fetch_powerworld.sh`.
 | Texas2000_June2016.pwb | fetched (TAMU) | 425 | 0x06-0x17 | same day aux | decoded, parity on every quantity | 2007 buses, 3043 branches |
 | ACTIV_SG_2000_v19.pwb | fetched (powerworld.com) | 425 | 0x26-0x37 | published case .m, deltas pinned | decoded, parity | 2000 buses, 3202 branches |
 | RTS-GMLC.PWB | fetched (GridMod/RTS-GMLC @3ece0d3) | 425 | 0x06/0x07 | same commit .m + .RAW | decoded, parity | 73 buses, 120 branches |
-| Texas7k 2021 export | local only | 483 | 0x66-0x167 | aux sibling available | rejected: header constant; bus heads decode, device chain undecoded | 6717 bus heads walk |
+| Texas7k 2021 export | local only | 483 | 0x66-0x167 | aux sibling available | rejected: header constant; buses, loads, shunts, branches decode in probes, the generator record is a new layout | 6717 buses, 5095 loads, 634 shunts probe exactly |
 | Texas7k v21/v22/2030 saves | local only | 508/537/550/551 | unprobed | — | rejected: header constant | |
 | ACTIVSg2000 current era export | local only | 425 | 0x66-0x177 | published case | rejected: bus flag bits 6/8 not validated | |
 | 39 bus sample case | local only | 425 | none found | — | rejected: no recognized bus record layout | |

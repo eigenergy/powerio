@@ -29,10 +29,11 @@
 //! Known limits, documented rather than guessed:
 //!
 //! - Status bytes: every device in every available case is in service, so
-//!   no out of service encoding is validated anywhere. The load record's
-//!   post ID byte (0 in every record) is treated as the Delphi status
-//!   convention; the generator, shunt, and branch status bytes are
-//!   unlocated and those devices read as in service.
+//!   no out of service encoding is validated anywhere and every device
+//!   reads as in service. The load record's post ID byte, once treated as
+//!   a status, is 0x00 in the 425 era files and 0x01 in the 483 era one
+//!   with every load Closed in both, so it is no status byte; the
+//!   generator, shunt, and branch status bytes are unlocated.
 //! - Transformer phase shift: every available case has zero phase, so the
 //!   field's offset is unknown; transformers read with `shift = 0`.
 //! - The slack designation is not stored in the bus record; buses read as
@@ -488,9 +489,12 @@ fn walk_devices<T>(
     Ok((out, first))
 }
 
-/// Load record: status byte, then constant power P and Q in per unit (f32).
+/// Load record: one undecoded byte, then constant power P and Q in per unit
+/// (f32). The byte is 0x00 in every 425 era record and 0x01 in every 483
+/// era one while both auxes say every load is Closed, so it is not a status
+/// byte; loads read as in service (see the module docs).
 fn read_load(c: &mut Cur, bus: BusId, id: String) -> Result<Load> {
-    let status = c.u8()?;
+    let _flag = c.u8()?;
     let p = c.f32()? * MVA_BASE;
     let q = c.f32()? * MVA_BASE;
     if !p.is_finite() || !q.is_finite() || p.abs() > 1.0e6 || q.abs() > 1.0e6 {
@@ -502,7 +506,7 @@ fn read_load(c: &mut Cur, bus: BusId, id: String) -> Result<Load> {
         bus,
         p,
         q,
-        in_service: status == 0,
+        in_service: true,
         extras,
     })
 }
