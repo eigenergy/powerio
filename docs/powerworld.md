@@ -136,6 +136,95 @@ vm/va to 1e-6/1e-4, ZIP load totals vs MATPOWER Pd/Qd to the .m print
 quantum, dispatch and branch values likewise. `powerio/tests/`
 `powerworld_parity.rs` asserts all of this.
 
+## The .pwb binary format (decode evidence)
+
+Established by differential analysis of three lawfully obtained files against
+their aux siblings, no PowerWorld software involved: ACTIVSg200.pwb
+(Simulator 20 era, June 2018, same snapshot as the vendored aux),
+Texas2000_June2016.pwb (June 2016, same day as its aux sibling), and
+ACTIV_SG_2000_v19.pwb (April 2017). Every claim below was verified by exact
+value match against the sibling aux on every record unless noted. Offsets are
+from the field listed; integers and floats are little endian.
+
+### Header (identical prefix in all three files)
+
+| offset | type | value | meaning |
+|---|---|---|---|
+| 0x00 | u64 | 15000 | magic / format constant |
+| 0x08 | u64 | 425 | format constant |
+| 0x10 | u64 | 20 | format constant |
+| 0x18 | 16 bytes | 0 | unknown |
+| 0x28 | f64 | varies | Delphi TDateTime of the save (days since 1899-12-30); matches each file's export date |
+| 0x30.. | | | case description block: a small count, then u32 length prefixed text paragraphs |
+
+### Strings
+
+Two encodings: u32 length prefixed byte strings (names, labels) and Pascal
+ShortStrings (one length byte; device IDs, circuit IDs).
+
+### Tables
+
+Object tables appear in a fixed order matching the aux export: buses, loads,
+generators, shunts, branches (lines and transformers interleaved, ordered by
+bus), then the remaining object types. Each table is preceded by its record
+count (u32; 200 appears at 0x328 in ACTIVSg200.pwb before the first bus
+record, 49 before the generators, 246 before the branches) plus a short
+table specific glue block.
+
+### Bus record (validated on all 200 + 2007 buses of two vintages)
+
+| field | type | notes |
+|---|---|---|
+| BusNum | u32 | record starts here |
+| BusName | u32 string | |
+| unknown | u32 | 39 in the 2018 file, 7 in the 2016 file; constant per file |
+| BusNomVolt | f32 | f32 storage explains the noise the aux prints (13.800000190734863) |
+| AreaNum, ZoneNum, BANumber | u32 ×3 | |
+| label | u32 string | "newbus 138" in the ACTIVSg cases |
+| BusPUVolt | f64 | exact match with the aux |
+| BusAngle | f64 | radians; aux prints degrees |
+| tail | 85 bytes (2018) / shorter (2016) | constant across records within a file; contains DCLossMultiplier as f32 1.0 and flag bytes; undecoded |
+
+Substation coordinates are not in the bus record; they live with the
+substation objects.
+
+### Load record (89 bytes fixed, validated on all 160)
+
+u32 BusNum, ShortString LoadID, one byte (status, 0 observed for Closed),
+then f32 values in per unit on the system base: LoadSMW/100 at +8 from
+record start, LoadSMVR/100 at +12. Remainder undecoded (I/Z components are
+zero in every available case).
+
+### Generator record (variable length, validated on all 49)
+
+u32 BusNum, ShortString GenID, then f32 per unit values at fixed offsets
+from record start: MW setpoint +11, MVAr setpoint +15, MVRMax +19, MVRMin
++23, GenVoltSet +27 (p.u., scale 1), GenMVABase +31 (MVA, scale 1), MWMax
++35, MWMin +39, GenRMPCT +53. GenZR/GenZX as f64 near +147/+193. Record
+length varies with embedded strings.
+
+### Branch records (lines ~224 bytes, transformers ~384, interleaved)
+
+u32 from bus, u32 to bus, u16 flags, then optionally a ShortString circuit
+ID. Flags 0x00EE: circuit string present, followed by one byte (status
+candidate), f32 LineR, f32 LineX, f32 LineC, f32 ratings/100 (LineAMVA at
++12 from LineX). Flags 0x00EF: no circuit string (PowerWorld's default
+" 1"), R follows the flags directly. Transformer records carry the
+regulation block at higher offsets: tap at +87 from record start, tap
+limits +104/+108, step +122, nominal kV pair +169/+173, XFMVABase +177.
+The flags word is the Delphi optional field bitmask; only the observed
+values are accepted and anything else is a loud error.
+
+### Open questions (inventoried, not guessed)
+
+- Status encodings (every device in the available 200 bus case is Closed);
+  the 2016 Texas case carries open devices and pins them.
+- The bus record tail bytes and the branch record interiors beyond the
+  fields above.
+- Table glue blocks between count and first record.
+- Substation, area/zone names, contingency tables: present after the
+  branches, undecoded in this pass.
+
 ## Object inventory of ACTIVSg200.aux
 
 | object | rows | fields | notes |
