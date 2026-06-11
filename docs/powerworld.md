@@ -262,8 +262,8 @@ its aux. Hawaii40 (2022, header constant 508) decodes with full parity
 the same way, which is the evidence admitting the 508 header era; its
 aux uses the 2022 concise vocabulary (see the mapping notes). The 508
 saves of node level cases (Texas7k v21) still die in the table chain
-like their 483 originals, now after a slow search rather than a named
-header rejection.
+like their 483 originals, after an exhausted chain search (0.85 s on
+the 13 MiB resave) rather than a named header rejection.
 
 ### Load record (validated on all 160 + 1417 + 1350 + 5095 loads of four files)
 
@@ -383,7 +383,7 @@ checksum and recorded URL by `benchmarks/fetch_powerworld.sh`.
 | ACTIV_SG_2000_v19.pwb | fetched (powerworld.com) | 425 | 0x26-0x37 | published case .m, deltas pinned | decoded, parity | 2000 buses, 3202 branches |
 | RTS-GMLC.PWB | fetched (GridMod/RTS-GMLC @3ece0d3) | 425 | 0x06/0x07 | same commit .m + .RAW | decoded, parity | 73 buses, 120 branches |
 | Texas7k 2021 export | local only | 483 | 0x66-0x167 | aux sibling available | rejected: header constant; buses, loads, shunts, branches decode in probes, the generator record is a new layout | 6717 buses, 5095 loads, 634 shunts probe exactly |
-| Texas7k v21/v22/2030 saves | local only | 508/537/550/551 | unprobed | — | rejected: header constant (537/550/551) or table chain (508, slow) | |
+| Texas7k v21/v22/2030 saves | local only | 508/537/550/551 | unprobed | — | rejected: header constant (537/550/551) or table chain (508) | |
 | 39 bus sample case | local only | 425 | none found | — | rejected: no recognized bus record layout | |
 | 118 bus sample case | local only | 338 | — | — | rejected: header constant | |
 | 12 bus course case | local only | 134 | — | — | rejected: header constant | |

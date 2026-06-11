@@ -148,6 +148,12 @@ fn activsg200_pwb_matches_its_aux_sibling() {
             a.rate_a
         );
         assert!(
+            (p.rate_b - a.rate_b).abs() < 1e-4 * a.rate_b.abs().max(1.0),
+            "{key:?} rate_b {} vs {}",
+            p.rate_b,
+            a.rate_b
+        );
+        assert!(
             (p.effective_tap() - a.effective_tap()).abs() < 1e-6,
             "{key:?} tap {} vs {}",
             p.effective_tap(),
@@ -602,6 +608,7 @@ fn rts_gmlc_pwb_matches_its_matpower_and_raw_siblings() {
     for p in &pwb.buses {
         let a = m_bus[&p.id.0];
         assert!((p.base_kv - a.base_kv).abs() < 1e-4, "bus {} kV", p.id);
+        assert_eq!((p.area, p.zone), (a.area, a.zone), "bus {}", p.id);
         let r = raw_bus[&p.id.0];
         assert!(
             (p.vm - r.vm).abs() <= 5e-6,
@@ -817,6 +824,12 @@ fn activsg2000_current_era_pwb_matches_its_aux_sibling() {
             a.rate_a
         );
         assert!(
+            (p.rate_b - a.rate_b).abs() <= 1e-3 + 1e-6 * a.rate_b.abs(),
+            "{key:?} rate_b {} vs {}",
+            p.rate_b,
+            a.rate_b
+        );
+        assert!(
             (p.effective_tap() - a.effective_tap()).abs() < 1e-6,
             "{key:?} tap {} vs {}",
             p.effective_tap(),
@@ -857,6 +870,7 @@ fn activsg500_pwb_matches_its_aux_sibling() {
     for (p, a) in pwb.buses.iter().zip(&aux.buses) {
         assert_eq!(p.id, a.id);
         assert_eq!(p.name, a.name);
+        assert_eq!((p.area, p.zone), (a.area, a.zone), "bus {}", p.id);
         assert!((p.base_kv - a.base_kv).abs() < 1e-4, "bus {} kV", p.id);
         assert!(
             (p.vm - a.vm).abs() <= 5e-7,
@@ -938,6 +952,12 @@ fn activsg500_pwb_matches_its_aux_sibling() {
             a.rate_a
         );
         assert!(
+            (p.rate_b - a.rate_b).abs() <= 1e-3 + 1e-6 * a.rate_b.abs(),
+            "{key:?} rate_b {} vs {}",
+            p.rate_b,
+            a.rate_b
+        );
+        assert!(
             (p.effective_tap() - a.effective_tap()).abs() < 1e-6,
             "{key:?} tap {} vs {}",
             p.effective_tap(),
@@ -975,6 +995,7 @@ fn hawaii40_pwb_matches_its_aux_sibling() {
     for (p, a) in pwb.buses.iter().zip(&aux.buses) {
         assert_eq!(p.id, a.id);
         assert_eq!(p.name, a.name);
+        assert_eq!((p.area, p.zone), (a.area, a.zone), "bus {}", p.id);
         assert!((p.base_kv - a.base_kv).abs() < 1e-4, "bus {} kV", p.id);
         assert!(
             (p.vm - a.vm).abs() <= 5e-7,
@@ -1027,6 +1048,16 @@ fn hawaii40_pwb_matches_its_aux_sibling() {
             );
         }
     }
+    for (p, a) in pwb.shunts.iter().zip(&aux.shunts) {
+        assert_eq!(p.bus, a.bus);
+        assert!(
+            (p.b - a.b).abs() <= 1e-3,
+            "shunt at {}: {} vs {}",
+            p.bus,
+            p.b,
+            a.b
+        );
+    }
     let mut aux_by_id: BTreeMap<(usize, usize, String), &powerio::Branch> = BTreeMap::default();
     for b in &aux.branches {
         aux_by_id.insert((b.from.0, b.to.0, ckt(b)), b);
@@ -1044,6 +1075,12 @@ fn hawaii40_pwb_matches_its_aux_sibling() {
             "{key:?} rate_a {} vs {}",
             p.rate_a,
             a.rate_a
+        );
+        assert!(
+            (p.rate_b - a.rate_b).abs() <= 1e-3 + 1e-6 * a.rate_b.abs(),
+            "{key:?} rate_b {} vs {}",
+            p.rate_b,
+            a.rate_b
         );
         assert!(
             (p.effective_tap() - a.effective_tap()).abs() < 1e-6,
