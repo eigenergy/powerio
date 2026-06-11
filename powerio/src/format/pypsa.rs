@@ -273,13 +273,21 @@ pub fn write_pypsa_csv_folder(net: &Network, out_dir: impl AsRef<Path>) -> Resul
             .push("storage fields are mapped to PyPSA storage_units with reduced fidelity".into());
     }
 
+    // Element tables must reference buses by the same key buses.csv is indexed
+    // on (the bus name, falling back to the id), or PyPSA cannot resolve them.
+    let keys: HashMap<BusId, String> = net.buses.iter().map(|b| (b.id, bus_name(b))).collect();
     write_file(out_dir, "network.csv", &network_csv(net), &mut files)?;
     write_file(out_dir, "snapshots.csv", ",snapshot\n0,now\n", &mut files)?;
     write_file(out_dir, "buses.csv", &buses_csv(net), &mut files)?;
-    write_file(out_dir, "generators.csv", &generators_csv(net), &mut files)?;
-    write_file(out_dir, "loads.csv", &loads_csv(net), &mut files)?;
-    write_file(out_dir, "lines.csv", &lines_csv(net), &mut files)?;
-    let transformers = transformers_csv(net);
+    write_file(
+        out_dir,
+        "generators.csv",
+        &generators_csv(net, &keys),
+        &mut files,
+    )?;
+    write_file(out_dir, "loads.csv", &loads_csv(net, &keys), &mut files)?;
+    write_file(out_dir, "lines.csv", &lines_csv(net, &keys), &mut files)?;
+    let transformers = transformers_csv(net, &keys);
     if transformers.lines().count() > 1 {
         write_file(out_dir, "transformers.csv", &transformers, &mut files)?;
     }
@@ -287,12 +295,17 @@ pub fn write_pypsa_csv_folder(net: &Network, out_dir: impl AsRef<Path>) -> Resul
         write_file(
             out_dir,
             "shunt_impedances.csv",
-            &shunts_csv(net),
+            &shunts_csv(net, &keys),
             &mut files,
         )?;
     }
     if !net.storage.is_empty() {
-        write_file(out_dir, "storage_units.csv", &storage_csv(net), &mut files)?;
+        write_file(
+            out_dir,
+            "storage_units.csv",
+            &storage_csv(net, &keys),
+            &mut files,
+        )?;
     }
     Ok(PypsaCsvOutputs {
         dir: out_dir.to_path_buf(),
@@ -325,7 +338,7 @@ fn buses_csv(net: &Network) -> String {
     s
 }
 
-fn generators_csv(net: &Network) -> String {
+fn generators_csv(net: &Network, keys: &HashMap<BusId, String>) -> String {
     let mut s = String::from(
         "name,bus,control,p_nom,p_set,q_set,p_min_pu,p_max_pu,marginal_cost,marginal_cost_quadratic,active,v_mag_pu_set\n",
     );
@@ -349,7 +362,7 @@ fn generators_csv(net: &Network) -> String {
             s,
             "gen_{},{},{},{},{},{},{},{},{},{},{},{}",
             i + 1,
-            g.bus.0,
+            bus_key(keys, g.bus),
             if bus_kind.get(&g.bus).copied() == Some(BusType::Ref) {
                 "Slack"
             } else {
@@ -373,14 +386,14 @@ fn generators_csv(net: &Network) -> String {
     s
 }
 
-fn loads_csv(net: &Network) -> String {
+fn loads_csv(net: &Network, keys: &HashMap<BusId, String>) -> String {
     let mut s = String::from("name,bus,p_set,q_set,active\n");
     for (i, l) in net.loads.iter().enumerate() {
         let _ = writeln!(
             s,
             "load_{},{},{},{},{}",
             i + 1,
-            l.bus.0,
+            bus_key(keys, l.bus),
             l.p,
             l.q,
             l.in_service
@@ -389,7 +402,7 @@ fn loads_csv(net: &Network) -> String {
     s
 }
 
-fn lines_csv(net: &Network) -> String {
+fn lines_csv(net: &Network, keys: &HashMap<BusId, String>) -> String {
     let mut s = String::from("name,bus0,bus1,r,x,b,s_nom,v_ang_min,v_ang_max,active\n");
     let bus_kv: HashMap<BusId, f64> = net.buses.iter().map(|b| (b.id, b.base_kv)).collect();
     for (i, br) in net
@@ -403,8 +416,8 @@ fn lines_csv(net: &Network) -> String {
             s,
             "line_{},{},{},{},{},{},{},{},{},{}",
             i + 1,
-            br.from.0,
-            br.to.0,
+            bus_key(keys, br.from),
+            bus_key(keys, br.to),
             br.r * zb,
             br.x * zb,
             br.b / zb,
@@ -417,7 +430,7 @@ fn lines_csv(net: &Network) -> String {
     s
 }
 
-fn transformers_csv(net: &Network) -> String {
+fn transformers_csv(net: &Network, keys: &HashMap<BusId, String>) -> String {
     let mut s = String::from("name,bus0,bus1,r,x,s_nom,tap_ratio,phase_shift,active\n");
     for (i, br) in net
         .branches
@@ -429,8 +442,8 @@ fn transformers_csv(net: &Network) -> String {
             s,
             "transformer_{},{},{},{},{},{},{},{},{}",
             i + 1,
-            br.from.0,
-            br.to.0,
+            bus_key(keys, br.from),
+            bus_key(keys, br.to),
             br.r,
             br.x,
             br.rate_a,
@@ -442,7 +455,7 @@ fn transformers_csv(net: &Network) -> String {
     s
 }
 
-fn shunts_csv(net: &Network) -> String {
+fn shunts_csv(net: &Network, keys: &HashMap<BusId, String>) -> String {
     let mut s = String::from("name,bus,g,b,active\n");
     let bus_kv: HashMap<BusId, f64> = net.buses.iter().map(|b| (b.id, b.base_kv)).collect();
     for (i, sh) in net.shunts.iter().enumerate() {
@@ -451,7 +464,7 @@ fn shunts_csv(net: &Network) -> String {
             s,
             "shunt_{},{},{},{},{}",
             i + 1,
-            sh.bus.0,
+            bus_key(keys, sh.bus),
             sh.g / (zb * net.base_mva),
             sh.b / (zb * net.base_mva),
             sh.in_service
@@ -460,7 +473,7 @@ fn shunts_csv(net: &Network) -> String {
     s
 }
 
-fn storage_csv(net: &Network) -> String {
+fn storage_csv(net: &Network, keys: &HashMap<BusId, String>) -> String {
     let mut s = String::from(
         "name,bus,p_nom,max_hours,efficiency_store,efficiency_dispatch,cyclic_state_of_charge\n",
     );
@@ -478,7 +491,7 @@ fn storage_csv(net: &Network) -> String {
             s,
             "storage_{},{},{},{},{},{},true",
             i + 1,
-            st.bus.0,
+            bus_key(keys, st.bus),
             p_nom,
             max_hours,
             st.charge_efficiency,
@@ -589,6 +602,12 @@ fn parse_csv(text: &str) -> Vec<Vec<String>> {
 
 fn bus_name(b: &Bus) -> String {
     esc(b.name.as_deref().unwrap_or(&b.id.0.to_string()))
+}
+
+/// The bus reference an element table writes: the same key `buses.csv` is
+/// indexed on, falling back to the raw id for a reference to a missing bus.
+fn bus_key(keys: &HashMap<BusId, String>, bus: BusId) -> String {
+    keys.get(&bus).cloned().unwrap_or_else(|| bus.0.to_string())
 }
 
 fn esc(s: &str) -> String {

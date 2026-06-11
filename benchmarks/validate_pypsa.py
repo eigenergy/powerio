@@ -62,7 +62,9 @@ def check_case(path: Path) -> str:
             py_b = []
             for _, row in net.lines.iterrows():
                 v = float(net.buses.loc[row.bus1].v_nom)
-                zbase = v * v / case.base_mva
+                # Mirror the writer's guard: a 0 kV bus (IEEE cases ship
+                # base_kv 0) uses zbase 1, i.e. ohms == per unit.
+                zbase = v * v / case.base_mva if v > 0 else 1.0
                 py_r.append(float(row.r) / zbase)
                 py_x.append(float(row.x) / zbase)
                 py_b.append(float(row.b) * zbase)
