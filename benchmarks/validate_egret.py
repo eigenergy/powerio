@@ -26,7 +26,7 @@ from egret.parsers.matpower_parser import create_ModelData
 
 
 def load(path):
-    if path.endswith(".m"):
+    if path.lower().endswith(".m"):
         return create_ModelData(path)
     return ModelData(path)
 

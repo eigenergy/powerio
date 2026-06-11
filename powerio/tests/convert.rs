@@ -421,8 +421,8 @@ fn powermodels_unbounded_limit_round_trips_as_infinity() {
 
 #[test]
 fn parse_file_accepts_uppercase_and_mixed_case_extensions() {
-    // Issue #97: .RAW / .Raw / .M should work identically to their lowercase forms.
-    // Extension detection must be case-insensitive.
+    // Issue #97: .RAW / .Raw / .M / .JSON / .AUX must work identically to their
+    // lowercase forms; extension detection is case-insensitive.
     let dir = std::env::temp_dir();
 
     let raw_src = std::fs::read_to_string(data("psse/case14.raw")).unwrap();
@@ -435,12 +435,22 @@ fn parse_file_accepts_uppercase_and_mixed_case_extensions() {
         assert_eq!(net.buses.len(), 14, ".{ext}: wrong bus count");
     }
 
+    // One uppercase probe per remaining extension; the JSON goes through the
+    // egret-vs-PowerModels sniff, the AUX through the PowerWorld reader.
+    let net = parse_matpower_file(data("case14.m")).unwrap();
     let m_src = std::fs::read_to_string(data("case14.m")).unwrap();
-    let path = dir.join("powerio_test_issue97.M");
-    std::fs::write(&path, &m_src).unwrap();
-    let result = parse_file(&path, None);
-    let _ = std::fs::remove_file(&path);
-    result.unwrap_or_else(|e| panic!(".M extension should be accepted: {e}"));
+    for (ext, src) in [
+        ("M", m_src),
+        ("JSON", write_powermodels_json(&net).text),
+        ("AUX", write_powerworld(&net).text),
+    ] {
+        let path = dir.join(format!("powerio_test_issue97.{ext}"));
+        std::fs::write(&path, &src).unwrap();
+        let result = parse_file(&path, None);
+        let _ = std::fs::remove_file(&path);
+        let parsed = result.unwrap_or_else(|e| panic!(".{ext} extension should be accepted: {e}"));
+        assert_eq!(parsed.buses.len(), 14, ".{ext}: wrong bus count");
+    }
 }
 
 #[test]

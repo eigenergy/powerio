@@ -153,24 +153,30 @@ pub fn parse_file(path: impl AsRef<std::path::Path>, from: Option<&str>) -> Resu
     let text = std::fs::read_to_string(path)?;
     let fmt = match from {
         Some(f) => target_format_from_name(f).ok_or_else(|| Error::UnknownFormat(f.to_string()))?,
-        None => {
-            let ext = path.extension().and_then(|e| e.to_str());
-            match ext.map(str::to_ascii_lowercase).as_deref() {
-                Some("m") => TargetFormat::Matpower,
-                Some("json") => sniff_json(&text),
-                Some("raw") => TargetFormat::Psse,
-                Some("aux") => TargetFormat::PowerWorld,
-                _ => {
-                    return Err(Error::UnknownFormat(format!(
-                        "cannot infer from file extension {ext:?}; pass an explicit source format"
-                    )));
-                }
-            }
-        }
+        None => format_from_extension(path, &text)?,
     };
     // The file stem is the name hint for formats that don't carry their own name.
     let stem = path.file_stem().and_then(|s| s.to_str());
     read_source(Arc::new(text), fmt, stem)
+}
+
+/// Map a file extension to a [`TargetFormat`], case-insensitively (issue #97:
+/// `.RAW` is as common as `.raw` in the wild). A `.json` is sniffed for the
+/// egret vs PowerModels shape. The error keeps the extension as the user wrote
+/// it.
+fn format_from_extension(path: &std::path::Path, text: &str) -> Result<TargetFormat> {
+    let ext = path.extension().and_then(|e| e.to_str());
+    Ok(match ext.map(str::to_ascii_lowercase).as_deref() {
+        Some("m") => TargetFormat::Matpower,
+        Some("json") => sniff_json(text),
+        Some("raw") => TargetFormat::Psse,
+        Some("aux") => TargetFormat::PowerWorld,
+        _ => {
+            return Err(Error::UnknownFormat(format!(
+                "cannot infer from file extension {ext:?}; pass an explicit source format"
+            )));
+        }
+    })
 }
 
 /// Read an owned `source` buffer as `fmt`, using `name_hint` (e.g. the file
