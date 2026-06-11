@@ -140,7 +140,7 @@ in Python), naming the table and counting the affected rows.
   `Network` from the gridfm-datakit Parquet dataset: lossy, but it recovers
   everything a power flow needs. That is bus types/voltages/limits, nodal load
   and shunt totals, generator
-  dispatch and bounds, branch `r/x/b/tap/shift/rate_a`/angle-limits, and `baseMVA`;
+  dispatch and bounds, branch `r/x/b/tap/shift/rate_a`/angle limits, and `baseMVA`;
   it can't recover original bus ids (synthesized `1..n`), per element load/shunt
   granularity (folded one synthetic element per bus), piecewise/cubic gen costs
   (read as none), or HVDC/storage. Because the writer stores the *effective* tap,
