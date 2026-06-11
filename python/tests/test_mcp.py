@@ -213,3 +213,31 @@ def test_tool_surface_parity():
         "convert_case", "save_case", "case_summary", "parse_case",
         "normalize_case", "case_to_json", "compute_matrix", "dense_view",
     }
+
+
+def test_unreadable_file_maps_cleanly(tmp_path):
+    # PermissionError must surface as the documented ValueError shape, like
+    # FileNotFoundError, not leak raw through the tool.
+    import os
+    import sys
+
+    if sys.platform == "win32" or os.geteuid() == 0:
+        pytest.skip("permission bits are not enforceable here")
+    locked = tmp_path / "locked.m"
+    locked.write_text("function mpc = x\n")
+    locked.chmod(0o000)
+    try:
+        with pytest.raises(ValueError, match="cannot read file"):
+            convert_case(to="psse", path=str(locked))
+        with pytest.raises(ValueError, match="cannot read file"):
+            case_summary(path=str(locked))
+    finally:
+        locked.chmod(0o644)
+
+
+def test_wrong_schema_json_maps_cleanly():
+    from powerio.mcp.server import compute_matrix
+
+    for bad in ("{}", "[]", "null", '{"buses": "nope"}'):
+        with pytest.raises(ValueError, match="parse failed"):
+            compute_matrix("bprime", json=bad)
