@@ -47,6 +47,16 @@ pub fn activsg2000_fetched(name: &str) -> Option<PathBuf> {
     p.exists().then_some(p)
 }
 
+/// A fetched RTS-GMLC fixture (`benchmarks/fetch_powerworld.sh`); `None`
+/// when the fetch has not run, so tests skip instead of fail.
+#[allow(dead_code)]
+pub fn rts_gmlc_fetched(name: &str) -> Option<PathBuf> {
+    let p = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../tests/data/large/RTS-GMLC")
+        .join(name);
+    p.exists().then_some(p)
+}
+
 /// Branch circuit identity: the trimmed `LineCircuit` extra, `"1"` (the
 /// PowerWorld default) when absent.
 #[allow(dead_code)]

@@ -205,15 +205,17 @@ impl<'a> Cur<'a> {
             return Err(bad(self));
         }
         let (a, v, c) = (self.u64()?, self.u64()?, self.u64()?);
-        if (a, c) != (15000, 20) {
+        if a != 15000 {
             return Err(bad(self));
         }
-        // The middle u64 is the writer format constant: 425 in every decoded
-        // file; 483/508/537/550/551 observed in 2021/2022 era exports.
-        if v != 425 {
+        // Every known PowerWorld binary starts with 15000; the next words
+        // identify the writer. 425/20 is the decoded era; 483 through 551
+        // appear in 2020-2022 era exports, and older Simulators use other
+        // constants or a different header shape entirely.
+        if (v, c) != (425, 20) {
             return Err(unsupported_vintage(format!(
-                "header format constant {v} (a newer writer; 425 era files are \
-                 the decoded ones)"
+                "header format words ({v}, {c}); (425, 20) era files are the \
+                 decoded ones"
             )));
         }
         Ok(())

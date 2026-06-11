@@ -571,3 +571,117 @@ fn rejects_unrecognized_binaries() {
         "{err}"
     );
 }
+
+/// RTS-GMLC (NREL/GMLC Reliability Test System): the first cross format
+/// oracle outside the TAMU cases and outside aux exports entirely. The .PWB
+/// (Simulator 19 era record family) checks against the .m and .RAW siblings
+/// from the same repository commit. Fetched fixtures; skipped when absent.
+#[test]
+fn rts_gmlc_pwb_matches_its_matpower_and_raw_siblings() {
+    use common::rts_gmlc_fetched as rts;
+    let (Some(pwb_path), Some(m_path), Some(raw_path)) =
+        (rts("RTS-GMLC.PWB"), rts("RTS_GMLC.m"), rts("RTS-GMLC.RAW"))
+    else {
+        eprintln!("skipped: run benchmarks/fetch_powerworld.sh");
+        return;
+    };
+    let pwb = read_pwb(&pwb_path);
+    let m = parse_file(m_path, None).unwrap();
+    let raw = parse_file(raw_path, None).unwrap();
+
+    assert_eq!(pwb.buses.len(), 73);
+    assert_eq!(m.buses.len(), 73);
+    assert_eq!(raw.buses.len(), 73);
+    assert_eq!(pwb.branches.len(), 120);
+    assert_eq!(m.branches.len(), 120);
+
+    // Bus identity by number (RTS-96 numbering, no renumbering between
+    // formats), voltage level, and the solved state against the .RAW.
+    let m_bus: BTreeMap<usize, &powerio::Bus> = m.buses.iter().map(|b| (b.id.0, b)).collect();
+    let raw_bus: BTreeMap<usize, &powerio::Bus> = raw.buses.iter().map(|b| (b.id.0, b)).collect();
+    for p in &pwb.buses {
+        let a = m_bus[&p.id.0];
+        assert!((p.base_kv - a.base_kv).abs() < 1e-4, "bus {} kV", p.id);
+        let r = raw_bus[&p.id.0];
+        assert!(
+            (p.vm - r.vm).abs() <= 5e-6,
+            "bus {} vm {} vs {}",
+            p.id,
+            p.vm,
+            r.vm
+        );
+    }
+
+    // Branches grouped by endpoint pair against the .m (which carries no
+    // circuit IDs); parallel units zip within a pair sorted by impedance.
+    let pair = |a: usize, b: usize| (a.min(b), a.max(b));
+    let mut m_by_pair: BTreeMap<(usize, usize), Vec<&powerio::Branch>> = BTreeMap::default();
+    for b in &m.branches {
+        m_by_pair.entry(pair(b.from.0, b.to.0)).or_default().push(b);
+    }
+    let mut p_by_pair: BTreeMap<(usize, usize), Vec<&powerio::Branch>> = BTreeMap::default();
+    for p in &pwb.branches {
+        p_by_pair.entry(pair(p.from.0, p.to.0)).or_default().push(p);
+    }
+    assert_eq!(p_by_pair.len(), m_by_pair.len());
+    let by_imp = |a: &&powerio::Branch, b: &&powerio::Branch| {
+        a.x.total_cmp(&b.x)
+            .then(a.r.total_cmp(&b.r))
+            .then(a.b.total_cmp(&b.b))
+            .then(a.is_transformer().cmp(&b.is_transformer()))
+    };
+    let mut transformers = 0;
+    let mut kind_deltas = Vec::new();
+    for (k, mut pv) in p_by_pair {
+        let mut mv = m_by_pair
+            .remove(&k)
+            .unwrap_or_else(|| panic!("{k:?} not in the .m"));
+        assert_eq!(pv.len(), mv.len(), "{k:?} parallel count");
+        pv.sort_by(by_imp);
+        mv.sort_by(by_imp);
+        for (p, a) in pv.iter().zip(&mv) {
+            assert!(
+                (p.r - a.r).abs() <= 5.1e-6 + 1.5e-7 * a.r.abs(),
+                "{k:?} R {} vs {}",
+                p.r,
+                a.r
+            );
+            assert!(
+                (p.x - a.x).abs() <= 5.1e-6 + 1.5e-7 * a.x.abs(),
+                "{k:?} X {} vs {}",
+                p.x,
+                a.x
+            );
+            assert!(
+                (p.b - a.b).abs() <= 5.1e-6 + 1.5e-7 * a.b.abs(),
+                "{k:?} B {} vs {}",
+                p.b,
+                a.b
+            );
+            assert!(
+                (p.rate_a - a.rate_a).abs() <= 1e-3 + 1e-6 * a.rate_a.abs(),
+                "{k:?} rate_a {} vs {}",
+                p.rate_a,
+                a.rate_a
+            );
+            if p.is_transformer() != a.is_transformer() {
+                kind_deltas.push((k.0, k.1, p.tap, a.tap));
+            }
+            transformers += usize::from(p.is_transformer());
+        }
+    }
+    assert!(
+        m_by_pair.is_empty(),
+        "pairs only in the .m: {:?}",
+        m_by_pair.keys()
+    );
+    // The unit tap ambiguity, the other way around: the .PWB stores 323-325
+    // as a line device where the .m writes ratio 1.0.
+    assert_eq!(kind_deltas, [(323, 325, 0.0, 1.0)]);
+    assert_eq!(transformers, 15);
+
+    // Generator placement against the .m.
+    let m_gen_buses: BTreeSet<usize> = m.generators.iter().map(|g| g.bus.0).collect();
+    let p_gen_buses: BTreeSet<usize> = pwb.generators.iter().map(|g| g.bus.0).collect();
+    assert_eq!(p_gen_buses, m_gen_buses);
+}

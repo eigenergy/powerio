@@ -45,3 +45,20 @@ f="case_ACTIVSg2000.m"
 [ -f "$dir/$f" ] || curl -fsSL "$mp/$f" -o "$dir/$f"
 echo "8d00618de8fd10bf35a599f59d2deebfecd0d86e28fcff73219ad7c4ebab860b  $dir/$f" | shasum -a 256 -c -
 ls -l "$dir"
+
+# RTS-GMLC (NREL/GMLC Reliability Test System, github.com/GridMod/RTS-GMLC):
+# the same case in PowerWorld, MATPOWER, and PSS/E form, the cross format
+# .pwb oracle independent of TAMU and of aux exports. The repository has no
+# license file, so these are fetched from a pinned commit and never vendored.
+rts_dir="$(cd "$(dirname "$0")/.." && pwd)/tests/data/large/RTS-GMLC"
+mkdir -p "$rts_dir"
+rts="https://raw.githubusercontent.com/GridMod/RTS-GMLC/3ece0d3725c844056132393ee252b3083dd4eab4/RTS_Data/FormattedData"
+[ -f "$rts_dir/RTS-GMLC.PWB" ] || curl -fsSL "$rts/POWERWORLD/RTS-GMLC.PWB" -o "$rts_dir/RTS-GMLC.PWB"
+[ -f "$rts_dir/RTS_GMLC.m" ] || curl -fsSL "$rts/MATPOWER/RTS_GMLC.m" -o "$rts_dir/RTS_GMLC.m"
+[ -f "$rts_dir/RTS-GMLC.RAW" ] || curl -fsSL "$rts/PSSE/RTS-GMLC.RAW" -o "$rts_dir/RTS-GMLC.RAW"
+shasum -a 256 -c - <<EOF
+776efbe78f432ead0ad9dea819bfb9d1283b26edc69c91e2bdf0cd2a28f726d1  $rts_dir/RTS-GMLC.PWB
+10573aee70f793c28a0602516f85c4345e6f171512852f1162c3bb3b02ba575b  $rts_dir/RTS_GMLC.m
+5db2a04865528419ce6e992e2b96bb9a2897b36c38f295ce8777e3a79591b783  $rts_dir/RTS-GMLC.RAW
+EOF
+ls -l "$rts_dir"

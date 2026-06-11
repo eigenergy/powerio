@@ -152,7 +152,7 @@ integers and floats are little endian.
 | offset | type | value | meaning |
 |---|---|---|---|
 | 0x00 | u64 | 15000 | magic / format constant |
-| 0x08 | u64 | 425 | writer format constant; 425 in every file this section decodes, but newer exports carry 483 (Texas7k 2021), 508 (saved as v21), 537, 550, or 551 (2022 era saves), and 425 alone does not pin the record layout (see the bus record flag words below) |
+| 0x08 | u64 | 425 | writer format constant; 425 in every file this section decodes, but other writers carry 483 (Texas7k 2021), 508 (v21 saves, 2020 era), 537, 550, 551 (2022 era), 338, 196, 191, 134 (older Simulators), and the oldest sample cases use a different header shape whose u64 view is garbage past the leading 15000. 425 alone does not pin the record layout (see the bus record flag words below) |
 | 0x10 | u64 | 20 | format constant |
 | 0x18 | 16 bytes | 0 | unknown |
 | 0x28 | f64 | varies | Delphi TDateTime of the save (days since 1899-12-30); matches each file's export date |
@@ -215,6 +215,18 @@ Full file censuses: June2016 carries 0x06 ×273, 0x07 ×1544, 0x16 ×9,
 v19 carries 0x36/0x37 on 22 of its 2000. The reader decodes both families:
 the head parses identically, the tails (57 bytes in the 2016 family, 85 in
 the 2018 one, plus the bit 4 lists) are skipped by the record resync.
+
+Newer writers widen the family with bits 6 and 8: Texas7k_20210804.PWB
+(header constant 483) carries 0x66 ×481, 0x166 ×187, 0x167 ×6049 over its
+6717 buses, and the current era ACTIVSg2000.PWB export (header constant
+425!) carries 0x66/0x67/0x166/0x167/0x177. The head layout STILL matches
+through the solved voltage (kV, area/zone/BA, label, vm, va verified by
+eye against the Texas7k aux values), with bit 8 varying per record like
+bit 0; bit 6 looks file constant. The device chains behind these bus
+tables carry further structure the validated models do not cover (the
+Texas7k load walk loses sync mid table), so these files classify and
+reject until that evidence pass lands. The 39 bus sample case (header 425)
+shows no recognized bus record layout at all in a 44 KiB file.
 
 ### Load record (validated on all 160 + 1417 + 1350 loads of three files)
 
@@ -295,6 +307,31 @@ case stores zero shunt MW and the reader sets G = 0.
 - Table glue blocks between count and first record.
 - Substation, area/zone names, contingency tables: present after the
   branches, undecoded in this pass.
+
+## Coverage matrix
+
+The corpus harness (`powerio/tests/powerworld_corpus.rs`) asserts exactly
+this table; the two must move together. Tiers: decoded with parity,
+classified and rejected (the error names the evidence), out of scope.
+Files marked local only live outside the repository (their identities in a
+gitignored manifest); everything else is vendored or fetched with a
+checksum and recorded URL by `benchmarks/fetch_powerworld.sh`.
+
+| file | provenance | header | bus flags | oracle | verdict | counts |
+|---|---|---|---|---|---|---|
+| ACTIVSg200.pwb | vendored (TAMU) | 425 | 0x26/0x27 | same snapshot aux + 2017 RAW | decoded, parity on every quantity | 200 buses, 246 branches |
+| Texas2000_June2016.pwb | fetched (TAMU) | 425 | 0x06-0x17 | same day aux | decoded, parity on every quantity | 2007 buses, 3043 branches |
+| ACTIV_SG_2000_v19.pwb | fetched (powerworld.com) | 425 | 0x26-0x37 | published case .m, deltas pinned | decoded, parity | 2000 buses, 3202 branches |
+| RTS-GMLC.PWB | fetched (GridMod/RTS-GMLC @3ece0d3) | 425 | 0x06/0x07 | same commit .m + .RAW | decoded, parity | 73 buses, 120 branches |
+| Texas7k 2021 export | local only | 483 | 0x66-0x167 | aux sibling available | rejected: header constant; bus heads decode, device chain undecoded | 6717 bus heads walk |
+| Texas7k v21/v22/2030 saves | local only | 508/537/550/551 | unprobed | — | rejected: header constant | |
+| ACTIVSg2000 current era export | local only | 425 | 0x66-0x177 | published case | rejected: bus flag bits 6/8 not validated | |
+| 39 bus sample case | local only | 425 | none found | — | rejected: no recognized bus record layout | |
+| 118 bus sample case | local only | 338 | — | — | rejected: header constant | |
+| 12 bus course case (+ v21 resave) | local only | 134 / 508 | — | — | rejected: header constant | |
+| 10 bus sample case | local only | 196 | — | — | rejected: header constant | |
+| 3 bus sample case | local only | pre 425 shape | — | — | rejected: header words | |
+| .pwd display files | local/fetched | — | — | — | out of scope this pass (M5 probe) | |
 
 ## Object inventory of ACTIVSg200.aux
 
