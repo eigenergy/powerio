@@ -18,7 +18,10 @@ fn cases() -> Vec<PathBuf> {
             let path = entry.unwrap().path();
             if path.is_dir() {
                 walk(&path, out);
-            } else if path.extension().is_some_and(|x| x == "m") {
+            } else if path
+                .extension()
+                .is_some_and(|x| x.eq_ignore_ascii_case("m"))
+            {
                 out.push(path);
             }
         }

@@ -400,7 +400,11 @@ fn run_batch(
             .into_iter()
             .filter_map(std::result::Result::ok)
             .filter(|e| e.file_type().is_file())
-            .filter(|e| e.path().extension().is_some_and(|x| x == "m"))
+            .filter(|e| {
+                e.path()
+                    .extension()
+                    .is_some_and(|x| x.eq_ignore_ascii_case("m"))
+            })
             .map(|e| e.path().to_path_buf())
             .collect()
     };
