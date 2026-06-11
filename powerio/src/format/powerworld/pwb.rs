@@ -13,12 +13,15 @@
 //! must be values this reader has seen and verified). A file that does not
 //! match the validated layout fails loudly; nothing is guessed silently.
 //!
-//! Supported vintages, all behind header format constant 425: the Simulator
-//! 19 era writer (bus record flag family `0x06`, the June 2016 ACTIVSg2000
-//! export, validated field by field against its same day aux sibling) and
-//! the Simulator 20 era writer (flag family `0x26`: the 2018 ACTIVSg200
-//! export validated against its aux, the 2017 v19 ACTIVSg2000 export
-//! validated against the published case). Record layouts are self
+//! Supported vintages, behind header format constants 425 and 508: the
+//! Simulator 19 era writer (bus record flag family `0x06`, the June 2016
+//! ACTIVSg2000 export, validated field by field against its same day aux
+//! sibling), the Simulator 20 era writer (flag family `0x26`: the 2018
+//! ACTIVSg200 export validated against its aux, the 2017 v19 ACTIVSg2000
+//! export validated against the published case), and the 2019+ era writers
+//! (flag bits 6 and 8 added over family `0x26`, header 425 or 508: the
+//! current era ACTIVSg2000, ACTIVSg500, and 2022 Hawaii40 exports, each
+//! validated against its aux). Record layouts are self
 //! describing through their flag words, a Delphi field presence bitmask:
 //! one record model decodes every observed flag word (see [`BusHead::unk`]
 //! and [`read_branch_head`]), and structural anchors (the rating block tag)

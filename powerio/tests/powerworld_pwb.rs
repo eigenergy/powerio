@@ -833,6 +833,7 @@ fn activsg2000_current_era_pwb_matches_its_aux_sibling() {
 /// as well as the values. Machine specific corpus file; skipped unless the
 /// local manifest lists it next to its aux sibling.
 #[test]
+#[allow(clippy::too_many_lines)]
 fn activsg500_pwb_matches_its_aux_sibling() {
     let Some(pwb_path) = common::local_corpus_path("ACTIVSg500 export (local only)") else {
         eprintln!("skipped: not in the local corpus manifest");
@@ -893,6 +894,11 @@ fn activsg500_pwb_matches_its_aux_sibling() {
         assert_eq!(p.bus, a.bus);
         for (x, y, what) in [
             (p.pg, a.pg, "pg"),
+            (p.qg, a.qg, "qg"),
+            (p.pmax, a.pmax, "pmax"),
+            (p.pmin, a.pmin, "pmin"),
+            (p.qmax, a.qmax, "qmax"),
+            (p.qmin, a.qmin, "qmin"),
             (p.vg, a.vg, "vg"),
             (p.mbase, a.mbase, "mbase"),
         ] {
@@ -924,6 +930,19 @@ fn activsg500_pwb_matches_its_aux_sibling() {
             .unwrap_or_else(|| panic!("{key:?} not in aux"));
         assert!((p.r - a.r).abs() <= 5e-7, "{key:?} R {} vs {}", p.r, a.r);
         assert!((p.x - a.x).abs() <= 5e-7, "{key:?} X {} vs {}", p.x, a.x);
+        assert!((p.b - a.b).abs() <= 5e-7, "{key:?} B {} vs {}", p.b, a.b);
+        assert!(
+            (p.rate_a - a.rate_a).abs() <= 1e-3 + 1e-6 * a.rate_a.abs(),
+            "{key:?} rate_a {} vs {}",
+            p.rate_a,
+            a.rate_a
+        );
+        assert!(
+            (p.effective_tap() - a.effective_tap()).abs() < 1e-6,
+            "{key:?} tap {} vs {}",
+            p.effective_tap(),
+            a.effective_tap()
+        );
         assert_eq!(p.is_transformer(), a.is_transformer(), "{key:?} kind");
     }
     assert!(aux_by_id.is_empty(), "aux branches missing: {aux_by_id:?}");
@@ -933,6 +952,7 @@ fn activsg500_pwb_matches_its_aux_sibling() {
 /// the parity evidence that admits the 508 header era. Machine specific
 /// corpus file; skipped unless the local manifest lists it.
 #[test]
+#[allow(clippy::too_many_lines)]
 fn hawaii40_pwb_matches_its_aux_sibling() {
     let Some(pwb_path) = common::local_corpus_path("Hawaii40 2022 export (local only)") else {
         eprintln!("skipped: not in the local corpus manifest");
@@ -992,6 +1012,11 @@ fn hawaii40_pwb_matches_its_aux_sibling() {
         assert_eq!(p.bus, a.bus);
         for (x, y, what) in [
             (p.pg, a.pg, "pg"),
+            (p.qg, a.qg, "qg"),
+            (p.pmax, a.pmax, "pmax"),
+            (p.pmin, a.pmin, "pmin"),
+            (p.qmax, a.qmax, "qmax"),
+            (p.qmin, a.qmin, "qmin"),
             (p.vg, a.vg, "vg"),
             (p.mbase, a.mbase, "mbase"),
         ] {
@@ -1013,6 +1038,19 @@ fn hawaii40_pwb_matches_its_aux_sibling() {
             .unwrap_or_else(|| panic!("{key:?} not in aux"));
         assert!((p.r - a.r).abs() <= 5e-7, "{key:?} R {} vs {}", p.r, a.r);
         assert!((p.x - a.x).abs() <= 5e-7, "{key:?} X {} vs {}", p.x, a.x);
+        assert!((p.b - a.b).abs() <= 5e-7, "{key:?} B {} vs {}", p.b, a.b);
+        assert!(
+            (p.rate_a - a.rate_a).abs() <= 1e-3 + 1e-6 * a.rate_a.abs(),
+            "{key:?} rate_a {} vs {}",
+            p.rate_a,
+            a.rate_a
+        );
+        assert!(
+            (p.effective_tap() - a.effective_tap()).abs() < 1e-6,
+            "{key:?} tap {} vs {}",
+            p.effective_tap(),
+            a.effective_tap()
+        );
         assert_eq!(p.is_transformer(), a.is_transformer(), "{key:?} kind");
     }
     assert!(aux_by_id.is_empty(), "aux branches missing: {aux_by_id:?}");
