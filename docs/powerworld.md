@@ -348,24 +348,73 @@ case stores zero shunt MW and the reader sets G = 0.
 - Substation, area/zone names, contingency tables: present after the
   branches, undecoded in this pass.
 
-## The .pwd display format (probe)
+## The .pwd display format: substation coordinates
 
-A timeboxed framing probe over four display files (the two fetched
-ACTIVSg2000 ones, ACTIVSg200, Hawaii40); no decoder. All four open with
-the same header: u32 = 50, two u16 canvas dimensions (200, 200), then
-palette and font records ("Tahoma"). The 2017 and later saves follow with
-a u32 length prefixed string ("Previous Select By Criteria Set Used") and
-a registry of the display object types the file uses: a u32 count, then
-per entry a u32 length prefixed type name and one byte (0x02 observed).
-Observed registries: ACTIVSg200 names DisplaySubstation; v19 names
-DisplayBranchPie, DisplaySubstation, DisplaySubstationField,
-DisplayTransmissionLine; Hawaii40 names DisplayBranchPie and
-DisplaySubstationField. The June 2016 file uses an older framing with no
-registry (font records follow the header directly). The drawing records
-behind the registry are undecoded; unlike the .pwb, the display format
-names its object types, so a future decoder has anchors to work from.
-Extracting the one useful subset (substation coordinates for layout) needs
-those record layouts and is a follow-up, not part of this pass.
+`parse_pwd` decodes one subset of the display sibling, the substation
+symbols, established by differential analysis of seven files spanning the
+June 2016 through 2022 writer eras (ACTIVSg200 vendored, the two fetched
+ACTIVSg2000 displays, the TAMU distributed ACTIVSg200 Illinois display
+mislabeled ACTIVSg2000.pwd, and the local ACTIVSg500, published
+ACTIVSg2000, and Hawaii40 sets). Every other drawing object type (buses,
+branch pies, transmission lines, field labels), the palettes, fonts,
+layers, and the substation record style tails stay undecoded.
+
+Header: u32 = 50, two u16 canvas dimensions, then a fixed shape block. The
+u32 at offset 22 is a per file stamp that every drawing object record
+repeats at +18 — the anchor the record scan keys on. A correction to the
+earlier probe notes: the type name list behind "Previous Select By
+Criteria Set Used" in 2017+ saves is the object type list of that dialog's
+last use (UI state), not a registry of the record types in the file
+(ACTIVSg200.pwd lists only DisplaySubstation yet draws eight plus types);
+the decoder takes nothing from it, and the June 2016 save has none.
+
+Two structures carry the substations, both present in every probed save:
+
+- The identity table, behind the file's only `ff ff ff ff 3d 0f` sequence
+  (sentinel plus table tag 0x0f3d): records of u32 number, the same u32
+  again, u32 length, name, 0x02, terminated exactly by the next
+  `ff ff ff ff`. Display order, not case order. A bus identity table (tag
+  0x0f3c, no coordinates) directly precedes it, undecoded.
+- The DisplaySubstation drawing records: u16 type tag, f32 x, f32 y at
+  +2/+6 (echoes), u32 flag, zeros, u16 0x000a, the header stamp at +18,
+  f64 x at +22, f64 y at +30, f64 0.0, then a style tail holding a digit
+  string (1 to 4 characters, shifts later fields), `ff ff ff ff`, a marker
+  byte, the u32 substation number, a 4 x f64 bounding box, and font
+  fields. Record lengths run 139 to 162 by era. The type tag (0x27e2,
+  0x27e3 observed) and the marker (0x03, 0x07) drift across writer eras,
+  so the reader keys on structure instead: stamp echo at +18, the f32/f64
+  dual coordinate equality, magnitude in [1, 1e7), and a marker plus
+  number link to every identity row in table order. Two real decoy groups
+  force that gauntlet: the era B substation field label group (same
+  count, different order; positional pairing scores r² 0.01 against the
+  oracle) and the Texas2016 interleaved label group (marker 0x05). Both
+  fail the link check; if several groups ever pass, the reader rejects
+  rather than guesses.
+
+The coordinates are diagram positions, not geography (no probed file
+stores latitude or longitude; needle scans came back empty). The auto
+generated layouts equal x = k·longitude, y = k·merc(latitude) with
+merc(lat) = degrees(ln(tan(45° + lat/2))): Hawaii40, never hand edited,
+reproduces it to f64 rounding (max residual 2.9e-11) and pins
+k = 535.8160803622592; the TAMU layouts carry hand moved symbols (median
+residual 0.006 to 43 units across files) and the June 2016 writer used a
+different transform entirely. The reader therefore exposes x/y as stored;
+projecting back to geography is the consumer's choice, and consumers who
+want coordinates as data should read the aux Substation latitude and
+longitude instead.
+
+Per file evidence (powerio/tests/powerworld_pwd.rs asserts the committed
+subset; the rest ran in the scout probes):
+
+| file | substations | aux (number, name) match | x vs longitude r² | y vs merc(lat) r² |
+|---|---|---|---|---|
+| ACTIVSg200 (vendored) | 111 | 111/111 | 0.99992 | 0.99980 |
+| Illinois display mislabeled ACTIVSg2000.pwd | 111 | 111/111 | 0.9972 | 0.9951 |
+| ACTIVSg500 (local) | 208 | 208/208 | 0.99999 | 0.999995 |
+| ACTIVSg2000 published set (local) | 1250 | 1250/1250 | 0.999999 | 0.999999 |
+| ACTIV_SG_2000_v19 (fetched) | 1250 | 1248/1250 vs the published aux (vintage skew) | 0.9935 | 0.9961 |
+| Texas2000 June 2016 (fetched) | 1500 | 1500/1500 | 0.99962 | 0.99966 |
+| Hawaii40 (local, 2022) | 31 | 31/31 | exact | exact |
 
 ## Coverage matrix
 
@@ -394,7 +443,7 @@ checksum and recorded URL by `benchmarks/fetch_powerworld.sh`.
 | ACTIVSg2000 current era export | local only | 425 | 0x66-0x177 | published case | decoded, counts verified; value parity test pending | 2000 buses, 3206 branches |
 | Hawaii40 2022 export | local only | 508 | 0x66-0x167 | same set aux (2022 vocabulary) | decoded, parity on every quantity | 37 buses, 89 branches |
 | 12 bus course case saved as v21 | local only | 508 | — | — | decoded, counts verified | 12 buses, 18 branches |
-| .pwd display files | local/fetched | — | — | — | out of scope this pass (M5 probe) | |
+| .pwd display files | local/fetched | 50 | — | sibling aux Substation latitude/longitude | substation coordinates decoded, matched 1-1 (see the .pwd section) | 111 through 1500 substations across seven files |
 
 ## Object inventory of ACTIVSg200.aux
 

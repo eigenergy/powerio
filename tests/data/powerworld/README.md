@@ -18,9 +18,11 @@ Vendored bytes are pinned; do not reformat or re-export these files.
 | `ACTIVSg200.pwb` | PowerWorld binary case | `99b7512b92b3f9e897b15d579847b99c1ec626d220a12598018af12e0eee79b1` |
 | `ACTIVSg200.RAW` | PSS/E raw (v33) | `fca4f71886a67c38c45979bc388476f6de044b64f426c7723afe1a025b988477` |
 | `case_ACTIVSg200.m` | MATPOWER | `3c92cb217e1e04bb764d2566ccf01f3f2e2ac8af2d6b2907b0619ee335165c87` |
+| `ACTIVSg200.pwd` | PowerWorld display (diagram sibling) | `be67278b62b474ece7750e5d548ffc64a192a9377e2a082547e738a1375672f8` |
 
-The four files describe the same network, so they serve as cross format
-oracles for each other: counts and values parsed from one format are checked
+The case files describe the same network, so they serve as cross format
+oracles for each other (the `.pwd` carries the diagram, not the case; its
+substation coordinates are checked against the `.aux` geography): counts and values parsed from one format are checked
 against the others in `powerio/tests/` parity tests. The `.aux` and `.pwb`
 are a same day export pair; the `.RAW` and `.m` are earlier revisions of the
 case, so parity against them is structural (identities, impedances, limits)
