@@ -79,10 +79,10 @@ fetched. Median wall time, same machine as above.
 <!-- BENCH:powerworld START -->
 | case | buses / branches | aux | pwb |
 | --- | --- | --- | --- |
-| ACTIVSg200 | 200 / 246 | 2.60 ms | 0.52 ms |
-| ACTIVSg2000 June 2016 | 2007 / 3043 | 30.3 ms | 3.30 ms |
-| RTS-GMLC | 73 / 120 | n/a | 12.4 ms |
-| Texas7k (local TAMU copy) | 6717 / 9140 | 71.3 ms | 13.5 ms |
+| ACTIVSg200 | 200 / 246 | 2.60 ms | 0.37 ms |
+| ACTIVSg2000 June 2016 | 2007 / 3043 | 30.1 ms | 3.01 ms |
+| RTS-GMLC | 73 / 120 | n/a | 10.8 ms |
+| Texas7k (local TAMU copy) | 6717 / 9140 | 69.0 ms | 11.8 ms |
 <!-- BENCH:powerworld END -->
 
 The `.pwb` reader locates each table by a depth first search over count
@@ -98,19 +98,27 @@ stays the dearest decode per bus because its bus numbers (101 through 325)
 are small integers that appear constantly in binary data, forging candidate
 device records the search walks and rejects once each.
 
-The Texas7k decode (the 2021 era record layouts) repriced the search:
-admitting the era's branch flag words doubles the flag vocabulary, and the
-forged candidates that admits cost 10 to 45 percent over the previous
-table on the 425 era files (0.36 to 0.52 ms on the 200 bus case, 3.0 to
-3.3 ms on the 2000 bus pair, 10.8 to 12.4 ms on RTS-GMLC), still 5 to 9
-times faster than the aux siblings. A flag mask keyed to the detected
-generator layout was tried and rejected: it turns real records invisible
-to the table end check on the newer files, and a forged short table can
-win (see known_branch_flags in the reader). The other Texas7k saves
-decode through the same models: the v21/v22 resaves in 65/70 ms, the
-2030 builds in about 40 ms, the scenario snapshot in 32 ms (release,
-parse only). Every structural validation is unchanged; the reader stays
-correctness first (a wrong network is worse than a slow loud parse).
+The Texas7k decode (the 2021 era record layouts) initially repriced the
+search by 10 to 45 percent on the 425 era files, and bisection showed the
+widened branch flag vocabulary was almost none of it (about 4 us on the
+200 bus case): the cost was an inlining loss (the whole record probes
+became opaque fn pointer calls, so the early rejections stopped inlining
+into the resync scans) and the second generator layout's candidate scan
+running unconditionally whenever a forged load candidate failed the
+chain. Both are structural fixes now: the probes are generic and
+monomorphize, and the header constant keys which generator layouts the
+search admits (425 files never carry the regulated bus shape, 483
+through 551 files never carry the older one, 508 saves exist with both
+and try the two in sequence), which also keeps a layout the file cannot
+carry from outbidding the right one. With those, the 425 era files parse
+at the pre widening numbers and the other Texas7k saves decode in 49 ms
+(v21), 39 ms (v22 and the 2030 builds), and 33 ms (the scenario
+snapshot; release, parse only). A branch flag mask keyed to the detected
+generator layout was also tried and rejected: it turns real records
+invisible to the table end check on the newer files, and a forged short
+table can win (see known_branch_flags in the reader). Every structural
+validation is unchanged; the reader stays correctness first (a wrong
+network is worse than a slow loud parse).
 
 ## Correctness: validated against four tools
 

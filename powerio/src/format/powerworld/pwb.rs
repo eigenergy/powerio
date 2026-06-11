@@ -104,16 +104,37 @@ type Probe<T> = std::result::Result<T, &'static str>;
 /// [`Error::FormatRead`] when the header is not the known magic, a record
 /// does not match the validated layouts, or a table cannot be located.
 pub fn parse_pwb(bytes: &[u8], name_hint: Option<&str>) -> Result<Network> {
-    expect_header(bytes)?;
+    let header_constant = expect_header(bytes)?;
     reject_unsupported_vintage(bytes)?;
+    // The header constant pins the generator record layout wherever the
+    // corpus is unambiguous: every 425 file carries the bus + ID shape and
+    // every 483/537/550/551 file the regulated bus shape, while 508 saves
+    // exist with both (Hawaii40 against the Texas7k v21 resave), so only
+    // they try the two in sequence. Beyond pricing, this keeps the layout
+    // a file cannot carry from ever outbidding the right one in the chain
+    // search; a hypothetical file mixing eras fails loudly instead.
+    let gen_variants = match header_constant {
+        425 => GenVariants {
+            plain: true,
+            reg: false,
+        },
+        508 => GenVariants {
+            plain: true,
+            reg: true,
+        },
+        _ => GenVariants {
+            plain: false,
+            reg: true,
+        },
+    };
     // The narrow bus glue window prices the common files (see
     // bus_table_candidates); the wide retry exists so a small node level
     // resave (a bus table under 256 records with the v21 writer's 52 byte
     // glue) is a second slower search instead of a coverage cliff. The
     // retry only runs on files the narrow search already failed.
-    match search_table_chain(bytes, name_hint, false) {
+    match search_table_chain(bytes, name_hint, gen_variants, false) {
         Some(net) => net,
-        None => search_table_chain(bytes, name_hint, true).unwrap_or_else(|| {
+        None => search_table_chain(bytes, name_hint, gen_variants, true).unwrap_or_else(|| {
             Err(Error::FormatRead {
                 format: FMT,
                 message: "no table chain matches the validated .pwb layouts \
@@ -124,12 +145,22 @@ pub fn parse_pwb(bytes: &[u8], name_hint: Option<&str>) -> Result<Network> {
     }
 }
 
+/// Which generator record layouts the header constant admits (see
+/// [`parse_pwb`]): the 425/508 era bus + ID shape (`plain`) and the 2021 era
+/// regulated bus shape (`reg`, [`read_gen_reg_record`]).
+#[derive(Clone, Copy)]
+struct GenVariants {
+    plain: bool,
+    reg: bool,
+}
+
 /// One full depth first search for the table chain; `None` when no chain
 /// matches. `wide_bus_glue` lifts the bus table's count gated glue window
 /// (see [`bus_table_candidates`]) for the retry pass.
 fn search_table_chain(
     bytes: &[u8],
     name_hint: Option<&str>,
+    gen_variants: GenVariants,
     wide_bus_glue: bool,
 ) -> Option<Result<Network>> {
     // A count word can be forged by record interiors and the case
@@ -155,26 +186,38 @@ fn search_table_chain(
         for (loads, l_end) in
             device_table_candidates(bytes, bus_end, &bus_ids, read_load_record, &load_runs, 48)
         {
-            // The generator table reads through one of two validated record
-            // layouts: the 425/508 era shape and the 2021 era shape with
-            // the regulated bus inserted (see read_gen_reg_record). A
-            // file's table uses exactly one; each gets its own run cache
-            // and the structural gauntlets keep the wrong one from parsing.
-            // The newer layout's table glue runs to 86 bytes (string
-            // metadata between the count and the first record in the v21
-            // resave); the older tables all sit within 48, and widening
-            // their window admits forged count words, so each variant
-            // carries its own glue bound.
-            let gen_candidates =
-                device_table_candidates(bytes, l_end, &bus_ids, read_gen_record, &gen_runs, 48)
-                    .chain(device_table_candidates(
-                        bytes,
-                        l_end,
-                        &bus_ids,
-                        read_gen_reg_record,
-                        &gen_reg_runs,
-                        96,
-                    ));
+            // The generator table reads through the record layouts the
+            // header constant admits (see parse_pwb). A file's table uses
+            // exactly one; each gets its own run cache and the structural
+            // gauntlets keep the wrong one from parsing. The newer layout's
+            // table glue runs to 86 bytes (string metadata between the
+            // count and the first record in the v21 resave); the older
+            // tables all sit within 48, and widening their window admits
+            // forged count words, so each variant carries its own glue
+            // bound.
+            let gen_candidates = gen_variants
+                .plain
+                .then(|| {
+                    device_table_candidates(bytes, l_end, &bus_ids, read_gen_record, &gen_runs, 48)
+                })
+                .into_iter()
+                .flatten()
+                .chain(
+                    gen_variants
+                        .reg
+                        .then(|| {
+                            device_table_candidates(
+                                bytes,
+                                l_end,
+                                &bus_ids,
+                                read_gen_reg_record,
+                                &gen_reg_runs,
+                                96,
+                            )
+                        })
+                        .into_iter()
+                        .flatten(),
+                );
             for (generators, g_end) in gen_candidates {
                 for (shunts, s_end) in device_table_candidates(
                     bytes,
@@ -308,7 +351,9 @@ fn printable(s: &[u8]) -> bool {
     s.iter().all(|&c| (0x20..0x7f).contains(&c))
 }
 
-fn expect_header(b: &[u8]) -> Result<()> {
+/// Validate the file head and return the writer format constant (the u64 at
+/// offset 0x08) for the layout keying in [`parse_pwb`].
+fn expect_header(b: &[u8]) -> Result<u64> {
     const DECODED: [u64; 6] = [425, 483, 508, 537, 550, 551];
     let bad = || Error::FormatRead {
         format: FMT,
@@ -340,7 +385,7 @@ fn expect_header(b: &[u8]) -> Result<()> {
              425/483/508/537/550/551 with 20"
         )));
     }
-    Ok(())
+    Ok(v)
 }
 
 /// Reject files whose leading 64 KiB carries no run of validated bus record
@@ -921,11 +966,11 @@ fn read_shunt(c: &mut Cur, bus: BusId, id: &[u8]) -> Probe<Shunt> {
 /// setting it on every transformer and a few dozen lines, with the head
 /// layout through the kind byte identical either way (its field lives in
 /// the undecoded tail). Admitting the bit 7 clear words doubles the flag
-/// vocabulary and with it the forged candidates the search walks on older
-/// files, a measured 12 to 20 percent on the 425 era corpus
-/// (benchmarks/RESULTS.md); a mask keyed to the generator layout was tried
-/// and rejected, since the strict mask turns real bit 7 clear records
-/// invisible to the table end check and a forged short table can win.
+/// vocabulary; the measured cost on the 425 era corpus is a few
+/// microseconds (benchmarks/RESULTS.md), and a mask keyed to the generator
+/// layout was tried and rejected anyway, since the strict mask turns real
+/// bit 7 clear records invisible to the table end check and a forged
+/// short table can win.
 /// Observed words: 0xEC/0xFC (2016), 0xEE/0xEF (2018 and v19), 0xFE/0xFF
 /// (v19), 0x6C and 0xEC/0xED (Texas7k); other combinations of the same
 /// bits are admitted by the bit logic and guarded by the structural
