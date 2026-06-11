@@ -1,9 +1,11 @@
-# Vendored MATPOWER cases (BSD-3, verbatim from github.com/MATPOWER/matpower).
-# They're MATLAB syntax, so GitHub Linguist counts them as MATLAB and drowns
-# out the Rust source in the language bar. Mark them vendored to drop them from
-# the language stats and collapse them in diffs. The files stay in the repo so
-# the test suite stays hermetic.
-tests/data/**/*.m linguist-vendored
+# Vendored case fixtures (MATPOWER cases verbatim from
+# github.com/MATPOWER/matpower, PSS/E, egret, PowerWorld exports). GitHub
+# Linguist misclassifies them — the `.m` MATPOWER cases as MATLAB, the
+# PowerWorld `.aux` exports as TeX (ACTIVSg200.aux alone showed as 32% of the
+# repo) — and drowns out the Rust source in the language bar. Mark the whole
+# fixture tree vendored to drop it from the language stats and collapse it in
+# diffs. The files stay in the repo so the test suite stays hermetic.
+tests/data/** linguist-vendored
 
 # Julia appears here only as a validation harness, not as the package language.
 benchmarks/**/*.jl linguist-vendored

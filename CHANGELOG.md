@@ -1,5 +1,27 @@
 # Changelog
 
+## 0.2.0
+
+The PowerWorld compatibility release.
+
+- Full `.aux` fidelity (#95): the reader covers the complete aux grammar
+  (legacy and concise headers, multiline field lists, SUBDATA and SCRIPT
+  blocks retained verbatim) and all three field naming generations through
+  Simulator 21+, merging the DATA sections real exports spread one object
+  over; byte-exact echo, parity tested against sibling MATPOWER and PSS/E
+  exports of the same cases.
+- Read-only `.pwb` binary reader (#95, #102, #105): 2016 through 2022 era
+  exports under the six decoded header constants 425, 483, 508, 537, 550,
+  and 551 — every Texas7k save decodes — with the table search running
+  faster than the aux text reader on every sibling pair; unsupported writer
+  vintages are detected and rejected with the format constant named.
+- Read-only `.pwd` display reader (#102): `powerworld::parse_pwd` extracts
+  substation diagram coordinates, matched 1-1 against the aux substations
+  on every probed save with a same-vintage aux (the v19 resave matches
+  1248/1250 against the published case, a vintage skew).
+- The decoded vintages and the per-field evidence behind the parity claims
+  are documented in [docs/powerworld.md](docs/powerworld.md).
+
 ## 0.1.1
 
 - File extension detection is case-insensitive (#97, #101): `parse_file`
