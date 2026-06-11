@@ -325,6 +325,25 @@ case stores zero shunt MW and the reader sets G = 0.
 - Substation, area/zone names, contingency tables: present after the
   branches, undecoded in this pass.
 
+## The .pwd display format (probe)
+
+A timeboxed framing probe over four display files (the two fetched
+ACTIVSg2000 ones, ACTIVSg200, Hawaii40); no decoder. All four open with
+the same header: u32 = 50, two u16 canvas dimensions (200, 200), then
+palette and font records ("Tahoma"). The 2017 and later saves follow with
+a u32 length prefixed string ("Previous Select By Criteria Set Used") and
+a registry of the display object types the file uses: a u32 count, then
+per entry a u32 length prefixed type name and one byte (0x02 observed).
+Observed registries: ACTIVSg200 names DisplaySubstation; v19 names
+DisplayBranchPie, DisplaySubstation, DisplaySubstationField,
+DisplayTransmissionLine; Hawaii40 names DisplayBranchPie and
+DisplaySubstationField. The June 2016 file uses an older framing with no
+registry (font records follow the header directly). The drawing records
+behind the registry are undecoded; unlike the .pwb, the display format
+names its object types, so a future decoder has anchors to work from.
+Extracting the one useful subset (substation coordinates for layout) needs
+those record layouts and is a follow-up, not part of this pass.
+
 ## Coverage matrix
 
 The corpus harness (`powerio/tests/powerworld_corpus.rs`) asserts exactly
