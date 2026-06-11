@@ -135,6 +135,7 @@ pub enum SourceFormat {
     EgretJson,
     Psse,
     PowerWorld,
+    PandapowerJson,
     /// Built in memory (e.g. from synth or an edited case); no source text.
     InMemory,
     /// A normalized derived view ([`Network::to_normalized`]): per unit, radians,
@@ -148,6 +149,9 @@ pub enum SourceFormat {
     /// synthesized `1..n`, per-element load/shunt granularity is folded to one
     /// synthetic element per bus, and HVDC/storage/piecewise costs are absent.
     Gridfm,
+    /// Read from a PyPSA CSV folder. This is a folder format rather than a
+    /// single retained text document, so same-format writes are canonicalized.
+    PypsaCsv,
 }
 
 /// A format-neutral power network.

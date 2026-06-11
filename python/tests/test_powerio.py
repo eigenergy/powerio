@@ -506,13 +506,15 @@ def test_convert_matpower_echo_is_byte_exact():
 
 
 def test_convert_matpower_to_each_format():
-    for fmt in ["powermodels-json", "egret-json", "psse", "powerworld"]:
+    for fmt in ["powermodels-json", "egret-json", "psse", "powerworld", "pandapower-json"]:
         r = powerio.convert_file(str(DATA / "case30.m"), fmt)
         assert isinstance(r.text, str) and len(r.text) > 0
         assert isinstance(r.warnings, list)
     # PowerModels JSON output parses as JSON and keeps the bus count.
     pm = json.loads(powerio.convert_file(str(DATA / "case30.m"), "powermodels-json").text)
     assert len(pm["bus"]) == 30
+    pp = json.loads(powerio.convert_file(str(DATA / "case30.m"), "pandapower-json").text)
+    assert pp["_class"] == "pandapowerNet"
 
 
 def test_convert_round_trip_through_psse(tmp_path):
@@ -531,7 +533,7 @@ def test_convert_unknown_format_raises():
 
 def test_convert_str_matches_convert_file():
     text = (DATA / "case30.m").read_text()
-    for fmt in ["powermodels-json", "egret-json", "psse", "powerworld"]:
+    for fmt in ["powermodels-json", "egret-json", "psse", "powerworld", "pandapower-json"]:
         from_str = powerio.convert_str(text, fmt)
         from_file = powerio.convert_file(str(DATA / "case30.m"), fmt)
         assert from_str.text == from_file.text
@@ -549,6 +551,21 @@ def test_convert_str_named_input_format():
     raw = powerio.convert_file(str(DATA / "case30.m"), "psse").text
     back = powerio.convert_str(raw, "matpower", format="psse")
     assert powerio.parse_str(back.text).n_buses == 30
+
+
+def test_pypsa_csv_folder_wrapper(tmp_path):
+    case = powerio.parse_file(DATA / "case9.m")
+    out = tmp_path / "pypsa"
+    result = case.write_pypsa_csv_folder(out)
+    assert (out / "network.csv").is_file()
+    assert (out / "buses.csv").is_file()
+    assert result["dir"] == str(out)
+    assert "warnings" in result
+
+    back = powerio.read_pypsa_csv_folder(out)
+    assert back.n_buses == case.n_buses
+    assert back.n_branches == case.n_branches
+    assert back.n_gens == case.n_gens
 
 
 def test_convert_str_errors():

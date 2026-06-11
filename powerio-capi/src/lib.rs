@@ -433,6 +433,44 @@ pub unsafe extern "C" fn pio_convert_file(
     }
 }
 
+/// Write `net` as a PyPSA CSV folder at `out_dir`. Returns `1` on success and
+/// `0` on error. Fidelity warnings, if any, are written `\n`-joined into
+/// `warnbuf`.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn pio_write_pypsa_csv_folder(
+    net: *const PioNetwork,
+    out_dir: *const c_char,
+    warnbuf: *mut c_char,
+    warnlen: usize,
+    errbuf: *mut c_char,
+    errlen: usize,
+) -> i32 {
+    unsafe {
+        let r = catch_unwind(AssertUnwindSafe(|| {
+            let c = network_ref(net).ok_or_else(|| "network handle is NULL".to_string())?;
+            let out_dir =
+                cstr(out_dir).ok_or_else(|| "out_dir is NULL or not UTF-8".to_string())?;
+            powerio::write_pypsa_csv_folder(&c.net, std::path::Path::new(out_dir))
+                .map(|outputs| outputs.warnings)
+                .map_err(|e| e.to_string())
+        }));
+        match r {
+            Ok(Ok(warnings)) => {
+                copy_to_buf(warnbuf, warnlen, &warnings.join("\n"));
+                1
+            }
+            Ok(Err(msg)) => {
+                copy_to_buf(errbuf, errlen, &msg);
+                0
+            }
+            Err(_) => {
+                copy_to_buf(errbuf, errlen, "panic while writing PyPSA CSV folder");
+                0
+            }
+        }
+    }
+}
+
 /// Read one scenario of a gridfm-datakit Parquet dataset into a network handle —
 /// the inverse of the gridfm writer. `dir` resolves leniently: the `raw/` leaf
 /// holding the parquet files, a `<case>/` directory with a `raw/` child, or a

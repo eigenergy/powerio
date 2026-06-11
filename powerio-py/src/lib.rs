@@ -565,6 +565,18 @@ impl PyCase {
         gridfm_outputs_to_dict(py, &outputs)
     }
 
+    /// Write this case as a PyPSA CSV folder. Returns
+    /// `{"dir", "files", "warnings"}`.
+    fn write_pypsa_csv_folder<'py>(
+        &self,
+        py: Python<'py>,
+        out_dir: &str,
+    ) -> PyResult<Bound<'py, PyDict>> {
+        let outputs =
+            powerio_matrix::write_pypsa_csv_folder(&self.inner, out_dir).map_err(to_pyerr)?;
+        pypsa_outputs_to_dict(py, &outputs)
+    }
+
     fn __repr__(&self) -> String {
         format!(
             "PyCase(name={:?}, n_buses={}, n_branches={}, n_gens={})",
@@ -601,6 +613,15 @@ fn parse_str(text: &str, format: Option<&str>) -> PyResult<PyCase> {
 #[pyfunction]
 fn from_json(text: &str) -> PyResult<PyCase> {
     let inner = powerio_matrix::Network::from_json(text).map_err(to_pyerr)?;
+    let core = IndexCore::build(&inner);
+    Ok(PyCase { inner, core })
+}
+
+/// Read a PyPSA CSV folder into a case.
+#[pyfunction]
+fn read_pypsa_csv_folder(path: &str) -> PyResult<PyCase> {
+    let inner =
+        powerio_matrix::read_pypsa_csv_folder(std::path::Path::new(path)).map_err(to_pyerr)?;
     let core = IndexCore::build(&inner);
     Ok(PyCase { inner, core })
 }
@@ -662,6 +683,15 @@ fn gridfm_outputs_to_dict<'py>(
     let d = dir_files_dict(py, &outputs.dir, &outputs.files)?;
     d.set_item("dropped_zero_impedance", outputs.dropped_zero_impedance)?;
     d.set_item("degenerate_cost_gens", outputs.degenerate_cost_gens)?;
+    Ok(d)
+}
+
+fn pypsa_outputs_to_dict<'py>(
+    py: Python<'py>,
+    outputs: &powerio_matrix::PypsaCsvOutputs,
+) -> PyResult<Bound<'py, PyDict>> {
+    let d = dir_files_dict(py, &outputs.dir, &outputs.files)?;
+    d.set_item("warnings", &outputs.warnings)?;
     Ok(d)
 }
 
@@ -747,6 +777,7 @@ fn _powerio(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(parse_file, m)?)?;
     m.add_function(wrap_pyfunction!(parse_str, m)?)?;
     m.add_function(wrap_pyfunction!(from_json, m)?)?;
+    m.add_function(wrap_pyfunction!(read_pypsa_csv_folder, m)?)?;
     m.add_function(wrap_pyfunction!(convert_file, m)?)?;
     m.add_function(wrap_pyfunction!(convert_str, m)?)?;
     // Whether the gridfm Parquet surface (arrow/parquet) was compiled in, so the

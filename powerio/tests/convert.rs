@@ -6,9 +6,10 @@
 use std::path::{Path, PathBuf};
 
 use powerio::{
-    BusId, SourceFormat, TargetFormat, convert_file, parse_file, parse_matpower,
-    parse_matpower_file, parse_powermodels_json, parse_powerworld, parse_psse, write_as,
-    write_egret_json, write_powermodels_json, write_powerworld, write_psse,
+    BusId, Network, SourceFormat, TargetFormat, convert_file, parse_file, parse_matpower,
+    parse_matpower_file, parse_powermodels_json, parse_powerworld, parse_psse,
+    read_pypsa_csv_folder, write_as, write_egret_json, write_powermodels_json, write_powerworld,
+    write_psse, write_pypsa_csv_folder,
 };
 use serde_json::Value;
 
@@ -43,6 +44,164 @@ fn canonical_api_names_parse_and_convert() {
     let same = convert_file(&path, TargetFormat::Matpower, None).unwrap();
     assert_eq!(same.text, src);
     assert!(same.warnings.is_empty());
+}
+
+#[derive(Debug, PartialEq)]
+struct Core {
+    buses: usize,
+    branches: usize,
+    gens: usize,
+    loads: usize,
+    shunts: usize,
+    load_p: i64,
+    load_q: i64,
+    gen_p: i64,
+    branch_r: i64,
+    branch_x: i64,
+    branch_b: i64,
+    base_mva: i64,
+}
+
+fn core(net: &Network) -> Core {
+    let r = |x: f64| (x * 1e6).round() as i64;
+    Core {
+        buses: net.buses.len(),
+        branches: net.branches.len(),
+        gens: net.generators.len(),
+        loads: net.loads.len(),
+        shunts: net.shunts.len(),
+        load_p: r(net.loads.iter().map(|l| l.p).sum()),
+        load_q: r(net.loads.iter().map(|l| l.q).sum()),
+        gen_p: r(net.generators.iter().map(|g| g.pg).sum()),
+        branch_r: r(net.branches.iter().map(|b| b.r).sum()),
+        branch_x: r(net.branches.iter().map(|b| b.x).sum()),
+        branch_b: r(net.branches.iter().map(|b| b.b).sum()),
+        base_mva: r(net.base_mva),
+    }
+}
+
+#[test]
+fn pandapower_json_round_trips_core_and_echoes_source() {
+    let net = parse_matpower_file(data("case9.m")).unwrap();
+    let conv = write_as(&net, TargetFormat::PandapowerJson);
+    assert!(
+        !conv.warnings.iter().any(|w| w.contains("dcline")),
+        "case9 has no dclines, got warnings: {:?}",
+        conv.warnings
+    );
+    let back = powerio::parse_str(&conv.text, "pandapower-json").unwrap();
+    assert_eq!(back.source_format, SourceFormat::PandapowerJson);
+    assert_eq!(core(&back), core(&net));
+    assert_eq!(
+        write_as(&back, TargetFormat::PandapowerJson).text,
+        conv.text
+    );
+
+    let inferred_path = tmp_path("case9-pandapower-json", "json");
+    std::fs::write(&inferred_path, &conv.text).unwrap();
+    let inferred = parse_file(&inferred_path, None).unwrap();
+    assert_eq!(inferred.source_format, SourceFormat::PandapowerJson);
+}
+
+#[test]
+fn pypsa_csv_folder_round_trips_core() {
+    let net = parse_matpower_file(data("case9.m")).unwrap();
+    let out = tmp_dir("case9-pypsa-csv");
+    let written = write_pypsa_csv_folder(&net, &out).unwrap();
+    let names: std::collections::BTreeSet<_> = written
+        .files
+        .iter()
+        .filter_map(|p| p.file_name().and_then(|s| s.to_str()))
+        .collect();
+    for expected in [
+        "network.csv",
+        "snapshots.csv",
+        "buses.csv",
+        "generators.csv",
+        "loads.csv",
+        "lines.csv",
+    ] {
+        assert!(names.contains(expected), "missing {expected} in {names:?}");
+    }
+    let back = read_pypsa_csv_folder(&out).unwrap();
+    assert_eq!(back.source_format, SourceFormat::PypsaCsv);
+    assert_eq!(core(&back), core(&net));
+}
+
+#[test]
+fn pypsa_csv_folder_preserves_nonnumeric_bus_names() {
+    let dir = tmp_dir("pypsa-nonnumeric-buses");
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(dir.join("network.csv"), "name,srid\nnamed,4326\n").unwrap();
+    std::fs::write(dir.join("snapshots.csv"), ",snapshot\n0,now\n").unwrap();
+    std::fs::write(
+        dir.join("buses.csv"),
+        "name,v_nom,v_mag_pu_set,v_mag_pu_min,v_mag_pu_max\nalpha,110.0,1.0,0.9,1.1\nbeta,110.0,1.0,0.9,1.1\n",
+    )
+    .unwrap();
+    std::fs::write(
+        dir.join("loads.csv"),
+        "name,bus,p_set,q_set\nload_1,beta,5.0,2.0\n",
+    )
+    .unwrap();
+    std::fs::write(
+        dir.join("lines.csv"),
+        "name,bus0,bus1,r,x,b,s_nom\nline_1,alpha,beta,12.1,24.2,0.0001,100.0\n",
+    )
+    .unwrap();
+
+    let net = read_pypsa_csv_folder(&dir).unwrap();
+    assert_eq!(net.buses[0].id, BusId(1));
+    assert_eq!(net.buses[0].name.as_deref(), Some("alpha"));
+    assert_eq!(net.buses[1].id, BusId(2));
+    assert_eq!(net.buses[1].name.as_deref(), Some("beta"));
+    assert_eq!(net.loads[0].bus, BusId(2));
+    assert_eq!(net.branches[0].from, BusId(1));
+    assert_eq!(net.branches[0].to, BusId(2));
+}
+
+#[test]
+#[allow(clippy::float_cmp)]
+fn pypsa_csv_folder_reads_storage_units() {
+    let dir = tmp_dir("pypsa-storage-units");
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(dir.join("network.csv"), "name,srid\nstorage,4326\n").unwrap();
+    std::fs::write(
+        dir.join("buses.csv"),
+        "name,v_nom,v_mag_pu_set,v_mag_pu_min,v_mag_pu_max\n1,110.0,1.0,0.9,1.1\n",
+    )
+    .unwrap();
+    std::fs::write(
+        dir.join("storage_units.csv"),
+        "name,bus,p_nom,max_hours,efficiency_store,efficiency_dispatch,p_set,q_set,state_of_charge_initial,active\nstorage_1,1,25.0,4.0,0.91,0.92,3.0,1.5,20.0,false\n",
+    )
+    .unwrap();
+
+    let net = read_pypsa_csv_folder(&dir).unwrap();
+    assert_eq!(net.storage.len(), 1);
+    let st = &net.storage[0];
+    assert_eq!(st.bus, BusId(1));
+    assert_eq!(st.energy_rating, 100.0);
+    assert_eq!(st.charge_rating, 25.0);
+    assert_eq!(st.discharge_rating, 25.0);
+    assert_eq!(st.charge_efficiency, 0.91);
+    assert_eq!(st.discharge_efficiency, 0.92);
+    assert_eq!(st.ps, 3.0);
+    assert_eq!(st.qs, 1.5);
+    assert_eq!(st.energy, 20.0);
+    assert!(!st.in_service);
+}
+
+fn tmp_dir(label: &str) -> PathBuf {
+    let p = std::env::temp_dir().join(format!("powerio-{label}-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&p);
+    p
+}
+
+fn tmp_path(label: &str, ext: &str) -> PathBuf {
+    let p = std::env::temp_dir().join(format!("powerio-{label}-{}.{}", std::process::id(), ext));
+    let _ = std::fs::remove_file(&p);
+    p
 }
 
 #[test]

@@ -29,6 +29,8 @@ The following formats are currently supported with read/write functionality:
 - [PowerWorld](https://www.powerworld.com/WebHelp/Content/MainDocumentation_HTML/Case_Formats.htm) `.aux`
 - [PowerModels.jl](https://github.com/lanl-ansi/PowerModels.jl) network data JSON
 - [egret](https://pypi.org/project/gridx-egret/) `ModelData` JSON
+- [pandapower](https://www.pandapower.org/) `pandapowerNet` JSON
+- [PyPSA](https://pypsa.org/) static CSV folders
 - [GridFM](https://github.com/gridfm) `.parquet`
 
 Support for the following formats is under development (see the open pull requests):
@@ -108,6 +110,9 @@ json, warnings = to_format(case, "powermodels-json")
 ### Command line interface (CLI)
 ```
 powerio convert tests/data/case14.m --to psse -o case14.raw
+powerio convert tests/data/case14.m --to pandapower-json -o case14.pp.json
+powerio convert tests/data/case14.m --to pypsa-csv -o pypsa_case
+powerio convert pypsa_case --from pypsa-csv --to matpower -o case14.m
 powerio verify tests/data/case30.m --kind bdoubleprime
 powerio dcopf tests/data/case30.m -o out
 powerio sensitivities tests/data/case30.m -o out
@@ -119,19 +124,21 @@ powerio
 
 ### Current Format Fidelity
 
-| reader / writer | MATPOWER | PowerModels JSON | PSS/E | PowerWorld | egret JSON |
-| --- | --- | --- | --- | --- | --- |
-| MATPOWER | original text | full | partial | partial | partial |
-| PowerModels JSON | partial | original text | partial | partial | partial |
-| PSS/E | full | full | original text | partial | partial |
-| PowerWorld | full | full | partial | original text | partial |
-| egret JSON | partial | full | partial | partial | original text |
+| reader / writer | MATPOWER | PowerModels JSON | PSS/E | PowerWorld | egret JSON | pandapower JSON |
+| --- | --- | --- | --- | --- | --- | --- |
+| MATPOWER | original text | full | partial | partial | partial | partial |
+| PowerModels JSON | partial | original text | partial | partial | partial | partial |
+| PSS/E | full | full | original text | partial | partial | partial |
+| PowerWorld | full | full | partial | original text | partial | partial |
+| egret JSON | partial | full | partial | partial | original text | partial |
+| pandapower JSON | partial | partial | partial | partial | partial | original text |
 
 `partial` means the target lacks fields present in the source. The writer reports
 those cases in `Conversion::warnings`. 
 
-GridFM Parquet is not in this table: both read and write are currently lossy. Known limits
-for every format are documented in
+PyPSA CSV folders and GridFM Parquet are not in this table because they are
+multi-file dataset formats rather than `Conversion { text }` targets; both are
+canonicalized on write and have documented lossy edges. Known limits for every format are documented in
 the [format fidelity guide](https://eigenergy.github.io/powerio/guides/format-fidelity.html).
 
 ### Matrices
@@ -217,6 +224,8 @@ The Rust test suite covers parsers, writers, format conversion, matrix
 builders, and normalization; the C ABI crate carries its own tests, and
 `pytest` covers the Python bindings. The benchmark validation suite compares
 selected outputs against PowerModels.jl, egret, ExaPowerIO.jl, and pandapower.
+The benchmark validation suite also imports PowerIO's PyPSA CSV folders with
+PyPSA when the optional oracle is installed.
 
 ```
 cargo fmt --all --check

@@ -2,12 +2,14 @@
 //! meeting at the shared [`Network`].
 //!
 //! Each format is one module here, owning its reader and/or writer: MATPOWER
-//! `.m`, PowerModels JSON, PSS/E `.raw`, PowerWorld `.aux`, and egret
-//! `ModelData` JSON. Every input and output format meets at the hub, so adding a
-//! format is one module, not a change to any other. [`parse_file`] reads a file,
-//! detecting the format from its extension; [`write_as`] serializes a `Network`
-//! to a target. Non-finite numeric values (a MATPOWER `Inf`/`NaN` angle limit,
-//! say) are written as JSON `null`.
+//! `.m`, PowerModels JSON, PSS/E `.raw`, PowerWorld `.aux`, egret
+//! `ModelData` JSON, pandapower JSON, and PyPSA CSV folders. Every input and
+//! output format meets at the hub, so adding a format is one module, not a
+//! change to any other. [`parse_file`] reads a file, detecting the format from
+//! its extension; [`write_as`] serializes a `Network` to text targets.
+//! Directory-format writers, such as PyPSA CSV folders, expose explicit
+//! filesystem helpers. Non-finite numeric values (a MATPOWER `Inf`/`NaN` angle
+//! limit, say) are written as JSON `null`.
 //!
 //! # Fidelity contract
 //!
@@ -32,15 +34,19 @@ use crate::{Error, Result};
 
 mod egret;
 mod matpower;
+mod pandapower;
 mod powermodels;
 mod powerworld;
 mod psse;
+mod pypsa;
 
 pub use egret::{parse_egret_json, write_egret_json};
 pub use matpower::{parse_matpower, parse_matpower_file, write_matpower};
+pub use pandapower::{parse_pandapower_json, write_pandapower_json};
 pub use powermodels::{parse_powermodels_json, write_powermodels_json};
 pub use powerworld::{parse_powerworld, write_powerworld};
 pub use psse::{parse_psse, write_psse};
+pub use pypsa::{PypsaCsvOutputs, read_pypsa_csv_folder, write_pypsa_csv_folder};
 
 /// A target interchange format. See [`write_as`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -54,6 +60,8 @@ pub enum TargetFormat {
     Psse,
     /// PowerWorld auxiliary `.aux`.
     PowerWorld,
+    /// pandapower `pandapowerNet` JSON.
+    PandapowerJson,
     /// MATPOWER `.m` (round-trip; byte-exact when the case kept its source).
     Matpower,
 }
@@ -63,7 +71,9 @@ impl TargetFormat {
     #[must_use]
     pub fn extension(self) -> &'static str {
         match self {
-            TargetFormat::PowerModelsJson | TargetFormat::EgretJson => "json",
+            TargetFormat::PowerModelsJson
+            | TargetFormat::EgretJson
+            | TargetFormat::PandapowerJson => "json",
             TargetFormat::Psse => "raw",
             TargetFormat::PowerWorld => "aux",
             TargetFormat::Matpower => "m",
@@ -78,6 +88,7 @@ impl TargetFormat {
             TargetFormat::EgretJson => "egret JSON",
             TargetFormat::Psse => "PSS/E .raw",
             TargetFormat::PowerWorld => "PowerWorld .aux",
+            TargetFormat::PandapowerJson => "pandapower JSON",
             TargetFormat::Matpower => "MATPOWER .m",
         }
     }
@@ -90,6 +101,7 @@ impl TargetFormat {
             TargetFormat::EgretJson => "egret-json",
             TargetFormat::Psse => "psse",
             TargetFormat::PowerWorld => "powerworld",
+            TargetFormat::PandapowerJson => "pandapower-json",
             TargetFormat::Matpower => "matpower",
         }
     }
@@ -111,9 +123,9 @@ impl FromStr for TargetFormat {
 
 /// Map a format name (with the common aliases) to a [`TargetFormat`], or `None`
 /// if unrecognized. Accepts `matpower`/`m`, `powermodels-json`/`powermodels`/`pm`,
-/// `egret-json`/`egret`, `psse`/`raw`, `powerworld`/`aux`. Case-insensitive. The
-/// one place the bindings (Python, C ABI) share, so a new format means one new
-/// arm here, not three.
+/// `egret-json`/`egret`, `pandapower-json`/`pandapower`/`pp`, `psse`/`raw`,
+/// `powerworld`/`aux`. Case-insensitive. The one place the bindings (Python, C
+/// ABI) share, so a new format means one new arm here, not three.
 ///
 /// The `powermodelsjson`/`egretjson` aliases let a [`SourceFormat`]'s string form
 /// (`{:?}` lowercased, e.g. `"PowerModelsJson"`) round-trip back to a target, so
@@ -128,6 +140,7 @@ pub fn target_format_from_name(name: &str) -> Option<TargetFormat> {
         "egret-json" | "egret" | "egretjson" => TargetFormat::EgretJson,
         "psse" | "raw" => TargetFormat::Psse,
         "powerworld" | "aux" => TargetFormat::PowerWorld,
+        "pandapower-json" | "pandapower" | "pandapowerjson" | "pp" => TargetFormat::PandapowerJson,
         _ => return None,
     })
 }
@@ -147,6 +160,11 @@ pub fn target_format_from_name(name: &str) -> Option<TargetFormat> {
 /// on malformed input.
 pub fn parse_file(path: impl AsRef<std::path::Path>, from: Option<&str>) -> Result<Network> {
     let path = path.as_ref();
+    if from.is_some_and(is_pypsa_csv_name)
+        || (from.is_none() && path.is_dir() && path.join("network.csv").is_file())
+    {
+        return pypsa::read_pypsa_csv_folder(path);
+    }
     // Read the file once into an owned buffer; the reader moves it straight into
     // the retained source (byte-exact round-trip) with no copy. Sniffing a
     // `.json` borrows the text before the move.
@@ -194,6 +212,7 @@ fn read_source(source: Arc<String>, fmt: TargetFormat, name_hint: Option<&str>) 
         TargetFormat::Psse => psse::parse_psse_source(source, name_hint),
         TargetFormat::PowerWorld => powerworld::parse_powerworld_source(source, name_hint),
         TargetFormat::EgretJson => egret::parse_egret_source(source, name_hint),
+        TargetFormat::PandapowerJson => pandapower::parse_pandapower_source(source, name_hint),
     }?;
     // A case with no buses is content-free for every consumer. Most readers
     // already reject it on a missing required table, but a JSON carrying only
@@ -221,16 +240,29 @@ fn sniff_json(text: &str) -> TargetFormat {
     use serde::de::IgnoredAny;
     #[derive(serde::Deserialize)]
     struct Shape {
+        #[serde(rename = "_class")]
+        class: Option<String>,
         elements: Option<IgnoredAny>,
         system: Option<IgnoredAny>,
     }
     match serde_json::from_str::<Shape>(text) {
         Ok(Shape {
+            class: Some(class), ..
+        }) if class == "pandapowerNet" => TargetFormat::PandapowerJson,
+        Ok(Shape {
             elements: Some(_),
             system: Some(_),
+            ..
         }) => TargetFormat::EgretJson,
         _ => TargetFormat::PowerModelsJson,
     }
+}
+
+fn is_pypsa_csv_name(name: &str) -> bool {
+    matches!(
+        name.to_ascii_lowercase().replace(['-', '_'], "").as_str(),
+        "pypsacsv" | "pypsa"
+    )
 }
 
 /// Parse in-memory case `text` of the named `format` (see
@@ -276,6 +308,7 @@ pub fn write_as(net: &Network, format: TargetFormat) -> Conversion {
         TargetFormat::EgretJson => write_egret_json(net),
         TargetFormat::Psse => write_psse(net),
         TargetFormat::PowerWorld => write_powerworld(net),
+        TargetFormat::PandapowerJson => write_pandapower_json(net),
         // From another source (or no retained source): canonical MATPOWER from
         // the folded model, which itemizes what it can't carry (HVDC, gen caps,
         // extras, a partial-cost case).
@@ -360,6 +393,7 @@ fn same_format(target: TargetFormat, source: SourceFormat) -> bool {
             | (TargetFormat::EgretJson, SourceFormat::EgretJson)
             | (TargetFormat::Psse, SourceFormat::Psse)
             | (TargetFormat::PowerWorld, SourceFormat::PowerWorld)
+            | (TargetFormat::PandapowerJson, SourceFormat::PandapowerJson)
     )
 }
 
@@ -420,6 +454,7 @@ mod tests {
             (SourceFormat::EgretJson, TargetFormat::EgretJson),
             (SourceFormat::Psse, TargetFormat::Psse),
             (SourceFormat::PowerWorld, TargetFormat::PowerWorld),
+            (SourceFormat::PandapowerJson, TargetFormat::PandapowerJson),
         ] {
             let token = format!("{sf:?}");
             assert_eq!(
@@ -429,7 +464,12 @@ mod tests {
             );
         }
         // The derived/in-memory source formats have no writer target.
-        for sf in [SourceFormat::InMemory, SourceFormat::Normalized] {
+        for sf in [
+            SourceFormat::InMemory,
+            SourceFormat::Normalized,
+            SourceFormat::Gridfm,
+            SourceFormat::PypsaCsv,
+        ] {
             assert_eq!(target_format_from_name(&format!("{sf:?}")), None);
         }
     }

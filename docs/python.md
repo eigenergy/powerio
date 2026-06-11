@@ -30,8 +30,10 @@ net = pio.parse_file("case9.m")
 same_text = net.to_matpower()
 json_text = net.to_json()
 pm = net.to_format("powermodels-json")
+pp = net.to_format("pandapower-json")
 raw = pio.convert_file("case9.m", "psse")
 aux = pio.convert_str(json_text, "powerworld", format="powermodels-json")
+pypsa_out = net.write_pypsa_csv_folder("case9-pypsa")
 
 normalized = net.to_normalized()
 dense = net.to_dense()       # needs powerio[matrix]
@@ -41,6 +43,23 @@ graph = net.to_networkx()    # needs powerio[graph]
 
 `parse_file(path, from_=None)` reads any format (inferred from the extension, or
 forced with `from_`); `parse_str(text, format)` reads in-memory text.
+
+## PyPSA folders
+
+PyPSA CSV folders are multi-file datasets, so they use explicit read/write
+helpers instead of `Conversion.text`.
+
+```python
+import powerio as pio
+
+case = pio.parse_file("case14.m")
+out = case.write_pypsa_csv_folder("case14-pypsa")
+round_trip = pio.read_pypsa_csv_folder(out["dir"])
+```
+
+The written folder can be imported with
+`pypsa.Network().import_from_csv_folder(path)`. PyPSA itself is not a runtime
+dependency of powerio.
 
 ## GridFM reads
 

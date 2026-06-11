@@ -206,6 +206,18 @@ char *pio_convert_file(const char *path,
                        char *errbuf,
                        size_t errlen);
 
+/**
+ * Write `net` as a PyPSA CSV folder at `out_dir`. Returns `1` on success and
+ * `0` on error. Fidelity warnings, if any, are written `\n`-joined into
+ * `warnbuf`.
+ */
+int32_t pio_write_pypsa_csv_folder(const PioNetwork *net,
+                                   const char *out_dir,
+                                   char *warnbuf,
+                                   size_t warnlen,
+                                   char *errbuf,
+                                   size_t errlen);
+
 #if defined(PIO_GRIDFM)
 /**
  * Read one scenario of a gridfm-datakit Parquet dataset into a network handle —

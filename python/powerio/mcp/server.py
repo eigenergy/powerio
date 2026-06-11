@@ -111,8 +111,10 @@ def convert_case(
 
     Provide exactly one of ``path`` (a file on disk) or ``content`` (inline file
     text). ``to``/``from_`` are format names or aliases: ``matpower`` (``m``),
-    ``powermodels-json`` (``pm``), ``egret-json`` (``egret``), ``psse``
-    (``raw``), ``powerworld`` (``aux``). The input format is inferred from the
+    ``powermodels-json`` (``pm``), ``egret-json`` (``egret``),
+    ``pandapower-json`` (``pp``), ``psse`` (``raw``), ``powerworld`` (``aux``).
+    PyPSA CSV folders are accepted as path inputs with ``from_="pypsa-csv"``,
+    but are not returned as inline text. The input format is inferred from the
     file extension for ``path``; ``from_`` is REQUIRED with inline ``content``.
 
     Returns ``{"text": <converted file>, "warnings": [<fidelity notes: data the
@@ -155,9 +157,10 @@ def save_case(
     matching ``to`` (``.m``, ``.json``, ``.raw``, ``.aux``).
 
     ``to`` is a format name or alias: ``matpower`` (``m``), ``powermodels-json``
-    (``pm``), ``egret-json`` (``egret``), ``psse`` (``raw``), ``powerworld``
-    (``aux``). Provide exactly one of ``path``, ``content`` (with ``format``),
-    or ``json`` (the transport string). An existing ``out_path`` is not
+    (``pm``), ``egret-json`` (``egret``), ``pandapower-json`` (``pp``),
+    ``psse`` (``raw``), ``powerworld`` (``aux``). Provide exactly one of
+    ``path``, ``content`` (with ``format``), or ``json`` (the transport string).
+    An existing ``out_path`` is not
     overwritten unless ``overwrite`` is true.
 
     Returns ``{"path": <absolute path written>, "bytes_written": <count>,
@@ -215,8 +218,8 @@ def parse_case(
 
     Provide exactly one of ``path`` or ``content``. For inline ``content``,
     ``format`` names the input format (default ``matpower``); formats:
-    ``matpower``, ``powermodels-json``, ``egret-json``, ``psse``,
-    ``powerworld``.
+    ``matpower``, ``powermodels-json``, ``egret-json``, ``pandapower-json``,
+    ``psse``, ``powerworld``, and ``pypsa-csv`` for path inputs.
 
     The returned ``json`` string is the exchange format between tool calls:
     pass it to ``compute_matrix``, ``dense_view``, and ``save_case`` here, or

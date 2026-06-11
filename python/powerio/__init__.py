@@ -1,8 +1,9 @@
 """powerio: lossless power system case file IO, conversion, and matrices.
 
-Parse MATPOWER, PSS/E, PowerWorld, PowerModels JSON, and egret JSON into one
-format-neutral case; write it back byte exact; convert between formats; and
-pull the sparse matrices and graph views solvers need::
+Parse MATPOWER, PSS/E, PowerWorld, PowerModels JSON, egret JSON, pandapower
+JSON, and PyPSA CSV folders into one format-neutral case; write retained text
+formats back byte exact; convert between formats; and pull the sparse matrices
+and graph views solvers need::
 
     import powerio as pio
 
@@ -10,6 +11,8 @@ pull the sparse matrices and graph views solvers need::
     print(net.n_buses, net.base_mva)         # 9 100.0
     text = net.to_matpower()                 # byte-exact MATPOWER echo
     raw, warnings = pio.convert_file("case9.m", "psse")
+    pp_json, warnings = pio.convert_file("case9.m", "pandapower-json")
+    pypsa_out = net.write_pypsa_csv_folder("case9-pypsa")
 
     B = net.bprime()                         # scipy.sparse, the FDPF B'
     Y = net.ybus()                           # complex csr, G + jB
@@ -58,6 +61,7 @@ __all__ = [
     "write_gridfm_batch",
     "read_gridfm",
     "read_gridfm_scenarios",
+    "read_pypsa_csv_folder",
     "GridfmRead",
     "__version__",
 ]
@@ -360,6 +364,15 @@ class Network:
             str(out_dir), scenario, include_y_bus, include_taps, include_shifts
         )
 
+    def write_pypsa_csv_folder(self, out_dir: Any) -> dict:
+        """Write this case as a PyPSA CSV folder.
+
+        The folder contains static PyPSA component CSVs and can be imported with
+        ``pypsa.Network().import_from_csv_folder(path)``. Returns a dict with
+        ``dir``, ``files``, and fidelity ``warnings``.
+        """
+        return self._inner.write_pypsa_csv_folder(str(out_dir))
+
     def to_normalized(self) -> "Network":
         """A normalized, computation-ready copy of this case: per unit, radians,
         out-of-service filtered, densely reindexed (1-based), bus types
@@ -414,10 +427,12 @@ def convert_file(path: Any, to: str, from_: Optional[str] = None) -> Conversion:
     """Convert a case file to another format through the neutral hub.
 
     ``to`` / ``from_`` are format names: ``matpower``, ``powermodels-json``,
-    ``egret-json``, ``psse``, ``powerworld`` (aliases ``m``, ``pm``, ``egret``,
-    ``raw``, ``aux``). The input format is inferred from the file extension
-    unless ``from_`` overrides it. Returns a :class:`Conversion` with the text
-    and any fidelity warnings.
+    ``egret-json``, ``pandapower-json``, ``psse``, ``powerworld`` (aliases
+    ``m``, ``pm``, ``egret``, ``pp``, ``raw``, ``aux``). The input format is
+    inferred from the file extension unless ``from_`` overrides it. PyPSA CSV
+    folders are read with ``from_="pypsa-csv"`` and written with
+    :meth:`Network.write_pypsa_csv_folder`. Returns a :class:`Conversion` with
+    the text and any fidelity warnings.
     """
     text, warnings = _powerio.convert_file(str(path), to, from_)
     return Conversion(text, warnings)
@@ -518,3 +533,8 @@ def read_gridfm_scenarios(dir: Any) -> "list[GridfmRead]":
         GridfmRead(Network(case), scen, warnings)
         for case, scen, warnings in _powerio.read_gridfm_scenarios(str(dir))
     ]
+
+
+def read_pypsa_csv_folder(path: Any) -> Network:
+    """Read a PyPSA CSV folder into a :class:`Network`."""
+    return Network(_powerio.read_pypsa_csv_folder(str(path)))

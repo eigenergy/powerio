@@ -29,7 +29,7 @@ dependencies = []
 matrix = ["numpy>=1.21", "scipy>=1.7"]
 graph = ["networkx>=2.6"]
 all = ["numpy>=1.21", "scipy>=1.7", "networkx>=2.6", "polars>=1"]
-bench = ["matpowercaseframes", "pandapower"]
+bench = ["matpowercaseframes", "pandapower", "pypsa>=1.0"]
 # The published wheel includes the native gridfm writer. This extra installs
 # Python packages for reading and inspecting the Parquet output.
 gridfm = ["polars>=1"]

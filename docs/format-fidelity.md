@@ -17,6 +17,7 @@ implementations and the matching powerio code:
 | Tap ratio | `0` means a line (treated as `1`); nonzero is a transformer | MATPOWER `idx_brch` `TAP` | `Branch::effective_tap` |
 | Phase shift, angle | degrees in the model; PowerModels JSON carries radians | PowerModels `make_per_unit!` | `format::powermodels` |
 | Angle limits | `angmin`/`angmax` default ±360 (unconstrained) | MATPOWER `idx_brch` `ANGMIN`/`ANGMAX` | `Branch::has_angle_limits` |
+| pandapower/PyPSA impedance | line `r/x` are converted between per unit and ohms with `Zbase = V_kV² / baseMVA`; line charging uses siemens | pandapower PPC conversion, PyPSA static components | `format::pandapower`, `format::pypsa` |
 | dcline `Pt`/`Qf`/`Qt` | sign flips vs MATPOWER | PowerModels `matpower.jl` | `format::powermodels` |
 | Generator cost | `c2 p² + c1 p` → `q = 2c2`, `c = c1`; coefficients high order first | MATPOWER `idx_cost`, egret `matpower_parser` | `GenCost::quadratic` |
 | `source_id` | `["bus", id]` for bus-tied elements | PowerModels `matpower.jl` | `format::powermodels` |
@@ -28,13 +29,15 @@ MATPOWER case taken through powerio to egret JSON matches egret's direct import.
 
 ## Validation
 
-The harness script `benchmarks/run_validation.sh` checks powerio against four independent
-tools. Every reader and every writer runs under an oracle: the conversion matrix
-covers MATPOWER, PSS/E, and egret sources against all five targets, every
-PowerWorld output is read back and bridged to PowerModels JSON, and the PMread
-leg covers the PowerModels JSON read side. The remaining source/target pairs
-(PowerModels JSON and PowerWorld sources into the non-PowerModels targets) have
-no external oracle and rest on the Rust round trip suite.
+The harness script `benchmarks/run_validation.sh` checks powerio against five independent
+tools. Every classic text reader and writer runs under an oracle: the conversion
+matrix covers MATPOWER, PSS/E, and egret sources against all five legacy text
+targets, every PowerWorld output is read back and bridged to PowerModels JSON,
+and the PMread leg covers the PowerModels JSON read side. pandapower JSON and
+PyPSA CSV folders have dedicated import validators because pandapower has its
+own JSON schema and PyPSA is a directory format. The remaining source/target
+pairs (PowerModels JSON and PowerWorld sources into the non-PowerModels targets)
+have no external oracle and rest on the Rust round trip suite.
 
 - **PowerModels.jl** (`validate_powermodels.jl`, `validate_psse.jl`,
   `core_json.jl`). Reads MATPOWER, PowerModels JSON, and PSS/E. The MATPOWER to
@@ -45,11 +48,16 @@ no external oracle and rest on the Rust round trip suite.
   and compares counts, totals, and generator cost curves.
 - **ExaPowerIO.jl** (`validate_exapowerio.jl`). Reads MATPOWER through powerio's C
   ABI and compares value for value.
-- **pandapower** (`validate_pandapower.py`). Cross-checks the parse and the `Y_bus`.
+- **pandapower** (`validate_pandapower.py`,
+  `validate_pandapower_converter.py`). Cross-checks MATPOWER parse/Y_bus and
+  imports powerio's pandapower JSON output back into pandapower, comparing counts
+  and Y_bus.
+- **PyPSA** (`validate_pypsa.py`). Imports powerio's PyPSA CSV-folder output and
+  checks counts, totals, and line parameters converted back to per unit.
 
 ### The conversion matrix
 
-`benchmarks/validate_matrix.py` converts each source to every target and checks
+`benchmarks/validate_matrix.py` converts each source to every legacy text target and checks
 the electrical core of the output (bus/branch/generator counts and the per unit
 demand, generation, and shunt totals) against the source's own core, read by an
 independent oracle. The diagonal is checked byte exact: writing back to the source
@@ -59,10 +67,11 @@ otherwise: basic (`case9`), shunts and transformers (`case14`, `case30`), size
 (`case118`, `case2869pegase`), HVDC with a mixed piecewise/polynomial gencost
 (`t_case9_dcline`), and a piecewise-cost case (`pglib_opf_case5_pjm`).
 
-All 65 cells pass (13 source cases × 5 targets). The core is preserved by every
+All 65 legacy text cells pass (13 source cases × 5 targets). The core is preserved by every
 writer regardless of fidelity tier, so it is the invariant checked across the
 whole matrix; cost, HVDC, and angle limits are tier specific and covered by the
-dedicated checks above and the Rust suite.
+dedicated checks above and the Rust suite. The pandapower JSON and PyPSA CSV
+validators run alongside this matrix and are reported as separate legs.
 
 ### Running it
 
@@ -70,11 +79,11 @@ dedicated checks above and the Rust suite.
 cargo build --release -p powerio-capi
 maturin develop --release                          # the powerio wheel
 julia --project=benchmarks -e 'using Pkg; Pkg.instantiate()'
-pip install -r benchmarks/requirements.txt         # pandapower + egret oracles
+pip install -r benchmarks/requirements.txt         # pandapower + egret + PyPSA oracles
 bash benchmarks/run_validation.sh
 ```
 
-The oracle tools (PowerModels.jl, egret, ExaPowerIO.jl, pandapower) are
+The oracle tools (PowerModels.jl, egret, ExaPowerIO.jl, pandapower, PyPSA) are
 benchmark scoped: they are declared in `benchmarks/Project.toml` and
 `benchmarks/requirements.txt`, never as dependencies of the powerio package.
 
@@ -95,6 +104,17 @@ These are reported in `Conversion::warnings`, not dropped silently.
 - **egret** output drops HVDC and storage. The reader takes the power flow
   ModelData subset (numeric bus ids, scalar values); unit commitment cases
   (`system.time_keys`) are rejected.
+- **pandapower JSON** writes the power-flow core as split-oriented
+  `pandapowerNet` tables. It maps line parameters through pandapower's physical
+  units, writes tap/shift branches as transformers, and uses `ext_grid` only for
+  reference buses that have no generator. Rate B/C, HVDC, storage, unsupported
+  costs, and source extras are reported as warnings.
+- **PyPSA CSV folders** are canonicalized directory outputs, not byte-exact text
+  conversions. The v1 reader/writer covers static buses, generators, loads,
+  lines, transformers, shunts, storage-unit stubs, and network base MVA. Time
+  series, links, stores, carriers, HVDC, and unknown component extras are
+  ignored on read or warned on write. Nonnumeric bus names read back as dense
+  synthetic ids while preserving the original names on `Bus.name`.
 - **gridfm** (read, the `gridfm` feature in `powerio-matrix`) reconstructs a
   `Network` from the gridfm-datakit Parquet dataset: lossy, but it recovers
   everything a power flow needs. That is bus types/voltages/limits, nodal load

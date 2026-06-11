@@ -68,10 +68,10 @@ recorded as n/a. The `powerio: parse` row uses the base Python package and reads
 from disk. The scipy matrix path `powerio[matrix]: parse + Y_bus + B'` measured
 9.0 / 26.0 / 36.1 / 565.1 ms on the same four cases.
 
-## Correctness: validated against four tools
+## Correctness: validation suite
 
 `bash benchmarks/run_validation.sh` runs every validator over every fixture and
-prints a pass/fail matrix. Latest run, all checks pass:
+prints a pass/fail matrix. The latest published legacy run passed:
 
 | fixture | PMjson | PMread | PSS/E | ExaPowerIO | pandapower (+ Y_bus) |
 | --- | --- | --- | --- | --- | --- |
@@ -122,14 +122,24 @@ What each column checks:
   the per-bus comparison. `_m2ppc` is used instead of `from_mpc` because it runs
   before the `from_ppc` step that raises on dclines and parallel branches.
 
+The issue-47 converter suite adds two more oracle legs to
+`benchmarks/run_validation.sh`:
+
+- **pp-json** (`validate_pandapower_converter.py`): powerio writes pandapower
+  `pandapowerNet` JSON, pandapower imports it, and the script compares counts
+  plus the full Y_bus against powerio's matrix builder.
+- **pypsa** (`validate_pypsa.py`): powerio writes a PyPSA CSV folder, PyPSA
+  imports it, and the script compares counts, load/generation totals, and line
+  parameters converted back to powerio's per-unit basis.
+
 ### Full reader × writer matrix
 
-`benchmarks/validate_matrix.py` converts each source to every target and checks the
+`benchmarks/validate_matrix.py` converts each source to every legacy text target and checks the
 output's electrical core against the source's own core, read by an independent
 oracle (PowerModels.jl for MATPOWER / PowerModels JSON / PSS/E, and PowerWorld via
 a powerio `.aux` → JSON bridge; the `egret` package for egret). The diagonal
 returns the original source text. Sources are the real native files where they exist (PSS/E `.raw`, egret
-`.json`) and representative MATPOWER cases otherwise. All 65 cells pass (13 source
+`.json`) and representative MATPOWER cases otherwise. All 65 legacy cells pass (13 source
 cases × 5 targets):
 
 ```
@@ -150,7 +160,7 @@ all-pairs tests in `powerio/tests/roundtrip_formats.rs`. See
 bash benchmarks/fetch_cases.sh                 # large cases into gitignored tests/data/large
 cargo build --release -p powerio-capi           # the C ABI the Julia harness calls
 maturin develop --release                       # the powerio wheel into the venv
-pip install -r benchmarks/requirements.txt      # the pandapower + egret oracles
+pip install -r benchmarks/requirements.txt      # pandapower + egret + PyPSA oracles
 julia --project=benchmarks -e 'using Pkg; Pkg.instantiate()'
 
 julia --project=benchmarks benchmarks/bench_julia.jl       # parser speed table
@@ -159,7 +169,7 @@ bash benchmarks/run_validation.sh                          # correctness matrix
 ```
 
 The oracle tools are benchmark scoped: PowerModels.jl and ExaPowerIO.jl in
-`benchmarks/Project.toml`, pandapower and egret in `benchmarks/requirements.txt`.
+`benchmarks/Project.toml`, pandapower, PyPSA, and egret in `benchmarks/requirements.txt`.
 None is a dependency of the powerio package or wheel.
 
 Versions for the run above: Julia 1.12.6 with PowerModels 0.21.6, ExaPowerIO
