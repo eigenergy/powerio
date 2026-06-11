@@ -153,7 +153,14 @@ pub fn parse_file(path: impl AsRef<std::path::Path>, from: Option<&str>) -> Resu
     let text = std::fs::read_to_string(path)?;
     let fmt = match from {
         Some(f) => target_format_from_name(f).ok_or_else(|| Error::UnknownFormat(f.to_string()))?,
-        None => match path.extension().and_then(|e| e.to_str()) {
+        // Case-insensitive: PSS/E files in the wild are `.RAW` as often as
+        // `.raw`, and PowerWorld exports `.AUX`.
+        None => match path
+            .extension()
+            .and_then(|e| e.to_str())
+            .map(str::to_ascii_lowercase)
+            .as_deref()
+        {
             Some("m") => TargetFormat::Matpower,
             Some("json") => sniff_json(&text),
             Some("raw") => TargetFormat::Psse,

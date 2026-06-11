@@ -96,6 +96,46 @@ Counts that survived the baseline: 200 buses, 49 generators, 160 loads,
 4 shunts, 246 branches (180 + 66). The sibling `case_ACTIVSg200.m` carries
 245 branches; reconciling the difference is part of the parity work.
 
+## Mapping notes (established against the sibling exports)
+
+- Complete case exports spread one object type over several DATA sections
+  with complementary field groups (the 2016 Texas2000 export writes Bus
+  twice, Gen three times, and a separate `Transformer` object for regulation
+  fields). The reader merges sections by key fields: BusNum for buses,
+  BusNum + device ID for loads/gens/shunts, bus pair + circuit for branches.
+  `Transformer` sections only augment existing branches.
+- Transformer records in Simulator 20 era exports carry impedance and tap
+  under `:1` locations (`LineR:1`, `LineTap:1`); 2016 era exports use the
+  bare names for everything. `LineTap` equals the MATPOWER tap convention
+  (verified on all 66 ACTIVSg200 and 562 Texas2000 transformers).
+- Loads are ZIP components (`LoadSMW/LoadIMW/LoadZMW`, ...). The typed model
+  carries the sum at nominal voltage; nonzero I/Z components are kept in
+  extras under their PowerWorld field names.
+- PowerWorld stores no PV/PQ type: `BusSlack` marks the reference and PV is
+  derived from in service generators. `BusVoltLim` is a YES/NO monitoring
+  toggle, never a number; per rating set limits live in
+  `BusVoltLimHigh:n`/`BusVoltLimLow:n` (empty in the ACTIVSg exports).
+- Branch identity (circuit ID, device type) and substation coordinates ride
+  in element extras under PowerWorld field names (`LineCircuit`,
+  `BranchDeviceType`, `Latitude:1`, ...), so the aux writer reproduces them
+  and cross format writers report them as extras.
+- Generator has no extras map (a deliberate performance decision), so GenID
+  and regulation fields are reachable only through the generic layer.
+- Aux exports print f32 noise in some fields (`BusNomVolt`
+  13.800000190734863); parity compares are approximate accordingly.
+
+## Parity findings (vendored ACTIVSg200 set)
+
+The vendored siblings are different case revisions: `.aux`/`.pwb` are a June
+2018 pair, `case_ACTIVSg200.m` is October 2017, `.RAW` is May 2017. Identity
+and impedance data agree (impedances to 5e-6, all 66 taps exact); the 2018
+revision adds one line (82-64) absent from 2017, and the solved states and
+load values differ between revisions. The June 2016 ACTIVSg2000 sibling set
+(fetched) was exported in one day from one case and gives full value parity:
+vm/va to 1e-6/1e-4, ZIP load totals vs MATPOWER Pd/Qd to the .m print
+quantum, dispatch and branch values likewise. `powerio/tests/`
+`powerworld_parity.rs` asserts all of this.
+
 ## Object inventory of ACTIVSg200.aux
 
 | object | rows | fields | notes |

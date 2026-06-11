@@ -48,50 +48,61 @@ pub(crate) fn parse_powerworld_source(
     }
 
     let aux = parse_aux(content)?;
-    let mut buses = Vec::new();
-    let mut loads = Vec::new();
-    let mut shunts = Vec::new();
-    let mut generators = Vec::new();
-    let mut branches = Vec::new();
-    let mut saw_any = false;
-
-    for blk in aux.data() {
-        saw_any = true;
-        match blk.object_type.as_str() {
-            "Bus" => {
-                for r in rows(blk) {
-                    buses.push(read_bus(&r)?);
-                }
-            }
-            "Load" => {
-                for r in rows(blk) {
-                    loads.push(read_load(&r)?);
-                }
-            }
-            "Shunt" => {
-                for r in rows(blk) {
-                    shunts.push(read_shunt(&r)?);
-                }
-            }
-            "Gen" => {
-                for r in rows(blk) {
-                    generators.push(read_gen(&r)?);
-                }
-            }
-            "Branch" => {
-                for r in rows(blk) {
-                    branches.push(read_branch(&r)?);
-                }
-            }
-            _ => {} // unmodeled object block: retained via the generic layer
-        }
-    }
-    if !saw_any {
+    if aux.data().next().is_none() {
         return Err(Error::FormatRead {
             format: FMT,
             message: "no DATA blocks found".into(),
         });
     }
+
+    // A complete case export spreads one object type over several DATA
+    // sections, each declaring a different field group for the same objects
+    // (Simulator 19 era exports write Bus twice, Gen three times, and put the
+    // transformer regulation fields in a separate `Transformer` object).
+    // Merge sections by the type's key fields before mapping; a later section
+    // updates the fields it declares, exactly like loading the aux into
+    // Simulator would.
+    let mut merged_buses = Merge::new(&["BusNum"]);
+    let mut merged_loads = Merge::new(&["BusNum", "LoadID"]);
+    let mut merged_shunts = Merge::new(&["BusNum", "ShuntID"]);
+    let mut merged_gens = Merge::new(&["BusNum", "GenID"]);
+    let mut merged_branches = Merge::new(&["BusNum", "BusNum:1", "LineCircuit"]);
+    for blk in aux.data() {
+        match blk.object_type.as_str() {
+            "Bus" => merged_buses.absorb(blk, true),
+            "Load" => merged_loads.absorb(blk, true),
+            "Shunt" => merged_shunts.absorb(blk, true),
+            "Gen" => merged_gens.absorb(blk, true),
+            "Branch" => merged_branches.absorb(blk, true),
+            // Transformer sections augment existing branches with regulation
+            // fields; a transformer with no Branch record carries no impedance
+            // and cannot stand alone, so unmatched rows are not created.
+            "Transformer" => merged_branches.absorb(blk, false),
+            _ => {} // unmodeled object block: retained via the generic layer
+        }
+    }
+
+    let mut buses = Vec::new();
+    for r in merged_buses.rows() {
+        buses.push(read_bus(r)?);
+    }
+    let mut loads = Vec::new();
+    for r in merged_loads.rows() {
+        loads.push(read_load(r)?);
+    }
+    let mut shunts = Vec::new();
+    for r in merged_shunts.rows() {
+        shunts.push(read_shunt(r)?);
+    }
+    let mut generators = Vec::new();
+    for r in merged_gens.rows() {
+        generators.push(read_gen(r)?);
+    }
+    let mut branches = Vec::new();
+    for r in merged_branches.rows() {
+        branches.push(read_branch(r)?);
+    }
+    derive_bus_kinds(&mut buses, &generators);
 
     let net = Network {
         name,
@@ -128,16 +139,72 @@ pub fn aux_sections(net: &Network) -> Option<Result<AuxFile>> {
 
 type Row<'a> = HashMap<&'a str, &'a str>;
 
-/// Each row of `blk` as a field-name → value map keyed by the declared field
-/// list.
-fn rows(blk: &AuxObject) -> impl Iterator<Item = Row<'_>> {
-    blk.rows.iter().map(|row| {
-        blk.fields
-            .iter()
-            .map(String::as_str)
-            .zip(row.values.iter().map(String::as_str))
-            .collect()
-    })
+/// Merges the rows of one object type across its DATA sections, keyed by the
+/// type's key fields. Insertion order is kept, so the first section fixes the
+/// element order and later sections update fields in place.
+#[derive(PartialEq, Eq, Hash)]
+enum MergeKey<'a> {
+    Fields(Vec<&'a str>),
+    /// A section with none of the type's key columns identifies its rows by
+    /// position (our own writer's output identifies devices by order).
+    Ordinal(usize),
+}
+
+struct Merge<'a> {
+    key_fields: &'static [&'static str],
+    index: HashMap<MergeKey<'a>, usize>,
+    merged: Vec<Row<'a>>,
+}
+
+impl<'a> Merge<'a> {
+    fn new(key_fields: &'static [&'static str]) -> Self {
+        Merge {
+            key_fields,
+            index: HashMap::new(),
+            merged: Vec::new(),
+        }
+    }
+
+    /// Fold a DATA section in. With `create`, rows whose key is unseen become
+    /// new elements; otherwise they are dropped (augmentation only sections,
+    /// like `Transformer`).
+    fn absorb(&mut self, blk: &'a AuxObject, create: bool) {
+        let positions: Vec<Option<usize>> =
+            self.key_fields.iter().map(|k| blk.field_index(k)).collect();
+        let keyless = positions.iter().all(Option::is_none);
+        for (at, row) in blk.rows.iter().enumerate() {
+            let key = if keyless {
+                MergeKey::Ordinal(at)
+            } else {
+                MergeKey::Fields(
+                    positions
+                        .iter()
+                        .map(|p| match p {
+                            Some(i) => row.values.get(*i).map_or("", |v| v.as_str().trim()),
+                            None => "",
+                        })
+                        .collect(),
+                )
+            };
+            let slot = match self.index.get(&key) {
+                Some(&i) => i,
+                None if create => {
+                    self.index.insert(key, self.merged.len());
+                    self.merged.push(HashMap::with_capacity(blk.fields.len()));
+                    self.merged.len() - 1
+                }
+                None => continue,
+            };
+            let entry = &mut self.merged[slot];
+            for (f, v) in blk.fields.iter().zip(&row.values) {
+                entry.insert(f.as_str(), v.as_str());
+            }
+        }
+    }
+
+    fn rows(&self) -> impl Iterator<Item = &Row<'a>> {
+        self.merged.iter()
+    }
 }
 
 fn bad_field(key: &str, tok: &str) -> Error {
@@ -174,70 +241,195 @@ fn uid(r: &Row, key: &str) -> Result<usize> {
     }
 }
 fn on(r: &Row, key: &str) -> bool {
-    !matches!(r.get(key).copied(), Some("Open" | "OPEN" | "0"))
+    !matches!(
+        r.get(key).copied().map(str::trim),
+        Some("Open" | "OPEN" | "0")
+    )
 }
 
-fn bus_kind(cat: Option<&str>) -> BusType {
-    match cat {
+/// First present, non-empty field among `keys`, trimmed.
+fn first<'a>(r: &Row<'a>, keys: &[&str]) -> Option<&'a str> {
+    keys.iter()
+        .find_map(|k| r.get(k).copied())
+        .map(str::trim)
+        .filter(|v| !v.is_empty())
+}
+
+/// First present, non-empty field among `keys` as f64; absent → `default`.
+fn f_alias(r: &Row, keys: &[&str], default: f64) -> Result<f64> {
+    match keys
+        .iter()
+        .find(|k| matches!(r.get(*k), Some(v) if !v.trim().is_empty()))
+    {
+        Some(k) => f_or(r, k, default),
+        None => Ok(default),
+    }
+}
+
+/// Copy `keys` into `extras` verbatim (trimmed of the padding PowerWorld pads
+/// quoted values with), skipping absent or empty fields. The PowerWorld field
+/// name is the extras key, so the provenance is self describing and the writer
+/// can put the value back in the same field.
+fn keep_extras(r: &Row, keys: &[&str], extras: &mut Extras) {
+    for k in keys {
+        if let Some(v) = r.get(k) {
+            let v = v.trim();
+            if !v.is_empty() {
+                extras.insert((*k).to_string(), serde_json::Value::String(v.to_string()));
+            }
+        }
+    }
+}
+
+/// `BusCat` (our writer's vocabulary) when present; real exports carry
+/// `BusSlack` instead and the PV/PQ split is derived from the generators in
+/// [`derive_bus_kinds`].
+fn bus_kind(r: &Row) -> BusType {
+    match r.get("BusCat").copied().map(str::trim) {
         Some("PV") => BusType::Pv,
         Some("Slack") => BusType::Ref,
         Some("Disconnected") => BusType::Isolated,
-        _ => BusType::Pq,
+        _ => {
+            if first(r, &["BusSlack"]).is_some_and(|v| v.eq_ignore_ascii_case("YES")) {
+                BusType::Ref
+            } else {
+                BusType::Pq
+            }
+        }
+    }
+}
+
+/// PowerWorld stores no PV/PQ bus type; it follows from the machines. A bus
+/// with an in-service generator regulates voltage (PV) unless it is the slack.
+/// Only buses left at the PQ default are promoted, so an explicit `BusCat`
+/// from our own writer is never overridden.
+fn derive_bus_kinds(buses: &mut [Bus], generators: &[Generator]) {
+    use std::collections::HashSet;
+    let gen_buses: HashSet<BusId> = generators
+        .iter()
+        .filter(|g| g.in_service)
+        .map(|g| g.bus)
+        .collect();
+    for b in buses {
+        if b.kind == BusType::Pq && gen_buses.contains(&b.id) {
+            b.kind = BusType::Pv;
+        }
     }
 }
 
 fn read_bus(r: &Row) -> Result<Bus> {
     let id = r
         .get("BusNum")
-        .and_then(|v| v.parse::<f64>().ok())
+        .and_then(|v| v.trim().parse::<f64>().ok())
         .ok_or_else(|| Error::FormatRead {
             format: FMT,
             message: "Bus block row missing numeric BusNum".into(),
         })? as usize;
     let name = r
         .get("BusName")
+        .map(|n| n.trim())
         .filter(|n| !n.is_empty())
         .map(ToString::to_string);
+    let mut extras = Extras::new();
+    // Substation identity and coordinates ride on the bus row in complete
+    // case exports (`Latitude:1`/`Longitude:1` are the substation's).
+    keep_extras(
+        r,
+        &[
+            "SubNum",
+            "Latitude:1",
+            "Longitude:1",
+            "OwnerNum",
+            "BANumber",
+        ],
+        &mut extras,
+    );
     Ok(Bus {
         id: BusId(id),
-        kind: bus_kind(r.get("BusCat").copied()),
+        kind: bus_kind(r),
         vm: f_or(r, "BusPUVolt", 1.0)?,
         va: f(r, "BusAngle")?,
         base_kv: f(r, "BusNomVolt")?,
-        vmax: f_or(r, "BusVMax", 1.1)?,
-        vmin: f_or(r, "BusVMin", 0.9)?,
+        // Real exports carry per rating set voltage limits; set 1 is the
+        // default set. Our writer's BusVMax/BusVMin are the fallback aliases.
+        vmax: f_alias(r, &["BusVoltLimHigh:1", "BusVMax"], 1.1)?,
+        vmin: f_alias(r, &["BusVoltLimLow:1", "BusVMin"], 0.9)?,
         area: uid(r, "AreaNum")?,
         zone: uid(r, "ZoneNum")?,
         name,
-        extras: Extras::new(),
+        extras,
     })
 }
 
 fn read_load(r: &Row) -> Result<Load> {
+    // Complete case exports write ZIP components (constant power S, constant
+    // current I, constant impedance Z, each MW/MVAr at nominal voltage); the
+    // simple LoadMW/LoadMVR pair is our own writer's form. The typed model
+    // carries the total at nominal voltage; nonzero I/Z components are kept in
+    // extras so nothing about the voltage dependence is lost.
+    let (p, q);
+    let mut extras = Extras::new();
+    if r.contains_key("LoadMW") || r.contains_key("LoadMVR") {
+        p = f(r, "LoadMW")?;
+        q = f(r, "LoadMVR")?;
+    } else {
+        let smw = f(r, "LoadSMW")?;
+        let imw = f(r, "LoadIMW")?;
+        let zmw = f(r, "LoadZMW")?;
+        let smvr = f(r, "LoadSMVR")?;
+        let imvr = f(r, "LoadIMVR")?;
+        let zmvr = f(r, "LoadZMVR")?;
+        p = smw + imw + zmw;
+        q = smvr + imvr + zmvr;
+        if imw != 0.0 || zmw != 0.0 || imvr != 0.0 || zmvr != 0.0 {
+            keep_extras(
+                r,
+                &[
+                    "LoadSMW", "LoadSMVR", "LoadIMW", "LoadIMVR", "LoadZMW", "LoadZMVR",
+                ],
+                &mut extras,
+            );
+        }
+    }
+    keep_extras(r, &["LoadID"], &mut extras);
     Ok(Load {
         bus: BusId(uid(r, "BusNum")?),
-        p: f(r, "LoadMW")?,
-        q: f(r, "LoadMVR")?,
+        p,
+        q,
         in_service: on(r, "LoadStatus"),
-        extras: Extras::new(),
+        extras,
     })
 }
 
 fn read_shunt(r: &Row) -> Result<Shunt> {
+    let mut extras = Extras::new();
+    keep_extras(r, &["ShuntID", "SSCMode"], &mut extras);
     Ok(Shunt {
         bus: BusId(uid(r, "BusNum")?),
-        g: f(r, "ShuntMW")?,
-        b: f(r, "ShuntMVR")?,
-        in_service: on(r, "ShuntStatus"),
-        extras: Extras::new(),
+        // Switched shunt nominal MW/MVAr in real exports; ShuntMW/ShuntMVR
+        // from our writer.
+        g: f_alias(r, &["ShuntMW", "SSNMW"], 0.0)?,
+        b: f_alias(r, &["ShuntMVR", "SSNMVR"], 0.0)?,
+        in_service: if r.contains_key("ShuntStatus") {
+            on(r, "ShuntStatus")
+        } else {
+            on(r, "SSStatus")
+        },
+        extras,
     })
 }
 
+// `Generator` has no extras map (a deliberate parse-performance decision; see
+// the `GenCaps` doc), so GenID and the regulation fields are not retained on
+// the typed model. They stay reachable through the generic layer and survive
+// aux → aux via the retained source.
 fn read_gen(r: &Row) -> Result<Generator> {
     Ok(Generator {
         bus: BusId(uid(r, "BusNum")?),
-        pg: f(r, "GenMW")?,
-        qg: f(r, "GenMVR")?,
+        // GenMW is the solved output; complete case exports write the
+        // dispatch setpoint instead.
+        pg: f_alias(r, &["GenMW", "GenMWSetPoint"], 0.0)?,
+        qg: f_alias(r, &["GenMVR", "GenMvrSetPoint"], 0.0)?,
         pmax: f(r, "GenMWMax")?,
         pmin: f(r, "GenMWMin")?,
         qmax: f(r, "GenMVRMax")?,
@@ -251,23 +443,38 @@ fn read_gen(r: &Row) -> Result<Generator> {
 }
 
 fn read_branch(r: &Row) -> Result<Branch> {
-    let is_xf = matches!(r.get("BranchDeviceType").copied(), Some("Transformer"));
-    let tap = f_or(r, "LineXFRatio", 1.0)?;
+    let is_xf = first(r, &["BranchDeviceType"]).is_some_and(|v| v == "Transformer");
+    let mut extras = Extras::new();
+    // Branch identity beyond the bus pair: circuit ID and device type. Kept
+    // verbatim (PowerWorld pads circuit IDs) so aux → aux through the typed
+    // model reproduces them exactly.
+    if let Some(v) = r.get("LineCircuit") {
+        extras.insert(
+            "LineCircuit".to_string(),
+            serde_json::Value::String((*v).to_string()),
+        );
+    }
+    keep_extras(r, &["BranchDeviceType", "LineLength"], &mut extras);
+    // Transformer records in complete case exports carry their impedance and
+    // tap under `:1` locations (values on the system base after correction);
+    // line records use the bare names. Our writer's LineXFRatio is the tap
+    // fallback.
+    let tap = f_alias(r, &["LineTap:1", "LineXFRatio"], 1.0)?;
     Ok(Branch {
         from: BusId(uid(r, "BusNum")?),
         to: BusId(uid(r, "BusNum:1")?),
-        r: f(r, "LineR")?,
-        x: f(r, "LineX")?,
-        b: f(r, "LineC")?,
-        rate_a: f(r, "LineAMVA")?,
-        rate_b: f(r, "LineBMVA")?,
-        rate_c: f(r, "LineCMVA")?,
+        r: f_alias(r, &["LineR", "LineR:1"], 0.0)?,
+        x: f_alias(r, &["LineX", "LineX:1"], 0.0)?,
+        b: f_alias(r, &["LineC", "LineC:1"], 0.0)?,
+        rate_a: f_alias(r, &["LineAMVA"], 0.0)?,
+        rate_b: f_alias(r, &["LineAMVA:1", "LineBMVA"], 0.0)?,
+        rate_c: f_alias(r, &["LineAMVA:2", "LineCMVA"], 0.0)?,
         tap: if is_xf { tap } else { 0.0 },
         shift: f(r, "LinePhase")?,
         in_service: on(r, "LineStatus"),
         angmin: -360.0,
         angmax: 360.0,
-        extras: Extras::new(),
+        extras,
     })
 }
 
@@ -338,7 +545,7 @@ pub fn write_powerworld(net: &Network) -> Conversion {
                 rows.push(format!(
                     "{} \"{}\" {} {} \"{}\"",
                     l.bus,
-                    i + 1,
+                    id_of(&l.extras, "LoadID", i),
                     n(l.p),
                     n(l.q),
                     status(l.in_service)
@@ -356,7 +563,7 @@ pub fn write_powerworld(net: &Network) -> Conversion {
                 rows.push(format!(
                     "{} \"{}\" {} {} \"{}\"",
                     sh.bus,
-                    i + 1,
+                    id_of(&sh.extras, "ShuntID", i),
                     n(sh.g),
                     n(sh.b),
                     status(sh.in_service)
@@ -394,16 +601,29 @@ pub fn write_powerworld(net: &Network) -> Conversion {
         "Branch",
         "[BusNum, BusNum:1, LineCircuit, LineR, LineX, LineC, LineAMVA, LineBMVA, LineCMVA, LineXFRatio, LinePhase, LineStatus, BranchDeviceType]",
         |rows| {
+            // Parallel branches need distinct circuit IDs: the bus pair plus
+            // circuit is the PowerWorld branch identity, and a reader (ours
+            // included) treats equal identities as one device.
+            let mut parallel: HashMap<(BusId, BusId), u32> = HashMap::new();
             for br in &net.branches {
-                let kind = if br.is_transformer() {
-                    "Transformer"
-                } else {
-                    "Line"
+                let kind = match br.extras.get("BranchDeviceType").and_then(|v| v.as_str()) {
+                    Some(v) => v,
+                    None if br.is_transformer() => "Transformer",
+                    None => "Line",
                 };
+                let nth = parallel.entry((br.from, br.to)).or_insert(0);
+                *nth += 1;
+                let fallback = nth.to_string();
+                let circuit = br
+                    .extras
+                    .get("LineCircuit")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or(&fallback);
                 rows.push(format!(
-                    "{} {} \"1\" {} {} {} {} {} {} {} {} \"{}\" \"{}\"",
+                    "{} {} \"{}\" {} {} {} {} {} {} {} {} \"{}\" \"{}\"",
                     br.from,
                     br.to,
+                    circuit,
                     n(br.r),
                     n(br.x),
                     n(br.b),
@@ -449,6 +669,15 @@ pub fn write_powerworld(net: &Network) -> Conversion {
     }
 
     Conversion { text: s, warnings }
+}
+
+/// Device ID for the writer: the retained PowerWorld ID from `extras` when the
+/// element came from an aux read, else the 1-based position.
+fn id_of(extras: &Extras, key: &str, index: usize) -> String {
+    match extras.get(key).and_then(serde_json::Value::as_str) {
+        Some(v) => v.to_string(),
+        None => (index + 1).to_string(),
+    }
 }
 
 fn block(s: &mut String, object: &str, fields: &str, fill: impl FnOnce(&mut Vec<String>)) {

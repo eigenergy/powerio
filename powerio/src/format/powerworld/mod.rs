@@ -21,6 +21,7 @@
 
 mod aux;
 mod map;
+mod objects;
 
 #[cfg(test)]
 mod tests;
@@ -32,6 +33,7 @@ pub use aux::{
 };
 pub(crate) use map::parse_powerworld_source;
 pub use map::{aux_sections, write_powerworld};
+pub use objects::{Contingency, contingencies, rating_set_names};
 
 use crate::Result;
 use crate::network::Network;

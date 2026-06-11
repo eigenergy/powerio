@@ -153,6 +153,116 @@ fn canonical_write_is_idempotent() {
     assert_eq!(first, second, "canonical aux output must be idempotent");
 }
 
+// ---- Network mapping --------------------------------------------------------
+
+use super::parse_powerworld;
+
+#[test]
+// Exact decimal fractions parsed from the fixture; bit equality is the assertion.
+#[allow(clippy::float_cmp)]
+fn zip_load_components_sum_and_survive_in_extras() {
+    let net = parse_powerworld(
+        "DATA (Bus, [BusNum, BusNomVolt])\n{\n1 115\n}\n\
+         DATA (Load, [BusNum, LoadID, LoadStatus, LoadSMW, LoadSMVR, LoadIMW, LoadIMVR, LoadZMW, LoadZMVR])\n\
+         {\n1 \"1 \" \"Closed\" 10.0 2.0 4.0 1.0 6.0 3.0\n}\n",
+    )
+    .unwrap();
+    let l = &net.loads[0];
+    assert_eq!(l.p, 20.0, "S + I + Z MW at nominal voltage");
+    assert_eq!(l.q, 6.0);
+    assert_eq!(
+        l.extras.get("LoadIMW").and_then(|v| v.as_str()),
+        Some("4.0"),
+        "voltage dependent components kept in extras"
+    );
+    assert_eq!(l.extras.get("LoadID").and_then(|v| v.as_str()), Some("1"));
+}
+
+#[test]
+// Exact decimal fractions parsed from the fixture; bit equality is the assertion.
+#[allow(clippy::float_cmp)]
+fn pure_constant_power_zip_load_keeps_no_component_extras() {
+    let net = parse_powerworld(
+        "DATA (Bus, [BusNum])\n{\n1\n}\n\
+         DATA (Load, [BusNum, LoadSMW, LoadSMVR, LoadIMW, LoadIMVR, LoadZMW, LoadZMVR])\n\
+         {\n1 10.0 2.0 0 0 0 0\n}\n",
+    )
+    .unwrap();
+    let l = &net.loads[0];
+    assert_eq!((l.p, l.q), (10.0, 2.0));
+    assert!(!l.extras.contains_key("LoadSMW"));
+}
+
+#[test]
+fn bus_kinds_derive_from_slack_flag_and_generators() {
+    use crate::network::BusType;
+    let net = parse_powerworld(
+        "DATA (Bus, [BusNum, BusSlack])\n{\n1 \"YES \"\n2 \"NO \"\n3 \"NO \"\n}\n\
+         DATA (Gen, [BusNum, GenID, GenStatus, GenMWSetPoint])\n\
+         {\n1 \"1\" \"Closed\" 100\n2 \"1\" \"Closed\" 50\n3 \"1\" \"Open\" 0\n}\n",
+    )
+    .unwrap();
+    let kinds: Vec<BusType> = net.buses.iter().map(|b| b.kind).collect();
+    assert_eq!(
+        kinds,
+        [BusType::Ref, BusType::Pv, BusType::Pq],
+        "slack flag wins, in-service gen promotes to PV, open gen does not"
+    );
+}
+
+#[test]
+// Exact decimal fractions parsed from the fixture; bit equality is the assertion.
+#[allow(clippy::float_cmp)]
+fn real_export_field_names_map_gen_shunt_and_transformer() {
+    let net = parse_powerworld(
+        "DATA (Bus, [BusNum])\n{\n1\n2\n}\n\
+         DATA (Gen, [BusNum, GenID, GenStatus, GenMWSetPoint, GenMvrSetPoint, GenMWMax, GenMWMin, GenMVRMax, GenMVRMin, GenVoltSet, GenMVABase])\n\
+         {\n1 \"1\" \"Closed\" 80.5 12.25 100 20 50 -50 1.04 120\n}\n\
+         DATA (Shunt, [BusNum, ShuntID, SSStatus, SSNMW, SSNMVR])\n{\n2 \"1\" \"Closed\" 0 25.0\n}\n\
+         DATA (Branch, [BusNum, BusNum:1, LineCircuit, BranchDeviceType, LineStatus, LineR:1, LineX:1, LineC:1, LineTap:1, LinePhase, LineAMVA, LineAMVA:1, LineAMVA:2])\n\
+         {\n1 2 \" 1\" \"Transformer\" \"Closed\" 0.001 0.05 0.002 0.9875 -2.5 250 260 270\n}\n",
+    )
+    .unwrap();
+    let g = &net.generators[0];
+    assert_eq!((g.pg, g.qg, g.vg, g.mbase), (80.5, 12.25, 1.04, 120.0));
+    let sh = &net.shunts[0];
+    assert_eq!((sh.g, sh.b), (0.0, 25.0));
+    assert!(sh.in_service);
+    let br = &net.branches[0];
+    assert_eq!((br.r, br.x, br.b), (0.001, 0.05, 0.002));
+    assert_eq!((br.tap, br.shift), (0.9875, -2.5));
+    assert_eq!((br.rate_a, br.rate_b, br.rate_c), (250.0, 260.0, 270.0));
+    assert!(br.is_transformer());
+    assert_eq!(
+        br.extras.get("LineCircuit").and_then(|v| v.as_str()),
+        Some(" 1"),
+        "circuit ID kept verbatim, padding included"
+    );
+}
+
+#[test]
+fn branch_identity_survives_aux_to_aux_through_the_typed_model() {
+    let src = "DATA (Bus, [BusNum])\n{\n1\n2\n}\n\
+         DATA (Branch, [BusNum, BusNum:1, LineCircuit, BranchDeviceType, LineStatus, LineR, LineX])\n\
+         {\n1 2 \" 2\" \"Breaker\" \"Open\" 0 0.0001\n}\n";
+    let net = parse_powerworld(src).unwrap();
+    // Strip the retained source to force the canonical writer.
+    let mut net = net;
+    net.source = None;
+    let out = super::write_powerworld(&net);
+    let again = parse_powerworld(&out.text).unwrap();
+    let br = &again.branches[0];
+    assert_eq!(
+        br.extras.get("LineCircuit").and_then(|v| v.as_str()),
+        Some(" 2")
+    );
+    assert_eq!(
+        br.extras.get("BranchDeviceType").and_then(|v| v.as_str()),
+        Some("Breaker")
+    );
+    assert!(!br.in_service);
+}
+
 // ---- Loud errors ------------------------------------------------------------
 
 fn read_err(text: &str) -> String {

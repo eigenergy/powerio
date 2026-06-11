@@ -21,5 +21,13 @@ Vendored bytes are pinned; do not reformat or re-export these files.
 
 The four files describe the same network, so they serve as cross format
 oracles for each other: counts and values parsed from one format are checked
-against the others in `powerio/tests/` parity tests. Larger ACTIVSg cases
-(2000 bus and up) are fetched, not vendored; see `benchmarks/fetch_cases.sh`.
+against the others in `powerio/tests/` parity tests. The `.aux` and `.pwb`
+are a same day export pair; the `.RAW` and `.m` are earlier revisions of the
+case, so parity against them is structural (identities, impedances, limits)
+rather than solved state.
+
+Larger ACTIVSg cases (2000 bus and up) are fetched, not vendored: see
+`benchmarks/fetch_powerworld.sh` (ACTIVSg2000 sibling sets from TAMU and from
+PowerWorld Corporation's synthetic case page,
+<https://www.powerworld.com/new-synthetic-power-flow-cases>) and
+`benchmarks/fetch_cases.sh` (MATPOWER exports of the larger grids).
