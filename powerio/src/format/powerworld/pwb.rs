@@ -13,7 +13,7 @@
 //! must be values this reader has seen and verified). A file that does not
 //! match the validated layout fails loudly; nothing is guessed silently.
 //!
-//! Supported vintages, behind header format constants 425, 483, and 508:
+//! Supported vintages, behind header format constants 425 through 551:
 //! the Simulator 19 era writer (bus record flag family `0x06`, the June 2016
 //! ACTIVSg2000 export, validated field by field against its same day aux
 //! sibling), the Simulator 20 era writer (flag family `0x26`: the 2018
@@ -21,17 +21,18 @@
 //! export validated against the published case), the 2019+ era writers
 //! (flag bits 6 and 8 added over family `0x26`, header 425 or 508: the
 //! current era ACTIVSg2000, ACTIVSg500, and 2022 Hawaii40 exports, each
-//! validated against its aux), and the 2021 era writer (header 483, the
-//! Texas7k export validated against its same day aux at 6717 bus scale;
-//! its generator record inserts the regulated bus number and carries a
+//! validated against its aux), and the 2021 era writer (headers 483
+//! through 551: the Texas7k export validated against its same day aux and
+//! .m siblings at 6717 bus scale, its v21/v22 resaves against the 2022
+//! aux, and the 2030 builds by counts with offline value alignment; the
+//! era's generator record inserts the regulated bus number and carries a
 //! validated in service bit, see [`read_gen_reg_record`]). Record layouts
 //! are self describing through their flag words, a Delphi field presence
 //! bitmask: one record model decodes every observed flag word (see
 //! [`BusHead::unk`] and [`read_branch_head`]), and structural anchors (the
 //! rating block tag) turn any unobserved variant into a loud error instead
-//! of a misread. Newer writers (header constants 537 through 551) are
-//! classified and rejected with the constant named. Evidence in
-//! `docs/powerworld.md`.
+//! of a misread. Older Simulators' constants are classified and rejected
+//! with the constant named. Evidence in `docs/powerworld.md`.
 //!
 //! The table search prices the format's structure (no field dictionary, so
 //! every table is located by validating record walks behind count word
@@ -51,7 +52,7 @@
 //!   other device in every available case is in service, so no other out of
 //!   service encoding is validated and those devices read as in service.
 //!   The load record's post ID byte, once treated as a status, is 0x00 in
-//!   the 425 era files and 0x01 in the 483 era one with every load Closed
+//!   the 425 era files and 0x01 in the 2021 era ones with every load Closed
 //!   in both, so it is no status byte; the 425 era generator, the shunt,
 //!   and the branch status bytes are unlocated.
 //! - Transformer phase shift: every available case has zero phase, so the
@@ -130,15 +131,16 @@ pub fn parse_pwb(bytes: &[u8], name_hint: Option<&str>) -> Result<Network> {
             device_table_candidates(bytes, bus_end, &bus_ids, read_load_record, &load_runs, 48)
         {
             // The generator table reads through one of two validated record
-            // layouts: the 425/508 era shape and the 2021 era shape with the
-            // regulated bus inserted (see read_gen_reg_record). A file's
-            // table uses exactly one; each gets its own run cache and the
-            // structural gauntlets keep the wrong one from parsing. The
-            // newer layout's glue runs to 86 bytes (string metadata between
-            // the count and the first record in the v21 resave); the older
-            // tables all sit within 48, and widening their window admits
-            // forged count words, so each reader carries its own bound.
-            for (generators, g_end) in
+            // layouts: the 425/508 era shape and the 2021 era shape with
+            // the regulated bus inserted (see read_gen_reg_record). A
+            // file's table uses exactly one; each gets its own run cache
+            // and the structural gauntlets keep the wrong one from parsing.
+            // The newer layout's table glue runs to 86 bytes (string
+            // metadata between the count and the first record in the v21
+            // resave); the older tables all sit within 48, and widening
+            // their window admits forged count words, so each variant
+            // carries its own glue bound.
+            let gen_candidates =
                 device_table_candidates(bytes, l_end, &bus_ids, read_gen_record, &gen_runs, 48)
                     .chain(device_table_candidates(
                         bytes,
@@ -147,8 +149,8 @@ pub fn parse_pwb(bytes: &[u8], name_hint: Option<&str>) -> Result<Network> {
                         read_gen_reg_record,
                         &gen_reg_runs,
                         96,
-                    ))
-            {
+                    ));
+            for (generators, g_end) in gen_candidates {
                 for (shunts, s_end) in device_table_candidates(
                     bytes,
                     g_end,
@@ -463,9 +465,14 @@ fn bus_table_candidates<'a>(
     (0x20..limit).flat_map(move |at| {
         let count = u32::from_le_bytes(b[at..at + 4].try_into().unwrap()) as usize;
         // Table glue between the count and the first record varies by a few
-        // bytes per table and vintage (52 on the v21 resave's bus table);
-        // scan a small window for the record.
-        let glues = (count != 0 && count <= 2_000_000).then_some(0..=96);
+        // bytes per table and vintage; scan a small window for the record.
+        // The v21 resave's bus glue runs 52 bytes, past the 48 every other
+        // export observes; the wide window applies only to large counts
+        // (every observed wide glue table is a node level resave with
+        // thousands of buses), since forged count words are overwhelmingly
+        // small values and widening their window prices every file.
+        let max_glue = if count >= 256 { 96 } else { 48 };
+        let glues = (count != 0 && count <= 2_000_000).then_some(0..=max_glue);
         glues
             .into_iter()
             .flatten()
@@ -864,17 +871,23 @@ fn read_shunt(c: &mut Cur, bus: BusId, id: &[u8]) -> Probe<Shunt> {
 // ---- Branch table ------------------------------------------------------------
 
 /// Whether a branch record flag word is one this reader decodes: base bits
-/// `0x6C` plus any combination of bits 0, 1, 4, and 7, a Delphi field
-/// presence bitmask like the bus record's. Bit 0 set omits the circuit ID
-/// string and its status byte (the PowerWorld default " 1" applies), bit 1
-/// set means two inline rating slots instead of three (the Simulator 19
-/// era writer inlines three), bit 4 marks a count prefixed list in the
-/// record tail. Bit 7 is set on every 425/508 era record; the 2021 era
-/// Texas7k export clears it on most lines while setting it on every
-/// transformer and a few dozen lines, and the head layout through the kind
-/// byte is identical either way (its field lives in the undecoded tail).
+/// `0x6C` plus any combination of bits 0, 1, 4, and (behind `wide`) 7, a
+/// Delphi field presence bitmask like the bus record's. Bit 0 set omits
+/// the circuit ID string and its status byte (the PowerWorld default " 1"
+/// applies), bit 1 set means two inline rating slots instead of three
+/// (the Simulator 19 era writer inlines three), bit 4 marks a count
+/// prefixed list in the record tail. Bit 7 is set on every 425/508 era
+/// record; the 2021 era Texas7k exports clear it on most lines while
+/// setting it on every transformer and a few dozen lines, with the head
+/// layout through the kind byte identical either way (its field lives in
+/// the undecoded tail). Admitting the bit 7 clear words doubles the flag
+/// vocabulary and with it the forged candidates the search walks on older
+/// files, a measured 12 to 20 percent on the 425 era corpus
+/// (benchmarks/RESULTS.md); a mask keyed to the generator layout was tried
+/// and rejected, since the strict mask turns real bit 7 clear records
+/// invisible to the table end check and a forged short table can win.
 /// Observed words: 0xEC/0xFC (2016), 0xEE/0xEF (2018 and v19), 0xFE/0xFF
-/// (v19), 0x6C/0x6D/0xEC/0xED (Texas7k); other combinations of the same
+/// (v19), 0x6C and 0xEC/0xED (Texas7k); other combinations of the same
 /// bits are admitted by the bit logic and guarded by the structural
 /// anchors in [`read_branch_head`].
 fn known_branch_flags(flags: u16) -> bool {

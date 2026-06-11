@@ -79,10 +79,10 @@ fetched. Median wall time, same machine as above.
 <!-- BENCH:powerworld START -->
 | case | buses / branches | aux | pwb |
 | --- | --- | --- | --- |
-| ACTIVSg200 | 200 / 246 | 2.47 ms | 0.36 ms |
-| ACTIVSg2000 June 2016 | 2007 / 3043 | 28.8 ms | 3.02 ms |
-| RTS-GMLC | 73 / 120 | n/a | 10.8 ms |
-| Texas7k aux (local TAMU copy) | 6717 / 9140 | 69.6 ms | rejected (header 483) |
+| ACTIVSg200 | 200 / 246 | 2.60 ms | 0.52 ms |
+| ACTIVSg2000 June 2016 | 2007 / 3043 | 30.3 ms | 3.30 ms |
+| RTS-GMLC | 73 / 120 | n/a | 12.4 ms |
+| Texas7k (local TAMU copy) | 6717 / 9140 | 71.3 ms | 13.5 ms |
 <!-- BENCH:powerworld END -->
 
 The `.pwb` reader locates each table by a depth first search over count
@@ -92,15 +92,25 @@ affordable: probe rejections are static strings instead of formatted
 allocations, bus membership is a bitmap instead of a hash set, and record
 runs are cached by first record offset so candidates that point at the
 same records share one walk. With those three changes (#99) the binary
-reader beats the aux text reader on both sibling pairs; before them the
-same search took 43 ms / 424 ms / 907 ms on these three files. RTS-GMLC
+reader beats the aux text reader on every sibling pair; before them the
+same search took 43 ms / 424 ms / 907 ms on the first three files. RTS-GMLC
 stays the dearest decode per bus because its bus numbers (101 through 325)
 are small integers that appear constantly in binary data, forging candidate
-device records the search walks and rejects once each. Rejection is priced
-by the same machinery: the 13 MiB Texas7k v21 resave exhausts the chain
-search in 0.85 s where the pre #99 reader took 100 s. Every structural
-validation is unchanged; the reader stays correctness first (a wrong
-network is worse than a slow loud parse).
+device records the search walks and rejects once each.
+
+The Texas7k decode (the 2021 era record layouts) repriced the search:
+admitting the era's branch flag words doubles the flag vocabulary, and the
+forged candidates that admits cost 10 to 45 percent over the previous
+table on the 425 era files (0.36 to 0.52 ms on the 200 bus case, 3.0 to
+3.3 ms on the 2000 bus pair, 10.8 to 12.4 ms on RTS-GMLC), still 5 to 9
+times faster than the aux siblings. A flag mask keyed to the detected
+generator layout was tried and rejected: it turns real records invisible
+to the table end check on the newer files, and a forged short table can
+win (see known_branch_flags in the reader). The other Texas7k saves
+decode through the same models: the v21/v22 resaves in 65/70 ms, the
+2030 builds in about 40 ms, the scenario snapshot in 32 ms (release,
+parse only). Every structural validation is unchanged; the reader stays
+correctness first (a wrong network is worse than a slow loud parse).
 
 ## Correctness: validated against four tools
 
