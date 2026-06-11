@@ -13,28 +13,39 @@
 //! must be values this reader has seen and verified). A file that does not
 //! match the validated layout fails loudly; nothing is guessed silently.
 //!
-//! Supported vintage: the Simulator 20 era writer with plain record tails
-//! (bus record flag word `0x26`/`0x27`), validated field by field against the
-//! ACTIVSg200 aux sibling. Older writers share the bus record head layout but
-//! differ behind it: the Simulator 19 era family (flag `0x06`/`0x07`, the
-//! June 2016 ACTIVSg2000 export) uses different record tails, and 2016/2017
-//! era exports carry count prefixed lists in some tails (flag bit 4, the v19
-//! file PowerWorld hosts). A census of bus record heads classifies the writer
-//! family, and anything beyond the decoded layout is rejected with the
-//! evidence named rather than decoded partially. Extending coverage is a
-//! documented follow-up; see `docs/powerworld.md`.
+//! Supported vintages, all behind header format constant 425: the Simulator
+//! 19 era writer (bus record flag family `0x06`, the June 2016 ACTIVSg2000
+//! export, validated field by field against its same day aux sibling) and
+//! the Simulator 20 era writer (flag family `0x26`: the 2018 ACTIVSg200
+//! export validated against its aux, the 2017 v19 ACTIVSg2000 export
+//! validated against the published case). Record layouts are self
+//! describing through their flag words, a Delphi field presence bitmask:
+//! one record model decodes every observed flag word (see [`BusHead::unk`]
+//! and [`read_branch_head`]), and structural anchors (the rating block tag)
+//! turn any unobserved variant into a loud error instead of a misread.
+//! Newer writers (header constants 483 through 551) are classified and
+//! rejected with the constant named. Evidence in `docs/powerworld.md`.
 //!
 //! Known limits, documented rather than guessed:
 //!
-//! - Status bytes: every device in the available sibling cases is Closed
-//!   (byte 0). A nonzero byte is read as out of service, which follows the
-//!   Delphi boolean convention but has no validated sample.
+//! - Status bytes: every device in every available case is in service, so
+//!   no out of service encoding is validated anywhere. The load record's
+//!   post ID byte (0 in every record) is treated as the Delphi status
+//!   convention; the generator, shunt, and branch status bytes are
+//!   unlocated and those devices read as in service.
 //! - Transformer phase shift: every available case has zero phase, so the
 //!   field's offset is unknown; transformers read with `shift = 0`.
 //! - The slack designation is not stored in the bus record; buses read as
 //!   PQ/PV (from the generators) and no bus is marked `Ref`.
 //! - The system MVA base is not decoded; per unit values are converted with
 //!   the 100 MVA default.
+//! - The shunt record's nominal MW slot is unlocated: every available case
+//!   stores zero shunt MW, and the slot once assumed to hold it carries 0.99
+//!   in the 2016 export (a regulation target, not a power). Shunts read with
+//!   `g = 0` and only the nominal MVAr is decoded.
+//! - Branch ratings beyond the inline slots (two or three, by flag bit 1)
+//!   are zero in every available case; the trailing rating block is
+//!   validated as zero filled f32s and read as zero ratings.
 
 use std::collections::HashSet;
 
@@ -213,45 +224,29 @@ fn printable(s: &[u8]) -> bool {
     s.iter().all(|&c| (0x20..0x7f).contains(&c))
 }
 
-/// Classify the writer vintage from a census of validated bus record heads
-/// in the leading 64 KiB and reject what the table walk cannot decode, naming
-/// the evidence. Every known vintage shares the bus record head layout
-/// through the solved voltage, so heads parse even where the tails do not;
-/// the flag word census then identifies the writer family (see
-/// [`KNOWN_BUS_FLAGS`]). Rejecting here gives the caller the detected vintage
-/// instead of letting the table search grind to a generic "no chain" error.
+/// Reject files whose leading 64 KiB carries no run of validated bus record
+/// heads, before the table search grinds to a generic "no chain" error. Both
+/// decoded record families share the head layout, so a census over
+/// [`known_bus_flags`] words finding fewer than two heads means an
+/// unrecognized layout, not a sparse case.
 fn reject_unsupported_vintage(b: &[u8]) -> Result<()> {
     let scan = b.len().min(0x10000).saturating_sub(8);
-    let (mut sim19, mut sim20, mut list_tails) = (0usize, 0usize, 0usize);
+    let mut heads = 0usize;
     let mut at = 0x20;
     while at < scan {
-        let Ok((head, after)) = read_bus_head(b, at, &KNOWN_BUS_FLAGS) else {
+        let Ok((_, after)) = read_bus_head(b, at) else {
             at += 1;
             continue;
         };
-        if head.unk & 0x20 == 0 {
-            sim19 += 1;
-        } else {
-            sim20 += 1;
-        }
-        if head.unk & 0x10 != 0 {
-            list_tails += 1;
+        heads += 1;
+        if heads >= 2 {
+            return Ok(());
         }
         at = after;
     }
-    let detail = if sim19 > sim20 {
-        "Simulator 19 era bus records (flag words 0x06/0x07)".into()
-    } else if list_tails > 0 {
-        format!(
-            "{list_tails} bus record tails carry count prefixed lists \
-             (flag words 0x36/0x37, seen in 2016/2017 era exports)"
-        )
-    } else if sim20 >= 2 {
-        return Ok(());
-    } else {
-        "no recognized bus record layout in the leading 64 KiB".into()
-    };
-    Err(unsupported_vintage(detail))
+    Err(unsupported_vintage(
+        "no recognized bus record layout in the leading 64 KiB",
+    ))
 }
 
 /// The single rejection path for recognized-but-undecoded writer vintages;
@@ -260,8 +255,8 @@ fn unsupported_vintage(detail: impl std::fmt::Display) -> Error {
     Error::FormatRead {
         format: FMT,
         message: format!(
-            "unsupported PowerWorld .pwb vintage: {detail}; only the Simulator 20 era \
-             layout (header format constant 425) with plain record tails is decoded (see docs/powerworld.md)"
+            "unsupported PowerWorld .pwb vintage: {detail}; only the validated 425 era \
+             record layouts are decoded (see docs/powerworld.md)"
         ),
     }
 }
@@ -270,25 +265,28 @@ fn unsupported_vintage(detail: impl std::fmt::Display) -> Error {
 
 struct BusHead {
     bus: Bus,
-    /// The flags u32 between name and nominal kV: a field presence bitmask,
-    /// not a per file constant. Bit 5 set marks the Simulator 20 era record
-    /// family (clear on the 2016 era 0x06/0x07 family), bit 4 set marks a
-    /// count prefixed list in the record tail, bit 0 clear means one extra
+    /// The flags u32 between name and nominal kV: a Delphi field presence
+    /// bitmask, not a per file constant. Bit 5 set marks the Simulator 20
+    /// era record family (clear on the Simulator 19 era 0x06/0x07 family,
+    /// whose tails are shorter), bit 4 set marks a count prefixed list in
+    /// the record tail (2016/2017 era exports), bit 0 clear means one extra
     /// u16 sits before the nominal kV (observed on generator buses).
     unk: u32,
 }
 
-/// Bus record flag words this reader decodes: the Simulator 20 era family
-/// with plain record tails. [`reject_unsupported_vintage`] turns everything
-/// else away early with the detected family named.
-const BUS_FLAGS: [u32; 2] = [0x26, 0x27];
+/// Whether a bus record flag word is one this reader decodes: base bits
+/// `0x06` plus any combination of bits 0, 4, and 5 (see [`BusHead::unk`]).
+/// All eight combinations are observed in the corpus (the census table in
+/// docs/powerworld.md).
+fn known_bus_flags(unk: u32) -> bool {
+    unk & !0x31 == 0x06
+}
 
-/// Every bus record flag word observed across the corpus (the census table
-/// in docs/powerworld.md), decoded or not
-/// (see [`BusHead::unk`] for the bit meanings). The census in
-/// [`reject_unsupported_vintage`] accepts all of them to identify the writer
-/// family; the table walk accepts only [`BUS_FLAGS`].
-const KNOWN_BUS_FLAGS: [u32; 8] = [0x06, 0x07, 0x16, 0x17, 0x26, 0x27, 0x36, 0x37];
+/// The record family bits of a bus flag word: everything but the per record
+/// presence bits 0 and 4. One file's bus table never mixes families.
+fn bus_family(unk: u32) -> u32 {
+    unk & !0x11
+}
 
 /// Bus table candidates: each `(count, glue)` position after the header whose
 /// record walk succeeds, in scan order. The caller validates each candidate
@@ -302,18 +300,16 @@ fn bus_table_candidates(b: &[u8]) -> impl Iterator<Item = (Vec<Bus>, usize)> + '
         let glues = (count != 0 && count <= 2_000_000).then_some(0..=48);
         glues.into_iter().flatten().filter_map(move |glue| {
             let first = at + 4 + glue;
-            let (head0, _) = read_bus_head(b, first, &BUS_FLAGS).ok()?;
+            let (head0, _) = read_bus_head(b, first).ok()?;
             walk_buses(b, first, count, head0.unk).ok()
         })
     })
 }
 
 /// Parse one bus record head at `at`; everything through the voltage angle
-/// (the head layout every known vintage shares). `accept` is the flag word
-/// set to admit: [`BUS_FLAGS`] when decoding, [`KNOWN_BUS_FLAGS`] when taking
-/// the vintage census. Returns the parsed bus and leaves undecoded tail bytes
-/// to the resync.
-fn read_bus_head(b: &[u8], at: usize, accept: &[u32]) -> Result<(BusHead, usize)> {
+/// (the head layout both record families share). Returns the parsed bus and
+/// leaves undecoded tail bytes, including the bit 4 list, to the resync.
+fn read_bus_head(b: &[u8], at: usize) -> Result<(BusHead, usize)> {
     let mut c = Cur { b, pos: at };
     let num = c.u32()? as usize;
     if num == 0 || num > 99_999_999 {
@@ -324,7 +320,7 @@ fn read_bus_head(b: &[u8], at: usize, accept: &[u32]) -> Result<(BusHead, usize)
         return Err(c.err("empty bus name"));
     }
     let unk = c.u32()?;
-    if !accept.contains(&unk) {
+    if !known_bus_flags(unk) {
         return Err(c.err(format!(
             "bus record flags {unk:#x} not in the validated set"
         )));
@@ -371,23 +367,24 @@ fn walk_buses(b: &[u8], first: usize, count: usize, unk: u32) -> Result<(Vec<Bus
     let mut buses = Vec::with_capacity(count.min(b.len().saturating_sub(first) / 16));
     let mut at = first;
     for i in 0..count {
-        let (head, after) = read_bus_head(b, at, &BUS_FLAGS)?;
-        if head.unk | 1 != unk | 1 {
+        let (head, after) = read_bus_head(b, at)?;
+        if bus_family(head.unk) != bus_family(unk) {
             return Err(Error::FormatRead {
                 format: FMT,
-                message: format!("bus record {i}: vintage marker changed mid table"),
+                message: format!("bus record {i}: record family changed mid table"),
             });
         }
         buses.push(head.bus);
         if i + 1 == count {
             return Ok((buses, after));
         }
-        // The record tail (constant per file, undecoded) separates this
-        // record from the next; find the next head by bounded scan.
+        // The record tail (undecoded; longer when flag bit 4 inserts a count
+        // prefixed list) separates this record from the next; find the next
+        // head by bounded scan.
         at = resync(after, after + RESYNC_WINDOW, |p| {
-            read_bus_head(b, p, &BUS_FLAGS)
+            read_bus_head(b, p)
                 .ok()
-                .filter(|(h, _)| h.unk | 1 == unk | 1)
+                .filter(|(h, _)| bus_family(h.unk) == bus_family(unk))
                 .map(|_| ())
         })
         .ok_or_else(|| Error::FormatRead {
@@ -508,36 +505,39 @@ fn read_load(c: &mut Cur, bus: BusId, id: String) -> Result<Load> {
     })
 }
 
-/// Generator record: a small gap whose width varies by writer vintage (3 to
-/// 5 bytes; the first byte is the status), then eight consecutive f32s:
-/// MW setpoint, MVAr setpoint, MVAr max, MVAr min (per unit), voltage
-/// setpoint (p.u.), MVA base, MW max, MW min (per unit).
-fn read_gen(c: &mut Cur, bus: BusId, _id: String) -> Result<Generator> {
-    let status = c.u8()?;
-    // Calibrate the vintage gap: after skipping 2 to 4 more bytes the f32
-    // block must give a plausible voltage setpoint and MVA base.
-    let base = c.pos;
+/// Generator record: the ID is a fixed capacity ShortString[2] (so the
+/// payload sits at constant offsets from the record start), undecoded flag
+/// bytes, then eight consecutive f32s: MW setpoint, MVAr setpoint, MVAr
+/// max, MVAr min (per unit), voltage setpoint (p.u.), MVA base, MW max, MW
+/// min (per unit). The f32 block starts at +9 or +10 in the 2016/2017
+/// exports (the flag bytes before it vary per record) and +11 in the 2018
+/// one; the voltage setpoint and MVA base ranges anchor the choice, and a
+/// record that puts implausible values at every offset is a loud error, not
+/// a generator.
+#[allow(clippy::needless_pass_by_value)] // the ReadDevice fn type fixes the signature
+fn read_gen(c: &mut Cur, bus: BusId, id: String) -> Result<Generator> {
+    let record_start = c.pos - (4 + 1) - id.len(); // u32 bus + the ID length byte
     let mut chosen = None;
-    for skip in [2usize, 3, 4] {
+    // +12 extends the observed set to two character IDs in a 2018 era
+    // export (unobserved, but the pre-rework probe covered it).
+    for anchor in [9usize, 10, 11, 12] {
         let mut probe = Cur {
             b: c.b,
-            pos: base + skip,
+            pos: record_start + anchor,
         };
         let Ok(vals) = (0..8).map(|_| probe.f32()).collect::<Result<Vec<_>>>() else {
             continue;
         };
-        let vg = vals[4];
-        let mbase = vals[5];
-        let plausible = vals.iter().all(|v| v.is_finite() && v.abs() < 1.0e6)
-            && (0.5..=1.6).contains(&vg)
-            && (0.1..=1.0e5).contains(&mbase);
+        let plausible = vals.iter().all(|x| x.is_finite() && x.abs() < 1.0e6)
+            && (0.5..=1.6).contains(&vals[4])
+            && (0.1..=1.0e5).contains(&vals[5]);
         if plausible {
-            chosen = Some((skip, vals, probe.pos));
+            chosen = Some((vals, probe.pos));
             break;
         }
     }
-    let Some((_, v, end)) = chosen else {
-        return Err(c.err("generator record does not match a validated layout"));
+    let Some((v, end)) = chosen else {
+        return Err(c.err("generator record does not match the validated layouts"));
     };
     c.pos = end;
     Ok(Generator {
@@ -550,32 +550,36 @@ fn read_gen(c: &mut Cur, bus: BusId, _id: String) -> Result<Generator> {
         mbase: v[5],
         pmax: v[6] * MVA_BASE,
         pmin: v[7] * MVA_BASE,
-        in_service: status == 0,
+        // The status byte is unlocated within the +7 flag bytes; every
+        // available machine is Closed (see the module docs).
+        in_service: true,
         cost: None,
         caps: Default::default(),
     })
 }
 
-/// Shunt record: nominal MW at +20 and MVAr at +24 from the record start
-/// (offsets identical in both vintages; the MW slot is zero in every
-/// available case and its position is inferred from adjacency).
+/// Shunt record: nominal MVAr as f32 at +24 from the record start, validated
+/// on all 199 shunts across the three sibling cases. The slot at +20 is 0.0
+/// in the Simulator 20 era files but 0.99 in the 2016 export, so it is not
+/// the nominal MW (see the module docs); shunts read with `g = 0`.
 fn read_shunt(c: &mut Cur, bus: BusId, id: String) -> Result<Shunt> {
     let record_start = c.pos - (4 + 1) - id.len(); // u32 bus + the ID length byte
     let mut probe = Cur {
         b: c.b,
-        pos: record_start + 20,
+        pos: record_start + 24,
     };
-    let g = probe.f32()? * MVA_BASE;
     let b_mvar = probe.f32()? * MVA_BASE;
-    if !g.is_finite() || !b_mvar.is_finite() || g.abs() > 1.0e6 || b_mvar.abs() > 1.0e6 {
-        return Err(c.err("implausible shunt values"));
+    if !b_mvar.is_finite() || b_mvar.abs() > 1.0e6 {
+        return Err(c.err("implausible shunt MVAr"));
     }
     c.pos = probe.pos;
     let mut extras = Extras::new();
     extras.insert("ShuntID".into(), serde_json::Value::String(id));
     Ok(Shunt {
         bus,
-        g,
+        // The nominal MW slot is unlocated (every available case stores
+        // zero); see the module docs.
+        g: 0.0,
         b: b_mvar,
         in_service: true,
         extras,
@@ -584,11 +588,18 @@ fn read_shunt(c: &mut Cur, bus: BusId, id: String) -> Result<Shunt> {
 
 // ---- Branch table ------------------------------------------------------------
 
-/// Branch record flag words this reader has validated. Bit 0 set means the
-/// circuit ID string (and its status byte) is omitted and the PowerWorld
-/// default " 1" applies; bit 1 differs between writer vintages with no
-/// structural change.
-const BRANCH_FLAGS: std::ops::RangeInclusive<u16> = 0x00EC..=0x00EF;
+/// Whether a branch record flag word is one this reader decodes: base bits
+/// `0xEC` plus any combination of bits 0, 1, and 4, a Delphi field presence
+/// bitmask like the bus record's. Bit 0 set omits the circuit ID string and
+/// its status byte (the PowerWorld default " 1" applies), bit 1 set means
+/// two inline rating slots instead of three (the Simulator 19 era writer
+/// inlines three), bit 4 marks a count prefixed list in the record tail.
+/// Observed words: 0xEC/0xFC (2016), 0xEE/0xEF (2018 and v19), 0xFE/0xFF
+/// (v19); the remaining two combinations are admitted by the same bit
+/// logic and guarded by the structural anchors in [`read_branch_head`].
+fn known_branch_flags(flags: u16) -> bool {
+    flags & !0x13 == 0x00EC
+}
 
 fn walk_branches(b: &[u8], from: usize, bus_ids: &HashSet<usize>) -> Result<Vec<Branch>> {
     // The gap between the shunt table end and the branch count word can
@@ -657,6 +668,13 @@ fn walk_branch_records(
     Ok((out, first))
 }
 
+/// Branch record, validated field by field against the aux siblings of all
+/// three cases (6,491 records). After the impedances: two or three inline
+/// per unit rating slots (by flag bit 1), a constant u32 tag, eleven f32
+/// slots (zero in every available case), one zero byte, then the kind byte
+/// that separates lines from transformers (which carry their tap next). The
+/// tag and the zero byte are structural anchors: an unobserved variant
+/// shifts them and dies loudly instead of misreading.
 #[allow(clippy::many_single_char_names)] // r, x, b are the domain names
 fn read_branch_head(b: &[u8], at: usize, bus_ids: &HashSet<usize>) -> Result<(Branch, usize)> {
     let mut c = Cur { b, pos: at };
@@ -666,21 +684,29 @@ fn read_branch_head(b: &[u8], at: usize, bus_ids: &HashSet<usize>) -> Result<(Br
         return Err(c.err("branch references unknown buses"));
     }
     let flags = c.u16()?;
-    if !BRANCH_FLAGS.contains(&flags) {
+    if !known_branch_flags(flags) {
         return Err(c.err(format!(
             "branch record flags {flags:#06x} not in the validated set; unsupported .pwb variant"
         )));
     }
-    let (circuit, status) = if flags & 1 == 0 {
-        let ckt = c.short_string(8)?;
-        if ckt.is_empty() {
-            return Err(c.err("empty circuit ID"));
+    let circuit = if flags & 1 == 0 {
+        // The circuit ID is a Delphi ShortString[2]: one length byte and a
+        // fixed two byte text area (a one character ID leaves the second
+        // byte unused). Establishing this took the v19 file's parallel
+        // circuit records, the first in the corpus with two character IDs.
+        let n = c.u8()? as usize;
+        if n == 0 || n > 2 {
+            return Err(c.err(format!("circuit ID length {n} (expected 1 or 2)")));
         }
-        (ckt, c.u8()?)
+        let text = c.take(2)?;
+        if !printable(&text[..n]) {
+            return Err(c.err("circuit ID has non printable bytes"));
+        }
+        String::from_utf8_lossy(&text[..n]).into_owned()
     } else {
         // Omitted circuit: PowerWorld's default, observed as " 1" in the
         // sibling aux.
-        (" 1".to_string(), 0)
+        " 1".to_string()
     };
     let r = c.f32()?;
     let x = c.f32()?;
@@ -691,21 +717,36 @@ fn read_branch_head(b: &[u8], at: usize, bus_ids: &HashSet<usize>) -> Result<(Br
         }
     }
     let _g = c.f32()?;
-    let mut rates = [0.0f64; 14];
-    for slot in &mut rates {
+    let inline = if flags & 2 == 0 { 3 } else { 2 };
+    let mut rates = [0.0f64; 3];
+    for slot in rates.iter_mut().take(inline) {
         let v = c.f32()?;
         if !v.is_finite() || !(0.0..=1.0e6).contains(&v) {
             return Err(c.err("implausible branch rating"));
         }
         *slot = v * MVA_BASE;
     }
+    let tag = c.u32()?;
+    if tag != 12 {
+        return Err(c.err(format!(
+            "branch rating block tag {tag} (expected 12); unvalidated .pwb branch variant"
+        )));
+    }
+    for _ in 0..11 {
+        let v = c.f32()?;
+        if !v.is_finite() || v.abs() > 1.0e6 {
+            return Err(c.err("implausible branch rating block value"));
+        }
+    }
+    if c.u8()? != 0 {
+        return Err(c.err("branch record separator byte not zero"));
+    }
     let kind = c.u8()?;
     let (device, tap) = match kind {
         0x01 => ("Line", 0.0),
         0x00 => {
-            let _pad = c.u8()?;
             let tap = c.f32()?;
-            if !tap.is_finite() || !(0.0..=10.0).contains(&tap) {
+            if !tap.is_finite() || !(0.2..=5.0).contains(&tap) {
                 return Err(c.err("implausible transformer tap"));
             }
             ("Transformer", tap)
@@ -735,7 +776,10 @@ fn read_branch_head(b: &[u8], at: usize, bus_ids: &HashSet<usize>) -> Result<(Br
         // Phase shift is undecoded: every available case has zero phase, so
         // the field's location is unknown (see the module docs).
         shift: 0.0,
-        in_service: status == 0,
+        // The branch status byte is unlocated (the byte once assumed to be
+        // it was the circuit ID's unused capacity byte); every available
+        // record is Closed. See the module docs.
+        in_service: true,
         angmin: -360.0,
         angmax: 360.0,
         extras,

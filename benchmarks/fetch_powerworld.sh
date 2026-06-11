@@ -36,4 +36,12 @@ shasum -a 256 -c - <<EOF
 b2ba4bbf3c57408a9791dfaad9d03a91acac374fdfc870563329b60745d7a30b  $dir/ACTIV_SG_2000_v19.pwb
 a9f545c33beb65f68c08f8b3811a34317b804fa14cb07e21e6b865a5528016d3  $dir/ACTIV_SG_2000_v19.pwd
 EOF
+
+# The published ACTIVSg2000 case in MATPOWER format, from the MATPOWER
+# repository (BSD 3-clause): the value oracle for the v19 .pwb, which has no
+# same day sibling exports.
+mp="https://raw.githubusercontent.com/MATPOWER/matpower/master/data"
+f="case_ACTIVSg2000.m"
+[ -f "$dir/$f" ] || curl -fsSL "$mp/$f" -o "$dir/$f"
+echo "8d00618de8fd10bf35a599f59d2deebfecd0d86e28fcff73219ad7c4ebab860b  $dir/$f" | shasum -a 256 -c -
 ls -l "$dir"

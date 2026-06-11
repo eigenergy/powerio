@@ -138,13 +138,14 @@ quantum, dispatch and branch values likewise. `powerio/tests/`
 
 ## The .pwb binary format (decode evidence)
 
-Established by differential analysis of three lawfully obtained files against
-their aux siblings, no PowerWorld software involved: ACTIVSg200.pwb
-(Simulator 20 era, June 2018, same snapshot as the vendored aux),
-Texas2000_June2016.pwb (June 2016, same day as its aux sibling), and
-ACTIV_SG_2000_v19.pwb (April 2017). Every claim below was verified by exact
-value match against the sibling aux on every record unless noted. Offsets are
-from the field listed; integers and floats are little endian.
+Established by differential analysis of three lawfully obtained files, no
+PowerWorld software involved: ACTIVSg200.pwb (Simulator 20 era, June 2018,
+same snapshot as the vendored aux), Texas2000_June2016.pwb (June 2016, same
+day as its aux sibling), and ACTIV_SG_2000_v19.pwb (April 2017, validated
+against the published ACTIVSg2000 case with the snapshot deltas pinned in
+the parity test). Every claim below was verified by value match against a
+sibling on every record unless noted. Offsets are from the field listed;
+integers and floats are little endian.
 
 ### Header (identical prefix in all three files)
 
@@ -159,8 +160,14 @@ from the field listed; integers and floats are little endian.
 
 ### Strings
 
-Two encodings: u32 length prefixed byte strings (names, labels) and Pascal
-ShortStrings (one length byte; device IDs, circuit IDs).
+Two encodings: u32 length prefixed byte strings (names, labels) and Delphi
+ShortStrings (one length byte; device IDs, circuit IDs). Some ShortString
+fields have a fixed capacity: the branch circuit ID and the generator ID are
+`string[2]` (one length byte plus a fixed two byte text area, so a one
+character value leaves an unused byte), while load IDs are stored variable
+length. The v19 file's parallel circuit records (the first in the corpus
+with two character circuit IDs) established the fixed capacity; the byte
+once assumed to be the branch status was the unused capacity byte.
 
 ### Tables
 
@@ -171,7 +178,7 @@ count (u32; 200 appears at 0x328 in ACTIVSg200.pwb before the first bus
 record, 49 before the generators, 246 before the branches) plus a short
 table specific glue block.
 
-### Bus record (validated on all 200 + 2007 buses of two vintages)
+### Bus record (validated on all 200 + 2007 + 2000 buses of three files)
 
 | field | type | notes |
 |---|---|---|
@@ -203,38 +210,58 @@ every observed flag word; the tails differ.
 | Texas2000_June2016.pwb | 0x06 ×1, 0x07 ×425, 0x17 ×77 |
 | ACTIV_SG_2000_v19.pwb (April 2017) | 0x26 ×139, 0x27 ×300, 0x36 ×1, 0x37 ×21 |
 
-The reader decodes the plain tailed Simulator 20 era family (0x26/0x27) and
-rejects the rest by census, naming the detected family. The v19 file walks
-correctly through 1962 of its 2000 bus records with the 2018 layout; the
-records with bit 4 set break the walk, which is why the whole file is
-rejected until the tail lists are decoded.
+Full file censuses: June2016 carries 0x06 ×273, 0x07 ×1544, 0x16 ×9,
+0x17 ×181 over its 2007 buses (bit 0 clear on the 282 generator buses);
+v19 carries 0x36/0x37 on 22 of its 2000. The reader decodes both families:
+the head parses identically, the tails (57 bytes in the 2016 family, 85 in
+the 2018 one, plus the bit 4 lists) are skipped by the record resync.
 
-### Load record (89 bytes fixed, validated on all 160)
+### Load record (validated on all 160 + 1417 + 1350 loads of three files)
 
-u32 BusNum, ShortString LoadID, one byte (status, 0 observed for Closed),
-then f32 values in per unit on the system base: LoadSMW/100 at +8 from
-record start, LoadSMVR/100 at +12. Remainder undecoded (I/Z components are
-zero in every available case).
+u32 BusNum, variable length ShortString LoadID, one byte (0 in every
+available record; treated as the Delphi status convention), then f32 values
+in per unit on the system base: LoadSMW/100, LoadSMVR/100. Remainder
+undecoded (I/Z components are zero in every available case).
 
-### Generator record (variable length, validated on all 49)
+### Generator record (validated on all 49 + 282 + 545 machines of three files)
 
-u32 BusNum, ShortString GenID, then f32 per unit values at fixed offsets
-from record start: MW setpoint +11, MVAr setpoint +15, MVRMax +19, MVRMin
-+23, GenVoltSet +27 (p.u., scale 1), GenMVABase +31 (MVA, scale 1), MWMax
-+35, MWMin +39, GenRMPCT +53. GenZR/GenZX as f64 near +147/+193. Record
-length varies with embedded strings.
+u32 BusNum, GenID as ShortString[2] (fixed three byte field), then flag
+bytes whose count varies, then eight consecutive f32 per unit values
+anchored at +9 or +10 (2016/2017 exports; the gap varies per record) or +11
+(2018) from the record start: MW setpoint, MVAr setpoint, MVRMax, MVRMin,
+GenVoltSet (p.u., scale 1), GenMVABase (MVA, scale 1), MWMax, MWMin. The
+voltage setpoint and MVA base ranges pick the anchor per record. In the
+2018 file also verified: GenRMPCT at +53, GenZR/GenZX as f64 near
++147/+193. Record length varies with embedded strings; the status byte is
+unlocated within the flag bytes (every available machine is Closed).
 
-### Branch records (lines ~224 bytes, transformers ~384, interleaved)
+### Branch records (validated on all 246 + 3043 + 3202 branches of three files)
 
-u32 from bus, u32 to bus, u16 flags, then optionally a ShortString circuit
-ID. Flags 0x00EE: circuit string present, followed by one byte (status
-candidate), f32 LineR, f32 LineX, f32 LineC, f32 ratings/100 (LineAMVA at
-+12 from LineX). Flags 0x00EF: no circuit string (PowerWorld's default
-" 1"), R follows the flags directly. Transformer records carry the
-regulation block at higher offsets: tap at +87 from record start, tap
-limits +104/+108, step +122, nominal kV pair +169/+173, XFMVABase +177.
-The flags word is the Delphi optional field bitmask; only the observed
-values are accepted and anything else is a loud error.
+u32 from bus, u32 to bus, u16 flags, then in order:
+
+- circuit ID as ShortString[2] (three byte field), unless flag bit 0 says
+  it is omitted (PowerWorld's default " 1" applies);
+- f32 LineR, LineX, LineC, LineG (per unit);
+- inline per unit rating f32s: LineAMVA, LineAMVA:1 when flag bit 1 is set
+  (the 2018 and v19 exports), plus LineAMVA:2 when it is clear (June 2016);
+- a constant u32 tag = 12, a structural anchor every record carries;
+- eleven f32 slots, zero in every available case (presumably further rating
+  locations; left undecoded);
+- one zero byte, then the kind byte: 0x01 line, 0x00 transformer, with the
+  transformer's LineTap as f32 immediately after.
+
+The flags word is the Delphi field presence bitmask, base bits 0xEC: bit 0
+omits the circuit ID, bit 1 selects two inline ratings instead of three,
+bit 4 appends a count prefixed list to the record tail (as in the bus
+records). Observed words: 0xEC/0xFC (2016, 2899 + 144 records), 0xEE/0xEF
+(2018 and v19), 0xFE/0xFF (v19, 195 + 5). In the 2018 file also verified,
+within the transformer tail: tap limits +104/+108, step +122, nominal kV
+pair +169/+173, XFMVABase +177 from the record start. The branch status is
+unlocated (every available record is in service); an earlier draft of this
+section took the circuit ID's unused capacity byte for the status and the
+byte before the kind byte for the kind, which made every 2018 line read as
+a zero tap transformer in extras until the v19 parallel circuits exposed
+both.
 
 Sibling print precision matters for transformer parity: the aux transformer
 Branch section prints impedances at 6 decimals while the line section prints
@@ -245,12 +272,26 @@ in the RAW and 0.000637 in the aux and the .m. Parity tests therefore
 compare transformers against the aux at its print quantum and against the
 RAW at full precision.
 
+### Shunt record (validated on all 4 + 41 + 154 shunts of three files)
+
+u32 BusNum, ShortString ShuntID, with the nominal MVAr as f32 in per unit
+at +24 from the record start in every vintage. The slot at +20 is 0.0 in
+the Simulator 20 era files but 0.99 in the 2016 export (a regulation
+target, not a power), so the nominal MW slot is unlocated; every available
+case stores zero shunt MW and the reader sets G = 0.
+
 ### Open questions (inventoried, not guessed)
 
-- Status encodings (every device in the available 200 bus case is Closed);
-  the 2016 Texas case carries open devices and pins them.
-- The bus record tail bytes and the branch record interiors beyond the
-  fields above.
+- Status bytes: every device in every available case is Closed/in service,
+  so no status offset is validated anywhere; devices read as in service.
+- The meaning of the bit 4 tail lists (u32 count, then 9 byte entries
+  observed as u8 = 3, u32 number, u32 = 1) and of the constant u32 12 tag
+  in branch records.
+- The eleven zero f32 slots after the branch rating tag, and the bus and
+  branch record tail bytes beyond the fields above.
+- The gen record's variable flag byte gap (+9/+10 within one 2016 file).
+- Whether load IDs are also fixed capacity (every observed load ID already
+  fills two characters or parses either way).
 - Table glue blocks between count and first record.
 - Substation, area/zone names, contingency tables: present after the
   branches, undecoded in this pass.

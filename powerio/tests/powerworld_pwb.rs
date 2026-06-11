@@ -3,6 +3,7 @@
 //! precision (the binary stores most quantities as f32, the aux prints the
 //! f64 widening of them).
 
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 
 use powerio::format::powerworld::parse_pwb;
@@ -101,8 +102,7 @@ fn activsg200_pwb_matches_its_aux_sibling() {
 
     // Branches: identity (including the default circuit on the one record
     // that omits it), impedances, ratings, taps, device kind.
-    let mut aux_by_id: std::collections::BTreeMap<(usize, usize, String), &powerio::Branch> =
-        std::collections::BTreeMap::default();
+    let mut aux_by_id: BTreeMap<(usize, usize, String), &powerio::Branch> = BTreeMap::default();
     for b in &aux.branches {
         aux_by_id.insert((b.from.0, b.to.0, ckt(b)), b);
     }
@@ -154,6 +154,11 @@ fn activsg200_pwb_matches_its_aux_sibling() {
             a.effective_tap()
         );
         assert_eq!(p.is_transformer(), a.is_transformer(), "{key:?} kind");
+        assert_eq!(
+            p.extras.get("BranchDeviceType"),
+            a.extras.get("BranchDeviceType"),
+            "{key:?} device type"
+        );
         transformers += usize::from(p.is_transformer());
     }
     assert!(
@@ -170,7 +175,7 @@ fn activsg200_pwb_matches_its_aux_sibling() {
     // transformers are matched on endpoints alone (no parallel pairs among
     // them); the two values TAMU revised between snapshots are pinned below.
     let raw = parse_file(vendored("ACTIVSg200.RAW"), None).unwrap();
-    let raw_by_pair: std::collections::BTreeMap<(usize, usize), &powerio::Branch> = raw
+    let raw_by_pair: BTreeMap<(usize, usize), &powerio::Branch> = raw
         .branches
         .iter()
         .map(|b| ((b.from.0, b.to.0), b))
@@ -202,28 +207,333 @@ fn activsg200_pwb_matches_its_aux_sibling() {
     );
 }
 
-/// The June 2016 ACTIVSg2000 export uses the Simulator 19 era record family
-/// (bus flag words 0x06/0x07); the v19 file shares the Simulator 20 era head
-/// layout but carries count prefixed lists in some bus record tails (flag
-/// bit 4). Neither tail layout is decoded, so both must die at the vintage
-/// gate with the evidence named rather than return a partial network.
-/// Fetched fixtures; skipped when absent. When those tails are decoded, this
-/// test becomes a parity test like the 200 bus one above.
+/// The June 2016 ACTIVSg2000 export (Simulator 19 era record family, bus
+/// flag words 0x06/0x07, three inline rating slots) against its same day aux
+/// sibling: exact counts, every decoded value at the print precision of the
+/// lower precision side (this aux prints solved voltages at 6 decimals,
+/// powers and ratings at 3). Fetched fixtures; skipped when absent.
 #[test]
-fn simulator19_vintage_is_rejected_loudly() {
-    for name in ["Texas2000_June2016.pwb", "ACTIV_SG_2000_v19.pwb"] {
-        let Some(path) = fetched(name) else {
-            eprintln!("skipped {name}: run benchmarks/fetch_powerworld.sh");
-            continue;
-        };
-        let bytes = std::fs::read(&path).unwrap();
-        let err = parse_pwb(&bytes, None).unwrap_err();
+#[allow(clippy::too_many_lines)]
+fn texas2000_june2016_pwb_matches_its_aux_sibling() {
+    let (Some(pwb_path), Some(aux_path)) = (
+        fetched("Texas2000_June2016.pwb"),
+        fetched("Texas2000_June2016.AUX"),
+    ) else {
+        eprintln!("skipped: run benchmarks/fetch_powerworld.sh");
+        return;
+    };
+    let pwb = read_pwb(&pwb_path);
+    let aux = parse_file(aux_path, None).unwrap();
+
+    assert_eq!(pwb.buses.len(), 2007);
+    assert_eq!(pwb.loads.len(), 1417);
+    assert_eq!(pwb.generators.len(), 282);
+    assert_eq!(pwb.shunts.len(), 41);
+    assert_eq!(pwb.branches.len(), 3043);
+    assert_eq!(aux.buses.len(), 2007);
+    assert_eq!(aux.branches.len(), 3043);
+
+    for (p, a) in pwb.buses.iter().zip(&aux.buses) {
+        assert_eq!(p.id, a.id);
+        assert_eq!(p.name, a.name);
+        assert!((p.base_kv - a.base_kv).abs() < 1e-4, "bus {} kV", p.id);
+        assert_eq!((p.area, p.zone), (a.area, a.zone), "bus {}", p.id);
         assert!(
-            err.to_string()
-                .contains("unsupported PowerWorld .pwb vintage"),
-            "{name}: expected a loud vintage rejection, got: {err}"
+            (p.vm - a.vm).abs() <= 5e-7,
+            "bus {} vm {} vs {}",
+            p.id,
+            p.vm,
+            a.vm
+        );
+        assert!(
+            (p.va - a.va).abs() <= 5e-5,
+            "bus {} va {} vs {}",
+            p.id,
+            p.va,
+            a.va
         );
     }
+
+    for (p, a) in pwb.loads.iter().zip(&aux.loads) {
+        assert_eq!(p.bus, a.bus);
+        assert!(
+            (p.p - a.p).abs() <= 1e-3,
+            "load at {}: {} vs {}",
+            p.bus,
+            p.p,
+            a.p
+        );
+        assert!(
+            (p.q - a.q).abs() <= 1e-3,
+            "load q at {}: {} vs {}",
+            p.bus,
+            p.q,
+            a.q
+        );
+    }
+    for (p, a) in pwb.generators.iter().zip(&aux.generators) {
+        assert_eq!(p.bus, a.bus);
+        for (x, y, what) in [
+            (p.pg, a.pg, "pg"),
+            (p.qg, a.qg, "qg"),
+            (p.pmax, a.pmax, "pmax"),
+            (p.pmin, a.pmin, "pmin"),
+            (p.qmax, a.qmax, "qmax"),
+            (p.qmin, a.qmin, "qmin"),
+            (p.vg, a.vg, "vg"),
+            (p.mbase, a.mbase, "mbase"),
+        ] {
+            assert!(
+                (x - y).abs() <= 1e-3 + 1e-6 * y.abs(),
+                "gen at {} {what}: {x} vs {y}",
+                p.bus
+            );
+        }
+    }
+    for (p, a) in pwb.shunts.iter().zip(&aux.shunts) {
+        assert_eq!(p.bus, a.bus);
+        assert!(
+            (p.b - a.b).abs() <= 1e-3,
+            "shunt at {}: {} vs {}",
+            p.bus,
+            p.b,
+            a.b
+        );
+    }
+
+    let mut aux_by_id: BTreeMap<(usize, usize, String), &powerio::Branch> = BTreeMap::default();
+    for b in &aux.branches {
+        aux_by_id.insert((b.from.0, b.to.0, ckt(b)), b);
+    }
+    let mut transformers = 0;
+    for p in &pwb.branches {
+        let key = (p.from.0, p.to.0, ckt(p));
+        let a = aux_by_id
+            .remove(&key)
+            .unwrap_or_else(|| panic!("{key:?} not in aux"));
+        assert!((p.r - a.r).abs() <= 5e-7, "{key:?} R {} vs {}", p.r, a.r);
+        assert!((p.x - a.x).abs() <= 5e-7, "{key:?} X {} vs {}", p.x, a.x);
+        assert!((p.b - a.b).abs() <= 5e-7, "{key:?} B {} vs {}", p.b, a.b);
+        for (x, y, what) in [
+            (p.rate_a, a.rate_a, "rate_a"),
+            (p.rate_b, a.rate_b, "rate_b"),
+            (p.rate_c, a.rate_c, "rate_c"),
+        ] {
+            assert!(
+                (x - y).abs() <= 1e-3 + 1e-6 * y.abs(),
+                "{key:?} {what} {x} vs {y}"
+            );
+        }
+        assert!(
+            (p.effective_tap() - a.effective_tap()).abs() < 1e-6,
+            "{key:?} tap {} vs {}",
+            p.effective_tap(),
+            a.effective_tap()
+        );
+        assert_eq!(p.is_transformer(), a.is_transformer(), "{key:?} kind");
+        assert_eq!(
+            p.extras.get("BranchDeviceType"),
+            a.extras.get("BranchDeviceType"),
+            "{key:?} device type"
+        );
+        transformers += usize::from(p.is_transformer());
+    }
+    assert!(
+        aux_by_id.is_empty(),
+        "aux branches missing from pwb: {aux_by_id:?}"
+    );
+    assert_eq!(transformers, 562);
+}
+
+/// The v19 ACTIVSg2000 export (April 2017, Simulator 20 era records with
+/// count prefixed list tails, bus flags 0x36/0x37 and branch flags
+/// 0xFE/0xFF) against the published case in MATPOWER format. The v19 file
+/// has no same day sibling, so the bar is structural identity plus values
+/// that are stable across snapshots (loads, impedances), with every
+/// difference pinned exactly. Buses match by order: the .m renumbers
+/// 1..2000 to 1001..8160 but keeps the order and the names (apostrophes
+/// printed as spaces). Fetched fixtures; skipped when absent.
+#[test]
+#[allow(clippy::too_many_lines)]
+fn activsg2000_v19_pwb_matches_the_published_case() {
+    let (Some(pwb_path), Some(m_path)) = (
+        fetched("ACTIV_SG_2000_v19.pwb"),
+        fetched("case_ACTIVSg2000.m"),
+    ) else {
+        eprintln!("skipped: run benchmarks/fetch_powerworld.sh");
+        return;
+    };
+    let pwb = read_pwb(&pwb_path);
+    let m = parse_file(m_path, None).unwrap();
+
+    assert_eq!(pwb.buses.len(), 2000);
+    assert_eq!(pwb.loads.len(), 1350);
+    assert_eq!(pwb.generators.len(), 545);
+    assert_eq!(pwb.shunts.len(), 154);
+    assert_eq!(pwb.branches.len(), 3202);
+    assert_eq!(m.buses.len(), 2000);
+
+    // Bus identity by name: the published case renumbered and reordered the
+    // buses, so order does not map them, but names are unique in both files
+    // (the .m flattens apostrophes to spaces, and its "May-00" is this
+    // file's "MAY 0" mangled by a spreadsheet export). Two buses were
+    // re-leveled after the v19 snapshot, pinned below.
+    let m_by_name: BTreeMap<String, &powerio::Bus> = m
+        .buses
+        .iter()
+        .map(|b| {
+            let n = b
+                .name
+                .as_deref()
+                .unwrap_or("")
+                .trim_matches('\'')
+                .to_string();
+            (if n == "May-00" { "MAY 0".into() } else { n }, b)
+        })
+        .collect();
+    assert_eq!(m_by_name.len(), 2000, "duplicate .m bus names");
+    let mut m_id_by_pwb_id = BTreeMap::new();
+    let mut kv_deltas = Vec::new();
+    for p in &pwb.buses {
+        let pn = p.name.as_deref().unwrap_or("").replace('\'', " ");
+        let a = m_by_name
+            .get(&pn)
+            .unwrap_or_else(|| panic!("bus {} {pn:?} not in the .m", p.id));
+        if (p.base_kv - a.base_kv).abs() >= 1e-4 {
+            kv_deltas.push((a.id.0, p.base_kv, a.base_kv));
+        }
+        m_id_by_pwb_id.insert(p.id.0, a.id.0);
+    }
+    assert_eq!(kv_deltas, [(1079, 18.0, 500.0), (5052, 22.0, 115.0)]);
+
+    // Loads are unchanged between the snapshots: per bus totals match the
+    // .m bus table at its print precision (2 decimals).
+    let mut pwb_load: BTreeMap<usize, (f64, f64)> = BTreeMap::default();
+    for l in &pwb.loads {
+        let e = pwb_load
+            .entry(m_id_by_pwb_id[&l.bus.0])
+            .or_insert((0.0, 0.0));
+        e.0 += l.p;
+        e.1 += l.q;
+    }
+    let mut m_load: BTreeMap<usize, (f64, f64)> = BTreeMap::default();
+    for l in &m.loads {
+        let e = m_load.entry(l.bus.0).or_insert((0.0, 0.0));
+        e.0 += l.p;
+        e.1 += l.q;
+    }
+    assert_eq!(pwb_load.len(), m_load.len());
+    for (bus, (p, q)) in &pwb_load {
+        let (mp, mq) = m_load[bus];
+        assert!(
+            (p - mp).abs() <= 5e-3 + 1e-6 * mp.abs(),
+            "load at m bus {bus}: {p} vs {mp}"
+        );
+        assert!(
+            (q - mq).abs() <= 5e-3 + 1e-6 * mq.abs(),
+            "load q at m bus {bus}: {q} vs {mq}"
+        );
+    }
+
+    // Branch identity: endpoints mapped through the bus names. The .m
+    // carries no circuit IDs, so parallel branches pair up within an
+    // endpoint group sorted by impedance. Snapshot deltas are pinned.
+    let pair = |a: usize, b: usize| (a.min(b), a.max(b));
+    let mut m_by_pair: BTreeMap<(usize, usize), Vec<&powerio::Branch>> = BTreeMap::default();
+    for b in &m.branches {
+        m_by_pair.entry(pair(b.from.0, b.to.0)).or_default().push(b);
+    }
+    let mut p_by_pair: BTreeMap<(usize, usize), Vec<&powerio::Branch>> = BTreeMap::default();
+    for p in &pwb.branches {
+        p_by_pair
+            .entry(pair(m_id_by_pwb_id[&p.from.0], m_id_by_pwb_id[&p.to.0]))
+            .or_default()
+            .push(p);
+    }
+    let by_imp = |a: &&powerio::Branch, b: &&powerio::Branch| {
+        a.x.total_cmp(&b.x)
+            .then(a.r.total_cmp(&b.r))
+            .then(a.b.total_cmp(&b.b))
+            // Parallel units can share impedances; break the tie by kind.
+            .then(a.is_transformer().cmp(&b.is_transformer()))
+    };
+    let mut count_deltas = Vec::new();
+    let mut imp_deltas = Vec::new();
+    let mut kind_deltas = Vec::new();
+    let mut matched = 0;
+    for (k, mut pv) in p_by_pair {
+        let mut mv = m_by_pair.remove(&k).unwrap_or_default();
+        if pv.len() != mv.len() {
+            count_deltas.push((k.0, k.1, pv.len(), mv.len()));
+        }
+        pv.sort_by(by_imp);
+        mv.sort_by(by_imp);
+        for (p, a) in pv.iter().zip(&mv) {
+            matched += 1;
+            // The published .m prints impedances at 5 decimals.
+            for (x, y, what) in [(p.r, a.r, "R"), (p.x, a.x, "X"), (p.b, a.b, "B")] {
+                if (x - y).abs() > 5.1e-6 + 1.5e-7 * y.abs() {
+                    imp_deltas.push((k.0, k.1, what, x, y));
+                }
+            }
+            if p.is_transformer() != a.is_transformer() {
+                kind_deltas.push((k.0, k.1, p.tap));
+            }
+        }
+    }
+    // Endpoint pairs only in the .m: branches added after the v19 snapshot.
+    let added_later: Vec<_> = m_by_pair.keys().copied().collect();
+    // The published revision added two parallel circuits and dropped three
+    // v19 branches (per pair counts: pwb vs .m).
+    assert_eq!(
+        count_deltas,
+        [
+            (3048, 5045, 1, 2),
+            (5018, 5236, 1, 2),
+            (5050, 8038, 1, 0),
+            (5258, 8108, 1, 0),
+            (5454, 8124, 1, 0),
+        ],
+        "per pair count deltas"
+    );
+    // The new endpoint pairs rewire the same buses the revision re-leveled
+    // (1079, 5052): 3206 published = 3199 matched + 2 extra parallels + 5
+    // branches at these four new pairs.
+    assert_eq!(
+        added_later,
+        [(1079, 3048), (5052, 8038), (5052, 8124), (8108, 8153)],
+        "pairs only in the .m"
+    );
+    assert_eq!(matched, 3199);
+    // Impedance revisions in the same two regions the revision rewired.
+    let imp_keys: Vec<_> = imp_deltas.iter().map(|&(a, b, w, ..)| (a, b, w)).collect();
+    assert_eq!(
+        imp_keys,
+        [
+            (1071, 1079, "R"),
+            (1071, 1079, "X"),
+            (5049, 5050, "R"),
+            (5049, 5050, "X"),
+        ],
+        "{imp_deltas:?}"
+    );
+    assert_eq!(kind_deltas, Vec::<(usize, usize, f64)>::new());
+
+    // Dispatch and shunt schedules moved between the snapshots; the
+    // generator placement still has to line up. The one extra v19 machine
+    // sits at bus 5052, the bus the revision re-leveled and rewired.
+    let m_gen_buses: BTreeSet<usize> = m.generators.iter().map(|g| g.bus.0).collect();
+    let pwb_gen_buses: BTreeSet<usize> = pwb
+        .generators
+        .iter()
+        .map(|g| m_id_by_pwb_id[&g.bus.0])
+        .collect();
+    let pwb_only: Vec<_> = pwb_gen_buses.difference(&m_gen_buses).copied().collect();
+    assert_eq!(pwb_only, [5052], "gen buses only in the pwb");
+    assert!(
+        m_gen_buses.is_subset(&pwb_gen_buses),
+        "gen buses only in the .m"
+    );
 }
 
 /// Loud rejection of files that are not the validated layout.

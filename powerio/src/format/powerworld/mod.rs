@@ -15,7 +15,9 @@
 //! The writer emits `DATA (Object, [fields]) { … }` blocks for the core
 //! types, values in MW/MVAr/degrees, status as `Closed`/`Open`. Generator
 //! cost, HVDC, and storage are not represented and are reported on write.
-//! The `.pwb` binary case format is not handled here yet.
+//!
+//! `.pwb` binary cases are read (never written) by [`parse_pwb`]; see that
+//! module for the decoded vintages and the parity evidence.
 //!
 //! [`Network`]: crate::network::Network
 
