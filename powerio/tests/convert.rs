@@ -467,3 +467,104 @@ fn oos_fixture_marks_out_of_service_elements() {
         .expect("branch 5-6");
     assert!(!br.in_service, "branch 5-6 is out of service");
 }
+
+#[test]
+fn parse_file_dispatch_precedes_the_text_read() {
+    // Format selection errors must be UnknownFormat, never the UTF-8 read
+    // error a binary file would hit first: the .pwd display sibling ships
+    // next to every case in the wild and gets its own pointer, and an
+    // unmapped extension errors without touching the file at all.
+    let dir = std::env::temp_dir();
+
+    let pwd = dir.join("powerio_test_dispatch.pwd");
+    std::fs::write(&pwd, [0x32u8, 0, 0, 0, 0xff, 0xfe, 0x80, 0x81]).unwrap();
+    let err = parse_file(&pwd, None).unwrap_err();
+    let _ = std::fs::remove_file(&pwd);
+    assert!(
+        matches!(err, powerio::Error::UnknownFormat(_)),
+        "pwd is UnknownFormat with a pointer, got: {err}"
+    );
+    assert!(err.to_string().contains("oneline display"), "{err}");
+
+    // Unmapped extension: UnknownFormat even though the file does not exist,
+    // because the extension settles the question before any read.
+    let err = parse_file(dir.join("powerio_test_dispatch.xyz"), None).unwrap_err();
+    assert!(
+        matches!(err, powerio::Error::UnknownFormat(_)),
+        "unmapped extension is UnknownFormat, got: {err}"
+    );
+}
+
+#[test]
+fn slackless_network_conversion_warns_for_power_flow_targets() {
+    use powerio::network::{Branch, Bus, BusType, Extras, Network};
+    fn bus(id: usize, kind: BusType) -> Bus {
+        Bus {
+            id: BusId(id),
+            kind,
+            vm: 1.0,
+            va: 0.0,
+            base_kv: 1.0,
+            vmax: 1.1,
+            vmin: 0.9,
+            area: 1,
+            zone: 1,
+            name: None,
+            extras: Extras::new(),
+        }
+    }
+    fn branch(from: usize, to: usize) -> Branch {
+        Branch {
+            from: BusId(from),
+            to: BusId(to),
+            r: 0.0,
+            x: 0.1,
+            b: 0.0,
+            rate_a: 0.0,
+            rate_b: 0.0,
+            rate_c: 0.0,
+            tap: 0.0,
+            shift: 0.0,
+            in_service: true,
+            angmin: -360.0,
+            angmax: 360.0,
+            extras: Extras::new(),
+        }
+    }
+    // PowerWorld .pwb stores no slack designation; converting its network to
+    // a format whose solvers need one must say so instead of silently
+    // emitting a case every power flow tool rejects.
+    let net = Network::in_memory(
+        "noslack",
+        100.0,
+        vec![bus(1, BusType::Pv), bus(2, BusType::Pq)],
+        vec![branch(1, 2)],
+    );
+    for fmt in [
+        TargetFormat::Matpower,
+        TargetFormat::Psse,
+        TargetFormat::PowerModelsJson,
+    ] {
+        let conv = write_as(&net, fmt);
+        assert!(
+            conv.warnings
+                .iter()
+                .any(|w| w.contains("reference (slack) bus")),
+            "{fmt:?} missing the slackless warning: {:?}",
+            conv.warnings
+        );
+    }
+    // A network with a slack stays warning free on this dimension.
+    let with_ref = Network::in_memory(
+        "slack",
+        100.0,
+        vec![bus(1, BusType::Ref), bus(2, BusType::Pq)],
+        vec![branch(1, 2)],
+    );
+    assert!(
+        !write_as(&with_ref, TargetFormat::Matpower)
+            .warnings
+            .iter()
+            .any(|w| w.contains("reference (slack) bus"))
+    );
+}

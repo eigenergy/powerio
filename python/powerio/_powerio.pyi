@@ -29,7 +29,15 @@ class PyCase:
     def source_format(
         self,
     ) -> Literal[
-        "Matpower", "PowerModelsJson", "EgretJson", "Psse", "PowerWorld", "InMemory", "Normalized"
+        "Matpower",
+        "PowerModelsJson",
+        "EgretJson",
+        "Psse",
+        "PowerWorld",
+        "PowerWorldBinary",
+        "Gridfm",
+        "InMemory",
+        "Normalized",
     ]: ...
     @property
     def n_buses(self) -> int: ...

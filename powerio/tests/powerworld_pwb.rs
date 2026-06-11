@@ -562,20 +562,38 @@ fn rejects_unrecognized_binaries() {
         "{err}"
     );
 
-    // A newer writer format constant (2021/2022 era exports carry 483, 508,
-    // 537, 550, or 551 at offset 0x08) is a vintage rejection naming the
+    // An undecoded writer format constant (the 2017 era 118 bus sample
+    // carries 338 at offset 0x08) is a vintage rejection naming the
     // constant, never a generic magic mismatch.
     let mut newer = Vec::new();
     newer.extend_from_slice(&15000u64.to_le_bytes());
-    newer.extend_from_slice(&483u64.to_le_bytes());
+    newer.extend_from_slice(&338u64.to_le_bytes());
     newer.extend_from_slice(&20u64.to_le_bytes());
     newer.extend_from_slice(&[0u8; 4096]);
     let err = parse_pwb(&newer, None).unwrap_err();
     let msg = err.to_string();
     assert!(
-        msg.contains("unsupported PowerWorld .pwb vintage") && msg.contains("483"),
+        msg.contains("unsupported PowerWorld .pwb vintage") && msg.contains("338"),
         "{err}"
     );
+
+    // A decoded constant over a garbage body dies at the bus layout gate,
+    // through the same loud vintage path; pinned for each constant the
+    // header gate admits.
+    for v in [425u64, 483, 508, 537, 550, 551] {
+        let mut garbage = Vec::new();
+        garbage.extend_from_slice(&15000u64.to_le_bytes());
+        garbage.extend_from_slice(&v.to_le_bytes());
+        garbage.extend_from_slice(&20u64.to_le_bytes());
+        garbage.extend_from_slice(&[0u8; 4096]);
+        let err = parse_pwb(&garbage, None).unwrap_err();
+        let msg = err.to_string();
+        assert!(
+            msg.contains("unsupported PowerWorld .pwb vintage")
+                && msg.contains("no recognized bus record layout"),
+            "constant {v}: {err}"
+        );
+    }
 }
 
 /// RTS-GMLC (NREL/GMLC Reliability Test System): the first cross format
@@ -1091,4 +1109,405 @@ fn hawaii40_pwb_matches_its_aux_sibling() {
         assert_eq!(p.is_transformer(), a.is_transformer(), "{key:?} kind");
     }
     assert!(aux_by_id.is_empty(), "aux branches missing: {aux_by_id:?}");
+}
+
+/// Texas7k (2021, header format constant 483) against its same day aux and
+/// MATPOWER siblings: the parity evidence that admits the 483 header era,
+/// at 6717 bus scale. The case carries the corpus's first out of service
+/// devices (94 open machines), so the generator in service bit is asserted
+/// here against both siblings, not just read as a default. The .m exporter
+/// prints at fixed decimals and writes the solved regulated bus voltage
+/// into VG, so voltage setpoints are asserted against the aux and the .m
+/// carries the topology, dispatch, and status parity. Machine specific
+/// corpus file; skipped unless the local manifest lists it.
+#[test]
+#[allow(clippy::too_many_lines)]
+fn texas7k_pwb_matches_its_aux_and_matpower_siblings() {
+    let Some(pwb_path) = common::local_corpus_path("Texas7k 2021 export (local only)") else {
+        eprintln!("skipped: not in the local corpus manifest");
+        return;
+    };
+    let aux_path = pwb_path.with_file_name("Texas7k_20210804.AUX");
+    let m_path = pwb_path.with_file_name("Texas7k_20210804.m");
+    if !aux_path.exists() || !m_path.exists() {
+        eprintln!("skipped: no aux/.m siblings next to the export");
+        return;
+    }
+    let pwb = read_pwb(&pwb_path);
+    let aux = parse_file(aux_path, None).unwrap();
+    let m = parse_file(m_path, None).unwrap();
+
+    assert_eq!(pwb.buses.len(), 6717);
+    assert_eq!(pwb.loads.len(), 5095);
+    assert_eq!(pwb.generators.len(), 731);
+    assert_eq!(pwb.shunts.len(), 634);
+    assert_eq!(pwb.branches.len(), 9140);
+    assert_eq!(aux.buses.len(), pwb.buses.len());
+    assert_eq!(aux.loads.len(), pwb.loads.len());
+    assert_eq!(aux.generators.len(), pwb.generators.len());
+    assert_eq!(aux.shunts.len(), pwb.shunts.len());
+    assert_eq!(aux.branches.len(), pwb.branches.len());
+    assert_eq!(m.buses.len(), pwb.buses.len());
+    assert_eq!(m.generators.len(), pwb.generators.len());
+    assert_eq!(m.branches.len(), pwb.branches.len());
+
+    // Buses: identity and the f64 solved state against the aux; the .m
+    // prints vm at 7 and va at 6 decimals.
+    let m_bus: BTreeMap<usize, &powerio::Bus> = m.buses.iter().map(|b| (b.id.0, b)).collect();
+    for (p, a) in pwb.buses.iter().zip(&aux.buses) {
+        assert_eq!(p.id, a.id);
+        assert_eq!(p.name, a.name);
+        assert!((p.base_kv - a.base_kv).abs() < 1e-4, "bus {} kV", p.id);
+        assert_eq!((p.area, p.zone), (a.area, a.zone), "bus {}", p.id);
+        assert!((p.vm - a.vm).abs() < 1e-9, "bus {} vm", p.id);
+        assert!((p.va - a.va).abs() < 1e-7, "bus {} va", p.id);
+        let mb = m_bus[&p.id.0];
+        assert!(
+            (p.base_kv - mb.base_kv).abs() < 1e-4,
+            "bus {} kV vs .m",
+            p.id
+        );
+        assert!((p.vm - mb.vm).abs() <= 1e-6, "bus {} vm vs .m", p.id);
+        assert!((p.va - mb.va).abs() <= 1e-5, "bus {} va vs .m", p.id);
+    }
+    // The binary stores no slack flag and no bus type; the .m types every
+    // generator bus PV whether or not its machines are in service, while
+    // the derived pwb kinds mark only buses with an in service machine.
+    // The electrical values above are the bus parity contract.
+    assert!(pwb.buses.iter().all(|b| b.kind != powerio::BusType::Ref));
+
+    // Loads against the aux (f32 storage); per bus totals against the .m
+    // bus rows (printed at 2 decimals).
+    for (p, a) in pwb.loads.iter().zip(&aux.loads) {
+        assert_eq!(p.bus, a.bus);
+        assert!(
+            (p.p - a.p).abs() < 1e-4 * a.p.abs().max(1.0),
+            "load at {}",
+            p.bus
+        );
+        assert!(
+            (p.q - a.q).abs() < 1e-4 * a.q.abs().max(1.0),
+            "load q at {}",
+            p.bus
+        );
+        assert!(p.in_service, "load at {} in service", p.bus);
+    }
+    let mut pwb_pd: BTreeMap<usize, (f64, f64)> = BTreeMap::default();
+    for l in &pwb.loads {
+        let e = pwb_pd.entry(l.bus.0).or_default();
+        e.0 += l.p;
+        e.1 += l.q;
+    }
+    let mut m_pd: BTreeMap<usize, (f64, f64)> = BTreeMap::default();
+    for l in &m.loads {
+        let e = m_pd.entry(l.bus.0).or_default();
+        e.0 += l.p;
+        e.1 += l.q;
+    }
+    for (bus, (p, q)) in &pwb_pd {
+        let (mp, mq) = m_pd.remove(bus).unwrap_or((0.0, 0.0));
+        assert!(
+            (p - mp).abs() <= 5.1e-3 + 1e-5 * mp.abs(),
+            "bus {bus} Pd {p} vs .m {mp}"
+        );
+        assert!(
+            (q - mq).abs() <= 5.1e-3 + 1e-5 * mq.abs(),
+            "bus {bus} Qd {q} vs .m {mq}"
+        );
+    }
+    assert!(
+        m_pd.values().all(|(p, q)| *p == 0.0 && *q == 0.0),
+        "loads only in the .m: {m_pd:?}"
+    );
+
+    // Generators against the aux, including the in service bit: this case
+    // is the first with open machines, and the binary's status byte is
+    // validated here on all 637 + 94 of them.
+    for (p, a) in pwb.generators.iter().zip(&aux.generators) {
+        assert_eq!(p.bus, a.bus);
+        assert_eq!(p.in_service, a.in_service, "gen at {} status", p.bus);
+        for (x, y, what) in [
+            (p.pg, a.pg, "pg"),
+            (p.qg, a.qg, "qg"),
+            (p.pmax, a.pmax, "pmax"),
+            (p.pmin, a.pmin, "pmin"),
+            (p.qmax, a.qmax, "qmax"),
+            (p.qmin, a.qmin, "qmin"),
+            (p.vg, a.vg, "vg"),
+            (p.mbase, a.mbase, "mbase"),
+        ] {
+            assert!(
+                (x - y).abs() < 1e-4 * y.abs().max(1.0),
+                "gen at {} {what}: {x} vs {y}",
+                p.bus
+            );
+        }
+    }
+    assert_eq!(pwb.generators.iter().filter(|g| !g.in_service).count(), 94);
+    // Placement, per bus dispatch, and statuses against the .m (printed at
+    // 2 decimals; machine order within a bus is not preserved, so per bus
+    // aggregates are the contract).
+    #[derive(Default)]
+    #[allow(clippy::items_after_statements)]
+    struct BusGens {
+        n: usize,
+        on: usize,
+        pg: f64,
+        pmax: f64,
+    }
+    let aggregate = |gens: &[powerio::Generator]| {
+        let mut by: BTreeMap<usize, BusGens> = BTreeMap::default();
+        for g in gens {
+            let e = by.entry(g.bus.0).or_default();
+            e.n += 1;
+            e.on += usize::from(g.in_service);
+            e.pg += g.pg;
+            e.pmax += g.pmax;
+        }
+        by
+    };
+    let pwb_gen = aggregate(&pwb.generators);
+    let m_gen = aggregate(&m.generators);
+    assert_eq!(
+        pwb_gen.keys().collect::<Vec<_>>(),
+        m_gen.keys().collect::<Vec<_>>()
+    );
+    for (bus, p) in &pwb_gen {
+        let a = &m_gen[bus];
+        assert_eq!((p.n, p.on), (a.n, a.on), "gen counts at {bus}");
+        assert!(
+            (p.pg - a.pg).abs() <= 5.1e-3 * p.n as f64 + 1e-5 * a.pg.abs(),
+            "bus {bus} pg {} vs .m {}",
+            p.pg,
+            a.pg
+        );
+        assert!(
+            (p.pmax - a.pmax).abs() <= 5.1e-3 * p.n as f64 + 1e-5 * a.pmax.abs(),
+            "bus {bus} pmax {} vs .m {}",
+            p.pmax,
+            a.pmax
+        );
+    }
+
+    // Shunts against the aux; per bus totals against the .m.
+    for (p, a) in pwb.shunts.iter().zip(&aux.shunts) {
+        assert_eq!(p.bus, a.bus);
+        assert!(
+            (p.b - a.b).abs() < 1e-4 * a.b.abs().max(1.0),
+            "shunt at {}",
+            p.bus
+        );
+    }
+    let mut pwb_bs: BTreeMap<usize, f64> = BTreeMap::default();
+    for s in &pwb.shunts {
+        *pwb_bs.entry(s.bus.0).or_default() += s.b;
+    }
+    let mut m_bs: BTreeMap<usize, f64> = BTreeMap::default();
+    for s in &m.shunts {
+        *m_bs.entry(s.bus.0).or_default() += s.b;
+    }
+    for (bus, b) in &pwb_bs {
+        let mb = m_bs.remove(bus).unwrap_or(0.0);
+        assert!(
+            (b - mb).abs() <= 5.1e-3 + 1e-5 * mb.abs(),
+            "bus {bus} Bs {b} vs .m {mb}"
+        );
+    }
+    assert!(
+        m_bs.values().all(|b| *b == 0.0),
+        "shunts only in the .m: {m_bs:?}"
+    );
+
+    // Branches against the aux by full identity (endpoints + circuit).
+    let mut aux_by_id: BTreeMap<(usize, usize, String), &powerio::Branch> = BTreeMap::default();
+    for b in &aux.branches {
+        aux_by_id.insert((b.from.0, b.to.0, ckt(b)), b);
+    }
+    for p in &pwb.branches {
+        let key = (p.from.0, p.to.0, ckt(p));
+        let a = aux_by_id
+            .remove(&key)
+            .unwrap_or_else(|| panic!("{key:?} not in aux"));
+        let tol = |v: f64| 5e-7 + 1e-6 * v.abs();
+        assert!(
+            (p.r - a.r).abs() <= tol(a.r),
+            "{key:?} R {} vs {}",
+            p.r,
+            a.r
+        );
+        assert!(
+            (p.x - a.x).abs() <= tol(a.x),
+            "{key:?} X {} vs {}",
+            p.x,
+            a.x
+        );
+        assert!(
+            (p.b - a.b).abs() <= tol(a.b),
+            "{key:?} B {} vs {}",
+            p.b,
+            a.b
+        );
+        assert!(
+            (p.rate_a - a.rate_a).abs() <= 1e-3 + 1e-6 * a.rate_a.abs(),
+            "{key:?} rate_a {} vs {}",
+            p.rate_a,
+            a.rate_a
+        );
+        assert!(
+            (p.tap - a.tap).abs() <= 5e-7 + 1e-6 * a.tap.abs(),
+            "{key:?} tap {} vs {}",
+            p.tap,
+            a.tap
+        );
+        assert_eq!(p.is_transformer(), a.is_transformer(), "{key:?} kind");
+        assert!(p.in_service, "{key:?} in service");
+    }
+    assert!(aux_by_id.is_empty(), "aux branches missing: {aux_by_id:?}");
+
+    // Topology against the .m: endpoint pairs with parallel counts (the .m
+    // carries no circuit IDs; parallel units zip within a pair sorted by
+    // impedance), every branch in service on both sides.
+    let pair = |a: usize, b: usize| (a.min(b), a.max(b));
+    let mut m_by_pair: BTreeMap<(usize, usize), Vec<&powerio::Branch>> = BTreeMap::default();
+    for b in &m.branches {
+        assert!(b.in_service);
+        m_by_pair.entry(pair(b.from.0, b.to.0)).or_default().push(b);
+    }
+    let mut p_by_pair: BTreeMap<(usize, usize), Vec<&powerio::Branch>> = BTreeMap::default();
+    for p in &pwb.branches {
+        p_by_pair.entry(pair(p.from.0, p.to.0)).or_default().push(p);
+    }
+    assert_eq!(p_by_pair.len(), m_by_pair.len());
+    let by_imp = |a: &&powerio::Branch, b: &&powerio::Branch| {
+        a.x.total_cmp(&b.x)
+            .then(a.r.total_cmp(&b.r))
+            .then(a.b.total_cmp(&b.b))
+    };
+    for (k, mut pv) in p_by_pair {
+        let mut mv = m_by_pair
+            .remove(&k)
+            .unwrap_or_else(|| panic!("{k:?} not in the .m"));
+        assert_eq!(pv.len(), mv.len(), "{k:?} parallel count");
+        pv.sort_by(by_imp);
+        mv.sort_by(by_imp);
+        for (p, a) in pv.iter().zip(&mv) {
+            assert!(
+                (p.r - a.r).abs() <= 5.1e-7 + 1.5e-6 * a.r.abs(),
+                "{k:?} R {} vs .m {}",
+                p.r,
+                a.r
+            );
+            assert!(
+                (p.x - a.x).abs() <= 5.1e-7 + 1.5e-6 * a.x.abs(),
+                "{k:?} X {} vs .m {}",
+                p.x,
+                a.x
+            );
+            assert!(
+                (p.b - a.b).abs() <= 5.1e-6 + 1.5e-6 * a.b.abs(),
+                "{k:?} B {} vs .m {}",
+                p.b,
+                a.b
+            );
+            assert!(
+                (p.rate_a - a.rate_a).abs() <= 5.1e-3 + 1e-5 * a.rate_a.abs(),
+                "{k:?} rate_a {} vs .m {}",
+                p.rate_a,
+                a.rate_a
+            );
+        }
+    }
+    assert!(
+        m_by_pair.is_empty(),
+        "pairs only in the .m: {:?}",
+        m_by_pair.keys()
+    );
+}
+
+/// The Texas7k v21 and v22 resaves (header format constants 508 and 551)
+/// against the same day 2022 aux: the parity evidence that admits those
+/// constants for the node level case family. The v21 save is also the
+/// evidence that bus flag bit 6 is a per record presence bit (the slack
+/// bus record clears it) rather than a file constant. Machine specific
+/// corpus files; skipped unless the local manifest lists them.
+#[test]
+fn texas7k_resaves_match_the_2022_aux() {
+    let labels = [
+        "Texas7k saved as v21 (local only)",
+        "Texas7k saved as v22 (local only)",
+    ];
+    for label in labels {
+        let Some(pwb_path) = common::local_corpus_path(label) else {
+            eprintln!("skipped {label}: not in the local corpus manifest");
+            continue;
+        };
+        let aux_path = pwb_path.with_file_name("Texas7k_20220923.AUX");
+        if !aux_path.exists() {
+            eprintln!("skipped {label}: no aux sibling next to the export");
+            continue;
+        }
+        let pwb = read_pwb(&pwb_path);
+        let aux = parse_file(aux_path, None).unwrap();
+
+        assert_eq!(pwb.buses.len(), 6717, "{label}");
+        assert_eq!(pwb.loads.len(), aux.loads.len(), "{label}");
+        assert_eq!(pwb.generators.len(), aux.generators.len(), "{label}");
+        assert_eq!(pwb.shunts.len(), aux.shunts.len(), "{label}");
+        assert_eq!(pwb.branches.len(), 9140, "{label}");
+        assert_eq!(aux.branches.len(), 9140, "{label}");
+
+        for (p, a) in pwb.buses.iter().zip(&aux.buses) {
+            assert_eq!(p.id, a.id, "{label}");
+            assert!((p.vm - a.vm).abs() < 1e-6, "{label} bus {} vm", p.id);
+            assert!((p.va - a.va).abs() < 1e-4, "{label} bus {} va", p.id);
+        }
+        for (p, a) in pwb.loads.iter().zip(&aux.loads) {
+            assert_eq!(p.bus, a.bus, "{label}");
+            assert!(
+                (p.p - a.p).abs() < 1e-3 * a.p.abs().max(1.0),
+                "{label} load at {}",
+                p.bus
+            );
+        }
+        for (p, a) in pwb.generators.iter().zip(&aux.generators) {
+            assert_eq!(p.bus, a.bus, "{label}");
+            assert_eq!(p.in_service, a.in_service, "{label} gen at {}", p.bus);
+            assert!(
+                (p.pg - a.pg).abs() < 1e-3 * a.pg.abs().max(1.0),
+                "{label} gen at {} pg",
+                p.bus
+            );
+            assert!(
+                (p.mbase - a.mbase).abs() < 1e-3 * a.mbase.abs().max(1.0),
+                "{label} gen at {} mbase",
+                p.bus
+            );
+        }
+        assert_eq!(
+            pwb.generators.iter().filter(|g| !g.in_service).count(),
+            94,
+            "{label}"
+        );
+        let mut aux_by_id: BTreeMap<(usize, usize, String), &powerio::Branch> = BTreeMap::default();
+        for b in &aux.branches {
+            aux_by_id.insert((b.from.0, b.to.0, ckt(b)), b);
+        }
+        for p in &pwb.branches {
+            let key = (p.from.0, p.to.0, ckt(p));
+            let a = aux_by_id
+                .remove(&key)
+                .unwrap_or_else(|| panic!("{label}: {key:?} not in aux"));
+            assert!(
+                (p.x - a.x).abs() <= 5e-7 + 1e-6 * a.x.abs(),
+                "{label} {key:?} X {} vs {}",
+                p.x,
+                a.x
+            );
+            assert_eq!(p.is_transformer(), a.is_transformer(), "{label} {key:?}");
+        }
+        assert!(
+            aux_by_id.is_empty(),
+            "{label}: aux branches missing: {aux_by_id:?}"
+        );
+    }
 }

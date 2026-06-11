@@ -166,6 +166,9 @@ enum FormatArg {
     /// Read a gridfm-datakit Parquet dataset directory (read-only).
     #[value(name = "gridfm")]
     Gridfm,
+    /// Read a PowerWorld .pwb binary case (read-only).
+    #[value(name = "pwb")]
+    Pwb,
 }
 
 impl FormatArg {
@@ -182,6 +185,7 @@ impl FormatArg {
             FormatArg::Gridfm => anyhow::bail!(
                 "`convert` cannot write a gridfm dataset; use the `gridfm` subcommand"
             ),
+            FormatArg::Pwb => anyhow::bail!("PowerWorld .pwb is read only; it cannot be a target"),
         })
     }
 
@@ -197,6 +201,7 @@ impl FormatArg {
             FormatArg::Psse => "psse",
             FormatArg::PowerWorld => "powerworld",
             FormatArg::Gridfm => "gridfm",
+            FormatArg::Pwb => "pwb",
         }
     }
 }

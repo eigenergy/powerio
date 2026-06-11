@@ -134,7 +134,15 @@ class Network:
     name: str
     base_mva: float
     source_format: Literal[
-        "Matpower", "PowerModelsJson", "EgretJson", "Psse", "PowerWorld", "InMemory", "Normalized"
+        "Matpower",
+        "PowerModelsJson",
+        "EgretJson",
+        "Psse",
+        "PowerWorld",
+        "PowerWorldBinary",
+        "Gridfm",
+        "InMemory",
+        "Normalized",
     ]
     n_buses: int
     n_branches: int
