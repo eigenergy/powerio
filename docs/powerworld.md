@@ -236,11 +236,21 @@ reject until its differential fit lands. The 39 bus sample case (header
 
 The TAMU repository sets re-downloaded in June 2026 supply what that fit
 was missing, same source aux siblings for the bit 6/8 family: ACTIVSg500
-(header 425, flags 0x66 through 0x177, all 500 bus heads parse),
-the published ACTIVSg2000 set (header 425, all 2000 heads), and Hawaii40
-(header 508, a 130 KiB case whose heads still parse, small enough to
-fit by eye). These classify and reject today and are the named oracles
-for the bit 6/8 era decode.
+(header 425), the published ACTIVSg2000 set (header 425), and Hawaii40
+(header 508). With the flag masks widened to admit bits 6 and 8 (both
+leave the bus head layout untouched; their fields live in the undecoded
+tails), the two ACTIVSg2000 current era exports decode end to end with
+exact element counts. ACTIVSg500 probes exactly through buses (500),
+loads (206, P total exact), generators (90, the aux bus multiset exact,
+f32 block at +11), and shunts (17, MVAr total exact), but its branch
+table embeds variable length structures between or inside record tails,
+some tens or hundreds of KiB (contingency label text such as
+"L_000124SALEM31-..." with "Applied:" memos is visible inside them), so
+the record resync loses the trail at record 73 and the file stays
+rejected. Skipping those blobs deterministically needs their grammar:
+that tail fit is the core of the bit 6/8 era work, with ACTIVSg500 and
+Hawaii40 (whose 508 header is one constant away once the records prove
+out) as the oracles.
 
 ### Load record (validated on all 160 + 1417 + 1350 + 5095 loads of four files)
 
@@ -361,14 +371,14 @@ checksum and recorded URL by `benchmarks/fetch_powerworld.sh`.
 | RTS-GMLC.PWB | fetched (GridMod/RTS-GMLC @3ece0d3) | 425 | 0x06/0x07 | same commit .m + .RAW | decoded, parity | 73 buses, 120 branches |
 | Texas7k 2021 export | local only | 483 | 0x66-0x167 | aux sibling available | rejected: header constant; buses, loads, shunts, branches decode in probes, the generator record is a new layout | 6717 buses, 5095 loads, 634 shunts probe exactly |
 | Texas7k v21/v22/2030 saves | local only | 508/537/550/551 | unprobed | — | rejected: header constant | |
-| ACTIVSg2000 current era export | local only | 425 | 0x66-0x177 | published case | rejected: bus flag bits 6/8 not validated | |
 | 39 bus sample case | local only | 425 | none found | — | rejected: no recognized bus record layout | |
 | 118 bus sample case | local only | 338 | — | — | rejected: header constant | |
 | 12 bus course case (+ v21 resave) | local only | 134 / 508 | — | — | rejected: header constant | |
 | 10 bus sample case | local only | 196 | — | — | rejected: header constant | |
 | 3 bus sample case | local only | pre 425 shape | — | — | rejected: header words | |
-| ACTIVSg500 export | local only | 425 | 0x66-0x177 | aux sibling available | rejected: bus flag bits 6/8 not validated | 500 heads parse |
-| ACTIVSg2000 published set export | local only | 425 | 0x66-0x177 | aux sibling available | rejected: bus flag bits 6/8 not validated | 2000 heads parse |
+| ACTIVSg500 export | local only | 425 | 0x66-0x177 | aux sibling available | rejected: branch record tails embed undecoded variable structures | buses/loads/gens/shunts probe exactly |
+| ACTIVSg2000 published set export | local only | 425 | 0x66-0x177 | aux sibling available | decoded, counts verified; value parity test pending | 2000 buses, 3206 branches |
+| ACTIVSg2000 current era export | local only | 425 | 0x66-0x177 | published case | decoded, counts verified; value parity test pending | 2000 buses, 3206 branches |
 | Hawaii40 2022 export | local only | 508 | 0x66-0x167 | aux sibling available | rejected: header constant | 37 heads parse in probes |
 | .pwd display files | local/fetched | — | — | — | out of scope this pass (M5 probe) | |
 

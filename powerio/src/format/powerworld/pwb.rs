@@ -273,22 +273,27 @@ struct BusHead {
     /// era record family (clear on the Simulator 19 era 0x06/0x07 family,
     /// whose tails are shorter), bit 4 set marks a count prefixed list in
     /// the record tail (2016/2017 era exports), bit 0 clear means one extra
-    /// u16 sits before the nominal kV (observed on generator buses).
+    /// u16 sits before the nominal kV (observed on generator buses). The
+    /// 2019+ era writers add bit 6 (constant within a file) and the per
+    /// record bit 8; both put their fields in the undecoded tail.
     unk: u32,
 }
 
 /// Whether a bus record flag word is one this reader decodes: base bits
-/// `0x06` plus any combination of bits 0, 4, and 5 (see [`BusHead::unk`]).
-/// All eight combinations are observed in the corpus (the census table in
-/// docs/powerworld.md).
+/// `0x06` plus any combination of bits 0, 4, 5, 6, and 8 (see
+/// [`BusHead::unk`]); the census table in docs/powerworld.md records the
+/// observed words. Bits 6 and 8 are the 2019+ era writers' additions; both
+/// leave the head layout untouched (their fields live in the tails the
+/// resync skips), proven by full value parity on the ACTIVSg500 and
+/// published ACTIVSg2000 exports.
 fn known_bus_flags(unk: u32) -> bool {
-    unk & !0x31 == 0x06
+    unk & !0x171 == 0x06
 }
 
 /// The record family bits of a bus flag word: everything but the per record
-/// presence bits 0 and 4. One file's bus table never mixes families.
+/// presence bits 0, 4, and 8. One file's bus table never mixes families.
 fn bus_family(unk: u32) -> u32 {
-    unk & !0x11
+    unk & !0x111
 }
 
 /// Bus table candidates: each `(count, glue)` position after the header whose
