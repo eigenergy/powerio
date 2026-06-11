@@ -420,6 +420,30 @@ fn powermodels_unbounded_limit_round_trips_as_infinity() {
 }
 
 #[test]
+fn parse_file_accepts_uppercase_and_mixed_case_extensions() {
+    // Issue #97: .RAW / .Raw / .M should work identically to their lowercase forms.
+    // Extension detection must be case-insensitive.
+    let dir = std::env::temp_dir();
+
+    let raw_src = std::fs::read_to_string(data("psse/case14.raw")).unwrap();
+    for ext in ["RAW", "Raw", "rAw"] {
+        let path = dir.join(format!("powerio_test_issue97.{ext}"));
+        std::fs::write(&path, &raw_src).unwrap();
+        let result = parse_file(&path, None);
+        let _ = std::fs::remove_file(&path);
+        let net = result.unwrap_or_else(|e| panic!(".{ext} extension should be accepted: {e}"));
+        assert_eq!(net.buses.len(), 14, ".{ext}: wrong bus count");
+    }
+
+    let m_src = std::fs::read_to_string(data("case14.m")).unwrap();
+    let path = dir.join("powerio_test_issue97.M");
+    std::fs::write(&path, &m_src).unwrap();
+    let result = parse_file(&path, None);
+    let _ = std::fs::remove_file(&path);
+    result.unwrap_or_else(|e| panic!(".M extension should be accepted: {e}"));
+}
+
+#[test]
 fn oos_fixture_marks_out_of_service_elements() {
     // t_case9_oos.m turns gen 2 and branch 5-6 out of service; the parse must carry
     // those in_service=false flags.

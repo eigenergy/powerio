@@ -153,17 +153,20 @@ pub fn parse_file(path: impl AsRef<std::path::Path>, from: Option<&str>) -> Resu
     let text = std::fs::read_to_string(path)?;
     let fmt = match from {
         Some(f) => target_format_from_name(f).ok_or_else(|| Error::UnknownFormat(f.to_string()))?,
-        None => match path.extension().and_then(|e| e.to_str()) {
-            Some("m") => TargetFormat::Matpower,
-            Some("json") => sniff_json(&text),
-            Some("raw") => TargetFormat::Psse,
-            Some("aux") => TargetFormat::PowerWorld,
-            other => {
-                return Err(Error::UnknownFormat(format!(
-                    "cannot infer from file extension {other:?}; pass an explicit source format"
-                )));
+        None => {
+            let ext = path.extension().and_then(|e| e.to_str());
+            match ext.map(str::to_ascii_lowercase).as_deref() {
+                Some("m") => TargetFormat::Matpower,
+                Some("json") => sniff_json(&text),
+                Some("raw") => TargetFormat::Psse,
+                Some("aux") => TargetFormat::PowerWorld,
+                _ => {
+                    return Err(Error::UnknownFormat(format!(
+                        "cannot infer from file extension {ext:?}; pass an explicit source format"
+                    )));
+                }
             }
-        },
+        }
     };
     // The file stem is the name hint for formats that don't carry their own name.
     let stem = path.file_stem().and_then(|s| s.to_str());
