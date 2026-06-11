@@ -223,11 +223,12 @@ Newer writers widen the family with bits 6 and 8: Texas7k_20210804.PWB
 through the solved voltage, with bit 8 varying per record like bit 0 and
 bit 6 file constant. The Texas7k chain behind the bus table, probed
 against its same day aux: loads (count 5095, layout unchanged, P total
-exact), then generators (count 731, a NEW record layout: the leading u32
-is not the device bus, two records can share it and it can name a bus
-that has no machine, so it is probably the regulated bus with the device
-bus deeper in the record; 246 records coincidentally parse like 425 era
-ones), then shunts (count 634, MVAr at +24, total exact), then branches
+exact), then generators (count 731 in aux row order; the leading u32
+equals the aux BusNum on roughly three quarters of the records, but the
+rest store a nearby bus and regroup unit IDs, e.g. units the aux puts at
+111208 and 111209 stored as units 1 and 2 of 111207, and no encoding of
+the aux bus appears elsewhere in those records, which suggests node level
+storage that the aux consolidation maps differently), then shunts (count 634, MVAr at +24, total exact), then branches
 (count 9140, the three inline rating 0xEC layout, first records parse).
 The generator record blocks the 483 decode; these files classify and
 reject until its differential fit lands. The 39 bus sample case (header
