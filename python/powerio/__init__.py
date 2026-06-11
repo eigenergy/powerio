@@ -18,6 +18,10 @@ and graph views solvers need::
     Y = net.ybus()                           # complex csr, G + jB
     G = net.to_networkx()                    # networkx.Graph keyed by bus id
 
+PyPSA CSV folders carry the static network topology (PyPSA's native component
+format for network definition); time-series NetCDF/HDF5 scenarios are out of
+scope for now (https://github.com/eigenergy/powerio/issues/107).
+
 ``import powerio`` and parsing/writing/converting pull in nothing but the
 interpreter. The matrix methods need scipy/numpy and the graph view needs networkx; add them
 with ``pip install 'powerio[matrix]'``, ``[graph]``, or ``[all]``. A missing

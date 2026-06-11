@@ -61,6 +61,11 @@ The written folder can be imported with
 `pypsa.Network().import_from_csv_folder(path)`. PyPSA itself is not a runtime
 dependency of powerio.
 
+CSV folders are PyPSA's native static component format and carry the network
+topology (buses, lines, generators, loads, shunts) — the part powerio models.
+Time-series scenarios in NetCDF/HDF5 are out of scope for now; support is
+tracked in [#107](https://github.com/eigenergy/powerio/issues/107).
+
 ## GridFM reads
 
 The native wheel includes the GridFM Parquet writer and reader.

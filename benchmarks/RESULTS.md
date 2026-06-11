@@ -121,16 +121,12 @@ What each column checks:
   ids). powerio's first-class loads and shunts are summed back onto their bus for
   the per-bus comparison. `_m2ppc` is used instead of `from_mpc` because it runs
   before the `from_ppc` step that raises on dclines and parallel branches.
-
-The issue-47 converter suite adds two more oracle legs to
-`benchmarks/run_validation.sh`:
-
-- **pp-json** (`validate_pandapower_converter.py`): powerio writes pandapower
-  `pandapowerNet` JSON, pandapower imports it, and the script compares counts
-  plus the full Y_bus against powerio's matrix builder.
-- **pypsa** (`validate_pypsa.py`): powerio writes a PyPSA CSV folder, PyPSA
-  imports it, and the script compares counts, load/generation totals, and line
-  parameters converted back to powerio's per-unit basis.
+- **pp-json** (`validate_pandapower_converter.py`): powerio's pandapower
+  `pandapowerNet` JSON writer: pandapower imports the output, and counts plus
+  the full Y_bus are compared against powerio's matrix builder.
+- **pypsa** (`validate_pypsa.py`): powerio's PyPSA CSV folder writer: PyPSA
+  imports the output, and counts, load/generation totals, and line parameters
+  (converted back to powerio's per-unit basis) are compared.
 
 ### Full reader × writer matrix
 
