@@ -239,8 +239,9 @@ was missing, same source aux siblings for the bit 6/8 family: ACTIVSg500
 (header 425), the published ACTIVSg2000 set (header 425), and Hawaii40
 (header 508). With the flag masks widened to admit bits 6 and 8 (both
 leave the bus head layout untouched; their fields live in the undecoded
-tails), the two ACTIVSg2000 current era exports decode end to end with
-exact element counts. ACTIVSg500 probes exactly through buses (500),
+tails), the two ACTIVSg2000 current era exports decode end to end, and
+the published set export carries full value parity against its same set
+aux on every decoded quantity (the test next to the other vintages'). ACTIVSg500 probes exactly through buses (500),
 loads (206, P total exact), generators (90, the aux bus multiset exact,
 f32 block at +11), and shunts (17, MVAr total exact), but its branch
 table embeds variable length structures between or inside record tails,
@@ -377,7 +378,7 @@ checksum and recorded URL by `benchmarks/fetch_powerworld.sh`.
 | 10 bus sample case | local only | 196 | — | — | rejected: header constant | |
 | 3 bus sample case | local only | pre 425 shape | — | — | rejected: header words | |
 | ACTIVSg500 export | local only | 425 | 0x66-0x177 | aux sibling available | rejected: branch record tails embed undecoded variable structures | buses/loads/gens/shunts probe exactly |
-| ACTIVSg2000 published set export | local only | 425 | 0x66-0x177 | aux sibling available | decoded, counts verified; value parity test pending | 2000 buses, 3206 branches |
+| ACTIVSg2000 published set export | local only | 425 | 0x66-0x177 | same set aux | decoded, parity on every quantity | 2000 buses, 3206 branches |
 | ACTIVSg2000 current era export | local only | 425 | 0x66-0x177 | published case | decoded, counts verified; value parity test pending | 2000 buses, 3206 branches |
 | Hawaii40 2022 export | local only | 508 | 0x66-0x167 | aux sibling available | rejected: header constant | 37 heads parse in probes |
 | .pwd display files | local/fetched | — | — | — | out of scope this pass (M5 probe) | |
