@@ -78,6 +78,32 @@ pub(crate) fn parse_powerworld_source(
         &[LINE_CIRCUIT, "Circuit"],
     ]);
     for blk in aux.data() {
+        let mapped = matches!(
+            blk.object_type.as_str(),
+            "Bus" | "Load" | "Shunt" | "Gen" | "Branch" | "Transformer"
+        );
+        // Name keyed exports (the 2030 era "complete case using labels"
+        // option) identify devices by BusName_NomVolt with no bus number
+        // column; absorbing them would collapse rows on empty keys and
+        // surface as an incidental reference error far from the cause.
+        // The Bus section is exempt: it carries BusNum alongside the label.
+        if mapped
+            && blk.object_type != "Bus"
+            && blk.field_index("BusName_NomVolt").is_some()
+            && ["BusNum", "BusNumFrom", "Number"]
+                .iter()
+                .all(|k| blk.field_index(k).is_none())
+        {
+            return Err(Error::FormatRead {
+                format: FMT,
+                message: format!(
+                    "the {} section is keyed by BusName_NomVolt (a name keyed \
+                     export); only bus number keyed exports are supported — \
+                     re-export the complete case keyed by bus number",
+                    blk.object_type
+                ),
+            });
+        }
         match blk.object_type.as_str() {
             "Bus" => merged_buses.absorb(blk, true),
             "Load" => merged_loads.absorb(blk, true),
@@ -248,25 +274,35 @@ fn f_or(r: &Row, key: &str, default: f64) -> Result<f64> {
 fn uid(r: &Row, key: &str) -> Result<usize> {
     match r.get(key).copied() {
         None | Some("") => Ok(0),
+        // Parse through f64 (some exports print ids with a decimal point)
+        // but reject anything a float to integer cast would silently bend:
+        // NaN and negatives saturate to 0 and rewire the network, huge
+        // values to usize::MAX, fractions truncate.
         #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
-        Some(s) => s
-            .trim()
-            .parse::<f64>()
-            .map(|v| v as usize)
-            .map_err(|_| bad_field(key, s)),
+        Some(s) => match s.trim().parse::<f64>() {
+            Ok(v) if v.is_finite() && v.fract() == 0.0 && (0.0..=4_294_967_295.0).contains(&v) => {
+                Ok(v as usize)
+            }
+            _ => Err(bad_field(key, s)),
+        },
     }
 }
-fn on(r: &Row, key: &str) -> bool {
-    !matches!(
-        r.get(key).copied().map(str::trim),
-        Some("Open" | "OPEN" | "0")
-    )
+fn on(r: &Row, key: &str) -> Result<bool> {
+    // A closed vocabulary: an unrecognized status token must not silently
+    // mean energized (the same contract f_or applies to numbers). Absent
+    // or empty keeps the documented in service default.
+    match r.get(key).copied().map(str::trim) {
+        None | Some("") => Ok(true),
+        Some(tok) if tok.eq_ignore_ascii_case("Closed") || tok == "1" => Ok(true),
+        Some(tok) if tok.eq_ignore_ascii_case("Open") || tok == "0" => Ok(false),
+        Some(tok) => Err(bad_field(key, tok)),
+    }
 }
 /// [`on`] over the first present field among `keys` (naming generations).
-fn on_alias(r: &Row, keys: &[&str]) -> bool {
+fn on_alias(r: &Row, keys: &[&str]) -> Result<bool> {
     match keys.iter().find(|k| r.contains_key(*k)) {
         Some(k) => on(r, k),
-        None => true,
+        None => Ok(true),
     }
 }
 /// [`uid`] over the first present, non-empty field among `keys`.
@@ -429,7 +465,7 @@ fn read_load(r: &Row) -> Result<Load> {
         bus: BusId(uid(r, "BusNum")?),
         p,
         q,
-        in_service: on_alias(r, &["LoadStatus", "Status"]),
+        in_service: on_alias(r, &["LoadStatus", "Status"])?,
         extras,
     })
 }
@@ -443,7 +479,7 @@ fn read_shunt(r: &Row) -> Result<Shunt> {
         // the 2022 vocabulary); ShuntMW/ShuntMVR from our writer.
         g: f_alias(r, &["ShuntMW", "SSNMW", "MWNom"], 0.0)?,
         b: f_alias(r, &["ShuntMVR", "SSNMVR", "MvarNom"], 0.0)?,
-        in_service: on_alias(r, &["ShuntStatus", "SSStatus", "Status"]),
+        in_service: on_alias(r, &["ShuntStatus", "SSStatus", "Status"])?,
         extras,
     })
 }
@@ -465,7 +501,7 @@ fn read_gen(r: &Row) -> Result<Generator> {
         qmin: f_alias(r, &["GenMVRMin", "MvarMin"], 0.0)?,
         vg: f_alias(r, &["GenVoltSet", "VoltSet"], 1.0)?,
         mbase: f_alias(r, &["GenMVABase", "MVABase"], 100.0)?,
-        in_service: on_alias(r, &["GenStatus", "Status"]),
+        in_service: on_alias(r, &["GenStatus", "Status"])?,
         cost: None,
         caps: Default::default(),
     })
@@ -488,7 +524,12 @@ fn read_branch(r: &Row) -> Result<Branch> {
     // tap under `:1` locations (values on the system base after correction);
     // line records use the bare names. Our writer's LineXFRatio is the tap
     // fallback.
-    let tap = f_alias(r, &["LineTap:1", "Tapxfbase", "LineXFRatio"], 1.0)?;
+    // 2016 era exports use the bare name here like everywhere else.
+    let tap = f_alias(
+        r,
+        &["LineTap:1", "Tapxfbase", "LineXFRatio", "LineTap"],
+        1.0,
+    )?;
     Ok(Branch {
         from: BusId(uid_alias(r, &["BusNum", "BusNumFrom"])?),
         to: BusId(uid_alias(r, &["BusNum:1", "BusNumTo"])?),
@@ -500,7 +541,7 @@ fn read_branch(r: &Row) -> Result<Branch> {
         rate_c: f_alias(r, &["LineAMVA:2", "LineCMVA", "LimitMVAC"], 0.0)?,
         tap: if is_xf { tap } else { 0.0 },
         shift: f_alias(r, &["LinePhase", "Phase"], 0.0)?,
-        in_service: on_alias(r, &["LineStatus", "Status"]),
+        in_service: on_alias(r, &["LineStatus", "Status"])?,
         angmin: -360.0,
         angmax: 360.0,
         extras,

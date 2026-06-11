@@ -106,8 +106,10 @@ Counts that survived the baseline: 200 buses, 49 generators, 160 loads,
   `Transformer` sections only augment existing branches.
 - Transformer records in Simulator 20 era exports carry impedance and tap
   under `:1` locations (`LineR:1`, `LineTap:1`); 2016 era exports use the
-  bare names for everything. `LineTap` equals the MATPOWER tap convention
-  (verified on all 66 ACTIVSg200 and 562 Texas2000 transformers).
+  bare names for everything, tap included. `LineTap` equals the MATPOWER
+  tap convention (verified on all 66 ACTIVSg200 and 562 Texas2000
+  transformers, every one of which stores 1.0, so the off nominal bare
+  name path is pinned by a synthetic test rather than parity).
 - 2022 era exports (Simulator 21+, the Hawaii40 set) write a third naming
   generation: concise headers with `Number`/`Name`/`NomkV`/`Vpu`/`Vangle`
   on buses, `ID`/`Status`/`SMW`/`SMvar` on devices,

@@ -282,6 +282,9 @@ impl<'a> Parser<'a> {
         let close = header
             .rfind(')')
             .ok_or_else(|| self.err("header has no `)`"))?;
+        if close <= open {
+            return Err(self.err("header `)` precedes `(`"));
+        }
         let before = header[..open].trim();
         let inner = &header[open + 1..close];
         let legacy = first_word_is(before, "DATA");
@@ -441,8 +444,11 @@ fn subdata_open(line: &str) -> Option<&str> {
 
 /// Does `text` start with `word` as a whole word (case insensitive)?
 fn first_word_is(text: &str, word: &str) -> bool {
-    text.len() >= word.len()
-        && text[..word.len()].eq_ignore_ascii_case(word)
+    // `get` instead of indexing: `word.len()` may land inside a multibyte
+    // character on arbitrary input text, where slicing would panic; a non
+    // boundary there correctly means the keyword is not present whole.
+    text.get(..word.len())
+        .is_some_and(|head| head.eq_ignore_ascii_case(word))
         && !text[word.len()..]
             .chars()
             .next()

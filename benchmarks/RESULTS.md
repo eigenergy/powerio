@@ -79,9 +79,9 @@ fetched. Median wall time, same machine as above.
 <!-- BENCH:powerworld START -->
 | case | buses / branches | aux | pwb |
 | --- | --- | --- | --- |
-| ACTIVSg200 | 200 / 246 | 2.60 ms | 0.37 ms |
-| ACTIVSg2000 June 2016 | 2007 / 3043 | 30.1 ms | 3.01 ms |
-| RTS-GMLC | 73 / 120 | n/a | 10.8 ms |
+| ACTIVSg200 | 200 / 246 | 2.60 ms | 0.34 ms |
+| ACTIVSg2000 June 2016 | 2007 / 3043 | 30.1 ms | 2.81 ms |
+| RTS-GMLC | 73 / 120 | n/a | 10.7 ms |
 | Texas7k (local TAMU copy) | 6717 / 9140 | 69.0 ms | 11.8 ms |
 <!-- BENCH:powerworld END -->
 
@@ -110,10 +110,12 @@ monomorphize, and the header constant keys which generator layouts the
 search admits (425 files never carry the regulated bus shape, 483
 through 551 files never carry the older one, 508 saves exist with both
 and try the two in sequence), which also keeps a layout the file cannot
-carry from outbidding the right one. With those, the 425 era files parse
-at the pre widening numbers and the other Texas7k saves decode in 49 ms
-(v21), 39 ms (v22 and the 2030 builds), and 33 ms (the scenario
-snapshot; release, parse only). A branch flag mask keyed to the detected
+carry from outbidding the right one. With those, plus probe orderings
+that run the most selective checks first (the bus flag mask before the
+name text scan, the generator block ranges as the values read), the 425
+era files parse below the pre widening numbers and the other Texas7k
+saves decode in 48 ms (v21) and about 20 ms each (v22, the 2030 builds,
+the scenario snapshot; release, parse only). A branch flag mask keyed to the detected
 generator layout was also tried and rejected: it turns real records
 invisible to the table end check on the newer files, and a forged short
 table can win (see known_branch_flags in the reader). Every structural

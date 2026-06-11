@@ -214,8 +214,13 @@ fn activsg2000_june2016_aux_vs_matpower_values() {
                 a.pg,
                 b.pg
             );
+            assert!((a.qg - b.qg).abs() < 5.01e-3, "bus {bus} qg");
             assert!((a.pmax - b.pmax).abs() < 5.01e-3, "bus {bus} pmax");
+            assert!((a.pmin - b.pmin).abs() < 5.01e-3, "bus {bus} pmin");
             assert!((a.qmax - b.qmax).abs() < 5.01e-3, "bus {bus} qmax");
+            assert!((a.qmin - b.qmin).abs() < 5.01e-3, "bus {bus} qmin");
+            assert!((a.vg - b.vg).abs() < 5.01e-5, "bus {bus} vg");
+            assert!((a.mbase - b.mbase).abs() < 5.01e-3, "bus {bus} mbase");
         }
     }
 
@@ -254,11 +259,19 @@ fn activsg2000_june2016_aux_vs_matpower_values() {
                 mb.effective_tap()
             );
             assert!(
+                (ab.b - mb.b).abs() < 1e-5,
+                "{pair:?} B {} vs {}",
+                ab.b,
+                mb.b
+            );
+            assert!(
                 (ab.rate_a - mb.rate_a).abs() < 5e-2,
                 "{pair:?} rate_a {} vs {}",
                 ab.rate_a,
                 mb.rate_a
             );
+            assert!((ab.rate_b - mb.rate_b).abs() < 5e-2, "{pair:?} rate_b");
+            assert!((ab.rate_c - mb.rate_c).abs() < 5e-2, "{pair:?} rate_c");
             compared += 1;
         }
     }

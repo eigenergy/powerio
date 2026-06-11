@@ -27,7 +27,7 @@ use std::sync::Arc;
 
 use serde_json::{Map, Value};
 
-use crate::network::{Network, SourceFormat};
+use crate::network::{BusType, Network, SourceFormat};
 use crate::{Error, Result};
 
 mod egret;
@@ -161,36 +161,46 @@ pub fn parse_file(path: impl AsRef<std::path::Path>, from: Option<&str>) -> Resu
         let stem = path.file_stem().and_then(|s| s.to_str());
         return powerworld::parse_pwb(&bytes, stem);
     }
+    // Settle the format before touching the file: an unmapped or binary
+    // extension must surface as UnknownFormat, not as the UTF-8 read error
+    // the text formats' loader would hit first. `.pwd` gets its own arm
+    // because the display sibling ships next to every case file in the wild
+    // and carries no case data.
+    if from.is_none() && ext.as_deref() == Some("pwd") {
+        return Err(Error::UnknownFormat(
+            "a PowerWorld .pwd is the oneline display, not case data; \
+             powerworld::parse_pwd reads its substation coordinates"
+                .into(),
+        ));
+    }
+    let fmt_hint = match from {
+        Some(f) => {
+            Some(target_format_from_name(f).ok_or_else(|| Error::UnknownFormat(f.to_string()))?)
+        }
+        None => {
+            // Everything but `.json` (sniffed below) resolves without the text.
+            match ext.as_deref() {
+                Some("m") => Some(TargetFormat::Matpower),
+                Some("raw") => Some(TargetFormat::Psse),
+                Some("aux") => Some(TargetFormat::PowerWorld),
+                Some("json") => None,
+                other => {
+                    return Err(Error::UnknownFormat(format!(
+                        "cannot infer from file extension {other:?}; \
+                         pass an explicit source format"
+                    )));
+                }
+            }
+        }
+    };
     // Read the file once into an owned buffer; the reader moves it straight into
     // the retained source (byte-exact round-trip) with no copy. Sniffing a
     // `.json` borrows the text before the move.
     let text = std::fs::read_to_string(path)?;
-    let fmt = match from {
-        Some(f) => target_format_from_name(f).ok_or_else(|| Error::UnknownFormat(f.to_string()))?,
-        None => format_from_extension(path, &text)?,
-    };
+    let fmt = fmt_hint.unwrap_or_else(|| sniff_json(&text));
     // The file stem is the name hint for formats that don't carry their own name.
     let stem = path.file_stem().and_then(|s| s.to_str());
     read_source(Arc::new(text), fmt, stem)
-}
-
-/// Map a file extension to a [`TargetFormat`], case-insensitively (issue #97:
-/// `.RAW` is as common as `.raw` in the wild). A `.json` is sniffed for the
-/// egret vs PowerModels shape. The error keeps the extension as the user wrote
-/// it.
-fn format_from_extension(path: &std::path::Path, text: &str) -> Result<TargetFormat> {
-    let ext = path.extension().and_then(|e| e.to_str());
-    Ok(match ext.map(str::to_ascii_lowercase).as_deref() {
-        Some("m") => TargetFormat::Matpower,
-        Some("json") => sniff_json(text),
-        Some("raw") => TargetFormat::Psse,
-        Some("aux") => TargetFormat::PowerWorld,
-        _ => {
-            return Err(Error::UnknownFormat(format!(
-                "cannot infer from file extension {ext:?}; pass an explicit source format"
-            )));
-        }
-    })
 }
 
 /// Read an owned `source` buffer as `fmt`, using `name_hint` (e.g. the file
@@ -296,6 +306,7 @@ pub fn write_as(net: &Network, format: TargetFormat) -> Conversion {
         TargetFormat::Matpower => matpower::write_matpower_conversion(net),
     };
     warn_normalized_tap(net, format, &mut conv);
+    warn_missing_reference(net, format, &mut conv);
     conv
 }
 
@@ -341,6 +352,26 @@ pub fn convert_str(text: &str, to: TargetFormat, format: &str) -> Result<Convers
 /// column), so it is exempt.
 // `tap == 1.0` / `shift == 0.0` are exact by construction: normalization sets a
 // line's tap from `effective_tap()` (the literal `1.0`) and its shift from
+/// Warn when a network with no reference (slack) bus converts to a format
+/// whose solvers require one. PowerWorld `.pwb` is the one source that
+/// systematically lacks the designation (the binary does not store it), so
+/// the silent case would be common; `to_normalized` synthesizes a slack at
+/// the largest pmax in service generator bus for consumers that need one.
+fn warn_missing_reference(net: &Network, format: TargetFormat, conv: &mut Conversion) {
+    let needs_ref = matches!(
+        format,
+        TargetFormat::Matpower | TargetFormat::Psse | TargetFormat::PowerModelsJson
+    );
+    if needs_ref && !net.buses.iter().any(|b| b.kind == BusType::Ref) {
+        conv.warnings.push(
+            "no reference (slack) bus in the source network; power flow tools \
+             reject such cases — to_normalized synthesizes a slack at the \
+             largest pmax in service generator bus"
+                .to_string(),
+        );
+    }
+}
+
 // `0.0 * DEG_TO_RAD` (exactly `0.0`), so an epsilon compare would be wrong here.
 #[allow(clippy::float_cmp)]
 fn warn_normalized_tap(net: &Network, format: TargetFormat, conv: &mut Conversion) {

@@ -13,7 +13,8 @@
 //! must be values this reader has seen and verified). A file that does not
 //! match the validated layout fails loudly; nothing is guessed silently.
 //!
-//! Supported vintages, behind header format constants 425 through 551:
+//! Supported vintages, behind the six decoded header format constants
+//! (425, 483, 508, 537, 550, 551):
 //! the Simulator 19 era writer (bus record flag family `0x06`, the June 2016
 //! ACTIVSg2000 export, validated field by field against its same day aux
 //! sibling), the Simulator 20 era writer (flag family `0x26`: the 2018
@@ -68,6 +69,11 @@
 //! - Branch ratings beyond the inline slots (two or three, by flag bit 1)
 //!   are zero in every available case; the trailing rating block is
 //!   validated as zero filled f32s and read as zero ratings.
+//! - Bus voltage limits are not decoded; buses read with the 1.1/0.9
+//!   defaults the aux reader also falls back to when the per rating set
+//!   fields are absent.
+//! - Branch angle limits have no PowerWorld field at all; branches read
+//!   with the +-360 degree placeholder every reader uses for absence.
 
 use std::cell::RefCell;
 use std::collections::HashMap;
@@ -131,17 +137,22 @@ pub fn parse_pwb(bytes: &[u8], name_hint: Option<&str>) -> Result<Network> {
     // bus_table_candidates); the wide retry exists so a small node level
     // resave (a bus table under 256 records with the v21 writer's 52 byte
     // glue) is a second slower search instead of a coverage cliff. The
-    // retry only runs on files the narrow search already failed.
-    match search_table_chain(bytes, name_hint, gen_variants, false) {
+    // retry only runs on files the narrow search already failed, enumerates
+    // only the glue combinations the narrow pass could not reach, and
+    // shares the bus run cache so nothing is walked twice.
+    let bus_runs = RefCell::new(HashMap::new());
+    match search_table_chain(bytes, name_hint, gen_variants, &bus_runs, false) {
         Some(net) => net,
-        None => search_table_chain(bytes, name_hint, gen_variants, true).unwrap_or_else(|| {
-            Err(Error::FormatRead {
-                format: FMT,
-                message: "no table chain matches the validated .pwb layouts \
-                          (buses, loads, generators, shunts, branches in sequence)"
-                    .into(),
-            })
-        }),
+        None => search_table_chain(bytes, name_hint, gen_variants, &bus_runs, true).unwrap_or_else(
+            || {
+                Err(Error::FormatRead {
+                    format: FMT,
+                    message: "no table chain matches the validated .pwb layouts \
+                                  (buses, loads, generators, shunts, branches in sequence)"
+                        .into(),
+                })
+            },
+        ),
     }
 }
 
@@ -161,6 +172,7 @@ fn search_table_chain(
     bytes: &[u8],
     name_hint: Option<&str>,
     gen_variants: GenVariants,
+    bus_runs: &RefCell<BusRuns>,
     wide_bus_glue: bool,
 ) -> Option<Result<Network>> {
     // A count word can be forged by record interiors and the case
@@ -171,8 +183,7 @@ fn search_table_chain(
     // the backtracking affordable: candidates pointing at the same first
     // record share one walk however many count words and search retries
     // reach it.
-    let bus_runs = RefCell::new(HashMap::new());
-    for (buses, bus_end) in bus_table_candidates(bytes, &bus_runs, wide_bus_glue) {
+    for (buses, bus_end, last_bus_unk) in bus_table_candidates(bytes, bus_runs, wide_bus_glue) {
         let Some(bus_ids) = BusIdSet::new(&buses) else {
             continue; // duplicate ids: not a real bus table
         };
@@ -183,9 +194,19 @@ fn search_table_chain(
         let gen_reg_runs = RefCell::new(HashMap::new());
         let shunt_runs = RefCell::new(HashMap::new());
         let branch_runs = RefCell::new(HashMap::new());
-        for (loads, l_end) in
-            device_table_candidates(bytes, bus_end, &bus_ids, read_load_record, &load_runs, 48)
-        {
+        // The load table's count word sits past the final bus record's
+        // undecoded tail, which a bit 4 list can stretch beyond one window
+        // (the 2030 build's lists run 1341 bytes); the seam scan honors it
+        // exactly as the intra table stepping does.
+        let load_scan_end = resync_end(bytes, bus_end, last_bus_unk & 0x10 != 0);
+        for (loads, l_end) in device_table_candidates(
+            bytes,
+            bus_end..load_scan_end,
+            &bus_ids,
+            read_load_record,
+            &load_runs,
+            48,
+        ) {
             // The generator table reads through the record layouts the
             // header constant admits (see parse_pwb). A file's table uses
             // exactly one; each gets its own run cache and the structural
@@ -198,7 +219,14 @@ fn search_table_chain(
             let gen_candidates = gen_variants
                 .plain
                 .then(|| {
-                    device_table_candidates(bytes, l_end, &bus_ids, read_gen_record, &gen_runs, 48)
+                    device_table_candidates(
+                        bytes,
+                        l_end..l_end + RESYNC_WINDOW,
+                        &bus_ids,
+                        read_gen_record,
+                        &gen_runs,
+                        48,
+                    )
                 })
                 .into_iter()
                 .flatten()
@@ -208,7 +236,7 @@ fn search_table_chain(
                         .then(|| {
                             device_table_candidates(
                                 bytes,
-                                l_end,
+                                l_end..l_end + RESYNC_WINDOW,
                                 &bus_ids,
                                 read_gen_reg_record,
                                 &gen_reg_runs,
@@ -221,7 +249,7 @@ fn search_table_chain(
             for (generators, g_end) in gen_candidates {
                 for (shunts, s_end) in device_table_candidates(
                     bytes,
-                    g_end,
+                    g_end..g_end + RESYNC_WINDOW,
                     &bus_ids,
                     read_shunt_record,
                     &shunt_runs,
@@ -334,14 +362,20 @@ impl<'a> Cur<'a> {
     }
 }
 
+/// How far a bit 4 record's tail blob may push the next record: the largest
+/// observed blob is 406 KiB (an ACTIVSg500 branch record, see
+/// docs/powerworld.md), so four MiB is an order of magnitude of headroom
+/// while bounding what a crafted file can make the scan walk per record.
+const BLOB_WINDOW: usize = 4 << 20;
+
 /// How far the scan for the next record may look past `after`: one bounded
-/// window normally, the buffer end when the preceding record's flag bit 4
+/// window normally, the blob window when the preceding record's flag bit 4
 /// inserted a count prefixed list (the 2019+ era branch blobs run to 406 KiB
 /// and the 2030 build's bus lists past one window; the record head gauntlets
 /// keep blob bytes from forging a record).
 fn resync_end(b: &[u8], after: usize, prev_bit4: bool) -> usize {
     if prev_bit4 {
-        b.len()
+        (after + BLOB_WINDOW).min(b.len())
     } else {
         after + RESYNC_WINDOW
     }
@@ -430,9 +464,13 @@ fn unsupported_vintage(detail: impl std::fmt::Display) -> Error {
 /// Bus id membership for the record probes, the hottest check in the table
 /// search (every probed byte offset starts with one or two lookups). A
 /// bitmap over the id range replaces hashing; [`read_bus_head`] caps ids at
-/// 99,999,999 so the map is bounded, and the corpus tops out around 8200.
-struct BusIdSet {
-    words: Vec<u64>,
+/// 99,999,999 and the corpus tops out around 790,000, but a forged
+/// candidate can pair a tiny count with an id near the cap, so tables whose
+/// id range dwarfs their count fall back to a sorted list instead of
+/// allocating megabytes per forged candidate.
+enum BusIdSet {
+    Bitmap(Vec<u64>),
+    Sparse(Vec<usize>),
 }
 
 impl BusIdSet {
@@ -440,22 +478,34 @@ impl BusIdSet {
     /// forged candidate, not a real bus table.
     fn new(buses: &[Bus]) -> Option<Self> {
         let max = buses.iter().map(|b| b.id.0).max().unwrap_or(0);
-        let mut words = vec![0u64; max / 64 + 1];
-        for bus in buses {
-            let (w, bit) = (bus.id.0 / 64, 1u64 << (bus.id.0 % 64));
-            if words[w] & bit != 0 {
+        let words = max / 64 + 1;
+        if words > (buses.len() * 4).max(1024) {
+            let mut ids: Vec<usize> = buses.iter().map(|b| b.id.0).collect();
+            ids.sort_unstable();
+            if ids.windows(2).any(|w| w[0] == w[1]) {
                 return None;
             }
-            words[w] |= bit;
+            return Some(Self::Sparse(ids));
         }
-        Some(Self { words })
+        let mut bits = vec![0u64; words];
+        for bus in buses {
+            let (w, bit) = (bus.id.0 / 64, 1u64 << (bus.id.0 % 64));
+            if bits[w] & bit != 0 {
+                return None;
+            }
+            bits[w] |= bit;
+        }
+        Some(Self::Bitmap(bits))
     }
 
     #[inline]
     fn contains(&self, id: usize) -> bool {
-        self.words
-            .get(id / 64)
-            .is_some_and(|w| w & (1 << (id % 64)) != 0)
+        match self {
+            Self::Bitmap(words) => words
+                .get(id / 64)
+                .is_some_and(|w| w & (1 << (id % 64)) != 0),
+            Self::Sparse(ids) => ids.binary_search(&id).is_ok(),
+        }
     }
 }
 
@@ -550,13 +600,15 @@ fn bus_family(unk: u32) -> u32 {
 type BusRuns = HashMap<usize, (Run<(Bus, u32)>, u32)>;
 
 /// Bus table candidates: each `(count, glue)` position after the header whose
-/// record walk succeeds, in scan order. The caller validates each candidate
-/// by parsing the tables that must follow it.
+/// record walk succeeds, in scan order, yielding the records, the offset
+/// past the last decoded head, and the last record's flag word (the load
+/// table seam needs its bit 4). The caller validates each candidate by
+/// parsing the tables that must follow it.
 fn bus_table_candidates<'a>(
     b: &'a [u8],
     runs: &'a RefCell<BusRuns>,
     wide_glue: bool,
-) -> impl Iterator<Item = (Vec<Bus>, usize)> + 'a {
+) -> impl Iterator<Item = (Vec<Bus>, usize, u32)> + 'a {
     let limit = b.len().saturating_sub(4).min(0x10000);
     (0x20..limit).flat_map(move |at| {
         let count = u32::from_le_bytes(b[at..at + 4].try_into().unwrap()) as usize;
@@ -567,15 +619,27 @@ fn bus_table_candidates<'a>(
         // large counts (every observed wide glue table is a node level
         // resave with thousands of buses, and forged count words are
         // overwhelmingly small values, so widening their window prices
-        // every file). The retry pass widens it unconditionally so a small
-        // table with wide glue is found rather than rejected.
-        let max_glue = if wide_glue || count >= 256 { 96 } else { 48 };
-        let glues = (count != 0 && count <= 2_000_000).then_some(0..=max_glue);
+        // every file). The retry pass covers exactly the complement (the
+        // wide glues for small counts), so with the shared run cache the
+        // two passes together cost one full sweep.
+        let glues = if wide_glue {
+            (count != 0 && count < 256).then_some(49..=96)
+        } else {
+            let max_glue = if count >= 256 { 96 } else { 48 };
+            (count != 0 && count <= 2_000_000).then_some(0..=max_glue)
+        };
         glues
             .into_iter()
             .flatten()
             .filter_map(move |glue| bus_run(b, runs, at + 4 + glue, count))
-            .map(|(heads, end)| (heads.into_iter().map(|(bus, _)| bus).collect(), end))
+            .map(|(heads, end)| {
+                let last_unk = heads.last().map_or(0, |(_, unk)| *unk);
+                (
+                    heads.into_iter().map(|(bus, _)| bus).collect(),
+                    end,
+                    last_unk,
+                )
+            })
     })
 }
 
@@ -626,13 +690,23 @@ fn read_bus_head(b: &[u8], at: usize) -> Probe<(BusHead, usize)> {
     if num == 0 || num > 99_999_999 {
         return Err("implausible bus number");
     }
-    let name = c.string(64)?;
-    if name.is_empty() {
+    let name_len = c.u32()? as usize;
+    if name_len == 0 {
         return Err("empty bus name");
     }
+    if name_len > 64 {
+        return Err("string length exceeds the field maximum");
+    }
+    let name = c.take(name_len)?;
+    // The flag mask (a handful of admitted words out of 2^32) is far more
+    // selective than the name text scan, so it gates first; the accept set
+    // is unchanged, only the rejection order.
     let unk = c.u32()?;
     if !known_bus_flags(unk) {
         return Err("bus record flags not in the validated set");
+    }
+    if !printable(name) {
+        return Err("string has non printable bytes");
     }
     if unk & 1 == 0 {
         let _extra = c.u16()?;
@@ -720,14 +794,14 @@ fn read_shunt_record(b: &[u8], at: usize, bus_ids: &BusIdSet) -> Probe<(Shunt, u
 /// keeps a candidate only if the tables that must follow it parse too.
 fn device_table_candidates<'a, T: Clone + 'a>(
     b: &'a [u8],
-    from: usize,
+    scan: std::ops::Range<usize>,
     bus_ids: &'a BusIdSet,
     read: impl ReadRecord<T> + 'a,
     runs: &'a RefCell<HashMap<usize, Run<T>>>,
     max_glue: usize,
 ) -> impl Iterator<Item = (Vec<T>, usize)> + 'a {
-    let limit = (from + RESYNC_WINDOW).min(b.len().saturating_sub(4));
-    (from..limit).flat_map(move |at| {
+    let limit = scan.end.min(b.len().saturating_sub(4));
+    (scan.start..limit).flat_map(move |at| {
         let count = u32::from_le_bytes(b[at..at + 4].try_into().unwrap()) as usize;
         let glues = (count != 0 && count <= 10_000_000).then_some(0..=max_glue);
         glues
@@ -826,14 +900,18 @@ fn read_gen(c: &mut Cur, bus: BusId, id: &[u8]) -> Probe<Generator> {
 /// a block that fails them is not a generator record.
 fn read_gen_f32_block(c: &mut Cur) -> Probe<[f64; 8]> {
     let mut v = [0.0f64; 8];
-    for slot in &mut v {
-        *slot = c.f32()?;
-    }
-    let plausible = v.iter().all(|x| x.is_finite() && x.abs() < 1.0e6)
-        && (0.5..=1.6).contains(&v[4])
-        && (0.1..=1.0e5).contains(&v[5]);
-    if !plausible {
-        return Err("generator record does not match the validated layouts");
+    // Each slot checks as it reads, and the two anchor ranges right after
+    // their slots, so a forged offset stops within a few reads instead of
+    // always paying all eight; same predicates, same accept set.
+    for (i, slot) in v.iter_mut().enumerate() {
+        let x = c.f32()?;
+        if !x.is_finite() || x.abs() >= 1.0e6 {
+            return Err("generator record does not match the validated layouts");
+        }
+        if (i == 4 && !(0.5..=1.6).contains(&x)) || (i == 5 && !(0.1..=1.0e5).contains(&x)) {
+            return Err("generator record does not match the validated layouts");
+        }
+        *slot = x;
     }
     Ok(v)
 }
@@ -1005,8 +1083,13 @@ fn find_branch_table(
             continue;
         };
         if let Some((branches, after)) = branch_run(b, runs, first, count, bus_ids) {
-            let continues =
-                (after..after + RESYNC_WINDOW).any(|p| read_branch_head(b, p, bus_ids).is_ok());
+            // The end check must step exactly like the run: a bit 4 tail on
+            // the last record can hold more than one window of blob, and a
+            // forged short count ending on such a record would otherwise
+            // read as "no further record" and win.
+            let last_bit4 = branches.last().is_some_and(|(_, flags)| flags & 0x10 != 0);
+            let continues = (after..resync_end(b, after, last_bit4))
+                .any(|p| read_branch_head(b, p, bus_ids).is_ok());
             if !continues {
                 return Some(branches.into_iter().map(|(br, _)| br).collect());
             }
