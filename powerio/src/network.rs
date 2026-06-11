@@ -135,6 +135,10 @@ pub enum SourceFormat {
     EgretJson,
     Psse,
     PowerWorld,
+    /// Read from a PowerWorld `.pwb` binary case. Read only: there is no
+    /// `.pwb` writer and no retained source text, so writing goes through
+    /// another format's writer.
+    PowerWorldBinary,
     /// Built in memory (e.g. from synth or an edited case); no source text.
     InMemory,
     /// A normalized derived view ([`Network::to_normalized`]): per unit, radians,

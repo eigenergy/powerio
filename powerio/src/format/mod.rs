@@ -426,8 +426,13 @@ mod tests {
                 "source_format {token:?} did not round-trip"
             );
         }
-        // The derived/in-memory source formats have no writer target.
-        for sf in [SourceFormat::InMemory, SourceFormat::Normalized] {
+        // The derived/in-memory source formats have no writer target, and
+        // neither does the read only .pwb binary.
+        for sf in [
+            SourceFormat::InMemory,
+            SourceFormat::Normalized,
+            SourceFormat::PowerWorldBinary,
+        ] {
             assert_eq!(target_format_from_name(&format!("{sf:?}")), None);
         }
     }

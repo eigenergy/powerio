@@ -19,6 +19,12 @@ use crate::{Error, Result};
 
 const FMT: &str = "PowerWorld .aux";
 
+/// Branch identity extras keys, shared with the `.pwb` reader. They double as
+/// the aux field names (extras keep PowerWorld fields verbatim), so every
+/// PowerWorld reader produces the same extras.
+pub(super) const LINE_CIRCUIT: &str = "LineCircuit";
+pub(super) const BRANCH_DEVICE_TYPE: &str = "BranchDeviceType";
+
 // ---- Reader -----------------------------------------------------------------
 
 /// Owned-source entry used by the format hub: parse by borrowing `source`, then
@@ -66,7 +72,7 @@ pub(crate) fn parse_powerworld_source(
     let mut merged_loads = Merge::new(&["BusNum", "LoadID"]);
     let mut merged_shunts = Merge::new(&["BusNum", "ShuntID"]);
     let mut merged_gens = Merge::new(&["BusNum", "GenID"]);
-    let mut merged_branches = Merge::new(&["BusNum", "BusNum:1", "LineCircuit"]);
+    let mut merged_branches = Merge::new(&["BusNum", "BusNum:1", LINE_CIRCUIT]);
     for blk in aux.data() {
         match blk.object_type.as_str() {
             "Bus" => merged_buses.absorb(blk, true),
@@ -303,7 +309,7 @@ fn bus_kind(r: &Row) -> BusType {
 /// with an in-service generator regulates voltage (PV) unless it is the slack.
 /// Only buses left at the PQ default are promoted, so an explicit `BusCat`
 /// from our own writer is never overridden.
-fn derive_bus_kinds(buses: &mut [Bus], generators: &[Generator]) {
+pub(super) fn derive_bus_kinds(buses: &mut [Bus], generators: &[Generator]) {
     use std::collections::HashSet;
     let gen_buses: HashSet<BusId> = generators
         .iter()
@@ -443,18 +449,18 @@ fn read_gen(r: &Row) -> Result<Generator> {
 }
 
 fn read_branch(r: &Row) -> Result<Branch> {
-    let is_xf = first(r, &["BranchDeviceType"]).is_some_and(|v| v == "Transformer");
+    let is_xf = first(r, &[BRANCH_DEVICE_TYPE]).is_some_and(|v| v == "Transformer");
     let mut extras = Extras::new();
     // Branch identity beyond the bus pair: circuit ID and device type. Kept
     // verbatim (PowerWorld pads circuit IDs) so aux → aux through the typed
     // model reproduces them exactly.
-    if let Some(v) = r.get("LineCircuit") {
+    if let Some(v) = r.get(LINE_CIRCUIT) {
         extras.insert(
-            "LineCircuit".to_string(),
+            LINE_CIRCUIT.to_string(),
             serde_json::Value::String((*v).to_string()),
         );
     }
-    keep_extras(r, &["BranchDeviceType", "LineLength"], &mut extras);
+    keep_extras(r, &[BRANCH_DEVICE_TYPE, "LineLength"], &mut extras);
     // Transformer records in complete case exports carry their impedance and
     // tap under `:1` locations (values on the system base after correction);
     // line records use the bare names. Our writer's LineXFRatio is the tap
@@ -606,7 +612,7 @@ pub fn write_powerworld(net: &Network) -> Conversion {
             // included) treats equal identities as one device.
             let mut parallel: HashMap<(BusId, BusId), u32> = HashMap::new();
             for br in &net.branches {
-                let kind = match br.extras.get("BranchDeviceType").and_then(|v| v.as_str()) {
+                let kind = match br.extras.get(BRANCH_DEVICE_TYPE).and_then(|v| v.as_str()) {
                     Some(v) => v,
                     None if br.is_transformer() => "Transformer",
                     None => "Line",
@@ -616,7 +622,7 @@ pub fn write_powerworld(net: &Network) -> Conversion {
                 let fallback = nth.to_string();
                 let circuit = br
                     .extras
-                    .get("LineCircuit")
+                    .get(LINE_CIRCUIT)
                     .and_then(|v| v.as_str())
                     .unwrap_or(&fallback);
                 rows.push(format!(

@@ -151,7 +151,7 @@ from the field listed; integers and floats are little endian.
 | offset | type | value | meaning |
 |---|---|---|---|
 | 0x00 | u64 | 15000 | magic / format constant |
-| 0x08 | u64 | 425 | format constant |
+| 0x08 | u64 | 425 | writer format constant; 425 in every file this section decodes, but newer exports carry 483 (Texas7k 2021), 508 (saved as v21), 537, 550, or 551 (2022 era saves), and 425 alone does not pin the record layout (see the bus record flag words below) |
 | 0x10 | u64 | 20 | format constant |
 | 0x18 | 16 bytes | 0 | unknown |
 | 0x28 | f64 | varies | Delphi TDateTime of the save (days since 1899-12-30); matches each file's export date |
@@ -177,16 +177,37 @@ table specific glue block.
 |---|---|---|
 | BusNum | u32 | record starts here |
 | BusName | u32 string | |
-| unknown | u32 | 39 in the 2018 file, 7 in the 2016 file; constant per file |
+| flags | u32 | a field presence bitmask, not a per file constant; see the census below |
 | BusNomVolt | f32 | f32 storage explains the noise the aux prints (13.800000190734863) |
 | AreaNum, ZoneNum, BANumber | u32 ×3 | |
 | label | u32 string | "newbus 138" in the ACTIVSg cases |
 | BusPUVolt | f64 | exact match with the aux |
 | BusAngle | f64 | radians; aux prints degrees |
-| tail | 85 bytes (2018) / shorter (2016) | constant across records within a file; contains DCLossMultiplier as f32 1.0 and flag bytes; undecoded |
+| tail | 85 bytes (2018) / shorter (2016) | constant across plain records within a file; contains DCLossMultiplier as f32 1.0 and flag bytes; undecoded. Records with flag bit 4 set insert a count prefixed list into the tail (u32 count, then 9 byte entries observed as u8 = 3, u32 number, u32 = 1; meaning undecoded) |
 
 Substation coordinates are not in the bus record; they live with the
 substation objects.
+
+#### Bus record flag words (census of validated heads, leading 64 KiB)
+
+The flag word is a field presence bitmask. Bit 5 set marks the Simulator 20
+era record family (clear on the 2016 era family), bit 4 set marks the count
+prefixed list in the record tail, bit 0 clear means one extra u16 before the
+nominal kV (the generator buses: 49 such records in ACTIVSg200, which has 49
+generators). The head layout through the solved voltage is identical across
+every observed flag word; the tails differ.
+
+| file | flag words seen |
+|---|---|
+| ACTIVSg200.pwb (June 2018) | 0x26 ×49, 0x27 ×151 (the full bus table) |
+| Texas2000_June2016.pwb | 0x06 ×1, 0x07 ×425, 0x17 ×77 |
+| ACTIV_SG_2000_v19.pwb (April 2017) | 0x26 ×139, 0x27 ×300, 0x36 ×1, 0x37 ×21 |
+
+The reader decodes the plain tailed Simulator 20 era family (0x26/0x27) and
+rejects the rest by census, naming the detected family. The v19 file walks
+correctly through 1962 of its 2000 bus records with the 2018 layout; the
+records with bit 4 set break the walk, which is why the whole file is
+rejected until the tail lists are decoded.
 
 ### Load record (89 bytes fixed, validated on all 160)
 
@@ -214,6 +235,15 @@ regulation block at higher offsets: tap at +87 from record start, tap
 limits +104/+108, step +122, nominal kV pair +169/+173, XFMVABase +177.
 The flags word is the Delphi optional field bitmask; only the observed
 values are accepted and anything else is a loud error.
+
+Sibling print precision matters for transformer parity: the aux transformer
+Branch section prints impedances at 6 decimals while the line section prints
+the f64 widening of the stored f32 at 20 decimals. The binary stores the
+full f32 either way, confirmed by the RAW sibling's 6 significant digits:
+transformer (15,14) R reads 0.000637329 from the binary, prints 6.37329E-4
+in the RAW and 0.000637 in the aux and the .m. Parity tests therefore
+compare transformers against the aux at its print quantum and against the
+RAW at full precision.
 
 ### Open questions (inventoried, not guessed)
 

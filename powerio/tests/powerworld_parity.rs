@@ -18,38 +18,18 @@
 //! writes 6 decimals for impedances, 2 for MW.
 
 use std::collections::{BTreeMap, BTreeSet};
-use std::path::{Path, PathBuf};
 
 use powerio::network::{BusId, Network};
 use powerio::parse_file;
 
-fn vendored(name: &str) -> PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../tests/data/powerworld")
-        .join(name)
-}
-
-fn fetched(name: &str) -> Option<PathBuf> {
-    let p = Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../tests/data/large/ACTIVSg2000")
-        .join(name);
-    p.exists().then_some(p)
-}
+mod common;
+use common::{activsg2000_fetched as fetched, ckt, powerworld_vendored as vendored};
 
 /// Branch identity: from, to, trimmed circuit ID.
 fn branch_ids(net: &Network) -> BTreeSet<(usize, usize, String)> {
     net.branches
         .iter()
-        .map(|b| {
-            let ckt = b
-                .extras
-                .get("LineCircuit")
-                .and_then(|v| v.as_str())
-                .unwrap_or("1")
-                .trim()
-                .to_string();
-            (b.from.0, b.to.0, ckt)
-        })
+        .map(|b| (b.from.0, b.to.0, ckt(b)))
         .collect()
 }
 
@@ -91,16 +71,7 @@ fn activsg200_aux_vs_matpower_structural() {
     let by_id: BTreeMap<(usize, usize, String), &powerio::Branch> = aux
         .branches
         .iter()
-        .map(|b| {
-            let ckt = b
-                .extras
-                .get("LineCircuit")
-                .and_then(|v| v.as_str())
-                .unwrap_or("1")
-                .trim()
-                .to_string();
-            ((b.from.0, b.to.0, ckt), b)
-        })
+        .map(|b| ((b.from.0, b.to.0, ckt(b)), b))
         .collect();
     for mb in &m.branches {
         let key = (mb.from.0, mb.to.0, "1".to_string());
