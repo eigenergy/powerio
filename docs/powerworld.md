@@ -108,6 +108,15 @@ Counts that survived the baseline: 200 buses, 49 generators, 160 loads,
   under `:1` locations (`LineR:1`, `LineTap:1`); 2016 era exports use the
   bare names for everything. `LineTap` equals the MATPOWER tap convention
   (verified on all 66 ACTIVSg200 and 562 Texas2000 transformers).
+- 2022 era exports (Simulator 21+, the Hawaii40 set) write a third naming
+  generation: concise headers with `Number`/`Name`/`NomkV`/`Vpu`/`Vangle`
+  on buses, `ID`/`Status`/`SMW`/`SMvar` on devices,
+  `BusNumFrom`/`BusNumTo`/`Circuit`/`R`/`X`/`B`/`LimitMVAA` on branches,
+  and `Rxfbase`/`Tapxfbase` on the transformer section. The mapping reads
+  all three generations through alias lists, and the section merge keys
+  carry the same aliases so the dual Branch sections join correctly. The
+  Hawaii40 pwb parity test cross validates the vocabulary: both readers
+  must agree value by value for it to pass.
 - Loads are ZIP components (`LoadSMW/LoadIMW/LoadZMW`, ...). The typed model
   carries the sum at nominal voltage; nonzero I/Z components are kept in
   extras under their PowerWorld field names.
@@ -241,17 +250,20 @@ was missing, same source aux siblings for the bit 6/8 family: ACTIVSg500
 leave the bus head layout untouched; their fields live in the undecoded
 tails), the two ACTIVSg2000 current era exports decode end to end, and
 the published set export carries full value parity against its same set
-aux on every decoded quantity (the test next to the other vintages'). ACTIVSg500 probes exactly through buses (500),
-loads (206, P total exact), generators (90, the aux bus multiset exact,
-f32 block at +11), and shunts (17, MVAr total exact), but its branch
-table embeds variable length structures between or inside record tails,
-some tens or hundreds of KiB (contingency label text such as
-"L_000124SALEM31-..." with "Applied:" memos is visible inside them), so
-the record resync loses the trail at record 73 and the file stays
-rejected. Skipping those blobs deterministically needs their grammar:
-that tail fit is the core of the bit 6/8 era work, with ACTIVSg500 and
-Hawaii40 (whose 508 header is one constant away once the records prove
-out) as the oracles.
+aux on every decoded quantity (the test next to the other vintages'). ACTIVSg500's branch records with flag bit 4
+append large tail structures: per bus f64 vectors (a u32 count equal to
+the bus count is visible inside), ascending bus number arrays, and
+contingency label text, up to 406 KiB on one record. The reader handles
+them by extending the resync scan to the buffer end after a bit 4 branch
+record (the ~90 byte structural gauntlet keeps blob bytes from forging a
+record; two forged record heads were found inside blobs and both fail
+it). With that rule ACTIVSg500 decodes with full value parity against
+its aux. Hawaii40 (2022, header constant 508) decodes with full parity
+the same way, which is the evidence admitting the 508 header era; its
+aux uses the 2022 concise vocabulary (see the mapping notes). The 508
+saves of node level cases (Texas7k v21) still die in the table chain
+like their 483 originals, now after a slow search rather than a named
+header rejection.
 
 ### Load record (validated on all 160 + 1417 + 1350 + 5095 loads of four files)
 
@@ -371,16 +383,17 @@ checksum and recorded URL by `benchmarks/fetch_powerworld.sh`.
 | ACTIV_SG_2000_v19.pwb | fetched (powerworld.com) | 425 | 0x26-0x37 | published case .m, deltas pinned | decoded, parity | 2000 buses, 3202 branches |
 | RTS-GMLC.PWB | fetched (GridMod/RTS-GMLC @3ece0d3) | 425 | 0x06/0x07 | same commit .m + .RAW | decoded, parity | 73 buses, 120 branches |
 | Texas7k 2021 export | local only | 483 | 0x66-0x167 | aux sibling available | rejected: header constant; buses, loads, shunts, branches decode in probes, the generator record is a new layout | 6717 buses, 5095 loads, 634 shunts probe exactly |
-| Texas7k v21/v22/2030 saves | local only | 508/537/550/551 | unprobed | — | rejected: header constant | |
+| Texas7k v21/v22/2030 saves | local only | 508/537/550/551 | unprobed | — | rejected: header constant (537/550/551) or table chain (508, slow) | |
 | 39 bus sample case | local only | 425 | none found | — | rejected: no recognized bus record layout | |
 | 118 bus sample case | local only | 338 | — | — | rejected: header constant | |
-| 12 bus course case (+ v21 resave) | local only | 134 / 508 | — | — | rejected: header constant | |
+| 12 bus course case | local only | 134 | — | — | rejected: header constant | |
 | 10 bus sample case | local only | 196 | — | — | rejected: header constant | |
 | 3 bus sample case | local only | pre 425 shape | — | — | rejected: header words | |
-| ACTIVSg500 export | local only | 425 | 0x66-0x177 | aux sibling available | rejected: branch record tails embed undecoded variable structures | buses/loads/gens/shunts probe exactly |
+| ACTIVSg500 export | local only | 425 | 0x66-0x177 | same set aux | decoded, parity on every quantity | 500 buses, 599 branches |
 | ACTIVSg2000 published set export | local only | 425 | 0x66-0x177 | same set aux | decoded, parity on every quantity | 2000 buses, 3206 branches |
 | ACTIVSg2000 current era export | local only | 425 | 0x66-0x177 | published case | decoded, counts verified; value parity test pending | 2000 buses, 3206 branches |
-| Hawaii40 2022 export | local only | 508 | 0x66-0x167 | aux sibling available | rejected: header constant | 37 heads parse in probes |
+| Hawaii40 2022 export | local only | 508 | 0x66-0x167 | same set aux (2022 vocabulary) | decoded, parity on every quantity | 37 buses, 89 branches |
+| 12 bus course case saved as v21 | local only | 508 | — | — | decoded, counts verified | 12 buses, 18 branches |
 | .pwd display files | local/fetched | — | — | — | out of scope this pass (M5 probe) | |
 
 ## Object inventory of ACTIVSg200.aux

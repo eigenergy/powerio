@@ -210,13 +210,16 @@ impl<'a> Cur<'a> {
             return Err(bad(self));
         }
         // Every known PowerWorld binary starts with 15000; the next words
-        // identify the writer. 425/20 is the decoded era; 483 through 551
-        // appear in 2020-2022 era exports, and older Simulators use other
-        // constants or a different header shape entirely.
-        if (v, c) != (425, 20) {
+        // identify the writer. The decoded eras are 425 (2016 through 2019
+        // era record families) and 508 (validated by parity on the 2022
+        // Hawaii40 export, whose records use the same bit 6/8 family);
+        // 483/537/550/551 exports carry structures the record models do
+        // not cover yet, and older Simulators use other constants or a
+        // different header shape entirely.
+        if c != 20 || !(v == 425 || v == 508) {
             return Err(unsupported_vintage(format!(
-                "header format words ({v}, {c}); (425, 20) era files are the \
-                 decoded ones"
+                "header format words ({v}, {c}); the decoded eras are \
+                 (425, 20) and (508, 20)"
             )));
         }
         Ok(())
@@ -658,12 +661,23 @@ fn walk_branch_records(
     let mut out = Vec::with_capacity(count.min(b.len().saturating_sub(first) / 16));
     let mut at = first;
     for i in 0..count {
-        let (br, after) = read_branch_head(b, at, bus_ids)?;
+        let (br, after, flags) = read_branch_head(b, at, bus_ids)?;
         out.push(br);
         if i + 1 == count {
             return Ok((out, after));
         }
-        at = resync(after, after + RESYNC_WINDOW, |p| {
+        // Flag bit 4 appends a variable structure to the record tail; the
+        // 2019+ era writers store per bus f64 vectors and contingency label
+        // text there, hundreds of KiB on some records, so the bounded
+        // window cannot cover it. The scan extends to the buffer end for
+        // those records only; the ~90 byte structural gauntlet of
+        // read_branch_head keeps blob content from forging a record.
+        let window_end = if flags & 0x10 != 0 {
+            b.len()
+        } else {
+            after + RESYNC_WINDOW
+        };
+        at = resync(after, window_end, |p| {
             read_branch_head(b, p, bus_ids).ok().map(|_| ())
         })
         .ok_or_else(|| Error::FormatRead {
@@ -687,7 +701,7 @@ fn walk_branch_records(
 /// tag and the zero byte are structural anchors: an unobserved variant
 /// shifts them and dies loudly instead of misreading.
 #[allow(clippy::many_single_char_names)] // r, x, b are the domain names
-fn read_branch_head(b: &[u8], at: usize, bus_ids: &HashSet<usize>) -> Result<(Branch, usize)> {
+fn read_branch_head(b: &[u8], at: usize, bus_ids: &HashSet<usize>) -> Result<(Branch, usize, u16)> {
     let mut c = Cur { b, pos: at };
     let from = c.u32()? as usize;
     let to = c.u32()? as usize;
@@ -795,5 +809,5 @@ fn read_branch_head(b: &[u8], at: usize, bus_ids: &HashSet<usize>) -> Result<(Br
         angmax: 360.0,
         extras,
     };
-    Ok((br, c.pos))
+    Ok((br, c.pos, flags))
 }

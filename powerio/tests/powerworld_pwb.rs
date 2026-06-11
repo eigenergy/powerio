@@ -709,6 +709,7 @@ fn parse_file_dispatches_pwb_and_converts() {
 /// vintages. Machine specific corpus file; skipped unless the local manifest
 /// lists it next to its aux sibling.
 #[test]
+#[allow(clippy::too_many_lines)]
 fn activsg2000_current_era_pwb_matches_its_aux_sibling() {
     let Some(pwb_path) = common::local_corpus_path("ACTIVSg2000 published set export (local only)")
     else {
@@ -821,6 +822,197 @@ fn activsg2000_current_era_pwb_matches_its_aux_sibling() {
             p.effective_tap(),
             a.effective_tap()
         );
+        assert_eq!(p.is_transformer(), a.is_transformer(), "{key:?} kind");
+    }
+    assert!(aux_by_id.is_empty(), "aux branches missing: {aux_by_id:?}");
+}
+
+/// ACTIVSg500's current era export against its same set aux. This is the
+/// file whose bit 4 branch records carry the huge tail blobs (per bus f64
+/// vectors, contingency label text), so it pins the unbounded tail resync
+/// as well as the values. Machine specific corpus file; skipped unless the
+/// local manifest lists it next to its aux sibling.
+#[test]
+fn activsg500_pwb_matches_its_aux_sibling() {
+    let Some(pwb_path) = common::local_corpus_path("ACTIVSg500 export (local only)") else {
+        eprintln!("skipped: not in the local corpus manifest");
+        return;
+    };
+    let aux_path = pwb_path.with_file_name("ACTIVSg500.aux");
+    if !aux_path.exists() {
+        eprintln!("skipped: no aux sibling next to the export");
+        return;
+    }
+    let pwb = read_pwb(&pwb_path);
+    let aux = parse_file(aux_path, None).unwrap();
+
+    assert_eq!(pwb.buses.len(), 500);
+    assert_eq!(pwb.branches.len(), 599);
+    assert_eq!(pwb.loads.len(), aux.loads.len());
+    assert_eq!(pwb.generators.len(), aux.generators.len());
+    assert_eq!(pwb.shunts.len(), aux.shunts.len());
+    assert_eq!(pwb.branches.len(), aux.branches.len());
+
+    for (p, a) in pwb.buses.iter().zip(&aux.buses) {
+        assert_eq!(p.id, a.id);
+        assert_eq!(p.name, a.name);
+        assert!((p.base_kv - a.base_kv).abs() < 1e-4, "bus {} kV", p.id);
+        assert!(
+            (p.vm - a.vm).abs() <= 5e-7,
+            "bus {} vm {} vs {}",
+            p.id,
+            p.vm,
+            a.vm
+        );
+        assert!(
+            (p.va - a.va).abs() <= 5e-5,
+            "bus {} va {} vs {}",
+            p.id,
+            p.va,
+            a.va
+        );
+    }
+    for (p, a) in pwb.loads.iter().zip(&aux.loads) {
+        assert_eq!(p.bus, a.bus);
+        assert!(
+            (p.p - a.p).abs() <= 1e-3,
+            "load at {}: {} vs {}",
+            p.bus,
+            p.p,
+            a.p
+        );
+        assert!(
+            (p.q - a.q).abs() <= 1e-3,
+            "load q at {}: {} vs {}",
+            p.bus,
+            p.q,
+            a.q
+        );
+    }
+    for (p, a) in pwb.generators.iter().zip(&aux.generators) {
+        assert_eq!(p.bus, a.bus);
+        for (x, y, what) in [
+            (p.pg, a.pg, "pg"),
+            (p.vg, a.vg, "vg"),
+            (p.mbase, a.mbase, "mbase"),
+        ] {
+            assert!(
+                (x - y).abs() <= 1e-3 + 1e-6 * y.abs(),
+                "gen at {} {what}: {x} vs {y}",
+                p.bus
+            );
+        }
+    }
+    for (p, a) in pwb.shunts.iter().zip(&aux.shunts) {
+        assert_eq!(p.bus, a.bus);
+        assert!(
+            (p.b - a.b).abs() <= 1e-3,
+            "shunt at {}: {} vs {}",
+            p.bus,
+            p.b,
+            a.b
+        );
+    }
+    let mut aux_by_id: BTreeMap<(usize, usize, String), &powerio::Branch> = BTreeMap::default();
+    for b in &aux.branches {
+        aux_by_id.insert((b.from.0, b.to.0, ckt(b)), b);
+    }
+    for p in &pwb.branches {
+        let key = (p.from.0, p.to.0, ckt(p));
+        let a = aux_by_id
+            .remove(&key)
+            .unwrap_or_else(|| panic!("{key:?} not in aux"));
+        assert!((p.r - a.r).abs() <= 5e-7, "{key:?} R {} vs {}", p.r, a.r);
+        assert!((p.x - a.x).abs() <= 5e-7, "{key:?} X {} vs {}", p.x, a.x);
+        assert_eq!(p.is_transformer(), a.is_transformer(), "{key:?} kind");
+    }
+    assert!(aux_by_id.is_empty(), "aux branches missing: {aux_by_id:?}");
+}
+
+/// Hawaii40 (2022, header format constant 508) against its same set aux:
+/// the parity evidence that admits the 508 header era. Machine specific
+/// corpus file; skipped unless the local manifest lists it.
+#[test]
+fn hawaii40_pwb_matches_its_aux_sibling() {
+    let Some(pwb_path) = common::local_corpus_path("Hawaii40 2022 export (local only)") else {
+        eprintln!("skipped: not in the local corpus manifest");
+        return;
+    };
+    let aux_path = pwb_path.with_file_name("Hawaii40_220906.AUX");
+    if !aux_path.exists() {
+        eprintln!("skipped: no aux sibling next to the export");
+        return;
+    }
+    let pwb = read_pwb(&pwb_path);
+    let aux = parse_file(aux_path, None).unwrap();
+
+    assert_eq!(pwb.buses.len(), aux.buses.len());
+    assert_eq!(pwb.loads.len(), aux.loads.len());
+    assert_eq!(pwb.generators.len(), aux.generators.len());
+    assert_eq!(pwb.shunts.len(), aux.shunts.len());
+    assert_eq!(pwb.branches.len(), aux.branches.len());
+
+    for (p, a) in pwb.buses.iter().zip(&aux.buses) {
+        assert_eq!(p.id, a.id);
+        assert_eq!(p.name, a.name);
+        assert!((p.base_kv - a.base_kv).abs() < 1e-4, "bus {} kV", p.id);
+        assert!(
+            (p.vm - a.vm).abs() <= 5e-7,
+            "bus {} vm {} vs {}",
+            p.id,
+            p.vm,
+            a.vm
+        );
+        assert!(
+            (p.va - a.va).abs() <= 5e-5,
+            "bus {} va {} vs {}",
+            p.id,
+            p.va,
+            a.va
+        );
+    }
+    for (p, a) in pwb.loads.iter().zip(&aux.loads) {
+        assert_eq!(p.bus, a.bus);
+        assert!(
+            (p.p - a.p).abs() <= 1e-3,
+            "load at {}: {} vs {}",
+            p.bus,
+            p.p,
+            a.p
+        );
+        assert!(
+            (p.q - a.q).abs() <= 1e-3,
+            "load q at {}: {} vs {}",
+            p.bus,
+            p.q,
+            a.q
+        );
+    }
+    for (p, a) in pwb.generators.iter().zip(&aux.generators) {
+        assert_eq!(p.bus, a.bus);
+        for (x, y, what) in [
+            (p.pg, a.pg, "pg"),
+            (p.vg, a.vg, "vg"),
+            (p.mbase, a.mbase, "mbase"),
+        ] {
+            assert!(
+                (x - y).abs() <= 1e-3 + 1e-6 * y.abs(),
+                "gen at {} {what}: {x} vs {y}",
+                p.bus
+            );
+        }
+    }
+    let mut aux_by_id: BTreeMap<(usize, usize, String), &powerio::Branch> = BTreeMap::default();
+    for b in &aux.branches {
+        aux_by_id.insert((b.from.0, b.to.0, ckt(b)), b);
+    }
+    for p in &pwb.branches {
+        let key = (p.from.0, p.to.0, ckt(p));
+        let a = aux_by_id
+            .remove(&key)
+            .unwrap_or_else(|| panic!("{key:?} not in aux"));
+        assert!((p.r - a.r).abs() <= 5e-7, "{key:?} R {} vs {}", p.r, a.r);
+        assert!((p.x - a.x).abs() <= 5e-7, "{key:?} X {} vs {}", p.x, a.x);
         assert_eq!(p.is_transformer(), a.is_transformer(), "{key:?} kind");
     }
     assert!(aux_by_id.is_empty(), "aux branches missing: {aux_by_id:?}");
