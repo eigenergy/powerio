@@ -21,7 +21,10 @@ Benchmarking Multiconductor OPF.
 ## opendss/
 
 IEEE 13, 34, and 123 bus test feeders from the official OpenDSS distribution,
-vendored via the dss-extensions mirror of the EPRI test case tree.
+vendored via the dss-extensions mirror of the EPRI test case tree. The
+feeders are the IEEE PES Distribution Test Feeder Working Group cases as
+distributed with OpenDSS; they are vendored unchanged under the distribution
+license in `opendss/License.txt`, with no relicensing.
 
 - Source: <https://github.com/dss-extensions/electricdss-tst>, commit
   `3b208397160213cae4a9e2d0a7d1aa3528ce26e1`, directory
@@ -61,3 +64,11 @@ commit 87dc18b0) via the committed oracle:
 `fourwire_linecode.json` comes from `micro/fourwire_linecode.dss` the same
 way. PMD's `parse_file` ran with `kron_reduce=false`; `print_file` wrote the
 dict. Regenerate with the same command when bumping the PMD version.
+
+## Licensing
+
+Each directory carries its own license file next to the data it covers:
+`bmopf/License.md`, `opendss/License.txt` (the BSD 3 clause notice retained
+from the upstream distribution), `micro/License.md` (CC BY 4.0), and
+`pmd/License.md` (derivatives carry their sources' licenses). The repository
+code license does not apply to vendored data.
