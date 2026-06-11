@@ -21,9 +21,20 @@ arrow = ["dep:arrow"]
 # Multiconductor distribution formats (OpenDSS, PMD ENGINEERING JSON, BMOPF
 # JSON): the pio_dist_* entry points. Off by default for the same reason.
 dist = ["dep:powerio-dist"]
+# gridfm-datakit Parquet reader (`pio_read_gridfm` / `pio_gridfm_scenario_ids`).
+# Off by default so the base ABI pulls in nothing but `powerio`; enabling it pulls
+# in powerio-matrix (arrow + parquet) for the reader.
+gridfm = ["dep:powerio-matrix", "powerio-matrix/gridfm"]
 
 [dependencies]
 powerio.workspace = true
 powerio-dist = { workspace = true, optional = true }
 # Only the C Data Interface (`ffi`) is needed; the heavy arrow defaults stay off.
 arrow = { workspace = true, features = ["ffi"], optional = true }
+# Pulled in only by the `gridfm` feature: the reader lives in powerio-matrix.
+# It re-exports powerio, so `Network` is the same type `make_network` already takes.
+powerio-matrix = { workspace = true, optional = true }
+
+[dev-dependencies]
+# Only the gridfm C-ABI test uses it (write a dataset to a temp dir, read it back).
+tempfile = "3"

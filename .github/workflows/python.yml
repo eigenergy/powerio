@@ -152,13 +152,15 @@ jobs:
 
   publish:
     name: publish to PyPI
-    # Releases created by workflows (the GITHUB_TOKEN recursion guard) never
-    # fire the release event, so manual dispatch is the recovery path; the
-    # pypi environment's deployment rules still gate both.
+    # release-binaries.yml stages each release as a draft a human publishes, so
+    # the release event fires with a user actor (events from a workflow's
+    # GITHUB_TOKEN are swallowed by the recursion guard). Manual dispatch is the
+    # recovery path for a missed event.
     if: github.event_name == 'release' || github.event_name == 'workflow_dispatch'
     needs: [ lint, test, test-gridfm, wheels, sdist ]
     runs-on: ubuntu-latest
-    # Protect this environment with required reviewers before launch.
+    # Deployment protection (required reviewers, tag rules) lives on the pypi
+    # environment in the repo settings, not in this file.
     environment: pypi
     permissions:
       id-token: write  # PyPI trusted publishing; no stored token

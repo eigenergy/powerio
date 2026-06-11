@@ -36,6 +36,9 @@ header = """
  * BMOPF JSON) behind their own PioDistNetwork handle, freed with
  * pio_dist_network_free; their string outputs are freed with pio_string_free.
  *
+ * Optional: build with `--features gridfm` to get pio_read_gridfm and
+ * pio_gridfm_scenario_ids, the gridfm-datakit Parquet reader (guarded by PIO_GRIDFM).
+ *
  * Checked in and generated; regenerate from the Rust source with
  *   cbindgen --config cbindgen.toml --crate powerio-capi --output include/powerio.h
  */"""
@@ -59,12 +62,14 @@ include = ["PioNetwork", "PioDistNetwork"]
 "FFI_ArrowArray" = "struct ArrowArray"
 "FFI_ArrowSchema" = "struct ArrowSchema"
 
-# Gate the optional features behind #ifdef (PIO_ARROW for `arrow`, PIO_DIST for
-# `dist`): cbindgen emits the cfg-gated symbols inside `#if defined(...)` even
-# on a default (no-feature) generation.
+# Gate the optional features behind #ifdef (PIO_ARROW for `arrow`, PIO_DIST
+# for `dist`, PIO_GRIDFM for `gridfm`): cbindgen emits the cfg-gated symbols
+# inside `#if defined(...)` even on a default (no-feature) generation, so the
+# checked-in header always carries every block.
 [defines]
 "feature = arrow" = "PIO_ARROW"
 "feature = dist" = "PIO_DIST"
+"feature = gridfm" = "PIO_GRIDFM"
 
 [parse]
 parse_deps = false

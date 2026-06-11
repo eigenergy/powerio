@@ -1,6 +1,6 @@
 name: Release binaries
 
-# Build the powerio-capi cdylib (with the arrow feature) for the five platforms
+# Build the powerio-capi cdylib (with the arrow and gridfm features) for the five platforms
 # PowerIO.jl's Artifacts.toml covers, package each as the artifact tarball that
 # file references (lib/ or bin/ layout, Julia platform triplet in the name), and
 # attach them to the GitHub release on a version tag. A workflow_dispatch run
@@ -69,7 +69,7 @@ jobs:
           sudo apt-get install -y ${{ matrix.cross_gcc }}
           echo "CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER=aarch64-linux-gnu-gcc" >> "$GITHUB_ENV"
       - name: Build powerio-capi
-        run: cargo build -p powerio-capi --release --features arrow --target ${{ matrix.rust_target }}
+        run: cargo build -p powerio-capi --release --features arrow,gridfm --target ${{ matrix.rust_target }}
       # Artifact layout PowerIO.jl's _artifact_lib() resolves: the cdylib under
       # lib/ (bin/ on Windows, renamed to the lib-prefixed name BinaryBuilder
       # would produce), the C header under include/, licenses at the root.
@@ -99,11 +99,32 @@ jobs:
         with:
           name: libpowerio_capi.${{ matrix.triplet }}
           path: libpowerio_capi.${{ matrix.triplet }}.tar.gz
+      # The draft release body is the CHANGELOG section for this version (the
+      # v0.0.1 release shipped with a bare one-liner); auto-generated notes are
+      # appended below it. All five matrix jobs write the same body, which
+      # softprops applies idempotently.
+      - name: Release body from CHANGELOG
+        if: github.ref_type == 'tag'
+        shell: bash
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          awk -v ver="${TAG#v}" '
+            $0 == "## " ver { hit = 1; next }
+            /^## / { hit = 0 }
+            hit { print }
+          ' CHANGELOG.md > release-body.md
+          if ! [ -s release-body.md ]; then
+            echo "CHANGELOG.md has no \"## ${TAG#v}\" section" >&2
+            exit 1
+          fi
       - name: Attach to release
         if: github.ref_type == 'tag'
         uses: softprops/action-gh-release@v3
         with:
           files: libpowerio_capi.${{ matrix.triplet }}.tar.gz
+          body_path: release-body.md
+          generate_release_notes: true
           # Stage the release as a draft a human publishes: the release event
           # then has a user actor, so it actually triggers python.yml (the
           # GITHUB_TOKEN recursion guard swallows bot-published events), and

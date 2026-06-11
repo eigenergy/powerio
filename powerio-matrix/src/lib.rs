@@ -37,8 +37,8 @@
 pub use powerio::{
     Branch, Bus, BusId, BusType, ConnectivityReport, Conversion, ElementCounts, Error,
     ErrorCategory, Extras, GenCost, Generator, Hvdc, IndexCore, IndexedNetwork, Load, Network,
-    Result, ScenarioMismatch, Shunt, SourceFormat, Storage, TargetFormat, convert_file, error,
-    format, indexed, network, parse_file, parse_matpower, parse_matpower_file,
+    Result, ScenarioMismatch, Shunt, SourceFormat, Storage, TargetFormat, convert_file,
+    convert_str, error, format, indexed, network, parse_file, parse_matpower, parse_matpower_file,
     parse_powermodels_json, parse_powerworld, parse_psse, parse_str, target_format_from_name,
     write_as, write_egret_json, write_matpower, write_powermodels_json, write_powerworld,
     write_psse,
@@ -62,6 +62,8 @@ pub use pipeline::{MatrixKind, Pipeline, PipelineOutputs, RhsKind, build_kind};
 
 #[cfg(feature = "gridfm")]
 pub use io::gridfm::{
-    GridfmOptions, GridfmOutputs, GridfmSnapshot, GridfmTables, gridfm_record_batches,
-    gridfm_record_batches_batch, numbered_snapshots, write_gridfm_batch, write_gridfm_dataset,
+    GridfmOptions, GridfmOutputs, GridfmRead, GridfmSnapshot, GridfmTables, gridfm_base_case,
+    gridfm_record_batches, gridfm_record_batches_batch, gridfm_scenario_ids, numbered_snapshots,
+    read_gridfm_dataset, read_gridfm_network, read_gridfm_scenarios, write_gridfm_batch,
+    write_gridfm_dataset,
 };

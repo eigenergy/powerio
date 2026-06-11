@@ -453,6 +453,74 @@ pub unsafe extern "C" fn pio_convert_file(
     }
 }
 
+/// Read one scenario of a gridfm-datakit Parquet dataset into a network handle —
+/// the inverse of the gridfm writer. `dir` resolves leniently: the `raw/` leaf
+/// holding the parquet files, a `<case>/` directory with a `raw/` child, or a
+/// parent with one `*/raw/` child. Returns `NULL` on error and writes the message
+/// into `errbuf`; the lossy read's fidelity warnings (what the gridfm schema
+/// couldn't round-trip) are written `\n`-joined into `warnbuf`. Free the handle
+/// with [`pio_network_free`]. Built `--features gridfm`.
+#[cfg(feature = "gridfm")]
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn pio_read_gridfm(
+    dir: *const c_char,
+    scenario: i64,
+    warnbuf: *mut c_char,
+    warnlen: usize,
+    errbuf: *mut c_char,
+    errlen: usize,
+) -> *mut PioNetwork {
+    unsafe {
+        finish_network(errbuf, errlen, "panic while reading gridfm dataset", || {
+            let dir = required_cstr(dir, "dir")?;
+            let read = powerio_matrix::read_gridfm_dataset(std::path::Path::new(dir), scenario)
+                .map_err(|e| e.to_string())?;
+            copy_to_buf(warnbuf, warnlen, &read.warnings.join("\n"));
+            Ok(read.network)
+        })
+    }
+}
+
+/// Write a gridfm dataset's distinct scenario ids (ascending) into `out`, up to
+/// `cap` entries, and return the total count. Call once with `cap == 0` (or `out`
+/// NULL) to size, allocate, then call again to fill — the standard count/buffer
+/// pattern of [`pio_bus_ids`]. Returns `-1` on error and writes the message into
+/// `errbuf`. Built `--features gridfm`.
+#[cfg(feature = "gridfm")]
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn pio_gridfm_scenario_ids(
+    dir: *const c_char,
+    out: *mut i64,
+    cap: usize,
+    errbuf: *mut c_char,
+    errlen: usize,
+) -> isize {
+    unsafe {
+        let r = catch_unwind(AssertUnwindSafe(|| {
+            let dir = cstr(dir).ok_or_else(|| "dir is NULL or not UTF-8".to_string())?;
+            powerio_matrix::gridfm_scenario_ids(std::path::Path::new(dir))
+                .map_err(|e| e.to_string())
+        }));
+        match r {
+            Ok(Ok(ids)) => {
+                if !out.is_null() {
+                    let n = ids.len().min(cap);
+                    std::ptr::copy_nonoverlapping(ids.as_ptr(), out, n);
+                }
+                ids.len() as isize
+            }
+            Ok(Err(msg)) => {
+                copy_to_buf(errbuf, errlen, &msg);
+                -1
+            }
+            Err(_) => {
+                copy_to_buf(errbuf, errlen, "panic while reading gridfm scenario ids");
+                -1
+            }
+        }
+    }
+}
+
 /// Free a string returned by [`pio_to_matpower`], [`pio_to_format`],
 /// [`pio_convert_file`], [`pio_to_json`], or any `pio_dist_*` string output.
 #[unsafe(no_mangle)]
@@ -1515,6 +1583,79 @@ mpc.branch = [
             assert!(net.is_null());
             let msg = unsafe { CStr::from_ptr(err.as_ptr()) }.to_str().unwrap();
             assert!(msg.contains("unknown distribution format"));
+        }
+    }
+
+    #[cfg(feature = "gridfm")]
+    #[test]
+    fn read_gridfm_round_trips_and_enumerates_scenarios() {
+        use powerio_matrix::{GridfmOptions, write_gridfm_dataset};
+        // Write a one-scenario dataset, then read it back over the C ABI.
+        let net = powerio::parse_file(
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../tests/data/case14.m"),
+            None,
+        )
+        .unwrap();
+        let tmp = tempfile::tempdir().unwrap();
+        let out = write_gridfm_dataset(&net, 0, tmp.path(), &GridfmOptions::default()).unwrap();
+        let dir = CString::new(out.dir.to_str().unwrap()).unwrap();
+
+        let mut warn = [0 as c_char; 512];
+        let mut err = [0 as c_char; 256];
+        unsafe {
+            let h = pio_read_gridfm(
+                dir.as_ptr(),
+                0,
+                warn.as_mut_ptr(),
+                warn.len(),
+                err.as_mut_ptr(),
+                err.len(),
+            );
+            assert!(
+                !h.is_null(),
+                "read failed: {}",
+                CStr::from_ptr(err.as_ptr()).to_str().unwrap()
+            );
+            assert_eq!(pio_n_buses(h), 14);
+            // The lossy read always reports fidelity warnings into warnbuf.
+            assert!(
+                !CStr::from_ptr(warn.as_ptr()).to_str().unwrap().is_empty(),
+                "expected fidelity warnings"
+            );
+            pio_network_free(h);
+
+            // Scenario ids: size with a NULL out, then fill. One scenario -> [0].
+            let count = pio_gridfm_scenario_ids(
+                dir.as_ptr(),
+                std::ptr::null_mut(),
+                0,
+                err.as_mut_ptr(),
+                err.len(),
+            );
+            assert_eq!(count, 1);
+            let mut ids = [-1i64; 4];
+            let n = pio_gridfm_scenario_ids(
+                dir.as_ptr(),
+                ids.as_mut_ptr(),
+                ids.len(),
+                err.as_mut_ptr(),
+                err.len(),
+            );
+            assert_eq!(n, 1);
+            assert_eq!(ids[0], 0);
+
+            // A missing dataset directory errors (NULL handle + message), not a panic.
+            let missing = CString::new(tmp.path().join("nope").to_str().unwrap()).unwrap();
+            let bad = pio_read_gridfm(
+                missing.as_ptr(),
+                0,
+                warn.as_mut_ptr(),
+                warn.len(),
+                err.as_mut_ptr(),
+                err.len(),
+            );
+            assert!(bad.is_null());
+            assert!(!CStr::from_ptr(err.as_ptr()).to_str().unwrap().is_empty());
         }
     }
 }

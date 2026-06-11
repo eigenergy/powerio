@@ -17,8 +17,9 @@ pip install 'powerio[pandas]'   # pandas and pyarrow compatibility reads (Python
 pip install 'powerio[all]'      # matrix, graph, and gridfm reads
 ```
 
-`import powerio`, `parse_file`, `parse_str`, `convert_file`, `to_matpower`, and
-`to_json` do not import NumPy, SciPy, NetworkX, Polars, pandas, or pyarrow.
+`import powerio`, `parse_file`, `parse_str`, `convert_file`, `convert_str`,
+`to_matpower`, and `to_json` do not import NumPy, SciPy, NetworkX, Polars,
+pandas, or pyarrow.
 
 ## Canonical use
 
@@ -30,6 +31,7 @@ same_text = net.to_matpower()
 json_text = net.to_json()
 pm = net.to_format("powermodels-json")
 raw = pio.convert_file("case9.m", "psse")
+aux = pio.convert_str(json_text, "powerworld", format="powermodels-json")
 
 normalized = net.to_normalized()
 dense = net.to_dense()       # needs powerio[matrix]
@@ -42,14 +44,30 @@ forced with `from_`); `parse_str(text, format)` reads in-memory text.
 
 ## GridFM reads
 
-The native wheel includes the GridFM Parquet writer. The preferred Python read
-extra is Polars:
+The native wheel includes the GridFM Parquet writer and reader.
+
+`read_gridfm(dir, scenario=0)` rebuilds a `Network` from a dataset, the inverse
+of `Network.write_gridfm`, returning a `GridfmRead(network, scenario, warnings)`
+namedtuple. The read is lossy but recovers everything a power flow needs;
+`warnings` lists what the gridfm schema couldn't round-trip (synthesized bus
+ids, folded per-bus load/shunt, dropped HVDC/storage, piecewise costs).
+`read_gridfm_scenarios(dir)` returns one `GridfmRead` per scenario. `dir`
+resolves the `raw/` leaf, a `<case>/` directory, or a parent with one `*/raw/`
+child.
 
 ```python
-import polars as pl
 import powerio as pio
 
 out = pio.parse_file("case14.m").write_gridfm("out")
+net, scenario, warnings = pio.read_gridfm(out["dir"])
+text = net.to_matpower()                 # gridfm → any classical format
+```
+
+To inspect the raw Parquet tables instead, the preferred read extra is Polars:
+
+```python
+import polars as pl
+
 bus = pl.read_parquet(f"{out['dir']}/bus_data.parquet")
 ```
 

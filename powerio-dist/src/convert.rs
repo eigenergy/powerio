@@ -132,10 +132,10 @@ fn convert(net: &DistNetwork, target: DistTargetFormat) -> Conversion {
     }
 }
 
-/// Parses `text` as `from` and writes it as `to` in one call. The warnings
+/// Parses `text` as `format` and writes it as `to` in one call. The warnings
 /// carry both the parse warnings and the writer's fidelity losses.
-pub fn convert_str(text: &str, to: DistTargetFormat, from: &str) -> crate::Result<Conversion> {
-    Ok(convert(&parse_str(text, from)?, to))
+pub fn convert_str(text: &str, to: DistTargetFormat, format: &str) -> crate::Result<Conversion> {
+    Ok(convert(&parse_str(text, format)?, to))
 }
 
 /// Parses `path` (format from `from` or the file itself) and writes it as
