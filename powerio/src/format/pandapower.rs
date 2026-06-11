@@ -353,8 +353,15 @@ fn load_frame(net: &Network) -> Value {
         "bus",
         "p_mw",
         "q_mvar",
+        // ZIP composition is all constant power. pandapower <= 3.1 reads the
+        // two-column names, >= 3.2 the four split P/Q names; emit both so the
+        // file imports (and makeYbus runs) on either side of the rename.
         "const_z_percent",
         "const_i_percent",
+        "const_z_p_percent",
+        "const_i_p_percent",
+        "const_z_q_percent",
+        "const_i_q_percent",
         "sn_mva",
         "scaling",
         "in_service",
@@ -369,6 +376,10 @@ fn load_frame(net: &Network) -> Value {
             Value::from(l.bus.0 as u64),
             jnum(l.p),
             jnum(l.q),
+            jnum(0.0),
+            jnum(0.0),
+            jnum(0.0),
+            jnum(0.0),
             jnum(0.0),
             jnum(0.0),
             Value::Null,

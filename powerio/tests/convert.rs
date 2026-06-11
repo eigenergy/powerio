@@ -206,7 +206,7 @@ fn pp_json(tables: &[(&str, Value)]) -> String {
     serde_json::json!({ "_class": "pandapowerNet", "_object": object }).to_string()
 }
 
-fn pp_frame(columns: &[&str], index: &[usize], data: Value) -> Value {
+fn pp_frame(columns: &[&str], index: &[usize], data: &Value) -> Value {
     serde_json::json!({ "columns": columns, "index": index, "data": data })
 }
 
@@ -231,14 +231,14 @@ fn pandapower_json_rejects_malformed_input() {
     let dangling = pp_json(&[
         (
             "bus",
-            pp_frame(&["vn_kv"], &[1], serde_json::json!([[110.0]])),
+            pp_frame(&["vn_kv"], &[1], &serde_json::json!([[110.0]])),
         ),
         (
             "load",
             pp_frame(
                 &["bus", "p_mw", "q_mvar"],
                 &[1],
-                serde_json::json!([[7, 5.0, 2.0]]),
+                &serde_json::json!([[7, 5.0, 2.0]]),
             ),
         ),
     ]);
@@ -246,11 +246,12 @@ fn pandapower_json_rejects_malformed_input() {
 }
 
 #[test]
+#[allow(clippy::float_cmp)]
 fn pandapower_line_rating_sentinel_reads_as_unlimited() {
     let text = pp_json(&[
         (
             "bus",
-            pp_frame(&["vn_kv"], &[1, 2], serde_json::json!([[110.0], [110.0]])),
+            pp_frame(&["vn_kv"], &[1, 2], &serde_json::json!([[110.0], [110.0]])),
         ),
         (
             "line",
@@ -264,7 +265,7 @@ fn pandapower_line_rating_sentinel_reads_as_unlimited() {
                     "max_i_ka",
                 ],
                 &[1, 2],
-                serde_json::json!([[1, 2, 1.0, 10.0, 1.0, 99999.0], [1, 2, 1.0, 10.0, 1.0, 1.0]]),
+                &serde_json::json!([[1, 2, 1.0, 10.0, 1.0, 99999.0], [1, 2, 1.0, 10.0, 1.0, 1.0]]),
             ),
         ),
     ]);
@@ -278,6 +279,7 @@ fn pandapower_line_rating_sentinel_reads_as_unlimited() {
 }
 
 #[test]
+#[allow(clippy::float_cmp)]
 fn pandapower_writer_keeps_zero_rating_zero() {
     let mut net = parse_matpower_file(data("case9.m")).unwrap();
     net.branches[0].rate_a = 0.0;

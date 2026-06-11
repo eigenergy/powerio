@@ -127,7 +127,7 @@ impl FromStr for TargetFormat {
 /// `powerworld`/`aux`. Case-insensitive. The one place the bindings (Python, C
 /// ABI) share, so a new text format means one new arm here, not three. PyPSA
 /// CSV folders are directory inputs with no text target; their aliases are
-/// matched by [`is_pypsa_csv_name`] next to this.
+/// matched by the private `is_pypsa_csv_name` next to this.
 ///
 /// The `powermodelsjson`/`egretjson`/`pandapowerjson` aliases let a
 /// [`SourceFormat`]'s string form (`{:?}` lowercased, e.g. `"PowerModelsJson"`)
