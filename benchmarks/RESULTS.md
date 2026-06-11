@@ -68,6 +68,32 @@ recorded as n/a. The `powerio: parse` row uses the base Python package and reads
 from disk. The scipy matrix path `powerio[matrix]: parse + Y_bus + B'` measured
 9.0 / 26.0 / 36.1 / 565.1 ms on the same four cases.
 
+## PowerWorld aux and pwb
+
+`cargo bench --bench parse -- "parse_aux_|parse_pwb_"` times both PowerWorld
+readers on the same cases: the vendored 200 bus pair, the fetched 2000 bus
+pair and RTS-GMLC (`benchmarks/fetch_powerworld.sh`), and any file passed
+through `POWERIO_BENCH_AUX`/`POWERIO_BENCH_PWB` for cases that cannot be
+fetched. Median wall time, same machine as above.
+
+<!-- BENCH:powerworld START -->
+| case | buses / branches | aux | pwb |
+| --- | --- | --- | --- |
+| ACTIVSg200 | 200 / 246 | 2.74 ms | 43.1 ms |
+| ACTIVSg2000 June 2016 | 2007 / 3043 | 32.0 ms | 424 ms |
+| RTS-GMLC | 73 / 120 | n/a | 907 ms |
+| Texas7k aux (local TAMU copy) | 6717 / 9140 | 72.9 ms | rejected (header 483) |
+<!-- BENCH:powerworld END -->
+
+The `.pwb` numbers price the format's structure, not byte volume: the binary
+carries no field dictionary, so the reader locates each table by a depth
+first search over count word candidates and validates every record behind
+every candidate. RTS-GMLC is slowest despite being smallest because its bus
+numbers (101 through 325) are small integers that appear constantly in
+binary data, forging candidate device records the search must walk and
+reject. Cutting that cost is tracked as a follow-up; the reader is built
+for correctness first (a wrong network is worse than a slow loud parse).
+
 ## Correctness: validated against four tools
 
 `bash benchmarks/run_validation.sh` runs every validator over every fixture and

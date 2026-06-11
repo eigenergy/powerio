@@ -685,3 +685,20 @@ fn rts_gmlc_pwb_matches_its_matpower_and_raw_siblings() {
     let p_gen_buses: BTreeSet<usize> = pwb.generators.iter().map(|g| g.bus.0).collect();
     assert_eq!(p_gen_buses, m_gen_buses);
 }
+
+/// The hub surface: `parse_file` dispatches `.pwb` by extension and by the
+/// explicit `pwb` source name, and the network converts onward (the CLI's
+/// `powerio convert ACTIVSg200.pwb out.m` path).
+#[test]
+fn parse_file_dispatches_pwb_and_converts() {
+    let net = parse_file(vendored("ACTIVSg200.pwb"), None).unwrap();
+    assert_eq!(net.buses.len(), 200);
+    assert_eq!(net.branches.len(), 246);
+    let by_name = parse_file(vendored("ACTIVSg200.pwb"), Some("pwb")).unwrap();
+    assert_eq!(by_name.buses.len(), 200);
+
+    let conv = powerio::write_as(&net, powerio::TargetFormat::Matpower);
+    let back = powerio::parse_str(&conv.text, "matpower").unwrap();
+    assert_eq!(back.buses.len(), 200);
+    assert_eq!(back.branches.len(), 246);
+}
