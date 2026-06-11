@@ -26,7 +26,7 @@ When writing back to the source format, PowerIO **returns the original file exac
 The following formats are currently supported with read/write functionality:
 - [MATPOWER](https://matpower.org/) `.m`
 - [PSS/E](https://www.siemens.com/global/en/products/energy/grid-software/planning/pss-software/pss-e.html) `.raw` revision 33
-- [PowerWorld](https://www.powerworld.com/WebHelp/Content/MainDocumentation_HTML/Case_Formats.htm) `.aux`
+- [PowerWorld](https://www.powerworld.com/WebHelp/Content/MainDocumentation_HTML/Case_Formats.htm) `.aux`, plus a read only `.pwb` binary reader (Simulator 19/20 era exports, parity tested against sibling formats; newer writer vintages are detected and rejected with the version named)
 - [PowerModels.jl](https://github.com/lanl-ansi/PowerModels.jl) network data JSON
 - [egret](https://pypi.org/project/gridx-egret/) `ModelData` JSON
 - [GridFM](https://github.com/gridfm) `.parquet`
@@ -125,10 +125,14 @@ powerio
 | PowerModels JSON | partial | original text | partial | partial | partial |
 | PSS/E | full | full | original text | partial | partial |
 | PowerWorld | full | full | partial | original text | partial |
+| PowerWorld `.pwb` | full | full | partial | partial | partial |
 | egret JSON | partial | full | partial | partial | original text |
 
 `partial` means the target lacks fields present in the source. The writer reports
-those cases in `Conversion::warnings`. 
+those cases in `Conversion::warnings`. PowerWorld `.pwb` is read only (no
+writer, no retained source): the row shows where its decoded power flow core
+lands; the decoded vintages and per field evidence live in
+[docs/powerworld.md](docs/powerworld.md). 
 
 GridFM Parquet is not in this table: both read and write are currently lossy. Known limits
 for every format are documented in

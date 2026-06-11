@@ -33,7 +33,7 @@ use crate::{Error, Result};
 mod egret;
 mod matpower;
 mod powermodels;
-mod powerworld;
+pub mod powerworld;
 mod psse;
 
 pub use egret::{parse_egret_json, write_egret_json};
@@ -133,9 +133,10 @@ pub fn target_format_from_name(name: &str) -> Option<TargetFormat> {
 }
 
 /// Parse the case file at `path` into a [`Network`], choosing the reader from
-/// `from` (a format name, see [`target_format_from_name`]) or, when `None`, from
-/// the file extension (`m`/`json`/`raw`/`aux`). A `.json` file is sniffed for the
-/// egret vs PowerModels shape; pass `from` to force one.
+/// `from` (a format name, see [`target_format_from_name`], plus `pwb`) or, when
+/// `None`, from the file extension (`m`/`json`/`raw`/`aux`/`pwb`). A `.json` file
+/// is sniffed for the egret vs PowerModels shape; pass `from` to force one.
+/// `.pwb` binaries are read only and carry no retained source.
 ///
 /// The one path-based parser the CLI and the Python/C/Julia bindings share (each
 /// exposes the same `parse_file(path, from)` shape), so adding a source format is
@@ -147,6 +148,19 @@ pub fn target_format_from_name(name: &str) -> Option<TargetFormat> {
 /// on malformed input.
 pub fn parse_file(path: impl AsRef<std::path::Path>, from: Option<&str>) -> Result<Network> {
     let path = path.as_ref();
+    // PowerWorld `.pwb` is binary and read only; dispatch it before the text
+    // read. `from` accepts "pwb" for files with a different extension.
+    let ext = path
+        .extension()
+        .and_then(|e| e.to_str())
+        .map(str::to_ascii_lowercase);
+    if from.is_some_and(|f| f.eq_ignore_ascii_case("pwb"))
+        || (from.is_none() && ext.as_deref() == Some("pwb"))
+    {
+        let bytes = std::fs::read(path)?;
+        let stem = path.file_stem().and_then(|s| s.to_str());
+        return powerworld::parse_pwb(&bytes, stem);
+    }
     // Read the file once into an owned buffer; the reader moves it straight into
     // the retained source (byte-exact round-trip) with no copy. Sniffing a
     // `.json` borrows the text before the move.
@@ -428,8 +442,13 @@ mod tests {
                 "source_format {token:?} did not round-trip"
             );
         }
-        // The derived/in-memory source formats have no writer target.
-        for sf in [SourceFormat::InMemory, SourceFormat::Normalized] {
+        // The derived/in-memory source formats have no writer target, and
+        // neither does the read only .pwb binary.
+        for sf in [
+            SourceFormat::InMemory,
+            SourceFormat::Normalized,
+            SourceFormat::PowerWorldBinary,
+        ] {
             assert_eq!(target_format_from_name(&format!("{sf:?}")), None);
         }
     }
