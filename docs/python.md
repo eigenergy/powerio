@@ -62,7 +62,8 @@ The written folder can be imported with
 dependency of powerio.
 
 CSV folders are PyPSA's native static component format and carry the network
-topology (buses, lines, generators, loads, shunts) — the part powerio models.
+topology (buses, lines, transformers, generators, loads, shunts, and
+storage units) — the part powerio models.
 Time series scenarios in NetCDF/HDF5 are out of scope for now; support is
 tracked in [#107](https://github.com/eigenergy/powerio/issues/107).
 
@@ -74,7 +75,7 @@ The native wheel includes the GridFM Parquet writer and reader.
 of `Network.write_gridfm`, returning a `GridfmRead(network, scenario, warnings)`
 namedtuple. The read is lossy but recovers everything a power flow needs;
 `warnings` lists what the gridfm schema couldn't round-trip (synthesized bus
-ids, folded per-bus load/shunt, dropped HVDC/storage, piecewise costs).
+ids, folded per bus load/shunt, dropped HVDC/storage, piecewise costs).
 `read_gridfm_scenarios(dir)` returns one `GridfmRead` per scenario. `dir`
 resolves the `raw/` leaf, a `<case>/` directory, or a parent with one `*/raw/`
 child.

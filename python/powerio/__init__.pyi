@@ -140,6 +140,7 @@ class Network:
         "Psse",
         "PowerWorld",
         "PandapowerJson",
+        "PowerWorldBinary",
         "InMemory",
         "Normalized",
         "Gridfm",

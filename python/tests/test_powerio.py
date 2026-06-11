@@ -753,3 +753,24 @@ def test_gridfm_in_all_export():
     ):
         assert name in powerio.__all__
         assert hasattr(powerio, name)
+
+
+def test_source_format_stubs_cover_every_variant():
+    # The .pyi Literal must list every string the runtime can produce; a new
+    # SourceFormat variant lands here and in both stubs together.
+    variants = [
+        "Matpower",
+        "PowerModelsJson",
+        "EgretJson",
+        "Psse",
+        "PowerWorld",
+        "PowerWorldBinary",
+        "Gridfm",
+        "InMemory",
+        "Normalized",
+    ]
+    root = Path(__file__).resolve().parents[1] / "powerio"
+    for stub in ("__init__.pyi", "_powerio.pyi"):
+        text = (root / stub).read_text()
+        for v in variants:
+            assert f'"{v}"' in text, f"{stub} missing source_format {v!r}"

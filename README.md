@@ -26,7 +26,7 @@ When writing back to the source format, PowerIO **returns the original file exac
 The following formats are currently supported with read/write functionality:
 - [MATPOWER](https://matpower.org/) `.m`
 - [PSS/E](https://www.siemens.com/global/en/products/energy/grid-software/planning/pss-software/pss-e.html) `.raw` revision 33
-- [PowerWorld](https://www.powerworld.com/WebHelp/Content/MainDocumentation_HTML/Case_Formats.htm) `.aux`
+- [PowerWorld](https://www.powerworld.com/WebHelp/Content/MainDocumentation_HTML/Case_Formats.htm) `.aux` (all three field naming generations through Simulator 21+), plus a read only `.pwb` binary reader (2016 through 2022 era exports under the six decoded header constants 425, 483, 508, 537, 550, and 551, parity tested against sibling formats up to the 6717 bus Texas7k; unsupported writer vintages are detected and rejected with the format constant named), and a read only `.pwd` display reader for substation diagram coordinates (matched 1-1 against the aux substations on every probed save with a same vintage aux; the v19 resave matches 1248/1250 against the published case, a vintage skew)
 - [PowerModels.jl](https://github.com/lanl-ansi/PowerModels.jl) network data JSON
 - [egret](https://pypi.org/project/gridx-egret/) `ModelData` JSON
 - [pandapower](https://www.pandapower.org/) `pandapowerNet` JSON
@@ -130,11 +130,15 @@ powerio
 | PowerModels JSON | partial | original text | partial | partial | partial | partial |
 | PSS/E | full | full | original text | partial | partial | partial |
 | PowerWorld | full | full | partial | original text | partial | partial |
+| PowerWorld `.pwb` | full | full | partial | partial | partial | partial |
 | egret JSON | partial | full | partial | partial | original text | partial |
 | pandapower JSON | partial | partial | partial | partial | partial | original text |
 
 `partial` means the target lacks fields present in the source. The writer reports
-those cases in `Conversion::warnings`. 
+those cases in `Conversion::warnings`. PowerWorld `.pwb` is read only (no
+writer, no retained source): the row shows where its decoded power flow core
+lands; the decoded vintages and per field evidence live in
+[docs/powerworld.md](docs/powerworld.md). 
 
 PyPSA CSV folders and GridFM Parquet are not in this table because they are
 multi-file dataset formats rather than `Conversion { text }` targets; both are
@@ -223,9 +227,9 @@ are in the [format fidelity guide](https://eigenergy.github.io/powerio/guides/fo
 The Rust test suite covers parsers, writers, format conversion, matrix
 builders, and normalization; the C ABI crate carries its own tests, and
 `pytest` covers the Python bindings. The benchmark validation suite compares
-selected outputs against PowerModels.jl, egret, ExaPowerIO.jl, and pandapower.
-The benchmark validation suite also imports PowerIO's PyPSA CSV folders with
-PyPSA when the optional oracle is installed.
+selected outputs against PowerModels.jl, egret, ExaPowerIO.jl, and pandapower,
+and imports PowerIO's PyPSA CSV folders with PyPSA when the optional oracle is
+installed.
 
 ```
 cargo fmt --all --check

@@ -35,9 +35,10 @@ matrix covers MATPOWER, PSS/E, and egret sources against all five legacy text
 targets, every PowerWorld output is read back and bridged to PowerModels JSON,
 and the PMread leg covers the PowerModels JSON read side. pandapower JSON and
 PyPSA CSV folders have dedicated import validators because pandapower has its
-own JSON schema and PyPSA is a directory format. The remaining source/target
-pairs (PowerModels JSON and PowerWorld sources into the non-PowerModels targets)
-have no external oracle and rest on the Rust round trip suite.
+own JSON schema and PyPSA is a directory format; both validate the write
+direction only — the pandapower JSON and PyPSA readers have no external oracle.
+They, and the remaining source/target pairs (PowerModels JSON and PowerWorld
+sources into the non-PowerModels targets), rest on the Rust round trip suite.
 
 - **PowerModels.jl** (`validate_powermodels.jl`, `validate_psse.jl`,
   `core_json.jl`). Reads MATPOWER, PowerModels JSON, and PSS/E. The MATPOWER to
@@ -100,19 +101,22 @@ in Python), naming the table and counting the affected rows.
   control is not modeled. Impedances are assumed on the system base (`CZ = CW = 1`).
 - **PowerWorld** `.aux` carries no system base, so the reader defaults to 100 MVA.
   No third-party `.aux` reader exists, so that writer is validated by powerio's own
-  read-back plus a PowerModels JSON bridge.
+  read back plus a PowerModels JSON bridge.
 - **MATPOWER** canonical output (for a case that did not originate as MATPOWER)
-  omits dcline; the byte-exact echo path keeps it when the case was read from
+  omits dcline; the byte exact echo path keeps it when the case was read from
   MATPOWER. Storage is written as an `mpc.storage` block.
 - **egret** output drops HVDC and storage. The reader takes the power flow
   ModelData subset (numeric bus ids, scalar values); unit commitment cases
   (`system.time_keys`) are rejected.
-- **pandapower JSON** writes the power flow core as split-oriented
+- **pandapower JSON** writes the power flow core as split oriented
   `pandapowerNet` tables: line parameters in pandapower's physical units,
   tap/shift branches as transformers, and an `ext_grid` row for each reference
   bus that has no generator (`vm_pu`/`va_degree` from the bus). Slack
   generators stay in the `gen` table with `slack=true`; reading such a file
-  back materializes the `ext_grid` row as a Ref generator. The writer warns on
+  back materializes the `ext_grid` row as a Ref generator. The file is always
+  labeled `f_hz = 50` (powerio's model carries no system frequency) with
+  `c_nf_per_km` compensated so the admittance is exact; a 60 Hz source is
+  relabeled, not altered electrically. The writer warns on
   dropped HVDC and storage, generator capability columns, angle limits, rate
   B/C, and costs `poly_cost` cannot carry (nonpolynomial costs dropped, cubic
   and higher truncated to quadratic). The reader consumes the bus, load, sgen,
@@ -122,8 +126,8 @@ in Python), naming the table and counting the affected rows.
   applied). ZIP load composition, line and transformer shunt conductance,
   magnetizing branches, lv side taps, and reactive cost coefficients warn per
   table with counts.
-- **PyPSA CSV folders** are canonicalized directory outputs, not byte-exact
-  text conversions. The v1 reader/writer covers static buses, generators,
+- **PyPSA CSV folders** are canonicalized directory outputs, not byte exact
+  text conversions. The reader/writer covers static buses, generators,
   loads, lines, transformers, shunts, storage units, and network base MVA;
   transformer impedances are rebased between the system base and the
   transformer `s_nom`. The reader maps links to HVDC lines with a warning
@@ -137,11 +141,11 @@ in Python), naming the table and counting the affected rows.
   everything a power flow needs. That is bus types/voltages/limits, nodal load
   and shunt totals, generator
   dispatch and bounds, branch `r/x/b/tap/shift/rate_a`/angle-limits, and `baseMVA`;
-  it can't recover original bus ids (synthesized `1..n`), per-element load/shunt
+  it can't recover original bus ids (synthesized `1..n`), per element load/shunt
   granularity (folded one synthetic element per bus), piecewise/cubic gen costs
   (read as none), or HVDC/storage. Because the writer stores the *effective* tap,
   a branch with unit tap and no phase shift is read back as a line (raw `tap = 0`);
-  a unity-ratio, zero-shift transformer in the source is thus read as a line (the
+  a unity ratio, zero shift transformer in the source is thus read as a line (the
   power flow is identical). The losses are returned as a warnings list on
-  `GridfmRead`, mirroring `Conversion::warnings`. The same-direction writer is
+  `GridfmRead`, mirroring `Conversion::warnings`. The same direction writer is
   documented in the [README](../README.md#gridfm).

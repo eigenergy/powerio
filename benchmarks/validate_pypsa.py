@@ -127,7 +127,8 @@ def check_case(path: Path) -> str:
 
 
 def zbase(v_kv, base_mva):
-    # Mirror the writer: a bus with no base_kv (MATPOWER 0) uses zbase = 1.
+    # Mirror the writer's guard: a bus with no base_kv (the IEEE cases ship
+    # base_kv 0) uses zbase = 1, i.e. ohms == per unit.
     if v_kv > 0.0 and base_mva > 0.0:
         return v_kv * v_kv / base_mva
     return 1.0

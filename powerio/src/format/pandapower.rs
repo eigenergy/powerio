@@ -93,7 +93,16 @@ pub(crate) fn parse_pandapower_source(
         let mut zip_rows = 0_usize;
         for row in load_frame.rows() {
             let scale = row.f_or("scaling", 1.0);
-            if row.f_or("const_z_percent", 0.0) != 0.0 || row.f_or("const_i_percent", 0.0) != 0.0 {
+            // pandapower <= 3.1 uses the two aggregate names; >= 3.2 splits
+            // them into separate P/Q columns. Check all six so a file that
+            // carries only the split names still triggers the warning.
+            let has_zip = row.f_or("const_z_percent", 0.0) != 0.0
+                || row.f_or("const_i_percent", 0.0) != 0.0
+                || row.f_or("const_z_p_percent", 0.0) != 0.0
+                || row.f_or("const_i_p_percent", 0.0) != 0.0
+                || row.f_or("const_z_q_percent", 0.0) != 0.0
+                || row.f_or("const_i_q_percent", 0.0) != 0.0;
+            if has_zip {
                 zip_rows += 1;
             }
             loads.push(Load {
@@ -106,7 +115,7 @@ pub(crate) fn parse_pandapower_source(
         }
         if zip_rows > 0 {
             warnings.push(format!(
-                "`load`: ZIP composition (const_z_percent/const_i_percent) nonzero on {zip_rows} rows; loads are read as constant power"
+                "`load`: ZIP composition (const_z_percent/const_i_percent/const_z_p_percent/const_i_p_percent/const_z_q_percent/const_i_q_percent) nonzero on {zip_rows} rows; loads are read as constant power"
             ));
         }
     }
@@ -149,7 +158,7 @@ pub(crate) fn parse_pandapower_source(
                 vg: row.f_or("vm_pu", 1.0),
                 mbase: row.f_or("sn_mva", base_mva),
                 in_service: row.bool_or("in_service", true),
-                cost: costs.get(&("gen".to_string(), idx)).cloned(),
+                cost: costs.get(&(CostElement::Gen, idx)).cloned(),
                 caps: [None; crate::network::GEN_EXTRA_KEYS.len()],
             });
         }
@@ -170,7 +179,7 @@ pub(crate) fn parse_pandapower_source(
                 vg: row.f_or("vm_pu", 1.0),
                 mbase: base_mva,
                 in_service: row.bool_or("in_service", true),
-                cost: costs.get(&("ext_grid".to_string(), idx)).cloned(),
+                cost: costs.get(&(CostElement::ExtGrid, idx)).cloned(),
                 caps: [None; crate::network::GEN_EXTRA_KEYS.len()],
             });
         }
@@ -194,7 +203,7 @@ pub(crate) fn parse_pandapower_source(
                 vg: 1.0,
                 mbase: row.f_or("sn_mva", base_mva),
                 in_service: row.bool_or("in_service", true),
-                cost: costs.get(&("sgen".to_string(), idx)).cloned(),
+                cost: costs.get(&(CostElement::Sgen, idx)).cloned(),
                 caps: [None; crate::network::GEN_EXTRA_KEYS.len()],
             });
         }
@@ -452,13 +461,13 @@ pub fn write_pandapower_json(net: &Network) -> Conversion {
     let mut warnings = Vec::new();
     if !net.hvdc.is_empty() {
         warnings.push(format!(
-            "{} dcline(s) dropped: pandapower JSON writer v1 does not model HVDC",
+            "{} dcline(s) dropped: the pandapower JSON writer does not model HVDC",
             net.hvdc.len()
         ));
     }
     if !net.storage.is_empty() {
         warnings.push(format!(
-            "{} storage unit(s) dropped: pandapower JSON writer v1 does not model storage",
+            "{} storage unit(s) dropped: the pandapower JSON writer does not model storage",
             net.storage.len()
         ));
     }
@@ -490,6 +499,9 @@ pub fn write_pandapower_json(net: &Network) -> Conversion {
     object.insert("trafo".into(), trafo);
     object.insert("poly_cost".into(), poly_cost_frame(net, &mut warnings));
     object.insert("name".into(), Value::String(net.name.clone()));
+    // Network carries no system frequency, so the writer always labels the file
+    // 50 Hz and compensates c_nf_per_km; a 60 Hz source keeps its exact Y_bus
+    // but is relabeled (documented in docs/format-fidelity.md).
     object.insert("f_hz".into(), jnum(F_HZ));
     object.insert("sn_mva".into(), jnum(net.base_mva));
     object.insert("version".into(), Value::String("3.0.0".into()));
@@ -540,8 +552,15 @@ fn load_frame(net: &Network) -> Value {
         "bus",
         "p_mw",
         "q_mvar",
+        // ZIP composition is all constant power. pandapower <= 3.1 reads the
+        // two-column names, >= 3.2 the four split P/Q names; emit both so the
+        // file imports (and makeYbus runs) on either side of the rename.
         "const_z_percent",
         "const_i_percent",
+        "const_z_p_percent",
+        "const_i_p_percent",
+        "const_z_q_percent",
+        "const_i_q_percent",
         "sn_mva",
         "scaling",
         "in_service",
@@ -556,6 +575,10 @@ fn load_frame(net: &Network) -> Value {
             pp_bus(l.bus),
             jnum(l.p),
             jnum(l.q),
+            jnum(0.0),
+            jnum(0.0),
+            jnum(0.0),
+            jnum(0.0),
             jnum(0.0),
             jnum(0.0),
             Value::Null,
@@ -676,6 +699,7 @@ fn branch_frames(net: &Network) -> (Value, Value) {
         "tap_side",
         "tap_neutral",
         "tap_step_percent",
+        "tap_step_degree",
         "tap_pos",
         "parallel",
         "df",
@@ -714,6 +738,7 @@ fn branch_frames(net: &Network) -> (Value, Value) {
                 Value::String("hv".into()),
                 Value::from(0_i64),
                 jnum(tap_delta.abs() * 100.0),
+                jnum(0.0),
                 jnum(tap_delta.signum()),
                 Value::from(1_u64),
                 jnum(1.0),
@@ -1052,10 +1077,32 @@ fn read_frame(root: &Map<String, Value>, name: &str) -> Result<Option<DataFrame>
     }))
 }
 
+/// The pandapower `poly_cost.et` element-type domain that maps onto powerio's
+/// model (gen, ext_grid, and sgen all read as generators). Other `et` values
+/// (`load`, `dcline`, `storage`) have no powerio element carrying a cost, so
+/// those rows are skipped on read.
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Debug)]
+enum CostElement {
+    Gen,
+    ExtGrid,
+    Sgen,
+}
+
+impl CostElement {
+    fn from_et(et: &str) -> Option<Self> {
+        match et {
+            "gen" => Some(Self::Gen),
+            "ext_grid" => Some(Self::ExtGrid),
+            "sgen" => Some(Self::Sgen),
+            _ => None,
+        }
+    }
+}
+
 fn read_poly_costs(
     root: &Map<String, Value>,
     warnings: &mut Vec<String>,
-) -> Result<BTreeMap<(String, usize), GenCost>> {
+) -> Result<BTreeMap<(CostElement, usize), GenCost>> {
     let mut out = BTreeMap::new();
     let Some(frame) = read_frame(root, "poly_cost")? else {
         return Ok(out);
@@ -1063,6 +1110,9 @@ fn read_poly_costs(
     let mut cq_rows = 0_usize;
     for row in frame.rows() {
         let et = row.string("et").unwrap_or_else(|| "gen".into());
+        let Some(et) = CostElement::from_et(&et) else {
+            continue;
+        };
         let element = row.usize_or("element", 0);
         if row.f_or("cq2_eur_per_mvar2", 0.0) != 0.0
             || row.f_or("cq1_eur_per_mvar", 0.0) != 0.0
@@ -1828,7 +1878,7 @@ mod tests {
         ]))
         .unwrap();
         for expected in [
-            "`load`: ZIP composition (const_z_percent/const_i_percent) nonzero on 1 rows; loads are read as constant power",
+            "`load`: ZIP composition (const_z_percent/const_i_percent/const_z_p_percent/const_i_p_percent/const_z_q_percent/const_i_q_percent) nonzero on 1 rows; loads are read as constant power",
             "`line`: g_us_per_km nonzero on 1 rows; line shunt conductance is not representable and was ignored",
             "`trafo`: i0_percent/pfe_kw nonzero on 1 rows; the magnetizing branch is not representable and was ignored",
         ] {
@@ -1838,6 +1888,40 @@ mod tests {
                 parsed.warnings
             );
         }
+    }
+
+    #[test]
+    fn zip_split_columns_warn_when_nonzero() {
+        // A file written by pandapower >= 3.2 carries only the four split names,
+        // not the two aggregate names. The reader must detect the nonzero values
+        // and still emit the ZIP warning.
+        let parsed = parse_pandapower_json(&pp_net(vec![
+            bus_table(json!([0])),
+            (
+                "load",
+                pp_frame(
+                    &[
+                        "bus",
+                        "p_mw",
+                        "const_z_p_percent",
+                        "const_i_p_percent",
+                        "const_z_q_percent",
+                        "const_i_q_percent",
+                    ],
+                    json!([0]),
+                    json!([[0, 1.0, 10.0, 0.0, 0.0, 0.0]]),
+                ),
+            ),
+        ]))
+        .unwrap();
+        assert!(
+            parsed
+                .warnings
+                .iter()
+                .any(|w| w.starts_with("`load`: ZIP composition")),
+            "expected ZIP warning in {:?}",
+            parsed.warnings
+        );
     }
 
     // --- writer ---

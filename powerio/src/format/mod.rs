@@ -30,14 +30,14 @@ use std::sync::Arc;
 
 use serde_json::{Map, Value};
 
-use crate::network::{Network, SourceFormat};
+use crate::network::{BusType, Network, SourceFormat};
 use crate::{Error, Result};
 
 mod egret;
 mod matpower;
 mod pandapower;
 mod powermodels;
-mod powerworld;
+pub mod powerworld;
 mod psse;
 mod pypsa;
 
@@ -126,11 +126,14 @@ impl FromStr for TargetFormat {
 /// if unrecognized. Accepts `matpower`/`m`, `powermodels-json`/`powermodels`/`pm`,
 /// `egret-json`/`egret`, `pandapower-json`/`pandapower`/`pp`, `psse`/`raw`,
 /// `powerworld`/`aux`. Case-insensitive. The one place the bindings (Python, C
-/// ABI) share, so a new format means one new arm here, not three.
+/// ABI) share, so a new text format means one new arm here, not three. PyPSA
+/// CSV folders are directory inputs with no text target; their aliases are
+/// matched by the private `is_pypsa_csv_name` next to this.
 ///
-/// The `powermodelsjson`/`egretjson` aliases let a [`SourceFormat`]'s string form
-/// (`{:?}` lowercased, e.g. `"PowerModelsJson"`) round-trip back to a target, so
-/// `net.to_format(other.source_format)` works for every format.
+/// The `powermodelsjson`/`egretjson`/`pandapowerjson` aliases let a
+/// [`SourceFormat`]'s string form (`{:?}` lowercased, e.g. `"PowerModelsJson"`)
+/// round-trip back to a target, so `net.to_format(other.source_format)` works
+/// for every format.
 #[must_use]
 pub fn target_format_from_name(name: &str) -> Option<TargetFormat> {
     Some(match name.to_ascii_lowercase().as_str() {
@@ -146,14 +149,27 @@ pub fn target_format_from_name(name: &str) -> Option<TargetFormat> {
     })
 }
 
+/// Whether a format name means a PyPSA CSV folder. PyPSA folders are directory
+/// inputs, not text targets, so they have no [`TargetFormat`] arm; this is the
+/// companion alias matcher to [`target_format_from_name`] and the one place the
+/// PyPSA aliases live.
+fn is_pypsa_csv_name(name: &str) -> bool {
+    matches!(
+        name.to_ascii_lowercase().replace(['-', '_'], "").as_str(),
+        "pypsacsv" | "pypsa"
+    )
+}
+
 /// Parse the case file at `path`, choosing the reader from `from` (the
-/// [`target_format_from_name`] names plus `pypsa-csv`/`pypsa`) or, when `None`,
-/// from the path: a directory containing `network.csv` parses as a PyPSA CSV
-/// folder (any other directory fails with the I/O error), and a file maps by
-/// extension (`m`/`json`/`raw`/`aux`). A `.json` file is sniffed three ways:
-/// pandapower (`"_class": "pandapowerNet"`), egret (top level `elements` and
-/// `system`), else PowerModels. Pass `from` to force one. Returns [`Parsed`]:
-/// the network plus the reader's fidelity warnings.
+/// [`target_format_from_name`] names plus `pypsa-csv`/`pypsa` and `pwb`) or,
+/// when `None`, from the path: a directory containing `network.csv` parses as
+/// a PyPSA CSV folder (any other directory fails with the I/O error), and a
+/// file maps by extension (`m`/`json`/`raw`/`aux`/`pwb`), case-insensitively
+/// (issue #97: `.RAW` is as common as `.raw` in the wild). A `.json` file is
+/// sniffed three ways: pandapower (`"_class": "pandapowerNet"`), egret (top
+/// level `elements` and `system`), else PowerModels. Pass `from` to force one.
+/// `.pwb` binaries are read only and carry no retained source. Returns
+/// [`Parsed`]: the network plus the reader's fidelity warnings.
 ///
 /// The one path-based parser the CLI and the Python/C/Julia bindings share (each
 /// exposes the same `parse_file(path, from)` shape), so adding a source format is
@@ -165,42 +181,73 @@ pub fn target_format_from_name(name: &str) -> Option<TargetFormat> {
 /// on malformed input.
 pub fn parse_file(path: impl AsRef<std::path::Path>, from: Option<&str>) -> Result<Parsed> {
     let path = path.as_ref();
+    // PyPSA CSV folders are directories, not files; dispatch them before any
+    // extension logic. `from` accepts the pypsa aliases, and a bare directory
+    // with a `network.csv` auto-detects.
     if from.is_some_and(is_pypsa_csv_name)
         || (from.is_none() && path.is_dir() && path.join("network.csv").is_file())
     {
         return pypsa::read_pypsa_csv_folder(path);
     }
+    // PowerWorld `.pwb` is binary and read only; dispatch it before the text
+    // read. `from` accepts "pwb" for files with a different extension.
+    let ext = path
+        .extension()
+        .and_then(|e| e.to_str())
+        .map(str::to_ascii_lowercase);
+    if from.is_some_and(|f| f.eq_ignore_ascii_case("pwb"))
+        || (from.is_none() && ext.as_deref() == Some("pwb"))
+    {
+        let bytes = std::fs::read(path)?;
+        let stem = path.file_stem().and_then(|s| s.to_str());
+        // The binary reader is total (no fidelity warnings); wrap its network
+        // in the shared [`Parsed`] shape.
+        let network = powerworld::parse_pwb(&bytes, stem)?;
+        return Ok(Parsed {
+            network,
+            warnings: Vec::new(),
+        });
+    }
+    // Settle the format before touching the file: an unmapped or binary
+    // extension must surface as UnknownFormat, not as the UTF-8 read error
+    // the text formats' loader would hit first. `.pwd` gets its own arm
+    // because the display sibling ships next to every case file in the wild
+    // and carries no case data.
+    if from.is_none() && ext.as_deref() == Some("pwd") {
+        return Err(Error::UnknownFormat(
+            "a PowerWorld .pwd is the oneline display, not case data; \
+             powerworld::parse_pwd reads its substation coordinates"
+                .into(),
+        ));
+    }
+    let fmt_hint = match from {
+        Some(f) => {
+            Some(target_format_from_name(f).ok_or_else(|| Error::UnknownFormat(f.to_string()))?)
+        }
+        None => {
+            // Everything but `.json` (sniffed below) resolves without the text.
+            match ext.as_deref() {
+                Some("m") => Some(TargetFormat::Matpower),
+                Some("raw") => Some(TargetFormat::Psse),
+                Some("aux") => Some(TargetFormat::PowerWorld),
+                Some("json") => None,
+                other => {
+                    return Err(Error::UnknownFormat(format!(
+                        "cannot infer from file extension {other:?}; \
+                         pass an explicit source format"
+                    )));
+                }
+            }
+        }
+    };
     // Read the file once into an owned buffer; the reader moves it straight into
     // the retained source (byte-exact round-trip) with no copy. Sniffing a
     // `.json` borrows the text before the move.
     let text = std::fs::read_to_string(path)?;
-    let fmt = match from {
-        Some(f) => target_format_from_name(f).ok_or_else(|| Error::UnknownFormat(f.to_string()))?,
-        None => format_from_extension(path, &text)?,
-    };
+    let fmt = fmt_hint.unwrap_or_else(|| sniff_json(&text));
     // The file stem is the name hint for formats that don't carry their own name.
     let stem = path.file_stem().and_then(|s| s.to_str());
     read_source(Arc::new(text), fmt, stem)
-}
-
-/// Map a file extension to a [`TargetFormat`], case-insensitively (issue #97:
-/// `.RAW` is as common as `.raw` in the wild). A `.json` is sniffed three ways:
-/// pandapower (`"_class": "pandapowerNet"`), egret (top level `elements` and
-/// `system`), else PowerModels. The error keeps the extension as the user wrote
-/// it.
-fn format_from_extension(path: &std::path::Path, text: &str) -> Result<TargetFormat> {
-    let ext = path.extension().and_then(|e| e.to_str());
-    Ok(match ext.map(str::to_ascii_lowercase).as_deref() {
-        Some("m") => TargetFormat::Matpower,
-        Some("json") => sniff_json(text),
-        Some("raw") => TargetFormat::Psse,
-        Some("aux") => TargetFormat::PowerWorld,
-        _ => {
-            return Err(Error::UnknownFormat(format!(
-                "cannot infer from file extension {ext:?}; pass an explicit source format"
-            )));
-        }
-    })
 }
 
 /// Read an owned `source` buffer as `fmt`, using `name_hint` (e.g. the file
@@ -278,13 +325,6 @@ fn sniff_json(text: &str) -> TargetFormat {
     }
 }
 
-fn is_pypsa_csv_name(name: &str) -> bool {
-    matches!(
-        name.to_ascii_lowercase().replace(['-', '_'], "").as_str(),
-        "pypsacsv" | "pypsa"
-    )
-}
-
 /// Parse in-memory case `text` of the named `format` (see
 /// [`target_format_from_name`]). Returns [`Parsed`]: the network plus the
 /// reader's fidelity warnings.
@@ -353,6 +393,7 @@ pub fn write_as(net: &Network, format: TargetFormat) -> Conversion {
         TargetFormat::Matpower => matpower::write_matpower_conversion(net),
     };
     warn_normalized_tap(net, format, &mut conv);
+    warn_missing_reference(net, format, &mut conv);
     conv
 }
 
@@ -395,6 +436,26 @@ pub fn convert_str(text: &str, to: TargetFormat, format: &str) -> Result<Convers
         conv.warnings.splice(0..0, parsed.warnings);
     }
     Ok(conv)
+}
+
+/// Warn when a network with no reference (slack) bus converts to a format
+/// whose solvers require one. PowerWorld `.pwb` is the one source that
+/// systematically lacks the designation (the binary does not store it), so
+/// the silent case would be common; `to_normalized` synthesizes a slack at
+/// the largest pmax in service generator bus for consumers that need one.
+fn warn_missing_reference(net: &Network, format: TargetFormat, conv: &mut Conversion) {
+    let needs_ref = matches!(
+        format,
+        TargetFormat::Matpower | TargetFormat::Psse | TargetFormat::PowerModelsJson
+    );
+    if needs_ref && !net.buses.iter().any(|b| b.kind == BusType::Ref) {
+        conv.warnings.push(
+            "no reference (slack) bus in the source network; power flow tools \
+             reject such cases — to_normalized synthesizes a slack at the \
+             largest pmax in service generator bus"
+                .to_string(),
+        );
+    }
 }
 
 /// A normalized network has its tap canonicalized to `1.0` on every line (the
@@ -517,12 +578,14 @@ mod tests {
                 "source_format {token:?} did not round-trip"
             );
         }
-        // The derived/in-memory source formats have no writer target.
+        // The derived/in-memory source formats have no writer target, and
+        // neither does the read only .pwb binary.
         for sf in [
             SourceFormat::InMemory,
             SourceFormat::Normalized,
             SourceFormat::Gridfm,
             SourceFormat::PypsaCsv,
+            SourceFormat::PowerWorldBinary,
         ] {
             assert_eq!(target_format_from_name(&format!("{sf:?}")), None);
         }
