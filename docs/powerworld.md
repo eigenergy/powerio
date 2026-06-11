@@ -108,6 +108,15 @@ Counts that survived the baseline: 200 buses, 49 generators, 160 loads,
   under `:1` locations (`LineR:1`, `LineTap:1`); 2016 era exports use the
   bare names for everything. `LineTap` equals the MATPOWER tap convention
   (verified on all 66 ACTIVSg200 and 562 Texas2000 transformers).
+- 2022 era exports (Simulator 21+, the Hawaii40 set) write a third naming
+  generation: concise headers with `Number`/`Name`/`NomkV`/`Vpu`/`Vangle`
+  on buses, `ID`/`Status`/`SMW`/`SMvar` on devices,
+  `BusNumFrom`/`BusNumTo`/`Circuit`/`R`/`X`/`B`/`LimitMVAA` on branches,
+  and `Rxfbase`/`Tapxfbase` on the transformer section. The mapping reads
+  all three generations through alias lists, and the section merge keys
+  carry the same aliases so the dual Branch sections join correctly. The
+  Hawaii40 pwb parity test cross validates the vocabulary: both readers
+  must agree value by value for it to pass.
 - Loads are ZIP components (`LoadSMW/LoadIMW/LoadZMW`, ...). The typed model
   carries the sum at nominal voltage; nonzero I/Z components are kept in
   extras under their PowerWorld field names.
@@ -236,11 +245,25 @@ reject until its differential fit lands. The 39 bus sample case (header
 
 The TAMU repository sets re-downloaded in June 2026 supply what that fit
 was missing, same source aux siblings for the bit 6/8 family: ACTIVSg500
-(header 425, flags 0x66 through 0x177, all 500 bus heads parse),
-the published ACTIVSg2000 set (header 425, all 2000 heads), and Hawaii40
-(header 508, a 130 KiB case whose heads still parse, small enough to
-fit by eye). These classify and reject today and are the named oracles
-for the bit 6/8 era decode.
+(header 425), the published ACTIVSg2000 set (header 425), and Hawaii40
+(header 508). With the flag masks widened to admit bits 6 and 8 (both
+leave the bus head layout untouched; their fields live in the undecoded
+tails), the two ACTIVSg2000 current era exports decode end to end, and
+the published set export carries full value parity against its same set
+aux on every decoded quantity (the test next to the other vintages'). ACTIVSg500's branch records with flag bit 4
+append large tail structures: per bus f64 vectors (a u32 count equal to
+the bus count is visible inside), ascending bus number arrays, and
+contingency label text, up to 406 KiB on one record. The reader handles
+them by extending the resync scan to the buffer end after a bit 4 branch
+record (the ~90 byte structural gauntlet keeps blob bytes from forging a
+record; two forged record heads were found inside blobs and both fail
+it). With that rule ACTIVSg500 decodes with full value parity against
+its aux. Hawaii40 (2022, header constant 508) decodes with full parity
+the same way, which is the evidence admitting the 508 header era; its
+aux uses the 2022 concise vocabulary (see the mapping notes). The 508
+saves of node level cases (Texas7k v21) still die in the table chain
+like their 483 originals, after an exhausted chain search (0.85 s on
+the 13 MiB resave) rather than a named header rejection.
 
 ### Load record (validated on all 160 + 1417 + 1350 + 5095 loads of four files)
 
@@ -325,24 +348,73 @@ case stores zero shunt MW and the reader sets G = 0.
 - Substation, area/zone names, contingency tables: present after the
   branches, undecoded in this pass.
 
-## The .pwd display format (probe)
+## The .pwd display format: substation coordinates
 
-A timeboxed framing probe over four display files (the two fetched
-ACTIVSg2000 ones, ACTIVSg200, Hawaii40); no decoder. All four open with
-the same header: u32 = 50, two u16 canvas dimensions (200, 200), then
-palette and font records ("Tahoma"). The 2017 and later saves follow with
-a u32 length prefixed string ("Previous Select By Criteria Set Used") and
-a registry of the display object types the file uses: a u32 count, then
-per entry a u32 length prefixed type name and one byte (0x02 observed).
-Observed registries: ACTIVSg200 names DisplaySubstation; v19 names
-DisplayBranchPie, DisplaySubstation, DisplaySubstationField,
-DisplayTransmissionLine; Hawaii40 names DisplayBranchPie and
-DisplaySubstationField. The June 2016 file uses an older framing with no
-registry (font records follow the header directly). The drawing records
-behind the registry are undecoded; unlike the .pwb, the display format
-names its object types, so a future decoder has anchors to work from.
-Extracting the one useful subset (substation coordinates for layout) needs
-those record layouts and is a follow-up, not part of this pass.
+`parse_pwd` decodes one subset of the display sibling, the substation
+symbols, established by differential analysis of seven files spanning the
+June 2016 through 2022 writer eras (ACTIVSg200 vendored, the two fetched
+ACTIVSg2000 displays, the TAMU distributed ACTIVSg200 Illinois display
+mislabeled ACTIVSg2000.pwd, and the local ACTIVSg500, published
+ACTIVSg2000, and Hawaii40 sets). Every other drawing object type (buses,
+branch pies, transmission lines, field labels), the palettes, fonts,
+layers, and the substation record style tails stay undecoded.
+
+Header: u32 = 50, two u16 canvas dimensions, then a fixed shape block. The
+u32 at offset 22 is a per file stamp that every drawing object record
+repeats at +18 — the anchor the record scan keys on. A correction to the
+earlier probe notes: the type name list behind "Previous Select By
+Criteria Set Used" in 2017+ saves is the object type list of that dialog's
+last use (UI state), not a registry of the record types in the file
+(ACTIVSg200.pwd lists only DisplaySubstation yet draws eight plus types);
+the decoder takes nothing from it, and the June 2016 save has none.
+
+Two structures carry the substations, both present in every probed save:
+
+- The identity table, behind the file's only `ff ff ff ff 3d 0f` sequence
+  (sentinel plus table tag 0x0f3d): records of u32 number, the same u32
+  again, u32 length, name, 0x02, terminated exactly by the next
+  `ff ff ff ff`. Display order, not case order. A bus identity table (tag
+  0x0f3c, no coordinates) directly precedes it, undecoded.
+- The DisplaySubstation drawing records: u16 type tag, f32 x, f32 y at
+  +2/+6 (echoes), u32 flag, zeros, u16 0x000a, the header stamp at +18,
+  f64 x at +22, f64 y at +30, f64 0.0, then a style tail holding a digit
+  string (1 to 4 characters, shifts later fields), `ff ff ff ff`, a marker
+  byte, the u32 substation number, a 4 x f64 bounding box, and font
+  fields. Record lengths run 139 to 162 by era. The type tag (0x27e2,
+  0x27e3 observed) and the marker (0x03, 0x07) drift across writer eras,
+  so the reader keys on structure instead: stamp echo at +18, the f32/f64
+  dual coordinate equality, magnitude in [1, 1e7), and a marker plus
+  number link to every identity row in table order. Two real decoy groups
+  force that gauntlet: the era B substation field label group (same
+  count, different order; positional pairing scores r² 0.01 against the
+  oracle) and the Texas2016 interleaved label group (marker 0x05). Both
+  fail the link check; if several groups ever pass, the reader rejects
+  rather than guesses.
+
+The coordinates are diagram positions, not geography (no probed file
+stores latitude or longitude; needle scans came back empty). The auto
+generated layouts equal x = k·longitude, y = k·merc(latitude) with
+merc(lat) = degrees(ln(tan(45° + lat/2))): Hawaii40, never hand edited,
+reproduces it to f64 rounding (max residual 2.9e-11) and pins
+k = 535.8160803622592; the TAMU layouts carry hand moved symbols (median
+residual 0.006 to 43 units across files) and the June 2016 writer used a
+different transform entirely. The reader therefore exposes x/y as stored;
+projecting back to geography is the consumer's choice, and consumers who
+want coordinates as data should read the aux Substation latitude and
+longitude instead.
+
+Per file evidence (powerio/tests/powerworld_pwd.rs asserts the committed
+subset; the rest ran in the scout probes):
+
+| file | substations | aux (number, name) match | x vs longitude r² | y vs merc(lat) r² |
+|---|---|---|---|---|
+| ACTIVSg200 (vendored) | 111 | 111/111 | 0.99992 | 0.99980 |
+| Illinois display mislabeled ACTIVSg2000.pwd | 111 | 111/111 | 0.9972 | 0.9951 |
+| ACTIVSg500 (local) | 208 | 208/208 | 0.99999 | 0.999995 |
+| ACTIVSg2000 published set (local) | 1250 | 1250/1250 | 0.999999 | 0.999999 |
+| ACTIV_SG_2000_v19 (fetched) | 1250 | 1248/1250 vs the published aux (vintage skew) | 0.9935 | 0.9961 |
+| Texas2000 June 2016 (fetched) | 1500 | 1500/1500 | 0.99962 | 0.99966 |
+| Hawaii40 (local, 2022) | 31 | 31/31 | exact | exact |
 
 ## Coverage matrix
 
@@ -360,17 +432,18 @@ checksum and recorded URL by `benchmarks/fetch_powerworld.sh`.
 | ACTIV_SG_2000_v19.pwb | fetched (powerworld.com) | 425 | 0x26-0x37 | published case .m, deltas pinned | decoded, parity | 2000 buses, 3202 branches |
 | RTS-GMLC.PWB | fetched (GridMod/RTS-GMLC @3ece0d3) | 425 | 0x06/0x07 | same commit .m + .RAW | decoded, parity | 73 buses, 120 branches |
 | Texas7k 2021 export | local only | 483 | 0x66-0x167 | aux sibling available | rejected: header constant; buses, loads, shunts, branches decode in probes, the generator record is a new layout | 6717 buses, 5095 loads, 634 shunts probe exactly |
-| Texas7k v21/v22/2030 saves | local only | 508/537/550/551 | unprobed | — | rejected: header constant | |
-| ACTIVSg2000 current era export | local only | 425 | 0x66-0x177 | published case | rejected: bus flag bits 6/8 not validated | |
+| Texas7k v21/v22/2030 saves | local only | 508/537/550/551 | unprobed | — | rejected: header constant (537/550/551) or table chain (508) | |
 | 39 bus sample case | local only | 425 | none found | — | rejected: no recognized bus record layout | |
 | 118 bus sample case | local only | 338 | — | — | rejected: header constant | |
-| 12 bus course case (+ v21 resave) | local only | 134 / 508 | — | — | rejected: header constant | |
+| 12 bus course case | local only | 134 | — | — | rejected: header constant | |
 | 10 bus sample case | local only | 196 | — | — | rejected: header constant | |
 | 3 bus sample case | local only | pre 425 shape | — | — | rejected: header words | |
-| ACTIVSg500 export | local only | 425 | 0x66-0x177 | aux sibling available | rejected: bus flag bits 6/8 not validated | 500 heads parse |
-| ACTIVSg2000 published set export | local only | 425 | 0x66-0x177 | aux sibling available | rejected: bus flag bits 6/8 not validated | 2000 heads parse |
-| Hawaii40 2022 export | local only | 508 | 0x66-0x167 | aux sibling available | rejected: header constant | 37 heads parse in probes |
-| .pwd display files | local/fetched | — | — | — | out of scope this pass (M5 probe) | |
+| ACTIVSg500 export | local only | 425 | 0x66-0x177 | same set aux | decoded, parity on every quantity | 500 buses, 599 branches |
+| ACTIVSg2000 published set export | local only | 425 | 0x66-0x177 | same set aux | decoded, parity on every quantity | 2000 buses, 3206 branches |
+| ACTIVSg2000 current era export | local only | 425 | 0x66-0x177 | published case | decoded, counts verified; value parity test pending | 2000 buses, 3206 branches |
+| Hawaii40 2022 export | local only | 508 | 0x66-0x167 | same set aux (2022 vocabulary) | decoded, parity on every quantity | 37 buses, 89 branches |
+| 12 bus course case saved as v21 | local only | 508 | — | — | decoded, counts verified | 12 buses, 18 branches |
+| .pwd display files | local/fetched | 50 | — | sibling aux Substation latitude/longitude | substation coordinates decoded, matched 1-1 (see the .pwd section) | 111 through 1500 substations across seven files |
 
 ## Object inventory of ACTIVSg200.aux
 

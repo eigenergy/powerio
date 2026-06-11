@@ -68,11 +68,15 @@ pub(crate) fn parse_powerworld_source(
     // Merge sections by the type's key fields before mapping; a later section
     // updates the fields it declares, exactly like loading the aux into
     // Simulator would.
-    let mut merged_buses = Merge::new(&["BusNum"]);
-    let mut merged_loads = Merge::new(&["BusNum", "LoadID"]);
-    let mut merged_shunts = Merge::new(&["BusNum", "ShuntID"]);
-    let mut merged_gens = Merge::new(&["BusNum", "GenID"]);
-    let mut merged_branches = Merge::new(&["BusNum", "BusNum:1", LINE_CIRCUIT]);
+    let mut merged_buses = Merge::new(&[&["BusNum", "Number"]]);
+    let mut merged_loads = Merge::new(&[&["BusNum"], &["LoadID", "ID"]]);
+    let mut merged_shunts = Merge::new(&[&["BusNum"], &["ShuntID", "ID"]]);
+    let mut merged_gens = Merge::new(&[&["BusNum"], &["GenID", "ID"]]);
+    let mut merged_branches = Merge::new(&[
+        &["BusNum", "BusNumFrom"],
+        &["BusNum:1", "BusNumTo"],
+        &[LINE_CIRCUIT, "Circuit"],
+    ]);
     for blk in aux.data() {
         match blk.object_type.as_str() {
             "Bus" => merged_buses.absorb(blk, true),
@@ -157,13 +161,16 @@ enum MergeKey<'a> {
 }
 
 struct Merge<'a> {
-    key_fields: &'static [&'static str],
+    /// Key columns as alias groups: each group lists the same key under its
+    /// naming generations (`BusNum`/`Number`, `LineCircuit`/`Circuit`, ...);
+    /// a section keys on whichever name it declares.
+    key_fields: &'static [&'static [&'static str]],
     index: HashMap<MergeKey<'a>, usize>,
     merged: Vec<Row<'a>>,
 }
 
 impl<'a> Merge<'a> {
-    fn new(key_fields: &'static [&'static str]) -> Self {
+    fn new(key_fields: &'static [&'static [&'static str]]) -> Self {
         Merge {
             key_fields,
             index: HashMap::new(),
@@ -175,8 +182,11 @@ impl<'a> Merge<'a> {
     /// new elements; otherwise they are dropped (augmentation only sections,
     /// like `Transformer`).
     fn absorb(&mut self, blk: &'a AuxObject, create: bool) {
-        let positions: Vec<Option<usize>> =
-            self.key_fields.iter().map(|k| blk.field_index(k)).collect();
+        let positions: Vec<Option<usize>> = self
+            .key_fields
+            .iter()
+            .map(|group| group.iter().find_map(|k| blk.field_index(k)))
+            .collect();
         let keyless = positions.iter().all(Option::is_none);
         for (at, row) in blk.rows.iter().enumerate() {
             let key = if keyless {
@@ -252,6 +262,23 @@ fn on(r: &Row, key: &str) -> bool {
         Some("Open" | "OPEN" | "0")
     )
 }
+/// [`on`] over the first present field among `keys` (naming generations).
+fn on_alias(r: &Row, keys: &[&str]) -> bool {
+    match keys.iter().find(|k| r.contains_key(*k)) {
+        Some(k) => on(r, k),
+        None => true,
+    }
+}
+/// [`uid`] over the first present, non-empty field among `keys`.
+fn uid_alias(r: &Row, keys: &[&str]) -> Result<usize> {
+    match keys
+        .iter()
+        .find(|k| matches!(r.get(*k), Some(v) if !v.trim().is_empty()))
+    {
+        Some(k) => uid(r, k),
+        None => Ok(0),
+    }
+}
 
 /// First present, non-empty field among `keys`, trimmed.
 fn first<'a>(r: &Row<'a>, keys: &[&str]) -> Option<&'a str> {
@@ -296,7 +323,7 @@ fn bus_kind(r: &Row) -> BusType {
         Some("Slack") => BusType::Ref,
         Some("Disconnected") => BusType::Isolated,
         _ => {
-            if first(r, &["BusSlack"]).is_some_and(|v| v.eq_ignore_ascii_case("YES")) {
+            if first(r, &["BusSlack", "Slack"]).is_some_and(|v| v.eq_ignore_ascii_case("YES")) {
                 BusType::Ref
             } else {
                 BusType::Pq
@@ -324,18 +351,13 @@ pub(super) fn derive_bus_kinds(buses: &mut [Bus], generators: &[Generator]) {
 }
 
 fn read_bus(r: &Row) -> Result<Bus> {
-    let id = r
-        .get("BusNum")
-        .and_then(|v| v.trim().parse::<f64>().ok())
+    let id = first(r, &["BusNum", "Number"])
+        .and_then(|v| v.parse::<f64>().ok())
         .ok_or_else(|| Error::FormatRead {
             format: FMT,
-            message: "Bus block row missing numeric BusNum".into(),
+            message: "Bus block row missing a numeric BusNum/Number".into(),
         })? as usize;
-    let name = r
-        .get("BusName")
-        .map(|n| n.trim())
-        .filter(|n| !n.is_empty())
-        .map(ToString::to_string);
+    let name = first(r, &["BusName", "Name"]).map(ToString::to_string);
     let mut extras = Extras::new();
     // Substation identity and coordinates ride on the bus row in complete
     // case exports (`Latitude:1`/`Longitude:1` are the substation's).
@@ -343,9 +365,13 @@ fn read_bus(r: &Row) -> Result<Bus> {
         r,
         &[
             "SubNum",
+            "SubNumber",
             "Latitude:1",
             "Longitude:1",
+            "Latitude",
+            "Longitude",
             "OwnerNum",
+            "OwnerNumber",
             "BANumber",
         ],
         &mut extras,
@@ -353,15 +379,16 @@ fn read_bus(r: &Row) -> Result<Bus> {
     Ok(Bus {
         id: BusId(id),
         kind: bus_kind(r),
-        vm: f_or(r, "BusPUVolt", 1.0)?,
-        va: f(r, "BusAngle")?,
-        base_kv: f(r, "BusNomVolt")?,
-        // Real exports carry per rating set voltage limits; set 1 is the
-        // default set. Our writer's BusVMax/BusVMin are the fallback aliases.
-        vmax: f_alias(r, &["BusVoltLimHigh:1", "BusVMax"], 1.1)?,
-        vmin: f_alias(r, &["BusVoltLimLow:1", "BusVMin"], 0.9)?,
-        area: uid(r, "AreaNum")?,
-        zone: uid(r, "ZoneNum")?,
+        vm: f_alias(r, &["BusPUVolt", "Vpu"], 1.0)?,
+        va: f_alias(r, &["BusAngle", "Vangle"], 0.0)?,
+        base_kv: f_alias(r, &["BusNomVolt", "NomkV"], 0.0)?,
+        // Real exports carry per rating set voltage limits; set 1 (set A in
+        // the 2022 vocabulary) is the default set. Our writer's
+        // BusVMax/BusVMin are the fallback aliases.
+        vmax: f_alias(r, &["BusVoltLimHigh:1", "LimitHighA", "BusVMax"], 1.1)?,
+        vmin: f_alias(r, &["BusVoltLimLow:1", "LimitLowA", "BusVMin"], 0.9)?,
+        area: uid_alias(r, &["AreaNum", "AreaNumber"])?,
+        zone: uid_alias(r, &["ZoneNum", "ZoneNumber"])?,
         name,
         extras,
     })
@@ -379,12 +406,12 @@ fn read_load(r: &Row) -> Result<Load> {
         p = f(r, "LoadMW")?;
         q = f(r, "LoadMVR")?;
     } else {
-        let smw = f(r, "LoadSMW")?;
-        let imw = f(r, "LoadIMW")?;
-        let zmw = f(r, "LoadZMW")?;
-        let smvr = f(r, "LoadSMVR")?;
-        let imvr = f(r, "LoadIMVR")?;
-        let zmvr = f(r, "LoadZMVR")?;
+        let smw = f_alias(r, &["LoadSMW", "SMW"], 0.0)?;
+        let imw = f_alias(r, &["LoadIMW", "IMW"], 0.0)?;
+        let zmw = f_alias(r, &["LoadZMW", "ZMW"], 0.0)?;
+        let smvr = f_alias(r, &["LoadSMVR", "SMvar"], 0.0)?;
+        let imvr = f_alias(r, &["LoadIMVR", "IMvar"], 0.0)?;
+        let zmvr = f_alias(r, &["LoadZMVR", "ZMvar"], 0.0)?;
         p = smw + imw + zmw;
         q = smvr + imvr + zmvr;
         if imw != 0.0 || zmw != 0.0 || imvr != 0.0 || zmvr != 0.0 {
@@ -397,30 +424,26 @@ fn read_load(r: &Row) -> Result<Load> {
             );
         }
     }
-    keep_extras(r, &["LoadID"], &mut extras);
+    keep_extras(r, &["LoadID", "ID"], &mut extras);
     Ok(Load {
         bus: BusId(uid(r, "BusNum")?),
         p,
         q,
-        in_service: on(r, "LoadStatus"),
+        in_service: on_alias(r, &["LoadStatus", "Status"]),
         extras,
     })
 }
 
 fn read_shunt(r: &Row) -> Result<Shunt> {
     let mut extras = Extras::new();
-    keep_extras(r, &["ShuntID", "SSCMode"], &mut extras);
+    keep_extras(r, &["ShuntID", "ID", "SSCMode", "ShuntMode"], &mut extras);
     Ok(Shunt {
         bus: BusId(uid(r, "BusNum")?),
-        // Switched shunt nominal MW/MVAr in real exports; ShuntMW/ShuntMVR
-        // from our writer.
-        g: f_alias(r, &["ShuntMW", "SSNMW"], 0.0)?,
-        b: f_alias(r, &["ShuntMVR", "SSNMVR"], 0.0)?,
-        in_service: if r.contains_key("ShuntStatus") {
-            on(r, "ShuntStatus")
-        } else {
-            on(r, "SSStatus")
-        },
+        // Switched shunt nominal MW/MVAr in real exports (MWNom/MvarNom in
+        // the 2022 vocabulary); ShuntMW/ShuntMVR from our writer.
+        g: f_alias(r, &["ShuntMW", "SSNMW", "MWNom"], 0.0)?,
+        b: f_alias(r, &["ShuntMVR", "SSNMVR", "MvarNom"], 0.0)?,
+        in_service: on_alias(r, &["ShuntStatus", "SSStatus", "Status"]),
         extras,
     })
 }
@@ -434,15 +457,15 @@ fn read_gen(r: &Row) -> Result<Generator> {
         bus: BusId(uid(r, "BusNum")?),
         // GenMW is the solved output; complete case exports write the
         // dispatch setpoint instead.
-        pg: f_alias(r, &["GenMW", "GenMWSetPoint"], 0.0)?,
-        qg: f_alias(r, &["GenMVR", "GenMvrSetPoint"], 0.0)?,
-        pmax: f(r, "GenMWMax")?,
-        pmin: f(r, "GenMWMin")?,
-        qmax: f(r, "GenMVRMax")?,
-        qmin: f(r, "GenMVRMin")?,
-        vg: f_or(r, "GenVoltSet", 1.0)?,
-        mbase: f_or(r, "GenMVABase", 100.0)?,
-        in_service: on(r, "GenStatus"),
+        pg: f_alias(r, &["GenMW", "GenMWSetPoint", "MWSetPoint"], 0.0)?,
+        qg: f_alias(r, &["GenMVR", "GenMvrSetPoint", "MvarSetPoint"], 0.0)?,
+        pmax: f_alias(r, &["GenMWMax", "MWMax"], 0.0)?,
+        pmin: f_alias(r, &["GenMWMin", "MWMin"], 0.0)?,
+        qmax: f_alias(r, &["GenMVRMax", "MvarMax"], 0.0)?,
+        qmin: f_alias(r, &["GenMVRMin", "MvarMin"], 0.0)?,
+        vg: f_alias(r, &["GenVoltSet", "VoltSet"], 1.0)?,
+        mbase: f_alias(r, &["GenMVABase", "MVABase"], 100.0)?,
+        in_service: on_alias(r, &["GenStatus", "Status"]),
         cost: None,
         caps: Default::default(),
     })
@@ -454,7 +477,7 @@ fn read_branch(r: &Row) -> Result<Branch> {
     // Branch identity beyond the bus pair: circuit ID and device type. Kept
     // verbatim (PowerWorld pads circuit IDs) so aux → aux through the typed
     // model reproduces them exactly.
-    if let Some(v) = r.get(LINE_CIRCUIT) {
+    if let Some(v) = r.get(LINE_CIRCUIT).or_else(|| r.get("Circuit")) {
         extras.insert(
             LINE_CIRCUIT.to_string(),
             serde_json::Value::String((*v).to_string()),
@@ -465,19 +488,19 @@ fn read_branch(r: &Row) -> Result<Branch> {
     // tap under `:1` locations (values on the system base after correction);
     // line records use the bare names. Our writer's LineXFRatio is the tap
     // fallback.
-    let tap = f_alias(r, &["LineTap:1", "LineXFRatio"], 1.0)?;
+    let tap = f_alias(r, &["LineTap:1", "Tapxfbase", "LineXFRatio"], 1.0)?;
     Ok(Branch {
-        from: BusId(uid(r, "BusNum")?),
-        to: BusId(uid(r, "BusNum:1")?),
-        r: f_alias(r, &["LineR", "LineR:1"], 0.0)?,
-        x: f_alias(r, &["LineX", "LineX:1"], 0.0)?,
-        b: f_alias(r, &["LineC", "LineC:1"], 0.0)?,
-        rate_a: f_alias(r, &["LineAMVA"], 0.0)?,
-        rate_b: f_alias(r, &["LineAMVA:1", "LineBMVA"], 0.0)?,
-        rate_c: f_alias(r, &["LineAMVA:2", "LineCMVA"], 0.0)?,
+        from: BusId(uid_alias(r, &["BusNum", "BusNumFrom"])?),
+        to: BusId(uid_alias(r, &["BusNum:1", "BusNumTo"])?),
+        r: f_alias(r, &["LineR", "LineR:1", "R", "Rxfbase"], 0.0)?,
+        x: f_alias(r, &["LineX", "LineX:1", "X", "Xxfbase"], 0.0)?,
+        b: f_alias(r, &["LineC", "LineC:1", "B", "Bxfbase"], 0.0)?,
+        rate_a: f_alias(r, &["LineAMVA", "LimitMVAA"], 0.0)?,
+        rate_b: f_alias(r, &["LineAMVA:1", "LineBMVA", "LimitMVAB"], 0.0)?,
+        rate_c: f_alias(r, &["LineAMVA:2", "LineCMVA", "LimitMVAC"], 0.0)?,
         tap: if is_xf { tap } else { 0.0 },
-        shift: f(r, "LinePhase")?,
-        in_service: on(r, "LineStatus"),
+        shift: f_alias(r, &["LinePhase", "Phase"], 0.0)?,
+        in_service: on_alias(r, &["LineStatus", "Status"]),
         angmin: -360.0,
         angmax: 360.0,
         extras,

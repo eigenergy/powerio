@@ -17,7 +17,9 @@
 //! cost, HVDC, and storage are not represented and are reported on write.
 //!
 //! `.pwb` binary cases are read (never written) by [`parse_pwb`]; see that
-//! module for the decoded vintages and the parity evidence.
+//! module for the decoded vintages and the parity evidence. `.pwd` display
+//! files carry no case data, only the diagram; [`parse_pwd`] reads the one
+//! decoded subset, substation coordinates.
 //!
 //! [`Network`]: crate::network::Network
 
@@ -25,6 +27,7 @@ mod aux;
 mod map;
 mod objects;
 mod pwb;
+mod pwd;
 
 #[cfg(test)]
 mod tests;
@@ -38,6 +41,7 @@ pub(crate) use map::parse_powerworld_source;
 pub use map::{aux_sections, write_powerworld};
 pub use objects::{Contingency, contingencies, rating_set_names};
 pub use pwb::parse_pwb;
+pub use pwd::{PwdSubstation, parse_pwd};
 
 use crate::Result;
 use crate::network::Network;

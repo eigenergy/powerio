@@ -68,3 +68,19 @@ pub fn ckt(b: &powerio::Branch) -> String {
         .trim()
         .to_string()
 }
+
+/// The path a label resolves to in the gitignored local corpus manifest
+/// (`tests/data/local_pwb_corpus.tsv`); `None` when the manifest, the label,
+/// or the file is absent, so tests on machine specific corpus files skip
+/// instead of fail.
+#[allow(dead_code)]
+pub fn local_corpus_path(label: &str) -> Option<PathBuf> {
+    let manifest = Path::new(env!("CARGO_MANIFEST_DIR")).join("../tests/data/local_pwb_corpus.tsv");
+    let text = std::fs::read_to_string(manifest).ok()?;
+    let path = text.lines().find_map(|line| {
+        let mut f = line.split('\t');
+        (f.next() == Some(label)).then(|| f.next()).flatten()
+    })?;
+    let p = PathBuf::from(path);
+    p.exists().then_some(p)
+}
