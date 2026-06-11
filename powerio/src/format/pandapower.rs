@@ -130,7 +130,7 @@ pub(crate) fn parse_pandapower_source(
                 vg: row.f_or("vm_pu", 1.0),
                 mbase: row.f_or("sn_mva", base_mva),
                 in_service: row.bool_or("in_service", true),
-                cost: costs.get(&("gen".to_string(), idx)).cloned(),
+                cost: costs.get(&(CostElement::Gen, idx)).cloned(),
                 caps: [None; crate::network::GEN_EXTRA_KEYS.len()],
             });
         }
@@ -151,7 +151,7 @@ pub(crate) fn parse_pandapower_source(
                 vg: row.f_or("vm_pu", 1.0),
                 mbase: base_mva,
                 in_service: row.bool_or("in_service", true),
-                cost: costs.get(&("ext_grid".to_string(), idx)).cloned(),
+                cost: costs.get(&(CostElement::ExtGrid, idx)).cloned(),
                 caps: [None; crate::network::GEN_EXTRA_KEYS.len()],
             });
         }
@@ -251,13 +251,13 @@ pub fn write_pandapower_json(net: &Network) -> Conversion {
     let mut warnings = Vec::new();
     if !net.hvdc.is_empty() {
         warnings.push(format!(
-            "{} dcline(s) dropped: pandapower JSON writer v1 does not model HVDC",
+            "{} dcline(s) dropped: the pandapower JSON writer does not model HVDC",
             net.hvdc.len()
         ));
     }
     if !net.storage.is_empty() {
         warnings.push(format!(
-            "{} storage unit(s) dropped: pandapower JSON writer v1 does not model storage",
+            "{} storage unit(s) dropped: the pandapower JSON writer does not model storage",
             net.storage.len()
         ));
     }
@@ -300,6 +300,9 @@ pub fn write_pandapower_json(net: &Network) -> Conversion {
     object.insert("trafo".into(), trafo);
     object.insert("poly_cost".into(), poly_cost_frame(net));
     object.insert("name".into(), Value::String(net.name.clone()));
+    // Network carries no system frequency, so the writer always labels the file
+    // 50 Hz and compensates c_nf_per_km; a 60 Hz source keeps its exact Y_bus
+    // but is relabeled (documented in docs/format-fidelity.md).
     object.insert("f_hz".into(), jnum(F_HZ));
     object.insert("sn_mva".into(), jnum(net.base_mva));
     object.insert("version".into(), Value::String("3.0.0".into()));
@@ -486,6 +489,7 @@ fn branch_frames(net: &Network) -> (Value, Value) {
         "tap_side",
         "tap_neutral",
         "tap_step_percent",
+        "tap_step_degree",
         "tap_pos",
         "parallel",
         "df",
@@ -525,6 +529,7 @@ fn branch_frames(net: &Network) -> (Value, Value) {
                 Value::String("hv".into()),
                 Value::from(0_i64),
                 jnum(tap_delta.abs() * 100.0),
+                jnum(0.0),
                 jnum(tap_delta.signum()),
                 Value::from(1_u64),
                 jnum(1.0),
@@ -733,13 +738,35 @@ fn read_frame(root: &Map<String, Value>, name: &str) -> Result<Option<DataFrame>
     }))
 }
 
-fn read_poly_costs(root: &Map<String, Value>) -> Result<BTreeMap<(String, usize), GenCost>> {
+/// The pandapower `poly_cost.et` element-type domain that maps onto powerio's
+/// model. Other `et` values (`sgen`, `load`, `dcline`, `storage`) have no
+/// powerio element carrying a cost, so those rows are skipped on read.
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Debug)]
+enum CostElement {
+    Gen,
+    ExtGrid,
+}
+
+impl CostElement {
+    fn from_et(et: &str) -> Option<Self> {
+        match et {
+            "gen" => Some(Self::Gen),
+            "ext_grid" => Some(Self::ExtGrid),
+            _ => None,
+        }
+    }
+}
+
+fn read_poly_costs(root: &Map<String, Value>) -> Result<BTreeMap<(CostElement, usize), GenCost>> {
     let mut out = BTreeMap::new();
     let Some(frame) = read_frame(root, "poly_cost")? else {
         return Ok(out);
     };
     for row in frame.rows() {
         let et = row.string("et").unwrap_or_else(|| "gen".into());
+        let Some(et) = CostElement::from_et(&et) else {
+            continue;
+        };
         let element = row.usize_or("element", 0);
         out.insert(
             (et, element),

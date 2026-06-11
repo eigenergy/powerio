@@ -192,6 +192,144 @@ fn pypsa_csv_folder_reads_storage_units() {
     assert!(!st.in_service);
 }
 
+/// Build a minimal pandapower JSON net: a `_object` map of split-orient frames
+/// (each frame's payload JSON-string-encoded the way pandas writes them).
+fn pp_json(tables: &[(&str, Value)]) -> String {
+    let mut object = serde_json::Map::new();
+    object.insert("sn_mva".into(), serde_json::json!(100.0));
+    for (name, payload) in tables {
+        object.insert(
+            (*name).into(),
+            serde_json::json!({ "_object": payload.to_string() }),
+        );
+    }
+    serde_json::json!({ "_class": "pandapowerNet", "_object": object }).to_string()
+}
+
+fn pp_frame(columns: &[&str], index: &[usize], data: Value) -> Value {
+    serde_json::json!({ "columns": columns, "index": index, "data": data })
+}
+
+#[test]
+fn pandapower_json_rejects_malformed_input() {
+    let err = |text: &str| {
+        powerio::parse_str(text, "pandapower-json")
+            .unwrap_err()
+            .to_string()
+    };
+
+    assert!(err(r#"{"_class":"NotANet","_object":{}}"#).contains("_class"));
+    assert!(err(r#"{"_class":"pandapowerNet"}"#).contains("_object"));
+    assert!(err(r#"{"_class":"pandapowerNet","_object":{}}"#).contains("bus"));
+    // A frame whose `_object` payload is not valid JSON.
+    assert!(
+        err(r#"{"_class":"pandapowerNet","_object":{"bus":{"_object":"not json"}}}"#)
+            .contains("bus")
+    );
+
+    // A load referencing a bus the bus table doesn't have.
+    let dangling = pp_json(&[
+        (
+            "bus",
+            pp_frame(&["vn_kv"], &[1], serde_json::json!([[110.0]])),
+        ),
+        (
+            "load",
+            pp_frame(
+                &["bus", "p_mw", "q_mvar"],
+                &[1],
+                serde_json::json!([[7, 5.0, 2.0]]),
+            ),
+        ),
+    ]);
+    assert!(powerio::parse_str(&dangling, "pandapower-json").is_err());
+}
+
+#[test]
+fn pandapower_line_rating_sentinel_reads_as_unlimited() {
+    let text = pp_json(&[
+        (
+            "bus",
+            pp_frame(&["vn_kv"], &[1, 2], serde_json::json!([[110.0], [110.0]])),
+        ),
+        (
+            "line",
+            pp_frame(
+                &[
+                    "from_bus",
+                    "to_bus",
+                    "r_ohm_per_km",
+                    "x_ohm_per_km",
+                    "length_km",
+                    "max_i_ka",
+                ],
+                &[1, 2],
+                serde_json::json!([[1, 2, 1.0, 10.0, 1.0, 99999.0], [1, 2, 1.0, 10.0, 1.0, 1.0]]),
+            ),
+        ),
+    ]);
+    let net = powerio::parse_str(&text, "pandapower-json").unwrap();
+    assert_eq!(
+        net.branches[0].rate_a, 0.0,
+        ">= 99999 kA is the unlimited sentinel"
+    );
+    let want = 110.0 * 3.0_f64.sqrt();
+    assert!((net.branches[1].rate_a - want).abs() < 1e-9);
+}
+
+#[test]
+fn pandapower_writer_keeps_zero_rating_zero() {
+    let mut net = parse_matpower_file(data("case9.m")).unwrap();
+    net.branches[0].rate_a = 0.0;
+    net.source = None; // force the canonical (non-echo) writer
+    let conv = write_as(&net, TargetFormat::PandapowerJson);
+    let back = powerio::parse_str(&conv.text, "pandapower-json").unwrap();
+    assert_eq!(back.branches[0].rate_a, 0.0);
+    assert!(back.branches[1].rate_a > 0.0, "other ratings survive");
+}
+
+#[test]
+fn pypsa_csv_folder_requires_buses_csv() {
+    let dir = tmp_dir("pypsa-no-buses");
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(dir.join("network.csv"), "name,srid\nempty,4326\n").unwrap();
+    let err = read_pypsa_csv_folder(&dir).unwrap_err().to_string();
+    assert!(err.contains("buses.csv"), "got: {err}");
+}
+
+#[test]
+fn pypsa_csv_quoted_fields_round_trip() {
+    let mut net = parse_matpower_file(data("case9.m")).unwrap();
+    net.buses[0].name = Some("weird, name\nwith \"newline\"".into());
+    let dir = tmp_dir("pypsa-quoted-names");
+    write_pypsa_csv_folder(&net, &dir).unwrap();
+    let back = read_pypsa_csv_folder(&dir).unwrap();
+    assert_eq!(back.buses.len(), net.buses.len());
+    assert!(
+        back.buses
+            .iter()
+            .any(|b| b.name.as_deref() == Some("weird, name\nwith \"newline\"")),
+        "quoted name lost: {:?}",
+        back.buses.iter().map(|b| &b.name).collect::<Vec<_>>()
+    );
+}
+
+#[test]
+fn parse_file_routes_pypsa_folders() {
+    let net = parse_matpower_file(data("case9.m")).unwrap();
+    let dir = tmp_dir("pypsa-parse-file-routing");
+    write_pypsa_csv_folder(&net, &dir).unwrap();
+
+    // Explicit format name, including alias spellings.
+    for alias in ["pypsa", "PyPSA", "pypsa-csv", "pypsa_csv"] {
+        let back = parse_file(&dir, Some(alias)).unwrap();
+        assert_eq!(back.source_format, SourceFormat::PypsaCsv, "alias {alias}");
+    }
+    // No format: a directory with network.csv auto-detects as PyPSA.
+    let back = parse_file(&dir, None).unwrap();
+    assert_eq!(back.source_format, SourceFormat::PypsaCsv);
+}
+
 fn tmp_dir(label: &str) -> PathBuf {
     let p = std::env::temp_dir().join(format!("powerio-{label}-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&p);

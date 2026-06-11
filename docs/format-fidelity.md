@@ -35,9 +35,10 @@ matrix covers MATPOWER, PSS/E, and egret sources against all five legacy text
 targets, every PowerWorld output is read back and bridged to PowerModels JSON,
 and the PMread leg covers the PowerModels JSON read side. pandapower JSON and
 PyPSA CSV folders have dedicated import validators because pandapower has its
-own JSON schema and PyPSA is a directory format. The remaining source/target
-pairs (PowerModels JSON and PowerWorld sources into the non-PowerModels targets)
-have no external oracle and rest on the Rust round trip suite.
+own JSON schema and PyPSA is a directory format; both validate the write
+direction only — the pandapower JSON and PyPSA readers have no external oracle.
+They, and the remaining source/target pairs (PowerModels JSON and PowerWorld
+sources into the non-PowerModels targets), rest on the Rust round trip suite.
 
 - **PowerModels.jl** (`validate_powermodels.jl`, `validate_psse.jl`,
   `core_json.jl`). Reads MATPOWER, PowerModels JSON, and PSS/E. The MATPOWER to
@@ -108,9 +109,12 @@ These are reported in `Conversion::warnings`, not dropped silently.
   `pandapowerNet` tables. It maps line parameters through pandapower's physical
   units, writes tap/shift branches as transformers, and uses `ext_grid` only for
   reference buses that have no generator. Rate B/C, HVDC, storage, unsupported
-  costs, and source extras are reported as warnings.
+  costs, and source extras are reported as warnings. The writer always labels
+  the file `f_hz = 50` (powerio's model carries no system frequency) with
+  `c_nf_per_km` compensated so the admittance is exact; a 60 Hz source is
+  relabeled, not altered electrically.
 - **PyPSA CSV folders** are canonicalized directory outputs, not byte-exact text
-  conversions. The v1 reader/writer covers static buses, generators, loads,
+  conversions. The reader/writer covers static buses, generators, loads,
   lines, transformers, shunts, storage-unit stubs, and network base MVA. Time
   series, links, stores, carriers, HVDC, and unknown component extras are
   ignored on read or warned on write. Nonnumeric bus names read back as dense

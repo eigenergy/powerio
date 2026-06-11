@@ -257,7 +257,7 @@ pub fn write_pypsa_csv_folder(net: &Network, out_dir: impl AsRef<Path>) -> Resul
     let mut warnings = Vec::new();
     if !net.hvdc.is_empty() {
         warnings.push(format!(
-            "{} dcline(s) dropped: PyPSA CSV writer v1 does not model HVDC links",
+            "{} dcline(s) dropped: the PyPSA CSV writer does not model HVDC links",
             net.hvdc.len()
         ));
     }
@@ -530,18 +530,21 @@ fn read_csv_required(path: &Path, label: &'static str) -> Result<CsvTable> {
 }
 
 fn read_csv_optional(path: &Path) -> Result<Option<CsvTable>> {
-    if !path.is_file() {
-        return Ok(None);
-    }
-    let text = std::fs::read_to_string(path)?;
-    let mut lines = text.lines();
-    let Some(header_line) = lines.next() else {
+    // Only a missing file means an absent table; any other error (permissions,
+    // a directory in the file's place) must surface, not read as an empty net.
+    let text = match std::fs::read_to_string(path) {
+        Ok(text) => text,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(e) => return Err(e.into()),
+    };
+    let mut records = parse_csv(&text)
+        .into_iter()
+        .filter(|r| !(r.len() == 1 && r[0].trim().is_empty()));
+    let Some(headers) = records.next() else {
         return Ok(Some(CsvTable { rows: Vec::new() }));
     };
-    let headers = parse_csv_line(header_line);
     let mut rows = Vec::new();
-    for line in lines.filter(|l| !l.trim().is_empty()) {
-        let fields = parse_csv_line(line);
+    for fields in records {
         let vals = headers
             .iter()
             .enumerate()
@@ -552,11 +555,15 @@ fn read_csv_optional(path: &Path) -> Result<Option<CsvTable>> {
     Ok(Some(CsvTable { rows }))
 }
 
-fn parse_csv_line(line: &str) -> Vec<String> {
-    let mut out = Vec::new();
+/// Split a whole CSV file into records, honoring quoted fields: an embedded
+/// newline or comma inside `"..."` stays in the field (the writer's `esc` emits
+/// those), and `""` is an escaped quote.
+fn parse_csv(text: &str) -> Vec<Vec<String>> {
+    let mut records = Vec::new();
+    let mut record = Vec::new();
     let mut cur = String::new();
-    let mut chars = line.chars().peekable();
     let mut quoted = false;
+    let mut chars = text.chars().peekable();
     while let Some(c) = chars.next() {
         match c {
             '"' if quoted && chars.peek() == Some(&'"') => {
@@ -564,15 +571,20 @@ fn parse_csv_line(line: &str) -> Vec<String> {
                 let _ = chars.next();
             }
             '"' => quoted = !quoted,
-            ',' if !quoted => {
-                out.push(cur);
-                cur = String::new();
+            ',' if !quoted => record.push(std::mem::take(&mut cur)),
+            '\r' if !quoted && chars.peek() == Some(&'\n') => {}
+            '\n' if !quoted => {
+                record.push(std::mem::take(&mut cur));
+                records.push(std::mem::take(&mut record));
             }
             _ => cur.push(c),
         }
     }
-    out.push(cur);
-    out
+    if !cur.is_empty() || !record.is_empty() {
+        record.push(cur);
+        records.push(record);
+    }
+    records
 }
 
 fn bus_name(b: &Bus) -> String {

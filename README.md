@@ -223,9 +223,9 @@ are in the [format fidelity guide](https://eigenergy.github.io/powerio/guides/fo
 The Rust test suite covers parsers, writers, format conversion, matrix
 builders, and normalization; the C ABI crate carries its own tests, and
 `pytest` covers the Python bindings. The benchmark validation suite compares
-selected outputs against PowerModels.jl, egret, ExaPowerIO.jl, and pandapower.
-The benchmark validation suite also imports PowerIO's PyPSA CSV folders with
-PyPSA when the optional oracle is installed.
+selected outputs against PowerModels.jl, egret, ExaPowerIO.jl, and pandapower,
+and imports PowerIO's PyPSA CSV folders with PyPSA when the optional oracle is
+installed.
 
 ```
 cargo fmt --all --check

@@ -125,11 +125,14 @@ impl FromStr for TargetFormat {
 /// if unrecognized. Accepts `matpower`/`m`, `powermodels-json`/`powermodels`/`pm`,
 /// `egret-json`/`egret`, `pandapower-json`/`pandapower`/`pp`, `psse`/`raw`,
 /// `powerworld`/`aux`. Case-insensitive. The one place the bindings (Python, C
-/// ABI) share, so a new format means one new arm here, not three.
+/// ABI) share, so a new text format means one new arm here, not three. PyPSA
+/// CSV folders are directory inputs with no text target; their aliases are
+/// matched by [`is_pypsa_csv_name`] next to this.
 ///
-/// The `powermodelsjson`/`egretjson` aliases let a [`SourceFormat`]'s string form
-/// (`{:?}` lowercased, e.g. `"PowerModelsJson"`) round-trip back to a target, so
-/// `net.to_format(other.source_format)` works for every format.
+/// The `powermodelsjson`/`egretjson`/`pandapowerjson` aliases let a
+/// [`SourceFormat`]'s string form (`{:?}` lowercased, e.g. `"PowerModelsJson"`)
+/// round-trip back to a target, so `net.to_format(other.source_format)` works
+/// for every format.
 #[must_use]
 pub fn target_format_from_name(name: &str) -> Option<TargetFormat> {
     Some(match name.to_ascii_lowercase().as_str() {
@@ -143,6 +146,17 @@ pub fn target_format_from_name(name: &str) -> Option<TargetFormat> {
         "pandapower-json" | "pandapower" | "pandapowerjson" | "pp" => TargetFormat::PandapowerJson,
         _ => return None,
     })
+}
+
+/// Whether a format name means a PyPSA CSV folder. PyPSA folders are directory
+/// inputs, not text targets, so they have no [`TargetFormat`] arm; this is the
+/// companion alias matcher to [`target_format_from_name`] and the one place the
+/// PyPSA aliases live.
+fn is_pypsa_csv_name(name: &str) -> bool {
+    matches!(
+        name.to_ascii_lowercase().replace(['-', '_'], "").as_str(),
+        "pypsacsv" | "pypsa"
+    )
 }
 
 /// Parse the case file at `path` into a [`Network`], choosing the reader from
@@ -256,13 +270,6 @@ fn sniff_json(text: &str) -> TargetFormat {
         }) => TargetFormat::EgretJson,
         _ => TargetFormat::PowerModelsJson,
     }
-}
-
-fn is_pypsa_csv_name(name: &str) -> bool {
-    matches!(
-        name.to_ascii_lowercase().replace(['-', '_'], "").as_str(),
-        "pypsacsv" | "pypsa"
-    )
 }
 
 /// Parse in-memory case `text` of the named `format` (see

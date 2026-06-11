@@ -207,9 +207,10 @@ char *pio_convert_file(const char *path,
                        size_t errlen);
 
 /**
- * Write `net` as a PyPSA CSV folder at `out_dir`. Returns `1` on success and
- * `0` on error. Fidelity warnings, if any, are written `\n`-joined into
- * `warnbuf`.
+ * Write `net` as a PyPSA CSV folder at `out_dir`. Returns `0` on success and
+ * `-1` on error (the message is written into `errbuf`), the same convention as
+ * the other fallible `int` returns in this ABI. Fidelity warnings, if any, are
+ * written `\n`-joined into `warnbuf`.
  */
 int32_t pio_write_pypsa_csv_folder(const PioNetwork *net,
                                    const char *out_dir,

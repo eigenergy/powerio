@@ -51,6 +51,28 @@ def test_convert_case_inline_requires_from():
     assert r["text"]
 
 
+def test_convert_case_pandapower_json_and_alias():
+    r = convert_case(to="pandapower-json", path=str(DATA / "case9.m"))
+    assert json.loads(r["text"])["_class"] == "pandapowerNet"
+    alias = convert_case(to="pp", path=str(DATA / "case9.m"))
+    assert json.loads(alias["text"])["_class"] == "pandapowerNet"
+    back = case_summary(content=r["text"], format="pandapower-json")
+    assert back["n_buses"] == 9
+    assert back["source_format"] == "PandapowerJson"
+
+
+def test_pypsa_folder_path_inputs():
+    net = powerio.parse_file(str(DATA / "case9.m"))
+    with tempfile.TemporaryDirectory() as tmp:
+        folder = str(Path(tmp) / "case9-pypsa")
+        net.write_pypsa_csv_folder(folder)
+        s = case_summary(path=folder)
+        assert s["n_buses"] == 9
+        assert s["source_format"] == "PypsaCsv"
+        r = convert_case(to="matpower", path=folder, from_="pypsa-csv")
+        assert r["text"].startswith("function mpc =")
+
+
 def test_convert_case_exactly_one_input():
     with pytest.raises(ValueError):
         convert_case(to="matpower")  # neither path nor content

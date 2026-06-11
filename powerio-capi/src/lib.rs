@@ -433,9 +433,10 @@ pub unsafe extern "C" fn pio_convert_file(
     }
 }
 
-/// Write `net` as a PyPSA CSV folder at `out_dir`. Returns `1` on success and
-/// `0` on error. Fidelity warnings, if any, are written `\n`-joined into
-/// `warnbuf`.
+/// Write `net` as a PyPSA CSV folder at `out_dir`. Returns `0` on success and
+/// `-1` on error (the message is written into `errbuf`), the same convention as
+/// the other fallible `int` returns in this ABI. Fidelity warnings, if any, are
+/// written `\n`-joined into `warnbuf`.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_write_pypsa_csv_folder(
     net: *const PioNetwork,
@@ -457,15 +458,15 @@ pub unsafe extern "C" fn pio_write_pypsa_csv_folder(
         match r {
             Ok(Ok(warnings)) => {
                 copy_to_buf(warnbuf, warnlen, &warnings.join("\n"));
-                1
+                0
             }
             Ok(Err(msg)) => {
                 copy_to_buf(errbuf, errlen, &msg);
-                0
+                -1
             }
             Err(_) => {
                 copy_to_buf(errbuf, errlen, "panic while writing PyPSA CSV folder");
-                0
+                -1
             }
         }
     }
