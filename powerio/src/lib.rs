@@ -28,7 +28,7 @@
 //! \t1\t2\t0.01\t0.1\t0\t0\t0\t0\t0\t0\t1\t-360\t360;
 //! ];
 //! ";
-//! let net = parse_str(src, "matpower")?;
+//! let net = parse_str(src, "matpower")?.network;
 //! assert_eq!(net.buses.len(), 2);
 //! assert_eq!(net.to_format(TargetFormat::Matpower).text, src);
 //! # Ok::<(), powerio::Error>(())
@@ -42,7 +42,7 @@ mod normalize;
 
 pub use error::{ElementCounts, Error, ErrorCategory, Result, ScenarioMismatch};
 pub use format::{
-    Conversion, PypsaCsvOutputs, TargetFormat, convert_file, convert_str, parse_egret_json,
+    Conversion, Parsed, PypsaCsvOutputs, TargetFormat, convert_file, convert_str, parse_egret_json,
     parse_file, parse_matpower, parse_matpower_file, parse_pandapower_json, parse_powermodels_json,
     parse_powerworld, parse_psse, parse_str, read_pypsa_csv_folder, target_format_from_name,
     write_as, write_egret_json, write_matpower, write_pandapower_json, write_powermodels_json,

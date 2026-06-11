@@ -79,9 +79,10 @@ struct ArrowSchema;
 #endif
 
 /**
- * Opaque parsed network handle. Carries the parsed [`Network`] plus the
- * [`IndexCore`] derived from it once at parse time, so every indexed query
- * reuses the same bus-id map and nodal aggregates instead of rebuilding them.
+ * Opaque parsed network handle. Carries the parsed [`Network`], the
+ * [`IndexCore`] derived from it once at parse time (so every indexed query
+ * reuses the same bus-id map and nodal aggregates instead of rebuilding
+ * them), and the reader's fidelity warnings ([`pio_parse_warnings`]).
  */
 typedef struct PioNetwork PioNetwork;
 
@@ -104,18 +105,33 @@ const char *pio_version(void);
 
 /**
  * Parse `path` (format from extension, or `from` if non-NULL) into a case
- * handle. Returns `NULL` on error and writes the message into `errbuf`.
+ * handle. `from` accepts the [`pio_parse_str`] format names plus
+ * `pypsa-csv`/`pypsa`; a PyPSA CSV folder is a directory, so it can only enter
+ * through this function, with `from = "pypsa-csv"` (or NULL when the directory
+ * holds a `network.csv`). Read fidelity warnings attach to the handle
+ * ([`pio_parse_warnings`]). Returns `NULL` on error and writes the message
+ * into `errbuf`.
  */
 PioNetwork *pio_parse_file(const char *path, const char *from, char *errbuf, size_t errlen);
 
 /**
  * Parse in-memory case `text` of the named `format` into a network handle. Unlike
  * [`pio_parse_file`] there is no path to infer from, so `format` is required: one of
- * `matpower`/`m`, `powermodels`/`pm`, `egret`, `psse`/`raw`, `powerworld`/`aux`
- * (see `TargetFormat::from_str`). Returns `NULL` on error and writes the
- * message into `errbuf`. Free the handle with [`pio_network_free`].
+ * `matpower`/`m`, `powermodels`/`pm`, `egret`, `pandapower-json`/`pandapower`/`pp`,
+ * `psse`/`raw`, `powerworld`/`aux` (see `TargetFormat::from_str`). PyPSA CSV
+ * folders are directories, not text; parse them with [`pio_parse_file`] and
+ * `from = "pypsa-csv"`. Read fidelity warnings attach to the handle
+ * ([`pio_parse_warnings`]). Returns `NULL` on error and writes the message
+ * into `errbuf`. Free the handle with [`pio_network_free`].
  */
 PioNetwork *pio_parse_str(const char *text, const char *format, char *errbuf, size_t errlen);
+
+/**
+ * Read fidelity warnings attached at parse time, `\n`-joined into `warnbuf`
+ * (truncated to fit; NULL/0 to skip). Returns the warning count; 0 for a
+ * NULL handle. Empty for formats whose readers are total.
+ */
+size_t pio_parse_warnings(const PioNetwork *net, char *warnbuf, size_t warnlen);
 
 /**
  * Free a network handle from [`pio_parse_file`], [`pio_parse_str`],

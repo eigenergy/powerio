@@ -120,6 +120,16 @@ def test_parse_str_general():
     assert c.n_buses == 9
 
 
+def test_read_warnings_surface():
+    # The genuine pandapower fixture carries a switch table the reader cannot
+    # model, so the parse reports it; the MATPOWER reader is total and reports
+    # nothing.
+    case = powerio.parse_file(DATA / "pandapower" / "example.json")
+    assert case.read_warnings
+    assert any("switch" in w for w in case.read_warnings)
+    assert powerio.parse_file(DATA / "case9.m").read_warnings == []
+
+
 def test_json_roundtrip_and_parsed_conversion():
     c = powerio.parse_file(DATA / "case9.m")
     back = powerio.from_json(c.to_json())

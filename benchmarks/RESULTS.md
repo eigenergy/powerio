@@ -126,7 +126,7 @@ What each column checks:
   the full Y_bus are compared against powerio's matrix builder.
 - **pypsa** (`validate_pypsa.py`): powerio's PyPSA CSV folder writer: PyPSA
   imports the output, and counts, load/generation totals, and line parameters
-  (converted back to powerio's per-unit basis) are compared.
+  (converted back to powerio's per unit basis) are compared.
 
 ### Full reader × writer matrix
 

@@ -20,7 +20,8 @@
 //!   field, comment, and numeric token.
 //! - **Cross-format keeps maximal fidelity with itemized loss.** Whatever the
 //!   target format cannot represent is reported in the [`Conversion`] `warnings`,
-//!   never dropped silently.
+//!   never dropped silently. On the read side, readers itemize what they ignore
+//!   in [`Parsed`] `warnings`.
 
 use std::collections::BTreeSet;
 use std::fmt;
@@ -145,10 +146,14 @@ pub fn target_format_from_name(name: &str) -> Option<TargetFormat> {
     })
 }
 
-/// Parse the case file at `path` into a [`Network`], choosing the reader from
-/// `from` (a format name, see [`target_format_from_name`]) or, when `None`, from
-/// the file extension (`m`/`json`/`raw`/`aux`). A `.json` file is sniffed for the
-/// egret vs PowerModels shape; pass `from` to force one.
+/// Parse the case file at `path`, choosing the reader from `from` (the
+/// [`target_format_from_name`] names plus `pypsa-csv`/`pypsa`) or, when `None`,
+/// from the path: a directory containing `network.csv` parses as a PyPSA CSV
+/// folder (any other directory fails with the I/O error), and a file maps by
+/// extension (`m`/`json`/`raw`/`aux`). A `.json` file is sniffed three ways:
+/// pandapower (`"_class": "pandapowerNet"`), egret (top level `elements` and
+/// `system`), else PowerModels. Pass `from` to force one. Returns [`Parsed`]:
+/// the network plus the reader's fidelity warnings.
 ///
 /// The one path-based parser the CLI and the Python/C/Julia bindings share (each
 /// exposes the same `parse_file(path, from)` shape), so adding a source format is
@@ -158,7 +163,7 @@ pub fn target_format_from_name(name: &str) -> Option<TargetFormat> {
 /// [`Error::UnknownFormat`] if `from` is unrecognized or the extension can't be
 /// mapped; [`Error::Io`] if the file can't be read; the reader's own [`Error`]
 /// on malformed input.
-pub fn parse_file(path: impl AsRef<std::path::Path>, from: Option<&str>) -> Result<Network> {
+pub fn parse_file(path: impl AsRef<std::path::Path>, from: Option<&str>) -> Result<Parsed> {
     let path = path.as_ref();
     if from.is_some_and(is_pypsa_csv_name)
         || (from.is_none() && path.is_dir() && path.join("network.csv").is_file())
@@ -179,8 +184,9 @@ pub fn parse_file(path: impl AsRef<std::path::Path>, from: Option<&str>) -> Resu
 }
 
 /// Map a file extension to a [`TargetFormat`], case-insensitively (issue #97:
-/// `.RAW` is as common as `.raw` in the wild). A `.json` is sniffed for the
-/// egret vs PowerModels shape. The error keeps the extension as the user wrote
+/// `.RAW` is as common as `.raw` in the wild). A `.json` is sniffed three ways:
+/// pandapower (`"_class": "pandapowerNet"`), egret (top level `elements` and
+/// `system`), else PowerModels. The error keeps the extension as the user wrote
 /// it.
 fn format_from_extension(path: &std::path::Path, text: &str) -> Result<TargetFormat> {
     let ext = path.extension().and_then(|e| e.to_str());
@@ -202,8 +208,10 @@ fn format_from_extension(path: &std::path::Path, text: &str) -> Result<TargetFor
 /// map: [`parse_file`] and [`parse_str`] both funnel through it, so every format
 /// is dispatched the same way. Each reader takes the owned `Arc` so
 /// it moves the buffer straight into the retained source (no copy) and is free
-/// to specialize its parse internally.
-fn read_source(source: Arc<String>, fmt: TargetFormat, name_hint: Option<&str>) -> Result<Network> {
+/// to specialize its parse internally. Owns the [`Parsed`] warnings vector;
+/// readers that report fidelity loss append to it.
+fn read_source(source: Arc<String>, fmt: TargetFormat, name_hint: Option<&str>) -> Result<Parsed> {
+    let mut warnings = Vec::new();
     let net = match fmt {
         TargetFormat::Matpower => matpower::parse_matpower_source(source, name_hint),
         TargetFormat::PowerModelsJson => {
@@ -212,28 +220,40 @@ fn read_source(source: Arc<String>, fmt: TargetFormat, name_hint: Option<&str>) 
         TargetFormat::Psse => psse::parse_psse_source(source, name_hint),
         TargetFormat::PowerWorld => powerworld::parse_powerworld_source(source, name_hint),
         TargetFormat::EgretJson => egret::parse_egret_source(source, name_hint),
-        TargetFormat::PandapowerJson => pandapower::parse_pandapower_source(source, name_hint),
+        TargetFormat::PandapowerJson => {
+            pandapower::parse_pandapower_source(source, name_hint, &mut warnings)
+        }
     }?;
-    // A case with no buses is content-free for every consumer. Most readers
-    // already reject it on a missing required table, but a JSON carrying only
-    // `baseMVA` would otherwise parse to a hollow network; reject it here so the
-    // one funnel guards every parse path (file and in-memory).
+    reject_empty_case(&net, fmt.label())?;
+    Ok(Parsed {
+        network: net,
+        warnings,
+    })
+}
+
+/// A case with no buses is content-free for every consumer. Most readers
+/// already reject it on a missing required table, but a JSON carrying only
+/// `baseMVA` would otherwise parse to a hollow network; reject it in the
+/// [`read_source`] funnel so every parse path (file and in-memory) is guarded,
+/// and in the PyPSA folder reader, which bypasses the funnel.
+pub(crate) fn reject_empty_case(net: &Network, format: &'static str) -> Result<()> {
     if net.buses.is_empty() {
         return Err(Error::FormatRead {
-            format: fmt.label(),
+            format,
             message: "case has no buses".into(),
         });
     }
-    Ok(net)
+    Ok(())
 }
 
-/// Both interchange JSON formats use the `.json` extension, so an explicit
-/// source format isn't always given. egret `ModelData` has top-level `elements`
-/// and `system`; PowerModels network data does not. Sniff that and fall back to
-/// PowerModels (the more common input) when the text is not egret shaped.
+/// The interchange JSON formats share the `.json` extension, so an explicit
+/// source format isn't always given. Sniff three ways: pandapower declares
+/// itself (`"_class": "pandapowerNet"`); egret `ModelData` has top level
+/// `elements` and `system`; else fall back to PowerModels (the more common
+/// input).
 ///
-/// Deserializing into [`IgnoredAny`] fields scans the JSON to find the two
-/// top-level keys without building the whole `Value` tree, so a large
+/// Deserializing into [`IgnoredAny`] fields scans the JSON to find the
+/// top level keys without building the whole `Value` tree, so a large
 /// PowerModels file isn't fully allocated here only to be parsed again by its
 /// reader.
 fn sniff_json(text: &str) -> TargetFormat {
@@ -266,20 +286,38 @@ fn is_pypsa_csv_name(name: &str) -> bool {
 }
 
 /// Parse in-memory case `text` of the named `format` (see
-/// [`target_format_from_name`]) into a [`Network`].
+/// [`target_format_from_name`]). Returns [`Parsed`]: the network plus the
+/// reader's fidelity warnings.
 ///
 /// # Errors
 /// [`Error::UnknownFormat`] if `format` is unrecognized; the reader's own
 /// [`Error`] on malformed input.
-pub fn parse_str(text: &str, format: &str) -> Result<Network> {
+pub fn parse_str(text: &str, format: &str) -> Result<Parsed> {
     let fmt =
         target_format_from_name(format).ok_or_else(|| Error::UnknownFormat(format.to_string()))?;
     read_source(Arc::new(text.to_owned()), fmt, None)
 }
 
+/// Output of a parse: the network plus the reader's fidelity warnings —
+/// tables and columns the model cannot carry, reported instead of dropped
+/// silently. Empty for the formats whose readers are total (MATPOWER,
+/// PowerModels, egret, PSS/E, PowerWorld).
+///
+/// `#[non_exhaustive]`: a returns-only type, so downstream code reads it but
+/// never constructs it, leaving room to add parse metadata without a breaking
+/// change.
+#[derive(Debug, Clone)]
+#[non_exhaustive]
+pub struct Parsed {
+    pub network: Network,
+    pub warnings: Vec<String>,
+}
+
 /// Output of a conversion: the serialized text plus any fidelity warnings:
 /// data the target can't represent, defaults synthesized, or blocks mapped best
-/// effort. An empty `warnings` means a faithful conversion.
+/// effort. An empty `warnings` means a faithful conversion. For [`convert_file`]
+/// and [`convert_str`], `warnings` carries the read side ([`Parsed`] warnings)
+/// too, ahead of the write side.
 ///
 /// `#[non_exhaustive]`: a returns-only type, so downstream code reads it but
 /// never constructs it, leaving room to add fidelity metadata without a breaking
@@ -295,7 +333,7 @@ pub struct Conversion {
 /// the retained source text; otherwise the network is serialized into the target.
 #[must_use]
 pub fn write_as(net: &Network, format: TargetFormat) -> Conversion {
-    if same_format(format, net.source_format) {
+    if is_echo(net, format) {
         if let Some(src) = &net.source {
             return Conversion {
                 text: src.to_string(),
@@ -323,7 +361,8 @@ pub fn write_as(net: &Network, format: TargetFormat) -> Conversion {
 ///
 /// This is the canonical file-conversion helper shared by the bindings. It
 /// parses `path` once, writes the resulting [`Network`] to `to`, and returns the
-/// converted text plus any fidelity warnings.
+/// converted text plus any fidelity warnings, read side first. An echo (writing
+/// back to the source format) returns the retained text with no warnings.
 ///
 /// # Errors
 /// As [`parse_file`].
@@ -332,8 +371,12 @@ pub fn convert_file(
     to: TargetFormat,
     from: Option<&str>,
 ) -> Result<Conversion> {
-    let net = parse_file(path, from)?;
-    Ok(write_as(&net, to))
+    let parsed = parse_file(path, from)?;
+    let mut conv = write_as(&parsed.network, to);
+    if !is_echo(&parsed.network, to) {
+        conv.warnings.splice(0..0, parsed.warnings);
+    }
+    Ok(conv)
 }
 
 /// Convert in-memory case `text` of the named `format` (see
@@ -341,13 +384,17 @@ pub fn convert_file(
 ///
 /// The in-memory sibling of [`convert_file`], shared by the bindings: parses
 /// `text` once and writes the resulting [`Network`] to `to`, with no file
-/// staging in between.
+/// staging in between. Warnings are read side first, as in [`convert_file`].
 ///
 /// # Errors
 /// As [`parse_str`].
 pub fn convert_str(text: &str, to: TargetFormat, format: &str) -> Result<Conversion> {
-    let net = parse_str(text, format)?;
-    Ok(write_as(&net, to))
+    let parsed = parse_str(text, format)?;
+    let mut conv = write_as(&parsed.network, to);
+    if !is_echo(&parsed.network, to) {
+        conv.warnings.splice(0..0, parsed.warnings);
+    }
+    Ok(conv)
 }
 
 /// A normalized network has its tap canonicalized to `1.0` on every line (the
@@ -382,6 +429,13 @@ fn warn_normalized_tap(net: &Network, format: TargetFormat, conv: &mut Conversio
              not preserved (the power flow is identical)"
         ));
     }
+}
+
+/// Whether writing `net` to `target` echoes the retained source text: the
+/// target is the source format and the source is still attached. An echo
+/// reproduces the input byte for byte, so read fidelity warnings don't apply.
+fn is_echo(net: &Network, target: TargetFormat) -> bool {
+    same_format(target, net.source_format) && net.source.is_some()
 }
 
 /// Whether a write target is the same format the network was read from.

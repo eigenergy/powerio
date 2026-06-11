@@ -134,8 +134,18 @@ class Network:
     name: str
     base_mva: float
     source_format: Literal[
-        "Matpower", "PowerModelsJson", "EgretJson", "Psse", "PowerWorld", "InMemory", "Normalized"
+        "Matpower",
+        "PowerModelsJson",
+        "EgretJson",
+        "Psse",
+        "PowerWorld",
+        "PandapowerJson",
+        "InMemory",
+        "Normalized",
+        "Gridfm",
+        "PypsaCsv",
     ]
+    read_warnings: List[str]
     n_buses: int
     n_branches: int
     n_gens: int
@@ -175,6 +185,7 @@ class Network:
         include_taps: bool = ...,
         include_shifts: bool = ...,
     ) -> GridfmOutputs: ...
+    def write_pypsa_csv_folder(self, out_dir: Any) -> Dict[str, Any]: ...
     def to_normalized(self) -> "Network": ...
     def to_networkx(self) -> Any: ...
     def write_dcopf_bundle(
@@ -210,3 +221,4 @@ def write_gridfm_batch(
 ) -> GridfmOutputs: ...
 def read_gridfm(dir: Any, scenario: int = ...) -> GridfmRead: ...
 def read_gridfm_scenarios(dir: Any) -> List[GridfmRead]: ...
+def read_pypsa_csv_folder(path: Any) -> Network: ...

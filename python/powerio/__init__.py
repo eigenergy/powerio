@@ -19,7 +19,7 @@ and graph views solvers need::
     G = net.to_networkx()                    # networkx.Graph keyed by bus id
 
 PyPSA CSV folders carry the static network topology (PyPSA's native component
-format for network definition); time-series NetCDF/HDF5 scenarios are out of
+format for network definition); time series NetCDF/HDF5 scenarios are out of
 scope for now (https://github.com/eigenergy/powerio/issues/107).
 
 ``import powerio`` and parsing/writing/converting pull in nothing but the
@@ -182,7 +182,9 @@ class Network:
     The data attributes (``buses``, ``branches``, ``gens``, ``loads``,
     ``shunts``) and the non-matrix methods (``write``, ``reference_bus_index``,
     ``connectivity_report``, ``write_dcopf_bundle``) delegate to the compiled
-    handle; the matrix methods below return ``scipy.sparse`` objects.
+    handle; the matrix methods below return ``scipy.sparse`` objects. Read
+    fidelity warnings from parse time are on ``read_warnings`` (empty when the
+    reader was total).
 
     Errors: a bad file path raises the standard ``OSError`` subclass
     (``FileNotFoundError``); a malformed case raises :class:`PowerIOParseError`
@@ -413,7 +415,11 @@ Case = Network
 
 
 def parse_file(path: Any, from_: Optional[str] = None) -> Network:
-    """Parse a case file from a path, inferring the format from the extension."""
+    """Parse a case file from a path, inferring the format from the extension.
+
+    Read fidelity warnings are on ``Network.read_warnings`` (empty when the
+    reader was total).
+    """
     return Network(_powerio.parse_file(str(path), from_))
 
 

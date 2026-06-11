@@ -60,9 +60,10 @@ jobs:
         .venv/bin/pip install --upgrade pip maturin
         .venv/bin/maturin develop --release
         .venv/bin/pip install -r benchmarks/requirements.txt
-    # In CI the oracle stack must be present: a broken egret or pandapower import
-    # would otherwise let run_validation.sh skip the 5x5 matrix leg and still pass.
+    # In CI the oracle stack must be present: a broken egret, pandapower, or
+    # pypsa import would otherwise let run_validation.sh skip that leg and
+    # still pass.
     - name: Verify the oracle stack imports
-      run: .venv/bin/python -c "import egret, pandapower"
+      run: .venv/bin/python -c "import egret, pandapower, pypsa"
     - name: Run the validation matrix
       run: bash benchmarks/run_validation.sh

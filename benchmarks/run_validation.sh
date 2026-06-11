@@ -10,7 +10,7 @@
 #   Exa     — powerio (via C ABI) vs ExaPowerIO.jl, value for value.
 #   pp      — powerio's parse + Y_bus vs pandapower (_m2ppc + makeYbus).
 #   pp-json — powerio's pandapower JSON output imported by pandapower.
-#   pypsa   — powerio's PyPSA CSV-folder output imported by PyPSA.
+#   pypsa   — powerio's PyPSA CSV folder output imported by PyPSA.
 #
 # Then the read sides and the full conversion matrix:
 #   PSSE-read   — powerio reads a real PSS/E .raw, emits PowerModels JSON, compared
@@ -19,7 +19,7 @@
 #                 against the matching MATPOWER case.
 #   matrix(5x5) — every legacy text reader -> every legacy text writer over the
 #                 fixtures, each output's electrical core checked against the
-#                 ground-truth MATPOWER case.
+#                 ground truth MATPOWER case.
 #
 # To keep the wall time down the work is staged so each heavy interpreter starts
 # once, not once per case: PowerModels exports all references (one Julia process),

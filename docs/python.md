@@ -63,7 +63,7 @@ dependency of powerio.
 
 CSV folders are PyPSA's native static component format and carry the network
 topology (buses, lines, generators, loads, shunts) — the part powerio models.
-Time-series scenarios in NetCDF/HDF5 are out of scope for now; support is
+Time series scenarios in NetCDF/HDF5 are out of scope for now; support is
 tracked in [#107](https://github.com/eigenergy/powerio/issues/107).
 
 ## GridFM reads

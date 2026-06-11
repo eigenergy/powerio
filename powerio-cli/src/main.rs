@@ -657,11 +657,16 @@ fn run_convert(
 
 /// Read `input` into the neutral [`powerio_matrix::Network`] through the shared
 /// format hub, which picks the reader from `from` or the extension (sniffing a
-/// `.json` for the egret vs PowerModels shape).
+/// `.json` for the pandapower vs egret vs PowerModels shape). Read fidelity
+/// warnings print to stderr like the write side's.
 fn read_network(
     input: &std::path::Path,
     from: Option<FormatArg>,
 ) -> anyhow::Result<powerio_matrix::Network> {
-    powerio_matrix::parse_file(input, from.map(FormatArg::name))
-        .with_context(|| format!("reading {}", input.display()))
+    let parsed = powerio_matrix::parse_file(input, from.map(FormatArg::name))
+        .with_context(|| format!("reading {}", input.display()))?;
+    for w in &parsed.warnings {
+        eprintln!("fidelity: {w}");
+    }
+    Ok(parsed.network)
 }

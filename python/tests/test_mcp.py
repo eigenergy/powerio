@@ -36,6 +36,33 @@ def test_case_summary_inline():
     assert s["source_format"] == "Matpower"
 
 
+def test_format_forwarded_for_path_inputs(tmp_path):
+    # An extensionless path parses only when the explicit format reaches
+    # parse_file; the old _parse dropped it and failed on the extension.
+    bare = tmp_path / "case9_no_extension"
+    bare.write_text((DATA / "case9.m").read_text())
+    s = case_summary(path=str(bare), format="matpower")
+    assert s["n_buses"] == 9
+
+
+def test_format_still_inferred_without_one():
+    # No format on a .json path: the extension sniff lands on pandapower.
+    s = case_summary(path=str(DATA / "pandapower" / "example.json"))
+    assert s["source_format"] == "PandapowerJson"
+
+
+def test_parse_case_surfaces_read_warnings():
+    from powerio.mcp.server import parse_case
+
+    r = parse_case(path=str(DATA / "pandapower" / "example.json"),
+                   format="pandapower-json")
+    warnings = r["summary"]["read_warnings"]
+    assert warnings and any("switch" in w for w in warnings)
+    # A total reader yields an empty list, not a missing key.
+    clean = parse_case(path=str(DATA / "case9.m"))
+    assert clean["summary"]["read_warnings"] == []
+
+
 def test_convert_case_path():
     r = convert_case(to="powermodels-json", path=str(DATA / "case30.m"))
     assert isinstance(r["text"], str) and r["text"]

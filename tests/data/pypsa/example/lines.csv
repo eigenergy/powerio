@@ -1,0 +1,2 @@
+name,bus0,bus1,type,x,r,b,s_nom,carrier,sub_network
+l1,north,south,,2.0,0.5,1e-05,100.0,,
