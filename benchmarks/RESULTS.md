@@ -68,6 +68,60 @@ recorded as n/a. The `powerio: parse` row uses the base Python package and reads
 from disk. The scipy matrix path `powerio[matrix]: parse + Y_bus + B'` measured
 9.0 / 26.0 / 36.1 / 565.1 ms on the same four cases.
 
+## PowerWorld aux and pwb
+
+`cargo bench --bench parse -- "parse_aux_|parse_pwb_"` times both PowerWorld
+readers on the same cases: the vendored 200 bus pair, the fetched 2000 bus
+pair and RTS-GMLC (`benchmarks/fetch_powerworld.sh`), and any file passed
+through `POWERIO_BENCH_AUX`/`POWERIO_BENCH_PWB` for cases that cannot be
+fetched. Median wall time, same machine as above.
+
+<!-- BENCH:powerworld START -->
+| case | buses / branches | aux | pwb |
+| --- | --- | --- | --- |
+| ACTIVSg200 | 200 / 246 | 2.60 ms | 0.34 ms |
+| ACTIVSg2000 June 2016 | 2007 / 3043 | 30.1 ms | 2.81 ms |
+| RTS-GMLC | 73 / 120 | n/a | 10.7 ms |
+| Texas7k (local TAMU copy) | 6717 / 9140 | 69.0 ms | 11.8 ms |
+<!-- BENCH:powerworld END -->
+
+The `.pwb` reader locates each table by a depth first search over count
+word candidates and validates every record behind every candidate (the
+binary carries no field dictionary). The search machinery keeps that
+affordable: probe rejections are static strings instead of formatted
+allocations, bus membership is a bitmap instead of a hash set, and record
+runs are cached by first record offset so candidates that point at the
+same records share one walk. With those three changes (#99) the binary
+reader beats the aux text reader on every sibling pair; before them the
+same search took 43 ms / 424 ms / 907 ms on the first three files. RTS-GMLC
+stays the dearest decode per bus because its bus numbers (101 through 325)
+are small integers that appear constantly in binary data, forging candidate
+device records the search walks and rejects once each.
+
+The Texas7k decode (the 2021 era record layouts) initially repriced the
+search by 10 to 45 percent on the 425 era files, and bisection showed the
+widened branch flag vocabulary was almost none of it (about 4 us on the
+200 bus case): the cost was an inlining loss (the whole record probes
+became opaque fn pointer calls, so the early rejections stopped inlining
+into the resync scans) and the second generator layout's candidate scan
+running unconditionally whenever a forged load candidate failed the
+chain. Both are structural fixes now: the probes are generic and
+monomorphize, and the header constant keys which generator layouts the
+search admits (425 files never carry the regulated bus shape, 483
+through 551 files never carry the older one, 508 saves exist with both
+and try the two in sequence), which also keeps a layout the file cannot
+carry from outbidding the right one. With those, plus probe orderings
+that run the most selective checks first (the bus flag mask before the
+name text scan, the generator block ranges as the values read), the 425
+era files parse below the pre widening numbers and the other Texas7k
+saves decode in 48 ms (v21) and about 20 ms each (v22, the 2030 builds,
+the scenario snapshot; release, parse only). A branch flag mask keyed to the detected
+generator layout was also tried and rejected: it turns real records
+invisible to the table end check on the newer files, and a forged short
+table can win (see known_branch_flags in the reader). Every structural
+validation is unchanged; the reader stays correctness first (a wrong
+network is worse than a slow loud parse).
+
 ## Correctness: validation suite
 
 `bash benchmarks/run_validation.sh` runs every validator over every fixture and
