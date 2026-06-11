@@ -234,6 +234,14 @@ The generator record blocks the 483 decode; these files classify and
 reject until its differential fit lands. The 39 bus sample case (header
 425) shows no recognized bus record layout at all in a 44 KiB file.
 
+The TAMU repository sets re-downloaded in June 2026 supply what that fit
+was missing, same source aux siblings for the bit 6/8 family: ACTIVSg500
+(header 425, flags 0x66 through 0x177, all 500 bus heads parse),
+the published ACTIVSg2000 set (header 425, all 2000 heads), and Hawaii40
+(header 508, a 130 KiB case whose heads still parse, small enough to
+fit by eye). These classify and reject today and are the named oracles
+for the bit 6/8 era decode.
+
 ### Load record (validated on all 160 + 1417 + 1350 + 5095 loads of four files)
 
 u32 BusNum, variable length ShortString LoadID, one undecoded byte, then
@@ -340,6 +348,9 @@ checksum and recorded URL by `benchmarks/fetch_powerworld.sh`.
 | 12 bus course case (+ v21 resave) | local only | 134 / 508 | — | — | rejected: header constant | |
 | 10 bus sample case | local only | 196 | — | — | rejected: header constant | |
 | 3 bus sample case | local only | pre 425 shape | — | — | rejected: header words | |
+| ACTIVSg500 export | local only | 425 | 0x66-0x177 | aux sibling available | rejected: bus flag bits 6/8 not validated | 500 heads parse |
+| ACTIVSg2000 published set export | local only | 425 | 0x66-0x177 | aux sibling available | rejected: bus flag bits 6/8 not validated | 2000 heads parse |
+| Hawaii40 2022 export | local only | 508 | 0x66-0x167 | aux sibling available | rejected: header constant | 37 heads parse in probes |
 | .pwd display files | local/fetched | — | — | — | out of scope this pass (M5 probe) | |
 
 ## Object inventory of ACTIVSg200.aux
