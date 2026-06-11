@@ -59,6 +59,7 @@ __all__ = [
     "read_gridfm",
     "read_gridfm_scenarios",
     "GridfmRead",
+    "dist",
     "__version__",
 ]
 
@@ -518,3 +519,6 @@ def read_gridfm_scenarios(dir: Any) -> "list[GridfmRead]":
         GridfmRead(Network(case), scen, warnings)
         for case, scen, warnings in _powerio.read_gridfm_scenarios(str(dir))
     ]
+
+
+from . import dist  # noqa: E402  (needs Conversion defined above)

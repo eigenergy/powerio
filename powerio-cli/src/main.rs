@@ -126,11 +126,14 @@ enum Command {
         #[arg(long, default_value_t = 0)]
         scenario: i64,
     },
-    /// Convert a case file to another format through the neutral hub.
+    /// Convert a case file to another format. Transmission formats convert
+    /// through the neutral hub; distribution formats (dss, pmd-json,
+    /// bmopf-json) through the wire coordinate distribution model. The two
+    /// families do not mix.
     Convert {
         /// Input case file, or a gridfm dataset directory with `--from gridfm`.
         /// The format is inferred from the extension (`.m`, `.json`, `.raw`,
-        /// `.aux`) unless `--from` is given.
+        /// `.aux`, `.dss`) unless `--from` is given.
         input: PathBuf,
         /// Target format.
         #[arg(long, value_enum)]
@@ -166,29 +169,50 @@ enum FormatArg {
     /// Read a gridfm-datakit Parquet dataset directory (read-only).
     #[value(name = "gridfm")]
     Gridfm,
+    #[value(name = "dss", alias = "opendss")]
+    Dss,
+    #[value(name = "pmd-json", alias = "pmd", alias = "engineering")]
+    PmdJson,
+    #[value(name = "bmopf-json", alias = "bmopf")]
+    BmopfJson,
 }
 
 impl FormatArg {
-    /// The write target this format maps to. `gridfm` has no convert-writer (use
-    /// the `gridfm` subcommand), so it errors here rather than silently misrouting.
-    fn to_target(self) -> anyhow::Result<powerio_matrix::TargetFormat> {
+    /// The writable transmission hub target: `None` for the distribution
+    /// formats and for gridfm, which has no convert writer (the `gridfm`
+    /// subcommand writes datasets).
+    fn transmission(self) -> Option<powerio_matrix::TargetFormat> {
         use powerio_matrix::TargetFormat;
-        Ok(match self {
-            FormatArg::Matpower => TargetFormat::Matpower,
-            FormatArg::PowerModelsJson => TargetFormat::PowerModelsJson,
-            FormatArg::EgretJson => TargetFormat::EgretJson,
-            FormatArg::Psse => TargetFormat::Psse,
-            FormatArg::PowerWorld => TargetFormat::PowerWorld,
-            FormatArg::Gridfm => anyhow::bail!(
-                "`convert` cannot write a gridfm dataset; use the `gridfm` subcommand"
-            ),
-        })
+        match self {
+            FormatArg::Matpower => Some(TargetFormat::Matpower),
+            FormatArg::PowerModelsJson => Some(TargetFormat::PowerModelsJson),
+            FormatArg::EgretJson => Some(TargetFormat::EgretJson),
+            FormatArg::Psse => Some(TargetFormat::Psse),
+            FormatArg::PowerWorld => Some(TargetFormat::PowerWorld),
+            FormatArg::Gridfm | FormatArg::Dss | FormatArg::PmdJson | FormatArg::BmopfJson => None,
+        }
     }
 
-    /// The canonical format name. For the five classical formats this is the name
-    /// `target_format_from_name` accepts, used to force a text reader; `gridfm` is
-    /// parquet-only and never routes through that hub (the callers guard it first),
-    /// so its name is for diagnostics only.
+    /// The distribution target, or `None` outside that family. For every
+    /// writable format exactly one of this and [`FormatArg::transmission`]
+    /// is `Some`, so adding one without wiring its family is a compile
+    /// error; gridfm is read only and returns `None` from both.
+    fn distribution(self) -> Option<powerio_dist::DistTargetFormat> {
+        use powerio_dist::DistTargetFormat;
+        match self {
+            FormatArg::Dss => Some(DistTargetFormat::Dss),
+            FormatArg::PmdJson => Some(DistTargetFormat::PmdJson),
+            FormatArg::BmopfJson => Some(DistTargetFormat::BmopfJson),
+            FormatArg::Matpower
+            | FormatArg::PowerModelsJson
+            | FormatArg::EgretJson
+            | FormatArg::Psse
+            | FormatArg::PowerWorld
+            | FormatArg::Gridfm => None,
+        }
+    }
+
+    /// The canonical name the format dispatchers accept, for forcing a reader.
     fn name(self) -> &'static str {
         match self {
             FormatArg::Matpower => "matpower",
@@ -197,6 +221,9 @@ impl FormatArg {
             FormatArg::Psse => "psse",
             FormatArg::PowerWorld => "powerworld",
             FormatArg::Gridfm => "gridfm",
+            FormatArg::Dss => "dss",
+            FormatArg::PmdJson => "pmd-json",
+            FormatArg::BmopfJson => "bmopf-json",
         }
     }
 }
@@ -588,41 +615,129 @@ fn run_convert(
     from: Option<FormatArg>,
     scenario: i64,
 ) -> anyhow::Result<()> {
-    let target = to.to_target()?;
-    // gridfm reads a Parquet dataset directory (the parquet-free `parse_file`
-    // can't), so it routes through powerio-matrix's reader, surfacing its fidelity
-    // notes.
-    let net = if from == Some(FormatArg::Gridfm) {
-        let read = powerio_matrix::read_gridfm_dataset(input, scenario)
-            .with_context(|| format!("reading gridfm dataset {}", input.display()))?;
-        for w in &read.warnings {
-            eprintln!("fidelity: {w}");
-        }
-        read.network
+    // gridfm has no convert writer; the dataset writer is the `gridfm`
+    // subcommand.
+    if matches!(to, FormatArg::Gridfm) {
+        anyhow::bail!("`convert` cannot write a gridfm dataset; use the `gridfm` subcommand");
+    }
+    // The two families share no conversion path; say so directly instead of
+    // letting the wrong family's reader produce a confusing format error. The
+    // input family comes from --from (gridfm reads into the transmission
+    // model), or from an unambiguous extension (.json is shared, so it stays
+    // undecided and the reader sniffs it).
+    let input_is_dist = from
+        .map(|f| !matches!(f, FormatArg::Gridfm) && f.transmission().is_none())
+        .or_else(|| {
+            match input
+                .extension()
+                .and_then(|e| e.to_str())
+                .map(str::to_ascii_lowercase)
+                .as_deref()
+            {
+                Some("m" | "raw" | "aux") => Some(false),
+                Some("dss") => Some(true),
+                _ => None,
+            }
+        });
+    if input_is_dist.is_some_and(|dist| dist != to.transmission().is_none()) {
+        anyhow::bail!(
+            "no conversion path between the transmission and distribution format families \
+             ({} to `{}`)",
+            from.map_or_else(
+                || format!("`{}` input", input.display()),
+                |f| format!("`{}`", f.name())
+            ),
+            to.name()
+        );
+    }
+    let (text, warnings) = if let Some(target) = to.transmission() {
+        // gridfm reads a Parquet dataset directory (the parquet-free
+        // `parse_file` can't), so it routes through powerio-matrix's reader,
+        // surfacing its fidelity notes.
+        let net = if matches!(from, Some(FormatArg::Gridfm)) {
+            let read = powerio_matrix::read_gridfm_dataset(input, scenario)
+                .with_context(|| format!("reading gridfm dataset {}", input.display()))?;
+            for w in &read.warnings {
+                eprintln!("fidelity: {w}");
+            }
+            read.network
+        } else {
+            // A .json input is undecided above. When the transmission reader
+            // rejects it but the distribution reader accepts it, the input is a
+            // distribution case aimed at a transmission target: say so instead
+            // of presenting the transmission parse error as the problem.
+            read_network(input, from).map_err(|err| {
+                // The liberal BMOPF reader accepts almost any JSON, so a bare
+                // parse success is no signal; a typed voltage source is (both
+                // distribution layouts carry one, transmission JSON does not).
+                if from.is_none()
+                    && input
+                        .extension()
+                        .is_some_and(|e| e.eq_ignore_ascii_case("json"))
+                    && powerio_dist::parse_file(input, None).is_ok_and(|n| !n.sources.is_empty())
+                {
+                    anyhow::anyhow!(
+                        "no conversion path between the transmission and distribution format \
+                         families (`{}` is a distribution case, `{}` is a transmission format)",
+                        input.display(),
+                        to.name()
+                    )
+                } else {
+                    err
+                }
+            })?
+        };
+        let conv = powerio_matrix::write_as(&net, target);
+        (conv.text, conv.warnings)
     } else {
-        read_network(input, from)?
+        let net = powerio_dist::parse_file(input, from.map(FormatArg::name))
+            .with_context(|| format!("reading {}", input.display()))?;
+        for w in &net.warnings {
+            eprintln!("parse: {w}");
+        }
+        let target = to
+            .distribution()
+            .expect("the family check routed a transmission target here");
+        let conv = net.to_format(target);
+        (conv.text, conv.warnings)
     };
-    let conv = powerio_matrix::write_as(&net, target);
-    for w in &conv.warnings {
+    for w in &warnings {
         eprintln!("fidelity: {w}");
     }
     match output {
         Some(p) if p.as_os_str() != "-" => {
-            std::fs::write(p, &conv.text).with_context(|| format!("writing {}", p.display()))?;
+            std::fs::write(p, &text).with_context(|| format!("writing {}", p.display()))?;
             eprintln!("wrote {}", p.display());
         }
-        _ => print!("{}", conv.text),
+        _ => print!("{text}"),
     }
     Ok(())
 }
 
 /// Read `input` into the neutral [`powerio_matrix::Network`] through the shared
 /// format hub, which picks the reader from `from` or the extension (sniffing a
-/// `.json` for the egret vs PowerModels shape).
+/// `.json` for the egret vs PowerModels shape). Distribution formats are
+/// rejected up front: every caller of this function consumes the transmission
+/// model, and clap can't express the restriction on the shared `FormatArg`.
 fn read_network(
     input: &std::path::Path,
     from: Option<FormatArg>,
 ) -> anyhow::Result<powerio_matrix::Network> {
+    if let Some(f) = from {
+        if matches!(f, FormatArg::Gridfm) {
+            anyhow::bail!(
+                "gridfm datasets are read by `convert --from gridfm` or the `gridfm` \
+                 subcommand, not this command"
+            );
+        }
+        if f.transmission().is_none() {
+            anyhow::bail!(
+                "`{}` is a distribution format; this command reads transmission cases \
+                 (matpower, powermodels-json, egret-json, psse, powerworld)",
+                f.name()
+            );
+        }
+    }
     powerio_matrix::parse_file(input, from.map(FormatArg::name))
         .with_context(|| format!("reading {}", input.display()))
 }

@@ -31,10 +31,13 @@ The following formats are currently supported with read/write functionality:
 - [egret](https://pypi.org/project/gridx-egret/) `ModelData` JSON
 - [GridFM](https://github.com/gridfm) `.parquet`
 
+Distribution networks are supported in wire coordinates via [`powerio-dist`](powerio-dist/):
+- [OpenDSS](https://www.epri.com/pages/sa/opendss) `.dss`
+- [PowerModelsDistribution.jl](https://github.com/lanl-ansi/PowerModelsDistribution.jl) ENGINEERING data JSON
+- the draft [IEEE BMOPF task force](https://github.com/frederikgeth/bmopf-report) schema `.json`
+
 Support for the following formats is under development (see the open pull requests):
-- [surge](https://github.com/amptimal/surge) `.surge.json` 
-- [PowerModelsDistribution.jl](https://github.com/lanl-ansi/PowerModelsDistribution.jl) engineering data JSON
-- [IEEE BMOPF](https://github.com/frederikgeth/bmopf-report) schema `.json`
+- [surge](https://github.com/amptimal/surge) `.surge.json`
 
 Other formats are planned; see the GitHub issues. If a format you need is missing, open an issue or a pull request. All are welcome to contribute to this community project.
 
@@ -45,6 +48,7 @@ This repository contains multiple packages.
 ```
 powerio          # parser, Network model, source retaining writers, converters
 powerio-matrix   # sparse matrices, DC sensitivity factors, graph views
+powerio-dist     # multiconductor distribution model, dss/PMD/BMOPF converters
 powerio-cli      # the `powerio` command and ratatui TUI
 powerio-py       # PyO3 extension for the Python `powerio` package
 powerio-capi     # C ABI for C, C++, Julia, and other foreign function interfaces
@@ -128,7 +132,11 @@ powerio
 | egret JSON | partial | full | partial | partial | original text |
 
 `partial` means the target lacks fields present in the source. The writer reports
-those cases in `Conversion::warnings`. 
+those cases in `Conversion::warnings`.
+The distribution matrix (dss, PMD JSON, BMOPF JSON, per fixture) is generated into
+[powerio-dist/docs/conversion-matrix.md](https://github.com/eigenergy/powerio/blob/main/powerio-dist/docs/conversion-matrix.md).
+Vendored test data keeps its own licenses, documented next to the fixtures
+(see [tests/data/dist/README.md](tests/data/dist/README.md)).
 
 GridFM Parquet is not in this table: both read and write are currently lossy. Known limits
 for every format are documented in

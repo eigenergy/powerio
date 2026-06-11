@@ -123,6 +123,51 @@ int main(int argc, char **argv) {
         printf("parse_str + to_normalized OK\n");
     }
 
+#ifdef PIO_DIST
+    /* Distribution surface: parse an in-memory OpenDSS case, read its parse
+     * warnings, convert it to BMOPF JSON, and check the byte-exact dss echo. */
+    {
+        const char *dss =
+            "clear\n"
+            "new circuit.smoke basekv=12.47 bus1=src\n"
+            "new line.l1 bus1=src bus2=b2 length=100 units=m\n"
+            "new load.d1 bus1=b2 kv=12.47 kw=50\n"
+            "solve\n";
+        PioDistNetwork *d = pio_dist_parse_str(dss, "dss", err, sizeof err);
+        CHECK(d != NULL, err);
+
+        char warn[1024];
+        char *w = pio_dist_warnings(d, err, sizeof err);
+        CHECK(w != NULL, err);
+        pio_string_free(w);
+
+        char *bmopf = pio_dist_to_format(d, "bmopf", warn, sizeof warn, err, sizeof err);
+        CHECK(bmopf != NULL, err);
+        CHECK(strstr(bmopf, "\"bus\"") != NULL, "BMOPF output lost the bus table");
+        pio_string_free(bmopf);
+
+        /* Same-format write echoes the retained source byte for byte. */
+        char *echo2 = pio_dist_to_format(d, "dss", warn, sizeof warn, err, sizeof err);
+        CHECK(echo2 != NULL, err);
+        CHECK(strcmp(echo2, dss) == 0, "dss echo is not byte exact");
+        pio_string_free(echo2);
+        pio_dist_network_free(d);
+
+        /* One-shot string conversion into PMD ENGINEERING JSON; parameter
+         * order is input, target, source, like pio_dist_convert_file. */
+        char *pmd = pio_dist_convert_str(dss, "pmd", "dss", warn, sizeof warn, err, sizeof err);
+        CHECK(pmd != NULL, err);
+        CHECK(strstr(pmd, "\"data_model\": \"ENGINEERING\"") != NULL,
+              "PMD output lost the data_model marker");
+        pio_string_free(pmd);
+
+        /* NULL handle is the documented safe default. */
+        CHECK(pio_dist_warnings(NULL, err, sizeof err) == NULL,
+              "NULL dist handle did not return NULL");
+        printf("dist surface OK\n");
+    }
+#endif
+
 #ifdef PIO_ARROW
     /* Zero-copy Arrow C Data Interface export: pull the bus table, check the row
      * count, then release the producer-owned buffers. */

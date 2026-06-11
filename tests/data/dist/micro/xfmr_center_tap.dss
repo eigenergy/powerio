@@ -1,0 +1,21 @@
+! Center tapped single phase service transformer, 7.2 kV primary to 120/240 V
+! split phase secondary. Three windings; winding 3 is reversed (bus nodes .0.2)
+! so the two halves stack to 240 V across nodes 1 and 2.
+Clear
+Set DefaultBaseFrequency=60
+
+New Circuit.xfmr_center_tap basekv=7.2 pu=1.0 phases=1 bus1=sourcebus.1 MVAsc3=2000 MVAsc1=2100
+
+New Transformer.t1 phases=1 windings=3
+~ wdg=1 bus=sourcebus.1 kv=7.2 kva=25 conn=wye %R=0.6
+~ wdg=2 bus=secondary.1.0 kv=0.12 kva=25 conn=wye %R=1.2
+~ wdg=3 bus=secondary.0.2 kv=0.12 kva=25 conn=wye %R=1.2
+~ xhl=2.04 xht=2.04 xlt=1.36
+
+New Load.l120a bus1=secondary.1.0 phases=1 conn=wye kv=0.12 kw=5 pf=0.95 model=1 vminpu=0.8 vmaxpu=1.2
+New Load.l120b bus1=secondary.2.0 phases=1 conn=wye kv=0.12 kw=4 pf=0.95 model=1 vminpu=0.8 vmaxpu=1.2
+New Load.l240 bus1=secondary.1.2 phases=1 conn=wye kv=0.24 kw=6 pf=0.95 model=1 vminpu=0.8 vmaxpu=1.2
+
+Set VoltageBases=[7.2, 0.24]
+Calcvoltagebases
+Solve

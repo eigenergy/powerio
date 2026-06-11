@@ -21,6 +21,9 @@ doc = false
 
 [dependencies]
 powerio-matrix = { workspace = true, features = ["gridfm"] }
+# Unconditional: the CLI always ships the distribution surface (`convert
+# --to dss/pmd-json/bmopf-json`); only the C ABI gates it behind a feature.
+powerio-dist.workspace = true
 sprs.workspace = true
 anyhow = "1"
 clap = { version = "4", features = ["derive"] }

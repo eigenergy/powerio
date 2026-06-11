@@ -18,6 +18,9 @@ crate-type = ["cdylib", "staticlib", "rlib"]
 # Zero-copy raw network export over the Arrow C Data Interface (`pio_export_arrow`).
 # Off by default so the base ABI pulls in nothing but `powerio`.
 arrow = ["dep:arrow"]
+# Multiconductor distribution formats (OpenDSS, PMD ENGINEERING JSON, BMOPF
+# JSON): the pio_dist_* entry points. Off by default for the same reason.
+dist = ["dep:powerio-dist"]
 # gridfm-datakit Parquet reader (`pio_read_gridfm` / `pio_gridfm_scenario_ids`).
 # Off by default so the base ABI pulls in nothing but `powerio`; enabling it pulls
 # in powerio-matrix (arrow + parquet) for the reader.
@@ -25,6 +28,7 @@ gridfm = ["dep:powerio-matrix", "powerio-matrix/gridfm"]
 
 [dependencies]
 powerio.workspace = true
+powerio-dist = { workspace = true, optional = true }
 # Only the C Data Interface (`ffi`) is needed; the heavy arrow defaults stay off.
 arrow = { workspace = true, features = ["ffi"], optional = true }
 # Pulled in only by the `gridfm` feature: the reader lives in powerio-matrix.

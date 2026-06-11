@@ -634,6 +634,131 @@ fn convert_str(text: &str, to: &str, format: Option<&str>) -> PyResult<(String, 
     Ok((conv.text, conv.warnings))
 }
 
+fn dist_to_pyerr(e: powerio_dist::Error) -> PyErr {
+    use powerio_dist::Error as E;
+    let msg = e.to_string();
+    match e {
+        // OSError(errno, strerror, filename) lets CPython pick the precise
+        // subclass (FileNotFoundError etc.) while keeping the path on
+        // e.filename, which a bare io::Error conversion would drop.
+        E::Io { path, source } => match source.raw_os_error() {
+            Some(errno) => pyo3::exceptions::PyOSError::new_err((errno, source.to_string(), path)),
+            None => PowerIOError::new_err(msg),
+        },
+        E::UnknownFormat(_) => PyValueError::new_err(msg),
+        E::Json { .. } => PowerIOParseError::new_err(msg),
+        _ => PowerIOError::new_err(msg),
+    }
+}
+
+/// Low-level handle around a parsed multiconductor distribution network in
+/// wire coordinates (OpenDSS, PMD ENGINEERING JSON, BMOPF JSON). The
+/// user-facing `powerio.dist.DistCase` wraps it.
+#[pyclass(name = "_DistCase", frozen)]
+struct PyDistCase {
+    net: powerio_dist::DistNetwork,
+}
+
+#[pymethods]
+impl PyDistCase {
+    /// Format the case was parsed from (`dss`, `pmd-json`, `bmopf-json`).
+    fn source_format(&self) -> Option<&'static str> {
+        self.net.source_format.map(|f| f.name())
+    }
+
+    /// Parse warnings: everything the reader could not represent or had to
+    /// assume.
+    fn warnings(&self) -> Vec<String> {
+        self.net.warnings.clone()
+    }
+
+    fn n_buses(&self) -> usize {
+        self.net.buses.len()
+    }
+
+    fn n_lines(&self) -> usize {
+        self.net.lines.len()
+    }
+
+    fn n_transformers(&self) -> usize {
+        self.net.transformers.len()
+    }
+
+    fn n_loads(&self) -> usize {
+        self.net.loads.len()
+    }
+
+    fn n_generators(&self) -> usize {
+        self.net.generators.len()
+    }
+
+    /// Serialize to `to` (`dss`, `pmd-json`, `bmopf-json`). Returns
+    /// `(text, warnings)`. Writing back to the source format echoes the
+    /// retained source byte for byte.
+    fn to_format(&self, to: &str) -> PyResult<(String, Vec<String>)> {
+        let target = to
+            .parse::<powerio_dist::DistTargetFormat>()
+            .map_err(dist_to_pyerr)?;
+        let conv = self.net.to_format(target);
+        Ok((conv.text, conv.warnings))
+    }
+
+    fn __repr__(&self) -> String {
+        format!(
+            "DistCase(n_buses={}, n_lines={}, n_transformers={}, n_loads={})",
+            self.net.buses.len(),
+            self.net.lines.len(),
+            self.net.transformers.len(),
+            self.net.loads.len()
+        )
+    }
+}
+
+/// Parse a distribution case file. The format comes from `from_` when given,
+/// else from the file itself (`.dss`, or `.json` sniffed for the PMD
+/// ENGINEERING `data_model` key against the BMOPF layout).
+#[pyfunction]
+#[pyo3(signature = (path, from_=None))]
+fn dist_parse_file(path: &str, from_: Option<&str>) -> PyResult<PyDistCase> {
+    powerio_dist::parse_file(std::path::Path::new(path), from_)
+        .map(|net| PyDistCase { net })
+        .map_err(dist_to_pyerr)
+}
+
+/// Parse an in-memory distribution case of the named `format` (`dss`,
+/// `pmd-json`, `bmopf-json`).
+#[pyfunction]
+fn dist_parse_str(text: &str, format: &str) -> PyResult<PyDistCase> {
+    powerio_dist::parse_str(text, format)
+        .map(|net| PyDistCase { net })
+        .map_err(dist_to_pyerr)
+}
+
+/// Convert a distribution case file to `to`. Returns `(text, warnings)`; the
+/// warnings carry both the parse warnings and the writer's fidelity losses.
+#[pyfunction]
+#[pyo3(signature = (path, to, from_=None))]
+fn dist_convert_file(path: &str, to: &str, from_: Option<&str>) -> PyResult<(String, Vec<String>)> {
+    let to = to
+        .parse::<powerio_dist::DistTargetFormat>()
+        .map_err(dist_to_pyerr)?;
+    let conv =
+        powerio_dist::convert_file(std::path::Path::new(path), to, from_).map_err(dist_to_pyerr)?;
+    Ok((conv.text, conv.warnings))
+}
+
+/// Convert an in-memory distribution case of the named `format` to `to`.
+/// Returns `(text, warnings)`; the warnings carry both the parse warnings and
+/// the writer's fidelity losses.
+#[pyfunction]
+fn dist_convert_str(text: &str, to: &str, format: &str) -> PyResult<(String, Vec<String>)> {
+    let to = to
+        .parse::<powerio_dist::DistTargetFormat>()
+        .map_err(dist_to_pyerr)?;
+    let conv = powerio_dist::convert_str(text, to, format).map_err(dist_to_pyerr)?;
+    Ok((conv.text, conv.warnings))
+}
+
 /// Build a `{dir, files}` dict from an outputs directory and its written files.
 /// Shared by the DC OPF and gridfm write paths. Paths go through [`path_to_str`]
 /// (so a non-UTF8 path raises instead of being mangled).
@@ -749,6 +874,11 @@ fn _powerio(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(from_json, m)?)?;
     m.add_function(wrap_pyfunction!(convert_file, m)?)?;
     m.add_function(wrap_pyfunction!(convert_str, m)?)?;
+    m.add_class::<PyDistCase>()?;
+    m.add_function(wrap_pyfunction!(dist_parse_file, m)?)?;
+    m.add_function(wrap_pyfunction!(dist_parse_str, m)?)?;
+    m.add_function(wrap_pyfunction!(dist_convert_file, m)?)?;
+    m.add_function(wrap_pyfunction!(dist_convert_str, m)?)?;
     // Whether the gridfm Parquet surface (arrow/parquet) was compiled in, so the
     // pure-Python layer can raise an ImportError instead of an AttributeError.
     m.add("_has_gridfm", cfg!(feature = "gridfm"))?;
