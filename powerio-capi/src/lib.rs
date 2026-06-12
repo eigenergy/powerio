@@ -271,14 +271,10 @@ pub unsafe extern "C" fn pio_read_dir(
     unsafe {
         finish_network(errbuf, errlen, "panic while reading dataset", || {
             let dir = cstr(dir).ok_or_else(|| "dir is NULL or not UTF-8".to_string())?;
-            let from = dataset_format(from)?;
-            match from {
-                DatasetFormat::Gridfm => {
-                    powerio_matrix::read_gridfm_dataset(std::path::Path::new(dir), scenario)
-                        .map(|read| (read.network, read.warnings))
-                        .map_err(|e| e.to_string())
-                }
-            }
+            let from = cstr(from).ok_or_else(|| "from is NULL or not UTF-8".to_string())?;
+            powerio_matrix::read_dataset_dir(std::path::Path::new(dir), from, scenario)
+                .map(|read| (read.network, read.warnings))
+                .map_err(|e| e.to_string())
         })
     }
 }
@@ -302,12 +298,9 @@ pub unsafe extern "C" fn pio_scenario_ids(
     unsafe {
         let r = catch_unwind(AssertUnwindSafe(|| {
             let dir = cstr(dir).ok_or_else(|| "dir is NULL or not UTF-8".to_string())?;
-            match dataset_format(from)? {
-                DatasetFormat::Gridfm => {
-                    powerio_matrix::gridfm_scenario_ids(std::path::Path::new(dir))
-                        .map_err(|e| e.to_string())
-                }
-            }
+            let from = cstr(from).ok_or_else(|| "from is NULL or not UTF-8".to_string())?;
+            powerio_matrix::dataset_scenario_ids(std::path::Path::new(dir), from)
+                .map_err(|e| e.to_string())
         }));
         match r {
             Ok(Ok(ids)) => {
@@ -323,27 +316,6 @@ pub unsafe extern "C" fn pio_scenario_ids(
                 -1
             }
         }
-    }
-}
-
-/// The dataset directory formats [`pio_read_dir`] and [`pio_scenario_ids`]
-/// dispatch on. One variant today; PyPSA CSV directories are case inputs, not
-/// datasets, and parse through [`pio_parse_file`].
-#[cfg(feature = "gridfm")]
-enum DatasetFormat {
-    Gridfm,
-}
-
-#[cfg(feature = "gridfm")]
-fn dataset_format(from: *const c_char) -> Result<DatasetFormat, String> {
-    let from = unsafe { cstr(from) }.ok_or_else(|| "from is NULL or not UTF-8".to_string())?;
-    if from.eq_ignore_ascii_case("gridfm") {
-        Ok(DatasetFormat::Gridfm)
-    } else {
-        Err(format!(
-            "{from} is not a dataset directory format (dataset formats: gridfm); \
-             PyPSA CSV directories parse through pio_parse_file"
-        ))
     }
 }
 
@@ -515,13 +487,29 @@ pub unsafe extern "C" fn pio_to_format(
     errlen: usize,
 ) -> *mut c_char {
     unsafe {
-        let r = catch_unwind(AssertUnwindSafe(|| {
+        finish_conversion(warnbuf, warnlen, errbuf, errlen, || {
             let c = network_ref(net).ok_or_else(|| "network handle is NULL".to_string())?;
             let target = target_format_from_c(to)?;
             let conv = c.net.to_format(target).map_err(|e| e.to_string())?;
-            Ok::<_, String>((conv.text, conv.warnings))
-        }));
-        match r {
+            Ok((conv.text, conv.warnings))
+        })
+    }
+}
+
+/// Finish a text-conversion entry point: run `f` (producing the converted text
+/// with its fidelity warnings, or an error message) under the panic guard,
+/// write the warnings into `warnbuf`, and hand back the owned C string — or
+/// write the error and return NULL. The shared tail of [`pio_to_format`],
+/// [`pio_convert_file`], and [`pio_convert_str`], mirroring [`finish_network`].
+unsafe fn finish_conversion(
+    warnbuf: *mut c_char,
+    warnlen: usize,
+    errbuf: *mut c_char,
+    errlen: usize,
+    f: impl FnOnce() -> Result<(String, Vec<String>), String>,
+) -> *mut c_char {
+    unsafe {
+        match catch_unwind(AssertUnwindSafe(f)) {
             Ok(Ok((text, warnings))) => {
                 copy_to_buf(warnbuf, warnlen, &warnings.join("\n"));
                 finish_cstring(text, errbuf, errlen)
@@ -554,28 +542,14 @@ pub unsafe extern "C" fn pio_convert_file(
     errlen: usize,
 ) -> *mut c_char {
     unsafe {
-        let r = catch_unwind(AssertUnwindSafe(|| {
+        finish_conversion(warnbuf, warnlen, errbuf, errlen, || {
             let path = cstr(path).ok_or_else(|| "path is NULL or not UTF-8".to_string())?;
             let from = optional_cstr(from, "from")?;
             let target = target_format_from_c(to)?;
             let conv = powerio::convert_file(std::path::Path::new(path), target, from)
                 .map_err(|e| e.to_string())?;
-            Ok::<_, String>((conv.text, conv.warnings))
-        }));
-        match r {
-            Ok(Ok((text, warnings))) => {
-                copy_to_buf(warnbuf, warnlen, &warnings.join("\n"));
-                finish_cstring(text, errbuf, errlen)
-            }
-            Ok(Err(msg)) => {
-                copy_to_buf(errbuf, errlen, &msg);
-                std::ptr::null_mut()
-            }
-            Err(_) => {
-                copy_to_buf(errbuf, errlen, "panic while converting");
-                std::ptr::null_mut()
-            }
-        }
+            Ok((conv.text, conv.warnings))
+        })
     }
 }
 
@@ -595,27 +569,13 @@ pub unsafe extern "C" fn pio_convert_str(
     errlen: usize,
 ) -> *mut c_char {
     unsafe {
-        let r = catch_unwind(AssertUnwindSafe(|| {
+        finish_conversion(warnbuf, warnlen, errbuf, errlen, || {
             let text = cstr(text).ok_or_else(|| "text is NULL or not UTF-8".to_string())?;
             let from = cstr(from).ok_or_else(|| "from is NULL or not UTF-8".to_string())?;
             let target = target_format_from_c(to)?;
             let conv = powerio::convert_str(text, target, from).map_err(|e| e.to_string())?;
-            Ok::<_, String>((conv.text, conv.warnings))
-        }));
-        match r {
-            Ok(Ok((text, warnings))) => {
-                copy_to_buf(warnbuf, warnlen, &warnings.join("\n"));
-                finish_cstring(text, errbuf, errlen)
-            }
-            Ok(Err(msg)) => {
-                copy_to_buf(errbuf, errlen, &msg);
-                std::ptr::null_mut()
-            }
-            Err(_) => {
-                copy_to_buf(errbuf, errlen, "panic while converting");
-                std::ptr::null_mut()
-            }
-        }
+            Ok((conv.text, conv.warnings))
+        })
     }
 }
 

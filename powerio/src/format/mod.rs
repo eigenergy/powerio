@@ -402,14 +402,6 @@ pub fn write_as(net: &Network, format: TargetFormat) -> Result<Conversion> {
             });
         }
     }
-    // The snapshot serializes the model itself, so no target-fidelity warning
-    // can apply; return before the warning passes.
-    if format == TargetFormat::PowerioJson {
-        return net.to_json().map(|text| Conversion {
-            text,
-            warnings: Vec::new(),
-        });
-    }
     let mut conv = match format {
         TargetFormat::PowerModelsJson => write_powermodels_json(net),
         TargetFormat::EgretJson => write_egret_json(net),
@@ -420,7 +412,16 @@ pub fn write_as(net: &Network, format: TargetFormat) -> Result<Conversion> {
         // the folded model, which itemizes what it can't carry (HVDC, gen caps,
         // extras, a partial-cost case).
         TargetFormat::Matpower => matpower::write_matpower_conversion(net),
-        TargetFormat::PowerioJson => unreachable!("handled above"),
+        // The snapshot serializes the model itself, so no target-fidelity
+        // warning can apply (warn_normalized_tap would even be FALSE here: the
+        // snapshot preserves the line/transformer labels it warns about);
+        // return before the warning passes.
+        TargetFormat::PowerioJson => {
+            return net.to_json().map(|text| Conversion {
+                text,
+                warnings: Vec::new(),
+            });
+        }
     };
     warn_normalized_tap(net, format, &mut conv);
     warn_missing_reference(net, format, &mut conv);
