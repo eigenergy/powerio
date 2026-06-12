@@ -197,6 +197,31 @@ fn local_corpus_pwd_siblings_match_their_auxes() {
     }
 }
 
+/// The malformed input invariant the fuzz harness asserts: every truncation
+/// or byte corruption of a real display file parses to Ok or a structured
+/// Err, never a panic. Every offset the reader follows derives from file
+/// bytes, so the sweep walks the whole file at a stride plus the tail,
+/// where a clipped record leaves reads dangling past the end.
+#[test]
+fn corrupt_display_files_never_panic() {
+    let pwd = fs::read(common::powerworld_vendored("ACTIVSg200.pwd")).unwrap();
+    let stride = 9973;
+    for len in (0..pwd.len())
+        .step_by(stride)
+        .chain(pwd.len().saturating_sub(48)..pwd.len())
+    {
+        let _ = parse_pwd(&pwd[..len]);
+    }
+    let mut copy = pwd.clone();
+    for i in (0..pwd.len()).step_by(stride) {
+        for byte in [0x00, 0xff] {
+            copy[i] = byte;
+            let _ = parse_pwd(&copy);
+        }
+        copy[i] = pwd[i];
+    }
+}
+
 /// Loud rejections: a binary case is not a display file, garbage is not a
 /// display file, and a display header with no substation identity table
 /// names what is missing.

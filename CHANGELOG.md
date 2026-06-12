@@ -1,5 +1,25 @@
 # Changelog
 
+## 0.2.1
+
+Hardening fixes only; no API or ABI change (`PIO_ABI_VERSION` stays 3).
+
+- MATPOWER: a crafted `gencost` NCOST (e.g. `1e20`) overflowed the row
+  width arithmetic and panicked on every build profile, a denial of
+  service on untrusted input through the Rust API and the CLI. The width
+  now saturates and the row is rejected as a `ShortRow` parse error.
+  Found by malformed input fuzzing.
+- C ABI: error and warning messages were clipped at a raw byte count,
+  which could split a multibyte UTF-8 character and hand the caller an
+  invalid string. Truncation now lands on a character boundary.
+- PowerWorld `.pwd`: the reader's byte accessors return `Option` instead
+  of indexing, so an out of range offset from a corrupt file rejects the
+  record instead of panicking. A corruption sweep test pins the
+  invariant; the differential oracle tests pass unchanged.
+- `powerio.h`: a doc comment contained a literal `*/` that terminated
+  the generated block comment, so compiling with `-DPIO_GRIDFM` against
+  the shipped 0.2.0 header failed with `unknown type name 'raw'`.
+
 ## 0.2.0
 
 - PowerWorld `.pwb` binary reader (#95, #102, #105): read only, covering
