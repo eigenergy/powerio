@@ -135,6 +135,7 @@ pub enum SourceFormat {
     EgretJson,
     Psse,
     PowerWorld,
+    PandapowerJson,
     /// Read from a PowerWorld `.pwb` binary case. Read only: there is no
     /// `.pwb` writer and no retained source text, so writing goes through
     /// another format's writer.
@@ -152,6 +153,9 @@ pub enum SourceFormat {
     /// synthesized `1..n`, per-element load/shunt granularity is folded to one
     /// synthetic element per bus, and HVDC/storage/piecewise costs are absent.
     Gridfm,
+    /// Read from a PyPSA CSV folder. This is a folder format rather than a
+    /// single retained text document, so same-format writes are canonicalized.
+    PypsaCsv,
 }
 
 /// A format-neutral power network.

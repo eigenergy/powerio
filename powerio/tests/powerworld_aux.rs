@@ -93,7 +93,7 @@ fn activsg200_values_survive_tokenizing() {
 /// Same format echo of the real export is byte exact (retained source).
 #[test]
 fn activsg200_echo_is_byte_exact() {
-    let net = parse_file(fixture("ACTIVSg200.aux"), None).unwrap();
+    let net = parse_file(fixture("ACTIVSg200.aux"), None).unwrap().network;
     let echo = net.to_format(TargetFormat::PowerWorld);
     assert!(echo.warnings.is_empty());
     assert_eq!(echo.text, activsg200());
@@ -110,7 +110,7 @@ fn activsg200_canonical_write_is_idempotent() {
 /// The typed Network mapping reads the real export's power flow core.
 #[test]
 fn activsg200_maps_the_power_flow_core() {
-    let net = parse_file(fixture("ACTIVSg200.aux"), None).unwrap();
+    let net = parse_file(fixture("ACTIVSg200.aux"), None).unwrap().network;
     assert_eq!(net.buses.len(), 200);
     assert_eq!(net.generators.len(), 49);
     assert_eq!(net.loads.len(), 160);

@@ -185,6 +185,9 @@ benchmarks/                  # parse benchmarks + Julia validation harnesses
 from `https://github.com/MATPOWER/matpower/tree/master/data` (BSD-3). Also
 `t_case9_dcline.m`, `pglib/` (PGLib OPF), and `psse/*.raw` (PSS/E fixtures). Add
 new sizes by curl from upstream.
+`tests/data/pandapower/example.json` was written by pandapower 3.2.2 and
+`tests/data/pypsa/example/` by PyPSA 1.2.2; both are committed byte exact as
+the tool wrote them (generation snippets in the READMEs next to them).
 
 ## Relationship to GridFM
 

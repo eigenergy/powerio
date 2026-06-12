@@ -163,6 +163,10 @@ enum FormatArg {
     Psse,
     #[value(name = "powerworld", alias = "aux")]
     PowerWorld,
+    #[value(name = "pandapower-json", alias = "pandapower", alias = "pp")]
+    PandapowerJson,
+    #[value(name = "pypsa-csv", alias = "pypsa")]
+    PypsaCsv,
     /// Read a gridfm-datakit Parquet dataset directory (read-only).
     #[value(name = "gridfm")]
     Gridfm,
@@ -182,6 +186,10 @@ impl FormatArg {
             FormatArg::EgretJson => TargetFormat::EgretJson,
             FormatArg::Psse => TargetFormat::Psse,
             FormatArg::PowerWorld => TargetFormat::PowerWorld,
+            FormatArg::PandapowerJson => TargetFormat::PandapowerJson,
+            FormatArg::PypsaCsv => anyhow::bail!(
+                "`convert` cannot return a PyPSA CSV folder as text; pass `--to pypsa-csv -o <dir>`"
+            ),
             FormatArg::Gridfm => anyhow::bail!(
                 "`convert` cannot write a gridfm dataset; use the `gridfm` subcommand"
             ),
@@ -200,6 +208,8 @@ impl FormatArg {
             FormatArg::EgretJson => "egret-json",
             FormatArg::Psse => "psse",
             FormatArg::PowerWorld => "powerworld",
+            FormatArg::PandapowerJson => "pandapower-json",
+            FormatArg::PypsaCsv => "pypsa-csv",
             FormatArg::Gridfm => "gridfm",
             FormatArg::Pwb => "pwb",
         }
@@ -597,6 +607,31 @@ fn run_convert(
     from: Option<FormatArg>,
     scenario: i64,
 ) -> anyhow::Result<()> {
+    if to == FormatArg::PypsaCsv {
+        let Some(out_dir) = output else {
+            anyhow::bail!("`--to pypsa-csv` requires `-o <output-dir>`");
+        };
+        if out_dir.as_os_str() == "-" {
+            anyhow::bail!("`--to pypsa-csv` writes a directory and cannot write to stdout");
+        }
+        let net = if from == Some(FormatArg::Gridfm) {
+            let read = powerio_matrix::read_gridfm_dataset(input, scenario)
+                .with_context(|| format!("reading gridfm dataset {}", input.display()))?;
+            for w in &read.warnings {
+                eprintln!("fidelity: {w}");
+            }
+            read.network
+        } else {
+            read_network(input, from)?
+        };
+        let outputs = powerio_matrix::write_pypsa_csv_folder(&net, out_dir)
+            .with_context(|| format!("writing PyPSA CSV folder {}", out_dir.display()))?;
+        for w in &outputs.warnings {
+            eprintln!("fidelity: {w}");
+        }
+        eprintln!("wrote {}", outputs.dir.display());
+        return Ok(());
+    }
     let target = to.to_target()?;
     // gridfm reads a Parquet dataset directory (the parquet-free `parse_file`
     // can't), so it routes through powerio-matrix's reader, surfacing its fidelity
@@ -627,11 +662,16 @@ fn run_convert(
 
 /// Read `input` into the neutral [`powerio_matrix::Network`] through the shared
 /// format hub, which picks the reader from `from` or the extension (sniffing a
-/// `.json` for the egret vs PowerModels shape).
+/// `.json` for the pandapower vs egret vs PowerModels shape). Read fidelity
+/// warnings print to stderr like the write side's.
 fn read_network(
     input: &std::path::Path,
     from: Option<FormatArg>,
 ) -> anyhow::Result<powerio_matrix::Network> {
-    powerio_matrix::parse_file(input, from.map(FormatArg::name))
-        .with_context(|| format!("reading {}", input.display()))
+    let parsed = powerio_matrix::parse_file(input, from.map(FormatArg::name))
+        .with_context(|| format!("reading {}", input.display()))?;
+    for w in &parsed.warnings {
+        eprintln!("fidelity: {w}");
+    }
+    Ok(parsed.network)
 }

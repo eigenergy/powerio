@@ -36,6 +36,33 @@ def test_case_summary_inline():
     assert s["source_format"] == "Matpower"
 
 
+def test_format_forwarded_for_path_inputs(tmp_path):
+    # An extensionless path parses only when the explicit format reaches
+    # parse_file; the old _parse dropped it and failed on the extension.
+    bare = tmp_path / "case9_no_extension"
+    bare.write_text((DATA / "case9.m").read_text())
+    s = case_summary(path=str(bare), format="matpower")
+    assert s["n_buses"] == 9
+
+
+def test_format_still_inferred_without_one():
+    # No format on a .json path: the extension sniff lands on pandapower.
+    s = case_summary(path=str(DATA / "pandapower" / "example.json"))
+    assert s["source_format"] == "PandapowerJson"
+
+
+def test_parse_case_surfaces_read_warnings():
+    from powerio.mcp.server import parse_case
+
+    r = parse_case(path=str(DATA / "pandapower" / "example.json"),
+                   format="pandapower-json")
+    warnings = r["summary"]["read_warnings"]
+    assert warnings and any("switch" in w for w in warnings)
+    # A total reader yields an empty list, not a missing key.
+    clean = parse_case(path=str(DATA / "case9.m"))
+    assert clean["summary"]["read_warnings"] == []
+
+
 def test_convert_case_path():
     r = convert_case(to="powermodels-json", path=str(DATA / "case30.m"))
     assert isinstance(r["text"], str) and r["text"]
@@ -49,6 +76,28 @@ def test_convert_case_inline_requires_from():
         convert_case(to="psse", content=text)  # missing from_
     r = convert_case(to="psse", content=text, from_="matpower")
     assert r["text"]
+
+
+def test_convert_case_pandapower_json_and_alias():
+    r = convert_case(to="pandapower-json", path=str(DATA / "case9.m"))
+    assert json.loads(r["text"])["_class"] == "pandapowerNet"
+    alias = convert_case(to="pp", path=str(DATA / "case9.m"))
+    assert json.loads(alias["text"])["_class"] == "pandapowerNet"
+    back = case_summary(content=r["text"], format="pandapower-json")
+    assert back["n_buses"] == 9
+    assert back["source_format"] == "PandapowerJson"
+
+
+def test_pypsa_folder_path_inputs():
+    net = powerio.parse_file(str(DATA / "case9.m"))
+    with tempfile.TemporaryDirectory() as tmp:
+        folder = str(Path(tmp) / "case9-pypsa")
+        net.write_pypsa_csv_folder(folder)
+        s = case_summary(path=folder)
+        assert s["n_buses"] == 9
+        assert s["source_format"] == "PypsaCsv"
+        r = convert_case(to="matpower", path=folder, from_="pypsa-csv")
+        assert r["text"].startswith("function mpc =")
 
 
 def test_convert_case_exactly_one_input():
@@ -184,6 +233,20 @@ def test_save_case_writes_and_refuses_overwrite(tmp_path):
         to="matpower", out_path=str(out), path=str(DATA / "case9.m"), overwrite=True
     )
     assert r2["bytes_written"] == out.stat().st_size
+
+
+def test_save_case_echo_keeps_read_warnings(tmp_path):
+    # Deliberate divergence from convert_case: a byte exact echo reports no
+    # warnings there, but save_case describes the written file end to end, so
+    # the read side stays.
+    from powerio.mcp.server import convert_case, save_case
+
+    src = DATA / "pandapower" / "example.json"
+    out = tmp_path / "echo.json"
+    saved = save_case(to="pandapower-json", out_path=str(out), path=str(src))
+    assert any("switch" in w for w in saved["warnings"]), saved["warnings"]
+    echoed = convert_case(to="pandapower-json", path=str(src))
+    assert echoed["warnings"] == []
 
 
 def test_exactly_one_of_path_content_json():

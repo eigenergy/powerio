@@ -201,7 +201,7 @@ mpc.branch = [
 \t2\t3\t0.01\t0.1\t0\t0\t0\t0\t0\t0\t1\t-360\t360;
 ];
 ";
-    let raw = parse_str(src, "matpower").unwrap();
+    let raw = parse_str(src, "matpower").unwrap().network;
     let n = raw.to_normalized().unwrap();
 
     assert_eq!(n.buses.len(), 2, "isolated bus dropped");
@@ -231,7 +231,7 @@ mpc.gen = [
 mpc.branch = [
 ];
 ";
-    let raw = parse_str(src, "matpower").unwrap();
+    let raw = parse_str(src, "matpower").unwrap().network;
     assert!(matches!(
         raw.to_normalized(),
         Err(Error::InvalidBaseMva { .. })
@@ -253,7 +253,7 @@ mpc.branch = [
 \t1\t2\t0.01\t0.1\t0\t0\t0\t0\t0\t0\t1\t-360\t360;
 ];
 ";
-    let raw = parse_str(src, "matpower").unwrap();
+    let raw = parse_str(src, "matpower").unwrap().network;
     assert!(matches!(
         raw.to_normalized(),
         Err(Error::ReferenceBusCount { found: 0 })
@@ -282,7 +282,11 @@ mpc.branch = [
 \t2\t3\t0.01\t0.1\t0\t0\t0\t0\t0\t0\t1\t-360\t360;
 ];
 ";
-    let n = parse_str(src, "matpower").unwrap().to_normalized().unwrap();
+    let n = parse_str(src, "matpower")
+        .unwrap()
+        .network
+        .to_normalized()
+        .unwrap();
     // Both gen-backed REF buses stay REF; the gen-less load bus is PQ.
     assert_eq!(n.buses.iter().filter(|b| b.kind == BusType::Ref).count(), 2);
     assert_eq!(n.buses[0].kind, BusType::Ref);
@@ -318,7 +322,11 @@ mpc.branch = [
 \t1\t2\t0.01\t0.1\t0\t0\t0\t0\t0\t0\t1\t-360\t360;
 ];
 ";
-    let n = parse_str(src, "matpower").unwrap().to_normalized().unwrap();
+    let n = parse_str(src, "matpower")
+        .unwrap()
+        .network
+        .to_normalized()
+        .unwrap();
     assert_eq!(n.buses.iter().filter(|b| b.kind == BusType::Ref).count(), 1);
     assert_eq!(n.buses[0].kind, BusType::Ref, "gen bus promoted to slack");
     assert_eq!(n.buses[1].kind, BusType::Pq);
@@ -347,7 +355,11 @@ mpc.branch = [
 \t1\t2\t0.01\t0.1\t0\t0\t0\t0\t0\t0\t1\t-360\t360;
 ];
 ";
-    let n = parse_str(src, "matpower").unwrap().to_normalized().unwrap();
+    let n = parse_str(src, "matpower")
+        .unwrap()
+        .network
+        .to_normalized()
+        .unwrap();
     let c = n.generators[0].cost.as_ref().unwrap();
     assert_eq!(c.model, 1);
     // [0, 0, 100, 2000] -> [0/100, 0, 100/100, 2000]
@@ -361,8 +373,8 @@ mpc.branch = [
 fn parse_str_matches_parse_file() {
     for case in ["case9.m", "case14.m", "case30.m"] {
         let text = std::fs::read_to_string(data(case)).unwrap();
-        let from_path = parse_file(data(case), None).unwrap();
-        let mut from_text = parse_str(&text, "matpower").unwrap();
+        let from_path = parse_file(data(case), None).unwrap().network;
+        let mut from_text = parse_str(&text, "matpower").unwrap().network;
         // The only legitimate difference is the network name, which `parse_file`
         // derives from the file stem and `parse_str` cannot (it has no path).
         from_text.name = from_path.name.clone();
@@ -416,7 +428,11 @@ mpc.branch = [
 \t1\t2\t0.01\t0.1\t0\t0\t0\t0\t0.978\t15\t1\t-30\t30;
 ];
 ";
-    let n = parse_str(src, "matpower").unwrap().to_normalized().unwrap();
+    let n = parse_str(src, "matpower")
+        .unwrap()
+        .network
+        .to_normalized()
+        .unwrap();
     let base = 100.0;
     // Bus angle: degrees → radians.
     assert!(
@@ -468,7 +484,11 @@ mpc.branch = [
 \t2\t3\t0.01\t0.1\t0\t0\t0\t0\t0\t0\t1\t-360\t360;
 ];
 ";
-    let n = parse_str(src, "matpower").unwrap().to_normalized().unwrap();
+    let n = parse_str(src, "matpower")
+        .unwrap()
+        .network
+        .to_normalized()
+        .unwrap();
     // Bus 2's gen has pmax 300 > bus 1's 100, so bus 2 (dense index 1) is slack.
     assert_eq!(n.buses[0].kind, BusType::Pv);
     assert_eq!(
@@ -500,7 +520,7 @@ mpc.branch = [
 \t1\t2\t0.01\t0.1\t0\t0\t0\t0\t0\t0\t1\t-360\t360;
 ];
 ";
-    let mut net = parse_str(src, "matpower").unwrap();
+    let mut net = parse_str(src, "matpower").unwrap().network;
     net.storage.push(Storage {
         bus: BusId(2),
         ps: 5.0,
