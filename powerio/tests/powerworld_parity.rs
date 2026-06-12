@@ -35,8 +35,12 @@ fn branch_ids(net: &Network) -> BTreeSet<(usize, usize, String)> {
 
 #[test]
 fn activsg200_aux_vs_matpower_structural() {
-    let aux = parse_file(vendored("ACTIVSg200.aux"), None).unwrap();
-    let m = parse_file(vendored("case_ACTIVSg200.m"), None).unwrap();
+    let aux = parse_file(vendored("ACTIVSg200.aux"), None)
+        .unwrap()
+        .network;
+    let m = parse_file(vendored("case_ACTIVSg200.m"), None)
+        .unwrap()
+        .network;
 
     // Bus identity and voltage level agree bus for bus. The aux prints f32
     // noise in nominal kV (13.800000190734863), so the compare is approximate.
@@ -90,8 +94,12 @@ fn activsg200_aux_vs_matpower_structural() {
 
 #[test]
 fn activsg200_aux_vs_psse_structural() {
-    let aux = parse_file(vendored("ACTIVSg200.aux"), None).unwrap();
-    let raw = parse_file(vendored("ACTIVSg200.RAW"), None).unwrap();
+    let aux = parse_file(vendored("ACTIVSg200.aux"), None)
+        .unwrap()
+        .network;
+    let raw = parse_file(vendored("ACTIVSg200.RAW"), None)
+        .unwrap()
+        .network;
 
     assert_eq!(raw.buses.len(), 200);
     let aux_kv: BTreeMap<usize, f64> = aux.buses.iter().map(|b| (b.id.0, b.base_kv)).collect();
@@ -135,8 +143,8 @@ fn activsg2000_june2016_aux_vs_matpower_values() {
         eprintln!("skipped: run benchmarks/fetch_powerworld.sh to fetch ACTIVSg2000");
         return;
     };
-    let aux = parse_file(&aux_path, Some("powerworld")).unwrap();
-    let m = parse_file(&m_path, None).unwrap();
+    let aux = parse_file(&aux_path, Some("powerworld")).unwrap().network;
+    let m = parse_file(&m_path, None).unwrap().network;
 
     assert_eq!(aux.buses.len(), m.buses.len(), "bus count");
     assert_eq!(aux.generators.len(), m.generators.len(), "gen count");
@@ -282,7 +290,9 @@ fn activsg2000_june2016_aux_vs_matpower_values() {
 #[test]
 fn activsg200_contingencies_are_reachable() {
     use powerio::format::powerworld::{aux_sections, contingencies};
-    let net = parse_file(vendored("ACTIVSg200.aux"), None).unwrap();
+    let net = parse_file(vendored("ACTIVSg200.aux"), None)
+        .unwrap()
+        .network;
     let aux = aux_sections(&net).expect("powerworld source").unwrap();
     let ctgs = contingencies(&aux);
     assert_eq!(ctgs.len(), 245);

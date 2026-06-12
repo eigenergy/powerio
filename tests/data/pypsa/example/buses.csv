@@ -1,0 +1,4 @@
+name,v_nom,type,carrier,unit,location,control,generator,sub_network
+north,110.0,,AC,,,PQ,,
+south,110.0,,AC,,,PQ,,
+east,20.0,,AC,,,PQ,,

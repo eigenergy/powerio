@@ -123,6 +123,24 @@ int main(int argc, char **argv) {
         printf("parse_str + to_normalized OK\n");
     }
 
+    /* PyPSA CSV folder writer: 0 on success, -1 on error (message in errbuf). */
+    {
+        char warn[PIO_ERRBUF_MIN];
+        warn[0] = '\0';
+        char outdir[512];
+        snprintf(outdir, sizeof outdir, "%s-pypsa-smoke", argv[1]);
+        int rc = pio_write_pypsa_csv_folder(c, outdir, warn, sizeof warn, err, sizeof err);
+        CHECK(rc == 0, err);
+        char buses[600];
+        snprintf(buses, sizeof buses, "%s/buses.csv", outdir);
+        FILE *bf = fopen(buses, "rb");
+        CHECK(bf != NULL, "PyPSA folder missing buses.csv");
+        fclose(bf);
+        rc = pio_write_pypsa_csv_folder(NULL, outdir, NULL, 0, err, sizeof err);
+        CHECK(rc == -1, "NULL network handle should fail the PyPSA write");
+        printf("pypsa csv folder write OK: %s\n", outdir);
+    }
+
 #ifdef PIO_ARROW
     /* Zero-copy Arrow C Data Interface export: pull the bus table, check the row
      * count, then release the producer-owned buffers. */

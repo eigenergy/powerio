@@ -25,12 +25,14 @@ pub use arrow_export::{
     PIO_ARROW_TABLE_SHUNT,
 };
 
-/// Opaque parsed network handle. Carries the parsed [`Network`] plus the
-/// [`IndexCore`] derived from it once at parse time, so every indexed query
-/// reuses the same bus-id map and nodal aggregates instead of rebuilding them.
+/// Opaque parsed network handle. Carries the parsed [`Network`], the
+/// [`IndexCore`] derived from it once at parse time (so every indexed query
+/// reuses the same bus-id map and nodal aggregates instead of rebuilding
+/// them), and the reader's fidelity warnings ([`pio_parse_warnings`]).
 pub struct PioNetwork {
     net: Network,
     core: IndexCore,
+    warnings: Vec<String>,
 }
 
 /// Copy `msg` (truncated to fit) into a caller `char[len]` buffer, always
@@ -89,25 +91,29 @@ unsafe fn guard<R>(fallback: R, f: impl FnOnce() -> R) -> R {
 
 /// Box a `Network` into an owned network handle, building its [`IndexCore`] once so
 /// every indexed query reuses it. The one constructor for `*mut PioNetwork`.
-fn make_network(net: Network) -> *mut PioNetwork {
+fn make_network(net: Network, warnings: Vec<String>) -> *mut PioNetwork {
     let core = IndexCore::build(&net);
-    Box::into_raw(Box::new(PioNetwork { net, core }))
+    Box::into_raw(Box::new(PioNetwork {
+        net,
+        core,
+        warnings,
+    }))
 }
 
-/// Finish a `*mut PioNetwork` entry point: run `f` (producing a `Network` or an
-/// error message) under the panic guard, hand back an owned handle, or write the
-/// error, `panic_msg` if `f` panicked, into `errbuf` and return NULL. The
-/// shared tail of every handle-returning function (`pio_parse_file`,
-/// `pio_parse_str`, `pio_to_normalized`, `pio_from_json`).
+/// Finish a `*mut PioNetwork` entry point: run `f` (producing a `Network` with
+/// its read warnings, or an error message) under the panic guard, hand back an
+/// owned handle, or write the error, `panic_msg` if `f` panicked, into `errbuf`
+/// and return NULL. The shared tail of every handle-returning function
+/// (`pio_parse_file`, `pio_parse_str`, `pio_to_normalized`, `pio_from_json`).
 unsafe fn finish_network(
     errbuf: *mut c_char,
     errlen: usize,
     panic_msg: &str,
-    f: impl FnOnce() -> Result<Network, String>,
+    f: impl FnOnce() -> Result<(Network, Vec<String>), String>,
 ) -> *mut PioNetwork {
     unsafe {
         match catch_unwind(AssertUnwindSafe(f)) {
-            Ok(Ok(net)) => make_network(net),
+            Ok(Ok((net, warnings))) => make_network(net, warnings),
             Ok(Err(msg)) => {
                 copy_to_buf(errbuf, errlen, &msg);
                 std::ptr::null_mut()
@@ -167,7 +173,12 @@ fn optional_cstr<'a>(p: *const c_char, name: &str) -> Result<Option<&'a str>, St
 }
 
 /// Parse `path` (format from extension, or `from` if non-NULL) into a case
-/// handle. Returns `NULL` on error and writes the message into `errbuf`.
+/// handle. `from` accepts the [`pio_parse_str`] format names plus
+/// `pypsa-csv`/`pypsa`; a PyPSA CSV folder is a directory, so it can only enter
+/// through this function, with `from = "pypsa-csv"` (or NULL when the directory
+/// holds a `network.csv`). Read fidelity warnings attach to the handle
+/// ([`pio_parse_warnings`]). Returns `NULL` on error and writes the message
+/// into `errbuf`.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_parse_file(
     path: *const c_char,
@@ -179,16 +190,21 @@ pub unsafe extern "C" fn pio_parse_file(
         finish_network(errbuf, errlen, "panic while parsing", || {
             let path = cstr(path).ok_or_else(|| "path is NULL or not UTF-8".to_string())?;
             let from = optional_cstr(from, "from")?;
-            powerio::parse_file(std::path::Path::new(path), from).map_err(|e| e.to_string())
+            powerio::parse_file(std::path::Path::new(path), from)
+                .map(|p| (p.network, p.warnings))
+                .map_err(|e| e.to_string())
         })
     }
 }
 
 /// Parse in-memory case `text` of the named `format` into a network handle. Unlike
 /// [`pio_parse_file`] there is no path to infer from, so `format` is required: one of
-/// `matpower`/`m`, `powermodels`/`pm`, `egret`, `psse`/`raw`, `powerworld`/`aux`
-/// (see `TargetFormat::from_str`). Returns `NULL` on error and writes the
-/// message into `errbuf`. Free the handle with [`pio_network_free`].
+/// `matpower`/`m`, `powermodels`/`pm`, `egret`, `pandapower-json`/`pandapower`/`pp`,
+/// `psse`/`raw`, `powerworld`/`aux` (see `TargetFormat::from_str`). PyPSA CSV
+/// folders are directories, not text; parse them with [`pio_parse_file`] and
+/// `from = "pypsa-csv"`. Read fidelity warnings attach to the handle
+/// ([`pio_parse_warnings`]). Returns `NULL` on error and writes the message
+/// into `errbuf`. Free the handle with [`pio_network_free`].
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_parse_str(
     text: *const c_char,
@@ -200,7 +216,27 @@ pub unsafe extern "C" fn pio_parse_str(
         finish_network(errbuf, errlen, "panic while parsing", || {
             let text = cstr(text).ok_or_else(|| "text is NULL or not UTF-8".to_string())?;
             let format = cstr(format).ok_or_else(|| "format is NULL or not UTF-8".to_string())?;
-            powerio::parse_str(text, format).map_err(|e| e.to_string())
+            powerio::parse_str(text, format)
+                .map(|p| (p.network, p.warnings))
+                .map_err(|e| e.to_string())
+        })
+    }
+}
+
+/// Read fidelity warnings attached at parse time, `\n`-joined into `warnbuf`
+/// (truncated to fit; NULL/0 to skip). Returns the warning count; 0 for a
+/// NULL handle. Empty for formats whose readers are total.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn pio_parse_warnings(
+    net: *const PioNetwork,
+    warnbuf: *mut c_char,
+    warnlen: usize,
+) -> usize {
+    unsafe {
+        guard(0, || {
+            let Some(c) = network_ref(net) else { return 0 };
+            copy_to_buf(warnbuf, warnlen, &c.warnings.join("\n"));
+            c.warnings.len()
         })
     }
 }
@@ -244,7 +280,10 @@ pub unsafe extern "C" fn pio_to_normalized(
     unsafe {
         finish_network(errbuf, errlen, "panic while normalizing", || {
             let c = network_ref(net).ok_or_else(|| "network handle is NULL".to_string())?;
-            c.net.to_normalized().map_err(|e| e.to_string())
+            c.net
+                .to_normalized()
+                .map(|n| (n, c.warnings.clone()))
+                .map_err(|e| e.to_string())
         })
     }
 }
@@ -433,6 +472,45 @@ pub unsafe extern "C" fn pio_convert_file(
     }
 }
 
+/// Write `net` as a PyPSA CSV folder at `out_dir`. Returns `0` on success and
+/// `-1` on error (the message is written into `errbuf`), the same convention as
+/// the other fallible `int` returns in this ABI. Fidelity warnings, if any, are
+/// written `\n`-joined into `warnbuf`.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn pio_write_pypsa_csv_folder(
+    net: *const PioNetwork,
+    out_dir: *const c_char,
+    warnbuf: *mut c_char,
+    warnlen: usize,
+    errbuf: *mut c_char,
+    errlen: usize,
+) -> i32 {
+    unsafe {
+        let r = catch_unwind(AssertUnwindSafe(|| {
+            let c = network_ref(net).ok_or_else(|| "network handle is NULL".to_string())?;
+            let out_dir =
+                cstr(out_dir).ok_or_else(|| "out_dir is NULL or not UTF-8".to_string())?;
+            powerio::write_pypsa_csv_folder(&c.net, std::path::Path::new(out_dir))
+                .map(|outputs| outputs.warnings)
+                .map_err(|e| e.to_string())
+        }));
+        match r {
+            Ok(Ok(warnings)) => {
+                copy_to_buf(warnbuf, warnlen, &warnings.join("\n"));
+                0
+            }
+            Ok(Err(msg)) => {
+                copy_to_buf(errbuf, errlen, &msg);
+                -1
+            }
+            Err(_) => {
+                copy_to_buf(errbuf, errlen, "panic while writing PyPSA CSV folder");
+                -1
+            }
+        }
+    }
+}
+
 /// Read one scenario of a gridfm-datakit Parquet dataset into a network handle —
 /// the inverse of the gridfm writer. `dir` resolves leniently: the `raw/` leaf
 /// holding the parquet files, a `<case>/` directory with a `raw/` child, or a
@@ -459,7 +537,7 @@ pub unsafe extern "C" fn pio_read_gridfm(
         match r {
             Ok(Ok(read)) => {
                 copy_to_buf(warnbuf, warnlen, &read.warnings.join("\n"));
-                make_network(read.network)
+                make_network(read.network, read.warnings)
             }
             Ok(Err(msg)) => {
                 copy_to_buf(errbuf, errlen, &msg);
@@ -569,7 +647,9 @@ pub unsafe extern "C" fn pio_from_json(
     unsafe {
         finish_network(errbuf, errlen, "panic while parsing JSON", || {
             let json = cstr(json).ok_or_else(|| "json is NULL or not UTF-8".to_string())?;
-            Network::from_json(json).map_err(|e| e.to_string())
+            Network::from_json(json)
+                .map(|n| (n, Vec::new()))
+                .map_err(|e| e.to_string())
         })
     }
 }
@@ -809,6 +889,36 @@ mod tests {
             assert_eq!(pio_base_mva(c), 100.0);
             assert_eq!(pio_n_components(c), 1);
             assert!(pio_reference_bus(c) >= 0);
+            // The MATPOWER reader is total: no read warnings.
+            assert_eq!(pio_parse_warnings(c, std::ptr::null_mut(), 0), 0);
+            pio_network_free(c);
+        }
+    }
+
+    #[test]
+    fn parse_warnings_reach_the_buffer() {
+        // The pandapower fixture carries switches the model ignores; the read
+        // warning must be countable and readable from the handle.
+        let path = data_path("pandapower/example.json");
+        let mut err = [0 as c_char; 256];
+        let c =
+            unsafe { pio_parse_file(path.as_ptr(), std::ptr::null(), err.as_mut_ptr(), err.len()) };
+        assert!(
+            !c.is_null(),
+            "parse failed: {}",
+            unsafe { CStr::from_ptr(err.as_ptr()) }.to_str().unwrap()
+        );
+        unsafe {
+            let mut warn = [0 as c_char; 4096];
+            let n = pio_parse_warnings(c, warn.as_mut_ptr(), warn.len());
+            assert!(n > 0, "expected read warnings");
+            let w = CStr::from_ptr(warn.as_ptr()).to_str().unwrap();
+            assert!(w.contains("switch"), "expected a switch warning, got {w:?}");
+            // A NULL handle reports zero warnings.
+            assert_eq!(
+                pio_parse_warnings(std::ptr::null(), warn.as_mut_ptr(), warn.len()),
+                0
+            );
             pio_network_free(c);
         }
     }
@@ -1230,7 +1340,8 @@ mpc.branch = [
             std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../tests/data/case14.m"),
             None,
         )
-        .unwrap();
+        .unwrap()
+        .network;
         let tmp = tempfile::tempdir().unwrap();
         let out = write_gridfm_dataset(&net, 0, tmp.path(), &GridfmOptions::default()).unwrap();
         let dir = CString::new(out.dir.to_str().unwrap()).unwrap();

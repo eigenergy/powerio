@@ -1,0 +1,2 @@
+name,bus0,bus1,type,carrier,efficiency,p_nom,p_set
+hvdc1,north,south,,,0.97,30.0,10.0

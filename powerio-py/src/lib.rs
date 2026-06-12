@@ -192,6 +192,18 @@ fn build_options(scheme: Scheme, include_taps: bool, include_shifts: bool) -> Bu
 pub struct PyCase {
     inner: Network,
     core: IndexCore,
+    warnings: Vec<String>,
+}
+
+/// Wrap a parse result as a `PyCase`, building the index core once and keeping
+/// the reader's fidelity warnings on the handle.
+fn case_from_parsed(parsed: powerio_matrix::Parsed) -> PyCase {
+    let core = IndexCore::build(&parsed.network);
+    PyCase {
+        inner: parsed.network,
+        core,
+        warnings: parsed.warnings,
+    }
 }
 
 #[pymethods]
@@ -211,6 +223,15 @@ impl PyCase {
     #[getter]
     fn source_format(&self) -> String {
         format!("{:?}", self.inner.source_format)
+    }
+
+    /// Read fidelity warnings attached at parse time: tables and columns the
+    /// model cannot carry, reported instead of dropped silently. Empty for
+    /// readers that don't report read warnings (currently every format except
+    /// pandapower JSON and PyPSA CSV).
+    #[getter]
+    fn read_warnings(&self) -> Vec<String> {
+        self.warnings.clone()
     }
 
     #[getter]
@@ -405,7 +426,11 @@ impl PyCase {
     fn to_normalized(&self) -> PyResult<PyCase> {
         let inner = self.inner.to_normalized().map_err(to_pyerr)?;
         let core = IndexCore::build(&inner);
-        Ok(PyCase { inner, core })
+        Ok(PyCase {
+            inner,
+            core,
+            warnings: self.warnings.clone(),
+        })
     }
 
     // --- matrix builders: each returns a COO tuple ----------------------
@@ -565,6 +590,18 @@ impl PyCase {
         gridfm_outputs_to_dict(py, &outputs)
     }
 
+    /// Write this case as a PyPSA CSV folder. Returns
+    /// `{"dir", "files", "warnings"}`.
+    fn write_pypsa_csv_folder<'py>(
+        &self,
+        py: Python<'py>,
+        out_dir: &str,
+    ) -> PyResult<Bound<'py, PyDict>> {
+        let outputs =
+            powerio_matrix::write_pypsa_csv_folder(&self.inner, out_dir).map_err(to_pyerr)?;
+        pypsa_outputs_to_dict(py, &outputs)
+    }
+
     fn __repr__(&self) -> String {
         format!(
             "PyCase(name={:?}, n_buses={}, n_branches={}, n_gens={})",
@@ -581,20 +618,20 @@ impl PyCase {
 #[pyfunction]
 #[pyo3(signature = (path, from_=None))]
 fn parse_file(path: &str, from_: Option<&str>) -> PyResult<PyCase> {
-    let inner = powerio_matrix::parse_file(std::path::Path::new(path), from_).map_err(to_pyerr)?;
-    let core = IndexCore::build(&inner);
-    Ok(PyCase { inner, core })
+    powerio_matrix::parse_file(std::path::Path::new(path), from_)
+        .map(case_from_parsed)
+        .map_err(to_pyerr)
 }
 
 /// Parse a case from in-memory text in the named `format` (`matpower`,
-/// `powermodels-json`, `egret-json`, `psse`, `powerworld`; aliases
-/// `m`/`pm`/`egret`/`raw`/`aux`).
+/// `powermodels-json`, `egret-json`, `pandapower-json`, `psse`, `powerworld`;
+/// aliases `m`/`pm`/`egret`/`pp`/`raw`/`aux`).
 #[pyfunction]
 #[pyo3(signature = (text, format=None))]
 fn parse_str(text: &str, format: Option<&str>) -> PyResult<PyCase> {
-    let inner = powerio_matrix::parse_str(text, format.unwrap_or("matpower")).map_err(to_pyerr)?;
-    let core = IndexCore::build(&inner);
-    Ok(PyCase { inner, core })
+    powerio_matrix::parse_str(text, format.unwrap_or("matpower"))
+        .map(case_from_parsed)
+        .map_err(to_pyerr)
 }
 
 /// Rebuild a case from JSON produced by `Network.to_json()`.
@@ -602,7 +639,19 @@ fn parse_str(text: &str, format: Option<&str>) -> PyResult<PyCase> {
 fn from_json(text: &str) -> PyResult<PyCase> {
     let inner = powerio_matrix::Network::from_json(text).map_err(to_pyerr)?;
     let core = IndexCore::build(&inner);
-    Ok(PyCase { inner, core })
+    Ok(PyCase {
+        inner,
+        core,
+        warnings: Vec::new(),
+    })
+}
+
+/// Read a PyPSA CSV folder into a case.
+#[pyfunction]
+fn read_pypsa_csv_folder(path: &str) -> PyResult<PyCase> {
+    powerio_matrix::read_pypsa_csv_folder(std::path::Path::new(path))
+        .map(case_from_parsed)
+        .map_err(to_pyerr)
 }
 
 /// Convert a case file to another format through the neutral hub. Returns
@@ -665,6 +714,15 @@ fn gridfm_outputs_to_dict<'py>(
     Ok(d)
 }
 
+fn pypsa_outputs_to_dict<'py>(
+    py: Python<'py>,
+    outputs: &powerio_matrix::PypsaCsvOutputs,
+) -> PyResult<Bound<'py, PyDict>> {
+    let d = dir_files_dict(py, &outputs.dir, &outputs.files)?;
+    d.set_item("warnings", &outputs.warnings)?;
+    Ok(d)
+}
+
 /// Write a batch of cases as one gridfm-datakit dataset, row-stacked and keyed by
 /// the `scenario` column. The k-th case is stamped `base_scenario + k`; all cases
 /// must share one base element set (same bus/branch/gen counts and bus-id order).
@@ -705,6 +763,7 @@ fn gridfm_read_to_py(read: GridfmRead) -> (PyCase, i64, Vec<String>) {
         PyCase {
             inner: read.network,
             core,
+            warnings: read.warnings.clone(),
         },
         read.scenario,
         read.warnings,
@@ -747,6 +806,7 @@ fn _powerio(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(parse_file, m)?)?;
     m.add_function(wrap_pyfunction!(parse_str, m)?)?;
     m.add_function(wrap_pyfunction!(from_json, m)?)?;
+    m.add_function(wrap_pyfunction!(read_pypsa_csv_folder, m)?)?;
     m.add_function(wrap_pyfunction!(convert_file, m)?)?;
     m.add_function(wrap_pyfunction!(convert_str, m)?)?;
     // Whether the gridfm Parquet surface (arrow/parquet) was compiled in, so the

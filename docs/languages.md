@@ -8,11 +8,12 @@ Verb taxonomy:
 - `parse_*`: bytes, paths, or text to `Network`
 - `to_*`: `Network` to a new value
 - `convert_file`: path to target text convenience
-- `write_*`: filesystem outputs (`write_gridfm`, `write_dcopf_bundle`); the Rust
+- `write_*`: filesystem outputs (`write_gridfm`, `write_pypsa_csv_folder`,
+  `write_dcopf_bundle`); the Rust
   hub also keeps `write_as` and per-format `write_*` text builders, the
   internals behind `to_format` and the `to_*` writers, which the bindings do
   not mirror
-- `read_*`: filesystem dataset inputs (`read_gridfm`), the inverse of
+- `read_*`: filesystem dataset inputs (`read_gridfm`, `read_pypsa_csv_folder`), the inverse of
   `write_*`. Datasets are multi-file directories, so they read and write;
   single documents parse and serialize (`parse_*`/`to_*`)
 - `export_*`: handoff to external memory or interface protocols
@@ -30,6 +31,7 @@ Verb taxonomy:
 | JSON text | `net.to_json()` | `net.to_json()` | `to_json(net)` | `pio_to_json` |
 | Normalized copy | `net.to_normalized()` | `net.to_normalized()` | `to_normalized(net)` | `pio_to_normalized` |
 | Dense tables | typed table API | `to_dense` | `to_dense` | `pio_*` extractors |
+| PyPSA CSV folder | `read_pypsa_csv_folder` / `write_pypsa_csv_folder` | `read_pypsa_csv_folder` / `net.write_pypsa_csv_folder` | planned | `pio_parse_file` / `pio_write_pypsa_csv_folder` |
 | gridfm read | `read_gridfm_dataset(dir, scenario)` | `read_gridfm(dir, scenario=0)` | `read_gridfm(dir; scenario=0)` (PR open) | `pio_read_gridfm` |
 | Arrow handoff | internal/C ABI | later | `to_arrow` | `pio_export_arrow` |
 

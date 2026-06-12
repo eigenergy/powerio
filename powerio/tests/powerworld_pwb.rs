@@ -24,7 +24,9 @@ fn read_pwb(path: &Path) -> Network {
 #[allow(clippy::too_many_lines)]
 fn activsg200_pwb_matches_its_aux_sibling() {
     let pwb = read_pwb(&vendored("ACTIVSg200.pwb"));
-    let aux = parse_file(vendored("ACTIVSg200.aux"), None).unwrap();
+    let aux = parse_file(vendored("ACTIVSg200.aux"), None)
+        .unwrap()
+        .network;
 
     assert_eq!(pwb.buses.len(), 200);
     assert_eq!(pwb.generators.len(), 49);
@@ -180,7 +182,9 @@ fn activsg200_pwb_matches_its_aux_sibling() {
     // RAW is a 2017 snapshot of the same case and carries no circuit IDs, so
     // transformers are matched on endpoints alone (no parallel pairs among
     // them); the two values TAMU revised between snapshots are pinned below.
-    let raw = parse_file(vendored("ACTIVSg200.RAW"), None).unwrap();
+    let raw = parse_file(vendored("ACTIVSg200.RAW"), None)
+        .unwrap()
+        .network;
     let raw_by_pair: BTreeMap<(usize, usize), &powerio::Branch> = raw
         .branches
         .iter()
@@ -229,7 +233,7 @@ fn texas2000_june2016_pwb_matches_its_aux_sibling() {
         return;
     };
     let pwb = read_pwb(&pwb_path);
-    let aux = parse_file(aux_path, None).unwrap();
+    let aux = parse_file(aux_path, None).unwrap().network;
 
     assert_eq!(pwb.buses.len(), 2007);
     assert_eq!(pwb.loads.len(), 1417);
@@ -370,7 +374,7 @@ fn activsg2000_v19_pwb_matches_the_published_case() {
         return;
     };
     let pwb = read_pwb(&pwb_path);
-    let m = parse_file(m_path, None).unwrap();
+    let m = parse_file(m_path, None).unwrap().network;
 
     assert_eq!(pwb.buses.len(), 2000);
     assert_eq!(pwb.loads.len(), 1350);
@@ -610,8 +614,8 @@ fn rts_gmlc_pwb_matches_its_matpower_and_raw_siblings() {
         return;
     };
     let pwb = read_pwb(&pwb_path);
-    let m = parse_file(m_path, None).unwrap();
-    let raw = parse_file(raw_path, None).unwrap();
+    let m = parse_file(m_path, None).unwrap().network;
+    let raw = parse_file(raw_path, None).unwrap().network;
 
     assert_eq!(pwb.buses.len(), 73);
     assert_eq!(m.buses.len(), 73);
@@ -716,14 +720,18 @@ fn rts_gmlc_pwb_matches_its_matpower_and_raw_siblings() {
 /// `powerio convert ACTIVSg200.pwb out.m` path).
 #[test]
 fn parse_file_dispatches_pwb_and_converts() {
-    let net = parse_file(vendored("ACTIVSg200.pwb"), None).unwrap();
+    let net = parse_file(vendored("ACTIVSg200.pwb"), None)
+        .unwrap()
+        .network;
     assert_eq!(net.buses.len(), 200);
     assert_eq!(net.branches.len(), 246);
-    let by_name = parse_file(vendored("ACTIVSg200.pwb"), Some("pwb")).unwrap();
+    let by_name = parse_file(vendored("ACTIVSg200.pwb"), Some("pwb"))
+        .unwrap()
+        .network;
     assert_eq!(by_name.buses.len(), 200);
 
     let conv = powerio::write_as(&net, powerio::TargetFormat::Matpower);
-    let back = powerio::parse_str(&conv.text, "matpower").unwrap();
+    let back = powerio::parse_str(&conv.text, "matpower").unwrap().network;
     assert_eq!(back.buses.len(), 200);
     assert_eq!(back.branches.len(), 246);
 }
@@ -747,7 +755,7 @@ fn activsg2000_current_era_pwb_matches_its_aux_sibling() {
         return;
     }
     let pwb = read_pwb(&pwb_path);
-    let aux = parse_file(aux_path, None).unwrap();
+    let aux = parse_file(aux_path, None).unwrap().network;
 
     assert_eq!(pwb.buses.len(), 2000);
     assert_eq!(pwb.branches.len(), 3206);
@@ -876,7 +884,7 @@ fn activsg500_pwb_matches_its_aux_sibling() {
         return;
     }
     let pwb = read_pwb(&pwb_path);
-    let aux = parse_file(aux_path, None).unwrap();
+    let aux = parse_file(aux_path, None).unwrap().network;
 
     assert_eq!(pwb.buses.len(), 500);
     assert_eq!(pwb.branches.len(), 599);
@@ -1002,7 +1010,7 @@ fn hawaii40_pwb_matches_its_aux_sibling() {
         return;
     }
     let pwb = read_pwb(&pwb_path);
-    let aux = parse_file(aux_path, None).unwrap();
+    let aux = parse_file(aux_path, None).unwrap().network;
 
     assert_eq!(pwb.buses.len(), aux.buses.len());
     assert_eq!(pwb.loads.len(), aux.loads.len());
@@ -1134,8 +1142,8 @@ fn texas7k_pwb_matches_its_aux_and_matpower_siblings() {
         return;
     }
     let pwb = read_pwb(&pwb_path);
-    let aux = parse_file(aux_path, None).unwrap();
-    let m = parse_file(m_path, None).unwrap();
+    let aux = parse_file(aux_path, None).unwrap().network;
+    let m = parse_file(m_path, None).unwrap().network;
 
     assert_eq!(pwb.buses.len(), 6717);
     assert_eq!(pwb.loads.len(), 5095);
@@ -1447,7 +1455,7 @@ fn texas7k_resaves_match_the_2022_aux() {
             continue;
         }
         let pwb = read_pwb(&pwb_path);
-        let aux = parse_file(aux_path, None).unwrap();
+        let aux = parse_file(aux_path, None).unwrap().network;
 
         assert_eq!(pwb.buses.len(), 6717, "{label}");
         assert_eq!(pwb.loads.len(), aux.loads.len(), "{label}");

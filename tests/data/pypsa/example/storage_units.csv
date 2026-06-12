@@ -1,0 +1,2 @@
+name,bus,control,type,p_nom,p_set,carrier,state_of_charge_initial,max_hours,efficiency_store,efficiency_dispatch
+s1,south,PQ,,25.0,3.0,,20.0,4.0,0.91,0.92
