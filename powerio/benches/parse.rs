@@ -62,7 +62,7 @@ fn bench_parse_formats(c: &mut Criterion) {
     for (name, fmt) in FORMATS {
         // Convert once outside the timed loop; `parse_str` runs the same
         // owned-source reader the file path does.
-        let text = write_as(&net, *fmt).text;
+        let text = write_as(&net, *fmt).unwrap().text;
         // A reader that can't re-read its own writer would make the timing
         // meaningless, so fail loudly here rather than benchmark an error path.
         parse_str(&text, name)

@@ -92,7 +92,7 @@ pub fn parse_pwd(bytes: &[u8]) -> Result<Vec<PwdSubstation>> {
     // Every drawing object record repeats the header stamp at +18 and dual
     // encodes its position (f64 at +22/+30, f32 echo at +2/+6); the scan
     // collects every offset with that shape and groups by the u16 type tag.
-    let mut groups: Vec<(u16, Vec<(usize, f64, f64)>)> = Vec::new();
+    let mut groups: Vec<(u16, Vec<DrawRecord>)> = Vec::new();
     for i in 0..bytes.len().saturating_sub(38) {
         if u32_at(bytes, i + 18) != Some(stamp) {
             continue;
@@ -116,10 +116,13 @@ pub fn parse_pwd(bytes: &[u8]) -> Result<Vec<PwdSubstation>> {
         if !(1.0..1.0e7).contains(&magnitude) {
             continue;
         }
-        let Some(tag) = u16_at(bytes, i) else { continue };
+        let Some(tag) = u16_at(bytes, i) else {
+            continue;
+        };
+        let rec = DrawRecord { at: i, x, y };
         match groups.iter_mut().find(|(t, _)| *t == tag) {
-            Some((_, v)) => v.push((i, x, y)),
-            None => groups.push((tag, vec![(i, x, y)])),
+            Some((_, v)) => v.push(rec),
+            None => groups.push((tag, vec![rec])),
         }
     }
 
@@ -128,14 +131,14 @@ pub fn parse_pwd(bytes: &[u8]) -> Result<Vec<PwdSubstation>> {
     // era) followed by the row's u32 number, somewhere in the style tail.
     // Field label decoys carry other markers (0x05 observed) or another
     // order and fail; ambiguity is a loud error, never a pick.
-    let matches: Vec<&(u16, Vec<(usize, f64, f64)>)> = groups
+    let matches: Vec<&(u16, Vec<DrawRecord>)> = groups
         .iter()
         .filter(|(_, records)| {
             records.len() == identity.len()
                 && records
                     .iter()
                     .zip(&identity)
-                    .all(|(&(i, _, _), (number, _))| links_number(bytes, i, *number))
+                    .all(|(rec, (number, _))| links_number(bytes, rec.at, *number))
         })
         .collect();
     let (_, records) = match matches.as_slice() {
@@ -159,8 +162,22 @@ pub fn parse_pwd(bytes: &[u8]) -> Result<Vec<PwdSubstation>> {
     Ok(records
         .iter()
         .zip(identity)
-        .map(|(&(_, x, y), (number, name))| PwdSubstation { number, name, x, y })
+        .map(|(rec, (number, name))| PwdSubstation {
+            number,
+            name,
+            x: rec.x,
+            y: rec.y,
+        })
         .collect())
+}
+
+/// A drawing record that passed the shape gate: its stream offset (for the
+/// identity link check) and the decoded coordinates, kept so the final mapping
+/// never re-reads the bytes.
+struct DrawRecord {
+    at: usize,
+    x: f64,
+    y: f64,
 }
 
 /// The substation identity table: exactly one valid walk behind a
@@ -211,8 +228,7 @@ fn identity_walk(b: &[u8], mut at: usize) -> Option<Vec<(u32, String)>> {
             return None;
         }
         let name = b.get(at + 12..at + 12 + len)?;
-        if !name.iter().all(|&c| (0x20..0x7f).contains(&c)) || b.get(at + 12 + len) != Some(&0x02)
-        {
+        if !name.iter().all(|&c| (0x20..0x7f).contains(&c)) || b.get(at + 12 + len) != Some(&0x02) {
             return None;
         }
         if !seen.insert(number) {
@@ -229,9 +245,8 @@ fn identity_walk(b: &[u8], mut at: usize) -> Option<Vec<(u32, String)>> {
 /// variable because a digit string of 1 to 4 characters precedes the link
 /// in some saves.
 fn links_number(b: &[u8], i: usize, number: u32) -> bool {
-    (40..140).any(|d| {
-        matches!(b.get(i + d), Some(0x03 | 0x07)) && u32_at(b, i + d + 1) == Some(number)
-    })
+    (40..140)
+        .any(|d| matches!(b.get(i + d), Some(0x03 | 0x07)) && u32_at(b, i + d + 1) == Some(number))
 }
 
 /// Every start of `needle` in `haystack`.

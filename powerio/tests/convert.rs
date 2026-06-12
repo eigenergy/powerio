@@ -480,7 +480,10 @@ fn powermodels_json_same_format_is_byte_exact_echo() {
     let net = parse_matpower_file(data("case30.m")).unwrap();
     let json = write_powermodels_json(&net).text;
     let net2 = parse_powermodels_json(&json).unwrap();
-    assert_eq!(write_as(&net2, TargetFormat::PowerModelsJson).unwrap().text, json);
+    assert_eq!(
+        write_as(&net2, TargetFormat::PowerModelsJson).unwrap().text,
+        json
+    );
 }
 
 #[test]
@@ -1386,7 +1389,8 @@ fn slackless_network_conversion_warns_for_power_flow_targets() {
         vec![branch(1, 2)],
     );
     assert!(
-        !write_as(&with_ref, TargetFormat::Matpower).unwrap()
+        !write_as(&with_ref, TargetFormat::Matpower)
+            .unwrap()
             .warnings
             .iter()
             .any(|w| w.contains("reference (slack) bus"))

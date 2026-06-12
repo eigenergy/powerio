@@ -244,7 +244,11 @@ pub(super) fn gencost_row(row: &[f64], i: usize) -> Result<GenCost> {
     // check below (a loud `ShortRow`), instead of overflowing the add (a panic
     // under debug overflow checks) or wrapping into a reversed `start..start+want`
     // slice range at `coeffs` (a slice-index panic in release).
-    let want = if model == 1 { ncost.saturating_mul(2) } else { ncost };
+    let want = if model == 1 {
+        ncost.saturating_mul(2)
+    } else {
+        ncost
+    };
     let start = gencost_col::REQUIRED;
     require("gencost", row, i, start.saturating_add(want))?;
     Ok(GenCost {

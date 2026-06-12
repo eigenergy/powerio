@@ -641,8 +641,7 @@ pub unsafe extern "C" fn pio_write_dir(
             let to = cstr(to).ok_or_else(|| "to is NULL or not UTF-8".to_string())?;
             let out_dir =
                 cstr(out_dir).ok_or_else(|| "out_dir is NULL or not UTF-8".to_string())?;
-            powerio::write_dir(&c.net, to, std::path::Path::new(out_dir))
-                .map_err(|e| e.to_string())
+            powerio::write_dir(&c.net, to, std::path::Path::new(out_dir)).map_err(|e| e.to_string())
         }));
         match r {
             Ok(Ok(warnings)) => {
@@ -675,11 +674,7 @@ pub unsafe extern "C" fn pio_string_free(s: *mut c_char) {
 /// Write up to `cap` values from `vals` into `out` and return the total number
 /// available. A NULL `out` skips the write, so `(NULL, 0)` is the pure count
 /// query of the cap/count convention every array extractor shares.
-unsafe fn fill<T: Copy>(
-    out: *mut T,
-    cap: usize,
-    vals: impl ExactSizeIterator<Item = T>,
-) -> usize {
+unsafe fn fill<T: Copy>(out: *mut T, cap: usize, vals: impl ExactSizeIterator<Item = T>) -> usize {
     unsafe {
         let total = vals.len();
         if !out.is_null() {
@@ -996,7 +991,10 @@ mod tests {
             assert_eq!(w.len(), len, "buffer sized from the return holds it all");
             assert!(w.contains("switch"), "expected a switch warning, got {w:?}");
             // A NULL handle reports zero bytes.
-            assert_eq!(pio_warnings(std::ptr::null(), warn.as_mut_ptr(), warn.len()), 0);
+            assert_eq!(
+                pio_warnings(std::ptr::null(), warn.as_mut_ptr(), warn.len()),
+                0
+            );
             pio_network_free(c);
         }
     }
