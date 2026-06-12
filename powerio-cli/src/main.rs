@@ -165,6 +165,9 @@ enum FormatArg {
     PowerWorld,
     #[value(name = "pandapower-json", alias = "pandapower", alias = "pp")]
     PandapowerJson,
+    /// The canonical lossless snapshot (`Network` as validated JSON).
+    #[value(name = "powerio-json", alias = "powerio", alias = "json")]
+    PowerioJson,
     #[value(name = "pypsa-csv", alias = "pypsa")]
     PypsaCsv,
     /// Read a gridfm-datakit Parquet dataset directory (read-only).
@@ -187,6 +190,7 @@ impl FormatArg {
             FormatArg::Psse => TargetFormat::Psse,
             FormatArg::PowerWorld => TargetFormat::PowerWorld,
             FormatArg::PandapowerJson => TargetFormat::PandapowerJson,
+            FormatArg::PowerioJson => TargetFormat::PowerioJson,
             FormatArg::PypsaCsv => anyhow::bail!(
                 "`convert` cannot return a PyPSA CSV folder as text; pass `--to pypsa-csv -o <dir>`"
             ),
@@ -209,6 +213,7 @@ impl FormatArg {
             FormatArg::Psse => "psse",
             FormatArg::PowerWorld => "powerworld",
             FormatArg::PandapowerJson => "pandapower-json",
+            FormatArg::PowerioJson => "powerio-json",
             FormatArg::PypsaCsv => "pypsa-csv",
             FormatArg::Gridfm => "gridfm",
             FormatArg::Pwb => "pwb",
@@ -646,7 +651,8 @@ fn run_convert(
     } else {
         read_network(input, from)?
     };
-    let conv = powerio_matrix::write_as(&net, target);
+    let conv = powerio_matrix::write_as(&net, target)
+        .with_context(|| format!("serializing to {target}"))?;
     for w in &conv.warnings {
         eprintln!("fidelity: {w}");
     }

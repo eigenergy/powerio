@@ -1027,7 +1027,7 @@ pub fn read_gridfm_scenarios(dir: impl AsRef<Path>) -> Result<Vec<GridfmRead>> {
 /// The distinct scenario ids in a gridfm dataset, ascending — the keys
 /// [`read_gridfm_scenarios`] rebuilds a [`Network`] for. Reads only `bus_data`'s
 /// scenario column, so it enumerates a dataset's scenarios without rebuilding
-/// every network; the C ABI's `pio_gridfm_scenario_ids` is a thin wrapper over it.
+/// every network; the C ABI's `pio_scenario_ids` is a thin wrapper over it.
 ///
 /// # Errors
 /// Propagates the directory resolution and `bus_data.parquet` read errors.

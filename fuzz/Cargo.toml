@@ -1,0 +1,61 @@
+[package]
+name = "powerio-fuzz"
+version = "0.0.0"
+publish = false
+edition = "2024"
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "0.4"
+powerio = { path = "../powerio" }
+
+# Detached from the parent workspace (and excluded there): the fuzz crate
+# needs nightly + cargo-fuzz and must not ride along on workspace builds.
+[workspace]
+
+[profile.release]
+debug = 1
+
+[[bin]]
+name = "matpower"
+path = "fuzz_targets/matpower.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "psse"
+path = "fuzz_targets/psse.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "powerio_json"
+path = "fuzz_targets/powerio_json.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "powerworld_aux"
+path = "fuzz_targets/powerworld_aux.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "pwb"
+path = "fuzz_targets/pwb.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "pwd"
+path = "fuzz_targets/pwd.rs"
+test = false
+doc = false
+bench = false

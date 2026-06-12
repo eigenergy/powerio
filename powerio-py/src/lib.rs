@@ -415,7 +415,7 @@ impl PyCase {
         let target = to
             .parse::<powerio_matrix::TargetFormat>()
             .map_err(to_pyerr)?;
-        let conv = self.inner.to_format(target);
+        let conv = self.inner.to_format(target).map_err(to_pyerr)?;
         Ok((conv.text, conv.warnings))
     }
 

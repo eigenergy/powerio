@@ -394,10 +394,21 @@ impl Network {
     }
 
     /// Serialize the structured tables to JSON — the transport the C ABI
-    /// (`pio_to_json`) and the Julia bridge consume. The retained `source` text
+    /// (the `powerio-json` format) and the Julia bridge consume. The retained `source` text
     /// is excluded (see the field's `#[serde(skip)]`), so the byte-exact echo
     /// stays on the same-format write path; a [`from_json`](Network::from_json)
     /// round-trip reproduces every field except `source`, which returns `None`.
+    ///
+    /// JSON has no `Inf`/`NaN`: `serde_json` writes a non-finite field as
+    /// `null`, which [`from_json`](Network::from_json) rejects on the way back
+    /// (`null` is not an `f64`). The write stays total — the bindings
+    /// materialize every parsed network through this transport, and readers
+    /// legitimately produce `Inf` limits — but such a snapshot does not round
+    /// trip; [`write_as`](crate::write_as) reports the degradation as a
+    /// fidelity warning naming the field.
+    ///
+    /// # Errors
+    /// A `serde_json` serialization failure (none arise from this model today).
     pub fn to_json(&self) -> crate::Result<String> {
         serde_json::to_string(self).map_err(|e| Error::FormatRead {
             format: "JSON",
@@ -405,10 +416,174 @@ impl Network {
         })
     }
 
+    /// The path of the first non-finite numeric field, or `None` when every
+    /// value is finite — drives the snapshot writer's degradation warning
+    /// (see [`to_json`](Network::to_json)).
+    /// `extras` maps hold `serde_json::Value`, which cannot carry a non-finite
+    /// number, so only the typed `f64` fields need scanning. Every struct is
+    /// destructured exhaustively: adding an `f64` field without classifying it
+    /// here is a compile error, not a silently unguarded value.
+    // The length IS the exhaustive field walk; splitting it would only scatter
+    // the per-struct lists the compile-time check exists to keep in one place.
+    #[allow(clippy::too_many_lines)]
+    pub(crate) fn first_non_finite(&self) -> Option<String> {
+        fn bad<'a>(fields: impl IntoIterator<Item = (&'a str, f64)>) -> Option<&'a str> {
+            fields
+                .into_iter()
+                .find_map(|(name, v)| (!v.is_finite()).then_some(name))
+        }
+        if !self.base_mva.is_finite() {
+            return Some("base_mva".into());
+        }
+        for (i, b) in self.buses.iter().enumerate() {
+            #[rustfmt::skip]
+            let Bus { id: _, kind: _, vm, va, base_kv, vmax, vmin, area: _, zone: _, name: _, extras: _ } = b;
+            let fields = [
+                ("vm", *vm),
+                ("va", *va),
+                ("base_kv", *base_kv),
+                ("vmax", *vmax),
+                ("vmin", *vmin),
+            ];
+            if let Some(f) = bad(fields) {
+                return Some(format!("buses[{i}].{f}"));
+            }
+        }
+        for (i, l) in self.loads.iter().enumerate() {
+            let Load {
+                bus: _,
+                p,
+                q,
+                in_service: _,
+                extras: _,
+            } = l;
+            if let Some(f) = bad([("p", *p), ("q", *q)]) {
+                return Some(format!("loads[{i}].{f}"));
+            }
+        }
+        for (i, s) in self.shunts.iter().enumerate() {
+            let Shunt {
+                bus: _,
+                g,
+                b,
+                in_service: _,
+                extras: _,
+            } = s;
+            if let Some(f) = bad([("g", *g), ("b", *b)]) {
+                return Some(format!("shunts[{i}].{f}"));
+            }
+        }
+        for (i, br) in self.branches.iter().enumerate() {
+            #[rustfmt::skip]
+            let Branch { from: _, to: _, r, x, b, rate_a, rate_b, rate_c, tap, shift, in_service: _, angmin, angmax, extras: _ } = br;
+            let fields = [
+                ("r", *r),
+                ("x", *x),
+                ("b", *b),
+                ("rate_a", *rate_a),
+                ("rate_b", *rate_b),
+                ("rate_c", *rate_c),
+                ("tap", *tap),
+                ("shift", *shift),
+                ("angmin", *angmin),
+                ("angmax", *angmax),
+            ];
+            if let Some(f) = bad(fields) {
+                return Some(format!("branches[{i}].{f}"));
+            }
+        }
+        for (i, g) in self.generators.iter().enumerate() {
+            #[rustfmt::skip]
+            let Generator { bus: _, pg, qg, pmax, pmin, qmax, qmin, vg, mbase, in_service: _, cost, caps } = g;
+            let fields = [
+                ("pg", *pg),
+                ("qg", *qg),
+                ("pmax", *pmax),
+                ("pmin", *pmin),
+                ("qmax", *qmax),
+                ("qmin", *qmin),
+                ("vg", *vg),
+                ("mbase", *mbase),
+            ];
+            if let Some(f) = bad(fields) {
+                return Some(format!("generators[{i}].{f}"));
+            }
+            if let Some(GenCost {
+                model: _,
+                startup,
+                shutdown,
+                ncost: _,
+                coeffs,
+            }) = cost
+            {
+                if let Some(f) = bad([("startup", *startup), ("shutdown", *shutdown)]) {
+                    return Some(format!("generators[{i}].cost.{f}"));
+                }
+                if coeffs.iter().any(|c| !c.is_finite()) {
+                    return Some(format!("generators[{i}].cost.coeffs"));
+                }
+            }
+            if caps.iter().flatten().any(|c| !c.is_finite()) {
+                return Some(format!("generators[{i}].caps"));
+            }
+        }
+        for (i, s) in self.storage.iter().enumerate() {
+            #[rustfmt::skip]
+            let Storage { bus: _, ps, qs, energy, energy_rating, charge_rating, discharge_rating, charge_efficiency, discharge_efficiency, thermal_rating, qmin, qmax, r, x, p_loss, q_loss, in_service: _, extras: _ } = s;
+            let fields = [
+                ("ps", *ps),
+                ("qs", *qs),
+                ("energy", *energy),
+                ("energy_rating", *energy_rating),
+                ("charge_rating", *charge_rating),
+                ("discharge_rating", *discharge_rating),
+                ("charge_efficiency", *charge_efficiency),
+                ("discharge_efficiency", *discharge_efficiency),
+                ("thermal_rating", *thermal_rating),
+                ("qmin", *qmin),
+                ("qmax", *qmax),
+                ("r", *r),
+                ("x", *x),
+                ("p_loss", *p_loss),
+                ("q_loss", *q_loss),
+            ];
+            if let Some(f) = bad(fields) {
+                return Some(format!("storage[{i}].{f}"));
+            }
+        }
+        for (i, h) in self.hvdc.iter().enumerate() {
+            #[rustfmt::skip]
+            let Hvdc { from: _, to: _, in_service: _, pf, pt, qf, qt, vf, vt, pmin, pmax, qminf, qmaxf, qmint, qmaxt, loss0, loss1, extras: _ } = h;
+            let fields = [
+                ("pf", *pf),
+                ("pt", *pt),
+                ("qf", *qf),
+                ("qt", *qt),
+                ("vf", *vf),
+                ("vt", *vt),
+                ("pmin", *pmin),
+                ("pmax", *pmax),
+                ("qminf", *qminf),
+                ("qmaxf", *qmaxf),
+                ("qmint", *qmint),
+                ("qmaxt", *qmaxt),
+                ("loss0", *loss0),
+                ("loss1", *loss1),
+            ];
+            if let Some(f) = bad(fields) {
+                return Some(format!("hvdc[{i}].{f}"));
+            }
+        }
+        None
+    }
+
     /// Serialize this network to `format`, preserving the retained source text
     /// on same-format writes and reporting any target-format fidelity warnings.
-    #[must_use]
-    pub fn to_format(&self, format: crate::TargetFormat) -> crate::Conversion {
+    ///
+    /// # Errors
+    /// As [`write_as`](crate::write_as): only a `PowerioJson` serialization
+    /// failure.
+    pub fn to_format(&self, format: crate::TargetFormat) -> crate::Result<crate::Conversion> {
         crate::write_as(self, format)
     }
 

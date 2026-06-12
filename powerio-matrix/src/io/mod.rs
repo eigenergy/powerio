@@ -14,3 +14,49 @@ pub use gridfm::{
 };
 pub use meta::{CaseMetadata, MatrixMetadata, write_meta_json};
 pub use mtx::{read_mtx, read_vector_mtx, write_mtx, write_vector_mtx};
+
+/// Read one scenario of a dataset directory in the named `from` format — the
+/// directory sibling of [`powerio::parse_file`], and the one place dataset
+/// format names are dispatched (the C ABI's `pio_read_dir` is a thin wrapper).
+/// `gridfm` is the one dataset format today; `scenario` selects within it.
+/// PyPSA CSV directories are case inputs, not datasets, and parse through
+/// `parse_file`.
+///
+/// # Errors
+/// [`powerio::Error::UnknownFormat`] for a non-dataset format name; otherwise
+/// as [`read_gridfm_dataset`].
+#[cfg(feature = "gridfm")]
+pub fn read_dataset_dir(
+    dir: impl AsRef<std::path::Path>,
+    from: &str,
+    scenario: i64,
+) -> powerio::Result<GridfmRead> {
+    require_dataset_format(from)?;
+    read_gridfm_dataset(dir, scenario)
+}
+
+/// The distinct scenario ids of the dataset directory `dir` in the named
+/// `from` format, ascending — the introspection sibling of
+/// [`read_dataset_dir`] (and the C ABI's `pio_scenario_ids`).
+///
+/// # Errors
+/// As [`read_dataset_dir`].
+#[cfg(feature = "gridfm")]
+pub fn dataset_scenario_ids(
+    dir: impl AsRef<std::path::Path>,
+    from: &str,
+) -> powerio::Result<Vec<i64>> {
+    require_dataset_format(from)?;
+    gridfm::gridfm_scenario_ids(dir)
+}
+
+#[cfg(feature = "gridfm")]
+fn require_dataset_format(from: &str) -> powerio::Result<()> {
+    if from.eq_ignore_ascii_case("gridfm") {
+        return Ok(());
+    }
+    Err(powerio::Error::UnknownFormat(format!(
+        "{from} is not a dataset directory format (dataset formats: gridfm); \
+         PyPSA CSV directories parse through parse_file"
+    )))
+}

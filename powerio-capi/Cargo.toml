@@ -15,10 +15,10 @@ name = "powerio_capi"
 crate-type = ["cdylib", "staticlib", "rlib"]
 
 [features]
-# Zero-copy raw network export over the Arrow C Data Interface (`pio_export_arrow`).
+# Zero-copy raw network export over the Arrow C Data Interface (`pio_to_arrow`).
 # Off by default so the base ABI pulls in nothing but `powerio`.
 arrow = ["dep:arrow"]
-# gridfm-datakit Parquet reader (`pio_read_gridfm` / `pio_gridfm_scenario_ids`).
+# gridfm-datakit Parquet reader (`pio_read_dir` / `pio_scenario_ids`).
 # Off by default so the base ABI pulls in nothing but `powerio`; enabling it pulls
 # in powerio-matrix (arrow + parquet) for the reader.
 gridfm = ["dep:powerio-matrix", "powerio-matrix/gridfm"]

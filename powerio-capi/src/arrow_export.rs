@@ -3,9 +3,11 @@
 //! Builds the parsed [`Network`] element tables (bus/branch/gen/load/shunt) as
 //! Arrow record batches and lends them across the C ABI zero-copy via
 //! [`arrow::ffi::to_ffi`]. This is the in-memory, self-describing sibling of
-//! [`pio_to_json`](crate::pio_to_json) and the `pio_branches`-style numeric
+//! the `powerio-json` snapshot and the `pio_branches`-style numeric
 //! extractors: any Arrow consumer (pyarrow, Arrow.jl, Arrow C++, polars, DuckDB)
-//! can pull a whole table without a copy or a temp file.
+//! can pull a whole table without a copy or a temp file. The schema is the
+//! ABI's evolution valve: richer columns arrive here, never as new C
+//! signatures.
 //!
 //! These are the *raw* network fields, with EXTERNAL bus ids (the same id space
 //! as `pio_bus_ids`), not the gridfm-datakit schema — no admittances or flows
@@ -20,7 +22,7 @@ use arrow::ffi::{FFI_ArrowArray, FFI_ArrowSchema, to_ffi};
 use arrow::record_batch::RecordBatch;
 use powerio::{BusId, Network};
 
-/// Table selectors for [`pio_export_arrow`](crate::pio_export_arrow); the C
+/// Table selectors for [`pio_to_arrow`](crate::pio_to_arrow); the C
 /// header mirrors these as `PIO_ARROW_TABLE_*`.
 pub const PIO_ARROW_TABLE_BUS: i32 = 0;
 pub const PIO_ARROW_TABLE_BRANCH: i32 = 1;

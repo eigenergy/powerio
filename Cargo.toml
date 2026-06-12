@@ -4,6 +4,9 @@ members = ["powerio", "powerio-matrix", "powerio-cli", "powerio-py", "powerio-ca
 # toolchain never compiles the PyO3 extension (which needs libpython). Build the
 # binding explicitly with `-p powerio-py`.
 default-members = ["powerio", "powerio-matrix", "powerio-cli"]
+# The fuzz harnesses need nightly + cargo-fuzz; they build on their own (see
+# fuzz/README.md), never as part of the workspace.
+exclude = ["fuzz"]
 resolver = "2"
 
 # Single source for the release version and shared metadata; the crates inherit
