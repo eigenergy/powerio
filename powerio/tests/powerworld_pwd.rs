@@ -208,7 +208,7 @@ fn corrupt_display_files_never_panic() {
     let stride = 9973;
     for len in (0..pwd.len())
         .step_by(stride)
-        .chain(pwd.len() - 48..pwd.len())
+        .chain(pwd.len().saturating_sub(48)..pwd.len())
     {
         let _ = parse_pwd(&pwd[..len]);
     }
