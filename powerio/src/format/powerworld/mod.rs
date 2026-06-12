@@ -23,7 +23,7 @@
 //!
 //! [`Network`]: crate::network::Network
 
-mod aux;
+mod auxiliary;
 mod map;
 mod objects;
 mod pwb;
@@ -34,7 +34,7 @@ mod tests;
 
 use std::sync::Arc;
 
-pub use aux::{
+pub use auxiliary::{
     AuxFile, AuxObject, AuxRow, AuxScript, AuxSection, AuxSubData, parse_aux, write_aux,
 };
 pub(crate) use map::parse_powerworld_source;

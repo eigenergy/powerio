@@ -10,7 +10,7 @@ use std::collections::HashMap;
 use std::fmt::Write as _;
 use std::sync::Arc;
 
-use super::aux::{AuxFile, AuxObject, parse_aux};
+use super::auxiliary::{AuxFile, AuxObject, parse_aux};
 use crate::format::Conversion;
 use crate::network::{
     Branch, Bus, BusId, BusType, Extras, Generator, Load, Network, Shunt, SourceFormat,

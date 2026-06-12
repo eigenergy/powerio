@@ -6,7 +6,7 @@
 //! views here give them names and structure. Everything stays read only: the
 //! data round trips through the retained source, untouched.
 
-use super::aux::AuxFile;
+use super::auxiliary::AuxFile;
 
 /// One contingency from a `Contingency` DATA section, with the actions of its
 /// `CTGElement` SUBDATA.
