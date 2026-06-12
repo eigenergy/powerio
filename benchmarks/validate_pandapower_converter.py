@@ -38,8 +38,20 @@ def check_case(path: Path) -> str:
         problems.append(f"generator count {len(net.gen) + len(net.ext_grid)} != {case.n_gens}")
     if len(net.load) != case.n_loads:
         problems.append(f"load count {len(net.load)} != {case.n_loads}")
-    if len(net.shunt) != case.n_shunts:
-        problems.append(f"shunt count {len(net.shunt)} != {case.n_shunts}")
+    # The writer maps MATPOWER transformer line charging b onto one bus shunt
+    # per terminal (pandapower's trafo magnetizing model is inductive only),
+    # and writes any branch across two voltage levels as a trafo.
+    kv = {b["id"]: (b["base_kv"] if b["base_kv"] > 0 else 1.0) for b in case.buses}
+    charging = sum(
+        2
+        for b in case.branches
+        if b["b"] != 0.0
+        and (b["tap"] != 0.0 or b["shift"] != 0.0 or kv[b["from_id"]] != kv[b["to_id"]])
+    )
+    if len(net.shunt) != case.n_shunts + charging:
+        problems.append(
+            f"shunt count {len(net.shunt)} != {case.n_shunts} + {charging} trafo charging"
+        )
 
     if not problems:
         try:
