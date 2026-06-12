@@ -347,9 +347,14 @@ pub unsafe extern "C" fn pio_warnings(
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_network_free(net: *mut PioNetwork) {
     unsafe {
-        if !net.is_null() {
-            drop(Box::from_raw(net));
-        }
+        // Under the same panic guard as every other entry point: the drop is
+        // pure deallocation today, but the boundary contract ("catches panics")
+        // must not depend on that staying true.
+        guard((), || {
+            if !net.is_null() {
+                drop(Box::from_raw(net));
+            }
+        });
     }
 }
 
@@ -625,9 +630,12 @@ pub unsafe extern "C" fn pio_write_dir(
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_string_free(s: *mut c_char) {
     unsafe {
-        if !s.is_null() {
-            drop(CString::from_raw(s));
-        }
+        // Same rationale as `pio_network_free`: the boundary catches panics.
+        guard((), || {
+            if !s.is_null() {
+                drop(CString::from_raw(s));
+            }
+        });
     }
 }
 

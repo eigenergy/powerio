@@ -79,8 +79,8 @@ julia -e 'using Pkg; Pkg.add(url="https://github.com/eigenergy/PowerIO.jl")'
 ```rust
 use powerio::{TargetFormat, parse_file};
 
-let net = parse_file("case14.m")?;
-let conv = net.to_format(TargetFormat::PowerModelsJson);
+let net = parse_file("case14.m")?.network;
+let conv = net.to_format(TargetFormat::PowerModelsJson)?;
 
 for warning in &conv.warnings {
     eprintln!("conversion warning: {warning}");

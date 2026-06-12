@@ -32,7 +32,7 @@ Verb taxonomy:
 | Normalized copy | `net.to_normalized()` | `net.to_normalized()` | `to_normalized(net)` | `pio_normalize` |
 | Dense tables | typed table API | `to_dense` | `to_dense` | `pio_*` extractors |
 | PyPSA CSV folder | `read_pypsa_csv_folder` / `write_pypsa_csv_folder` | `read_pypsa_csv_folder` / `net.write_pypsa_csv_folder` | planned | `pio_parse_file` / `pio_write_dir` + `"pypsa-csv"` |
-| gridfm read | `read_gridfm_dataset(dir, scenario)` | `read_gridfm(dir, scenario=0)` | `read_gridfm(dir; scenario=0)` (PR open) | `pio_read_dir` + `"gridfm"` |
+| gridfm read | `read_gridfm_dataset(dir, scenario)` | `read_gridfm(dir, scenario=0)` | `read_gridfm(dir; scenario=0)` | `pio_read_dir` + `"gridfm"` |
 | Arrow handoff | internal/C ABI | later | `to_arrow` | `pio_to_arrow` |
 
 **Note:** the C ABI carries no per-format symbols: matpower, the powerio-json

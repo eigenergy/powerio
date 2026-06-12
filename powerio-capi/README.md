@@ -179,6 +179,13 @@ additive symbols do not.
 | 3 | `pio_case_free` → `pio_network_free`; `PioCase` → `PioNetwork` (opaque typedef) (#77). |
 | 4 | The naming grammar: format symbols folded into format strings (`pio_to_matpower`/`pio_to_json`/`pio_from_json` → `pio_to_format`/`pio_parse_str` with `powerio-json`; `pio_write_pypsa_csv_folder` → `pio_write_dir`; `pio_read_gridfm`/`pio_gridfm_scenario_ids` → `pio_read_dir`/`pio_scenario_ids`), `pio_to_normalized` → `pio_normalize`, `pio_export_arrow` → `pio_to_arrow`, cap/count extractors, byte-length `pio_warnings`, `pio_ref_bus_index`/`pio_ref_bus_indices`, `pio_n_islands`, `pio_bus_demand`/`pio_bus_shunt`, `pio_convert_*(input, from, to, ...)`, new `pio_convert_str`. |
 
+One v4 break deserves a callout: `pio_convert_file` kept its symbol, arity,
+and parameter types but reordered arguments 2 and 3 from `(path, to, from)`
+to `(path, from, to)`. Every other v4 change renames a symbol or changes an
+arity, so a stale caller fails at link or load; this one links fine and reads
+the formats reversed. It is the reason the `pio_abi_version()` handshake is
+not optional.
+
 The grammar v4 fixed is the freeze: existing signatures never change again,
 new data means new symbols, and rich or multiconductor data rides the Arrow
 and `powerio-json` schemas, which evolve without touching a C signature. Any

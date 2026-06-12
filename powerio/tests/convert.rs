@@ -1396,3 +1396,68 @@ fn slackless_network_conversion_warns_for_power_flow_targets() {
             .any(|w| w.contains("reference (slack) bus"))
     );
 }
+
+#[test]
+fn snapshot_rejects_non_finite_values_naming_the_field() {
+    // The powerio-json snapshot is documented lossless and validated; JSON has
+    // no Inf/NaN, and serde_json would degrade them to `null` (which from_json
+    // then rejects as "invalid type: null"). The write must refuse the network
+    // up front, naming the offending field, instead of succeeding with a
+    // snapshot that cannot round-trip.
+    let mut net = parse_matpower_file(data("case9.m")).unwrap();
+    net.branches[2].angmax = f64::INFINITY;
+    let err = write_as(&net, TargetFormat::PowerioJson).expect_err("Inf must not snapshot");
+    assert!(
+        err.to_string().contains("branches[2].angmax"),
+        "error should name the field: {err}"
+    );
+
+    let mut net = parse_matpower_file(data("case9.m")).unwrap();
+    net.buses[0].vm = f64::NAN;
+    let err = write_as(&net, TargetFormat::PowerioJson).expect_err("NaN must not snapshot");
+    assert!(
+        err.to_string().contains("buses[0].vm"),
+        "error should name the field: {err}"
+    );
+
+    // The interchange JSON targets keep their null-with-warning contract.
+    let conv = write_as(&net, TargetFormat::PowerModelsJson).unwrap();
+    assert!(conv.text.contains("null"));
+}
+
+#[test]
+fn snapshot_round_trips_through_core_api() {
+    // write_as -> parse_str at the core level (the C ABI test covers the same
+    // path over FFI). case30 carries loads, shunts, and gen costs.
+    let net = parse_matpower_file(data("case30.m")).unwrap();
+    let conv = write_as(&net, TargetFormat::PowerioJson).unwrap();
+    assert!(conv.warnings.is_empty(), "the snapshot writes no warnings");
+    let parsed = powerio::parse_str(&conv.text, "powerio-json").unwrap();
+    assert!(parsed.warnings.is_empty(), "the snapshot reads back total");
+    let back = parsed.network;
+    assert_eq!(back.buses.len(), net.buses.len());
+    assert_eq!(back.branches.len(), net.branches.len());
+    assert_eq!(back.generators.len(), net.generators.len());
+    // Bit-exact: the snapshot is lossless, so even the sign of a zero survives.
+    assert_eq!(back.base_mva.to_bits(), net.base_mva.to_bits());
+    assert_eq!(back.source_format, net.source_format);
+}
+
+#[test]
+fn snapshot_json_file_is_sniffed_without_a_format_hint() {
+    // A snapshot written to disk carries the generic .json extension; the
+    // sniffer must route it to the powerio-json reader (top level `buses`),
+    // not the PowerModels fallback, so parse_file works with from=None.
+    let net = parse_matpower_file(data("case14.m")).unwrap();
+    let text = write_as(&net, TargetFormat::PowerioJson).unwrap().text;
+    let path = std::env::temp_dir().join(format!(
+        "powerio_snapshot_sniff_{}.json",
+        std::process::id()
+    ));
+    std::fs::write(&path, &text).unwrap();
+    let parsed = parse_file(&path, None);
+    std::fs::remove_file(&path).ok();
+    let back = parsed.unwrap().network;
+    assert_eq!(back.buses.len(), 14);
+    assert_eq!(back.source_format, SourceFormat::Matpower);
+}

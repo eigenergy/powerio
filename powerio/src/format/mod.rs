@@ -177,8 +177,9 @@ fn is_pypsa_csv_name(name: &str) -> bool {
 /// when its name maps to no extension, the I/O error otherwise), and a
 /// file maps by extension (`m`/`json`/`raw`/`aux`/`pwb`), case-insensitively
 /// (issue #97: `.RAW` is as common as `.raw` in the wild). A `.json` file is
-/// sniffed three ways: pandapower (`"_class": "pandapowerNet"`), egret (top
-/// level `elements` and `system`), else PowerModels. Pass `from` to force one.
+/// sniffed four ways: pandapower (`"_class": "pandapowerNet"`), egret (top
+/// level `elements` and `system`), the powerio-json snapshot (top level
+/// `buses`), else PowerModels. Pass `from` to force one.
 /// `.pwb` binaries are read only and carry no retained source. Returns
 /// [`Parsed`]: the network plus the reader's fidelity warnings.
 ///
@@ -307,11 +308,12 @@ pub(crate) fn reject_empty_case(net: &Network, format: &'static str) -> Result<(
     Ok(())
 }
 
-/// The interchange JSON formats share the `.json` extension, so an explicit
-/// source format isn't always given. Sniff three ways: pandapower declares
-/// itself (`"_class": "pandapowerNet"`); egret `ModelData` has top level
-/// `elements` and `system`; else fall back to PowerModels (the more common
-/// input).
+/// The JSON formats share the `.json` extension, so an explicit source format
+/// isn't always given. Sniff four ways: pandapower declares itself
+/// (`"_class": "pandapowerNet"`); egret `ModelData` has top level `elements`
+/// and `system`; the powerio-json snapshot carries a top level `buses` array
+/// (the other dialects key their bus tables differently: PowerModels `bus`,
+/// egret `elements`); else fall back to PowerModels (the more common input).
 ///
 /// Deserializing into [`IgnoredAny`] fields scans the JSON to find the
 /// top level keys without building the whole `Value` tree, so a large
@@ -325,6 +327,7 @@ fn sniff_json(text: &str) -> TargetFormat {
         class: Option<String>,
         elements: Option<IgnoredAny>,
         system: Option<IgnoredAny>,
+        buses: Option<IgnoredAny>,
     }
     match serde_json::from_str::<Shape>(text) {
         Ok(Shape {
@@ -335,6 +338,7 @@ fn sniff_json(text: &str) -> TargetFormat {
             system: Some(_),
             ..
         }) => TargetFormat::EgretJson,
+        Ok(Shape { buses: Some(_), .. }) => TargetFormat::PowerioJson,
         _ => TargetFormat::PowerModelsJson,
     }
 }

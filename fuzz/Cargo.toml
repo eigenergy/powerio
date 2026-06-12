@@ -40,6 +40,13 @@ doc = false
 bench = false
 
 [[bin]]
+name = "powerworld_aux"
+path = "fuzz_targets/powerworld_aux.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
 name = "pwb"
 path = "fuzz_targets/pwb.rs"
 test = false
