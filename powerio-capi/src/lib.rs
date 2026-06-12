@@ -36,7 +36,9 @@ pub struct PioNetwork {
 }
 
 /// Copy `msg` (truncated to fit) into a caller `char[len]` buffer, always
-/// NUL-terminated. Shared by the error and warning outputs.
+/// NUL-terminated. Truncation backs up to a UTF-8 character boundary so a
+/// clipped message is still valid UTF-8. Shared by the error and warning
+/// outputs.
 ///
 /// # Safety
 /// A non-NULL `buf` must point to at least `len` writable bytes; the write
@@ -48,7 +50,10 @@ unsafe fn copy_to_buf(buf: *mut c_char, len: usize, msg: &str) {
             return;
         }
         let bytes = msg.as_bytes();
-        let n = bytes.len().min(len - 1);
+        let mut n = bytes.len().min(len - 1);
+        while n > 0 && !msg.is_char_boundary(n) {
+            n -= 1;
+        }
         std::ptr::copy_nonoverlapping(bytes.as_ptr().cast::<c_char>(), buf, n);
         *buf.add(n) = 0;
     }
@@ -1307,6 +1312,25 @@ mpc.branch = [
             .position(|&b| b == 0)
             .expect("buffer must be NUL-terminated");
         assert!(nul <= 15);
+    }
+
+    #[test]
+    fn truncation_lands_on_a_utf8_char_boundary() {
+        // "aé€" is 1+2+3 bytes; a 6-byte buffer fits 5 message bytes, which
+        // would split '€'. The copy must back up to "aé" instead of emitting a
+        // dangling partial codepoint.
+        let mut buf = [0x7f as c_char; 6];
+        unsafe { copy_to_buf(buf.as_mut_ptr(), buf.len(), "aé€") };
+        let s = unsafe { CStr::from_ptr(buf.as_ptr()) }
+            .to_str()
+            .expect("truncated message must be valid UTF-8");
+        assert_eq!(s, "aé");
+
+        // A message that fits is copied whole.
+        let mut buf = [0x7f as c_char; 8];
+        unsafe { copy_to_buf(buf.as_mut_ptr(), buf.len(), "aé€") };
+        let s = unsafe { CStr::from_ptr(buf.as_ptr()) }.to_str().unwrap();
+        assert_eq!(s, "aé€");
     }
 
     #[cfg(feature = "arrow")]
