@@ -519,7 +519,7 @@ pub unsafe extern "C" fn pio_write_pypsa_csv_folder(
 /// Read one scenario of a gridfm-datakit Parquet dataset into a network handle —
 /// the inverse of the gridfm writer. `dir` resolves leniently: the `raw/` leaf
 /// holding the parquet files, a `<case>/` directory with a `raw/` child, or a
-/// parent with one `*/raw/` child. Returns `NULL` on error and writes the message
+/// parent holding exactly one such case. Returns `NULL` on error and writes the message
 /// into `errbuf`; the lossy read's fidelity warnings (what the gridfm schema
 /// couldn't round-trip) are written `\n`-joined into `warnbuf`. Free the handle
 /// with [`pio_network_free`]. Built `--features gridfm`.
