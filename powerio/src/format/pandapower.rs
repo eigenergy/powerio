@@ -662,20 +662,29 @@ pub fn write_pandapower_json(net: &Network) -> Conversion {
     if rate_bc > 0 {
         warnings.push(format!("{rate_bc} branch rate_b/rate_c value set(s) dropped: pandapower carries one loading limit"));
     }
-    let zero_kv = net.buses.iter().filter(|b| b.base_kv <= 0.0).count();
-    if zero_kv > 0 {
+    let no_kv = net.buses.iter().filter(|b| b.base_kv <= 0.0).count();
+    if no_kv > 0 {
         warnings.push(format!(
-            "{zero_kv} bus(es) have baseKV == 0; vn_kv was written as 1 so pandapower's ohm conversion preserves the per unit impedances"
+            "{no_kv} bus(es) carry no base_kv; written with vn_kv = 1 so pandapower's \
+             ohm-based model stays defined (per-unit impedances are preserved exactly)"
         ));
     }
 
     let mut object = Map::new();
+    let (line, trafo, charging) = branch_frames(net, &mut warnings);
+    if !charging.is_empty() {
+        warnings.push(format!(
+            "{} transformer terminal charging shunt(s) written into `shunt`: pandapower's \
+             trafo magnetizing model is inductive only, so MATPOWER transformer line \
+             charging b rides as bus shunts (Y_bus exact)",
+            charging.len()
+        ));
+    }
     object.insert("bus".into(), bus_frame(net, &mut warnings));
     object.insert("load".into(), load_frame(net, &mut warnings));
-    object.insert("shunt".into(), shunt_frame(net, &mut warnings));
+    object.insert("shunt".into(), shunt_frame(net, &charging, &mut warnings));
     object.insert("gen".into(), gen_frame(net, &mut warnings));
     object.insert("ext_grid".into(), ext_grid_frame(net, &mut warnings));
-    let (line, trafo) = branch_frames(net, &mut warnings);
     object.insert("line".into(), line);
     object.insert("trafo".into(), trafo);
     object.insert("poly_cost".into(), poly_cost_frame(net, &mut warnings));
@@ -715,7 +724,7 @@ fn bus_frame(net: &Network, warnings: &mut Vec<String>) -> Value {
         index.push(pp_bus(b.id));
         data.push(vec![
             b.name.clone().map_or(Value::Null, Value::String),
-            jnum(write_kv(b.base_kv)),
+            jnum(written_kv(b.base_kv)),
             Value::String("b".into()),
             Value::from(b.zone as u64),
             Value::Bool(b.kind != BusType::Isolated),
@@ -771,7 +780,11 @@ fn load_frame(net: &Network, warnings: &mut Vec<String>) -> Value {
     frame("load", &columns, index, data, warnings)
 }
 
-fn shunt_frame(net: &Network, warnings: &mut Vec<String>) -> Value {
+fn shunt_frame(
+    net: &Network,
+    charging: &[(BusId, f64, bool)],
+    warnings: &mut Vec<String>,
+) -> Value {
     let columns = [
         "bus",
         "name",
@@ -785,7 +798,7 @@ fn shunt_frame(net: &Network, warnings: &mut Vec<String>) -> Value {
     let bus_kv: HashMap<BusId, f64> = net
         .buses
         .iter()
-        .map(|b| (b.id, write_kv(b.base_kv)))
+        .map(|b| (b.id, written_kv(b.base_kv)))
         .collect();
     let mut index = Vec::with_capacity(net.shunts.len());
     let mut data = Vec::with_capacity(net.shunts.len());
@@ -796,10 +809,23 @@ fn shunt_frame(net: &Network, warnings: &mut Vec<String>) -> Value {
             Value::Null,
             jnum(-s.b),
             jnum(s.g),
-            jnum(*bus_kv.get(&s.bus).unwrap_or(&0.0)),
+            jnum(*bus_kv.get(&s.bus).unwrap_or(&1.0)),
             Value::from(1_u64),
             Value::from(1_u64),
             Value::Bool(s.in_service),
+        ]);
+    }
+    for (bus, b_half_pu, in_service) in charging {
+        index.push(Value::from(data.len() as u64));
+        data.push(vec![
+            pp_bus(*bus),
+            Value::String("trafo charging".into()),
+            jnum(-b_half_pu * net.base_mva),
+            jnum(0.0),
+            jnum(*bus_kv.get(bus).unwrap_or(&1.0)),
+            Value::from(1_u64),
+            Value::from(1_u64),
+            Value::Bool(*in_service),
         ]);
     }
     frame("shunt", &columns, index, data, warnings)
@@ -849,12 +875,18 @@ fn gen_frame(net: &Network, warnings: &mut Vec<String>) -> Value {
     frame("gen", &columns, index, data, warnings)
 }
 
-#[allow(clippy::too_many_lines)]
-// mirrors pandapower line/trafo column order in one place
-// The exact compares are the point: a MATPOWER ratio of literally 1 (and only
-// 1) marks a branch electrically identical to a line.
+/// Build the line and trafo frames, plus the charging shunts: one
+/// `(bus, b_half_pu, in_service)` per terminal of every trafo-written branch
+/// that carries MATPOWER line charging `b` (see the comment at the push site).
+#[allow(clippy::too_many_lines)] // mirrors pandapower line/trafo column order in one place
+#[allow(clippy::type_complexity)]
+// The exact v_from != v_to compare is the point: both come from written_kv of
+// the same bus table, so any difference is a real voltage level split.
 #[allow(clippy::float_cmp)]
-fn branch_frames(net: &Network, warnings: &mut Vec<String>) -> (Value, Value) {
+fn branch_frames(
+    net: &Network,
+    warnings: &mut Vec<String>,
+) -> (Value, Value, Vec<(BusId, f64, bool)>) {
     let line_columns = [
         "name",
         "std_type",
@@ -890,6 +922,8 @@ fn branch_frames(net: &Network, warnings: &mut Vec<String>) -> (Value, Value) {
         "tap_step_percent",
         "tap_step_degree",
         "tap_pos",
+        // pandapower 3.x only applies the tap when tap_changer_type is "Ratio";
+        // without the column every written tap silently reads back as 1.0.
         "tap_changer_type",
         "parallel",
         "df",
@@ -898,32 +932,41 @@ fn branch_frames(net: &Network, warnings: &mut Vec<String>) -> (Value, Value) {
     let bus_kv: HashMap<BusId, f64> = net
         .buses
         .iter()
-        .map(|b| (b.id, write_kv(b.base_kv)))
+        .map(|b| (b.id, written_kv(b.base_kv)))
         .collect();
     let mut line_index = Vec::new();
     let mut line_data = Vec::new();
     let mut trafo_index = Vec::new();
     let mut trafo_data = Vec::new();
-    let mut trafo_b = 0_usize;
+    let mut charging = Vec::new();
     for br in &net.branches {
-        let v_from = *bus_kv.get(&br.from).unwrap_or(&0.0);
-        let v_to = *bus_kv.get(&br.to).unwrap_or(&0.0);
-        // pandapower refers line ohms and max_i_ka to the FROM bus voltage.
+        let v_from = *bus_kv.get(&br.from).unwrap_or(&1.0);
+        let v_to = *bus_kv.get(&br.to).unwrap_or(&1.0);
+        // pandapower refers line ohms and max_i_ka to the FROM bus voltage
+        // (build_branch._calc_line_parameter); for written lines the two ends
+        // agree by the trafo coercion below, but the reader holds the same
+        // convention for third party files.
         let zb = zbase(v_from, net.base_mva);
-        // A branch with no effective tap and no shift is electrically a line
-        // even when MATPOWER labels it a transformer (explicit ratio 1); the
-        // line table is the only one that carries its charging susceptance.
-        if br.is_transformer() && (br.effective_tap() != 1.0 || br.shift != 0.0) {
-            if br.b != 0.0 {
-                trafo_b += 1;
-            }
+        // A branch across two voltage levels must be a trafo even with tap 1:
+        // a pandapower line lives on one voltage level, so its ohmic values
+        // would be rebased to the wrong vn on import.
+        if br.is_transformer() || v_from != v_to {
             let sn = if br.rate_a > 0.0 {
                 br.rate_a
             } else {
                 net.base_mva
             };
             let z = (br.r * br.r + br.x * br.x).sqrt();
-            let tap_delta = br.effective_tap() - 1.0;
+            let tap = br.effective_tap();
+            let tap_delta = tap - 1.0;
+            // pandapower's trafo magnetizing branch is inductive only and
+            // single sided; MATPOWER's capacitive charging maps exactly onto a
+            // bus shunt at each terminal instead (the from-side half sits
+            // behind the tap in MATPOWER's model, hence the tap² rebase).
+            if br.b != 0.0 {
+                charging.push((br.from, br.b / 2.0 / (tap * tap), br.in_service));
+                charging.push((br.to, br.b / 2.0, br.in_service));
+            }
             trafo_index.push(Value::from(trafo_data.len() as u64));
             trafo_data.push(vec![
                 Value::Null,
@@ -943,13 +986,7 @@ fn branch_frames(net: &Network, warnings: &mut Vec<String>) -> (Value, Value) {
                 jnum(tap_delta.abs() * 100.0),
                 jnum(0.0),
                 jnum(tap_delta.signum()),
-                // pandapower >= 3.0 ignores the tap columns unless the
-                // changer type says "Ratio".
-                if tap_delta == 0.0 {
-                    Value::Null
-                } else {
-                    Value::String("Ratio".into())
-                },
+                Value::String("Ratio".into()),
                 Value::from(1_u64),
                 jnum(1.0),
                 Value::Bool(br.in_service),
@@ -979,14 +1016,10 @@ fn branch_frames(net: &Network, warnings: &mut Vec<String>) -> (Value, Value) {
             ]);
         }
     }
-    if trafo_b > 0 {
-        warnings.push(format!(
-            "{trafo_b} transformer(s) carry charging susceptance; the pandapower trafo model has no charging branch, b was dropped"
-        ));
-    }
     (
         frame("line", &line_columns, line_index, line_data, warnings),
         frame("trafo", &trafo_columns, trafo_index, trafo_data, warnings),
+        charging,
     )
 }
 
@@ -1517,19 +1550,21 @@ fn bus_kv(buses: &[Bus], bus_pos: &HashMap<BusId, usize>, bus: BusId) -> f64 {
         .map_or(0.0, |b| b.base_kv)
 }
 
-/// pandapower converts ohms back to per unit by dividing by `vn_kv^2`, so a
-/// MATPOWER baseKV of 0 must not reach the file. Substituting 1 kV pairs with
-/// `zbase()`'s `1/base_mva` and the per unit impedances survive the round trip.
-fn write_kv(base_kv: f64) -> f64 {
-    if base_kv > 0.0 { base_kv } else { 1.0 }
-}
-
 fn zbase(v_kv: f64, base_mva: f64) -> f64 {
     if v_kv > 0.0 && base_mva > 0.0 {
         v_kv * v_kv / base_mva
     } else {
         1.0
     }
+}
+
+/// The `vn_kv` the writer puts in the file. MATPOWER's IEEE cases carry
+/// `base_kv = 0`, which pandapower's ohm-based model divides by; write 1 kV
+/// instead and convert impedances on the same 1 kV zbase, so pandapower's
+/// `vn² / sn` reconstruction returns the exact per-unit values (warned in
+/// `write_pandapower_json`).
+fn written_kv(base_kv: f64) -> f64 {
+    if base_kv > 0.0 { base_kv } else { 1.0 }
 }
 
 fn value_f64(v: &Value) -> Option<f64> {
@@ -2591,30 +2626,10 @@ mod tests {
     }
 
     #[test]
-    fn writer_ratio_one_trafo_becomes_line_and_keeps_charging() {
-        // An explicit MATPOWER ratio of 1 with no shift is electrically a
-        // line; only the line table can carry its charging susceptance.
-        let mut net = test_net(vec![test_bus(1, BusType::Ref), test_bus(2, BusType::Pq)]);
-        let mut br = test_branch(1, 2, 1.0);
-        br.b = 0.04;
-        net.branches.push(br);
-        let conv = write_pandapower_json(&net);
-        assert!(written_frame(&conv.text, "trafo").data.is_empty());
-        assert_eq!(written_frame(&conv.text, "line").data.len(), 1);
-        assert!(
-            !conv.warnings.iter().any(|w| w.contains("charging")),
-            "{:?}",
-            conv.warnings
-        );
-        let rt = parse_pandapower_json(&conv.text).unwrap();
-        let b = &rt.network.branches[0];
-        assert!((b.b - 0.04).abs() < 1e-12);
-        assert!((b.r - 0.01).abs() < 1e-12);
-        assert!((b.x - 0.1).abs() < 1e-12);
-    }
-
-    #[test]
-    fn writer_warns_when_tapped_trafo_drops_charging() {
+    fn writer_trafo_charging_rides_as_bus_shunts() {
+        // pandapower's trafo magnetizing branch is inductive only, so the
+        // MATPOWER charging b of a trafo-written branch lands as one bus
+        // shunt per terminal, the from side rebased by tap².
         let mut net = test_net(vec![test_bus(1, BusType::Ref), test_bus(2, BusType::Pq)]);
         let mut br = test_branch(1, 2, 1.05);
         br.b = 0.04;
@@ -2622,10 +2637,21 @@ mod tests {
         let conv = write_pandapower_json(&net);
         assert!(
             conv.warnings.iter().any(|w| w
-                == "1 transformer(s) carry charging susceptance; the pandapower trafo model has no charging branch, b was dropped"),
+                .starts_with("1 transformer terminal charging shunt(s) written into `shunt`")
+                || w.starts_with("2 transformer terminal charging shunt(s) written into `shunt`")),
             "{:?}",
             conv.warnings
         );
+        let shunt = written_frame(&conv.text, "shunt");
+        assert_eq!(shunt.data.len(), 2);
+        let rt = parse_pandapower_json(&conv.text).unwrap();
+        assert_eq!(rt.network.shunts.len(), 2);
+        let total_b: f64 = rt.network.shunts.iter().map(|s| s.b).sum();
+        // Shunt b is MVAr at v = 1 pu (the MATPOWER Bs convention), so the
+        // per unit halves scale by base_mva.
+        let want = (0.04 / 2.0 / (1.05 * 1.05) + 0.04 / 2.0) * 100.0;
+        assert!((total_b - want).abs() < 1e-12, "{total_b}");
+        assert_eq!(rt.network.branches[0].b, 0.0);
     }
 
     #[test]
@@ -2638,8 +2664,9 @@ mod tests {
         let bus = written_frame(&conv.text, "bus");
         assert_eq!(col(&bus, "vn_kv"), vec![json!(1.0), json!(1.0)]);
         assert!(
-            conv.warnings.iter().any(|w| w
-                == "2 bus(es) have baseKV == 0; vn_kv was written as 1 so pandapower's ohm conversion preserves the per unit impedances"),
+            conv.warnings
+                .iter()
+                .any(|w| w.starts_with("2 bus(es) carry no base_kv; written with vn_kv = 1")),
             "{:?}",
             conv.warnings
         );
@@ -2650,9 +2677,10 @@ mod tests {
     }
 
     #[test]
-    fn writer_line_ohms_use_from_bus_voltage() {
-        // pandapower's build_branch divides line ohms and max_i_ka by the
-        // FROM bus voltage base; a cross voltage level line must round trip.
+    fn writer_cross_voltage_level_branch_becomes_trafo() {
+        // A pandapower line lives on one voltage level, so a tap-less branch
+        // across two levels must be written as a trafo to keep its ohms on
+        // the right vn; the electrical values round trip.
         let mut net = test_net(vec![test_bus(1, BusType::Ref), test_bus(2, BusType::Pq)]);
         net.buses[0].base_kv = 380.0;
         net.buses[1].base_kv = 150.0;
@@ -2660,10 +2688,8 @@ mod tests {
         br.rate_a = 100.0;
         net.branches.push(br);
         let conv = write_pandapower_json(&net);
-        let line = written_frame(&conv.text, "line");
-        let zb = 380.0 * 380.0 / 100.0;
-        let r_ohm = value_f64(&col(&line, "r_ohm_per_km")[0]).unwrap();
-        assert!((r_ohm - 0.01 * zb).abs() < 1e-9);
+        assert!(written_frame(&conv.text, "line").data.is_empty());
+        assert_eq!(written_frame(&conv.text, "trafo").data.len(), 1);
         let rt = parse_pandapower_json(&conv.text).unwrap();
         let b = &rt.network.branches[0];
         assert!((b.r - 0.01).abs() < 1e-12);

@@ -114,10 +114,11 @@ in Python), naming the table and counting the affected rows.
   `pandapowerNet` tables. Line ohms are referred to the from bus voltage, as
   pandapower's `build_branch` reads them; a bus with baseKV 0 writes
   `vn_kv = 1` (warned) so the per unit impedances survive. A branch with a
-  real tap or shift becomes a `trafo` row with `tap_changer_type = "Ratio"`;
-  one with unit tap and no shift becomes a line, the only table that carries
-  its charging (transformer charging that cannot move is dropped with a
-  warning). The file is labeled `f_hz = 50` with `c_nf_per_km` compensated, so
+  tap, a shift, or terminals on two voltage levels becomes a `trafo` row with
+  `tap_changer_type = "Ratio"`; its MATPOWER charging b rides as one bus
+  shunt per terminal (warned, Y_bus exact) because pandapower's magnetizing
+  model is inductive only.
+  The file is labeled `f_hz = 50` with `c_nf_per_km` compensated, so
   a 60 Hz source keeps its exact Y_bus. Reference buses without a generator
   get an `ext_grid` row, which reads back as a Ref generator. The writer also
   warns on dropped HVDC, storage, capability columns, angle limits, rate B/C,
