@@ -153,6 +153,31 @@ mpc.storage = [
 }
 
 #[test]
+fn rejects_oversized_gencost_ncost_without_panicking() {
+    // NCOST is read from the file as an f64 truncated to usize, so a huge value
+    // saturates near usize::MAX. The row-width requirement (`start + 2*ncost` for
+    // model 1, `start + ncost` for model 2) must be computed without overflowing:
+    // a malformed NCOST has to surface as a loud `ShortRow`, not an add-overflow
+    // panic (debug) or a reversed-slice panic (release). Both cost models exercise
+    // a distinct saturating op (`saturating_mul` vs `saturating_add`).
+    let case = |gencost: &str| {
+        format!(
+            "mpc.baseMVA = 100;\n\
+             mpc.bus = [\n1 3 0 0 0 0 1 1 0 345 1 1.1 0.9;\n];\n\
+             mpc.gen = [\n1 0 0 100 -100 1 100 1 100 0 0 0 0 0 0 0 0 0 0 0 0;\n];\n\
+             mpc.branch = [\n1 1 0.01 0.05 0.02 0 0 0 0 0 1 -360 360;\n];\n\
+             mpc.gencost = [\n{gencost}\n];\n"
+        )
+    };
+    // model 2 (polynomial): want = ncost
+    let err = parse_mpc(&case("2 0 0 1e20 500 300 200;")).expect_err("huge model-2 ncost");
+    assert!(err.to_string().contains("gencost"), "got: {err}");
+    // model 1 (piecewise): want = 2 * ncost, the saturating_mul path
+    let err = parse_mpc(&case("1 0 0 1e19 0 0 1 1;")).expect_err("huge model-1 ncost");
+    assert!(err.to_string().contains("gencost"), "got: {err}");
+}
+
+#[test]
 fn rejects_unterminated_matrix() {
     // A `mpc.bus = [ … ` truncated at EOF with no closing `];`. The streaming
     // row parser must reject this (old `find_matrix` returned UnbalancedBrackets)
