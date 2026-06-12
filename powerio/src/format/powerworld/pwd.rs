@@ -68,21 +68,17 @@ pub fn parse_pwd(bytes: &[u8]) -> Result<Vec<PwdSubstation>> {
         format: FMT,
         message,
     };
-    if bytes.len() < 0x40 || u32_at(bytes, 0) != 50 {
+    if bytes.len() < 0x40 || u32_at(bytes, 0) != Some(50) {
         return Err(err(format!(
             "not a recognized PowerWorld display file (header word {}; the probed saves all \
              carry 50)",
-            if bytes.len() >= 4 {
-                u32_at(bytes, 0)
-            } else {
-                0
-            },
+            u32_at(bytes, 0).unwrap_or(0),
         )));
     }
-    if u16_at(bytes, 4) == 0 || u16_at(bytes, 6) == 0 {
+    if u16_at(bytes, 4) == Some(0) || u16_at(bytes, 6) == Some(0) {
         return Err(err("display header canvas dimensions are zero".into()));
     }
-    let stamp = u32_at(bytes, 22);
+    let stamp = u32_at(bytes, 22).unwrap_or(0);
     if stamp == 0 {
         return Err(err(
             "display header stamp is zero; every validated save carries a nonzero stamp the \
@@ -96,13 +92,14 @@ pub fn parse_pwd(bytes: &[u8]) -> Result<Vec<PwdSubstation>> {
     // Every drawing object record repeats the header stamp at +18 and dual
     // encodes its position (f64 at +22/+30, f32 echo at +2/+6); the scan
     // collects every offset with that shape and groups by the u16 type tag.
-    let mut groups: Vec<(u16, Vec<usize>)> = Vec::new();
+    let mut groups: Vec<(u16, Vec<(usize, f64, f64)>)> = Vec::new();
     for i in 0..bytes.len().saturating_sub(38) {
-        if u32_at(bytes, i + 18) != stamp {
+        if u32_at(bytes, i + 18) != Some(stamp) {
             continue;
         }
-        let x = f64_at(bytes, i + 22);
-        let y = f64_at(bytes, i + 30);
+        let (Some(x), Some(y)) = (f64_at(bytes, i + 22), f64_at(bytes, i + 30)) else {
+            continue;
+        };
         if !x.is_finite() || !y.is_finite() {
             continue;
         }
@@ -110,8 +107,8 @@ pub fn parse_pwd(bytes: &[u8]) -> Result<Vec<PwdSubstation>> {
         let (rx, ry) = (x as f32, y as f32);
         // Bit equality: the magnitude gate below excludes zero, so the only
         // value the echo can hold is the rounded f64 itself.
-        if f32_at(bytes, i + 2).to_bits() != rx.to_bits()
-            || f32_at(bytes, i + 6).to_bits() != ry.to_bits()
+        if f32_at(bytes, i + 2).map(f32::to_bits) != Some(rx.to_bits())
+            || f32_at(bytes, i + 6).map(f32::to_bits) != Some(ry.to_bits())
         {
             continue;
         }
@@ -119,10 +116,10 @@ pub fn parse_pwd(bytes: &[u8]) -> Result<Vec<PwdSubstation>> {
         if !(1.0..1.0e7).contains(&magnitude) {
             continue;
         }
-        let tag = u16_at(bytes, i);
+        let Some(tag) = u16_at(bytes, i) else { continue };
         match groups.iter_mut().find(|(t, _)| *t == tag) {
-            Some((_, v)) => v.push(i),
-            None => groups.push((tag, vec![i])),
+            Some((_, v)) => v.push((i, x, y)),
+            None => groups.push((tag, vec![(i, x, y)])),
         }
     }
 
@@ -131,17 +128,17 @@ pub fn parse_pwd(bytes: &[u8]) -> Result<Vec<PwdSubstation>> {
     // era) followed by the row's u32 number, somewhere in the style tail.
     // Field label decoys carry other markers (0x05 observed) or another
     // order and fail; ambiguity is a loud error, never a pick.
-    let matches: Vec<&(u16, Vec<usize>)> = groups
+    let matches: Vec<&(u16, Vec<(usize, f64, f64)>)> = groups
         .iter()
-        .filter(|(_, offsets)| {
-            offsets.len() == identity.len()
-                && offsets
+        .filter(|(_, records)| {
+            records.len() == identity.len()
+                && records
                     .iter()
                     .zip(&identity)
-                    .all(|(&i, (number, _))| links_number(bytes, i, *number))
+                    .all(|(&(i, _, _), (number, _))| links_number(bytes, i, *number))
         })
         .collect();
-    let (_, offsets) = match matches.as_slice() {
+    let (_, records) = match matches.as_slice() {
         [one] => *one,
         [] => {
             return Err(err(format!(
@@ -159,15 +156,10 @@ pub fn parse_pwd(bytes: &[u8]) -> Result<Vec<PwdSubstation>> {
         }
     };
 
-    Ok(offsets
+    Ok(records
         .iter()
         .zip(identity)
-        .map(|(&i, (number, name))| PwdSubstation {
-            number,
-            name,
-            x: f64_at(bytes, i + 22),
-            y: f64_at(bytes, i + 30),
-        })
+        .map(|(&(_, x, y), (number, name))| PwdSubstation { number, name, x, y })
         .collect())
 }
 
@@ -207,22 +199,20 @@ fn identity_walk(b: &[u8], mut at: usize) -> Option<Vec<(u32, String)>> {
     let mut rows = Vec::new();
     let mut seen = HashSet::new();
     loop {
-        if at + 4 <= b.len() && b[at..at + 4] == [0xff; 4] {
+        if b.get(at..at + 4) == Some([0xff; 4].as_slice()) {
             return (!rows.is_empty()).then_some(rows);
         }
-        if at + 13 > b.len() {
+        let number = u32_at(b, at)?;
+        if number == 0 || number > 99_999_999 || u32_at(b, at + 4) != Some(number) {
             return None;
         }
-        let number = u32_at(b, at);
-        if number == 0 || number > 99_999_999 || u32_at(b, at + 4) != number {
+        let len = u32_at(b, at + 8)? as usize;
+        if len == 0 || len >= 64 {
             return None;
         }
-        let len = u32_at(b, at + 8) as usize;
-        if len == 0 || len >= 64 || at + 12 + len + 1 > b.len() {
-            return None;
-        }
-        let name = &b[at + 12..at + 12 + len];
-        if !name.iter().all(|&c| (0x20..0x7f).contains(&c)) || b[at + 12 + len] != 0x02 {
+        let name = b.get(at + 12..at + 12 + len)?;
+        if !name.iter().all(|&c| (0x20..0x7f).contains(&c)) || b.get(at + 12 + len) != Some(&0x02)
+        {
             return None;
         }
         if !seen.insert(number) {
@@ -240,9 +230,7 @@ fn identity_walk(b: &[u8], mut at: usize) -> Option<Vec<(u32, String)>> {
 /// in some saves.
 fn links_number(b: &[u8], i: usize, number: u32) -> bool {
     (40..140).any(|d| {
-        i + d + 5 <= b.len()
-            && (b[i + d] == 0x03 || b[i + d] == 0x07)
-            && u32_at(b, i + d + 1) == number
+        matches!(b.get(i + d), Some(0x03 | 0x07)) && u32_at(b, i + d + 1) == Some(number)
     })
 }
 
@@ -254,18 +242,22 @@ fn memmem<'a>(haystack: &'a [u8], needle: &'a [u8]) -> impl Iterator<Item = usiz
         .filter_map(move |(i, w)| (w == needle).then_some(i))
 }
 
-fn u16_at(b: &[u8], i: usize) -> u16 {
-    u16::from_le_bytes(b[i..i + 2].try_into().unwrap())
+// Total little endian reads: `None` past the end of the buffer, no index
+// arithmetic that can panic or wrap. Every offset in this reader derives
+// from untrusted file bytes, so the accessors carry the bounds check.
+
+fn u16_at(b: &[u8], i: usize) -> Option<u16> {
+    Some(u16::from_le_bytes(*b.get(i..)?.first_chunk()?))
 }
 
-fn u32_at(b: &[u8], i: usize) -> u32 {
-    u32::from_le_bytes(b[i..i + 4].try_into().unwrap())
+fn u32_at(b: &[u8], i: usize) -> Option<u32> {
+    Some(u32::from_le_bytes(*b.get(i..)?.first_chunk()?))
 }
 
-fn f32_at(b: &[u8], i: usize) -> f32 {
-    f32::from_le_bytes(b[i..i + 4].try_into().unwrap())
+fn f32_at(b: &[u8], i: usize) -> Option<f32> {
+    Some(f32::from_le_bytes(*b.get(i..)?.first_chunk()?))
 }
 
-fn f64_at(b: &[u8], i: usize) -> f64 {
-    f64::from_le_bytes(b[i..i + 8].try_into().unwrap())
+fn f64_at(b: &[u8], i: usize) -> Option<f64> {
+    Some(f64::from_le_bytes(*b.get(i..)?.first_chunk()?))
 }

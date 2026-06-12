@@ -35,7 +35,7 @@ fn canonical_api_names_parse_and_convert() {
     assert_eq!(TargetFormat::Psse.to_string(), "psse");
     assert_eq!(net.to_matpower(), src);
 
-    let pm = net.to_format(TargetFormat::PowerModelsJson);
+    let pm = net.to_format(TargetFormat::PowerModelsJson).unwrap();
     assert_eq!(
         serde_json::from_str::<Value>(&pm.text).unwrap()["name"],
         "case14"
@@ -87,7 +87,7 @@ fn core(net: &Network) -> Core {
 #[test]
 fn pandapower_json_round_trips_core_and_echoes_source() {
     let net = parse_matpower_file(data("case9.m")).unwrap();
-    let conv = write_as(&net, TargetFormat::PandapowerJson);
+    let conv = write_as(&net, TargetFormat::PandapowerJson).unwrap();
     assert!(
         !conv.warnings.iter().any(|w| w.contains("dcline")),
         "case9 has no dclines, got warnings: {:?}",
@@ -99,7 +99,7 @@ fn pandapower_json_round_trips_core_and_echoes_source() {
     assert_eq!(back.source_format, SourceFormat::PandapowerJson);
     assert_eq!(core(&back), core(&net));
     assert_eq!(
-        write_as(&back, TargetFormat::PandapowerJson).text,
+        write_as(&back, TargetFormat::PandapowerJson).unwrap().text,
         conv.text
     );
 
@@ -292,7 +292,7 @@ fn pandapower_writer_keeps_zero_rating_zero() {
     let mut net = parse_matpower_file(data("case9.m")).unwrap();
     net.branches[0].rate_a = 0.0;
     net.source = None; // force the canonical (non-echo) writer
-    let conv = write_as(&net, TargetFormat::PandapowerJson);
+    let conv = write_as(&net, TargetFormat::PandapowerJson).unwrap();
     let back = powerio::parse_str(&conv.text, "pandapower-json")
         .unwrap()
         .network;
@@ -480,7 +480,7 @@ fn powermodels_json_same_format_is_byte_exact_echo() {
     let net = parse_matpower_file(data("case30.m")).unwrap();
     let json = write_powermodels_json(&net).text;
     let net2 = parse_powermodels_json(&json).unwrap();
-    assert_eq!(write_as(&net2, TargetFormat::PowerModelsJson).text, json);
+    assert_eq!(write_as(&net2, TargetFormat::PowerModelsJson).unwrap().text, json);
 }
 
 #[test]
@@ -495,7 +495,7 @@ fn powermodels_json_to_matpower_two_way() {
     let net = parse_powermodels_json(&json).unwrap();
     assert_eq!(net.source_format, powerio::SourceFormat::PowerModelsJson);
 
-    let reparsed = parse_matpower(&write_as(&net, TargetFormat::Matpower).text).unwrap();
+    let reparsed = parse_matpower(&write_as(&net, TargetFormat::Matpower).unwrap().text).unwrap();
     assert_eq!(reparsed.buses.len(), orig.buses.len());
     assert_eq!(reparsed.branches.len(), orig.branches.len());
     assert_eq!(reparsed.generators.len(), orig.generators.len());
@@ -556,7 +556,7 @@ fn hvdc_converts_and_round_trips() {
     // write_as would echo its source; convert through PowerModels first to reach
     // the canonical MATPOWER path with HVDC still present.
     assert_eq!(back.source_format, SourceFormat::PowerModelsJson);
-    let to_mp = write_as(&back, TargetFormat::Matpower);
+    let to_mp = write_as(&back, TargetFormat::Matpower).unwrap();
     assert!(
         to_mp.warnings.iter().any(|w| w.contains("dcline")),
         "cross-format → MATPOWER should warn on dropped dclines, got {:?}",
@@ -618,7 +618,7 @@ fn readers_reject_malformed_input() {
 #[test]
 fn matpower_target_round_trips() {
     let net = parse_matpower_file(data("case14.m")).unwrap();
-    let conv = write_as(&net, TargetFormat::Matpower);
+    let conv = write_as(&net, TargetFormat::Matpower).unwrap();
     assert!(conv.warnings.is_empty());
     // Matpower target is the lossless echo: byte-identical to the source.
     let src = std::fs::read_to_string(data("case14.m")).unwrap();
@@ -1100,7 +1100,7 @@ fn pandapower_json_round_trips_transformers_shunts_and_oos() {
         if case == "case14.m" {
             knock_out_case14(&mut net);
         }
-        let conv = write_as(&net, TargetFormat::PandapowerJson);
+        let conv = write_as(&net, TargetFormat::PandapowerJson).unwrap();
         let back = powerio::parse_str(&conv.text, "pandapower-json")
             .unwrap()
             .network;
@@ -1180,7 +1180,7 @@ fn gen_costs_round_trip_through_pandapower_json() {
     // case9 costs are quadratic [c2, c1, c0] = [0.11, 5.0, 150.0]; poly_cost
     // must carry all three back without reordering (a cp0/cp2 swap fails here).
     let net = parse_matpower_file(data("case9.m")).unwrap();
-    let conv = write_as(&net, TargetFormat::PandapowerJson);
+    let conv = write_as(&net, TargetFormat::PandapowerJson).unwrap();
     let back = powerio::parse_str(&conv.text, "pandapower-json")
         .unwrap()
         .network;
@@ -1369,7 +1369,7 @@ fn slackless_network_conversion_warns_for_power_flow_targets() {
         TargetFormat::Psse,
         TargetFormat::PowerModelsJson,
     ] {
-        let conv = write_as(&net, fmt);
+        let conv = write_as(&net, fmt).unwrap();
         assert!(
             conv.warnings
                 .iter()
@@ -1386,7 +1386,7 @@ fn slackless_network_conversion_warns_for_power_flow_targets() {
         vec![branch(1, 2)],
     );
     assert!(
-        !write_as(&with_ref, TargetFormat::Matpower)
+        !write_as(&with_ref, TargetFormat::Matpower).unwrap()
             .warnings
             .iter()
             .any(|w| w.contains("reference (slack) bus"))

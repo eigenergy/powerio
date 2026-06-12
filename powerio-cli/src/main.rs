@@ -646,7 +646,8 @@ fn run_convert(
     } else {
         read_network(input, from)?
     };
-    let conv = powerio_matrix::write_as(&net, target);
+    let conv = powerio_matrix::write_as(&net, target)
+        .with_context(|| format!("serializing to {target}"))?;
     for w in &conv.warnings {
         eprintln!("fidelity: {w}");
     }

@@ -407,8 +407,11 @@ impl Network {
 
     /// Serialize this network to `format`, preserving the retained source text
     /// on same-format writes and reporting any target-format fidelity warnings.
-    #[must_use]
-    pub fn to_format(&self, format: crate::TargetFormat) -> crate::Conversion {
+    ///
+    /// # Errors
+    /// As [`write_as`](crate::write_as): only the `PowerioJson` snapshot can
+    /// fail, on non-finite numeric values.
+    pub fn to_format(&self, format: crate::TargetFormat) -> crate::Result<crate::Conversion> {
         crate::write_as(self, format)
     }
 

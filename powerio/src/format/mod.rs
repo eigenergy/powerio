@@ -65,6 +65,10 @@ pub enum TargetFormat {
     PandapowerJson,
     /// MATPOWER `.m` (round-trip; byte-exact when the case kept its source).
     Matpower,
+    /// The canonical PowerIO snapshot: [`Network`] serialized as JSON, validated
+    /// on read. Lossless for every model field; the retained source text is the
+    /// one exclusion (see [`Network::to_json`]).
+    PowerioJson,
 }
 
 impl TargetFormat {
@@ -74,7 +78,8 @@ impl TargetFormat {
         match self {
             TargetFormat::PowerModelsJson
             | TargetFormat::EgretJson
-            | TargetFormat::PandapowerJson => "json",
+            | TargetFormat::PandapowerJson
+            | TargetFormat::PowerioJson => "json",
             TargetFormat::Psse => "raw",
             TargetFormat::PowerWorld => "aux",
             TargetFormat::Matpower => "m",
@@ -91,6 +96,7 @@ impl TargetFormat {
             TargetFormat::PowerWorld => "PowerWorld .aux",
             TargetFormat::PandapowerJson => "pandapower JSON",
             TargetFormat::Matpower => "MATPOWER .m",
+            TargetFormat::PowerioJson => "PowerIO JSON",
         }
     }
 
@@ -104,6 +110,7 @@ impl TargetFormat {
             TargetFormat::PowerWorld => "powerworld",
             TargetFormat::PandapowerJson => "pandapower-json",
             TargetFormat::Matpower => "matpower",
+            TargetFormat::PowerioJson => "powerio-json",
         }
     }
 }
@@ -125,7 +132,9 @@ impl FromStr for TargetFormat {
 /// Map a format name (with the common aliases) to a [`TargetFormat`], or `None`
 /// if unrecognized. Accepts `matpower`/`m`, `powermodels-json`/`powermodels`/`pm`,
 /// `egret-json`/`egret`, `pandapower-json`/`pandapower`/`pp`, `psse`/`raw`,
-/// `powerworld`/`aux`. Case-insensitive. The one place the bindings (Python, C
+/// `powerworld`/`aux`, `powerio-json`/`powerio`/`json` (the canonical snapshot;
+/// plain `json` means this one, the foreign JSON dialects are namespaced).
+/// Case-insensitive. The one place the bindings (Python, C
 /// ABI) share, so a new text format means one new arm here, not three. PyPSA
 /// CSV folders are directory inputs with no text target; their aliases are
 /// matched by the private `is_pypsa_csv_name` next to this.
@@ -145,6 +154,7 @@ pub fn target_format_from_name(name: &str) -> Option<TargetFormat> {
         "psse" | "raw" => TargetFormat::Psse,
         "powerworld" | "aux" => TargetFormat::PowerWorld,
         "pandapower-json" | "pandapower" | "pandapowerjson" | "pp" => TargetFormat::PandapowerJson,
+        "powerio-json" | "powerio" | "poweriojson" | "json" => TargetFormat::PowerioJson,
         _ => return None,
     })
 }
@@ -271,6 +281,9 @@ fn read_source(source: Arc<String>, fmt: TargetFormat, name_hint: Option<&str>) 
         TargetFormat::PandapowerJson => {
             pandapower::parse_pandapower_source(source, name_hint, &mut warnings)
         }
+        // The canonical snapshot: validated deserialization of the model itself.
+        // It carries its own name and source_format, so the hint doesn't apply.
+        TargetFormat::PowerioJson => Network::from_json(&source),
     }?;
     reject_empty_case(&net, fmt.label())?;
     Ok(Parsed {
@@ -374,15 +387,28 @@ pub struct Conversion {
 
 /// Convert a [`Network`] to `format`. Writing back to the source format returns
 /// the retained source text; otherwise the network is serialized into the target.
-#[must_use]
-pub fn write_as(net: &Network, format: TargetFormat) -> Conversion {
+///
+/// # Errors
+/// Only the `PowerioJson` snapshot can fail: JSON has no `Inf`/`NaN` and the
+/// snapshot must round-trip exactly, so a network carrying non-finite values
+/// is an error rather than a `null` (the interchange JSON targets write `null`
+/// with a warning instead, and never fail).
+pub fn write_as(net: &Network, format: TargetFormat) -> Result<Conversion> {
     if is_echo(net, format) {
         if let Some(src) = &net.source {
-            return Conversion {
+            return Ok(Conversion {
                 text: src.to_string(),
                 warnings: Vec::new(),
-            };
+            });
         }
+    }
+    // The snapshot serializes the model itself, so no target-fidelity warning
+    // can apply; return before the warning passes.
+    if format == TargetFormat::PowerioJson {
+        return net.to_json().map(|text| Conversion {
+            text,
+            warnings: Vec::new(),
+        });
     }
     let mut conv = match format {
         TargetFormat::PowerModelsJson => write_powermodels_json(net),
@@ -394,10 +420,11 @@ pub fn write_as(net: &Network, format: TargetFormat) -> Conversion {
         // the folded model, which itemizes what it can't carry (HVDC, gen caps,
         // extras, a partial-cost case).
         TargetFormat::Matpower => matpower::write_matpower_conversion(net),
+        TargetFormat::PowerioJson => unreachable!("handled above"),
     };
     warn_normalized_tap(net, format, &mut conv);
     warn_missing_reference(net, format, &mut conv);
-    conv
+    Ok(conv)
 }
 
 /// Convert a case file to `to`, optionally forcing the source format with
@@ -416,7 +443,7 @@ pub fn convert_file(
     from: Option<&str>,
 ) -> Result<Conversion> {
     let parsed = parse_file(path, from)?;
-    let mut conv = write_as(&parsed.network, to);
+    let mut conv = write_as(&parsed.network, to)?;
     if !is_echo(&parsed.network, to) {
         conv.warnings.splice(0..0, parsed.warnings);
     }
@@ -434,11 +461,34 @@ pub fn convert_file(
 /// As [`parse_str`].
 pub fn convert_str(text: &str, to: TargetFormat, format: &str) -> Result<Conversion> {
     let parsed = parse_str(text, format)?;
-    let mut conv = write_as(&parsed.network, to);
+    let mut conv = write_as(&parsed.network, to)?;
     if !is_echo(&parsed.network, to) {
         conv.warnings.splice(0..0, parsed.warnings);
     }
     Ok(conv)
+}
+
+/// Write `net` into the directory `out_dir` as the named directory-shaped
+/// format — the directory sibling of [`write_as`], sharing its name-dispatch
+/// role for the bindings. PyPSA CSV (`pypsa-csv`/`pypsa`) is the one such
+/// format today; a text format name is rejected by name, pointing at
+/// [`write_as`]. Returns the write's fidelity warnings.
+///
+/// # Errors
+/// [`Error::UnknownFormat`] for a non-directory format name; the writer's own
+/// [`Error`] otherwise.
+pub fn write_dir(
+    net: &Network,
+    to: &str,
+    out_dir: impl AsRef<std::path::Path>,
+) -> Result<Vec<String>> {
+    if is_pypsa_csv_name(to) {
+        return write_pypsa_csv_folder(net, out_dir.as_ref()).map(|o| o.warnings);
+    }
+    Err(Error::UnknownFormat(format!(
+        "{to} is not a directory format (directory targets: pypsa-csv); \
+         text formats serialize through write_as / to_format"
+    )))
 }
 
 /// Warn when a network with no reference (slack) bus converts to a format
