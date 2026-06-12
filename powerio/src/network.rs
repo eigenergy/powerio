@@ -394,7 +394,7 @@ impl Network {
     }
 
     /// Serialize the structured tables to JSON — the transport the C ABI
-    /// (`pio_to_json`) and the Julia bridge consume. The retained `source` text
+    /// (the `powerio-json` format) and the Julia bridge consume. The retained `source` text
     /// is excluded (see the field's `#[serde(skip)]`), so the byte-exact echo
     /// stays on the same-format write path; a [`from_json`](Network::from_json)
     /// round-trip reproduces every field except `source`, which returns `None`.

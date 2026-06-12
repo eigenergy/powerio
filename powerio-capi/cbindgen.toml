@@ -76,7 +76,7 @@ header = """
  *   cbindgen --config cbindgen.toml --crate powerio-capi --output include/powerio.h
  */"""
 
-# pio_export_arrow takes arrow-rs's FFI_ArrowArray/FFI_ArrowSchema, which are
+# pio_to_arrow takes arrow-rs's FFI_ArrowArray/FFI_ArrowSchema, which are
 # #[repr(C)] and layout-identical to the Arrow C Data Interface structs. Present
 # them under the standard ArrowArray/ArrowSchema names so a consumer can pass the
 # structs from arrow_c_data_interface.h (forward-declared below, gated on

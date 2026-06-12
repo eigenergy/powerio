@@ -175,7 +175,7 @@ Current conventions for signs, taps, phase shifts, per unit scaling, reference b
 
 The normalized copy carries no retained source text, so writing it emits the derived model rather than the original file.
 
-Python exposes the normalized view as `case.to_normalized()`, the C ABI as `pio_to_normalized`,
+Python exposes the normalized view as `case.to_normalized()`, the C ABI as `pio_normalize`,
 and Julia as `to_normalized(case)`.
 
 
@@ -184,7 +184,7 @@ and Julia as `to_normalized(case)`.
 `powerio-capi` exposes parse, query, conversion, JSON transport, normalization,
 and numeric table extraction through `pio_*` functions. The public header is
 [powerio-capi/include/powerio.h](https://github.com/eigenergy/powerio/blob/main/powerio-capi/include/powerio.h).
-Build with `--features arrow` to enable `pio_export_arrow` over the
+Build with `--features arrow` to enable `pio_to_arrow` over the
 [Arrow C Data Interface](https://arrow.apache.org/docs/format/CDataInterface.html).
 
 ### PowerAgent
