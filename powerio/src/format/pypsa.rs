@@ -84,7 +84,8 @@ fn read_pypsa_csv_folder_inner(path: &Path, warnings: &mut Vec<String>) -> Resul
         id_of_name.insert(raw_names[i].clone(), id);
         // v_nom drives every ohm <-> per unit conversion; defaulting it would
         // silently read line ohms as per unit (the pandapower reader holds the
-        // same line for vn_kv). PyPSA itself always exports the column.
+        // same line for vn_kv). PyPSA omits the column only when every bus
+        // keeps the default v_nom = 1, and erroring there beats misreading.
         let v_nom = row.f("v_nom").filter(|v| v.is_finite()).ok_or_else(|| {
             bad(format!(
                 "buses.csv row {}: required column `v_nom` is missing or not numeric",
@@ -198,7 +199,7 @@ fn read_pypsa_csv_folder_inner(path: &Path, warnings: &mut Vec<String>) -> Resul
                 g_rows += 1;
             }
             // PyPSA per-unitizes line ohms on the BUS0 v_nom
-            // (pf.calculate_dependent_values), not bus1.
+            // (Network.calculate_dependent_values), not bus1.
             let zb = zbase(bus_kv(&buses, &bus_pos, from), base_mva);
             branches.push(Branch {
                 from,

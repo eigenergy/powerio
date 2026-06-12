@@ -20,7 +20,8 @@ defaults, which breaks byte level comparisons.
 
 Provenance and license: the network data derives from
 `pandapower.networks.example_simple()`, shipped with pandapower (BSD 3-Clause,
-(c) the pandapower contributors,
+(c) University of Kassel and Fraunhofer Institute for Energy Economics and
+Energy System Technology (IEE),
 <https://github.com/e2nIEE/pandapower/blob/develop/LICENSE>), serialized by
 `pp.to_json` with the additions in the script above. Vendored for testing
 only.

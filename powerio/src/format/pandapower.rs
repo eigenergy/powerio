@@ -525,8 +525,9 @@ pub(crate) fn parse_pandapower_source(
     warn_nonempty_table(obj, "pwl_cost", "piecewise costs are not mapped", warnings)?;
 
     // The enumerations above cover the common element tables; anything else
-    // shaped like a non-empty DataFrame (svc, tcsc, asymmetric loads, ...)
-    // still injects or shifts power, so name it instead of vanishing.
+    // shaped like a non-empty DataFrame (svc, tcsc, asymmetric loads, but
+    // also res_* result tables) may carry model data, so name it instead of
+    // letting it vanish.
     for key in obj.keys() {
         if HANDLED_TABLES.contains(&key.as_str()) {
             continue;
@@ -1141,13 +1142,13 @@ fn frame(
 ) -> Value {
     // `jnum` writes a non-finite f64 as null, and the frame body is serialized
     // to a string below, so the hub's generic null-key warning in `finish`
-    // never sees these tables. Numeric columns carry no legitimate nulls (only
-    // the object dtype columns do), so a null there is a non-finite value and
-    // the loss is reported here.
+    // never sees these tables. The one float64 column the writer nulls on
+    // purpose is load `sn_mva` (pandapower's own default is NaN); every other
+    // numeric null is a non-finite value, reported here.
     let nonfinite: Vec<String> = columns
         .iter()
         .enumerate()
-        .filter(|(_, c)| dtype_for(c) == "float64")
+        .filter(|(_, c)| dtype_for(c) == "float64" && !(table == "load" && **c == "sn_mva"))
         .filter_map(|(ci, c)| {
             let n = data
                 .iter()
@@ -2302,6 +2303,26 @@ mod tests {
         assert!(
             msg.contains("`poly_cost` row 0: required column `element` is missing"),
             "{msg}"
+        );
+    }
+
+    #[test]
+    fn writer_does_not_warn_on_finite_loads() {
+        // load `sn_mva` is null on purpose (pandapower's default is NaN);
+        // a network of finite loads must not trip the non-finite warning.
+        let mut net = test_net(vec![test_bus(1, BusType::Ref)]);
+        net.loads.push(Load {
+            bus: BusId(1),
+            p: 1.0,
+            q: 0.5,
+            in_service: true,
+            extras: Extras::default(),
+        });
+        let conv = write_pandapower_json(&net);
+        assert!(
+            !conv.warnings.iter().any(|w| w.contains("non-finite")),
+            "{:?}",
+            conv.warnings
         );
     }
 
