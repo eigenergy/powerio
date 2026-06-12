@@ -399,21 +399,17 @@ impl Network {
     /// stays on the same-format write path; a [`from_json`](Network::from_json)
     /// round-trip reproduces every field except `source`, which returns `None`.
     ///
+    /// JSON has no `Inf`/`NaN`: `serde_json` writes a non-finite field as
+    /// `null`, which [`from_json`](Network::from_json) rejects on the way back
+    /// (`null` is not an `f64`). The write stays total — the bindings
+    /// materialize every parsed network through this transport, and readers
+    /// legitimately produce `Inf` limits — but such a snapshot does not round
+    /// trip; [`write_as`](crate::write_as) reports the degradation as a
+    /// fidelity warning naming the field.
+    ///
     /// # Errors
-    /// A non-finite numeric field. JSON has no `Inf`/`NaN` and `serde_json`
-    /// would silently degrade them to `null`, which [`from_json`](Network::from_json)
-    /// then rejects — so the snapshot refuses the network up front, naming the
-    /// field (the interchange JSON targets write `null` with a warning instead).
+    /// A `serde_json` serialization failure (none arise from this model today).
     pub fn to_json(&self) -> crate::Result<String> {
-        if let Some(path) = self.first_non_finite() {
-            return Err(Error::FormatRead {
-                format: "JSON",
-                message: format!(
-                    "{path} is not finite; JSON has no Inf/NaN, so the powerio-json \
-                     snapshot cannot carry it"
-                ),
-            });
-        }
         serde_json::to_string(self).map_err(|e| Error::FormatRead {
             format: "JSON",
             message: e.to_string(),
@@ -421,7 +417,8 @@ impl Network {
     }
 
     /// The path of the first non-finite numeric field, or `None` when every
-    /// value is finite — the [`to_json`](Network::to_json) write guard.
+    /// value is finite — drives the snapshot writer's degradation warning
+    /// (see [`to_json`](Network::to_json)).
     /// `extras` maps hold `serde_json::Value`, which cannot carry a non-finite
     /// number, so only the typed `f64` fields need scanning. Every struct is
     /// destructured exhaustively: adding an `f64` field without classifying it
@@ -429,7 +426,7 @@ impl Network {
     // The length IS the exhaustive field walk; splitting it would only scatter
     // the per-struct lists the compile-time check exists to keep in one place.
     #[allow(clippy::too_many_lines)]
-    fn first_non_finite(&self) -> Option<String> {
+    pub(crate) fn first_non_finite(&self) -> Option<String> {
         fn bad<'a>(fields: impl IntoIterator<Item = (&'a str, f64)>) -> Option<&'a str> {
             fields
                 .into_iter()
@@ -584,8 +581,8 @@ impl Network {
     /// on same-format writes and reporting any target-format fidelity warnings.
     ///
     /// # Errors
-    /// As [`write_as`](crate::write_as): only the `PowerioJson` snapshot can
-    /// fail, on non-finite numeric values.
+    /// As [`write_as`](crate::write_as): only a `PowerioJson` serialization
+    /// failure.
     pub fn to_format(&self, format: crate::TargetFormat) -> crate::Result<crate::Conversion> {
         crate::write_as(self, format)
     }

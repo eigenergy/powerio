@@ -393,10 +393,12 @@ pub struct Conversion {
 /// the retained source text; otherwise the network is serialized into the target.
 ///
 /// # Errors
-/// Only the `PowerioJson` snapshot can fail: JSON has no `Inf`/`NaN` and the
-/// snapshot must round-trip exactly, so a network carrying non-finite values
-/// is an error rather than a `null` (the interchange JSON targets write `null`
-/// with a warning instead, and never fail).
+/// Only a `PowerioJson` serialization failure (none arise from this model
+/// today). A non-finite value is not an error: readers legitimately produce
+/// `Inf` limits and the bindings materialize every network through the
+/// snapshot, so it is written as `null` with a fidelity warning naming the
+/// field — that output serves the one-way transports but does not read back
+/// (the validating reader rejects the `null`).
 pub fn write_as(net: &Network, format: TargetFormat) -> Result<Conversion> {
     if is_echo(net, format) {
         if let Some(src) = &net.source {
@@ -416,14 +418,21 @@ pub fn write_as(net: &Network, format: TargetFormat) -> Result<Conversion> {
         // the folded model, which itemizes what it can't carry (HVDC, gen caps,
         // extras, a partial-cost case).
         TargetFormat::Matpower => matpower::write_matpower_conversion(net),
-        // The snapshot serializes the model itself, so no target-fidelity
-        // warning can apply (warn_normalized_tap would even be FALSE here: the
-        // snapshot preserves the line/transformer labels it warns about);
-        // return before the warning passes.
+        // The snapshot serializes the model itself, so the usual target
+        // passes don't apply (warn_normalized_tap would even be FALSE here:
+        // the snapshot preserves the line/transformer labels it warns about);
+        // return before them. The one fidelity loss the snapshot can suffer
+        // is JSON's missing Inf/NaN — serde writes them as `null`, which
+        // `from_json` rejects on the way back — so warn, naming the field.
         TargetFormat::PowerioJson => {
             return net.to_json().map(|text| Conversion {
                 text,
-                warnings: Vec::new(),
+                warnings: net.first_non_finite().map_or_else(Vec::new, |path| {
+                    vec![format!(
+                        "{path} is not finite; JSON has no Inf/NaN, so it is written as \
+                         null and this snapshot will not read back as powerio-json"
+                    )]
+                }),
             });
         }
     };

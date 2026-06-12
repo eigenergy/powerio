@@ -1398,31 +1398,35 @@ fn slackless_network_conversion_warns_for_power_flow_targets() {
 }
 
 #[test]
-fn snapshot_rejects_non_finite_values_naming_the_field() {
-    // The powerio-json snapshot is documented lossless and validated; JSON has
-    // no Inf/NaN, and serde_json would degrade them to `null` (which from_json
-    // then rejects as "invalid type: null"). The write must refuse the network
-    // up front, naming the offending field, instead of succeeding with a
-    // snapshot that cannot round-trip.
+fn snapshot_warns_on_non_finite_and_does_not_read_back() {
+    // JSON has no Inf/NaN: serde writes them as `null`, which the validating
+    // reader rejects. Readers legitimately produce Inf limits and the bindings
+    // materialize every network through the snapshot, so the write stays total
+    // — but it must SAY what degraded (naming the field), and the no-read-back
+    // consequence is pinned here so a change to either side surfaces.
     let mut net = parse_matpower_file(data("case9.m")).unwrap();
     net.branches[2].angmax = f64::INFINITY;
-    let err = write_as(&net, TargetFormat::PowerioJson).expect_err("Inf must not snapshot");
+    let conv = write_as(&net, TargetFormat::PowerioJson).unwrap();
     assert!(
-        err.to_string().contains("branches[2].angmax"),
-        "error should name the field: {err}"
+        conv.warnings
+            .iter()
+            .any(|w| w.contains("branches[2].angmax")),
+        "the degradation warning should name the field: {:?}",
+        conv.warnings
     );
+    let err = powerio::parse_str(&conv.text, "powerio-json")
+        .expect_err("a null-degraded snapshot must not validate");
+    assert!(err.to_string().contains("null"), "got: {err}");
 
+    // A NaN bus voltage warns the same way.
     let mut net = parse_matpower_file(data("case9.m")).unwrap();
     net.buses[0].vm = f64::NAN;
-    let err = write_as(&net, TargetFormat::PowerioJson).expect_err("NaN must not snapshot");
+    let conv = write_as(&net, TargetFormat::PowerioJson).unwrap();
     assert!(
-        err.to_string().contains("buses[0].vm"),
-        "error should name the field: {err}"
+        conv.warnings.iter().any(|w| w.contains("buses[0].vm")),
+        "got: {:?}",
+        conv.warnings
     );
-
-    // The interchange JSON targets keep their null-with-warning contract.
-    let conv = write_as(&net, TargetFormat::PowerModelsJson).unwrap();
-    assert!(conv.text.contains("null"));
 }
 
 #[test]
