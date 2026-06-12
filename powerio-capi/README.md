@@ -156,15 +156,14 @@ Every entry point is hardened at the boundary:
 
 Two notes on the trust model:
 
-- Malformed or hostile input surfaces as an error (or at worst a caught
-  panic), never undefined behavior — the parsers are safe Rust and fuzzed
-  (see `fuzz/`). Resource use is the caveat: memory scales with input size
-  and no size caps are enforced, so cap untrusted inputs yourself if you
-  parse them in bulk.
+- Malformed or hostile input surfaces as an error or, at worst, a caught
+  panic; the parsers are safe Rust and fuzzed (see `fuzz/`), so undefined
+  behavior is out of reach on any input. Resource use is the caveat: memory
+  scales with input size and no size caps are enforced, so cap untrusted
+  inputs yourself if you parse them in bulk.
 - The panic guards assume the default `panic = "unwind"`. A downstream
-  rebuild with `panic = "abort"` aborts the process on a caught-class bug
-  instead of returning an error — a clean abort, still never undefined
-  behavior.
+  rebuild with `panic = "abort"` turns a caught-class bug into an orderly
+  process abort instead of an error return.
 
 ## ABI history
 

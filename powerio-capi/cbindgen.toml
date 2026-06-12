@@ -44,8 +44,8 @@ header = """
  * - errbuf/errlen caller buffers (the libpcap/curl idiom: allocation-free
  *   across the boundary, no thread-local state). NULL or length 0 discards
  *   the message; a long message truncates on a UTF-8 character boundary and
- *   is always NUL-terminated. PIO_ERRBUF_MIN is a comfortable size. Errors
- *   are messages, not codes, by design.
+ *   is always NUL-terminated. PIO_ERRBUF_MIN is a comfortable size. The ABI
+ *   reports errors as messages and defines no error codes.
  * - Warnings attach to the network handle; query them with pio_warnings,
  *   which returns the byte length needed (call with NULL/0 to size). Only
  *   functions returning no handle (pio_to_format, pio_convert_*,
@@ -60,7 +60,7 @@ header = """
  * - Every entry point catches Rust panics at the boundary and returns the
  *   documented failure value (NULL, 0, -1, 0.0) rather than unwinding across
  *   the ABI (requires the default panic = "unwind"; a panic = "abort" build
- *   aborts cleanly instead, never undefined behavior).
+ *   aborts the process instead).
  *
  * Evolution policy: existing signatures are frozen. New data means new
  * symbols; rich or multiconductor data rides the Arrow C Data Interface

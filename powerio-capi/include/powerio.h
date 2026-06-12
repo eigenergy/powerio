@@ -31,8 +31,8 @@
  * - errbuf/errlen caller buffers (the libpcap/curl idiom: allocation-free
  *   across the boundary, no thread-local state). NULL or length 0 discards
  *   the message; a long message truncates on a UTF-8 character boundary and
- *   is always NUL-terminated. PIO_ERRBUF_MIN is a comfortable size. Errors
- *   are messages, not codes, by design.
+ *   is always NUL-terminated. PIO_ERRBUF_MIN is a comfortable size. The ABI
+ *   reports errors as messages and defines no error codes.
  * - Warnings attach to the network handle; query them with pio_warnings,
  *   which returns the byte length needed (call with NULL/0 to size). Only
  *   functions returning no handle (pio_to_format, pio_convert_*,
@@ -47,7 +47,7 @@
  * - Every entry point catches Rust panics at the boundary and returns the
  *   documented failure value (NULL, 0, -1, 0.0) rather than unwinding across
  *   the ABI (requires the default panic = "unwind"; a panic = "abort" build
- *   aborts cleanly instead, never undefined behavior).
+ *   aborts the process instead).
  *
  * Evolution policy: existing signatures are frozen. New data means new
  * symbols; rich or multiconductor data rides the Arrow C Data Interface
@@ -274,7 +274,7 @@ int32_t pio_is_radial(const PioNetwork *net);
 
 /**
  * Serialize `net` to the named format `to` — the one text serializer; every
- * format is a string, never a symbol. Accepts the [`pio_parse_str`] names:
+ * format is named by a string. Accepts the [`pio_parse_str`] names:
  * `matpower` is a byte-exact echo when the handle was parsed from MATPOWER,
  * and `powerio-json` is the canonical lossless snapshot (validated by
  * [`pio_parse_str`] on the way back; the retained source text is the one
@@ -403,7 +403,7 @@ size_t pio_bus_shunt(const PioNetwork *net, double *gs, double *bs, size_t cap);
  * Export one raw network table over the Arrow C Data Interface — the `to_`
  * conversion whose output type is Arrow structs rather than a string, and the
  * bulk plane this ABI evolves on: new or richer columns arrive in the Arrow
- * schema, never as new C signatures.
+ * schema, leaving the C signatures fixed.
  *
  * `table` is one of the `PIO_ARROW_TABLE_*` selectors (bus/branch/gen/load/
  * shunt); the columns are the parsed network fields with EXTERNAL bus ids (the

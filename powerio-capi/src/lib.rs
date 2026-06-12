@@ -467,7 +467,7 @@ pub unsafe extern "C" fn pio_is_radial(net: *const PioNetwork) -> i32 {
 }
 
 /// Serialize `net` to the named format `to` — the one text serializer; every
-/// format is a string, never a symbol. Accepts the [`pio_parse_str`] names:
+/// format is named by a string. Accepts the [`pio_parse_str`] names:
 /// `matpower` is a byte-exact echo when the handle was parsed from MATPOWER,
 /// and `powerio-json` is the canonical lossless snapshot (validated by
 /// [`pio_parse_str`] on the way back; the retained source text is the one
@@ -800,7 +800,7 @@ pub unsafe extern "C" fn pio_bus_shunt(
 /// Export one raw network table over the Arrow C Data Interface — the `to_`
 /// conversion whose output type is Arrow structs rather than a string, and the
 /// bulk plane this ABI evolves on: new or richer columns arrive in the Arrow
-/// schema, never as new C signatures.
+/// schema, leaving the C signatures fixed.
 ///
 /// `table` is one of the `PIO_ARROW_TABLE_*` selectors (bus/branch/gen/load/
 /// shunt); the columns are the parsed network fields with EXTERNAL bus ids (the
@@ -1037,7 +1037,7 @@ mod tests {
             let total = pio_bus_ids(c, std::ptr::null_mut(), 0);
             assert_eq!(total, 9);
             // A two-slot buffer gets exactly two ids; the total still comes back,
-            // so a short read is detectable, never a silent overflow.
+            // so a short read is detectable.
             let mut ids = [-1i64; 2];
             assert_eq!(pio_bus_ids(c, ids.as_mut_ptr(), ids.len()), 9);
             assert!(ids.iter().all(|&id| id >= 1));
