@@ -1,5 +1,37 @@
 # Changelog
 
+## 0.2.0
+
+- PowerWorld `.pwb` binary reader (#95, #102, #105): read only, covering
+  June 2016 through 2022 era exports under header constants 425, 483, 508,
+  537, 550, and 551, parity tested against same vintage `.aux`/`.RAW`/`.m`
+  siblings up to the 6717 bus Texas7k. Unsupported writer vintages are
+  rejected with the format constant named.
+- pandapower JSON converter (#106): read and write `pandapowerNet` JSON.
+  Written trafo parameters reproduce the source Y_bus exactly through
+  pandapower 3.x's transformer model, ZIP load columns go out in both the
+  <= 3.1 and >= 3.2 namings, and CI validates the converter against
+  pandapower itself over the vendored fixtures.
+- PyPSA CSV folder converter (#106): read and write the static network
+  CSV folder, CI validated against PyPSA over the vendored fixtures.
+  Folders parse through `parse_file(..., "pypsa-csv")`, auto-detected for
+  a directory holding `network.csv`; the CLI takes `--from pypsa-csv` and
+  `--to pypsa-csv -o <dir>`.
+- Read fidelity channel (#106): `parse_file`/`parse_str` return
+  `Parsed { network, warnings }`, so what a reader cannot carry is
+  itemized instead of dropped silently. Python exposes
+  `Network.read_warnings` and the MCP tools report it; the C ABI gains
+  `pio_parse_warnings` and `pio_write_pypsa_csv_folder` (additive, ABI
+  version stays 3).
+- PowerWorld `.pwd` display reader (#102): substation diagram coordinates,
+  matched 1-1 against the aux substations on every probed save with a same
+  vintage aux (the v19 resave matches 1248/1250 against the published
+  case, a vintage skew).
+- Full `.aux` fidelity (#95): all three field naming generations through
+  Simulator 21+, validated against the vendored ACTIVSg200 set.
+- `docs/powerworld.md` records the decode evidence, mapping notes, and the
+  coverage matrix the corpus tests assert.
+
 ## 0.1.1
 
 - File extension detection is case-insensitive (#97, #101): `parse_file`
