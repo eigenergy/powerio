@@ -30,6 +30,22 @@ jobs:
         if git grep -Iln $'\xc3\xa2' -- ':!tests/data'; then
           echo "mojibake (UTF-8 read as cp1252 and re-encoded) found in the files above"; exit 1
         fi
+    # A path component whose stem is a reserved DOS device name (aux, con, nul,
+    # prn, com1-9, lpt1-9), ends in a dot or space, or contains <>:"\|?* cannot
+    # be checked out on Windows. Only the release workflow runs a Windows job,
+    # so without this gate the breakage surfaces at tag time (v0.2.0 failed on
+    # powerworld/aux.rs).
+    - name: Windows-checkoutable paths
+      run: |
+        git ls-files | awk -F/ '{
+          if ($0 ~ /[<>:"\\|?*]/) { print; bad=1; next }
+          for (i = 1; i <= NF; i++) {
+            c = tolower($i); sub(/\..*$/, "", c)
+            if (c ~ /^(con|prn|aux|nul|com[1-9]|lpt[1-9])$/ || $i ~ /[. ]$/) { print; bad=1; break }
+          }
+        } END { exit bad }' || {
+          echo "the paths above cannot be checked out on Windows"; exit 1
+        }
 
   fmt:
     name: rustfmt

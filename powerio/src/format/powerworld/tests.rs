@@ -1,7 +1,7 @@
 //! Unit tests for the generic aux grammar, one per construct of the format
 //! guide.
 
-use super::aux::{AuxSection, parse_aux, write_aux};
+use super::auxiliary::{AuxSection, parse_aux, write_aux};
 use crate::Error;
 
 fn one_object(text: &str) -> super::AuxObject {
