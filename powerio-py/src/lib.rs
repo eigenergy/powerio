@@ -227,7 +227,8 @@ impl PyCase {
 
     /// Read fidelity warnings attached at parse time: tables and columns the
     /// model cannot carry, reported instead of dropped silently. Empty for
-    /// formats whose readers are total.
+    /// readers that don't report read warnings (currently every format except
+    /// pandapower JSON and PyPSA CSV).
     #[getter]
     fn read_warnings(&self) -> Vec<String> {
         self.warnings.clone()

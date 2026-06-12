@@ -183,8 +183,9 @@ class Network:
     ``shunts``) and the non-matrix methods (``write``, ``reference_bus_index``,
     ``connectivity_report``, ``write_dcopf_bundle``) delegate to the compiled
     handle; the matrix methods below return ``scipy.sparse`` objects. Read
-    fidelity warnings from parse time are on ``read_warnings`` (empty when the
-    reader was total).
+    fidelity warnings from parse time are on ``read_warnings`` (empty for
+    readers that don't report any; currently all but pandapower JSON and
+    PyPSA CSV).
 
     Errors: a bad file path raises the standard ``OSError`` subclass
     (``FileNotFoundError``); a malformed case raises :class:`PowerIOParseError`
@@ -417,8 +418,8 @@ Case = Network
 def parse_file(path: Any, from_: Optional[str] = None) -> Network:
     """Parse a case file from a path, inferring the format from the extension.
 
-    Read fidelity warnings are on ``Network.read_warnings`` (empty when the
-    reader was total).
+    Read fidelity warnings are on ``Network.read_warnings`` (empty for readers
+    that don't report any; currently all but pandapower JSON and PyPSA CSV).
     """
     return Network(_powerio.parse_file(str(path), from_))
 

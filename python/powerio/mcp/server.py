@@ -170,7 +170,10 @@ def save_case(
     overwritten unless ``overwrite`` is true.
 
     Returns ``{"path": <absolute path written>, "bytes_written": <count>,
-    "warnings": [<read fidelity notes, then write fidelity notes>]}``.
+    "warnings": [<read fidelity notes, then write fidelity notes>]}``. Read
+    notes are always included, even when the output format matches the source
+    (where ``convert_case`` reports none because the text is a byte exact
+    echo): this tool's warnings describe the written file end to end.
     """
     case = _load(path, content, json, format)
     try:
@@ -193,7 +196,10 @@ def save_case(
     return {
         "path": os.path.abspath(out_path),
         "bytes_written": len(conv.text.encode("utf-8")),
-        # to_format bypasses the hub's convert fold, so prepend the read side here.
+        # to_format bypasses the hub's convert fold, so prepend the read side
+        # here. Deliberately unconditional: the hub suppresses read warnings on
+        # a byte exact echo, but this report covers the written file end to
+        # end (pinned in test_mcp.py).
         "warnings": list(case.read_warnings) + list(conv.warnings),
     }
 

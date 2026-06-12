@@ -29,3 +29,8 @@ n.export_to_csv_folder("tests/data/pypsa/example")
 
 A genuine export carries no `powerio_base_mva` column, so the reader takes
 base_mva = 1.0 for this fixture.
+
+Provenance and license: the network itself is original to this repository
+(defined by the script above, no third party data); the files are the byte
+exact output of PyPSA's exporter (PyPSA is MIT licensed,
+<https://github.com/PyPSA/PyPSA/blob/master/LICENSES/MIT.txt>).

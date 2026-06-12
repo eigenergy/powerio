@@ -7,7 +7,7 @@
 //! output format meets at the hub, so adding a format is one module, not a
 //! change to any other. [`parse_file`] reads a file, detecting the format from
 //! its extension; [`write_as`] serializes a `Network` to text targets.
-//! Directory-format writers, such as PyPSA CSV folders, expose explicit
+//! Writers for directory formats, such as PyPSA CSV folders, expose explicit
 //! filesystem helpers. Non-finite numeric values (a MATPOWER `Inf`/`NaN` angle
 //! limit, say) are written as JSON `null`.
 //!
@@ -163,7 +163,8 @@ fn is_pypsa_csv_name(name: &str) -> bool {
 /// Parse the case file at `path`, choosing the reader from `from` (the
 /// [`target_format_from_name`] names plus `pypsa-csv`/`pypsa` and `pwb`) or,
 /// when `None`, from the path: a directory containing `network.csv` parses as
-/// a PyPSA CSV folder (any other directory fails with the I/O error), and a
+/// a PyPSA CSV folder (any other directory fails: [`Error::UnknownFormat`]
+/// when its name maps to no extension, the I/O error otherwise), and a
 /// file maps by extension (`m`/`json`/`raw`/`aux`/`pwb`), case-insensitively
 /// (issue #97: `.RAW` is as common as `.raw` in the wild). A `.json` file is
 /// sniffed three ways: pandapower (`"_class": "pandapowerNet"`), egret (top
@@ -340,8 +341,10 @@ pub fn parse_str(text: &str, format: &str) -> Result<Parsed> {
 
 /// Output of a parse: the network plus the reader's fidelity warnings —
 /// tables and columns the model cannot carry, reported instead of dropped
-/// silently. Empty for the formats whose readers are total (MATPOWER,
-/// PowerModels, egret, PSS/E, PowerWorld).
+/// silently. Empty for readers that don't report read warnings (currently
+/// every format except pandapower JSON and PyPSA CSV; the PSS/E and
+/// PowerWorld reductions are documented in docs/format-fidelity.md, not
+/// reported here yet).
 ///
 /// `#[non_exhaustive]`: a returns-only type, so downstream code reads it but
 /// never constructs it, leaving room to add parse metadata without a breaking
@@ -446,16 +449,26 @@ pub fn convert_str(text: &str, to: TargetFormat, format: &str) -> Result<Convers
 fn warn_missing_reference(net: &Network, format: TargetFormat, conv: &mut Conversion) {
     let needs_ref = matches!(
         format,
-        TargetFormat::Matpower | TargetFormat::Psse | TargetFormat::PowerModelsJson
+        TargetFormat::Matpower
+            | TargetFormat::Psse
+            | TargetFormat::PowerModelsJson
+            | TargetFormat::PandapowerJson
     );
-    if needs_ref && !net.buses.iter().any(|b| b.kind == BusType::Ref) {
-        conv.warnings.push(
-            "no reference (slack) bus in the source network; power flow tools \
-             reject such cases — to_normalized synthesizes a slack at the \
-             largest pmax in service generator bus"
-                .to_string(),
-        );
+    if needs_ref {
+        conv.warnings.extend(missing_reference_warning(net));
     }
+}
+
+/// The slackless-network warning itself, shared with the PyPSA folder writer
+/// (which produces `PypsaCsvOutputs`, not a [`Conversion`], so it cannot go
+/// through [`warn_missing_reference`]).
+pub(super) fn missing_reference_warning(net: &Network) -> Option<String> {
+    (!net.buses.iter().any(|b| b.kind == BusType::Ref)).then(|| {
+        "no reference (slack) bus in the source network; power flow tools \
+         reject such cases — to_normalized synthesizes a slack at the \
+         largest pmax in service generator bus"
+            .to_string()
+    })
 }
 
 /// A normalized network has its tap canonicalized to `1.0` on every line (the
@@ -471,8 +484,19 @@ fn warn_missing_reference(net: &Network, format: TargetFormat, conv: &mut Conver
 // `0.0 * DEG_TO_RAD` (exactly `0.0`), so an epsilon compare would be wrong here.
 #[allow(clippy::float_cmp)]
 fn warn_normalized_tap(net: &Network, format: TargetFormat, conv: &mut Conversion) {
-    if !net.is_normalized() || matches!(format, TargetFormat::Matpower) {
+    if matches!(format, TargetFormat::Matpower) {
         return;
+    }
+    conv.warnings.extend(normalized_tap_warning(net));
+}
+
+/// The normalized-label warning itself, shared with the PyPSA folder writer.
+// `tap == 1.0` / `shift == 0.0` are exact by construction (see
+// `warn_normalized_tap`), so an epsilon compare would be wrong here.
+#[allow(clippy::float_cmp)]
+pub(super) fn normalized_tap_warning(net: &Network) -> Option<String> {
+    if !net.is_normalized() {
+        return None;
     }
     // After normalization a line (raw tap 0) and a unity-ratio transformer (raw
     // tap 1) both read as tap 1.0 / shift 0.0, so they cannot be told apart. Count
@@ -482,14 +506,20 @@ fn warn_normalized_tap(net: &Network, format: TargetFormat, conv: &mut Conversio
         .iter()
         .filter(|b| b.tap == 1.0 && b.shift == 0.0)
         .count();
-    if ambiguous > 0 {
-        conv.warnings.push(format!(
+    (ambiguous > 0).then(|| {
+        format!(
             "normalized network: {ambiguous} branch(es) have unit tap and no phase \
-             shift and are written as transformers; a normalized line is indistinguishable \
-             from a transformer whose tap is exactly 1, so the line/transformer label is \
-             not preserved (the power flow is identical)"
-        ));
-    }
+             shift, so the line/transformer label is not preserved (the power flow \
+             is identical)"
+        )
+    })
+}
+
+/// True when `value` is set and deviates from `reference`: the shared test for
+/// "does this rating column carry information the target cannot" used by the
+/// rate_b/rate_c drop warnings.
+fn nonzero_differs(value: f64, reference: f64) -> bool {
+    value.abs() > f64::EPSILON && (value - reference).abs() > f64::EPSILON
 }
 
 /// Whether writing `net` to `target` echoes the retained source text: the

@@ -235,6 +235,20 @@ def test_save_case_writes_and_refuses_overwrite(tmp_path):
     assert r2["bytes_written"] == out.stat().st_size
 
 
+def test_save_case_echo_keeps_read_warnings(tmp_path):
+    # Deliberate divergence from convert_case: a byte exact echo reports no
+    # warnings there, but save_case describes the written file end to end, so
+    # the read side stays.
+    from powerio.mcp.server import convert_case, save_case
+
+    src = DATA / "pandapower" / "example.json"
+    out = tmp_path / "echo.json"
+    saved = save_case(to="pandapower-json", out_path=str(out), path=str(src))
+    assert any("switch" in w for w in saved["warnings"]), saved["warnings"]
+    echoed = convert_case(to="pandapower-json", path=str(src))
+    assert echoed["warnings"] == []
+
+
 def test_exactly_one_of_path_content_json():
     from powerio.mcp.server import compute_matrix, dense_view, parse_case
 

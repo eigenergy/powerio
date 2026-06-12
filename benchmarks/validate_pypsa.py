@@ -63,7 +63,9 @@ def check_case(path: Path) -> str:
             py_x = []
             py_b = []
             for _, row in net.lines.iterrows():
-                v = float(net.buses.loc[row.bus1].v_nom)
+                # PyPSA per-unitizes line ohms on bus0's v_nom
+                # (pf.calculate_dependent_values); mirror that side.
+                v = float(net.buses.loc[row.bus0].v_nom)
                 zb = zbase(v, case.base_mva)
                 py_r.append(float(row.r) / zb)
                 py_x.append(float(row.x) / zb)

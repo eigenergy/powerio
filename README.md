@@ -140,9 +140,11 @@ writer, no retained source): the row shows where its decoded power flow core
 lands; the decoded vintages and per field evidence live in
 [docs/powerworld.md](docs/powerworld.md). 
 
-PyPSA CSV folders and GridFM Parquet are not in this table because they are
-multi-file dataset formats rather than `Conversion { text }` targets; both are
-canonicalized on write and have documented lossy edges. Known limits for every format are documented in
+PyPSA CSV folders and GridFM Parquet are not in this table only because they
+are directory datasets, not single text outputs. Both read and write: PyPSA
+with regenerable committed fixtures (`tests/data/pypsa/README.md`), GridFM
+with a deliberately lossy read that recovers the power flow core. Known
+limits for every format are documented in
 the [format fidelity guide](https://eigenergy.github.io/powerio/guides/format-fidelity.html).
 
 ### Matrices

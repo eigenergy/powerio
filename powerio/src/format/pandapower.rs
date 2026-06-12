@@ -1,6 +1,6 @@
 //! Read and write pandapower `pandapowerNet` JSON.
 //!
-//! pandapower serializes each element table as a pandas split-oriented
+//! pandapower serializes each element table as a pandas split oriented
 //! `DataFrame` encoded inside a JSON string. This module implements that small
 //! table codec directly so the Rust core stays Python-free.
 
@@ -9,7 +9,7 @@ use std::sync::Arc;
 
 use serde_json::{Map, Value};
 
-use super::{Conversion, Parsed, finish, jnum};
+use super::{Conversion, Parsed, finish, jnum, nonzero_differs};
 use crate::network::{
     Branch, Bus, BusId, BusType, Extras, GenCost, Generator, Hvdc, Load, Network, Shunt,
     SourceFormat, Storage,
@@ -47,8 +47,31 @@ pub(crate) fn parse_pandapower_source(
         .and_then(Value::as_object)
         .ok_or_else(|| bad("missing `_object` network map"))?;
 
-    let base_mva = obj.get("sn_mva").and_then(Value::as_f64).unwrap_or(1.0);
-    let f_hz = obj.get("f_hz").and_then(Value::as_f64).unwrap_or(F_HZ);
+    // Present-but-unparseable would silently rescale the whole per unit
+    // system (sn_mva) or every line charging value (f_hz), so both are errors;
+    // only a genuinely absent field takes the pandapower default.
+    let base_mva = match obj.get("sn_mva") {
+        None => 1.0,
+        Some(v) => value_f64(v)
+            .filter(|b| b.is_finite() && *b > 0.0)
+            .ok_or_else(|| {
+                bad(format!(
+                    "`sn_mva` is not a positive number (`{}`)",
+                    value_repr(v)
+                ))
+            })?,
+    };
+    let f_hz = match obj.get("f_hz") {
+        None => F_HZ,
+        Some(v) => value_f64(v)
+            .filter(|f| f.is_finite() && *f > 0.0)
+            .ok_or_else(|| {
+                bad(format!(
+                    "`f_hz` is not a positive number (`{}`)",
+                    value_repr(v)
+                ))
+            })?,
+    };
     let name = obj
         .get("name")
         .and_then(Value::as_str)
@@ -124,10 +147,21 @@ pub(crate) fn parse_pandapower_source(
     if let Some(shunt_frame) = read_frame(obj, "shunt")? {
         for row in shunt_frame.rows() {
             let step = row.f_or("step", 1.0);
+            let bus = bus_ref("shunt", &row, "bus", &bus_of_pp)?;
+            // pandapower rates a shunt at its own vn_kv and scales the power
+            // by (bus_kv / vn_kv)^2 (_calc_shunts_and_add_on_ppc); a missing
+            // vn_kv means the bus voltage.
+            let bus_v = bus_kv(&buses, &bus_pos, bus);
+            let vn = row.f_finite("vn_kv").filter(|v| *v > 0.0).unwrap_or(bus_v);
+            let v_ratio = if vn > 0.0 && bus_v > 0.0 {
+                (bus_v / vn).powi(2)
+            } else {
+                1.0
+            };
             shunts.push(Shunt {
-                bus: bus_ref("shunt", &row, "bus", &bus_of_pp)?,
-                g: row.f_or("p_mw", 0.0) * step,
-                b: -row.f_or("q_mvar", 0.0) * step,
+                bus,
+                g: row.f_or("p_mw", 0.0) * step * v_ratio,
+                b: -row.f_or("q_mvar", 0.0) * step * v_ratio,
                 in_service: row.bool_or("in_service", true),
                 extras: Extras::default(),
             });
@@ -215,8 +249,10 @@ pub(crate) fn parse_pandapower_source(
         for row in line_frame.rows() {
             let from = bus_ref("line", &row, "from_bus", &bus_of_pp)?;
             let to = bus_ref("line", &row, "to_bus", &bus_of_pp)?;
-            let v_to = bus_kv(&buses, &bus_pos, to);
-            let zbase = zbase(v_to, base_mva);
+            // pandapower refers line ohms and max_i_ka to the FROM bus voltage
+            // (build_branch._calc_line_parameter).
+            let v_from = bus_kv(&buses, &bus_pos, from);
+            let zbase = zbase(v_from, base_mva);
             let par = parallel_or_one(&row);
             let max_i_ka = row.f_or("max_i_ka", 0.0);
             if row.f_or("g_us_per_km", 0.0) != 0.0 {
@@ -238,7 +274,7 @@ pub(crate) fn parse_pandapower_source(
                 rate_a: if max_i_ka >= MAX_I_KA {
                     0.0
                 } else {
-                    max_i_ka * v_to * 3.0_f64.sqrt() * par
+                    max_i_ka * v_from * 3.0_f64.sqrt() * par
                 },
                 rate_b: 0.0,
                 rate_c: 0.0,
@@ -257,30 +293,111 @@ pub(crate) fn parse_pandapower_source(
         }
     }
     if let Some(trafo_frame) = read_frame(obj, "trafo")? {
+        let has_changer = trafo_frame.col("tap_changer_type").is_some();
         let mut mag_rows = 0_usize;
-        let mut lv_rows = 0_usize;
+        let mut tabular_rows = 0_usize;
         for row in trafo_frame.rows() {
             let from = bus_ref("trafo", &row, "hv_bus", &bus_of_pp)?;
             let to = bus_ref("trafo", &row, "lv_bus", &bus_of_pp)?;
             let sn = row.f_or("sn_mva", base_mva);
             let par = parallel_or_one(&row);
-            let r = row.f_or("vkr_percent", 0.0) * base_mva / (sn * 100.0);
-            let z = row.f_or("vk_percent", 0.0).abs() * base_mva / (sn * 100.0);
-            let x = (z * z - r * r).max(0.0).sqrt() * row.f_or("vk_percent", 0.0).signum();
             if row.f_or("i0_percent", 0.0) != 0.0 || row.f_or("pfe_kw", 0.0) != 0.0 {
                 mag_rows += 1;
             }
+
+            // Mirror pandapower's build_branch: the tap adjusts the nominal
+            // voltage of its side (_calc_tap_from_dataframe), the impedance is
+            // referred through (vn_trafo_lv / vn_bus_lv)^2
+            // (_calc_r_x_from_dataframe), and the ppc ratio is
+            // (vn_trafo_hv / vn_bus_hv) / (vn_trafo_lv / vn_bus_lv). MATPOWER
+            // carries any (tap, shift) pair, so all of it is representable.
+            let v_bus_hv = bus_kv(&buses, &bus_pos, from);
+            let v_bus_lv = bus_kv(&buses, &bus_pos, to);
+            let vn_hv = row
+                .f_finite("vn_hv_kv")
+                .filter(|v| *v > 0.0)
+                .unwrap_or(v_bus_hv);
+            let vn_lv = row
+                .f_finite("vn_lv_kv")
+                .filter(|v| *v > 0.0)
+                .unwrap_or(v_bus_lv);
             let tap_neutral = row.f_or("tap_neutral", 0.0);
-            let tap_pos = row.f_or("tap_pos", tap_neutral);
-            let tap_step_percent = row.f_or("tap_step_percent", 0.0);
-            let mut tap = 1.0 + (tap_pos - tap_neutral) * tap_step_percent / 100.0;
-            if row
+            let diff = row.f_or("tap_pos", tap_neutral) - tap_neutral;
+            let step_percent = row.f_or("tap_step_percent", 0.0);
+            let step_degree = row.f_or("tap_step_degree", 0.0);
+            let lv_side = row
                 .string("tap_side")
-                .is_some_and(|s| s.eq_ignore_ascii_case("lv"))
-            {
-                tap = 1.0;
-                lv_rows += 1;
+                .is_some_and(|s| s.eq_ignore_ascii_case("lv"));
+            // pandapower >= 3.0 applies the tap columns only when
+            // tap_changer_type names a changer (a null cell means none); 2.x
+            // files gate ideal phase shifters on the tap_phase_shifter bool
+            // and apply ratio taps unconditionally.
+            let changer = if row.bool_or("tap_dependency_table", false) {
+                Changer::Tabular
+            } else if has_changer {
+                match row.string("tap_changer_type") {
+                    Some(t)
+                        if t.eq_ignore_ascii_case("ratio")
+                            || t.eq_ignore_ascii_case("symmetrical") =>
+                    {
+                        Changer::Ratio
+                    }
+                    Some(t) if t.eq_ignore_ascii_case("ideal") => Changer::Ideal,
+                    Some(_) => Changer::Tabular,
+                    None => Changer::Inactive,
+                }
+            } else if row.bool_or("tap_phase_shifter", false) {
+                Changer::Ideal
+            } else {
+                Changer::Ratio
+            };
+            let mut tap_factor_hv = 1.0;
+            let mut tap_factor_lv = 1.0;
+            let mut shift = row.f_or("shift_degree", 0.0);
+            let direction = if lv_side { -1.0 } else { 1.0 };
+            match changer {
+                Changer::Ratio => {
+                    let du = diff * step_percent / 100.0;
+                    let th = step_degree.to_radians();
+                    let mag = (1.0 + du * th.cos()).hypot(du * th.sin());
+                    shift += (direction * du * th.sin())
+                        .atan2(1.0 + du * th.cos())
+                        .to_degrees();
+                    if lv_side {
+                        tap_factor_lv = mag;
+                    } else {
+                        tap_factor_hv = mag;
+                    }
+                }
+                Changer::Ideal => {
+                    // pandapower prefers the degree column when it is set.
+                    shift += if step_degree == 0.0 {
+                        direction * 2.0 * (diff * step_percent / 200.0).asin().to_degrees()
+                    } else {
+                        direction * diff * step_degree
+                    };
+                }
+                Changer::Inactive => {}
+                Changer::Tabular => tabular_rows += 1,
             }
+            // The off-nominal part needs real voltages on both sides; without
+            // them (a baseKV-less source) only the tap factor itself applies.
+            let nominal = if vn_hv > 0.0 && vn_lv > 0.0 && v_bus_hv > 0.0 && v_bus_lv > 0.0 {
+                (vn_hv / v_bus_hv) / (vn_lv / v_bus_lv)
+            } else {
+                1.0
+            };
+            let tap = nominal * tap_factor_hv / tap_factor_lv;
+            let z_corr = tap_factor_lv.powi(2)
+                * if vn_lv > 0.0 && v_bus_lv > 0.0 {
+                    (vn_lv / v_bus_lv).powi(2)
+                } else {
+                    1.0
+                };
+
+            let r = row.f_or("vkr_percent", 0.0) * base_mva / (sn * 100.0) * z_corr;
+            let z = row.f_or("vk_percent", 0.0).abs() * base_mva / (sn * 100.0) * z_corr;
+            let x = (z * z - r * r).max(0.0).sqrt() * row.f_or("vk_percent", 0.0).signum();
             branches.push(Branch {
                 from,
                 to,
@@ -291,7 +408,7 @@ pub(crate) fn parse_pandapower_source(
                 rate_b: 0.0,
                 rate_c: 0.0,
                 tap,
-                shift: row.f_or("shift_degree", 0.0),
+                shift,
                 in_service: row.bool_or("in_service", true),
                 angmin: -360.0,
                 angmax: 360.0,
@@ -303,9 +420,9 @@ pub(crate) fn parse_pandapower_source(
                 "`trafo`: i0_percent/pfe_kw nonzero on {mag_rows} rows; the magnetizing branch is not representable and was ignored"
             ));
         }
-        if lv_rows > 0 {
+        if tabular_rows > 0 {
             warnings.push(format!(
-                "`trafo`: tap_side == \"lv\" on {lv_rows} rows; taps are modeled on the hv side, lv taps were ignored"
+                "`trafo`: {tabular_rows} row(s) have a tabular or unrecognized tap changer; those taps were ignored"
             ));
         }
     }
@@ -407,6 +524,30 @@ pub(crate) fn parse_pandapower_source(
     )?;
     warn_nonempty_table(obj, "pwl_cost", "piecewise costs are not mapped", warnings)?;
 
+    // The enumerations above cover the common element tables; anything else
+    // shaped like a non-empty DataFrame (svc, tcsc, asymmetric loads, ...)
+    // still injects or shifts power, so name it instead of vanishing.
+    for key in obj.keys() {
+        if HANDLED_TABLES.contains(&key.as_str()) {
+            continue;
+        }
+        let looks_like_frame = obj
+            .get(key)
+            .and_then(Value::as_object)
+            .is_some_and(|m| m.get("_class").and_then(Value::as_str) == Some("DataFrame"));
+        if !looks_like_frame {
+            continue;
+        }
+        if let Ok(Some(frame)) = read_frame(obj, key) {
+            if !frame.data.is_empty() {
+                warnings.push(format!(
+                    "`{key}` table ignored ({} rows): not mapped",
+                    frame.data.len()
+                ));
+            }
+        }
+    }
+
     let net = Network {
         name,
         base_mva,
@@ -422,6 +563,40 @@ pub(crate) fn parse_pandapower_source(
     };
     net.check_references(FMT)?;
     Ok(net)
+}
+
+/// Every `_object` table key the reader consumes or warns about by name; any
+/// other non-empty DataFrame gets the generic ignored-table warning.
+const HANDLED_TABLES: [&str; 18] = [
+    "bus",
+    "load",
+    "sgen",
+    "shunt",
+    "gen",
+    "ext_grid",
+    "line",
+    "trafo",
+    "storage",
+    "dcline",
+    "poly_cost",
+    "trafo3w",
+    "ward",
+    "xward",
+    "impedance",
+    "motor",
+    "switch",
+    "pwl_cost",
+];
+
+/// The pandapower tap changer kinds the trafo reader distinguishes: ratio
+/// (and symmetrical) changers adjust their side's nominal voltage, ideal
+/// changers shift the angle, tabular and unrecognized changers are not
+/// representable, and a null `tap_changer_type` cell deactivates the tap.
+enum Changer {
+    Inactive,
+    Ratio,
+    Ideal,
+    Tabular,
 }
 
 /// `parallel` column, treating missing or nonpositive values as one device.
@@ -487,14 +662,20 @@ pub fn write_pandapower_json(net: &Network) -> Conversion {
     if rate_bc > 0 {
         warnings.push(format!("{rate_bc} branch rate_b/rate_c value set(s) dropped: pandapower carries one loading limit"));
     }
+    let zero_kv = net.buses.iter().filter(|b| b.base_kv <= 0.0).count();
+    if zero_kv > 0 {
+        warnings.push(format!(
+            "{zero_kv} bus(es) have baseKV == 0; vn_kv was written as 1 so pandapower's ohm conversion preserves the per unit impedances"
+        ));
+    }
 
     let mut object = Map::new();
-    object.insert("bus".into(), bus_frame(net));
-    object.insert("load".into(), load_frame(net));
-    object.insert("shunt".into(), shunt_frame(net));
-    object.insert("gen".into(), gen_frame(net));
-    object.insert("ext_grid".into(), ext_grid_frame(net));
-    let (line, trafo) = branch_frames(net);
+    object.insert("bus".into(), bus_frame(net, &mut warnings));
+    object.insert("load".into(), load_frame(net, &mut warnings));
+    object.insert("shunt".into(), shunt_frame(net, &mut warnings));
+    object.insert("gen".into(), gen_frame(net, &mut warnings));
+    object.insert("ext_grid".into(), ext_grid_frame(net, &mut warnings));
+    let (line, trafo) = branch_frames(net, &mut warnings);
     object.insert("line".into(), line);
     object.insert("trafo".into(), trafo);
     object.insert("poly_cost".into(), poly_cost_frame(net, &mut warnings));
@@ -517,7 +698,7 @@ pub fn write_pandapower_json(net: &Network) -> Conversion {
     finish(root, warnings)
 }
 
-fn bus_frame(net: &Network) -> Value {
+fn bus_frame(net: &Network, warnings: &mut Vec<String>) -> Value {
     let columns = [
         "name",
         "vn_kv",
@@ -534,7 +715,7 @@ fn bus_frame(net: &Network) -> Value {
         index.push(pp_bus(b.id));
         data.push(vec![
             b.name.clone().map_or(Value::Null, Value::String),
-            jnum(b.base_kv),
+            jnum(write_kv(b.base_kv)),
             Value::String("b".into()),
             Value::from(b.zone as u64),
             Value::Bool(b.kind != BusType::Isolated),
@@ -543,10 +724,10 @@ fn bus_frame(net: &Network) -> Value {
             jnum(b.vmax),
         ]);
     }
-    frame(&columns, index, data)
+    frame("bus", &columns, index, data, warnings)
 }
 
-fn load_frame(net: &Network) -> Value {
+fn load_frame(net: &Network, warnings: &mut Vec<String>) -> Value {
     let columns = [
         "name",
         "bus",
@@ -587,10 +768,10 @@ fn load_frame(net: &Network) -> Value {
             Value::String("wye".into()),
         ]);
     }
-    frame(&columns, index, data)
+    frame("load", &columns, index, data, warnings)
 }
 
-fn shunt_frame(net: &Network) -> Value {
+fn shunt_frame(net: &Network, warnings: &mut Vec<String>) -> Value {
     let columns = [
         "bus",
         "name",
@@ -601,7 +782,11 @@ fn shunt_frame(net: &Network) -> Value {
         "max_step",
         "in_service",
     ];
-    let bus_kv: HashMap<BusId, f64> = net.buses.iter().map(|b| (b.id, b.base_kv)).collect();
+    let bus_kv: HashMap<BusId, f64> = net
+        .buses
+        .iter()
+        .map(|b| (b.id, write_kv(b.base_kv)))
+        .collect();
     let mut index = Vec::with_capacity(net.shunts.len());
     let mut data = Vec::with_capacity(net.shunts.len());
     for s in &net.shunts {
@@ -617,10 +802,10 @@ fn shunt_frame(net: &Network) -> Value {
             Value::Bool(s.in_service),
         ]);
     }
-    frame(&columns, index, data)
+    frame("shunt", &columns, index, data, warnings)
 }
 
-fn gen_frame(net: &Network) -> Value {
+fn gen_frame(net: &Network, warnings: &mut Vec<String>) -> Value {
     let columns = [
         "name",
         "bus",
@@ -661,11 +846,15 @@ fn gen_frame(net: &Network) -> Value {
             jnum(g.pmax),
         ]);
     }
-    frame(&columns, index, data)
+    frame("gen", &columns, index, data, warnings)
 }
 
-#[allow(clippy::too_many_lines)] // mirrors pandapower line/trafo column order in one place
-fn branch_frames(net: &Network) -> (Value, Value) {
+#[allow(clippy::too_many_lines)]
+// mirrors pandapower line/trafo column order in one place
+// The exact compares are the point: a MATPOWER ratio of literally 1 (and only
+// 1) marks a branch electrically identical to a line.
+#[allow(clippy::float_cmp)]
+fn branch_frames(net: &Network, warnings: &mut Vec<String>) -> (Value, Value) {
     let line_columns = [
         "name",
         "std_type",
@@ -701,19 +890,33 @@ fn branch_frames(net: &Network) -> (Value, Value) {
         "tap_step_percent",
         "tap_step_degree",
         "tap_pos",
+        "tap_changer_type",
         "parallel",
         "df",
         "in_service",
     ];
-    let bus_kv: HashMap<BusId, f64> = net.buses.iter().map(|b| (b.id, b.base_kv)).collect();
+    let bus_kv: HashMap<BusId, f64> = net
+        .buses
+        .iter()
+        .map(|b| (b.id, write_kv(b.base_kv)))
+        .collect();
     let mut line_index = Vec::new();
     let mut line_data = Vec::new();
     let mut trafo_index = Vec::new();
     let mut trafo_data = Vec::new();
+    let mut trafo_b = 0_usize;
     for br in &net.branches {
+        let v_from = *bus_kv.get(&br.from).unwrap_or(&0.0);
         let v_to = *bus_kv.get(&br.to).unwrap_or(&0.0);
-        let zb = zbase(v_to, net.base_mva);
-        if br.is_transformer() {
+        // pandapower refers line ohms and max_i_ka to the FROM bus voltage.
+        let zb = zbase(v_from, net.base_mva);
+        // A branch with no effective tap and no shift is electrically a line
+        // even when MATPOWER labels it a transformer (explicit ratio 1); the
+        // line table is the only one that carries its charging susceptance.
+        if br.is_transformer() && (br.effective_tap() != 1.0 || br.shift != 0.0) {
+            if br.b != 0.0 {
+                trafo_b += 1;
+            }
             let sn = if br.rate_a > 0.0 {
                 br.rate_a
             } else {
@@ -728,7 +931,7 @@ fn branch_frames(net: &Network) -> (Value, Value) {
                 pp_bus(br.from),
                 pp_bus(br.to),
                 jnum(sn),
-                jnum(*bus_kv.get(&br.from).unwrap_or(&0.0)),
+                jnum(v_from),
                 jnum(v_to),
                 jnum(z * sn * 100.0 / net.base_mva),
                 jnum(br.r * sn * 100.0 / net.base_mva),
@@ -740,6 +943,13 @@ fn branch_frames(net: &Network) -> (Value, Value) {
                 jnum(tap_delta.abs() * 100.0),
                 jnum(0.0),
                 jnum(tap_delta.signum()),
+                // pandapower >= 3.0 ignores the tap columns unless the
+                // changer type says "Ratio".
+                if tap_delta == 0.0 {
+                    Value::Null
+                } else {
+                    Value::String("Ratio".into())
+                },
                 Value::from(1_u64),
                 jnum(1.0),
                 Value::Bool(br.in_service),
@@ -759,7 +969,7 @@ fn branch_frames(net: &Network) -> (Value, Value) {
                 jnum(if br.rate_a == 0.0 {
                     0.0
                 } else {
-                    br.rate_a / (v_to * 3.0_f64.sqrt())
+                    br.rate_a / (v_from * 3.0_f64.sqrt())
                 }),
                 jnum(1.0),
                 Value::from(1_u64),
@@ -769,13 +979,18 @@ fn branch_frames(net: &Network) -> (Value, Value) {
             ]);
         }
     }
+    if trafo_b > 0 {
+        warnings.push(format!(
+            "{trafo_b} transformer(s) carry charging susceptance; the pandapower trafo model has no charging branch, b was dropped"
+        ));
+    }
     (
-        frame(&line_columns, line_index, line_data),
-        frame(&trafo_columns, trafo_index, trafo_data),
+        frame("line", &line_columns, line_index, line_data, warnings),
+        frame("trafo", &trafo_columns, trafo_index, trafo_data, warnings),
     )
 }
 
-fn ext_grid_frame(net: &Network) -> Value {
+fn ext_grid_frame(net: &Network, warnings: &mut Vec<String>) -> Value {
     let columns = [
         "name",
         "bus",
@@ -804,7 +1019,7 @@ fn ext_grid_frame(net: &Network) -> Value {
             Value::Bool(true),
         ]);
     }
-    frame(&columns, index, data)
+    frame("ext_grid", &columns, index, data, warnings)
 }
 
 fn poly_cost_frame(net: &Network, warnings: &mut Vec<String>) -> Value {
@@ -874,7 +1089,7 @@ fn poly_cost_frame(net: &Network, warnings: &mut Vec<String>) -> Value {
             "{empty} generator costs had no coefficients and were written as zero"
         ));
     }
-    frame(&columns, index, data)
+    frame("poly_cost", &columns, index, data, warnings)
 }
 
 /// pandapower bus column value for a 1-based [`BusId`]: pandapower indices are
@@ -884,7 +1099,36 @@ fn pp_bus(id: BusId) -> Value {
 }
 
 #[allow(clippy::needless_pass_by_value)] // ownership emphasizes the frame consumes constructed rows
-fn frame(columns: &[&str], index: Vec<Value>, data: Vec<Vec<Value>>) -> Value {
+fn frame(
+    table: &str,
+    columns: &[&str],
+    index: Vec<Value>,
+    data: Vec<Vec<Value>>,
+    warnings: &mut Vec<String>,
+) -> Value {
+    // `jnum` writes a non-finite f64 as null, and the frame body is serialized
+    // to a string below, so the hub's generic null-key warning in `finish`
+    // never sees these tables. Numeric columns carry no legitimate nulls (only
+    // the object dtype columns do), so a null there is a non-finite value and
+    // the loss is reported here.
+    let nonfinite: Vec<String> = columns
+        .iter()
+        .enumerate()
+        .filter(|(_, c)| dtype_for(c) == "float64")
+        .filter_map(|(ci, c)| {
+            let n = data
+                .iter()
+                .filter(|row| row.get(ci) == Some(&Value::Null))
+                .count();
+            (n > 0).then(|| format!("`{c}` ({n})"))
+        })
+        .collect();
+    if !nonfinite.is_empty() {
+        warnings.push(format!(
+            "`{table}`: non-finite value(s) written as null in column(s) {}; pandapower reads them as NaN",
+            nonfinite.join(", ")
+        ));
+    }
     let inner = serde_json::json!({
         "columns": columns,
         "index": index,
@@ -908,15 +1152,11 @@ fn frame(columns: &[&str], index: Vec<Value>, data: Vec<Vec<Value>>) -> Value {
     Value::Object(m)
 }
 
-fn nonzero_differs(value: f64, reference: f64) -> bool {
-    value.abs() > f64::EPSILON && (value - reference).abs() > f64::EPSILON
-}
-
 fn dtype_for(column: &str) -> &'static str {
     match column {
         "bus" | "from_bus" | "to_bus" | "hv_bus" | "lv_bus" | "parallel" | "element" => "uint32",
         "in_service" | "slack" | "controllable" => "bool",
-        "name" | "type" | "std_type" | "geo" | "et" | "tap_side" => "object",
+        "name" | "type" | "std_type" | "geo" | "et" | "tap_side" | "tap_changer_type" => "object",
         _ => "float64",
     }
 }
@@ -1108,19 +1348,43 @@ fn read_poly_costs(
         return Ok(out);
     };
     let mut cq_rows = 0_usize;
+    let mut unmapped_rows = 0_usize;
     for row in frame.rows() {
-        let et = row.string("et").unwrap_or_else(|| "gen".into());
-        let Some(et) = CostElement::from_et(&et) else {
+        // The (et, element) key decides which generator owns the cost; a
+        // defaulted key would silently attach a cost curve to the wrong
+        // element, so both columns are required (the bus_ref standard).
+        let et_raw = row.string("et").ok_or_else(|| {
+            bad(format!(
+                "`poly_cost` row {}: required column `et` is missing",
+                row.label()
+            ))
+        })?;
+        let element = row
+            .get("element")
+            .and_then(|v| {
+                value_usize(v).or_else(|| {
+                    v.as_f64()
+                        .filter(|f| f.fract() == 0.0 && *f >= 0.0 && *f < usize::MAX as f64)
+                        .map(|f| f as usize)
+                })
+            })
+            .ok_or_else(|| {
+                bad(format!(
+                    "`poly_cost` row {}: required column `element` is missing or not a non-negative integer",
+                    row.label()
+                ))
+            })?;
+        let Some(et) = CostElement::from_et(&et_raw) else {
+            unmapped_rows += 1;
             continue;
         };
-        let element = row.usize_or("element", 0);
         if row.f_or("cq2_eur_per_mvar2", 0.0) != 0.0
             || row.f_or("cq1_eur_per_mvar", 0.0) != 0.0
             || row.f_or("cq0_eur", 0.0) != 0.0
         {
             cq_rows += 1;
         }
-        out.insert(
+        let previous = out.insert(
             (et, element),
             GenCost {
                 model: 2,
@@ -1134,10 +1398,21 @@ fn read_poly_costs(
                 ],
             },
         );
+        if previous.is_some() {
+            return Err(bad(format!(
+                "`poly_cost` row {}: duplicate cost for et `{et_raw}` element {element}",
+                row.label()
+            )));
+        }
     }
     if cq_rows > 0 {
         warnings.push(format!(
             "`poly_cost`: reactive cost coefficients (cq*) nonzero on {cq_rows} rows; only active power costs are read"
+        ));
+    }
+    if unmapped_rows > 0 {
+        warnings.push(format!(
+            "`poly_cost`: {unmapped_rows} row(s) skipped; only gen/ext_grid/sgen costs map onto powerio generators"
         ));
     }
     Ok(out)
@@ -1242,6 +1517,13 @@ fn bus_kv(buses: &[Bus], bus_pos: &HashMap<BusId, usize>, bus: BusId) -> f64 {
         .map_or(0.0, |b| b.base_kv)
 }
 
+/// pandapower converts ohms back to per unit by dividing by `vn_kv^2`, so a
+/// MATPOWER baseKV of 0 must not reach the file. Substituting 1 kV pairs with
+/// `zbase()`'s `1/base_mva` and the per unit impedances survive the round trip.
+fn write_kv(base_kv: f64) -> f64 {
+    if base_kv > 0.0 { base_kv } else { 1.0 }
+}
+
 fn zbase(v_kv: f64, base_mva: f64) -> f64 {
     if v_kv > 0.0 && base_mva > 0.0 {
         v_kv * v_kv / base_mva
@@ -1295,7 +1577,7 @@ mod tests {
     use super::*;
     use serde_json::json;
 
-    /// A split-oriented DataFrame the way pandapower `to_json` encodes it.
+    /// A split oriented DataFrame the way pandapower `to_json` encodes it.
     fn pp_frame_raw(columns: Value, index: Value, data: Value) -> Value {
         let inner = json!({ "columns": columns, "index": index, "data": data });
         json!({
@@ -1756,7 +2038,9 @@ mod tests {
     }
 
     #[test]
-    fn trafo_lv_tap_side_ignored_with_warning() {
+    fn trafo_lv_tap_adjusts_ratio_and_impedance() {
+        // An lv side tap divides the ppc ratio and refers the impedance
+        // through (vn_trafo_lv / vn_bus_lv)^2, exactly as pandapower does.
         let parsed = parse_pandapower_json(&trafo_net(
             &[
                 "hv_bus",
@@ -1769,13 +2053,253 @@ mod tests {
             json!([0, 1, 10.0, "LV", 3.0, 2.0]),
         ))
         .unwrap();
-        assert_eq!(parsed.network.branches[0].tap, 1.0);
+        let br = &parsed.network.branches[0];
+        assert!((br.tap - 1.0 / 1.06).abs() < 1e-12);
+        assert!((br.x - 0.1 * 1.06 * 1.06).abs() < 1e-12);
         assert!(
-            parsed.warnings.iter().any(|w| w
-                == "`trafo`: tap_side == \"lv\" on 1 rows; taps are modeled on the hv side, lv taps were ignored"),
+            !parsed.warnings.iter().any(|w| w.contains("tap")),
             "{:?}",
             parsed.warnings
         );
+    }
+
+    const TAP_COLUMNS: [&str; 6] = [
+        "hv_bus",
+        "lv_bus",
+        "vk_percent",
+        "tap_pos",
+        "tap_step_percent",
+        "tap_changer_type",
+    ];
+
+    #[test]
+    fn trafo_null_tap_changer_type_deactivates_tap() {
+        // pandapower >= 3.0 ignores the tap columns when tap_changer_type is
+        // null; the tap is simply inactive, so no warning either.
+        let parsed = parse_pandapower_json(&trafo_net(
+            &TAP_COLUMNS,
+            json!([0, 1, 10.0, 3.0, 2.0, null]),
+        ))
+        .unwrap();
+        assert_eq!(parsed.network.branches[0].tap, 1.0);
+        assert!(
+            !parsed.warnings.iter().any(|w| w.contains("tap")),
+            "{:?}",
+            parsed.warnings
+        );
+    }
+
+    #[test]
+    fn trafo_ratio_tap_changer_applies_tap() {
+        let parsed = parse_pandapower_json(&trafo_net(
+            &TAP_COLUMNS,
+            json!([0, 1, 10.0, 3.0, 2.0, "Ratio"]),
+        ))
+        .unwrap();
+        assert!((parsed.network.branches[0].tap - 1.06).abs() < 1e-12);
+    }
+
+    #[test]
+    fn trafo_ideal_tap_changer_becomes_phase_shift() {
+        // An ideal changer with only tap_step_percent set shifts the angle by
+        // 2*asin(diff*step/200) degrees (pandapower _calc_tap_from_dataframe).
+        let parsed = parse_pandapower_json(&trafo_net(
+            &TAP_COLUMNS,
+            json!([0, 1, 10.0, 3.0, 2.0, "Ideal"]),
+        ))
+        .unwrap();
+        let br = &parsed.network.branches[0];
+        assert_eq!(br.tap, 1.0);
+        let want = 2.0 * (3.0 * 2.0 / 200.0_f64).asin().to_degrees();
+        assert!((br.shift - want).abs() < 1e-12, "{}", br.shift);
+    }
+
+    #[test]
+    fn trafo_ideal_tap_changer_with_degrees_shifts_by_step() {
+        let parsed = parse_pandapower_json(&trafo_net(
+            &[
+                "hv_bus",
+                "lv_bus",
+                "vk_percent",
+                "tap_pos",
+                "tap_step_degree",
+                "tap_changer_type",
+            ],
+            json!([0, 1, 10.0, 2.0, 1.5, "Ideal"]),
+        ))
+        .unwrap();
+        let br = &parsed.network.branches[0];
+        assert_eq!(br.tap, 1.0);
+        assert!((br.shift - 3.0).abs() < 1e-12, "{}", br.shift);
+    }
+
+    #[test]
+    fn trafo_tap_phase_shifter_bool_becomes_phase_shift() {
+        // pandapower 2.x gated ideal phase shifters on a bool instead.
+        let parsed = parse_pandapower_json(&trafo_net(
+            &[
+                "hv_bus",
+                "lv_bus",
+                "vk_percent",
+                "tap_pos",
+                "tap_step_percent",
+                "tap_phase_shifter",
+            ],
+            json!([0, 1, 10.0, 3.0, 2.0, true]),
+        ))
+        .unwrap();
+        let br = &parsed.network.branches[0];
+        assert_eq!(br.tap, 1.0);
+        let want = 2.0 * (3.0 * 2.0 / 200.0_f64).asin().to_degrees();
+        assert!((br.shift - want).abs() < 1e-12, "{}", br.shift);
+    }
+
+    #[test]
+    fn trafo_tabular_tap_changer_ignored_with_warning() {
+        let parsed = parse_pandapower_json(&trafo_net(
+            &TAP_COLUMNS,
+            json!([0, 1, 10.0, 3.0, 2.0, "Tabular"]),
+        ))
+        .unwrap();
+        assert_eq!(parsed.network.branches[0].tap, 1.0);
+        assert!(
+            parsed.warnings.iter().any(|w| w
+                == "`trafo`: 1 row(s) have a tabular or unrecognized tap changer; those taps were ignored"),
+            "{:?}",
+            parsed.warnings
+        );
+    }
+
+    #[test]
+    fn sixty_hz_file_scales_line_charging() {
+        let mut object = Map::new();
+        object.insert("sn_mva".into(), json!(100.0));
+        object.insert("f_hz".into(), json!(60.0));
+        let (k, v) = bus_table(json!([0, 1]));
+        object.insert(k.into(), v);
+        object.insert(
+            "line".into(),
+            pp_frame(
+                &["from_bus", "to_bus", "c_nf_per_km", "length_km"],
+                json!([0]),
+                json!([[0, 1, 100.0, 1.0]]),
+            ),
+        );
+        let text = serde_json::to_string(&json!({
+            "_module": "pandapower.auxiliary",
+            "_class": "pandapowerNet",
+            "_object": object,
+        }))
+        .unwrap();
+        let parsed = parse_pandapower_json(&text).unwrap();
+        let zb = 110.0 * 110.0 / 100.0;
+        let want = 100.0e-9 * 2.0 * std::f64::consts::PI * 60.0 * zb;
+        assert!((parsed.network.branches[0].b - want).abs() < 1e-15);
+    }
+
+    #[test]
+    fn out_of_service_bus_round_trips_as_isolated() {
+        let parsed = parse_pandapower_json(&pp_net(vec![(
+            "bus",
+            pp_frame(
+                &["name", "vn_kv", "in_service"],
+                json!([0, 1]),
+                json!([[null, 110.0, true], [null, 110.0, false]]),
+            ),
+        )]))
+        .unwrap();
+        assert_eq!(parsed.network.buses[1].kind, BusType::Isolated);
+        let conv = write_pandapower_json(&parsed.network);
+        let bus = written_frame(&conv.text, "bus");
+        assert_eq!(col(&bus, "in_service"), vec![json!(true), json!(false)]);
+    }
+
+    #[test]
+    fn shunt_vn_kv_scales_power_by_voltage_ratio() {
+        // A 10 kV rated shunt on a 110 kV bus: pandapower scales the power by
+        // (bus_kv / vn_kv)^2 (_calc_shunts_and_add_on_ppc).
+        let parsed = parse_pandapower_json(&pp_net(vec![
+            bus_table(json!([0])),
+            (
+                "shunt",
+                pp_frame(
+                    &["bus", "p_mw", "q_mvar", "vn_kv"],
+                    json!([0]),
+                    json!([[0, 2.0, 5.0, 10.0]]),
+                ),
+            ),
+        ]))
+        .unwrap();
+        let s = &parsed.network.shunts[0];
+        let ratio = (110.0_f64 / 10.0).powi(2);
+        assert!((s.g - 2.0 * ratio).abs() < 1e-9);
+        assert!((s.b + 5.0 * ratio).abs() < 1e-9);
+    }
+
+    #[test]
+    fn unknown_nonempty_table_warns() {
+        let frame = pp_frame(&["bus", "x_l_ohm"], json!([0]), json!([[0, 1.0]]));
+        let parsed =
+            parse_pandapower_json(&pp_net(vec![bus_table(json!([0])), ("svc", frame)])).unwrap();
+        assert!(
+            parsed
+                .warnings
+                .iter()
+                .any(|w| w == "`svc` table ignored (1 rows): not mapped"),
+            "{:?}",
+            parsed.warnings
+        );
+    }
+
+    #[test]
+    fn poly_cost_missing_element_is_an_error() {
+        let msg = err(&pp_net(vec![
+            bus_table(json!([0])),
+            (
+                "gen",
+                pp_frame(&["bus", "p_mw"], json!([0]), json!([[0, 1.0]])),
+            ),
+            (
+                "poly_cost",
+                pp_frame(&["et", "cp1_eur_per_mw"], json!([0]), json!([["gen", 3.0]])),
+            ),
+        ]));
+        assert!(
+            msg.contains("`poly_cost` row 0: required column `element` is missing"),
+            "{msg}"
+        );
+    }
+
+    #[test]
+    fn writer_warns_on_non_finite_values() {
+        let mut net = test_net(vec![test_bus(1, BusType::Ref)]);
+        let mut g = test_gen(1, None);
+        g.qmax = f64::INFINITY;
+        g.qmin = f64::NEG_INFINITY;
+        net.generators.push(g);
+        let conv = write_pandapower_json(&net);
+        assert!(
+            conv.warnings.iter().any(|w| w
+                == "`gen`: non-finite value(s) written as null in column(s) `min_q_mvar` (1), `max_q_mvar` (1); pandapower reads them as NaN"),
+            "{:?}",
+            conv.warnings
+        );
+    }
+
+    #[test]
+    fn trafo_off_nominal_vn_adjusts_ratio_and_impedance() {
+        // vn_lv_kv below the bus voltage: pandapower refers the impedance
+        // through (vn_lv / vn_bus_lv)^2 and folds the off-nominal ratio into
+        // the ppc tap. Buses are 110 kV (bus_table).
+        let parsed = parse_pandapower_json(&trafo_net(
+            &["hv_bus", "lv_bus", "vk_percent", "vn_hv_kv", "vn_lv_kv"],
+            json!([0, 1, 10.0, 110.0, 104.5]),
+        ))
+        .unwrap();
+        let br = &parsed.network.branches[0];
+        let k: f64 = 104.5 / 110.0;
+        assert!((br.tap - 1.0 / k).abs() < 1e-12);
+        assert!((br.x - 0.1 * k * k).abs() < 1e-12);
     }
 
     #[test]
@@ -2053,6 +2577,98 @@ mod tests {
         assert_eq!(trafo.index, vec![json!(0)]);
         assert_eq!(col(&trafo, "hv_bus"), vec![json!(1)]);
         assert_eq!(col(&trafo, "lv_bus"), vec![json!(2)]);
+    }
+
+    #[test]
+    fn writer_tapped_trafo_carries_ratio_tap_changer_type() {
+        let mut net = test_net(vec![test_bus(1, BusType::Ref), test_bus(2, BusType::Pq)]);
+        net.branches.push(test_branch(1, 2, 1.05));
+        let conv = write_pandapower_json(&net);
+        let trafo = written_frame(&conv.text, "trafo");
+        assert_eq!(col(&trafo, "tap_changer_type"), vec![json!("Ratio")]);
+        let rt = parse_pandapower_json(&conv.text).unwrap();
+        assert!((rt.network.branches[0].tap - 1.05).abs() < 1e-12);
+    }
+
+    #[test]
+    fn writer_ratio_one_trafo_becomes_line_and_keeps_charging() {
+        // An explicit MATPOWER ratio of 1 with no shift is electrically a
+        // line; only the line table can carry its charging susceptance.
+        let mut net = test_net(vec![test_bus(1, BusType::Ref), test_bus(2, BusType::Pq)]);
+        let mut br = test_branch(1, 2, 1.0);
+        br.b = 0.04;
+        net.branches.push(br);
+        let conv = write_pandapower_json(&net);
+        assert!(written_frame(&conv.text, "trafo").data.is_empty());
+        assert_eq!(written_frame(&conv.text, "line").data.len(), 1);
+        assert!(
+            !conv.warnings.iter().any(|w| w.contains("charging")),
+            "{:?}",
+            conv.warnings
+        );
+        let rt = parse_pandapower_json(&conv.text).unwrap();
+        let b = &rt.network.branches[0];
+        assert!((b.b - 0.04).abs() < 1e-12);
+        assert!((b.r - 0.01).abs() < 1e-12);
+        assert!((b.x - 0.1).abs() < 1e-12);
+    }
+
+    #[test]
+    fn writer_warns_when_tapped_trafo_drops_charging() {
+        let mut net = test_net(vec![test_bus(1, BusType::Ref), test_bus(2, BusType::Pq)]);
+        let mut br = test_branch(1, 2, 1.05);
+        br.b = 0.04;
+        net.branches.push(br);
+        let conv = write_pandapower_json(&net);
+        assert!(
+            conv.warnings.iter().any(|w| w
+                == "1 transformer(s) carry charging susceptance; the pandapower trafo model has no charging branch, b was dropped"),
+            "{:?}",
+            conv.warnings
+        );
+    }
+
+    #[test]
+    fn writer_substitutes_one_kv_for_zero_base_kv() {
+        let mut net = test_net(vec![test_bus(1, BusType::Ref), test_bus(2, BusType::Pq)]);
+        net.buses[0].base_kv = 0.0;
+        net.buses[1].base_kv = 0.0;
+        net.branches.push(test_branch(1, 2, 0.0));
+        let conv = write_pandapower_json(&net);
+        let bus = written_frame(&conv.text, "bus");
+        assert_eq!(col(&bus, "vn_kv"), vec![json!(1.0), json!(1.0)]);
+        assert!(
+            conv.warnings.iter().any(|w| w
+                == "2 bus(es) have baseKV == 0; vn_kv was written as 1 so pandapower's ohm conversion preserves the per unit impedances"),
+            "{:?}",
+            conv.warnings
+        );
+        let rt = parse_pandapower_json(&conv.text).unwrap();
+        let b = &rt.network.branches[0];
+        assert!((b.r - 0.01).abs() < 1e-12);
+        assert!((b.x - 0.1).abs() < 1e-12);
+    }
+
+    #[test]
+    fn writer_line_ohms_use_from_bus_voltage() {
+        // pandapower's build_branch divides line ohms and max_i_ka by the
+        // FROM bus voltage base; a cross voltage level line must round trip.
+        let mut net = test_net(vec![test_bus(1, BusType::Ref), test_bus(2, BusType::Pq)]);
+        net.buses[0].base_kv = 380.0;
+        net.buses[1].base_kv = 150.0;
+        let mut br = test_branch(1, 2, 0.0);
+        br.rate_a = 100.0;
+        net.branches.push(br);
+        let conv = write_pandapower_json(&net);
+        let line = written_frame(&conv.text, "line");
+        let zb = 380.0 * 380.0 / 100.0;
+        let r_ohm = value_f64(&col(&line, "r_ohm_per_km")[0]).unwrap();
+        assert!((r_ohm - 0.01 * zb).abs() < 1e-9);
+        let rt = parse_pandapower_json(&conv.text).unwrap();
+        let b = &rt.network.branches[0];
+        assert!((b.r - 0.01).abs() < 1e-12);
+        assert!((b.x - 0.1).abs() < 1e-12);
+        assert!((b.rate_a - 100.0).abs() < 1e-9);
     }
 
     #[test]

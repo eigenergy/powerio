@@ -17,3 +17,10 @@ pp.to_json(net, "tests/data/pandapower/example.json")
 Regenerate with the same pandapower version (the CI pin in
 `benchmarks/requirements.txt`); a different version reshuffles column order and
 defaults, which breaks byte level comparisons.
+
+Provenance and license: the network data derives from
+`pandapower.networks.example_simple()`, shipped with pandapower (BSD 3-Clause,
+(c) the pandapower contributors,
+<https://github.com/e2nIEE/pandapower/blob/develop/LICENSE>), serialized by
+`pp.to_json` with the additions in the script above. Vendored for testing
+only.

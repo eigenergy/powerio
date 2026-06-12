@@ -82,12 +82,21 @@ fn read_pypsa_csv_folder_inner(path: &Path, warnings: &mut Vec<String>) -> Resul
             None => (BusId(i + 1), Some(raw_names[i].clone())),
         };
         id_of_name.insert(raw_names[i].clone(), id);
+        // v_nom drives every ohm <-> per unit conversion; defaulting it would
+        // silently read line ohms as per unit (the pandapower reader holds the
+        // same line for vn_kv). PyPSA itself always exports the column.
+        let v_nom = row.f("v_nom").filter(|v| v.is_finite()).ok_or_else(|| {
+            bad(format!(
+                "buses.csv row {}: required column `v_nom` is missing or not numeric",
+                i + 1
+            ))
+        })?;
         buses.push(Bus {
             id,
             kind: BusType::Pq,
             vm: row.f("v_mag_pu_set").unwrap_or(1.0),
             va: 0.0,
-            base_kv: row.f("v_nom").unwrap_or(0.0),
+            base_kv: v_nom,
             vmax: row.f("v_mag_pu_max").unwrap_or(1.1),
             vmin: row.f("v_mag_pu_min").unwrap_or(0.9),
             area: 1,
@@ -156,12 +165,14 @@ fn read_pypsa_csv_folder_inner(path: &Path, warnings: &mut Vec<String>) -> Resul
                 mbase: base_mva,
                 in_service: row.bool("active").unwrap_or(true),
                 cost: match (c2, c1) {
-                    (Some(q), Some(c)) => Some(GenCost {
+                    (Some(q), c) => Some(GenCost {
                         model: 2,
                         startup: 0.0,
                         shutdown: 0.0,
                         ncost: 3,
-                        coeffs: vec![q, c, 0.0],
+                        // PyPSA defaults marginal_cost to 0, so a quadratic
+                        // without a linear column keeps the quadratic term.
+                        coeffs: vec![q, c.unwrap_or(0.0), 0.0],
                     }),
                     (None, Some(c)) => Some(GenCost {
                         model: 2,
@@ -170,7 +181,7 @@ fn read_pypsa_csv_folder_inner(path: &Path, warnings: &mut Vec<String>) -> Resul
                         ncost: 2,
                         coeffs: vec![c, 0.0],
                     }),
-                    _ => None,
+                    (None, None) => None,
                 },
                 caps: [None; crate::network::GEN_EXTRA_KEYS.len()],
             });
@@ -186,7 +197,9 @@ fn read_pypsa_csv_folder_inner(path: &Path, warnings: &mut Vec<String>) -> Resul
             if row.f("g").unwrap_or(0.0) != 0.0 {
                 g_rows += 1;
             }
-            let zb = zbase(bus_kv(&buses, &bus_pos, to), base_mva);
+            // PyPSA per-unitizes line ohms on the BUS0 v_nom
+            // (pf.calculate_dependent_values), not bus1.
+            let zb = zbase(bus_kv(&buses, &bus_pos, from), base_mva);
             branches.push(Branch {
                 from,
                 to,
@@ -326,6 +339,40 @@ fn read_pypsa_csv_folder_inner(path: &Path, warnings: &mut Vec<String>) -> Resul
         }
     }
 
+    // A real PyPSA export can carry its data in time series siblings
+    // (`loads-p_set.csv`, `generators-p_max_pu.csv`, ...); reading only the
+    // static tables and saying nothing would present a zero-load network as a
+    // clean parse. Name every CSV this reader did not open.
+    let consumed = [
+        "network.csv",
+        "snapshots.csv",
+        "buses.csv",
+        "loads.csv",
+        "shunt_impedances.csv",
+        "generators.csv",
+        "lines.csv",
+        "transformers.csv",
+        "storage_units.csv",
+        "links.csv",
+        "stores.csv",
+    ];
+    let mut unread: Vec<String> = std::fs::read_dir(path)?
+        .filter_map(std::result::Result::ok)
+        .filter_map(|e| e.file_name().into_string().ok())
+        .filter(|n| {
+            Path::new(n)
+                .extension()
+                .is_some_and(|e| e.eq_ignore_ascii_case("csv"))
+                && !consumed.contains(&n.as_str())
+        })
+        .collect();
+    unread.sort();
+    for file in unread {
+        warnings.push(format!(
+            "`{file}` ignored: only the static element tables are read (time series and other tables are not modeled)"
+        ));
+    }
+
     let net = Network {
         name,
         base_mva,
@@ -346,31 +393,56 @@ fn read_pypsa_csv_folder_inner(path: &Path, warnings: &mut Vec<String>) -> Resul
     Ok(net)
 }
 
+#[allow(clippy::too_many_lines)] // one fidelity warning block per dropped field family, then the table writes
 pub fn write_pypsa_csv_folder(net: &Network, out_dir: impl AsRef<Path>) -> Result<PypsaCsvOutputs> {
     let out_dir = out_dir.as_ref();
     std::fs::create_dir_all(out_dir)?;
     let mut files = Vec::new();
     let mut warnings = Vec::new();
     // Element tables must reference buses by the same key buses.csv is indexed
-    // on (the bus name, falling back to the id), or PyPSA cannot resolve them.
-    let key_of: HashMap<BusId, String> = net.buses.iter().map(|b| (b.id, bus_key(b))).collect();
-    let mut key_counts: HashMap<String, usize> = HashMap::new();
+    // on, and PyPSA requires those keys to be unique for its joins. A bus is
+    // keyed by its name only when the name collides with no other bus's name
+    // or id string; colliding buses fall back to their numeric id, which is
+    // unique by construction and (per the same rule) cannot displace a kept
+    // name.
+    let mut name_counts: HashMap<&str, usize> = HashMap::new();
     for b in &net.buses {
-        *key_counts.entry(bus_key(b)).or_insert(0) += 1;
+        if let Some(n) = &b.name {
+            *name_counts.entry(n.as_str()).or_insert(0) += 1;
+        }
     }
-    let mut dups: Vec<String> = key_counts
-        .into_iter()
-        .filter_map(|(k, c)| (c > 1).then_some(k))
+    let id_owner: HashMap<String, BusId> = net
+        .buses
+        .iter()
+        .map(|b| (b.id.0.to_string(), b.id))
         .collect();
-    if !dups.is_empty() {
-        dups.sort();
-        let list = dups
-            .iter()
-            .map(|d| format!("`{d}`"))
-            .collect::<Vec<_>>()
-            .join(", ");
+    let mut displaced: Vec<String> = Vec::new();
+    let key_of: HashMap<BusId, String> = net
+        .buses
+        .iter()
+        .map(|b| {
+            let key = match &b.name {
+                Some(n)
+                    if name_counts[n.as_str()] == 1
+                        && id_owner.get(n).is_none_or(|&owner| owner == b.id) =>
+                {
+                    n.clone()
+                }
+                Some(n) => {
+                    displaced.push(format!("`{n}`"));
+                    b.id.0.to_string()
+                }
+                None => b.id.0.to_string(),
+            };
+            (b.id, key)
+        })
+        .collect();
+    if !displaced.is_empty() {
+        displaced.sort();
+        displaced.dedup();
         warnings.push(format!(
-            "buses.csv: duplicate bus names {list}; PyPSA requires unique names"
+            "buses.csv: bus names {} collide with another bus name or id; those buses are keyed by their numeric id instead",
+            displaced.join(", ")
         ));
     }
     if !net.hvdc.is_empty() {
@@ -382,6 +454,40 @@ pub fn write_pypsa_csv_folder(net: &Network, out_dir: impl AsRef<Path>) -> Resul
     if net.generators.iter().any(Generator::has_caps) {
         warnings.push("generator capability/ramp columns dropped: PyPSA generator CSV has no MATPOWER capability columns".into());
     }
+    let isolated = net
+        .buses
+        .iter()
+        .filter(|b| b.kind == BusType::Isolated)
+        .count();
+    if isolated > 0 {
+        warnings.push(format!(
+            "{isolated} isolated bus(es) written without status: PyPSA buses carry no active flag, they read back in service"
+        ));
+    }
+    let xf_angles = net
+        .branches
+        .iter()
+        .filter(|b| b.is_transformer() && b.has_angle_limits())
+        .count();
+    if xf_angles > 0 {
+        warnings.push(format!(
+            "{xf_angles} transformer angle limit(s) dropped: transformers.csv carries no v_ang_min/v_ang_max"
+        ));
+    }
+    let rate_bc = net
+        .branches
+        .iter()
+        .filter(|b| {
+            super::nonzero_differs(b.rate_b, b.rate_a) || super::nonzero_differs(b.rate_c, b.rate_a)
+        })
+        .count();
+    if rate_bc > 0 {
+        warnings.push(format!(
+            "{rate_bc} branch rate_b/rate_c value set(s) dropped: PyPSA carries one s_nom rating"
+        ));
+    }
+    warnings.extend(super::missing_reference_warning(net));
+    warnings.extend(super::normalized_tap_warning(net));
     // Exact compares are the point: any deviation from the symmetric, no-loss
     // shape the round trip preserves means a field is dropped on write.
     #[allow(clippy::float_cmp)]
@@ -468,6 +574,11 @@ fn buses_csv(net: &Network, key_of: &HashMap<BusId, String>) -> String {
     s
 }
 
+#[allow(clippy::too_many_lines)]
+// one column expression per PyPSA generator attribute
+// The exact mbase compare is the point: any deviation from the system base is
+// information the PyPSA table cannot carry.
+#[allow(clippy::float_cmp)]
 fn generators_csv(
     net: &Network,
     key_of: &HashMap<BusId, String>,
@@ -480,6 +591,7 @@ fn generators_csv(
     let mut dropped = 0usize;
     let mut truncated = 0usize;
     let mut empty = 0usize;
+    let mut unbounded = 0usize;
     for (i, g) in net.generators.iter().enumerate() {
         let p_nom = if g.pmax.is_finite() && g.pmax > 0.0 {
             g.pmax
@@ -519,8 +631,18 @@ fn generators_csv(
             p_nom,
             g.pg,
             g.qg,
-            if p_nom == 0.0 { 0.0 } else { g.pmin / p_nom },
+            if p_nom == 0.0 || !g.pmin.is_finite() {
+                if !g.pmin.is_finite() {
+                    unbounded += 1;
+                }
+                0.0
+            } else {
+                g.pmin / p_nom
+            },
             if p_nom == 0.0 || !g.pmax.is_finite() {
+                if !g.pmax.is_finite() {
+                    unbounded += 1;
+                }
                 1.0
             } else {
                 g.pmax / p_nom
@@ -544,6 +666,31 @@ fn generators_csv(
     if empty > 0 {
         warnings.push(format!(
             "{empty} generator costs had no coefficients and were written as zero"
+        ));
+    }
+    if unbounded > 0 {
+        warnings.push(format!(
+            "{unbounded} non-finite generator p limit(s) written as the PyPSA defaults (p_min_pu 0, p_max_pu 1)"
+        ));
+    }
+    let q_limited = net
+        .generators
+        .iter()
+        .filter(|g| g.qmin.is_finite() || g.qmax.is_finite())
+        .count();
+    if q_limited > 0 {
+        warnings.push(format!(
+            "{q_limited} generator reactive limit(s) dropped: PyPSA generators carry no q bounds"
+        ));
+    }
+    let off_base = net
+        .generators
+        .iter()
+        .filter(|g| g.mbase != 0.0 && g.mbase != net.base_mva)
+        .count();
+    if off_base > 0 {
+        warnings.push(format!(
+            "{off_base} generator machine base(s) (mbase) dropped: PyPSA carries no per generator MVA base"
         ));
     }
     s
@@ -574,7 +721,8 @@ fn lines_csv(net: &Network, key_of: &HashMap<BusId, String>) -> String {
         .enumerate()
         .filter(|(_, b)| !b.is_transformer())
     {
-        let zb = zbase(*bus_kv.get(&br.to).unwrap_or(&0.0), net.base_mva);
+        // PyPSA per-unitizes line ohms on the BUS0 v_nom, not bus1.
+        let zb = zbase(*bus_kv.get(&br.from).unwrap_or(&0.0), net.base_mva);
         let _ = writeln!(
             s,
             "line_{},{},{},{},{},{},{},{},{},{}",
@@ -726,7 +874,8 @@ fn read_csv_optional(path: &Path) -> Result<Option<CsvTable>> {
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
         Err(e) => return Err(e.into()),
     };
-    let mut records = parse_csv(&text)
+    let name = path.file_name().and_then(|s| s.to_str()).unwrap_or("csv");
+    let mut records = parse_csv(&text, name)?
         .into_iter()
         .filter(|r| !(r.len() == 1 && r[0].trim().is_empty()));
     let Some(headers) = records.next() else {
@@ -746,8 +895,10 @@ fn read_csv_optional(path: &Path) -> Result<Option<CsvTable>> {
 
 /// Split a whole CSV file into records, honoring quoted fields: an embedded
 /// newline or comma inside `"..."` stays in the field (the writer's `esc` emits
-/// those), and `""` is an escaped quote.
-fn parse_csv(text: &str) -> Vec<Vec<String>> {
+/// those), and `""` is an escaped quote. A quote left open at end of input is
+/// malformed CSV — everything after it would silently parse as one literal
+/// field — so it is an error, not a best-effort record.
+fn parse_csv(text: &str, name: &str) -> Result<Vec<Vec<String>>> {
     let mut records = Vec::new();
     let mut record = Vec::new();
     let mut cur = String::new();
@@ -769,16 +920,22 @@ fn parse_csv(text: &str) -> Vec<Vec<String>> {
             _ => cur.push(c),
         }
     }
+    if quoted {
+        return Err(bad(format!(
+            "{name}: unterminated quoted field (unbalanced `\"`)"
+        )));
+    }
     if !cur.is_empty() || !record.is_empty() {
         record.push(cur);
         records.push(record);
     }
-    records
+    Ok(records)
 }
 
-/// The one PyPSA name for a bus: its name when it has one, else its numeric id.
-/// Both `buses.csv` keys and every element bus column go through this, so the
-/// written tables always join.
+/// The collision-free PyPSA key for a bus: its name when it has one, else its
+/// numeric id. Tests build `key_of` maps with it; the writer derives keys with
+/// the collision fallback in `write_pypsa_csv_folder` instead.
+#[cfg(test)]
 fn bus_key(b: &Bus) -> String {
     b.name.clone().unwrap_or_else(|| b.id.0.to_string())
 }
@@ -1208,16 +1365,85 @@ mod tests {
     }
 
     #[test]
-    fn duplicate_bus_keys_warn_on_write() {
-        let net = net_with(vec![bus(1, Some("X")), bus(2, Some("X"))]);
-        let out = write_pypsa_csv_folder(&net, tmp_dir("dup-keys")).unwrap();
+    fn duplicate_bus_names_fall_back_to_ids() {
+        let mut net = net_with(vec![bus(1, Some("X")), bus(2, Some("X"))]);
+        net.loads = vec![Load {
+            bus: BusId(2),
+            p: 5.0,
+            q: 1.0,
+            in_service: true,
+            extras: Extras::default(),
+        }];
+        let dir = tmp_dir("dup-keys");
+        let out = write_pypsa_csv_folder(&net, &dir).unwrap();
         assert!(
-            out.warnings
-                .iter()
-                .any(|w| w == "buses.csv: duplicate bus names `X`; PyPSA requires unique names"),
+            out.warnings.iter().any(|w| w
+                == "buses.csv: bus names `X` collide with another bus name or id; those buses are keyed by their numeric id instead"),
             "{:?}",
             out.warnings
         );
+        let buses = fs::read_to_string(dir.join("buses.csv")).unwrap();
+        let keys: Vec<&str> = buses
+            .lines()
+            .skip(1)
+            .map(|l| l.split(',').next().unwrap())
+            .collect();
+        assert_eq!(keys, ["1", "2"]);
+        // The folder is importable: elements join on the fallback keys.
+        let back = read_pypsa_csv_folder(&dir).unwrap().network;
+        assert_eq!(back.loads[0].bus, back.buses[1].id);
+    }
+
+    #[test]
+    fn unterminated_quote_is_an_error() {
+        let dir = folder(
+            "bad-quote",
+            &[("buses.csv", "name,v_nom\n\"bus one,110\n2,110\n")],
+        );
+        let msg = read_pypsa_csv_folder(&dir).unwrap_err().to_string();
+        assert!(
+            msg.contains("buses.csv: unterminated quoted field (unbalanced `\"`)"),
+            "{msg}"
+        );
+    }
+
+    #[test]
+    fn quadratic_only_marginal_cost_is_kept() {
+        // PyPSA defaults marginal_cost to 0; a quadratic-only file still
+        // carries a real cost curve.
+        let dir = folder(
+            "quad-cost",
+            &[
+                ("buses.csv", "name,v_nom\n1,110\n"),
+                (
+                    "generators.csv",
+                    "name,bus,p_nom,marginal_cost_quadratic\ng1,1,50,0.25\n",
+                ),
+            ],
+        );
+        let parsed = read_pypsa_csv_folder(&dir).unwrap();
+        let cost = parsed.network.generators[0].cost.as_ref().unwrap();
+        assert_eq!(cost.coeffs, vec![0.25, 0.0, 0.0]);
+    }
+
+    #[test]
+    fn bus_name_matching_another_bus_id_falls_back() {
+        // A bus literally named "2" would collide with bus id 2's key.
+        let net = net_with(vec![bus(1, Some("2")), bus(2, None)]);
+        let dir = tmp_dir("name-id-clash");
+        let out = write_pypsa_csv_folder(&net, &dir).unwrap();
+        assert!(
+            out.warnings.iter().any(|w| w.contains("`2`")),
+            "{:?}",
+            out.warnings
+        );
+        let buses = fs::read_to_string(dir.join("buses.csv")).unwrap();
+        let keys: Vec<&str> = buses
+            .lines()
+            .skip(1)
+            .map(|l| l.split(',').next().unwrap())
+            .collect();
+        assert_eq!(keys, ["1", "2"]);
     }
 
     #[test]

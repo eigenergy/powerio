@@ -54,7 +54,9 @@ sources into the non-PowerModels targets), rest on the Rust round trip suite.
   imports powerio's pandapower JSON output back into pandapower, comparing counts
   and Y_bus.
 - **PyPSA** (`validate_pypsa.py`). Imports powerio's PyPSA CSV folder output and
-  checks counts, totals, and line parameters converted back to per unit.
+  checks counts, totals, line r/x/b rebased from ohms on the bus0 voltage, and
+  transformer r/x/tap_ratio/s_nom rebased from the transformer `s_nom` base; a
+  line/transformer split mismatch fails the case.
 
 ### The conversion matrix
 
@@ -109,33 +111,34 @@ in Python), naming the table and counting the affected rows.
   ModelData subset (numeric bus ids, scalar values); unit commitment cases
   (`system.time_keys`) are rejected.
 - **pandapower JSON** writes the power flow core as split oriented
-  `pandapowerNet` tables: line parameters in pandapower's physical units,
-  tap/shift branches as transformers, and an `ext_grid` row for each reference
-  bus that has no generator (`vm_pu`/`va_degree` from the bus). Slack
-  generators stay in the `gen` table with `slack=true`; reading such a file
-  back materializes the `ext_grid` row as a Ref generator. The file is always
-  labeled `f_hz = 50` (powerio's model carries no system frequency) with
-  `c_nf_per_km` compensated so the admittance is exact; a 60 Hz source is
-  relabeled, not altered electrically. The writer warns on
-  dropped HVDC and storage, generator capability columns, angle limits, rate
-  B/C, and costs `poly_cost` cannot carry (nonpolynomial costs dropped, cubic
-  and higher truncated to quadratic). The reader consumes the bus, load, sgen,
-  shunt, gen, ext_grid, line, trafo, storage, dcline, and poly_cost tables;
-  trafo3w, ward, xward, impedance, motor, switch, and pwl_cost are ignored
-  with a warning naming the table and row count (open switches are not
-  applied). ZIP load composition, line and transformer shunt conductance,
-  magnetizing branches, lv side taps, and reactive cost coefficients warn per
-  table with counts.
+  `pandapowerNet` tables. Line ohms are referred to the from bus voltage, as
+  pandapower's `build_branch` reads them; a bus with baseKV 0 writes
+  `vn_kv = 1` (warned) so the per unit impedances survive. A branch with a
+  real tap or shift becomes a `trafo` row with `tap_changer_type = "Ratio"`;
+  one with unit tap and no shift becomes a line, the only table that carries
+  its charging (transformer charging that cannot move is dropped with a
+  warning). The file is labeled `f_hz = 50` with `c_nf_per_km` compensated, so
+  a 60 Hz source keeps its exact Y_bus. Reference buses without a generator
+  get an `ext_grid` row, which reads back as a Ref generator. The writer also
+  warns on dropped HVDC, storage, capability columns, angle limits, rate B/C,
+  non-finite values (written as JSON null), and costs `poly_cost` cannot
+  carry. The reader models ratio, ideal, and pandapower 2.x tap changers,
+  off-nominal `vn_hv_kv`/`vn_lv_kv`, lv side taps, and shunt `vn_kv` scaling;
+  ZIP load composition, line shunt conductance, magnetizing branches, tabular
+  tap changers, reactive cost coefficients, and every other non-empty table
+  warn with row counts.
 - **PyPSA CSV folders** are canonicalized directory outputs, not byte exact
-  text conversions. The reader/writer covers static buses, generators,
-  loads, lines, transformers, shunts, storage units, and network base MVA;
-  transformer impedances are rebased between the system base and the
-  transformer `s_nom`. The reader maps links to HVDC lines with a warning
-  (PyPSA links carry no reactive or voltage data), warns on nonzero line or
-  transformer `g`, ignores stores with a warning, and ignores time series and
-  carriers. The writer drops HVDC with a warning and keys every table by bus
-  name (the id string when a bus is unnamed). Nonnumeric bus names read back
-  as dense synthetic ids while preserving the original names on `Bus.name`.
+  text conversions. Covered: static buses, generators, loads, lines (ohms on
+  the bus0 voltage, as PyPSA computes them), transformers (rebased between
+  the system base and the transformer `s_nom`), shunts, storage units, and
+  base MVA. The reader maps links to HVDC with a warning, requires `v_nom`
+  and balanced CSV quoting, and warns on stores, nonzero `g`, and every CSV
+  it does not read (time series, carriers). The writer keys tables by bus
+  name, falling back to the numeric id when names collide (warned), and warns
+  on dropped HVDC, q limits, mbase, transformer angle limits, rate B/C,
+  isolated buses, non-finite p limits, and slackless or normalized networks.
+  Nonnumeric bus names read back as dense synthetic ids with the originals on
+  `Bus.name`.
 - **gridfm** (read, the `gridfm` feature in `powerio-matrix`) reconstructs a
   `Network` from the gridfm-datakit Parquet dataset: lossy, but it recovers
   everything a power flow needs. That is bus types/voltages/limits, nodal load

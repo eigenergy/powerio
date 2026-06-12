@@ -57,6 +57,8 @@ have_egret=1
 "$PY" -c "import egret" 2>/dev/null || have_egret=0
 have_pypsa=1
 "$PY" -c "import pypsa" 2>/dev/null || have_pypsa=0
+have_pandapower=1
+"$PY" -c "import pandapower" 2>/dev/null || have_pandapower=0
 
 MCASES=(
     tests/data/case9.m
@@ -98,12 +100,21 @@ echo "=== PowerModels + ExaPowerIO comparisons ==="
 
 # 4. pandapower parse + Y_bus over every case (one Python process; n/a where its
 #    reader can't parse the case). Nonzero exit == a real mismatch, counted below.
-echo "=== pandapower (parse + Y_bus) ==="
-"$PY" benchmarks/validate_pandapower.py "${MCASES[@]}" || true
-
 # 4b. pandapower JSON converter output loaded by pandapower itself.
-echo "=== pandapower JSON converter ==="
-"$PY" benchmarks/validate_pandapower_converter.py "${MCASES[@]}" || true
+# CI installs pandapower unconditionally; the guard keeps local runs without
+# the oracle stack from failing the leg count, mirroring the pypsa leg.
+if [ "$have_pandapower" -eq 0 ]; then
+    echo "=== pandapower: skipped (not installed; pip install -r benchmarks/requirements.txt) ==="
+    for c in "${MCASES[@]}"; do
+        printf '%s\tpp\tSKIP(pandapower)\n' "$(basename "${c%.m}")" >>"$PIO_RESULTS_TSV"
+        printf '%s\tpp-json\tSKIP(pandapower)\n' "$(basename "${c%.m}")" >>"$PIO_RESULTS_TSV"
+    done
+else
+    echo "=== pandapower (parse + Y_bus) ==="
+    "$PY" benchmarks/validate_pandapower.py "${MCASES[@]}" || true
+    echo "=== pandapower JSON converter ==="
+    "$PY" benchmarks/validate_pandapower_converter.py "${MCASES[@]}" || true
+fi
 
 # 4c. PyPSA CSV converter output loaded by PyPSA itself.
 echo "=== PyPSA CSV converter ==="
