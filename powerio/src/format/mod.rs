@@ -23,14 +23,14 @@
 //!   never dropped silently. On the read side, readers itemize what they ignore
 //!   in [`Parsed`] `warnings`.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeSet, HashMap};
 use std::fmt;
 use std::str::FromStr;
 use std::sync::Arc;
 
 use serde_json::{Map, Value};
 
-use crate::network::{BusType, Network, SourceFormat};
+use crate::network::{Bus, BusId, BusType, Network, SourceFormat};
 use crate::{Error, Result};
 
 mod egret;
@@ -520,6 +520,39 @@ pub(super) fn normalized_tap_warning(net: &Network) -> Option<String> {
 /// rate_b/rate_c drop warnings.
 fn nonzero_differs(value: f64, reference: f64) -> bool {
     value.abs() > f64::EPSILON && (value - reference).abs() > f64::EPSILON
+}
+
+/// Set a bus's kind through the `bus_pos` index, leaving Isolated buses alone.
+/// Shared by the readers that derive bus kinds from generator/slack tables.
+pub(crate) fn set_bus_kind(
+    buses: &mut [Bus],
+    bus_pos: &HashMap<BusId, usize>,
+    bus: BusId,
+    kind: BusType,
+) {
+    if let Some(&idx) = bus_pos.get(&bus) {
+        if buses[idx].kind != BusType::Isolated {
+            buses[idx].kind = kind;
+        }
+    }
+}
+
+/// `base_kv` of a bus through the `bus_pos` index; 0.0 for an unknown bus.
+pub(crate) fn bus_kv(buses: &[Bus], bus_pos: &HashMap<BusId, usize>, bus: BusId) -> f64 {
+    bus_pos
+        .get(&bus)
+        .and_then(|&i| buses.get(i))
+        .map_or(0.0, |b| b.base_kv)
+}
+
+/// Impedance base `v_kv² / base_mva`; 1.0 when either base is missing, so a
+/// per-unit ↔ ohm conversion on it is the identity.
+pub(crate) fn zbase(v_kv: f64, base_mva: f64) -> f64 {
+    if v_kv > 0.0 && base_mva > 0.0 {
+        v_kv * v_kv / base_mva
+    } else {
+        1.0
+    }
 }
 
 /// Whether writing `net` to `target` echoes the retained source text: the

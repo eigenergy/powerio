@@ -9,7 +9,7 @@ use std::sync::Arc;
 
 use serde_json::{Map, Value};
 
-use super::{Conversion, Parsed, finish, jnum, nonzero_differs};
+use super::{Conversion, Parsed, bus_kv, finish, jnum, nonzero_differs, set_bus_kind, zbase};
 use crate::network::{
     Branch, Bus, BusId, BusType, Extras, GenCost, Generator, Hvdc, Load, Network, Shunt,
     SourceFormat, Storage,
@@ -672,7 +672,14 @@ pub fn write_pandapower_json(net: &Network) -> Conversion {
     }
 
     let mut object = Map::new();
-    let (line, trafo, charging) = branch_frames(net, &mut warnings);
+    // The written vn_kv per bus, shared by every frame that rebases impedances
+    // or stamps a shunt voltage.
+    let kv_of: HashMap<BusId, f64> = net
+        .buses
+        .iter()
+        .map(|b| (b.id, written_kv(b.base_kv)))
+        .collect();
+    let (line, trafo, charging) = branch_frames(net, &kv_of, &mut warnings);
     if !charging.is_empty() {
         warnings.push(format!(
             "{} transformer terminal charging shunt(s) written into `shunt`: pandapower's \
@@ -683,7 +690,10 @@ pub fn write_pandapower_json(net: &Network) -> Conversion {
     }
     object.insert("bus".into(), bus_frame(net, &mut warnings));
     object.insert("load".into(), load_frame(net, &mut warnings));
-    object.insert("shunt".into(), shunt_frame(net, &charging, &mut warnings));
+    object.insert(
+        "shunt".into(),
+        shunt_frame(net, &charging, &kv_of, &mut warnings),
+    );
     object.insert("gen".into(), gen_frame(net, &mut warnings));
     object.insert("ext_grid".into(), ext_grid_frame(net, &mut warnings));
     object.insert("line".into(), line);
@@ -784,6 +794,7 @@ fn load_frame(net: &Network, warnings: &mut Vec<String>) -> Value {
 fn shunt_frame(
     net: &Network,
     charging: &[(BusId, f64, bool)],
+    kv_of: &HashMap<BusId, f64>,
     warnings: &mut Vec<String>,
 ) -> Value {
     let columns = [
@@ -796,11 +807,6 @@ fn shunt_frame(
         "max_step",
         "in_service",
     ];
-    let bus_kv: HashMap<BusId, f64> = net
-        .buses
-        .iter()
-        .map(|b| (b.id, written_kv(b.base_kv)))
-        .collect();
     let mut index = Vec::with_capacity(net.shunts.len());
     let mut data = Vec::with_capacity(net.shunts.len());
     for s in &net.shunts {
@@ -810,7 +816,7 @@ fn shunt_frame(
             Value::Null,
             jnum(-s.b),
             jnum(s.g),
-            jnum(*bus_kv.get(&s.bus).unwrap_or(&1.0)),
+            jnum(*kv_of.get(&s.bus).unwrap_or(&1.0)),
             Value::from(1_u64),
             Value::from(1_u64),
             Value::Bool(s.in_service),
@@ -823,7 +829,7 @@ fn shunt_frame(
             Value::String("trafo charging".into()),
             jnum(-b_half_pu * net.base_mva),
             jnum(0.0),
-            jnum(*bus_kv.get(bus).unwrap_or(&1.0)),
+            jnum(*kv_of.get(bus).unwrap_or(&1.0)),
             Value::from(1_u64),
             Value::from(1_u64),
             Value::Bool(*in_service),
@@ -886,6 +892,7 @@ fn gen_frame(net: &Network, warnings: &mut Vec<String>) -> Value {
 #[allow(clippy::float_cmp)]
 fn branch_frames(
     net: &Network,
+    kv_of: &HashMap<BusId, f64>,
     warnings: &mut Vec<String>,
 ) -> (Value, Value, Vec<(BusId, f64, bool)>) {
     let line_columns = [
@@ -930,19 +937,14 @@ fn branch_frames(
         "df",
         "in_service",
     ];
-    let bus_kv: HashMap<BusId, f64> = net
-        .buses
-        .iter()
-        .map(|b| (b.id, written_kv(b.base_kv)))
-        .collect();
     let mut line_index = Vec::new();
     let mut line_data = Vec::new();
     let mut trafo_index = Vec::new();
     let mut trafo_data = Vec::new();
     let mut charging = Vec::new();
     for br in &net.branches {
-        let v_from = *bus_kv.get(&br.from).unwrap_or(&1.0);
-        let v_to = *bus_kv.get(&br.to).unwrap_or(&1.0);
+        let v_from = *kv_of.get(&br.from).unwrap_or(&1.0);
+        let v_to = *kv_of.get(&br.to).unwrap_or(&1.0);
         // pandapower refers line ohms and max_i_ka to the FROM bus voltage
         // (build_branch._calc_line_parameter); for written lines the two ends
         // agree by the trafo coercion below, but the reader holds the same
@@ -1533,29 +1535,6 @@ fn value_repr(v: &Value) -> String {
     match v {
         Value::String(s) => s.clone(),
         other => other.to_string(),
-    }
-}
-
-fn set_bus_kind(buses: &mut [Bus], bus_pos: &HashMap<BusId, usize>, bus: BusId, kind: BusType) {
-    if let Some(&idx) = bus_pos.get(&bus) {
-        if buses[idx].kind != BusType::Isolated {
-            buses[idx].kind = kind;
-        }
-    }
-}
-
-fn bus_kv(buses: &[Bus], bus_pos: &HashMap<BusId, usize>, bus: BusId) -> f64 {
-    bus_pos
-        .get(&bus)
-        .and_then(|&i| buses.get(i))
-        .map_or(0.0, |b| b.base_kv)
-}
-
-fn zbase(v_kv: f64, base_mva: f64) -> f64 {
-    if v_kv > 0.0 && base_mva > 0.0 {
-        v_kv * v_kv / base_mva
-    } else {
-        1.0
     }
 }
 

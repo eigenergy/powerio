@@ -8,7 +8,7 @@ use std::collections::{HashMap, HashSet};
 use std::fmt::Write as _;
 use std::path::{Path, PathBuf};
 
-use super::Parsed;
+use super::{Parsed, bus_kv, set_bus_kind, zbase};
 use crate::network::{
     Branch, Bus, BusId, BusType, Extras, GenCost, Generator, Hvdc, Load, Network, Shunt,
     SourceFormat, Storage,
@@ -522,8 +522,15 @@ pub fn write_pypsa_csv_folder(net: &Network, out_dir: impl AsRef<Path>) -> Resul
         &generators_csv(net, &key_of, &mut warnings),
         &mut files,
     )?;
+    // The v_nom per bus, shared by the writers that rebase impedances.
+    let kv_of: HashMap<BusId, f64> = net.buses.iter().map(|b| (b.id, b.base_kv)).collect();
     write_file(out_dir, "loads.csv", &loads_csv(net, &key_of), &mut files)?;
-    write_file(out_dir, "lines.csv", &lines_csv(net, &key_of), &mut files)?;
+    write_file(
+        out_dir,
+        "lines.csv",
+        &lines_csv(net, &key_of, &kv_of),
+        &mut files,
+    )?;
     let transformers = transformers_csv(net, &key_of);
     if transformers.lines().count() > 1 {
         write_file(out_dir, "transformers.csv", &transformers, &mut files)?;
@@ -532,7 +539,7 @@ pub fn write_pypsa_csv_folder(net: &Network, out_dir: impl AsRef<Path>) -> Resul
         write_file(
             out_dir,
             "shunt_impedances.csv",
-            &shunts_csv(net, &key_of),
+            &shunts_csv(net, &key_of, &kv_of),
             &mut files,
         )?;
     }
@@ -713,9 +720,12 @@ fn loads_csv(net: &Network, key_of: &HashMap<BusId, String>) -> String {
     s
 }
 
-fn lines_csv(net: &Network, key_of: &HashMap<BusId, String>) -> String {
+fn lines_csv(
+    net: &Network,
+    key_of: &HashMap<BusId, String>,
+    kv_of: &HashMap<BusId, f64>,
+) -> String {
     let mut s = String::from("name,bus0,bus1,r,x,b,s_nom,v_ang_min,v_ang_max,active\n");
-    let bus_kv: HashMap<BusId, f64> = net.buses.iter().map(|b| (b.id, b.base_kv)).collect();
     for (i, br) in net
         .branches
         .iter()
@@ -723,7 +733,7 @@ fn lines_csv(net: &Network, key_of: &HashMap<BusId, String>) -> String {
         .filter(|(_, b)| !b.is_transformer())
     {
         // PyPSA per-unitizes line ohms on the BUS0 v_nom, not bus1.
-        let zb = zbase(*bus_kv.get(&br.from).unwrap_or(&0.0), net.base_mva);
+        let zb = zbase(*kv_of.get(&br.from).unwrap_or(&0.0), net.base_mva);
         let _ = writeln!(
             s,
             "line_{},{},{},{},{},{},{},{},{},{}",
@@ -776,11 +786,14 @@ fn transformers_csv(net: &Network, key_of: &HashMap<BusId, String>) -> String {
     s
 }
 
-fn shunts_csv(net: &Network, key_of: &HashMap<BusId, String>) -> String {
+fn shunts_csv(
+    net: &Network,
+    key_of: &HashMap<BusId, String>,
+    kv_of: &HashMap<BusId, f64>,
+) -> String {
     let mut s = String::from("name,bus,g,b,active\n");
-    let bus_kv: HashMap<BusId, f64> = net.buses.iter().map(|b| (b.id, b.base_kv)).collect();
     for (i, sh) in net.shunts.iter().enumerate() {
-        let zb = zbase(*bus_kv.get(&sh.bus).unwrap_or(&0.0), net.base_mva);
+        let zb = zbase(*kv_of.get(&sh.bus).unwrap_or(&0.0), net.base_mva);
         let _ = writeln!(
             s,
             "shunt_{},{},{},{},{}",
@@ -856,10 +869,10 @@ impl CsvRow {
     }
 }
 
-fn bad(message: String) -> Error {
+fn bad(message: impl Into<String>) -> Error {
     Error::FormatRead {
         format: FMT,
-        message,
+        message: message.into(),
     }
 }
 
@@ -972,29 +985,6 @@ fn bus_ref(
             "{file} row {n}: column `{key}` references unknown bus `{raw}`"
         ))
     })
-}
-
-fn set_bus_kind(buses: &mut [Bus], bus_pos: &HashMap<BusId, usize>, bus: BusId, kind: BusType) {
-    if let Some(&idx) = bus_pos.get(&bus) {
-        if buses[idx].kind != BusType::Isolated {
-            buses[idx].kind = kind;
-        }
-    }
-}
-
-fn bus_kv(buses: &[Bus], bus_pos: &HashMap<BusId, usize>, bus: BusId) -> f64 {
-    bus_pos
-        .get(&bus)
-        .and_then(|&i| buses.get(i))
-        .map_or(0.0, |b| b.base_kv)
-}
-
-fn zbase(v_kv: f64, base_mva: f64) -> f64 {
-    if v_kv > 0.0 && base_mva > 0.0 {
-        v_kv * v_kv / base_mva
-    } else {
-        1.0
-    }
 }
 
 #[cfg(test)]
