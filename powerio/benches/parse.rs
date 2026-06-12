@@ -124,11 +124,24 @@ fn bench_powerworld_pwb(c: &mut Criterion) {
     }
 }
 
+/// The `.pwd` display decoder: a byte-offset scan over the whole file, the one
+/// reader whose hot loop runs per byte rather than per record — regression
+/// coverage for the total (Option-returning) byte accessors.
+fn bench_powerworld_pwd(c: &mut Criterion) {
+    let Ok(bytes) = std::fs::read("../tests/data/powerworld/ACTIVSg200.pwd") else {
+        return;
+    };
+    c.bench_function("parse_pwd_activsg200", |b| {
+        b.iter(|| powerio::format::powerworld::parse_pwd(black_box(&bytes)).unwrap());
+    });
+}
+
 criterion_group!(
     benches,
     bench_parse,
     bench_roundtrip,
     bench_parse_formats,
-    bench_powerworld_pwb
+    bench_powerworld_pwb,
+    bench_powerworld_pwd
 );
 criterion_main!(benches);
