@@ -1,0 +1,37 @@
+name: Notify PowerIO.jl
+
+# After a release is published, nudge PowerIO.jl's Update artifacts workflow so
+# its Artifacts.toml repins to the new binaries immediately. PowerIO.jl's daily
+# schedule is the no-secret backstop, so a missing token only costs latency.
+#
+# POWERIO_JL_DISPATCH_TOKEN: a fine-grained PAT for eigenergy/PowerIO.jl with
+# Contents read/write (the repository_dispatch endpoint requires write on the
+# target repo). The receiving workflow validates the tag shape and refuses
+# binaries whose ABI the binding does not target.
+
+on:
+  release:
+    types: [ published ]
+
+jobs:
+  dispatch:
+    runs-on: ubuntu-latest
+    steps:
+      - name: repository_dispatch powerio-release
+        env:
+          TOKEN: ${{ secrets.POWERIO_JL_DISPATCH_TOKEN }}
+          TAG: ${{ github.event.release.tag_name }}
+        run: |
+          if [ -z "$TOKEN" ]; then
+            echo "POWERIO_JL_DISPATCH_TOKEN not set; PowerIO.jl's daily schedule will pick up $TAG" \
+              | tee -a "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          jq -n --arg tag "$TAG" '{event_type: "powerio-release", client_payload: {tag: $tag}}' \
+            | curl -sf -X POST \
+                -H "Authorization: Bearer $TOKEN" \
+                -H "Accept: application/vnd.github+json" \
+                https://api.github.com/repos/eigenergy/PowerIO.jl/dispatches \
+                --data-binary @-
+          echo "dispatched powerio-release ($TAG) to eigenergy/PowerIO.jl" \
+            | tee -a "$GITHUB_STEP_SUMMARY"
