@@ -252,8 +252,8 @@ pub unsafe extern "C" fn pio_parse_str(
 /// Read one scenario of a dataset directory in the named `from` format into a
 /// network handle — the directory sibling of [`pio_parse_file`]. `gridfm` (the
 /// gridfm-datakit Parquet layout; `dir` resolves leniently: the `raw/` leaf,
-/// a `<case>/` directory with a `raw/` child, or a parent with one `*/raw/`
-/// child) is the one dataset format today. `scenario` selects within a
+/// a `<case>/` directory with a `raw/` child, or a parent holding exactly one
+/// such case) is the one dataset format today. `scenario` selects within a
 /// multi-scenario dataset ([`pio_scenario_ids`] enumerates them); formats
 /// without scenarios take `0`. Read fidelity warnings attach to the handle
 /// ([`pio_warnings`]). Returns `NULL` on error and writes the message into
