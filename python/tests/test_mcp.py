@@ -19,6 +19,13 @@ from powerio.mcp.server import case_summary, convert_case  # noqa: E402
 
 DATA = Path(__file__).resolve().parents[2] / "tests" / "data"
 
+# The gridfm Parquet surface is a compile-time feature; skip its tools when the
+# extension was built without it (mirrors test_powerio.py).
+HAS_GRIDFM = bool(getattr(powerio._powerio, "_has_gridfm", False))
+gridfm_only = pytest.mark.skipif(
+    not HAS_GRIDFM, reason="extension built without the gridfm feature"
+)
+
 
 def test_case_summary_path():
     s = case_summary(path=str(DATA / "case9.m"))
@@ -341,6 +348,7 @@ def test_read_pypsa_csv_missing_folder_maps_cleanly(tmp_path):
         read_pypsa_csv_folder(str(tmp_path / "nope"))
 
 
+@gridfm_only
 def test_gridfm_round_trip(tmp_path):
     from powerio.mcp.server import read_gridfm, write_gridfm
 
@@ -353,6 +361,7 @@ def test_gridfm_round_trip(tmp_path):
     assert json.loads(r["json"])
 
 
+@gridfm_only
 def test_read_gridfm_missing_dir_maps_cleanly(tmp_path):
     from powerio.mcp.server import read_gridfm
 
