@@ -2,10 +2,11 @@
 //! files.
 //!
 //! Readers and writers cover MATPOWER `.m`, PowerModels JSON, PSS/E `.raw`,
-//! PowerWorld `.aux`, and egret JSON. Every format meets at the typed
-//! [`Network`], and [`Network::to_format`] reports whatever a target format
-//! cannot represent. See the [`crate::format`] module for the two-tier
-//! fidelity contract.
+//! PowerWorld `.aux`, pandapower JSON, PyPSA CSV, and egret JSON. PowerWorld
+//! `.pwb` case files are read only; `.pwd` display files parse through
+//! [`parse_display_file`]. Case formats meet at the typed [`Network`], and
+//! [`Network::to_format`] reports whatever a target format cannot represent.
+//! See the [`crate::format`] module for the two-tier fidelity contract.
 //!
 //! Writing back to the source format reproduces the file byte for byte:
 //! `parse → write → parse` returns the original text, down to comments and
@@ -42,11 +43,13 @@ mod normalize;
 
 pub use error::{ElementCounts, Error, ErrorCategory, Result, ScenarioMismatch};
 pub use format::{
-    Conversion, Parsed, PypsaCsvOutputs, TargetFormat, convert_file, convert_str, parse_egret_json,
-    parse_file, parse_matpower, parse_matpower_file, parse_pandapower_json, parse_powermodels_json,
-    parse_powerworld, parse_psse, parse_str, read_pypsa_csv_folder, target_format_from_name,
-    write_as, write_egret_json, write_matpower, write_pandapower_json, write_powermodels_json,
-    write_powerworld, write_psse, write_pypsa_csv_folder,
+    Conversion, DisplayData, DisplayFormat, Parsed, PwdDisplay, PwdSubstation, PypsaCsvOutputs,
+    TargetFormat, convert_file, convert_str, display_format_from_name, parse_display_bytes,
+    parse_display_file, parse_egret_json, parse_file, parse_matpower, parse_matpower_file,
+    parse_pandapower_json, parse_powermodels_json, parse_powerworld, parse_psse, parse_str,
+    read_pypsa_csv_folder, target_format_from_name, write_as, write_egret_json, write_matpower,
+    write_pandapower_json, write_powermodels_json, write_powerworld, write_psse,
+    write_pypsa_csv_folder,
 };
 pub use indexed::{ConnectivityReport, IndexCore, IndexedNetwork};
 pub use network::{

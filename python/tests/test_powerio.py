@@ -86,6 +86,27 @@ def test_parse_infers_format_from_extension():
     assert case.source_format == "Matpower"
 
 
+def test_parse_powerworld_display_file_and_bytes():
+    path = DATA / "powerworld" / "ACTIVSg200.pwd"
+    parsed = powerio.parse_display_file(path)
+    from_bytes = powerio.parse_display_bytes(path.read_bytes(), "powerworld-pwd")
+
+    assert parsed == from_bytes
+    assert parsed.kind == "powerworld"
+    assert isinstance(parsed.data, powerio.PwdDisplay)
+    assert parsed.data.canvas_width == 200
+    assert parsed.data.canvas_height == 200
+    assert parsed.data.stamp == 43068
+    assert len(parsed.data.substations) == 111
+
+    first = parsed.data.substations[0]
+    assert isinstance(first, powerio.PwdSubstation)
+    assert first.number == 50
+    assert first.name == "CHAMPAIGN 3"
+    assert first.x == pytest.approx(-47299.112519818635)
+    assert first.y == pytest.approx(23498.080802557866)
+
+
 def test_case_tables(case9):
     assert len(case9.buses) == 9
     assert len(case9.branches) == 9

@@ -5,7 +5,8 @@ ABI while still using each language's own style. **PowerIO is under active devel
 
 Verb taxonomy:
 
-- `parse_*`: bytes, paths, or text to `Network`
+- `parse_*`: bytes, paths, or text to typed parsed values. Case parsers return
+  `Network`; display parsers return display data.
 - `to_*`: `Network` to a new value
 - `convert_file`: path to target text convenience
 - `write_*`: filesystem outputs (`write_gridfm`, `write_pypsa_csv_folder`,
@@ -22,6 +23,8 @@ Verb taxonomy:
 |---|---|---|---|---|
 | Parse path | `parse_file(path, from)` | `parse_file(path, from_=None)` | `parse_file(path; from=nothing)` | `pio_parse_file` |
 | Parse text | `parse_str(text, format)` | `parse_str(text, format)` | `parse_str(text, format)` | `pio_parse_str` |
+| Parse display path | `parse_display_file(path, from)` | `parse_display_file(path, from_=None)` | planned | n/a |
+| Parse display bytes | `parse_display_bytes(bytes, format)` | `parse_display_bytes(data, format)` | planned | n/a |
 | Parse IO | n/a | file object later | `parse_file(io, format)` | n/a |
 | JSON to Network | `Network::from_json` | `from_json` | `from_json` | `pio_from_json` |
 | File conversion | `convert_file(path, to, from)` | `convert_file(path, to, from_=None)` | `convert_file(path, to; from=nothing)` | `pio_convert_file` |

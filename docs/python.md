@@ -34,6 +34,7 @@ pp = net.to_format("pandapower-json")
 raw = pio.convert_file("case9.m", "psse")
 aux = pio.convert_str(json_text, "powerworld", format="powermodels-json")
 pypsa_out = net.write_pypsa_csv_folder("case9-pypsa")
+display = pio.parse_display_file("case.pwd")
 
 normalized = net.to_normalized()
 dense = net.to_dense()       # needs powerio[matrix]
@@ -41,8 +42,24 @@ bprime = net.bprime()        # needs powerio[matrix]
 graph = net.to_networkx()    # needs powerio[graph]
 ```
 
-`parse_file(path, from_=None)` reads any format (inferred from the extension, or
-forced with `from_`); `parse_str(text, format)` reads in-memory text.
+`parse_file(path, from_=None)` reads network case files (inferred from the
+extension, or forced with `from_`); `parse_str(text, format)` reads in-memory
+case text. Display artifacts are not network cases, so they use the separate
+display API:
+
+```python
+from pathlib import Path
+
+display = pio.parse_display_file("case.pwd")
+same = pio.parse_display_bytes(Path("case.pwd").read_bytes(), "pwd")
+
+assert display.kind == "powerworld"
+first = display.data.substations[0]
+print(first.number, first.name, first.x, first.y)
+```
+
+For v0.2.2, `display.data` is a `PwdDisplay` with `canvas_width`,
+`canvas_height`, `stamp`, and `substations`.
 
 ## PyPSA folders
 

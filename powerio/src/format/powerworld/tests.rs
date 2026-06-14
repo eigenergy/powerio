@@ -241,6 +241,49 @@ fn real_export_field_names_map_gen_shunt_and_transformer() {
 }
 
 #[test]
+// Exact decimal fractions parsed from the fixture; bit equality is the assertion.
+#[allow(clippy::float_cmp)]
+fn name_keyed_core_rows_resolve_bus_labels() {
+    let net = parse_powerworld(
+        "DATA (Bus, [BusName_NomVolt, BusNum, BusName, BusNomVolt, BusSlack])\n\
+         {\n\"ALPHA_230.00\" 10 \"ALPHA\" 230 \"YES \"\n\"BETA_230.00\" 20 \"BETA\" 230 \"NO \"\n}\n\
+         DATA (Load, [BusName_NomVolt, LoadID, LoadStatus, LoadSMW, LoadSMVR])\n\
+         {\n\"BETA_230.00\" \"1\" \"Closed\" 12.0 4.0\n}\n\
+         DATA (Gen, [BusName_NomVolt, GenID, GenStatus, GenMW, GenMVR, GenMWMax, GenMWMin])\n\
+         {\n\"ALPHA_230.00\" \"1\" \"Closed\" 50.0 5.0 80.0 10.0\n}\n\
+         DATA (Shunt, [BusName_NomVolt, ShuntID, SSStatus, SSNMW, SSNMVR])\n\
+         {\n\"BETA_230.00\" \"1\" \"Closed\" 0.0 3.0\n}\n\
+         DATA (Branch, [BusName_NomVolt, BusName_NomVolt:1, LineCircuit, LineStatus, LineR, LineX, LineC])\n\
+         {\n\"ALPHA_230.00\" \"BETA_230.00\" \"1\" \"Closed\" 0.01 0.05 0.002\n}\n",
+    )
+    .unwrap();
+
+    assert_eq!(net.buses[0].id, crate::network::BusId(10));
+    assert_eq!(net.loads[0].bus, crate::network::BusId(20));
+    assert_eq!(net.generators[0].bus, crate::network::BusId(10));
+    assert_eq!(net.shunts[0].bus, crate::network::BusId(20));
+    assert_eq!(net.branches[0].from, crate::network::BusId(10));
+    assert_eq!(net.branches[0].to, crate::network::BusId(20));
+    assert_eq!((net.branches[0].r, net.branches[0].x), (0.01, 0.05));
+}
+
+#[test]
+fn blank_numeric_bus_keys_fall_back_to_labels_before_merging() {
+    let net = parse_powerworld(
+        "DATA (Bus, [BusName_NomVolt, BusNum, BusName, BusNomVolt, BusSlack])\n\
+         {\n\"ALPHA_230.00\" 10 \"ALPHA\" 230 \"YES \"\n\"BETA_230.00\" 20 \"BETA\" 230 \"NO \"\n}\n\
+         DATA (Load, [BusNum, BusName_NomVolt, LoadID, LoadStatus, LoadSMW])\n\
+         {\n\"\" \"ALPHA_230.00\" \"1\" \"Closed\" 12.0\n\"\" \"BETA_230.00\" \"1\" \"Closed\" 34.0\n}\n",
+    )
+    .unwrap();
+
+    assert_eq!(net.loads.len(), 2);
+    assert_eq!(net.loads[0].bus, crate::network::BusId(10));
+    assert_eq!(net.loads[1].bus, crate::network::BusId(20));
+    assert_eq!((net.loads[0].p, net.loads[1].p), (12.0, 34.0));
+}
+
+#[test]
 fn branch_identity_survives_aux_to_aux_through_the_typed_model() {
     let src = "DATA (Bus, [BusNum])\n{\n1\n2\n}\n\
          DATA (Branch, [BusNum, BusNum:1, LineCircuit, BranchDeviceType, LineStatus, LineR, LineX])\n\

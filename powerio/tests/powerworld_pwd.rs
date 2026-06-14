@@ -14,7 +14,10 @@ use std::collections::BTreeMap;
 use std::fs;
 use std::path::Path;
 
-use powerio::format::powerworld::{PwdSubstation, parse_aux, parse_pwd};
+use powerio::format::powerworld::{parse_aux, parse_pwd, parse_pwd_display, parse_pwd_file};
+use powerio::{
+    DisplayData, PwdDisplay, PwdSubstation, parse_display_bytes, parse_display_file, parse_file,
+};
 
 /// (number, name, latitude, longitude) per aux Substation row. Handles both
 /// naming vocabularies (classic SubNum/SubName, 2022 Number/Name).
@@ -61,6 +64,13 @@ fn join(pwd: &[PwdSubstation], aux: &[(u32, String, f64, f64)]) -> Vec<(f64, f64
         .collect()
 }
 
+fn powerworld_display(data: DisplayData) -> PwdDisplay {
+    match data {
+        DisplayData::PowerWorld(display) => display,
+        _ => unreachable!("v0.2.2 only has PowerWorld display data"),
+    }
+}
+
 /// Pearson r² between paired samples.
 fn r_squared(pairs: &[(f64, f64)]) -> f64 {
     let n = pairs.len() as f64;
@@ -100,6 +110,60 @@ fn activsg200_pwd_matches_its_aux_sibling() {
     let aux = aux_substations(&common::powerworld_vendored("ACTIVSg200.aux"));
     let joined = join(&pwd, &aux);
     assert_projection_fit(&joined, 0.999, "ACTIVSg200");
+}
+
+#[test]
+fn pwd_display_metadata_and_file_helper_match_byte_parser() {
+    let path = common::powerworld_vendored("ACTIVSg200.pwd");
+    let bytes = fs::read(&path).unwrap();
+    let display = parse_pwd_display(&bytes).unwrap();
+    let from_file = parse_pwd_file(&path).unwrap();
+    let legacy = parse_pwd(&bytes).unwrap();
+    let generic_file = powerworld_display(parse_display_file(&path, None).unwrap());
+    let generic_bytes = powerworld_display(parse_display_bytes(&bytes, "pwd").unwrap());
+
+    assert_eq!(display.canvas_width, 200);
+    assert_eq!(display.canvas_height, 200);
+    assert_eq!(display.stamp, 43068);
+    assert_eq!(display.substations.len(), 111);
+    assert_eq!(from_file, display);
+    assert_eq!(legacy, display.substations);
+    assert_eq!(generic_file, display);
+    assert_eq!(generic_bytes, display);
+}
+
+#[test]
+fn display_api_accepts_powerworld_aliases() {
+    let path = common::powerworld_vendored("ACTIVSg200.pwd");
+    let bytes = fs::read(&path).unwrap();
+    let expected = powerworld_display(parse_display_file(&path, None).unwrap());
+
+    for alias in ["pwd", "powerworld-pwd", "powerworld-display"] {
+        assert_eq!(
+            powerworld_display(parse_display_file(&path, Some(alias)).unwrap()),
+            expected,
+            "file alias {alias}"
+        );
+        assert_eq!(
+            powerworld_display(parse_display_bytes(&bytes, alias).unwrap()),
+            expected,
+            "byte alias {alias}"
+        );
+    }
+}
+
+#[test]
+fn pwd_is_not_a_network_case() {
+    let path = common::powerworld_vendored("ACTIVSg200.pwd");
+    for from in [
+        None,
+        Some("pwd"),
+        Some("powerworld-pwd"),
+        Some("powerworld-display"),
+    ] {
+        let err = parse_file(&path, from).unwrap_err().to_string();
+        assert!(err.contains("parse_display_file"), "{err}");
+    }
 }
 
 /// The June 2016 era save (no select by criteria block, the oldest probed
