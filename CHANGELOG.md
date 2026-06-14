@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+- Normalization: `Network::to_normalized` preserves source bus ids instead of
+  renumbering surviving buses to dense 1-based ids. Dense row mapping remains
+  available through `IndexedNetwork` and the C ABI table order.
+
 ## 0.2.2
 
 - Display API: `parse_display_file` / `parse_display_bytes` read display

@@ -257,8 +257,8 @@ def normalize_case(
     format: Optional[str] = None,
 ) -> dict:
     """Parse a case and return the JSON transport of its normalized form: per
-    unit, radians, out of service elements filtered, buses densely reindexed
-    (1-based), bus types canonicalized.
+    unit, radians, out of service elements filtered, source bus ids preserved,
+    bus types canonicalized.
 
     Use this instead of ``parse_case`` when downstream math wants a computation
     ready case rather than the verbatim source tables. Provide exactly one of

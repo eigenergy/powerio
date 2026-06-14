@@ -423,7 +423,7 @@ class Network:
 
     def to_normalized(self) -> "Network":
         """A normalized, computation-ready copy of this case: per unit, radians,
-        out-of-service filtered, densely reindexed (1-based), bus types
+        out-of-service filtered, source bus ids preserved, bus types
         canonicalized. The original case is unchanged; the result carries no
         retained source, so :meth:`write` serializes the per-unit model rather
         than echoing it. Raises :class:`PowerIODataError` if the case can't be

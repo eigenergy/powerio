@@ -143,9 +143,10 @@ pub enum SourceFormat {
     /// Built in memory (e.g. from synth or an edited case); no source text.
     InMemory,
     /// A normalized derived view ([`Network::to_normalized`]): per unit, radians,
-    /// filtered, densely reindexed. Distinct from [`InMemory`](SourceFormat::InMemory)
-    /// so consumers can tell a per-unit product from a raw in-memory network; it
-    /// has no source text and a different unit basis than a parsed network.
+    /// filtered, source bus ids preserved. Distinct from
+    /// [`InMemory`](SourceFormat::InMemory) so consumers can tell a per-unit
+    /// product from a raw in-memory network; it has no source text and a different
+    /// unit basis than a parsed network.
     Normalized,
     /// Read back from a gridfm-datakit Parquet dataset (the ML→classical bridge,
     /// `powerio-matrix`'s `read_gridfm_dataset`). A lossy, power-flow-complete
@@ -442,7 +443,7 @@ impl Network {
         Ok(net)
     }
 
-    /// Whether this is a normalized (per-unit, radian, filtered, reindexed)
+    /// Whether this is a normalized (per-unit, radian, filtered)
     /// derived product from [`to_normalized`](Network::to_normalized), rather
     /// than a raw network at the file's unit basis. Unit-sensitive code that
     /// takes a `&Network` can check this instead of silently assuming MW.

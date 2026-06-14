@@ -174,7 +174,7 @@ Current conventions for signs, taps, phase shifts, per unit scaling, reference b
 - voltage phase angles are in radians, 
 - inactive elements are removed, 
 - `tap == 0` replaced with `1`,
-- surviving buses reindexed to a dense 1-based id space, and 
+- surviving buses keep their source bus ids, and
 - bus types are made consistent with generator placement and reference buses. 
 
 The normalized copy carries no retained source text, so writing it emits the derived model rather than the original file.

@@ -270,10 +270,10 @@ unsafe fn view<'a>(net: *const PioNetwork) -> Option<IndexedNetwork<'a>> {
 }
 
 /// Normalize `net` into a NEW per-unit network handle: per unit, radians,
-/// out-of-service filtered, densely reindexed, bus types canonicalized (see
-/// `Network::to_normalized`). The result is independent of `net`; free both
-/// with [`pio_network_free`]. Every extractor and [`pio_to_json`] works on it
-/// unchanged (the handle is per unit, not MW). Returns `NULL` on error (no
+/// out-of-service filtered, source bus ids preserved, bus types canonicalized
+/// (see `Network::to_normalized`). The result is independent of `net`; free
+/// both with [`pio_network_free`]. Every extractor and [`pio_to_json`] works on
+/// it unchanged (the handle is per unit, not MW). Returns `NULL` on error (no
 /// reference bus can be chosen, or a non-positive base MVA) and writes the
 /// message into `errbuf`.
 #[unsafe(no_mangle)]
@@ -1212,6 +1212,62 @@ mpc.branch = [
             let mut refs = vec![0i64; pio_n_reference_buses(cn)];
             pio_reference_buses(cn, refs.as_mut_ptr());
             assert_eq!(refs, vec![0, 1]);
+
+            pio_network_free(cn);
+            pio_network_free(cs);
+        }
+    }
+
+    #[test]
+    fn normalized_preserves_source_bus_ids() {
+        let src = "\
+function mpc = sparseids
+mpc.version = '2';
+mpc.baseMVA = 100;
+mpc.bus = [
+\t1\t3\t0\t0\t0\t0\t1\t1\t0\t230\t1\t1.1\t0.9;
+\t2\t1\t0\t0\t0\t0\t1\t1\t0\t230\t1\t1.1\t0.9;
+\t3\t1\t0\t0\t0\t0\t1\t1\t0\t230\t1\t1.1\t0.9;
+\t4\t1\t0\t0\t0\t0\t1\t1\t0\t230\t1\t1.1\t0.9;
+\t10\t1\t50\t10\t0\t0\t1\t1\t0\t230\t1\t1.1\t0.9;
+];
+mpc.gen = [
+\t1\t0\t0\t100\t-100\t1\t100\t1\t200\t0\t0\t0\t0\t0\t0\t0\t0\t0\t0\t0\t0;
+];
+mpc.branch = [
+\t1\t2\t0.01\t0.1\t0\t0\t0\t0\t0\t0\t1\t-360\t360;
+\t2\t3\t0.01\t0.1\t0\t0\t0\t0\t0\t0\t1\t-360\t360;
+\t3\t4\t0.01\t0.1\t0\t0\t0\t0\t0\t0\t1\t-360\t360;
+\t4\t10\t0.01\t0.1\t0\t0\t0\t0\t0\t0\t1\t-360\t360;
+];
+";
+        let text = CString::new(src).unwrap();
+        let fmt = CString::new("matpower").unwrap();
+        let mut err = [0 as c_char; 256];
+        unsafe {
+            let cs = pio_parse_str(text.as_ptr(), fmt.as_ptr(), err.as_mut_ptr(), err.len());
+            assert!(!cs.is_null(), "parse_str returned null");
+            let cn = pio_to_normalized(cs, err.as_mut_ptr(), err.len());
+            assert!(!cn.is_null(), "to_normalized returned null");
+
+            let mut ids = vec![0i64; pio_n_buses(cn)];
+            pio_bus_ids(cn, ids.as_mut_ptr());
+            assert_eq!(ids, vec![1, 2, 3, 4, 10]);
+
+            let mut from = vec![0i64; pio_n_branches(cn)];
+            let mut to = vec![0i64; pio_n_branches(cn)];
+            pio_branches(
+                cn,
+                from.as_mut_ptr(),
+                to.as_mut_ptr(),
+                std::ptr::null_mut(),
+                std::ptr::null_mut(),
+                std::ptr::null_mut(),
+                std::ptr::null_mut(),
+                std::ptr::null_mut(),
+                std::ptr::null_mut(),
+            );
+            assert_eq!((from[3], to[3]), (4, 10));
 
             pio_network_free(cn);
             pio_network_free(cs);
