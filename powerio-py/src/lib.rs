@@ -28,7 +28,7 @@ use powerio_matrix::matrix::{
     build_incidence, build_lacpf, build_lodf, build_ptdf, build_weighted_laplacian, build_ybus,
 };
 use powerio_matrix::opf_pipeline::{DcOpfOptions, write_dcopf_bundle as write_bundle};
-use powerio_matrix::{IndexCore, IndexedNetwork, Network};
+use powerio_matrix::{DisplayData, IndexCore, IndexedNetwork, Network, PwdDisplay};
 
 #[cfg(feature = "gridfm")]
 use powerio_matrix::io::gridfm::{
@@ -203,6 +203,34 @@ fn case_from_parsed(parsed: powerio_matrix::Parsed) -> PyCase {
         inner: parsed.network,
         core,
         warnings: parsed.warnings,
+    }
+}
+
+fn pwd_display_to_dict<'py>(py: Python<'py>, display: &PwdDisplay) -> PyResult<Bound<'py, PyDict>> {
+    let d = PyDict::new(py);
+    d.set_item("canvas_width", display.canvas_width)?;
+    d.set_item("canvas_height", display.canvas_height)?;
+    d.set_item("stamp", display.stamp)?;
+    let mut rows = Vec::with_capacity(display.substations.len());
+    for substation in &display.substations {
+        let row = PyDict::new(py);
+        row.set_item("number", substation.number)?;
+        row.set_item("name", &substation.name)?;
+        row.set_item("x", substation.x)?;
+        row.set_item("y", substation.y)?;
+        rows.push(row);
+    }
+    d.set_item("substations", PyList::new(py, rows)?)?;
+    Ok(d)
+}
+
+fn display_data_to_py<'py>(py: Python<'py>, display: DisplayData) -> PyResult<Bound<'py, PyAny>> {
+    match display {
+        DisplayData::PowerWorld(display) => {
+            let payload = pwd_display_to_dict(py, &display)?;
+            Ok(("powerworld", payload).into_pyobject(py)?.into_any())
+        }
+        _ => Err(PowerIOError::new_err("unsupported display data kind")),
     }
 }
 
@@ -634,6 +662,32 @@ fn parse_str(text: &str, format: Option<&str>) -> PyResult<PyCase> {
         .map_err(to_pyerr)
 }
 
+/// Parse a display file from a path, inferring the format from the extension
+/// unless `from_` is given. Returns `(kind, payload)`.
+#[pyfunction]
+#[pyo3(signature = (path, from_=None))]
+fn parse_display_file<'py>(
+    py: Python<'py>,
+    path: &str,
+    from_: Option<&str>,
+) -> PyResult<Bound<'py, PyAny>> {
+    let display =
+        powerio_matrix::parse_display_file(std::path::Path::new(path), from_).map_err(to_pyerr)?;
+    display_data_to_py(py, display)
+}
+
+/// Parse display bytes in the named display format. Returns `(kind, payload)`.
+#[pyfunction]
+#[pyo3(signature = (data, format))]
+fn parse_display_bytes<'py>(
+    py: Python<'py>,
+    data: &[u8],
+    format: &str,
+) -> PyResult<Bound<'py, PyAny>> {
+    let display = powerio_matrix::parse_display_bytes(data, format).map_err(to_pyerr)?;
+    display_data_to_py(py, display)
+}
+
 /// Rebuild a case from JSON produced by `Network.to_json()`.
 #[pyfunction]
 fn from_json(text: &str) -> PyResult<PyCase> {
@@ -805,6 +859,8 @@ fn _powerio(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PyCase>()?;
     m.add_function(wrap_pyfunction!(parse_file, m)?)?;
     m.add_function(wrap_pyfunction!(parse_str, m)?)?;
+    m.add_function(wrap_pyfunction!(parse_display_file, m)?)?;
+    m.add_function(wrap_pyfunction!(parse_display_bytes, m)?)?;
     m.add_function(wrap_pyfunction!(from_json, m)?)?;
     m.add_function(wrap_pyfunction!(read_pypsa_csv_folder, m)?)?;
     m.add_function(wrap_pyfunction!(convert_file, m)?)?;

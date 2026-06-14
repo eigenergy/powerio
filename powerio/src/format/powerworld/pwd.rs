@@ -38,6 +38,7 @@
 //! read the aux.
 
 use std::collections::HashSet;
+use std::path::Path;
 
 use crate::{Error, Result};
 
@@ -57,6 +58,39 @@ pub struct PwdSubstation {
     pub y: f64,
 }
 
+/// Decoded PowerWorld display file content.
+///
+/// A `.pwd` is not a case file and does not carry a [`Network`](crate::Network).
+/// This structure exposes the display metadata the reader validates plus the
+/// supported drawing object subset.
+#[derive(Debug, Clone, PartialEq)]
+pub struct PwdDisplay {
+    pub canvas_width: u16,
+    pub canvas_height: u16,
+    pub stamp: u32,
+    pub substations: Vec<PwdSubstation>,
+}
+
+/// Read and parse a `.pwd` display file.
+///
+/// # Errors
+/// [`Error::Io`] when the file cannot be read, or [`Error::FormatRead`] when
+/// the display bytes are not a supported PowerWorld `.pwd` shape.
+pub fn parse_pwd_file(path: impl AsRef<Path>) -> Result<PwdDisplay> {
+    let bytes = std::fs::read(path)?;
+    parse_pwd_display(&bytes)
+}
+
+/// Parse a `.pwd` display file, returning metadata and decoded substations.
+///
+/// # Errors
+/// [`Error::FormatRead`] when the header is not the known display shape,
+/// the file has no substation identity table (bus only diagrams), or no
+/// unique drawing record group links to the identity rows.
+pub fn parse_pwd_display(bytes: &[u8]) -> Result<PwdDisplay> {
+    parse_pwd_inner(bytes)
+}
+
 /// Parse the substation coordinates out of `.pwd` bytes.
 ///
 /// # Errors
@@ -64,28 +98,47 @@ pub struct PwdSubstation {
 /// the file has no substation identity table (bus only diagrams), or no
 /// unique drawing record group links to the identity rows.
 pub fn parse_pwd(bytes: &[u8]) -> Result<Vec<PwdSubstation>> {
-    let err = |message: String| Error::FormatRead {
+    parse_pwd_display(bytes).map(|display| display.substations)
+}
+
+fn pwd_err(message: impl Into<String>) -> Error {
+    Error::FormatRead {
         format: FMT,
-        message,
-    };
-    if bytes.len() < 0x40 || u32_at(bytes, 0) != Some(50) {
-        return Err(err(format!(
-            "not a recognized PowerWorld display file (header word {}; the probed saves all \
+        message: message.into(),
+    }
+}
+
+fn parse_pwd_header(bytes: &[u8]) -> Result<(u16, u16, u32)> {
+    let (Some(header), Some(canvas_width), Some(canvas_height)) =
+        (u32_at(bytes, 0), u16_at(bytes, 4), u16_at(bytes, 6))
+    else {
+        let header = u32_at(bytes, 0).unwrap_or(0);
+        return Err(pwd_err(format!(
+            "not a recognized PowerWorld display file (header word {header}; the probed saves all \
              carry 50)",
-            u32_at(bytes, 0).unwrap_or(0),
+        )));
+    };
+    if bytes.len() < 0x40 || header != 50 {
+        return Err(pwd_err(format!(
+            "not a recognized PowerWorld display file (header word {header}; the probed saves all \
+             carry 50)",
         )));
     }
-    if u16_at(bytes, 4) == Some(0) || u16_at(bytes, 6) == Some(0) {
-        return Err(err("display header canvas dimensions are zero".into()));
+    if canvas_width == 0 || canvas_height == 0 {
+        return Err(pwd_err("display header canvas dimensions are zero"));
     }
     let stamp = u32_at(bytes, 22).unwrap_or(0);
     if stamp == 0 {
-        return Err(err(
+        return Err(pwd_err(
             "display header stamp is zero; every validated save carries a nonzero stamp the \
-             drawing records repeat"
-                .into(),
+             drawing records repeat",
         ));
     }
+    Ok((canvas_width, canvas_height, stamp))
+}
+
+fn parse_pwd_inner(bytes: &[u8]) -> Result<PwdDisplay> {
+    let (canvas_width, canvas_height, stamp) = parse_pwd_header(bytes)?;
 
     let identity = find_identity_table(bytes)?;
 
@@ -144,14 +197,14 @@ pub fn parse_pwd(bytes: &[u8]) -> Result<Vec<PwdSubstation>> {
     let (_, records) = match matches.as_slice() {
         [one] => *one,
         [] => {
-            return Err(err(format!(
+            return Err(pwd_err(format!(
                 "no drawing record group links the {} substation identity rows; the \
                  DisplaySubstation layout of this save is not the validated one",
                 identity.len()
             )));
         }
         several => {
-            return Err(err(format!(
+            return Err(pwd_err(format!(
                 "{} drawing record groups link the substation identity rows; refusing to guess \
                  between them",
                 several.len()
@@ -159,7 +212,7 @@ pub fn parse_pwd(bytes: &[u8]) -> Result<Vec<PwdSubstation>> {
         }
     };
 
-    Ok(records
+    let substations = records
         .iter()
         .zip(identity)
         .map(|(rec, (number, name))| PwdSubstation {
@@ -168,7 +221,13 @@ pub fn parse_pwd(bytes: &[u8]) -> Result<Vec<PwdSubstation>> {
             x: rec.x,
             y: rec.y,
         })
-        .collect())
+        .collect();
+    Ok(PwdDisplay {
+        canvas_width,
+        canvas_height,
+        stamp,
+        substations,
+    })
 }
 
 /// A drawing record that passed the shape gate: its stream offset (for the

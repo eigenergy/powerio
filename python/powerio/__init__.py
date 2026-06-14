@@ -45,6 +45,9 @@ __all__ = [
     "Incidence",
     "YbusParts",
     "Conversion",
+    "DisplayData",
+    "PwdDisplay",
+    "PwdSubstation",
     "DenseNetwork",
     "DenseBranch",
     "DenseGen",
@@ -54,6 +57,8 @@ __all__ = [
     "PowerIOParseError",
     "PowerIODataError",
     "parse_file",
+    "parse_display_file",
+    "parse_display_bytes",
     "parse_str",
     "from_json",
     "convert_file",
@@ -85,6 +90,21 @@ id these rows came from; ``warnings`` lists what the gridfm schema could not
 round-trip (synthesized bus ids, folded per-bus load/shunt, dropped HVDC/storage,
 piecewise costs). The read is lossy but recovers everything a power flow needs.
 """
+
+DisplayData = namedtuple("DisplayData", ["kind", "data"])
+DisplayData.__doc__ = """Output of :func:`parse_display_file` / :func:`parse_display_bytes`.
+
+``kind`` names the display format. For v0.2.2, ``kind == "powerworld"`` and
+``data`` is a :class:`PwdDisplay`.
+"""
+
+PwdDisplay = namedtuple(
+    "PwdDisplay", ["canvas_width", "canvas_height", "stamp", "substations"]
+)
+PwdDisplay.__doc__ = """Decoded PowerWorld ``.pwd`` display metadata."""
+
+PwdSubstation = namedtuple("PwdSubstation", ["number", "name", "x", "y"])
+PwdSubstation.__doc__ = """One decoded PowerWorld display substation."""
 
 Incidence = namedtuple("Incidence", ["A", "b", "p_shift", "branch_of_col"])
 Incidence.__doc__ = """Output of :meth:`Network.incidence`.
@@ -174,6 +194,27 @@ def _require_gridfm() -> None:
             "wheel built with gridfm support or rebuild from source with "
             "`maturin develop --features gridfm`."
         )
+
+
+def _wrap_display(raw) -> DisplayData:
+    kind, payload = raw
+    if kind == "powerworld":
+        substations = [
+            PwdSubstation(
+                row["number"],
+                row["name"],
+                row["x"],
+                row["y"],
+            )
+            for row in payload["substations"]
+        ]
+        payload = PwdDisplay(
+            payload["canvas_width"],
+            payload["canvas_height"],
+            payload["stamp"],
+            substations,
+        )
+    return DisplayData(kind, payload)
 
 
 class Network:
@@ -422,6 +463,16 @@ def parse_file(path: Any, from_: Optional[str] = None) -> Network:
     that don't report any; currently all but pandapower JSON and PyPSA CSV).
     """
     return Network(_powerio.parse_file(str(path), from_))
+
+
+def parse_display_file(path: Any, from_: Optional[str] = None) -> DisplayData:
+    """Parse a display artifact such as a PowerWorld ``.pwd`` file."""
+    return _wrap_display(_powerio.parse_display_file(str(path), from_))
+
+
+def parse_display_bytes(data: bytes, format: str) -> DisplayData:
+    """Parse display bytes in the named display format."""
+    return _wrap_display(_powerio.parse_display_bytes(data, format))
 
 
 def parse_str(text: str, format: str = "matpower") -> Network:

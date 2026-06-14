@@ -26,7 +26,7 @@ When writing back to the source format, PowerIO **returns the original file exac
 The following formats are currently supported with read/write functionality:
 - [MATPOWER](https://matpower.org/) `.m`
 - [PSS/E](https://www.siemens.com/global/en/products/energy/grid-software/planning/pss-software/pss-e.html) `.raw` revision 33
-- [PowerWorld](https://www.powerworld.com/WebHelp/Content/MainDocumentation_HTML/Case_Formats.htm) `.aux`, plus read only `.pwb` (binary case) and `.pwd` (display) readers; vintage coverage and decode evidence in [docs/powerworld.md](docs/powerworld.md)
+- [PowerWorld](https://www.powerworld.com/WebHelp/Content/MainDocumentation_HTML/Case_Formats.htm) `.aux`, plus read only `.pwb` binary cases; `.pwd` display files parse through the separate display API. Vintage coverage and decode evidence live in [docs/powerworld.md](docs/powerworld.md).
 - [PowerModels.jl](https://github.com/lanl-ansi/PowerModels.jl) network data JSON
 - [egret](https://pypi.org/project/gridx-egret/) `ModelData` JSON
 - [pandapower](https://www.pandapower.org/) `pandapowerNet` JSON
@@ -79,7 +79,8 @@ julia -e 'using Pkg; Pkg.add(url="https://github.com/eigenergy/PowerIO.jl")'
 ```rust
 use powerio::{TargetFormat, parse_file};
 
-let net = parse_file("case14.m")?;
+let parsed = parse_file("case14.m", None)?;
+let net = parsed.network;
 let conv = net.to_format(TargetFormat::PowerModelsJson);
 
 for warning in &conv.warnings {
@@ -95,6 +96,7 @@ import powerio as pio
 
 case = pio.parse_file("case9.m")
 bprime = case.bprime()            # scipy.sparse, needs powerio[matrix]
+display = pio.parse_display_file("case.pwd")
 raw, warnings = pio.convert_file("case9.m", "psse")
 ```
 
@@ -137,8 +139,10 @@ powerio
 `partial` means the target lacks fields present in the source. The writer reports
 those cases in `Conversion::warnings`. PowerWorld `.pwb` is read only (no
 writer, no retained source): the row shows where its decoded power flow core
-lands; the decoded vintages and per field evidence live in
-[docs/powerworld.md](docs/powerworld.md). 
+lands. PowerWorld `.pwd` is display data, not a network case, so it is outside
+this conversion table and uses `parse_display_file` / `parse_display_bytes`.
+The decoded vintages and per field evidence live in
+[docs/powerworld.md](docs/powerworld.md).
 
 PyPSA CSV folders and GridFM Parquet are not in this table only because they
 are directory datasets, not single text outputs. Both read and write: PyPSA

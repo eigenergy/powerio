@@ -1,5 +1,21 @@
 # Changelog
 
+## 0.2.2
+
+- Display API: `parse_display_file` / `parse_display_bytes` read display
+  artifacts separately from network cases. PowerWorld `.pwd` returns
+  `DisplayData::PowerWorld(PwdDisplay)` in Rust and
+  `DisplayData("powerworld", PwdDisplay(...))` in Python. `parse_file`
+  remains Network only and points `.pwd` callers at the display API.
+- PowerWorld AUX: name keyed complete case exports can resolve
+  `BusName_NomVolt` labels for loads, shunts, generators, and branches.
+- PSS/E: the reader accepts comment headers, system wide records before
+  `BEGIN BUS DATA`, and v34 named branch records without misclassifying
+  long v33 branch rows.
+- MCP: add dedicated tools for PyPSA CSV folders and gridfm Parquet datasets.
+- DC sensitivities: PTDF/LODF fall back to dense Gaussian elimination for
+  invertible indefinite grounded Laplacians.
+
 ## 0.2.1
 
 Hardening fixes only; no API or ABI change (`PIO_ABI_VERSION` stays 3).

@@ -42,10 +42,19 @@ pub(crate) fn parse_pandapower_source(
     if root.get("_class").and_then(Value::as_str) != Some("pandapowerNet") {
         return Err(bad("top level `_class` is not `pandapowerNet`"));
     }
-    let obj = root
-        .get("_object")
-        .and_then(Value::as_object)
-        .ok_or_else(|| bad("missing `_object` network map"))?;
+    let object_from_string;
+    let obj = match root.get("_object") {
+        Some(Value::Object(obj)) => obj,
+        Some(Value::String(raw)) => {
+            object_from_string = serde_json::from_str::<Value>(raw)
+                .map_err(|e| bad(format!("top level `_object`: {e}")))?;
+            object_from_string
+                .as_object()
+                .ok_or_else(|| bad("top level `_object` string is not a network map"))?
+        }
+        Some(_) => return Err(bad("top level `_object` is not a network map")),
+        None => return Err(bad("missing `_object` network map")),
+    };
 
     // Present-but-unparseable would silently rescale the whole per unit
     // system (sn_mva) or every line charging value (f_hz), so both are errors;
@@ -1644,6 +1653,21 @@ mod tests {
         let parsed = parse_pandapower_json(&pp_net(vec![bus_table(json!([0, 1, 2]))])).unwrap();
         let ids: Vec<usize> = parsed.network.buses.iter().map(|b| b.id.0).collect();
         assert_eq!(ids, vec![1, 2, 3]);
+    }
+
+    #[test]
+    fn top_level_object_may_be_json_encoded_string() {
+        let mut root: Value =
+            serde_json::from_str(&pp_net(vec![bus_table(json!([0, 1]))])).unwrap();
+        let object = root.as_object_mut().unwrap().remove("_object").unwrap();
+        root.as_object_mut().unwrap().insert(
+            "_object".into(),
+            Value::String(serde_json::to_string(&object).unwrap()),
+        );
+
+        let parsed = parse_pandapower_json(&root.to_string()).unwrap();
+
+        assert_eq!(parsed.network.buses.len(), 2);
     }
 
     #[test]

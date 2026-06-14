@@ -18,8 +18,8 @@
 //!
 //! `.pwb` binary cases are read (never written) by [`parse_pwb`]; see that
 //! module for the decoded vintages and the parity evidence. `.pwd` display
-//! files carry no case data, only the diagram; [`parse_pwd`] reads the one
-//! decoded subset, substation coordinates.
+//! files carry no case data, only the diagram; [`parse_pwd_file`] and
+//! [`parse_pwd`] read the decoded substation coordinates.
 //!
 //! [`Network`]: crate::network::Network
 
@@ -41,7 +41,7 @@ pub(crate) use map::parse_powerworld_source;
 pub use map::{aux_sections, write_powerworld};
 pub use objects::{Contingency, contingencies, rating_set_names};
 pub use pwb::parse_pwb;
-pub use pwd::{PwdSubstation, parse_pwd};
+pub use pwd::{PwdDisplay, PwdSubstation, parse_pwd, parse_pwd_display, parse_pwd_file};
 
 use crate::Result;
 use crate::network::Network;

@@ -260,17 +260,29 @@ pub(crate) fn parse_psse_source(source: Arc<String>, name_hint: Option<&str>) ->
     let mut lines = content.lines();
 
     // Header line 1: IC, SBASE, REV, ...
-    let header = lines.next().ok_or_else(|| Error::FormatRead {
-        format: FMT,
-        message: "empty file".into(),
-    })?;
-    let base_mva = fields(header)
+    let header = lines
+        .by_ref()
+        .find(|line| {
+            let line = line.trim();
+            !line.is_empty() && !is_comment(line)
+        })
+        .ok_or_else(|| Error::FormatRead {
+            format: FMT,
+            message: "empty file".into(),
+        })?;
+    let header_fields = fields(header);
+    let base_mva = header_fields
         .get(1)
         .and_then(|f| f.parse::<f64>().ok())
         .ok_or_else(|| Error::FormatRead {
             format: FMT,
             message: "missing SBASE in header".into(),
         })?;
+    let raw_rev = header_fields
+        .get(2)
+        .and_then(|f| f.parse::<f64>().ok())
+        .filter(|v| v.is_finite() && *v >= 0.0)
+        .map_or(33, |v| v as u32);
     // Line 2 is the case title; we write the network name there, so read it back.
     let title = lines.next().unwrap_or("").trim();
     let name = if title.is_empty() {
@@ -289,10 +301,14 @@ pub(crate) fn parse_psse_source(source: Arc<String>, name_hint: Option<&str>) ->
     // Sections appear in fixed order, each ended by a record whose first field is
     // `0`. We read the ones we model and treat the rest as skipped.
     let mut section = Section::Bus;
+    let mut saw_bus_marker = false;
     let mut lines = lines.peekable();
     while let Some(raw) = lines.next() {
         let line = raw.trim();
         if line.is_empty() {
+            continue;
+        }
+        if is_comment(line) {
             continue;
         }
         if line == "Q" {
@@ -304,16 +320,20 @@ pub(crate) fn parse_psse_source(source: Arc<String>, name_hint: Option<&str>) ->
             // unmodeled sections between transformers and switched shunts don't
             // throw off the position.
             section = section_after_marker(line);
+            saw_bus_marker |= matches!(section, Section::Bus);
             continue;
         }
         let f = fields(line);
         match section {
+            Section::Bus if !saw_bus_marker && buses.is_empty() && is_system_wide_record(&f) => {
+                section = Section::Skip;
+            }
             Section::Bus => buses.push(read_bus(&f)?),
             Section::Load => loads.push(read_load(&f)?),
             Section::FixedShunt => shunts.push(read_shunt(&f)?),
             Section::SwitchedShunt => shunts.push(read_switched_shunt(&f)?),
             Section::Generator => generators.push(read_gen(&f)?),
-            Section::Branch => branches.push(read_branch(&f)?),
+            Section::Branch => branches.push(read_branch(&f, raw_rev)?),
             Section::Transformer => {
                 // 2-winding = 4 lines (K field == 0); 3-winding = 5 lines (skip).
                 let two_winding = f.get(2).and_then(|x| x.parse::<i64>().ok()) == Some(0);
@@ -365,7 +385,9 @@ enum Section {
 /// number of skipped sections between the modeled ones doesn't matter.
 fn section_after_marker(line: &str) -> Section {
     let u = line.to_ascii_uppercase();
-    if u.contains("BEGIN LOAD DATA") {
+    if u.contains("BEGIN BUS DATA") {
+        Section::Bus
+    } else if u.contains("BEGIN LOAD DATA") {
         Section::Load
     } else if u.contains("BEGIN FIXED SHUNT DATA") {
         Section::FixedShunt
@@ -385,6 +407,17 @@ fn section_after_marker(line: &str) -> Section {
 /// A record line's first field is `0` (the section terminator).
 fn is_terminator(line: &str) -> bool {
     fields(line).first().map(String::as_str) == Some("0")
+}
+
+fn is_comment(line: &str) -> bool {
+    line.starts_with("@!") || line.starts_with('@')
+}
+
+fn is_system_wide_record(f: &[String]) -> bool {
+    matches!(
+        f.first().map(|s| s.to_ascii_uppercase()),
+        Some(first) if matches!(first.as_str(), "GENERAL" | "RATING")
+    )
 }
 
 /// Split a PSS/E record into trimmed, unquoted fields, dropping a trailing
@@ -554,20 +587,26 @@ fn read_gen(f: &[String]) -> Result<Generator> {
     })
 }
 
-fn read_branch(f: &[String]) -> Result<Branch> {
-    // I, J, CKT, R, X, B, RATEA, RATEB, RATEC, GI,BI,GJ,BJ, ST(13)
+fn read_branch(f: &[String], raw_rev: u32) -> Result<Branch> {
+    // v33: I, J, CKT, R, X, B, RATEA, RATEB, RATEC, GI,BI,GJ,BJ, ST(13)
+    // v34 exports insert NAME before twelve rating columns, putting STAT after
+    // GI/BI/GJ/BJ. v33 can still have a long owner/fraction tail, so the RAW
+    // revision, not RATEA parseability, decides the long named layout.
+    let named_record = raw_rev >= 34 && f.len() >= 24;
+    let rating = if named_record { 7 } else { 6 };
+    let status = if named_record { 23 } else { 13 };
     Ok(Branch {
         from: BusId(id_at(f, 0, 0)?),
         to: BusId(id_at(f, 1, 0)?),
         r: num_at(f, 3, 0.0)?,
         x: num_at(f, 4, 0.0)?,
         b: num_at(f, 5, 0.0)?,
-        rate_a: num_at(f, 6, 0.0)?,
-        rate_b: num_at(f, 7, 0.0)?,
-        rate_c: num_at(f, 8, 0.0)?,
+        rate_a: num_at(f, rating, 0.0)?,
+        rate_b: num_at(f, rating + 1, 0.0)?,
+        rate_c: num_at(f, rating + 2, 0.0)?,
         tap: 0.0,
         shift: 0.0,
-        in_service: on_at(f, 13, true)?,
+        in_service: on_at(f, status, true)?,
         angmin: -360.0,
         angmax: 360.0,
         extras: Extras::new(),
@@ -594,4 +633,95 @@ fn read_transformer(l1: &[String], l2: &[String], l3: &[String], _l4: &[String])
         angmax: 360.0,
         extras: Extras::new(),
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn close(actual: f64, expected: f64) {
+        assert!((actual - expected).abs() < 1e-12, "{actual} != {expected}");
+    }
+
+    #[test]
+    fn reads_comment_headers_system_wide_block_and_named_branch_records() {
+        let raw = r#"@!IC, SBASE,REV,XFRRAT,NXFRAT,BASFRQ
+0, 100.00, 34, 0, 0, 60.00 / synthetic v34 export
+
+
+GENERAL, THRSHZ=0.0002
+RATING, 1, "      ", "                                "
+0 / END OF SYSTEM-WIDE DATA, BEGIN BUS DATA
+@!   I,'NAME        ', BASKV, IDE,AREA,ZONE,OWNER, VM,        VA,    NVHI,   NVLO,   EVHI,   EVLO
+1,'BUS1        ', 230.0000,3,1,1,1,1.00000,0.0000,1.1000,0.9000,1.1000,0.9000
+2,'BUS2        ', 230.0000,1,1,1,1,1.00000,0.0000,1.1000,0.9000,1.1000,0.9000
+0 / END OF BUS DATA, BEGIN LOAD DATA
+@!   I,'ID',STAT,AREA,ZONE,      PL,        QL
+2,'1 ',1,1,1,10.0,5.0
+0 / END OF LOAD DATA, BEGIN FIXED SHUNT DATA
+0 / END OF FIXED SHUNT DATA, BEGIN GENERATOR DATA
+@!   I,'ID',      PG,        QG,        QT,        QB,     VS,    IREG,     MBASE,     ZR,         ZX,         RT,         XT,     GTAP,STAT, RMPCT,      PT,        PB
+1,'1 ',50.0,5.0,20.0,-10.0,1.0,0,100.0,0.0,1.0,0.0,0.0,1.0,1,100.0,80.0,10.0
+0 / END OF GENERATOR DATA, BEGIN BRANCH DATA
+@!   I,     J,'CKT',     R,          X,         B,                    'N A M E'                 ,   RATE1,   RATE2,   RATE3,   RATE4,   RATE5,   RATE6,   RATE7,   RATE8,   RATE9,  RATE10,  RATE11,  RATE12,    GI,       BI,       GJ,       BJ,STAT,MET,  LEN
+1,2,'1 ',0.01,0.05,0.001,'named branch',100.0,90.0,80.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,1,1,0.0
+0 / END OF BRANCH DATA, BEGIN TRANSFORMER DATA
+0 / END OF TRANSFORMER DATA, BEGIN AREA DATA
+Q
+"#;
+
+        let net = parse_psse(raw).unwrap();
+
+        close(net.base_mva, 100.0);
+        assert_eq!(net.buses.len(), 2);
+        assert_eq!(net.loads.len(), 1);
+        assert_eq!(net.generators.len(), 1);
+        assert_eq!(net.branches.len(), 1);
+        close(net.branches[0].rate_a, 100.0);
+        assert!(net.branches[0].in_service);
+    }
+
+    #[test]
+    fn v33_long_branch_with_blank_ratea_keeps_v33_columns() {
+        let raw = r"0, 100.00, 33, 0, 0, 60.00 / synthetic v33 export
+CASE
+COMMENT
+1,'BUS1        ', 230.0000,3,1,1,1,1.00000,0.0000,1.1000,0.9000,1.1000,0.9000
+2,'BUS2        ', 230.0000,1,1,1,1,1.00000,0.0000,1.1000,0.9000,1.1000,0.9000
+0 / END OF BUS DATA, BEGIN LOAD DATA
+0 / END OF LOAD DATA, BEGIN FIXED SHUNT DATA
+0 / END OF FIXED SHUNT DATA, BEGIN GENERATOR DATA
+0 / END OF GENERATOR DATA, BEGIN BRANCH DATA
+1,2,'1 ',0.01,0.05,0.001,,90.0,80.0,0.0,0.0,0.0,0.0,1,1,0.0,1,1.0,2,0.0,3,0.0,4,0.0
+0 / END OF BRANCH DATA, BEGIN TRANSFORMER DATA
+0 / END OF TRANSFORMER DATA, BEGIN AREA DATA
+Q
+";
+
+        let net = parse_psse(raw).unwrap();
+
+        assert_eq!(net.branches.len(), 1);
+        close(net.branches[0].rate_a, 0.0);
+        close(net.branches[0].rate_b, 90.0);
+        close(net.branches[0].rate_c, 80.0);
+        assert!(net.branches[0].in_service);
+    }
+
+    #[test]
+    fn malformed_first_bus_id_is_not_treated_as_system_wide_data() {
+        let raw = r"0, 100.00, 33, 0, 0, 60.00 / synthetic malformed export
+CASE
+COMMENT
+BAD,'BUS1        ', 230.0000,3,1,1,1,1.00000,0.0000,1.1000,0.9000,1.1000,0.9000
+0 / END OF BUS DATA, BEGIN LOAD DATA
+Q
+";
+
+        let err = parse_psse(raw).unwrap_err();
+
+        assert!(
+            err.to_string().contains("bus record missing numeric id"),
+            "malformed bus id should be reported directly: {err}"
+        );
+    }
 }

@@ -3,10 +3,13 @@
 //!
 //! Each format is one module here, owning its reader and/or writer: MATPOWER
 //! `.m`, PowerModels JSON, PSS/E `.raw`, PowerWorld `.aux`, egret
-//! `ModelData` JSON, pandapower JSON, and PyPSA CSV folders. Every input and
-//! output format meets at the hub, so adding a format is one module, not a
-//! change to any other. [`parse_file`] reads a file, detecting the format from
-//! its extension; [`write_as`] serializes a `Network` to text targets.
+//! `ModelData` JSON, pandapower JSON, and PyPSA CSV folders. PowerWorld `.pwb`
+//! cases and `.pwd` displays are read only. Case input and output formats meet
+//! at the hub, so adding a format is one module, not a change to any other.
+//! [`parse_file`] reads Network cases, detecting the format from its extension;
+//! [`parse_display_file`] reads display artifacts such as PowerWorld `.pwd`.
+//! [`write_as`]
+//! serializes a `Network` to text targets.
 //! Writers for directory formats, such as PyPSA CSV folders, expose explicit
 //! filesystem helpers. Non-finite numeric values (a MATPOWER `Inf`/`NaN` angle
 //! limit, say) are written as JSON `null`.
@@ -45,7 +48,7 @@ pub use egret::{parse_egret_json, write_egret_json};
 pub use matpower::{parse_matpower, parse_matpower_file, write_matpower};
 pub use pandapower::{parse_pandapower_json, write_pandapower_json};
 pub use powermodels::{parse_powermodels_json, write_powermodels_json};
-pub use powerworld::{parse_powerworld, write_powerworld};
+pub use powerworld::{PwdDisplay, PwdSubstation, parse_powerworld, write_powerworld};
 pub use psse::{parse_psse, write_psse};
 pub use pypsa::{PypsaCsvOutputs, read_pypsa_csv_folder, write_pypsa_csv_folder};
 
@@ -122,6 +125,65 @@ impl FromStr for TargetFormat {
     }
 }
 
+/// A display artifact format. These files are not power network cases and do
+/// not parse to [`Network`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum DisplayFormat {
+    /// PowerWorld oneline display `.pwd`.
+    PowerWorld,
+}
+
+impl DisplayFormat {
+    /// Conventional file extension for this display format (no leading dot).
+    #[must_use]
+    pub fn extension(self) -> &'static str {
+        match self {
+            DisplayFormat::PowerWorld => "pwd",
+        }
+    }
+
+    /// Human-readable format name for diagnostics.
+    #[must_use]
+    pub fn label(self) -> &'static str {
+        match self {
+            DisplayFormat::PowerWorld => "PowerWorld .pwd",
+        }
+    }
+
+    /// Canonical API token for this format.
+    #[must_use]
+    pub fn token(self) -> &'static str {
+        match self {
+            DisplayFormat::PowerWorld => "powerworld-display",
+        }
+    }
+}
+
+impl fmt::Display for DisplayFormat {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.token())
+    }
+}
+
+impl FromStr for DisplayFormat {
+    type Err = Error;
+
+    fn from_str(name: &str) -> Result<Self> {
+        display_format_from_name(name).ok_or_else(|| Error::UnknownFormat(name.to_string()))
+    }
+}
+
+/// Map a display format name to a [`DisplayFormat`], or `None` if unrecognized.
+/// Accepts `pwd`, `powerworld-pwd`, and `powerworld-display`.
+#[must_use]
+pub fn display_format_from_name(name: &str) -> Option<DisplayFormat> {
+    Some(match name.to_ascii_lowercase().as_str() {
+        "pwd" | "powerworld-pwd" | "powerworld-display" => DisplayFormat::PowerWorld,
+        _ => return None,
+    })
+}
+
 /// Map a format name (with the common aliases) to a [`TargetFormat`], or `None`
 /// if unrecognized. Accepts `matpower`/`m`, `powermodels-json`/`powermodels`/`pm`,
 /// `egret-json`/`egret`, `pandapower-json`/`pandapower`/`pp`, `psse`/`raw`,
@@ -147,6 +209,87 @@ pub fn target_format_from_name(name: &str) -> Option<TargetFormat> {
         "pandapower-json" | "pandapower" | "pandapowerjson" | "pp" => TargetFormat::PandapowerJson,
         _ => return None,
     })
+}
+
+/// Output of a display parse. v0.2.2 supports PowerWorld `.pwd`; future display
+/// formats can add variants without changing the parse entry point.
+#[derive(Debug, Clone, PartialEq)]
+#[non_exhaustive]
+pub enum DisplayData {
+    /// PowerWorld oneline display data.
+    PowerWorld(PwdDisplay),
+}
+
+impl DisplayData {
+    /// The display format represented by this value.
+    #[must_use]
+    pub fn format(&self) -> DisplayFormat {
+        match self {
+            DisplayData::PowerWorld(_) => DisplayFormat::PowerWorld,
+        }
+    }
+}
+
+fn display_file_guidance() -> Error {
+    Error::UnknownFormat(
+        "a PowerWorld .pwd is display data, not a Network case; \
+         use parse_display_file(path, None)"
+            .into(),
+    )
+}
+
+/// Parse display bytes in the named display `format`.
+///
+/// # Errors
+/// [`Error::UnknownFormat`] if `format` is not a display format; otherwise the
+/// reader's own [`Error`] on malformed input.
+pub fn parse_display_bytes(bytes: &[u8], format: &str) -> Result<DisplayData> {
+    let fmt =
+        display_format_from_name(format).ok_or_else(|| Error::UnknownFormat(format.to_string()))?;
+    match fmt {
+        DisplayFormat::PowerWorld => Ok(DisplayData::PowerWorld(powerworld::parse_pwd_display(
+            bytes,
+        )?)),
+    }
+}
+
+/// Parse the display file at `path`, choosing the reader from `from` or, when
+/// `None`, from the extension. v0.2.2 infers PowerWorld `.pwd`.
+///
+/// # Errors
+/// [`Error::UnknownFormat`] if `from` is unrecognized or the extension cannot
+/// be mapped; [`Error::Io`] if the file cannot be read; the reader's own
+/// [`Error`] on malformed input.
+pub fn parse_display_file(
+    path: impl AsRef<std::path::Path>,
+    from: Option<&str>,
+) -> Result<DisplayData> {
+    let path = path.as_ref();
+    let fmt = match from {
+        Some(f) => {
+            display_format_from_name(f).ok_or_else(|| Error::UnknownFormat(f.to_string()))?
+        }
+        None => match path
+            .extension()
+            .and_then(|e| e.to_str())
+            .map(str::to_ascii_lowercase)
+            .as_deref()
+        {
+            Some("pwd") => DisplayFormat::PowerWorld,
+            other => {
+                return Err(Error::UnknownFormat(format!(
+                    "cannot infer display format from file extension {other:?}; \
+                     pass an explicit display format"
+                )));
+            }
+        },
+    };
+    let bytes = std::fs::read(path)?;
+    match fmt {
+        DisplayFormat::PowerWorld => Ok(DisplayData::PowerWorld(powerworld::parse_pwd_display(
+            &bytes,
+        )?)),
+    }
 }
 
 /// Whether a format name means a PyPSA CSV folder. PyPSA folders are directory
@@ -215,14 +358,13 @@ pub fn parse_file(path: impl AsRef<std::path::Path>, from: Option<&str>) -> Resu
     // because the display sibling ships next to every case file in the wild
     // and carries no case data.
     if from.is_none() && ext.as_deref() == Some("pwd") {
-        return Err(Error::UnknownFormat(
-            "a PowerWorld .pwd is the oneline display, not case data; \
-             powerworld::parse_pwd reads its substation coordinates"
-                .into(),
-        ));
+        return Err(display_file_guidance());
     }
     let fmt_hint = match from {
         Some(f) => {
+            if display_format_from_name(f).is_some() {
+                return Err(display_file_guidance());
+            }
             Some(target_format_from_name(f).ok_or_else(|| Error::UnknownFormat(f.to_string()))?)
         }
         None => {

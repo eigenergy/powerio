@@ -794,7 +794,7 @@ fn close(a: f64, b: f64) {
 fn parse_file_dispatch_precedes_the_text_read() {
     // Format selection errors must be UnknownFormat, never the UTF-8 read
     // error a binary file would hit first: the .pwd display sibling ships
-    // next to every case in the wild and gets its own pointer, and an
+    // next to every case in the wild and gets its display API pointer, and an
     // unmapped extension errors without touching the file at all.
     let dir = std::env::temp_dir();
 
@@ -806,7 +806,7 @@ fn parse_file_dispatch_precedes_the_text_read() {
         matches!(err, powerio::Error::UnknownFormat(_)),
         "pwd is UnknownFormat with a pointer, got: {err}"
     );
-    assert!(err.to_string().contains("oneline display"), "{err}");
+    assert!(err.to_string().contains("parse_display_file"), "{err}");
 
     // Unmapped extension: UnknownFormat even though the file does not exist,
     // because the extension settles the question before any read.

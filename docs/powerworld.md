@@ -415,12 +415,18 @@ case stores zero shunt MW and the reader sets G = 0.
 
 ## The .pwd display format: substation coordinates
 
-`parse_pwd` decodes one subset of the display sibling, the substation
+`.pwd` files are display artifacts, not network cases, so `parse_file`
+rejects them with a pointer to the display API. Use
+`parse_display_file(path, None)` / `parse_display_bytes(bytes, "pwd")` for
+the generic surface, or the lower level PowerWorld helpers
+`parse_pwd_file`, `parse_pwd_display`, and `parse_pwd`. The display result
+is `DisplayData::PowerWorld(PwdDisplay { canvas_width, canvas_height,
+stamp, substations })`; Python returns `DisplayData("powerworld",
+PwdDisplay(...))`.
+
+The `.pwd` decoder reads one subset of the display sibling, the substation
 symbols, established by differential analysis of seven files spanning the
-June 2016 through 2022 writer eras (ACTIVSg200 vendored, the two fetched
-ACTIVSg2000 displays, the TAMU distributed ACTIVSg200 Illinois display
-mislabeled ACTIVSg2000.pwd, and the local ACTIVSg500, published
-ACTIVSg2000, and Hawaii40 sets). Every other drawing object type (buses,
+June 2016 through 2022 writer eras. Every other drawing object type (buses,
 branch pies, transmission lines, field labels), the palettes, fonts,
 layers, and the substation record style tails stay undecoded.
 
