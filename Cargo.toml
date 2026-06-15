@@ -10,7 +10,7 @@ resolver = "2"
 # via `key.workspace = true`, so a release bump touches this version and the
 # two dependency pins below.
 [workspace.package]
-version = "0.2.2"
+version = "0.3.0"
 edition = "2024"
 rust-version = "1.86"
 license = "MIT OR Apache-2.0"
