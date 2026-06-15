@@ -218,6 +218,34 @@ def test_to_normalized_filters_out_of_service():
     assert n.source_format == "Normalized"
 
 
+def test_to_normalized_preserves_source_bus_ids():
+    src = """function mpc = sparseids
+mpc.version = '2';
+mpc.baseMVA = 100;
+mpc.bus = [
+\t1\t3\t0\t0\t0\t0\t1\t1\t0\t230\t1\t1.1\t0.9;
+\t2\t1\t0\t0\t0\t0\t1\t1\t0\t230\t1\t1.1\t0.9;
+\t3\t1\t0\t0\t0\t0\t1\t1\t0\t230\t1\t1.1\t0.9;
+\t4\t1\t0\t0\t0\t0\t1\t1\t0\t230\t1\t1.1\t0.9;
+\t10\t1\t50\t10\t0\t0\t1\t1\t0\t230\t1\t1.1\t0.9;
+];
+mpc.gen = [
+\t1\t0\t0\t100\t-100\t1\t100\t1\t200\t0\t0\t0\t0\t0\t0\t0\t0\t0\t0\t0\t0;
+];
+mpc.branch = [
+\t1\t2\t0.01\t0.1\t0\t0\t0\t0\t0\t0\t1\t-360\t360;
+\t2\t3\t0.01\t0.1\t0\t0\t0\t0\t0\t0\t1\t-360\t360;
+\t3\t4\t0.01\t0.1\t0\t0\t0\t0\t0\t0\t1\t-360\t360;
+\t4\t10\t0.01\t0.1\t0\t0\t0\t0\t0\t0\t1\t-360\t360;
+];
+"""
+    n = powerio.parse_str(src).to_normalized()
+    assert [bus["id"] for bus in n.buses] == [1, 2, 3, 4, 10]
+    assert n.loads[0]["bus"] == 10
+    assert n.branches[-1]["from_id"] == 4
+    assert n.branches[-1]["to_id"] == 10
+
+
 def test_parse_bad_path_raises():
     # I/O failures map to the standard OSError subclass, not PowerIOError.
     with pytest.raises(FileNotFoundError):

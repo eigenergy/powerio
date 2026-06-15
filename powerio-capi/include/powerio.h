@@ -141,10 +141,10 @@ void pio_network_free(PioNetwork *net);
 
 /**
  * Normalize `net` into a NEW per-unit network handle: per unit, radians,
- * out-of-service filtered, densely reindexed, bus types canonicalized (see
- * `Network::to_normalized`). The result is independent of `net`; free both
- * with [`pio_network_free`]. Every extractor and [`pio_to_json`] works on it
- * unchanged (the handle is per unit, not MW). Returns `NULL` on error (no
+ * out-of-service filtered, source bus ids preserved, bus types canonicalized
+ * (see `Network::to_normalized`). The result is independent of `net`; free
+ * both with [`pio_network_free`]. Every extractor and [`pio_to_json`] works on
+ * it unchanged (the handle is per unit, not MW). Returns `NULL` on error (no
  * reference bus can be chosen, or a non-positive base MVA) and writes the
  * message into `errbuf`.
  */
