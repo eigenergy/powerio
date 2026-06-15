@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.3.0
+## 0.2.3
 
 - Normalization: `Network::to_normalized` preserves source bus ids instead of
   renumbering surviving buses to dense 1-based ids. Dense row mapping remains
