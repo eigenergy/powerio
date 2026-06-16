@@ -36,6 +36,7 @@ class PyCase:
         "PowerWorld",
         "PandapowerJson",
         "PowerWorldBinary",
+        "PowerFactory",
         "InMemory",
         "Normalized",
         "Gridfm",

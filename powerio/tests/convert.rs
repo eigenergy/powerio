@@ -808,6 +808,26 @@ fn parse_file_dispatch_precedes_the_text_read() {
     );
     assert!(err.to_string().contains("parse_display_file"), "{err}");
 
+    let pfd = dir.join("powerio_test_dispatch.pfd");
+    std::fs::write(&pfd, [0x47u8, 0x50, 0x0c, 0x2a, 0x07, 0x4b, 0xfa]).unwrap();
+    for from in [None, Some("pfd"), Some("powerfactory")] {
+        let err = parse_file(&pfd, from).unwrap_err();
+        assert!(
+            err.to_string().contains("PowerFactory .pfd"),
+            "pfd dispatch should reach the binary classifier, got: {err}"
+        );
+        assert!(
+            err.to_string().contains("unsupported"),
+            "pfd rejection should be explicit, got: {err}"
+        );
+    }
+    let _ = std::fs::remove_file(&pfd);
+    let err = powerio::parse_str("not used", "pfd").unwrap_err();
+    assert!(
+        matches!(err, powerio::Error::UnknownFormat(_)),
+        "parse_str must not accept binary pfd input, got: {err}"
+    );
+
     // Unmapped extension: UnknownFormat even though the file does not exist,
     // because the extension settles the question before any read.
     let err = parse_file(dir.join("powerio_test_dispatch.xyz"), None).unwrap_err();

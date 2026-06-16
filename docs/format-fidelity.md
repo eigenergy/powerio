@@ -104,6 +104,10 @@ in Python), naming the table and counting the affected rows.
 - **PowerWorld** `.aux` carries no system base, so the reader defaults to 100 MVA.
   No third-party `.aux` reader exists, so that writer is validated by powerio's own
   read back plus a PowerModels JSON bridge.
+- **PowerFactory** DGS exports (`.dgs`) are read only; the encrypted `.pfd`
+  project export is recognized but rejected with a `PowerFactory .pfd` error
+  (no public decoder), pointing at the DGS path. See
+  [the PowerFactory notes](powerfactory.md).
 - **MATPOWER** canonical output (for a case that did not originate as MATPOWER)
   omits dcline; the byte exact echo path keeps it when the case was read from
   MATPOWER. Storage is written as an `mpc.storage` block.

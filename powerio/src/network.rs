@@ -140,6 +140,14 @@ pub enum SourceFormat {
     /// `.pwb` writer and no retained source text, so writing goes through
     /// another format's writer.
     PowerWorldBinary,
+    /// Read from a DIgSILENT PowerFactory `.pfd` binary project. Read only:
+    /// v0.2.4 recognizes the source shape but rejects the opaque project
+    /// container until a decoded layout is proven.
+    PowerFactory,
+    /// Read from a DIgSILENT PowerFactory DGS plaintext export (`.dgs`). This is
+    /// the format PowerFactory writes for data exchange, distinct from the
+    /// encrypted `.pfd` project; read only (no DGS writer).
+    PowerFactoryDgs,
     /// Built in memory (e.g. from synth or an edited case); no source text.
     InMemory,
     /// A normalized derived view ([`Network::to_normalized`]): per unit, radians,

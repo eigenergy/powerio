@@ -32,6 +32,14 @@ The following formats are currently supported with read/write functionality:
 - [pandapower](https://www.pandapower.org/) `pandapowerNet` JSON
 - [PyPSA](https://pypsa.org/) static CSV folders
 - [GridFM](https://github.com/gridfm) `.parquet`
+- [DIgSILENT PowerFactory](https://www.digsilent.de/) DGS plaintext exports `.dgs`, read only
+
+DIgSILENT PowerFactory `.dgs` is the plaintext interchange format PowerFactory
+writes for data exchange; powerio reads it (V5 and V7 schemas). The `.pfd`
+project export is an encrypted binary container with no public decoder, so
+`parse_file` recognizes it but rejects it with an error that points at the DGS
+export path. Evidence, the DGS mapping, and parity results are in
+[docs/powerfactory.md](docs/powerfactory.md).
 
 Support for the following formats is under development (see the open pull requests):
 - [surge](https://github.com/amptimal/surge) `.surge.json` 

@@ -44,8 +44,10 @@ graph = net.to_networkx()    # needs powerio[graph]
 
 `parse_file(path, from_=None)` reads network case files (inferred from the
 extension, or forced with `from_`); `parse_str(text, format)` reads in-memory
-case text. Display artifacts are not network cases, so they use the separate
-display API:
+case text. Binary cases such as PowerWorld `.pwb` and recognized PowerFactory
+`.pfd` projects enter only through `parse_file`; `.pfd` rejects until a decoded
+layout is proven. Display artifacts are not network cases, so they use the
+separate display API:
 
 ```python
 from pathlib import Path

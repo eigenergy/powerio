@@ -4,8 +4,12 @@
 //! Each format is one module here, owning its reader and/or writer: MATPOWER
 //! `.m`, PowerModels JSON, PSS/E `.raw`, PowerWorld `.aux`, egret
 //! `ModelData` JSON, pandapower JSON, and PyPSA CSV folders. PowerWorld `.pwb`
-//! cases and `.pwd` displays are read only. Case input and output formats meet
-//! at the hub, so adding a format is one module, not a change to any other.
+//! cases are read only. DIgSILENT PowerFactory DGS exports (`.dgs`) are read
+//! only; the encrypted `.pfd` project export is recognized but rejected with a
+//! named error pointing at the DGS path. `.pwd` displays are read only display
+//! artifacts. Case input
+//! and output formats meet at the hub, so adding a format is one module, not a
+//! change to any other.
 //! [`parse_file`] reads Network cases, detecting the format from its extension;
 //! [`parse_display_file`] reads display artifacts such as PowerWorld `.pwd`.
 //! [`write_as`]
@@ -36,17 +40,21 @@ use serde_json::{Map, Value};
 use crate::network::{Bus, BusId, BusType, Network, SourceFormat};
 use crate::{Error, Result};
 
+mod dgs;
 mod egret;
 mod matpower;
 mod pandapower;
+mod powerfactory;
 mod powermodels;
 pub mod powerworld;
 mod psse;
 mod pypsa;
 
+pub use dgs::{parse_dgs, parse_dgs_file};
 pub use egret::{parse_egret_json, write_egret_json};
 pub use matpower::{parse_matpower, parse_matpower_file, write_matpower};
 pub use pandapower::{parse_pandapower_json, write_pandapower_json};
+pub use powerfactory::parse_powerfactory_pfd;
 pub use powermodels::{parse_powermodels_json, write_powermodels_json};
 pub use powerworld::{PwdDisplay, PwdSubstation, parse_powerworld, write_powerworld};
 pub use psse::{parse_psse, write_psse};
@@ -303,17 +311,36 @@ fn is_pypsa_csv_name(name: &str) -> bool {
     )
 }
 
+fn is_powerfactory_name(name: &str) -> bool {
+    matches!(
+        name.to_ascii_lowercase().replace(['-', '_'], "").as_str(),
+        "powerfactory" | "pfd"
+    )
+}
+
+/// Whether a format name means a DIgSILENT DGS plaintext export. Kept separate
+/// from [`is_powerfactory_name`] so the encrypted-binary `.pfd` rejection never
+/// shadows the readable `.dgs` plaintext path.
+fn is_dgs_name(name: &str) -> bool {
+    matches!(
+        name.to_ascii_lowercase().replace(['-', '_'], "").as_str(),
+        "dgs" | "powerfactorydgs"
+    )
+}
+
 /// Parse the case file at `path`, choosing the reader from `from` (the
-/// [`target_format_from_name`] names plus `pypsa-csv`/`pypsa` and `pwb`) or,
+/// [`target_format_from_name`] names plus `pypsa-csv`/`pypsa`, `pwb`, and
+/// `powerfactory`/`pfd`) or,
 /// when `None`, from the path: a directory containing `network.csv` parses as
 /// a PyPSA CSV folder (any other directory fails: [`Error::UnknownFormat`]
 /// when its name maps to no extension, the I/O error otherwise), and a
-/// file maps by extension (`m`/`json`/`raw`/`aux`/`pwb`), case-insensitively
-/// (issue #97: `.RAW` is as common as `.raw` in the wild). A `.json` file is
-/// sniffed three ways: pandapower (`"_class": "pandapowerNet"`), egret (top
-/// level `elements` and `system`), else PowerModels. Pass `from` to force one.
-/// `.pwb` binaries are read only and carry no retained source. Returns
-/// [`Parsed`]: the network plus the reader's fidelity warnings.
+/// file maps by extension (`m`/`json`/`raw`/`aux`/`pwb`/`pfd`),
+/// case-insensitively (issue #97: `.RAW` is as common as `.raw` in the wild).
+/// A `.json` file is sniffed three ways: pandapower (`"_class":
+/// "pandapowerNet"`), egret (top level `elements` and `system`), else
+/// PowerModels. Pass `from` to force one. `.pwb` and `.pfd` binaries are read
+/// only and carry no retained source; `.pfd` rejects until a decoded layout is
+/// proven. Returns [`Parsed`]: the network plus the reader's fidelity warnings.
 ///
 /// The one path-based parser the CLI and the Python/C/Julia bindings share (each
 /// exposes the same `parse_file(path, from)` shape), so adding a source format is
@@ -351,6 +378,24 @@ pub fn parse_file(path: impl AsRef<std::path::Path>, from: Option<&str>) -> Resu
             network,
             warnings: Vec::new(),
         });
+    }
+    if from.is_some_and(is_powerfactory_name) || (from.is_none() && ext.as_deref() == Some("pfd")) {
+        let bytes = std::fs::read(path)?;
+        let stem = path.file_stem().and_then(|s| s.to_str());
+        let network = powerfactory::parse_powerfactory_pfd(&bytes, stem)?;
+        return Ok(Parsed {
+            network,
+            warnings: Vec::new(),
+        });
+    }
+    // DIgSILENT DGS is plaintext but read only (no writer), so it gets a
+    // dedicated branch like the `.pwb`/`.pfd` binaries rather than a
+    // `TargetFormat`. The reader retains the source for a same-format echo.
+    if from.is_some_and(is_dgs_name) || (from.is_none() && ext.as_deref() == Some("dgs")) {
+        let text = std::fs::read_to_string(path)?;
+        let stem = path.file_stem().and_then(|s| s.to_str());
+        let (network, warnings) = dgs::parse_dgs_source(Arc::new(text), stem)?;
+        return Ok(Parsed { network, warnings });
     }
     // Settle the format before touching the file: an unmapped or binary
     // extension must surface as UnknownFormat, not as the UTF-8 read error
@@ -791,6 +836,8 @@ mod tests {
             SourceFormat::Gridfm,
             SourceFormat::PypsaCsv,
             SourceFormat::PowerWorldBinary,
+            SourceFormat::PowerFactory,
+            SourceFormat::PowerFactoryDgs,
         ] {
             assert_eq!(target_format_from_name(&format!("{sf:?}")), None);
         }

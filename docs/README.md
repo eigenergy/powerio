@@ -6,6 +6,8 @@ crate doc comment.
 - [format-fidelity.md](format-fidelity.md): numeric conventions every reader
   and writer follows, how they're validated against four independent tools, and the
   per-format limits reported in `Conversion::warnings`.
+- [powerfactory.md](powerfactory.md): reading PowerFactory data via the DGS
+  plaintext export, and why the encrypted `.pfd` project is rejected instead.
 - [matrices.md](matrices.md): the matrix family `powerio-matrix` builds and the
   sign, tap, per unit, and DC conventions across them.
 - [dcopf-bundle.md](dcopf-bundle.md): the Matrix Market + manifest schema the

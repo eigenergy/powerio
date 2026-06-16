@@ -106,9 +106,9 @@ const char *pio_version(void);
 /**
  * Parse `path` (format from extension, or `from` if non-NULL) into a case
  * handle. `from` accepts the [`pio_parse_str`] format names plus
- * `pypsa-csv`/`pypsa`; a PyPSA CSV folder is a directory, so it can only enter
- * through this function, with `from = "pypsa-csv"` (or NULL when the directory
- * holds a `network.csv`). Read fidelity warnings attach to the handle
+ * `pypsa-csv`/`pypsa`, `pwb`, and `powerfactory`/`pfd`; PyPSA folders and
+ * binary cases can only enter through this function. Read fidelity warnings
+ * attach to the handle
  * ([`pio_parse_warnings`]). Returns `NULL` on error and writes the message
  * into `errbuf`.
  */

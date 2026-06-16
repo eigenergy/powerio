@@ -1,5 +1,22 @@
 # Changelog
 
+## 0.2.4
+
+- PowerFactory DGS: a `dgs` reader for DIgSILENT's plaintext interchange format,
+  the path PowerFactory uses for data exchange. Handles both schema generations
+  (V5 integer ids / dot decimals, V7 string FIDs / comma decimals), resolves
+  connectivity through `StaCubic` cubicles, and maps the object model into
+  `Network`. `parse_file` reads `.dgs` and `parse_file(.., Some("dgs"))` forces
+  it. Read only. The IEEE 39 DGS export decodes to the exact `case39.m` topology;
+  the IEEE 118 export to the `case118.m` bus set and generator count
+  (`powerio/tests/dgs_parity.rs`).
+- PowerFactory `.pfd`: `parse_file` recognizes the extension and explicit
+  `powerfactory` / `pfd` source names, then rejects the encrypted binary project
+  container with a named unsupported error that points at the DGS export path.
+  The payload is statistically a cipher stream (uniform byte distribution, no
+  zero runs), so there is no decode without the key; see
+  [docs/powerfactory.md](docs/powerfactory.md).
+
 ## 0.2.3
 
 - Normalization: `Network::to_normalized` preserves source bus ids instead of

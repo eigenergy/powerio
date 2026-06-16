@@ -148,7 +148,7 @@ enum Command {
     },
 }
 
-/// A case interchange format, for `--to` / `--from`. `gridfm` is read-only here:
+/// A case interchange format, for `--to` / `--from`. `gridfm` is read only here:
 /// `convert --from gridfm` reads a Parquet dataset, but writing a gridfm dataset
 /// is the dedicated `gridfm` subcommand, so `--to gridfm` is rejected.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, ValueEnum)]
@@ -167,12 +167,15 @@ enum FormatArg {
     PandapowerJson,
     #[value(name = "pypsa-csv", alias = "pypsa")]
     PypsaCsv,
-    /// Read a gridfm-datakit Parquet dataset directory (read-only).
+    /// Read a gridfm-datakit Parquet dataset directory (read only).
     #[value(name = "gridfm")]
     Gridfm,
-    /// Read a PowerWorld .pwb binary case (read-only).
+    /// Read a PowerWorld .pwb binary case (read only).
     #[value(name = "pwb")]
     Pwb,
+    /// Read a DIgSILENT PowerFactory .pfd binary project (read only).
+    #[value(name = "powerfactory", alias = "pfd")]
+    PowerFactory,
 }
 
 impl FormatArg {
@@ -194,6 +197,9 @@ impl FormatArg {
                 "`convert` cannot write a gridfm dataset; use the `gridfm` subcommand"
             ),
             FormatArg::Pwb => anyhow::bail!("PowerWorld .pwb is read only; it cannot be a target"),
+            FormatArg::PowerFactory => {
+                anyhow::bail!("PowerFactory .pfd is read only; it cannot be a target")
+            }
         })
     }
 
@@ -212,6 +218,7 @@ impl FormatArg {
             FormatArg::PypsaCsv => "pypsa-csv",
             FormatArg::Gridfm => "gridfm",
             FormatArg::Pwb => "pwb",
+            FormatArg::PowerFactory => "powerfactory",
         }
     }
 }

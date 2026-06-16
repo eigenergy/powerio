@@ -4,6 +4,8 @@
 source text back to the same format, and converts between MATPOWER, PSS/E,
 PowerWorld, PowerModels JSON, and egret JSON. Display artifacts such as
 PowerWorld `.pwd` use `parse_display_file` instead of `parse_file`.
+PowerFactory `.pfd` projects are recognized as opaque binary inputs and rejected
+until a decoded layout is proven.
 
 ```rust
 use powerio::{TargetFormat, parse_file};
