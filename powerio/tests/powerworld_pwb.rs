@@ -1787,6 +1787,90 @@ fn icseg_uiuc_pwb_matches_raw_and_matpower() {
     }
 }
 
+#[test]
+fn icseg_brazilian_pwb_matches_raw_and_epc_topology() {
+    let Some(root) = std::env::var_os("POWERIO_ICSEG_CORPUS") else {
+        eprintln!("skipped: POWERIO_ICSEG_CORPUS is not set");
+        return;
+    };
+    let root = std::path::PathBuf::from(root).join("brazilian_7_bus");
+    let pwb = parse_file(root.join("Brazilian_7_bus_Equiv_Model.pwb"), None)
+        .unwrap()
+        .network;
+    for other_path in [
+        "PSSE/Brazilian_7_bus_Equiv_Model.RAW",
+        "PSLF/Brazilian_7_bus_Equiv_Model.EPC",
+    ] {
+        let other = parse_file(root.join(other_path), None).unwrap().network;
+        assert_eq!(pwb.buses.len(), other.buses.len(), "{other_path} buses");
+        assert_eq!(
+            pwb.branches.len(),
+            other.branches.len(),
+            "{other_path} branches"
+        );
+        assert_eq!(
+            pwb.generators.len(),
+            other.generators.len(),
+            "{other_path} generators"
+        );
+        assert_eq!(
+            branch_undirected_fingerprint(&pwb),
+            branch_undirected_fingerprint(&other),
+            "{other_path} topology"
+        );
+        assert_eq!(
+            branch_rx_fingerprint(&pwb),
+            branch_rx_fingerprint(&other),
+            "{other_path} branches"
+        );
+    }
+}
+
+#[test]
+fn datasets_powerfactory_ieee14_pwb_decodes() {
+    let Some(root) = std::env::var_os("POWERIO_DATASETS") else {
+        eprintln!("skipped: POWERIO_DATASETS is not set");
+        return;
+    };
+    let path = std::path::PathBuf::from(root)
+        .join("powerfactory-corpus/ieee14_multisoftware/powerworld/Assignment1.PWB");
+    if !path.exists() {
+        eprintln!("skipped: {} is absent", path.display());
+        return;
+    }
+    let pwb = parse_file(path, Some("pwb")).unwrap().network;
+    assert_eq!(pwb.buses.len(), 14);
+    assert_eq!(pwb.loads.len(), 11);
+    assert_eq!(pwb.generators.len(), 5);
+    assert_eq!(pwb.shunts.len(), 1);
+    assert_eq!(pwb.branches.len(), 20);
+    assert_eq!(
+        branch_undirected_fingerprint(&pwb),
+        [
+            (1, 2),
+            (1, 5),
+            (2, 3),
+            (2, 4),
+            (2, 5),
+            (3, 4),
+            (4, 5),
+            (4, 7),
+            (4, 9),
+            (5, 6),
+            (6, 11),
+            (6, 12),
+            (6, 13),
+            (7, 8),
+            (7, 9),
+            (9, 10),
+            (9, 14),
+            (10, 11),
+            (12, 13),
+            (13, 14),
+        ]
+    );
+}
+
 fn assert_header338_match(pwb: &Network, other: &Network, label: &str) {
     assert_case_shape_and_totals_match(pwb, other, label);
     assert_eq!(tap_count(pwb), tap_count(other), "{label} transformer taps");

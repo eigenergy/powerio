@@ -13,7 +13,7 @@
 //! must be values this reader has seen and verified). A file that does not
 //! match the validated layout fails loudly; nothing is guessed silently.
 //!
-//! Supported header constants: 338, 368, 425, 483, 508, 537, 550, and 551.
+//! Supported header constants: 338, 368, 425, 483, 508, 537, 550, 551, and 554.
 //! Older ICSEG, ACTIVSg, Hawaii40, and Texas7k saves share the bus, load,
 //! shunt, and branch heads decoded below; generator records use either the
 //! plain bus + ID shape or the regulated bus shape keyed in [`parse_pwb`].
@@ -115,16 +115,25 @@ pub fn parse_pwb(bytes: &[u8], name_hint: Option<&str>) -> Result<Network> {
         338 | 368 | 425 => GenVariants {
             plain: true,
             reg: false,
+            simple_reg: false,
         },
         508 => GenVariants {
             plain: true,
             reg: true,
+            simple_reg: false,
+        },
+        554 => GenVariants {
+            plain: false,
+            reg: false,
+            simple_reg: true,
         },
         _ => GenVariants {
             plain: false,
             reg: true,
+            simple_reg: false,
         },
     };
+    let branch_count_can_include_trailer = header_constant == 554;
     // The narrow bus glue window prices the common files (see
     // bus_table_candidates); the wide retry exists so a small node level
     // resave (a bus table under 256 records with the v21 writer's 52 byte
@@ -133,28 +142,44 @@ pub fn parse_pwb(bytes: &[u8], name_hint: Option<&str>) -> Result<Network> {
     // only the glue combinations the narrow pass could not reach, and
     // shares the bus run cache so nothing is walked twice.
     let bus_runs = RefCell::new(HashMap::new());
-    match search_table_chain(bytes, name_hint, gen_variants, &bus_runs, false) {
+    match search_table_chain(
+        bytes,
+        name_hint,
+        gen_variants,
+        branch_count_can_include_trailer,
+        &bus_runs,
+        false,
+    ) {
         Some(net) => net,
-        None => search_table_chain(bytes, name_hint, gen_variants, &bus_runs, true).unwrap_or_else(
-            || {
-                Err(Error::FormatRead {
-                    format: FMT,
-                    message: "no table chain matches the validated .pwb layouts \
+        None => search_table_chain(
+            bytes,
+            name_hint,
+            gen_variants,
+            branch_count_can_include_trailer,
+            &bus_runs,
+            true,
+        )
+        .unwrap_or_else(|| {
+            Err(Error::FormatRead {
+                format: FMT,
+                message: "no table chain matches the validated .pwb layouts \
                                   (buses, loads, generators, shunts, branches in sequence)"
-                        .into(),
-                })
-            },
-        ),
+                    .into(),
+            })
+        }),
     }
 }
 
 /// Which generator record layouts the header constant admits (see
-/// [`parse_pwb`]): the 425/508 era bus + ID shape (`plain`) and the 2021 era
-/// regulated bus shape (`reg`, [`read_gen_reg_record`]).
+/// [`parse_pwb`]): the 425/508 era bus + ID shape (`plain`), the 2021 era
+/// regulated bus shape (`reg`, [`read_gen_reg_record`]), and the 554 shape
+/// whose regulated bus record omits the presence byte (`simple_reg`,
+/// [`read_gen_reg_simple_record`]).
 #[derive(Clone, Copy)]
 struct GenVariants {
     plain: bool,
     reg: bool,
+    simple_reg: bool,
 }
 
 /// One full depth first search for the table chain; `None` when no chain
@@ -165,6 +190,7 @@ fn search_table_chain(
     bytes: &[u8],
     name_hint: Option<&str>,
     gen_variants: GenVariants,
+    branch_count_can_include_trailer: bool,
     bus_runs: &RefCell<BusRuns>,
     wide_bus_glue: bool,
 ) -> Option<Result<Network>> {
@@ -189,6 +215,7 @@ fn search_table_chain(
         let load_runs = RefCell::new(HashMap::new());
         let gen_runs = RefCell::new(HashMap::new());
         let gen_reg_runs = RefCell::new(HashMap::new());
+        let gen_reg_simple_runs = RefCell::new(HashMap::new());
         let shunt_runs = RefCell::new(HashMap::new());
         let branch_runs = RefCell::new(HashMap::new());
         // The load table's count word sits past the final bus record's
@@ -202,7 +229,7 @@ fn search_table_chain(
             &bus_ids,
             read_load_record,
             &load_runs,
-            96,
+            128,
             12,
         ) {
             // The generator table reads through the record layouts the
@@ -242,15 +269,37 @@ fn search_table_chain(
                         })
                         .into_iter()
                         .flatten(),
+                )
+                .chain(
+                    gen_variants
+                        .simple_reg
+                        .then(|| {
+                            device_table_candidates(
+                                bytes,
+                                l_end..l_end.saturating_add(RESYNC_WINDOW),
+                                &bus_ids,
+                                read_gen_reg_simple_record,
+                                &gen_reg_simple_runs,
+                                128,
+                                40,
+                            )
+                        })
+                        .into_iter()
+                        .flatten(),
                 );
             for (generators, g_end) in gen_candidates {
                 if gen_table_continues(bytes, g_end, &bus_ids, gen_variants) {
                     continue;
                 }
                 if !bus_shunts.is_empty() {
-                    if let Some(branches) =
-                        find_branch_table(bytes, g_end, &bus_ids, &bus_names, &branch_runs)
-                    {
+                    if let Some(branches) = find_branch_table(
+                        bytes,
+                        g_end,
+                        &bus_ids,
+                        &bus_names,
+                        &branch_runs,
+                        branch_count_can_include_trailer,
+                    ) {
                         keep_best_chain(
                             &mut best,
                             chain_score(&loads, &bus_shunts, &branches, &generators),
@@ -274,13 +323,18 @@ fn search_table_chain(
                     48,
                     28,
                 ) {
-                    let Some(branches) =
-                        find_branch_table(bytes, s_end, &bus_ids, &bus_names, &branch_runs)
-                    else {
+                    let Some(branches) = find_branch_table(
+                        bytes,
+                        s_end,
+                        &bus_ids,
+                        &bus_names,
+                        &branch_runs,
+                        branch_count_can_include_trailer,
+                    ) else {
                         continue;
                     };
                     let mut shunts = shunts;
-                    shunts.extend(bus_shunts.clone());
+                    extend_unique_shunts(&mut shunts, &bus_shunts);
                     keep_best_chain(
                         &mut best,
                         chain_score(&loads, &shunts, &branches, &generators),
@@ -294,9 +348,14 @@ fn search_table_chain(
                         ),
                     );
                 }
-                if let Some(branches) =
-                    find_branch_table(bytes, g_end, &bus_ids, &bus_names, &branch_runs)
-                {
+                if let Some(branches) = find_branch_table(
+                    bytes,
+                    g_end,
+                    &bus_ids,
+                    &bus_names,
+                    &branch_runs,
+                    branch_count_can_include_trailer,
+                ) {
                     keep_best_chain(
                         &mut best,
                         chain_score(&loads, &bus_shunts, &branches, &generators),
@@ -341,6 +400,18 @@ fn chain_score(
     loads.len() + shunts.len() + branches.len() + generators.len()
 }
 
+fn extend_unique_shunts(shunts: &mut Vec<Shunt>, extra: &[Shunt]) {
+    for shunt in extra {
+        if !shunts.iter().any(|existing| {
+            existing.bus == shunt.bus
+                && (existing.g - shunt.g).abs() <= 1e-9
+                && (existing.b - shunt.b).abs() <= 1e-9
+        }) {
+            shunts.push(shunt.clone());
+        }
+    }
+}
+
 fn gen_table_continues(
     bytes: &[u8],
     after: usize,
@@ -350,6 +421,7 @@ fn gen_table_continues(
     (after..after.saturating_add(RESYNC_WINDOW).min(bytes.len())).any(|p| {
         (variants.plain && read_gen_record(bytes, p, bus_ids).is_ok())
             || (variants.reg && read_gen_reg_record(bytes, p, bus_ids).is_ok())
+            || (variants.simple_reg && read_gen_reg_simple_record(bytes, p, bus_ids).is_ok())
     })
 }
 
@@ -526,7 +598,7 @@ fn string_at(b: &[u8], at: usize, max: usize) -> Probe<String> {
 /// Validate the file head and return the writer format constant (the u64 at
 /// offset 0x08) for the layout keying in [`parse_pwb`].
 fn expect_header(b: &[u8]) -> Result<u64> {
-    const DECODED: [u64; 8] = [338, 368, 425, 483, 508, 537, 550, 551];
+    const DECODED: [u64; 9] = [338, 368, 425, 483, 508, 537, 550, 551, 554];
     let bad = || Error::FormatRead {
         format: FMT,
         message: "not a recognized PowerWorld binary case (header magic mismatch); \
@@ -547,7 +619,7 @@ fn expect_header(b: &[u8]) -> Result<u64> {
     if c != 20 || !DECODED.contains(&v) {
         return Err(unsupported_vintage(format!(
             "header format words ({v}, {c}); the decoded eras are \
-             338/368/425/483/508/537/550/551 with 20"
+             338/368/425/483/508/537/550/551/554 with 20"
         )));
     }
     Ok(v)
@@ -582,7 +654,7 @@ fn unsupported_vintage(detail: impl std::fmt::Display) -> Error {
         format: FMT,
         message: format!(
             "unsupported PowerWorld .pwb vintage: {detail}; only the validated \
-             338/368/425/483/508/537/550/551 layouts are decoded (see docs/powerworld.md)"
+             338/368/425/483/508/537/550/551/554 layouts are decoded (see docs/powerworld.md)"
         ),
     }
 }
@@ -1217,6 +1289,35 @@ fn read_gen_reg_record(b: &[u8], at: usize, bus_ids: &BusIdSet) -> Probe<(Genera
         let _ = c.u8()?;
     }
     let v = read_gen_f32_block(&mut c)?;
+    read_gen_reg_tail(&mut c, bus, &v)
+}
+
+/// Header 554 regulated generator record: terminal bus, regulated bus,
+/// fixed capacity ID, two zero bytes, then the shared f32 block and the
+/// same status/RMPCT tail as [`read_gen_reg_record`].
+fn read_gen_reg_simple_record(
+    b: &[u8],
+    at: usize,
+    bus_ids: &BusIdSet,
+) -> Probe<(Generator, usize)> {
+    let mut c = Cur { b, pos: at };
+    let bus = c.u32()? as usize;
+    if !bus_ids.contains(bus) {
+        return Err("record references an unknown bus");
+    }
+    let reg = c.u32()? as usize;
+    if !bus_ids.contains(reg) {
+        return Err("regulated bus is not a known bus");
+    }
+    let _id = c.short_string_2()?;
+    if c.u8()? != 0 || c.u8()? != 0 {
+        return Err("generator record separator bytes not zero");
+    }
+    let v = read_gen_f32_block(&mut c)?;
+    read_gen_reg_tail(&mut c, bus, &v)
+}
+
+fn read_gen_reg_tail(c: &mut Cur<'_>, bus: usize, v: &[f64; 8]) -> Probe<(Generator, usize)> {
     if c.u8()? != 0 {
         return Err("generator record separator byte not zero");
     }
@@ -1228,7 +1329,7 @@ fn read_gen_reg_record(b: &[u8], at: usize, bus_ids: &BusIdSet) -> Probe<(Genera
     if !rmpct.is_finite() || !(0.0..=1000.0).contains(&rmpct) {
         return Err("implausible remote regulation percentage");
     }
-    Ok((gen_from_block(BusId(bus), &v, status & 1 == 1), c.pos))
+    Ok((gen_from_block(BusId(bus), v, status & 1 == 1), c.pos))
 }
 
 /// Shunt record: nominal MVAr as f32 at +24 from the record start, validated
@@ -1299,6 +1400,7 @@ fn find_branch_table(
     bus_ids: &BusIdSet,
     bus_names: &HashMap<String, BusId>,
     runs: &RefCell<HashMap<usize, Run<(Branch, u16)>>>,
+    count_can_include_trailer: bool,
 ) -> Option<Vec<Branch>> {
     // The gap between the shunt table end and the branch count word can
     // exceed one resync window; two cover every observed file.
@@ -1307,7 +1409,7 @@ fn find_branch_table(
         .min(b.len().saturating_sub(4));
     for at in from..limit {
         let count = u32::from_le_bytes(b[at..at + 4].try_into().unwrap()) as usize;
-        if count == 0 || count > 10_000_000 || !count_fits(b, at.saturating_add(4), count, 24) {
+        if count == 0 || count > 10_000_000 {
             continue;
         }
         // The branch table glue is longer than the device tables'; scan a
@@ -1317,16 +1419,27 @@ fn find_branch_table(
         else {
             continue;
         };
-        if let Some((branches, after)) = branch_run(b, runs, first, count, bus_ids, bus_names) {
-            // The end check must step exactly like the run: a bit 4 tail on
-            // the last record can hold more than one window of blob, and a
-            // forged short count ending on such a record would otherwise
-            // read as "no further record" and win.
-            let last_bit4 = branches.last().is_some_and(|(_, flags)| flags & 0x10 != 0);
-            let continues = (after..resync_end(b, after, last_bit4))
-                .any(|p| read_branch_head(b, p, bus_ids, bus_names).is_ok());
-            if !continues {
-                return Some(branches.into_iter().map(|(br, _)| br).collect());
+        let counts = [
+            Some(count),
+            (count_can_include_trailer && count > 1).then_some(count - 1),
+        ];
+        for effective_count in counts.into_iter().flatten() {
+            if !count_fits(b, at.saturating_add(4), effective_count, 24) {
+                continue;
+            }
+            if let Some((branches, after)) =
+                branch_run(b, runs, first, effective_count, bus_ids, bus_names)
+            {
+                // The end check must step exactly like the run: a bit 4 tail on
+                // the last record can hold more than one window of blob, and a
+                // forged short count ending on such a record would otherwise
+                // read as "no further record" and win.
+                let last_bit4 = branches.last().is_some_and(|(_, flags)| flags & 0x10 != 0);
+                let continues = (after..resync_end(b, after, last_bit4))
+                    .any(|p| read_branch_head(b, p, bus_ids, bus_names).is_ok());
+                if !continues {
+                    return Some(branches.into_iter().map(|(br, _)| br).collect());
+                }
             }
         }
     }

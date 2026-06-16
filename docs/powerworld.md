@@ -291,6 +291,16 @@ bus, regulated bus, ID, MW, and status each) and their name keyed aux
 export (BusName_NomVolt keys instead of BusNum) keeps them out of the
 committed aux comparison until the aux reader learns that vocabulary.
 
+Header 554 appears in the PowerFactory corpus's PowerWorld IEEE 14 save
+(`Assignment1.PWB`). It keeps the same bus, load, shunt, and branch heads,
+but widens the load table glue to 104 bytes and uses a regulated generator
+record without the 2021 era presence byte: terminal bus, regulated bus,
+fixed ID, two zero bytes, the shared f32 generator block, then the same
+status/RMPCT tail. Its branch table count includes one trailing non branch
+record; the 20 validated branch records are the standard IEEE 14 topology.
+The local datasets test pins the 14 bus, 11 load, 5 generator, 1 shunt,
+20 branch shape.
+
 ### Load record (validated on all 160 + 1417 + 1350 + 5095 loads of four files)
 
 u32 BusNum, variable length ShortString LoadID, one undecoded byte, then
@@ -510,6 +520,7 @@ with parity, classified and rejected, out of scope.
 | Texas7k 2030 build | local only | 550 | 0x66-0x167 | aux, offline strict alignment (name keyed export) | decoded, counts committed; 1058/1058 generators value checked offline | 7132 buses, 9555 branches |
 | Texas7k 2030 saved as v22 | local only | 537 | 0x66-0x167 | aux, offline strict alignment | decoded, counts committed | 7132 buses, 9555 branches |
 | Texas7k 2021 scenario snapshot | local only | 537 | 0x66-0x167 | same grid as the 2021 export | decoded, counts match the 2021 case | 6717 buses, 9140 branches |
+| PowerFactory corpus IEEE 14 PowerWorld save | local only | 554 | 0x06/0x07 | standard IEEE 14 topology | decoded, local datasets test | 14 buses, 20 branches |
 | 39 bus sample case | local only | 425 | 0x06/0x07 | ICSEG RAW/EPC sibling | decoded; counts, totals, and branch topology match | 39 buses, 46 branches |
 | 118 bus sample case | local only | 338 | 0x06 family | ICSEG RAW/EPC sibling | decoded; counts, totals, and branch topology match | 118 buses, 186 branches |
 | 12 bus course case | local only | 134 | — | — | rejected: header constant | |
