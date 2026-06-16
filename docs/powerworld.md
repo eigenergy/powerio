@@ -510,8 +510,8 @@ with parity, classified and rejected, out of scope.
 | Texas7k 2030 build | local only | 550 | 0x66-0x167 | aux, offline strict alignment (name keyed export) | decoded, counts committed; 1058/1058 generators value checked offline | 7132 buses, 9555 branches |
 | Texas7k 2030 saved as v22 | local only | 537 | 0x66-0x167 | aux, offline strict alignment | decoded, counts committed | 7132 buses, 9555 branches |
 | Texas7k 2021 scenario snapshot | local only | 537 | 0x66-0x167 | same grid as the 2021 export | decoded, counts match the 2021 case | 6717 buses, 9140 branches |
-| 39 bus sample case | local only | 425 | none found | — | rejected: no recognized bus record layout | |
-| 118 bus sample case | local only | 338 | — | — | rejected: header constant | |
+| 39 bus sample case | local only | 425 | 0x06/0x07 | ICSEG RAW/EPC sibling | decoded; counts, totals, and branch topology match | 39 buses, 46 branches |
+| 118 bus sample case | local only | 338 | 0x06 family | ICSEG RAW/EPC sibling | decoded; counts, totals, and branch topology match | 118 buses, 186 branches |
 | 12 bus course case | local only | 134 | — | — | rejected: header constant | |
 | 10 bus sample case | local only | 196 | — | — | rejected: header constant | |
 | 3 bus sample case | local only | pre 425 shape | — | — | rejected: header words | |

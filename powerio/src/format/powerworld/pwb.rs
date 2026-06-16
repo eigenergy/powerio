@@ -20,6 +20,13 @@
 //! Flag words are Delphi field presence bitmasks, and structural anchors
 //! reject unobserved variants.
 //!
+//! To add a new vintage, start with the smallest stable facts: header words,
+//! bus flag census, table count positions, record anchors, and companion
+//! export parity. Prefer widening a presence bit or table glue window only
+//! after a full record walk still validates every later table. A new layout
+//! belongs behind its own probe until a sibling `.aux`, `.raw`, `.epc`, or
+//! `.m` file proves that it shares an existing record family.
+//!
 //! The table search prices the format's structure (no field dictionary, so
 //! every table is located by validating record walks behind count word
 //! candidates), and the probe layer is built so that search allocates only
