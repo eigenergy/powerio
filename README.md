@@ -9,13 +9,16 @@
   >
 </p>
 
-PowerIO is a fast, universal parser and converter for power system case files. It aspires to be "the [pandoc](https://pandoc.org) for power systems." 
+PowerIO parses power system case files into a typed `Network`, converts between
+formats, and builds sparse matrices and graph views for solver and analysis
+code. Same format writes return retained source text when the reader supports
+it; cross format writes report fields the target cannot carry in warnings.
 
-Using PowerIO, you can build sparse matrices and graph views for downstream analysis and solver code. PowerIO can serve as a drop-in replacement for the data layers of many popular community libraries, enhancing interoperability between diverse packages and formats. 
-
-
-PowerIO is implemented in [Rust](https://rust-lang.org) with a low-level [C ABI](https://github.com/eigenergy/powerio/tree/main/powerio-capi); any
-language with a C foreign function interface (FFI) can call it, including [Python](#python) and [Julia](#julia). You can also use it directly in [Rust itself](#rust) or through the [command line](#command-line-interface-cli).
+The core is implemented in [Rust](https://rust-lang.org). The
+[C ABI](https://github.com/eigenergy/powerio/tree/main/powerio-capi) exposes
+the same parser and converter to C, C++, Julia, and other foreign function
+interfaces. The Python package and command line interface sit on top of the
+same Rust code.
 
 ## Overview
 
@@ -54,7 +57,10 @@ powerio-capi     # C ABI for C, C++, Julia, and other foreign function interface
 PowerIO.jl       # Julia bindings over the C ABI
 ```
 
-The core powerio [Rust crate](https://crates.io/crates/powerio) is as dependency light as possible, with its companion [Python package](https://pypi.org/project/powerio/) requiring **zero dependencies**.
+The core [powerio Rust crate](https://crates.io/crates/powerio) keeps parsing
+and conversion separate from matrix, TUI, and data frame dependencies. The
+[Python package](https://pypi.org/project/powerio/) imports with no required
+third party packages; matrix and graph helpers live behind extras.
 
 API docs: <https://eigenergy.github.io/powerio/>.
 Language API map: [languages guide](https://eigenergy.github.io/powerio/guides/languages.html).
@@ -173,7 +179,7 @@ Current conventions for signs, taps, phase shifts, per unit scaling, reference b
 
 ### Normalized View
 
-`Network::to_normalized` derives a mildly opinionated, post-processed copy of a case that is designed to be solver-friendly:
+`Network::to_normalized` derives a post processed copy of a case for solvers:
 
 - powers are in per unit,
 - voltage phase angles are in radians, 

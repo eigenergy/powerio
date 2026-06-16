@@ -1,19 +1,17 @@
-//! The format hub: readers and writers for every supported file format, all
-//! meeting at the shared [`Network`].
+//! Readers and writers for supported case formats, all meeting at [`Network`].
 //!
-//! Each format is one module here, owning its reader and/or writer: MATPOWER
-//! `.m`, PowerModels JSON, PSS/E `.raw`, PowerWorld `.aux`, egret
-//! `ModelData` JSON, pandapower JSON, PyPSA CSV folders, and PSLF `.epc`.
-//! PowerWorld `.pwb`, PSLF `.epc`, and `.pwd` displays are read only. Case input
-//! and output formats meet at the hub, so adding a writable format is one
-//! module, not a change to any other.
+//! Each format module owns its reader and/or writer: MATPOWER `.m`,
+//! PowerModels JSON, PSS/E `.raw`, PowerWorld `.aux`, egret `ModelData` JSON,
+//! pandapower JSON, PyPSA CSV folders, and PSLF `.epc`. PowerWorld `.pwb`,
+//! PSLF `.epc`, and PowerWorld `.pwd` displays are read only. Case input and
+//! output formats meet here, so adding a writable format is one module plus
+//! one hub registration.
 //! [`parse_file`] reads Network cases, detecting the format from its extension;
 //! [`parse_display_file`] reads display artifacts such as PowerWorld `.pwd`.
-//! [`write_as`]
-//! serializes a `Network` to text targets.
-//! Writers for directory formats, such as PyPSA CSV folders, expose explicit
-//! filesystem helpers. Non-finite numeric values (a MATPOWER `Inf`/`NaN` angle
-//! limit, say) are written as JSON `null`.
+//! [`write_as`] serializes a `Network` to text targets. Directory formats,
+//! such as PyPSA CSV folders, use explicit filesystem helpers. Non-finite
+//! numeric values, such as MATPOWER `Inf`/`NaN` angle limits, are written as
+//! JSON `null`.
 //!
 //! # Fidelity contract
 //!
@@ -315,17 +313,15 @@ fn is_pslf_name(name: &str) -> bool {
     )
 }
 
-/// Parse the case file at `path`, choosing the reader from `from` (the
-/// [`target_format_from_name`] names plus `pypsa-csv`/`pypsa` and `pwb`) or,
-/// when `None`, from the path: a directory containing `network.csv` parses as
-/// a PyPSA CSV folder (any other directory fails: [`Error::UnknownFormat`]
-/// when its name maps to no extension, the I/O error otherwise), and a
-/// file maps by extension (`m`/`json`/`raw`/`aux`/`pwb`/`epc`), case-insensitively
-/// (issue #97: `.RAW` is as common as `.raw` in the wild). A `.json` file is
-/// sniffed three ways: pandapower (`"_class": "pandapowerNet"`), egret (top
-/// level `elements` and `system`), else PowerModels. Pass `from` to force one.
-/// `.pwb` binaries are read only and carry no retained source. Returns
-/// [`Parsed`]: the network plus the reader's fidelity warnings.
+/// Parse the case file at `path`.
+///
+/// `from` can force a reader by name: [`target_format_from_name`] names plus
+/// `pypsa-csv`/`pypsa`, `pwb`, `pslf`, and `epc`. With `from = None`, a
+/// directory containing `network.csv` parses as PyPSA CSV and a file maps by
+/// extension (`m`/`json`/`raw`/`aux`/`pwb`/`epc`), case insensitively. JSON is
+/// sniffed as pandapower, egret, or PowerModels. PowerWorld `.pwb` is binary
+/// and read only; PSLF `.epc` is text and read only. Returns [`Parsed`]: the
+/// network plus reader warnings.
 ///
 /// The one path-based parser the CLI and the Python/C/Julia bindings share (each
 /// exposes the same `parse_file(path, from)` shape), so adding a source format is

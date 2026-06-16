@@ -387,6 +387,7 @@ fn search_table_chain(
     None
 }
 
+/// Keep the table chain with the largest decoded electrical core.
 fn keep_best_chain(
     best: &mut Option<(usize, Result<Network>)>,
     score: usize,
@@ -400,6 +401,7 @@ fn keep_best_chain(
     }
 }
 
+/// Score a candidate table chain by decoded element count.
 fn chain_score(
     loads: &[Load],
     shunts: &[Shunt],
@@ -409,6 +411,7 @@ fn chain_score(
     loads.len() + shunts.len() + branches.len() + generators.len()
 }
 
+/// Add bus tail shunts without duplicating the dedicated shunt table rows.
 fn extend_unique_shunts(shunts: &mut Vec<Shunt>, extra: &[Shunt]) {
     for shunt in extra {
         if !shunts.iter().any(|existing| {
@@ -421,6 +424,10 @@ fn extend_unique_shunts(shunts: &mut Vec<Shunt>, extra: &[Shunt]) {
     }
 }
 
+/// Check whether another generator record starts soon after a candidate table.
+///
+/// This rejects short prefixes when a wrong count word points into the real
+/// generator table.
 fn gen_table_continues(
     bytes: &[u8],
     after: usize,
@@ -434,6 +441,7 @@ fn gen_table_continues(
     })
 }
 
+/// Assemble the decoded tables and run the common reference checks.
 fn checked_network(
     name_hint: Option<&str>,
     mut buses: Vec<Bus>,
@@ -461,12 +469,14 @@ fn checked_network(
 
 // ---- Cursor -----------------------------------------------------------------
 
+/// Bounds checked cursor for little endian record probes.
 struct Cur<'a> {
     b: &'a [u8],
     pos: usize,
 }
 
 impl<'a> Cur<'a> {
+    /// Take `n` bytes and advance the cursor.
     fn take(&mut self, n: usize) -> Probe<&'a [u8]> {
         let end = self.pos.checked_add(n).ok_or("truncated record")?;
         let s = self.b.get(self.pos..end).ok_or("truncated record")?;
@@ -474,20 +484,25 @@ impl<'a> Cur<'a> {
         Ok(s)
     }
 
+    /// Read one byte.
     fn u8(&mut self) -> Probe<u8> {
         Ok(self.take(1)?[0])
     }
+    /// Read a little endian u16.
     fn u16(&mut self) -> Probe<u16> {
         Ok(u16::from_le_bytes(self.take(2)?.try_into().unwrap()))
     }
+    /// Read a little endian u32.
     fn u32(&mut self) -> Probe<u32> {
         Ok(u32::from_le_bytes(self.take(4)?.try_into().unwrap()))
     }
+    /// Read a little endian f32 and widen to f64.
     fn f32(&mut self) -> Probe<f64> {
         Ok(f64::from(f32::from_le_bytes(
             self.take(4)?.try_into().unwrap(),
         )))
     }
+    /// Read a little endian f64.
     fn f64(&mut self) -> Probe<f64> {
         Ok(f64::from_le_bytes(self.take(8)?.try_into().unwrap()))
     }
@@ -556,18 +571,22 @@ fn resync_end(b: &[u8], after: usize, prev_bit4: bool) -> usize {
     }
 }
 
+/// True when a probed string is printable ASCII.
 fn printable(s: &[u8]) -> bool {
     s.iter().all(|&c| (0x20..0x7f).contains(&c))
 }
 
+/// Borrow a bounded byte slice at an absolute offset.
 fn slice_at(b: &[u8], at: usize, n: usize) -> Option<&[u8]> {
     at.checked_add(n).and_then(|end| b.get(at..end))
 }
 
+/// Add an absolute offset without wrapping.
 fn checked_offset(at: usize, add: usize) -> Probe<usize> {
     at.checked_add(add).ok_or("truncated record")
 }
 
+/// Reject impossible count words before walking a table.
 fn count_fits(b: &[u8], first: usize, count: usize, min_record_len: usize) -> bool {
     let Some(remaining) = b.len().checked_sub(first) else {
         return false;
@@ -577,6 +596,7 @@ fn count_fits(b: &[u8], first: usize, count: usize, min_record_len: usize) -> bo
         .is_some_and(|min_bytes| min_bytes <= remaining)
 }
 
+/// Read a little endian u32 at an absolute offset.
 fn u32_at(b: &[u8], at: usize) -> Probe<u32> {
     slice_at(b, at, 4)
         .and_then(|s| <[u8; 4]>::try_from(s).ok())
@@ -584,6 +604,7 @@ fn u32_at(b: &[u8], at: usize) -> Probe<u32> {
         .ok_or("truncated record")
 }
 
+/// Read a little endian f32 at an absolute offset and widen to f64.
 fn f32_at(b: &[u8], at: usize) -> Probe<f64> {
     slice_at(b, at, 4)
         .and_then(|s| <[u8; 4]>::try_from(s).ok())
@@ -592,6 +613,7 @@ fn f32_at(b: &[u8], at: usize) -> Probe<f64> {
         .ok_or("truncated record")
 }
 
+/// Read a length prefixed printable ASCII string at an absolute offset.
 fn string_at(b: &[u8], at: usize, max: usize) -> Probe<String> {
     let n = u32_at(b, at)? as usize;
     if n > max {
@@ -713,6 +735,7 @@ impl BusIdSet {
         Some(Self::Bitmap(bits))
     }
 
+    /// Check whether a decoded bus id exists.
     #[inline]
     fn contains(&self, id: usize) -> bool {
         match self {
@@ -724,6 +747,7 @@ impl BusIdSet {
     }
 }
 
+/// Build an uppercase bus name index for records that point by name.
 fn bus_name_map(buses: &[Bus]) -> HashMap<String, BusId> {
     buses
         .iter()
@@ -749,6 +773,7 @@ struct Run<T> {
 }
 
 impl<T: Clone> Run<T> {
+    /// Start a record run with its first validated record.
     fn start(item: T, end: usize) -> Self {
         Run {
             items: vec![item],
@@ -999,6 +1024,7 @@ fn read_bus_head(b: &[u8], at: usize) -> Probe<(BusHead, usize)> {
     Ok((BusHead { bus, shunt, unk }, c.pos))
 }
 
+/// Decode the optional fixed shunt stored in some bus record tails.
 fn bus_tail_shunt(b: &[u8], after_head: usize, bus: BusId) -> Option<Shunt> {
     let g_pu = b
         .get(after_head.checked_add(1)?..after_head.checked_add(5)?)
@@ -1029,6 +1055,7 @@ fn bus_tail_shunt(b: &[u8], after_head: usize, bus: BusId) -> Option<Shunt> {
     })
 }
 
+/// Read the bus label plus solved voltage magnitude and angle.
 fn read_bus_label_and_solution(c: &mut Cur<'_>) -> Probe<(f64, f64)> {
     let _label = c.string(64)?;
     let vm = c.f64()?;
@@ -1069,14 +1096,17 @@ fn read_device_head<T>(
     Ok((v, c.pos))
 }
 
+/// Probe one load record using the shared device head.
 fn read_load_record(b: &[u8], at: usize, bus_ids: &BusIdSet) -> Probe<(Load, usize)> {
     read_device_head(b, at, bus_ids, read_load)
 }
 
+/// Probe one plain generator record using the shared device head.
 fn read_gen_record(b: &[u8], at: usize, bus_ids: &BusIdSet) -> Probe<(Generator, usize)> {
     read_device_head(b, at, bus_ids, read_gen)
 }
 
+/// Probe one switched shunt record using the shared device head.
 fn read_shunt_record(b: &[u8], at: usize, bus_ids: &BusIdSet) -> Probe<(Shunt, usize)> {
     read_device_head(b, at, bus_ids, read_shunt)
 }
@@ -1333,6 +1363,7 @@ fn read_gen_reg_simple_record(
     read_gen_reg_tail(&mut c, bus, &v)
 }
 
+/// Read the status and RMPCT tail shared by regulated generator records.
 fn read_gen_reg_tail(c: &mut Cur<'_>, bus: usize, v: &[f64; 8]) -> Probe<(Generator, usize)> {
     if c.u8()? != 0 {
         return Err("generator record separator byte not zero");

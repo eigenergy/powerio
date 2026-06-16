@@ -1,9 +1,9 @@
 # powerio
 
 `powerio` is the core Rust crate for parsing power system case files into a
-typed `Network`, retaining same-format source text where the reader supports
-it, and converting through the format-neutral model. The workspace README has
-the full format matrix and non-Rust entry points.
+typed `Network`, retaining same format source text where the reader supports
+it, and converting through the format neutral model. The workspace README has
+the full format matrix and language bindings.
 
 ```rust
 use powerio::{TargetFormat, parse_file};

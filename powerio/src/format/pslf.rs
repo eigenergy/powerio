@@ -123,6 +123,7 @@ struct EpcDocument {
 }
 
 impl EpcDocument {
+    /// Choose the case name from the title block, falling back to the file stem.
     fn name(&self, name_hint: Option<&str>) -> String {
         self.title
             .iter()
@@ -132,12 +133,14 @@ impl EpcDocument {
             .map_or_else(|| name_hint.unwrap_or("case").to_string(), str::to_string)
     }
 
+    /// Return records from a named EPC section, or an empty slice when absent.
     fn records(&self, section: &str) -> &[Record] {
         self.sections
             .get(section)
             .map_or(&[], |section| section.records.as_slice())
     }
 
+    /// Read `sbase` from solution parameters, defaulting to 100 MVA.
     fn base_mva(&self, warnings: &mut Vec<String>) -> f64 {
         for line in &self.solution_parameters {
             let toks = tokens(line);
@@ -154,6 +157,7 @@ impl EpcDocument {
         100.0
     }
 
+    /// Read the optional branch reactance jump threshold.
     fn jump_threshold(&self) -> Option<f64> {
         self.solution_parameters.iter().find_map(|line| {
             let toks = tokens(line);
@@ -312,6 +316,10 @@ fn parse_document(content: &str, warnings: &mut Vec<String>) -> EpcDocument {
     }
 }
 
+/// Parse a `name data [count] ...` section header.
+///
+/// The returned name is lower case so callers can use stable section keys
+/// across files that vary capitalization.
 fn parse_section_header(line: &str) -> Option<(String, usize, String)> {
     let lower = line.to_ascii_lowercase();
     let data_at = lower.find(" data")?;
@@ -323,6 +331,9 @@ fn parse_section_header(line: &str) -> Option<(String, usize, String)> {
     Some((name, count, header))
 }
 
+/// Strip line endings and detect EPC continuation lines.
+///
+/// A trailing `/` joins the next physical line into the same logical record.
 fn clean_line(raw: &str) -> (String, bool) {
     let raw = raw.trim_end_matches('\r');
     let trimmed = raw.trim_end();
@@ -335,11 +346,13 @@ fn clean_line(raw: &str) -> (String, bool) {
     }
 }
 
+/// Tokenize a logical record and split it into identity and value sides.
 fn split_record(raw_lines: &[String]) -> (Vec<String>, Vec<String>) {
     let toks = tokens(&raw_lines.join(" "));
     split_tokens(toks)
 }
 
+/// Split already tokenized fields at the first unquoted `:`.
 fn split_tokens(toks: Vec<String>) -> (Vec<String>, Vec<String>) {
     if let Some(colon) = toks.iter().position(|tok| tok == ":") {
         (toks[..colon].to_vec(), toks[colon + 1..].to_vec())
@@ -348,6 +361,9 @@ fn split_tokens(toks: Vec<String>) -> (Vec<String>, Vec<String>) {
     }
 }
 
+/// Tokenize an EPC line while preserving quoted strings as one token.
+///
+/// Double quotes inside a quoted string are escaped by doubling them.
 fn tokens(line: &str) -> Vec<String> {
     let mut out = Vec::new();
     let mut cur = String::new();
@@ -386,6 +402,7 @@ fn tokens(line: &str) -> Vec<String> {
     out
 }
 
+/// Return the right side tokens for one physical line in a multi-line record.
 fn line_rhs(rec: &Record, line: usize) -> Vec<String> {
     rec.raw
         .get(line)
@@ -393,10 +410,12 @@ fn line_rhs(rec: &Record, line: usize) -> Vec<String> {
         .unwrap_or_default()
 }
 
+/// Return all tokens for one physical line in a multi-line record.
 fn line_tokens(rec: &Record, line: usize) -> Vec<String> {
     rec.raw.get(line).map_or_else(Vec::new, |line| tokens(line))
 }
 
+/// Map one `bus data` record into a [`Bus`].
 fn read_bus(rec: &Record) -> Result<Bus> {
     let id = BusId(req_id(&rec.lhs, 0, "bus id", rec)?);
     let name = rec.lhs.get(1).map(|name| name.trim().to_string());
@@ -415,6 +434,7 @@ fn read_bus(rec: &Record) -> Result<Bus> {
     })
 }
 
+/// Convert PSLF bus type codes to the format neutral bus type enum.
 fn pslf_bus_type(code: i64) -> BusType {
     match code {
         0 => BusType::Ref,
@@ -424,6 +444,7 @@ fn pslf_bus_type(code: i64) -> BusType {
     }
 }
 
+/// Map one `branch data` record into a line [`Branch`].
 fn read_branch(rec: &Record) -> Result<Branch> {
     let mut extras = extras(rec, "branch data", 9, 10);
     if let Some(circuit) = rec.lhs.get(6) {
@@ -450,6 +471,10 @@ fn read_branch(rec: &Record) -> Result<Branch> {
     })
 }
 
+/// Map one two winding `transformer data` record into a [`Branch`].
+///
+/// Three winding records return `None` with a read warning because `Network`
+/// has no neutral representation for them.
 fn read_transformer(rec: &Record, warnings: &mut Vec<String>) -> Result<Option<Branch>> {
     let rhs1 = line_rhs(rec, 0);
     let line2 = line_tokens(rec, 1);
@@ -496,6 +521,10 @@ fn read_transformer(rec: &Record, warnings: &mut Vec<String>) -> Result<Option<B
     }))
 }
 
+/// Map one `generator data` record.
+///
+/// EPC stores the controlled voltage on the bus row, so the generator `vg`
+/// field is filled from the bus voltage map.
 fn read_generator(rec: &Record, bus_vm: &HashMap<BusId, f64>) -> Result<Generator> {
     let bus = BusId(req_id(&rec.lhs, 0, "generator bus", rec)?);
     Ok(Generator {
@@ -514,6 +543,10 @@ fn read_generator(rec: &Record, bus_vm: &HashMap<BusId, f64>) -> Result<Generato
     })
 }
 
+/// Map one `load data` record.
+///
+/// Constant current and impedance components are folded into total P/Q because
+/// `Network` has one static load row; the component values stay in extras.
 fn read_load(
     rec: &Record,
     warnings: &mut Vec<String>,
@@ -550,6 +583,7 @@ fn read_load(
     })
 }
 
+/// Map one fixed `shunt data` record and convert per unit G/B to MW/MVAr.
 fn read_shunt(rec: &Record, base_mva: f64) -> Result<Shunt> {
     let g_pu = num_at(&rec.rhs, 3, 0.0, "shunt pu_mw", rec)?;
     let b_pu = num_at(&rec.rhs, 4, 0.0, "shunt pu_mvar", rec)?;
@@ -565,6 +599,10 @@ fn read_shunt(rec: &Record, base_mva: f64) -> Result<Shunt> {
     })
 }
 
+/// Map one `svd data` record as a fixed shunt at its initial G/B value.
+///
+/// The control target, limits, and switching fields stay in extras until
+/// `Network` grows a typed controlled shunt model.
 fn read_svd(
     rec: &Record,
     base_mva: f64,
@@ -592,6 +630,10 @@ fn read_svd(
     })
 }
 
+/// Converter side of a PSLF DC line.
+///
+/// EPC stores AC converter rows separately from the DC line row. This holds the
+/// AC terminal and setpoints until the line join happens.
 #[derive(Clone)]
 struct DcConverter {
     ac_bus: BusId,
@@ -602,6 +644,10 @@ struct DcConverter {
     extras: Extras,
 }
 
+/// Read all `dc converter data` rows into a DC bus keyed map.
+///
+/// Malformed converter rows become warnings so unrelated AC data in the same
+/// file can still be read.
 fn read_dc_converters(
     doc: &EpcDocument,
     warnings: &mut Vec<String>,
@@ -710,6 +756,7 @@ fn read_dc_lines(
     out
 }
 
+/// Report nonempty EPC sections that are retained as source text only.
 fn warn_unmodeled_sections(doc: &EpcDocument, warnings: &mut Vec<String>) {
     const MODELED: &[&str] = &[
         "bus data",
@@ -757,10 +804,12 @@ fn extras(rec: &Record, section: &str, used_lhs: usize, used_rhs: usize) -> Extr
     extras
 }
 
+/// Convert strings to a JSON array for `extras`.
 fn string_array(values: impl IntoIterator<Item = String>) -> Value {
     Value::Array(values.into_iter().map(Value::String).collect())
 }
 
+/// Preserve an EPC token as a number when it parses, otherwise as a string.
 fn string_or_number(token: &str) -> Value {
     token
         .parse::<f64>()
@@ -768,10 +817,12 @@ fn string_or_number(token: &str) -> Value {
         .map_or_else(|| Value::String(token.to_string()), number_value)
 }
 
+/// Convert a finite f64 to JSON, using null for nonfinite values.
 fn number_value(value: f64) -> Value {
     Number::from_f64(value).map_or(Value::Null, Value::Number)
 }
 
+/// Read an optional floating point field with a default for omitted values.
 fn num_at(tokens: &[String], i: usize, default: f64, field: &str, rec: &Record) -> Result<f64> {
     match tokens.get(i).map(String::as_str) {
         None | Some("") => Ok(default),
@@ -779,6 +830,7 @@ fn num_at(tokens: &[String], i: usize, default: f64, field: &str, rec: &Record) 
     }
 }
 
+/// Read an optional integer field with a default for omitted values.
 fn int_at(tokens: &[String], i: usize, default: i64, field: &str, rec: &Record) -> Result<i64> {
     match tokens.get(i).map(String::as_str) {
         None | Some("") => Ok(default),
@@ -786,6 +838,7 @@ fn int_at(tokens: &[String], i: usize, default: i64, field: &str, rec: &Record) 
     }
 }
 
+/// Read an optional nonnegative numeric identifier.
 fn id_at(tokens: &[String], i: usize, default: usize, field: &str, rec: &Record) -> Result<usize> {
     match tokens.get(i).map(String::as_str) {
         None | Some("") => Ok(default),
@@ -793,6 +846,7 @@ fn id_at(tokens: &[String], i: usize, default: usize, field: &str, rec: &Record)
     }
 }
 
+/// Read a required nonnegative numeric identifier.
 fn req_id(tokens: &[String], i: usize, field: &str, rec: &Record) -> Result<usize> {
     tokens
         .get(i)
@@ -803,15 +857,18 @@ fn req_id(tokens: &[String], i: usize, field: &str, rec: &Record) -> Result<usiz
         })
 }
 
+/// Parse PSLF numeric identifiers, including values written as floating text.
 fn parse_id(tok: &str) -> Option<usize> {
     let value = tok.parse::<f64>().ok()?;
     (value.is_finite() && value >= 0.0).then_some(value as usize)
 }
 
+/// Read a numeric status field as an in service boolean.
 fn on_at(tokens: &[String], i: usize, default: bool, field: &str, rec: &Record) -> Result<bool> {
     Ok(num_at(tokens, i, if default { 1.0 } else { 0.0 }, field, rec)? != 0.0)
 }
 
+/// Build a field-level parse error with the source line number.
 fn bad_field(field: &str, i: usize, tok: &str, rec: &Record) -> Error {
     Error::FormatRead {
         format: FMT,
