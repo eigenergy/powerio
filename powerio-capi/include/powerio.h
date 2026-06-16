@@ -107,10 +107,11 @@ const char *pio_version(void);
  * Parse `path` into a network handle. With `from = NULL`, the reader is
  * inferred from the extension or PyPSA `network.csv` directory layout. `from`
  * accepts the `pio_parse_str` text format names plus `pypsa-csv`/`pypsa` and
- * `pwb`; PyPSA CSV folders are directories, so they enter through this
- * function with `from = "pypsa-csv"` or by inference from `network.csv`. Read
- * fidelity warnings attach to the handle ([`pio_parse_warnings`]). Returns
- * `NULL` on error and writes the message into `errbuf`.
+ * `pwb`; that includes `pslf`/`epc`, and `.epc` is inferred by extension.
+ * PyPSA CSV folders are directories, so they enter through this function with
+ * `from = "pypsa-csv"` or by inference from `network.csv`. Read fidelity
+ * warnings attach to the handle ([`pio_parse_warnings`]). Returns `NULL` on
+ * error and writes the message into `errbuf`.
  */
 PioNetwork *pio_parse_file(const char *path, const char *from, char *errbuf, size_t errlen);
 

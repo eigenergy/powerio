@@ -163,7 +163,7 @@ integers and floats are little endian.
 | offset | type | value | meaning |
 |---|---|---|---|
 | 0x00 | u64 | 15000 | magic / format constant |
-| 0x08 | u64 | varies | writer format constant. Decoded constants: 338, 368, 425, 483, 508, 537, 550, 551. Other older samples carry 196, 191, 134, or a different header shape. The constant does not pin the record layout; record flags and table anchors do. |
+| 0x08 | u64 | varies | writer format constant. Decoded constants: 338, 368, 425, 483, 508, 537, 550, 551, 554. Other older samples carry 196, 191, 134, or a different header shape. The constant does not pin the record layout; record flags and table anchors do. |
 | 0x10 | u64 | 20 | format constant |
 | 0x18 | 16 bytes | 0 | unknown |
 | 0x28 | f64 | varies | Delphi TDateTime of the save (days since 1899-12-30); matches each file's export date |

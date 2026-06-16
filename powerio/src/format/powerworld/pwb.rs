@@ -393,10 +393,16 @@ fn keep_best_chain(
     score: usize,
     net: Result<Network>,
 ) {
-    if best
-        .as_ref()
-        .is_none_or(|(best_score, _)| score > *best_score)
-    {
+    let candidate_ok = net.is_ok();
+    let replace = match best.as_ref() {
+        None => true,
+        Some((best_score, best_net)) => match (best_net.is_ok(), candidate_ok) {
+            (false, true) => true,
+            (true, false) => false,
+            _ => score > *best_score,
+        },
+    };
+    if replace {
         *best = Some((score, net));
     }
 }
@@ -1178,11 +1184,11 @@ fn read_load(c: &mut Cur, bus: BusId, id: &[u8]) -> Probe<Load> {
     if flag == 0 && p.abs() < 1e-30 && q.abs() < 1e-30 {
         let early_p = f32_at(c.b, checked_offset(record_start, 25)?)? * MVA_BASE;
         let early_q = f32_at(c.b, checked_offset(record_start, 29)?)? * MVA_BASE;
-        let late_p = early_q;
-        let late_q = f32_at(c.b, checked_offset(record_start, 33)?)? * MVA_BASE;
+        let late_p = f32_at(c.b, checked_offset(record_start, 33)?)? * MVA_BASE;
+        let late_q = f32_at(c.b, checked_offset(record_start, 37)?)? * MVA_BASE;
         let early_is_marker = (early_p - MVA_BASE).abs() <= 1e-6 && early_q.abs() <= 1e-30;
         let (alt_p, alt_q, end) = if early_is_marker {
-            (late_p, late_q, checked_offset(record_start, 37)?)
+            (late_p, late_q, checked_offset(record_start, 41)?)
         } else {
             (early_p, early_q, checked_offset(record_start, 33)?)
         };
@@ -1754,5 +1760,53 @@ fn read_legacy_branch_tail(c: &mut Cur<'_>, tail_start: usize) -> Probe<(&'stati
         Ok(("Transformer", tap))
     } else {
         Ok(("Line", 0.0))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn empty_network(name: &str) -> Network {
+        Network {
+            name: name.to_string(),
+            base_mva: MVA_BASE,
+            buses: Vec::new(),
+            loads: Vec::new(),
+            shunts: Vec::new(),
+            branches: Vec::new(),
+            generators: Vec::new(),
+            storage: Vec::new(),
+            hvdc: Vec::new(),
+            source_format: SourceFormat::PowerWorldBinary,
+            source: None,
+        }
+    }
+
+    #[test]
+    fn best_chain_prefers_valid_chain_over_higher_scoring_error() {
+        let mut best = None;
+        keep_best_chain(&mut best, 100, Err(unsupported_vintage("bad candidate")));
+        keep_best_chain(&mut best, 1, Ok(empty_network("valid")));
+
+        let (_, net) = best.unwrap();
+        assert!(net.is_ok());
+    }
+
+    #[test]
+    fn alternate_load_record_reads_late_p_and_q() {
+        let mut bytes = vec![0u8; 41];
+        bytes[6] = 0;
+        bytes[25..29].copy_from_slice(&1.0f32.to_le_bytes());
+        bytes[29..33].copy_from_slice(&0.0f32.to_le_bytes());
+        bytes[33..37].copy_from_slice(&0.5f32.to_le_bytes());
+        bytes[37..41].copy_from_slice(&0.25f32.to_le_bytes());
+
+        let mut c = Cur { b: &bytes, pos: 6 };
+        let load = read_load(&mut c, BusId(1), b"1").unwrap();
+
+        assert!((load.p - 50.0).abs() < 1e-9);
+        assert!((load.q - 25.0).abs() < 1e-9);
+        assert_eq!(c.pos, 41);
     }
 }

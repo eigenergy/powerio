@@ -857,10 +857,16 @@ fn req_id(tokens: &[String], i: usize, field: &str, rec: &Record) -> Result<usiz
         })
 }
 
-/// Parse PSLF numeric identifiers, including values written as floating text.
+/// Parse PSLF numeric identifiers, including integer-valued floating text.
 fn parse_id(tok: &str) -> Option<usize> {
+    if let Ok(value) = tok.parse::<usize>() {
+        return Some(value);
+    }
     let value = tok.parse::<f64>().ok()?;
-    (value.is_finite() && value >= 0.0).then_some(value as usize)
+    if !value.is_finite() || value < 0.0 || value.fract() != 0.0 || value > usize::MAX as f64 {
+        return None;
+    }
+    Some(value as usize)
 }
 
 /// Read a numeric status field as an in service boolean.
@@ -934,5 +940,15 @@ end
         let mut warnings = Vec::new();
         let net = parse_pslf_source(Arc::new(epc.to_string()), None, &mut warnings).unwrap();
         assert_eq!(net.source.as_deref().map(String::as_str), Some(epc));
+    }
+
+    #[test]
+    fn parse_id_accepts_only_integer_values() {
+        assert_eq!(parse_id("12"), Some(12));
+        assert_eq!(parse_id("12.0"), Some(12));
+        assert_eq!(parse_id("1e3"), Some(1000));
+        assert_eq!(parse_id("12.9"), None);
+        assert_eq!(parse_id("-1"), None);
+        assert_eq!(parse_id("NaN"), None);
     }
 }
