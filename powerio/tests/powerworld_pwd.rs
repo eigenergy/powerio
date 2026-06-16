@@ -286,9 +286,9 @@ fn corrupt_display_files_never_panic() {
     }
 }
 
-/// Loud rejections: a binary case is not a display file, garbage is not a
-/// display file, and a display header with no substation identity table
-/// names what is missing.
+/// Loud rejections: a binary case is not a display file, and garbage is not a
+/// display file. A valid display header with no substation identity table
+/// decodes as a display with no substation symbols.
 #[test]
 fn rejects_non_display_inputs() {
     let pwb = fs::read(common::powerworld_vendored("ACTIVSg200.pwb")).unwrap();
@@ -311,6 +311,9 @@ fn rejects_non_display_inputs() {
     headless.extend_from_slice(&[0u8; 14]);
     headless.extend_from_slice(&0xa83cu32.to_le_bytes()); // stamp at offset 22
     headless.extend_from_slice(&[0u8; 4096]);
-    let err = parse_pwd(&headless).unwrap_err().to_string();
-    assert!(err.contains("no substation identity table"), "{err}");
+    let display = parse_pwd_display(&headless).unwrap();
+    assert_eq!(display.canvas_width, 200);
+    assert_eq!(display.canvas_height, 200);
+    assert_eq!(display.stamp, 0xa83c);
+    assert!(display.substations.is_empty());
 }

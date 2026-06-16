@@ -104,25 +104,21 @@ uint32_t pio_abi_version(void);
 const char *pio_version(void);
 
 /**
- * Parse `path` (format from extension, or `from` if non-NULL) into a case
- * handle. `from` accepts the [`pio_parse_str`] format names plus
- * `pypsa-csv`/`pypsa`; a PyPSA CSV folder is a directory, so it can only enter
- * through this function, with `from = "pypsa-csv"` (or NULL when the directory
- * holds a `network.csv`). Read fidelity warnings attach to the handle
- * ([`pio_parse_warnings`]). Returns `NULL` on error and writes the message
- * into `errbuf`.
+ * Parse a case file or directory into a network handle. With `from = NULL`,
+ * the reader is inferred from the extension or PyPSA `network.csv` directory
+ * layout. `from` also accepts `pypsa-csv`/`pypsa`, `pwb`, `pslf`, and `epc`.
+ * Read fidelity warnings attach to the handle ([`pio_parse_warnings`]).
+ * Returns `NULL` on error and writes the message into `errbuf`.
  */
 PioNetwork *pio_parse_file(const char *path, const char *from, char *errbuf, size_t errlen);
 
 /**
- * Parse in-memory case `text` of the named `format` into a network handle. Unlike
- * [`pio_parse_file`] there is no path to infer from, so `format` is required: one of
- * `matpower`/`m`, `powermodels`/`pm`, `egret`, `pandapower-json`/`pandapower`/`pp`,
- * `psse`/`raw`, `powerworld`/`aux` (see `TargetFormat::from_str`). PyPSA CSV
- * folders are directories, not text; parse them with [`pio_parse_file`] and
- * `from = "pypsa-csv"`. Read fidelity warnings attach to the handle
- * ([`pio_parse_warnings`]). Returns `NULL` on error and writes the message
- * into `errbuf`. Free the handle with [`pio_network_free`].
+ * Parse in-memory text in the named `format` into a network handle. Supported
+ * text formats are `matpower`/`m`, `powermodels`/`pm`, `egret`,
+ * `pandapower-json`/`pandapower`/`pp`, `psse`/`raw`, `powerworld`/`aux`, and
+ * `pslf`/`epc`. Read fidelity warnings attach to the handle
+ * ([`pio_parse_warnings`]). Returns `NULL` on error and writes the message into
+ * `errbuf`. Free the handle with [`pio_network_free`].
  */
 PioNetwork *pio_parse_str(const char *text, const char *format, char *errbuf, size_t errlen);
 
