@@ -4,7 +4,7 @@
 //! f64 widening of them).
 
 use std::collections::{BTreeMap, BTreeSet};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use powerio::format::powerworld::parse_pwb;
 use powerio::network::Network;
@@ -566,25 +566,10 @@ fn rejects_unrecognized_binaries() {
         "{err}"
     );
 
-    // An undecoded writer format constant (the 2017 era 118 bus sample
-    // carries 338 at offset 0x08) is a vintage rejection naming the
-    // constant, never a generic magic mismatch.
-    let mut newer = Vec::new();
-    newer.extend_from_slice(&15000u64.to_le_bytes());
-    newer.extend_from_slice(&338u64.to_le_bytes());
-    newer.extend_from_slice(&20u64.to_le_bytes());
-    newer.extend_from_slice(&[0u8; 4096]);
-    let err = parse_pwb(&newer, None).unwrap_err();
-    let msg = err.to_string();
-    assert!(
-        msg.contains("unsupported PowerWorld .pwb vintage") && msg.contains("338"),
-        "{err}"
-    );
-
     // A decoded constant over a garbage body dies at the bus layout gate,
     // through the same loud vintage path; pinned for each constant the
     // header gate admits.
-    for v in [425u64, 483, 508, 537, 550, 551] {
+    for v in [338u64, 368, 425, 483, 508, 537, 550, 551] {
         let mut garbage = Vec::new();
         garbage.extend_from_slice(&15000u64.to_le_bytes());
         garbage.extend_from_slice(&v.to_le_bytes());
@@ -597,6 +582,28 @@ fn rejects_unrecognized_binaries() {
                 && msg.contains("no recognized bus record layout"),
             "constant {v}: {err}"
         );
+    }
+}
+
+#[test]
+fn truncations_do_not_panic() {
+    let bytes = std::fs::read(vendored("ACTIVSg200.pwb")).unwrap();
+    for len in [
+        0,
+        1,
+        8,
+        24,
+        63,
+        64,
+        128,
+        512,
+        4096,
+        65_536,
+        bytes.len() / 2,
+        bytes.len() - 1,
+    ] {
+        let outcome = std::panic::catch_unwind(|| parse_pwb(&bytes[..len], Some("truncated")));
+        assert!(outcome.is_ok(), "truncation at {len} bytes panicked");
     }
 }
 
@@ -1518,4 +1525,455 @@ fn texas7k_resaves_match_the_2022_aux() {
             "{label}: aux branches missing: {aux_by_id:?}"
         );
     }
+}
+
+#[test]
+fn icseg_header338_pwb_matches_raw_and_epc() {
+    let Some(root) = std::env::var_os("POWERIO_ICSEG_CORPUS") else {
+        eprintln!("skipped: POWERIO_ICSEG_CORPUS is not set");
+        return;
+    };
+    let root = std::path::PathBuf::from(root);
+    for (pwb_path, raw_path, epc_path) in [
+        (
+            "ieee_118_bus/IEEE 118 Bus.pwb",
+            "ieee_118_bus/IEEE 118 Bus.RAW",
+            "ieee_118_bus/IEEE 118 Bus.EPC",
+        ),
+        (
+            "ieee_30_bus/IEEE 30 bus.pwb",
+            "ieee_30_bus/IEEE 30 bus.RAW",
+            "ieee_30_bus/IEEE 30 bus.EPC",
+        ),
+        (
+            "ieee_57_bus/IEEE 57 bus.pwb",
+            "ieee_57_bus/IEEE 57 bus.RAW",
+            "ieee_57_bus/IEEE 57 bus.EPC",
+        ),
+    ] {
+        let pwb = parse_file(root.join(pwb_path), None).unwrap().network;
+        let raw = parse_file(root.join(raw_path), None).unwrap().network;
+        let epc = parse_file(root.join(epc_path), None).unwrap().network;
+        assert_header338_match(&pwb, &raw, pwb_path);
+        assert_header338_match(&pwb, &epc, pwb_path);
+    }
+}
+
+#[test]
+fn icseg_four_generator_pwb_matches_raw_and_epc() {
+    let Some(root) = std::env::var_os("POWERIO_ICSEG_CORPUS") else {
+        eprintln!("skipped: POWERIO_ICSEG_CORPUS is not set");
+        return;
+    };
+    let root = std::path::PathBuf::from(root);
+    for dir in [
+        "four_generator_system/1.Benchmark_4ger_ESST1A_TGR_2015",
+        "four_generator_system/2.Benchmark_4ger_ESST1A_noTGR_PSSmod_2015",
+        "four_generator_system/3.Benchmark_4ger_ESST1A_noTGR_PSSori_2015",
+    ] {
+        let case = root.join(dir);
+        let pwb = parse_file(case.join("Benchmark_4ger_33_2015.pwb"), None)
+            .unwrap()
+            .network;
+        let raw = parse_file(case.join("Benchmark_4ger_33_2015.RAW"), None)
+            .unwrap()
+            .network;
+        let epc = parse_file(case.join("Benchmark_4ger_33_2015.EPC"), None)
+            .unwrap()
+            .network;
+        assert_four_generator_match(&pwb, &raw, dir);
+        assert_four_generator_match(&pwb, &epc, dir);
+    }
+}
+
+#[test]
+fn icseg_australian_pwb_matches_raw_and_epc() {
+    let Some(root) = std::env::var_os("POWERIO_ICSEG_CORPUS") else {
+        eprintln!("skipped: POWERIO_ICSEG_CORPUS is not set");
+        return;
+    };
+    let root = std::path::PathBuf::from(root).join("australian_14_generator");
+    for dir in [
+        "LF_Case01_R4_S",
+        "LF_Case02_R4_S",
+        "LF_Case03_R4_S",
+        "LF_Case04_R4_S",
+        "LF_Case05_R4_S",
+        "LF_Case06_R4_S",
+    ] {
+        let case = root.join(dir);
+        let pwb = parse_file(case.join("AU14GenModel.PWB"), None)
+            .unwrap()
+            .network;
+        let raw = parse_file(case.join("AU14GenModel.RAW"), None)
+            .unwrap()
+            .network;
+        let epc = parse_file(case.join("AU14GenModel.EPC"), None)
+            .unwrap()
+            .network;
+        assert_australian_match(&pwb, &raw, dir);
+        assert_australian_match(&pwb, &epc, dir);
+        if !matches!(dir, "LF_Case04_R4_S" | "LF_Case06_R4_S") {
+            assert_eq!(
+                branch_rx_fingerprint(&pwb),
+                branch_rx_fingerprint(&epc),
+                "{dir} branches"
+            );
+        }
+    }
+}
+
+#[test]
+fn icseg_aux_exports_match_pwb() {
+    let Some(root) = std::env::var_os("POWERIO_ICSEG_CORPUS") else {
+        eprintln!("skipped: POWERIO_ICSEG_CORPUS is not set");
+        return;
+    };
+    let root = std::path::PathBuf::from(root);
+    for (pwb_path, aux_path) in [
+        ("activsg200/ACTIVSg200.pwb", "activsg200/ACTIVSg200.aux"),
+        ("activsg500/ACTIVSg500.pwb", "activsg500/ACTIVSg500.aux"),
+    ] {
+        let pwb = parse_file(root.join(pwb_path), None).unwrap().network;
+        let aux = parse_file(root.join(aux_path), None).unwrap().network;
+        assert_exact_static_match(&pwb, &aux, pwb_path);
+    }
+}
+
+#[test]
+fn icseg_large_case_companions_match_core() {
+    let Some(root) = std::env::var_os("POWERIO_ICSEG_CORPUS") else {
+        eprintln!("skipped: POWERIO_ICSEG_CORPUS is not set");
+        return;
+    };
+    let root = std::path::PathBuf::from(root);
+    for (pwb_path, other_path) in [
+        (
+            "texas2000_june2016/Texas 2000 - June 2016 Synthetic Case/Texas2000_June2016.pwb",
+            "texas2000_june2016/Texas 2000 - June 2016 Synthetic Case/Texas2000_June2016.EPC",
+        ),
+        (
+            "uiuc_150_bus/UIUC 150-Bus System/uiuc-150bus.pwb",
+            "uiuc_150_bus/UIUC 150-Bus System/uiuc-150bus.RAW",
+        ),
+    ] {
+        let pwb = parse_file(root.join(pwb_path), None).unwrap().network;
+        let other = parse_file(root.join(other_path), None).unwrap().network;
+        assert_case_shape_and_totals_match(&pwb, &other, pwb_path);
+        assert_eq!(
+            branch_undirected_fingerprint(&pwb),
+            branch_undirected_fingerprint(&other),
+            "{pwb_path} topology"
+        );
+    }
+}
+
+#[test]
+fn icseg_all_pwb_files_parse() {
+    let Some(root) = std::env::var_os("POWERIO_ICSEG_CORPUS") else {
+        eprintln!("skipped: POWERIO_ICSEG_CORPUS is not set");
+        return;
+    };
+    let root = std::path::PathBuf::from(root);
+    let mut files = Vec::new();
+    collect_pwb_files(&root, &mut files);
+    files.sort();
+    assert_eq!(files.len(), 33, "unexpected ICSEG PWB file count");
+
+    let mut failures = Vec::new();
+    for file in files {
+        if let Err(err) = parse_file(&file, None) {
+            failures.push(format!("{}: {err}", file.display()));
+        }
+    }
+    assert!(failures.is_empty(), "{}", failures.join("\n"));
+}
+
+#[test]
+fn icseg_classic_pwb_matches_raw_and_epc() {
+    let Some(root) = std::env::var_os("POWERIO_ICSEG_CORPUS") else {
+        eprintln!("skipped: POWERIO_ICSEG_CORPUS is not set");
+        return;
+    };
+    let root = std::path::PathBuf::from(root);
+    for (pwb_path, raw_path, epc_path, exact_branch_rx) in [
+        (
+            "ieee_14_bus/IEEE 14 bus.pwb",
+            "ieee_14_bus/IEEE 14 bus.raw",
+            "ieee_14_bus/IEEE 14 bus.epc",
+            true,
+        ),
+        (
+            "ieee_24_bus/IEEE 24 bus.pwb",
+            "ieee_24_bus/IEEE 24 bus.RAW",
+            "ieee_24_bus/IEEE 24 bus.EPC",
+            false,
+        ),
+        (
+            "ieee_39_bus/IEEE 39 bus.pwb",
+            "ieee_39_bus/IEEE 39 bus.RAW",
+            "ieee_39_bus/IEEE 39 bus.EPC",
+            true,
+        ),
+        (
+            "ieee_96_rts/IEEE RTS 96 bus.PWB",
+            "ieee_96_rts/IEEE RTS 96 bus.RAW",
+            "ieee_96_rts/IEEE RTS 96 bus.EPC",
+            true,
+        ),
+        (
+            "ieee_300_bus/IEEE300Bus.pwb",
+            "ieee_300_bus/IEEE300Bus.raw",
+            "ieee_300_bus/IEEE300Bus.epc",
+            false,
+        ),
+        (
+            "kundur_two_area/two_area_case.pwb",
+            "kundur_two_area/two_area_case.RAW",
+            "kundur_two_area/two_area_case.EPC",
+            false,
+        ),
+        (
+            "wscc_9_bus/WSCC 9 bus.pwb",
+            "wscc_9_bus/WSCC 9 bus.raw",
+            "wscc_9_bus/WSCC 9 bus.epc",
+            true,
+        ),
+    ] {
+        let pwb = parse_file(root.join(pwb_path), None).unwrap().network;
+        for other_path in [raw_path, epc_path] {
+            let other = parse_file(root.join(other_path), None).unwrap().network;
+            assert_case_shape_and_totals_match(&pwb, &other, pwb_path);
+            assert_eq!(
+                load_fingerprint(&pwb),
+                load_fingerprint(&other),
+                "{pwb_path} loads"
+            );
+            assert_eq!(
+                branch_undirected_fingerprint(&pwb),
+                branch_undirected_fingerprint(&other),
+                "{pwb_path} topology"
+            );
+            if exact_branch_rx {
+                assert_eq!(
+                    branch_rx_fingerprint(&pwb),
+                    branch_rx_fingerprint(&other),
+                    "{pwb_path} branches"
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn icseg_uiuc_pwb_matches_raw_and_matpower() {
+    let Some(root) = std::env::var_os("POWERIO_ICSEG_CORPUS") else {
+        eprintln!("skipped: POWERIO_ICSEG_CORPUS is not set");
+        return;
+    };
+    let root = std::path::PathBuf::from(root).join("uiuc_150_bus/UIUC 150-Bus System");
+    let pwb = parse_file(root.join("uiuc-150bus.pwb"), None)
+        .unwrap()
+        .network;
+    for other_path in ["uiuc-150bus.RAW", "uiuc_150bus[1].m"] {
+        let other = parse_file(root.join(other_path), None).unwrap().network;
+        assert_case_shape_and_totals_match(&pwb, &other, other_path);
+        assert_eq!(bus_ids(&pwb), bus_ids(&other), "{other_path} bus ids");
+        assert_eq!(
+            branch_undirected_fingerprint(&pwb),
+            branch_undirected_fingerprint(&other),
+            "{other_path} topology"
+        );
+    }
+}
+
+fn assert_header338_match(pwb: &Network, other: &Network, label: &str) {
+    assert_case_shape_and_totals_match(pwb, other, label);
+    assert_eq!(tap_count(pwb), tap_count(other), "{label} transformer taps");
+}
+
+fn collect_pwb_files(dir: &Path, out: &mut Vec<PathBuf>) {
+    for entry in std::fs::read_dir(dir).unwrap() {
+        let path = entry.unwrap().path();
+        if path.is_dir() {
+            collect_pwb_files(&path, out);
+        } else if path
+            .extension()
+            .and_then(|ext| ext.to_str())
+            .is_some_and(|ext| ext.eq_ignore_ascii_case("pwb"))
+        {
+            out.push(path);
+        }
+    }
+}
+
+fn assert_case_shape_and_totals_match(pwb: &Network, other: &Network, label: &str) {
+    assert_eq!(pwb.buses.len(), other.buses.len(), "{label} buses");
+    assert_eq!(pwb.loads.len(), other.loads.len(), "{label} loads");
+    assert_eq!(
+        pwb.generators.len(),
+        other.generators.len(),
+        "{label} generators"
+    );
+    assert_eq!(pwb.shunts.len(), other.shunts.len(), "{label} shunts");
+    assert_eq!(pwb.branches.len(), other.branches.len(), "{label} branches");
+    close(sum_load_p(pwb), sum_load_p(other), label, "load P");
+    close(sum_load_q(pwb), sum_load_q(other), label, "load Q");
+    close(sum_gen_p(pwb), sum_gen_p(other), label, "gen P");
+    close(sum_gen_q(pwb), sum_gen_q(other), label, "gen Q");
+    close(sum_shunt_g(pwb), sum_shunt_g(other), label, "shunt G");
+    close(sum_shunt_b(pwb), sum_shunt_b(other), label, "shunt B");
+}
+
+fn assert_four_generator_match(pwb: &Network, other: &Network, label: &str) {
+    assert_header338_match(pwb, other, label);
+    assert_eq!(
+        load_fingerprint(pwb),
+        load_fingerprint(other),
+        "{label} loads"
+    );
+    assert_eq!(
+        branch_rx_fingerprint(pwb),
+        branch_rx_fingerprint(other),
+        "{label} branches"
+    );
+}
+
+fn assert_australian_match(pwb: &Network, other: &Network, label: &str) {
+    assert_case_shape_and_totals_match(pwb, other, label);
+    assert_eq!(
+        load_fingerprint(pwb),
+        load_fingerprint(other),
+        "{label} loads"
+    );
+    assert_eq!(
+        branch_endpoint_fingerprint(pwb),
+        branch_endpoint_fingerprint(other),
+        "{label} branch endpoints"
+    );
+}
+
+fn assert_exact_static_match(pwb: &Network, other: &Network, label: &str) {
+    assert_case_shape_and_totals_match(pwb, other, label);
+    assert_eq!(
+        load_fingerprint(pwb),
+        load_fingerprint(other),
+        "{label} loads"
+    );
+    assert_eq!(
+        branch_rx_fingerprint(pwb),
+        branch_rx_fingerprint(other),
+        "{label} branches"
+    );
+}
+
+fn close(actual: f64, expected: f64, label: &str, what: &str) {
+    assert!(
+        (actual - expected).abs() <= 1e-4 * expected.abs().max(1.0),
+        "{label} {what}: {actual} vs {expected}"
+    );
+}
+
+fn sum_load_p(net: &Network) -> f64 {
+    net.loads.iter().map(|l| l.p).sum()
+}
+
+fn sum_load_q(net: &Network) -> f64 {
+    net.loads.iter().map(|l| l.q).sum()
+}
+
+fn sum_gen_p(net: &Network) -> f64 {
+    net.generators.iter().map(|g| g.pg).sum()
+}
+
+fn sum_gen_q(net: &Network) -> f64 {
+    net.generators.iter().map(|g| g.qg).sum()
+}
+
+fn sum_shunt_b(net: &Network) -> f64 {
+    net.shunts.iter().map(|s| s.b).sum()
+}
+
+fn sum_shunt_g(net: &Network) -> f64 {
+    net.shunts.iter().map(|s| s.g).sum()
+}
+
+fn tap_count(net: &Network) -> usize {
+    net.branches
+        .iter()
+        .filter(|branch| (branch.effective_tap() - 1.0).abs() > 1e-9)
+        .count()
+}
+
+fn load_fingerprint(net: &Network) -> Vec<(usize, i64, i64, bool)> {
+    let mut out: Vec<_> = net
+        .loads
+        .iter()
+        .map(|load| {
+            (
+                load.bus.0,
+                scaled_load(load.p),
+                scaled_load(load.q),
+                load.in_service,
+            )
+        })
+        .collect();
+    out.sort_unstable();
+    out
+}
+
+fn bus_ids(net: &Network) -> Vec<usize> {
+    let mut out: Vec<_> = net.buses.iter().map(|bus| bus.id.0).collect();
+    out.sort_unstable();
+    out
+}
+
+fn branch_rx_fingerprint(net: &Network) -> Vec<(usize, usize, i64, i64, bool)> {
+    let mut out: Vec<_> = net
+        .branches
+        .iter()
+        .map(|branch| {
+            (
+                branch.from.0,
+                branch.to.0,
+                scaled(branch.r),
+                scaled(branch.x),
+                branch.is_transformer(),
+            )
+        })
+        .collect();
+    out.sort_unstable();
+    out
+}
+
+fn branch_endpoint_fingerprint(net: &Network) -> Vec<(usize, usize, bool)> {
+    let mut out: Vec<_> = net
+        .branches
+        .iter()
+        .map(|branch| (branch.from.0, branch.to.0, branch.is_transformer()))
+        .collect();
+    out.sort_unstable();
+    out
+}
+
+fn branch_undirected_fingerprint(net: &Network) -> Vec<(usize, usize)> {
+    let mut out: Vec<_> = net
+        .branches
+        .iter()
+        .map(|branch| {
+            let a = branch.from.0.min(branch.to.0);
+            let b = branch.from.0.max(branch.to.0);
+            (a, b)
+        })
+        .collect();
+    out.sort_unstable();
+    out
+}
+
+fn scaled(value: f64) -> i64 {
+    (value * 1e6).round() as i64
+}
+
+fn scaled_load(value: f64) -> i64 {
+    (value * 1e2).round() as i64
 }

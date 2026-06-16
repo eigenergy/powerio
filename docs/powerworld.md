@@ -42,7 +42,7 @@ Rules shared by both forms:
 - Field names carry location suffixes, `variablename:location` (`BusNum:1` is
   the second bus of a branch); `:0` may be omitted. Simulator 19 renamed most
   located fields to concise names (`LineMW:1` became `MWTo`), and both
-  generations of names appear in the wild.
+  generations appear in exported files.
 - `<SUBDATA subobject_type> ... </SUBDATA>` blocks follow the value row of
   the object they belong to, inside the `{ }` body. Their interior format is
   fixed per subobject type; some hold free text (`PWCaseHeader`), some hold
@@ -163,7 +163,7 @@ integers and floats are little endian.
 | offset | type | value | meaning |
 |---|---|---|---|
 | 0x00 | u64 | 15000 | magic / format constant |
-| 0x08 | u64 | 425 | writer format constant; 425 in every file this section decodes, but other writers carry 483 (Texas7k 2021), 508 (v21 saves, 2020 era), 537, 550, 551 (2022 era), 338, 196, 191, 134 (older Simulators), and the oldest sample cases use a different header shape whose u64 view is garbage past the leading 15000. 425 alone does not pin the record layout (see the bus record flag words below) |
+| 0x08 | u64 | varies | writer format constant. Decoded constants: 338, 368, 425, 483, 508, 537, 550, 551. Other older samples carry 196, 191, 134, or a different header shape. The constant does not pin the record layout; record flags and table anchors do. |
 | 0x10 | u64 | 20 | format constant |
 | 0x18 | 16 bytes | 0 | unknown |
 | 0x28 | f64 | varies | Delphi TDateTime of the save (days since 1899-12-30); matches each file's export date |
@@ -439,7 +439,7 @@ last use (UI state), not a registry of the record types in the file
 (ACTIVSg200.pwd lists only DisplaySubstation yet draws eight plus types);
 the decoder takes nothing from it, and the June 2016 save has none.
 
-Two structures carry the substations, both present in every probed save:
+Two structures carry substations when the display includes substation symbols:
 
 - The identity table, behind the file's only `ff ff ff ff 3d 0f` sequence
   (sentinel plus table tag 0x0f3d): records of u32 number, the same u32
@@ -461,6 +461,10 @@ Two structures carry the substations, both present in every probed save:
   oracle) and the Texas2016 interleaved label group (marker 0x05). Both
   fail the link check; if several groups ever pass, the reader rejects
   rather than guesses.
+
+Some ICSEG display files have a valid PowerWorld display header but no
+substation identity table. Those decode as `PwdDisplay` with an empty
+`substations` list; bus symbols and other drawing objects remain undecoded.
 
 The coordinates are diagram positions, not geography (no probed file
 stores latitude or longitude; needle scans came back empty). The auto
@@ -489,12 +493,10 @@ subset; the rest ran in the scout probes):
 
 ## Coverage matrix
 
-The corpus harness (`powerio/tests/powerworld_corpus.rs`) asserts exactly
-this table; the two must move together. Tiers: decoded with parity,
-classified and rejected (the error names the evidence), out of scope.
-Files marked local only live outside the repository (their identities in a
-gitignored manifest); everything else is vendored or fetched with a
-checksum and recorded URL by `benchmarks/fetch_powerworld.sh`.
+The committed `powerworld_corpus.rs` test pins the vendored and fetched rows.
+Local only rows live outside the repository; machine specific paths belong in
+the gitignored local manifest or the ICSEG env gated tests. Tiers: decoded
+with parity, classified and rejected, out of scope.
 
 | file | provenance | header | bus flags | oracle | verdict | counts |
 |---|---|---|---|---|---|---|
@@ -519,6 +521,9 @@ checksum and recorded URL by `benchmarks/fetch_powerworld.sh`.
 | Hawaii40 2022 export | local only | 508 | 0x66-0x167 | same set aux (2022 vocabulary) | decoded, parity on every quantity | 37 buses, 89 branches |
 | 12 bus course case saved as v21 | local only | 508 | — | — | decoded, counts verified | 12 buses, 18 branches |
 | .pwd display files | local/fetched | 50 | — | sibling aux Substation latitude/longitude | substation coordinates decoded, matched 1-1 (see the .pwd section) | 111 through 1500 substations across seven files |
+| ICSEG .pwd display set | local ICSEG | 50 | — | header plus optional substation table | decoded | 33 displays, 0 through 1500 substations |
+| ICSEG older PWB cases | local ICSEG | 338/368 | 0x06 family plus ICSEG bits | RAW/EPC siblings where present | decoded; opt in report has zero PWB parse/conversion failures | 7 files |
+| ICSEG 425 PWB variants | local ICSEG | 425 | mixed | RAW/EPC/AUX/M siblings where present | decoded; opt in report has zero PWB parse/conversion failures | 26 files |
 
 ## Object inventory of ACTIVSg200.aux
 
