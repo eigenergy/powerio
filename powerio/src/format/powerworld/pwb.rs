@@ -196,6 +196,7 @@ fn search_table_chain(
             read_load_record,
             &load_runs,
             96,
+            12,
         ) {
             // The generator table reads through the record layouts the
             // header constant admits (see parse_pwb). A file's table uses
@@ -213,6 +214,7 @@ fn search_table_chain(
                         read_gen_record,
                         &gen_runs,
                         128,
+                        32,
                     )
                 })
                 .into_iter()
@@ -228,6 +230,7 @@ fn search_table_chain(
                                 read_gen_reg_record,
                                 &gen_reg_runs,
                                 128,
+                                40,
                             )
                         })
                         .into_iter()
@@ -262,6 +265,7 @@ fn search_table_chain(
                     read_shunt_record,
                     &shunt_runs,
                     48,
+                    28,
                 ) {
                     let Some(branches) =
                         find_branch_table(bytes, s_end, &bus_ids, &bus_names, &branch_runs)
@@ -474,6 +478,15 @@ fn slice_at(b: &[u8], at: usize, n: usize) -> Option<&[u8]> {
 
 fn checked_offset(at: usize, add: usize) -> Probe<usize> {
     at.checked_add(add).ok_or("truncated record")
+}
+
+fn count_fits(b: &[u8], first: usize, count: usize, min_record_len: usize) -> bool {
+    let Some(remaining) = b.len().checked_sub(first) else {
+        return false;
+    };
+    count
+        .checked_mul(min_record_len)
+        .is_some_and(|min_bytes| min_bytes <= remaining)
 }
 
 fn u32_at(b: &[u8], at: usize) -> Probe<u32> {
@@ -703,10 +716,11 @@ fn known_bus_flags(unk: u32) -> bool {
     unk & !0x3571 == 0x06
 }
 
-/// The record family bits of a bus flag word: everything but the per record
-/// presence bits 0, 4, 6, and 8. One file's bus table never mixes families.
+/// The record family bits of a bus flag word: everything but the admitted
+/// per record presence bits that leave the decoded head layout unchanged.
+/// Bit 5 stays in the family key because the 0x06 and 0x26 era tails differ.
 fn bus_family(unk: u32) -> u32 {
-    unk & !0x151
+    unk & !0x3551
 }
 
 /// The bus run cache: keyed by first record offset, each entry carrying the
@@ -746,7 +760,12 @@ fn bus_table_candidates<'a>(
         glues
             .into_iter()
             .flatten()
-            .filter_map(move |glue| bus_run(b, runs, at + 4 + glue, count))
+            .filter_map(move |glue| {
+                let first = at.checked_add(4)?.checked_add(glue)?;
+                count_fits(b, first, count, 32)
+                    .then(|| bus_run(b, runs, first, count))
+                    .flatten()
+            })
             .map(|(heads, end)| {
                 let last_unk = heads.last().map_or(0, |(_, unk, _)| *unk);
                 let shunts = heads
@@ -977,15 +996,18 @@ fn device_table_candidates<'a, T: Clone + 'a>(
     read: impl ReadRecord<T> + 'a,
     runs: &'a RefCell<HashMap<usize, Run<T>>>,
     max_glue: usize,
+    min_record_len: usize,
 ) -> impl Iterator<Item = (Vec<T>, usize)> + 'a {
     let limit = scan.end.min(b.len().saturating_sub(4));
     (scan.start..limit).flat_map(move |at| {
         let count = u32::from_le_bytes(b[at..at + 4].try_into().unwrap()) as usize;
         let glues = (count != 0 && count <= 10_000_000).then_some(0..=max_glue);
-        glues
-            .into_iter()
-            .flatten()
-            .filter_map(move |glue| device_run(b, runs, at + 4 + glue, count, bus_ids, read))
+        glues.into_iter().flatten().filter_map(move |glue| {
+            let first = at.checked_add(4)?.checked_add(glue)?;
+            count_fits(b, first, count, min_record_len)
+                .then(|| device_run(b, runs, first, count, bus_ids, read))
+                .flatten()
+        })
     })
 }
 
@@ -1278,7 +1300,7 @@ fn find_branch_table(
         .min(b.len().saturating_sub(4));
     for at in from..limit {
         let count = u32::from_le_bytes(b[at..at + 4].try_into().unwrap()) as usize;
-        if count == 0 || count > 10_000_000 {
+        if count == 0 || count > 10_000_000 || !count_fits(b, at.saturating_add(4), count, 24) {
             continue;
         }
         // The branch table glue is longer than the device tables'; scan a
