@@ -21,7 +21,7 @@ end
 
 #[test]
 fn parse_str_accepts_pslf_aliases() {
-    for alias in ["pslf", "epc", "pslf-epc"] {
+    for alias in ["pslf", "PSLF", "epc", "EPC", "pslf-epc", "Pslf_Epc"] {
         let parsed = parse_str(EPC, alias).unwrap();
         assert_eq!(parsed.network.source_format, SourceFormat::Pslf);
         assert_eq!(parsed.network.buses.len(), 2);
@@ -42,6 +42,17 @@ fn parse_file_infers_uppercase_epc_extension() {
         parsed.network.source.as_deref().map(String::as_str),
         Some(EPC)
     );
+}
+
+#[test]
+fn parse_file_accepts_case_insensitive_pslf_hint() {
+    let path = temp_path("case.txt");
+    std::fs::write(&path, EPC).unwrap();
+
+    for hint in ["PSLF", "EPC", "Pslf_Epc"] {
+        let parsed = parse_file(&path, Some(hint)).unwrap();
+        assert_eq!(parsed.network.source_format, SourceFormat::Pslf);
+    }
 }
 
 #[test]

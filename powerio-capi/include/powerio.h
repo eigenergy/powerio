@@ -104,21 +104,24 @@ uint32_t pio_abi_version(void);
 const char *pio_version(void);
 
 /**
- * Parse a case file or directory into a network handle. With `from = NULL`,
- * the reader is inferred from the extension or PyPSA `network.csv` directory
- * layout. `from` also accepts `pypsa-csv`/`pypsa`, `pwb`, `pslf`, and `epc`.
- * Read fidelity warnings attach to the handle ([`pio_parse_warnings`]).
- * Returns `NULL` on error and writes the message into `errbuf`.
+ * Parse `path` into a network handle. With `from = NULL`, the reader is
+ * inferred from the extension or PyPSA `network.csv` directory layout. `from`
+ * accepts the `pio_parse_str` text format names plus `pypsa-csv`/`pypsa` and
+ * `pwb`; PyPSA CSV folders are directories, so they enter through this
+ * function with `from = "pypsa-csv"` or by inference from `network.csv`. Read
+ * fidelity warnings attach to the handle ([`pio_parse_warnings`]). Returns
+ * `NULL` on error and writes the message into `errbuf`.
  */
 PioNetwork *pio_parse_file(const char *path, const char *from, char *errbuf, size_t errlen);
 
 /**
- * Parse in-memory text in the named `format` into a network handle. Supported
- * text formats are `matpower`/`m`, `powermodels`/`pm`, `egret`,
+ * Parse in-memory case `text` of the named `format` into a network handle.
+ * Supported text formats are `matpower`/`m`, `powermodels`/`pm`, `egret`,
  * `pandapower-json`/`pandapower`/`pp`, `psse`/`raw`, `powerworld`/`aux`, and
- * `pslf`/`epc`. Read fidelity warnings attach to the handle
- * ([`pio_parse_warnings`]). Returns `NULL` on error and writes the message into
- * `errbuf`. Free the handle with [`pio_network_free`].
+ * `pslf`/`epc`. PyPSA CSV folders are directories, not text; parse them with
+ * [`pio_parse_file`]. Read fidelity warnings attach to the handle
+ * ([`pio_parse_warnings`]). Returns `NULL` on error and writes the message
+ * into `errbuf`. Free the handle with [`pio_network_free`].
  */
 PioNetwork *pio_parse_str(const char *text, const char *format, char *errbuf, size_t errlen);
 

@@ -291,15 +291,12 @@ bus, regulated bus, ID, MW, and status each) and their name keyed aux
 export (BusName_NomVolt keys instead of BusNum) keeps them out of the
 committed aux comparison until the aux reader learns that vocabulary.
 
-Header 554 appears in the PowerFactory corpus's PowerWorld IEEE 14 save
-(`Assignment1.PWB`). It keeps the same bus, load, shunt, and branch heads,
-but widens the load table glue to 104 bytes and uses a regulated generator
-record without the 2021 era presence byte: terminal bus, regulated bus,
-fixed ID, two zero bytes, the shared f32 generator block, then the same
-status/RMPCT tail. Its branch table count includes one trailing non branch
-record; the 20 validated branch records are the standard IEEE 14 topology.
-The local datasets test pins the 14 bus, 11 load, 5 generator, 1 shunt,
-20 branch shape.
+Header 554 keeps the same bus, load, shunt, and branch heads, but widens the
+load table glue to 104 bytes and uses a regulated generator record without
+the 2021 era presence byte: terminal bus, regulated bus, fixed ID, two zero
+bytes, the shared f32 generator block, then the same status/RMPCT tail. Its
+branch table count can include one trailing non branch record; the accepted
+branch run still has to pass the normal branch record validation and end check.
 
 ### Load record (validated on all 160 + 1417 + 1350 + 5095 loads of four files)
 
@@ -472,9 +469,9 @@ Two structures carry substations when the display includes substation symbols:
   fail the link check; if several groups ever pass, the reader rejects
   rather than guesses.
 
-Some ICSEG display files have a valid PowerWorld display header but no
-substation identity table. Those decode as `PwdDisplay` with an empty
-`substations` list; bus symbols and other drawing objects remain undecoded.
+Some display files have a valid PowerWorld display header but no substation
+identity table. Those decode as `PwdDisplay` with an empty `substations` list;
+bus symbols and other drawing objects remain undecoded.
 
 The coordinates are diagram positions, not geography (no probed file
 stores latitude or longitude; needle scans came back empty). The auto
@@ -505,8 +502,8 @@ subset; the rest ran in the scout probes):
 
 The committed `powerworld_corpus.rs` test pins the vendored and fetched rows.
 Local only rows live outside the repository; machine specific paths belong in
-the gitignored local manifest or the ICSEG env gated tests. Tiers: decoded
-with parity, classified and rejected, out of scope.
+the gitignored local manifest. Tiers: decoded with parity, classified and
+rejected, out of scope.
 
 | file | provenance | header | bus flags | oracle | verdict | counts |
 |---|---|---|---|---|---|---|
@@ -520,9 +517,9 @@ with parity, classified and rejected, out of scope.
 | Texas7k 2030 build | local only | 550 | 0x66-0x167 | aux, offline strict alignment (name keyed export) | decoded, counts committed; 1058/1058 generators value checked offline | 7132 buses, 9555 branches |
 | Texas7k 2030 saved as v22 | local only | 537 | 0x66-0x167 | aux, offline strict alignment | decoded, counts committed | 7132 buses, 9555 branches |
 | Texas7k 2021 scenario snapshot | local only | 537 | 0x66-0x167 | same grid as the 2021 export | decoded, counts match the 2021 case | 6717 buses, 9140 branches |
-| PowerFactory corpus IEEE 14 PowerWorld save | local only | 554 | 0x06/0x07 | standard IEEE 14 topology | decoded, local datasets test | 14 buses, 20 branches |
-| 39 bus sample case | local only | 425 | 0x06/0x07 | ICSEG RAW/EPC sibling | decoded; counts, totals, and branch topology match | 39 buses, 46 branches |
-| 118 bus sample case | local only | 338 | 0x06 family | ICSEG RAW/EPC sibling | decoded; counts, totals, and branch topology match | 118 buses, 186 branches |
+| IEEE 14 PowerWorld save | local only | 554 | 0x06/0x07 | standard IEEE 14 topology | decoded offline | 14 buses, 20 branches |
+| 39 bus sample case | local only | 425 | 0x06/0x07 | RAW/EPC sibling | decoded; counts, totals, and branch topology match | 39 buses, 46 branches |
+| 118 bus sample case | local only | 338 | 0x06 family | RAW/EPC sibling | decoded; counts, totals, and branch topology match | 118 buses, 186 branches |
 | 12 bus course case | local only | 134 | — | — | rejected: header constant | |
 | 10 bus sample case | local only | 196 | — | — | rejected: header constant | |
 | 3 bus sample case | local only | pre 425 shape | — | — | rejected: header words | |
@@ -532,9 +529,6 @@ with parity, classified and rejected, out of scope.
 | Hawaii40 2022 export | local only | 508 | 0x66-0x167 | same set aux (2022 vocabulary) | decoded, parity on every quantity | 37 buses, 89 branches |
 | 12 bus course case saved as v21 | local only | 508 | — | — | decoded, counts verified | 12 buses, 18 branches |
 | .pwd display files | local/fetched | 50 | — | sibling aux Substation latitude/longitude | substation coordinates decoded, matched 1-1 (see the .pwd section) | 111 through 1500 substations across seven files |
-| ICSEG .pwd display set | local ICSEG | 50 | — | header plus optional substation table | decoded | 33 displays, 0 through 1500 substations |
-| ICSEG older PWB cases | local ICSEG | 338/368 | 0x06 family plus ICSEG bits | RAW/EPC siblings where present | decoded; opt in report has zero PWB parse/conversion failures | 7 files |
-| ICSEG 425 PWB variants | local ICSEG | 425 | mixed | RAW/EPC/AUX/M siblings where present | decoded; opt in report has zero PWB parse/conversion failures | 26 files |
 
 ## Object inventory of ACTIVSg200.aux
 

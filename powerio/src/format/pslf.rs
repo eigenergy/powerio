@@ -110,6 +110,11 @@ pub(crate) fn parse_pslf_source(
     Ok(net)
 }
 
+/// Structural parse of an EPC file before mapping to [`Network`].
+///
+/// This intentionally keeps sections as raw records instead of making a PSLF
+/// specific object model. The reader only maps the static power flow sections;
+/// everything else remains in `source` and is surfaced through warnings.
 #[derive(Debug)]
 struct EpcDocument {
     title: Vec<String>,
@@ -160,6 +165,10 @@ impl EpcDocument {
     }
 }
 
+/// One named `... data [count]` block.
+///
+/// `declared_count` is retained because count mismatches are useful evidence
+/// when a variant section shape appears in a new EPC file.
 #[derive(Debug)]
 struct Section {
     declared_count: usize,
@@ -167,6 +176,11 @@ struct Section {
     records: Vec<Record>,
 }
 
+/// One logical EPC record assembled from one or more physical lines.
+///
+/// `lhs` is the identity side before `:`, and `rhs` is the numeric/status side.
+/// Raw physical lines stay attached so conversion warnings and extras can point
+/// back to the original text.
 #[derive(Debug)]
 struct Record {
     line_no: usize,
@@ -175,6 +189,12 @@ struct Record {
     rhs: Vec<String>,
 }
 
+/// Parse EPC's section grammar without interpreting electrical fields.
+///
+/// The general structure is stable across observed files: free text blocks end
+/// with `!`, data sections declare a count in brackets, and `/` continues a
+/// record onto the next physical line. The parser stops early at the next
+/// section header and reports the mismatch instead of consuming unrelated text.
 #[expect(clippy::too_many_lines)]
 fn parse_document(content: &str, warnings: &mut Vec<String>) -> EpcDocument {
     let lines: Vec<&str> = content.lines().collect();
@@ -439,6 +459,9 @@ fn read_transformer(rec: &Record, warnings: &mut Vec<String>) -> Result<Option<B
     let ts_r = num_at(&rhs1, 19, 0.0, "transformer ts_r", rec)?;
     let ts_x = num_at(&rhs1, 20, 0.0, "transformer ts_x", rec)?;
     if tertiary != 0 || pt_r != 0.0 || pt_x != 0.0 || ts_r != 0.0 || ts_x != 0.0 {
+        // A three winding transformer has no neutral Network equivalent. Do
+        // not invent a dummy bus or collapse it into pairwise branches; keeping
+        // the raw record and warning is safer for conversion callers.
         warnings.push(format!(
             "transformer record at line {} is three winding; no neutral Network equivalent",
             rec.line_no
@@ -503,6 +526,9 @@ fn read_load(
     let p_z = num_at(&rec.rhs, 5, 0.0, "load mw_z", rec)?;
     let q_z = num_at(&rec.rhs, 6, 0.0, "load mvar_z", rec)?;
     if (p_i, q_i, p_z, q_z) != (0.0, 0.0, 0.0, 0.0) && once.insert("zip_load") {
+        // Network has one static load per row today. Preserve component values
+        // in extras and fold them into P/Q so matrix builders see the total
+        // demand that the solved power flow used.
         warnings.push(
             "PSLF ZIP load components folded into Network load p/q; component fields retained in extras"
                 .into(),
@@ -608,6 +634,11 @@ fn read_dc_converters(
     out
 }
 
+/// Map two-terminal DC lines through their converter rows.
+///
+/// EPC separates the DC line from each AC converter. `Network::Hvdc` needs AC
+/// terminal buses and setpoints on one row, so this joins by DC bus id and
+/// retains converter extras under the HVDC record.
 fn read_dc_lines(
     doc: &EpcDocument,
     converters: &HashMap<usize, DcConverter>,
@@ -701,6 +732,11 @@ fn warn_unmodeled_sections(doc: &EpcDocument, warnings: &mut Vec<String>) {
     }
 }
 
+/// Common extras for mapped EPC rows.
+///
+/// The `used_*` bounds are the fields consumed by the typed reader. Remaining
+/// tokens are retained so later PSLF work can recover more fields without
+/// needing the original case file at hand.
 fn extras(rec: &Record, section: &str, used_lhs: usize, used_rhs: usize) -> Extras {
     let mut extras = Extras::new();
     extras.insert("pslf_section".into(), Value::String(section.into()));

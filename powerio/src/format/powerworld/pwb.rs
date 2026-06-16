@@ -14,11 +14,20 @@
 //! match the validated layout fails loudly; nothing is guessed silently.
 //!
 //! Supported header constants: 338, 368, 425, 483, 508, 537, 550, 551, and 554.
-//! Older ICSEG, ACTIVSg, Hawaii40, and Texas7k saves share the bus, load,
-//! shunt, and branch heads decoded below; generator records use either the
-//! plain bus + ID shape or the regulated bus shape keyed in [`parse_pwb`].
-//! Flag words are Delphi field presence bitmasks, and structural anchors
-//! reject unobserved variants.
+//! These constants gate only the writer era; a recognized constant still has
+//! to pass the table walk. Constants 338/368/425 use the older generator record
+//! (`bus`, ID, f32 block), 483/537/550/551 use the regulated bus record, 508
+//! has been observed with both generator families, and 554 uses the regulated
+//! record without the 2021 era presence byte. The bus, load, shunt, and branch
+//! heads are more general: their flag words are Delphi field presence bitmasks,
+//! so one decoded head model admits the observed 0x06, 0x26, and 0x66 families
+//! as long as the later table walk still validates.
+//!
+//! The emerging structure is useful but bounded: the file is a sequence of
+//! count-word tables separated by writer metadata, each record starts with a
+//! small stable head, optional fields are controlled by bitmasks or short kind
+//! markers, and long tails are skipped only after anchors prove the record kind.
+//! That gives a general path for new vintages without guessing at fields.
 //!
 //! To add a new vintage, start with the smallest stable facts: header words,
 //! bus flag census, table count positions, record anchors, and companion
@@ -613,9 +622,12 @@ fn expect_header(b: &[u8]) -> Result<u64> {
     if a != 15000 {
         return Err(bad());
     }
-    // Every known PowerWorld binary starts with 15000; the next words
-    // identify the writer. Recognized constants still have to pass the
-    // record layout checks below.
+    // Every known PowerWorld binary starts with 15000. The next two words
+    // identify the writer family: the decoded constants cover older 0x06 bus
+    // records (338/368), the Simulator 19/20/current 425 family, the 2021
+    // regulated generator family (483/537/550/551), the mixed 508 saves, and
+    // the 554 regulated generator variant. Header admission is not trust:
+    // every table still has to pass the record probes below.
     if c != 20 || !DECODED.contains(&v) {
         return Err(unsupported_vintage(format!(
             "header format words ({v}, {c}); the decoded eras are \
@@ -626,7 +638,10 @@ fn expect_header(b: &[u8]) -> Result<u64> {
 }
 
 /// Reject files whose leading 64 KiB carries no run of validated bus record
-/// heads before the table search reaches a generic "no chain" error.
+/// heads before the table search reaches a generic "no chain" error. The
+/// decoded bus head families share enough structure that fewer than two
+/// validated heads in this window means an unrecognized body layout, not a
+/// sparse case.
 fn reject_unsupported_vintage(b: &[u8]) -> Result<()> {
     let scan = b.len().min(0x10000).saturating_sub(8);
     let mut heads = 0usize;
@@ -787,17 +802,18 @@ struct BusHead {
 }
 
 /// Whether a bus record flag word is one this reader decodes: base bits
-/// `0x06` plus any combination of bits 0, 4, 5, 6, 8, 10, 12, and 13 (see
-/// [`BusHead::unk`]); the census table in docs/powerworld.md records the
-/// observed words. Bits 6, 8, 10, 12, and 13 leave the head layout
-/// untouched.
+/// `0x06` plus any combination of the observed presence bits. Bit 5 changes
+/// the tail family (`0x06` vs `0x26` era), while bits 6, 8, 10, 12, and 13
+/// were admitted only after full table walks showed they leave the decoded
+/// head layout unchanged.
 fn known_bus_flags(unk: u32) -> bool {
     unk & !0x3571 == 0x06
 }
 
-/// The record family bits of a bus flag word: everything but the admitted
-/// per record presence bits that leave the decoded head layout unchanged.
-/// Bit 5 stays in the family key because the 0x06 and 0x26 era tails differ.
+/// The record family bits of a bus flag word. One bus table cannot mix tail
+/// families, but individual records can toggle optional presence bits inside
+/// a family. Bit 5 stays in the family key because the 0x06 and 0x26 era tails
+/// differ; the other admitted bits are per record fields or skipped tails.
 fn bus_family(unk: u32) -> u32 {
     unk & !0x3551
 }
@@ -1579,6 +1595,8 @@ fn read_standard_branch_head(
     Ok((br, c.pos, flags))
 }
 
+/// Read a signed branch endpoint. Some saves store a negative endpoint for
+/// orientation metadata; the network bus id is the positive magnitude.
 fn branch_endpoint(c: &mut Cur<'_>) -> Probe<usize> {
     let raw = i32::from_le_bytes(c.take(4)?.try_into().unwrap());
     raw.checked_abs()
@@ -1586,6 +1604,11 @@ fn branch_endpoint(c: &mut Cur<'_>) -> Probe<usize> {
         .ok_or("invalid branch endpoint")
 }
 
+/// Probe the fixed-layout generator step-up transformer records found in the
+/// Australian cases. They do not use the normal branch head, so this reader
+/// keeps them behind a separate probe with several anchors: known high side
+/// bus, 100 MVA nominal marker, plausible device X/MBASE fields, "STEP UP" in
+/// the name, and a low side bus named `GEN <unit>`.
 fn read_step_up_transformer_head(
     b: &[u8],
     at: usize,
@@ -1656,6 +1679,9 @@ fn read_step_up_transformer_head(
     ))
 }
 
+/// Read the modern branch tail after the common electrical head. The tail is
+/// a rating block, separator byte, and kind marker; kind 1 is a line, kind 0
+/// is a transformer followed by the tap.
 fn read_modern_branch_tail(c: &mut Cur<'_>) -> Probe<(&'static str, f64)> {
     for _ in 0..11 {
         let v = c.f32()?;
@@ -1679,6 +1705,9 @@ fn read_modern_branch_tail(c: &mut Cur<'_>) -> Probe<(&'static str, f64)> {
     }
 }
 
+/// Read the older short branch tail. These saves do not carry the modern kind
+/// marker, so transformer detection uses the validated zero marker block plus
+/// a plausible non-unit tap at the observed tail offset.
 fn read_legacy_branch_tail(c: &mut Cur<'_>, tail_start: usize) -> Probe<(&'static str, f64)> {
     for _ in 0..4 {
         if c.u32()? != 0 {
