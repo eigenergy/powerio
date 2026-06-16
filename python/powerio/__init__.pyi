@@ -156,6 +156,7 @@ class Network:
         "Psse",
         "PowerWorld",
         "PandapowerJson",
+        "Pslf",
         "PowerWorldBinary",
         "InMemory",
         "Normalized",

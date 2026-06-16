@@ -2,8 +2,8 @@
 //! files.
 //!
 //! Readers and writers cover MATPOWER `.m`, PowerModels JSON, PSS/E `.raw`,
-//! PowerWorld `.aux`, pandapower JSON, PyPSA CSV, and egret JSON. PowerWorld
-//! `.pwb` case files are read only; `.pwd` display files parse through
+//! PowerWorld `.aux`, pandapower JSON, PyPSA CSV, and egret JSON. PSLF `.epc`
+//! and PowerWorld `.pwb` case files are read only; `.pwd` display files parse through
 //! [`parse_display_file`]. Case formats meet at the typed [`Network`], and
 //! [`Network::to_format`] reports whatever a target format cannot represent.
 //! See the [`crate::format`] module for the two-tier fidelity contract.
@@ -46,9 +46,9 @@ pub use format::{
     Conversion, DisplayData, DisplayFormat, Parsed, PwdDisplay, PwdSubstation, PypsaCsvOutputs,
     TargetFormat, convert_file, convert_str, display_format_from_name, parse_display_bytes,
     parse_display_file, parse_egret_json, parse_file, parse_matpower, parse_matpower_file,
-    parse_pandapower_json, parse_powermodels_json, parse_powerworld, parse_psse, parse_str,
-    read_pypsa_csv_folder, target_format_from_name, write_as, write_egret_json, write_matpower,
-    write_pandapower_json, write_powermodels_json, write_powerworld, write_psse,
+    parse_pandapower_json, parse_powermodels_json, parse_powerworld, parse_pslf, parse_psse,
+    parse_str, read_pypsa_csv_folder, target_format_from_name, write_as, write_egret_json,
+    write_matpower, write_pandapower_json, write_powermodels_json, write_powerworld, write_psse,
     write_pypsa_csv_folder,
 };
 pub use indexed::{ConnectivityReport, IndexCore, IndexedNetwork};

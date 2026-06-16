@@ -136,6 +136,9 @@ pub enum SourceFormat {
     Psse,
     PowerWorld,
     PandapowerJson,
+    /// Read from a GE PSLF `.epc` case. Read only for now: same-source text is
+    /// retained for auditability, but there is no canonical PSLF writer.
+    Pslf,
     /// Read from a PowerWorld `.pwb` binary case. Read only: there is no
     /// `.pwb` writer and no retained source text, so writing goes through
     /// another format's writer.

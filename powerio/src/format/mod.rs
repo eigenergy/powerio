@@ -3,9 +3,10 @@
 //!
 //! Each format is one module here, owning its reader and/or writer: MATPOWER
 //! `.m`, PowerModels JSON, PSS/E `.raw`, PowerWorld `.aux`, egret
-//! `ModelData` JSON, pandapower JSON, and PyPSA CSV folders. PowerWorld `.pwb`
-//! cases and `.pwd` displays are read only. Case input and output formats meet
-//! at the hub, so adding a format is one module, not a change to any other.
+//! `ModelData` JSON, pandapower JSON, PyPSA CSV folders, and PSLF `.epc`.
+//! PowerWorld `.pwb`, PSLF `.epc`, and `.pwd` displays are read only. Case input
+//! and output formats meet at the hub, so adding a writable format is one
+//! module, not a change to any other.
 //! [`parse_file`] reads Network cases, detecting the format from its extension;
 //! [`parse_display_file`] reads display artifacts such as PowerWorld `.pwd`.
 //! [`write_as`]
@@ -41,6 +42,7 @@ mod matpower;
 mod pandapower;
 mod powermodels;
 pub mod powerworld;
+mod pslf;
 mod psse;
 mod pypsa;
 
@@ -49,6 +51,7 @@ pub use matpower::{parse_matpower, parse_matpower_file, write_matpower};
 pub use pandapower::{parse_pandapower_json, write_pandapower_json};
 pub use powermodels::{parse_powermodels_json, write_powermodels_json};
 pub use powerworld::{PwdDisplay, PwdSubstation, parse_powerworld, write_powerworld};
+pub use pslf::parse_pslf;
 pub use psse::{parse_psse, write_psse};
 pub use pypsa::{PypsaCsvOutputs, read_pypsa_csv_folder, write_pypsa_csv_folder};
 
@@ -303,12 +306,21 @@ fn is_pypsa_csv_name(name: &str) -> bool {
     )
 }
 
+/// Whether a source format name means PSLF EPC. PSLF is read only and
+/// deliberately stays out of [`TargetFormat`].
+fn is_pslf_name(name: &str) -> bool {
+    matches!(
+        name.to_ascii_lowercase().replace(['-', '_'], "").as_str(),
+        "pslf" | "epc" | "pslfepc"
+    )
+}
+
 /// Parse the case file at `path`, choosing the reader from `from` (the
 /// [`target_format_from_name`] names plus `pypsa-csv`/`pypsa` and `pwb`) or,
 /// when `None`, from the path: a directory containing `network.csv` parses as
 /// a PyPSA CSV folder (any other directory fails: [`Error::UnknownFormat`]
 /// when its name maps to no extension, the I/O error otherwise), and a
-/// file maps by extension (`m`/`json`/`raw`/`aux`/`pwb`), case-insensitively
+/// file maps by extension (`m`/`json`/`raw`/`aux`/`pwb`/`epc`), case-insensitively
 /// (issue #97: `.RAW` is as common as `.raw` in the wild). A `.json` file is
 /// sniffed three ways: pandapower (`"_class": "pandapowerNet"`), egret (top
 /// level `elements` and `system`), else PowerModels. Pass `from` to force one.
@@ -351,6 +363,14 @@ pub fn parse_file(path: impl AsRef<std::path::Path>, from: Option<&str>) -> Resu
             network,
             warnings: Vec::new(),
         });
+    }
+    if from.is_some_and(is_pslf_name) || (from.is_none() && ext.as_deref() == Some("epc")) {
+        let text = std::fs::read_to_string(path)?;
+        let stem = path.file_stem().and_then(|s| s.to_str());
+        let mut warnings = Vec::new();
+        let network = pslf::parse_pslf_source(Arc::new(text), stem, &mut warnings)?;
+        reject_empty_case(&network, "PSLF .epc")?;
+        return Ok(Parsed { network, warnings });
     }
     // Settle the format before touching the file: an unmapped or binary
     // extension must surface as UnknownFormat, not as the UTF-8 read error
@@ -476,6 +496,12 @@ fn sniff_json(text: &str) -> TargetFormat {
 /// [`Error::UnknownFormat`] if `format` is unrecognized; the reader's own
 /// [`Error`] on malformed input.
 pub fn parse_str(text: &str, format: &str) -> Result<Parsed> {
+    if is_pslf_name(format) {
+        let mut warnings = Vec::new();
+        let network = pslf::parse_pslf_source(Arc::new(text.to_owned()), None, &mut warnings)?;
+        reject_empty_case(&network, "PSLF .epc")?;
+        return Ok(Parsed { network, warnings });
+    }
     let fmt =
         target_format_from_name(format).ok_or_else(|| Error::UnknownFormat(format.to_string()))?;
     read_source(Arc::new(text.to_owned()), fmt, None)
@@ -791,6 +817,7 @@ mod tests {
             SourceFormat::Gridfm,
             SourceFormat::PypsaCsv,
             SourceFormat::PowerWorldBinary,
+            SourceFormat::Pslf,
         ] {
             assert_eq!(target_format_from_name(&format!("{sf:?}")), None);
         }
