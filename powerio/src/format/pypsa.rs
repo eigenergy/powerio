@@ -377,6 +377,7 @@ fn read_pypsa_csv_folder_inner(path: &Path, warnings: &mut Vec<String>) -> Resul
     let net = Network {
         name,
         base_mva,
+        base_frequency: crate::network::DEFAULT_BASE_FREQUENCY,
         buses,
         loads,
         shunts,

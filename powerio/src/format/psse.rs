@@ -71,8 +71,10 @@ pub fn write_psse(net: &Network) -> Conversion {
 
     let _ = writeln!(
         s,
-        "0, {}, {REV}, 0, 0, 60.00   / powerio export: {}",
-        net.base_mva, net.name
+        "0, {}, {REV}, 0, 0, {}   / powerio export: {}",
+        net.base_mva,
+        num(net.base_frequency),
+        net.name
     );
     let _ = writeln!(s, "{}", net.name);
     let _ = writeln!(s);
@@ -271,6 +273,9 @@ pub fn parse_psse(content: &str) -> Result<Network> {
 /// Owned-source entry used by the format hub: parse by borrowing `source`, then
 /// move the buffer into the retained source (no copy). `name_hint` (e.g. a file
 /// stem) names the network when the title line is blank.
+// A flat reader: header parse plus one match arm per section. Splitting it would
+// add indirection without clarity.
+#[expect(clippy::too_many_lines)]
 pub(crate) fn parse_psse_source(source: Arc<String>, name_hint: Option<&str>) -> Result<Network> {
     let content: &str = &source;
     let mut lines = content.lines();
@@ -299,6 +304,13 @@ pub(crate) fn parse_psse_source(source: Arc<String>, name_hint: Option<&str>) ->
         .and_then(|f| f.parse::<f64>().ok())
         .filter(|v| v.is_finite() && *v >= 0.0)
         .map_or(33, |v| v as u32);
+    // BASFRQ is the sixth header field (IC, SBASE, REV, XFRRAT, NXFRAT, BASFRQ);
+    // older revisions that carry only `SBASE, title` lack it, so default it.
+    let base_frequency = header_fields
+        .get(5)
+        .and_then(|f| f.parse::<f64>().ok())
+        .filter(|v| v.is_finite() && *v > 0.0)
+        .unwrap_or(crate::network::DEFAULT_BASE_FREQUENCY);
     // Line 2 is the case title; we write the network name there, so read it back.
     let title = lines.next().unwrap_or("").trim();
     let name = if title.is_empty() {
@@ -370,6 +382,7 @@ pub(crate) fn parse_psse_source(source: Arc<String>, name_hint: Option<&str>) ->
     let net = Network {
         name,
         base_mva,
+        base_frequency,
         buses,
         loads,
         shunts,

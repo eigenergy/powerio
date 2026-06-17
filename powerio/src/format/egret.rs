@@ -315,6 +315,7 @@ pub(crate) fn parse_egret_source(source: Arc<String>, name_hint: Option<&str>) -
     let net = Network {
         name,
         base_mva,
+        base_frequency: crate::network::DEFAULT_BASE_FREQUENCY,
         buses,
         loads,
         shunts,

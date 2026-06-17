@@ -31,6 +31,18 @@ use crate::Error;
 /// cross-format passthrough. Keys are the field names; values are JSON scalars.
 pub type Extras = BTreeMap<String, Value>;
 
+/// System base frequency in hertz when a format records none. Power networks run
+/// at 50 or 60 Hz; 60 is the default for the formats (MATPOWER, PowerModels,
+/// egret) that carry no frequency field.
+pub const DEFAULT_BASE_FREQUENCY: f64 = 60.0;
+
+/// serde default for [`Network::base_frequency`], so JSON written before the
+/// field existed still deserializes (the C ABI and Julia bridge ride on the JSON
+/// transport).
+fn default_base_frequency() -> f64 {
+    DEFAULT_BASE_FREQUENCY
+}
+
 /// A bus identifier as it appears in the source file: the external, stable id
 /// (1-based in MATPOWER, and possibly sparse — pegase has gaps in its ids).
 /// Distinct from the dense `[0, n)` analysis index, which only
@@ -167,6 +179,14 @@ pub enum SourceFormat {
 pub struct Network {
     pub name: String,
     pub base_mva: f64,
+    /// System base frequency in hertz (50 or 60). Threaded through the formats
+    /// that record it (PSS/E `BASFRQ`, pandapower `f_hz`) and defaulted to
+    /// [`DEFAULT_BASE_FREQUENCY`] for the rest. Load-bearing for any
+    /// reactance↔henry conversion (pandapower line charging) and reported as a
+    /// fidelity loss when a non-default value writes to a format with no
+    /// frequency field.
+    #[serde(default = "default_base_frequency")]
+    pub base_frequency: f64,
     pub buses: Vec<Bus>,
     pub loads: Vec<Load>,
     pub shunts: Vec<Shunt>,
@@ -385,6 +405,7 @@ impl Network {
         Network {
             name: name.into(),
             base_mva,
+            base_frequency: DEFAULT_BASE_FREQUENCY,
             buses,
             loads: Vec::new(),
             shunts: Vec::new(),

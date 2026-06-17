@@ -561,7 +561,27 @@ pub fn write_as(net: &Network, format: TargetFormat) -> Conversion {
     };
     warn_normalized_tap(net, format, &mut conv);
     warn_missing_reference(net, format, &mut conv);
+    warn_dropped_frequency(net, format, &mut conv);
     conv
+}
+
+/// Warn when a non-default system frequency writes to a format with no frequency
+/// field. PSS/E (`BASFRQ`) and pandapower (`f_hz`) carry it; MATPOWER,
+/// PowerModels, egret, and PowerWorld have nowhere to put it, so a 50 Hz case
+/// would silently read back as the 60 Hz default. Report the loss instead.
+fn warn_dropped_frequency(net: &Network, format: TargetFormat, conv: &mut Conversion) {
+    let carries_frequency = matches!(format, TargetFormat::Psse | TargetFormat::PandapowerJson);
+    if carries_frequency {
+        return;
+    }
+    if (net.base_frequency - crate::network::DEFAULT_BASE_FREQUENCY).abs() > 1e-9 {
+        conv.warnings.push(format!(
+            "system base frequency {} Hz dropped: {} has no frequency field (reads back as {} Hz)",
+            net.base_frequency,
+            format.label(),
+            crate::network::DEFAULT_BASE_FREQUENCY
+        ));
+    }
 }
 
 /// Convert a case file to `to`, optionally forcing the source format with

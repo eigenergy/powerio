@@ -561,6 +561,7 @@ pub(crate) fn parse_pandapower_source(
     let net = Network {
         name,
         base_mva,
+        base_frequency: f_hz,
         buses,
         loads,
         shunts,
@@ -709,10 +710,11 @@ pub fn write_pandapower_json(net: &Network) -> Conversion {
     object.insert("trafo".into(), trafo);
     object.insert("poly_cost".into(), poly_cost_frame(net, &mut warnings));
     object.insert("name".into(), Value::String(net.name.clone()));
-    // Network carries no system frequency, so the writer always labels the file
-    // 50 Hz and compensates c_nf_per_km; a 60 Hz source keeps its exact Y_bus
-    // but is relabeled (documented in docs/format-fidelity.md).
-    object.insert("f_hz".into(), jnum(F_HZ));
+    // Label the file with the network's own frequency and compute c_nf_per_km
+    // against the same value, so a re-read (which divides by the file's f_hz)
+    // reconstructs the exact line charging. Defaults to 60 Hz for sources that
+    // record none; a pandapower source carries its parsed f_hz back out.
+    object.insert("f_hz".into(), jnum(net.base_frequency));
     object.insert("sn_mva".into(), jnum(net.base_mva));
     object.insert("version".into(), Value::String("3.0.0".into()));
     object.insert("format_version".into(), Value::String("3.0.0".into()));
@@ -1013,7 +1015,7 @@ fn branch_frames(
                 jnum(1.0),
                 jnum(br.r * zb),
                 jnum(br.x * zb),
-                jnum(br.b / zb / (2.0 * std::f64::consts::PI * F_HZ) * 1e9),
+                jnum(br.b / zb / (2.0 * std::f64::consts::PI * net.base_frequency) * 1e9),
                 jnum(0.0),
                 jnum(if br.rate_a == 0.0 {
                     0.0
@@ -2529,6 +2531,7 @@ mod tests {
         Network {
             name: "t".into(),
             base_mva: 100.0,
+            base_frequency: crate::network::DEFAULT_BASE_FREQUENCY,
             buses,
             loads: Vec::new(),
             shunts: Vec::new(),

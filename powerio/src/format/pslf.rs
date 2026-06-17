@@ -96,6 +96,7 @@ pub(crate) fn parse_pslf_source(
     let net = Network {
         name,
         base_mva,
+        base_frequency: crate::network::DEFAULT_BASE_FREQUENCY,
         buses,
         loads,
         shunts,

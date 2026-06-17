@@ -338,6 +338,7 @@ impl Network {
         let net = Network {
             name: self.name.clone(),
             base_mva: base,
+            base_frequency: self.base_frequency,
             buses,
             loads,
             shunts,

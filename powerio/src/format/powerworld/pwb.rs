@@ -460,6 +460,7 @@ fn checked_network(
     let net = Network {
         name: name_hint.unwrap_or("case").to_string(),
         base_mva: MVA_BASE,
+        base_frequency: crate::network::DEFAULT_BASE_FREQUENCY,
         buses,
         loads,
         shunts,
@@ -1771,6 +1772,7 @@ mod tests {
         Network {
             name: name.to_string(),
             base_mva: MVA_BASE,
+            base_frequency: crate::network::DEFAULT_BASE_FREQUENCY,
             buses: Vec::new(),
             loads: Vec::new(),
             shunts: Vec::new(),

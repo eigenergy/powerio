@@ -368,6 +368,7 @@ pub(crate) fn parse_powermodels_json_source(
     let net = Network {
         name,
         base_mva,
+        base_frequency: crate::network::DEFAULT_BASE_FREQUENCY,
         buses: sorted(root, "bus", "index")
             .iter()
             .map(|v| read_bus(v, ascale))

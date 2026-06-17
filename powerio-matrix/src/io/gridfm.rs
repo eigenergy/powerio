@@ -1359,6 +1359,7 @@ fn build_network_from_columns(
     let net = Network {
         name: name.to_string(),
         base_mva,
+        base_frequency: crate::network::DEFAULT_BASE_FREQUENCY,
         buses,
         loads,
         shunts,

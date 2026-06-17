@@ -149,6 +149,7 @@ fn build_case<'a>(name: &str, get: impl Fn(&str) -> Option<&'a str>) -> Result<N
     Ok(Network {
         name: name.to_string(),
         base_mva,
+        base_frequency: crate::network::DEFAULT_BASE_FREQUENCY,
         buses,
         loads,
         shunts,
