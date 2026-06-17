@@ -524,8 +524,8 @@ fn psse_reads_real_pti_files() {
 
 #[test]
 fn hvdc_converts_and_round_trips() {
-    // t_case9_dcline.m carries HVDC dclines. PowerModels JSON round-trips them;
-    // egret/PSS-E/PowerWorld drop them, each with a warning.
+    // t_case9_dcline.m carries HVDC dclines. PowerModels JSON and PSS/E round-trip
+    // them (PSS/E as two-terminal DC); egret/PowerWorld drop them with a warning.
     let net = parse_matpower_file(data("t_case9_dcline.m")).unwrap();
     assert!(!net.hvdc.is_empty(), "fixture should have dclines");
 
@@ -539,11 +539,24 @@ fn hvdc_converts_and_round_trips() {
     assert_eq!(back.hvdc[0].from, net.hvdc[0].from);
     assert_eq!(back.hvdc[0].to, net.hvdc[0].to);
 
-    for conv in [
-        write_egret_json(&net),
-        write_psse(&net),
-        write_powerworld(&net),
-    ] {
+    // PSS/E writes the dclines as two-terminal DC records; the endpoints and
+    // power setpoint survive a re-read, with the converter detail defaulted.
+    let psse = write_psse(&net);
+    let from_psse = parse_psse(&psse.text).unwrap();
+    assert_eq!(
+        from_psse.hvdc.len(),
+        net.hvdc.len(),
+        "PSS/E keeps the dclines"
+    );
+    assert_eq!(from_psse.hvdc[0].from, net.hvdc[0].from);
+    assert_eq!(from_psse.hvdc[0].to, net.hvdc[0].to);
+    assert!(
+        psse.warnings.iter().any(|w| w.contains("converter detail")),
+        "PSS/E should note the defaulted converter detail, got {:?}",
+        psse.warnings
+    );
+
+    for conv in [write_egret_json(&net), write_powerworld(&net)] {
         assert!(
             conv.warnings.iter().any(|w| w.contains("dcline")),
             "expected a dropped-dcline warning, got {:?}",

@@ -7,20 +7,24 @@
 //! control detail is not modeled. Impedances are written on the system base with
 //! per-unit turns ratios (`CZ = 1`, `CW = 1`); the reader assumes the same and
 //! does not convert other impedance/turns bases — a non-unit `CZ`/`CW` is read
-//! verbatim (so misread). Two-terminal DC and the other advanced sections are not
-//! modeled: on write they're emitted as empty sections, on read they're skipped,
-//! and HVDC/storage carried on the `Network` are reported as dropped. Same-format
-//! round-trip is byte-exact via the retained source (see [`crate::write_as`]);
-//! this serializer is the cross-format path.
+//! verbatim (so misread). Two-terminal DC lines read and write as the neutral
+//! [`Hvdc`] (power-setpoint model; converter firing-angle/transformer detail
+//! rides through in extras). The other advanced sections (VSC and multi-terminal
+//! DC, FACTS, GNE) are not modeled: on write they're emitted as empty sections,
+//! on read they're skipped, and storage carried on the `Network` is reported as
+//! dropped. Same-format round-trip is byte-exact via the retained source (see
+//! [`crate::write_as`]); this serializer is the cross-format path.
 
 use std::collections::BTreeMap;
 use std::fmt::Write as _;
 use std::sync::Arc;
 
-use super::{Conversion, sanitize_quoted};
+use serde_json::Value;
+
+use super::{Conversion, jnum, sanitize_quoted};
 use crate::network::{
-    Branch, Bus, BusId, BusType, Extras, Generator, Impedance, Load, Network, Shunt, SourceFormat,
-    Transformer3W, TransformerControl, TransformerControlMode, Winding,
+    Branch, Bus, BusId, BusType, Extras, Generator, Hvdc, Impedance, Load, Network, Shunt,
+    SourceFormat, Transformer3W, TransformerControl, TransformerControlMode, Winding,
 };
 use crate::{Error, Result};
 
@@ -315,19 +319,55 @@ pub fn write_psse_rev(net: &Network, rev: u32) -> Conversion {
     }
     let _ = writeln!(s, "0 / END OF TRANSFORMER DATA, BEGIN AREA DATA");
 
-    // The remaining sections are not modeled; emit their terminators in order so
-    // the file parses as a complete case. The terminator set is stable across
-    // v33-v35 for the sections powerio doesn't model.
-    for line in EMPTY_SECTIONS {
+    // Two-terminal DC lines occupy the first of the otherwise-empty sections:
+    // emit their 3-line records (if any) between the begin/end markers, then the
+    // remaining sections as bare terminators so the file parses as a complete case.
+    let _ = writeln!(s, "{}", EMPTY_SECTIONS[0]);
+    for (i, dc) in net.hvdc.iter().enumerate() {
+        let name = format!(
+            "'{}'",
+            dc_str(&dc.extras, "psse_dc_name").unwrap_or_else(|| format!("DC{}", i + 1))
+        );
+        let mdc = if dc.in_service {
+            dc_int(&dc.extras, "psse_dc_mdc").unwrap_or(1)
+        } else {
+            0
+        };
+        let rdc = dc_f64(&dc.extras, "psse_dc_rdc").unwrap_or(0.0);
+        let vschd = dc_f64(&dc.extras, "psse_dc_vschd").unwrap_or(0.0);
+        let l1_tail = dc_tail(
+            &dc.extras,
+            "psse_dc_control_tail",
+            "0.0, 0.0, 0.0, 'I', 0.0, 20, 1.0",
+        );
+        let rect_tail = dc_tail(&dc.extras, "psse_dc_rectifier_tail", DEFAULT_CONVERTER_TAIL);
+        let inv_tail = dc_tail(&dc.extras, "psse_dc_inverter_tail", DEFAULT_CONVERTER_TAIL);
+        let _ = writeln!(
+            s,
+            "{name}, {mdc}, {}, {}, {}, {l1_tail}",
+            num(rdc),
+            num(dc.pf),
+            num(vschd)
+        );
+        let _ = writeln!(s, "{}, {rect_tail}", dc.from);
+        let _ = writeln!(s, "{}, {inv_tail}", dc.to);
+    }
+    for line in &EMPTY_SECTIONS[1..] {
         let _ = writeln!(s, "{line}");
     }
     let _ = writeln!(s, "Q");
 
-    if !net.hvdc.is_empty() {
-        warnings.push(format!(
-            "{} dcline(s) dropped: PSS/E HVDC not modeled",
-            net.hvdc.len()
-        ));
+    if net
+        .hvdc
+        .iter()
+        .any(|d| !d.extras.contains_key("psse_dc_name"))
+    {
+        warnings.push(
+            "DC line converter detail (firing angles, converter transformer taps, reactive \
+             output) defaulted: PSS/E two-terminal DC is written from the power setpoint and \
+             line resistance only"
+                .into(),
+        );
     }
     if !net.storage.is_empty() {
         warnings.push(format!(
@@ -365,6 +405,13 @@ pub fn write_psse_rev(net: &Network, rev: u32) -> Conversion {
 fn ide(kind: BusType) -> u8 {
     kind as u8 // 1=PQ, 2=PV, 3=ref/swing, 4=isolated — same codes
 }
+
+/// Converter-line tail (everything after the AC terminal bus) for a synthesized
+/// two-terminal DC record: NBR/NBI bridges, firing-angle limits, converter
+/// transformer R/X and tap data, and the metered-end id. PSS/E-sourced lines
+/// replay their own tail; these defaults serve a cross-format source.
+const DEFAULT_CONVERTER_TAIL: &str =
+    "1, 15.0, 5.0, 0.0, 0.0, 0.0, 1.0, 1.0, 1.5, 0.51, 0.00625, 0, 0, 0, '1', 0.0";
 
 const EMPTY_SECTIONS: [&str; 13] = [
     "0 / END OF AREA DATA, BEGIN TWO-TERMINAL DC DATA",
@@ -447,6 +494,7 @@ pub(crate) fn parse_psse_source(source: Arc<String>, name_hint: Option<&str>) ->
     let mut generators = Vec::new();
     let mut branches = Vec::new();
     let mut transformers_3w = Vec::new();
+    let mut hvdc = Vec::new();
 
     // Sections appear in fixed order, each ended by a record whose first field is
     // `0`. We read the ones we model and treat the rest as skipped.
@@ -503,6 +551,13 @@ pub(crate) fn parse_psse_source(source: Arc<String>, name_hint: Option<&str>) ->
                     )?);
                 }
             }
+            Section::TwoTerminalDc => {
+                // 3-line record: control line, then the rectifier and inverter
+                // converter lines whose first field is the AC terminal bus.
+                let rectifier = lines.next().map_or("", str::trim);
+                let inverter = lines.next().map_or("", str::trim);
+                hvdc.push(read_dc_line(&f, &fields(rectifier), &fields(inverter))?);
+            }
             Section::Skip => {}
         }
     }
@@ -517,7 +572,7 @@ pub(crate) fn parse_psse_source(source: Arc<String>, name_hint: Option<&str>) ->
         branches,
         generators,
         storage: Vec::new(),
-        hvdc: Vec::new(),
+        hvdc,
         transformers_3w,
         source_format: SourceFormat::Psse,
         source: Some(source),
@@ -535,6 +590,7 @@ enum Section {
     Generator,
     Branch,
     Transformer,
+    TwoTerminalDc,
     Skip,
 }
 
@@ -557,6 +613,8 @@ fn section_after_marker(line: &str) -> Section {
         Section::Branch
     } else if u.contains("BEGIN TRANSFORMER DATA") {
         Section::Transformer
+    } else if u.contains("BEGIN TWO-TERMINAL DC DATA") {
+        Section::TwoTerminalDc
     } else {
         Section::Skip
     }
@@ -889,6 +947,90 @@ fn read_transformer_3w(
     })
 }
 
+/// Read a 3-line two-terminal DC line record into an [`Hvdc`].
+///
+/// The control line `l1` gives the operating mode (`MDC`), the DC line resistance
+/// (`RDC`), the power/current demand (`SETVL`), and the scheduled DC voltage
+/// (`VSCHD`). The rectifier and inverter lines' first field is the AC terminal
+/// bus, which becomes the HVDC from/to. The HVDC is read as a power-setpoint
+/// model (`pf = pt = SETVL`, no reactive output); the converter detail beyond the
+/// buses (firing angles, converter transformer taps) is retained in extras for a
+/// faithful write-back, not modeled electrically.
+fn read_dc_line(l1: &[String], rect: &[String], inv: &[String]) -> Result<Hvdc> {
+    let mdc = int_at(l1, 1, 1)?;
+    let rdc = num_at(l1, 2, 0.0)?;
+    let setvl = num_at(l1, 3, 0.0)?;
+    let vschd = num_at(l1, 4, 0.0)?;
+    let mut extras = Extras::new();
+    if let Some(name) = l1.first().filter(|n| !n.is_empty()) {
+        extras.insert("psse_dc_name".into(), Value::String(name.clone()));
+    }
+    extras.insert("psse_dc_mdc".into(), Value::from(mdc));
+    extras.insert("psse_dc_rdc".into(), jnum(rdc));
+    extras.insert("psse_dc_vschd".into(), jnum(vschd));
+    extras.insert("psse_dc_control_tail".into(), tail_array(l1, 5));
+    extras.insert("psse_dc_rectifier_tail".into(), tail_array(rect, 1));
+    extras.insert("psse_dc_inverter_tail".into(), tail_array(inv, 1));
+    Ok(Hvdc {
+        from: BusId(id_at(rect, 0, 0)?),
+        to: BusId(id_at(inv, 0, 0)?),
+        in_service: mdc != 0,
+        pf: setvl,
+        pt: setvl,
+        qf: 0.0,
+        qt: 0.0,
+        vf: 1.0,
+        vt: 1.0,
+        pmin: 0.0,
+        pmax: setvl.abs(),
+        qminf: 0.0,
+        qmaxf: 0.0,
+        qmint: 0.0,
+        qmaxt: 0.0,
+        loss0: 0.0,
+        loss1: 0.0,
+        extras,
+    })
+}
+
+/// The fields of `f` from index `start` as a JSON string array (for extras).
+fn tail_array(f: &[String], start: usize) -> Value {
+    Value::Array(
+        f.iter()
+            .skip(start)
+            .map(|s| Value::String(s.clone()))
+            .collect(),
+    )
+}
+
+/// A string-valued DC extra.
+fn dc_str(extras: &Extras, key: &str) -> Option<String> {
+    extras.get(key).and_then(Value::as_str).map(str::to_owned)
+}
+
+/// An integer-valued DC extra.
+fn dc_int(extras: &Extras, key: &str) -> Option<i64> {
+    extras.get(key).and_then(Value::as_i64)
+}
+
+/// A float-valued DC extra.
+fn dc_f64(extras: &Extras, key: &str) -> Option<f64> {
+    extras.get(key).and_then(Value::as_f64)
+}
+
+/// A retained converter-line tail joined back into a record fragment, or
+/// `default` when the element carries none (a cross-format source).
+fn dc_tail(extras: &Extras, key: &str, default: &str) -> String {
+    match extras.get(key).and_then(Value::as_array) {
+        Some(arr) if !arr.is_empty() => arr
+            .iter()
+            .filter_map(Value::as_str)
+            .collect::<Vec<_>>()
+            .join(", "),
+        _ => default.to_string(),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -959,6 +1101,46 @@ Q
         close(net.branches[0].rate_b, 90.0);
         close(net.branches[0].rate_c, 80.0);
         assert!(net.branches[0].in_service);
+    }
+
+    #[test]
+    fn reads_and_writes_a_two_terminal_dc_line() {
+        let raw = r"0, 100.00, 33, 0, 0, 60.00 / x
+CASE
+COMMENT
+1,'B1          ', 230.0,3,1,1,1,1.0,0.0,1.1,0.9,1.1,0.9
+4,'B4          ', 230.0,1,1,1,1,1.0,0.0,1.1,0.9,1.1,0.9
+5,'B5          ', 230.0,1,1,1,1,1.0,0.0,1.1,0.9,1.1,0.9
+0 / END OF BUS DATA, BEGIN LOAD DATA
+0 / END OF LOAD DATA, BEGIN FIXED SHUNT DATA
+0 / END OF FIXED SHUNT DATA, BEGIN GENERATOR DATA
+0 / END OF GENERATOR DATA, BEGIN BRANCH DATA
+0 / END OF BRANCH DATA, BEGIN TRANSFORMER DATA
+0 / END OF TRANSFORMER DATA, BEGIN AREA DATA
+0 / END OF AREA DATA, BEGIN TWO-TERMINAL DC DATA
+'DCLINE1', 1, 2.5, 350.0, 500.0, 0.0, 0.0, 0.0, 'I', 0.0, 20, 1.0
+4, 1, 15.0, 5.0, 0.0, 0.0, 0.0, 1.0, 1.0, 1.5, 0.51, 0.00625, 0, 0, 0, '1', 0.0
+5, 1, 15.0, 5.0, 0.0, 0.0, 0.0, 1.0, 1.0, 1.5, 0.51, 0.00625, 0, 0, 0, '1', 0.0
+0 / END OF TWO-TERMINAL DC DATA, BEGIN VSC DC LINE DATA
+Q
+";
+        let net = parse_psse(raw).unwrap();
+        assert_eq!(net.hvdc.len(), 1, "the two-terminal DC line was read");
+        let dc = &net.hvdc[0];
+        assert_eq!(dc.from, BusId(4), "rectifier bus is the from end");
+        assert_eq!(dc.to, BusId(5), "inverter bus is the to end");
+        assert!(dc.in_service);
+        close(dc.pf, 350.0);
+        close(dc.pt, 350.0);
+
+        // Round trip: write and re-read keeps the buses and the power setpoint.
+        let net2 = parse_psse(&write_psse(&net).text).unwrap();
+        assert_eq!(net2.hvdc.len(), 1, "the DC line survives the write");
+        let dc2 = &net2.hvdc[0];
+        assert_eq!(dc2.from, BusId(4));
+        assert_eq!(dc2.to, BusId(5));
+        assert!(dc2.in_service);
+        close(dc2.pf, 350.0);
     }
 
     #[test]
