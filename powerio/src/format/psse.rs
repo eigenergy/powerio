@@ -20,7 +20,7 @@ use std::sync::Arc;
 use super::{Conversion, sanitize_quoted};
 use crate::network::{
     Branch, Bus, BusId, BusType, Extras, Generator, Impedance, Load, Network, Shunt, SourceFormat,
-    Transformer3W, Winding,
+    Transformer3W, TransformerControl, TransformerControlMode, Winding,
 };
 use crate::{Error, Result};
 
@@ -234,15 +234,30 @@ pub fn write_psse_rev(net: &Network, rev: u32) -> Conversion {
             br.to,
             i32::from(br.in_service)
         );
-        let _ = writeln!(s, "{}, {}, {}", num(br.r), num(br.x), net.base_mva);
+        // Winding-1 control columns (COD, CONT, RMA/RMI, VMA/VMI, NTP) come from
+        // the regulating-control data when present, else the fixed defaults.
+        let ctl = br.control.as_ref();
+        let sbase = ctl
+            .filter(|c| c.mva_base > 0.0)
+            .map_or(net.base_mva, |c| c.mva_base);
+        let cod = ctl.map_or(0, |c| mode_to_cod(c.mode));
+        let cont = ctl.and_then(|c| c.controlled_bus).map_or(0, |b| b.0);
+        let (rma, rmi, vma, vmi, ntp) = ctl.map_or((1.1, 0.9, 1.1, 0.9, 33), |c| {
+            (c.tap_max, c.tap_min, c.band_max, c.band_min, c.ntp)
+        });
+        let _ = writeln!(s, "{}, {}, {}", num(br.r), num(br.x), num(sbase));
         let _ = writeln!(
             s,
-            "{}, 0, {}, {}, {}, {}, 0, 0, 1.1, 0.9, 1.1, 0.9, 33, 0, 0, 0, 0",
+            "{}, 0, {}, {}, {}, {}, {cod}, {cont}, {}, {}, {}, {}, {ntp}, 0, 0, 0, 0",
             num(br.effective_tap()),
             num(br.shift),
             num(br.rate_a),
             num(br.rate_b),
-            num(br.rate_c)
+            num(br.rate_c),
+            num(rma),
+            num(rmi),
+            num(vma),
+            num(vmi)
         );
         let _ = writeln!(s, "1.0, 0");
     }
@@ -760,7 +775,26 @@ fn read_branch(f: &[String], raw_rev: u32) -> Result<Branch> {
 fn read_transformer(l1: &[String], l2: &[String], l3: &[String], _l4: &[String]) -> Result<Branch> {
     // l1: I, J, K, CKT, CW, CZ, CM, MAG1, MAG2, NMETR, NAME, STAT(11)
     // l2: R1-2, X1-2, SBASE1-2
-    // l3: WINDV1, NOMV1, ANG1, RATA1, RATB1, RATC1, ...
+    // l3: WINDV1, NOMV1, ANG1, RATA1, RATB1, RATC1, COD1, CONT1, RMA1, RMI1,
+    //     VMA1, VMI1, NTP1, ...
+    // A nonzero control code COD1 marks a regulating winding; capture its limits
+    // and regulated bus, else leave the branch's control unset.
+    let cod = int_at(l3, 6, 0)?;
+    let control = (cod != 0)
+        .then(|| -> Result<TransformerControl> {
+            let cont = id_at(l3, 7, 0)?;
+            Ok(TransformerControl {
+                mode: cod_to_mode(cod),
+                controlled_bus: (cont != 0).then_some(BusId(cont)),
+                tap_max: num_at(l3, 8, 1.1)?,
+                tap_min: num_at(l3, 9, 0.9)?,
+                band_max: num_at(l3, 10, 1.1)?,
+                band_min: num_at(l3, 11, 0.9)?,
+                ntp: int_at(l3, 12, 33)?.clamp(0, i64::from(u32::MAX)) as u32,
+                mva_base: num_at(l2, 2, 0.0)?,
+            })
+        })
+        .transpose()?;
     Ok(Branch {
         from: BusId(id_at(l1, 0, 0)?),
         to: BusId(id_at(l1, 1, 0)?),
@@ -775,9 +809,31 @@ fn read_transformer(l1: &[String], l2: &[String], l3: &[String], _l4: &[String])
         in_service: on_at(l1, 11, true)?,
         angmin: -360.0,
         angmax: 360.0,
-        control: None,
+        control,
         extras: Extras::new(),
     })
+}
+
+/// PSS/E transformer control code `COD` → neutral control mode. The sign encodes
+/// an enable/disable flag PSS/E carries separately; only the magnitude selects
+/// the regulation kind.
+fn cod_to_mode(cod: i64) -> TransformerControlMode {
+    match cod.abs() {
+        1 => TransformerControlMode::Voltage,
+        2 => TransformerControlMode::ReactiveFlow,
+        3 => TransformerControlMode::ActiveFlow,
+        _ => TransformerControlMode::Fixed,
+    }
+}
+
+/// Neutral control mode → PSS/E `COD` (positive; the enable-flag sign is not modeled).
+fn mode_to_cod(mode: TransformerControlMode) -> i64 {
+    match mode {
+        TransformerControlMode::Fixed => 0,
+        TransformerControlMode::Voltage => 1,
+        TransformerControlMode::ReactiveFlow => 2,
+        TransformerControlMode::ActiveFlow => 3,
+    }
 }
 
 /// Read a 5-line 3-winding transformer record into a [`Transformer3W`].
@@ -903,6 +959,48 @@ Q
         close(net.branches[0].rate_b, 90.0);
         close(net.branches[0].rate_c, 80.0);
         assert!(net.branches[0].in_service);
+    }
+
+    #[test]
+    fn reads_and_writes_a_regulating_transformer_control() {
+        let raw = r"0, 100.00, 33, 0, 0, 60.00 / x
+CASE
+COMMENT
+1,'B1          ', 230.0,3,1,1,1,1.00000,0.0,1.1,0.9,1.1,0.9
+2,'B2          ', 138.0,1,1,1,1,1.00000,0.0,1.1,0.9,1.1,0.9
+3,'B3          ', 13.8,1,1,1,1,1.00000,0.0,1.1,0.9,1.1,0.9
+0 / END OF BUS DATA, BEGIN LOAD DATA
+0 / END OF LOAD DATA, BEGIN FIXED SHUNT DATA
+0 / END OF FIXED SHUNT DATA, BEGIN GENERATOR DATA
+0 / END OF GENERATOR DATA, BEGIN BRANCH DATA
+0 / END OF BRANCH DATA, BEGIN TRANSFORMER DATA
+1, 2, 0, '1', 1, 1, 1, 0, 0, 2, 'REG         ', 1, 1, 1, 0, 1, 0, 1, 0, 1, '            '
+0.01, 0.10, 100.0
+1.025, 0, 2.5, 100.0, 90.0, 80.0, 1, 3, 1.08, 0.92, 1.05, 0.98, 17, 0, 0, 0, 0
+1.0, 0
+0 / END OF TRANSFORMER DATA, BEGIN AREA DATA
+Q
+";
+        let net = parse_psse(raw).unwrap();
+        assert_eq!(net.branches.len(), 1);
+        let c = net.branches[0].control.as_ref().expect("control parsed");
+        assert_eq!(c.mode, TransformerControlMode::Voltage);
+        assert_eq!(c.controlled_bus, Some(BusId(3)));
+        close(c.tap_max, 1.08);
+        close(c.tap_min, 0.92);
+        close(c.band_min, 0.98);
+        assert_eq!(c.ntp, 17);
+        close(c.mva_base, 100.0);
+
+        // Round trip: write and re-read keeps the control block and the tap/shift.
+        let net2 = parse_psse(&write_psse(&net).text).unwrap();
+        let c2 = net2.branches[0].control.as_ref().expect("control survives");
+        assert_eq!(c2.mode, TransformerControlMode::Voltage);
+        assert_eq!(c2.controlled_bus, Some(BusId(3)));
+        close(c2.tap_max, 1.08);
+        assert_eq!(c2.ntp, 17);
+        close(net2.branches[0].tap, 1.025);
+        close(net2.branches[0].shift, 2.5);
     }
 
     #[test]
