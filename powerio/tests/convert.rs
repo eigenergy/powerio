@@ -7,9 +7,9 @@ use std::path::{Path, PathBuf};
 
 use powerio::{
     BusId, BusType, Error, Network, SourceFormat, TargetFormat, convert_file, parse_file,
-    parse_matpower, parse_matpower_file, parse_powermodels_json, parse_powerworld, parse_psse,
-    read_pypsa_csv_folder, write_as, write_egret_json, write_powermodels_json, write_powerworld,
-    write_psse, write_pypsa_csv_folder,
+    parse_matpower, parse_matpower_file, parse_powermodels_json, parse_powerworld, parse_pslf,
+    parse_psse, read_pypsa_csv_folder, write_as, write_egret_json, write_powermodels_json,
+    write_powerworld, write_pslf, write_psse, write_pypsa_csv_folder,
 };
 use serde_json::Value;
 
@@ -575,6 +575,54 @@ fn hvdc_converts_and_round_trips() {
         "cross-format → MATPOWER should warn on dropped dclines, got {:?}",
         to_mp.warnings
     );
+}
+
+#[test]
+fn hvdc_round_trips_through_pslf() {
+    // A MATPOWER case with dclines converts to PSLF as `dc converter` + `dc line`
+    // records, and a re-read recovers the AC terminals, power setpoints, and
+    // status. (PSLF keeps the AC converters separate from the DC line; the writer
+    // synthesizes the DC bus join keys.)
+    let net = parse_matpower_file(data("t_case9_dcline.m")).unwrap();
+    assert!(!net.hvdc.is_empty(), "fixture should have dclines");
+
+    let pslf = write_pslf(&net);
+    assert!(
+        !pslf.warnings.iter().any(|w| w.contains("dcline")),
+        "HVDC is now written, not dropped: {:?}",
+        pslf.warnings
+    );
+    let back = parse_pslf(&pslf.text).unwrap();
+    assert_eq!(back.hvdc.len(), net.hvdc.len(), "every dcline survives");
+    for (a, b) in net.hvdc.iter().zip(&back.hvdc) {
+        assert_eq!(b.from, a.from);
+        assert_eq!(b.to, a.to);
+        assert_eq!(b.in_service, a.in_service);
+        assert!(
+            (b.pf - a.pf).abs() < 1e-6,
+            "pf changed: {} != {}",
+            a.pf,
+            b.pf
+        );
+        assert!(
+            (b.pt - a.pt).abs() < 1e-6,
+            "pt changed: {} != {}",
+            a.pt,
+            b.pt
+        );
+        assert!(
+            (b.qf - a.qf).abs() < 1e-6,
+            "qf changed: {} != {}",
+            a.qf,
+            b.qf
+        );
+        assert!(
+            (b.qt - a.qt).abs() < 1e-6,
+            "qt changed: {} != {}",
+            a.qt,
+            b.qt
+        );
+    }
 }
 
 #[test]

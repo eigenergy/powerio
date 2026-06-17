@@ -1303,15 +1303,61 @@ pub fn write_pslf(net: &Network) -> Conversion {
         }
     }
 
+    // ---- dc converter + dc line data (two-terminal HVDC) ----
+    // EPC keeps the AC converter rows separate from the DC line that joins them,
+    // keyed by a DC bus number. Synthesize a distinct DC bus per converter (these
+    // are internal join keys, not AC buses) and emit the from/to converter rows
+    // plus the line row that read_dc_converters/read_dc_lines rejoin into one
+    // `Network::Hvdc`.
+    if !net.hvdc.is_empty() {
+        let _ = writeln!(
+            s,
+            "dc converter data [{}] id name kv dc_bus",
+            net.hvdc.len() * 2
+        );
+        for (k, d) in net.hvdc.iter().enumerate() {
+            for (ac, dc_bus, p, q) in [
+                (d.from, 2 * k + 1, d.pf, d.qf),
+                (d.to, 2 * k + 2, d.pt, d.qt),
+            ] {
+                let r = bus_ref(ac);
+                // Line 1 carries the AC bus (lhs 0), the DC bus (lhs 3), and the
+                // status (rhs 0); the trailing `/` continues onto line 2, which
+                // carries p (token 2) and q (token 3).
+                let _ = writeln!(
+                    s,
+                    "{} {} {} {} : {} /",
+                    ac,
+                    name_tok(r.name),
+                    num(r.base_kv),
+                    dc_bus,
+                    i32::from(d.in_service),
+                );
+                let _ = writeln!(s, "0 0 {} {}", num(p), num(q));
+            }
+        }
+        let _ = writeln!(
+            s,
+            "dc line data [{}] from name kv to st rate1",
+            net.hvdc.len()
+        );
+        for (k, d) in net.hvdc.iter().enumerate() {
+            // The reader reads the status (rhs 0) and rate1 (rhs 6); rate1 sets the
+            // power limit, falling back to |p| when nonpositive, so emit pmax.
+            let _ = writeln!(
+                s,
+                "{} \"dc\" 0 {} : {} 0 0 0 0 0 {}",
+                2 * k + 1,
+                2 * k + 2,
+                i32::from(d.in_service),
+                num(d.pmax),
+            );
+        }
+    }
+
     let _ = writeln!(s, "end");
 
     // ---- fidelity warnings ----
-    if !net.hvdc.is_empty() {
-        warnings.push(format!(
-            "{} dcline(s) dropped: PSLF DC converter/line export not yet modeled",
-            net.hvdc.len()
-        ));
-    }
     if !net.storage.is_empty() {
         warnings.push(format!(
             "{} storage unit(s) dropped: PSLF .epc has no storage record",
