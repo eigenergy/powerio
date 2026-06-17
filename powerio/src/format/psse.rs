@@ -1,17 +1,17 @@
-//! Read and write PSS/E `.raw` (revision 33).
+//! Read and write PSS/E `.raw` (revisions 33-35; see [`write_psse_rev`]).
 //!
-//! Covers the core sections — bus, load, fixed shunt, generator, branch, and
-//! 2-winding transformer — which together carry a transmission power flow case.
-//! A switched shunt is read as a fixed shunt at its steady-state susceptance
-//! `BINIT` (the same reduction PowerModels makes); the block/step control detail
-//! is not modeled. Impedances are written on the system base with per-unit turns
-//! ratios (`CZ = 1`, `CW = 1`); the reader assumes the same and does not convert
-//! other impedance/turns bases — a non-unit `CZ`/`CW` is read verbatim (so
-//! misread). 3-winding transformers, two-terminal DC, and the other advanced
-//! sections are not modeled: on write they're emitted as empty sections, on read
-//! they're skipped, and HVDC/storage carried on the `Network` are reported as
-//! dropped. Same-format round-trip is byte-exact via the retained source (see
-//! [`crate::write_as`]); this serializer is the cross-format path.
+//! Covers the core sections — bus, load, fixed shunt, generator, branch, and the
+//! 2- and 3-winding transformer records — which together carry a transmission
+//! power flow case. A switched shunt is read as a fixed shunt at its steady-state
+//! susceptance `BINIT` (the same reduction PowerModels makes); the block/step
+//! control detail is not modeled. Impedances are written on the system base with
+//! per-unit turns ratios (`CZ = 1`, `CW = 1`); the reader assumes the same and
+//! does not convert other impedance/turns bases — a non-unit `CZ`/`CW` is read
+//! verbatim (so misread). Two-terminal DC and the other advanced sections are not
+//! modeled: on write they're emitted as empty sections, on read they're skipped,
+//! and HVDC/storage carried on the `Network` are reported as dropped. Same-format
+//! round-trip is byte-exact via the retained source (see [`crate::write_as`]);
+//! this serializer is the cross-format path.
 
 use std::collections::BTreeMap;
 use std::fmt::Write as _;
@@ -19,7 +19,8 @@ use std::sync::Arc;
 
 use super::{Conversion, sanitize_quoted};
 use crate::network::{
-    Branch, Bus, BusId, BusType, Extras, Generator, Load, Network, Shunt, SourceFormat,
+    Branch, Bus, BusId, BusType, Extras, Generator, Impedance, Load, Network, Shunt, SourceFormat,
+    Transformer3W, Winding,
 };
 use crate::{Error, Result};
 
@@ -245,6 +246,56 @@ pub fn write_psse_rev(net: &Network, rev: u32) -> Conversion {
         );
         let _ = writeln!(s, "1.0, 0");
     }
+
+    // 3-winding transformers: a 5-line record. CW=1, CZ=1, CM=1 (same conventions
+    // as the 2-winding record); line 2 carries the three pairwise impedances and
+    // the star-point voltage, lines 3-5 the per-winding tap/angle/ratings.
+    for t in &net.transformers_3w {
+        let raw_name = t.name.as_deref().unwrap_or("");
+        let name = sanitize_quoted(raw_name, NAME_FORBIDDEN, ' ');
+        if matches!(name, std::borrow::Cow::Owned(_)) {
+            sanitized_names += 1;
+        }
+        let _ = writeln!(
+            s,
+            "{}, {}, {}, '1', 1, 1, 1, {}, {}, 2, '{:<12}', {}, 1, 1, 0, 1, 0, 1, 0, 1, '            '",
+            t.windings[0].bus,
+            t.windings[1].bus,
+            t.windings[2].bus,
+            num(t.mag_g),
+            num(t.mag_b),
+            name,
+            i32::from(t.in_service)
+        );
+        let [z12, z23, z31] = t.z;
+        let _ = writeln!(
+            s,
+            "{}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}",
+            num(z12.r),
+            num(z12.x),
+            num(z12.base_mva),
+            num(z23.r),
+            num(z23.x),
+            num(z23.base_mva),
+            num(z31.r),
+            num(z31.x),
+            num(z31.base_mva),
+            num(t.star_vm),
+            num(t.star_va)
+        );
+        for w in &t.windings {
+            let _ = writeln!(
+                s,
+                "{}, {}, {}, {}, {}, {}, 0, 0, 1.1, 0.9, 1.1, 0.9, 33, 0, 0, 0, 0",
+                num(w.tap),
+                num(w.nominal_kv),
+                num(w.shift),
+                num(w.rate_a),
+                num(w.rate_b),
+                num(w.rate_c)
+            );
+        }
+    }
     let _ = writeln!(s, "0 / END OF TRANSFORMER DATA, BEGIN AREA DATA");
 
     // The remaining sections are not modeled; emit their terminators in order so
@@ -316,8 +367,9 @@ const EMPTY_SECTIONS: [&str; 13] = [
 
 // ---- Reader -----------------------------------------------------------------
 
-/// Parse a PSS/E v33 `.raw` into a [`Network`]. Reads bus/load/fixed-shunt/
-/// generator/branch/2-winding-transformer; skips the advanced sections.
+/// Parse a PSS/E `.raw` (revisions 33-35) into a [`Network`]. Reads bus/load/
+/// fixed-shunt/generator/branch/2- and 3-winding transformer; skips the advanced
+/// sections.
 pub fn parse_psse(content: &str) -> Result<Network> {
     parse_psse_source(Arc::new(content.to_owned()), None)
 }
@@ -377,6 +429,7 @@ pub(crate) fn parse_psse_source(source: Arc<String>, name_hint: Option<&str>) ->
     let mut shunts = Vec::new();
     let mut generators = Vec::new();
     let mut branches = Vec::new();
+    let mut transformers_3w = Vec::new();
 
     // Sections appear in fixed order, each ended by a record whose first field is
     // `0`. We read the ones we model and treat the rest as skipped.
@@ -415,7 +468,7 @@ pub(crate) fn parse_psse_source(source: Arc<String>, name_hint: Option<&str>) ->
             Section::Generator => generators.push(read_gen(&f)?),
             Section::Branch => branches.push(read_branch(&f, raw_rev)?),
             Section::Transformer => {
-                // 2-winding = 4 lines (K field == 0); 3-winding = 5 lines (skip).
+                // 2-winding = 4 lines (K field == 0); 3-winding = 5 lines.
                 let two_winding = f.get(2).and_then(|x| x.parse::<i64>().ok()) == Some(0);
                 let l2 = lines.next().map_or("", str::trim);
                 let l3 = lines.next().map_or("", str::trim);
@@ -423,8 +476,14 @@ pub(crate) fn parse_psse_source(source: Arc<String>, name_hint: Option<&str>) ->
                 if two_winding {
                     branches.push(read_transformer(&f, &fields(l2), &fields(l3), &fields(l4))?);
                 } else {
-                    // 3-winding: consume its 5th line and skip (not modeled).
-                    lines.next();
+                    let l5 = lines.next().map_or("", str::trim);
+                    transformers_3w.push(read_transformer_3w(
+                        &f,
+                        &fields(l2),
+                        &fields(l3),
+                        &fields(l4),
+                        &fields(l5),
+                    )?);
                 }
             }
             Section::Skip => {}
@@ -442,7 +501,7 @@ pub(crate) fn parse_psse_source(source: Arc<String>, name_hint: Option<&str>) ->
         generators,
         storage: Vec::new(),
         hvdc: Vec::new(),
-        transformers_3w: Vec::new(),
+        transformers_3w,
         source_format: SourceFormat::Psse,
         source: Some(source),
     };
@@ -717,6 +776,57 @@ fn read_transformer(l1: &[String], l2: &[String], l3: &[String], _l4: &[String])
     })
 }
 
+/// Read a 5-line 3-winding transformer record into a [`Transformer3W`].
+///
+/// As with the 2-winding reader, `CZ = 1` is assumed, so the pairwise R/X are
+/// taken on the system base verbatim (a non-unit `CZ` is misread — the same
+/// limitation the 2-winding path has).
+fn read_transformer_3w(
+    l1: &[String],
+    l2: &[String],
+    l3: &[String],
+    l4: &[String],
+    l5: &[String],
+) -> Result<Transformer3W> {
+    // l1: I, J, K, CKT, CW, CZ, CM, MAG1, MAG2, NMETR, NAME, STAT(11)
+    // l2: R1-2,X1-2,SBASE1-2, R2-3,X2-3,SBASE2-3, R3-1,X3-1,SBASE3-1, VMSTAR, ANSTAR
+    // l3/l4/l5: WINDVk, NOMVk, ANGk, RATAk, RATBk, RATCk, ...
+    let imp = |off: usize| -> Result<Impedance> {
+        Ok(Impedance {
+            r: num_at(l2, off, 0.0)?,
+            x: num_at(l2, off + 1, 0.0)?,
+            base_mva: num_at(l2, off + 2, 0.0)?,
+        })
+    };
+    let winding = |bus_field: usize, w: &[String]| -> Result<Winding> {
+        Ok(Winding {
+            bus: BusId(id_at(l1, bus_field, 0)?),
+            tap: num_at(w, 0, 1.0)?,
+            shift: num_at(w, 2, 0.0)?,
+            nominal_kv: num_at(w, 1, 0.0)?,
+            rate_a: num_at(w, 3, 0.0)?,
+            rate_b: num_at(w, 4, 0.0)?,
+            rate_c: num_at(w, 5, 0.0)?,
+        })
+    };
+    Ok(Transformer3W {
+        windings: [winding(0, l3)?, winding(1, l4)?, winding(2, l5)?],
+        z: [imp(0)?, imp(3)?, imp(6)?],
+        star_vm: num_at(l2, 9, 1.0)?,
+        star_va: num_at(l2, 10, 0.0)?,
+        mag_g: num_at(l1, 7, 0.0)?,
+        mag_b: num_at(l1, 8, 0.0)?,
+        // STAT 0 = out of service; 1-4 mark which windings are in service. Treat
+        // any nonzero status as the transformer being in service.
+        in_service: int_at(l1, 11, 1)? != 0,
+        name: l1
+            .get(10)
+            .filter(|n| !n.is_empty())
+            .map(|n| n.trim().to_string()),
+        extras: Extras::new(),
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -787,6 +897,58 @@ Q
         close(net.branches[0].rate_b, 90.0);
         close(net.branches[0].rate_c, 80.0);
         assert!(net.branches[0].in_service);
+    }
+
+    #[test]
+    fn reads_and_writes_a_three_winding_transformer() {
+        let raw = r"0, 100.00, 33, 0, 0, 60.00 / x
+CASE
+COMMENT
+1,'B1          ', 230.0,3,1,1,1,1.00000,0.0,1.1,0.9,1.1,0.9
+2,'B2          ', 138.0,1,1,1,1,1.00000,0.0,1.1,0.9,1.1,0.9
+3,'B3          ', 13.8,1,1,1,1,1.00000,0.0,1.1,0.9,1.1,0.9
+0 / END OF BUS DATA, BEGIN LOAD DATA
+0 / END OF LOAD DATA, BEGIN FIXED SHUNT DATA
+0 / END OF FIXED SHUNT DATA, BEGIN GENERATOR DATA
+0 / END OF GENERATOR DATA, BEGIN BRANCH DATA
+0 / END OF BRANCH DATA, BEGIN TRANSFORMER DATA
+1, 2, 3, '1', 1, 1, 1, 0.0, 0.0, 2, 'T3W         ', 1, 1, 1, 0, 1, 0, 1, 0, 1, '            '
+0.01, 0.10, 100.0, 0.02, 0.20, 100.0, 0.03, 0.30, 100.0, 0.98, -1.5
+1.0, 230.0, 0.0, 100.0, 90.0, 80.0, 0, 0, 1.1, 0.9, 1.1, 0.9, 33, 0, 0, 0, 0
+1.025, 138.0, 0.0, 110.0, 0, 0, 0, 0, 1.1, 0.9, 1.1, 0.9, 33, 0, 0, 0, 0
+0.95, 13.8, 30.0, 50.0, 0, 0, 0, 0, 1.1, 0.9, 1.1, 0.9, 33, 0, 0, 0, 0
+0 / END OF TRANSFORMER DATA, BEGIN AREA DATA
+Q
+";
+        let net = parse_psse(raw).unwrap();
+        assert_eq!(
+            net.transformers_3w.len(),
+            1,
+            "the 3-winding record was read"
+        );
+        assert!(net.branches.is_empty(), "a 3W is not folded into branches");
+        let t = &net.transformers_3w[0];
+        assert_eq!(
+            [t.windings[0].bus, t.windings[1].bus, t.windings[2].bus],
+            [BusId(1), BusId(2), BusId(3)]
+        );
+        close(t.z[0].r, 0.01);
+        close(t.z[2].x, 0.30);
+        close(t.windings[0].rate_a, 100.0);
+        close(t.windings[1].tap, 1.025);
+        close(t.windings[2].shift, 30.0);
+        close(t.star_vm, 0.98);
+        close(t.star_va, -1.5);
+
+        // Round trip: write and re-read keeps the windings and the star voltage.
+        let net2 = parse_psse(&write_psse(&net).text).unwrap();
+        assert_eq!(net2.transformers_3w.len(), 1);
+        assert!(net2.branches.is_empty());
+        let t2 = &net2.transformers_3w[0];
+        close(t2.z[1].x, 0.20);
+        close(t2.windings[2].tap, 0.95);
+        close(t2.star_va, -1.5);
+        assert_eq!(t2.name.as_deref(), Some("T3W"));
     }
 
     #[test]
