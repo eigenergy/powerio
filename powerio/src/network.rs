@@ -392,13 +392,17 @@ pub struct Hvdc {
     pub extras: Extras,
 }
 
-/// A series impedance carried on a stated MVA base. Used by [`Transformer3W`] for
-/// each winding-pair branch of a three-winding unit.
+/// A series impedance with the MVA base it is expressed on. Used pairwise by
+/// [`Transformer3W`]; a self-contained unit so the base travels with the value
+/// instead of being implied by position.
 ///
-/// `r`/`x` are per unit on the *system* base (the same convention as
-/// [`Branch`], `CZ = 1` on the PSS/E side), so the matrix math needs no rebasing;
-/// `base_mva` records the winding-pair MVA base the source file declared, kept so
-/// a write-back reproduces it.
+/// `r`/`x` are per unit on the *system* base (the same `CZ = 1` convention as
+/// [`Branch::r`]/[`Branch::x`], so the matrix math needs no rebasing); `base_mva`
+/// records the winding-pair MVA base the source file declared (PSS/E `SBASE1-2`
+/// and friends), kept so a write-back reproduces it and so a future `CZ = 2`
+/// reader has somewhere to put the winding base it must rebase from. Room to grow
+/// (winding voltage base, turns-ratio units) as the transformer control work
+/// lands without reshaping the [`Transformer3W::z`] array.
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
 pub struct Impedance {
     pub r: f64,
@@ -437,7 +441,9 @@ pub struct Winding {
 pub struct Transformer3W {
     /// The three windings, in order (primary, secondary, tertiary).
     pub windings: [Winding; 3],
-    /// Pairwise series impedance `[z12, z23, z31]`, per unit on the system base.
+    /// Pairwise series impedance `[z12, z23, z31]` (primary-secondary,
+    /// secondary-tertiary, tertiary-primary), each per unit on the system base
+    /// with its declared MVA base.
     pub z: [Impedance; 3],
     /// Star-point voltage magnitude (p.u.) and angle (degrees), as solved.
     pub star_vm: f64,

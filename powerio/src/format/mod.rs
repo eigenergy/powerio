@@ -41,7 +41,6 @@ mod pandapower;
 mod powermodels;
 pub mod powerworld;
 mod pslf;
-mod pslf_write;
 mod psse;
 mod pypsa;
 
@@ -50,8 +49,7 @@ pub use matpower::{parse_matpower, parse_matpower_file, write_matpower};
 pub use pandapower::{parse_pandapower_json, write_pandapower_json};
 pub use powermodels::{parse_powermodels_json, write_powermodels_json};
 pub use powerworld::{PwdDisplay, PwdSubstation, parse_powerworld, write_powerworld};
-pub use pslf::parse_pslf;
-pub use pslf_write::write_pslf;
+pub use pslf::{parse_pslf, write_pslf};
 pub use psse::{parse_psse, write_psse, write_psse_rev};
 pub use pypsa::{PypsaCsvOutputs, read_pypsa_csv_folder, write_pypsa_csv_folder};
 

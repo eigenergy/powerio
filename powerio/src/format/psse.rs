@@ -267,6 +267,8 @@ pub fn write_psse_rev(net: &Network, rev: u32) -> Conversion {
             name,
             i32::from(t.in_service)
         );
+        // Line 2: the three pairwise (R, X) on the system base (CZ=1), each with
+        // its declared SBASE column, then the star voltage.
         let [z12, z23, z31] = t.z;
         let _ = writeln!(
             s,
@@ -791,6 +793,8 @@ fn read_transformer_3w(
     // l1: I, J, K, CKT, CW, CZ, CM, MAG1, MAG2, NMETR, NAME, STAT(11)
     // l2: R1-2,X1-2,SBASE1-2, R2-3,X2-3,SBASE2-3, R3-1,X3-1,SBASE3-1, VMSTAR, ANSTAR
     // l3/l4/l5: WINDVk, NOMVk, ANGk, RATAk, RATBk, RATCk, ...
+    // (R, X, SBASE) for a winding pair; at CZ = 1 the impedance is already on the
+    // system base, so the SBASE column is carried only to write it back.
     let imp = |off: usize| -> Result<Impedance> {
         Ok(Impedance {
             r: num_at(l2, off, 0.0)?,

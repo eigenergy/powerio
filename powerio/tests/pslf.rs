@@ -106,6 +106,53 @@ fn pslf_same_format_write_echoes_source() {
     assert_eq!(write_as(&parsed.network, TargetFormat::Pslf).text, EPC);
 }
 
+#[test]
+fn pslf_reads_and_writes_a_three_winding_transformer() {
+    let net = parse_pslf(EPC_3W).unwrap();
+    assert_eq!(net.transformers_3w.len(), 1, "the tertiary record was read");
+    assert!(net.branches.is_empty(), "a 3W is not folded into branches");
+    let t = &net.transformers_3w[0];
+    assert_eq!(
+        [
+            t.windings[0].bus.0,
+            t.windings[1].bus.0,
+            t.windings[2].bus.0
+        ],
+        [1, 2, 3]
+    );
+    // z12 = primary-secondary, z23 = secondary-tertiary, z31 = tertiary-primary.
+    assert!((t.z[0].r - 0.01).abs() < 1e-9);
+    assert!((t.z[1].r - 0.03).abs() < 1e-9);
+    assert!((t.z[2].r - 0.02).abs() < 1e-9);
+    assert!((t.windings[0].tap - 1.05).abs() < 1e-9);
+
+    // Round trip through the writer keeps the buses, impedances, and primary tap.
+    let net2 = parse_pslf(&write_pslf(&net).text).unwrap();
+    assert_eq!(net2.transformers_3w.len(), 1);
+    assert!(net2.branches.is_empty());
+    let t2 = &net2.transformers_3w[0];
+    assert!((t2.z[2].x - 0.07).abs() < 1e-9);
+    assert!((t2.windings[0].tap - 1.05).abs() < 1e-9);
+    assert_eq!(t2.windings[2].bus.0, 3);
+}
+
+/// A 3-bus EPC with a tertiary (3-winding) transformer record.
+const EPC_3W: &str = r#"title
+t3w
+!
+solution parameters
+sbase 100.0000
+!
+bus data  [3] ty vsched volt angle ar zone vmax vmin
+1 "B1          " 230.0000 : 0 1.0 1.0 0.0 1 1 1.1 0.9
+2 "B2          " 138.0000 : 1 1.0 1.0 0.0 1 1 1.1 0.9
+3 "B3          " 13.8000 : 1 1.0 1.0 0.0 1 1 1.1 0.9
+transformer data  [1]
+1 "B1          " 230.00 2 "B2          " 138.00 "1 " 1 "xf3" : 1 0 0 0 0 0 0 0 0 3 0 0 0 0 100 0.01 0.06 0.02 0.07 0.03 0.08 /
+0 0 0 0 0 0 100 90 80 0 0.0 0 0 0 0 0 1.05
+end
+"#;
+
 /// A two-winding transformer EPC plus a ZIP load, for the round-trip test.
 const EPC_WITH_TRANSFORMER: &str = r#"title
 xfmr case
