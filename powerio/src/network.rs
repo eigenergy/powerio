@@ -348,7 +348,11 @@ mod caps_serde {
     }
 
     pub(super) fn deserialize<'de, D: Deserializer<'de>>(d: D) -> Result<GenCaps, D::Error> {
-        let named = BTreeMap::<String, f64>::deserialize(d)?;
+        // Accept an explicit `null` as the empty set (treated like an omitted
+        // field), so a producer that encodes "no caps" as `null` round-trips the
+        // same way `cost: Option<_>` does. `#[serde(default)]` only covers an
+        // absent key, not a present `null`.
+        let named = Option::<BTreeMap<String, f64>>::deserialize(d)?.unwrap_or_default();
         let mut caps: GenCaps = [None; GEN_EXTRA_KEYS.len()];
         for (slot, key) in caps.iter_mut().zip(GEN_EXTRA_KEYS.iter()) {
             *slot = named.get(*key).copied();
@@ -803,5 +807,11 @@ mod tests {
             "vg":1,"mbase":100,"in_service":true,"cost":null}"#;
         let g3: Generator = serde_json::from_str(no_caps).unwrap();
         assert!(!g3.has_caps());
+
+        // An explicit `"caps":null` is the empty set too, the same as omitting it.
+        let null_caps = r#"{"bus":1,"pg":10,"qg":0,"pmax":100,"pmin":0,"qmax":50,"qmin":-50,
+            "vg":1,"mbase":100,"in_service":true,"cost":null,"caps":null}"#;
+        let g4: Generator = serde_json::from_str(null_caps).unwrap();
+        assert!(!g4.has_caps());
     }
 }

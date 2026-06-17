@@ -289,9 +289,11 @@ int32_t pio_is_radial(const PioNetwork *net);
  * Serialize `net` to the named format `to` — the one text serializer; every
  * format is named by a string. Accepts the [`pio_parse_str`] names:
  * `matpower` is a byte-exact echo when the handle was parsed from MATPOWER,
- * and `powerio-json` is the canonical lossless snapshot (validated by
- * [`pio_parse_str`] on the way back; the retained source text is the one
- * field it omits).
+ * and `powerio-json` is the canonical snapshot (validated by [`pio_parse_str`]
+ * on the way back; the retained source text is the one field it omits). The
+ * snapshot is lossless except for a non-finite `f64` (`Inf`/`NaN`), which JSON
+ * cannot represent: it is written as `null`, named in a fidelity warning, and
+ * then fails to read back — pass `warnbuf` to detect it.
  *
  * Returns the text as an owned C string (free with [`pio_string_free`]),
  * `NULL` on error (message into `errbuf`). Fidelity warnings, if any, are

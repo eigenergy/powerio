@@ -1,8 +1,8 @@
 # Fuzzing the parser surface
 
 libFuzzer harnesses for the readers that take untrusted input: `matpower`,
-`psse`, `powerworld_aux`, and `powerio_json` feed `parse_str`; `pwb` and `pwd`
-feed the PowerWorld binary decoders raw bytes. The remaining `parse_str`
+`psse`, `pslf`, `powerworld_aux`, and `powerio_json` feed `parse_str`; `pwb` and
+`pwd` feed the PowerWorld binary decoders raw bytes. The remaining `parse_str`
 formats (PowerModels, egret, pandapower) ride serde_json rather than a
 hand-written tokenizer, so the harnesses cover every hand-rolled reader. The
 invariant under test is the parser trust model: any input returns `Ok` or a

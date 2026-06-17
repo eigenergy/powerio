@@ -47,6 +47,13 @@ doc = false
 bench = false
 
 [[bin]]
+name = "pslf"
+path = "fuzz_targets/pslf.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
 name = "pwb"
 path = "fuzz_targets/pwb.rs"
 test = false

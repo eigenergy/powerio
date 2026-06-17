@@ -45,8 +45,14 @@ fn golden_v4_snapshot_still_parses() {
         "generator caps must serialize as an object"
     );
 
-    // Re-serialize and read back: the schema round-trips without drift.
+    // Re-serialize and read back: the schema round-trips without drift, and the
+    // CURRENT serializer (not just the frozen golden bytes) still emits caps as a
+    // name-keyed object — so a writer-side wire-form regression fails here too.
     let again = net.to_json().unwrap();
+    assert!(
+        again.contains(r#""caps":{"#) && !again.contains(r#""caps":["#),
+        "the live serializer must still emit caps as an object"
+    );
     let back = Network::from_json(&again).unwrap();
     assert_eq!(back.buses.len(), net.buses.len());
     assert_eq!(back.generators.len(), net.generators.len());
@@ -88,7 +94,10 @@ fn small_net() -> Network {
         name: None,
         extras: Extras::new(),
     };
-    let mut caps: GenCaps = [None; 11];
+    // Length-agnostic: GEN_EXTRA_KEYS is pub(crate), so the integration crate
+    // can't write `[None; GEN_EXTRA_KEYS.len()]`; `GenCaps::default()` tracks the
+    // array length so this test still compiles when a capability column is added.
+    let mut caps: GenCaps = GenCaps::default();
     caps[8] = Some(1.5); // ramp_30
     let g = Generator {
         bus: BusId(1),
