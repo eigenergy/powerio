@@ -204,6 +204,7 @@ pub(crate) fn parse_pandapower_source(
                 in_service: row.bool_or("in_service", true),
                 cost: costs.get(&(CostElement::Gen, idx)).cloned(),
                 caps: [None; crate::network::GEN_EXTRA_KEYS.len()],
+                regulated_bus: None,
             });
         }
     }
@@ -225,6 +226,7 @@ pub(crate) fn parse_pandapower_source(
                 in_service: row.bool_or("in_service", true),
                 cost: costs.get(&(CostElement::ExtGrid, idx)).cloned(),
                 caps: [None; crate::network::GEN_EXTRA_KEYS.len()],
+                regulated_bus: None,
             });
         }
     }
@@ -249,6 +251,7 @@ pub(crate) fn parse_pandapower_source(
                 in_service: row.bool_or("in_service", true),
                 cost: costs.get(&(CostElement::Sgen, idx)).cloned(),
                 caps: [None; crate::network::GEN_EXTRA_KEYS.len()],
+                regulated_bus: None,
             });
         }
     }
@@ -2567,6 +2570,7 @@ mod tests {
             in_service: true,
             cost,
             caps: [None; crate::network::GEN_EXTRA_KEYS.len()],
+            regulated_bus: None,
         }
     }
 

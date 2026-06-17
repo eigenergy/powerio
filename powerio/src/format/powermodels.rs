@@ -599,6 +599,7 @@ fn read_gen(v: &Value, pscale: f64, base_mva: f64, per_unit: bool) -> Generator 
         in_service: flag(v, "gen_status"),
         cost,
         caps,
+        regulated_bus: None,
     }
 }
 

@@ -1304,6 +1304,7 @@ fn build_network_from_columns(
             in_service: g_in[r] != 0,
             cost,
             caps: [None; 11],
+            regulated_bus: None,
         });
     }
 
@@ -2528,6 +2529,7 @@ mod tests {
             in_service: true,
             cost: Some(cost),
             caps: [None; 11],
+            regulated_bus: None,
         }
     }
 

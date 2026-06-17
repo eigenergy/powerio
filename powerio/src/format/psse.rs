@@ -211,15 +211,18 @@ pub fn write_psse_rev(net: &Network, rev: u32) -> Conversion {
     let mut gen_ids: BTreeMap<BusId, u32> = BTreeMap::new();
     for g in &net.generators {
         let id = positional_id(g.bus, &mut gen_ids);
+        // IREG (field 7): the remote regulated bus, or 0 for own-terminal control.
+        let ireg = g.regulated_bus.map_or(0, |b| b.0);
         let _ = writeln!(
             s,
-            "{}, '{id}', {}, {}, {}, {}, {}, 0, {}, 0, 1, 0, 0, 1, {}, 100, {}, {}, 1, 1",
+            "{}, '{id}', {}, {}, {}, {}, {}, {}, {}, 0, 1, 0, 0, 1, {}, 100, {}, {}, 1, 1",
             g.bus,
             num(g.pg),
             num(g.qg),
             num(g.qmax),
             num(g.qmin),
             num(g.vg),
+            ireg,
             num(g.mbase),
             i32::from(g.in_service),
             num(g.pmax),
@@ -1013,8 +1016,12 @@ fn read_area(f: &[String]) -> Result<Area> {
 
 fn read_gen(f: &[String]) -> Result<Generator> {
     // I, ID, PG, QG, QT, QB, VS, IREG, MBASE, ..., STAT(14), ..., PT(16), PB(17)
+    let bus = id_at(f, 0, 0)?;
+    // IREG names a remote regulated bus; 0 (or the generator's own bus) means it
+    // regulates its own terminal, which the neutral model leaves as `None`.
+    let ireg = id_at(f, 7, 0)?;
     Ok(Generator {
-        bus: BusId(id_at(f, 0, 0)?),
+        bus: BusId(bus),
         pg: num_at(f, 2, 0.0)?,
         qg: num_at(f, 3, 0.0)?,
         qmax: num_at(f, 4, 0.0)?,
@@ -1026,6 +1033,7 @@ fn read_gen(f: &[String]) -> Result<Generator> {
         pmin: num_at(f, 17, 0.0)?,
         cost: None,
         caps: Default::default(),
+        regulated_bus: (ireg != 0 && ireg != bus).then_some(BusId(ireg)),
     })
 }
 
@@ -1495,6 +1503,68 @@ Q
         assert_eq!(c2.blocks.len(), 2);
         close(c2.blocks[0].b, 25.0);
         close(net2.shunts[0].b, 19.0);
+    }
+
+    #[test]
+    fn reads_and_writes_a_generator_remote_regulated_bus() {
+        let raw = r"0, 100.00, 33, 0, 0, 60.00 / x
+CASE
+COMMENT
+1,'B1          ', 230.0,3,1,1,1,1.0,0.0,1.1,0.9,1.1,0.9
+3,'B3          ', 18.0,2,1,1,1,1.0,0.0,1.1,0.9,1.1,0.9
+7,'B7          ', 230.0,1,1,1,1,1.0,0.0,1.1,0.9,1.1,0.9
+0 / END OF BUS DATA, BEGIN LOAD DATA
+0 / END OF LOAD DATA, BEGIN FIXED SHUNT DATA
+0 / END OF FIXED SHUNT DATA, BEGIN GENERATOR DATA
+3,'1', 50.0, 5.0, 30.0, -20.0, 1.02, 7, 100.0, 0, 1, 0, 0, 1, 1, 100.0, 80.0, 0.0, 1, 1
+1,'1', 10.0, 0.0, 10.0, -10.0, 1.0, 0, 100.0, 0, 1, 0, 0, 1, 1, 100.0, 50.0, 0.0, 1, 1
+0 / END OF GENERATOR DATA, BEGIN BRANCH DATA
+0 / END OF BRANCH DATA, BEGIN TRANSFORMER DATA
+0 / END OF TRANSFORMER DATA, BEGIN AREA DATA
+Q
+";
+        let net = parse_psse(raw).unwrap();
+        assert_eq!(net.generators.len(), 2);
+        let g3 = net.generators.iter().find(|g| g.bus == BusId(3)).unwrap();
+        assert_eq!(
+            g3.regulated_bus,
+            Some(BusId(7)),
+            "IREG names the remote regulated bus"
+        );
+        // IREG 0 means own-terminal control: no remote bus.
+        let g1 = net.generators.iter().find(|g| g.bus == BusId(1)).unwrap();
+        assert_eq!(g1.regulated_bus, None);
+
+        // Round trip: IREG is written at field 7 and re-read intact.
+        let text = write_psse(&net).text;
+        let net2 = parse_psse(&text).unwrap();
+        let g3b = net2.generators.iter().find(|g| g.bus == BusId(3)).unwrap();
+        assert_eq!(g3b.regulated_bus, Some(BusId(7)));
+        let g1b = net2.generators.iter().find(|g| g.bus == BusId(1)).unwrap();
+        assert_eq!(g1b.regulated_bus, None);
+    }
+
+    #[test]
+    fn rejects_a_generator_regulating_an_unknown_bus() {
+        let raw = r"0, 100.00, 33, 0, 0, 60.00 / x
+CASE
+COMMENT
+1,'B1          ', 230.0,3,1,1,1,1.0,0.0,1.1,0.9,1.1,0.9
+3,'B3          ', 18.0,2,1,1,1,1.0,0.0,1.1,0.9,1.1,0.9
+0 / END OF BUS DATA, BEGIN LOAD DATA
+0 / END OF LOAD DATA, BEGIN FIXED SHUNT DATA
+0 / END OF FIXED SHUNT DATA, BEGIN GENERATOR DATA
+3,'1', 50.0, 5.0, 30.0, -20.0, 1.02, 99, 100.0, 0, 1, 0, 0, 1, 1, 100.0, 80.0, 0.0, 1, 1
+0 / END OF GENERATOR DATA, BEGIN BRANCH DATA
+0 / END OF BRANCH DATA, BEGIN TRANSFORMER DATA
+0 / END OF TRANSFORMER DATA, BEGIN AREA DATA
+Q
+";
+        let err = parse_psse(raw).unwrap_err().to_string();
+        assert!(
+            err.contains("generator voltage control references unknown bus 99"),
+            "got {err}"
+        );
     }
 
     #[test]

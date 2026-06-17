@@ -542,6 +542,7 @@ fn read_gen(v: &Value) -> Result<Generator> {
         in_service: flag(v, "in_service", true)?,
         cost,
         caps: Default::default(),
+        regulated_bus: None,
     })
 }
 

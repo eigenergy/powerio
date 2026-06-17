@@ -432,6 +432,7 @@ fn gen_with_cost(bus: usize, cost: Option<GenCost>) -> Generator {
         in_service: true,
         cost,
         caps: Default::default(),
+        regulated_bus: None,
     }
 }
 

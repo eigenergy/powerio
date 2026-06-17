@@ -227,6 +227,7 @@ pub(super) fn gen_row(row: &[f64], i: usize) -> Result<Generator> {
         in_service: is_in_service(row[gen_col::GEN_STATUS]),
         cost: None,
         caps,
+        regulated_bus: None,
     })
 }
 

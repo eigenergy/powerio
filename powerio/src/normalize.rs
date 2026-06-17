@@ -181,6 +181,9 @@ fn norm_gens(gens: &[Generator], base: f64, map: &HashMap<BusId, BusId>) -> Vec<
                     ..c.clone()
                 }),
                 caps,
+                // Remap the regulated bus through the same id map; drop it if its
+                // target was filtered out so the normalized view stays consistent.
+                regulated_bus: g.regulated_bus.and_then(|b| remap(map, b)),
                 ..g.clone()
             })
         })

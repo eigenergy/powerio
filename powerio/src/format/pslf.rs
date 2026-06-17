@@ -626,6 +626,7 @@ fn read_generator(rec: &Record, bus_vm: &HashMap<BusId, f64>) -> Result<Generato
         in_service: on_at(&rec.rhs, 0, true, "generator status", rec)?,
         cost: None,
         caps: Default::default(),
+        regulated_bus: None,
     })
 }
 

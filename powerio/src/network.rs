@@ -442,6 +442,14 @@ pub struct Generator {
     /// costs 11 heap allocations each, which dominates the parse of a large
     /// generator-heavy case. Surfaced into formats that name them (PowerModels).
     pub caps: GenCaps,
+    /// The remote bus whose voltage this generator regulates, when that is not its
+    /// own terminal bus (PSS/E `IREG`). `None` means it regulates its own bus.
+    /// Part of the cross-element voltage-control graph: a format that names a
+    /// remote regulated bus (PSS/E) keeps it across a round trip instead of
+    /// collapsing every generator onto its own terminal. `#[serde(default)]` so
+    /// JSON written before the field existed still deserializes.
+    #[serde(default)]
+    pub regulated_bus: Option<BusId>,
 }
 
 impl Generator {
@@ -988,6 +996,9 @@ impl Network {
         }
         for g in &self.generators {
             check(g.bus, "generator")?;
+            if let Some(bus) = g.regulated_bus {
+                check(bus, "generator voltage control")?;
+            }
         }
         for d in &self.hvdc {
             check(d.from, "dcline")?;
@@ -1240,6 +1251,7 @@ mod tests {
             in_service: true,
             cost: None,
             caps: Default::default(),
+            regulated_bus: None,
         });
 
         let diags = net.validate_values();

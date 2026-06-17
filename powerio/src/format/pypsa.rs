@@ -186,6 +186,7 @@ fn read_pypsa_csv_folder_inner(path: &Path, warnings: &mut Vec<String>) -> Resul
                     (None, None) => None,
                 },
                 caps: [None; crate::network::GEN_EXTRA_KEYS.len()],
+                regulated_bus: None,
             });
         }
     }
@@ -1052,6 +1053,7 @@ mod tests {
             in_service: true,
             cost,
             caps: [None; crate::network::GEN_EXTRA_KEYS.len()],
+            regulated_bus: None,
         }
     }
 

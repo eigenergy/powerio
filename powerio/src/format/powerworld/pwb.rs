@@ -1291,6 +1291,7 @@ fn gen_from_block(bus: BusId, v: &[f64; 8], in_service: bool) -> Generator {
         in_service,
         cost: None,
         caps: Default::default(),
+        regulated_bus: None,
     }
 }
 

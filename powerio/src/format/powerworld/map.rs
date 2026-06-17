@@ -527,6 +527,7 @@ fn read_gen(r: &Row, bus_labels: &HashMap<&str, BusId>) -> Result<Generator> {
         in_service: on_alias(r, &["GenStatus", "Status"])?,
         cost: None,
         caps: Default::default(),
+        regulated_bus: None,
     })
 }
 
