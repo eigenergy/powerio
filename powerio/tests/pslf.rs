@@ -63,21 +63,46 @@ fn pslf_is_not_a_write_target() {
 
 #[test]
 fn malformed_pslf_input_returns_errors_without_panics() {
-    for text in [
-        "",
-        "title\nunterminated\n",
-        "bus data [1]\nnot-a-bus\nend\n",
-        "bus data [1]\n1 \"A\" 230 : bad 1 1 0 1 1 1.1 0.9\nend\n",
-        "bus data [1]\n1 \"A\" 230 : 0 1 1 0 1 1 1.1 0.9 /\n",
+    for (text, expected) in [
+        ("", "no buses"),
+        ("title\nunterminated\n", "no buses"),
+        (
+            "bus data [1]\nnot-a-bus\nend\n",
+            "bus id missing or invalid",
+        ),
+        (
+            "bus data [1]\n1 \"A\" 230 : bad 1 1 0 1 1 1.1 0.9\nend\n",
+            "bus type field 0 value",
+        ),
     ] {
         let outcome = std::panic::catch_unwind(|| parse_str(text, "pslf"));
         assert!(outcome.is_ok(), "PSLF parser panicked on {text:?}");
+        let err = outcome
+            .unwrap()
+            .expect_err("malformed PSLF input parsed successfully");
+        assert!(
+            err.to_string().contains(expected),
+            "expected {expected:?} in {err}"
+        );
     }
+}
 
-    let err = parse_str("bus data [1]\nnot-a-bus\nend\n", "pslf").expect_err("bad bus must fail");
+#[test]
+fn pslf_missing_end_marker_warns_without_panic() {
+    let text = "bus data [1]\n1 \"A\" 230 : 0 1 1 0 1 1 1.1 0.9 /\n";
+    let outcome = std::panic::catch_unwind(|| parse_str(text, "pslf"));
     assert!(
-        err.to_string().contains("bus id missing or invalid"),
-        "{err}"
+        outcome.is_ok(),
+        "PSLF parser panicked on missing end marker"
+    );
+    let parsed = outcome.unwrap().expect("single bus PSLF case should parse");
+    assert!(
+        parsed
+            .warnings
+            .iter()
+            .any(|warning| warning.contains("no end marker")),
+        "expected no end marker warning, got {:?}",
+        parsed.warnings
     );
 }
 
