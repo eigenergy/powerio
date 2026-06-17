@@ -633,6 +633,45 @@ pub(crate) const GEN_EXTRA_KEYS: [&str; 11] = [
     "ramp_q", "apf",
 ];
 
+/// A value-domain finding from [`Network::validate_values`]: an element field
+/// whose value falls outside its physical range, paired with the value
+/// [`repair`](Network::repair) would set in its place.
+///
+/// `#[non_exhaustive]`: a returns-only record, so downstream code reads it but
+/// never constructs it, leaving room to add locator fields without a break.
+#[derive(Debug, Clone, PartialEq)]
+#[non_exhaustive]
+pub struct Diagnostic {
+    /// Human-readable element locator, e.g. `"bus 3"` or `"generator at bus 5"`.
+    pub element: String,
+    pub field: &'static str,
+    pub old: f64,
+    pub new: f64,
+    pub reason: &'static str,
+}
+
+/// Voltage magnitude (p.u.) repair: non-positive or above 2 (or non-finite) → 1.0.
+/// A zero magnitude is treated as out of domain (a de-energized placeholder), not
+/// a valid 0 p.u.
+fn repair_vm(vm: f64) -> Option<f64> {
+    (!vm.is_finite() || vm <= 0.0 || vm > 2.0).then_some(1.0)
+}
+
+/// Voltage angle (degrees) repair: `|va| > 2000` (or non-finite) → 0.0.
+fn repair_va(va: f64) -> Option<f64> {
+    (!va.is_finite() || va.abs() > 2000.0).then_some(0.0)
+}
+
+/// Generator MVA base repair: non-positive (or non-finite) → the system base.
+fn repair_mbase(mbase: f64, sbase: f64) -> Option<f64> {
+    (!mbase.is_finite() || mbase <= 0.0).then_some(sbase)
+}
+
+/// Generator voltage setpoint (p.u.) repair: non-positive (or non-finite) → 1.0.
+fn repair_vg(vg: f64) -> Option<f64> {
+    (!vg.is_finite() || vg <= 0.0).then_some(1.0)
+}
+
 impl Network {
     /// A network assembled in memory from buses and branches, with no loads,
     /// shunts, generators, storage, HVDC, or retained source document. Synthetic
@@ -734,6 +773,89 @@ impl Network {
                 base: self.base_mva,
             })
         }
+    }
+
+    /// Report element fields whose values fall outside their physical domain,
+    /// without changing anything. Each [`Diagnostic`] names the element, the
+    /// field, the current value, the value [`repair`](Network::repair) would set,
+    /// and why.
+    ///
+    /// This generalizes the per-reader value clamps (a bus voltage magnitude
+    /// outside `[0, 2]`, an angle past `±2000°`, a zero generator MVA base or
+    /// voltage setpoint) into one pass any consumer can run, separate from the
+    /// structural [`validate`](Network::validate) (which only checks ids and
+    /// references). It is non-mutating; call [`repair`](Network::repair) to apply
+    /// the fixes.
+    #[must_use]
+    pub fn validate_values(&self) -> Vec<Diagnostic> {
+        let mut out = Vec::new();
+        for b in &self.buses {
+            if let Some(new) = repair_vm(b.vm) {
+                out.push(Diagnostic {
+                    element: format!("bus {}", b.id),
+                    field: "vm",
+                    old: b.vm,
+                    new,
+                    reason: "voltage magnitude outside [0, 2] p.u.",
+                });
+            }
+            if let Some(new) = repair_va(b.va) {
+                out.push(Diagnostic {
+                    element: format!("bus {}", b.id),
+                    field: "va",
+                    old: b.va,
+                    new,
+                    reason: "voltage angle outside ±2000°",
+                });
+            }
+        }
+        for g in &self.generators {
+            if let Some(new) = repair_mbase(g.mbase, self.base_mva) {
+                out.push(Diagnostic {
+                    element: format!("generator at bus {}", g.bus),
+                    field: "mbase",
+                    old: g.mbase,
+                    new,
+                    reason: "non-positive generator MVA base",
+                });
+            }
+            if let Some(new) = repair_vg(g.vg) {
+                out.push(Diagnostic {
+                    element: format!("generator at bus {}", g.bus),
+                    field: "vg",
+                    old: g.vg,
+                    new,
+                    reason: "non-positive voltage setpoint",
+                });
+            }
+        }
+        out
+    }
+
+    /// Clamp every out-of-domain value to its repaired value (the same rules
+    /// [`validate_values`](Network::validate_values) reports), returning the list
+    /// of changes made. A second call returns an empty list (the values are now
+    /// in domain).
+    pub fn repair(&mut self) -> Vec<Diagnostic> {
+        let findings = self.validate_values();
+        let sbase = self.base_mva;
+        for b in &mut self.buses {
+            if let Some(new) = repair_vm(b.vm) {
+                b.vm = new;
+            }
+            if let Some(new) = repair_va(b.va) {
+                b.va = new;
+            }
+        }
+        for g in &mut self.generators {
+            if let Some(new) = repair_mbase(g.mbase, sbase) {
+                g.mbase = new;
+            }
+            if let Some(new) = repair_vg(g.vg) {
+                g.vg = new;
+            }
+        }
+        findings
     }
 
     /// Check structural integrity: bus ids are unique and every element
@@ -1025,5 +1147,51 @@ mod tests {
             err.contains("switched-shunt control references unknown bus 9"),
             "got {err}"
         );
+    }
+
+    #[test]
+    fn validate_values_flags_and_repair_clamps_out_of_domain_values() {
+        let mut net = Network::in_memory("t", 100.0, vec![bus(1), bus(2)], Vec::new());
+        net.buses[0].vm = 0.0; // outside [0, 2]
+        net.buses[1].va = 9000.0; // past ±2000°
+        net.generators.push(Generator {
+            bus: BusId(1),
+            pg: 10.0,
+            qg: 0.0,
+            pmax: 100.0,
+            pmin: 0.0,
+            qmax: 50.0,
+            qmin: -50.0,
+            vg: 0.0,    // non-positive setpoint
+            mbase: 0.0, // non-positive base
+            in_service: true,
+            cost: None,
+            caps: Default::default(),
+        });
+
+        let diags = net.validate_values();
+        let fields: std::collections::BTreeSet<_> = diags.iter().map(|d| d.field).collect();
+        assert_eq!(
+            fields,
+            ["mbase", "va", "vg", "vm"].into_iter().collect(),
+            "all four out-of-domain fields reported"
+        );
+        // Non-mutating: the network still holds the bad values.
+        close(net.buses[0].vm, 0.0);
+
+        let applied = net.repair();
+        assert_eq!(applied.len(), diags.len());
+        close(net.buses[0].vm, 1.0);
+        close(net.buses[1].va, 0.0);
+        close(net.generators[0].mbase, 100.0); // → base_mva
+        close(net.generators[0].vg, 1.0);
+        // Idempotent: nothing left to repair.
+        assert!(net.validate_values().is_empty());
+    }
+
+    #[test]
+    fn validate_values_is_empty_for_a_clean_network() {
+        let net = Network::in_memory("t", 100.0, vec![bus(1), bus(2)], Vec::new());
+        assert!(net.validate_values().is_empty());
     }
 }

@@ -53,7 +53,8 @@ pub use format::{
 };
 pub use indexed::{ConnectivityReport, IndexCore, IndexedNetwork};
 pub use network::{
-    Branch, Bus, BusId, BusType, DEFAULT_BASE_FREQUENCY, Extras, GenCaps, GenCost, Generator, Hvdc,
-    Impedance, Load, Network, Shunt, ShuntBlock, SourceFormat, Storage, SwitchedShuntControl,
-    SwitchedShuntMode, Transformer3W, TransformerControl, TransformerControlMode, Winding,
+    Branch, Bus, BusId, BusType, DEFAULT_BASE_FREQUENCY, Diagnostic, Extras, GenCaps, GenCost,
+    Generator, Hvdc, Impedance, Load, Network, Shunt, ShuntBlock, SourceFormat, Storage,
+    SwitchedShuntControl, SwitchedShuntMode, Transformer3W, TransformerControl,
+    TransformerControlMode, Winding,
 };
