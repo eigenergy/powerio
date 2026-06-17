@@ -500,6 +500,7 @@ fn read_shunt(r: &Row, bus_labels: &HashMap<&str, BusId>) -> Result<Shunt> {
         g: f_alias(r, &["ShuntMW", "SSNMW", "MWNom"], 0.0)?,
         b: f_alias(r, &["ShuntMVR", "SSNMVR", "MvarNom"], 0.0)?,
         in_service: on_alias(r, &["ShuntStatus", "SSStatus", "Status"])?,
+        control: None,
         extras,
     })
 }

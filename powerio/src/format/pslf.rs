@@ -679,6 +679,7 @@ fn read_shunt(rec: &Record, base_mva: f64) -> Result<Shunt> {
         g: g_pu * base_mva,
         b: b_pu * base_mva,
         in_service: on_at(&rec.rhs, 0, true, "shunt status", rec)?,
+        control: None,
         extras,
     })
 }
@@ -710,6 +711,7 @@ fn read_svd(
         g: g_pu * base_mva,
         b: b_pu * base_mva,
         in_service: on_at(&rec.rhs, 0, true, "svd status", rec)?,
+        control: None,
         extras,
     })
 }
@@ -1338,6 +1340,15 @@ pub fn write_pslf(net: &Network) -> Conversion {
         warnings.push(format!(
             "{dropped_control} transformer(s) lost their regulating control (mode/tap limits/\
              regulated bus): the PSLF .epc transformer record carries no control columns"
+        ));
+    }
+    // Switched shunts write as fixed `.epc` shunts (G/B); the switching control
+    // has no column in the shunt record this writer emits.
+    let dropped_sw = net.shunts.iter().filter(|s| s.control.is_some()).count();
+    if dropped_sw > 0 {
+        warnings.push(format!(
+            "{dropped_sw} switched shunt(s) written as fixed: the PSLF .epc shunt record this \
+             writer emits has no switching-control columns (mode/band/step blocks)"
         ));
     }
     if sanitized_names > 0 {

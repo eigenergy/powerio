@@ -147,6 +147,7 @@ fn bdoubleprime_with_shunts_is_strictly_dominant() {
             g: 0.0,
             b: -10.0,
             in_service: true,
+            control: None,
             extras: Extras::new(),
         },
         Shunt {
@@ -154,6 +155,7 @@ fn bdoubleprime_with_shunts_is_strictly_dominant() {
             g: 0.0,
             b: -10.0,
             in_service: true,
+            control: None,
             extras: Extras::new(),
         },
         Shunt {
@@ -161,6 +163,7 @@ fn bdoubleprime_with_shunts_is_strictly_dominant() {
             g: 0.0,
             b: -10.0,
             in_service: true,
+            control: None,
             extras: Extras::new(),
         },
     ];

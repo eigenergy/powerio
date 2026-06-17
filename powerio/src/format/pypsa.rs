@@ -131,6 +131,7 @@ fn read_pypsa_csv_folder_inner(path: &Path, warnings: &mut Vec<String>) -> Resul
                 g: row.f("g").unwrap_or(0.0) * zb * base_mva,
                 b: row.f("b").unwrap_or(0.0) * zb * base_mva,
                 in_service: row.bool("active").unwrap_or(true),
+                control: None,
                 extras: Extras::default(),
             });
         }

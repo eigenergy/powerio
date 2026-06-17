@@ -485,6 +485,7 @@ fn read_shunt(v: &Value) -> Result<Shunt> {
         g: f(v, "gs")?,
         b: f(v, "bs")?,
         in_service: flag(v, "in_service", true)?,
+        control: None,
         extras: Extras::new(),
     })
 }

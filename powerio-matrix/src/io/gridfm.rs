@@ -1250,6 +1250,7 @@ fn build_network_from_columns(
                 g: gs[r] * base_mva,
                 b: bs[r] * base_mva,
                 in_service: true,
+                control: None,
                 extras: Extras::new(),
             });
         }

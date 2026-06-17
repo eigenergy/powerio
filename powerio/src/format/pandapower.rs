@@ -172,6 +172,7 @@ pub(crate) fn parse_pandapower_source(
                 g: row.f_or("p_mw", 0.0) * step * v_ratio,
                 b: -row.f_or("q_mvar", 0.0) * step * v_ratio,
                 in_service: row.bool_or("in_service", true),
+                control: None,
                 extras: Extras::default(),
             });
         }

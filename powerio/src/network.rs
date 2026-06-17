@@ -253,10 +253,55 @@ pub struct Shunt {
     pub bus: BusId,
     /// Shunt conductance (MW at V = 1 p.u.).
     pub g: f64,
-    /// Shunt susceptance (MVAr at V = 1 p.u.).
+    /// Shunt susceptance (MVAr at V = 1 p.u.). For a switched shunt this is the
+    /// initial (steady-state) value within the [`control`](Shunt::control) blocks.
     pub b: f64,
     pub in_service: bool,
+    /// Switching-control data when this is a switched (adjustable) shunt; `None`
+    /// for a fixed shunt. `#[serde(default)]` so JSON written before the field
+    /// existed still deserializes.
+    #[serde(default)]
+    pub control: Option<SwitchedShuntControl>,
     pub extras: Extras,
+}
+
+/// How a switched shunt adjusts its susceptance. Maps to the PSS/E `MODSW` code.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+#[non_exhaustive]
+pub enum SwitchedShuntMode {
+    /// Fixed at its initial susceptance, no automatic switching (`MODSW` 0).
+    Locked,
+    /// Continuous adjustment within the block range (`MODSW` 1).
+    Continuous,
+    /// Discrete adjustment in fixed steps (`MODSW` 2 and up).
+    Discrete,
+}
+
+/// One block of a switched shunt: `steps` equal increments of susceptance `b`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ShuntBlock {
+    pub steps: u32,
+    /// Susceptance increment per step (MVAr at V = 1 p.u.).
+    pub b: f64,
+}
+
+/// Switching-control data for a switched shunt ([`Shunt::control`]): the mode,
+/// the regulated voltage band and bus, the reactive-range percentage, and the
+/// adjustable susceptance blocks. The shunt's [`b`](Shunt::b) is the initial
+/// value within the blocks' total range.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[non_exhaustive]
+pub struct SwitchedShuntControl {
+    pub mode: SwitchedShuntMode,
+    /// Regulated voltage band (per unit).
+    pub vhigh: f64,
+    pub vlow: f64,
+    /// The regulated bus; `None` means the shunt regulates its own bus.
+    pub control_bus: Option<BusId>,
+    /// Percent of the controlled device's reactive range to apply (PSS/E `RMPCT`).
+    pub rmpct: f64,
+    pub blocks: Vec<ShuntBlock>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -747,6 +792,9 @@ impl Network {
         }
         for s in &self.shunts {
             check(s.bus, "shunt")?;
+            if let Some(bus) = s.control.as_ref().and_then(|c| c.control_bus) {
+                check(bus, "switched-shunt control")?;
+            }
         }
         for g in &self.generators {
             check(g.bus, "generator")?;
@@ -928,6 +976,53 @@ mod tests {
         let err = net.validate().unwrap_err().to_string();
         assert!(
             err.contains("transformer control references unknown bus 9"),
+            "got {err}"
+        );
+    }
+
+    /// A discrete switched shunt on bus 1 regulating the voltage at bus `reg`.
+    fn switched_shunt(reg: usize) -> Shunt {
+        Shunt {
+            bus: BusId(1),
+            g: 0.0,
+            b: 19.0,
+            in_service: true,
+            control: Some(SwitchedShuntControl {
+                mode: SwitchedShuntMode::Discrete,
+                vhigh: 1.05,
+                vlow: 0.95,
+                control_bus: Some(BusId(reg)),
+                rmpct: 100.0,
+                blocks: vec![
+                    ShuntBlock { steps: 2, b: 25.0 },
+                    ShuntBlock { steps: 1, b: 50.0 },
+                ],
+            }),
+            extras: Extras::new(),
+        }
+    }
+
+    #[test]
+    fn switched_shunt_control_survives_json_transport() {
+        let mut net = Network::in_memory("t", 100.0, vec![bus(1), bus(2), bus(3)], Vec::new());
+        net.shunts.push(switched_shunt(3));
+        net.validate().unwrap();
+
+        let back = Network::from_json(&net.to_json().unwrap()).unwrap();
+        let c = back.shunts[0].control.as_ref().unwrap();
+        assert_eq!(c.mode, SwitchedShuntMode::Discrete);
+        assert_eq!(c.control_bus, Some(BusId(3)));
+        assert_eq!(c.blocks.len(), 2);
+        close(c.blocks[1].b, 50.0);
+    }
+
+    #[test]
+    fn check_references_rejects_a_dangling_switched_shunt_control_bus() {
+        let mut net = Network::in_memory("t", 100.0, vec![bus(1), bus(2)], Vec::new());
+        net.shunts.push(switched_shunt(9)); // controls a bus that doesn't exist
+        let err = net.validate().unwrap_err().to_string();
+        assert!(
+            err.contains("switched-shunt control references unknown bus 9"),
             "got {err}"
         );
     }

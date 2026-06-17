@@ -1059,6 +1059,7 @@ fn bus_tail_shunt(b: &[u8], after_head: usize, bus: BusId) -> Option<Shunt> {
         g: g_pu * MVA_BASE,
         b: b_pu * MVA_BASE,
         in_service: true,
+        control: None,
         extras,
     })
 }
@@ -1414,6 +1415,7 @@ fn read_shunt(c: &mut Cur, bus: BusId, id: &[u8]) -> Probe<Shunt> {
         g: 0.0,
         b: b_mvar,
         in_service: true,
+        control: None,
         extras,
     })
 }

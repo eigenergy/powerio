@@ -506,6 +506,7 @@ fn read_shunt(v: &Value, pscale: f64) -> Shunt {
         g: f(v, "gs") * pscale,
         b: f(v, "bs") * pscale,
         in_service: flag(v, "status"),
+        control: None,
         extras: extras_excluding(
             v,
             &["shunt_bus", "gs", "bs", "status", "index", "source_id"],

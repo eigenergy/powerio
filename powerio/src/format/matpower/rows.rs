@@ -173,6 +173,7 @@ pub(super) fn bus_row(row: &[f64], i: usize) -> Result<(Bus, Option<Load>, Optio
         g: gs,
         b: bs,
         in_service,
+        control: None,
         extras: Extras::new(),
     });
     Ok((bus, load, shunt))

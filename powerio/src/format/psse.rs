@@ -2,9 +2,9 @@
 //!
 //! Covers the core sections — bus, load, fixed shunt, generator, branch, and the
 //! 2- and 3-winding transformer records — which together carry a transmission
-//! power flow case. A switched shunt is read as a fixed shunt at its steady-state
-//! susceptance `BINIT` (the same reduction PowerModels makes); the block/step
-//! control detail is not modeled. Impedances are written on the system base with
+//! power flow case. A switched shunt keeps its steady-state susceptance `BINIT`
+//! as the shunt `b` and carries its mode, voltage band, regulated bus, RMPCT, and
+//! step blocks on [`SwitchedShuntControl`]. Impedances are written on the system base with
 //! per-unit turns ratios (`CZ = 1`, `CW = 1`); the reader assumes the same and
 //! does not convert other impedance/turns bases — a non-unit `CZ`/`CW` is read
 //! verbatim (so misread). Two-terminal DC lines read and write as the neutral
@@ -24,7 +24,8 @@ use serde_json::Value;
 use super::{Conversion, jnum, sanitize_quoted};
 use crate::network::{
     Branch, Bus, BusId, BusType, Extras, Generator, Hvdc, Impedance, Load, Network, Shunt,
-    SourceFormat, Transformer3W, TransformerControl, TransformerControlMode, Winding,
+    ShuntBlock, SourceFormat, SwitchedShuntControl, SwitchedShuntMode, Transformer3W,
+    TransformerControl, TransformerControlMode, Winding,
 };
 use crate::{Error, Result};
 
@@ -158,7 +159,8 @@ pub fn write_psse_rev(net: &Network, rev: u32) -> Conversion {
     }
     let _ = writeln!(s, "0 / END OF LOAD DATA, BEGIN FIXED SHUNT DATA");
 
-    for sh in &net.shunts {
+    // Fixed shunts here; switched shunts (control = Some) go in their own section.
+    for sh in net.shunts.iter().filter(|s| s.control.is_none()) {
         let _ = writeln!(
             s,
             "{}, '1', {}, {}, {}",
@@ -352,7 +354,33 @@ pub fn write_psse_rev(net: &Network, rev: u32) -> Conversion {
         let _ = writeln!(s, "{}, {rect_tail}", dc.from);
         let _ = writeln!(s, "{}, {inv_tail}", dc.to);
     }
-    for line in &EMPTY_SECTIONS[1..] {
+    // Sections up to and including the SWITCHED SHUNT begin marker.
+    for line in &EMPTY_SECTIONS[1..=9] {
+        let _ = writeln!(s, "{line}");
+    }
+    // Switched shunts: BINIT becomes the susceptance, the control record the rest.
+    for sh in net.shunts.iter().filter(|s| s.control.is_some()) {
+        let Some(c) = sh.control.as_ref() else {
+            continue;
+        };
+        let swrem = c.control_bus.map_or(0, |b| b.0);
+        let mut blocks = String::new();
+        for blk in &c.blocks {
+            let _ = write!(blocks, ", {}, {}", blk.steps, num(blk.b));
+        }
+        let _ = writeln!(
+            s,
+            "{}, {}, 0, {}, {}, {}, {swrem}, {}, '', {}{blocks}",
+            sh.bus,
+            mode_to_modsw(c.mode),
+            i32::from(sh.in_service),
+            num(c.vhigh),
+            num(c.vlow),
+            num(c.rmpct),
+            num(sh.b)
+        );
+    }
+    for line in &EMPTY_SECTIONS[10..] {
         let _ = writeln!(s, "{line}");
     }
     let _ = writeln!(s, "Q");
@@ -768,21 +796,69 @@ fn read_shunt(f: &[String]) -> Result<Shunt> {
         g: num_at(f, 3, 0.0)?,
         b: num_at(f, 4, 0.0)?,
         in_service: on_at(f, 2, true)?,
+        control: None,
         extras: Extras::new(),
     })
 }
 
 fn read_switched_shunt(f: &[String]) -> Result<Shunt> {
     // I, MODSW, ADJM, STAT, VSWHI, VSWLO, SWREM, RMPCT, RMIDNT, BINIT(9), N1, B1, ...
-    // Model the steady-state susceptance BINIT as a fixed shunt (gs = 0), the same
-    // reduction PowerModels makes; the block/step control detail isn't modeled.
+    // The steady-state susceptance BINIT becomes the shunt `b` (gs = 0); the
+    // mode, voltage band, regulated bus, RMPCT, and the (Ni, Bi) step blocks ride
+    // on the switching-control record.
+    let bus = id_at(f, 0, 0)?;
+    let swrem = id_at(f, 6, 0)?;
+    // Step blocks are (count, susceptance) pairs from field 10; stop at the first
+    // empty (padding) block or the end of the record.
+    let mut blocks = Vec::new();
+    let mut i = 10;
+    while i + 1 < f.len() {
+        let steps = int_at(f, i, 0)?;
+        let b = num_at(f, i + 1, 0.0)?;
+        if steps == 0 && b == 0.0 {
+            break;
+        }
+        blocks.push(ShuntBlock {
+            steps: steps.clamp(0, i64::from(u32::MAX)) as u32,
+            b,
+        });
+        i += 2;
+    }
+    let control = SwitchedShuntControl {
+        mode: modsw_to_mode(int_at(f, 1, 1)?),
+        vhigh: num_at(f, 4, 0.0)?,
+        vlow: num_at(f, 5, 0.0)?,
+        control_bus: (swrem != 0 && swrem != bus).then_some(BusId(swrem)),
+        rmpct: num_at(f, 7, 100.0)?,
+        blocks,
+    };
     Ok(Shunt {
-        bus: BusId(id_at(f, 0, 0)?),
+        bus: BusId(bus),
         g: 0.0,
         b: num_at(f, 9, 0.0)?,
         in_service: on_at(f, 3, true)?,
+        control: Some(control),
         extras: Extras::new(),
     })
+}
+
+/// PSS/E `MODSW` switched-shunt mode code → neutral mode.
+fn modsw_to_mode(modsw: i64) -> SwitchedShuntMode {
+    match modsw {
+        0 => SwitchedShuntMode::Locked,
+        1 => SwitchedShuntMode::Continuous,
+        _ => SwitchedShuntMode::Discrete,
+    }
+}
+
+/// Neutral switched-shunt mode → PSS/E `MODSW` (the 0/1/2 codes; modes beyond
+/// discrete collapse to 2).
+fn mode_to_modsw(mode: SwitchedShuntMode) -> i64 {
+    match mode {
+        SwitchedShuntMode::Locked => 0,
+        SwitchedShuntMode::Continuous => 1,
+        SwitchedShuntMode::Discrete => 2,
+    }
 }
 
 fn read_gen(f: &[String]) -> Result<Generator> {
@@ -1101,6 +1177,58 @@ Q
         close(net.branches[0].rate_b, 90.0);
         close(net.branches[0].rate_c, 80.0);
         assert!(net.branches[0].in_service);
+    }
+
+    #[test]
+    fn reads_and_writes_a_switched_shunt() {
+        let raw = r"0, 100.00, 33, 0, 0, 60.00 / x
+CASE
+COMMENT
+1,'B1          ', 230.0,3,1,1,1,1.0,0.0,1.1,0.9,1.1,0.9
+3,'B3          ', 230.0,1,1,1,1,1.0,0.0,1.1,0.9,1.1,0.9
+7,'B7          ', 230.0,1,1,1,1,1.0,0.0,1.1,0.9,1.1,0.9
+0 / END OF BUS DATA, BEGIN LOAD DATA
+0 / END OF LOAD DATA, BEGIN FIXED SHUNT DATA
+0 / END OF FIXED SHUNT DATA, BEGIN GENERATOR DATA
+0 / END OF GENERATOR DATA, BEGIN BRANCH DATA
+0 / END OF BRANCH DATA, BEGIN TRANSFORMER DATA
+0 / END OF TRANSFORMER DATA, BEGIN AREA DATA
+0 / END OF AREA DATA, BEGIN SWITCHED SHUNT DATA
+3, 2, 0, 1, 1.05, 0.95, 7, 100.0, '', 19.0, 2, 25.0, 1, 50.0
+0 / END OF SWITCHED SHUNT DATA, BEGIN GNE DEVICE DATA
+Q
+";
+        let net = parse_psse(raw).unwrap();
+        assert_eq!(net.shunts.len(), 1);
+        let sh = &net.shunts[0];
+        assert_eq!(sh.bus, BusId(3));
+        close(sh.b, 19.0);
+        let c = sh.control.as_ref().expect("switched-shunt control parsed");
+        assert_eq!(c.mode, SwitchedShuntMode::Discrete);
+        close(c.vhigh, 1.05);
+        close(c.vlow, 0.95);
+        assert_eq!(c.control_bus, Some(BusId(7)));
+        close(c.rmpct, 100.0);
+        assert_eq!(c.blocks.len(), 2);
+        assert_eq!(c.blocks[0].steps, 2);
+        close(c.blocks[0].b, 25.0);
+        assert_eq!(c.blocks[1].steps, 1);
+        close(c.blocks[1].b, 50.0);
+
+        // Round trip: written to the SWITCHED SHUNT section and re-read intact.
+        let text = write_psse(&net).text;
+        assert!(text.contains("BEGIN SWITCHED SHUNT DATA"));
+        let net2 = parse_psse(&text).unwrap();
+        assert_eq!(net2.shunts.len(), 1);
+        let c2 = net2.shunts[0]
+            .control
+            .as_ref()
+            .expect("control survives the write");
+        assert_eq!(c2.mode, SwitchedShuntMode::Discrete);
+        assert_eq!(c2.control_bus, Some(BusId(7)));
+        assert_eq!(c2.blocks.len(), 2);
+        close(c2.blocks[0].b, 25.0);
+        close(net2.shunts[0].b, 19.0);
     }
 
     #[test]

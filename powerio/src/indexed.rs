@@ -429,6 +429,7 @@ mod tests {
             g: 0.2,
             b: 0.4,
             in_service: true,
+            control: None,
             extras: Extras::new(),
         });
         net.shunts.push(Shunt {
@@ -436,6 +437,7 @@ mod tests {
             g: 0.1,
             b: 0.3,
             in_service: true,
+            control: None,
             extras: Extras::new(),
         });
         net
