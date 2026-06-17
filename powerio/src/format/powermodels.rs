@@ -399,6 +399,7 @@ pub(crate) fn parse_powermodels_json_source(
             .collect(),
         transformers_3w: Vec::new(),
         areas: Vec::new(),
+        solver: None,
         source_format: SourceFormat::PowerModelsJson,
         source: Some(source),
     };

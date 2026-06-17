@@ -351,6 +351,7 @@ impl Network {
             hvdc,
             transformers_3w: Vec::new(),
             areas: Vec::new(),
+            solver: None,
             source_format: SourceFormat::Normalized,
             source: None,
         };

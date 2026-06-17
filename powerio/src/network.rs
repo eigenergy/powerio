@@ -210,6 +210,10 @@ pub struct Network {
     /// deserializes.
     #[serde(default)]
     pub areas: Vec<Area>,
+    /// Solver / solution-control metadata when the source carries it, else `None`.
+    /// `#[serde(default)]` so older JSON still deserializes.
+    #[serde(default)]
+    pub solver: Option<SolverParams>,
     pub source_format: SourceFormat,
     /// Raw source text, when read from a textual format; enables a byte-exact
     /// same-format round-trip. `Arc<String>` (not `Arc<str>`) is deliberate: a
@@ -522,6 +526,43 @@ pub struct Area {
     pub name: Option<String>,
 }
 
+/// Solver / solution-control metadata: the Newton tolerance and iteration cap,
+/// the zero-impedance threshold, and the per-quantity adjustment-enable flags.
+///
+/// Each field is optional because a source states only the ones it carries. No
+/// power-flow physics, but it determines whether a downstream solver reproduces
+/// the source tool's converged answer. Maps to the PSS/E v34+ system-wide block
+/// (`GENERAL THRSHZ`, `NEWTON TOLN`/`ITMXN`, `SOLVER ACTAPS`/`AREAIN`/`PHSHFT`/
+/// `DCTAPS`/`SWSHNT`).
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[non_exhaustive]
+pub struct SolverParams {
+    /// Newton power-flow mismatch tolerance (`NEWTON TOLN`).
+    pub newton_tolerance: Option<f64>,
+    /// Newton iteration cap (`NEWTON ITMXN`).
+    pub max_iterations: Option<u32>,
+    /// Branches with `|x|` below this are treated as zero impedance (`GENERAL THRSHZ`).
+    pub zero_impedance_threshold: Option<f64>,
+    /// Whether the solver adjusts transformer taps (`SOLVER ACTAPS`).
+    pub adjust_taps: Option<bool>,
+    /// Whether the solver adjusts area interchange (`SOLVER AREAIN`).
+    pub adjust_area_interchange: Option<bool>,
+    /// Whether the solver adjusts phase-shift angles (`SOLVER PHSHFT`).
+    pub adjust_phase_shift: Option<bool>,
+    /// Whether the solver adjusts DC line taps (`SOLVER DCTAPS`).
+    pub adjust_dc_taps: Option<bool>,
+    /// Whether the solver adjusts switched shunts (`SOLVER SWSHNT`).
+    pub adjust_switched_shunt: Option<bool>,
+}
+
+impl SolverParams {
+    /// True when no field is set (so readers can avoid attaching an empty record).
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        *self == SolverParams::default()
+    }
+}
+
 /// A series impedance with the MVA base it is expressed on. Used pairwise by
 /// [`Transformer3W`]; a self-contained unit so the base travels with the value
 /// instead of being implied by position.
@@ -723,6 +764,7 @@ impl Network {
             hvdc: Vec::new(),
             transformers_3w: Vec::new(),
             areas: Vec::new(),
+            solver: None,
             source_format: SourceFormat::InMemory,
             source: None,
         }

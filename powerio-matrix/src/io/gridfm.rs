@@ -1371,6 +1371,7 @@ fn build_network_from_columns(
         hvdc: Vec::new(),
         transformers_3w: Vec::new(),
         areas: Vec::new(),
+        solver: None,
         source_format: SourceFormat::Gridfm,
         source: None,
     };

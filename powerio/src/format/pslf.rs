@@ -124,6 +124,7 @@ pub(crate) fn parse_pslf_source(
         hvdc,
         transformers_3w,
         areas: Vec::new(),
+        solver: None,
         source_format: SourceFormat::Pslf,
         source: Some(source),
     };

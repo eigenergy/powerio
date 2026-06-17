@@ -24,7 +24,7 @@ use serde_json::Value;
 use super::{Conversion, jnum, sanitize_quoted};
 use crate::network::{
     Area, Branch, Bus, BusId, BusType, Extras, Generator, Hvdc, Impedance, Load, Network, Shunt,
-    ShuntBlock, SourceFormat, SwitchedShuntControl, SwitchedShuntMode, Transformer3W,
+    ShuntBlock, SolverParams, SourceFormat, SwitchedShuntControl, SwitchedShuntMode, Transformer3W,
     TransformerControl, TransformerControlMode, Winding,
 };
 use crate::{Error, Result};
@@ -103,6 +103,36 @@ pub fn write_psse_rev(net: &Network, rev: u32) -> Conversion {
     let _ = writeln!(s, "{}", net.name);
     let _ = writeln!(s);
     if modern {
+        // v34+ system-wide block: emit the solver keyword lines (the fields that
+        // are set), then close the block.
+        if let Some(sp) = &net.solver {
+            if let Some(t) = sp.zero_impedance_threshold {
+                let _ = writeln!(s, "GENERAL, THRSHZ={}", num(t));
+            }
+            let mut newton = Vec::new();
+            if let Some(t) = sp.newton_tolerance {
+                newton.push(format!("TOLN={}", num(t)));
+            }
+            if let Some(n) = sp.max_iterations {
+                newton.push(format!("ITMXN={n}"));
+            }
+            if !newton.is_empty() {
+                let _ = writeln!(s, "NEWTON, {}", newton.join(", "));
+            }
+            let flags: Vec<String> = [
+                ("ACTAPS", sp.adjust_taps),
+                ("AREAIN", sp.adjust_area_interchange),
+                ("PHSHFT", sp.adjust_phase_shift),
+                ("DCTAPS", sp.adjust_dc_taps),
+                ("SWSHNT", sp.adjust_switched_shunt),
+            ]
+            .into_iter()
+            .filter_map(|(name, v)| v.map(|b| format!("{name}={}", i32::from(b))))
+            .collect();
+            if !flags.is_empty() {
+                let _ = writeln!(s, "SOLVER, {}", flags.join(", "));
+            }
+        }
         let _ = writeln!(s, "0 / END OF SYSTEM-WIDE DATA, BEGIN BUS DATA");
     }
 
@@ -540,6 +570,7 @@ pub(crate) fn parse_psse_source(source: Arc<String>, name_hint: Option<&str>) ->
     let mut transformers_3w = Vec::new();
     let mut hvdc = Vec::new();
     let mut areas = Vec::new();
+    let mut solver = SolverParams::default();
 
     // Sections appear in fixed order, each ended by a record whose first field is
     // `0`. We read the ones we model and treat the rest as skipped.
@@ -569,7 +600,10 @@ pub(crate) fn parse_psse_source(source: Arc<String>, name_hint: Option<&str>) ->
         let f = fields(line);
         match section {
             Section::Bus if !saw_bus_marker && buses.is_empty() && is_system_wide_record(&f) => {
-                section = Section::Skip;
+                // The v34+ system-wide block precedes the bus data; capture its
+                // solver keyword lines (this is the first one that triggered).
+                section = Section::SystemWide;
+                parse_solver_line(&f, &mut solver);
             }
             Section::Bus => buses.push(read_bus(&f)?),
             Section::Load => loads.push(read_load(&f)?),
@@ -604,6 +638,7 @@ pub(crate) fn parse_psse_source(source: Arc<String>, name_hint: Option<&str>) ->
                 hvdc.push(read_dc_line(&f, &fields(rectifier), &fields(inverter))?);
             }
             Section::Area => areas.push(read_area(&f)?),
+            Section::SystemWide => parse_solver_line(&f, &mut solver),
             Section::Skip => {}
         }
     }
@@ -621,6 +656,7 @@ pub(crate) fn parse_psse_source(source: Arc<String>, name_hint: Option<&str>) ->
         hvdc,
         transformers_3w,
         areas,
+        solver: (!solver.is_empty()).then_some(solver),
         source_format: SourceFormat::Psse,
         source: Some(source),
     };
@@ -639,6 +675,7 @@ enum Section {
     Transformer,
     TwoTerminalDc,
     Area,
+    SystemWide,
     Skip,
 }
 
@@ -684,7 +721,42 @@ fn is_comment(line: &str) -> bool {
 fn is_system_wide_record(f: &[String]) -> bool {
     matches!(
         f.first().map(|s| s.to_ascii_uppercase()),
-        Some(first) if matches!(first.as_str(), "GENERAL" | "RATING")
+        Some(first) if matches!(first.as_str(), "GENERAL" | "RATING" | "NEWTON" | "SOLVER")
+    )
+}
+
+/// Parse a v34+ system-wide keyword line (`GENERAL`/`NEWTON`/`SOLVER`, each a
+/// keyword then `KEY=VALUE` tokens) into the solver record. Unrecognized
+/// keywords (e.g. `RATING`) and keys are ignored.
+fn parse_solver_line(f: &[String], solver: &mut SolverParams) {
+    let Some(keyword) = f.first().map(|s| s.to_ascii_uppercase()) else {
+        return;
+    };
+    for tok in &f[1..] {
+        let Some((key, val)) = tok.split_once('=') else {
+            continue;
+        };
+        let (key, val) = (key.trim().to_ascii_uppercase(), val.trim());
+        match (keyword.as_str(), key.as_str()) {
+            ("GENERAL", "THRSHZ") => solver.zero_impedance_threshold = val.parse().ok(),
+            ("NEWTON", "TOLN") => solver.newton_tolerance = val.parse().ok(),
+            ("NEWTON", "ITMXN") => solver.max_iterations = val.parse().ok(),
+            ("SOLVER", "ACTAPS") => solver.adjust_taps = Some(parse_enable(val)),
+            ("SOLVER", "AREAIN") => solver.adjust_area_interchange = Some(parse_enable(val)),
+            ("SOLVER", "PHSHFT") => solver.adjust_phase_shift = Some(parse_enable(val)),
+            ("SOLVER", "DCTAPS") => solver.adjust_dc_taps = Some(parse_enable(val)),
+            ("SOLVER", "SWSHNT") => solver.adjust_switched_shunt = Some(parse_enable(val)),
+            _ => {}
+        }
+    }
+}
+
+/// A `SOLVER` adjustment flag: numeric → nonzero is enabled; a keyword is enabled
+/// unless it reads as off.
+fn parse_enable(val: &str) -> bool {
+    val.parse::<f64>().map_or_else(
+        |_| !matches!(val.to_ascii_uppercase().as_str(), "DISABLED" | "OFF" | "NO"),
+        |n| n != 0.0,
     )
 }
 
@@ -1216,6 +1288,41 @@ Q
         close(net.branches[0].rate_b, 90.0);
         close(net.branches[0].rate_c, 80.0);
         assert!(net.branches[0].in_service);
+    }
+
+    #[test]
+    fn reads_and_writes_solver_params() {
+        let raw = r"0, 100.00, 34, 0, 1, 60.00 / x
+CASE
+COMMENT
+GENERAL, THRSHZ=0.0001
+NEWTON, TOLN=0.1, ITMXN=25
+SOLVER, ACTAPS=1, AREAIN=0, PHSHFT=1, DCTAPS=1, SWSHNT=0
+0 / END OF SYSTEM-WIDE DATA, BEGIN BUS DATA
+1,'B1          ', 230.0,3,1,1,1,1.0,0.0,1.1,0.9,1.1,0.9
+0 / END OF BUS DATA, BEGIN LOAD DATA
+Q
+";
+        let net = parse_psse(raw).unwrap();
+        let sp = net.solver.as_ref().expect("solver params parsed");
+        close(sp.zero_impedance_threshold.unwrap(), 0.0001);
+        close(sp.newton_tolerance.unwrap(), 0.1);
+        assert_eq!(sp.max_iterations, Some(25));
+        assert_eq!(sp.adjust_taps, Some(true));
+        assert_eq!(sp.adjust_area_interchange, Some(false));
+        assert_eq!(sp.adjust_phase_shift, Some(true));
+        assert_eq!(sp.adjust_switched_shunt, Some(false));
+
+        // Round trip at rev 34 keeps the tolerances and the adjustment flags.
+        let net2 = parse_psse(&write_psse_rev(&net, 34).text).unwrap();
+        let sp2 = net2
+            .solver
+            .as_ref()
+            .expect("solver params survive the write");
+        close(sp2.newton_tolerance.unwrap(), 0.1);
+        assert_eq!(sp2.max_iterations, Some(25));
+        assert_eq!(sp2.adjust_taps, Some(true));
+        assert_eq!(sp2.adjust_area_interchange, Some(false));
     }
 
     #[test]

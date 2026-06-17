@@ -470,6 +470,7 @@ fn checked_network(
         hvdc: Vec::new(),
         transformers_3w: Vec::new(),
         areas: Vec::new(),
+        solver: None,
         source_format: SourceFormat::PowerWorldBinary,
         source: None,
     };
@@ -1788,6 +1789,7 @@ mod tests {
             hvdc: Vec::new(),
             transformers_3w: Vec::new(),
             areas: Vec::new(),
+            solver: None,
             source_format: SourceFormat::PowerWorldBinary,
             source: None,
         }

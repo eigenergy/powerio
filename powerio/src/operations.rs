@@ -194,6 +194,7 @@ impl Network {
             hvdc,
             transformers_3w,
             areas: Vec::new(),
+            solver: None,
             source_format: SourceFormat::InMemory,
             source: None,
         };
