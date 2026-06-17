@@ -6,12 +6,30 @@
 //! [`merge_bus`](Network::merge_bus) collapses two buses into one (re-homing the
 //! incident elements), and [`reduce_zero_impedance`](Network::reduce_zero_impedance)
 //! builds on it to remove jumper branches.
+//! [`reduce_passthrough_buses`](Network::reduce_passthrough_buses) folds dummy-bus
+//! line sections back into one equivalent branch.
 
 use std::collections::HashSet;
 
 use serde_json::Value;
 
-use crate::network::{Branch, Bus, BusId, BusType, Network, Shunt, SourceFormat};
+use crate::network::{Branch, Bus, BusId, BusType, Extras, Network, Shunt, SourceFormat};
+
+/// The endpoint of `b` other than `m` (assumes `m` is an endpoint).
+fn other_end(b: &Branch, m: BusId) -> BusId {
+    if b.from == m { b.to } else { b.from }
+}
+
+/// Combine two thermal ratings into the equivalent for a series pair. `0` means
+/// "no limit" in the MATPOWER convention, so it yields to a finite rating; two
+/// finite ratings give the more limiting (smaller) one.
+fn combine_rate(a: f64, b: f64) -> f64 {
+    match (a == 0.0, b == 0.0) {
+        (true, _) => b,
+        (_, true) => a,
+        _ => a.min(b),
+    }
+}
 
 /// Bus-kind importance, so a [`merge_bus`](Network::merge_bus) keeps the stronger
 /// designation (a slack outranks a PV bus, which outranks PQ, which outranks an
@@ -289,6 +307,122 @@ impl Network {
         }
         before - self.branches.len()
     }
+
+    /// Collapse degree-2 passthrough buses, returning the number removed. A
+    /// passthrough bus carries nothing but two in-service line sections, so it is
+    /// an electrically inert junction: the two sections fold into one equivalent
+    /// branch between their outer endpoints and the middle bus is deleted.
+    ///
+    /// This is the multi-section-line reduction. Exporters often split one circuit
+    /// into segments joined at dummy buses; folding them back recovers the single
+    /// branch. A bus qualifies only when it carries no load, generator, shunt, or
+    /// storage, is not a control reference, area swing, HVDC endpoint, or 3-winding
+    /// winding bus, is not the system slack, and is touched by exactly two ordinary
+    /// branches (never transformers) that are both in service and run to two
+    /// distinct other buses. The equivalent branch sums the series impedance and
+    /// line charging, takes the more limiting thermal rating of the two sections,
+    /// and intersects their angle limits. Chains of dummy buses collapse fully, one
+    /// bus per step.
+    pub fn reduce_passthrough_buses(&mut self) -> usize {
+        let mut collapsed = 0;
+        // Re-scan after each fold: the equivalent branch becomes a section for the
+        // next bus in a dummy chain, and the bus list shrinks.
+        while let Some(mid) = self
+            .buses
+            .iter()
+            .map(|b| b.id)
+            .find(|&m| self.is_passthrough(m))
+        {
+            self.collapse_passthrough(mid);
+            collapsed += 1;
+        }
+        collapsed
+    }
+
+    /// Whether `m` is a collapsible degree-2 passthrough bus (see
+    /// [`reduce_passthrough_buses`](Network::reduce_passthrough_buses)).
+    fn is_passthrough(&self, m: BusId) -> bool {
+        let Some(bus) = self.buses.iter().find(|b| b.id == m) else {
+            return false;
+        };
+        if bus.kind == BusType::Ref {
+            return false;
+        }
+        if self.loads.iter().any(|l| l.bus == m)
+            || self.generators.iter().any(|g| g.bus == m)
+            || self.shunts.iter().any(|s| s.bus == m)
+            || self.storage.iter().any(|s| s.bus == m)
+            || self.hvdc.iter().any(|d| d.from == m || d.to == m)
+        {
+            return false;
+        }
+        if self
+            .transformers_3w
+            .iter()
+            .any(|t| t.windings.iter().any(|w| w.bus == m))
+        {
+            return false;
+        }
+        if self.areas.iter().any(|a| a.slack_bus == Some(m)) {
+            return false;
+        }
+        let controlled = self
+            .branches
+            .iter()
+            .any(|b| b.control.as_ref().and_then(|c| c.controlled_bus) == Some(m));
+        let regulated = self
+            .shunts
+            .iter()
+            .any(|s| s.control.as_ref().and_then(|c| c.control_bus) == Some(m));
+        if controlled || regulated {
+            return false;
+        }
+        let incident: Vec<&Branch> = self
+            .branches
+            .iter()
+            .filter(|b| b.from == m || b.to == m)
+            .collect();
+        if incident.len() != 2 {
+            return false;
+        }
+        let a = other_end(incident[0], m);
+        let c = other_end(incident[1], m);
+        incident.iter().all(|b| !b.is_transformer() && b.in_service) && a != m && c != m && a != c
+    }
+
+    /// Fold the two line sections at passthrough bus `m` into one equivalent branch
+    /// and remove `m`. The caller has already checked [`is_passthrough`].
+    fn collapse_passthrough(&mut self, m: BusId) {
+        let mut sections: Vec<Branch> = Vec::new();
+        self.branches.retain(|b| {
+            if b.from == m || b.to == m {
+                sections.push(b.clone());
+                false
+            } else {
+                true
+            }
+        });
+        debug_assert_eq!(sections.len(), 2, "passthrough bus must have two sections");
+        let (s1, s2) = (&sections[0], &sections[1]);
+        self.branches.push(Branch {
+            from: other_end(s1, m),
+            to: other_end(s2, m),
+            r: s1.r + s2.r,
+            x: s1.x + s2.x,
+            b: s1.b + s2.b,
+            rate_a: combine_rate(s1.rate_a, s2.rate_a),
+            rate_b: combine_rate(s1.rate_b, s2.rate_b),
+            rate_c: combine_rate(s1.rate_c, s2.rate_c),
+            tap: 0.0,
+            shift: 0.0,
+            in_service: true,
+            angmin: s1.angmin.max(s2.angmin),
+            angmax: s1.angmax.min(s2.angmax),
+            control: None,
+            extras: Extras::new(),
+        });
+        self.buses.retain(|b| b.id != m);
+    }
 }
 
 #[cfg(test)]
@@ -439,6 +573,78 @@ mod tests {
         net.merge_bus(BusId(2), BusId(3)); // merge the slack into the PQ bus 2
         let two = net.buses.iter().find(|b| b.id == BusId(2)).unwrap();
         assert_eq!(two.kind, BusType::Ref, "the slack designation is not lost");
+    }
+
+    #[test]
+    fn reduce_passthrough_folds_a_multi_section_line() {
+        // A 1-2-3-4 chain where 2 and 3 are dummy junctions; ratings 100 / 80 /
+        // unlimited along the sections.
+        let mut s1 = line(1, 2);
+        s1.rate_a = 100.0;
+        let mut s2 = line(2, 3);
+        s2.rate_a = 80.0;
+        let s3 = line(3, 4); // rate_a 0 == no limit
+        let mut net = Network::in_memory(
+            "net",
+            100.0,
+            vec![
+                bus(1, 1, 230.0),
+                bus(2, 1, 230.0),
+                bus(3, 1, 230.0),
+                bus(4, 1, 230.0),
+            ],
+            vec![s1, s2, s3],
+        );
+
+        let removed = net.reduce_passthrough_buses();
+        assert_eq!(removed, 2, "both dummy buses collapse");
+        assert_eq!(net.buses.len(), 2);
+        assert!(
+            net.buses
+                .iter()
+                .all(|b| b.id == BusId(1) || b.id == BusId(4))
+        );
+        assert_eq!(net.branches.len(), 1, "one equivalent branch");
+        let eq = &net.branches[0];
+        assert_eq!(
+            [eq.from, eq.to].iter().copied().collect::<HashSet<_>>(),
+            [BusId(1), BusId(4)].into_iter().collect::<HashSet<_>>(),
+        );
+        assert!((eq.x - 0.3).abs() < 1e-9, "series reactance sums");
+        assert!(
+            (eq.rate_a - 80.0).abs() < 1e-9,
+            "the more limiting finite rating wins"
+        );
+        net.validate().unwrap();
+    }
+
+    #[test]
+    fn reduce_passthrough_keeps_a_bus_with_injection() {
+        // Bus 2 is degree 2 but carries a load, so it is not inert.
+        let mut net = Network::in_memory(
+            "net",
+            100.0,
+            vec![bus(1, 1, 230.0), bus(2, 1, 230.0), bus(3, 1, 230.0)],
+            vec![line(1, 2), line(2, 3)],
+        );
+        net.loads.push(load(2));
+        assert_eq!(net.reduce_passthrough_buses(), 0);
+        assert_eq!(net.buses.len(), 3);
+    }
+
+    #[test]
+    fn reduce_passthrough_does_not_fold_across_a_transformer() {
+        // Section 2-3 is a transformer, so bus 2 is a real terminal, not a junction.
+        let mut xfmr = line(2, 3);
+        xfmr.tap = 1.0;
+        let mut net = Network::in_memory(
+            "net",
+            100.0,
+            vec![bus(1, 1, 230.0), bus(2, 1, 230.0), bus(3, 1, 230.0)],
+            vec![line(1, 2), xfmr],
+        );
+        assert_eq!(net.reduce_passthrough_buses(), 0);
+        assert_eq!(net.buses.len(), 3);
     }
 
     #[test]
