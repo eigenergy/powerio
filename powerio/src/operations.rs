@@ -1,16 +1,29 @@
-//! Network operations: deriving a new [`Network`] from an existing one.
+//! Network operations: deriving or rewriting a [`Network`].
 //!
 //! These are model-level transforms, distinct from the format readers/writers and
-//! from the per-unit [`to_normalized`](Network::to_normalized) view. The first is
-//! [`subset`](Network::subset): carve a study footprint out of a larger case by
-//! area, zone, base kV, or bus number, optionally completing the cut branches with
-//! their out-of-scope boundary buses.
+//! from the per-unit [`to_normalized`](Network::to_normalized) view.
+//! [`subset`](Network::subset) carves a study footprint out of a larger case;
+//! [`merge_bus`](Network::merge_bus) collapses two buses into one (re-homing the
+//! incident elements), and [`reduce_zero_impedance`](Network::reduce_zero_impedance)
+//! builds on it to remove jumper branches.
 
 use std::collections::HashSet;
 
 use serde_json::Value;
 
-use crate::network::{Branch, Bus, BusId, Network, Shunt, SourceFormat};
+use crate::network::{Branch, Bus, BusId, BusType, Network, Shunt, SourceFormat};
+
+/// Bus-kind importance, so a [`merge_bus`](Network::merge_bus) keeps the stronger
+/// designation (a slack outranks a PV bus, which outranks PQ, which outranks an
+/// isolated stub).
+fn kind_priority(kind: BusType) -> u8 {
+    match kind {
+        BusType::Ref => 3,
+        BusType::Pv => 2,
+        BusType::Pq => 1,
+        BusType::Isolated => 0,
+    }
+}
 
 /// Which buses a [`subset`](Network::subset) keeps: inclusive ranges over area,
 /// zone, base kV, and bus number, ANDed together. An unset (`None`) filter
@@ -189,6 +202,91 @@ impl Network {
         );
         net
     }
+
+    /// Merge bus `from` into bus `into`: re-home every element on `from` (loads,
+    /// shunts, generators, storage, branch/HVDC/transformer endpoints, and control
+    /// references) onto `into`, drop the branches and HVDC lines that ran directly
+    /// between the two (now self-loops), and remove the `from` bus. The surviving
+    /// bus keeps the stronger of the two bus kinds (a slack is not demoted).
+    ///
+    /// A no-op when `into == from`. The other attributes of `from` (its voltage,
+    /// limits, name) are discarded; the topology and injections are what move.
+    pub fn merge_bus(&mut self, into: BusId, from: BusId) {
+        if into == from {
+            return;
+        }
+        let remap = |b: &mut BusId| {
+            if *b == from {
+                *b = into;
+            }
+        };
+
+        for l in &mut self.loads {
+            remap(&mut l.bus);
+        }
+        for s in &mut self.shunts {
+            remap(&mut s.bus);
+            if let Some(cb) = s.control.as_mut().and_then(|c| c.control_bus.as_mut()) {
+                remap(cb);
+            }
+        }
+        for g in &mut self.generators {
+            remap(&mut g.bus);
+        }
+        for st in &mut self.storage {
+            remap(&mut st.bus);
+        }
+        for br in &mut self.branches {
+            remap(&mut br.from);
+            remap(&mut br.to);
+            if let Some(cb) = br.control.as_mut().and_then(|c| c.controlled_bus.as_mut()) {
+                remap(cb);
+            }
+        }
+        self.branches.retain(|b| b.from != b.to);
+        for d in &mut self.hvdc {
+            remap(&mut d.from);
+            remap(&mut d.to);
+        }
+        self.hvdc.retain(|d| d.from != d.to);
+        for t in &mut self.transformers_3w {
+            for w in &mut t.windings {
+                remap(&mut w.bus);
+            }
+        }
+
+        // Promote the surviving bus kind, then drop the merged bus.
+        let from_kind = self.buses.iter().find(|b| b.id == from).map(|b| b.kind);
+        self.buses.retain(|b| b.id != from);
+        if let (Some(fk), Some(into_bus)) =
+            (from_kind, self.buses.iter_mut().find(|b| b.id == into))
+        {
+            if kind_priority(fk) > kind_priority(into_bus.kind) {
+                into_bus.kind = fk;
+            }
+        }
+    }
+
+    /// Collapse every non-transformer branch whose series impedance magnitude is
+    /// at or below `threshold` by merging its endpoints (the to-bus into the
+    /// from-bus), returning the number of branches removed. Parallel jumpers
+    /// between the same pair go in the same step.
+    ///
+    /// Zero-impedance branches (bus ties, breakers modeled as jumpers) carry no
+    /// power-flow drop, so collapsing them shrinks the network without changing
+    /// its electrical behavior. Transformers are never collapsed (a unity-ratio
+    /// transformer is a real device, not a jumper).
+    pub fn reduce_zero_impedance(&mut self, threshold: f64) -> usize {
+        let before = self.branches.len();
+        // Re-scan after each merge: bus ids and the branch list both change.
+        while let Some((into, from)) = self.branches.iter().find_map(|b| {
+            (!b.is_transformer() && b.from != b.to && b.r.hypot(b.x) <= threshold)
+                .then_some((b.from, b.to))
+        }) {
+            self.merge_bus(into, from);
+        }
+        before - self.branches.len()
+    }
 }
 
 #[cfg(test)]
@@ -310,5 +408,55 @@ mod tests {
         };
         let sub = net.subset(&sel, false);
         assert_eq!(sub.buses.len(), 2, "only the 230 kV buses match");
+    }
+
+    #[test]
+    fn merge_bus_rehomes_elements_and_drops_the_connecting_branch() {
+        let mut net = two_area_net(); // buses 1,2,3; lines 1-2, 2-3; loads on 1, 3
+        net.merge_bus(BusId(2), BusId(3));
+
+        assert_eq!(net.buses.len(), 2, "bus 3 removed");
+        assert!(net.buses.iter().all(|b| b.id != BusId(3)));
+        assert_eq!(
+            net.branches.len(),
+            1,
+            "the 2-3 line collapsed to a self-loop"
+        );
+        assert_eq!(net.branches[0].from, BusId(1));
+        assert_eq!(net.branches[0].to, BusId(2));
+        // Both loads survive; the one on bus 3 moved to bus 2.
+        assert_eq!(net.loads.len(), 2);
+        assert!(net.loads.iter().any(|l| l.bus == BusId(2)));
+        net.validate().unwrap();
+    }
+
+    #[test]
+    fn merge_bus_keeps_the_stronger_bus_kind() {
+        let mut net = two_area_net();
+        net.buses[2].kind = BusType::Ref; // bus 3 is the slack
+        net.merge_bus(BusId(2), BusId(3)); // merge the slack into the PQ bus 2
+        let two = net.buses.iter().find(|b| b.id == BusId(2)).unwrap();
+        assert_eq!(two.kind, BusType::Ref, "the slack designation is not lost");
+    }
+
+    #[test]
+    fn reduce_zero_impedance_collapses_jumpers_only() {
+        // Buses 1-2 a real line, 2-3 a zero-impedance jumper.
+        let mut jumper = line(2, 3);
+        jumper.x = 0.0;
+        let mut net = Network::in_memory(
+            "net",
+            100.0,
+            vec![bus(1, 1, 230.0), bus(2, 1, 230.0), bus(3, 1, 230.0)],
+            vec![line(1, 2), jumper],
+        );
+        net.loads.push(load(3));
+
+        let removed = net.reduce_zero_impedance(1e-9);
+        assert_eq!(removed, 1, "only the jumper is collapsed");
+        assert_eq!(net.buses.len(), 2);
+        assert_eq!(net.branches.len(), 1, "the real 1-2 line remains");
+        assert!(net.loads.iter().any(|l| l.bus == BusId(2)), "load re-homed");
+        net.validate().unwrap();
     }
 }
