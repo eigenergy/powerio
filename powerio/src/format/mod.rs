@@ -590,16 +590,20 @@ pub fn write_as(net: &Network, format: TargetFormat) -> Result<Conversion> {
         // the snapshot preserves the line/transformer labels it warns about);
         // return before them. The one fidelity loss the snapshot can suffer
         // is JSON's missing Inf/NaN — serde writes them as `null`, which
-        // `from_json` rejects on the way back — so warn, naming the field.
+        // `from_json` rejects on the way back — so warn, naming every field.
         TargetFormat::PowerioJson => {
             return net.to_json().map(|text| Conversion {
                 text,
-                warnings: net.first_non_finite().map_or_else(Vec::new, |path| {
-                    vec![format!(
-                        "{path} is not finite; JSON has no Inf/NaN, so it is written as \
-                         null and this snapshot will not read back as powerio-json"
-                    )]
-                }),
+                warnings: net
+                    .non_finite_fields()
+                    .into_iter()
+                    .map(|path| {
+                        format!(
+                            "{path} is not finite; JSON has no Inf/NaN, so it is written as \
+                             null and this snapshot will not read back as powerio-json"
+                        )
+                    })
+                    .collect(),
             });
         }
     };

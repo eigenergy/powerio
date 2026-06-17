@@ -1427,6 +1427,23 @@ fn snapshot_warns_on_non_finite_and_does_not_read_back() {
         "got: {:?}",
         conv.warnings
     );
+
+    // EVERY non-finite field is named, not just the first: serde writes them all
+    // as null, so a caller fixing only the first-reported field would re-export
+    // and still fail to read back. Both offenders must appear in one write.
+    let mut net = parse_matpower_file(data("case9.m")).unwrap();
+    net.buses[0].vm = f64::NAN;
+    net.branches[2].angmax = f64::INFINITY;
+    let conv = write_as(&net, TargetFormat::PowerioJson).unwrap();
+    assert!(
+        conv.warnings.iter().any(|w| w.contains("buses[0].vm"))
+            && conv
+                .warnings
+                .iter()
+                .any(|w| w.contains("branches[2].angmax")),
+        "both non-finite fields must be named in one write: {:?}",
+        conv.warnings
+    );
 }
 
 #[test]

@@ -470,9 +470,11 @@ impl Network {
         })
     }
 
-    /// The path of the first non-finite numeric field, or `None` when every
-    /// value is finite — drives the snapshot writer's degradation warning
-    /// (see [`to_json`](Network::to_json)).
+    /// The paths of every non-finite numeric field — empty when all values are
+    /// finite. Drives the snapshot writer's degradation warning (see
+    /// [`to_json`](Network::to_json)): serde writes EVERY non-finite `f64` as
+    /// `null`, so the warning must name them all, not just the first, or the
+    /// caller fixes one field and the snapshot still fails to read back.
     /// `extras` maps hold `serde_json::Value`, which cannot carry a non-finite
     /// number, so only the typed `f64` fields need scanning. Every struct is
     /// destructured exhaustively: adding an `f64` field without classifying it
@@ -480,14 +482,17 @@ impl Network {
     // The length IS the exhaustive field walk; splitting it would only scatter
     // the per-struct lists the compile-time check exists to keep in one place.
     #[allow(clippy::too_many_lines)]
-    pub(crate) fn first_non_finite(&self) -> Option<String> {
-        fn bad<'a>(fields: impl IntoIterator<Item = (&'a str, f64)>) -> Option<&'a str> {
+    pub(crate) fn non_finite_fields(&self) -> Vec<String> {
+        fn bad<'a>(
+            fields: impl IntoIterator<Item = (&'a str, f64)>,
+        ) -> impl Iterator<Item = &'a str> {
             fields
                 .into_iter()
-                .find_map(|(name, v)| (!v.is_finite()).then_some(name))
+                .filter_map(|(name, v)| (!v.is_finite()).then_some(name))
         }
+        let mut out = Vec::new();
         if !self.base_mva.is_finite() {
-            return Some("base_mva".into());
+            out.push("base_mva".into());
         }
         for (i, b) in self.buses.iter().enumerate() {
             #[rustfmt::skip]
@@ -499,9 +504,7 @@ impl Network {
                 ("vmax", *vmax),
                 ("vmin", *vmin),
             ];
-            if let Some(f) = bad(fields) {
-                return Some(format!("buses[{i}].{f}"));
-            }
+            out.extend(bad(fields).map(|f| format!("buses[{i}].{f}")));
         }
         for (i, l) in self.loads.iter().enumerate() {
             let Load {
@@ -511,9 +514,7 @@ impl Network {
                 in_service: _,
                 extras: _,
             } = l;
-            if let Some(f) = bad([("p", *p), ("q", *q)]) {
-                return Some(format!("loads[{i}].{f}"));
-            }
+            out.extend(bad([("p", *p), ("q", *q)]).map(|f| format!("loads[{i}].{f}")));
         }
         for (i, s) in self.shunts.iter().enumerate() {
             let Shunt {
@@ -523,9 +524,7 @@ impl Network {
                 in_service: _,
                 extras: _,
             } = s;
-            if let Some(f) = bad([("g", *g), ("b", *b)]) {
-                return Some(format!("shunts[{i}].{f}"));
-            }
+            out.extend(bad([("g", *g), ("b", *b)]).map(|f| format!("shunts[{i}].{f}")));
         }
         for (i, br) in self.branches.iter().enumerate() {
             #[rustfmt::skip]
@@ -542,9 +541,7 @@ impl Network {
                 ("angmin", *angmin),
                 ("angmax", *angmax),
             ];
-            if let Some(f) = bad(fields) {
-                return Some(format!("branches[{i}].{f}"));
-            }
+            out.extend(bad(fields).map(|f| format!("branches[{i}].{f}")));
         }
         for (i, g) in self.generators.iter().enumerate() {
             #[rustfmt::skip]
@@ -559,9 +556,7 @@ impl Network {
                 ("vg", *vg),
                 ("mbase", *mbase),
             ];
-            if let Some(f) = bad(fields) {
-                return Some(format!("generators[{i}].{f}"));
-            }
+            out.extend(bad(fields).map(|f| format!("generators[{i}].{f}")));
             if let Some(GenCost {
                 model: _,
                 startup,
@@ -570,15 +565,16 @@ impl Network {
                 coeffs,
             }) = cost
             {
-                if let Some(f) = bad([("startup", *startup), ("shutdown", *shutdown)]) {
-                    return Some(format!("generators[{i}].cost.{f}"));
-                }
+                out.extend(
+                    bad([("startup", *startup), ("shutdown", *shutdown)])
+                        .map(|f| format!("generators[{i}].cost.{f}")),
+                );
                 if coeffs.iter().any(|c| !c.is_finite()) {
-                    return Some(format!("generators[{i}].cost.coeffs"));
+                    out.push(format!("generators[{i}].cost.coeffs"));
                 }
             }
             if caps.iter().flatten().any(|c| !c.is_finite()) {
-                return Some(format!("generators[{i}].caps"));
+                out.push(format!("generators[{i}].caps"));
             }
         }
         for (i, s) in self.storage.iter().enumerate() {
@@ -601,9 +597,7 @@ impl Network {
                 ("p_loss", *p_loss),
                 ("q_loss", *q_loss),
             ];
-            if let Some(f) = bad(fields) {
-                return Some(format!("storage[{i}].{f}"));
-            }
+            out.extend(bad(fields).map(|f| format!("storage[{i}].{f}")));
         }
         for (i, h) in self.hvdc.iter().enumerate() {
             #[rustfmt::skip]
@@ -624,11 +618,9 @@ impl Network {
                 ("loss0", *loss0),
                 ("loss1", *loss1),
             ];
-            if let Some(f) = bad(fields) {
-                return Some(format!("hvdc[{i}].{f}"));
-            }
+            out.extend(bad(fields).map(|f| format!("hvdc[{i}].{f}")));
         }
-        None
+        out
     }
 
     /// Serialize this network to `format`, preserving the retained source text
@@ -813,5 +805,53 @@ mod tests {
             "vg":1,"mbase":100,"in_service":true,"cost":null,"caps":null}"#;
         let g4: Generator = serde_json::from_str(null_caps).unwrap();
         assert!(!g4.has_caps());
+    }
+
+    #[test]
+    fn non_finite_fields_lists_every_offender_not_just_the_first() {
+        let bus = |id, vm| Bus {
+            id: BusId(id),
+            kind: BusType::Pq,
+            vm,
+            va: 0.0,
+            base_kv: 230.0,
+            vmax: 1.1,
+            vmin: 0.9,
+            area: 1,
+            zone: 1,
+            name: None,
+            extras: Extras::new(),
+        };
+        let branch = Branch {
+            from: BusId(1),
+            to: BusId(2),
+            r: 0.0,
+            x: f64::INFINITY,
+            b: 0.0,
+            rate_a: 0.0,
+            rate_b: 0.0,
+            rate_c: 0.0,
+            tap: 0.0,
+            shift: 0.0,
+            in_service: true,
+            angmin: -360.0,
+            angmax: 360.0,
+            extras: Extras::new(),
+        };
+        // Two distinct non-finite fields: a bus vm (NaN) and a branch x (Inf).
+        let net = Network::in_memory(
+            "nf",
+            100.0,
+            vec![bus(1, f64::NAN), bus(2, 1.0)],
+            vec![branch],
+        );
+        let fields = net.non_finite_fields();
+        assert!(fields.contains(&"buses[0].vm".to_string()), "{fields:?}");
+        assert!(fields.contains(&"branches[0].x".to_string()), "{fields:?}");
+        assert_eq!(
+            fields.len(),
+            2,
+            "exactly the two offenders, no more: {fields:?}"
+        );
     }
 }
