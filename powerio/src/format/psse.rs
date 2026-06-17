@@ -665,7 +665,7 @@ pub(crate) fn parse_psse_source(
             Section::Bus => buses.push(read_bus(&f)?),
             Section::Load => loads.push(read_load(&f)?),
             Section::FixedShunt => shunts.push(read_shunt(&f)?),
-            Section::SwitchedShunt => shunts.push(read_switched_shunt(&f)?),
+            Section::SwitchedShunt => shunts.push(read_switched_shunt(&f, raw_rev)?),
             Section::Generator => generators.push(read_gen(&f)?),
             Section::Branch => branches.push(read_branch(&f, raw_rev)?),
             Section::Transformer => {
@@ -800,16 +800,16 @@ fn begin_section_name(line: &str) -> Option<String> {
 /// so the loss is reported at read time rather than silently. The line count is
 /// approximate (multi-line records count once per line).
 fn warn_unmodeled_sections(content: &str, warnings: &mut Vec<String>) {
-    fn flush(current: Option<&(String, bool)>, rows: usize, warnings: &mut Vec<String>) {
+    fn close(current: Option<&(String, bool)>, rows: usize, totals: &mut BTreeMap<String, usize>) {
         if let Some((name, true)) = current {
             if rows > 0 {
-                warnings.push(format!(
-                    "PSS/E {name} section ({rows} record line(s)) is not modeled: preserved only \
-                     in a same-format .raw echo, dropped on any other write"
-                ));
+                *totals.entry(name.clone()).or_default() += rows;
             }
         }
     }
+    // Aggregate by section name: a substation block repeats its TERMINAL/SWITCHING
+    // sub-sections per station, so one warning per name beats hundreds.
+    let mut totals: BTreeMap<String, usize> = BTreeMap::new();
     // (section name, is it a skipped/unmodeled section).
     let mut current: Option<(String, bool)> = None;
     let mut rows: usize = 0;
@@ -819,7 +819,7 @@ fn warn_unmodeled_sections(content: &str, warnings: &mut Vec<String>) {
             continue;
         }
         if is_section_marker(t) {
-            flush(current.as_ref(), rows, warnings);
+            close(current.as_ref(), rows, &mut totals);
             rows = 0;
             current = begin_section_name(t)
                 .map(|n| (n, matches!(section_after_marker(t), Section::Skip)));
@@ -827,7 +827,13 @@ fn warn_unmodeled_sections(content: &str, warnings: &mut Vec<String>) {
             rows += 1;
         }
     }
-    flush(current.as_ref(), rows, warnings);
+    close(current.as_ref(), rows, &mut totals);
+    for (name, rows) in totals {
+        warnings.push(format!(
+            "PSS/E {name} section ({rows} record line(s)) is not modeled: preserved only in a \
+             same-format .raw echo, dropped on any other write"
+        ));
+    }
 }
 
 fn is_comment(line: &str) -> bool {
@@ -949,7 +955,13 @@ fn on_at(f: &[String], i: usize, default: bool) -> Result<bool> {
 fn int_at(f: &[String], i: usize, default: i64) -> Result<i64> {
     match f.get(i).map(String::as_str) {
         None | Some("") => Ok(default),
-        Some(s) => s.parse().map_err(|_| bad_field(i, s)),
+        // v34/35 exporters write integer fields in float form (`0.00` for `0`), so
+        // parse through f64 and truncate, the way `id_at` already does.
+        #[allow(clippy::cast_possible_truncation)]
+        Some(s) => s
+            .parse::<f64>()
+            .map(|v| v as i64)
+            .map_err(|_| bad_field(i, s)),
     }
 }
 
@@ -1035,17 +1047,18 @@ fn read_shunt(f: &[String]) -> Result<Shunt> {
     })
 }
 
-fn read_switched_shunt(f: &[String]) -> Result<Shunt> {
-    // I, MODSW, ADJM, STAT, VSWHI, VSWLO, SWREM, RMPCT, RMIDNT, BINIT(9), N1, B1, ...
-    // The steady-state susceptance BINIT becomes the shunt `b` (gs = 0); the
-    // mode, voltage band, regulated bus, RMPCT, and the (Ni, Bi) step blocks ride
-    // on the switching-control record.
+fn read_switched_shunt(f: &[String], rev: u32) -> Result<Shunt> {
+    // v33/34: I, MODSW, ADJM, STAT, VSWHI, VSWLO, SWREM, RMPCT, RMIDNT, BINIT(9),
+    // N1, B1, ... v35 inserts a quoted shunt ID at field 1, shifting the rest by
+    // one. BINIT becomes the shunt `b` (gs = 0); the mode, voltage band, regulated
+    // bus, RMPCT, and (Ni, Bi) step blocks ride on the switching-control record.
+    let o = usize::from(rev >= 35);
     let bus = id_at(f, 0, 0)?;
-    let swrem = id_at(f, 6, 0)?;
-    // Step blocks are (count, susceptance) pairs from field 10; stop at the first
+    let swrem = id_at(f, 6 + o, 0)?;
+    // Step blocks are (count, susceptance) pairs from BINIT+1; stop at the first
     // empty (padding) block or the end of the record.
     let mut blocks = Vec::new();
-    let mut i = 10;
+    let mut i = 10 + o;
     while i + 1 < f.len() {
         let steps = int_at(f, i, 0)?;
         let b = num_at(f, i + 1, 0.0)?;
@@ -1059,20 +1072,25 @@ fn read_switched_shunt(f: &[String]) -> Result<Shunt> {
         i += 2;
     }
     let control = SwitchedShuntControl {
-        mode: modsw_to_mode(int_at(f, 1, 1)?),
-        vhigh: num_at(f, 4, 0.0)?,
-        vlow: num_at(f, 5, 0.0)?,
+        mode: modsw_to_mode(int_at(f, 1 + o, 1)?),
+        vhigh: num_at(f, 4 + o, 0.0)?,
+        vlow: num_at(f, 5 + o, 0.0)?,
         control_bus: (swrem != 0 && swrem != bus).then_some(BusId(swrem)),
-        rmpct: num_at(f, 7, 100.0)?,
+        rmpct: num_at(f, 7 + o, 100.0)?,
         blocks,
     };
     Ok(Shunt {
         bus: BusId(bus),
         g: 0.0,
-        b: num_at(f, 9, 0.0)?,
-        in_service: on_at(f, 3, true)?,
+        b: num_at(f, 9 + o, 0.0)?,
+        in_service: on_at(f, 3 + o, true)?,
         control: Some(control),
-        extras: Extras::new(),
+        // Keep the v35 shunt ID so it survives a round trip.
+        extras: if rev >= 35 {
+            device_extras(f, 1)
+        } else {
+            Extras::new()
+        },
     })
 }
 
@@ -1661,6 +1679,44 @@ Q
             err.contains("generator voltage control references unknown bus 99"),
             "got {err}"
         );
+    }
+
+    #[test]
+    fn reads_a_v35_switched_shunt_with_an_id_column() {
+        // v35 inserts a quoted shunt ID at field 1, shifting every later column.
+        // Reading it at the v33 offsets misparses VSWLO as SWREM (regression: a
+        // real v35 case pointed switched-shunt control at a nonexistent bus 1).
+        let raw = "0, 100.00, 35, 0, 0, 60.00 / x
+CASE
+COMMENT
+5,'B5          ', 230.0,1,1,1,1,1.0,0.0,1.1,0.9,1.1,0.9
+0 / END OF BUS DATA, BEGIN LOAD DATA
+0 / END OF LOAD DATA, BEGIN FIXED SHUNT DATA
+0 / END OF FIXED SHUNT DATA, BEGIN GENERATOR DATA
+0 / END OF GENERATOR DATA, BEGIN BRANCH DATA
+0 / END OF BRANCH DATA, BEGIN TRANSFORMER DATA
+0 / END OF TRANSFORMER DATA, BEGIN AREA DATA
+0 / END OF AREA DATA, BEGIN SWITCHED SHUNT DATA
+5,'1 ',2,0,1,1.05,0.95,0,100.0,'',19.0,2,25.0
+0 / END OF SWITCHED SHUNT DATA, BEGIN GNE DEVICE DATA
+Q
+";
+        let net = parse_psse(raw).unwrap();
+        assert_eq!(net.shunts.len(), 1);
+        let sh = &net.shunts[0];
+        assert_eq!(sh.bus, BusId(5));
+        close(sh.b, 19.0);
+        let c = sh.control.as_ref().expect("switched-shunt control parsed");
+        assert_eq!(c.mode, SwitchedShuntMode::Discrete);
+        close(c.vhigh, 1.05);
+        close(c.vlow, 0.95);
+        assert_eq!(
+            c.control_bus, None,
+            "SWREM 0 means own-bus control, not bus 1"
+        );
+        assert_eq!(c.blocks.len(), 1);
+        assert_eq!(c.blocks[0].steps, 2);
+        close(c.blocks[0].b, 25.0);
     }
 
     #[test]
