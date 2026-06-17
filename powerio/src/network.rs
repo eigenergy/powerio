@@ -296,7 +296,7 @@ pub struct Generator {
     /// A fixed array, not an [`Extras`] map: a string-keyed map per generator
     /// costs 11 heap allocations each, which dominates the parse of a large
     /// generator-heavy case. Surfaced into formats that name them (PowerModels).
-    /// On the JSON snapshot it is a name-keyed object (see [`caps_serde`]) so the
+    /// On the JSON snapshot it is a name-keyed object (see `caps_serde`) so the
     /// schema stays additive when `GEN_EXTRA_KEYS` grows; `#[serde(default)]` so a
     /// snapshot that omits it deserializes to the empty set.
     #[serde(default = "default_caps", with = "caps_serde")]
