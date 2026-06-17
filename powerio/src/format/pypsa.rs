@@ -389,6 +389,7 @@ fn read_pypsa_csv_folder_inner(path: &Path, warnings: &mut Vec<String>) -> Resul
         storage,
         hvdc,
         transformers_3w: Vec::new(),
+        areas: Vec::new(),
         source_format: SourceFormat::PypsaCsv,
         source: None,
     };

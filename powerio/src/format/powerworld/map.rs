@@ -138,6 +138,7 @@ pub(crate) fn parse_powerworld_source(
         storage: Vec::new(),
         hvdc: Vec::new(),
         transformers_3w: Vec::new(),
+        areas: Vec::new(),
         source_format: SourceFormat::PowerWorld,
         source: Some(source),
     };

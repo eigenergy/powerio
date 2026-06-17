@@ -204,6 +204,12 @@ pub struct Network {
     /// [`Transformer3W::star_expansion`].
     #[serde(default)]
     pub transformers_3w: Vec<Transformer3W>,
+    /// Area records: scheduled interchange and per-area swing bus. Distinct from
+    /// the bare `area` number on each [`Bus`]; this is the area's metadata, which
+    /// every conversion dropped before. `#[serde(default)]` so older JSON still
+    /// deserializes.
+    #[serde(default)]
+    pub areas: Vec<Area>,
     pub source_format: SourceFormat,
     /// Raw source text, when read from a textual format; enables a byte-exact
     /// same-format round-trip. `Arc<String>` (not `Arc<str>`) is deliberate: a
@@ -497,6 +503,25 @@ pub struct Hvdc {
     pub extras: Extras,
 }
 
+/// An area record: the area's scheduled net interchange and its swing bus.
+///
+/// The [`number`](Area::number) matches the `area` field carried on each
+/// [`Bus`]; this table holds the per-area metadata (the interchange target and
+/// the area slack) that the bus number alone can't. Maps to the PSS/E area record
+/// (`I, ISW, PDES, PTOL, ARNAME`).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[non_exhaustive]
+pub struct Area {
+    pub number: usize,
+    /// The area swing (slack) bus, or `None` when unset.
+    pub slack_bus: Option<BusId>,
+    /// Scheduled net interchange (MW); positive is export out of the area.
+    pub net_interchange: f64,
+    /// Interchange tolerance bandwidth (MW).
+    pub tolerance: f64,
+    pub name: Option<String>,
+}
+
 /// A series impedance with the MVA base it is expressed on. Used pairwise by
 /// [`Transformer3W`]; a self-contained unit so the base travels with the value
 /// instead of being implied by position.
@@ -697,6 +722,7 @@ impl Network {
             storage: Vec::new(),
             hvdc: Vec::new(),
             transformers_3w: Vec::new(),
+            areas: Vec::new(),
             source_format: SourceFormat::InMemory,
             source: None,
         }
@@ -927,6 +953,11 @@ impl Network {
         }
         for s in &self.storage {
             check(s.bus, "storage")?;
+        }
+        for a in &self.areas {
+            if let Some(slack) = a.slack_bus {
+                check(slack, "area swing")?;
+            }
         }
         for t in &self.transformers_3w {
             for w in &t.windings {

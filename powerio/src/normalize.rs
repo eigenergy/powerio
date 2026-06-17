@@ -350,6 +350,7 @@ impl Network {
             storage,
             hvdc,
             transformers_3w: Vec::new(),
+            areas: Vec::new(),
             source_format: SourceFormat::Normalized,
             source: None,
         };

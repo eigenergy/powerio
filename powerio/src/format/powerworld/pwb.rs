@@ -469,6 +469,7 @@ fn checked_network(
         storage: Vec::new(),
         hvdc: Vec::new(),
         transformers_3w: Vec::new(),
+        areas: Vec::new(),
         source_format: SourceFormat::PowerWorldBinary,
         source: None,
     };
@@ -1786,6 +1787,7 @@ mod tests {
             storage: Vec::new(),
             hvdc: Vec::new(),
             transformers_3w: Vec::new(),
+            areas: Vec::new(),
             source_format: SourceFormat::PowerWorldBinary,
             source: None,
         }

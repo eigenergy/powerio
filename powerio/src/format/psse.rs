@@ -23,7 +23,7 @@ use serde_json::Value;
 
 use super::{Conversion, jnum, sanitize_quoted};
 use crate::network::{
-    Branch, Bus, BusId, BusType, Extras, Generator, Hvdc, Impedance, Load, Network, Shunt,
+    Area, Branch, Bus, BusId, BusType, Extras, Generator, Hvdc, Impedance, Load, Network, Shunt,
     ShuntBlock, SourceFormat, SwitchedShuntControl, SwitchedShuntMode, Transformer3W,
     TransformerControl, TransformerControlMode, Winding,
 };
@@ -320,6 +320,22 @@ pub fn write_psse_rev(net: &Network, rev: u32) -> Conversion {
         }
     }
     let _ = writeln!(s, "0 / END OF TRANSFORMER DATA, BEGIN AREA DATA");
+    for a in &net.areas {
+        let raw_name = a.name.as_deref().unwrap_or("");
+        let name = sanitize_quoted(raw_name, NAME_FORBIDDEN, ' ');
+        if matches!(name, std::borrow::Cow::Owned(_)) {
+            sanitized_names += 1;
+        }
+        let _ = writeln!(
+            s,
+            "{}, {}, {}, {}, '{:<12}'",
+            a.number,
+            a.slack_bus.map_or(0, |b| b.0),
+            num(a.net_interchange),
+            num(a.tolerance),
+            name
+        );
+    }
 
     // Two-terminal DC lines occupy the first of the otherwise-empty sections:
     // emit their 3-line records (if any) between the begin/end markers, then the
@@ -523,6 +539,7 @@ pub(crate) fn parse_psse_source(source: Arc<String>, name_hint: Option<&str>) ->
     let mut branches = Vec::new();
     let mut transformers_3w = Vec::new();
     let mut hvdc = Vec::new();
+    let mut areas = Vec::new();
 
     // Sections appear in fixed order, each ended by a record whose first field is
     // `0`. We read the ones we model and treat the rest as skipped.
@@ -586,6 +603,7 @@ pub(crate) fn parse_psse_source(source: Arc<String>, name_hint: Option<&str>) ->
                 let inverter = lines.next().map_or("", str::trim);
                 hvdc.push(read_dc_line(&f, &fields(rectifier), &fields(inverter))?);
             }
+            Section::Area => areas.push(read_area(&f)?),
             Section::Skip => {}
         }
     }
@@ -602,6 +620,7 @@ pub(crate) fn parse_psse_source(source: Arc<String>, name_hint: Option<&str>) ->
         storage: Vec::new(),
         hvdc,
         transformers_3w,
+        areas,
         source_format: SourceFormat::Psse,
         source: Some(source),
     };
@@ -619,6 +638,7 @@ enum Section {
     Branch,
     Transformer,
     TwoTerminalDc,
+    Area,
     Skip,
 }
 
@@ -643,6 +663,10 @@ fn section_after_marker(line: &str) -> Section {
         Section::Transformer
     } else if u.contains("BEGIN TWO-TERMINAL DC DATA") {
         Section::TwoTerminalDc
+    } else if u.contains("BEGIN AREA DATA") {
+        // Distinct from "BEGIN INTER-AREA TRANSFER DATA", which doesn't contain
+        // the exact "BEGIN AREA DATA" run.
+        Section::Area
     } else {
         Section::Skip
     }
@@ -859,6 +883,21 @@ fn mode_to_modsw(mode: SwitchedShuntMode) -> i64 {
         SwitchedShuntMode::Continuous => 1,
         SwitchedShuntMode::Discrete => 2,
     }
+}
+
+fn read_area(f: &[String]) -> Result<Area> {
+    // I, ISW, PDES, PTOL, 'ARNAME'
+    let isw = id_at(f, 1, 0)?;
+    Ok(Area {
+        number: id_at(f, 0, 0)?,
+        slack_bus: (isw != 0).then_some(BusId(isw)),
+        net_interchange: num_at(f, 2, 0.0)?,
+        tolerance: num_at(f, 3, 0.0)?,
+        name: f
+            .get(4)
+            .filter(|n| !n.trim().is_empty())
+            .map(|n| n.trim().to_string()),
+    })
 }
 
 fn read_gen(f: &[String]) -> Result<Generator> {
@@ -1177,6 +1216,42 @@ Q
         close(net.branches[0].rate_b, 90.0);
         close(net.branches[0].rate_c, 80.0);
         assert!(net.branches[0].in_service);
+    }
+
+    #[test]
+    fn reads_and_writes_area_records() {
+        let raw = r"0, 100.00, 33, 0, 0, 60.00 / x
+CASE
+COMMENT
+1,'B1          ', 230.0,3,1,1,1,1.0,0.0,1.1,0.9,1.1,0.9
+5,'B5          ', 230.0,1,1,1,1,1.0,0.0,1.1,0.9,1.1,0.9
+0 / END OF BUS DATA, BEGIN LOAD DATA
+0 / END OF LOAD DATA, BEGIN FIXED SHUNT DATA
+0 / END OF FIXED SHUNT DATA, BEGIN GENERATOR DATA
+0 / END OF GENERATOR DATA, BEGIN BRANCH DATA
+0 / END OF BRANCH DATA, BEGIN TRANSFORMER DATA
+0 / END OF TRANSFORMER DATA, BEGIN AREA DATA
+1, 5, 100.0, 10.0, 'AREA-ONE    '
+0 / END OF AREA DATA, BEGIN TWO-TERMINAL DC DATA
+Q
+";
+        let net = parse_psse(raw).unwrap();
+        assert_eq!(net.areas.len(), 1, "the area record was read");
+        let a = &net.areas[0];
+        assert_eq!(a.number, 1);
+        assert_eq!(a.slack_bus, Some(BusId(5)));
+        close(a.net_interchange, 100.0);
+        close(a.tolerance, 10.0);
+        assert_eq!(a.name.as_deref(), Some("AREA-ONE"));
+
+        // Round trip: write and re-read keeps the interchange and swing bus.
+        let net2 = parse_psse(&write_psse(&net).text).unwrap();
+        assert_eq!(net2.areas.len(), 1);
+        let a2 = &net2.areas[0];
+        assert_eq!(a2.number, 1);
+        assert_eq!(a2.slack_bus, Some(BusId(5)));
+        close(a2.net_interchange, 100.0);
+        assert_eq!(a2.name.as_deref(), Some("AREA-ONE"));
     }
 
     #[test]

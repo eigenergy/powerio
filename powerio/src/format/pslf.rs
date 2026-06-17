@@ -123,6 +123,7 @@ pub(crate) fn parse_pslf_source(
         storage: Vec::new(),
         hvdc,
         transformers_3w,
+        areas: Vec::new(),
         source_format: SourceFormat::Pslf,
         source: Some(source),
     };

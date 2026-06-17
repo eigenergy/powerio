@@ -193,6 +193,7 @@ impl Network {
             storage,
             hvdc,
             transformers_3w,
+            areas: Vec::new(),
             source_format: SourceFormat::InMemory,
             source: None,
         };
