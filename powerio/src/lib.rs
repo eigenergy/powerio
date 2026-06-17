@@ -49,7 +49,7 @@ pub use format::{
     parse_pandapower_json, parse_powermodels_json, parse_powerworld, parse_pslf, parse_psse,
     parse_str, read_pypsa_csv_folder, target_format_from_name, write_as, write_egret_json,
     write_matpower, write_pandapower_json, write_powermodels_json, write_powerworld, write_psse,
-    write_pypsa_csv_folder,
+    write_psse_rev, write_pypsa_csv_folder,
 };
 pub use indexed::{ConnectivityReport, IndexCore, IndexedNetwork};
 pub use network::{

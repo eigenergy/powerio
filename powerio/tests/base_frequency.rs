@@ -97,7 +97,7 @@ fn dropped_frequency_warns_for_formats_without_a_field() {
         );
     }
     // PSS/E and pandapower carry it, so no frequency warning there.
-    for target in [TargetFormat::Psse, TargetFormat::PandapowerJson] {
+    for target in [TargetFormat::Psse { rev: 33 }, TargetFormat::PandapowerJson] {
         let conv = write_as(&net, target);
         assert!(
             !conv.warnings.iter().any(|w| w.contains("frequency")),

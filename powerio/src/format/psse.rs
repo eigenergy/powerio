@@ -33,11 +33,28 @@ const NAME_FORBIDDEN: &[char] = &['\'', '/'];
 
 // ---- Writer -----------------------------------------------------------------
 
+/// Serialize `net` to PSS/E `.raw` at the default revision (33).
+#[must_use]
+pub fn write_psse(net: &Network) -> Conversion {
+    write_psse_rev(net, REV)
+}
+
+/// Serialize `net` to PSS/E `.raw` at `rev` (33, 34, or 35).
+///
+/// Revisions 34 and 35 add the expanded system-wide header with its
+/// end-of-system-wide-data marker, the named 12-rating branch record (the reader
+/// keys its branch layout off the header revision), and the load
+/// distributed-generation / load-type trailing columns. Any other `rev` falls
+/// back to the 33 layout. Same-format byte-exact echo still rides the retained
+/// source (see [`crate::write_as`]); this serializer is the cross-format path.
 #[must_use]
 // A flat serializer: one stanza per PSS/E record type; splitting it would add
 // indirection without clarity.
 #[expect(clippy::too_many_lines)]
-pub fn write_psse(net: &Network) -> Conversion {
+pub fn write_psse_rev(net: &Network, rev: u32) -> Conversion {
+    // v34+ wraps the global parameters in a system-wide data section, names
+    // branches and carries 12 ratings, and adds load DG / load-type columns.
+    let modern = rev >= 34;
     let mut warnings = Vec::new();
     let mut nonfinite = false;
     let mut sanitized_names = 0usize;
@@ -71,13 +88,17 @@ pub fn write_psse(net: &Network) -> Conversion {
 
     let _ = writeln!(
         s,
-        "0, {}, {REV}, 0, 0, {}   / powerio export: {}",
+        "0, {}, {rev}, 0, {}, {}   / powerio export: {}",
         net.base_mva,
+        i32::from(modern),
         num(net.base_frequency),
         net.name
     );
     let _ = writeln!(s, "{}", net.name);
     let _ = writeln!(s);
+    if modern {
+        let _ = writeln!(s, "0 / END OF SYSTEM-WIDE DATA, BEGIN BUS DATA");
+    }
 
     // Bus, with area/zone kept for the load records that reference them.
     let mut bus_area: BTreeMap<BusId, (usize, usize)> = BTreeMap::new();
@@ -107,11 +128,21 @@ pub fn write_psse(net: &Network) -> Conversion {
     }
     let _ = writeln!(s, "0 / END OF BUS DATA, BEGIN LOAD DATA");
 
+    // v33 ends the load record at INTRPT; v34 adds PDGEN/QDGEN/STDG and v35 a
+    // LOADTYPE string. powerio's load carries none of these, so they trail as
+    // defaults; the reader reads PL/QL by fixed index and ignores the rest.
+    let load_tail = if rev >= 35 {
+        ", 0, 0, 0, ''"
+    } else if modern {
+        ", 0, 0, 0"
+    } else {
+        ""
+    };
     for l in &net.loads {
         let (area, zone) = bus_area.get(&l.bus).copied().unwrap_or((1, 1));
         let _ = writeln!(
             s,
-            "{}, '1', {}, {}, {}, {}, {}, 0, 0, 0, 0, 1, 1, 0",
+            "{}, '1', {}, {}, {}, {}, {}, 0, 0, 0, 0, 1, 1, 0{load_tail}",
             l.bus,
             i32::from(l.in_service),
             area,
@@ -154,19 +185,39 @@ pub fn write_psse(net: &Network) -> Conversion {
 
     // Non-transformer branches here; transformers go in their own section.
     for br in net.branches.iter().filter(|b| !b.is_transformer()) {
-        let _ = writeln!(
-            s,
-            "{}, {}, '1', {}, {}, {}, {}, {}, {}, 0, 0, 0, 0, {}, 1, 0, 1, 1",
-            br.from,
-            br.to,
-            num(br.r),
-            num(br.x),
-            num(br.b),
-            num(br.rate_a),
-            num(br.rate_b),
-            num(br.rate_c),
-            i32::from(br.in_service)
-        );
+        if modern {
+            // v34+: a quoted line NAME at field 6, then twelve rating columns,
+            // pushing STAT to field 23 (the layout the reader expects at rev>=34).
+            // ratings 4-12 default to 0 (powerio carries only rate_a/b/c).
+            let _ = writeln!(
+                s,
+                "{}, {}, '1', {}, {}, {}, '            ', {}, {}, {}, \
+                 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, {}, 1, 0, 1, 1",
+                br.from,
+                br.to,
+                num(br.r),
+                num(br.x),
+                num(br.b),
+                num(br.rate_a),
+                num(br.rate_b),
+                num(br.rate_c),
+                i32::from(br.in_service)
+            );
+        } else {
+            let _ = writeln!(
+                s,
+                "{}, {}, '1', {}, {}, {}, {}, {}, {}, 0, 0, 0, 0, {}, 1, 0, 1, 1",
+                br.from,
+                br.to,
+                num(br.r),
+                num(br.x),
+                num(br.b),
+                num(br.rate_a),
+                num(br.rate_b),
+                num(br.rate_c),
+                i32::from(br.in_service)
+            );
+        }
     }
     let _ = writeln!(s, "0 / END OF BRANCH DATA, BEGIN TRANSFORMER DATA");
 
@@ -197,7 +248,8 @@ pub fn write_psse(net: &Network) -> Conversion {
     let _ = writeln!(s, "0 / END OF TRANSFORMER DATA, BEGIN AREA DATA");
 
     // The remaining sections are not modeled; emit their terminators in order so
-    // the file is a valid v33 case.
+    // the file parses as a complete case. The terminator set is stable across
+    // v33-v35 for the sections powerio doesn't model.
     for line in EMPTY_SECTIONS {
         let _ = writeln!(s, "{line}");
     }
@@ -734,6 +786,57 @@ Q
         close(net.branches[0].rate_b, 90.0);
         close(net.branches[0].rate_c, 80.0);
         assert!(net.branches[0].in_service);
+    }
+
+    #[test]
+    fn writes_v34_v35_layouts_that_round_trip() {
+        let raw = r"0, 100.00, 33, 0, 0, 60.00 / x
+CASE
+COMMENT
+1,'B1          ', 230.0,3,1,1,1,1.0,0.0,1.1,0.9,1.1,0.9
+2,'B2          ', 230.0,1,1,1,1,1.0,0.0,1.1,0.9,1.1,0.9
+0 / END OF BUS DATA, BEGIN LOAD DATA
+2,'1',1,1,1,10.0,5.0,0,0,0,0,1,1,0
+0 / END OF LOAD DATA, BEGIN FIXED SHUNT DATA
+0 / END OF FIXED SHUNT DATA, BEGIN GENERATOR DATA
+0 / END OF GENERATOR DATA, BEGIN BRANCH DATA
+1,2,'1 ',0.01,0.05,0.001,111.0,90.0,80.0,0,0,0,0,1,1,0,1,1
+0 / END OF BRANCH DATA, BEGIN TRANSFORMER DATA
+0 / END OF TRANSFORMER DATA, BEGIN AREA DATA
+Q
+";
+        let net = parse_psse(raw).unwrap();
+
+        for rev in [34u32, 35] {
+            let text = write_psse_rev(&net, rev).text;
+            // v34+ wraps the globals in a system-wide section with its end marker.
+            assert!(
+                text.contains("END OF SYSTEM-WIDE DATA, BEGIN BUS DATA"),
+                "rev {rev} missing the system-wide marker"
+            );
+            let header = text.lines().next().unwrap();
+            assert!(header.contains(&format!(", {rev}, ")), "header {header:?}");
+            // The branch uses the named 12-rating layout (>= 24 comma fields).
+            let branch = text.lines().find(|l| l.starts_with("1, 2, '1'")).unwrap();
+            assert!(
+                branch.split(',').count() >= 24,
+                "rev {rev} branch is not the named layout: {branch:?}"
+            );
+
+            let back = parse_psse(&text).unwrap();
+            assert_eq!(back.buses.len(), 2);
+            assert_eq!(back.loads.len(), 1);
+            assert_eq!(back.branches.len(), 1);
+            close(back.branches[0].rate_a, 111.0);
+            close(back.loads[0].p, 10.0);
+            assert!(back.branches[0].in_service);
+        }
+
+        // The v35 load record carries the trailing LOADTYPE field.
+        assert!(
+            write_psse_rev(&net, 35).text.contains(", ''"),
+            "v35 load should carry a LOADTYPE field"
+        );
     }
 
     #[test]

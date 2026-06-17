@@ -50,7 +50,7 @@ pub use pandapower::{parse_pandapower_json, write_pandapower_json};
 pub use powermodels::{parse_powermodels_json, write_powermodels_json};
 pub use powerworld::{PwdDisplay, PwdSubstation, parse_powerworld, write_powerworld};
 pub use pslf::parse_pslf;
-pub use psse::{parse_psse, write_psse};
+pub use psse::{parse_psse, write_psse, write_psse_rev};
 pub use pypsa::{PypsaCsvOutputs, read_pypsa_csv_folder, write_pypsa_csv_folder};
 
 /// A target interchange format. See [`write_as`].
@@ -61,8 +61,10 @@ pub enum TargetFormat {
     PowerModelsJson,
     /// egret `ModelData` JSON.
     EgretJson,
-    /// PSS/E `.raw` (v33).
-    Psse,
+    /// PSS/E `.raw` at the given revision. `rev` selects the record layout the
+    /// writer emits (33, 34, or 35); 33 is the historical default. The reader
+    /// takes the revision from the file header, so this only affects writes.
+    Psse { rev: u32 },
     /// PowerWorld auxiliary `.aux`.
     PowerWorld,
     /// pandapower `pandapowerNet` JSON.
@@ -79,7 +81,7 @@ impl TargetFormat {
             TargetFormat::PowerModelsJson
             | TargetFormat::EgretJson
             | TargetFormat::PandapowerJson => "json",
-            TargetFormat::Psse => "raw",
+            TargetFormat::Psse { .. } => "raw",
             TargetFormat::PowerWorld => "aux",
             TargetFormat::Matpower => "m",
         }
@@ -91,7 +93,7 @@ impl TargetFormat {
         match self {
             TargetFormat::PowerModelsJson => "PowerModels JSON",
             TargetFormat::EgretJson => "egret JSON",
-            TargetFormat::Psse => "PSS/E .raw",
+            TargetFormat::Psse { .. } => "PSS/E .raw",
             TargetFormat::PowerWorld => "PowerWorld .aux",
             TargetFormat::PandapowerJson => "pandapower JSON",
             TargetFormat::Matpower => "MATPOWER .m",
@@ -104,7 +106,9 @@ impl TargetFormat {
         match self {
             TargetFormat::PowerModelsJson => "powermodels-json",
             TargetFormat::EgretJson => "egret-json",
-            TargetFormat::Psse => "psse",
+            TargetFormat::Psse { rev: 34 } => "psse34",
+            TargetFormat::Psse { rev: 35 } => "psse35",
+            TargetFormat::Psse { .. } => "psse",
             TargetFormat::PowerWorld => "powerworld",
             TargetFormat::PandapowerJson => "pandapower-json",
             TargetFormat::Matpower => "matpower",
@@ -205,7 +209,9 @@ pub fn target_format_from_name(name: &str) -> Option<TargetFormat> {
             TargetFormat::PowerModelsJson
         }
         "egret-json" | "egret" | "egretjson" => TargetFormat::EgretJson,
-        "psse" | "raw" => TargetFormat::Psse,
+        "psse" | "raw" | "psse33" | "raw33" => TargetFormat::Psse { rev: 33 },
+        "psse34" | "raw34" => TargetFormat::Psse { rev: 34 },
+        "psse35" | "raw35" => TargetFormat::Psse { rev: 35 },
         "powerworld" | "aux" => TargetFormat::PowerWorld,
         "pandapower-json" | "pandapower" | "pandapowerjson" | "pp" => TargetFormat::PandapowerJson,
         _ => return None,
@@ -387,7 +393,7 @@ pub fn parse_file(path: impl AsRef<std::path::Path>, from: Option<&str>) -> Resu
             // Everything but `.json` (sniffed below) resolves without the text.
             match ext.as_deref() {
                 Some("m") => Some(TargetFormat::Matpower),
-                Some("raw") => Some(TargetFormat::Psse),
+                Some("raw") => Some(TargetFormat::Psse { rev: 33 }),
                 Some("aux") => Some(TargetFormat::PowerWorld),
                 Some("json") => None,
                 other => {
@@ -423,7 +429,7 @@ fn read_source(source: Arc<String>, fmt: TargetFormat, name_hint: Option<&str>) 
         TargetFormat::PowerModelsJson => {
             powermodels::parse_powermodels_json_source(source, name_hint)
         }
-        TargetFormat::Psse => psse::parse_psse_source(source, name_hint),
+        TargetFormat::Psse { .. } => psse::parse_psse_source(source, name_hint),
         TargetFormat::PowerWorld => powerworld::parse_powerworld_source(source, name_hint),
         TargetFormat::EgretJson => egret::parse_egret_source(source, name_hint),
         TargetFormat::PandapowerJson => {
@@ -551,7 +557,7 @@ pub fn write_as(net: &Network, format: TargetFormat) -> Conversion {
     let mut conv = match format {
         TargetFormat::PowerModelsJson => write_powermodels_json(net),
         TargetFormat::EgretJson => write_egret_json(net),
-        TargetFormat::Psse => write_psse(net),
+        TargetFormat::Psse { rev } => write_psse_rev(net, rev),
         TargetFormat::PowerWorld => write_powerworld(net),
         TargetFormat::PandapowerJson => write_pandapower_json(net),
         // From another source (or no retained source): canonical MATPOWER from
@@ -570,7 +576,10 @@ pub fn write_as(net: &Network, format: TargetFormat) -> Conversion {
 /// PowerModels, egret, and PowerWorld have nowhere to put it, so a 50 Hz case
 /// would silently read back as the 60 Hz default. Report the loss instead.
 fn warn_dropped_frequency(net: &Network, format: TargetFormat, conv: &mut Conversion) {
-    let carries_frequency = matches!(format, TargetFormat::Psse | TargetFormat::PandapowerJson);
+    let carries_frequency = matches!(
+        format,
+        TargetFormat::Psse { .. } | TargetFormat::PandapowerJson
+    );
     if carries_frequency {
         return;
     }
@@ -634,7 +643,7 @@ fn warn_missing_reference(net: &Network, format: TargetFormat, conv: &mut Conver
     let needs_ref = matches!(
         format,
         TargetFormat::Matpower
-            | TargetFormat::Psse
+            | TargetFormat::Psse { .. }
             | TargetFormat::PowerModelsJson
             | TargetFormat::PandapowerJson
     );
@@ -787,7 +796,7 @@ fn same_format(target: TargetFormat, source: SourceFormat) -> bool {
         (TargetFormat::Matpower, SourceFormat::Matpower)
             | (TargetFormat::PowerModelsJson, SourceFormat::PowerModelsJson)
             | (TargetFormat::EgretJson, SourceFormat::EgretJson)
-            | (TargetFormat::Psse, SourceFormat::Psse)
+            | (TargetFormat::Psse { .. }, SourceFormat::Psse)
             | (TargetFormat::PowerWorld, SourceFormat::PowerWorld)
             | (TargetFormat::PandapowerJson, SourceFormat::PandapowerJson)
     )
@@ -848,7 +857,7 @@ mod tests {
             (SourceFormat::Matpower, TargetFormat::Matpower),
             (SourceFormat::PowerModelsJson, TargetFormat::PowerModelsJson),
             (SourceFormat::EgretJson, TargetFormat::EgretJson),
-            (SourceFormat::Psse, TargetFormat::Psse),
+            (SourceFormat::Psse, TargetFormat::Psse { rev: 33 }),
             (SourceFormat::PowerWorld, TargetFormat::PowerWorld),
             (SourceFormat::PandapowerJson, TargetFormat::PandapowerJson),
         ] {

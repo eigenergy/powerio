@@ -51,7 +51,7 @@ fn bench_roundtrip(c: &mut Criterion) {
 // fixture for them.
 const FORMATS: &[(&str, TargetFormat)] = &[
     ("powermodels-json", TargetFormat::PowerModelsJson),
-    ("psse", TargetFormat::Psse),
+    ("psse", TargetFormat::Psse { rev: 33 }),
     ("powerworld", TargetFormat::PowerWorld),
     ("egret-json", TargetFormat::EgretJson),
 ];

@@ -161,6 +161,12 @@ enum FormatArg {
     EgretJson,
     #[value(name = "psse", alias = "raw")]
     Psse,
+    /// Write PSS/E `.raw` at revision 34.
+    #[value(name = "psse34")]
+    Psse34,
+    /// Write PSS/E `.raw` at revision 35.
+    #[value(name = "psse35")]
+    Psse35,
     #[value(name = "powerworld", alias = "aux")]
     PowerWorld,
     #[value(name = "pandapower-json", alias = "pandapower", alias = "pp")]
@@ -187,7 +193,9 @@ impl FormatArg {
             FormatArg::Matpower => TargetFormat::Matpower,
             FormatArg::PowerModelsJson => TargetFormat::PowerModelsJson,
             FormatArg::EgretJson => TargetFormat::EgretJson,
-            FormatArg::Psse => TargetFormat::Psse,
+            FormatArg::Psse => TargetFormat::Psse { rev: 33 },
+            FormatArg::Psse34 => TargetFormat::Psse { rev: 34 },
+            FormatArg::Psse35 => TargetFormat::Psse { rev: 35 },
             FormatArg::PowerWorld => TargetFormat::PowerWorld,
             FormatArg::PandapowerJson => TargetFormat::PandapowerJson,
             FormatArg::PypsaCsv => anyhow::bail!(
@@ -213,6 +221,8 @@ impl FormatArg {
             FormatArg::PowerModelsJson => "powermodels-json",
             FormatArg::EgretJson => "egret-json",
             FormatArg::Psse => "psse",
+            FormatArg::Psse34 => "psse34",
+            FormatArg::Psse35 => "psse35",
             FormatArg::PowerWorld => "powerworld",
             FormatArg::PandapowerJson => "pandapower-json",
             FormatArg::PypsaCsv => "pypsa-csv",

@@ -32,7 +32,7 @@ fn canonical_api_names_parse_and_convert() {
         "powermodels-json".parse::<TargetFormat>().unwrap(),
         TargetFormat::PowerModelsJson
     );
-    assert_eq!(TargetFormat::Psse.to_string(), "psse");
+    assert_eq!(TargetFormat::Psse { rev: 33 }.to_string(), "psse");
     assert_eq!(net.to_matpower(), src);
 
     let pm = net.to_format(TargetFormat::PowerModelsJson);
@@ -1366,7 +1366,7 @@ fn slackless_network_conversion_warns_for_power_flow_targets() {
     );
     for fmt in [
         TargetFormat::Matpower,
-        TargetFormat::Psse,
+        TargetFormat::Psse { rev: 33 },
         TargetFormat::PowerModelsJson,
     ] {
         let conv = write_as(&net, fmt);
