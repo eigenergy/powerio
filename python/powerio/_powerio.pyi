@@ -35,6 +35,7 @@ class PyCase:
         "Psse",
         "PowerWorld",
         "PandapowerJson",
+        "Pslf",
         "PowerWorldBinary",
         "InMemory",
         "Normalized",

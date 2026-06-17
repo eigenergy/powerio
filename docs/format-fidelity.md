@@ -21,6 +21,7 @@ implementations and the matching powerio code:
 | dcline `Pt`/`Qf`/`Qt` | sign flips vs MATPOWER | PowerModels `matpower.jl` | `format::powermodels` |
 | Generator cost | `c2 p² + c1 p` → `q = 2c2`, `c = c1`; coefficients high order first | MATPOWER `idx_cost`, egret `matpower_parser` | `GenCost::quadratic` |
 | `source_id` | `["bus", id]` for bus-tied elements | PowerModels `matpower.jl` | `format::powermodels` |
+| PSLF shunts | EPC `pu_mw`/`pu_mvar` are per unit on `sbase`; `Network::Shunt` stores MW/MVAr at V = 1 | paired EPC/RAW case checks | `format::pslf` |
 
 egret's own MATPOWER parser uses the same reductions (bus type as
 `matpower_bustype`, polynomial coefficients reversed to a `{degree: coefficient}`
@@ -104,6 +105,11 @@ in Python), naming the table and counting the affected rows.
 - **PowerWorld** `.aux` carries no system base, so the reader defaults to 100 MVA.
   No third-party `.aux` reader exists, so that writer is validated by powerio's own
   read back plus a PowerModels JSON bridge.
+- **PSLF** `.epc` is read only. The reader maps the static power flow core:
+  buses, lines, two winding transformers, generators, loads, fixed shunts,
+  controlled shunts at initial `g/b`, and limited two terminal DC records.
+  Unsupported sections stay in the retained source text and emit warnings.
+  Three winding transformers are reported rather than reduced.
 - **MATPOWER** canonical output (for a case that did not originate as MATPOWER)
   omits dcline; the byte exact echo path keeps it when the case was read from
   MATPOWER. Storage is written as an `mpc.storage` block.

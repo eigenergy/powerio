@@ -1,7 +1,7 @@
 """powerio: lossless power system case file IO, conversion, and matrices.
 
-Parse MATPOWER, PSS/E, PowerWorld, PowerModels JSON, egret JSON, pandapower
-JSON, and PyPSA CSV folders into one format-neutral case; write retained text
+Parse MATPOWER, PSS/E, PowerWorld, PSLF EPC, PowerModels JSON, egret JSON,
+pandapower JSON, and PyPSA CSV folders into one format neutral case; write retained text
 formats back byte exact; convert between formats; and pull the sparse matrices
 and graph views solvers need::
 
@@ -460,7 +460,8 @@ def parse_file(path: Any, from_: Optional[str] = None) -> Network:
     """Parse a case file from a path, inferring the format from the extension.
 
     Read fidelity warnings are on ``Network.read_warnings`` (empty for readers
-    that don't report any; currently all but pandapower JSON and PyPSA CSV).
+    that don't report any; currently pandapower JSON, PyPSA CSV, and PSLF EPC
+    report them).
     """
     return Network(_powerio.parse_file(str(path), from_))
 
@@ -491,8 +492,10 @@ def convert_file(path: Any, to: str, from_: Optional[str] = None) -> Conversion:
     ``to`` / ``from_`` are format names: ``matpower``, ``powermodels-json``,
     ``egret-json``, ``pandapower-json``, ``psse``, ``powerworld`` (aliases
     ``m``, ``pm``, ``egret``, ``pp``, ``raw``, ``aux``). The input format is
-    inferred from the file extension unless ``from_`` overrides it. PyPSA CSV
-    folders are read with ``from_="pypsa-csv"`` and written with
+    inferred from the file extension unless ``from_`` overrides it. PSLF EPC is
+    accepted as input with ``from_="pslf"`` / ``"epc"`` or a ``.epc`` extension,
+    but it is not a write target. PyPSA CSV folders are read with
+    ``from_="pypsa-csv"`` and written with
     :meth:`Network.write_pypsa_csv_folder`. Returns a :class:`Conversion` with
     the text and any fidelity warnings.
     """

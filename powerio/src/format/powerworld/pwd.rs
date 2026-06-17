@@ -4,7 +4,9 @@
 //! A `.pwd` is the diagram sibling of a case: drawing records for buses,
 //! branches, substations, and field labels. This reader decodes the one
 //! subset with a differential oracle, the substation symbols, and leaves
-//! every other drawing object undecoded. The evidence (seven files across
+//! every other drawing object undecoded. Files without the substation table
+//! still return display metadata with an empty substation list. The evidence
+//! (seven files across
 //! the 2016 through 2022 writer eras, each matched 1-1 against the
 //! latitude/longitude its same vintage aux carries per substation, except
 //! the v19 resave, which matches 1248/1250 against the published case
@@ -85,8 +87,7 @@ pub fn parse_pwd_file(path: impl AsRef<Path>) -> Result<PwdDisplay> {
 ///
 /// # Errors
 /// [`Error::FormatRead`] when the header is not the known display shape,
-/// the file has no substation identity table (bus only diagrams), or no
-/// unique drawing record group links to the identity rows.
+/// or no unique drawing record group links to the identity rows.
 pub fn parse_pwd_display(bytes: &[u8]) -> Result<PwdDisplay> {
     parse_pwd_inner(bytes)
 }
@@ -95,8 +96,7 @@ pub fn parse_pwd_display(bytes: &[u8]) -> Result<PwdDisplay> {
 ///
 /// # Errors
 /// [`Error::FormatRead`] when the header is not the known display shape,
-/// the file has no substation identity table (bus only diagrams), or no
-/// unique drawing record group links to the identity rows.
+/// or no unique drawing record group links to the identity rows.
 pub fn parse_pwd(bytes: &[u8]) -> Result<Vec<PwdSubstation>> {
     parse_pwd_display(bytes).map(|display| display.substations)
 }
@@ -141,6 +141,14 @@ fn parse_pwd_inner(bytes: &[u8]) -> Result<PwdDisplay> {
     let (canvas_width, canvas_height, stamp) = parse_pwd_header(bytes)?;
 
     let identity = find_identity_table(bytes)?;
+    if identity.is_empty() {
+        return Ok(PwdDisplay {
+            canvas_width,
+            canvas_height,
+            stamp,
+            substations: Vec::new(),
+        });
+    }
 
     // Every drawing object record repeats the header stamp at +18 and dual
     // encodes its position (f64 at +22/+30, f32 echo at +2/+6); the scan
@@ -240,8 +248,8 @@ struct DrawRecord {
 }
 
 /// The substation identity table: exactly one valid walk behind a
-/// `ff ff ff ff 3d 0f` anchor. Zero (bus only diagrams, pre 2016 shapes)
-/// and several are loud errors.
+/// `ff ff ff ff 3d 0f` anchor. A missing table means there are no decoded
+/// substation symbols. Several tables are a loud error.
 fn find_identity_table(b: &[u8]) -> Result<Vec<(u32, String)>> {
     let mut tables = Vec::new();
     for at in memmem(b, &IDENTITY_TAG) {
@@ -251,12 +259,7 @@ fn find_identity_table(b: &[u8]) -> Result<Vec<(u32, String)>> {
     }
     match tables.len() {
         1 => Ok(tables.pop().unwrap()),
-        0 => Err(Error::FormatRead {
-            format: FMT,
-            message: "no substation identity table (tag 0x0f3d walks clean); bus only diagrams \
-                      and unprobed save eras are not decoded (see docs/powerworld.md)"
-                .into(),
-        }),
+        0 => Ok(Vec::new()),
         n => Err(Error::FormatRead {
             format: FMT,
             message: format!(

@@ -566,25 +566,10 @@ fn rejects_unrecognized_binaries() {
         "{err}"
     );
 
-    // An undecoded writer format constant (the 2017 era 118 bus sample
-    // carries 338 at offset 0x08) is a vintage rejection naming the
-    // constant, never a generic magic mismatch.
-    let mut newer = Vec::new();
-    newer.extend_from_slice(&15000u64.to_le_bytes());
-    newer.extend_from_slice(&338u64.to_le_bytes());
-    newer.extend_from_slice(&20u64.to_le_bytes());
-    newer.extend_from_slice(&[0u8; 4096]);
-    let err = parse_pwb(&newer, None).unwrap_err();
-    let msg = err.to_string();
-    assert!(
-        msg.contains("unsupported PowerWorld .pwb vintage") && msg.contains("338"),
-        "{err}"
-    );
-
     // A decoded constant over a garbage body dies at the bus layout gate,
     // through the same loud vintage path; pinned for each constant the
     // header gate admits.
-    for v in [425u64, 483, 508, 537, 550, 551] {
+    for v in [338u64, 368, 425, 483, 508, 537, 550, 551] {
         let mut garbage = Vec::new();
         garbage.extend_from_slice(&15000u64.to_le_bytes());
         garbage.extend_from_slice(&v.to_le_bytes());
@@ -597,6 +582,28 @@ fn rejects_unrecognized_binaries() {
                 && msg.contains("no recognized bus record layout"),
             "constant {v}: {err}"
         );
+    }
+}
+
+#[test]
+fn truncations_do_not_panic() {
+    let bytes = std::fs::read(vendored("ACTIVSg200.pwb")).unwrap();
+    for len in [
+        0,
+        1,
+        8,
+        24,
+        63,
+        64,
+        128,
+        512,
+        4096,
+        65_536,
+        bytes.len() / 2,
+        bytes.len() - 1,
+    ] {
+        let outcome = std::panic::catch_unwind(|| parse_pwb(&bytes[..len], Some("truncated")));
+        assert!(outcome.is_ok(), "truncation at {len} bytes panicked");
     }
 }
 

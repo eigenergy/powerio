@@ -13,27 +13,28 @@
 //! must be values this reader has seen and verified). A file that does not
 //! match the validated layout fails loudly; nothing is guessed silently.
 //!
-//! Supported vintages, behind the six decoded header format constants
-//! (425, 483, 508, 537, 550, 551):
-//! the Simulator 19 era writer (bus record flag family `0x06`, the June 2016
-//! ACTIVSg2000 export, validated field by field against its same day aux
-//! sibling), the Simulator 20 era writer (flag family `0x26`: the 2018
-//! ACTIVSg200 export validated against its aux, the 2017 v19 ACTIVSg2000
-//! export validated against the published case), the 2019+ era writers
-//! (flag bits 6 and 8 added over family `0x26`, header 425 or 508: the
-//! current era ACTIVSg2000, ACTIVSg500, and 2022 Hawaii40 exports, each
-//! validated against its aux), and the 2021 era writer (headers 483
-//! through 551: the Texas7k export validated against its same day aux and
-//! .m siblings at 6717 bus scale, its v21/v22 resaves against the 2022
-//! aux, and the 2030 builds by counts with offline value alignment; the
-//! era's generator record inserts the regulated bus number and carries a
-//! validated in service bit, see [`read_gen_reg_record`]). Record layouts
-//! are self describing through their flag words, a Delphi field presence
-//! bitmask: one record model decodes every observed flag word (see
-//! [`BusHead::unk`] and [`read_branch_head`]), and structural anchors (the
-//! rating block tag) turn any unobserved variant into a loud error instead
-//! of a misread. Older Simulators' constants are classified and rejected
-//! with the constant named. Evidence in `docs/powerworld.md`.
+//! Supported header constants: 338, 368, 425, 483, 508, 537, 550, 551, and 554.
+//! These constants gate only the writer era; a recognized constant still has
+//! to pass the table walk. Constants 338/368/425 use the older generator record
+//! (`bus`, ID, f32 block), 483/537/550/551 use the regulated bus record, 508
+//! has been observed with both generator families, and 554 uses the regulated
+//! record without the 2021 era presence byte. The bus, load, shunt, and branch
+//! heads are more general: their flag words are Delphi field presence bitmasks,
+//! so one decoded head model admits the observed 0x06, 0x26, and 0x66 families
+//! as long as the later table walk still validates.
+//!
+//! The emerging structure is useful but bounded: the file is a sequence of
+//! count-word tables separated by writer metadata, each record starts with a
+//! small stable head, optional fields are controlled by bitmasks or short kind
+//! markers, and long tails are skipped only after anchors prove the record kind.
+//! That gives a general path for new vintages without guessing at fields.
+//!
+//! To add a new vintage, start with the smallest stable facts: header words,
+//! bus flag census, table count positions, record anchors, and companion
+//! export parity. Prefer widening a presence bit or table glue window only
+//! after a full record walk still validates every later table. A new layout
+//! belongs behind its own probe until a sibling `.aux`, `.raw`, `.epc`, or
+//! `.m` file proves that it shares an existing record family.
 //!
 //! The table search prices the format's structure (no field dictionary, so
 //! every table is located by validating record walks behind count word
@@ -120,19 +121,28 @@ pub fn parse_pwb(bytes: &[u8], name_hint: Option<&str>) -> Result<Network> {
     // a file cannot carry from ever outbidding the right one in the chain
     // search; a hypothetical file mixing eras fails loudly instead.
     let gen_variants = match header_constant {
-        425 => GenVariants {
+        338 | 368 | 425 => GenVariants {
             plain: true,
             reg: false,
+            simple_reg: false,
         },
         508 => GenVariants {
             plain: true,
             reg: true,
+            simple_reg: false,
+        },
+        554 => GenVariants {
+            plain: false,
+            reg: false,
+            simple_reg: true,
         },
         _ => GenVariants {
             plain: false,
             reg: true,
+            simple_reg: false,
         },
     };
+    let branch_count_can_include_trailer = header_constant == 554;
     // The narrow bus glue window prices the common files (see
     // bus_table_candidates); the wide retry exists so a small node level
     // resave (a bus table under 256 records with the v21 writer's 52 byte
@@ -141,37 +151,55 @@ pub fn parse_pwb(bytes: &[u8], name_hint: Option<&str>) -> Result<Network> {
     // only the glue combinations the narrow pass could not reach, and
     // shares the bus run cache so nothing is walked twice.
     let bus_runs = RefCell::new(HashMap::new());
-    match search_table_chain(bytes, name_hint, gen_variants, &bus_runs, false) {
+    match search_table_chain(
+        bytes,
+        name_hint,
+        gen_variants,
+        branch_count_can_include_trailer,
+        &bus_runs,
+        false,
+    ) {
         Some(net) => net,
-        None => search_table_chain(bytes, name_hint, gen_variants, &bus_runs, true).unwrap_or_else(
-            || {
-                Err(Error::FormatRead {
-                    format: FMT,
-                    message: "no table chain matches the validated .pwb layouts \
+        None => search_table_chain(
+            bytes,
+            name_hint,
+            gen_variants,
+            branch_count_can_include_trailer,
+            &bus_runs,
+            true,
+        )
+        .unwrap_or_else(|| {
+            Err(Error::FormatRead {
+                format: FMT,
+                message: "no table chain matches the validated .pwb layouts \
                                   (buses, loads, generators, shunts, branches in sequence)"
-                        .into(),
-                })
-            },
-        ),
+                    .into(),
+            })
+        }),
     }
 }
 
 /// Which generator record layouts the header constant admits (see
-/// [`parse_pwb`]): the 425/508 era bus + ID shape (`plain`) and the 2021 era
-/// regulated bus shape (`reg`, [`read_gen_reg_record`]).
+/// [`parse_pwb`]): the 425/508 era bus + ID shape (`plain`), the 2021 era
+/// regulated bus shape (`reg`, [`read_gen_reg_record`]), and the 554 shape
+/// whose regulated bus record omits the presence byte (`simple_reg`,
+/// [`read_gen_reg_simple_record`]).
 #[derive(Clone, Copy)]
 struct GenVariants {
     plain: bool,
     reg: bool,
+    simple_reg: bool,
 }
 
 /// One full depth first search for the table chain; `None` when no chain
 /// matches. `wide_bus_glue` lifts the bus table's count gated glue window
 /// (see [`bus_table_candidates`]) for the retry pass.
+#[expect(clippy::too_many_lines)]
 fn search_table_chain(
     bytes: &[u8],
     name_hint: Option<&str>,
     gen_variants: GenVariants,
+    branch_count_can_include_trailer: bool,
     bus_runs: &RefCell<BusRuns>,
     wide_bus_glue: bool,
 ) -> Option<Result<Network>> {
@@ -183,15 +211,20 @@ fn search_table_chain(
     // the backtracking affordable: candidates pointing at the same first
     // record share one walk however many count words and search retries
     // reach it.
-    for (buses, bus_end, last_bus_unk) in bus_table_candidates(bytes, bus_runs, wide_bus_glue) {
+    for (buses, bus_shunts, bus_end, last_bus_unk) in
+        bus_table_candidates(bytes, bus_runs, wide_bus_glue)
+    {
         let Some(bus_ids) = BusIdSet::new(&buses) else {
             continue; // duplicate ids: not a real bus table
         };
+        let mut best = None;
+        let bus_names = bus_name_map(&buses);
         // The device and branch runs validate bus references, so their
         // caches are scoped to one bus table candidate.
         let load_runs = RefCell::new(HashMap::new());
         let gen_runs = RefCell::new(HashMap::new());
         let gen_reg_runs = RefCell::new(HashMap::new());
+        let gen_reg_simple_runs = RefCell::new(HashMap::new());
         let shunt_runs = RefCell::new(HashMap::new());
         let branch_runs = RefCell::new(HashMap::new());
         // The load table's count word sits past the final bus record's
@@ -205,27 +238,26 @@ fn search_table_chain(
             &bus_ids,
             read_load_record,
             &load_runs,
-            48,
+            128,
+            12,
         ) {
             // The generator table reads through the record layouts the
             // header constant admits (see parse_pwb). A file's table uses
             // exactly one; each gets its own run cache and the structural
             // gauntlets keep the wrong one from parsing. The newer layout's
-            // table glue runs to 86 bytes (string metadata between the
-            // count and the first record in the v21 resave); the older
-            // tables all sit within 48, and widening their window admits
-            // forged count words, so each variant carries its own glue
-            // bound.
+            // table glue runs to 86 bytes in the v21 resave; the older
+            // table glue reaches 104 bytes in the IEEE 24 bus save.
             let gen_candidates = gen_variants
                 .plain
                 .then(|| {
                     device_table_candidates(
                         bytes,
-                        l_end..l_end + RESYNC_WINDOW,
+                        l_end..l_end.saturating_add(RESYNC_WINDOW),
                         &bus_ids,
                         read_gen_record,
                         &gen_runs,
-                        48,
+                        128,
+                        32,
                     )
                 })
                 .into_iter()
@@ -236,83 +268,247 @@ fn search_table_chain(
                         .then(|| {
                             device_table_candidates(
                                 bytes,
-                                l_end..l_end + RESYNC_WINDOW,
+                                l_end..l_end.saturating_add(RESYNC_WINDOW),
                                 &bus_ids,
                                 read_gen_reg_record,
                                 &gen_reg_runs,
-                                96,
+                                128,
+                                40,
+                            )
+                        })
+                        .into_iter()
+                        .flatten(),
+                )
+                .chain(
+                    gen_variants
+                        .simple_reg
+                        .then(|| {
+                            device_table_candidates(
+                                bytes,
+                                l_end..l_end.saturating_add(RESYNC_WINDOW),
+                                &bus_ids,
+                                read_gen_reg_simple_record,
+                                &gen_reg_simple_runs,
+                                128,
+                                40,
                             )
                         })
                         .into_iter()
                         .flatten(),
                 );
             for (generators, g_end) in gen_candidates {
+                if gen_table_continues(bytes, g_end, &bus_ids, gen_variants) {
+                    continue;
+                }
+                if !bus_shunts.is_empty() {
+                    if let Some(branches) = find_branch_table(
+                        bytes,
+                        g_end,
+                        &bus_ids,
+                        &bus_names,
+                        &branch_runs,
+                        branch_count_can_include_trailer,
+                    ) {
+                        keep_best_chain(
+                            &mut best,
+                            chain_score(&loads, &bus_shunts, &branches, &generators),
+                            checked_network(
+                                name_hint,
+                                buses.clone(),
+                                loads.clone(),
+                                bus_shunts.clone(),
+                                branches,
+                                generators.clone(),
+                            ),
+                        );
+                    }
+                }
                 for (shunts, s_end) in device_table_candidates(
                     bytes,
-                    g_end..g_end + RESYNC_WINDOW,
+                    g_end..g_end.saturating_add(RESYNC_WINDOW),
                     &bus_ids,
                     read_shunt_record,
                     &shunt_runs,
                     48,
+                    28,
                 ) {
-                    let Some(branches) = find_branch_table(bytes, s_end, &bus_ids, &branch_runs)
-                    else {
+                    let Some(branches) = find_branch_table(
+                        bytes,
+                        s_end,
+                        &bus_ids,
+                        &bus_names,
+                        &branch_runs,
+                        branch_count_can_include_trailer,
+                    ) else {
                         continue;
                     };
-                    let mut buses = buses.clone();
-                    derive_bus_kinds(&mut buses, &generators);
-                    let net = Network {
-                        name: name_hint.unwrap_or("case").to_string(),
-                        base_mva: MVA_BASE,
-                        buses,
-                        loads,
-                        shunts,
-                        branches,
-                        generators,
-                        storage: Vec::new(),
-                        hvdc: Vec::new(),
-                        source_format: SourceFormat::PowerWorldBinary,
-                        source: None,
-                    };
-                    return Some(net.check_references(FMT).map(|()| net));
+                    let mut shunts = shunts;
+                    extend_unique_shunts(&mut shunts, &bus_shunts);
+                    keep_best_chain(
+                        &mut best,
+                        chain_score(&loads, &shunts, &branches, &generators),
+                        checked_network(
+                            name_hint,
+                            buses.clone(),
+                            loads.clone(),
+                            shunts,
+                            branches,
+                            generators.clone(),
+                        ),
+                    );
+                }
+                if let Some(branches) = find_branch_table(
+                    bytes,
+                    g_end,
+                    &bus_ids,
+                    &bus_names,
+                    &branch_runs,
+                    branch_count_can_include_trailer,
+                ) {
+                    keep_best_chain(
+                        &mut best,
+                        chain_score(&loads, &bus_shunts, &branches, &generators),
+                        checked_network(
+                            name_hint,
+                            buses.clone(),
+                            loads.clone(),
+                            bus_shunts.clone(),
+                            branches,
+                            generators.clone(),
+                        ),
+                    );
                 }
             }
+        }
+        if let Some((_, net)) = best {
+            return Some(net);
         }
     }
     None
 }
 
+/// Keep the table chain with the largest decoded electrical core.
+fn keep_best_chain(
+    best: &mut Option<(usize, Result<Network>)>,
+    score: usize,
+    net: Result<Network>,
+) {
+    let candidate_ok = net.is_ok();
+    let replace = match best.as_ref() {
+        None => true,
+        Some((best_score, best_net)) => match (best_net.is_ok(), candidate_ok) {
+            (false, true) => true,
+            (true, false) => false,
+            _ => score > *best_score,
+        },
+    };
+    if replace {
+        *best = Some((score, net));
+    }
+}
+
+/// Score a candidate table chain by decoded element count.
+fn chain_score(
+    loads: &[Load],
+    shunts: &[Shunt],
+    branches: &[Branch],
+    generators: &[Generator],
+) -> usize {
+    loads.len() + shunts.len() + branches.len() + generators.len()
+}
+
+/// Add bus tail shunts without duplicating the dedicated shunt table rows.
+fn extend_unique_shunts(shunts: &mut Vec<Shunt>, extra: &[Shunt]) {
+    for shunt in extra {
+        if !shunts.iter().any(|existing| {
+            existing.bus == shunt.bus
+                && (existing.g - shunt.g).abs() <= 1e-9
+                && (existing.b - shunt.b).abs() <= 1e-9
+        }) {
+            shunts.push(shunt.clone());
+        }
+    }
+}
+
+/// Check whether another generator record starts soon after a candidate table.
+///
+/// This rejects short prefixes when a wrong count word points into the real
+/// generator table.
+fn gen_table_continues(
+    bytes: &[u8],
+    after: usize,
+    bus_ids: &BusIdSet,
+    variants: GenVariants,
+) -> bool {
+    (after..after.saturating_add(RESYNC_WINDOW).min(bytes.len())).any(|p| {
+        (variants.plain && read_gen_record(bytes, p, bus_ids).is_ok())
+            || (variants.reg && read_gen_reg_record(bytes, p, bus_ids).is_ok())
+            || (variants.simple_reg && read_gen_reg_simple_record(bytes, p, bus_ids).is_ok())
+    })
+}
+
+/// Assemble the decoded tables and run the common reference checks.
+fn checked_network(
+    name_hint: Option<&str>,
+    mut buses: Vec<Bus>,
+    loads: Vec<Load>,
+    shunts: Vec<Shunt>,
+    branches: Vec<Branch>,
+    generators: Vec<Generator>,
+) -> Result<Network> {
+    derive_bus_kinds(&mut buses, &generators);
+    let net = Network {
+        name: name_hint.unwrap_or("case").to_string(),
+        base_mva: MVA_BASE,
+        buses,
+        loads,
+        shunts,
+        branches,
+        generators,
+        storage: Vec::new(),
+        hvdc: Vec::new(),
+        source_format: SourceFormat::PowerWorldBinary,
+        source: None,
+    };
+    net.check_references(FMT).map(|()| net)
+}
+
 // ---- Cursor -----------------------------------------------------------------
 
+/// Bounds checked cursor for little endian record probes.
 struct Cur<'a> {
     b: &'a [u8],
     pos: usize,
 }
 
 impl<'a> Cur<'a> {
+    /// Take `n` bytes and advance the cursor.
     fn take(&mut self, n: usize) -> Probe<&'a [u8]> {
-        if self.pos + n > self.b.len() {
-            return Err("truncated record");
-        }
-        let s = &self.b[self.pos..self.pos + n];
-        self.pos += n;
+        let end = self.pos.checked_add(n).ok_or("truncated record")?;
+        let s = self.b.get(self.pos..end).ok_or("truncated record")?;
+        self.pos = end;
         Ok(s)
     }
 
+    /// Read one byte.
     fn u8(&mut self) -> Probe<u8> {
         Ok(self.take(1)?[0])
     }
+    /// Read a little endian u16.
     fn u16(&mut self) -> Probe<u16> {
         Ok(u16::from_le_bytes(self.take(2)?.try_into().unwrap()))
     }
+    /// Read a little endian u32.
     fn u32(&mut self) -> Probe<u32> {
         Ok(u32::from_le_bytes(self.take(4)?.try_into().unwrap()))
     }
+    /// Read a little endian f32 and widen to f64.
     fn f32(&mut self) -> Probe<f64> {
         Ok(f64::from(f32::from_le_bytes(
             self.take(4)?.try_into().unwrap(),
         )))
     }
+    /// Read a little endian f64.
     fn f64(&mut self) -> Probe<f64> {
         Ok(f64::from_le_bytes(self.take(8)?.try_into().unwrap()))
     }
@@ -375,20 +571,71 @@ const BLOB_WINDOW: usize = 4 << 20;
 /// keep blob bytes from forging a record).
 fn resync_end(b: &[u8], after: usize, prev_bit4: bool) -> usize {
     if prev_bit4 {
-        (after + BLOB_WINDOW).min(b.len())
+        after.saturating_add(BLOB_WINDOW).min(b.len())
     } else {
-        after + RESYNC_WINDOW
+        after.saturating_add(RESYNC_WINDOW)
     }
 }
 
+/// True when a probed string is printable ASCII.
 fn printable(s: &[u8]) -> bool {
     s.iter().all(|&c| (0x20..0x7f).contains(&c))
+}
+
+/// Borrow a bounded byte slice at an absolute offset.
+fn slice_at(b: &[u8], at: usize, n: usize) -> Option<&[u8]> {
+    at.checked_add(n).and_then(|end| b.get(at..end))
+}
+
+/// Add an absolute offset without wrapping.
+fn checked_offset(at: usize, add: usize) -> Probe<usize> {
+    at.checked_add(add).ok_or("truncated record")
+}
+
+/// Reject impossible count words before walking a table.
+fn count_fits(b: &[u8], first: usize, count: usize, min_record_len: usize) -> bool {
+    let Some(remaining) = b.len().checked_sub(first) else {
+        return false;
+    };
+    count
+        .checked_mul(min_record_len)
+        .is_some_and(|min_bytes| min_bytes <= remaining)
+}
+
+/// Read a little endian u32 at an absolute offset.
+fn u32_at(b: &[u8], at: usize) -> Probe<u32> {
+    slice_at(b, at, 4)
+        .and_then(|s| <[u8; 4]>::try_from(s).ok())
+        .map(u32::from_le_bytes)
+        .ok_or("truncated record")
+}
+
+/// Read a little endian f32 at an absolute offset and widen to f64.
+fn f32_at(b: &[u8], at: usize) -> Probe<f64> {
+    slice_at(b, at, 4)
+        .and_then(|s| <[u8; 4]>::try_from(s).ok())
+        .map(f32::from_le_bytes)
+        .map(f64::from)
+        .ok_or("truncated record")
+}
+
+/// Read a length prefixed printable ASCII string at an absolute offset.
+fn string_at(b: &[u8], at: usize, max: usize) -> Probe<String> {
+    let n = u32_at(b, at)? as usize;
+    if n > max {
+        return Err("string length exceeds the field maximum");
+    }
+    let s = slice_at(b, checked_offset(at, 4)?, n).ok_or("truncated record")?;
+    if !printable(s) {
+        return Err("string has non printable bytes");
+    }
+    Ok(String::from_utf8_lossy(s).into_owned())
 }
 
 /// Validate the file head and return the writer format constant (the u64 at
 /// offset 0x08) for the layout keying in [`parse_pwb`].
 fn expect_header(b: &[u8]) -> Result<u64> {
-    const DECODED: [u64; 6] = [425, 483, 508, 537, 550, 551];
+    const DECODED: [u64; 9] = [338, 368, 425, 483, 508, 537, 550, 551, 554];
     let bad = || Error::FormatRead {
         format: FMT,
         message: "not a recognized PowerWorld binary case (header magic mismatch); \
@@ -403,30 +650,26 @@ fn expect_header(b: &[u8]) -> Result<u64> {
     if a != 15000 {
         return Err(bad());
     }
-    // Every known PowerWorld binary starts with 15000; the next words
-    // identify the writer. The decoded constants: 425 (2016 through 2019
-    // era record families), 483 (the 2021 Texas7k export, validated by
-    // same day aux parity), 508 (the 2022 Hawaii40 export and the Texas7k
-    // v21 resave, both aux validated), and 551/550/537 (the Texas7k v22,
-    // 2030, and 2030 v22 saves, whose tables walk the same record models
-    // against their aux siblings). Older Simulators use other constants or
-    // a different header shape entirely; those reject here, and a known
-    // constant with unrecognized records still dies at the bus layout gate
-    // below.
+    // Every known PowerWorld binary starts with 15000. The next two words
+    // identify the writer family: the decoded constants cover older 0x06 bus
+    // records (338/368), the Simulator 19/20/current 425 family, the 2021
+    // regulated generator family (483/537/550/551), the mixed 508 saves, and
+    // the 554 regulated generator variant. Header admission is not trust:
+    // every table still has to pass the record probes below.
     if c != 20 || !DECODED.contains(&v) {
         return Err(unsupported_vintage(format!(
             "header format words ({v}, {c}); the decoded eras are \
-             425/483/508/537/550/551 with 20"
+             338/368/425/483/508/537/550/551/554 with 20"
         )));
     }
     Ok(v)
 }
 
 /// Reject files whose leading 64 KiB carries no run of validated bus record
-/// heads, before the table search grinds to a generic "no chain" error. Both
-/// decoded record families share the head layout, so a census over
-/// [`known_bus_flags`] words finding fewer than two heads means an
-/// unrecognized layout, not a sparse case.
+/// heads before the table search reaches a generic "no chain" error. The
+/// decoded bus head families share enough structure that fewer than two
+/// validated heads in this window means an unrecognized body layout, not a
+/// sparse case.
 fn reject_unsupported_vintage(b: &[u8]) -> Result<()> {
     let scan = b.len().min(0x10000).saturating_sub(8);
     let mut heads = 0usize;
@@ -453,8 +696,8 @@ fn unsupported_vintage(detail: impl std::fmt::Display) -> Error {
     Error::FormatRead {
         format: FMT,
         message: format!(
-            "unsupported PowerWorld .pwb vintage: {detail}; only the validated 425/483/508 \
-             era record layouts are decoded (see docs/powerworld.md)"
+            "unsupported PowerWorld .pwb vintage: {detail}; only the validated \
+             338/368/425/483/508/537/550/551/554 layouts are decoded (see docs/powerworld.md)"
         ),
     }
 }
@@ -498,6 +741,7 @@ impl BusIdSet {
         Some(Self::Bitmap(bits))
     }
 
+    /// Check whether a decoded bus id exists.
     #[inline]
     fn contains(&self, id: usize) -> bool {
         match self {
@@ -507,6 +751,18 @@ impl BusIdSet {
             Self::Sparse(ids) => ids.binary_search(&id).is_ok(),
         }
     }
+}
+
+/// Build an uppercase bus name index for records that point by name.
+fn bus_name_map(buses: &[Bus]) -> HashMap<String, BusId> {
+    buses
+        .iter()
+        .filter_map(|bus| {
+            bus.name
+                .as_ref()
+                .map(|name| (name.trim().to_ascii_uppercase(), bus.id))
+        })
+        .collect()
 }
 
 /// The record run from one first record offset: the walk from a given offset
@@ -523,6 +779,7 @@ struct Run<T> {
 }
 
 impl<T: Clone> Run<T> {
+    /// Start a record run with its first validated record.
     fn start(item: T, end: usize) -> Self {
         Run {
             items: vec![item],
@@ -561,6 +818,7 @@ impl<T: Clone> Run<T> {
 
 struct BusHead {
     bus: Bus,
+    shunt: Option<Shunt>,
     /// The flags u32 between name and nominal kV: a Delphi field presence
     /// bitmask, not a per file constant. Bit 5 set marks the Simulator 20
     /// era record family (clear on the Simulator 19 era 0x06/0x07 family,
@@ -575,29 +833,26 @@ struct BusHead {
 }
 
 /// Whether a bus record flag word is one this reader decodes: base bits
-/// `0x06` plus any combination of bits 0, 4, 5, 6, and 8 (see
-/// [`BusHead::unk`]); the census table in docs/powerworld.md records the
-/// observed words. Bits 6 and 8 are the 2019+ era writers' additions; both
-/// leave the head layout untouched (their fields live in the tails the
-/// resync skips), proven by full value parity on the ACTIVSg500 and
-/// published ACTIVSg2000 exports.
+/// `0x06` plus any combination of the observed presence bits. Bit 5 changes
+/// the tail family (`0x06` vs `0x26` era), while bits 6, 8, 10, 12, and 13
+/// were admitted only after full table walks showed they leave the decoded
+/// head layout unchanged.
 fn known_bus_flags(unk: u32) -> bool {
-    unk & !0x171 == 0x06
+    unk & !0x3571 == 0x06
 }
 
-/// The record family bits of a bus flag word: everything but the per record
-/// presence bits 0, 4, 6, and 8. One file's bus table never mixes families.
-/// Bit 6 was a file constant in every export until the Texas7k v21 resave,
-/// which clears it on exactly one record (the slack bus, whose tail lacks
-/// the location string block the other records carry), so it is a per
-/// record presence bit like 0, 4, and 8.
+/// The record family bits of a bus flag word. One bus table cannot mix tail
+/// families, but individual records can toggle optional presence bits inside
+/// a family. Bit 5 stays in the family key because the 0x06 and 0x26 era tails
+/// differ; the other admitted bits are per record fields or skipped tails.
 fn bus_family(unk: u32) -> u32 {
-    unk & !0x151
+    unk & !0x3551
 }
 
 /// The bus run cache: keyed by first record offset, each entry carrying the
 /// walked `(bus, flag word)` records and the table's family bits.
-type BusRuns = HashMap<usize, (Run<(Bus, u32)>, u32)>;
+type BusRunItem = (Bus, u32, Option<Shunt>);
+type BusRuns = HashMap<usize, (Run<BusRunItem>, u32)>;
 
 /// Bus table candidates: each `(count, glue)` position after the header whose
 /// record walk succeeds, in scan order, yielding the records, the offset
@@ -608,7 +863,7 @@ fn bus_table_candidates<'a>(
     b: &'a [u8],
     runs: &'a RefCell<BusRuns>,
     wide_glue: bool,
-) -> impl Iterator<Item = (Vec<Bus>, usize, u32)> + 'a {
+) -> impl Iterator<Item = (Vec<Bus>, Vec<Shunt>, usize, u32)> + 'a {
     let limit = b.len().saturating_sub(4).min(0x10000);
     (0x20..limit).flat_map(move |at| {
         let count = u32::from_le_bytes(b[at..at + 4].try_into().unwrap()) as usize;
@@ -631,11 +886,26 @@ fn bus_table_candidates<'a>(
         glues
             .into_iter()
             .flatten()
-            .filter_map(move |glue| bus_run(b, runs, at + 4 + glue, count))
+            .filter_map(move |glue| {
+                let first = at.checked_add(4)?.checked_add(glue)?;
+                count_fits(b, first, count, 32)
+                    .then(|| bus_run(b, runs, first, count))
+                    .flatten()
+            })
             .map(|(heads, end)| {
-                let last_unk = heads.last().map_or(0, |(_, unk)| *unk);
+                let last_unk = heads.last().map_or(0, |(_, unk, _)| *unk);
+                let shunts = heads
+                    .iter()
+                    .filter_map(|(bus, _, shunt)| {
+                        shunt.clone().map(|mut shunt| {
+                            shunt.bus = bus.id;
+                            shunt
+                        })
+                    })
+                    .collect();
                 (
-                    heads.into_iter().map(|(bus, _)| bus).collect(),
+                    heads.into_iter().map(|(bus, _, _)| bus).collect(),
+                    shunts,
                     end,
                     last_unk,
                 )
@@ -654,7 +924,7 @@ fn bus_run(
     runs: &RefCell<BusRuns>,
     first: usize,
     count: usize,
-) -> Option<(Vec<(Bus, u32)>, usize)> {
+) -> Option<(Vec<BusRunItem>, usize)> {
     let mut map = runs.borrow_mut();
     let (run, family) = match map.entry(first) {
         Entry::Occupied(e) => e.into_mut(),
@@ -664,7 +934,7 @@ fn bus_run(
         Entry::Vacant(e) => {
             let (head, end) = read_bus_head(b, first).ok()?;
             let family = bus_family(head.unk);
-            e.insert((Run::start((head.bus, head.unk), end), family))
+            e.insert((Run::start((head.bus, head.unk, head.shunt), end), family))
         }
     };
     let family = *family;
@@ -676,14 +946,15 @@ fn bus_run(
             read_bus_head(b, p)
                 .ok()
                 .filter(|(h, _)| bus_family(h.unk) == family)
-                .map(|(h, end)| ((h.bus, h.unk), end))
+                .map(|(h, end)| ((h.bus, h.unk, h.shunt), end))
         })
     })
 }
 
-/// Parse one bus record head at `at`; everything through the voltage angle
-/// (the head layout both record families share). Returns the parsed bus and
-/// leaves undecoded tail bytes, including the bit 4 list, to the resync.
+/// Parse one bus record head at `at`; everything through the voltage angle.
+/// Header 338 and some small header 425 saves omit the balancing authority
+/// field between zone and label. Returns the parsed bus and leaves undecoded
+/// tail bytes, including the bit 4 list, to the resync.
 fn read_bus_head(b: &[u8], at: usize) -> Probe<(BusHead, usize)> {
     let mut c = Cur { b, pos: at };
     let num = c.u32()? as usize;
@@ -717,13 +988,27 @@ fn read_bus_head(b: &[u8], at: usize) -> Probe<(BusHead, usize)> {
     }
     let area = c.u32()? as usize;
     let zone = c.u32()? as usize;
-    let ba = c.u32()?;
-    if area > 100_000_000 || zone > 100_000_000 || ba > 100_000_000 {
+    if area > 100_000_000 || zone > 100_000_000 {
         return Err("implausible area/zone/BA number");
     }
-    let _label = c.string(64)?;
-    let vm = c.f64()?;
-    let va_rad = c.f64()?;
+    let after_zone = c.pos;
+    let mut with_ba = Cur { b, pos: after_zone };
+    let with_ba_result = (|| -> Probe<(f64, f64)> {
+        let ba = with_ba.u32()?;
+        if ba > 100_000_000 {
+            return Err("implausible area/zone/BA number");
+        }
+        read_bus_label_and_solution(&mut with_ba)
+    })();
+    let (vm, va_rad) = if let Ok(solution) = with_ba_result {
+        c.pos = with_ba.pos;
+        solution
+    } else {
+        let mut old = Cur { b, pos: after_zone };
+        let solution = read_bus_label_and_solution(&mut old)?;
+        c.pos = old.pos;
+        solution
+    };
     if !vm.is_finite() || !(0.0..=10.0).contains(&vm) || !va_rad.is_finite() || va_rad.abs() > 100.0
     {
         return Err("implausible voltage solution");
@@ -741,7 +1026,47 @@ fn read_bus_head(b: &[u8], at: usize) -> Probe<(BusHead, usize)> {
         name: Some(String::from_utf8_lossy(name).into_owned()),
         extras: Extras::new(),
     };
-    Ok((BusHead { bus, unk }, c.pos))
+    let shunt = bus_tail_shunt(b, c.pos, BusId(num));
+    Ok((BusHead { bus, shunt, unk }, c.pos))
+}
+
+/// Decode the optional fixed shunt stored in some bus record tails.
+fn bus_tail_shunt(b: &[u8], after_head: usize, bus: BusId) -> Option<Shunt> {
+    let g_pu = b
+        .get(after_head.checked_add(1)?..after_head.checked_add(5)?)
+        .and_then(|s| <[u8; 4]>::try_from(s).ok())
+        .map(f32::from_le_bytes)
+        .map(f64::from)
+        .filter(|g| g.is_finite() && g.abs() <= 1.0e6)
+        .unwrap_or(0.0);
+    let b_pu = b
+        .get(after_head.checked_add(5)?..after_head.checked_add(9)?)
+        .and_then(|s| <[u8; 4]>::try_from(s).ok())
+        .map(f32::from_le_bytes)
+        .map(f64::from)?;
+    if !b_pu.is_finite() || b_pu.abs() > 1.0e6 || (g_pu.abs() <= 1e-9 && b_pu.abs() <= 1e-9) {
+        return None;
+    }
+    let mut extras = Extras::new();
+    extras.insert(
+        "ShuntID".into(),
+        serde_json::Value::String("BusShunt".into()),
+    );
+    Some(Shunt {
+        bus,
+        g: g_pu * MVA_BASE,
+        b: b_pu * MVA_BASE,
+        in_service: true,
+        extras,
+    })
+}
+
+/// Read the bus label plus solved voltage magnitude and angle.
+fn read_bus_label_and_solution(c: &mut Cur<'_>) -> Probe<(f64, f64)> {
+    let _label = c.string(64)?;
+    let vm = c.f64()?;
+    let va_rad = c.f64()?;
+    Ok((vm, va_rad))
 }
 
 // ---- Device tables (loads, generators, shunts) -------------------------------
@@ -777,14 +1102,17 @@ fn read_device_head<T>(
     Ok((v, c.pos))
 }
 
+/// Probe one load record using the shared device head.
 fn read_load_record(b: &[u8], at: usize, bus_ids: &BusIdSet) -> Probe<(Load, usize)> {
     read_device_head(b, at, bus_ids, read_load)
 }
 
+/// Probe one plain generator record using the shared device head.
 fn read_gen_record(b: &[u8], at: usize, bus_ids: &BusIdSet) -> Probe<(Generator, usize)> {
     read_device_head(b, at, bus_ids, read_gen)
 }
 
+/// Probe one switched shunt record using the shared device head.
 fn read_shunt_record(b: &[u8], at: usize, bus_ids: &BusIdSet) -> Probe<(Shunt, usize)> {
     read_device_head(b, at, bus_ids, read_shunt)
 }
@@ -799,15 +1127,18 @@ fn device_table_candidates<'a, T: Clone + 'a>(
     read: impl ReadRecord<T> + 'a,
     runs: &'a RefCell<HashMap<usize, Run<T>>>,
     max_glue: usize,
+    min_record_len: usize,
 ) -> impl Iterator<Item = (Vec<T>, usize)> + 'a {
     let limit = scan.end.min(b.len().saturating_sub(4));
     (scan.start..limit).flat_map(move |at| {
         let count = u32::from_le_bytes(b[at..at + 4].try_into().unwrap()) as usize;
         let glues = (count != 0 && count <= 10_000_000).then_some(0..=max_glue);
-        glues
-            .into_iter()
-            .flatten()
-            .filter_map(move |glue| device_run(b, runs, at + 4 + glue, count, bus_ids, read))
+        glues.into_iter().flatten().filter_map(move |glue| {
+            let first = at.checked_add(4)?.checked_add(glue)?;
+            count_fits(b, first, count, min_record_len)
+                .then(|| device_run(b, runs, first, count, bus_ids, read))
+                .flatten()
+        })
     })
 }
 
@@ -832,7 +1163,8 @@ fn device_run<T: Clone>(
     };
     run.prefix(count, |after, _| {
         // The undecoded record tail separates this record from the next.
-        (after..after + RESYNC_WINDOW).find_map(|p| read(b, p, bus_ids).ok())
+        (after..after.saturating_add(RESYNC_WINDOW).min(b.len()))
+            .find_map(|p| read(b, p, bus_ids).ok())
     })
 }
 
@@ -841,9 +1173,32 @@ fn device_run<T: Clone>(
 /// era one while both auxes say every load is Closed, so it is not a status
 /// byte; loads read as in service (see the module docs).
 fn read_load(c: &mut Cur, bus: BusId, id: &[u8]) -> Probe<Load> {
-    let _flag = c.u8()?;
-    let p = c.f32()? * MVA_BASE;
-    let q = c.f32()? * MVA_BASE;
+    let record_start = c.pos - (4 + 1) - id.len(); // u32 bus + the ID length byte
+    let flag = c.u8()?;
+    if flag > 1 {
+        return Err("load status byte not in the validated set");
+    }
+    let mut p = c.f32()? * MVA_BASE;
+    let mut q = c.f32()? * MVA_BASE;
+    let mut in_service = true;
+    if flag == 0 && p.abs() < 1e-30 && q.abs() < 1e-30 {
+        let early_p = f32_at(c.b, checked_offset(record_start, 25)?)? * MVA_BASE;
+        let early_q = f32_at(c.b, checked_offset(record_start, 29)?)? * MVA_BASE;
+        let late_p = f32_at(c.b, checked_offset(record_start, 33)?)? * MVA_BASE;
+        let late_q = f32_at(c.b, checked_offset(record_start, 37)?)? * MVA_BASE;
+        let early_is_marker = (early_p - MVA_BASE).abs() <= 1e-6 && early_q.abs() <= 1e-30;
+        let (alt_p, alt_q, end) = if early_is_marker {
+            (late_p, late_q, checked_offset(record_start, 41)?)
+        } else {
+            (early_p, early_q, checked_offset(record_start, 33)?)
+        };
+        if alt_p.abs() > 1e-30 || alt_q.abs() > 1e-30 {
+            p = alt_p;
+            q = alt_q;
+            in_service = !early_is_marker;
+        }
+        c.pos = c.pos.max(end);
+    }
     if !p.is_finite() || !q.is_finite() || p.abs() > 1.0e6 || q.abs() > 1.0e6 {
         return Err("implausible load power");
     }
@@ -856,7 +1211,7 @@ fn read_load(c: &mut Cur, bus: BusId, id: &[u8]) -> Probe<Load> {
         bus,
         p,
         q,
-        in_service: true,
+        in_service,
         extras,
     })
 }
@@ -878,7 +1233,7 @@ fn read_gen(c: &mut Cur, bus: BusId, id: &[u8]) -> Probe<Generator> {
     for anchor in [9usize, 10, 11, 12] {
         let mut probe = Cur {
             b: c.b,
-            pos: record_start + anchor,
+            pos: checked_offset(record_start, anchor)?,
         };
         if let Ok(vals) = read_gen_f32_block(&mut probe) {
             chosen = Some((vals, probe.pos));
@@ -986,6 +1341,36 @@ fn read_gen_reg_record(b: &[u8], at: usize, bus_ids: &BusIdSet) -> Probe<(Genera
         let _ = c.u8()?;
     }
     let v = read_gen_f32_block(&mut c)?;
+    read_gen_reg_tail(&mut c, bus, &v)
+}
+
+/// Header 554 regulated generator record: terminal bus, regulated bus,
+/// fixed capacity ID, two zero bytes, then the shared f32 block and the
+/// same status/RMPCT tail as [`read_gen_reg_record`].
+fn read_gen_reg_simple_record(
+    b: &[u8],
+    at: usize,
+    bus_ids: &BusIdSet,
+) -> Probe<(Generator, usize)> {
+    let mut c = Cur { b, pos: at };
+    let bus = c.u32()? as usize;
+    if !bus_ids.contains(bus) {
+        return Err("record references an unknown bus");
+    }
+    let reg = c.u32()? as usize;
+    if !bus_ids.contains(reg) {
+        return Err("regulated bus is not a known bus");
+    }
+    let _id = c.short_string_2()?;
+    if c.u8()? != 0 || c.u8()? != 0 {
+        return Err("generator record separator bytes not zero");
+    }
+    let v = read_gen_f32_block(&mut c)?;
+    read_gen_reg_tail(&mut c, bus, &v)
+}
+
+/// Read the status and RMPCT tail shared by regulated generator records.
+fn read_gen_reg_tail(c: &mut Cur<'_>, bus: usize, v: &[f64; 8]) -> Probe<(Generator, usize)> {
     if c.u8()? != 0 {
         return Err("generator record separator byte not zero");
     }
@@ -997,7 +1382,7 @@ fn read_gen_reg_record(b: &[u8], at: usize, bus_ids: &BusIdSet) -> Probe<(Genera
     if !rmpct.is_finite() || !(0.0..=1000.0).contains(&rmpct) {
         return Err("implausible remote regulation percentage");
     }
-    Ok((gen_from_block(BusId(bus), &v, status & 1 == 1), c.pos))
+    Ok((gen_from_block(BusId(bus), v, status & 1 == 1), c.pos))
 }
 
 /// Shunt record: nominal MVAr as f32 at +24 from the record start, validated
@@ -1008,7 +1393,7 @@ fn read_shunt(c: &mut Cur, bus: BusId, id: &[u8]) -> Probe<Shunt> {
     let record_start = c.pos - (4 + 1) - id.len(); // u32 bus + the ID length byte
     let mut probe = Cur {
         b: c.b,
-        pos: record_start + 24,
+        pos: checked_offset(record_start, 24)?,
     };
     let b_mvar = probe.f32()? * MVA_BASE;
     if !b_mvar.is_finite() || b_mvar.abs() > 1.0e6 {
@@ -1034,7 +1419,7 @@ fn read_shunt(c: &mut Cur, bus: BusId, id: &[u8]) -> Probe<Shunt> {
 // ---- Branch table ------------------------------------------------------------
 
 /// Whether a branch record flag word is one this reader decodes: base bits
-/// `0x6C` plus any combination of bits 0, 1, 4, and 7, a Delphi field
+/// `0x4C` plus any combination of bits 0, 1, 4, 5, and 7, a Delphi field
 /// presence bitmask like the bus record's. Bit 0 set omits
 /// the circuit ID string and its status byte (the PowerWorld default " 1"
 /// applies), bit 1 set means two inline rating slots instead of three
@@ -1050,11 +1435,12 @@ fn read_shunt(c: &mut Cur, bus: BusId, id: &[u8]) -> Probe<Shunt> {
 /// bit 7 clear records invisible to the table end check and a forged
 /// short table can win.
 /// Observed words: 0xEC/0xFC (2016), 0xEE/0xEF (2018 and v19), 0xFE/0xFF
-/// (v19), 0x6C and 0xEC/0xED (Texas7k); other combinations of the same
-/// bits are admitted by the bit logic and guarded by the structural
-/// anchors in [`read_branch_head`].
+/// (v19), 0x6C and 0xEC/0xED (Texas7k), 0xCE on the Australian series
+/// capacitor records, and the same families with bits 10 or 14 set in the
+/// Kundur save. Other combinations of the same bits are admitted by the bit
+/// logic and guarded by the structural anchors in [`read_branch_head`].
 fn known_branch_flags(flags: u16) -> bool {
-    flags & !0x93 == 0x006C
+    flags & !0x44B3 == 0x004C
 }
 
 /// Locate and walk the branch table after `from`: the first `(count, glue)`
@@ -1065,11 +1451,15 @@ fn find_branch_table(
     b: &[u8],
     from: usize,
     bus_ids: &BusIdSet,
+    bus_names: &HashMap<String, BusId>,
     runs: &RefCell<HashMap<usize, Run<(Branch, u16)>>>,
+    count_can_include_trailer: bool,
 ) -> Option<Vec<Branch>> {
     // The gap between the shunt table end and the branch count word can
     // exceed one resync window; two cover every observed file.
-    let limit = (from + RESYNC_WINDOW * 2).min(b.len().saturating_sub(4));
+    let limit = from
+        .saturating_add(RESYNC_WINDOW * 2)
+        .min(b.len().saturating_sub(4));
     for at in from..limit {
         let count = u32::from_le_bytes(b[at..at + 4].try_into().unwrap()) as usize;
         if count == 0 || count > 10_000_000 {
@@ -1077,21 +1467,32 @@ fn find_branch_table(
         }
         // The branch table glue is longer than the device tables'; scan a
         // window after the count for the first record.
-        let Some(first) =
-            (at + 4..(at + 64).min(b.len())).find(|&p| read_branch_head(b, p, bus_ids).is_ok())
+        let Some(first) = (at.saturating_add(4)..at.saturating_add(64).min(b.len()))
+            .find(|&p| read_branch_head(b, p, bus_ids, bus_names).is_ok())
         else {
             continue;
         };
-        if let Some((branches, after)) = branch_run(b, runs, first, count, bus_ids) {
-            // The end check must step exactly like the run: a bit 4 tail on
-            // the last record can hold more than one window of blob, and a
-            // forged short count ending on such a record would otherwise
-            // read as "no further record" and win.
-            let last_bit4 = branches.last().is_some_and(|(_, flags)| flags & 0x10 != 0);
-            let continues = (after..resync_end(b, after, last_bit4))
-                .any(|p| read_branch_head(b, p, bus_ids).is_ok());
-            if !continues {
-                return Some(branches.into_iter().map(|(br, _)| br).collect());
+        let counts = [
+            Some(count),
+            (count_can_include_trailer && count > 1).then_some(count - 1),
+        ];
+        for effective_count in counts.into_iter().flatten() {
+            if !count_fits(b, at.saturating_add(4), effective_count, 24) {
+                continue;
+            }
+            if let Some((branches, after)) =
+                branch_run(b, runs, first, effective_count, bus_ids, bus_names)
+            {
+                // The end check must step exactly like the run: a bit 4 tail on
+                // the last record can hold more than one window of blob, and a
+                // forged short count ending on such a record would otherwise
+                // read as "no further record" and win.
+                let last_bit4 = branches.last().is_some_and(|(_, flags)| flags & 0x10 != 0);
+                let continues = (after..resync_end(b, after, last_bit4))
+                    .any(|p| read_branch_head(b, p, bus_ids, bus_names).is_ok());
+                if !continues {
+                    return Some(branches.into_iter().map(|(br, _)| br).collect());
+                }
             }
         }
     }
@@ -1107,13 +1508,14 @@ fn branch_run(
     first: usize,
     count: usize,
     bus_ids: &BusIdSet,
+    bus_names: &HashMap<String, BusId>,
 ) -> Option<(Vec<(Branch, u16)>, usize)> {
     let mut map = runs.borrow_mut();
     let run = match map.entry(first) {
         Entry::Occupied(e) => e.into_mut(),
         // A failed head parse is not cached, as in the sibling run lookups.
         Entry::Vacant(e) => {
-            let (br, end, flags) = read_branch_head(b, first, bus_ids).ok()?;
+            let (br, end, flags) = read_branch_head(b, first, bus_ids, bus_names).ok()?;
             e.insert(Run::start((br, flags), end))
         }
     };
@@ -1121,7 +1523,7 @@ fn branch_run(
         // The undecoded record tail separates this record from the next;
         // find the next head by bounded scan (see resync_end).
         (after..resync_end(b, after, prev.1 & 0x10 != 0)).find_map(|p| {
-            read_branch_head(b, p, bus_ids)
+            read_branch_head(b, p, bus_ids, bus_names)
                 .ok()
                 .map(|(br, end, flags)| ((br, flags), end))
         })
@@ -1136,10 +1538,25 @@ fn branch_run(
 /// tag and the zero byte are structural anchors: an unobserved variant
 /// shifts them and dies loudly instead of misreading.
 #[allow(clippy::many_single_char_names)] // r, x, b are the domain names
-fn read_branch_head(b: &[u8], at: usize, bus_ids: &BusIdSet) -> Probe<(Branch, usize, u16)> {
+fn read_branch_head(
+    b: &[u8],
+    at: usize,
+    bus_ids: &BusIdSet,
+    bus_names: &HashMap<String, BusId>,
+) -> Probe<(Branch, usize, u16)> {
+    read_step_up_transformer_head(b, at, bus_ids, bus_names)
+        .or_else(|_| read_standard_branch_head(b, at, bus_ids))
+}
+
+#[allow(clippy::many_single_char_names)] // r, x, b are the domain names
+fn read_standard_branch_head(
+    b: &[u8],
+    at: usize,
+    bus_ids: &BusIdSet,
+) -> Probe<(Branch, usize, u16)> {
     let mut c = Cur { b, pos: at };
-    let from = c.u32()? as usize;
-    let to = c.u32()? as usize;
+    let from = branch_endpoint(&mut c)?;
+    let to = branch_endpoint(&mut c)?;
     if !bus_ids.contains(from) || !bus_ids.contains(to) || from == to {
         return Err("branch references unknown buses");
     }
@@ -1172,32 +1589,12 @@ fn read_branch_head(b: &[u8], at: usize, bus_ids: &BusIdSet) -> Probe<(Branch, u
         }
         *slot = v * MVA_BASE;
     }
+    let tail_start = c.pos;
     let tag = c.u32()?;
-    if tag != 12 {
-        return Err("branch rating block tag not 12; unvalidated .pwb branch variant");
-    }
-    for _ in 0..11 {
-        let v = c.f32()?;
-        if !v.is_finite() || v.abs() > 1.0e6 {
-            return Err("implausible branch rating block value");
-        }
-    }
-    if c.u8()? != 0 {
-        return Err("branch record separator byte not zero");
-    }
-    let kind = c.u8()?;
-    let (device, tap) = match kind {
-        0x01 => ("Line", 0.0),
-        0x00 => {
-            let tap = c.f32()?;
-            if !tap.is_finite() || !(0.2..=5.0).contains(&tap) {
-                return Err("implausible transformer tap");
-            }
-            ("Transformer", tap)
-        }
-        _ => {
-            return Err("branch kind marker not in the validated set");
-        }
+    let (device, tap) = match tag {
+        12 => read_modern_branch_tail(&mut c)?,
+        5 => read_legacy_branch_tail(&mut c, tail_start)?,
+        _ => return Err("branch tail tag not in the validated set"),
     };
     let mut extras = Extras::new();
     extras.insert(
@@ -1233,4 +1630,183 @@ fn read_branch_head(b: &[u8], at: usize, bus_ids: &BusIdSet) -> Probe<(Branch, u
         extras,
     };
     Ok((br, c.pos, flags))
+}
+
+/// Read a signed branch endpoint. Some saves store a negative endpoint for
+/// orientation metadata; the network bus id is the positive magnitude.
+fn branch_endpoint(c: &mut Cur<'_>) -> Probe<usize> {
+    let raw = i32::from_le_bytes(c.take(4)?.try_into().unwrap());
+    raw.checked_abs()
+        .and_then(|id| (id > 0).then_some(id as usize))
+        .ok_or("invalid branch endpoint")
+}
+
+/// Probe the fixed-layout generator step-up transformer records found in the
+/// Australian cases. They do not use the normal branch head, so this reader
+/// keeps them behind a separate probe with several anchors: known high side
+/// bus, 100 MVA nominal marker, plausible device X/MBASE fields, "STEP UP" in
+/// the name, and a low side bus named `GEN <unit>`.
+fn read_step_up_transformer_head(
+    b: &[u8],
+    at: usize,
+    bus_ids: &BusIdSet,
+    bus_names: &HashMap<String, BusId>,
+) -> Probe<(Branch, usize, u16)> {
+    if at < 8 {
+        return Err("step up transformer anchor before record");
+    }
+    let from = u32_at(b, at)? as usize;
+    if !bus_ids.contains(from) {
+        return Err("step up transformer high side bus is unknown");
+    }
+    let nominal = f32_at(b, at - 8)?;
+    if !nominal.is_finite() || (nominal - 100.0).abs() > 1e-3 {
+        return Err("step up transformer nominal anchor missing");
+    }
+    let x_device = f32_at(b, checked_offset(at, 17)?)?;
+    let mbase = f32_at(b, checked_offset(at, 197)?)?;
+    if !x_device.is_finite()
+        || !(0.0..=100.0).contains(&x_device)
+        || !mbase.is_finite()
+        || !(0.1..=1.0e5).contains(&mbase)
+    {
+        return Err("step up transformer impedance anchor missing");
+    }
+    let name_at = checked_offset(at, 356)?;
+    let name = string_at(b, name_at, 64)?;
+    let Some(gen_name) = name.split_whitespace().next() else {
+        return Err("step up transformer name is empty");
+    };
+    if !name.to_ascii_uppercase().contains("STEP UP") {
+        return Err("step up transformer name anchor missing");
+    }
+    let to = bus_names
+        .get(&format!("GEN {}", gen_name.to_ascii_uppercase()))
+        .copied()
+        .ok_or("step up transformer low side bus is unknown")?;
+    if to.0 == from {
+        return Err("step up transformer has identical endpoints");
+    }
+    let mut extras = Extras::new();
+    extras.insert(LINE_CIRCUIT.into(), serde_json::Value::String(" 1".into()));
+    extras.insert(
+        BRANCH_DEVICE_TYPE.into(),
+        serde_json::Value::String("Transformer".into()),
+    );
+    let br = Branch {
+        from: BusId(from),
+        to,
+        r: 0.0,
+        x: x_device * mbase / MVA_BASE,
+        b: 0.0,
+        rate_a: 0.0,
+        rate_b: 0.0,
+        rate_c: 0.0,
+        tap: 1.0,
+        shift: 0.0,
+        in_service: true,
+        angmin: -360.0,
+        angmax: 360.0,
+        extras,
+    };
+    Ok((
+        br,
+        checked_offset(checked_offset(name_at, 4)?, name.len())?,
+        0,
+    ))
+}
+
+/// Read the modern branch tail after the common electrical head. The tail is
+/// a rating block, separator byte, and kind marker; kind 1 is a line, kind 0
+/// is a transformer followed by the tap.
+fn read_modern_branch_tail(c: &mut Cur<'_>) -> Probe<(&'static str, f64)> {
+    for _ in 0..11 {
+        let v = c.f32()?;
+        if !v.is_finite() || v.abs() > 1.0e6 {
+            return Err("implausible branch rating block value");
+        }
+    }
+    if c.u8()? != 0 {
+        return Err("branch record separator byte not zero");
+    }
+    match c.u8()? {
+        0x01 => Ok(("Line", 0.0)),
+        0x00 => {
+            let tap = c.f32()?;
+            if !tap.is_finite() || !(0.2..=5.0).contains(&tap) {
+                return Err("implausible transformer tap");
+            }
+            Ok(("Transformer", tap))
+        }
+        _ => Err("branch kind marker not in the validated set"),
+    }
+}
+
+/// Read the older short branch tail. These saves do not carry the modern kind
+/// marker, so transformer detection uses the validated zero marker block plus
+/// a plausible non-unit tap at the observed tail offset.
+fn read_legacy_branch_tail(c: &mut Cur<'_>, tail_start: usize) -> Probe<(&'static str, f64)> {
+    for _ in 0..4 {
+        if c.u32()? != 0 {
+            return Err("legacy branch tail marker is not zero filled");
+        }
+    }
+    let tap = tail_start
+        .checked_add(22)
+        .and_then(|at| slice_at(c.b, at, 4))
+        .and_then(|s| <[u8; 4]>::try_from(s).ok())
+        .map_or(0.0, |raw| f64::from(f32::from_le_bytes(raw)));
+    if tap.is_finite() && (0.2..=5.0).contains(&tap) && (tap - 1.0).abs() > 1e-6 {
+        Ok(("Transformer", tap))
+    } else {
+        Ok(("Line", 0.0))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn empty_network(name: &str) -> Network {
+        Network {
+            name: name.to_string(),
+            base_mva: MVA_BASE,
+            buses: Vec::new(),
+            loads: Vec::new(),
+            shunts: Vec::new(),
+            branches: Vec::new(),
+            generators: Vec::new(),
+            storage: Vec::new(),
+            hvdc: Vec::new(),
+            source_format: SourceFormat::PowerWorldBinary,
+            source: None,
+        }
+    }
+
+    #[test]
+    fn best_chain_prefers_valid_chain_over_higher_scoring_error() {
+        let mut best = None;
+        keep_best_chain(&mut best, 100, Err(unsupported_vintage("bad candidate")));
+        keep_best_chain(&mut best, 1, Ok(empty_network("valid")));
+
+        let (_, net) = best.unwrap();
+        assert!(net.is_ok());
+    }
+
+    #[test]
+    fn alternate_load_record_reads_late_p_and_q() {
+        let mut bytes = vec![0u8; 41];
+        bytes[6] = 0;
+        bytes[25..29].copy_from_slice(&1.0f32.to_le_bytes());
+        bytes[29..33].copy_from_slice(&0.0f32.to_le_bytes());
+        bytes[33..37].copy_from_slice(&0.5f32.to_le_bytes());
+        bytes[37..41].copy_from_slice(&0.25f32.to_le_bytes());
+
+        let mut c = Cur { b: &bytes, pos: 6 };
+        let load = read_load(&mut c, BusId(1), b"1").unwrap();
+
+        assert!((load.p - 50.0).abs() < 1e-9);
+        assert!((load.q - 25.0).abs() < 1e-9);
+        assert_eq!(c.pos, 41);
+    }
 }

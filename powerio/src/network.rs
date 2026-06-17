@@ -125,7 +125,7 @@ impl GenCost {
     }
 }
 
-/// Which format a [`Network`] was read from. Drives the same-format byte-exact
+/// Which format a [`Network`] was read from. Drives the same format byte exact
 /// echo on write.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[non_exhaustive]
@@ -136,22 +136,25 @@ pub enum SourceFormat {
     Psse,
     PowerWorld,
     PandapowerJson,
+    /// Read from a GE PSLF `.epc` case. Read only: same source text is
+    /// retained for auditability, but there is no canonical PSLF writer.
+    Pslf,
     /// Read from a PowerWorld `.pwb` binary case. Read only: there is no
     /// `.pwb` writer and no retained source text, so writing goes through
     /// another format's writer.
     PowerWorldBinary,
-    /// Built in memory (e.g. from synth or an edited case); no source text.
+    /// Built in memory, for example from synth or an edited case; no source text.
     InMemory,
     /// A normalized derived view ([`Network::to_normalized`]): per unit, radians,
     /// filtered, source bus ids preserved. Distinct from
-    /// [`InMemory`](SourceFormat::InMemory) so consumers can tell a per-unit
-    /// product from a raw in-memory network; it has no source text and a different
+    /// [`InMemory`](SourceFormat::InMemory) so consumers can tell a per unit
+    /// product from a raw in memory network; it has no source text and a different
     /// unit basis than a parsed network.
     Normalized,
     /// Read back from a gridfm-datakit Parquet dataset (the ML→classical bridge,
-    /// `powerio-matrix`'s `read_gridfm_dataset`). A lossy, power-flow-complete
+    /// `powerio-matrix`'s `read_gridfm_dataset`). A lossy, power flow complete
     /// reconstruction with no retained source text: original bus ids are
-    /// synthesized `1..n`, per-element load/shunt granularity is folded to one
+    /// synthesized `1..n`, per element load/shunt granularity is folded to one
     /// synthetic element per bus, and HVDC/storage/piecewise costs are absent.
     Gridfm,
     /// Read from a PyPSA CSV folder. This is a folder format rather than a
