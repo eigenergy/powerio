@@ -138,6 +138,34 @@ fn pslf_write_reports_dropped_transformer_control() {
 }
 
 #[test]
+fn pslf_write_reports_dropped_generator_regulated_bus() {
+    // A PSS/E generator regulating a remote bus (IREG ≠ its own) carries a target
+    // the .epc generator record can't express, so the writer must report the loss.
+    let raw = "0, 100.00, 33, 0, 0, 60.00 / x\nCASE\nCOMMENT\n\
+        1,'B1          ', 230.0,3,1,1,1,1.0,0.0,1.1,0.9,1.1,0.9\n\
+        2,'B2          ', 18.0,2,1,1,1,1.0,0.0,1.1,0.9,1.1,0.9\n\
+        7,'B7          ', 230.0,1,1,1,1,1.0,0.0,1.1,0.9,1.1,0.9\n\
+        0 / END OF BUS DATA, BEGIN LOAD DATA\n\
+        0 / END OF LOAD DATA, BEGIN FIXED SHUNT DATA\n\
+        0 / END OF FIXED SHUNT DATA, BEGIN GENERATOR DATA\n\
+        2,'1', 50.0, 5.0, 30.0, -20.0, 1.02, 7, 100.0, 0, 1, 0, 0, 1, 1, 100.0, 80.0, 0.0, 1, 1\n\
+        0 / END OF GENERATOR DATA, BEGIN BRANCH DATA\n\
+        0 / END OF BRANCH DATA, BEGIN TRANSFORMER DATA\n\
+        0 / END OF TRANSFORMER DATA, BEGIN AREA DATA\nQ\n";
+    let net = parse_psse(raw).unwrap();
+    assert_eq!(net.generators[0].regulated_bus, Some(powerio::BusId(7)));
+
+    let conv = write_pslf(&net);
+    assert!(
+        conv.warnings
+            .iter()
+            .any(|w| w.contains("remote regulated bus")),
+        "expected a regulated-bus-drop warning, got {:?}",
+        conv.warnings
+    );
+}
+
+#[test]
 fn pslf_reads_and_writes_a_three_winding_transformer() {
     let net = parse_pslf(EPC_3W).unwrap();
     assert_eq!(net.transformers_3w.len(), 1, "the tertiary record was read");

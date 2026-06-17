@@ -1368,6 +1368,19 @@ pub fn write_pslf(net: &Network) -> Conversion {
     if net.generators.iter().any(|g| g.cost.is_some()) {
         warnings.push("generator cost curves dropped: PSLF .epc carries no cost data".into());
     }
+    // The generator record this writer emits regulates the unit's own terminal, so
+    // a generator pointing at a remote regulated bus loses that target.
+    let dropped_reg = net
+        .generators
+        .iter()
+        .filter(|g| g.regulated_bus.is_some())
+        .count();
+    if dropped_reg > 0 {
+        warnings.push(format!(
+            "{dropped_reg} generator(s) lost their remote regulated bus: the PSLF .epc generator \
+             record this writer emits controls the unit's own terminal"
+        ));
+    }
     // A 3-winding record here carries only the primary winding's ratio/ratings, so
     // report any non-nominal secondary/tertiary winding as a fidelity loss.
     let drops_winding_detail = net.transformers_3w.iter().any(|t| {
