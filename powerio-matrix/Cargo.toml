@@ -42,7 +42,7 @@ sha2 = "0.10"
 # arrow and parquet release in lockstep and share `RecordBatch`; keep both on the
 # same major. `snap` matches the Snappy compression pandas/datakit write by default.
 arrow = { workspace = true, optional = true }
-parquet = { version = "58", default-features = false, features = ["arrow", "snap"], optional = true }
+parquet = { version = "59", default-features = false, features = ["arrow", "snap"], optional = true }
 
 [dev-dependencies]
 approx = "0.5"
