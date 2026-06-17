@@ -41,6 +41,7 @@ mod pandapower;
 mod powermodels;
 pub mod powerworld;
 mod pslf;
+mod pslf_write;
 mod psse;
 mod pypsa;
 
@@ -50,6 +51,7 @@ pub use pandapower::{parse_pandapower_json, write_pandapower_json};
 pub use powermodels::{parse_powermodels_json, write_powermodels_json};
 pub use powerworld::{PwdDisplay, PwdSubstation, parse_powerworld, write_powerworld};
 pub use pslf::parse_pslf;
+pub use pslf_write::write_pslf;
 pub use psse::{parse_psse, write_psse, write_psse_rev};
 pub use pypsa::{PypsaCsvOutputs, read_pypsa_csv_folder, write_pypsa_csv_folder};
 
@@ -71,6 +73,8 @@ pub enum TargetFormat {
     PandapowerJson,
     /// MATPOWER `.m` (round-trip; byte-exact when the case kept its source).
     Matpower,
+    /// GE PSLF `.epc` (round-trip; byte-exact when the case kept its source).
+    Pslf,
 }
 
 impl TargetFormat {
@@ -84,6 +88,7 @@ impl TargetFormat {
             TargetFormat::Psse { .. } => "raw",
             TargetFormat::PowerWorld => "aux",
             TargetFormat::Matpower => "m",
+            TargetFormat::Pslf => "epc",
         }
     }
 
@@ -97,6 +102,7 @@ impl TargetFormat {
             TargetFormat::PowerWorld => "PowerWorld .aux",
             TargetFormat::PandapowerJson => "pandapower JSON",
             TargetFormat::Matpower => "MATPOWER .m",
+            TargetFormat::Pslf => "PSLF .epc",
         }
     }
 
@@ -112,6 +118,7 @@ impl TargetFormat {
             TargetFormat::PowerWorld => "powerworld",
             TargetFormat::PandapowerJson => "pandapower-json",
             TargetFormat::Matpower => "matpower",
+            TargetFormat::Pslf => "pslf",
         }
     }
 }
@@ -214,6 +221,7 @@ pub fn target_format_from_name(name: &str) -> Option<TargetFormat> {
         "psse35" | "raw35" => TargetFormat::Psse { rev: 35 },
         "powerworld" | "aux" => TargetFormat::PowerWorld,
         "pandapower-json" | "pandapower" | "pandapowerjson" | "pp" => TargetFormat::PandapowerJson,
+        "pslf" | "epc" | "pslf-epc" => TargetFormat::Pslf,
         _ => return None,
     })
 }
@@ -435,6 +443,9 @@ fn read_source(source: Arc<String>, fmt: TargetFormat, name_hint: Option<&str>) 
         TargetFormat::PandapowerJson => {
             pandapower::parse_pandapower_source(source, name_hint, &mut warnings)
         }
+        // PSLF read normally enters through the `is_pslf_name`/`.epc` fast path in
+        // parse_file / parse_str; this arm keeps the funnel total.
+        TargetFormat::Pslf => pslf::parse_pslf_source(source, name_hint, &mut warnings),
     }?;
     reject_empty_case(&net, fmt.label())?;
     Ok(Parsed {
@@ -564,6 +575,7 @@ pub fn write_as(net: &Network, format: TargetFormat) -> Conversion {
         // the folded model, which itemizes what it can't carry (HVDC, gen caps,
         // extras, a partial-cost case).
         TargetFormat::Matpower => matpower::write_matpower_conversion(net),
+        TargetFormat::Pslf => write_pslf(net),
     };
     warn_normalized_tap(net, format, &mut conv);
     warn_missing_reference(net, format, &mut conv);
@@ -646,6 +658,7 @@ fn warn_missing_reference(net: &Network, format: TargetFormat, conv: &mut Conver
             | TargetFormat::Psse { .. }
             | TargetFormat::PowerModelsJson
             | TargetFormat::PandapowerJson
+            | TargetFormat::Pslf
     );
     if needs_ref {
         conv.warnings.extend(missing_reference_warning(net));
@@ -799,6 +812,7 @@ fn same_format(target: TargetFormat, source: SourceFormat) -> bool {
             | (TargetFormat::Psse { .. }, SourceFormat::Psse)
             | (TargetFormat::PowerWorld, SourceFormat::PowerWorld)
             | (TargetFormat::PandapowerJson, SourceFormat::PandapowerJson)
+            | (TargetFormat::Pslf, SourceFormat::Pslf)
     )
 }
 
@@ -860,6 +874,7 @@ mod tests {
             (SourceFormat::Psse, TargetFormat::Psse { rev: 33 }),
             (SourceFormat::PowerWorld, TargetFormat::PowerWorld),
             (SourceFormat::PandapowerJson, TargetFormat::PandapowerJson),
+            (SourceFormat::Pslf, TargetFormat::Pslf),
         ] {
             let token = format!("{sf:?}");
             assert_eq!(
@@ -876,7 +891,6 @@ mod tests {
             SourceFormat::Gridfm,
             SourceFormat::PypsaCsv,
             SourceFormat::PowerWorldBinary,
-            SourceFormat::Pslf,
         ] {
             assert_eq!(target_format_from_name(&format!("{sf:?}")), None);
         }

@@ -17,8 +17,8 @@ use std::path::{Path, PathBuf};
 
 use powerio::{
     Network, TargetFormat, parse_egret_json, parse_matpower_file, parse_powermodels_json,
-    parse_powerworld, parse_psse, write_as, write_egret_json, write_powermodels_json,
-    write_powerworld, write_psse, write_psse_rev,
+    parse_powerworld, parse_pslf, parse_psse, write_as, write_egret_json, write_powermodels_json,
+    write_powerworld, write_pslf, write_psse, write_psse_rev,
 };
 
 mod common;
@@ -115,6 +115,12 @@ fn roundtrippable() -> Vec<Roundtrippable> {
             format: TargetFormat::EgretJson,
             write: |n| write_egret_json(n).text,
             read: |s| parse_egret_json(s).unwrap(),
+        },
+        Roundtrippable {
+            name: "PSLF .epc",
+            format: TargetFormat::Pslf,
+            write: |n| write_pslf(n).text,
+            read: |s| parse_pslf(s).unwrap(),
         },
     ]
 }

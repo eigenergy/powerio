@@ -173,7 +173,7 @@ enum FormatArg {
     PandapowerJson,
     #[value(name = "pypsa-csv", alias = "pypsa")]
     PypsaCsv,
-    /// Read a GE PSLF .epc case (read only).
+    /// GE PSLF .epc case (read and write).
     #[value(name = "pslf", alias = "epc")]
     Pslf,
     /// Read a gridfm-datakit Parquet dataset directory (read only).
@@ -201,9 +201,7 @@ impl FormatArg {
             FormatArg::PypsaCsv => anyhow::bail!(
                 "`convert` cannot return a PyPSA CSV folder as text; pass `--to pypsa-csv -o <dir>`"
             ),
-            FormatArg::Pslf => {
-                anyhow::bail!("PSLF .epc is read only; it cannot be a conversion target")
-            }
+            FormatArg::Pslf => TargetFormat::Pslf,
             FormatArg::Gridfm => anyhow::bail!(
                 "`convert` cannot write a gridfm dataset; use the `gridfm` subcommand"
             ),

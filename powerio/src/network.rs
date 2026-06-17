@@ -148,8 +148,10 @@ pub enum SourceFormat {
     Psse,
     PowerWorld,
     PandapowerJson,
-    /// Read from a GE PSLF `.epc` case. Read only: same source text is
-    /// retained for auditability, but there is no canonical PSLF writer.
+    /// Read from a GE PSLF `.epc` case. Same source text is retained, so a
+    /// same-format write echoes it byte-for-byte; a cross-format or
+    /// source-dropped write goes through the `.epc` serializer
+    /// ([`write_pslf`](crate::write_pslf)).
     Pslf,
     /// Read from a PowerWorld `.pwb` binary case. Read only: there is no
     /// `.pwb` writer and no retained source text, so writing goes through

@@ -1,6 +1,9 @@
 use std::path::PathBuf;
 
-use powerio::{SourceFormat, parse_file, parse_str, target_format_from_name};
+use powerio::{
+    SourceFormat, TargetFormat, parse_file, parse_pslf, parse_str, target_format_from_name,
+    write_as, write_pslf,
+};
 
 const EPC: &str = r#"title
 two bus
@@ -56,10 +59,70 @@ fn parse_file_accepts_case_insensitive_pslf_hint() {
 }
 
 #[test]
-fn pslf_is_not_a_write_target() {
-    assert_eq!(target_format_from_name("pslf"), None);
-    assert_eq!(target_format_from_name("epc"), None);
+fn pslf_is_a_write_target() {
+    assert_eq!(target_format_from_name("pslf"), Some(TargetFormat::Pslf));
+    assert_eq!(target_format_from_name("epc"), Some(TargetFormat::Pslf));
 }
+
+#[test]
+fn pslf_write_read_round_trip_preserves_the_core() {
+    // .epc → Network → .epc → Network keeps the power flow core. (The two-winding
+    // transformer and ZIP load split exercise the multi-line record and the
+    // replayed pslf_* extras.)
+    let net0 = parse_pslf(EPC_WITH_TRANSFORMER).unwrap();
+    let text = write_pslf(&net0).text;
+    let net1 = parse_pslf(&text).unwrap();
+
+    assert_eq!(net1.buses.len(), net0.buses.len());
+    assert_eq!(net1.branches.len(), net0.branches.len());
+    assert_eq!(net1.loads.len(), net0.loads.len());
+    assert_eq!(net1.generators.len(), net0.generators.len());
+    assert_eq!(net1.shunts.len(), net0.shunts.len());
+
+    let sum = |xs: &[f64]| xs.iter().sum::<f64>();
+    let p0 = sum(&net0.loads.iter().map(|l| l.p).collect::<Vec<_>>());
+    let p1 = sum(&net1.loads.iter().map(|l| l.p).collect::<Vec<_>>());
+    assert!((p0 - p1).abs() < 1e-9, "load P changed: {p0} != {p1}");
+    // The transformer survives the round trip with its tap.
+    let tap0 = net0
+        .branches
+        .iter()
+        .find(|b| b.is_transformer())
+        .unwrap()
+        .tap;
+    let tap1 = net1
+        .branches
+        .iter()
+        .find(|b| b.is_transformer())
+        .unwrap()
+        .tap;
+    assert!((tap0 - tap1).abs() < 1e-9, "tap changed: {tap0} != {tap1}");
+}
+
+#[test]
+fn pslf_same_format_write_echoes_source() {
+    // A PSLF-sourced network writes back byte-for-byte through the retained source.
+    let parsed = parse_str(EPC, "pslf").unwrap();
+    assert_eq!(write_as(&parsed.network, TargetFormat::Pslf).text, EPC);
+}
+
+/// A two-winding transformer EPC plus a ZIP load, for the round-trip test.
+const EPC_WITH_TRANSFORMER: &str = r#"title
+xfmr case
+!
+solution parameters
+sbase 100.0000
+!
+bus data  [2] ty vsched volt angle ar zone vmax vmin
+1 "Slack       " 230.0000 : 0 1.0000 1.0000 0.0 1 1 1.1 0.9
+2 "Load        " 138.0000 : 1 1.0000 1.0000 -1.0 1 1 1.1 0.9
+transformer data  [1]
+1 "Slack       " 230.00 2 "Load        " 138.00 "1 " 1 "xf" : 1 0 0 0 0 0 0 0 0 0 0 0 0 0 100 0.02 0.06 0 0 0 0 /
+0 0 0 0 0 0 90 80 70 0 0.05 0 0 0 0 0 1.025
+load data  [1] id long_id st mw mvar mw_i mvar_i mw_z mvar_z ar zone
+2 "Load        " 138.00 "1 " "load" : 1 10 3 1 0.5 2 1.5 1 1
+end
+"#;
 
 #[test]
 fn malformed_pslf_input_returns_errors_without_panics() {
