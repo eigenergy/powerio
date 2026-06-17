@@ -445,6 +445,8 @@ fn read_bus(r: &Row) -> Result<Bus> {
         // BusVMax/BusVMin are the fallback aliases.
         vmax: f_alias(r, &["BusVoltLimHigh:1", "LimitHighA", "BusVMax"], 1.1)?,
         vmin: f_alias(r, &["BusVoltLimLow:1", "LimitLowA", "BusVMin"], 0.9)?,
+        evhi: None,
+        evlo: None,
         area: uid_alias(r, &["AreaNum", "AreaNumber"])?,
         zone: uid_alias(r, &["ZoneNum", "ZoneNumber"])?,
         name,
@@ -764,6 +766,16 @@ pub fn write_powerworld(net: &Network) -> Conversion {
             "{} 3-winding transformer(s) dropped: the PowerWorld .aux writer emits no 3-winding record",
             net.transformers_3w.len()
         ));
+    }
+    if net
+        .buses
+        .iter()
+        .any(|b| b.evhi.is_some() || b.evlo.is_some())
+    {
+        warnings.push(
+            "emergency voltage band(s) (EVHI/EVLO) dropped: this writer carries one voltage band"
+                .into(),
+        );
     }
     if !net.storage.is_empty() {
         warnings.push(format!(

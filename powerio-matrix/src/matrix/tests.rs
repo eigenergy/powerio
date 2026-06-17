@@ -15,6 +15,8 @@ fn bus(id: usize, kind: BusType) -> Bus {
         base_kv: 345.0,
         vmax: 1.1,
         vmin: 0.9,
+        evhi: None,
+        evlo: None,
         area: 1,
         zone: 1,
         name: None,

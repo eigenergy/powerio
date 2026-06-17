@@ -90,6 +90,16 @@ pub fn write_powermodels_json(net: &Network) -> Conversion {
             net.transformers_3w.len()
         ));
     }
+    if net
+        .buses
+        .iter()
+        .any(|b| b.evhi.is_some() || b.evlo.is_some())
+    {
+        warnings.push(
+            "emergency voltage band(s) (EVHI/EVLO) dropped: this writer carries one voltage band"
+                .into(),
+        );
+    }
 
     let mut root = Map::new();
     root.insert("name".into(), Value::String(net.name.clone()));
@@ -475,6 +485,8 @@ fn read_bus(v: &Value, ascale: f64) -> Result<Bus> {
         base_kv: f(v, "base_kv"),
         vmax: f(v, "vmax"),
         vmin: f(v, "vmin"),
+        evhi: None,
+        evlo: None,
         area: uid(v, "area"),
         zone: uid(v, "zone"),
         name: v.get("name").and_then(Value::as_str).map(str::to_string),

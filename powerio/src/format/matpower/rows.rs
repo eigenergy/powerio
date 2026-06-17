@@ -154,6 +154,8 @@ pub(super) fn bus_row(row: &[f64], i: usize) -> Result<(Bus, Option<Load>, Optio
         base_kv: row[bus_col::BASE_KV],
         vmax: row[bus_col::VMAX],
         vmin: row[bus_col::VMIN],
+        evhi: None,
+        evlo: None,
         area: row[bus_col::BUS_AREA] as usize,
         zone: row[bus_col::ZONE] as usize,
         name: None,

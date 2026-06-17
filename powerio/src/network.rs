@@ -241,6 +241,15 @@ pub struct Bus {
     pub base_kv: f64,
     pub vmax: f64,
     pub vmin: f64,
+    /// Emergency (short-term) voltage band, set only when the source states one
+    /// distinct from the normal [`vmax`](Bus::vmax)/[`vmin`](Bus::vmin) band (PSS/E
+    /// `EVHI`/`EVLO`). `None` means the emergency band equals the normal band, so
+    /// read `evhi.unwrap_or(vmax)` / `evlo.unwrap_or(vmin)`. `#[serde(default)]` so
+    /// JSON written before the fields existed still deserializes.
+    #[serde(default)]
+    pub evhi: Option<f64>,
+    #[serde(default)]
+    pub evlo: Option<f64>,
     pub area: usize,
     pub zone: usize,
     pub name: Option<String>,
@@ -668,6 +677,8 @@ impl Transformer3W {
             base_kv: self.windings[0].nominal_kv,
             vmax: 1.1,
             vmin: 0.9,
+            evhi: None,
+            evlo: None,
             area: 0,
             zone: 0,
             name: self.name.clone(),
@@ -1038,6 +1049,8 @@ mod tests {
             base_kv: 230.0,
             vmax: 1.1,
             vmin: 0.9,
+            evhi: None,
+            evlo: None,
             area: 1,
             zone: 1,
             name: None,

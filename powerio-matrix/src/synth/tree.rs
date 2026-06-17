@@ -48,6 +48,8 @@ pub(crate) fn make_bus(id: usize) -> Bus {
         base_kv: 345.0,
         vmax: 1.1,
         vmin: 0.9,
+        evhi: None,
+        evlo: None,
         area: 1,
         zone: 1,
         name: None,

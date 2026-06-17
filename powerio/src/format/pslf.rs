@@ -449,6 +449,8 @@ fn read_bus(rec: &Record) -> Result<Bus> {
         base_kv: num_at(&rec.lhs, 2, 0.0, "bus nominal kV", rec)?,
         vmax: num_at(&rec.rhs, 6, 1.1, "bus vmax", rec)?,
         vmin: num_at(&rec.rhs, 7, 0.9, "bus vmin", rec)?,
+        evhi: None,
+        evlo: None,
         area: id_at(&rec.rhs, 4, 1, "bus area", rec)?,
         zone: id_at(&rec.rhs, 5, 1, "bus zone", rec)?,
         name,

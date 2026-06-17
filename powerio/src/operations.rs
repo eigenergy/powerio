@@ -491,6 +491,8 @@ mod tests {
             base_kv,
             vmax: 1.1,
             vmin: 0.9,
+            evhi: None,
+            evlo: None,
             area,
             zone: 1,
             name: None,

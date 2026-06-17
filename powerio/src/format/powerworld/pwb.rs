@@ -1025,6 +1025,8 @@ fn read_bus_head(b: &[u8], at: usize) -> Probe<(BusHead, usize)> {
         base_kv: kv,
         vmax: 1.1,
         vmin: 0.9,
+        evhi: None,
+        evlo: None,
         area,
         zone,
         name: Some(String::from_utf8_lossy(name).into_owned()),

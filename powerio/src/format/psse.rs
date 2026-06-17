@@ -145,6 +145,8 @@ pub fn write_psse_rev(net: &Network, rev: u32) -> Conversion {
         if matches!(name, std::borrow::Cow::Owned(_)) {
             sanitized_names += 1;
         }
+        // The last two columns are EVHI/EVLO; emit the emergency band when set,
+        // else echo the normal band.
         let _ = writeln!(
             s,
             "{}, '{:<12}', {}, {}, {}, {}, 1, {}, {}, {}, {}, {}, {}",
@@ -158,8 +160,8 @@ pub fn write_psse_rev(net: &Network, rev: u32) -> Conversion {
             num(b.va),
             num(b.vmax),
             num(b.vmin),
-            num(b.vmax),
-            num(b.vmin)
+            num(b.evhi.unwrap_or(b.vmax)),
+            num(b.evlo.unwrap_or(b.vmin))
         );
     }
     let _ = writeln!(s, "0 / END OF BUS DATA, BEGIN LOAD DATA");
@@ -877,6 +879,9 @@ fn bustype(code: i64) -> BusType {
     }
 }
 
+// The EVHI/EVLO equality below is an exact compare on purpose: the emergency
+// band is typed only when its token differs from the normal-band token.
+#[allow(clippy::float_cmp)]
 fn read_bus(f: &[String]) -> Result<Bus> {
     // I, NAME, BASKV, IDE, AREA, ZONE, OWNER, VM, VA, NVHI, NVLO, EVHI, EVLO
     let id = f
@@ -890,14 +895,22 @@ fn read_bus(f: &[String]) -> Result<Bus> {
         .get(1)
         .filter(|n| !n.is_empty())
         .map(|n| n.trim().to_string());
+    let vmax = num_at(f, 9, 1.1)?;
+    let vmin = num_at(f, 10, 0.9)?;
+    // EVHI/EVLO (v31+); default to the normal band when absent. Keep them typed
+    // only when they actually differ, so the common equal-band case stays `None`.
+    let evhi = num_at(f, 11, vmax)?;
+    let evlo = num_at(f, 12, vmin)?;
     Ok(Bus {
         id: BusId(id),
         kind: bustype(int_at(f, 3, 1)?),
         vm: num_at(f, 7, 1.0)?,
         va: num_at(f, 8, 0.0)?,
         base_kv: num_at(f, 2, 0.0)?,
-        vmax: num_at(f, 9, 1.1)?,
-        vmin: num_at(f, 10, 0.9)?,
+        vmax,
+        vmin,
+        evhi: (evhi != vmax).then_some(evhi),
+        evlo: (evlo != vmin).then_some(evlo),
         area: id_at(f, 4, 0)?,
         zone: id_at(f, 5, 0)?,
         name,
@@ -1741,6 +1754,55 @@ Q
         let norm = net.to_normalized().unwrap();
         assert_eq!(norm.transformers_3w.len(), 1, "to_normalized keeps the 3W");
         norm.validate().unwrap();
+    }
+
+    #[test]
+    fn reads_writes_and_drops_an_emergency_voltage_band() {
+        // Bus 1 has a distinct EVHI/EVLO (1.2/0.8) vs the normal band (1.1/0.9);
+        // bus 2's emergency band equals its normal band.
+        let raw = r"0, 100.00, 33, 0, 0, 60.00 / x
+CASE
+COMMENT
+1,'B1          ', 230.0,3,1,1,1,1.0,0.0,1.1,0.9,1.2,0.8
+2,'B2          ', 230.0,1,1,1,1,1.0,0.0,1.1,0.9,1.1,0.9
+0 / END OF BUS DATA, BEGIN LOAD DATA
+0 / END OF LOAD DATA, BEGIN FIXED SHUNT DATA
+0 / END OF FIXED SHUNT DATA, BEGIN GENERATOR DATA
+1,'1 ',50.0,5.0,20.0,-10.0,1.0,0,100.0,0.0,1.0,0.0,0.0,1.0,1,100.0,80.0,10.0
+0 / END OF GENERATOR DATA, BEGIN BRANCH DATA
+0 / END OF BRANCH DATA, BEGIN TRANSFORMER DATA
+0 / END OF TRANSFORMER DATA, BEGIN AREA DATA
+Q
+";
+        let net = parse_psse(raw).unwrap();
+        let b1 = net.buses.iter().find(|b| b.id == BusId(1)).unwrap();
+        assert!(
+            b1.evhi.is_some() && b1.evlo.is_some(),
+            "distinct band typed"
+        );
+        close(b1.evhi.unwrap(), 1.2);
+        close(b1.evlo.unwrap(), 0.8);
+        let b2 = net.buses.iter().find(|b| b.id == BusId(2)).unwrap();
+        assert!(
+            b2.evhi.is_none() && b2.evlo.is_none(),
+            "an emergency band equal to the normal band stays None"
+        );
+
+        // Round trip through the PSS/E writer keeps the distinct band.
+        let net2 = parse_psse(&write_psse(&net).text).unwrap();
+        let r1 = net2.buses.iter().find(|b| b.id == BusId(1)).unwrap();
+        close(r1.evhi.unwrap(), 1.2);
+        close(r1.evlo.unwrap(), 0.8);
+
+        // A cross-format write to MATPOWER (single voltage band) reports the drop.
+        let mpc = net.to_format(crate::TargetFormat::Matpower);
+        assert!(
+            mpc.warnings
+                .iter()
+                .any(|w| w.contains("emergency voltage band")),
+            "MATPOWER write must warn on the dropped emergency band, got {:?}",
+            mpc.warnings
+        );
     }
 
     #[test]

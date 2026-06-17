@@ -66,6 +66,16 @@ pub fn write_egret_json(net: &Network) -> Conversion {
             net.transformers_3w.len()
         ));
     }
+    if net
+        .buses
+        .iter()
+        .any(|b| b.evhi.is_some() || b.evlo.is_some())
+    {
+        warnings.push(
+            "emergency voltage band(s) (EVHI/EVLO) dropped: this writer carries one voltage band"
+                .into(),
+        );
+    }
     if !net.storage.is_empty() {
         warnings.push(format!(
             "{} storage unit(s) dropped: egret storage mapping not implemented",
@@ -470,6 +480,8 @@ fn read_bus(key: &str, v: &Value) -> Result<Bus> {
         base_kv: f(v, "base_kv")?,
         vmax: f_or(v, "v_max", 1.1)?,
         vmin: f_or(v, "v_min", 0.9)?,
+        evhi: None,
+        evlo: None,
         area: usize_or(v, "area", 0)?,
         zone: usize_or(v, "zone", 0)?,
         name: v.get("name").and_then(Value::as_str).map(str::to_string),

@@ -112,6 +112,8 @@ pub(crate) fn parse_pandapower_source(
             base_kv: row.req_f("vn_kv")?,
             vmax: row.f_or("max_vm_pu", 1.1),
             vmin: row.f_or("min_vm_pu", 0.9),
+            evhi: None,
+            evlo: None,
             area: 1,
             zone: row.usize_or("zone", 1),
             name: row.string("name"),
@@ -665,6 +667,16 @@ pub fn write_pandapower_json(net: &Network) -> Conversion {
             "{} 3-winding transformer(s) dropped: the pandapower JSON writer emits no trafo3w table",
             net.transformers_3w.len()
         ));
+    }
+    if net
+        .buses
+        .iter()
+        .any(|b| b.evhi.is_some() || b.evlo.is_some())
+    {
+        warnings.push(
+            "emergency voltage band(s) (EVHI/EVLO) dropped: this writer carries one voltage band"
+                .into(),
+        );
     }
     if !net.storage.is_empty() {
         warnings.push(format!(
@@ -2535,6 +2547,8 @@ mod tests {
             base_kv: 110.0,
             vmax: 1.1,
             vmin: 0.9,
+            evhi: None,
+            evlo: None,
             area: 1,
             zone: 1,
             name: None,
