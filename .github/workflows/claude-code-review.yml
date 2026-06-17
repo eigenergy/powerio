@@ -12,6 +12,7 @@ on:
 
 jobs:
   claude-review:
+    if: ${{ github.event.pull_request.user.type != 'Bot' }}
     # Optional: Filter by PR author
     # if: |
     #   github.event.pull_request.user.login == 'external-contributor' ||
@@ -35,7 +36,6 @@ jobs:
         id: claude-review
         uses: anthropics/claude-code-action@v1
         with:
-          allowed_bots: 'dependabot[bot]'
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           plugin_marketplaces: 'https://github.com/anthropics/claude-code.git'
           plugins: 'code-review@claude-code-plugins'
