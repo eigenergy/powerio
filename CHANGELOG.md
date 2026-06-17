@@ -1,5 +1,40 @@
 # Changelog
 
+## 0.2.4
+
+- PSLF `.epc`: read support for GE PSLF power flow cases, including `.epc`
+  extension inference and `pslf` / `epc` input aliases. The reader is read only
+  and keeps source text plus warnings for sections outside `Network`.
+- PowerWorld `.pwb`: expanded binary reader coverage across older and newer
+  header constants, with stricter record probes, companion format parity checks,
+  and clearer rejection of unsupported vintages.
+- PowerWorld `.pwd`: display parsing keeps the separate display API path and
+  retains the malformed input invariant: corrupt or truncated display files
+  return a structured error or a parsed display, not a panic.
+- No C ABI break; `PIO_ABI_VERSION` stays 3.
+
+## 0.2.3
+
+- Normalization: `Network::to_normalized` preserves source bus ids instead of
+  renumbering surviving buses to dense 1-based ids. Dense row mapping remains
+  available through `IndexedNetwork` and the C ABI table order.
+
+## 0.2.2
+
+- Display API: `parse_display_file` / `parse_display_bytes` read display
+  artifacts separately from network cases. PowerWorld `.pwd` returns
+  `DisplayData::PowerWorld(PwdDisplay)` in Rust and
+  `DisplayData("powerworld", PwdDisplay(...))` in Python. `parse_file`
+  remains Network only and points `.pwd` callers at the display API.
+- PowerWorld AUX: name keyed complete case exports can resolve
+  `BusName_NomVolt` labels for loads, shunts, generators, and branches.
+- PSS/E: the reader accepts comment headers, system wide records before
+  `BEGIN BUS DATA`, and v34 named branch records without misclassifying
+  long v33 branch rows.
+- MCP: add dedicated tools for PyPSA CSV folders and gridfm Parquet datasets.
+- DC sensitivities: PTDF/LODF fall back to dense Gaussian elimination for
+  invertible indefinite grounded Laplacians.
+
 ## 0.2.1
 
 Hardening fixes only; no API or ABI change (`PIO_ABI_VERSION` stays 3).

@@ -623,6 +623,24 @@ fn radial_lodf_is_negative_identity() {
 }
 
 #[test]
+fn ptdf_handles_indefinite_but_invertible_laplacian() {
+    let case = net(
+        "negative-x",
+        vec![bus(1, BusType::Ref), bus(2, BusType::Pq)],
+        vec![branch(1, 2, -1.0)],
+    );
+    let view = IndexedNetwork::new(&case);
+
+    let ptdf = dense(&build_ptdf(&view, DcConvention::PaperPure).unwrap());
+    let lodf = dense(&build_lodf(&view, DcConvention::PaperPure).unwrap());
+
+    assert_eq!(ptdf.len(), 1);
+    assert!(ptdf[0][0].abs() < 1e-12);
+    assert!((ptdf[0][1] + 1.0).abs() < 1e-12);
+    assert_eq!(lodf, vec![vec![-1.0]]);
+}
+
+#[test]
 fn ungrounded_island_errors() {
     // Two islands (1-2 and 3-4), but only island 1-2 carries a reference: the
     // 3-4 island has no slack to ground, so its all-ones null vector survives.

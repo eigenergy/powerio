@@ -1,4 +1,4 @@
-//! `Network::to_normalized`: per-unit / radians / tap / filter / reindex / bus
+//! `Network::to_normalized`: per-unit / radians / tap / filter / source ids / bus
 //! types, plus the no-false-write-back contract and `parse_str == parse`.
 
 use std::path::{Path, PathBuf};
@@ -161,7 +161,7 @@ fn filters_and_retypes_out_of_service_case() {
     let n = raw.to_normalized().unwrap();
 
     // The fixture marks the bus-2 generator and branch 5-6 out of service; no
-    // isolated buses, so all 9 buses survive with dense 1-based ids.
+    // isolated buses, so all 9 buses survive with their source ids.
     assert_eq!(n.generators.len(), raw.generators.len() - 1);
     assert_eq!(n.branches.len(), raw.branches.len() - 1);
     assert_eq!(n.buses.len(), 9);
@@ -183,7 +183,7 @@ fn filters_and_retypes_out_of_service_case() {
 #[test]
 fn drops_isolated_bus_and_remaps_endpoints() {
     // Bus 2 is isolated (type 4); branch 2-3 references it (dropped), branch 1-3
-    // survives and is remapped, the load on bus 3 follows the reindex.
+    // survives, and the load on bus 3 keeps that source id.
     let src = "\
 function mpc = iso
 mpc.version = '2';
@@ -205,13 +205,56 @@ mpc.branch = [
     let n = raw.to_normalized().unwrap();
 
     assert_eq!(n.buses.len(), 2, "isolated bus dropped");
-    assert_eq!(n.buses.iter().map(|b| b.id.0).collect::<Vec<_>>(), [1, 2]);
+    assert_eq!(n.buses.iter().map(|b| b.id.0).collect::<Vec<_>>(), [1, 3]);
     assert_eq!(n.branches.len(), 1, "branch on the isolated bus dropped");
-    assert_eq!((n.branches[0].from.0, n.branches[0].to.0), (1, 2));
+    assert_eq!((n.branches[0].from.0, n.branches[0].to.0), (1, 3));
     assert_eq!(n.loads.len(), 1);
-    assert_eq!(n.loads[0].bus.0, 2, "load remapped to the dense id");
+    assert_eq!(n.loads[0].bus.0, 3, "load keeps the source id");
     assert_eq!(n.buses[0].kind, BusType::Ref);
     assert_eq!(n.buses[1].kind, BusType::Pq);
+}
+
+#[test]
+fn preserves_sparse_source_bus_ids() {
+    let src = "\
+function mpc = sparseids
+mpc.version = '2';
+mpc.baseMVA = 100;
+mpc.bus = [
+\t1\t3\t0\t0\t0\t0\t1\t1\t0\t230\t1\t1.1\t0.9;
+\t2\t1\t0\t0\t0\t0\t1\t1\t0\t230\t1\t1.1\t0.9;
+\t3\t1\t0\t0\t0\t0\t1\t1\t0\t230\t1\t1.1\t0.9;
+\t4\t1\t0\t0\t0\t0\t1\t1\t0\t230\t1\t1.1\t0.9;
+\t10\t1\t50\t10\t0\t0\t1\t1\t0\t230\t1\t1.1\t0.9;
+];
+mpc.gen = [
+\t1\t0\t0\t100\t-100\t1\t100\t1\t200\t0\t0\t0\t0\t0\t0\t0\t0\t0\t0\t0\t0;
+];
+mpc.branch = [
+\t1\t2\t0.01\t0.1\t0\t0\t0\t0\t0\t0\t1\t-360\t360;
+\t2\t3\t0.01\t0.1\t0\t0\t0\t0\t0\t0\t1\t-360\t360;
+\t3\t4\t0.01\t0.1\t0\t0\t0\t0\t0\t0\t1\t-360\t360;
+\t4\t10\t0.01\t0.1\t0\t0\t0\t0\t0\t0\t1\t-360\t360;
+];
+";
+    let n = parse_str(src, "matpower")
+        .unwrap()
+        .network
+        .to_normalized()
+        .unwrap();
+
+    assert_eq!(
+        n.buses.iter().map(|b| b.id.0).collect::<Vec<_>>(),
+        [1, 2, 3, 4, 10]
+    );
+    assert_eq!(n.loads.len(), 1);
+    assert_eq!(n.loads[0].bus.0, 10);
+    assert_eq!(n.branches.len(), 4);
+    assert_eq!((n.branches[3].from.0, n.branches[3].to.0), (4, 10));
+
+    let view = IndexedNetwork::new(&n);
+    assert_eq!(view.bus_index(BusId(10)), Some(4));
+    assert_eq!(view.bus_id(4), BusId(10));
 }
 
 #[test]

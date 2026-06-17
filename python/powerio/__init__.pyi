@@ -89,6 +89,22 @@ class GridfmRead(NamedTuple):
     scenario: int
     warnings: List[str]
 
+class PwdSubstation(NamedTuple):
+    number: int
+    name: str
+    x: float
+    y: float
+
+class PwdDisplay(NamedTuple):
+    canvas_width: int
+    canvas_height: int
+    stamp: int
+    substations: List[PwdSubstation]
+
+class DisplayData(NamedTuple):
+    kind: Literal["powerworld"]
+    data: PwdDisplay
+
 class DenseBranch(NamedTuple):
     from_id: Any  # numpy.ndarray
     to_id: Any  # numpy.ndarray
@@ -140,6 +156,7 @@ class Network:
         "Psse",
         "PowerWorld",
         "PandapowerJson",
+        "Pslf",
         "PowerWorldBinary",
         "InMemory",
         "Normalized",
@@ -204,6 +221,8 @@ class Conversion(NamedTuple):
 Format = str
 
 def parse_file(path: Any, from_: Optional[Format] = ...) -> Network: ...
+def parse_display_file(path: Any, from_: Optional[Format] = ...) -> DisplayData: ...
+def parse_display_bytes(data: bytes, format: Format) -> DisplayData: ...
 def parse_str(text: str, format: Format = ...) -> Network: ...
 def from_json(text: str) -> Network: ...
 def convert_file(path: Any, to: Format, from_: Optional[Format] = ...) -> Conversion: ...

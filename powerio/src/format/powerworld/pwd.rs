@@ -4,7 +4,9 @@
 //! A `.pwd` is the diagram sibling of a case: drawing records for buses,
 //! branches, substations, and field labels. This reader decodes the one
 //! subset with a differential oracle, the substation symbols, and leaves
-//! every other drawing object undecoded. The evidence (seven files across
+//! every other drawing object undecoded. Files without the substation table
+//! still return display metadata with an empty substation list. The evidence
+//! (seven files across
 //! the 2016 through 2022 writer eras, each matched 1-1 against the
 //! latitude/longitude its same vintage aux carries per substation, except
 //! the v19 resave, which matches 1248/1250 against the published case
@@ -38,6 +40,7 @@
 //! read the aux.
 
 use std::collections::HashSet;
+use std::path::Path;
 
 use crate::{Error, Result};
 
@@ -57,37 +60,95 @@ pub struct PwdSubstation {
     pub y: f64,
 }
 
+/// Decoded PowerWorld display file content.
+///
+/// A `.pwd` is not a case file and does not carry a [`Network`](crate::Network).
+/// This structure exposes the display metadata the reader validates plus the
+/// supported drawing object subset.
+#[derive(Debug, Clone, PartialEq)]
+pub struct PwdDisplay {
+    pub canvas_width: u16,
+    pub canvas_height: u16,
+    pub stamp: u32,
+    pub substations: Vec<PwdSubstation>,
+}
+
+/// Read and parse a `.pwd` display file.
+///
+/// # Errors
+/// [`Error::Io`] when the file cannot be read, or [`Error::FormatRead`] when
+/// the display bytes are not a supported PowerWorld `.pwd` shape.
+pub fn parse_pwd_file(path: impl AsRef<Path>) -> Result<PwdDisplay> {
+    let bytes = std::fs::read(path)?;
+    parse_pwd_display(&bytes)
+}
+
+/// Parse a `.pwd` display file, returning metadata and decoded substations.
+///
+/// # Errors
+/// [`Error::FormatRead`] when the header is not the known display shape,
+/// or no unique drawing record group links to the identity rows.
+pub fn parse_pwd_display(bytes: &[u8]) -> Result<PwdDisplay> {
+    parse_pwd_inner(bytes)
+}
+
 /// Parse the substation coordinates out of `.pwd` bytes.
 ///
 /// # Errors
 /// [`Error::FormatRead`] when the header is not the known display shape,
-/// the file has no substation identity table (bus only diagrams), or no
-/// unique drawing record group links to the identity rows.
+/// or no unique drawing record group links to the identity rows.
 pub fn parse_pwd(bytes: &[u8]) -> Result<Vec<PwdSubstation>> {
-    let err = |message: String| Error::FormatRead {
+    parse_pwd_display(bytes).map(|display| display.substations)
+}
+
+fn pwd_err(message: impl Into<String>) -> Error {
+    Error::FormatRead {
         format: FMT,
-        message,
-    };
-    if bytes.len() < 0x40 || u32_at(bytes, 0) != Some(50) {
-        return Err(err(format!(
-            "not a recognized PowerWorld display file (header word {}; the probed saves all \
+        message: message.into(),
+    }
+}
+
+fn parse_pwd_header(bytes: &[u8]) -> Result<(u16, u16, u32)> {
+    let (Some(header), Some(canvas_width), Some(canvas_height)) =
+        (u32_at(bytes, 0), u16_at(bytes, 4), u16_at(bytes, 6))
+    else {
+        let header = u32_at(bytes, 0).unwrap_or(0);
+        return Err(pwd_err(format!(
+            "not a recognized PowerWorld display file (header word {header}; the probed saves all \
              carry 50)",
-            u32_at(bytes, 0).unwrap_or(0),
+        )));
+    };
+    if bytes.len() < 0x40 || header != 50 {
+        return Err(pwd_err(format!(
+            "not a recognized PowerWorld display file (header word {header}; the probed saves all \
+             carry 50)",
         )));
     }
-    if u16_at(bytes, 4) == Some(0) || u16_at(bytes, 6) == Some(0) {
-        return Err(err("display header canvas dimensions are zero".into()));
+    if canvas_width == 0 || canvas_height == 0 {
+        return Err(pwd_err("display header canvas dimensions are zero"));
     }
     let stamp = u32_at(bytes, 22).unwrap_or(0);
     if stamp == 0 {
-        return Err(err(
+        return Err(pwd_err(
             "display header stamp is zero; every validated save carries a nonzero stamp the \
-             drawing records repeat"
-                .into(),
+             drawing records repeat",
         ));
     }
+    Ok((canvas_width, canvas_height, stamp))
+}
+
+fn parse_pwd_inner(bytes: &[u8]) -> Result<PwdDisplay> {
+    let (canvas_width, canvas_height, stamp) = parse_pwd_header(bytes)?;
 
     let identity = find_identity_table(bytes)?;
+    if identity.is_empty() {
+        return Ok(PwdDisplay {
+            canvas_width,
+            canvas_height,
+            stamp,
+            substations: Vec::new(),
+        });
+    }
 
     // Every drawing object record repeats the header stamp at +18 and dual
     // encodes its position (f64 at +22/+30, f32 echo at +2/+6); the scan
@@ -144,14 +205,14 @@ pub fn parse_pwd(bytes: &[u8]) -> Result<Vec<PwdSubstation>> {
     let (_, records) = match matches.as_slice() {
         [one] => *one,
         [] => {
-            return Err(err(format!(
+            return Err(pwd_err(format!(
                 "no drawing record group links the {} substation identity rows; the \
                  DisplaySubstation layout of this save is not the validated one",
                 identity.len()
             )));
         }
         several => {
-            return Err(err(format!(
+            return Err(pwd_err(format!(
                 "{} drawing record groups link the substation identity rows; refusing to guess \
                  between them",
                 several.len()
@@ -159,7 +220,7 @@ pub fn parse_pwd(bytes: &[u8]) -> Result<Vec<PwdSubstation>> {
         }
     };
 
-    Ok(records
+    let substations = records
         .iter()
         .zip(identity)
         .map(|(rec, (number, name))| PwdSubstation {
@@ -168,7 +229,13 @@ pub fn parse_pwd(bytes: &[u8]) -> Result<Vec<PwdSubstation>> {
             x: rec.x,
             y: rec.y,
         })
-        .collect())
+        .collect();
+    Ok(PwdDisplay {
+        canvas_width,
+        canvas_height,
+        stamp,
+        substations,
+    })
 }
 
 /// A drawing record that passed the shape gate: its stream offset (for the
@@ -181,8 +248,8 @@ struct DrawRecord {
 }
 
 /// The substation identity table: exactly one valid walk behind a
-/// `ff ff ff ff 3d 0f` anchor. Zero (bus only diagrams, pre 2016 shapes)
-/// and several are loud errors.
+/// `ff ff ff ff 3d 0f` anchor. A missing table means there are no decoded
+/// substation symbols. Several tables are a loud error.
 fn find_identity_table(b: &[u8]) -> Result<Vec<(u32, String)>> {
     let mut tables = Vec::new();
     for at in memmem(b, &IDENTITY_TAG) {
@@ -192,12 +259,7 @@ fn find_identity_table(b: &[u8]) -> Result<Vec<(u32, String)>> {
     }
     match tables.len() {
         1 => Ok(tables.pop().unwrap()),
-        0 => Err(Error::FormatRead {
-            format: FMT,
-            message: "no substation identity table (tag 0x0f3d walks clean); bus only diagrams \
-                      and unprobed save eras are not decoded (see docs/powerworld.md)"
-                .into(),
-        }),
+        0 => Ok(Vec::new()),
         n => Err(Error::FormatRead {
             format: FMT,
             message: format!(
@@ -216,26 +278,30 @@ fn identity_walk(b: &[u8], mut at: usize) -> Option<Vec<(u32, String)>> {
     let mut rows = Vec::new();
     let mut seen = HashSet::new();
     loop {
-        if b.get(at..at + 4) == Some([0xff; 4].as_slice()) {
+        if b.get(at..).and_then(|s| s.get(..4)) == Some([0xff; 4].as_slice()) {
             return (!rows.is_empty()).then_some(rows);
         }
         let number = u32_at(b, at)?;
-        if number == 0 || number > 99_999_999 || u32_at(b, at + 4) != Some(number) {
+        let duplicate_at = at.checked_add(4)?;
+        if number == 0 || number > 99_999_999 || u32_at(b, duplicate_at) != Some(number) {
             return None;
         }
-        let len = u32_at(b, at + 8)? as usize;
+        let len_at = at.checked_add(8)?;
+        let len = u32_at(b, len_at)? as usize;
         if len == 0 || len >= 64 {
             return None;
         }
-        let name = b.get(at + 12..at + 12 + len)?;
-        if !name.iter().all(|&c| (0x20..0x7f).contains(&c)) || b.get(at + 12 + len) != Some(&0x02) {
+        let name_start = at.checked_add(12)?;
+        let name_end = name_start.checked_add(len)?;
+        let name = b.get(name_start..name_end)?;
+        if !name.iter().all(|&c| (0x20..0x7f).contains(&c)) || b.get(name_end) != Some(&0x02) {
             return None;
         }
         if !seen.insert(number) {
             return None;
         }
         rows.push((number, String::from_utf8_lossy(name).into_owned()));
-        at += 12 + len + 1;
+        at = name_end.checked_add(1)?;
     }
 }
 
@@ -245,8 +311,15 @@ fn identity_walk(b: &[u8], mut at: usize) -> Option<Vec<(u32, String)>> {
 /// variable because a digit string of 1 to 4 characters precedes the link
 /// in some saves.
 fn links_number(b: &[u8], i: usize, number: u32) -> bool {
-    (40..140)
-        .any(|d| matches!(b.get(i + d), Some(0x03 | 0x07)) && u32_at(b, i + d + 1) == Some(number))
+    (40..140).any(|d| {
+        let Some(marker_at) = i.checked_add(d) else {
+            return false;
+        };
+        let Some(number_at) = marker_at.checked_add(1) else {
+            return false;
+        };
+        matches!(b.get(marker_at), Some(0x03 | 0x07)) && u32_at(b, number_at) == Some(number)
+    })
 }
 
 /// Every start of `needle` in `haystack`.

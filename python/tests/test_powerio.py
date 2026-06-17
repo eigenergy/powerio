@@ -86,6 +86,27 @@ def test_parse_infers_format_from_extension():
     assert case.source_format == "Matpower"
 
 
+def test_parse_powerworld_display_file_and_bytes():
+    path = DATA / "powerworld" / "ACTIVSg200.pwd"
+    parsed = powerio.parse_display_file(path)
+    from_bytes = powerio.parse_display_bytes(path.read_bytes(), "powerworld-pwd")
+
+    assert parsed == from_bytes
+    assert parsed.kind == "powerworld"
+    assert isinstance(parsed.data, powerio.PwdDisplay)
+    assert parsed.data.canvas_width == 200
+    assert parsed.data.canvas_height == 200
+    assert parsed.data.stamp == 43068
+    assert len(parsed.data.substations) == 111
+
+    first = parsed.data.substations[0]
+    assert isinstance(first, powerio.PwdSubstation)
+    assert first.number == 50
+    assert first.name == "CHAMPAIGN 3"
+    assert first.x == pytest.approx(-47299.112519818635)
+    assert first.y == pytest.approx(23498.080802557866)
+
+
 def test_case_tables(case9):
     assert len(case9.buses) == 9
     assert len(case9.branches) == 9
@@ -195,6 +216,34 @@ def test_to_normalized_filters_out_of_service():
     assert n.n_branches == case.n_branches - 1
     assert n.n_buses == 9
     assert n.source_format == "Normalized"
+
+
+def test_to_normalized_preserves_source_bus_ids():
+    src = """function mpc = sparseids
+mpc.version = '2';
+mpc.baseMVA = 100;
+mpc.bus = [
+\t1\t3\t0\t0\t0\t0\t1\t1\t0\t230\t1\t1.1\t0.9;
+\t2\t1\t0\t0\t0\t0\t1\t1\t0\t230\t1\t1.1\t0.9;
+\t3\t1\t0\t0\t0\t0\t1\t1\t0\t230\t1\t1.1\t0.9;
+\t4\t1\t0\t0\t0\t0\t1\t1\t0\t230\t1\t1.1\t0.9;
+\t10\t1\t50\t10\t0\t0\t1\t1\t0\t230\t1\t1.1\t0.9;
+];
+mpc.gen = [
+\t1\t0\t0\t100\t-100\t1\t100\t1\t200\t0\t0\t0\t0\t0\t0\t0\t0\t0\t0\t0\t0;
+];
+mpc.branch = [
+\t1\t2\t0.01\t0.1\t0\t0\t0\t0\t0\t0\t1\t-360\t360;
+\t2\t3\t0.01\t0.1\t0\t0\t0\t0\t0\t0\t1\t-360\t360;
+\t3\t4\t0.01\t0.1\t0\t0\t0\t0\t0\t0\t1\t-360\t360;
+\t4\t10\t0.01\t0.1\t0\t0\t0\t0\t0\t0\t1\t-360\t360;
+];
+"""
+    n = powerio.parse_str(src).to_normalized()
+    assert [bus["id"] for bus in n.buses] == [1, 2, 3, 4, 10]
+    assert n.loads[0]["bus"] == 10
+    assert n.branches[-1]["from_id"] == 4
+    assert n.branches[-1]["to_id"] == 10
 
 
 def test_parse_bad_path_raises():

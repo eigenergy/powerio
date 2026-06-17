@@ -125,7 +125,7 @@ impl GenCost {
     }
 }
 
-/// Which format a [`Network`] was read from. Drives the same-format byte-exact
+/// Which format a [`Network`] was read from. Drives the same format byte exact
 /// echo on write.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[non_exhaustive]
@@ -136,21 +136,25 @@ pub enum SourceFormat {
     Psse,
     PowerWorld,
     PandapowerJson,
+    /// Read from a GE PSLF `.epc` case. Read only: same source text is
+    /// retained for auditability, but there is no canonical PSLF writer.
+    Pslf,
     /// Read from a PowerWorld `.pwb` binary case. Read only: there is no
     /// `.pwb` writer and no retained source text, so writing goes through
     /// another format's writer.
     PowerWorldBinary,
-    /// Built in memory (e.g. from synth or an edited case); no source text.
+    /// Built in memory, for example from synth or an edited case; no source text.
     InMemory,
     /// A normalized derived view ([`Network::to_normalized`]): per unit, radians,
-    /// filtered, densely reindexed. Distinct from [`InMemory`](SourceFormat::InMemory)
-    /// so consumers can tell a per-unit product from a raw in-memory network; it
-    /// has no source text and a different unit basis than a parsed network.
+    /// filtered, source bus ids preserved. Distinct from
+    /// [`InMemory`](SourceFormat::InMemory) so consumers can tell a per unit
+    /// product from a raw in memory network; it has no source text and a different
+    /// unit basis than a parsed network.
     Normalized,
     /// Read back from a gridfm-datakit Parquet dataset (the ML→classical bridge,
-    /// `powerio-matrix`'s `read_gridfm_dataset`). A lossy, power-flow-complete
+    /// `powerio-matrix`'s `read_gridfm_dataset`). A lossy, power flow complete
     /// reconstruction with no retained source text: original bus ids are
-    /// synthesized `1..n`, per-element load/shunt granularity is folded to one
+    /// synthesized `1..n`, per element load/shunt granularity is folded to one
     /// synthetic element per bus, and HVDC/storage/piecewise costs are absent.
     Gridfm,
     /// Read from a PyPSA CSV folder. This is a folder format rather than a
@@ -292,6 +296,10 @@ pub struct Generator {
     /// A fixed array, not an [`Extras`] map: a string-keyed map per generator
     /// costs 11 heap allocations each, which dominates the parse of a large
     /// generator-heavy case. Surfaced into formats that name them (PowerModels).
+    /// On the JSON snapshot it is a name-keyed object (see [`caps_serde`]) so the
+    /// schema stays additive when `GEN_EXTRA_KEYS` grows; `#[serde(default)]` so a
+    /// snapshot that omits it deserializes to the empty set.
+    #[serde(default = "default_caps", with = "caps_serde")]
     pub caps: GenCaps,
 }
 
@@ -306,6 +314,48 @@ impl Generator {
 
 /// A generator's capability / ramp columns, one slot per `GEN_EXTRA_KEYS` name.
 pub type GenCaps = [Option<f64>; GEN_EXTRA_KEYS.len()];
+
+/// The empty capability set, for a JSON snapshot that omits the field entirely.
+fn default_caps() -> GenCaps {
+    [None; GEN_EXTRA_KEYS.len()]
+}
+
+/// Serialize [`GenCaps`] as a name-keyed object (`{"ramp_30": 1.2, ...}`) keyed by
+/// [`GEN_EXTRA_KEYS`], emitting only the present slots, instead of a length-exact
+/// array. A fixed-length array round-trips through serde only at exactly its
+/// current length: the day `GEN_EXTRA_KEYS` grows a column, every old snapshot
+/// fails to deserialize and every new one fails on an old build — and the C ABI
+/// ties the JSON snapshot schema to its version, so that is a forced ABI break.
+/// The named map makes a new key purely additive: an old document simply lacks it
+/// (deserializes to `None`), and an unknown key from a newer document is ignored.
+/// In memory `caps` stays a fixed array, so the per-generator allocation cost the
+/// array avoids is unchanged; only the wire form is named.
+mod caps_serde {
+    use super::{GEN_EXTRA_KEYS, GenCaps};
+    use serde::de::{Deserialize, Deserializer};
+    use serde::ser::{SerializeMap, Serializer};
+    use std::collections::BTreeMap;
+
+    pub(super) fn serialize<S: Serializer>(caps: &GenCaps, s: S) -> Result<S::Ok, S::Error> {
+        let present = caps.iter().filter(|v| v.is_some()).count();
+        let mut map = s.serialize_map(Some(present))?;
+        for (key, slot) in GEN_EXTRA_KEYS.iter().zip(caps.iter()) {
+            if let Some(value) = slot {
+                map.serialize_entry(key, value)?;
+            }
+        }
+        map.end()
+    }
+
+    pub(super) fn deserialize<'de, D: Deserializer<'de>>(d: D) -> Result<GenCaps, D::Error> {
+        let named = BTreeMap::<String, f64>::deserialize(d)?;
+        let mut caps: GenCaps = [None; GEN_EXTRA_KEYS.len()];
+        for (slot, key) in caps.iter_mut().zip(GEN_EXTRA_KEYS.iter()) {
+            *slot = named.get(*key).copied();
+        }
+        Ok(caps)
+    }
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Storage {
@@ -617,7 +667,7 @@ impl Network {
         Ok(net)
     }
 
-    /// Whether this is a normalized (per-unit, radian, filtered, reindexed)
+    /// Whether this is a normalized (per-unit, radian, filtered)
     /// derived product from [`to_normalized`](Network::to_normalized), rather
     /// than a raw network at the file's unit basis. Unit-sensitive code that
     /// takes a `&Network` can check this instead of silently assuming MW.
@@ -706,5 +756,52 @@ impl Network {
             check(s.bus, "storage")?;
         }
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn gen_caps_serialize_as_a_named_map_that_grows_additively() {
+        let mut caps: GenCaps = [None; GEN_EXTRA_KEYS.len()];
+        caps[8] = Some(1.5); // ramp_30
+        caps[10] = Some(0.5); // apf
+        let g = Generator {
+            bus: BusId(1),
+            pg: 10.0,
+            qg: 0.0,
+            pmax: 100.0,
+            pmin: 0.0,
+            qmax: 50.0,
+            qmin: -50.0,
+            vg: 1.0,
+            mbase: 100.0,
+            in_service: true,
+            cost: None,
+            caps,
+        };
+
+        // caps is a name-keyed object emitting only the present slots, not a
+        // length-exact array.
+        let json = serde_json::to_string(&g).unwrap();
+        assert!(json.contains(r#""caps":{"#), "caps is an object: {json}");
+        assert!(json.contains(r#""ramp_30":1.5"#) && json.contains(r#""apf":0.5"#));
+        let back: Generator = serde_json::from_str(&json).unwrap();
+        assert_eq!(back.caps, g.caps);
+
+        // Growing GEN_EXTRA_KEYS stays additive: an unknown future key is ignored,
+        // a missing key reads as None, and an omitted field is the empty set.
+        let with_future = r#"{"bus":1,"pg":10,"qg":0,"pmax":100,"pmin":0,"qmax":50,"qmin":-50,
+            "vg":1,"mbase":100,"in_service":true,"cost":null,
+            "caps":{"ramp_30":1.5,"future_ramp":9.9}}"#;
+        let g2: Generator = serde_json::from_str(with_future).unwrap();
+        assert_eq!(g2.caps[8], Some(1.5));
+        assert_eq!(g2.caps.iter().filter(|v| v.is_some()).count(), 1);
+        let no_caps = r#"{"bus":1,"pg":10,"qg":0,"pmax":100,"pmin":0,"qmax":50,"qmin":-50,
+            "vg":1,"mbase":100,"in_service":true,"cost":null}"#;
+        let g3: Generator = serde_json::from_str(no_caps).unwrap();
+        assert!(!g3.has_caps());
     }
 }

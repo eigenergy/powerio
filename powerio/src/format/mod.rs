@@ -1,15 +1,17 @@
-//! The format hub: readers and writers for every supported file format, all
-//! meeting at the shared [`Network`].
+//! Readers and writers for supported case formats, all meeting at [`Network`].
 //!
-//! Each format is one module here, owning its reader and/or writer: MATPOWER
-//! `.m`, PowerModels JSON, PSS/E `.raw`, PowerWorld `.aux`, egret
-//! `ModelData` JSON, pandapower JSON, and PyPSA CSV folders. Every input and
-//! output format meets at the hub, so adding a format is one module, not a
-//! change to any other. [`parse_file`] reads a file, detecting the format from
-//! its extension; [`write_as`] serializes a `Network` to text targets.
-//! Writers for directory formats, such as PyPSA CSV folders, expose explicit
-//! filesystem helpers. Non-finite numeric values (a MATPOWER `Inf`/`NaN` angle
-//! limit, say) are written as JSON `null`.
+//! Each format module owns its reader and/or writer: MATPOWER `.m`,
+//! PowerModels JSON, PSS/E `.raw`, PowerWorld `.aux`, egret `ModelData` JSON,
+//! pandapower JSON, PyPSA CSV folders, and PSLF `.epc`. PowerWorld `.pwb`,
+//! PSLF `.epc`, and PowerWorld `.pwd` displays are read only. Case input and
+//! output formats meet here, so adding a writable format is one module plus
+//! one hub registration.
+//! [`parse_file`] reads Network cases, detecting the format from its extension;
+//! [`parse_display_file`] reads display artifacts such as PowerWorld `.pwd`.
+//! [`write_as`] serializes a `Network` to text targets. Directory formats,
+//! such as PyPSA CSV folders, use explicit filesystem helpers. Non-finite
+//! numeric values, such as MATPOWER `Inf`/`NaN` angle limits, are written as
+//! JSON `null`.
 //!
 //! # Fidelity contract
 //!
@@ -38,6 +40,7 @@ mod matpower;
 mod pandapower;
 mod powermodels;
 pub mod powerworld;
+mod pslf;
 mod psse;
 mod pypsa;
 
@@ -45,7 +48,8 @@ pub use egret::{parse_egret_json, write_egret_json};
 pub use matpower::{parse_matpower, parse_matpower_file, write_matpower};
 pub use pandapower::{parse_pandapower_json, write_pandapower_json};
 pub use powermodels::{parse_powermodels_json, write_powermodels_json};
-pub use powerworld::{parse_powerworld, write_powerworld};
+pub use powerworld::{PwdDisplay, PwdSubstation, parse_powerworld, write_powerworld};
+pub use pslf::parse_pslf;
 pub use psse::{parse_psse, write_psse};
 pub use pypsa::{PypsaCsvOutputs, read_pypsa_csv_folder, write_pypsa_csv_folder};
 
@@ -129,6 +133,65 @@ impl FromStr for TargetFormat {
     }
 }
 
+/// A display artifact format. These files are not power network cases and do
+/// not parse to [`Network`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum DisplayFormat {
+    /// PowerWorld oneline display `.pwd`.
+    PowerWorld,
+}
+
+impl DisplayFormat {
+    /// Conventional file extension for this display format (no leading dot).
+    #[must_use]
+    pub fn extension(self) -> &'static str {
+        match self {
+            DisplayFormat::PowerWorld => "pwd",
+        }
+    }
+
+    /// Human-readable format name for diagnostics.
+    #[must_use]
+    pub fn label(self) -> &'static str {
+        match self {
+            DisplayFormat::PowerWorld => "PowerWorld .pwd",
+        }
+    }
+
+    /// Canonical API token for this format.
+    #[must_use]
+    pub fn token(self) -> &'static str {
+        match self {
+            DisplayFormat::PowerWorld => "powerworld-display",
+        }
+    }
+}
+
+impl fmt::Display for DisplayFormat {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.token())
+    }
+}
+
+impl FromStr for DisplayFormat {
+    type Err = Error;
+
+    fn from_str(name: &str) -> Result<Self> {
+        display_format_from_name(name).ok_or_else(|| Error::UnknownFormat(name.to_string()))
+    }
+}
+
+/// Map a display format name to a [`DisplayFormat`], or `None` if unrecognized.
+/// Accepts `pwd`, `powerworld-pwd`, and `powerworld-display`.
+#[must_use]
+pub fn display_format_from_name(name: &str) -> Option<DisplayFormat> {
+    Some(match name.to_ascii_lowercase().as_str() {
+        "pwd" | "powerworld-pwd" | "powerworld-display" => DisplayFormat::PowerWorld,
+        _ => return None,
+    })
+}
+
 /// Map a format name (with the common aliases) to a [`TargetFormat`], or `None`
 /// if unrecognized. Accepts `matpower`/`m`, `powermodels-json`/`powermodels`/`pm`,
 /// `egret-json`/`egret`, `pandapower-json`/`pandapower`/`pp`, `psse`/`raw`,
@@ -159,6 +222,87 @@ pub fn target_format_from_name(name: &str) -> Option<TargetFormat> {
     })
 }
 
+/// Output of a display parse. v0.2.2 supports PowerWorld `.pwd`; future display
+/// formats can add variants without changing the parse entry point.
+#[derive(Debug, Clone, PartialEq)]
+#[non_exhaustive]
+pub enum DisplayData {
+    /// PowerWorld oneline display data.
+    PowerWorld(PwdDisplay),
+}
+
+impl DisplayData {
+    /// The display format represented by this value.
+    #[must_use]
+    pub fn format(&self) -> DisplayFormat {
+        match self {
+            DisplayData::PowerWorld(_) => DisplayFormat::PowerWorld,
+        }
+    }
+}
+
+fn display_file_guidance() -> Error {
+    Error::UnknownFormat(
+        "a PowerWorld .pwd is display data, not a Network case; \
+         use parse_display_file(path, None)"
+            .into(),
+    )
+}
+
+/// Parse display bytes in the named display `format`.
+///
+/// # Errors
+/// [`Error::UnknownFormat`] if `format` is not a display format; otherwise the
+/// reader's own [`Error`] on malformed input.
+pub fn parse_display_bytes(bytes: &[u8], format: &str) -> Result<DisplayData> {
+    let fmt =
+        display_format_from_name(format).ok_or_else(|| Error::UnknownFormat(format.to_string()))?;
+    match fmt {
+        DisplayFormat::PowerWorld => Ok(DisplayData::PowerWorld(powerworld::parse_pwd_display(
+            bytes,
+        )?)),
+    }
+}
+
+/// Parse the display file at `path`, choosing the reader from `from` or, when
+/// `None`, from the extension. v0.2.2 infers PowerWorld `.pwd`.
+///
+/// # Errors
+/// [`Error::UnknownFormat`] if `from` is unrecognized or the extension cannot
+/// be mapped; [`Error::Io`] if the file cannot be read; the reader's own
+/// [`Error`] on malformed input.
+pub fn parse_display_file(
+    path: impl AsRef<std::path::Path>,
+    from: Option<&str>,
+) -> Result<DisplayData> {
+    let path = path.as_ref();
+    let fmt = match from {
+        Some(f) => {
+            display_format_from_name(f).ok_or_else(|| Error::UnknownFormat(f.to_string()))?
+        }
+        None => match path
+            .extension()
+            .and_then(|e| e.to_str())
+            .map(str::to_ascii_lowercase)
+            .as_deref()
+        {
+            Some("pwd") => DisplayFormat::PowerWorld,
+            other => {
+                return Err(Error::UnknownFormat(format!(
+                    "cannot infer display format from file extension {other:?}; \
+                     pass an explicit display format"
+                )));
+            }
+        },
+    };
+    let bytes = std::fs::read(path)?;
+    match fmt {
+        DisplayFormat::PowerWorld => Ok(DisplayData::PowerWorld(powerworld::parse_pwd_display(
+            &bytes,
+        )?)),
+    }
+}
+
 /// Whether a format name means a PyPSA CSV folder. PyPSA folders are directory
 /// inputs, not text targets, so they have no [`TargetFormat`] arm; this is the
 /// companion alias matcher to [`target_format_from_name`] and the one place the
@@ -170,18 +314,28 @@ fn is_pypsa_csv_name(name: &str) -> bool {
     )
 }
 
+/// Whether a source format name means PSLF EPC. PSLF is read only and
+/// deliberately stays out of [`TargetFormat`].
+fn is_pslf_name(name: &str) -> bool {
+    matches!(
+        name.to_ascii_lowercase().replace(['-', '_'], "").as_str(),
+        "pslf" | "epc" | "pslfepc"
+    )
+}
+
 /// Parse the case file at `path`, choosing the reader from `from` (the
-/// [`target_format_from_name`] names plus `pypsa-csv`/`pypsa` and `pwb`) or,
-/// when `None`, from the path: a directory containing `network.csv` parses as
-/// a PyPSA CSV folder (any other directory fails: [`Error::UnknownFormat`]
-/// when its name maps to no extension, the I/O error otherwise), and a
-/// file maps by extension (`m`/`json`/`raw`/`aux`/`pwb`), case-insensitively
-/// (issue #97: `.RAW` is as common as `.raw` in the wild). A `.json` file is
-/// sniffed four ways: pandapower (`"_class": "pandapowerNet"`), egret (top
-/// level `elements` and `system`), the powerio-json snapshot (top level
-/// `buses`), else PowerModels. Pass `from` to force one.
-/// `.pwb` binaries are read only and carry no retained source. Returns
-/// [`Parsed`]: the network plus the reader's fidelity warnings.
+/// [`target_format_from_name`] names plus `pypsa-csv`/`pypsa`, `pwb`, `pslf`,
+/// and `epc`) or, when `None`, from the path: a directory containing
+/// `network.csv` parses as a PyPSA CSV folder (any other directory fails:
+/// [`Error::UnknownFormat`] when its name maps to no extension, the I/O error
+/// otherwise), and a file maps by extension (`m`/`json`/`raw`/`aux`/`pwb`/`epc`),
+/// case insensitively (issue #97: `.RAW` is as common as `.raw` in the wild). A
+/// `.json` file is sniffed four ways: pandapower (`"_class": "pandapowerNet"`),
+/// egret (top level `elements` and `system`), the powerio-json snapshot (top
+/// level `buses`), else PowerModels. Pass `from` to force one. PowerWorld `.pwb`
+/// is a binary read only format with no retained source; PSLF `.epc` is text and
+/// read only. Returns [`Parsed`]: the network plus the reader's fidelity
+/// warnings.
 ///
 /// The one path-based parser the CLI and the Python/C/Julia bindings share (each
 /// exposes the same `parse_file(path, from)` shape), so adding a source format is
@@ -220,20 +374,27 @@ pub fn parse_file(path: impl AsRef<std::path::Path>, from: Option<&str>) -> Resu
             warnings: Vec::new(),
         });
     }
+    if from.is_some_and(is_pslf_name) || (from.is_none() && ext.as_deref() == Some("epc")) {
+        let text = std::fs::read_to_string(path)?;
+        let stem = path.file_stem().and_then(|s| s.to_str());
+        let mut warnings = Vec::new();
+        let network = pslf::parse_pslf_source(Arc::new(text), stem, &mut warnings)?;
+        reject_empty_case(&network, "PSLF .epc")?;
+        return Ok(Parsed { network, warnings });
+    }
     // Settle the format before touching the file: an unmapped or binary
     // extension must surface as UnknownFormat, not as the UTF-8 read error
     // the text formats' loader would hit first. `.pwd` gets its own arm
     // because the display sibling ships next to every case file in the wild
     // and carries no case data.
     if from.is_none() && ext.as_deref() == Some("pwd") {
-        return Err(Error::UnknownFormat(
-            "a PowerWorld .pwd is the oneline display, not case data; \
-             powerworld::parse_pwd reads its substation coordinates"
-                .into(),
-        ));
+        return Err(display_file_guidance());
     }
     let fmt_hint = match from {
         Some(f) => {
+            if display_format_from_name(f).is_some() {
+                return Err(display_file_guidance());
+            }
             Some(target_format_from_name(f).ok_or_else(|| Error::UnknownFormat(f.to_string()))?)
         }
         None => {
@@ -351,6 +512,12 @@ fn sniff_json(text: &str) -> TargetFormat {
 /// [`Error::UnknownFormat`] if `format` is unrecognized; the reader's own
 /// [`Error`] on malformed input.
 pub fn parse_str(text: &str, format: &str) -> Result<Parsed> {
+    if is_pslf_name(format) {
+        let mut warnings = Vec::new();
+        let network = pslf::parse_pslf_source(Arc::new(text.to_owned()), None, &mut warnings)?;
+        reject_empty_case(&network, "PSLF .epc")?;
+        return Ok(Parsed { network, warnings });
+    }
     let fmt =
         target_format_from_name(format).ok_or_else(|| Error::UnknownFormat(format.to_string()))?;
     read_source(Arc::new(text.to_owned()), fmt, None)
@@ -713,6 +880,7 @@ mod tests {
             SourceFormat::Gridfm,
             SourceFormat::PypsaCsv,
             SourceFormat::PowerWorldBinary,
+            SourceFormat::Pslf,
         ] {
             assert_eq!(target_format_from_name(&format!("{sf:?}")), None);
         }

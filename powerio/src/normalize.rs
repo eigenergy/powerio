@@ -9,8 +9,8 @@
 //!   reader inverts it; [`Network::to_normalized`] scales the same way into a new
 //!   `Network`. The cost rescale is the one piece subtle enough that a second copy
 //!   would drift, so it has a single home.
-//! - **[`Network::to_normalized`]**: a derived, computation-ready view — per unit,
-//!   radians, out-of-service filtered, densely reindexed, bus types canonicalized.
+//! - **[`Network::to_normalized`]**: a derived, computation-ready view, per unit,
+//!   radians, out-of-service filtered, source id preserving, bus types canonicalized.
 
 use std::collections::{HashMap, HashSet};
 
@@ -96,7 +96,7 @@ pub(crate) fn cost_from_pu(coeffs: &[f64], model: u8, base: f64) -> Vec<f64> {
     }
 }
 
-/// Map an old bus id to its new dense id, or `None` if the bus was dropped.
+/// Map a source bus id to its surviving normalized id, or `None` if the bus was dropped.
 fn remap(map: &HashMap<BusId, BusId>, id: BusId) -> Option<BusId> {
     map.get(&id).copied()
 }
@@ -252,8 +252,10 @@ impl Network {
     ///   bus. A bus orphaned by the out-of-service filter (no in-service branch,
     ///   but not typed isolated) is kept — its load is real — and surfaces as its
     ///   own island, which the grounding check reports if it has no reference.
-    /// - **Reindexed**: kept buses get a dense 1-based id (their position among the
-    ///   survivors), and every endpoint is remapped to match.
+    /// - **IDs**: kept buses retain their source bus ids, and every surviving
+    ///   endpoint stays in the same id space. Consumers that need dense rows should
+    ///   use [`IndexedNetwork`](crate::IndexedNetwork), which derives `[0, n)`
+    ///   indices without destroying source ids.
     /// - **Bus types**: a bus hosting a surviving generator keeps `REF` if the file
     ///   marked it `REF`, otherwise becomes `PV`; a generator-less bus is `PQ` (so a
     ///   generator-less `REF` is demoted). The file's `REF` buses are kept, several
@@ -282,18 +284,15 @@ impl Network {
         let base = self.base_mva;
 
         // Kept buses keep their original `kind` for now (the reference scan below
-        // reads it); the new id is the 1-based position among survivors. Isolated
-        // buses are dropped.
+        // reads it) and their source ids. Isolated buses are dropped.
         let mut id_map: HashMap<BusId, BusId> = HashMap::with_capacity(self.buses.len());
         let mut buses: Vec<Bus> = Vec::with_capacity(self.buses.len());
         for b in &self.buses {
             if b.kind == BusType::Isolated {
                 continue;
             }
-            let new_id = BusId(buses.len() + 1);
-            id_map.insert(b.id, new_id);
+            id_map.insert(b.id, b.id);
             buses.push(Bus {
-                id: new_id,
                 va: b.va * DEG_TO_RAD,
                 ..b.clone()
             });
@@ -349,9 +348,9 @@ impl Network {
             source_format: SourceFormat::Normalized,
             source: None,
         };
-        // The filter+remap drops every reference to a dropped bus by
+        // The filter drops every reference to a dropped bus by
         // construction, so the result is reference-consistent. Assert it in
-        // debug builds to catch a future regression in the remap logic.
+        // debug builds to catch a future regression in the filtering logic.
         debug_assert!(
             net.validate().is_ok(),
             "to_normalized produced a dangling reference"

@@ -251,17 +251,18 @@ fn powerworld_rejects_non_integer_bus_numbers() {
 }
 
 #[test]
-fn powerworld_rejects_name_keyed_exports() {
-    // The 2030 era "complete case using labels" option keys devices by
-    // BusName_NomVolt with no bus number column; the reader names the
-    // condition instead of collapsing rows and failing on a reference.
+fn powerworld_reads_name_keyed_exports() {
     let aux = "\
 DATA (Bus, [BusName_NomVolt, BusNum, BusName])\n{\n\"A_138.0\" 1 \"A\"\n}\n\
 DATA (Load, [BusName_NomVolt, LoadID, LoadSMW])\n{\n\"A_138.0\" \"1\" 5.0\n}\n";
-    let err = parse_powerworld(aux).unwrap_err();
+    let net = parse_powerworld(aux).unwrap();
+    assert_eq!(net.loads[0].bus.0, 1);
+
+    let unknown = aux.replace("A_138.0\" \"1\" 5.0", "B_138.0\" \"1\" 5.0");
+    let err = parse_powerworld(&unknown).unwrap_err();
     assert!(
-        err.to_string().contains("BusName_NomVolt"),
-        "error names the vocabulary: {err}"
+        err.to_string().contains("unknown BusName_NomVolt"),
+        "error names the unresolved label: {err}"
     );
 }
 

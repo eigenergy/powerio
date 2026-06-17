@@ -50,6 +50,15 @@ pub struct PioNetwork {
     warnings: Vec<String>,
 }
 
+// The handle is immutable after construction and the C ABI documents concurrent
+// reads from any number of threads as safe (see the cbindgen header preamble).
+// That contract requires `PioNetwork: Send + Sync`; pin it at compile time so a
+// future field that is not `Sync` fails the build instead of the contract.
+const _: fn() = || {
+    fn assert_send_sync<T: Send + Sync>() {}
+    assert_send_sync::<PioNetwork>();
+};
+
 /// Copy `msg` (truncated to fit) into a caller `char[len]` buffer, always
 /// NUL-terminated. Truncation backs up to a UTF-8 character boundary so a
 /// clipped message is still valid UTF-8. Shared by the error and warning
@@ -199,11 +208,12 @@ fn optional_cstr<'a>(p: *const c_char, name: &str) -> Result<Option<&'a str>, St
 
 /// Parse `path` (format from extension, or `from` if non-NULL) into a network
 /// handle. `from` accepts the [`pio_parse_str`] format names plus
-/// `pypsa-csv`/`pypsa`; a PyPSA CSV folder is a directory, so it can only enter
-/// through this function, with `from = "pypsa-csv"` (or NULL when the directory
-/// holds a `network.csv`). Read fidelity warnings attach to the handle
-/// ([`pio_warnings`]). Returns `NULL` on error and writes the message into
-/// `errbuf`. Free the handle with [`pio_network_free`].
+/// `pypsa-csv`/`pypsa` and `pwb`; that includes `pslf`/`epc`, and `.epc` is
+/// inferred by extension. A PyPSA CSV folder is a directory, so it can only
+/// enter through this function, with `from = "pypsa-csv"` (or NULL when the
+/// directory holds a `network.csv`). Read fidelity warnings attach to the
+/// handle ([`pio_warnings`]). Returns `NULL` on error and writes the message
+/// into `errbuf`. Free the handle with [`pio_network_free`].
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_parse_file(
     path: *const c_char,
@@ -225,12 +235,13 @@ pub unsafe extern "C" fn pio_parse_file(
 /// Parse in-memory case `text` of the named `format` into a network handle.
 /// Unlike [`pio_parse_file`] there is no path to infer from, so `format` is
 /// required: one of `matpower`/`m`, `powermodels`/`pm`, `egret`,
-/// `pandapower-json`/`pandapower`/`pp`, `psse`/`raw`, `powerworld`/`aux`, or
-/// `powerio-json`/`json` (the canonical snapshot [`pio_to_format`] writes,
-/// validated on read). PyPSA CSV folders are directories, not text; parse them
-/// with [`pio_parse_file`] and `from = "pypsa-csv"`. Read fidelity warnings
-/// attach to the handle ([`pio_warnings`]). Returns `NULL` on error and writes
-/// the message into `errbuf`. Free the handle with [`pio_network_free`].
+/// `pandapower-json`/`pandapower`/`pp`, `psse`/`raw`, `powerworld`/`aux`,
+/// `pslf`/`epc`, or `powerio-json`/`json` (the canonical snapshot
+/// [`pio_to_format`] writes, validated on read). PyPSA CSV folders are
+/// directories, not text; parse them with [`pio_parse_file`] and
+/// `from = "pypsa-csv"`. Read fidelity warnings attach to the handle
+/// ([`pio_warnings`]). Returns `NULL` on error and writes the message into
+/// `errbuf`. Free the handle with [`pio_network_free`].
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_parse_str(
     text: *const c_char,
@@ -371,7 +382,7 @@ unsafe fn view<'a>(net: *const PioNetwork) -> Option<IndexedNetwork<'a>> {
 }
 
 /// Normalize `net` into a NEW network handle: per unit, radians, out-of-service
-/// filtered, densely reindexed, bus types canonicalized (see
+/// filtered, source bus ids preserved, bus types canonicalized (see
 /// `Network::to_normalized`). A value transform, not a serialization — hence
 /// the verb, while the `to_*` family re-encodes unchanged data. The result is
 /// independent of `net`; free both with [`pio_network_free`]. Every extractor
@@ -657,7 +668,9 @@ unsafe fn fill<T: Copy>(out: *mut T, cap: usize, vals: impl ExactSizeIterator<It
 /// Write the 1-based external bus ids, in dense order, into `out`, up to `cap`
 /// entries, and return the total bus count. This ordering DEFINES the dense
 /// index space every other per-bus array shares. Call once with `(NULL, 0)` to
-/// size, allocate, then call again to fill.
+/// size, allocate, then call again to fill. Ids are int64 in `1..2^63-1` (a v4
+/// invariant); a source id that is a string or exceeds that range is mapped to
+/// dense int64 at read, never passed through raw.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_bus_ids(net: *const PioNetwork, out: *mut i64, cap: usize) -> usize {
     unsafe {
@@ -1306,6 +1319,63 @@ mpc.branch = [
             let mut refs = [-1i64; 2];
             assert_eq!(pio_ref_bus_indices(cn, refs.as_mut_ptr(), refs.len()), 2);
             assert_eq!(refs, [0, 1]);
+
+            pio_network_free(cn);
+            pio_network_free(cs);
+        }
+    }
+
+    #[test]
+    fn normalized_preserves_source_bus_ids() {
+        let src = "\
+function mpc = sparseids
+mpc.version = '2';
+mpc.baseMVA = 100;
+mpc.bus = [
+\t1\t3\t0\t0\t0\t0\t1\t1\t0\t230\t1\t1.1\t0.9;
+\t2\t1\t0\t0\t0\t0\t1\t1\t0\t230\t1\t1.1\t0.9;
+\t3\t1\t0\t0\t0\t0\t1\t1\t0\t230\t1\t1.1\t0.9;
+\t4\t1\t0\t0\t0\t0\t1\t1\t0\t230\t1\t1.1\t0.9;
+\t10\t1\t50\t10\t0\t0\t1\t1\t0\t230\t1\t1.1\t0.9;
+];
+mpc.gen = [
+\t1\t0\t0\t100\t-100\t1\t100\t1\t200\t0\t0\t0\t0\t0\t0\t0\t0\t0\t0\t0\t0;
+];
+mpc.branch = [
+\t1\t2\t0.01\t0.1\t0\t0\t0\t0\t0\t0\t1\t-360\t360;
+\t2\t3\t0.01\t0.1\t0\t0\t0\t0\t0\t0\t1\t-360\t360;
+\t3\t4\t0.01\t0.1\t0\t0\t0\t0\t0\t0\t1\t-360\t360;
+\t4\t10\t0.01\t0.1\t0\t0\t0\t0\t0\t0\t1\t-360\t360;
+];
+";
+        let text = CString::new(src).unwrap();
+        let fmt = CString::new("matpower").unwrap();
+        let mut err = [0 as c_char; 256];
+        unsafe {
+            let cs = pio_parse_str(text.as_ptr(), fmt.as_ptr(), err.as_mut_ptr(), err.len());
+            assert!(!cs.is_null(), "parse_str returned null");
+            let cn = pio_normalize(cs, err.as_mut_ptr(), err.len());
+            assert!(!cn.is_null(), "normalize returned null");
+
+            let mut ids = vec![0i64; pio_n_buses(cn)];
+            pio_bus_ids(cn, ids.as_mut_ptr(), ids.len());
+            assert_eq!(ids, vec![1, 2, 3, 4, 10]);
+
+            let mut from = vec![0i64; pio_n_branches(cn)];
+            let mut to = vec![0i64; pio_n_branches(cn)];
+            pio_branches(
+                cn,
+                from.as_mut_ptr(),
+                to.as_mut_ptr(),
+                std::ptr::null_mut(),
+                std::ptr::null_mut(),
+                std::ptr::null_mut(),
+                std::ptr::null_mut(),
+                std::ptr::null_mut(),
+                std::ptr::null_mut(),
+                from.len(),
+            );
+            assert_eq!((from[3], to[3]), (4, 10));
 
             pio_network_free(cn);
             pio_network_free(cs);

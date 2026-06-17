@@ -41,6 +41,11 @@ header = """
  * - Array extractors write up to `cap` values per output array and return the
  *   total available; NULL out (or cap 0) is a pure count query, so a short
  *   read is detectable and a caller buffer can never silently overflow.
+ * - Bus ids are int64 in the range 1..2^63-1 (a v4 invariant). pio_bus_ids and
+ *   every per-bus column keyed to its ordering are int64; a source whose ids are
+ *   strings or exceed 2^63-1 has no representation on this surface and is mapped
+ *   to dense int64 at read (with a warning) or routed through the multiconductor
+ *   surface. Never hand a raw oversized id to this surface.
  * - errbuf/errlen caller buffers (the libpcap/curl idiom: allocation-free
  *   across the boundary, no thread-local state). NULL or length 0 discards
  *   the message; a long message truncates on a UTF-8 character boundary and
@@ -66,7 +71,13 @@ header = """
  * symbols; rich or multiconductor data rides the Arrow C Data Interface
  * (pio_to_arrow) and the powerio-json snapshot, whose schemas carry their own
  * structure and grow without touching a C signature. The dense extractors are
- * the frozen balanced positive-sequence projection, complete as-is.
+ * the frozen balanced positive-sequence projection, complete as-is. The Arrow
+ * tables and the powerio-json schema are append-only: the existing
+ * PIO_ARROW_TABLE_* ids and each table's column order are frozen, a new table
+ * takes the next id and new columns append (nullable) at the end, and a
+ * consumer addresses columns by name, never by position. The powerio-json
+ * snapshot adds only optional or defaulted fields; existing field names, types,
+ * and wire forms stay fixed. This is what PIO_ABI_VERSION freezes.
  *
  * Optional: build with `--features arrow` for pio_to_arrow (guarded by
  * PIO_ARROW), and `--features gridfm` for pio_read_dir / pio_scenario_ids

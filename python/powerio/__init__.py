@@ -1,7 +1,7 @@
 """powerio: lossless power system case file IO, conversion, and matrices.
 
-Parse MATPOWER, PSS/E, PowerWorld, PowerModels JSON, egret JSON, pandapower
-JSON, and PyPSA CSV folders into one format-neutral case; write retained text
+Parse MATPOWER, PSS/E, PowerWorld, PSLF EPC, PowerModels JSON, egret JSON,
+pandapower JSON, and PyPSA CSV folders into one format neutral case; write retained text
 formats back byte exact; convert between formats; and pull the sparse matrices
 and graph views solvers need::
 
@@ -45,6 +45,9 @@ __all__ = [
     "Incidence",
     "YbusParts",
     "Conversion",
+    "DisplayData",
+    "PwdDisplay",
+    "PwdSubstation",
     "DenseNetwork",
     "DenseBranch",
     "DenseGen",
@@ -54,6 +57,8 @@ __all__ = [
     "PowerIOParseError",
     "PowerIODataError",
     "parse_file",
+    "parse_display_file",
+    "parse_display_bytes",
     "parse_str",
     "from_json",
     "convert_file",
@@ -85,6 +90,21 @@ id these rows came from; ``warnings`` lists what the gridfm schema could not
 round-trip (synthesized bus ids, folded per-bus load/shunt, dropped HVDC/storage,
 piecewise costs). The read is lossy but recovers everything a power flow needs.
 """
+
+DisplayData = namedtuple("DisplayData", ["kind", "data"])
+DisplayData.__doc__ = """Output of :func:`parse_display_file` / :func:`parse_display_bytes`.
+
+``kind`` names the display format. For v0.2.2, ``kind == "powerworld"`` and
+``data`` is a :class:`PwdDisplay`.
+"""
+
+PwdDisplay = namedtuple(
+    "PwdDisplay", ["canvas_width", "canvas_height", "stamp", "substations"]
+)
+PwdDisplay.__doc__ = """Decoded PowerWorld ``.pwd`` display metadata."""
+
+PwdSubstation = namedtuple("PwdSubstation", ["number", "name", "x", "y"])
+PwdSubstation.__doc__ = """One decoded PowerWorld display substation."""
 
 Incidence = namedtuple("Incidence", ["A", "b", "p_shift", "branch_of_col"])
 Incidence.__doc__ = """Output of :meth:`Network.incidence`.
@@ -174,6 +194,27 @@ def _require_gridfm() -> None:
             "wheel built with gridfm support or rebuild from source with "
             "`maturin develop --features gridfm`."
         )
+
+
+def _wrap_display(raw) -> DisplayData:
+    kind, payload = raw
+    if kind == "powerworld":
+        substations = [
+            PwdSubstation(
+                row["number"],
+                row["name"],
+                row["x"],
+                row["y"],
+            )
+            for row in payload["substations"]
+        ]
+        payload = PwdDisplay(
+            payload["canvas_width"],
+            payload["canvas_height"],
+            payload["stamp"],
+            substations,
+        )
+    return DisplayData(kind, payload)
 
 
 class Network:
@@ -382,7 +423,7 @@ class Network:
 
     def to_normalized(self) -> "Network":
         """A normalized, computation-ready copy of this case: per unit, radians,
-        out-of-service filtered, densely reindexed (1-based), bus types
+        out-of-service filtered, source bus ids preserved, bus types
         canonicalized. The original case is unchanged; the result carries no
         retained source, so :meth:`write` serializes the per-unit model rather
         than echoing it. Raises :class:`PowerIODataError` if the case can't be
@@ -419,9 +460,20 @@ def parse_file(path: Any, from_: Optional[str] = None) -> Network:
     """Parse a case file from a path, inferring the format from the extension.
 
     Read fidelity warnings are on ``Network.read_warnings`` (empty for readers
-    that don't report any; currently all but pandapower JSON and PyPSA CSV).
+    that don't report any; currently pandapower JSON, PyPSA CSV, and PSLF EPC
+    report them).
     """
     return Network(_powerio.parse_file(str(path), from_))
+
+
+def parse_display_file(path: Any, from_: Optional[str] = None) -> DisplayData:
+    """Parse a display artifact such as a PowerWorld ``.pwd`` file."""
+    return _wrap_display(_powerio.parse_display_file(str(path), from_))
+
+
+def parse_display_bytes(data: bytes, format: str) -> DisplayData:
+    """Parse display bytes in the named display format."""
+    return _wrap_display(_powerio.parse_display_bytes(data, format))
 
 
 def parse_str(text: str, format: str = "matpower") -> Network:
@@ -440,8 +492,10 @@ def convert_file(path: Any, to: str, from_: Optional[str] = None) -> Conversion:
     ``to`` / ``from_`` are format names: ``matpower``, ``powermodels-json``,
     ``egret-json``, ``pandapower-json``, ``psse``, ``powerworld`` (aliases
     ``m``, ``pm``, ``egret``, ``pp``, ``raw``, ``aux``). The input format is
-    inferred from the file extension unless ``from_`` overrides it. PyPSA CSV
-    folders are read with ``from_="pypsa-csv"`` and written with
+    inferred from the file extension unless ``from_`` overrides it. PSLF EPC is
+    accepted as input with ``from_="pslf"`` / ``"epc"`` or a ``.epc`` extension,
+    but it is not a write target. PyPSA CSV folders are read with
+    ``from_="pypsa-csv"`` and written with
     :meth:`Network.write_pypsa_csv_folder`. Returns a :class:`Conversion` with
     the text and any fidelity warnings.
     """

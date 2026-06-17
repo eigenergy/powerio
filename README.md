@@ -9,13 +9,16 @@
   >
 </p>
 
-PowerIO is a fast, universal parser and converter for power system case files. It aspires to be "the [pandoc](https://pandoc.org) for power systems." 
+PowerIO parses power system case files into a typed `Network`, converts between
+formats, and builds sparse matrices and graph views for solver and analysis
+code. Same format writes return retained source text when the reader supports
+it; cross format writes report fields the target cannot carry in warnings.
 
-Using PowerIO, you can build sparse matrices and graph views for downstream analysis and solver code. PowerIO can serve as a drop-in replacement for the data layers of many popular community libraries, enhancing interoperability between diverse packages and formats. 
-
-
-PowerIO is implemented in [Rust](https://rust-lang.org) with a low-level [C ABI](https://github.com/eigenergy/powerio/tree/main/powerio-capi); any
-language with a C foreign function interface (FFI) can call it, including [Python](#python) and [Julia](#julia). You can also use it directly in [Rust itself](#rust) or through the [command line](#command-line-interface-cli).
+The core is implemented in [Rust](https://rust-lang.org). The
+[C ABI](https://github.com/eigenergy/powerio/tree/main/powerio-capi) exposes
+the same parser and converter to C, C++, Julia, and other foreign function
+interfaces. The Python package and command line interface sit on top of the
+same Rust code.
 
 ## Overview
 
@@ -23,10 +26,11 @@ When writing back to the source format, PowerIO **returns the original file exac
 
 ### Formats
 
-The following formats are currently supported with read/write functionality:
+The following formats are currently supported:
 - [MATPOWER](https://matpower.org/) `.m`
 - [PSS/E](https://www.siemens.com/global/en/products/energy/grid-software/planning/pss-software/pss-e.html) `.raw` revision 33
-- [PowerWorld](https://www.powerworld.com/WebHelp/Content/MainDocumentation_HTML/Case_Formats.htm) `.aux`, plus read only `.pwb` (binary case) and `.pwd` (display) readers; vintage coverage and decode evidence in [docs/powerworld.md](docs/powerworld.md)
+- [PowerWorld](https://www.powerworld.com/WebHelp/Content/MainDocumentation_HTML/Case_Formats.htm) `.aux`, plus read only `.pwb` binary cases; `.pwd` display files parse through the separate display API. Vintage coverage and decode evidence live in [docs/powerworld.md](docs/powerworld.md).
+- GE PSLF `.epc` power flow cases as read only inputs.
 - [PowerModels.jl](https://github.com/lanl-ansi/PowerModels.jl) network data JSON
 - [egret](https://pypi.org/project/gridx-egret/) `ModelData` JSON
 - [pandapower](https://www.pandapower.org/) `pandapowerNet` JSON
@@ -53,7 +57,10 @@ powerio-capi     # C ABI for C, C++, Julia, and other foreign function interface
 PowerIO.jl       # Julia bindings over the C ABI
 ```
 
-The core powerio [Rust crate](https://crates.io/crates/powerio) is as dependency light as possible, with its companion [Python package](https://pypi.org/project/powerio/) requiring **zero dependencies**.
+The core [powerio Rust crate](https://crates.io/crates/powerio) keeps parsing
+and conversion separate from matrix, TUI, and data frame dependencies. The
+[Python package](https://pypi.org/project/powerio/) imports with no required
+third party packages; matrix and graph helpers live behind extras.
 
 API docs: <https://eigenergy.github.io/powerio/>.
 Language API map: [languages guide](https://eigenergy.github.io/powerio/guides/languages.html).
@@ -79,7 +86,8 @@ julia -e 'using Pkg; Pkg.add(url="https://github.com/eigenergy/PowerIO.jl")'
 ```rust
 use powerio::{TargetFormat, parse_file};
 
-let net = parse_file("case14.m")?.network;
+let parsed = parse_file("case14.m", None)?;
+let net = parsed.network;
 let conv = net.to_format(TargetFormat::PowerModelsJson)?;
 
 for warning in &conv.warnings {
@@ -95,6 +103,7 @@ import powerio as pio
 
 case = pio.parse_file("case9.m")
 bprime = case.bprime()            # scipy.sparse, needs powerio[matrix]
+display = pio.parse_display_file("case.pwd")
 raw, warnings = pio.convert_file("case9.m", "psse")
 ```
 
@@ -113,6 +122,7 @@ powerio convert tests/data/case14.m --to psse -o case14.raw
 powerio convert tests/data/case14.m --to pandapower-json -o case14.pp.json
 powerio convert tests/data/case14.m --to pypsa-csv -o pypsa_case
 powerio convert pypsa_case --from pypsa-csv --to matpower -o case14.m
+powerio convert case.epc --from pslf --to matpower -o case.m
 powerio verify tests/data/case30.m --kind bdoubleprime
 powerio dcopf tests/data/case30.m -o out
 powerio sensitivities tests/data/case30.m -o out
@@ -131,14 +141,19 @@ powerio
 | PSS/E | full | full | original text | partial | partial | partial |
 | PowerWorld | full | full | partial | original text | partial | partial |
 | PowerWorld `.pwb` | full | full | partial | partial | partial | partial |
+| PSLF `.epc` | partial | partial | partial | partial | partial | partial |
 | egret JSON | partial | full | partial | partial | original text | partial |
 | pandapower JSON | partial | partial | partial | partial | partial | original text |
 
 `partial` means the target lacks fields present in the source. The writer reports
 those cases in `Conversion::warnings`. PowerWorld `.pwb` is read only (no
 writer, no retained source): the row shows where its decoded power flow core
-lands; the decoded vintages and per field evidence live in
-[docs/powerworld.md](docs/powerworld.md). 
+lands. PSLF `.epc` is also read only; the parser retains the source text for
+audit and reports unsupported EPC sections as read warnings, but there is no
+PSLF writer. PowerWorld `.pwd` is display data, not a network case, so it is
+outside this conversion table and uses `parse_display_file` /
+`parse_display_bytes`. The decoded vintages and per field evidence live in
+[docs/powerworld.md](docs/powerworld.md).
 
 PyPSA CSV folders and GridFM Parquet are not in this table only because they
 are directory datasets, not single text outputs. Both read and write: PyPSA
@@ -164,13 +179,13 @@ Current conventions for signs, taps, phase shifts, per unit scaling, reference b
 
 ### Normalized View
 
-`Network::to_normalized` derives a mildly opinionated, post-processed copy of a case that is designed to be solver-friendly:
+`Network::to_normalized` derives a post processed copy of a case for solvers:
 
 - powers are in per unit,
 - voltage phase angles are in radians, 
 - inactive elements are removed, 
 - `tap == 0` replaced with `1`,
-- surviving buses reindexed to a dense 1-based id space, and 
+- surviving buses keep their source bus ids, and
 - bus types are made consistent with generator placement and reference buses. 
 
 The normalized copy carries no retained source text, so writing it emits the derived model rather than the original file.

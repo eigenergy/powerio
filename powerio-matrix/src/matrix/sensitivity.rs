@@ -2,11 +2,10 @@
 //!
 //! PTDF maps nodal injections to branch flows (`f = PTDF · p`); LODF maps a
 //! branch outage to the flow it redistributes onto the others. Both come from
-//! the reference-grounded DC Laplacian `ABA = ground_with(L, refs)`: one
-//! row/column removed per reference bus, factored once with a dense Cholesky.
-//! It is SPD as long as every connected component carries a reference (the
-//! [`check_reference_coverage`](crate::indexed::IndexedNetwork::check_reference_coverage)
-//! precondition), so disconnected networks with one reference per island are
+//! the reference grounded DC Laplacian `ABA = ground_with(L, refs)`: one
+//! row/column removed per reference bus. Positive branch weights use a dense
+//! Cholesky factorization; nonsingular indefinite cases fall back to dense
+//! Gaussian elimination. Disconnected networks with one reference per island are
 //! supported. Several references in one island are fixed angle buses; this is
 //! not a participation factor based distributed slack model. PTDF is dense
 //! `m × n`; a future sparse path would compute selected columns or use sparse
@@ -109,8 +108,11 @@ fn ptdf_dense(inc: &IncidenceParts, refs: &[usize]) -> Result<(Vec<f64>, usize, 
 
     // Reduced inverse of the grounded Laplacian: Rinv = (ABA_refs)^{-1}.
     let lr = ground_with(&build_weighted_laplacian(&inc.a, &inc.b), &g);
-    let chol = DenseCholesky::factor(&densify(&lr, nr), nr).ok_or(Error::SingularNetwork)?;
-    let rinv = chol.inverse(); // nr × nr, row-major
+    let dense_lr = densify(&lr, nr);
+    let rinv = DenseCholesky::factor(&dense_lr, nr).map_or_else(
+        || dense_inverse(&dense_lr, nr).ok_or(Error::SingularNetwork),
+        |chol| Ok(chol.inverse()),
+    )?; // nr × nr, row-major
 
     // Minv (n × n) is Rinv padded with a zero row/col at every grounded bus, so
     // each reference's PTDF column comes out zero. PTDF = (B Aᵀ) · Minv, computed
@@ -162,6 +164,59 @@ fn dense_to_csr(dense: &[f64], rows: usize, cols: usize) -> CsMat<f64> {
         }
     }
     coo.finish_csr()
+}
+
+fn dense_inverse(a: &[f64], n: usize) -> Option<Vec<f64>> {
+    let mut a = a.to_vec();
+    let mut inv = vec![0.0; n * n];
+    for i in 0..n {
+        inv[i * n + i] = 1.0;
+    }
+
+    for col in 0..n {
+        let mut pivot_row = col;
+        let mut pivot_abs = a[col * n + col].abs();
+        for r in (col + 1)..n {
+            let v = a[r * n + col].abs();
+            if v > pivot_abs {
+                pivot_abs = v;
+                pivot_row = r;
+            }
+        }
+        if !pivot_abs.is_finite() || pivot_abs <= 1e-12 {
+            return None;
+        }
+        if pivot_row != col {
+            swap_dense_rows(&mut a, n, pivot_row, col);
+            swap_dense_rows(&mut inv, n, pivot_row, col);
+        }
+
+        let pivot = a[col * n + col];
+        for c in 0..n {
+            a[col * n + c] /= pivot;
+            inv[col * n + c] /= pivot;
+        }
+        for r in 0..n {
+            if r == col {
+                continue;
+            }
+            let factor = a[r * n + col];
+            if factor == 0.0 {
+                continue;
+            }
+            for c in 0..n {
+                a[r * n + c] -= factor * a[col * n + c];
+                inv[r * n + c] -= factor * inv[col * n + c];
+            }
+        }
+    }
+    Some(inv)
+}
+
+fn swap_dense_rows(a: &mut [f64], n: usize, r1: usize, r2: usize) {
+    for c in 0..n {
+        a.swap(r1 * n + c, r2 * n + c);
+    }
 }
 
 /// Dense lower-triangular Cholesky `A = L Lᵀ` for a small SPD matrix.

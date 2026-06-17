@@ -170,10 +170,13 @@ enum FormatArg {
     PowerioJson,
     #[value(name = "pypsa-csv", alias = "pypsa")]
     PypsaCsv,
-    /// Read a gridfm-datakit Parquet dataset directory (read-only).
+    /// Read a GE PSLF .epc case (read only).
+    #[value(name = "pslf", alias = "epc")]
+    Pslf,
+    /// Read a gridfm-datakit Parquet dataset directory (read only).
     #[value(name = "gridfm")]
     Gridfm,
-    /// Read a PowerWorld .pwb binary case (read-only).
+    /// Read a PowerWorld .pwb binary case (read only).
     #[value(name = "pwb")]
     Pwb,
 }
@@ -194,6 +197,9 @@ impl FormatArg {
             FormatArg::PypsaCsv => anyhow::bail!(
                 "`convert` cannot return a PyPSA CSV folder as text; pass `--to pypsa-csv -o <dir>`"
             ),
+            FormatArg::Pslf => {
+                anyhow::bail!("PSLF .epc is read only; it cannot be a conversion target")
+            }
             FormatArg::Gridfm => anyhow::bail!(
                 "`convert` cannot write a gridfm dataset; use the `gridfm` subcommand"
             ),
@@ -215,6 +221,7 @@ impl FormatArg {
             FormatArg::PandapowerJson => "pandapower-json",
             FormatArg::PowerioJson => "powerio-json",
             FormatArg::PypsaCsv => "pypsa-csv",
+            FormatArg::Pslf => "pslf",
             FormatArg::Gridfm => "gridfm",
             FormatArg::Pwb => "pwb",
         }
