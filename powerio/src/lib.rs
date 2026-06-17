@@ -40,6 +40,7 @@ pub mod format;
 pub mod indexed;
 pub mod network;
 mod normalize;
+mod operations;
 
 pub use error::{ElementCounts, Error, ErrorCategory, Result, ScenarioMismatch};
 pub use format::{
@@ -58,3 +59,4 @@ pub use network::{
     SwitchedShuntControl, SwitchedShuntMode, Transformer3W, TransformerControl,
     TransformerControlMode, Winding,
 };
+pub use operations::Selector;
