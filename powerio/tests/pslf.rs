@@ -1,8 +1,8 @@
 use std::path::PathBuf;
 
 use powerio::{
-    SourceFormat, TargetFormat, parse_file, parse_pslf, parse_str, target_format_from_name,
-    write_as, write_pslf,
+    SourceFormat, TargetFormat, parse_file, parse_pslf, parse_psse, parse_str,
+    target_format_from_name, write_as, write_pslf,
 };
 
 const EPC: &str = r#"title
@@ -104,6 +104,37 @@ fn pslf_same_format_write_echoes_source() {
     // A PSLF-sourced network writes back byte-for-byte through the retained source.
     let parsed = parse_str(EPC, "pslf").unwrap();
     assert_eq!(write_as(&parsed.network, TargetFormat::Pslf).text, EPC);
+}
+
+#[test]
+fn pslf_write_reports_dropped_transformer_control() {
+    // A PSS/E regulating transformer carries control the .epc record can't hold,
+    // so the PSLF writer must report the loss rather than drop it silently.
+    let raw = "0, 100.00, 33, 0, 0, 60.00 / x\nCASE\nCOMMENT\n\
+        1,'B1          ', 230.0,3,1,1,1,1.0,0.0,1.1,0.9,1.1,0.9\n\
+        2,'B2          ', 138.0,1,1,1,1,1.0,0.0,1.1,0.9,1.1,0.9\n\
+        3,'B3          ', 13.8,1,1,1,1,1.0,0.0,1.1,0.9,1.1,0.9\n\
+        0 / END OF BUS DATA, BEGIN LOAD DATA\n\
+        0 / END OF LOAD DATA, BEGIN FIXED SHUNT DATA\n\
+        0 / END OF FIXED SHUNT DATA, BEGIN GENERATOR DATA\n\
+        0 / END OF GENERATOR DATA, BEGIN BRANCH DATA\n\
+        0 / END OF BRANCH DATA, BEGIN TRANSFORMER DATA\n\
+        1, 2, 0, '1', 1, 1, 1, 0, 0, 2, 'REG         ', 1, 1, 1, 0, 1, 0, 1, 0, 1, '            '\n\
+        0.01, 0.10, 100.0\n\
+        1.025, 0, 2.5, 100.0, 90.0, 80.0, 1, 3, 1.08, 0.92, 1.05, 0.98, 17, 0, 0, 0, 0\n\
+        1.0, 0\n\
+        0 / END OF TRANSFORMER DATA, BEGIN AREA DATA\nQ\n";
+    let net = parse_psse(raw).unwrap();
+    assert!(net.branches[0].control.is_some());
+
+    let conv = write_pslf(&net);
+    assert!(
+        conv.warnings
+            .iter()
+            .any(|w| w.contains("regulating control")),
+        "expected a control-drop warning, got {:?}",
+        conv.warnings
+    );
 }
 
 #[test]

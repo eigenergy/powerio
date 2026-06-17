@@ -1331,6 +1331,15 @@ pub fn write_pslf(net: &Network) -> Conversion {
                 .into(),
         );
     }
+    // The `.epc` transformer record this writer emits has no regulating-control
+    // columns (mode/limits/regulated bus), so a Branch carrying control loses it.
+    let dropped_control = net.branches.iter().filter(|b| b.control.is_some()).count();
+    if dropped_control > 0 {
+        warnings.push(format!(
+            "{dropped_control} transformer(s) lost their regulating control (mode/tap limits/\
+             regulated bus): the PSLF .epc transformer record carries no control columns"
+        ));
+    }
     if sanitized_names > 0 {
         warnings.push(format!(
             "{sanitized_names} name(s) contained a double quote that would corrupt an EPC \
