@@ -60,6 +60,12 @@ pub fn write_egret_json(net: &Network) -> Conversion {
             net.hvdc.len()
         ));
     }
+    if !net.transformers_3w.is_empty() {
+        warnings.push(format!(
+            "{} 3-winding transformer(s) dropped: the egret writer emits no 3-winding record",
+            net.transformers_3w.len()
+        ));
+    }
     if !net.storage.is_empty() {
         warnings.push(format!(
             "{} storage unit(s) dropped: egret storage mapping not implemented",

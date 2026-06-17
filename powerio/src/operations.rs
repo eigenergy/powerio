@@ -13,7 +13,9 @@ use std::collections::HashSet;
 
 use serde_json::Value;
 
-use crate::network::{Branch, Bus, BusId, BusType, Extras, Network, Shunt, SourceFormat};
+use crate::network::{
+    Branch, Bus, BusId, BusType, Extras, Generator, Network, Shunt, SourceFormat,
+};
 
 /// The endpoint of `b` other than `m` (assumes `m` is an endpoint).
 fn other_end(b: &Branch, m: BusId) -> BusId {
@@ -151,7 +153,7 @@ impl Network {
             .filter(|s| in_scope.contains(&s.bus))
             .cloned()
             .collect();
-        let generators = self
+        let mut generators: Vec<Generator> = self
             .generators
             .iter()
             .filter(|g| in_scope.contains(&g.bus))
@@ -196,6 +198,11 @@ impl Network {
                 if c.control_bus.is_some_and(|b| !kept.contains(&b)) {
                     c.control_bus = None;
                 }
+            }
+        }
+        for g in &mut generators {
+            if g.regulated_bus.is_some_and(|b| !kept.contains(&b)) {
+                g.regulated_bus = None;
             }
         }
 
@@ -252,6 +259,9 @@ impl Network {
         }
         for g in &mut self.generators {
             remap(&mut g.bus);
+            if let Some(rb) = g.regulated_bus.as_mut() {
+                remap(rb);
+            }
         }
         for st in &mut self.storage {
             remap(&mut st.bus);
@@ -272,6 +282,11 @@ impl Network {
         for t in &mut self.transformers_3w {
             for w in &mut t.windings {
                 remap(&mut w.bus);
+            }
+        }
+        for a in &mut self.areas {
+            if let Some(slack) = a.slack_bus.as_mut() {
+                remap(slack);
             }
         }
 
@@ -374,7 +389,8 @@ impl Network {
             .shunts
             .iter()
             .any(|s| s.control.as_ref().and_then(|c| c.control_bus) == Some(m));
-        if controlled || regulated {
+        let gen_regulated = self.generators.iter().any(|g| g.regulated_bus == Some(m));
+        if controlled || regulated || gen_regulated {
             return false;
         }
         let incident: Vec<&Branch> = self
@@ -464,7 +480,7 @@ impl Network {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::network::{BusType, Extras, Load};
+    use crate::network::{Area, BusType, Extras, Generator, Load};
 
     fn bus(id: usize, area: usize, base_kv: f64) -> Bus {
         Bus {
@@ -524,6 +540,83 @@ mod tests {
         net.loads.push(load(1));
         net.loads.push(load(3));
         net
+    }
+
+    fn gen_regulating(bus: usize, regulated: usize) -> Generator {
+        Generator {
+            bus: BusId(bus),
+            pg: 10.0,
+            qg: 0.0,
+            pmax: 100.0,
+            pmin: 0.0,
+            qmax: 50.0,
+            qmin: -50.0,
+            vg: 1.0,
+            mbase: 100.0,
+            in_service: true,
+            cost: None,
+            caps: Default::default(),
+            regulated_bus: Some(BusId(regulated)),
+        }
+    }
+
+    #[test]
+    fn subset_clears_a_regulated_bus_outside_the_kept_set() {
+        // A generator on in-scope bus 1 regulates bus 3, which the area filter drops.
+        let mut net = two_area_net();
+        net.generators.push(gen_regulating(1, 3));
+        let sel = Selector {
+            area: Some((1, 1)),
+            ..Selector::default()
+        };
+        let sub = net.subset(&sel, false);
+        assert_eq!(sub.generators.len(), 1);
+        assert_eq!(
+            sub.generators[0].regulated_bus, None,
+            "the dropped remote regulated bus is cleared, not left dangling"
+        );
+        sub.validate().unwrap();
+    }
+
+    #[test]
+    fn merge_bus_remaps_regulated_bus_and_area_slack() {
+        let mut net = two_area_net();
+        net.generators.push(gen_regulating(1, 3)); // gen on bus 1 regulates bus 3
+        net.areas.push(Area {
+            number: 1,
+            slack_bus: Some(BusId(3)),
+            net_interchange: 0.0,
+            tolerance: 0.0,
+            name: None,
+        });
+        net.merge_bus(BusId(2), BusId(3)); // bus 3 merges into bus 2
+        assert_eq!(
+            net.generators[0].regulated_bus,
+            Some(BusId(2)),
+            "the regulated bus follows the merge"
+        );
+        assert_eq!(
+            net.areas[0].slack_bus,
+            Some(BusId(2)),
+            "the area swing follows the merge"
+        );
+        net.validate().unwrap();
+    }
+
+    #[test]
+    fn reduce_passthrough_keeps_a_generator_regulated_bus() {
+        // Bus 2 is a degree-2 junction with no injection, but a generator on bus 1
+        // regulates it, so it is not an inert passthrough.
+        let mut net = Network::in_memory(
+            "net",
+            100.0,
+            vec![bus(1, 1, 230.0), bus(2, 1, 230.0), bus(3, 1, 230.0)],
+            vec![line(1, 2), line(2, 3)],
+        );
+        net.generators.push(gen_regulating(1, 2));
+        assert_eq!(net.reduce_passthrough_buses(), 0);
+        assert_eq!(net.buses.len(), 3);
+        net.validate().unwrap();
     }
 
     #[test]

@@ -84,6 +84,12 @@ pub fn write_powermodels_json(net: &Network) -> Conversion {
             storage.len()
         ));
     }
+    if !net.transformers_3w.is_empty() {
+        warnings.push(format!(
+            "{} 3-winding transformer(s) dropped: the PowerModels JSON writer emits no 3-winding record",
+            net.transformers_3w.len()
+        ));
+    }
 
     let mut root = Map::new();
     root.insert("name".into(), Value::String(net.name.clone()));

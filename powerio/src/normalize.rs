@@ -16,7 +16,7 @@ use std::collections::{HashMap, HashSet};
 
 use crate::network::{
     Branch, Bus, BusId, BusType, GEN_EXTRA_KEYS, GenCost, Generator, Hvdc, Load, Network, Shunt,
-    SourceFormat, Storage,
+    SourceFormat, Storage, Transformer3W,
 };
 use crate::{Error, Result};
 
@@ -125,6 +125,12 @@ fn norm_shunts(shunts: &[Shunt], base: f64, map: &HashMap<BusId, BusId>) -> Vec<
                 bus: remap(map, s.bus)?,
                 g: s.g / base,
                 b: s.b / base,
+                // Remap the switched-shunt control bus and drop it if its target was
+                // filtered out, so the normalized network has no dangling reference.
+                control: s.control.clone().map(|mut c| {
+                    c.control_bus = c.control_bus.and_then(|b| remap(map, b));
+                    c
+                }),
                 ..s.clone()
             })
         })
@@ -146,9 +152,13 @@ fn norm_branches(branches: &[Branch], base: f64, map: &HashMap<BusId, BusId>) ->
                 shift: br.shift * DEG_TO_RAD,
                 angmin: br.angmin * DEG_TO_RAD,
                 angmax: br.angmax * DEG_TO_RAD,
-                // `..br.clone()` carries `control` through; transformer-control tap
-                // limits are unitless and `to_normalized` preserves source bus ids,
-                // so the regulated-bus reference stays valid.
+                // Remap the regulated-bus reference through the id map and drop it
+                // if its target was filtered out (out of service / isolated), so the
+                // normalized network has no dangling control reference.
+                control: br.control.clone().map(|mut c| {
+                    c.controlled_bus = c.controlled_bus.and_then(|b| remap(map, b));
+                    c
+                }),
                 ..br.clone()
             })
         })
@@ -239,6 +249,36 @@ fn norm_hvdc(hvdc: &[Hvdc], base: f64, map: &HashMap<BusId, BusId>) -> Vec<Hvdc>
         .collect()
 }
 
+fn norm_transformers_3w(
+    xfmrs: &[Transformer3W],
+    base: f64,
+    map: &HashMap<BusId, BusId>,
+) -> Vec<Transformer3W> {
+    xfmrs
+        .iter()
+        .filter(|t| t.in_service)
+        .filter_map(|t| {
+            // Remap each winding terminal and drop the whole unit if any was filtered
+            // out (a 3-winding transformer can't keep a dangling winding). Phase
+            // shifts and the star angle go to radians; winding ratings go per unit;
+            // the pairwise impedances are already per unit on the system base.
+            let mut windings = t.windings.clone();
+            for w in &mut windings {
+                w.bus = remap(map, w.bus)?;
+                w.shift *= DEG_TO_RAD;
+                w.rate_a /= base;
+                w.rate_b /= base;
+                w.rate_c /= base;
+            }
+            Some(Transformer3W {
+                windings,
+                star_va: t.star_va * DEG_TO_RAD,
+                ..t.clone()
+            })
+        })
+        .collect()
+}
+
 impl Network {
     /// A normalized, computation-ready copy of this network. The raw `Network` is
     /// kept lossless (MATPOWER units, 1-based sparse ids, out-of-service elements
@@ -309,6 +349,7 @@ impl Network {
         let generators = norm_gens(&self.generators, base, &id_map);
         let storage = norm_storage(&self.storage, base, &id_map);
         let hvdc = norm_hvdc(&self.hvdc, base, &id_map);
+        let transformers_3w = norm_transformers_3w(&self.transformers_3w, base, &id_map);
 
         // Bus types: a bus hosting an in-service generator keeps `Ref` if the
         // file marked it `Ref`, else becomes `Pv`; a gen-less bus is `Pq`.
@@ -352,7 +393,9 @@ impl Network {
             generators,
             storage,
             hvdc,
-            transformers_3w: Vec::new(),
+            transformers_3w,
+            // Areas (interchange schedule, per-area swing) are interchange metadata,
+            // not part of the per-unit electrical view, so they are not carried.
             areas: Vec::new(),
             solver: None,
             source_format: SourceFormat::Normalized,
@@ -375,6 +418,92 @@ mod tests {
 
     fn approx(a: f64, b: f64) -> bool {
         (a - b).abs() < 1e-9
+    }
+
+    #[test]
+    fn to_normalized_drops_a_control_bus_whose_target_was_filtered_out() {
+        use crate::network::{Extras, SwitchedShuntControl, SwitchedShuntMode};
+
+        let mkbus = |id: usize, kind: BusType| Bus {
+            id: BusId(id),
+            kind,
+            vm: 1.0,
+            va: 0.0,
+            base_kv: 230.0,
+            vmax: 1.1,
+            vmin: 0.9,
+            area: 1,
+            zone: 1,
+            name: None,
+            extras: Extras::new(),
+        };
+        let branch = Branch {
+            from: BusId(1),
+            to: BusId(2),
+            r: 0.0,
+            x: 0.1,
+            b: 0.0,
+            rate_a: 0.0,
+            rate_b: 0.0,
+            rate_c: 0.0,
+            tap: 0.0,
+            shift: 0.0,
+            in_service: true,
+            angmin: -360.0,
+            angmax: 360.0,
+            control: None,
+            extras: Extras::new(),
+        };
+        // Bus 3 is isolated, so to_normalized drops it.
+        let mut net = Network::in_memory(
+            "n",
+            100.0,
+            vec![
+                mkbus(1, BusType::Ref),
+                mkbus(2, BusType::Pq),
+                mkbus(3, BusType::Isolated),
+            ],
+            vec![branch],
+        );
+        net.generators.push(Generator {
+            bus: BusId(1),
+            pg: 10.0,
+            qg: 0.0,
+            pmax: 100.0,
+            pmin: 0.0,
+            qmax: 50.0,
+            qmin: -50.0,
+            vg: 1.0,
+            mbase: 100.0,
+            in_service: true,
+            cost: None,
+            caps: Default::default(),
+            regulated_bus: None,
+        });
+        // A switched shunt on bus 2 whose control bus is the (dropped) isolated bus 3.
+        net.shunts.push(Shunt {
+            bus: BusId(2),
+            g: 0.0,
+            b: 10.0,
+            in_service: true,
+            control: Some(SwitchedShuntControl {
+                mode: SwitchedShuntMode::Discrete,
+                vhigh: 1.05,
+                vlow: 0.95,
+                control_bus: Some(BusId(3)),
+                rmpct: 100.0,
+                blocks: Vec::new(),
+            }),
+            extras: Extras::new(),
+        });
+
+        let norm = net.to_normalized().unwrap();
+        norm.validate().unwrap();
+        let c = norm.shunts[0].control.as_ref().expect("control retained");
+        assert_eq!(
+            c.control_bus, None,
+            "a control bus pointing at a filtered-out isolated bus is dropped, not left dangling"
+        );
     }
 
     #[test]

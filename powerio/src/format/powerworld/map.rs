@@ -759,6 +759,12 @@ pub fn write_powerworld(net: &Network) -> Conversion {
             net.hvdc.len()
         ));
     }
+    if !net.transformers_3w.is_empty() {
+        warnings.push(format!(
+            "{} 3-winding transformer(s) dropped: the PowerWorld .aux writer emits no 3-winding record",
+            net.transformers_3w.len()
+        ));
+    }
     if !net.storage.is_empty() {
         warnings.push(format!(
             "{} storage unit(s) dropped: PowerWorld storage not modeled",

@@ -460,6 +460,12 @@ pub fn write_pypsa_csv_folder(net: &Network, out_dir: impl AsRef<Path>) -> Resul
             net.hvdc.len()
         ));
     }
+    if !net.transformers_3w.is_empty() {
+        warnings.push(format!(
+            "{} 3-winding transformer(s) dropped: the PyPSA CSV writer emits no 3-winding transformer",
+            net.transformers_3w.len()
+        ));
+    }
     if net.generators.iter().any(Generator::has_caps) {
         warnings.push("generator capability/ramp columns dropped: PyPSA generator CSV has no MATPOWER capability columns".into());
     }

@@ -1702,6 +1702,48 @@ Q
     }
 
     #[test]
+    fn three_winding_cross_format_warns_and_survives_normalization() {
+        // Same 3-winding record plus a slack generator so to_normalized has a
+        // reference to anchor.
+        let raw = r"0, 100.00, 33, 0, 0, 60.00 / x
+CASE
+COMMENT
+1,'B1          ', 230.0,3,1,1,1,1.00000,0.0,1.1,0.9,1.1,0.9
+2,'B2          ', 138.0,1,1,1,1,1.00000,0.0,1.1,0.9,1.1,0.9
+3,'B3          ', 13.8,1,1,1,1,1.00000,0.0,1.1,0.9,1.1,0.9
+0 / END OF BUS DATA, BEGIN LOAD DATA
+0 / END OF LOAD DATA, BEGIN FIXED SHUNT DATA
+0 / END OF FIXED SHUNT DATA, BEGIN GENERATOR DATA
+1,'1 ',50.0,5.0,20.0,-10.0,1.0,0,100.0,0.0,1.0,0.0,0.0,1.0,1,100.0,80.0,10.0
+0 / END OF GENERATOR DATA, BEGIN BRANCH DATA
+0 / END OF BRANCH DATA, BEGIN TRANSFORMER DATA
+1, 2, 3, '1', 1, 1, 1, 0.0, 0.0, 2, 'T3W         ', 1, 1, 1, 0, 1, 0, 1, 0, 1, '            '
+0.01, 0.10, 100.0, 0.02, 0.20, 100.0, 0.03, 0.30, 100.0, 0.98, -1.5
+1.0, 230.0, 0.0, 100.0, 90.0, 80.0, 0, 0, 1.1, 0.9, 1.1, 0.9, 33, 0, 0, 0, 0
+1.025, 138.0, 0.0, 110.0, 0, 0, 0, 0, 1.1, 0.9, 1.1, 0.9, 33, 0, 0, 0, 0
+0.95, 13.8, 30.0, 50.0, 0, 0, 0, 0, 1.1, 0.9, 1.1, 0.9, 33, 0, 0, 0, 0
+0 / END OF TRANSFORMER DATA, BEGIN AREA DATA
+Q
+";
+        let net = parse_psse(raw).unwrap();
+        assert_eq!(net.transformers_3w.len(), 1);
+
+        // Cross-format write to MATPOWER drops the 3W but must report it, not drop
+        // it silently.
+        let mpc = net.to_format(crate::TargetFormat::Matpower);
+        assert!(
+            mpc.warnings.iter().any(|w| w.contains("3-winding")),
+            "MATPOWER write must warn on the dropped 3-winding transformer, got {:?}",
+            mpc.warnings
+        );
+
+        // The normalized analysis view keeps the 3-winding transformer.
+        let norm = net.to_normalized().unwrap();
+        assert_eq!(norm.transformers_3w.len(), 1, "to_normalized keeps the 3W");
+        norm.validate().unwrap();
+    }
+
+    #[test]
     fn writes_v34_v35_layouts_that_round_trip() {
         let raw = r"0, 100.00, 33, 0, 0, 60.00 / x
 CASE
