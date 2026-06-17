@@ -1629,6 +1629,7 @@ fn read_standard_branch_head(
         in_service: true,
         angmin: -360.0,
         angmax: 360.0,
+        control: None,
         extras,
     };
     Ok((br, c.pos, flags))
@@ -1709,6 +1710,7 @@ fn read_step_up_transformer_head(
         in_service: true,
         angmin: -360.0,
         angmax: 360.0,
+        control: None,
         extras,
     };
     Ok((

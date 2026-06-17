@@ -509,6 +509,7 @@ fn read_branch(v: &Value) -> Result<Branch> {
         in_service: flag(v, "in_service", true)?,
         angmin: f_or(v, "angle_diff_min", -360.0)?,
         angmax: f_or(v, "angle_diff_max", 360.0)?,
+        control: None,
         extras: Extras::new(),
     })
 }

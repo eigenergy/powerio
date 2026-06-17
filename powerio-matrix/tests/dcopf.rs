@@ -412,6 +412,7 @@ fn branch_xts(from: usize, to: usize, x: f64, tap: f64, shift: f64) -> Branch {
         in_service: true,
         angmin: -360.0,
         angmax: 360.0,
+        control: None,
         extras: Extras::new(),
     }
 }

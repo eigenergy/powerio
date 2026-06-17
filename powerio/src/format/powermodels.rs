@@ -540,6 +540,7 @@ fn read_branch(v: &Value, pscale: f64, ascale: f64) -> Branch {
         in_service: flag(v, "br_status"),
         angmin: f(v, "angmin") * ascale,
         angmax: f(v, "angmax") * ascale,
+        control: None,
         extras: extras_excluding(
             v,
             &[

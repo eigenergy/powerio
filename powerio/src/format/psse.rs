@@ -752,6 +752,7 @@ fn read_branch(f: &[String], raw_rev: u32) -> Result<Branch> {
         in_service: on_at(f, status, true)?,
         angmin: -360.0,
         angmax: 360.0,
+        control: None,
         extras: Extras::new(),
     })
 }
@@ -774,6 +775,7 @@ fn read_transformer(l1: &[String], l2: &[String], l3: &[String], _l4: &[String])
         in_service: on_at(l1, 11, true)?,
         angmin: -360.0,
         angmax: 360.0,
+        control: None,
         extras: Extras::new(),
     })
 }

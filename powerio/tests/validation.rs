@@ -37,6 +37,7 @@ fn branch(from: usize, to: usize) -> Branch {
         in_service: true,
         angmin: -360.0,
         angmax: 360.0,
+        control: None,
         extras: Extras::new(),
     }
 }

@@ -1352,6 +1352,7 @@ fn build_network_from_columns(
             in_service: br_status[row] != 0,
             angmin: ang_min[row],
             angmax: ang_max[row],
+            control: None,
             extras: Extras::new(),
         });
     }
@@ -2495,6 +2496,7 @@ mod tests {
             in_service: true,
             angmin: -360.0,
             angmax: 360.0,
+            control: None,
             extras: Extras::new(),
         }
     }

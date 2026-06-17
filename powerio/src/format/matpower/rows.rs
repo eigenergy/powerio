@@ -194,6 +194,7 @@ pub(super) fn branch_row(row: &[f64], i: usize) -> Result<Branch> {
         in_service: is_in_service(row[branch_col::BR_STATUS]),
         angmin: row[branch_col::ANGMIN],
         angmax: row[branch_col::ANGMAX],
+        control: None,
         extras: Extras::new(),
     })
 }

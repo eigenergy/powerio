@@ -279,6 +279,12 @@ pub struct Branch {
     pub in_service: bool,
     pub angmin: f64,
     pub angmax: f64,
+    /// Regulating-transformer control data, when this branch is a transformer
+    /// under automatic tap or phase control. `None` for lines and for fixed-ratio
+    /// transformers. `#[serde(default)]` so JSON written before the field existed
+    /// still deserializes.
+    #[serde(default)]
+    pub control: Option<TransformerControl>,
     pub extras: Extras,
 }
 
@@ -302,6 +308,60 @@ impl Branch {
     #[must_use]
     pub fn has_angle_limits(&self) -> bool {
         self.angmin > -360.0 || self.angmax < 360.0
+    }
+}
+
+/// What a regulating transformer's tap (or phase shift) automatically controls.
+/// Maps to the PSS/E control code `COD` and the PSLF transformer `type`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+#[non_exhaustive]
+pub enum TransformerControlMode {
+    /// Fixed ratio, no automatic adjustment (PSS/E `COD` 0/±4, PSLF type 1).
+    Fixed,
+    /// Bus voltage control via tap (LTC; PSS/E `COD` ±1, PSLF type 2).
+    Voltage,
+    /// Reactive-power-flow control via tap (PSS/E `COD` ±2).
+    ReactiveFlow,
+    /// Active-power-flow control via phase shift (PSS/E `COD` ±3, PSLF type 4).
+    ActiveFlow,
+}
+
+/// Automatic-control data for a regulating transformer ([`Branch::control`]).
+///
+/// The limits carry whatever the [`mode`](TransformerControl::mode) regulates:
+/// `tap_min`/`tap_max` bound the tap ratio (or the phase angle, for
+/// [`ActiveFlow`](TransformerControlMode::ActiveFlow)), and `band_min`/`band_max`
+/// bound the controlled quantity (the regulated voltage band, or the
+/// scheduled MW/MVAr). `ntp` is the number of discrete tap positions and
+/// `controlled_bus` is the regulated bus (`None` = the transformer's own
+/// terminal). `mva_base` is the winding MVA base the impedance is referred to.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[non_exhaustive]
+pub struct TransformerControl {
+    pub mode: TransformerControlMode,
+    pub controlled_bus: Option<BusId>,
+    pub tap_min: f64,
+    pub tap_max: f64,
+    pub band_min: f64,
+    pub band_max: f64,
+    pub ntp: u32,
+    pub mva_base: f64,
+}
+
+impl Default for TransformerControl {
+    fn default() -> Self {
+        // PSS/E's documented defaults for an unset winding-control block.
+        TransformerControl {
+            mode: TransformerControlMode::Fixed,
+            controlled_bus: None,
+            tap_min: 0.9,
+            tap_max: 1.1,
+            band_min: 0.9,
+            band_max: 1.1,
+            ntp: 33,
+            mva_base: 0.0,
+        }
     }
 }
 
@@ -509,6 +569,7 @@ impl Transformer3W {
             in_service: self.in_service,
             angmin: -360.0,
             angmax: 360.0,
+            control: None,
             extras: Extras::new(),
         };
         let branches = [
@@ -677,6 +738,9 @@ impl Network {
                     });
                 }
             }
+            if let Some(bus) = br.control.as_ref().and_then(|c| c.controlled_bus) {
+                check(bus, "transformer control")?;
+            }
         }
         for l in &self.loads {
             check(l.bus, "load")?;
@@ -809,6 +873,61 @@ mod tests {
         let err = net.validate().unwrap_err().to_string();
         assert!(
             err.contains("3-winding transformer references unknown bus 3"),
+            "got {err}"
+        );
+    }
+
+    /// A regulating transformer (bus 1→2) controlling the voltage at bus `reg`.
+    fn regulating_branch(reg: usize) -> Branch {
+        Branch {
+            from: BusId(1),
+            to: BusId(2),
+            r: 0.0,
+            x: 0.1,
+            b: 0.0,
+            rate_a: 0.0,
+            rate_b: 0.0,
+            rate_c: 0.0,
+            tap: 1.0,
+            shift: 0.0,
+            in_service: true,
+            angmin: -360.0,
+            angmax: 360.0,
+            control: Some(TransformerControl {
+                mode: TransformerControlMode::Voltage,
+                controlled_bus: Some(BusId(reg)),
+                tap_min: 0.95,
+                tap_max: 1.05,
+                band_min: 1.0,
+                band_max: 1.02,
+                ntp: 17,
+                mva_base: 100.0,
+            }),
+            extras: Extras::new(),
+        }
+    }
+
+    #[test]
+    fn transformer_control_survives_json_transport() {
+        let mut net = Network::in_memory("t", 100.0, vec![bus(1), bus(2), bus(3)], Vec::new());
+        net.branches.push(regulating_branch(3));
+        net.validate().unwrap();
+
+        let back = Network::from_json(&net.to_json().unwrap()).unwrap();
+        let c = back.branches[0].control.as_ref().unwrap();
+        assert_eq!(c.mode, TransformerControlMode::Voltage);
+        assert_eq!(c.controlled_bus, Some(BusId(3)));
+        close(c.tap_max, 1.05);
+        assert_eq!(c.ntp, 17);
+    }
+
+    #[test]
+    fn check_references_rejects_a_dangling_controlled_bus() {
+        let mut net = Network::in_memory("t", 100.0, vec![bus(1), bus(2)], Vec::new());
+        net.branches.push(regulating_branch(9)); // controls a bus that doesn't exist
+        let err = net.validate().unwrap_err().to_string();
+        assert!(
+            err.contains("transformer control references unknown bus 9"),
             "got {err}"
         );
     }

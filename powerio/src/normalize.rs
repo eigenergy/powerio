@@ -146,6 +146,9 @@ fn norm_branches(branches: &[Branch], base: f64, map: &HashMap<BusId, BusId>) ->
                 shift: br.shift * DEG_TO_RAD,
                 angmin: br.angmin * DEG_TO_RAD,
                 angmax: br.angmax * DEG_TO_RAD,
+                // `..br.clone()` carries `control` through; transformer-control tap
+                // limits are unitless and `to_normalized` preserves source bus ids,
+                // so the regulated-bus reference stays valid.
                 ..br.clone()
             })
         })

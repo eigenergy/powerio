@@ -574,6 +574,7 @@ fn read_branch(r: &Row, bus_labels: &HashMap<&str, BusId>) -> Result<Branch> {
         in_service: on_alias(r, &["LineStatus", "Status"])?,
         angmin: -360.0,
         angmax: 360.0,
+        control: None,
         extras,
     })
 }

@@ -487,6 +487,7 @@ fn read_branch(rec: &Record) -> Result<Branch> {
         in_service: on_at(&rec.rhs, 0, true, "branch status", rec)?,
         angmin: -360.0,
         angmax: 360.0,
+        control: None,
         extras,
     })
 }
@@ -599,6 +600,7 @@ fn read_transformer(rec: &Record) -> Result<TransformerRecord> {
         in_service,
         angmin: -360.0,
         angmax: 360.0,
+        control: None,
         extras,
     }))
 }

@@ -215,6 +215,7 @@ fn read_pypsa_csv_folder_inner(path: &Path, warnings: &mut Vec<String>) -> Resul
                 in_service: row.bool("active").unwrap_or(true),
                 angmin: row.f("v_ang_min").unwrap_or(-360.0),
                 angmax: row.f("v_ang_max").unwrap_or(360.0),
+                control: None,
                 extras: Extras::default(),
             });
         }
@@ -257,6 +258,7 @@ fn read_pypsa_csv_folder_inner(path: &Path, warnings: &mut Vec<String>) -> Resul
                 in_service: row.bool("active").unwrap_or(true),
                 angmin: -360.0,
                 angmax: 360.0,
+                control: None,
                 extras: Extras::default(),
             });
         }
@@ -1088,6 +1090,7 @@ mod tests {
             in_service: true,
             angmin: -360.0,
             angmax: 360.0,
+            control: None,
             extras: Extras::default(),
         }
     }

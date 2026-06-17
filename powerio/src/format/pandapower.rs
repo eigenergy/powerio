@@ -292,6 +292,7 @@ pub(crate) fn parse_pandapower_source(
                 in_service: row.bool_or("in_service", true),
                 angmin: -360.0,
                 angmax: 360.0,
+                control: None,
                 extras: Extras::default(),
             });
         }
@@ -421,6 +422,7 @@ pub(crate) fn parse_pandapower_source(
                 in_service: row.bool_or("in_service", true),
                 angmin: -360.0,
                 angmax: 360.0,
+                control: None,
                 extras: Extras::default(),
             });
         }
@@ -2578,6 +2580,7 @@ mod tests {
             in_service: true,
             angmin: -360.0,
             angmax: 360.0,
+            control: None,
             extras: Extras::default(),
         }
     }

@@ -37,6 +37,7 @@ fn br(from: usize, to: usize, r: f64, x: f64, b: f64) -> Branch {
         in_service: true,
         angmin: -360.0,
         angmax: 360.0,
+        control: None,
         extras: Extras::new(),
     }
 }
