@@ -569,6 +569,7 @@ pub(crate) fn parse_pandapower_source(
         generators,
         storage,
         hvdc,
+        transformers_3w: Vec::new(),
         source_format: SourceFormat::PandapowerJson,
         source: Some(source),
     };
@@ -2539,6 +2540,7 @@ mod tests {
             generators: Vec::new(),
             storage: Vec::new(),
             hvdc: Vec::new(),
+            transformers_3w: Vec::new(),
             source_format: SourceFormat::InMemory,
             source: None,
         }

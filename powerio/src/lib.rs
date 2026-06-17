@@ -54,5 +54,5 @@ pub use format::{
 pub use indexed::{ConnectivityReport, IndexCore, IndexedNetwork};
 pub use network::{
     Branch, Bus, BusId, BusType, DEFAULT_BASE_FREQUENCY, Extras, GenCaps, GenCost, Generator, Hvdc,
-    Load, Network, Shunt, SourceFormat, Storage,
+    Impedance, Load, Network, Shunt, SourceFormat, Storage, Transformer3W, Winding,
 };

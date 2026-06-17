@@ -323,6 +323,7 @@ pub(crate) fn parse_egret_source(source: Arc<String>, name_hint: Option<&str>) -
         generators,
         storage: Vec::new(),
         hvdc,
+        transformers_3w: Vec::new(),
         source_format: SourceFormat::EgretJson,
         source: Some(source),
     };

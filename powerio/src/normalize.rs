@@ -346,6 +346,7 @@ impl Network {
             generators,
             storage,
             hvdc,
+            transformers_3w: Vec::new(),
             source_format: SourceFormat::Normalized,
             source: None,
         };

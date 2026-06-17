@@ -397,6 +397,7 @@ pub(crate) fn parse_powermodels_json_source(
             .iter()
             .map(|v| read_hvdc(v, pscale))
             .collect(),
+        transformers_3w: Vec::new(),
         source_format: SourceFormat::PowerModelsJson,
         source: Some(source),
     };

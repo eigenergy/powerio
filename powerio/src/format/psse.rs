@@ -442,6 +442,7 @@ pub(crate) fn parse_psse_source(source: Arc<String>, name_hint: Option<&str>) ->
         generators,
         storage: Vec::new(),
         hvdc: Vec::new(),
+        transformers_3w: Vec::new(),
         source_format: SourceFormat::Psse,
         source: Some(source),
     };

@@ -196,6 +196,14 @@ pub struct Network {
     pub generators: Vec<Generator>,
     pub storage: Vec<Storage>,
     pub hvdc: Vec<Hvdc>,
+    /// Three-winding transformers, kept as typed records rather than folded into
+    /// `branches`, so a star point and the per-winding data survive a round trip.
+    /// `#[serde(default)]` so JSON written before the field existed still
+    /// deserializes. The matrix builders and any consumer that wants the expanded
+    /// form (the planned distribution crate) call
+    /// [`Transformer3W::star_expansion`].
+    #[serde(default)]
+    pub transformers_3w: Vec<Transformer3W>,
     pub source_format: SourceFormat,
     /// Raw source text, when read from a textual format; enables a byte-exact
     /// same-format round-trip. `Arc<String>` (not `Arc<str>`) is deliberate: a
@@ -384,6 +392,128 @@ pub struct Hvdc {
     pub extras: Extras,
 }
 
+/// A series impedance carried on a stated MVA base. Used by [`Transformer3W`] for
+/// each winding-pair branch of a three-winding unit.
+///
+/// `r`/`x` are per unit on the *system* base (the same convention as
+/// [`Branch`], `CZ = 1` on the PSS/E side), so the matrix math needs no rebasing;
+/// `base_mva` records the winding-pair MVA base the source file declared, kept so
+/// a write-back reproduces it.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+pub struct Impedance {
+    pub r: f64,
+    pub x: f64,
+    pub base_mva: f64,
+}
+
+/// One winding of a [`Transformer3W`]: its terminal bus, off-nominal ratio, phase
+/// shift, nominal voltage, and thermal ratings.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[non_exhaustive]
+pub struct Winding {
+    pub bus: BusId,
+    /// Off-nominal turns ratio (1.0 = nominal); the PSS/E `WINDV`, `CW = 1`.
+    pub tap: f64,
+    /// Phase shift (degrees).
+    pub shift: f64,
+    /// Winding nominal voltage (kV); 0 defers to the terminal bus base kV.
+    pub nominal_kv: f64,
+    pub rate_a: f64,
+    pub rate_b: f64,
+    pub rate_c: f64,
+}
+
+/// A three-winding transformer: three terminal buses joined at a common star
+/// point, with the series impedance given pairwise (winding 1-2, 2-3, 3-1).
+///
+/// Kept as a typed record (not three [`Branch`]es) so the star-point voltage and
+/// the per-winding control data survive a same-format round trip. Both the PSS/E
+/// 3-winding record and the PSLF tertiary-winding record map onto it.
+/// [`star_expansion`](Transformer3W::star_expansion) turns it into the synthetic
+/// star bus plus three branches that the matrix builders — and the planned
+/// distribution crate — consume.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[non_exhaustive]
+pub struct Transformer3W {
+    /// The three windings, in order (primary, secondary, tertiary).
+    pub windings: [Winding; 3],
+    /// Pairwise series impedance `[z12, z23, z31]`, per unit on the system base.
+    pub z: [Impedance; 3],
+    /// Star-point voltage magnitude (p.u.) and angle (degrees), as solved.
+    pub star_vm: f64,
+    pub star_va: f64,
+    /// Magnetizing shunt referred to the star point (p.u. on the system base).
+    pub mag_g: f64,
+    pub mag_b: f64,
+    pub in_service: bool,
+    pub name: Option<String>,
+    pub extras: Extras,
+}
+
+impl Transformer3W {
+    /// The per-winding star impedances `(r, x)` — winding *k* to the star point —
+    /// from the pairwise values, per unit on the system base.
+    ///
+    /// Standard pairwise→star conversion: `z1 = (z12 + z31 - z23) / 2`, and so on.
+    /// Because the impedances are already on a common base, the split is linear in
+    /// `r` and `x` separately.
+    #[must_use]
+    pub fn star_impedances(&self) -> [(f64, f64); 3] {
+        let [z12, z23, z31] = self.z;
+        let half = |a: f64, b: f64, c: f64| (a + b - c) / 2.0;
+        [
+            (half(z12.r, z31.r, z23.r), half(z12.x, z31.x, z23.x)),
+            (half(z12.r, z23.r, z31.r), half(z12.x, z23.x, z31.x)),
+            (half(z23.r, z31.r, z12.r), half(z23.x, z31.x, z12.x)),
+        ]
+    }
+
+    /// Expand into a synthetic star [`Bus`] (id `star_id`) plus three [`Branch`]es,
+    /// one per winding, for analysis consumers that work in the bus-branch model
+    /// (the matrix builders, the distribution crate). The star bus carries the
+    /// stored star voltage and the magnetizing shunt is left to the caller; each
+    /// branch takes its winding's tap, phase shift, and ratings.
+    #[must_use]
+    pub fn star_expansion(&self, star_id: BusId) -> (Bus, [Branch; 3]) {
+        let star = Bus {
+            id: star_id,
+            kind: BusType::Pq,
+            vm: self.star_vm,
+            va: self.star_va,
+            base_kv: self.windings[0].nominal_kv,
+            vmax: 1.1,
+            vmin: 0.9,
+            area: 0,
+            zone: 0,
+            name: self.name.clone(),
+            extras: Extras::new(),
+        };
+        let zs = self.star_impedances();
+        let branch = |w: &Winding, (r, x): (f64, f64)| Branch {
+            from: w.bus,
+            to: star_id,
+            r,
+            x,
+            b: 0.0,
+            rate_a: w.rate_a,
+            rate_b: w.rate_b,
+            rate_c: w.rate_c,
+            tap: w.tap,
+            shift: w.shift,
+            in_service: self.in_service,
+            angmin: -360.0,
+            angmax: 360.0,
+            extras: Extras::new(),
+        };
+        let branches = [
+            branch(&self.windings[0], zs[0]),
+            branch(&self.windings[1], zs[1]),
+            branch(&self.windings[2], zs[2]),
+        ];
+        (star, branches)
+    }
+}
+
 /// The MATPOWER gen capability / ramp columns past `PMIN`, in order. The index
 /// into this array is the slot index into a [`GenCaps`].
 pub(crate) const GEN_EXTRA_KEYS: [&str; 11] = [
@@ -415,6 +545,7 @@ impl Network {
             generators: Vec::new(),
             storage: Vec::new(),
             hvdc: Vec::new(),
+            transformers_3w: Vec::new(),
             source_format: SourceFormat::InMemory,
             source: None,
         }
@@ -557,6 +688,122 @@ impl Network {
         for s in &self.storage {
             check(s.bus, "storage")?;
         }
+        for t in &self.transformers_3w {
+            for w in &t.windings {
+                check(w.bus, "3-winding transformer")?;
+            }
+        }
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn close(actual: f64, expected: f64) {
+        assert!((actual - expected).abs() < 1e-12, "{actual} != {expected}");
+    }
+
+    fn bus(id: usize) -> Bus {
+        Bus {
+            id: BusId(id),
+            kind: BusType::Pq,
+            vm: 1.0,
+            va: 0.0,
+            base_kv: 230.0,
+            vmax: 1.1,
+            vmin: 0.9,
+            area: 1,
+            zone: 1,
+            name: None,
+            extras: Extras::new(),
+        }
+    }
+
+    fn winding(b: usize) -> Winding {
+        Winding {
+            bus: BusId(b),
+            tap: 1.0,
+            shift: 0.0,
+            nominal_kv: 230.0,
+            rate_a: 100.0,
+            rate_b: 0.0,
+            rate_c: 0.0,
+        }
+    }
+
+    fn transformer_3w() -> Transformer3W {
+        let z = |r, x| Impedance {
+            r,
+            x,
+            base_mva: 100.0,
+        };
+        Transformer3W {
+            windings: [winding(1), winding(2), winding(3)],
+            z: [z(0.01, 0.10), z(0.02, 0.20), z(0.03, 0.30)],
+            star_vm: 0.98,
+            star_va: -1.5,
+            mag_g: 0.0,
+            mag_b: 0.0,
+            in_service: true,
+            name: Some("T1".into()),
+            extras: Extras::new(),
+        }
+    }
+
+    #[test]
+    fn star_impedances_split_the_pairwise_values() {
+        // z1 = (z12 + z31 - z23)/2, z2 = (z12 + z23 - z31)/2, z3 = (z23 + z31 - z12)/2.
+        let [(r1, x1), (r2, x2), (r3, x3)] = transformer_3w().star_impedances();
+        close(r1, 0.01);
+        close(x1, 0.10);
+        close(r2, 0.0);
+        close(x2, 0.0);
+        close(r3, 0.02);
+        close(x3, 0.20);
+    }
+
+    #[test]
+    fn star_expansion_builds_a_star_bus_and_three_branches() {
+        let t = transformer_3w();
+        let (star, branches) = t.star_expansion(BusId(99));
+
+        assert_eq!(star.id, BusId(99));
+        close(star.vm, 0.98);
+        close(star.va, -1.5);
+        // Each branch runs from its winding bus to the star, carrying the
+        // winding tap and ratings and the split impedance.
+        for (i, br) in branches.iter().enumerate() {
+            assert_eq!(br.from, t.windings[i].bus);
+            assert_eq!(br.to, BusId(99));
+            close(br.tap, 1.0);
+            close(br.rate_a, 100.0);
+        }
+        close(branches[2].r, 0.02);
+        close(branches[2].x, 0.20);
+    }
+
+    #[test]
+    fn three_winding_transformer_survives_json_transport() {
+        let mut net = Network::in_memory("t", 100.0, vec![bus(1), bus(2), bus(3)], Vec::new());
+        net.transformers_3w.push(transformer_3w());
+        net.validate().unwrap();
+
+        let back = Network::from_json(&net.to_json().unwrap()).unwrap();
+        assert_eq!(back.transformers_3w.len(), 1);
+        close(back.transformers_3w[0].z[1].x, 0.20);
+        assert_eq!(back.transformers_3w[0].windings[2].bus, BusId(3));
+    }
+
+    #[test]
+    fn check_references_rejects_a_dangling_winding_bus() {
+        let mut net = Network::in_memory("t", 100.0, vec![bus(1), bus(2)], Vec::new());
+        net.transformers_3w.push(transformer_3w()); // winding 3 references bus 3
+        let err = net.validate().unwrap_err().to_string();
+        assert!(
+            err.contains("3-winding transformer references unknown bus 3"),
+            "got {err}"
+        );
     }
 }

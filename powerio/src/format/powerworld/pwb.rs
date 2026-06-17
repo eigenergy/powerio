@@ -468,6 +468,7 @@ fn checked_network(
         generators,
         storage: Vec::new(),
         hvdc: Vec::new(),
+        transformers_3w: Vec::new(),
         source_format: SourceFormat::PowerWorldBinary,
         source: None,
     };
@@ -1780,6 +1781,7 @@ mod tests {
             generators: Vec::new(),
             storage: Vec::new(),
             hvdc: Vec::new(),
+            transformers_3w: Vec::new(),
             source_format: SourceFormat::PowerWorldBinary,
             source: None,
         }

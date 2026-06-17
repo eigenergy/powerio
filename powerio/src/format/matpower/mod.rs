@@ -157,6 +157,7 @@ fn build_case<'a>(name: &str, get: impl Fn(&str) -> Option<&'a str>) -> Result<N
         generators,
         storage,
         hvdc,
+        transformers_3w: Vec::new(),
         source_format: SourceFormat::Matpower,
         source: None,
     })
