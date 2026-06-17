@@ -11,13 +11,17 @@ use std::fmt::Write as _;
 use std::sync::Arc;
 
 use super::auxiliary::{AuxFile, AuxObject, parse_aux};
-use crate::format::Conversion;
+use crate::format::{Conversion, sanitize_quoted};
 use crate::network::{
     Branch, Bus, BusId, BusType, Extras, Generator, Load, Network, Shunt, SourceFormat,
 };
 use crate::{Error, Result};
 
 const FMT: &str = "PowerWorld .aux";
+
+/// The double quote would close a PowerWorld quoted value early on re-read (the
+/// tokenizer toggles on `"` with no un-escaping), shifting every later column.
+const NAME_FORBIDDEN: &[char] = &['"'];
 
 /// Branch identity extras keys, shared with the `.pwb` reader. They double as
 /// the aux field names (extras keep PowerWorld fields verbatim), so every
@@ -581,6 +585,7 @@ fn read_branch(r: &Row, bus_labels: &HashMap<&str, BusId>) -> Result<Branch> {
 pub fn write_powerworld(net: &Network) -> Conversion {
     let mut warnings = Vec::new();
     let mut nonfinite = false;
+    let mut sanitized_names = 0usize;
     let mut n = |x: f64| -> String {
         if x.is_finite() {
             format!("{x}")
@@ -613,10 +618,15 @@ pub fn write_powerworld(net: &Network) -> Conversion {
         "[BusNum, BusName, BusNomVolt, BusPUVolt, BusAngle, AreaNum, ZoneNum, BusVMax, BusVMin, BusCat]",
         |rows| {
             for b in &net.buses {
+                let raw_name = b.name.as_deref().unwrap_or("");
+                let name = sanitize_quoted(raw_name, NAME_FORBIDDEN, ' ');
+                if matches!(name, std::borrow::Cow::Owned(_)) {
+                    sanitized_names += 1;
+                }
                 rows.push(format!(
                     "{} \"{}\" {} {} {} {} {} {} {} \"{}\"",
                     b.id,
-                    b.name.as_deref().unwrap_or(""),
+                    name,
                     n(b.base_kv),
                     n(b.vm),
                     n(b.va),
@@ -760,6 +770,12 @@ pub fn write_powerworld(net: &Network) -> Conversion {
     }
     if nonfinite {
         warnings.push("non-finite values written as ±1e10 sentinels".into());
+    }
+    if sanitized_names > 0 {
+        warnings.push(format!(
+            "{sanitized_names} bus name(s) contained a double quote that would corrupt a \
+             PowerWorld value; replaced with spaces"
+        ));
     }
 
     Conversion { text: s, warnings }

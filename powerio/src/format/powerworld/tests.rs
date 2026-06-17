@@ -155,7 +155,32 @@ fn canonical_write_is_idempotent() {
 
 // ---- Network mapping --------------------------------------------------------
 
-use super::parse_powerworld;
+use super::{parse_powerworld, write_powerworld};
+
+#[test]
+// Exact kV values parsed from the fixture; bit equality is the assertion.
+#[allow(clippy::float_cmp)]
+fn writer_sanitizes_bus_names_that_would_corrupt_a_value() {
+    // A bus name carrying a double quote would close the quoted BusName field
+    // early on re-read and shift every later column; the writer replaces it and
+    // warns, so the second bus's nominal kV survives the round trip.
+    let mut net = parse_powerworld(
+        "DATA (Bus, [BusNum, BusName, BusNomVolt])\n{\n1 \"A\" 230\n2 \"B\" 138\n}\n",
+    )
+    .unwrap();
+    net.buses[0].name = Some("O\"Brien".to_string());
+    let conv = write_powerworld(&net);
+    let reparsed = parse_powerworld(&conv.text).unwrap();
+    assert_eq!(reparsed.buses.len(), 2);
+    assert_eq!(reparsed.buses[0].base_kv, 230.0);
+    assert_eq!(reparsed.buses[1].base_kv, 138.0);
+    assert!(!reparsed.buses[0].name.as_deref().unwrap().contains('"'));
+    assert!(
+        conv.warnings.iter().any(|w| w.contains("bus name")),
+        "expected a sanitization warning, got {:?}",
+        conv.warnings
+    );
+}
 
 #[test]
 // Exact decimal fractions parsed from the fixture; bit equality is the assertion.

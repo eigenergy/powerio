@@ -17,7 +17,7 @@ use std::collections::BTreeMap;
 use std::fmt::Write as _;
 use std::sync::Arc;
 
-use super::Conversion;
+use super::{Conversion, sanitize_quoted};
 use crate::network::{
     Branch, Bus, BusId, BusType, Extras, Generator, Load, Network, Shunt, SourceFormat,
 };
@@ -25,6 +25,11 @@ use crate::{Error, Result};
 
 const FMT: &str = "PSS/E .raw";
 const REV: u32 = 33;
+
+/// Characters that would corrupt a single-quoted PSS/E name field. The quote
+/// toggles the reader's quoted state early, and `/` truncates the record at the
+/// inline-comment delimiter (a PSS/E record splits on `/` before tokenizing).
+const NAME_FORBIDDEN: &[char] = &['\'', '/'];
 
 // ---- Writer -----------------------------------------------------------------
 
@@ -35,6 +40,7 @@ const REV: u32 = 33;
 pub fn write_psse(net: &Network) -> Conversion {
     let mut warnings = Vec::new();
     let mut nonfinite = false;
+    let mut sanitized_names = 0usize;
     let mut s = String::new();
     // A formatter that records when a value can't be represented (PSS/E is fixed
     // numeric — no Inf/NaN).
@@ -75,7 +81,11 @@ pub fn write_psse(net: &Network) -> Conversion {
     let mut bus_area: BTreeMap<BusId, (usize, usize)> = BTreeMap::new();
     for b in &net.buses {
         bus_area.insert(b.id, (b.area, b.zone));
-        let name = b.name.as_deref().unwrap_or("");
+        let raw_name = b.name.as_deref().unwrap_or("");
+        let name = sanitize_quoted(raw_name, NAME_FORBIDDEN, ' ');
+        if matches!(name, std::borrow::Cow::Owned(_)) {
+            sanitized_names += 1;
+        }
         let _ = writeln!(
             s,
             "{}, '{:<12}', {}, {}, {}, {}, 1, {}, {}, {}, {}, {}, {}",
@@ -218,6 +228,12 @@ pub fn write_psse(net: &Network) -> Conversion {
     }
     if nonfinite {
         warnings.push("non-finite values written as ±1e10 sentinels (PSS/E has no Inf/NaN)".into());
+    }
+    if sanitized_names > 0 {
+        warnings.push(format!(
+            "{sanitized_names} bus name(s) contained a quote or '/' that would corrupt a PSS/E \
+             record; replaced with spaces"
+        ));
     }
 
     Conversion { text: s, warnings }
@@ -705,6 +721,43 @@ Q
         close(net.branches[0].rate_b, 90.0);
         close(net.branches[0].rate_c, 80.0);
         assert!(net.branches[0].in_service);
+    }
+
+    #[test]
+    fn writer_sanitizes_bus_names_that_would_corrupt_a_record() {
+        // A name with an apostrophe closes the single-quoted field early; a name
+        // with '/' truncates the record at the inline-comment delimiter. Either
+        // shifts every later column. The writer replaces both and warns, so the
+        // second bus's base kV survives the round trip.
+        let raw = r"0, 100.00, 33, 0, 0, 60.00 / x
+CASE
+COMMENT
+1,'BUS1        ', 230.0000,3,1,1,1,1.00000,0.0000,1.1000,0.9000,1.1000,0.9000
+2,'BUS2        ', 138.0000,1,1,1,1,1.00000,0.0000,1.1000,0.9000,1.1000,0.9000
+0 / END OF BUS DATA, BEGIN LOAD DATA
+0 / END OF LOAD DATA, BEGIN FIXED SHUNT DATA
+0 / END OF FIXED SHUNT DATA, BEGIN GENERATOR DATA
+0 / END OF GENERATOR DATA, BEGIN BRANCH DATA
+0 / END OF BRANCH DATA, BEGIN TRANSFORMER DATA
+0 / END OF TRANSFORMER DATA, BEGIN AREA DATA
+Q
+";
+        let mut net = parse_psse(raw).unwrap();
+        net.buses[0].name = Some("O'Brien/X".to_string());
+
+        let conv = write_psse(&net);
+        let reparsed = parse_psse(&conv.text).unwrap();
+
+        assert_eq!(reparsed.buses.len(), 2);
+        close(reparsed.buses[0].base_kv, 230.0);
+        close(reparsed.buses[1].base_kv, 138.0);
+        let name = reparsed.buses[0].name.as_deref().unwrap();
+        assert!(!name.contains('\'') && !name.contains('/'), "got {name:?}");
+        assert!(
+            conv.warnings.iter().any(|w| w.contains("bus name")),
+            "expected a sanitization warning, got {:?}",
+            conv.warnings
+        );
     }
 
     #[test]

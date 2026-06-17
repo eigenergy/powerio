@@ -709,6 +709,40 @@ pub(crate) fn bus_kv(buses: &[Bus], bus_pos: &HashMap<BusId, usize>, bus: BusId)
         .map_or(0.0, |b| b.base_kv)
 }
 
+/// Replace characters that would corrupt a quoted or delimited field with
+/// `replacement`, so a free-form name can't shift or truncate the record it sits
+/// in. `forbidden` lists the destination's quote, delimiter, and comment chars.
+/// Returns the value borrowed unchanged when it holds none of them, so the common
+/// clean-name path allocates nothing.
+///
+/// Each text writer calls this at its quoting seam and warns when the result
+/// differs from the input (the substitution silently alters operator-facing
+/// names): the PSS/E single-quoted bus name and the PowerWorld double-quoted bus
+/// name both interpolate a `Network` name straight into a quoted field, where an
+/// embedded quote (or, for PSS/E, the `/` inline-comment delimiter) would shift
+/// every later column of the record.
+pub(crate) fn sanitize_quoted<'a>(
+    value: &'a str,
+    forbidden: &[char],
+    replacement: char,
+) -> std::borrow::Cow<'a, str> {
+    if value.contains(forbidden) {
+        value
+            .chars()
+            .map(|c| {
+                if forbidden.contains(&c) {
+                    replacement
+                } else {
+                    c
+                }
+            })
+            .collect::<String>()
+            .into()
+    } else {
+        std::borrow::Cow::Borrowed(value)
+    }
+}
+
 /// Impedance base `v_kv² / base_mva`; 1.0 when either base is missing, so a
 /// per-unit ↔ ohm conversion on it is the identity.
 pub(crate) fn zbase(v_kv: f64, base_mva: f64) -> f64 {
