@@ -95,7 +95,7 @@ struct ArrowSchema;
  * `powerio.h`) and refuses a mismatched library instead of calling in blind.
  *
  * v4 froze the naming grammar and conventions (see the header preamble); the
- * surface evolves additively from here — new data means new symbols, and rich
+ * surface evolves additively from here: new data means new symbols, and rich
  * or multiconductor data rides the Arrow and `powerio-json` schemas, which
  * carry their own structure and never force a signature change.
  */
@@ -185,7 +185,7 @@ PioNetwork *pio_parse_str(const char *text, const char *format, char *errbuf, si
 #if defined(PIO_GRIDFM)
 /**
  * Read one scenario of a dataset directory in the named `from` format into a
- * network handle — the directory sibling of [`pio_parse_file`]. `gridfm` (the
+ * network handle: the directory sibling of [`pio_parse_file`]. `gridfm` (the
  * gridfm-datakit Parquet layout; `dir` resolves leniently: the `raw/` leaf,
  * a `<case>/` directory with a `raw/` child, or a parent holding exactly one
  * such case) is the one dataset format today. `scenario` selects within a
@@ -206,7 +206,7 @@ PioNetwork *pio_read_dir(const char *dir,
 /**
  * Write the distinct scenario ids (ascending) of the dataset directory `dir`
  * in the named `from` format into `out`, up to `cap` entries, and return the
- * total count — the cap/count convention of [`pio_bus_ids`]. `gridfm` is the
+ * total count: the cap/count convention of [`pio_bus_ids`]. `gridfm` is the
  * one dataset format today. Returns `-1` on error and writes the message into
  * `errbuf` (unlike the handle extractors, this reads the filesystem and can
  * fail). Built `--features gridfm`.
@@ -224,7 +224,7 @@ ptrdiff_t pio_scenario_ids(const char *dir,
  * of [`pio_parse_file`], [`pio_parse_str`], [`pio_read_dir`], or
  * [`pio_normalize`] built it), `\n`-joined into `warnbuf` (truncated to fit
  * on a UTF-8 boundary; NULL/0 to skip). Returns the byte length of the full
- * joined text, excluding the NUL — call once with `(NULL, 0)` to size, then
+ * joined text, excluding the NUL; call once with `(NULL, 0)` to size, then
  * pass a `char[len + 1]`. `0` means no warnings (or a NULL handle); readers
  * that are total attach none.
  */
@@ -239,7 +239,7 @@ void pio_network_free(PioNetwork *net);
 /**
  * Normalize `net` into a NEW network handle: per unit, radians, out-of-service
  * filtered, source bus ids preserved, bus types canonicalized (see
- * `Network::to_normalized`). A value transform, not a serialization — hence
+ * `Network::to_normalized`). A value transform, not a serialization, hence
  * the verb, while the `to_*` family re-encodes unchanged data. The result is
  * independent of `net`; free both with [`pio_network_free`]. Every extractor
  * and serializer works on it unchanged (the handle is per unit, not MW).
@@ -258,7 +258,7 @@ double pio_base_mva(const PioNetwork *net);
 
 /**
  * Dense `[0, n)` index of the single reference (slack) bus, or `-1` if not
- * exactly one. An INDEX into the [`pio_bus_ids`] ordering, not a bus id —
+ * exactly one. An INDEX into the [`pio_bus_ids`] ordering, not a bus id;
  * `pio_branches` from/to carry ids, so the unit is in the name. A network may
  * carry several references (one per island, or a normalized case that kept
  * the file's multiple `REF` buses); [`pio_ref_bus_indices`] reads them all,
@@ -268,7 +268,7 @@ int64_t pio_ref_bus_index(const PioNetwork *net);
 
 /**
  * Write the dense `[0, n)` indices of the reference (slack) buses, ascending,
- * into `out`, up to `cap` entries, and return the total count — the cap/count
+ * into `out`, up to `cap` entries, and return the total count: the cap/count
  * convention of [`pio_bus_ids`]. `0` means none; `> 1` means one reference
  * per island or several fixed references in one island (a normalized case
  * always reports `>= 1`).
@@ -286,18 +286,18 @@ size_t pio_n_islands(const PioNetwork *net);
 int32_t pio_is_radial(const PioNetwork *net);
 
 /**
- * Serialize `net` to the named format `to` — the one text serializer; every
+ * Serialize `net` to the named format `to`: the one text serializer; every
  * format is named by a string. Accepts the [`pio_parse_str`] names:
  * `matpower` is a byte-exact echo when the handle was parsed from MATPOWER,
  * and `powerio-json` is the canonical snapshot (validated by [`pio_parse_str`]
  * on the way back; the retained source text is the one field it omits). The
  * snapshot is lossless except for a non-finite `f64` (`Inf`/`NaN`), which JSON
  * cannot represent: it is written as `null`, named in a fidelity warning, and
- * then fails to read back — pass `warnbuf` to detect it.
+ * then fails to read back; pass `warnbuf` to detect it.
  *
  * Returns the text as an owned C string (free with [`pio_string_free`]),
  * `NULL` on error (message into `errbuf`). Fidelity warnings, if any, are
- * written `\n`-joined into `warnbuf` — a returned string has no handle to
+ * written `\n`-joined into `warnbuf`; a returned string has no handle to
  * attach them to.
  */
 char *pio_to_format(const PioNetwork *net,
@@ -323,7 +323,7 @@ char *pio_convert_file(const char *path,
                        size_t errlen);
 
 /**
- * Convert in-memory case `text` from format `from` (required — there is no
+ * Convert in-memory case `text` from format `from` (required; there is no
  * path to infer from) to format `to`, without keeping a handle: the in-memory
  * sibling of [`pio_convert_file`]. Returns the converted text as an owned C
  * string (free with [`pio_string_free`]), `NULL` on error. Fidelity warnings,
@@ -339,7 +339,7 @@ char *pio_convert_str(const char *text,
 
 /**
  * Write `net` into the directory `out_dir` as the named directory-shaped
- * format `to` — the directory sibling of [`pio_to_format`]. PyPSA CSV
+ * format `to`: the directory sibling of [`pio_to_format`]. PyPSA CSV
  * (`pypsa-csv`/`pypsa`) is the one such format today; a text format name is
  * an error pointing back at [`pio_to_format`]. Returns `0` on success and
  * `-1` on error (message into `errbuf`). Fidelity warnings, if any, are
@@ -372,7 +372,7 @@ size_t pio_bus_ids(const PioNetwork *net, int64_t *out, size_t cap);
 /**
  * Write the branch table as parallel arrays, each up to `cap` entries, and
  * return the total branch count. A branch is any two-terminal series element
- * — lines and transformers alike (a transformer has `tap != 0`). `from`/`to`
+ * lines and transformers alike (a transformer has `tap != 0`). `from`/`to`
  * are 1-based bus IDS (the [`pio_bus_ids`] id space, not dense indices); map
  * them to dense matrix rows with the [`pio_bus_ids`] ordering. Any output
  * pointer may be NULL to skip that column; all NULL is the count query.
@@ -417,7 +417,7 @@ size_t pio_bus_shunt(const PioNetwork *net, double *gs, double *bs, size_t cap);
 
 #if defined(PIO_ARROW)
 /**
- * Export one raw network table over the Arrow C Data Interface — the `to_`
+ * Export one raw network table over the Arrow C Data Interface: the `to_`
  * conversion whose output type is Arrow structs rather than a string, and the
  * bulk plane this ABI evolves on: new or richer columns arrive in the Arrow
  * schema, leaving the C signatures fixed.

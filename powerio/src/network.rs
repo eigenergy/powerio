@@ -1,4 +1,4 @@
-//! Format-neutral network model — the hub every converter meets at.
+//! Format-neutral network model: the hub every converter meets at.
 //!
 //! Readers map their format into a [`Network`]; writers map a `Network` back out.
 //! It is the one canonical data model: format-neutral tables with loads and
@@ -32,7 +32,7 @@ use crate::Error;
 pub type Extras = BTreeMap<String, Value>;
 
 /// A bus identifier as it appears in the source file: the external, stable id
-/// (1-based in MATPOWER, and possibly sparse — pegase has gaps in its ids).
+/// (1-based in MATPOWER, and possibly sparse; pegase has gaps in its ids).
 /// Distinct from the dense `[0, n)` analysis index, which only
 /// [`IndexedNetwork`](crate::IndexedNetwork) produces, via
 /// [`bus_index`](crate::IndexedNetwork::bus_index). The two are both integers
@@ -41,7 +41,7 @@ pub type Extras = BTreeMap<String, Value>;
 /// contiguous case and pure garbage on a sparse one).
 ///
 /// `#[serde(transparent)]` so the JSON transport carries a bare integer, not a
-/// wrapper object — the wire format is unchanged.
+/// wrapper object; the wire format is unchanged.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(transparent)]
 pub struct BusId(pub usize);
@@ -324,7 +324,7 @@ fn default_caps() -> GenCaps {
 /// [`GEN_EXTRA_KEYS`], emitting only the present slots, instead of a length-exact
 /// array. A fixed-length array round-trips through serde only at exactly its
 /// current length: the day `GEN_EXTRA_KEYS` grows a column, every old snapshot
-/// fails to deserialize and every new one fails on an old build — and the C ABI
+/// fails to deserialize and every new one fails on an old build, and the C ABI
 /// ties the JSON snapshot schema to its version, so that is a forced ABI break.
 /// The named map makes a new key purely additive: an old document simply lacks it
 /// (deserializes to `None`), and an unknown key from a newer document is ignored.
@@ -447,7 +447,7 @@ impl Network {
         }
     }
 
-    /// Serialize the structured tables to JSON — the transport the C ABI
+    /// Serialize the structured tables to JSON: the transport the C ABI
     /// (the `powerio-json` format) and the Julia bridge consume. The retained `source` text
     /// is excluded (see the field's `#[serde(skip)]`), so the byte-exact echo
     /// stays on the same-format write path; a [`from_json`](Network::from_json)
@@ -455,9 +455,9 @@ impl Network {
     ///
     /// JSON has no `Inf`/`NaN`: `serde_json` writes a non-finite field as
     /// `null`, which [`from_json`](Network::from_json) rejects on the way back
-    /// (`null` is not an `f64`). The write stays total — the bindings
+    /// (`null` is not an `f64`). The write stays total, the bindings
     /// materialize every parsed network through this transport, and readers
-    /// legitimately produce `Inf` limits — but such a snapshot does not round
+    /// legitimately produce `Inf` limits, but such a snapshot does not round
     /// trip; [`write_as`](crate::write_as) reports the degradation as a
     /// fidelity warning naming the field.
     ///
@@ -470,7 +470,7 @@ impl Network {
         })
     }
 
-    /// The paths of every non-finite numeric field — empty when all values are
+    /// The paths of every non-finite numeric field, empty when all values are
     /// finite. Drives the snapshot writer's degradation warning (see
     /// [`to_json`](Network::to_json)): serde writes EVERY non-finite `f64` as
     /// `null`, so the warning must name them all, not just the first, or the
@@ -573,8 +573,13 @@ impl Network {
                     out.push(format!("generators[{i}].cost.coeffs"));
                 }
             }
-            if caps.iter().flatten().any(|c| !c.is_finite()) {
-                out.push(format!("generators[{i}].caps"));
+            // Name the exact cap key (caps serializes as a name-keyed object, so
+            // the null lands at generators[i].caps.<key>, e.g. ramp_30), matching
+            // the key-level precision of every other field.
+            for (key, slot) in GEN_EXTRA_KEYS.iter().zip(caps.iter()) {
+                if matches!(slot, Some(v) if !v.is_finite()) {
+                    out.push(format!("generators[{i}].caps.{key}"));
+                }
             }
         }
         for (i, s) in self.storage.iter().enumerate() {
@@ -645,8 +650,8 @@ impl Network {
     /// Rebuild a `Network` from JSON produced by [`to_json`](Network::to_json).
     ///
     /// Validates the result (no buses, unique bus ids, no dangling references)
-    /// before returning, so the JSON transport — the C ABI and Julia bridge ride
-    /// on it — can't hand back a network the file readers would have rejected
+    /// before returning, so the JSON transport (the C ABI and Julia bridge ride
+    /// on it) can't hand back a network the file readers would have rejected
     /// (the same no-buses guard `read_source` applies to every parse path).
     pub fn from_json(text: &str) -> crate::Result<Network> {
         let net: Network = serde_json::from_str(text).map_err(|e| Error::FormatRead {
@@ -838,20 +843,43 @@ mod tests {
             angmax: 360.0,
             extras: Extras::new(),
         };
-        // Two distinct non-finite fields: a bus vm (NaN) and a branch x (Inf).
-        let net = Network::in_memory(
+        // A non-finite generator capability reports at its exact key path
+        // (caps serializes as a name-keyed object), not the parent `caps`.
+        let mut g = Generator {
+            bus: BusId(1),
+            pg: 0.0,
+            qg: 0.0,
+            pmax: 0.0,
+            pmin: 0.0,
+            qmax: 0.0,
+            qmin: 0.0,
+            vg: 1.0,
+            mbase: 100.0,
+            in_service: true,
+            cost: None,
+            caps: GenCaps::default(),
+        };
+        g.caps[8] = Some(f64::INFINITY); // ramp_30
+        // Three distinct non-finite fields: a bus vm (NaN), a branch x (Inf), and
+        // a generator ramp_30 cap (Inf).
+        let mut net = Network::in_memory(
             "nf",
             100.0,
             vec![bus(1, f64::NAN), bus(2, 1.0)],
             vec![branch],
         );
+        net.generators.push(g);
         let fields = net.non_finite_fields();
         assert!(fields.contains(&"buses[0].vm".to_string()), "{fields:?}");
         assert!(fields.contains(&"branches[0].x".to_string()), "{fields:?}");
+        assert!(
+            fields.contains(&"generators[0].caps.ramp_30".to_string()),
+            "caps reported at key precision: {fields:?}"
+        );
         assert_eq!(
             fields.len(),
-            2,
-            "exactly the two offenders, no more: {fields:?}"
+            3,
+            "exactly the three offenders, no more: {fields:?}"
         );
     }
 }

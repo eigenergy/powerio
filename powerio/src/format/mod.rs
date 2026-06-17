@@ -523,7 +523,7 @@ pub fn parse_str(text: &str, format: &str) -> Result<Parsed> {
     read_source(Arc::new(text.to_owned()), fmt, None)
 }
 
-/// Output of a parse: the network plus the reader's fidelity warnings —
+/// Output of a parse: the network plus the reader's fidelity warnings,
 /// tables and columns the model cannot carry, reported instead of dropped
 /// silently. Empty for readers that don't report read warnings (currently
 /// every format except pandapower JSON and PyPSA CSV; the PSS/E and
@@ -564,7 +564,7 @@ pub struct Conversion {
 /// today). A non-finite value is not an error: readers legitimately produce
 /// `Inf` limits and the bindings materialize every network through the
 /// snapshot, so it is written as `null` with a fidelity warning naming the
-/// field — that output serves the one-way transports but does not read back
+/// field: that output serves the one-way transports but does not read back
 /// (the validating reader rejects the `null`).
 pub fn write_as(net: &Network, format: TargetFormat) -> Result<Conversion> {
     if is_echo(net, format) {
@@ -589,8 +589,8 @@ pub fn write_as(net: &Network, format: TargetFormat) -> Result<Conversion> {
         // passes don't apply (warn_normalized_tap would even be FALSE here:
         // the snapshot preserves the line/transformer labels it warns about);
         // return before them. The one fidelity loss the snapshot can suffer
-        // is JSON's missing Inf/NaN — serde writes them as `null`, which
-        // `from_json` rejects on the way back — so warn, naming every field.
+        // is JSON's missing Inf/NaN: serde writes them as `null`, which
+        // `from_json` rejects on the way back, so warn, naming every field.
         TargetFormat::PowerioJson => {
             return net.to_json().map(|text| Conversion {
                 text,
@@ -654,7 +654,7 @@ pub fn convert_str(text: &str, to: TargetFormat, format: &str) -> Result<Convers
 }
 
 /// Write `net` into the directory `out_dir` as the named directory-shaped
-/// format — the directory sibling of [`write_as`], sharing its name-dispatch
+/// format: the directory sibling of [`write_as`], sharing its name-dispatch
 /// role for the bindings. PyPSA CSV (`pypsa-csv`/`pypsa`) is the one such
 /// format today; a text format name is rejected by name, pointing at
 /// [`write_as`]. Returns the write's fidelity warnings.
@@ -700,7 +700,7 @@ fn warn_missing_reference(net: &Network, format: TargetFormat, conv: &mut Conver
 pub(super) fn missing_reference_warning(net: &Network) -> Option<String> {
     (!net.buses.iter().any(|b| b.kind == BusType::Ref)).then(|| {
         "no reference (slack) bus in the source network; power flow tools \
-         reject such cases — to_normalized synthesizes a slack at the \
+         reject such cases; to_normalized synthesizes a slack at the \
          largest pmax in service generator bus"
             .to_string()
     })
@@ -858,7 +858,7 @@ mod tests {
     fn source_format_strings_round_trip_to_a_target() {
         // The bindings expose `source_format` as its `{:?}` form, and
         // `to_format` routes that string back through `target_format_from_name`.
-        // Every writable source format must resolve — including PowerModelsJson /
+        // Every writable source format must resolve, including PowerModelsJson /
         // EgretJson, whose camel-case names need the `powermodelsjson` /
         // `egretjson` aliases (issue #75).
         for (sf, want) in [
