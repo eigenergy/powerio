@@ -17,7 +17,7 @@ use std::path::Path;
 use powerio::{Branch, Bus, BusId, BusType, Extras, GenCaps, Generator, Network, SourceFormat};
 
 /// A v4-vintage snapshot, written by `powerio convert case30.m --to powerio-json`.
-/// Regenerate ONLY on a deliberate schema change — and then bump `PIO_ABI_VERSION`.
+/// Regenerate ONLY on a deliberate schema change, and then bump `PIO_ABI_VERSION`.
 fn golden_v4() -> String {
     let path =
         Path::new(env!("CARGO_MANIFEST_DIR")).join("../tests/data/powerio-json/case30_v4.json");
@@ -47,7 +47,7 @@ fn golden_v4_snapshot_still_parses() {
 
     // Re-serialize and read back: the schema round-trips without drift, and the
     // CURRENT serializer (not just the frozen golden bytes) still emits caps as a
-    // name-keyed object — so a writer-side wire-form regression fails here too.
+    // name-keyed object, so a writer-side wire-form regression fails here too.
     let again = net.to_json().unwrap();
     assert!(
         again.contains(r#""caps":{"#) && !again.contains(r#""caps":["#),

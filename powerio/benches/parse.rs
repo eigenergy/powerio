@@ -125,7 +125,7 @@ fn bench_powerworld_pwb(c: &mut Criterion) {
 }
 
 /// The `.pwd` display decoder: a byte-offset scan over the whole file, the one
-/// reader whose hot loop runs per byte rather than per record — regression
+/// reader whose hot loop runs per byte rather than per record: regression
 /// coverage for the total (Option-returning) byte accessors.
 fn bench_powerworld_pwd(c: &mut Criterion) {
     let Ok(bytes) = std::fs::read("../tests/data/powerworld/ACTIVSg200.pwd") else {

@@ -15,7 +15,7 @@ pub use gridfm::{
 pub use meta::{CaseMetadata, MatrixMetadata, write_meta_json};
 pub use mtx::{read_mtx, read_vector_mtx, write_mtx, write_vector_mtx};
 
-/// Read one scenario of a dataset directory in the named `from` format — the
+/// Read one scenario of a dataset directory in the named `from` format: the
 /// directory sibling of [`powerio::parse_file`], and the one place dataset
 /// format names are dispatched (the C ABI's `pio_read_dir` is a thin wrapper).
 /// `gridfm` is the one dataset format today; `scenario` selects within it.
@@ -36,7 +36,7 @@ pub fn read_dataset_dir(
 }
 
 /// The distinct scenario ids of the dataset directory `dir` in the named
-/// `from` format, ascending — the introspection sibling of
+/// `from` format, ascending, the introspection sibling of
 /// [`read_dataset_dir`] (and the C ABI's `pio_scenario_ids`).
 ///
 /// # Errors

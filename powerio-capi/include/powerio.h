@@ -150,7 +150,7 @@ extern "C" {
 uint32_t pio_abi_version(void);
 
 /**
- * The crate version string (e.g. `"0.2.0"`), `'static` and NUL-terminated. Do
+ * The crate version string (a semver string), `'static` and NUL-terminated. Do
  * NOT free it. Informational; pair it with [`pio_abi_version`] for the actual
  * compatibility check.
  */

@@ -24,5 +24,5 @@ mkdir -p corpus/pwb && cp ../tests/data/powerworld/*.pwb corpus/pwb/ 2>/dev/null
 ```
 
 The crate is excluded from the workspace and from CI; run it when touching a
-reader. A crash reproducer lands in `artifacts/<target>/` — turn it into a
+reader. A crash reproducer lands in `artifacts/<target>/`; turn it into a
 regression test next to the reader before fixing.

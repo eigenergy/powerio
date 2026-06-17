@@ -117,7 +117,7 @@ The grammar is written out in the header preamble; the short version:
   `pio_convert_file`/`pio_convert_str` transcode without keeping a handle.
 - `pio_to_format` is the one text serializer; `pio_to_arrow` earns its own
   symbol only because its output type is Arrow C Data Interface structs.
-- Format names never appear in symbols — `matpower`, `psse`, `powerio-json`,
+- Format names never appear in symbols: `matpower`, `psse`, `powerio-json`,
   `pypsa-csv`, `gridfm`, and every future format are strings, so a new format
   never changes this ABI.
 - Noun phrases are queries: `pio_n_*` counts, `pio_is_radial`,

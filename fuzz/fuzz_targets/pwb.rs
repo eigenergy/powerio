@@ -1,4 +1,4 @@
-//! Malformed-input fuzzing of the PowerWorld `.pwb` binary decoder — raw
+//! Malformed-input fuzzing of the PowerWorld `.pwb` binary decoder: raw
 //! attacker-controlled bytes drive every offset and length it reads.
 #![no_main]
 

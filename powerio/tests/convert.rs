@@ -1401,8 +1401,8 @@ fn slackless_network_conversion_warns_for_power_flow_targets() {
 fn snapshot_warns_on_non_finite_and_does_not_read_back() {
     // JSON has no Inf/NaN: serde writes them as `null`, which the validating
     // reader rejects. Readers legitimately produce Inf limits and the bindings
-    // materialize every network through the snapshot, so the write stays total
-    // — but it must SAY what degraded (naming the field), and the no-read-back
+    // materialize every network through the snapshot, so the write stays total,
+    // but it must SAY what degraded (naming the field), and the no-read-back
     // consequence is pinned here so a change to either side surfaces.
     let mut net = parse_matpower_file(data("case9.m")).unwrap();
     net.branches[2].angmax = f64::INFINITY;

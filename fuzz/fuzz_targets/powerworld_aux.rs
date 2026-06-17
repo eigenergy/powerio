@@ -1,4 +1,4 @@
-//! Malformed-input fuzzing of the PowerWorld `.aux` reader — the one
+//! Malformed-input fuzzing of the PowerWorld `.aux` reader: the one
 //! hand-written text tokenizer `parse_str` reaches (the JSON dialects ride
 //! serde), so it carries the same byte-indexing hazards as the binary
 //! decoders.
