@@ -435,7 +435,7 @@ fn read_source(source: Arc<String>, fmt: TargetFormat, name_hint: Option<&str>) 
         TargetFormat::PowerModelsJson => {
             powermodels::parse_powermodels_json_source(source, name_hint)
         }
-        TargetFormat::Psse { .. } => psse::parse_psse_source(source, name_hint),
+        TargetFormat::Psse { .. } => psse::parse_psse_source(source, name_hint, &mut warnings),
         TargetFormat::PowerWorld => powerworld::parse_powerworld_source(source, name_hint),
         TargetFormat::EgretJson => egret::parse_egret_source(source, name_hint),
         TargetFormat::PandapowerJson => {
@@ -797,7 +797,17 @@ pub(crate) fn zbase(v_kv: f64, base_mva: f64) -> f64 {
 /// target is the source format and the source is still attached. An echo
 /// reproduces the input byte for byte, so read fidelity warnings don't apply.
 fn is_echo(net: &Network, target: TargetFormat) -> bool {
-    same_format(target, net.source_format) && net.source.is_some()
+    let Some(src) = &net.source else { return false };
+    if !same_format(target, net.source_format) {
+        return false;
+    }
+    // A PSS/E source echoes only when the requested revision equals the source's
+    // own; any other revision must go through write_psse_rev so the caller gets
+    // the layout it asked for instead of the original bytes.
+    if let TargetFormat::Psse { rev } = target {
+        return psse::header_rev(src) == rev;
+    }
+    true
 }
 
 /// Whether a write target is the same format the network was read from.

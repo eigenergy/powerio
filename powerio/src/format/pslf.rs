@@ -1448,9 +1448,14 @@ fn circuit_tok(extras: &Extras) -> String {
     format!("\"{ck}\"")
 }
 
-/// A numeric `pslf_*` extra, if present and finite.
+/// A numeric `pslf_*` extra, if present and finite. A non-finite value yields
+/// `None` so the caller falls back to its synthesized default rather than
+/// replaying a `NaN`/`±Inf` into the record.
 fn extra_f64(extras: &Extras, key: &str) -> Option<f64> {
-    extras.get(key).and_then(Value::as_f64)
+    extras
+        .get(key)
+        .and_then(Value::as_f64)
+        .filter(|v| v.is_finite())
 }
 
 /// `a / b`, or 0 when `b` is not a usable divisor (the identity for an absent base).

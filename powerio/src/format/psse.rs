@@ -542,7 +542,27 @@ const EMPTY_SECTIONS: [&str; 13] = [
 /// fixed-shunt/generator/branch/2- and 3-winding transformer; skips the advanced
 /// sections.
 pub fn parse_psse(content: &str) -> Result<Network> {
-    parse_psse_source(Arc::new(content.to_owned()), None)
+    let mut warnings = Vec::new();
+    parse_psse_source(Arc::new(content.to_owned()), None, &mut warnings)
+}
+
+/// The PSS/E revision declared in a retained `.raw` header (field 3, `REV`), or
+/// 33 when it is absent or unparseable. The format hub uses it to decide whether
+/// a same-format write can echo the source bytes or must re-emit at a different
+/// revision.
+pub(crate) fn header_rev(source: &str) -> u32 {
+    let Some(header) = source
+        .lines()
+        .map(str::trim)
+        .find(|line| !line.is_empty() && !is_comment(line))
+    else {
+        return 33;
+    };
+    fields(header)
+        .get(2)
+        .and_then(|f| f.parse::<f64>().ok())
+        .filter(|v| v.is_finite() && *v >= 0.0)
+        .map_or(33, |v| v as u32)
 }
 
 /// Owned-source entry used by the format hub: parse by borrowing `source`, then
@@ -551,7 +571,11 @@ pub fn parse_psse(content: &str) -> Result<Network> {
 // A flat reader: header parse plus one match arm per section. Splitting it would
 // add indirection without clarity.
 #[expect(clippy::too_many_lines)]
-pub(crate) fn parse_psse_source(source: Arc<String>, name_hint: Option<&str>) -> Result<Network> {
+pub(crate) fn parse_psse_source(
+    source: Arc<String>,
+    name_hint: Option<&str>,
+    warnings: &mut Vec<String>,
+) -> Result<Network> {
     let content: &str = &source;
     let mut lines = content.lines();
 
@@ -676,6 +700,8 @@ pub(crate) fn parse_psse_source(source: Arc<String>, name_hint: Option<&str>) ->
         }
     }
 
+    warn_unmodeled_sections(content, warnings);
+
     let net = Network {
         name,
         base_mva,
@@ -745,6 +771,63 @@ fn section_after_marker(line: &str) -> Section {
 /// A record line's first field is `0` (the section terminator).
 fn is_terminator(line: &str) -> bool {
     fields(line).first().map(String::as_str) == Some("0")
+}
+
+/// A terminator that also delimits a named section (`... END OF X DATA, BEGIN Y
+/// DATA`), as opposed to the case header (whose first field is also `0`).
+fn is_section_marker(line: &str) -> bool {
+    if !is_terminator(line) {
+        return false;
+    }
+    let u = line.to_ascii_uppercase();
+    u.contains("END OF") || u.contains("BEGIN ")
+}
+
+/// The upper-cased section name a `BEGIN <name> DATA` marker introduces.
+fn begin_section_name(line: &str) -> Option<String> {
+    let u = line.to_ascii_uppercase();
+    let start = u.find("BEGIN ")? + "BEGIN ".len();
+    let rest = &u[start..];
+    let end = rest.find(" DATA")?;
+    Some(rest[..end].trim().to_string())
+}
+
+/// Warn about non-empty PSS/E sections the reader does not model (VSC and
+/// multi-terminal DC, impedance correction, substation/node, multi-section line,
+/// induction machine, FACTS, GNE, owner/zone, ...). Their content survives a
+/// same-format `.raw` write (the retained source is echoed) but is dropped on a
+/// cross-format write or after the source is discarded (e.g. a JSON round trip),
+/// so the loss is reported at read time rather than silently. The line count is
+/// approximate (multi-line records count once per line).
+fn warn_unmodeled_sections(content: &str, warnings: &mut Vec<String>) {
+    fn flush(current: Option<&(String, bool)>, rows: usize, warnings: &mut Vec<String>) {
+        if let Some((name, true)) = current {
+            if rows > 0 {
+                warnings.push(format!(
+                    "PSS/E {name} section ({rows} record line(s)) is not modeled: preserved only \
+                     in a same-format .raw echo, dropped on any other write"
+                ));
+            }
+        }
+    }
+    // (section name, is it a skipped/unmodeled section).
+    let mut current: Option<(String, bool)> = None;
+    let mut rows: usize = 0;
+    for line in content.lines() {
+        let t = line.trim();
+        if t.is_empty() || is_comment(t) || t.eq_ignore_ascii_case("q") {
+            continue;
+        }
+        if is_section_marker(t) {
+            flush(current.as_ref(), rows, warnings);
+            rows = 0;
+            current = begin_section_name(t)
+                .map(|n| (n, matches!(section_after_marker(t), Section::Skip)));
+        } else {
+            rows += 1;
+        }
+    }
+    flush(current.as_ref(), rows, warnings);
 }
 
 fn is_comment(line: &str) -> bool {
@@ -1754,6 +1837,64 @@ Q
         let norm = net.to_normalized().unwrap();
         assert_eq!(norm.transformers_3w.len(), 1, "to_normalized keeps the 3W");
         norm.validate().unwrap();
+    }
+
+    #[test]
+    fn writing_a_different_revision_re_emits_instead_of_echoing() {
+        // A PSS/E v33 source echoes byte-for-byte when written back as v33, but a
+        // request for v34 must re-emit the v34 layout, not return the v33 bytes.
+        let raw = "0, 100.00, 33, 0, 0, 60.00 / x
+CASE
+COMMENT
+1,'B1          ', 230.0,3,1,1,1,1.0,0.0,1.1,0.9,1.1,0.9
+0 / END OF BUS DATA, BEGIN LOAD DATA
+0 / END OF LOAD DATA, BEGIN FIXED SHUNT DATA
+0 / END OF FIXED SHUNT DATA, BEGIN GENERATOR DATA
+0 / END OF GENERATOR DATA, BEGIN BRANCH DATA
+0 / END OF BRANCH DATA, BEGIN TRANSFORMER DATA
+0 / END OF TRANSFORMER DATA, BEGIN AREA DATA
+Q
+";
+        let parsed = crate::parse_str(raw, "psse").unwrap();
+        let same = crate::write_as(&parsed.network, crate::TargetFormat::Psse { rev: 33 });
+        assert_eq!(same.text, raw, "same revision echoes the retained source");
+        let v34 = crate::write_as(&parsed.network, crate::TargetFormat::Psse { rev: 34 });
+        assert_ne!(v34.text, raw, "a different revision must re-emit, not echo");
+        assert!(
+            v34.text.contains("END OF SYSTEM-WIDE DATA"),
+            "v34 output carries the system-wide marker, got:\n{}",
+            v34.text
+        );
+    }
+
+    #[test]
+    fn warns_on_a_nonempty_unmodeled_section() {
+        // A substation (node-breaker) section is not modeled; reading must report
+        // it rather than drop it silently.
+        let raw = "0, 100.00, 34, 0, 0, 60.00 / x
+CASE
+COMMENT
+1,'B1          ', 230.0,3,1,1,1,1.0,0.0,1.1,0.9,1.1,0.9
+0 / END OF BUS DATA, BEGIN LOAD DATA
+0 / END OF LOAD DATA, BEGIN FIXED SHUNT DATA
+0 / END OF FIXED SHUNT DATA, BEGIN GENERATOR DATA
+0 / END OF GENERATOR DATA, BEGIN BRANCH DATA
+0 / END OF BRANCH DATA, BEGIN TRANSFORMER DATA
+0 / END OF TRANSFORMER DATA, BEGIN AREA DATA
+0 / END OF AREA DATA, BEGIN SUBSTATION DATA
+1, 'SUB1', 21.3, -157.8, 0.001
+0 / END OF SUBSTATION DATA, BEGIN GNE DEVICE DATA
+Q
+";
+        let parsed = crate::parse_str(raw, "psse").unwrap();
+        assert!(
+            parsed
+                .warnings
+                .iter()
+                .any(|w| w.contains("SUBSTATION") && w.contains("not modeled")),
+            "an unmodeled substation section must be reported, got {:?}",
+            parsed.warnings
+        );
     }
 
     #[test]
