@@ -450,6 +450,10 @@ pub struct Generator {
     /// A fixed array, not an [`Extras`] map: a string-keyed map per generator
     /// costs 11 heap allocations each, which dominates the parse of a large
     /// generator-heavy case. Surfaced into formats that name them (PowerModels).
+    /// On the JSON snapshot it is a name-keyed object (see [`caps_serde`]) so the
+    /// schema stays additive when `GEN_EXTRA_KEYS` grows; `#[serde(default)]` so a
+    /// snapshot that omits it deserializes to the empty set.
+    #[serde(default = "default_caps", with = "caps_serde")]
     pub caps: GenCaps,
     /// The remote bus whose voltage this generator regulates, when that is not its
     /// own terminal bus (PSS/E `IREG`). `None` means it regulates its own bus.
@@ -472,6 +476,48 @@ impl Generator {
 
 /// A generator's capability / ramp columns, one slot per `GEN_EXTRA_KEYS` name.
 pub type GenCaps = [Option<f64>; GEN_EXTRA_KEYS.len()];
+
+/// The empty capability set, for a JSON snapshot that omits the field entirely.
+fn default_caps() -> GenCaps {
+    [None; GEN_EXTRA_KEYS.len()]
+}
+
+/// Serialize [`GenCaps`] as a name-keyed object (`{"ramp_30": 1.2, ...}`) keyed by
+/// [`GEN_EXTRA_KEYS`], emitting only the present slots, instead of a length-exact
+/// array. A fixed-length array round-trips through serde only at exactly its
+/// current length: the day `GEN_EXTRA_KEYS` grows a column, every old snapshot
+/// fails to deserialize and every new one fails on an old build — and the C ABI
+/// ties the JSON snapshot schema to its version, so that is a forced ABI break.
+/// The named map makes a new key purely additive: an old document simply lacks it
+/// (deserializes to `None`), and an unknown key from a newer document is ignored.
+/// In memory `caps` stays a fixed array, so the per-generator allocation cost the
+/// array avoids is unchanged; only the wire form is named.
+mod caps_serde {
+    use super::{GEN_EXTRA_KEYS, GenCaps};
+    use serde::de::{Deserialize, Deserializer};
+    use serde::ser::{SerializeMap, Serializer};
+    use std::collections::BTreeMap;
+
+    pub(super) fn serialize<S: Serializer>(caps: &GenCaps, s: S) -> Result<S::Ok, S::Error> {
+        let present = caps.iter().filter(|v| v.is_some()).count();
+        let mut map = s.serialize_map(Some(present))?;
+        for (key, slot) in GEN_EXTRA_KEYS.iter().zip(caps.iter()) {
+            if let Some(value) = slot {
+                map.serialize_entry(key, value)?;
+            }
+        }
+        map.end()
+    }
+
+    pub(super) fn deserialize<'de, D: Deserializer<'de>>(d: D) -> Result<GenCaps, D::Error> {
+        let named = BTreeMap::<String, f64>::deserialize(d)?;
+        let mut caps: GenCaps = [None; GEN_EXTRA_KEYS.len()];
+        for (slot, key) in caps.iter_mut().zip(GEN_EXTRA_KEYS.iter()) {
+            *slot = named.get(*key).copied();
+        }
+        Ok(caps)
+    }
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Storage {
@@ -1186,6 +1232,49 @@ mod tests {
         assert_eq!(c.controlled_bus, Some(BusId(3)));
         close(c.tap_max, 1.05);
         assert_eq!(c.ntp, 17);
+    }
+
+    #[test]
+    fn gen_caps_serialize_as_a_named_map_that_grows_additively() {
+        let mut caps: GenCaps = [None; GEN_EXTRA_KEYS.len()];
+        caps[8] = Some(1.5); // ramp_30
+        caps[10] = Some(0.5); // apf
+        let g = Generator {
+            bus: BusId(1),
+            pg: 10.0,
+            qg: 0.0,
+            pmax: 100.0,
+            pmin: 0.0,
+            qmax: 50.0,
+            qmin: -50.0,
+            vg: 1.0,
+            mbase: 100.0,
+            in_service: true,
+            cost: None,
+            caps,
+            regulated_bus: None,
+        };
+
+        // caps is a name-keyed object emitting only the present slots, not a
+        // length-exact array.
+        let json = serde_json::to_string(&g).unwrap();
+        assert!(json.contains(r#""caps":{"#), "caps is an object: {json}");
+        assert!(json.contains(r#""ramp_30":1.5"#) && json.contains(r#""apf":0.5"#));
+        let back: Generator = serde_json::from_str(&json).unwrap();
+        assert_eq!(back.caps, g.caps);
+
+        // Growing GEN_EXTRA_KEYS stays additive: an unknown future key is ignored,
+        // a missing key reads as None, and an omitted field is the empty set.
+        let with_future = r#"{"bus":1,"pg":10,"qg":0,"pmax":100,"pmin":0,"qmax":50,"qmin":-50,
+            "vg":1,"mbase":100,"in_service":true,"cost":null,
+            "caps":{"ramp_30":1.5,"future_ramp":9.9}}"#;
+        let g2: Generator = serde_json::from_str(with_future).unwrap();
+        assert_eq!(g2.caps[8], Some(1.5));
+        assert_eq!(g2.caps.iter().filter(|v| v.is_some()).count(), 1);
+        let no_caps = r#"{"bus":1,"pg":10,"qg":0,"pmax":100,"pmin":0,"qmax":50,"qmin":-50,
+            "vg":1,"mbase":100,"in_service":true,"cost":null}"#;
+        let g3: Generator = serde_json::from_str(no_caps).unwrap();
+        assert!(!g3.has_caps());
     }
 
     #[test]
