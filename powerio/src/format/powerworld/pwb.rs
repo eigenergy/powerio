@@ -573,7 +573,7 @@ fn resync_end(b: &[u8], after: usize, prev_bit4: bool) -> usize {
     if prev_bit4 {
         after.saturating_add(BLOB_WINDOW).min(b.len())
     } else {
-        after.saturating_add(RESYNC_WINDOW)
+        after.saturating_add(RESYNC_WINDOW).min(b.len())
     }
 }
 

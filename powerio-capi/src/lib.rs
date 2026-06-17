@@ -578,11 +578,17 @@ pub unsafe extern "C" fn pio_gridfm_scenario_ids(
         }));
         match r {
             Ok(Ok(ids)) => {
+                let Ok(total) = isize::try_from(ids.len()) else {
+                    copy_to_buf(errbuf, errlen, "gridfm scenario count exceeds isize");
+                    return -1;
+                };
                 if !out.is_null() {
                     let n = ids.len().min(cap);
-                    std::ptr::copy_nonoverlapping(ids.as_ptr(), out, n);
+                    if n > 0 {
+                        std::ptr::copy_nonoverlapping(ids.as_ptr(), out, n);
+                    }
                 }
-                ids.len() as isize
+                total
             }
             Ok(Err(msg)) => {
                 copy_to_buf(errbuf, errlen, &msg);

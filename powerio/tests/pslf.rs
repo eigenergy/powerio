@@ -61,6 +61,26 @@ fn pslf_is_not_a_write_target() {
     assert_eq!(target_format_from_name("epc"), None);
 }
 
+#[test]
+fn malformed_pslf_input_returns_errors_without_panics() {
+    for text in [
+        "",
+        "title\nunterminated\n",
+        "bus data [1]\nnot-a-bus\nend\n",
+        "bus data [1]\n1 \"A\" 230 : bad 1 1 0 1 1 1.1 0.9\nend\n",
+        "bus data [1]\n1 \"A\" 230 : 0 1 1 0 1 1 1.1 0.9 /\n",
+    ] {
+        let outcome = std::panic::catch_unwind(|| parse_str(text, "pslf"));
+        assert!(outcome.is_ok(), "PSLF parser panicked on {text:?}");
+    }
+
+    let err = parse_str("bus data [1]\nnot-a-bus\nend\n", "pslf").expect_err("bad bus must fail");
+    assert!(
+        err.to_string().contains("bus id missing or invalid"),
+        "{err}"
+    );
+}
+
 fn temp_path(name: &str) -> PathBuf {
     let mut path = std::env::temp_dir();
     path.push(format!(

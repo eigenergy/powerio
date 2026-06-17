@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.2.4
+
+- PSLF `.epc`: read support for GE PSLF power flow cases, including `.epc`
+  extension inference and `pslf` / `epc` input aliases. The reader is read only
+  and keeps source text plus warnings for sections outside `Network`.
+- PowerWorld `.pwb`: expanded binary reader coverage across older and newer
+  header constants, with stricter record probes, companion format parity checks,
+  and clearer rejection of unsupported vintages.
+- PowerWorld `.pwd`: display parsing keeps the separate display API path and
+  retains the malformed input invariant: corrupt or truncated display files
+  return a structured error or a parsed display, not a panic.
+- No C ABI break; `PIO_ABI_VERSION` stays 3.
+
 ## 0.2.3
 
 - Normalization: `Network::to_normalized` preserves source bus ids instead of

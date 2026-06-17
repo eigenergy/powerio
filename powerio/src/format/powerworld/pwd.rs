@@ -278,26 +278,30 @@ fn identity_walk(b: &[u8], mut at: usize) -> Option<Vec<(u32, String)>> {
     let mut rows = Vec::new();
     let mut seen = HashSet::new();
     loop {
-        if b.get(at..at + 4) == Some([0xff; 4].as_slice()) {
+        if b.get(at..).and_then(|s| s.get(..4)) == Some([0xff; 4].as_slice()) {
             return (!rows.is_empty()).then_some(rows);
         }
         let number = u32_at(b, at)?;
-        if number == 0 || number > 99_999_999 || u32_at(b, at + 4) != Some(number) {
+        let duplicate_at = at.checked_add(4)?;
+        if number == 0 || number > 99_999_999 || u32_at(b, duplicate_at) != Some(number) {
             return None;
         }
-        let len = u32_at(b, at + 8)? as usize;
+        let len_at = at.checked_add(8)?;
+        let len = u32_at(b, len_at)? as usize;
         if len == 0 || len >= 64 {
             return None;
         }
-        let name = b.get(at + 12..at + 12 + len)?;
-        if !name.iter().all(|&c| (0x20..0x7f).contains(&c)) || b.get(at + 12 + len) != Some(&0x02) {
+        let name_start = at.checked_add(12)?;
+        let name_end = name_start.checked_add(len)?;
+        let name = b.get(name_start..name_end)?;
+        if !name.iter().all(|&c| (0x20..0x7f).contains(&c)) || b.get(name_end) != Some(&0x02) {
             return None;
         }
         if !seen.insert(number) {
             return None;
         }
         rows.push((number, String::from_utf8_lossy(name).into_owned()));
-        at += 12 + len + 1;
+        at = name_end.checked_add(1)?;
     }
 }
 
@@ -307,8 +311,15 @@ fn identity_walk(b: &[u8], mut at: usize) -> Option<Vec<(u32, String)>> {
 /// variable because a digit string of 1 to 4 characters precedes the link
 /// in some saves.
 fn links_number(b: &[u8], i: usize, number: u32) -> bool {
-    (40..140)
-        .any(|d| matches!(b.get(i + d), Some(0x03 | 0x07)) && u32_at(b, i + d + 1) == Some(number))
+    (40..140).any(|d| {
+        let Some(marker_at) = i.checked_add(d) else {
+            return false;
+        };
+        let Some(number_at) = marker_at.checked_add(1) else {
+            return false;
+        };
+        matches!(b.get(marker_at), Some(0x03 | 0x07)) && u32_at(b, number_at) == Some(number)
+    })
 }
 
 /// Every start of `needle` in `haystack`.
