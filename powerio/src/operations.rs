@@ -423,6 +423,42 @@ impl Network {
         });
         self.buses.retain(|b| b.id != m);
     }
+
+    /// Retype to [`BusType::Isolated`] every bus with no in-service electrical
+    /// connection — no in-service incident branch, HVDC line, or 3-winding
+    /// transformer — returning the number retyped.
+    ///
+    /// A stranded bus (retired or not-yet-built equipment, or the residue of a
+    /// topology edit) otherwise keeps a PQ/PV/slack kind that tells a solver to
+    /// include it, leaving an ungrounded singleton in the system. This only
+    /// *demotes* a disconnected bus; it never promotes a connected one, and a bus
+    /// the source already marks isolated is left untouched. Connectivity is judged
+    /// on in-service equipment only, so opening the last branch into a bus makes it
+    /// eligible.
+    pub fn retype_isolated_buses(&mut self) -> usize {
+        let mut connected: HashSet<BusId> = HashSet::new();
+        for br in self.branches.iter().filter(|b| b.in_service) {
+            connected.insert(br.from);
+            connected.insert(br.to);
+        }
+        for d in self.hvdc.iter().filter(|d| d.in_service) {
+            connected.insert(d.from);
+            connected.insert(d.to);
+        }
+        for t in self.transformers_3w.iter().filter(|t| t.in_service) {
+            for w in &t.windings {
+                connected.insert(w.bus);
+            }
+        }
+        let mut retyped = 0;
+        for b in &mut self.buses {
+            if b.kind != BusType::Isolated && !connected.contains(&b.id) {
+                b.kind = BusType::Isolated;
+                retyped += 1;
+            }
+        }
+        retyped
+    }
 }
 
 #[cfg(test)]
@@ -645,6 +681,51 @@ mod tests {
         );
         assert_eq!(net.reduce_passthrough_buses(), 0);
         assert_eq!(net.buses.len(), 3);
+    }
+
+    #[test]
+    fn retype_isolated_marks_stranded_buses() {
+        // Bus 3 has no incident branch.
+        let mut net = Network::in_memory(
+            "net",
+            100.0,
+            vec![bus(1, 1, 230.0), bus(2, 1, 230.0), bus(3, 1, 230.0)],
+            vec![line(1, 2)],
+        );
+        assert_eq!(net.retype_isolated_buses(), 1);
+        let three = net.buses.iter().find(|b| b.id == BusId(3)).unwrap();
+        assert_eq!(three.kind, BusType::Isolated);
+        // The connected buses keep their kind.
+        let one = net.buses.iter().find(|b| b.id == BusId(1)).unwrap();
+        assert_eq!(one.kind, BusType::Pq);
+        net.validate().unwrap();
+    }
+
+    #[test]
+    fn retype_isolated_judges_in_service_equipment_only() {
+        // The only branch is out of service, so both of its ends are stranded.
+        let mut br = line(1, 2);
+        br.in_service = false;
+        let mut net = Network::in_memory(
+            "net",
+            100.0,
+            vec![bus(1, 1, 230.0), bus(2, 1, 230.0)],
+            vec![br],
+        );
+        assert_eq!(net.retype_isolated_buses(), 2);
+        assert!(net.buses.iter().all(|b| b.kind == BusType::Isolated));
+    }
+
+    #[test]
+    fn retype_isolated_is_idempotent() {
+        let mut net = Network::in_memory(
+            "net",
+            100.0,
+            vec![bus(1, 1, 230.0), bus(2, 1, 230.0), bus(3, 1, 230.0)],
+            vec![line(1, 2)],
+        );
+        assert_eq!(net.retype_isolated_buses(), 1);
+        assert_eq!(net.retype_isolated_buses(), 0, "second pass is a no-op");
     }
 
     #[test]
