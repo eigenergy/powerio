@@ -174,11 +174,15 @@ pub fn write_psse_rev(net: &Network, rev: u32) -> Conversion {
     } else {
         ""
     };
+    // Per-bus circuit-id counters so parallel devices on a bus get distinct ids
+    // (PSS/E requires (bus, id) to be unique); a captured `extras["id"]` wins.
+    let mut load_ids: BTreeMap<BusId, u32> = BTreeMap::new();
     for l in &net.loads {
         let (area, zone) = bus_area.get(&l.bus).copied().unwrap_or((1, 1));
+        let id = device_id(&l.extras, l.bus, &mut load_ids);
         let _ = writeln!(
             s,
-            "{}, '1', {}, {}, {}, {}, {}, 0, 0, 0, 0, 1, 1, 0{load_tail}",
+            "{}, '{id}', {}, {}, {}, {}, {}, 0, 0, 0, 0, 1, 1, 0{load_tail}",
             l.bus,
             i32::from(l.in_service),
             area,
@@ -190,10 +194,12 @@ pub fn write_psse_rev(net: &Network, rev: u32) -> Conversion {
     let _ = writeln!(s, "0 / END OF LOAD DATA, BEGIN FIXED SHUNT DATA");
 
     // Fixed shunts here; switched shunts (control = Some) go in their own section.
+    let mut shunt_ids: BTreeMap<BusId, u32> = BTreeMap::new();
     for sh in net.shunts.iter().filter(|s| s.control.is_none()) {
+        let id = device_id(&sh.extras, sh.bus, &mut shunt_ids);
         let _ = writeln!(
             s,
-            "{}, '1', {}, {}, {}",
+            "{}, '{id}', {}, {}, {}",
             sh.bus,
             i32::from(sh.in_service),
             num(sh.g),
@@ -202,10 +208,12 @@ pub fn write_psse_rev(net: &Network, rev: u32) -> Conversion {
     }
     let _ = writeln!(s, "0 / END OF FIXED SHUNT DATA, BEGIN GENERATOR DATA");
 
+    let mut gen_ids: BTreeMap<BusId, u32> = BTreeMap::new();
     for g in &net.generators {
+        let id = positional_id(g.bus, &mut gen_ids);
         let _ = writeln!(
             s,
-            "{}, '1', {}, {}, {}, {}, {}, 0, {}, 0, 1, 0, 0, 1, {}, 100, {}, {}, 1, 1",
+            "{}, '{id}', {}, {}, {}, {}, {}, 0, {}, 0, 1, 0, 0, 1, {}, 100, {}, {}, 1, 1",
             g.bus,
             num(g.pg),
             num(g.qg),
@@ -478,6 +486,26 @@ pub fn write_psse_rev(net: &Network, rev: u32) -> Conversion {
 /// MATPOWER/neutral bus kind → PSS/E bus type code (IDE).
 fn ide(kind: BusType) -> u8 {
     kind as u8 // 1=PQ, 2=PV, 3=ref/swing, 4=isolated — same codes
+}
+
+/// The circuit id for an element: its captured `extras["id"]` when present, else
+/// the next positional id for its bus, so parallel devices stay distinct and the
+/// PSS/E `(bus, id)` uniqueness rule holds.
+fn device_id(extras: &Extras, bus: BusId, counters: &mut BTreeMap<BusId, u32>) -> String {
+    let n = counters.entry(bus).or_insert(0);
+    *n += 1;
+    extras
+        .get("id")
+        .and_then(Value::as_str)
+        .map_or_else(|| n.to_string(), str::to_owned)
+}
+
+/// The next positional circuit id for `bus` (for elements with no extras to carry
+/// a captured id, such as generators).
+fn positional_id(bus: BusId, counters: &mut BTreeMap<BusId, u32>) -> String {
+    let n = counters.entry(bus).or_insert(0);
+    *n += 1;
+    n.to_string()
 }
 
 /// Converter-line tail (everything after the AC terminal bus) for a synthesized
@@ -874,6 +902,17 @@ fn read_bus(f: &[String]) -> Result<Bus> {
     })
 }
 
+/// Capture an element's circuit id (field `i`, a quoted 1-2 char string) into its
+/// extras under `"id"`, so a round trip keeps the id and parallel devices on a bus
+/// stay distinguishable.
+fn device_extras(f: &[String], i: usize) -> Extras {
+    let mut extras = Extras::new();
+    if let Some(id) = f.get(i).map(|s| s.trim()).filter(|s| !s.is_empty()) {
+        extras.insert("id".into(), Value::String(id.to_string()));
+    }
+    extras
+}
+
 fn read_load(f: &[String]) -> Result<Load> {
     // I, ID, STATUS, AREA, ZONE, PL, QL, ...
     Ok(Load {
@@ -881,7 +920,7 @@ fn read_load(f: &[String]) -> Result<Load> {
         p: num_at(f, 5, 0.0)?,
         q: num_at(f, 6, 0.0)?,
         in_service: on_at(f, 2, true)?,
-        extras: Extras::new(),
+        extras: device_extras(f, 1),
     })
 }
 
@@ -893,7 +932,7 @@ fn read_shunt(f: &[String]) -> Result<Shunt> {
         b: num_at(f, 4, 0.0)?,
         in_service: on_at(f, 2, true)?,
         control: None,
-        extras: Extras::new(),
+        extras: device_extras(f, 1),
     })
 }
 
@@ -1288,6 +1327,51 @@ Q
         close(net.branches[0].rate_b, 90.0);
         close(net.branches[0].rate_c, 80.0);
         assert!(net.branches[0].in_service);
+    }
+
+    #[test]
+    fn captured_load_ids_round_trip_and_parallel_loads_stay_distinct() {
+        let raw = r"0, 100.00, 33, 0, 0, 60.00 / x
+CASE
+COMMENT
+1,'B1          ', 230.0,3,1,1,1,1.0,0.0,1.1,0.9,1.1,0.9
+2,'B2          ', 230.0,1,1,1,1,1.0,0.0,1.1,0.9,1.1,0.9
+0 / END OF BUS DATA, BEGIN LOAD DATA
+2,'A',1,1,1,10.0,5.0,0,0,0,0,1,1,0
+2,'B',1,1,1,20.0,8.0,0,0,0,0,1,1,0
+0 / END OF LOAD DATA, BEGIN FIXED SHUNT DATA
+0 / END OF FIXED SHUNT DATA, BEGIN GENERATOR DATA
+0 / END OF GENERATOR DATA, BEGIN BRANCH DATA
+0 / END OF BRANCH DATA, BEGIN TRANSFORMER DATA
+0 / END OF TRANSFORMER DATA, BEGIN AREA DATA
+Q
+";
+        let id = |l: &Load| {
+            l.extras
+                .get("id")
+                .and_then(|v| v.as_str())
+                .map(str::to_owned)
+        };
+        let net = parse_psse(raw).unwrap();
+        assert_eq!(net.loads.len(), 2);
+        assert_eq!(id(&net.loads[0]).as_deref(), Some("A"));
+        assert_eq!(id(&net.loads[1]).as_deref(), Some("B"));
+
+        // A round trip keeps the captured ids.
+        let net2 = parse_psse(&write_psse(&net).text).unwrap();
+        assert_eq!(id(&net2.loads[0]).as_deref(), Some("A"));
+        assert_eq!(id(&net2.loads[1]).as_deref(), Some("B"));
+
+        // With the ids stripped (a synthesized network, e.g. from MATPOWER), the
+        // two loads on bus 2 still write with distinct positional ids, so the
+        // output is valid PSS/E rather than two colliding (bus, '1') records.
+        let mut synth = net.clone();
+        for l in &mut synth.loads {
+            l.extras.remove("id");
+        }
+        let net3 = parse_psse(&write_psse(&synth).text).unwrap();
+        let ids: Vec<_> = net3.loads.iter().filter_map(&id).collect();
+        assert_eq!(ids, vec!["1".to_string(), "2".to_string()]);
     }
 
     #[test]
