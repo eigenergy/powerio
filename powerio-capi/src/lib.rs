@@ -797,8 +797,11 @@ pub unsafe extern "C" fn pio_bus_demand(
     unsafe {
         guard(0, || {
             view(net).map_or(0, |v| {
-                fill(pd, cap, v.pd().iter().copied());
-                fill(qd, cap, v.qd().iter().copied())
+                // Return an explicit bus count, not the last fill's result, so the
+                // cap/count return is independent of which columns were requested.
+                let n = fill(pd, cap, v.pd().iter().copied());
+                fill(qd, cap, v.qd().iter().copied());
+                n
             })
         })
     }
@@ -817,8 +820,10 @@ pub unsafe extern "C" fn pio_bus_shunt(
     unsafe {
         guard(0, || {
             view(net).map_or(0, |v| {
-                fill(gs, cap, v.gs().iter().copied());
-                fill(bs, cap, v.bs().iter().copied())
+                // Explicit bus count, not the last fill's result (see pio_bus_demand).
+                let n = fill(gs, cap, v.gs().iter().copied());
+                fill(bs, cap, v.bs().iter().copied());
+                n
             })
         })
     }

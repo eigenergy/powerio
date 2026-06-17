@@ -671,7 +671,7 @@ pub fn write_dir(
         return write_pypsa_csv_folder(net, out_dir.as_ref()).map(|o| o.warnings);
     }
     Err(Error::UnknownFormat(format!(
-        "{to} is not a directory format (directory targets: pypsa-csv); \
+        "{to} is not a directory format (directory targets: pypsa-csv/pypsa); \
          text formats serialize through write_as / to_format"
     )))
 }
