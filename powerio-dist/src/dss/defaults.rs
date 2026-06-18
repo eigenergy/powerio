@@ -65,6 +65,15 @@ pub mod capacitor {
     pub const KV: f64 = 12.47;
 }
 
+pub mod reactor {
+    //! `TReactorObj.Create` (Reactor.pas): 3 phases, 100 kvar, 12.47 kV,
+    //! wye. Unlike the capacitor's 1200 kvar bank, the reactor constructor
+    //! seeds a 100 kvar rating.
+    pub const PHASES: usize = 3;
+    pub const KVAR: f64 = 100.0;
+    pub const KV: f64 = 12.47;
+}
+
 pub mod generator {
     pub const PHASES: usize = 3;
     pub const KV: f64 = 12.47;

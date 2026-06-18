@@ -275,6 +275,69 @@ fn ten_conductor_linecode_types() {
 }
 
 #[test]
+#[allow(clippy::float_cmp)]
+fn grounding_reactor_types_as_an_inductive_shunt() {
+    use powerio_dist::parse_dss_str;
+    let net = parse_dss_str(
+        "New Circuit.c basekv=4.16\n\
+         New Reactor.rx bus1=b2 phases=3 kvar=900 kv=4.16\n",
+    );
+    let sh = net
+        .shunts
+        .iter()
+        .find(|s| s.name.eq_ignore_ascii_case("rx"))
+        .expect("reactor typed as a shunt");
+    // Inductive: the diagonal susceptance is negative, the capacitor's mirror.
+    let v_phase = 4.16e3 / 3f64.sqrt();
+    let expected = -900e3 / 3.0 / (v_phase * v_phase);
+    assert!((sh.b[0][0] - expected).abs() < 1e-12, "{}", sh.b[0][0]);
+    assert_eq!(sh.g[0][0], 0.0);
+    // No silent loss: nothing falls through to the untyped layer.
+    assert!(net.untyped.is_empty(), "{:?}", net.untyped);
+}
+
+#[test]
+fn reactor_defaults_are_materialized_and_recorded() {
+    use powerio_dist::parse_dss_str;
+    let net = parse_dss_str("New Circuit.c basekv=12.47\nNew Reactor.rd bus1=b2\n");
+    assert!(net.shunts.iter().any(|s| s.name.eq_ignore_ascii_case("rd")));
+    let recorded = net
+        .defaulted
+        .iter()
+        .find(|(k, _)| k.eq_ignore_ascii_case("reactor.rd"))
+        .map(|(_, v)| v)
+        .expect("defaults recorded for the reactor");
+    assert!(recorded.contains(&"kvar"), "{recorded:?}");
+    assert!(recorded.contains(&"kv"), "{recorded:?}");
+}
+
+#[test]
+fn series_and_impedance_reactors_stay_untyped() {
+    use powerio_dist::parse_dss_str;
+    // Series reactor (bus2): deferred, like the series capacitor.
+    let net = parse_dss_str(
+        "New Circuit.c basekv=4.16\nNew Reactor.rs bus1=b2 bus2=b3 phases=3 kvar=900 kv=4.16\n",
+    );
+    assert!(net.untyped.iter().any(|o| o.name == "rs"));
+    assert!(net.shunts.iter().all(|s| s.name != "rs"));
+    assert!(
+        net.warnings
+            .iter()
+            .any(|w| w.contains("reactor rs") && w.contains("series"))
+    );
+    // Impedance form (r/x): kvar is ignored by the engine, so we refuse to
+    // invent a susceptance and keep it untyped instead.
+    let net =
+        parse_dss_str("New Circuit.c basekv=4.16\nNew Reactor.rz bus1=b2 phases=3 r=0.1 x=5\n");
+    assert!(net.untyped.iter().any(|o| o.name == "rz"));
+    assert!(
+        net.warnings
+            .iter()
+            .any(|w| w.contains("reactor rz") && w.contains("impedance form"))
+    );
+}
+
+#[test]
 fn regcontrol_warns_and_keeps_taps() {
     let net = parse("opendss/ieee13/IEEE13Nodeckt.dss");
     assert!(

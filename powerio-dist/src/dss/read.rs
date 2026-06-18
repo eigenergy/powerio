@@ -103,6 +103,9 @@ pub fn network_from_raw(raw: &RawDss, source: Arc<String>) -> DistNetwork {
     for obj in raw.of_class("capacitor") {
         rd.capacitor(obj);
     }
+    for obj in raw.of_class("reactor") {
+        rd.reactor(obj);
+    }
     for obj in raw.of_class("generator") {
         let g = rd.generator(obj);
         rd.net.generators.push(g);
@@ -122,6 +125,7 @@ pub fn network_from_raw(raw: &RawDss, source: Arc<String>) -> DistNetwork {
                 | "transformer"
                 | "load"
                 | "capacitor"
+                | "reactor"
                 | "generator"
                 | "swtcontrol"
                 | "regcontrol"
@@ -294,6 +298,14 @@ impl<'a> Props<'a> {
             .collect()
     }
 }
+
+/// Reactor properties that define the impedance directly. When any is
+/// present the engine ignores `kvar`/`kv`, so the kvar-shunt typing does not
+/// apply and the object stays untyped.
+const REACTOR_IMPEDANCE_FORMS: &[&str] = &[
+    "rmatrix", "xmatrix", "parallel", "r", "x", "rp", "z1", "z2", "z0", "z", "rcurve", "lcurve",
+    "lmh",
+];
 
 impl Reader<'_> {
     fn warn(&mut self, msg: impl Into<String>) {
@@ -1166,6 +1178,90 @@ impl Reader<'_> {
         }
         // The written pair regenerates verbatim in the dss writer; the b
         // matrix is the model truth either way.
+        let mut extras = extras_from_leftovers(&props);
+        self.stash_kv_and_phases(&props, &mut extras, kv, phases);
+        extras.insert("kvar".into(), kvar.into());
+        self.net.shunts.push(DistShunt {
+            name: obj.name.clone(),
+            bus: spec.name,
+            terminal_map: map,
+            g: vec![vec![0.0; n]; n],
+            b,
+            extras,
+        });
+    }
+
+    // ----- reactor → shunt -----------------------------------------------
+
+    /// A grounding (shunt) reactor specified by `kvar`/`kv` maps to a shunt
+    /// with inductive (negative) susceptance, the sign mirror of a
+    /// capacitor. Series reactors (`bus2`), delta banks, and the
+    /// impedance-defined forms (`r`/`x`, `z*`, the matrices, `lmh`, the
+    /// curves) override the kvar interpretation in the engine, so they stay
+    /// untyped with a precise warning rather than emit a wrong admittance.
+    fn reactor(&mut self, obj: &RawObject) {
+        let props = Props::new(obj);
+        if props.by_name.contains_key("bus2") {
+            self.warn(format!(
+                "reactor {}: series reactors (bus2) are not typed yet; kept untyped",
+                obj.name
+            ));
+            self.net.untyped.push(UntypedObject::from(obj));
+            return;
+        }
+        // Any of these defines the impedance directly; kvar/kv is then
+        // ignored by the engine, so typing it as a kvar shunt would invent
+        // an admittance the source never asked for.
+        if let Some(form) = REACTOR_IMPEDANCE_FORMS
+            .iter()
+            .find(|k| props.by_name.contains_key(**k))
+        {
+            self.warn(format!(
+                "reactor {}: impedance form (`{form}`) is not typed yet; kept untyped",
+                obj.name
+            ));
+            self.net.untyped.push(UntypedObject::from(obj));
+            return;
+        }
+        let phases = self.usize_or(&props, "phases", "reactor", &obj.name, dd::reactor::PHASES);
+        // InterpretConnection (Reactor.pas): `d*` and `ll` are delta.
+        let conn_delta = props.get("conn").is_some_and(|v| {
+            v.text.to_ascii_lowercase().starts_with('d') || v.text.eq_ignore_ascii_case("ll")
+        });
+        if conn_delta {
+            self.warn(format!(
+                "reactor {}: delta connection is not typed yet; kept untyped",
+                obj.name
+            ));
+            self.net.untyped.push(UntypedObject::from(obj));
+            return;
+        }
+        let kvar = props
+            .get("kvar")
+            .and_then(|v| self.f64_prop(Some(v)))
+            .unwrap_or_else(|| {
+                self.defaulted("reactor", &obj.name, "kvar");
+                dd::reactor::KVAR
+            });
+        let kv = self.f64_or(&props, "kv", "reactor", &obj.name, dd::reactor::KV);
+        // Reactor.pas mirrors the capacitor: a wye bank's kv is line to line
+        // for 2 or 3 phases, line to neutral otherwise.
+        let v_phase = if phases == 2 || phases == 3 {
+            kv * 1e3 / 3f64.sqrt()
+        } else {
+            kv * 1e3
+        };
+        // Inductive: the susceptance is negative, the sign opposite the
+        // capacitor's. b = -Q / V^2 per phase.
+        let b_phase = -kvar * 1e3 / phases as f64 / (v_phase * v_phase);
+
+        let spec = bus_spec(props.get("bus1"), "");
+        let map = self.terminals(&spec, phases, phases + 1, phases);
+        let n = map.len();
+        let mut b = vec![vec![0.0; n]; n];
+        for (i, row) in b.iter_mut().enumerate().take(phases) {
+            row[i] = b_phase;
+        }
         let mut extras = extras_from_leftovers(&props);
         self.stash_kv_and_phases(&props, &mut extras, kv, phases);
         extras.insert("kvar".into(), kvar.into());
