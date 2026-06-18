@@ -178,7 +178,7 @@ fn same_format_round_trip_is_byte_exact() {
             let text = (fmt.write)(&net0);
             let net_from_text = (fmt.read)(&text); // carries source = text, format = fmt
             assert_eq!(
-                write_as(&net_from_text, fmt.format).text,
+                write_as(&net_from_text, fmt.format).unwrap().text,
                 text,
                 "{case} {}: same-format write is not a byte-exact echo",
                 fmt.name
@@ -218,7 +218,7 @@ fn egret_fixtures_round_trip_byte_exact() {
         let text = std::fs::read_to_string(data(f)).unwrap();
         let net = parse_egret_json(&text).unwrap();
         assert_eq!(
-            write_as(&net, TargetFormat::EgretJson).text,
+            write_as(&net, TargetFormat::EgretJson).unwrap().text,
             text,
             "{f}: egret same-format write is not a byte-exact echo"
         );

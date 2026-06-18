@@ -26,18 +26,20 @@ Verb taxonomy:
 | Parse display path | `parse_display_file(path, from)` | `parse_display_file(path, from_=None)` | planned | n/a |
 | Parse display bytes | `parse_display_bytes(bytes, format)` | `parse_display_bytes(data, format)` | planned | n/a |
 | Parse IO | n/a | file object later | `parse_file(io, format)` | n/a |
-| JSON to Network | `Network::from_json` | `from_json` | `from_json` | `pio_from_json` |
+| JSON to Network | `Network::from_json` | `from_json` | `from_json` | `pio_parse_str` + `"powerio-json"` |
 | File conversion | `convert_file(path, to, from)` | `convert_file(path, to, from_=None)` | `convert_file(path, to; from=nothing)` | `pio_convert_file` |
-| Text conversion | `convert_str(text, to, format)` | `convert_str(text, to, format)` | planned | planned |
+| Text conversion | `convert_str(text, to, format)` | `convert_str(text, to, format)` | planned | `pio_convert_str` |
 | Parsed conversion | `net.to_format(to)` | `net.to_format(to)` | `to_format(net, to)` | `pio_to_format` |
-| MATPOWER text | `net.to_matpower()` | `net.to_matpower()` | `to_matpower(net)` | `pio_to_matpower` |
-| JSON text | `net.to_json()` | `net.to_json()` | `to_json(net)` | `pio_to_json` |
-| Normalized copy | `net.to_normalized()` | `net.to_normalized()` | `to_normalized(net)` | `pio_to_normalized` |
+| MATPOWER text | `net.to_matpower()` | `net.to_matpower()` | `to_matpower(net)` | `pio_to_format` + `"matpower"` |
+| JSON text | `net.to_json()` | `net.to_json()` | `to_json(net)` | `pio_to_format` + `"powerio-json"` |
+| Normalized copy | `net.to_normalized()` | `net.to_normalized()` | `to_normalized(net)` | `pio_normalize` |
 | Dense tables | typed table API | `to_dense` | `to_dense` | `pio_*` extractors |
-| PyPSA CSV folder | `read_pypsa_csv_folder` / `write_pypsa_csv_folder` | `read_pypsa_csv_folder` / `net.write_pypsa_csv_folder` | planned | `pio_parse_file` / `pio_write_pypsa_csv_folder` |
-| gridfm read | `read_gridfm_dataset(dir, scenario)` | `read_gridfm(dir, scenario=0)` | `read_gridfm(dir; scenario=0)` (PR open) | `pio_read_gridfm` |
-| Arrow handoff | internal/C ABI | later | `to_arrow` | `pio_export_arrow` |
+| PyPSA CSV folder | `read_pypsa_csv_folder` / `write_pypsa_csv_folder` | `read_pypsa_csv_folder` / `net.write_pypsa_csv_folder` | planned | `pio_parse_file` / `pio_write_dir` + `"pypsa-csv"` |
+| gridfm read | `read_gridfm_dataset(dir, scenario)` | `read_gridfm(dir, scenario=0)` | `read_gridfm(dir; scenario=0)` | `pio_read_dir` + `"gridfm"` |
+| Arrow handoff | internal/C ABI | later | `to_arrow` | `pio_to_arrow` |
 
-**Note:** `pio_export_arrow` keeps `export` because it fills Arrow C Data Interface
-structs with release callbacks. It is not an owned string or handle return like
-the `to_*` functions.
+**Note:** the C ABI carries no per-format symbols: matpower, the powerio-json
+snapshot, PyPSA CSV directories, and gridfm datasets are all format strings into
+`pio_to_format` / `pio_parse_str` / `pio_write_dir` / `pio_read_dir`. The
+language APIs keep their per-format conveniences (`to_matpower`, `from_json`,
+...) as wrappers over the same paths.

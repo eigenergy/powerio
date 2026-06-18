@@ -1882,7 +1882,7 @@ Q
 
         // Cross-format write to MATPOWER drops the 3W but must report it, not drop
         // it silently.
-        let mpc = net.to_format(crate::TargetFormat::Matpower);
+        let mpc = net.to_format(crate::TargetFormat::Matpower).unwrap();
         assert!(
             mpc.warnings.iter().any(|w| w.contains("3-winding")),
             "MATPOWER write must warn on the dropped 3-winding transformer, got {:?}",
@@ -1912,9 +1912,9 @@ COMMENT
 Q
 ";
         let parsed = crate::parse_str(raw, "psse").unwrap();
-        let same = crate::write_as(&parsed.network, crate::TargetFormat::Psse { rev: 33 });
+        let same = crate::write_as(&parsed.network, crate::TargetFormat::Psse { rev: 33 }).unwrap();
         assert_eq!(same.text, raw, "same revision echoes the retained source");
-        let v34 = crate::write_as(&parsed.network, crate::TargetFormat::Psse { rev: 34 });
+        let v34 = crate::write_as(&parsed.network, crate::TargetFormat::Psse { rev: 34 }).unwrap();
         assert_ne!(v34.text, raw, "a different revision must re-emit, not echo");
         assert!(
             v34.text.contains("END OF SYSTEM-WIDE DATA"),
@@ -1992,7 +1992,7 @@ Q
         close(r1.evlo.unwrap(), 0.8);
 
         // A cross-format write to MATPOWER (single voltage band) reports the drop.
-        let mpc = net.to_format(crate::TargetFormat::Matpower);
+        let mpc = net.to_format(crate::TargetFormat::Matpower).unwrap();
         assert!(
             mpc.warnings
                 .iter()

@@ -10,7 +10,7 @@ use powerio::{TargetFormat, parse_file};
 
 let parsed = parse_file("case14.m", None)?;
 let net = parsed.network;
-let converted = net.to_format(TargetFormat::PowerModelsJson);
+let converted = net.to_format(TargetFormat::PowerModelsJson)?;
 std::fs::write("case14.json", converted.text)?;
 ```
 

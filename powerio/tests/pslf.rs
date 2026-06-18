@@ -103,7 +103,10 @@ fn pslf_write_read_round_trip_preserves_the_core() {
 fn pslf_same_format_write_echoes_source() {
     // A PSLF-sourced network writes back byte-for-byte through the retained source.
     let parsed = parse_str(EPC, "pslf").unwrap();
-    assert_eq!(write_as(&parsed.network, TargetFormat::Pslf).text, EPC);
+    assert_eq!(
+        write_as(&parsed.network, TargetFormat::Pslf).unwrap().text,
+        EPC
+    );
 }
 
 #[test]

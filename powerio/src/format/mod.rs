@@ -71,6 +71,10 @@ pub enum TargetFormat {
     PandapowerJson,
     /// MATPOWER `.m` (round-trip; byte-exact when the case kept its source).
     Matpower,
+    /// The canonical PowerIO snapshot: [`Network`] serialized as JSON, validated
+    /// on read. Lossless for every model field; the retained source text is the
+    /// one exclusion (see [`Network::to_json`]).
+    PowerioJson,
     /// GE PSLF `.epc` (round-trip; byte-exact when the case kept its source).
     Pslf,
 }
@@ -82,7 +86,8 @@ impl TargetFormat {
         match self {
             TargetFormat::PowerModelsJson
             | TargetFormat::EgretJson
-            | TargetFormat::PandapowerJson => "json",
+            | TargetFormat::PandapowerJson
+            | TargetFormat::PowerioJson => "json",
             TargetFormat::Psse { .. } => "raw",
             TargetFormat::PowerWorld => "aux",
             TargetFormat::Matpower => "m",
@@ -100,6 +105,7 @@ impl TargetFormat {
             TargetFormat::PowerWorld => "PowerWorld .aux",
             TargetFormat::PandapowerJson => "pandapower JSON",
             TargetFormat::Matpower => "MATPOWER .m",
+            TargetFormat::PowerioJson => "PowerIO JSON",
             TargetFormat::Pslf => "PSLF .epc",
         }
     }
@@ -116,6 +122,7 @@ impl TargetFormat {
             TargetFormat::PowerWorld => "powerworld",
             TargetFormat::PandapowerJson => "pandapower-json",
             TargetFormat::Matpower => "matpower",
+            TargetFormat::PowerioJson => "powerio-json",
             TargetFormat::Pslf => "pslf",
         }
     }
@@ -197,7 +204,9 @@ pub fn display_format_from_name(name: &str) -> Option<DisplayFormat> {
 /// Map a format name (with the common aliases) to a [`TargetFormat`], or `None`
 /// if unrecognized. Accepts `matpower`/`m`, `powermodels-json`/`powermodels`/`pm`,
 /// `egret-json`/`egret`, `pandapower-json`/`pandapower`/`pp`, `psse`/`raw`,
-/// `powerworld`/`aux`. Case-insensitive. The one place the bindings (Python, C
+/// `powerworld`/`aux`, `powerio-json`/`powerio`/`json` (the canonical snapshot;
+/// plain `json` means this one, the foreign JSON dialects are namespaced).
+/// Case-insensitive. The one place the bindings (Python, C
 /// ABI) share, so a new text format means one new arm here, not three. PyPSA
 /// CSV folders are directory inputs with no text target; their aliases are
 /// matched by the private `is_pypsa_csv_name` next to this.
@@ -219,6 +228,7 @@ pub fn target_format_from_name(name: &str) -> Option<TargetFormat> {
         "psse35" | "raw35" => TargetFormat::Psse { rev: 35 },
         "powerworld" | "aux" => TargetFormat::PowerWorld,
         "pandapower-json" | "pandapower" | "pandapowerjson" | "pp" => TargetFormat::PandapowerJson,
+        "powerio-json" | "powerio" | "poweriojson" | "json" => TargetFormat::PowerioJson,
         "pslf" | "epc" | "pslf-epc" => TargetFormat::Pslf,
         _ => return None,
     })
@@ -325,15 +335,19 @@ fn is_pslf_name(name: &str) -> bool {
     )
 }
 
-/// Parse the case file at `path`.
-///
-/// `from` can force a reader by name: [`target_format_from_name`] names plus
-/// `pypsa-csv`/`pypsa`, `pwb`, `pslf`, and `epc`. With `from = None`, a
-/// directory containing `network.csv` parses as PyPSA CSV and a file maps by
-/// extension (`m`/`json`/`raw`/`aux`/`pwb`/`epc`), case insensitively. JSON is
-/// sniffed as pandapower, egret, or PowerModels. PowerWorld `.pwb` is binary
-/// and read only; PSLF `.epc` is text and read only. Returns [`Parsed`]: the
-/// network plus reader warnings.
+/// Parse the case file at `path`, choosing the reader from `from` (the
+/// [`target_format_from_name`] names plus `pypsa-csv`/`pypsa`, `pwb`, `pslf`,
+/// and `epc`) or, when `None`, from the path: a directory containing
+/// `network.csv` parses as a PyPSA CSV folder (any other directory fails:
+/// [`Error::UnknownFormat`] when its name maps to no extension, the I/O error
+/// otherwise), and a file maps by extension (`m`/`json`/`raw`/`aux`/`pwb`/`epc`),
+/// case insensitively (issue #97: `.RAW` is as common as `.raw` in the wild). A
+/// `.json` file is sniffed four ways: pandapower (`"_class": "pandapowerNet"`),
+/// egret (top level `elements` and `system`), the powerio-json snapshot (top
+/// level `buses`), else PowerModels. Pass `from` to force one. PowerWorld `.pwb`
+/// is a binary read only format with no retained source; PSLF `.epc` is text and
+/// read only. Returns [`Parsed`]: the network plus the reader's fidelity
+/// warnings.
 ///
 /// The one path-based parser the CLI and the Python/C/Julia bindings share (each
 /// exposes the same `parse_file(path, from)` shape), so adding a source format is
@@ -441,6 +455,9 @@ fn read_source(source: Arc<String>, fmt: TargetFormat, name_hint: Option<&str>) 
         TargetFormat::PandapowerJson => {
             pandapower::parse_pandapower_source(source, name_hint, &mut warnings)
         }
+        // The canonical snapshot: validated deserialization of the model itself.
+        // It carries its own name and source_format, so the hint doesn't apply.
+        TargetFormat::PowerioJson => Network::from_json(&source),
         // PSLF read normally enters through the `is_pslf_name`/`.epc` fast path in
         // parse_file / parse_str; this arm keeps the funnel total.
         TargetFormat::Pslf => pslf::parse_pslf_source(source, name_hint, &mut warnings),
@@ -467,11 +484,12 @@ pub(crate) fn reject_empty_case(net: &Network, format: &'static str) -> Result<(
     Ok(())
 }
 
-/// The interchange JSON formats share the `.json` extension, so an explicit
-/// source format isn't always given. Sniff three ways: pandapower declares
-/// itself (`"_class": "pandapowerNet"`); egret `ModelData` has top level
-/// `elements` and `system`; else fall back to PowerModels (the more common
-/// input).
+/// The JSON formats share the `.json` extension, so an explicit source format
+/// isn't always given. Sniff four ways: pandapower declares itself
+/// (`"_class": "pandapowerNet"`); egret `ModelData` has top level `elements`
+/// and `system`; the powerio-json snapshot carries a top level `buses` array
+/// (the other dialects key their bus tables differently: PowerModels `bus`,
+/// egret `elements`); else fall back to PowerModels (the more common input).
 ///
 /// Deserializing into [`IgnoredAny`] fields scans the JSON to find the
 /// top level keys without building the whole `Value` tree, so a large
@@ -485,6 +503,7 @@ fn sniff_json(text: &str) -> TargetFormat {
         class: Option<String>,
         elements: Option<IgnoredAny>,
         system: Option<IgnoredAny>,
+        buses: Option<IgnoredAny>,
     }
     match serde_json::from_str::<Shape>(text) {
         Ok(Shape {
@@ -495,6 +514,7 @@ fn sniff_json(text: &str) -> TargetFormat {
             system: Some(_),
             ..
         }) => TargetFormat::EgretJson,
+        Ok(Shape { buses: Some(_), .. }) => TargetFormat::PowerioJson,
         _ => TargetFormat::PowerModelsJson,
     }
 }
@@ -518,7 +538,7 @@ pub fn parse_str(text: &str, format: &str) -> Result<Parsed> {
     read_source(Arc::new(text.to_owned()), fmt, None)
 }
 
-/// Output of a parse: the network plus the reader's fidelity warnings —
+/// Output of a parse: the network plus the reader's fidelity warnings,
 /// tables and columns the model cannot carry, reported instead of dropped
 /// silently. Empty for readers that don't report read warnings (currently
 /// every format except pandapower JSON and PyPSA CSV; the PSS/E and
@@ -553,14 +573,21 @@ pub struct Conversion {
 
 /// Convert a [`Network`] to `format`. Writing back to the source format returns
 /// the retained source text; otherwise the network is serialized into the target.
-#[must_use]
-pub fn write_as(net: &Network, format: TargetFormat) -> Conversion {
+///
+/// # Errors
+/// Only a `PowerioJson` serialization failure (none arise from this model
+/// today). A non-finite value is not an error: readers legitimately produce
+/// `Inf` limits and the bindings materialize every network through the
+/// snapshot, so it is written as `null` with a fidelity warning naming the
+/// field: that output serves the one-way transports but does not read back
+/// (the validating reader rejects the `null`).
+pub fn write_as(net: &Network, format: TargetFormat) -> Result<Conversion> {
     if is_echo(net, format) {
         if let Some(src) = &net.source {
-            return Conversion {
+            return Ok(Conversion {
                 text: src.to_string(),
                 warnings: Vec::new(),
-            };
+            });
         }
     }
     let mut conv = match format {
@@ -573,12 +600,33 @@ pub fn write_as(net: &Network, format: TargetFormat) -> Conversion {
         // the folded model, which itemizes what it can't carry (HVDC, gen caps,
         // extras, a partial-cost case).
         TargetFormat::Matpower => matpower::write_matpower_conversion(net),
+        // The snapshot serializes the model itself, so the usual target
+        // passes don't apply (warn_normalized_tap would even be FALSE here:
+        // the snapshot preserves the line/transformer labels it warns about);
+        // return before them. The one fidelity loss the snapshot can suffer
+        // is JSON's missing Inf/NaN: serde writes them as `null`, which
+        // `from_json` rejects on the way back, so warn, naming every field.
+        TargetFormat::PowerioJson => {
+            return net.to_json().map(|text| Conversion {
+                text,
+                warnings: net
+                    .non_finite_fields()
+                    .into_iter()
+                    .map(|path| {
+                        format!(
+                            "{path} is not finite; JSON has no Inf/NaN, so it is written as \
+                             null and this snapshot will not read back as powerio-json"
+                        )
+                    })
+                    .collect(),
+            });
+        }
         TargetFormat::Pslf => write_pslf(net),
     };
     warn_normalized_tap(net, format, &mut conv);
     warn_missing_reference(net, format, &mut conv);
     warn_dropped_frequency(net, format, &mut conv);
-    conv
+    Ok(conv)
 }
 
 /// Warn when a non-default system frequency writes to a format with no frequency
@@ -619,7 +667,7 @@ pub fn convert_file(
     from: Option<&str>,
 ) -> Result<Conversion> {
     let parsed = parse_file(path, from)?;
-    let mut conv = write_as(&parsed.network, to);
+    let mut conv = write_as(&parsed.network, to)?;
     if !is_echo(&parsed.network, to) {
         conv.warnings.splice(0..0, parsed.warnings);
     }
@@ -637,11 +685,34 @@ pub fn convert_file(
 /// As [`parse_str`].
 pub fn convert_str(text: &str, to: TargetFormat, format: &str) -> Result<Conversion> {
     let parsed = parse_str(text, format)?;
-    let mut conv = write_as(&parsed.network, to);
+    let mut conv = write_as(&parsed.network, to)?;
     if !is_echo(&parsed.network, to) {
         conv.warnings.splice(0..0, parsed.warnings);
     }
     Ok(conv)
+}
+
+/// Write `net` into the directory `out_dir` as the named directory-shaped
+/// format: the directory sibling of [`write_as`], sharing its name-dispatch
+/// role for the bindings. PyPSA CSV (`pypsa-csv`/`pypsa`) is the one such
+/// format today; a text format name is rejected by name, pointing at
+/// [`write_as`]. Returns the write's fidelity warnings.
+///
+/// # Errors
+/// [`Error::UnknownFormat`] for a non-directory format name; the writer's own
+/// [`Error`] otherwise.
+pub fn write_dir(
+    net: &Network,
+    to: &str,
+    out_dir: impl AsRef<std::path::Path>,
+) -> Result<Vec<String>> {
+    if is_pypsa_csv_name(to) {
+        return write_pypsa_csv_folder(net, out_dir.as_ref()).map(|o| o.warnings);
+    }
+    Err(Error::UnknownFormat(format!(
+        "{to} is not a directory format (directory targets: pypsa-csv/pypsa); \
+         text formats serialize through write_as / to_format"
+    )))
 }
 
 /// Warn when a network with no reference (slack) bus converts to a format
@@ -669,7 +740,7 @@ fn warn_missing_reference(net: &Network, format: TargetFormat, conv: &mut Conver
 pub(super) fn missing_reference_warning(net: &Network) -> Option<String> {
     (!net.buses.iter().any(|b| b.kind == BusType::Ref)).then(|| {
         "no reference (slack) bus in the source network; power flow tools \
-         reject such cases — to_normalized synthesizes a slack at the \
+         reject such cases; to_normalized synthesizes a slack at the \
          largest pmax in service generator bus"
             .to_string()
     })
@@ -872,7 +943,7 @@ mod tests {
     fn source_format_strings_round_trip_to_a_target() {
         // The bindings expose `source_format` as its `{:?}` form, and
         // `to_format` routes that string back through `target_format_from_name`.
-        // Every writable source format must resolve — including PowerModelsJson /
+        // Every writable source format must resolve, including PowerModelsJson /
         // EgretJson, whose camel-case names need the `powermodelsjson` /
         // `egretjson` aliases (issue #75).
         for (sf, want) in [

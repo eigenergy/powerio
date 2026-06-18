@@ -89,7 +89,7 @@ fn dropped_frequency_warns_for_formats_without_a_field() {
         TargetFormat::EgretJson,
         TargetFormat::PowerWorld,
     ] {
-        let conv = write_as(&net, target);
+        let conv = write_as(&net, target).unwrap();
         assert!(
             conv.warnings.iter().any(|w| w.contains("frequency")),
             "{target:?} should warn that it drops the 50 Hz label, got {:?}",
@@ -98,7 +98,7 @@ fn dropped_frequency_warns_for_formats_without_a_field() {
     }
     // PSS/E and pandapower carry it, so no frequency warning there.
     for target in [TargetFormat::Psse { rev: 33 }, TargetFormat::PandapowerJson] {
-        let conv = write_as(&net, target);
+        let conv = write_as(&net, target).unwrap();
         assert!(
             !conv.warnings.iter().any(|w| w.contains("frequency")),
             "{target:?} carries the frequency and should not warn, got {:?}",

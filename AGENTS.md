@@ -19,8 +19,8 @@ graph views for any downstream solver. (Planned) feeds the GridFM ML pipeline.
   (`python/powerio/`); hands back COO triplets that scipy assembles.
 - **`powerio-capi`**: C ABI over `powerio` (`pio_*`, header `powerio.h`) for
   C, C++, Julia, and other FFI users. `--features arrow` adds
-  `pio_export_arrow`, an Arrow C Data Interface export; `--features gridfm` adds
-  `pio_read_gridfm` / `pio_gridfm_scenario_ids` (the gridfm-datakit Parquet
+  `pio_to_arrow`, an Arrow C Data Interface export; `--features gridfm` adds
+  `pio_read_dir` / `pio_scenario_ids` (the gridfm-datakit Parquet
   reader, pulling in `powerio-matrix`). Both are additive/feature-gated, so no
   ABI bump.
 
@@ -64,7 +64,7 @@ powerio gridfm tests/data/case14.m -o out      # gridfm-datakit Parquet dataset
 
 # C ABI (cdylib + staticlib; header powerio-capi/include/powerio.h):
 cargo build -p powerio-capi
-cargo build -p powerio-capi --features arrow   # + pio_export_arrow (Arrow C Data Interface)
+cargo build -p powerio-capi --features arrow   # + pio_to_arrow (Arrow C Data Interface)
 
 # Python (PyO3 crate needs libpython, so it is NOT in default-members):
 cargo build -p powerio-py    # plain cargo build of the extension
@@ -124,7 +124,7 @@ powerio-py/src/lib.rs        # PyO3 extension → COO triplets (module `_powerio
 python/powerio/              # importable package (scipy/networkx assembly, lazy)
 python/tests/               # test_powerio.py, test_gridfm.py, test_mcp.py
 powerio-capi/                # C ABI (pio_*, include/powerio.h, examples/smoke.c)
-│                            #   src/arrow_export.rs: pio_export_arrow (feature = "arrow")
+│                            #   src/arrow_export.rs: pio_to_arrow (feature = "arrow")
 tests/data/                  # shared fixtures (used by CLI examples)
 benchmarks/                  # parse benchmarks + Julia validation harnesses
 ```
@@ -159,7 +159,7 @@ benchmarks/                  # parse benchmarks + Julia validation harnesses
   `powerio/src/lib.rs`, add a CLI/`TargetFormat` arm. `Network` is the unifying
   hub.
 - **JSON transport.** `Network::to_json`/`from_json` (serde) is the structured
-  transport; over the C ABI it is `pio_to_json`/`pio_from_json`. The retained
+  transport; over the C ABI it is the `powerio-json` format through `pio_to_format`/`pio_parse_str`. The retained
   `source` text is `#[serde(skip)]`, so JSON carries the tables, not the
   byte exact echo, and a `from_json` round trip returns `source` as `None`.
 - **Sign convention.** Positive Laplacian: off diag negative, diag positive, `diag = sum |off-diag|` for B'. The positive (M-matrix) Laplacian form SDDM solvers expect.

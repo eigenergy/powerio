@@ -123,7 +123,7 @@ jobs:
     - uses: Swatinem/rust-cache@v2
     - name: Build powerio-capi --features arrow
       run: cargo build -p powerio-capi --release --features arrow
-    # The cfg-gated pio_export_arrow still appears in the source symbol grep, so
+    # The cfg-gated pio_to_arrow still appears in the source symbol grep, so
     # it must be declared in the header (inside #ifdef PIO_ARROW); parity holds.
     - name: Header symbol parity
       run: |
