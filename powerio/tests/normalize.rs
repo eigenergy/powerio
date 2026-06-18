@@ -113,7 +113,7 @@ fn no_false_write_back() {
 
     // Writing it serializes the per-unit/radian model, so it must NOT echo the
     // raw MATPOWER bytes.
-    let out = write_as(&n, TargetFormat::Matpower);
+    let out = write_as(&n, TargetFormat::Matpower).unwrap();
     assert_ne!(
         out.text.trim_end(),
         src.replace("\r\n", "\n").trim_end(),
@@ -135,7 +135,7 @@ fn warns_when_writing_normalized_lines_as_transformers() {
             .all(|b| approx(b.tap, 1.0) && approx(b.shift, 0.0))
     );
 
-    let out = write_as(&n, TargetFormat::Psse);
+    let out = write_as(&n, TargetFormat::Psse).unwrap();
     assert!(
         out.warnings
             .iter()
@@ -145,7 +145,7 @@ fn warns_when_writing_normalized_lines_as_transformers() {
     );
 
     // A raw network keeps lines at tap 0, so the warning must not fire for it.
-    let raw_out = write_as(&raw, TargetFormat::Psse);
+    let raw_out = write_as(&raw, TargetFormat::Psse).unwrap();
     assert!(
         !raw_out
             .warnings

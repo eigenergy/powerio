@@ -70,3 +70,5 @@ pub use io::gridfm::{
     read_gridfm_dataset, read_gridfm_network, read_gridfm_scenarios, write_gridfm_batch,
     write_gridfm_dataset,
 };
+#[cfg(feature = "gridfm")]
+pub use io::{dataset_scenario_ids, read_dataset_dir};

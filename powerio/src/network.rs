@@ -1,4 +1,4 @@
-//! Format-neutral network model — the hub every converter meets at.
+//! Format-neutral network model: the hub every converter meets at.
 //!
 //! Readers map their format into a [`Network`]; writers map a `Network` back out.
 //! It is the one canonical data model: format-neutral tables with loads and
@@ -32,7 +32,7 @@ use crate::Error;
 pub type Extras = BTreeMap<String, Value>;
 
 /// A bus identifier as it appears in the source file: the external, stable id
-/// (1-based in MATPOWER, and possibly sparse — pegase has gaps in its ids).
+/// (1-based in MATPOWER, and possibly sparse; pegase has gaps in its ids).
 /// Distinct from the dense `[0, n)` analysis index, which only
 /// [`IndexedNetwork`](crate::IndexedNetwork) produces, via
 /// [`bus_index`](crate::IndexedNetwork::bus_index). The two are both integers
@@ -41,7 +41,7 @@ pub type Extras = BTreeMap<String, Value>;
 /// contiguous case and pure garbage on a sparse one).
 ///
 /// `#[serde(transparent)]` so the JSON transport carries a bare integer, not a
-/// wrapper object — the wire format is unchanged.
+/// wrapper object; the wire format is unchanged.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(transparent)]
 pub struct BusId(pub usize);
@@ -296,6 +296,10 @@ pub struct Generator {
     /// A fixed array, not an [`Extras`] map: a string-keyed map per generator
     /// costs 11 heap allocations each, which dominates the parse of a large
     /// generator-heavy case. Surfaced into formats that name them (PowerModels).
+    /// On the JSON snapshot it is a name-keyed object (see `caps_serde`) so the
+    /// schema stays additive when `GEN_EXTRA_KEYS` grows; `#[serde(default)]` so a
+    /// snapshot that omits it deserializes to the empty set.
+    #[serde(default = "default_caps", with = "caps_serde")]
     pub caps: GenCaps,
 }
 
@@ -310,6 +314,52 @@ impl Generator {
 
 /// A generator's capability / ramp columns, one slot per `GEN_EXTRA_KEYS` name.
 pub type GenCaps = [Option<f64>; GEN_EXTRA_KEYS.len()];
+
+/// The empty capability set, for a JSON snapshot that omits the field entirely.
+fn default_caps() -> GenCaps {
+    [None; GEN_EXTRA_KEYS.len()]
+}
+
+/// Serialize [`GenCaps`] as a name-keyed object (`{"ramp_30": 1.2, ...}`) keyed by
+/// [`GEN_EXTRA_KEYS`], emitting only the present slots, instead of a length-exact
+/// array. A fixed-length array round-trips through serde only at exactly its
+/// current length: the day `GEN_EXTRA_KEYS` grows a column, every old snapshot
+/// fails to deserialize and every new one fails on an old build, and the C ABI
+/// ties the JSON snapshot schema to its version, so that is a forced ABI break.
+/// The named map makes a new key purely additive: an old document simply lacks it
+/// (deserializes to `None`), and an unknown key from a newer document is ignored.
+/// In memory `caps` stays a fixed array, so the per-generator allocation cost the
+/// array avoids is unchanged; only the wire form is named.
+mod caps_serde {
+    use super::{GEN_EXTRA_KEYS, GenCaps};
+    use serde::de::{Deserialize, Deserializer};
+    use serde::ser::{SerializeMap, Serializer};
+    use std::collections::BTreeMap;
+
+    pub(super) fn serialize<S: Serializer>(caps: &GenCaps, s: S) -> Result<S::Ok, S::Error> {
+        let present = caps.iter().filter(|v| v.is_some()).count();
+        let mut map = s.serialize_map(Some(present))?;
+        for (key, slot) in GEN_EXTRA_KEYS.iter().zip(caps.iter()) {
+            if let Some(value) = slot {
+                map.serialize_entry(key, value)?;
+            }
+        }
+        map.end()
+    }
+
+    pub(super) fn deserialize<'de, D: Deserializer<'de>>(d: D) -> Result<GenCaps, D::Error> {
+        // Accept an explicit `null` as the empty set (treated like an omitted
+        // field), so a producer that encodes "no caps" as `null` round-trips the
+        // same way `cost: Option<_>` does. `#[serde(default)]` only covers an
+        // absent key, not a present `null`.
+        let named = Option::<BTreeMap<String, f64>>::deserialize(d)?.unwrap_or_default();
+        let mut caps: GenCaps = [None; GEN_EXTRA_KEYS.len()];
+        for (slot, key) in caps.iter_mut().zip(GEN_EXTRA_KEYS.iter()) {
+            *slot = named.get(*key).copied();
+        }
+        Ok(caps)
+    }
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Storage {
@@ -397,11 +447,22 @@ impl Network {
         }
     }
 
-    /// Serialize the structured tables to JSON — the transport the C ABI
-    /// (`pio_to_json`) and the Julia bridge consume. The retained `source` text
+    /// Serialize the structured tables to JSON: the transport the C ABI
+    /// (the `powerio-json` format) and the Julia bridge consume. The retained `source` text
     /// is excluded (see the field's `#[serde(skip)]`), so the byte-exact echo
     /// stays on the same-format write path; a [`from_json`](Network::from_json)
     /// round-trip reproduces every field except `source`, which returns `None`.
+    ///
+    /// JSON has no `Inf`/`NaN`: `serde_json` writes a non-finite field as
+    /// `null`, which [`from_json`](Network::from_json) rejects on the way back
+    /// (`null` is not an `f64`). The write stays total, the bindings
+    /// materialize every parsed network through this transport, and readers
+    /// legitimately produce `Inf` limits, but such a snapshot does not round
+    /// trip; [`write_as`](crate::write_as) reports the degradation as a
+    /// fidelity warning naming the field.
+    ///
+    /// # Errors
+    /// A `serde_json` serialization failure (none arise from this model today).
     pub fn to_json(&self) -> crate::Result<String> {
         serde_json::to_string(self).map_err(|e| Error::FormatRead {
             format: "JSON",
@@ -409,10 +470,171 @@ impl Network {
         })
     }
 
+    /// The paths of every non-finite numeric field, empty when all values are
+    /// finite. Drives the snapshot writer's degradation warning (see
+    /// [`to_json`](Network::to_json)): serde writes EVERY non-finite `f64` as
+    /// `null`, so the warning must name them all, not just the first, or the
+    /// caller fixes one field and the snapshot still fails to read back.
+    /// `extras` maps hold `serde_json::Value`, which cannot carry a non-finite
+    /// number, so only the typed `f64` fields need scanning. Every struct is
+    /// destructured exhaustively: adding an `f64` field without classifying it
+    /// here is a compile error, not a silently unguarded value.
+    // The length IS the exhaustive field walk; splitting it would only scatter
+    // the per-struct lists the compile-time check exists to keep in one place.
+    #[allow(clippy::too_many_lines)]
+    pub(crate) fn non_finite_fields(&self) -> Vec<String> {
+        fn bad<'a>(
+            fields: impl IntoIterator<Item = (&'a str, f64)>,
+        ) -> impl Iterator<Item = &'a str> {
+            fields
+                .into_iter()
+                .filter_map(|(name, v)| (!v.is_finite()).then_some(name))
+        }
+        let mut out = Vec::new();
+        if !self.base_mva.is_finite() {
+            out.push("base_mva".into());
+        }
+        for (i, b) in self.buses.iter().enumerate() {
+            #[rustfmt::skip]
+            let Bus { id: _, kind: _, vm, va, base_kv, vmax, vmin, area: _, zone: _, name: _, extras: _ } = b;
+            let fields = [
+                ("vm", *vm),
+                ("va", *va),
+                ("base_kv", *base_kv),
+                ("vmax", *vmax),
+                ("vmin", *vmin),
+            ];
+            out.extend(bad(fields).map(|f| format!("buses[{i}].{f}")));
+        }
+        for (i, l) in self.loads.iter().enumerate() {
+            let Load {
+                bus: _,
+                p,
+                q,
+                in_service: _,
+                extras: _,
+            } = l;
+            out.extend(bad([("p", *p), ("q", *q)]).map(|f| format!("loads[{i}].{f}")));
+        }
+        for (i, s) in self.shunts.iter().enumerate() {
+            let Shunt {
+                bus: _,
+                g,
+                b,
+                in_service: _,
+                extras: _,
+            } = s;
+            out.extend(bad([("g", *g), ("b", *b)]).map(|f| format!("shunts[{i}].{f}")));
+        }
+        for (i, br) in self.branches.iter().enumerate() {
+            #[rustfmt::skip]
+            let Branch { from: _, to: _, r, x, b, rate_a, rate_b, rate_c, tap, shift, in_service: _, angmin, angmax, extras: _ } = br;
+            let fields = [
+                ("r", *r),
+                ("x", *x),
+                ("b", *b),
+                ("rate_a", *rate_a),
+                ("rate_b", *rate_b),
+                ("rate_c", *rate_c),
+                ("tap", *tap),
+                ("shift", *shift),
+                ("angmin", *angmin),
+                ("angmax", *angmax),
+            ];
+            out.extend(bad(fields).map(|f| format!("branches[{i}].{f}")));
+        }
+        for (i, g) in self.generators.iter().enumerate() {
+            #[rustfmt::skip]
+            let Generator { bus: _, pg, qg, pmax, pmin, qmax, qmin, vg, mbase, in_service: _, cost, caps } = g;
+            let fields = [
+                ("pg", *pg),
+                ("qg", *qg),
+                ("pmax", *pmax),
+                ("pmin", *pmin),
+                ("qmax", *qmax),
+                ("qmin", *qmin),
+                ("vg", *vg),
+                ("mbase", *mbase),
+            ];
+            out.extend(bad(fields).map(|f| format!("generators[{i}].{f}")));
+            if let Some(GenCost {
+                model: _,
+                startup,
+                shutdown,
+                ncost: _,
+                coeffs,
+            }) = cost
+            {
+                out.extend(
+                    bad([("startup", *startup), ("shutdown", *shutdown)])
+                        .map(|f| format!("generators[{i}].cost.{f}")),
+                );
+                if coeffs.iter().any(|c| !c.is_finite()) {
+                    out.push(format!("generators[{i}].cost.coeffs"));
+                }
+            }
+            // Name the exact cap key (caps serializes as a name-keyed object, so
+            // the null lands at generators[i].caps.<key>, e.g. ramp_30), matching
+            // the key-level precision of every other field.
+            for (key, slot) in GEN_EXTRA_KEYS.iter().zip(caps.iter()) {
+                if matches!(slot, Some(v) if !v.is_finite()) {
+                    out.push(format!("generators[{i}].caps.{key}"));
+                }
+            }
+        }
+        for (i, s) in self.storage.iter().enumerate() {
+            #[rustfmt::skip]
+            let Storage { bus: _, ps, qs, energy, energy_rating, charge_rating, discharge_rating, charge_efficiency, discharge_efficiency, thermal_rating, qmin, qmax, r, x, p_loss, q_loss, in_service: _, extras: _ } = s;
+            let fields = [
+                ("ps", *ps),
+                ("qs", *qs),
+                ("energy", *energy),
+                ("energy_rating", *energy_rating),
+                ("charge_rating", *charge_rating),
+                ("discharge_rating", *discharge_rating),
+                ("charge_efficiency", *charge_efficiency),
+                ("discharge_efficiency", *discharge_efficiency),
+                ("thermal_rating", *thermal_rating),
+                ("qmin", *qmin),
+                ("qmax", *qmax),
+                ("r", *r),
+                ("x", *x),
+                ("p_loss", *p_loss),
+                ("q_loss", *q_loss),
+            ];
+            out.extend(bad(fields).map(|f| format!("storage[{i}].{f}")));
+        }
+        for (i, h) in self.hvdc.iter().enumerate() {
+            #[rustfmt::skip]
+            let Hvdc { from: _, to: _, in_service: _, pf, pt, qf, qt, vf, vt, pmin, pmax, qminf, qmaxf, qmint, qmaxt, loss0, loss1, extras: _ } = h;
+            let fields = [
+                ("pf", *pf),
+                ("pt", *pt),
+                ("qf", *qf),
+                ("qt", *qt),
+                ("vf", *vf),
+                ("vt", *vt),
+                ("pmin", *pmin),
+                ("pmax", *pmax),
+                ("qminf", *qminf),
+                ("qmaxf", *qmaxf),
+                ("qmint", *qmint),
+                ("qmaxt", *qmaxt),
+                ("loss0", *loss0),
+                ("loss1", *loss1),
+            ];
+            out.extend(bad(fields).map(|f| format!("hvdc[{i}].{f}")));
+        }
+        out
+    }
+
     /// Serialize this network to `format`, preserving the retained source text
     /// on same-format writes and reporting any target-format fidelity warnings.
-    #[must_use]
-    pub fn to_format(&self, format: crate::TargetFormat) -> crate::Conversion {
+    ///
+    /// # Errors
+    /// As [`write_as`](crate::write_as): only a `PowerioJson` serialization
+    /// failure.
+    pub fn to_format(&self, format: crate::TargetFormat) -> crate::Result<crate::Conversion> {
         crate::write_as(self, format)
     }
 
@@ -428,8 +650,8 @@ impl Network {
     /// Rebuild a `Network` from JSON produced by [`to_json`](Network::to_json).
     ///
     /// Validates the result (no buses, unique bus ids, no dangling references)
-    /// before returning, so the JSON transport — the C ABI and Julia bridge ride
-    /// on it — can't hand back a network the file readers would have rejected
+    /// before returning, so the JSON transport (the C ABI and Julia bridge ride
+    /// on it) can't hand back a network the file readers would have rejected
     /// (the same no-buses guard `read_source` applies to every parse path).
     pub fn from_json(text: &str) -> crate::Result<Network> {
         let net: Network = serde_json::from_str(text).map_err(|e| Error::FormatRead {
@@ -535,5 +757,129 @@ impl Network {
             check(s.bus, "storage")?;
         }
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn gen_caps_serialize_as_a_named_map_that_grows_additively() {
+        let mut caps: GenCaps = [None; GEN_EXTRA_KEYS.len()];
+        caps[8] = Some(1.5); // ramp_30
+        caps[10] = Some(0.5); // apf
+        let g = Generator {
+            bus: BusId(1),
+            pg: 10.0,
+            qg: 0.0,
+            pmax: 100.0,
+            pmin: 0.0,
+            qmax: 50.0,
+            qmin: -50.0,
+            vg: 1.0,
+            mbase: 100.0,
+            in_service: true,
+            cost: None,
+            caps,
+        };
+
+        // caps is a name-keyed object emitting only the present slots, not a
+        // length-exact array.
+        let json = serde_json::to_string(&g).unwrap();
+        assert!(json.contains(r#""caps":{"#), "caps is an object: {json}");
+        assert!(json.contains(r#""ramp_30":1.5"#) && json.contains(r#""apf":0.5"#));
+        let back: Generator = serde_json::from_str(&json).unwrap();
+        assert_eq!(back.caps, g.caps);
+
+        // Growing GEN_EXTRA_KEYS stays additive: an unknown future key is ignored,
+        // a missing key reads as None, and an omitted field is the empty set.
+        let with_future = r#"{"bus":1,"pg":10,"qg":0,"pmax":100,"pmin":0,"qmax":50,"qmin":-50,
+            "vg":1,"mbase":100,"in_service":true,"cost":null,
+            "caps":{"ramp_30":1.5,"future_ramp":9.9}}"#;
+        let g2: Generator = serde_json::from_str(with_future).unwrap();
+        assert_eq!(g2.caps[8], Some(1.5));
+        assert_eq!(g2.caps.iter().filter(|v| v.is_some()).count(), 1);
+        let no_caps = r#"{"bus":1,"pg":10,"qg":0,"pmax":100,"pmin":0,"qmax":50,"qmin":-50,
+            "vg":1,"mbase":100,"in_service":true,"cost":null}"#;
+        let g3: Generator = serde_json::from_str(no_caps).unwrap();
+        assert!(!g3.has_caps());
+
+        // An explicit `"caps":null` is the empty set too, the same as omitting it.
+        let null_caps = r#"{"bus":1,"pg":10,"qg":0,"pmax":100,"pmin":0,"qmax":50,"qmin":-50,
+            "vg":1,"mbase":100,"in_service":true,"cost":null,"caps":null}"#;
+        let g4: Generator = serde_json::from_str(null_caps).unwrap();
+        assert!(!g4.has_caps());
+    }
+
+    #[test]
+    fn non_finite_fields_lists_every_offender_not_just_the_first() {
+        let bus = |id, vm| Bus {
+            id: BusId(id),
+            kind: BusType::Pq,
+            vm,
+            va: 0.0,
+            base_kv: 230.0,
+            vmax: 1.1,
+            vmin: 0.9,
+            area: 1,
+            zone: 1,
+            name: None,
+            extras: Extras::new(),
+        };
+        let branch = Branch {
+            from: BusId(1),
+            to: BusId(2),
+            r: 0.0,
+            x: f64::INFINITY,
+            b: 0.0,
+            rate_a: 0.0,
+            rate_b: 0.0,
+            rate_c: 0.0,
+            tap: 0.0,
+            shift: 0.0,
+            in_service: true,
+            angmin: -360.0,
+            angmax: 360.0,
+            extras: Extras::new(),
+        };
+        // A non-finite generator capability reports at its exact key path
+        // (caps serializes as a name-keyed object), not the parent `caps`.
+        let mut g = Generator {
+            bus: BusId(1),
+            pg: 0.0,
+            qg: 0.0,
+            pmax: 0.0,
+            pmin: 0.0,
+            qmax: 0.0,
+            qmin: 0.0,
+            vg: 1.0,
+            mbase: 100.0,
+            in_service: true,
+            cost: None,
+            caps: GenCaps::default(),
+        };
+        g.caps[8] = Some(f64::INFINITY); // ramp_30
+        // Three distinct non-finite fields: a bus vm (NaN), a branch x (Inf), and
+        // a generator ramp_30 cap (Inf).
+        let mut net = Network::in_memory(
+            "nf",
+            100.0,
+            vec![bus(1, f64::NAN), bus(2, 1.0)],
+            vec![branch],
+        );
+        net.generators.push(g);
+        let fields = net.non_finite_fields();
+        assert!(fields.contains(&"buses[0].vm".to_string()), "{fields:?}");
+        assert!(fields.contains(&"branches[0].x".to_string()), "{fields:?}");
+        assert!(
+            fields.contains(&"generators[0].caps.ramp_30".to_string()),
+            "caps reported at key precision: {fields:?}"
+        );
+        assert_eq!(
+            fields.len(),
+            3,
+            "exactly the three offenders, no more: {fields:?}"
+        );
     }
 }

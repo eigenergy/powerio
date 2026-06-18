@@ -50,15 +50,21 @@ int main(int argc, char **argv) {
     printf("parsed %s: %zu buses, %zu branches, %zu gens, baseMVA %g\n", argv[1],
            nb, m, ng, base);
     CHECK(nb > 0 && m > 0, "empty case");
-    CHECK(pio_n_components(c) >= 1, "bad component count");
-    CHECK(pio_reference_bus(c) >= 0, "no single reference bus");
+    CHECK(pio_n_islands(c) >= 1, "bad island count");
+    CHECK(pio_ref_bus_index(c) >= 0, "no single reference bus");
+    /* The MATPOWER reader is total: no warnings attached to the handle. */
+    CHECK(pio_warnings(c, NULL, 0) == 0, "unexpected parse warnings");
 
     /* Pull branch endpoints (1-based bus ids, same space as pio_bus_ids) and
-     * reactances, as a solver would. */
+     * reactances, as a solver would. The all-NULL call is the count query; the
+     * fill returns the same total, so a short buffer is detectable. */
+    CHECK(pio_branches(c, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, 0) == m,
+          "count query disagrees with pio_n_branches");
     int64_t *from = malloc(m * sizeof *from);
     double *x = malloc(m * sizeof *x);
     CHECK(from && x, "out of memory");
-    pio_branches(c, from, NULL, NULL, x, NULL, NULL, NULL, NULL);
+    CHECK(pio_branches(c, from, NULL, NULL, x, NULL, NULL, NULL, NULL, m) == m,
+          "branch fill did not return the total");
     for (size_t k = 0; k < m; k++) {
         CHECK(from[k] >= 1, "branch from-id should be a valid 1-based bus id");
         CHECK(x[k] != 0.0, "zero reactance");
@@ -66,23 +72,26 @@ int main(int argc, char **argv) {
     free(from);
     free(x);
 
-    /* Byte-exact MATPOWER echo comes back as an owned string. */
-    char *echo = pio_to_matpower(c, err, sizeof err);
+    /* Byte-exact MATPOWER echo: matpower is a format string, not a symbol. */
+    char warn[PIO_ERRBUF_MIN];
+    warn[0] = '\0';
+    char *echo = pio_to_format(c, "matpower", warn, sizeof warn, err, sizeof err);
     CHECK(echo != NULL && strlen(echo) > 0, err);
     pio_string_free(echo);
 
     /* Cross-format convert reaches the converter and returns owned text. */
-    char *raw = pio_convert_file(argv[1], "psse", NULL, NULL, 0, err, sizeof err);
+    char *raw = pio_convert_file(argv[1], NULL, "psse", NULL, 0, err, sizeof err);
     CHECK(raw != NULL, err);
     pio_string_free(raw);
 
-    /* JSON transport: serialize, rebuild, and confirm the counts survive. */
-    char *json = pio_to_json(c, err, sizeof err);
+    /* The canonical snapshot: serialize to powerio-json, parse it back, and
+     * confirm the counts survive. Lossless, validated on read. */
+    char *json = pio_to_format(c, "powerio-json", NULL, 0, err, sizeof err);
     CHECK(json != NULL, err);
-    PioNetwork *c2 = pio_from_json(json, err, sizeof err);
+    PioNetwork *c2 = pio_parse_str(json, "powerio-json", err, sizeof err);
     CHECK(c2 != NULL, err);
     CHECK(pio_n_buses(c2) == nb && pio_n_branches(c2) == m && pio_n_gens(c2) == ng,
-          "JSON round-trip changed the table sizes");
+          "snapshot round-trip changed the table sizes");
     pio_string_free(json);
     pio_network_free(c2);
 
@@ -104,41 +113,47 @@ int main(int argc, char **argv) {
         CHECK(cs != NULL, err);
         CHECK(pio_n_buses(cs) == nb && pio_n_branches(cs) == m && pio_n_gens(cs) == ng,
               "pio_parse_str disagrees with pio_parse_file on table sizes");
+
+        /* In-memory convert: parse + serialize fused, no filesystem. */
+        char *pm = pio_convert_str(buf, "matpower", "powermodels-json",
+                                   NULL, 0, err, sizeof err);
+        CHECK(pm != NULL, err);
+        pio_string_free(pm);
         free(buf);
 
         /* Normalize into a NEW handle: per unit, radians, filtered, reindexed.
          * It has no more buses than the raw case, has at least one reference bus
-         * (several if the file marked several), and still serializes through the
-         * JSON transport. Use pio_n_reference_buses, not pio_reference_bus >= 0:
-         * the latter returns -1 for a multi-slack case, which is valid here. */
-        PioNetwork *cn = pio_to_normalized(cs, err, sizeof err);
+         * (several if the file marked several), and still snapshots. Count the
+         * references with the NULL-out query, not pio_ref_bus_index >= 0: the
+         * latter returns -1 for a multi-slack case, which is valid here. */
+        PioNetwork *cn = pio_normalize(cs, err, sizeof err);
         CHECK(cn != NULL, err);
         CHECK(pio_n_buses(cn) <= nb && pio_n_buses(cn) > 0, "normalized bus count out of range");
-        CHECK(pio_n_reference_buses(cn) >= 1, "normalized case lost its reference bus");
-        char *njson = pio_to_json(cn, err, sizeof err);
+        CHECK(pio_ref_bus_indices(cn, NULL, 0) >= 1, "normalized case lost its reference bus");
+        char *njson = pio_to_format(cn, "powerio-json", NULL, 0, err, sizeof err);
         CHECK(njson != NULL, err);
         pio_string_free(njson);
         pio_network_free(cn);
         pio_network_free(cs);
-        printf("parse_str + to_normalized OK\n");
+        printf("parse_str + convert_str + normalize OK\n");
     }
 
-    /* PyPSA CSV folder writer: 0 on success, -1 on error (message in errbuf). */
+    /* Directory writer: 0 on success, -1 on error (message in errbuf). The
+     * format is a string here too; pypsa-csv is the one directory format. */
     {
-        char warn[PIO_ERRBUF_MIN];
         warn[0] = '\0';
         char outdir[512];
         snprintf(outdir, sizeof outdir, "%s-pypsa-smoke", argv[1]);
-        int rc = pio_write_pypsa_csv_folder(c, outdir, warn, sizeof warn, err, sizeof err);
+        int rc = pio_write_dir(c, "pypsa-csv", outdir, warn, sizeof warn, err, sizeof err);
         CHECK(rc == 0, err);
         char buses[600];
         snprintf(buses, sizeof buses, "%s/buses.csv", outdir);
         FILE *bf = fopen(buses, "rb");
         CHECK(bf != NULL, "PyPSA folder missing buses.csv");
         fclose(bf);
-        rc = pio_write_pypsa_csv_folder(NULL, outdir, NULL, 0, err, sizeof err);
-        CHECK(rc == -1, "NULL network handle should fail the PyPSA write");
-        printf("pypsa csv folder write OK: %s\n", outdir);
+        rc = pio_write_dir(NULL, "pypsa-csv", outdir, NULL, 0, err, sizeof err);
+        CHECK(rc == -1, "NULL network handle should fail the directory write");
+        printf("pypsa csv directory write OK: %s\n", outdir);
     }
 
 #ifdef PIO_ARROW
@@ -149,7 +164,7 @@ int main(int argc, char **argv) {
         struct ArrowSchema sch;
         memset(&arr, 0, sizeof arr);
         memset(&sch, 0, sizeof sch);
-        int rc = pio_export_arrow(c, PIO_ARROW_TABLE_BUS, &arr, &sch, err, sizeof err);
+        int rc = pio_to_arrow(c, PIO_ARROW_TABLE_BUS, &arr, &sch, err, sizeof err);
         CHECK(rc == 0, err);
         CHECK(arr.length == (int64_t)nb, "arrow bus table row count mismatch");
         CHECK(arr.release != NULL && sch.release != NULL, "missing arrow release callbacks");
@@ -161,7 +176,7 @@ int main(int argc, char **argv) {
 
     /* NULL handle is the documented safe default. */
     CHECK(pio_n_buses(NULL) == 0, "NULL handle did not return 0");
-    CHECK(pio_reference_bus(NULL) == -1, "NULL handle did not return -1");
+    CHECK(pio_ref_bus_index(NULL) == -1, "NULL handle did not return -1");
 
     pio_network_free(c);
     printf("C ABI smoke test OK\n");

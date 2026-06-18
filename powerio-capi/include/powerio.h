@@ -1,26 +1,74 @@
-/* powerio C ABI: parse any power system case format, query it, convert
- * it, and extract the numeric tables for matrix assembly.
+/* powerio C ABI, version 4: parse any power system case format, query it,
+ * convert it, and extract the numeric tables for matrix assembly. Check
+ * pio_abi_version() against PIO_ABI_VERSION at load; the integer is the
+ * compatibility contract, the version string is informational.
  *
- * Memory: strings returned by pio_to_matpower / pio_to_format /
- * pio_convert_file / pio_to_json are owned by the library; free them with
- * pio_string_free. Network handles from pio_parse_file / pio_parse_str /
- * pio_from_json / pio_to_normalized are freed with pio_network_free. Array
- * extractors fill caller-allocated buffers whose length is the matching pio_n_*
- * count; pass NULL to skip an output.
+ * Naming grammar (fixed; the surface evolves additively from here):
+ * - Verb-led names are operations and the verb fixes the return family:
+ *   parse/read/normalize return a new handle, write has a filesystem effect,
+ *   convert transcodes without keeping a handle, free destroys.
+ * - to_ marks a representation change of the same network (the strtol/htons
+ *   lineage). The target is a format string unless the output type differs:
+ *   pio_to_format returns text for every named format, pio_to_arrow fills
+ *   Arrow C Data Interface structs.
+ * - Noun phrases are queries (no get_); n_ prefixes counts, is_ predicates.
+ * - Format names never appear in symbols. Formats are strings ("matpower",
+ *   "psse", "powerio-json", ...), so a new format never changes this ABI.
  *
- * Message buffers: errbuf/warnbuf may be NULL (or length 0) to discard the
- * message. A message longer than the buffer is truncated to fit and is always
- * NUL-terminated. PIO_ERRBUF_MIN is a comfortable size for any error string.
+ * Vocabulary (one meaning per word, transmission and distribution alike):
+ * - bus: a named connection point, any number of phases. This surface is bus
+ *   granular (pio_n_buses, pio_bus_ids, pio_bus_demand, ...).
+ * - node: one conductor's point at a bus (OpenDSS bus.1.2.3). Reserved for
+ *   the multiconductor surface; never a synonym for bus here.
+ * - branch: any two-terminal series element, lines and transformers alike
+ *   (circuit theory; MATPOWER mpc.branch; the Branch Flow Model). "line" is
+ *   the transformer-excluding subset and never names the umbrella table.
  *
- * Every entry point catches Rust panics at the boundary and returns the documented
- * failure value (NULL, 0, -1, 0.0, or unchanged output) rather than unwinding
- * across the ABI.
+ * Conventions:
+ * - Array extractors write up to `cap` values per output array and return the
+ *   total available; NULL out (or cap 0) is a pure count query, so a short
+ *   read is detectable and a caller buffer can never silently overflow.
+ * - Bus ids are int64 in the range 1..2^63-1 (a v4 invariant). pio_bus_ids and
+ *   every per-bus column keyed to its ordering are int64; a source whose ids are
+ *   strings or exceed 2^63-1 has no representation on this surface and is mapped
+ *   to dense int64 at read (with a warning) or routed through the multiconductor
+ *   surface. Never hand a raw oversized id to this surface.
+ * - errbuf/errlen caller buffers (the libpcap/curl idiom: allocation-free
+ *   across the boundary, no thread-local state). NULL or length 0 discards
+ *   the message; a long message truncates on a UTF-8 character boundary and
+ *   is always NUL-terminated. PIO_ERRBUF_MIN is a comfortable size. The ABI
+ *   reports errors as messages and defines no error codes.
+ * - Warnings attach to the network handle; query them with pio_warnings,
+ *   which returns the byte length needed (call with NULL/0 to size). Only
+ *   functions returning no handle (pio_to_format, pio_convert_*,
+ *   pio_write_dir) take a warnbuf.
+ * - Strings returned by pio_to_format / pio_convert_file / pio_convert_str
+ *   are owned by the library; free them with pio_string_free. Handles from
+ *   pio_parse_file / pio_parse_str / pio_read_dir / pio_normalize are freed
+ *   with pio_network_free. Arrow buffers are freed through their own release
+ *   callbacks (the C Data Interface contract).
+ * - A handle is immutable after construction: concurrent reads from any
+ *   number of threads are safe; pio_network_free is not, free exactly once.
+ * - Every entry point catches Rust panics at the boundary and returns the
+ *   documented failure value (NULL, 0, -1, 0.0) rather than unwinding across
+ *   the ABI (requires the default panic = "unwind"; a panic = "abort" build
+ *   aborts the process instead).
  *
- * Optional: build with `--features arrow` to get pio_export_arrow, a raw
- * network export over the Arrow C Data Interface (guarded by PIO_ARROW).
+ * Evolution policy: existing signatures are frozen. New data means new
+ * symbols; rich or multiconductor data rides the Arrow C Data Interface
+ * (pio_to_arrow) and the powerio-json snapshot, whose schemas carry their own
+ * structure and grow without touching a C signature. The dense extractors are
+ * the frozen balanced positive-sequence projection, complete as-is. The Arrow
+ * tables and the powerio-json schema are append-only: the existing
+ * PIO_ARROW_TABLE_* ids and each table's column order are frozen, a new table
+ * takes the next id and new columns append (nullable) at the end, and a
+ * consumer addresses columns by name, never by position. The powerio-json
+ * snapshot adds only optional or defaulted fields; existing field names, types,
+ * and wire forms stay fixed. This is what PIO_ABI_VERSION freezes.
  *
- * Optional: build with `--features gridfm` to get pio_read_gridfm and
- * pio_gridfm_scenario_ids, the gridfm-datakit Parquet reader (guarded by PIO_GRIDFM).
+ * Optional: build with `--features arrow` for pio_to_arrow (guarded by
+ * PIO_ARROW), and `--features gridfm` for pio_read_dir / pio_scenario_ids
+ * (guarded by PIO_GRIDFM).
  *
  * Checked in and generated; regenerate from the Rust source with
  *   cbindgen --config cbindgen.toml --crate powerio-capi --output include/powerio.h
@@ -41,12 +89,17 @@ struct ArrowSchema;
 
 /**
  * ABI version of this C interface. Bump on any breaking change to an existing
- * `pio_*` signature or to the JSON transport schema (new additive symbols don't
- * require a bump). A consumer compares [`pio_abi_version`] against the value it
- * was built against (the `PIO_ABI_VERSION` macro in `powerio.h`) and refuses a
- * mismatched library instead of calling in blind.
+ * `pio_*` signature or to the `powerio-json` snapshot schema (new additive
+ * symbols don't require a bump). A consumer compares [`pio_abi_version`]
+ * against the value it was built against (the `PIO_ABI_VERSION` macro in
+ * `powerio.h`) and refuses a mismatched library instead of calling in blind.
+ *
+ * v4 froze the naming grammar and conventions (see the header preamble); the
+ * surface evolves additively from here: new data means new symbols, and rich
+ * or multiconductor data rides the Arrow and `powerio-json` schemas, which
+ * carry their own structure and never force a signature change.
  */
-#define PIO_ABI_VERSION 3
+#define PIO_ABI_VERSION 4
 
 /**
  * A comfortable error-buffer size: pass a `char[PIO_ERRBUF_MIN]` to any
@@ -56,7 +109,7 @@ struct ArrowSchema;
 
 #if defined(PIO_ARROW)
 /**
- * Table selectors for [`pio_export_arrow`](crate::pio_export_arrow); the C
+ * Table selectors for [`pio_to_arrow`](crate::pio_to_arrow); the C
  * header mirrors these as `PIO_ARROW_TABLE_*`.
  */
 #define PIO_ARROW_TABLE_BUS 0
@@ -81,8 +134,8 @@ struct ArrowSchema;
 /**
  * Opaque parsed network handle. Carries the parsed [`Network`], the
  * [`IndexCore`] derived from it once at parse time (so every indexed query
- * reuses the same bus-id map and nodal aggregates instead of rebuilding
- * them), and the reader's fidelity warnings ([`pio_parse_warnings`]).
+ * reuses the same bus-id map and per-bus aggregates instead of rebuilding
+ * them), and the reader's fidelity warnings ([`pio_warnings`]).
  */
 typedef struct PioNetwork PioNetwork;
 
@@ -97,58 +150,103 @@ extern "C" {
 uint32_t pio_abi_version(void);
 
 /**
- * The crate version string (e.g. `"0.0.1"`), `'static` and NUL-terminated. Do
+ * The crate version string (a semver string), `'static` and NUL-terminated. Do
  * NOT free it. Informational; pair it with [`pio_abi_version`] for the actual
  * compatibility check.
  */
 const char *pio_version(void);
 
 /**
- * Parse `path` into a network handle. With `from = NULL`, the reader is
- * inferred from the extension or PyPSA `network.csv` directory layout. `from`
- * accepts the `pio_parse_str` text format names plus `pypsa-csv`/`pypsa` and
- * `pwb`; that includes `pslf`/`epc`, and `.epc` is inferred by extension.
- * PyPSA CSV folders are directories, so they enter through this function with
- * `from = "pypsa-csv"` or by inference from `network.csv`. Read fidelity
- * warnings attach to the handle ([`pio_parse_warnings`]). Returns `NULL` on
- * error and writes the message into `errbuf`.
+ * Parse `path` (format from extension, or `from` if non-NULL) into a network
+ * handle. `from` accepts the [`pio_parse_str`] format names plus
+ * `pypsa-csv`/`pypsa` and `pwb`; that includes `pslf`/`epc`, and `.epc` is
+ * inferred by extension. A PyPSA CSV folder is a directory, so it can only
+ * enter through this function, with `from = "pypsa-csv"` (or NULL when the
+ * directory holds a `network.csv`). Read fidelity warnings attach to the
+ * handle ([`pio_warnings`]). Returns `NULL` on error and writes the message
+ * into `errbuf`. Free the handle with [`pio_network_free`].
  */
 PioNetwork *pio_parse_file(const char *path, const char *from, char *errbuf, size_t errlen);
 
 /**
  * Parse in-memory case `text` of the named `format` into a network handle.
- * Supported text formats are `matpower`/`m`, `powermodels`/`pm`, `egret`,
- * `pandapower-json`/`pandapower`/`pp`, `psse`/`raw`, `powerworld`/`aux`, and
- * `pslf`/`epc`. PyPSA CSV folders are directories, not text; parse them with
- * [`pio_parse_file`]. Read fidelity warnings attach to the handle
- * ([`pio_parse_warnings`]). Returns `NULL` on error and writes the message
- * into `errbuf`. Free the handle with [`pio_network_free`].
+ * Unlike [`pio_parse_file`] there is no path to infer from, so `format` is
+ * required: one of `matpower`/`m`, `powermodels`/`pm`, `egret`,
+ * `pandapower-json`/`pandapower`/`pp`, `psse`/`raw`, `powerworld`/`aux`,
+ * `pslf`/`epc`, or `powerio-json`/`json` (the canonical snapshot
+ * [`pio_to_format`] writes, validated on read). PyPSA CSV folders are
+ * directories, not text; parse them with [`pio_parse_file`] and
+ * `from = "pypsa-csv"`. Read fidelity warnings attach to the handle
+ * ([`pio_warnings`]). Returns `NULL` on error and writes the message into
+ * `errbuf`. Free the handle with [`pio_network_free`].
  */
 PioNetwork *pio_parse_str(const char *text, const char *format, char *errbuf, size_t errlen);
 
+#if defined(PIO_GRIDFM)
 /**
- * Read fidelity warnings attached at parse time, `\n`-joined into `warnbuf`
- * (truncated to fit; NULL/0 to skip). Returns the warning count; 0 for a
- * NULL handle. Empty for formats whose readers are total.
+ * Read one scenario of a dataset directory in the named `from` format into a
+ * network handle: the directory sibling of [`pio_parse_file`]. `gridfm` (the
+ * gridfm-datakit Parquet layout; `dir` resolves leniently: the `raw/` leaf,
+ * a `<case>/` directory with a `raw/` child, or a parent holding exactly one
+ * such case) is the one dataset format today. `scenario` selects within a
+ * multi-scenario dataset ([`pio_scenario_ids`] enumerates them); formats
+ * without scenarios take `0`. Read fidelity warnings attach to the handle
+ * ([`pio_warnings`]). Returns `NULL` on error and writes the message into
+ * `errbuf`. Free the handle with [`pio_network_free`]. Built
+ * `--features gridfm`.
  */
-size_t pio_parse_warnings(const PioNetwork *net, char *warnbuf, size_t warnlen);
+PioNetwork *pio_read_dir(const char *dir,
+                         const char *from,
+                         int64_t scenario,
+                         char *errbuf,
+                         size_t errlen);
+#endif
+
+#if defined(PIO_GRIDFM)
+/**
+ * Write the distinct scenario ids (ascending) of the dataset directory `dir`
+ * in the named `from` format into `out`, up to `cap` entries, and return the
+ * total count: the cap/count convention of [`pio_bus_ids`]. `gridfm` is the
+ * one dataset format today. Returns `-1` on error and writes the message into
+ * `errbuf` (unlike the handle extractors, this reads the filesystem and can
+ * fail). Built `--features gridfm`.
+ */
+ptrdiff_t pio_scenario_ids(const char *dir,
+                           const char *from,
+                           int64_t *out,
+                           size_t cap,
+                           char *errbuf,
+                           size_t errlen);
+#endif
+
+/**
+ * The fidelity warnings attached to the handle at construction (by whichever
+ * of [`pio_parse_file`], [`pio_parse_str`], [`pio_read_dir`], or
+ * [`pio_normalize`] built it), `\n`-joined into `warnbuf` (truncated to fit
+ * on a UTF-8 boundary; NULL/0 to skip). Returns the byte length of the full
+ * joined text, excluding the NUL; call once with `(NULL, 0)` to size, then
+ * pass a `char[len + 1]`. `0` means no warnings (or a NULL handle); readers
+ * that are total attach none.
+ */
+size_t pio_warnings(const PioNetwork *net, char *warnbuf, size_t warnlen);
 
 /**
  * Free a network handle from [`pio_parse_file`], [`pio_parse_str`],
- * [`pio_to_normalized`], or [`pio_from_json`].
+ * [`pio_read_dir`], or [`pio_normalize`].
  */
 void pio_network_free(PioNetwork *net);
 
 /**
- * Normalize `net` into a NEW per-unit network handle: per unit, radians,
- * out-of-service filtered, source bus ids preserved, bus types canonicalized
- * (see `Network::to_normalized`). The result is independent of `net`; free
- * both with [`pio_network_free`]. Every extractor and [`pio_to_json`] works on
- * it unchanged (the handle is per unit, not MW). Returns `NULL` on error (no
- * reference bus can be chosen, or a non-positive base MVA) and writes the
- * message into `errbuf`.
+ * Normalize `net` into a NEW network handle: per unit, radians, out-of-service
+ * filtered, source bus ids preserved, bus types canonicalized (see
+ * `Network::to_normalized`). A value transform, not a serialization, hence
+ * the verb, while the `to_*` family re-encodes unchanged data. The result is
+ * independent of `net`; free both with [`pio_network_free`]. Every extractor
+ * and serializer works on it unchanged (the handle is per unit, not MW).
+ * Returns `NULL` on error (no reference bus can be chosen, or a non-positive
+ * base MVA) and writes the message into `errbuf`.
  */
-PioNetwork *pio_to_normalized(const PioNetwork *net, char *errbuf, size_t errlen);
+PioNetwork *pio_normalize(const PioNetwork *net, char *errbuf, size_t errlen);
 
 size_t pio_n_buses(const PioNetwork *net);
 
@@ -159,47 +257,48 @@ size_t pio_n_gens(const PioNetwork *net);
 double pio_base_mva(const PioNetwork *net);
 
 /**
- * Dense `[0, n)` index of the single reference bus, or `-1` if not exactly one
- * (also `-1` if the index is too large for `isize`). A network may carry
- * several references (one per island, or a normalized case that kept the file's
- * multiple `REF` buses); use [`pio_n_reference_buses`] to tell zero from many,
- * and [`pio_reference_buses`] to read them all.
+ * Dense `[0, n)` index of the single reference (slack) bus, or `-1` if not
+ * exactly one. An INDEX into the [`pio_bus_ids`] ordering, not a bus id;
+ * `pio_branches` from/to carry ids, so the unit is in the name. A network may
+ * carry several references (one per island, or a normalized case that kept
+ * the file's multiple `REF` buses); [`pio_ref_bus_indices`] reads them all,
+ * and its count (`NULL` out) tells zero from many.
  */
-ptrdiff_t pio_reference_bus(const PioNetwork *net);
+int64_t pio_ref_bus_index(const PioNetwork *net);
 
 /**
- * Number of reference (slack) buses. `0` means none; `> 1` means one reference
- * per island or several fixed reference buses in one island. A normalized case
- * always reports `>= 1`.
+ * Write the dense `[0, n)` indices of the reference (slack) buses, ascending,
+ * into `out`, up to `cap` entries, and return the total count: the cap/count
+ * convention of [`pio_bus_ids`]. `0` means none; `> 1` means one reference
+ * per island or several fixed references in one island (a normalized case
+ * always reports `>= 1`).
  */
-size_t pio_n_reference_buses(const PioNetwork *net);
+size_t pio_ref_bus_indices(const PioNetwork *net, int64_t *out, size_t cap);
 
 /**
- * Fill `out` (length [`pio_n_reference_buses`]) with the dense `[0, n)` indices
- * of the reference buses, ascending.
+ * Number of islands: connected components of the in-service topology.
  */
-void pio_reference_buses(const PioNetwork *net, int64_t *out);
-
-size_t pio_n_components(const PioNetwork *net);
+size_t pio_n_islands(const PioNetwork *net);
 
 /**
- * `1` if the in-service topology is a forest, else `0`.
+ * `1` if the in-service topology is radial (every island a tree), else `0`.
  */
 int32_t pio_is_radial(const PioNetwork *net);
 
 /**
- * Serialize `net` to MATPOWER `.m` text (byte-exact echo when parsed from
- * MATPOWER). Returns an owned C string; free with [`pio_string_free`]. Returns
- * `NULL` on error and writes the message into `errbuf`.
- */
-char *pio_to_matpower(const PioNetwork *net, char *errbuf, size_t errlen);
-
-/**
- * Serialize `net` to format `to`.
+ * Serialize `net` to the named format `to`: the one text serializer; every
+ * format is named by a string. Accepts the [`pio_parse_str`] names:
+ * `matpower` is a byte-exact echo when the handle was parsed from MATPOWER,
+ * and `powerio-json` is the canonical snapshot (validated by [`pio_parse_str`]
+ * on the way back; the retained source text is the one field it omits). The
+ * snapshot is lossless except for a non-finite `f64` (`Inf`/`NaN`), which JSON
+ * cannot represent: it is written as `null`, named in a fidelity warning, and
+ * then fails to read back; pass `warnbuf` to detect it.
  *
- * Returns the converted text as an owned C string (free with
- * [`pio_string_free`]), `NULL` on error. Fidelity warnings, if any, are written
- * `\n`-joined into `warnbuf`.
+ * Returns the text as an owned C string (free with [`pio_string_free`]),
+ * `NULL` on error (message into `errbuf`). Fidelity warnings, if any, are
+ * written `\n`-joined into `warnbuf`; a returned string has no handle to
+ * attach them to.
  */
 char *pio_to_format(const PioNetwork *net,
                     const char *to,
@@ -209,136 +308,119 @@ char *pio_to_format(const PioNetwork *net,
                     size_t errlen);
 
 /**
- * Convert `path` to format `to` (optionally forcing the source via `from`).
+ * Convert the case file at `path` from format `from` (NULL to infer from the
+ * path, as [`pio_parse_file`]) to format `to`, without keeping a handle.
  * Returns the converted text as an owned C string (free with
- * [`pio_string_free`]), `NULL` on error. Fidelity warnings, if any, are written
- * `\n`-joined into `warnbuf`.
+ * [`pio_string_free`]), `NULL` on error. Fidelity warnings, read side first,
+ * are written `\n`-joined into `warnbuf`.
  */
 char *pio_convert_file(const char *path,
-                       const char *to,
                        const char *from,
+                       const char *to,
                        char *warnbuf,
                        size_t warnlen,
                        char *errbuf,
                        size_t errlen);
 
 /**
- * Write `net` as a PyPSA CSV folder at `out_dir`. Returns `0` on success and
- * `-1` on error (the message is written into `errbuf`), the same convention as
- * the other fallible `int` returns in this ABI. Fidelity warnings, if any, are
+ * Convert in-memory case `text` from format `from` (required; there is no
+ * path to infer from) to format `to`, without keeping a handle: the in-memory
+ * sibling of [`pio_convert_file`]. Returns the converted text as an owned C
+ * string (free with [`pio_string_free`]), `NULL` on error. Fidelity warnings,
+ * read side first, are written `\n`-joined into `warnbuf`.
+ */
+char *pio_convert_str(const char *text,
+                      const char *from,
+                      const char *to,
+                      char *warnbuf,
+                      size_t warnlen,
+                      char *errbuf,
+                      size_t errlen);
+
+/**
+ * Write `net` into the directory `out_dir` as the named directory-shaped
+ * format `to`: the directory sibling of [`pio_to_format`]. PyPSA CSV
+ * (`pypsa-csv`/`pypsa`) is the one such format today; a text format name is
+ * an error pointing back at [`pio_to_format`]. Returns `0` on success and
+ * `-1` on error (message into `errbuf`). Fidelity warnings, if any, are
  * written `\n`-joined into `warnbuf`.
  */
-int32_t pio_write_pypsa_csv_folder(const PioNetwork *net,
-                                   const char *out_dir,
-                                   char *warnbuf,
-                                   size_t warnlen,
-                                   char *errbuf,
-                                   size_t errlen);
-
-#if defined(PIO_GRIDFM)
-/**
- * Read one scenario of a gridfm-datakit Parquet dataset into a network handle —
- * the inverse of the gridfm writer. `dir` resolves leniently: the `raw/` leaf
- * holding the parquet files, a `<case>/` directory with a `raw/` child, or a
- * parent holding exactly one such case. Returns `NULL` on error and writes the message
- * into `errbuf`; the lossy read's fidelity warnings (what the gridfm schema
- * couldn't round-trip) are written `\n`-joined into `warnbuf`. Free the handle
- * with [`pio_network_free`]. Built `--features gridfm`.
- */
-PioNetwork *pio_read_gridfm(const char *dir,
-                            int64_t scenario,
-                            char *warnbuf,
-                            size_t warnlen,
-                            char *errbuf,
-                            size_t errlen);
-#endif
-
-#if defined(PIO_GRIDFM)
-/**
- * Write a gridfm dataset's distinct scenario ids (ascending) into `out`, up to
- * `cap` entries, and return the total count. Call once with `cap == 0` (or `out`
- * NULL) to size, allocate, then call again to fill — the standard count/buffer
- * pattern of [`pio_bus_ids`]. Returns `-1` on error and writes the message into
- * `errbuf`. Built `--features gridfm`.
- */
-ptrdiff_t pio_gridfm_scenario_ids(const char *dir,
-                                  int64_t *out,
-                                  size_t cap,
-                                  char *errbuf,
-                                  size_t errlen);
-#endif
+int32_t pio_write_dir(const PioNetwork *net,
+                      const char *to,
+                      const char *out_dir,
+                      char *warnbuf,
+                      size_t warnlen,
+                      char *errbuf,
+                      size_t errlen);
 
 /**
- * Free a string returned by [`pio_to_matpower`], [`pio_to_format`],
- * [`pio_convert_file`], or
- * [`pio_to_json`].
+ * Free a string returned by [`pio_to_format`], [`pio_convert_file`], or
+ * [`pio_convert_str`].
  */
 void pio_string_free(char *s);
 
 /**
- * Serialize the case to JSON: the structured-table transport every Julia
- * bridge consumes. Carries the whole [`Network`] (buses, loads, shunts,
- * branches, generators, storage, HVDC, extras) but not the retained source
- * text, so it is structured data, not the byte-exact echo. Returns an owned C
- * string (free with [`pio_string_free`]), `NULL` on error (message into
- * `errbuf`).
+ * Write the 1-based external bus ids, in dense order, into `out`, up to `cap`
+ * entries, and return the total bus count. This ordering DEFINES the dense
+ * index space every other per-bus array shares. Call once with `(NULL, 0)` to
+ * size, allocate, then call again to fill. Ids are int64 in `1..2^63-1` (a v4
+ * invariant); a source id that is a string or exceeds that range is mapped to
+ * dense int64 at read, never passed through raw.
  */
-char *pio_to_json(const PioNetwork *net, char *errbuf, size_t errlen);
+size_t pio_bus_ids(const PioNetwork *net, int64_t *out, size_t cap);
 
 /**
- * Rebuild a network handle from JSON produced by [`pio_to_json`]. Returns a new
- * handle (free with [`pio_network_free`]), or `NULL` on error (message into
- * `errbuf`). The handle has no retained source, so [`pio_to_matpower`]
- * reformats it rather than echoing a byte-exact original.
+ * Write the branch table as parallel arrays, each up to `cap` entries, and
+ * return the total branch count. A branch is any two-terminal series element
+ * lines and transformers alike (a transformer has `tap != 0`). `from`/`to`
+ * are 1-based bus IDS (the [`pio_bus_ids`] id space, not dense indices); map
+ * them to dense matrix rows with the [`pio_bus_ids`] ordering. Any output
+ * pointer may be NULL to skip that column; all NULL is the count query.
  */
-PioNetwork *pio_from_json(const char *json, char *errbuf, size_t errlen);
+size_t pio_branches(const PioNetwork *net,
+                    int64_t *from,
+                    int64_t *to,
+                    double *r,
+                    double *x,
+                    double *b,
+                    double *tap,
+                    double *shift,
+                    uint8_t *in_service,
+                    size_t cap);
 
 /**
- * Fill `out` (length `pio_n_buses`) with the 1-based bus ids in dense order.
+ * Write the generator table as parallel arrays, each up to `cap` entries, and
+ * return the total generator count. `bus` is the 1-based bus id (the
+ * [`pio_bus_ids`] id space). Any output pointer may be NULL to skip.
  */
-void pio_bus_ids(const PioNetwork *net, int64_t *out);
+size_t pio_gens(const PioNetwork *net,
+                int64_t *bus,
+                double *pg,
+                double *pmax,
+                double *pmin,
+                uint8_t *in_service,
+                size_t cap);
 
 /**
- * Fill the branch tables (each length `pio_n_branches`). `from`/`to` are the
- * 1-based bus ids (the same id space as [`pio_bus_ids`], not dense indices);
- * map them to dense matrix rows with the [`pio_bus_ids`] ordering. Any pointer
- * may be `NULL` to skip.
+ * Write the per-bus demand aggregates (active `pd`, reactive `qd`, summed
+ * over each bus's loads, dense [`pio_bus_ids`] order), each up to `cap`
+ * entries, and return the total bus count. Either pointer may be NULL.
  */
-void pio_branches(const PioNetwork *net,
-                  int64_t *from,
-                  int64_t *to,
-                  double *r,
-                  double *x,
-                  double *b,
-                  double *tap,
-                  double *shift,
-                  uint8_t *in_service);
+size_t pio_bus_demand(const PioNetwork *net, double *pd, double *qd, size_t cap);
 
 /**
- * Fill the generator tables (each length `pio_n_gens`; `bus` is the 1-based bus
- * id, the same id space as [`pio_bus_ids`]). Any pointer may be `NULL` to skip.
+ * Write the per-bus shunt aggregates (conductance `gs`, susceptance `bs`,
+ * dense [`pio_bus_ids`] order), each up to `cap` entries, and return the
+ * total bus count. Either pointer may be NULL.
  */
-void pio_gens(const PioNetwork *net,
-              int64_t *bus,
-              double *pg,
-              double *pmax,
-              double *pmin,
-              uint8_t *in_service);
-
-/**
- * Fill nodal aggregates (each length `pio_n_buses`, dense order): active and
- * reactive demand summed per bus. Any pointer may be `NULL`.
- */
-void pio_nodal_demand(const PioNetwork *net, double *pd, double *qd);
-
-/**
- * Fill nodal shunt aggregates (each length `pio_n_buses`, dense order).
- */
-void pio_nodal_shunt(const PioNetwork *net, double *gs, double *bs);
+size_t pio_bus_shunt(const PioNetwork *net, double *gs, double *bs, size_t cap);
 
 #if defined(PIO_ARROW)
 /**
- * Export one raw network table over the Arrow C Data Interface.
+ * Export one raw network table over the Arrow C Data Interface: the `to_`
+ * conversion whose output type is Arrow structs rather than a string, and the
+ * bulk plane this ABI evolves on: new or richer columns arrive in the Arrow
+ * schema, leaving the C signatures fixed.
  *
  * `table` is one of the `PIO_ARROW_TABLE_*` selectors (bus/branch/gen/load/
  * shunt); the columns are the parsed network fields with EXTERNAL bus ids (the
@@ -350,12 +432,12 @@ void pio_nodal_shunt(const PioNetwork *net, double *gs, double *bs);
  * On error (returns `-1`) the message is written into `errbuf` and the
  * out-params are left untouched. Only built with the `arrow` cargo feature.
  */
-int32_t pio_export_arrow(const PioNetwork *net,
-                         int32_t table,
-                         struct ArrowArray *out_array,
-                         struct ArrowSchema *out_schema,
-                         char *errbuf,
-                         size_t errlen);
+int32_t pio_to_arrow(const PioNetwork *net,
+                     int32_t table,
+                     struct ArrowArray *out_array,
+                     struct ArrowSchema *out_schema,
+                     char *errbuf,
+                     size_t errlen);
 #endif
 
 #ifdef __cplusplus
