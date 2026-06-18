@@ -15,7 +15,7 @@
 //! dropped. Same-format round-trip is byte-exact via the retained source (see
 //! [`crate::write_as`]); this serializer is the cross-format path.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Write as _;
 use std::sync::Arc;
 
@@ -178,7 +178,7 @@ pub fn write_psse_rev(net: &Network, rev: u32) -> Conversion {
     };
     // Per-bus circuit-id counters so parallel devices on a bus get distinct ids
     // (PSS/E requires (bus, id) to be unique); a captured `extras["id"]` wins.
-    let mut load_ids: BTreeMap<BusId, u32> = BTreeMap::new();
+    let mut load_ids: BTreeMap<BusId, BTreeSet<String>> = BTreeMap::new();
     for l in &net.loads {
         let (area, zone) = bus_area.get(&l.bus).copied().unwrap_or((1, 1));
         let id = device_id(&l.extras, l.bus, &mut load_ids);
@@ -196,7 +196,7 @@ pub fn write_psse_rev(net: &Network, rev: u32) -> Conversion {
     let _ = writeln!(s, "0 / END OF LOAD DATA, BEGIN FIXED SHUNT DATA");
 
     // Fixed shunts here; switched shunts (control = Some) go in their own section.
-    let mut shunt_ids: BTreeMap<BusId, u32> = BTreeMap::new();
+    let mut shunt_ids: BTreeMap<BusId, BTreeSet<String>> = BTreeMap::new();
     for sh in net.shunts.iter().filter(|s| s.control.is_none()) {
         let id = device_id(&sh.extras, sh.bus, &mut shunt_ids);
         let _ = writeln!(
@@ -418,6 +418,10 @@ pub fn write_psse_rev(net: &Network, rev: u32) -> Conversion {
         let _ = writeln!(s, "{line}");
     }
     // Switched shunts: BINIT becomes the susceptance, the control record the rest.
+    // v35 inserts a quoted shunt ID at field 1; the reader reads it back at that
+    // same offset (o = 1), so the writer must emit it or every later field is read
+    // one column off. v33/34 have no ID column.
+    let mut sw_ids: BTreeMap<BusId, BTreeSet<String>> = BTreeMap::new();
     for sh in net.shunts.iter().filter(|s| s.control.is_some()) {
         let Some(c) = sh.control.as_ref() else {
             continue;
@@ -427,9 +431,14 @@ pub fn write_psse_rev(net: &Network, rev: u32) -> Conversion {
         for blk in &c.blocks {
             let _ = write!(blocks, ", {}, {}", blk.steps, num(blk.b));
         }
+        let id_field = if rev >= 35 {
+            format!(", '{}'", device_id(&sh.extras, sh.bus, &mut sw_ids))
+        } else {
+            String::new()
+        };
         let _ = writeln!(
             s,
-            "{}, {}, 0, {}, {}, {}, {swrem}, {}, '', {}{blocks}",
+            "{}{id_field}, {}, 0, {}, {}, {}, {swrem}, {}, '', {}{blocks}",
             sh.bus,
             mode_to_modsw(c.mode),
             i32::from(sh.in_service),
@@ -493,16 +502,27 @@ fn ide(kind: BusType) -> u8 {
     kind as u8 // 1=PQ, 2=PV, 3=ref/swing, 4=isolated — same codes
 }
 
-/// The circuit id for an element: its captured `extras["id"]` when present, else
-/// the next positional id for its bus, so parallel devices stay distinct and the
-/// PSS/E `(bus, id)` uniqueness rule holds.
-fn device_id(extras: &Extras, bus: BusId, counters: &mut BTreeMap<BusId, u32>) -> String {
-    let n = counters.entry(bus).or_insert(0);
-    *n += 1;
-    extras
-        .get("id")
-        .and_then(Value::as_str)
-        .map_or_else(|| n.to_string(), str::to_owned)
+/// The circuit id for an element: its captured `extras["id"]` when present and
+/// not already used on this bus, else the lowest positional id still free, so
+/// parallel devices stay distinct and the PSS/E `(bus, id)` uniqueness rule holds
+/// even when the source supplies ids that collide with each other or with a
+/// later positional id. `used` tracks the ids already emitted per bus.
+fn device_id(extras: &Extras, bus: BusId, used: &mut BTreeMap<BusId, BTreeSet<String>>) -> String {
+    let taken = used.entry(bus).or_default();
+    if let Some(id) = extras.get("id").and_then(Value::as_str) {
+        if taken.insert(id.to_owned()) {
+            return id.to_owned();
+        }
+    }
+    // No captured id, or it was already taken on this bus: first free positional id.
+    let mut n = 1u32;
+    loop {
+        let candidate = n.to_string();
+        if taken.insert(candidate.clone()) {
+            return candidate;
+        }
+        n += 1;
+    }
 }
 
 /// The next positional circuit id for `bus` (for elements with no extras to carry
@@ -1617,6 +1637,48 @@ Q
         assert_eq!(c2.blocks.len(), 2);
         close(c2.blocks[0].b, 25.0);
         close(net2.shunts[0].b, 19.0);
+    }
+
+    #[test]
+    fn v35_switched_shunt_write_round_trips_through_the_id_column() {
+        // v35 inserts a quoted shunt ID at field 1; the writer must emit it or the
+        // reader (o = 1 at rev >= 35) reads every later field one column off. Build
+        // a switched shunt, write the v35 layout, and confirm it reads back intact.
+        let raw = r"0, 100.00, 33, 0, 0, 60.00 / x
+CASE
+COMMENT
+3,'B3          ', 230.0,1,1,1,1,1.0,0.0,1.1,0.9,1.1,0.9
+7,'B7          ', 230.0,1,1,1,1,1.0,0.0,1.1,0.9,1.1,0.9
+0 / END OF BUS DATA, BEGIN LOAD DATA
+0 / END OF LOAD DATA, BEGIN FIXED SHUNT DATA
+0 / END OF FIXED SHUNT DATA, BEGIN GENERATOR DATA
+0 / END OF GENERATOR DATA, BEGIN BRANCH DATA
+0 / END OF BRANCH DATA, BEGIN TRANSFORMER DATA
+0 / END OF TRANSFORMER DATA, BEGIN AREA DATA
+0 / END OF AREA DATA, BEGIN SWITCHED SHUNT DATA
+3, 2, 0, 1, 1.05, 0.95, 7, 100.0, '', 19.0, 2, 25.0, 1, 50.0
+0 / END OF SWITCHED SHUNT DATA, BEGIN GNE DEVICE DATA
+Q
+";
+        let net = parse_psse(raw).unwrap();
+        let text = write_psse_rev(&net, 35).text;
+        let net2 = parse_psse(&text).unwrap();
+        assert_eq!(net2.shunts.len(), 1);
+        let sh = &net2.shunts[0];
+        assert_eq!(sh.bus, BusId(3));
+        close(sh.b, 19.0);
+        let c = sh
+            .control
+            .as_ref()
+            .expect("v35 switched-shunt control survives the write");
+        assert_eq!(c.mode, SwitchedShuntMode::Discrete);
+        close(c.vhigh, 1.05);
+        close(c.vlow, 0.95);
+        assert_eq!(c.control_bus, Some(BusId(7)));
+        close(c.rmpct, 100.0);
+        assert_eq!(c.blocks.len(), 2);
+        close(c.blocks[0].b, 25.0);
+        close(c.blocks[1].b, 50.0);
     }
 
     #[test]

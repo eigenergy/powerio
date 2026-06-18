@@ -206,6 +206,24 @@ impl Network {
             }
         }
 
+        // Keep the area records still referenced by a kept bus (clearing a dangling
+        // area-slack), plus the global solver settings. The bus `area` numbers alone
+        // can't carry the interchange schedule or the solver tolerances, so dropping
+        // them would silently lose data a PSS/E/PSLF write of the subset emits.
+        let kept_area_numbers: HashSet<usize> = buses.iter().map(|b| b.area).collect();
+        let areas = self
+            .areas
+            .iter()
+            .filter(|a| kept_area_numbers.contains(&a.number))
+            .cloned()
+            .map(|mut a| {
+                if a.slack_bus.is_some_and(|b| !kept.contains(&b)) {
+                    a.slack_bus = None;
+                }
+                a
+            })
+            .collect::<Vec<_>>();
+
         let net = Network {
             name: format!("{} (subset)", self.name),
             base_mva: self.base_mva,
@@ -218,8 +236,8 @@ impl Network {
             storage,
             hvdc,
             transformers_3w,
-            areas: Vec::new(),
-            solver: None,
+            areas,
+            solver: self.solver.clone(),
             source_format: SourceFormat::InMemory,
             source: None,
         };
@@ -420,6 +438,18 @@ impl Network {
         });
         debug_assert_eq!(sections.len(), 2, "passthrough bus must have two sections");
         let (s1, s2) = (&sections[0], &sections[1]);
+        // Intersect the two sections' angle windows, but never emit an inverted
+        // (empty) limit: two disjoint windows give angmin > angmax, which an OPF
+        // angle-difference constraint reads as infeasible. Disjoint windows fall
+        // back to the union so folding a multi-section line never turns a feasible
+        // case infeasible. (Whether series sections should intersect vs sum their
+        // windows is a modeling choice; this only fixes the invalid-range case.)
+        let mut angmin = s1.angmin.max(s2.angmin);
+        let mut angmax = s1.angmax.min(s2.angmax);
+        if angmin > angmax {
+            angmin = s1.angmin.min(s2.angmin);
+            angmax = s1.angmax.max(s2.angmax);
+        }
         self.branches.push(Branch {
             from: other_end(s1, m),
             to: other_end(s2, m),
@@ -432,8 +462,8 @@ impl Network {
             tap: 0.0,
             shift: 0.0,
             in_service: true,
-            angmin: s1.angmin.max(s2.angmin),
-            angmax: s1.angmax.min(s2.angmax),
+            angmin,
+            angmax,
             control: None,
             extras: Extras::new(),
         });

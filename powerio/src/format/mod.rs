@@ -626,7 +626,29 @@ pub fn write_as(net: &Network, format: TargetFormat) -> Result<Conversion> {
     warn_normalized_tap(net, format, &mut conv);
     warn_missing_reference(net, format, &mut conv);
     warn_dropped_frequency(net, format, &mut conv);
+    warn_psse_downgrade(net, format, &mut conv);
     Ok(conv)
+}
+
+/// Warn when a PSS/E source is re-serialized at an older revision than its own.
+/// `parse_file` maps every `.raw` to revision 33 and the `psse`/`raw` aliases
+/// resolve to 33, so writing a v34/v35 source through the default target skips
+/// the echo path (revisions differ) and re-emits the v33 layout, dropping the
+/// modern records (12 named ratings, load DG/LOADTYPE columns, the system-wide
+/// block) and any unmodeled section the echo would have preserved. Name the
+/// downgrade instead of performing it silently.
+fn warn_psse_downgrade(net: &Network, format: TargetFormat, conv: &mut Conversion) {
+    if let (TargetFormat::Psse { rev }, SourceFormat::Psse, Some(src)) =
+        (format, net.source_format, net.source.as_ref())
+    {
+        let src_rev = psse::header_rev(src);
+        if src_rev > rev {
+            conv.warnings.push(format!(
+                "PSS/E source is revision {src_rev} but the write target is revision {rev}; \
+                 the older layout drops fields the source carried (write to psse{src_rev} to keep them)"
+            ));
+        }
+    }
 }
 
 /// Warn when a non-default system frequency writes to a format with no frequency

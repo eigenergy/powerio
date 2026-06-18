@@ -1361,6 +1361,17 @@ pub fn write_pslf(net: &Network) -> Conversion {
     let _ = writeln!(s, "end");
 
     // ---- fidelity warnings ----
+    let asymmetric_hvdc = net
+        .hvdc
+        .iter()
+        .filter(|d| (d.pmin + d.pmax).abs() > 1e-9)
+        .count();
+    if asymmetric_hvdc > 0 {
+        warnings.push(format!(
+            "{asymmetric_hvdc} HVDC line(s) have asymmetric power limits (pmin != -pmax); \
+             the PSLF .epc dc record carries only rate1 (= pmax), so pmin reads back as -pmax"
+        ));
+    }
     if !net.storage.is_empty() {
         warnings.push(format!(
             "{} storage unit(s) dropped: PSLF .epc has no storage record",

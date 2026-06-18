@@ -199,9 +199,10 @@ pub struct Network {
     /// Three-winding transformers, kept as typed records rather than folded into
     /// `branches`, so a star point and the per-winding data survive a round trip.
     /// `#[serde(default)]` so JSON written before the field existed still
-    /// deserializes. The matrix builders and any consumer that wants the expanded
-    /// form (the planned distribution crate) call
-    /// [`Transformer3W::star_expansion`].
+    /// deserializes. A consumer that needs the bus-branch form calls
+    /// [`Transformer3W::star_expansion`]; the in-crate matrix builders do not fold
+    /// these yet, so a 3-winding transformer is absent from `Y_bus`/connectivity
+    /// until a caller expands it (tracked in issue #131).
     #[serde(default)]
     pub transformers_3w: Vec<Transformer3W>,
     /// Area records: scheduled interchange and per-area swing bus. Distinct from
@@ -672,8 +673,9 @@ pub struct Winding {
 /// the per-winding control data survive a same-format round trip. Both the PSS/E
 /// 3-winding record and the PSLF tertiary-winding record map onto it.
 /// [`star_expansion`](Transformer3W::star_expansion) turns it into the synthetic
-/// star bus plus three branches that the matrix builders — and the planned
-/// distribution crate — consume.
+/// star bus plus three branches for a consumer that works in the bus-branch model.
+/// The matrix builders do not call it yet, so a 3-winding transformer does not
+/// appear in `Y_bus` until a caller expands it (issue #131).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[non_exhaustive]
 pub struct Transformer3W {
@@ -713,10 +715,10 @@ impl Transformer3W {
     }
 
     /// Expand into a synthetic star [`Bus`] (id `star_id`) plus three [`Branch`]es,
-    /// one per winding, for analysis consumers that work in the bus-branch model
-    /// (the matrix builders, the distribution crate). The star bus carries the
-    /// stored star voltage and the magnetizing shunt is left to the caller; each
-    /// branch takes its winding's tap, phase shift, and ratings.
+    /// one per winding, for a consumer that works in the bus-branch model. (The
+    /// in-crate matrix builders do not call this yet; see issue #131.) The star bus
+    /// carries the stored star voltage and the magnetizing shunt is left to the
+    /// caller; each branch takes its winding's tap, phase shift, and ratings.
     #[must_use]
     pub fn star_expansion(&self, star_id: BusId) -> (Bus, [Branch; 3]) {
         let star = Bus {
