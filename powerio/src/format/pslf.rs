@@ -7,7 +7,7 @@
 //! inverts the reader's column layout for the cross-format write path (same
 //! format writes echo the retained source).
 
-use std::collections::{BTreeMap, HashMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::fmt::Write as _;
 use std::sync::Arc;
 
@@ -992,7 +992,7 @@ struct BusRef<'a> {
 /// The inverse of the reader's column layout: it emits the same colon separated
 /// `lhs : rhs` records, so a `.epc` -> [`Network`] -> `.epc` round trip preserves
 /// the power flow core. Where a PSLF read stashed a field the neutral model does
-/// not name under a `pslf_*` extras key (the ZIP load split, the per-unit shunt
+/// not name under a `pslf_*` extras key (the ZIP load split, the per unit shunt
 /// G/B, the branch circuit id, the transformer winding base), the writer replays
 /// it; otherwise it synthesizes the column. Same-format byte-exact echo rides the
 /// retained source (see [`crate::write_as`]); this is the cross-format path and
@@ -1171,19 +1171,26 @@ pub fn write_pslf(net: &Network) -> Conversion {
             "branch data [{}] ck se long_id st resist react charge rate1 rate2 rate3",
             lines.len()
         );
+        // Parallel branches between the same bus pair get distinct circuit ids; a
+        // captured `pslf_circuit` (from a PSLF source) wins, else positional.
+        let mut branch_ids: BTreeMap<(BusId, BusId), BTreeSet<String>> = BTreeMap::new();
         for br in lines {
             let f = bus_ref(br.from);
             let t = bus_ref(br.to);
+            let ck = super::allocate_circuit_id(
+                br.extras.get("pslf_circuit").and_then(Value::as_str),
+                (br.from, br.to),
+                &mut branch_ids,
+            );
             let _ = writeln!(
                 s,
-                "{} {} {} {} {} {} {} 1 \"line\" : {} {} {} {} {} {} {}",
+                "{} {} {} {} {} {} \"{ck}\" 1 \"line\" : {} {} {} {} {} {} {}",
                 br.from,
                 name_tok(f.name),
                 num(f.base_kv),
                 br.to,
                 name_tok(t.name),
                 num(t.base_kv),
-                circuit_tok(&br.extras),
                 i32::from(br.in_service),
                 num(br.r),
                 num(br.x),

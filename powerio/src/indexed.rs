@@ -96,12 +96,14 @@ impl IndexCore {
     }
 }
 
-/// A `Network` paired with its derived [`IndexCore`]. Borrows the network; the
-/// core is either owned (the one-shot [`IndexedNetwork::new`]) or borrowed from a
-/// cached [`IndexCore`] ([`IndexedNetwork::with_core`]).
+/// A `Network` paired with its derived [`IndexCore`]. The network is borrowed for
+/// the common case, but owned when it had to be star-lowered (a 3-winding
+/// transformer expanded into a star bus plus three branches via
+/// [`Network::expand_transformers_3w`]); the core is owned ([`IndexedNetwork::new`])
+/// or borrowed from a cached [`IndexCore`] ([`IndexedNetwork::with_core`]).
 #[derive(Debug)]
 pub struct IndexedNetwork<'n> {
-    net: &'n Network,
+    net: Cow<'n, Network>,
     core: Cow<'n, IndexCore>,
 }
 
@@ -111,26 +113,41 @@ impl<'n> IndexedNetwork<'n> {
     /// [`with_core`](Self::with_core) so the derivation isn't rebuilt per call.
     #[must_use]
     pub fn new(net: &'n Network) -> Self {
+        let net = net.expand_transformers_3w();
+        let core = IndexCore::build(&net);
         Self {
             net,
-            core: Cow::Owned(IndexCore::build(net)),
+            core: Cow::Owned(core),
         }
     }
 
-    /// Pair `net` with an already-built [`IndexCore`] — no allocation. The core
-    /// must have been built from this same `net`.
+    /// Pair `net` with an already-built [`IndexCore`] — no allocation when `net`
+    /// has no 3-winding transformer (the core must have been built from this same
+    /// `net`). When `net` does carry a 3-winding transformer, the view star-lowers
+    /// it and rebuilds the core over the expanded form, since the cached core was
+    /// derived from the unexpanded network.
     #[must_use]
     pub fn with_core(net: &'n Network, core: &'n IndexCore) -> Self {
-        Self {
-            net,
-            core: Cow::Borrowed(core),
+        match net.expand_transformers_3w() {
+            Cow::Borrowed(net) => Self {
+                net: Cow::Borrowed(net),
+                core: Cow::Borrowed(core),
+            },
+            Cow::Owned(net) => {
+                let core = IndexCore::build(&net);
+                Self {
+                    net: Cow::Owned(net),
+                    core: Cow::Owned(core),
+                }
+            }
         }
     }
 
-    /// The underlying network.
+    /// The underlying network (the star-lowered form when a 3-winding transformer
+    /// was expanded).
     #[inline]
     pub fn network(&self) -> &Network {
-        self.net
+        &self.net
     }
 
     #[inline]
@@ -385,7 +402,9 @@ impl ConnectivityReport {
 #[cfg(test)]
 mod tests {
     use super::{IndexCore, IndexedNetwork};
-    use crate::network::{Bus, BusId, BusType, Extras, Load, Network, Shunt};
+    use crate::network::{
+        Bus, BusId, BusType, Extras, Impedance, Load, Network, Shunt, Transformer3W, Winding,
+    };
 
     fn bus(id: usize, kind: BusType) -> Bus {
         Bus {
@@ -454,6 +473,95 @@ mod tests {
         let j = view.bus_index(BusId(2)).unwrap();
         assert!(view.pd()[j].abs() < 1e-12);
         assert!(view.gs()[j].abs() < 1e-12);
+    }
+
+    fn three_winding(a: usize, b: usize, c: usize) -> Transformer3W {
+        let winding = |bus| Winding {
+            bus: BusId(bus),
+            tap: 1.0,
+            shift: 0.0,
+            nominal_kv: 0.0,
+            rate_a: 0.0,
+            rate_b: 0.0,
+            rate_c: 0.0,
+        };
+        let imp = Impedance {
+            r: 0.0,
+            x: 0.1,
+            base_mva: 100.0,
+        };
+        Transformer3W {
+            windings: [winding(a), winding(b), winding(c)],
+            z: [imp, imp, imp],
+            star_vm: 1.0,
+            star_va: 0.0,
+            mag_g: 0.0,
+            mag_b: 0.0,
+            in_service: true,
+            name: None,
+            extras: Extras::new(),
+        }
+    }
+
+    #[test]
+    fn three_winding_star_lowering_adds_a_grounded_star_bus_with_its_magnetizing_shunt() {
+        // Three buses joined only by a 3-winding transformer; bus 1 is the
+        // reference. The view star-lowers it into one grounded component plus a
+        // synthetic star bus that carries the magnetizing shunt.
+        let mut net = Network::in_memory(
+            "t3w",
+            100.0,
+            vec![
+                bus(1, BusType::Ref),
+                bus(2, BusType::Pq),
+                bus(3, BusType::Pq),
+            ],
+            Vec::new(),
+        );
+        let mut t = three_winding(1, 2, 3);
+        t.mag_b = 0.05; // p.u. on the system base
+        net.transformers_3w.push(t);
+
+        let view = IndexedNetwork::new(&net);
+        assert_eq!(view.n(), 4, "three buses plus the synthetic star point");
+        assert_eq!(view.n_connected_components(), 1);
+        view.check_reference_coverage().unwrap();
+
+        // The star bus is the last dense index; its susceptance is the magnetizing
+        // b scaled to the system base (raw network: × base_mva).
+        let star = view.n() - 1;
+        assert!((view.bs()[star] - 0.05 * 100.0).abs() < 1e-9);
+        for i in 0..3 {
+            assert!(view.bs()[i].abs() < 1e-12, "original buses carry no shunt");
+        }
+
+        // The canonical model keeps the typed record and gains no buses/branches.
+        assert_eq!(net.buses.len(), 3);
+        assert!(net.branches.is_empty());
+        assert_eq!(net.transformers_3w.len(), 1);
+    }
+
+    #[test]
+    fn out_of_service_three_winding_is_not_expanded() {
+        let mut net = Network::in_memory(
+            "t3w",
+            100.0,
+            vec![
+                bus(1, BusType::Ref),
+                bus(2, BusType::Pq),
+                bus(3, BusType::Pq),
+            ],
+            Vec::new(),
+        );
+        let mut t = three_winding(1, 2, 3);
+        t.in_service = false;
+        net.transformers_3w.push(t);
+
+        let view = IndexedNetwork::new(&net);
+        // No star bus is synthesized for an out-of-service transformer, so the
+        // three buses stay as three islands (no spurious star point).
+        assert_eq!(view.n(), 3);
+        assert_eq!(view.n_connected_components(), 3);
     }
 
     #[test]

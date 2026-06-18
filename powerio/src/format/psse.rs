@@ -5,7 +5,7 @@
 //! power flow case. A switched shunt keeps its steady-state susceptance `BINIT`
 //! as the shunt `b` and carries its mode, voltage band, regulated bus, RMPCT, and
 //! step blocks on [`SwitchedShuntControl`]. Impedances are written on the system base with
-//! per-unit turns ratios (`CZ = 1`, `CW = 1`); the reader assumes the same and
+//! per unit turns ratios (`CZ = 1`, `CW = 1`); the reader assumes the same and
 //! does not convert other impedance/turns bases — a non-unit `CZ`/`CW` is read
 //! verbatim (so misread). Two-terminal DC lines read and write as the neutral
 //! [`Hvdc`] (power-setpoint model; converter firing-angle/transformer detail
@@ -234,14 +234,22 @@ pub fn write_psse_rev(net: &Network, rev: u32) -> Conversion {
     let _ = writeln!(s, "0 / END OF GENERATOR DATA, BEGIN BRANCH DATA");
 
     // Non-transformer branches here; transformers go in their own section.
+    // Parallel branches between the same bus pair get distinct circuit ids (PSS/E
+    // keys a branch on (I, J, CKT)); a captured source CKT wins.
+    let mut branch_ids: BTreeMap<(BusId, BusId), BTreeSet<String>> = BTreeMap::new();
     for br in net.branches.iter().filter(|b| !b.is_transformer()) {
+        let ckt = super::allocate_circuit_id(
+            br.extras.get("id").and_then(Value::as_str),
+            (br.from, br.to),
+            &mut branch_ids,
+        );
         if modern {
             // v34+: a quoted line NAME at field 6, then twelve rating columns,
             // pushing STAT to field 23 (the layout the reader expects at rev>=34).
             // ratings 4-12 default to 0 (powerio carries only rate_a/b/c).
             let _ = writeln!(
                 s,
-                "{}, {}, '1', {}, {}, {}, '            ', {}, {}, {}, \
+                "{}, {}, '{ckt}', {}, {}, {}, '            ', {}, {}, {}, \
                  0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, {}, 1, 0, 1, 1",
                 br.from,
                 br.to,
@@ -256,7 +264,7 @@ pub fn write_psse_rev(net: &Network, rev: u32) -> Conversion {
         } else {
             let _ = writeln!(
                 s,
-                "{}, {}, '1', {}, {}, {}, {}, {}, {}, 0, 0, 0, 0, {}, 1, 0, 1, 1",
+                "{}, {}, '{ckt}', {}, {}, {}, {}, {}, {}, 0, 0, 0, 0, {}, 1, 0, 1, 1",
                 br.from,
                 br.to,
                 num(br.r),
@@ -276,11 +284,14 @@ pub fn write_psse_rev(net: &Network, rev: u32) -> Conversion {
         // base). Record 1 carries the full owner block (O1..O4,F1..F4) and the
         // VECGRP string: PSS/E v33 readers count a 2-winding transformer as a
         // fixed 43-field record (21 + 3 + 17 + 2), so the owner padding matters.
+        // MAG1 = 0, MAG2 = the branch charging b (CM = 1, so p.u. on the system
+        // base); a 2-winding transformer that carries line charging keeps it.
         let _ = writeln!(
             s,
-            "{}, {}, 0, '1', 1, 1, 1, 0, 0, 2, '            ', {}, 1, 1, 0, 1, 0, 1, 0, 1, '            '",
+            "{}, {}, 0, '1', 1, 1, 1, 0, {}, 2, '            ', {}, 1, 1, 0, 1, 0, 1, 0, 1, '            '",
             br.from,
             br.to,
+            num(br.b),
             i32::from(br.in_service)
         );
         // Winding-1 control columns (COD, CONT, RMA/RMI, VMA/VMI, NTP) come from
@@ -508,21 +519,7 @@ fn ide(kind: BusType) -> u8 {
 /// even when the source supplies ids that collide with each other or with a
 /// later positional id. `used` tracks the ids already emitted per bus.
 fn device_id(extras: &Extras, bus: BusId, used: &mut BTreeMap<BusId, BTreeSet<String>>) -> String {
-    let taken = used.entry(bus).or_default();
-    if let Some(id) = extras.get("id").and_then(Value::as_str) {
-        if taken.insert(id.to_owned()) {
-            return id.to_owned();
-        }
-    }
-    // No captured id, or it was already taken on this bus: first free positional id.
-    let mut n = 1u32;
-    loop {
-        let candidate = n.to_string();
-        if taken.insert(candidate.clone()) {
-            return candidate;
-        }
-        n += 1;
-    }
+    super::allocate_circuit_id(extras.get("id").and_then(Value::as_str), bus, used)
 }
 
 /// The next positional circuit id for `bus` (for elements with no extras to carry
@@ -695,6 +692,17 @@ pub(crate) fn parse_psse_source(
                 let l3 = lines.next().map_or("", str::trim);
                 let l4 = lines.next().map_or("", str::trim);
                 if two_winding {
+                    // MAG2 maps to the branch charging b only at CM = 1; a CM != 1
+                    // record states magnetizing data in units this reader does not
+                    // convert, so read_transformer drops it. Name the loss.
+                    if int_at(&f, 6, 1)? != 1 && num_at(&f, 8, 0.0)? != 0.0 {
+                        warnings.push(format!(
+                            "transformer {}-{}: magnetizing data with CM != 1 dropped \
+                             (only CM = 1 p.u. susceptance is read as branch charging)",
+                            f.first().map_or("?", String::as_str),
+                            f.get(1).map_or("?", String::as_str),
+                        ));
+                    }
                     branches.push(read_transformer(&f, &fields(l2), &fields(l3), &fields(l4))?);
                 } else {
                     let l5 = lines.next().map_or("", str::trim);
@@ -1194,7 +1202,8 @@ fn read_branch(f: &[String], raw_rev: u32) -> Result<Branch> {
         angmin: -360.0,
         angmax: 360.0,
         control: None,
-        extras: Extras::new(),
+        // Capture CKT (field 2) so parallel circuits stay distinct on write-back.
+        extras: device_extras(f, 2),
     })
 }
 
@@ -1226,7 +1235,15 @@ fn read_transformer(l1: &[String], l2: &[String], l3: &[String], _l4: &[String])
         to: BusId(id_at(l1, 1, 0)?),
         r: num_at(l2, 0, 0.0)?,
         x: num_at(l2, 1, 0.0)?,
-        b: 0.0,
+        // MAG2 (l1[8]) is the magnetizing susceptance. At CM = 1 it is p.u. on the
+        // system base, the same convention as `Branch::b`, so it maps straight
+        // across; at CM != 1 it is stated in units this reader does not convert, so
+        // it is dropped (the caller warns). MAG1 (conductance) has no `Branch` slot.
+        b: if int_at(l1, 6, 1)? == 1 {
+            num_at(l1, 8, 0.0)?
+        } else {
+            0.0
+        },
         rate_a: num_at(l3, 3, 0.0)?,
         rate_b: num_at(l3, 4, 0.0)?,
         rate_c: num_at(l3, 5, 0.0)?,
@@ -1513,6 +1530,83 @@ Q
         }
         let net3 = parse_psse(&write_psse(&synth).text).unwrap();
         let ids: Vec<_> = net3.loads.iter().filter_map(&id).collect();
+        assert_eq!(ids, vec!["1".to_string(), "2".to_string()]);
+    }
+
+    #[test]
+    fn two_winding_transformer_charging_round_trips_via_mag2() {
+        // MAG2 (line-1 field 8) carries the transformer's magnetizing susceptance;
+        // at CM = 1 it maps to the branch charging b and must survive a round trip.
+        let raw = r"0, 100.00, 33, 0, 0, 60.00 / x
+CASE
+COMMENT
+1,'B1          ', 230.0,3,1,1,1,1.00000,0.0,1.1,0.9,1.1,0.9
+2,'B2          ', 138.0,1,1,1,1,1.00000,0.0,1.1,0.9,1.1,0.9
+0 / END OF BUS DATA, BEGIN LOAD DATA
+0 / END OF LOAD DATA, BEGIN FIXED SHUNT DATA
+0 / END OF FIXED SHUNT DATA, BEGIN GENERATOR DATA
+0 / END OF GENERATOR DATA, BEGIN BRANCH DATA
+0 / END OF BRANCH DATA, BEGIN TRANSFORMER DATA
+1, 2, 0, '1', 1, 1, 1, 0, 0.04, 2, 'XF          ', 1, 1, 1, 0, 1, 0, 1, 0, 1, '            '
+0.01, 0.10, 100.0
+1.025, 0, 0.0, 100.0, 90.0, 80.0, 0, 0, 1.1, 0.9, 1.1, 0.9, 33, 0, 0, 0, 0
+1.0, 0
+0 / END OF TRANSFORMER DATA, BEGIN AREA DATA
+Q
+";
+        let net = parse_psse(raw).unwrap();
+        assert_eq!(net.branches.len(), 1);
+        assert!(net.branches[0].is_transformer());
+        close(net.branches[0].b, 0.04);
+
+        let net2 = parse_psse(&write_psse(&net).text).unwrap();
+        close(net2.branches[0].b, 0.04);
+    }
+
+    #[test]
+    fn parallel_branches_round_trip_and_stay_distinct() {
+        // Two circuits between buses 1 and 2: each keeps a distinct CKT so the
+        // output is valid PSS/E rather than two colliding (I, J, '1') records.
+        let raw = r"0, 100.00, 33, 0, 0, 60.00 / x
+CASE
+COMMENT
+1,'B1          ', 230.0,3,1,1,1,1.0,0.0,1.1,0.9,1.1,0.9
+2,'B2          ', 230.0,1,1,1,1,1.0,0.0,1.1,0.9,1.1,0.9
+0 / END OF BUS DATA, BEGIN LOAD DATA
+0 / END OF LOAD DATA, BEGIN FIXED SHUNT DATA
+0 / END OF FIXED SHUNT DATA, BEGIN GENERATOR DATA
+0 / END OF GENERATOR DATA, BEGIN BRANCH DATA
+1,2,'1 ',0.01,0.05,0.001,0,0,0,0,0,0,0,1,1,0.0
+1,2,'2 ',0.02,0.06,0.002,0,0,0,0,0,0,0,1,1,0.0
+0 / END OF BRANCH DATA, BEGIN TRANSFORMER DATA
+0 / END OF TRANSFORMER DATA, BEGIN AREA DATA
+Q
+";
+        let ckt = |b: &Branch| {
+            b.extras
+                .get("id")
+                .and_then(|v| v.as_str())
+                .map(str::to_owned)
+        };
+        let net = parse_psse(raw).unwrap();
+        assert_eq!(net.branches.len(), 2);
+        assert_eq!(ckt(&net.branches[0]).as_deref(), Some("1"));
+        assert_eq!(ckt(&net.branches[1]).as_deref(), Some("2"));
+
+        // Round trip keeps both circuits distinct.
+        let net2 = parse_psse(&write_psse(&net).text).unwrap();
+        assert_eq!(net2.branches.len(), 2);
+        assert_eq!(ckt(&net2.branches[0]).as_deref(), Some("1"));
+        assert_eq!(ckt(&net2.branches[1]).as_deref(), Some("2"));
+
+        // With the captured ids stripped (a synthesized network), the two parallel
+        // branches still write with distinct positional circuit ids.
+        let mut synth = net.clone();
+        for b in &mut synth.branches {
+            b.extras.remove("id");
+        }
+        let net3 = parse_psse(&write_psse(&synth).text).unwrap();
+        let ids: Vec<_> = net3.branches.iter().filter_map(&ckt).collect();
         assert_eq!(ids, vec!["1".to_string(), "2".to_string()]);
     }
 

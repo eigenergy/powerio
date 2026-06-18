@@ -627,7 +627,34 @@ pub fn write_as(net: &Network, format: TargetFormat) -> Result<Conversion> {
     warn_missing_reference(net, format, &mut conv);
     warn_dropped_frequency(net, format, &mut conv);
     warn_psse_downgrade(net, format, &mut conv);
+    warn_dropped_transformer_charging(net, format, &mut conv);
     Ok(conv)
+}
+
+/// Allocate a circuit id for an element keyed by `key` — a bus for loads/shunts,
+/// or a `(from, to)` pair for branches: reuse the source-supplied `preferred` id
+/// when it is still free on this key, else the lowest free positional id. Keeps
+/// parallel devices distinct so the `(key, id)` uniqueness rule the PSS/E and
+/// PSLF records require holds even when the source supplies colliding ids.
+pub(super) fn allocate_circuit_id<K: Ord + Clone>(
+    preferred: Option<&str>,
+    key: K,
+    used: &mut std::collections::BTreeMap<K, std::collections::BTreeSet<String>>,
+) -> String {
+    let taken = used.entry(key).or_default();
+    if let Some(id) = preferred {
+        if taken.insert(id.to_owned()) {
+            return id.to_owned();
+        }
+    }
+    let mut n = 1u32;
+    loop {
+        let candidate = n.to_string();
+        if taken.insert(candidate.clone()) {
+            return candidate;
+        }
+        n += 1;
+    }
 }
 
 /// Warn when a PSS/E source is re-serialized at an older revision than its own.
@@ -669,6 +696,27 @@ fn warn_dropped_frequency(net: &Network, format: TargetFormat, conv: &mut Conver
             net.base_frequency,
             format.label(),
             crate::network::DEFAULT_BASE_FREQUENCY
+        ));
+    }
+}
+
+/// Warn when a transformer carries line charging (`b != 0`) and the target's
+/// transformer record has no susceptance column to hold it. The PSLF `.epc`
+/// transformer record is the one such target; PSS/E writes it as `MAG2` and the
+/// MATPOWER-shaped writers keep `b` on the branch row, so neither drops it.
+fn warn_dropped_transformer_charging(net: &Network, format: TargetFormat, conv: &mut Conversion) {
+    if !matches!(format, TargetFormat::Pslf) {
+        return;
+    }
+    let n = net
+        .branches
+        .iter()
+        .filter(|b| b.is_transformer() && b.b != 0.0)
+        .count();
+    if n > 0 {
+        conv.warnings.push(format!(
+            "{n} transformer(s) carry line charging (b != 0) that the PSLF .epc transformer \
+             record cannot represent; the charging was dropped"
         ));
     }
 }

@@ -5,6 +5,7 @@ use crate::matrix::{
     BuildOptions, MatrixStats, Scheme, build_bdoubleprime, build_bprime, build_lacpf, build_ybus,
 };
 use crate::network::{Branch, Bus, BusId, BusType, Extras, Network, Shunt};
+use crate::parse_psse;
 
 fn bus(id: usize, kind: BusType) -> Bus {
     Bus {
@@ -59,6 +60,52 @@ fn three_bus() -> Network {
             br(2, 3, 0.0, 0.25, 0.0),
         ],
     )
+}
+
+#[test]
+fn three_winding_transformer_enters_the_matrices_and_connects_its_windings() {
+    // Three buses (1 reference, 2 and 3 PQ) joined only by a 3-winding
+    // transformer, no other branch. The indexed view star-lowers it, so the
+    // windings land in one grounded component (plus the synthetic star point)
+    // instead of three ungrounded islands, and the star branches scatter into B'.
+    let raw = r"0, 100.00, 33, 0, 0, 60.00 / x
+CASE
+COMMENT
+1,'B1          ', 230.0,3,1,1,1,1.00000,0.0,1.1,0.9,1.1,0.9
+2,'B2          ', 138.0,1,1,1,1,1.00000,0.0,1.1,0.9,1.1,0.9
+3,'B3          ', 13.8,1,1,1,1,1.00000,0.0,1.1,0.9,1.1,0.9
+0 / END OF BUS DATA, BEGIN LOAD DATA
+0 / END OF LOAD DATA, BEGIN FIXED SHUNT DATA
+0 / END OF FIXED SHUNT DATA, BEGIN GENERATOR DATA
+0 / END OF GENERATOR DATA, BEGIN BRANCH DATA
+0 / END OF BRANCH DATA, BEGIN TRANSFORMER DATA
+1, 2, 3, '1', 1, 1, 1, 0.0, 0.0, 2, 'T3W         ', 1, 1, 1, 0, 1, 0, 1, 0, 1, '            '
+0.01, 0.10, 100.0, 0.02, 0.20, 100.0, 0.03, 0.30, 100.0, 0.98, -1.5
+1.0, 230.0, 0.0, 100.0, 90.0, 80.0, 0, 0, 1.1, 0.9, 1.1, 0.9, 33, 0, 0, 0, 0
+1.025, 138.0, 0.0, 110.0, 0, 0, 0, 0, 1.1, 0.9, 1.1, 0.9, 33, 0, 0, 0, 0
+0.95, 13.8, 30.0, 50.0, 0, 0, 0, 0, 1.1, 0.9, 1.1, 0.9, 33, 0, 0, 0, 0
+0 / END OF TRANSFORMER DATA, BEGIN AREA DATA
+Q
+";
+    let net = parse_psse(raw).unwrap();
+    assert!(net.branches.is_empty(), "a 3W is not folded into branches");
+    assert_eq!(net.transformers_3w.len(), 1);
+
+    let view = IndexedNetwork::new(&net);
+    assert_eq!(view.n(), 4, "three buses plus the synthetic star point");
+    assert_eq!(view.n_connected_components(), 1);
+    // Before the star-lowering, buses 2 and 3 were ungrounded islands; now the
+    // single component is grounded by the reference bus.
+    view.check_reference_coverage().unwrap();
+
+    let b = build_bprime(&view, &BuildOptions::default()).unwrap();
+    assert_eq!(b.rows(), 4);
+    assert_eq!(b.cols(), 4);
+
+    // The canonical model is untouched: still three buses, no branches, one record.
+    assert_eq!(net.buses.len(), 3);
+    assert!(net.branches.is_empty());
+    assert_eq!(net.transformers_3w.len(), 1);
 }
 
 #[test]

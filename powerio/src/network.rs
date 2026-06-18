@@ -199,10 +199,11 @@ pub struct Network {
     /// Three-winding transformers, kept as typed records rather than folded into
     /// `branches`, so a star point and the per-winding data survive a round trip.
     /// `#[serde(default)]` so JSON written before the field existed still
-    /// deserializes. A consumer that needs the bus-branch form calls
-    /// [`Transformer3W::star_expansion`]; the in-crate matrix builders do not fold
-    /// these yet, so a 3-winding transformer is absent from `Y_bus`/connectivity
-    /// until a caller expands it (tracked in issue #131).
+    /// deserializes. [`IndexedNetwork`](crate::IndexedNetwork) lowers each
+    /// in-service record into a star bus plus three branches (via
+    /// [`Transformer3W::star_expansion`]) before building any matrix, so a
+    /// 3-winding transformer does appear in `Y_bus`/connectivity; the canonical
+    /// model keeps the typed record for round-trip fidelity.
     #[serde(default)]
     pub transformers_3w: Vec<Transformer3W>,
     /// Area records: scheduled interchange and per-area swing bus. Distinct from
@@ -386,9 +387,9 @@ pub enum TransformerControlMode {
     Fixed,
     /// Bus voltage control via tap (LTC; PSS/E `COD` ±1, PSLF type 2).
     Voltage,
-    /// Reactive-power-flow control via tap (PSS/E `COD` ±2).
+    /// Reactive power flow control via tap (PSS/E `COD` ±2).
     ReactiveFlow,
-    /// Active-power-flow control via phase shift (PSS/E `COD` ±3, PSLF type 4).
+    /// Active power flow control via phase shift (PSS/E `COD` ±3, PSLF type 4).
     ActiveFlow,
 }
 
@@ -598,14 +599,14 @@ pub struct Area {
 /// the zero-impedance threshold, and the per-quantity adjustment-enable flags.
 ///
 /// Each field is optional because a source states only the ones it carries. No
-/// power-flow physics, but it determines whether a downstream solver reproduces
+/// power flow physics, but it determines whether a downstream solver reproduces
 /// the source tool's converged answer. Maps to the PSS/E v34+ system-wide block
 /// (`GENERAL THRSHZ`, `NEWTON TOLN`/`ITMXN`, `SOLVER ACTAPS`/`AREAIN`/`PHSHFT`/
 /// `DCTAPS`/`SWSHNT`).
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[non_exhaustive]
 pub struct SolverParams {
-    /// Newton power-flow mismatch tolerance (`NEWTON TOLN`).
+    /// Newton power flow mismatch tolerance (`NEWTON TOLN`).
     pub newton_tolerance: Option<f64>,
     /// Newton iteration cap (`NEWTON ITMXN`).
     pub max_iterations: Option<u32>,
@@ -673,9 +674,9 @@ pub struct Winding {
 /// the per-winding control data survive a same-format round trip. Both the PSS/E
 /// 3-winding record and the PSLF tertiary-winding record map onto it.
 /// [`star_expansion`](Transformer3W::star_expansion) turns it into the synthetic
-/// star bus plus three branches for a consumer that works in the bus-branch model.
-/// The matrix builders do not call it yet, so a 3-winding transformer does not
-/// appear in `Y_bus` until a caller expands it (issue #131).
+/// star bus plus three branches for a consumer that works in the bus-branch model;
+/// [`IndexedNetwork`](crate::IndexedNetwork) applies it before building any matrix,
+/// so a 3-winding transformer contributes to `Y_bus` and connectivity.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[non_exhaustive]
 pub struct Transformer3W {
@@ -715,9 +716,10 @@ impl Transformer3W {
     }
 
     /// Expand into a synthetic star [`Bus`] (id `star_id`) plus three [`Branch`]es,
-    /// one per winding, for a consumer that works in the bus-branch model. (The
-    /// in-crate matrix builders do not call this yet; see issue #131.) The star bus
-    /// carries the stored star voltage and the magnetizing shunt is left to the
+    /// one per winding, for a consumer that works in the bus-branch model.
+    /// [`IndexedNetwork`](crate::IndexedNetwork) calls this via
+    /// [`Network::expand_transformers_3w`] when assembling a matrix view. The star
+    /// bus carries the stored star voltage and the magnetizing shunt is left to the
     /// caller; each branch takes its winding's tap, phase shift, and ratings.
     #[must_use]
     pub fn star_expansion(&self, star_id: BusId) -> (Bus, [Branch; 3]) {
@@ -1168,6 +1170,56 @@ impl Network {
             }
         }
         findings
+    }
+
+    /// A bus-branch lowering of the network for analysis: each in-service
+    /// 3-winding transformer becomes a synthetic star bus, its three winding
+    /// branches, and (when present) its magnetizing shunt, so the matrix builders
+    /// and connectivity see it. Returns the network unchanged (borrowed) when
+    /// there are no 3-winding transformers, so the common case allocates nothing.
+    ///
+    /// The canonical `Network` keeps the typed [`Transformer3W`] records; this is
+    /// the derived analysis form that [`IndexedNetwork`](crate::IndexedNetwork)
+    /// builds behind the scenes, so callers never see the synthetic buses in the
+    /// model they read or write.
+    pub(crate) fn expand_transformers_3w(&self) -> std::borrow::Cow<'_, Network> {
+        if self.transformers_3w.is_empty() {
+            return std::borrow::Cow::Borrowed(self);
+        }
+        let mut net = self.clone();
+        // The star branches carry per-unit impedance (CZ = 1), the same convention
+        // the matrix builders read straight off a branch, so no rebasing. The
+        // magnetizing shunt is an admittance, so it scales like every other shunt:
+        // by the per-unit base for a raw network, by 1 for a normalized one.
+        let scale = if net.is_normalized() {
+            1.0
+        } else {
+            net.base_mva
+        };
+        let base_id = net.buses.iter().map(|b| b.id.0).max().unwrap_or(0) + 1;
+        for (k, t) in self
+            .transformers_3w
+            .iter()
+            .filter(|t| t.in_service)
+            .enumerate()
+        {
+            let star_id = BusId(base_id + k);
+            let (star, branches) = t.star_expansion(star_id);
+            net.buses.push(star);
+            net.branches.extend(branches);
+            if t.mag_g != 0.0 || t.mag_b != 0.0 {
+                net.shunts.push(Shunt {
+                    bus: star_id,
+                    g: t.mag_g * scale,
+                    b: t.mag_b * scale,
+                    in_service: true,
+                    control: None,
+                    extras: Extras::new(),
+                });
+            }
+        }
+        net.transformers_3w.clear();
+        std::borrow::Cow::Owned(net)
     }
 
     /// Check structural integrity: bus ids are unique and every element

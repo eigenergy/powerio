@@ -395,7 +395,7 @@ impl Network {
             hvdc,
             transformers_3w,
             // Areas (interchange schedule, per-area swing) are interchange metadata,
-            // not part of the per-unit electrical view, so they are not carried.
+            // not part of the per unit electrical view, so they are not carried.
             areas: Vec::new(),
             solver: None,
             source_format: SourceFormat::Normalized,

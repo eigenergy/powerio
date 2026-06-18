@@ -1,7 +1,7 @@
 //! Network operations: deriving or rewriting a [`Network`].
 //!
 //! These are model-level transforms, distinct from the format readers/writers and
-//! from the per-unit [`to_normalized`](Network::to_normalized) view.
+//! from the per unit [`to_normalized`](Network::to_normalized) view.
 //! [`subset`](Network::subset) carves a study footprint out of a larger case;
 //! [`merge_bus`](Network::merge_bus) collapses two buses into one (re-homing the
 //! incident elements), and [`reduce_zero_impedance`](Network::reduce_zero_impedance)
@@ -320,25 +320,40 @@ impl Network {
         }
     }
 
-    /// Collapse every non-transformer branch whose series impedance magnitude is
-    /// at or below `threshold` by merging its endpoints (the to-bus into the
-    /// from-bus), returning the number of branches removed. Parallel jumpers
-    /// between the same pair go in the same step.
+    /// Collapse every in-service, non-transformer branch whose series impedance
+    /// magnitude is at or below `threshold` by merging its endpoints (the to-bus
+    /// into the from-bus), returning the number of branches removed. Parallel
+    /// jumpers between the same pair go in the same step.
     ///
     /// Zero-impedance branches (bus ties, breakers modeled as jumpers) carry no
-    /// power-flow drop, so collapsing them shrinks the network without changing
-    /// its electrical behavior. Transformers are never collapsed (a unity-ratio
-    /// transformer is a real device, not a jumper).
+    /// power flow drop, so collapsing them shrinks the network without changing
+    /// its electrical behavior. An out-of-service jumper is an open switch whose
+    /// endpoints are not electrically joined, so it is left in place. Transformers
+    /// are never collapsed (a unity-ratio transformer is a real device, not a
+    /// jumper); a jumper between two windings of the same 3-winding transformer is
+    /// also skipped, since merging would collapse that transformer onto one node.
     pub fn reduce_zero_impedance(&mut self, threshold: f64) -> usize {
         let before = self.branches.len();
         // Re-scan after each merge: bus ids and the branch list both change.
         while let Some((into, from)) = self.branches.iter().find_map(|b| {
-            (!b.is_transformer() && b.from != b.to && b.r.hypot(b.x) <= threshold)
-                .then_some((b.from, b.to))
+            (b.in_service
+                && !b.is_transformer()
+                && b.from != b.to
+                && b.r.hypot(b.x) <= threshold
+                && !self.shares_transformer_3w(b.from, b.to))
+            .then_some((b.from, b.to))
         }) {
             self.merge_bus(into, from);
         }
         before - self.branches.len()
+    }
+
+    /// Whether buses `a` and `b` are two windings of the same 3-winding
+    /// transformer; merging them would short two windings onto one node.
+    fn shares_transformer_3w(&self, a: BusId, b: BusId) -> bool {
+        self.transformers_3w
+            .iter()
+            .any(|t| t.windings.iter().any(|w| w.bus == a) && t.windings.iter().any(|w| w.bus == b))
     }
 
     /// Collapse degree-2 passthrough buses, returning the number removed. A
@@ -510,7 +525,9 @@ impl Network {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::network::{Area, BusType, Extras, Generator, Load};
+    use crate::network::{
+        Area, BusType, Extras, Generator, Impedance, Load, Transformer3W, Winding,
+    };
 
     fn bus(id: usize, area: usize, base_kv: f64) -> Bus {
         Bus {
@@ -572,6 +589,34 @@ mod tests {
         net.loads.push(load(1));
         net.loads.push(load(3));
         net
+    }
+
+    fn transformer_3w(a: usize, b: usize, c: usize) -> Transformer3W {
+        let winding = |bus| Winding {
+            bus: BusId(bus),
+            tap: 1.0,
+            shift: 0.0,
+            nominal_kv: 0.0,
+            rate_a: 0.0,
+            rate_b: 0.0,
+            rate_c: 0.0,
+        };
+        let imp = Impedance {
+            r: 0.0,
+            x: 0.1,
+            base_mva: 100.0,
+        };
+        Transformer3W {
+            windings: [winding(a), winding(b), winding(c)],
+            z: [imp, imp, imp],
+            star_vm: 1.0,
+            star_va: 0.0,
+            mag_g: 0.0,
+            mag_b: 0.0,
+            in_service: true,
+            name: None,
+            extras: Extras::new(),
+        }
     }
 
     fn gen_regulating(bus: usize, regulated: usize) -> Generator {
@@ -871,6 +916,51 @@ mod tests {
         assert_eq!(net.buses.len(), 2);
         assert_eq!(net.branches.len(), 1, "the real 1-2 line remains");
         assert!(net.loads.iter().any(|l| l.bus == BusId(2)), "load re-homed");
+        net.validate().unwrap();
+    }
+
+    #[test]
+    fn reduce_zero_impedance_keeps_an_open_jumper() {
+        // A zero-impedance jumper between 2 and 3 is out of service: it models an
+        // open switch, so its endpoints stay separate and must not be merged.
+        let mut jumper = line(2, 3);
+        jumper.x = 0.0;
+        jumper.in_service = false;
+        let mut net = Network::in_memory(
+            "net",
+            100.0,
+            vec![bus(1, 1, 230.0), bus(2, 1, 230.0), bus(3, 1, 230.0)],
+            vec![line(1, 2), jumper],
+        );
+
+        let removed = net.reduce_zero_impedance(1e-9);
+        assert_eq!(removed, 0, "an open jumper is left in place");
+        assert_eq!(net.buses.len(), 3);
+        assert_eq!(net.branches.len(), 2);
+        net.validate().unwrap();
+    }
+
+    #[test]
+    fn reduce_zero_impedance_keeps_a_3w_winding_pair() {
+        // A zero-impedance jumper between buses 2 and 3, which are two windings of
+        // the same 3-winding transformer. Merging them would short two windings
+        // onto one node, so the jumper is left in place.
+        let mut jumper = line(2, 3);
+        jumper.x = 0.0;
+        let mut net = Network::in_memory(
+            "net",
+            100.0,
+            vec![bus(1, 1, 230.0), bus(2, 1, 138.0), bus(3, 1, 13.8)],
+            vec![line(1, 2), jumper],
+        );
+        net.transformers_3w.push(transformer_3w(1, 2, 3));
+
+        let removed = net.reduce_zero_impedance(1e-9);
+        assert_eq!(
+            removed, 0,
+            "a jumper across two windings of one 3W transformer is kept"
+        );
+        assert_eq!(net.buses.len(), 3);
         net.validate().unwrap();
     }
 }
