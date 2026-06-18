@@ -135,7 +135,7 @@ fn warns_when_writing_normalized_lines_as_transformers() {
             .all(|b| approx(b.tap, 1.0) && approx(b.shift, 0.0))
     );
 
-    let out = write_as(&n, TargetFormat::Psse).unwrap();
+    let out = write_as(&n, TargetFormat::Psse { rev: 33 }).unwrap();
     assert!(
         out.warnings
             .iter()
@@ -145,7 +145,7 @@ fn warns_when_writing_normalized_lines_as_transformers() {
     );
 
     // A raw network keeps lines at tap 0, so the warning must not fire for it.
-    let raw_out = write_as(&raw, TargetFormat::Psse).unwrap();
+    let raw_out = write_as(&raw, TargetFormat::Psse { rev: 33 }).unwrap();
     assert!(
         !raw_out
             .warnings

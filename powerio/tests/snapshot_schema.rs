@@ -89,6 +89,8 @@ fn small_net() -> Network {
         base_kv: 230.0,
         vmax: 1.1,
         vmin: 0.9,
+        evhi: None,
+        evlo: None,
         area: 1,
         zone: 1,
         name: None,
@@ -112,6 +114,7 @@ fn small_net() -> Network {
         in_service: true,
         cost: None,
         caps,
+        regulated_bus: None,
     };
     let branch = Branch {
         from: BusId(1),
@@ -127,11 +130,13 @@ fn small_net() -> Network {
         in_service: true,
         angmin: -360.0,
         angmax: 360.0,
+        control: None,
         extras: Extras::new(),
     };
     Network {
         name: "schema_lock".into(),
         base_mva: 100.0,
+        base_frequency: 60.0,
         buses: vec![bus(1, BusType::Ref), bus(2, BusType::Pq)],
         loads: vec![],
         shunts: vec![],
@@ -139,6 +144,9 @@ fn small_net() -> Network {
         generators: vec![g],
         storage: vec![],
         hvdc: vec![],
+        transformers_3w: vec![],
+        areas: vec![],
+        solver: None,
         source_format: SourceFormat::InMemory,
         source: None,
     }

@@ -60,6 +60,22 @@ pub fn write_egret_json(net: &Network) -> Conversion {
             net.hvdc.len()
         ));
     }
+    if !net.transformers_3w.is_empty() {
+        warnings.push(format!(
+            "{} 3-winding transformer(s) dropped: the egret writer emits no 3-winding record",
+            net.transformers_3w.len()
+        ));
+    }
+    if net
+        .buses
+        .iter()
+        .any(|b| b.evhi.is_some() || b.evlo.is_some())
+    {
+        warnings.push(
+            "emergency voltage band(s) (EVHI/EVLO) dropped: this writer carries one voltage band"
+                .into(),
+        );
+    }
     if !net.storage.is_empty() {
         warnings.push(format!(
             "{} storage unit(s) dropped: egret storage mapping not implemented",
@@ -315,6 +331,7 @@ pub(crate) fn parse_egret_source(source: Arc<String>, name_hint: Option<&str>) -
     let net = Network {
         name,
         base_mva,
+        base_frequency: crate::network::DEFAULT_BASE_FREQUENCY,
         buses,
         loads,
         shunts,
@@ -322,6 +339,9 @@ pub(crate) fn parse_egret_source(source: Arc<String>, name_hint: Option<&str>) -
         generators,
         storage: Vec::new(),
         hvdc,
+        transformers_3w: Vec::new(),
+        areas: Vec::new(),
+        solver: None,
         source_format: SourceFormat::EgretJson,
         source: Some(source),
     };
@@ -460,6 +480,8 @@ fn read_bus(key: &str, v: &Value) -> Result<Bus> {
         base_kv: f(v, "base_kv")?,
         vmax: f_or(v, "v_max", 1.1)?,
         vmin: f_or(v, "v_min", 0.9)?,
+        evhi: None,
+        evlo: None,
         area: usize_or(v, "area", 0)?,
         zone: usize_or(v, "zone", 0)?,
         name: v.get("name").and_then(Value::as_str).map(str::to_string),
@@ -483,6 +505,7 @@ fn read_shunt(v: &Value) -> Result<Shunt> {
         g: f(v, "gs")?,
         b: f(v, "bs")?,
         in_service: flag(v, "in_service", true)?,
+        control: None,
         extras: Extras::new(),
     })
 }
@@ -507,6 +530,7 @@ fn read_branch(v: &Value) -> Result<Branch> {
         in_service: flag(v, "in_service", true)?,
         angmin: f_or(v, "angle_diff_min", -360.0)?,
         angmax: f_or(v, "angle_diff_max", 360.0)?,
+        control: None,
         extras: Extras::new(),
     })
 }
@@ -536,6 +560,7 @@ fn read_gen(v: &Value) -> Result<Generator> {
         in_service: flag(v, "in_service", true)?,
         cost,
         caps: Default::default(),
+        regulated_bus: None,
     })
 }
 

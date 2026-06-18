@@ -161,6 +161,12 @@ enum FormatArg {
     EgretJson,
     #[value(name = "psse", alias = "raw")]
     Psse,
+    /// Write PSS/E `.raw` at revision 34.
+    #[value(name = "psse34")]
+    Psse34,
+    /// Write PSS/E `.raw` at revision 35.
+    #[value(name = "psse35")]
+    Psse35,
     #[value(name = "powerworld", alias = "aux")]
     PowerWorld,
     #[value(name = "pandapower-json", alias = "pandapower", alias = "pp")]
@@ -170,7 +176,7 @@ enum FormatArg {
     PowerioJson,
     #[value(name = "pypsa-csv", alias = "pypsa")]
     PypsaCsv,
-    /// Read a GE PSLF .epc case (read only).
+    /// GE PSLF .epc case (read and write).
     #[value(name = "pslf", alias = "epc")]
     Pslf,
     /// Read a gridfm-datakit Parquet dataset directory (read only).
@@ -190,16 +196,16 @@ impl FormatArg {
             FormatArg::Matpower => TargetFormat::Matpower,
             FormatArg::PowerModelsJson => TargetFormat::PowerModelsJson,
             FormatArg::EgretJson => TargetFormat::EgretJson,
-            FormatArg::Psse => TargetFormat::Psse,
+            FormatArg::Psse => TargetFormat::Psse { rev: 33 },
+            FormatArg::Psse34 => TargetFormat::Psse { rev: 34 },
+            FormatArg::Psse35 => TargetFormat::Psse { rev: 35 },
             FormatArg::PowerWorld => TargetFormat::PowerWorld,
             FormatArg::PandapowerJson => TargetFormat::PandapowerJson,
             FormatArg::PowerioJson => TargetFormat::PowerioJson,
             FormatArg::PypsaCsv => anyhow::bail!(
                 "`convert` cannot return a PyPSA CSV folder as text; pass `--to pypsa-csv -o <dir>`"
             ),
-            FormatArg::Pslf => {
-                anyhow::bail!("PSLF .epc is read only; it cannot be a conversion target")
-            }
+            FormatArg::Pslf => TargetFormat::Pslf,
             FormatArg::Gridfm => anyhow::bail!(
                 "`convert` cannot write a gridfm dataset; use the `gridfm` subcommand"
             ),
@@ -217,6 +223,8 @@ impl FormatArg {
             FormatArg::PowerModelsJson => "powermodels-json",
             FormatArg::EgretJson => "egret-json",
             FormatArg::Psse => "psse",
+            FormatArg::Psse34 => "psse34",
+            FormatArg::Psse35 => "psse35",
             FormatArg::PowerWorld => "powerworld",
             FormatArg::PandapowerJson => "pandapower-json",
             FormatArg::PowerioJson => "powerio-json",

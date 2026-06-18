@@ -15,6 +15,8 @@ fn bus(id: usize, kind: BusType) -> Bus {
         base_kv: 1.0,
         vmax: 1.1,
         vmin: 0.9,
+        evhi: None,
+        evlo: None,
         area: 1,
         zone: 1,
         name: None,
@@ -37,6 +39,7 @@ fn branch(from: usize, to: usize) -> Branch {
         in_service: true,
         angmin: -360.0,
         angmax: 360.0,
+        control: None,
         extras: Extras::new(),
     }
 }

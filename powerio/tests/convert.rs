@@ -7,9 +7,9 @@ use std::path::{Path, PathBuf};
 
 use powerio::{
     BusId, BusType, Error, Network, SourceFormat, TargetFormat, convert_file, parse_file,
-    parse_matpower, parse_matpower_file, parse_powermodels_json, parse_powerworld, parse_psse,
-    read_pypsa_csv_folder, write_as, write_egret_json, write_powermodels_json, write_powerworld,
-    write_psse, write_pypsa_csv_folder,
+    parse_matpower, parse_matpower_file, parse_powermodels_json, parse_powerworld, parse_pslf,
+    parse_psse, read_pypsa_csv_folder, write_as, write_egret_json, write_powermodels_json,
+    write_powerworld, write_pslf, write_psse, write_pypsa_csv_folder,
 };
 use serde_json::Value;
 
@@ -32,7 +32,7 @@ fn canonical_api_names_parse_and_convert() {
         "powermodels-json".parse::<TargetFormat>().unwrap(),
         TargetFormat::PowerModelsJson
     );
-    assert_eq!(TargetFormat::Psse.to_string(), "psse");
+    assert_eq!(TargetFormat::Psse { rev: 33 }.to_string(), "psse");
     assert_eq!(net.to_matpower(), src);
 
     let pm = net.to_format(TargetFormat::PowerModelsJson).unwrap();
@@ -527,8 +527,8 @@ fn psse_reads_real_pti_files() {
 
 #[test]
 fn hvdc_converts_and_round_trips() {
-    // t_case9_dcline.m carries HVDC dclines. PowerModels JSON round-trips them;
-    // egret/PSS-E/PowerWorld drop them, each with a warning.
+    // t_case9_dcline.m carries HVDC dclines. PowerModels JSON and PSS/E round-trip
+    // them (PSS/E as two-terminal DC); egret/PowerWorld drop them with a warning.
     let net = parse_matpower_file(data("t_case9_dcline.m")).unwrap();
     assert!(!net.hvdc.is_empty(), "fixture should have dclines");
 
@@ -542,11 +542,24 @@ fn hvdc_converts_and_round_trips() {
     assert_eq!(back.hvdc[0].from, net.hvdc[0].from);
     assert_eq!(back.hvdc[0].to, net.hvdc[0].to);
 
-    for conv in [
-        write_egret_json(&net),
-        write_psse(&net),
-        write_powerworld(&net),
-    ] {
+    // PSS/E writes the dclines as two-terminal DC records; the endpoints and
+    // power setpoint survive a re-read, with the converter detail defaulted.
+    let psse = write_psse(&net);
+    let from_psse = parse_psse(&psse.text).unwrap();
+    assert_eq!(
+        from_psse.hvdc.len(),
+        net.hvdc.len(),
+        "PSS/E keeps the dclines"
+    );
+    assert_eq!(from_psse.hvdc[0].from, net.hvdc[0].from);
+    assert_eq!(from_psse.hvdc[0].to, net.hvdc[0].to);
+    assert!(
+        psse.warnings.iter().any(|w| w.contains("converter detail")),
+        "PSS/E should note the defaulted converter detail, got {:?}",
+        psse.warnings
+    );
+
+    for conv in [write_egret_json(&net), write_powerworld(&net)] {
         assert!(
             conv.warnings.iter().any(|w| w.contains("dcline")),
             "expected a dropped-dcline warning, got {:?}",
@@ -565,6 +578,54 @@ fn hvdc_converts_and_round_trips() {
         "cross-format → MATPOWER should warn on dropped dclines, got {:?}",
         to_mp.warnings
     );
+}
+
+#[test]
+fn hvdc_round_trips_through_pslf() {
+    // A MATPOWER case with dclines converts to PSLF as `dc converter` + `dc line`
+    // records, and a re-read recovers the AC terminals, power setpoints, and
+    // status. (PSLF keeps the AC converters separate from the DC line; the writer
+    // synthesizes the DC bus join keys.)
+    let net = parse_matpower_file(data("t_case9_dcline.m")).unwrap();
+    assert!(!net.hvdc.is_empty(), "fixture should have dclines");
+
+    let pslf = write_pslf(&net);
+    assert!(
+        !pslf.warnings.iter().any(|w| w.contains("dcline")),
+        "HVDC is now written, not dropped: {:?}",
+        pslf.warnings
+    );
+    let back = parse_pslf(&pslf.text).unwrap();
+    assert_eq!(back.hvdc.len(), net.hvdc.len(), "every dcline survives");
+    for (a, b) in net.hvdc.iter().zip(&back.hvdc) {
+        assert_eq!(b.from, a.from);
+        assert_eq!(b.to, a.to);
+        assert_eq!(b.in_service, a.in_service);
+        assert!(
+            (b.pf - a.pf).abs() < 1e-6,
+            "pf changed: {} != {}",
+            a.pf,
+            b.pf
+        );
+        assert!(
+            (b.pt - a.pt).abs() < 1e-6,
+            "pt changed: {} != {}",
+            a.pt,
+            b.pt
+        );
+        assert!(
+            (b.qf - a.qf).abs() < 1e-6,
+            "qf changed: {} != {}",
+            a.qf,
+            b.qf
+        );
+        assert!(
+            (b.qt - a.qt).abs() < 1e-6,
+            "qt changed: {} != {}",
+            a.qt,
+            b.qt
+        );
+    }
 }
 
 #[test]
@@ -1334,6 +1395,8 @@ fn slackless_network_conversion_warns_for_power_flow_targets() {
             base_kv: 1.0,
             vmax: 1.1,
             vmin: 0.9,
+            evhi: None,
+            evlo: None,
             area: 1,
             zone: 1,
             name: None,
@@ -1355,6 +1418,7 @@ fn slackless_network_conversion_warns_for_power_flow_targets() {
             in_service: true,
             angmin: -360.0,
             angmax: 360.0,
+            control: None,
             extras: Extras::new(),
         }
     }
@@ -1369,7 +1433,7 @@ fn slackless_network_conversion_warns_for_power_flow_targets() {
     );
     for fmt in [
         TargetFormat::Matpower,
-        TargetFormat::Psse,
+        TargetFormat::Psse { rev: 33 },
         TargetFormat::PowerModelsJson,
     ] {
         let conv = write_as(&net, fmt).unwrap();

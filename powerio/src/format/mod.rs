@@ -49,8 +49,8 @@ pub use matpower::{parse_matpower, parse_matpower_file, write_matpower};
 pub use pandapower::{parse_pandapower_json, write_pandapower_json};
 pub use powermodels::{parse_powermodels_json, write_powermodels_json};
 pub use powerworld::{PwdDisplay, PwdSubstation, parse_powerworld, write_powerworld};
-pub use pslf::parse_pslf;
-pub use psse::{parse_psse, write_psse};
+pub use pslf::{parse_pslf, write_pslf};
+pub use psse::{parse_psse, write_psse, write_psse_rev};
 pub use pypsa::{PypsaCsvOutputs, read_pypsa_csv_folder, write_pypsa_csv_folder};
 
 /// A target interchange format. See [`write_as`].
@@ -61,8 +61,10 @@ pub enum TargetFormat {
     PowerModelsJson,
     /// egret `ModelData` JSON.
     EgretJson,
-    /// PSS/E `.raw` (v33).
-    Psse,
+    /// PSS/E `.raw` at the given revision. `rev` selects the record layout the
+    /// writer emits (33, 34, or 35); 33 is the historical default. The reader
+    /// takes the revision from the file header, so this only affects writes.
+    Psse { rev: u32 },
     /// PowerWorld auxiliary `.aux`.
     PowerWorld,
     /// pandapower `pandapowerNet` JSON.
@@ -73,6 +75,8 @@ pub enum TargetFormat {
     /// on read. Lossless for every model field; the retained source text is the
     /// one exclusion (see [`Network::to_json`]).
     PowerioJson,
+    /// GE PSLF `.epc` (round-trip; byte-exact when the case kept its source).
+    Pslf,
 }
 
 impl TargetFormat {
@@ -84,9 +88,10 @@ impl TargetFormat {
             | TargetFormat::EgretJson
             | TargetFormat::PandapowerJson
             | TargetFormat::PowerioJson => "json",
-            TargetFormat::Psse => "raw",
+            TargetFormat::Psse { .. } => "raw",
             TargetFormat::PowerWorld => "aux",
             TargetFormat::Matpower => "m",
+            TargetFormat::Pslf => "epc",
         }
     }
 
@@ -96,11 +101,12 @@ impl TargetFormat {
         match self {
             TargetFormat::PowerModelsJson => "PowerModels JSON",
             TargetFormat::EgretJson => "egret JSON",
-            TargetFormat::Psse => "PSS/E .raw",
+            TargetFormat::Psse { .. } => "PSS/E .raw",
             TargetFormat::PowerWorld => "PowerWorld .aux",
             TargetFormat::PandapowerJson => "pandapower JSON",
             TargetFormat::Matpower => "MATPOWER .m",
             TargetFormat::PowerioJson => "PowerIO JSON",
+            TargetFormat::Pslf => "PSLF .epc",
         }
     }
 
@@ -110,11 +116,14 @@ impl TargetFormat {
         match self {
             TargetFormat::PowerModelsJson => "powermodels-json",
             TargetFormat::EgretJson => "egret-json",
-            TargetFormat::Psse => "psse",
+            TargetFormat::Psse { rev: 34 } => "psse34",
+            TargetFormat::Psse { rev: 35 } => "psse35",
+            TargetFormat::Psse { .. } => "psse",
             TargetFormat::PowerWorld => "powerworld",
             TargetFormat::PandapowerJson => "pandapower-json",
             TargetFormat::Matpower => "matpower",
             TargetFormat::PowerioJson => "powerio-json",
+            TargetFormat::Pslf => "pslf",
         }
     }
 }
@@ -214,10 +223,13 @@ pub fn target_format_from_name(name: &str) -> Option<TargetFormat> {
             TargetFormat::PowerModelsJson
         }
         "egret-json" | "egret" | "egretjson" => TargetFormat::EgretJson,
-        "psse" | "raw" => TargetFormat::Psse,
+        "psse" | "raw" | "psse33" | "raw33" => TargetFormat::Psse { rev: 33 },
+        "psse34" | "raw34" => TargetFormat::Psse { rev: 34 },
+        "psse35" | "raw35" => TargetFormat::Psse { rev: 35 },
         "powerworld" | "aux" => TargetFormat::PowerWorld,
         "pandapower-json" | "pandapower" | "pandapowerjson" | "pp" => TargetFormat::PandapowerJson,
         "powerio-json" | "powerio" | "poweriojson" | "json" => TargetFormat::PowerioJson,
+        "pslf" | "epc" | "pslf-epc" => TargetFormat::Pslf,
         _ => return None,
     })
 }
@@ -401,7 +413,7 @@ pub fn parse_file(path: impl AsRef<std::path::Path>, from: Option<&str>) -> Resu
             // Everything but `.json` (sniffed below) resolves without the text.
             match ext.as_deref() {
                 Some("m") => Some(TargetFormat::Matpower),
-                Some("raw") => Some(TargetFormat::Psse),
+                Some("raw") => Some(TargetFormat::Psse { rev: 33 }),
                 Some("aux") => Some(TargetFormat::PowerWorld),
                 Some("json") => None,
                 other => {
@@ -437,7 +449,7 @@ fn read_source(source: Arc<String>, fmt: TargetFormat, name_hint: Option<&str>) 
         TargetFormat::PowerModelsJson => {
             powermodels::parse_powermodels_json_source(source, name_hint)
         }
-        TargetFormat::Psse => psse::parse_psse_source(source, name_hint),
+        TargetFormat::Psse { .. } => psse::parse_psse_source(source, name_hint, &mut warnings),
         TargetFormat::PowerWorld => powerworld::parse_powerworld_source(source, name_hint),
         TargetFormat::EgretJson => egret::parse_egret_source(source, name_hint),
         TargetFormat::PandapowerJson => {
@@ -446,6 +458,9 @@ fn read_source(source: Arc<String>, fmt: TargetFormat, name_hint: Option<&str>) 
         // The canonical snapshot: validated deserialization of the model itself.
         // It carries its own name and source_format, so the hint doesn't apply.
         TargetFormat::PowerioJson => Network::from_json(&source),
+        // PSLF read normally enters through the `is_pslf_name`/`.epc` fast path in
+        // parse_file / parse_str; this arm keeps the funnel total.
+        TargetFormat::Pslf => pslf::parse_pslf_source(source, name_hint, &mut warnings),
     }?;
     reject_empty_case(&net, fmt.label())?;
     Ok(Parsed {
@@ -578,7 +593,7 @@ pub fn write_as(net: &Network, format: TargetFormat) -> Result<Conversion> {
     let mut conv = match format {
         TargetFormat::PowerModelsJson => write_powermodels_json(net),
         TargetFormat::EgretJson => write_egret_json(net),
-        TargetFormat::Psse => write_psse(net),
+        TargetFormat::Psse { rev } => write_psse_rev(net, rev),
         TargetFormat::PowerWorld => write_powerworld(net),
         TargetFormat::PandapowerJson => write_pandapower_json(net),
         // From another source (or no retained source): canonical MATPOWER from
@@ -606,10 +621,104 @@ pub fn write_as(net: &Network, format: TargetFormat) -> Result<Conversion> {
                     .collect(),
             });
         }
+        TargetFormat::Pslf => write_pslf(net),
     };
     warn_normalized_tap(net, format, &mut conv);
     warn_missing_reference(net, format, &mut conv);
+    warn_dropped_frequency(net, format, &mut conv);
+    warn_psse_downgrade(net, format, &mut conv);
+    warn_dropped_transformer_charging(net, format, &mut conv);
     Ok(conv)
+}
+
+/// Allocate a circuit id for an element keyed by `key` — a bus for loads/shunts,
+/// or a `(from, to)` pair for branches: reuse the source-supplied `preferred` id
+/// when it is still free on this key, else the lowest free positional id. Keeps
+/// parallel devices distinct so the `(key, id)` uniqueness rule the PSS/E and
+/// PSLF records require holds even when the source supplies colliding ids.
+pub(super) fn allocate_circuit_id<K: Ord + Clone>(
+    preferred: Option<&str>,
+    key: K,
+    used: &mut std::collections::BTreeMap<K, std::collections::BTreeSet<String>>,
+) -> String {
+    let taken = used.entry(key).or_default();
+    if let Some(id) = preferred {
+        if taken.insert(id.to_owned()) {
+            return id.to_owned();
+        }
+    }
+    let mut n = 1u32;
+    loop {
+        let candidate = n.to_string();
+        if taken.insert(candidate.clone()) {
+            return candidate;
+        }
+        n += 1;
+    }
+}
+
+/// Warn when a PSS/E source is re-serialized at an older revision than its own.
+/// `parse_file` maps every `.raw` to revision 33 and the `psse`/`raw` aliases
+/// resolve to 33, so writing a v34/v35 source through the default target skips
+/// the echo path (revisions differ) and re-emits the v33 layout, dropping the
+/// modern records (12 named ratings, load DG/LOADTYPE columns, the system-wide
+/// block) and any unmodeled section the echo would have preserved. Name the
+/// downgrade instead of performing it silently.
+fn warn_psse_downgrade(net: &Network, format: TargetFormat, conv: &mut Conversion) {
+    if let (TargetFormat::Psse { rev }, SourceFormat::Psse, Some(src)) =
+        (format, net.source_format, net.source.as_ref())
+    {
+        let src_rev = psse::header_rev(src);
+        if src_rev > rev {
+            conv.warnings.push(format!(
+                "PSS/E source is revision {src_rev} but the write target is revision {rev}; \
+                 the older layout drops fields the source carried (write to psse{src_rev} to keep them)"
+            ));
+        }
+    }
+}
+
+/// Warn when a non-default system frequency writes to a format with no frequency
+/// field. PSS/E (`BASFRQ`) and pandapower (`f_hz`) carry it; MATPOWER,
+/// PowerModels, egret, and PowerWorld have nowhere to put it, so a 50 Hz case
+/// would silently read back as the 60 Hz default. Report the loss instead.
+fn warn_dropped_frequency(net: &Network, format: TargetFormat, conv: &mut Conversion) {
+    let carries_frequency = matches!(
+        format,
+        TargetFormat::Psse { .. } | TargetFormat::PandapowerJson
+    );
+    if carries_frequency {
+        return;
+    }
+    if (net.base_frequency - crate::network::DEFAULT_BASE_FREQUENCY).abs() > 1e-9 {
+        conv.warnings.push(format!(
+            "system base frequency {} Hz dropped: {} has no frequency field (reads back as {} Hz)",
+            net.base_frequency,
+            format.label(),
+            crate::network::DEFAULT_BASE_FREQUENCY
+        ));
+    }
+}
+
+/// Warn when a transformer carries line charging (`b != 0`) and the target's
+/// transformer record has no susceptance column to hold it. The PSLF `.epc`
+/// transformer record is the one such target; PSS/E writes it as `MAG2` and the
+/// MATPOWER-shaped writers keep `b` on the branch row, so neither drops it.
+fn warn_dropped_transformer_charging(net: &Network, format: TargetFormat, conv: &mut Conversion) {
+    if !matches!(format, TargetFormat::Pslf) {
+        return;
+    }
+    let n = net
+        .branches
+        .iter()
+        .filter(|b| b.is_transformer() && b.b != 0.0)
+        .count();
+    if n > 0 {
+        conv.warnings.push(format!(
+            "{n} transformer(s) carry line charging (b != 0) that the PSLF .epc transformer \
+             record cannot represent; the charging was dropped"
+        ));
+    }
 }
 
 /// Convert a case file to `to`, optionally forcing the source format with
@@ -685,9 +794,10 @@ fn warn_missing_reference(net: &Network, format: TargetFormat, conv: &mut Conver
     let needs_ref = matches!(
         format,
         TargetFormat::Matpower
-            | TargetFormat::Psse
+            | TargetFormat::Psse { .. }
             | TargetFormat::PowerModelsJson
             | TargetFormat::PandapowerJson
+            | TargetFormat::Pslf
     );
     if needs_ref {
         conv.warnings.extend(missing_reference_warning(net));
@@ -780,6 +890,40 @@ pub(crate) fn bus_kv(buses: &[Bus], bus_pos: &HashMap<BusId, usize>, bus: BusId)
         .map_or(0.0, |b| b.base_kv)
 }
 
+/// Replace characters that would corrupt a quoted or delimited field with
+/// `replacement`, so a free-form name can't shift or truncate the record it sits
+/// in. `forbidden` lists the destination's quote, delimiter, and comment chars.
+/// Returns the value borrowed unchanged when it holds none of them, so the common
+/// clean-name path allocates nothing.
+///
+/// Each text writer calls this at its quoting seam and warns when the result
+/// differs from the input (the substitution silently alters operator-facing
+/// names): the PSS/E single-quoted bus name and the PowerWorld double-quoted bus
+/// name both interpolate a `Network` name straight into a quoted field, where an
+/// embedded quote (or, for PSS/E, the `/` inline-comment delimiter) would shift
+/// every later column of the record.
+pub(crate) fn sanitize_quoted<'a>(
+    value: &'a str,
+    forbidden: &[char],
+    replacement: char,
+) -> std::borrow::Cow<'a, str> {
+    if value.contains(forbidden) {
+        value
+            .chars()
+            .map(|c| {
+                if forbidden.contains(&c) {
+                    replacement
+                } else {
+                    c
+                }
+            })
+            .collect::<String>()
+            .into()
+    } else {
+        std::borrow::Cow::Borrowed(value)
+    }
+}
+
 /// Impedance base `v_kv² / base_mva`; 1.0 when either base is missing, so a
 /// per-unit ↔ ohm conversion on it is the identity.
 pub(crate) fn zbase(v_kv: f64, base_mva: f64) -> f64 {
@@ -794,7 +938,17 @@ pub(crate) fn zbase(v_kv: f64, base_mva: f64) -> f64 {
 /// target is the source format and the source is still attached. An echo
 /// reproduces the input byte for byte, so read fidelity warnings don't apply.
 fn is_echo(net: &Network, target: TargetFormat) -> bool {
-    same_format(target, net.source_format) && net.source.is_some()
+    let Some(src) = &net.source else { return false };
+    if !same_format(target, net.source_format) {
+        return false;
+    }
+    // A PSS/E source echoes only when the requested revision equals the source's
+    // own; any other revision must go through write_psse_rev so the caller gets
+    // the layout it asked for instead of the original bytes.
+    if let TargetFormat::Psse { rev } = target {
+        return psse::header_rev(src) == rev;
+    }
+    true
 }
 
 /// Whether a write target is the same format the network was read from.
@@ -804,9 +958,10 @@ fn same_format(target: TargetFormat, source: SourceFormat) -> bool {
         (TargetFormat::Matpower, SourceFormat::Matpower)
             | (TargetFormat::PowerModelsJson, SourceFormat::PowerModelsJson)
             | (TargetFormat::EgretJson, SourceFormat::EgretJson)
-            | (TargetFormat::Psse, SourceFormat::Psse)
+            | (TargetFormat::Psse { .. }, SourceFormat::Psse)
             | (TargetFormat::PowerWorld, SourceFormat::PowerWorld)
             | (TargetFormat::PandapowerJson, SourceFormat::PandapowerJson)
+            | (TargetFormat::Pslf, SourceFormat::Pslf)
     )
 }
 
@@ -865,9 +1020,10 @@ mod tests {
             (SourceFormat::Matpower, TargetFormat::Matpower),
             (SourceFormat::PowerModelsJson, TargetFormat::PowerModelsJson),
             (SourceFormat::EgretJson, TargetFormat::EgretJson),
-            (SourceFormat::Psse, TargetFormat::Psse),
+            (SourceFormat::Psse, TargetFormat::Psse { rev: 33 }),
             (SourceFormat::PowerWorld, TargetFormat::PowerWorld),
             (SourceFormat::PandapowerJson, TargetFormat::PandapowerJson),
+            (SourceFormat::Pslf, TargetFormat::Pslf),
         ] {
             let token = format!("{sf:?}");
             assert_eq!(
@@ -884,7 +1040,6 @@ mod tests {
             SourceFormat::Gridfm,
             SourceFormat::PypsaCsv,
             SourceFormat::PowerWorldBinary,
-            SourceFormat::Pslf,
         ] {
             assert_eq!(target_format_from_name(&format!("{sf:?}")), None);
         }

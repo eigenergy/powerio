@@ -17,12 +17,19 @@ use std::path::{Path, PathBuf};
 
 use powerio::{
     Network, TargetFormat, parse_egret_json, parse_matpower_file, parse_powermodels_json,
-    parse_powerworld, parse_psse, write_as, write_egret_json, write_powermodels_json,
-    write_powerworld, write_psse,
+    parse_powerworld, parse_pslf, parse_psse, write_as, write_egret_json, write_powermodels_json,
+    write_powerworld, write_pslf, write_psse, write_psse_rev,
 };
 
 mod common;
 use common::json_approx_eq;
+
+fn write_psse34(n: &Network) -> String {
+    write_psse_rev(n, 34).text
+}
+fn write_psse35(n: &Network) -> String {
+    write_psse_rev(n, 35).text
+}
 
 fn data(name: &str) -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -81,8 +88,20 @@ fn roundtrippable() -> Vec<Roundtrippable> {
         },
         Roundtrippable {
             name: "PSS/E .raw",
-            format: TargetFormat::Psse,
+            format: TargetFormat::Psse { rev: 33 },
             write: |n| write_psse(n).text,
+            read: |s| parse_psse(s).unwrap(),
+        },
+        Roundtrippable {
+            name: "PSS/E .raw v34",
+            format: TargetFormat::Psse { rev: 34 },
+            write: write_psse34,
+            read: |s| parse_psse(s).unwrap(),
+        },
+        Roundtrippable {
+            name: "PSS/E .raw v35",
+            format: TargetFormat::Psse { rev: 35 },
+            write: write_psse35,
             read: |s| parse_psse(s).unwrap(),
         },
         Roundtrippable {
@@ -96,6 +115,12 @@ fn roundtrippable() -> Vec<Roundtrippable> {
             format: TargetFormat::EgretJson,
             write: |n| write_egret_json(n).text,
             read: |s| parse_egret_json(s).unwrap(),
+        },
+        Roundtrippable {
+            name: "PSLF .epc",
+            format: TargetFormat::Pslf,
+            write: |n| write_pslf(n).text,
+            read: |s| parse_pslf(s).unwrap(),
         },
     ]
 }

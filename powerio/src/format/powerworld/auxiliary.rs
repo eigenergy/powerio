@@ -597,12 +597,20 @@ fn write_object(s: &mut String, d: &AuxObject) {
 
 /// Write one value, quoting when the bare token would not survive a re-read:
 /// empty, embedded whitespace or comma, or a `//` that would read as a comment.
+/// An embedded `"` is replaced with a space before quoting: the tokenizer toggles
+/// on `"` with no un-escaping, so a literal quote would close the field early and
+/// shift every later column.
 fn push_value(s: &mut String, v: &str) {
-    let needs_quotes =
-        v.is_empty() || v.contains(char::is_whitespace) || v.contains(',') || v.contains("//");
+    let needs_quotes = v.is_empty()
+        || v.contains(char::is_whitespace)
+        || v.contains(',')
+        || v.contains("//")
+        || v.contains('"');
     if needs_quotes {
         s.push('"');
-        s.push_str(v);
+        for ch in v.chars() {
+            s.push(if ch == '"' { ' ' } else { ch });
+        }
         s.push('"');
     } else {
         s.push_str(v);

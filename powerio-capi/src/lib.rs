@@ -1395,8 +1395,9 @@ mpc.branch = [
 
     #[test]
     fn convert_emits_warning_into_buffer() {
-        // t_case9_dcline carries an HVDC dcline PSS/E can't represent; the drop
-        // must reach the caller's warning buffer, not vanish.
+        // t_case9_dcline carries an HVDC dcline. PSS/E writes it as two-terminal DC
+        // but defaults the converter detail; that fidelity note must reach the
+        // caller's warning buffer, not vanish.
         let path = data_path("t_case9_dcline.m");
         let to = CString::new("psse").unwrap();
         let mut warn = [0 as c_char; 512];
@@ -1414,8 +1415,8 @@ mpc.branch = [
             assert!(!s.is_null());
             let w = CStr::from_ptr(warn.as_ptr()).to_str().unwrap();
             assert!(
-                w.contains("dcline"),
-                "expected an HVDC/dcline warning, got {w:?}"
+                w.contains("converter detail"),
+                "expected an HVDC converter-detail warning, got {w:?}"
             );
             pio_string_free(s);
         }

@@ -98,18 +98,22 @@ PyPSA readers itemize what they ignore in `Parsed::warnings` (`read_warnings`
 in Python), naming the table and counting the affected rows.
 `convert_file`/`convert_str` fold the read warnings into `Conversion::warnings`.
 
-- **PSS/E** reads revision 33. 3-winding transformers and two-terminal DC are
-  skipped. A switched shunt is read as a fixed shunt at its steady-state
-  susceptance `BINIT` (the same reduction PowerModels makes); block and step
-  control is not modeled. Impedances are assumed on the system base (`CZ = CW = 1`).
+- **PSS/E** reads revisions 33, 34, and 35. 3-winding transformers are kept as
+  typed records and star-lowered into `Y_bus`/connectivity by the indexed view;
+  two-terminal DC lines map to the neutral HVDC model. A switched shunt keeps its
+  steady-state susceptance `BINIT` as the shunt `b` and carries its mode, voltage
+  band, regulated bus, and step blocks. A 2-winding transformer's magnetizing
+  susceptance round-trips through `MAG2` (`CM = 1`). Impedances are assumed on the
+  system base (`CZ = CW = 1`).
 - **PowerWorld** `.aux` carries no system base, so the reader defaults to 100 MVA.
   No third-party `.aux` reader exists, so that writer is validated by powerio's own
   read back plus a PowerModels JSON bridge.
-- **PSLF** `.epc` is read only. The reader maps the static power flow core:
-  buses, lines, two winding transformers, generators, loads, fixed shunts,
-  controlled shunts at initial `g/b`, and limited two terminal DC records.
-  Unsupported sections stay in the retained source text and emit warnings.
-  Three winding transformers are reported rather than reduced.
+- **PSLF** `.epc` is read and written. The reader maps the static power flow core:
+  buses, lines, two- and three-winding transformers, generators, loads, fixed
+  shunts, controlled shunts at initial `g/b`, and limited two-terminal DC records.
+  Three-winding transformers are kept as typed records and star-lowered into
+  `Y_bus`/connectivity by the indexed view. Unsupported sections stay in the
+  retained source text and emit warnings.
 - **MATPOWER** canonical output (for a case that did not originate as MATPOWER)
   omits dcline; the byte exact echo path keeps it when the case was read from
   MATPOWER. Storage is written as an `mpc.storage` block.

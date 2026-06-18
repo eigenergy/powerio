@@ -1,21 +1,30 @@
-//! Read legacy GE PSLF `.epc` power flow cases.
+//! Read and write legacy GE PSLF `.epc` power flow cases.
 //!
 //! EPC files contain named data sections with colon separated record bodies.
 //! The reader keeps raw physical lines plus token lists on both sides of each
 //! colon, then maps the static power flow core into [`Network`]. Records outside
-//! that model stay in retained source text and read warnings.
+//! that model stay in retained source text and read warnings. [`write_pslf`]
+//! inverts the reader's column layout for the cross-format write path (same
+//! format writes echo the retained source).
 
-use std::collections::{BTreeMap, HashMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
+use std::fmt::Write as _;
 use std::sync::Arc;
 
 use serde_json::{Number, Value};
 
+use super::{Conversion, sanitize_quoted};
 use crate::network::{
-    Branch, Bus, BusId, BusType, Extras, Generator, Hvdc, Load, Network, Shunt, SourceFormat,
+    Branch, Bus, BusId, BusType, Extras, Generator, Hvdc, Impedance, Load, Network, Shunt,
+    SourceFormat, Transformer3W, Winding,
 };
 use crate::{Error, Result};
 
 const FMT: &str = "PSLF .epc";
+
+/// The double quote delimits an EPC name token, and the reader's tokenizer
+/// toggles on it with no un-escaping, so an embedded quote would shift the record.
+const NAME_FORBIDDEN: &[char] = &['"'];
 
 /// Parse a PSLF `.epc` case into a [`Network`].
 ///
@@ -77,10 +86,19 @@ pub(crate) fn parse_pslf_source(
         ));
     }
 
+    let mut transformers_3w = Vec::new();
     for rec in doc.records("transformer data") {
-        if let Some(branch) = read_transformer(rec, warnings)? {
-            branches.push(branch);
+        match read_transformer(rec)? {
+            TransformerRecord::TwoWinding(branch) => branches.push(branch),
+            TransformerRecord::ThreeWinding(t) => transformers_3w.push(t),
         }
+    }
+    if !transformers_3w.is_empty() {
+        warnings.push(
+            "PSLF 3-winding transformer(s) mapped with the primary winding ratio/ratings; \
+             secondary/tertiary winding ratios default to nominal"
+                .into(),
+        );
     }
 
     let mut generators = Vec::new();
@@ -96,6 +114,7 @@ pub(crate) fn parse_pslf_source(
     let net = Network {
         name,
         base_mva,
+        base_frequency: crate::network::DEFAULT_BASE_FREQUENCY,
         buses,
         loads,
         shunts,
@@ -103,6 +122,9 @@ pub(crate) fn parse_pslf_source(
         generators,
         storage: Vec::new(),
         hvdc,
+        transformers_3w,
+        areas: Vec::new(),
+        solver: None,
         source_format: SourceFormat::Pslf,
         source: Some(source),
     };
@@ -427,6 +449,8 @@ fn read_bus(rec: &Record) -> Result<Bus> {
         base_kv: num_at(&rec.lhs, 2, 0.0, "bus nominal kV", rec)?,
         vmax: num_at(&rec.rhs, 6, 1.1, "bus vmax", rec)?,
         vmin: num_at(&rec.rhs, 7, 0.9, "bus vmin", rec)?,
+        evhi: None,
+        evlo: None,
         area: id_at(&rec.rhs, 4, 1, "bus area", rec)?,
         zone: id_at(&rec.rhs, 5, 1, "bus zone", rec)?,
         name,
@@ -467,15 +491,29 @@ fn read_branch(rec: &Record) -> Result<Branch> {
         in_service: on_at(&rec.rhs, 0, true, "branch status", rec)?,
         angmin: -360.0,
         angmax: 360.0,
+        control: None,
         extras,
     })
 }
 
-/// Map one two winding `transformer data` record into a [`Branch`].
+/// One mapped `transformer data` record: a 2-winding becomes a [`Branch`], a
+/// 3-winding becomes a [`Transformer3W`].
+// The 3-winding variant is the larger; boxing it to equalize the variants would
+// add an allocation per record for no real benefit at this size.
+#[allow(clippy::large_enum_variant)]
+enum TransformerRecord {
+    TwoWinding(Branch),
+    ThreeWinding(Transformer3W),
+}
+
+/// Map one `transformer data` record. A tertiary winding (a nonzero tertiary bus
+/// or any primary-tertiary / secondary-tertiary impedance) makes it a
+/// [`Transformer3W`]; otherwise it is a two-winding [`Branch`].
 ///
-/// Three winding records return `None` with a read warning because `Network`
-/// has no neutral representation for them.
-fn read_transformer(rec: &Record, warnings: &mut Vec<String>) -> Result<Option<Branch>> {
+/// The `.epc` record carries the three pairwise impedances and the primary
+/// winding's ratio/ratings; the secondary and tertiary winding ratios are not
+/// represented at these column positions, so they default to nominal.
+fn read_transformer(rec: &Record) -> Result<TransformerRecord> {
     let rhs1 = line_rhs(rec, 0);
     let line2 = line_tokens(rec, 1);
     let tertiary = id_at(&rhs1, 9, 0, "transformer tertiary bus", rec)?;
@@ -483,40 +521,90 @@ fn read_transformer(rec: &Record, warnings: &mut Vec<String>) -> Result<Option<B
     let pt_x = num_at(&rhs1, 18, 0.0, "transformer pt_x", rec)?;
     let ts_r = num_at(&rhs1, 19, 0.0, "transformer ts_r", rec)?;
     let ts_x = num_at(&rhs1, 20, 0.0, "transformer ts_x", rec)?;
+    let from = BusId(req_id(&rec.lhs, 0, "transformer from bus", rec)?);
+    let to = BusId(req_id(&rec.lhs, 3, "transformer to bus", rec)?);
+    let r = num_at(&rhs1, 15, 0.0, "transformer r", rec)?;
+    let x = num_at(&rhs1, 16, 0.0, "transformer x", rec)?;
+    let tbase = num_at(&rhs1, 14, 0.0, "transformer base", rec)?;
+    let tap = num_at(&line2, 16, 1.0, "transformer tap", rec)?;
+    let shift = num_at(&line2, 10, 0.0, "transformer shift", rec)?;
+    let rate_a = num_at(&line2, 6, 0.0, "transformer rate1", rec)?;
+    let rate_b = num_at(&line2, 7, 0.0, "transformer rate2", rec)?;
+    let rate_c = num_at(&line2, 8, 0.0, "transformer rate3", rec)?;
+    let in_service = on_at(&rhs1, 0, true, "transformer status", rec)?;
+    let circuit = rec.lhs.get(6).cloned();
+    let name = rec
+        .lhs
+        .get(8)
+        .filter(|n| !n.trim().is_empty())
+        .map(|n| n.trim().to_string());
+
     if tertiary != 0 || pt_r != 0.0 || pt_x != 0.0 || ts_r != 0.0 || ts_x != 0.0 {
-        // A three winding transformer has no neutral Network equivalent. Do
-        // not invent a dummy bus or collapse it into pairwise branches; keeping
-        // the raw record and warning is safer for conversion callers.
-        warnings.push(format!(
-            "transformer record at line {} is three winding; no neutral Network equivalent",
-            rec.line_no
-        ));
-        return Ok(None);
+        let mut extras = extras(rec, "transformer data", 8, 21);
+        if let Some(c) = circuit {
+            extras.insert("pslf_circuit".into(), Value::String(c));
+        }
+        let nominal = |bus| Winding {
+            bus,
+            tap: 1.0,
+            shift: 0.0,
+            nominal_kv: 0.0,
+            rate_a: 0.0,
+            rate_b: 0.0,
+            rate_c: 0.0,
+        };
+        let imp = |r, x| Impedance {
+            r,
+            x,
+            base_mva: tbase,
+        };
+        let t3 = Transformer3W {
+            windings: [
+                Winding {
+                    bus: from,
+                    tap: if tap == 0.0 { 1.0 } else { tap },
+                    shift,
+                    nominal_kv: 0.0,
+                    rate_a,
+                    rate_b,
+                    rate_c,
+                },
+                nominal(to),
+                nominal(BusId(tertiary)),
+            ],
+            // z12 = primary-secondary, z23 = secondary-tertiary, z31 = tertiary-primary.
+            z: [imp(r, x), imp(ts_r, ts_x), imp(pt_r, pt_x)],
+            star_vm: 1.0,
+            star_va: 0.0,
+            mag_g: 0.0,
+            mag_b: 0.0,
+            in_service,
+            name,
+            extras,
+        };
+        return Ok(TransformerRecord::ThreeWinding(t3));
     }
 
-    let tap = num_at(&line2, 16, 1.0, "transformer tap", rec)?;
     let mut extras = extras(rec, "transformer data", 8, 21);
-    if let Some(circuit) = rec.lhs.get(6) {
-        extras.insert("pslf_circuit".into(), Value::String(circuit.clone()));
+    if let Some(c) = circuit {
+        extras.insert("pslf_circuit".into(), Value::String(c));
     }
-    extras.insert(
-        "pslf_tbase".into(),
-        number_value(num_at(&rhs1, 14, 0.0, "transformer base", rec)?),
-    );
-    Ok(Some(Branch {
-        from: BusId(req_id(&rec.lhs, 0, "transformer from bus", rec)?),
-        to: BusId(req_id(&rec.lhs, 3, "transformer to bus", rec)?),
-        r: num_at(&rhs1, 15, 0.0, "transformer r", rec)?,
-        x: num_at(&rhs1, 16, 0.0, "transformer x", rec)?,
+    extras.insert("pslf_tbase".into(), number_value(tbase));
+    Ok(TransformerRecord::TwoWinding(Branch {
+        from,
+        to,
+        r,
+        x,
         b: 0.0,
-        rate_a: num_at(&line2, 6, 0.0, "transformer rate1", rec)?,
-        rate_b: num_at(&line2, 7, 0.0, "transformer rate2", rec)?,
-        rate_c: num_at(&line2, 8, 0.0, "transformer rate3", rec)?,
+        rate_a,
+        rate_b,
+        rate_c,
         tap: if tap == 0.0 { 1.0 } else { tap },
-        shift: num_at(&line2, 10, 0.0, "transformer shift", rec)?,
-        in_service: on_at(&rhs1, 0, true, "transformer status", rec)?,
+        shift,
+        in_service,
         angmin: -360.0,
         angmax: 360.0,
+        control: None,
         extras,
     }))
 }
@@ -540,6 +628,7 @@ fn read_generator(rec: &Record, bus_vm: &HashMap<BusId, f64>) -> Result<Generato
         in_service: on_at(&rec.rhs, 0, true, "generator status", rec)?,
         cost: None,
         caps: Default::default(),
+        regulated_bus: None,
     })
 }
 
@@ -595,6 +684,7 @@ fn read_shunt(rec: &Record, base_mva: f64) -> Result<Shunt> {
         g: g_pu * base_mva,
         b: b_pu * base_mva,
         in_service: on_at(&rec.rhs, 0, true, "shunt status", rec)?,
+        control: None,
         extras,
     })
 }
@@ -626,6 +716,7 @@ fn read_svd(
         g: g_pu * base_mva,
         b: b_pu * base_mva,
         in_service: on_at(&rec.rhs, 0, true, "svd status", rec)?,
+        control: None,
         extras,
     })
 }
@@ -882,6 +973,515 @@ fn bad_field(field: &str, i: usize, tok: &str, rec: &Record) -> Error {
             "{field} field {i} value {tok:?} is invalid at line {}",
             rec.line_no
         ),
+    }
+}
+
+// ---- Writer -----------------------------------------------------------------
+
+/// Per-bus identity the EPC `lhs` carries on every element record.
+#[derive(Clone, Copy)]
+struct BusRef<'a> {
+    name: &'a str,
+    base_kv: f64,
+    area: usize,
+    zone: usize,
+}
+
+/// Serialize `net` to PSLF `.epc` text.
+///
+/// The inverse of the reader's column layout: it emits the same colon separated
+/// `lhs : rhs` records, so a `.epc` -> [`Network`] -> `.epc` round trip preserves
+/// the power flow core. Where a PSLF read stashed a field the neutral model does
+/// not name under a `pslf_*` extras key (the ZIP load split, the per unit shunt
+/// G/B, the branch circuit id, the transformer winding base), the writer replays
+/// it; otherwise it synthesizes the column. Same-format byte-exact echo rides the
+/// retained source (see [`crate::write_as`]); this is the cross-format path and
+/// the fallback when the source text was dropped (e.g. after a JSON round trip).
+#[must_use]
+// A flat serializer: one stanza per EPC section; splitting it would add
+// indirection without clarity.
+#[expect(clippy::too_many_lines)]
+pub fn write_pslf(net: &Network) -> Conversion {
+    let mut warnings = Vec::new();
+    let mut nonfinite = false;
+    let mut sanitized_names = 0usize;
+    let mut s = String::new();
+
+    let mut num = |x: f64| -> String {
+        if x.is_finite() {
+            format!("{x}")
+        } else {
+            nonfinite = true;
+            let sentinel = if x > 0.0 {
+                1.0e10
+            } else if x < 0.0 {
+                -1.0e10
+            } else {
+                0.0
+            };
+            format!("{sentinel}")
+        }
+    };
+
+    // Bus identity for the lhs of every downstream record, keyed by source id.
+    let bus_refs: HashMap<BusId, BusRef> = net
+        .buses
+        .iter()
+        .map(|b| {
+            (
+                b.id,
+                BusRef {
+                    name: b.name.as_deref().unwrap_or(""),
+                    base_kv: b.base_kv,
+                    area: b.area,
+                    zone: b.zone,
+                },
+            )
+        })
+        .collect();
+    let bus_ref = |id: BusId| -> BusRef {
+        bus_refs.get(&id).copied().unwrap_or(BusRef {
+            name: "",
+            base_kv: 0.0,
+            area: 1,
+            zone: 1,
+        })
+    };
+    // A quoted, sanitized name token; counts substitutions for the warning.
+    let mut name_tok = |name: &str| -> String {
+        let clean = sanitize_quoted(name, NAME_FORBIDDEN, ' ');
+        if matches!(clean, std::borrow::Cow::Owned(_)) {
+            sanitized_names += 1;
+        }
+        format!("\"{clean}\"")
+    };
+
+    // ---- header blocks ----
+    let _ = writeln!(s, "title");
+    let _ = writeln!(s, "{}", net.name);
+    let _ = writeln!(s, "!");
+    let _ = writeln!(s, "comments");
+    let _ = writeln!(s, "powerio export");
+    let _ = writeln!(s, "!");
+    let _ = writeln!(s, "solution parameters");
+    let _ = writeln!(s, "sbase {}", num(net.base_mva));
+    let _ = writeln!(s, "!");
+
+    // ---- bus data ----
+    let _ = writeln!(
+        s,
+        "bus data [{}] ty vsched volt angle ar zone vmax vmin",
+        net.buses.len()
+    );
+    for b in &net.buses {
+        let _ = writeln!(
+            s,
+            "{} {} {} : {} {} {} {} {} {} {} {}",
+            b.id,
+            name_tok(b.name.as_deref().unwrap_or("")),
+            num(b.base_kv),
+            pslf_type(b.kind),
+            num(b.vm),
+            num(b.vm),
+            num(b.va),
+            b.area,
+            b.zone,
+            num(b.vmax),
+            num(b.vmin),
+        );
+    }
+
+    // ---- load data ----
+    if !net.loads.is_empty() {
+        let _ = writeln!(
+            s,
+            "load data [{}] id long_id st mw mvar mw_i mvar_i mw_z mvar_z ar zone",
+            net.loads.len()
+        );
+        for l in &net.loads {
+            let r = bus_ref(l.bus);
+            // Replay the ZIP split a PSLF read preserved; otherwise put the whole
+            // demand in the constant-power column.
+            let mw = extra_f64(&l.extras, "pslf_mw").unwrap_or(l.p);
+            let mvar = extra_f64(&l.extras, "pslf_mvar").unwrap_or(l.q);
+            let mw_i = extra_f64(&l.extras, "pslf_mw_i").unwrap_or(0.0);
+            let mvar_i = extra_f64(&l.extras, "pslf_mvar_i").unwrap_or(0.0);
+            let mw_z = extra_f64(&l.extras, "pslf_mw_z").unwrap_or(0.0);
+            let mvar_z = extra_f64(&l.extras, "pslf_mvar_z").unwrap_or(0.0);
+            let _ = writeln!(
+                s,
+                "{} {} {} \"1\" \"load\" : {} {} {} {} {} {} {} {} {}",
+                l.bus,
+                name_tok(r.name),
+                num(r.base_kv),
+                i32::from(l.in_service),
+                num(mw),
+                num(mvar),
+                num(mw_i),
+                num(mvar_i),
+                num(mw_z),
+                num(mvar_z),
+                r.area,
+                r.zone,
+            );
+        }
+    }
+
+    // ---- shunt data ----
+    if !net.shunts.is_empty() {
+        let _ = writeln!(
+            s,
+            "shunt data [{}] id ck se long_id st ar zone pu_mw pu_mvar",
+            net.shunts.len()
+        );
+        for sh in &net.shunts {
+            let r = bus_ref(sh.bus);
+            // PSLF stores shunt G/B per unit on the system base; replay the read
+            // values when present, else divide the MW/MVAr-at-1pu back out.
+            let pu_mw = extra_f64(&sh.extras, "pslf_pu_mw")
+                .or_else(|| extra_f64(&sh.extras, "pslf_pu_g"))
+                .unwrap_or_else(|| safe_div(sh.g, net.base_mva));
+            let pu_mvar = extra_f64(&sh.extras, "pslf_pu_mvar")
+                .or_else(|| extra_f64(&sh.extras, "pslf_pu_b"))
+                .unwrap_or_else(|| safe_div(sh.b, net.base_mva));
+            let _ = writeln!(
+                s,
+                "{} {} {} \"1\" : {} {} {} {} {}",
+                sh.bus,
+                name_tok(r.name),
+                num(r.base_kv),
+                i32::from(sh.in_service),
+                r.area,
+                r.zone,
+                num(pu_mw),
+                num(pu_mvar),
+            );
+        }
+    }
+
+    // ---- branch data (non-transformer) ----
+    let lines: Vec<&Branch> = net
+        .branches
+        .iter()
+        .filter(|b| !b.is_transformer())
+        .collect();
+    if !lines.is_empty() {
+        let _ = writeln!(
+            s,
+            "branch data [{}] ck se long_id st resist react charge rate1 rate2 rate3",
+            lines.len()
+        );
+        // Parallel branches between the same bus pair get distinct circuit ids; a
+        // captured `pslf_circuit` (from a PSLF source) wins, else positional.
+        let mut branch_ids: BTreeMap<(BusId, BusId), BTreeSet<String>> = BTreeMap::new();
+        for br in lines {
+            let f = bus_ref(br.from);
+            let t = bus_ref(br.to);
+            let ck = super::allocate_circuit_id(
+                br.extras.get("pslf_circuit").and_then(Value::as_str),
+                (br.from, br.to),
+                &mut branch_ids,
+            );
+            let _ = writeln!(
+                s,
+                "{} {} {} {} {} {} \"{ck}\" 1 \"line\" : {} {} {} {} {} {} {}",
+                br.from,
+                name_tok(f.name),
+                num(f.base_kv),
+                br.to,
+                name_tok(t.name),
+                num(t.base_kv),
+                i32::from(br.in_service),
+                num(br.r),
+                num(br.x),
+                num(br.b),
+                num(br.rate_a),
+                num(br.rate_b),
+                num(br.rate_c),
+            );
+        }
+    }
+
+    // ---- transformer data (2- and 3-winding, one section) ----
+    let xfmrs: Vec<&Branch> = net.branches.iter().filter(|b| b.is_transformer()).collect();
+    let n_xfmr = xfmrs.len() + net.transformers_3w.len();
+    if n_xfmr > 0 {
+        let _ = writeln!(s, "transformer data [{n_xfmr}]");
+        for br in xfmrs {
+            let f = bus_ref(br.from);
+            let t = bus_ref(br.to);
+            let tbase = extra_f64(&br.extras, "pslf_tbase").unwrap_or(net.base_mva);
+            // First physical line: identity lhs, then the 21-field rhs the reader
+            // indexes (status 0, tertiary 9 = 0, base 14, R 15, X 16, and the
+            // pt/ts tertiary impedances 17-20 = 0 to mark a 2-winding unit). The
+            // trailing `/` continues the record onto the second line.
+            let mut rhs1 = vec!["0".to_string(); 21];
+            rhs1[0] = i32::from(br.in_service).to_string();
+            rhs1[14] = num(tbase);
+            rhs1[15] = num(br.r);
+            rhs1[16] = num(br.x);
+            let _ = writeln!(
+                s,
+                "{} {} {} {} {} {} {} 1 \"xfmr\" : {} /",
+                br.from,
+                name_tok(f.name),
+                num(f.base_kv),
+                br.to,
+                name_tok(t.name),
+                num(t.base_kv),
+                circuit_tok(&br.extras),
+                rhs1.join(" "),
+            );
+            // Second physical line: ratings at 6-8, phase shift at 10, tap at 16.
+            let mut line2 = vec!["0".to_string(); 17];
+            line2[6] = num(br.rate_a);
+            line2[7] = num(br.rate_b);
+            line2[8] = num(br.rate_c);
+            line2[10] = num(br.shift);
+            line2[16] = num(br.effective_tap());
+            let _ = writeln!(s, "{}", line2.join(" "));
+        }
+        for tr in &net.transformers_3w {
+            let p = bus_ref(tr.windings[0].bus);
+            let sec = bus_ref(tr.windings[1].bus);
+            let [z12, z23, z31] = tr.z;
+            // The tertiary bus rides field 9; the pairwise impedances fill the
+            // primary-secondary slot (15-16) and the primary-tertiary (17-18) and
+            // secondary-tertiary (19-20) slots the reader keys off to detect a 3W.
+            let mut rhs1 = vec!["0".to_string(); 21];
+            rhs1[0] = i32::from(tr.in_service).to_string();
+            rhs1[9] = tr.windings[2].bus.to_string();
+            rhs1[14] = num(z12.base_mva);
+            rhs1[15] = num(z12.r);
+            rhs1[16] = num(z12.x);
+            rhs1[17] = num(z31.r);
+            rhs1[18] = num(z31.x);
+            rhs1[19] = num(z23.r);
+            rhs1[20] = num(z23.x);
+            let _ = writeln!(
+                s,
+                "{} {} {} {} {} {} {} 1 \"xf3\" : {} /",
+                tr.windings[0].bus,
+                name_tok(p.name),
+                num(p.base_kv),
+                tr.windings[1].bus,
+                name_tok(sec.name),
+                num(sec.base_kv),
+                circuit_tok(&tr.extras),
+                rhs1.join(" "),
+            );
+            // Only the primary winding's ratio/ratings have a column here.
+            let mut line2 = vec!["0".to_string(); 17];
+            line2[6] = num(tr.windings[0].rate_a);
+            line2[7] = num(tr.windings[0].rate_b);
+            line2[8] = num(tr.windings[0].rate_c);
+            line2[10] = num(tr.windings[0].shift);
+            line2[16] = num(tr.windings[0].tap);
+            let _ = writeln!(s, "{}", line2.join(" "));
+        }
+    }
+
+    // ---- generator data ----
+    if !net.generators.is_empty() {
+        let _ = writeln!(
+            s,
+            "generator data [{}] id long_id st no reg_name reg_kv prf qrf ar zone \
+             pgen pmax pmin qgen qmax qmin mbase",
+            net.generators.len()
+        );
+        for g in &net.generators {
+            let r = bus_ref(g.bus);
+            // rhs indices the reader reads: status 0, pgen 8, pmax 9, pmin 10,
+            // qgen 11, qmax 12, qmin 13, mbase 14. The reader takes vg from the bus
+            // voltage, so it is not carried here.
+            let _ = writeln!(
+                s,
+                "{} {} \"1\" \"gen\" : {} 1 0 0 1 1 {} {} {} {} {} {} {} {} {}",
+                g.bus,
+                name_tok(r.name),
+                i32::from(g.in_service),
+                r.area,
+                r.zone,
+                num(g.pg),
+                num(g.pmax),
+                num(g.pmin),
+                num(g.qg),
+                num(g.qmax),
+                num(g.qmin),
+                num(g.mbase),
+            );
+        }
+    }
+
+    // ---- dc converter + dc line data (two-terminal HVDC) ----
+    // EPC keeps the AC converter rows separate from the DC line that joins them,
+    // keyed by a DC bus number. Synthesize a distinct DC bus per converter (these
+    // are internal join keys, not AC buses) and emit the from/to converter rows
+    // plus the line row that read_dc_converters/read_dc_lines rejoin into one
+    // `Network::Hvdc`.
+    if !net.hvdc.is_empty() {
+        let _ = writeln!(
+            s,
+            "dc converter data [{}] id name kv dc_bus",
+            net.hvdc.len() * 2
+        );
+        for (k, d) in net.hvdc.iter().enumerate() {
+            for (ac, dc_bus, p, q) in [
+                (d.from, 2 * k + 1, d.pf, d.qf),
+                (d.to, 2 * k + 2, d.pt, d.qt),
+            ] {
+                let r = bus_ref(ac);
+                // Line 1 carries the AC bus (lhs 0), the DC bus (lhs 3), and the
+                // status (rhs 0); the trailing `/` continues onto line 2, which
+                // carries p (token 2) and q (token 3).
+                let _ = writeln!(
+                    s,
+                    "{} {} {} {} : {} /",
+                    ac,
+                    name_tok(r.name),
+                    num(r.base_kv),
+                    dc_bus,
+                    i32::from(d.in_service),
+                );
+                let _ = writeln!(s, "0 0 {} {}", num(p), num(q));
+            }
+        }
+        let _ = writeln!(
+            s,
+            "dc line data [{}] from name kv to st rate1",
+            net.hvdc.len()
+        );
+        for (k, d) in net.hvdc.iter().enumerate() {
+            // The reader reads the status (rhs 0) and rate1 (rhs 6); rate1 sets the
+            // power limit, falling back to |p| when nonpositive, so emit pmax.
+            let _ = writeln!(
+                s,
+                "{} \"dc\" 0 {} : {} 0 0 0 0 0 {}",
+                2 * k + 1,
+                2 * k + 2,
+                i32::from(d.in_service),
+                num(d.pmax),
+            );
+        }
+    }
+
+    let _ = writeln!(s, "end");
+
+    // ---- fidelity warnings ----
+    let asymmetric_hvdc = net
+        .hvdc
+        .iter()
+        .filter(|d| (d.pmin + d.pmax).abs() > 1e-9)
+        .count();
+    if asymmetric_hvdc > 0 {
+        warnings.push(format!(
+            "{asymmetric_hvdc} HVDC line(s) have asymmetric power limits (pmin != -pmax); \
+             the PSLF .epc dc record carries only rate1 (= pmax), so pmin reads back as -pmax"
+        ));
+    }
+    if !net.storage.is_empty() {
+        warnings.push(format!(
+            "{} storage unit(s) dropped: PSLF .epc has no storage record",
+            net.storage.len()
+        ));
+    }
+    if net.generators.iter().any(|g| g.cost.is_some()) {
+        warnings.push("generator cost curves dropped: PSLF .epc carries no cost data".into());
+    }
+    // The generator record this writer emits regulates the unit's own terminal, so
+    // a generator pointing at a remote regulated bus loses that target.
+    let dropped_reg = net
+        .generators
+        .iter()
+        .filter(|g| g.regulated_bus.is_some())
+        .count();
+    if dropped_reg > 0 {
+        warnings.push(format!(
+            "{dropped_reg} generator(s) lost their remote regulated bus: the PSLF .epc generator \
+             record this writer emits controls the unit's own terminal"
+        ));
+    }
+    // A 3-winding record here carries only the primary winding's ratio/ratings, so
+    // report any non-nominal secondary/tertiary winding as a fidelity loss.
+    let drops_winding_detail = net.transformers_3w.iter().any(|t| {
+        t.windings[1..]
+            .iter()
+            .any(|w| (w.tap - 1.0).abs() > 1e-9 || w.rate_a.abs() > 1e-9)
+    });
+    if drops_winding_detail {
+        warnings.push(
+            "PSLF 3-winding export carries the primary winding ratio/ratings only; \
+             secondary/tertiary winding ratios/ratings dropped"
+                .into(),
+        );
+    }
+    // The `.epc` transformer record this writer emits has no regulating-control
+    // columns (mode/limits/regulated bus), so a Branch carrying control loses it.
+    let dropped_control = net.branches.iter().filter(|b| b.control.is_some()).count();
+    if dropped_control > 0 {
+        warnings.push(format!(
+            "{dropped_control} transformer(s) lost their regulating control (mode/tap limits/\
+             regulated bus): the PSLF .epc transformer record carries no control columns"
+        ));
+    }
+    // Switched shunts write as fixed `.epc` shunts (G/B); the switching control
+    // has no column in the shunt record this writer emits.
+    let dropped_sw = net.shunts.iter().filter(|s| s.control.is_some()).count();
+    if dropped_sw > 0 {
+        warnings.push(format!(
+            "{dropped_sw} switched shunt(s) written as fixed: the PSLF .epc shunt record this \
+             writer emits has no switching-control columns (mode/band/step blocks)"
+        ));
+    }
+    if sanitized_names > 0 {
+        warnings.push(format!(
+            "{sanitized_names} name(s) contained a double quote that would corrupt an EPC \
+             record; replaced with spaces"
+        ));
+    }
+    if nonfinite {
+        warnings.push("non-finite values written as ±1e10 sentinels (PSLF has no Inf/NaN)".into());
+    }
+
+    Conversion { text: s, warnings }
+}
+
+/// Neutral bus kind -> PSLF bus type code (inverse of [`pslf_bus_type`]).
+fn pslf_type(kind: BusType) -> u8 {
+    match kind {
+        BusType::Ref => 0,
+        BusType::Pv => 2,
+        BusType::Isolated => 4,
+        BusType::Pq => 1,
+    }
+}
+
+/// The branch/transformer circuit id token, replayed from `pslf_circuit` when a
+/// PSLF read kept it, else `"1"`.
+fn circuit_tok(extras: &Extras) -> String {
+    let ck = extras
+        .get("pslf_circuit")
+        .and_then(Value::as_str)
+        .unwrap_or("1");
+    format!("\"{ck}\"")
+}
+
+/// A numeric `pslf_*` extra, if present and finite. A non-finite value yields
+/// `None` so the caller falls back to its synthesized default rather than
+/// replaying a `NaN`/`±Inf` into the record.
+fn extra_f64(extras: &Extras, key: &str) -> Option<f64> {
+    extras
+        .get(key)
+        .and_then(Value::as_f64)
+        .filter(|v| v.is_finite())
+}
+
+/// `a / b`, or 0 when `b` is not a usable divisor (the identity for an absent base).
+fn safe_div(a: f64, b: f64) -> f64 {
+    if b.is_finite() && b != 0.0 {
+        a / b
+    } else {
+        0.0
     }
 }
 

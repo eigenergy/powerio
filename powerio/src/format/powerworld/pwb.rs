@@ -460,6 +460,7 @@ fn checked_network(
     let net = Network {
         name: name_hint.unwrap_or("case").to_string(),
         base_mva: MVA_BASE,
+        base_frequency: crate::network::DEFAULT_BASE_FREQUENCY,
         buses,
         loads,
         shunts,
@@ -467,6 +468,9 @@ fn checked_network(
         generators,
         storage: Vec::new(),
         hvdc: Vec::new(),
+        transformers_3w: Vec::new(),
+        areas: Vec::new(),
+        solver: None,
         source_format: SourceFormat::PowerWorldBinary,
         source: None,
     };
@@ -1021,6 +1025,8 @@ fn read_bus_head(b: &[u8], at: usize) -> Probe<(BusHead, usize)> {
         base_kv: kv,
         vmax: 1.1,
         vmin: 0.9,
+        evhi: None,
+        evlo: None,
         area,
         zone,
         name: Some(String::from_utf8_lossy(name).into_owned()),
@@ -1057,6 +1063,7 @@ fn bus_tail_shunt(b: &[u8], after_head: usize, bus: BusId) -> Option<Shunt> {
         g: g_pu * MVA_BASE,
         b: b_pu * MVA_BASE,
         in_service: true,
+        control: None,
         extras,
     })
 }
@@ -1286,6 +1293,7 @@ fn gen_from_block(bus: BusId, v: &[f64; 8], in_service: bool) -> Generator {
         in_service,
         cost: None,
         caps: Default::default(),
+        regulated_bus: None,
     }
 }
 
@@ -1412,6 +1420,7 @@ fn read_shunt(c: &mut Cur, bus: BusId, id: &[u8]) -> Probe<Shunt> {
         g: 0.0,
         b: b_mvar,
         in_service: true,
+        control: None,
         extras,
     })
 }
@@ -1627,6 +1636,7 @@ fn read_standard_branch_head(
         in_service: true,
         angmin: -360.0,
         angmax: 360.0,
+        control: None,
         extras,
     };
     Ok((br, c.pos, flags))
@@ -1707,6 +1717,7 @@ fn read_step_up_transformer_head(
         in_service: true,
         angmin: -360.0,
         angmax: 360.0,
+        control: None,
         extras,
     };
     Ok((
@@ -1771,6 +1782,7 @@ mod tests {
         Network {
             name: name.to_string(),
             base_mva: MVA_BASE,
+            base_frequency: crate::network::DEFAULT_BASE_FREQUENCY,
             buses: Vec::new(),
             loads: Vec::new(),
             shunts: Vec::new(),
@@ -1778,6 +1790,9 @@ mod tests {
             generators: Vec::new(),
             storage: Vec::new(),
             hvdc: Vec::new(),
+            transformers_3w: Vec::new(),
+            areas: Vec::new(),
+            solver: None,
             source_format: SourceFormat::PowerWorldBinary,
             source: None,
         }
