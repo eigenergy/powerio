@@ -1146,6 +1146,15 @@ impl Network {
         out
     }
 
+    /// Drop the retained source text after an in-place mutation, so a later
+    /// [`write_as`](crate::write_as) to the source format re-serializes the
+    /// modified model instead of echoing the now-stale original bytes. A no-op
+    /// operation leaves the source intact, keeping the byte-exact echo for an
+    /// unmodified round trip.
+    pub(crate) fn invalidate_source(&mut self) {
+        self.source = None;
+    }
+
     /// Clamp every out-of-domain value to its repaired value (the same rules
     /// [`validate_values`](Network::validate_values) reports), returning the list
     /// of changes made. A second call returns an empty list (the values are now
@@ -1168,6 +1177,10 @@ impl Network {
             if let Some(new) = repair_vg(g.vg) {
                 g.vg = new;
             }
+        }
+        // The repairs changed the model, so the retained source no longer matches.
+        if !findings.is_empty() {
+            self.invalidate_source();
         }
         findings
     }

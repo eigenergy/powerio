@@ -318,6 +318,8 @@ impl Network {
                 into_bus.kind = fk;
             }
         }
+        // The topology changed, so the retained source text is stale.
+        self.invalidate_source();
     }
 
     /// Collapse every in-service, non-transformer branch whose series impedance
@@ -483,6 +485,8 @@ impl Network {
             extras: Extras::new(),
         });
         self.buses.retain(|b| b.id != m);
+        // The topology changed, so the retained source text is stale.
+        self.invalidate_source();
     }
 
     /// Retype to [`BusType::Isolated`] every bus with no in-service electrical
@@ -517,6 +521,10 @@ impl Network {
                 b.kind = BusType::Isolated;
                 retyped += 1;
             }
+        }
+        // Only a real retype invalidates the source; a no-op call stays lossless.
+        if retyped > 0 {
+            self.invalidate_source();
         }
         retyped
     }
@@ -962,5 +970,64 @@ mod tests {
         );
         assert_eq!(net.buses.len(), 3);
         net.validate().unwrap();
+    }
+
+    #[test]
+    fn in_place_mutations_invalidate_the_retained_source() {
+        use std::sync::Arc;
+        let retained = || Some(Arc::new("RETAINED".to_string()));
+
+        // merge_bus (via reduce_zero_impedance): a collapse drops the stale source.
+        let mut jumper = line(2, 3);
+        jumper.x = 0.0;
+        let mut net = Network::in_memory(
+            "net",
+            100.0,
+            vec![bus(1, 1, 230.0), bus(2, 1, 230.0), bus(3, 1, 230.0)],
+            vec![line(1, 2), jumper],
+        );
+        net.source = retained();
+        assert_eq!(net.reduce_zero_impedance(1e-9), 1);
+        assert!(net.source.is_none(), "a merge invalidates the source");
+
+        // A no-op reduction keeps the byte-exact echo.
+        let mut net = Network::in_memory(
+            "net",
+            100.0,
+            vec![bus(1, 1, 230.0), bus(2, 1, 230.0)],
+            vec![line(1, 2)],
+        );
+        net.source = retained();
+        assert_eq!(net.reduce_zero_impedance(1e-9), 0);
+        assert!(net.source.is_some(), "a no-op leaves the source intact");
+
+        // reduce_passthrough_buses (via collapse_passthrough).
+        let mut net = Network::in_memory(
+            "net",
+            100.0,
+            vec![bus(1, 1, 230.0), bus(2, 1, 230.0), bus(3, 1, 230.0)],
+            vec![line(1, 2), line(2, 3)],
+        );
+        net.source = retained();
+        assert_eq!(net.reduce_passthrough_buses(), 1);
+        assert!(net.source.is_none());
+
+        // retype_isolated_buses: bus 3 is stranded.
+        let mut net = Network::in_memory(
+            "net",
+            100.0,
+            vec![bus(1, 1, 230.0), bus(2, 1, 230.0), bus(3, 1, 230.0)],
+            vec![line(1, 2)],
+        );
+        net.source = retained();
+        assert_eq!(net.retype_isolated_buses(), 1);
+        assert!(net.source.is_none());
+
+        // repair: an out-of-domain voltage is clamped.
+        let mut net = Network::in_memory("net", 100.0, vec![bus(1, 1, 230.0)], Vec::new());
+        net.buses[0].vm = -1.0;
+        net.source = retained();
+        assert!(!net.repair().is_empty());
+        assert!(net.source.is_none());
     }
 }
