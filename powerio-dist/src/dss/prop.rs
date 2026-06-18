@@ -290,6 +290,41 @@ class!(
 );
 
 class!(
+    REACTOR,
+    "reactor",
+    [
+        "bus1",
+        "bus2",
+        "phases",
+        "kvar",
+        "kv",
+        "conn",
+        "rmatrix",
+        "xmatrix",
+        "parallel",
+        "r",
+        "x",
+        "rp",
+        "z1",
+        "z2",
+        "z0",
+        "z",
+        "rcurve",
+        "lcurve",
+        "lmh",
+        // inherited
+        "normamps",
+        "emergamps",
+        "faultrate",
+        "pctperm",
+        "repair",
+        "basefreq",
+        "enabled",
+        "like",
+    ]
+);
+
+class!(
     GENERATOR,
     "generator",
     [
@@ -418,6 +453,7 @@ static CLASSES: &[&DssClass] = &[
     &TRANSFORMER,
     &VSOURCE,
     &CAPACITOR,
+    &REACTOR,
     &GENERATOR,
     &SWTCONTROL,
     &REGCONTROL,
@@ -488,7 +524,21 @@ mod tests {
     fn class_lookup() {
         assert!(class_by_name("Line").is_some());
         assert!(class_by_name("LINECODE").is_some());
-        assert!(class_by_name("reactor").is_none());
+        assert!(class_by_name("reactor").is_some());
+        assert!(class_by_name("xfmrcode").is_none());
+    }
+
+    #[test]
+    fn reactor_positions_match_the_engine() {
+        // Reactor.pas DefineProperties: 19 own properties (bus1..lmh) plus the
+        // PD-element inherited tail. A missing slot would shift positional
+        // assignment of every later property.
+        assert_eq!(REACTOR.prop_index("bus1"), Some(0));
+        assert_eq!(REACTOR.prop_index("kvar"), Some(3));
+        assert_eq!(REACTOR.prop_index("lmh"), Some(18));
+        // "normamps" opens the inherited PD tail right after lmh.
+        assert_eq!(REACTOR.prop_index("normamps"), Some(19));
+        assert_eq!(REACTOR.props.len(), 19 + 8);
     }
 
     #[test]
