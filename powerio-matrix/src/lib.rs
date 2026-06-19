@@ -11,7 +11,7 @@
 //! use powerio_matrix::{parse_file, IndexedNetwork, build_bprime, BuildOptions};
 //!
 //! # let case = concat!(env!("CARGO_MANIFEST_DIR"), "/../tests/data/case14.m");
-//! let net = parse_file(case, None)?;           // re-exported from powerio
+//! let net = parse_file(case, None)?.network;   // re-exported from powerio
 //! let g = IndexedNetwork::new(&net);           // dense [0, n) analysis view
 //! let bprime = build_bprime(&g, &BuildOptions::default())?;
 //! assert_eq!(bprime.rows(), g.n());            // B' is n×n
@@ -35,13 +35,16 @@
 // the matrix modules' `crate::Error` / `crate::network` / `crate::format` paths
 // resolve unchanged after the split.
 pub use powerio::{
-    Branch, Bus, BusId, BusType, ConnectivityReport, Conversion, ElementCounts, Error,
-    ErrorCategory, Extras, GenCost, Generator, Hvdc, IndexCore, IndexedNetwork, Load, Network,
-    Result, ScenarioMismatch, Shunt, SourceFormat, Storage, TargetFormat, convert_file,
-    convert_str, error, format, indexed, network, parse_file, parse_matpower, parse_matpower_file,
-    parse_powermodels_json, parse_powerworld, parse_psse, parse_str, target_format_from_name,
-    write_as, write_egret_json, write_matpower, write_powermodels_json, write_powerworld,
-    write_psse,
+    Branch, Bus, BusId, BusType, ConnectivityReport, Conversion, DisplayData, DisplayFormat,
+    ElementCounts, Error, ErrorCategory, Extras, GenCost, Generator, Hvdc, IndexCore,
+    IndexedNetwork, Load, Network, Parsed, PwdDisplay, PwdSubstation, PypsaCsvOutputs, Result,
+    ScenarioMismatch, Shunt, SourceFormat, Storage, TargetFormat, convert_file, convert_str,
+    display_format_from_name, error, format, indexed, network, parse_display_bytes,
+    parse_display_file, parse_file, parse_matpower, parse_matpower_file, parse_pandapower_json,
+    parse_powermodels_json, parse_powerworld, parse_pslf, parse_psse, parse_str,
+    read_pypsa_csv_folder, target_format_from_name, write_as, write_egret_json, write_matpower,
+    write_pandapower_json, write_powermodels_json, write_powerworld, write_psse,
+    write_pypsa_csv_folder,
 };
 
 pub mod io;
@@ -67,3 +70,5 @@ pub use io::gridfm::{
     read_gridfm_dataset, read_gridfm_network, read_gridfm_scenarios, write_gridfm_batch,
     write_gridfm_dataset,
 };
+#[cfg(feature = "gridfm")]
+pub use io::{dataset_scenario_ids, read_dataset_dir};

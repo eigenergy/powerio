@@ -28,7 +28,7 @@ use powerio_matrix::matrix::{
     build_incidence, build_lacpf, build_lodf, build_ptdf, build_weighted_laplacian, build_ybus,
 };
 use powerio_matrix::opf_pipeline::{DcOpfOptions, write_dcopf_bundle as write_bundle};
-use powerio_matrix::{IndexCore, IndexedNetwork, Network};
+use powerio_matrix::{DisplayData, IndexCore, IndexedNetwork, Network, PwdDisplay};
 
 #[cfg(feature = "gridfm")]
 use powerio_matrix::io::gridfm::{
@@ -192,6 +192,46 @@ fn build_options(scheme: Scheme, include_taps: bool, include_shifts: bool) -> Bu
 pub struct PyCase {
     inner: Network,
     core: IndexCore,
+    warnings: Vec<String>,
+}
+
+/// Wrap a parse result as a `PyCase`, building the index core once and keeping
+/// the reader's fidelity warnings on the handle.
+fn case_from_parsed(parsed: powerio_matrix::Parsed) -> PyCase {
+    let core = IndexCore::build(&parsed.network);
+    PyCase {
+        inner: parsed.network,
+        core,
+        warnings: parsed.warnings,
+    }
+}
+
+fn pwd_display_to_dict<'py>(py: Python<'py>, display: &PwdDisplay) -> PyResult<Bound<'py, PyDict>> {
+    let d = PyDict::new(py);
+    d.set_item("canvas_width", display.canvas_width)?;
+    d.set_item("canvas_height", display.canvas_height)?;
+    d.set_item("stamp", display.stamp)?;
+    let mut rows = Vec::with_capacity(display.substations.len());
+    for substation in &display.substations {
+        let row = PyDict::new(py);
+        row.set_item("number", substation.number)?;
+        row.set_item("name", &substation.name)?;
+        row.set_item("x", substation.x)?;
+        row.set_item("y", substation.y)?;
+        rows.push(row);
+    }
+    d.set_item("substations", PyList::new(py, rows)?)?;
+    Ok(d)
+}
+
+fn display_data_to_py<'py>(py: Python<'py>, display: DisplayData) -> PyResult<Bound<'py, PyAny>> {
+    match display {
+        DisplayData::PowerWorld(display) => {
+            let payload = pwd_display_to_dict(py, &display)?;
+            Ok(("powerworld", payload).into_pyobject(py)?.into_any())
+        }
+        _ => Err(PowerIOError::new_err("unsupported display data kind")),
+    }
 }
 
 #[pymethods]
@@ -211,6 +251,15 @@ impl PyCase {
     #[getter]
     fn source_format(&self) -> String {
         format!("{:?}", self.inner.source_format)
+    }
+
+    /// Read fidelity warnings attached at parse time: tables and columns the
+    /// model cannot carry, reported instead of dropped silently. Empty for
+    /// readers that don't report read warnings (currently every format except
+    /// pandapower JSON and PyPSA CSV).
+    #[getter]
+    fn read_warnings(&self) -> Vec<String> {
+        self.warnings.clone()
     }
 
     #[getter]
@@ -394,7 +443,7 @@ impl PyCase {
         let target = to
             .parse::<powerio_matrix::TargetFormat>()
             .map_err(to_pyerr)?;
-        let conv = self.inner.to_format(target);
+        let conv = self.inner.to_format(target).map_err(to_pyerr)?;
         Ok((conv.text, conv.warnings))
     }
 
@@ -405,7 +454,11 @@ impl PyCase {
     fn to_normalized(&self) -> PyResult<PyCase> {
         let inner = self.inner.to_normalized().map_err(to_pyerr)?;
         let core = IndexCore::build(&inner);
-        Ok(PyCase { inner, core })
+        Ok(PyCase {
+            inner,
+            core,
+            warnings: self.warnings.clone(),
+        })
     }
 
     // --- matrix builders: each returns a COO tuple ----------------------
@@ -565,6 +618,18 @@ impl PyCase {
         gridfm_outputs_to_dict(py, &outputs)
     }
 
+    /// Write this case as a PyPSA CSV folder. Returns
+    /// `{"dir", "files", "warnings"}`.
+    fn write_pypsa_csv_folder<'py>(
+        &self,
+        py: Python<'py>,
+        out_dir: &str,
+    ) -> PyResult<Bound<'py, PyDict>> {
+        let outputs =
+            powerio_matrix::write_pypsa_csv_folder(&self.inner, out_dir).map_err(to_pyerr)?;
+        pypsa_outputs_to_dict(py, &outputs)
+    }
+
     fn __repr__(&self) -> String {
         format!(
             "PyCase(name={:?}, n_buses={}, n_branches={}, n_gens={})",
@@ -581,20 +646,46 @@ impl PyCase {
 #[pyfunction]
 #[pyo3(signature = (path, from_=None))]
 fn parse_file(path: &str, from_: Option<&str>) -> PyResult<PyCase> {
-    let inner = powerio_matrix::parse_file(std::path::Path::new(path), from_).map_err(to_pyerr)?;
-    let core = IndexCore::build(&inner);
-    Ok(PyCase { inner, core })
+    powerio_matrix::parse_file(std::path::Path::new(path), from_)
+        .map(case_from_parsed)
+        .map_err(to_pyerr)
 }
 
 /// Parse a case from in-memory text in the named `format` (`matpower`,
-/// `powermodels-json`, `egret-json`, `psse`, `powerworld`; aliases
-/// `m`/`pm`/`egret`/`raw`/`aux`).
+/// `powermodels-json`, `egret-json`, `pandapower-json`, `psse`, `powerworld`,
+/// `pslf`; aliases `m`/`pm`/`egret`/`pp`/`raw`/`aux`/`epc`).
 #[pyfunction]
 #[pyo3(signature = (text, format=None))]
 fn parse_str(text: &str, format: Option<&str>) -> PyResult<PyCase> {
-    let inner = powerio_matrix::parse_str(text, format.unwrap_or("matpower")).map_err(to_pyerr)?;
-    let core = IndexCore::build(&inner);
-    Ok(PyCase { inner, core })
+    powerio_matrix::parse_str(text, format.unwrap_or("matpower"))
+        .map(case_from_parsed)
+        .map_err(to_pyerr)
+}
+
+/// Parse a display file from a path, inferring the format from the extension
+/// unless `from_` is given. Returns `(kind, payload)`.
+#[pyfunction]
+#[pyo3(signature = (path, from_=None))]
+fn parse_display_file<'py>(
+    py: Python<'py>,
+    path: &str,
+    from_: Option<&str>,
+) -> PyResult<Bound<'py, PyAny>> {
+    let display =
+        powerio_matrix::parse_display_file(std::path::Path::new(path), from_).map_err(to_pyerr)?;
+    display_data_to_py(py, display)
+}
+
+/// Parse display bytes in the named display format. Returns `(kind, payload)`.
+#[pyfunction]
+#[pyo3(signature = (data, format))]
+fn parse_display_bytes<'py>(
+    py: Python<'py>,
+    data: &[u8],
+    format: &str,
+) -> PyResult<Bound<'py, PyAny>> {
+    let display = powerio_matrix::parse_display_bytes(data, format).map_err(to_pyerr)?;
+    display_data_to_py(py, display)
 }
 
 /// Rebuild a case from JSON produced by `Network.to_json()`.
@@ -602,7 +693,19 @@ fn parse_str(text: &str, format: Option<&str>) -> PyResult<PyCase> {
 fn from_json(text: &str) -> PyResult<PyCase> {
     let inner = powerio_matrix::Network::from_json(text).map_err(to_pyerr)?;
     let core = IndexCore::build(&inner);
-    Ok(PyCase { inner, core })
+    Ok(PyCase {
+        inner,
+        core,
+        warnings: Vec::new(),
+    })
+}
+
+/// Read a PyPSA CSV folder into a case.
+#[pyfunction]
+fn read_pypsa_csv_folder(path: &str) -> PyResult<PyCase> {
+    powerio_matrix::read_pypsa_csv_folder(std::path::Path::new(path))
+        .map(case_from_parsed)
+        .map_err(to_pyerr)
 }
 
 /// Convert a case file to another format through the neutral hub. Returns
@@ -790,6 +893,15 @@ fn gridfm_outputs_to_dict<'py>(
     Ok(d)
 }
 
+fn pypsa_outputs_to_dict<'py>(
+    py: Python<'py>,
+    outputs: &powerio_matrix::PypsaCsvOutputs,
+) -> PyResult<Bound<'py, PyDict>> {
+    let d = dir_files_dict(py, &outputs.dir, &outputs.files)?;
+    d.set_item("warnings", &outputs.warnings)?;
+    Ok(d)
+}
+
 /// Write a batch of cases as one gridfm-datakit dataset, row-stacked and keyed by
 /// the `scenario` column. The k-th case is stamped `base_scenario + k`; all cases
 /// must share one base element set (same bus/branch/gen counts and bus-id order).
@@ -830,6 +942,7 @@ fn gridfm_read_to_py(read: GridfmRead) -> (PyCase, i64, Vec<String>) {
         PyCase {
             inner: read.network,
             core,
+            warnings: read.warnings.clone(),
         },
         read.scenario,
         read.warnings,
@@ -871,7 +984,10 @@ fn _powerio(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PyCase>()?;
     m.add_function(wrap_pyfunction!(parse_file, m)?)?;
     m.add_function(wrap_pyfunction!(parse_str, m)?)?;
+    m.add_function(wrap_pyfunction!(parse_display_file, m)?)?;
+    m.add_function(wrap_pyfunction!(parse_display_bytes, m)?)?;
     m.add_function(wrap_pyfunction!(from_json, m)?)?;
+    m.add_function(wrap_pyfunction!(read_pypsa_csv_folder, m)?)?;
     m.add_function(wrap_pyfunction!(convert_file, m)?)?;
     m.add_function(wrap_pyfunction!(convert_str, m)?)?;
     m.add_class::<PyDistCase>()?;

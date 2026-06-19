@@ -6,7 +6,7 @@ build-backend = "maturin"
 name = "powerio"
 # version is read from powerio-py/Cargo.toml by maturin (kept single-source).
 dynamic = ["version"]
-description = "Lossless power system case file IO, format conversion, and sparse matrix and graph views"
+description = 'Fast case parsing and conversion: "pandoc for power systems"'
 readme = "README.md"
 requires-python = ">=3.9"
 license = { text = "MIT OR Apache-2.0" }
@@ -29,7 +29,7 @@ dependencies = []
 matrix = ["numpy>=1.21", "scipy>=1.7"]
 graph = ["networkx>=2.6"]
 all = ["numpy>=1.21", "scipy>=1.7", "networkx>=2.6", "polars>=1"]
-bench = ["matpowercaseframes", "pandapower"]
+bench = ["matpowercaseframes", "pandapower", "pypsa>=1.0"]
 # The published wheel includes the native gridfm writer. This extra installs
 # Python packages for reading and inspecting the Parquet output.
 gridfm = ["polars>=1"]

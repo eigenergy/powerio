@@ -31,9 +31,13 @@ pio_n_branches(h) = Int(ccall((:pio_n_branches, LIBPOWERIO), Csize_t, (Ptr{Cvoid
 pio_n_gens(h)     = Int(ccall((:pio_n_gens, LIBPOWERIO),     Csize_t, (Ptr{Cvoid},), h))
 pio_base_mva(h)   = ccall((:pio_base_mva, LIBPOWERIO),       Cdouble, (Ptr{Cvoid},), h)
 
+# ABI v4 extractors: every array call passes a cap and returns the total
+# available (NULL out is the count query). The caps below come from the
+# matching pio_n_* call, so the returned totals always equal them.
+
 function pio_bus_ids(h, n)
     out = Vector{Int64}(undef, n)
-    ccall((:pio_bus_ids, LIBPOWERIO), Cvoid, (Ptr{Cvoid}, Ptr{Int64}), h, out)
+    ccall((:pio_bus_ids, LIBPOWERIO), Csize_t, (Ptr{Cvoid}, Ptr{Int64}, Csize_t), h, out, n)
     out
 end
 
@@ -42,10 +46,10 @@ function pio_branches(h, m)
     r     = Vector{Float64}(undef, m); x = Vector{Float64}(undef, m)
     b     = Vector{Float64}(undef, m); tap = Vector{Float64}(undef, m)
     shift = Vector{Float64}(undef, m); insvc = Vector{UInt8}(undef, m)
-    ccall((:pio_branches, LIBPOWERIO), Cvoid,
+    ccall((:pio_branches, LIBPOWERIO), Csize_t,
           (Ptr{Cvoid}, Ptr{Int64}, Ptr{Int64}, Ptr{Float64}, Ptr{Float64},
-           Ptr{Float64}, Ptr{Float64}, Ptr{Float64}, Ptr{UInt8}),
-          h, from, to, r, x, b, tap, shift, insvc)
+           Ptr{Float64}, Ptr{Float64}, Ptr{Float64}, Ptr{UInt8}, Csize_t),
+          h, from, to, r, x, b, tap, shift, insvc, m)
     (; from, to, r, x, b, tap, shift, in_service = insvc)
 end
 
@@ -53,23 +57,23 @@ function pio_gens(h, ng)
     bus  = Vector{Int64}(undef, ng); pg = Vector{Float64}(undef, ng)
     pmax = Vector{Float64}(undef, ng); pmin = Vector{Float64}(undef, ng)
     insvc = Vector{UInt8}(undef, ng)
-    ccall((:pio_gens, LIBPOWERIO), Cvoid,
-          (Ptr{Cvoid}, Ptr{Int64}, Ptr{Float64}, Ptr{Float64}, Ptr{Float64}, Ptr{UInt8}),
-          h, bus, pg, pmax, pmin, insvc)
+    ccall((:pio_gens, LIBPOWERIO), Csize_t,
+          (Ptr{Cvoid}, Ptr{Int64}, Ptr{Float64}, Ptr{Float64}, Ptr{Float64}, Ptr{UInt8}, Csize_t),
+          h, bus, pg, pmax, pmin, insvc, ng)
     (; bus, pg, pmax, pmin, in_service = insvc)
 end
 
-function pio_nodal_demand(h, n)
+function pio_bus_demand(h, n)
     pd = Vector{Float64}(undef, n); qd = Vector{Float64}(undef, n)
-    ccall((:pio_nodal_demand, LIBPOWERIO), Cvoid,
-          (Ptr{Cvoid}, Ptr{Float64}, Ptr{Float64}), h, pd, qd)
+    ccall((:pio_bus_demand, LIBPOWERIO), Csize_t,
+          (Ptr{Cvoid}, Ptr{Float64}, Ptr{Float64}, Csize_t), h, pd, qd, n)
     (; pd, qd)
 end
 
-function pio_nodal_shunt(h, n)
+function pio_bus_shunt(h, n)
     gs = Vector{Float64}(undef, n); bs = Vector{Float64}(undef, n)
-    ccall((:pio_nodal_shunt, LIBPOWERIO), Cvoid,
-          (Ptr{Cvoid}, Ptr{Float64}, Ptr{Float64}), h, gs, bs)
+    ccall((:pio_bus_shunt, LIBPOWERIO), Csize_t,
+          (Ptr{Cvoid}, Ptr{Float64}, Ptr{Float64}, Csize_t), h, gs, bs, n)
     (; gs, bs)
 end
 
@@ -82,8 +86,8 @@ function powerio_load(path::AbstractString)
            bus_ids = pio_bus_ids(h, n),
            branch = pio_branches(h, m),
            gen = pio_gens(h, ng),
-           demand = pio_nodal_demand(h, n),
-           shunt = pio_nodal_shunt(h, n),
+           demand = pio_bus_demand(h, n),
+           shunt = pio_bus_shunt(h, n),
            n, m, ng)
     finally
         pio_free(h)

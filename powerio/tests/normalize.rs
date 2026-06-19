@@ -1,4 +1,4 @@
-//! `Network::to_normalized`: per-unit / radians / tap / filter / reindex / bus
+//! `Network::to_normalized`: per-unit / radians / tap / filter / source ids / bus
 //! types, plus the no-false-write-back contract and `parse_str == parse`.
 
 use std::path::{Path, PathBuf};
@@ -113,7 +113,7 @@ fn no_false_write_back() {
 
     // Writing it serializes the per-unit/radian model, so it must NOT echo the
     // raw MATPOWER bytes.
-    let out = write_as(&n, TargetFormat::Matpower);
+    let out = write_as(&n, TargetFormat::Matpower).unwrap();
     assert_ne!(
         out.text.trim_end(),
         src.replace("\r\n", "\n").trim_end(),
@@ -135,7 +135,7 @@ fn warns_when_writing_normalized_lines_as_transformers() {
             .all(|b| approx(b.tap, 1.0) && approx(b.shift, 0.0))
     );
 
-    let out = write_as(&n, TargetFormat::Psse);
+    let out = write_as(&n, TargetFormat::Psse { rev: 33 }).unwrap();
     assert!(
         out.warnings
             .iter()
@@ -145,7 +145,7 @@ fn warns_when_writing_normalized_lines_as_transformers() {
     );
 
     // A raw network keeps lines at tap 0, so the warning must not fire for it.
-    let raw_out = write_as(&raw, TargetFormat::Psse);
+    let raw_out = write_as(&raw, TargetFormat::Psse { rev: 33 }).unwrap();
     assert!(
         !raw_out
             .warnings
@@ -161,7 +161,7 @@ fn filters_and_retypes_out_of_service_case() {
     let n = raw.to_normalized().unwrap();
 
     // The fixture marks the bus-2 generator and branch 5-6 out of service; no
-    // isolated buses, so all 9 buses survive with dense 1-based ids.
+    // isolated buses, so all 9 buses survive with their source ids.
     assert_eq!(n.generators.len(), raw.generators.len() - 1);
     assert_eq!(n.branches.len(), raw.branches.len() - 1);
     assert_eq!(n.buses.len(), 9);
@@ -183,7 +183,7 @@ fn filters_and_retypes_out_of_service_case() {
 #[test]
 fn drops_isolated_bus_and_remaps_endpoints() {
     // Bus 2 is isolated (type 4); branch 2-3 references it (dropped), branch 1-3
-    // survives and is remapped, the load on bus 3 follows the reindex.
+    // survives, and the load on bus 3 keeps that source id.
     let src = "\
 function mpc = iso
 mpc.version = '2';
@@ -201,17 +201,60 @@ mpc.branch = [
 \t2\t3\t0.01\t0.1\t0\t0\t0\t0\t0\t0\t1\t-360\t360;
 ];
 ";
-    let raw = parse_str(src, "matpower").unwrap();
+    let raw = parse_str(src, "matpower").unwrap().network;
     let n = raw.to_normalized().unwrap();
 
     assert_eq!(n.buses.len(), 2, "isolated bus dropped");
-    assert_eq!(n.buses.iter().map(|b| b.id.0).collect::<Vec<_>>(), [1, 2]);
+    assert_eq!(n.buses.iter().map(|b| b.id.0).collect::<Vec<_>>(), [1, 3]);
     assert_eq!(n.branches.len(), 1, "branch on the isolated bus dropped");
-    assert_eq!((n.branches[0].from.0, n.branches[0].to.0), (1, 2));
+    assert_eq!((n.branches[0].from.0, n.branches[0].to.0), (1, 3));
     assert_eq!(n.loads.len(), 1);
-    assert_eq!(n.loads[0].bus.0, 2, "load remapped to the dense id");
+    assert_eq!(n.loads[0].bus.0, 3, "load keeps the source id");
     assert_eq!(n.buses[0].kind, BusType::Ref);
     assert_eq!(n.buses[1].kind, BusType::Pq);
+}
+
+#[test]
+fn preserves_sparse_source_bus_ids() {
+    let src = "\
+function mpc = sparseids
+mpc.version = '2';
+mpc.baseMVA = 100;
+mpc.bus = [
+\t1\t3\t0\t0\t0\t0\t1\t1\t0\t230\t1\t1.1\t0.9;
+\t2\t1\t0\t0\t0\t0\t1\t1\t0\t230\t1\t1.1\t0.9;
+\t3\t1\t0\t0\t0\t0\t1\t1\t0\t230\t1\t1.1\t0.9;
+\t4\t1\t0\t0\t0\t0\t1\t1\t0\t230\t1\t1.1\t0.9;
+\t10\t1\t50\t10\t0\t0\t1\t1\t0\t230\t1\t1.1\t0.9;
+];
+mpc.gen = [
+\t1\t0\t0\t100\t-100\t1\t100\t1\t200\t0\t0\t0\t0\t0\t0\t0\t0\t0\t0\t0\t0;
+];
+mpc.branch = [
+\t1\t2\t0.01\t0.1\t0\t0\t0\t0\t0\t0\t1\t-360\t360;
+\t2\t3\t0.01\t0.1\t0\t0\t0\t0\t0\t0\t1\t-360\t360;
+\t3\t4\t0.01\t0.1\t0\t0\t0\t0\t0\t0\t1\t-360\t360;
+\t4\t10\t0.01\t0.1\t0\t0\t0\t0\t0\t0\t1\t-360\t360;
+];
+";
+    let n = parse_str(src, "matpower")
+        .unwrap()
+        .network
+        .to_normalized()
+        .unwrap();
+
+    assert_eq!(
+        n.buses.iter().map(|b| b.id.0).collect::<Vec<_>>(),
+        [1, 2, 3, 4, 10]
+    );
+    assert_eq!(n.loads.len(), 1);
+    assert_eq!(n.loads[0].bus.0, 10);
+    assert_eq!(n.branches.len(), 4);
+    assert_eq!((n.branches[3].from.0, n.branches[3].to.0), (4, 10));
+
+    let view = IndexedNetwork::new(&n);
+    assert_eq!(view.bus_index(BusId(10)), Some(4));
+    assert_eq!(view.bus_id(4), BusId(10));
 }
 
 #[test]
@@ -231,7 +274,7 @@ mpc.gen = [
 mpc.branch = [
 ];
 ";
-    let raw = parse_str(src, "matpower").unwrap();
+    let raw = parse_str(src, "matpower").unwrap().network;
     assert!(matches!(
         raw.to_normalized(),
         Err(Error::InvalidBaseMva { .. })
@@ -253,7 +296,7 @@ mpc.branch = [
 \t1\t2\t0.01\t0.1\t0\t0\t0\t0\t0\t0\t1\t-360\t360;
 ];
 ";
-    let raw = parse_str(src, "matpower").unwrap();
+    let raw = parse_str(src, "matpower").unwrap().network;
     assert!(matches!(
         raw.to_normalized(),
         Err(Error::ReferenceBusCount { found: 0 })
@@ -282,7 +325,11 @@ mpc.branch = [
 \t2\t3\t0.01\t0.1\t0\t0\t0\t0\t0\t0\t1\t-360\t360;
 ];
 ";
-    let n = parse_str(src, "matpower").unwrap().to_normalized().unwrap();
+    let n = parse_str(src, "matpower")
+        .unwrap()
+        .network
+        .to_normalized()
+        .unwrap();
     // Both gen-backed REF buses stay REF; the gen-less load bus is PQ.
     assert_eq!(n.buses.iter().filter(|b| b.kind == BusType::Ref).count(), 2);
     assert_eq!(n.buses[0].kind, BusType::Ref);
@@ -318,7 +365,11 @@ mpc.branch = [
 \t1\t2\t0.01\t0.1\t0\t0\t0\t0\t0\t0\t1\t-360\t360;
 ];
 ";
-    let n = parse_str(src, "matpower").unwrap().to_normalized().unwrap();
+    let n = parse_str(src, "matpower")
+        .unwrap()
+        .network
+        .to_normalized()
+        .unwrap();
     assert_eq!(n.buses.iter().filter(|b| b.kind == BusType::Ref).count(), 1);
     assert_eq!(n.buses[0].kind, BusType::Ref, "gen bus promoted to slack");
     assert_eq!(n.buses[1].kind, BusType::Pq);
@@ -347,7 +398,11 @@ mpc.branch = [
 \t1\t2\t0.01\t0.1\t0\t0\t0\t0\t0\t0\t1\t-360\t360;
 ];
 ";
-    let n = parse_str(src, "matpower").unwrap().to_normalized().unwrap();
+    let n = parse_str(src, "matpower")
+        .unwrap()
+        .network
+        .to_normalized()
+        .unwrap();
     let c = n.generators[0].cost.as_ref().unwrap();
     assert_eq!(c.model, 1);
     // [0, 0, 100, 2000] -> [0/100, 0, 100/100, 2000]
@@ -361,8 +416,8 @@ mpc.branch = [
 fn parse_str_matches_parse_file() {
     for case in ["case9.m", "case14.m", "case30.m"] {
         let text = std::fs::read_to_string(data(case)).unwrap();
-        let from_path = parse_file(data(case), None).unwrap();
-        let mut from_text = parse_str(&text, "matpower").unwrap();
+        let from_path = parse_file(data(case), None).unwrap().network;
+        let mut from_text = parse_str(&text, "matpower").unwrap().network;
         // The only legitimate difference is the network name, which `parse_file`
         // derives from the file stem and `parse_str` cannot (it has no path).
         from_text.name = from_path.name.clone();
@@ -416,7 +471,11 @@ mpc.branch = [
 \t1\t2\t0.01\t0.1\t0\t0\t0\t0\t0.978\t15\t1\t-30\t30;
 ];
 ";
-    let n = parse_str(src, "matpower").unwrap().to_normalized().unwrap();
+    let n = parse_str(src, "matpower")
+        .unwrap()
+        .network
+        .to_normalized()
+        .unwrap();
     let base = 100.0;
     // Bus angle: degrees → radians.
     assert!(
@@ -468,7 +527,11 @@ mpc.branch = [
 \t2\t3\t0.01\t0.1\t0\t0\t0\t0\t0\t0\t1\t-360\t360;
 ];
 ";
-    let n = parse_str(src, "matpower").unwrap().to_normalized().unwrap();
+    let n = parse_str(src, "matpower")
+        .unwrap()
+        .network
+        .to_normalized()
+        .unwrap();
     // Bus 2's gen has pmax 300 > bus 1's 100, so bus 2 (dense index 1) is slack.
     assert_eq!(n.buses[0].kind, BusType::Pv);
     assert_eq!(
@@ -500,7 +563,7 @@ mpc.branch = [
 \t1\t2\t0.01\t0.1\t0\t0\t0\t0\t0\t0\t1\t-360\t360;
 ];
 ";
-    let mut net = parse_str(src, "matpower").unwrap();
+    let mut net = parse_str(src, "matpower").unwrap().network;
     net.storage.push(Storage {
         bus: BusId(2),
         ps: 5.0,

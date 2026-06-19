@@ -30,8 +30,11 @@ net = pio.parse_file("case9.m")
 same_text = net.to_matpower()
 json_text = net.to_json()
 pm = net.to_format("powermodels-json")
+pp = net.to_format("pandapower-json")
 raw = pio.convert_file("case9.m", "psse")
 aux = pio.convert_str(json_text, "powerworld", format="powermodels-json")
+pypsa_out = net.write_pypsa_csv_folder("case9-pypsa")
+display = pio.parse_display_file("case.pwd")
 
 normalized = net.to_normalized()
 dense = net.to_dense()       # needs powerio[matrix]
@@ -39,8 +42,47 @@ bprime = net.bprime()        # needs powerio[matrix]
 graph = net.to_networkx()    # needs powerio[graph]
 ```
 
-`parse_file(path, from_=None)` reads any format (inferred from the extension, or
-forced with `from_`); `parse_str(text, format)` reads in-memory text.
+`parse_file(path, from_=None)` reads network case files (inferred from the
+extension, or forced with `from_`); `parse_str(text, format)` reads in-memory
+case text. Display artifacts are not network cases, so they use the separate
+display API:
+
+```python
+from pathlib import Path
+
+display = pio.parse_display_file("case.pwd")
+same = pio.parse_display_bytes(Path("case.pwd").read_bytes(), "pwd")
+
+assert display.kind == "powerworld"
+first = display.data.substations[0]
+print(first.number, first.name, first.x, first.y)
+```
+
+For v0.2.2, `display.data` is a `PwdDisplay` with `canvas_width`,
+`canvas_height`, `stamp`, and `substations`.
+
+## PyPSA folders
+
+PyPSA CSV folders are multi-file datasets, so they use explicit read/write
+helpers instead of `Conversion.text`.
+
+```python
+import powerio as pio
+
+case = pio.parse_file("case14.m")
+out = case.write_pypsa_csv_folder("case14-pypsa")
+round_trip = pio.read_pypsa_csv_folder(out["dir"])
+```
+
+The written folder can be imported with
+`pypsa.Network().import_from_csv_folder(path)`. PyPSA itself is not a runtime
+dependency of powerio.
+
+CSV folders are PyPSA's native static component format and carry the network
+topology: buses, lines, transformers, generators, loads, shunts, storage
+units, and links (read as HVDC).
+Time series scenarios in NetCDF/HDF5 are out of scope for now; support is
+tracked in [#107](https://github.com/eigenergy/powerio/issues/107).
 
 ## GridFM reads
 
@@ -50,7 +92,7 @@ The native wheel includes the GridFM Parquet writer and reader.
 of `Network.write_gridfm`, returning a `GridfmRead(network, scenario, warnings)`
 namedtuple. The read is lossy but recovers everything a power flow needs;
 `warnings` lists what the gridfm schema couldn't round-trip (synthesized bus
-ids, folded per-bus load/shunt, dropped HVDC/storage, piecewise costs).
+ids, folded per bus load/shunt, dropped HVDC/storage, piecewise costs).
 `read_gridfm_scenarios(dir)` returns one `GridfmRead` per scenario. `dir`
 resolves the `raw/` leaf, a `<case>/` directory, or a parent with one `*/raw/`
 child.

@@ -2014,7 +2014,7 @@ checksum = "439ee305def115ba05938db6eb1644ff94165c5ab5e9420d1c1bcedbba909391"
 
 [[package]]
 name = "powerio"
-version = "0.1.0"
+version = "0.2.4"
 dependencies = [
  "criterion",
  "lexical-core",
@@ -2027,7 +2027,7 @@ dependencies = [
 
 [[package]]
 name = "powerio-capi"
-version = "0.1.0"
+version = "0.2.4"
 dependencies = [
  "arrow",
  "powerio",
@@ -2038,7 +2038,7 @@ dependencies = [
 
 [[package]]
 name = "powerio-cli"
-version = "0.1.0"
+version = "0.2.4"
 dependencies = [
  "anyhow",
  "clap",
@@ -2054,7 +2054,7 @@ dependencies = [
 
 [[package]]
 name = "powerio-dist"
-version = "0.1.0"
+version = "0.2.4"
 dependencies = [
  "jsonschema",
  "serde",
@@ -2064,7 +2064,7 @@ dependencies = [
 
 [[package]]
 name = "powerio-matrix"
-version = "0.1.0"
+version = "0.2.4"
 dependencies = [
  "approx",
  "arrow",
@@ -2084,7 +2084,7 @@ dependencies = [
 
 [[package]]
 name = "powerio-py"
-version = "0.1.0"
+version = "0.2.4"
 dependencies = [
  "powerio-dist",
  "powerio-matrix",

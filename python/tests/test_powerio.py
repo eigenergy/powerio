@@ -86,6 +86,27 @@ def test_parse_infers_format_from_extension():
     assert case.source_format == "Matpower"
 
 
+def test_parse_powerworld_display_file_and_bytes():
+    path = DATA / "powerworld" / "ACTIVSg200.pwd"
+    parsed = powerio.parse_display_file(path)
+    from_bytes = powerio.parse_display_bytes(path.read_bytes(), "powerworld-pwd")
+
+    assert parsed == from_bytes
+    assert parsed.kind == "powerworld"
+    assert isinstance(parsed.data, powerio.PwdDisplay)
+    assert parsed.data.canvas_width == 200
+    assert parsed.data.canvas_height == 200
+    assert parsed.data.stamp == 43068
+    assert len(parsed.data.substations) == 111
+
+    first = parsed.data.substations[0]
+    assert isinstance(first, powerio.PwdSubstation)
+    assert first.number == 50
+    assert first.name == "CHAMPAIGN 3"
+    assert first.x == pytest.approx(-47299.112519818635)
+    assert first.y == pytest.approx(23498.080802557866)
+
+
 def test_case_tables(case9):
     assert len(case9.buses) == 9
     assert len(case9.branches) == 9
@@ -118,6 +139,16 @@ def test_parse_str_general():
     text = (DATA / "case9.m").read_text()
     c = powerio.parse_str(text, "matpower")
     assert c.n_buses == 9
+
+
+def test_read_warnings_surface():
+    # The genuine pandapower fixture carries a switch table the reader cannot
+    # model, so the parse reports it; the MATPOWER reader is total and reports
+    # nothing.
+    case = powerio.parse_file(DATA / "pandapower" / "example.json")
+    assert case.read_warnings
+    assert any("switch" in w for w in case.read_warnings)
+    assert powerio.parse_file(DATA / "case9.m").read_warnings == []
 
 
 def test_json_roundtrip_and_parsed_conversion():
@@ -185,6 +216,34 @@ def test_to_normalized_filters_out_of_service():
     assert n.n_branches == case.n_branches - 1
     assert n.n_buses == 9
     assert n.source_format == "Normalized"
+
+
+def test_to_normalized_preserves_source_bus_ids():
+    src = """function mpc = sparseids
+mpc.version = '2';
+mpc.baseMVA = 100;
+mpc.bus = [
+\t1\t3\t0\t0\t0\t0\t1\t1\t0\t230\t1\t1.1\t0.9;
+\t2\t1\t0\t0\t0\t0\t1\t1\t0\t230\t1\t1.1\t0.9;
+\t3\t1\t0\t0\t0\t0\t1\t1\t0\t230\t1\t1.1\t0.9;
+\t4\t1\t0\t0\t0\t0\t1\t1\t0\t230\t1\t1.1\t0.9;
+\t10\t1\t50\t10\t0\t0\t1\t1\t0\t230\t1\t1.1\t0.9;
+];
+mpc.gen = [
+\t1\t0\t0\t100\t-100\t1\t100\t1\t200\t0\t0\t0\t0\t0\t0\t0\t0\t0\t0\t0\t0;
+];
+mpc.branch = [
+\t1\t2\t0.01\t0.1\t0\t0\t0\t0\t0\t0\t1\t-360\t360;
+\t2\t3\t0.01\t0.1\t0\t0\t0\t0\t0\t0\t1\t-360\t360;
+\t3\t4\t0.01\t0.1\t0\t0\t0\t0\t0\t0\t1\t-360\t360;
+\t4\t10\t0.01\t0.1\t0\t0\t0\t0\t0\t0\t1\t-360\t360;
+];
+"""
+    n = powerio.parse_str(src).to_normalized()
+    assert [bus["id"] for bus in n.buses] == [1, 2, 3, 4, 10]
+    assert n.loads[0]["bus"] == 10
+    assert n.branches[-1]["from_id"] == 4
+    assert n.branches[-1]["to_id"] == 10
 
 
 def test_parse_bad_path_raises():
@@ -506,13 +565,15 @@ def test_convert_matpower_echo_is_byte_exact():
 
 
 def test_convert_matpower_to_each_format():
-    for fmt in ["powermodels-json", "egret-json", "psse", "powerworld"]:
+    for fmt in ["powermodels-json", "egret-json", "psse", "powerworld", "pandapower-json"]:
         r = powerio.convert_file(str(DATA / "case30.m"), fmt)
         assert isinstance(r.text, str) and len(r.text) > 0
         assert isinstance(r.warnings, list)
     # PowerModels JSON output parses as JSON and keeps the bus count.
     pm = json.loads(powerio.convert_file(str(DATA / "case30.m"), "powermodels-json").text)
     assert len(pm["bus"]) == 30
+    pp = json.loads(powerio.convert_file(str(DATA / "case30.m"), "pandapower-json").text)
+    assert pp["_class"] == "pandapowerNet"
 
 
 def test_convert_round_trip_through_psse(tmp_path):
@@ -531,7 +592,7 @@ def test_convert_unknown_format_raises():
 
 def test_convert_str_matches_convert_file():
     text = (DATA / "case30.m").read_text()
-    for fmt in ["powermodels-json", "egret-json", "psse", "powerworld"]:
+    for fmt in ["powermodels-json", "egret-json", "psse", "powerworld", "pandapower-json"]:
         from_str = powerio.convert_str(text, fmt)
         from_file = powerio.convert_file(str(DATA / "case30.m"), fmt)
         assert from_str.text == from_file.text
@@ -549,6 +610,21 @@ def test_convert_str_named_input_format():
     raw = powerio.convert_file(str(DATA / "case30.m"), "psse").text
     back = powerio.convert_str(raw, "matpower", format="psse")
     assert powerio.parse_str(back.text).n_buses == 30
+
+
+def test_pypsa_csv_folder_wrapper(tmp_path):
+    case = powerio.parse_file(DATA / "case9.m")
+    out = tmp_path / "pypsa"
+    result = case.write_pypsa_csv_folder(out)
+    assert (out / "network.csv").is_file()
+    assert (out / "buses.csv").is_file()
+    assert result["dir"] == str(out)
+    assert "warnings" in result
+
+    back = powerio.read_pypsa_csv_folder(out)
+    assert back.n_buses == case.n_buses
+    assert back.n_branches == case.n_branches
+    assert back.n_gens == case.n_gens
 
 
 def test_convert_str_errors():
@@ -726,3 +802,24 @@ def test_gridfm_in_all_export():
     ):
         assert name in powerio.__all__
         assert hasattr(powerio, name)
+
+
+def test_source_format_stubs_cover_every_variant():
+    # The .pyi Literal must list every string the runtime can produce; a new
+    # SourceFormat variant lands here and in both stubs together.
+    variants = [
+        "Matpower",
+        "PowerModelsJson",
+        "EgretJson",
+        "Psse",
+        "PowerWorld",
+        "PowerWorldBinary",
+        "Gridfm",
+        "InMemory",
+        "Normalized",
+    ]
+    root = Path(__file__).resolve().parents[1] / "powerio"
+    for stub in ("__init__.pyi", "_powerio.pyi"):
+        text = (root / stub).read_text()
+        for v in variants:
+            assert f'"{v}"' in text, f"{stub} missing source_format {v!r}"

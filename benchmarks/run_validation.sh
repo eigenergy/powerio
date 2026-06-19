@@ -9,21 +9,25 @@
 #   PSSE    — powerio's PSS/E .raw vs PowerModels.jl (counts + demand/gen totals).
 #   Exa     — powerio (via C ABI) vs ExaPowerIO.jl, value for value.
 #   pp      — powerio's parse + Y_bus vs pandapower (_m2ppc + makeYbus).
+#   pp-json — powerio's pandapower JSON output imported by pandapower.
+#   pypsa   — powerio's PyPSA CSV folder output imported by PyPSA.
 #
 # Then the read sides and the full conversion matrix:
 #   PSSE-read   — powerio reads a real PSS/E .raw, emits PowerModels JSON, compared
 #                 against PowerModels.jl reading the same .raw.
 #   egret-read  — powerio reads a real egret .json, emits PowerModels JSON, checked
 #                 against the matching MATPOWER case.
-#   matrix(5x5) — every reader -> every writer over the fixtures, each output's
-#                 electrical core checked against the ground-truth MATPOWER case.
+#   matrix(5x5) — every legacy text reader -> every legacy text writer over the
+#                 fixtures, each output's electrical core checked against the
+#                 ground truth MATPOWER case.
 #
 # To keep the wall time down the work is staged so each heavy interpreter starts
 # once, not once per case: PowerModels exports all references (one Julia process),
 # powerio runs all conversions (one Python process), PowerModels + ExaPowerIO run
-# every comparison (one Julia process), pandapower runs every case (one Python
-# process), and the 5x5 matrix runs its own batched process. Each leg appends a
-# `<case>\t<leg>\t<mark>` line to results.tsv, rendered into the matrix below.
+# every comparison (one Julia process), pandapower and PyPSA run their converter
+# imports in batched Python processes, and the 5x5 matrix runs its own batched
+# process. Each leg appends a `<case>\t<leg>\t<mark>` line to results.tsv,
+# rendered into the matrix below.
 #
 # Prereqs: `cargo build --release -p powerio-capi`, the powerio Python extension
 # built into .venv (`maturin develop --release`), the Julia env instantiated
@@ -51,6 +55,10 @@ export PIO_RESULTS_TSV="$TMP/results.tsv"
 # needs only powerio + PowerModels, so it runs regardless.
 have_egret=1
 "$PY" -c "import egret" 2>/dev/null || have_egret=0
+have_pypsa=1
+"$PY" -c "import pypsa" 2>/dev/null || have_pypsa=0
+have_pandapower=1
+"$PY" -c "import pandapower" 2>/dev/null || have_pandapower=0
 
 MCASES=(
     tests/data/case9.m
@@ -92,8 +100,32 @@ echo "=== PowerModels + ExaPowerIO comparisons ==="
 
 # 4. pandapower parse + Y_bus over every case (one Python process; n/a where its
 #    reader can't parse the case). Nonzero exit == a real mismatch, counted below.
-echo "=== pandapower (parse + Y_bus) ==="
-"$PY" benchmarks/validate_pandapower.py "${MCASES[@]}" || true
+# 4b. pandapower JSON converter output loaded by pandapower itself.
+# CI installs pandapower unconditionally; the guard keeps local runs without
+# the oracle stack from failing the leg count, mirroring the pypsa leg.
+if [ "$have_pandapower" -eq 0 ]; then
+    echo "=== pandapower: skipped (not installed; pip install -r benchmarks/requirements.txt) ==="
+    for c in "${MCASES[@]}"; do
+        printf '%s\tpp\tSKIP(pandapower)\n' "$(basename "${c%.m}")" >>"$PIO_RESULTS_TSV"
+        printf '%s\tpp-json\tSKIP(pandapower)\n' "$(basename "${c%.m}")" >>"$PIO_RESULTS_TSV"
+    done
+else
+    echo "=== pandapower (parse + Y_bus) ==="
+    "$PY" benchmarks/validate_pandapower.py "${MCASES[@]}" || true
+    echo "=== pandapower JSON converter ==="
+    "$PY" benchmarks/validate_pandapower_converter.py "${MCASES[@]}" || true
+fi
+
+# 4c. PyPSA CSV converter output loaded by PyPSA itself.
+echo "=== PyPSA CSV converter ==="
+if [ "$have_pypsa" -eq 0 ]; then
+    echo "  skipped: pypsa not installed (pip install -r benchmarks/requirements.txt)"
+    for c in "${MCASES[@]}"; do
+        printf '%s\tpypsa\tSKIP(pypsa)\n' "$(basename "${c%.m}")" >>"$PIO_RESULTS_TSV"
+    done
+else
+    "$PY" benchmarks/validate_pypsa.py "${MCASES[@]}" || true
+fi
 
 # 5. Full reader x writer matrix (its own batched process).
 echo "=== full reader x writer matrix (PowerModels + egret oracles) ==="
@@ -118,8 +150,9 @@ awk -F'\t' '
 # A FAIL mark is a real discrepancy; n/a and SKIP are not. A short results file
 # (fewer rows than legs run) means a phase crashed before recording — fail loudly.
 mark_fails=$(awk -F'\t' '$3 == "FAIL" { c++ } END { print c + 0 }' "$PIO_RESULTS_TSV")
-# 5 legs per .m case (PMjson, PMread, PSSE, Exa, pp) + 1 per raw + 1 per egret + 1 matrix.
-expected=$((${#MCASES[@]} * 5 + ${#RAWCASES[@]} + ${#EGCASES[@]} + 1))
+# 7 legs per .m case (PMjson, PMread, PSSE, Exa, pp, pp-json, pypsa)
+# + 1 per raw + 1 per egret + 1 matrix.
+expected=$((${#MCASES[@]} * 7 + ${#RAWCASES[@]} + ${#EGCASES[@]} + 1))
 got=$(wc -l <"$PIO_RESULTS_TSV")
 short=0
 [ "$got" -lt "$expected" ] && short=1

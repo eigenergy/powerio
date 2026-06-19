@@ -1,0 +1,4 @@
+name,bus,control,type,p_nom,p_set,carrier,marginal_cost,marginal_cost_quadratic
+g-slack,north,Slack,,120.0,50.0,,12.0,0.04
+g-pv,south,PV,,80.0,30.0,,20.0,0.0
+g-pq,east,PQ,,10.0,5.0,,0.0,0.0

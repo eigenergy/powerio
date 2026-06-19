@@ -19,6 +19,13 @@ from powerio.mcp.server import case_summary, convert_case  # noqa: E402
 
 DATA = Path(__file__).resolve().parents[2] / "tests" / "data"
 
+# The gridfm Parquet surface is a compile-time feature; skip its tools when the
+# extension was built without it (mirrors test_powerio.py).
+HAS_GRIDFM = bool(getattr(powerio._powerio, "_has_gridfm", False))
+gridfm_only = pytest.mark.skipif(
+    not HAS_GRIDFM, reason="extension built without the gridfm feature"
+)
+
 
 def test_case_summary_path():
     s = case_summary(path=str(DATA / "case9.m"))
@@ -36,6 +43,33 @@ def test_case_summary_inline():
     assert s["source_format"] == "Matpower"
 
 
+def test_format_forwarded_for_path_inputs(tmp_path):
+    # An extensionless path parses only when the explicit format reaches
+    # parse_file; the old _parse dropped it and failed on the extension.
+    bare = tmp_path / "case9_no_extension"
+    bare.write_text((DATA / "case9.m").read_text())
+    s = case_summary(path=str(bare), format="matpower")
+    assert s["n_buses"] == 9
+
+
+def test_format_still_inferred_without_one():
+    # No format on a .json path: the extension sniff lands on pandapower.
+    s = case_summary(path=str(DATA / "pandapower" / "example.json"))
+    assert s["source_format"] == "PandapowerJson"
+
+
+def test_parse_case_surfaces_read_warnings():
+    from powerio.mcp.server import parse_case
+
+    r = parse_case(path=str(DATA / "pandapower" / "example.json"),
+                   format="pandapower-json")
+    warnings = r["summary"]["read_warnings"]
+    assert warnings and any("switch" in w for w in warnings)
+    # A total reader yields an empty list, not a missing key.
+    clean = parse_case(path=str(DATA / "case9.m"))
+    assert clean["summary"]["read_warnings"] == []
+
+
 def test_convert_case_path():
     r = convert_case(to="powermodels-json", path=str(DATA / "case30.m"))
     assert isinstance(r["text"], str) and r["text"]
@@ -49,6 +83,28 @@ def test_convert_case_inline_requires_from():
         convert_case(to="psse", content=text)  # missing from_
     r = convert_case(to="psse", content=text, from_="matpower")
     assert r["text"]
+
+
+def test_convert_case_pandapower_json_and_alias():
+    r = convert_case(to="pandapower-json", path=str(DATA / "case9.m"))
+    assert json.loads(r["text"])["_class"] == "pandapowerNet"
+    alias = convert_case(to="pp", path=str(DATA / "case9.m"))
+    assert json.loads(alias["text"])["_class"] == "pandapowerNet"
+    back = case_summary(content=r["text"], format="pandapower-json")
+    assert back["n_buses"] == 9
+    assert back["source_format"] == "PandapowerJson"
+
+
+def test_pypsa_folder_path_inputs():
+    net = powerio.parse_file(str(DATA / "case9.m"))
+    with tempfile.TemporaryDirectory() as tmp:
+        folder = str(Path(tmp) / "case9-pypsa")
+        net.write_pypsa_csv_folder(folder)
+        s = case_summary(path=folder)
+        assert s["n_buses"] == 9
+        assert s["source_format"] == "PypsaCsv"
+        r = convert_case(to="matpower", path=folder, from_="pypsa-csv")
+        assert r["text"].startswith("function mpc =")
 
 
 def test_convert_case_exactly_one_input():
@@ -186,6 +242,20 @@ def test_save_case_writes_and_refuses_overwrite(tmp_path):
     assert r2["bytes_written"] == out.stat().st_size
 
 
+def test_save_case_echo_keeps_read_warnings(tmp_path):
+    # Deliberate divergence from convert_case: a byte exact echo reports no
+    # warnings there, but save_case describes the written file end to end, so
+    # the read side stays.
+    from powerio.mcp.server import convert_case, save_case
+
+    src = DATA / "pandapower" / "example.json"
+    out = tmp_path / "echo.json"
+    saved = save_case(to="pandapower-json", out_path=str(out), path=str(src))
+    assert any("switch" in w for w in saved["warnings"]), saved["warnings"]
+    echoed = convert_case(to="pandapower-json", path=str(src))
+    assert echoed["warnings"] == []
+
+
 def test_exactly_one_of_path_content_json():
     from powerio.mcp.server import compute_matrix, dense_view, parse_case
 
@@ -212,4 +282,88 @@ def test_tool_surface_parity():
     assert names == {
         "convert_case", "save_case", "case_summary", "parse_case",
         "normalize_case", "case_to_json", "compute_matrix", "dense_view",
+        "read_pypsa_csv_folder", "write_pypsa_csv_folder",
+        "read_gridfm", "write_gridfm",
     }
+
+
+def test_unreadable_file_maps_cleanly(tmp_path):
+    # PermissionError must surface as the documented ValueError shape, like
+    # FileNotFoundError, not leak raw through the tool.
+    import os
+    import sys
+
+    if sys.platform == "win32" or os.geteuid() == 0:
+        pytest.skip("permission bits are not enforceable here")
+    locked = tmp_path / "locked.m"
+    locked.write_text("function mpc = x\n")
+    locked.chmod(0o000)
+    try:
+        with pytest.raises(ValueError, match="cannot read file"):
+            convert_case(to="psse", path=str(locked))
+        with pytest.raises(ValueError, match="cannot read file"):
+            case_summary(path=str(locked))
+    finally:
+        locked.chmod(0o644)
+
+
+def test_wrong_schema_json_maps_cleanly():
+    from powerio.mcp.server import compute_matrix
+
+    for bad in ("{}", "[]", "null", '{"buses": "nope"}'):
+        with pytest.raises(ValueError, match="parse failed"):
+            compute_matrix("bprime", json=bad)
+
+
+# ---------------------------------------------------------------------------
+# Folder / Parquet tools: PyPSA static CSV folders and gridfm Parquet datasets,
+# which have no single-file text form and so get dedicated read/write tools.
+# ---------------------------------------------------------------------------
+
+def test_pypsa_csv_folder_round_trip(tmp_path):
+    from powerio.mcp.server import read_pypsa_csv_folder, write_pypsa_csv_folder
+
+    out_dir = tmp_path / "pypsa_csv"
+    w = write_pypsa_csv_folder(str(out_dir), path=str(DATA / "case9.m"))
+    assert w["files"], w
+    assert (out_dir / "buses.csv").exists()
+    r = read_pypsa_csv_folder(str(out_dir))
+    assert r["summary"]["n_buses"] == 9
+    assert json.loads(r["json"])
+
+
+def test_pypsa_csv_folder_accepts_transport(tmp_path):
+    from powerio.mcp.server import parse_case, write_pypsa_csv_folder
+
+    transport = parse_case(path=str(DATA / "case9.m"))["json"]
+    out_dir = tmp_path / "from_json"
+    write_pypsa_csv_folder(str(out_dir), json=transport)
+    assert (out_dir / "generators.csv").exists()
+
+
+def test_read_pypsa_csv_missing_folder_maps_cleanly(tmp_path):
+    from powerio.mcp.server import read_pypsa_csv_folder
+
+    with pytest.raises(ValueError):
+        read_pypsa_csv_folder(str(tmp_path / "nope"))
+
+
+@gridfm_only
+def test_gridfm_round_trip(tmp_path):
+    from powerio.mcp.server import read_gridfm, write_gridfm
+
+    out_dir = tmp_path / "gfm"
+    w = write_gridfm(str(out_dir), path=str(DATA / "case9.m"))
+    assert w["files"], w
+    r = read_gridfm(str(out_dir))
+    assert r["summary"]["n_buses"] == 9
+    assert r["scenario"] == 0
+    assert json.loads(r["json"])
+
+
+@gridfm_only
+def test_read_gridfm_missing_dir_maps_cleanly(tmp_path):
+    from powerio.mcp.server import read_gridfm
+
+    with pytest.raises(ValueError):
+        read_gridfm(str(tmp_path / "nope"))

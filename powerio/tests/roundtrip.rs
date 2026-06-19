@@ -18,7 +18,10 @@ fn cases() -> Vec<PathBuf> {
             let path = entry.unwrap().path();
             if path.is_dir() {
                 walk(&path, out);
-            } else if path.extension().is_some_and(|x| x == "m") {
+            } else if path
+                .extension()
+                .is_some_and(|x| x.eq_ignore_ascii_case("m"))
+            {
                 out.push(path);
             }
         }
@@ -38,7 +41,7 @@ fn writer_reproduces_source_modulo_trailing_newline() {
         // Compare modulo the final newline and `\r\n`; everything else —
         // comments, column headers, exact tokens — is byte-for-byte.
         assert_eq!(
-            written.trim_end_matches('\n'),
+            written.replace("\r\n", "\n").trim_end_matches('\n'),
             original.replace("\r\n", "\n").trim_end_matches('\n'),
             "{}: writer did not reproduce the source",
             path.display()

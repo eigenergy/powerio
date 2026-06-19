@@ -48,6 +48,8 @@ pub(crate) fn make_bus(id: usize) -> Bus {
         base_kv: 345.0,
         vmax: 1.1,
         vmin: 0.9,
+        evhi: None,
+        evlo: None,
         area: 1,
         zone: 1,
         name: None,
@@ -81,6 +83,7 @@ pub(crate) fn make_branch(
         in_service: true,
         angmin: -360.0,
         angmax: 360.0,
+        control: None,
         extras: Extras::new(),
     }
 }

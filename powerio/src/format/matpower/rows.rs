@@ -154,6 +154,8 @@ pub(super) fn bus_row(row: &[f64], i: usize) -> Result<(Bus, Option<Load>, Optio
         base_kv: row[bus_col::BASE_KV],
         vmax: row[bus_col::VMAX],
         vmin: row[bus_col::VMIN],
+        evhi: None,
+        evlo: None,
         area: row[bus_col::BUS_AREA] as usize,
         zone: row[bus_col::ZONE] as usize,
         name: None,
@@ -173,6 +175,7 @@ pub(super) fn bus_row(row: &[f64], i: usize) -> Result<(Bus, Option<Load>, Optio
         g: gs,
         b: bs,
         in_service,
+        control: None,
         extras: Extras::new(),
     });
     Ok((bus, load, shunt))
@@ -194,6 +197,7 @@ pub(super) fn branch_row(row: &[f64], i: usize) -> Result<Branch> {
         in_service: is_in_service(row[branch_col::BR_STATUS]),
         angmin: row[branch_col::ANGMIN],
         angmax: row[branch_col::ANGMAX],
+        control: None,
         extras: Extras::new(),
     })
 }
@@ -225,6 +229,7 @@ pub(super) fn gen_row(row: &[f64], i: usize) -> Result<Generator> {
         in_service: is_in_service(row[gen_col::GEN_STATUS]),
         cost: None,
         caps,
+        regulated_bus: None,
     })
 }
 
@@ -238,9 +243,19 @@ pub(super) fn gencost_row(row: &[f64], i: usize) -> Result<GenCost> {
     // only this row's values, not the padding. Require the row to actually hold
     // them: a NCOST larger than the row is malformed, and silently truncating it
     // would misrepresent the cost curve.
-    let want = if model == 1 { 2 * ncost } else { ncost };
+    // `ncost` is an untrusted file field truncated from an f64, so a huge or
+    // non-finite NCOST saturates near `usize::MAX`. Size the requirement with
+    // saturating arithmetic: an implausible NCOST is then rejected by the length
+    // check below (a loud `ShortRow`), instead of overflowing the add (a panic
+    // under debug overflow checks) or wrapping into a reversed `start..start+want`
+    // slice range at `coeffs` (a slice-index panic in release).
+    let want = if model == 1 {
+        ncost.saturating_mul(2)
+    } else {
+        ncost
+    };
     let start = gencost_col::REQUIRED;
-    require("gencost", row, i, start + want)?;
+    require("gencost", row, i, start.saturating_add(want))?;
     Ok(GenCost {
         model,
         startup: row[gencost_col::STARTUP],

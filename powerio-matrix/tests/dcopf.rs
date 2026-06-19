@@ -386,6 +386,8 @@ fn bus(id: usize, kind: BusType) -> Bus {
         base_kv: 345.0,
         vmax: 1.1,
         vmin: 0.9,
+        evhi: None,
+        evlo: None,
         area: 1,
         zone: 1,
         name: None,
@@ -412,6 +414,7 @@ fn branch_xts(from: usize, to: usize, x: f64, tap: f64, shift: f64) -> Branch {
         in_service: true,
         angmin: -360.0,
         angmax: 360.0,
+        control: None,
         extras: Extras::new(),
     }
 }
@@ -431,6 +434,7 @@ fn gen_with_cost(bus: usize, cost: Option<GenCost>) -> Generator {
         in_service: true,
         cost,
         caps: Default::default(),
+        regulated_bus: None,
     }
 }
 
@@ -620,6 +624,24 @@ fn radial_lodf_is_negative_identity() {
             );
         }
     }
+}
+
+#[test]
+fn ptdf_handles_indefinite_but_invertible_laplacian() {
+    let case = net(
+        "negative-x",
+        vec![bus(1, BusType::Ref), bus(2, BusType::Pq)],
+        vec![branch(1, 2, -1.0)],
+    );
+    let view = IndexedNetwork::new(&case);
+
+    let ptdf = dense(&build_ptdf(&view, DcConvention::PaperPure).unwrap());
+    let lodf = dense(&build_lodf(&view, DcConvention::PaperPure).unwrap());
+
+    assert_eq!(ptdf.len(), 1);
+    assert!(ptdf[0][0].abs() < 1e-12);
+    assert!((ptdf[0][1] + 1.0).abs() < 1e-12);
+    assert_eq!(lodf, vec![vec![-1.0]]);
 }
 
 #[test]

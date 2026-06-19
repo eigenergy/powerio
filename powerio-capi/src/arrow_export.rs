@@ -3,9 +3,11 @@
 //! Builds the parsed [`Network`] element tables (bus/branch/gen/load/shunt) as
 //! Arrow record batches and lends them across the C ABI zero-copy via
 //! [`arrow::ffi::to_ffi`]. This is the in-memory, self-describing sibling of
-//! [`pio_to_json`](crate::pio_to_json) and the `pio_branches`-style numeric
+//! the `powerio-json` snapshot and the `pio_branches`-style numeric
 //! extractors: any Arrow consumer (pyarrow, Arrow.jl, Arrow C++, polars, DuckDB)
-//! can pull a whole table without a copy or a temp file.
+//! can pull a whole table without a copy or a temp file. The schema is the
+//! ABI's evolution valve: richer columns arrive here, never as new C
+//! signatures.
 //!
 //! These are the *raw* network fields, with EXTERNAL bus ids (the same id space
 //! as `pio_bus_ids`), not the gridfm-datakit schema — no admittances or flows
@@ -20,7 +22,7 @@ use arrow::ffi::{FFI_ArrowArray, FFI_ArrowSchema, to_ffi};
 use arrow::record_batch::RecordBatch;
 use powerio::{BusId, Network};
 
-/// Table selectors for [`pio_export_arrow`](crate::pio_export_arrow); the C
+/// Table selectors for [`pio_to_arrow`](crate::pio_to_arrow); the C
 /// header mirrors these as `PIO_ARROW_TABLE_*`.
 pub const PIO_ARROW_TABLE_BUS: i32 = 0;
 pub const PIO_ARROW_TABLE_BRANCH: i32 = 1;
@@ -29,8 +31,12 @@ pub const PIO_ARROW_TABLE_LOAD: i32 = 3;
 pub const PIO_ARROW_TABLE_SHUNT: i32 = 4;
 
 // These values are the ABI: the `PIO_ARROW_TABLE_*` macros in include/powerio.h
-// are hand-synced to them. Pin them so a Rust-side edit that drifts from the
-// header fails the build instead of silently exporting the wrong table.
+// are hand-synced to them. The set is append-only: these ids and each table's
+// column order are frozen, a new table takes the next id (5, 6, ...) and extends
+// this assert, and new columns append (nullable) at the end so consumers read by
+// name. Pin them so a Rust-side edit that drifts from the header (a renumber, a
+// reorder, a dropped table) fails the build instead of silently exporting the
+// wrong table.
 const _: () = assert!(
     PIO_ARROW_TABLE_BUS == 0
         && PIO_ARROW_TABLE_BRANCH == 1
@@ -182,7 +188,7 @@ mod tests {
         let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("../tests/data")
             .join(name);
-        powerio::parse_file(&path, None).unwrap()
+        powerio::parse_file(&path, None).unwrap().network
     }
 
     fn round_trip(net: &Network, table: i32) -> StructArray {

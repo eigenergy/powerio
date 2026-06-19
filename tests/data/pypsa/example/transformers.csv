@@ -1,0 +1,2 @@
+name,bus0,bus1,type,model,x,r,s_nom,tap_ratio,sub_network
+t1,south,east,,t,0.1,0.01,60.0,1.05,
