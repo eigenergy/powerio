@@ -937,30 +937,48 @@ impl DssWriter {
 
     fn shunts(&mut self, net: &DistNetwork) {
         for sh in &net.shunts {
-            self.check_name("capacitor", &sh.name);
+            // A purely capacitive shunt has positive diagonal susceptance and
+            // regenerates as a Capacitor; a grounding reactor carries the
+            // inductive (negative) sign and regenerates as a Reactor. The
+            // sign is the class discriminator, the mirror of the reader.
             let phases = extras_usize(&sh.extras, "phases").unwrap_or(sh.terminal_map.len());
-            let b_phase = (0..phases.min(sh.b.len()))
+            // One pass over the diagonal for both extremes.
+            let (b_max, b_min) = (0..phases.min(sh.b.len()))
                 .map(|i| sh.b[i][i])
-                .fold(0.0_f64, f64::max);
-            if b_phase <= 0.0 {
+                .fold((0.0_f64, 0.0_f64), |(mx, mn), v| (mx.max(v), mn.min(v)));
+            let (class, b_phase) = if b_max > 0.0 {
+                ("capacitor", b_max)
+            } else if b_min < 0.0 {
+                ("reactor", b_min)
+            } else {
                 self.warn(format!(
-                    "shunt {}: no positive susceptance; dropped from the output",
+                    "shunt {}: no nonzero susceptance; dropped from the output",
                     sh.name
                 ));
                 continue;
+            };
+            if b_max > 0.0 && b_min < 0.0 {
+                // Both signs on the diagonal: only the dominant class is
+                // emitted; the opposite-sign phases are not regenerated.
+                self.warn(format!(
+                    "shunt {}: diagonal mixes capacitive and inductive phases; only the \
+                     {class} phases are regenerated",
+                    sh.name
+                ));
             }
+            self.check_name(class, &sh.name);
             let off_diag =
                 sh.b.iter()
                     .enumerate()
                     .any(|(i, row)| row.iter().enumerate().any(|(j, &v)| i != j && v != 0.0));
             if off_diag {
                 self.warn(format!(
-                    "shunt {}: off diagonal susceptance has no capacitor expression; \
+                    "shunt {}: off diagonal susceptance has no {class} expression; \
                      only the diagonal is regenerated",
                     sh.name
                 ));
             }
-            // Any (kv, kvar) pair with kvar = b v^2 reproduces the same
+            // Any (kv, kvar) pair with |kvar| = |b| v^2 reproduces the same
             // admittance; the recorded pair (when the source carried one)
             // emits verbatim, keeping the text stable across round trips.
             let kv = self.element_kv(
@@ -969,31 +987,37 @@ impl DssWriter {
                 phases,
                 Configuration::Wye,
                 &sh.name,
-                "capacitor",
+                class,
             );
             let kvar = extras_f64(&sh.extras, "kvar").unwrap_or_else(|| {
-                // The reader's wye capacitor convention: line to line kv
-                // for 2 and 3 phase, line to neutral for single phase.
+                // The reader's wye convention: line to line kv for 2 and 3
+                // phase, line to neutral for single phase. kvar is the
+                // positive rating; the inductive sign lives in the model's b.
                 let v_phase = if matches!(phases, 2 | 3) {
                     kv * 1e3 / 3f64.sqrt()
                 } else {
                     kv * 1e3
                 };
-                b_phase * v_phase * v_phase * phases as f64 / 1e3
+                b_phase.abs() * v_phase * v_phase * phases as f64 / 1e3
             });
             let mut extras = sh.extras.clone();
             extras.remove("kv");
             extras.remove("kvar");
             extras.remove("phases");
             extras.remove("conn");
+            let decl = if class == "reactor" {
+                "Reactor"
+            } else {
+                "Capacitor"
+            };
             let mut s = format!(
-                "New Capacitor.{} bus1={} phases={phases} conn=wye kv={} kvar={}",
+                "New {decl}.{} bus1={} phases={phases} conn=wye kv={} kvar={}",
                 sh.name,
                 self.bus_ref(&sh.bus, &sh.terminal_map),
                 num(kv),
                 num(kvar),
             );
-            s.push_str(&self.extras_tail("capacitor", &sh.name, &extras));
+            s.push_str(&self.extras_tail(class, &sh.name, &extras));
             self.line_out(&s);
         }
         self.out.push('\n');
@@ -1489,6 +1513,45 @@ mod tests {
             .lines()
             .find(|l| l.contains("Capacitor.c1"))
             .unwrap();
+        assert!(line.contains(&format!("kvar={}", num(expected))), "{line}");
+    }
+
+    #[test]
+    fn inductive_shunt_regenerates_as_a_reactor() {
+        // A negative diagonal susceptance is the grounding-reactor sign; it
+        // must emit `New Reactor`, not a capacitor, with the positive kvar
+        // rating recovered from |b| v^2.
+        let (b, vs) = three_phase_source(2400.0);
+        let b_phase = -1e-3;
+        let sh = DistShunt {
+            name: "rx".into(),
+            bus: "sb".into(),
+            terminal_map: strings(&["1", "2", "3"]),
+            g: vec![vec![0.0; 3]; 3],
+            b: vec![
+                vec![b_phase, 0.0, 0.0],
+                vec![0.0, b_phase, 0.0],
+                vec![0.0, 0.0, b_phase],
+            ],
+            extras: Extras::new(),
+        };
+        let net = DistNetwork {
+            base_frequency: 60.0,
+            buses: vec![b],
+            sources: vec![vs],
+            shunts: vec![sh],
+            ..DistNetwork::default()
+        };
+        let out = write_dss(&net);
+        let line = out
+            .text
+            .lines()
+            .find(|l| l.contains("Reactor.rx"))
+            .unwrap_or_else(|| panic!("no reactor emitted in:\n{}", out.text));
+        assert!(!out.text.contains("Capacitor.rx"), "{}", out.text);
+        let kv = 2400.0 * 3f64.sqrt() / 1e3;
+        let v_phase = kv * 1e3 / 3f64.sqrt();
+        let expected = b_phase.abs() * v_phase * v_phase * 3.0 / 1e3;
         assert!(line.contains(&format!("kvar={}", num(expected))), "{line}");
     }
 
