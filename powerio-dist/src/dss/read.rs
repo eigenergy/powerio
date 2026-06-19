@@ -299,12 +299,14 @@ impl<'a> Props<'a> {
     }
 }
 
-/// Reactor properties that define the impedance directly. When any is
-/// present the engine ignores `kvar`/`kv`, so the kvar-shunt typing does not
-/// apply and the object stays untyped.
+/// Reactor properties that set the impedance directly. When any is present
+/// the engine takes its SpecType from the impedance and ignores `kvar`/`kv`,
+/// so the kvar-shunt typing does not apply and the object stays untyped.
+/// `parallel` (series vs parallel R-X) and `rp` (a parallel damping
+/// resistance) are modifiers, not a SpecType of their own: a `kvar` reactor
+/// that also sets them is still a kvar shunt, so they are not listed here.
 const REACTOR_IMPEDANCE_FORMS: &[&str] = &[
-    "rmatrix", "xmatrix", "parallel", "r", "x", "rp", "z1", "z2", "z0", "z", "rcurve", "lcurve",
-    "lmh",
+    "rmatrix", "xmatrix", "r", "x", "z1", "z2", "z0", "z", "rcurve", "lcurve", "lmh",
 ];
 
 impl Reader<'_> {
@@ -1243,9 +1245,12 @@ impl Reader<'_> {
             self.net.untyped.push(UntypedObject::from(obj));
             return;
         }
+        // Read kvar the way the capacitor does, so an array token (kvar=[..])
+        // is interpreted identically by both shunt readers.
         let kvar = props
             .get("kvar")
-            .and_then(|v| self.f64_prop(Some(v)))
+            .and_then(|v| v.to_vector(Some(self.vars)).ok())
+            .and_then(|v| v.first().copied())
             .unwrap_or_else(|| {
                 self.defaulted("reactor", &obj.name, "kvar");
                 dd::reactor::KVAR

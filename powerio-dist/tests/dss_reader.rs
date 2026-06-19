@@ -335,6 +335,14 @@ fn series_and_impedance_reactors_stay_untyped() {
             .iter()
             .any(|w| w.contains("reactor rz") && w.contains("impedance form"))
     );
+    // `parallel` and `rp` are modifiers, not an impedance SpecType: a kvar
+    // reactor that also sets them still types as an inductive shunt.
+    let net = parse_dss_str(
+        "New Circuit.c basekv=4.16\n\
+         New Reactor.rmod bus1=b2 phases=3 kvar=900 kv=4.16 parallel=yes rp=1000\n",
+    );
+    assert!(net.shunts.iter().any(|s| s.name == "rmod"));
+    assert!(net.untyped.iter().all(|o| o.name != "rmod"));
 }
 
 #[test]
