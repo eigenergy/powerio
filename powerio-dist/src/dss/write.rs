@@ -16,7 +16,7 @@ use std::collections::BTreeMap;
 use std::fmt::Write as _;
 
 use crate::convert::Conversion;
-use crate::model::{Configuration, DistBus, DistNetwork, Extras, Mat, WindingConn};
+use crate::model::{Configuration, DistBus, DistNetwork, Extras, Mat, Winding, WindingConn};
 
 use super::{lex, prop};
 
@@ -78,6 +78,15 @@ fn estimate_bus_kv(net: &DistNetwork) -> BTreeMap<String, f64> {
             kv.insert(vs.bus.to_ascii_lowercase(), vln);
         }
     }
+    // Per bus grounded terminal sets, to tell a line to neutral winding (a
+    // terminal tied to ground in its map) from a line to line one. Grounding
+    // and the terminal map both survive a BMOPF round trip, the wye/delta
+    // label does not, so this is what the transformer ratio keys on below.
+    let grounded: BTreeMap<String, &Vec<String>> = net
+        .buses
+        .iter()
+        .map(|b| (b.id.to_ascii_lowercase(), &b.grounded))
+        .collect();
     for _ in 0..net.buses.len() {
         let mut changed = false;
         for l in &net.lines {
@@ -116,20 +125,33 @@ fn estimate_bus_kv(net: &DistNetwork) -> BTreeMap<String, f64> {
         }
         for t in &net.transformers {
             // Propagate by winding voltage ratio from any known winding bus.
+            // The bus map holds phase to neutral voltages, so each winding's
+            // v_ref is first reduced to that base. A winding's rating is the
+            // voltage across its two terminals: line to line when both are
+            // phases (a polyphase winding, or a single phase delta leg), line
+            // to neutral when one terminal is the bus's grounded neutral.
+            // Matched windings (wye-wye, three phase wye-delta) cancel the
+            // factor; only a mixed open delta leg (single phase wye to delta)
+            // shifts, where the old raw ratio was a sqrt(3) off.
+            let pn = |w: &Winding| {
+                let v = (w.v_ref / 1e3) * 1e3;
+                let line_to_neutral = t.phases < 2
+                    && grounded
+                        .get(&w.bus.to_ascii_lowercase())
+                        .is_some_and(|g| w.terminal_map.iter().any(|tm| g.contains(tm)));
+                if line_to_neutral { v } else { v / 3f64.sqrt() }
+            };
             let known: Option<(usize, f64)> = t
                 .windings
                 .iter()
                 .enumerate()
                 .find_map(|(i, w)| kv.get(&w.bus.to_ascii_lowercase()).map(|v| (i, *v)));
             if let Some((i, v_known)) = known {
-                let v_ref_known = (t.windings[i].v_ref / 1e3) * 1e3;
-                if v_ref_known > 0.0 {
+                let pn_known = pn(&t.windings[i]);
+                if pn_known > 0.0 {
                     for (j, w) in t.windings.iter().enumerate() {
                         if j != i && !kv.contains_key(&w.bus.to_ascii_lowercase()) {
-                            kv.insert(
-                                w.bus.to_ascii_lowercase(),
-                                v_known * ((w.v_ref / 1e3) * 1e3) / v_ref_known,
-                            );
+                            kv.insert(w.bus.to_ascii_lowercase(), v_known * pn(w) / pn_known);
                             changed = true;
                         }
                     }

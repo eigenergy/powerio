@@ -1083,8 +1083,15 @@ impl Reader<'_> {
                 .clone()
                 .unwrap_or_else(|| Value::new(format!("{name}_w{}", i + 1)).to_bus_spec());
             // Each winding terminal has phases + 1 conductors; wye keeps the
-            // neutral in the map, delta leaves the unused conductor out.
-            let keep = if w.conn_delta { phases } else { phases + 1 };
+            // neutral in the map, delta leaves the unused conductor out. A
+            // delta winding is wired line to line, so a single phase delta leg
+            // (an open delta secondary, bus spec `.1.2`) still spans two phase
+            // terminals; keep both rather than collapsing to one.
+            let keep = if w.conn_delta {
+                phases.max(2)
+            } else {
+                phases + 1
+            };
             let map = self.terminals(&spec, phases, phases + 1, keep);
             out.push(Winding {
                 bus: spec.name,

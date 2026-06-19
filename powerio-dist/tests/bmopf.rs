@@ -124,6 +124,8 @@ fn dss_fixtures_emit_valid_bmopf() {
         "micro/xfmr_center_tap.dss",
         "micro/xfmr_wye_delta.dss",
         "micro/xfmr_delta_wye.dss",
+        "micro/xfmr_open_wye_open_delta.dss",
+        "micro/xfmr_1ph_delta_wye.dss",
         "micro/switch.dss",
         "micro/fourwire_linecode.dss",
         "micro/defaults_degenerate.dss",
@@ -132,6 +134,62 @@ fn dss_fixtures_emit_valid_bmopf() {
         let out = write_bmopf_json(&net);
         assert_eq!(errors(&v, &out.text), Vec::<String>::new(), "{case}");
     }
+}
+
+/// A single phase wye/delta transformer (an open delta leg) must reach the
+/// BMOPF output as a `single_phase` entry, not drop, and the delta winding
+/// must carry both of its phase terminals end to end. This is issue #135's
+/// item 1: the classifier used to route only `(1, [Wye, Wye])`, and the dss
+/// reader collapsed a single phase delta map to one terminal.
+#[test]
+fn single_phase_wye_delta_keeps_both_delta_terminals() {
+    // Open wye / open delta: the delta is on the secondary, on .1.2 and .2.3.
+    let net = parse_dss_file(fixture("micro/xfmr_open_wye_open_delta.dss")).unwrap();
+    let t1 = net.transformers.iter().find(|t| t.name == "t1").unwrap();
+    assert_eq!(t1.windings[1].conn, WindingConn::Delta);
+    assert_eq!(t1.windings[1].terminal_map, vec!["1", "2"]);
+    let t2 = net.transformers.iter().find(|t| t.name == "t2").unwrap();
+    assert_eq!(t2.windings[1].terminal_map, vec!["2", "3"]);
+
+    let out = write_bmopf_json(&net);
+    assert!(
+        !out.warnings.iter().any(|w| w.contains("transformer")
+            && w.contains("not representable")
+            && w.contains("dropped")),
+        "open delta transformers dropped: {:?}",
+        out.warnings
+    );
+    // The wye/delta connection is not encoded in single_phase; we flag it
+    // rather than dropping the transformer.
+    assert!(
+        out.warnings
+            .iter()
+            .any(|w| w.contains("t1") && w.contains("not encoded in the subtype")),
+        "missing the wye/delta fidelity note: {:?}",
+        out.warnings
+    );
+    let doc: serde_json::Value = serde_json::from_str(&out.text).unwrap();
+    let sp = &doc["transformer"]["single_phase"];
+    assert_eq!(sp["t1"]["terminal_map_to"], serde_json::json!(["1", "2"]));
+    assert_eq!(sp["t2"]["terminal_map_to"], serde_json::json!(["2", "3"]));
+
+    // The other orientation: a delta primary (line to line, on .1.2) into a
+    // grounded wye secondary keeps both primary terminals.
+    let dw = parse_dss_file(fixture("micro/xfmr_1ph_delta_wye.dss")).unwrap();
+    let t = &dw.transformers[0];
+    assert_eq!(t.windings[0].conn, WindingConn::Delta);
+    assert_eq!(t.windings[0].terminal_map, vec!["1", "2"]);
+    let out = write_bmopf_json(&dw);
+    assert!(
+        !out.warnings.iter().any(|w| w.contains("not representable")),
+        "delta-wye dropped: {:?}",
+        out.warnings
+    );
+    let doc: serde_json::Value = serde_json::from_str(&out.text).unwrap();
+    assert_eq!(
+        doc["transformer"]["single_phase"]["t1"]["terminal_map_from"],
+        serde_json::json!(["1", "2"])
+    );
 }
 
 #[test]

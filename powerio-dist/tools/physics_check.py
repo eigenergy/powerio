@@ -23,6 +23,8 @@ ORIGINALS = {
     "micro_xfmr_center_tap": "tests/data/dist/micro/xfmr_center_tap.dss",
     "micro_xfmr_wye_delta": "tests/data/dist/micro/xfmr_wye_delta.dss",
     "micro_xfmr_delta_wye": "tests/data/dist/micro/xfmr_delta_wye.dss",
+    "micro_xfmr_open_wye_open_delta": "tests/data/dist/micro/xfmr_open_wye_open_delta.dss",
+    "micro_xfmr_1ph_delta_wye": "tests/data/dist/micro/xfmr_1ph_delta_wye.dss",
     "micro_switch": "tests/data/dist/micro/switch.dss",
     "micro_fourwire_linecode": "tests/data/dist/micro/fourwire_linecode.dss",
     "micro_defaults_degenerate": "tests/data/dist/micro/defaults_degenerate.dss",
@@ -115,6 +117,17 @@ DOCUMENTED = {
     ("opendss_ieee123_IEEE123Master", "via_bmopf"): (None, "transformer shape outside the four BMOPF subtypes"),
     ("opendss_ieee123_IEEE123Master", "via_pmd"): (1e-2, "regulator bank restatement"),
     ("micro_xfmr_center_tap", "via_bmopf"): (2e-1, "BMOPF: center tap collapses to two windings"),
+    # Open wye / open delta and the single phase delta-wye leg. BMOPF
+    # single_phase carries the terminals and impedance but no wye/delta label,
+    # so the open delta secondary's floating ground reference is not
+    # reproduced (its line to line voltages still agree); the grounded delta-wye
+    # leg only shifts by the single phase delta winding's impedance base. PMD
+    # reads a single phase delta winding back as a two phase transformer, which
+    # re-solves differently. The canonical dss regeneration is exact for both.
+    ("micro_xfmr_open_wye_open_delta", "via_bmopf"): (2e-1, "BMOPF: open delta floating reference, no wye/delta label"),
+    ("micro_xfmr_open_wye_open_delta", "via_pmd"): (1.5e0, "PMD: single phase delta winding read as two phase"),
+    ("micro_xfmr_1ph_delta_wye", "via_bmopf"): (1e-3, "BMOPF: single phase delta winding impedance base, no wye/delta label"),
+    ("micro_xfmr_1ph_delta_wye", "via_pmd"): (1e0, "PMD: single phase delta winding read as two phase"),
     ("micro_xfmr_single_phase", "via_pmd"): (1e-6, "engine Z1/Z0 vs MVAsc input path"),
     # PMD models a dss switch as a 1e-7 ohm series element while the engine's
     # switch dummy works out near 1e-3 ohm over the forced length.

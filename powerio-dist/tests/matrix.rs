@@ -132,6 +132,26 @@ const CASES: &[Case] = &[
         dss_renames_grounded: false,
     },
     Case {
+        // Open wye / open delta bank: the single phase wye/delta path. BMOPF
+        // single_phase carries no wye/delta label, so the delta secondary
+        // reads back as wye (terminals preserved), restating the transformer.
+        label: "open wye open delta transformer",
+        rel: "micro/xfmr_open_wye_open_delta.dss",
+        fmt: Fmt::Dss,
+        bmopf_restates_transformers: true,
+        dss_renames_grounded: false,
+    },
+    Case {
+        // Single phase delta-wye (phase to phase primary, grounded wye
+        // secondary): the other single phase wye/delta orientation. Same
+        // BMOPF conn-label restatement as above.
+        label: "single phase delta wye transformer",
+        rel: "micro/xfmr_1ph_delta_wye.dss",
+        fmt: Fmt::Dss,
+        bmopf_restates_transformers: true,
+        dss_renames_grounded: false,
+    },
+    Case {
         label: "switch states",
         rel: "micro/switch.dss",
         fmt: Fmt::Dss,

@@ -382,6 +382,20 @@ impl Writer {
             self.extras_dropped(&t.extras, &format!("transformer {}", t.name));
             match classify(t) {
                 Kind::SinglePhase => {
+                    if t.windings.iter().any(|w| w.conn == WindingConn::Delta) {
+                        // An open wye / open delta leg. The single_phase shape
+                        // carries the terminals and impedance faithfully, but
+                        // has no field for the wye/delta connection, so a
+                        // consumer that models the subtype literally reads it
+                        // as a wye-wye unit. Flag it; the line to line topology
+                        // survives in the terminal map.
+                        self.warn(format!(
+                            "transformer {}: single phase wye/delta emitted as single_phase; \
+                             the wye/delta connection is not encoded in the subtype, only the \
+                             line to line terminal map",
+                            t.name
+                        ));
+                    }
                     let v = self.two_winding(t, &t.windings[0], &t.windings[1], 1.0);
                     insert("single_phase", t.name.clone(), v, &mut by_subtype);
                 }
@@ -669,7 +683,17 @@ fn classify(t: &DistTransformer) -> Kind {
     }
     let conns: Vec<WindingConn> = t.windings.iter().map(|w| w.conn).collect();
     match (t.phases, conns.as_slice()) {
-        (1, [WindingConn::Wye, WindingConn::Wye]) => Kind::SinglePhase,
+        // single_phase covers the plain 1-phase wye-wye unit and both open
+        // wye / open delta leg orientations (one delta winding wired line to
+        // line). The single_phase shape holds the delta side: it carries two
+        // phase terminals, no conn discriminator, and its line to line v_ref
+        // makes the per winding impedance base v^2/s already right. The
+        // pattern reads as the three pairs wye-wye, delta-wye, wye-delta.
+        (
+            1,
+            [WindingConn::Wye | WindingConn::Delta, WindingConn::Wye]
+            | [WindingConn::Wye, WindingConn::Delta],
+        ) => Kind::SinglePhase,
         (1, [WindingConn::Wye, WindingConn::Wye, WindingConn::Wye]) => Kind::CenterTap,
         (3, [WindingConn::Wye, WindingConn::Delta]) => Kind::WyeDelta,
         (3, [WindingConn::Delta, WindingConn::Wye]) => Kind::DeltaWye,

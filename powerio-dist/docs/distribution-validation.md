@@ -36,17 +36,24 @@ Frederik Geth pointed to, also at `github.com/tshort/OpenDSS`).
 | IEEE 123 | vendored fixture, all gates pass | `examples/bmopf/ieee123.json` |
 | IEEE 37 | converts cleanly from the upstream dataset, dss echo byte exact | generate on demand |
 | 4Bus DY / YD / GrdYD / YY (Bal) | delta, wye, grounded transformer connections; all gates pass | `examples/bmopf/4bus_dy.json` (delta wye) |
-| 4Bus OYOD (open wye, open delta) | the open connection transformer is a single phase wye delta, outside the four BMOPF subtypes, so it drops with a warning | — |
+| 4Bus OYOD (open wye, open delta) | the open connection units are single phase wye/delta transformers; they convert to `single_phase` with both delta phase terminals preserved | generate on demand |
 
-The three transformer micro-cases (single phase, center tap, delta wye, wye delta)
-and the switch, four wire linecode, and ten conductor micro-fixtures exercise the
-same gates; see `conversion-matrix.md`.
+The open delta leg is the single phase wye/delta path. The `single_phase`
+subtype carries its terminals and impedance faithfully but has no field for the
+wye/delta connection, so the writer flags each one (the consumer reads it as a
+wye-wye unit). The dss re-solve is exact; the BMOPF re-solve differs by the
+floating delta's ground reference, which the connection label would pin. See the
+`xfmr_open_wye_open_delta` and `xfmr_1ph_delta_wye` micro-fixtures.
+
+The transformer micro-cases (single phase, center tap, delta wye, wye delta, open
+wye / open delta, single phase delta wye) and the switch, four wire linecode, and
+ten conductor micro-fixtures exercise the same gates; see `conversion-matrix.md`.
 
 ### Needs more typed support (documented gaps)
 
 | Case | Missing today | Behaviour now |
 |---|---|---|
-| 4wire-Delta | typed `Generator` modeling | generators land in `untyped`, dropped with a warning |
+| 4wire-Delta | the three winding (wye/delta/delta) unit, plus typed `Generator` modeling | the open wye/open delta units now convert as `single_phase`; the three winding bank still drops, pending the transformer model extension |
 | 8500-Node | typed `Generator`, plus `Fuse`/`Recloser`/`Relay`/`CapControl` instrumentation | partial; control elements drop with warnings |
 | NEVTestCase | typed `Reactor` (neutral-to-earth grounding) | **addressed by the stacked typed-reactor PR**, which maps a grounding reactor to a BMOPF `shunt` |
 | LVTestCase / LVTestCaseNorthAmerican | `LoadShape`/`Monitor`/`EnergyMeter` time series; `CNData`/`LineGeometry`/`LineSpacing` geometry | core network converts; instrumentation and geometry drop with warnings |
