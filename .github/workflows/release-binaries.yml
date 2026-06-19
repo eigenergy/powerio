@@ -1,6 +1,6 @@
 name: Release binaries
 
-# Build the powerio-capi cdylib (with the arrow and gridfm features) for the five platforms
+# Build the powerio-capi cdylib (with the arrow, gridfm, and dist features) for the five platforms
 # PowerIO.jl's Artifacts.toml covers, package each as the artifact tarball that
 # file references (lib/ or bin/ layout, Julia platform triplet in the name), and
 # attach them to the GitHub release on a version tag. A workflow_dispatch run
@@ -69,7 +69,7 @@ jobs:
           sudo apt-get install -y ${{ matrix.cross_gcc }}
           echo "CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER=aarch64-linux-gnu-gcc" >> "$GITHUB_ENV"
       - name: Build powerio-capi
-        run: cargo build -p powerio-capi --release --features arrow,gridfm --target ${{ matrix.rust_target }}
+        run: cargo build -p powerio-capi --release --features arrow,gridfm,dist --target ${{ matrix.rust_target }}
       # Artifact layout PowerIO.jl's _artifact_lib() resolves: the cdylib under
       # lib/ (bin/ on Windows, renamed to the lib-prefixed name BinaryBuilder
       # would produce), the C header under include/, licenses at the root.
