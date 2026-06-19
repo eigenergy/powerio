@@ -39,7 +39,8 @@ def solve(path):
     # (RegControl becomes a fixed tap transformer). The cases run their own
     # Solve while loading, so control actions must be off before that:
     # inject the option right after the circuit line on both sides.
-    text = open(path, encoding="utf-8", errors="replace").read()
+    with open(path, encoding="utf-8", errors="replace") as f:
+        text = f.read()
     lines = text.splitlines()
     injected = False
     for i, line in enumerate(lines):

@@ -466,9 +466,16 @@ impl Writer {
         );
         // The whole leakage reactance rides on the from side, the
         // convention the public example uses.
+        if t.xsc_pct.is_empty() {
+            self.warn(format!(
+                "transformer {}: xsc_pct is empty; emitted x_series_from=0",
+                t.name
+            ));
+        }
+        let xhl = t.xsc_pct.first().copied().unwrap_or(0.0);
         o.insert(
             "x_series_from".into(),
-            self.num(t.xsc_pct[0] / 100.0 * zb_from, "transformer x_series_from"),
+            self.num(xhl / 100.0 * zb_from, "transformer x_series_from"),
         );
         o.insert("x_series_to".into(), json!(0.0));
         o.insert("terminal_map_from".into(), json!(from.terminal_map));
@@ -566,9 +573,16 @@ impl Writer {
                 "transformer r_series",
             ),
         );
+        if t.xsc_pct.is_empty() {
+            self.warn(format!(
+                "transformer {}: xsc_pct is empty; emitted x_series=0",
+                t.name
+            ));
+        }
+        let xhl = t.xsc_pct.first().copied().unwrap_or(0.0);
         o.insert(
             "x_series".into(),
-            self.num(t.xsc_pct[0] / 100.0 * zb_wye, "transformer x_series"),
+            self.num(xhl / 100.0 * zb_wye, "transformer x_series"),
         );
         o.insert("terminal_map_from".into(), json!(from.terminal_map));
         o.insert("terminal_map_to".into(), json!(to.terminal_map));

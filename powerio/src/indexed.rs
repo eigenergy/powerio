@@ -99,7 +99,7 @@ impl IndexCore {
 /// A `Network` paired with its derived [`IndexCore`]. The network is borrowed for
 /// the common case, but owned when it had to be star-lowered (a 3-winding
 /// transformer expanded into a star bus plus three branches via
-/// [`Network::expand_transformers_3w`]); the core is owned ([`IndexedNetwork::new`])
+/// `Network::expand_transformers_3w`); the core is owned ([`IndexedNetwork::new`])
 /// or borrowed from a cached [`IndexCore`] ([`IndexedNetwork::with_core`]).
 #[derive(Debug)]
 pub struct IndexedNetwork<'n> {
