@@ -34,11 +34,12 @@ Frederik Geth pointed to, also at `github.com/tshort/OpenDSS`).
 | IEEE 13 | vendored fixture, all gates pass | `tests/data/dist/bmopf/example_ieee13.json` |
 | IEEE 34 | vendored fixture, all gates pass | `examples/bmopf/ieee34.json` |
 | IEEE 123 | vendored fixture, all gates pass | `examples/bmopf/ieee123.json` |
-| IEEE 37 | converts cleanly from the upstream dataset; dss echo byte-exact | `examples/bmopf/ieee37.json` |
-| 4Bus-* (OYOD/YY/YD/DY/GrdYD) | only supported elements; small unbalanced references | generate on demand |
+| IEEE 37 | converts cleanly from the upstream dataset, dss echo byte exact | generate on demand |
+| 4Bus DY / YD / GrdYD / YY (Bal) | delta, wye, grounded transformer connections; all gates pass | `examples/bmopf/4bus_dy.json` (delta wye) |
+| 4Bus OYOD (open wye, open delta) | the open connection transformer is a single phase wye delta, outside the four BMOPF subtypes, so it drops with a warning | — |
 
-The three transformer micro-cases (single-phase, center-tap, delta-wye, wye-delta)
-and the switch / four-wire-linecode / ten-conductor micro-fixtures exercise the
+The three transformer micro-cases (single phase, center tap, delta wye, wye delta)
+and the switch, four wire linecode, and ten conductor micro-fixtures exercise the
 same gates; see `conversion-matrix.md`.
 
 ### Needs more typed support (documented gaps)
