@@ -17,12 +17,19 @@ use std::path::{Path, PathBuf};
 
 use powerio::{
     Network, TargetFormat, parse_egret_json, parse_matpower_file, parse_powermodels_json,
-    parse_powerworld, parse_psse, write_as, write_egret_json, write_powermodels_json,
-    write_powerworld, write_psse,
+    parse_powerworld, parse_pslf, parse_psse, write_as, write_egret_json, write_powermodels_json,
+    write_powerworld, write_pslf, write_psse, write_psse_rev,
 };
 
 mod common;
 use common::json_approx_eq;
+
+fn write_psse34(n: &Network) -> String {
+    write_psse_rev(n, 34).text
+}
+fn write_psse35(n: &Network) -> String {
+    write_psse_rev(n, 35).text
+}
 
 fn data(name: &str) -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -81,8 +88,20 @@ fn roundtrippable() -> Vec<Roundtrippable> {
         },
         Roundtrippable {
             name: "PSS/E .raw",
-            format: TargetFormat::Psse,
+            format: TargetFormat::Psse { rev: 33 },
             write: |n| write_psse(n).text,
+            read: |s| parse_psse(s).unwrap(),
+        },
+        Roundtrippable {
+            name: "PSS/E .raw v34",
+            format: TargetFormat::Psse { rev: 34 },
+            write: write_psse34,
+            read: |s| parse_psse(s).unwrap(),
+        },
+        Roundtrippable {
+            name: "PSS/E .raw v35",
+            format: TargetFormat::Psse { rev: 35 },
+            write: write_psse35,
             read: |s| parse_psse(s).unwrap(),
         },
         Roundtrippable {
@@ -96,6 +115,12 @@ fn roundtrippable() -> Vec<Roundtrippable> {
             format: TargetFormat::EgretJson,
             write: |n| write_egret_json(n).text,
             read: |s| parse_egret_json(s).unwrap(),
+        },
+        Roundtrippable {
+            name: "PSLF .epc",
+            format: TargetFormat::Pslf,
+            write: |n| write_pslf(n).text,
+            read: |s| parse_pslf(s).unwrap(),
         },
     ]
 }
@@ -153,7 +178,7 @@ fn same_format_round_trip_is_byte_exact() {
             let text = (fmt.write)(&net0);
             let net_from_text = (fmt.read)(&text); // carries source = text, format = fmt
             assert_eq!(
-                write_as(&net_from_text, fmt.format).text,
+                write_as(&net_from_text, fmt.format).unwrap().text,
                 text,
                 "{case} {}: same-format write is not a byte-exact echo",
                 fmt.name
@@ -193,7 +218,7 @@ fn egret_fixtures_round_trip_byte_exact() {
         let text = std::fs::read_to_string(data(f)).unwrap();
         let net = parse_egret_json(&text).unwrap();
         assert_eq!(
-            write_as(&net, TargetFormat::EgretJson).text,
+            write_as(&net, TargetFormat::EgretJson).unwrap().text,
             text,
             "{f}: egret same-format write is not a byte-exact echo"
         );

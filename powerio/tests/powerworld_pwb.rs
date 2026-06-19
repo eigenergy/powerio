@@ -737,7 +737,7 @@ fn parse_file_dispatches_pwb_and_converts() {
         .network;
     assert_eq!(by_name.buses.len(), 200);
 
-    let conv = powerio::write_as(&net, powerio::TargetFormat::Matpower);
+    let conv = powerio::write_as(&net, powerio::TargetFormat::Matpower).unwrap();
     let back = powerio::parse_str(&conv.text, "matpower").unwrap().network;
     assert_eq!(back.buses.len(), 200);
     assert_eq!(back.branches.len(), 246);

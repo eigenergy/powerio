@@ -386,6 +386,8 @@ fn bus(id: usize, kind: BusType) -> Bus {
         base_kv: 345.0,
         vmax: 1.1,
         vmin: 0.9,
+        evhi: None,
+        evlo: None,
         area: 1,
         zone: 1,
         name: None,
@@ -412,6 +414,7 @@ fn branch_xts(from: usize, to: usize, x: f64, tap: f64, shift: f64) -> Branch {
         in_service: true,
         angmin: -360.0,
         angmax: 360.0,
+        control: None,
         extras: Extras::new(),
     }
 }
@@ -431,6 +434,7 @@ fn gen_with_cost(bus: usize, cost: Option<GenCost>) -> Generator {
         in_service: true,
         cost,
         caps: Default::default(),
+        regulated_bus: None,
     }
 }
 

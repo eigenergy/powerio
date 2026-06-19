@@ -46,6 +46,23 @@ pub(crate) fn write_matpower_conversion(net: &Network) -> Conversion {
             net.hvdc.len()
         ));
     }
+    if !net.transformers_3w.is_empty() {
+        warnings.push(format!(
+            "{} 3-winding transformer(s) dropped: the canonical MATPOWER writer emits no \
+             3-winding record (star-expand them into branches before writing to keep them)",
+            net.transformers_3w.len()
+        ));
+    }
+    if net
+        .buses
+        .iter()
+        .any(|b| b.evhi.is_some() || b.evlo.is_some())
+    {
+        warnings.push(
+            "emergency voltage band(s) (EVHI/EVLO) dropped: this writer carries one voltage band"
+                .into(),
+        );
+    }
     let with_caps = net.generators.iter().filter(|g| g.has_caps()).count();
     if with_caps > 0 {
         warnings.push(format!(

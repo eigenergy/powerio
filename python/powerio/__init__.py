@@ -72,6 +72,7 @@ __all__ = [
     "read_gridfm_scenarios",
     "read_pypsa_csv_folder",
     "GridfmRead",
+    "dist",
     "__version__",
 ]
 
@@ -603,3 +604,6 @@ def read_gridfm_scenarios(dir: Any) -> "list[GridfmRead]":
 def read_pypsa_csv_folder(path: Any) -> Network:
     """Read a PyPSA CSV folder into a :class:`Network`."""
     return Network(_powerio.read_pypsa_csv_folder(str(path)))
+
+
+from . import dist  # noqa: E402  (needs Conversion defined above)

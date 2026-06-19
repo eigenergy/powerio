@@ -94,7 +94,7 @@ fn activsg200_values_survive_tokenizing() {
 #[test]
 fn activsg200_echo_is_byte_exact() {
     let net = parse_file(fixture("ACTIVSg200.aux"), None).unwrap().network;
-    let echo = net.to_format(TargetFormat::PowerWorld);
+    let echo = net.to_format(TargetFormat::PowerWorld).unwrap();
     assert!(echo.warnings.is_empty());
     assert_eq!(echo.text, activsg200());
 }

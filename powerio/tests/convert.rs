@@ -7,9 +7,9 @@ use std::path::{Path, PathBuf};
 
 use powerio::{
     BusId, BusType, Error, Network, SourceFormat, TargetFormat, convert_file, parse_file,
-    parse_matpower, parse_matpower_file, parse_powermodels_json, parse_powerworld, parse_psse,
-    read_pypsa_csv_folder, write_as, write_egret_json, write_powermodels_json, write_powerworld,
-    write_psse, write_pypsa_csv_folder,
+    parse_matpower, parse_matpower_file, parse_powermodels_json, parse_powerworld, parse_pslf,
+    parse_psse, read_pypsa_csv_folder, write_as, write_egret_json, write_powermodels_json,
+    write_powerworld, write_pslf, write_psse, write_pypsa_csv_folder,
 };
 use serde_json::Value;
 
@@ -32,10 +32,10 @@ fn canonical_api_names_parse_and_convert() {
         "powermodels-json".parse::<TargetFormat>().unwrap(),
         TargetFormat::PowerModelsJson
     );
-    assert_eq!(TargetFormat::Psse.to_string(), "psse");
+    assert_eq!(TargetFormat::Psse { rev: 33 }.to_string(), "psse");
     assert_eq!(net.to_matpower(), src);
 
-    let pm = net.to_format(TargetFormat::PowerModelsJson);
+    let pm = net.to_format(TargetFormat::PowerModelsJson).unwrap();
     assert_eq!(
         serde_json::from_str::<Value>(&pm.text).unwrap()["name"],
         "case14"
@@ -87,7 +87,7 @@ fn core(net: &Network) -> Core {
 #[test]
 fn pandapower_json_round_trips_core_and_echoes_source() {
     let net = parse_matpower_file(data("case9.m")).unwrap();
-    let conv = write_as(&net, TargetFormat::PandapowerJson);
+    let conv = write_as(&net, TargetFormat::PandapowerJson).unwrap();
     assert!(
         !conv.warnings.iter().any(|w| w.contains("dcline")),
         "case9 has no dclines, got warnings: {:?}",
@@ -99,7 +99,7 @@ fn pandapower_json_round_trips_core_and_echoes_source() {
     assert_eq!(back.source_format, SourceFormat::PandapowerJson);
     assert_eq!(core(&back), core(&net));
     assert_eq!(
-        write_as(&back, TargetFormat::PandapowerJson).text,
+        write_as(&back, TargetFormat::PandapowerJson).unwrap().text,
         conv.text
     );
 
@@ -292,7 +292,7 @@ fn pandapower_writer_keeps_zero_rating_zero() {
     let mut net = parse_matpower_file(data("case9.m")).unwrap();
     net.branches[0].rate_a = 0.0;
     net.source = None; // force the canonical (non-echo) writer
-    let conv = write_as(&net, TargetFormat::PandapowerJson);
+    let conv = write_as(&net, TargetFormat::PandapowerJson).unwrap();
     let back = powerio::parse_str(&conv.text, "pandapower-json")
         .unwrap()
         .network;
@@ -480,7 +480,10 @@ fn powermodels_json_same_format_is_byte_exact_echo() {
     let net = parse_matpower_file(data("case30.m")).unwrap();
     let json = write_powermodels_json(&net).text;
     let net2 = parse_powermodels_json(&json).unwrap();
-    assert_eq!(write_as(&net2, TargetFormat::PowerModelsJson).text, json);
+    assert_eq!(
+        write_as(&net2, TargetFormat::PowerModelsJson).unwrap().text,
+        json
+    );
 }
 
 #[test]
@@ -495,7 +498,7 @@ fn powermodels_json_to_matpower_two_way() {
     let net = parse_powermodels_json(&json).unwrap();
     assert_eq!(net.source_format, powerio::SourceFormat::PowerModelsJson);
 
-    let reparsed = parse_matpower(&write_as(&net, TargetFormat::Matpower).text).unwrap();
+    let reparsed = parse_matpower(&write_as(&net, TargetFormat::Matpower).unwrap().text).unwrap();
     assert_eq!(reparsed.buses.len(), orig.buses.len());
     assert_eq!(reparsed.branches.len(), orig.branches.len());
     assert_eq!(reparsed.generators.len(), orig.generators.len());
@@ -524,8 +527,8 @@ fn psse_reads_real_pti_files() {
 
 #[test]
 fn hvdc_converts_and_round_trips() {
-    // t_case9_dcline.m carries HVDC dclines. PowerModels JSON round-trips them;
-    // egret/PSS-E/PowerWorld drop them, each with a warning.
+    // t_case9_dcline.m carries HVDC dclines. PowerModels JSON and PSS/E round-trip
+    // them (PSS/E as two-terminal DC); egret/PowerWorld drop them with a warning.
     let net = parse_matpower_file(data("t_case9_dcline.m")).unwrap();
     assert!(!net.hvdc.is_empty(), "fixture should have dclines");
 
@@ -539,11 +542,24 @@ fn hvdc_converts_and_round_trips() {
     assert_eq!(back.hvdc[0].from, net.hvdc[0].from);
     assert_eq!(back.hvdc[0].to, net.hvdc[0].to);
 
-    for conv in [
-        write_egret_json(&net),
-        write_psse(&net),
-        write_powerworld(&net),
-    ] {
+    // PSS/E writes the dclines as two-terminal DC records; the endpoints and
+    // power setpoint survive a re-read, with the converter detail defaulted.
+    let psse = write_psse(&net);
+    let from_psse = parse_psse(&psse.text).unwrap();
+    assert_eq!(
+        from_psse.hvdc.len(),
+        net.hvdc.len(),
+        "PSS/E keeps the dclines"
+    );
+    assert_eq!(from_psse.hvdc[0].from, net.hvdc[0].from);
+    assert_eq!(from_psse.hvdc[0].to, net.hvdc[0].to);
+    assert!(
+        psse.warnings.iter().any(|w| w.contains("converter detail")),
+        "PSS/E should note the defaulted converter detail, got {:?}",
+        psse.warnings
+    );
+
+    for conv in [write_egret_json(&net), write_powerworld(&net)] {
         assert!(
             conv.warnings.iter().any(|w| w.contains("dcline")),
             "expected a dropped-dcline warning, got {:?}",
@@ -556,12 +572,60 @@ fn hvdc_converts_and_round_trips() {
     // write_as would echo its source; convert through PowerModels first to reach
     // the canonical MATPOWER path with HVDC still present.
     assert_eq!(back.source_format, SourceFormat::PowerModelsJson);
-    let to_mp = write_as(&back, TargetFormat::Matpower);
+    let to_mp = write_as(&back, TargetFormat::Matpower).unwrap();
     assert!(
         to_mp.warnings.iter().any(|w| w.contains("dcline")),
         "cross-format → MATPOWER should warn on dropped dclines, got {:?}",
         to_mp.warnings
     );
+}
+
+#[test]
+fn hvdc_round_trips_through_pslf() {
+    // A MATPOWER case with dclines converts to PSLF as `dc converter` + `dc line`
+    // records, and a re-read recovers the AC terminals, power setpoints, and
+    // status. (PSLF keeps the AC converters separate from the DC line; the writer
+    // synthesizes the DC bus join keys.)
+    let net = parse_matpower_file(data("t_case9_dcline.m")).unwrap();
+    assert!(!net.hvdc.is_empty(), "fixture should have dclines");
+
+    let pslf = write_pslf(&net);
+    assert!(
+        !pslf.warnings.iter().any(|w| w.contains("dcline")),
+        "HVDC is now written, not dropped: {:?}",
+        pslf.warnings
+    );
+    let back = parse_pslf(&pslf.text).unwrap();
+    assert_eq!(back.hvdc.len(), net.hvdc.len(), "every dcline survives");
+    for (a, b) in net.hvdc.iter().zip(&back.hvdc) {
+        assert_eq!(b.from, a.from);
+        assert_eq!(b.to, a.to);
+        assert_eq!(b.in_service, a.in_service);
+        assert!(
+            (b.pf - a.pf).abs() < 1e-6,
+            "pf changed: {} != {}",
+            a.pf,
+            b.pf
+        );
+        assert!(
+            (b.pt - a.pt).abs() < 1e-6,
+            "pt changed: {} != {}",
+            a.pt,
+            b.pt
+        );
+        assert!(
+            (b.qf - a.qf).abs() < 1e-6,
+            "qf changed: {} != {}",
+            a.qf,
+            b.qf
+        );
+        assert!(
+            (b.qt - a.qt).abs() < 1e-6,
+            "qt changed: {} != {}",
+            a.qt,
+            b.qt
+        );
+    }
 }
 
 #[test]
@@ -618,7 +682,7 @@ fn readers_reject_malformed_input() {
 #[test]
 fn matpower_target_round_trips() {
     let net = parse_matpower_file(data("case14.m")).unwrap();
-    let conv = write_as(&net, TargetFormat::Matpower);
+    let conv = write_as(&net, TargetFormat::Matpower).unwrap();
     assert!(conv.warnings.is_empty());
     // Matpower target is the lossless echo: byte-identical to the source.
     let src = std::fs::read_to_string(data("case14.m")).unwrap();
@@ -1100,7 +1164,7 @@ fn pandapower_json_round_trips_transformers_shunts_and_oos() {
         if case == "case14.m" {
             knock_out_case14(&mut net);
         }
-        let conv = write_as(&net, TargetFormat::PandapowerJson);
+        let conv = write_as(&net, TargetFormat::PandapowerJson).unwrap();
         let back = powerio::parse_str(&conv.text, "pandapower-json")
             .unwrap()
             .network;
@@ -1180,7 +1244,7 @@ fn gen_costs_round_trip_through_pandapower_json() {
     // case9 costs are quadratic [c2, c1, c0] = [0.11, 5.0, 150.0]; poly_cost
     // must carry all three back without reordering (a cp0/cp2 swap fails here).
     let net = parse_matpower_file(data("case9.m")).unwrap();
-    let conv = write_as(&net, TargetFormat::PandapowerJson);
+    let conv = write_as(&net, TargetFormat::PandapowerJson).unwrap();
     let back = powerio::parse_str(&conv.text, "pandapower-json")
         .unwrap()
         .network;
@@ -1331,6 +1395,8 @@ fn slackless_network_conversion_warns_for_power_flow_targets() {
             base_kv: 1.0,
             vmax: 1.1,
             vmin: 0.9,
+            evhi: None,
+            evlo: None,
             area: 1,
             zone: 1,
             name: None,
@@ -1352,6 +1418,7 @@ fn slackless_network_conversion_warns_for_power_flow_targets() {
             in_service: true,
             angmin: -360.0,
             angmax: 360.0,
+            control: None,
             extras: Extras::new(),
         }
     }
@@ -1366,10 +1433,10 @@ fn slackless_network_conversion_warns_for_power_flow_targets() {
     );
     for fmt in [
         TargetFormat::Matpower,
-        TargetFormat::Psse,
+        TargetFormat::Psse { rev: 33 },
         TargetFormat::PowerModelsJson,
     ] {
-        let conv = write_as(&net, fmt);
+        let conv = write_as(&net, fmt).unwrap();
         assert!(
             conv.warnings
                 .iter()
@@ -1387,8 +1454,95 @@ fn slackless_network_conversion_warns_for_power_flow_targets() {
     );
     assert!(
         !write_as(&with_ref, TargetFormat::Matpower)
+            .unwrap()
             .warnings
             .iter()
             .any(|w| w.contains("reference (slack) bus"))
     );
+}
+
+#[test]
+fn snapshot_warns_on_non_finite_and_does_not_read_back() {
+    // JSON has no Inf/NaN: serde writes them as `null`, which the validating
+    // reader rejects. Readers legitimately produce Inf limits and the bindings
+    // materialize every network through the snapshot, so the write stays total,
+    // but it must SAY what degraded (naming the field), and the no-read-back
+    // consequence is pinned here so a change to either side surfaces.
+    let mut net = parse_matpower_file(data("case9.m")).unwrap();
+    net.branches[2].angmax = f64::INFINITY;
+    let conv = write_as(&net, TargetFormat::PowerioJson).unwrap();
+    assert!(
+        conv.warnings
+            .iter()
+            .any(|w| w.contains("branches[2].angmax")),
+        "the degradation warning should name the field: {:?}",
+        conv.warnings
+    );
+    let err = powerio::parse_str(&conv.text, "powerio-json")
+        .expect_err("a null-degraded snapshot must not validate");
+    assert!(err.to_string().contains("null"), "got: {err}");
+
+    // A NaN bus voltage warns the same way.
+    let mut net = parse_matpower_file(data("case9.m")).unwrap();
+    net.buses[0].vm = f64::NAN;
+    let conv = write_as(&net, TargetFormat::PowerioJson).unwrap();
+    assert!(
+        conv.warnings.iter().any(|w| w.contains("buses[0].vm")),
+        "got: {:?}",
+        conv.warnings
+    );
+
+    // EVERY non-finite field is named, not just the first: serde writes them all
+    // as null, so a caller fixing only the first-reported field would re-export
+    // and still fail to read back. Both offenders must appear in one write.
+    let mut net = parse_matpower_file(data("case9.m")).unwrap();
+    net.buses[0].vm = f64::NAN;
+    net.branches[2].angmax = f64::INFINITY;
+    let conv = write_as(&net, TargetFormat::PowerioJson).unwrap();
+    assert!(
+        conv.warnings.iter().any(|w| w.contains("buses[0].vm"))
+            && conv
+                .warnings
+                .iter()
+                .any(|w| w.contains("branches[2].angmax")),
+        "both non-finite fields must be named in one write: {:?}",
+        conv.warnings
+    );
+}
+
+#[test]
+fn snapshot_round_trips_through_core_api() {
+    // write_as -> parse_str at the core level (the C ABI test covers the same
+    // path over FFI). case30 carries loads, shunts, and gen costs.
+    let net = parse_matpower_file(data("case30.m")).unwrap();
+    let conv = write_as(&net, TargetFormat::PowerioJson).unwrap();
+    assert!(conv.warnings.is_empty(), "the snapshot writes no warnings");
+    let parsed = powerio::parse_str(&conv.text, "powerio-json").unwrap();
+    assert!(parsed.warnings.is_empty(), "the snapshot reads back total");
+    let back = parsed.network;
+    assert_eq!(back.buses.len(), net.buses.len());
+    assert_eq!(back.branches.len(), net.branches.len());
+    assert_eq!(back.generators.len(), net.generators.len());
+    // Bit-exact: the snapshot is lossless, so even the sign of a zero survives.
+    assert_eq!(back.base_mva.to_bits(), net.base_mva.to_bits());
+    assert_eq!(back.source_format, net.source_format);
+}
+
+#[test]
+fn snapshot_json_file_is_sniffed_without_a_format_hint() {
+    // A snapshot written to disk carries the generic .json extension; the
+    // sniffer must route it to the powerio-json reader (top level `buses`),
+    // not the PowerModels fallback, so parse_file works with from=None.
+    let net = parse_matpower_file(data("case14.m")).unwrap();
+    let text = write_as(&net, TargetFormat::PowerioJson).unwrap().text;
+    let path = std::env::temp_dir().join(format!(
+        "powerio_snapshot_sniff_{}.json",
+        std::process::id()
+    ));
+    std::fs::write(&path, &text).unwrap();
+    let parsed = parse_file(&path, None);
+    std::fs::remove_file(&path).ok();
+    let back = parsed.unwrap().network;
+    assert_eq!(back.buses.len(), 14);
+    assert_eq!(back.source_format, SourceFormat::Matpower);
 }

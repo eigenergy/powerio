@@ -84,6 +84,22 @@ pub fn write_powermodels_json(net: &Network) -> Conversion {
             storage.len()
         ));
     }
+    if !net.transformers_3w.is_empty() {
+        warnings.push(format!(
+            "{} 3-winding transformer(s) dropped: the PowerModels JSON writer emits no 3-winding record",
+            net.transformers_3w.len()
+        ));
+    }
+    if net
+        .buses
+        .iter()
+        .any(|b| b.evhi.is_some() || b.evlo.is_some())
+    {
+        warnings.push(
+            "emergency voltage band(s) (EVHI/EVLO) dropped: this writer carries one voltage band"
+                .into(),
+        );
+    }
 
     let mut root = Map::new();
     root.insert("name".into(), Value::String(net.name.clone()));
@@ -368,6 +384,7 @@ pub(crate) fn parse_powermodels_json_source(
     let net = Network {
         name,
         base_mva,
+        base_frequency: crate::network::DEFAULT_BASE_FREQUENCY,
         buses: sorted(root, "bus", "index")
             .iter()
             .map(|v| read_bus(v, ascale))
@@ -396,6 +413,9 @@ pub(crate) fn parse_powermodels_json_source(
             .iter()
             .map(|v| read_hvdc(v, pscale))
             .collect(),
+        transformers_3w: Vec::new(),
+        areas: Vec::new(),
+        solver: None,
         source_format: SourceFormat::PowerModelsJson,
         source: Some(source),
     };
@@ -465,6 +485,8 @@ fn read_bus(v: &Value, ascale: f64) -> Result<Bus> {
         base_kv: f(v, "base_kv"),
         vmax: f(v, "vmax"),
         vmin: f(v, "vmin"),
+        evhi: None,
+        evlo: None,
         area: uid(v, "area"),
         zone: uid(v, "zone"),
         name: v.get("name").and_then(Value::as_str).map(str::to_string),
@@ -504,6 +526,7 @@ fn read_shunt(v: &Value, pscale: f64) -> Shunt {
         g: f(v, "gs") * pscale,
         b: f(v, "bs") * pscale,
         in_service: flag(v, "status"),
+        control: None,
         extras: extras_excluding(
             v,
             &["shunt_bus", "gs", "bs", "status", "index", "source_id"],
@@ -538,6 +561,7 @@ fn read_branch(v: &Value, pscale: f64, ascale: f64) -> Branch {
         in_service: flag(v, "br_status"),
         angmin: f(v, "angmin") * ascale,
         angmax: f(v, "angmax") * ascale,
+        control: None,
         extras: extras_excluding(
             v,
             &[
@@ -593,6 +617,7 @@ fn read_gen(v: &Value, pscale: f64, base_mva: f64, per_unit: bool) -> Generator 
         in_service: flag(v, "gen_status"),
         cost,
         caps,
+        regulated_bus: None,
     }
 }
 

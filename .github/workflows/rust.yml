@@ -72,11 +72,11 @@ jobs:
     # Deny the workspace pedantic lints on the non-extension crates. The PyO3
     # ext crates are linted in the Python workflow with their feature enabled.
     - name: Clippy
-      run: cargo clippy --all-targets -p powerio -p powerio-matrix -p powerio-cli -p powerio-capi -- -D warnings
-    # Bare `cargo test` only covers powerio + powerio-matrix (the default-members); name
-    # the C ABI crate explicitly so its end-to-end ABI tests run in CI too.
+      run: cargo clippy --all-targets -p powerio -p powerio-matrix -p powerio-cli -p powerio-capi -p powerio-dist -- -D warnings
+    # Bare `cargo test` only covers the default-members; name the C ABI crate
+    # explicitly so its end-to-end ABI tests run in CI too.
     - name: Run tests
-      run: cargo test -p powerio -p powerio-matrix -p powerio-cli -p powerio-capi --verbose
+      run: cargo test -p powerio -p powerio-matrix -p powerio-cli -p powerio-capi -p powerio-dist --verbose
     # The gridfm Parquet export is behind a cargo feature; exercise it (and its
     # clippy) explicitly so coverage doesn't depend on CLI feature unification.
     - name: Clippy + tests (gridfm feature)
@@ -123,7 +123,7 @@ jobs:
     - uses: Swatinem/rust-cache@v2
     - name: Build powerio-capi --features arrow
       run: cargo build -p powerio-capi --release --features arrow
-    # The cfg-gated pio_export_arrow still appears in the source symbol grep, so
+    # The cfg-gated pio_to_arrow still appears in the source symbol grep, so
     # it must be declared in the header (inside #ifdef PIO_ARROW); parity holds.
     - name: Header symbol parity
       run: |
@@ -143,3 +143,36 @@ jobs:
       run: |
         cargo test -p powerio-capi --features arrow --verbose
         cargo clippy -p powerio-capi --all-targets --features arrow -- -D warnings
+
+  c-abi-dist:
+    name: C ABI (dist feature)
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v6
+    - uses: dtolnay/rust-toolchain@stable
+      with:
+        components: clippy
+    - uses: Swatinem/rust-cache@v2
+    - name: Build powerio-capi --features dist
+      run: cargo build -p powerio-capi --release --features dist
+    # The cfg-gated pio_dist_* entry points still appear in the source symbol
+    # grep, so they must be declared in the header (inside #ifdef PIO_DIST);
+    # parity holds.
+    - name: Header symbol parity
+      run: |
+        grep -oE 'extern "C" fn pio_[a-z_]+' powerio-capi/src/lib.rs \
+          | grep -oE 'pio_[a-z_]+' | sort -u > rs_syms
+        grep -oE 'pio_[a-z_]+ *\(' powerio-capi/include/powerio.h \
+          | grep -oE 'pio_[a-z_]+' | sort -u > h_syms
+        diff rs_syms h_syms
+    # Compile the smoke test with -DPIO_DIST so it exercises the distribution
+    # entry points against the dist-featured library.
+    - name: Compile and run the C smoke test (dist)
+      run: |
+        cc -DPIO_DIST -I powerio-capi/include powerio-capi/examples/smoke.c \
+           -L target/release -lpowerio_capi -o pio_smoke_dist
+        LD_LIBRARY_PATH=target/release ./pio_smoke_dist tests/data/case9.m
+    - name: Tests + clippy (dist feature)
+      run: |
+        cargo test -p powerio-capi --features dist --verbose
+        cargo clippy -p powerio-capi --all-targets --features dist -- -D warnings

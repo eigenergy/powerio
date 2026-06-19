@@ -1,0 +1,14 @@
+! Three phase delta-wye step down transformer, 12.47 kV delta primary to
+! 208 V grounded wye secondary, with a wye connected load.
+Clear
+Set DefaultBaseFrequency=60
+
+New Circuit.xfmr_delta_wye basekv=12.47 pu=1.0 phases=3 bus1=sourcebus MVAsc3=2000 MVAsc1=2100
+
+New Transformer.t1 phases=3 windings=2 buses=(sourcebus, secondary) conns=(delta, wye) kvs=(12.47, 0.208) kvas=(300, 300) xhl=5.75 %Rs=(0.5, 0.5)
+
+New Load.l1 bus1=secondary phases=3 conn=wye kv=0.208 kw=200 pf=0.9 model=1 vminpu=0.8 vmaxpu=1.2
+
+Set VoltageBases=[12.47, 0.208]
+Calcvoltagebases
+Solve

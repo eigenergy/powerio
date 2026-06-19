@@ -1,0 +1,16 @@
+! Single phase delta-wye: a phase to phase (line to line) 12.47 kV primary
+! across two source phases, stepping to a grounded 2.4 kV wye secondary.
+! The delta winding (sourcebus.1.2) keeps both phase terminals through the
+! single phase wye/delta path; the grounded secondary gives a solid reference.
+Clear
+Set DefaultBaseFrequency=60
+
+New Circuit.xfmr_1ph_delta_wye basekv=12.47 pu=1.0 phases=3 bus1=sourcebus MVAsc3=200000 MVAsc1=210000
+
+New Transformer.t1 phases=1 windings=2 buses=(sourcebus.1.2, secondary.1.0) conns=(delta, wye) kvs=(12.47, 2.4) kvas=(500, 500) xhl=2 %Rs=(0.5, 0.5)
+
+New Load.load1 bus1=secondary.1.0 phases=1 conn=wye kv=2.4 kw=200 pf=0.95 model=1
+
+Set VoltageBases=[12.47, 2.4]
+Calcvoltagebases
+Solve
