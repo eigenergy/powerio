@@ -1,0 +1,18 @@
+! Degenerate circuit exercising OpenDSS class defaults: every element below
+! relies on constructor defaults for its electrical parameters. A converter
+! must materialize those defaults explicitly (line r1=0.058 ohm/kft etc.,
+! load kv=12.47 kw=10 pf=0.88, transformer 12.47/12.47 kV 1000 kVA xhl=7,
+! vsource basekv=115 pu=1).
+Clear
+Set DefaultBaseFrequency=60
+
+New Circuit.defaults_degenerate
+
+New Line.l_default bus1=sourcebus bus2=b2
+New Load.ld_default bus1=b2
+New Transformer.t_default buses=(b2, b3)
+New Load.ld2 bus1=b3 kw=20
+
+Set VoltageBases=[115, 12.47]
+Calcvoltagebases
+Solve

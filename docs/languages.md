@@ -43,3 +43,21 @@ snapshot, PyPSA CSV directories, and gridfm datasets are all format strings into
 `pio_to_format` / `pio_parse_str` / `pio_write_dir` / `pio_read_dir`. The
 language APIs keep their per-format conveniences (`to_matpower`, `from_json`,
 ...) as wrappers over the same paths.
+
+## Distribution surface (`powerio-dist`)
+
+The multiconductor distribution model follows the same taxonomy under its own
+handle type; the two families do not mix. The distribution surface ships under the
+same `PIO_ABI_VERSION` as transmission, behind the optional `dist` feature
+(`PIO_DIST`); a consumer probes it at runtime with `pio_has_feature("dist")`.
+Julia bindings are not wired up yet (tracked on the PowerIO.jl side).
+
+| Concept | Rust | Python | C ABI |
+|---|---|---|---|
+| Parse path | `powerio_dist::parse_file(path, from)` | `dist.parse_file(path, from_=None)` | `pio_dist_parse_file` |
+| Parse text | `powerio_dist::parse_str(text, format)` | `dist.parse_str(text, format)` | `pio_dist_parse_str` |
+| File conversion | `powerio_dist::convert_file(path, to, from)` | `dist.convert_file(path, to, from_=None)` | `pio_dist_convert_file` |
+| Target format type | `DistTargetFormat` (`FromStr`, `name()`) | format name strings | format name strings |
+| Text conversion | `powerio_dist::convert_str(text, to, format)` | `dist.convert_str(text, to, format)` | `pio_dist_convert_str` |
+| Parsed conversion | `net.to_format(to)` | `case.to_format(to)` | `pio_dist_to_format` |
+| Parse warnings | `net.warnings` | `case.warnings` | `pio_dist_warnings` |

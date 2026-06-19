@@ -8,6 +8,12 @@ tests/data/** linguist-vendored
 
 # Julia appears here only as a validation harness, not as the package language.
 benchmarks/**/*.jl linguist-vendored
+powerio-dist/tools/pmd/*.jl linguist-vendored
+
+# Vendored distribution fixtures (BMOPF schema + example networks from
+# frederikgeth/bmopf-report, OpenDSS test feeders): keep them out of the
+# language stats and collapsed in diffs.
+tests/data/dist/** linguist-vendored
 
 # Vendored case fixtures are byte-exact round-trip references: the `parse → write`
 # tests (e.g. powerio/tests/roundtrip.rs) compare the writer output to the file

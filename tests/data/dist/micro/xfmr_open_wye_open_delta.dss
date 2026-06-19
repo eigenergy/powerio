@@ -1,0 +1,17 @@
+! Open wye, open delta transformer bank: two single phase units step a
+! 7.2 kV line to neutral primary down to a 4.16 kV delta secondary. Each
+! delta leg (secondary.1.2 and secondary.2.3) spans two phase terminals,
+! the single phase wye/delta path BMOPF emits as a single_phase entry.
+Clear
+Set DefaultBaseFrequency=60
+
+New Circuit.xfmr_open_wye_open_delta basekv=12.47 pu=1.0 phases=3 bus1=sourcebus MVAsc3=200000 MVAsc1=210000
+
+New Transformer.t1 phases=1 windings=2 buses=(sourcebus.1.0, secondary.1.2) conns=(wye, delta) kvs=(7.2, 4.16) kvas=(2000, 2000) xhl=5.75 %Rs=(0.5, 0.5)
+New Transformer.t2 phases=1 windings=2 buses=(sourcebus.2.0, secondary.2.3) conns=(wye, delta) kvs=(7.2, 4.16) kvas=(2000, 2000) xhl=5.75 %Rs=(0.5, 0.5)
+
+New Load.load1 bus1=secondary phases=3 conn=delta kv=4.16 kw=300 pf=0.95 model=1
+
+Set VoltageBases=[12.47, 4.16]
+Calcvoltagebases
+Solve

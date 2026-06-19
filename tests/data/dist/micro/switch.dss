@@ -1,0 +1,24 @@
+! Switch handling: a closed switch line in the main path, an open switch
+! feeding a stub, and a SwtControl holding each switch in its state.
+Clear
+Set DefaultBaseFrequency=60
+
+New Circuit.switch_case basekv=12.47 pu=1.0 phases=3 bus1=sourcebus MVAsc3=2000 MVAsc1=2100
+
+New Linecode.lc3 nphases=3 basefreq=60 units=km
+~ rmatrix = (0.31 | 0.06 0.30 | 0.06 0.06 0.31)
+~ xmatrix = (0.69 | 0.30 0.71 | 0.28 0.30 0.69)
+~ cmatrix = (10.2 | -3.1 10.4 | -2.9 -3.1 10.2)
+
+New Line.feeder bus1=sourcebus bus2=mid phases=3 linecode=lc3 length=1.2 units=km
+New Line.sw_closed bus1=mid bus2=loadbus phases=3 switch=y
+New Line.sw_open bus1=mid bus2=stub phases=3 switch=y
+
+New SwtControl.sc_closed SwitchedObj=Line.sw_closed SwitchedTerm=1 Normal=closed Action=close
+New SwtControl.sc_open SwitchedObj=Line.sw_open SwitchedTerm=1 Normal=open Action=open
+
+New Load.l1 bus1=loadbus phases=3 conn=wye kv=12.47 kw=500 pf=0.95 model=1 vminpu=0.8 vmaxpu=1.2
+
+Set VoltageBases=[12.47]
+Calcvoltagebases
+Solve

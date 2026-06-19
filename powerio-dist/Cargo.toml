@@ -1,0 +1,31 @@
+[package]
+name = "powerio-dist"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+description = "Multiconductor distribution network model and lossless converters for OpenDSS, PMD JSON, and BMOPF JSON."
+readme = "README.md"
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+documentation = "https://docs.rs/powerio-dist"
+keywords = ["opendss", "distribution", "parser", "lossless"]
+categories = ["science", "parsing"]
+
+[package.metadata.docs.rs]
+all-features = true
+
+[dependencies]
+thiserror = "2"
+serde.workspace = true
+# float_roundtrip: the default float parser can be one ULP off the shortest
+# representation its own serializer prints; the round trip contracts need
+# parse(print(x)) == x exactly.
+serde_json = { workspace = true, features = ["float_roundtrip"] }
+
+[dev-dependencies]
+# Draft 2020-12 validation against the vendored BMOPF schema in tests.
+jsonschema = { version = "0.46", default-features = false }
+
+[lints]
+workspace = true

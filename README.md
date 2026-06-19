@@ -37,10 +37,13 @@ The following formats are currently supported:
 - [PyPSA](https://pypsa.org/) static CSV folders
 - [GridFM](https://github.com/gridfm) `.parquet`
 
+Distribution networks are supported in wire coordinates via [`powerio-dist`](powerio-dist/):
+- [OpenDSS](https://www.epri.com/pages/sa/opendss) `.dss`
+- [PowerModelsDistribution.jl](https://github.com/lanl-ansi/PowerModelsDistribution.jl) ENGINEERING data JSON
+- The (draft) BMOPF JSON spec and schema of the [IEEE BMOPF task force](https://github.com/frederikgeth/bmopf-report) `.json`
+
 Support for the following formats is under development (see the open pull requests):
-- [surge](https://github.com/amptimal/surge) `.surge.json` 
-- [PowerModelsDistribution.jl](https://github.com/lanl-ansi/PowerModelsDistribution.jl) engineering data JSON
-- [IEEE BMOPF](https://github.com/frederikgeth/bmopf-report) schema `.json`
+- [surge](https://github.com/amptimal/surge) `.surge.json`
 
 Other formats are planned; see the GitHub issues. If a format you need is missing, open an issue or a pull request. All are welcome to contribute to this community project.
 
@@ -51,6 +54,7 @@ This repository contains multiple packages.
 ```
 powerio          # parser, Network model, source retaining writers, converters
 powerio-matrix   # sparse matrices, DC sensitivity factors, graph views
+powerio-dist     # multiconductor distribution model, dss/PMD/BMOPF converters
 powerio-cli      # the `powerio` command and ratatui TUI
 powerio-py       # PyO3 extension for the Python `powerio` package
 powerio-capi     # C ABI for C, C++, Julia, and other foreign function interfaces
@@ -154,6 +158,11 @@ PSLF writer. PowerWorld `.pwd` is display data, not a network case, so it is
 outside this conversion table and uses `parse_display_file` /
 `parse_display_bytes`. The decoded vintages and per field evidence live in
 [docs/powerworld.md](docs/powerworld.md).
+
+The distribution matrix (dss, PMD JSON, BMOPF JSON, per fixture) is generated into
+[powerio-dist/docs/conversion-matrix.md](https://github.com/eigenergy/powerio/blob/main/powerio-dist/docs/conversion-matrix.md).
+Vendored test data keeps its own licenses, documented next to the fixtures
+(see [tests/data/dist/README.md](tests/data/dist/README.md)).
 
 PyPSA CSV folders and GridFM Parquet are not in this table only because they
 are directory datasets, not single text outputs. Both read and write: PyPSA
