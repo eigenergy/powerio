@@ -920,9 +920,10 @@ impl DssWriter {
             // inductive (negative) sign and regenerates as a Reactor. The
             // sign is the class discriminator, the mirror of the reader.
             let phases = extras_usize(&sh.extras, "phases").unwrap_or(sh.terminal_map.len());
-            let diag: Vec<f64> = (0..phases.min(sh.b.len())).map(|i| sh.b[i][i]).collect();
-            let b_max = diag.iter().copied().fold(0.0_f64, f64::max);
-            let b_min = diag.iter().copied().fold(0.0_f64, f64::min);
+            // One pass over the diagonal for both extremes.
+            let (b_max, b_min) = (0..phases.min(sh.b.len()))
+                .map(|i| sh.b[i][i])
+                .fold((0.0_f64, 0.0_f64), |(mx, mn), v| (mx.max(v), mn.min(v)));
             let (class, b_phase) = if b_max > 0.0 {
                 ("capacitor", b_max)
             } else if b_min < 0.0 {
@@ -934,6 +935,15 @@ impl DssWriter {
                 ));
                 continue;
             };
+            if b_max > 0.0 && b_min < 0.0 {
+                // Both signs on the diagonal: only the dominant class is
+                // emitted; the opposite-sign phases are not regenerated.
+                self.warn(format!(
+                    "shunt {}: diagonal mixes capacitive and inductive phases; only the \
+                     {class} phases are regenerated",
+                    sh.name
+                ));
+            }
             self.check_name(class, &sh.name);
             let off_diag =
                 sh.b.iter()
