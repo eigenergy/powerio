@@ -1,4 +1,4 @@
-//! Format-neutral network model — the hub every converter meets at.
+//! Format-neutral network model: the hub every converter meets at.
 //!
 //! Readers map their format into a [`Network`]; writers map a `Network` back out.
 //! It is the one canonical data model: format-neutral tables with loads and
@@ -31,8 +31,20 @@ use crate::Error;
 /// cross-format passthrough. Keys are the field names; values are JSON scalars.
 pub type Extras = BTreeMap<String, Value>;
 
+/// System base frequency in hertz when a format records none. Power networks run
+/// at 50 or 60 Hz; 60 is the default for the formats (MATPOWER, PowerModels,
+/// egret) that carry no frequency field.
+pub const DEFAULT_BASE_FREQUENCY: f64 = 60.0;
+
+/// serde default for [`Network::base_frequency`], so JSON written before the
+/// field existed still deserializes (the C ABI and Julia bridge ride on the JSON
+/// transport).
+fn default_base_frequency() -> f64 {
+    DEFAULT_BASE_FREQUENCY
+}
+
 /// A bus identifier as it appears in the source file: the external, stable id
-/// (1-based in MATPOWER, and possibly sparse — pegase has gaps in its ids).
+/// (1-based in MATPOWER, and possibly sparse; pegase has gaps in its ids).
 /// Distinct from the dense `[0, n)` analysis index, which only
 /// [`IndexedNetwork`](crate::IndexedNetwork) produces, via
 /// [`bus_index`](crate::IndexedNetwork::bus_index). The two are both integers
@@ -41,7 +53,7 @@ pub type Extras = BTreeMap<String, Value>;
 /// contiguous case and pure garbage on a sparse one).
 ///
 /// `#[serde(transparent)]` so the JSON transport carries a bare integer, not a
-/// wrapper object — the wire format is unchanged.
+/// wrapper object; the wire format is unchanged.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(transparent)]
 pub struct BusId(pub usize);
@@ -136,8 +148,10 @@ pub enum SourceFormat {
     Psse,
     PowerWorld,
     PandapowerJson,
-    /// Read from a GE PSLF `.epc` case. Read only: same source text is
-    /// retained for auditability, but there is no canonical PSLF writer.
+    /// Read from a GE PSLF `.epc` case. Same source text is retained, so a
+    /// same-format write echoes it byte-for-byte; a cross-format or
+    /// source-dropped write goes through the `.epc` serializer
+    /// ([`write_pslf`](crate::write_pslf)).
     Pslf,
     /// Read from a PowerWorld `.pwb` binary case. Read only: there is no
     /// `.pwb` writer and no retained source text, so writing goes through
@@ -167,6 +181,14 @@ pub enum SourceFormat {
 pub struct Network {
     pub name: String,
     pub base_mva: f64,
+    /// System base frequency in hertz (50 or 60). Threaded through the formats
+    /// that record it (PSS/E `BASFRQ`, pandapower `f_hz`) and defaulted to
+    /// [`DEFAULT_BASE_FREQUENCY`] for the rest. Load-bearing for any
+    /// reactance↔henry conversion (pandapower line charging) and reported as a
+    /// fidelity loss when a non-default value writes to a format with no
+    /// frequency field.
+    #[serde(default = "default_base_frequency")]
+    pub base_frequency: f64,
     pub buses: Vec<Bus>,
     pub loads: Vec<Load>,
     pub shunts: Vec<Shunt>,
@@ -174,6 +196,26 @@ pub struct Network {
     pub generators: Vec<Generator>,
     pub storage: Vec<Storage>,
     pub hvdc: Vec<Hvdc>,
+    /// Three-winding transformers, kept as typed records rather than folded into
+    /// `branches`, so a star point and the per-winding data survive a round trip.
+    /// `#[serde(default)]` so JSON written before the field existed still
+    /// deserializes. [`IndexedNetwork`](crate::IndexedNetwork) lowers each
+    /// in-service record into a star bus plus three branches (via
+    /// [`Transformer3W::star_expansion`]) before building any matrix, so a
+    /// 3-winding transformer does appear in `Y_bus`/connectivity; the canonical
+    /// model keeps the typed record for round-trip fidelity.
+    #[serde(default)]
+    pub transformers_3w: Vec<Transformer3W>,
+    /// Area records: scheduled interchange and per-area swing bus. Distinct from
+    /// the bare `area` number on each [`Bus`]; this is the area's metadata, which
+    /// every conversion dropped before. `#[serde(default)]` so older JSON still
+    /// deserializes.
+    #[serde(default)]
+    pub areas: Vec<Area>,
+    /// Solver / solution-control metadata when the source carries it, else `None`.
+    /// `#[serde(default)]` so older JSON still deserializes.
+    #[serde(default)]
+    pub solver: Option<SolverParams>,
     pub source_format: SourceFormat,
     /// Raw source text, when read from a textual format; enables a byte-exact
     /// same-format round-trip. `Arc<String>` (not `Arc<str>`) is deliberate: a
@@ -201,6 +243,15 @@ pub struct Bus {
     pub base_kv: f64,
     pub vmax: f64,
     pub vmin: f64,
+    /// Emergency (short-term) voltage band, set only when the source states one
+    /// distinct from the normal [`vmax`](Bus::vmax)/[`vmin`](Bus::vmin) band (PSS/E
+    /// `EVHI`/`EVLO`). `None` means the emergency band equals the normal band, so
+    /// read `evhi.unwrap_or(vmax)` / `evlo.unwrap_or(vmin)`. `#[serde(default)]` so
+    /// JSON written before the fields existed still deserializes.
+    #[serde(default)]
+    pub evhi: Option<f64>,
+    #[serde(default)]
+    pub evlo: Option<f64>,
     pub area: usize,
     pub zone: usize,
     pub name: Option<String>,
@@ -223,10 +274,55 @@ pub struct Shunt {
     pub bus: BusId,
     /// Shunt conductance (MW at V = 1 p.u.).
     pub g: f64,
-    /// Shunt susceptance (MVAr at V = 1 p.u.).
+    /// Shunt susceptance (MVAr at V = 1 p.u.). For a switched shunt this is the
+    /// initial (steady-state) value within the [`control`](Shunt::control) blocks.
     pub b: f64,
     pub in_service: bool,
+    /// Switching-control data when this is a switched (adjustable) shunt; `None`
+    /// for a fixed shunt. `#[serde(default)]` so JSON written before the field
+    /// existed still deserializes.
+    #[serde(default)]
+    pub control: Option<SwitchedShuntControl>,
     pub extras: Extras,
+}
+
+/// How a switched shunt adjusts its susceptance. Maps to the PSS/E `MODSW` code.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+#[non_exhaustive]
+pub enum SwitchedShuntMode {
+    /// Fixed at its initial susceptance, no automatic switching (`MODSW` 0).
+    Locked,
+    /// Continuous adjustment within the block range (`MODSW` 1).
+    Continuous,
+    /// Discrete adjustment in fixed steps (`MODSW` 2 and up).
+    Discrete,
+}
+
+/// One block of a switched shunt: `steps` equal increments of susceptance `b`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ShuntBlock {
+    pub steps: u32,
+    /// Susceptance increment per step (MVAr at V = 1 p.u.).
+    pub b: f64,
+}
+
+/// Switching-control data for a switched shunt ([`Shunt::control`]): the mode,
+/// the regulated voltage band and bus, the reactive-range percentage, and the
+/// adjustable susceptance blocks. The shunt's [`b`](Shunt::b) is the initial
+/// value within the blocks' total range.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[non_exhaustive]
+pub struct SwitchedShuntControl {
+    pub mode: SwitchedShuntMode,
+    /// Regulated voltage band (per unit).
+    pub vhigh: f64,
+    pub vlow: f64,
+    /// The regulated bus; `None` means the shunt regulates its own bus.
+    pub control_bus: Option<BusId>,
+    /// Percent of the controlled device's reactive range to apply (PSS/E `RMPCT`).
+    pub rmpct: f64,
+    pub blocks: Vec<ShuntBlock>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -249,6 +345,12 @@ pub struct Branch {
     pub in_service: bool,
     pub angmin: f64,
     pub angmax: f64,
+    /// Regulating-transformer control data, when this branch is a transformer
+    /// under automatic tap or phase control. `None` for lines and for fixed-ratio
+    /// transformers. `#[serde(default)]` so JSON written before the field existed
+    /// still deserializes.
+    #[serde(default)]
+    pub control: Option<TransformerControl>,
     pub extras: Extras,
 }
 
@@ -275,6 +377,60 @@ impl Branch {
     }
 }
 
+/// What a regulating transformer's tap (or phase shift) automatically controls.
+/// Maps to the PSS/E control code `COD` and the PSLF transformer `type`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+#[non_exhaustive]
+pub enum TransformerControlMode {
+    /// Fixed ratio, no automatic adjustment (PSS/E `COD` 0/±4, PSLF type 1).
+    Fixed,
+    /// Bus voltage control via tap (LTC; PSS/E `COD` ±1, PSLF type 2).
+    Voltage,
+    /// Reactive power flow control via tap (PSS/E `COD` ±2).
+    ReactiveFlow,
+    /// Active power flow control via phase shift (PSS/E `COD` ±3, PSLF type 4).
+    ActiveFlow,
+}
+
+/// Automatic-control data for a regulating transformer ([`Branch::control`]).
+///
+/// The limits carry whatever the [`mode`](TransformerControl::mode) regulates:
+/// `tap_min`/`tap_max` bound the tap ratio (or the phase angle, for
+/// [`ActiveFlow`](TransformerControlMode::ActiveFlow)), and `band_min`/`band_max`
+/// bound the controlled quantity (the regulated voltage band, or the
+/// scheduled MW/MVAr). `ntp` is the number of discrete tap positions and
+/// `controlled_bus` is the regulated bus (`None` = the transformer's own
+/// terminal). `mva_base` is the winding MVA base the impedance is referred to.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[non_exhaustive]
+pub struct TransformerControl {
+    pub mode: TransformerControlMode,
+    pub controlled_bus: Option<BusId>,
+    pub tap_min: f64,
+    pub tap_max: f64,
+    pub band_min: f64,
+    pub band_max: f64,
+    pub ntp: u32,
+    pub mva_base: f64,
+}
+
+impl Default for TransformerControl {
+    fn default() -> Self {
+        // PSS/E's documented defaults for an unset winding-control block.
+        TransformerControl {
+            mode: TransformerControlMode::Fixed,
+            controlled_bus: None,
+            tap_min: 0.9,
+            tap_max: 1.1,
+            band_min: 0.9,
+            band_max: 1.1,
+            ntp: 33,
+            mva_base: 0.0,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Generator {
     pub bus: BusId,
@@ -296,7 +452,19 @@ pub struct Generator {
     /// A fixed array, not an [`Extras`] map: a string-keyed map per generator
     /// costs 11 heap allocations each, which dominates the parse of a large
     /// generator-heavy case. Surfaced into formats that name them (PowerModels).
+    /// On the JSON snapshot it is a name-keyed object (see `caps_serde`) so the
+    /// schema stays additive when `GEN_EXTRA_KEYS` grows; `#[serde(default)]` so a
+    /// snapshot that omits it deserializes to the empty set.
+    #[serde(default = "default_caps", with = "caps_serde")]
     pub caps: GenCaps,
+    /// The remote bus whose voltage this generator regulates, when that is not its
+    /// own terminal bus (PSS/E `IREG`). `None` means it regulates its own bus.
+    /// Part of the cross-element voltage-control graph: a format that names a
+    /// remote regulated bus (PSS/E) keeps it across a round trip instead of
+    /// collapsing every generator onto its own terminal. `#[serde(default)]` so
+    /// JSON written before the field existed still deserializes.
+    #[serde(default)]
+    pub regulated_bus: Option<BusId>,
 }
 
 impl Generator {
@@ -310,6 +478,52 @@ impl Generator {
 
 /// A generator's capability / ramp columns, one slot per `GEN_EXTRA_KEYS` name.
 pub type GenCaps = [Option<f64>; GEN_EXTRA_KEYS.len()];
+
+/// The empty capability set, for a JSON snapshot that omits the field entirely.
+fn default_caps() -> GenCaps {
+    [None; GEN_EXTRA_KEYS.len()]
+}
+
+/// Serialize [`GenCaps`] as a name-keyed object (`{"ramp_30": 1.2, ...}`) keyed by
+/// [`GEN_EXTRA_KEYS`], emitting only the present slots, instead of a length-exact
+/// array. A fixed-length array round-trips through serde only at exactly its
+/// current length: the day `GEN_EXTRA_KEYS` grows a column, every old snapshot
+/// fails to deserialize and every new one fails on an old build, and the C ABI
+/// ties the JSON snapshot schema to its version, so that is a forced ABI break.
+/// The named map makes a new key purely additive: an old document simply lacks it
+/// (deserializes to `None`), and an unknown key from a newer document is ignored.
+/// In memory `caps` stays a fixed array, so the per-generator allocation cost the
+/// array avoids is unchanged; only the wire form is named.
+mod caps_serde {
+    use super::{GEN_EXTRA_KEYS, GenCaps};
+    use serde::de::{Deserialize, Deserializer};
+    use serde::ser::{SerializeMap, Serializer};
+    use std::collections::BTreeMap;
+
+    pub(super) fn serialize<S: Serializer>(caps: &GenCaps, s: S) -> Result<S::Ok, S::Error> {
+        let present = caps.iter().filter(|v| v.is_some()).count();
+        let mut map = s.serialize_map(Some(present))?;
+        for (key, slot) in GEN_EXTRA_KEYS.iter().zip(caps.iter()) {
+            if let Some(value) = slot {
+                map.serialize_entry(key, value)?;
+            }
+        }
+        map.end()
+    }
+
+    pub(super) fn deserialize<'de, D: Deserializer<'de>>(d: D) -> Result<GenCaps, D::Error> {
+        // Accept an explicit `null` as the empty set (treated like an omitted
+        // field), so a producer that encodes "no caps" as `null` round-trips the
+        // same way `cost: Option<_>` does. `#[serde(default)]` only covers an
+        // absent key, not a present `null`.
+        let named = Option::<BTreeMap<String, f64>>::deserialize(d)?.unwrap_or_default();
+        let mut caps: GenCaps = [None; GEN_EXTRA_KEYS.len()];
+        for (slot, key) in caps.iter_mut().zip(GEN_EXTRA_KEYS.iter()) {
+            *slot = named.get(*key).copied();
+        }
+        Ok(caps)
+    }
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Storage {
@@ -362,12 +576,240 @@ pub struct Hvdc {
     pub extras: Extras,
 }
 
+/// An area record: the area's scheduled net interchange and its swing bus.
+///
+/// The [`number`](Area::number) matches the `area` field carried on each
+/// [`Bus`]; this table holds the per-area metadata (the interchange target and
+/// the area slack) that the bus number alone can't. Maps to the PSS/E area record
+/// (`I, ISW, PDES, PTOL, ARNAME`).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[non_exhaustive]
+pub struct Area {
+    pub number: usize,
+    /// The area swing (slack) bus, or `None` when unset.
+    pub slack_bus: Option<BusId>,
+    /// Scheduled net interchange (MW); positive is export out of the area.
+    pub net_interchange: f64,
+    /// Interchange tolerance bandwidth (MW).
+    pub tolerance: f64,
+    pub name: Option<String>,
+}
+
+/// Solver / solution-control metadata: the Newton tolerance and iteration cap,
+/// the zero-impedance threshold, and the per-quantity adjustment-enable flags.
+///
+/// Each field is optional because a source states only the ones it carries. No
+/// power flow physics, but it determines whether a downstream solver reproduces
+/// the source tool's converged answer. Maps to the PSS/E v34+ system-wide block
+/// (`GENERAL THRSHZ`, `NEWTON TOLN`/`ITMXN`, `SOLVER ACTAPS`/`AREAIN`/`PHSHFT`/
+/// `DCTAPS`/`SWSHNT`).
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[non_exhaustive]
+pub struct SolverParams {
+    /// Newton power flow mismatch tolerance (`NEWTON TOLN`).
+    pub newton_tolerance: Option<f64>,
+    /// Newton iteration cap (`NEWTON ITMXN`).
+    pub max_iterations: Option<u32>,
+    /// Branches with `|x|` below this are treated as zero impedance (`GENERAL THRSHZ`).
+    pub zero_impedance_threshold: Option<f64>,
+    /// Whether the solver adjusts transformer taps (`SOLVER ACTAPS`).
+    pub adjust_taps: Option<bool>,
+    /// Whether the solver adjusts area interchange (`SOLVER AREAIN`).
+    pub adjust_area_interchange: Option<bool>,
+    /// Whether the solver adjusts phase-shift angles (`SOLVER PHSHFT`).
+    pub adjust_phase_shift: Option<bool>,
+    /// Whether the solver adjusts DC line taps (`SOLVER DCTAPS`).
+    pub adjust_dc_taps: Option<bool>,
+    /// Whether the solver adjusts switched shunts (`SOLVER SWSHNT`).
+    pub adjust_switched_shunt: Option<bool>,
+}
+
+impl SolverParams {
+    /// True when no field is set (so readers can avoid attaching an empty record).
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        *self == SolverParams::default()
+    }
+}
+
+/// A series impedance with the MVA base it is expressed on. Used pairwise by
+/// [`Transformer3W`]; a self-contained unit so the base travels with the value
+/// instead of being implied by position.
+///
+/// `r`/`x` are per unit on the *system* base (the same `CZ = 1` convention as
+/// [`Branch::r`]/[`Branch::x`], so the matrix math needs no rebasing); `base_mva`
+/// records the winding-pair MVA base the source file declared (PSS/E `SBASE1-2`
+/// and friends), kept so a write-back reproduces it and so a future `CZ = 2`
+/// reader has somewhere to put the winding base it must rebase from. Room to grow
+/// (winding voltage base, turns-ratio units) as the transformer control work
+/// lands without reshaping the [`Transformer3W::z`] array.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+pub struct Impedance {
+    pub r: f64,
+    pub x: f64,
+    pub base_mva: f64,
+}
+
+/// One winding of a [`Transformer3W`]: its terminal bus, off-nominal ratio, phase
+/// shift, nominal voltage, and thermal ratings.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[non_exhaustive]
+pub struct Winding {
+    pub bus: BusId,
+    /// Off-nominal turns ratio (1.0 = nominal); the PSS/E `WINDV`, `CW = 1`.
+    pub tap: f64,
+    /// Phase shift (degrees).
+    pub shift: f64,
+    /// Winding nominal voltage (kV); 0 defers to the terminal bus base kV.
+    pub nominal_kv: f64,
+    pub rate_a: f64,
+    pub rate_b: f64,
+    pub rate_c: f64,
+}
+
+/// A three-winding transformer: three terminal buses joined at a common star
+/// point, with the series impedance given pairwise (winding 1-2, 2-3, 3-1).
+///
+/// Kept as a typed record (not three [`Branch`]es) so the star-point voltage and
+/// the per-winding control data survive a same-format round trip. Both the PSS/E
+/// 3-winding record and the PSLF tertiary-winding record map onto it.
+/// [`star_expansion`](Transformer3W::star_expansion) turns it into the synthetic
+/// star bus plus three branches for a consumer that works in the bus-branch model;
+/// [`IndexedNetwork`](crate::IndexedNetwork) applies it before building any matrix,
+/// so a 3-winding transformer contributes to `Y_bus` and connectivity.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[non_exhaustive]
+pub struct Transformer3W {
+    /// The three windings, in order (primary, secondary, tertiary).
+    pub windings: [Winding; 3],
+    /// Pairwise series impedance `[z12, z23, z31]` (primary-secondary,
+    /// secondary-tertiary, tertiary-primary), each per unit on the system base
+    /// with its declared MVA base.
+    pub z: [Impedance; 3],
+    /// Star-point voltage magnitude (p.u.) and angle (degrees), as solved.
+    pub star_vm: f64,
+    pub star_va: f64,
+    /// Magnetizing shunt referred to the star point (p.u. on the system base).
+    pub mag_g: f64,
+    pub mag_b: f64,
+    pub in_service: bool,
+    pub name: Option<String>,
+    pub extras: Extras,
+}
+
+impl Transformer3W {
+    /// The per-winding star impedances `(r, x)` — winding *k* to the star point —
+    /// from the pairwise values, per unit on the system base.
+    ///
+    /// Standard pairwise→star conversion: `z1 = (z12 + z31 - z23) / 2`, and so on.
+    /// Because the impedances are already on a common base, the split is linear in
+    /// `r` and `x` separately.
+    #[must_use]
+    pub fn star_impedances(&self) -> [(f64, f64); 3] {
+        let [z12, z23, z31] = self.z;
+        let half = |a: f64, b: f64, c: f64| (a + b - c) / 2.0;
+        [
+            (half(z12.r, z31.r, z23.r), half(z12.x, z31.x, z23.x)),
+            (half(z12.r, z23.r, z31.r), half(z12.x, z23.x, z31.x)),
+            (half(z23.r, z31.r, z12.r), half(z23.x, z31.x, z12.x)),
+        ]
+    }
+
+    /// Expand into a synthetic star [`Bus`] (id `star_id`) plus three [`Branch`]es,
+    /// one per winding, for a consumer that works in the bus-branch model.
+    /// [`IndexedNetwork`](crate::IndexedNetwork) calls this via
+    /// `Network::expand_transformers_3w` when assembling a matrix view. The star
+    /// bus carries the stored star voltage and the magnetizing shunt is left to the
+    /// caller; each branch takes its winding's tap, phase shift, and ratings.
+    #[must_use]
+    pub fn star_expansion(&self, star_id: BusId) -> (Bus, [Branch; 3]) {
+        let star = Bus {
+            id: star_id,
+            kind: BusType::Pq,
+            vm: self.star_vm,
+            va: self.star_va,
+            base_kv: self.windings[0].nominal_kv,
+            vmax: 1.1,
+            vmin: 0.9,
+            evhi: None,
+            evlo: None,
+            area: 0,
+            zone: 0,
+            name: self.name.clone(),
+            extras: Extras::new(),
+        };
+        let zs = self.star_impedances();
+        let branch = |w: &Winding, (r, x): (f64, f64)| Branch {
+            from: w.bus,
+            to: star_id,
+            r,
+            x,
+            b: 0.0,
+            rate_a: w.rate_a,
+            rate_b: w.rate_b,
+            rate_c: w.rate_c,
+            tap: w.tap,
+            shift: w.shift,
+            in_service: self.in_service,
+            angmin: -360.0,
+            angmax: 360.0,
+            control: None,
+            extras: Extras::new(),
+        };
+        let branches = [
+            branch(&self.windings[0], zs[0]),
+            branch(&self.windings[1], zs[1]),
+            branch(&self.windings[2], zs[2]),
+        ];
+        (star, branches)
+    }
+}
+
 /// The MATPOWER gen capability / ramp columns past `PMIN`, in order. The index
 /// into this array is the slot index into a [`GenCaps`].
 pub(crate) const GEN_EXTRA_KEYS: [&str; 11] = [
     "pc1", "pc2", "qc1min", "qc1max", "qc2min", "qc2max", "ramp_agc", "ramp_10", "ramp_30",
     "ramp_q", "apf",
 ];
+
+/// A value-domain finding from [`Network::validate_values`]: an element field
+/// whose value falls outside its physical range, paired with the value
+/// [`repair`](Network::repair) would set in its place.
+///
+/// `#[non_exhaustive]`: a returns-only record, so downstream code reads it but
+/// never constructs it, leaving room to add locator fields without a break.
+#[derive(Debug, Clone, PartialEq)]
+#[non_exhaustive]
+pub struct Diagnostic {
+    /// Human-readable element locator, e.g. `"bus 3"` or `"generator at bus 5"`.
+    pub element: String,
+    pub field: &'static str,
+    pub old: f64,
+    pub new: f64,
+    pub reason: &'static str,
+}
+
+/// Voltage magnitude (p.u.) repair: non-positive or above 2 (or non-finite) → 1.0.
+/// A zero magnitude is treated as out of domain (a de-energized placeholder), not
+/// a valid 0 p.u.
+fn repair_vm(vm: f64) -> Option<f64> {
+    (!vm.is_finite() || vm <= 0.0 || vm > 2.0).then_some(1.0)
+}
+
+/// Voltage angle (degrees) repair: `|va| > 2000` (or non-finite) → 0.0.
+fn repair_va(va: f64) -> Option<f64> {
+    (!va.is_finite() || va.abs() > 2000.0).then_some(0.0)
+}
+
+/// Generator MVA base repair: non-positive (or non-finite) → the system base.
+fn repair_mbase(mbase: f64, sbase: f64) -> Option<f64> {
+    (!mbase.is_finite() || mbase <= 0.0).then_some(sbase)
+}
+
+/// Generator voltage setpoint (p.u.) repair: non-positive (or non-finite) → 1.0.
+fn repair_vg(vg: f64) -> Option<f64> {
+    (!vg.is_finite() || vg <= 0.0).then_some(1.0)
+}
 
 impl Network {
     /// A network assembled in memory from buses and branches, with no loads,
@@ -385,6 +827,7 @@ impl Network {
         Network {
             name: name.into(),
             base_mva,
+            base_frequency: DEFAULT_BASE_FREQUENCY,
             buses,
             loads: Vec::new(),
             shunts: Vec::new(),
@@ -392,16 +835,30 @@ impl Network {
             generators: Vec::new(),
             storage: Vec::new(),
             hvdc: Vec::new(),
+            transformers_3w: Vec::new(),
+            areas: Vec::new(),
+            solver: None,
             source_format: SourceFormat::InMemory,
             source: None,
         }
     }
 
-    /// Serialize the structured tables to JSON — the transport the C ABI
-    /// (`pio_to_json`) and the Julia bridge consume. The retained `source` text
+    /// Serialize the structured tables to JSON: the transport the C ABI
+    /// (the `powerio-json` format) and the Julia bridge consume. The retained `source` text
     /// is excluded (see the field's `#[serde(skip)]`), so the byte-exact echo
     /// stays on the same-format write path; a [`from_json`](Network::from_json)
     /// round-trip reproduces every field except `source`, which returns `None`.
+    ///
+    /// JSON has no `Inf`/`NaN`: `serde_json` writes a non-finite field as
+    /// `null`, which [`from_json`](Network::from_json) rejects on the way back
+    /// (`null` is not an `f64`). The write stays total, the bindings
+    /// materialize every parsed network through this transport, and readers
+    /// legitimately produce `Inf` limits, but such a snapshot does not round
+    /// trip; [`write_as`](crate::write_as) reports the degradation as a
+    /// fidelity warning naming the field.
+    ///
+    /// # Errors
+    /// A `serde_json` serialization failure (none arise from this model today).
     pub fn to_json(&self) -> crate::Result<String> {
         serde_json::to_string(self).map_err(|e| Error::FormatRead {
             format: "JSON",
@@ -409,10 +866,172 @@ impl Network {
         })
     }
 
+    /// The paths of every non-finite numeric field, empty when all values are
+    /// finite. Drives the snapshot writer's degradation warning (see
+    /// [`to_json`](Network::to_json)): serde writes EVERY non-finite `f64` as
+    /// `null`, so the warning must name them all, not just the first, or the
+    /// caller fixes one field and the snapshot still fails to read back.
+    /// `extras` maps hold `serde_json::Value`, which cannot carry a non-finite
+    /// number, so only the typed `f64` fields need scanning. Every struct is
+    /// destructured exhaustively: adding an `f64` field without classifying it
+    /// here is a compile error, not a silently unguarded value.
+    // The length IS the exhaustive field walk; splitting it would only scatter
+    // the per-struct lists the compile-time check exists to keep in one place.
+    #[allow(clippy::too_many_lines)]
+    pub(crate) fn non_finite_fields(&self) -> Vec<String> {
+        fn bad<'a>(
+            fields: impl IntoIterator<Item = (&'a str, f64)>,
+        ) -> impl Iterator<Item = &'a str> {
+            fields
+                .into_iter()
+                .filter_map(|(name, v)| (!v.is_finite()).then_some(name))
+        }
+        let mut out = Vec::new();
+        if !self.base_mva.is_finite() {
+            out.push("base_mva".into());
+        }
+        for (i, b) in self.buses.iter().enumerate() {
+            #[rustfmt::skip]
+            let Bus { id: _, kind: _, vm, va, base_kv, vmax, vmin, evhi: _, evlo: _, area: _, zone: _, name: _, extras: _ } = b;
+            let fields = [
+                ("vm", *vm),
+                ("va", *va),
+                ("base_kv", *base_kv),
+                ("vmax", *vmax),
+                ("vmin", *vmin),
+            ];
+            out.extend(bad(fields).map(|f| format!("buses[{i}].{f}")));
+        }
+        for (i, l) in self.loads.iter().enumerate() {
+            let Load {
+                bus: _,
+                p,
+                q,
+                in_service: _,
+                extras: _,
+            } = l;
+            out.extend(bad([("p", *p), ("q", *q)]).map(|f| format!("loads[{i}].{f}")));
+        }
+        for (i, s) in self.shunts.iter().enumerate() {
+            let Shunt {
+                bus: _,
+                g,
+                b,
+                in_service: _,
+                control: _,
+                extras: _,
+            } = s;
+            out.extend(bad([("g", *g), ("b", *b)]).map(|f| format!("shunts[{i}].{f}")));
+        }
+        for (i, br) in self.branches.iter().enumerate() {
+            #[rustfmt::skip]
+            let Branch { from: _, to: _, r, x, b, rate_a, rate_b, rate_c, tap, shift, in_service: _, angmin, angmax, control: _, extras: _ } = br;
+            let fields = [
+                ("r", *r),
+                ("x", *x),
+                ("b", *b),
+                ("rate_a", *rate_a),
+                ("rate_b", *rate_b),
+                ("rate_c", *rate_c),
+                ("tap", *tap),
+                ("shift", *shift),
+                ("angmin", *angmin),
+                ("angmax", *angmax),
+            ];
+            out.extend(bad(fields).map(|f| format!("branches[{i}].{f}")));
+        }
+        for (i, g) in self.generators.iter().enumerate() {
+            #[rustfmt::skip]
+            let Generator { bus: _, pg, qg, pmax, pmin, qmax, qmin, vg, mbase, in_service: _, cost, caps, regulated_bus: _ } = g;
+            let fields = [
+                ("pg", *pg),
+                ("qg", *qg),
+                ("pmax", *pmax),
+                ("pmin", *pmin),
+                ("qmax", *qmax),
+                ("qmin", *qmin),
+                ("vg", *vg),
+                ("mbase", *mbase),
+            ];
+            out.extend(bad(fields).map(|f| format!("generators[{i}].{f}")));
+            if let Some(GenCost {
+                model: _,
+                startup,
+                shutdown,
+                ncost: _,
+                coeffs,
+            }) = cost
+            {
+                out.extend(
+                    bad([("startup", *startup), ("shutdown", *shutdown)])
+                        .map(|f| format!("generators[{i}].cost.{f}")),
+                );
+                if coeffs.iter().any(|c| !c.is_finite()) {
+                    out.push(format!("generators[{i}].cost.coeffs"));
+                }
+            }
+            // Name the exact cap key (caps serializes as a name-keyed object, so
+            // the null lands at generators[i].caps.<key>, e.g. ramp_30), matching
+            // the key-level precision of every other field.
+            for (key, slot) in GEN_EXTRA_KEYS.iter().zip(caps.iter()) {
+                if matches!(slot, Some(v) if !v.is_finite()) {
+                    out.push(format!("generators[{i}].caps.{key}"));
+                }
+            }
+        }
+        for (i, s) in self.storage.iter().enumerate() {
+            #[rustfmt::skip]
+            let Storage { bus: _, ps, qs, energy, energy_rating, charge_rating, discharge_rating, charge_efficiency, discharge_efficiency, thermal_rating, qmin, qmax, r, x, p_loss, q_loss, in_service: _, extras: _ } = s;
+            let fields = [
+                ("ps", *ps),
+                ("qs", *qs),
+                ("energy", *energy),
+                ("energy_rating", *energy_rating),
+                ("charge_rating", *charge_rating),
+                ("discharge_rating", *discharge_rating),
+                ("charge_efficiency", *charge_efficiency),
+                ("discharge_efficiency", *discharge_efficiency),
+                ("thermal_rating", *thermal_rating),
+                ("qmin", *qmin),
+                ("qmax", *qmax),
+                ("r", *r),
+                ("x", *x),
+                ("p_loss", *p_loss),
+                ("q_loss", *q_loss),
+            ];
+            out.extend(bad(fields).map(|f| format!("storage[{i}].{f}")));
+        }
+        for (i, h) in self.hvdc.iter().enumerate() {
+            #[rustfmt::skip]
+            let Hvdc { from: _, to: _, in_service: _, pf, pt, qf, qt, vf, vt, pmin, pmax, qminf, qmaxf, qmint, qmaxt, loss0, loss1, extras: _ } = h;
+            let fields = [
+                ("pf", *pf),
+                ("pt", *pt),
+                ("qf", *qf),
+                ("qt", *qt),
+                ("vf", *vf),
+                ("vt", *vt),
+                ("pmin", *pmin),
+                ("pmax", *pmax),
+                ("qminf", *qminf),
+                ("qmaxf", *qmaxf),
+                ("qmint", *qmint),
+                ("qmaxt", *qmaxt),
+                ("loss0", *loss0),
+                ("loss1", *loss1),
+            ];
+            out.extend(bad(fields).map(|f| format!("hvdc[{i}].{f}")));
+        }
+        out
+    }
+
     /// Serialize this network to `format`, preserving the retained source text
     /// on same-format writes and reporting any target-format fidelity warnings.
-    #[must_use]
-    pub fn to_format(&self, format: crate::TargetFormat) -> crate::Conversion {
+    ///
+    /// # Errors
+    /// As [`write_as`](crate::write_as): only a `PowerioJson` serialization
+    /// failure.
+    pub fn to_format(&self, format: crate::TargetFormat) -> crate::Result<crate::Conversion> {
         crate::write_as(self, format)
     }
 
@@ -428,8 +1047,8 @@ impl Network {
     /// Rebuild a `Network` from JSON produced by [`to_json`](Network::to_json).
     ///
     /// Validates the result (no buses, unique bus ids, no dangling references)
-    /// before returning, so the JSON transport — the C ABI and Julia bridge ride
-    /// on it — can't hand back a network the file readers would have rejected
+    /// before returning, so the JSON transport (the C ABI and Julia bridge ride
+    /// on it) can't hand back a network the file readers would have rejected
     /// (the same no-buses guard `read_source` applies to every parse path).
     pub fn from_json(text: &str) -> crate::Result<Network> {
         let net: Network = serde_json::from_str(text).map_err(|e| Error::FormatRead {
@@ -468,6 +1087,152 @@ impl Network {
                 base: self.base_mva,
             })
         }
+    }
+
+    /// Report element fields whose values fall outside their physical domain,
+    /// without changing anything. Each [`Diagnostic`] names the element, the
+    /// field, the current value, the value [`repair`](Network::repair) would set,
+    /// and why.
+    ///
+    /// This generalizes the per-reader value clamps (a bus voltage magnitude
+    /// outside `[0, 2]`, an angle past `±2000°`, a zero generator MVA base or
+    /// voltage setpoint) into one pass any consumer can run, separate from the
+    /// structural [`validate`](Network::validate) (which only checks ids and
+    /// references). It is non-mutating; call [`repair`](Network::repair) to apply
+    /// the fixes.
+    #[must_use]
+    pub fn validate_values(&self) -> Vec<Diagnostic> {
+        let mut out = Vec::new();
+        for b in &self.buses {
+            if let Some(new) = repair_vm(b.vm) {
+                out.push(Diagnostic {
+                    element: format!("bus {}", b.id),
+                    field: "vm",
+                    old: b.vm,
+                    new,
+                    reason: "voltage magnitude outside [0, 2] p.u.",
+                });
+            }
+            if let Some(new) = repair_va(b.va) {
+                out.push(Diagnostic {
+                    element: format!("bus {}", b.id),
+                    field: "va",
+                    old: b.va,
+                    new,
+                    reason: "voltage angle outside ±2000°",
+                });
+            }
+        }
+        for g in &self.generators {
+            if let Some(new) = repair_mbase(g.mbase, self.base_mva) {
+                out.push(Diagnostic {
+                    element: format!("generator at bus {}", g.bus),
+                    field: "mbase",
+                    old: g.mbase,
+                    new,
+                    reason: "non-positive generator MVA base",
+                });
+            }
+            if let Some(new) = repair_vg(g.vg) {
+                out.push(Diagnostic {
+                    element: format!("generator at bus {}", g.bus),
+                    field: "vg",
+                    old: g.vg,
+                    new,
+                    reason: "non-positive voltage setpoint",
+                });
+            }
+        }
+        out
+    }
+
+    /// Drop the retained source text after an in-place mutation, so a later
+    /// [`write_as`](crate::write_as) to the source format re-serializes the
+    /// modified model instead of echoing the now-stale original bytes. A no-op
+    /// operation leaves the source intact, keeping the byte-exact echo for an
+    /// unmodified round trip.
+    pub(crate) fn invalidate_source(&mut self) {
+        self.source = None;
+    }
+
+    /// Clamp every out-of-domain value to its repaired value (the same rules
+    /// [`validate_values`](Network::validate_values) reports), returning the list
+    /// of changes made. A second call returns an empty list (the values are now
+    /// in domain).
+    pub fn repair(&mut self) -> Vec<Diagnostic> {
+        let findings = self.validate_values();
+        let sbase = self.base_mva;
+        for b in &mut self.buses {
+            if let Some(new) = repair_vm(b.vm) {
+                b.vm = new;
+            }
+            if let Some(new) = repair_va(b.va) {
+                b.va = new;
+            }
+        }
+        for g in &mut self.generators {
+            if let Some(new) = repair_mbase(g.mbase, sbase) {
+                g.mbase = new;
+            }
+            if let Some(new) = repair_vg(g.vg) {
+                g.vg = new;
+            }
+        }
+        // The repairs changed the model, so the retained source no longer matches.
+        if !findings.is_empty() {
+            self.invalidate_source();
+        }
+        findings
+    }
+
+    /// A bus-branch lowering of the network for analysis: each in-service
+    /// 3-winding transformer becomes a synthetic star bus, its three winding
+    /// branches, and (when present) its magnetizing shunt, so the matrix builders
+    /// and connectivity see it. Returns the network unchanged (borrowed) when
+    /// there are no 3-winding transformers, so the common case allocates nothing.
+    ///
+    /// The canonical `Network` keeps the typed [`Transformer3W`] records; this is
+    /// the derived analysis form that [`IndexedNetwork`](crate::IndexedNetwork)
+    /// builds behind the scenes, so callers never see the synthetic buses in the
+    /// model they read or write.
+    pub(crate) fn expand_transformers_3w(&self) -> std::borrow::Cow<'_, Network> {
+        if self.transformers_3w.is_empty() {
+            return std::borrow::Cow::Borrowed(self);
+        }
+        let mut net = self.clone();
+        // The star branches carry per-unit impedance (CZ = 1), the same convention
+        // the matrix builders read straight off a branch, so no rebasing. The
+        // magnetizing shunt is an admittance, so it scales like every other shunt:
+        // by the per-unit base for a raw network, by 1 for a normalized one.
+        let scale = if net.is_normalized() {
+            1.0
+        } else {
+            net.base_mva
+        };
+        let base_id = net.buses.iter().map(|b| b.id.0).max().unwrap_or(0) + 1;
+        for (k, t) in self
+            .transformers_3w
+            .iter()
+            .filter(|t| t.in_service)
+            .enumerate()
+        {
+            let star_id = BusId(base_id + k);
+            let (star, branches) = t.star_expansion(star_id);
+            net.buses.push(star);
+            net.branches.extend(branches);
+            if t.mag_g != 0.0 || t.mag_b != 0.0 {
+                net.shunts.push(Shunt {
+                    bus: star_id,
+                    g: t.mag_g * scale,
+                    b: t.mag_b * scale,
+                    in_service: true,
+                    control: None,
+                    extras: Extras::new(),
+                });
+            }
+        }
+        net.transformers_3w.clear();
+        std::borrow::Cow::Owned(net)
     }
 
     /// Check structural integrity: bus ids are unique and every element
@@ -517,15 +1282,24 @@ impl Network {
                     });
                 }
             }
+            if let Some(bus) = br.control.as_ref().and_then(|c| c.controlled_bus) {
+                check(bus, "transformer control")?;
+            }
         }
         for l in &self.loads {
             check(l.bus, "load")?;
         }
         for s in &self.shunts {
             check(s.bus, "shunt")?;
+            if let Some(bus) = s.control.as_ref().and_then(|c| c.control_bus) {
+                check(bus, "switched-shunt control")?;
+            }
         }
         for g in &self.generators {
             check(g.bus, "generator")?;
+            if let Some(bus) = g.regulated_bus {
+                check(bus, "generator voltage control")?;
+            }
         }
         for d in &self.hvdc {
             check(d.from, "dcline")?;
@@ -534,6 +1308,402 @@ impl Network {
         for s in &self.storage {
             check(s.bus, "storage")?;
         }
+        for a in &self.areas {
+            if let Some(slack) = a.slack_bus {
+                check(slack, "area swing")?;
+            }
+        }
+        for t in &self.transformers_3w {
+            for w in &t.windings {
+                check(w.bus, "3-winding transformer")?;
+            }
+        }
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn close(actual: f64, expected: f64) {
+        assert!((actual - expected).abs() < 1e-12, "{actual} != {expected}");
+    }
+
+    fn bus(id: usize) -> Bus {
+        Bus {
+            id: BusId(id),
+            kind: BusType::Pq,
+            vm: 1.0,
+            va: 0.0,
+            base_kv: 230.0,
+            vmax: 1.1,
+            vmin: 0.9,
+            evhi: None,
+            evlo: None,
+            area: 1,
+            zone: 1,
+            name: None,
+            extras: Extras::new(),
+        }
+    }
+
+    fn winding(b: usize) -> Winding {
+        Winding {
+            bus: BusId(b),
+            tap: 1.0,
+            shift: 0.0,
+            nominal_kv: 230.0,
+            rate_a: 100.0,
+            rate_b: 0.0,
+            rate_c: 0.0,
+        }
+    }
+
+    fn transformer_3w() -> Transformer3W {
+        let z = |r, x| Impedance {
+            r,
+            x,
+            base_mva: 100.0,
+        };
+        Transformer3W {
+            windings: [winding(1), winding(2), winding(3)],
+            z: [z(0.01, 0.10), z(0.02, 0.20), z(0.03, 0.30)],
+            star_vm: 0.98,
+            star_va: -1.5,
+            mag_g: 0.0,
+            mag_b: 0.0,
+            in_service: true,
+            name: Some("T1".into()),
+            extras: Extras::new(),
+        }
+    }
+
+    #[test]
+    fn star_impedances_split_the_pairwise_values() {
+        // z1 = (z12 + z31 - z23)/2, z2 = (z12 + z23 - z31)/2, z3 = (z23 + z31 - z12)/2.
+        let [(r1, x1), (r2, x2), (r3, x3)] = transformer_3w().star_impedances();
+        close(r1, 0.01);
+        close(x1, 0.10);
+        close(r2, 0.0);
+        close(x2, 0.0);
+        close(r3, 0.02);
+        close(x3, 0.20);
+    }
+
+    #[test]
+    fn star_expansion_builds_a_star_bus_and_three_branches() {
+        let t = transformer_3w();
+        let (star, branches) = t.star_expansion(BusId(99));
+
+        assert_eq!(star.id, BusId(99));
+        close(star.vm, 0.98);
+        close(star.va, -1.5);
+        // Each branch runs from its winding bus to the star, carrying the
+        // winding tap and ratings and the split impedance.
+        for (i, br) in branches.iter().enumerate() {
+            assert_eq!(br.from, t.windings[i].bus);
+            assert_eq!(br.to, BusId(99));
+            close(br.tap, 1.0);
+            close(br.rate_a, 100.0);
+        }
+        close(branches[2].r, 0.02);
+        close(branches[2].x, 0.20);
+    }
+
+    #[test]
+    fn three_winding_transformer_survives_json_transport() {
+        let mut net = Network::in_memory("t", 100.0, vec![bus(1), bus(2), bus(3)], Vec::new());
+        net.transformers_3w.push(transformer_3w());
+        net.validate().unwrap();
+
+        let back = Network::from_json(&net.to_json().unwrap()).unwrap();
+        assert_eq!(back.transformers_3w.len(), 1);
+        close(back.transformers_3w[0].z[1].x, 0.20);
+        assert_eq!(back.transformers_3w[0].windings[2].bus, BusId(3));
+    }
+
+    #[test]
+    fn check_references_rejects_a_dangling_winding_bus() {
+        let mut net = Network::in_memory("t", 100.0, vec![bus(1), bus(2)], Vec::new());
+        net.transformers_3w.push(transformer_3w()); // winding 3 references bus 3
+        let err = net.validate().unwrap_err().to_string();
+        assert!(
+            err.contains("3-winding transformer references unknown bus 3"),
+            "got {err}"
+        );
+    }
+
+    /// A regulating transformer (bus 1→2) controlling the voltage at bus `reg`.
+    fn regulating_branch(reg: usize) -> Branch {
+        Branch {
+            from: BusId(1),
+            to: BusId(2),
+            r: 0.0,
+            x: 0.1,
+            b: 0.0,
+            rate_a: 0.0,
+            rate_b: 0.0,
+            rate_c: 0.0,
+            tap: 1.0,
+            shift: 0.0,
+            in_service: true,
+            angmin: -360.0,
+            angmax: 360.0,
+            control: Some(TransformerControl {
+                mode: TransformerControlMode::Voltage,
+                controlled_bus: Some(BusId(reg)),
+                tap_min: 0.95,
+                tap_max: 1.05,
+                band_min: 1.0,
+                band_max: 1.02,
+                ntp: 17,
+                mva_base: 100.0,
+            }),
+            extras: Extras::new(),
+        }
+    }
+
+    #[test]
+    fn transformer_control_survives_json_transport() {
+        let mut net = Network::in_memory("t", 100.0, vec![bus(1), bus(2), bus(3)], Vec::new());
+        net.branches.push(regulating_branch(3));
+        net.validate().unwrap();
+
+        let back = Network::from_json(&net.to_json().unwrap()).unwrap();
+        let c = back.branches[0].control.as_ref().unwrap();
+        assert_eq!(c.mode, TransformerControlMode::Voltage);
+        assert_eq!(c.controlled_bus, Some(BusId(3)));
+        close(c.tap_max, 1.05);
+        assert_eq!(c.ntp, 17);
+    }
+
+    #[test]
+    fn gen_caps_serialize_as_a_named_map_that_grows_additively() {
+        let mut caps: GenCaps = [None; GEN_EXTRA_KEYS.len()];
+        caps[8] = Some(1.5); // ramp_30
+        caps[10] = Some(0.5); // apf
+        let g = Generator {
+            bus: BusId(1),
+            pg: 10.0,
+            qg: 0.0,
+            pmax: 100.0,
+            pmin: 0.0,
+            qmax: 50.0,
+            qmin: -50.0,
+            vg: 1.0,
+            mbase: 100.0,
+            in_service: true,
+            cost: None,
+            caps,
+            regulated_bus: None,
+        };
+
+        // caps is a name-keyed object emitting only the present slots, not a
+        // length-exact array.
+        let json = serde_json::to_string(&g).unwrap();
+        assert!(json.contains(r#""caps":{"#), "caps is an object: {json}");
+        assert!(json.contains(r#""ramp_30":1.5"#) && json.contains(r#""apf":0.5"#));
+        let back: Generator = serde_json::from_str(&json).unwrap();
+        assert_eq!(back.caps, g.caps);
+
+        // Growing GEN_EXTRA_KEYS stays additive: an unknown future key is ignored,
+        // a missing key reads as None, and an omitted field is the empty set.
+        let with_future = r#"{"bus":1,"pg":10,"qg":0,"pmax":100,"pmin":0,"qmax":50,"qmin":-50,
+            "vg":1,"mbase":100,"in_service":true,"cost":null,
+            "caps":{"ramp_30":1.5,"future_ramp":9.9}}"#;
+        let g2: Generator = serde_json::from_str(with_future).unwrap();
+        assert_eq!(g2.caps[8], Some(1.5));
+        assert_eq!(g2.caps.iter().filter(|v| v.is_some()).count(), 1);
+        let no_caps = r#"{"bus":1,"pg":10,"qg":0,"pmax":100,"pmin":0,"qmax":50,"qmin":-50,
+            "vg":1,"mbase":100,"in_service":true,"cost":null}"#;
+        let g3: Generator = serde_json::from_str(no_caps).unwrap();
+        assert!(!g3.has_caps());
+
+        // An explicit `"caps":null` is the empty set too, the same as omitting it.
+        let null_caps = r#"{"bus":1,"pg":10,"qg":0,"pmax":100,"pmin":0,"qmax":50,"qmin":-50,
+            "vg":1,"mbase":100,"in_service":true,"cost":null,"caps":null}"#;
+        let g4: Generator = serde_json::from_str(null_caps).unwrap();
+        assert!(!g4.has_caps());
+    }
+
+    #[test]
+    fn non_finite_fields_lists_every_offender_not_just_the_first() {
+        let bus = |id, vm| Bus {
+            id: BusId(id),
+            kind: BusType::Pq,
+            vm,
+            va: 0.0,
+            base_kv: 230.0,
+            vmax: 1.1,
+            vmin: 0.9,
+            evhi: None,
+            evlo: None,
+            area: 1,
+            zone: 1,
+            name: None,
+            extras: Extras::new(),
+        };
+        let branch = Branch {
+            from: BusId(1),
+            to: BusId(2),
+            r: 0.0,
+            x: f64::INFINITY,
+            b: 0.0,
+            rate_a: 0.0,
+            rate_b: 0.0,
+            rate_c: 0.0,
+            tap: 0.0,
+            shift: 0.0,
+            in_service: true,
+            angmin: -360.0,
+            angmax: 360.0,
+            control: None,
+            extras: Extras::new(),
+        };
+        // A non-finite generator capability reports at its exact key path
+        // (caps serializes as a name-keyed object), not the parent `caps`.
+        let mut g = Generator {
+            bus: BusId(1),
+            pg: 0.0,
+            qg: 0.0,
+            pmax: 0.0,
+            pmin: 0.0,
+            qmax: 0.0,
+            qmin: 0.0,
+            vg: 1.0,
+            mbase: 100.0,
+            in_service: true,
+            cost: None,
+            caps: GenCaps::default(),
+            regulated_bus: None,
+        };
+        g.caps[8] = Some(f64::INFINITY); // ramp_30
+        // Three distinct non-finite fields: a bus vm (NaN), a branch x (Inf), and
+        // a generator ramp_30 cap (Inf).
+        let mut net = Network::in_memory(
+            "nf",
+            100.0,
+            vec![bus(1, f64::NAN), bus(2, 1.0)],
+            vec![branch],
+        );
+        net.generators.push(g);
+        let fields = net.non_finite_fields();
+        assert!(fields.contains(&"buses[0].vm".to_string()), "{fields:?}");
+        assert!(fields.contains(&"branches[0].x".to_string()), "{fields:?}");
+        assert!(
+            fields.contains(&"generators[0].caps.ramp_30".to_string()),
+            "caps reported at key precision: {fields:?}"
+        );
+        assert_eq!(
+            fields.len(),
+            3,
+            "exactly the three offenders, no more: {fields:?}"
+        );
+    }
+
+    #[test]
+    fn check_references_rejects_a_dangling_controlled_bus() {
+        let mut net = Network::in_memory("t", 100.0, vec![bus(1), bus(2)], Vec::new());
+        net.branches.push(regulating_branch(9)); // controls a bus that doesn't exist
+        let err = net.validate().unwrap_err().to_string();
+        assert!(
+            err.contains("transformer control references unknown bus 9"),
+            "got {err}"
+        );
+    }
+
+    /// A discrete switched shunt on bus 1 regulating the voltage at bus `reg`.
+    fn switched_shunt(reg: usize) -> Shunt {
+        Shunt {
+            bus: BusId(1),
+            g: 0.0,
+            b: 19.0,
+            in_service: true,
+            control: Some(SwitchedShuntControl {
+                mode: SwitchedShuntMode::Discrete,
+                vhigh: 1.05,
+                vlow: 0.95,
+                control_bus: Some(BusId(reg)),
+                rmpct: 100.0,
+                blocks: vec![
+                    ShuntBlock { steps: 2, b: 25.0 },
+                    ShuntBlock { steps: 1, b: 50.0 },
+                ],
+            }),
+            extras: Extras::new(),
+        }
+    }
+
+    #[test]
+    fn switched_shunt_control_survives_json_transport() {
+        let mut net = Network::in_memory("t", 100.0, vec![bus(1), bus(2), bus(3)], Vec::new());
+        net.shunts.push(switched_shunt(3));
+        net.validate().unwrap();
+
+        let back = Network::from_json(&net.to_json().unwrap()).unwrap();
+        let c = back.shunts[0].control.as_ref().unwrap();
+        assert_eq!(c.mode, SwitchedShuntMode::Discrete);
+        assert_eq!(c.control_bus, Some(BusId(3)));
+        assert_eq!(c.blocks.len(), 2);
+        close(c.blocks[1].b, 50.0);
+    }
+
+    #[test]
+    fn check_references_rejects_a_dangling_switched_shunt_control_bus() {
+        let mut net = Network::in_memory("t", 100.0, vec![bus(1), bus(2)], Vec::new());
+        net.shunts.push(switched_shunt(9)); // controls a bus that doesn't exist
+        let err = net.validate().unwrap_err().to_string();
+        assert!(
+            err.contains("switched-shunt control references unknown bus 9"),
+            "got {err}"
+        );
+    }
+
+    #[test]
+    fn validate_values_flags_and_repair_clamps_out_of_domain_values() {
+        let mut net = Network::in_memory("t", 100.0, vec![bus(1), bus(2)], Vec::new());
+        net.buses[0].vm = 0.0; // outside [0, 2]
+        net.buses[1].va = 9000.0; // past ±2000°
+        net.generators.push(Generator {
+            bus: BusId(1),
+            pg: 10.0,
+            qg: 0.0,
+            pmax: 100.0,
+            pmin: 0.0,
+            qmax: 50.0,
+            qmin: -50.0,
+            vg: 0.0,    // non-positive setpoint
+            mbase: 0.0, // non-positive base
+            in_service: true,
+            cost: None,
+            caps: Default::default(),
+            regulated_bus: None,
+        });
+
+        let diags = net.validate_values();
+        let fields: std::collections::BTreeSet<_> = diags.iter().map(|d| d.field).collect();
+        assert_eq!(
+            fields,
+            ["mbase", "va", "vg", "vm"].into_iter().collect(),
+            "all four out-of-domain fields reported"
+        );
+        // Non-mutating: the network still holds the bad values.
+        close(net.buses[0].vm, 0.0);
+
+        let applied = net.repair();
+        assert_eq!(applied.len(), diags.len());
+        close(net.buses[0].vm, 1.0);
+        close(net.buses[1].va, 0.0);
+        close(net.generators[0].mbase, 100.0); // → base_mva
+        close(net.generators[0].vg, 1.0);
+        // Idempotent: nothing left to repair.
+        assert!(net.validate_values().is_empty());
+    }
+
+    #[test]
+    fn validate_values_is_empty_for_a_clean_network() {
+        let net = Network::in_memory("t", 100.0, vec![bus(1), bus(2)], Vec::new());
+        assert!(net.validate_values().is_empty());
     }
 }

@@ -11,35 +11,91 @@ usize_is_size_t = true
 # File preamble. cbindgen generates the rest from the Rust source, so the only
 # hand-written prose lives here; per-symbol docs come from the Rust doc comments.
 header = """
-/* powerio C ABI: parse any power system case format, query it, convert
- * it, and extract the numeric tables for matrix assembly.
+/* powerio C ABI, version 4: parse any power system case format, query it,
+ * convert it, and extract the numeric tables for matrix assembly. Check
+ * pio_abi_version() against PIO_ABI_VERSION at load; the integer is the
+ * compatibility contract, the version string is informational.
  *
- * Memory: strings returned by pio_to_matpower / pio_to_format /
- * pio_convert_file / pio_to_json are owned by the library; free them with
- * pio_string_free. Network handles from pio_parse_file / pio_parse_str /
- * pio_from_json / pio_to_normalized are freed with pio_network_free. Array
- * extractors fill caller-allocated buffers whose length is the matching pio_n_*
- * count; pass NULL to skip an output.
+ * Naming grammar (fixed; the surface evolves additively from here):
+ * - Verb-led names are operations and the verb fixes the return family:
+ *   parse/read/normalize return a new handle, write has a filesystem effect,
+ *   convert transcodes without keeping a handle, free destroys.
+ * - to_ marks a representation change of the same network (the strtol/htons
+ *   lineage). The target is a format string unless the output type differs:
+ *   pio_to_format returns text for every named format, pio_to_arrow fills
+ *   Arrow C Data Interface structs.
+ * - Noun phrases are queries (no get_); n_ prefixes counts, is_ predicates.
+ * - Format names never appear in symbols. Formats are strings ("matpower",
+ *   "psse", "powerio-json", ...), so a new format never changes this ABI.
  *
- * Message buffers: errbuf/warnbuf may be NULL (or length 0) to discard the
- * message. A message longer than the buffer is truncated to fit and is always
- * NUL-terminated. PIO_ERRBUF_MIN is a comfortable size for any error string.
+ * Vocabulary (one meaning per word, transmission and distribution alike):
+ * - bus: a named connection point, any number of phases. This surface is bus
+ *   granular (pio_n_buses, pio_bus_ids, pio_bus_demand, ...).
+ * - node: one conductor's point at a bus (OpenDSS bus.1.2.3). Reserved for
+ *   the multiconductor surface; never a synonym for bus here.
+ * - branch: any two-terminal series element, lines and transformers alike
+ *   (circuit theory; MATPOWER mpc.branch; the Branch Flow Model). "line" is
+ *   the transformer-excluding subset and never names the umbrella table.
  *
- * Every entry point catches Rust panics at the boundary and returns the documented
- * failure value (NULL, 0, -1, 0.0, or unchanged output) rather than unwinding
- * across the ABI.
+ * Conventions:
+ * - Array extractors write up to `cap` values per output array and return the
+ *   total available; NULL out (or cap 0) is a pure count query, so a short
+ *   read is detectable and a caller buffer can never silently overflow.
+ * - Bus ids are int64 in the range 1..2^63-1 (a v4 invariant). pio_bus_ids and
+ *   every per-bus column keyed to its ordering are int64; a source whose ids are
+ *   strings or exceed 2^63-1 has no representation on this surface and is mapped
+ *   to dense int64 at read (with a warning) or routed through the multiconductor
+ *   surface. Never hand a raw oversized id to this surface.
+ * - errbuf/errlen caller buffers (the libpcap/curl idiom: allocation-free
+ *   across the boundary, no thread-local state). NULL or length 0 discards
+ *   the message; a long message truncates on a UTF-8 character boundary and
+ *   is always NUL-terminated. PIO_ERRBUF_MIN is a comfortable size. The ABI
+ *   reports errors as messages and defines no error codes.
+ * - Warnings attach to the network handle; query them with pio_warnings,
+ *   which returns the byte length needed (call with NULL/0 to size). Only
+ *   functions returning no handle (pio_to_format, pio_convert_*,
+ *   pio_write_dir) take a warnbuf.
+ * - Strings returned by pio_to_format / pio_convert_file / pio_convert_str
+ *   are owned by the library; free them with pio_string_free. Handles from
+ *   pio_parse_file / pio_parse_str / pio_read_dir / pio_normalize are freed
+ *   with pio_network_free. Arrow buffers are freed through their own release
+ *   callbacks (the C Data Interface contract).
+ * - A handle is immutable after construction: concurrent reads from any
+ *   number of threads are safe; pio_network_free is not, free exactly once.
+ * - Every entry point catches Rust panics at the boundary and returns the
+ *   documented failure value (NULL, 0, -1, 0.0) rather than unwinding across
+ *   the ABI (requires the default panic = "unwind"; a panic = "abort" build
+ *   aborts the process instead).
  *
- * Optional: build with `--features arrow` to get pio_export_arrow, a raw
- * network export over the Arrow C Data Interface (guarded by PIO_ARROW).
+ * Evolution policy: existing signatures are frozen. New data means new
+ * symbols; rich or multiconductor data rides the Arrow C Data Interface
+ * (pio_to_arrow) and the powerio-json snapshot, whose schemas carry their own
+ * structure and grow without touching a C signature. The dense extractors are
+ * the frozen balanced positive-sequence projection, complete as-is. The Arrow
+ * tables and the powerio-json schema are append-only: the existing
+ * PIO_ARROW_TABLE_* ids and each table's column order are frozen, a new table
+ * takes the next id and new columns append (nullable) at the end, and a
+ * consumer addresses columns by name, never by position. The powerio-json
+ * snapshot adds only optional or defaulted fields; existing field names, types,
+ * and wire forms stay fixed. This is what PIO_ABI_VERSION freezes.
  *
- * Optional: build with `--features gridfm` to get pio_read_gridfm and
- * pio_gridfm_scenario_ids, the gridfm-datakit Parquet reader (guarded by PIO_GRIDFM).
+ * Optional: build with `--features arrow` for pio_to_arrow (guarded by
+ * PIO_ARROW), `--features gridfm` for pio_read_dir / pio_scenario_ids
+ * (guarded by PIO_GRIDFM), and `--features dist` for the pio_dist_* entry
+ * points (guarded by PIO_DIST): multiconductor distribution cases (OpenDSS,
+ * PMD ENGINEERING JSON, BMOPF JSON) behind their own PioDistNetwork handle,
+ * freed with pio_dist_network_free, string outputs freed with pio_string_free.
+ * The distribution surface is EXPERIMENTAL while the IEEE BMOPF schema is a
+ * draft: its C signatures are frozen under this same PIO_ABI_VERSION (it has no
+ * separate version), but its JSON payloads (bmopf-json, powerio-dist-json) carry
+ * their own meta.version and may evolve; pin a vintage from the payload meta.
+ * Probe optional surfaces at runtime with pio_has_feature("arrow"|"gridfm"|"dist").
  *
  * Checked in and generated; regenerate from the Rust source with
  *   cbindgen --config cbindgen.toml --crate powerio-capi --output include/powerio.h
  */"""
 
-# pio_export_arrow takes arrow-rs's FFI_ArrowArray/FFI_ArrowSchema, which are
+# pio_to_arrow takes arrow-rs's FFI_ArrowArray/FFI_ArrowSchema, which are
 # #[repr(C)] and layout-identical to the Arrow C Data Interface structs. Present
 # them under the standard ArrowArray/ArrowSchema names so a consumer can pass the
 # structs from arrow_c_data_interface.h (forward-declared below, gated on
@@ -52,18 +108,19 @@ struct ArrowSchema;
 
 [export]
 prefix = ""
-include = ["PioNetwork"]
+include = ["PioNetwork", "PioDistNetwork"]
 
 [export.rename]
 "FFI_ArrowArray" = "struct ArrowArray"
 "FFI_ArrowSchema" = "struct ArrowSchema"
 
-# Gate the optional Arrow export behind `#ifdef PIO_ARROW` (the `arrow` feature)
-# and the optional gridfm reader behind `#ifdef PIO_GRIDFM` (the `gridfm` feature):
-# cbindgen emits the cfg-gated symbols inside `#if defined(...)` even on a default
-# (no-feature) generation, so the checked-in header always carries both blocks.
+# Gate the optional features behind #ifdef (PIO_ARROW for `arrow`, PIO_DIST
+# for `dist`, PIO_GRIDFM for `gridfm`): cbindgen emits the cfg-gated symbols
+# inside `#if defined(...)` even on a default (no-feature) generation, so the
+# checked-in header always carries every block.
 [defines]
 "feature = arrow" = "PIO_ARROW"
+"feature = dist" = "PIO_DIST"
 "feature = gridfm" = "PIO_GRIDFM"
 
 [parse]

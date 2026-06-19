@@ -14,6 +14,9 @@ on:
     branches: [ "main" ]
     paths: [ "powerio/**", "powerio-capi/**", ".github/workflows/julia-binding.yml" ]
 
+permissions:
+  contents: read
+
 env:
   CARGO_TERM_COLOR: always
 
@@ -43,10 +46,11 @@ jobs:
       if: steps.powerio-jl.outputs.available == 'true'
     - name: Build powerio-capi
       if: steps.powerio-jl.outputs.available == 'true'
-      # --features arrow,gridfm so PowerIO.jl's Arrow export and gridfm reader
-      # tests run against real pio_export_arrow / pio_read_gridfm symbols rather
-      # than skipping (arrow_available() / gridfm_available() gate them).
-      run: cargo build -p powerio-capi --release --features arrow,gridfm
+      # --features arrow,gridfm,dist so PowerIO.jl's Arrow export, gridfm reader,
+      # and the pio_dist_* distribution surface bind against real symbols rather
+      # than skipping (arrow_available() / gridfm_available() / pio_has_feature
+      # gate them).
+      run: cargo build -p powerio-capi --release --features arrow,gridfm,dist
     - name: Check out PowerIO.jl
       if: steps.powerio-jl.outputs.available == 'true'
       uses: actions/checkout@v6

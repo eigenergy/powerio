@@ -126,11 +126,14 @@ enum Command {
         #[arg(long, default_value_t = 0)]
         scenario: i64,
     },
-    /// Convert a case file to another format through the neutral hub.
+    /// Convert a case file to another format. Transmission formats convert
+    /// through the neutral hub; distribution formats (dss, pmd-json,
+    /// bmopf-json) through the wire coordinate distribution model. The two
+    /// families do not mix.
     Convert {
         /// Input case file, or a gridfm dataset directory with `--from gridfm`.
         /// The format is inferred from the extension (`.m`, `.json`, `.raw`,
-        /// `.aux`) unless `--from` is given.
+        /// `.aux`, `.dss`) unless `--from` is given.
         input: PathBuf,
         /// Target format.
         #[arg(long, value_enum)]
@@ -161,13 +164,22 @@ enum FormatArg {
     EgretJson,
     #[value(name = "psse", alias = "raw")]
     Psse,
+    /// Write PSS/E `.raw` at revision 34.
+    #[value(name = "psse34")]
+    Psse34,
+    /// Write PSS/E `.raw` at revision 35.
+    #[value(name = "psse35")]
+    Psse35,
     #[value(name = "powerworld", alias = "aux")]
     PowerWorld,
     #[value(name = "pandapower-json", alias = "pandapower", alias = "pp")]
     PandapowerJson,
+    /// The canonical lossless snapshot (`Network` as validated JSON).
+    #[value(name = "powerio-json", alias = "powerio", alias = "json")]
+    PowerioJson,
     #[value(name = "pypsa-csv", alias = "pypsa")]
     PypsaCsv,
-    /// Read a GE PSLF .epc case (read only).
+    /// GE PSLF .epc case (read and write).
     #[value(name = "pslf", alias = "epc")]
     Pslf,
     /// Read a gridfm-datakit Parquet dataset directory (read only).
@@ -176,49 +188,92 @@ enum FormatArg {
     /// Read a PowerWorld .pwb binary case (read only).
     #[value(name = "pwb")]
     Pwb,
+    /// OpenDSS `.dss` distribution case (read and write).
+    #[value(name = "dss", alias = "opendss")]
+    Dss,
+    /// PowerModelsDistribution ENGINEERING JSON (read and write).
+    #[value(name = "pmd-json", alias = "pmd", alias = "engineering")]
+    PmdJson,
+    /// IEEE BMOPF JSON distribution case (read and write).
+    #[value(name = "bmopf-json", alias = "bmopf")]
+    BmopfJson,
 }
 
 impl FormatArg {
-    /// The write target this format maps to. `gridfm` has no convert-writer (use
-    /// the `gridfm` subcommand), so it errors here rather than silently misrouting.
-    fn to_target(self) -> anyhow::Result<powerio_matrix::TargetFormat> {
+    /// The writable transmission hub target: `None` for the distribution
+    /// formats and for gridfm, which has no convert writer (the `gridfm`
+    /// subcommand writes datasets).
+    fn transmission(self) -> Option<powerio_matrix::TargetFormat> {
         use powerio_matrix::TargetFormat;
-        Ok(match self {
+        Some(match self {
             FormatArg::Matpower => TargetFormat::Matpower,
             FormatArg::PowerModelsJson => TargetFormat::PowerModelsJson,
             FormatArg::EgretJson => TargetFormat::EgretJson,
-            FormatArg::Psse => TargetFormat::Psse,
+            FormatArg::Psse => TargetFormat::Psse { rev: 33 },
+            FormatArg::Psse34 => TargetFormat::Psse { rev: 34 },
+            FormatArg::Psse35 => TargetFormat::Psse { rev: 35 },
             FormatArg::PowerWorld => TargetFormat::PowerWorld,
             FormatArg::PandapowerJson => TargetFormat::PandapowerJson,
-            FormatArg::PypsaCsv => anyhow::bail!(
-                "`convert` cannot return a PyPSA CSV folder as text; pass `--to pypsa-csv -o <dir>`"
-            ),
-            FormatArg::Pslf => {
-                anyhow::bail!("PSLF .epc is read only; it cannot be a conversion target")
-            }
-            FormatArg::Gridfm => anyhow::bail!(
-                "`convert` cannot write a gridfm dataset; use the `gridfm` subcommand"
-            ),
-            FormatArg::Pwb => anyhow::bail!("PowerWorld .pwb is read only; it cannot be a target"),
+            FormatArg::PowerioJson => TargetFormat::PowerioJson,
+            FormatArg::Pslf => TargetFormat::Pslf,
+            // PypsaCsv is a transmission format, but it writes a directory, not a
+            // text target; `run_convert` handles it before reaching here. gridfm
+            // is read only here, and Pwb is read only. The distribution formats
+            // belong to `distribution()`. All return `None` from this method.
+            FormatArg::PypsaCsv
+            | FormatArg::Gridfm
+            | FormatArg::Pwb
+            | FormatArg::Dss
+            | FormatArg::PmdJson
+            | FormatArg::BmopfJson => return None,
         })
     }
 
-    /// The canonical format name. For the five classical formats this is the name
-    /// `target_format_from_name` accepts, used to force a text reader; `gridfm` is
-    /// parquet-only and never routes through that hub (the callers guard it first),
-    /// so its name is for diagnostics only.
+    /// The distribution target, or `None` outside that family. For every
+    /// writable format exactly one of this and [`FormatArg::transmission`]
+    /// is `Some`, so adding one without wiring its family is a compile
+    /// error; gridfm is read only and returns `None` from both.
+    fn distribution(self) -> Option<powerio_dist::DistTargetFormat> {
+        use powerio_dist::DistTargetFormat;
+        match self {
+            FormatArg::Dss => Some(DistTargetFormat::Dss),
+            FormatArg::PmdJson => Some(DistTargetFormat::PmdJson),
+            FormatArg::BmopfJson => Some(DistTargetFormat::BmopfJson),
+            FormatArg::Matpower
+            | FormatArg::PowerModelsJson
+            | FormatArg::EgretJson
+            | FormatArg::Psse
+            | FormatArg::Psse34
+            | FormatArg::Psse35
+            | FormatArg::PowerWorld
+            | FormatArg::PandapowerJson
+            | FormatArg::PowerioJson
+            | FormatArg::PypsaCsv
+            | FormatArg::Pslf
+            | FormatArg::Gridfm
+            | FormatArg::Pwb => None,
+        }
+    }
+
+    /// The canonical name the format dispatchers accept, for forcing a reader.
     fn name(self) -> &'static str {
         match self {
             FormatArg::Matpower => "matpower",
             FormatArg::PowerModelsJson => "powermodels-json",
             FormatArg::EgretJson => "egret-json",
             FormatArg::Psse => "psse",
+            FormatArg::Psse34 => "psse34",
+            FormatArg::Psse35 => "psse35",
             FormatArg::PowerWorld => "powerworld",
             FormatArg::PandapowerJson => "pandapower-json",
+            FormatArg::PowerioJson => "powerio-json",
             FormatArg::PypsaCsv => "pypsa-csv",
             FormatArg::Pslf => "pslf",
             FormatArg::Gridfm => "gridfm",
             FormatArg::Pwb => "pwb",
+            FormatArg::Dss => "dss",
+            FormatArg::PmdJson => "pmd-json",
+            FormatArg::BmopfJson => "bmopf-json",
         }
     }
 }
@@ -614,14 +669,51 @@ fn run_convert(
     from: Option<FormatArg>,
     scenario: i64,
 ) -> anyhow::Result<()> {
+    // gridfm has no convert writer; the dataset writer is the `gridfm`
+    // subcommand.
+    if matches!(to, FormatArg::Gridfm) {
+        anyhow::bail!("`convert` cannot write a gridfm dataset; use the `gridfm` subcommand");
+    }
+    // PyPSA CSV is a transmission format that writes a directory, not a text
+    // target, so it takes the folder path and returns early.
     if to == FormatArg::PypsaCsv {
-        let Some(out_dir) = output else {
-            anyhow::bail!("`--to pypsa-csv` requires `-o <output-dir>`");
-        };
-        if out_dir.as_os_str() == "-" {
-            anyhow::bail!("`--to pypsa-csv` writes a directory and cannot write to stdout");
-        }
-        let net = if from == Some(FormatArg::Gridfm) {
+        return convert_to_pypsa_folder(input, output, from, scenario);
+    }
+    // The two families share no conversion path; say so directly instead of
+    // letting the wrong family's reader produce a confusing format error. The
+    // input family comes from --from (gridfm reads into the transmission
+    // model), or from an unambiguous extension (.json is shared, so it stays
+    // undecided and the reader sniffs it).
+    let input_is_dist = from
+        .map(|f| !matches!(f, FormatArg::Gridfm) && f.transmission().is_none())
+        .or_else(|| {
+            match input
+                .extension()
+                .and_then(|e| e.to_str())
+                .map(str::to_ascii_lowercase)
+                .as_deref()
+            {
+                Some("m" | "raw" | "aux" | "epc" | "pwb") => Some(false),
+                Some("dss") => Some(true),
+                _ => None,
+            }
+        });
+    if input_is_dist.is_some_and(|dist| dist != to.transmission().is_none()) {
+        anyhow::bail!(
+            "no conversion path between the transmission and distribution format families \
+             ({} to `{}`)",
+            from.map_or_else(
+                || format!("`{}` input", input.display()),
+                |f| format!("`{}`", f.name())
+            ),
+            to.name()
+        );
+    }
+    let (text, warnings) = if let Some(target) = to.transmission() {
+        // gridfm reads a Parquet dataset directory (the parquet-free
+        // `parse_file` can't), so it routes through powerio-matrix's reader,
+        // surfacing its fidelity notes.
+        let net = if matches!(from, Some(FormatArg::Gridfm)) {
             let read = powerio_matrix::read_gridfm_dataset(input, scenario)
                 .with_context(|| format!("reading gridfm dataset {}", input.display()))?;
             for w in &read.warnings {
@@ -629,20 +721,74 @@ fn run_convert(
             }
             read.network
         } else {
-            read_network(input, from)?
+            // A .json input is undecided above. When the transmission reader
+            // rejects it but the distribution reader accepts it, the input is a
+            // distribution case aimed at a transmission target: say so instead
+            // of presenting the transmission parse error as the problem.
+            read_network(input, from).map_err(|err| {
+                // The liberal BMOPF reader accepts almost any JSON, so a bare
+                // parse success is no signal; a typed voltage source is (both
+                // distribution layouts carry one, transmission JSON does not).
+                if from.is_none()
+                    && input
+                        .extension()
+                        .is_some_and(|e| e.eq_ignore_ascii_case("json"))
+                    && powerio_dist::parse_file(input, None).is_ok_and(|n| !n.sources.is_empty())
+                {
+                    anyhow::anyhow!(
+                        "no conversion path between the transmission and distribution format \
+                         families (`{}` is a distribution case, `{}` is a transmission format)",
+                        input.display(),
+                        to.name()
+                    )
+                } else {
+                    err
+                }
+            })?
         };
-        let outputs = powerio_matrix::write_pypsa_csv_folder(&net, out_dir)
-            .with_context(|| format!("writing PyPSA CSV folder {}", out_dir.display()))?;
-        for w in &outputs.warnings {
-            eprintln!("fidelity: {w}");
+        let conv = powerio_matrix::write_as(&net, target)
+            .with_context(|| format!("serializing to {target}"))?;
+        (conv.text, conv.warnings)
+    } else {
+        let net = powerio_dist::parse_file(input, from.map(FormatArg::name))
+            .with_context(|| format!("reading {}", input.display()))?;
+        for w in &net.warnings {
+            eprintln!("parse: {w}");
         }
-        eprintln!("wrote {}", outputs.dir.display());
-        return Ok(());
+        let target = to
+            .distribution()
+            .expect("the family check routed a transmission target here");
+        let conv = net.to_format(target);
+        (conv.text, conv.warnings)
+    };
+    for w in &warnings {
+        eprintln!("fidelity: {w}");
     }
-    let target = to.to_target()?;
-    // gridfm reads a Parquet dataset directory (the parquet-free `parse_file`
-    // can't), so it routes through powerio-matrix's reader, surfacing its fidelity
-    // notes.
+    match output {
+        Some(p) if p.as_os_str() != "-" => {
+            std::fs::write(p, &text).with_context(|| format!("writing {}", p.display()))?;
+            eprintln!("wrote {}", p.display());
+        }
+        _ => print!("{text}"),
+    }
+    Ok(())
+}
+
+/// Write `input` out as a PyPSA CSV folder (a directory target, so it never
+/// returns text). gridfm input reads through the dataset reader; everything else
+/// goes through the shared transmission hub.
+fn convert_to_pypsa_folder(
+    input: &std::path::Path,
+    output: Option<&std::path::Path>,
+    from: Option<FormatArg>,
+    scenario: i64,
+) -> anyhow::Result<()> {
+    let Some(out_dir) = output else {
+        anyhow::bail!("`--to pypsa-csv` requires `-o <output-dir>`");
+    };
+    if out_dir.as_os_str() == "-" {
+        anyhow::bail!("`--to pypsa-csv` writes a directory and cannot write to stdout");
+    }
     let net = if from == Some(FormatArg::Gridfm) {
         let read = powerio_matrix::read_gridfm_dataset(input, scenario)
             .with_context(|| format!("reading gridfm dataset {}", input.display()))?;
@@ -653,28 +799,40 @@ fn run_convert(
     } else {
         read_network(input, from)?
     };
-    let conv = powerio_matrix::write_as(&net, target);
-    for w in &conv.warnings {
+    let outputs = powerio_matrix::write_pypsa_csv_folder(&net, out_dir)
+        .with_context(|| format!("writing PyPSA CSV folder {}", out_dir.display()))?;
+    for w in &outputs.warnings {
         eprintln!("fidelity: {w}");
     }
-    match output {
-        Some(p) if p.as_os_str() != "-" => {
-            std::fs::write(p, &conv.text).with_context(|| format!("writing {}", p.display()))?;
-            eprintln!("wrote {}", p.display());
-        }
-        _ => print!("{}", conv.text),
-    }
+    eprintln!("wrote {}", outputs.dir.display());
     Ok(())
 }
 
 /// Read `input` into the neutral [`powerio_matrix::Network`] through the shared
 /// format hub, which picks the reader from `from` or the extension (sniffing a
-/// `.json` for the pandapower vs egret vs PowerModels shape). Read fidelity
-/// warnings print to stderr like the write side's.
+/// `.json` for the pandapower vs egret vs PowerModels shape). The distribution
+/// formats are rejected up front: every caller of this function consumes the
+/// transmission model, and clap can't express the restriction on the shared
+/// `FormatArg`. Read fidelity warnings print to stderr like the write side's.
 fn read_network(
     input: &std::path::Path,
     from: Option<FormatArg>,
 ) -> anyhow::Result<powerio_matrix::Network> {
+    if let Some(f) = from {
+        if matches!(f, FormatArg::Gridfm) {
+            anyhow::bail!(
+                "gridfm datasets are read by `convert --from gridfm` or the `gridfm` \
+                 subcommand, not this command"
+            );
+        }
+        if f.distribution().is_some() {
+            anyhow::bail!(
+                "`{}` is a distribution format; this command reads transmission cases \
+                 (use `convert` to bridge dss, pmd-json, and bmopf-json)",
+                f.name()
+            );
+        }
+    }
     let parsed = powerio_matrix::parse_file(input, from.map(FormatArg::name))
         .with_context(|| format!("reading {}", input.display()))?;
     for w in &parsed.warnings {

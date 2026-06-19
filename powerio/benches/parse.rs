@@ -51,7 +51,7 @@ fn bench_roundtrip(c: &mut Criterion) {
 // fixture for them.
 const FORMATS: &[(&str, TargetFormat)] = &[
     ("powermodels-json", TargetFormat::PowerModelsJson),
-    ("psse", TargetFormat::Psse),
+    ("psse", TargetFormat::Psse { rev: 33 }),
     ("powerworld", TargetFormat::PowerWorld),
     ("egret-json", TargetFormat::EgretJson),
 ];
@@ -62,7 +62,7 @@ fn bench_parse_formats(c: &mut Criterion) {
     for (name, fmt) in FORMATS {
         // Convert once outside the timed loop; `parse_str` runs the same
         // owned-source reader the file path does.
-        let text = write_as(&net, *fmt).text;
+        let text = write_as(&net, *fmt).unwrap().text;
         // A reader that can't re-read its own writer would make the timing
         // meaningless, so fail loudly here rather than benchmark an error path.
         parse_str(&text, name)
@@ -124,11 +124,24 @@ fn bench_powerworld_pwb(c: &mut Criterion) {
     }
 }
 
+/// The `.pwd` display decoder: a byte-offset scan over the whole file, the one
+/// reader whose hot loop runs per byte rather than per record: regression
+/// coverage for the total (Option-returning) byte accessors.
+fn bench_powerworld_pwd(c: &mut Criterion) {
+    let Ok(bytes) = std::fs::read("../tests/data/powerworld/ACTIVSg200.pwd") else {
+        return;
+    };
+    c.bench_function("parse_pwd_activsg200", |b| {
+        b.iter(|| powerio::format::powerworld::parse_pwd(black_box(&bytes)).unwrap());
+    });
+}
+
 criterion_group!(
     benches,
     bench_parse,
     bench_roundtrip,
     bench_parse_formats,
-    bench_powerworld_pwb
+    bench_powerworld_pwb,
+    bench_powerworld_pwd
 );
 criterion_main!(benches);

@@ -1,0 +1,13 @@
+! Single phase wye-wye distribution transformer, 7.2 kV primary to 240 V secondary.
+Clear
+Set DefaultBaseFrequency=60
+
+New Circuit.xfmr_single_phase basekv=7.2 pu=1.0 phases=1 bus1=sourcebus.1 MVAsc3=2000 MVAsc1=2100
+
+New Transformer.t1 phases=1 windings=2 buses=(sourcebus.1, secondary.1) conns=(wye, wye) kvs=(7.2, 0.24) kvas=(25, 25) xhl=2.04 %Rs=(0.6, 0.6)
+
+New Load.l1 bus1=secondary.1 phases=1 conn=wye kv=0.24 kw=15 pf=0.95 model=1 vminpu=0.8 vmaxpu=1.2
+
+Set VoltageBases=[7.2, 0.24]
+Calcvoltagebases
+Solve

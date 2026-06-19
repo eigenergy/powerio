@@ -1027,7 +1027,7 @@ pub fn read_gridfm_scenarios(dir: impl AsRef<Path>) -> Result<Vec<GridfmRead>> {
 /// The distinct scenario ids in a gridfm dataset, ascending — the keys
 /// [`read_gridfm_scenarios`] rebuilds a [`Network`] for. Reads only `bus_data`'s
 /// scenario column, so it enumerates a dataset's scenarios without rebuilding
-/// every network; the C ABI's `pio_gridfm_scenario_ids` is a thin wrapper over it.
+/// every network; the C ABI's `pio_scenario_ids` is a thin wrapper over it.
 ///
 /// # Errors
 /// Propagates the directory resolution and `bus_data.parquet` read errors.
@@ -1229,6 +1229,8 @@ fn build_network_from_columns(
             base_kv: vn_kv[r],
             vmax: max_vm[r],
             vmin: min_vm[r],
+            evhi: None,
+            evlo: None,
             area: 0,
             zone: 0,
             name: None,
@@ -1250,6 +1252,7 @@ fn build_network_from_columns(
                 g: gs[r] * base_mva,
                 b: bs[r] * base_mva,
                 in_service: true,
+                control: None,
                 extras: Extras::new(),
             });
         }
@@ -1303,6 +1306,7 @@ fn build_network_from_columns(
             in_service: g_in[r] != 0,
             cost,
             caps: [None; 11],
+            regulated_bus: None,
         });
     }
 
@@ -1352,6 +1356,7 @@ fn build_network_from_columns(
             in_service: br_status[row] != 0,
             angmin: ang_min[row],
             angmax: ang_max[row],
+            control: None,
             extras: Extras::new(),
         });
     }
@@ -1359,6 +1364,7 @@ fn build_network_from_columns(
     let net = Network {
         name: name.to_string(),
         base_mva,
+        base_frequency: crate::network::DEFAULT_BASE_FREQUENCY,
         buses,
         loads,
         shunts,
@@ -1366,6 +1372,9 @@ fn build_network_from_columns(
         generators,
         storage: Vec::new(),
         hvdc: Vec::new(),
+        transformers_3w: Vec::new(),
+        areas: Vec::new(),
+        solver: None,
         source_format: SourceFormat::Gridfm,
         source: None,
     };
@@ -2471,6 +2480,8 @@ mod tests {
             base_kv: 1.0,
             vmax: 1.1,
             vmin: 0.9,
+            evhi: None,
+            evlo: None,
             area: 1,
             zone: 1,
             name: None,
@@ -2493,6 +2504,7 @@ mod tests {
             in_service: true,
             angmin: -360.0,
             angmax: 360.0,
+            control: None,
             extras: Extras::new(),
         }
     }
@@ -2521,6 +2533,7 @@ mod tests {
             in_service: true,
             cost: Some(cost),
             caps: [None; 11],
+            regulated_bus: None,
         }
     }
 

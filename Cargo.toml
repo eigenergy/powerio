@@ -1,16 +1,19 @@
 [workspace]
-members = ["powerio", "powerio-matrix", "powerio-cli", "powerio-py", "powerio-capi"]
+members = ["powerio", "powerio-matrix", "powerio-cli", "powerio-py", "powerio-capi", "powerio-dist"]
 # Bare `cargo build`/`test`/`clippy` touch only the library + CLI crates, so the
 # toolchain never compiles the PyO3 extension (which needs libpython). Build the
 # binding explicitly with `-p powerio-py`.
-default-members = ["powerio", "powerio-matrix", "powerio-cli"]
+default-members = ["powerio", "powerio-matrix", "powerio-cli", "powerio-dist"]
+# The fuzz harnesses need nightly + cargo-fuzz; they build on their own (see
+# fuzz/README.md), never as part of the workspace.
+exclude = ["fuzz"]
 resolver = "2"
 
 # Single source for the release version and shared metadata; the crates inherit
 # via `key.workspace = true`, so a release bump touches this version and the
 # two dependency pins below.
 [workspace.package]
-version = "0.2.4"
+version = "0.3.0"
 edition = "2024"
 rust-version = "1.86"
 license = "MIT OR Apache-2.0"
@@ -20,12 +23,13 @@ homepage = "https://eigenergy.github.io/powerio/"
 [workspace.dependencies]
 # The intra-workspace deps carry the version pin `cargo publish` needs; keeping
 # them here means the pin moves with the [workspace.package] version.
-powerio = { path = "powerio", version = "0.2.4" }
-powerio-matrix = { path = "powerio-matrix", version = "0.2.4" }
+powerio = { path = "powerio", version = "0.3.0" }
+powerio-matrix = { path = "powerio-matrix", version = "0.3.0" }
+powerio-dist = { path = "powerio-dist", version = "0.3.0" }
 # Cross-crate type identity: `CsMat<f64>` (sprs) and the Arrow types cross crate
 # boundaries, so every crate must build against the same major.
 sprs = { version = "0.11", default-features = false }
-arrow = { version = "58", default-features = false }
+arrow = { version = "59", default-features = false }
 num-complex = "0.4"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"

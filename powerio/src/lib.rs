@@ -31,7 +31,7 @@
 //! ";
 //! let net = parse_str(src, "matpower")?.network;
 //! assert_eq!(net.buses.len(), 2);
-//! assert_eq!(net.to_format(TargetFormat::Matpower).text, src);
+//! assert_eq!(net.to_format(TargetFormat::Matpower)?.text, src);
 //! # Ok::<(), powerio::Error>(())
 //! ```
 
@@ -40,6 +40,7 @@ pub mod format;
 pub mod indexed;
 pub mod network;
 mod normalize;
+mod operations;
 
 pub use error::{ElementCounts, Error, ErrorCategory, Result, ScenarioMismatch};
 pub use format::{
@@ -47,12 +48,15 @@ pub use format::{
     TargetFormat, convert_file, convert_str, display_format_from_name, parse_display_bytes,
     parse_display_file, parse_egret_json, parse_file, parse_matpower, parse_matpower_file,
     parse_pandapower_json, parse_powermodels_json, parse_powerworld, parse_pslf, parse_psse,
-    parse_str, read_pypsa_csv_folder, target_format_from_name, write_as, write_egret_json,
-    write_matpower, write_pandapower_json, write_powermodels_json, write_powerworld, write_psse,
-    write_pypsa_csv_folder,
+    parse_str, read_pypsa_csv_folder, target_format_from_name, write_as, write_dir,
+    write_egret_json, write_matpower, write_pandapower_json, write_powermodels_json,
+    write_powerworld, write_pslf, write_psse, write_psse_rev, write_pypsa_csv_folder,
 };
 pub use indexed::{ConnectivityReport, IndexCore, IndexedNetwork};
 pub use network::{
-    Branch, Bus, BusId, BusType, Extras, GenCaps, GenCost, Generator, Hvdc, Load, Network, Shunt,
-    SourceFormat, Storage,
+    Area, Branch, Bus, BusId, BusType, DEFAULT_BASE_FREQUENCY, Diagnostic, Extras, GenCaps,
+    GenCost, Generator, Hvdc, Impedance, Load, Network, Shunt, ShuntBlock, SolverParams,
+    SourceFormat, Storage, SwitchedShuntControl, SwitchedShuntMode, Transformer3W,
+    TransformerControl, TransformerControlMode, Winding,
 };
+pub use operations::Selector;

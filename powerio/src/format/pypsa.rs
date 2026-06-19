@@ -100,6 +100,8 @@ fn read_pypsa_csv_folder_inner(path: &Path, warnings: &mut Vec<String>) -> Resul
             base_kv: v_nom,
             vmax: row.f("v_mag_pu_max").unwrap_or(1.1),
             vmin: row.f("v_mag_pu_min").unwrap_or(0.9),
+            evhi: None,
+            evlo: None,
             area: 1,
             zone: 1,
             name: bus_name,
@@ -131,6 +133,7 @@ fn read_pypsa_csv_folder_inner(path: &Path, warnings: &mut Vec<String>) -> Resul
                 g: row.f("g").unwrap_or(0.0) * zb * base_mva,
                 b: row.f("b").unwrap_or(0.0) * zb * base_mva,
                 in_service: row.bool("active").unwrap_or(true),
+                control: None,
                 extras: Extras::default(),
             });
         }
@@ -185,6 +188,7 @@ fn read_pypsa_csv_folder_inner(path: &Path, warnings: &mut Vec<String>) -> Resul
                     (None, None) => None,
                 },
                 caps: [None; crate::network::GEN_EXTRA_KEYS.len()],
+                regulated_bus: None,
             });
         }
     }
@@ -215,6 +219,7 @@ fn read_pypsa_csv_folder_inner(path: &Path, warnings: &mut Vec<String>) -> Resul
                 in_service: row.bool("active").unwrap_or(true),
                 angmin: row.f("v_ang_min").unwrap_or(-360.0),
                 angmax: row.f("v_ang_max").unwrap_or(360.0),
+                control: None,
                 extras: Extras::default(),
             });
         }
@@ -257,6 +262,7 @@ fn read_pypsa_csv_folder_inner(path: &Path, warnings: &mut Vec<String>) -> Resul
                 in_service: row.bool("active").unwrap_or(true),
                 angmin: -360.0,
                 angmax: 360.0,
+                control: None,
                 extras: Extras::default(),
             });
         }
@@ -377,6 +383,7 @@ fn read_pypsa_csv_folder_inner(path: &Path, warnings: &mut Vec<String>) -> Resul
     let net = Network {
         name,
         base_mva,
+        base_frequency: crate::network::DEFAULT_BASE_FREQUENCY,
         buses,
         loads,
         shunts,
@@ -384,6 +391,9 @@ fn read_pypsa_csv_folder_inner(path: &Path, warnings: &mut Vec<String>) -> Resul
         generators,
         storage,
         hvdc,
+        transformers_3w: Vec::new(),
+        areas: Vec::new(),
+        solver: None,
         source_format: SourceFormat::PypsaCsv,
         source: None,
     };
@@ -451,6 +461,22 @@ pub fn write_pypsa_csv_folder(net: &Network, out_dir: impl AsRef<Path>) -> Resul
             "{} dcline(s) dropped: the PyPSA CSV writer does not model HVDC links",
             net.hvdc.len()
         ));
+    }
+    if !net.transformers_3w.is_empty() {
+        warnings.push(format!(
+            "{} 3-winding transformer(s) dropped: the PyPSA CSV writer emits no 3-winding transformer",
+            net.transformers_3w.len()
+        ));
+    }
+    if net
+        .buses
+        .iter()
+        .any(|b| b.evhi.is_some() || b.evlo.is_some())
+    {
+        warnings.push(
+            "emergency voltage band(s) (EVHI/EVLO) dropped: this writer carries one voltage band"
+                .into(),
+        );
     }
     if net.generators.iter().any(Generator::has_caps) {
         warnings.push("generator capability/ramp columns dropped: PyPSA generator CSV has no MATPOWER capability columns".into());
@@ -1024,6 +1050,8 @@ mod tests {
             base_kv: 110.0,
             vmax: 1.1,
             vmin: 0.9,
+            evhi: None,
+            evlo: None,
             area: 1,
             zone: 1,
             name: name.map(str::to_string),
@@ -1045,6 +1073,7 @@ mod tests {
             in_service: true,
             cost,
             caps: [None; crate::network::GEN_EXTRA_KEYS.len()],
+            regulated_bus: None,
         }
     }
 
@@ -1086,6 +1115,7 @@ mod tests {
             in_service: true,
             angmin: -360.0,
             angmax: 360.0,
+            control: None,
             extras: Extras::default(),
         }
     }

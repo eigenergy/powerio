@@ -11,13 +11,17 @@ use std::fmt::Write as _;
 use std::sync::Arc;
 
 use super::auxiliary::{AuxFile, AuxObject, parse_aux};
-use crate::format::Conversion;
+use crate::format::{Conversion, sanitize_quoted};
 use crate::network::{
     Branch, Bus, BusId, BusType, Extras, Generator, Load, Network, Shunt, SourceFormat,
 };
 use crate::{Error, Result};
 
 const FMT: &str = "PowerWorld .aux";
+
+/// The double quote would close a PowerWorld quoted value early on re-read (the
+/// tokenizer toggles on `"` with no un-escaping), shifting every later column.
+const NAME_FORBIDDEN: &[char] = &['"'];
 
 /// Branch identity extras keys, shared with the `.pwb` reader. They double as
 /// the aux field names (extras keep PowerWorld fields verbatim), so every
@@ -125,6 +129,7 @@ pub(crate) fn parse_powerworld_source(
     let net = Network {
         name,
         base_mva,
+        base_frequency: crate::network::DEFAULT_BASE_FREQUENCY,
         buses,
         loads,
         shunts,
@@ -132,6 +137,9 @@ pub(crate) fn parse_powerworld_source(
         generators,
         storage: Vec::new(),
         hvdc: Vec::new(),
+        transformers_3w: Vec::new(),
+        areas: Vec::new(),
+        solver: None,
         source_format: SourceFormat::PowerWorld,
         source: Some(source),
     };
@@ -437,6 +445,8 @@ fn read_bus(r: &Row) -> Result<Bus> {
         // BusVMax/BusVMin are the fallback aliases.
         vmax: f_alias(r, &["BusVoltLimHigh:1", "LimitHighA", "BusVMax"], 1.1)?,
         vmin: f_alias(r, &["BusVoltLimLow:1", "LimitLowA", "BusVMin"], 0.9)?,
+        evhi: None,
+        evlo: None,
         area: uid_alias(r, &["AreaNum", "AreaNumber"])?,
         zone: uid_alias(r, &["ZoneNum", "ZoneNumber"])?,
         name,
@@ -494,6 +504,7 @@ fn read_shunt(r: &Row, bus_labels: &HashMap<&str, BusId>) -> Result<Shunt> {
         g: f_alias(r, &["ShuntMW", "SSNMW", "MWNom"], 0.0)?,
         b: f_alias(r, &["ShuntMVR", "SSNMVR", "MvarNom"], 0.0)?,
         in_service: on_alias(r, &["ShuntStatus", "SSStatus", "Status"])?,
+        control: None,
         extras,
     })
 }
@@ -518,6 +529,7 @@ fn read_gen(r: &Row, bus_labels: &HashMap<&str, BusId>) -> Result<Generator> {
         in_service: on_alias(r, &["GenStatus", "Status"])?,
         cost: None,
         caps: Default::default(),
+        regulated_bus: None,
     })
 }
 
@@ -568,6 +580,7 @@ fn read_branch(r: &Row, bus_labels: &HashMap<&str, BusId>) -> Result<Branch> {
         in_service: on_alias(r, &["LineStatus", "Status"])?,
         angmin: -360.0,
         angmax: 360.0,
+        control: None,
         extras,
     })
 }
@@ -581,6 +594,7 @@ fn read_branch(r: &Row, bus_labels: &HashMap<&str, BusId>) -> Result<Branch> {
 pub fn write_powerworld(net: &Network) -> Conversion {
     let mut warnings = Vec::new();
     let mut nonfinite = false;
+    let mut sanitized_names = 0usize;
     let mut n = |x: f64| -> String {
         if x.is_finite() {
             format!("{x}")
@@ -613,10 +627,15 @@ pub fn write_powerworld(net: &Network) -> Conversion {
         "[BusNum, BusName, BusNomVolt, BusPUVolt, BusAngle, AreaNum, ZoneNum, BusVMax, BusVMin, BusCat]",
         |rows| {
             for b in &net.buses {
+                let raw_name = b.name.as_deref().unwrap_or("");
+                let name = sanitize_quoted(raw_name, NAME_FORBIDDEN, ' ');
+                if matches!(name, std::borrow::Cow::Owned(_)) {
+                    sanitized_names += 1;
+                }
                 rows.push(format!(
                     "{} \"{}\" {} {} {} {} {} {} {} \"{}\"",
                     b.id,
-                    b.name.as_deref().unwrap_or(""),
+                    name,
                     n(b.base_kv),
                     n(b.vm),
                     n(b.va),
@@ -742,6 +761,22 @@ pub fn write_powerworld(net: &Network) -> Conversion {
             net.hvdc.len()
         ));
     }
+    if !net.transformers_3w.is_empty() {
+        warnings.push(format!(
+            "{} 3-winding transformer(s) dropped: the PowerWorld .aux writer emits no 3-winding record",
+            net.transformers_3w.len()
+        ));
+    }
+    if net
+        .buses
+        .iter()
+        .any(|b| b.evhi.is_some() || b.evlo.is_some())
+    {
+        warnings.push(
+            "emergency voltage band(s) (EVHI/EVLO) dropped: this writer carries one voltage band"
+                .into(),
+        );
+    }
     if !net.storage.is_empty() {
         warnings.push(format!(
             "{} storage unit(s) dropped: PowerWorld storage not modeled",
@@ -760,6 +795,12 @@ pub fn write_powerworld(net: &Network) -> Conversion {
     }
     if nonfinite {
         warnings.push("non-finite values written as ±1e10 sentinels".into());
+    }
+    if sanitized_names > 0 {
+        warnings.push(format!(
+            "{sanitized_names} bus name(s) contained a double quote that would corrupt a \
+             PowerWorld value; replaced with spaces"
+        ));
     }
 
     Conversion { text: s, warnings }

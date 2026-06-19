@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.3.0
+
+- Distribution systems: new `powerio-dist` crate for multi conductor unbalanced
+  networks. Reads OpenDSS and the PowerModelsDistribution engineering JSON, and
+  reads/writes the IEEE BMOPF Taskforce JSON (schema v0.0.1). First crates.io
+  release of `powerio-dist`.
+- PSS/E: read and write support for v34 and v35 alongside v33.
+- GE PSLF: an `.epc` writer, with better interoperability between PSLF and PSS/E.
+- Transformers with three or more windings.
+- C ABI v4 (`PIO_ABI_VERSION` 4): a smaller canonical surface designed so future
+  changes stay additive. Breaking ABI change in this release.
+- Memory safety hardening across the readers.
+
 ## 0.2.4
 
 - PSLF `.epc`: read support for GE PSLF power flow cases, including `.epc`
