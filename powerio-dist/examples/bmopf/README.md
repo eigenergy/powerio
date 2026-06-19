@@ -24,10 +24,11 @@ The dss reader materializes every OpenDSS class default explicitly, so the BMOPF
 output is fully explicit. Writing back to `.dss` reproduces the source byte for
 byte, which fixes the source fidelity these encodings rest on.
 
-The schema forbids sidecar data (`additionalProperties: false` throughout), so
-these documents carry no `meta`/`$schema` block; the schema vintage is the
-vendored copy. A namespaced extension hatch for self-identifying provenance is an
-open task-force question (see the PR #82 discussion).
+Each document carries a top-level `meta` block (BMOPF schema v0.0.1) that
+self-identifies: `meta.generator` names the writing tool and version, and
+`meta.$schema` pins the schema vintage the file targets. The block is
+deterministic (no timestamp) so output stays byte-stable. Per-phase generator
+`cost` is emitted as an array, as the v0.0.1 schema requires.
 
 ## Provenance and licensing
 

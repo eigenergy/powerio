@@ -1,13 +1,61 @@
 {
     "$schema":"https://json-schema.org/draft/2020-12/schema",
-    "$id":"https://github.com/frederikgeth/OpenDSSToPMDJSON",
-    "title":"**Draft** BMOPF OPF test case schema",
+    "$id":"https://github.com/frederikgeth/bmopf-report/tree/main/draft_schema_and_networks",
+    "title":"**Draft** BMOPF OPF test case schema v.0.0.1",
     "type": "object",
     "additionalProperties": false,
     "properties": {
         "name": {
             "type": "string",
             "description": "Test case name"
+        },
+        "meta": {
+            "type": "object",
+            "description": "Case metadata block",
+            "properties": {
+                "$schema":     { "type": "string" },
+                "version":     { "type": "string" },
+                "title":       { "type": "string" },
+                "description": { "type": "string" },
+                "created":     { "type": "string" },
+                "modified":    { "type": "string" },
+                "license":     { "type": "string" },
+                "authors": {
+                    "type": "array",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "name":  { "type": "string" },
+                            "email": { "type": "string" },
+                            "orcid": { "type": "string" }
+                        },
+                        "additionalProperties": false
+                    }
+                },
+                "sources": {
+                    "type": "array",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "name":    { "type": "string" },
+                            "url":     { "type": "string" },
+                            "format":  { "type": "string" },
+                            "doi":     { "type": "string" },
+                            "version": { "type": "string" }
+                        },
+                        "additionalProperties": false
+                    }
+                },
+                "generator": {
+                    "type": "object",
+                    "properties": {
+                        "tool":    { "type": "string" },
+                        "version": { "type": "string" }
+                    },
+                    "additionalProperties": false
+                }
+            },
+            "additionalProperties": false
         },
         "bus": {
             "type": "object",
@@ -221,6 +269,48 @@
                     },
                     "terminal_map": {
                         "$ref": "#/$defs/terminal_map_type"
+                    },
+                    "model": {
+                        "$ref": "#/$defs/load_model_type"
+                    },
+                    "v_nom": {
+                        "type": "array",
+                        "items": {
+                            "type": "number",
+                            "description": "Nominal terminal voltage at which p_nom/q_nom are specified [V]; phase-to-neutral for WYE, line-to-line for DELTA. Required when model is zip or exponential."
+                        }
+                    },
+                    "alpha_z": {
+                        "type": "array",
+                        "items": {"type": "number", "description": "Active-power constant-impedance fraction (ZIP)"}
+                    },
+                    "alpha_i": {
+                        "type": "array",
+                        "items": {"type": "number", "description": "Active-power constant-current fraction (ZIP)"}
+                    },
+                    "alpha_p": {
+                        "type": "array",
+                        "items": {"type": "number", "description": "Active-power constant-power fraction (ZIP)"}
+                    },
+                    "beta_z": {
+                        "type": "array",
+                        "items": {"type": "number", "description": "Reactive-power constant-impedance fraction (ZIP)"}
+                    },
+                    "beta_i": {
+                        "type": "array",
+                        "items": {"type": "number", "description": "Reactive-power constant-current fraction (ZIP)"}
+                    },
+                    "beta_p": {
+                        "type": "array",
+                        "items": {"type": "number", "description": "Reactive-power constant-power fraction (ZIP)"}
+                    },
+                    "gamma_p": {
+                        "type": "array",
+                        "items": {"type": "number", "description": "Active-power voltage exponent (exponential model)"}
+                    },
+                    "gamma_q": {
+                        "type": "array",
+                        "items": {"type": "number", "description": "Reactive-power voltage exponent (exponential model)"}
                     }
                 },
                 "required": [
@@ -231,7 +321,7 @@
                     "terminal_map"
                 ]
             }
-        },    
+        },
         "generator": {
             "type": "object",
             "description": "Generator elements",
@@ -268,8 +358,11 @@
                         }
                     },
                     "cost": {
-                        "type": "number",
-                        "description": "Generating cost if active power [$/kWh]"
+                        "type": "array",
+                        "description": "Per-phase linear generating cost [$/kWh], one entry per phase conductor",
+                        "items": {
+                            "type": "number"
+                        }
                     },
                     "bus": {
                         "$ref": "#/$defs/bus_type"
@@ -412,6 +505,11 @@
             "type": "string",
             "description": "Element configuration, as WYE, DELTA, or SINGLE_PHASE",
             "enum": ["WYE", "DELTA", "SINGLE_PHASE"]
+        },
+        "load_model_type": {
+            "type": "string",
+            "description": "Voltage dependence of the load: constant_power (default), constant_current (P∝|V|), constant_impedance (P∝|V|²), zip (polynomial in |V|), or exponential (power law in |V|)",
+            "enum": ["constant_power", "constant_current", "constant_impedance", "zip", "exponential"]
         },
         "terminal_map_type":{
             "type": "array",

@@ -187,7 +187,8 @@ impl Reader<'_> {
                 "shunt" => self.shunts(items),
                 "voltage_source" => self.sources(items),
                 "transformer" => self.transformers(items),
-                "name" => {}
+                // `meta` is provenance, not network data; the writer regenerates it.
+                "name" | "meta" => {}
                 other => {
                     self.net.warnings.push(format!(
                         "top level `{other}` is outside the schema; kept untyped"
@@ -392,6 +393,25 @@ impl Reader<'_> {
                 (Some(a), Some(b)) if a == b => a.clone(),
                 _ => Vec::new(),
             };
+            // Cost is a per-phase array in the schema; powerio's model holds one
+            // value, so take the first entry (warning if the phases disagree). A
+            // bare scalar is still accepted for documents written before v0.0.1.
+            let cost = match o.get("cost") {
+                Some(Value::Array(a)) => {
+                    let vals: Vec<f64> = a.iter().map(f).collect();
+                    // Bit comparison: detect any per-phase difference exactly
+                    // (broadcast entries are bit-identical), without a float_cmp.
+                    if vals.windows(2).any(|w| w[0].to_bits() != w[1].to_bits()) {
+                        self.net.warnings.push(format!(
+                            "generator {name}: per-phase cost is non-uniform; \
+                             collapsed to the first entry"
+                        ));
+                    }
+                    vals.first().copied()
+                }
+                Some(v) => Some(f(v)),
+                None => None,
+            };
             self.net.generators.push(DistGenerator {
                 name: name.clone(),
                 bus: string(o.get("bus")),
@@ -407,7 +427,7 @@ impl Reader<'_> {
                 p_max,
                 q_min,
                 q_max,
-                cost: o.get("cost").map(f),
+                cost,
                 extras: take_extras(
                     o,
                     &known,

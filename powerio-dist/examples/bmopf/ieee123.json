@@ -5362,6 +5362,13 @@
       ]
     }
   },
+  "meta": {
+    "$schema": "https://github.com/frederikgeth/bmopf-report/tree/main/draft_schema_and_networks",
+    "generator": {
+      "tool": "powerio",
+      "version": "0.2.4"
+    }
+  },
   "name": "ieee123",
   "shunt": {
     "C83": {
