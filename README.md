@@ -34,7 +34,7 @@ The following formats are currently supported with read/write functionality:
 Distribution networks are supported in wire coordinates via [`powerio-dist`](powerio-dist/):
 - [OpenDSS](https://www.epri.com/pages/sa/opendss) `.dss`
 - [PowerModelsDistribution.jl](https://github.com/lanl-ansi/PowerModelsDistribution.jl) ENGINEERING data JSON
-- the draft [IEEE BMOPF task force](https://github.com/frederikgeth/bmopf-report) schema `.json`
+- The (draft) BMOPF JSON spec and schema of the [IEEE BMOPF task force](https://github.com/frederikgeth/bmopf-report) `.json`
 
 Support for the following formats is under development (see the open pull requests):
 - [surge](https://github.com/amptimal/surge) `.surge.json`
