@@ -29,7 +29,7 @@ powerio-matrix.workspace = true
 # Unconditional: the wheel always ships the distribution surface (powerio.dist);
 # only the C ABI gates it behind a feature.
 powerio-dist.workspace = true
-pyo3 = { version = "0.27", features = ["abi3-py39"] }
+pyo3 = { version = "0.29", features = ["abi3-py39"] }
 # Must track powerio-matrix's sprs so `CsMat<f64>` is the same type across the
 # boundary. No numpy: the matrix methods hand back COO triplets as plain Python
 # lists, which the pure-Python layer assembles into scipy.sparse.
