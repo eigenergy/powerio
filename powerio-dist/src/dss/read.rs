@@ -309,6 +309,34 @@ const REACTOR_IMPEDANCE_FORMS: &[&str] = &[
     "rmatrix", "xmatrix", "r", "x", "z1", "z2", "z0", "z", "rcurve", "lcurve", "lmh",
 ];
 
+#[derive(Clone, Copy)]
+struct KvarShuntSpec {
+    class: &'static str,
+    series_name: &'static str,
+    default_phases: usize,
+    default_kvar: f64,
+    default_kv: f64,
+    b_sign: f64,
+}
+
+const CAPACITOR_KVAR_SHUNT: KvarShuntSpec = KvarShuntSpec {
+    class: "capacitor",
+    series_name: "capacitors",
+    default_phases: dd::capacitor::PHASES,
+    default_kvar: dd::capacitor::KVAR,
+    default_kv: dd::capacitor::KV,
+    b_sign: 1.0,
+};
+
+const REACTOR_KVAR_SHUNT: KvarShuntSpec = KvarShuntSpec {
+    class: "reactor",
+    series_name: "reactors",
+    default_phases: dd::reactor::PHASES,
+    default_kvar: dd::reactor::KVAR,
+    default_kv: dd::reactor::KV,
+    b_sign: -1.0,
+};
+
 impl Reader<'_> {
     fn warn(&mut self, msg: impl Into<String>) {
         self.net.warnings.push(msg.into());
@@ -1127,77 +1155,7 @@ impl Reader<'_> {
     // ----- capacitor → shunt ---------------------------------------------
 
     fn capacitor(&mut self, obj: &RawObject) {
-        let props = Props::new(obj);
-        if props.by_name.contains_key("bus2") {
-            self.warn(format!(
-                "capacitor {}: series capacitors (bus2) are not typed yet; kept untyped",
-                obj.name
-            ));
-            self.net.untyped.push(UntypedObject::from(obj));
-            return;
-        }
-        let phases = self.usize_or(
-            &props,
-            "phases",
-            "capacitor",
-            &obj.name,
-            dd::capacitor::PHASES,
-        );
-        // InterpretConnection (Capacitor.cpp ~180): `d*` and `ll` are delta.
-        let conn_delta = props.get("conn").is_some_and(|v| {
-            v.text.to_ascii_lowercase().starts_with('d') || v.text.eq_ignore_ascii_case("ll")
-        });
-        if conn_delta {
-            self.warn(format!(
-                "capacitor {}: delta connection is not typed yet; kept untyped",
-                obj.name
-            ));
-            self.net.untyped.push(UntypedObject::from(obj));
-            return;
-        }
-        let kvar_first = props
-            .get("kvar")
-            .and_then(|v| v.to_vector(Some(self.vars)).ok())
-            .and_then(|v| v.first().copied());
-        let kvar = if let Some(q) = kvar_first {
-            q
-        } else {
-            self.defaulted("capacitor", &obj.name, "kvar");
-            dd::capacitor::KVAR
-        };
-        let kv = self.f64_or(&props, "kv", "capacitor", &obj.name, dd::capacitor::KV);
-        // Capacitor.cpp ~620-630: a wye bank's kv is line to line for 2 or
-        // 3 phases, line to neutral otherwise.
-        let v_phase = if phases == 2 || phases == 3 {
-            kv * 1e3 / 3f64.sqrt()
-        } else {
-            kv * 1e3
-        };
-        let b_phase = kvar * 1e3 / phases as f64 / (v_phase * v_phase);
-
-        let spec = bus_spec(props.get("bus1"), "");
-        // The default return (bus2) is the same bus's ground; register the
-        // ground connection but keep the map and matrices phase only, the
-        // shape a shunt-to-ground admittance has downstream.
-        let map = self.terminals(&spec, phases, phases + 1, phases);
-        let n = map.len();
-        let mut b = vec![vec![0.0; n]; n];
-        for (i, row) in b.iter_mut().enumerate().take(phases) {
-            row[i] = b_phase;
-        }
-        // The written pair regenerates verbatim in the dss writer; the b
-        // matrix is the model truth either way.
-        let mut extras = extras_from_leftovers(&props);
-        self.stash_kv_and_phases(&props, &mut extras, kv, phases);
-        extras.insert("kvar".into(), kvar.into());
-        self.net.shunts.push(DistShunt {
-            name: obj.name.clone(),
-            bus: spec.name,
-            terminal_map: map,
-            g: vec![vec![0.0; n]; n],
-            b,
-            extras,
-        });
+        self.kvar_shunt(obj, CAPACITOR_KVAR_SHUNT);
     }
 
     // ----- reactor → shunt -----------------------------------------------
@@ -1210,14 +1168,6 @@ impl Reader<'_> {
     /// untyped with a precise warning rather than emit a wrong admittance.
     fn reactor(&mut self, obj: &RawObject) {
         let props = Props::new(obj);
-        if props.by_name.contains_key("bus2") {
-            self.warn(format!(
-                "reactor {}: series reactors (bus2) are not typed yet; kept untyped",
-                obj.name
-            ));
-            self.net.untyped.push(UntypedObject::from(obj));
-            return;
-        }
         // Any of these defines the impedance directly; kvar/kv is then
         // ignored by the engine, so typing it as a kvar shunt would invent
         // an admittance the source never asked for.
@@ -1232,54 +1182,89 @@ impl Reader<'_> {
             self.net.untyped.push(UntypedObject::from(obj));
             return;
         }
-        let phases = self.usize_or(&props, "phases", "reactor", &obj.name, dd::reactor::PHASES);
-        // InterpretConnection (Reactor.pas): `d*` and `ll` are delta.
+        self.kvar_shunt_with_props(obj, &props, REACTOR_KVAR_SHUNT);
+    }
+
+    fn kvar_shunt(&mut self, obj: &RawObject, spec: KvarShuntSpec) {
+        let props = Props::new(obj);
+        self.kvar_shunt_with_props(obj, &props, spec);
+    }
+
+    fn kvar_shunt_with_props(&mut self, obj: &RawObject, props: &Props<'_>, spec: KvarShuntSpec) {
+        if props.by_name.contains_key("bus2") {
+            self.warn(format!(
+                "{} {}: series {} (bus2) are not typed yet; kept untyped",
+                spec.class, obj.name, spec.series_name
+            ));
+            self.net.untyped.push(UntypedObject::from(obj));
+            return;
+        }
+        let phases = self.usize_or(props, "phases", spec.class, &obj.name, spec.default_phases);
+        if phases == 0 {
+            self.warn(format!(
+                "{} {}: nonpositive `phases` value is not a typed shunt; kept untyped",
+                spec.class, obj.name
+            ));
+            self.net.untyped.push(UntypedObject::from(obj));
+            return;
+        }
+        // InterpretConnection: `d*` and `ll` are delta for both Capacitor and
+        // Reactor, and delta banks are not a shunt-to-ground matrix.
         let conn_delta = props.get("conn").is_some_and(|v| {
             v.text.to_ascii_lowercase().starts_with('d') || v.text.eq_ignore_ascii_case("ll")
         });
         if conn_delta {
             self.warn(format!(
-                "reactor {}: delta connection is not typed yet; kept untyped",
-                obj.name
+                "{} {}: delta connection is not typed yet; kept untyped",
+                spec.class, obj.name
             ));
             self.net.untyped.push(UntypedObject::from(obj));
             return;
         }
-        // Read kvar the way the capacitor does, so an array token (kvar=[..])
-        // is interpreted identically by both shunt readers.
+        // Read the first kvar array entry, as the DSS engine does for a
+        // grounding shunt bank.
         let kvar = props
             .get("kvar")
             .and_then(|v| v.to_vector(Some(self.vars)).ok())
             .and_then(|v| v.first().copied())
             .unwrap_or_else(|| {
-                self.defaulted("reactor", &obj.name, "kvar");
-                dd::reactor::KVAR
+                self.defaulted(spec.class, &obj.name, "kvar");
+                spec.default_kvar
             });
-        let kv = self.f64_or(&props, "kv", "reactor", &obj.name, dd::reactor::KV);
-        // Reactor.pas mirrors the capacitor: a wye bank's kv is line to line
-        // for 2 or 3 phases, line to neutral otherwise.
+        let kv = self.f64_or(props, "kv", spec.class, &obj.name, spec.default_kv);
+        // A wye bank's kv is line to line for 2 or 3 phases, line to neutral
+        // otherwise.
         let v_phase = if phases == 2 || phases == 3 {
             kv * 1e3 / 3f64.sqrt()
         } else {
             kv * 1e3
         };
-        // Inductive: the susceptance is negative, the sign opposite the
-        // capacitor's. b = -Q / V^2 per phase.
-        let b_phase = -kvar * 1e3 / phases as f64 / (v_phase * v_phase);
+        if !v_phase.is_finite() || v_phase <= 0.0 {
+            self.warn(format!(
+                "{} {}: invalid `kv` value is not a typed shunt; kept untyped",
+                spec.class, obj.name
+            ));
+            self.net.untyped.push(UntypedObject::from(obj));
+            return;
+        }
+        let b_phase = spec.b_sign * kvar * 1e3 / phases as f64 / (v_phase * v_phase);
 
-        let spec = bus_spec(props.get("bus1"), "");
-        let map = self.terminals(&spec, phases, phases + 1, phases);
+        let bus = bus_spec(props.get("bus1"), "");
+        // The default return (bus2) is the same bus's ground; register the
+        // ground connection but keep the map and matrices phase only, the
+        // shape a shunt-to-ground admittance has downstream.
+        let map = self.terminals(&bus, phases, phases + 1, phases);
         let n = map.len();
         let mut b = vec![vec![0.0; n]; n];
         for (i, row) in b.iter_mut().enumerate().take(phases) {
             row[i] = b_phase;
         }
-        let mut extras = extras_from_leftovers(&props);
-        self.stash_kv_and_phases(&props, &mut extras, kv, phases);
+        let mut extras = extras_from_leftovers(props);
+        self.stash_kv_and_phases(props, &mut extras, kv, phases);
         extras.insert("kvar".into(), kvar.into());
         self.net.shunts.push(DistShunt {
             name: obj.name.clone(),
-            bus: spec.name,
+            bus: bus.name,
             terminal_map: map,
             g: vec![vec![0.0; n]; n],
             b,
@@ -1662,6 +1647,50 @@ mod tests {
         let c1 = net.shunts.iter().find(|s| s.name == "c1").unwrap();
         let v1 = 7.2e3;
         assert!((c1.b[0][0] * v1 * v1 / 300e3 - 1.0).abs() < 1e-12);
+    }
+
+    #[test]
+    fn capacitor_and_reactor_kvar_shunts_share_magnitude_with_opposite_sign() {
+        let net = parse_dss_str(
+            "New Circuit.c\n\
+             New Capacitor.cap bus1=b.1 phases=1 kv=7.2 kvar=300\n\
+             New Reactor.rea bus1=b.2 phases=1 kv=7.2 kvar=300",
+        );
+        let cap = net.shunts.iter().find(|s| s.name == "cap").unwrap();
+        let rea = net.shunts.iter().find(|s| s.name == "rea").unwrap();
+        assert!(cap.b[0][0] > 0.0);
+        assert!(rea.b[0][0] < 0.0);
+        assert!((cap.b[0][0] + rea.b[0][0]).abs() < 1e-18);
+    }
+
+    #[test]
+    fn kvar_shunts_with_nonpositive_phases_stay_untyped() {
+        let net = parse_dss_str(
+            "New Circuit.c\n\
+             New Capacitor.cap bus1=b.1 phases=0 kv=7.2 kvar=300\n\
+             New Reactor.rea bus1=b.2 phases=0 kv=7.2 kvar=300",
+        );
+        assert!(net.shunts.is_empty());
+        assert!(
+            net.untyped
+                .iter()
+                .any(|u| u.class.eq_ignore_ascii_case("capacitor") && u.name == "cap")
+        );
+        assert!(
+            net.untyped
+                .iter()
+                .any(|u| u.class.eq_ignore_ascii_case("reactor") && u.name == "rea")
+        );
+        assert!(
+            net.warnings
+                .iter()
+                .any(|w| w.contains("capacitor cap: nonpositive `phases`"))
+        );
+        assert!(
+            net.warnings
+                .iter()
+                .any(|w| w.contains("reactor rea: nonpositive `phases`"))
+        );
     }
 
     #[test]

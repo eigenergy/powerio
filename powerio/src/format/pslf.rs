@@ -355,17 +355,37 @@ fn parse_section_header(line: &str) -> Option<(String, usize, String)> {
 
 /// Strip line endings and detect EPC continuation lines.
 ///
-/// A trailing `/` joins the next physical line into the same logical record.
+/// A trailing `/` outside a quoted string joins the next physical line into
+/// the same logical record.
 fn clean_line(raw: &str) -> (String, bool) {
     let raw = raw.trim_end_matches('\r');
     let trimmed = raw.trim_end();
-    let continued = trimmed.ends_with('/');
+    let continued = ends_with_unquoted_slash(trimmed);
     if continued {
         let without = &trimmed[..trimmed.len() - 1];
         (without.trim_end().to_string(), true)
     } else {
         (raw.to_string(), false)
     }
+}
+
+fn ends_with_unquoted_slash(line: &str) -> bool {
+    if !line.ends_with('/') {
+        return false;
+    }
+    let before = &line[..line.len() - 1];
+    let mut quoted = false;
+    let mut chars = before.chars().peekable();
+    while let Some(ch) = chars.next() {
+        if ch == '"' {
+            if quoted && chars.peek() == Some(&'"') {
+                chars.next();
+            } else {
+                quoted = !quoted;
+            }
+        }
+    }
+    !quoted
 }
 
 /// Tokenize a logical record and split it into identity and value sides.
@@ -1540,6 +1560,31 @@ end
         let mut warnings = Vec::new();
         let net = parse_pslf_source(Arc::new(epc.to_string()), None, &mut warnings).unwrap();
         assert_eq!(net.source.as_deref().map(String::as_str), Some(epc));
+    }
+
+    #[test]
+    fn clean_line_continuation_slash_respects_quotes() {
+        assert_eq!(clean_line(r#"1 "A" : 0 /"#), (r#"1 "A" : 0"#.into(), true));
+        assert_eq!(
+            clean_line(r#"1 "name/" : 0"#),
+            (r#"1 "name/" : 0"#.into(), false)
+        );
+        assert_eq!(
+            clean_line(r#"1 "unterminated /"#),
+            (r#"1 "unterminated /"#.into(), false)
+        );
+        assert_eq!(
+            clean_line(r#"1 "has ""quote""" : 0 /"#),
+            (r#"1 "has ""quote""" : 0"#.into(), true)
+        );
+    }
+
+    #[test]
+    fn pslf_tokens_keep_slashes_inside_quoted_names() {
+        assert_eq!(
+            tokens(r#"1 "A/B" 230.0 : 0"#),
+            vec!["1", "A/B", "230.0", ":", "0"]
+        );
     }
 
     #[test]

@@ -380,6 +380,14 @@ mod tests {
     }
 
     #[test]
+    fn quoted_values_keep_comment_markers() {
+        let p = params(r#"a="x // y" b='x ! y' c={x // y}"#);
+        assert_eq!(p[0], (Some("a".into()), "x // y".into(), true));
+        assert_eq!(p[1], (Some("b".into()), "x ! y".into(), true));
+        assert_eq!(p[2], (Some("c".into()), "x // y".into(), true));
+    }
+
+    #[test]
     fn slash_alone_is_not_a_comment() {
         let p = params("x=a/b");
         assert_eq!(p[0], (Some("x".into()), "a/b".into(), false));
