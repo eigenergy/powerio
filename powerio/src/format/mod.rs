@@ -449,7 +449,9 @@ fn read_source(source: Arc<String>, fmt: TargetFormat, name_hint: Option<&str>) 
             powermodels::parse_powermodels_json_source(source, name_hint)
         }
         TargetFormat::Psse { .. } => psse::parse_psse_source(source, name_hint, &mut warnings),
-        TargetFormat::PowerWorld => powerworld::parse_powerworld_source(source, name_hint),
+        TargetFormat::PowerWorld => {
+            powerworld::parse_powerworld_source(source, name_hint, &mut warnings)
+        }
         TargetFormat::EgretJson => egret::parse_egret_source(source, name_hint),
         TargetFormat::PandapowerJson => {
             pandapower::parse_pandapower_source(source, name_hint, &mut warnings)

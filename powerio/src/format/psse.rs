@@ -5,9 +5,9 @@
 //! power flow case. A switched shunt keeps its steady-state susceptance `BINIT`
 //! as the shunt `b` and carries its mode, voltage band, regulated bus, RMPCT, and
 //! step blocks on [`SwitchedShuntControl`]. Impedances are written on the system base with
-//! per unit turns ratios (`CZ = 1`, `CW = 1`); the reader assumes the same and
-//! does not convert other impedance/turns bases — a non-unit `CZ`/`CW` is read
-//! verbatim (so misread). Two-terminal DC lines read and write as the neutral
+//! per unit turns ratios (`CZ = 1`, `CW = 1`); the reader warns on other
+//! impedance/turns bases and reads them verbatim rather than converting them.
+//! Two-terminal DC lines read and write as the neutral
 //! [`Hvdc`] (power-setpoint model; converter firing-angle/transformer detail
 //! rides through in extras). The other advanced sections (VSC and multi-terminal
 //! DC, FACTS, GNE) are not modeled: on write they're emitted as empty sections,
@@ -742,6 +742,7 @@ pub(crate) fn parse_psse_source(
                 let l3 = next_continuation_line(&mut lines, "transformer", "winding data line 1")?;
                 let l4 = next_continuation_line(&mut lines, "transformer", "winding data line 2")?;
                 if two_winding {
+                    warn_non_unit_transformer_basis(&f, warnings)?;
                     // MAG2 maps to the branch charging b only at CM = 1; a CM != 1
                     // record states magnetizing data in units this reader does not
                     // convert, so read_transformer drops it. Name the loss.
@@ -755,6 +756,7 @@ pub(crate) fn parse_psse_source(
                     }
                     branches.push(read_transformer(&f, &fields(l2), &fields(l3), &fields(l4))?);
                 } else {
+                    warn_non_unit_transformer_basis(&f, warnings)?;
                     let l5 =
                         next_continuation_line(&mut lines, "transformer", "winding data line 3")?;
                     transformers_3w.push(read_transformer_3w(
@@ -874,6 +876,23 @@ fn next_continuation_line<'a>(
         });
     }
     Ok(line)
+}
+
+fn warn_non_unit_transformer_basis(f: &[String], warnings: &mut Vec<String>) -> Result<()> {
+    let cw = num_at(f, 4, 1.0)?;
+    let cz = num_at(f, 5, 1.0)?;
+    let non_unit = |v: f64| !v.is_finite() || (v - 1.0).abs() > f64::EPSILON;
+    if non_unit(cw) || non_unit(cz) {
+        let i = f.first().map_or("?", String::as_str);
+        let j = f.get(1).map_or("?", String::as_str);
+        let k = f.get(2).map_or("?", String::as_str);
+        let id = f.get(3).map_or("", String::as_str);
+        warnings.push(format!(
+            "PSS/E transformer {i}-{j}-{k} id {id:?}: non-unit CW/CZ ({cw}/{cz}) not \
+             converted; impedance and turns fields were read as if CW=CZ=1"
+        ));
+    }
+    Ok(())
 }
 
 /// A terminator that also delimits a named section (`... END OF X DATA, BEGIN Y
@@ -1737,6 +1756,36 @@ Q
         assert!(
             err.contains("transformer record ended before transformer impedance line"),
             "{err}"
+        );
+    }
+
+    #[test]
+    fn warns_on_non_unit_transformer_basis_codes() {
+        let raw = r"0, 100.00, 33, 0, 0, 60.00 / synthetic
+CASE
+COMMENT
+1,'BUS1        ', 230.0,3,1,1,1,1.0,0.0,1.1,0.9,1.1,0.9
+2,'BUS2        ', 230.0,1,1,1,1,1.0,0.0,1.1,0.9,1.1,0.9
+0 / END OF BUS DATA, BEGIN LOAD DATA
+0 / END OF LOAD DATA, BEGIN FIXED SHUNT DATA
+0 / END OF FIXED SHUNT DATA, BEGIN GENERATOR DATA
+0 / END OF GENERATOR DATA, BEGIN BRANCH DATA
+0 / END OF BRANCH DATA, BEGIN TRANSFORMER DATA
+1,2,0,'1 ',2,3,1,0,0,1,'xf',1
+0.01,0.10,100.0
+1.0,230.0,0.0,100.0,90.0,80.0,0,0,1.1,0.9,1.1,0.9,33
+1.0,230.0
+0 / END OF TRANSFORMER DATA, BEGIN AREA DATA
+Q
+";
+        let parsed = crate::parse_str(raw, "psse").unwrap();
+        assert!(
+            parsed
+                .warnings
+                .iter()
+                .any(|w| w.contains("non-unit CW/CZ") && w.contains("not converted")),
+            "missing transformer basis warning: {:?}",
+            parsed.warnings
         );
     }
 

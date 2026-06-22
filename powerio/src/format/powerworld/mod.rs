@@ -54,5 +54,6 @@ use crate::network::Network;
 /// `DATA` sections.
 pub fn parse_powerworld(content: &str) -> Result<Network> {
     // The caller owns `content` as a borrow, so retention needs one copy.
-    parse_powerworld_source(Arc::new(content.to_owned()), None)
+    let mut warnings = Vec::new();
+    parse_powerworld_source(Arc::new(content.to_owned()), None, &mut warnings)
 }
