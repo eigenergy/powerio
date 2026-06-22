@@ -2,6 +2,11 @@
 
 ## 0.3.1
 
+- Matrix API: added `LinDist3FlowMatrices`, `build_lindist3flow`, and
+  `build_lindist3flow_spanning_tree`. The strict builder requires one connected
+  radial case with one reference bus; the spanning tree builder projects a
+  connected meshed case through a deterministic minimum impedance tree. Added
+  `Error::NotRadial`.
 - Parser warnings: PSS/E and PowerWorld `.aux` parse warnings now surface
   through `Parsed::warnings` and the C ABI's `pio_warnings` path instead of
   living only in docs or writer warnings.

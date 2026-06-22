@@ -13,6 +13,7 @@ let bprime = build_bprime(&view, &BuildOptions::default())?;
 ```
 
 Outputs include B', B'', Y_bus components, LACPF, incidence, weighted
-Laplacians, PTDF, LODF, DC OPF bundles, adjacency, and a petgraph view. The
-workspace README has the full format and validation overview:
+Laplacians, PTDF, LODF, LinDist3Flow path matrices, DC OPF bundles, adjacency,
+and a petgraph view. LinDist3Flow includes a strict radial builder and an
+explicit spanning tree projection. The workspace README has the full format and validation overview:
 <https://github.com/eigenergy/powerio>.

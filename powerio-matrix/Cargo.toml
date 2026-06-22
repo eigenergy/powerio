@@ -39,6 +39,7 @@ rand_chacha = "0.9"
 walkdir = "2"
 rayon = "1"
 sha2 = "0.10"
+petgraph.workspace = true
 # arrow and parquet release in lockstep and share `RecordBatch`; keep both on the
 # same major. `snap` matches the Snappy compression pandas/datakit write by default.
 arrow = { workspace = true, optional = true }
@@ -46,6 +47,7 @@ parquet = { version = "59", default-features = false, features = ["arrow", "snap
 
 [dev-dependencies]
 approx = "0.5"
+powerio-dist.workspace = true
 tempfile = "3"
 
 [lints]
