@@ -2,11 +2,47 @@
 
 ## 0.3.1
 
+- Matrix API: added `LinDist3FlowMatrices`, `build_lindist3flow`, and
+  `build_lindist3flow_spanning_tree`. The strict builder requires one connected
+  radial case with one reference bus; the spanning tree builder projects a
+  connected meshed case through a deterministic minimum impedance tree. Added
+  `Error::NotRadial`.
+- Parser warnings: PSS/E and PowerWorld `.aux` parse warnings now surface
+  through `Parsed::warnings` and the C ABI's `pio_warnings` path instead of
+  living only in docs or writer warnings.
+- PSS/E: hardened record tokenization and continuation handling. Slash
+  characters inside quoted fields are no longer treated as comments; incomplete
+  transformer and two-terminal DC continuation records now error clearly instead
+  of consuming section terminators; transformer records with non-unit `CW`/`CZ`
+  now warn that impedance and turns values were read without conversion.
+- PSS/E: load ZIP components and v34/v35 load tail fields are retained in extras
+  and replayed on write. If typed load `p/q` no longer match retained
+  `PL/QL/IP/IQ/YP/YQ`, the writer emits typed constant power and reports the
+  stale extras instead of replaying wrong source components.
+- PSS/E: quoted IDs, names, and HVDC names are sanitized before duplicate ID
+  allocation, so collisions created by replacing quotes or `/` are handled
+  deterministically and reported in conversion warnings.
+- Normalization: generator cost per-unit scaling now dispatches through explicit
+  cost models, and slack bus selection ignores `NaN` generator `pmax` values
+  when choosing among candidate reference buses.
+- PSLF and PowerWorld AUX tokenization: quoted `/` and `//` text is kept as data
+  rather than treated as continuation or comments. PowerWorld `.aux` now reports
+  unmodeled `DATA` blocks as parse warnings while retaining source text for
+  same-format writeback.
+- `powerio-dist` OpenDSS: quoted comment markers are preserved in lexer values,
+  indented block comments are skipped, capacitor and reactor kvar shunts share
+  validation, reactors with kvar/kv map to typed shunts with negative
+  susceptance, and invalid shunt forms stay untyped with explicit warnings.
+- `powerio-dist` BMOPF: fixed OpenDSS generators with fixed P/Q setpoints now
+  encode as negative BMOPF loads with warnings. The vendored draft schema was
+  refreshed for multi-digit matrix keys, corrected `$id`, and nonnegative
+  switch `i_max`, so 10-conductor linecode output validates without the old
+  schema warning.
 - C distribution ABI v1 (`PIO_DIST_ABI_VERSION` 1): direct `pio_dist_*` callers
   get a separate version check; the supported one-shot conversion order is
   `(input, from, to, ...)`.
-- No core C ABI break; `PIO_ABI_VERSION` stays 4. Rust and Python APIs are
-  unchanged.
+- No core C ABI break; `PIO_ABI_VERSION` stays 4. No existing Rust or Python
+  API was removed or reordered.
 
 ## 0.3.0
 
