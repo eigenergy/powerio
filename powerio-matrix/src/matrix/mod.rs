@@ -37,7 +37,9 @@ pub use laplacian::{
     GroundedIndexMap, build_weighted_laplacian, ground_at, ground_at_each, reference_indicator,
     unit_vector,
 };
-pub use lindist3flow::{LinDist3FlowMatrices, build_lindist3flow};
+pub use lindist3flow::{
+    LinDist3FlowMatrices, build_lindist3flow, build_lindist3flow_spanning_tree,
+};
 pub use opf::{BusCosts, GenCosts, OpfInstance, Units, build_opf_instance};
 pub use sensitivity::{build_lodf, build_ptdf, build_ptdf_lodf};
 pub use ybus::{YbusParts, build_ybus};
