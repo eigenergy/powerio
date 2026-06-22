@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.3.1
+
+- C distribution ABI v1 (`PIO_DIST_ABI_VERSION` 1): direct `pio_dist_*` callers
+  get a separate version check; the supported one-shot conversion order is
+  `(input, from, to, ...)`.
+- No core C ABI break; `PIO_ABI_VERSION` stays 4. Rust and Python APIs are
+  unchanged.
+
 ## 0.3.0
 
 - Distribution systems: new `powerio-dist` crate for multi conductor unbalanced
@@ -11,9 +19,6 @@
 - Transformers with three or more windings.
 - C ABI v4 (`PIO_ABI_VERSION` 4): a smaller canonical surface designed so future
   changes stay additive. Breaking ABI change in this release.
-- C distribution ABI v1 (`PIO_DIST_ABI_VERSION` 1): direct `pio_dist_*` callers
-  get a separate version check; the supported one-shot conversion order is
-  `(input, from, to, ...)`.
 - Memory safety hardening across the readers.
 
 ## 0.2.4

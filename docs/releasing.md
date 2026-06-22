@@ -1,22 +1,22 @@
-# Releasing powerio (v0.3.0, with powerio-dist)
+# Releasing powerio (v0.3.1)
 
-Run after `release-prep-v0.3.0` merges to `main`. The workspace version is a
-single source (`[workspace.package].version`); all crates inherit it, so a
-release is one version bump plus an ordered publish.
+Run after this PR merges to `main`. The workspace version is a single source
+(`[workspace.package].version`); all crates inherit it, so a release is one
+version bump plus an ordered publish.
 
 ## 1. Version bump
 
 Bump `[workspace.package].version` and the three intra-workspace dependency pins
-in the root `Cargo.toml` from `0.2.4` to `0.3.0` in lockstep:
+in the root `Cargo.toml` from `0.3.0` to `0.3.1` in lockstep:
 
 ```toml
 [workspace.package]
-version = "0.3.0"
+version = "0.3.1"
 
 [workspace.dependencies]
-powerio       = { path = "powerio",       version = "0.3.0" }
-powerio-matrix = { path = "powerio-matrix", version = "0.3.0" }
-powerio-dist  = { path = "powerio-dist",  version = "0.3.0" }
+powerio       = { path = "powerio",       version = "0.3.1" }
+powerio-matrix = { path = "powerio-matrix", version = "0.3.1" }
+powerio-dist  = { path = "powerio-dist",  version = "0.3.1" }
 ```
 
 `powerio-dist` inherits via `version.workspace = true`. Update `CHANGELOG.md`,
@@ -53,13 +53,13 @@ committed `powerio.h`.
 
 ## 4. Tag and publish
 
-Tag `v0.3.0` and push; CI builds the wheels and platform tarballs and stages a
+Tag `v0.3.1` and push; CI builds the wheels and platform tarballs and stages a
 draft GitHub release for a maintainer to publish (publishing fires the crates.io
 and PyPI steps). `powerio-py` ships as a maturin wheel to PyPI with the
 `extension-module,gridfm` features; the `dist` surface is always compiled into
 the Python extension.
 
-## Deferred (additive, post-0.3.0)
+## Deferred (additive, post-0.3.1)
 
 - A lossless `powerio-dist-json` snapshot (serde on `DistNetwork`) with a payload
   `meta.version`, the distribution analogue of `powerio-json`, plus a CI gate
