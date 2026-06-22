@@ -21,6 +21,14 @@ Every fixture passes three independent checks, run from `tests/` and `tools/`:
   v0.16). The emitted PMD ENGINEERING JSON parses and agrees on topology. Cases
   with ragged transformer connections (delta-wye) are excluded: PMD's JSON reader
   `hcat`s connection lists and throws on ragged input (an upstream PMD bug).
+- **Local DSS corpus BMOPF gate** (`tests/local_dss_corpus.rs`, opt in with
+  `POWERIO_DIST_LOCAL_DSS_CORPUS`). Every `.dss` under the supplied tree parses,
+  writes BMOPF JSON, validates against the vendored schema, reparses, writes DSS,
+  reparses that DSS, and writes a second BMOPF JSON. The second BMOPF document
+  must be schema valid and stable up to JSON numeric rounding. Against
+  electricdss r4161 `IEEETestCases`, the gate passes all 91 `.dss` files:
+  12,274 parse warnings, 290,393 BMOPF warnings, and 303 counted real network
+  losses.
 
 ## Dataset coverage
 
@@ -34,7 +42,6 @@ Frederik Geth pointed to, also at `github.com/tshort/OpenDSS`).
 | IEEE 13 | vendored fixture, all gates pass | `tests/data/dist/bmopf/example_ieee13.json` |
 | IEEE 34 | vendored fixture, all gates pass | `examples/bmopf/ieee34.json` |
 | IEEE 123 | vendored fixture, all gates pass | `examples/bmopf/ieee123.json` |
-| IEEE 37 | converts cleanly from the upstream dataset, dss echo byte exact | generate on demand |
 | 4Bus DY / YD / GrdYD / YY (Bal) | delta, wye, grounded transformer connections; all gates pass | `examples/bmopf/4bus_dy.json` (delta wye) |
 | 4Bus OYOD (open wye, open delta) | the open connection units are single phase wye/delta transformers; they convert to `single_phase` with both delta phase terminals preserved | generate on demand |
 
@@ -54,8 +61,9 @@ ten conductor micro-fixtures exercise the same gates; see `conversion-matrix.md`
 | Case | Missing today | Behaviour now |
 |---|---|---|
 | 4wire-Delta | the three winding (wye/delta/delta) unit | the open wye/open delta units now convert as `single_phase`; fixed OpenDSS generators encode as negative BMOPF loads; the three winding bank still drops, pending the transformer model extension |
-| 8500-Node | transformer model extension, plus `Fuse`/`Recloser`/`Relay`/`CapControl` instrumentation | partial; control and protection elements drop with warnings; fixed OpenDSS generators encode as negative BMOPF loads |
-| NEVTestCase | transformer model extension for the remaining transformer banks | grounding reactors now map to BMOPF `shunt`; a gold fixture still waits on the transformer extension so the case has no real network loss |
+| IEEE 37 | delta-delta transformers and regulators | BMOPF JSON is schema valid and stable through DSS regeneration; unsupported transformer buses and terminals are pruned with warnings |
+| 8500-Node | transformer model extension, plus `Fuse`/`Recloser`/`Relay`/`CapControl` instrumentation | center tap secondaries preserve grounding through BMOPF → DSS; unsupported banks, control, and protection elements drop with warnings |
+| NEVTestCase | transformer model extension for the remaining transformer banks | grounding reactors now map to BMOPF `shunt`; remaining transformer banks drop with warnings |
 | LVTestCase / LVTestCaseNorthAmerican | `LoadShape`/`Monitor`/`EnergyMeter` time series; `CNData`/`LineGeometry`/`LineSpacing` geometry | core network converts; instrumentation and geometry drop with warnings |
 
 Unsupported OpenDSS classes never fail a parse: they fall through to the `untyped`

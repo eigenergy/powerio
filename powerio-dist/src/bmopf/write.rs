@@ -6,6 +6,8 @@
 //! Nonfinite values cannot appear in JSON; they emit as 0 with a warning
 //! naming the element and field.
 
+use std::collections::{BTreeMap, BTreeSet};
+
 use serde_json::{Map, Value, json};
 
 use crate::convert::Conversion;
@@ -175,7 +177,53 @@ impl Writer {
                 u.class, u.name
             ));
         }
+        self.prune_unreferenced_buses(&mut doc);
         Value::Object(doc)
+    }
+
+    fn prune_unreferenced_buses(&mut self, doc: &mut Map<String, Value>) {
+        let mut refs = BTreeMap::new();
+        for (key, value) in doc.iter() {
+            if key != "bus" {
+                collect_bus_usage(value, &mut refs);
+            }
+        }
+        let Some(buses) = doc.get_mut("bus").and_then(Value::as_object_mut) else {
+            return;
+        };
+        let ids: Vec<String> = buses.keys().cloned().collect();
+        for id in ids {
+            let Some(used) = refs.get(&id) else {
+                buses.remove(&id);
+                self.warn(format!(
+                    "bus {id}: no emitted BMOPF element references this bus; dropped from the output"
+                ));
+                continue;
+            };
+            let Some(bus) = buses.get_mut(&id).and_then(Value::as_object_mut) else {
+                continue;
+            };
+            prune_string_array(
+                bus,
+                "terminal_names",
+                used,
+                &mut self.warnings,
+                &format!("bus {id}"),
+            );
+            prune_string_array(
+                bus,
+                "perfectly_grounded_terminals",
+                used,
+                &mut self.warnings,
+                &format!("bus {id}"),
+            );
+            if matches!(
+                bus.get("perfectly_grounded_terminals"),
+                Some(Value::Array(terms)) if terms.is_empty()
+            ) {
+                bus.remove("perfectly_grounded_terminals");
+            }
+        }
     }
 
     /// Lines and switches.
@@ -690,6 +738,73 @@ fn unique_load_name(loads: &Map<String, Value>, desired: &str) -> String {
         }
     }
     unreachable!("unbounded suffix search returns before overflow")
+}
+
+fn collect_bus_usage(value: &Value, refs: &mut BTreeMap<String, BTreeSet<String>>) {
+    match value {
+        Value::Object(o) => {
+            add_bus_usage(o, refs, "bus", "terminal_map");
+            add_bus_usage(o, refs, "bus_from", "terminal_map_from");
+            add_bus_usage(o, refs, "bus_to", "terminal_map_to");
+            for value in o.values() {
+                collect_bus_usage(value, refs);
+            }
+        }
+        Value::Array(values) => {
+            for value in values {
+                collect_bus_usage(value, refs);
+            }
+        }
+        _ => {}
+    }
+}
+
+fn add_bus_usage(
+    o: &Map<String, Value>,
+    refs: &mut BTreeMap<String, BTreeSet<String>>,
+    bus_key: &str,
+    map_key: &str,
+) {
+    let Some(id) = o.get(bus_key).and_then(Value::as_str) else {
+        return;
+    };
+    let entry = refs.entry(id.to_string()).or_default();
+    if let Some(terms) = o.get(map_key).and_then(Value::as_array) {
+        entry.extend(terms.iter().filter_map(Value::as_str).map(str::to_string));
+    }
+}
+
+fn prune_string_array(
+    o: &mut Map<String, Value>,
+    key: &str,
+    used: &BTreeSet<String>,
+    warnings: &mut Vec<String>,
+    what: &str,
+) {
+    let Some(Value::Array(values)) = o.get_mut(key) else {
+        return;
+    };
+    let old = std::mem::take(values);
+    let mut kept = Vec::new();
+    let mut dropped = Vec::new();
+    for value in old {
+        if value.as_str().is_some_and(|s| used.contains(s)) {
+            kept.push(value);
+        } else {
+            dropped.push(value);
+        }
+    }
+    if !dropped.is_empty() {
+        let names: Vec<String> = dropped
+            .iter()
+            .filter_map(Value::as_str)
+            .map(str::to_string)
+            .collect();
+        warnings.push(format!(
+            "{what}: `{key}` entries {names:?} are not referenced by emitted BMOPF elements; dropped from the output"
+        ));
+    }
+    *values = kept;
 }
 
 fn fixed_generation(g: &DistGenerator) -> bool {

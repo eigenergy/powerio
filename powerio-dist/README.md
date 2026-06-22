@@ -34,7 +34,9 @@ PowerModelsDistribution; CI runs the schema validation and round trip suites.
 For a local OpenDSS corpus, set `POWERIO_DIST_LOCAL_DSS_CORPUS` to a directory
 tree and run `cargo test -p powerio-dist --test local_dss_corpus -- --nocapture`;
 the test parses every `.dss`, writes BMOPF JSON, validates it against the
-vendored schema, and reparses it.
+vendored schema, reparses it, writes DSS, reparses that DSS, and checks that
+the second BMOPF JSON remains schema valid and stable up to JSON numeric
+rounding.
 
 The workspace README covers the CLI, Python package, C ABI, and the
 transmission crates: <https://github.com/eigenergy/powerio>.

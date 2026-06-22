@@ -7,7 +7,7 @@ use std::sync::Arc;
 use powerio_dist::dss::{parse_dss_file, parse_dss_str};
 use powerio_dist::{
     Configuration, DistNetwork, DistTransformer, Extras, Winding, WindingConn, parse_bmopf_file,
-    parse_bmopf_str, write_bmopf_json,
+    parse_bmopf_str, write_bmopf_json, write_dss,
 };
 
 fn fixture(rel: &str) -> PathBuf {
@@ -440,6 +440,57 @@ fn center_tap_collapse_converts_resistance_through_ohms() {
     // The primary is untouched by the collapse: %R=0.6 on 7.2 kV/25 kVA.
     let r_from = t["r_series_from"].as_f64().unwrap();
     assert!((r_from - 12.4416).abs() < 1e-9, "r_series_from = {r_from}");
+}
+
+#[test]
+fn bmopf_center_tap_rebuilds_dss_grounded_center() {
+    let text = r#"{
+        "bus": {
+            "src": {"terminal_names": ["1", "2"], "perfectly_grounded_terminals": ["2"]},
+            "lv": {"terminal_names": ["1", "2", "3"], "perfectly_grounded_terminals": ["3"]}
+        },
+        "voltage_source": {
+            "source": {
+                "v_magnitude": [7200.0, 0.0],
+                "v_angle": [0.0, 0.0],
+                "bus": "src",
+                "terminal_map": ["1", "2"]
+            }
+        },
+        "transformer": {
+            "center_tap": {
+                "ct": {
+                    "bus_from": "src",
+                    "bus_to": "lv",
+                    "terminal_map_from": ["1", "2"],
+                    "terminal_map_to": ["1", "2", "3"],
+                    "s_rating": 25000.0,
+                    "v_ref_from": 7200.0,
+                    "v_ref_to": 240.0,
+                    "r_series_from": 12.4416,
+                    "r_series_to": 0.013824,
+                    "x_series_from": 42.2784,
+                    "x_series_to": 0.0
+                }
+            }
+        }
+    }"#;
+    let net = parse_bmopf_str(text).unwrap();
+    assert_eq!(net.transformers[0].windings.len(), 3);
+    let dss = write_dss(&net).text;
+    assert!(dss.contains("lv.1.0"), "{dss}");
+    assert!(dss.contains("lv.0.2"), "{dss}");
+
+    let out = write_bmopf_json(&parse_dss_str(&dss));
+    let doc: serde_json::Value = serde_json::from_str(&out.text).unwrap();
+    assert_eq!(
+        doc["bus"]["lv"]["perfectly_grounded_terminals"],
+        serde_json::json!(["4"])
+    );
+    assert_eq!(
+        doc["transformer"]["center_tap"]["ct"]["terminal_map_to"],
+        serde_json::json!(["1", "2", "4"])
+    );
 }
 
 #[test]

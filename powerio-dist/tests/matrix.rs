@@ -3,6 +3,7 @@
 //! the lossy transforms named per cell. `cargo test --test matrix --
 //! --ignored write_conversion_matrix` regenerates docs/conversion-matrix.md.
 
+use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Write as _;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -375,7 +376,7 @@ fn assert_linecodes_close(a: &DistNetwork, b: &DistNetwork, what: &str) {
 /// terminal maps of the elements referencing them.
 fn normalize_grounded(net: &DistNetwork) -> DistNetwork {
     let mut net = net.clone();
-    let grounded: std::collections::BTreeMap<String, Vec<String>> = net
+    let grounded: BTreeMap<String, Vec<String>> = net
         .buses
         .iter()
         .map(|b| (b.id.to_ascii_lowercase(), b.grounded.clone()))
@@ -412,6 +413,52 @@ fn normalize_grounded(net: &DistNetwork) -> DistNetwork {
         for w in &mut t.windings {
             fix(&w.bus.clone(), &mut w.terminal_map);
         }
+    }
+    net
+}
+
+fn normalize_bmopf_bus_metadata(net: &DistNetwork, usage_net: &DistNetwork) -> DistNetwork {
+    let mut net = net.clone();
+    let mut usage: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
+    let mut add = |bus: &str, terms: &[String]| {
+        usage
+            .entry(bus.to_string())
+            .or_default()
+            .extend(terms.iter().cloned());
+    };
+    for l in &usage_net.lines {
+        add(&l.bus_from, &l.terminal_map_from);
+        add(&l.bus_to, &l.terminal_map_to);
+    }
+    for s in &usage_net.switches {
+        add(&s.bus_from, &s.terminal_map_from);
+        add(&s.bus_to, &s.terminal_map_to);
+    }
+    for l in &usage_net.loads {
+        add(&l.bus, &l.terminal_map);
+    }
+    for g in &usage_net.generators {
+        add(&g.bus, &g.terminal_map);
+    }
+    for s in &usage_net.shunts {
+        add(&s.bus, &s.terminal_map);
+    }
+    for s in &usage_net.sources {
+        add(&s.bus, &s.terminal_map);
+    }
+    for t in &usage_net.transformers {
+        for w in &t.windings {
+            add(&w.bus, &w.terminal_map);
+        }
+    }
+
+    net.buses.retain(|b| usage.contains_key(&b.id));
+    for b in &mut net.buses {
+        let Some(used) = usage.get(&b.id) else {
+            continue;
+        };
+        b.terminals.retain(|term| used.contains(term));
+        b.grounded.retain(|term| used.contains(term));
     }
     net
 }
@@ -471,16 +518,24 @@ fn off_diagonal_round_trips() {
                 .parse(&out.text)
                 .unwrap_or_else(|e| panic!("{what}: {e}"));
             let transformers = !(target == Fmt::Bmopf && case.bmopf_restates_transformers);
+            let (expected, actual) = if target == Fmt::Bmopf {
+                (
+                    normalize_bmopf_bus_metadata(&net, &back),
+                    normalize_bmopf_bus_metadata(&back, &back),
+                )
+            } else {
+                (net.clone(), back)
+            };
             if target == Fmt::Dss && case.dss_renames_grounded {
                 // Grounded phase terminals fold into node 0 on the way
                 // through dss; compare the networks with each bus's grounded
                 // terminals normalized to one token.
-                let (a, b) = (normalize_grounded(&net), normalize_grounded(&back));
+                let (a, b) = (normalize_grounded(&expected), normalize_grounded(&actual));
                 assert_projection_eq(&a, &b, &what, transformers);
                 assert_linecodes_close(&a, &b, &what);
             } else {
-                assert_projection_eq(&net, &back, &what, transformers);
-                assert_linecodes_close(&net, &back, &what);
+                assert_projection_eq(&expected, &actual, &what, transformers);
+                assert_linecodes_close(&expected, &actual, &what);
             }
         }
     }
