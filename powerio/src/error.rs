@@ -83,15 +83,6 @@ pub enum Error {
     )]
     UngroundedComponent { components: usize },
 
-    #[error(
-        "network topology is not a connected radial tree (buses={buses}, in-service branches={branches}, components={components})"
-    )]
-    NotRadial {
-        buses: usize,
-        branches: usize,
-        components: usize,
-    },
-
     #[error(transparent)]
     Io(#[from] std::io::Error),
 
@@ -204,7 +195,6 @@ impl Error {
             | Error::ShapeMismatch { .. }
             | Error::SingularNetwork
             | Error::UngroundedComponent { .. }
-            | Error::NotRadial { .. }
             | Error::EmptyScenarioBatch
             | Error::ScenarioIdOverflow { .. }
             | Error::NormalizedGridfmSnapshot { .. }
