@@ -217,23 +217,43 @@ fn ieee13_conversion_warnings_name_every_loss() {
 }
 
 #[test]
-fn ten_conductor_linecode_is_valid_data_the_schema_rejects() {
+fn ten_conductor_linecode_is_schema_valid() {
     let v = schema_validator();
     let net = parse_dss_file(fixture("micro/linecode_10x10.dss")).unwrap();
     let out = write_bmopf_json(&net);
-    // The writer says what is about to happen...
     assert!(
         out.warnings
             .iter()
-            .any(|w| w.contains("double digit matrix keys"))
+            .all(|w| !w.contains("double digit matrix keys")),
+        "obsolete double digit warning still emitted: {:?}",
+        out.warnings
     );
-    // ...and the draft schema indeed rejects the document: the single
-    // digit key patterns (`^R_series_\d_\d`) do not match `R_series_10_10`,
-    // so additionalProperties: false refuses the key. The fix is
-    // `^R_series_\d+_\d+$`.
-    let errs = errors(&v, &out.text);
-    assert!(!errs.is_empty());
-    assert!(errs.iter().any(|e| e.contains("linecode")));
+    assert_eq!(errors(&v, &out.text), Vec::<String>::new());
+}
+
+#[test]
+fn fixed_generators_emit_as_negative_loads() {
+    let v = schema_validator();
+    let net = parse_dss_str(
+        "New Circuit.c\n\
+         New Generator.g bus1=b.1 phases=1 kv=2.4 kw=100 kvar=20",
+    );
+    let out = write_bmopf_json(&net);
+    assert_eq!(errors(&v, &out.text), Vec::<String>::new());
+    assert!(
+        out.warnings
+            .iter()
+            .any(|w| w.contains("generator g") && w.contains("negative load")),
+        "missing fixed generator warning: {:?}",
+        out.warnings
+    );
+    let doc: serde_json::Value = serde_json::from_str(&out.text).unwrap();
+    assert!(
+        doc.get("generator").is_none(),
+        "fixed generator was emitted"
+    );
+    assert_eq!(doc["load"]["g"]["p_nom"], serde_json::json!([-100_000.0]));
+    assert_eq!(doc["load"]["g"]["q_nom"], serde_json::json!([-20_000.0]));
 }
 
 #[test]
@@ -285,13 +305,17 @@ fn negative_validation_cases() {
             }),
         ),
         (
-            // linecode i_max items are nonnegative; switch i_max has no
-            // item constraint in the draft, an asymmetry worth feedback.
             "negative linecode i_max",
             mutate(&|d| {
                 let codes = d["linecode"].as_object_mut().unwrap();
                 let first = codes.keys().next().unwrap().clone();
                 codes[&first]["i_max"] = serde_json::json!([-600.0, 600.0, 600.0]);
+            }),
+        ),
+        (
+            "negative switch i_max",
+            mutate(&|d| {
+                d["switch"]["671692"]["i_max"] = serde_json::json!([-600.0]);
             }),
         ),
         (

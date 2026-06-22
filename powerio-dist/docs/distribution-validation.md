@@ -27,7 +27,7 @@ Every fixture passes three independent checks, run from `tests/` and `tools/`:
 Against the OpenDSS `IEEETestCases` distribution (electricdss r4161; the set
 Frederik Geth pointed to, also at `github.com/tshort/OpenDSS`).
 
-### Converts today (typed: line, linecode, load, transformer, vsource, capacitor, generator, switch/swtcontrol, regcontrol)
+### Converts today (typed: line, linecode, load, transformer, vsource, capacitor, generator, reactor, switch/swtcontrol, regcontrol)
 
 | Case | Status | BMOPF JSON |
 |---|---|---|
@@ -53,9 +53,9 @@ ten conductor micro-fixtures exercise the same gates; see `conversion-matrix.md`
 
 | Case | Missing today | Behaviour now |
 |---|---|---|
-| 4wire-Delta | the three winding (wye/delta/delta) unit, plus typed `Generator` modeling | the open wye/open delta units now convert as `single_phase`; the three winding bank still drops, pending the transformer model extension |
-| 8500-Node | typed `Generator`, plus `Fuse`/`Recloser`/`Relay`/`CapControl` instrumentation | partial; control elements drop with warnings |
-| NEVTestCase | typed `Reactor` (neutral-to-earth grounding) | **addressed by the stacked typed-reactor PR**, which maps a grounding reactor to a BMOPF `shunt` |
+| 4wire-Delta | the three winding (wye/delta/delta) unit | the open wye/open delta units now convert as `single_phase`; fixed OpenDSS generators encode as negative BMOPF loads; the three winding bank still drops, pending the transformer model extension |
+| 8500-Node | transformer model extension, plus `Fuse`/`Recloser`/`Relay`/`CapControl` instrumentation | partial; control and protection elements drop with warnings; fixed OpenDSS generators encode as negative BMOPF loads |
+| NEVTestCase | transformer model extension for the remaining transformer banks | grounding reactors now map to BMOPF `shunt`; a gold fixture still waits on the transformer extension so the case has no real network loss |
 | LVTestCase / LVTestCaseNorthAmerican | `LoadShape`/`Monitor`/`EnergyMeter` time series; `CNData`/`LineGeometry`/`LineSpacing` geometry | core network converts; instrumentation and geometry drop with warnings |
 
 Unsupported OpenDSS classes never fail a parse: they fall through to the `untyped`

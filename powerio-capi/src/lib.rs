@@ -1071,8 +1071,8 @@ pub unsafe extern "C" fn pio_dist_to_format(
     }
 }
 
-/// Convert distribution case `path` to format `to` (optionally forcing the source
-/// via `from`; see [`pio_dist_parse_file`] for the inference rules). Returns the
+/// Convert distribution case `path` from optional source format `from` to format
+/// `to`; see [`pio_dist_parse_file`] for the inference rules. Returns the
 /// converted text as an owned C string (free with [`pio_string_free`]), `NULL` on
 /// error. The warnings written `\n`-joined into `warnbuf` carry both the parse
 /// warnings and the writer's fidelity losses (there is no handle to query them).
@@ -1080,8 +1080,8 @@ pub unsafe extern "C" fn pio_dist_to_format(
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_dist_convert_file(
     path: *const c_char,
-    to: *const c_char,
     from: *const c_char,
+    to: *const c_char,
     warnbuf: *mut c_char,
     warnlen: usize,
     errbuf: *mut c_char,
@@ -1101,7 +1101,7 @@ pub unsafe extern "C" fn pio_dist_convert_file(
 
 /// Convert in-memory distribution case `text` of format `from` to format `to`
 /// (both required; `dss`, `pmd`, or `bmopf`). The parameter order is input,
-/// target, source, matching [`pio_dist_convert_file`]. Returns the converted text
+/// source, target, matching [`pio_dist_convert_file`]. Returns the converted text
 /// as an owned C string (free with [`pio_string_free`]), `NULL` on error. The
 /// warnings written `\n`-joined into `warnbuf` carry both the parse warnings and
 /// the writer's fidelity losses (there is no handle to query them).
@@ -1109,8 +1109,8 @@ pub unsafe extern "C" fn pio_dist_convert_file(
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_dist_convert_str(
     text: *const c_char,
-    to: *const c_char,
     from: *const c_char,
+    to: *const c_char,
     warnbuf: *mut c_char,
     warnlen: usize,
     errbuf: *mut c_char,
@@ -1966,8 +1966,8 @@ mpc.branch = [
             let s = unsafe {
                 pio_dist_convert_str(
                     text.as_ptr(),
-                    to.as_ptr(),
                     from.as_ptr(),
+                    to.as_ptr(),
                     warn.as_mut_ptr(),
                     warn.len(),
                     err.as_mut_ptr(),
@@ -2023,8 +2023,8 @@ mpc.branch = [
             let s = unsafe {
                 pio_dist_convert_file(
                     path.as_ptr(),
-                    to.as_ptr(),
                     std::ptr::null(),
+                    to.as_ptr(),
                     warn.as_mut_ptr(),
                     warn.len(),
                     err.as_mut_ptr(),

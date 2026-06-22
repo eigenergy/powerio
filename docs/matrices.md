@@ -14,6 +14,7 @@ detail is in the [crate docs](https://eigenergy.github.io/powerio/powerio_matrix
 | B'' (FDPF) | n×n | `build_bdoubleprime` | SDDM when bus shunts are present |
 | `Re(Y_bus)`, `-Im(Y_bus)` | n×n | `build_ybus` | full admittance, keeps taps and shifts |
 | LACPF (linear AC power flow) block | 2n×2n | `build_lacpf` | `[[G, −B], [−B, −G]]`, flat start, indefinite |
+| LinDist3Flow path matrices | (n−1)×(n−1), incidence (n−1)×(n−1) | `build_lindist3flow` | connected radial tree only; returns reduced `R`, `X`, and branch by bus incidence |
 | signed incidence `A` | n×m | `build_incidence` | column `e`: `+1` at from-bus, `−1` at to-bus |
 | weighted Laplacian `L` | n×n | `build_weighted_laplacian` | `L = A diag(w) Aᵀ`, `ground_at` removes a row/col |
 | flow map `B Aᵀ` | m×n | `build_flow_map` | `f = B Aᵀ θ` |
@@ -53,6 +54,11 @@ instance bundle (`A`, `b`, `L`, costs, bounds, thermal limits, `C_g`) is documen
   counts the drops (`dropped_zero_impedance` in `gridfm_meta.json`).
 - **Reference coverage.** `IndexedNetwork::check_reference_coverage` verifies that
   every in-service island has a reference bus.
+- **LinDist3Flow.** `build_lindist3flow` requires one connected radial tree with
+  exactly one reference bus. It orients branches away from that root, removes the
+  root bus, and returns the reduced branch by bus incidence plus `R` and `X`
+  path impedance matrices. On a radial network with no shunts, the grounded
+  LACPF block inverse is `[[R, X], [X, -R]]`.
 - **Susceptance conventions for the DC approximation.** `DcConvention` selects
   the branch weight the DC builders (incidence, weighted Laplacian, PTDF/LODF,
   the DC OPF bundle) use. The default `PaperPure` is the textbook DC power flow

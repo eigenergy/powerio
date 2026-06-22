@@ -534,15 +534,15 @@ char *pio_dist_to_format(const PioDistNetwork *net,
 
 #if defined(PIO_DIST)
 /**
- * Convert distribution case `path` to format `to` (optionally forcing the source
- * via `from`; see [`pio_dist_parse_file`] for the inference rules). Returns the
+ * Convert distribution case `path` from optional source format `from` to format
+ * `to`; see [`pio_dist_parse_file`] for the inference rules. Returns the
  * converted text as an owned C string (free with [`pio_string_free`]), `NULL` on
  * error. The warnings written `\n`-joined into `warnbuf` carry both the parse
  * warnings and the writer's fidelity losses (there is no handle to query them).
  */
 char *pio_dist_convert_file(const char *path,
-                            const char *to,
                             const char *from,
+                            const char *to,
                             char *warnbuf,
                             size_t warnlen,
                             char *errbuf,
@@ -553,14 +553,14 @@ char *pio_dist_convert_file(const char *path,
 /**
  * Convert in-memory distribution case `text` of format `from` to format `to`
  * (both required; `dss`, `pmd`, or `bmopf`). The parameter order is input,
- * target, source, matching [`pio_dist_convert_file`]. Returns the converted text
+ * source, target, matching [`pio_dist_convert_file`]. Returns the converted text
  * as an owned C string (free with [`pio_string_free`]), `NULL` on error. The
  * warnings written `\n`-joined into `warnbuf` carry both the parse warnings and
  * the writer's fidelity losses (there is no handle to query them).
  */
 char *pio_dist_convert_str(const char *text,
-                           const char *to,
                            const char *from,
+                           const char *to,
                            char *warnbuf,
                            size_t warnlen,
                            char *errbuf,

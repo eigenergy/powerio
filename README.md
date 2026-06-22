@@ -178,6 +178,7 @@ The `powerio-matrix` Rust crate derives an `IndexedNetwork` with dense bus indic
 - B' and B'' DCPF and FDPF matrices
 - Nodal admittance matrix
 - LACPF block matrix
+- LinDist3Flow path matrices for radial cases
 - Signed incidence, weighted Laplacian, and flow map matrices
 - PTDF and LODF sensitivity matrices
 - Adjacency matrix and `petgraph` view

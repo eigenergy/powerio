@@ -8,15 +8,18 @@ are pinned exactly as committed; do not reformat or re-encode them.
 Draft BMOPF schema and example networks from the IEEE PES Task Force on
 Benchmarking Multiconductor OPF.
 
-- Source: <https://github.com/frederikgeth/bmopf-report>, commit
-  `f93bca69c59e47d08a727145277406ed3f11aa3f`, directory
-  `draft_schema_and_networks/`.
+- Example source: <https://github.com/frederikgeth/bmopf-report>, commit
+  `3a786e16c761981951f1deab72fd28624577dda6`, directory
+  `draft_schema_and_networks/network_examples/`.
+- Schema source: same commit, with the matrix key, stale `$id`, and switch
+  `i_max` corrections from `june26-report-updates`
+  (`72ae3e672784c81f7f75f3283e0138cb70e6ebaa`) applied on top.
 - `draft_bmopf_schema.json` sha256
-  `b28d712e32a467ad0b339c600f51562aa049574c86cd4323ab18c4fb2e45d089`
+  `1868a7cb599d7bc348dbdae5c406d569fc1c568212828ef9b3cbcbdb616f8603`
 - `example_ieee13.json` sha256
   `dec886d0fcde8bb82ef3d4567d04c08eced87a84d30a041385cac97a936dd757`
 - `example_enwl_n1_f2.json` sha256
-  `c635a3a2a2783b3e0e8249e65ef17f217a464955977e2223ae8f7d39b6519d6c`
+  `082660cc835419a8335f1afca43ee89eea61216d4120ebe8b171b01550afb0d8`
 
 ## opendss/
 

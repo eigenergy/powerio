@@ -187,8 +187,8 @@ int main(int argc, char **argv) {
         pio_dist_network_free(d);
 
         /* One-shot string conversion into PMD ENGINEERING JSON; parameter
-         * order is input, target, source, like pio_dist_convert_file. */
-        char *pmd = pio_dist_convert_str(dss, "pmd", "dss", warn, sizeof warn, err, sizeof err);
+         * order is input, source, target, like pio_dist_convert_file. */
+        char *pmd = pio_dist_convert_str(dss, "dss", "pmd", warn, sizeof warn, err, sizeof err);
         CHECK(pmd != NULL, err);
         CHECK(strstr(pmd, "\"data_model\": \"ENGINEERING\"") != NULL,
               "PMD output lost the data_model marker");

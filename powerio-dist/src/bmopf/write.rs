@@ -1,10 +1,6 @@
 //! [`DistNetwork`] into strict BMOPF JSON.
 //!
-//! Output is schema valid wherever the schema permits the data; the one
-//! deliberate exception is linecodes and shunts wider than 9 conductors,
-//! whose matrix keys (`R_series_10_10`) the draft schema's single digit
-//! key patterns reject. The writer emits them anyway: the data is valid,
-//! the pattern is the limitation, and the conversion warns.
+//! Output is schema valid wherever the schema permits the data.
 //!
 //! Numbers serialize through serde_json (shortest round trip form).
 //! Nonfinite values cannot appear in JSON; they emit as 0 with a warning
@@ -13,13 +9,15 @@
 use serde_json::{Map, Value, json};
 
 use crate::convert::Conversion;
-use crate::model::{Configuration, DistNetwork, DistTransformer, Mat, Winding, WindingConn};
+use crate::model::{
+    Configuration, DistGenerator, DistNetwork, DistTransformer, Mat, Winding, WindingConn,
+};
 
 /// The `$schema` stamped into every document's `meta`: the canonical bmopf-report
 /// schema id, so a file always points back to the one authoritative schema
 /// vintage. Matches the `$id` of the vendored schema.
 const BMOPF_SCHEMA_ID: &str =
-    "https://github.com/frederikgeth/bmopf-report/tree/main/draft_schema_and_networks";
+    "https://github.com/frederikgeth/bmopf-report/draft_schema_and_networks";
 
 /// Writes the strict BMOPF document. Every field the schema cannot carry
 /// is reported in the warnings.
@@ -128,15 +126,6 @@ impl Writer {
             let mut codes = Map::new();
             for c in &net.linecodes {
                 let mut o = Map::new();
-                let n = c.n_conductors;
-                if n > 9 {
-                    self.warn(format!(
-                        "linecode {}: {n} conductors produce double digit matrix keys, \
-                         which the draft schema's `^R_series_\\d_\\d` patterns reject; \
-                         emitted anyway",
-                        c.name
-                    ));
-                }
                 // The schema requires R_series_1_1 and X_series_1_1; an
                 // empty matrix would drop them and invalidate the output.
                 let dim = c.r_series.len().max(c.x_series.len()).max(1);
@@ -226,25 +215,49 @@ impl Writer {
 
     /// Loads, generators, shunts, and the voltage sources.
     fn injections(&mut self, net: &DistNetwork, doc: &mut Map<String, Value>) {
-        if !net.loads.is_empty() {
-            let mut loads = Map::new();
-            for l in &net.loads {
-                let mut o = Map::new();
-                o.insert("configuration".into(), json!(config_str(l.configuration)));
-                o.insert("p_nom".into(), self.nums(&l.p_nom, "load p_nom"));
-                o.insert("q_nom".into(), self.nums(&l.q_nom, "load q_nom"));
-                o.insert("bus".into(), json!(l.bus));
-                o.insert("terminal_map".into(), json!(l.terminal_map));
-                self.extras_dropped(&l.extras, &format!("load {}", l.name));
-                loads.insert(l.name.clone(), Value::Object(o));
-            }
-            doc.insert("load".into(), Value::Object(loads));
+        let mut loads = Map::new();
+        for l in &net.loads {
+            let mut o = Map::new();
+            o.insert("configuration".into(), json!(config_str(l.configuration)));
+            o.insert("p_nom".into(), self.nums(&l.p_nom, "load p_nom"));
+            o.insert("q_nom".into(), self.nums(&l.q_nom, "load q_nom"));
+            o.insert("bus".into(), json!(l.bus));
+            o.insert("terminal_map".into(), json!(l.terminal_map));
+            self.extras_dropped(&l.extras, &format!("load {}", l.name));
+            loads.insert(l.name.clone(), Value::Object(o));
         }
-        if !net.generators.is_empty() {
-            let mut gens = Map::new();
-            for g in &net.generators {
+        let mut gens = Map::new();
+        for g in &net.generators {
+            if fixed_generation(g) {
+                let load_name = unique_load_name(&loads, &g.name);
+                let mut o = Map::new();
+                let p_nom: Vec<f64> = g.p_nom.iter().map(|&p| -p).collect();
+                let q_nom: Vec<f64> = g.q_nom.iter().map(|&q| -q).collect();
+                o.insert("configuration".into(), json!(config_str(g.configuration)));
+                o.insert("p_nom".into(), self.nums(&p_nom, "load p_nom"));
+                o.insert("q_nom".into(), self.nums(&q_nom, "load q_nom"));
+                o.insert("bus".into(), json!(g.bus));
+                o.insert("terminal_map".into(), json!(g.terminal_map));
+                self.warn(format!(
+                    "generator {}: fixed P/Q generation encoded as BMOPF negative load `{load_name}`",
+                    g.name
+                ));
+                if g.cost.is_some() {
+                    self.warn(format!(
+                        "generator {}: generation cost has no field on a BMOPF negative load; dropped",
+                        g.name
+                    ));
+                }
+                self.extras_dropped(&g.extras, &format!("generator {}", g.name));
+                loads.insert(load_name, Value::Object(o));
+            } else {
                 gens.insert(g.name.clone(), self.generator(g));
             }
+        }
+        if !loads.is_empty() {
+            doc.insert("load".into(), Value::Object(loads));
+        }
+        if !gens.is_empty() {
             doc.insert("generator".into(), Value::Object(gens));
         }
         if !net.shunts.is_empty() {
@@ -305,7 +318,7 @@ impl Writer {
         doc.insert("voltage_source".into(), Value::Object(sources));
     }
 
-    fn generator(&mut self, g: &crate::model::DistGenerator) -> Value {
+    fn generator(&mut self, g: &DistGenerator) -> Value {
         let mut o = Map::new();
         // BMOPF generators carry bounds and cost, no dispatch setpoint: a
         // fixed injection becomes pinned bounds. Explicit source bounds win
@@ -664,6 +677,38 @@ impl Writer {
                 );
             }
         }
+    }
+}
+
+fn unique_load_name(loads: &Map<String, Value>, desired: &str) -> String {
+    if !loads.contains_key(desired) {
+        return desired.to_string();
+    }
+    let base = format!("generator_{desired}");
+    if !loads.contains_key(&base) {
+        return base;
+    }
+    for i in 2.. {
+        let candidate = format!("{base}_{i}");
+        if !loads.contains_key(&candidate) {
+            return candidate;
+        }
+    }
+    unreachable!("unbounded suffix search returns before overflow")
+}
+
+fn fixed_generation(g: &DistGenerator) -> bool {
+    let has_setpoint = !g.p_nom.is_empty() || !g.q_nom.is_empty();
+    has_setpoint
+        && fixed_bounds(g.p_min.as_deref(), g.p_max.as_deref(), &g.p_nom)
+        && fixed_bounds(g.q_min.as_deref(), g.q_max.as_deref(), &g.q_nom)
+}
+
+fn fixed_bounds(lo: Option<&[f64]>, hi: Option<&[f64]>, nom: &[f64]) -> bool {
+    match (lo, hi) {
+        (None, None) => true,
+        (Some(lo), Some(hi)) => lo == nom && hi == nom,
+        _ => false,
     }
 }
 

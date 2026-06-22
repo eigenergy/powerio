@@ -1,6 +1,6 @@
 {
     "$schema":"https://json-schema.org/draft/2020-12/schema",
-    "$id":"https://github.com/frederikgeth/bmopf-report/tree/main/draft_schema_and_networks",
+    "$id":"https://github.com/frederikgeth/bmopf-report/draft_schema_and_networks",
     "title":"**Draft** BMOPF OPF test case schema v.0.0.1",
     "type": "object",
     "additionalProperties": false,
@@ -223,11 +223,11 @@
                     }
                 },
                 "patternProperties": {
-                    "^G_\\d_\\d": {
+                    "^G_\\d+_\\d+": {
                         "type": "number",
                         "description": "Array elements of the conductance [S]"
                     },
-                    "^B_\\d_\\d": {
+                    "^B_\\d+_\\d+": {
                         "type": "number",
                         "description": "Array elements of the susceptance [S]"
                     }
@@ -405,27 +405,27 @@
                     }
                 },
                 "patternProperties":{
-                    "^R_series_\\d_\\d": {
+                    "^R_series_\\d+_\\d+": {
                         "type": "number",
                         "description": "Element of the series resistance matrix [Ohm/m]"
                     },
-                    "^X_series_\\d_\\d": {
+                    "^X_series_\\d+_\\d+": {
                         "type": "number",
                         "description": "Element of the series reactance matrix [Ohm/m]"
                     },
-                    "^G_from_\\d_\\d": {
+                    "^G_from_\\d+_\\d+": {
                         "type": "number",
                         "description": "Element of the shunt conductance matrix [S/m]"
                     },
-                    "^G_to_\\d_\\d": {
+                    "^G_to_\\d+_\\d+": {
                         "type": "number",
                         "description": "Element of the shunt conductance matrix [S/m]"
                     },
-                    "^B_from_\\d_\\d": {
+                    "^B_from_\\d+_\\d+": {
                         "type": "number",
                         "description": "Element of the shunt susceptance matrix [S/m]"
                     },
-                    "^B_to_\\d_\\d": {
+                    "^B_to_\\d+_\\d+": {
                         "type": "number",
                         "description": "Element of the shunt susceptance matrix [S/m]"
                     }
@@ -462,7 +462,10 @@
                     },
                     "i_max": {
                         "type": "array",
-                        "description": "Maximum permitted current passing through each conductor of the switch [A]"
+                        "description": "Maximum permitted current passing through each conductor of the switch [A]",
+                        "items": {
+                            "$ref": "#/$defs/nonnegative_number"
+                        }
                     }
                 },
                 "required": [
