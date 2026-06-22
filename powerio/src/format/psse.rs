@@ -179,12 +179,7 @@ pub fn write_psse_rev(net: &Network, rev: u32) -> Conversion {
         if matches!(id, std::borrow::Cow::Owned(_)) {
             sanitized_quoted += 1;
         }
-        let pl = extra_f64(&l.extras, "psse_pl").unwrap_or(l.p);
-        let ql = extra_f64(&l.extras, "psse_ql").unwrap_or(l.q);
-        let ip = extra_f64(&l.extras, "psse_ip").unwrap_or(0.0);
-        let iq = extra_f64(&l.extras, "psse_iq").unwrap_or(0.0);
-        let yp = extra_f64(&l.extras, "psse_yp").unwrap_or(0.0);
-        let yq = extra_f64(&l.extras, "psse_yq").unwrap_or(0.0);
+        let (pl, ql, ip, iq, yp, yq) = load_components_for_write(l, &id, &mut warnings);
         let owner = extra_i64(&l.extras, "psse_owner").unwrap_or(1);
         let scal = extra_i64(&l.extras, "psse_scal").unwrap_or(1);
         let intrpt = extra_i64(&l.extras, "psse_intrpt").unwrap_or(0);
@@ -1543,6 +1538,40 @@ fn extra_i64(extras: &Extras, key: &str) -> Option<i64> {
     extras.get(key).and_then(Value::as_i64)
 }
 
+fn same_load_total(a: f64, b: f64) -> bool {
+    (a - b).abs() <= 1e-9 * a.abs().max(b.abs()).max(1.0)
+}
+
+fn load_components_for_write(
+    l: &Load,
+    id: &str,
+    warnings: &mut Vec<String>,
+) -> (f64, f64, f64, f64, f64, f64) {
+    let pl = extra_f64(&l.extras, "psse_pl").unwrap_or(l.p);
+    let ql = extra_f64(&l.extras, "psse_ql").unwrap_or(l.q);
+    let ip = extra_f64(&l.extras, "psse_ip").unwrap_or(0.0);
+    let iq = extra_f64(&l.extras, "psse_iq").unwrap_or(0.0);
+    let yp = extra_f64(&l.extras, "psse_yp").unwrap_or(0.0);
+    let yq = extra_f64(&l.extras, "psse_yq").unwrap_or(0.0);
+    let has_components = [
+        "psse_pl", "psse_ql", "psse_ip", "psse_iq", "psse_yp", "psse_yq",
+    ]
+    .iter()
+    .any(|key| l.extras.contains_key(*key));
+    if has_components
+        && (!same_load_total(pl + ip + yp, l.p) || !same_load_total(ql + iq + yq, l.q))
+    {
+        warnings.push(format!(
+            "PSS/E load at bus {} id {id:?}: stale PL/QL/IP/IQ/YP/YQ extras did not match \
+             typed p/q; wrote typed p/q as constant power",
+            l.bus
+        ));
+        (l.p, l.q, 0.0, 0.0, 0.0, 0.0)
+    } else {
+        (pl, ql, ip, iq, yp, yq)
+    }
+}
+
 /// A retained converter-line tail joined back into a record fragment, or
 /// `default` when the element carries none (a cross-format source).
 fn dc_tail(extras: &Extras, key: &str, default: &str) -> String {
@@ -1621,6 +1650,42 @@ Q
         let net2 = parse_psse(&text).unwrap();
         close(net2.loads[0].p, 13.0);
         close(net2.loads[0].q, 5.0);
+    }
+
+    #[test]
+    fn mutated_load_does_not_replay_stale_psse_zip_extras() {
+        let raw = r"0, 100.00, 35, 0, 1, 60.00 / synthetic
+CASE
+COMMENT
+0 / END OF SYSTEM-WIDE DATA, BEGIN BUS DATA
+1,'BUS1        ', 230.0,3,1,1,1,1.0,0.0,1.1,0.9,1.1,0.9
+2,'BUS2        ', 230.0,1,1,1,1,1.0,0.0,1.1,0.9,1.1,0.9
+0 / END OF BUS DATA, BEGIN LOAD DATA
+2,'L1',1,1,1,10.0,3.0,1.0,0.5,2.0,1.5,1,0,1,4.0,2.0,1,'industrial'
+0 / END OF LOAD DATA, BEGIN FIXED SHUNT DATA
+Q
+";
+        let mut net = parse_psse(raw).unwrap();
+        net.loads[0].p = 20.0;
+        net.loads[0].q = 7.0;
+
+        let conv = write_psse_rev(&net, 35);
+
+        assert!(
+            conv.text.contains("20.0, 7.0, 0.0, 0.0, 0.0, 0.0"),
+            "typed p/q were not written as constant power: {}",
+            conv.text
+        );
+        assert!(
+            conv.warnings
+                .iter()
+                .any(|w| w.contains("stale PL/QL/IP/IQ/YP/YQ")),
+            "missing stale extras warning: {:?}",
+            conv.warnings
+        );
+        let reparsed = parse_psse(&conv.text).unwrap();
+        close(reparsed.loads[0].p, 20.0);
+        close(reparsed.loads[0].q, 7.0);
     }
 
     #[test]
