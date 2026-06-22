@@ -734,9 +734,13 @@ pub(crate) fn parse_psse_source(
             Section::Transformer => {
                 // 2-winding = 4 lines (K field == 0); 3-winding = 5 lines.
                 let two_winding = f.get(2).and_then(|x| x.parse::<i64>().ok()) == Some(0);
-                let l2 = lines.next().map_or("", str::trim);
-                let l3 = lines.next().map_or("", str::trim);
-                let l4 = lines.next().map_or("", str::trim);
+                let l2 = next_continuation_line(
+                    &mut lines,
+                    "transformer",
+                    "transformer impedance line",
+                )?;
+                let l3 = next_continuation_line(&mut lines, "transformer", "winding data line 1")?;
+                let l4 = next_continuation_line(&mut lines, "transformer", "winding data line 2")?;
                 if two_winding {
                     // MAG2 maps to the branch charging b only at CM = 1; a CM != 1
                     // record states magnetizing data in units this reader does not
@@ -751,7 +755,8 @@ pub(crate) fn parse_psse_source(
                     }
                     branches.push(read_transformer(&f, &fields(l2), &fields(l3), &fields(l4))?);
                 } else {
-                    let l5 = lines.next().map_or("", str::trim);
+                    let l5 =
+                        next_continuation_line(&mut lines, "transformer", "winding data line 3")?;
                     transformers_3w.push(read_transformer_3w(
                         &f,
                         &fields(l2),
@@ -764,8 +769,10 @@ pub(crate) fn parse_psse_source(
             Section::TwoTerminalDc => {
                 // 3-line record: control line, then the rectifier and inverter
                 // converter lines whose first field is the AC terminal bus.
-                let rectifier = lines.next().map_or("", str::trim);
-                let inverter = lines.next().map_or("", str::trim);
+                let rectifier =
+                    next_continuation_line(&mut lines, "two-terminal DC", "rectifier line")?;
+                let inverter =
+                    next_continuation_line(&mut lines, "two-terminal DC", "inverter line")?;
                 hvdc.push(read_dc_line(&f, &fields(rectifier), &fields(inverter))?);
             }
             Section::Area => areas.push(read_area(&f)?),
@@ -845,6 +852,28 @@ fn section_after_marker(line: &str) -> Section {
 /// A record line's first field is `0` (the section terminator).
 fn is_terminator(line: &str) -> bool {
     fields(line).first().map(String::as_str) == Some("0")
+}
+
+fn next_continuation_line<'a>(
+    lines: &mut std::iter::Peekable<std::str::Lines<'a>>,
+    record: &str,
+    expected: &str,
+) -> Result<&'a str> {
+    let Some(line) = lines.next().map(str::trim) else {
+        return Err(Error::FormatRead {
+            format: FMT,
+            message: format!("PSS/E {record} record ended before {expected}"),
+        });
+    };
+    if line.eq_ignore_ascii_case("q") || is_terminator(line) {
+        return Err(Error::FormatRead {
+            format: FMT,
+            message: format!(
+                "PSS/E {record} record ended before {expected}: found section terminator `{line}`"
+            ),
+        });
+    }
+    Ok(line)
 }
 
 /// A terminator that also delimits a named section (`... END OF X DATA, BEGIN Y
@@ -1686,6 +1715,46 @@ Q
         let reparsed = parse_psse(&conv.text).unwrap();
         close(reparsed.loads[0].p, 20.0);
         close(reparsed.loads[0].q, 7.0);
+    }
+
+    #[test]
+    fn transformer_continuation_rejects_section_terminator() {
+        let raw = r"0, 100.00, 33, 0, 0, 60.00 / synthetic
+CASE
+COMMENT
+1,'BUS1        ', 230.0,3,1,1,1,1.0,0.0,1.1,0.9,1.1,0.9
+2,'BUS2        ', 230.0,1,1,1,1,1.0,0.0,1.1,0.9,1.1,0.9
+0 / END OF BUS DATA, BEGIN LOAD DATA
+0 / END OF LOAD DATA, BEGIN FIXED SHUNT DATA
+0 / END OF FIXED SHUNT DATA, BEGIN GENERATOR DATA
+0 / END OF GENERATOR DATA, BEGIN BRANCH DATA
+0 / END OF BRANCH DATA, BEGIN TRANSFORMER DATA
+1,2,0,'1 ',1,1,1,0,0,1,'xf'
+0 / END OF TRANSFORMER DATA, BEGIN AREA DATA
+Q
+";
+        let err = parse_psse(raw).unwrap_err().to_string();
+        assert!(
+            err.contains("transformer record ended before transformer impedance line"),
+            "{err}"
+        );
+    }
+
+    #[test]
+    fn dc_continuation_rejects_section_terminator() {
+        let raw = r"0, 100.00, 33, 0, 0, 60.00 / synthetic
+CASE
+COMMENT
+0 / END OF SYSTEM-WIDE DATA, BEGIN TWO-TERMINAL DC DATA
+'DC1',1
+0 / END OF TWO-TERMINAL DC DATA, BEGIN VSC DC LINE DATA
+Q
+";
+        let err = parse_psse(raw).unwrap_err().to_string();
+        assert!(
+            err.contains("two-terminal DC record ended before rectifier line"),
+            "{err}"
+        );
     }
 
     #[test]

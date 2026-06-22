@@ -34,6 +34,23 @@ pub(crate) const RAD_TO_DEG: f64 = 180.0 / std::f64::consts::PI;
 /// between the reader, the writer, and [`Network::to_normalized`].
 pub(crate) const GEN_PU_KEYS: [&str; 4] = ["ramp_agc", "ramp_10", "ramp_30", "ramp_q"];
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum CostModel {
+    Piecewise,
+    Polynomial,
+    Unknown,
+}
+
+impl From<u8> for CostModel {
+    fn from(value: u8) -> Self {
+        match value {
+            1 => CostModel::Piecewise,
+            2 => CostModel::Polynomial,
+            _ => CostModel::Unknown,
+        }
+    }
+}
+
 /// Gen cost coefficients rescaled into the per-unit basis, trimmed to the length
 /// the model implies (a polynomial keeps `ncost` coeffs; a piecewise curve keeps
 /// `2·ncost` `(mw, cost)` values). MATPOWER pads every gencost row to the matrix
@@ -46,8 +63,8 @@ pub(crate) const GEN_PU_KEYS: [&str; 4] = ["ramp_agc", "ramp_10", "ramp_30", "ra
 /// unknown coefficient semantics, so it passes through untouched — the exact
 /// inverse of [`cost_from_pu`]'s own passthrough.
 pub(crate) fn cost_to_pu(cost: &GenCost, base: f64) -> Vec<f64> {
-    match cost.model {
-        2 => {
+    match CostModel::from(cost.model) {
+        CostModel::Polynomial => {
             let coeffs = &cost.coeffs[..cost.ncost.min(cost.coeffs.len())];
             let k = coeffs.len();
             // The exponent k-1-i is in [0, k-1]; a polynomial never has i32::MAX-many
@@ -60,7 +77,7 @@ pub(crate) fn cost_to_pu(cost: &GenCost, base: f64) -> Vec<f64> {
                 })
                 .collect()
         }
-        1 => {
+        CostModel::Piecewise => {
             let coeffs = &cost.coeffs[..(cost.ncost * 2).min(cost.coeffs.len())];
             coeffs
                 .iter()
@@ -68,7 +85,7 @@ pub(crate) fn cost_to_pu(cost: &GenCost, base: f64) -> Vec<f64> {
                 .map(|(i, &c)| if i % 2 == 0 { c / base } else { c })
                 .collect()
         }
-        _ => cost.coeffs.clone(),
+        CostModel::Unknown => cost.coeffs.clone(),
     }
 }
 
@@ -79,20 +96,18 @@ pub(crate) fn cost_to_pu(cost: &GenCost, base: f64) -> Vec<f64> {
 /// trimmed, so this does no trimming; other models pass through unchanged.
 pub(crate) fn cost_from_pu(coeffs: &[f64], model: u8, base: f64) -> Vec<f64> {
     let k = coeffs.len();
-    if model == 2 {
-        coeffs
+    match CostModel::from(model) {
+        CostModel::Polynomial => coeffs
             .iter()
             .enumerate()
             .map(|(i, &c)| c / base.powi(i32::try_from(k - 1 - i).expect("cost degree fits i32")))
-            .collect()
-    } else if model == 1 {
-        coeffs
+            .collect(),
+        CostModel::Piecewise => coeffs
             .iter()
             .enumerate()
             .map(|(i, &c)| if i % 2 == 0 { c * base } else { c })
-            .collect()
-    } else {
-        coeffs.to_vec()
+            .collect(),
+        CostModel::Unknown => coeffs.to_vec(),
     }
 }
 
@@ -505,6 +520,55 @@ mod tests {
         assert_eq!(
             c.control_bus, None,
             "a control bus pointing at a filtered-out isolated bus is dropped, not left dangling"
+        );
+    }
+
+    #[test]
+    fn normalized_slack_tiebreak_ignores_nan_pmax() {
+        use crate::network::Extras;
+
+        let mkbus = |id: usize| Bus {
+            id: BusId(id),
+            kind: BusType::Pq,
+            vm: 1.0,
+            va: 0.0,
+            base_kv: 230.0,
+            vmax: 1.1,
+            vmin: 0.9,
+            evhi: None,
+            evlo: None,
+            area: 1,
+            zone: 1,
+            name: None,
+            extras: Extras::new(),
+        };
+        let mkgen = |bus: usize, pmax: f64| Generator {
+            bus: BusId(bus),
+            pg: 0.0,
+            qg: 0.0,
+            pmax,
+            pmin: 0.0,
+            qmax: 0.0,
+            qmin: 0.0,
+            vg: 1.0,
+            mbase: 100.0,
+            in_service: true,
+            cost: None,
+            caps: Default::default(),
+            regulated_bus: None,
+        };
+        let mut net = Network::in_memory("n", 100.0, vec![mkbus(1), mkbus(2)], Vec::new());
+        net.generators = vec![mkgen(1, f64::NAN), mkgen(2, 10.0)];
+
+        let norm = net.to_normalized().unwrap();
+
+        assert_eq!(
+            norm.buses.iter().find(|b| b.id == BusId(1)).unwrap().kind,
+            BusType::Pv
+        );
+        assert_eq!(
+            norm.buses.iter().find(|b| b.id == BusId(2)).unwrap().kind,
+            BusType::Ref
         );
     }
 
