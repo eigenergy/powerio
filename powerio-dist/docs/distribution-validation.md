@@ -27,7 +27,7 @@ Every fixture passes three independent checks, run from `tests/` and `tools/`:
   reparses that DSS, and writes a second BMOPF JSON. The second BMOPF document
   must be schema valid and stable up to JSON numeric rounding. Against
   electricdss r4161 `IEEETestCases`, the gate passes all 91 `.dss` files:
-  12,274 parse warnings, 290,393 BMOPF warnings, and 303 counted real network
+  12,274 parse warnings, 290,393 BMOPF warnings, and 9,756 counted real network
   losses.
 
 ## Dataset coverage
@@ -63,7 +63,7 @@ ten conductor micro-fixtures exercise the same gates; see `conversion-matrix.md`
 | 4wire-Delta | the three winding (wye/delta/delta) unit | the open wye/open delta units now convert as `single_phase`; fixed OpenDSS generators encode as negative BMOPF loads; the three winding bank still drops, pending the transformer model extension |
 | IEEE 37 | delta-delta transformers and regulators | BMOPF JSON is schema valid and stable through DSS regeneration; unsupported transformer buses and terminals are pruned with warnings |
 | 8500-Node | transformer model extension, plus `Fuse`/`Recloser`/`Relay`/`CapControl` instrumentation | center tap secondaries preserve grounding through BMOPF → DSS; unsupported banks, control, and protection elements drop with warnings |
-| NEVTestCase | transformer model extension for the remaining transformer banks | grounding reactors now map to BMOPF `shunt`; remaining transformer banks drop with warnings |
+| NEVTestCase | transformer model extension for the remaining transformer banks; series and impedance form reactors | grounding reactors with `kvar`/`kv` map to BMOPF `shunt`; the remaining reactor forms and transformer banks drop with warnings |
 | LVTestCase / LVTestCaseNorthAmerican | `LoadShape`/`Monitor`/`EnergyMeter` time series; `CNData`/`LineGeometry`/`LineSpacing` geometry | core network converts; instrumentation and geometry drop with warnings |
 
 Unsupported OpenDSS classes never fail a parse: they fall through to the `untyped`

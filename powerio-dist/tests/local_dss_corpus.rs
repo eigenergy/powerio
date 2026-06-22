@@ -74,10 +74,10 @@ fn real_network_loss(warnings: &[String]) -> usize {
     warnings
         .iter()
         .filter(|w| {
-            w.contains("not representable in the four BMOPF transformer subtypes; dropped")
-                || (w.contains("reactor ")
-                    && w.contains("class is not represented in BMOPF; dropped"))
-                || (w.contains("capacitor ")
+            (w.contains("transformer ")
+                && w.contains("not representable in the four BMOPF")
+                && w.contains("dropped from the output"))
+                || ((w.contains("reactor ") || w.contains("capacitor "))
                     && w.contains("class is not represented in BMOPF; dropped"))
         })
         .count()

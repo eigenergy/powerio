@@ -1104,11 +1104,7 @@ pub unsafe extern "C" fn pio_dist_convert_file(
     unsafe {
         finish_conversion(warnbuf, warnlen, errbuf, errlen, || {
             let path = required_cstr(path, "path")?;
-            let from = optional_cstr(from, "from")?;
-            let to = dist_target_from_c(to)?;
-            let conv = powerio_dist::convert_file(std::path::Path::new(path), to, from)
-                .map_err(|e| e.to_string())?;
-            Ok((conv.text, conv.warnings))
+            dist_convert_file_compat(std::path::Path::new(path), from, to)
         })
     }
 }
@@ -1133,12 +1129,57 @@ pub unsafe extern "C" fn pio_dist_convert_str(
     unsafe {
         finish_conversion(warnbuf, warnlen, errbuf, errlen, || {
             let text = required_cstr(text, "text")?;
-            let to = dist_target_from_c(to)?;
-            let from = required_cstr(from, "from")?;
-            let conv = powerio_dist::convert_str(text, to, from).map_err(|e| e.to_string())?;
-            Ok((conv.text, conv.warnings))
+            dist_convert_str_compat(text, from, to)
         })
     }
+}
+
+#[cfg(feature = "dist")]
+fn dist_convert_file_compat(
+    path: &std::path::Path,
+    from: *const c_char,
+    to: *const c_char,
+) -> Result<(String, Vec<String>), String> {
+    let current: Result<(String, Vec<String>), String> = (|| {
+        let from = optional_cstr(from, "from")?;
+        let to = dist_target_from_c(to)?;
+        let conv = powerio_dist::convert_file(path, to, from).map_err(|e| e.to_string())?;
+        Ok((conv.text, conv.warnings))
+    })();
+    current.or_else(|primary| {
+        let legacy: Result<(String, Vec<String>), String> = (|| {
+            let legacy_to = dist_target_from_c(from)?;
+            let legacy_from = optional_cstr(to, "from")?;
+            let conv = powerio_dist::convert_file(path, legacy_to, legacy_from)
+                .map_err(|e| e.to_string())?;
+            Ok((conv.text, conv.warnings))
+        })();
+        legacy.map_err(|_| primary)
+    })
+}
+
+#[cfg(feature = "dist")]
+fn dist_convert_str_compat(
+    text: &str,
+    from: *const c_char,
+    to: *const c_char,
+) -> Result<(String, Vec<String>), String> {
+    let current: Result<(String, Vec<String>), String> = (|| {
+        let to = dist_target_from_c(to)?;
+        let from = required_cstr(from, "from")?;
+        let conv = powerio_dist::convert_str(text, to, from).map_err(|e| e.to_string())?;
+        Ok((conv.text, conv.warnings))
+    })();
+    current.or_else(|primary| {
+        let legacy: Result<(String, Vec<String>), String> = (|| {
+            let legacy_to = dist_target_from_c(from)?;
+            let legacy_from = required_cstr(to, "from")?;
+            let conv = powerio_dist::convert_str(text, legacy_to, legacy_from)
+                .map_err(|e| e.to_string())?;
+            Ok((conv.text, conv.warnings))
+        })();
+        legacy.map_err(|_| primary)
+    })
 }
 
 #[cfg(feature = "dist")]
@@ -2009,6 +2050,35 @@ mpc.branch = [
         }
 
         #[test]
+        fn convert_str_accepts_experimental_julia_order() {
+            let source = std::fs::read_to_string(fourwire()).unwrap();
+            let text = CString::new(source).unwrap();
+            let to = CString::new("pmd").unwrap();
+            let from = CString::new("dss").unwrap();
+            let mut warn = [0 as c_char; 4096];
+            let mut err = [0 as c_char; PIO_ERRBUF_MIN];
+            let s = unsafe {
+                pio_dist_convert_str(
+                    text.as_ptr(),
+                    to.as_ptr(),
+                    from.as_ptr(),
+                    warn.as_mut_ptr(),
+                    warn.len(),
+                    err.as_mut_ptr(),
+                    err.len(),
+                )
+            };
+            assert!(
+                !s.is_null(),
+                "{}",
+                unsafe { CStr::from_ptr(err.as_ptr()) }.to_str().unwrap()
+            );
+            let pmd = unsafe { CStr::from_ptr(s) }.to_str().unwrap();
+            assert!(pmd.contains("\"data_model\": \"ENGINEERING\""));
+            unsafe { pio_string_free(s) };
+        }
+
+        #[test]
         fn warnings_report_count_and_text() {
             // An unknown length unit draws a parse warning; the handle must
             // surface it. Warnings use the size-then-fill idiom of `pio_warnings`.
@@ -2049,6 +2119,33 @@ mpc.branch = [
                     path.as_ptr(),
                     std::ptr::null(),
                     to.as_ptr(),
+                    warn.as_mut_ptr(),
+                    warn.len(),
+                    err.as_mut_ptr(),
+                    err.len(),
+                )
+            };
+            assert!(
+                !s.is_null(),
+                "{}",
+                unsafe { CStr::from_ptr(err.as_ptr()) }.to_str().unwrap()
+            );
+            let text = unsafe { CStr::from_ptr(s) }.to_str().unwrap();
+            assert!(text.contains("\"bus\""));
+            unsafe { pio_string_free(s) };
+        }
+
+        #[test]
+        fn convert_file_accepts_experimental_julia_order() {
+            let path = fourwire_cstr();
+            let to = CString::new("bmopf-json").unwrap();
+            let mut warn = [0 as c_char; 4096];
+            let mut err = [0 as c_char; PIO_ERRBUF_MIN];
+            let s = unsafe {
+                pio_dist_convert_file(
+                    path.as_ptr(),
+                    to.as_ptr(),
+                    std::ptr::null(),
                     warn.as_mut_ptr(),
                     warn.len(),
                     err.as_mut_ptr(),

@@ -596,32 +596,7 @@ impl Reader<'_> {
                 tap: 1.0,
             },
         ];
-        if subtype == "center_tap" && windings[1].terminal_map.len() >= 3 {
-            let to = windings.pop().expect("secondary winding exists");
-            let common = to.terminal_map.last().cloned().unwrap_or_default();
-            let hot_a = to.terminal_map[0].clone();
-            let hot_b = to.terminal_map[1].clone();
-            let half = Winding {
-                bus: to.bus.clone(),
-                terminal_map: vec![hot_a, common.clone()],
-                conn: WindingConn::Wye,
-                v_ref: to.v_ref / 2.0,
-                s_rating: to.s_rating,
-                r_pct: to.r_pct * 2.0,
-                tap: to.tap,
-            };
-            let other_half = Winding {
-                bus: to.bus,
-                terminal_map: vec![common, hot_b],
-                conn: WindingConn::Wye,
-                v_ref: to.v_ref / 2.0,
-                s_rating: to.s_rating,
-                r_pct: to.r_pct * 2.0,
-                tap: to.tap,
-            };
-            windings.push(half);
-            windings.push(other_half);
-        }
+        expand_center_tap_windings(subtype, &mut windings);
         let mut extras = take_extras(
             o,
             &known,
@@ -640,4 +615,34 @@ impl Reader<'_> {
             extras,
         }
     }
+}
+
+fn expand_center_tap_windings(subtype: &str, windings: &mut Vec<Winding>) {
+    if subtype != "center_tap" || windings[1].terminal_map.len() < 3 {
+        return;
+    }
+    let to = windings.pop().expect("secondary winding exists");
+    let common = to.terminal_map.last().cloned().unwrap_or_default();
+    let hot_a = to.terminal_map[0].clone();
+    let hot_b = to.terminal_map[1].clone();
+    let half = Winding {
+        bus: to.bus.clone(),
+        terminal_map: vec![hot_a, common.clone()],
+        conn: WindingConn::Wye,
+        v_ref: to.v_ref / 2.0,
+        s_rating: to.s_rating,
+        r_pct: to.r_pct * 2.0,
+        tap: to.tap,
+    };
+    let other_half = Winding {
+        bus: to.bus,
+        terminal_map: vec![common, hot_b],
+        conn: WindingConn::Wye,
+        v_ref: to.v_ref / 2.0,
+        s_rating: to.s_rating,
+        r_pct: to.r_pct * 2.0,
+        tap: to.tap,
+    };
+    windings.push(half);
+    windings.push(other_half);
 }
