@@ -70,3 +70,6 @@ Unsupported OpenDSS classes never fail a parse: they fall through to the `untype
 store and the writer reports them, so coverage grows additively without silent
 loss. Protection and instrumentation (Monitor, EnergyMeter, Recloser, Relay, Fuse,
 TCC_Curve) are out of scope for a power flow / OPF data model.
+
+The remaining transformer losses require a BMOPF schema extension; tracked
+upstream in `frederikgeth/bmopf-report#9`.
