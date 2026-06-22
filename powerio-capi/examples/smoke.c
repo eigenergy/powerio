@@ -199,6 +199,8 @@ int main(int argc, char **argv) {
               "NULL dist handle did not return 0");
         /* The optional dist surface reports itself through the feature query. */
         CHECK(pio_has_feature("dist") == 1, "pio_has_feature(dist) should be 1");
+        CHECK(pio_dist_abi_version() == PIO_DIST_ABI_VERSION,
+              "dist ABI version mismatch");
         printf("dist surface OK\n");
     }
 #endif

@@ -52,8 +52,8 @@ pub struct PioNetwork {
 
 // The handle is immutable after construction and the C ABI documents concurrent
 // reads from any number of threads as safe (see the cbindgen header preamble).
-// That contract requires `PioNetwork: Send + Sync`; pin it at compile time so a
-// future field that is not `Sync` fails the build instead of the contract.
+// That guarantee requires `PioNetwork: Send + Sync`; pin it at compile time so
+// a future field that is not `Sync` fails the build instead of weakening it.
 const _: fn() = || {
     fn assert_send_sync<T: Send + Sync>() {}
     assert_send_sync::<PioNetwork>();
@@ -167,6 +167,13 @@ unsafe fn finish_network(
 /// carry their own structure and never force a signature change.
 pub const PIO_ABI_VERSION: u32 = 4;
 
+/// ABI version of the optional `pio_dist_*` C surface. This is separate from
+/// [`PIO_ABI_VERSION`] so distribution C entry points can evolve without forcing
+/// a core ABI bump. Version 1 is the supported dist surface with conversion
+/// order `(input, from, to, ...)`.
+#[cfg(feature = "dist")]
+pub const PIO_DIST_ABI_VERSION: u32 = 1;
+
 /// A comfortable error-buffer size: pass a `char[PIO_ERRBUF_MIN]` to any
 /// `errbuf`/`warnbuf` parameter and a message always fits without truncation.
 pub const PIO_ERRBUF_MIN: usize = 256;
@@ -176,6 +183,15 @@ pub const PIO_ERRBUF_MIN: usize = 256;
 #[unsafe(no_mangle)]
 pub extern "C" fn pio_abi_version() -> u32 {
     PIO_ABI_VERSION
+}
+
+/// The ABI version of the optional `pio_dist_*` surface. Only linked when the
+/// `dist` feature is compiled in; probe that first with `pio_has_feature("dist")`
+/// if loading dynamically.
+#[cfg(feature = "dist")]
+#[unsafe(no_mangle)]
+pub extern "C" fn pio_dist_abi_version() -> u32 {
+    PIO_DIST_ABI_VERSION
 }
 
 /// Whether an optional build feature is compiled in: pass `"arrow"`, `"gridfm"`,
@@ -385,8 +401,8 @@ pub unsafe extern "C" fn pio_warnings(
 pub unsafe extern "C" fn pio_network_free(net: *mut PioNetwork) {
     unsafe {
         // Under the same panic guard as every other entry point: the drop is
-        // pure deallocation today, but the boundary contract ("catches panics")
-        // must not depend on that staying true.
+        // pure deallocation today, but "catches panics" must not depend on that
+        // staying true.
         guard((), || {
             if !net.is_null() {
                 drop(Box::from_raw(net));
@@ -907,14 +923,12 @@ pub unsafe extern "C" fn pio_to_arrow(
 
 // ---------------------------------------------------------------------------
 // Distribution surface (`dist` feature). The multiconductor model behind its own
-// opaque `PioDistNetwork` handle and the `pio_dist_*` entry points. It ships
-// under the SAME `PIO_ABI_VERSION` as transmission (no separate version) and is
-// gated on the `dist` feature / `PIO_DIST` define, exactly like `arrow`/`gridfm`;
-// a runtime consumer probes it with `pio_has_feature("dist")`. The surface is
-// EXPERIMENTAL while the IEEE BMOPF schema is a draft: these C signatures are
-// frozen under v4, but the JSON payloads (bmopf-json, powerio-dist-json) carry
-// their own meta.version and may evolve, so a consumer pins a schema vintage from
-// the payload meta, never from the ABI version.
+// opaque `PioDistNetwork` handle and the `pio_dist_*` entry points. It is gated
+// on the `dist` feature / `PIO_DIST` define, exactly like `arrow`/`gridfm`; a
+// runtime consumer probes it with `pio_has_feature("dist")`, then checks
+// `pio_dist_abi_version()`. The surface is EXPERIMENTAL while the IEEE BMOPF
+// schema is a draft: C signature changes bump `PIO_DIST_ABI_VERSION`, and the
+// JSON payloads (bmopf-json, powerio-dist-json) carry their own meta.version.
 // ---------------------------------------------------------------------------
 
 /// Like [`cstr`] but a NULL or non-UTF-8 pointer is an error naming the offending
@@ -1188,8 +1202,8 @@ mod tests {
 
     #[test]
     fn version_surface() {
-        // The ABI version is the compatibility contract a consumer checks at
-        // load; the version string is static, NUL-terminated, and non-empty.
+        // The ABI version is the load-time compatibility check; the version
+        // string is static, NUL-terminated, and non-empty.
         assert_eq!(pio_abi_version(), PIO_ABI_VERSION);
         assert_eq!(PIO_ABI_VERSION, 4);
         let v = unsafe { CStr::from_ptr(pio_version()) }.to_str().unwrap();
@@ -1897,6 +1911,16 @@ mpc.branch = [
 
         fn fourwire_cstr() -> CString {
             CString::new(fourwire().to_str().unwrap()).unwrap()
+        }
+
+        #[test]
+        fn dist_abi_version_is_separate() {
+            assert_eq!(pio_abi_version(), PIO_ABI_VERSION);
+            assert_eq!(PIO_ABI_VERSION, 4);
+            assert_eq!(pio_dist_abi_version(), PIO_DIST_ABI_VERSION);
+            assert_eq!(PIO_DIST_ABI_VERSION, 1);
+            let feature = CString::new("dist").unwrap();
+            assert_eq!(unsafe { pio_has_feature(feature.as_ptr()) }, 1);
         }
 
         #[test]

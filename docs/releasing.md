@@ -20,8 +20,9 @@ powerio-dist  = { path = "powerio-dist",  version = "0.3.0" }
 ```
 
 `powerio-dist` inherits via `version.workspace = true`. Update `CHANGELOG.md`,
-run `cargo build` to refresh `Cargo.lock`, and confirm `pio_abi_version()` is 4
-(unchanged — the dist surface is additive under the same ABI version).
+run `cargo build` to refresh `Cargo.lock`, and confirm `pio_abi_version()` is 4.
+If the `dist` C surface is built, also confirm `pio_dist_abi_version()` matches
+`PIO_DIST_ABI_VERSION`.
 
 ## 2. crates.io publish order
 
@@ -45,9 +46,10 @@ self-contained first: `cargo publish -p powerio-dist --dry-run --locked`.
 `release-binaries.yml` builds the `powerio-capi` cdylib for the five PowerIO.jl
 platforms with `--features arrow,gridfm,dist`, so the released `.dylib`/`.so`/
 `.dll` exports the `pio_dist_*` distribution surface. PowerIO.jl probes it at
-runtime with `pio_has_feature("dist")`; no ABI-version change is needed (the dist
-surface is additive under `PIO_ABI_VERSION = 4`). The cbindgen header parity job
-gates the committed `powerio.h`.
+runtime with `pio_has_feature("dist")`. Direct C callers also check
+`pio_dist_abi_version()` against `PIO_DIST_ABI_VERSION`; dist C changes do not
+force a core `PIO_ABI_VERSION` bump. The cbindgen header parity job gates the
+committed `powerio.h`.
 
 ## 4. Tag and publish
 
@@ -61,9 +63,9 @@ the Python extension.
 
 - A lossless `powerio-dist-json` snapshot (serde on `DistNetwork`) with a payload
   `meta.version`, the distribution analogue of `powerio-json`, plus a CI gate
-  requiring `#[serde(default)]` on every new dist field. The dist C signatures
-  are frozen under v4; this snapshot is the place a future non-additive schema
-  change is versioned, in the payload, never in the ABI. Tracked for v0.3.x.
+  requiring `#[serde(default)]` on every new dist field. Direct dist C signature
+  changes bump `PIO_DIST_ABI_VERSION`; this snapshot is the place a future
+  non-additive schema change is versioned in the payload. Tracked for v0.3.x.
 - A `meta`/`$schema` block on BMOPF output is blocked by the schema's
   `additionalProperties: false`; it depends on the task-force extension-hatch
   decision (PR #82 discussion), not on powerio.

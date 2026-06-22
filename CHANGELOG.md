@@ -11,6 +11,9 @@
 - Transformers with three or more windings.
 - C ABI v4 (`PIO_ABI_VERSION` 4): a smaller canonical surface designed so future
   changes stay additive. Breaking ABI change in this release.
+- C distribution ABI v1 (`PIO_DIST_ABI_VERSION` 1): direct `pio_dist_*` callers
+  get a separate version check; the supported one-shot conversion order is
+  `(input, from, to, ...)`.
 - Memory safety hardening across the readers.
 
 ## 0.2.4

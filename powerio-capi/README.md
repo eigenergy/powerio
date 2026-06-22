@@ -128,7 +128,7 @@ The grammar is written out in the header preamble; the short version:
   conductor's point at a bus (reserved for the multiconductor surface), and a
   *branch* is any two-terminal series element, lines and transformers alike.
 
-## Safety contract
+## Safety model
 
 Every entry point is hardened at the boundary:
 
@@ -169,8 +169,8 @@ Two notes on the trust model:
 
 Compare `pio_abi_version()` against the `PIO_ABI_VERSION` your binary was
 compiled against before any other call; a mismatch means the library and the
-header disagree on the contract below. Breaking changes bump the version,
-additive symbols do not.
+header disagree on the rules below. Breaking changes bump the version, additive
+symbols do not.
 
 | ABI | Breaking change |
 |---|---|
@@ -190,6 +190,13 @@ The grammar v4 fixed is the freeze: existing signatures never change again,
 new data means new symbols, and rich or multiconductor data rides the Arrow
 and `powerio-json` schemas, which evolve without touching a C signature. Any
 future break would bump `PIO_ABI_VERSION` in lockstep with PowerIO.jl.
+
+The optional `pio_dist_*` surface has its own version check:
+`pio_dist_abi_version()` against `PIO_DIST_ABI_VERSION`, after confirming
+`pio_has_feature("dist")`. Supported direct C use of the distribution surface
+starts at `PIO_DIST_ABI_VERSION = 1`, with one-shot conversion ordered as
+`pio_dist_convert_*(input, from, to, ...)`. The dist conversion symbols that
+appeared before this split should be treated as experimental.
 
 ## Scope
 
