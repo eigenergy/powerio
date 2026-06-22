@@ -10,7 +10,8 @@ use serde_json::{Map, Value, json};
 
 use crate::convert::Conversion;
 use crate::model::{
-    Configuration, DistGenerator, DistNetwork, DistTransformer, Mat, Winding, WindingConn,
+    Configuration, DistGenerator, DistNetwork, DistSourceFormat, DistTransformer, Mat, Winding,
+    WindingConn,
 };
 
 /// The `$schema` stamped into every document's `meta`: the canonical bmopf-report
@@ -228,7 +229,7 @@ impl Writer {
         }
         let mut gens = Map::new();
         for g in &net.generators {
-            if fixed_generation(g) {
+            if fixed_generation_as_negative_load(net, g) {
                 let load_name = unique_load_name(&loads, &g.name);
                 let mut o = Map::new();
                 let p_nom: Vec<f64> = g.p_nom.iter().map(|&p| -p).collect();
@@ -242,12 +243,6 @@ impl Writer {
                     "generator {}: fixed P/Q generation encoded as BMOPF negative load `{load_name}`",
                     g.name
                 ));
-                if g.cost.is_some() {
-                    self.warn(format!(
-                        "generator {}: generation cost has no field on a BMOPF negative load; dropped",
-                        g.name
-                    ));
-                }
                 self.extras_dropped(&g.extras, &format!("generator {}", g.name));
                 loads.insert(load_name, Value::Object(o));
             } else {
@@ -702,6 +697,12 @@ fn fixed_generation(g: &DistGenerator) -> bool {
     has_setpoint
         && fixed_bounds(g.p_min.as_deref(), g.p_max.as_deref(), &g.p_nom)
         && fixed_bounds(g.q_min.as_deref(), g.q_max.as_deref(), &g.q_nom)
+}
+
+fn fixed_generation_as_negative_load(net: &DistNetwork, g: &DistGenerator) -> bool {
+    g.cost.is_none()
+        && net.source_format != Some(DistSourceFormat::BmopfJson)
+        && fixed_generation(g)
 }
 
 fn fixed_bounds(lo: Option<&[f64]>, hi: Option<&[f64]>, nom: &[f64]) -> bool {

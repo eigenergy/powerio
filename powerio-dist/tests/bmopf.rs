@@ -257,6 +257,63 @@ fn fixed_generators_emit_as_negative_loads() {
 }
 
 #[test]
+fn fixed_bmopf_generators_with_cost_stay_generators() {
+    let v = schema_validator();
+    let net = parse_bmopf_str(
+        r#"{
+          "bus": {
+            "b": {
+              "terminal_names": ["1"],
+              "perfectly_grounded_terminals": []
+            }
+          },
+          "voltage_source": {
+            "source": {
+              "v_magnitude": [2400.0],
+              "v_angle": [0.0],
+              "bus": "b",
+              "terminal_map": ["1"]
+            }
+          },
+          "generator": {
+            "g": {
+              "p_min": [100.0],
+              "p_max": [100.0],
+              "q_min": [20.0],
+              "q_max": [20.0],
+              "cost": [0.001],
+              "bus": "b",
+              "configuration": "SINGLE_PHASE",
+              "terminal_map": ["1"]
+            }
+          }
+        }"#,
+    )
+    .unwrap();
+
+    let out = write_bmopf_json(&net);
+
+    assert_eq!(errors(&v, &out.text), Vec::<String>::new());
+    assert!(
+        out.warnings
+            .iter()
+            .all(|w| !w.contains("negative load") && !w.contains("cost")),
+        "unexpected generator loss warning: {:?}",
+        out.warnings
+    );
+    let doc: serde_json::Value = serde_json::from_str(&out.text).unwrap();
+    assert!(
+        doc.get("load").is_none(),
+        "BMOPF generator was reclassified as a load"
+    );
+    assert_eq!(doc["generator"]["g"]["p_min"], serde_json::json!([100.0]));
+    assert_eq!(doc["generator"]["g"]["p_max"], serde_json::json!([100.0]));
+    assert_eq!(doc["generator"]["g"]["cost"], serde_json::json!([0.001]));
+    let again = parse_bmopf_str(&out.text).unwrap();
+    assert_model_eq(&net, &again);
+}
+
+#[test]
 fn negative_validation_cases() {
     let v = schema_validator();
     let base: serde_json::Value = serde_json::from_str(
