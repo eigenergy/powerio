@@ -174,11 +174,7 @@ pub fn write_psse_rev(net: &Network, rev: u32) -> Conversion {
     let mut load_ids: BTreeMap<BusId, BTreeSet<String>> = BTreeMap::new();
     for l in &net.loads {
         let (area, zone) = bus_area.get(&l.bus).copied().unwrap_or((1, 1));
-        let raw_id = device_id(&l.extras, l.bus, &mut load_ids);
-        let id = sanitize_quoted(&raw_id, NAME_FORBIDDEN, ' ');
-        if matches!(id, std::borrow::Cow::Owned(_)) {
-            sanitized_quoted += 1;
-        }
+        let id = quoted_device_id(&l.extras, l.bus, &mut load_ids, &mut sanitized_quoted);
         let (pl, ql, ip, iq, yp, yq) = load_components_for_write(l, &id, &mut warnings);
         let owner = extra_i64(&l.extras, "psse_owner").unwrap_or(1);
         let scal = extra_i64(&l.extras, "psse_scal").unwrap_or(1);
@@ -229,11 +225,7 @@ pub fn write_psse_rev(net: &Network, rev: u32) -> Conversion {
     // Fixed shunts here; switched shunts (control = Some) go in their own section.
     let mut shunt_ids: BTreeMap<BusId, BTreeSet<String>> = BTreeMap::new();
     for sh in net.shunts.iter().filter(|s| s.control.is_none()) {
-        let raw_id = device_id(&sh.extras, sh.bus, &mut shunt_ids);
-        let id = sanitize_quoted(&raw_id, NAME_FORBIDDEN, ' ');
-        if matches!(id, std::borrow::Cow::Owned(_)) {
-            sanitized_quoted += 1;
-        }
+        let id = quoted_device_id(&sh.extras, sh.bus, &mut shunt_ids, &mut sanitized_quoted);
         let _ = writeln!(
             s,
             "{}, '{id}', {}, {}, {}",
@@ -273,15 +265,12 @@ pub fn write_psse_rev(net: &Network, rev: u32) -> Conversion {
     // keys a branch on (I, J, CKT)); a captured source CKT wins.
     let mut branch_ids: BTreeMap<(BusId, BusId), BTreeSet<String>> = BTreeMap::new();
     for br in net.branches.iter().filter(|b| !b.is_transformer()) {
-        let ckt = super::allocate_circuit_id(
+        let ckt = quoted_circuit_id(
             br.extras.get("id").and_then(Value::as_str),
             (br.from, br.to),
             &mut branch_ids,
+            &mut sanitized_quoted,
         );
-        let ckt = sanitize_quoted(&ckt, NAME_FORBIDDEN, ' ');
-        if matches!(ckt, std::borrow::Cow::Owned(_)) {
-            sanitized_quoted += 1;
-        }
         if modern {
             // v34+: a quoted line NAME at field 6, then twelve rating columns,
             // pushing STAT to field 23 (the layout the reader expects at rev>=34).
@@ -484,11 +473,7 @@ pub fn write_psse_rev(net: &Network, rev: u32) -> Conversion {
             let _ = write!(blocks, ", {}, {}", blk.steps, num(blk.b));
         }
         let id_field = if rev >= 35 {
-            let raw_id = device_id(&sh.extras, sh.bus, &mut sw_ids);
-            let id = sanitize_quoted(&raw_id, NAME_FORBIDDEN, ' ');
-            if matches!(id, std::borrow::Cow::Owned(_)) {
-                sanitized_quoted += 1;
-            }
+            let id = quoted_device_id(&sh.extras, sh.bus, &mut sw_ids, &mut sanitized_quoted);
             format!(", '{id}'")
         } else {
             String::new()
@@ -559,13 +544,39 @@ fn ide(kind: BusType) -> u8 {
     kind as u8 // 1=PQ, 2=PV, 3=ref/swing, 4=isolated — same codes
 }
 
-/// The circuit id for an element: its captured `extras["id"]` when present and
-/// not already used on this bus, else the lowest positional id still free, so
-/// parallel devices stay distinct and the PSS/E `(bus, id)` uniqueness rule holds
-/// even when the source supplies ids that collide with each other or with a
-/// later positional id. `used` tracks the ids already emitted per bus.
-fn device_id(extras: &Extras, bus: BusId, used: &mut BTreeMap<BusId, BTreeSet<String>>) -> String {
-    super::allocate_circuit_id(extras.get("id").and_then(Value::as_str), bus, used)
+/// The circuit id for an element: its sanitized `extras["id"]` when present and
+/// still free on this bus, else the lowest positional id still free, so parallel
+/// devices stay distinct and the PSS/E `(bus, id)` uniqueness rule holds even
+/// when source ids collide before or after sanitation. `used` tracks the ids
+/// already emitted per bus.
+fn quoted_device_id(
+    extras: &Extras,
+    bus: BusId,
+    used: &mut BTreeMap<BusId, BTreeSet<String>>,
+    sanitized_quoted: &mut usize,
+) -> String {
+    quoted_circuit_id(
+        extras.get("id").and_then(Value::as_str),
+        bus,
+        used,
+        sanitized_quoted,
+    )
+}
+
+fn quoted_circuit_id<K: Ord + Clone>(
+    preferred: Option<&str>,
+    key: K,
+    used: &mut BTreeMap<K, BTreeSet<String>>,
+    sanitized_quoted: &mut usize,
+) -> String {
+    let sanitized = preferred.map(|id| {
+        let cleaned = sanitize_quoted(id, NAME_FORBIDDEN, ' ');
+        if matches!(cleaned, std::borrow::Cow::Owned(_)) {
+            *sanitized_quoted += 1;
+        }
+        cleaned.into_owned()
+    });
+    super::allocate_circuit_id(sanitized.as_deref(), key, used)
 }
 
 /// The next positional circuit id for `bus` (for elements with no extras to carry
@@ -867,7 +878,7 @@ fn next_continuation_line<'a>(
             message: format!("PSS/E {record} record ended before {expected}"),
         });
     };
-    if line.eq_ignore_ascii_case("q") || is_terminator(line) {
+    if line.eq_ignore_ascii_case("q") || is_section_marker(line) || is_bare_terminator(line) {
         return Err(Error::FormatRead {
             format: FMT,
             message: format!(
@@ -876,6 +887,11 @@ fn next_continuation_line<'a>(
         });
     }
     Ok(line)
+}
+
+fn is_bare_terminator(line: &str) -> bool {
+    let f = fields(line);
+    f.len() == 1 && f.first().map(String::as_str) == Some("0")
 }
 
 fn warn_non_unit_transformer_basis(f: &[String], warnings: &mut Vec<String>) -> Result<()> {
@@ -1760,6 +1776,32 @@ Q
     }
 
     #[test]
+    fn transformer_impedance_line_can_start_with_zero_resistance() {
+        let raw = r"0, 100.00, 33, 0, 0, 60.00 / synthetic
+CASE
+COMMENT
+1,'BUS1        ', 230.0,3,1,1,1,1.0,0.0,1.1,0.9,1.1,0.9
+2,'BUS2        ', 230.0,1,1,1,1,1.0,0.0,1.1,0.9,1.1,0.9
+0 / END OF BUS DATA, BEGIN LOAD DATA
+0 / END OF LOAD DATA, BEGIN FIXED SHUNT DATA
+0 / END OF FIXED SHUNT DATA, BEGIN GENERATOR DATA
+0 / END OF GENERATOR DATA, BEGIN BRANCH DATA
+0 / END OF BRANCH DATA, BEGIN TRANSFORMER DATA
+1,2,0,'1 ',1,1,1,0,0,1,'xf',1
+0,0.10,100.0
+1.0,230.0,0.0,100.0,90.0,80.0,0,0,1.1,0.9,1.1,0.9,33
+1.0,230.0
+0 / END OF TRANSFORMER DATA, BEGIN AREA DATA
+Q
+";
+        let net = parse_psse(raw).unwrap();
+
+        assert_eq!(net.branches.len(), 1);
+        close(net.branches[0].r, 0.0);
+        close(net.branches[0].x, 0.10);
+    }
+
+    #[test]
     fn warns_on_non_unit_transformer_basis_codes() {
         let raw = r"0, 100.00, 33, 0, 0, 60.00 / synthetic
 CASE
@@ -1913,6 +1955,49 @@ Q
         let net3 = parse_psse(&write_psse(&synth).text).unwrap();
         let ids: Vec<_> = net3.loads.iter().filter_map(&id).collect();
         assert_eq!(ids, vec!["1".to_string(), "2".to_string()]);
+    }
+
+    #[test]
+    fn sanitized_load_ids_are_allocated_after_cleaning() {
+        let raw = r"0, 100.00, 33, 0, 0, 60.00 / x
+CASE
+COMMENT
+1,'B1          ', 230.0,3,1,1,1,1.0,0.0,1.1,0.9,1.1,0.9
+2,'B2          ', 230.0,1,1,1,1,1.0,0.0,1.1,0.9,1.1,0.9
+0 / END OF BUS DATA, BEGIN LOAD DATA
+2,'A',1,1,1,10.0,5.0,0,0,0,0,1,1,0
+2,'B',1,1,1,20.0,8.0,0,0,0,0,1,1,0
+0 / END OF LOAD DATA, BEGIN FIXED SHUNT DATA
+0 / END OF FIXED SHUNT DATA, BEGIN GENERATOR DATA
+0 / END OF GENERATOR DATA, BEGIN BRANCH DATA
+0 / END OF BRANCH DATA, BEGIN TRANSFORMER DATA
+0 / END OF TRANSFORMER DATA, BEGIN AREA DATA
+Q
+";
+        let mut net = parse_psse(raw).unwrap();
+        net.loads[0]
+            .extras
+            .insert("id".into(), Value::String("A/B".into()));
+        net.loads[1]
+            .extras
+            .insert("id".into(), Value::String("A'B".into()));
+
+        let conv = write_psse(&net);
+        let reparsed = parse_psse(&conv.text).unwrap();
+        let ids: Vec<_> = reparsed
+            .loads
+            .iter()
+            .filter_map(|l| l.extras.get("id").and_then(Value::as_str))
+            .collect();
+
+        assert_eq!(ids, vec!["A B", "1"]);
+        assert!(
+            conv.warnings
+                .iter()
+                .any(|w| w.contains("2 quoted PSS/E field")),
+            "missing sanitation warning: {:?}",
+            conv.warnings
+        );
     }
 
     #[test]
