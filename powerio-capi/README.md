@@ -211,8 +211,9 @@ appeared before this split should be treated as experimental.
 Every public `PIO_*` macro, opaque typedef, and `pio_*` prototype in
 `powerio.h` is pinned by a Cargo test, and CI compiles the C smoke program
 against the no-default core ABI plus the arrow, gridfm, and dist feature
-surfaces. Source/header symbol parity is checked separately, so adding,
-renaming, or deleting a public entry point fails before release.
+surfaces. CI also compiles and links a C++ header sanity program to keep the
+`extern "C"` path honest. Source/header symbol parity is checked separately, so
+adding, renaming, or deleting a public entry point fails before release.
 
 ## Scope
 

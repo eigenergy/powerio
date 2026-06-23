@@ -52,8 +52,9 @@ force a core `PIO_ABI_VERSION` bump. The ABI manifest test pins every public
 `PIO_*` macro, opaque typedef, and `pio_*` prototype in the committed
 `powerio.h`; the source/header symbol parity job catches missing declarations.
 CI also builds and smoke tests the no-default core ABI plus the release
-`arrow,gridfm,dist` feature set. The C smoke tests reject the old target/source
-conversion order for both core and dist entry points.
+`arrow,gridfm,dist` feature set, including a C++ compile/link sanity check for
+the public header. The C smoke tests reject the old target/source conversion
+order for both core and dist entry points.
 
 ## 4. Tag and publish
 

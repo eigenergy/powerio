@@ -116,6 +116,11 @@ jobs:
         cc -I powerio-capi/include powerio-capi/examples/smoke.c \
            -L target/release -lpowerio_capi -o pio_smoke
         LD_LIBRARY_PATH=target/release ./pio_smoke tests/data/case9.m
+    - name: Compile and run the C++ header sanity check
+      run: |
+        c++ -std=c++17 -I powerio-capi/include powerio-capi/examples/header_cpp.cpp \
+           -L target/release -lpowerio_capi -o pio_header_cpp
+        LD_LIBRARY_PATH=target/release ./pio_header_cpp
     - name: Tests + clippy (core no-default)
       run: |
         cargo test -p powerio-capi --no-default-features --verbose
@@ -184,6 +189,12 @@ jobs:
            -I powerio-capi/include powerio-capi/examples/smoke.c \
            -L target/release -lpowerio_capi -o pio_smoke_gridfm
         LD_LIBRARY_PATH=target/release ./pio_smoke_gridfm tests/data/case9.m /tmp/pio-gridfm-smoke/case9/raw
+    - name: Compile and run the C++ header sanity check (release features)
+      run: |
+        c++ -std=c++17 -DPIO_ARROW -DPIO_GRIDFM -DPIO_DIST \
+           -I powerio-capi/include powerio-capi/examples/header_cpp.cpp \
+           -L target/release -lpowerio_capi -o pio_header_cpp_release
+        LD_LIBRARY_PATH=target/release ./pio_header_cpp_release
     - name: Tests + clippy (release features)
       run: |
         cargo test -p powerio-capi --features arrow,gridfm,dist --verbose

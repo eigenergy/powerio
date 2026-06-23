@@ -42,7 +42,7 @@
 - C ABI hardening: unit tests pin every public `PIO_*` macro, opaque typedef,
   and `pio_*` prototype in `powerio.h`; Cargo now checks Rust source/header
   symbol parity; CI builds the no-default core ABI plus the release
-  `arrow,gridfm,dist` feature smoke test.
+  `arrow,gridfm,dist` feature smoke test and C++ header/link sanity checks.
 - No core C ABI break; `PIO_ABI_VERSION` stays 4. No existing Rust or Python
   API was removed or reordered.
 
