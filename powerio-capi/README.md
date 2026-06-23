@@ -22,6 +22,16 @@ cbindgen --config powerio-capi/cbindgen.toml --crate powerio-capi \
   --output powerio-capi/include/powerio.h
 ```
 
+The test suite pins the checked-in header shape. Run the core and optional
+surfaces before changing `powerio.h` or an exported `pio_*` function:
+
+```
+cargo test -p powerio-capi --no-default-features
+cargo test -p powerio-capi --features arrow
+cargo test -p powerio-capi --features gridfm
+cargo test -p powerio-capi --features dist
+```
+
 ## C
 
 ```c
@@ -197,6 +207,12 @@ The optional `pio_dist_*` surface has its own version check:
 starts at `PIO_DIST_ABI_VERSION = 1`, with one-shot conversion ordered as
 `pio_dist_convert_*(input, from, to, ...)`. The dist conversion symbols that
 appeared before this split should be treated as experimental.
+
+Every public `PIO_*` macro, opaque typedef, and `pio_*` prototype in
+`powerio.h` is pinned by a Cargo test, and CI compiles the C smoke program
+against the no-default core ABI plus the arrow, gridfm, and dist feature
+surfaces. Source/header symbol parity is checked separately, so adding,
+renaming, or deleting a public entry point fails before release.
 
 ## Scope
 

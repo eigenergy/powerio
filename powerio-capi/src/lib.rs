@@ -1211,40 +1211,186 @@ mod tests {
         assert!(!v.is_empty());
     }
 
-    #[test]
-    fn conversion_header_keeps_input_from_to_order() {
-        fn assert_arg_order(
-            header: &str,
-            function: &str,
-            input_name: &str,
-            from_name: &str,
-            to_name: &str,
-        ) {
-            let needle = format!("{function}(const char *{input_name}");
-            let start = header.find(&needle).unwrap_or_else(|| {
-                panic!("missing header prototype for {function} starting with {input_name}")
-            });
-            let prototype_tail = &header[start..];
-            let end = prototype_tail
-                .find(");")
-                .unwrap_or_else(|| panic!("unterminated header prototype for {function}"));
-            let prototype = &prototype_tail[..end];
-            let input_pos = prototype
-                .find(&format!("const char *{input_name}"))
-                .unwrap();
-            let from_pos = prototype.find(&format!("const char *{from_name}")).unwrap();
-            let to_pos = prototype.find(&format!("const char *{to_name}")).unwrap();
-            assert!(
-                input_pos < from_pos && from_pos < to_pos,
-                "{function} header order drifted: {prototype}"
-            );
+    fn strip_c_comments(input: &str) -> String {
+        let mut out = String::with_capacity(input.len());
+        let mut chars = input.chars().peekable();
+        let mut in_block = false;
+        while let Some(ch) = chars.next() {
+            if in_block {
+                if ch == '*' && chars.peek() == Some(&'/') {
+                    chars.next();
+                    in_block = false;
+                } else if ch == '\n' {
+                    out.push('\n');
+                }
+            } else if ch == '/' && chars.peek() == Some(&'*') {
+                chars.next();
+                in_block = true;
+            } else if ch == '/' && chars.peek() == Some(&'/') {
+                chars.next();
+                for tail in chars.by_ref() {
+                    if tail == '\n' {
+                        out.push('\n');
+                        break;
+                    }
+                }
+            } else {
+                out.push(ch);
+            }
         }
+        out
+    }
 
-        let header = include_str!("../include/powerio.h");
-        assert_arg_order(header, "pio_convert_file", "path", "from", "to");
-        assert_arg_order(header, "pio_convert_str", "text", "from", "to");
-        assert_arg_order(header, "pio_dist_convert_file", "path", "from", "to");
-        assert_arg_order(header, "pio_dist_convert_str", "text", "from", "to");
+    fn collapse_ws(s: &str) -> String {
+        s.split_whitespace().collect::<Vec<_>>().join(" ")
+    }
+
+    fn c_header_abi_manifest(header: &str) -> Vec<String> {
+        let clean = strip_c_comments(header);
+        let mut entries = Vec::new();
+        let mut prototype = String::new();
+        for line in clean.lines().map(str::trim).filter(|line| !line.is_empty()) {
+            if !prototype.is_empty() {
+                prototype.push(' ');
+                prototype.push_str(line);
+                if line.ends_with(';') {
+                    entries.push(collapse_ws(&prototype));
+                    prototype.clear();
+                }
+                continue;
+            }
+
+            if line.starts_with("#define PIO_") || line.starts_with("typedef struct Pio") {
+                entries.push(collapse_ws(line));
+            } else if line.contains("pio_") {
+                if line.ends_with(';') {
+                    entries.push(collapse_ws(line));
+                } else {
+                    prototype.push_str(line);
+                }
+            }
+        }
+        assert!(prototype.is_empty(), "unterminated prototype: {prototype}");
+        entries
+    }
+
+    fn pio_symbol_names_from_manifest(manifest: &[String]) -> Vec<String> {
+        let mut names = std::collections::BTreeSet::new();
+        for entry in manifest {
+            if let Some(start) = entry.find("pio_") {
+                let tail = &entry[start..];
+                if let Some(end) = tail.find('(') {
+                    names.insert(tail[..end].to_string());
+                }
+            }
+        }
+        names.into_iter().collect()
+    }
+
+    fn source_exported_pio_symbols(source: &str) -> Vec<String> {
+        let mut names = std::collections::BTreeSet::new();
+        let mut saw_no_mangle = false;
+        for line in source.lines() {
+            let trimmed = line.trim();
+            if trimmed == "#[unsafe(no_mangle)]" {
+                saw_no_mangle = true;
+                continue;
+            }
+            if !trimmed.contains("extern \"C\"") {
+                if !trimmed.is_empty()
+                    && !trimmed.starts_with("#[")
+                    && !trimmed.starts_with("//")
+                    && !trimmed.starts_with("///")
+                {
+                    saw_no_mangle = false;
+                }
+                continue;
+            }
+            if let Some(start) = trimmed.find("fn pio_") {
+                let tail = &trimmed[start + "fn ".len()..];
+                let end = tail
+                    .find('(')
+                    .unwrap_or_else(|| panic!("unterminated extern fn line: {trimmed}"));
+                let name = &tail[..end];
+                assert!(
+                    saw_no_mangle,
+                    "{name} is exported in Rust source without #[unsafe(no_mangle)]"
+                );
+                names.insert(name.to_string());
+                saw_no_mangle = false;
+                continue;
+            }
+            if !trimmed.is_empty() && !trimmed.starts_with("#[") && !trimmed.starts_with("//") {
+                saw_no_mangle = false;
+            }
+        }
+        names.into_iter().collect()
+    }
+
+    #[test]
+    fn c_header_abi_manifest_is_pinned() {
+        let actual = c_header_abi_manifest(include_str!("../include/powerio.h"));
+        let expected = [
+            "#define PIO_ABI_VERSION 4",
+            "#define PIO_DIST_ABI_VERSION 1",
+            "#define PIO_ERRBUF_MIN 256",
+            "#define PIO_ARROW_TABLE_BUS 0",
+            "#define PIO_ARROW_TABLE_BRANCH 1",
+            "#define PIO_ARROW_TABLE_GEN 2",
+            "#define PIO_ARROW_TABLE_LOAD 3",
+            "#define PIO_ARROW_TABLE_SHUNT 4",
+            "typedef struct PioDistNetwork PioDistNetwork;",
+            "typedef struct PioNetwork PioNetwork;",
+            "uint32_t pio_abi_version(void);",
+            "uint32_t pio_dist_abi_version(void);",
+            "int32_t pio_has_feature(const char *feature);",
+            "const char *pio_version(void);",
+            "PioNetwork *pio_parse_file(const char *path, const char *from, char *errbuf, size_t errlen);",
+            "PioNetwork *pio_parse_str(const char *text, const char *format, char *errbuf, size_t errlen);",
+            "PioNetwork *pio_read_dir(const char *dir, const char *from, int64_t scenario, char *errbuf, size_t errlen);",
+            "ptrdiff_t pio_scenario_ids(const char *dir, const char *from, int64_t *out, size_t cap, char *errbuf, size_t errlen);",
+            "size_t pio_warnings(const PioNetwork *net, char *warnbuf, size_t warnlen);",
+            "void pio_network_free(PioNetwork *net);",
+            "PioNetwork *pio_normalize(const PioNetwork *net, char *errbuf, size_t errlen);",
+            "size_t pio_n_buses(const PioNetwork *net);",
+            "size_t pio_n_branches(const PioNetwork *net);",
+            "size_t pio_n_gens(const PioNetwork *net);",
+            "double pio_base_mva(const PioNetwork *net);",
+            "int64_t pio_ref_bus_index(const PioNetwork *net);",
+            "size_t pio_ref_bus_indices(const PioNetwork *net, int64_t *out, size_t cap);",
+            "size_t pio_n_islands(const PioNetwork *net);",
+            "int32_t pio_is_radial(const PioNetwork *net);",
+            "char *pio_to_format(const PioNetwork *net, const char *to, char *warnbuf, size_t warnlen, char *errbuf, size_t errlen);",
+            "char *pio_convert_file(const char *path, const char *from, const char *to, char *warnbuf, size_t warnlen, char *errbuf, size_t errlen);",
+            "char *pio_convert_str(const char *text, const char *from, const char *to, char *warnbuf, size_t warnlen, char *errbuf, size_t errlen);",
+            "int32_t pio_write_dir(const PioNetwork *net, const char *to, const char *out_dir, char *warnbuf, size_t warnlen, char *errbuf, size_t errlen);",
+            "void pio_string_free(char *s);",
+            "size_t pio_bus_ids(const PioNetwork *net, int64_t *out, size_t cap);",
+            "size_t pio_branches(const PioNetwork *net, int64_t *from, int64_t *to, double *r, double *x, double *b, double *tap, double *shift, uint8_t *in_service, size_t cap);",
+            "size_t pio_gens(const PioNetwork *net, int64_t *bus, double *pg, double *pmax, double *pmin, uint8_t *in_service, size_t cap);",
+            "size_t pio_bus_demand(const PioNetwork *net, double *pd, double *qd, size_t cap);",
+            "size_t pio_bus_shunt(const PioNetwork *net, double *gs, double *bs, size_t cap);",
+            "int32_t pio_to_arrow(const PioNetwork *net, int32_t table, struct ArrowArray *out_array, struct ArrowSchema *out_schema, char *errbuf, size_t errlen);",
+            "PioDistNetwork *pio_dist_parse_file(const char *path, const char *from, char *errbuf, size_t errlen);",
+            "PioDistNetwork *pio_dist_parse_str(const char *text, const char *format, char *errbuf, size_t errlen);",
+            "void pio_dist_network_free(PioDistNetwork *net);",
+            "size_t pio_dist_warnings(const PioDistNetwork *net, char *warnbuf, size_t warnlen);",
+            "char *pio_dist_to_format(const PioDistNetwork *net, const char *to, char *warnbuf, size_t warnlen, char *errbuf, size_t errlen);",
+            "char *pio_dist_convert_file(const char *path, const char *from, const char *to, char *warnbuf, size_t warnlen, char *errbuf, size_t errlen);",
+            "char *pio_dist_convert_str(const char *text, const char *from, const char *to, char *warnbuf, size_t warnlen, char *errbuf, size_t errlen);",
+        ]
+        .into_iter()
+        .map(str::to_string)
+        .collect::<Vec<_>>();
+        assert_eq!(actual, expected);
+    }
+
+    #[test]
+    fn c_header_and_rust_exported_symbols_match() {
+        let manifest = c_header_abi_manifest(include_str!("../include/powerio.h"));
+        let header_symbols = pio_symbol_names_from_manifest(&manifest);
+        let rust_symbols = source_exported_pio_symbols(include_str!("lib.rs"));
+        assert_eq!(rust_symbols, header_symbols);
     }
 
     #[test]

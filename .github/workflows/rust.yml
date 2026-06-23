@@ -88,14 +88,16 @@ jobs:
         cargo test -p powerio-matrix --features gridfm --verbose
 
   c-abi:
-    name: C ABI (header parity + C smoke test)
+    name: C ABI (core no-default + C smoke test)
     runs-on: ubuntu-latest
     steps:
     - uses: actions/checkout@v6
     - uses: dtolnay/rust-toolchain@stable
+      with:
+        components: clippy
     - uses: Swatinem/rust-cache@v2
-    - name: Build powerio-capi (cdylib + staticlib)
-      run: cargo build -p powerio-capi --release
+    - name: Build powerio-capi --no-default-features
+      run: cargo build -p powerio-capi --release --no-default-features
     # Every `pio_` export in the Rust source must be declared in the checked-in
     # header, so a new, renamed, or removed entry point can't silently drift out
     # of sync with include/powerio.h.
@@ -114,6 +116,10 @@ jobs:
         cc -I powerio-capi/include powerio-capi/examples/smoke.c \
            -L target/release -lpowerio_capi -o pio_smoke
         LD_LIBRARY_PATH=target/release ./pio_smoke tests/data/case9.m
+    - name: Tests + clippy (core no-default)
+      run: |
+        cargo test -p powerio-capi --no-default-features --verbose
+        cargo clippy -p powerio-capi --all-targets --no-default-features -- -D warnings
 
   c-abi-arrow:
     name: C ABI (arrow feature)
@@ -146,6 +152,42 @@ jobs:
       run: |
         cargo test -p powerio-capi --features arrow --verbose
         cargo clippy -p powerio-capi --all-targets --features arrow -- -D warnings
+
+  c-abi-gridfm:
+    name: C ABI (release features)
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v6
+    - uses: dtolnay/rust-toolchain@stable
+      with:
+        components: clippy
+    - uses: Swatinem/rust-cache@v2
+    - name: Build powerio-capi --features arrow,gridfm,dist
+      run: cargo build -p powerio-capi --release --features arrow,gridfm,dist
+    # The cfg-gated optional symbols still appear in the source symbol grep,
+    # so they must be declared in the header (inside their PIO_* guards);
+    # parity holds for the release feature set.
+    - name: Header symbol parity
+      run: |
+        grep -oE 'extern "C" fn pio_[a-z_]+' powerio-capi/src/lib.rs \
+          | grep -oE 'pio_[a-z_]+' | sort -u > rs_syms
+        grep -oE 'pio_[a-z_]+ *\(' powerio-capi/include/powerio.h \
+          | grep -oE 'pio_[a-z_]+' | sort -u > h_syms
+        diff rs_syms h_syms
+    # Compile the smoke test with every optional PIO_* define so it exercises
+    # the same C surface the release artifacts export.
+    - name: Compile and run the C smoke test (release features)
+      run: |
+        rm -rf /tmp/pio-gridfm-smoke
+        cargo run -p powerio-cli -- gridfm tests/data/case9.m -o /tmp/pio-gridfm-smoke
+        cc -DPIO_ARROW -DPIO_GRIDFM -DPIO_DIST \
+           -I powerio-capi/include powerio-capi/examples/smoke.c \
+           -L target/release -lpowerio_capi -o pio_smoke_gridfm
+        LD_LIBRARY_PATH=target/release ./pio_smoke_gridfm tests/data/case9.m /tmp/pio-gridfm-smoke/case9/raw
+    - name: Tests + clippy (release features)
+      run: |
+        cargo test -p powerio-capi --features arrow,gridfm,dist --verbose
+        cargo clippy -p powerio-capi --all-targets --features arrow,gridfm,dist -- -D warnings
 
   c-abi-dist:
     name: C ABI (dist feature)

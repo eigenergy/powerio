@@ -48,8 +48,11 @@ platforms with `--features arrow,gridfm,dist`, so the released `.dylib`/`.so`/
 `.dll` exports the `pio_dist_*` distribution surface. PowerIO.jl probes it at
 runtime with `pio_has_feature("dist")`. Direct C callers also check
 `pio_dist_abi_version()` against `PIO_DIST_ABI_VERSION`; dist C changes do not
-force a core `PIO_ABI_VERSION` bump. The cbindgen header parity job gates the
-committed `powerio.h`, and the C smoke tests reject the old target/source
+force a core `PIO_ABI_VERSION` bump. The ABI manifest test pins every public
+`PIO_*` macro, opaque typedef, and `pio_*` prototype in the committed
+`powerio.h`; the source/header symbol parity job catches missing declarations.
+CI also builds and smoke tests the no-default core ABI plus the release
+`arrow,gridfm,dist` feature set. The C smoke tests reject the old target/source
 conversion order for both core and dist entry points.
 
 ## 4. Tag and publish

@@ -39,6 +39,10 @@
 - C ABI tests now reject the old target-before-source conversion order for both
   `pio_convert_*` and `pio_dist_convert_*`, including the compiled C smoke test
   against `powerio.h`.
+- C ABI hardening: unit tests pin every public `PIO_*` macro, opaque typedef,
+  and `pio_*` prototype in `powerio.h`; Cargo now checks Rust source/header
+  symbol parity; CI builds the no-default core ABI plus the release
+  `arrow,gridfm,dist` feature smoke test.
 - No core C ABI break; `PIO_ABI_VERSION` stays 4. No existing Rust or Python
   API was removed or reordered.
 

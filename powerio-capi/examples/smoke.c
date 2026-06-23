@@ -20,6 +20,28 @@
 #include <stdlib.h>
 #include <string.h>
 
+#if PIO_ABI_VERSION != 4
+#error "PIO_ABI_VERSION changed without updating the C ABI smoke test"
+#endif
+
+#if PIO_ERRBUF_MIN != 256
+#error "PIO_ERRBUF_MIN changed without updating the C ABI smoke test"
+#endif
+
+#ifdef PIO_DIST
+#if PIO_DIST_ABI_VERSION != 1
+#error "PIO_DIST_ABI_VERSION changed without updating the C ABI smoke test"
+#endif
+#endif
+
+#ifdef PIO_ARROW
+#if PIO_ARROW_TABLE_BUS != 0 || PIO_ARROW_TABLE_BRANCH != 1 ||                \
+    PIO_ARROW_TABLE_GEN != 2 || PIO_ARROW_TABLE_LOAD != 3 ||                  \
+    PIO_ARROW_TABLE_SHUNT != 4
+#error "PIO_ARROW_TABLE_* ids changed without updating the C ABI smoke test"
+#endif
+#endif
+
 #define CHECK(cond, msg)                                                       \
     do {                                                                       \
         if (!(cond)) {                                                         \
@@ -33,6 +55,12 @@ int main(int argc, char **argv) {
         fprintf(stderr, "usage: %s <case.m>\n", argv[0]);
         return 2;
     }
+#ifdef PIO_GRIDFM
+    if (argc < 3) {
+        fprintf(stderr, "usage: %s <case.m> <gridfm-raw-dir>\n", argv[0]);
+        return 2;
+    }
+#endif
 
     /* ABI handshake: a consumer refuses a library whose ABI version differs from
      * the header it compiled against. pio_version() is a static, non-owned string. */
@@ -163,6 +191,28 @@ int main(int argc, char **argv) {
         CHECK(rc == -1, "NULL network handle should fail the directory write");
         printf("pypsa csv directory write OK: %s\n", outdir);
     }
+
+#ifdef PIO_GRIDFM
+    /* Dataset reader surface: gridfm is a directory format and returns the same
+     * PioNetwork handle family as parse_file/parse_str. */
+    {
+        const char *gridfm_dir = argv[2];
+        CHECK(pio_has_feature("gridfm") == 1, "pio_has_feature(gridfm) should be 1");
+
+        ptrdiff_t count = pio_scenario_ids(gridfm_dir, "gridfm", NULL, 0, err, sizeof err);
+        CHECK(count > 0, err);
+        int64_t ids[4] = {-1, -1, -1, -1};
+        CHECK(pio_scenario_ids(gridfm_dir, "gridfm", ids, 4, err, sizeof err) == count,
+              "scenario-id fill did not return the total");
+
+        PioNetwork *g = pio_read_dir(gridfm_dir, "gridfm", ids[0], err, sizeof err);
+        CHECK(g != NULL, err);
+        CHECK(pio_n_buses(g) > 0, "gridfm read returned an empty network");
+        CHECK(pio_warnings(g, NULL, 0) > 0, "gridfm read should report fidelity warnings");
+        pio_network_free(g);
+        printf("gridfm surface OK\n");
+    }
+#endif
 
 #ifdef PIO_DIST
     /* Distribution surface: parse an in-memory OpenDSS case, read its parse
