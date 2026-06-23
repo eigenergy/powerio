@@ -65,8 +65,11 @@ impl Writer {
 
     fn extras_dropped(&mut self, extras: &crate::model::Extras, what: &str) {
         for key in extras.keys() {
-            if key == "bmopf_subtype" {
-                continue; // reader bookkeeping, not source data
+            // `bmopf_subtype` is reader bookkeeping; `conn` marks a delta shunt
+            // whose geometry already lives in the off diagonal B matrix, so it
+            // is preserved, not dropped.
+            if key == "bmopf_subtype" || key == "conn" {
+                continue;
             }
             self.warn(format!(
                 "{what}: `{key}` has no place in the BMOPF schema; dropped from the output"

@@ -392,6 +392,24 @@ fn zero_impedance_grounding_reactor_stays_untyped() {
 }
 
 #[test]
+fn grounding_reactor_with_unparseable_rx_stays_untyped() {
+    use powerio_dist::parse_dss_str;
+    // A non-numeric `r` fails to evaluate; substituting 0 would emit a lossless
+    // grounding reactor, so the object stays untyped with a warning instead.
+    let net = parse_dss_str(
+        "New Circuit.c basekv=4.16\n\
+         New Reactor.rz bus1=b2.1 bus2=b2.0 phases=1 r=notanumber x=4\n",
+    );
+    assert!(net.untyped.iter().any(|o| o.name == "rz"));
+    assert!(net.shunts.iter().all(|s| s.name != "rz"));
+    assert!(
+        net.warnings
+            .iter()
+            .any(|w| w.contains("reactor rz") && w.contains("does not evaluate"))
+    );
+}
+
+#[test]
 fn delta_capacitor_and_reactor_type_as_shunt_matrices() {
     use powerio_dist::parse_dss_str;
     let net = parse_dss_str(

@@ -156,6 +156,27 @@ fn pmd_round_trips_to_model_equality() {
 }
 
 #[test]
+fn dss_delta_shunt_writes_pmd_delta_configuration() {
+    use powerio_dist::parse_dss_str;
+    let net = parse_dss_str(
+        "New Circuit.c basekv=4.16\n\
+         New Capacitor.capd bus1=b2.1.2.3 phases=3 conn=delta kvar=900 kv=4.16\n\
+         New Capacitor.capw bus1=b3.1.2.3 phases=3 kvar=900 kv=4.16\n",
+    );
+    let out = write_pmd_json(&net);
+    let doc: serde_json::Value = serde_json::from_str(&out.text).unwrap();
+    // A delta bank carries a line to line admittance, so it must not emit as
+    // WYE; a plain wye bank still does.
+    assert_eq!(doc["shunt"]["capd"]["configuration"], "DELTA");
+    assert_eq!(doc["shunt"]["capw"]["configuration"], "WYE");
+    assert!(
+        !out.warnings.iter().any(|w| w.contains("`conn`")),
+        "spurious conn warning: {:?}",
+        out.warnings
+    );
+}
+
+#[test]
 fn dss_to_pmd_reproduces_the_reference_essentials() {
     let net = parse_dss_file(fixture("opendss/ieee13/IEEE13Nodeckt.dss")).unwrap();
     let out = write_pmd_json(&net);

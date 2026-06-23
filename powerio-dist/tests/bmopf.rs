@@ -185,6 +185,13 @@ fn dss_delta_shunts_emit_bmopf_matrices() {
     let doc: serde_json::Value = serde_json::from_str(&out.text).unwrap();
     assert!(doc["shunt"]["capd"]["B_1_2"].as_f64().unwrap() < 0.0);
     assert!(doc["shunt"]["rxd"]["B_1_2"].as_f64().unwrap() > 0.0);
+    // The `conn` marker is preserved in the off diagonal B matrix, so it must
+    // not raise a spurious "dropped from the output" warning.
+    assert!(
+        !out.warnings.iter().any(|w| w.contains("`conn`")),
+        "spurious conn drop warning: {:?}",
+        out.warnings
+    );
 }
 
 /// A single phase wye/delta transformer (an open delta leg) must reach the

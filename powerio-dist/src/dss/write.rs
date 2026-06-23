@@ -18,6 +18,7 @@ use std::fmt::Write as _;
 use crate::convert::Conversion;
 use crate::model::{Configuration, DistBus, DistNetwork, Extras, Mat, Winding, WindingConn};
 
+use super::read::delta_edges;
 use super::{lex, prop};
 
 /// Writes canonical `.dss` text from the model.
@@ -165,8 +166,10 @@ fn estimate_bus_kv(net: &DistNetwork) -> BTreeMap<String, f64> {
     kv
 }
 
-/// A float in the shortest form Rust round trips.
+/// A float in the shortest form Rust round trips. Negative zero canonicalizes
+/// to `0` so a `-x/denom` that lands on `-0.0` does not emit the literal `-0`.
 fn num(v: f64) -> String {
+    let v = if v == 0.0 { 0.0 } else { v };
     format!("{v}")
 }
 
@@ -193,6 +196,9 @@ fn extras_f64(extras: &Extras, key: &str) -> Option<f64> {
     let v = extras.get(key)?;
     v.as_f64()
         .or_else(|| v.as_str().and_then(|s| s.parse().ok()))
+        // A stashed `inf`/`NaN` token parses to a non-finite f64; reject it so
+        // it never reaches `num()` and emits a literal `inf`/`NaN` DSS token.
+        .filter(|f| f.is_finite())
 }
 
 fn extras_usize(extras: &Extras, key: &str) -> Option<usize> {
@@ -978,10 +984,7 @@ impl DssWriter {
         let resistance = conductance / denom;
         let reactance = -susceptance / denom;
         let mut extras = sh.extras.clone();
-        extras.remove("kv");
-        extras.remove("kvar");
-        extras.remove("phases");
-        extras.remove("conn");
+        strip_shunt_extras(&mut extras);
         let ground = vec!["0".to_string(); phases.max(1)];
         let mut line = format!(
             "New Reactor.{} bus1={} bus2={} phases={} r={} x={}",
@@ -1018,8 +1021,11 @@ impl DssWriter {
     }
 
     fn write_kvar_shunt(&mut self, sh: &crate::model::DistShunt, phases: usize, conn_delta: bool) {
-        let (b_max, b_min) = (0..phases.min(sh.b.len()))
-            .map(|idx| sh.b[idx][idx])
+        // Scan every diagonal conductor, not just the first `phases` of them: a
+        // delta bank's conductor count exceeds its stashed `phases`, and a
+        // sign-flipped diagonal past that bound must still set the class.
+        let (b_max, b_min) = (0..sh.b.len())
+            .map(|idx| diag_at(&sh.b, idx))
             .fold((0.0_f64, 0.0_f64), |(mx, mn), v| (mx.max(v), mn.min(v)));
         let (class, b_phase) = if b_max > 0.0 {
             ("capacitor", b_max)
@@ -1076,10 +1082,7 @@ impl DssWriter {
         let kvar = extras_f64(&sh.extras, "kvar")
             .unwrap_or_else(|| shunt_kvar(sh, phases, conn_delta, &edges, b_phase, kv));
         let mut extras = sh.extras.clone();
-        extras.remove("kv");
-        extras.remove("kvar");
-        extras.remove("phases");
-        extras.remove("conn");
+        strip_shunt_extras(&mut extras);
         let conn = if conn_delta { "delta" } else { "wye" };
         let decl = if class == "reactor" {
             "Reactor"
@@ -1186,6 +1189,14 @@ fn element_conn(extras: &Extras, configuration: Configuration) -> &'static str {
     }
 }
 
+/// Drop the shunt keys the writer regenerates from the typed model so a stale
+/// copy is not re-emitted in the extras tail.
+fn strip_shunt_extras(extras: &mut Extras) {
+    for key in ["kv", "kvar", "phases", "conn"] {
+        extras.remove(key);
+    }
+}
+
 fn has_nonzero(m: &Mat) -> bool {
     m.iter().flatten().any(|&v| v != 0.0)
 }
@@ -1243,31 +1254,25 @@ fn looks_like_delta_shunt(b: &Mat, terminals: usize, phases: usize) -> bool {
     delta_branch_susceptance(b, &edges, terminals).is_some()
 }
 
-fn delta_edges(n: usize, phases: usize) -> Vec<(usize, usize)> {
-    if n < 2 {
-        Vec::new()
-    } else if phases >= 3 && n >= 3 {
-        (0..n).map(|i| (i, (i + 1) % n)).collect()
-    } else {
-        let branches = phases.max(1).min(n - 1);
-        (0..branches).map(|i| (i, i + 1)).collect()
-    }
-}
-
 fn delta_branch_abs(b: &Mat, edges: &[(usize, usize)]) -> Option<f64> {
     if edges.is_empty() {
         return None;
     }
-    let mut total = 0.0;
-    let mut count: usize = 0;
-    for &(i, j) in edges {
-        let Some(v) = b.get(i).and_then(|row| row.get(j)).copied() else {
-            continue;
-        };
-        total += v.abs();
-        count += 1;
-    }
-    (count > 0).then_some(total / count as f64)
+    // Average over every edge (a missing entry contributes 0), so the divisor
+    // matches the `edges.len()` that `shunt_kvar` multiplies back in; counting
+    // only present entries would over-scale the regenerated kvar on a ragged
+    // matrix.
+    let total: f64 = edges
+        .iter()
+        .map(|&(i, j)| {
+            b.get(i)
+                .and_then(|row| row.get(j))
+                .copied()
+                .unwrap_or(0.0)
+                .abs()
+        })
+        .sum();
+    Some(total / edges.len() as f64)
 }
 
 fn delta_branch_susceptance(b: &Mat, edges: &[(usize, usize)], terminals: usize) -> Option<f64> {
@@ -1825,7 +1830,11 @@ mod tests {
         assert!(line.contains("bus2=sb.0"), "{line}");
         assert!(line.contains("phases=1"), "{line}");
         assert!(line.contains("r=0.3"), "{line}");
-        assert!(line.contains("x=-0"), "{line}");
+        assert!(line.contains("x=0"), "{line}");
+        assert!(
+            !line.contains("x=-0"),
+            "negative zero must canonicalize: {line}"
+        );
     }
 
     #[test]

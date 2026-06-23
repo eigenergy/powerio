@@ -1231,14 +1231,19 @@ impl Reader<'_> {
         bus: &BusSpec,
         phases: usize,
     ) {
-        let resistance = props
-            .get("r")
-            .and_then(|v| v.to_f64(Some(self.vars)).ok())
-            .unwrap_or(0.0);
-        let reactance = props
-            .get("x")
-            .and_then(|v| v.to_f64(Some(self.vars)).ok())
-            .unwrap_or(0.0);
+        // An absent `r`/`x` key defaults to 0, but a key whose token fails to
+        // evaluate keeps the object untyped instead of silently substituting 0,
+        // which would emit a lossless grounding reactor with no warning that
+        // the resistance was dropped.
+        let term = |v: Option<&Value>| v.map_or(Ok(0.0), |val| val.to_f64(Some(self.vars)));
+        let (Ok(resistance), Ok(reactance)) = (term(props.get("r")), term(props.get("x"))) else {
+            self.warn(format!(
+                "reactor {}: `r`/`x` does not evaluate to a number; kept untyped",
+                obj.name
+            ));
+            self.net.untyped.push(UntypedObject::from(obj));
+            return;
+        };
         let denom = resistance * resistance + reactance * reactance;
         if !denom.is_finite() || denom <= 0.0 {
             self.warn(format!(
@@ -1329,7 +1334,11 @@ impl Reader<'_> {
         } else {
             kv * 1e3
         };
-        if !v_ref.is_finite() || v_ref <= 0.0 {
+        // `kvar_shunt_matrix` divides by `v_ref * v_ref`; a positive but tiny
+        // `v_ref` can square to zero (or a non-finite) and turn the admittance
+        // into an infinity, so reject the squared value here too.
+        let v_sq = v_ref * v_ref;
+        if !v_ref.is_finite() || v_ref <= 0.0 || !v_sq.is_finite() || v_sq == 0.0 {
             self.warn(format!(
                 "{} {}: invalid `kv` value is not a typed shunt; kept untyped",
                 spec.class, obj.name
@@ -1560,7 +1569,10 @@ fn same_bus_ground_return(bus: &BusSpec, return_bus: &BusSpec, phases: usize) ->
             .all(|&n| n <= 0)
 }
 
-fn delta_edges(n: usize, phases: usize) -> Vec<(usize, usize)> {
+/// The line to line branches of a delta bank over `n` terminals: a closed
+/// ring for a 3+ phase bank, an open chain otherwise. Shared with the writer
+/// so the reader and writer cannot disagree on the branch topology.
+pub(super) fn delta_edges(n: usize, phases: usize) -> Vec<(usize, usize)> {
     if n < 2 {
         Vec::new()
     } else if phases >= 3 && n >= 3 {

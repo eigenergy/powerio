@@ -6,12 +6,18 @@
   same bus's node 0 now type as shunts in BMOPF instead of staying untyped.
   Impedance form reactors use the equivalent admittance matrix, so neutral
   grounding resistors survive DSS to BMOPF conversion.
-- `powerio-dist` OpenDSS: delta capacitor and reactor banks now type as shunt
-  admittance matrices, including off diagonal branch terms, instead of being
-  dropped as untyped objects.
+- `powerio-dist` OpenDSS: three phase and single phase line to line delta
+  capacitor and reactor banks now type as shunt admittance matrices, including
+  off diagonal branch terms, instead of being dropped as untyped objects. Two
+  phase open delta banks stay untyped with a warning.
 - DSS writing now regenerates conductance bearing shunts as grounding reactors
   and preserves delta shunts as `conn=delta` where the typed model identifies
-  them.
+  them. The PMD shunt writer labels delta banks `DELTA` instead of `WYE`.
+- Shunt conversion hardening: a `kv` that squares to zero, a non-finite stashed
+  token, and a reactor `r`/`x` that fails to evaluate no longer leak infinities,
+  literal `NaN`/`inf`, or a silent zero into the output; each keeps the object
+  untyped or drops it with a warning. The BMOPF writer no longer warns that a
+  delta shunt's `conn` marker was dropped.
 - No core or distribution C ABI break; `PIO_ABI_VERSION` stays 4 and
   `PIO_DIST_ABI_VERSION` stays 1.
 

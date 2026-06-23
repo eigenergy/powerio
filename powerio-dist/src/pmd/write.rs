@@ -72,6 +72,14 @@ fn zero_matrix(n: usize) -> Mat {
     vec![vec![0.0; n]; n]
 }
 
+/// A shunt whose stashed `conn` marks it a delta (line to line) bank.
+fn shunt_is_delta(extras: &Extras) -> bool {
+    extras
+        .get("conn")
+        .and_then(|v| v.as_str())
+        .is_some_and(|t| t.to_ascii_lowercase().starts_with('d') || t.eq_ignore_ascii_case("ll"))
+}
+
 fn scale(m: &Mat, k: f64) -> Mat {
     m.iter()
         .map(|row| row.iter().map(|v| v * k).collect())
@@ -471,7 +479,15 @@ impl Writer {
                 );
                 o.insert("gs".into(), matrix(&s.g));
                 o.insert("bs".into(), matrix(&s.b));
-                o.insert("configuration".into(), json!("WYE"));
+                // A delta bank carries a `conn` marker and an off diagonal B
+                // matrix; emitting it as WYE would describe a line to line
+                // admittance as line to ground.
+                let configuration = if shunt_is_delta(&s.extras) {
+                    "DELTA"
+                } else {
+                    "WYE"
+                };
+                o.insert("configuration".into(), json!(configuration));
                 o.insert("model".into(), json!("CAPACITOR"));
                 o.insert("dispatchable".into(), json!("NO"));
                 o.insert("status".into(), Self::status(&s.extras));
@@ -479,7 +495,7 @@ impl Writer {
                     "source_id".into(),
                     json!(format!("capacitor.{}", s.name.to_lowercase())),
                 );
-                self.extras_dropped(&s.extras, &["kv", "kvar"], &what);
+                self.extras_dropped(&s.extras, &["kv", "kvar", "conn"], &what);
                 shunts.insert(s.name.to_lowercase(), Value::Object(o));
             }
             doc.insert("shunt".into(), Value::Object(shunts));
