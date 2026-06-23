@@ -1161,19 +1161,39 @@ impl Reader<'_> {
     // ----- reactor → shunt -----------------------------------------------
 
     /// A grounding (shunt) reactor specified by `kvar`/`kv` maps to a shunt
-    /// with inductive (negative) susceptance, the sign mirror of a
-    /// capacitor. Series reactors (`bus2`), delta banks, and the
-    /// impedance-defined forms (`r`/`x`, `z*`, the matrices, `lmh`, the
-    /// curves) override the kvar interpretation in the engine, so they stay
-    /// untyped with a precise warning rather than emit a wrong admittance.
+    /// with inductive (negative) susceptance, the sign mirror of a capacitor.
+    /// A reactor from a bus terminal to the same bus's node 0 is also a shunt;
+    /// when it uses `r`/`x`, store the equivalent conductance and susceptance.
+    /// Other `bus2` reactors are series elements and stay untyped.
     fn reactor(&mut self, obj: &RawObject) {
         let props = Props::new(obj);
-        // Any of these defines the impedance directly; kvar/kv is then
-        // ignored by the engine, so typing it as a kvar shunt would invent
-        // an admittance the source never asked for.
+        let phases = self.usize_or(&props, "phases", "reactor", &obj.name, dd::reactor::PHASES);
+        if phases == 0 {
+            self.warn(format!(
+                "reactor {}: nonpositive `phases` value is not a typed shunt; kept untyped",
+                obj.name
+            ));
+            self.net.untyped.push(UntypedObject::from(obj));
+            return;
+        }
+        let bus = bus_spec(props.get("bus1"), "");
+        let bus2 = props.get("bus2").map(super::lex::Value::to_bus_spec);
+        let grounding_return = bus2
+            .as_ref()
+            .is_some_and(|return_bus| same_bus_ground_return(&bus, return_bus, phases));
+
+        if bus2.is_some() && !grounding_return {
+            self.warn(format!(
+                "reactor {}: series reactors (bus2) are not typed yet; kept untyped",
+                obj.name
+            ));
+            self.net.untyped.push(UntypedObject::from(obj));
+            return;
+        }
+
         if let Some(form) = REACTOR_IMPEDANCE_FORMS
             .iter()
-            .find(|k| props.by_name.contains_key(**k))
+            .find(|k| !matches!(**k, "r" | "x") && props.by_name.contains_key(**k))
         {
             self.warn(format!(
                 "reactor {}: impedance form (`{form}`) is not typed yet; kept untyped",
@@ -1182,7 +1202,70 @@ impl Reader<'_> {
             self.net.untyped.push(UntypedObject::from(obj));
             return;
         }
+        let has_rx = props.by_name.contains_key("r") || props.by_name.contains_key("x");
+        if has_rx {
+            if grounding_return {
+                self.grounding_impedance_reactor(obj, &props, &bus, phases);
+            } else {
+                let form = if props.by_name.contains_key("r") {
+                    "r"
+                } else {
+                    "x"
+                };
+                self.warn(format!(
+                    "reactor {}: impedance form (`{form}`) is not typed yet; kept untyped",
+                    obj.name
+                ));
+                self.net.untyped.push(UntypedObject::from(obj));
+            }
+            return;
+        }
+
         self.kvar_shunt_with_props(obj, &props, REACTOR_KVAR_SHUNT);
+    }
+
+    fn grounding_impedance_reactor(
+        &mut self,
+        obj: &RawObject,
+        props: &Props<'_>,
+        bus: &BusSpec,
+        phases: usize,
+    ) {
+        let resistance = props
+            .get("r")
+            .and_then(|v| v.to_f64(Some(self.vars)).ok())
+            .unwrap_or(0.0);
+        let reactance = props
+            .get("x")
+            .and_then(|v| v.to_f64(Some(self.vars)).ok())
+            .unwrap_or(0.0);
+        let denom = resistance * resistance + reactance * reactance;
+        if !denom.is_finite() || denom <= 0.0 {
+            self.warn(format!(
+                "reactor {}: zero impedance grounding reactor is not a typed shunt; kept untyped",
+                obj.name
+            ));
+            self.net.untyped.push(UntypedObject::from(obj));
+            return;
+        }
+        let map = self.terminals(bus, phases, phases + 1, phases);
+        let dim = map.len();
+        let mut conductance = vec![vec![0.0; dim]; dim];
+        let mut susceptance = vec![vec![0.0; dim]; dim];
+        let y_g = resistance / denom;
+        let y_b = -reactance / denom;
+        for idx in 0..dim {
+            conductance[idx][idx] = y_g;
+            susceptance[idx][idx] = y_b;
+        }
+        self.net.shunts.push(DistShunt {
+            name: obj.name.clone(),
+            bus: bus.name.clone(),
+            terminal_map: map,
+            g: conductance,
+            b: susceptance,
+            extras: extras_from_leftovers(props),
+        });
     }
 
     fn kvar_shunt(&mut self, obj: &RawObject, spec: KvarShuntSpec) {
@@ -1191,14 +1274,6 @@ impl Reader<'_> {
     }
 
     fn kvar_shunt_with_props(&mut self, obj: &RawObject, props: &Props<'_>, spec: KvarShuntSpec) {
-        if props.by_name.contains_key("bus2") {
-            self.warn(format!(
-                "{} {}: series {} (bus2) are not typed yet; kept untyped",
-                spec.class, obj.name, spec.series_name
-            ));
-            self.net.untyped.push(UntypedObject::from(obj));
-            return;
-        }
         let phases = self.usize_or(props, "phases", spec.class, &obj.name, spec.default_phases);
         if phases == 0 {
             self.warn(format!(
@@ -1209,13 +1284,26 @@ impl Reader<'_> {
             return;
         }
         // InterpretConnection: `d*` and `ll` are delta for both Capacitor and
-        // Reactor, and delta banks are not a shunt-to-ground matrix.
+        // Reactor. Delta banks are line to line shunts represented by a nodal
+        // admittance matrix.
         let conn_delta = props.get("conn").is_some_and(|v| {
             v.text.to_ascii_lowercase().starts_with('d') || v.text.eq_ignore_ascii_case("ll")
         });
-        if conn_delta {
+        let bus = bus_spec(props.get("bus1"), "");
+        if let Some(return_bus) = props.get("bus2").map(super::lex::Value::to_bus_spec) {
+            if !same_bus_ground_return(&bus, &return_bus, phases) {
+                self.warn(format!(
+                    "{} {}: series {} (bus2) are not typed yet; kept untyped",
+                    spec.class, obj.name, spec.series_name
+                ));
+                self.net.untyped.push(UntypedObject::from(obj));
+                return;
+            }
+        }
+
+        if conn_delta && phases == 1 && bus.nodes.len() < 2 {
             self.warn(format!(
-                "{} {}: delta connection is not typed yet; kept untyped",
+                "{} {}: single phase delta shunt needs two bus nodes; kept untyped",
                 spec.class, obj.name
             ));
             self.net.untyped.push(UntypedObject::from(obj));
@@ -1233,13 +1321,15 @@ impl Reader<'_> {
             });
         let kv = self.f64_or(props, "kv", spec.class, &obj.name, spec.default_kv);
         // A wye bank's kv is line to line for 2 or 3 phases, line to neutral
-        // otherwise.
-        let v_phase = if phases == 2 || phases == 3 {
+        // otherwise. A delta bank's kv is line to line across each branch.
+        let v_ref = if conn_delta {
+            kv * 1e3
+        } else if phases == 2 || phases == 3 {
             kv * 1e3 / 3f64.sqrt()
         } else {
             kv * 1e3
         };
-        if !v_phase.is_finite() || v_phase <= 0.0 {
+        if !v_ref.is_finite() || v_ref <= 0.0 {
             self.warn(format!(
                 "{} {}: invalid `kv` value is not a typed shunt; kept untyped",
                 spec.class, obj.name
@@ -1247,27 +1337,43 @@ impl Reader<'_> {
             self.net.untyped.push(UntypedObject::from(obj));
             return;
         }
-        let b_phase = spec.b_sign * kvar * 1e3 / phases as f64 / (v_phase * v_phase);
 
-        let bus = bus_spec(props.get("bus1"), "");
-        // The default return (bus2) is the same bus's ground; register the
-        // ground connection but keep the map and matrices phase only, the
-        // shape a shunt-to-ground admittance has downstream.
-        let map = self.terminals(&bus, phases, phases + 1, phases);
-        let n = map.len();
-        let mut b = vec![vec![0.0; n]; n];
-        for (i, row) in b.iter_mut().enumerate().take(phases) {
-            row[i] = b_phase;
-        }
+        let (nconds, keep) = if conn_delta {
+            let keep = match phases {
+                1 => 2,
+                2 => 3,
+                _ => phases,
+            };
+            (keep, keep)
+        } else {
+            // The default return is the same bus's ground; register the ground
+            // connection but keep the map and matrices phase only, the shape a
+            // shunt-to-ground admittance has downstream.
+            (phases + 1, phases)
+        };
+        let map = self.terminals(&bus, phases, nconds, keep);
+        let Some(susceptance) =
+            kvar_shunt_matrix(&map, phases, conn_delta, kvar, v_ref, spec.b_sign)
+        else {
+            self.warn(format!(
+                "{} {}: delta shunt terminal map is not typed; kept untyped",
+                spec.class, obj.name
+            ));
+            self.net.untyped.push(UntypedObject::from(obj));
+            return;
+        };
         let mut extras = extras_from_leftovers(props);
         self.stash_kv_and_phases(props, &mut extras, kv, phases);
         extras.insert("kvar".into(), kvar.into());
+        if conn_delta {
+            extras.insert("conn".into(), "delta".into());
+        }
         self.net.shunts.push(DistShunt {
             name: obj.name.clone(),
             bus: bus.name,
             terminal_map: map,
-            g: vec![vec![0.0; n]; n],
-            b,
+            g: vec![vec![0.0; susceptance.len()]; susceptance.len()],
+            b: susceptance,
             extras,
         });
     }
@@ -1436,6 +1542,64 @@ fn scale_mat(m: &Mat, k: f64) -> Mat {
     m.iter()
         .map(|row| row.iter().map(|v| v * k).collect())
         .collect()
+}
+
+fn filled_phase_nodes(spec: &BusSpec, phases: usize) -> Vec<i32> {
+    let mut nodes: Vec<i32> = (1..=i32::try_from(phases).unwrap_or(i32::MAX)).collect();
+    for (idx, &node) in spec.nodes.iter().enumerate().take(phases) {
+        nodes[idx] = node.max(0);
+    }
+    nodes
+}
+
+fn same_bus_ground_return(bus: &BusSpec, return_bus: &BusSpec, phases: usize) -> bool {
+    bus.name.eq_ignore_ascii_case(&return_bus.name)
+        && !return_bus.nodes.is_empty()
+        && filled_phase_nodes(return_bus, phases)
+            .iter()
+            .all(|&n| n <= 0)
+}
+
+fn delta_edges(n: usize, phases: usize) -> Vec<(usize, usize)> {
+    if n < 2 {
+        Vec::new()
+    } else if phases >= 3 && n >= 3 {
+        (0..n).map(|i| (i, (i + 1) % n)).collect()
+    } else {
+        let branches = phases.max(1).min(n - 1);
+        (0..branches).map(|i| (i, i + 1)).collect()
+    }
+}
+
+fn kvar_shunt_matrix(
+    map: &[String],
+    phases: usize,
+    conn_delta: bool,
+    kvar: f64,
+    v_ref: f64,
+    b_sign: f64,
+) -> Option<Mat> {
+    let dim = map.len();
+    let mut susceptance = vec![vec![0.0; dim]; dim];
+    if conn_delta {
+        let edges = delta_edges(dim, phases);
+        if edges.is_empty() || map.iter().any(|t| t == "0") {
+            return None;
+        }
+        let b_branch = b_sign * kvar * 1e3 / edges.len() as f64 / (v_ref * v_ref);
+        for (from, to) in edges {
+            susceptance[from][from] += b_branch;
+            susceptance[to][to] += b_branch;
+            susceptance[from][to] -= b_branch;
+            susceptance[to][from] -= b_branch;
+        }
+    } else {
+        let b_phase = b_sign * kvar * 1e3 / phases as f64 / (v_ref * v_ref);
+        for (idx, row) in susceptance.iter_mut().enumerate().take(phases) {
+            row[idx] = b_phase;
+        }
+    }
+    Some(susceptance)
 }
 
 fn bus_spec(v: Option<&Value>, fallback: &str) -> BusSpec {
@@ -1702,12 +1866,15 @@ mod tests {
              New Capacitor.cap bus1=b.1.2.3 phases=3 conn=ll kvar=600 kv=4.16",
         );
         assert_eq!(net.generators[0].configuration, Configuration::Delta);
-        // Delta capacitors stay untyped, same as conn=delta.
-        assert!(net.shunts.is_empty());
+        // `ll` capacitor banks use the delta shunt path.
+        assert_eq!(net.shunts.len(), 1);
+        let sh = &net.shunts[0];
+        assert!(sh.b[0][1] < 0.0, "{:?}", sh.b);
+        assert_eq!(sh.terminal_map, vec!["1", "2", "3"]);
         assert!(
             net.untyped
                 .iter()
-                .any(|u| u.class.eq_ignore_ascii_case("capacitor") && u.name == "cap")
+                .all(|u| !(u.class.eq_ignore_ascii_case("capacitor") && u.name == "cap"))
         );
     }
 

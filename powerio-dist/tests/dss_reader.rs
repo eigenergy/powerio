@@ -312,7 +312,111 @@ fn reactor_defaults_are_materialized_and_recorded() {
 }
 
 #[test]
-fn series_and_impedance_reactors_stay_untyped() {
+#[allow(clippy::float_cmp)]
+fn grounding_impedance_reactors_type_as_conductive_shunts() {
+    use powerio_dist::parse_dss_str;
+    let net = parse_dss_str(
+        "New Circuit.c basekv=0.4\n\
+         New Reactor.tx_busgrounding_B179 phases=1 bus1=B179.4 bus2=B179.0 r=0.3 x=0.0\n\
+         New Reactor.loadbusgrounding_B3230 phases=1 bus1=B3230.4 bus2=B3230.0 r=10.0 x=0.0\n\
+         New Reactor.loadbusgrounding_B2656 phases=1 bus1=B2656.4 bus2=B2656.0 r=10.0 x=0.0\n",
+    );
+    assert_eq!(net.shunts.len(), 3, "{:?}", net.warnings);
+    assert!(
+        net.untyped
+            .iter()
+            .all(|o| !o.class.eq_ignore_ascii_case("reactor"))
+    );
+    let first = net
+        .shunts
+        .iter()
+        .find(|s| s.name == "tx_busgrounding_B179")
+        .unwrap();
+    assert_eq!(first.bus, "B179");
+    assert_eq!(first.terminal_map, vec!["4"]);
+    assert_eq!(first.g[0][0], 1.0 / 0.3);
+    assert_eq!(first.b[0][0], 0.0);
+    let second = net
+        .shunts
+        .iter()
+        .find(|s| s.name == "loadbusgrounding_B3230")
+        .unwrap();
+    assert_eq!(second.terminal_map, vec!["4"]);
+    assert_eq!(second.g[0][0], 0.1);
+    assert_eq!(second.b[0][0], 0.0);
+}
+
+#[test]
+fn grounding_reactor_with_rx_uses_admittance_inverse() {
+    use powerio_dist::parse_dss_str;
+    let net = parse_dss_str(
+        "New Circuit.c basekv=4.16\nNew Reactor.rz bus1=b2.1 bus2=b2.0 phases=1 r=3 x=4\n",
+    );
+    let sh = net.shunts.iter().find(|s| s.name == "rz").unwrap();
+    assert!((sh.g[0][0] - 0.12).abs() < 1e-12, "{}", sh.g[0][0]);
+    assert!((sh.b[0][0] + 0.16).abs() < 1e-12, "{}", sh.b[0][0]);
+}
+
+#[test]
+fn grounding_reactor_bus2_uses_the_dss_fill_rule() {
+    use powerio_dist::parse_dss_str;
+    let net = parse_dss_str(
+        "New Circuit.c basekv=4.16\n\
+         New Reactor.rz bus1=b2.1.2.3 bus2=b2.0 phases=3 r=3 x=4\n",
+    );
+    assert!(net.untyped.iter().any(|o| o.name == "rz"));
+    assert!(net.shunts.iter().all(|s| s.name != "rz"));
+    assert!(
+        net.warnings
+            .iter()
+            .any(|w| w.contains("reactor rz") && w.contains("series"))
+    );
+
+    let net = parse_dss_str(
+        "New Circuit.c basekv=4.16\n\
+         New Reactor.rz bus1=b2.1.2.3 bus2=b2.0.0.0 phases=3 r=3 x=4\n",
+    );
+    let sh = net.shunts.iter().find(|s| s.name == "rz").unwrap();
+    assert_eq!(sh.terminal_map, vec!["1", "2", "3"]);
+}
+
+#[test]
+fn zero_impedance_grounding_reactor_stays_untyped() {
+    use powerio_dist::parse_dss_str;
+    let net = parse_dss_str(
+        "New Circuit.c basekv=4.16\nNew Reactor.rz bus1=b2.1 bus2=b2.0 phases=1 r=0 x=0\n",
+    );
+    assert!(net.untyped.iter().any(|o| o.name == "rz"));
+    assert!(net.shunts.iter().all(|s| s.name != "rz"));
+    assert!(net.warnings.iter().any(|w| w.contains("zero impedance")));
+}
+
+#[test]
+fn delta_capacitor_and_reactor_type_as_shunt_matrices() {
+    use powerio_dist::parse_dss_str;
+    let net = parse_dss_str(
+        "New Circuit.c basekv=4.16\n\
+         New Capacitor.capd bus1=b2.1.2.3 phases=3 conn=delta kvar=900 kv=4.16\n\
+         New Reactor.rxd bus1=b3.1.2.3 phases=3 conn=delta kvar=600 kv=4.16\n",
+    );
+    assert_eq!(net.shunts.len(), 2, "{:?}", net.warnings);
+    assert!(
+        net.untyped
+            .iter()
+            .all(|o| o.name != "capd" && o.name != "rxd")
+    );
+    let cap = net.shunts.iter().find(|s| s.name == "capd").unwrap();
+    assert_eq!(cap.terminal_map, vec!["1", "2", "3"]);
+    assert!(cap.b[0][0] > 0.0, "{:?}", cap.b);
+    assert!(cap.b[0][1] < 0.0, "{:?}", cap.b);
+    assert!((cap.b[0][0] + cap.b[0][1] + cap.b[0][2]).abs() < 1e-12);
+    let rx = net.shunts.iter().find(|s| s.name == "rxd").unwrap();
+    assert!(rx.b[0][0] < 0.0, "{:?}", rx.b);
+    assert!(rx.b[0][1] > 0.0, "{:?}", rx.b);
+}
+
+#[test]
+fn series_and_non_ground_impedance_reactors_stay_untyped() {
     use powerio_dist::parse_dss_str;
     // Series reactor (bus2): deferred, like the series capacitor.
     let net = parse_dss_str(
@@ -325,8 +429,7 @@ fn series_and_impedance_reactors_stay_untyped() {
             .iter()
             .any(|w| w.contains("reactor rs") && w.contains("series"))
     );
-    // Impedance form (r/x): kvar is ignored by the engine, so we refuse to
-    // invent a susceptance and keep it untyped instead.
+    // Impedance form without an explicit ground return is not a shunt.
     let net =
         parse_dss_str("New Circuit.c basekv=4.16\nNew Reactor.rz bus1=b2 phases=3 r=0.1 x=5\n");
     assert!(net.untyped.iter().any(|o| o.name == "rz"));

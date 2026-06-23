@@ -944,90 +944,172 @@ impl DssWriter {
         }
     }
 
+    fn write_impedance_shunt(&mut self, sh: &crate::model::DistShunt, phases: usize) {
+        self.check_name("reactor", &sh.name);
+        let Some((conductance, susceptance)) = first_diag_admittance(&sh.g, &sh.b, phases) else {
+            self.warn(format!(
+                "shunt {}: conductance matrix has no diagonal admittance; dropped from the output",
+                sh.name
+            ));
+            return;
+        };
+        if has_off_diagonal(&sh.g) || has_off_diagonal(&sh.b) {
+            self.warn(format!(
+                "shunt {}: off diagonal admittance has no scalar reactor expression; \
+                 only the first diagonal admittance is regenerated",
+                sh.name
+            ));
+        }
+        if !uniform_diag_admittance(&sh.g, &sh.b, phases, conductance, susceptance) {
+            self.warn(format!(
+                "shunt {}: diagonal admittances differ; only the first diagonal \
+                 admittance is regenerated",
+                sh.name
+            ));
+        }
+        let denom = conductance * conductance + susceptance * susceptance;
+        if !denom.is_finite() || denom <= 0.0 {
+            self.warn(format!(
+                "shunt {}: invalid grounding admittance; dropped from the output",
+                sh.name
+            ));
+            return;
+        }
+        let resistance = conductance / denom;
+        let reactance = -susceptance / denom;
+        let mut extras = sh.extras.clone();
+        extras.remove("kv");
+        extras.remove("kvar");
+        extras.remove("phases");
+        extras.remove("conn");
+        let ground = vec!["0".to_string(); phases.max(1)];
+        let mut line = format!(
+            "New Reactor.{} bus1={} bus2={} phases={} r={} x={}",
+            sh.name,
+            self.bus_ref(&sh.bus, &sh.terminal_map),
+            self.bus_ref(&sh.bus, &ground),
+            phases.max(1),
+            num(resistance),
+            num(reactance),
+        );
+        line.push_str(&self.extras_tail("reactor", &sh.name, &extras));
+        self.line_out(&line);
+    }
+
+    fn shunt_phases(
+        &mut self,
+        sh: &crate::model::DistShunt,
+        conn_delta: bool,
+        inferred_phases: usize,
+    ) -> usize {
+        if let Some(p) = extras_usize(&sh.extras, "phases") {
+            p.max(1)
+        } else if conn_delta {
+            self.element_phases(
+                &sh.extras,
+                &sh.terminal_map,
+                Configuration::Delta,
+                "shunt",
+                &sh.name,
+            )
+        } else {
+            inferred_phases
+        }
+    }
+
+    fn write_kvar_shunt(&mut self, sh: &crate::model::DistShunt, phases: usize, conn_delta: bool) {
+        let (b_max, b_min) = (0..phases.min(sh.b.len()))
+            .map(|idx| sh.b[idx][idx])
+            .fold((0.0_f64, 0.0_f64), |(mx, mn), v| (mx.max(v), mn.min(v)));
+        let (class, b_phase) = if b_max > 0.0 {
+            ("capacitor", b_max)
+        } else if b_min < 0.0 {
+            ("reactor", b_min)
+        } else {
+            self.warn(format!(
+                "shunt {}: no nonzero susceptance; dropped from the output",
+                sh.name
+            ));
+            return;
+        };
+        if b_max > 0.0 && b_min < 0.0 {
+            self.warn(format!(
+                "shunt {}: diagonal mixes capacitive and inductive phases; only the \
+                 {class} phases are regenerated",
+                sh.name
+            ));
+        }
+        self.check_name(class, &sh.name);
+        let off_diag = has_off_diagonal(&sh.b);
+        if off_diag && !conn_delta {
+            self.warn(format!(
+                "shunt {}: off diagonal susceptance has no {class} expression; \
+                 only the diagonal is regenerated",
+                sh.name
+            ));
+        }
+        let edges = if conn_delta {
+            delta_edges(sh.terminal_map.len(), phases)
+        } else {
+            Vec::new()
+        };
+        if conn_delta && edges.is_empty() {
+            self.warn(format!(
+                "shunt {}: delta terminal map has no branch expression; dropped from the output",
+                sh.name
+            ));
+            return;
+        }
+        if conn_delta && delta_branch_susceptance(&sh.b, &edges, sh.terminal_map.len()).is_none() {
+            self.warn(format!(
+                "shunt {}: delta susceptance matrix has no scalar {class} expression; \
+                 only the average branch susceptance is regenerated",
+                sh.name
+            ));
+        }
+        let configuration = if conn_delta {
+            Configuration::Delta
+        } else {
+            Configuration::Wye
+        };
+        let kv = self.element_kv(&sh.extras, &sh.bus, phases, configuration, &sh.name, class);
+        let kvar = extras_f64(&sh.extras, "kvar")
+            .unwrap_or_else(|| shunt_kvar(sh, phases, conn_delta, &edges, b_phase, kv));
+        let mut extras = sh.extras.clone();
+        extras.remove("kv");
+        extras.remove("kvar");
+        extras.remove("phases");
+        extras.remove("conn");
+        let conn = if conn_delta { "delta" } else { "wye" };
+        let decl = if class == "reactor" {
+            "Reactor"
+        } else {
+            "Capacitor"
+        };
+        let mut line = format!(
+            "New {decl}.{} bus1={} phases={phases} conn={conn} kv={} kvar={}",
+            sh.name,
+            self.bus_ref(&sh.bus, &sh.terminal_map),
+            num(kv),
+            num(kvar),
+        );
+        line.push_str(&self.extras_tail(class, &sh.name, &extras));
+        self.line_out(&line);
+    }
+
     fn shunts(&mut self, net: &DistNetwork) {
         for sh in &net.shunts {
-            // A purely capacitive shunt has positive diagonal susceptance and
-            // regenerates as a Capacitor; a grounding reactor carries the
-            // inductive (negative) sign and regenerates as a Reactor. The
-            // sign is the class discriminator, the mirror of the reader.
-            let phases = extras_usize(&sh.extras, "phases").unwrap_or(sh.terminal_map.len());
-            // One pass over the diagonal for both extremes.
-            let (b_max, b_min) = (0..phases.min(sh.b.len()))
-                .map(|i| sh.b[i][i])
-                .fold((0.0_f64, 0.0_f64), |(mx, mn), v| (mx.max(v), mn.min(v)));
-            let (class, b_phase) = if b_max > 0.0 {
-                ("capacitor", b_max)
-            } else if b_min < 0.0 {
-                ("reactor", b_min)
+            let stashed_delta = shunt_stashed_delta(sh);
+            let inferred_phases =
+                extras_usize(&sh.extras, "phases").unwrap_or_else(|| sh.terminal_map.len().max(1));
+            let conn_delta = stashed_delta
+                || looks_like_delta_shunt(&sh.b, sh.terminal_map.len(), inferred_phases);
+            let phases = self.shunt_phases(sh, conn_delta, inferred_phases);
+            if has_nonzero(&sh.g) {
+                self.write_impedance_shunt(sh, phases);
             } else {
-                self.warn(format!(
-                    "shunt {}: no nonzero susceptance; dropped from the output",
-                    sh.name
-                ));
-                continue;
-            };
-            if b_max > 0.0 && b_min < 0.0 {
-                // Both signs on the diagonal: only the dominant class is
-                // emitted; the opposite-sign phases are not regenerated.
-                self.warn(format!(
-                    "shunt {}: diagonal mixes capacitive and inductive phases; only the \
-                     {class} phases are regenerated",
-                    sh.name
-                ));
+                self.write_kvar_shunt(sh, phases, conn_delta);
             }
-            self.check_name(class, &sh.name);
-            let off_diag =
-                sh.b.iter()
-                    .enumerate()
-                    .any(|(i, row)| row.iter().enumerate().any(|(j, &v)| i != j && v != 0.0));
-            if off_diag {
-                self.warn(format!(
-                    "shunt {}: off diagonal susceptance has no {class} expression; \
-                     only the diagonal is regenerated",
-                    sh.name
-                ));
-            }
-            // Any (kv, kvar) pair with |kvar| = |b| v^2 reproduces the same
-            // admittance; the recorded pair (when the source carried one)
-            // emits verbatim, keeping the text stable across round trips.
-            let kv = self.element_kv(
-                &sh.extras,
-                &sh.bus,
-                phases,
-                Configuration::Wye,
-                &sh.name,
-                class,
-            );
-            let kvar = extras_f64(&sh.extras, "kvar").unwrap_or_else(|| {
-                // The reader's wye convention: line to line kv for 2 and 3
-                // phase, line to neutral for single phase. kvar is the
-                // positive rating; the inductive sign lives in the model's b.
-                let v_phase = if matches!(phases, 2 | 3) {
-                    kv * 1e3 / 3f64.sqrt()
-                } else {
-                    kv * 1e3
-                };
-                b_phase.abs() * v_phase * v_phase * phases as f64 / 1e3
-            });
-            let mut extras = sh.extras.clone();
-            extras.remove("kv");
-            extras.remove("kvar");
-            extras.remove("phases");
-            extras.remove("conn");
-            let decl = if class == "reactor" {
-                "Reactor"
-            } else {
-                "Capacitor"
-            };
-            let mut s = format!(
-                "New {decl}.{} bus1={} phases={phases} conn=wye kv={} kvar={}",
-                sh.name,
-                self.bus_ref(&sh.bus, &sh.terminal_map),
-                num(kv),
-                num(kvar),
-            );
-            s.push_str(&self.extras_tail(class, &sh.name, &extras));
-            self.line_out(&s);
         }
         self.out.push('\n');
     }
@@ -1101,6 +1183,156 @@ fn element_conn(extras: &Extras, configuration: Configuration) -> &'static str {
         Configuration::Delta => "delta",
         Configuration::SinglePhase if stash_delta => "delta",
         _ => "wye",
+    }
+}
+
+fn has_nonzero(m: &Mat) -> bool {
+    m.iter().flatten().any(|&v| v != 0.0)
+}
+
+fn has_off_diagonal(m: &Mat) -> bool {
+    m.iter()
+        .enumerate()
+        .any(|(i, row)| row.iter().enumerate().any(|(j, &v)| i != j && v != 0.0))
+}
+
+fn diag_at(m: &Mat, i: usize) -> f64 {
+    m.get(i).and_then(|row| row.get(i)).copied().unwrap_or(0.0)
+}
+
+fn matrix_scale(m: &Mat) -> f64 {
+    m.iter().flatten().fold(0.0_f64, |acc, &v| acc.max(v.abs()))
+}
+
+fn close(a: f64, b: f64, scale: f64) -> bool {
+    (a - b).abs() <= 1e-12_f64.max(scale * 1e-9)
+}
+
+fn first_diag_admittance(g: &Mat, b: &Mat, phases: usize) -> Option<(f64, f64)> {
+    (0..phases.max(1)).find_map(|i| {
+        let gi = diag_at(g, i);
+        let bi = diag_at(b, i);
+        (gi != 0.0 || bi != 0.0).then_some((gi, bi))
+    })
+}
+
+fn uniform_diag_admittance(g: &Mat, b: &Mat, phases: usize, g0: f64, b0: f64) -> bool {
+    let scale = matrix_scale(g)
+        .max(matrix_scale(b))
+        .max(g0.abs())
+        .max(b0.abs());
+    (0..phases.max(1)).all(|i| close(diag_at(g, i), g0, scale) && close(diag_at(b, i), b0, scale))
+}
+
+fn shunt_stashed_delta(sh: &crate::model::DistShunt) -> bool {
+    sh.extras
+        .get("conn")
+        .and_then(|v| v.as_str())
+        .is_some_and(|t| t.to_ascii_lowercase().starts_with('d') || t.eq_ignore_ascii_case("ll"))
+}
+
+fn mat_at(m: &Mat, i: usize, j: usize) -> f64 {
+    m.get(i).and_then(|row| row.get(j)).copied().unwrap_or(0.0)
+}
+
+fn looks_like_delta_shunt(b: &Mat, terminals: usize, phases: usize) -> bool {
+    if terminals < 2 || !has_off_diagonal(b) {
+        return false;
+    }
+    let edges = delta_edges(terminals, phases);
+    delta_branch_susceptance(b, &edges, terminals).is_some()
+}
+
+fn delta_edges(n: usize, phases: usize) -> Vec<(usize, usize)> {
+    if n < 2 {
+        Vec::new()
+    } else if phases >= 3 && n >= 3 {
+        (0..n).map(|i| (i, (i + 1) % n)).collect()
+    } else {
+        let branches = phases.max(1).min(n - 1);
+        (0..branches).map(|i| (i, i + 1)).collect()
+    }
+}
+
+fn delta_branch_abs(b: &Mat, edges: &[(usize, usize)]) -> Option<f64> {
+    if edges.is_empty() {
+        return None;
+    }
+    let mut total = 0.0;
+    let mut count: usize = 0;
+    for &(i, j) in edges {
+        let Some(v) = b.get(i).and_then(|row| row.get(j)).copied() else {
+            continue;
+        };
+        total += v.abs();
+        count += 1;
+    }
+    (count > 0).then_some(total / count as f64)
+}
+
+fn delta_branch_susceptance(b: &Mat, edges: &[(usize, usize)], terminals: usize) -> Option<f64> {
+    if terminals < 2 || edges.is_empty() {
+        return None;
+    }
+    let scale = matrix_scale(b);
+    if scale == 0.0 {
+        return None;
+    }
+    let first = edges[0];
+    let branch = -mat_at(b, first.0, first.1);
+    if branch == 0.0 {
+        return None;
+    }
+    let scale = scale.max(branch.abs());
+    for (i, row) in b.iter().enumerate() {
+        for (j, &value) in row.iter().enumerate() {
+            if (i >= terminals || j >= terminals) && !close(value, 0.0, scale) {
+                return None;
+            }
+        }
+    }
+    for i in 0..terminals {
+        let incident = edges
+            .iter()
+            .filter(|&&(from, to)| from == i || to == i)
+            .count() as f64;
+        for j in 0..terminals {
+            let linked = edges
+                .iter()
+                .any(|&(from, to)| (from == i && to == j) || (from == j && to == i));
+            let expected = if i == j {
+                incident * branch
+            } else if linked {
+                -branch
+            } else {
+                0.0
+            };
+            if !close(mat_at(b, i, j), expected, scale) {
+                return None;
+            }
+        }
+    }
+    Some(branch)
+}
+
+fn shunt_kvar(
+    sh: &crate::model::DistShunt,
+    phases: usize,
+    conn_delta: bool,
+    edges: &[(usize, usize)],
+    b_phase: f64,
+    kv: f64,
+) -> f64 {
+    if conn_delta {
+        let b_branch = delta_branch_abs(&sh.b, edges).unwrap_or(b_phase.abs());
+        b_branch * (kv * 1e3) * (kv * 1e3) * edges.len() as f64 / 1e3
+    } else {
+        let v_phase = if matches!(phases, 2 | 3) {
+            kv * 1e3 / 3f64.sqrt()
+        } else {
+            kv * 1e3
+        };
+        b_phase.abs() * v_phase * v_phase * phases as f64 / 1e3
     }
 }
 
@@ -1562,6 +1794,158 @@ mod tests {
         let v_phase = kv * 1e3 / 3f64.sqrt();
         let expected = b_phase.abs() * v_phase * v_phase * 3.0 / 1e3;
         assert!(line.contains(&format!("kvar={}", num(expected))), "{line}");
+    }
+
+    #[test]
+    fn conductive_shunt_regenerates_as_grounding_reactor() {
+        let (_, vs) = three_phase_source(2400.0);
+        let b = bus("sb", &["1", "2", "3", "4"], &[]);
+        let sh = DistShunt {
+            name: "gnd".into(),
+            bus: "sb".into(),
+            terminal_map: strings(&["4"]),
+            g: vec![vec![1.0 / 0.3]],
+            b: vec![vec![0.0]],
+            extras: Extras::new(),
+        };
+        let net = DistNetwork {
+            base_frequency: 60.0,
+            buses: vec![b],
+            sources: vec![vs],
+            shunts: vec![sh],
+            ..DistNetwork::default()
+        };
+        let out = write_dss(&net);
+        let line = out
+            .text
+            .lines()
+            .find(|l| l.contains("Reactor.gnd"))
+            .unwrap_or_else(|| panic!("no reactor emitted in:\n{}", out.text));
+        assert!(line.contains("bus1=sb.4"), "{line}");
+        assert!(line.contains("bus2=sb.0"), "{line}");
+        assert!(line.contains("phases=1"), "{line}");
+        assert!(line.contains("r=0.3"), "{line}");
+        assert!(line.contains("x=-0"), "{line}");
+    }
+
+    #[test]
+    fn delta_shunt_regenerates_conn_delta() {
+        let (b, vs) = three_phase_source(2400.0);
+        let b_branch = 2e-4;
+        let bmat = vec![
+            vec![2.0 * b_branch, -b_branch, -b_branch],
+            vec![-b_branch, 2.0 * b_branch, -b_branch],
+            vec![-b_branch, -b_branch, 2.0 * b_branch],
+        ];
+        let mut extras = Extras::new();
+        extras.insert("conn".into(), serde_json::json!("delta"));
+        extras.insert("phases".into(), serde_json::json!("3"));
+        let sh = DistShunt {
+            name: "capd".into(),
+            bus: "sb".into(),
+            terminal_map: strings(&["1", "2", "3"]),
+            g: vec![vec![0.0; 3]; 3],
+            b: bmat,
+            extras,
+        };
+        let net = DistNetwork {
+            base_frequency: 60.0,
+            buses: vec![b],
+            sources: vec![vs],
+            shunts: vec![sh],
+            ..DistNetwork::default()
+        };
+        let out = write_dss(&net);
+        let line = out
+            .text
+            .lines()
+            .find(|l| l.contains("Capacitor.capd"))
+            .unwrap_or_else(|| panic!("no capacitor emitted in:\n{}", out.text));
+        assert!(line.contains("phases=3 conn=delta"), "{line}");
+        assert!(
+            !out.warnings.iter().any(|w| w.contains("off diagonal")),
+            "{:?}",
+            out.warnings
+        );
+    }
+
+    #[test]
+    fn non_scalar_delta_matrix_is_not_inferred_silently() {
+        let (b, vs) = three_phase_source(2400.0);
+        let bmat = vec![
+            vec![0.003, -0.001, -0.002],
+            vec![-0.001, 0.003, -0.002],
+            vec![-0.002, -0.002, 0.004],
+        ];
+        let sh = DistShunt {
+            name: "capx".into(),
+            bus: "sb".into(),
+            terminal_map: strings(&["1", "2", "3"]),
+            g: vec![vec![0.0; 3]; 3],
+            b: bmat,
+            extras: Extras::new(),
+        };
+        let net = DistNetwork {
+            base_frequency: 60.0,
+            buses: vec![b],
+            sources: vec![vs],
+            shunts: vec![sh],
+            ..DistNetwork::default()
+        };
+        let out = write_dss(&net);
+        let line = out
+            .text
+            .lines()
+            .find(|l| l.contains("Capacitor.capx"))
+            .unwrap_or_else(|| panic!("no capacitor emitted in:\n{}", out.text));
+        assert!(line.contains("conn=wye"), "{line}");
+        assert!(
+            out.warnings.iter().any(|w| w.contains("off diagonal")),
+            "{:?}",
+            out.warnings
+        );
+    }
+
+    #[test]
+    fn stashed_delta_matrix_warns_when_scalar_emission_is_lossy() {
+        let (b, vs) = three_phase_source(2400.0);
+        let bmat = vec![
+            vec![0.003, -0.001, -0.002],
+            vec![-0.001, 0.003, -0.002],
+            vec![-0.002, -0.002, 0.004],
+        ];
+        let mut extras = Extras::new();
+        extras.insert("conn".into(), serde_json::json!("delta"));
+        extras.insert("phases".into(), serde_json::json!("3"));
+        let sh = DistShunt {
+            name: "capx".into(),
+            bus: "sb".into(),
+            terminal_map: strings(&["1", "2", "3"]),
+            g: vec![vec![0.0; 3]; 3],
+            b: bmat,
+            extras,
+        };
+        let net = DistNetwork {
+            base_frequency: 60.0,
+            buses: vec![b],
+            sources: vec![vs],
+            shunts: vec![sh],
+            ..DistNetwork::default()
+        };
+        let out = write_dss(&net);
+        let line = out
+            .text
+            .lines()
+            .find(|l| l.contains("Capacitor.capx"))
+            .unwrap_or_else(|| panic!("no capacitor emitted in:\n{}", out.text));
+        assert!(line.contains("conn=delta"), "{line}");
+        assert!(
+            out.warnings
+                .iter()
+                .any(|w| w.contains("no scalar capacitor expression")),
+            "{:?}",
+            out.warnings
+        );
     }
 
     #[test]
