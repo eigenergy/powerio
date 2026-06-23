@@ -1,5 +1,20 @@
 # Changelog
 
+## 0.3.2
+
+- `powerio-dist` OpenDSS: grounding reactors written from a bus terminal to the
+  same bus's node 0 now type as shunts in BMOPF instead of staying untyped.
+  Impedance form reactors use the equivalent admittance matrix, so neutral
+  grounding resistors survive DSS to BMOPF conversion.
+- `powerio-dist` OpenDSS: delta capacitor and reactor banks now type as shunt
+  admittance matrices, including off diagonal branch terms, instead of being
+  dropped as untyped objects.
+- DSS writing now regenerates conductance bearing shunts as grounding reactors
+  and preserves delta shunts as `conn=delta` where the typed model identifies
+  them.
+- No core or distribution C ABI break; `PIO_ABI_VERSION` stays 4 and
+  `PIO_DIST_ABI_VERSION` stays 1.
+
 ## 0.3.1
 
 - Parser warnings: PSS/E and PowerWorld `.aux` parse warnings now surface

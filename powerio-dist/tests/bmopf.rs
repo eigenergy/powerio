@@ -136,6 +136,57 @@ fn dss_fixtures_emit_valid_bmopf() {
     }
 }
 
+#[test]
+fn dss_grounding_reactors_emit_bmopf_shunts() {
+    let v = schema_validator();
+    let net = parse_dss_str(
+        "New Circuit.c basekv=0.4\n\
+         New Reactor.tx_busgrounding_B179 phases=1 bus1=B179.4 bus2=B179.0 r=0.3 x=0.0\n\
+         New Reactor.loadbusgrounding_B3230 phases=1 bus1=B3230.4 bus2=B3230.0 r=10.0 x=0.0\n\
+         New Reactor.loadbusgrounding_B2656 phases=1 bus1=B2656.4 bus2=B2656.0 r=10.0 x=0.0\n",
+    );
+    let out = write_bmopf_json(&net);
+    assert_eq!(errors(&v, &out.text), Vec::<String>::new());
+    assert!(
+        !out.warnings
+            .iter()
+            .any(|w| w.contains("reactor") || w.contains("ground")),
+        "{:?}",
+        out.warnings
+    );
+    let doc: serde_json::Value = serde_json::from_str(&out.text).unwrap();
+    let sh = &doc["shunt"];
+    assert_eq!(sh.as_object().unwrap().len(), 3);
+    assert_eq!(
+        sh["tx_busgrounding_B179"]["terminal_map"],
+        serde_json::json!(["4"])
+    );
+    assert_eq!(
+        sh["tx_busgrounding_B179"]["G_1_1"],
+        serde_json::json!(1.0 / 0.3)
+    );
+    assert_eq!(sh["tx_busgrounding_B179"]["B_1_1"], serde_json::json!(0.0));
+    assert_eq!(
+        sh["loadbusgrounding_B3230"]["G_1_1"],
+        serde_json::json!(0.1)
+    );
+}
+
+#[test]
+fn dss_delta_shunts_emit_bmopf_matrices() {
+    let v = schema_validator();
+    let net = parse_dss_str(
+        "New Circuit.c basekv=4.16\n\
+         New Capacitor.capd bus1=b2.1.2.3 phases=3 conn=delta kvar=900 kv=4.16\n\
+         New Reactor.rxd bus1=b3.1.2.3 phases=3 conn=delta kvar=600 kv=4.16\n",
+    );
+    let out = write_bmopf_json(&net);
+    assert_eq!(errors(&v, &out.text), Vec::<String>::new());
+    let doc: serde_json::Value = serde_json::from_str(&out.text).unwrap();
+    assert!(doc["shunt"]["capd"]["B_1_2"].as_f64().unwrap() < 0.0);
+    assert!(doc["shunt"]["rxd"]["B_1_2"].as_f64().unwrap() > 0.0);
+}
+
 /// A single phase wye/delta transformer (an open delta leg) must reach the
 /// BMOPF output as a `single_phase` entry, not drop, and the delta winding
 /// must carry both of its phase terminals end to end. This is issue #135's
