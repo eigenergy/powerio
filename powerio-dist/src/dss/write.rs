@@ -1060,6 +1060,13 @@ impl DssWriter {
             ));
             return;
         }
+        if conn_delta && delta_branch_susceptance(&sh.b, &edges, sh.terminal_map.len()).is_none() {
+            self.warn(format!(
+                "shunt {}: delta susceptance matrix has no scalar {class} expression; \
+                 only the average branch susceptance is regenerated",
+                sh.name
+            ));
+        }
         let configuration = if conn_delta {
             Configuration::Delta
         } else {
@@ -1095,7 +1102,8 @@ impl DssWriter {
             let stashed_delta = shunt_stashed_delta(sh);
             let inferred_phases =
                 extras_usize(&sh.extras, "phases").unwrap_or_else(|| sh.terminal_map.len().max(1));
-            let conn_delta = stashed_delta || looks_like_delta_shunt(&sh.b, inferred_phases);
+            let conn_delta = stashed_delta
+                || looks_like_delta_shunt(&sh.b, sh.terminal_map.len(), inferred_phases);
             let phases = self.shunt_phases(sh, conn_delta, inferred_phases);
             if has_nonzero(&sh.g) {
                 self.write_impedance_shunt(sh, phases);
@@ -1223,19 +1231,16 @@ fn shunt_stashed_delta(sh: &crate::model::DistShunt) -> bool {
         .is_some_and(|t| t.to_ascii_lowercase().starts_with('d') || t.eq_ignore_ascii_case("ll"))
 }
 
-fn looks_like_delta_shunt(b: &Mat, phases: usize) -> bool {
-    if b.len() < 2 || !has_off_diagonal(b) {
+fn mat_at(m: &Mat, i: usize, j: usize) -> f64 {
+    m.get(i).and_then(|row| row.get(j)).copied().unwrap_or(0.0)
+}
+
+fn looks_like_delta_shunt(b: &Mat, terminals: usize, phases: usize) -> bool {
+    if terminals < 2 || !has_off_diagonal(b) {
         return false;
     }
-    let scale = matrix_scale(b);
-    if scale == 0.0 {
-        return false;
-    }
-    let n = b.len().min(phases.max(2));
-    b.iter().take(n).all(|row| {
-        let sum: f64 = row.iter().take(n).sum();
-        close(sum, 0.0, scale)
-    })
+    let edges = delta_edges(terminals, phases);
+    delta_branch_susceptance(b, &edges, terminals).is_some()
 }
 
 fn delta_edges(n: usize, phases: usize) -> Vec<(usize, usize)> {
@@ -1263,6 +1268,51 @@ fn delta_branch_abs(b: &Mat, edges: &[(usize, usize)]) -> Option<f64> {
         count += 1;
     }
     (count > 0).then_some(total / count as f64)
+}
+
+fn delta_branch_susceptance(b: &Mat, edges: &[(usize, usize)], terminals: usize) -> Option<f64> {
+    if terminals < 2 || edges.is_empty() {
+        return None;
+    }
+    let scale = matrix_scale(b);
+    if scale == 0.0 {
+        return None;
+    }
+    let first = edges[0];
+    let branch = -mat_at(b, first.0, first.1);
+    if branch == 0.0 {
+        return None;
+    }
+    let scale = scale.max(branch.abs());
+    for (i, row) in b.iter().enumerate() {
+        for (j, &value) in row.iter().enumerate() {
+            if (i >= terminals || j >= terminals) && !close(value, 0.0, scale) {
+                return None;
+            }
+        }
+    }
+    for i in 0..terminals {
+        let incident = edges
+            .iter()
+            .filter(|&&(from, to)| from == i || to == i)
+            .count() as f64;
+        for j in 0..terminals {
+            let linked = edges
+                .iter()
+                .any(|&(from, to)| (from == i && to == j) || (from == j && to == i));
+            let expected = if i == j {
+                incident * branch
+            } else if linked {
+                -branch
+            } else {
+                0.0
+            };
+            if !close(mat_at(b, i, j), expected, scale) {
+                return None;
+            }
+        }
+    }
+    Some(branch)
 }
 
 fn shunt_kvar(
@@ -1814,6 +1864,85 @@ mod tests {
         assert!(line.contains("phases=3 conn=delta"), "{line}");
         assert!(
             !out.warnings.iter().any(|w| w.contains("off diagonal")),
+            "{:?}",
+            out.warnings
+        );
+    }
+
+    #[test]
+    fn non_scalar_delta_matrix_is_not_inferred_silently() {
+        let (b, vs) = three_phase_source(2400.0);
+        let bmat = vec![
+            vec![0.003, -0.001, -0.002],
+            vec![-0.001, 0.003, -0.002],
+            vec![-0.002, -0.002, 0.004],
+        ];
+        let sh = DistShunt {
+            name: "capx".into(),
+            bus: "sb".into(),
+            terminal_map: strings(&["1", "2", "3"]),
+            g: vec![vec![0.0; 3]; 3],
+            b: bmat,
+            extras: Extras::new(),
+        };
+        let net = DistNetwork {
+            base_frequency: 60.0,
+            buses: vec![b],
+            sources: vec![vs],
+            shunts: vec![sh],
+            ..DistNetwork::default()
+        };
+        let out = write_dss(&net);
+        let line = out
+            .text
+            .lines()
+            .find(|l| l.contains("Capacitor.capx"))
+            .unwrap_or_else(|| panic!("no capacitor emitted in:\n{}", out.text));
+        assert!(line.contains("conn=wye"), "{line}");
+        assert!(
+            out.warnings.iter().any(|w| w.contains("off diagonal")),
+            "{:?}",
+            out.warnings
+        );
+    }
+
+    #[test]
+    fn stashed_delta_matrix_warns_when_scalar_emission_is_lossy() {
+        let (b, vs) = three_phase_source(2400.0);
+        let bmat = vec![
+            vec![0.003, -0.001, -0.002],
+            vec![-0.001, 0.003, -0.002],
+            vec![-0.002, -0.002, 0.004],
+        ];
+        let mut extras = Extras::new();
+        extras.insert("conn".into(), serde_json::json!("delta"));
+        extras.insert("phases".into(), serde_json::json!("3"));
+        let sh = DistShunt {
+            name: "capx".into(),
+            bus: "sb".into(),
+            terminal_map: strings(&["1", "2", "3"]),
+            g: vec![vec![0.0; 3]; 3],
+            b: bmat,
+            extras,
+        };
+        let net = DistNetwork {
+            base_frequency: 60.0,
+            buses: vec![b],
+            sources: vec![vs],
+            shunts: vec![sh],
+            ..DistNetwork::default()
+        };
+        let out = write_dss(&net);
+        let line = out
+            .text
+            .lines()
+            .find(|l| l.contains("Capacitor.capx"))
+            .unwrap_or_else(|| panic!("no capacitor emitted in:\n{}", out.text));
+        assert!(line.contains("conn=delta"), "{line}");
+        assert!(
+            out.warnings
+                .iter()
+                .any(|w| w.contains("no scalar capacitor expression")),
             "{:?}",
             out.warnings
         );

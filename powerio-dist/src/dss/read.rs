@@ -1180,7 +1180,7 @@ impl Reader<'_> {
         let bus2 = props.get("bus2").map(super::lex::Value::to_bus_spec);
         let grounding_return = bus2
             .as_ref()
-            .is_some_and(|return_bus| same_bus_ground_return(&bus, return_bus));
+            .is_some_and(|return_bus| same_bus_ground_return(&bus, return_bus, phases));
 
         if bus2.is_some() && !grounding_return {
             self.warn(format!(
@@ -1291,7 +1291,7 @@ impl Reader<'_> {
         });
         let bus = bus_spec(props.get("bus1"), "");
         if let Some(return_bus) = props.get("bus2").map(super::lex::Value::to_bus_spec) {
-            if !same_bus_ground_return(&bus, &return_bus) {
+            if !same_bus_ground_return(&bus, &return_bus, phases) {
                 self.warn(format!(
                     "{} {}: series {} (bus2) are not typed yet; kept untyped",
                     spec.class, obj.name, spec.series_name
@@ -1544,10 +1544,20 @@ fn scale_mat(m: &Mat, k: f64) -> Mat {
         .collect()
 }
 
-fn same_bus_ground_return(bus: &BusSpec, return_bus: &BusSpec) -> bool {
+fn filled_phase_nodes(spec: &BusSpec, phases: usize) -> Vec<i32> {
+    let mut nodes: Vec<i32> = (1..=i32::try_from(phases).unwrap_or(i32::MAX)).collect();
+    for (idx, &node) in spec.nodes.iter().enumerate().take(phases) {
+        nodes[idx] = node.max(0);
+    }
+    nodes
+}
+
+fn same_bus_ground_return(bus: &BusSpec, return_bus: &BusSpec, phases: usize) -> bool {
     bus.name.eq_ignore_ascii_case(&return_bus.name)
         && !return_bus.nodes.is_empty()
-        && return_bus.nodes.iter().all(|&n| n <= 0)
+        && filled_phase_nodes(return_bus, phases)
+            .iter()
+            .all(|&n| n <= 0)
 }
 
 fn delta_edges(n: usize, phases: usize) -> Vec<(usize, usize)> {

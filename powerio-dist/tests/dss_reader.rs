@@ -358,6 +358,29 @@ fn grounding_reactor_with_rx_uses_admittance_inverse() {
 }
 
 #[test]
+fn grounding_reactor_bus2_uses_the_dss_fill_rule() {
+    use powerio_dist::parse_dss_str;
+    let net = parse_dss_str(
+        "New Circuit.c basekv=4.16\n\
+         New Reactor.rz bus1=b2.1.2.3 bus2=b2.0 phases=3 r=3 x=4\n",
+    );
+    assert!(net.untyped.iter().any(|o| o.name == "rz"));
+    assert!(net.shunts.iter().all(|s| s.name != "rz"));
+    assert!(
+        net.warnings
+            .iter()
+            .any(|w| w.contains("reactor rz") && w.contains("series"))
+    );
+
+    let net = parse_dss_str(
+        "New Circuit.c basekv=4.16\n\
+         New Reactor.rz bus1=b2.1.2.3 bus2=b2.0.0.0 phases=3 r=3 x=4\n",
+    );
+    let sh = net.shunts.iter().find(|s| s.name == "rz").unwrap();
+    assert_eq!(sh.terminal_map, vec!["1", "2", "3"]);
+}
+
+#[test]
 fn zero_impedance_grounding_reactor_stays_untyped() {
     use powerio_dist::parse_dss_str;
     let net = parse_dss_str(
