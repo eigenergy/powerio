@@ -616,3 +616,30 @@ fn push_value(s: &mut String, v: &str) {
         s.push_str(v);
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn strip_comment_keeps_double_slash_inside_quotes() {
+        assert_eq!(
+            strip_comment(r#"1 "http://example" // trailing"#),
+            r#"1 "http://example" "#
+        );
+    }
+
+    #[test]
+    fn csv_split_keeps_quoted_commas_and_empty_values() {
+        let mut out = Vec::new();
+        split_values_into(r#""a,b", "", plain"#, true, &mut out);
+        assert_eq!(out, vec!["a,b", "", "plain"]);
+    }
+
+    #[test]
+    fn whitespace_split_keeps_quoted_comment_marker() {
+        let mut out = Vec::new();
+        split_values_into(r#"one "two // three" four"#, false, &mut out);
+        assert_eq!(out, vec!["one", "two // three", "four"]);
+    }
+}

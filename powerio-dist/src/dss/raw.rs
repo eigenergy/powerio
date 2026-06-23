@@ -287,9 +287,9 @@ struct Executor<'l, L: Loader> {
 }
 
 /// Splits script text into command lines, dropping block comments. A block
-/// comment starts on a line whose first character is `/` followed by `*`
-/// and ends on the first line containing `*/`; both boundary lines are
-/// consumed whole, matching the OpenDSS executive.
+/// comment starts when the first nonspace characters are `/*` and ends on the
+/// first line containing `*/`; both boundary lines are consumed whole,
+/// matching the OpenDSS executive.
 fn command_lines(text: &str) -> impl Iterator<Item = (usize, &str)> {
     let mut in_block = false;
     text.lines().enumerate().filter_map(move |(i, line)| {
@@ -299,7 +299,7 @@ fn command_lines(text: &str) -> impl Iterator<Item = (usize, &str)> {
             }
             return None;
         }
-        if line.starts_with("/*") {
+        if line.trim_start().starts_with("/*") {
             in_block = true;
             if line.contains("*/") {
                 in_block = false;
@@ -978,8 +978,15 @@ mod tests {
     }
 
     #[test]
+    fn indented_block_comments_skip_lines() {
+        let raw = parse("  /* comment\nNew Line.l1 length=1\n*/\nNew Line.l2 length=2");
+        assert!(raw.find("line", "l1").is_none());
+        assert!(raw.find("line", "l2").is_some());
+    }
+
+    #[test]
     fn one_line_block_comment() {
-        let raw = parse("/* x */\nNew Line.l2 length=2");
+        let raw = parse("\t/* x */\nNew Line.l2 length=2");
         assert!(raw.find("line", "l2").is_some());
     }
 

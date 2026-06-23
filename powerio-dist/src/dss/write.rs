@@ -630,7 +630,16 @@ impl DssWriter {
     }
 
     fn sources(&mut self, net: &DistNetwork) {
-        for (i, vs) in net.sources.iter().enumerate() {
+        let mut order: Vec<usize> = (0..net.sources.len()).collect();
+        if let Some(source_idx) = net
+            .sources
+            .iter()
+            .position(|vs| vs.name.eq_ignore_ascii_case("source"))
+        {
+            order.swap(0, source_idx);
+        }
+        for (i, source_idx) in order.into_iter().enumerate() {
+            let vs = &net.sources[source_idx];
             let phases = source_phases(net, vs);
             let energized = vs.v_magnitude.iter().filter(|&&v| v > 0.0).count();
             if energized > 0 && energized != phases {
@@ -1782,6 +1791,60 @@ mod tests {
                 .any(|w| w.contains("phases=3") && w.contains("positive")),
             "{:?}",
             out.warnings
+        );
+    }
+
+    #[test]
+    fn multiple_sources_keep_named_vsource_when_source_exists() {
+        let third = 2.0 * std::f64::consts::FRAC_PI_3;
+        let source = VoltageSource {
+            name: "source".into(),
+            bus: "Bx".into(),
+            terminal_map: strings(&["1", "2", "3", "4"]),
+            v_magnitude: vec![20_000.0, 20_000.0, 20_000.0, 0.0],
+            v_angle: vec![0.0, -third, third, 0.0],
+            extras: Extras::new(),
+        };
+        let wind = VoltageSource {
+            name: "WindGen1".into(),
+            bus: "Bg".into(),
+            terminal_map: strings(&["1", "2", "3", "4"]),
+            v_magnitude: vec![400.0, 400.0, 400.0, 0.0],
+            v_angle: vec![
+                -std::f64::consts::FRAC_PI_3,
+                std::f64::consts::PI,
+                third / 2.0,
+                0.0,
+            ],
+            extras: Extras::new(),
+        };
+        let net = DistNetwork {
+            name: Some("dg".into()),
+            base_frequency: 60.0,
+            buses: vec![
+                bus("Bg", &["1", "2", "3", "4"], &["4"]),
+                bus("Bx", &["1", "2", "3", "4"], &["4"]),
+            ],
+            sources: vec![wind, source],
+            ..DistNetwork::default()
+        };
+
+        let out = write_dss(&net).text;
+        let circuit = out.lines().find(|l| l.starts_with("New Circuit")).unwrap();
+        assert!(circuit.contains("bus1=Bx.1.2.3.0"), "{circuit}");
+        assert!(
+            out.lines()
+                .any(|l| l.starts_with("New Vsource.WindGen1") && l.contains("bus1=Bg.1.2.3.0")),
+            "{out}"
+        );
+        let reparsed = parse_dss_str(&out);
+        assert!(
+            reparsed
+                .sources
+                .iter()
+                .any(|vs| vs.name.eq_ignore_ascii_case("WindGen1")),
+            "{:?}",
+            reparsed.sources
         );
     }
 

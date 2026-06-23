@@ -6,7 +6,7 @@
 //! generic layer (see [`super::aux`]) and survives the same format round trip
 //! via the retained source.
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::fmt::Write as _;
 use std::sync::Arc;
 
@@ -37,6 +37,7 @@ pub(super) const BRANCH_DEVICE_TYPE: &str = "BranchDeviceType";
 pub(crate) fn parse_powerworld_source(
     source: Arc<String>,
     name_hint: Option<&str>,
+    warnings: &mut Vec<String>,
 ) -> Result<Network> {
     let content: &str = &source;
     // PowerWorld `.aux` does not carry the system base in the case data, so we
@@ -81,6 +82,7 @@ pub(crate) fn parse_powerworld_source(
         &["BusNum:1", "BusNumTo", "BusName_NomVolt:1"],
         &[LINE_CIRCUIT, "Circuit"],
     ]);
+    let mut unmodeled: BTreeMap<&str, usize> = BTreeMap::new();
     for blk in aux.data() {
         match blk.object_type.as_str() {
             "Bus" => merged_buses.absorb(
@@ -95,9 +97,19 @@ pub(crate) fn parse_powerworld_source(
             // fields; a transformer with no Branch record carries no impedance
             // and cannot stand alone, so unmatched rows are not created.
             "Transformer" => merged_branches.absorb(blk, false),
-            _ => {} // unmodeled object block: retained via the generic layer
+            _ => {
+                if !blk.rows.is_empty() {
+                    *unmodeled.entry(&blk.object_type).or_default() += blk.rows.len();
+                }
+            }
         }
     }
+    warnings.extend(unmodeled.into_iter().map(|(object, rows)| {
+        format!(
+            "PowerWorld .aux DATA {object} has {rows} row(s) not modeled in Network; \
+             retained only in source text for same-format writeback"
+        )
+    }));
 
     let mut buses = Vec::new();
     let mut bus_labels = HashMap::new();

@@ -2,8 +2,8 @@
 //!
 //! Each format module owns its reader and/or writer: MATPOWER `.m`,
 //! PowerModels JSON, PSS/E `.raw`, PowerWorld `.aux`, egret `ModelData` JSON,
-//! pandapower JSON, PyPSA CSV folders, and PSLF `.epc`. PowerWorld `.pwb`,
-//! PSLF `.epc`, and PowerWorld `.pwd` displays are read only. Case input and
+//! pandapower JSON, PyPSA CSV folders, and PSLF `.epc`. PowerWorld `.pwb`
+//! cases and PowerWorld `.pwd` displays are read only. Case input and
 //! output formats meet here, so adding a writable format is one module plus
 //! one hub registration.
 //! [`parse_file`] reads Network cases, detecting the format from its extension;
@@ -326,8 +326,7 @@ fn is_pypsa_csv_name(name: &str) -> bool {
     )
 }
 
-/// Whether a source format name means PSLF EPC. PSLF is read only and
-/// deliberately stays out of [`TargetFormat`].
+/// Whether a source format name means PSLF EPC.
 fn is_pslf_name(name: &str) -> bool {
     matches!(
         name.to_ascii_lowercase().replace(['-', '_'], "").as_str(),
@@ -346,7 +345,7 @@ fn is_pslf_name(name: &str) -> bool {
 /// egret (top level `elements` and `system`), the powerio-json snapshot (top
 /// level `buses`), else PowerModels. Pass `from` to force one. PowerWorld `.pwb`
 /// is a binary read only format with no retained source; PSLF `.epc` is text and
-/// read only. Returns [`Parsed`]: the network plus the reader's fidelity
+/// has a writer. Returns [`Parsed`]: the network plus the reader's fidelity
 /// warnings.
 ///
 /// The one path-based parser the CLI and the Python/C/Julia bindings share (each
@@ -450,7 +449,9 @@ fn read_source(source: Arc<String>, fmt: TargetFormat, name_hint: Option<&str>) 
             powermodels::parse_powermodels_json_source(source, name_hint)
         }
         TargetFormat::Psse { .. } => psse::parse_psse_source(source, name_hint, &mut warnings),
-        TargetFormat::PowerWorld => powerworld::parse_powerworld_source(source, name_hint),
+        TargetFormat::PowerWorld => {
+            powerworld::parse_powerworld_source(source, name_hint, &mut warnings)
+        }
         TargetFormat::EgretJson => egret::parse_egret_source(source, name_hint),
         TargetFormat::PandapowerJson => {
             pandapower::parse_pandapower_source(source, name_hint, &mut warnings)
@@ -541,9 +542,7 @@ pub fn parse_str(text: &str, format: &str) -> Result<Parsed> {
 /// Output of a parse: the network plus the reader's fidelity warnings,
 /// tables and columns the model cannot carry, reported instead of dropped
 /// silently. Empty for readers that don't report read warnings (currently
-/// every format except pandapower JSON and PyPSA CSV; the PSS/E and
-/// PowerWorld reductions are documented in docs/format-fidelity.md, not
-/// reported here yet).
+/// readers that do not need to reduce any source fields).
 ///
 /// `#[non_exhaustive]`: a returns-only type, so downstream code reads it but
 /// never constructs it, leaving room to add parse metadata without a breaking

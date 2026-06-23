@@ -7,7 +7,7 @@ use std::sync::Arc;
 use powerio_dist::dss::{parse_dss_file, parse_dss_str};
 use powerio_dist::{
     Configuration, DistNetwork, DistTransformer, Extras, Winding, WindingConn, parse_bmopf_file,
-    parse_bmopf_str, write_bmopf_json,
+    parse_bmopf_str, write_bmopf_json, write_dss,
 };
 
 fn fixture(rel: &str) -> PathBuf {
@@ -217,23 +217,100 @@ fn ieee13_conversion_warnings_name_every_loss() {
 }
 
 #[test]
-fn ten_conductor_linecode_is_valid_data_the_schema_rejects() {
+fn ten_conductor_linecode_is_schema_valid() {
     let v = schema_validator();
     let net = parse_dss_file(fixture("micro/linecode_10x10.dss")).unwrap();
     let out = write_bmopf_json(&net);
-    // The writer says what is about to happen...
     assert!(
         out.warnings
             .iter()
-            .any(|w| w.contains("double digit matrix keys"))
+            .all(|w| !w.contains("double digit matrix keys")),
+        "obsolete double digit warning still emitted: {:?}",
+        out.warnings
     );
-    // ...and the draft schema indeed rejects the document: the single
-    // digit key patterns (`^R_series_\d_\d`) do not match `R_series_10_10`,
-    // so additionalProperties: false refuses the key. The fix is
-    // `^R_series_\d+_\d+$`.
-    let errs = errors(&v, &out.text);
-    assert!(!errs.is_empty());
-    assert!(errs.iter().any(|e| e.contains("linecode")));
+    assert_eq!(errors(&v, &out.text), Vec::<String>::new());
+}
+
+#[test]
+fn fixed_generators_emit_as_negative_loads() {
+    let v = schema_validator();
+    let net = parse_dss_str(
+        "New Circuit.c\n\
+         New Generator.g bus1=b.1 phases=1 kv=2.4 kw=100 kvar=20",
+    );
+    let out = write_bmopf_json(&net);
+    assert_eq!(errors(&v, &out.text), Vec::<String>::new());
+    assert!(
+        out.warnings
+            .iter()
+            .any(|w| w.contains("generator g") && w.contains("negative load")),
+        "missing fixed generator warning: {:?}",
+        out.warnings
+    );
+    let doc: serde_json::Value = serde_json::from_str(&out.text).unwrap();
+    assert!(
+        doc.get("generator").is_none(),
+        "fixed generator was emitted"
+    );
+    assert_eq!(doc["load"]["g"]["p_nom"], serde_json::json!([-100_000.0]));
+    assert_eq!(doc["load"]["g"]["q_nom"], serde_json::json!([-20_000.0]));
+}
+
+#[test]
+fn fixed_bmopf_generators_with_cost_stay_generators() {
+    let v = schema_validator();
+    let net = parse_bmopf_str(
+        r#"{
+          "bus": {
+            "b": {
+              "terminal_names": ["1"],
+              "perfectly_grounded_terminals": []
+            }
+          },
+          "voltage_source": {
+            "source": {
+              "v_magnitude": [2400.0],
+              "v_angle": [0.0],
+              "bus": "b",
+              "terminal_map": ["1"]
+            }
+          },
+          "generator": {
+            "g": {
+              "p_min": [100.0],
+              "p_max": [100.0],
+              "q_min": [20.0],
+              "q_max": [20.0],
+              "cost": [0.001],
+              "bus": "b",
+              "configuration": "SINGLE_PHASE",
+              "terminal_map": ["1"]
+            }
+          }
+        }"#,
+    )
+    .unwrap();
+
+    let out = write_bmopf_json(&net);
+
+    assert_eq!(errors(&v, &out.text), Vec::<String>::new());
+    assert!(
+        out.warnings
+            .iter()
+            .all(|w| !w.contains("negative load") && !w.contains("cost")),
+        "unexpected generator loss warning: {:?}",
+        out.warnings
+    );
+    let doc: serde_json::Value = serde_json::from_str(&out.text).unwrap();
+    assert!(
+        doc.get("load").is_none(),
+        "BMOPF generator was reclassified as a load"
+    );
+    assert_eq!(doc["generator"]["g"]["p_min"], serde_json::json!([100.0]));
+    assert_eq!(doc["generator"]["g"]["p_max"], serde_json::json!([100.0]));
+    assert_eq!(doc["generator"]["g"]["cost"], serde_json::json!([0.001]));
+    let again = parse_bmopf_str(&out.text).unwrap();
+    assert_model_eq(&net, &again);
 }
 
 #[test]
@@ -285,13 +362,17 @@ fn negative_validation_cases() {
             }),
         ),
         (
-            // linecode i_max items are nonnegative; switch i_max has no
-            // item constraint in the draft, an asymmetry worth feedback.
             "negative linecode i_max",
             mutate(&|d| {
                 let codes = d["linecode"].as_object_mut().unwrap();
                 let first = codes.keys().next().unwrap().clone();
                 codes[&first]["i_max"] = serde_json::json!([-600.0, 600.0, 600.0]);
+            }),
+        ),
+        (
+            "negative switch i_max",
+            mutate(&|d| {
+                d["switch"]["671692"]["i_max"] = serde_json::json!([-600.0]);
             }),
         ),
         (
@@ -359,6 +440,57 @@ fn center_tap_collapse_converts_resistance_through_ohms() {
     // The primary is untouched by the collapse: %R=0.6 on 7.2 kV/25 kVA.
     let r_from = t["r_series_from"].as_f64().unwrap();
     assert!((r_from - 12.4416).abs() < 1e-9, "r_series_from = {r_from}");
+}
+
+#[test]
+fn bmopf_center_tap_rebuilds_dss_grounded_center() {
+    let text = r#"{
+        "bus": {
+            "src": {"terminal_names": ["1", "2"], "perfectly_grounded_terminals": ["2"]},
+            "lv": {"terminal_names": ["1", "2", "3"], "perfectly_grounded_terminals": ["3"]}
+        },
+        "voltage_source": {
+            "source": {
+                "v_magnitude": [7200.0, 0.0],
+                "v_angle": [0.0, 0.0],
+                "bus": "src",
+                "terminal_map": ["1", "2"]
+            }
+        },
+        "transformer": {
+            "center_tap": {
+                "ct": {
+                    "bus_from": "src",
+                    "bus_to": "lv",
+                    "terminal_map_from": ["1", "2"],
+                    "terminal_map_to": ["1", "2", "3"],
+                    "s_rating": 25000.0,
+                    "v_ref_from": 7200.0,
+                    "v_ref_to": 240.0,
+                    "r_series_from": 12.4416,
+                    "r_series_to": 0.013824,
+                    "x_series_from": 42.2784,
+                    "x_series_to": 0.0
+                }
+            }
+        }
+    }"#;
+    let net = parse_bmopf_str(text).unwrap();
+    assert_eq!(net.transformers[0].windings.len(), 3);
+    let dss = write_dss(&net).text;
+    assert!(dss.contains("lv.1.0"), "{dss}");
+    assert!(dss.contains("lv.0.2"), "{dss}");
+
+    let out = write_bmopf_json(&parse_dss_str(&dss));
+    let doc: serde_json::Value = serde_json::from_str(&out.text).unwrap();
+    assert_eq!(
+        doc["bus"]["lv"]["perfectly_grounded_terminals"],
+        serde_json::json!(["4"])
+    );
+    assert_eq!(
+        doc["transformer"]["center_tap"]["ct"]["terminal_map_to"],
+        serde_json::json!(["1", "2", "4"])
+    );
 }
 
 #[test]

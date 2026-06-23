@@ -28,9 +28,9 @@ When writing back to the source format, PowerIO **returns the original file exac
 
 The following formats are currently supported:
 - [MATPOWER](https://matpower.org/) `.m`
-- [PSS/E](https://www.siemens.com/global/en/products/energy/grid-software/planning/pss-software/pss-e.html) `.raw` revision 33
+- [PSS/E](https://www.siemens.com/global/en/products/energy/grid-software/planning/pss-software/pss-e.html) `.raw` revisions 33, 34, and 35
 - [PowerWorld](https://www.powerworld.com/WebHelp/Content/MainDocumentation_HTML/Case_Formats.htm) `.aux`, plus read only `.pwb` binary cases; `.pwd` display files parse through the separate display API. Vintage coverage and decode evidence live in [docs/powerworld.md](docs/powerworld.md).
-- GE PSLF `.epc` power flow cases as read only inputs.
+- GE PSLF `.epc` power flow cases
 - [PowerModels.jl](https://github.com/lanl-ansi/PowerModels.jl) network data JSON
 - [egret](https://pypi.org/project/gridx-egret/) `ModelData` JSON
 - [pandapower](https://www.pandapower.org/) `pandapowerNet` JSON
@@ -122,7 +122,7 @@ json, warnings = to_format(case, "powermodels-json")
 
 ### Command line interface (CLI)
 ```
-powerio convert tests/data/case14.m --to psse -o case14.raw
+powerio convert tests/data/case14.m --to psse35 -o case14.raw
 powerio convert tests/data/case14.m --to pandapower-json -o case14.pp.json
 powerio convert tests/data/case14.m --to pypsa-csv -o pypsa_case
 powerio convert pypsa_case --from pypsa-csv --to matpower -o case14.m
@@ -152,9 +152,9 @@ powerio
 `partial` means the target lacks fields present in the source. The writer reports
 those cases in `Conversion::warnings`. PowerWorld `.pwb` is read only (no
 writer, no retained source): the row shows where its decoded power flow core
-lands. PSLF `.epc` is also read only; the parser retains the source text for
-audit and reports unsupported EPC sections as read warnings, but there is no
-PSLF writer. PowerWorld `.pwd` is display data, not a network case, so it is
+lands. PSLF `.epc` reads and writes the power flow core; same format writes
+echo retained source text, and unsupported EPC sections are reported as read
+warnings. PowerWorld `.pwd` is display data, not a network case, so it is
 outside this conversion table and uses `parse_display_file` /
 `parse_display_bytes`. The decoded vintages and per field evidence live in
 [docs/powerworld.md](docs/powerworld.md).

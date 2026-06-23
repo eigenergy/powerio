@@ -158,6 +158,35 @@ fn canonical_write_is_idempotent() {
 use super::{parse_powerworld, write_powerworld};
 
 #[test]
+fn unmodeled_data_blocks_warn_on_parse() {
+    let parsed = crate::parse_str(
+        "DATA (Bus, [BusNum])\n{\n1\n}\n\
+         DATA (Owner, [Name])\n{\n\"Utility\"\n}\n\
+         DATA (Area, [Number, Name])\n{\n1 \"North\"\n}\n",
+        "powerworld",
+    )
+    .unwrap();
+
+    assert_eq!(parsed.network.buses.len(), 1);
+    assert!(
+        parsed
+            .warnings
+            .iter()
+            .any(|w| w.contains("DATA Owner") && w.contains("not modeled")),
+        "missing Owner warning: {:?}",
+        parsed.warnings
+    );
+    assert!(
+        parsed
+            .warnings
+            .iter()
+            .any(|w| w.contains("DATA Area") && w.contains("not modeled")),
+        "missing Area warning: {:?}",
+        parsed.warnings
+    );
+}
+
+#[test]
 // Exact kV values parsed from the fixture; bit equality is the assertion.
 #[allow(clippy::float_cmp)]
 fn writer_sanitizes_bus_names_that_would_corrupt_a_value() {

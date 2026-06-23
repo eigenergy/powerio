@@ -52,8 +52,8 @@ pub struct PioNetwork {
 
 // The handle is immutable after construction and the C ABI documents concurrent
 // reads from any number of threads as safe (see the cbindgen header preamble).
-// That contract requires `PioNetwork: Send + Sync`; pin it at compile time so a
-// future field that is not `Sync` fails the build instead of the contract.
+// That guarantee requires `PioNetwork: Send + Sync`; pin it at compile time so
+// a future field that is not `Sync` fails the build instead of weakening it.
 const _: fn() = || {
     fn assert_send_sync<T: Send + Sync>() {}
     assert_send_sync::<PioNetwork>();
@@ -167,6 +167,13 @@ unsafe fn finish_network(
 /// carry their own structure and never force a signature change.
 pub const PIO_ABI_VERSION: u32 = 4;
 
+/// ABI version of the optional `pio_dist_*` C surface. This is separate from
+/// [`PIO_ABI_VERSION`] so distribution C entry points can evolve without forcing
+/// a core ABI bump. Version 1 is the supported dist surface with conversion
+/// order `(input, from, to, ...)`.
+#[cfg(feature = "dist")]
+pub const PIO_DIST_ABI_VERSION: u32 = 1;
+
 /// A comfortable error-buffer size: pass a `char[PIO_ERRBUF_MIN]` to any
 /// `errbuf`/`warnbuf` parameter and a message always fits without truncation.
 pub const PIO_ERRBUF_MIN: usize = 256;
@@ -176,6 +183,15 @@ pub const PIO_ERRBUF_MIN: usize = 256;
 #[unsafe(no_mangle)]
 pub extern "C" fn pio_abi_version() -> u32 {
     PIO_ABI_VERSION
+}
+
+/// The ABI version of the optional `pio_dist_*` surface. Only linked when the
+/// `dist` feature is compiled in; probe that first with `pio_has_feature("dist")`
+/// if loading dynamically.
+#[cfg(feature = "dist")]
+#[unsafe(no_mangle)]
+pub extern "C" fn pio_dist_abi_version() -> u32 {
+    PIO_DIST_ABI_VERSION
 }
 
 /// Whether an optional build feature is compiled in: pass `"arrow"`, `"gridfm"`,
@@ -385,8 +401,8 @@ pub unsafe extern "C" fn pio_warnings(
 pub unsafe extern "C" fn pio_network_free(net: *mut PioNetwork) {
     unsafe {
         // Under the same panic guard as every other entry point: the drop is
-        // pure deallocation today, but the boundary contract ("catches panics")
-        // must not depend on that staying true.
+        // pure deallocation today, but "catches panics" must not depend on that
+        // staying true.
         guard((), || {
             if !net.is_null() {
                 drop(Box::from_raw(net));
@@ -907,14 +923,12 @@ pub unsafe extern "C" fn pio_to_arrow(
 
 // ---------------------------------------------------------------------------
 // Distribution surface (`dist` feature). The multiconductor model behind its own
-// opaque `PioDistNetwork` handle and the `pio_dist_*` entry points. It ships
-// under the SAME `PIO_ABI_VERSION` as transmission (no separate version) and is
-// gated on the `dist` feature / `PIO_DIST` define, exactly like `arrow`/`gridfm`;
-// a runtime consumer probes it with `pio_has_feature("dist")`. The surface is
-// EXPERIMENTAL while the IEEE BMOPF schema is a draft: these C signatures are
-// frozen under v4, but the JSON payloads (bmopf-json, powerio-dist-json) carry
-// their own meta.version and may evolve, so a consumer pins a schema vintage from
-// the payload meta, never from the ABI version.
+// opaque `PioDistNetwork` handle and the `pio_dist_*` entry points. It is gated
+// on the `dist` feature / `PIO_DIST` define, exactly like `arrow`/`gridfm`; a
+// runtime consumer probes it with `pio_has_feature("dist")`, then checks
+// `pio_dist_abi_version()`. The surface is EXPERIMENTAL while the IEEE BMOPF
+// schema is a draft: C signature changes bump `PIO_DIST_ABI_VERSION`, and the
+// JSON payloads (bmopf-json, powerio-dist-json) carry their own meta.version.
 // ---------------------------------------------------------------------------
 
 /// Like [`cstr`] but a NULL or non-UTF-8 pointer is an error naming the offending
@@ -1071,8 +1085,8 @@ pub unsafe extern "C" fn pio_dist_to_format(
     }
 }
 
-/// Convert distribution case `path` to format `to` (optionally forcing the source
-/// via `from`; see [`pio_dist_parse_file`] for the inference rules). Returns the
+/// Convert distribution case `path` from optional source format `from` to format
+/// `to`; see [`pio_dist_parse_file`] for the inference rules. Returns the
 /// converted text as an owned C string (free with [`pio_string_free`]), `NULL` on
 /// error. The warnings written `\n`-joined into `warnbuf` carry both the parse
 /// warnings and the writer's fidelity losses (there is no handle to query them).
@@ -1080,8 +1094,8 @@ pub unsafe extern "C" fn pio_dist_to_format(
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_dist_convert_file(
     path: *const c_char,
-    to: *const c_char,
     from: *const c_char,
+    to: *const c_char,
     warnbuf: *mut c_char,
     warnlen: usize,
     errbuf: *mut c_char,
@@ -1101,7 +1115,7 @@ pub unsafe extern "C" fn pio_dist_convert_file(
 
 /// Convert in-memory distribution case `text` of format `from` to format `to`
 /// (both required; `dss`, `pmd`, or `bmopf`). The parameter order is input,
-/// target, source, matching [`pio_dist_convert_file`]. Returns the converted text
+/// source, target, matching [`pio_dist_convert_file`]. Returns the converted text
 /// as an owned C string (free with [`pio_string_free`]), `NULL` on error. The
 /// warnings written `\n`-joined into `warnbuf` carry both the parse warnings and
 /// the writer's fidelity losses (there is no handle to query them).
@@ -1109,8 +1123,8 @@ pub unsafe extern "C" fn pio_dist_convert_file(
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_dist_convert_str(
     text: *const c_char,
-    to: *const c_char,
     from: *const c_char,
+    to: *const c_char,
     warnbuf: *mut c_char,
     warnlen: usize,
     errbuf: *mut c_char,
@@ -1188,13 +1202,195 @@ mod tests {
 
     #[test]
     fn version_surface() {
-        // The ABI version is the compatibility contract a consumer checks at
-        // load; the version string is static, NUL-terminated, and non-empty.
+        // The ABI version is the load-time compatibility check; the version
+        // string is static, NUL-terminated, and non-empty.
         assert_eq!(pio_abi_version(), PIO_ABI_VERSION);
         assert_eq!(PIO_ABI_VERSION, 4);
         let v = unsafe { CStr::from_ptr(pio_version()) }.to_str().unwrap();
         assert_eq!(v, env!("CARGO_PKG_VERSION"));
         assert!(!v.is_empty());
+    }
+
+    fn strip_c_comments(input: &str) -> String {
+        let mut out = String::with_capacity(input.len());
+        let mut chars = input.chars().peekable();
+        let mut in_block = false;
+        while let Some(ch) = chars.next() {
+            if in_block {
+                if ch == '*' && chars.peek() == Some(&'/') {
+                    chars.next();
+                    in_block = false;
+                } else if ch == '\n' {
+                    out.push('\n');
+                }
+            } else if ch == '/' && chars.peek() == Some(&'*') {
+                chars.next();
+                in_block = true;
+            } else if ch == '/' && chars.peek() == Some(&'/') {
+                chars.next();
+                for tail in chars.by_ref() {
+                    if tail == '\n' {
+                        out.push('\n');
+                        break;
+                    }
+                }
+            } else {
+                out.push(ch);
+            }
+        }
+        out
+    }
+
+    fn collapse_ws(s: &str) -> String {
+        s.split_whitespace().collect::<Vec<_>>().join(" ")
+    }
+
+    fn c_header_abi_manifest(header: &str) -> Vec<String> {
+        let clean = strip_c_comments(header);
+        let mut entries = Vec::new();
+        let mut prototype = String::new();
+        for line in clean.lines().map(str::trim).filter(|line| !line.is_empty()) {
+            if !prototype.is_empty() {
+                prototype.push(' ');
+                prototype.push_str(line);
+                if line.ends_with(';') {
+                    entries.push(collapse_ws(&prototype));
+                    prototype.clear();
+                }
+                continue;
+            }
+
+            if line.starts_with("#define PIO_") || line.starts_with("typedef struct Pio") {
+                entries.push(collapse_ws(line));
+            } else if line.contains("pio_") {
+                if line.ends_with(';') {
+                    entries.push(collapse_ws(line));
+                } else {
+                    prototype.push_str(line);
+                }
+            }
+        }
+        assert!(prototype.is_empty(), "unterminated prototype: {prototype}");
+        entries
+    }
+
+    fn pio_symbol_names_from_manifest(manifest: &[String]) -> Vec<String> {
+        let mut names = std::collections::BTreeSet::new();
+        for entry in manifest {
+            if let Some(start) = entry.find("pio_") {
+                let tail = &entry[start..];
+                if let Some(end) = tail.find('(') {
+                    names.insert(tail[..end].to_string());
+                }
+            }
+        }
+        names.into_iter().collect()
+    }
+
+    fn source_exported_pio_symbols(source: &str) -> Vec<String> {
+        let mut names = std::collections::BTreeSet::new();
+        let mut saw_no_mangle = false;
+        for line in source.lines() {
+            let trimmed = line.trim();
+            if trimmed == "#[unsafe(no_mangle)]" {
+                saw_no_mangle = true;
+                continue;
+            }
+            if !trimmed.contains("extern \"C\"") {
+                if !trimmed.is_empty()
+                    && !trimmed.starts_with("#[")
+                    && !trimmed.starts_with("//")
+                    && !trimmed.starts_with("///")
+                {
+                    saw_no_mangle = false;
+                }
+                continue;
+            }
+            if let Some(start) = trimmed.find("fn pio_") {
+                let tail = &trimmed[start + "fn ".len()..];
+                let end = tail
+                    .find('(')
+                    .unwrap_or_else(|| panic!("unterminated extern fn line: {trimmed}"));
+                let name = &tail[..end];
+                assert!(
+                    saw_no_mangle,
+                    "{name} is exported in Rust source without #[unsafe(no_mangle)]"
+                );
+                names.insert(name.to_string());
+                saw_no_mangle = false;
+                continue;
+            }
+            if !trimmed.is_empty() && !trimmed.starts_with("#[") && !trimmed.starts_with("//") {
+                saw_no_mangle = false;
+            }
+        }
+        names.into_iter().collect()
+    }
+
+    #[test]
+    fn c_header_abi_manifest_is_pinned() {
+        let actual = c_header_abi_manifest(include_str!("../include/powerio.h"));
+        let expected = [
+            "#define PIO_ABI_VERSION 4",
+            "#define PIO_DIST_ABI_VERSION 1",
+            "#define PIO_ERRBUF_MIN 256",
+            "#define PIO_ARROW_TABLE_BUS 0",
+            "#define PIO_ARROW_TABLE_BRANCH 1",
+            "#define PIO_ARROW_TABLE_GEN 2",
+            "#define PIO_ARROW_TABLE_LOAD 3",
+            "#define PIO_ARROW_TABLE_SHUNT 4",
+            "typedef struct PioDistNetwork PioDistNetwork;",
+            "typedef struct PioNetwork PioNetwork;",
+            "uint32_t pio_abi_version(void);",
+            "uint32_t pio_dist_abi_version(void);",
+            "int32_t pio_has_feature(const char *feature);",
+            "const char *pio_version(void);",
+            "PioNetwork *pio_parse_file(const char *path, const char *from, char *errbuf, size_t errlen);",
+            "PioNetwork *pio_parse_str(const char *text, const char *format, char *errbuf, size_t errlen);",
+            "PioNetwork *pio_read_dir(const char *dir, const char *from, int64_t scenario, char *errbuf, size_t errlen);",
+            "ptrdiff_t pio_scenario_ids(const char *dir, const char *from, int64_t *out, size_t cap, char *errbuf, size_t errlen);",
+            "size_t pio_warnings(const PioNetwork *net, char *warnbuf, size_t warnlen);",
+            "void pio_network_free(PioNetwork *net);",
+            "PioNetwork *pio_normalize(const PioNetwork *net, char *errbuf, size_t errlen);",
+            "size_t pio_n_buses(const PioNetwork *net);",
+            "size_t pio_n_branches(const PioNetwork *net);",
+            "size_t pio_n_gens(const PioNetwork *net);",
+            "double pio_base_mva(const PioNetwork *net);",
+            "int64_t pio_ref_bus_index(const PioNetwork *net);",
+            "size_t pio_ref_bus_indices(const PioNetwork *net, int64_t *out, size_t cap);",
+            "size_t pio_n_islands(const PioNetwork *net);",
+            "int32_t pio_is_radial(const PioNetwork *net);",
+            "char *pio_to_format(const PioNetwork *net, const char *to, char *warnbuf, size_t warnlen, char *errbuf, size_t errlen);",
+            "char *pio_convert_file(const char *path, const char *from, const char *to, char *warnbuf, size_t warnlen, char *errbuf, size_t errlen);",
+            "char *pio_convert_str(const char *text, const char *from, const char *to, char *warnbuf, size_t warnlen, char *errbuf, size_t errlen);",
+            "int32_t pio_write_dir(const PioNetwork *net, const char *to, const char *out_dir, char *warnbuf, size_t warnlen, char *errbuf, size_t errlen);",
+            "void pio_string_free(char *s);",
+            "size_t pio_bus_ids(const PioNetwork *net, int64_t *out, size_t cap);",
+            "size_t pio_branches(const PioNetwork *net, int64_t *from, int64_t *to, double *r, double *x, double *b, double *tap, double *shift, uint8_t *in_service, size_t cap);",
+            "size_t pio_gens(const PioNetwork *net, int64_t *bus, double *pg, double *pmax, double *pmin, uint8_t *in_service, size_t cap);",
+            "size_t pio_bus_demand(const PioNetwork *net, double *pd, double *qd, size_t cap);",
+            "size_t pio_bus_shunt(const PioNetwork *net, double *gs, double *bs, size_t cap);",
+            "int32_t pio_to_arrow(const PioNetwork *net, int32_t table, struct ArrowArray *out_array, struct ArrowSchema *out_schema, char *errbuf, size_t errlen);",
+            "PioDistNetwork *pio_dist_parse_file(const char *path, const char *from, char *errbuf, size_t errlen);",
+            "PioDistNetwork *pio_dist_parse_str(const char *text, const char *format, char *errbuf, size_t errlen);",
+            "void pio_dist_network_free(PioDistNetwork *net);",
+            "size_t pio_dist_warnings(const PioDistNetwork *net, char *warnbuf, size_t warnlen);",
+            "char *pio_dist_to_format(const PioDistNetwork *net, const char *to, char *warnbuf, size_t warnlen, char *errbuf, size_t errlen);",
+            "char *pio_dist_convert_file(const char *path, const char *from, const char *to, char *warnbuf, size_t warnlen, char *errbuf, size_t errlen);",
+            "char *pio_dist_convert_str(const char *text, const char *from, const char *to, char *warnbuf, size_t warnlen, char *errbuf, size_t errlen);",
+        ]
+        .into_iter()
+        .map(str::to_string)
+        .collect::<Vec<_>>();
+        assert_eq!(actual, expected);
+    }
+
+    #[test]
+    fn c_header_and_rust_exported_symbols_match() {
+        let manifest = c_header_abi_manifest(include_str!("../include/powerio.h"));
+        let header_symbols = pio_symbol_names_from_manifest(&manifest);
+        let rust_symbols = source_exported_pio_symbols(include_str!("lib.rs"));
+        assert_eq!(rust_symbols, header_symbols);
     }
 
     #[test]
@@ -1358,6 +1554,32 @@ mod tests {
     }
 
     #[test]
+    fn convert_file_rejects_target_before_source_order() {
+        let path = data_path("case14.m");
+        let old_target = CString::new("powermodels-json").unwrap();
+        let old_source = CString::new("matpower").unwrap();
+        let mut warn = [0 as c_char; 512];
+        let mut err = [0 as c_char; PIO_ERRBUF_MIN];
+        unsafe {
+            let s = pio_convert_file(
+                path.as_ptr(),
+                old_target.as_ptr(),
+                old_source.as_ptr(),
+                warn.as_mut_ptr(),
+                warn.len(),
+                err.as_mut_ptr(),
+                err.len(),
+            );
+            assert!(
+                s.is_null(),
+                "legacy target-before-source order unexpectedly succeeded"
+            );
+            let msg = CStr::from_ptr(err.as_ptr()).to_str().unwrap();
+            assert!(!msg.is_empty(), "expected an explanatory parse error");
+        }
+    }
+
+    #[test]
     fn convert_str_round_trips_in_memory() {
         // The in-memory converter is parse_str + to_format fused: matpower in,
         // powermodels out, no filesystem.
@@ -1388,6 +1610,36 @@ mod tests {
             let out = CStr::from_ptr(s).to_str().unwrap();
             assert!(out.contains("\"bus\""));
             pio_string_free(s);
+        }
+    }
+
+    #[test]
+    fn convert_str_rejects_target_before_source_order() {
+        let src = std::fs::read_to_string(
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../tests/data/case9.m"),
+        )
+        .unwrap();
+        let text = CString::new(src).unwrap();
+        let old_target = CString::new("powermodels-json").unwrap();
+        let old_source = CString::new("matpower").unwrap();
+        let mut warn = [0 as c_char; 512];
+        let mut err = [0 as c_char; PIO_ERRBUF_MIN];
+        unsafe {
+            let s = pio_convert_str(
+                text.as_ptr(),
+                old_target.as_ptr(),
+                old_source.as_ptr(),
+                warn.as_mut_ptr(),
+                warn.len(),
+                err.as_mut_ptr(),
+                err.len(),
+            );
+            assert!(
+                s.is_null(),
+                "legacy target-before-source order unexpectedly succeeded"
+            );
+            let msg = CStr::from_ptr(err.as_ptr()).to_str().unwrap();
+            assert!(!msg.is_empty(), "expected an explanatory parse error");
         }
     }
 
@@ -1900,6 +2152,16 @@ mpc.branch = [
         }
 
         #[test]
+        fn dist_abi_version_is_separate() {
+            assert_eq!(pio_abi_version(), PIO_ABI_VERSION);
+            assert_eq!(PIO_ABI_VERSION, 4);
+            assert_eq!(pio_dist_abi_version(), PIO_DIST_ABI_VERSION);
+            assert_eq!(PIO_DIST_ABI_VERSION, 1);
+            let feature = CString::new("dist").unwrap();
+            assert_eq!(unsafe { pio_has_feature(feature.as_ptr()) }, 1);
+        }
+
+        #[test]
         fn parse_file_convert_and_echo() {
             let path = fourwire_cstr();
             let mut err = [0 as c_char; PIO_ERRBUF_MIN];
@@ -1966,8 +2228,8 @@ mpc.branch = [
             let s = unsafe {
                 pio_dist_convert_str(
                     text.as_ptr(),
-                    to.as_ptr(),
                     from.as_ptr(),
+                    to.as_ptr(),
                     warn.as_mut_ptr(),
                     warn.len(),
                     err.as_mut_ptr(),
@@ -1982,6 +2244,33 @@ mpc.branch = [
             let pmd = unsafe { CStr::from_ptr(s) }.to_str().unwrap();
             assert!(pmd.contains("\"data_model\": \"ENGINEERING\""));
             unsafe { pio_string_free(s) };
+        }
+
+        #[test]
+        fn convert_str_rejects_target_before_source_order() {
+            let source = std::fs::read_to_string(fourwire()).unwrap();
+            let text = CString::new(source).unwrap();
+            let old_target = CString::new("pmd").unwrap();
+            let old_source = CString::new("dss").unwrap();
+            let mut warn = [0 as c_char; 4096];
+            let mut err = [0 as c_char; PIO_ERRBUF_MIN];
+            let s = unsafe {
+                pio_dist_convert_str(
+                    text.as_ptr(),
+                    old_target.as_ptr(),
+                    old_source.as_ptr(),
+                    warn.as_mut_ptr(),
+                    warn.len(),
+                    err.as_mut_ptr(),
+                    err.len(),
+                )
+            };
+            assert!(
+                s.is_null(),
+                "legacy target-before-source order unexpectedly succeeded"
+            );
+            let msg = unsafe { CStr::from_ptr(err.as_ptr()) }.to_str().unwrap();
+            assert!(!msg.is_empty(), "expected an explanatory parse error");
         }
 
         #[test]
@@ -2023,8 +2312,8 @@ mpc.branch = [
             let s = unsafe {
                 pio_dist_convert_file(
                     path.as_ptr(),
-                    to.as_ptr(),
                     std::ptr::null(),
+                    to.as_ptr(),
                     warn.as_mut_ptr(),
                     warn.len(),
                     err.as_mut_ptr(),
@@ -2039,6 +2328,32 @@ mpc.branch = [
             let text = unsafe { CStr::from_ptr(s) }.to_str().unwrap();
             assert!(text.contains("\"bus\""));
             unsafe { pio_string_free(s) };
+        }
+
+        #[test]
+        fn convert_file_rejects_target_before_source_order() {
+            let path = fourwire_cstr();
+            let old_target = CString::new("pmd").unwrap();
+            let old_source = CString::new("dss").unwrap();
+            let mut warn = [0 as c_char; 4096];
+            let mut err = [0 as c_char; PIO_ERRBUF_MIN];
+            let s = unsafe {
+                pio_dist_convert_file(
+                    path.as_ptr(),
+                    old_target.as_ptr(),
+                    old_source.as_ptr(),
+                    warn.as_mut_ptr(),
+                    warn.len(),
+                    err.as_mut_ptr(),
+                    err.len(),
+                )
+            };
+            assert!(
+                s.is_null(),
+                "legacy target-before-source order unexpectedly succeeded"
+            );
+            let msg = unsafe { CStr::from_ptr(err.as_ptr()) }.to_str().unwrap();
+            assert!(!msg.is_empty(), "expected an explanatory parse error");
         }
 
         #[test]

@@ -1,7 +1,7 @@
 /* powerio C ABI, version 4: parse any power system case format, query it,
  * convert it, and extract the numeric tables for matrix assembly. Check
  * pio_abi_version() against PIO_ABI_VERSION at load; the integer is the
- * compatibility contract, the version string is informational.
+ * compatibility check, the version string is informational.
  *
  * Naming grammar (fixed; the surface evolves additively from here):
  * - Verb-led names are operations and the verb fixes the return family:
@@ -46,7 +46,7 @@
  *   are owned by the library; free them with pio_string_free. Handles from
  *   pio_parse_file / pio_parse_str / pio_read_dir / pio_normalize are freed
  *   with pio_network_free. Arrow buffers are freed through their own release
- *   callbacks (the C Data Interface contract).
+ *   callbacks (the C Data Interface release rule).
  * - A handle is immutable after construction: concurrent reads from any
  *   number of threads are safe; pio_network_free is not, free exactly once.
  * - Every entry point catches Rust panics at the boundary and returns the
@@ -73,9 +73,11 @@
  * PMD ENGINEERING JSON, BMOPF JSON) behind their own PioDistNetwork handle,
  * freed with pio_dist_network_free, string outputs freed with pio_string_free.
  * The distribution surface is EXPERIMENTAL while the IEEE BMOPF schema is a
- * draft: its C signatures are frozen under this same PIO_ABI_VERSION (it has no
- * separate version), but its JSON payloads (bmopf-json, powerio-dist-json) carry
- * their own meta.version and may evolve; pin a vintage from the payload meta.
+ * draft: supported dist C usage starts at PIO_DIST_ABI_VERSION = 1, with
+ * pio_dist_convert_*(input, from, to, ...). Dist C signature changes bump
+ * PIO_DIST_ABI_VERSION, not PIO_ABI_VERSION. Its JSON payloads (bmopf-json,
+ * powerio-dist-json) carry their own meta.version and may evolve; pin a
+ * vintage from the payload meta.
  * Probe optional surfaces at runtime with pio_has_feature("arrow"|"gridfm"|"dist").
  *
  * Checked in and generated; regenerate from the Rust source with
@@ -108,6 +110,16 @@ struct ArrowSchema;
  * carry their own structure and never force a signature change.
  */
 #define PIO_ABI_VERSION 4
+
+#if defined(PIO_DIST)
+/**
+ * ABI version of the optional `pio_dist_*` C surface. This is separate from
+ * [`PIO_ABI_VERSION`] so distribution C entry points can evolve without forcing
+ * a core ABI bump. Version 1 is the supported dist surface with conversion
+ * order `(input, from, to, ...)`.
+ */
+#define PIO_DIST_ABI_VERSION 1
+#endif
 
 /**
  * A comfortable error-buffer size: pass a `char[PIO_ERRBUF_MIN]` to any
@@ -166,6 +178,15 @@ extern "C" {
  * consumer detect a stale or incompatible library at load time. Infallible.
  */
 uint32_t pio_abi_version(void);
+
+#if defined(PIO_DIST)
+/**
+ * The ABI version of the optional `pio_dist_*` surface. Only linked when the
+ * `dist` feature is compiled in; probe that first with `pio_has_feature("dist")`
+ * if loading dynamically.
+ */
+uint32_t pio_dist_abi_version(void);
+#endif
 
 /**
  * Whether an optional build feature is compiled in: pass `"arrow"`, `"gridfm"`,
@@ -534,15 +555,15 @@ char *pio_dist_to_format(const PioDistNetwork *net,
 
 #if defined(PIO_DIST)
 /**
- * Convert distribution case `path` to format `to` (optionally forcing the source
- * via `from`; see [`pio_dist_parse_file`] for the inference rules). Returns the
+ * Convert distribution case `path` from optional source format `from` to format
+ * `to`; see [`pio_dist_parse_file`] for the inference rules. Returns the
  * converted text as an owned C string (free with [`pio_string_free`]), `NULL` on
  * error. The warnings written `\n`-joined into `warnbuf` carry both the parse
  * warnings and the writer's fidelity losses (there is no handle to query them).
  */
 char *pio_dist_convert_file(const char *path,
-                            const char *to,
                             const char *from,
+                            const char *to,
                             char *warnbuf,
                             size_t warnlen,
                             char *errbuf,
@@ -553,14 +574,14 @@ char *pio_dist_convert_file(const char *path,
 /**
  * Convert in-memory distribution case `text` of format `from` to format `to`
  * (both required; `dss`, `pmd`, or `bmopf`). The parameter order is input,
- * target, source, matching [`pio_dist_convert_file`]. Returns the converted text
+ * source, target, matching [`pio_dist_convert_file`]. Returns the converted text
  * as an owned C string (free with [`pio_string_free`]), `NULL` on error. The
  * warnings written `\n`-joined into `warnbuf` carry both the parse warnings and
  * the writer's fidelity losses (there is no handle to query them).
  */
 char *pio_dist_convert_str(const char *text,
-                           const char *to,
                            const char *from,
+                           const char *to,
                            char *warnbuf,
                            size_t warnlen,
                            char *errbuf,

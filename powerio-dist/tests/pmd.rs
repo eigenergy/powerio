@@ -526,9 +526,8 @@ fn inline_linecode_collision_with_document_linecode() {
 }
 
 /// A linecode carrying only a 10x10 xs sizes from the widest matrix, not
-/// rs alone: n_conductors is 10, rs reads as zero padding, and the BMOPF
-/// emission fires the double digit schema warning. Present matrices that
-/// disagree in size pad with a warning naming the code.
+/// rs alone: n_conductors is 10 and rs reads as zero padding. Present
+/// matrices that disagree in size pad with a warning naming the code.
 #[test]
 #[allow(clippy::float_cmp)]
 fn linecode_sized_from_widest_matrix() {
@@ -563,7 +562,9 @@ fn linecode_sized_from_widest_matrix() {
     assert!(
         out.warnings
             .iter()
-            .any(|w| w.contains("10 conductors produce double digit matrix keys"))
+            .all(|w| !w.contains("double digit matrix keys")),
+        "obsolete double digit warning still emitted: {:?}",
+        out.warnings
     );
 }
 
