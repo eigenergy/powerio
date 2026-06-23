@@ -119,6 +119,14 @@ int main(int argc, char **argv) {
                                    NULL, 0, err, sizeof err);
         CHECK(pm != NULL, err);
         pio_string_free(pm);
+
+        char *old_order = pio_convert_str(buf, "powermodels-json", "matpower",
+                                          NULL, 0, err, sizeof err);
+        if (old_order != NULL) {
+            pio_string_free(old_order);
+            CHECK(0, "pio_convert_str accepted target/source argument order");
+        }
+        CHECK(strlen(err) > 0, "pio_convert_str old-order error was empty");
         free(buf);
 
         /* Normalize into a NEW handle: per unit, radians, filtered, reindexed.
@@ -193,6 +201,14 @@ int main(int argc, char **argv) {
         CHECK(strstr(pmd, "\"data_model\": \"ENGINEERING\"") != NULL,
               "PMD output lost the data_model marker");
         pio_string_free(pmd);
+
+        char *old_dist_order = pio_dist_convert_str(dss, "pmd", "dss",
+                                                    warn, sizeof warn, err, sizeof err);
+        if (old_dist_order != NULL) {
+            pio_string_free(old_dist_order);
+            CHECK(0, "pio_dist_convert_str accepted target/source argument order");
+        }
+        CHECK(strlen(err) > 0, "pio_dist_convert_str old-order error was empty");
 
         /* NULL handle is the documented safe default: a 0-length count. */
         CHECK(pio_dist_warnings(NULL, warn, sizeof warn) == 0,

@@ -49,7 +49,8 @@ platforms with `--features arrow,gridfm,dist`, so the released `.dylib`/`.so`/
 runtime with `pio_has_feature("dist")`. Direct C callers also check
 `pio_dist_abi_version()` against `PIO_DIST_ABI_VERSION`; dist C changes do not
 force a core `PIO_ABI_VERSION` bump. The cbindgen header parity job gates the
-committed `powerio.h`.
+committed `powerio.h`, and the C smoke tests reject the old target/source
+conversion order for both core and dist entry points.
 
 ## 4. Tag and publish
 

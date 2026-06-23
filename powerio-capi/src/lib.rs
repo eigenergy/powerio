@@ -1212,6 +1212,42 @@ mod tests {
     }
 
     #[test]
+    fn conversion_header_keeps_input_from_to_order() {
+        fn assert_arg_order(
+            header: &str,
+            function: &str,
+            input_name: &str,
+            from_name: &str,
+            to_name: &str,
+        ) {
+            let needle = format!("{function}(const char *{input_name}");
+            let start = header.find(&needle).unwrap_or_else(|| {
+                panic!("missing header prototype for {function} starting with {input_name}")
+            });
+            let prototype_tail = &header[start..];
+            let end = prototype_tail
+                .find(");")
+                .unwrap_or_else(|| panic!("unterminated header prototype for {function}"));
+            let prototype = &prototype_tail[..end];
+            let input_pos = prototype
+                .find(&format!("const char *{input_name}"))
+                .unwrap();
+            let from_pos = prototype.find(&format!("const char *{from_name}")).unwrap();
+            let to_pos = prototype.find(&format!("const char *{to_name}")).unwrap();
+            assert!(
+                input_pos < from_pos && from_pos < to_pos,
+                "{function} header order drifted: {prototype}"
+            );
+        }
+
+        let header = include_str!("../include/powerio.h");
+        assert_arg_order(header, "pio_convert_file", "path", "from", "to");
+        assert_arg_order(header, "pio_convert_str", "text", "from", "to");
+        assert_arg_order(header, "pio_dist_convert_file", "path", "from", "to");
+        assert_arg_order(header, "pio_dist_convert_str", "text", "from", "to");
+    }
+
+    #[test]
     fn parse_query_free() {
         let c = case9();
         unsafe {
@@ -1372,6 +1408,32 @@ mod tests {
     }
 
     #[test]
+    fn convert_file_rejects_target_before_source_order() {
+        let path = data_path("case14.m");
+        let old_target = CString::new("powermodels-json").unwrap();
+        let old_source = CString::new("matpower").unwrap();
+        let mut warn = [0 as c_char; 512];
+        let mut err = [0 as c_char; PIO_ERRBUF_MIN];
+        unsafe {
+            let s = pio_convert_file(
+                path.as_ptr(),
+                old_target.as_ptr(),
+                old_source.as_ptr(),
+                warn.as_mut_ptr(),
+                warn.len(),
+                err.as_mut_ptr(),
+                err.len(),
+            );
+            assert!(
+                s.is_null(),
+                "legacy target-before-source order unexpectedly succeeded"
+            );
+            let msg = CStr::from_ptr(err.as_ptr()).to_str().unwrap();
+            assert!(!msg.is_empty(), "expected an explanatory parse error");
+        }
+    }
+
+    #[test]
     fn convert_str_round_trips_in_memory() {
         // The in-memory converter is parse_str + to_format fused: matpower in,
         // powermodels out, no filesystem.
@@ -1402,6 +1464,36 @@ mod tests {
             let out = CStr::from_ptr(s).to_str().unwrap();
             assert!(out.contains("\"bus\""));
             pio_string_free(s);
+        }
+    }
+
+    #[test]
+    fn convert_str_rejects_target_before_source_order() {
+        let src = std::fs::read_to_string(
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../tests/data/case9.m"),
+        )
+        .unwrap();
+        let text = CString::new(src).unwrap();
+        let old_target = CString::new("powermodels-json").unwrap();
+        let old_source = CString::new("matpower").unwrap();
+        let mut warn = [0 as c_char; 512];
+        let mut err = [0 as c_char; PIO_ERRBUF_MIN];
+        unsafe {
+            let s = pio_convert_str(
+                text.as_ptr(),
+                old_target.as_ptr(),
+                old_source.as_ptr(),
+                warn.as_mut_ptr(),
+                warn.len(),
+                err.as_mut_ptr(),
+                err.len(),
+            );
+            assert!(
+                s.is_null(),
+                "legacy target-before-source order unexpectedly succeeded"
+            );
+            let msg = CStr::from_ptr(err.as_ptr()).to_str().unwrap();
+            assert!(!msg.is_empty(), "expected an explanatory parse error");
         }
     }
 
@@ -2009,6 +2101,33 @@ mpc.branch = [
         }
 
         #[test]
+        fn convert_str_rejects_target_before_source_order() {
+            let source = std::fs::read_to_string(fourwire()).unwrap();
+            let text = CString::new(source).unwrap();
+            let old_target = CString::new("pmd").unwrap();
+            let old_source = CString::new("dss").unwrap();
+            let mut warn = [0 as c_char; 4096];
+            let mut err = [0 as c_char; PIO_ERRBUF_MIN];
+            let s = unsafe {
+                pio_dist_convert_str(
+                    text.as_ptr(),
+                    old_target.as_ptr(),
+                    old_source.as_ptr(),
+                    warn.as_mut_ptr(),
+                    warn.len(),
+                    err.as_mut_ptr(),
+                    err.len(),
+                )
+            };
+            assert!(
+                s.is_null(),
+                "legacy target-before-source order unexpectedly succeeded"
+            );
+            let msg = unsafe { CStr::from_ptr(err.as_ptr()) }.to_str().unwrap();
+            assert!(!msg.is_empty(), "expected an explanatory parse error");
+        }
+
+        #[test]
         fn warnings_report_count_and_text() {
             // An unknown length unit draws a parse warning; the handle must
             // surface it. Warnings use the size-then-fill idiom of `pio_warnings`.
@@ -2063,6 +2182,32 @@ mpc.branch = [
             let text = unsafe { CStr::from_ptr(s) }.to_str().unwrap();
             assert!(text.contains("\"bus\""));
             unsafe { pio_string_free(s) };
+        }
+
+        #[test]
+        fn convert_file_rejects_target_before_source_order() {
+            let path = fourwire_cstr();
+            let old_target = CString::new("pmd").unwrap();
+            let old_source = CString::new("dss").unwrap();
+            let mut warn = [0 as c_char; 4096];
+            let mut err = [0 as c_char; PIO_ERRBUF_MIN];
+            let s = unsafe {
+                pio_dist_convert_file(
+                    path.as_ptr(),
+                    old_target.as_ptr(),
+                    old_source.as_ptr(),
+                    warn.as_mut_ptr(),
+                    warn.len(),
+                    err.as_mut_ptr(),
+                    err.len(),
+                )
+            };
+            assert!(
+                s.is_null(),
+                "legacy target-before-source order unexpectedly succeeded"
+            );
+            let msg = unsafe { CStr::from_ptr(err.as_ptr()) }.to_str().unwrap();
+            assert!(!msg.is_empty(), "expected an explanatory parse error");
         }
 
         #[test]

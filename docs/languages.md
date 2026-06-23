@@ -50,8 +50,8 @@ The multiconductor distribution model follows the same taxonomy under its own
 handle type; the two families do not mix. The C distribution surface ships
 behind the optional `dist` feature (`PIO_DIST`); a consumer probes it with
 `pio_has_feature("dist")`, then checks `pio_dist_abi_version()` against
-`PIO_DIST_ABI_VERSION`. Julia bindings are not wired up yet (tracked on the
-PowerIO.jl side).
+`PIO_DIST_ABI_VERSION`. PowerIO.jl uses the same runtime check before calling
+the distribution C conversion helpers.
 
 | Concept | Rust | Python | C ABI |
 |---|---|---|---|
