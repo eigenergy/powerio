@@ -188,18 +188,18 @@ fn build_options(scheme: Scheme, include_taps: bool, include_shifts: bool) -> Bu
 /// The derived [`IndexCore`] is built once and cached alongside `inner`, so the
 /// matrix builders and topology getters reuse it instead of rebuilding the
 /// bus-id map per call.
-#[pyclass(name = "PyCase")]
-pub struct PyCase {
+#[pyclass(name = "PyNetwork")]
+pub struct PyNetwork {
     inner: Network,
     core: IndexCore,
     warnings: Vec<String>,
 }
 
-/// Wrap a parse result as a `PyCase`, building the index core once and keeping
+/// Wrap a parse result as a `PyNetwork`, building the index core once and keeping
 /// the reader's fidelity warnings on the handle.
-fn case_from_parsed(parsed: powerio_matrix::Parsed) -> PyCase {
+fn case_from_parsed(parsed: powerio_matrix::Parsed) -> PyNetwork {
     let core = IndexCore::build(&parsed.network);
-    PyCase {
+    PyNetwork {
         inner: parsed.network,
         core,
         warnings: parsed.warnings,
@@ -235,7 +235,7 @@ fn display_data_to_py<'py>(py: Python<'py>, display: DisplayData) -> PyResult<Bo
 }
 
 #[pymethods]
-impl PyCase {
+impl PyNetwork {
     // --- metadata -------------------------------------------------------
 
     #[getter]
@@ -451,10 +451,10 @@ impl PyCase {
     /// out-of-service filtered, densely reindexed (1-based), bus types
     /// canonicalized. The raw case is unchanged; the result carries no retained
     /// source, so writing it serializes the per-unit model rather than echoing.
-    fn to_normalized(&self) -> PyResult<PyCase> {
+    fn to_normalized(&self) -> PyResult<PyNetwork> {
         let inner = self.inner.to_normalized().map_err(to_pyerr)?;
         let core = IndexCore::build(&inner);
-        Ok(PyCase {
+        Ok(PyNetwork {
             inner,
             core,
             warnings: self.warnings.clone(),
@@ -632,7 +632,7 @@ impl PyCase {
 
     fn __repr__(&self) -> String {
         format!(
-            "PyCase(name={:?}, n_buses={}, n_branches={}, n_gens={})",
+            "Network(name={:?}, n_buses={}, n_branches={}, n_gens={})",
             self.inner.name,
             self.inner.buses.len(),
             self.inner.branches.len(),
@@ -645,7 +645,7 @@ impl PyCase {
 /// `from_` is given.
 #[pyfunction]
 #[pyo3(signature = (path, from_=None))]
-fn parse_file(path: &str, from_: Option<&str>) -> PyResult<PyCase> {
+fn parse_file(path: &str, from_: Option<&str>) -> PyResult<PyNetwork> {
     powerio_matrix::parse_file(std::path::Path::new(path), from_)
         .map(case_from_parsed)
         .map_err(to_pyerr)
@@ -656,7 +656,7 @@ fn parse_file(path: &str, from_: Option<&str>) -> PyResult<PyCase> {
 /// `pslf`; aliases `m`/`pm`/`egret`/`pp`/`raw`/`aux`/`epc`).
 #[pyfunction]
 #[pyo3(signature = (text, format=None))]
-fn parse_str(text: &str, format: Option<&str>) -> PyResult<PyCase> {
+fn parse_str(text: &str, format: Option<&str>) -> PyResult<PyNetwork> {
     powerio_matrix::parse_str(text, format.unwrap_or("matpower"))
         .map(case_from_parsed)
         .map_err(to_pyerr)
@@ -690,10 +690,10 @@ fn parse_display_bytes<'py>(
 
 /// Rebuild a case from JSON produced by `Network.to_json()`.
 #[pyfunction]
-fn from_json(text: &str) -> PyResult<PyCase> {
+fn from_json(text: &str) -> PyResult<PyNetwork> {
     let inner = powerio_matrix::Network::from_json(text).map_err(to_pyerr)?;
     let core = IndexCore::build(&inner);
-    Ok(PyCase {
+    Ok(PyNetwork {
         inner,
         core,
         warnings: Vec::new(),
@@ -702,7 +702,7 @@ fn from_json(text: &str) -> PyResult<PyCase> {
 
 /// Read a PyPSA CSV folder into a case.
 #[pyfunction]
-fn read_pypsa_csv_folder(path: &str) -> PyResult<PyCase> {
+fn read_pypsa_csv_folder(path: &str) -> PyResult<PyNetwork> {
     powerio_matrix::read_pypsa_csv_folder(std::path::Path::new(path))
         .map(case_from_parsed)
         .map_err(to_pyerr)
@@ -756,14 +756,18 @@ fn dist_to_pyerr(e: powerio_dist::Error) -> PyErr {
 
 /// Low-level handle around a parsed multiconductor distribution network in
 /// wire coordinates (OpenDSS, PMD ENGINEERING JSON, BMOPF JSON). The
-/// user-facing `powerio.dist.DistCase` wraps it.
-#[pyclass(name = "_DistCase", frozen)]
-struct PyDistCase {
+/// user-facing `powerio.dist.DistNetwork` wraps it.
+#[pyclass(name = "_DistNetwork", frozen)]
+struct PyDistNetwork {
     net: powerio_dist::DistNetwork,
 }
 
 #[pymethods]
-impl PyDistCase {
+impl PyDistNetwork {
+    fn name(&self) -> Option<&str> {
+        self.net.name.as_deref()
+    }
+
     /// Format the case was parsed from (`dss`, `pmd-json`, `bmopf-json`).
     fn source_format(&self) -> Option<&'static str> {
         self.net.source_format.map(|f| f.name())
@@ -795,6 +799,10 @@ impl PyDistCase {
         self.net.generators.len()
     }
 
+    fn n_sources(&self) -> usize {
+        self.net.sources.len()
+    }
+
     /// Serialize to `to` (`dss`, `pmd-json`, `bmopf-json`). Returns
     /// `(text, warnings)`. Writing back to the source format echoes the
     /// retained source byte for byte.
@@ -808,7 +816,7 @@ impl PyDistCase {
 
     fn __repr__(&self) -> String {
         format!(
-            "DistCase(n_buses={}, n_lines={}, n_transformers={}, n_loads={})",
+            "DistNetwork(n_buses={}, n_lines={}, n_transformers={}, n_loads={})",
             self.net.buses.len(),
             self.net.lines.len(),
             self.net.transformers.len(),
@@ -822,18 +830,18 @@ impl PyDistCase {
 /// ENGINEERING `data_model` key against the BMOPF layout).
 #[pyfunction]
 #[pyo3(signature = (path, from_=None))]
-fn dist_parse_file(path: &str, from_: Option<&str>) -> PyResult<PyDistCase> {
+fn dist_parse_file(path: &str, from_: Option<&str>) -> PyResult<PyDistNetwork> {
     powerio_dist::parse_file(std::path::Path::new(path), from_)
-        .map(|net| PyDistCase { net })
+        .map(|net| PyDistNetwork { net })
         .map_err(dist_to_pyerr)
 }
 
 /// Parse an in-memory distribution case of the named `format` (`dss`,
 /// `pmd-json`, `bmopf-json`).
 #[pyfunction]
-fn dist_parse_str(text: &str, format: &str) -> PyResult<PyDistCase> {
+fn dist_parse_str(text: &str, format: &str) -> PyResult<PyDistNetwork> {
     powerio_dist::parse_str(text, format)
-        .map(|net| PyDistCase { net })
+        .map(|net| PyDistNetwork { net })
         .map_err(dist_to_pyerr)
 }
 
@@ -860,6 +868,25 @@ fn dist_convert_str(text: &str, to: &str, format: &str) -> PyResult<(String, Vec
         .map_err(dist_to_pyerr)?;
     let conv = powerio_dist::convert_str(text, to, format).map_err(dist_to_pyerr)?;
     Ok((conv.text, conv.warnings))
+}
+
+/// Classify top level JSON markers. Returns `(status, domain, format)` where
+/// `status` is `known`, `unknown`, or `ambiguous`.
+#[pyfunction]
+fn classify_json_text(text: &str) -> (String, Option<String>, Option<String>) {
+    match powerio_matrix::format::routing::classify_json_text(text) {
+        powerio_matrix::format::routing::Detection::Known(format) => (
+            "known".into(),
+            Some(match format.domain() {
+                powerio_matrix::format::routing::Domain::Transmission => "transmission".into(),
+                powerio_matrix::format::routing::Domain::Distribution => "distribution".into(),
+                _ => "unknown".into(),
+            }),
+            Some(format.name().into()),
+        ),
+        powerio_matrix::format::routing::Detection::Unknown => ("unknown".into(), None, None),
+        powerio_matrix::format::routing::Detection::Ambiguous => ("ambiguous".into(), None, None),
+    }
 }
 
 /// Build a `{dir, files}` dict from an outputs directory and its written files.
@@ -911,7 +938,7 @@ fn pypsa_outputs_to_dict<'py>(
 #[pyo3(signature = (cases, out_dir, base_scenario=0, include_y_bus=true, include_taps=true, include_shifts=true))]
 fn write_gridfm_batch<'py>(
     py: Python<'py>,
-    cases: Vec<PyRef<'py, PyCase>>,
+    cases: Vec<PyRef<'py, PyNetwork>>,
     out_dir: &str,
     base_scenario: i64,
     include_y_bus: bool,
@@ -933,13 +960,13 @@ fn write_gridfm_batch<'py>(
 
 /// Turn a [`GridfmRead`] into the `(case, scenario, warnings)` triple the Python
 /// `read_gridfm*` functions return: the reconstructed network wrapped as a
-/// `PyCase` (with its index core, exactly as `parse_file` does), the scenario id,
+/// `PyNetwork` (with its index core, exactly as `parse_file` does), the scenario id,
 /// and the fidelity warnings the lossy read surfaced.
 #[cfg(feature = "gridfm")]
-fn gridfm_read_to_py(read: GridfmRead) -> (PyCase, i64, Vec<String>) {
+fn gridfm_read_to_py(read: GridfmRead) -> (PyNetwork, i64, Vec<String>) {
     let core = IndexCore::build(&read.network);
     (
-        PyCase {
+        PyNetwork {
             inner: read.network,
             core,
             warnings: read.warnings.clone(),
@@ -958,7 +985,7 @@ fn gridfm_read_to_py(read: GridfmRead) -> (PyCase, i64, Vec<String>) {
 #[cfg(feature = "gridfm")]
 #[pyfunction]
 #[pyo3(signature = (dir, scenario=0))]
-fn read_gridfm(dir: &str, scenario: i64) -> PyResult<(PyCase, i64, Vec<String>)> {
+fn read_gridfm(dir: &str, scenario: i64) -> PyResult<(PyNetwork, i64, Vec<String>)> {
     gridfm_read_dataset(dir, scenario)
         .map(gridfm_read_to_py)
         .map_err(to_pyerr)
@@ -970,7 +997,7 @@ fn read_gridfm(dir: &str, scenario: i64) -> PyResult<(PyCase, i64, Vec<String>)>
 /// `gridfm` feature.
 #[cfg(feature = "gridfm")]
 #[pyfunction]
-fn read_gridfm_scenarios(dir: &str) -> PyResult<Vec<(PyCase, i64, Vec<String>)>> {
+fn read_gridfm_scenarios(dir: &str) -> PyResult<Vec<(PyNetwork, i64, Vec<String>)>> {
     let reads = gridfm_read_scenarios(dir).map_err(to_pyerr)?;
     Ok(reads.into_iter().map(gridfm_read_to_py).collect())
 }
@@ -981,7 +1008,7 @@ fn _powerio(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add("PowerIOError", m.py().get_type::<PowerIOError>())?;
     m.add("PowerIOParseError", m.py().get_type::<PowerIOParseError>())?;
     m.add("PowerIODataError", m.py().get_type::<PowerIODataError>())?;
-    m.add_class::<PyCase>()?;
+    m.add_class::<PyNetwork>()?;
     m.add_function(wrap_pyfunction!(parse_file, m)?)?;
     m.add_function(wrap_pyfunction!(parse_str, m)?)?;
     m.add_function(wrap_pyfunction!(parse_display_file, m)?)?;
@@ -990,11 +1017,12 @@ fn _powerio(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(read_pypsa_csv_folder, m)?)?;
     m.add_function(wrap_pyfunction!(convert_file, m)?)?;
     m.add_function(wrap_pyfunction!(convert_str, m)?)?;
-    m.add_class::<PyDistCase>()?;
+    m.add_class::<PyDistNetwork>()?;
     m.add_function(wrap_pyfunction!(dist_parse_file, m)?)?;
     m.add_function(wrap_pyfunction!(dist_parse_str, m)?)?;
     m.add_function(wrap_pyfunction!(dist_convert_file, m)?)?;
     m.add_function(wrap_pyfunction!(dist_convert_str, m)?)?;
+    m.add_function(wrap_pyfunction!(classify_json_text, m)?)?;
     // Whether the gridfm Parquet surface (arrow/parquet) was compiled in, so the
     // pure-Python layer can raise an ImportError instead of an AttributeError.
     m.add("_has_gridfm", cfg!(feature = "gridfm"))?;

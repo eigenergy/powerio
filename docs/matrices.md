@@ -1,6 +1,6 @@
 # Matrix outputs and conventions
 
-The `powerio-matrix` crate exposes efficient sparse matrix and graph views for common power system representations. The views are derived from a parsed `Network`. The builders take the densely indexed `IndexedNetwork`, which maps bus ids to a
+The `powerio-matrix` crate builds sparse matrices and graph outputs for common power system representations. The outputs are derived from a parsed `Network`. The builders take the densely indexed `IndexedNetwork`, which maps bus ids to a
 contiguous `[0, n)`.
 
 **Note:** The experimental DC OPF bundle currently has its own schema in [dcopf-bundle.md](dcopf-bundle.md), and per-builder API
@@ -20,7 +20,7 @@ detail is in the [crate docs](https://eigenergy.github.io/powerio/powerio_matrix
 | PTDF | m×n | `build_ptdf` | dense; factors the Laplacian grounded at the reference buses |
 | LODF | m×m | `build_lodf` | dense DC line-outage factors |
 | adjacency | n×n | `build_adjacency` | `MatrixKind::Adjacency` |
-| petgraph view | n/a | `IndexedNetwork::to_petgraph` | `UnGraph<bus_idx, branch_idx>` |
+| petgraph graph | n/a | `IndexedNetwork::to_petgraph` | `UnGraph<bus_idx, branch_idx>` |
 
 Computing PTDF and LODF matrices requires a linear solve, which is not the focus of powerio. Both factor the Laplacian with one row and column removed for each reference bus, using the dense Cholesky in
 `matrix::sensitivity`. Every connected component must contain at least one

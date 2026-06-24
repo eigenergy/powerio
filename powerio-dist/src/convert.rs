@@ -23,10 +23,11 @@ pub enum DistTargetFormat {
 
 /// Resolves common names and file extensions to a target format.
 pub fn dist_target_from_name(name: &str) -> Option<DistTargetFormat> {
-    match name.to_ascii_lowercase().as_str() {
+    let key = canonical_key(name);
+    match key.as_str() {
         "dss" | "opendss" => Some(DistTargetFormat::Dss),
-        "bmopf" | "bmopf-json" | "bmopf_json" => Some(DistTargetFormat::BmopfJson),
-        "pmd" | "pmd-json" | "pmd_json" | "engineering" => Some(DistTargetFormat::PmdJson),
+        "pmd" | "pmdjson" | "engineering" => Some(DistTargetFormat::PmdJson),
+        "bmopf" | "bmopfjson" => Some(DistTargetFormat::BmopfJson),
         _ => None,
     }
 }
@@ -60,16 +61,29 @@ fn read(path: &std::path::Path) -> crate::Result<String> {
     })
 }
 
-/// PMD ENGINEERING JSON carries a top level `data_model` key; the BMOPF
-/// layout has none. Deserializing into an [`IgnoredAny`](serde::de::IgnoredAny)
-/// field finds the key at the top level only (a nested or quoted occurrence
-/// doesn't count) without building the value tree.
-fn is_pmd_json(text: &str) -> bool {
-    #[derive(serde::Deserialize)]
-    struct Shape {
-        data_model: Option<serde::de::IgnoredAny>,
+fn canonical_key(name: &str) -> String {
+    name.to_ascii_lowercase()
+        .chars()
+        .filter(|c| *c != '-' && *c != '_')
+        .collect()
+}
+
+fn has_top_level_key(text: &str, key: &str) -> bool {
+    serde_json::from_str::<serde_json::Value>(text).is_ok_and(|value| {
+        value
+            .as_object()
+            .is_some_and(|shape| shape.contains_key(key))
+    })
+}
+
+/// Distribution parser policy for `.json`: PMD carries `data_model`; otherwise
+/// it is routed to BMOPF so the BMOPF reader can give the parse error or warning.
+fn infer_distribution_json_format(text: &str) -> DistTargetFormat {
+    if has_top_level_key(text, "data_model") {
+        DistTargetFormat::PmdJson
+    } else {
+        DistTargetFormat::BmopfJson
     }
-    serde_json::from_str::<Shape>(text).is_ok_and(|s| s.data_model.is_some())
 }
 
 /// Parses `text` in the named format (see [`dist_target_from_name`]).
@@ -82,8 +96,7 @@ pub fn parse_str(text: &str, format: &str) -> crate::Result<DistNetwork> {
 }
 
 /// Parses `path`, taking the format from `from` when given, the `.dss`
-/// extension otherwise, and for `.json` the presence of the top level PMD
-/// ENGINEERING `data_model` key against the BMOPF layout.
+/// extension otherwise, and for `.json` the shared distribution classifier.
 pub fn parse_file(
     path: impl AsRef<std::path::Path>,
     from: Option<&str>,
@@ -103,7 +116,7 @@ pub fn parse_file(
             "dss" => DistTargetFormat::Dss,
             "json" => {
                 let text = read(path)?;
-                return if is_pmd_json(&text) {
+                return if infer_distribution_json_format(&text) == DistTargetFormat::PmdJson {
                     crate::pmd::parse_pmd_str(&text)
                 } else {
                     crate::bmopf::parse_bmopf_str(&text)
@@ -193,12 +206,23 @@ mod tests {
     use super::*;
 
     #[test]
-    fn sniff_requires_top_level_data_model() {
-        assert!(is_pmd_json(r#"{"data_model": "ENGINEERING"}"#));
-        // Nested or quoted occurrences are not the marker.
-        assert!(!is_pmd_json(r#"{"bus": {"data_model": {}}}"#));
-        assert!(!is_pmd_json(r#"{"name": "data_model"}"#));
-        assert!(!is_pmd_json("{not json"));
+    fn distribution_json_classifier_preserves_pmd_marker_and_bmopf_fallback() {
+        assert_eq!(
+            infer_distribution_json_format(r#"{"data_model": "ENGINEERING"}"#),
+            DistTargetFormat::PmdJson
+        );
+        assert_eq!(
+            infer_distribution_json_format(r#"{"bus": {"data_model": {}}}"#),
+            DistTargetFormat::BmopfJson
+        );
+        assert_eq!(
+            infer_distribution_json_format(r#"{"name": "data_model"}"#),
+            DistTargetFormat::BmopfJson
+        );
+        assert_eq!(
+            infer_distribution_json_format("{not json"),
+            DistTargetFormat::BmopfJson
+        );
     }
 
     #[test]

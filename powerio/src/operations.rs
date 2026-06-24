@@ -1,7 +1,7 @@
 //! Network operations: deriving or rewriting a [`Network`].
 //!
 //! These are model-level transforms, distinct from the format readers/writers and
-//! from the per unit [`to_normalized`](Network::to_normalized) view.
+//! from the per unit [`to_normalized`](Network::to_normalized) form.
 //! [`subset`](Network::subset) carves a study footprint out of a larger case;
 //! [`merge_bus`](Network::merge_bus) collapses two buses into one (re-homing the
 //! incident elements), and [`reduce_zero_impedance`](Network::reduce_zero_impedance)

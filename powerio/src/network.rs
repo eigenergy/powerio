@@ -159,7 +159,7 @@ pub enum SourceFormat {
     PowerWorldBinary,
     /// Built in memory, for example from synth or an edited case; no source text.
     InMemory,
-    /// A normalized derived view ([`Network::to_normalized`]): per unit, radians,
+    /// A normalized derived form ([`Network::to_normalized`]): per unit, radians,
     /// filtered, source bus ids preserved. Distinct from
     /// [`InMemory`](SourceFormat::InMemory) so consumers can tell a per unit
     /// product from a raw in memory network; it has no source text and a different
@@ -718,7 +718,7 @@ impl Transformer3W {
     /// Expand into a synthetic star [`Bus`] (id `star_id`) plus three [`Branch`]es,
     /// one per winding, for a consumer that works in the bus-branch model.
     /// [`IndexedNetwork`](crate::IndexedNetwork) calls this via
-    /// `Network::expand_transformers_3w` when assembling a matrix view. The star
+    /// `Network::expand_transformers_3w` when assembling matrix inputs. The star
     /// bus carries the stored star voltage and the magnetizing shunt is left to the
     /// caller; each branch takes its winding's tap, phase shift, and ratings.
     #[must_use]

@@ -10,7 +10,7 @@
 </p>
 
 PowerIO parses power system case files into a typed `Network`, converts between
-formats, and builds sparse matrices and graph views for solver and analysis
+formats, and builds sparse matrices and graph representations for solver and analysis
 code. Same format writes return retained source text when the reader supports
 it; cross format writes report fields the target cannot carry in warnings.
 
@@ -53,7 +53,7 @@ This repository contains multiple packages.
 
 ```
 powerio          # parser, Network model, source retaining writers, converters
-powerio-matrix   # sparse matrices, DC sensitivity factors, graph views
+powerio-matrix   # sparse matrices, DC sensitivity factors, graph representations
 powerio-dist     # multiconductor distribution model, dss/PMD/BMOPF converters
 powerio-cli      # the `powerio` command and ratatui TUI
 powerio-py       # PyO3 extension for the Python `powerio` package
@@ -180,13 +180,13 @@ The `powerio-matrix` Rust crate derives an `IndexedNetwork` with dense bus indic
 - LACPF block matrix
 - Signed incidence, weighted Laplacian, and flow map matrices
 - PTDF and LODF sensitivity matrices
-- Adjacency matrix and `petgraph` view
+- Adjacency matrix and `petgraph` graph output
 - Matrix Market bundles for low-level OPF solvers
 - KKT operators for OPF solvers (experimental)
 
 Current conventions for signs, taps, phase shifts, per unit scaling, reference buses, and line parameters are documented in the [matrices guide](https://eigenergy.github.io/powerio/guides/matrices.html).
 
-### Normalized View
+### Normalized Form
 
 `Network::to_normalized` derives a post processed copy of a case for solvers:
 
@@ -199,7 +199,7 @@ Current conventions for signs, taps, phase shifts, per unit scaling, reference b
 
 The normalized copy carries no retained source text, so writing it emits the derived model rather than the original file.
 
-Python exposes the normalized view as `case.to_normalized()`, the C ABI as `pio_normalize`,
+Python exposes the normalized form as `case.to_normalized()`, the C ABI as `pio_normalize`,
 and Julia as `to_normalized(case)`.
 
 
@@ -214,7 +214,7 @@ Build with `--features arrow` to enable `pio_to_arrow` over the
 ### PowerAgent
 
 
-PowerIO is part of the [PowerAgent](https://github.com/Power-Agent) community. The Python interface for PowerIO currently includes an optional MCP server exposing low-level conversion, summaries, JSON transport, matrix views, and file staging as tools.
+PowerIO is part of the [PowerAgent](https://github.com/Power-Agent) community. The Python interface for PowerIO currently includes an optional MCP server exposing semantic tools for conversion, saving, summaries, parsing, normalization, matrix outputs, and display data.
 
 
 ```

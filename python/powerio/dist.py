@@ -1,4 +1,4 @@
-"""Multiconductor distribution cases in wire coordinates.
+"""Multiconductor distribution networks in wire coordinates.
 
 Three formats, lossless three way conversion: OpenDSS ``.dss``,
 PowerModelsDistribution ENGINEERING JSON (``pmd-json``), and the draft BMOPF
@@ -9,10 +9,10 @@ the :class:`~powerio.Conversion` warnings instead of dropping it silently.
 
     import powerio.dist as dist
 
-    case = dist.parse_file("feeder.dss")
-    for w in case.warnings:
+    net = dist.parse_file("feeder.dss")
+    for w in net.warnings:
         print("parse:", w)
-    conv = case.to_format("pmd-json")
+    conv = net.to_format("pmd-json")
 """
 
 from __future__ import annotations
@@ -22,6 +22,7 @@ from typing import Any, Optional
 from . import Conversion, _powerio
 
 __all__ = [
+    "DistNetwork",
     "DistCase",
     "parse_file",
     "parse_str",
@@ -30,8 +31,8 @@ __all__ = [
 ]
 
 
-class DistCase:
-    """A parsed multiconductor distribution case.
+class DistNetwork:
+    """A parsed multiconductor distribution network.
 
     Buses carry named terminals, lines carry conductor impedance matrices, and
     transformers carry per winding connections; nothing is collapsed to
@@ -43,8 +44,13 @@ class DistCase:
         self._inner = inner
 
     @property
+    def name(self) -> Optional[str]:
+        """Distribution network name when the source format carries one."""
+        return self._inner.name()
+
+    @property
     def source_format(self) -> Optional[str]:
-        """Format the case was parsed from: ``dss``, ``pmd-json``, or ``bmopf-json``."""
+        """Format parsed from: ``dss``, ``pmd-json``, or ``bmopf-json``."""
         return self._inner.source_format()
 
     @property
@@ -72,6 +78,10 @@ class DistCase:
     def n_generators(self) -> int:
         return self._inner.n_generators()
 
+    @property
+    def n_sources(self) -> int:
+        return self._inner.n_sources()
+
     def to_format(self, to: str) -> Conversion:
         """Serialize to ``to`` (``dss``, ``pmd-json``, ``bmopf-json``).
 
@@ -86,38 +96,43 @@ class DistCase:
         return self._inner.__repr__()
 
 
-def parse_file(path: Any, from_: Optional[str] = None) -> DistCase:
-    """Parse a distribution case file.
+# Deprecated compatibility alias. Kept because it was exported before the
+# DistNetwork rename; remove in 0.4.0.
+DistCase = DistNetwork
+
+
+def parse_file(path: Any, from_: Optional[str] = None) -> DistNetwork:
+    """Parse a distribution network file.
 
     The format comes from ``from_`` when given, else from the file itself:
     ``.dss`` is OpenDSS, and ``.json`` holding the ENGINEERING ``data_model``
     key is PMD JSON, otherwise BMOPF JSON.
     """
-    return DistCase(_powerio.dist_parse_file(str(path), from_))
+    return DistNetwork(_powerio.dist_parse_file(str(path), from_))
 
 
-def parse_str(text: str, format: str) -> DistCase:
-    """Parse an in-memory distribution case of the named ``format``."""
-    return DistCase(_powerio.dist_parse_str(text, format))
+def parse_str(text: str, format: str) -> DistNetwork:
+    """Parse an in-memory distribution network of the named ``format``."""
+    return DistNetwork(_powerio.dist_parse_str(text, format))
 
 
 def convert_file(path: Any, to: str, from_: Optional[str] = None) -> Conversion:
-    """Convert a distribution case file to ``to`` in one call.
+    """Convert a distribution network file to ``to`` in one call.
 
     The warnings carry both the parse warnings and the writer's fidelity
-    losses (there is no :class:`DistCase` to query them from).
+    losses (there is no :class:`DistNetwork` to query them from).
     """
     text, warnings = _powerio.dist_convert_file(str(path), to, from_)
     return Conversion(text, warnings)
 
 
 def convert_str(text: str, to: str, format: str) -> Conversion:
-    """Convert an in-memory distribution case of the named ``format`` to ``to``.
+    """Convert an in-memory distribution network of the named ``format`` to ``to``.
 
     The signature matches :func:`powerio.convert_str`: input, target, source,
     except ``format`` is required (there is no extension to infer from and no
     default). The warnings carry both the parse warnings and the writer's
-    fidelity losses (there is no :class:`DistCase` to query them from).
+    fidelity losses (there is no :class:`DistNetwork` to query them from).
     """
     text, warnings = _powerio.dist_convert_str(text, to, format)
     return Conversion(text, warnings)

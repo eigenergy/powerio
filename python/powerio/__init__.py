@@ -3,7 +3,7 @@
 Parse MATPOWER, PSS/E, PowerWorld, PSLF EPC, PowerModels JSON, egret JSON,
 pandapower JSON, and PyPSA CSV folders into one format neutral case; write retained text
 formats back byte exact; convert between formats; and pull the sparse matrices
-and graph views solvers need::
+and graph outputs solvers need::
 
     import powerio as pio
 
@@ -23,7 +23,7 @@ format for network definition); time series NetCDF/HDF5 scenarios are out of
 scope for now (https://github.com/eigenergy/powerio/issues/107).
 
 ``import powerio`` and parsing/writing/converting pull in nothing but the
-interpreter. The matrix methods need scipy/numpy and the graph view needs networkx; add them
+interpreter. The matrix methods need scipy/numpy and the graph helper needs networkx; add them
 with ``pip install 'powerio[matrix]'``, ``[graph]``, or ``[all]``. A missing
 extra raises a clear ImportError, never a link error: the compiled core
 (``powerio._powerio``) returns COO triplets as plain Python lists, and the
@@ -41,7 +41,6 @@ from ._powerio import PowerIODataError, PowerIOError, PowerIOParseError, __versi
 
 __all__ = [
     "Network",
-    "Case",
     "Incidence",
     "YbusParts",
     "Conversion",
@@ -156,7 +155,7 @@ DenseNetwork = namedtuple(
         "is_radial",
     ],
 )
-DenseNetwork.__doc__ = """Dense NumPy table view of a parsed :class:`Network`."""
+DenseNetwork.__doc__ = """Copied dense NumPy table export of a parsed :class:`Network`."""
 
 
 def _require(module: str, extra: str):
@@ -237,7 +236,7 @@ class Network:
     ``scheme``/``convention``/``units`` string raises ``ValueError``.
     """
 
-    def __init__(self, inner: "_powerio.PyCase"):
+    def __init__(self, inner: "_powerio.PyNetwork"):
         self._inner = inner
 
     def __getattr__(self, name: str):
@@ -251,9 +250,11 @@ class Network:
         return getattr(self._inner, name)
 
     def __repr__(self) -> str:
-        return repr(self._inner).replace("PyCase", "Network", 1)
+        # The inner handle's __repr__ already renders the public ``Network(...)``
+        # form, so this is a straight delegate.
+        return repr(self._inner)
 
-    # --- canonical format and table views -------------------------------
+    # --- canonical format and table exports -----------------------------
 
     def to_matpower(self) -> str:
         """Serialize to MATPOWER ``.m`` text.
@@ -279,8 +280,8 @@ class Network:
     def to_dense(self) -> DenseNetwork:
         """Dense NumPy arrays for solver and adapter code.
 
-        This view preserves bus and branch source order. Loads and shunts are
-        summed per bus, matching the Rust indexed analysis view.
+        This allocates new arrays, preserves bus and branch source order, and
+        sums loads and shunts per bus to match the Rust indexed analysis view.
         """
         np = _require("numpy", "matrix")
         buses = self._inner.buses
@@ -454,6 +455,8 @@ class Network:
         return g
 
 
+# Deprecated compatibility alias. Kept out of ``__all__`` and docs; remove in
+# 0.4.0.
 Case = Network
 
 
@@ -516,39 +519,39 @@ def convert_str(text: str, to: str, format: str = "matpower") -> Conversion:
     return Conversion(out, warnings)
 
 
-def to_format(case: Network, to: str) -> Conversion:
-    """Serialize ``case`` to another format."""
-    return case.to_format(to)
+def to_format(network: Network, to: str) -> Conversion:
+    """Serialize ``network`` to another format."""
+    return network.to_format(to)
 
 
-def to_matpower(case: Network) -> str:
-    """Serialize ``case`` to MATPOWER ``.m`` text."""
-    return case.to_matpower()
+def to_matpower(network: Network) -> str:
+    """Serialize ``network`` to MATPOWER ``.m`` text."""
+    return network.to_matpower()
 
 
-def to_json(case: Network) -> str:
-    """Serialize ``case`` to the JSON transport."""
-    return case.to_json()
+def to_json(network: Network) -> str:
+    """Serialize ``network`` to the JSON transport."""
+    return network.to_json()
 
 
-def to_dense(case: Network) -> DenseNetwork:
-    """Return the dense NumPy table view of ``case``."""
-    return case.to_dense()
+def to_dense(network: Network) -> DenseNetwork:
+    """Return copied dense NumPy tables for ``network``."""
+    return network.to_dense()
 
 
 def write_gridfm_batch(
-    cases: "list[Network]",
+    networks: "list[Network]",
     out_dir: Any,
     base_scenario: int = 0,
     include_y_bus: bool = True,
     include_taps: bool = True,
     include_shifts: bool = True,
 ) -> dict:
-    """Write several cases as one gridfm-datakit dataset, row-stacked and keyed by
-    the ``scenario`` column.
+    """Write several networks as one gridfm-datakit dataset, row-stacked and
+    keyed by the ``scenario`` column.
 
-    Each case is one snapshot; the k-th is stamped ``base_scenario + k``. The
-    cases must share a base element set: the same bus/branch/gen counts and
+    Each network is one snapshot; the k-th is stamped ``base_scenario + k``. The
+    networks must share a base element set: the same bus/branch/gen counts and
     bus id order (otherwise :class:`PowerIODataError` is raised). Load, dispatch,
     branch status, and costs may vary per scenario. Returns the same dict as
     :meth:`Network.write_gridfm`. Published wheels include the native writer;
@@ -556,7 +559,7 @@ def write_gridfm_batch(
     ``ImportError``.
     """
     _require_gridfm()
-    inners = [c._inner for c in cases]
+    inners = [c._inner for c in networks]
     return _powerio.write_gridfm_batch(
         inners, str(out_dir), base_scenario, include_y_bus, include_taps, include_shifts
     )
@@ -581,8 +584,8 @@ def read_gridfm(dir: Any, scenario: int = 0) -> GridfmRead:
     ``ImportError``.
     """
     _require_gridfm()
-    case, scen, warnings = _powerio.read_gridfm(str(dir), scenario)
-    return GridfmRead(Network(case), scen, warnings)
+    inner, scen, warnings = _powerio.read_gridfm(str(dir), scenario)
+    return GridfmRead(Network(inner), scen, warnings)
 
 
 def read_gridfm_scenarios(dir: Any) -> "list[GridfmRead]":
@@ -596,8 +599,8 @@ def read_gridfm_scenarios(dir: Any) -> "list[GridfmRead]":
     """
     _require_gridfm()
     return [
-        GridfmRead(Network(case), scen, warnings)
-        for case, scen, warnings in _powerio.read_gridfm_scenarios(str(dir))
+        GridfmRead(Network(inner), scen, warnings)
+        for inner, scen, warnings in _powerio.read_gridfm_scenarios(str(dir))
     ]
 
 

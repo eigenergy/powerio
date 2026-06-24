@@ -34,6 +34,7 @@ use serde_json::{Map, Value};
 
 use crate::network::{Bus, BusId, BusType, Network, SourceFormat};
 use crate::{Error, Result};
+use routing::{Detection, SourceFormat as DetectedFormat, TransmissionFormat};
 
 mod egret;
 mod matpower;
@@ -43,6 +44,7 @@ pub mod powerworld;
 mod pslf;
 mod psse;
 mod pypsa;
+pub mod routing;
 
 pub use egret::{parse_egret_json, write_egret_json};
 pub use matpower::{parse_matpower, parse_matpower_file, write_matpower};
@@ -217,20 +219,20 @@ pub fn display_format_from_name(name: &str) -> Option<DisplayFormat> {
 /// for every format.
 #[must_use]
 pub fn target_format_from_name(name: &str) -> Option<TargetFormat> {
-    Some(match name.to_ascii_lowercase().as_str() {
-        "matpower" | "m" => TargetFormat::Matpower,
-        "powermodels-json" | "powermodels" | "powermodelsjson" | "pm" => {
-            TargetFormat::PowerModelsJson
+    Some(match routing::transmission_format_from_name(name)? {
+        TransmissionFormat::Matpower => TargetFormat::Matpower,
+        TransmissionFormat::PowerModelsJson => TargetFormat::PowerModelsJson,
+        TransmissionFormat::EgretJson => TargetFormat::EgretJson,
+        TransmissionFormat::Psse => TargetFormat::Psse { rev: 33 },
+        TransmissionFormat::Psse34 => TargetFormat::Psse { rev: 34 },
+        TransmissionFormat::Psse35 => TargetFormat::Psse { rev: 35 },
+        TransmissionFormat::PowerWorld => TargetFormat::PowerWorld,
+        TransmissionFormat::PandapowerJson => TargetFormat::PandapowerJson,
+        TransmissionFormat::PowerioJson => TargetFormat::PowerioJson,
+        TransmissionFormat::Pslf => TargetFormat::Pslf,
+        TransmissionFormat::PypsaCsv | TransmissionFormat::Pwb | TransmissionFormat::Gridfm => {
+            return None;
         }
-        "egret-json" | "egret" | "egretjson" => TargetFormat::EgretJson,
-        "psse" | "raw" | "psse33" | "raw33" => TargetFormat::Psse { rev: 33 },
-        "psse34" | "raw34" => TargetFormat::Psse { rev: 34 },
-        "psse35" | "raw35" => TargetFormat::Psse { rev: 35 },
-        "powerworld" | "aux" => TargetFormat::PowerWorld,
-        "pandapower-json" | "pandapower" | "pandapowerjson" | "pp" => TargetFormat::PandapowerJson,
-        "powerio-json" | "powerio" | "poweriojson" | "json" => TargetFormat::PowerioJson,
-        "pslf" | "epc" | "pslf-epc" => TargetFormat::Pslf,
-        _ => return None,
     })
 }
 
@@ -341,12 +343,14 @@ fn is_pslf_name(name: &str) -> bool {
 /// [`Error::UnknownFormat`] when its name maps to no extension, the I/O error
 /// otherwise), and a file maps by extension (`m`/`json`/`raw`/`aux`/`pwb`/`epc`),
 /// case insensitively (issue #97: `.RAW` is as common as `.raw` in the wild). A
-/// `.json` file is sniffed four ways: pandapower (`"_class": "pandapowerNet"`),
-/// egret (top level `elements` and `system`), the powerio-json snapshot (top
-/// level `buses`), else PowerModels. Pass `from` to force one. PowerWorld `.pwb`
-/// is a binary read only format with no retained source; PSLF `.epc` is text and
-/// has a writer. Returns [`Parsed`]: the network plus the reader's fidelity
-/// warnings.
+/// `.json` file is classified by top level shape markers: pandapower
+/// (`"_class": "pandapowerNet"`), egret (`elements` and `system`), powerio-json
+/// (`buses` plus network keys), and PowerModels JSON (`baseMVA`, `branch`,
+/// `gen`, or `gencost`). JSON matching distribution markers, ambiguous markers,
+/// or no known markers returns [`Error::UnknownFormat`]. Pass `from` to force a
+/// transmission format. PowerWorld `.pwb` is a binary read only format with no
+/// retained source; PSLF `.epc` is text and has a writer. Returns [`Parsed`]:
+/// the network plus the reader's fidelity warnings.
 ///
 /// The one path-based parser the CLI and the Python/C/Julia bindings share (each
 /// exposes the same `parse_file(path, from)` shape), so adding a source format is
@@ -428,7 +432,10 @@ pub fn parse_file(path: impl AsRef<std::path::Path>, from: Option<&str>) -> Resu
     // the retained source (byte-exact round-trip) with no copy. Sniffing a
     // `.json` borrows the text before the move.
     let text = std::fs::read_to_string(path)?;
-    let fmt = fmt_hint.unwrap_or_else(|| sniff_json(&text));
+    let fmt = match fmt_hint {
+        Some(fmt) => fmt,
+        None => sniff_json(&text)?,
+    };
     // The file stem is the name hint for formats that don't carry their own name.
     let stem = path.file_stem().and_then(|s| s.to_str());
     read_source(Arc::new(text), fmt, stem)
@@ -486,37 +493,36 @@ pub(crate) fn reject_empty_case(net: &Network, format: &'static str) -> Result<(
 }
 
 /// The JSON formats share the `.json` extension, so an explicit source format
-/// isn't always given. Sniff four ways: pandapower declares itself
-/// (`"_class": "pandapowerNet"`); egret `ModelData` has top level `elements`
-/// and `system`; the powerio-json snapshot carries a top level `buses` array
-/// (the other dialects key their bus tables differently: PowerModels `bus`,
-/// egret `elements`); else fall back to PowerModels (the more common input).
-///
-/// Deserializing into [`IgnoredAny`] fields scans the JSON to find the
-/// top level keys without building the whole `Value` tree, so a large
-/// PowerModels file isn't fully allocated here only to be parsed again by its
-/// reader.
-fn sniff_json(text: &str) -> TargetFormat {
-    use serde::de::IgnoredAny;
-    #[derive(serde::Deserialize)]
-    struct Shape {
-        #[serde(rename = "_class")]
-        class: Option<String>,
-        elements: Option<IgnoredAny>,
-        system: Option<IgnoredAny>,
-        buses: Option<IgnoredAny>,
+/// isn't always given. Classification lives here so the CLI and bindings use
+/// the same top level markers as the Rust parsers.
+fn sniff_json(text: &str) -> Result<TargetFormat> {
+    match routing::classify_json_text(text) {
+        Detection::Known(DetectedFormat::Transmission(format)) => transmission_json_target(format),
+        Detection::Known(DetectedFormat::Distribution(format)) => {
+            Err(Error::UnknownFormat(format!(
+                "JSON looks like distribution `{}`; use the distribution parser or pass an explicit transmission format",
+                format.name()
+            )))
+        }
+        Detection::Ambiguous => Err(Error::UnknownFormat(
+            "ambiguous JSON markers; pass an explicit source format".into(),
+        )),
+        Detection::Unknown => Err(Error::UnknownFormat(
+            "cannot infer JSON format; pass an explicit source format".into(),
+        )),
     }
-    match serde_json::from_str::<Shape>(text) {
-        Ok(Shape {
-            class: Some(class), ..
-        }) if class == "pandapowerNet" => TargetFormat::PandapowerJson,
-        Ok(Shape {
-            elements: Some(_),
-            system: Some(_),
-            ..
-        }) => TargetFormat::EgretJson,
-        Ok(Shape { buses: Some(_), .. }) => TargetFormat::PowerioJson,
-        _ => TargetFormat::PowerModelsJson,
+}
+
+fn transmission_json_target(format: TransmissionFormat) -> Result<TargetFormat> {
+    match format {
+        TransmissionFormat::PowerModelsJson => Ok(TargetFormat::PowerModelsJson),
+        TransmissionFormat::EgretJson => Ok(TargetFormat::EgretJson),
+        TransmissionFormat::PandapowerJson => Ok(TargetFormat::PandapowerJson),
+        TransmissionFormat::PowerioJson => Ok(TargetFormat::PowerioJson),
+        other => Err(Error::UnknownFormat(format!(
+            "JSON classifier returned non-JSON transmission format `{}`",
+            other.name()
+        ))),
     }
 }
 

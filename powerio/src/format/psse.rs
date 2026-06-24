@@ -2512,7 +2512,7 @@ Q
             mpc.warnings
         );
 
-        // The normalized analysis view keeps the 3-winding transformer.
+        // The normalized form keeps the 3-winding transformer.
         let norm = net.to_normalized().unwrap();
         assert_eq!(norm.transformers_3w.len(), 1, "to_normalized keeps the 3W");
         norm.validate().unwrap();

@@ -7,7 +7,7 @@ conversion with zero dependencies:
 pip install powerio
 ```
 
-Install extras only for the views that need them:
+Install extras only for the outputs that need them:
 
 ```bash
 pip install 'powerio[matrix]'   # numpy, scipy
@@ -114,3 +114,12 @@ bus = pl.read_parquet(f"{out['dir']}/bus_data.parquet")
 ```
 
 Use `powerio[pandas]` only for downstream code that expects pandas DataFrames.
+
+## MCP path handling
+
+The optional MCP server accepts local filesystem paths and `file://` URIs for
+`path` and `out_path` arguments. Remote URI schemes are rejected. Deployments
+that need filesystem containment can set `POWERIO_MCP_ALLOWED_ROOTS` to an
+`os.pathsep` separated list of directories; all MCP reads and writes must
+resolve under one of those roots. `POWERIO_MCP_ROOT` is accepted as a single
+root alias.

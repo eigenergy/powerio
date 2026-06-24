@@ -25,5 +25,5 @@ writer consumes one, so a format is one reader/writer at the hub rather than a
 pairwise converter, and adding one touches a single module. `IndexedNetwork` is the
 dense `[0, n)` analysis view derived from a `Network`; the matrix builders work from
 it. The parser, the hub, the source retaining writer, and the converters live in the
-`powerio` crate (light dependencies); the matrices and graph views live in
+`powerio` crate (light dependencies); the matrix builders and graph outputs live in
 `powerio-matrix`, which re-exports `powerio` so one import pulls in both layers.

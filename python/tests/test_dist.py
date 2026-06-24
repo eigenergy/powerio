@@ -20,6 +20,13 @@ def test_parse_file_counts_and_source_format():
     assert isinstance(case.warnings, list)
 
 
+def test_distcase_compatibility_alias():
+    case = dist.parse_file(FOURWIRE)
+    assert dist.DistCase is dist.DistNetwork
+    assert "DistCase" in dist.__all__
+    assert isinstance(case, dist.DistCase)
+
+
 def test_same_format_write_echoes_source():
     case = dist.parse_file(FOURWIRE)
     conv = case.to_format("dss")
