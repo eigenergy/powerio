@@ -736,7 +736,7 @@ fn distribution_summary_json(net: &powerio_dist::DistNetwork) -> serde_json::Val
     json!({
         "domain": "distribution",
         "name": net.name,
-        "source_format": net.source_format.map(|f| f.name()),
+        "source_format": net.source_format.map(powerio_dist::DistSourceFormat::name),
         "json_format": "bmopf-json",
         "base_mva": serde_json::Value::Null,
         "elements": {

@@ -495,9 +495,7 @@ pub(crate) fn reject_empty_case(net: &Network, format: &'static str) -> Result<(
 /// bindings use the same top level markers as the Rust parsers.
 fn sniff_json(text: &str) -> Result<TargetFormat> {
     match powerio_format::classify_json_text(text) {
-        Detection::Known(DetectedFormat::Transmission(format)) => {
-            Ok(transmission_json_target(format))
-        }
+        Detection::Known(DetectedFormat::Transmission(format)) => transmission_json_target(format),
         Detection::Known(DetectedFormat::Distribution(format)) => {
             Err(Error::UnknownFormat(format!(
                 "JSON looks like distribution `{}`; use the distribution parser or pass an explicit transmission format",
@@ -516,25 +514,16 @@ fn sniff_json(text: &str) -> Result<TargetFormat> {
     }
 }
 
-fn transmission_json_target(format: TransmissionFormat) -> TargetFormat {
+fn transmission_json_target(format: TransmissionFormat) -> Result<TargetFormat> {
     match format {
-        TransmissionFormat::PowerModelsJson => TargetFormat::PowerModelsJson,
-        TransmissionFormat::EgretJson => TargetFormat::EgretJson,
-        TransmissionFormat::PandapowerJson => TargetFormat::PandapowerJson,
-        TransmissionFormat::PowerioJson => TargetFormat::PowerioJson,
-        // Non-JSON transmission formats should never come from JSON shape
-        // detection. PowerModels is the safest text JSON fallback when callers
-        // misuse this helper internally.
-        TransmissionFormat::Matpower
-        | TransmissionFormat::Psse
-        | TransmissionFormat::Psse34
-        | TransmissionFormat::Psse35
-        | TransmissionFormat::PowerWorld
-        | TransmissionFormat::PypsaCsv
-        | TransmissionFormat::Pslf
-        | TransmissionFormat::Pwb
-        | TransmissionFormat::Gridfm => TargetFormat::PowerModelsJson,
-        _ => TargetFormat::PowerModelsJson,
+        TransmissionFormat::PowerModelsJson => Ok(TargetFormat::PowerModelsJson),
+        TransmissionFormat::EgretJson => Ok(TargetFormat::EgretJson),
+        TransmissionFormat::PandapowerJson => Ok(TargetFormat::PandapowerJson),
+        TransmissionFormat::PowerioJson => Ok(TargetFormat::PowerioJson),
+        other => Err(Error::UnknownFormat(format!(
+            "JSON classifier returned non-JSON transmission format `{}`",
+            other.name()
+        ))),
     }
 }
 

@@ -91,11 +91,12 @@ pub fn parse_file(
             "dss" => DistTargetFormat::Dss,
             "json" => {
                 let text = read(path)?;
-                return match powerio_format::infer_distribution_json_format(&text) {
-                    DistributionFormat::PmdJson => crate::pmd::parse_pmd_str(&text),
-                    DistributionFormat::BmopfJson => crate::bmopf::parse_bmopf_str(&text),
-                    DistributionFormat::Dss => unreachable!("DSS is not a JSON format"),
-                    _ => crate::bmopf::parse_bmopf_str(&text),
+                return if powerio_format::infer_distribution_json_format(&text)
+                    == DistributionFormat::PmdJson
+                {
+                    crate::pmd::parse_pmd_str(&text)
+                } else {
+                    crate::bmopf::parse_bmopf_str(&text)
                 };
             }
             other => return Err(crate::Error::UnknownFormat(other.to_string())),
