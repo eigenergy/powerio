@@ -2,31 +2,20 @@
 
 ## 0.3.3
 
-- MCP server: **unified the tool surface** to the bare powerio verbs (matching
-  the CLI's `powerio convert`), finishing the parse/convert name unification (#77)
-  that landed across Rust, Python, and C but never reached the MCP layer. One set
-  of tools now covers transmission *and* distribution, routed by format (the two
-  format sets are disjoint):
-  - `convert`, `save`, `summary` accept any single-file format in either domain.
-    `save(to="pypsa-csv")` writes the CSV folder; `save(to="dss")` is the
-    **OpenDSS on-ramp** — stage an IEEE BMOPF or PowerModelsDistribution case as a
-    `.dss` file an OpenDSS engine (e.g. PowerMCP's) can compile.
-  - `parse`, `to_json`, `normalize`, `compute_matrix`, `dense_view` are
-    transmission-only and reject a distribution format — a distribution network
-    has no JSON transport and isn't positive-sequence.
-  - `read_gridfm` / `write_gridfm` keep their own tools (the dataset carries
-    scenario and column options the format-only tools don't); `read_display_file`
-    decodes PowerWorld `.pwd` one-line geometry.
-  - `pypsa-csv` is read through `parse`/`summary` via a folder `path`, so
-    `read_pypsa_csv_folder` / `write_pypsa_csv_folder` are now deprecated aliases.
-  - The pre-0.3.3 names (`convert_case`, `save_case`, `case_summary`, `parse_case`,
-    `normalize_case`, `case_to_json`, `read_pypsa_csv_folder`,
-    `write_pypsa_csv_folder`) remain as **deprecated aliases** that forward
-    unchanged, so existing clients keep working for one release; they are
-    **removed in 0.4.0**. The source-format argument is `format` on every tool.
-  Eleven canonical tools (plus the eight deprecated aliases).
-- Python API: removed the undocumented `powerio.Case` alias for `Network` (use
-  `Network` directly). The **experimental** distribution surface renames
+- MCP server: **unified the advertised tool surface** to semantic verbs:
+  `convert`, `save`, `summary`, `parse`, `normalize`, `matrix`, and `display`.
+  The tools route transmission cases, distribution cases, PyPSA CSV folders, and
+  gridfm datasets by format. Distribution `parse` returns canonical `bmopf-json`
+  as its serial transport; transmission `parse` returns `powerio-json`.
+  `summary` now has one canonical JSON schema across MCP and the CLI's new
+  `powerio summary` command. Gridfm is a format behind `parse`/`save`, not its
+  own MCP tool. PowerWorld `.pwd` display files parse through `display`, leaving
+  room for a future open display format without renaming the tool. Older case,
+  matrix, and PyPSA helper names stay as direct Python compatibility callables
+  for one release, but they are no longer advertised as MCP tools.
+- Python API: restored the undocumented `powerio.Case = Network` alias for one
+  release, but left it out of `__all__` and docs; remove it in 0.4.0. The
+  **experimental** distribution surface renames
   `powerio.dist.DistCase → DistNetwork` to match the native `DistNetwork` hub
   type; `powerio.dist` is gated on the draft BMOPF schema (`PIO_DIST_ABI_VERSION`
   = 1) and not yet under the stability guarantee.
@@ -224,11 +213,11 @@ Hardening fixes only; no API or ABI change (`PIO_ABI_VERSION` stays 3).
 - `convert_str` (#88): in-memory conversion through the hub in Rust and
   Python; the MCP server's inline conversion no longer stages temp files.
   Closes #66.
-- The MCP server grows from two tools to eight (#90): `parse_case`,
-  `normalize_case`, and `case_to_json` emit the JSON transport,
-  `compute_matrix` returns nine sparse kinds in COO form, `dense_view`
-  returns the dense table view, and `save_case` writes converted cases to
-  disk; `convert_case` and `case_summary` are unchanged.
+- The MCP server grows from two tools to eight (#90): parse and normalization
+  helpers emit the JSON transport, the matrix helper returns nine sparse kinds
+  in COO form, the dense table export returns copied tables, and the save
+  helper writes converted cases to disk; conversion and summary helpers are
+  unchanged.
 - Docs (#92): Pages landing page with the released/development split, guide
   links, and the logo; the crate homepage points at the docs site; release
   drafts carry the CHANGELOG section instead of a bare title.
@@ -241,7 +230,7 @@ First release.
   PowerModels JSON, and egret JSON; byte-exact same-format round trips,
   maximal-fidelity conversion between formats.
 - `Network`, the one canonical model, with `to_normalized` deriving a
-  per-unit / radian / filtered / reindexed view.
+  per-unit / radian / filtered / reindexed form.
 - C ABI (`powerio-capi`, ABI version 3): parse, query, convert, JSON
   transport, and Arrow C Data Interface export behind `--features arrow`;
   cbindgen-generated header, version handshake, panic-safe boundary.

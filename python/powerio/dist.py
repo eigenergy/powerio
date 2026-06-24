@@ -43,6 +43,11 @@ class DistNetwork:
         self._inner = inner
 
     @property
+    def name(self) -> Optional[str]:
+        """Distribution network name when the source format carries one."""
+        return self._inner.name()
+
+    @property
     def source_format(self) -> Optional[str]:
         """Format parsed from: ``dss``, ``pmd-json``, or ``bmopf-json``."""
         return self._inner.source_format()
@@ -71,6 +76,10 @@ class DistNetwork:
     @property
     def n_generators(self) -> int:
         return self._inner.n_generators()
+
+    @property
+    def n_sources(self) -> int:
+        return self._inner.n_sources()
 
     def to_format(self, to: str) -> Conversion:
         """Serialize to ``to`` (``dss``, ``pmd-json``, ``bmopf-json``).

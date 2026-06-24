@@ -25,7 +25,7 @@ dependencies = []
 
 [project.optional-dependencies]
 # The matrix methods assemble scipy.sparse from the COO triplets the extension
-# returns; the graph view builds a networkx graph. Install only what you use.
+# returns; the graph helper builds a networkx graph. Install only what you use.
 matrix = ["numpy>=1.21", "scipy>=1.7"]
 graph = ["networkx>=2.6"]
 all = ["numpy>=1.21", "scipy>=1.7", "networkx>=2.6", "polars>=1"]

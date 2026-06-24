@@ -9,7 +9,7 @@
 //!   reader inverts it; [`Network::to_normalized`] scales the same way into a new
 //!   `Network`. The cost rescale is the one piece subtle enough that a second copy
 //!   would drift, so it has a single home.
-//! - **[`Network::to_normalized`]**: a derived, computation-ready view, per unit,
+//! - **[`Network::to_normalized`]**: a derived, computation-ready form, per unit,
 //!   radians, out-of-service filtered, source id preserving, bus types canonicalized.
 
 use std::collections::{HashMap, HashSet};
@@ -207,7 +207,7 @@ fn norm_gens(gens: &[Generator], base: f64, map: &HashMap<BusId, BusId>) -> Vec<
                 }),
                 caps,
                 // Remap the regulated bus through the same id map; drop it if its
-                // target was filtered out so the normalized view stays consistent.
+                // target was filtered out so the normalized form stays consistent.
                 regulated_bus: g.regulated_bus.and_then(|b| remap(map, b)),
                 ..g.clone()
             })

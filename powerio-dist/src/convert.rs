@@ -1,6 +1,7 @@
 //! Cross format conversion output and the format dispatcher.
 
 use crate::model::{DistNetwork, DistSourceFormat};
+use powerio_format::DistributionFormat;
 
 /// Text in the target format plus every fidelity loss the writer took.
 /// Nothing drops silently: a field the target cannot represent appears
@@ -23,10 +24,10 @@ pub enum DistTargetFormat {
 
 /// Resolves common names and file extensions to a target format.
 pub fn dist_target_from_name(name: &str) -> Option<DistTargetFormat> {
-    match name.to_ascii_lowercase().as_str() {
-        "dss" | "opendss" => Some(DistTargetFormat::Dss),
-        "bmopf" | "bmopf-json" | "bmopf_json" => Some(DistTargetFormat::BmopfJson),
-        "pmd" | "pmd-json" | "pmd_json" | "engineering" => Some(DistTargetFormat::PmdJson),
+    match powerio_format::distribution_format_from_name(name)? {
+        DistributionFormat::Dss => Some(DistTargetFormat::Dss),
+        DistributionFormat::BmopfJson => Some(DistTargetFormat::BmopfJson),
+        DistributionFormat::PmdJson => Some(DistTargetFormat::PmdJson),
         _ => None,
     }
 }
@@ -60,18 +61,6 @@ fn read(path: &std::path::Path) -> crate::Result<String> {
     })
 }
 
-/// PMD ENGINEERING JSON carries a top level `data_model` key; the BMOPF
-/// layout has none. Deserializing into an [`IgnoredAny`](serde::de::IgnoredAny)
-/// field finds the key at the top level only (a nested or quoted occurrence
-/// doesn't count) without building the value tree.
-fn is_pmd_json(text: &str) -> bool {
-    #[derive(serde::Deserialize)]
-    struct Shape {
-        data_model: Option<serde::de::IgnoredAny>,
-    }
-    serde_json::from_str::<Shape>(text).is_ok_and(|s| s.data_model.is_some())
-}
-
 /// Parses `text` in the named format (see [`dist_target_from_name`]).
 pub fn parse_str(text: &str, format: &str) -> crate::Result<DistNetwork> {
     match format.parse::<DistTargetFormat>()? {
@@ -82,8 +71,7 @@ pub fn parse_str(text: &str, format: &str) -> crate::Result<DistNetwork> {
 }
 
 /// Parses `path`, taking the format from `from` when given, the `.dss`
-/// extension otherwise, and for `.json` the presence of the top level PMD
-/// ENGINEERING `data_model` key against the BMOPF layout.
+/// extension otherwise, and for `.json` the shared distribution classifier.
 pub fn parse_file(
     path: impl AsRef<std::path::Path>,
     from: Option<&str>,
@@ -103,10 +91,11 @@ pub fn parse_file(
             "dss" => DistTargetFormat::Dss,
             "json" => {
                 let text = read(path)?;
-                return if is_pmd_json(&text) {
-                    crate::pmd::parse_pmd_str(&text)
-                } else {
-                    crate::bmopf::parse_bmopf_str(&text)
+                return match powerio_format::infer_distribution_json_format(&text) {
+                    DistributionFormat::PmdJson => crate::pmd::parse_pmd_str(&text),
+                    DistributionFormat::BmopfJson => crate::bmopf::parse_bmopf_str(&text),
+                    DistributionFormat::Dss => unreachable!("DSS is not a JSON format"),
+                    _ => crate::bmopf::parse_bmopf_str(&text),
                 };
             }
             other => return Err(crate::Error::UnknownFormat(other.to_string())),
@@ -193,12 +182,23 @@ mod tests {
     use super::*;
 
     #[test]
-    fn sniff_requires_top_level_data_model() {
-        assert!(is_pmd_json(r#"{"data_model": "ENGINEERING"}"#));
-        // Nested or quoted occurrences are not the marker.
-        assert!(!is_pmd_json(r#"{"bus": {"data_model": {}}}"#));
-        assert!(!is_pmd_json(r#"{"name": "data_model"}"#));
-        assert!(!is_pmd_json("{not json"));
+    fn distribution_json_classifier_preserves_pmd_marker_and_bmopf_fallback() {
+        assert_eq!(
+            powerio_format::infer_distribution_json_format(r#"{"data_model": "ENGINEERING"}"#),
+            DistributionFormat::PmdJson
+        );
+        assert_eq!(
+            powerio_format::infer_distribution_json_format(r#"{"bus": {"data_model": {}}}"#),
+            DistributionFormat::BmopfJson
+        );
+        assert_eq!(
+            powerio_format::infer_distribution_json_format(r#"{"name": "data_model"}"#),
+            DistributionFormat::BmopfJson
+        );
+        assert_eq!(
+            powerio_format::infer_distribution_json_format("{not json"),
+            DistributionFormat::BmopfJson
+        );
     }
 
     #[test]

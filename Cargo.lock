@@ -1998,6 +1998,7 @@ dependencies = [
  "lexical-core",
  "num-complex",
  "petgraph",
+ "powerio-format",
  "serde",
  "serde_json",
  "thiserror 2.0.18",
@@ -2022,8 +2023,10 @@ dependencies = [
  "clap",
  "crossterm",
  "powerio-dist",
+ "powerio-format",
  "powerio-matrix",
  "ratatui",
+ "serde_json",
  "sprs",
  "tracing",
  "tracing-subscriber",
@@ -2035,9 +2038,17 @@ name = "powerio-dist"
 version = "0.3.3"
 dependencies = [
  "jsonschema",
+ "powerio-format",
  "serde",
  "serde_json",
  "thiserror 2.0.18",
+]
+
+[[package]]
+name = "powerio-format"
+version = "0.3.3"
+dependencies = [
+ "serde_json",
 ]
 
 [[package]]
@@ -2065,6 +2076,7 @@ name = "powerio-py"
 version = "0.3.3"
 dependencies = [
  "powerio-dist",
+ "powerio-format",
  "powerio-matrix",
  "pyo3",
  "sprs",

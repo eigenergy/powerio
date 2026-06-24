@@ -3,7 +3,7 @@
 Parse MATPOWER, PSS/E, PowerWorld, PSLF EPC, PowerModels JSON, egret JSON,
 pandapower JSON, and PyPSA CSV folders into one format neutral case; write retained text
 formats back byte exact; convert between formats; and pull the sparse matrices
-and graph views solvers need::
+and graph outputs solvers need::
 
     import powerio as pio
 
@@ -23,7 +23,7 @@ format for network definition); time series NetCDF/HDF5 scenarios are out of
 scope for now (https://github.com/eigenergy/powerio/issues/107).
 
 ``import powerio`` and parsing/writing/converting pull in nothing but the
-interpreter. The matrix methods need scipy/numpy and the graph view needs networkx; add them
+interpreter. The matrix methods need scipy/numpy and the graph helper needs networkx; add them
 with ``pip install 'powerio[matrix]'``, ``[graph]``, or ``[all]``. A missing
 extra raises a clear ImportError, never a link error: the compiled core
 (``powerio._powerio``) returns COO triplets as plain Python lists, and the
@@ -155,7 +155,7 @@ DenseNetwork = namedtuple(
         "is_radial",
     ],
 )
-DenseNetwork.__doc__ = """Dense NumPy table view of a parsed :class:`Network`."""
+DenseNetwork.__doc__ = """Copied dense NumPy table export of a parsed :class:`Network`."""
 
 
 def _require(module: str, extra: str):
@@ -254,7 +254,7 @@ class Network:
         # form, so this is a straight delegate.
         return repr(self._inner)
 
-    # --- canonical format and table views -------------------------------
+    # --- canonical format and table exports -----------------------------
 
     def to_matpower(self) -> str:
         """Serialize to MATPOWER ``.m`` text.
@@ -280,8 +280,8 @@ class Network:
     def to_dense(self) -> DenseNetwork:
         """Dense NumPy arrays for solver and adapter code.
 
-        This view preserves bus and branch source order. Loads and shunts are
-        summed per bus, matching the Rust indexed analysis view.
+        This allocates new arrays, preserves bus and branch source order, and
+        sums loads and shunts per bus to match the Rust indexed analysis view.
         """
         np = _require("numpy", "matrix")
         buses = self._inner.buses
@@ -455,6 +455,11 @@ class Network:
         return g
 
 
+# Deprecated compatibility alias. Kept out of ``__all__`` and docs; remove in
+# 0.4.0.
+Case = Network
+
+
 def parse_file(path: Any, from_: Optional[str] = None) -> Network:
     """Parse a case file from a path, inferring the format from the extension.
 
@@ -530,7 +535,7 @@ def to_json(network: Network) -> str:
 
 
 def to_dense(network: Network) -> DenseNetwork:
-    """Return the dense NumPy table view of ``network``."""
+    """Return copied dense NumPy tables for ``network``."""
     return network.to_dense()
 
 

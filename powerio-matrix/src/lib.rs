@@ -1,10 +1,10 @@
-//! `powerio-matrix`: sparse matrices and graph views for power system case files,
+//! `powerio-matrix`: sparse matrices and graph outputs for power system case files,
 //! built on [`powerio`] (re-exported, so one `use powerio_matrix::...` pulls in
 //! both layers).
 //!
 //! Signed incidence `A`, weighted Laplacian `L = A diag(b) Aᵀ` and its
 //! reference-grounded form, B'/B''/Y_bus, PTDF/LODF, adjacency, the LACPF block,
-//! and the DC OPF instance bundle, plus a petgraph view. The builders take the
+//! and the DC OPF instance bundle, plus a petgraph representation. The builders take the
 //! dense-indexed [`IndexedNetwork`] view of a [`Network`].
 //!
 //! ```

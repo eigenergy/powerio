@@ -34,6 +34,7 @@ use serde_json::{Map, Value};
 
 use crate::network::{Bus, BusId, BusType, Network, SourceFormat};
 use crate::{Error, Result};
+use powerio_format::{Detection, SourceFormat as DetectedFormat, TransmissionFormat};
 
 mod egret;
 mod matpower;
@@ -217,19 +218,20 @@ pub fn display_format_from_name(name: &str) -> Option<DisplayFormat> {
 /// for every format.
 #[must_use]
 pub fn target_format_from_name(name: &str) -> Option<TargetFormat> {
-    Some(match name.to_ascii_lowercase().as_str() {
-        "matpower" | "m" => TargetFormat::Matpower,
-        "powermodels-json" | "powermodels" | "powermodelsjson" | "pm" => {
-            TargetFormat::PowerModelsJson
+    Some(match powerio_format::transmission_format_from_name(name)? {
+        TransmissionFormat::Matpower => TargetFormat::Matpower,
+        TransmissionFormat::PowerModelsJson => TargetFormat::PowerModelsJson,
+        TransmissionFormat::EgretJson => TargetFormat::EgretJson,
+        TransmissionFormat::Psse => TargetFormat::Psse { rev: 33 },
+        TransmissionFormat::Psse34 => TargetFormat::Psse { rev: 34 },
+        TransmissionFormat::Psse35 => TargetFormat::Psse { rev: 35 },
+        TransmissionFormat::PowerWorld => TargetFormat::PowerWorld,
+        TransmissionFormat::PandapowerJson => TargetFormat::PandapowerJson,
+        TransmissionFormat::PowerioJson => TargetFormat::PowerioJson,
+        TransmissionFormat::Pslf => TargetFormat::Pslf,
+        TransmissionFormat::PypsaCsv | TransmissionFormat::Pwb | TransmissionFormat::Gridfm => {
+            return None;
         }
-        "egret-json" | "egret" | "egretjson" => TargetFormat::EgretJson,
-        "psse" | "raw" | "psse33" | "raw33" => TargetFormat::Psse { rev: 33 },
-        "psse34" | "raw34" => TargetFormat::Psse { rev: 34 },
-        "psse35" | "raw35" => TargetFormat::Psse { rev: 35 },
-        "powerworld" | "aux" => TargetFormat::PowerWorld,
-        "pandapower-json" | "pandapower" | "pandapowerjson" | "pp" => TargetFormat::PandapowerJson,
-        "powerio-json" | "powerio" | "poweriojson" | "json" => TargetFormat::PowerioJson,
-        "pslf" | "epc" | "pslf-epc" => TargetFormat::Pslf,
         _ => return None,
     })
 }
@@ -428,7 +430,10 @@ pub fn parse_file(path: impl AsRef<std::path::Path>, from: Option<&str>) -> Resu
     // the retained source (byte-exact round-trip) with no copy. Sniffing a
     // `.json` borrows the text before the move.
     let text = std::fs::read_to_string(path)?;
-    let fmt = fmt_hint.unwrap_or_else(|| sniff_json(&text));
+    let fmt = match fmt_hint {
+        Some(fmt) => fmt,
+        None => sniff_json(&text)?,
+    };
     // The file stem is the name hint for formats that don't carry their own name.
     let stem = path.file_stem().and_then(|s| s.to_str());
     read_source(Arc::new(text), fmt, stem)
@@ -486,36 +491,49 @@ pub(crate) fn reject_empty_case(net: &Network, format: &'static str) -> Result<(
 }
 
 /// The JSON formats share the `.json` extension, so an explicit source format
-/// isn't always given. Sniff four ways: pandapower declares itself
-/// (`"_class": "pandapowerNet"`); egret `ModelData` has top level `elements`
-/// and `system`; the powerio-json snapshot carries a top level `buses` array
-/// (the other dialects key their bus tables differently: PowerModels `bus`,
-/// egret `elements`); else fall back to PowerModels (the more common input).
-///
-/// Deserializing into [`IgnoredAny`] fields scans the JSON to find the
-/// top level keys without building the whole `Value` tree, so a large
-/// PowerModels file isn't fully allocated here only to be parsed again by its
-/// reader.
-fn sniff_json(text: &str) -> TargetFormat {
-    use serde::de::IgnoredAny;
-    #[derive(serde::Deserialize)]
-    struct Shape {
-        #[serde(rename = "_class")]
-        class: Option<String>,
-        elements: Option<IgnoredAny>,
-        system: Option<IgnoredAny>,
-        buses: Option<IgnoredAny>,
+/// isn't always given. Classification lives in `powerio-format` so the CLI and
+/// bindings use the same top level markers as the Rust parsers.
+fn sniff_json(text: &str) -> Result<TargetFormat> {
+    match powerio_format::classify_json_text(text) {
+        Detection::Known(DetectedFormat::Transmission(format)) => {
+            Ok(transmission_json_target(format))
+        }
+        Detection::Known(DetectedFormat::Distribution(format)) => {
+            Err(Error::UnknownFormat(format!(
+                "JSON looks like distribution `{}`; use the distribution parser or pass an explicit transmission format",
+                format.name()
+            )))
+        }
+        Detection::Known(_) => Err(Error::UnknownFormat(
+            "unsupported JSON format family; pass an explicit source format".into(),
+        )),
+        Detection::Ambiguous => Err(Error::UnknownFormat(
+            "ambiguous JSON markers; pass an explicit source format".into(),
+        )),
+        Detection::Unknown => Err(Error::UnknownFormat(
+            "cannot infer JSON format; pass an explicit source format".into(),
+        )),
     }
-    match serde_json::from_str::<Shape>(text) {
-        Ok(Shape {
-            class: Some(class), ..
-        }) if class == "pandapowerNet" => TargetFormat::PandapowerJson,
-        Ok(Shape {
-            elements: Some(_),
-            system: Some(_),
-            ..
-        }) => TargetFormat::EgretJson,
-        Ok(Shape { buses: Some(_), .. }) => TargetFormat::PowerioJson,
+}
+
+fn transmission_json_target(format: TransmissionFormat) -> TargetFormat {
+    match format {
+        TransmissionFormat::PowerModelsJson => TargetFormat::PowerModelsJson,
+        TransmissionFormat::EgretJson => TargetFormat::EgretJson,
+        TransmissionFormat::PandapowerJson => TargetFormat::PandapowerJson,
+        TransmissionFormat::PowerioJson => TargetFormat::PowerioJson,
+        // Non-JSON transmission formats should never come from JSON shape
+        // detection. PowerModels is the safest text JSON fallback when callers
+        // misuse this helper internally.
+        TransmissionFormat::Matpower
+        | TransmissionFormat::Psse
+        | TransmissionFormat::Psse34
+        | TransmissionFormat::Psse35
+        | TransmissionFormat::PowerWorld
+        | TransmissionFormat::PypsaCsv
+        | TransmissionFormat::Pslf
+        | TransmissionFormat::Pwb
+        | TransmissionFormat::Gridfm => TargetFormat::PowerModelsJson,
         _ => TargetFormat::PowerModelsJson,
     }
 }

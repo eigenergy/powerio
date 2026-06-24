@@ -25,6 +25,7 @@ extension-module = ["pyo3/extension-module"]
 gridfm = ["powerio-matrix/gridfm"]
 
 [dependencies]
+powerio-format.workspace = true
 powerio-matrix.workspace = true
 # Unconditional: the wheel always ships the distribution surface (powerio.dist);
 # only the C ABI gates it behind a feature.

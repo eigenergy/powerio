@@ -764,6 +764,10 @@ struct PyDistNetwork {
 
 #[pymethods]
 impl PyDistNetwork {
+    fn name(&self) -> Option<&str> {
+        self.net.name.as_deref()
+    }
+
     /// Format the case was parsed from (`dss`, `pmd-json`, `bmopf-json`).
     fn source_format(&self) -> Option<&'static str> {
         self.net.source_format.map(|f| f.name())
@@ -793,6 +797,10 @@ impl PyDistNetwork {
 
     fn n_generators(&self) -> usize {
         self.net.generators.len()
+    }
+
+    fn n_sources(&self) -> usize {
+        self.net.sources.len()
     }
 
     /// Serialize to `to` (`dss`, `pmd-json`, `bmopf-json`). Returns
@@ -860,6 +868,25 @@ fn dist_convert_str(text: &str, to: &str, format: &str) -> PyResult<(String, Vec
         .map_err(dist_to_pyerr)?;
     let conv = powerio_dist::convert_str(text, to, format).map_err(dist_to_pyerr)?;
     Ok((conv.text, conv.warnings))
+}
+
+/// Classify top level JSON markers. Returns `(status, domain, format)` where
+/// `status` is `known`, `unknown`, or `ambiguous`.
+#[pyfunction]
+fn classify_json_text(text: &str) -> (String, Option<String>, Option<String>) {
+    match powerio_format::classify_json_text(text) {
+        powerio_format::Detection::Known(format) => (
+            "known".into(),
+            Some(match format.domain() {
+                powerio_format::Domain::Transmission => "transmission".into(),
+                powerio_format::Domain::Distribution => "distribution".into(),
+                _ => "unknown".into(),
+            }),
+            Some(format.name().into()),
+        ),
+        powerio_format::Detection::Unknown => ("unknown".into(), None, None),
+        powerio_format::Detection::Ambiguous => ("ambiguous".into(), None, None),
+    }
 }
 
 /// Build a `{dir, files}` dict from an outputs directory and its written files.
@@ -995,6 +1022,7 @@ fn _powerio(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(dist_parse_str, m)?)?;
     m.add_function(wrap_pyfunction!(dist_convert_file, m)?)?;
     m.add_function(wrap_pyfunction!(dist_convert_str, m)?)?;
+    m.add_function(wrap_pyfunction!(classify_json_text, m)?)?;
     // Whether the gridfm Parquet surface (arrow/parquet) was compiled in, so the
     // pure-Python layer can raise an ImportError instead of an AttributeError.
     m.add("_has_gridfm", cfg!(feature = "gridfm"))?;

@@ -210,6 +210,8 @@ class Network:
         self, out_dir: str, convention: Convention = ..., units: Units = ...
     ) -> Dict[str, Any]: ...
 
+Case = Network
+
 class Conversion(NamedTuple):
     text: str
     warnings: List[str]

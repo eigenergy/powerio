@@ -20,6 +20,7 @@ path = "src/main.rs"
 doc = false
 
 [dependencies]
+powerio-format.workspace = true
 powerio-matrix = { workspace = true, features = ["gridfm"] }
 # Unconditional: the CLI always ships the distribution surface (`convert
 # --to dss/pmd-json/bmopf-json`); only the C ABI gates it behind a feature.
@@ -32,6 +33,7 @@ crossterm = "0.29"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
 walkdir = "2"
+serde_json.workspace = true
 
 [lints]
 workspace = true

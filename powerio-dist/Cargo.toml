@@ -16,6 +16,7 @@ categories = ["science", "parsing"]
 all-features = true
 
 [dependencies]
+powerio-format.workspace = true
 thiserror = "2"
 serde.workspace = true
 # float_roundtrip: the default float parser can be one ULP off the shortest

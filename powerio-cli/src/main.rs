@@ -9,11 +9,13 @@ use std::path::{Path, PathBuf};
 
 use anyhow::Context;
 use clap::{Parser, Subcommand, ValueEnum};
+use powerio_format::{Detection, SourceFormat as DetectedFormat};
 use powerio_matrix::io::gridfm::{GridfmOptions, numbered_snapshots, write_gridfm_batch};
 use powerio_matrix::matrix::{BuildOptions, DcConvention, Scheme, Units, sddm_check};
 use powerio_matrix::opf_pipeline::{DcOpfOptions, write_dcopf_bundle};
 use powerio_matrix::pipeline::{MatrixKind, Pipeline, RhsKind};
 use powerio_matrix::synth::{SynthSpec, Topology};
+use serde_json::json;
 mod tui;
 
 #[derive(Parser, Debug)]
@@ -103,6 +105,17 @@ enum Command {
         /// DC susceptance convention.
         #[arg(long, value_enum, default_value = "paper-pure")]
         convention: DcConvArg,
+    },
+    /// Print the canonical network summary JSON.
+    Summary {
+        /// Input case file, PyPSA CSV folder, or gridfm dataset directory.
+        input: PathBuf,
+        /// Override the inferred input format.
+        #[arg(long, value_enum)]
+        from: Option<FormatArg>,
+        /// With `--from gridfm`, which scenario to summarize.
+        #[arg(long, default_value_t = 0)]
+        scenario: i64,
     },
     /// Write the gridfm-datakit Parquet dataset for one or more cases.
     ///
@@ -435,6 +448,11 @@ fn main() -> anyhow::Result<()> {
             output,
             convention,
         } => run_sensitivities(&input, &output, convention.into()),
+        Command::Summary {
+            input,
+            from,
+            scenario,
+        } => run_summary(&input, from, scenario),
         Command::Gridfm {
             inputs,
             output,
@@ -662,6 +680,136 @@ fn run_verify(input: &Path, kind: MatrixKind, scheme: Scheme) -> anyhow::Result<
     Ok(())
 }
 
+fn run_summary(input: &Path, from: Option<FormatArg>, scenario: i64) -> anyhow::Result<()> {
+    let value =
+        if from == Some(FormatArg::Gridfm) || (from.is_none() && looks_like_gridfm_dir(input)) {
+            let read = powerio_matrix::read_gridfm_dataset(input, scenario)
+                .with_context(|| format!("reading gridfm dataset {}", input.display()))?;
+            transmission_summary_json(&read.network, &read.warnings)
+        } else if from.is_some_and(|f| f.distribution().is_some())
+            || (from.is_none() && looks_like_distribution_input(input)?)
+        {
+            let net = powerio_dist::parse_file(input, from.map(FormatArg::name))
+                .with_context(|| format!("reading {}", input.display()))?;
+            distribution_summary_json(&net)
+        } else {
+            let parsed = powerio_matrix::parse_file(input, from.map(FormatArg::name))
+                .with_context(|| format!("reading {}", input.display()))?;
+            transmission_summary_json(&parsed.network, &parsed.warnings)
+        };
+    println!("{}", serde_json::to_string_pretty(&value)?);
+    Ok(())
+}
+
+fn transmission_summary_json(
+    net: &powerio_matrix::Network,
+    warnings: &[String],
+) -> serde_json::Value {
+    let view = powerio_matrix::IndexedNetwork::new(net);
+    json!({
+        "domain": "transmission",
+        "name": net.name,
+        "source_format": format!("{:?}", net.source_format),
+        "json_format": "powerio-json",
+        "base_mva": net.base_mva,
+        "elements": {
+            "buses": net.buses.len(),
+            "branches": net.branches.len(),
+            "generators": net.generators.len(),
+            "loads": net.loads.len(),
+            "shunts": net.shunts.len(),
+            "lines": serde_json::Value::Null,
+            "transformers": serde_json::Value::Null,
+            "sources": serde_json::Value::Null,
+        },
+        "topology": {
+            "connected_components": view.n_connected_components(),
+            "is_radial": view.is_radial(),
+            "reference_buses": view.reference_bus_indices(),
+            "connectivity_report": view.connectivity_report(),
+        },
+        "warnings": warnings,
+    })
+}
+
+fn distribution_summary_json(net: &powerio_dist::DistNetwork) -> serde_json::Value {
+    json!({
+        "domain": "distribution",
+        "name": net.name,
+        "source_format": net.source_format.map(|f| f.name()),
+        "json_format": "bmopf-json",
+        "base_mva": serde_json::Value::Null,
+        "elements": {
+            "buses": net.buses.len(),
+            "branches": serde_json::Value::Null,
+            "generators": net.generators.len(),
+            "loads": net.loads.len(),
+            "shunts": serde_json::Value::Null,
+            "lines": net.lines.len(),
+            "transformers": net.transformers.len(),
+            "sources": net.sources.len(),
+        },
+        "topology": {
+            "connected_components": serde_json::Value::Null,
+            "is_radial": serde_json::Value::Null,
+            "reference_buses": serde_json::Value::Null,
+            "connectivity_report": serde_json::Value::Null,
+        },
+        "warnings": net.warnings,
+    })
+}
+
+fn looks_like_gridfm_dir(input: &Path) -> bool {
+    input.join("bus_data.parquet").is_file()
+        || input.join("raw").join("bus_data.parquet").is_file()
+        || std::fs::read_dir(input).is_ok_and(|entries| {
+            entries
+                .filter_map(std::result::Result::ok)
+                .filter(|e| e.path().join("raw").join("bus_data.parquet").is_file())
+                .take(2)
+                .count()
+                == 1
+        })
+}
+
+fn looks_like_distribution_input(input: &Path) -> anyhow::Result<bool> {
+    Ok(infer_input_family(input)?.unwrap_or(false))
+}
+
+/// Infer the case family from clear extensions or, for `.json`, the shared
+/// JSON shape classifier. `Some(true)` is distribution, `Some(false)` is
+/// transmission, and `None` means the extension carries no family signal.
+fn infer_input_family(input: &Path) -> anyhow::Result<Option<bool>> {
+    let ext = input
+        .extension()
+        .and_then(|e| e.to_str())
+        .map(str::to_ascii_lowercase);
+    match ext.as_deref() {
+        Some("m" | "raw" | "aux" | "epc" | "pwb") => return Ok(Some(false)),
+        Some("dss") => return Ok(Some(true)),
+        Some("json") => {}
+        _ => return Ok(None),
+    }
+    let text = std::fs::read_to_string(input)
+        .with_context(|| format!("reading JSON format markers from {}", input.display()))?;
+    match powerio_format::classify_json_text(&text) {
+        Detection::Known(DetectedFormat::Distribution(_)) => Ok(Some(true)),
+        Detection::Known(DetectedFormat::Transmission(_)) => Ok(Some(false)),
+        Detection::Ambiguous => anyhow::bail!(
+            "ambiguous JSON markers in {}; pass --from to choose a format",
+            input.display()
+        ),
+        Detection::Unknown => anyhow::bail!(
+            "cannot infer JSON format for {}; pass --from to choose a format",
+            input.display()
+        ),
+        Detection::Known(_) => anyhow::bail!(
+            "unrecognized JSON format family in {}; pass --from to choose a format",
+            input.display()
+        ),
+    }
+}
+
 fn run_convert(
     input: &std::path::Path,
     to: FormatArg,
@@ -682,22 +830,12 @@ fn run_convert(
     // The two families share no conversion path; say so directly instead of
     // letting the wrong family's reader produce a confusing format error. The
     // input family comes from --from (gridfm reads into the transmission
-    // model), or from an unambiguous extension (.json is shared, so it stays
-    // undecided and the reader sniffs it).
-    let input_is_dist = from
-        .map(|f| !matches!(f, FormatArg::Gridfm) && f.transmission().is_none())
-        .or_else(|| {
-            match input
-                .extension()
-                .and_then(|e| e.to_str())
-                .map(str::to_ascii_lowercase)
-                .as_deref()
-            {
-                Some("m" | "raw" | "aux" | "epc" | "pwb") => Some(false),
-                Some("dss") => Some(true),
-                _ => None,
-            }
-        });
+    // model), from a clear extension, or from the shared JSON classifier.
+    let input_is_dist = if let Some(f) = from {
+        Some(!matches!(f, FormatArg::Gridfm) && f.transmission().is_none())
+    } else {
+        infer_input_family(input)?
+    };
     if input_is_dist.is_some_and(|dist| dist != to.transmission().is_none()) {
         anyhow::bail!(
             "no conversion path between the transmission and distribution format families \
@@ -721,30 +859,7 @@ fn run_convert(
             }
             read.network
         } else {
-            // A .json input is undecided above. When the transmission reader
-            // rejects it but the distribution reader accepts it, the input is a
-            // distribution case aimed at a transmission target: say so instead
-            // of presenting the transmission parse error as the problem.
-            read_network(input, from).map_err(|err| {
-                // The liberal BMOPF reader accepts almost any JSON, so a bare
-                // parse success is no signal; a typed voltage source is (both
-                // distribution layouts carry one, transmission JSON does not).
-                if from.is_none()
-                    && input
-                        .extension()
-                        .is_some_and(|e| e.eq_ignore_ascii_case("json"))
-                    && powerio_dist::parse_file(input, None).is_ok_and(|n| !n.sources.is_empty())
-                {
-                    anyhow::anyhow!(
-                        "no conversion path between the transmission and distribution format \
-                         families (`{}` is a distribution case, `{}` is a transmission format)",
-                        input.display(),
-                        to.name()
-                    )
-                } else {
-                    err
-                }
-            })?
+            read_network(input, from)?
         };
         let conv = powerio_matrix::write_as(&net, target)
             .with_context(|| format!("serializing to {target}"))?;
@@ -839,4 +954,87 @@ fn read_network(
         eprintln!("fidelity: {w}");
     }
     Ok(parsed.network)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{
+        FormatArg, distribution_summary_json, infer_input_family, looks_like_distribution_input,
+        run_convert, transmission_summary_json,
+    };
+    use std::path::Path;
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    fn data(path: &str) -> std::path::PathBuf {
+        Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("..")
+            .join("tests")
+            .join("data")
+            .join(path)
+    }
+
+    #[test]
+    fn summary_json_matches_canonical_transmission_shape() {
+        let parsed = powerio_matrix::parse_file(data("case9.m"), None).unwrap();
+        let value = transmission_summary_json(&parsed.network, &parsed.warnings);
+        assert_eq!(value["domain"], "transmission");
+        assert_eq!(value["json_format"], "powerio-json");
+        assert_eq!(value["elements"]["buses"], 9);
+        assert_eq!(value["topology"]["connected_components"], 1);
+    }
+
+    #[test]
+    fn summary_json_matches_canonical_distribution_shape() {
+        let net = powerio_dist::parse_file(data("dist/micro/xfmr_single_phase.dss"), None).unwrap();
+        let value = distribution_summary_json(&net);
+        assert_eq!(value["domain"], "distribution");
+        assert_eq!(value["json_format"], "bmopf-json");
+        assert_eq!(value["elements"]["buses"], 2);
+        assert!(value["topology"]["connected_components"].is_null());
+    }
+
+    #[test]
+    fn distribution_json_shape_check_uses_shared_classifier() {
+        let tmp = std::env::temp_dir().join(format!(
+            "powerio-summary-routing-{}.json",
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::write(&tmp, r#"{"bus":{"a":{"terminal_names":["1"]}}}"#).unwrap();
+        assert!(looks_like_distribution_input(&tmp).unwrap());
+        std::fs::write(
+            &tmp,
+            std::fs::read_to_string(data("egret/case9.json")).unwrap(),
+        )
+        .unwrap();
+        assert!(!looks_like_distribution_input(&tmp).unwrap());
+        let _ = std::fs::remove_file(tmp);
+    }
+
+    #[test]
+    fn convert_rejects_transmission_json_to_distribution_without_format() {
+        let stamp = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let input = std::env::temp_dir().join(format!("powerio-convert-pm-{stamp}.json"));
+        let output = std::env::temp_dir().join(format!("powerio-convert-pm-{stamp}.dss"));
+        let parsed = powerio_matrix::parse_file(data("case9.m"), None).unwrap();
+        let conv = powerio_matrix::write_as(
+            &parsed.network,
+            powerio_matrix::TargetFormat::PowerModelsJson,
+        )
+        .unwrap();
+        std::fs::write(&input, conv.text).unwrap();
+
+        assert_eq!(infer_input_family(&input).unwrap(), Some(false));
+        let err = run_convert(&input, FormatArg::Dss, Some(&output), None, 0).unwrap_err();
+        assert!(err.to_string().contains("no conversion path"), "{err}");
+        assert!(!output.exists());
+
+        let _ = std::fs::remove_file(input);
+        let _ = std::fs::remove_file(output);
+    }
 }
