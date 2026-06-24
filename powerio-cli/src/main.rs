@@ -9,7 +9,7 @@ use std::path::{Path, PathBuf};
 
 use anyhow::Context;
 use clap::{Parser, Subcommand, ValueEnum};
-use powerio_format::{Detection, SourceFormat as DetectedFormat};
+use powerio_matrix::format::routing::{Detection, SourceFormat as DetectedFormat};
 use powerio_matrix::io::gridfm::{GridfmOptions, numbered_snapshots, write_gridfm_batch};
 use powerio_matrix::matrix::{BuildOptions, DcConvention, Scheme, Units, sddm_check};
 use powerio_matrix::opf_pipeline::{DcOpfOptions, write_dcopf_bundle};
@@ -17,6 +17,8 @@ use powerio_matrix::pipeline::{MatrixKind, Pipeline, RhsKind};
 use powerio_matrix::synth::{SynthSpec, Topology};
 use serde_json::json;
 mod tui;
+
+const SUMMARY_SCHEMA_VERSION: &str = "0.1";
 
 #[derive(Parser, Debug)]
 #[command(name = "powerio", version, about)]
@@ -707,7 +709,10 @@ fn transmission_summary_json(
 ) -> serde_json::Value {
     let view = powerio_matrix::IndexedNetwork::new(net);
     json!({
+        "schema": "powerio.summary",
+        "schema_version": SUMMARY_SCHEMA_VERSION,
         "domain": "transmission",
+        "model": "balanced",
         "name": net.name,
         "source_format": format!("{:?}", net.source_format),
         "json_format": "powerio-json",
@@ -734,7 +739,10 @@ fn transmission_summary_json(
 
 fn distribution_summary_json(net: &powerio_dist::DistNetwork) -> serde_json::Value {
     json!({
+        "schema": "powerio.summary",
+        "schema_version": SUMMARY_SCHEMA_VERSION,
         "domain": "distribution",
+        "model": "multiconductor",
         "name": net.name,
         "source_format": net.source_format.map(powerio_dist::DistSourceFormat::name),
         "json_format": "bmopf-json",
@@ -792,7 +800,7 @@ fn infer_input_family(input: &Path) -> anyhow::Result<Option<bool>> {
     }
     let text = std::fs::read_to_string(input)
         .with_context(|| format!("reading JSON format markers from {}", input.display()))?;
-    match powerio_format::classify_json_text(&text) {
+    match powerio_matrix::format::routing::classify_json_text(&text) {
         Detection::Known(DetectedFormat::Distribution(_)) => Ok(Some(true)),
         Detection::Known(DetectedFormat::Transmission(_)) => Ok(Some(false)),
         Detection::Ambiguous => anyhow::bail!(
@@ -977,7 +985,10 @@ mod tests {
     fn summary_json_matches_canonical_transmission_shape() {
         let parsed = powerio_matrix::parse_file(data("case9.m"), None).unwrap();
         let value = transmission_summary_json(&parsed.network, &parsed.warnings);
+        assert_eq!(value["schema"], "powerio.summary");
+        assert_eq!(value["schema_version"], "0.1");
         assert_eq!(value["domain"], "transmission");
+        assert_eq!(value["model"], "balanced");
         assert_eq!(value["json_format"], "powerio-json");
         assert_eq!(value["elements"]["buses"], 9);
         assert_eq!(value["topology"]["connected_components"], 1);
@@ -987,7 +998,10 @@ mod tests {
     fn summary_json_matches_canonical_distribution_shape() {
         let net = powerio_dist::parse_file(data("dist/micro/xfmr_single_phase.dss"), None).unwrap();
         let value = distribution_summary_json(&net);
+        assert_eq!(value["schema"], "powerio.summary");
+        assert_eq!(value["schema_version"], "0.1");
         assert_eq!(value["domain"], "distribution");
+        assert_eq!(value["model"], "multiconductor");
         assert_eq!(value["json_format"], "bmopf-json");
         assert_eq!(value["elements"]["buses"], 2);
         assert!(value["topology"]["connected_components"].is_null());

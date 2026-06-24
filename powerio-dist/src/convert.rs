@@ -1,7 +1,6 @@
 //! Cross format conversion output and the format dispatcher.
 
 use crate::model::{DistNetwork, DistSourceFormat};
-use powerio_format::DistributionFormat;
 
 /// Text in the target format plus every fidelity loss the writer took.
 /// Nothing drops silently: a field the target cannot represent appears
@@ -24,10 +23,11 @@ pub enum DistTargetFormat {
 
 /// Resolves common names and file extensions to a target format.
 pub fn dist_target_from_name(name: &str) -> Option<DistTargetFormat> {
-    match powerio_format::distribution_format_from_name(name)? {
-        DistributionFormat::Dss => Some(DistTargetFormat::Dss),
-        DistributionFormat::BmopfJson => Some(DistTargetFormat::BmopfJson),
-        DistributionFormat::PmdJson => Some(DistTargetFormat::PmdJson),
+    let key = canonical_key(name);
+    match key.as_str() {
+        "dss" | "opendss" => Some(DistTargetFormat::Dss),
+        "pmd" | "pmdjson" | "engineering" => Some(DistTargetFormat::PmdJson),
+        "bmopf" | "bmopfjson" => Some(DistTargetFormat::BmopfJson),
         _ => None,
     }
 }
@@ -61,6 +61,31 @@ fn read(path: &std::path::Path) -> crate::Result<String> {
     })
 }
 
+fn canonical_key(name: &str) -> String {
+    name.to_ascii_lowercase()
+        .chars()
+        .filter(|c| *c != '-' && *c != '_')
+        .collect()
+}
+
+fn has_top_level_key(text: &str, key: &str) -> bool {
+    serde_json::from_str::<serde_json::Value>(text).is_ok_and(|value| {
+        value
+            .as_object()
+            .is_some_and(|shape| shape.contains_key(key))
+    })
+}
+
+/// Distribution parser policy for `.json`: PMD carries `data_model`; otherwise
+/// it is routed to BMOPF so the BMOPF reader can give the parse error or warning.
+fn infer_distribution_json_format(text: &str) -> DistTargetFormat {
+    if has_top_level_key(text, "data_model") {
+        DistTargetFormat::PmdJson
+    } else {
+        DistTargetFormat::BmopfJson
+    }
+}
+
 /// Parses `text` in the named format (see [`dist_target_from_name`]).
 pub fn parse_str(text: &str, format: &str) -> crate::Result<DistNetwork> {
     match format.parse::<DistTargetFormat>()? {
@@ -91,9 +116,7 @@ pub fn parse_file(
             "dss" => DistTargetFormat::Dss,
             "json" => {
                 let text = read(path)?;
-                return if powerio_format::infer_distribution_json_format(&text)
-                    == DistributionFormat::PmdJson
-                {
+                return if infer_distribution_json_format(&text) == DistTargetFormat::PmdJson {
                     crate::pmd::parse_pmd_str(&text)
                 } else {
                     crate::bmopf::parse_bmopf_str(&text)
@@ -185,20 +208,20 @@ mod tests {
     #[test]
     fn distribution_json_classifier_preserves_pmd_marker_and_bmopf_fallback() {
         assert_eq!(
-            powerio_format::infer_distribution_json_format(r#"{"data_model": "ENGINEERING"}"#),
-            DistributionFormat::PmdJson
+            infer_distribution_json_format(r#"{"data_model": "ENGINEERING"}"#),
+            DistTargetFormat::PmdJson
         );
         assert_eq!(
-            powerio_format::infer_distribution_json_format(r#"{"bus": {"data_model": {}}}"#),
-            DistributionFormat::BmopfJson
+            infer_distribution_json_format(r#"{"bus": {"data_model": {}}}"#),
+            DistTargetFormat::BmopfJson
         );
         assert_eq!(
-            powerio_format::infer_distribution_json_format(r#"{"name": "data_model"}"#),
-            DistributionFormat::BmopfJson
+            infer_distribution_json_format(r#"{"name": "data_model"}"#),
+            DistTargetFormat::BmopfJson
         );
         assert_eq!(
-            powerio_format::infer_distribution_json_format("{not json"),
-            DistributionFormat::BmopfJson
+            infer_distribution_json_format("{not json"),
+            DistTargetFormat::BmopfJson
         );
     }
 

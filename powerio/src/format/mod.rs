@@ -34,7 +34,7 @@ use serde_json::{Map, Value};
 
 use crate::network::{Bus, BusId, BusType, Network, SourceFormat};
 use crate::{Error, Result};
-use powerio_format::{Detection, SourceFormat as DetectedFormat, TransmissionFormat};
+use routing::{Detection, SourceFormat as DetectedFormat, TransmissionFormat};
 
 mod egret;
 mod matpower;
@@ -44,6 +44,7 @@ pub mod powerworld;
 mod pslf;
 mod psse;
 mod pypsa;
+pub mod routing;
 
 pub use egret::{parse_egret_json, write_egret_json};
 pub use matpower::{parse_matpower, parse_matpower_file, write_matpower};
@@ -218,7 +219,7 @@ pub fn display_format_from_name(name: &str) -> Option<DisplayFormat> {
 /// for every format.
 #[must_use]
 pub fn target_format_from_name(name: &str) -> Option<TargetFormat> {
-    Some(match powerio_format::transmission_format_from_name(name)? {
+    Some(match routing::transmission_format_from_name(name)? {
         TransmissionFormat::Matpower => TargetFormat::Matpower,
         TransmissionFormat::PowerModelsJson => TargetFormat::PowerModelsJson,
         TransmissionFormat::EgretJson => TargetFormat::EgretJson,
@@ -232,7 +233,6 @@ pub fn target_format_from_name(name: &str) -> Option<TargetFormat> {
         TransmissionFormat::PypsaCsv | TransmissionFormat::Pwb | TransmissionFormat::Gridfm => {
             return None;
         }
-        _ => return None,
     })
 }
 
@@ -491,10 +491,10 @@ pub(crate) fn reject_empty_case(net: &Network, format: &'static str) -> Result<(
 }
 
 /// The JSON formats share the `.json` extension, so an explicit source format
-/// isn't always given. Classification lives in `powerio-format` so the CLI and
-/// bindings use the same top level markers as the Rust parsers.
+/// isn't always given. Classification lives here so the CLI and bindings use
+/// the same top level markers as the Rust parsers.
 fn sniff_json(text: &str) -> Result<TargetFormat> {
-    match powerio_format::classify_json_text(text) {
+    match routing::classify_json_text(text) {
         Detection::Known(DetectedFormat::Transmission(format)) => transmission_json_target(format),
         Detection::Known(DetectedFormat::Distribution(format)) => {
             Err(Error::UnknownFormat(format!(
@@ -502,9 +502,6 @@ fn sniff_json(text: &str) -> Result<TargetFormat> {
                 format.name()
             )))
         }
-        Detection::Known(_) => Err(Error::UnknownFormat(
-            "unsupported JSON format family; pass an explicit source format".into(),
-        )),
         Detection::Ambiguous => Err(Error::UnknownFormat(
             "ambiguous JSON markers; pass an explicit source format".into(),
         )),

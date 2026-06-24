@@ -1,6 +1,6 @@
-//! Canonical format alias and JSON shape detection for powerio.
+//! Shared format alias and JSON shape routing for the `powerio` crate.
 //!
-//! This crate is deliberately parser free. It only answers routing questions:
+//! This module is deliberately parser free. It only answers routing questions:
 //! what a format name means, and what top level JSON markers imply.
 
 /// A classification result that can be known, absent, or unsafe to choose.
@@ -149,16 +149,6 @@ pub fn distribution_format_from_name(name: &str) -> Option<DistributionFormat> {
     }
 }
 
-/// Distribution parser policy for `.json`: PMD carries `data_model`; otherwise
-/// it is routed to BMOPF so the BMOPF reader can give the parse error or warning.
-pub fn infer_distribution_json_format(text: &str) -> DistributionFormat {
-    if has_top_level_key(text, "data_model") {
-        DistributionFormat::PmdJson
-    } else {
-        DistributionFormat::BmopfJson
-    }
-}
-
 /// Classify a JSON document across the transmission and distribution domains.
 ///
 /// Unknown means there is no recognized top level marker. Ambiguous means a
@@ -176,14 +166,6 @@ fn canonical_key(name: &str) -> String {
         .chars()
         .filter(|c| *c != '-' && *c != '_')
         .collect()
-}
-
-fn has_top_level_key(text: &str, key: &str) -> bool {
-    serde_json::from_str::<serde_json::Value>(text).is_ok_and(|value| {
-        value
-            .as_object()
-            .is_some_and(|shape| shape.contains_key(key))
-    })
 }
 
 struct JsonShape {
@@ -260,7 +242,6 @@ impl JsonShape {
 mod tests {
     use super::{
         Detection, DistributionFormat, SourceFormat, TransmissionFormat, classify_json_text,
-        infer_distribution_json_format,
     };
 
     #[test]
@@ -331,18 +312,10 @@ mod tests {
     }
 
     #[test]
-    fn mixed_strong_markers_are_ambiguous() {
+    fn mixed_transmission_and_distribution_markers_are_ambiguous() {
         assert_eq!(
             classify_json_text(r#"{"baseMVA":100.0,"voltage_source":{}}"#),
             Detection::Ambiguous
-        );
-    }
-
-    #[test]
-    fn distribution_parser_falls_back_to_bmopf() {
-        assert_eq!(
-            infer_distribution_json_format(r#"{"name":"not enough signal"}"#),
-            DistributionFormat::BmopfJson
         );
     }
 }

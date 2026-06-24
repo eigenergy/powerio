@@ -874,18 +874,18 @@ fn dist_convert_str(text: &str, to: &str, format: &str) -> PyResult<(String, Vec
 /// `status` is `known`, `unknown`, or `ambiguous`.
 #[pyfunction]
 fn classify_json_text(text: &str) -> (String, Option<String>, Option<String>) {
-    match powerio_format::classify_json_text(text) {
-        powerio_format::Detection::Known(format) => (
+    match powerio_matrix::format::routing::classify_json_text(text) {
+        powerio_matrix::format::routing::Detection::Known(format) => (
             "known".into(),
             Some(match format.domain() {
-                powerio_format::Domain::Transmission => "transmission".into(),
-                powerio_format::Domain::Distribution => "distribution".into(),
+                powerio_matrix::format::routing::Domain::Transmission => "transmission".into(),
+                powerio_matrix::format::routing::Domain::Distribution => "distribution".into(),
                 _ => "unknown".into(),
             }),
             Some(format.name().into()),
         ),
-        powerio_format::Detection::Unknown => ("unknown".into(), None, None),
-        powerio_format::Detection::Ambiguous => ("ambiguous".into(), None, None),
+        powerio_matrix::format::routing::Detection::Unknown => ("unknown".into(), None, None),
+        powerio_matrix::format::routing::Detection::Ambiguous => ("ambiguous".into(), None, None),
     }
 }
 

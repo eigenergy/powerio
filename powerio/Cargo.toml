@@ -19,7 +19,6 @@ categories = ["science", "parsing"]
 all-features = true
 
 [dependencies]
-powerio-format.workspace = true
 thiserror = "2"
 num-complex.workspace = true
 # Byte-slice float parsing for numeric matrix rows, avoiding UTF-8 allocation.

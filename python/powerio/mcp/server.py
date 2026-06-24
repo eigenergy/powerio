@@ -44,6 +44,7 @@ _POWERIO_JSON_FORMATS = frozenset({"powerio", "powerio-json", "json"})
 _BMOPF_JSON_FORMATS = frozenset({"bmopf", "bmopf-json", "bmopf_json"})
 _ALLOWED_ROOTS_ENV = "POWERIO_MCP_ALLOWED_ROOTS"
 _LEGACY_ALLOWED_ROOT_ENV = "POWERIO_MCP_ROOT"
+_SCHEMA_VERSION = "0.1"
 
 _MATRIX_KIND_ALIASES = {
     "b": "bprime",
@@ -361,7 +362,10 @@ def _load_any(
 def _transmission_summary(net: "powerio.Network") -> Dict[str, Any]:
     refs = net.reference_bus_indices()
     return {
+        "schema": "powerio.summary",
+        "schema_version": _SCHEMA_VERSION,
         "domain": "transmission",
+        "model": "balanced",
         "name": net.name,
         "source_format": net.source_format,
         "json_format": "powerio-json",
@@ -388,7 +392,10 @@ def _transmission_summary(net: "powerio.Network") -> Dict[str, Any]:
 
 def _distribution_summary(net: "dist.DistNetwork") -> Dict[str, Any]:
     return {
+        "schema": "powerio.summary",
+        "schema_version": _SCHEMA_VERSION,
         "domain": "distribution",
+        "model": "multiconductor",
         "name": net.name,
         "source_format": net.source_format,
         "json_format": "bmopf-json",
@@ -627,11 +634,16 @@ def _parse_impl(
         text, warnings = _dist_json(loaded.network)
     else:
         text, warnings = loaded.network.to_json(), loaded.warnings
+    summary = _summary(loaded)
     return {
+        "schema": "powerio.parse",
+        "schema_version": _SCHEMA_VERSION,
         "domain": loaded.domain,
+        "model": summary["model"],
+        "source_format": summary["source_format"],
         "json_format": loaded.json_format,
         "json": text,
-        "summary": _summary(loaded),
+        "summary": summary,
         "warnings": warnings,
     }
 
@@ -652,11 +664,16 @@ def _normalize_impl(
     except powerio.PowerIOError as exc:
         raise ValueError(f"normalization failed: {exc}") from exc
     normalized = _Loaded("transmission", norm, list(norm.read_warnings), "powerio-json")
+    summary = _summary(normalized)
     return {
+        "schema": "powerio.normalize",
+        "schema_version": _SCHEMA_VERSION,
         "domain": "transmission",
+        "model": "balanced",
+        "source_format": summary["source_format"],
         "json_format": "powerio-json",
         "json": norm.to_json(),
-        "summary": _summary(normalized),
+        "summary": summary,
         "warnings": list(norm.read_warnings),
     }
 
@@ -705,6 +722,13 @@ def _matrix_impl(
         raise ValueError(f"matrix build failed: {exc}") from exc
     coo = mat.tocoo()
     return {
+        "schema": "powerio.matrix",
+        "schema_version": _SCHEMA_VERSION,
+        "domain": "transmission",
+        "model": "balanced",
+        "source_format": net.source_format,
+        "json_format": loaded.json_format,
+        "warnings": loaded.warnings,
         "format": "coo",
         "kind": canonical,
         "shape": [int(coo.shape[0]), int(coo.shape[1])],
@@ -729,7 +753,10 @@ def _display_impl(path: str, from_format: Optional[str] = None) -> dict:
         raise ValueError(f"unsupported display format: {data.kind!r}")
     pwd = data.data
     return {
+        "schema": "powerio.display",
+        "schema_version": _SCHEMA_VERSION,
         "domain": "display",
+        "model": "display",
         "source_format": "powerworld-pwd",
         "canvas": {
             "width": pwd.canvas_width,

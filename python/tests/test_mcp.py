@@ -52,7 +52,10 @@ def test_tool_surface_is_semantic():
 
 def test_summary_transmission_schema():
     s = server.summary(path=str(DATA / "case9.m"))
+    assert s["schema"] == "powerio.summary"
+    assert s["schema_version"] == "0.1"
     assert s["domain"] == "transmission"
+    assert s["model"] == "balanced"
     assert s["json_format"] == "powerio-json"
     assert s["source_format"] == "Matpower"
     assert s["base_mva"] == 100.0
@@ -66,7 +69,9 @@ def test_summary_transmission_schema():
 def test_summary_distribution_schema_and_json_sniffing():
     for path in (DSS, BMOPF, PMD):
         s = server.summary(path=str(path))
+        assert s["schema"] == "powerio.summary"
         assert s["domain"] == "distribution"
+        assert s["model"] == "multiconductor"
         assert s["json_format"] == "bmopf-json"
         assert s["elements"]["buses"] > 0
         assert s["elements"]["sources"] >= 0
@@ -85,7 +90,11 @@ def test_distribution_aliases_route_to_core_parser():
 
 def test_parse_transmission_transport_round_trip(tmp_path):
     parsed = server.parse(path=str(DATA / "case9.m"))
+    assert parsed["schema"] == "powerio.parse"
+    assert parsed["schema_version"] == "0.1"
     assert parsed["domain"] == "transmission"
+    assert parsed["model"] == "balanced"
+    assert parsed["source_format"] == "Matpower"
     assert parsed["json_format"] == "powerio-json"
     assert powerio.from_json(parsed["json"]).n_buses == 9
     assert server.summary(json=parsed["json"], json_format="powerio-json")[
@@ -102,7 +111,9 @@ def test_parse_transmission_transport_round_trip(tmp_path):
 
 def test_parse_distribution_uses_bmopf_transport(tmp_path):
     parsed = server.parse(path=str(DSS))
+    assert parsed["schema"] == "powerio.parse"
     assert parsed["domain"] == "distribution"
+    assert parsed["model"] == "multiconductor"
     assert parsed["json_format"] == "bmopf-json"
     doc = json.loads(parsed["json"])
     assert "bus" in doc and "voltage_source" in doc
@@ -118,6 +129,7 @@ def test_parse_distribution_uses_bmopf_transport(tmp_path):
 def test_minimal_bmopf_json_routes_without_format(tmp_path):
     parsed = server.parse(content=MINIMAL_BMOPF)
     assert parsed["domain"] == "distribution"
+    assert parsed["model"] == "multiconductor"
     assert parsed["json_format"] == "bmopf-json"
     assert parsed["summary"]["elements"]["buses"] == 1
 
@@ -140,6 +152,14 @@ def test_powermodels_json_still_routes_as_transmission():
 def test_normalize_rejects_distribution():
     with pytest.raises(ValueError, match="not defined for distribution"):
         server.normalize(path=str(DSS))
+
+
+def test_normalize_payload_has_schema_marker():
+    norm = server.normalize(path=str(DATA / "case9.m"))
+    assert norm["schema"] == "powerio.normalize"
+    assert norm["schema_version"] == "0.1"
+    assert norm["domain"] == "transmission"
+    assert norm["model"] == "balanced"
 
 
 def test_parse_reads_pypsa_folder(tmp_path):
@@ -170,6 +190,12 @@ def test_gridfm_routes_through_generic_verbs(tmp_path):
 
 def test_matrix_kinds_aliases_and_errors():
     m = server.matrix("b", path=str(DATA / "case9.m"))
+    assert m["schema"] == "powerio.matrix"
+    assert m["schema_version"] == "0.1"
+    assert m["domain"] == "transmission"
+    assert m["model"] == "balanced"
+    assert m["source_format"] == "Matpower"
+    assert m["warnings"] == []
     assert m["kind"] == "bprime"
     assert m["shape"] == [9, 9]
     assert type(m["data"][0]) is float and type(m["row"][0]) is int
@@ -260,7 +286,10 @@ def test_mcp_allowed_roots_restrict_filesystem_paths(monkeypatch, tmp_path):
 
 def test_display_decodes_powerworld_pwd():
     d = server.display(str(PWD))
+    assert d["schema"] == "powerio.display"
+    assert d["schema_version"] == "0.1"
     assert d["domain"] == "display"
+    assert d["model"] == "display"
     assert d["source_format"] == "powerworld-pwd"
     assert d["canvas"]["width"] > 0
     assert d["substations"]
