@@ -2,21 +2,39 @@
 
 ## 0.3.3
 
-- MCP server: expose the distribution surface (`powerio.dist`) as three new
-  tools — `convert_dist_case`, `dist_case_summary`, and `save_dist_case` —
-  covering OpenDSS `.dss`, PowerModelsDistribution ENGINEERING JSON, and IEEE
-  BMOPF JSON, with the same one-error-shape and fidelity-warning contract as the
-  transmission tools. A distribution case keeps multiconductor wire detail and
-  has no JSON transport, so these tools take a file `path` or inline `content`
-  only (and inline content requires an explicit format).
-- MCP server: add `read_display_file`, exposing the PowerWorld `.pwd` one-line
-  display geometry (canvas size and substation coordinates) that travels
-  separately from the network case. The MCP surface grows from twelve tools to
-  sixteen.
-- No Rust or C ABI change; `PIO_ABI_VERSION` stays 4 and `PIO_DIST_ABI_VERSION`
-  stays 1. The Python API and matrix builders are unchanged: this release only
-  adds MCP tools over the already-shipped `powerio.dist` and
-  `parse_display_file` APIs.
+- MCP server: **unified the tool surface** to the bare powerio verbs (matching
+  the CLI's `powerio convert`), finishing the parse/convert name unification (#77)
+  that landed across Rust, Python, and C but never reached the MCP layer. One set
+  of tools now covers transmission *and* distribution, routed by format (the two
+  format sets are disjoint):
+  - `convert`, `save`, `summary` accept any single-file format in either domain.
+    `save(to="pypsa-csv")` writes the CSV folder; `save(to="dss")` is the
+    **OpenDSS on-ramp** — stage an IEEE BMOPF or PowerModelsDistribution case as a
+    `.dss` file an OpenDSS engine (e.g. PowerMCP's) can compile.
+  - `parse`, `to_json`, `normalize`, `compute_matrix`, `dense_view` are
+    transmission-only and reject a distribution format — a distribution network
+    has no JSON transport and isn't positive-sequence.
+  - `read_gridfm` / `write_gridfm` keep their own tools (the dataset carries
+    scenario and column options the format-only tools don't); `read_display_file`
+    decodes PowerWorld `.pwd` one-line geometry.
+  - `pypsa-csv` is read through `parse`/`summary` via a folder `path`, so
+    `read_pypsa_csv_folder` / `write_pypsa_csv_folder` are now deprecated aliases.
+  - The pre-0.3.3 names (`convert_case`, `save_case`, `case_summary`, `parse_case`,
+    `normalize_case`, `case_to_json`, `read_pypsa_csv_folder`,
+    `write_pypsa_csv_folder`) remain as **deprecated aliases** that forward
+    unchanged, so existing clients keep working for one release; they are
+    **removed in 0.4.0**. The source-format argument is `format` on every tool.
+  Eleven canonical tools (plus the eight deprecated aliases).
+- Python API: removed the undocumented `powerio.Case` alias for `Network` (use
+  `Network` directly). The **experimental** distribution surface renames
+  `powerio.dist.DistCase → DistNetwork` to match the native `DistNetwork` hub
+  type; `powerio.dist` is gated on the draft BMOPF schema (`PIO_DIST_ABI_VERSION`
+  = 1) and not yet under the stability guarantee.
+- No C ABI change: `PIO_ABI_VERSION` stays 4 and `PIO_DIST_ABI_VERSION` stays 1,
+  and the matrix builders are unchanged. The native extension's internal pyclass
+  names changed (`PyCase → PyNetwork`, `_DistCase → _DistNetwork`) so `repr()`
+  now renders the public `Network(...)` / `DistNetwork(...)` form directly; a
+  rebuilt wheel is required.
 
 ## 0.3.2
 
