@@ -270,10 +270,10 @@ def test_exactly_one_of_path_content_json():
 
 
 def test_tool_surface_parity():
-    # The PowerMCP bundle ships a standalone copy of this server
+    # The PowerMCP bundle re-exports this server verbatim
     # (powerio/powerio_mcp.py in Power-Agent/PowerMCP); powerio.mcp.server is
     # canonical. The set below is the shared surface; a tool added or removed
-    # here fails this test until the set, and the PowerMCP copy, move with it.
+    # here fails this test until the set, and the PowerMCP re-export, move with it.
     import asyncio
 
     from powerio.mcp import server
@@ -284,6 +284,8 @@ def test_tool_surface_parity():
         "normalize_case", "case_to_json", "compute_matrix", "dense_view",
         "read_pypsa_csv_folder", "write_pypsa_csv_folder",
         "read_gridfm", "write_gridfm",
+        "convert_dist_case", "dist_case_summary", "save_dist_case",
+        "read_display_file",
     }
 
 
@@ -367,3 +369,123 @@ def test_read_gridfm_missing_dir_maps_cleanly(tmp_path):
 
     with pytest.raises(ValueError):
         read_gridfm(str(tmp_path / "nope"))
+
+
+# ---------------------------------------------------------------------------
+# Distribution tools: multiconductor cases (powerio.dist) in OpenDSS .dss,
+# PowerModelsDistribution ENGINEERING JSON, and IEEE BMOPF JSON. A DistCase has
+# no JSON transport, so these tools take only path/content (never json), and
+# inline content requires an explicit format.
+# ---------------------------------------------------------------------------
+
+DSS = DATA / "dist" / "micro" / "xfmr_single_phase.dss"
+
+
+def test_dist_case_summary_counts():
+    from powerio.mcp.server import dist_case_summary
+
+    s = dist_case_summary(path=str(DSS))
+    assert s["source_format"] == "dss"
+    assert s["n_buses"] == 2
+    assert s["n_transformers"] == 1
+    assert s["n_loads"] == 1
+    assert isinstance(s["warnings"], list)
+
+
+def test_convert_dist_case_dss_to_pmd_and_bmopf():
+    from powerio.mcp.server import convert_dist_case
+
+    pmd = convert_dist_case(to="pmd-json", path=str(DSS))
+    assert json.loads(pmd["text"])["data_model"] == "ENGINEERING"
+    assert isinstance(pmd["warnings"], list)
+    bmopf = convert_dist_case(to="bmopf-json", path=str(DSS))
+    assert "bus" in json.loads(bmopf["text"])
+
+
+def test_convert_dist_case_same_format_echoes():
+    from powerio.mcp.server import convert_dist_case
+
+    r = convert_dist_case(to="dss", path=str(DSS))
+    assert r["text"] == DSS.read_text()
+    assert r["warnings"] == []
+
+
+def test_convert_dist_case_inline_requires_from():
+    from powerio.mcp.server import convert_dist_case
+
+    text = DSS.read_text()
+    with pytest.raises(ValueError):
+        convert_dist_case(to="pmd-json", content=text)  # missing from_
+    r = convert_dist_case(to="pmd-json", content=text, from_="dss")
+    assert json.loads(r["text"])["data_model"] == "ENGINEERING"
+
+
+def test_dist_case_summary_inline_requires_format():
+    from powerio.mcp.server import dist_case_summary
+
+    with pytest.raises(ValueError):
+        dist_case_summary(content=DSS.read_text())  # missing format
+    s = dist_case_summary(content=DSS.read_text(), format="dss")
+    assert s["n_buses"] == 2
+
+
+def test_dist_tools_exactly_one_input():
+    from powerio.mcp.server import convert_dist_case, dist_case_summary
+
+    with pytest.raises(ValueError):
+        dist_case_summary()  # neither path nor content
+    with pytest.raises(ValueError):
+        dist_case_summary(path="x", content="y")  # both
+    with pytest.raises(ValueError):
+        convert_dist_case(to="dss")  # neither
+    with pytest.raises(ValueError):
+        convert_dist_case(to="dss", path="x", content="y")  # both
+
+
+def test_dist_errors_map_cleanly():
+    from powerio.mcp.server import convert_dist_case, dist_case_summary
+
+    with pytest.raises(ValueError):  # FileNotFoundError → ValueError
+        dist_case_summary(path=str(DATA / "dist" / "does_not_exist.dss"))
+    with pytest.raises(ValueError):  # PowerIOParseError → ValueError
+        convert_dist_case(to="dss", content="{not json", from_="bmopf-json")
+
+
+def test_save_dist_case_writes_and_refuses_overwrite(tmp_path):
+    from powerio.mcp.server import save_dist_case
+
+    out = tmp_path / "feeder.json"
+    r = save_dist_case(to="pmd-json", out_path=str(out), path=str(DSS))
+    assert r["path"] == str(out)
+    assert r["bytes_written"] == out.stat().st_size
+    assert json.loads(out.read_text())["data_model"] == "ENGINEERING"
+    with pytest.raises(ValueError):
+        save_dist_case(to="pmd-json", out_path=str(out), path=str(DSS))
+    r2 = save_dist_case(to="dss", out_path=str(out), path=str(DSS), overwrite=True)
+    assert r2["bytes_written"] == out.stat().st_size
+    assert out.read_text() == DSS.read_text()  # same-format echo is byte exact
+
+
+# ---------------------------------------------------------------------------
+# Display tool: PowerWorld .pwd one-line geometry, which travels separately
+# from the network case (its own display API, not parse_file).
+# ---------------------------------------------------------------------------
+
+PWD = DATA / "powerworld" / "ACTIVSg200.pwd"
+
+
+def test_read_display_file_decodes_pwd():
+    from powerio.mcp.server import read_display_file
+
+    d = read_display_file(str(PWD))
+    assert d["kind"] == "powerworld"
+    assert d["canvas_width"] > 0 and d["canvas_height"] > 0
+    assert d["substations"]
+    assert {"number", "name", "x", "y"} <= set(d["substations"][0])
+
+
+def test_read_display_file_errors_map_cleanly(tmp_path):
+    from powerio.mcp.server import read_display_file
+
+    with pytest.raises(ValueError):  # FileNotFoundError → ValueError
+        read_display_file(str(tmp_path / "nope.pwd"))

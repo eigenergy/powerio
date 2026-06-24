@@ -18,6 +18,12 @@ string:
 - ``read_pypsa_csv_folder`` / ``write_pypsa_csv_folder``: the PyPSA static CSV
   folder format, which has no single-file text form.
 - ``read_gridfm`` / ``write_gridfm``: the gridfm-datakit Parquet datasets.
+- ``convert_dist_case`` / ``dist_case_summary`` / ``save_dist_case``: the
+  multiconductor distribution surface (``powerio.dist``), with its own format
+  set (OpenDSS ``.dss``, PowerModelsDistribution ENGINEERING JSON, IEEE BMOPF
+  JSON); a distribution case keeps wire detail and has no JSON transport.
+- ``read_display_file``: the PowerWorld ``.pwd`` one-line display geometry,
+  which travels separately from the network case.
 
 Run over stdio with the ``powerio-mcp`` console script (or ``python -m
 powerio.mcp``). The server is a thin wrapper over the powerio Python API; it
@@ -35,6 +41,7 @@ import os
 from typing import Any, Dict, Optional
 
 import powerio
+from powerio import dist
 from mcp.server.fastmcp import FastMCP
 
 mcp = FastMCP("powerio")
@@ -560,6 +567,233 @@ def write_gridfm(
     except OSError as exc:
         raise ValueError(f"write failed: {exc}") from exc
     return dict(result)
+
+
+# ---------------------------------------------------------------------------
+# Distribution cases: multiconductor unbalanced networks (powerio.dist), with
+# their own three-way format set — OpenDSS .dss, PowerModelsDistribution
+# ENGINEERING JSON, and IEEE BMOPF JSON. Distinct from the transmission Network
+# above: a DistCase keeps multiconductor wire detail, has no JSON transport (so
+# these tools take only path/content, never json), and is not accepted by the
+# matrix builders. dist.parse_str / dist.convert_str also require an explicit
+# format — there is no `matpower` default to fall back to for inline content.
+# ---------------------------------------------------------------------------
+
+
+def _one_dist_input(path: Optional[str], content: Optional[str]) -> None:
+    if (path is None) == (content is None):
+        raise ValueError("provide exactly one of `path` or `content`")
+
+
+def _parse_dist(
+    path: Optional[str], content: Optional[str], format: Optional[str]
+) -> "dist.DistCase":
+    """Parse a distribution case from exactly one of ``path`` or inline
+    ``content``, mapping powerio and filesystem errors to ValueError so MCP
+    clients see one error shape. ``format`` forwards to the parser; for a
+    ``path`` it may be ``None`` (inferred from the extension), but it is
+    REQUIRED for inline ``content`` (``dist.parse_str`` has no default)."""
+    _one_dist_input(path, content)
+    if content is not None and not format:
+        raise ValueError("`format` is required when parsing inline `content`")
+    try:
+        if path is not None:
+            return dist.parse_file(path, format)
+        return dist.parse_str(content, format)
+    except powerio.PowerIOError as exc:
+        raise ValueError(f"parse failed: {exc}") from exc
+    except FileNotFoundError as exc:
+        raise ValueError(f"file not found: {exc}") from exc
+    except OSError as exc:
+        raise ValueError(f"cannot read file: {exc}") from exc
+
+
+def _dist_summary(case: "dist.DistCase") -> Dict[str, Any]:
+    return {
+        "source_format": case.source_format,
+        "n_buses": case.n_buses,
+        "n_lines": case.n_lines,
+        "n_transformers": case.n_transformers,
+        "n_loads": case.n_loads,
+        "n_generators": case.n_generators,
+        "warnings": list(case.warnings),
+    }
+
+
+@mcp.tool()
+def convert_dist_case(
+    to: str,
+    path: Optional[str] = None,
+    content: Optional[str] = None,
+    from_: Optional[str] = None,
+) -> dict:
+    """Convert a multiconductor distribution case to another format, losslessly
+    where the target allows.
+
+    The distribution counterpart of ``convert_case`` (which handles
+    transmission cases). Provide exactly one of ``path`` (a file on disk) or
+    ``content`` (inline file text). ``to``/``from_`` are distribution format
+    names: ``dss`` (OpenDSS), ``pmd-json`` (PowerModelsDistribution ENGINEERING
+    JSON), or ``bmopf-json`` (IEEE BMOPF task-force JSON). For a ``path`` the
+    input format is inferred from the extension (``.dss`` is OpenDSS; a
+    ``.json`` holding a top-level ENGINEERING ``data_model`` key is PMD JSON,
+    otherwise BMOPF JSON); ``from_`` is REQUIRED with inline ``content``.
+
+    Returns ``{"text": <converted file>, "warnings": [<fidelity notes: both the
+    parse warnings and any data the target format could not represent>]}``
+    (empty for a faithful conversion; writing back to the source format echoes
+    the retained source text byte for byte).
+    """
+    _one_dist_input(path, content)
+    if content is not None and not from_:
+        raise ValueError("`from_` is required when converting inline `content`")
+    try:
+        if path is not None:
+            conv = dist.convert_file(path, to, from_)
+        else:
+            conv = dist.convert_str(content, to, from_)
+    except powerio.PowerIOError as exc:
+        raise ValueError(f"conversion failed: {exc}") from exc
+    except FileNotFoundError as exc:
+        raise ValueError(f"file not found: {exc}") from exc
+    except OSError as exc:
+        raise ValueError(f"cannot read file: {exc}") from exc
+    return {"text": conv.text, "warnings": list(conv.warnings)}
+
+
+@mcp.tool()
+def dist_case_summary(
+    path: Optional[str] = None,
+    content: Optional[str] = None,
+    format: Optional[str] = None,
+) -> dict:
+    """Summarize a multiconductor distribution case: source format, element
+    counts, and parse fidelity warnings.
+
+    The distribution counterpart of ``case_summary`` (which handles
+    transmission cases). Provide exactly one of ``path`` or ``content``.
+    ``format`` is the distribution format name (``dss``, ``pmd-json``,
+    ``bmopf-json``); for a ``path`` it is inferred from the extension when
+    omitted, but it is REQUIRED for inline ``content``.
+
+    Returns ``{"source_format": <str>, "n_buses": <int>, "n_lines": <int>,
+    "n_transformers": <int>, "n_loads": <int>, "n_generators": <int>,
+    "warnings": [<everything the reader could not represent or had to assume>]}``.
+    Distribution cases keep multiconductor wire detail and have no positive
+    sequence base MVA or connectivity summary, so those ``case_summary`` fields
+    are absent here.
+    """
+    return _dist_summary(_parse_dist(path, content, format))
+
+
+@mcp.tool()
+def save_dist_case(
+    to: str,
+    out_path: str,
+    path: Optional[str] = None,
+    content: Optional[str] = None,
+    format: Optional[str] = None,
+    overwrite: bool = False,
+) -> dict:
+    """Convert a distribution case and write the result to a file on disk.
+
+    The distribution counterpart of ``save_case``. Use this to stage input for
+    consumers that only accept file paths — for example a distribution solver
+    or PowerMCP's OpenDSS engine, which compiles a ``.dss`` file: convert any
+    distribution case to ``.dss`` here and point the other program at
+    ``out_path``. Distribution cases have no JSON transport, so a file is the
+    only handoff. Pick an ``out_path`` extension matching ``to`` (``.dss`` for
+    OpenDSS, ``.json`` for ``pmd-json``/``bmopf-json``).
+
+    ``to`` is a distribution format name (``dss``, ``pmd-json``,
+    ``bmopf-json``). Provide exactly one of ``path`` or ``content``. ``format``
+    is the source format name; for a ``path`` it is inferred from the extension
+    when omitted, but it is REQUIRED for inline ``content``. An existing
+    ``out_path`` is not overwritten unless ``overwrite`` is true.
+
+    Returns ``{"path": <absolute path written>, "bytes_written": <count>,
+    "warnings": [<parse fidelity notes, then write fidelity notes — the full
+    fidelity story of the written file>]}``. The warnings already fold the
+    parse side in (``dist.convert_*`` carries both), so they describe the
+    written file end to end.
+    """
+    _one_dist_input(path, content)
+    if content is not None and not format:
+        raise ValueError("`format` is required when converting inline `content`")
+    try:
+        if path is not None:
+            conv = dist.convert_file(path, to, format)
+        else:
+            conv = dist.convert_str(content, to, format)
+    except powerio.PowerIOError as exc:
+        raise ValueError(f"conversion failed: {exc}") from exc
+    except FileNotFoundError as exc:
+        raise ValueError(f"file not found: {exc}") from exc
+    except OSError as exc:
+        raise ValueError(f"cannot read file: {exc}") from exc
+    try:
+        # newline="" disables newline translation so the file is byte-identical
+        # to the converter output on every platform, and bytes_written is exact.
+        mode = "w" if overwrite else "x"
+        with open(out_path, mode, encoding="utf-8", newline="") as fh:
+            fh.write(conv.text)
+    except FileExistsError:
+        raise ValueError(
+            f"refusing to overwrite existing file: {out_path}; pass overwrite=true"
+        ) from None
+    except OSError as exc:
+        raise ValueError(f"write failed: {exc}") from exc
+    return {
+        "path": os.path.abspath(out_path),
+        "bytes_written": len(conv.text.encode("utf-8")),
+        "warnings": list(conv.warnings),
+    }
+
+
+# ---------------------------------------------------------------------------
+# Display artifacts: the one-line diagram geometry that travels separately from
+# the network case (powerio.parse_display_file), exposed so a client can place
+# buses on a one-line or map without the vendor tool installed.
+# ---------------------------------------------------------------------------
+
+
+@mcp.tool()
+def read_display_file(path: str) -> dict:
+    """Decode a PowerWorld ``.pwd`` display file into canvas + substation layout.
+
+    A ``.pwd`` is the one-line *display* artifact (diagram geometry), separate
+    from the network case in a ``.pwb`` / ``.aux``. This reads the diagram's
+    canvas size, its stamp, and each substation's display coordinates, so a
+    client can place buses on a one-line or map without PowerWorld installed.
+
+    Returns ``{"kind": "powerworld", "canvas_width": <int>,
+    "canvas_height": <int>, "stamp": <int>, "substations":
+    [{"number": <int>, "name": <str>, "x": <float>, "y": <float>}, ...]}``.
+    """
+    try:
+        display = powerio.parse_display_file(path)
+    except powerio.PowerIOError as exc:
+        raise ValueError(f"parse failed: {exc}") from exc
+    except FileNotFoundError as exc:
+        raise ValueError(f"file not found: {exc}") from exc
+    except OSError as exc:
+        raise ValueError(f"cannot read file: {exc}") from exc
+    # powerio's DisplayData is generic (kind + data); only "powerworld" yields a
+    # PwdDisplay. Reject any other kind with a clean error instead of an opaque
+    # AttributeError if a future powerio adds one.
+    if display.kind != "powerworld":
+        raise ValueError(f"unsupported display format: {display.kind!r}")
+    pwd = display.data
+    return {
+        "kind": display.kind,
+        "canvas_width": pwd.canvas_width,
+        "canvas_height": pwd.canvas_height,
+        "stamp": pwd.stamp,
+        "substations": [
+            {"number": s.number, "name": s.name, "x": s.x, "y": s.y}
+            for s in pwd.substations
+        ],
+    }
 
 
 def main() -> None:

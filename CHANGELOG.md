@@ -1,5 +1,23 @@
 # Changelog
 
+## 0.3.3
+
+- MCP server: expose the distribution surface (`powerio.dist`) as three new
+  tools — `convert_dist_case`, `dist_case_summary`, and `save_dist_case` —
+  covering OpenDSS `.dss`, PowerModelsDistribution ENGINEERING JSON, and IEEE
+  BMOPF JSON, with the same one-error-shape and fidelity-warning contract as the
+  transmission tools. A distribution case keeps multiconductor wire detail and
+  has no JSON transport, so these tools take a file `path` or inline `content`
+  only (and inline content requires an explicit format).
+- MCP server: add `read_display_file`, exposing the PowerWorld `.pwd` one-line
+  display geometry (canvas size and substation coordinates) that travels
+  separately from the network case. The MCP surface grows from twelve tools to
+  sixteen.
+- No Rust or C ABI change; `PIO_ABI_VERSION` stays 4 and `PIO_DIST_ABI_VERSION`
+  stays 1. The Python API and matrix builders are unchanged: this release only
+  adds MCP tools over the already-shipped `powerio.dist` and
+  `parse_display_file` APIs.
+
 ## 0.3.2
 
 - `powerio-dist` OpenDSS: grounding reactors written from a bus terminal to the
