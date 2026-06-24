@@ -840,7 +840,7 @@ fn run_convert(
     // input family comes from --from (gridfm reads into the transmission
     // model), from a clear extension, or from the shared JSON classifier.
     let input_is_dist = if let Some(f) = from {
-        Some(!matches!(f, FormatArg::Gridfm) && f.transmission().is_none())
+        Some(f.distribution().is_some())
     } else {
         infer_input_family(input)?
     };
@@ -1049,6 +1049,32 @@ mod tests {
         assert!(!output.exists());
 
         let _ = std::fs::remove_file(input);
+        let _ = std::fs::remove_file(output);
+    }
+
+    #[test]
+    fn convert_accepts_pypsa_csv_as_transmission_input() {
+        let stamp = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let input = std::env::temp_dir().join(format!("powerio-convert-pypsa-{stamp}"));
+        let output = std::env::temp_dir().join(format!("powerio-convert-pypsa-{stamp}.m"));
+        let parsed = powerio_matrix::parse_file(data("case9.m"), None).unwrap();
+        powerio_matrix::write_pypsa_csv_folder(&parsed.network, &input).unwrap();
+
+        run_convert(
+            &input,
+            FormatArg::Matpower,
+            Some(&output),
+            Some(FormatArg::PypsaCsv),
+            0,
+        )
+        .unwrap();
+        let text = std::fs::read_to_string(&output).unwrap();
+        assert!(text.contains("mpc.bus"));
+
+        let _ = std::fs::remove_dir_all(input);
         let _ = std::fs::remove_file(output);
     }
 }
