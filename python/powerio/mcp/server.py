@@ -210,9 +210,11 @@ def _format_from_json_class(
         return domain, format
     if status == "ambiguous":
         raise ValueError(
-            f"ambiguous JSON markers{where}; pass `format` or `json_format`"
+            f"ambiguous JSON markers{where}; pass `from_format` or `json_format`"
         )
-    raise ValueError(f"cannot infer JSON format{where}; pass `format` or `json_format`")
+    raise ValueError(
+        f"cannot infer JSON format{where}; pass `from_format` or `json_format`"
+    )
 
 
 def _transport_kind(text: str, json_format: Optional[str]) -> str:
@@ -233,7 +235,7 @@ def _transport_kind(text: str, json_format: Optional[str]) -> str:
         return "powerio-json"
     raise ValueError(
         "`json` transport must be `powerio-json` or `bmopf-json`; "
-        "pass case JSON as `content` with `format`"
+        "pass case JSON as `content` with `from_format`"
     )
 
 
@@ -279,9 +281,9 @@ def _parse_distribution(
         if status == "known" and domain == "distribution":
             format = inferred
         elif status == "ambiguous":
-            raise ValueError("ambiguous JSON markers; pass `format`")
+            raise ValueError("ambiguous JSON markers; pass `from_format`")
         else:
-            raise ValueError("`format` is required for inline distribution content")
+            raise ValueError("`from_format` is required for inline distribution content")
     try:
         if path is not None:
             net = dist.parse_file(path, format)
@@ -442,71 +444,113 @@ def _write_text(
     }
 
 
-@mcp.tool()
-def convert(
-    to: str,
+def _choose_from_format(
+    from_format: Optional[str] = None,
+    *,
+    format: Optional[str] = None,
+    from_: Optional[str] = None,
+) -> Optional[str]:
+    values = [
+        ("from_format", from_format),
+        ("format", format),
+        ("from_", from_),
+    ]
+    chosen_name: Optional[str] = None
+    chosen: Optional[str] = None
+    for name, value in values:
+        if value is None:
+            continue
+        if chosen is None:
+            chosen_name, chosen = name, value
+            continue
+        if _fmt(value) != _fmt(chosen):
+            raise ValueError(f"`{chosen_name}` and `{name}` disagree")
+    return chosen
+
+
+def _choose_to_format(
+    to_format: Optional[str] = None,
+    *,
+    to: Optional[str] = None,
+    required: bool = True,
+) -> Optional[str]:
+    if to_format is not None and to is not None and _fmt(to_format) != _fmt(to):
+        raise ValueError("`to_format` and `to` disagree")
+    target = to_format or to
+    if required and target is None:
+        raise ValueError("`to_format` is required")
+    return target
+
+
+def _infer_to_format_from_out_path(out_path: str) -> str:
+    suffix = Path(out_path).suffix.lower()
+    inferred = {
+        ".m": "matpower",
+        ".raw": "psse",
+        ".aux": "powerworld",
+        ".epc": "pslf",
+        ".dss": "dss",
+    }.get(suffix)
+    if inferred is not None:
+        return inferred
+    raise ValueError(
+        "cannot infer `to_format` from `out_path`; pass `to_format` explicitly"
+    )
+
+
+def _convert_impl(
+    to_format: str,
     path: Optional[str] = None,
     content: Optional[str] = None,
     json: Optional[str] = None,
-    format: Optional[str] = None,
+    from_format: Optional[str] = None,
     json_format: Optional[str] = None,
     options: Optional[Dict[str, Any]] = None,
 ) -> dict:
-    """Convert a network to a single text format.
-
-    Inputs can be a file/folder/dataset ``path``, inline ``content``, or a
-    transport ``json`` from ``parse``/``normalize``. ``format`` names the input
-    format when inference is not enough; ``json_format`` is ``powerio-json`` or
-    ``bmopf-json``. Folder and dataset targets write through ``save``.
-    """
-    to_l = _fmt(to)
+    to_l = _fmt(to_format)
     if _is_pypsa_format(to_l):
-        raise ValueError("`pypsa-csv` writes a folder; use save(to='pypsa-csv')")
+        raise ValueError(
+            "`pypsa-csv` writes a folder; use save(to_format='pypsa-csv')"
+        )
     if _is_gridfm_format(to_l):
-        raise ValueError("`gridfm` writes a dataset; use save(to='gridfm')")
-    loaded = _load_any(path, content, json, format, json_format, options)
+        raise ValueError("`gridfm` writes a dataset; use save(to_format='gridfm')")
+    loaded = _load_any(path, content, json, from_format, json_format, options)
     try:
         if _is_dist_format(to_l):
             if loaded.domain != "distribution":
                 raise ValueError(
                     "no conversion path between transmission and distribution formats"
                 )
-            conv = loaded.network.to_format(to)
+            conv = loaded.network.to_format(to_format)
             warnings = loaded.warnings + list(conv.warnings)
         else:
             if loaded.domain != "transmission":
                 raise ValueError(
                     "no conversion path between distribution and transmission formats"
                 )
-            conv = loaded.network.to_format(to)
+            conv = loaded.network.to_format(to_format)
             warnings = loaded.warnings + list(conv.warnings)
     except powerio.PowerIOError as exc:
         raise ValueError(f"conversion failed: {exc}") from exc
     return {"text": conv.text, "warnings": warnings}
 
 
-@mcp.tool()
-def save(
-    to: str,
+def _save_impl(
     out_path: str,
     path: Optional[str] = None,
     content: Optional[str] = None,
     json: Optional[str] = None,
-    format: Optional[str] = None,
+    to_format: Optional[str] = None,
+    from_format: Optional[str] = None,
     json_format: Optional[str] = None,
     options: Optional[Dict[str, Any]] = None,
     overwrite: bool = False,
 ) -> dict:
-    """Write a converted network to disk.
-
-    Text targets write files. ``pypsa-csv`` writes a folder. ``gridfm`` writes a
-    dataset. ``options`` carries format-specific fields such as gridfm
-    ``scenario`` and column toggles.
-    """
     opts = _opts(options)
     out_path = _local_path(out_path, purpose="out_path", for_write=True)
-    loaded = _load_any(path, content, json, format, json_format, options)
-    to_l = _fmt(to)
+    target = to_format or _infer_to_format_from_out_path(out_path)
+    loaded = _load_any(path, content, json, from_format, json_format, options)
+    to_l = _fmt(target)
 
     if _is_gridfm_format(to_l):
         if loaded.domain != "transmission":
@@ -547,7 +591,7 @@ def save(
         if loaded.domain != "distribution":
             raise ValueError("target is a distribution format but source is transmission")
         try:
-            conv = loaded.network.to_format(to)
+            conv = loaded.network.to_format(target)
         except powerio.PowerIOError as exc:
             raise ValueError(f"conversion failed: {exc}") from exc
         return _write_text(out_path, conv.text, loaded.warnings + list(conv.warnings), overwrite)
@@ -555,34 +599,30 @@ def save(
     if loaded.domain != "transmission":
         raise ValueError("target is a transmission format but source is distribution")
     try:
-        conv = loaded.network.to_format(to)
+        conv = loaded.network.to_format(target)
     except powerio.PowerIOError as exc:
         raise ValueError(f"conversion failed: {exc}") from exc
     return _write_text(out_path, conv.text, loaded.warnings + list(conv.warnings), overwrite)
 
 
-@mcp.tool()
-def summary(
+def _summary_impl(
     path: Optional[str] = None,
     content: Optional[str] = None,
     json: Optional[str] = None,
-    format: Optional[str] = None,
+    from_format: Optional[str] = None,
     json_format: Optional[str] = None,
     options: Optional[Dict[str, Any]] = None,
 ) -> dict:
-    """Return the canonical network summary JSON."""
-    return _summary(_load_any(path, content, json, format, json_format, options))
+    return _summary(_load_any(path, content, json, from_format, json_format, options))
 
 
-@mcp.tool()
-def parse(
+def _parse_impl(
     path: Optional[str] = None,
     content: Optional[str] = None,
-    format: Optional[str] = None,
+    from_format: Optional[str] = None,
     options: Optional[Dict[str, Any]] = None,
 ) -> dict:
-    """Parse a network and return its serial JSON transport plus summary."""
-    loaded = _parse_any(path, content, format, options)
+    loaded = _parse_any(path, content, from_format, options)
     if loaded.domain == "distribution":
         text, warnings = _dist_json(loaded.network)
     else:
@@ -596,17 +636,15 @@ def parse(
     }
 
 
-@mcp.tool()
-def normalize(
+def _normalize_impl(
     path: Optional[str] = None,
     content: Optional[str] = None,
     json: Optional[str] = None,
-    format: Optional[str] = None,
+    from_format: Optional[str] = None,
     json_format: Optional[str] = None,
     options: Optional[Dict[str, Any]] = None,
 ) -> dict:
-    """Normalize a transmission network and return the powerio JSON transport."""
-    loaded = _load_any(path, content, json, format, json_format, options)
+    loaded = _load_any(path, content, json, from_format, json_format, options)
     if loaded.domain != "transmission":
         raise ValueError("normalization is not defined for distribution networks")
     try:
@@ -623,29 +661,21 @@ def normalize(
     }
 
 
-@mcp.tool()
-def matrix(
+def _matrix_impl(
     kind: str,
     path: Optional[str] = None,
     content: Optional[str] = None,
     json: Optional[str] = None,
-    format: Optional[str] = None,
+    from_format: Optional[str] = None,
     json_format: Optional[str] = None,
     options: Optional[Dict[str, Any]] = None,
     scheme: str = "bx",
     convention: str = "paper",
 ) -> dict:
-    """Build a transmission matrix output in COO form.
-
-    ``kind`` accepts common names and intent aliases: ``bprime``/``b``/``b1``,
-    ``bdoubleprime``/``b2``/``bpp``, ``ybus_real``/``g``,
-    ``ybus_imag``/``negB``/``b_lap``, ``adjacency``/``adj``, ``ptdf``,
-    ``lodf``, ``laplacian``, or ``lacpf``.
-    """
     canonical = _MATRIX_KIND_ALIASES.get(kind.lower())
     if canonical is None:
         raise ValueError(f"unknown matrix kind {kind!r}; expected one of: {_MATRIX_HELP}")
-    loaded = _load_any(path, content, json, format, json_format, options)
+    loaded = _load_any(path, content, json, from_format, json_format, options)
     if loaded.domain != "transmission":
         raise ValueError("matrix outputs need a transmission network")
     net = loaded.network
@@ -685,12 +715,10 @@ def matrix(
     }
 
 
-@mcp.tool()
-def display(path: str, format: Optional[str] = None) -> dict:
-    """Parse a display artifact and return canonical display JSON."""
+def _display_impl(path: str, from_format: Optional[str] = None) -> dict:
     path = _local_path(path, purpose="path")
     try:
-        data = powerio.parse_display_file(path, format)
+        data = powerio.parse_display_file(path, from_format)
     except powerio.PowerIOError as exc:
         raise ValueError(f"parse failed: {exc}") from exc
     except FileNotFoundError as exc:
@@ -715,7 +743,262 @@ def display(path: str, format: Optional[str] = None) -> dict:
     }
 
 
+@mcp.tool(name="convert")
+def _convert_tool(
+    to_format: str,
+    path: Optional[str] = None,
+    content: Optional[str] = None,
+    json: Optional[str] = None,
+    from_format: Optional[str] = None,
+    json_format: Optional[str] = None,
+    options: Optional[Dict[str, Any]] = None,
+) -> dict:
+    """Convert a network to a single text format."""
+    return _convert_impl(
+        to_format,
+        path=path,
+        content=content,
+        json=json,
+        from_format=from_format,
+        json_format=json_format,
+        options=options,
+    )
+
+
+@mcp.tool(name="save")
+def _save_tool(
+    out_path: str,
+    path: Optional[str] = None,
+    content: Optional[str] = None,
+    json: Optional[str] = None,
+    to_format: Optional[str] = None,
+    from_format: Optional[str] = None,
+    json_format: Optional[str] = None,
+    options: Optional[Dict[str, Any]] = None,
+    overwrite: bool = False,
+) -> dict:
+    """Write a converted network to disk."""
+    return _save_impl(
+        out_path,
+        path=path,
+        content=content,
+        json=json,
+        to_format=to_format,
+        from_format=from_format,
+        json_format=json_format,
+        options=options,
+        overwrite=overwrite,
+    )
+
+
+@mcp.tool(name="summary")
+def _summary_tool(
+    path: Optional[str] = None,
+    content: Optional[str] = None,
+    json: Optional[str] = None,
+    from_format: Optional[str] = None,
+    json_format: Optional[str] = None,
+    options: Optional[Dict[str, Any]] = None,
+) -> dict:
+    """Return the canonical network summary JSON."""
+    return _summary_impl(path, content, json, from_format, json_format, options)
+
+
+@mcp.tool(name="parse")
+def _parse_tool(
+    path: Optional[str] = None,
+    content: Optional[str] = None,
+    from_format: Optional[str] = None,
+    options: Optional[Dict[str, Any]] = None,
+) -> dict:
+    """Parse a network and return its serial JSON transport plus summary."""
+    return _parse_impl(path, content, from_format, options)
+
+
+@mcp.tool(name="normalize")
+def _normalize_tool(
+    path: Optional[str] = None,
+    content: Optional[str] = None,
+    json: Optional[str] = None,
+    from_format: Optional[str] = None,
+    json_format: Optional[str] = None,
+    options: Optional[Dict[str, Any]] = None,
+) -> dict:
+    """Normalize a transmission network and return the powerio JSON transport."""
+    return _normalize_impl(path, content, json, from_format, json_format, options)
+
+
+@mcp.tool(name="matrix")
+def _matrix_tool(
+    kind: str,
+    path: Optional[str] = None,
+    content: Optional[str] = None,
+    json: Optional[str] = None,
+    from_format: Optional[str] = None,
+    json_format: Optional[str] = None,
+    options: Optional[Dict[str, Any]] = None,
+    scheme: str = "bx",
+    convention: str = "paper",
+) -> dict:
+    """Build a transmission matrix output in COO form."""
+    return _matrix_impl(
+        kind,
+        path=path,
+        content=content,
+        json=json,
+        from_format=from_format,
+        json_format=json_format,
+        options=options,
+        scheme=scheme,
+        convention=convention,
+    )
+
+
+@mcp.tool(name="display")
+def _display_tool(path: str, from_format: Optional[str] = None) -> dict:
+    """Parse a display artifact and return canonical display JSON."""
+    return _display_impl(path, from_format)
+
+
 # Non-advertised compatibility callables for direct Python imports.
+def convert(
+    to_format: Optional[str] = None,
+    path: Optional[str] = None,
+    content: Optional[str] = None,
+    json: Optional[str] = None,
+    from_format: Optional[str] = None,
+    json_format: Optional[str] = None,
+    options: Optional[Dict[str, Any]] = None,
+    *,
+    to: Optional[str] = None,
+    format: Optional[str] = None,
+    from_: Optional[str] = None,
+) -> dict:
+    target = _choose_to_format(to_format, to=to)
+    source = _choose_from_format(from_format, format=format, from_=from_)
+    return _convert_impl(
+        target,
+        path=path,
+        content=content,
+        json=json,
+        from_format=source,
+        json_format=json_format,
+        options=options,
+    )
+
+
+def save(
+    out_path: str,
+    path: Optional[str] = None,
+    content: Optional[str] = None,
+    json: Optional[str] = None,
+    to_format: Optional[str] = None,
+    from_format: Optional[str] = None,
+    json_format: Optional[str] = None,
+    options: Optional[Dict[str, Any]] = None,
+    overwrite: bool = False,
+    *,
+    to: Optional[str] = None,
+    format: Optional[str] = None,
+    from_: Optional[str] = None,
+) -> dict:
+    target = _choose_to_format(to_format, to=to, required=False)
+    source = _choose_from_format(from_format, format=format, from_=from_)
+    return _save_impl(
+        out_path,
+        path=path,
+        content=content,
+        json=json,
+        to_format=target,
+        from_format=source,
+        json_format=json_format,
+        options=options,
+        overwrite=overwrite,
+    )
+
+
+def summary(
+    path: Optional[str] = None,
+    content: Optional[str] = None,
+    json: Optional[str] = None,
+    from_format: Optional[str] = None,
+    json_format: Optional[str] = None,
+    options: Optional[Dict[str, Any]] = None,
+    *,
+    format: Optional[str] = None,
+    from_: Optional[str] = None,
+) -> dict:
+    source = _choose_from_format(from_format, format=format, from_=from_)
+    return _summary_impl(path, content, json, source, json_format, options)
+
+
+def parse(
+    path: Optional[str] = None,
+    content: Optional[str] = None,
+    from_format: Optional[str] = None,
+    options: Optional[Dict[str, Any]] = None,
+    *,
+    format: Optional[str] = None,
+    from_: Optional[str] = None,
+) -> dict:
+    source = _choose_from_format(from_format, format=format, from_=from_)
+    return _parse_impl(path, content, source, options)
+
+
+def normalize(
+    path: Optional[str] = None,
+    content: Optional[str] = None,
+    json: Optional[str] = None,
+    from_format: Optional[str] = None,
+    json_format: Optional[str] = None,
+    options: Optional[Dict[str, Any]] = None,
+    *,
+    format: Optional[str] = None,
+    from_: Optional[str] = None,
+) -> dict:
+    source = _choose_from_format(from_format, format=format, from_=from_)
+    return _normalize_impl(path, content, json, source, json_format, options)
+
+
+def matrix(
+    kind: str,
+    path: Optional[str] = None,
+    content: Optional[str] = None,
+    json: Optional[str] = None,
+    from_format: Optional[str] = None,
+    json_format: Optional[str] = None,
+    options: Optional[Dict[str, Any]] = None,
+    scheme: str = "bx",
+    convention: str = "paper",
+    *,
+    format: Optional[str] = None,
+    from_: Optional[str] = None,
+) -> dict:
+    source = _choose_from_format(from_format, format=format, from_=from_)
+    return _matrix_impl(
+        kind,
+        path=path,
+        content=content,
+        json=json,
+        from_format=source,
+        json_format=json_format,
+        options=options,
+        scheme=scheme,
+        convention=convention,
+    )
+
+
+def display(
+    path: str,
+    from_format: Optional[str] = None,
+    *,
+    format: Optional[str] = None,
+    from_: Optional[str] = None,
+) -> dict:
+    source = _choose_from_format(from_format, format=format, from_=from_)
+    return _display_impl(path, source)
+
+
 def compute_matrix(*args: Any, **kwargs: Any) -> dict:
     return matrix(*args, **kwargs)
 
@@ -726,7 +1009,7 @@ def convert_case(
     content: Optional[str] = None,
     from_: Optional[str] = None,
 ) -> dict:
-    return convert(to=to, path=path, content=content, format=from_)
+    return convert(to_format=to, path=path, content=content, from_format=from_)
 
 
 def save_case(
@@ -739,12 +1022,12 @@ def save_case(
     overwrite: bool = False,
 ) -> dict:
     return save(
-        to=to,
         out_path=out_path,
         path=path,
         content=content,
         json=json,
-        format=format,
+        to_format=to,
+        from_format=format,
         overwrite=overwrite,
     )
 
@@ -755,7 +1038,7 @@ def case_summary(
     json: Optional[str] = None,
     format: Optional[str] = None,
 ) -> dict:
-    return summary(path=path, content=content, json=json, format=format)
+    return summary(path=path, content=content, json=json, from_format=format)
 
 
 def parse_case(
@@ -763,7 +1046,7 @@ def parse_case(
     content: Optional[str] = None,
     format: Optional[str] = None,
 ) -> dict:
-    return parse(path=path, content=content, format=format)
+    return parse(path=path, content=content, from_format=format)
 
 
 def normalize_case(
@@ -771,7 +1054,7 @@ def normalize_case(
     content: Optional[str] = None,
     format: Optional[str] = None,
 ) -> dict:
-    return normalize(path=path, content=content, format=format)
+    return normalize(path=path, content=content, from_format=format)
 
 
 def case_to_json(
@@ -779,7 +1062,7 @@ def case_to_json(
     content: Optional[str] = None,
     format: Optional[str] = None,
 ) -> dict:
-    result = parse(path=path, content=content, format=format)
+    result = parse(path=path, content=content, from_format=format)
     return {"json": result["json"], "json_format": result["json_format"]}
 
 
@@ -791,12 +1074,12 @@ def write_pypsa_csv_folder(
     format: Optional[str] = None,
 ) -> dict:
     return save(
-        to="pypsa-csv",
         out_path=out_dir,
         path=path,
         content=content,
         json=json,
-        format=format,
+        to_format="pypsa-csv",
+        from_format=format,
     )
 
 

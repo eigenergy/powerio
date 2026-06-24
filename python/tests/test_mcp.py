@@ -25,7 +25,8 @@ gridfm_only = pytest.mark.skipif(
 
 
 def test_tool_surface_is_semantic():
-    names = {t.name for t in asyncio.run(server.mcp.list_tools())}
+    tools = {t.name: t for t in asyncio.run(server.mcp.list_tools())}
+    names = set(tools)
     assert names == {
         "convert",
         "save",
@@ -35,6 +36,18 @@ def test_tool_surface_is_semantic():
         "matrix",
         "display",
     }
+    for name in ("parse", "summary", "normalize", "matrix", "display"):
+        props = tools[name].inputSchema["properties"]
+        assert "from_format" in props
+        assert "format" not in props
+    convert_props = tools["convert"].inputSchema["properties"]
+    assert "to_format" in convert_props and "from_format" in convert_props
+    assert "to" not in convert_props and "format" not in convert_props
+    save_schema = tools["save"].inputSchema
+    assert save_schema["required"] == ["out_path"]
+    save_props = save_schema["properties"]
+    assert "to_format" in save_props and "from_format" in save_props
+    assert "to" not in save_props and "format" not in save_props
 
 
 def test_summary_transmission_schema():
@@ -63,9 +76,11 @@ def test_summary_distribution_schema_and_json_sniffing():
 def test_distribution_aliases_route_to_core_parser():
     text = DSS.read_text()
     for fmt in ("dss", "opendss"):
-        assert server.summary(content=text, format=fmt)["domain"] == "distribution"
-    assert json.loads(server.convert(to="pmd", path=str(DSS))["text"])["data_model"] == "ENGINEERING"
-    assert "bus" in json.loads(server.convert(to="bmopf", path=str(DSS))["text"])
+        assert server.summary(content=text, from_format=fmt)["domain"] == "distribution"
+    assert json.loads(server.convert(to_format="pmd", path=str(DSS))["text"])[
+        "data_model"
+    ] == "ENGINEERING"
+    assert "bus" in json.loads(server.convert(to_format="bmopf", path=str(DSS))["text"])
 
 
 def test_parse_transmission_transport_round_trip(tmp_path):
@@ -81,7 +96,7 @@ def test_parse_transmission_transport_round_trip(tmp_path):
     ]["buses"] == 9
 
     out = tmp_path / "case9.m"
-    server.save(to="matpower", out_path=str(out), json=parsed["json"], json_format=parsed["json_format"])
+    server.save(out_path=str(out), json=parsed["json"], json_format=parsed["json_format"])
     assert powerio.parse_file(out).n_buses == 9
 
 
@@ -96,7 +111,7 @@ def test_parse_distribution_uses_bmopf_transport(tmp_path):
     ]["sources"] >= 1
 
     out = tmp_path / "feeder.dss"
-    server.save(to="dss", out_path=str(out), json=parsed["json"], json_format=parsed["json_format"])
+    server.save(out_path=str(out), json=parsed["json"], json_format=parsed["json_format"])
     assert "new circuit" in out.read_text().lower()
 
 
@@ -110,7 +125,7 @@ def test_minimal_bmopf_json_routes_without_format(tmp_path):
     assert s["domain"] == "distribution"
 
     out = tmp_path / "minimal.json"
-    server.save(to="bmopf-json", out_path=str(out), json=MINIMAL_BMOPF)
+    server.save(to_format="bmopf-json", out_path=str(out), json=MINIMAL_BMOPF)
     assert json.loads(out.read_text())["bus"]["a"]["terminal_names"] == ["1"]
 
 
@@ -140,14 +155,16 @@ def test_parse_reads_pypsa_folder(tmp_path):
 @gridfm_only
 def test_gridfm_routes_through_generic_verbs(tmp_path):
     out_dir = tmp_path / "gfm"
-    write = server.save(to="gridfm", out_path=str(out_dir), path=str(DATA / "case9.m"))
+    write = server.save(to_format="gridfm", out_path=str(out_dir), path=str(DATA / "case9.m"))
     assert write["files"]
 
-    parsed = server.parse(path=str(out_dir), format="gridfm", options={"scenario": 0})
+    parsed = server.parse(path=str(out_dir), from_format="gridfm", options={"scenario": 0})
     assert parsed["summary"]["domain"] == "transmission"
     assert parsed["summary"]["elements"]["buses"] == 9
 
-    converted = server.convert(to="matpower", path=str(out_dir), format="gridfm")
+    converted = server.convert(
+        to_format="matpower", path=str(out_dir), from_format="gridfm"
+    )
     assert "mpc.bus" in converted["text"]
 
 
@@ -183,16 +200,43 @@ def test_bad_json_transport_maps_cleanly():
 
 def test_save_text_folder_and_overwrite(tmp_path):
     out = tmp_path / "case9.json"
-    r = server.save(to="powermodels-json", out_path=str(out), path=str(DATA / "case9.m"))
+    r = server.save(
+        to_format="powermodels-json", out_path=str(out), path=str(DATA / "case9.m")
+    )
     assert r["path"] == str(out)
     assert r["bytes_written"] == out.stat().st_size
     with pytest.raises(ValueError):
-        server.save(to="powermodels-json", out_path=str(out), path=str(DATA / "case9.m"))
-    server.save(to="matpower", out_path=str(out), path=str(DATA / "case9.m"), overwrite=True)
+        server.save(
+            to_format="powermodels-json",
+            out_path=str(out),
+            path=str(DATA / "case9.m"),
+        )
+    server.save(
+        to_format="matpower",
+        out_path=str(out),
+        path=str(DATA / "case9.m"),
+        overwrite=True,
+    )
 
     folder = tmp_path / "pypsa"
-    w = server.save(to="pypsa-csv", out_path=str(folder), path=str(DATA / "case9.m"))
+    w = server.save(
+        to_format="pypsa-csv", out_path=str(folder), path=str(DATA / "case9.m")
+    )
     assert w["files"] and (folder / "buses.csv").exists()
+
+
+def test_convert_requires_to_format():
+    with pytest.raises(ValueError, match="to_format"):
+        server.convert(path=str(DATA / "case9.m"))
+
+
+def test_save_infers_unambiguous_output_format(tmp_path):
+    raw = tmp_path / "case9.raw"
+    server.save(out_path=str(raw), path=str(DATA / "case9.m"))
+    assert raw.read_text().lstrip().startswith("0,")
+
+    with pytest.raises(ValueError, match="to_format"):
+        server.save(out_path=str(tmp_path / "case9.json"), path=str(DATA / "case9.m"))
 
 
 def test_file_uri_paths_are_accepted(tmp_path):
@@ -200,7 +244,7 @@ def test_file_uri_paths_are_accepted(tmp_path):
     assert server.summary(path=source_uri)["elements"]["buses"] == 9
 
     out = tmp_path / "case9.json"
-    server.save(to="powermodels-json", out_path=out.as_uri(), path=source_uri)
+    server.save(to_format="powermodels-json", out_path=out.as_uri(), path=source_uri)
     assert json.loads(out.read_text())["name"] == "case9"
 
 
@@ -234,6 +278,7 @@ def test_display_errors_map_cleanly(tmp_path):
 
 def test_compatibility_aliases_are_not_tools(tmp_path):
     assert server.case_summary(path=str(DATA / "case9.m")) == server.summary(path=str(DATA / "case9.m"))
+    assert server.convert(to="psse", format="matpower", content=(DATA / "case9.m").read_text())["text"]
     assert server.compute_matrix("b", path=str(DATA / "case9.m"))["kind"] == "bprime"
     out_dir = tmp_path / "pypsa"
     assert server.write_pypsa_csv_folder(str(out_dir), path=str(DATA / "case9.m"))["files"]
