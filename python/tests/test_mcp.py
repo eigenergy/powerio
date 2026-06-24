@@ -274,6 +274,26 @@ def test_file_uri_paths_are_accepted(tmp_path):
     assert json.loads(out.read_text())["name"] == "case9"
 
 
+def test_file_uri_decoding_preserves_windows_drive_letters():
+    def text(path):
+        return str(path).replace("\\", "/")
+
+    assert (
+        text(server._decode_local_path("file:///C:/Users/Sam/case%209.m", purpose="path"))
+        == "C:/Users/Sam/case 9.m"
+    )
+    assert (
+        text(
+            server._decode_local_path(
+                "file://localhost/D:/grid/case.raw", purpose="path"
+            )
+        )
+        == "D:/grid/case.raw"
+    )
+    with pytest.raises(ValueError, match="must be local"):
+        server._decode_local_path("file://server/share/case.raw", purpose="path")
+
+
 def test_mcp_allowed_roots_restrict_filesystem_paths(monkeypatch, tmp_path):
     local_case = tmp_path / "case9.m"
     local_case.write_text((DATA / "case9.m").read_text())

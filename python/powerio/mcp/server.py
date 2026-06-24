@@ -141,9 +141,21 @@ def _decode_local_path(value: str, *, purpose: str) -> Path:
     if parsed.scheme and not windows_drive:
         if parsed.scheme != "file":
             raise ValueError(f"`{purpose}` must be a local path or file:// URI")
-        if parsed.netloc not in ("", "localhost"):
+        netloc = unquote(parsed.netloc)
+        path = unquote(parsed.path)
+        if len(netloc) == 2 and netloc[0].isalpha() and netloc[1] == ":":
+            return Path(f"{netloc}{path}").expanduser()
+        if netloc.lower() not in ("", "localhost"):
             raise ValueError(f"`{purpose}` file URI must be local")
-        return Path(unquote(parsed.path)).expanduser()
+        if (
+            len(path) >= 3
+            and path[0] == "/"
+            and path[1].isalpha()
+            and path[2] == ":"
+            and (len(path) == 3 or path[3] in "/\\")
+        ):
+            path = path[1:]
+        return Path(path).expanduser()
     return Path(str(value)).expanduser()
 
 

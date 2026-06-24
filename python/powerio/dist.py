@@ -23,6 +23,7 @@ from . import Conversion, _powerio
 
 __all__ = [
     "DistNetwork",
+    "DistCase",
     "parse_file",
     "parse_str",
     "convert_file",
@@ -93,6 +94,11 @@ class DistNetwork:
 
     def __repr__(self) -> str:
         return self._inner.__repr__()
+
+
+# Deprecated compatibility alias. Kept because it was exported before the
+# DistNetwork rename; remove in 0.4.0.
+DistCase = DistNetwork
 
 
 def parse_file(path: Any, from_: Optional[str] = None) -> DistNetwork:

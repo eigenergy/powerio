@@ -343,12 +343,14 @@ fn is_pslf_name(name: &str) -> bool {
 /// [`Error::UnknownFormat`] when its name maps to no extension, the I/O error
 /// otherwise), and a file maps by extension (`m`/`json`/`raw`/`aux`/`pwb`/`epc`),
 /// case insensitively (issue #97: `.RAW` is as common as `.raw` in the wild). A
-/// `.json` file is sniffed four ways: pandapower (`"_class": "pandapowerNet"`),
-/// egret (top level `elements` and `system`), the powerio-json snapshot (top
-/// level `buses`), else PowerModels. Pass `from` to force one. PowerWorld `.pwb`
-/// is a binary read only format with no retained source; PSLF `.epc` is text and
-/// has a writer. Returns [`Parsed`]: the network plus the reader's fidelity
-/// warnings.
+/// `.json` file is classified by top level shape markers: pandapower
+/// (`"_class": "pandapowerNet"`), egret (`elements` and `system`), powerio-json
+/// (`buses` plus network keys), and PowerModels JSON (`baseMVA`, `branch`,
+/// `gen`, or `gencost`). JSON matching distribution markers, ambiguous markers,
+/// or no known markers returns [`Error::UnknownFormat`]. Pass `from` to force a
+/// transmission format. PowerWorld `.pwb` is a binary read only format with no
+/// retained source; PSLF `.epc` is text and has a writer. Returns [`Parsed`]:
+/// the network plus the reader's fidelity warnings.
 ///
 /// The one path-based parser the CLI and the Python/C/Julia bindings share (each
 /// exposes the same `parse_file(path, from)` shape), so adding a source format is

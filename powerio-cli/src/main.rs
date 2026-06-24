@@ -166,9 +166,10 @@ enum Command {
     },
 }
 
-/// A case interchange format, for `--to` / `--from`. `gridfm` is read-only here:
-/// `convert --from gridfm` reads a Parquet dataset, but writing a gridfm dataset
-/// is the dedicated `gridfm` subcommand, so `--to gridfm` is rejected.
+/// A case interchange format, for `--to` / `--from`. `gridfm` and `pwb` are
+/// read-only here: `convert --from gridfm` reads a Parquet dataset, but writing
+/// a gridfm dataset is the dedicated `gridfm` subcommand, and PowerWorld `.pwb`
+/// has no writer.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, ValueEnum)]
 enum FormatArg {
     #[value(name = "matpower", alias = "m")]
@@ -830,6 +831,11 @@ fn run_convert(
     if matches!(to, FormatArg::Gridfm) {
         anyhow::bail!("`convert` cannot write a gridfm dataset; use the `gridfm` subcommand");
     }
+    if matches!(to, FormatArg::Pwb) {
+        anyhow::bail!(
+            "`convert` cannot write PowerWorld .pwb binary cases; use `--to powerworld` for AUX text"
+        );
+    }
     // PyPSA CSV is a transmission format that writes a directory, not a text
     // target, so it takes the folder path and returns early.
     if to == FormatArg::PypsaCsv {
@@ -933,7 +939,7 @@ fn convert_to_pypsa_folder(
 
 /// Read `input` into the neutral [`powerio_matrix::Network`] through the shared
 /// format hub, which picks the reader from `from` or the extension (sniffing a
-/// `.json` for the pandapower vs egret vs PowerModels shape). The distribution
+/// `.json` with the shared top level shape classifier). The distribution
 /// formats are rejected up front: every caller of this function consumes the
 /// transmission model, and clap can't express the restriction on the shared
 /// `FormatArg`. Read fidelity warnings print to stderr like the write side's.
@@ -1076,5 +1082,21 @@ mod tests {
 
         let _ = std::fs::remove_dir_all(input);
         let _ = std::fs::remove_file(output);
+    }
+
+    #[test]
+    fn convert_rejects_pwb_target_before_family_routing() {
+        let err = run_convert(
+            &data("dist/micro/xfmr_single_phase.dss"),
+            FormatArg::Pwb,
+            None,
+            None,
+            0,
+        )
+        .unwrap_err();
+        assert!(
+            err.to_string().contains("cannot write PowerWorld .pwb"),
+            "{err}"
+        );
     }
 }

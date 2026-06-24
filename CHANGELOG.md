@@ -15,10 +15,11 @@
   for one release, but they are no longer advertised as MCP tools.
 - Python API: restored the undocumented `powerio.Case = Network` alias for one
   release, but left it out of `__all__` and docs; remove it in 0.4.0. The
-  **experimental** distribution surface renames
-  `powerio.dist.DistCase → DistNetwork` to match the native `DistNetwork` hub
-  type; `powerio.dist` is gated on the draft BMOPF schema (`PIO_DIST_ABI_VERSION`
-  = 1) and not yet under the stability guarantee.
+  **experimental** distribution surface now uses `powerio.dist.DistNetwork` as
+  the primary name to match the native `DistNetwork` hub type, while the
+  exported `powerio.dist.DistCase = DistNetwork` alias stays for one release.
+  `powerio.dist` is gated on the draft BMOPF schema (`PIO_DIST_ABI_VERSION` = 1)
+  and not yet under the stability guarantee.
 - No C ABI change: `PIO_ABI_VERSION` stays 4 and `PIO_DIST_ABI_VERSION` stays 1,
   and the matrix builders are unchanged. The native extension's internal pyclass
   names changed (`PyCase → PyNetwork`, `_DistCase → _DistNetwork`) so `repr()`
