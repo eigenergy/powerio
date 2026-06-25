@@ -15,9 +15,9 @@ use serde_json::{Map, Value};
 
 use crate::error::{Error, Result};
 use crate::model::{
-    Configuration, DistBus, DistGenerator, DistLine, DistLineCode, DistLoad, DistNetwork,
-    DistShunt, DistSourceFormat, DistSwitch, DistTransformer, Extras, Mat, UntypedObject,
-    VoltageSource, Winding, WindingConn,
+    Configuration, DistBus, DistGenerator, DistLine, DistLineCode, DistLoad, DistLoadVoltageModel,
+    DistNetwork, DistShunt, DistSourceFormat, DistSwitch, DistTransformer, Extras, Mat,
+    UntypedObject, VoltageSource, Winding, WindingConn,
 };
 
 pub fn parse_pmd_file(path: impl AsRef<Path>) -> Result<DistNetwork> {
@@ -568,6 +568,21 @@ impl Reader<'_> {
                     extras.insert("model".into(), dss_model.into());
                 }
             }
+            let v_nom = floats("vm_nom", o.get("vm_nom")).unwrap_or_default();
+            let voltage_model = match o.get("model").and_then(Value::as_str) {
+                Some("IMPEDANCE") => DistLoadVoltageModel::ConstantImpedance { v_nom },
+                Some("CURRENT") => DistLoadVoltageModel::ConstantCurrent { v_nom },
+                Some("ZIPV") => DistLoadVoltageModel::Zip {
+                    v_nom,
+                    alpha_z: Vec::new(),
+                    alpha_i: Vec::new(),
+                    alpha_p: Vec::new(),
+                    beta_z: Vec::new(),
+                    beta_i: Vec::new(),
+                    beta_p: Vec::new(),
+                },
+                _ => DistLoadVoltageModel::ConstantPower,
+            };
             stash_status(
                 o,
                 &mut extras,
@@ -581,6 +596,7 @@ impl Reader<'_> {
                 configuration,
                 p_nom: scale("pd_nom"),
                 q_nom: scale("qd_nom"),
+                voltage_model,
                 extras,
             });
         }

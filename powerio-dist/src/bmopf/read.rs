@@ -15,9 +15,9 @@ use serde_json::{Map, Value};
 
 use crate::error::{Error, Result};
 use crate::model::{
-    Configuration, DistBus, DistGenerator, DistLine, DistLineCode, DistLoad, DistNetwork,
-    DistShunt, DistSourceFormat, DistSwitch, DistTransformer, Extras, Mat, UntypedObject,
-    VoltageSource, Winding, WindingConn,
+    Configuration, DistBus, DistGenerator, DistLine, DistLineCode, DistLoad, DistLoadVoltageModel,
+    DistNetwork, DistShunt, DistSourceFormat, DistSwitch, DistTransformer, Extras, Mat,
+    UntypedObject, VoltageSource, Winding, WindingConn,
 };
 
 pub fn parse_bmopf_file(path: impl AsRef<Path>) -> Result<DistNetwork> {
@@ -347,7 +347,58 @@ impl Reader<'_> {
     fn loads(&mut self, items: &Map<String, Value>) {
         for (name, v) in items {
             let Value::Object(o) = v else { continue };
-            let known = ["p_nom", "q_nom", "bus", "configuration", "terminal_map"];
+            let known = [
+                "p_nom",
+                "q_nom",
+                "bus",
+                "configuration",
+                "terminal_map",
+                "model",
+                "v_nom",
+                "alpha_z",
+                "alpha_i",
+                "alpha_p",
+                "beta_z",
+                "beta_i",
+                "beta_p",
+                "gamma_p",
+                "gamma_q",
+            ];
+            let v_nom = floats(o.get("v_nom")).unwrap_or_default();
+            let has_zip = [
+                "alpha_z", "alpha_i", "alpha_p", "beta_z", "beta_i", "beta_p",
+            ]
+            .iter()
+            .any(|key| o.get(*key).is_some());
+            let has_exp = o.get("gamma_p").is_some() || o.get("gamma_q").is_some();
+            let model = o
+                .get("model")
+                .and_then(Value::as_str)
+                .unwrap_or("POWER")
+                .to_ascii_uppercase();
+            let voltage_model = if has_exp {
+                DistLoadVoltageModel::Exponential {
+                    v_nom,
+                    gamma_p: floats(o.get("gamma_p")).unwrap_or_default(),
+                    gamma_q: floats(o.get("gamma_q")).unwrap_or_default(),
+                }
+            } else if has_zip {
+                DistLoadVoltageModel::Zip {
+                    v_nom,
+                    alpha_z: floats(o.get("alpha_z")).unwrap_or_default(),
+                    alpha_i: floats(o.get("alpha_i")).unwrap_or_default(),
+                    alpha_p: floats(o.get("alpha_p")).unwrap_or_default(),
+                    beta_z: floats(o.get("beta_z")).unwrap_or_default(),
+                    beta_i: floats(o.get("beta_i")).unwrap_or_default(),
+                    beta_p: floats(o.get("beta_p")).unwrap_or_default(),
+                }
+            } else if model.contains("IMPEDANCE") {
+                DistLoadVoltageModel::ConstantImpedance { v_nom }
+            } else if model.contains("CURRENT") {
+                DistLoadVoltageModel::ConstantCurrent { v_nom }
+            } else {
+                DistLoadVoltageModel::ConstantPower
+            };
             self.net.loads.push(DistLoad {
                 name: name.clone(),
                 bus: string(o.get("bus")),
@@ -359,6 +410,7 @@ impl Reader<'_> {
                 ),
                 p_nom: floats(o.get("p_nom")).unwrap_or_default(),
                 q_nom: floats(o.get("q_nom")).unwrap_or_default(),
+                voltage_model,
                 extras: take_extras(
                     o,
                     &known,

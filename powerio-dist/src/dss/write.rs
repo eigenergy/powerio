@@ -16,7 +16,9 @@ use std::collections::BTreeMap;
 use std::fmt::Write as _;
 
 use crate::convert::Conversion;
-use crate::model::{Configuration, DistBus, DistNetwork, Extras, Mat, Winding, WindingConn};
+use crate::model::{
+    Configuration, DistBus, DistLoadVoltageModel, DistNetwork, Extras, Mat, Winding, WindingConn,
+};
 
 use super::read::delta_edges;
 use super::{lex, prop};
@@ -890,6 +892,8 @@ impl DssWriter {
             extras.remove("kv");
             extras.remove("phases");
             extras.remove("conn");
+            extras.remove("model");
+            extras.remove("zipv");
             // q that came from a power factor goes back as pf=, so the
             // engine recomputes its own kvar bit for bit.
             let reactive = match extras.remove("pf").and_then(|v| v.as_f64()) {
@@ -903,6 +907,51 @@ impl DssWriter {
                 num(kv),
                 num(kw),
             );
+            match &l.voltage_model {
+                DistLoadVoltageModel::ConstantPower => {}
+                DistLoadVoltageModel::ConstantImpedance { .. } => {
+                    s.push_str(" model=2");
+                }
+                DistLoadVoltageModel::ConstantCurrent { .. } => {
+                    s.push_str(" model=5");
+                }
+                DistLoadVoltageModel::Zip {
+                    alpha_z,
+                    alpha_i,
+                    alpha_p,
+                    beta_z,
+                    beta_i,
+                    beta_p,
+                    ..
+                } => {
+                    s.push_str(" model=8");
+                    if let (Some(az), Some(ai), Some(ap), Some(bz), Some(bi), Some(bp)) = (
+                        alpha_z.first(),
+                        alpha_i.first(),
+                        alpha_p.first(),
+                        beta_z.first(),
+                        beta_i.first(),
+                        beta_p.first(),
+                    ) {
+                        let _ = write!(
+                            s,
+                            " zipv=({}, {}, {}, {}, {}, {}, 0)",
+                            num(*az),
+                            num(*ai),
+                            num(*ap),
+                            num(*bz),
+                            num(*bi),
+                            num(*bp)
+                        );
+                    }
+                }
+                DistLoadVoltageModel::Exponential { .. } => {
+                    self.warn(format!(
+                        "load {}: exponential voltage model has no OpenDSS load model code; emitted constant power",
+                        l.name
+                    ));
+                }
+            }
             s.push_str(&self.extras_tail("load", &l.name, &extras));
             self.line_out(&s);
         }
@@ -1387,6 +1436,7 @@ mod tests {
             configuration,
             p_nom: vec![1e3; phases],
             q_nom: vec![0.0; phases],
+            voltage_model: DistLoadVoltageModel::ConstantPower,
             extras: Extras::from([("kv".to_string(), serde_json::json!("0.4"))]),
         }
     }

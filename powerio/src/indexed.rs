@@ -435,6 +435,7 @@ mod tests {
             bus: BusId(1),
             p: 10.0,
             q: 5.0,
+            voltage_model: None,
             in_service: true,
             extras: Extras::new(),
         });
@@ -442,6 +443,7 @@ mod tests {
             bus: BusId(1),
             p: 3.0,
             q: 1.0,
+            voltage_model: None,
             in_service: true,
             extras: Extras::new(),
         });

@@ -453,7 +453,7 @@ fn read_source(source: Arc<String>, fmt: TargetFormat, name_hint: Option<&str>) 
     let net = match fmt {
         TargetFormat::Matpower => matpower::parse_matpower_source(source, name_hint),
         TargetFormat::PowerModelsJson => {
-            powermodels::parse_powermodels_json_source(source, name_hint)
+            powermodels::parse_powermodels_json_source(source, name_hint, &mut warnings)
         }
         TargetFormat::Psse { .. } => psse::parse_psse_source(source, name_hint, &mut warnings),
         TargetFormat::PowerWorld => {

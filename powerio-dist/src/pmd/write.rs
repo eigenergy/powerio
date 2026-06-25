@@ -17,8 +17,8 @@ use serde_json::{Map, Value, json};
 
 use crate::convert::Conversion;
 use crate::model::{
-    Configuration, DistLineCode, DistNetwork, DistTransformer, Extras, Mat, VoltageSource, Winding,
-    WindingConn,
+    Configuration, DistLineCode, DistLoadVoltageModel, DistNetwork, DistTransformer, Extras, Mat,
+    VoltageSource, Winding, WindingConn,
 };
 
 /// Writes the ENGINEERING document.
@@ -390,14 +390,37 @@ impl Writer {
                     json!(l.q_nom.iter().map(|q| q / 1e3).collect::<Vec<_>>()),
                 );
                 o.insert("bus".into(), json!(l.bus.to_lowercase()));
-                if let Some(kv) = Self::extras_f64(&l.extras, "kv") {
-                    o.insert("vm_nom".into(), json!(kv));
-                }
-                let model = match Self::extras_f64(&l.extras, "model").map(|m| m as i64) {
-                    Some(2) => "IMPEDANCE",
-                    Some(5) => "CURRENT",
-                    Some(8) => "ZIPV",
-                    _ => "POWER",
+                let mut insert_vm_nom = |v_nom: &[f64]| {
+                    if let Some(kv) = Self::extras_f64(&l.extras, "kv") {
+                        o.insert("vm_nom".into(), json!(kv));
+                    } else if !v_nom.is_empty() {
+                        o.insert("vm_nom".into(), json!(v_nom));
+                    }
+                };
+                let model = match &l.voltage_model {
+                    DistLoadVoltageModel::ConstantImpedance { v_nom } => {
+                        insert_vm_nom(v_nom);
+                        "IMPEDANCE"
+                    }
+                    DistLoadVoltageModel::ConstantCurrent { v_nom } => {
+                        insert_vm_nom(v_nom);
+                        "CURRENT"
+                    }
+                    DistLoadVoltageModel::Zip { v_nom, .. } => {
+                        insert_vm_nom(v_nom);
+                        "ZIPV"
+                    }
+                    DistLoadVoltageModel::Exponential { v_nom, .. } => {
+                        insert_vm_nom(v_nom);
+                        self.warn(format!(
+                            "{what}: exponential load model has no ENGINEERING field; emitted POWER"
+                        ));
+                        "POWER"
+                    }
+                    DistLoadVoltageModel::ConstantPower => {
+                        insert_vm_nom(&[]);
+                        "POWER"
+                    }
                 };
                 o.insert("model".into(), json!(model));
                 o.insert("dispatchable".into(), json!("NO"));

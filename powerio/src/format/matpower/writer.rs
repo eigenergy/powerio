@@ -46,6 +46,12 @@ pub(crate) fn write_matpower_conversion(net: &Network) -> Conversion {
             net.hvdc.len()
         ));
     }
+    if !net.switches.is_empty() {
+        warnings.push(format!(
+            "{} switch(es) dropped: MATPOWER has no switch table",
+            net.switches.len()
+        ));
+    }
     if !net.transformers_3w.is_empty() {
         warnings.push(format!(
             "{} 3-winding transformer(s) dropped: the canonical MATPOWER writer emits no \
@@ -67,6 +73,26 @@ pub(crate) fn write_matpower_conversion(net: &Network) -> Conversion {
     if with_caps > 0 {
         warnings.push(format!(
             "generator capability/ramp columns dropped for {with_caps} generator(s): the canonical MATPOWER writer emits only the standard gen columns"
+        ));
+    }
+    let non_matpower_charging = net
+        .branches
+        .iter()
+        .filter(|b| b.has_non_matpower_charging())
+        .count();
+    if non_matpower_charging > 0 {
+        warnings.push(format!(
+            "{non_matpower_charging} branch terminal admittance record(s) collapsed to BR_B: MATPOWER cannot carry conductance or asymmetric terminal charging"
+        ));
+    }
+    let voltage_loads = net
+        .loads
+        .iter()
+        .filter(|l| l.voltage_model.is_some())
+        .count();
+    if voltage_loads > 0 {
+        warnings.push(format!(
+            "{voltage_loads} voltage dependent load model(s) dropped: MATPOWER carries only static Pd/Qd"
         ));
     }
     let with_cost = net.generators.iter().filter(|g| g.cost.is_some()).count();
@@ -148,7 +174,7 @@ fn canonical(net: &Network) -> String {
             br.to,
             br.r,
             br.x,
-            br.b,
+            br.terminal_charging().total_b(),
             br.rate_a,
             br.rate_b,
             br.rate_c,

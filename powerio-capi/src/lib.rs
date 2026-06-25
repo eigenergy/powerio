@@ -37,7 +37,7 @@ mod arrow_export;
 #[cfg(feature = "arrow")]
 pub use arrow_export::{
     PIO_ARROW_TABLE_BRANCH, PIO_ARROW_TABLE_BUS, PIO_ARROW_TABLE_GEN, PIO_ARROW_TABLE_LOAD,
-    PIO_ARROW_TABLE_SHUNT,
+    PIO_ARROW_TABLE_SHUNT, PIO_ARROW_TABLE_SWITCH,
 };
 
 /// Opaque parsed network handle. Carries the parsed [`Network`], the
@@ -459,6 +459,11 @@ pub unsafe extern "C" fn pio_n_branches(net: *const PioNetwork) -> usize {
 }
 
 #[unsafe(no_mangle)]
+pub unsafe extern "C" fn pio_n_switches(net: *const PioNetwork) -> usize {
+    unsafe { guard(0, || network_ref(net).map_or(0, |c| c.net.switches.len())) }
+}
+
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_n_gens(net: *const PioNetwork) -> usize {
     unsafe { guard(0, || network_ref(net).map_or(0, |c| c.net.generators.len())) }
 }
@@ -781,6 +786,108 @@ pub unsafe extern "C" fn pio_branches(
                 net.branches.iter().map(|br| u8::from(br.in_service)),
             );
             net.branches.len()
+        })
+    }
+}
+
+/// Write the branch terminal charging table as parallel arrays, each up to
+/// `cap` entries, and return the total branch count. Columns are p.u.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn pio_branch_charging(
+    net: *const PioNetwork,
+    g_fr: *mut f64,
+    b_fr: *mut f64,
+    g_to: *mut f64,
+    b_to: *mut f64,
+    cap: usize,
+) -> usize {
+    unsafe {
+        guard(0, || {
+            let Some(c) = network_ref(net) else { return 0 };
+            let net = &c.net;
+            fill(
+                g_fr,
+                cap,
+                net.branches.iter().map(|br| br.terminal_charging().g_fr),
+            );
+            fill(
+                b_fr,
+                cap,
+                net.branches.iter().map(|br| br.terminal_charging().b_fr),
+            );
+            fill(
+                g_to,
+                cap,
+                net.branches.iter().map(|br| br.terminal_charging().g_to),
+            );
+            fill(
+                b_to,
+                cap,
+                net.branches.iter().map(|br| br.terminal_charging().b_to),
+            );
+            net.branches.len()
+        })
+    }
+}
+
+/// Write the switch table as parallel arrays, each up to `cap` entries, and
+/// return the total switch count. `from`/`to` are external bus ids.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn pio_switches(
+    net: *const PioNetwork,
+    from: *mut i64,
+    to: *mut i64,
+    closed: *mut u8,
+    thermal_rating: *mut f64,
+    current_rating: *mut f64,
+    pf: *mut f64,
+    qf: *mut f64,
+    pt: *mut f64,
+    qt: *mut f64,
+    cap: usize,
+) -> usize {
+    unsafe {
+        guard(0, || {
+            let Some(c) = network_ref(net) else { return 0 };
+            let net = &c.net;
+            fill(
+                from,
+                cap,
+                net.switches
+                    .iter()
+                    .map(|sw| i64::try_from(sw.from.0).unwrap_or(-1)),
+            );
+            fill(
+                to,
+                cap,
+                net.switches
+                    .iter()
+                    .map(|sw| i64::try_from(sw.to.0).unwrap_or(-1)),
+            );
+            fill(
+                closed,
+                cap,
+                net.switches.iter().map(|sw| u8::from(sw.closed)),
+            );
+            fill(
+                thermal_rating,
+                cap,
+                net.switches
+                    .iter()
+                    .map(|sw| sw.thermal_rating.unwrap_or(0.0)),
+            );
+            fill(
+                current_rating,
+                cap,
+                net.switches
+                    .iter()
+                    .map(|sw| sw.current_rating.unwrap_or(0.0)),
+            );
+            fill(pf, cap, net.switches.iter().map(|sw| sw.pf.unwrap_or(0.0)));
+            fill(qf, cap, net.switches.iter().map(|sw| sw.qf.unwrap_or(0.0)));
+            fill(pt, cap, net.switches.iter().map(|sw| sw.pt.unwrap_or(0.0)));
+            fill(qt, cap, net.switches.iter().map(|sw| sw.qt.unwrap_or(0.0)));
+            net.switches.len()
         })
     }
 }
@@ -1339,6 +1446,7 @@ mod tests {
             "#define PIO_ARROW_TABLE_GEN 2",
             "#define PIO_ARROW_TABLE_LOAD 3",
             "#define PIO_ARROW_TABLE_SHUNT 4",
+            "#define PIO_ARROW_TABLE_SWITCH 5",
             "typedef struct PioDistNetwork PioDistNetwork;",
             "typedef struct PioNetwork PioNetwork;",
             "uint32_t pio_abi_version(void);",
@@ -1354,6 +1462,7 @@ mod tests {
             "PioNetwork *pio_normalize(const PioNetwork *net, char *errbuf, size_t errlen);",
             "size_t pio_n_buses(const PioNetwork *net);",
             "size_t pio_n_branches(const PioNetwork *net);",
+            "size_t pio_n_switches(const PioNetwork *net);",
             "size_t pio_n_gens(const PioNetwork *net);",
             "double pio_base_mva(const PioNetwork *net);",
             "int64_t pio_ref_bus_index(const PioNetwork *net);",
@@ -1367,6 +1476,8 @@ mod tests {
             "void pio_string_free(char *s);",
             "size_t pio_bus_ids(const PioNetwork *net, int64_t *out, size_t cap);",
             "size_t pio_branches(const PioNetwork *net, int64_t *from, int64_t *to, double *r, double *x, double *b, double *tap, double *shift, uint8_t *in_service, size_t cap);",
+            "size_t pio_branch_charging(const PioNetwork *net, double *g_fr, double *b_fr, double *g_to, double *b_to, size_t cap);",
+            "size_t pio_switches(const PioNetwork *net, int64_t *from, int64_t *to, uint8_t *closed, double *thermal_rating, double *current_rating, double *pf, double *qf, double *pt, double *qt, size_t cap);",
             "size_t pio_gens(const PioNetwork *net, int64_t *bus, double *pg, double *pmax, double *pmin, uint8_t *in_service, size_t cap);",
             "size_t pio_bus_demand(const PioNetwork *net, double *pd, double *qd, size_t cap);",
             "size_t pio_bus_shunt(const PioNetwork *net, double *gs, double *bs, size_t cap);",

@@ -124,7 +124,35 @@ pub struct DistLoad {
     pub p_nom: Vec<f64>,
     /// Vars per phase.
     pub q_nom: Vec<f64>,
+    pub voltage_model: DistLoadVoltageModel,
     pub extras: Extras,
+}
+
+#[derive(Clone, Debug, Default, PartialEq)]
+#[non_exhaustive]
+pub enum DistLoadVoltageModel {
+    #[default]
+    ConstantPower,
+    ConstantCurrent {
+        v_nom: Vec<f64>,
+    },
+    ConstantImpedance {
+        v_nom: Vec<f64>,
+    },
+    Zip {
+        v_nom: Vec<f64>,
+        alpha_z: Vec<f64>,
+        alpha_i: Vec<f64>,
+        alpha_p: Vec<f64>,
+        beta_z: Vec<f64>,
+        beta_i: Vec<f64>,
+        beta_p: Vec<f64>,
+    },
+    Exponential {
+        v_nom: Vec<f64>,
+        gamma_p: Vec<f64>,
+        gamma_q: Vec<f64>,
+    },
 }
 
 #[derive(Clone, Debug, PartialEq)]

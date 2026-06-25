@@ -11,8 +11,8 @@ use serde_json::{Map, Value};
 
 use super::{Conversion, Parsed, bus_kv, finish, jnum, nonzero_differs, set_bus_kind, zbase};
 use crate::network::{
-    Branch, Bus, BusId, BusType, Extras, GenCost, Generator, Hvdc, Load, Network, Shunt,
-    SourceFormat, Storage,
+    Branch, BranchCharging, BranchCurrentRatings, Bus, BusId, BusType, Extras, GenCost, Generator,
+    Hvdc, Load, LoadVoltageModel, Network, Shunt, SourceFormat, Storage,
 };
 use crate::{Error, Result};
 
@@ -139,19 +139,55 @@ pub(crate) fn parse_pandapower_source(
             if has_zip {
                 zip_rows += 1;
             }
+            let p = row.f_or("p_mw", 0.0) * scale;
+            let q = row.f_or("q_mvar", 0.0) * scale;
+            let p_z_pct = if row.get("const_z_p_percent").is_some() {
+                row.f_or("const_z_p_percent", 0.0)
+            } else {
+                row.f_or("const_z_percent", 0.0)
+            };
+            let p_i_pct = if row.get("const_i_p_percent").is_some() {
+                row.f_or("const_i_p_percent", 0.0)
+            } else {
+                row.f_or("const_i_percent", 0.0)
+            };
+            let q_z_pct = if row.get("const_z_q_percent").is_some() {
+                row.f_or("const_z_q_percent", 0.0)
+            } else {
+                row.f_or("const_z_percent", 0.0)
+            };
+            let q_i_pct = if row.get("const_i_q_percent").is_some() {
+                row.f_or("const_i_q_percent", 0.0)
+            } else {
+                row.f_or("const_i_percent", 0.0)
+            };
+            let voltage_model = has_zip.then(|| {
+                let p_z = p * p_z_pct / 100.0;
+                let p_i = p * p_i_pct / 100.0;
+                let q_z = q * q_z_pct / 100.0;
+                let q_i = q * q_i_pct / 100.0;
+                LoadVoltageModel::Zip {
+                    p_constant_power: p - p_z - p_i,
+                    q_constant_power: q - q_z - q_i,
+                    p_constant_current: p_i,
+                    q_constant_current: q_i,
+                    p_constant_impedance: p_z,
+                    q_constant_impedance: q_z,
+                    v_nom: None,
+                    load_type: None,
+                    scaling: Some(scale),
+                }
+            });
             loads.push(Load {
                 bus: bus_ref("load", &row, "bus", &bus_of_pp)?,
-                p: row.f_or("p_mw", 0.0) * scale,
-                q: row.f_or("q_mvar", 0.0) * scale,
+                p,
+                q,
+                voltage_model,
                 in_service: row.bool_or("in_service", true),
                 extras: Extras::default(),
             });
         }
-        if zip_rows > 0 {
-            warnings.push(format!(
-                "`load`: ZIP composition (const_z_percent/const_i_percent/const_z_p_percent/const_i_p_percent/const_z_q_percent/const_i_q_percent) nonzero on {zip_rows} rows; loads are read as constant power"
-            ));
-        }
+        let _ = zip_rows;
     }
 
     let mut shunts = Vec::new();
@@ -260,7 +296,6 @@ pub(crate) fn parse_pandapower_source(
 
     let mut branches = Vec::new();
     if let Some(line_frame) = read_frame(obj, "line")? {
-        let mut g_rows = 0_usize;
         for row in line_frame.rows() {
             let from = bus_ref("line", &row, "from_bus", &bus_of_pp)?;
             let to = bus_ref("line", &row, "to_bus", &bus_of_pp)?;
@@ -270,22 +305,27 @@ pub(crate) fn parse_pandapower_source(
             let zbase = zbase(v_from, base_mva);
             let par = parallel_or_one(&row);
             let max_i_ka = row.f_or("max_i_ka", 0.0);
-            if row.f_or("g_us_per_km", 0.0) != 0.0 {
-                g_rows += 1;
-            }
+            let b = row.f_or("c_nf_per_km", 0.0)
+                * row.f_or("length_km", 1.0)
+                * 1e-9
+                * 2.0
+                * std::f64::consts::PI
+                * f_hz
+                * zbase
+                * par;
+            let g = row.f_or("g_us_per_km", 0.0) * row.f_or("length_km", 1.0) * 1e-6 * zbase * par;
             branches.push(Branch {
                 from,
                 to,
                 r: row.f_or("r_ohm_per_km", 0.0) * row.f_or("length_km", 1.0) / zbase / par,
                 x: row.f_or("x_ohm_per_km", 0.0) * row.f_or("length_km", 1.0) / zbase / par,
-                b: row.f_or("c_nf_per_km", 0.0)
-                    * row.f_or("length_km", 1.0)
-                    * 1e-9
-                    * 2.0
-                    * std::f64::consts::PI
-                    * f_hz
-                    * zbase
-                    * par,
+                b,
+                charging: Some(BranchCharging {
+                    g_fr: g / 2.0,
+                    b_fr: b / 2.0,
+                    g_to: g / 2.0,
+                    b_to: b / 2.0,
+                }),
                 rate_a: if max_i_ka >= MAX_I_KA {
                     0.0
                 } else {
@@ -293,33 +333,37 @@ pub(crate) fn parse_pandapower_source(
                 },
                 rate_b: 0.0,
                 rate_c: 0.0,
+                current_ratings: (max_i_ka > 0.0 && max_i_ka < MAX_I_KA).then_some(
+                    BranchCurrentRatings {
+                        c_rating_a: max_i_ka * par,
+                        c_rating_b: 0.0,
+                        c_rating_c: 0.0,
+                    },
+                ),
                 tap: 0.0,
                 shift: 0.0,
                 in_service: row.bool_or("in_service", true),
                 angmin: -360.0,
                 angmax: 360.0,
                 control: None,
+                solution: None,
                 extras: Extras::default(),
             });
-        }
-        if g_rows > 0 {
-            warnings.push(format!(
-                "`line`: g_us_per_km nonzero on {g_rows} rows; line shunt conductance is not representable and was ignored"
-            ));
         }
     }
     if let Some(trafo_frame) = read_frame(obj, "trafo")? {
         let has_changer = trafo_frame.col("tap_changer_type").is_some();
-        let mut mag_rows = 0_usize;
         let mut tabular_rows = 0_usize;
         for row in trafo_frame.rows() {
             let from = bus_ref("trafo", &row, "hv_bus", &bus_of_pp)?;
             let to = bus_ref("trafo", &row, "lv_bus", &bus_of_pp)?;
             let sn = row.f_or("sn_mva", base_mva);
             let par = parallel_or_one(&row);
-            if row.f_or("i0_percent", 0.0) != 0.0 || row.f_or("pfe_kw", 0.0) != 0.0 {
-                mag_rows += 1;
-            }
+            let pfe_mw = row.f_or("pfe_kw", 0.0) * 1e-3 * par;
+            let g_mag = pfe_mw / base_mva;
+            let i0_mva = row.f_or("i0_percent", 0.0).abs() * sn * par / 100.0;
+            let s_mag = i0_mva / base_mva;
+            let b_mag = -(s_mag * s_mag - g_mag * g_mag).max(0.0).sqrt();
 
             // Mirror pandapower's build_branch: the tap adjusts the nominal
             // voltage of its side (_calc_tap_from_dataframe), the impedance is
@@ -419,23 +463,26 @@ pub(crate) fn parse_pandapower_source(
                 to,
                 r: r / par,
                 x: x / par,
-                b: 0.0,
+                b: b_mag,
+                charging: Some(BranchCharging {
+                    g_fr: g_mag,
+                    b_fr: b_mag,
+                    g_to: 0.0,
+                    b_to: 0.0,
+                }),
                 rate_a: sn * par,
                 rate_b: 0.0,
                 rate_c: 0.0,
+                current_ratings: None,
                 tap,
                 shift,
                 in_service: row.bool_or("in_service", true),
                 angmin: -360.0,
                 angmax: 360.0,
                 control: None,
+                solution: None,
                 extras: Extras::default(),
             });
-        }
-        if mag_rows > 0 {
-            warnings.push(format!(
-                "`trafo`: i0_percent/pfe_kw nonzero on {mag_rows} rows; the magnetizing branch is not representable and was ignored"
-            ));
         }
         if tabular_rows > 0 {
             warnings.push(format!(
@@ -469,6 +516,7 @@ pub(crate) fn parse_pandapower_source(
                 thermal_rating: row
                     .f_finite("sn_mva")
                     .unwrap_or_else(|| charge_rating.max(discharge_rating)),
+                current_rating: None,
                 qmin: row.f_or("min_q_mvar", f64::NEG_INFINITY),
                 qmax: row.f_or("max_q_mvar", f64::INFINITY),
                 r: 0.0,
@@ -508,6 +556,7 @@ pub(crate) fn parse_pandapower_source(
                 qmaxt: row.f_or("max_q_to_mvar", f64::INFINITY),
                 loss0: loss_mw,
                 loss1: loss_percent / 100.0,
+                cost: None,
                 extras: Extras::default(),
             });
         }
@@ -574,6 +623,7 @@ pub(crate) fn parse_pandapower_source(
         loads,
         shunts,
         branches,
+        switches: Vec::new(),
         generators,
         storage,
         hvdc,
@@ -2347,6 +2397,7 @@ mod tests {
             bus: BusId(1),
             p: 1.0,
             q: 0.5,
+            voltage_model: None,
             in_service: true,
             extras: Extras::default(),
         });
@@ -2460,7 +2511,7 @@ mod tests {
     }
 
     #[test]
-    fn column_semantics_warn_with_counts() {
+    fn column_semantics_promote_typed_fields() {
         let parsed = parse_pandapower_json(&pp_net(vec![
             bus_table(json!([0, 1])),
             (
@@ -2489,24 +2540,20 @@ mod tests {
             ),
         ]))
         .unwrap();
-        for expected in [
-            "`load`: ZIP composition (const_z_percent/const_i_percent/const_z_p_percent/const_i_p_percent/const_z_q_percent/const_i_q_percent) nonzero on 1 rows; loads are read as constant power",
-            "`line`: g_us_per_km nonzero on 1 rows; line shunt conductance is not representable and was ignored",
-            "`trafo`: i0_percent/pfe_kw nonzero on 1 rows; the magnetizing branch is not representable and was ignored",
-        ] {
-            assert!(
-                parsed.warnings.iter().any(|w| w == expected),
-                "missing {expected:?} in {:?}",
-                parsed.warnings
-            );
-        }
+        assert!(parsed.warnings.is_empty(), "{:?}", parsed.warnings);
+        assert!(matches!(
+            &parsed.network.loads[0].voltage_model,
+            Some(LoadVoltageModel::Zip { p_constant_impedance, .. }) if *p_constant_impedance == 0.2
+        ));
+        assert!(parsed.network.branches[0].terminal_charging().g_fr > 0.0);
+        assert!(parsed.network.branches[1].terminal_charging().b_fr < 0.0);
     }
 
     #[test]
-    fn zip_split_columns_warn_when_nonzero() {
+    fn zip_split_columns_become_typed_model() {
         // A file written by pandapower >= 3.2 carries only the four split names,
         // not the two aggregate names. The reader must detect the nonzero values
-        // and still emit the ZIP warning.
+        // and still type the ZIP model.
         let parsed = parse_pandapower_json(&pp_net(vec![
             bus_table(json!([0])),
             (
@@ -2526,14 +2573,11 @@ mod tests {
             ),
         ]))
         .unwrap();
-        assert!(
-            parsed
-                .warnings
-                .iter()
-                .any(|w| w.starts_with("`load`: ZIP composition")),
-            "expected ZIP warning in {:?}",
-            parsed.warnings
-        );
+        assert!(parsed.warnings.is_empty(), "{:?}", parsed.warnings);
+        assert!(matches!(
+            &parsed.network.loads[0].voltage_model,
+            Some(LoadVoltageModel::Zip { p_constant_impedance, .. }) if *p_constant_impedance == 0.1
+        ));
     }
 
     // --- writer ---
@@ -2565,6 +2609,7 @@ mod tests {
             loads: Vec::new(),
             shunts: Vec::new(),
             branches: Vec::new(),
+            switches: Vec::new(),
             generators: Vec::new(),
             storage: Vec::new(),
             hvdc: Vec::new(),
@@ -2601,15 +2646,18 @@ mod tests {
             r: 0.01,
             x: 0.1,
             b: 0.0,
+            charging: None,
             rate_a: 0.0,
             rate_b: 0.0,
             rate_c: 0.0,
+            current_ratings: None,
             tap,
             shift: 0.0,
             in_service: true,
             angmin: -360.0,
             angmax: 360.0,
             control: None,
+            solution: None,
             extras: Extras::default(),
         }
     }
@@ -2647,6 +2695,7 @@ mod tests {
             bus: BusId(2),
             p: 1.0,
             q: 0.0,
+            voltage_model: None,
             in_service: true,
             extras: Extras::default(),
         });

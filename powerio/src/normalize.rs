@@ -15,8 +15,8 @@
 use std::collections::{HashMap, HashSet};
 
 use crate::network::{
-    Branch, Bus, BusId, BusType, GEN_EXTRA_KEYS, GenCost, Generator, Hvdc, Load, Network, Shunt,
-    SourceFormat, Storage, Transformer3W,
+    Branch, Bus, BusId, BusType, GEN_EXTRA_KEYS, GenCost, Generator, Hvdc, Load, LoadVoltageModel,
+    Network, Shunt, SourceFormat, Storage, Switch, Transformer3W,
 };
 use crate::{Error, Result};
 
@@ -125,10 +125,54 @@ fn norm_loads(loads: &[Load], base: f64, map: &HashMap<BusId, BusId>) -> Vec<Loa
                 bus: remap(map, l.bus)?,
                 p: l.p / base,
                 q: l.q / base,
+                voltage_model: l
+                    .voltage_model
+                    .as_ref()
+                    .map(|m| norm_load_voltage_model(m, base)),
                 ..l.clone()
             })
         })
         .collect()
+}
+
+fn norm_load_voltage_model(model: &LoadVoltageModel, base: f64) -> LoadVoltageModel {
+    match model {
+        LoadVoltageModel::ConstantPower => LoadVoltageModel::ConstantPower,
+        LoadVoltageModel::Zip {
+            p_constant_power,
+            q_constant_power,
+            p_constant_current,
+            q_constant_current,
+            p_constant_impedance,
+            q_constant_impedance,
+            v_nom,
+            load_type,
+            scaling,
+        } => LoadVoltageModel::Zip {
+            p_constant_power: p_constant_power / base,
+            q_constant_power: q_constant_power / base,
+            p_constant_current: p_constant_current / base,
+            q_constant_current: q_constant_current / base,
+            p_constant_impedance: p_constant_impedance / base,
+            q_constant_impedance: q_constant_impedance / base,
+            v_nom: *v_nom,
+            load_type: *load_type,
+            scaling: *scaling,
+        },
+        LoadVoltageModel::Exponential {
+            p,
+            q,
+            v_nom,
+            gamma_p,
+            gamma_q,
+        } => LoadVoltageModel::Exponential {
+            p: p / base,
+            q: q / base,
+            v_nom: *v_nom,
+            gamma_p: *gamma_p,
+            gamma_q: *gamma_q,
+        },
+    }
 }
 
 fn norm_shunts(shunts: &[Shunt], base: f64, map: &HashMap<BusId, BusId>) -> Vec<Shunt> {
@@ -167,6 +211,12 @@ fn norm_branches(branches: &[Branch], base: f64, map: &HashMap<BusId, BusId>) ->
                 shift: br.shift * DEG_TO_RAD,
                 angmin: br.angmin * DEG_TO_RAD,
                 angmax: br.angmax * DEG_TO_RAD,
+                solution: br.solution.map(|s| crate::network::BranchSolution {
+                    pf: s.pf / base,
+                    qf: s.qf / base,
+                    pt: s.pt / base,
+                    qt: s.qt / base,
+                }),
                 // Remap the regulated-bus reference through the id map and drop it
                 // if its target was filtered out (out of service / isolated), so the
                 // normalized network has no dangling control reference.
@@ -215,6 +265,24 @@ fn norm_gens(gens: &[Generator], base: f64, map: &HashMap<BusId, BusId>) -> Vec<
         .collect()
 }
 
+fn norm_switches(switches: &[Switch], base: f64, map: &HashMap<BusId, BusId>) -> Vec<Switch> {
+    switches
+        .iter()
+        .filter_map(|s| {
+            Some(Switch {
+                from: remap(map, s.from)?,
+                to: remap(map, s.to)?,
+                thermal_rating: s.thermal_rating.map(|v| v / base),
+                pf: s.pf.map(|v| v / base),
+                qf: s.qf.map(|v| v / base),
+                pt: s.pt.map(|v| v / base),
+                qt: s.qt.map(|v| v / base),
+                ..s.clone()
+            })
+        })
+        .collect()
+}
+
 fn norm_storage(storage: &[Storage], base: f64, map: &HashMap<BusId, BusId>) -> Vec<Storage> {
     storage
         .iter()
@@ -258,6 +326,10 @@ fn norm_hvdc(hvdc: &[Hvdc], base: f64, map: &HashMap<BusId, BusId>) -> Vec<Hvdc>
                 qmint: d.qmint / base,
                 qmaxt: d.qmaxt / base,
                 loss0: d.loss0 / base,
+                cost: d.cost.as_ref().map(|c| GenCost {
+                    coeffs: cost_to_pu(c, base),
+                    ..c.clone()
+                }),
                 ..d.clone()
             })
         })
@@ -361,6 +433,7 @@ impl Network {
         let loads = norm_loads(&self.loads, base, &id_map);
         let shunts = norm_shunts(&self.shunts, base, &id_map);
         let branches = norm_branches(&self.branches, base, &id_map);
+        let switches = norm_switches(&self.switches, base, &id_map);
         let generators = norm_gens(&self.generators, base, &id_map);
         let storage = norm_storage(&self.storage, base, &id_map);
         let hvdc = norm_hvdc(&self.hvdc, base, &id_map);
@@ -405,6 +478,7 @@ impl Network {
             loads,
             shunts,
             branches,
+            switches,
             generators,
             storage,
             hvdc,
@@ -460,15 +534,18 @@ mod tests {
             r: 0.0,
             x: 0.1,
             b: 0.0,
+            charging: None,
             rate_a: 0.0,
             rate_b: 0.0,
             rate_c: 0.0,
+            current_ratings: None,
             tap: 0.0,
             shift: 0.0,
             in_service: true,
             angmin: -360.0,
             angmax: 360.0,
             control: None,
+            solution: None,
             extras: Extras::new(),
         };
         // Bus 3 is isolated, so to_normalized drops it.

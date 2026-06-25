@@ -29,6 +29,7 @@ pub const PIO_ARROW_TABLE_BRANCH: i32 = 1;
 pub const PIO_ARROW_TABLE_GEN: i32 = 2;
 pub const PIO_ARROW_TABLE_LOAD: i32 = 3;
 pub const PIO_ARROW_TABLE_SHUNT: i32 = 4;
+pub const PIO_ARROW_TABLE_SWITCH: i32 = 5;
 
 // These values are the ABI: the `PIO_ARROW_TABLE_*` macros in include/powerio.h
 // are hand-synced to them. The set is append-only: these ids and each table's
@@ -43,6 +44,7 @@ const _: () = assert!(
         && PIO_ARROW_TABLE_GEN == 2
         && PIO_ARROW_TABLE_LOAD == 3
         && PIO_ARROW_TABLE_SHUNT == 4
+        && PIO_ARROW_TABLE_SWITCH == 5
 );
 
 /// Build the requested table and export it over the C Data Interface. The
@@ -55,6 +57,7 @@ pub fn export(net: &Network, table: i32) -> Result<(FFI_ArrowArray, FFI_ArrowSch
         PIO_ARROW_TABLE_GEN => gen_batch(net),
         PIO_ARROW_TABLE_LOAD => load_batch(net),
         PIO_ARROW_TABLE_SHUNT => shunt_batch(net),
+        PIO_ARROW_TABLE_SWITCH => switch_batch(net),
         other => return Err(format!("unknown Arrow table id {other}")),
     }
     .map_err(|e| e.to_string())?;
@@ -101,6 +104,78 @@ fn branch_batch(net: &Network) -> Result<RecordBatch, ArrowError> {
         ),
         ("angmin", f64s(br.iter().map(|x| x.angmin).collect())),
         ("angmax", f64s(br.iter().map(|x| x.angmax).collect())),
+        (
+            "g_fr",
+            f64s(br.iter().map(|x| x.terminal_charging().g_fr).collect()),
+        ),
+        (
+            "b_fr",
+            f64s(br.iter().map(|x| x.terminal_charging().b_fr).collect()),
+        ),
+        (
+            "g_to",
+            f64s(br.iter().map(|x| x.terminal_charging().g_to).collect()),
+        ),
+        (
+            "b_to",
+            f64s(br.iter().map(|x| x.terminal_charging().b_to).collect()),
+        ),
+        (
+            "c_rating_a",
+            f64s(
+                br.iter()
+                    .map(|x| x.current_ratings.map_or(0.0, |r| r.c_rating_a))
+                    .collect(),
+            ),
+        ),
+        (
+            "c_rating_b",
+            f64s(
+                br.iter()
+                    .map(|x| x.current_ratings.map_or(0.0, |r| r.c_rating_b))
+                    .collect(),
+            ),
+        ),
+        (
+            "c_rating_c",
+            f64s(
+                br.iter()
+                    .map(|x| x.current_ratings.map_or(0.0, |r| r.c_rating_c))
+                    .collect(),
+            ),
+        ),
+        (
+            "pf",
+            f64s(
+                br.iter()
+                    .map(|x| x.solution.map_or(0.0, |s| s.pf))
+                    .collect(),
+            ),
+        ),
+        (
+            "qf",
+            f64s(
+                br.iter()
+                    .map(|x| x.solution.map_or(0.0, |s| s.qf))
+                    .collect(),
+            ),
+        ),
+        (
+            "pt",
+            f64s(
+                br.iter()
+                    .map(|x| x.solution.map_or(0.0, |s| s.pt))
+                    .collect(),
+            ),
+        ),
+        (
+            "qt",
+            f64s(
+                br.iter()
+                    .map(|x| x.solution.map_or(0.0, |s| s.qt))
+                    .collect(),
+            ),
+        ),
     ])
 }
 
@@ -146,6 +221,30 @@ fn shunt_batch(net: &Network) -> Result<RecordBatch, ArrowError> {
             "in_service",
             u8s(s.iter().map(|x| u8::from(x.in_service)).collect()),
         ),
+    ])
+}
+
+fn switch_batch(net: &Network) -> Result<RecordBatch, ArrowError> {
+    let s = &net.switches;
+    batch(vec![
+        ("from", i64s(s.iter().map(|x| ext(x.from)).collect())),
+        ("to", i64s(s.iter().map(|x| ext(x.to)).collect())),
+        (
+            "closed",
+            u8s(s.iter().map(|x| u8::from(x.closed)).collect()),
+        ),
+        (
+            "thermal_rating",
+            f64s(s.iter().map(|x| x.thermal_rating.unwrap_or(0.0)).collect()),
+        ),
+        (
+            "current_rating",
+            f64s(s.iter().map(|x| x.current_rating.unwrap_or(0.0)).collect()),
+        ),
+        ("pf", f64s(s.iter().map(|x| x.pf.unwrap_or(0.0)).collect())),
+        ("qf", f64s(s.iter().map(|x| x.qf.unwrap_or(0.0)).collect())),
+        ("pt", f64s(s.iter().map(|x| x.pt.unwrap_or(0.0)).collect())),
+        ("qt", f64s(s.iter().map(|x| x.qt.unwrap_or(0.0)).collect())),
     ])
 }
 

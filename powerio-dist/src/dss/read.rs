@@ -20,9 +20,9 @@ use super::lex::{BusSpec, Value, VarMap};
 use super::raw::{RawDss, RawObject, parse_raw_with};
 use crate::error::{Error, Result};
 use crate::model::{
-    Configuration, DistBus, DistGenerator, DistLine, DistLineCode, DistLoad, DistNetwork,
-    DistShunt, DistSourceFormat, DistSwitch, DistTransformer, Extras, Mat, UntypedObject,
-    VoltageSource, Winding, WindingConn, square_from_rows,
+    Configuration, DistBus, DistGenerator, DistLine, DistLineCode, DistLoad, DistLoadVoltageModel,
+    DistNetwork, DistShunt, DistSourceFormat, DistSwitch, DistTransformer, Extras, Mat,
+    UntypedObject, VoltageSource, Winding, WindingConn, square_from_rows,
 };
 
 /// Parses a `.dss` file, following includes, into the canonical model.
@@ -950,12 +950,6 @@ impl Reader<'_> {
         let model = self
             .usize_prop(props.get("model"))
             .map_or(dd::load::MODEL, |m| i64::try_from(m).unwrap_or(i64::MAX));
-        if model != 1 {
-            self.warn(format!(
-                "load {}: model={model} is not constant power; downstream formats treat it as constant power",
-                obj.name
-            ));
-        }
 
         let spec = bus_spec(props.get("bus1"), "");
         let nconds = if conn_delta && phases == 3 {
@@ -987,6 +981,34 @@ impl Reader<'_> {
         if model != 1 {
             extras.insert("model".into(), model.into());
         }
+        let v_nom = vec![kv * 1e3; phases];
+        let zipv = props
+            .get("zipv")
+            .and_then(|v| v.to_vector(Some(self.vars)).ok())
+            .unwrap_or_default();
+        let voltage_model = match model {
+            2 => DistLoadVoltageModel::ConstantImpedance { v_nom },
+            5 => DistLoadVoltageModel::ConstantCurrent { v_nom },
+            8 if zipv.len() >= 6 => DistLoadVoltageModel::Zip {
+                v_nom,
+                alpha_z: vec![zipv[0]; phases],
+                alpha_i: vec![zipv[1]; phases],
+                alpha_p: vec![zipv[2]; phases],
+                beta_z: vec![zipv[3]; phases],
+                beta_i: vec![zipv[4]; phases],
+                beta_p: vec![zipv[5]; phases],
+            },
+            8 => DistLoadVoltageModel::Zip {
+                v_nom,
+                alpha_z: Vec::new(),
+                alpha_i: Vec::new(),
+                alpha_p: Vec::new(),
+                beta_z: Vec::new(),
+                beta_i: Vec::new(),
+                beta_p: Vec::new(),
+            },
+            _ => DistLoadVoltageModel::ConstantPower,
+        };
         DistLoad {
             name: obj.name.clone(),
             bus: spec.name,
@@ -994,6 +1016,7 @@ impl Reader<'_> {
             configuration,
             p_nom: vec![kw * 1e3 / phases as f64; phases],
             q_nom: vec![q_total * 1e3 / phases as f64; phases],
+            voltage_model,
             extras,
         }
     }

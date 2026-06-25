@@ -336,6 +336,7 @@ pub(crate) fn parse_egret_source(source: Arc<String>, name_hint: Option<&str>) -
         loads,
         shunts,
         branches,
+        switches: Vec::new(),
         generators,
         storage: Vec::new(),
         hvdc,
@@ -494,6 +495,7 @@ fn read_load(v: &Value) -> Result<Load> {
         bus: id_field(v, "bus")?,
         p: f(v, "p_load")?,
         q: f(v, "q_load")?,
+        voltage_model: None,
         in_service: flag(v, "in_service", true)?,
         extras: Extras::new(),
     })
@@ -518,9 +520,11 @@ fn read_branch(v: &Value) -> Result<Branch> {
         r: f(v, "resistance")?,
         x: f(v, "reactance")?,
         b: f(v, "charging_susceptance")?,
+        charging: None,
         rate_a: f(v, "rating_long_term")?,
         rate_b: f(v, "rating_short_term")?,
         rate_c: f(v, "rating_emergency")?,
+        current_ratings: None,
         tap: if is_xf {
             f_or(v, "transformer_tap_ratio", 1.0)?
         } else {
@@ -531,6 +535,7 @@ fn read_branch(v: &Value) -> Result<Branch> {
         angmin: f_or(v, "angle_diff_min", -360.0)?,
         angmax: f_or(v, "angle_diff_max", 360.0)?,
         control: None,
+        solution: None,
         extras: Extras::new(),
     })
 }
@@ -583,6 +588,7 @@ fn read_dc_branch(v: &Value) -> Result<Hvdc> {
         qmaxt: f(v, "qmaxt")?,
         loss0: f(v, "loss0")?,
         loss1: f_or(v, "loss_factor", 0.0)?,
+        cost: None,
         extras: Extras::new(),
     })
 }

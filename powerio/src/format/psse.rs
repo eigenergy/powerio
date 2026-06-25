@@ -23,9 +23,9 @@ use serde_json::Value;
 
 use super::{Conversion, jnum, sanitize_quoted};
 use crate::network::{
-    Area, Branch, Bus, BusId, BusType, Extras, Generator, Hvdc, Impedance, Load, Network, Shunt,
-    ShuntBlock, SolverParams, SourceFormat, SwitchedShuntControl, SwitchedShuntMode, Transformer3W,
-    TransformerControl, TransformerControlMode, Winding,
+    Area, Branch, BranchCharging, Bus, BusId, BusType, Extras, Generator, Hvdc, Impedance, Load,
+    LoadVoltageModel, Network, Shunt, ShuntBlock, SolverParams, SourceFormat, SwitchedShuntControl,
+    SwitchedShuntMode, Transformer3W, TransformerControl, TransformerControlMode, Winding,
 };
 use crate::{Error, Result};
 
@@ -804,6 +804,7 @@ pub(crate) fn parse_psse_source(
         loads,
         shunts,
         branches,
+        switches: Vec::new(),
         generators,
         storage: Vec::new(),
         hvdc,
@@ -1224,26 +1225,32 @@ fn read_load(f: &[String], raw_rev: u32, warnings: &mut Vec<String>) -> Result<L
             extras.insert("psse_loadtype".into(), Value::String(loadtype.to_string()));
         }
     }
-    if [ip, iq, yp, yq].iter().any(|v| v.abs() > f64::EPSILON) {
-        warnings.push(format!(
-            "PSS/E load at bus {bus} id {id:?}: IP/IQ/YP/YQ folded into Network load p/q at V=1; component fields retained in extras"
-        ));
-    }
-    let has_load_options = extras.contains_key("psse_scal")
-        || extras.contains_key("psse_intrpt")
+    let scal = int_at(f, 12, 1)?;
+    let load_type = f.get(17).and_then(|s| s.trim().parse::<i32>().ok());
+    let has_load_options = extras.contains_key("psse_intrpt")
         || extras.contains_key("psse_pdgen")
         || extras.contains_key("psse_qdgen")
-        || extras.contains_key("psse_flagstatus")
-        || extras.contains_key("psse_loadtype");
+        || extras.contains_key("psse_flagstatus");
     if has_load_options {
         warnings.push(format!(
-            "PSS/E load at bus {bus} id {id:?}: load scaling/interruptible/DG/type fields are retained in extras but not typed in Network"
+            "PSS/E load at bus {bus} id {id:?}: interruptible/DG/flag fields are retained in extras"
         ));
     }
     Ok(Load {
         bus: BusId(bus),
         p: pl + ip + yp,
         q: ql + iq + yq,
+        voltage_model: Some(LoadVoltageModel::Zip {
+            p_constant_power: pl,
+            q_constant_power: ql,
+            p_constant_current: ip,
+            q_constant_current: iq,
+            p_constant_impedance: yp,
+            q_constant_impedance: yq,
+            v_nom: None,
+            load_type,
+            scaling: (scal != 1).then_some(scal as f64),
+        }),
         in_service: on_at(f, 2, true)?,
         extras,
     })
@@ -1373,21 +1380,37 @@ fn read_branch(f: &[String], raw_rev: u32) -> Result<Branch> {
     let named_record = raw_rev >= 34 && f.len() >= 24;
     let rating = if named_record { 7 } else { 6 };
     let status = if named_record { 23 } else { 13 };
+    let shunt = if named_record { 19 } else { 9 };
+    let br_b = num_at(f, 5, 0.0)?;
+    let g_fr = num_at(f, shunt, 0.0)?;
+    let b_fr_extra = num_at(f, shunt + 1, 0.0)?;
+    let g_to = num_at(f, shunt + 2, 0.0)?;
+    let b_to_extra = num_at(f, shunt + 3, 0.0)?;
+    let b_fr = br_b / 2.0 + b_fr_extra;
+    let b_to = br_b / 2.0 + b_to_extra;
     Ok(Branch {
         from: BusId(id_at(f, 0, 0)?),
         to: BusId(id_at(f, 1, 0)?),
         r: num_at(f, 3, 0.0)?,
         x: num_at(f, 4, 0.0)?,
-        b: num_at(f, 5, 0.0)?,
+        b: b_fr + b_to,
+        charging: Some(BranchCharging {
+            g_fr,
+            b_fr,
+            g_to,
+            b_to,
+        }),
         rate_a: num_at(f, rating, 0.0)?,
         rate_b: num_at(f, rating + 1, 0.0)?,
         rate_c: num_at(f, rating + 2, 0.0)?,
+        current_ratings: None,
         tap: 0.0,
         shift: 0.0,
         in_service: on_at(f, status, true)?,
         angmin: -360.0,
         angmax: 360.0,
         control: None,
+        solution: None,
         // Capture CKT (field 2) so parallel circuits stay distinct on write-back.
         extras: device_extras(f, 2),
     })
@@ -1416,29 +1439,39 @@ fn read_transformer(l1: &[String], l2: &[String], l3: &[String], _l4: &[String])
             })
         })
         .transpose()?;
+    let mag_g = if int_at(l1, 6, 1)? == 1 {
+        num_at(l1, 7, 0.0)?
+    } else {
+        0.0
+    };
+    let mag_b = if int_at(l1, 6, 1)? == 1 {
+        num_at(l1, 8, 0.0)?
+    } else {
+        0.0
+    };
     Ok(Branch {
         from: BusId(id_at(l1, 0, 0)?),
         to: BusId(id_at(l1, 1, 0)?),
         r: num_at(l2, 0, 0.0)?,
         x: num_at(l2, 1, 0.0)?,
-        // MAG2 (l1[8]) is the magnetizing susceptance. At CM = 1 it is p.u. on the
-        // system base, the same convention as `Branch::b`, so it maps straight
-        // across; at CM != 1 it is stated in units this reader does not convert, so
-        // it is dropped (the caller warns). MAG1 (conductance) has no `Branch` slot.
-        b: if int_at(l1, 6, 1)? == 1 {
-            num_at(l1, 8, 0.0)?
-        } else {
-            0.0
-        },
+        b: mag_b,
+        charging: Some(BranchCharging {
+            g_fr: mag_g,
+            b_fr: mag_b,
+            g_to: 0.0,
+            b_to: 0.0,
+        }),
         rate_a: num_at(l3, 3, 0.0)?,
         rate_b: num_at(l3, 4, 0.0)?,
         rate_c: num_at(l3, 5, 0.0)?,
+        current_ratings: None,
         tap: num_at(l3, 0, 1.0)?,
         shift: num_at(l3, 2, 0.0)?,
         in_service: on_at(l1, 11, true)?,
         angmin: -360.0,
         angmax: 360.0,
         control,
+        solution: None,
         extras: Extras::new(),
     })
 }
@@ -1560,6 +1593,7 @@ fn read_dc_line(l1: &[String], rect: &[String], inv: &[String]) -> Result<Hvdc> 
         qmaxt: 0.0,
         loss0: 0.0,
         loss1: 0.0,
+        cost: None,
         extras,
     })
 }
@@ -1611,6 +1645,40 @@ fn load_components_for_write(
     id: &str,
     warnings: &mut Vec<String>,
 ) -> (f64, f64, f64, f64, f64, f64) {
+    if let Some(LoadVoltageModel::Zip {
+        p_constant_power,
+        q_constant_power,
+        p_constant_current,
+        q_constant_current,
+        p_constant_impedance,
+        q_constant_impedance,
+        ..
+    }) = &l.voltage_model
+    {
+        if same_load_total(
+            p_constant_power + p_constant_current + p_constant_impedance,
+            l.p,
+        ) && same_load_total(
+            q_constant_power + q_constant_current + q_constant_impedance,
+            l.q,
+        ) {
+            return (
+                *p_constant_power,
+                *q_constant_power,
+                *p_constant_current,
+                *q_constant_current,
+                *p_constant_impedance,
+                *q_constant_impedance,
+            );
+        }
+        warnings.push(format!(
+            "PSS/E load at bus {} id {id:?}: stale voltage model components did not match \
+             typed p/q; wrote typed p/q as constant power",
+            l.bus
+        ));
+        return (l.p, l.q, 0.0, 0.0, 0.0, 0.0);
+    }
+
     let pl = extra_f64(&l.extras, "psse_pl").unwrap_or(l.p);
     let ql = extra_f64(&l.extras, "psse_ql").unwrap_or(l.q);
     let ip = extra_f64(&l.extras, "psse_ip").unwrap_or(0.0);
@@ -1674,7 +1742,7 @@ Q
     }
 
     #[test]
-    fn load_zip_components_warn_fold_and_round_trip_through_extras() {
+    fn load_zip_components_are_typed_and_round_trip() {
         let raw = r"0, 100.00, 35, 0, 1, 60.00 / synthetic
 CASE
 COMMENT
@@ -1693,12 +1761,20 @@ Q
         assert_eq!(net.loads.len(), 1);
         close(net.loads[0].p, 13.0);
         close(net.loads[0].q, 5.0);
+        let Some(LoadVoltageModel::Zip {
+            p_constant_power,
+            q_constant_current,
+            p_constant_impedance,
+            ..
+        }) = &net.loads[0].voltage_model
+        else {
+            panic!("missing typed ZIP load model");
+        };
+        close(*p_constant_power, 10.0);
+        close(*q_constant_current, 0.5);
+        close(*p_constant_impedance, 2.0);
         assert!(
-            warnings.iter().any(|w| w.contains("IP/IQ/YP/YQ")),
-            "missing ZIP warning: {warnings:?}"
-        );
-        assert!(
-            warnings.iter().any(|w| w.contains("DG/type fields")),
+            warnings.iter().any(|w| w.contains("interruptible/DG/flag")),
             "missing load option warning: {warnings:?}"
         );
 
@@ -1743,8 +1819,8 @@ Q
         assert!(
             conv.warnings
                 .iter()
-                .any(|w| w.contains("stale PL/QL/IP/IQ/YP/YQ")),
-            "missing stale extras warning: {:?}",
+                .any(|w| w.contains("stale voltage model components")),
+            "missing stale voltage model warning: {:?}",
             conv.warnings
         );
         let reparsed = parse_psse(&conv.text).unwrap();

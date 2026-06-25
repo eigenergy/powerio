@@ -18,8 +18,8 @@ use serde_json::{Map, Value};
 
 use super::{Conversion, finish, jnum};
 use crate::network::{
-    Branch, Bus, BusId, BusType, GEN_EXTRA_KEYS, GenCost, Generator, Hvdc, Load, Network, Shunt,
-    SourceFormat, Storage,
+    Branch, BranchCharging, BranchCurrentRatings, BranchSolution, Bus, BusId, BusType,
+    GEN_EXTRA_KEYS, GenCost, Generator, Hvdc, Load, Network, Shunt, SourceFormat, Storage, Switch,
 };
 use crate::normalize::{self, GEN_PU_KEYS};
 use crate::{Error, Result};
@@ -72,6 +72,11 @@ pub fn write_powermodels_json(net: &Network) -> Conversion {
         let idx = i + 1;
         storage.insert(idx.to_string(), storage_obj(st, idx, p));
     }
+    let mut switch = Map::new();
+    for (i, sw) in net.switches.iter().enumerate() {
+        let idx = i + 1;
+        switch.insert(idx.to_string(), switch_obj(sw, idx, p));
+    }
     if !dcline.is_empty() {
         warnings.push(format!(
             "{} dcline(s) mapped with warnings to the PowerModels dcline schema",
@@ -114,7 +119,7 @@ pub fn write_powermodels_json(net: &Network) -> Conversion {
     root.insert("shunt".into(), Value::Object(shunt));
     root.insert("dcline".into(), Value::Object(dcline));
     root.insert("storage".into(), Value::Object(storage));
-    root.insert("switch".into(), Value::Object(Map::new()));
+    root.insert("switch".into(), Value::Object(switch));
 
     finish(root, warnings)
 }
@@ -154,11 +159,11 @@ fn branch_obj(br: &Branch, idx: usize, p: f64, a: f64) -> Value {
     m.insert("t_bus".into(), Value::from(br.to.0 as u64));
     m.insert("br_r".into(), jnum(br.r));
     m.insert("br_x".into(), jnum(br.x));
-    // MATPOWER's single line-charging `b` splits half to each end; no branch `g`.
-    m.insert("b_fr".into(), jnum(br.b / 2.0));
-    m.insert("b_to".into(), jnum(br.b / 2.0));
-    m.insert("g_fr".into(), jnum(0.0));
-    m.insert("g_to".into(), jnum(0.0));
+    let charging = br.terminal_charging();
+    m.insert("b_fr".into(), jnum(charging.b_fr));
+    m.insert("b_to".into(), jnum(charging.b_to));
+    m.insert("g_fr".into(), jnum(charging.g_fr));
+    m.insert("g_to".into(), jnum(charging.g_to));
     m.insert("tap".into(), jnum(br.effective_tap()));
     m.insert("shift".into(), jnum(br.shift * a));
     m.insert("br_status".into(), status_int(br.in_service));
@@ -176,6 +181,23 @@ fn branch_obj(br: &Branch, idx: usize, p: f64, a: f64) -> Value {
     }
     if br.rate_c != 0.0 {
         m.insert("rate_c".into(), jnum(br.rate_c * p));
+    }
+    if let Some(current) = br.current_ratings {
+        if current.c_rating_a != 0.0 {
+            m.insert("c_rating_a".into(), jnum(current.c_rating_a));
+        }
+        if current.c_rating_b != 0.0 {
+            m.insert("c_rating_b".into(), jnum(current.c_rating_b));
+        }
+        if current.c_rating_c != 0.0 {
+            m.insert("c_rating_c".into(), jnum(current.c_rating_c));
+        }
+    }
+    if let Some(solution) = br.solution {
+        m.insert("pf".into(), jnum(solution.pf * p));
+        m.insert("qf".into(), jnum(solution.qf * p));
+        m.insert("pt".into(), jnum(solution.pt * p));
+        m.insert("qt".into(), jnum(solution.qt * p));
     }
     m.insert("source_id".into(), source_id("branch", idx));
     Value::Object(m)
@@ -283,6 +305,22 @@ fn dcline_obj(dc: &Hvdc, idx: usize, p: f64) -> Value {
     m.insert("qmaxt".into(), jnum(dc.qmaxt * p));
     m.insert("loss0".into(), jnum(dc.loss0 * p));
     m.insert("loss1".into(), jnum(dc.loss1));
+    if let Some(cost) = &dc.cost {
+        let coeffs: Vec<Value> = normalize::cost_to_pu(cost, 1.0 / p)
+            .into_iter()
+            .map(jnum)
+            .collect();
+        let ncost = if cost.model == 1 {
+            coeffs.len() / 2
+        } else {
+            coeffs.len()
+        };
+        m.insert("model".into(), Value::from(u64::from(cost.model)));
+        m.insert("ncost".into(), Value::from(ncost as u64));
+        m.insert("startup".into(), jnum(cost.startup));
+        m.insert("shutdown".into(), jnum(cost.shutdown));
+        m.insert("cost".into(), Value::Array(coeffs));
+    }
     m.insert("source_id".into(), source_id("dcline", idx));
     Value::Object(m)
 }
@@ -318,6 +356,9 @@ fn storage_obj(st: &Storage, idx: usize, p: f64) -> Value {
     m.insert("charge_efficiency".into(), jnum(st.charge_efficiency));
     m.insert("discharge_efficiency".into(), jnum(st.discharge_efficiency));
     m.insert("thermal_rating".into(), jnum(st.thermal_rating * p));
+    if let Some(current_rating) = st.current_rating {
+        m.insert("current_rating".into(), jnum(current_rating));
+    }
     m.insert("qmin".into(), jnum(st.qmin * p));
     m.insert("qmax".into(), jnum(st.qmax * p));
     m.insert("r".into(), jnum(st.r));
@@ -326,6 +367,34 @@ fn storage_obj(st: &Storage, idx: usize, p: f64) -> Value {
     m.insert("q_loss".into(), jnum(st.q_loss * p));
     m.insert("status".into(), status_int(st.in_service));
     m.insert("source_id".into(), source_id("storage", idx));
+    Value::Object(m)
+}
+
+fn switch_obj(sw: &Switch, idx: usize, p: f64) -> Value {
+    let mut m = Map::new();
+    m.insert("index".into(), Value::from(idx as u64));
+    m.insert("f_bus".into(), Value::from(sw.from.0 as u64));
+    m.insert("t_bus".into(), Value::from(sw.to.0 as u64));
+    m.insert("state".into(), status_int(sw.closed));
+    if let Some(rating) = sw.thermal_rating {
+        m.insert("thermal_rating".into(), jnum(rating * p));
+    }
+    if let Some(rating) = sw.current_rating {
+        m.insert("current_rating".into(), jnum(rating));
+    }
+    if let Some(pf) = sw.pf {
+        m.insert("pf".into(), jnum(pf * p));
+    }
+    if let Some(qf) = sw.qf {
+        m.insert("qf".into(), jnum(qf * p));
+    }
+    if let Some(pt) = sw.pt {
+        m.insert("pt".into(), jnum(pt * p));
+    }
+    if let Some(qt) = sw.qt {
+        m.insert("qt".into(), jnum(qt * p));
+    }
+    m.insert("source_id".into(), source_id("switch", idx));
     Value::Object(m)
 }
 
@@ -341,7 +410,8 @@ const FMT: &str = "PowerModels JSON";
 /// following PowerModels' own exceptions (storage `ps`/`qs` stay raw, dcline
 /// `pt`/`qf`/`qt` flip sign); `per_unit = false` is read as-is.
 pub fn parse_powermodels_json(content: &str) -> Result<Network> {
-    parse_powermodels_json_source(Arc::new(content.to_owned()), None)
+    let mut warnings = Vec::new();
+    parse_powermodels_json_source(Arc::new(content.to_owned()), None, &mut warnings)
 }
 
 /// Owned-source entry used by the format hub: parse by borrowing `source`, then
@@ -350,6 +420,7 @@ pub fn parse_powermodels_json(content: &str) -> Result<Network> {
 pub(crate) fn parse_powermodels_json_source(
     source: Arc<String>,
     name_hint: Option<&str>,
+    warnings: &mut Vec<String>,
 ) -> Result<Network> {
     let content: &str = &source;
     let root: Value = serde_json::from_str(content).map_err(|e| Error::FormatRead {
@@ -372,6 +443,13 @@ pub(crate) fn parse_powermodels_json_source(
         .get("per_unit")
         .and_then(Value::as_bool)
         .unwrap_or(false);
+    if root
+        .get("multinetwork")
+        .and_then(Value::as_bool)
+        .unwrap_or(false)
+    {
+        warnings.push("multinetwork=true: only the top-level single snapshot was read".into());
+    }
     let pscale = if per_unit { base_mva } else { 1.0 };
     let ascale = if per_unit { normalize::RAD_TO_DEG } else { 1.0 };
     let name = root
@@ -401,6 +479,10 @@ pub(crate) fn parse_powermodels_json_source(
             .iter()
             .map(|v| read_branch(v, pscale, ascale))
             .collect(),
+        switches: sorted(root, "switch", "index")
+            .iter()
+            .map(|v| read_switch(v, pscale))
+            .collect(),
         generators: sorted(root, "gen", "index")
             .iter()
             .map(|v| read_gen(v, pscale, base_mva, per_unit))
@@ -411,7 +493,7 @@ pub(crate) fn parse_powermodels_json_source(
             .collect(),
         hvdc: sorted(root, "dcline", "index")
             .iter()
-            .map(|v| read_hvdc(v, pscale))
+            .map(|v| read_hvdc(v, pscale, base_mva, per_unit))
             .collect(),
         transformers_3w: Vec::new(),
         areas: Vec::new(),
@@ -515,6 +597,7 @@ fn read_load(v: &Value, pscale: f64) -> Load {
         bus: BusId(uid(v, "load_bus")),
         p: f(v, "pd") * pscale,
         q: f(v, "qd") * pscale,
+        voltage_model: None,
         in_service: flag(v, "status"),
         extras: extras_excluding(v, &["load_bus", "pd", "qd", "status", "index", "source_id"]),
     }
@@ -553,15 +636,34 @@ fn read_branch(v: &Value, pscale: f64, ascale: f64) -> Branch {
         r: f(v, "br_r"),
         x: f(v, "br_x"),
         b: f(v, "b_fr") + f(v, "b_to"),
+        charging: Some(BranchCharging {
+            g_fr: f(v, "g_fr"),
+            b_fr: f(v, "b_fr"),
+            g_to: f(v, "g_to"),
+            b_to: f(v, "b_to"),
+        }),
         rate_a: f(v, "rate_a") * pscale,
         rate_b: f(v, "rate_b") * pscale,
         rate_c: f(v, "rate_c") * pscale,
+        current_ratings: has_any(v, &["c_rating_a", "c_rating_b", "c_rating_c"]).then_some(
+            BranchCurrentRatings {
+                c_rating_a: f(v, "c_rating_a"),
+                c_rating_b: f(v, "c_rating_b"),
+                c_rating_c: f(v, "c_rating_c"),
+            },
+        ),
         tap,
         shift: f(v, "shift") * ascale,
         in_service: flag(v, "br_status"),
         angmin: f(v, "angmin") * ascale,
         angmax: f(v, "angmax") * ascale,
         control: None,
+        solution: has_any(v, &["pf", "qf", "pt", "qt"]).then_some(BranchSolution {
+            pf: f(v, "pf") * pscale,
+            qf: f(v, "qf") * pscale,
+            pt: f(v, "pt") * pscale,
+            qt: f(v, "qt") * pscale,
+        }),
         extras: extras_excluding(
             v,
             &[
@@ -582,6 +684,56 @@ fn read_branch(v: &Value, pscale: f64, ascale: f64) -> Branch {
                 "rate_a",
                 "rate_b",
                 "rate_c",
+                "c_rating_a",
+                "c_rating_b",
+                "c_rating_c",
+                "pf",
+                "qf",
+                "pt",
+                "qt",
+                "index",
+                "source_id",
+            ],
+        ),
+    }
+}
+
+fn has_any(v: &Value, keys: &[&str]) -> bool {
+    keys.iter().any(|key| v.get(*key).is_some())
+}
+
+fn read_switch(v: &Value, pscale: f64) -> Switch {
+    let closed = if v.get("state").is_some() {
+        flag(v, "state")
+    } else {
+        flag(v, "status")
+    };
+    Switch {
+        from: BusId(uid(v, "f_bus")),
+        to: BusId(uid(v, "t_bus")),
+        closed,
+        thermal_rating: v
+            .get("thermal_rating")
+            .and_then(Value::as_f64)
+            .map(|x| x * pscale),
+        current_rating: v.get("current_rating").and_then(Value::as_f64),
+        pf: v.get("pf").and_then(Value::as_f64).map(|x| x * pscale),
+        qf: v.get("qf").and_then(Value::as_f64).map(|x| x * pscale),
+        pt: v.get("pt").and_then(Value::as_f64).map(|x| x * pscale),
+        qt: v.get("qt").and_then(Value::as_f64).map(|x| x * pscale),
+        extras: extras_excluding(
+            v,
+            &[
+                "f_bus",
+                "t_bus",
+                "state",
+                "status",
+                "thermal_rating",
+                "current_rating",
+                "pf",
+                "qf",
+                "pt",
+                "qt",
                 "index",
                 "source_id",
             ],
@@ -654,7 +806,7 @@ fn read_cost(v: &Value, base_mva: f64, per_unit: bool) -> GenCost {
     }
 }
 
-fn read_hvdc(v: &Value, pscale: f64) -> Hvdc {
+fn read_hvdc(v: &Value, pscale: f64, base_mva: f64, per_unit: bool) -> Hvdc {
     // Aggregate bounds come from PowerModels' raw originals (mp_pmin/mp_pmax); fall
     // back to the from-end per-unit bounds for input that lacks them.
     let pmin = v
@@ -685,6 +837,7 @@ fn read_hvdc(v: &Value, pscale: f64) -> Hvdc {
         qmaxt: f_or(v, "qmaxt", f64::INFINITY) * pscale,
         loss0: f(v, "loss0") * pscale,
         loss1: f(v, "loss1"),
+        cost: v.get("model").map(|_| read_cost(v, base_mva, per_unit)),
         extras: extras_excluding(
             v,
             &[
@@ -711,6 +864,11 @@ fn read_hvdc(v: &Value, pscale: f64) -> Hvdc {
                 "qmaxt",
                 "loss0",
                 "loss1",
+                "model",
+                "ncost",
+                "startup",
+                "shutdown",
+                "cost",
                 "index",
                 "source_id",
             ],
@@ -730,6 +888,7 @@ fn read_storage(v: &Value, pscale: f64) -> Storage {
         charge_efficiency: f_or(v, "charge_efficiency", 1.0),
         discharge_efficiency: f_or(v, "discharge_efficiency", 1.0),
         thermal_rating: f(v, "thermal_rating") * pscale,
+        current_rating: v.get("current_rating").and_then(Value::as_f64),
         // Unbounded reactive limits (±Inf) write as null; read them back unbounded.
         qmin: f_or(v, "qmin", f64::NEG_INFINITY) * pscale,
         qmax: f_or(v, "qmax", f64::INFINITY) * pscale,
@@ -751,6 +910,7 @@ fn read_storage(v: &Value, pscale: f64) -> Storage {
                 "charge_efficiency",
                 "discharge_efficiency",
                 "thermal_rating",
+                "current_rating",
                 "qmin",
                 "qmax",
                 "r",

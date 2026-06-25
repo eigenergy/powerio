@@ -1,11 +1,11 @@
 //! Bus admittance matrix `Y_bus = G + jB` per MATPOWER's `makeYbus`.
 //!
 //! For each in-service branch from bus `i` to bus `j` with series impedance
-//! `z = r + jx`, total line charging `b`, complex tap `a = tap * exp(j shift)`:
+//! `z = r + jx`, terminal shunts `y_fr`/`y_to`, complex tap `a = tap * exp(j shift)`:
 //!
 //! ```text
-//! Y[i,i] += (1/z + j b/2) / |a|^2
-//! Y[j,j] += (1/z + j b/2)
+//! Y[i,i] += (1/z + y_fr) / |a|^2
+//! Y[j,j] += (1/z + y_to)
 //! Y[i,j] += -(1/z) / conj(a)
 //! Y[j,i] += -(1/z) / a
 //! ```
@@ -149,8 +149,18 @@ pub(crate) fn branch_admittance(
     }
     let y_series = Complex64::new(r / denom, -x / denom);
 
-    let b_charging = if flags.zero_charging { 0.0 } else { br.b };
-    let y_shunt_half = Complex64::new(0.0, b_charging / 2.0);
+    let charging = if flags.zero_charging {
+        crate::network::BranchCharging {
+            g_fr: 0.0,
+            b_fr: 0.0,
+            g_to: 0.0,
+            b_to: 0.0,
+        }
+    } else {
+        br.terminal_charging()
+    };
+    let y_fr = Complex64::new(charging.g_fr, charging.b_fr);
+    let y_to = Complex64::new(charging.g_to, charging.b_to);
 
     let tap_mag = if flags.unity_taps {
         1.0
@@ -163,8 +173,8 @@ pub(crate) fn branch_admittance(
     let a = Complex64::from_polar(tap_mag, shift_rad);
     let a_norm_sqr = tap_mag * tap_mag;
 
-    let y_ff = (y_series + y_shunt_half) / a_norm_sqr;
-    let y_tt = y_series + y_shunt_half;
+    let y_ff = (y_series + y_fr) / a_norm_sqr;
+    let y_tt = y_series + y_to;
     let y_ft = -y_series / a.conj();
     let y_tf = -y_series / a;
     Ok(Some([y_ff, y_ft, y_tf, y_tt]))

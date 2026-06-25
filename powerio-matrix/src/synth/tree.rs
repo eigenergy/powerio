@@ -75,15 +75,18 @@ pub(crate) fn make_branch(
         r,
         x,
         b: 0.0,
+        charging: None,
         rate_a: 0.0,
         rate_b: 0.0,
         rate_c: 0.0,
+        current_ratings: None,
         tap: 0.0,
         shift: 0.0,
         in_service: true,
         angmin: -360.0,
         angmax: 360.0,
         control: None,
+        solution: None,
         extras: Extras::new(),
     }
 }

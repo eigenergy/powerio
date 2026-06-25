@@ -392,6 +392,90 @@ fn powermodels_structure_and_split() {
 }
 
 #[test]
+fn powermodels_preserves_rich_branch_and_switch_fields() {
+    let json = r#"{
+        "name": "rich",
+        "baseMVA": 100.0,
+        "per_unit": true,
+        "multinetwork": true,
+        "bus": {
+            "1": {"index": 1, "bus_i": 1, "bus_type": 3, "vm": 1.0, "va": 0.0, "vmax": 1.1, "vmin": 0.9, "base_kv": 230.0},
+            "2": {"index": 2, "bus_i": 2, "bus_type": 1, "vm": 1.0, "va": 0.0, "vmax": 1.1, "vmin": 0.9, "base_kv": 230.0}
+        },
+        "load": {
+            "1": {"index": 1, "load_bus": 1, "pd": 0.10, "qd": 0.01, "status": 1},
+            "2": {"index": 2, "load_bus": 1, "pd": 0.20, "qd": 0.02, "status": 1}
+        },
+        "branch": {
+            "1": {
+                "index": 1, "f_bus": 1, "t_bus": 2, "br_r": 0.01, "br_x": 0.10,
+                "g_fr": 0.001, "b_fr": 0.02, "g_to": 0.003, "b_to": 0.04,
+                "rate_a": 1.0, "rate_b": 1.1, "rate_c": 1.2,
+                "c_rating_a": 500.0, "c_rating_b": 600.0, "c_rating_c": 700.0,
+                "tap": 1.0, "shift": 0.0, "transformer": false, "br_status": 1,
+                "angmin": -6.283185307179586, "angmax": 6.283185307179586,
+                "pf": 0.125, "qf": 0.025, "pt": -0.120, "qt": -0.020
+            }
+        },
+        "switch": {
+            "1": {
+                "index": 1, "f_bus": 1, "t_bus": 2, "state": 1,
+                "thermal_rating": 0.75, "current_rating": 9.0,
+                "pf": 0.01, "qf": 0.02, "pt": -0.01, "qt": -0.02
+            }
+        },
+        "gen": {}, "shunt": {}, "storage": {}, "dcline": {}
+    }"#;
+
+    let parsed = powerio::parse_str(json, "powermodels").unwrap();
+    assert!(
+        parsed
+            .warnings
+            .iter()
+            .any(|w| w.contains("multinetwork=true")),
+        "expected multinetwork warning, got {:?}",
+        parsed.warnings
+    );
+    let net = parsed.network;
+    assert_eq!(net.loads.len(), 2);
+    assert_eq!(net.loads[0].bus, BusId(1));
+    assert_eq!(net.loads[1].bus, BusId(1));
+
+    let br = &net.branches[0];
+    let charging = br.terminal_charging();
+    assert!((charging.g_fr - 0.001).abs() < 1e-12);
+    assert!((charging.b_fr - 0.02).abs() < 1e-12);
+    assert!((charging.g_to - 0.003).abs() < 1e-12);
+    assert!((charging.b_to - 0.04).abs() < 1e-12);
+    assert!((br.b - 0.06).abs() < 1e-12);
+    assert!((br.current_ratings.unwrap().c_rating_b - 600.0).abs() < 1e-12);
+    assert!((br.solution.unwrap().pf - 12.5).abs() < 1e-12);
+
+    let sw = &net.switches[0];
+    assert!(sw.closed);
+    assert_eq!(sw.thermal_rating, Some(75.0));
+    assert_eq!(sw.current_rating, Some(9.0));
+    assert_eq!(sw.pf, Some(1.0));
+
+    let out: Value = serde_json::from_str(&write_powermodels_json(&net).text).unwrap();
+    assert_eq!(out["branch"]["1"]["g_fr"], 0.001);
+    assert_eq!(out["branch"]["1"]["b_to"], 0.04);
+    assert_eq!(out["branch"]["1"]["c_rating_c"], 700.0);
+    assert_eq!(out["branch"]["1"]["pf"], 0.125);
+    assert_eq!(out["switch"]["1"]["thermal_rating"], 0.75);
+
+    let matpower = write_as(&net, TargetFormat::Matpower).unwrap();
+    assert!(
+        matpower
+            .warnings
+            .iter()
+            .any(|w| w.contains("terminal admittance")),
+        "expected MATPOWER terminal admittance warning, got {:?}",
+        matpower.warnings
+    );
+}
+
+#[test]
 // Detecting an explicit tap of exactly 1.0 from the file is the point, so the exact compare is intended.
 #[allow(clippy::float_cmp)]
 fn powermodels_transformer_flag_tracks_raw_tap() {
@@ -754,6 +838,27 @@ fn powermodels_dcline_flips_pt_qf_qt_sign() {
 }
 
 #[test]
+fn powermodels_dcline_cost_round_trips() {
+    let mut net = parse_matpower_file(data("t_case9_dcline.m")).unwrap();
+    let dc = net.hvdc.first_mut().expect("fixture has dclines");
+    dc.cost = Some(powerio::network::GenCost {
+        model: 2,
+        startup: 0.0,
+        shutdown: 0.0,
+        ncost: 3,
+        coeffs: vec![0.02, 3.0, 10.0],
+    });
+
+    let back = parse_powermodels_json(&write_powermodels_json(&net).text).unwrap();
+    let got = back.hvdc[0].cost.as_ref().expect("dcline cost survives");
+    assert_eq!(got.model, 2);
+    assert_eq!(got.ncost, 3);
+    for (got, want) in got.coeffs.iter().zip([0.02, 3.0, 10.0]) {
+        assert!((got - want).abs() < 1e-9, "{got} != {want}");
+    }
+}
+
+#[test]
 fn powermodels_storage_ps_qs_stay_raw() {
     // PowerModels' make_per_unit! leaves storage ps/qs as setpoints (raw) while
     // scaling energy/ratings/limits by base. The reader must mirror that split.
@@ -947,6 +1052,10 @@ fn pandapower_genuine_fixture_reads() {
     assert_eq!(xf.shift, 150.0);
     // tap_pos == tap_neutral (0) on the hv side -> tap exactly 1.0, kept.
     assert_eq!(xf.tap, 1.0);
+    assert!(
+        xf.terminal_charging().g_fr > 0.0,
+        "pandapower pfe_kw should become typed magnetizing conductance"
+    );
 
     // Line 1: 10 km at 110 kV. r/x/b all scale by length; b is
     // c_nf_per_km * length * 2*pi*f * zbase (pandapower build_branch).
@@ -982,17 +1091,12 @@ fn pandapower_genuine_fixture_reads() {
     assert_eq!(dc.vf, 1.01);
     assert!(dc.pmax.is_infinite());
 
-    // Exactly the 8-row switch table and the trafo magnetizing branch warn.
-    assert_eq!(parsed.warnings.len(), 2, "{:?}", parsed.warnings);
+    // The 8-row switch table still warns; ZIP, line conductance, and transformer
+    // magnetizing admittance are typed.
+    assert_eq!(parsed.warnings.len(), 1, "{:?}", parsed.warnings);
     assert!(
         parsed.warnings.iter().any(|w| w
             == "`switch` table ignored (8 rows): switches are not modeled; open switches are not applied"),
-        "{:?}",
-        parsed.warnings
-    );
-    assert!(
-        parsed.warnings.iter().any(|w| w
-            == "`trafo`: i0_percent/pfe_kw nonzero on 1 rows; the magnetizing branch is not representable and was ignored"),
         "{:?}",
         parsed.warnings
     );
@@ -1410,14 +1514,17 @@ fn slackless_network_conversion_warns_for_power_flow_targets() {
             r: 0.0,
             x: 0.1,
             b: 0.0,
+            charging: None,
             rate_a: 0.0,
             rate_b: 0.0,
             rate_c: 0.0,
+            current_ratings: None,
             tap: 0.0,
             shift: 0.0,
             in_service: true,
             angmin: -360.0,
             angmax: 360.0,
+            solution: None,
             control: None,
             extras: Extras::new(),
         }

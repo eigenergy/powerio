@@ -58,8 +58,8 @@ pub use convert::{
 pub use dss::{parse_dss_file, parse_dss_str, write_dss};
 pub use error::{Error, Result};
 pub use model::{
-    Configuration, DistBus, DistGenerator, DistLine, DistLineCode, DistLoad, DistNetwork,
-    DistShunt, DistSourceFormat, DistSwitch, DistTransformer, Extras, Mat, UntypedObject,
-    VoltageSource, Winding, WindingConn,
+    Configuration, DistBus, DistGenerator, DistLine, DistLineCode, DistLoad, DistLoadVoltageModel,
+    DistNetwork, DistShunt, DistSourceFormat, DistSwitch, DistTransformer, Extras, Mat,
+    UntypedObject, VoltageSource, Winding, WindingConn,
 };
 pub use pmd::{parse_pmd_file, parse_pmd_str, write_pmd_json};

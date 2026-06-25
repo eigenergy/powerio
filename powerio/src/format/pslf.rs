@@ -15,8 +15,8 @@ use serde_json::{Number, Value};
 
 use super::{Conversion, sanitize_quoted};
 use crate::network::{
-    Branch, Bus, BusId, BusType, Extras, Generator, Hvdc, Impedance, Load, Network, Shunt,
-    SourceFormat, Transformer3W, Winding,
+    Branch, Bus, BusId, BusType, Extras, Generator, Hvdc, Impedance, Load, LoadVoltageModel,
+    Network, Shunt, SourceFormat, Transformer3W, Winding,
 };
 use crate::{Error, Result};
 
@@ -119,6 +119,7 @@ pub(crate) fn parse_pslf_source(
         loads,
         shunts,
         branches,
+        switches: Vec::new(),
         generators,
         storage: Vec::new(),
         hvdc,
@@ -503,15 +504,18 @@ fn read_branch(rec: &Record) -> Result<Branch> {
         r: num_at(&rec.rhs, 1, 0.0, "branch r", rec)?,
         x: num_at(&rec.rhs, 2, 0.0, "branch x", rec)?,
         b: num_at(&rec.rhs, 3, 0.0, "branch b", rec)?,
+        charging: None,
         rate_a: num_at(&rec.rhs, 4, 0.0, "branch rate1", rec)?,
         rate_b: num_at(&rec.rhs, 5, 0.0, "branch rate2", rec)?,
         rate_c: num_at(&rec.rhs, 6, 0.0, "branch rate3", rec)?,
+        current_ratings: None,
         tap: 0.0,
         shift: 0.0,
         in_service: on_at(&rec.rhs, 0, true, "branch status", rec)?,
         angmin: -360.0,
         angmax: 360.0,
         control: None,
+        solution: None,
         extras,
     })
 }
@@ -616,15 +620,18 @@ fn read_transformer(rec: &Record) -> Result<TransformerRecord> {
         r,
         x,
         b: 0.0,
+        charging: None,
         rate_a,
         rate_b,
         rate_c,
+        current_ratings: None,
         tap: if tap == 0.0 { 1.0 } else { tap },
         shift,
         in_service,
         angmin: -360.0,
         angmax: 360.0,
         control: None,
+        solution: None,
         extras,
     }))
 }
@@ -687,6 +694,17 @@ fn read_load(
         bus: BusId(req_id(&rec.lhs, 0, "load bus", rec)?),
         p: p_const + p_i + p_z,
         q: q_const + q_i + q_z,
+        voltage_model: Some(LoadVoltageModel::Zip {
+            p_constant_power: p_const,
+            q_constant_power: q_const,
+            p_constant_current: p_i,
+            q_constant_current: q_i,
+            p_constant_impedance: p_z,
+            q_constant_impedance: q_z,
+            v_nom: None,
+            load_type: None,
+            scaling: None,
+        }),
         in_service: on_at(&rec.rhs, 0, true, "load status", rec)?,
         extras,
     })
@@ -850,6 +868,7 @@ fn read_dc_lines(
                 qmaxt: to.q.max(0.0),
                 loss0: 0.0,
                 loss1: 0.0,
+                cost: None,
                 extras,
             })
         })();
