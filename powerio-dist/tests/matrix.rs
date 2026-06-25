@@ -227,9 +227,9 @@ fn by_name<'a, T>(items: &'a [T], name: impl Fn(&'a T) -> &'a str) -> Vec<(&'a s
 }
 
 fn same_v_nom(a: &[f64], b: &[f64], allow_derived: bool) -> bool {
-    a == b
-        || (a.len() == 1 && b.iter().all(|v| *v == a[0]))
-        || (b.len() == 1 && a.iter().all(|v| *v == b[0]))
+    (a.len() == b.len() && a.iter().zip(b).all(|(x, y)| close_power(*x, *y)))
+        || (a.len() == 1 && b.iter().all(|v| close_power(*v, a[0])))
+        || (b.len() == 1 && a.iter().all(|v| close_power(*v, b[0])))
         || (allow_derived && a.is_empty() && !b.is_empty())
 }
 
@@ -242,8 +242,8 @@ fn same_load_voltage_model(
         (
             DistLoadVoltageModel::ConstantPower { v_nom: a },
             DistLoadVoltageModel::ConstantPower { v_nom: b },
-        ) => same_v_nom(a, b, allow_derived_v_nom),
-        (
+        )
+        | (
             DistLoadVoltageModel::ConstantCurrent { v_nom: a },
             DistLoadVoltageModel::ConstantCurrent { v_nom: b },
         )

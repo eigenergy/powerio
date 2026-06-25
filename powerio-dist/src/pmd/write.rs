@@ -911,7 +911,11 @@ fn source_vm_nom(extras: &Extras, v_nom: &[f64]) -> Option<Value> {
             return Some(json!(kv));
         }
     }
-    let vals: Vec<f64> = raw.as_array()?.iter().filter_map(|v| v.as_f64()).collect();
+    let vals: Vec<f64> = raw
+        .as_array()?
+        .iter()
+        .filter_map(serde_json::Value::as_f64)
+        .collect();
     if vals.len() == 1 && v_nom.iter().all(|v| same_voltage(*v, vals[0] * 1e3)) {
         return Some(raw.clone());
     }

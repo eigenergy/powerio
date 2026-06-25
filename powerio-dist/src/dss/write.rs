@@ -58,6 +58,16 @@ struct DssWriter {
     kv_estimate: BTreeMap<String, f64>,
 }
 
+#[derive(Clone, Copy)]
+struct ElementKv<'a> {
+    bus: &'a str,
+    phases: usize,
+    configuration: Configuration,
+    name: &'a str,
+    class: &'a str,
+    typed_kv: Option<f64>,
+}
+
 /// Phase to neutral voltage per bus, propagated from the sources through
 /// lines and switches (same level) and transformers (winding ratios). The
 /// estimate feeds load/capacitor `kv` and `Set VoltageBases` when the
@@ -890,12 +900,14 @@ impl DssWriter {
             let typed_kv = self.load_nominal_kv(&l.voltage_model, phases, l.configuration, &l.name);
             let kv = self.element_kv(
                 &l.extras,
-                &l.bus,
-                phases,
-                l.configuration,
-                &l.name,
-                "load",
-                typed_kv,
+                ElementKv {
+                    bus: &l.bus,
+                    phases,
+                    configuration: l.configuration,
+                    name: &l.name,
+                    class: "load",
+                    typed_kv,
+                },
             );
             let mut extras = l.extras.clone();
             extras.remove("kv");
@@ -969,16 +981,7 @@ impl DssWriter {
 
     /// `kv` for a load or capacitor: the recorded value when the source
     /// carried one, otherwise the propagated bus estimate.
-    fn element_kv(
-        &mut self,
-        extras: &Extras,
-        bus: &str,
-        phases: usize,
-        configuration: Configuration,
-        name: &str,
-        class: &str,
-        typed_kv: Option<f64>,
-    ) -> f64 {
+    fn element_kv(&mut self, extras: &Extras, ctx: ElementKv<'_>) -> f64 {
         if let Some(v) = extras.get("kv") {
             match v
                 .as_f64()
@@ -986,18 +989,19 @@ impl DssWriter {
             {
                 Some(kv) => return kv,
                 None => self.warn(format!(
-                    "{class} {name}: kv extra `{v}` does not parse as a number; \
-                     using the bus voltage estimate"
+                    "{} {}: kv extra `{v}` does not parse as a number; \
+                     using the bus voltage estimate",
+                    ctx.class, ctx.name
                 )),
             }
         }
-        if let Some(kv) = typed_kv {
+        if let Some(kv) = ctx.typed_kv {
             return kv;
         }
-        if let Some(vln) = self.kv_estimate.get(&bus.to_ascii_lowercase()).copied() {
+        if let Some(vln) = self.kv_estimate.get(&ctx.bus.to_ascii_lowercase()).copied() {
             // OpenDSS convention: line to line for 2 and 3 phase, line to
             // neutral for single phase.
-            let v = if phases >= 2 || configuration == Configuration::Delta {
+            let v = if ctx.phases >= 2 || ctx.configuration == Configuration::Delta {
                 vln * 3f64.sqrt()
             } else {
                 vln
@@ -1005,8 +1009,9 @@ impl DssWriter {
             v / 1e3
         } else {
             self.warn(format!(
-                "{class} {name}: no kv in the source and no bus voltage estimate; \
-                 emitted 12.47"
+                "{} {}: no kv in the source and no bus voltage estimate; \
+                 emitted 12.47",
+                ctx.class, ctx.name
             ));
             12.47
         }
@@ -1170,12 +1175,14 @@ impl DssWriter {
         };
         let kv = self.element_kv(
             &sh.extras,
-            &sh.bus,
-            phases,
-            configuration,
-            &sh.name,
-            class,
-            None,
+            ElementKv {
+                bus: &sh.bus,
+                phases,
+                configuration,
+                name: &sh.name,
+                class,
+                typed_kv: None,
+            },
         );
         let kvar = extras_f64(&sh.extras, "kvar")
             .unwrap_or_else(|| shunt_kvar(sh, phases, conn_delta, &edges, b_phase, kv));
@@ -1236,12 +1243,14 @@ impl DssWriter {
             let kvar: f64 = g.q_nom.iter().sum::<f64>() / 1e3;
             let kv = self.element_kv(
                 &g.extras,
-                &g.bus,
-                phases,
-                g.configuration,
-                &g.name,
-                "generator",
-                None,
+                ElementKv {
+                    bus: &g.bus,
+                    phases,
+                    configuration: g.configuration,
+                    name: &g.name,
+                    class: "generator",
+                    typed_kv: None,
+                },
             );
             let mut s = format!(
                 "New Generator.{} bus1={} phases={phases} conn={conn} kv={} kw={} kvar={}",

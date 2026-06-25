@@ -1877,7 +1877,7 @@ Q
         else {
             panic!("tiny nonzero ZIP component was not typed");
         };
-        assert_eq!(*p_constant_current, 1e-20);
+        assert_eq!(p_constant_current.to_bits(), 1.0e-20_f64.to_bits());
 
         let matpower = crate::format::matpower::write_matpower_conversion(&net);
         assert!(
