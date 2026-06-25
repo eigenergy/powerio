@@ -11,6 +11,13 @@ fn load_model<'a>(net: &'a powerio_dist::DistNetwork, name: &str) -> &'a DistLoa
         .voltage_model
 }
 
+fn all_close(values: &[f64], expected: f64) -> bool {
+    values.len() == 3
+        && values
+            .iter()
+            .all(|v| (*v - expected).abs() <= 1e-9 * v.abs().max(expected.abs()).max(1.0))
+}
+
 #[test]
 fn rich_bmopf_load_voltage_models_preserve_all_variants() {
     let text = r#"{
@@ -58,7 +65,7 @@ fn rich_bmopf_load_voltage_models_preserve_all_variants() {
     let net = parse_bmopf_str(text).unwrap();
     assert!(matches!(
         load_model(&net, "cp"),
-        DistLoadVoltageModel::ConstantPower
+        DistLoadVoltageModel::ConstantPower { v_nom } if v_nom == &vec![7200.0, 7200.0, 7200.0]
     ));
     assert!(matches!(
         load_model(&net, "ci"),
@@ -92,6 +99,10 @@ fn rich_bmopf_load_voltage_models_preserve_all_variants() {
         doc["load"]["zip"]["alpha_p"],
         serde_json::json!([0.5, 0.5, 0.5])
     );
+    assert_eq!(
+        doc["load"]["cp"]["v_nom"],
+        serde_json::json!([7200.0, 7200.0, 7200.0])
+    );
 }
 
 #[test]
@@ -120,19 +131,24 @@ fn rich_pmd_load_voltage_models_keep_model_and_nominal_voltage() {
     let net = parse_pmd_str(text).unwrap();
     assert!(matches!(
         load_model(&net, "ci"),
-        DistLoadVoltageModel::ConstantCurrent { v_nom } if v_nom == &vec![7.2, 7.2, 7.2]
+        DistLoadVoltageModel::ConstantCurrent { v_nom } if v_nom == &vec![7200.0, 7200.0, 7200.0]
     ));
     assert!(matches!(
         load_model(&net, "cz"),
-        DistLoadVoltageModel::ConstantImpedance { v_nom } if v_nom == &vec![7.2, 7.2, 7.2]
+        DistLoadVoltageModel::ConstantImpedance { v_nom } if v_nom == &vec![7200.0, 7200.0, 7200.0]
     ));
     assert!(matches!(
         load_model(&net, "zip"),
-        DistLoadVoltageModel::Zip { v_nom, .. } if v_nom == &vec![7.2, 7.2, 7.2]
+        DistLoadVoltageModel::Zip { v_nom, .. } if v_nom == &vec![7200.0, 7200.0, 7200.0]
     ));
 
     let out = write_pmd_json(&net);
     assert!(out.warnings.is_empty(), "{:?}", out.warnings);
+    let doc: serde_json::Value = serde_json::from_str(&out.text).unwrap();
+    assert_eq!(
+        doc["load"]["ci"]["vm_nom"],
+        serde_json::json!([7.2, 7.2, 7.2])
+    );
     let back = parse_pmd_str(&out.text).unwrap();
     assert_eq!(load_model(&back, "ci"), load_model(&net, "ci"));
     assert_eq!(load_model(&back, "cz"), load_model(&net, "cz"));
@@ -151,13 +167,14 @@ fn rich_opendss_load_models_and_switches_round_trip() {
     let net = parse_dss_str(dss);
     assert_eq!(net.switches.len(), 1);
     assert!(net.switches[0].open);
+    let dss_v_nom = 12_470.0 / 3f64.sqrt();
     assert!(matches!(
         load_model(&net, "ci"),
-        DistLoadVoltageModel::ConstantCurrent { v_nom } if v_nom == &vec![12_470.0, 12_470.0, 12_470.0]
+        DistLoadVoltageModel::ConstantCurrent { v_nom } if all_close(v_nom, dss_v_nom)
     ));
     assert!(matches!(
         load_model(&net, "cz"),
-        DistLoadVoltageModel::ConstantImpedance { v_nom } if v_nom == &vec![12_470.0, 12_470.0, 12_470.0]
+        DistLoadVoltageModel::ConstantImpedance { v_nom } if all_close(v_nom, dss_v_nom)
     ));
     assert!(matches!(
         load_model(&net, "zip"),

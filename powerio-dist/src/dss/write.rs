@@ -887,7 +887,16 @@ impl DssWriter {
             self.warn_short_map("load", &l.name, l.terminal_map.len(), nconds);
             let kw: f64 = l.p_nom.iter().sum::<f64>() / 1e3;
             let kvar: f64 = l.q_nom.iter().sum::<f64>() / 1e3;
-            let kv = self.element_kv(&l.extras, &l.bus, phases, l.configuration, &l.name, "load");
+            let typed_kv = self.load_nominal_kv(&l.voltage_model, phases, l.configuration, &l.name);
+            let kv = self.element_kv(
+                &l.extras,
+                &l.bus,
+                phases,
+                l.configuration,
+                &l.name,
+                "load",
+                typed_kv,
+            );
             let mut extras = l.extras.clone();
             extras.remove("kv");
             extras.remove("phases");
@@ -908,7 +917,7 @@ impl DssWriter {
                 num(kw),
             );
             match &l.voltage_model {
-                DistLoadVoltageModel::ConstantPower => {}
+                DistLoadVoltageModel::ConstantPower { .. } => {}
                 DistLoadVoltageModel::ConstantImpedance { .. } => {
                     s.push_str(" model=2");
                 }
@@ -968,6 +977,7 @@ impl DssWriter {
         configuration: Configuration,
         name: &str,
         class: &str,
+        typed_kv: Option<f64>,
     ) -> f64 {
         if let Some(v) = extras.get("kv") {
             match v
@@ -980,6 +990,9 @@ impl DssWriter {
                      using the bus voltage estimate"
                 )),
             }
+        }
+        if let Some(kv) = typed_kv {
+            return kv;
         }
         if let Some(vln) = self.kv_estimate.get(&bus.to_ascii_lowercase()).copied() {
             // OpenDSS convention: line to line for 2 and 3 phase, line to
@@ -997,6 +1010,34 @@ impl DssWriter {
             ));
             12.47
         }
+    }
+
+    fn load_nominal_kv(
+        &mut self,
+        model: &DistLoadVoltageModel,
+        phases: usize,
+        configuration: Configuration,
+        name: &str,
+    ) -> Option<f64> {
+        let v_nom = model.v_nom();
+        let v_phase = v_nom
+            .first()
+            .copied()
+            .filter(|v| v.is_finite() && *v > 0.0)?;
+        if v_nom
+            .iter()
+            .any(|v| (*v - v_phase).abs() > 1e-9 * v.abs().max(v_phase.abs()).max(1.0))
+        {
+            self.warn(format!(
+                "load {name}: nonuniform nominal voltage array has no OpenDSS scalar kv; emitted the first value"
+            ));
+        }
+        let v = if phases >= 2 && configuration == Configuration::Wye {
+            v_phase * 3f64.sqrt()
+        } else {
+            v_phase
+        };
+        Some(v / 1e3)
     }
 
     fn write_impedance_shunt(&mut self, sh: &crate::model::DistShunt, phases: usize) {
@@ -1127,7 +1168,15 @@ impl DssWriter {
         } else {
             Configuration::Wye
         };
-        let kv = self.element_kv(&sh.extras, &sh.bus, phases, configuration, &sh.name, class);
+        let kv = self.element_kv(
+            &sh.extras,
+            &sh.bus,
+            phases,
+            configuration,
+            &sh.name,
+            class,
+            None,
+        );
         let kvar = extras_f64(&sh.extras, "kvar")
             .unwrap_or_else(|| shunt_kvar(sh, phases, conn_delta, &edges, b_phase, kv));
         let mut extras = sh.extras.clone();
@@ -1192,6 +1241,7 @@ impl DssWriter {
                 g.configuration,
                 &g.name,
                 "generator",
+                None,
             );
             let mut s = format!(
                 "New Generator.{} bus1={} phases={phases} conn={conn} kv={} kw={} kvar={}",
@@ -1436,7 +1486,7 @@ mod tests {
             configuration,
             p_nom: vec![1e3; phases],
             q_nom: vec![0.0; phases],
-            voltage_model: DistLoadVoltageModel::ConstantPower,
+            voltage_model: DistLoadVoltageModel::ConstantPower { v_nom: Vec::new() },
             extras: Extras::from([("kv".to_string(), serde_json::json!("0.4"))]),
         }
     }

@@ -372,8 +372,11 @@ impl Writer {
         what: &str,
     ) {
         match model {
-            DistLoadVoltageModel::ConstantPower => {
+            DistLoadVoltageModel::ConstantPower { v_nom } => {
                 o.insert("model".into(), json!("constant_power"));
+                if !v_nom.is_empty() {
+                    o.insert("v_nom".into(), self.nums(v_nom, &format!("{what} v_nom")));
+                }
             }
             DistLoadVoltageModel::ConstantCurrent { v_nom } => {
                 o.insert("model".into(), json!("constant_current"));

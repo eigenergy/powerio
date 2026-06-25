@@ -233,6 +233,9 @@ pub struct Network {
     pub source: Option<Arc<String>>,
 }
 
+/// v1-facing name for the canonical scalar positive sequence model.
+pub type BalancedNetwork = Network;
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Bus {
     /// Stable bus id (1-based in MATPOWER; preserved verbatim).
@@ -310,6 +313,34 @@ pub enum LoadVoltageModel {
         gamma_p: f64,
         gamma_q: f64,
     },
+}
+
+impl LoadVoltageModel {
+    #[must_use]
+    pub fn has_non_matpower_fields(&self) -> bool {
+        match self {
+            Self::ConstantPower => false,
+            Self::Zip {
+                p_constant_current,
+                q_constant_current,
+                p_constant_impedance,
+                q_constant_impedance,
+                v_nom,
+                load_type,
+                scaling,
+                ..
+            } => {
+                *p_constant_current != 0.0
+                    || *q_constant_current != 0.0
+                    || *p_constant_impedance != 0.0
+                    || *q_constant_impedance != 0.0
+                    || v_nom.is_some()
+                    || load_type.is_some()
+                    || scaling.is_some()
+            }
+            Self::Exponential { .. } => true,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

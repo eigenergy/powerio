@@ -397,7 +397,7 @@ impl Reader<'_> {
             } else if model.contains("CURRENT") {
                 DistLoadVoltageModel::ConstantCurrent { v_nom }
             } else {
-                DistLoadVoltageModel::ConstantPower
+                DistLoadVoltageModel::ConstantPower { v_nom }
             };
             self.net.loads.push(DistLoad {
                 name: name.clone(),

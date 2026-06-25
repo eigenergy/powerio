@@ -226,17 +226,23 @@ fn by_name<'a, T>(items: &'a [T], name: impl Fn(&'a T) -> &'a str) -> Vec<(&'a s
     v
 }
 
-fn same_v_nom(a: &[f64], b: &[f64], allow_missing: bool) -> bool {
-    a == b || (allow_missing && (a.is_empty() || b.is_empty()))
+fn same_v_nom(a: &[f64], b: &[f64], allow_derived: bool) -> bool {
+    a == b
+        || (a.len() == 1 && b.iter().all(|v| *v == a[0]))
+        || (b.len() == 1 && a.iter().all(|v| *v == b[0]))
+        || (allow_derived && a.is_empty() && !b.is_empty())
 }
 
 fn same_load_voltage_model(
     a: &DistLoadVoltageModel,
     b: &DistLoadVoltageModel,
-    allow_missing_v_nom: bool,
+    allow_derived_v_nom: bool,
 ) -> bool {
     match (a, b) {
-        (DistLoadVoltageModel::ConstantPower, DistLoadVoltageModel::ConstantPower) => true,
+        (
+            DistLoadVoltageModel::ConstantPower { v_nom: a },
+            DistLoadVoltageModel::ConstantPower { v_nom: b },
+        ) => same_v_nom(a, b, allow_derived_v_nom),
         (
             DistLoadVoltageModel::ConstantCurrent { v_nom: a },
             DistLoadVoltageModel::ConstantCurrent { v_nom: b },
@@ -244,7 +250,7 @@ fn same_load_voltage_model(
         | (
             DistLoadVoltageModel::ConstantImpedance { v_nom: a },
             DistLoadVoltageModel::ConstantImpedance { v_nom: b },
-        ) => same_v_nom(a, b, allow_missing_v_nom),
+        ) => same_v_nom(a, b, allow_derived_v_nom),
         (
             DistLoadVoltageModel::Zip {
                 v_nom: av,
@@ -265,7 +271,7 @@ fn same_load_voltage_model(
                 beta_p: bbp,
             },
         ) => {
-            same_v_nom(av, bv, allow_missing_v_nom)
+            same_v_nom(av, bv, allow_derived_v_nom)
                 && aaz == b_alpha_z
                 && aai == bai
                 && aap == bap
@@ -284,7 +290,7 @@ fn same_load_voltage_model(
                 gamma_p: bp,
                 gamma_q: bq,
             },
-        ) => same_v_nom(av, bv, allow_missing_v_nom) && ap == bp && aq == bq,
+        ) => same_v_nom(av, bv, allow_derived_v_nom) && ap == bp && aq == bq,
         _ => false,
     }
 }
@@ -293,7 +299,7 @@ fn close_power(x: f64, y: f64) -> bool {
     (x - y).abs() <= 4.0 * f64::EPSILON * x.abs().max(y.abs())
 }
 
-fn assert_loads_eq(a: &DistNetwork, b: &DistNetwork, what: &str, allow_missing_v_nom: bool) {
+fn assert_loads_eq(a: &DistNetwork, b: &DistNetwork, what: &str, allow_derived_v_nom: bool) {
     assert_eq!(a.loads.len(), b.loads.len(), "{what}: loads");
     for ((_, x), (_, y)) in by_name(&a.loads, |l| &l.name)
         .iter()
@@ -311,7 +317,7 @@ fn assert_loads_eq(a: &DistNetwork, b: &DistNetwork, what: &str, allow_missing_v
             x.name
         );
         assert!(
-            same_load_voltage_model(&x.voltage_model, &y.voltage_model, allow_missing_v_nom),
+            same_load_voltage_model(&x.voltage_model, &y.voltage_model, allow_derived_v_nom),
             "{what}: load {} voltage model {:?} vs {:?}",
             x.name,
             x.voltage_model,
@@ -320,14 +326,8 @@ fn assert_loads_eq(a: &DistNetwork, b: &DistNetwork, what: &str, allow_missing_v
     }
 }
 
-fn legacy_dss_pmd_v_nom_loss(what: &str) -> bool {
-    matches!(
-        what,
-        "IEEE 13 → PMD → back"
-            | "IEEE 34 → PMD → back"
-            | "IEEE 123 → PMD → back"
-            | "PMD IEEE 13 → dss → back"
-    )
+fn target_may_materialize_v_nom(what: &str) -> bool {
+    what.contains("→ dss → back")
 }
 
 /// The model fields every format carries; the per cell comparisons run on
@@ -353,8 +353,8 @@ fn assert_projection_eq(a: &DistNetwork, b: &DistNetwork, what: &str, transforme
     // Scale changes (kW to W and back) cost at most one rounding per
     // direction; powers compare to 2 ULP relative, everything structural
     // exactly.
-    let allow_missing_v_nom = legacy_dss_pmd_v_nom_loss(what);
-    assert_loads_eq(a, b, what, allow_missing_v_nom);
+    let allow_derived_v_nom = target_may_materialize_v_nom(what);
+    assert_loads_eq(a, b, what, allow_derived_v_nom);
     assert_eq!(a.lines.len(), b.lines.len(), "{what}: lines");
     for ((_, x), (_, y)) in by_name(&a.lines, |l| &l.name)
         .iter()

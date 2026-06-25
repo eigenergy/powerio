@@ -88,7 +88,11 @@ pub(crate) fn write_matpower_conversion(net: &Network) -> Conversion {
     let voltage_loads = net
         .loads
         .iter()
-        .filter(|l| l.voltage_model.is_some())
+        .filter(|l| {
+            l.voltage_model
+                .as_ref()
+                .is_some_and(crate::network::LoadVoltageModel::has_non_matpower_fields)
+        })
         .count();
     if voltage_loads > 0 {
         warnings.push(format!(

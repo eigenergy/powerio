@@ -660,6 +660,41 @@ Q
 }
 
 #[test]
+fn rich_zip_load_model_writes_to_pslf_components() {
+    let raw = r"0, 100.00, 35, 0, 1, 60.00 / synthetic
+CASE
+COMMENT
+0 / END OF SYSTEM-WIDE DATA, BEGIN BUS DATA
+1,'BUS1        ', 230.0,3,1,1,1,1.0,0.0,1.1,0.9,1.1,0.9
+2,'BUS2        ', 230.0,1,1,1,1,1.0,0.0,1.1,0.9,1.1,0.9
+0 / END OF BUS DATA, BEGIN LOAD DATA
+2,'L1',1,1,1,10.0,3.0,1.0,0.5,2.0,1.5,1,0,1,0.0,0.0,1
+0 / END OF LOAD DATA, BEGIN FIXED SHUNT DATA
+Q
+";
+    let net = parse_psse(raw).unwrap();
+    let pslf = write_pslf(&net);
+    assert!(
+        !pslf.warnings.iter().any(|w| w.contains("voltage model")),
+        "{:?}",
+        pslf.warnings
+    );
+    let back = parse_pslf(&pslf.text).unwrap();
+    let Some(LoadVoltageModel::Zip {
+        p_constant_power,
+        p_constant_current,
+        p_constant_impedance,
+        ..
+    }) = &back.loads[0].voltage_model
+    else {
+        panic!("PSLF writer flattened typed ZIP components");
+    };
+    close(*p_constant_power, 10.0);
+    close(*p_constant_current, 1.0);
+    close(*p_constant_impedance, 2.0);
+}
+
+#[test]
 fn rich_pandapower_zip_and_terminal_conductance_are_typed() {
     let parsed = powerio::parse_str(
         &pp_json(&[

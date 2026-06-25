@@ -60,6 +60,6 @@ pub use error::{Error, Result};
 pub use model::{
     Configuration, DistBus, DistGenerator, DistLine, DistLineCode, DistLoad, DistLoadVoltageModel,
     DistNetwork, DistShunt, DistSourceFormat, DistSwitch, DistTransformer, Extras, Mat,
-    UntypedObject, VoltageSource, Winding, WindingConn,
+    MulticonductorNetwork, UntypedObject, VoltageSource, Winding, WindingConn,
 };
 pub use pmd::{parse_pmd_file, parse_pmd_str, write_pmd_json};

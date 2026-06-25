@@ -177,18 +177,29 @@ pub fn write_psse_rev(net: &Network, rev: u32) -> Conversion {
         let id = quoted_device_id(&l.extras, l.bus, &mut load_ids, &mut sanitized_quoted);
         let (pl, ql, ip, iq, yp, yq) = load_components_for_write(l, &id, &mut warnings);
         let owner = extra_i64(&l.extras, "psse_owner").unwrap_or(1);
-        let scal = extra_i64(&l.extras, "psse_scal").unwrap_or(1);
+        let scal = typed_psse_scal(l, &id, &mut warnings)
+            .or_else(|| extra_i64(&l.extras, "psse_scal"))
+            .unwrap_or(1);
         let intrpt = extra_i64(&l.extras, "psse_intrpt").unwrap_or(0);
+        let typed_load_type = l.voltage_model.as_ref().and_then(typed_psse_load_type);
+        if rev < 35 && typed_load_type.is_some() {
+            warnings.push(format!(
+                "PSS/E load at bus {} id {id:?}: load type requires revision 35; dropped",
+                l.bus
+            ));
+        }
         let modern_tail = if rev >= 35 {
             let pdgen = extra_f64(&l.extras, "psse_pdgen").unwrap_or(0.0);
             let qdgen = extra_f64(&l.extras, "psse_qdgen").unwrap_or(0.0);
             let flagstatus = extra_i64(&l.extras, "psse_flagstatus").unwrap_or(0);
-            let raw_loadtype = l
-                .extras
-                .get("psse_loadtype")
-                .and_then(Value::as_str)
-                .unwrap_or("");
-            let loadtype = sanitize_quoted(raw_loadtype, NAME_FORBIDDEN, ' ');
+            let raw_loadtype = typed_load_type.or_else(|| {
+                l.extras
+                    .get("psse_loadtype")
+                    .and_then(Value::as_str)
+                    .map(str::to_owned)
+            });
+            let loadtype =
+                sanitize_quoted(raw_loadtype.as_deref().unwrap_or(""), NAME_FORBIDDEN, ' ');
             if matches!(loadtype, std::borrow::Cow::Owned(_)) {
                 sanitized_quoted += 1;
             }
@@ -1227,6 +1238,19 @@ fn read_load(f: &[String], raw_rev: u32, warnings: &mut Vec<String>) -> Result<L
     }
     let scal = int_at(f, 12, 1)?;
     let load_type = f.get(17).and_then(|s| s.trim().parse::<i32>().ok());
+    let has_zip_components = [ip, iq, yp, yq].iter().any(|v| *v != 0.0);
+    let voltage_model =
+        (has_zip_components || scal != 1 || load_type.is_some()).then_some(LoadVoltageModel::Zip {
+            p_constant_power: pl,
+            q_constant_power: ql,
+            p_constant_current: ip,
+            q_constant_current: iq,
+            p_constant_impedance: yp,
+            q_constant_impedance: yq,
+            v_nom: None,
+            load_type,
+            scaling: (scal != 1).then_some(scal as f64),
+        });
     let has_load_options = extras.contains_key("psse_intrpt")
         || extras.contains_key("psse_pdgen")
         || extras.contains_key("psse_qdgen")
@@ -1240,17 +1264,7 @@ fn read_load(f: &[String], raw_rev: u32, warnings: &mut Vec<String>) -> Result<L
         bus: BusId(bus),
         p: pl + ip + yp,
         q: ql + iq + yq,
-        voltage_model: Some(LoadVoltageModel::Zip {
-            p_constant_power: pl,
-            q_constant_power: ql,
-            p_constant_current: ip,
-            q_constant_current: iq,
-            p_constant_impedance: yp,
-            q_constant_impedance: yq,
-            v_nom: None,
-            load_type,
-            scaling: (scal != 1).then_some(scal as f64),
-        }),
+        voltage_model,
         in_service: on_at(f, 2, true)?,
         extras,
     })
@@ -1640,6 +1654,43 @@ fn same_load_total(a: f64, b: f64) -> bool {
     (a - b).abs() <= 1e-9 * a.abs().max(b.abs()).max(1.0)
 }
 
+fn typed_psse_scal(l: &Load, id: &str, warnings: &mut Vec<String>) -> Option<i64> {
+    let Some(LoadVoltageModel::Zip {
+        scaling: Some(scaling),
+        ..
+    }) = &l.voltage_model
+    else {
+        return None;
+    };
+    let scaling = *scaling;
+    if !scaling.is_finite() {
+        warnings.push(format!(
+            "PSS/E load at bus {} id {id:?}: non-finite typed scaling has no SCAL value; used source/default SCAL",
+            l.bus
+        ));
+        return None;
+    }
+    let rounded = scaling.round();
+    if (scaling - rounded).abs() > 1e-9 || rounded < i64::MIN as f64 || rounded > i64::MAX as f64 {
+        warnings.push(format!(
+            "PSS/E load at bus {} id {id:?}: non-integer typed scaling {scaling} has no SCAL value; used source/default SCAL",
+            l.bus
+        ));
+        return None;
+    }
+    Some(rounded as i64)
+}
+
+fn typed_psse_load_type(model: &LoadVoltageModel) -> Option<String> {
+    match model {
+        LoadVoltageModel::Zip {
+            load_type: Some(load_type),
+            ..
+        } => Some(load_type.to_string()),
+        _ => None,
+    }
+}
+
 fn load_components_for_write(
     l: &Load,
     id: &str,
@@ -1652,6 +1703,7 @@ fn load_components_for_write(
         q_constant_current,
         p_constant_impedance,
         q_constant_impedance,
+        v_nom,
         ..
     }) = &l.voltage_model
     {
@@ -1662,6 +1714,12 @@ fn load_components_for_write(
             q_constant_power + q_constant_current + q_constant_impedance,
             l.q,
         ) {
+            if v_nom.is_some() {
+                warnings.push(format!(
+                    "PSS/E load at bus {} id {id:?}: nominal voltage has no load record field; dropped",
+                    l.bus
+                ));
+            }
             return (
                 *p_constant_power,
                 *q_constant_power,
@@ -1674,6 +1732,13 @@ fn load_components_for_write(
         warnings.push(format!(
             "PSS/E load at bus {} id {id:?}: stale voltage model components did not match \
              typed p/q; wrote typed p/q as constant power",
+            l.bus
+        ));
+        return (l.p, l.q, 0.0, 0.0, 0.0, 0.0);
+    }
+    if matches!(l.voltage_model, Some(LoadVoltageModel::Exponential { .. })) {
+        warnings.push(format!(
+            "PSS/E load at bus {} id {id:?}: exponential voltage model has no load record fields; wrote typed p/q as constant power",
             l.bus
         ));
         return (l.p, l.q, 0.0, 0.0, 0.0, 0.0);
@@ -1790,6 +1855,100 @@ Q
         let net2 = parse_psse(&text).unwrap();
         close(net2.loads[0].p, 13.0);
         close(net2.loads[0].q, 5.0);
+    }
+
+    #[test]
+    fn tiny_nonzero_zip_components_are_preserved_as_typed_fields() {
+        let raw = r"0, 100.00, 35, 0, 1, 60.00 / synthetic
+CASE
+COMMENT
+0 / END OF SYSTEM-WIDE DATA, BEGIN BUS DATA
+1,'BUS1        ', 230.0,3,1,1,1,1.0,0.0,1.1,0.9,1.1,0.9
+2,'BUS2        ', 230.0,1,1,1,1,1.0,0.0,1.1,0.9,1.1,0.9
+0 / END OF BUS DATA, BEGIN LOAD DATA
+2,'L1',1,1,1,10.0,3.0,1e-20,0.0,0.0,0.0,1,1,0,0.0,0.0,0,''
+0 / END OF LOAD DATA, BEGIN FIXED SHUNT DATA
+Q
+";
+        let net = parse_psse(raw).unwrap();
+        let Some(LoadVoltageModel::Zip {
+            p_constant_current, ..
+        }) = &net.loads[0].voltage_model
+        else {
+            panic!("tiny nonzero ZIP component was not typed");
+        };
+        assert_eq!(*p_constant_current, 1e-20);
+
+        let matpower = crate::format::matpower::write_matpower_conversion(&net);
+        assert!(
+            matpower
+                .warnings
+                .iter()
+                .any(|w| w.contains("voltage dependent load model")),
+            "missing MATPOWER voltage model warning: {:?}",
+            matpower.warnings
+        );
+    }
+
+    #[test]
+    fn typed_psse_load_scaling_and_type_write_without_extras() {
+        let raw = r"0, 100.00, 35, 0, 1, 60.00 / synthetic
+CASE
+COMMENT
+0 / END OF SYSTEM-WIDE DATA, BEGIN BUS DATA
+1,'BUS1        ', 230.0,3,1,1,1,1.0,0.0,1.1,0.9,1.1,0.9
+2,'BUS2        ', 230.0,1,1,1,1,1.0,0.0,1.1,0.9,1.1,0.9
+0 / END OF BUS DATA, BEGIN LOAD DATA
+2,'L1',1,1,1,10.0,3.0,1.0,0.5,2.0,1.5,1,1,0,0.0,0.0,0,''
+0 / END OF LOAD DATA, BEGIN FIXED SHUNT DATA
+Q
+";
+        let mut net = parse_psse(raw).unwrap();
+        let Some(LoadVoltageModel::Zip {
+            scaling,
+            load_type,
+            v_nom,
+            ..
+        }) = &mut net.loads[0].voltage_model
+        else {
+            panic!("missing typed ZIP load model");
+        };
+        *scaling = Some(0.0);
+        *load_type = Some(7);
+        *v_nom = Some(230_000.0);
+        net.loads[0].extras.remove("psse_scal");
+        net.loads[0].extras.remove("psse_loadtype");
+
+        let conv = write_psse_rev(&net, 35);
+
+        assert!(
+            conv.text.contains(", 1, 0, 0, 0.0, 0.0, 0, '7'"),
+            "typed SCAL/LOADTYPE were not written: {}",
+            conv.text
+        );
+        assert!(
+            conv.warnings.iter().any(|w| w.contains("nominal voltage")),
+            "missing nominal voltage warning: {:?}",
+            conv.warnings
+        );
+        let rev33 = write_psse(&net);
+        assert!(
+            rev33
+                .warnings
+                .iter()
+                .any(|w| w.contains("load type requires revision 35")),
+            "missing rev33 load type warning: {:?}",
+            rev33.warnings
+        );
+        let reparsed = parse_psse(&conv.text).unwrap();
+        let Some(LoadVoltageModel::Zip {
+            scaling, load_type, ..
+        }) = &reparsed.loads[0].voltage_model
+        else {
+            panic!("missing reparsed ZIP load model");
+        };
+        assert_eq!(*scaling, Some(0.0));
+        assert_eq!(*load_type, Some(7));
     }
 
     #[test]

@@ -568,7 +568,12 @@ impl Reader<'_> {
                     extras.insert("model".into(), dss_model.into());
                 }
             }
-            let v_nom = floats("vm_nom", o.get("vm_nom")).unwrap_or_default();
+            let v_nom: Vec<f64> = floats("vm_nom", o.get("vm_nom"))
+                .or_else(|| o.get("vm_nom").map(|v| vec![restore("vm_nom", v)]))
+                .unwrap_or_default()
+                .iter()
+                .map(|v| v * 1e3)
+                .collect();
             let voltage_model = match o.get("model").and_then(Value::as_str) {
                 Some("IMPEDANCE") => DistLoadVoltageModel::ConstantImpedance { v_nom },
                 Some("CURRENT") => DistLoadVoltageModel::ConstantCurrent { v_nom },
@@ -581,7 +586,7 @@ impl Reader<'_> {
                     beta_i: Vec::new(),
                     beta_p: Vec::new(),
                 },
-                _ => DistLoadVoltageModel::ConstantPower,
+                _ => DistLoadVoltageModel::ConstantPower { v_nom },
             };
             stash_status(
                 o,

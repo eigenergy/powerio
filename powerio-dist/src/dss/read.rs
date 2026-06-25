@@ -981,7 +981,12 @@ impl Reader<'_> {
         if model != 1 {
             extras.insert("model".into(), model.into());
         }
-        let v_nom = vec![kv * 1e3; phases];
+        let v_phase = if phases >= 2 && configuration == Configuration::Wye {
+            kv * 1e3 / 3f64.sqrt()
+        } else {
+            kv * 1e3
+        };
+        let v_nom = vec![v_phase; phases];
         let zipv = props
             .get("zipv")
             .and_then(|v| v.to_vector(Some(self.vars)).ok())
@@ -1007,7 +1012,7 @@ impl Reader<'_> {
                 beta_i: Vec::new(),
                 beta_p: Vec::new(),
             },
-            _ => DistLoadVoltageModel::ConstantPower,
+            _ => DistLoadVoltageModel::ConstantPower { v_nom },
         };
         DistLoad {
             name: obj.name.clone(),

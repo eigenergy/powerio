@@ -128,17 +128,19 @@ pub struct DistLoad {
     pub extras: Extras,
 }
 
-#[derive(Clone, Debug, Default, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 #[non_exhaustive]
 pub enum DistLoadVoltageModel {
-    #[default]
-    ConstantPower,
-    ConstantCurrent {
-        v_nom: Vec<f64>,
-    },
-    ConstantImpedance {
-        v_nom: Vec<f64>,
-    },
+    /// Constant power load. `v_nom` is volts per active phase when the source
+    /// states it.
+    ConstantPower { v_nom: Vec<f64> },
+    /// Constant current load. `v_nom` is volts per active phase.
+    ConstantCurrent { v_nom: Vec<f64> },
+    /// Constant impedance load. `v_nom` is volts per active phase.
+    ConstantImpedance { v_nom: Vec<f64> },
+    /// ZIP load coefficients by active phase. `v_nom` is volts per active
+    /// phase; alpha terms apply to active power and beta terms to reactive
+    /// power.
     Zip {
         v_nom: Vec<f64>,
         alpha_z: Vec<f64>,
@@ -148,11 +150,32 @@ pub enum DistLoadVoltageModel {
         beta_i: Vec<f64>,
         beta_p: Vec<f64>,
     },
+    /// Exponential voltage model by active phase. `v_nom` is volts per active
+    /// phase.
     Exponential {
         v_nom: Vec<f64>,
         gamma_p: Vec<f64>,
         gamma_q: Vec<f64>,
     },
+}
+
+impl Default for DistLoadVoltageModel {
+    fn default() -> Self {
+        Self::ConstantPower { v_nom: Vec::new() }
+    }
+}
+
+impl DistLoadVoltageModel {
+    #[must_use]
+    pub fn v_nom(&self) -> &[f64] {
+        match self {
+            Self::ConstantPower { v_nom }
+            | Self::ConstantCurrent { v_nom }
+            | Self::ConstantImpedance { v_nom }
+            | Self::Zip { v_nom, .. }
+            | Self::Exponential { v_nom, .. } => v_nom,
+        }
+    }
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -269,6 +292,9 @@ pub struct DistNetwork {
     pub source_format: Option<DistSourceFormat>,
     pub extras: Extras,
 }
+
+/// v1-facing name for the canonical multiconductor distribution model.
+pub type MulticonductorNetwork = DistNetwork;
 
 impl Default for DistNetwork {
     /// An empty network at the OpenDSS default frequency. A derived 0 Hz
