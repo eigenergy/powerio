@@ -9,7 +9,8 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use powerio_dist::{
-    DistNetwork, DistTargetFormat, Result, parse_bmopf_str, parse_dss_file, parse_pmd_str,
+    DistLoadVoltageModel, DistNetwork, DistTargetFormat, Result, parse_bmopf_str, parse_dss_file,
+    parse_pmd_str,
 };
 
 fn fixture(rel: &str) -> PathBuf {
@@ -219,16 +220,121 @@ fn parse_case(case: &Case) -> DistNetwork {
     }
 }
 
+fn by_name<'a, T>(items: &'a [T], name: impl Fn(&'a T) -> &'a str) -> Vec<(&'a str, &'a T)> {
+    let mut v: Vec<(&str, &T)> = items.iter().map(|t| (name(t), t)).collect();
+    v.sort_by_key(|(n, _)| n.to_ascii_lowercase());
+    v
+}
+
+fn same_v_nom(a: &[f64], b: &[f64], allow_missing: bool) -> bool {
+    a == b || (allow_missing && (a.is_empty() || b.is_empty()))
+}
+
+fn same_load_voltage_model(
+    a: &DistLoadVoltageModel,
+    b: &DistLoadVoltageModel,
+    allow_missing_v_nom: bool,
+) -> bool {
+    match (a, b) {
+        (DistLoadVoltageModel::ConstantPower, DistLoadVoltageModel::ConstantPower) => true,
+        (
+            DistLoadVoltageModel::ConstantCurrent { v_nom: a },
+            DistLoadVoltageModel::ConstantCurrent { v_nom: b },
+        )
+        | (
+            DistLoadVoltageModel::ConstantImpedance { v_nom: a },
+            DistLoadVoltageModel::ConstantImpedance { v_nom: b },
+        ) => same_v_nom(a, b, allow_missing_v_nom),
+        (
+            DistLoadVoltageModel::Zip {
+                v_nom: av,
+                alpha_z: aaz,
+                alpha_i: aai,
+                alpha_p: aap,
+                beta_z: abz,
+                beta_i: abi,
+                beta_p: abp,
+            },
+            DistLoadVoltageModel::Zip {
+                v_nom: bv,
+                alpha_z: b_alpha_z,
+                alpha_i: bai,
+                alpha_p: bap,
+                beta_z: bbz,
+                beta_i: bbi,
+                beta_p: bbp,
+            },
+        ) => {
+            same_v_nom(av, bv, allow_missing_v_nom)
+                && aaz == b_alpha_z
+                && aai == bai
+                && aap == bap
+                && abz == bbz
+                && abi == bbi
+                && abp == bbp
+        }
+        (
+            DistLoadVoltageModel::Exponential {
+                v_nom: av,
+                gamma_p: ap,
+                gamma_q: aq,
+            },
+            DistLoadVoltageModel::Exponential {
+                v_nom: bv,
+                gamma_p: bp,
+                gamma_q: bq,
+            },
+        ) => same_v_nom(av, bv, allow_missing_v_nom) && ap == bp && aq == bq,
+        _ => false,
+    }
+}
+
+fn close_power(x: f64, y: f64) -> bool {
+    (x - y).abs() <= 4.0 * f64::EPSILON * x.abs().max(y.abs())
+}
+
+fn assert_loads_eq(a: &DistNetwork, b: &DistNetwork, what: &str, allow_missing_v_nom: bool) {
+    assert_eq!(a.loads.len(), b.loads.len(), "{what}: loads");
+    for ((_, x), (_, y)) in by_name(&a.loads, |l| &l.name)
+        .iter()
+        .zip(&by_name(&b.loads, |l| &l.name))
+    {
+        for (p, q) in x.p_nom.iter().zip(&y.p_nom) {
+            assert!(close_power(*p, *q), "{what}: load {} p {p} vs {q}", x.name);
+        }
+        for (p, q) in x.q_nom.iter().zip(&y.q_nom) {
+            assert!(close_power(*p, *q), "{what}: load {} q {p} vs {q}", x.name);
+        }
+        assert_eq!(
+            x.terminal_map, y.terminal_map,
+            "{what}: load {} map",
+            x.name
+        );
+        assert!(
+            same_load_voltage_model(&x.voltage_model, &y.voltage_model, allow_missing_v_nom),
+            "{what}: load {} voltage model {:?} vs {:?}",
+            x.name,
+            x.voltage_model,
+            y.voltage_model
+        );
+    }
+}
+
+fn legacy_dss_pmd_v_nom_loss(what: &str) -> bool {
+    matches!(
+        what,
+        "IEEE 13 → PMD → back"
+            | "IEEE 34 → PMD → back"
+            | "IEEE 123 → PMD → back"
+            | "PMD IEEE 13 → dss → back"
+    )
+}
+
 /// The model fields every format carries; the per cell comparisons run on
 /// this projection, with transformer carve outs where BMOPF restates them.
 fn assert_projection_eq(a: &DistNetwork, b: &DistNetwork, what: &str, transformers: bool) {
     // JSON formats key elements by name, so order is not preserved across
     // a round trip; compare per name.
-    fn by_name<'a, T>(items: &'a [T], name: impl Fn(&'a T) -> &'a str) -> Vec<(&'a str, &'a T)> {
-        let mut v: Vec<(&str, &T)> = items.iter().map(|t| (name(t), t)).collect();
-        v.sort_by_key(|(n, _)| n.to_ascii_lowercase());
-        v
-    }
     assert_eq!(a.buses.len(), b.buses.len(), "{what}: bus count");
     let buses_a = by_name(&a.buses, |b| &b.id);
     let buses_b = by_name(&b.buses, |b| &b.id);
@@ -247,24 +353,8 @@ fn assert_projection_eq(a: &DistNetwork, b: &DistNetwork, what: &str, transforme
     // Scale changes (kW to W and back) cost at most one rounding per
     // direction; powers compare to 2 ULP relative, everything structural
     // exactly.
-    let close = |x: f64, y: f64| (x - y).abs() <= 4.0 * f64::EPSILON * x.abs().max(y.abs());
-    assert_eq!(a.loads.len(), b.loads.len(), "{what}: loads");
-    for ((_, x), (_, y)) in by_name(&a.loads, |l| &l.name)
-        .iter()
-        .zip(&by_name(&b.loads, |l| &l.name))
-    {
-        for (p, q) in x.p_nom.iter().zip(&y.p_nom) {
-            assert!(close(*p, *q), "{what}: load {} p {p} vs {q}", x.name);
-        }
-        for (p, q) in x.q_nom.iter().zip(&y.q_nom) {
-            assert!(close(*p, *q), "{what}: load {} q {p} vs {q}", x.name);
-        }
-        assert_eq!(
-            x.terminal_map, y.terminal_map,
-            "{what}: load {} map",
-            x.name
-        );
-    }
+    let allow_missing_v_nom = legacy_dss_pmd_v_nom_loss(what);
+    assert_loads_eq(a, b, what, allow_missing_v_nom);
     assert_eq!(a.lines.len(), b.lines.len(), "{what}: lines");
     for ((_, x), (_, y)) in by_name(&a.lines, |l| &l.name)
         .iter()

@@ -6,6 +6,7 @@
 #
 #   julia --project=benchmarks validate_oracles.jl export  <tmp> <case.m>...
 #   julia --project=benchmarks validate_oracles.jl compare <tmp> --m <m>... --raw <r>... --egret <e>...
+#   julia --project=benchmarks validate_oracles.jl rich    <tmp> <rich.pm.json>...
 #
 # `export` writes <tmp>/<base>.pmref.json (PowerModels' own per_unit JSON) for the
 # PMread leg — it must run before powerio re-emits it. `compare` runs PMjson /
@@ -15,6 +16,7 @@
 # line per leg to <tmp>/results.tsv and prints detail; exits nonzero on any FAIL.
 using PowerModels
 using ExaPowerIO
+using JSON
 PowerModels.silence()
 include(joinpath(@__DIR__, "oracle_compare.jl"))
 include(joinpath(@__DIR__, "powerio_ffi.jl"))
@@ -91,6 +93,17 @@ function do_compare(tmp, groups)
     return fails
 end
 
+function do_rich(tmp, json_cases)
+    fails = 0
+    open(joinpath(tmp, "results.tsv"), "a") do io
+        for path in json_cases
+            b = stem(path)
+            leg!(io, b, "PMrich", [path], () -> compare_powermodels_rich(path)) || (fails += 1)
+        end
+    end
+    return fails
+end
+
 function parse_groups(args)
     groups = Dict("m" => String[], "raw" => String[], "egret" => String[])
     cur = nothing
@@ -114,8 +127,10 @@ function main(args)
         return 0
     elseif mode == "compare"
         return do_compare(tmp, parse_groups(rest)) == 0 ? 0 : 1
+    elseif mode == "rich"
+        return do_rich(tmp, rest) == 0 ? 0 : 1
     else
-        error("unknown mode $mode (expected export or compare)")
+        error("unknown mode $mode (expected export, compare, or rich)")
     end
 end
 

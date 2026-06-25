@@ -81,6 +81,86 @@ function compare_powermodels(ref_m::AbstractString, our_json::AbstractString)
     return problems
 end
 
+function _rich_has_field(raw, table, fields)
+    for (_, item) in get(raw, table, Dict())
+        any(haskey(item, f) for f in fields) && return true
+    end
+    return false
+end
+
+function _rich_cmp!(problems, raw, parsed, table, fields; label = table)
+    r = get(raw, table, Dict())
+    p = get(parsed, table, Dict())
+    for (k, rv) in r
+        haskey(p, k) || (push!(problems, "$label[$k]: missing after PowerModels parse"); continue)
+        pv = p[k]
+        for f in fields
+            haskey(rv, f) || continue
+            if !haskey(pv, f)
+                push!(problems, "$label[$k].$f: missing after PowerModels parse")
+            elseif !_approx(rv[f], pv[f])
+                push!(problems, "$label[$k].$f: raw=$(rv[f]) parsed=$(pv[f])")
+            end
+        end
+    end
+end
+
+function _load_bus_hist(loads)
+    hist = Dict{Any, Int}()
+    for (_, load) in loads
+        bus = load["load_bus"]
+        hist[bus] = get(hist, bus, 0) + 1
+    end
+    return hist
+end
+
+# Validate the richer PowerModels JSON tables directly against PowerModels'
+# own parsed data dict. This is intentionally separate from compare_powermodels:
+# the legacy comparator keeps the electrical core matrix readable, while this
+# one proves fields beyond MATPOWER's row shape are not rejected or collapsed by
+# the PowerModels network data model.
+function compare_powermodels_rich(json_path::AbstractString)
+    raw = JSON.parsefile(json_path)
+    parsed = try
+        PowerModels.parse_file(json_path; validate = false)
+    catch e
+        return ["PowerModels rejected rich JSON: $e"]
+    end
+
+    problems = String[]
+    rich_seen = 0
+
+    raw_loads = get(raw, "load", Dict())
+    parsed_loads = get(parsed, "load", Dict())
+    if length(raw_loads) != length(parsed_loads)
+        push!(problems, "load count: raw=$(length(raw_loads)) parsed=$(length(parsed_loads))")
+    end
+    if _load_bus_hist(raw_loads) != _load_bus_hist(parsed_loads)
+        push!(problems, "load_bus multiplicity changed")
+    elseif any(v > 1 for v in values(_load_bus_hist(raw_loads)))
+        rich_seen += 1
+    end
+
+    branch_fields = ("g_fr", "b_fr", "g_to", "b_to", "c_rating_a", "c_rating_b", "c_rating_c", "pf", "qf", "pt", "qt")
+    _rich_has_field(raw, "branch", branch_fields) && (rich_seen += 1)
+    _rich_cmp!(problems, raw, parsed, "branch", branch_fields)
+
+    switch_fields = ("f_bus", "t_bus", "state", "thermal_rating", "current_rating", "pf", "qf", "pt", "qt")
+    !isempty(get(raw, "switch", Dict())) && (rich_seen += 1)
+    _rich_cmp!(problems, raw, parsed, "switch", switch_fields)
+
+    storage_fields = ("storage_bus", "thermal_rating", "current_rating", "energy_rating", "charge_rating", "discharge_rating")
+    _rich_has_field(raw, "storage", storage_fields) && (rich_seen += 1)
+    _rich_cmp!(problems, raw, parsed, "storage", storage_fields)
+
+    dcline_fields = ("model", "ncost", "cost")
+    _rich_has_field(raw, "dcline", dcline_fields) && (rich_seen += 1)
+    _rich_cmp!(problems, raw, parsed, "dcline", dcline_fields)
+
+    rich_seen > 0 || push!(problems, "no rich fields found in $(basename(json_path))")
+    return problems
+end
+
 # Generic PowerModels electrical-core comparator: bus/branch/gen/load counts and
 # the demand/generation totals are strict, shunt count is informational (powerio
 # models fixed shunts but not PSS/E switched shunts). Returns (problems, note).

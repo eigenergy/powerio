@@ -230,3 +230,48 @@ None is a dependency of the powerio package or wheel.
 Versions for the run above: Julia 1.12.6 with PowerModels 0.21.6, ExaPowerIO
 0.3.0, BenchmarkTools 1.8.0 (`benchmarks/Project.toml` / `Manifest.toml`); Python
 with pandapower 3.2.2, gridx-egret 0.6.2, scipy 1.13.1, numpy 2.0.2.
+
+## Rich data model validation
+
+`bash benchmarks/run_rich_validation.sh` is the validation tier for fields that
+do not fit the MATPOWER row shape: branch terminal admittance, switches, branch
+current ratings and flow solution values, storage current ratings, HVDC costs,
+and load voltage models.
+
+The strict part runs committed fixtures:
+
+```
+cargo test -p powerio rich
+cargo test -p powerio-dist rich
+cargo test -p powerio-matrix ybus_uses_asymmetric_terminal_admittance
+```
+
+It also runs a PowerModels JSON oracle leg when Julia is available:
+
+```
+julia --project=benchmarks benchmarks/validate_oracles.jl rich <tmp> <rich-json>...
+```
+
+That leg asks PowerModels.jl to parse rich PowerModels JSON and compares the
+fields PowerModels exposes in its internal data dict: multiple loads on a bus,
+`g_fr`/`b_fr`/`g_to`/`b_to`, `c_rating_*`, branch `pf/qf/pt/qt`, switch state and
+ratings, storage `current_rating`, and dcline cost.
+
+The broad corpus part is opt in and report only. It never commits local paths or
+external data. Point it at any local case corpus with repeated `--root` flags:
+
+```
+bash benchmarks/run_rich_validation.sh --root <local-corpus> --root <another-local-corpus>
+```
+
+The scanner also accepts `POWERIO_RICH_ROOTS` as a path list separated by the
+platform path separator. It treats every root the same way; package test data,
+local archives, and generated cases are just corpus roots. Reports are written to
+`benchmarks/results/rich_corpus.tsv`, `benchmarks/results/rich_corpus.json`,
+`benchmarks/results/rich_oracle.tsv`, and `benchmarks/results/rich_dist_local.tsv`;
+that directory is gitignored.
+
+Distribution local DSS corpus checks stay opt in through
+`POWERIO_DIST_LOCAL_DSS_CORPUS`. Failures from broad local corpora are triage
+data; the committed rich tests and the curated PowerModels rich oracle are the
+release gate.
