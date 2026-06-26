@@ -103,6 +103,41 @@ fn rich_audit_network() -> Network {
     net
 }
 
+fn terminal_projection_network() -> Network {
+    let mut net = Network::in_memory(
+        "terminal-projection",
+        100.0,
+        vec![audit_bus(1, BusType::Ref), audit_bus(2, BusType::Pq)],
+        Vec::new(),
+    );
+    net.branches.push(Branch {
+        from: BusId(1),
+        to: BusId(2),
+        r: 0.01,
+        x: 0.1,
+        b: 0.0,
+        charging: Some(BranchCharging {
+            g_fr: 0.01,
+            b_fr: 0.02,
+            g_to: 0.03,
+            b_to: 0.05,
+        }),
+        rate_a: 100.0,
+        rate_b: 0.0,
+        rate_c: 0.0,
+        current_ratings: None,
+        tap: 0.0,
+        shift: 0.0,
+        in_service: true,
+        angmin: -360.0,
+        angmax: 360.0,
+        control: None,
+        solution: None,
+        extras: Extras::default(),
+    });
+    net
+}
+
 fn has_warning(warnings: &[String], needle: &str) -> bool {
     warnings.iter().any(|w| w.contains(needle))
 }
@@ -179,6 +214,37 @@ fn rich_writer_warnings_cover_simple_formats() {
     assert!(has_warning(&pslf.warnings, "branch terminal admittance"));
     assert!(has_warning(&pslf.warnings, "branch current rating"));
     assert!(has_warning(&pslf.warnings, "branch solution value"));
+}
+
+#[test]
+fn terminal_charging_projection_feeds_legacy_writer_b_fields() {
+    let net = terminal_projection_network();
+    let want_b = 0.07;
+
+    let matpower = write_as(&net, TargetFormat::Matpower).unwrap();
+    assert!(has_warning(&matpower.warnings, "total susceptance"));
+    let back = parse_matpower(&matpower.text).unwrap();
+    close(back.branches[0].b, want_b);
+
+    let egret = write_egret_json(&net);
+    assert!(has_warning(&egret.warnings, "total susceptance"));
+    let egret_json: Value = serde_json::from_str(&egret.text).unwrap();
+    close(
+        egret_json["elements"]["branch"]["1"]["charging_susceptance"]
+            .as_f64()
+            .unwrap(),
+        want_b,
+    );
+
+    let powerworld = write_powerworld(&net);
+    assert!(has_warning(&powerworld.warnings, "total susceptance"));
+    let back = parse_powerworld(&powerworld.text).unwrap();
+    close(back.branches[0].b, want_b);
+
+    let pslf = write_pslf(&net);
+    assert!(has_warning(&pslf.warnings, "total susceptance"));
+    let back = parse_pslf(&pslf.text).unwrap();
+    close(back.branches[0].b, want_b);
 }
 
 #[derive(Debug, PartialEq)]

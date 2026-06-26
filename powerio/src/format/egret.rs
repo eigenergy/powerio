@@ -131,7 +131,7 @@ fn warn_egret_writer_losses(net: &Network, warnings: &mut Vec<String>) {
         .count();
     if terminal_charging > 0 {
         warnings.push(format!(
-            "{terminal_charging} branch terminal admittance record(s) collapsed to charging_susceptance: egret branches cannot carry conductance or asymmetric terminal charging"
+            "{terminal_charging} branch terminal admittance record(s) collapsed to total susceptance: egret branches cannot carry conductance or asymmetric terminal charging"
         ));
     }
     let current_ratings = net
@@ -214,7 +214,10 @@ fn branch_obj(br: &Branch) -> Value {
     m.insert("to_bus".into(), Value::String(br.to.to_string()));
     m.insert("resistance".into(), jnum(br.r));
     m.insert("reactance".into(), jnum(br.x));
-    m.insert("charging_susceptance".into(), jnum(br.b));
+    m.insert(
+        "charging_susceptance".into(),
+        jnum(br.legacy_total_charging_b()),
+    );
     m.insert("in_service".into(), Value::Bool(br.in_service));
     m.insert("angle_diff_min".into(), jnum(br.angmin));
     m.insert("angle_diff_max".into(), jnum(br.angmax));

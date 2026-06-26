@@ -757,7 +757,7 @@ pub fn write_powerworld(net: &Network) -> Conversion {
                     circuit,
                     n(br.r),
                     n(br.x),
-                    n(br.b),
+                    n(br.legacy_total_charging_b()),
                     n(br.rate_a),
                     n(br.rate_b),
                     n(br.rate_c),
@@ -822,7 +822,7 @@ pub fn write_powerworld(net: &Network) -> Conversion {
         .count();
     if terminal_charging > 0 {
         warnings.push(format!(
-            "{terminal_charging} branch terminal admittance record(s) collapsed to LineC: PowerWorld aux branch rows written here cannot carry conductance or asymmetric terminal charging"
+            "{terminal_charging} branch terminal admittance record(s) collapsed to total susceptance: PowerWorld aux branch rows written here cannot carry conductance or asymmetric terminal charging"
         ));
     }
     let current_ratings = net

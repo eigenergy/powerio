@@ -13,7 +13,7 @@ implementations and the matching powerio code:
 | --- | --- | --- | --- |
 | Bus type codes | 1=PQ, 2=PV, 3=ref, 4=isolated | MATPOWER `idx_bus` | `network::BusType` |
 | Impedance, susceptance | per unit on `baseMVA`, never rescaled | MATPOWER `idx_brch` (`BR_B` already per unit) | `format::matpower` |
-| Line charging `b` | split half to each end (`b_fr = b_to = BR_B/2`) | PowerModels `matpower.jl` | `format::powermodels` |
+| Branch terminal admittance | MATPOWER `BR_B` splits half to each end; richer sources use canonical `g_fr`/`b_fr`/`g_to`/`b_to`; one-value targets receive the total susceptance projection | PowerModels `matpower.jl`; MATPOWER `idx_brch` | `network::BranchCharging`, `Branch::terminal_charging` |
 | Tap ratio | `0` means a line (treated as `1`); nonzero is a transformer | MATPOWER `idx_brch` `TAP` | `Branch::effective_tap` |
 | Phase shift, angle | degrees in the model; PowerModels JSON carries radians | PowerModels `make_per_unit!` | `format::powermodels` |
 | Angle limits | `angmin`/`angmax` default ±360 (unconstrained) | MATPOWER `idx_brch` `ANGMIN`/`ANGMAX` | `Branch::has_angle_limits` |

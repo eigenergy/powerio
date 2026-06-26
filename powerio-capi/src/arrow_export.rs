@@ -92,7 +92,10 @@ fn branch_batch(net: &Network) -> Result<RecordBatch, ArrowError> {
         ("to", i64s(br.iter().map(|x| ext(x.to)).collect())),
         ("r", f64s(br.iter().map(|x| x.r).collect())),
         ("x", f64s(br.iter().map(|x| x.x).collect())),
-        ("b", f64s(br.iter().map(|x| x.b).collect())),
+        (
+            "b",
+            f64s(br.iter().map(|x| x.legacy_total_charging_b()).collect()),
+        ),
         ("rate_a", f64s(br.iter().map(|x| x.rate_a).collect())),
         ("rate_b", f64s(br.iter().map(|x| x.rate_b).collect())),
         ("rate_c", f64s(br.iter().map(|x| x.rate_c).collect())),
@@ -290,11 +293,100 @@ mod tests {
         powerio::parse_file(&path, None).unwrap().network
     }
 
+    fn terminal_projection_net() -> Network {
+        use powerio::{
+            Branch, BranchCharging, Bus, BusId, BusType, DEFAULT_BASE_FREQUENCY, Extras,
+            SourceFormat,
+        };
+
+        Network {
+            name: "terminal-projection".into(),
+            base_mva: 100.0,
+            base_frequency: DEFAULT_BASE_FREQUENCY,
+            buses: vec![
+                Bus {
+                    id: BusId(1),
+                    kind: BusType::Ref,
+                    vm: 1.0,
+                    va: 0.0,
+                    base_kv: 230.0,
+                    vmax: 1.1,
+                    vmin: 0.9,
+                    evhi: None,
+                    evlo: None,
+                    area: 1,
+                    zone: 1,
+                    name: None,
+                    extras: Extras::new(),
+                },
+                Bus {
+                    id: BusId(2),
+                    kind: BusType::Pq,
+                    vm: 1.0,
+                    va: 0.0,
+                    base_kv: 230.0,
+                    vmax: 1.1,
+                    vmin: 0.9,
+                    evhi: None,
+                    evlo: None,
+                    area: 1,
+                    zone: 1,
+                    name: None,
+                    extras: Extras::new(),
+                },
+            ],
+            loads: Vec::new(),
+            shunts: Vec::new(),
+            branches: vec![Branch {
+                from: BusId(1),
+                to: BusId(2),
+                r: 0.01,
+                x: 0.1,
+                b: 0.0,
+                charging: Some(BranchCharging {
+                    g_fr: 0.01,
+                    b_fr: 0.02,
+                    g_to: 0.03,
+                    b_to: 0.05,
+                }),
+                rate_a: 100.0,
+                rate_b: 0.0,
+                rate_c: 0.0,
+                current_ratings: None,
+                tap: 0.0,
+                shift: 0.0,
+                in_service: true,
+                angmin: -360.0,
+                angmax: 360.0,
+                control: None,
+                solution: None,
+                extras: Extras::new(),
+            }],
+            switches: Vec::new(),
+            generators: Vec::new(),
+            storage: Vec::new(),
+            hvdc: Vec::new(),
+            transformers_3w: Vec::new(),
+            areas: Vec::new(),
+            solver: None,
+            source_format: SourceFormat::InMemory,
+            source: None,
+        }
+    }
+
     fn round_trip(net: &Network, table: i32) -> StructArray {
         let (array, schema) = export(net, table).unwrap();
         // from_ffi consumes the array and borrows the schema (zero-copy import).
         let data = unsafe { from_ffi(array, &schema) }.unwrap();
         StructArray::from(data)
+    }
+
+    fn f64_col<'a>(sa: &'a StructArray, name: &str) -> &'a Float64Array {
+        sa.column_by_name(name)
+            .unwrap()
+            .as_any()
+            .downcast_ref::<Float64Array>()
+            .unwrap()
     }
 
     #[test]
@@ -342,6 +434,18 @@ mod tests {
         );
         assert_eq!(round_trip(&n, PIO_ARROW_TABLE_LOAD).len(), n.loads.len());
         assert_eq!(round_trip(&n, PIO_ARROW_TABLE_SHUNT).len(), n.shunts.len());
+    }
+
+    #[test]
+    fn branch_table_b_is_legacy_projection() {
+        let n = terminal_projection_net();
+        let sa = round_trip(&n, PIO_ARROW_TABLE_BRANCH);
+        assert_eq!(sa.len(), 1);
+        assert!((f64_col(&sa, "b").value(0) - 0.07).abs() < 1e-12);
+        assert!((f64_col(&sa, "g_fr").value(0) - 0.01).abs() < 1e-12);
+        assert!((f64_col(&sa, "b_fr").value(0) - 0.02).abs() < 1e-12);
+        assert!((f64_col(&sa, "g_to").value(0) - 0.03).abs() < 1e-12);
+        assert!((f64_col(&sa, "b_to").value(0) - 0.05).abs() < 1e-12);
     }
 
     #[test]

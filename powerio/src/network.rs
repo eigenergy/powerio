@@ -407,7 +407,9 @@ pub struct Branch {
     pub r: f64,
     /// Series reactance (p.u.).
     pub x: f64,
-    /// MATPOWER compatible total line charging susceptance (p.u.).
+    /// MATPOWER compatible total line charging susceptance (p.u.). This is the
+    /// legacy total projection; when [`charging`](Branch::charging) is present,
+    /// per terminal admittance is canonical and this field is compatibility data.
     pub b: f64,
     /// Per terminal shunt admittance (p.u.). If absent, derive symmetric
     /// susceptance from [`b`](Branch::b).
@@ -438,7 +440,8 @@ pub struct Branch {
     pub extras: Extras,
 }
 
-/// Per terminal branch shunt admittance in p.u.
+/// Per terminal branch shunt admittance in p.u. This is the canonical
+/// physical branch shunt model when present.
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 pub struct BranchCharging {
     pub g_fr: f64,
@@ -461,6 +464,11 @@ impl BranchCharging {
     #[must_use]
     pub fn total_b(self) -> f64 {
         self.b_fr + self.b_to
+    }
+
+    #[must_use]
+    pub fn total_g(self) -> f64 {
+        self.g_fr + self.g_to
     }
 
     #[must_use]
@@ -501,6 +509,13 @@ impl Branch {
     pub fn terminal_charging(&self) -> BranchCharging {
         self.charging
             .unwrap_or_else(|| BranchCharging::from_total_b(self.b))
+    }
+
+    /// Total susceptance projection for MATPOWER shaped formats that only carry
+    /// one line charging value.
+    #[must_use]
+    pub fn legacy_total_charging_b(&self) -> f64 {
+        self.terminal_charging().total_b()
     }
 
     /// Whether this branch has charging that a MATPOWER branch row cannot carry.

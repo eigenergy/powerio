@@ -336,14 +336,17 @@ pub fn write_psse_rev(net: &Network, rev: u32) -> Conversion {
         // base). Record 1 carries the full owner block (O1..O4,F1..F4) and the
         // VECGRP string: PSS/E v33 readers count a 2-winding transformer as a
         // fixed 43-field record (21 + 3 + 17 + 2), so the owner padding matters.
-        // MAG1 = 0, MAG2 = the branch charging b (CM = 1, so p.u. on the system
-        // base); a 2-winding transformer that carries line charging keeps it.
+        // MAG1/MAG2 = the branch charging projected to one magnetizing
+        // admittance (CM = 1, so p.u. on the system base); a 2-winding
+        // transformer that carries line charging keeps the total.
+        let charging = br.terminal_charging();
         let _ = writeln!(
             s,
-            "{}, {}, 0, '1', 1, 1, 1, 0, {}, 2, '            ', {}, 1, 1, 0, 1, 0, 1, 0, 1, '            '",
+            "{}, {}, 0, '1', 1, 1, 1, {}, {}, 2, '            ', {}, 1, 1, 0, 1, 0, 1, 0, 1, '            '",
             br.from,
             br.to,
-            num(br.b),
+            num(charging.total_g()),
+            num(charging.total_b()),
             i32::from(br.in_service)
         );
         // Winding-1 control columns (COD, CONT, RMA/RMI, VMA/VMI, NTP) come from
@@ -559,6 +562,20 @@ pub fn write_psse_rev(net: &Network, rev: u32) -> Conversion {
     if branch_solutions > 0 {
         warnings.push(format!(
             "{branch_solutions} branch solution value set(s) dropped: PSS/E RAW power flow result fields are not written"
+        ));
+    }
+    let transformer_terminal_shunts = net
+        .branches
+        .iter()
+        .filter(|b| {
+            b.is_transformer()
+                && b.charging
+                    .is_some_and(|c| c.g_to.abs() > f64::EPSILON || c.b_to.abs() > f64::EPSILON)
+        })
+        .count();
+    if transformer_terminal_shunts > 0 {
+        warnings.push(format!(
+            "{transformer_terminal_shunts} transformer terminal admittance record(s) collapsed to magnetizing admittance: PSS/E transformer records cannot preserve terminal side assignment"
         ));
     }
     if net.generators.iter().any(Generator::has_caps) {
@@ -1865,6 +1882,29 @@ mod tests {
         }
     }
 
+    fn transformer_with_terminal_charging(charging: BranchCharging) -> Branch {
+        Branch {
+            from: BusId(1),
+            to: BusId(2),
+            r: 0.01,
+            x: 0.1,
+            b: 0.0,
+            charging: Some(charging),
+            rate_a: 100.0,
+            rate_b: 110.0,
+            rate_c: 120.0,
+            current_ratings: None,
+            tap: 1.05,
+            shift: 0.0,
+            in_service: true,
+            angmin: -360.0,
+            angmax: 360.0,
+            control: None,
+            solution: None,
+            extras: Extras::default(),
+        }
+    }
+
     fn assert_terminal_charging_round_trip(text: &str) {
         let back = parse_psse(text).unwrap();
         let charging = back.branches[0].terminal_charging();
@@ -1892,6 +1932,73 @@ mod tests {
         let rev35 = write_psse_rev(&net, 35);
         assert!(rev35.warnings.is_empty(), "{:?}", rev35.warnings);
         assert_terminal_charging_round_trip(&rev35.text);
+    }
+
+    #[test]
+    fn transformer_magnetizing_admittance_writes_mag1_mag2() {
+        let mut net = Network::in_memory(
+            "xfmr-mag",
+            100.0,
+            vec![test_bus(1, BusType::Ref), test_bus(2, BusType::Pq)],
+            Vec::new(),
+        );
+        net.branches
+            .push(transformer_with_terminal_charging(BranchCharging {
+                g_fr: 0.01,
+                b_fr: 0.02,
+                g_to: 0.0,
+                b_to: 0.0,
+            }));
+
+        let conv = write_psse(&net);
+        assert!(
+            !conv
+                .warnings
+                .iter()
+                .any(|w| w.contains("magnetizing admittance")),
+            "{:?}",
+            conv.warnings
+        );
+        let back = parse_psse(&conv.text).unwrap();
+        let charging = back.branches[0].terminal_charging();
+        close(charging.g_fr, 0.01);
+        close(charging.b_fr, 0.02);
+        close(charging.g_to, 0.0);
+        close(charging.b_to, 0.0);
+        close(back.branches[0].b, 0.02);
+    }
+
+    #[test]
+    fn transformer_to_side_terminal_admittance_warns_and_collapses_to_mag() {
+        let mut net = Network::in_memory(
+            "xfmr-mag-collapse",
+            100.0,
+            vec![test_bus(1, BusType::Ref), test_bus(2, BusType::Pq)],
+            Vec::new(),
+        );
+        net.branches
+            .push(transformer_with_terminal_charging(BranchCharging {
+                g_fr: 0.01,
+                b_fr: 0.02,
+                g_to: 0.03,
+                b_to: 0.05,
+            }));
+
+        let conv = write_psse(&net);
+        assert!(
+            conv.warnings
+                .iter()
+                .any(|w| w.contains("magnetizing admittance")),
+            "{:?}",
+            conv.warnings
+        );
+        let back = parse_psse(&conv.text).unwrap();
+        let charging = back.branches[0].terminal_charging();
+        close(charging.g_fr, 0.04);
+        close(charging.b_fr, 0.07);
+        close(charging.g_to, 0.0);
+        close(charging.b_to, 0.0);
+        close(back.branches[0].b, 0.07);
     }
 
     #[test]

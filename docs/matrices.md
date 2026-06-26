@@ -39,10 +39,12 @@ instance bundle (`A`, `b`, `L`, costs, bounds, thermal limits, `C_g`) is documen
   out of range is an `Error::UnknownBus`.
 - **Taps and shifts.** `tap == 0` means `tap = 1` (`Branch::effective_tap`). B'
   ignores taps and shifts; B'' keeps taps and zeros only shifts; Y_bus keeps both.
-- **Line charging susceptance is stored per unit.** `Branch::b` is the total
-  charging susceptance, already per unit on the system base (the MATPOWER `BR_B`
-  convention, which the other readers normalize to). The builders use it as
-  stored, with no further scaling.
+- **Branch shunt admittance is stored per unit.** `Branch::charging` is the
+  canonical per terminal admittance when present: `g_fr`, `b_fr`, `g_to`, and
+  `b_to` are already per unit on the system base. `Branch::b` is the legacy
+  MATPOWER `BR_B` total projection for formats that carry only one charging
+  value. Matrix builders use `Branch::terminal_charging()`, so richer terminal
+  values feed Y_bus even when the legacy total is zero or stale.
 - **B' scheme.** `Scheme` selects between the two fast decoupled load flow
   variants for B': `Xb` weights a branch by `1/x` (series resistance ignored),
   `Bx` (the default) by `x/(r² + x²)`.

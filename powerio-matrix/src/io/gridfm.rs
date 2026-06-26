@@ -342,7 +342,7 @@ fn validate_snapshot_inputs(net: &Network, scenario: i64) -> Result<()> {
     for (row, br) in net.branches.iter().enumerate() {
         finite(scenario, "branch", row, "r", br.r)?;
         finite(scenario, "branch", row, "x", br.x)?;
-        finite(scenario, "branch", row, "b", br.b)?;
+        finite(scenario, "branch", row, "b", br.legacy_total_charging_b())?;
         finite(scenario, "branch", row, "tap", br.tap)?;
         finite(scenario, "branch", row, "shift", br.shift)?;
         not_nan(scenario, "branch", row, "angmin", br.angmin)?;
@@ -760,7 +760,7 @@ fn branch_batch(snaps: &[SnapshotView], opts: &GridfmOptions) -> Result<RecordBa
 
             r_col.push(br.r);
             x_col.push(br.x);
-            b_col.push(br.b);
+            b_col.push(br.legacy_total_charging_b());
             tap.push(br.effective_tap());
             shift.push(br.shift);
             ang_min.push(br.angmin);
@@ -1655,7 +1655,7 @@ fn f64_col(batches: &[RecordBatch], name: &str) -> Result<Vec<f64>> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::network::{Branch, Bus, BusId, Extras, Generator};
+    use crate::network::{Branch, BranchCharging, Bus, BusId, BusType, Extras, Generator};
     use arrow::array::{Float64Array, Int64Array};
     use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
 
@@ -1784,6 +1784,34 @@ mod tests {
         assert_eq!(tables.bus.num_rows(), net.buses.len()); // 14
         assert_eq!(tables.generator.num_rows(), net.generators.len()); // 5
         assert_eq!(tables.branch.num_rows(), net.branches.len()); // 20
+    }
+
+    #[test]
+    fn branch_b_uses_terminal_charging_projection() {
+        let mut net = Network::in_memory(
+            "terminal-projection",
+            100.0,
+            vec![bus(1, BusType::Ref), bus(2, BusType::Pq)],
+            Vec::new(),
+        );
+        let mut br = branch(1, 2, 0.01, 0.1);
+        br.charging = Some(BranchCharging {
+            g_fr: 0.01,
+            b_fr: 0.02,
+            g_to: 0.03,
+            b_to: 0.05,
+        });
+        net.branches.push(br);
+
+        let tables = gridfm_record_batches(&net, 0, &GridfmOptions::default()).unwrap();
+        let b = col_f64(&tables.branch, "b").value(0);
+        assert!((b - 0.07).abs() < 1e-12);
+
+        let yff_i = col_f64(&tables.branch, "Yff_i").value(0);
+        let ytt_i = col_f64(&tables.branch, "Ytt_i").value(0);
+        let y_series_i = -0.1 / (0.01 * 0.01 + 0.1 * 0.1);
+        let recovered_b = yff_i + ytt_i - 2.0 * y_series_i;
+        assert!((recovered_b - b).abs() < 1e-12);
     }
 
     #[test]

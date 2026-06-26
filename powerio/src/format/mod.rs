@@ -705,10 +705,11 @@ fn warn_dropped_frequency(net: &Network, format: TargetFormat, conv: &mut Conver
     }
 }
 
-/// Warn when a transformer carries line charging (`b != 0`) and the target's
+/// Warn when a transformer carries line charging and the target's
 /// transformer record has no susceptance column to hold it. The PSLF `.epc`
-/// transformer record is the one such target; PSS/E writes it as `MAG2` and the
-/// MATPOWER-shaped writers keep `b` on the branch row, so neither drops it.
+/// transformer record is the one such target; PSS/E writes representable
+/// magnetizing admittance and the MATPOWER shaped writers keep the legacy total
+/// projection on the branch row, so neither drops it.
 fn warn_dropped_transformer_charging(net: &Network, format: TargetFormat, conv: &mut Conversion) {
     if !matches!(format, TargetFormat::Pslf) {
         return;
@@ -716,11 +717,11 @@ fn warn_dropped_transformer_charging(net: &Network, format: TargetFormat, conv: 
     let n = net
         .branches
         .iter()
-        .filter(|b| b.is_transformer() && b.b != 0.0)
+        .filter(|b| b.is_transformer() && b.legacy_total_charging_b() != 0.0)
         .count();
     if n > 0 {
         conv.warnings.push(format!(
-            "{n} transformer(s) carry line charging (b != 0) that the PSLF .epc transformer \
+            "{n} transformer(s) carry line charging that the PSLF .epc transformer \
              record cannot represent; the charging was dropped"
         ));
     }

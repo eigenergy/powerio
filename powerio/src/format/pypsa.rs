@@ -856,7 +856,7 @@ fn transformers_csv(net: &Network, key_of: &HashMap<BusId, String>) -> String {
         };
         let charging = br.charging.unwrap_or(BranchCharging {
             g_fr: 0.0,
-            b_fr: br.b,
+            b_fr: br.legacy_total_charging_b(),
             g_to: 0.0,
             b_to: 0.0,
         });

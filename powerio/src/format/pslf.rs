@@ -1227,7 +1227,7 @@ pub fn write_pslf(net: &Network) -> Conversion {
                 i32::from(br.in_service),
                 num(br.r),
                 num(br.x),
-                num(br.b),
+                num(br.legacy_total_charging_b()),
                 num(br.rate_a),
                 num(br.rate_b),
                 num(br.rate_c),
@@ -1428,7 +1428,7 @@ pub fn write_pslf(net: &Network) -> Conversion {
         .count();
     if terminal_charging > 0 {
         warnings.push(format!(
-            "{terminal_charging} branch terminal admittance record(s) collapsed to charge: PSLF branch records written here cannot carry conductance or asymmetric terminal charging"
+            "{terminal_charging} branch terminal admittance record(s) collapsed to total susceptance: PSLF branch records written here cannot carry conductance or asymmetric terminal charging"
         ));
     }
     let current_ratings = net

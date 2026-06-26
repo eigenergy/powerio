@@ -87,7 +87,7 @@ fn canonical_warnings(net: &Network) -> Vec<String> {
         .count();
     if non_matpower_charging > 0 {
         warnings.push(format!(
-            "{non_matpower_charging} branch terminal admittance record(s) collapsed to BR_B: MATPOWER cannot carry conductance or asymmetric terminal charging"
+            "{non_matpower_charging} branch terminal admittance record(s) collapsed to total susceptance: MATPOWER cannot carry conductance or asymmetric terminal charging"
         ));
     }
     let current_ratings = net

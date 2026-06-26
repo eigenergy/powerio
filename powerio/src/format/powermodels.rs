@@ -7,10 +7,11 @@
 //! `1/baseMVA`). Because the data already declares per unit, `parse_file(out.json)`
 //! reads it with PowerModels' default `validate = true` without rerunning
 //! `make_per_unit!`, so it lands on the same network as `parse_file(case.m)`.
-//! Loads and shunts are first-class on the `Network`, line charging `b` splits
-//! half to each end, and `transformer` follows PowerModels' rule (raw tap `≠ 0`).
-//! `hvdc`/`storage` are mapped to the closest PowerModels blocks and emit a
-//! warning when present.
+//! Loads and shunts are first-class on the `Network`; branch terminal admittance
+//! writes as PowerModels' `g_fr`/`b_fr`/`g_to`/`b_to` fields, with MATPOWER
+//! `BR_B` expanded only when no richer terminal model is present. `transformer`
+//! follows PowerModels' rule (raw tap `≠ 0`). `hvdc`/`storage` are mapped to the
+//! closest PowerModels blocks and emit a warning when present.
 
 use std::sync::Arc;
 

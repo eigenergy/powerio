@@ -484,7 +484,7 @@ impl Network {
             to: other_end(s2, m),
             r: s1.r + s2.r,
             x: s1.x + s2.x,
-            b: s1.b + s2.b,
+            b: s1.legacy_total_charging_b() + s2.legacy_total_charging_b(),
             charging: None,
             rate_a: combine_rate(s1.rate_a, s2.rate_a),
             rate_b: combine_rate(s1.rate_b, s2.rate_b),

@@ -777,7 +777,11 @@ pub unsafe extern "C" fn pio_branches(
             );
             fill(r, cap, net.branches.iter().map(|br| br.r));
             fill(x, cap, net.branches.iter().map(|br| br.x));
-            fill(b, cap, net.branches.iter().map(|br| br.b));
+            fill(
+                b,
+                cap,
+                net.branches.iter().map(|br| br.legacy_total_charging_b()),
+            );
             fill(tap, cap, net.branches.iter().map(|br| br.tap));
             fill(shift, cap, net.branches.iter().map(|br| br.shift));
             fill(
@@ -1273,12 +1277,108 @@ mod tests {
         .unwrap()
     }
 
+    fn close(actual: f64, expected: f64) {
+        assert!((actual - expected).abs() < 1e-12, "{actual} != {expected}");
+    }
+
     fn case9() -> *mut PioNetwork {
         let path = data_path("case9.m");
         let mut err = [0 as c_char; 256];
         let c =
             unsafe { pio_parse_file(path.as_ptr(), std::ptr::null(), err.as_mut_ptr(), err.len()) };
         assert!(!c.is_null(), "parse returned null");
+        c
+    }
+
+    fn terminal_projection_case() -> *mut PioNetwork {
+        use powerio::{
+            Branch, BranchCharging, Bus, BusId, BusType, DEFAULT_BASE_FREQUENCY, Extras,
+            SourceFormat,
+        };
+
+        let net = Network {
+            name: "terminal-projection".into(),
+            base_mva: 100.0,
+            base_frequency: DEFAULT_BASE_FREQUENCY,
+            buses: vec![
+                Bus {
+                    id: BusId(1),
+                    kind: BusType::Ref,
+                    vm: 1.0,
+                    va: 0.0,
+                    base_kv: 230.0,
+                    vmax: 1.1,
+                    vmin: 0.9,
+                    evhi: None,
+                    evlo: None,
+                    area: 1,
+                    zone: 1,
+                    name: None,
+                    extras: Extras::new(),
+                },
+                Bus {
+                    id: BusId(2),
+                    kind: BusType::Pq,
+                    vm: 1.0,
+                    va: 0.0,
+                    base_kv: 230.0,
+                    vmax: 1.1,
+                    vmin: 0.9,
+                    evhi: None,
+                    evlo: None,
+                    area: 1,
+                    zone: 1,
+                    name: None,
+                    extras: Extras::new(),
+                },
+            ],
+            loads: Vec::new(),
+            shunts: Vec::new(),
+            branches: vec![Branch {
+                from: BusId(1),
+                to: BusId(2),
+                r: 0.01,
+                x: 0.1,
+                b: 0.0,
+                charging: Some(BranchCharging {
+                    g_fr: 0.01,
+                    b_fr: 0.02,
+                    g_to: 0.03,
+                    b_to: 0.05,
+                }),
+                rate_a: 100.0,
+                rate_b: 0.0,
+                rate_c: 0.0,
+                current_ratings: None,
+                tap: 0.0,
+                shift: 0.0,
+                in_service: true,
+                angmin: -360.0,
+                angmax: 360.0,
+                control: None,
+                solution: None,
+                extras: Extras::new(),
+            }],
+            switches: Vec::new(),
+            generators: Vec::new(),
+            storage: Vec::new(),
+            hvdc: Vec::new(),
+            transformers_3w: Vec::new(),
+            areas: Vec::new(),
+            solver: None,
+            source_format: SourceFormat::InMemory,
+            source: None,
+        };
+        let text = CString::new(net.to_json().unwrap()).unwrap();
+        let format = CString::new("powerio-json").unwrap();
+        let mut err = [0 as c_char; 256];
+        let c =
+            unsafe { pio_parse_str(text.as_ptr(), format.as_ptr(), err.as_mut_ptr(), err.len()) };
+        assert!(
+            !c.is_null(),
+            "parse returned null: {}",
+            unsafe { CStr::from_ptr(err.as_ptr()) }.to_str().unwrap()
+        );
         c
     }
 
@@ -1618,6 +1718,47 @@ mod tests {
             // same id space as pio_bus_ids, not dense indices.
             assert!(from.iter().all(|&f| f >= 1));
             assert!(x.iter().all(|&xx| xx > 0.0));
+            pio_network_free(c);
+        }
+    }
+
+    #[test]
+    fn branch_tables_project_terminal_charging_to_legacy_b() {
+        let c = terminal_projection_case();
+        unsafe {
+            let mut b = [0.0];
+            let nb = pio_branches(
+                c,
+                std::ptr::null_mut(),
+                std::ptr::null_mut(),
+                std::ptr::null_mut(),
+                std::ptr::null_mut(),
+                b.as_mut_ptr(),
+                std::ptr::null_mut(),
+                std::ptr::null_mut(),
+                std::ptr::null_mut(),
+                1,
+            );
+            assert_eq!(nb, 1);
+            close(b[0], 0.07);
+
+            let mut g_fr = [0.0];
+            let mut b_fr = [0.0];
+            let mut g_to = [0.0];
+            let mut b_to = [0.0];
+            let nb = pio_branch_charging(
+                c,
+                g_fr.as_mut_ptr(),
+                b_fr.as_mut_ptr(),
+                g_to.as_mut_ptr(),
+                b_to.as_mut_ptr(),
+                1,
+            );
+            assert_eq!(nb, 1);
+            close(g_fr[0], 0.01);
+            close(b_fr[0], 0.02);
+            close(g_to[0], 0.03);
+            close(b_to[0], 0.05);
             pio_network_free(c);
         }
     }

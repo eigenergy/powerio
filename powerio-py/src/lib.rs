@@ -371,8 +371,8 @@ impl PyNetwork {
             d.set_item("to_id", br.to.0)?;
             d.set_item("r", br.r)?;
             d.set_item("x", br.x)?;
-            d.set_item("b", br.b)?;
             let charging = br.terminal_charging();
+            d.set_item("b", br.legacy_total_charging_b())?;
             d.set_item("g_fr", charging.g_fr)?;
             d.set_item("b_fr", charging.b_fr)?;
             d.set_item("g_to", charging.g_to)?;
