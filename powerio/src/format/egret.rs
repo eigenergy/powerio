@@ -17,8 +17,8 @@ use serde_json::{Map, Value};
 
 use super::{Conversion, finish, jnum};
 use crate::network::{
-    Branch, Bus, BusId, BusType, Extras, GenCost, Generator, Hvdc, Load, Network, Shunt,
-    SourceFormat,
+    Branch, Bus, BusId, BusType, Extras, GenCost, Generator, Hvdc, Load, LoadVoltageModel, Network,
+    Shunt, SourceFormat,
 };
 use crate::{Error, Result};
 
@@ -80,6 +80,46 @@ pub fn write_egret_json(net: &Network) -> Conversion {
         warnings.push(format!(
             "{} storage unit(s) dropped: egret storage mapping not implemented",
             net.storage.len()
+        ));
+    }
+    let voltage_loads = net
+        .loads
+        .iter()
+        .filter(|l| {
+            l.voltage_model
+                .as_ref()
+                .is_some_and(LoadVoltageModel::has_non_matpower_fields)
+        })
+        .count();
+    if voltage_loads > 0 {
+        warnings.push(format!(
+            "{voltage_loads} voltage dependent load model(s) dropped: egret load records carry static p_load/q_load only"
+        ));
+    }
+    let terminal_charging = net
+        .branches
+        .iter()
+        .filter(|b| b.has_non_matpower_charging())
+        .count();
+    if terminal_charging > 0 {
+        warnings.push(format!(
+            "{terminal_charging} branch terminal admittance record(s) collapsed to charging_susceptance: egret branches cannot carry conductance or asymmetric terminal charging"
+        ));
+    }
+    let current_ratings = net
+        .branches
+        .iter()
+        .filter(|b| b.current_ratings.is_some())
+        .count();
+    if current_ratings > 0 {
+        warnings.push(format!(
+            "{current_ratings} branch current rating record(s) dropped: egret branch records carry MVA ratings only"
+        ));
+    }
+    let branch_solutions = net.branches.iter().filter(|b| b.solution.is_some()).count();
+    if branch_solutions > 0 {
+        warnings.push(format!(
+            "{branch_solutions} branch solution value set(s) dropped: egret branch result fields are not written"
         ));
     }
 

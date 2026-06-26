@@ -1421,6 +1421,32 @@ pub fn write_pslf(net: &Network) -> Conversion {
     if net.generators.iter().any(|g| g.cost.is_some()) {
         warnings.push("generator cost curves dropped: PSLF .epc carries no cost data".into());
     }
+    let terminal_charging = net
+        .branches
+        .iter()
+        .filter(|b| b.has_non_matpower_charging())
+        .count();
+    if terminal_charging > 0 {
+        warnings.push(format!(
+            "{terminal_charging} branch terminal admittance record(s) collapsed to charge: PSLF branch records written here cannot carry conductance or asymmetric terminal charging"
+        ));
+    }
+    let current_ratings = net
+        .branches
+        .iter()
+        .filter(|b| b.current_ratings.is_some())
+        .count();
+    if current_ratings > 0 {
+        warnings.push(format!(
+            "{current_ratings} branch current rating record(s) dropped: PSLF branch records written here carry MVA ratings only"
+        ));
+    }
+    let branch_solutions = net.branches.iter().filter(|b| b.solution.is_some()).count();
+    if branch_solutions > 0 {
+        warnings.push(format!(
+            "{branch_solutions} branch solution value set(s) dropped: PSLF solved flow fields are not written"
+        ));
+    }
     // The generator record this writer emits regulates the unit's own terminal, so
     // a generator pointing at a remote regulated bus loses that target.
     let dropped_reg = net

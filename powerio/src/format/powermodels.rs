@@ -19,7 +19,8 @@ use serde_json::{Map, Value};
 use super::{Conversion, finish, jnum};
 use crate::network::{
     Branch, BranchCharging, BranchCurrentRatings, BranchSolution, Bus, BusId, BusType,
-    GEN_EXTRA_KEYS, GenCost, Generator, Hvdc, Load, Network, Shunt, SourceFormat, Storage, Switch,
+    GEN_EXTRA_KEYS, GenCost, Generator, Hvdc, Load, LoadVoltageModel, Network, Shunt, SourceFormat,
+    Storage, Switch,
 };
 use crate::normalize::{self, GEN_PU_KEYS};
 use crate::{Error, Result};
@@ -93,6 +94,20 @@ pub fn write_powermodels_json(net: &Network) -> Conversion {
         warnings.push(format!(
             "{} 3-winding transformer(s) dropped: the PowerModels JSON writer emits no 3-winding record",
             net.transformers_3w.len()
+        ));
+    }
+    let voltage_loads = net
+        .loads
+        .iter()
+        .filter(|l| {
+            l.voltage_model
+                .as_ref()
+                .is_some_and(LoadVoltageModel::has_non_matpower_fields)
+        })
+        .count();
+    if voltage_loads > 0 {
+        warnings.push(format!(
+            "{voltage_loads} voltage dependent load model(s) dropped: PowerModels load records carry static pd/qd only"
         ));
     }
     if net

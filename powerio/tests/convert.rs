@@ -5,9 +5,9 @@
 
 use std::path::{Path, PathBuf};
 
-use powerio::network::LoadVoltageModel;
 use powerio::{
-    BusId, BusType, Error, Network, SourceFormat, TargetFormat, convert_file, parse_file,
+    Branch, BranchCharging, BranchCurrentRatings, BranchSolution, Bus, BusId, BusType, Error,
+    Extras, Load, LoadVoltageModel, Network, SourceFormat, TargetFormat, convert_file, parse_file,
     parse_matpower, parse_matpower_file, parse_powermodels_json, parse_powerworld, parse_pslf,
     parse_psse, read_pypsa_csv_folder, write_as, write_egret_json, write_powermodels_json,
     write_powerworld, write_pslf, write_psse, write_pypsa_csv_folder,
@@ -21,6 +21,90 @@ fn data(name: &str) -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../tests/data")
         .join(name)
+}
+
+fn audit_bus(id: usize, kind: BusType) -> Bus {
+    Bus {
+        id: BusId(id),
+        kind,
+        vm: 1.0,
+        va: 0.0,
+        base_kv: 230.0,
+        vmax: 1.1,
+        vmin: 0.9,
+        evhi: None,
+        evlo: None,
+        area: 1,
+        zone: 1,
+        name: None,
+        extras: Extras::default(),
+    }
+}
+
+fn rich_audit_network() -> Network {
+    let mut net = Network::in_memory(
+        "rich-audit",
+        100.0,
+        vec![audit_bus(1, BusType::Ref), audit_bus(2, BusType::Pq)],
+        Vec::new(),
+    );
+    net.loads.push(Load {
+        bus: BusId(2),
+        p: 10.0,
+        q: 5.0,
+        voltage_model: Some(LoadVoltageModel::Zip {
+            p_constant_power: 5.0,
+            q_constant_power: 2.0,
+            p_constant_current: 2.0,
+            q_constant_current: 1.0,
+            p_constant_impedance: 3.0,
+            q_constant_impedance: 2.0,
+            v_nom: None,
+            load_type: None,
+            scaling: None,
+        }),
+        in_service: true,
+        extras: Extras::default(),
+    });
+    net.branches.push(Branch {
+        from: BusId(1),
+        to: BusId(2),
+        r: 0.01,
+        x: 0.1,
+        b: 0.0,
+        charging: Some(BranchCharging {
+            g_fr: 0.01,
+            b_fr: 0.02,
+            g_to: 0.0,
+            b_to: 0.05,
+        }),
+        rate_a: 100.0,
+        rate_b: 0.0,
+        rate_c: 0.0,
+        current_ratings: Some(BranchCurrentRatings {
+            c_rating_a: 500.0,
+            c_rating_b: 600.0,
+            c_rating_c: 700.0,
+        }),
+        tap: 0.0,
+        shift: 0.0,
+        in_service: true,
+        angmin: -360.0,
+        angmax: 360.0,
+        control: None,
+        solution: Some(BranchSolution {
+            pf: 1.0,
+            qf: 0.5,
+            pt: -0.9,
+            qt: -0.4,
+        }),
+        extras: Extras::default(),
+    });
+    net
+}
+
+fn has_warning(warnings: &[String], needle: &str) -> bool {
+    warnings.iter().any(|w| w.contains(needle))
 }
 
 #[test]
@@ -45,6 +129,56 @@ fn canonical_api_names_parse_and_convert() {
     let same = convert_file(&path, TargetFormat::Matpower, None).unwrap();
     assert_eq!(same.text, src);
     assert!(same.warnings.is_empty());
+}
+
+#[test]
+fn rich_writer_warnings_cover_simple_formats() {
+    let net = rich_audit_network();
+
+    let matpower = write_as(&net, TargetFormat::Matpower).unwrap();
+    assert!(has_warning(
+        &matpower.warnings,
+        "branch terminal admittance"
+    ));
+    assert!(has_warning(&matpower.warnings, "branch current rating"));
+    assert!(has_warning(&matpower.warnings, "branch solution value"));
+    assert!(has_warning(
+        &matpower.warnings,
+        "voltage dependent load model"
+    ));
+
+    let pm = write_powermodels_json(&net);
+    assert!(has_warning(&pm.warnings, "voltage dependent load model"));
+    assert!(!has_warning(&pm.warnings, "branch current rating"));
+    assert!(!has_warning(&pm.warnings, "branch solution value"));
+
+    let egret = write_egret_json(&net);
+    assert!(has_warning(&egret.warnings, "branch terminal admittance"));
+    assert!(has_warning(&egret.warnings, "branch current rating"));
+    assert!(has_warning(&egret.warnings, "branch solution value"));
+    assert!(has_warning(&egret.warnings, "voltage dependent load model"));
+
+    let powerworld = write_powerworld(&net);
+    assert!(has_warning(
+        &powerworld.warnings,
+        "branch terminal admittance"
+    ));
+    assert!(has_warning(&powerworld.warnings, "branch current rating"));
+    assert!(has_warning(&powerworld.warnings, "branch solution value"));
+    assert!(has_warning(
+        &powerworld.warnings,
+        "voltage dependent load model"
+    ));
+
+    let psse = write_psse(&net);
+    assert!(!has_warning(&psse.warnings, "branch terminal admittance"));
+    assert!(has_warning(&psse.warnings, "branch current rating"));
+    assert!(has_warning(&psse.warnings, "branch solution value"));
+
+    let pslf = write_pslf(&net);
+    assert!(has_warning(&pslf.warnings, "branch terminal admittance"));
+    assert!(has_warning(&pslf.warnings, "branch current rating"));
+    assert!(has_warning(&pslf.warnings, "branch solution value"));
 }
 
 #[derive(Debug, PartialEq)]

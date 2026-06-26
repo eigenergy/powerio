@@ -757,6 +757,22 @@ pub fn write_pandapower_json(net: &Network) -> Conversion {
              ohm-based model stays defined (per-unit impedances are preserved exactly)"
         ));
     }
+    let current_ratings = net
+        .branches
+        .iter()
+        .filter(|b| b.current_ratings.is_some())
+        .count();
+    if current_ratings > 0 {
+        warnings.push(format!(
+            "{current_ratings} branch current rating record(s) dropped: pandapower line/trafo tables carry MVA loading limits, not current ratings"
+        ));
+    }
+    let branch_solutions = net.branches.iter().filter(|b| b.solution.is_some()).count();
+    if branch_solutions > 0 {
+        warnings.push(format!(
+            "{branch_solutions} branch solution value set(s) dropped: pandapower branch result tables are not written"
+        ));
+    }
 
     let mut object = Map::new();
     // The written vn_kv per bus, shared by every frame that rebases impedances
@@ -835,6 +851,159 @@ fn bus_frame(net: &Network, warnings: &mut Vec<String>) -> Value {
     frame("bus", &columns, index, data, warnings)
 }
 
+#[derive(Clone, Copy)]
+struct PandapowerLoadValues {
+    p_mw: f64,
+    q_mvar: f64,
+    const_z_percent: f64,
+    const_i_percent: f64,
+    const_z_p_percent: f64,
+    const_i_p_percent: f64,
+    const_z_q_percent: f64,
+    const_i_q_percent: f64,
+    scaling: f64,
+}
+
+fn same_load_total(a: f64, b: f64) -> bool {
+    (a - b).abs() <= 1e-9 * a.abs().max(b.abs()).max(1.0)
+}
+
+fn load_percent(part: f64, total: f64) -> Option<f64> {
+    if total.abs() <= f64::EPSILON {
+        (part.abs() <= f64::EPSILON).then_some(0.0)
+    } else {
+        Some(part / total * 100.0)
+    }
+}
+
+fn aggregate_zip_percent(p_pct: f64, q_pct: f64) -> f64 {
+    if (p_pct - q_pct).abs() <= 1e-9 * p_pct.abs().max(q_pct.abs()).max(1.0) {
+        p_pct
+    } else {
+        0.0
+    }
+}
+
+fn constant_power_load_values(p_mw: f64, q_mvar: f64, scaling: f64) -> PandapowerLoadValues {
+    PandapowerLoadValues {
+        p_mw,
+        q_mvar,
+        const_z_percent: 0.0,
+        const_i_percent: 0.0,
+        const_z_p_percent: 0.0,
+        const_i_p_percent: 0.0,
+        const_z_q_percent: 0.0,
+        const_i_q_percent: 0.0,
+        scaling,
+    }
+}
+
+fn load_values_for_pandapower(l: &Load, warnings: &mut Vec<String>) -> PandapowerLoadValues {
+    let mut out = constant_power_load_values(l.p, l.q, 1.0);
+    let Some(model) = &l.voltage_model else {
+        return out;
+    };
+    match model {
+        LoadVoltageModel::ConstantPower => out,
+        LoadVoltageModel::Zip {
+            p_constant_power,
+            q_constant_power,
+            p_constant_current,
+            q_constant_current,
+            p_constant_impedance,
+            q_constant_impedance,
+            v_nom,
+            load_type,
+            scaling,
+        } => {
+            if !same_load_total(
+                p_constant_power + p_constant_current + p_constant_impedance,
+                l.p,
+            ) || !same_load_total(
+                q_constant_power + q_constant_current + q_constant_impedance,
+                l.q,
+            ) {
+                warnings.push(format!(
+                    "pandapower load at bus {}: stale voltage model components did not match typed p/q; wrote typed p/q as constant power",
+                    l.bus
+                ));
+                return out;
+            }
+            if let Some(v_nom) = v_nom {
+                warnings.push(format!(
+                    "pandapower load at bus {}: nominal voltage {v_nom} has no load table field; dropped",
+                    l.bus
+                ));
+            }
+            if let Some(load_type) = load_type {
+                warnings.push(format!(
+                    "pandapower load at bus {}: source load type {load_type} has no load table field; dropped",
+                    l.bus
+                ));
+            }
+            if let Some(s) = *scaling {
+                if s.is_finite()
+                    && (s.abs() > f64::EPSILON
+                        || (l.p.abs() <= f64::EPSILON && l.q.abs() <= f64::EPSILON))
+                {
+                    out.scaling = s;
+                    if s.abs() > f64::EPSILON {
+                        out.p_mw = l.p / s;
+                        out.q_mvar = l.q / s;
+                    }
+                } else {
+                    warnings.push(format!(
+                        "pandapower load at bus {}: non-finite or unusable scaling {s}; wrote scaling 1",
+                        l.bus
+                    ));
+                }
+            }
+            let Some(p_z_pct) = load_percent(*p_constant_impedance, l.p) else {
+                warnings.push(format!(
+                    "pandapower load at bus {}: active ZIP components need a nonzero total p; wrote typed p/q as constant power",
+                    l.bus
+                ));
+                return constant_power_load_values(out.p_mw, out.q_mvar, out.scaling);
+            };
+            let Some(p_i_pct) = load_percent(*p_constant_current, l.p) else {
+                warnings.push(format!(
+                    "pandapower load at bus {}: active ZIP components need a nonzero total p; wrote typed p/q as constant power",
+                    l.bus
+                ));
+                return constant_power_load_values(out.p_mw, out.q_mvar, out.scaling);
+            };
+            let Some(q_z_pct) = load_percent(*q_constant_impedance, l.q) else {
+                warnings.push(format!(
+                    "pandapower load at bus {}: reactive ZIP components need a nonzero total q; wrote typed p/q as constant power",
+                    l.bus
+                ));
+                return constant_power_load_values(out.p_mw, out.q_mvar, out.scaling);
+            };
+            let Some(q_i_pct) = load_percent(*q_constant_current, l.q) else {
+                warnings.push(format!(
+                    "pandapower load at bus {}: reactive ZIP components need a nonzero total q; wrote typed p/q as constant power",
+                    l.bus
+                ));
+                return constant_power_load_values(out.p_mw, out.q_mvar, out.scaling);
+            };
+            out.const_z_p_percent = p_z_pct;
+            out.const_i_p_percent = p_i_pct;
+            out.const_z_q_percent = q_z_pct;
+            out.const_i_q_percent = q_i_pct;
+            out.const_z_percent = aggregate_zip_percent(p_z_pct, q_z_pct);
+            out.const_i_percent = aggregate_zip_percent(p_i_pct, q_i_pct);
+            out
+        }
+        LoadVoltageModel::Exponential { .. } => {
+            warnings.push(format!(
+                "pandapower load at bus {}: exponential voltage model has no load table fields; wrote typed p/q as constant power",
+                l.bus
+            ));
+            out
+        }
+    }
+}
+
 fn load_frame(net: &Network, warnings: &mut Vec<String>) -> Value {
     let columns = [
         "name",
@@ -858,20 +1027,21 @@ fn load_frame(net: &Network, warnings: &mut Vec<String>) -> Value {
     let mut index = Vec::with_capacity(net.loads.len());
     let mut data = Vec::with_capacity(net.loads.len());
     for l in &net.loads {
+        let values = load_values_for_pandapower(l, warnings);
         index.push(Value::from(data.len() as u64));
         data.push(vec![
             Value::Null,
             pp_bus(l.bus),
-            jnum(l.p),
-            jnum(l.q),
-            jnum(0.0),
-            jnum(0.0),
-            jnum(0.0),
-            jnum(0.0),
-            jnum(0.0),
-            jnum(0.0),
+            jnum(values.p_mw),
+            jnum(values.q_mvar),
+            jnum(values.const_z_percent),
+            jnum(values.const_i_percent),
+            jnum(values.const_z_p_percent),
+            jnum(values.const_i_p_percent),
+            jnum(values.const_z_q_percent),
+            jnum(values.const_i_q_percent),
             Value::Null,
-            jnum(1.0),
+            jnum(values.scaling),
             Value::Bool(l.in_service),
             Value::String("wye".into()),
         ]);
@@ -881,7 +1051,7 @@ fn load_frame(net: &Network, warnings: &mut Vec<String>) -> Value {
 
 fn shunt_frame(
     net: &Network,
-    charging: &[(BusId, f64, bool)],
+    charging: &[(BusId, f64, f64, bool)],
     kv_of: &HashMap<BusId, f64>,
     warnings: &mut Vec<String>,
 ) -> Value {
@@ -910,13 +1080,13 @@ fn shunt_frame(
             Value::Bool(s.in_service),
         ]);
     }
-    for (bus, b_half_pu, in_service) in charging {
+    for (bus, g_pu, b_pu, in_service) in charging {
         index.push(Value::from(data.len() as u64));
         data.push(vec![
             pp_bus(*bus),
             Value::String("trafo charging".into()),
-            jnum(-b_half_pu * net.base_mva),
-            jnum(0.0),
+            jnum(-b_pu * net.base_mva),
+            jnum(g_pu * net.base_mva),
             jnum(*kv_of.get(bus).unwrap_or(&1.0)),
             Value::from(1_u64),
             Value::from(1_u64),
@@ -971,8 +1141,8 @@ fn gen_frame(net: &Network, warnings: &mut Vec<String>) -> Value {
 }
 
 /// Build the line and trafo frames, plus the charging shunts: one
-/// `(bus, b_half_pu, in_service)` per terminal of every trafo-written branch
-/// that carries MATPOWER line charging `b` (see the comment at the push site).
+/// `(bus, g_pu, b_pu, in_service)` per terminal of every trafo-written branch
+/// that carries terminal shunt admittance (see the comment at the push site).
 #[allow(clippy::too_many_lines)] // mirrors pandapower line/trafo column order in one place
 #[allow(clippy::type_complexity)]
 // The exact v_from != v_to compare is the point: both come from written_kv of
@@ -982,7 +1152,7 @@ fn branch_frames(
     net: &Network,
     kv_of: &HashMap<BusId, f64>,
     warnings: &mut Vec<String>,
-) -> (Value, Value, Vec<(BusId, f64, bool)>) {
+) -> (Value, Value, Vec<(BusId, f64, f64, bool)>) {
     let line_columns = [
         "name",
         "std_type",
@@ -1054,9 +1224,17 @@ fn branch_frames(
             // single sided; MATPOWER's capacitive charging maps exactly onto a
             // bus shunt at each terminal instead (the from-side half sits
             // behind the tap in MATPOWER's model, hence the tap² rebase).
-            if br.b != 0.0 {
-                charging.push((br.from, br.b / 2.0 / (tap * tap), br.in_service));
-                charging.push((br.to, br.b / 2.0, br.in_service));
+            let terminal = br.terminal_charging();
+            if terminal.g_fr != 0.0 || terminal.b_fr != 0.0 {
+                charging.push((
+                    br.from,
+                    terminal.g_fr / (tap * tap),
+                    terminal.b_fr / (tap * tap),
+                    br.in_service,
+                ));
+            }
+            if terminal.g_to != 0.0 || terminal.b_to != 0.0 {
+                charging.push((br.to, terminal.g_to, terminal.b_to, br.in_service));
             }
             trafo_index.push(Value::from(trafo_data.len() as u64));
             trafo_data.push(vec![
@@ -1083,6 +1261,16 @@ fn branch_frames(
                 Value::Bool(br.in_service),
             ]);
         } else {
+            let terminal = br.terminal_charging();
+            if br.charging.is_some()
+                && ((terminal.g_fr - terminal.g_to).abs() > f64::EPSILON
+                    || (terminal.b_fr - terminal.b_to).abs() > f64::EPSILON)
+            {
+                warnings.push(format!(
+                    "branch {} -> {} terminal admittance collapsed to symmetric line charging: pandapower line tables cannot carry asymmetric terminal charging",
+                    br.from, br.to
+                ));
+            }
             line_index.push(Value::from(line_data.len() as u64));
             line_data.push(vec![
                 Value::Null,
@@ -1092,8 +1280,11 @@ fn branch_frames(
                 jnum(1.0),
                 jnum(br.r * zb),
                 jnum(br.x * zb),
-                jnum(br.b / zb / (2.0 * std::f64::consts::PI * net.base_frequency) * 1e9),
-                jnum(0.0),
+                jnum(
+                    terminal.total_b() / zb / (2.0 * std::f64::consts::PI * net.base_frequency)
+                        * 1e9,
+                ),
+                jnum((terminal.g_fr + terminal.g_to) / zb * 1e6),
                 jnum(if br.rate_a == 0.0 {
                     0.0
                 } else {
@@ -2733,6 +2924,54 @@ mod tests {
         assert_eq!(col(&trafo, "tap_changer_type"), vec![json!("Ratio")]);
         let rt = parse_pandapower_json(&conv.text).unwrap();
         assert!((rt.network.branches[0].tap - 1.05).abs() < 1e-12);
+    }
+
+    #[test]
+    fn writer_zip_load_columns_round_trip() {
+        let mut net = test_net(vec![test_bus(1, BusType::Ref)]);
+        net.loads.push(Load {
+            bus: BusId(1),
+            p: 10.0,
+            q: 5.0,
+            voltage_model: Some(LoadVoltageModel::Zip {
+                p_constant_power: 5.0,
+                q_constant_power: 1.0,
+                p_constant_current: 2.0,
+                q_constant_current: 1.5,
+                p_constant_impedance: 3.0,
+                q_constant_impedance: 2.5,
+                v_nom: None,
+                load_type: None,
+                scaling: Some(0.5),
+            }),
+            in_service: true,
+            extras: Extras::default(),
+        });
+
+        let conv = write_pandapower_json(&net);
+        assert!(conv.warnings.is_empty(), "{:?}", conv.warnings);
+        let load = written_frame(&conv.text, "load");
+        assert_eq!(col(&load, "p_mw"), vec![json!(20.0)]);
+        assert_eq!(col(&load, "q_mvar"), vec![json!(10.0)]);
+        assert_eq!(col(&load, "scaling"), vec![json!(0.5)]);
+        assert_eq!(col(&load, "const_z_p_percent"), vec![json!(30.0)]);
+        assert_eq!(col(&load, "const_i_p_percent"), vec![json!(20.0)]);
+        assert_eq!(col(&load, "const_z_q_percent"), vec![json!(50.0)]);
+        assert_eq!(col(&load, "const_i_q_percent"), vec![json!(30.0)]);
+
+        let back = parse_pandapower_json(&conv.text).unwrap().network;
+        let Some(LoadVoltageModel::Zip {
+            p_constant_current,
+            q_constant_impedance,
+            scaling,
+            ..
+        }) = &back.loads[0].voltage_model
+        else {
+            panic!("missing ZIP load after write/read");
+        };
+        assert!((*p_constant_current - 2.0).abs() < 1e-12);
+        assert!((*q_constant_impedance - 2.5).abs() < 1e-12);
+        assert_eq!(*scaling, Some(0.5));
     }
 
     #[test]

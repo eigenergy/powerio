@@ -85,6 +85,22 @@ pub(crate) fn write_matpower_conversion(net: &Network) -> Conversion {
             "{non_matpower_charging} branch terminal admittance record(s) collapsed to BR_B: MATPOWER cannot carry conductance or asymmetric terminal charging"
         ));
     }
+    let current_ratings = net
+        .branches
+        .iter()
+        .filter(|b| b.current_ratings.is_some())
+        .count();
+    if current_ratings > 0 {
+        warnings.push(format!(
+            "{current_ratings} branch current rating record(s) dropped: MATPOWER branch rows carry MVA ratings only"
+        ));
+    }
+    let branch_solutions = net.branches.iter().filter(|b| b.solution.is_some()).count();
+    if branch_solutions > 0 {
+        warnings.push(format!(
+            "{branch_solutions} branch solution value set(s) dropped: MATPOWER branch rows do not carry solved flow columns"
+        ));
+    }
     let voltage_loads = net
         .loads
         .iter()

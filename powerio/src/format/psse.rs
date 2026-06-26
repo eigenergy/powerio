@@ -282,6 +282,11 @@ pub fn write_psse_rev(net: &Network, rev: u32) -> Conversion {
             &mut branch_ids,
             &mut sanitized_quoted,
         );
+        let charging = br.terminal_charging();
+        let b_total = charging.total_b();
+        let b_mid = b_total / 2.0;
+        let bi = charging.b_fr - b_mid;
+        let bj = charging.b_to - b_mid;
         if modern {
             // v34+: a quoted line NAME at field 6, then twelve rating columns,
             // pushing STAT to field 23 (the layout the reader expects at rev>=34).
@@ -289,29 +294,37 @@ pub fn write_psse_rev(net: &Network, rev: u32) -> Conversion {
             let _ = writeln!(
                 s,
                 "{}, {}, '{ckt}', {}, {}, {}, '            ', {}, {}, {}, \
-                 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, {}, 1, 0, 1, 1",
+                 0, 0, 0, 0, 0, 0, 0, 0, 0, {}, {}, {}, {}, {}, 1, 0, 1, 1",
                 br.from,
                 br.to,
                 num(br.r),
                 num(br.x),
-                num(br.b),
+                num(b_total),
                 num(br.rate_a),
                 num(br.rate_b),
                 num(br.rate_c),
+                num(charging.g_fr),
+                num(bi),
+                num(charging.g_to),
+                num(bj),
                 i32::from(br.in_service)
             );
         } else {
             let _ = writeln!(
                 s,
-                "{}, {}, '{ckt}', {}, {}, {}, {}, {}, {}, 0, 0, 0, 0, {}, 1, 0, 1, 1",
+                "{}, {}, '{ckt}', {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, 1, 0, 1, 1",
                 br.from,
                 br.to,
                 num(br.r),
                 num(br.x),
-                num(br.b),
+                num(b_total),
                 num(br.rate_a),
                 num(br.rate_b),
                 num(br.rate_c),
+                num(charging.g_fr),
+                num(bi),
+                num(charging.g_to),
+                num(bj),
                 i32::from(br.in_service)
             );
         }
@@ -531,6 +544,22 @@ pub fn write_psse_rev(net: &Network, rev: u32) -> Conversion {
         warnings.push(
             "branch angle limits (angmin/angmax) dropped: PSS/E branch records carry none".into(),
         );
+    }
+    let current_ratings = net
+        .branches
+        .iter()
+        .filter(|b| b.current_ratings.is_some())
+        .count();
+    if current_ratings > 0 {
+        warnings.push(format!(
+            "{current_ratings} branch current rating record(s) dropped: PSS/E branch ratings are MVA ratings"
+        ));
+    }
+    let branch_solutions = net.branches.iter().filter(|b| b.solution.is_some()).count();
+    if branch_solutions > 0 {
+        warnings.push(format!(
+            "{branch_solutions} branch solution value set(s) dropped: PSS/E RAW power flow result fields are not written"
+        ));
     }
     if net.generators.iter().any(Generator::has_caps) {
         warnings.push(
@@ -1788,6 +1817,81 @@ mod tests {
 
     fn close(actual: f64, expected: f64) {
         assert!((actual - expected).abs() < 1e-12, "{actual} != {expected}");
+    }
+
+    fn test_bus(id: usize, kind: BusType) -> Bus {
+        Bus {
+            id: BusId(id),
+            kind,
+            vm: 1.0,
+            va: 0.0,
+            base_kv: 230.0,
+            vmax: 1.1,
+            vmin: 0.9,
+            evhi: None,
+            evlo: None,
+            area: 1,
+            zone: 1,
+            name: None,
+            extras: Extras::default(),
+        }
+    }
+
+    fn branch_with_terminal_charging() -> Branch {
+        Branch {
+            from: BusId(1),
+            to: BusId(2),
+            r: 0.01,
+            x: 0.1,
+            b: 0.0,
+            charging: Some(BranchCharging {
+                g_fr: 0.01,
+                b_fr: 0.02,
+                g_to: 0.03,
+                b_to: 0.05,
+            }),
+            rate_a: 100.0,
+            rate_b: 110.0,
+            rate_c: 120.0,
+            current_ratings: None,
+            tap: 0.0,
+            shift: 0.0,
+            in_service: true,
+            angmin: -360.0,
+            angmax: 360.0,
+            control: None,
+            solution: None,
+            extras: Extras::default(),
+        }
+    }
+
+    fn assert_terminal_charging_round_trip(text: &str) {
+        let back = parse_psse(text).unwrap();
+        let charging = back.branches[0].terminal_charging();
+        close(charging.g_fr, 0.01);
+        close(charging.b_fr, 0.02);
+        close(charging.g_to, 0.03);
+        close(charging.b_to, 0.05);
+        close(back.branches[0].b, 0.07);
+    }
+
+    #[test]
+    fn branch_terminal_charging_writes_gi_bi_gj_bj() {
+        let mut net = Network::in_memory(
+            "terminal-shunts",
+            100.0,
+            vec![test_bus(1, BusType::Ref), test_bus(2, BusType::Pq)],
+            Vec::new(),
+        );
+        net.branches.push(branch_with_terminal_charging());
+
+        let rev33 = write_psse(&net);
+        assert!(rev33.warnings.is_empty(), "{:?}", rev33.warnings);
+        assert_terminal_charging_round_trip(&rev33.text);
+
+        let rev35 = write_psse_rev(&net, 35);
+        assert!(rev35.warnings.is_empty(), "{:?}", rev35.warnings);
+        assert_terminal_charging_round_trip(&rev35.text);
     }
 
     #[test]

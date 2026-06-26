@@ -225,6 +225,15 @@ fn extras_usize(extras: &Extras, key: &str) -> Option<usize> {
         })
 }
 
+fn zipv_cutoff(value: Option<&serde_json::Value>) -> Option<f64> {
+    let text = value?.as_str()?;
+    lex::Value::new(text)
+        .to_vector(None)
+        .ok()
+        .and_then(|v| v.get(6).copied())
+        .filter(|v| v.is_finite())
+}
+
 /// Whether the dss tokenizer would split this name: its delimiters, quote
 /// pair characters, comment openers, and (in bus ids) the node dot.
 fn name_breaks_dss(name: &str, is_bus_id: bool) -> bool {
@@ -913,8 +922,8 @@ impl DssWriter {
             extras.remove("kv");
             extras.remove("phases");
             extras.remove("conn");
-            extras.remove("model");
-            extras.remove("zipv");
+            let retained_model = extras.remove("model");
+            let retained_zipv = extras.remove("zipv");
             // q that came from a power factor goes back as pf=, so the
             // engine recomputes its own kvar bit for bit.
             let reactive = match extras.remove("pf").and_then(|v| v.as_f64()) {
@@ -929,7 +938,11 @@ impl DssWriter {
                 num(kw),
             );
             match &l.voltage_model {
-                DistLoadVoltageModel::ConstantPower { .. } => {}
+                DistLoadVoltageModel::ConstantPower { .. } => {
+                    if let Some(model) = retained_model {
+                        extras.insert("model".into(), model);
+                    }
+                }
                 DistLoadVoltageModel::ConstantImpedance { .. } => {
                     s.push_str(" model=2");
                 }
@@ -954,15 +967,17 @@ impl DssWriter {
                         beta_i.first(),
                         beta_p.first(),
                     ) {
+                        let cutoff = zipv_cutoff(retained_zipv.as_ref()).unwrap_or(0.0);
                         let _ = write!(
                             s,
-                            " zipv=({}, {}, {}, {}, {}, {}, 0)",
+                            " zipv=({}, {}, {}, {}, {}, {}, {})",
                             num(*az),
                             num(*ai),
                             num(*ap),
                             num(*bz),
                             num(*bi),
-                            num(*bp)
+                            num(*bp),
+                            num(cutoff)
                         );
                     }
                 }

@@ -163,6 +163,7 @@ fn rich_opendss_load_models_and_switches_round_trip() {
         New SwtControl.swctrl switchedobj=Line.sw action=open\n\
         New Load.ci bus1=b2.1.2.3 phases=3 conn=wye kv=12.47 kw=90 kvar=45 model=5\n\
         New Load.cz bus1=b2.1.2.3 phases=3 conn=wye kv=12.47 kw=90 kvar=45 model=2\n\
+        New Load.cp3 bus1=b2.1.2.3 phases=3 conn=wye kv=12.47 kw=90 kvar=45 model=3\n\
         New Load.zip bus1=b2.1.2.3 phases=3 conn=wye kv=12.47 kw=90 kvar=45 model=8 zipv=[0.2,0.3,0.5,0.1,0.4,0.5,0.8]\n";
     let net = parse_dss_str(dss);
     assert_eq!(net.switches.len(), 1);
@@ -181,6 +182,19 @@ fn rich_opendss_load_models_and_switches_round_trip() {
         DistLoadVoltageModel::Zip { alpha_z, beta_i, .. }
             if alpha_z == &vec![0.2, 0.2, 0.2] && beta_i == &vec![0.4, 0.4, 0.4]
     ));
+    let dss_direct = write_dss(&net);
+    assert!(
+        dss_direct
+            .text
+            .contains("zipv=(0.2, 0.3, 0.5, 0.1, 0.4, 0.5, 0.8)"),
+        "{}",
+        dss_direct.text
+    );
+    assert!(
+        dss_direct.text.contains("New Load.cp3") && dss_direct.text.contains("model=3"),
+        "{}",
+        dss_direct.text
+    );
 
     let bmopf = write_bmopf_json(&net);
     let bmopf_doc: serde_json::Value = serde_json::from_str(&bmopf.text).unwrap();

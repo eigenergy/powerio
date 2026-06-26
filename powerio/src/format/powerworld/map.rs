@@ -13,7 +13,8 @@ use std::sync::Arc;
 use super::auxiliary::{AuxFile, AuxObject, parse_aux};
 use crate::format::{Conversion, sanitize_quoted};
 use crate::network::{
-    Branch, Bus, BusId, BusType, Extras, Generator, Load, Network, Shunt, SourceFormat,
+    Branch, Bus, BusId, BusType, Extras, Generator, Load, LoadVoltageModel, Network, Shunt,
+    SourceFormat,
 };
 use crate::{Error, Result};
 
@@ -798,6 +799,46 @@ pub fn write_powerworld(net: &Network) -> Conversion {
         warnings.push(format!(
             "{} storage unit(s) dropped: PowerWorld storage not modeled",
             net.storage.len()
+        ));
+    }
+    let voltage_loads = net
+        .loads
+        .iter()
+        .filter(|l| {
+            l.voltage_model
+                .as_ref()
+                .is_some_and(LoadVoltageModel::has_non_matpower_fields)
+        })
+        .count();
+    if voltage_loads > 0 {
+        warnings.push(format!(
+            "{voltage_loads} voltage dependent load model(s) dropped: PowerWorld Load records carry static MW/MVR only"
+        ));
+    }
+    let terminal_charging = net
+        .branches
+        .iter()
+        .filter(|b| b.has_non_matpower_charging())
+        .count();
+    if terminal_charging > 0 {
+        warnings.push(format!(
+            "{terminal_charging} branch terminal admittance record(s) collapsed to LineC: PowerWorld aux branch rows written here cannot carry conductance or asymmetric terminal charging"
+        ));
+    }
+    let current_ratings = net
+        .branches
+        .iter()
+        .filter(|b| b.current_ratings.is_some())
+        .count();
+    if current_ratings > 0 {
+        warnings.push(format!(
+            "{current_ratings} branch current rating record(s) dropped: PowerWorld aux branch rows written here carry MVA ratings only"
+        ));
+    }
+    let branch_solutions = net.branches.iter().filter(|b| b.solution.is_some()).count();
+    if branch_solutions > 0 {
+        warnings.push(format!(
+            "{branch_solutions} branch solution value set(s) dropped: PowerWorld aux result fields are not written"
         ));
     }
     if net.branches.iter().any(Branch::has_angle_limits) {
