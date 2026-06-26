@@ -37,6 +37,11 @@ pub(crate) fn write_matpower_conversion(net: &Network) -> Conversion {
         };
     }
 
+    let warnings = canonical_warnings(net);
+    Conversion { text, warnings }
+}
+
+fn canonical_warnings(net: &Network) -> Vec<String> {
     // The canonical writer (see `canonical`) emits the standard bus/branch/gen/
     // gencost/storage blocks only. Report every neutral-model field it can't.
     let mut warnings = Vec::new();
@@ -133,7 +138,7 @@ pub(crate) fn write_matpower_conversion(net: &Network) -> Conversion {
             "source-format passthrough fields (extras) dropped: the canonical MATPOWER writer emits only named columns".to_string(),
         );
     }
-    Conversion { text, warnings }
+    warnings
 }
 
 /// Canonical MATPOWER from the neutral model, for networks with no MATPOWER

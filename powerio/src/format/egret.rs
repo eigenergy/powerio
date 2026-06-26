@@ -54,6 +54,34 @@ pub fn write_egret_json(net: &Network) -> Conversion {
         generator.insert((i + 1).to_string(), gen_obj(g, &mut warnings));
     }
 
+    warn_egret_writer_losses(net, &mut warnings);
+
+    let mut elements = Map::new();
+    elements.insert("bus".into(), Value::Object(bus));
+    elements.insert("load".into(), Value::Object(load));
+    elements.insert("shunt".into(), Value::Object(shunt));
+    elements.insert("branch".into(), Value::Object(branch));
+    elements.insert("generator".into(), Value::Object(generator));
+
+    let mut system = Map::new();
+    system.insert("baseMVA".into(), jnum(net.base_mva));
+    match reference_bus(net) {
+        Some(r) => {
+            system.insert("reference_bus".into(), Value::String(r.id.to_string()));
+            system.insert("reference_bus_angle".into(), jnum(r.va));
+        }
+        None => warnings
+            .push("no single reference bus (BusType::Ref); system.reference_bus omitted".into()),
+    }
+
+    let mut root = Map::new();
+    root.insert("elements".into(), Value::Object(elements));
+    root.insert("system".into(), Value::Object(system));
+
+    finish(root, warnings)
+}
+
+fn warn_egret_writer_losses(net: &Network, warnings: &mut Vec<String>) {
     if !net.hvdc.is_empty() {
         warnings.push(format!(
             "{} dcline(s) dropped: egret HVDC mapping not implemented",
@@ -122,30 +150,6 @@ pub fn write_egret_json(net: &Network) -> Conversion {
             "{branch_solutions} branch solution value set(s) dropped: egret branch result fields are not written"
         ));
     }
-
-    let mut elements = Map::new();
-    elements.insert("bus".into(), Value::Object(bus));
-    elements.insert("load".into(), Value::Object(load));
-    elements.insert("shunt".into(), Value::Object(shunt));
-    elements.insert("branch".into(), Value::Object(branch));
-    elements.insert("generator".into(), Value::Object(generator));
-
-    let mut system = Map::new();
-    system.insert("baseMVA".into(), jnum(net.base_mva));
-    match reference_bus(net) {
-        Some(r) => {
-            system.insert("reference_bus".into(), Value::String(r.id.to_string()));
-            system.insert("reference_bus_angle".into(), jnum(r.va));
-        }
-        None => warnings
-            .push("no single reference bus (BusType::Ref); system.reference_bus omitted".into()),
-    }
-
-    let mut root = Map::new();
-    root.insert("elements".into(), Value::Object(elements));
-    root.insert("system".into(), Value::Object(system));
-
-    finish(root, warnings)
 }
 
 fn reference_bus(net: &Network) -> Option<&Bus> {

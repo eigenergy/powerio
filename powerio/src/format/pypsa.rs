@@ -854,7 +854,7 @@ fn transformers_csv(net: &Network, key_of: &HashMap<BusId, String>) -> String {
         } else {
             net.base_mva
         };
-        let charging = br.charging.unwrap_or_else(|| BranchCharging {
+        let charging = br.charging.unwrap_or(BranchCharging {
             g_fr: 0.0,
             b_fr: br.b,
             g_to: 0.0,
