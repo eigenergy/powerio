@@ -28,7 +28,9 @@ use powerio_matrix::matrix::{
     build_incidence, build_lacpf, build_lodf, build_ptdf, build_weighted_laplacian, build_ybus,
 };
 use powerio_matrix::opf_pipeline::{DcOpfOptions, write_dcopf_bundle as write_bundle};
-use powerio_matrix::{DisplayData, IndexCore, IndexedNetwork, Network, PwdDisplay};
+use powerio_matrix::{
+    DisplayData, IndexCore, IndexedNetwork, MissingGenCostPolicy, Network, PwdDisplay, WriteOptions,
+};
 
 #[cfg(feature = "gridfm")]
 use powerio_matrix::io::gridfm::{
@@ -130,6 +132,103 @@ fn parse_units(s: &str) -> PyResult<Units> {
             "unknown units {other:?}; expected 'perunit' or 'native'"
         ))),
     }
+}
+
+fn parse_missing_gen_cost(
+    s: Option<&str>,
+    default_gen_cost: Option<&str>,
+    default_policy: MissingGenCostPolicy,
+) -> PyResult<MissingGenCostPolicy> {
+    let Some(s) = s else {
+        if default_gen_cost.is_some() {
+            return Err(PyValueError::new_err(
+                "default_gen_cost is only valid with missing_gen_cost='quadratic'",
+            ));
+        }
+        return Ok(default_policy);
+    };
+    match normalize(s).as_str() {
+        "preserve" => {
+            if default_gen_cost.is_some() {
+                return Err(PyValueError::new_err(
+                    "default_gen_cost is only valid with missing_gen_cost='quadratic'",
+                ));
+            }
+            Ok(MissingGenCostPolicy::Preserve)
+        }
+        "require" => {
+            if default_gen_cost.is_some() {
+                return Err(PyValueError::new_err(
+                    "default_gen_cost is only valid with missing_gen_cost='quadratic'",
+                ));
+            }
+            Ok(MissingGenCostPolicy::Require)
+        }
+        "zero" => {
+            if default_gen_cost.is_some() {
+                return Err(PyValueError::new_err(
+                    "default_gen_cost is only valid with missing_gen_cost='quadratic'",
+                ));
+            }
+            Ok(MissingGenCostPolicy::zero())
+        }
+        "quadratic" => {
+            let value = default_gen_cost.ok_or_else(|| {
+                PyValueError::new_err(
+                    "missing_gen_cost='quadratic' requires default_gen_cost='c2,c1,c0'",
+                )
+            })?;
+            let [c2, c1, c0] = parse_cost_triple(value)?;
+            Ok(MissingGenCostPolicy::quadratic(c2, c1, c0))
+        }
+        other => Err(PyValueError::new_err(format!(
+            "unknown missing_gen_cost {other:?}; expected 'preserve', 'require', 'zero', or 'quadratic'"
+        ))),
+    }
+}
+
+fn parse_cost_triple(value: &str) -> PyResult<[f64; 3]> {
+    let parts: Vec<_> = value.split(',').map(str::trim).collect();
+    if parts.len() != 3 {
+        return Err(PyValueError::new_err(
+            "default_gen_cost expects exactly three comma-separated values: c2,c1,c0",
+        ));
+    }
+    let mut out = [0.0; 3];
+    for (slot, part) in out.iter_mut().zip(parts) {
+        *slot = part.parse::<f64>().map_err(|_| {
+            PyValueError::new_err(format!("could not parse default_gen_cost value {part:?}"))
+        })?;
+        if !slot.is_finite() {
+            return Err(PyValueError::new_err(
+                "default_gen_cost values must be finite",
+            ));
+        }
+    }
+    Ok(out)
+}
+
+fn write_options(
+    missing_gen_cost: Option<&str>,
+    default_gen_cost: Option<&str>,
+    gen_cost_csv: Option<&str>,
+    default_policy: MissingGenCostPolicy,
+) -> PyResult<WriteOptions> {
+    let missing_gen_cost =
+        parse_missing_gen_cost(missing_gen_cost, default_gen_cost, default_policy)?;
+    let gen_cost_patches = match gen_cost_csv {
+        Some(path) => {
+            let text = std::fs::read_to_string(path).map_err(|e| {
+                PyValueError::new_err(format!("reading gen_cost_csv {path:?}: {e}"))
+            })?;
+            powerio_matrix::parse_gen_cost_csv(&text).map_err(to_pyerr)?
+        }
+        None => Vec::new(),
+    };
+    Ok(WriteOptions {
+        missing_gen_cost,
+        gen_cost_patches,
+    })
 }
 
 fn normalize(s: &str) -> String {
@@ -470,11 +569,27 @@ impl PyNetwork {
     }
 
     /// Serialize this case to another format. Returns `(text, warnings)`.
-    fn to_format(&self, to: &str) -> PyResult<(String, Vec<String>)> {
+    #[pyo3(signature = (to, missing_gen_cost=None, default_gen_cost=None, gen_cost_csv=None))]
+    fn to_format(
+        &self,
+        to: &str,
+        missing_gen_cost: Option<&str>,
+        default_gen_cost: Option<&str>,
+        gen_cost_csv: Option<&str>,
+    ) -> PyResult<(String, Vec<String>)> {
         let target = to
             .parse::<powerio_matrix::TargetFormat>()
             .map_err(to_pyerr)?;
-        let conv = self.inner.to_format(target).map_err(to_pyerr)?;
+        let opts = write_options(
+            missing_gen_cost,
+            default_gen_cost,
+            gen_cost_csv,
+            MissingGenCostPolicy::Preserve,
+        )?;
+        let conv = self
+            .inner
+            .to_format_with_options(target, &opts)
+            .map_err(to_pyerr)?;
         Ok((conv.text, conv.warnings))
     }
 
@@ -608,17 +723,29 @@ impl PyNetwork {
 
     /// Write the DC OPF bundle into `out_dir/<case>_dcopf/`. Returns
     /// `{"dir": str, "files": [str, ...]}`.
-    #[pyo3(signature = (out_dir, convention=None, units=None))]
+    #[allow(clippy::too_many_arguments)]
+    #[pyo3(signature = (out_dir, convention=None, units=None, missing_gen_cost=None, default_gen_cost=None, gen_cost_csv=None))]
     fn write_dcopf_bundle<'py>(
         &self,
         py: Python<'py>,
         out_dir: &str,
         convention: Option<&str>,
         units: Option<&str>,
+        missing_gen_cost: Option<&str>,
+        default_gen_cost: Option<&str>,
+        gen_cost_csv: Option<&str>,
     ) -> PyResult<Bound<'py, PyDict>> {
+        let cost_opts = write_options(
+            missing_gen_cost,
+            default_gen_cost,
+            gen_cost_csv,
+            MissingGenCostPolicy::Require,
+        )?;
         let opts = DcOpfOptions {
             convention: parse_convention(convention.unwrap_or("paper"))?,
             units: parse_units(units.unwrap_or("perunit"))?,
+            missing_gen_cost: cost_opts.missing_gen_cost,
+            gen_cost_patches: cost_opts.gen_cost_patches,
         };
         let outputs = write_bundle(&self.inner, out_dir, &opts).map_err(to_pyerr)?;
         dir_files_dict(py, &outputs.dir, &outputs.files)
@@ -629,7 +756,8 @@ impl PyNetwork {
     /// `{"dir", "files", "dropped_zero_impedance", "degenerate_cost_gens"}`.
     /// Available when the extension is built with the Rust `gridfm` feature.
     #[cfg(feature = "gridfm")]
-    #[pyo3(signature = (out_dir, scenario=0, include_y_bus=true, include_taps=true, include_shifts=true))]
+    #[allow(clippy::too_many_arguments)]
+    #[pyo3(signature = (out_dir, scenario=0, include_y_bus=true, include_taps=true, include_shifts=true, missing_gen_cost=None, default_gen_cost=None, gen_cost_csv=None))]
     fn write_gridfm<'py>(
         &self,
         py: Python<'py>,
@@ -638,11 +766,22 @@ impl PyNetwork {
         include_y_bus: bool,
         include_taps: bool,
         include_shifts: bool,
+        missing_gen_cost: Option<&str>,
+        default_gen_cost: Option<&str>,
+        gen_cost_csv: Option<&str>,
     ) -> PyResult<Bound<'py, PyDict>> {
+        let cost_opts = write_options(
+            missing_gen_cost,
+            default_gen_cost,
+            gen_cost_csv,
+            MissingGenCostPolicy::Preserve,
+        )?;
         let opts = GridfmOptions {
             include_y_bus,
             include_taps,
             include_shifts,
+            missing_gen_cost: cost_opts.missing_gen_cost,
+            gen_cost_patches: cost_opts.gen_cost_patches,
         };
         let outputs =
             gridfm_write_dataset(&self.inner, scenario, out_dir, &opts).map_err(to_pyerr)?;
@@ -744,13 +883,27 @@ fn read_pypsa_csv_folder(path: &str) -> PyResult<PyNetwork> {
 /// (fields the target couldn't represent). The input format is the file
 /// extension unless `from` overrides it.
 #[pyfunction]
-#[pyo3(signature = (path, to, from_=None))]
-fn convert_file(path: &str, to: &str, from_: Option<&str>) -> PyResult<(String, Vec<String>)> {
+#[pyo3(signature = (path, to, from_=None, missing_gen_cost=None, default_gen_cost=None, gen_cost_csv=None))]
+fn convert_file(
+    path: &str,
+    to: &str,
+    from_: Option<&str>,
+    missing_gen_cost: Option<&str>,
+    default_gen_cost: Option<&str>,
+    gen_cost_csv: Option<&str>,
+) -> PyResult<(String, Vec<String>)> {
     let target = to
         .parse::<powerio_matrix::TargetFormat>()
         .map_err(to_pyerr)?;
-    let conv = powerio_matrix::convert_file(std::path::Path::new(path), target, from_)
-        .map_err(to_pyerr)?;
+    let opts = write_options(
+        missing_gen_cost,
+        default_gen_cost,
+        gen_cost_csv,
+        MissingGenCostPolicy::Preserve,
+    )?;
+    let conv =
+        powerio_matrix::convert_file_with_options(std::path::Path::new(path), target, from_, &opts)
+            .map_err(to_pyerr)?;
     Ok((conv.text, conv.warnings))
 }
 
@@ -758,13 +911,27 @@ fn convert_file(path: &str, to: &str, from_: Option<&str>) -> PyResult<(String, 
 /// with no file staging. Returns `(text, warnings)` like `convert_file`.
 /// `format` names the input format (default `matpower`).
 #[pyfunction]
-#[pyo3(signature = (text, to, format=None))]
-fn convert_str(text: &str, to: &str, format: Option<&str>) -> PyResult<(String, Vec<String>)> {
+#[pyo3(signature = (text, to, format=None, missing_gen_cost=None, default_gen_cost=None, gen_cost_csv=None))]
+fn convert_str(
+    text: &str,
+    to: &str,
+    format: Option<&str>,
+    missing_gen_cost: Option<&str>,
+    default_gen_cost: Option<&str>,
+    gen_cost_csv: Option<&str>,
+) -> PyResult<(String, Vec<String>)> {
     let target = to
         .parse::<powerio_matrix::TargetFormat>()
         .map_err(to_pyerr)?;
-    let conv = powerio_matrix::convert_str(text, target, format.unwrap_or("matpower"))
-        .map_err(to_pyerr)?;
+    let opts = write_options(
+        missing_gen_cost,
+        default_gen_cost,
+        gen_cost_csv,
+        MissingGenCostPolicy::Preserve,
+    )?;
+    let conv =
+        powerio_matrix::convert_str_with_options(text, target, format.unwrap_or("matpower"), &opts)
+            .map_err(to_pyerr)?;
     Ok((conv.text, conv.warnings))
 }
 
@@ -948,6 +1115,10 @@ fn gridfm_outputs_to_dict<'py>(
     let d = dir_files_dict(py, &outputs.dir, &outputs.files)?;
     d.set_item("dropped_zero_impedance", outputs.dropped_zero_impedance)?;
     d.set_item("degenerate_cost_gens", outputs.degenerate_cost_gens)?;
+    d.set_item("missing_cost_gens", outputs.missing_cost_gens)?;
+    d.set_item("unsupported_cost_gens", outputs.unsupported_cost_gens)?;
+    d.set_item("synthesized_gen_costs", outputs.synthesized_gen_costs)?;
+    d.set_item("patched_gen_costs", outputs.patched_gen_costs)?;
     Ok(d)
 }
 
@@ -965,8 +1136,9 @@ fn pypsa_outputs_to_dict<'py>(
 /// must share one base element set (same bus/branch/gen counts and bus-id order).
 /// Available when the extension is built with the Rust `gridfm` feature.
 #[cfg(feature = "gridfm")]
+#[allow(clippy::too_many_arguments)]
 #[pyfunction]
-#[pyo3(signature = (cases, out_dir, base_scenario=0, include_y_bus=true, include_taps=true, include_shifts=true))]
+#[pyo3(signature = (cases, out_dir, base_scenario=0, include_y_bus=true, include_taps=true, include_shifts=true, missing_gen_cost=None, default_gen_cost=None, gen_cost_csv=None))]
 fn write_gridfm_batch<'py>(
     py: Python<'py>,
     cases: Vec<PyRef<'py, PyNetwork>>,
@@ -975,11 +1147,22 @@ fn write_gridfm_batch<'py>(
     include_y_bus: bool,
     include_taps: bool,
     include_shifts: bool,
+    missing_gen_cost: Option<&str>,
+    default_gen_cost: Option<&str>,
+    gen_cost_csv: Option<&str>,
 ) -> PyResult<Bound<'py, PyDict>> {
+    let cost_opts = write_options(
+        missing_gen_cost,
+        default_gen_cost,
+        gen_cost_csv,
+        MissingGenCostPolicy::Preserve,
+    )?;
     let opts = GridfmOptions {
         include_y_bus,
         include_taps,
         include_shifts,
+        missing_gen_cost: cost_opts.missing_gen_cost,
+        gen_cost_patches: cost_opts.gen_cost_patches,
     };
     // The shared numbering builder stamps the k-th case `base_scenario + k`, the
     // same rule (and checked arithmetic) the CLI uses.

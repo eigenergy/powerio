@@ -17,11 +17,25 @@ use crate::matrix::incidence::{DcConvention, build_flow_map, build_incidence};
 use crate::matrix::laplacian::{build_weighted_laplacian, ground_at_each, reference_indicator};
 use crate::matrix::opf::{Units, build_opf_instance};
 use crate::network::Network;
+use crate::{GenCostPatch, MissingGenCostPolicy};
 
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone)]
 pub struct DcOpfOptions {
     pub convention: DcConvention,
     pub units: Units,
+    pub missing_gen_cost: MissingGenCostPolicy,
+    pub gen_cost_patches: Vec<GenCostPatch>,
+}
+
+impl Default for DcOpfOptions {
+    fn default() -> Self {
+        Self {
+            convention: DcConvention::default(),
+            units: Units::default(),
+            missing_gen_cost: MissingGenCostPolicy::Require,
+            gen_cost_patches: Vec::new(),
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -44,6 +58,9 @@ struct DcOpfMeta {
     reference_buses: Vec<usize>,
     convention: DcConvention,
     units: Units,
+    cost_policy: MissingGenCostPolicy,
+    synthesized_gen_costs: usize,
+    patched_gen_costs: usize,
     files: Vec<String>,
     powerio_version: String,
 }
@@ -54,7 +71,10 @@ pub fn write_dcopf_bundle(
     out_dir: impl AsRef<Path>,
     opts: &DcOpfOptions,
 ) -> Result<DcOpfOutputs> {
-    let view = IndexedNetwork::new(net);
+    let mut policy_net = net.clone();
+    let cost_report =
+        policy_net.apply_gen_cost_policy(&opts.gen_cost_patches, opts.missing_gen_cost)?;
+    let view = IndexedNetwork::new(&policy_net);
 
     let dir = out_dir.as_ref().join(format!("{}_dcopf", view.name()));
     std::fs::create_dir_all(&dir)?;
@@ -105,6 +125,9 @@ pub fn write_dcopf_bundle(
         reference_buses: refs.clone(),
         convention: opts.convention,
         units: opts.units,
+        cost_policy: opts.missing_gen_cost,
+        synthesized_gen_costs: cost_report.synthesized,
+        patched_gen_costs: cost_report.patched,
         files: files
             .iter()
             .filter_map(|p| p.file_name().and_then(|s| s.to_str()).map(str::to_string))

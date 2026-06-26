@@ -37,6 +37,7 @@
 
 pub mod error;
 pub mod format;
+pub mod gen_cost;
 pub mod indexed;
 pub mod network;
 mod normalize;
@@ -45,13 +46,15 @@ mod operations;
 pub use error::{ElementCounts, Error, ErrorCategory, Result, ScenarioMismatch};
 pub use format::{
     Conversion, DisplayData, DisplayFormat, Parsed, PwdDisplay, PwdSubstation, PypsaCsvOutputs,
-    TargetFormat, convert_file, convert_str, display_format_from_name, parse_display_bytes,
-    parse_display_file, parse_egret_json, parse_file, parse_matpower, parse_matpower_file,
-    parse_pandapower_json, parse_powermodels_json, parse_powerworld, parse_pslf, parse_psse,
-    parse_str, read_pypsa_csv_folder, target_format_from_name, write_as, write_dir,
+    TargetFormat, WriteOptions, convert_file, convert_file_with_options, convert_str,
+    convert_str_with_options, display_format_from_name, parse_display_bytes, parse_display_file,
+    parse_egret_json, parse_file, parse_matpower, parse_matpower_file, parse_pandapower_json,
+    parse_powermodels_json, parse_powerworld, parse_pslf, parse_psse, parse_str,
+    read_pypsa_csv_folder, target_format_from_name, write_as, write_as_with_options, write_dir,
     write_egret_json, write_matpower, write_pandapower_json, write_powermodels_json,
     write_powerworld, write_pslf, write_psse, write_psse_rev, write_pypsa_csv_folder,
 };
+pub use gen_cost::{GenCostPatch, GenCostPolicyReport, MissingGenCostPolicy, parse_gen_cost_csv};
 pub use indexed::{ConnectivityReport, IndexCore, IndexedNetwork};
 pub use network::{
     Area, BalancedNetwork, Branch, BranchCharging, BranchCurrentRatings, BranchSolution, Bus,

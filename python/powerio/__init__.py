@@ -268,13 +268,24 @@ class Network:
         """Serialize to the JSON transport."""
         return self._inner.to_json()
 
-    def to_format(self, to: str) -> Conversion:
+    def to_format(
+        self,
+        to: str,
+        missing_gen_cost: Optional[str] = None,
+        default_gen_cost: Optional[str] = None,
+        gen_cost_csv: Optional[Any] = None,
+    ) -> Conversion:
         """Serialize this parsed case to another format.
 
         ``to`` is one of the format names accepted by :func:`convert_file`.
         Returns a :class:`Conversion` with output text and fidelity warnings.
         """
-        text, warnings = self._inner.to_format(to)
+        text, warnings = self._inner.to_format(
+            to,
+            missing_gen_cost=missing_gen_cost,
+            default_gen_cost=default_gen_cost,
+            gen_cost_csv=None if gen_cost_csv is None else str(gen_cost_csv),
+        )
         return Conversion(text, warnings)
 
     def to_dense(self) -> DenseNetwork:
@@ -399,6 +410,9 @@ class Network:
         include_y_bus: bool = True,
         include_taps: bool = True,
         include_shifts: bool = True,
+        missing_gen_cost: Optional[str] = None,
+        default_gen_cost: Optional[str] = None,
+        gen_cost_csv: Optional[Any] = None,
     ) -> dict:
         """Write the gridfm-datakit Parquet dataset for this case under
         ``<out_dir>/<case>/raw/``.
@@ -411,7 +425,14 @@ class Network:
         """
         _require_gridfm()
         return self._inner.write_gridfm(
-            str(out_dir), scenario, include_y_bus, include_taps, include_shifts
+            str(out_dir),
+            scenario,
+            include_y_bus,
+            include_taps,
+            include_shifts,
+            missing_gen_cost=missing_gen_cost,
+            default_gen_cost=default_gen_cost,
+            gen_cost_csv=None if gen_cost_csv is None else str(gen_cost_csv),
         )
 
     def write_pypsa_csv_folder(self, out_dir: Any) -> dict:
@@ -490,7 +511,14 @@ def from_json(text: str) -> Network:
     return Network(_powerio.from_json(text))
 
 
-def convert_file(path: Any, to: str, from_: Optional[str] = None) -> Conversion:
+def convert_file(
+    path: Any,
+    to: str,
+    from_: Optional[str] = None,
+    missing_gen_cost: Optional[str] = None,
+    default_gen_cost: Optional[str] = None,
+    gen_cost_csv: Optional[Any] = None,
+) -> Conversion:
     """Convert a case file to another format through the neutral hub.
 
     ``to`` / ``from_`` are format names: ``matpower``, ``powermodels-json``,
@@ -503,11 +531,25 @@ def convert_file(path: Any, to: str, from_: Optional[str] = None) -> Conversion:
     :meth:`Network.write_pypsa_csv_folder`. Returns a :class:`Conversion` with
     the text and any fidelity warnings.
     """
-    text, warnings = _powerio.convert_file(str(path), to, from_)
+    text, warnings = _powerio.convert_file(
+        str(path),
+        to,
+        from_,
+        missing_gen_cost=missing_gen_cost,
+        default_gen_cost=default_gen_cost,
+        gen_cost_csv=None if gen_cost_csv is None else str(gen_cost_csv),
+    )
     return Conversion(text, warnings)
 
 
-def convert_str(text: str, to: str, format: str = "matpower") -> Conversion:
+def convert_str(
+    text: str,
+    to: str,
+    format: str = "matpower",
+    missing_gen_cost: Optional[str] = None,
+    default_gen_cost: Optional[str] = None,
+    gen_cost_csv: Optional[Any] = None,
+) -> Conversion:
     """Convert in-memory case ``text`` to another format through the neutral
     hub, with no file staging.
 
@@ -515,13 +557,31 @@ def convert_str(text: str, to: str, format: str = "matpower") -> Conversion:
     ``format`` names the input (default ``matpower``). Returns a
     :class:`Conversion` with the converted text and any fidelity warnings.
     """
-    out, warnings = _powerio.convert_str(text, to, format)
+    out, warnings = _powerio.convert_str(
+        text,
+        to,
+        format,
+        missing_gen_cost=missing_gen_cost,
+        default_gen_cost=default_gen_cost,
+        gen_cost_csv=None if gen_cost_csv is None else str(gen_cost_csv),
+    )
     return Conversion(out, warnings)
 
 
-def to_format(network: Network, to: str) -> Conversion:
+def to_format(
+    network: Network,
+    to: str,
+    missing_gen_cost: Optional[str] = None,
+    default_gen_cost: Optional[str] = None,
+    gen_cost_csv: Optional[Any] = None,
+) -> Conversion:
     """Serialize ``network`` to another format."""
-    return network.to_format(to)
+    return network.to_format(
+        to,
+        missing_gen_cost=missing_gen_cost,
+        default_gen_cost=default_gen_cost,
+        gen_cost_csv=gen_cost_csv,
+    )
 
 
 def to_matpower(network: Network) -> str:
@@ -546,6 +606,9 @@ def write_gridfm_batch(
     include_y_bus: bool = True,
     include_taps: bool = True,
     include_shifts: bool = True,
+    missing_gen_cost: Optional[str] = None,
+    default_gen_cost: Optional[str] = None,
+    gen_cost_csv: Optional[Any] = None,
 ) -> dict:
     """Write several networks as one gridfm-datakit dataset, row-stacked and
     keyed by the ``scenario`` column.
@@ -561,7 +624,15 @@ def write_gridfm_batch(
     _require_gridfm()
     inners = [c._inner for c in networks]
     return _powerio.write_gridfm_batch(
-        inners, str(out_dir), base_scenario, include_y_bus, include_taps, include_shifts
+        inners,
+        str(out_dir),
+        base_scenario,
+        include_y_bus,
+        include_taps,
+        include_shifts,
+        missing_gen_cost=missing_gen_cost,
+        default_gen_cost=default_gen_cost,
+        gen_cost_csv=None if gen_cost_csv is None else str(gen_cost_csv),
     )
 
 

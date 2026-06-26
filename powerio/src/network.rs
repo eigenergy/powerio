@@ -1365,6 +1365,18 @@ impl Network {
         crate::write_as(self, format)
     }
 
+    /// Serialize this network with write-time cost policies.
+    ///
+    /// The network itself is not mutated. Default options preserve
+    /// [`to_format`](Self::to_format) behavior.
+    pub fn to_format_with_options(
+        &self,
+        format: crate::TargetFormat,
+        options: &crate::WriteOptions,
+    ) -> crate::Result<crate::Conversion> {
+        crate::write_as_with_options(self, format, options)
+    }
+
     /// Serialize this network to MATPOWER `.m` text.
     ///
     /// This is byte-exact when the network was parsed from MATPOWER and still

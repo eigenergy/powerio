@@ -19,6 +19,9 @@ the conventions a consumer (e.g. a C++ Laplacian solver) needs.
 - **Units.** `PerUnit` by default: power divided by `base_mva`, cost scaled so
   it is a function of per unit power (`q ← 2c₂·base²`, `c ← c₁·base`). `Native`
   keeps MW / native cost. The choice is recorded in the manifest.
+- **Generator costs.** The default DC OPF export policy is `require`: an
+  in-service generator without cost data is an error. Use `--missing-gen-cost`
+  to explicitly fill missing rows for feasibility tests.
 - **Reference buses.** `reference_buses` in the manifest lists every grounded bus
   as a 0-based dense index. Each in-service island needs at least one reference.
   If several references lie in one island, the bundle fixes all of those voltage
@@ -49,7 +52,8 @@ unlimited per MATPOWER). Generator-space provenance (length n_gen): `q_gen`,
 ## Manifest (`dcopf_meta.json`)
 
 `case_name, base_mva, n, m, n_gen, reference_buses` (0-based), `convention`,
-`units`, `files[]`, `powerio_version`.
+`units`, `cost_policy`, `synthesized_gen_costs`, `patched_gen_costs`, `files[]`,
+`powerio_version`.
 
 ## Solving with it
 

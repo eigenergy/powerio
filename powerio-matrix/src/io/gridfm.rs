@@ -75,7 +75,10 @@ use serde::Serialize;
 use crate::indexed::IndexedNetwork;
 use crate::matrix::{BuildOptions, YbusFlags, branch_admittance, branch_flows, build_ybus};
 use crate::network::{Branch, Bus, BusId, BusType, Extras, Generator, Load, Shunt, SourceFormat};
-use crate::{ElementCounts, Error, GenCost, Network, Result, ScenarioMismatch};
+use crate::{
+    ElementCounts, Error, GenCost, GenCostPatch, MissingGenCostPolicy, Network, Result,
+    ScenarioMismatch,
+};
 
 /// Options for the gridfm export — the batch-wide knobs. The scenario id is a
 /// per-snapshot property (set via [`GridfmSnapshot::new`] / [`numbered_snapshots`],
@@ -92,6 +95,11 @@ pub struct GridfmOptions {
     pub include_taps: bool,
     /// Apply phase shifts to the admittances. Default `true`.
     pub include_shifts: bool,
+    /// How missing generator cost rows are handled before export.
+    pub missing_gen_cost: MissingGenCostPolicy,
+    /// Explicit generator cost patches applied to each snapshot before the missing
+    /// cost policy.
+    pub gen_cost_patches: Vec<GenCostPatch>,
 }
 
 impl Default for GridfmOptions {
@@ -100,6 +108,8 @@ impl Default for GridfmOptions {
             include_y_bus: true,
             include_taps: true,
             include_shifts: true,
+            missing_gen_cost: MissingGenCostPolicy::Preserve,
+            gen_cost_patches: Vec::new(),
         }
     }
 }
@@ -114,6 +124,10 @@ impl GridfmOptions {
             include_shifts: self.include_shifts,
             ..Default::default()
         }
+    }
+
+    fn cost_options_default(&self) -> bool {
+        self.missing_gen_cost.is_preserve() && self.gen_cost_patches.is_empty()
     }
 }
 
@@ -178,6 +192,14 @@ pub struct GridfmOutputs {
     /// Generators whose cost row gridfm couldn't represent, whose `cp*` columns
     /// were zeroed.
     pub degenerate_cost_gens: usize,
+    /// Generators with no cost after applying the export cost policy.
+    pub missing_cost_gens: usize,
+    /// Generators with a present cost row gridfm cannot represent.
+    pub unsupported_cost_gens: usize,
+    /// Generators whose missing cost was filled by the export policy.
+    pub synthesized_gen_costs: usize,
+    /// Generator costs replaced by explicit user patches.
+    pub patched_gen_costs: usize,
 }
 
 #[derive(Serialize)]
@@ -207,6 +229,15 @@ struct GridfmMeta {
     /// malformed, or cubic and higher; `cp*` columns zeroed), summed over every
     /// snapshot in the batch.
     degenerate_cost_gens: usize,
+    /// Missing cost rows after applying the export cost policy.
+    missing_cost_gens: usize,
+    /// Present cost rows that gridfm cannot represent.
+    unsupported_cost_gens: usize,
+    /// Same as `degenerate_cost_gens`; named for the physical `cp*` columns.
+    zeroed_cost_gens: usize,
+    cost_policy: MissingGenCostPolicy,
+    synthesized_gen_costs: usize,
+    patched_gen_costs: usize,
     files: Vec<String>,
     powerio_version: String,
 }
@@ -245,7 +276,18 @@ pub fn gridfm_record_batches_batch(
     snapshots: &[GridfmSnapshot],
     opts: &GridfmOptions,
 ) -> Result<GridfmTables> {
-    let views = snapshot_views(snapshots)?;
+    if opts.cost_options_default() {
+        let views = snapshot_views(snapshots)?;
+        return tables_from_views(&views, opts);
+    }
+
+    let (nets, _) = policy_adjusted_snapshots(snapshots, opts)?;
+    let adjusted: Vec<_> = nets
+        .iter()
+        .zip(snapshots)
+        .map(|(net, snap)| GridfmSnapshot::new(net, snap.scenario))
+        .collect();
+    let views = snapshot_views(&adjusted)?;
     tables_from_views(&views, opts)
 }
 
@@ -416,6 +458,28 @@ fn shape_of(net: &Network) -> ElementCounts {
     }
 }
 
+#[derive(Debug, Clone, Copy, Default)]
+struct CostPolicyBatchReport {
+    synthesized: usize,
+    patched: usize,
+}
+
+fn policy_adjusted_snapshots(
+    snapshots: &[GridfmSnapshot],
+    opts: &GridfmOptions,
+) -> Result<(Vec<Network>, CostPolicyBatchReport)> {
+    let mut report = CostPolicyBatchReport::default();
+    let mut nets = Vec::with_capacity(snapshots.len());
+    for snap in snapshots {
+        let mut net = snap.net.clone();
+        let r = net.apply_gen_cost_policy(&opts.gen_cost_patches, opts.missing_gen_cost)?;
+        report.synthesized += r.synthesized;
+        report.patched += r.patched;
+        nets.push(net);
+    }
+    Ok((nets, report))
+}
+
 /// Number a list of networks into snapshots, stamping the k-th `base + k` — the
 /// one place the "k-th input is scenario `base + k`" rule lives, so the CLI and
 /// the Python binding can't drift. Checked: returns [`Error::ScenarioIdOverflow`]
@@ -470,13 +534,37 @@ pub fn write_gridfm_batch(
     out_dir: impl AsRef<Path>,
     opts: &GridfmOptions,
 ) -> Result<GridfmOutputs> {
+    if opts.cost_options_default() {
+        return write_gridfm_batch_inner(
+            snapshots,
+            out_dir.as_ref(),
+            opts,
+            CostPolicyBatchReport::default(),
+        );
+    }
+
+    let (nets, cost_report) = policy_adjusted_snapshots(snapshots, opts)?;
+    let adjusted: Vec<_> = nets
+        .iter()
+        .zip(snapshots)
+        .map(|(net, snap)| GridfmSnapshot::new(net, snap.scenario))
+        .collect();
+    write_gridfm_batch_inner(&adjusted, out_dir.as_ref(), opts, cost_report)
+}
+
+fn write_gridfm_batch_inner(
+    snapshots: &[GridfmSnapshot],
+    out_dir: &Path,
+    opts: &GridfmOptions,
+    cost_report: CostPolicyBatchReport,
+) -> Result<GridfmOutputs> {
     let views = snapshot_views(snapshots)?;
     let tables = tables_from_views(&views, opts)?;
 
     // The shape check guarantees every snapshot shares the base element set, so
     // the name and structural counts come from the first.
     let net = views[0].view.network();
-    let dir = out_dir.as_ref().join(&net.name).join("raw");
+    let dir = out_dir.join(&net.name).join("raw");
     std::fs::create_dir_all(&dir)?;
 
     let mut files = Vec::new();
@@ -494,11 +582,17 @@ pub fn write_gridfm_batch(
         .flat_map(|v| v.view.network().branches.iter())
         .filter(|br| br.r * br.r + br.x * br.x == 0.0)
         .count();
-    let degenerate_cost_gens: usize = views
+    let missing_cost_gens: usize = views
         .iter()
         .flat_map(|v| v.view.network().generators.iter())
-        .filter(|g| !cost_representable(g.cost.as_ref()))
+        .filter(|g| g.cost.is_none())
         .count();
+    let unsupported_cost_gens: usize = views
+        .iter()
+        .flat_map(|v| v.view.network().generators.iter())
+        .filter(|g| g.cost.is_some() && !cost_representable(g.cost.as_ref()))
+        .count();
+    let degenerate_cost_gens = missing_cost_gens + unsupported_cost_gens;
 
     let meta = GridfmMeta {
         case_name: net.name.clone(),
@@ -513,6 +607,12 @@ pub fn write_gridfm_batch(
         reference_bus: views[0].ref_bus,
         dropped_zero_impedance,
         degenerate_cost_gens,
+        missing_cost_gens,
+        unsupported_cost_gens,
+        zeroed_cost_gens: degenerate_cost_gens,
+        cost_policy: opts.missing_gen_cost,
+        synthesized_gen_costs: cost_report.synthesized,
+        patched_gen_costs: cost_report.patched,
         files: files
             .iter()
             .filter_map(|p| p.file_name().and_then(|s| s.to_str()).map(str::to_string))
@@ -529,6 +629,10 @@ pub fn write_gridfm_batch(
         files,
         dropped_zero_impedance,
         degenerate_cost_gens,
+        missing_cost_gens,
+        unsupported_cost_gens,
+        synthesized_gen_costs: cost_report.synthesized,
+        patched_gen_costs: cost_report.patched,
     })
 }
 
@@ -2601,11 +2705,54 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let out = write_gridfm_dataset(&net, 0, dir.path(), &GridfmOptions::default()).unwrap();
         assert_eq!(out.degenerate_cost_gens, 1);
+        assert_eq!(out.missing_cost_gens, 0);
+        assert_eq!(out.unsupported_cost_gens, 1);
         let meta: serde_json::Value = serde_json::from_str(
             &std::fs::read_to_string(out.dir.join("gridfm_meta.json")).unwrap(),
         )
         .unwrap();
         assert_eq!(meta["degenerate_cost_gens"], 1);
+        assert_eq!(meta["missing_cost_gens"], 0);
+        assert_eq!(meta["unsupported_cost_gens"], 1);
+        assert_eq!(meta["zeroed_cost_gens"], 1);
+    }
+
+    #[test]
+    fn missing_gridfm_costs_are_split_and_fill_policy_reduces_missing_count() {
+        let mut net = Network::in_memory(
+            "missing-cost",
+            100.0,
+            vec![bus(1, BusType::Ref), bus(2, BusType::Pq)],
+            vec![branch(1, 2, 0.01, 0.1)],
+        );
+        let mut missing = gen_at(1, gencost(2, 3, vec![1.0, 2.0, 3.0]));
+        missing.cost = None;
+        net.generators.push(missing);
+        net.generators
+            .push(gen_at(2, gencost(1, 2, vec![0.0, 0.0, 1.0, 1.0])));
+
+        let dir = tempfile::tempdir().unwrap();
+        let out = write_gridfm_dataset(&net, 0, dir.path(), &GridfmOptions::default()).unwrap();
+        assert_eq!(out.degenerate_cost_gens, 2);
+        assert_eq!(out.missing_cost_gens, 1);
+        assert_eq!(out.unsupported_cost_gens, 1);
+
+        let opts = GridfmOptions {
+            missing_gen_cost: MissingGenCostPolicy::zero(),
+            ..Default::default()
+        };
+        let dir = tempfile::tempdir().unwrap();
+        let out = write_gridfm_dataset(&net, 0, dir.path(), &opts).unwrap();
+        assert_eq!(out.synthesized_gen_costs, 1);
+        assert_eq!(out.missing_cost_gens, 0);
+        assert_eq!(out.unsupported_cost_gens, 1);
+        assert_eq!(out.degenerate_cost_gens, 1);
+        let meta: serde_json::Value = serde_json::from_str(
+            &std::fs::read_to_string(out.dir.join("gridfm_meta.json")).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(meta["cost_policy"]["mode"], "fill");
+        assert_eq!(meta["synthesized_gen_costs"], 1);
     }
 
     #[test]
