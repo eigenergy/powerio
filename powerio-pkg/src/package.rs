@@ -8,7 +8,10 @@ use powerio::{BalancedNetwork, SourceFormat};
 use powerio_dist::{DistSourceFormat, MulticonductorNetwork};
 
 use crate::diagnostics::{DiagnosticSeverity, DiagnosticStage, StructuredDiagnostic};
-use crate::lowering::LoweringRecord;
+use crate::lowering::{
+    LoweringRecord, MulticonductorToBalancedOptions, MulticonductorToBalancedReadiness,
+    check_multiconductor_to_balanced_lowering,
+};
 use crate::model::{ModelKind, ModelPayload};
 use crate::provenance::{
     Confidence, MappingKind, Origin, Producer, SourceDescriptor, SourceMapEntry, SourceRef,
@@ -235,6 +238,20 @@ impl CompilerPackage {
     /// Append a lowering record to the history.
     pub fn push_lowering(&mut self, record: LoweringRecord) {
         self.lowering_history.push(record);
+    }
+
+    /// Check whether this package's multiconductor payload is ready for the
+    /// future explicit multiconductor to balanced lowering pass.
+    #[must_use]
+    pub fn check_multiconductor_to_balanced_lowering(
+        &self,
+    ) -> Option<MulticonductorToBalancedReadiness> {
+        self.as_multiconductor().map(|net| {
+            check_multiconductor_to_balanced_lowering(
+                net,
+                MulticonductorToBalancedOptions::default(),
+            )
+        })
     }
 
     /// Run the package semantic validation profile and record its findings.

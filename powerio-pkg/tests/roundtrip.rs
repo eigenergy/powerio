@@ -2,8 +2,9 @@
 
 use powerio_pkg::{
     CompilerPackage, Confidence, DiagnosticCode, DiagnosticSeverity, DiagnosticStage, MappingKind,
-    ModelKind, Origin, PIO_PACKAGE_SCHEMA_URL, PIO_PACKAGE_SCHEMA_VERSION, SourceDescriptor,
-    SourceMapEntry, SourceRef, StructuredDiagnostic, ValidationStatus,
+    ModelKind, MulticonductorToBalancedReadiness, Origin, PIO_PACKAGE_SCHEMA_URL,
+    PIO_PACKAGE_SCHEMA_VERSION, SequenceTransformConvention, SourceDescriptor, SourceMapEntry,
+    SourceRef, StructuredDiagnostic, ValidationStatus, check_multiconductor_to_balanced_lowering,
 };
 
 const MATPOWER_SRC: &str = "\
@@ -31,6 +32,77 @@ fn multiconductor_package() -> CompilerPackage {
     // exercises the defaulted -> source-map lift.
     let net = powerio_dist::parse_str("New Circuit.c1", "dss").expect("parse dss");
     CompilerPackage::from_multiconductor(net)
+}
+
+fn strings(values: &[&str]) -> Vec<String> {
+    values.iter().map(|v| (*v).to_owned()).collect()
+}
+
+fn zero_matrix(n: usize) -> powerio_dist::Mat {
+    vec![vec![0.0; n]; n]
+}
+
+fn preflight_network(terminals: &[&str], grounded: &[&str]) -> powerio_dist::DistNetwork {
+    use powerio_dist::{DistBus, DistLine, DistLineCode, DistNetwork, Extras, VoltageSource};
+
+    let n = terminals.len();
+    let terminal_map = strings(terminals);
+    let mut net = DistNetwork::default();
+    for id in ["sourcebus", "loadbus"] {
+        net.buses.push(DistBus {
+            id: id.to_owned(),
+            terminals: terminal_map.clone(),
+            grounded: strings(grounded),
+            v_min: None,
+            v_max: None,
+            vpn_min: None,
+            vpn_max: None,
+            vpp_min: None,
+            vpp_max: None,
+            vsym_min: None,
+            vsym_max: None,
+            extras: Extras::new(),
+        });
+    }
+    net.linecodes.push(DistLineCode {
+        name: "lc".to_owned(),
+        n_conductors: n,
+        r_series: zero_matrix(n),
+        x_series: zero_matrix(n),
+        g_from: zero_matrix(n),
+        b_from: zero_matrix(n),
+        g_to: zero_matrix(n),
+        b_to: zero_matrix(n),
+        i_max: None,
+        s_max: None,
+        extras: Extras::new(),
+    });
+    net.lines.push(DistLine {
+        name: "l1".to_owned(),
+        bus_from: "sourcebus".to_owned(),
+        bus_to: "loadbus".to_owned(),
+        terminal_map_from: terminal_map.clone(),
+        terminal_map_to: terminal_map.clone(),
+        linecode: "lc".to_owned(),
+        length: 1.0,
+        extras: Extras::new(),
+    });
+    net.sources.push(VoltageSource {
+        name: "source".to_owned(),
+        bus: "sourcebus".to_owned(),
+        terminal_map,
+        v_magnitude: vec![1.0; n],
+        v_angle: vec![0.0; n],
+        extras: Extras::new(),
+    });
+    net
+}
+
+fn has_lowering_code(report: &MulticonductorToBalancedReadiness, code: &str) -> bool {
+    report
+        .diagnostics
+        .iter()
+        .any(|d| d.code == DiagnosticCode::new(code))
 }
 
 /// Serialize -> deserialize -> serialize must be byte-identical (deterministic
@@ -359,6 +431,159 @@ fn sane_validation_records_multiconductor_structure_findings() {
             .any(|p| p.name == "multiconductor.structure" && p.status == ValidationStatus::Error)
     );
     assert_json_roundtrips(&pkg);
+}
+
+#[test]
+fn lowering_preflight_accepts_three_phase_without_neutral() {
+    let net = preflight_network(&["1", "2", "3"], &[]);
+    let report = check_multiconductor_to_balanced_lowering(
+        &net,
+        powerio_pkg::MulticonductorToBalancedOptions::default(),
+    );
+
+    assert_eq!(
+        report.convention,
+        SequenceTransformConvention::FortescuePowerInvariant
+    );
+    assert_eq!(report.status, ValidationStatus::Ok);
+    assert!(report.is_ready());
+    assert!(report.diagnostics.is_empty(), "{:?}", report.diagnostics);
+}
+
+#[test]
+fn lowering_preflight_records_kron_reduction_for_neutral() {
+    let net = preflight_network(&["1", "2", "3", "4"], &["4"]);
+    let report = check_multiconductor_to_balanced_lowering(
+        &net,
+        powerio_pkg::MulticonductorToBalancedOptions::default(),
+    );
+
+    assert_eq!(report.status, ValidationStatus::Info);
+    assert!(report.is_ready());
+    assert!(has_lowering_code(
+        &report,
+        "LOWER.MULTI_TO_BALANCED.KRON_REDUCTION_REQUIRED"
+    ));
+    assert!(
+        report
+            .approximations
+            .iter()
+            .any(|a| a.contains("Kron reduction")),
+        "{:?}",
+        report.approximations
+    );
+}
+
+#[test]
+fn lowering_preflight_rejects_one_phase_input() {
+    let net = preflight_network(&["1"], &[]);
+    let report = check_multiconductor_to_balanced_lowering(
+        &net,
+        powerio_pkg::MulticonductorToBalancedOptions::default(),
+    );
+
+    assert_eq!(report.status, ValidationStatus::Error);
+    assert!(!report.is_ready());
+    assert!(has_lowering_code(
+        &report,
+        "LOWER.MULTI_TO_BALANCED.UNSUPPORTED_CONDUCTOR_SET"
+    ));
+}
+
+#[test]
+fn lowering_preflight_rejects_two_wire_input() {
+    let net = preflight_network(&["1", "2"], &[]);
+    let report = check_multiconductor_to_balanced_lowering(
+        &net,
+        powerio_pkg::MulticonductorToBalancedOptions::default(),
+    );
+
+    assert_eq!(report.status, ValidationStatus::Error);
+    assert!(!report.is_ready());
+    assert!(has_lowering_code(
+        &report,
+        "LOWER.MULTI_TO_BALANCED.AMBIGUOUS_TERMINAL_MAP"
+    ));
+}
+
+#[test]
+fn lowering_preflight_rejects_untyped_objects() {
+    use powerio_dist::UntypedObject;
+
+    let mut net = preflight_network(&["1", "2", "3"], &[]);
+    net.untyped.push(UntypedObject {
+        class: "regcontrol".to_owned(),
+        name: "r1".to_owned(),
+        props: Vec::new(),
+    });
+    let report = check_multiconductor_to_balanced_lowering(
+        &net,
+        powerio_pkg::MulticonductorToBalancedOptions::default(),
+    );
+
+    assert_eq!(report.status, ValidationStatus::Error);
+    assert!(has_lowering_code(
+        &report,
+        "LOWER.MULTI_TO_BALANCED.UNSUPPORTED_OBJECT"
+    ));
+}
+
+#[test]
+fn lowering_preflight_rejects_missing_phase_reference() {
+    let mut net = preflight_network(&["1", "2", "3"], &[]);
+    net.sources.clear();
+    let report = check_multiconductor_to_balanced_lowering(
+        &net,
+        powerio_pkg::MulticonductorToBalancedOptions::default(),
+    );
+
+    assert_eq!(report.status, ValidationStatus::Error);
+    assert!(has_lowering_code(
+        &report,
+        "LOWER.MULTI_TO_BALANCED.MISSING_PHASE_REFERENCE"
+    ));
+}
+
+#[test]
+fn lowering_preflight_rejects_transformers() {
+    use powerio_dist::{DistTransformer, Extras};
+
+    let mut net = preflight_network(&["1", "2", "3"], &[]);
+    net.transformers.push(DistTransformer {
+        name: "t1".to_owned(),
+        windings: Vec::new(),
+        xsc_pct: Vec::new(),
+        phases: 3,
+        extras: Extras::new(),
+    });
+    let report = check_multiconductor_to_balanced_lowering(
+        &net,
+        powerio_pkg::MulticonductorToBalancedOptions::default(),
+    );
+
+    assert_eq!(report.status, ValidationStatus::Error);
+    assert!(has_lowering_code(
+        &report,
+        "LOWER.MULTI_TO_BALANCED.UNSUPPORTED_TRANSFORMER"
+    ));
+}
+
+#[test]
+fn package_lowering_preflight_helper_is_read_only() {
+    let balanced = balanced_package();
+    assert!(
+        balanced
+            .check_multiconductor_to_balanced_lowering()
+            .is_none()
+    );
+
+    let pkg = CompilerPackage::from_multiconductor(preflight_network(&["1", "2", "3"], &[]));
+    assert!(pkg.lowering_history.is_empty());
+    let report = pkg
+        .check_multiconductor_to_balanced_lowering()
+        .expect("multiconductor package has readiness");
+    assert_eq!(report.status, ValidationStatus::Ok);
+    assert!(pkg.lowering_history.is_empty());
 }
 
 #[test]

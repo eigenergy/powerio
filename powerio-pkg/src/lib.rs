@@ -45,7 +45,10 @@ pub mod summary;
 pub mod validation;
 
 pub use diagnostics::{DiagnosticCode, DiagnosticSeverity, DiagnosticStage, StructuredDiagnostic};
-pub use lowering::LoweringRecord;
+pub use lowering::{
+    LoweringRecord, MulticonductorToBalancedOptions, MulticonductorToBalancedReadiness,
+    SequenceTransformConvention, check_multiconductor_to_balanced_lowering,
+};
 pub use model::{ModelKind, ModelPayload};
 pub use package::{
     CompilerPackage, DerivedMetadata, PIO_PACKAGE_SCHEMA_URL, PIO_PACKAGE_SCHEMA_VERSION,
