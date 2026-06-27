@@ -10,6 +10,8 @@ crate doc comment.
   sign, tap, per unit, and DC conventions across them.
 - [dcopf-bundle.md](dcopf-bundle.md): the Matrix Market + manifest schema the
   `dcopf` subcommand writes for a downstream solver.
+- [generator-cost-policy.md](generator-cost-policy.md): how missing generator
+  costs are handled across PSS/E, MATPOWER, DC OPF, GridFM, and future adapters.
 - [languages.md](languages.md): canonical Rust, Python, Julia, and C ABI names.
 - [python.md](python.md): Python install extras and API examples.
 - [architecture/](architecture/README.md): the compiler-IR architecture and the

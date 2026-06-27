@@ -32,6 +32,7 @@ use std::sync::Arc;
 
 use serde_json::{Map, Value};
 
+use crate::gen_cost::{GenCostPatch, MissingGenCostPolicy};
 use crate::network::{Bus, BusId, BusType, Network, SourceFormat};
 use crate::{Error, Result};
 use routing::{Detection, SourceFormat as DetectedFormat, TransmissionFormat};
@@ -576,6 +577,24 @@ pub struct Conversion {
     pub warnings: Vec<String>,
 }
 
+/// Optional write-time policies layered on top of the neutral [`Network`].
+///
+/// The default is a no-op and preserves the old `write_as` / `convert_*`
+/// behavior. Non-default options work on a cloned network and never mutate the
+/// caller's case.
+#[derive(Debug, Clone, Default)]
+pub struct WriteOptions {
+    pub missing_gen_cost: MissingGenCostPolicy,
+    pub gen_cost_patches: Vec<GenCostPatch>,
+}
+
+impl WriteOptions {
+    #[must_use]
+    pub fn is_default(&self) -> bool {
+        self.missing_gen_cost.is_preserve() && self.gen_cost_patches.is_empty()
+    }
+}
+
 /// Convert a [`Network`] to `format`. Writing back to the source format returns
 /// the retained source text; otherwise the network is serialized into the target.
 ///
@@ -633,6 +652,53 @@ pub fn write_as(net: &Network, format: TargetFormat) -> Result<Conversion> {
     warn_dropped_frequency(net, format, &mut conv);
     warn_psse_downgrade(net, format, &mut conv);
     warn_dropped_transformer_charging(net, format, &mut conv);
+    Ok(conv)
+}
+
+/// Convert a [`Network`] with write-time cost policies. The old [`write_as`]
+/// behavior is preserved when `options` is default.
+pub fn write_as_with_options(
+    net: &Network,
+    format: TargetFormat,
+    options: &WriteOptions,
+) -> Result<Conversion> {
+    if options.is_default() {
+        return write_as(net, format);
+    }
+
+    let mut working = net.clone();
+    let report =
+        working.apply_gen_cost_policy(&options.gen_cost_patches, options.missing_gen_cost)?;
+    let mut policy_warnings = Vec::new();
+    if report.patched > 0 {
+        policy_warnings.push(format!(
+            "generator cost patch applied to {} generator(s)",
+            report.patched
+        ));
+    }
+    if report.synthesized > 0 {
+        policy_warnings.push(match options.missing_gen_cost {
+            MissingGenCostPolicy::Fill {
+                c2,
+                c1,
+                c0,
+                startup,
+                shutdown,
+            } => format!(
+                "generator cost synthesized for {} generator(s): model 2, ncost 3, \
+                 coeffs [{c2}, {c1}, {c0}], startup {startup}, shutdown {shutdown}",
+                report.synthesized
+            ),
+            _ => unreachable!("only Fill synthesizes costs"),
+        });
+    }
+    if report.patched > 0 || report.synthesized > 0 {
+        working.source = None;
+    }
+
+    let mut conv = write_as(&working, format)?;
+    policy_warnings.append(&mut conv.warnings);
+    conv.warnings = policy_warnings;
     Ok(conv)
 }
 
@@ -750,6 +816,21 @@ pub fn convert_file(
     Ok(conv)
 }
 
+/// Convert a case file with write-time cost policies.
+pub fn convert_file_with_options(
+    path: impl AsRef<std::path::Path>,
+    to: TargetFormat,
+    from: Option<&str>,
+    options: &WriteOptions,
+) -> Result<Conversion> {
+    let parsed = parse_file(path, from)?;
+    let mut conv = write_as_with_options(&parsed.network, to, options)?;
+    if !is_echo(&parsed.network, to) || !options.is_default() {
+        conv.warnings.splice(0..0, parsed.warnings);
+    }
+    Ok(conv)
+}
+
 /// Convert in-memory case `text` of the named `format` (see
 /// [`target_format_from_name`]) to `to`.
 ///
@@ -763,6 +844,21 @@ pub fn convert_str(text: &str, to: TargetFormat, format: &str) -> Result<Convers
     let parsed = parse_str(text, format)?;
     let mut conv = write_as(&parsed.network, to)?;
     if !is_echo(&parsed.network, to) {
+        conv.warnings.splice(0..0, parsed.warnings);
+    }
+    Ok(conv)
+}
+
+/// Convert in-memory case text with write-time cost policies.
+pub fn convert_str_with_options(
+    text: &str,
+    to: TargetFormat,
+    format: &str,
+    options: &WriteOptions,
+) -> Result<Conversion> {
+    let parsed = parse_str(text, format)?;
+    let mut conv = write_as_with_options(&parsed.network, to, options)?;
+    if !is_echo(&parsed.network, to) || !options.is_default() {
         conv.warnings.splice(0..0, parsed.warnings);
     }
     Ok(conv)

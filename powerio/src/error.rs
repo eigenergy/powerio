@@ -48,6 +48,12 @@ pub enum Error {
     #[error("generator {gen_index} has no cost data")]
     MissingGenCost { gen_index: usize },
 
+    #[error("default generator cost field `{field}` is not finite: {value}")]
+    NonFiniteGenCost { field: &'static str, value: f64 },
+
+    #[error("invalid generator cost patch row {row}: {reason}")]
+    InvalidGenCostPatch { row: usize, reason: String },
+
     #[error(
         "generator {gen_index} has an unsupported cost model (model {model}, ncost {ncost}); need polynomial model 2 with degree ≤ 2"
     )]
@@ -188,6 +194,8 @@ impl Error {
             | Error::DimensionMismatch { .. }
             | Error::NoGenerators
             | Error::MissingGenCost { .. }
+            | Error::NonFiniteGenCost { .. }
+            | Error::InvalidGenCostPatch { .. }
             | Error::UnsupportedCostModel { .. }
             | Error::GenCostCountMismatch { .. }
             | Error::ReferenceBusCount { .. }

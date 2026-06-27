@@ -7,10 +7,11 @@ use std::path::{Path, PathBuf};
 
 use powerio::{
     Branch, BranchCharging, BranchCurrentRatings, BranchSolution, Bus, BusId, BusType, Error,
-    Extras, Load, LoadVoltageModel, Network, SourceFormat, TargetFormat, convert_file, parse_file,
-    parse_matpower, parse_matpower_file, parse_powermodels_json, parse_powerworld, parse_pslf,
-    parse_psse, read_pypsa_csv_folder, write_as, write_egret_json, write_powermodels_json,
-    write_powerworld, write_pslf, write_psse, write_pypsa_csv_folder,
+    Extras, Load, LoadVoltageModel, MissingGenCostPolicy, Network, SourceFormat, TargetFormat,
+    WriteOptions, convert_file, parse_file, parse_gen_cost_csv, parse_matpower,
+    parse_matpower_file, parse_powermodels_json, parse_powerworld, parse_pslf, parse_psse,
+    read_pypsa_csv_folder, write_as, write_as_with_options, write_egret_json,
+    write_powermodels_json, write_powerworld, write_pslf, write_psse, write_pypsa_csv_folder,
 };
 use serde_json::Value;
 
@@ -2121,6 +2122,119 @@ fn snapshot_round_trips_through_core_api() {
     // Bit-exact: the snapshot is lossless, so even the sign of a zero survives.
     assert_eq!(back.base_mva.to_bits(), net.base_mva.to_bits());
     assert_eq!(back.source_format, net.source_format);
+}
+
+#[test]
+fn psse_to_matpower_omits_missing_costs_without_synthesizing_zero() {
+    let raw = std::fs::read_to_string(data("psse/case14.raw")).unwrap();
+    let net = parse_psse(&raw).unwrap();
+    assert!(net.generators.iter().all(|g| g.cost.is_none()));
+
+    let conv = write_as(&net, TargetFormat::Matpower).unwrap();
+    assert!(conv.text.contains("mpc.gen = ["));
+    assert!(!conv.text.contains("mpc.gencost = ["));
+    assert!(
+        conv.warnings.iter().any(|w| {
+            w.contains("generator costs absent") && w.contains("no zero costs synthesized")
+        }),
+        "{:?}",
+        conv.warnings
+    );
+}
+
+#[test]
+fn psse_to_matpower_can_explicitly_fill_zero_costs() {
+    let raw = std::fs::read_to_string(data("psse/case14.raw")).unwrap();
+    let net = parse_psse(&raw).unwrap();
+    let opts = WriteOptions {
+        missing_gen_cost: MissingGenCostPolicy::zero(),
+        gen_cost_patches: Vec::new(),
+    };
+
+    let conv = write_as_with_options(&net, TargetFormat::Matpower, &opts).unwrap();
+    assert!(conv.text.contains("mpc.gencost = ["));
+    assert!(
+        conv.warnings
+            .iter()
+            .any(|w| w.contains("generator cost synthesized")),
+        "{:?}",
+        conv.warnings
+    );
+    let back = parse_matpower(&conv.text).unwrap();
+    assert_eq!(back.generators.len(), net.generators.len());
+    for g in &back.generators {
+        let cost = g.cost.as_ref().expect("filled cost");
+        assert_eq!(cost.model, 2);
+        assert_eq!(cost.ncost, 3);
+        assert_eq!(cost.coeffs, vec![0.0, 0.0, 0.0]);
+    }
+}
+
+#[test]
+fn partial_matpower_costs_preserve_existing_rows_when_fill_policy_is_explicit() {
+    let mut net = parse_matpower_file(data("case9.m")).unwrap();
+    net.source = None;
+    let original = net.generators[0].cost.clone().expect("case9 cost");
+    net.generators[1].cost = None;
+
+    let default = write_as(&net, TargetFormat::Matpower).unwrap();
+    assert!(!default.text.contains("mpc.gencost = ["));
+    assert!(
+        default
+            .warnings
+            .iter()
+            .any(|w| w.contains("all-or-nothing")),
+        "{:?}",
+        default.warnings
+    );
+
+    let opts = WriteOptions {
+        missing_gen_cost: MissingGenCostPolicy::quadratic(0.01, 2.0, 3.0),
+        gen_cost_patches: Vec::new(),
+    };
+    let filled = write_as_with_options(&net, TargetFormat::Matpower, &opts).unwrap();
+    let back = parse_matpower(&filled.text).unwrap();
+    assert_eq!(
+        back.generators[0].cost.as_ref().unwrap().coeffs,
+        original.coeffs
+    );
+    assert_eq!(
+        back.generators[1].cost.as_ref().unwrap().coeffs,
+        vec![0.01, 2.0, 3.0]
+    );
+}
+
+#[test]
+fn generator_cost_csv_patches_validate_index_and_bus() {
+    let mut net = parse_matpower_file(data("case9.m")).unwrap();
+    let bus = net.generators[0].bus;
+    let csv = format!("gen_index,bus,c2,c1,c0\n0,{bus},0.5,4.0,1.0\n");
+    let patches = parse_gen_cost_csv(&csv).unwrap();
+    let report = net
+        .apply_gen_cost_policy(&patches, MissingGenCostPolicy::Preserve)
+        .unwrap();
+    assert_eq!(report.patched, 1);
+    assert_eq!(
+        net.generators[0].cost.as_ref().unwrap().coeffs,
+        vec![0.5, 4.0, 1.0]
+    );
+
+    let duplicate = format!("gen_index,bus,c2,c1,c0\n0,{bus},0,0,0\n0,{bus},1,1,1\n");
+    let patches = parse_gen_cost_csv(&duplicate).unwrap();
+    let err = net
+        .apply_gen_cost_policy(&patches, MissingGenCostPolicy::Preserve)
+        .unwrap_err();
+    assert!(err.to_string().contains("duplicate gen_index"));
+
+    let mismatch = "gen_index,bus,c2,c1,c0\n0,9999,0,0,0\n";
+    let patches = parse_gen_cost_csv(mismatch).unwrap();
+    let err = net
+        .apply_gen_cost_policy(&patches, MissingGenCostPolicy::Preserve)
+        .unwrap_err();
+    assert!(err.to_string().contains("bus mismatch"));
+
+    let err = parse_gen_cost_csv("gen_index,bus,c2,c1,c0\n0,1,NaN,0,0\n").unwrap_err();
+    assert!(err.to_string().contains("not finite"));
 }
 
 #[test]

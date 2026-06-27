@@ -4,9 +4,9 @@
 use powerio_matrix::IndexedNetwork;
 use powerio_matrix::{
     Branch, BuildOptions, Bus, BusId, BusType, DcConvention, Error, Extras, GenCost, Generator,
-    Network, Scheme, Units, build_adjacency, build_bprime, build_flow_map, build_incidence,
-    build_lodf, build_opf_instance, build_ptdf, build_weighted_laplacian, build_ybus, ground_at,
-    parse_matpower_file,
+    MissingGenCostPolicy, Network, Scheme, Units, build_adjacency, build_bprime, build_flow_map,
+    build_incidence, build_lodf, build_opf_instance, build_ptdf, build_weighted_laplacian,
+    build_ybus, ground_at, parse_matpower_file,
 };
 use sprs::CsMat;
 
@@ -257,6 +257,33 @@ fn bundle_round_trips() {
     let l = powerio_matrix::io::read_mtx(out.dir.join("L.mtx")).unwrap();
     assert_eq!(l.rows(), case.buses.len());
     assert_eq!(l.cols(), case.buses.len());
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn dcopf_bundle_can_fill_missing_costs_explicitly() {
+    let case = net_with_gens(
+        "nocost_dcopf",
+        vec![bus(1, BusType::Ref), bus(2, BusType::Pq)],
+        vec![branch(1, 2, 0.1)],
+        vec![gen_with_cost(1, None)],
+    );
+    let dir = std::env::temp_dir().join("powerio_dcopf_fill_cost_test");
+    let _ = std::fs::remove_dir_all(&dir);
+    let opts = powerio_matrix::DcOpfOptions {
+        missing_gen_cost: MissingGenCostPolicy::zero(),
+        ..Default::default()
+    };
+    let out = powerio_matrix::write_dcopf_bundle(&case, &dir, &opts).unwrap();
+    let meta: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(out.dir.join("dcopf_meta.json")).unwrap())
+            .unwrap();
+    assert_eq!(meta["synthesized_gen_costs"], 1);
+    assert_eq!(meta["cost_policy"]["mode"], "fill");
+    let q_gen = powerio_matrix::io::read_vector_mtx(out.dir.join("q_gen.mtx")).unwrap();
+    let c_gen = powerio_matrix::io::read_vector_mtx(out.dir.join("c_gen.mtx")).unwrap();
+    assert_eq!(q_gen, vec![0.0]);
+    assert_eq!(c_gen, vec![0.0]);
     let _ = std::fs::remove_dir_all(&dir);
 }
 

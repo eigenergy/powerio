@@ -1,6 +1,6 @@
 //! The `.pio.json` root object.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use serde::{Deserialize, Serialize};
 
@@ -8,13 +8,16 @@ use powerio::{BalancedNetwork, SourceFormat};
 use powerio_dist::{DistSourceFormat, MulticonductorNetwork};
 
 use crate::diagnostics::{DiagnosticSeverity, DiagnosticStage, StructuredDiagnostic};
-use crate::lowering::LoweringRecord;
+use crate::lowering::{
+    LoweringRecord, MulticonductorToBalancedOptions, MulticonductorToBalancedReadiness,
+    check_multiconductor_to_balanced_lowering,
+};
 use crate::model::{ModelKind, ModelPayload};
 use crate::provenance::{
     Confidence, MappingKind, Origin, Producer, SourceDescriptor, SourceMapEntry, SourceRef,
 };
 use crate::summary::{ObjectSummary, ObjectTopology, ObjectUnits};
-use crate::validation::ValidationSummary;
+use crate::validation::{ValidationPass, ValidationStatus, ValidationSummary};
 
 /// The canonical schema URL for this package version.
 pub const PIO_PACKAGE_SCHEMA_URL: &str = "https://powerio.dev/schema/pio-package/0.1";
@@ -235,6 +238,496 @@ impl CompilerPackage {
     /// Append a lowering record to the history.
     pub fn push_lowering(&mut self, record: LoweringRecord) {
         self.lowering_history.push(record);
+    }
+
+    /// Check whether this package's multiconductor payload is ready for the
+    /// future explicit multiconductor to balanced lowering pass.
+    #[must_use]
+    pub fn check_multiconductor_to_balanced_lowering(
+        &self,
+    ) -> Option<MulticonductorToBalancedReadiness> {
+        self.as_multiconductor().map(|net| {
+            check_multiconductor_to_balanced_lowering(
+                net,
+                MulticonductorToBalancedOptions::default(),
+            )
+        })
+    }
+
+    /// Run the package semantic validation profile and record its findings.
+    ///
+    /// This pass is non mutating: it reports structural and semantic issues in
+    /// `diagnostics` and `validation.passes`, but it never repairs or rewrites
+    /// the payload.
+    pub fn run_sane_validation(&mut self) {
+        self.diagnostics
+            .retain(|d| !is_sane_validation_code(d.code.as_str()));
+
+        let (diagnostics, passes) = match &self.model {
+            ModelPayload::Balanced { balanced_network } => sane_validate_balanced(balanced_network),
+            ModelPayload::Multiconductor {
+                multiconductor_network,
+            } => sane_validate_multiconductor(multiconductor_network),
+        };
+
+        self.diagnostics.extend(diagnostics);
+        self.validation =
+            ValidationSummary::from_diagnostics(&self.diagnostics).with_passes(passes);
+    }
+}
+
+const SANE_VALIDATION_CODES: [&str; 6] = [
+    "VALIDATE.BALANCED.STRUCTURE",
+    "VALIDATE.BALANCED.VALUE_DOMAIN",
+    "VALIDATE.MULTI.STRUCTURE",
+    "VALIDATE.MULTI.TERMINAL_MAP",
+    "VALIDATE.MULTI.UNTYPED_OBJECT",
+    "VALIDATE.MULTI.NO_VOLTAGE_SOURCE",
+];
+
+fn is_sane_validation_code(code: &str) -> bool {
+    SANE_VALIDATION_CODES.contains(&code)
+}
+
+fn validation_status(diagnostics: &[StructuredDiagnostic]) -> ValidationStatus {
+    diagnostics
+        .iter()
+        .map(|d| match d.severity {
+            DiagnosticSeverity::Debug => ValidationStatus::Ok,
+            DiagnosticSeverity::Info => ValidationStatus::Info,
+            DiagnosticSeverity::Warning => ValidationStatus::Warning,
+            DiagnosticSeverity::Error => ValidationStatus::Error,
+            DiagnosticSeverity::Fatal => ValidationStatus::Fatal,
+        })
+        .max()
+        .unwrap_or(ValidationStatus::Ok)
+}
+
+fn sane_validate_balanced(
+    net: &BalancedNetwork,
+) -> (Vec<StructuredDiagnostic>, Vec<ValidationPass>) {
+    let mut structure = Vec::new();
+    if let Err(err) = net.validate() {
+        structure.push(StructuredDiagnostic::new(
+            "VALIDATE.BALANCED.STRUCTURE",
+            DiagnosticSeverity::Error,
+            DiagnosticStage::Validate,
+            err.to_string(),
+        ));
+    }
+
+    let mut value_domain = Vec::new();
+    for finding in net.validate_values() {
+        let mut d = StructuredDiagnostic::new(
+            "VALIDATE.BALANCED.VALUE_DOMAIN",
+            DiagnosticSeverity::Warning,
+            DiagnosticStage::Validate,
+            format!(
+                "{} field `{}` is outside its value domain; suggested value is {}",
+                finding.element, finding.field, finding.new
+            ),
+        )
+        .with_element_path(format!(
+            "/model/balanced_network/{}#{}",
+            finding.element.replace(' ', "_"),
+            finding.field
+        ))
+        .with_suggested_action("Run the explicit repair pass if these defaults are desired.");
+        d.details
+            .insert("element".to_owned(), serde_json::json!(finding.element));
+        d.details
+            .insert("field".to_owned(), serde_json::json!(finding.field));
+        d.details
+            .insert("old".to_owned(), serde_json::json!(finding.old));
+        d.details
+            .insert("new".to_owned(), serde_json::json!(finding.new));
+        d.details
+            .insert("reason".to_owned(), serde_json::json!(finding.reason));
+        value_domain.push(d);
+    }
+
+    let passes = vec![
+        ValidationPass::new("balanced.structure", validation_status(&structure)),
+        ValidationPass::new("balanced.value_domain", validation_status(&value_domain)),
+    ];
+    structure.extend(value_domain);
+    (structure, passes)
+}
+
+fn sane_validate_multiconductor(
+    net: &MulticonductorNetwork,
+) -> (Vec<StructuredDiagnostic>, Vec<ValidationPass>) {
+    let mut structure = Vec::new();
+    let mut terminal_maps = Vec::new();
+    let mut untyped = Vec::new();
+    let mut sources = Vec::new();
+
+    let (bus_ids, bus_terminals) = multiconductor_bus_index(net, &mut structure);
+
+    validate_multiconductor_lines(
+        net,
+        &bus_ids,
+        &bus_terminals,
+        &mut structure,
+        &mut terminal_maps,
+    );
+    validate_multiconductor_switches(
+        net,
+        &bus_ids,
+        &bus_terminals,
+        &mut structure,
+        &mut terminal_maps,
+    );
+    validate_multiconductor_transformers(
+        net,
+        &bus_ids,
+        &bus_terminals,
+        &mut structure,
+        &mut terminal_maps,
+    );
+    validate_multiconductor_injections(
+        net,
+        &bus_ids,
+        &bus_terminals,
+        &mut structure,
+        &mut terminal_maps,
+    );
+
+    for (i, obj) in net.untyped.iter().enumerate() {
+        untyped.push(
+            StructuredDiagnostic::new(
+                "VALIDATE.MULTI.UNTYPED_OBJECT",
+                DiagnosticSeverity::Warning,
+                DiagnosticStage::Validate,
+                format!(
+                    "{} {} is preserved as an untyped object",
+                    obj.class, obj.name
+                ),
+            )
+            .with_element_path(format!("/model/multiconductor_network/untyped/{i}")),
+        );
+    }
+
+    if net.sources.is_empty() {
+        sources.push(StructuredDiagnostic::new(
+            "VALIDATE.MULTI.NO_VOLTAGE_SOURCE",
+            DiagnosticSeverity::Warning,
+            DiagnosticStage::Validate,
+            "multiconductor package has no voltage source",
+        ));
+    }
+
+    let passes = vec![
+        ValidationPass::new("multiconductor.structure", validation_status(&structure)),
+        ValidationPass::new(
+            "multiconductor.terminal_map",
+            validation_status(&terminal_maps),
+        ),
+        ValidationPass::new("multiconductor.untyped_object", validation_status(&untyped)),
+        ValidationPass::new("multiconductor.voltage_source", validation_status(&sources)),
+    ];
+
+    let mut diagnostics = structure;
+    diagnostics.extend(terminal_maps);
+    diagnostics.extend(untyped);
+    diagnostics.extend(sources);
+    (diagnostics, passes)
+}
+
+fn validate_multiconductor_lines(
+    net: &MulticonductorNetwork,
+    bus_ids: &BTreeSet<String>,
+    bus_terminals: &BTreeMap<String, BTreeSet<String>>,
+    structure: &mut Vec<StructuredDiagnostic>,
+    terminal_maps: &mut Vec<StructuredDiagnostic>,
+) {
+    for (i, line) in net.lines.iter().enumerate() {
+        check_bus_ref(
+            &line.bus_from,
+            &format!("line {} from bus", line.name),
+            &format!("/model/multiconductor_network/lines/{i}/bus_from"),
+            bus_ids,
+            structure,
+        );
+        check_bus_ref(
+            &line.bus_to,
+            &format!("line {} to bus", line.name),
+            &format!("/model/multiconductor_network/lines/{i}/bus_to"),
+            bus_ids,
+            structure,
+        );
+        if !net
+            .linecodes
+            .iter()
+            .any(|c| c.name.eq_ignore_ascii_case(&line.linecode))
+        {
+            structure.push(
+                StructuredDiagnostic::new(
+                    "VALIDATE.MULTI.STRUCTURE",
+                    DiagnosticSeverity::Error,
+                    DiagnosticStage::Validate,
+                    format!(
+                        "line {} references unknown linecode `{}`",
+                        line.name, line.linecode
+                    ),
+                )
+                .with_element_path(format!("/model/multiconductor_network/lines/{i}/linecode")),
+            );
+        }
+        check_terminal_map(
+            &line.bus_from,
+            &line.terminal_map_from,
+            &format!("line {} from terminals", line.name),
+            &format!("/model/multiconductor_network/lines/{i}/terminal_map_from"),
+            bus_terminals,
+            terminal_maps,
+        );
+        check_terminal_map(
+            &line.bus_to,
+            &line.terminal_map_to,
+            &format!("line {} to terminals", line.name),
+            &format!("/model/multiconductor_network/lines/{i}/terminal_map_to"),
+            bus_terminals,
+            terminal_maps,
+        );
+    }
+}
+
+fn validate_multiconductor_switches(
+    net: &MulticonductorNetwork,
+    bus_ids: &BTreeSet<String>,
+    bus_terminals: &BTreeMap<String, BTreeSet<String>>,
+    structure: &mut Vec<StructuredDiagnostic>,
+    terminal_maps: &mut Vec<StructuredDiagnostic>,
+) {
+    for (i, sw) in net.switches.iter().enumerate() {
+        check_bus_ref(
+            &sw.bus_from,
+            &format!("switch {} from bus", sw.name),
+            &format!("/model/multiconductor_network/switches/{i}/bus_from"),
+            bus_ids,
+            structure,
+        );
+        check_bus_ref(
+            &sw.bus_to,
+            &format!("switch {} to bus", sw.name),
+            &format!("/model/multiconductor_network/switches/{i}/bus_to"),
+            bus_ids,
+            structure,
+        );
+        check_terminal_map(
+            &sw.bus_from,
+            &sw.terminal_map_from,
+            &format!("switch {} from terminals", sw.name),
+            &format!("/model/multiconductor_network/switches/{i}/terminal_map_from"),
+            bus_terminals,
+            terminal_maps,
+        );
+        check_terminal_map(
+            &sw.bus_to,
+            &sw.terminal_map_to,
+            &format!("switch {} to terminals", sw.name),
+            &format!("/model/multiconductor_network/switches/{i}/terminal_map_to"),
+            bus_terminals,
+            terminal_maps,
+        );
+    }
+}
+
+fn validate_multiconductor_transformers(
+    net: &MulticonductorNetwork,
+    bus_ids: &BTreeSet<String>,
+    bus_terminals: &BTreeMap<String, BTreeSet<String>>,
+    structure: &mut Vec<StructuredDiagnostic>,
+    terminal_maps: &mut Vec<StructuredDiagnostic>,
+) {
+    for (i, tx) in net.transformers.iter().enumerate() {
+        for (j, winding) in tx.windings.iter().enumerate() {
+            check_bus_ref(
+                &winding.bus,
+                &format!("transformer {} winding {j} bus", tx.name),
+                &format!("/model/multiconductor_network/transformers/{i}/windings/{j}/bus"),
+                bus_ids,
+                structure,
+            );
+            check_terminal_map(
+                &winding.bus,
+                &winding.terminal_map,
+                &format!("transformer {} winding {j} terminals", tx.name),
+                &format!(
+                    "/model/multiconductor_network/transformers/{i}/windings/{j}/terminal_map"
+                ),
+                bus_terminals,
+                terminal_maps,
+            );
+        }
+    }
+}
+
+fn validate_multiconductor_injections(
+    net: &MulticonductorNetwork,
+    bus_ids: &BTreeSet<String>,
+    bus_terminals: &BTreeMap<String, BTreeSet<String>>,
+    structure: &mut Vec<StructuredDiagnostic>,
+    terminal_maps: &mut Vec<StructuredDiagnostic>,
+) {
+    let mut ctx = MultiValidationContext {
+        bus_ids,
+        bus_terminals,
+        structure,
+        terminal_maps,
+    };
+    for (i, load) in net.loads.iter().enumerate() {
+        check_one_bus_element(
+            &load.bus,
+            &load.terminal_map,
+            &format!("load {}", load.name),
+            &format!("/model/multiconductor_network/loads/{i}"),
+            &mut ctx,
+        );
+    }
+    for (i, generator) in net.generators.iter().enumerate() {
+        check_one_bus_element(
+            &generator.bus,
+            &generator.terminal_map,
+            &format!("generator {}", generator.name),
+            &format!("/model/multiconductor_network/generators/{i}"),
+            &mut ctx,
+        );
+    }
+    for (i, shunt) in net.shunts.iter().enumerate() {
+        check_one_bus_element(
+            &shunt.bus,
+            &shunt.terminal_map,
+            &format!("shunt {}", shunt.name),
+            &format!("/model/multiconductor_network/shunts/{i}"),
+            &mut ctx,
+        );
+    }
+    for (i, source) in net.sources.iter().enumerate() {
+        check_one_bus_element(
+            &source.bus,
+            &source.terminal_map,
+            &format!("voltage source {}", source.name),
+            &format!("/model/multiconductor_network/sources/{i}"),
+            &mut ctx,
+        );
+    }
+}
+
+struct MultiValidationContext<'a> {
+    bus_ids: &'a BTreeSet<String>,
+    bus_terminals: &'a BTreeMap<String, BTreeSet<String>>,
+    structure: &'a mut Vec<StructuredDiagnostic>,
+    terminal_maps: &'a mut Vec<StructuredDiagnostic>,
+}
+
+fn check_one_bus_element(
+    bus: &str,
+    terminal_map: &[String],
+    label: &str,
+    path: &str,
+    ctx: &mut MultiValidationContext<'_>,
+) {
+    check_bus_ref(
+        bus,
+        &format!("{label} bus"),
+        &format!("{path}/bus"),
+        ctx.bus_ids,
+        ctx.structure,
+    );
+    check_terminal_map(
+        bus,
+        terminal_map,
+        &format!("{label} terminals"),
+        &format!("{path}/terminal_map"),
+        ctx.bus_terminals,
+        ctx.terminal_maps,
+    );
+}
+
+fn multiconductor_bus_index(
+    net: &MulticonductorNetwork,
+    diagnostics: &mut Vec<StructuredDiagnostic>,
+) -> (BTreeSet<String>, BTreeMap<String, BTreeSet<String>>) {
+    let mut ids = BTreeSet::new();
+    let mut terminals = BTreeMap::new();
+    let mut first_seen = BTreeMap::<String, String>::new();
+    for (i, bus) in net.buses.iter().enumerate() {
+        let key = bus.id.to_ascii_lowercase();
+        if let Some(first) = first_seen.insert(key.clone(), bus.id.clone()) {
+            diagnostics.push(
+                StructuredDiagnostic::new(
+                    "VALIDATE.MULTI.STRUCTURE",
+                    DiagnosticSeverity::Error,
+                    DiagnosticStage::Validate,
+                    format!("duplicate bus id `{}` conflicts with `{first}`", bus.id),
+                )
+                .with_element_path(format!("/model/multiconductor_network/buses/{i}/id")),
+            );
+        }
+        ids.insert(key.clone());
+        terminals.insert(key, bus.terminals.iter().cloned().collect());
+    }
+    (ids, terminals)
+}
+
+fn check_bus_ref(
+    bus: &str,
+    what: &str,
+    path: &str,
+    bus_ids: &BTreeSet<String>,
+    diagnostics: &mut Vec<StructuredDiagnostic>,
+) {
+    if !bus_ids.contains(&bus.to_ascii_lowercase()) {
+        diagnostics.push(
+            StructuredDiagnostic::new(
+                "VALIDATE.MULTI.STRUCTURE",
+                DiagnosticSeverity::Error,
+                DiagnosticStage::Validate,
+                format!("{what} references unknown bus `{bus}`"),
+            )
+            .with_element_path(path),
+        );
+    }
+}
+
+fn check_terminal_map(
+    bus: &str,
+    terminal_map: &[String],
+    what: &str,
+    path: &str,
+    bus_terminals: &BTreeMap<String, BTreeSet<String>>,
+    diagnostics: &mut Vec<StructuredDiagnostic>,
+) {
+    if terminal_map.is_empty() {
+        diagnostics.push(
+            StructuredDiagnostic::new(
+                "VALIDATE.MULTI.TERMINAL_MAP",
+                DiagnosticSeverity::Error,
+                DiagnosticStage::Validate,
+                format!("{what} has an empty terminal map"),
+            )
+            .with_element_path(path),
+        );
+        return;
+    }
+
+    let Some(known) = bus_terminals.get(&bus.to_ascii_lowercase()) else {
+        return;
+    };
+    for terminal in terminal_map {
+        if !known.contains(terminal) {
+            diagnostics.push(
+                StructuredDiagnostic::new(
+                    "VALIDATE.MULTI.TERMINAL_MAP",
+                    DiagnosticSeverity::Error,
+                    DiagnosticStage::Validate,
+                    format!("{what} references unknown terminal `{terminal}` on bus `{bus}`"),
+                )
+                .with_element_path(path),
+            );
+        }
     }
 }
 

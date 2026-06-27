@@ -121,7 +121,12 @@ fn canonical_warnings(net: &Network) -> Vec<String> {
         ));
     }
     let with_cost = net.generators.iter().filter(|g| g.cost.is_some()).count();
-    if with_cost > 0 && with_cost < net.generators.len() {
+    if !net.generators.is_empty() && with_cost == 0 {
+        warnings.push(format!(
+            "generator costs absent for {} generator(s): omitted `mpc.gencost`; no zero costs synthesized",
+            net.generators.len()
+        ));
+    } else if with_cost > 0 && with_cost < net.generators.len() {
         warnings.push(format!(
             "gen cost dropped: {with_cost} of {} generators carry cost data, but MATPOWER's `mpc.gencost` block is all-or-nothing",
             net.generators.len()

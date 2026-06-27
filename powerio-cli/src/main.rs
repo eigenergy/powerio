@@ -16,6 +16,7 @@ use powerio_matrix::matrix::{BuildOptions, DcConvention, Scheme, Units, sddm_che
 use powerio_matrix::opf_pipeline::{DcOpfOptions, write_dcopf_bundle};
 use powerio_matrix::pipeline::{MatrixKind, Pipeline, RhsKind};
 use powerio_matrix::synth::{SynthSpec, Topology};
+use powerio_matrix::{MissingGenCostPolicy, WriteOptions};
 use powerio_pkg::{
     CompilerPackage, DiagnosticSeverity, DiagnosticStage, Origin, SourceDescriptor,
     StructuredDiagnostic, ValidationSummary,
@@ -101,6 +102,15 @@ enum Command {
         /// Unit system for power/cost quantities.
         #[arg(long, value_enum, default_value = "per-unit")]
         units: UnitsArg,
+        /// Policy for in-service generators with no cost row.
+        #[arg(long, value_enum, default_value = "require")]
+        missing_gen_cost: MissingGenCostArg,
+        /// Default polynomial cost as `c2,c1,c0` for `--missing-gen-cost quadratic`.
+        #[arg(long)]
+        default_gen_cost: Option<String>,
+        /// CSV with columns gen_index,bus,c2,c1,c0 and optional startup,shutdown.
+        #[arg(long)]
+        gen_cost_csv: Option<PathBuf>,
     },
     /// Emit DC sensitivity matrices (PTDF, LODF) for one case.
     Sensitivities {
@@ -160,6 +170,15 @@ enum Command {
         /// Base scenario id; the k-th input is stamped `scenario + k`.
         #[arg(long, default_value_t = 0)]
         scenario: i64,
+        /// Policy for generators with no cost row.
+        #[arg(long, value_enum, default_value = "preserve")]
+        missing_gen_cost: MissingGenCostArg,
+        /// Default polynomial cost as `c2,c1,c0` for `--missing-gen-cost quadratic`.
+        #[arg(long)]
+        default_gen_cost: Option<String>,
+        /// CSV with columns gen_index,bus,c2,c1,c0 and optional startup,shutdown.
+        #[arg(long)]
+        gen_cost_csv: Option<PathBuf>,
     },
     /// Convert a case file to another format. Transmission formats convert
     /// through the neutral hub; distribution formats (dss, pmd-json,
@@ -183,7 +202,62 @@ enum Command {
         /// With `--from gridfm`, which scenario to read from the dataset.
         #[arg(long, default_value_t = 0)]
         scenario: i64,
+        /// Policy for generators with no cost row.
+        #[arg(long, value_enum, default_value = "preserve")]
+        missing_gen_cost: MissingGenCostArg,
+        /// Default polynomial cost as `c2,c1,c0` for `--missing-gen-cost quadratic`.
+        #[arg(long)]
+        default_gen_cost: Option<String>,
+        /// CSV with columns gen_index,bus,c2,c1,c0 and optional startup,shutdown.
+        #[arg(long)]
+        gen_cost_csv: Option<PathBuf>,
     },
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, ValueEnum)]
+enum MissingGenCostArg {
+    Preserve,
+    Require,
+    Zero,
+    Quadratic,
+}
+
+#[derive(Clone, Copy, Debug)]
+struct GenCostCliOptions<'a> {
+    missing_gen_cost: MissingGenCostArg,
+    default_gen_cost: Option<&'a str>,
+    gen_cost_csv: Option<&'a Path>,
+}
+
+impl<'a> GenCostCliOptions<'a> {
+    const fn new(
+        missing_gen_cost: MissingGenCostArg,
+        default_gen_cost: Option<&'a str>,
+        gen_cost_csv: Option<&'a Path>,
+    ) -> Self {
+        Self {
+            missing_gen_cost,
+            default_gen_cost,
+            gen_cost_csv,
+        }
+    }
+
+    #[cfg(test)]
+    const fn preserve() -> Self {
+        Self {
+            missing_gen_cost: MissingGenCostArg::Preserve,
+            default_gen_cost: None,
+            gen_cost_csv: None,
+        }
+    }
+
+    fn write_options(self) -> anyhow::Result<WriteOptions> {
+        write_options(
+            self.missing_gen_cost,
+            self.default_gen_cost,
+            self.gen_cost_csv,
+        )
+    }
 }
 
 /// A case interchange format, for `--to` / `--from`. `gridfm` and `pwb` are
@@ -425,10 +499,7 @@ impl From<TopologyArg> for Topology {
 fn main() -> anyhow::Result<()> {
     install_tracing();
     let cli = Cli::parse();
-    match cli.command.unwrap_or(Command::Tui {
-        data_dir: None,
-        out_dir: None,
-    }) {
+    match cli.command.unwrap_or_else(default_command) {
         Command::Tui { data_dir, out_dir } => tui::run(tui::TuiOptions { data_dir, out_dir }),
         Command::Batch {
             input,
@@ -446,15 +517,7 @@ fn main() -> anyhow::Result<()> {
             seed,
             output,
             matrices,
-        } => run_gen(
-            topology.into(),
-            n,
-            r_over_x,
-            mean_x,
-            seed,
-            &output,
-            matrices,
-        ),
+        } => run_gen_cli(topology, n, r_over_x, mean_x, seed, &output, matrices),
         Command::Verify {
             input,
             kind,
@@ -465,7 +528,18 @@ fn main() -> anyhow::Result<()> {
             output,
             convention,
             units,
-        } => run_dcopf(&input, &output, convention.into(), units.into()),
+            missing_gen_cost,
+            default_gen_cost,
+            gen_cost_csv,
+        } => run_dcopf(
+            &input,
+            &output,
+            convention.into(),
+            units.into(),
+            missing_gen_cost,
+            default_gen_cost.as_deref(),
+            gen_cost_csv.as_deref(),
+        ),
         Command::Sensitivities {
             input,
             output,
@@ -487,15 +561,59 @@ fn main() -> anyhow::Result<()> {
             output,
             from,
             scenario,
-        } => run_gridfm(&inputs, &output, from, scenario),
+            missing_gen_cost,
+            default_gen_cost,
+            gen_cost_csv,
+        } => run_gridfm(
+            &inputs,
+            &output,
+            from,
+            scenario,
+            missing_gen_cost,
+            default_gen_cost.as_deref(),
+            gen_cost_csv.as_deref(),
+        ),
         Command::Convert {
             input,
             to,
             output,
             from,
             scenario,
-        } => run_convert(&input, to, output.as_deref(), from, scenario),
+            missing_gen_cost,
+            default_gen_cost,
+            gen_cost_csv,
+        } => run_convert(
+            &input,
+            to,
+            output.as_deref(),
+            from,
+            scenario,
+            GenCostCliOptions::new(
+                missing_gen_cost,
+                default_gen_cost.as_deref(),
+                gen_cost_csv.as_deref(),
+            ),
+        ),
     }
+}
+
+fn default_command() -> Command {
+    Command::Tui {
+        data_dir: None,
+        out_dir: None,
+    }
+}
+
+fn run_gen_cli(
+    topology: TopologyArg,
+    n: usize,
+    r_over_x: f64,
+    mean_x: f64,
+    seed: u64,
+    output: &Path,
+    matrices: Vec<MatrixKindArg>,
+) -> anyhow::Result<()> {
+    run_gen(topology.into(), n, r_over_x, mean_x, seed, output, matrices)
 }
 
 fn install_tracing() {
@@ -617,15 +735,94 @@ fn run_sensitivities(input: &Path, output: &Path, convention: DcConvention) -> a
     Ok(())
 }
 
+fn missing_gen_cost_policy(
+    arg: MissingGenCostArg,
+    default_gen_cost: Option<&str>,
+) -> anyhow::Result<MissingGenCostPolicy> {
+    match arg {
+        MissingGenCostArg::Preserve => {
+            if default_gen_cost.is_some() {
+                anyhow::bail!("--default-gen-cost is only valid with --missing-gen-cost quadratic");
+            }
+            Ok(MissingGenCostPolicy::Preserve)
+        }
+        MissingGenCostArg::Require => {
+            if default_gen_cost.is_some() {
+                anyhow::bail!("--default-gen-cost is only valid with --missing-gen-cost quadratic");
+            }
+            Ok(MissingGenCostPolicy::Require)
+        }
+        MissingGenCostArg::Zero => {
+            if default_gen_cost.is_some() {
+                anyhow::bail!("--default-gen-cost is only valid with --missing-gen-cost quadratic");
+            }
+            Ok(MissingGenCostPolicy::zero())
+        }
+        MissingGenCostArg::Quadratic => {
+            let value = default_gen_cost
+                .context("--missing-gen-cost quadratic requires --default-gen-cost C2,C1,C0")?;
+            let [c2, c1, c0] = parse_cost_triple(value)?;
+            Ok(MissingGenCostPolicy::quadratic(c2, c1, c0))
+        }
+    }
+}
+
+fn parse_cost_triple(value: &str) -> anyhow::Result<[f64; 3]> {
+    let parts: Vec<_> = value.split(',').map(str::trim).collect();
+    if parts.len() != 3 {
+        anyhow::bail!("--default-gen-cost expects exactly three comma-separated values: C2,C1,C0");
+    }
+    let mut out = [0.0; 3];
+    for (slot, part) in out.iter_mut().zip(parts) {
+        *slot = part
+            .parse::<f64>()
+            .with_context(|| format!("parse --default-gen-cost value `{part}`"))?;
+        if !slot.is_finite() {
+            anyhow::bail!("--default-gen-cost values must be finite");
+        }
+    }
+    Ok(out)
+}
+
+fn write_options(
+    arg: MissingGenCostArg,
+    default_gen_cost: Option<&str>,
+    gen_cost_csv: Option<&Path>,
+) -> anyhow::Result<WriteOptions> {
+    let missing_gen_cost = missing_gen_cost_policy(arg, default_gen_cost)?;
+    let gen_cost_patches = match gen_cost_csv {
+        Some(path) => {
+            let text = std::fs::read_to_string(path)
+                .with_context(|| format!("reading generator cost CSV {}", path.display()))?;
+            powerio_matrix::parse_gen_cost_csv(&text)
+                .with_context(|| format!("parsing generator cost CSV {}", path.display()))?
+        }
+        None => Vec::new(),
+    };
+    Ok(WriteOptions {
+        missing_gen_cost,
+        gen_cost_patches,
+    })
+}
+
 fn run_dcopf(
     input: &Path,
     output: &Path,
     convention: DcConvention,
     units: Units,
+    missing_gen_cost: MissingGenCostArg,
+    default_gen_cost: Option<&str>,
+    gen_cost_csv: Option<&Path>,
 ) -> anyhow::Result<()> {
     let mpc = powerio_matrix::parse_matpower_file(input)
         .with_context(|| format!("parse {}", input.display()))?;
-    let opts = DcOpfOptions { convention, units };
+    let cost_opts = write_options(missing_gen_cost, default_gen_cost, gen_cost_csv)?;
+    let opts = DcOpfOptions {
+        convention,
+        units,
+        missing_gen_cost: cost_opts.missing_gen_cost,
+        gen_cost_patches: cost_opts.gen_cost_patches,
+    };
     let outputs = write_dcopf_bundle(&mpc, output, &opts)
         .with_context(|| format!("export DC OPF bundle for {}", input.display()))?;
     tracing::info!(
@@ -642,6 +839,9 @@ fn run_gridfm(
     output: &Path,
     from: Option<FormatArg>,
     base_scenario: i64,
+    missing_gen_cost: MissingGenCostArg,
+    default_gen_cost: Option<&str>,
+    gen_cost_csv: Option<&Path>,
 ) -> anyhow::Result<()> {
     // The `gridfm` subcommand writes a dataset from classical cases; `--from gridfm`
     // (reading a dataset) is the inverse and belongs to `convert`. Reject it with a
@@ -663,13 +863,20 @@ fn run_gridfm(
     let net_refs: Vec<_> = nets.iter().collect();
     let snapshots = numbered_snapshots(&net_refs, base_scenario)?;
 
-    let opts = GridfmOptions::default();
+    let cost_opts = write_options(missing_gen_cost, default_gen_cost, gen_cost_csv)?;
+    let opts = GridfmOptions {
+        missing_gen_cost: cost_opts.missing_gen_cost,
+        gen_cost_patches: cost_opts.gen_cost_patches,
+        ..Default::default()
+    };
     let outputs = write_gridfm_batch(&snapshots, output, &opts)
         .with_context(|| format!("export gridfm dataset for {} scenario(s)", snapshots.len()))?;
     if outputs.dropped_zero_impedance > 0 || outputs.degenerate_cost_gens > 0 {
         tracing::warn!(
             zeroed_branches = outputs.dropped_zero_impedance,
             degenerate_cost_gens = outputs.degenerate_cost_gens,
+            missing_cost_gens = outputs.missing_cost_gens,
+            unsupported_cost_gens = outputs.unsupported_cost_gens,
             "gridfm: some columns were zeroed; see gridfm_meta.json"
         );
     }
@@ -767,6 +974,7 @@ fn build_package(
         let mut pkg = CompilerPackage::from_balanced(read.network);
         add_read_warning_diagnostics(&mut pkg, "READ.GRIDFM.FIDELITY_WARNING", &read.warnings);
         set_package_source(&mut pkg, input, PackageSourceKind::Folder, "gridfm", false);
+        pkg.run_sane_validation();
         return Ok(pkg);
     }
 
@@ -789,6 +997,7 @@ fn build_package(
             format,
             retained_source,
         );
+        pkg.run_sane_validation();
         return Ok(pkg);
     }
 
@@ -809,6 +1018,7 @@ fn build_package(
         format,
         retained_source,
     );
+    pkg.run_sane_validation();
     Ok(pkg)
 }
 
@@ -1026,6 +1236,7 @@ fn run_convert(
     output: Option<&std::path::Path>,
     from: Option<FormatArg>,
     scenario: i64,
+    gen_cost_options: GenCostCliOptions<'_>,
 ) -> anyhow::Result<()> {
     // gridfm has no convert writer; the dataset writer is the `gridfm`
     // subcommand.
@@ -1040,7 +1251,7 @@ fn run_convert(
     // PyPSA CSV is a transmission format that writes a directory, not a text
     // target, so it takes the folder path and returns early.
     if to == FormatArg::PypsaCsv {
-        return convert_to_pypsa_folder(input, output, from, scenario);
+        return convert_to_pypsa_folder(input, output, from, scenario, gen_cost_options);
     }
     // The two families share no conversion path; say so directly instead of
     // letting the wrong family's reader produce a confusing format error. The
@@ -1063,6 +1274,7 @@ fn run_convert(
         );
     }
     let (text, warnings) = if let Some(target) = to.transmission() {
+        let options = gen_cost_options.write_options()?;
         // gridfm reads a Parquet dataset directory (the parquet-free
         // `parse_file` can't), so it routes through powerio-matrix's reader,
         // surfacing its fidelity notes.
@@ -1076,7 +1288,7 @@ fn run_convert(
         } else {
             read_network(input, from)?
         };
-        let conv = powerio_matrix::write_as(&net, target)
+        let conv = powerio_matrix::write_as_with_options(&net, target, &options)
             .with_context(|| format!("serializing to {target}"))?;
         (conv.text, conv.warnings)
     } else {
@@ -1112,6 +1324,7 @@ fn convert_to_pypsa_folder(
     output: Option<&std::path::Path>,
     from: Option<FormatArg>,
     scenario: i64,
+    gen_cost_options: GenCostCliOptions<'_>,
 ) -> anyhow::Result<()> {
     let Some(out_dir) = output else {
         anyhow::bail!("`--to pypsa-csv` requires `-o <output-dir>`");
@@ -1119,7 +1332,7 @@ fn convert_to_pypsa_folder(
     if out_dir.as_os_str() == "-" {
         anyhow::bail!("`--to pypsa-csv` writes a directory and cannot write to stdout");
     }
-    let net = if from == Some(FormatArg::Gridfm) {
+    let mut net = if from == Some(FormatArg::Gridfm) {
         let read = powerio_matrix::read_gridfm_dataset(input, scenario)
             .with_context(|| format!("reading gridfm dataset {}", input.display()))?;
         for w in &read.warnings {
@@ -1129,6 +1342,20 @@ fn convert_to_pypsa_folder(
     } else {
         read_network(input, from)?
     };
+    let options = gen_cost_options.write_options()?;
+    let report = net.apply_gen_cost_policy(&options.gen_cost_patches, options.missing_gen_cost)?;
+    if report.patched > 0 {
+        eprintln!(
+            "fidelity: generator cost patch applied to {} generator(s)",
+            report.patched
+        );
+    }
+    if report.synthesized > 0 {
+        eprintln!(
+            "fidelity: generator cost synthesized for {} generator(s)",
+            report.synthesized
+        );
+    }
     let outputs = powerio_matrix::write_pypsa_csv_folder(&net, out_dir)
         .with_context(|| format!("writing PyPSA CSV folder {}", out_dir.display()))?;
     for w in &outputs.warnings {
@@ -1174,12 +1401,12 @@ fn read_network(
 #[cfg(test)]
 mod tests {
     use super::{
-        Cli, Command, FormatArg, build_package, distribution_summary_json, infer_input_family,
-        looks_like_distribution_input, package_text, run_convert, run_package,
+        Cli, Command, FormatArg, GenCostCliOptions, build_package, distribution_summary_json,
+        infer_input_family, looks_like_distribution_input, package_text, run_convert, run_package,
         transmission_summary_json,
     };
     use clap::Parser;
-    use powerio_pkg::{CompilerPackage, MappingKind, Origin};
+    use powerio_pkg::{CompilerPackage, MappingKind, Origin, ValidationStatus};
     use std::path::Path;
     use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -1303,6 +1530,24 @@ mod tests {
     }
 
     #[test]
+    fn package_text_includes_validation_passes() {
+        let text = package_text(&data("case9.m"), None, 0).unwrap();
+        let pkg = CompilerPackage::from_json(&text).unwrap();
+        assert!(
+            pkg.validation
+                .passes
+                .iter()
+                .any(|p| p.name == "balanced.structure" && p.status == ValidationStatus::Ok),
+            "missing balanced validation pass: {:?}",
+            pkg.validation.passes
+        );
+
+        let pretty = pkg.to_json_pretty().unwrap();
+        let back = CompilerPackage::from_json(&pretty).unwrap();
+        assert_eq!(back.validation.passes, pkg.validation.passes);
+    }
+
+    #[test]
     fn package_distribution_fixture_keeps_defaulted_source_maps() {
         let input = data("dist/micro/xfmr_single_phase.dss");
         let pkg = build_package(&input, None, 0).unwrap();
@@ -1381,7 +1626,15 @@ mpc.branch = [
         std::fs::write(&input, conv.text).unwrap();
 
         assert_eq!(infer_input_family(&input).unwrap(), Some(false));
-        let err = run_convert(&input, FormatArg::Dss, Some(&output), None, 0).unwrap_err();
+        let err = run_convert(
+            &input,
+            FormatArg::Dss,
+            Some(&output),
+            None,
+            0,
+            GenCostCliOptions::preserve(),
+        )
+        .unwrap_err();
         assert!(err.to_string().contains("no conversion path"), "{err}");
         assert!(!output.exists());
 
@@ -1406,6 +1659,7 @@ mpc.branch = [
             Some(&output),
             Some(FormatArg::PypsaCsv),
             0,
+            GenCostCliOptions::preserve(),
         )
         .unwrap();
         let text = std::fs::read_to_string(&output).unwrap();
@@ -1423,6 +1677,7 @@ mpc.branch = [
             None,
             None,
             0,
+            GenCostCliOptions::preserve(),
         )
         .unwrap_err();
         assert!(
