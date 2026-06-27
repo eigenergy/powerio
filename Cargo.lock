@@ -2023,6 +2023,7 @@ dependencies = [
  "crossterm",
  "powerio-dist",
  "powerio-matrix",
+ "powerio-pkg",
  "ratatui",
  "serde_json",
  "sprs",

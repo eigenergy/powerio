@@ -793,9 +793,7 @@ fn loads_csv(net: &Network, key_of: &HashMap<BusId, String>) -> String {
 }
 
 fn pypsa_loses_terminal_charging(br: &Branch) -> bool {
-    let Some(charging) = br.charging else {
-        return false;
-    };
+    let charging = br.terminal_charging();
     if br.is_transformer() {
         charging.g_to.abs() > f64::EPSILON || charging.b_to.abs() > f64::EPSILON
     } else {
@@ -1403,6 +1401,22 @@ mod tests {
         assert_eq!(
             csv.lines().nth(1).unwrap(),
             "transformer_1,1,2,0.125,0.5,0.25,0,100,1.05,0,true"
+        );
+    }
+
+    #[test]
+    fn transformer_legacy_b_warns_about_terminal_charging_collapse() {
+        let mut net = net_with(vec![bus(1, None), bus(2, None)]);
+        net.branches = vec![xfmr(1, 2, 50.0)];
+
+        let out = write_pypsa_csv_folder(&net, tmp_dir("xf-legacy-b-warning")).unwrap();
+
+        assert!(
+            out.warnings
+                .iter()
+                .any(|w| w.contains("terminal admittance")),
+            "{:?}",
+            out.warnings
         );
     }
 

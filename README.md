@@ -55,6 +55,7 @@ This repository contains multiple packages.
 powerio          # parser, Network model, source retaining writers, converters
 powerio-matrix   # sparse matrices, DC sensitivity factors, graph representations
 powerio-dist     # multiconductor distribution model, dss/PMD/BMOPF converters
+powerio-pkg      # .pio.json compiler package envelope
 powerio-cli      # the `powerio` command and ratatui TUI
 powerio-py       # PyO3 extension for the Python `powerio` package
 powerio-capi     # C ABI for C, C++, Julia, and other foreign function interfaces
@@ -127,6 +128,7 @@ powerio convert tests/data/case14.m --to pandapower-json -o case14.pp.json
 powerio convert tests/data/case14.m --to pypsa-csv -o pypsa_case
 powerio convert pypsa_case --from pypsa-csv --to matpower -o case14.m
 powerio convert case.epc --from pslf --to matpower -o case.m
+powerio package tests/data/case14.m -o case14.pio.json
 powerio verify tests/data/case30.m --kind bdoubleprime
 powerio dcopf tests/data/case30.m -o out
 powerio sensitivities tests/data/case30.m -o out

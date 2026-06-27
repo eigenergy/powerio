@@ -110,6 +110,22 @@ fn explicit_model_kind_is_authoritative() {
 }
 
 #[test]
+fn mismatched_model_kind_is_rejected() {
+    let pkg = balanced_package();
+    let mut v = serde_json::to_value(&pkg).unwrap();
+    v.as_object_mut()
+        .unwrap()
+        .insert("model_kind".to_owned(), serde_json::json!("multiconductor"));
+    let json = serde_json::to_string(&v).unwrap();
+
+    let err = CompilerPackage::from_json(&json).expect_err("kind mismatch must be rejected");
+    assert!(
+        err.to_string().contains("model_kind does not match"),
+        "{err}"
+    );
+}
+
+#[test]
 fn diagnostics_roundtrip() {
     let mut pkg = balanced_package();
     pkg.diagnostics.push(

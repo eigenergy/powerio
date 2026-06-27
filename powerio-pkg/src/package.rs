@@ -193,7 +193,13 @@ impl CompilerPackage {
 
     /// Deserialize from `.pio.json`.
     pub fn from_json(text: &str) -> serde_json::Result<Self> {
-        serde_json::from_str(text)
+        let pkg: Self = serde_json::from_str(text)?;
+        if !pkg.kind_is_consistent() {
+            return Err(<serde_json::Error as serde::de::Error>::custom(
+                "model_kind does not match model.kind",
+            ));
+        }
+        Ok(pkg)
     }
 
     #[must_use]
