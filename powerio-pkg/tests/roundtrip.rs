@@ -3,7 +3,7 @@
 use powerio_pkg::{
     CompilerPackage, Confidence, DiagnosticCode, DiagnosticSeverity, DiagnosticStage, MappingKind,
     ModelKind, Origin, PIO_PACKAGE_SCHEMA_URL, PIO_PACKAGE_SCHEMA_VERSION, SourceDescriptor,
-    SourceMapEntry, SourceRef, StructuredDiagnostic,
+    SourceMapEntry, SourceRef, StructuredDiagnostic, ValidationStatus,
 };
 
 const MATPOWER_SRC: &str = "\
@@ -260,6 +260,105 @@ fn unknown_future_fields_are_tolerated() {
     assert_eq!(back.model_kind(), ModelKind::Balanced);
     assert!(back.kind_is_consistent());
     assert_eq!(back.as_balanced().unwrap().buses.len(), 2);
+}
+
+#[test]
+fn sane_validation_records_balanced_value_domain_findings() {
+    let src = "\
+function mpc = bad_values
+mpc.version = '2';
+mpc.baseMVA = 100;
+mpc.bus = [
+\t1\t3\t0\t0\t0\t0\t1\t0\t0\t230\t1\t1.1\t0.9;
+\t2\t1\t0\t0\t0\t0\t1\t1\t0\t230\t1\t1.1\t0.9;
+];
+mpc.branch = [
+\t1\t2\t0.01\t0.1\t0\t0\t0\t0\t0\t0\t1\t-360\t360;
+];
+";
+    let net = powerio::parse_str(src, "matpower").unwrap().network;
+    let mut pkg = CompilerPackage::from_balanced(net);
+    pkg.run_sane_validation();
+
+    assert!(
+        pkg.diagnostics.iter().any(|d| d.code
+            == DiagnosticCode::new("VALIDATE.BALANCED.VALUE_DOMAIN")
+            && d.details["field"] == "vm"),
+        "expected voltage magnitude finding: {:?}",
+        pkg.diagnostics
+    );
+    assert_eq!(pkg.validation.status, ValidationStatus::Warning);
+    assert!(
+        pkg.validation
+            .passes
+            .iter()
+            .any(|p| p.name == "balanced.value_domain" && p.status == ValidationStatus::Warning),
+        "missing balanced value domain pass: {:?}",
+        pkg.validation.passes
+    );
+    assert_json_roundtrips(&pkg);
+}
+
+#[test]
+fn sane_validation_records_multiconductor_structure_findings() {
+    use powerio_dist::{DistBus, DistLine, DistNetwork, Extras, UntypedObject};
+
+    let mut net = DistNetwork::default();
+    net.buses.push(DistBus {
+        id: "a".to_owned(),
+        terminals: vec!["1".to_owned()],
+        grounded: Vec::new(),
+        v_min: None,
+        v_max: None,
+        vpn_min: None,
+        vpn_max: None,
+        vpp_min: None,
+        vpp_max: None,
+        vsym_min: None,
+        vsym_max: None,
+        extras: Extras::new(),
+    });
+    net.lines.push(DistLine {
+        name: "l1".to_owned(),
+        bus_from: "a".to_owned(),
+        bus_to: "missing".to_owned(),
+        terminal_map_from: vec!["2".to_owned()],
+        terminal_map_to: vec!["1".to_owned()],
+        linecode: "missing_code".to_owned(),
+        length: 1.0,
+        extras: Extras::new(),
+    });
+    net.untyped.push(UntypedObject {
+        class: "regcontrol".to_owned(),
+        name: "r1".to_owned(),
+        props: Vec::new(),
+    });
+
+    let mut pkg = CompilerPackage::from_multiconductor(net);
+    pkg.run_sane_validation();
+
+    for code in [
+        "VALIDATE.MULTI.STRUCTURE",
+        "VALIDATE.MULTI.TERMINAL_MAP",
+        "VALIDATE.MULTI.UNTYPED_OBJECT",
+        "VALIDATE.MULTI.NO_VOLTAGE_SOURCE",
+    ] {
+        assert!(
+            pkg.diagnostics
+                .iter()
+                .any(|d| d.code == DiagnosticCode::new(code)),
+            "missing {code}: {:?}",
+            pkg.diagnostics
+        );
+    }
+    assert_eq!(pkg.validation.status, ValidationStatus::Error);
+    assert!(
+        pkg.validation
+            .passes
+            .iter()
+            .any(|p| p.name == "multiconductor.structure" && p.status == ValidationStatus::Error)
+    );
+    assert_json_roundtrips(&pkg);
 }
 
 #[test]

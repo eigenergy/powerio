@@ -974,6 +974,7 @@ fn build_package(
         let mut pkg = CompilerPackage::from_balanced(read.network);
         add_read_warning_diagnostics(&mut pkg, "READ.GRIDFM.FIDELITY_WARNING", &read.warnings);
         set_package_source(&mut pkg, input, PackageSourceKind::Folder, "gridfm", false);
+        pkg.run_sane_validation();
         return Ok(pkg);
     }
 
@@ -996,6 +997,7 @@ fn build_package(
             format,
             retained_source,
         );
+        pkg.run_sane_validation();
         return Ok(pkg);
     }
 
@@ -1016,6 +1018,7 @@ fn build_package(
         format,
         retained_source,
     );
+    pkg.run_sane_validation();
     Ok(pkg)
 }
 
@@ -1403,7 +1406,7 @@ mod tests {
         transmission_summary_json,
     };
     use clap::Parser;
-    use powerio_pkg::{CompilerPackage, MappingKind, Origin};
+    use powerio_pkg::{CompilerPackage, MappingKind, Origin, ValidationStatus};
     use std::path::Path;
     use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -1524,6 +1527,24 @@ mod tests {
         assert!(text.contains("\"schema\""));
         let pkg = CompilerPackage::from_json(&text).unwrap();
         assert_eq!(pkg.summary.elements["buses"], 9);
+    }
+
+    #[test]
+    fn package_text_includes_validation_passes() {
+        let text = package_text(&data("case9.m"), None, 0).unwrap();
+        let pkg = CompilerPackage::from_json(&text).unwrap();
+        assert!(
+            pkg.validation
+                .passes
+                .iter()
+                .any(|p| p.name == "balanced.structure" && p.status == ValidationStatus::Ok),
+            "missing balanced validation pass: {:?}",
+            pkg.validation.passes
+        );
+
+        let pretty = pkg.to_json_pretty().unwrap();
+        let back = CompilerPackage::from_json(&pretty).unwrap();
+        assert_eq!(back.validation.passes, pkg.validation.passes);
     }
 
     #[test]
