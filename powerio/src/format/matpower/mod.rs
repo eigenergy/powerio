@@ -154,6 +154,7 @@ fn build_case<'a>(name: &str, get: impl Fn(&str) -> Option<&'a str>) -> Result<N
         loads,
         shunts,
         branches,
+        switches: Vec::new(),
         generators,
         storage,
         hvdc,

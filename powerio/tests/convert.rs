@@ -6,7 +6,8 @@
 use std::path::{Path, PathBuf};
 
 use powerio::{
-    BusId, BusType, Error, Network, SourceFormat, TargetFormat, convert_file, parse_file,
+    Branch, BranchCharging, BranchCurrentRatings, BranchSolution, Bus, BusId, BusType, Error,
+    Extras, Load, LoadVoltageModel, Network, SourceFormat, TargetFormat, convert_file, parse_file,
     parse_matpower, parse_matpower_file, parse_powermodels_json, parse_powerworld, parse_pslf,
     parse_psse, read_pypsa_csv_folder, write_as, write_egret_json, write_powermodels_json,
     write_powerworld, write_pslf, write_psse, write_pypsa_csv_folder,
@@ -20,6 +21,125 @@ fn data(name: &str) -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../tests/data")
         .join(name)
+}
+
+fn audit_bus(id: usize, kind: BusType) -> Bus {
+    Bus {
+        id: BusId(id),
+        kind,
+        vm: 1.0,
+        va: 0.0,
+        base_kv: 230.0,
+        vmax: 1.1,
+        vmin: 0.9,
+        evhi: None,
+        evlo: None,
+        area: 1,
+        zone: 1,
+        name: None,
+        extras: Extras::default(),
+    }
+}
+
+fn rich_audit_network() -> Network {
+    let mut net = Network::in_memory(
+        "rich-audit",
+        100.0,
+        vec![audit_bus(1, BusType::Ref), audit_bus(2, BusType::Pq)],
+        Vec::new(),
+    );
+    net.loads.push(Load {
+        bus: BusId(2),
+        p: 10.0,
+        q: 5.0,
+        voltage_model: Some(LoadVoltageModel::Zip {
+            p_constant_power: 5.0,
+            q_constant_power: 2.0,
+            p_constant_current: 2.0,
+            q_constant_current: 1.0,
+            p_constant_impedance: 3.0,
+            q_constant_impedance: 2.0,
+            v_nom: None,
+            load_type: None,
+            scaling: None,
+        }),
+        in_service: true,
+        extras: Extras::default(),
+    });
+    net.branches.push(Branch {
+        from: BusId(1),
+        to: BusId(2),
+        r: 0.01,
+        x: 0.1,
+        b: 0.0,
+        charging: Some(BranchCharging {
+            g_fr: 0.01,
+            b_fr: 0.02,
+            g_to: 0.0,
+            b_to: 0.05,
+        }),
+        rate_a: 100.0,
+        rate_b: 0.0,
+        rate_c: 0.0,
+        current_ratings: Some(BranchCurrentRatings {
+            c_rating_a: 500.0,
+            c_rating_b: 600.0,
+            c_rating_c: 700.0,
+        }),
+        tap: 0.0,
+        shift: 0.0,
+        in_service: true,
+        angmin: -360.0,
+        angmax: 360.0,
+        control: None,
+        solution: Some(BranchSolution {
+            pf: 1.0,
+            qf: 0.5,
+            pt: -0.9,
+            qt: -0.4,
+        }),
+        extras: Extras::default(),
+    });
+    net
+}
+
+fn terminal_projection_network() -> Network {
+    let mut net = Network::in_memory(
+        "terminal-projection",
+        100.0,
+        vec![audit_bus(1, BusType::Ref), audit_bus(2, BusType::Pq)],
+        Vec::new(),
+    );
+    net.branches.push(Branch {
+        from: BusId(1),
+        to: BusId(2),
+        r: 0.01,
+        x: 0.1,
+        b: 0.0,
+        charging: Some(BranchCharging {
+            g_fr: 0.01,
+            b_fr: 0.02,
+            g_to: 0.03,
+            b_to: 0.05,
+        }),
+        rate_a: 100.0,
+        rate_b: 0.0,
+        rate_c: 0.0,
+        current_ratings: None,
+        tap: 0.0,
+        shift: 0.0,
+        in_service: true,
+        angmin: -360.0,
+        angmax: 360.0,
+        control: None,
+        solution: None,
+        extras: Extras::default(),
+    });
+    net
+}
+
+fn has_warning(warnings: &[String], needle: &str) -> bool {
+    warnings.iter().any(|w| w.contains(needle))
 }
 
 #[test]
@@ -44,6 +164,87 @@ fn canonical_api_names_parse_and_convert() {
     let same = convert_file(&path, TargetFormat::Matpower, None).unwrap();
     assert_eq!(same.text, src);
     assert!(same.warnings.is_empty());
+}
+
+#[test]
+fn rich_writer_warnings_cover_simple_formats() {
+    let net = rich_audit_network();
+
+    let matpower = write_as(&net, TargetFormat::Matpower).unwrap();
+    assert!(has_warning(
+        &matpower.warnings,
+        "branch terminal admittance"
+    ));
+    assert!(has_warning(&matpower.warnings, "branch current rating"));
+    assert!(has_warning(&matpower.warnings, "branch solution value"));
+    assert!(has_warning(
+        &matpower.warnings,
+        "voltage dependent load model"
+    ));
+
+    let pm = write_powermodels_json(&net);
+    assert!(has_warning(&pm.warnings, "voltage dependent load model"));
+    assert!(!has_warning(&pm.warnings, "branch current rating"));
+    assert!(!has_warning(&pm.warnings, "branch solution value"));
+
+    let egret = write_egret_json(&net);
+    assert!(has_warning(&egret.warnings, "branch terminal admittance"));
+    assert!(has_warning(&egret.warnings, "branch current rating"));
+    assert!(has_warning(&egret.warnings, "branch solution value"));
+    assert!(has_warning(&egret.warnings, "voltage dependent load model"));
+
+    let powerworld = write_powerworld(&net);
+    assert!(has_warning(
+        &powerworld.warnings,
+        "branch terminal admittance"
+    ));
+    assert!(has_warning(&powerworld.warnings, "branch current rating"));
+    assert!(has_warning(&powerworld.warnings, "branch solution value"));
+    assert!(has_warning(
+        &powerworld.warnings,
+        "voltage dependent load model"
+    ));
+
+    let psse = write_psse(&net);
+    assert!(!has_warning(&psse.warnings, "branch terminal admittance"));
+    assert!(has_warning(&psse.warnings, "branch current rating"));
+    assert!(has_warning(&psse.warnings, "branch solution value"));
+
+    let pslf = write_pslf(&net);
+    assert!(has_warning(&pslf.warnings, "branch terminal admittance"));
+    assert!(has_warning(&pslf.warnings, "branch current rating"));
+    assert!(has_warning(&pslf.warnings, "branch solution value"));
+}
+
+#[test]
+fn terminal_charging_projection_feeds_legacy_writer_b_fields() {
+    let net = terminal_projection_network();
+    let want_b = 0.07;
+
+    let matpower = write_as(&net, TargetFormat::Matpower).unwrap();
+    assert!(has_warning(&matpower.warnings, "total susceptance"));
+    let back = parse_matpower(&matpower.text).unwrap();
+    close(back.branches[0].b, want_b);
+
+    let egret = write_egret_json(&net);
+    assert!(has_warning(&egret.warnings, "total susceptance"));
+    let egret_json: Value = serde_json::from_str(&egret.text).unwrap();
+    close(
+        egret_json["elements"]["branch"]["1"]["charging_susceptance"]
+            .as_f64()
+            .unwrap(),
+        want_b,
+    );
+
+    let powerworld = write_powerworld(&net);
+    assert!(has_warning(&powerworld.warnings, "total susceptance"));
+    let back = parse_powerworld(&powerworld.text).unwrap();
+    close(back.branches[0].b, want_b);
+
+    let pslf = write_pslf(&net);
+    assert!(has_warning(&pslf.warnings, "total susceptance"));
+    let back = parse_pslf(&pslf.text).unwrap();
+    close(back.branches[0].b, want_b);
 }
 
 #[derive(Debug, PartialEq)]
@@ -389,6 +590,377 @@ fn powermodels_structure_and_split() {
     let load1 = &v["load"]["1"];
     assert!(load1["load_bus"].is_number());
     assert!(load1.get("pd").is_some());
+}
+
+#[test]
+fn powermodels_preserves_rich_branch_and_switch_fields() {
+    let json = r#"{
+        "name": "rich",
+        "baseMVA": 100.0,
+        "per_unit": true,
+        "multinetwork": true,
+        "bus": {
+            "1": {"index": 1, "bus_i": 1, "bus_type": 3, "vm": 1.0, "va": 0.0, "vmax": 1.1, "vmin": 0.9, "base_kv": 230.0},
+            "2": {"index": 2, "bus_i": 2, "bus_type": 1, "vm": 1.0, "va": 0.0, "vmax": 1.1, "vmin": 0.9, "base_kv": 230.0}
+        },
+        "load": {
+            "1": {"index": 1, "load_bus": 1, "pd": 0.10, "qd": 0.01, "status": 1},
+            "2": {"index": 2, "load_bus": 1, "pd": 0.20, "qd": 0.02, "status": 1}
+        },
+        "branch": {
+            "1": {
+                "index": 1, "f_bus": 1, "t_bus": 2, "br_r": 0.01, "br_x": 0.10,
+                "g_fr": 0.001, "b_fr": 0.02, "g_to": 0.003, "b_to": 0.04,
+                "rate_a": 1.0, "rate_b": 1.1, "rate_c": 1.2,
+                "c_rating_a": 500.0, "c_rating_b": 600.0, "c_rating_c": 700.0,
+                "tap": 1.0, "shift": 0.0, "transformer": false, "br_status": 1,
+                "angmin": -6.283185307179586, "angmax": 6.283185307179586,
+                "pf": 0.125, "qf": 0.025, "pt": -0.120, "qt": -0.020
+            }
+        },
+        "switch": {
+            "1": {
+                "index": 1, "f_bus": 1, "t_bus": 2, "state": 1,
+                "thermal_rating": 0.75, "current_rating": 9.0,
+                "pf": 0.01, "qf": 0.02, "pt": -0.01, "qt": -0.02
+            }
+        },
+        "gen": {}, "shunt": {}, "storage": {}, "dcline": {}
+    }"#;
+
+    let parsed = powerio::parse_str(json, "powermodels").unwrap();
+    assert!(
+        parsed
+            .warnings
+            .iter()
+            .any(|w| w.contains("multinetwork=true")),
+        "expected multinetwork warning, got {:?}",
+        parsed.warnings
+    );
+    let net = parsed.network;
+    assert_eq!(net.loads.len(), 2);
+    assert_eq!(net.loads[0].bus, BusId(1));
+    assert_eq!(net.loads[1].bus, BusId(1));
+
+    let br = &net.branches[0];
+    let charging = br.terminal_charging();
+    assert!((charging.g_fr - 0.001).abs() < 1e-12);
+    assert!((charging.b_fr - 0.02).abs() < 1e-12);
+    assert!((charging.g_to - 0.003).abs() < 1e-12);
+    assert!((charging.b_to - 0.04).abs() < 1e-12);
+    assert!((br.b - 0.06).abs() < 1e-12);
+    assert!((br.current_ratings.unwrap().c_rating_b - 600.0).abs() < 1e-12);
+    assert!((br.solution.unwrap().pf - 12.5).abs() < 1e-12);
+
+    let sw = &net.switches[0];
+    assert!(sw.closed);
+    assert_eq!(sw.thermal_rating, Some(75.0));
+    assert_eq!(sw.current_rating, Some(9.0));
+    assert_eq!(sw.pf, Some(1.0));
+
+    let out: Value = serde_json::from_str(&write_powermodels_json(&net).text).unwrap();
+    assert_eq!(out["branch"]["1"]["g_fr"], 0.001);
+    assert_eq!(out["branch"]["1"]["b_to"], 0.04);
+    assert_eq!(out["branch"]["1"]["c_rating_c"], 700.0);
+    assert_eq!(out["branch"]["1"]["pf"], 0.125);
+    assert_eq!(out["switch"]["1"]["thermal_rating"], 0.75);
+
+    let matpower = write_as(&net, TargetFormat::Matpower).unwrap();
+    assert!(
+        matpower
+            .warnings
+            .iter()
+            .any(|w| w.contains("terminal admittance")),
+        "expected MATPOWER terminal admittance warning, got {:?}",
+        matpower.warnings
+    );
+}
+
+#[test]
+fn rich_powermodels_typed_fields_survive_json_transport() {
+    let json = r#"{
+        "name": "rich-all",
+        "baseMVA": 100.0,
+        "per_unit": false,
+        "bus": {
+            "1": {"index": 1, "bus_i": 1, "bus_type": 3, "vm": 1.0, "va": 0.0, "vmax": 1.1, "vmin": 0.9, "base_kv": 230.0},
+            "2": {"index": 2, "bus_i": 2, "bus_type": 1, "vm": 1.0, "va": 0.0, "vmax": 1.1, "vmin": 0.9, "base_kv": 230.0}
+        },
+        "load": {
+            "1": {"index": 1, "load_bus": 1, "pd": 10.0, "qd": 1.0, "status": 1},
+            "2": {"index": 2, "load_bus": 1, "pd": 20.0, "qd": 2.0, "status": 1}
+        },
+        "branch": {
+            "1": {
+                "index": 1, "f_bus": 1, "t_bus": 2, "br_r": 0.01, "br_x": 0.10,
+                "g_fr": 0.001, "b_fr": 0.02, "g_to": 0.003, "b_to": 0.04,
+                "rate_a": 100.0, "rate_b": 110.0, "rate_c": 120.0,
+                "c_rating_a": 500.0, "c_rating_b": 600.0, "c_rating_c": 700.0,
+                "tap": 1.0, "shift": 0.0, "transformer": false, "br_status": 1,
+                "angmin": -6.283185307179586, "angmax": 6.283185307179586,
+                "pf": 12.5, "qf": 2.5, "pt": -12.0, "qt": -2.0
+            }
+        },
+        "switch": {
+            "1": {
+                "index": 1, "f_bus": 1, "t_bus": 2, "state": 1,
+                "thermal_rating": 75.0, "current_rating": 9.0,
+                "pf": 1.0, "qf": 2.0, "pt": -1.0, "qt": -2.0
+            }
+        },
+        "storage": {
+            "1": {
+                "index": 1, "storage_bus": 1, "ps": 0.5, "qs": 0.25,
+                "energy": 10.0, "energy_rating": 60.0,
+                "charge_rating": 30.0, "discharge_rating": 30.0,
+                "charge_efficiency": 0.9, "discharge_efficiency": 0.91,
+                "thermal_rating": 30.0, "current_rating": 4.2,
+                "qmin": -10.0, "qmax": 10.0, "r": 0.0, "x": 0.0,
+                "p_loss": 0.0, "q_loss": 0.0, "status": 1
+            }
+        },
+        "dcline": {
+            "1": {
+                "index": 1, "f_bus": 1, "t_bus": 2, "br_status": 1,
+                "pf": 30.0, "pt": -29.0, "qf": -3.0, "qt": 2.0,
+                "vf": 1.0, "vt": 1.0,
+                "pminf": 0.0, "pmaxf": 50.0, "pmint": -49.5, "pmaxt": 0.5,
+                "mp_pmin": 0.0, "mp_pmax": 50.0,
+                "qminf": -10.0, "qmaxf": 10.0, "qmint": -11.0, "qmaxt": 11.0,
+                "loss0": 0.5, "loss1": 0.01,
+                "model": 2, "startup": 0.0, "shutdown": 0.0, "ncost": 3,
+                "cost": [0.02, 3.0, 10.0]
+            }
+        },
+        "gen": {}, "shunt": {}
+    }"#;
+
+    let net = parse_powermodels_json(json).unwrap();
+    assert_eq!(net.loads.len(), 2, "multiple loads per bus are first class");
+    assert!(net.loads.iter().all(|l| l.bus == BusId(1)));
+
+    let br = &net.branches[0];
+    let charging = br.terminal_charging();
+    close(charging.g_fr, 0.001);
+    close(charging.b_to, 0.04);
+    close(br.current_ratings.unwrap().c_rating_c, 700.0);
+    close(br.solution.unwrap().pf, 12.5);
+
+    let sw = &net.switches[0];
+    assert!(sw.closed);
+    close(sw.thermal_rating.unwrap(), 75.0);
+    close(sw.current_rating.unwrap(), 9.0);
+    close(sw.pf.unwrap(), 1.0);
+
+    let storage = &net.storage[0];
+    close(storage.current_rating.unwrap(), 4.2);
+
+    let cost = net.hvdc[0].cost.as_ref().expect("HVDC cost is typed");
+    for (got, want) in cost.coeffs.iter().zip([0.02, 3.0, 10.0]) {
+        close(*got, want);
+    }
+
+    let out = write_powermodels_json(&net);
+    assert!(
+        out.warnings
+            .iter()
+            .all(|w| w.contains("dcline") || w.contains("storage")),
+        "{:?}",
+        out.warnings
+    );
+    let back = parse_powermodels_json(&out.text).unwrap();
+    assert_eq!(back.loads.len(), 2);
+    assert_eq!(back.branches[0].terminal_charging(), charging);
+    assert_eq!(back.switches[0].current_rating, Some(9.0));
+    assert_eq!(back.storage[0].current_rating, Some(4.2));
+    assert_eq!(
+        back.hvdc[0].cost.as_ref().unwrap().coeffs,
+        vec![0.02, 3.0, 10.0]
+    );
+}
+
+#[test]
+fn rich_matpower_terminal_admittance_warning_contract() {
+    let base = r#"{
+        "name": "mp-charging",
+        "baseMVA": 100.0,
+        "per_unit": false,
+        "bus": {
+            "1": {"index": 1, "bus_i": 1, "bus_type": 3, "vm": 1.0, "va": 0.0, "vmax": 1.1, "vmin": 0.9, "base_kv": 230.0},
+            "2": {"index": 2, "bus_i": 2, "bus_type": 1, "vm": 1.0, "va": 0.0, "vmax": 1.1, "vmin": 0.9, "base_kv": 230.0}
+        },
+        "branch": {
+            "1": {
+                "index": 1, "f_bus": 1, "t_bus": 2, "br_r": 0.01, "br_x": 0.10,
+                "g_fr": 0.0, "b_fr": 0.02, "g_to": 0.0, "b_to": 0.02,
+                "rate_a": 100.0, "rate_b": 110.0, "rate_c": 120.0,
+                "tap": 1.0, "shift": 0.0, "transformer": false, "br_status": 1,
+                "angmin": -6.283185307179586, "angmax": 6.283185307179586
+            }
+        },
+        "gen": {}, "load": {}, "shunt": {}, "storage": {}, "switch": {}, "dcline": {}
+    }"#;
+    let net = parse_powermodels_json(base).unwrap();
+    let mp = write_as(&net, TargetFormat::Matpower).unwrap();
+    assert!(
+        !mp.warnings
+            .iter()
+            .any(|w| w.contains("terminal admittance")),
+        "{:?}",
+        mp.warnings
+    );
+    let reread = parse_matpower(&mp.text).unwrap();
+    close(reread.branches[0].b, 0.04);
+
+    let asymmetric = base.replace(
+        r#""g_to": 0.0, "b_to": 0.02"#,
+        r#""g_to": 0.001, "b_to": 0.03"#,
+    );
+    let net = parse_powermodels_json(&asymmetric).unwrap();
+    let mp = write_as(&net, TargetFormat::Matpower).unwrap();
+    assert!(
+        mp.warnings
+            .iter()
+            .any(|w| w.contains("terminal admittance")),
+        "{:?}",
+        mp.warnings
+    );
+}
+
+#[test]
+fn rich_psse_zip_load_model_is_typed() {
+    let raw = r"0, 100.00, 35, 0, 1, 60.00 / synthetic
+CASE
+COMMENT
+0 / END OF SYSTEM-WIDE DATA, BEGIN BUS DATA
+1,'BUS1        ', 230.0,3,1,1,1,1.0,0.0,1.1,0.9,1.1,0.9
+2,'BUS2        ', 230.0,1,1,1,1,1.0,0.0,1.1,0.9,1.1,0.9
+0 / END OF BUS DATA, BEGIN LOAD DATA
+2,'L1',1,1,1,10.0,3.0,1.0,0.5,2.0,1.5,1,0,1,4.0,2.0,1,'industrial'
+0 / END OF LOAD DATA, BEGIN FIXED SHUNT DATA
+Q
+";
+    let net = parse_psse(raw).unwrap();
+    assert_eq!(net.loads.len(), 1);
+    assert!(net.loads[0].extras.contains_key("psse_loadtype"));
+    let Some(LoadVoltageModel::Zip {
+        p_constant_power,
+        q_constant_current,
+        p_constant_impedance,
+        ..
+    }) = &net.loads[0].voltage_model
+    else {
+        panic!("PSS/E ZIP load pieces were not typed");
+    };
+    close(*p_constant_power, 10.0);
+    close(*q_constant_current, 0.5);
+    close(*p_constant_impedance, 2.0);
+    close(net.loads[0].p, 13.0);
+    close(net.loads[0].q, 5.0);
+}
+
+#[test]
+fn rich_zip_load_model_writes_to_pslf_components() {
+    let raw = r"0, 100.00, 35, 0, 1, 60.00 / synthetic
+CASE
+COMMENT
+0 / END OF SYSTEM-WIDE DATA, BEGIN BUS DATA
+1,'BUS1        ', 230.0,3,1,1,1,1.0,0.0,1.1,0.9,1.1,0.9
+2,'BUS2        ', 230.0,1,1,1,1,1.0,0.0,1.1,0.9,1.1,0.9
+0 / END OF BUS DATA, BEGIN LOAD DATA
+2,'L1',1,1,1,10.0,3.0,1.0,0.5,2.0,1.5,1,0,1,0.0,0.0,1
+0 / END OF LOAD DATA, BEGIN FIXED SHUNT DATA
+Q
+";
+    let net = parse_psse(raw).unwrap();
+    let pslf = write_pslf(&net);
+    assert!(
+        !pslf.warnings.iter().any(|w| w.contains("voltage model")),
+        "{:?}",
+        pslf.warnings
+    );
+    let back = parse_pslf(&pslf.text).unwrap();
+    let Some(LoadVoltageModel::Zip {
+        p_constant_power,
+        p_constant_current,
+        p_constant_impedance,
+        ..
+    }) = &back.loads[0].voltage_model
+    else {
+        panic!("PSLF writer flattened typed ZIP components");
+    };
+    close(*p_constant_power, 10.0);
+    close(*p_constant_current, 1.0);
+    close(*p_constant_impedance, 2.0);
+}
+
+#[test]
+fn rich_pandapower_zip_and_terminal_conductance_are_typed() {
+    let parsed = powerio::parse_str(
+        &pp_json(&[
+            (
+                "bus",
+                pp_frame(&["vn_kv"], &[0, 1], &serde_json::json!([[110.0], [110.0]])),
+            ),
+            (
+                "load",
+                pp_frame(
+                    &[
+                        "bus",
+                        "p_mw",
+                        "q_mvar",
+                        "const_z_p_percent",
+                        "const_i_p_percent",
+                        "const_z_q_percent",
+                        "const_i_q_percent",
+                    ],
+                    &[0],
+                    &serde_json::json!([[0, 10.0, 5.0, 20.0, 30.0, 10.0, 40.0]]),
+                ),
+            ),
+            (
+                "line",
+                pp_frame(
+                    &[
+                        "from_bus",
+                        "to_bus",
+                        "length_km",
+                        "r_ohm_per_km",
+                        "x_ohm_per_km",
+                        "c_nf_per_km",
+                        "g_us_per_km",
+                    ],
+                    &[0],
+                    &serde_json::json!([[0, 1, 2.0, 0.1, 0.2, 0.0, 3.0]]),
+                ),
+            ),
+        ]),
+        "pandapower-json",
+    )
+    .unwrap();
+    assert!(parsed.warnings.is_empty(), "{:?}", parsed.warnings);
+    let Some(LoadVoltageModel::Zip {
+        p_constant_power,
+        p_constant_current,
+        p_constant_impedance,
+        q_constant_power,
+        q_constant_current,
+        q_constant_impedance,
+        ..
+    }) = &parsed.network.loads[0].voltage_model
+    else {
+        panic!("pandapower ZIP columns were not typed");
+    };
+    close(*p_constant_impedance, 2.0);
+    close(*p_constant_current, 3.0);
+    close(*p_constant_power, 5.0);
+    close(*q_constant_impedance, 0.5);
+    close(*q_constant_current, 2.0);
+    close(*q_constant_power, 2.5);
+    assert!(
+        parsed.network.branches[0].terminal_charging().g_fr > 0.0,
+        "line shunt conductance should be typed terminal admittance"
+    );
 }
 
 #[test]
@@ -754,6 +1326,27 @@ fn powermodels_dcline_flips_pt_qf_qt_sign() {
 }
 
 #[test]
+fn powermodels_dcline_cost_round_trips() {
+    let mut net = parse_matpower_file(data("t_case9_dcline.m")).unwrap();
+    let dc = net.hvdc.first_mut().expect("fixture has dclines");
+    dc.cost = Some(powerio::network::GenCost {
+        model: 2,
+        startup: 0.0,
+        shutdown: 0.0,
+        ncost: 3,
+        coeffs: vec![0.02, 3.0, 10.0],
+    });
+
+    let back = parse_powermodels_json(&write_powermodels_json(&net).text).unwrap();
+    let got = back.hvdc[0].cost.as_ref().expect("dcline cost survives");
+    assert_eq!(got.model, 2);
+    assert_eq!(got.ncost, 3);
+    for (got, want) in got.coeffs.iter().zip([0.02, 3.0, 10.0]) {
+        assert!((got - want).abs() < 1e-9, "{got} != {want}");
+    }
+}
+
+#[test]
 fn powermodels_storage_ps_qs_stay_raw() {
     // PowerModels' make_per_unit! leaves storage ps/qs as setpoints (raw) while
     // scaling energy/ratings/limits by base. The reader must mirror that split.
@@ -947,6 +1540,10 @@ fn pandapower_genuine_fixture_reads() {
     assert_eq!(xf.shift, 150.0);
     // tap_pos == tap_neutral (0) on the hv side -> tap exactly 1.0, kept.
     assert_eq!(xf.tap, 1.0);
+    assert!(
+        xf.terminal_charging().g_fr > 0.0,
+        "pandapower pfe_kw should become typed magnetizing conductance"
+    );
 
     // Line 1: 10 km at 110 kV. r/x/b all scale by length; b is
     // c_nf_per_km * length * 2*pi*f * zbase (pandapower build_branch).
@@ -982,17 +1579,12 @@ fn pandapower_genuine_fixture_reads() {
     assert_eq!(dc.vf, 1.01);
     assert!(dc.pmax.is_infinite());
 
-    // Exactly the 8-row switch table and the trafo magnetizing branch warn.
-    assert_eq!(parsed.warnings.len(), 2, "{:?}", parsed.warnings);
+    // The 8-row switch table still warns; ZIP, line conductance, and transformer
+    // magnetizing admittance are typed.
+    assert_eq!(parsed.warnings.len(), 1, "{:?}", parsed.warnings);
     assert!(
         parsed.warnings.iter().any(|w| w
             == "`switch` table ignored (8 rows): switches are not modeled; open switches are not applied"),
-        "{:?}",
-        parsed.warnings
-    );
-    assert!(
-        parsed.warnings.iter().any(|w| w
-            == "`trafo`: i0_percent/pfe_kw nonzero on 1 rows; the magnetizing branch is not representable and was ignored"),
         "{:?}",
         parsed.warnings
     );
@@ -1410,14 +2002,17 @@ fn slackless_network_conversion_warns_for_power_flow_targets() {
             r: 0.0,
             x: 0.1,
             b: 0.0,
+            charging: None,
             rate_a: 0.0,
             rate_b: 0.0,
             rate_c: 0.0,
+            current_ratings: None,
             tap: 0.0,
             shift: 0.0,
             in_service: true,
             angmin: -360.0,
             angmax: 360.0,
+            solution: None,
             control: None,
             extras: Extras::new(),
         }

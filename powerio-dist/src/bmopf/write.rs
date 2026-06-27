@@ -12,8 +12,8 @@ use serde_json::{Map, Value, json};
 
 use crate::convert::Conversion;
 use crate::model::{
-    Configuration, DistGenerator, DistNetwork, DistSourceFormat, DistTransformer, Mat, Winding,
-    WindingConn,
+    Configuration, DistGenerator, DistLoadVoltageModel, DistNetwork, DistSourceFormat,
+    DistTransformer, Mat, Winding, WindingConn,
 };
 
 /// The `$schema` stamped into every document's `meta`: the canonical bmopf-report
@@ -275,6 +275,7 @@ impl Writer {
             o.insert("q_nom".into(), self.nums(&l.q_nom, "load q_nom"));
             o.insert("bus".into(), json!(l.bus));
             o.insert("terminal_map".into(), json!(l.terminal_map));
+            self.load_voltage_model(&mut o, &l.voltage_model, &format!("load {}", l.name));
             self.extras_dropped(&l.extras, &format!("load {}", l.name));
             loads.insert(l.name.clone(), Value::Object(o));
         }
@@ -362,6 +363,82 @@ impl Writer {
             sources.insert(vs.name.clone(), Value::Object(o));
         }
         doc.insert("voltage_source".into(), Value::Object(sources));
+    }
+
+    fn load_voltage_model(
+        &mut self,
+        o: &mut Map<String, Value>,
+        model: &DistLoadVoltageModel,
+        what: &str,
+    ) {
+        match model {
+            DistLoadVoltageModel::ConstantPower { v_nom } => {
+                o.insert("model".into(), json!("constant_power"));
+                if !v_nom.is_empty() {
+                    o.insert("v_nom".into(), self.nums(v_nom, &format!("{what} v_nom")));
+                }
+            }
+            DistLoadVoltageModel::ConstantCurrent { v_nom } => {
+                o.insert("model".into(), json!("constant_current"));
+                o.insert("v_nom".into(), self.nums(v_nom, &format!("{what} v_nom")));
+            }
+            DistLoadVoltageModel::ConstantImpedance { v_nom } => {
+                o.insert("model".into(), json!("constant_impedance"));
+                o.insert("v_nom".into(), self.nums(v_nom, &format!("{what} v_nom")));
+            }
+            DistLoadVoltageModel::Zip {
+                v_nom,
+                alpha_z,
+                alpha_i,
+                alpha_p,
+                beta_z,
+                beta_i,
+                beta_p,
+            } => {
+                o.insert("model".into(), json!("zip"));
+                o.insert("v_nom".into(), self.nums(v_nom, &format!("{what} v_nom")));
+                o.insert(
+                    "alpha_z".into(),
+                    self.nums(alpha_z, &format!("{what} alpha_z")),
+                );
+                o.insert(
+                    "alpha_i".into(),
+                    self.nums(alpha_i, &format!("{what} alpha_i")),
+                );
+                o.insert(
+                    "alpha_p".into(),
+                    self.nums(alpha_p, &format!("{what} alpha_p")),
+                );
+                o.insert(
+                    "beta_z".into(),
+                    self.nums(beta_z, &format!("{what} beta_z")),
+                );
+                o.insert(
+                    "beta_i".into(),
+                    self.nums(beta_i, &format!("{what} beta_i")),
+                );
+                o.insert(
+                    "beta_p".into(),
+                    self.nums(beta_p, &format!("{what} beta_p")),
+                );
+            }
+            DistLoadVoltageModel::Exponential {
+                v_nom,
+                gamma_p,
+                gamma_q,
+            } => {
+                o.insert("model".into(), json!("exponential"));
+                o.insert("v_nom".into(), self.nums(v_nom, &format!("{what} v_nom")));
+                o.insert(
+                    "gamma_p".into(),
+                    self.nums(gamma_p, &format!("{what} gamma_p")),
+                );
+                o.insert(
+                    "gamma_q".into(),
+                    self.nums(gamma_q, &format!("{what} gamma_q")),
+                );
+            }
+        }
     }
 
     fn generator(&mut self, g: &DistGenerator) -> Value {
@@ -901,5 +978,66 @@ fn config_str(c: Configuration) -> &'static str {
         Configuration::Wye => "WYE",
         Configuration::Delta => "DELTA",
         Configuration::SinglePhase => "SINGLE_PHASE",
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::bmopf::parse_bmopf_str;
+    use crate::model::DistLoadVoltageModel;
+
+    #[test]
+    fn load_voltage_models_round_trip_through_bmopf() {
+        let text = r#"{
+            "bus": {
+                "b1": {"terminal_names": ["1", "2", "3", "4"], "perfectly_grounded_terminals": ["4"]}
+            },
+            "voltage_source": {
+                "source": {
+                    "bus": "b1", "terminal_map": ["1", "2", "3", "4"],
+                    "v_magnitude": [7200.0, 7200.0, 7200.0, 0.0],
+                    "v_angle": [0.0, -120.0, 120.0, 0.0]
+                }
+            },
+            "load": {
+                "zip": {
+                    "bus": "b1", "terminal_map": ["1", "2", "3", "4"],
+                    "configuration": "WYE", "p_nom": [1.0, 2.0, 3.0], "q_nom": [0.1, 0.2, 0.3],
+                    "model": "zip", "v_nom": [7200.0, 7200.0, 7200.0],
+                    "alpha_z": [0.2, 0.2, 0.2], "alpha_i": [0.3, 0.3, 0.3], "alpha_p": [0.5, 0.5, 0.5],
+                    "beta_z": [0.1, 0.1, 0.1], "beta_i": [0.4, 0.4, 0.4], "beta_p": [0.5, 0.5, 0.5]
+                },
+                "exp": {
+                    "bus": "b1", "terminal_map": ["1", "2", "3", "4"],
+                    "configuration": "WYE", "p_nom": [1.0, 1.0, 1.0], "q_nom": [0.0, 0.0, 0.0],
+                    "model": "exponential", "v_nom": [7200.0, 7200.0, 7200.0],
+                    "gamma_p": [1.2, 1.2, 1.2], "gamma_q": [2.1, 2.1, 2.1]
+                }
+            }
+        }"#;
+        let net = parse_bmopf_str(text).unwrap();
+        let zip = net.loads.iter().find(|l| l.name == "zip").unwrap();
+        let exp = net.loads.iter().find(|l| l.name == "exp").unwrap();
+        assert!(matches!(
+            &zip.voltage_model,
+            DistLoadVoltageModel::Zip { alpha_z, .. } if alpha_z == &vec![0.2, 0.2, 0.2]
+        ));
+        assert!(matches!(
+            &exp.voltage_model,
+            DistLoadVoltageModel::Exponential { gamma_q, .. } if gamma_q == &vec![2.1, 2.1, 2.1]
+        ));
+
+        let out = write_bmopf_json(&net);
+        assert!(out.warnings.is_empty(), "{:?}", out.warnings);
+        let v: Value = serde_json::from_str(&out.text).unwrap();
+        assert_eq!(
+            v["load"]["zip"]["alpha_i"],
+            serde_json::json!([0.3, 0.3, 0.3])
+        );
+        assert_eq!(
+            v["load"]["exp"]["gamma_p"],
+            serde_json::json!([1.2, 1.2, 1.2])
+        );
     }
 }

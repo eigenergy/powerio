@@ -193,6 +193,8 @@ pub struct Network {
     pub loads: Vec<Load>,
     pub shunts: Vec<Shunt>,
     pub branches: Vec<Branch>,
+    #[serde(default)]
+    pub switches: Vec<Switch>,
     pub generators: Vec<Generator>,
     pub storage: Vec<Storage>,
     pub hvdc: Vec<Hvdc>,
@@ -231,6 +233,9 @@ pub struct Network {
     pub source: Option<Arc<String>>,
 }
 
+/// v1-facing name for the canonical scalar positive sequence model.
+pub type BalancedNetwork = Network;
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Bus {
     /// Stable bus id (1-based in MATPOWER; preserved verbatim).
@@ -265,8 +270,77 @@ pub struct Load {
     pub p: f64,
     /// Reactive demand (MVAr).
     pub q: f64,
+    /// Voltage dependence, when the source states one. `None` is constant power.
+    #[serde(default)]
+    pub voltage_model: Option<LoadVoltageModel>,
     pub in_service: bool,
     pub extras: Extras,
+}
+
+/// Voltage dependence for a transmission load.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+#[non_exhaustive]
+pub enum LoadVoltageModel {
+    /// Explicit constant power marker.
+    ConstantPower,
+    /// ZIP load split in source units. The three active parts sum to
+    /// [`Load::p`], and the three reactive parts sum to [`Load::q`].
+    Zip {
+        p_constant_power: f64,
+        q_constant_power: f64,
+        p_constant_current: f64,
+        q_constant_current: f64,
+        p_constant_impedance: f64,
+        q_constant_impedance: f64,
+        #[serde(default)]
+        v_nom: Option<f64>,
+        /// Source load type code, when a format has one (PSS/E `ID`/`LOADTYPE`
+        /// style metadata).
+        #[serde(default)]
+        load_type: Option<i32>,
+        /// Source scaling factor, when a format has one.
+        #[serde(default)]
+        scaling: Option<f64>,
+    },
+    /// Exponential voltage model: `P = p * (V / v_nom)^gamma_p`,
+    /// `Q = q * (V / v_nom)^gamma_q`.
+    Exponential {
+        p: f64,
+        q: f64,
+        #[serde(default)]
+        v_nom: Option<f64>,
+        gamma_p: f64,
+        gamma_q: f64,
+    },
+}
+
+impl LoadVoltageModel {
+    #[must_use]
+    pub fn has_non_matpower_fields(&self) -> bool {
+        match self {
+            Self::ConstantPower => false,
+            Self::Zip {
+                p_constant_current,
+                q_constant_current,
+                p_constant_impedance,
+                q_constant_impedance,
+                v_nom,
+                load_type,
+                scaling,
+                ..
+            } => {
+                *p_constant_current != 0.0
+                    || *q_constant_current != 0.0
+                    || *p_constant_impedance != 0.0
+                    || *q_constant_impedance != 0.0
+                    || v_nom.is_some()
+                    || load_type.is_some()
+                    || scaling.is_some()
+            }
+            Self::Exponential { .. } => true,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -333,11 +407,20 @@ pub struct Branch {
     pub r: f64,
     /// Series reactance (p.u.).
     pub x: f64,
-    /// Total line-charging susceptance (p.u.); half goes to each end.
+    /// MATPOWER compatible total line charging susceptance (p.u.). This is the
+    /// legacy total projection; when [`charging`](Branch::charging) is present,
+    /// per terminal admittance is canonical and this field is compatibility data.
     pub b: f64,
+    /// Per terminal shunt admittance (p.u.). If absent, derive symmetric
+    /// susceptance from [`b`](Branch::b).
+    #[serde(default)]
+    pub charging: Option<BranchCharging>,
     pub rate_a: f64,
     pub rate_b: f64,
     pub rate_c: f64,
+    /// Current ratings, when the source distinguishes them from MVA ratings.
+    #[serde(default)]
+    pub current_ratings: Option<BranchCurrentRatings>,
     /// Tap ratio, MATPOWER convention: 0 means "no tap" (a line), treated as 1.
     pub tap: f64,
     /// Phase shift (degrees).
@@ -351,7 +434,66 @@ pub struct Branch {
     /// still deserializes.
     #[serde(default)]
     pub control: Option<TransformerControl>,
+    /// Solved branch flow values, when present in a case snapshot.
+    #[serde(default)]
+    pub solution: Option<BranchSolution>,
     pub extras: Extras,
+}
+
+/// Per terminal branch shunt admittance in p.u. This is the canonical
+/// physical branch shunt model when present.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub struct BranchCharging {
+    pub g_fr: f64,
+    pub b_fr: f64,
+    pub g_to: f64,
+    pub b_to: f64,
+}
+
+impl BranchCharging {
+    #[must_use]
+    pub fn from_total_b(b: f64) -> Self {
+        Self {
+            g_fr: 0.0,
+            b_fr: b / 2.0,
+            g_to: 0.0,
+            b_to: b / 2.0,
+        }
+    }
+
+    #[must_use]
+    pub fn total_b(self) -> f64 {
+        self.b_fr + self.b_to
+    }
+
+    #[must_use]
+    pub fn total_g(self) -> f64 {
+        self.g_fr + self.g_to
+    }
+
+    #[must_use]
+    pub fn is_matpower_symmetric(self) -> bool {
+        self.g_fr.abs() <= f64::EPSILON
+            && self.g_to.abs() <= f64::EPSILON
+            && (self.b_fr - self.b_to).abs() <= f64::EPSILON
+    }
+}
+
+/// Current limits for a branch, in source units.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub struct BranchCurrentRatings {
+    pub c_rating_a: f64,
+    pub c_rating_b: f64,
+    pub c_rating_c: f64,
+}
+
+/// Solved branch terminal flows in MW/MVAr.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub struct BranchSolution {
+    pub pf: f64,
+    pub qf: f64,
+    pub pt: f64,
+    pub qt: f64,
 }
 
 impl Branch {
@@ -359,6 +501,28 @@ impl Branch {
     #[must_use]
     pub fn effective_tap(&self) -> f64 {
         if self.tap == 0.0 { 1.0 } else { self.tap }
+    }
+
+    /// Per terminal shunt admittance, deriving the legacy symmetric MATPOWER
+    /// charging model when the richer field is absent.
+    #[must_use]
+    pub fn terminal_charging(&self) -> BranchCharging {
+        self.charging
+            .unwrap_or_else(|| BranchCharging::from_total_b(self.b))
+    }
+
+    /// Total susceptance projection for MATPOWER shaped formats that only carry
+    /// one line charging value.
+    #[must_use]
+    pub fn legacy_total_charging_b(&self) -> f64 {
+        self.terminal_charging().total_b()
+    }
+
+    /// Whether this branch has charging that a MATPOWER branch row cannot carry.
+    #[must_use]
+    pub fn has_non_matpower_charging(&self) -> bool {
+        self.charging
+            .is_some_and(|charging| !charging.is_matpower_symmetric())
     }
 
     /// A transformer iff the raw tap field is nonzero (an explicit `1` counts) or
@@ -375,6 +539,28 @@ impl Branch {
     pub fn has_angle_limits(&self) -> bool {
         self.angmin > -360.0 || self.angmax < 360.0
     }
+}
+
+/// A transmission switch. Closed switches are preserved as data; matrix builders
+/// do not lower them into zero impedance branches.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Switch {
+    pub from: BusId,
+    pub to: BusId,
+    pub closed: bool,
+    #[serde(default)]
+    pub thermal_rating: Option<f64>,
+    #[serde(default)]
+    pub current_rating: Option<f64>,
+    #[serde(default)]
+    pub pf: Option<f64>,
+    #[serde(default)]
+    pub qf: Option<f64>,
+    #[serde(default)]
+    pub pt: Option<f64>,
+    #[serde(default)]
+    pub qt: Option<f64>,
+    pub extras: Extras,
 }
 
 /// What a regulating transformer's tap (or phase shift) automatically controls.
@@ -537,6 +723,8 @@ pub struct Storage {
     pub charge_efficiency: f64,
     pub discharge_efficiency: f64,
     pub thermal_rating: f64,
+    #[serde(default)]
+    pub current_rating: Option<f64>,
     pub qmin: f64,
     pub qmax: f64,
     pub r: f64,
@@ -573,6 +761,8 @@ pub struct Hvdc {
     pub qmaxt: f64,
     pub loss0: f64,
     pub loss1: f64,
+    #[serde(default)]
+    pub cost: Option<GenCost>,
     pub extras: Extras,
 }
 
@@ -745,15 +935,18 @@ impl Transformer3W {
             r,
             x,
             b: 0.0,
+            charging: None,
             rate_a: w.rate_a,
             rate_b: w.rate_b,
             rate_c: w.rate_c,
+            current_ratings: None,
             tap: w.tap,
             shift: w.shift,
             in_service: self.in_service,
             angmin: -360.0,
             angmax: 360.0,
             control: None,
+            solution: None,
             extras: Extras::new(),
         };
         let branches = [
@@ -832,6 +1025,7 @@ impl Network {
             loads: Vec::new(),
             shunts: Vec::new(),
             branches,
+            switches: Vec::new(),
             generators: Vec::new(),
             storage: Vec::new(),
             hvdc: Vec::new(),
@@ -890,6 +1084,9 @@ impl Network {
         if !self.base_mva.is_finite() {
             out.push("base_mva".into());
         }
+        if !self.base_frequency.is_finite() {
+            out.push("base_frequency".into());
+        }
         for (i, b) in self.buses.iter().enumerate() {
             #[rustfmt::skip]
             let Bus { id: _, kind: _, vm, va, base_kv, vmax, vmin, evhi: _, evlo: _, area: _, zone: _, name: _, extras: _ } = b;
@@ -907,10 +1104,63 @@ impl Network {
                 bus: _,
                 p,
                 q,
+                voltage_model,
                 in_service: _,
                 extras: _,
             } = l;
             out.extend(bad([("p", *p), ("q", *q)]).map(|f| format!("loads[{i}].{f}")));
+            if let Some(model) = voltage_model {
+                match model {
+                    LoadVoltageModel::ConstantPower => {}
+                    LoadVoltageModel::Zip {
+                        p_constant_power,
+                        q_constant_power,
+                        p_constant_current,
+                        q_constant_current,
+                        p_constant_impedance,
+                        q_constant_impedance,
+                        v_nom,
+                        load_type: _,
+                        scaling,
+                    } => {
+                        let fields = [
+                            ("p_constant_power", *p_constant_power),
+                            ("q_constant_power", *q_constant_power),
+                            ("p_constant_current", *p_constant_current),
+                            ("q_constant_current", *q_constant_current),
+                            ("p_constant_impedance", *p_constant_impedance),
+                            ("q_constant_impedance", *q_constant_impedance),
+                        ];
+                        out.extend(bad(fields).map(|f| format!("loads[{i}].voltage_model.{f}")));
+                        if matches!(v_nom, Some(v) if !v.is_finite()) {
+                            out.push(format!("loads[{i}].voltage_model.v_nom"));
+                        }
+                        if matches!(scaling, Some(v) if !v.is_finite()) {
+                            out.push(format!("loads[{i}].voltage_model.scaling"));
+                        }
+                    }
+                    LoadVoltageModel::Exponential {
+                        p,
+                        q,
+                        v_nom,
+                        gamma_p,
+                        gamma_q,
+                    } => {
+                        out.extend(
+                            bad([
+                                ("p", *p),
+                                ("q", *q),
+                                ("gamma_p", *gamma_p),
+                                ("gamma_q", *gamma_q),
+                            ])
+                            .map(|f| format!("loads[{i}].voltage_model.{f}")),
+                        );
+                        if matches!(v_nom, Some(v) if !v.is_finite()) {
+                            out.push(format!("loads[{i}].voltage_model.v_nom"));
+                        }
+                    }
+                }
+            }
         }
         for (i, s) in self.shunts.iter().enumerate() {
             let Shunt {
@@ -925,7 +1175,7 @@ impl Network {
         }
         for (i, br) in self.branches.iter().enumerate() {
             #[rustfmt::skip]
-            let Branch { from: _, to: _, r, x, b, rate_a, rate_b, rate_c, tap, shift, in_service: _, angmin, angmax, control: _, extras: _ } = br;
+            let Branch { from: _, to: _, r, x, b, charging, rate_a, rate_b, rate_c, current_ratings, tap, shift, in_service: _, angmin, angmax, control: _, solution, extras: _ } = br;
             let fields = [
                 ("r", *r),
                 ("x", *x),
@@ -939,6 +1189,67 @@ impl Network {
                 ("angmax", *angmax),
             ];
             out.extend(bad(fields).map(|f| format!("branches[{i}].{f}")));
+            if let Some(charging) = charging {
+                let BranchCharging {
+                    g_fr,
+                    b_fr,
+                    g_to,
+                    b_to,
+                } = charging;
+                let fields = [
+                    ("g_fr", *g_fr),
+                    ("b_fr", *b_fr),
+                    ("g_to", *g_to),
+                    ("b_to", *b_to),
+                ];
+                out.extend(bad(fields).map(|f| format!("branches[{i}].charging.{f}")));
+            }
+            if let Some(current) = current_ratings {
+                let BranchCurrentRatings {
+                    c_rating_a,
+                    c_rating_b,
+                    c_rating_c,
+                } = current;
+                let fields = [
+                    ("c_rating_a", *c_rating_a),
+                    ("c_rating_b", *c_rating_b),
+                    ("c_rating_c", *c_rating_c),
+                ];
+                out.extend(bad(fields).map(|f| format!("branches[{i}].current_ratings.{f}")));
+            }
+            if let Some(solution) = solution {
+                let BranchSolution { pf, qf, pt, qt } = solution;
+                out.extend(
+                    bad([("pf", *pf), ("qf", *qf), ("pt", *pt), ("qt", *qt)])
+                        .map(|f| format!("branches[{i}].solution.{f}")),
+                );
+            }
+        }
+        for (i, sw) in self.switches.iter().enumerate() {
+            let Switch {
+                from: _,
+                to: _,
+                closed: _,
+                thermal_rating,
+                current_rating,
+                pf,
+                qf,
+                pt,
+                qt,
+                extras: _,
+            } = sw;
+            for (field, value) in [
+                ("thermal_rating", *thermal_rating),
+                ("current_rating", *current_rating),
+                ("pf", *pf),
+                ("qf", *qf),
+                ("pt", *pt),
+                ("qt", *qt),
+            ] {
+                if matches!(value, Some(v) if !v.is_finite()) {
+                    out.push(format!("switches[{i}].{field}"));
+                }
+            }
         }
         for (i, g) in self.generators.iter().enumerate() {
             #[rustfmt::skip]
@@ -981,7 +1292,7 @@ impl Network {
         }
         for (i, s) in self.storage.iter().enumerate() {
             #[rustfmt::skip]
-            let Storage { bus: _, ps, qs, energy, energy_rating, charge_rating, discharge_rating, charge_efficiency, discharge_efficiency, thermal_rating, qmin, qmax, r, x, p_loss, q_loss, in_service: _, extras: _ } = s;
+            let Storage { bus: _, ps, qs, energy, energy_rating, charge_rating, discharge_rating, charge_efficiency, discharge_efficiency, thermal_rating, current_rating, qmin, qmax, r, x, p_loss, q_loss, in_service: _, extras: _ } = s;
             let fields = [
                 ("ps", *ps),
                 ("qs", *qs),
@@ -1000,10 +1311,13 @@ impl Network {
                 ("q_loss", *q_loss),
             ];
             out.extend(bad(fields).map(|f| format!("storage[{i}].{f}")));
+            if matches!(current_rating, Some(v) if !v.is_finite()) {
+                out.push(format!("storage[{i}].current_rating"));
+            }
         }
         for (i, h) in self.hvdc.iter().enumerate() {
             #[rustfmt::skip]
-            let Hvdc { from: _, to: _, in_service: _, pf, pt, qf, qt, vf, vt, pmin, pmax, qminf, qmaxf, qmint, qmaxt, loss0, loss1, extras: _ } = h;
+            let Hvdc { from: _, to: _, in_service: _, pf, pt, qf, qt, vf, vt, pmin, pmax, qminf, qmaxf, qmint, qmaxt, loss0, loss1, cost, extras: _ } = h;
             let fields = [
                 ("pf", *pf),
                 ("pt", *pt),
@@ -1021,6 +1335,22 @@ impl Network {
                 ("loss1", *loss1),
             ];
             out.extend(bad(fields).map(|f| format!("hvdc[{i}].{f}")));
+            if let Some(GenCost {
+                model: _,
+                startup,
+                shutdown,
+                ncost: _,
+                coeffs,
+            }) = cost
+            {
+                out.extend(
+                    bad([("startup", *startup), ("shutdown", *shutdown)])
+                        .map(|f| format!("hvdc[{i}].cost.{f}")),
+                );
+                if coeffs.iter().any(|c| !c.is_finite()) {
+                    out.push(format!("hvdc[{i}].cost.coeffs"));
+                }
+            }
         }
         out
     }
@@ -1286,6 +1616,16 @@ impl Network {
                 check(bus, "transformer control")?;
             }
         }
+        for (i, sw) in self.switches.iter().enumerate() {
+            for bus in [sw.from, sw.to] {
+                if !ids.contains(&bus) {
+                    return Err(Error::FormatRead {
+                        format,
+                        message: format!("switch {i} references unknown bus {bus}"),
+                    });
+                }
+            }
+        }
         for l in &self.loads {
             check(l.bus, "load")?;
         }
@@ -1442,9 +1782,11 @@ mod tests {
             r: 0.0,
             x: 0.1,
             b: 0.0,
+            charging: None,
             rate_a: 0.0,
             rate_b: 0.0,
             rate_c: 0.0,
+            current_ratings: None,
             tap: 1.0,
             shift: 0.0,
             in_service: true,
@@ -1460,6 +1802,7 @@ mod tests {
                 ntp: 17,
                 mva_base: 100.0,
             }),
+            solution: None,
             extras: Extras::new(),
         }
     }
@@ -1550,15 +1893,18 @@ mod tests {
             r: 0.0,
             x: f64::INFINITY,
             b: 0.0,
+            charging: None,
             rate_a: 0.0,
             rate_b: 0.0,
             rate_c: 0.0,
+            current_ratings: None,
             tap: 0.0,
             shift: 0.0,
             in_service: true,
             angmin: -360.0,
             angmax: 360.0,
             control: None,
+            solution: None,
             extras: Extras::new(),
         };
         // A non-finite generator capability reports at its exact key path

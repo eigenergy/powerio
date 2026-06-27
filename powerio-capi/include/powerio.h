@@ -151,6 +151,10 @@ struct ArrowSchema;
 #define PIO_ARROW_TABLE_SHUNT 4
 #endif
 
+#if defined(PIO_ARROW)
+#define PIO_ARROW_TABLE_SWITCH 5
+#endif
+
 #if defined(PIO_DIST)
 /**
  * Opaque parsed distribution network handle (the multiconductor wire-coordinate
@@ -302,6 +306,8 @@ size_t pio_n_buses(const PioNetwork *net);
 
 size_t pio_n_branches(const PioNetwork *net);
 
+size_t pio_n_switches(const PioNetwork *net);
+
 size_t pio_n_gens(const PioNetwork *net);
 
 double pio_base_mva(const PioNetwork *net);
@@ -436,6 +442,33 @@ size_t pio_branches(const PioNetwork *net,
                     double *tap,
                     double *shift,
                     uint8_t *in_service,
+                    size_t cap);
+
+/**
+ * Write the branch terminal charging table as parallel arrays, each up to
+ * `cap` entries, and return the total branch count. Columns are p.u.
+ */
+size_t pio_branch_charging(const PioNetwork *net,
+                           double *g_fr,
+                           double *b_fr,
+                           double *g_to,
+                           double *b_to,
+                           size_t cap);
+
+/**
+ * Write the switch table as parallel arrays, each up to `cap` entries, and
+ * return the total switch count. `from`/`to` are external bus ids.
+ */
+size_t pio_switches(const PioNetwork *net,
+                    int64_t *from,
+                    int64_t *to,
+                    uint8_t *closed,
+                    double *thermal_rating,
+                    double *current_rating,
+                    double *pf,
+                    double *qf,
+                    double *pt,
+                    double *qt,
                     size_t cap);
 
 /**

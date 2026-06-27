@@ -16,7 +16,9 @@ use std::collections::BTreeMap;
 use std::fmt::Write as _;
 
 use crate::convert::Conversion;
-use crate::model::{Configuration, DistBus, DistNetwork, Extras, Mat, Winding, WindingConn};
+use crate::model::{
+    Configuration, DistBus, DistLoadVoltageModel, DistNetwork, Extras, Mat, Winding, WindingConn,
+};
 
 use super::read::delta_edges;
 use super::{lex, prop};
@@ -54,6 +56,16 @@ struct DssWriter {
     terminals: BTreeMap<String, Vec<String>>,
     /// Bus id (lowercase) → phase to neutral voltage estimate, volts.
     kv_estimate: BTreeMap<String, f64>,
+}
+
+#[derive(Clone, Copy)]
+struct ElementKv<'a> {
+    bus: &'a str,
+    phases: usize,
+    configuration: Configuration,
+    name: &'a str,
+    class: &'a str,
+    typed_kv: Option<f64>,
 }
 
 /// Phase to neutral voltage per bus, propagated from the sources through
@@ -211,6 +223,15 @@ fn extras_usize(extras: &Extras, key: &str) -> Option<usize> {
                 .filter(|f| f.fract() == 0.0 && *f >= 0.0)
                 .map(|f| f as usize)
         })
+}
+
+fn zipv_cutoff(value: Option<&serde_json::Value>) -> Option<f64> {
+    let text = value?.as_str()?;
+    lex::Value::new(text)
+        .to_vector(None)
+        .ok()
+        .and_then(|v| v.get(6).copied())
+        .filter(|v| v.is_finite())
 }
 
 /// Whether the dss tokenizer would split this name: its delimiters, quote
@@ -885,11 +906,24 @@ impl DssWriter {
             self.warn_short_map("load", &l.name, l.terminal_map.len(), nconds);
             let kw: f64 = l.p_nom.iter().sum::<f64>() / 1e3;
             let kvar: f64 = l.q_nom.iter().sum::<f64>() / 1e3;
-            let kv = self.element_kv(&l.extras, &l.bus, phases, l.configuration, &l.name, "load");
+            let typed_kv = self.load_nominal_kv(&l.voltage_model, phases, l.configuration, &l.name);
+            let kv = self.element_kv(
+                &l.extras,
+                ElementKv {
+                    bus: &l.bus,
+                    phases,
+                    configuration: l.configuration,
+                    name: &l.name,
+                    class: "load",
+                    typed_kv,
+                },
+            );
             let mut extras = l.extras.clone();
             extras.remove("kv");
             extras.remove("phases");
             extras.remove("conn");
+            let retained_model = extras.remove("model");
+            let retained_zipv = extras.remove("zipv");
             // q that came from a power factor goes back as pf=, so the
             // engine recomputes its own kvar bit for bit.
             let reactive = match extras.remove("pf").and_then(|v| v.as_f64()) {
@@ -903,6 +937,57 @@ impl DssWriter {
                 num(kv),
                 num(kw),
             );
+            match &l.voltage_model {
+                DistLoadVoltageModel::ConstantPower { .. } => {
+                    if let Some(model) = retained_model {
+                        extras.insert("model".into(), model);
+                    }
+                }
+                DistLoadVoltageModel::ConstantImpedance { .. } => {
+                    s.push_str(" model=2");
+                }
+                DistLoadVoltageModel::ConstantCurrent { .. } => {
+                    s.push_str(" model=5");
+                }
+                DistLoadVoltageModel::Zip {
+                    alpha_z,
+                    alpha_i,
+                    alpha_p,
+                    beta_z,
+                    beta_i,
+                    beta_p,
+                    ..
+                } => {
+                    s.push_str(" model=8");
+                    if let (Some(az), Some(ai), Some(ap), Some(bz), Some(bi), Some(bp)) = (
+                        alpha_z.first(),
+                        alpha_i.first(),
+                        alpha_p.first(),
+                        beta_z.first(),
+                        beta_i.first(),
+                        beta_p.first(),
+                    ) {
+                        let cutoff = zipv_cutoff(retained_zipv.as_ref()).unwrap_or(0.0);
+                        let _ = write!(
+                            s,
+                            " zipv=({}, {}, {}, {}, {}, {}, {})",
+                            num(*az),
+                            num(*ai),
+                            num(*ap),
+                            num(*bz),
+                            num(*bi),
+                            num(*bp),
+                            num(cutoff)
+                        );
+                    }
+                }
+                DistLoadVoltageModel::Exponential { .. } => {
+                    self.warn(format!(
+                        "load {}: exponential voltage model has no OpenDSS load model code; emitted constant power",
+                        l.name
+                    ));
+                }
+            }
             s.push_str(&self.extras_tail("load", &l.name, &extras));
             self.line_out(&s);
         }
@@ -911,15 +996,7 @@ impl DssWriter {
 
     /// `kv` for a load or capacitor: the recorded value when the source
     /// carried one, otherwise the propagated bus estimate.
-    fn element_kv(
-        &mut self,
-        extras: &Extras,
-        bus: &str,
-        phases: usize,
-        configuration: Configuration,
-        name: &str,
-        class: &str,
-    ) -> f64 {
+    fn element_kv(&mut self, extras: &Extras, ctx: ElementKv<'_>) -> f64 {
         if let Some(v) = extras.get("kv") {
             match v
                 .as_f64()
@@ -927,15 +1004,19 @@ impl DssWriter {
             {
                 Some(kv) => return kv,
                 None => self.warn(format!(
-                    "{class} {name}: kv extra `{v}` does not parse as a number; \
-                     using the bus voltage estimate"
+                    "{} {}: kv extra `{v}` does not parse as a number; \
+                     using the bus voltage estimate",
+                    ctx.class, ctx.name
                 )),
             }
         }
-        if let Some(vln) = self.kv_estimate.get(&bus.to_ascii_lowercase()).copied() {
+        if let Some(kv) = ctx.typed_kv {
+            return kv;
+        }
+        if let Some(vln) = self.kv_estimate.get(&ctx.bus.to_ascii_lowercase()).copied() {
             // OpenDSS convention: line to line for 2 and 3 phase, line to
             // neutral for single phase.
-            let v = if phases >= 2 || configuration == Configuration::Delta {
+            let v = if ctx.phases >= 2 || ctx.configuration == Configuration::Delta {
                 vln * 3f64.sqrt()
             } else {
                 vln
@@ -943,11 +1024,40 @@ impl DssWriter {
             v / 1e3
         } else {
             self.warn(format!(
-                "{class} {name}: no kv in the source and no bus voltage estimate; \
-                 emitted 12.47"
+                "{} {}: no kv in the source and no bus voltage estimate; \
+                 emitted 12.47",
+                ctx.class, ctx.name
             ));
             12.47
         }
+    }
+
+    fn load_nominal_kv(
+        &mut self,
+        model: &DistLoadVoltageModel,
+        phases: usize,
+        configuration: Configuration,
+        name: &str,
+    ) -> Option<f64> {
+        let v_nom = model.v_nom();
+        let v_phase = v_nom
+            .first()
+            .copied()
+            .filter(|v| v.is_finite() && *v > 0.0)?;
+        if v_nom
+            .iter()
+            .any(|v| (*v - v_phase).abs() > 1e-9 * v.abs().max(v_phase.abs()).max(1.0))
+        {
+            self.warn(format!(
+                "load {name}: nonuniform nominal voltage array has no OpenDSS scalar kv; emitted the first value"
+            ));
+        }
+        let v = if phases >= 2 && configuration == Configuration::Wye {
+            v_phase * 3f64.sqrt()
+        } else {
+            v_phase
+        };
+        Some(v / 1e3)
     }
 
     fn write_impedance_shunt(&mut self, sh: &crate::model::DistShunt, phases: usize) {
@@ -1078,7 +1188,17 @@ impl DssWriter {
         } else {
             Configuration::Wye
         };
-        let kv = self.element_kv(&sh.extras, &sh.bus, phases, configuration, &sh.name, class);
+        let kv = self.element_kv(
+            &sh.extras,
+            ElementKv {
+                bus: &sh.bus,
+                phases,
+                configuration,
+                name: &sh.name,
+                class,
+                typed_kv: None,
+            },
+        );
         let kvar = extras_f64(&sh.extras, "kvar")
             .unwrap_or_else(|| shunt_kvar(sh, phases, conn_delta, &edges, b_phase, kv));
         let mut extras = sh.extras.clone();
@@ -1138,11 +1258,14 @@ impl DssWriter {
             let kvar: f64 = g.q_nom.iter().sum::<f64>() / 1e3;
             let kv = self.element_kv(
                 &g.extras,
-                &g.bus,
-                phases,
-                g.configuration,
-                &g.name,
-                "generator",
+                ElementKv {
+                    bus: &g.bus,
+                    phases,
+                    configuration: g.configuration,
+                    name: &g.name,
+                    class: "generator",
+                    typed_kv: None,
+                },
             );
             let mut s = format!(
                 "New Generator.{} bus1={} phases={phases} conn={conn} kv={} kw={} kvar={}",
@@ -1387,6 +1510,7 @@ mod tests {
             configuration,
             p_nom: vec![1e3; phases],
             q_nom: vec![0.0; phases],
+            voltage_model: DistLoadVoltageModel::ConstantPower { v_nom: Vec::new() },
             extras: Extras::from([("kv".to_string(), serde_json::json!("0.4"))]),
         }
     }

@@ -17,8 +17,8 @@ use serde_json::{Map, Value};
 
 use super::{Conversion, finish, jnum};
 use crate::network::{
-    Branch, Bus, BusId, BusType, Extras, GenCost, Generator, Hvdc, Load, Network, Shunt,
-    SourceFormat,
+    Branch, Bus, BusId, BusType, Extras, GenCost, Generator, Hvdc, Load, LoadVoltageModel, Network,
+    Shunt, SourceFormat,
 };
 use crate::{Error, Result};
 
@@ -54,6 +54,34 @@ pub fn write_egret_json(net: &Network) -> Conversion {
         generator.insert((i + 1).to_string(), gen_obj(g, &mut warnings));
     }
 
+    warn_egret_writer_losses(net, &mut warnings);
+
+    let mut elements = Map::new();
+    elements.insert("bus".into(), Value::Object(bus));
+    elements.insert("load".into(), Value::Object(load));
+    elements.insert("shunt".into(), Value::Object(shunt));
+    elements.insert("branch".into(), Value::Object(branch));
+    elements.insert("generator".into(), Value::Object(generator));
+
+    let mut system = Map::new();
+    system.insert("baseMVA".into(), jnum(net.base_mva));
+    match reference_bus(net) {
+        Some(r) => {
+            system.insert("reference_bus".into(), Value::String(r.id.to_string()));
+            system.insert("reference_bus_angle".into(), jnum(r.va));
+        }
+        None => warnings
+            .push("no single reference bus (BusType::Ref); system.reference_bus omitted".into()),
+    }
+
+    let mut root = Map::new();
+    root.insert("elements".into(), Value::Object(elements));
+    root.insert("system".into(), Value::Object(system));
+
+    finish(root, warnings)
+}
+
+fn warn_egret_writer_losses(net: &Network, warnings: &mut Vec<String>) {
     if !net.hvdc.is_empty() {
         warnings.push(format!(
             "{} dcline(s) dropped: egret HVDC mapping not implemented",
@@ -82,30 +110,46 @@ pub fn write_egret_json(net: &Network) -> Conversion {
             net.storage.len()
         ));
     }
-
-    let mut elements = Map::new();
-    elements.insert("bus".into(), Value::Object(bus));
-    elements.insert("load".into(), Value::Object(load));
-    elements.insert("shunt".into(), Value::Object(shunt));
-    elements.insert("branch".into(), Value::Object(branch));
-    elements.insert("generator".into(), Value::Object(generator));
-
-    let mut system = Map::new();
-    system.insert("baseMVA".into(), jnum(net.base_mva));
-    match reference_bus(net) {
-        Some(r) => {
-            system.insert("reference_bus".into(), Value::String(r.id.to_string()));
-            system.insert("reference_bus_angle".into(), jnum(r.va));
-        }
-        None => warnings
-            .push("no single reference bus (BusType::Ref); system.reference_bus omitted".into()),
+    let voltage_loads = net
+        .loads
+        .iter()
+        .filter(|l| {
+            l.voltage_model
+                .as_ref()
+                .is_some_and(LoadVoltageModel::has_non_matpower_fields)
+        })
+        .count();
+    if voltage_loads > 0 {
+        warnings.push(format!(
+            "{voltage_loads} voltage dependent load model(s) dropped: egret load records carry static p_load/q_load only"
+        ));
     }
-
-    let mut root = Map::new();
-    root.insert("elements".into(), Value::Object(elements));
-    root.insert("system".into(), Value::Object(system));
-
-    finish(root, warnings)
+    let terminal_charging = net
+        .branches
+        .iter()
+        .filter(|b| b.has_non_matpower_charging())
+        .count();
+    if terminal_charging > 0 {
+        warnings.push(format!(
+            "{terminal_charging} branch terminal admittance record(s) collapsed to total susceptance: egret branches cannot carry conductance or asymmetric terminal charging"
+        ));
+    }
+    let current_ratings = net
+        .branches
+        .iter()
+        .filter(|b| b.current_ratings.is_some())
+        .count();
+    if current_ratings > 0 {
+        warnings.push(format!(
+            "{current_ratings} branch current rating record(s) dropped: egret branch records carry MVA ratings only"
+        ));
+    }
+    let branch_solutions = net.branches.iter().filter(|b| b.solution.is_some()).count();
+    if branch_solutions > 0 {
+        warnings.push(format!(
+            "{branch_solutions} branch solution value set(s) dropped: egret branch result fields are not written"
+        ));
+    }
 }
 
 fn reference_bus(net: &Network) -> Option<&Bus> {
@@ -170,7 +214,10 @@ fn branch_obj(br: &Branch) -> Value {
     m.insert("to_bus".into(), Value::String(br.to.to_string()));
     m.insert("resistance".into(), jnum(br.r));
     m.insert("reactance".into(), jnum(br.x));
-    m.insert("charging_susceptance".into(), jnum(br.b));
+    m.insert(
+        "charging_susceptance".into(),
+        jnum(br.legacy_total_charging_b()),
+    );
     m.insert("in_service".into(), Value::Bool(br.in_service));
     m.insert("angle_diff_min".into(), jnum(br.angmin));
     m.insert("angle_diff_max".into(), jnum(br.angmax));
@@ -336,6 +383,7 @@ pub(crate) fn parse_egret_source(source: Arc<String>, name_hint: Option<&str>) -
         loads,
         shunts,
         branches,
+        switches: Vec::new(),
         generators,
         storage: Vec::new(),
         hvdc,
@@ -494,6 +542,7 @@ fn read_load(v: &Value) -> Result<Load> {
         bus: id_field(v, "bus")?,
         p: f(v, "p_load")?,
         q: f(v, "q_load")?,
+        voltage_model: None,
         in_service: flag(v, "in_service", true)?,
         extras: Extras::new(),
     })
@@ -518,9 +567,11 @@ fn read_branch(v: &Value) -> Result<Branch> {
         r: f(v, "resistance")?,
         x: f(v, "reactance")?,
         b: f(v, "charging_susceptance")?,
+        charging: None,
         rate_a: f(v, "rating_long_term")?,
         rate_b: f(v, "rating_short_term")?,
         rate_c: f(v, "rating_emergency")?,
+        current_ratings: None,
         tap: if is_xf {
             f_or(v, "transformer_tap_ratio", 1.0)?
         } else {
@@ -531,6 +582,7 @@ fn read_branch(v: &Value) -> Result<Branch> {
         angmin: f_or(v, "angle_diff_min", -360.0)?,
         angmax: f_or(v, "angle_diff_max", 360.0)?,
         control: None,
+        solution: None,
         extras: Extras::new(),
     })
 }
@@ -583,6 +635,7 @@ fn read_dc_branch(v: &Value) -> Result<Hvdc> {
         qmaxt: f(v, "qmaxt")?,
         loss0: f(v, "loss0")?,
         loss1: f_or(v, "loss_factor", 0.0)?,
+        cost: None,
         extras: Extras::new(),
     })
 }

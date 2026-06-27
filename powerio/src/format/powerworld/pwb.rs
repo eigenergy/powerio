@@ -465,6 +465,7 @@ fn checked_network(
         loads,
         shunts,
         branches,
+        switches: Vec::new(),
         generators,
         storage: Vec::new(),
         hvdc: Vec::new(),
@@ -1218,6 +1219,7 @@ fn read_load(c: &mut Cur, bus: BusId, id: &[u8]) -> Probe<Load> {
         bus,
         p,
         q,
+        voltage_model: None,
         in_service,
         extras,
     })
@@ -1623,9 +1625,11 @@ fn read_standard_branch_head(
         r,
         x,
         b: b_chg,
+        charging: None,
         rate_a: rates[0],
         rate_b: rates[1],
         rate_c: rates[2],
+        current_ratings: None,
         tap,
         // Phase shift is undecoded: every available case has zero phase, so
         // the field's location is unknown (see the module docs).
@@ -1637,6 +1641,7 @@ fn read_standard_branch_head(
         angmin: -360.0,
         angmax: 360.0,
         control: None,
+        solution: None,
         extras,
     };
     Ok((br, c.pos, flags))
@@ -1709,15 +1714,18 @@ fn read_step_up_transformer_head(
         r: 0.0,
         x: x_device * mbase / MVA_BASE,
         b: 0.0,
+        charging: None,
         rate_a: 0.0,
         rate_b: 0.0,
         rate_c: 0.0,
+        current_ratings: None,
         tap: 1.0,
         shift: 0.0,
         in_service: true,
         angmin: -360.0,
         angmax: 360.0,
         control: None,
+        solution: None,
         extras,
     };
     Ok((
@@ -1787,6 +1795,7 @@ mod tests {
             loads: Vec::new(),
             shunts: Vec::new(),
             branches: Vec::new(),
+            switches: Vec::new(),
             generators: Vec::new(),
             storage: Vec::new(),
             hvdc: Vec::new(),

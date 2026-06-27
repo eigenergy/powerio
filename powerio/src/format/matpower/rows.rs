@@ -166,6 +166,7 @@ pub(super) fn bus_row(row: &[f64], i: usize) -> Result<(Bus, Option<Load>, Optio
         bus: id,
         p: pd,
         q: qd,
+        voltage_model: None,
         in_service,
         extras: Extras::new(),
     });
@@ -189,15 +190,18 @@ pub(super) fn branch_row(row: &[f64], i: usize) -> Result<Branch> {
         r: row[branch_col::BR_R],
         x: row[branch_col::BR_X],
         b: row[branch_col::BR_B],
+        charging: None,
         rate_a: row[branch_col::RATE_A],
         rate_b: row[branch_col::RATE_B],
         rate_c: row[branch_col::RATE_C],
+        current_ratings: None,
         tap: row[branch_col::TAP],
         shift: row[branch_col::SHIFT],
         in_service: is_in_service(row[branch_col::BR_STATUS]),
         angmin: row[branch_col::ANGMIN],
         angmax: row[branch_col::ANGMAX],
         control: None,
+        solution: None,
         extras: Extras::new(),
     })
 }
@@ -278,6 +282,7 @@ pub(super) fn storage_row(row: &[f64], i: usize) -> Result<Storage> {
         charge_efficiency: row[storage_col::CHARGE_EFFICIENCY],
         discharge_efficiency: row[storage_col::DISCHARGE_EFFICIENCY],
         thermal_rating: row[storage_col::THERMAL_RATING],
+        current_rating: None,
         qmin: row[storage_col::QMIN],
         qmax: row[storage_col::QMAX],
         r: row[storage_col::R],
@@ -309,6 +314,7 @@ pub(super) fn hvdc_row(row: &[f64], i: usize) -> Result<Hvdc> {
         qmaxt: row[dcline_col::QMAXT],
         loss0: row[dcline_col::LOSS0],
         loss1: row[dcline_col::LOSS1],
+        cost: None,
         extras: Extras::new(),
     })
 }

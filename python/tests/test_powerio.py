@@ -118,6 +118,70 @@ def test_case_tables(case9):
     assert gen["cost"]["coeffs"] == [0.11, 5.0, 150.0]
 
 
+def test_branch_table_b_is_terminal_projection():
+    case = powerio.parse_str(
+        json.dumps(
+            {
+                "name": "terminal-projection",
+                "baseMVA": 100.0,
+                "per_unit": False,
+                "bus": {
+                    "1": {
+                        "index": 1,
+                        "bus_i": 1,
+                        "bus_type": 3,
+                        "vm": 1.0,
+                        "va": 0.0,
+                        "vmax": 1.1,
+                        "vmin": 0.9,
+                        "base_kv": 230.0,
+                    },
+                    "2": {
+                        "index": 2,
+                        "bus_i": 2,
+                        "bus_type": 1,
+                        "vm": 1.0,
+                        "va": 0.0,
+                        "vmax": 1.1,
+                        "vmin": 0.9,
+                        "base_kv": 230.0,
+                    },
+                },
+                "branch": {
+                    "1": {
+                        "index": 1,
+                        "f_bus": 1,
+                        "t_bus": 2,
+                        "br_r": 0.01,
+                        "br_x": 0.1,
+                        "g_fr": 0.01,
+                        "b_fr": 0.02,
+                        "g_to": 0.03,
+                        "b_to": 0.05,
+                        "tap": 1.0,
+                        "shift": 0.0,
+                        "br_status": 1,
+                        "angmin": -6.283185307179586,
+                        "angmax": 6.283185307179586,
+                        "transformer": False,
+                    }
+                },
+                "gen": {},
+                "load": {},
+                "shunt": {},
+            }
+        ),
+        "powermodels-json",
+    )
+
+    br = case.branches[0]
+    assert br["b"] == pytest.approx(0.07)
+    assert br["g_fr"] == pytest.approx(0.01)
+    assert br["b_fr"] == pytest.approx(0.02)
+    assert br["g_to"] == pytest.approx(0.03)
+    assert br["b_to"] == pytest.approx(0.05)
+
+
 def test_loads_and_shunts_are_first_class():
     case = powerio.parse_file(DATA / "case30.m")
     # MATPOWER folds demand onto the bus row; powerio splits it back out.

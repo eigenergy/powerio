@@ -13,7 +13,8 @@ use std::sync::Arc;
 use super::auxiliary::{AuxFile, AuxObject, parse_aux};
 use crate::format::{Conversion, sanitize_quoted};
 use crate::network::{
-    Branch, Bus, BusId, BusType, Extras, Generator, Load, Network, Shunt, SourceFormat,
+    Branch, Bus, BusId, BusType, Extras, Generator, Load, LoadVoltageModel, Network, Shunt,
+    SourceFormat,
 };
 use crate::{Error, Result};
 
@@ -146,6 +147,7 @@ pub(crate) fn parse_powerworld_source(
         loads,
         shunts,
         branches,
+        switches: Vec::new(),
         generators,
         storage: Vec::new(),
         hvdc: Vec::new(),
@@ -501,6 +503,7 @@ fn read_load(r: &Row, bus_labels: &HashMap<&str, BusId>) -> Result<Load> {
         bus: bus_ref(r, &["BusNum"], &["BusName_NomVolt"], bus_labels)?,
         p,
         q,
+        voltage_model: None,
         in_service: on_alias(r, &["LoadStatus", "Status"])?,
         extras,
     })
@@ -584,15 +587,18 @@ fn read_branch(r: &Row, bus_labels: &HashMap<&str, BusId>) -> Result<Branch> {
         r: f_alias(r, &["LineR", "LineR:1", "R", "Rxfbase"], 0.0)?,
         x: f_alias(r, &["LineX", "LineX:1", "X", "Xxfbase"], 0.0)?,
         b: f_alias(r, &["LineC", "LineC:1", "B", "Bxfbase"], 0.0)?,
+        charging: None,
         rate_a: f_alias(r, &["LineAMVA", "LimitMVAA"], 0.0)?,
         rate_b: f_alias(r, &["LineAMVA:1", "LineBMVA", "LimitMVAB"], 0.0)?,
         rate_c: f_alias(r, &["LineAMVA:2", "LineCMVA", "LimitMVAC"], 0.0)?,
+        current_ratings: None,
         tap: if is_xf { tap } else { 0.0 },
         shift: f_alias(r, &["LinePhase", "Phase"], 0.0)?,
         in_service: on_alias(r, &["LineStatus", "Status"])?,
         angmin: -360.0,
         angmax: 360.0,
         control: None,
+        solution: None,
         extras,
     })
 }
@@ -751,7 +757,7 @@ pub fn write_powerworld(net: &Network) -> Conversion {
                     circuit,
                     n(br.r),
                     n(br.x),
-                    n(br.b),
+                    n(br.legacy_total_charging_b()),
                     n(br.rate_a),
                     n(br.rate_b),
                     n(br.rate_c),
@@ -793,6 +799,46 @@ pub fn write_powerworld(net: &Network) -> Conversion {
         warnings.push(format!(
             "{} storage unit(s) dropped: PowerWorld storage not modeled",
             net.storage.len()
+        ));
+    }
+    let voltage_loads = net
+        .loads
+        .iter()
+        .filter(|l| {
+            l.voltage_model
+                .as_ref()
+                .is_some_and(LoadVoltageModel::has_non_matpower_fields)
+        })
+        .count();
+    if voltage_loads > 0 {
+        warnings.push(format!(
+            "{voltage_loads} voltage dependent load model(s) dropped: PowerWorld Load records carry static MW/MVR only"
+        ));
+    }
+    let terminal_charging = net
+        .branches
+        .iter()
+        .filter(|b| b.has_non_matpower_charging())
+        .count();
+    if terminal_charging > 0 {
+        warnings.push(format!(
+            "{terminal_charging} branch terminal admittance record(s) collapsed to total susceptance: PowerWorld aux branch rows written here cannot carry conductance or asymmetric terminal charging"
+        ));
+    }
+    let current_ratings = net
+        .branches
+        .iter()
+        .filter(|b| b.current_ratings.is_some())
+        .count();
+    if current_ratings > 0 {
+        warnings.push(format!(
+            "{current_ratings} branch current rating record(s) dropped: PowerWorld aux branch rows written here carry MVA ratings only"
+        ));
+    }
+    let branch_solutions = net.branches.iter().filter(|b| b.solution.is_some()).count();
+    if branch_solutions > 0 {
+        warnings.push(format!(
+            "{branch_solutions} branch solution value set(s) dropped: PowerWorld aux result fields are not written"
         ));
     }
     if net.branches.iter().any(Branch::has_angle_limits) {

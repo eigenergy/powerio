@@ -371,15 +371,46 @@ impl PyNetwork {
             d.set_item("to_id", br.to.0)?;
             d.set_item("r", br.r)?;
             d.set_item("x", br.x)?;
-            d.set_item("b", br.b)?;
+            let charging = br.terminal_charging();
+            d.set_item("b", br.legacy_total_charging_b())?;
+            d.set_item("g_fr", charging.g_fr)?;
+            d.set_item("b_fr", charging.b_fr)?;
+            d.set_item("g_to", charging.g_to)?;
+            d.set_item("b_to", charging.b_to)?;
             d.set_item("rate_a", br.rate_a)?;
             d.set_item("rate_b", br.rate_b)?;
             d.set_item("rate_c", br.rate_c)?;
+            d.set_item("c_rating_a", br.current_ratings.map(|r| r.c_rating_a))?;
+            d.set_item("c_rating_b", br.current_ratings.map(|r| r.c_rating_b))?;
+            d.set_item("c_rating_c", br.current_ratings.map(|r| r.c_rating_c))?;
             d.set_item("tap", br.tap)?;
             d.set_item("shift", br.shift)?;
             d.set_item("in_service", br.in_service)?;
             d.set_item("angmin", br.angmin)?;
             d.set_item("angmax", br.angmax)?;
+            d.set_item("pf", br.solution.map(|s| s.pf))?;
+            d.set_item("qf", br.solution.map(|s| s.qf))?;
+            d.set_item("pt", br.solution.map(|s| s.pt))?;
+            d.set_item("qt", br.solution.map(|s| s.qt))?;
+            rows.push(d);
+        }
+        PyList::new(py, rows)
+    }
+
+    #[getter]
+    fn switches<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyList>> {
+        let mut rows: Vec<Bound<'py, PyDict>> = Vec::with_capacity(self.inner.switches.len());
+        for sw in &self.inner.switches {
+            let d = PyDict::new(py);
+            d.set_item("from_id", sw.from.0)?;
+            d.set_item("to_id", sw.to.0)?;
+            d.set_item("closed", sw.closed)?;
+            d.set_item("thermal_rating", sw.thermal_rating)?;
+            d.set_item("current_rating", sw.current_rating)?;
+            d.set_item("pf", sw.pf)?;
+            d.set_item("qf", sw.qf)?;
+            d.set_item("pt", sw.pt)?;
+            d.set_item("qt", sw.qt)?;
             rows.push(d);
         }
         PyList::new(py, rows)

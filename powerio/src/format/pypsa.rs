@@ -10,8 +10,8 @@ use std::path::{Path, PathBuf};
 
 use super::{Parsed, bus_kv, set_bus_kind, zbase};
 use crate::network::{
-    Branch, Bus, BusId, BusType, Extras, GenCost, Generator, Hvdc, Load, Network, Shunt,
-    SourceFormat, Storage,
+    Branch, BranchCharging, Bus, BusId, BusType, Extras, GenCost, Generator, Hvdc, Load,
+    LoadVoltageModel, Network, Shunt, SourceFormat, Storage,
 };
 use crate::{Error, Result};
 
@@ -117,6 +117,7 @@ fn read_pypsa_csv_folder_inner(path: &Path, warnings: &mut Vec<String>) -> Resul
                 bus: bus_ref("loads.csv", i + 1, row, "bus", &id_of_name)?,
                 p: row.f("p_set").unwrap_or(0.0),
                 q: row.f("q_set").unwrap_or(0.0),
+                voltage_model: None,
                 in_service: row.bool("active").unwrap_or(true),
                 extras: Extras::default(),
             });
@@ -195,42 +196,42 @@ fn read_pypsa_csv_folder_inner(path: &Path, warnings: &mut Vec<String>) -> Resul
 
     let mut branches = Vec::new();
     if let Some(table) = read_csv_optional(&path.join("lines.csv"))? {
-        let mut g_rows = 0usize;
         for (i, row) in table.rows.iter().enumerate() {
             let from = bus_ref("lines.csv", i + 1, row, "bus0", &id_of_name)?;
             let to = bus_ref("lines.csv", i + 1, row, "bus1", &id_of_name)?;
-            if row.f("g").unwrap_or(0.0) != 0.0 {
-                g_rows += 1;
-            }
             // PyPSA per-unitizes line ohms on the BUS0 v_nom
             // (Network.calculate_dependent_values), not bus1.
             let zb = zbase(bus_kv(&buses, &bus_pos, from), base_mva);
+            let b = row.f("b").unwrap_or(0.0) * zb;
+            let g = row.f("g").unwrap_or(0.0) * zb;
             branches.push(Branch {
                 from,
                 to,
                 r: row.f("r").unwrap_or(0.0) / zb,
                 x: row.f("x").unwrap_or(0.0) / zb,
-                b: row.f("b").unwrap_or(0.0) * zb,
+                b,
+                charging: Some(BranchCharging {
+                    g_fr: g / 2.0,
+                    b_fr: b / 2.0,
+                    g_to: g / 2.0,
+                    b_to: b / 2.0,
+                }),
                 rate_a: row.f("s_nom").unwrap_or(0.0),
                 rate_b: 0.0,
                 rate_c: 0.0,
+                current_ratings: None,
                 tap: 0.0,
                 shift: 0.0,
                 in_service: row.bool("active").unwrap_or(true),
                 angmin: row.f("v_ang_min").unwrap_or(-360.0),
                 angmax: row.f("v_ang_max").unwrap_or(360.0),
                 control: None,
+                solution: None,
                 extras: Extras::default(),
             });
         }
-        if g_rows > 0 {
-            warnings.push(format!(
-                "lines.csv: g nonzero on {g_rows} rows; line shunt conductance is not representable and was ignored"
-            ));
-        }
     }
     if let Some(table) = read_csv_optional(&path.join("transformers.csv"))? {
-        let mut g_rows = 0usize;
         for (i, row) in table.rows.iter().enumerate() {
             let from = bus_ref("transformers.csv", i + 1, row, "bus0", &id_of_name)?;
             let to = bus_ref("transformers.csv", i + 1, row, "bus1", &id_of_name)?;
@@ -244,32 +245,34 @@ fn read_pypsa_csv_folder_inner(path: &Path, warnings: &mut Vec<String>) -> Resul
                     i + 1
                 )));
             }
-            if row.f("g").unwrap_or(0.0) != 0.0 {
-                g_rows += 1;
-            }
             let k = base_mva / s_nom;
+            let b = row.f("b").unwrap_or(0.0) * s_nom / base_mva;
+            let g = row.f("g").unwrap_or(0.0) * s_nom / base_mva;
             branches.push(Branch {
                 from,
                 to,
                 r: row.f("r").unwrap_or(0.0) * k,
                 x: row.f("x").unwrap_or(0.0) * k,
-                b: row.f("b").unwrap_or(0.0) * s_nom / base_mva,
+                b,
+                charging: Some(BranchCharging {
+                    g_fr: g,
+                    b_fr: b,
+                    g_to: 0.0,
+                    b_to: 0.0,
+                }),
                 rate_a: s_nom,
                 rate_b: 0.0,
                 rate_c: 0.0,
+                current_ratings: None,
                 tap: row.f("tap_ratio").unwrap_or(1.0),
                 shift: row.f("phase_shift").unwrap_or(0.0),
                 in_service: row.bool("active").unwrap_or(true),
                 angmin: -360.0,
                 angmax: 360.0,
                 control: None,
+                solution: None,
                 extras: Extras::default(),
             });
-        }
-        if g_rows > 0 {
-            warnings.push(format!(
-                "transformers.csv: g nonzero on {g_rows} rows; transformer shunt conductance is not representable and was ignored"
-            ));
         }
     }
 
@@ -289,6 +292,7 @@ fn read_pypsa_csv_folder_inner(path: &Path, warnings: &mut Vec<String>) -> Resul
                 charge_efficiency: row.f("efficiency_store").unwrap_or(1.0),
                 discharge_efficiency: row.f("efficiency_dispatch").unwrap_or(1.0),
                 thermal_rating: p_nom,
+                current_rating: None,
                 qmin: f64::NEG_INFINITY,
                 qmax: f64::INFINITY,
                 r: 0.0,
@@ -327,6 +331,7 @@ fn read_pypsa_csv_folder_inner(path: &Path, warnings: &mut Vec<String>) -> Resul
                 qmaxt: 0.0,
                 loss0: 0.0,
                 loss1: 1.0 - efficiency,
+                cost: None,
                 extras: Extras::default(),
             });
         }
@@ -388,6 +393,7 @@ fn read_pypsa_csv_folder_inner(path: &Path, warnings: &mut Vec<String>) -> Resul
         loads,
         shunts,
         branches,
+        switches: Vec::new(),
         generators,
         storage,
         hvdc,
@@ -481,6 +487,20 @@ pub fn write_pypsa_csv_folder(net: &Network, out_dir: impl AsRef<Path>) -> Resul
     if net.generators.iter().any(Generator::has_caps) {
         warnings.push("generator capability/ramp columns dropped: PyPSA generator CSV has no MATPOWER capability columns".into());
     }
+    let voltage_loads = net
+        .loads
+        .iter()
+        .filter(|l| {
+            l.voltage_model
+                .as_ref()
+                .is_some_and(LoadVoltageModel::has_non_matpower_fields)
+        })
+        .count();
+    if voltage_loads > 0 {
+        warnings.push(format!(
+            "{voltage_loads} voltage dependent load model(s) dropped: PyPSA loads.csv carries static p_set/q_set only"
+        ));
+    }
     let isolated = net
         .buses
         .iter()
@@ -511,6 +531,32 @@ pub fn write_pypsa_csv_folder(net: &Network, out_dir: impl AsRef<Path>) -> Resul
     if rate_bc > 0 {
         warnings.push(format!(
             "{rate_bc} branch rate_b/rate_c value set(s) dropped: PyPSA carries one s_nom rating"
+        ));
+    }
+    let current_ratings = net
+        .branches
+        .iter()
+        .filter(|b| b.current_ratings.is_some())
+        .count();
+    if current_ratings > 0 {
+        warnings.push(format!(
+            "{current_ratings} branch current rating record(s) dropped: PyPSA static branch tables carry s_nom, not source current ratings"
+        ));
+    }
+    let branch_solutions = net.branches.iter().filter(|b| b.solution.is_some()).count();
+    if branch_solutions > 0 {
+        warnings.push(format!(
+            "{branch_solutions} branch solution value set(s) dropped: PyPSA result time series are not written"
+        ));
+    }
+    let terminal_charging = net
+        .branches
+        .iter()
+        .filter(|b| pypsa_loses_terminal_charging(b))
+        .count();
+    if terminal_charging > 0 {
+        warnings.push(format!(
+            "{terminal_charging} branch terminal admittance record(s) collapsed: PyPSA CSV supports symmetric line shunts and one-sided transformer shunts only"
         ));
     }
     warnings.extend(super::missing_reference_warning(net));
@@ -746,12 +792,24 @@ fn loads_csv(net: &Network, key_of: &HashMap<BusId, String>) -> String {
     s
 }
 
+fn pypsa_loses_terminal_charging(br: &Branch) -> bool {
+    let Some(charging) = br.charging else {
+        return false;
+    };
+    if br.is_transformer() {
+        charging.g_to.abs() > f64::EPSILON || charging.b_to.abs() > f64::EPSILON
+    } else {
+        (charging.g_fr - charging.g_to).abs() > f64::EPSILON
+            || (charging.b_fr - charging.b_to).abs() > f64::EPSILON
+    }
+}
+
 fn lines_csv(
     net: &Network,
     key_of: &HashMap<BusId, String>,
     kv_of: &HashMap<BusId, f64>,
 ) -> String {
-    let mut s = String::from("name,bus0,bus1,r,x,b,s_nom,v_ang_min,v_ang_max,active\n");
+    let mut s = String::from("name,bus0,bus1,r,x,b,g,s_nom,v_ang_min,v_ang_max,active\n");
     for (i, br) in net
         .branches
         .iter()
@@ -760,15 +818,17 @@ fn lines_csv(
     {
         // PyPSA per-unitizes line ohms on the BUS0 v_nom, not bus1.
         let zb = zbase(*kv_of.get(&br.from).unwrap_or(&0.0), net.base_mva);
+        let charging = br.terminal_charging();
         let _ = writeln!(
             s,
-            "line_{},{},{},{},{},{},{},{},{},{}",
+            "line_{},{},{},{},{},{},{},{},{},{},{}",
             i + 1,
             key_for(key_of, br.from),
             key_for(key_of, br.to),
             br.r * zb,
             br.x * zb,
-            br.b / zb,
+            charging.total_b() / zb,
+            (charging.g_fr + charging.g_to) / zb,
             br.rate_a,
             br.angmin,
             br.angmax,
@@ -779,7 +839,7 @@ fn lines_csv(
 }
 
 fn transformers_csv(net: &Network, key_of: &HashMap<BusId, String>) -> String {
-    let mut s = String::from("name,bus0,bus1,r,x,b,s_nom,tap_ratio,phase_shift,active\n");
+    let mut s = String::from("name,bus0,bus1,r,x,b,g,s_nom,tap_ratio,phase_shift,active\n");
     for (i, br) in net
         .branches
         .iter()
@@ -794,15 +854,22 @@ fn transformers_csv(net: &Network, key_of: &HashMap<BusId, String>) -> String {
         } else {
             net.base_mva
         };
+        let charging = br.charging.unwrap_or(BranchCharging {
+            g_fr: 0.0,
+            b_fr: br.legacy_total_charging_b(),
+            g_to: 0.0,
+            b_to: 0.0,
+        });
         let _ = writeln!(
             s,
-            "transformer_{},{},{},{},{},{},{},{},{},{}",
+            "transformer_{},{},{},{},{},{},{},{},{},{},{}",
             i + 1,
             key_for(key_of, br.from),
             key_for(key_of, br.to),
             br.r * s_nom / net.base_mva,
             br.x * s_nom / net.base_mva,
-            br.b * net.base_mva / s_nom,
+            charging.b_fr * net.base_mva / s_nom,
+            charging.g_fr * net.base_mva / s_nom,
             s_nom,
             br.effective_tap(),
             br.shift,
@@ -1089,6 +1156,7 @@ mod tests {
             charge_efficiency: 0.91,
             discharge_efficiency: 0.92,
             thermal_rating: 25.0,
+            current_rating: None,
             qmin: f64::NEG_INFINITY,
             qmax: f64::INFINITY,
             r: 0.0,
@@ -1107,15 +1175,41 @@ mod tests {
             r: 0.125,
             x: 0.5,
             b: 0.25,
+            charging: None,
             rate_a,
             rate_b: 0.0,
             rate_c: 0.0,
+            current_ratings: None,
             tap: 1.05,
             shift: 0.0,
             in_service: true,
             angmin: -360.0,
             angmax: 360.0,
             control: None,
+            solution: None,
+            extras: Extras::default(),
+        }
+    }
+
+    fn line(from: usize, to: usize) -> Branch {
+        Branch {
+            from: BusId(from),
+            to: BusId(to),
+            r: 0.01,
+            x: 0.1,
+            b: 0.2,
+            charging: None,
+            rate_a: 100.0,
+            rate_b: 0.0,
+            rate_c: 0.0,
+            current_ratings: None,
+            tap: 0.0,
+            shift: 0.0,
+            in_service: true,
+            angmin: -360.0,
+            angmax: 360.0,
+            control: None,
+            solution: None,
             extras: Extras::default(),
         }
     }
@@ -1240,14 +1334,12 @@ mod tests {
         close(br.r, 0.125); // 0.0625 * 100/50
         close(br.x, 0.5);
         close(br.b, 0.25); // 0.5 * 50/100
+        close(br.terminal_charging().g_fr, 0.05);
+        close(br.terminal_charging().b_fr, 0.25);
+        close(br.terminal_charging().g_to, 0.0);
         assert_eq!(br.rate_a, 50.0);
         assert_eq!(br.tap, 1.05);
-        assert!(
-            parsed.warnings.iter().any(|w| w
-                == "transformers.csv: g nonzero on 1 rows; transformer shunt conductance is not representable and was ignored"),
-            "{:?}",
-            parsed.warnings
-        );
+        assert!(parsed.warnings.is_empty(), "{:?}", parsed.warnings);
     }
 
     #[test]
@@ -1272,7 +1364,7 @@ mod tests {
     }
 
     #[test]
-    fn line_g_warns() {
+    fn line_g_maps_to_terminal_conductance() {
         let dir = folder(
             "line-g",
             &[
@@ -1284,12 +1376,10 @@ mod tests {
             ],
         );
         let parsed = read_pypsa_csv_folder(&dir).unwrap();
-        assert!(
-            parsed.warnings.iter().any(|w| w
-                == "lines.csv: g nonzero on 1 rows; line shunt conductance is not representable and was ignored"),
-            "{:?}",
-            parsed.warnings
-        );
+        let charging = parsed.network.branches[0].terminal_charging();
+        close(charging.g_fr, 1815.0);
+        close(charging.g_to, 1815.0);
+        assert!(parsed.warnings.is_empty(), "{:?}", parsed.warnings);
     }
 
     #[test]
@@ -1300,7 +1390,7 @@ mod tests {
         let csv = transformers_csv(&net, &key_of);
         assert_eq!(
             csv.lines().nth(1).unwrap(),
-            "transformer_1,1,2,0.0625,0.25,0.5,50,1.05,0,true"
+            "transformer_1,1,2,0.0625,0.25,0.5,0,50,1.05,0,true"
         );
     }
 
@@ -1312,8 +1402,71 @@ mod tests {
         let csv = transformers_csv(&net, &key_of);
         assert_eq!(
             csv.lines().nth(1).unwrap(),
-            "transformer_1,1,2,0.125,0.5,0.25,100,1.05,0,true"
+            "transformer_1,1,2,0.125,0.5,0.25,0,100,1.05,0,true"
         );
+    }
+
+    #[test]
+    fn line_conductance_writes_and_round_trips() {
+        let mut net = net_with(vec![bus(1, None), bus(2, None)]);
+        let mut br = line(1, 2);
+        br.charging = Some(BranchCharging {
+            g_fr: 0.4,
+            b_fr: 0.1,
+            g_to: 0.4,
+            b_to: 0.1,
+        });
+        net.branches = vec![br];
+        let dir = tmp_dir("line-g-write");
+        let out = write_pypsa_csv_folder(&net, &dir).unwrap();
+        assert!(
+            !out.warnings
+                .iter()
+                .any(|w| w.contains("terminal admittance")),
+            "{:?}",
+            out.warnings
+        );
+        let text = fs::read_to_string(dir.join("lines.csv")).unwrap();
+        assert_eq!(
+            text.lines().next().unwrap(),
+            "name,bus0,bus1,r,x,b,g,s_nom,v_ang_min,v_ang_max,active"
+        );
+
+        let back = read_pypsa_csv_folder(&dir).unwrap().network;
+        let charging = back.branches[0].terminal_charging();
+        close(charging.g_fr, 0.4);
+        close(charging.g_to, 0.4);
+        close(charging.b_fr, 0.1);
+        close(charging.b_to, 0.1);
+    }
+
+    #[test]
+    fn transformer_conductance_writes_and_round_trips() {
+        let mut net = net_with(vec![bus(1, None), bus(2, None)]);
+        let mut br = xfmr(1, 2, 50.0);
+        br.charging = Some(BranchCharging {
+            g_fr: 0.05,
+            b_fr: 0.25,
+            g_to: 0.0,
+            b_to: 0.0,
+        });
+        net.branches = vec![br];
+        let dir = tmp_dir("xf-g-write");
+        let out = write_pypsa_csv_folder(&net, &dir).unwrap();
+        assert!(
+            !out.warnings
+                .iter()
+                .any(|w| w.contains("terminal admittance")),
+            "{:?}",
+            out.warnings
+        );
+
+        let back = read_pypsa_csv_folder(&dir).unwrap().network;
+        let charging = back.branches[0].terminal_charging();
+        close(charging.g_fr, 0.05);
+        close(charging.g_to, 0.0);
+        close(charging.b_fr, 0.25);
+        close(charging.b_to, 0.0);
     }
 
     #[test]
@@ -1371,6 +1524,7 @@ mod tests {
             bus: BusId(2),
             p: 5.0,
             q: 1.0,
+            voltage_model: None,
             in_service: true,
             extras: Extras::default(),
         }];
@@ -1392,6 +1546,7 @@ mod tests {
             bus: BusId(2),
             p: 5.0,
             q: 1.0,
+            voltage_model: None,
             in_service: true,
             extras: Extras::default(),
         }];

@@ -15,8 +15,8 @@ use serde_json::{Number, Value};
 
 use super::{Conversion, sanitize_quoted};
 use crate::network::{
-    Branch, Bus, BusId, BusType, Extras, Generator, Hvdc, Impedance, Load, Network, Shunt,
-    SourceFormat, Transformer3W, Winding,
+    Branch, Bus, BusId, BusType, Extras, Generator, Hvdc, Impedance, Load, LoadVoltageModel,
+    Network, Shunt, SourceFormat, Transformer3W, Winding,
 };
 use crate::{Error, Result};
 
@@ -119,6 +119,7 @@ pub(crate) fn parse_pslf_source(
         loads,
         shunts,
         branches,
+        switches: Vec::new(),
         generators,
         storage: Vec::new(),
         hvdc,
@@ -503,15 +504,18 @@ fn read_branch(rec: &Record) -> Result<Branch> {
         r: num_at(&rec.rhs, 1, 0.0, "branch r", rec)?,
         x: num_at(&rec.rhs, 2, 0.0, "branch x", rec)?,
         b: num_at(&rec.rhs, 3, 0.0, "branch b", rec)?,
+        charging: None,
         rate_a: num_at(&rec.rhs, 4, 0.0, "branch rate1", rec)?,
         rate_b: num_at(&rec.rhs, 5, 0.0, "branch rate2", rec)?,
         rate_c: num_at(&rec.rhs, 6, 0.0, "branch rate3", rec)?,
+        current_ratings: None,
         tap: 0.0,
         shift: 0.0,
         in_service: on_at(&rec.rhs, 0, true, "branch status", rec)?,
         angmin: -360.0,
         angmax: 360.0,
         control: None,
+        solution: None,
         extras,
     })
 }
@@ -616,15 +620,18 @@ fn read_transformer(rec: &Record) -> Result<TransformerRecord> {
         r,
         x,
         b: 0.0,
+        charging: None,
         rate_a,
         rate_b,
         rate_c,
+        current_ratings: None,
         tap: if tap == 0.0 { 1.0 } else { tap },
         shift,
         in_service,
         angmin: -360.0,
         angmax: 360.0,
         control: None,
+        solution: None,
         extras,
     }))
 }
@@ -654,8 +661,8 @@ fn read_generator(rec: &Record, bus_vm: &HashMap<BusId, f64>) -> Result<Generato
 
 /// Map one `load data` record.
 ///
-/// Constant current and impedance components are folded into total P/Q because
-/// `Network` has one static load row; the component values stay in extras.
+/// Constant current and impedance components are folded into total P/Q for
+/// static load aggregation and preserved in the typed voltage model.
 fn read_load(
     rec: &Record,
     warnings: &mut Vec<String>,
@@ -667,12 +674,12 @@ fn read_load(
     let q_i = num_at(&rec.rhs, 4, 0.0, "load mvar_i", rec)?;
     let p_z = num_at(&rec.rhs, 5, 0.0, "load mw_z", rec)?;
     let q_z = num_at(&rec.rhs, 6, 0.0, "load mvar_z", rec)?;
-    if (p_i, q_i, p_z, q_z) != (0.0, 0.0, 0.0, 0.0) && once.insert("zip_load") {
-        // Network has one static load per row today. Preserve component values
-        // in extras and fold them into P/Q so matrix builders see the total
-        // demand that the solved power flow used.
+    let has_zip_components = (p_i, q_i, p_z, q_z) != (0.0, 0.0, 0.0, 0.0);
+    if has_zip_components && once.insert("zip_load") {
+        // Fold components into P/Q so matrix builders see the total demand that
+        // the solved power flow used. The split stays typed for richer writers.
         warnings.push(
-            "PSLF ZIP load components folded into Network load p/q; component fields retained in extras"
+            "PSLF ZIP load components folded into Network load p/q; component fields retained in the typed load voltage model"
                 .into(),
         );
     }
@@ -687,6 +694,17 @@ fn read_load(
         bus: BusId(req_id(&rec.lhs, 0, "load bus", rec)?),
         p: p_const + p_i + p_z,
         q: q_const + q_i + q_z,
+        voltage_model: has_zip_components.then_some(LoadVoltageModel::Zip {
+            p_constant_power: p_const,
+            q_constant_power: q_const,
+            p_constant_current: p_i,
+            q_constant_current: q_i,
+            p_constant_impedance: p_z,
+            q_constant_impedance: q_z,
+            v_nom: None,
+            load_type: None,
+            scaling: None,
+        }),
         in_service: on_at(&rec.rhs, 0, true, "load status", rec)?,
         extras,
     })
@@ -850,6 +868,7 @@ fn read_dc_lines(
                 qmaxt: to.q.max(0.0),
                 loss0: 0.0,
                 loss1: 0.0,
+                cost: None,
                 extras,
             })
         })();
@@ -1120,14 +1139,8 @@ pub fn write_pslf(net: &Network) -> Conversion {
         );
         for l in &net.loads {
             let r = bus_ref(l.bus);
-            // Replay the ZIP split a PSLF read preserved; otherwise put the whole
-            // demand in the constant-power column.
-            let mw = extra_f64(&l.extras, "pslf_mw").unwrap_or(l.p);
-            let mvar = extra_f64(&l.extras, "pslf_mvar").unwrap_or(l.q);
-            let mw_i = extra_f64(&l.extras, "pslf_mw_i").unwrap_or(0.0);
-            let mvar_i = extra_f64(&l.extras, "pslf_mvar_i").unwrap_or(0.0);
-            let mw_z = extra_f64(&l.extras, "pslf_mw_z").unwrap_or(0.0);
-            let mvar_z = extra_f64(&l.extras, "pslf_mvar_z").unwrap_or(0.0);
+            let (mw, mvar, mw_i, mvar_i, mw_z, mvar_z) =
+                load_components_for_write(l, &mut warnings);
             let _ = writeln!(
                 s,
                 "{} {} {} \"1\" \"load\" : {} {} {} {} {} {} {} {} {}",
@@ -1214,7 +1227,7 @@ pub fn write_pslf(net: &Network) -> Conversion {
                 i32::from(br.in_service),
                 num(br.r),
                 num(br.x),
-                num(br.b),
+                num(br.legacy_total_charging_b()),
                 num(br.rate_a),
                 num(br.rate_b),
                 num(br.rate_c),
@@ -1408,6 +1421,32 @@ pub fn write_pslf(net: &Network) -> Conversion {
     if net.generators.iter().any(|g| g.cost.is_some()) {
         warnings.push("generator cost curves dropped: PSLF .epc carries no cost data".into());
     }
+    let terminal_charging = net
+        .branches
+        .iter()
+        .filter(|b| b.has_non_matpower_charging())
+        .count();
+    if terminal_charging > 0 {
+        warnings.push(format!(
+            "{terminal_charging} branch terminal admittance record(s) collapsed to total susceptance: PSLF branch records written here cannot carry conductance or asymmetric terminal charging"
+        ));
+    }
+    let current_ratings = net
+        .branches
+        .iter()
+        .filter(|b| b.current_ratings.is_some())
+        .count();
+    if current_ratings > 0 {
+        warnings.push(format!(
+            "{current_ratings} branch current rating record(s) dropped: PSLF branch records written here carry MVA ratings only"
+        ));
+    }
+    let branch_solutions = net.branches.iter().filter(|b| b.solution.is_some()).count();
+    if branch_solutions > 0 {
+        warnings.push(format!(
+            "{branch_solutions} branch solution value set(s) dropped: PSLF solved flow fields are not written"
+        ));
+    }
     // The generator record this writer emits regulates the unit's own terminal, so
     // a generator pointing at a remote regulated bus loses that target.
     let dropped_reg = net
@@ -1494,6 +1533,94 @@ fn extra_f64(extras: &Extras, key: &str) -> Option<f64> {
         .get(key)
         .and_then(Value::as_f64)
         .filter(|v| v.is_finite())
+}
+
+fn same_load_total(a: f64, b: f64) -> bool {
+    (a - b).abs() <= 1e-9 * a.abs().max(b.abs()).max(1.0)
+}
+
+fn load_components_for_write(
+    l: &Load,
+    warnings: &mut Vec<String>,
+) -> (f64, f64, f64, f64, f64, f64) {
+    if let Some(LoadVoltageModel::Zip {
+        p_constant_power,
+        q_constant_power,
+        p_constant_current,
+        q_constant_current,
+        p_constant_impedance,
+        q_constant_impedance,
+        v_nom,
+        load_type,
+        scaling,
+        ..
+    }) = &l.voltage_model
+    {
+        if same_load_total(
+            p_constant_power + p_constant_current + p_constant_impedance,
+            l.p,
+        ) && same_load_total(
+            q_constant_power + q_constant_current + q_constant_impedance,
+            l.q,
+        ) {
+            if v_nom.is_some() {
+                warnings.push(format!(
+                    "PSLF load at bus {}: nominal voltage has no load data field; dropped",
+                    l.bus
+                ));
+            }
+            if load_type.is_some() || scaling.is_some() {
+                warnings.push(format!(
+                    "PSLF load at bus {}: PSS/E load type/scaling has no load data field; dropped",
+                    l.bus
+                ));
+            }
+            return (
+                *p_constant_power,
+                *q_constant_power,
+                *p_constant_current,
+                *q_constant_current,
+                *p_constant_impedance,
+                *q_constant_impedance,
+            );
+        }
+        warnings.push(format!(
+            "PSLF load at bus {}: stale voltage model components did not match typed p/q; wrote typed p/q as constant power",
+            l.bus
+        ));
+        return (l.p, l.q, 0.0, 0.0, 0.0, 0.0);
+    }
+    if matches!(l.voltage_model, Some(LoadVoltageModel::Exponential { .. })) {
+        warnings.push(format!(
+            "PSLF load at bus {}: exponential voltage model has no PSLF load data columns; wrote typed p/q as constant power",
+            l.bus
+        ));
+        return (l.p, l.q, 0.0, 0.0, 0.0, 0.0);
+    }
+
+    // Replay the ZIP split a PSLF read preserved before this release; otherwise
+    // put the whole demand in the constant power column.
+    let mw = extra_f64(&l.extras, "pslf_mw").unwrap_or(l.p);
+    let mvar = extra_f64(&l.extras, "pslf_mvar").unwrap_or(l.q);
+    let mw_i = extra_f64(&l.extras, "pslf_mw_i").unwrap_or(0.0);
+    let mvar_i = extra_f64(&l.extras, "pslf_mvar_i").unwrap_or(0.0);
+    let mw_z = extra_f64(&l.extras, "pslf_mw_z").unwrap_or(0.0);
+    let mvar_z = extra_f64(&l.extras, "pslf_mvar_z").unwrap_or(0.0);
+    if l.extras.keys().any(|key| {
+        matches!(
+            key.as_str(),
+            "pslf_mw" | "pslf_mvar" | "pslf_mw_i" | "pslf_mvar_i" | "pslf_mw_z" | "pslf_mvar_z"
+        )
+    }) && (!same_load_total(mw + mw_i + mw_z, l.p)
+        || !same_load_total(mvar + mvar_i + mvar_z, l.q))
+    {
+        warnings.push(format!(
+            "PSLF load at bus {}: stale PSLF load extras did not match typed p/q; wrote typed p/q as constant power",
+            l.bus
+        ));
+        return (l.p, l.q, 0.0, 0.0, 0.0, 0.0);
+    }
+    (mw, mvar, mw_i, mvar_i, mw_z, mvar_z)
 }
 
 /// `a / b`, or 0 when `b` is not a usable divisor (the identity for an absent base).

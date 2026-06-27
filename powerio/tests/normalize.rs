@@ -572,6 +572,7 @@ mpc.branch = [
         energy_rating: 200.0,
         charge_rating: 40.0,
         discharge_rating: 40.0,
+        current_rating: None,
         charge_efficiency: 0.95,
         discharge_efficiency: 0.95,
         thermal_rating: 60.0,

@@ -17,8 +17,8 @@ use serde_json::{Map, Value, json};
 
 use crate::convert::Conversion;
 use crate::model::{
-    Configuration, DistLineCode, DistNetwork, DistTransformer, Extras, Mat, VoltageSource, Winding,
-    WindingConn,
+    Configuration, DistLineCode, DistLoadVoltageModel, DistNetwork, DistTransformer, Extras, Mat,
+    VoltageSource, Winding, WindingConn,
 };
 
 /// Writes the ENGINEERING document.
@@ -390,14 +390,44 @@ impl Writer {
                     json!(l.q_nom.iter().map(|q| q / 1e3).collect::<Vec<_>>()),
                 );
                 o.insert("bus".into(), json!(l.bus.to_lowercase()));
-                if let Some(kv) = Self::extras_f64(&l.extras, "kv") {
-                    o.insert("vm_nom".into(), json!(kv));
-                }
-                let model = match Self::extras_f64(&l.extras, "model").map(|m| m as i64) {
-                    Some(2) => "IMPEDANCE",
-                    Some(5) => "CURRENT",
-                    Some(8) => "ZIPV",
-                    _ => "POWER",
+                let mut insert_vm_nom = |v_nom: &[f64]| {
+                    if let Some(value) = source_vm_nom(&l.extras, v_nom) {
+                        o.insert("vm_nom".into(), value);
+                    } else if !v_nom.is_empty() {
+                        let value = if v_nom.len() == 1 {
+                            json!(v_nom[0] / 1e3)
+                        } else {
+                            json!(v_nom.iter().map(|v| v / 1e3).collect::<Vec<_>>())
+                        };
+                        o.insert("vm_nom".into(), value);
+                    } else if let Some(kv) = Self::extras_f64(&l.extras, "kv") {
+                        o.insert("vm_nom".into(), json!(kv));
+                    }
+                };
+                let model = match &l.voltage_model {
+                    DistLoadVoltageModel::ConstantImpedance { v_nom } => {
+                        insert_vm_nom(v_nom);
+                        "IMPEDANCE"
+                    }
+                    DistLoadVoltageModel::ConstantCurrent { v_nom } => {
+                        insert_vm_nom(v_nom);
+                        "CURRENT"
+                    }
+                    DistLoadVoltageModel::Zip { v_nom, .. } => {
+                        insert_vm_nom(v_nom);
+                        "ZIPV"
+                    }
+                    DistLoadVoltageModel::Exponential { v_nom, .. } => {
+                        insert_vm_nom(v_nom);
+                        self.warn(format!(
+                            "{what}: exponential load model has no ENGINEERING field; emitted POWER"
+                        ));
+                        "POWER"
+                    }
+                    DistLoadVoltageModel::ConstantPower { v_nom } => {
+                        insert_vm_nom(v_nom);
+                        "POWER"
+                    }
                 };
                 o.insert("model".into(), json!(model));
                 o.insert("dispatchable".into(), json!("NO"));
@@ -866,4 +896,40 @@ fn thevenin(vs: &VoltageSource, n_cond: usize) -> (Mat, Mat) {
 
 fn count_phases(vs: &VoltageSource) -> usize {
     vs.v_magnitude.iter().filter(|&&v| v > 0.0).count()
+}
+
+fn source_vm_nom(extras: &Extras, v_nom: &[f64]) -> Option<Value> {
+    let raw = extras.get("kv")?;
+    if v_nom.is_empty() {
+        return Some(raw.clone());
+    }
+    if let Some(kv) = raw
+        .as_f64()
+        .or_else(|| raw.as_str().and_then(|s| s.parse().ok()))
+    {
+        if v_nom.iter().all(|v| same_voltage(*v, kv * 1e3)) {
+            return Some(json!(kv));
+        }
+    }
+    let vals: Vec<f64> = raw
+        .as_array()?
+        .iter()
+        .filter_map(serde_json::Value::as_f64)
+        .collect();
+    if vals.len() == 1 && v_nom.iter().all(|v| same_voltage(*v, vals[0] * 1e3)) {
+        return Some(raw.clone());
+    }
+    if vals.len() == v_nom.len()
+        && vals
+            .iter()
+            .zip(v_nom)
+            .all(|(a, b)| same_voltage(*b, *a * 1e3))
+    {
+        return Some(raw.clone());
+    }
+    None
+}
+
+fn same_voltage(a: f64, b: f64) -> bool {
+    (a - b).abs() <= 1e-9 * a.abs().max(b.abs()).max(1.0)
 }

@@ -23,9 +23,9 @@ use serde_json::Value;
 
 use super::{Conversion, jnum, sanitize_quoted};
 use crate::network::{
-    Area, Branch, Bus, BusId, BusType, Extras, Generator, Hvdc, Impedance, Load, Network, Shunt,
-    ShuntBlock, SolverParams, SourceFormat, SwitchedShuntControl, SwitchedShuntMode, Transformer3W,
-    TransformerControl, TransformerControlMode, Winding,
+    Area, Branch, BranchCharging, Bus, BusId, BusType, Extras, Generator, Hvdc, Impedance, Load,
+    LoadVoltageModel, Network, Shunt, ShuntBlock, SolverParams, SourceFormat, SwitchedShuntControl,
+    SwitchedShuntMode, Transformer3W, TransformerControl, TransformerControlMode, Winding,
 };
 use crate::{Error, Result};
 
@@ -177,18 +177,29 @@ pub fn write_psse_rev(net: &Network, rev: u32) -> Conversion {
         let id = quoted_device_id(&l.extras, l.bus, &mut load_ids, &mut sanitized_quoted);
         let (pl, ql, ip, iq, yp, yq) = load_components_for_write(l, &id, &mut warnings);
         let owner = extra_i64(&l.extras, "psse_owner").unwrap_or(1);
-        let scal = extra_i64(&l.extras, "psse_scal").unwrap_or(1);
+        let scal = typed_psse_scal(l, &id, &mut warnings)
+            .or_else(|| extra_i64(&l.extras, "psse_scal"))
+            .unwrap_or(1);
         let intrpt = extra_i64(&l.extras, "psse_intrpt").unwrap_or(0);
+        let typed_load_type = l.voltage_model.as_ref().and_then(typed_psse_load_type);
+        if rev < 35 && typed_load_type.is_some() {
+            warnings.push(format!(
+                "PSS/E load at bus {} id {id:?}: load type requires revision 35; dropped",
+                l.bus
+            ));
+        }
         let modern_tail = if rev >= 35 {
             let pdgen = extra_f64(&l.extras, "psse_pdgen").unwrap_or(0.0);
             let qdgen = extra_f64(&l.extras, "psse_qdgen").unwrap_or(0.0);
             let flagstatus = extra_i64(&l.extras, "psse_flagstatus").unwrap_or(0);
-            let raw_loadtype = l
-                .extras
-                .get("psse_loadtype")
-                .and_then(Value::as_str)
-                .unwrap_or("");
-            let loadtype = sanitize_quoted(raw_loadtype, NAME_FORBIDDEN, ' ');
+            let raw_loadtype = typed_load_type.or_else(|| {
+                l.extras
+                    .get("psse_loadtype")
+                    .and_then(Value::as_str)
+                    .map(str::to_owned)
+            });
+            let loadtype =
+                sanitize_quoted(raw_loadtype.as_deref().unwrap_or(""), NAME_FORBIDDEN, ' ');
             if matches!(loadtype, std::borrow::Cow::Owned(_)) {
                 sanitized_quoted += 1;
             }
@@ -271,6 +282,11 @@ pub fn write_psse_rev(net: &Network, rev: u32) -> Conversion {
             &mut branch_ids,
             &mut sanitized_quoted,
         );
+        let charging = br.terminal_charging();
+        let b_total = charging.total_b();
+        let b_mid = b_total / 2.0;
+        let bi = charging.b_fr - b_mid;
+        let bj = charging.b_to - b_mid;
         if modern {
             // v34+: a quoted line NAME at field 6, then twelve rating columns,
             // pushing STAT to field 23 (the layout the reader expects at rev>=34).
@@ -278,29 +294,37 @@ pub fn write_psse_rev(net: &Network, rev: u32) -> Conversion {
             let _ = writeln!(
                 s,
                 "{}, {}, '{ckt}', {}, {}, {}, '            ', {}, {}, {}, \
-                 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, {}, 1, 0, 1, 1",
+                 0, 0, 0, 0, 0, 0, 0, 0, 0, {}, {}, {}, {}, {}, 1, 0, 1, 1",
                 br.from,
                 br.to,
                 num(br.r),
                 num(br.x),
-                num(br.b),
+                num(b_total),
                 num(br.rate_a),
                 num(br.rate_b),
                 num(br.rate_c),
+                num(charging.g_fr),
+                num(bi),
+                num(charging.g_to),
+                num(bj),
                 i32::from(br.in_service)
             );
         } else {
             let _ = writeln!(
                 s,
-                "{}, {}, '{ckt}', {}, {}, {}, {}, {}, {}, 0, 0, 0, 0, {}, 1, 0, 1, 1",
+                "{}, {}, '{ckt}', {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, 1, 0, 1, 1",
                 br.from,
                 br.to,
                 num(br.r),
                 num(br.x),
-                num(br.b),
+                num(b_total),
                 num(br.rate_a),
                 num(br.rate_b),
                 num(br.rate_c),
+                num(charging.g_fr),
+                num(bi),
+                num(charging.g_to),
+                num(bj),
                 i32::from(br.in_service)
             );
         }
@@ -312,14 +336,17 @@ pub fn write_psse_rev(net: &Network, rev: u32) -> Conversion {
         // base). Record 1 carries the full owner block (O1..O4,F1..F4) and the
         // VECGRP string: PSS/E v33 readers count a 2-winding transformer as a
         // fixed 43-field record (21 + 3 + 17 + 2), so the owner padding matters.
-        // MAG1 = 0, MAG2 = the branch charging b (CM = 1, so p.u. on the system
-        // base); a 2-winding transformer that carries line charging keeps it.
+        // MAG1/MAG2 = the branch charging projected to one magnetizing
+        // admittance (CM = 1, so p.u. on the system base); a 2-winding
+        // transformer that carries line charging keeps the total.
+        let charging = br.terminal_charging();
         let _ = writeln!(
             s,
-            "{}, {}, 0, '1', 1, 1, 1, 0, {}, 2, '            ', {}, 1, 1, 0, 1, 0, 1, 0, 1, '            '",
+            "{}, {}, 0, '1', 1, 1, 1, {}, {}, 2, '            ', {}, 1, 1, 0, 1, 0, 1, 0, 1, '            '",
             br.from,
             br.to,
-            num(br.b),
+            num(charging.total_g()),
+            num(charging.total_b()),
             i32::from(br.in_service)
         );
         // Winding-1 control columns (COD, CONT, RMA/RMI, VMA/VMI, NTP) come from
@@ -520,6 +547,36 @@ pub fn write_psse_rev(net: &Network, rev: u32) -> Conversion {
         warnings.push(
             "branch angle limits (angmin/angmax) dropped: PSS/E branch records carry none".into(),
         );
+    }
+    let current_ratings = net
+        .branches
+        .iter()
+        .filter(|b| b.current_ratings.is_some())
+        .count();
+    if current_ratings > 0 {
+        warnings.push(format!(
+            "{current_ratings} branch current rating record(s) dropped: PSS/E branch ratings are MVA ratings"
+        ));
+    }
+    let branch_solutions = net.branches.iter().filter(|b| b.solution.is_some()).count();
+    if branch_solutions > 0 {
+        warnings.push(format!(
+            "{branch_solutions} branch solution value set(s) dropped: PSS/E RAW power flow result fields are not written"
+        ));
+    }
+    let transformer_terminal_shunts = net
+        .branches
+        .iter()
+        .filter(|b| {
+            b.is_transformer()
+                && b.charging
+                    .is_some_and(|c| c.g_to.abs() > f64::EPSILON || c.b_to.abs() > f64::EPSILON)
+        })
+        .count();
+    if transformer_terminal_shunts > 0 {
+        warnings.push(format!(
+            "{transformer_terminal_shunts} transformer terminal admittance record(s) collapsed to magnetizing admittance: PSS/E transformer records cannot preserve terminal side assignment"
+        ));
     }
     if net.generators.iter().any(Generator::has_caps) {
         warnings.push(
@@ -804,6 +861,7 @@ pub(crate) fn parse_psse_source(
         loads,
         shunts,
         branches,
+        switches: Vec::new(),
         generators,
         storage: Vec::new(),
         hvdc,
@@ -1224,26 +1282,35 @@ fn read_load(f: &[String], raw_rev: u32, warnings: &mut Vec<String>) -> Result<L
             extras.insert("psse_loadtype".into(), Value::String(loadtype.to_string()));
         }
     }
-    if [ip, iq, yp, yq].iter().any(|v| v.abs() > f64::EPSILON) {
-        warnings.push(format!(
-            "PSS/E load at bus {bus} id {id:?}: IP/IQ/YP/YQ folded into Network load p/q at V=1; component fields retained in extras"
-        ));
-    }
-    let has_load_options = extras.contains_key("psse_scal")
-        || extras.contains_key("psse_intrpt")
+    let scal = int_at(f, 12, 1)?;
+    let load_type = f.get(17).and_then(|s| s.trim().parse::<i32>().ok());
+    let has_zip_components = [ip, iq, yp, yq].iter().any(|v| *v != 0.0);
+    let voltage_model =
+        (has_zip_components || scal != 1 || load_type.is_some()).then_some(LoadVoltageModel::Zip {
+            p_constant_power: pl,
+            q_constant_power: ql,
+            p_constant_current: ip,
+            q_constant_current: iq,
+            p_constant_impedance: yp,
+            q_constant_impedance: yq,
+            v_nom: None,
+            load_type,
+            scaling: (scal != 1).then_some(scal as f64),
+        });
+    let has_load_options = extras.contains_key("psse_intrpt")
         || extras.contains_key("psse_pdgen")
         || extras.contains_key("psse_qdgen")
-        || extras.contains_key("psse_flagstatus")
-        || extras.contains_key("psse_loadtype");
+        || extras.contains_key("psse_flagstatus");
     if has_load_options {
         warnings.push(format!(
-            "PSS/E load at bus {bus} id {id:?}: load scaling/interruptible/DG/type fields are retained in extras but not typed in Network"
+            "PSS/E load at bus {bus} id {id:?}: interruptible/DG/flag fields are retained in extras"
         ));
     }
     Ok(Load {
         bus: BusId(bus),
         p: pl + ip + yp,
         q: ql + iq + yq,
+        voltage_model,
         in_service: on_at(f, 2, true)?,
         extras,
     })
@@ -1373,21 +1440,37 @@ fn read_branch(f: &[String], raw_rev: u32) -> Result<Branch> {
     let named_record = raw_rev >= 34 && f.len() >= 24;
     let rating = if named_record { 7 } else { 6 };
     let status = if named_record { 23 } else { 13 };
+    let shunt = if named_record { 19 } else { 9 };
+    let br_b = num_at(f, 5, 0.0)?;
+    let g_fr = num_at(f, shunt, 0.0)?;
+    let b_fr_extra = num_at(f, shunt + 1, 0.0)?;
+    let g_to = num_at(f, shunt + 2, 0.0)?;
+    let b_to_extra = num_at(f, shunt + 3, 0.0)?;
+    let b_fr = br_b / 2.0 + b_fr_extra;
+    let b_to = br_b / 2.0 + b_to_extra;
     Ok(Branch {
         from: BusId(id_at(f, 0, 0)?),
         to: BusId(id_at(f, 1, 0)?),
         r: num_at(f, 3, 0.0)?,
         x: num_at(f, 4, 0.0)?,
-        b: num_at(f, 5, 0.0)?,
+        b: b_fr + b_to,
+        charging: Some(BranchCharging {
+            g_fr,
+            b_fr,
+            g_to,
+            b_to,
+        }),
         rate_a: num_at(f, rating, 0.0)?,
         rate_b: num_at(f, rating + 1, 0.0)?,
         rate_c: num_at(f, rating + 2, 0.0)?,
+        current_ratings: None,
         tap: 0.0,
         shift: 0.0,
         in_service: on_at(f, status, true)?,
         angmin: -360.0,
         angmax: 360.0,
         control: None,
+        solution: None,
         // Capture CKT (field 2) so parallel circuits stay distinct on write-back.
         extras: device_extras(f, 2),
     })
@@ -1416,29 +1499,39 @@ fn read_transformer(l1: &[String], l2: &[String], l3: &[String], _l4: &[String])
             })
         })
         .transpose()?;
+    let mag_g = if int_at(l1, 6, 1)? == 1 {
+        num_at(l1, 7, 0.0)?
+    } else {
+        0.0
+    };
+    let mag_b = if int_at(l1, 6, 1)? == 1 {
+        num_at(l1, 8, 0.0)?
+    } else {
+        0.0
+    };
     Ok(Branch {
         from: BusId(id_at(l1, 0, 0)?),
         to: BusId(id_at(l1, 1, 0)?),
         r: num_at(l2, 0, 0.0)?,
         x: num_at(l2, 1, 0.0)?,
-        // MAG2 (l1[8]) is the magnetizing susceptance. At CM = 1 it is p.u. on the
-        // system base, the same convention as `Branch::b`, so it maps straight
-        // across; at CM != 1 it is stated in units this reader does not convert, so
-        // it is dropped (the caller warns). MAG1 (conductance) has no `Branch` slot.
-        b: if int_at(l1, 6, 1)? == 1 {
-            num_at(l1, 8, 0.0)?
-        } else {
-            0.0
-        },
+        b: mag_b,
+        charging: Some(BranchCharging {
+            g_fr: mag_g,
+            b_fr: mag_b,
+            g_to: 0.0,
+            b_to: 0.0,
+        }),
         rate_a: num_at(l3, 3, 0.0)?,
         rate_b: num_at(l3, 4, 0.0)?,
         rate_c: num_at(l3, 5, 0.0)?,
+        current_ratings: None,
         tap: num_at(l3, 0, 1.0)?,
         shift: num_at(l3, 2, 0.0)?,
         in_service: on_at(l1, 11, true)?,
         angmin: -360.0,
         angmax: 360.0,
         control,
+        solution: None,
         extras: Extras::new(),
     })
 }
@@ -1560,6 +1653,7 @@ fn read_dc_line(l1: &[String], rect: &[String], inv: &[String]) -> Result<Hvdc> 
         qmaxt: 0.0,
         loss0: 0.0,
         loss1: 0.0,
+        cost: None,
         extras,
     })
 }
@@ -1606,11 +1700,96 @@ fn same_load_total(a: f64, b: f64) -> bool {
     (a - b).abs() <= 1e-9 * a.abs().max(b.abs()).max(1.0)
 }
 
+fn typed_psse_scal(l: &Load, id: &str, warnings: &mut Vec<String>) -> Option<i64> {
+    let Some(LoadVoltageModel::Zip {
+        scaling: Some(scaling),
+        ..
+    }) = &l.voltage_model
+    else {
+        return None;
+    };
+    let scaling = *scaling;
+    if !scaling.is_finite() {
+        warnings.push(format!(
+            "PSS/E load at bus {} id {id:?}: non-finite typed scaling has no SCAL value; used source/default SCAL",
+            l.bus
+        ));
+        return None;
+    }
+    let rounded = scaling.round();
+    if (scaling - rounded).abs() > 1e-9 || rounded < i64::MIN as f64 || rounded > i64::MAX as f64 {
+        warnings.push(format!(
+            "PSS/E load at bus {} id {id:?}: non-integer typed scaling {scaling} has no SCAL value; used source/default SCAL",
+            l.bus
+        ));
+        return None;
+    }
+    Some(rounded as i64)
+}
+
+fn typed_psse_load_type(model: &LoadVoltageModel) -> Option<String> {
+    match model {
+        LoadVoltageModel::Zip {
+            load_type: Some(load_type),
+            ..
+        } => Some(load_type.to_string()),
+        _ => None,
+    }
+}
+
 fn load_components_for_write(
     l: &Load,
     id: &str,
     warnings: &mut Vec<String>,
 ) -> (f64, f64, f64, f64, f64, f64) {
+    if let Some(LoadVoltageModel::Zip {
+        p_constant_power,
+        q_constant_power,
+        p_constant_current,
+        q_constant_current,
+        p_constant_impedance,
+        q_constant_impedance,
+        v_nom,
+        ..
+    }) = &l.voltage_model
+    {
+        if same_load_total(
+            p_constant_power + p_constant_current + p_constant_impedance,
+            l.p,
+        ) && same_load_total(
+            q_constant_power + q_constant_current + q_constant_impedance,
+            l.q,
+        ) {
+            if v_nom.is_some() {
+                warnings.push(format!(
+                    "PSS/E load at bus {} id {id:?}: nominal voltage has no load record field; dropped",
+                    l.bus
+                ));
+            }
+            return (
+                *p_constant_power,
+                *q_constant_power,
+                *p_constant_current,
+                *q_constant_current,
+                *p_constant_impedance,
+                *q_constant_impedance,
+            );
+        }
+        warnings.push(format!(
+            "PSS/E load at bus {} id {id:?}: stale voltage model components did not match \
+             typed p/q; wrote typed p/q as constant power",
+            l.bus
+        ));
+        return (l.p, l.q, 0.0, 0.0, 0.0, 0.0);
+    }
+    if matches!(l.voltage_model, Some(LoadVoltageModel::Exponential { .. })) {
+        warnings.push(format!(
+            "PSS/E load at bus {} id {id:?}: exponential voltage model has no load record fields; wrote typed p/q as constant power",
+            l.bus
+        ));
+        return (l.p, l.q, 0.0, 0.0, 0.0, 0.0);
+    }
+
     let pl = extra_f64(&l.extras, "psse_pl").unwrap_or(l.p);
     let ql = extra_f64(&l.extras, "psse_ql").unwrap_or(l.q);
     let ip = extra_f64(&l.extras, "psse_ip").unwrap_or(0.0);
@@ -1657,6 +1836,171 @@ mod tests {
         assert!((actual - expected).abs() < 1e-12, "{actual} != {expected}");
     }
 
+    fn test_bus(id: usize, kind: BusType) -> Bus {
+        Bus {
+            id: BusId(id),
+            kind,
+            vm: 1.0,
+            va: 0.0,
+            base_kv: 230.0,
+            vmax: 1.1,
+            vmin: 0.9,
+            evhi: None,
+            evlo: None,
+            area: 1,
+            zone: 1,
+            name: None,
+            extras: Extras::default(),
+        }
+    }
+
+    fn branch_with_terminal_charging() -> Branch {
+        Branch {
+            from: BusId(1),
+            to: BusId(2),
+            r: 0.01,
+            x: 0.1,
+            b: 0.0,
+            charging: Some(BranchCharging {
+                g_fr: 0.01,
+                b_fr: 0.02,
+                g_to: 0.03,
+                b_to: 0.05,
+            }),
+            rate_a: 100.0,
+            rate_b: 110.0,
+            rate_c: 120.0,
+            current_ratings: None,
+            tap: 0.0,
+            shift: 0.0,
+            in_service: true,
+            angmin: -360.0,
+            angmax: 360.0,
+            control: None,
+            solution: None,
+            extras: Extras::default(),
+        }
+    }
+
+    fn transformer_with_terminal_charging(charging: BranchCharging) -> Branch {
+        Branch {
+            from: BusId(1),
+            to: BusId(2),
+            r: 0.01,
+            x: 0.1,
+            b: 0.0,
+            charging: Some(charging),
+            rate_a: 100.0,
+            rate_b: 110.0,
+            rate_c: 120.0,
+            current_ratings: None,
+            tap: 1.05,
+            shift: 0.0,
+            in_service: true,
+            angmin: -360.0,
+            angmax: 360.0,
+            control: None,
+            solution: None,
+            extras: Extras::default(),
+        }
+    }
+
+    fn assert_terminal_charging_round_trip(text: &str) {
+        let back = parse_psse(text).unwrap();
+        let charging = back.branches[0].terminal_charging();
+        close(charging.g_fr, 0.01);
+        close(charging.b_fr, 0.02);
+        close(charging.g_to, 0.03);
+        close(charging.b_to, 0.05);
+        close(back.branches[0].b, 0.07);
+    }
+
+    #[test]
+    fn branch_terminal_charging_writes_gi_bi_gj_bj() {
+        let mut net = Network::in_memory(
+            "terminal-shunts",
+            100.0,
+            vec![test_bus(1, BusType::Ref), test_bus(2, BusType::Pq)],
+            Vec::new(),
+        );
+        net.branches.push(branch_with_terminal_charging());
+
+        let rev33 = write_psse(&net);
+        assert!(rev33.warnings.is_empty(), "{:?}", rev33.warnings);
+        assert_terminal_charging_round_trip(&rev33.text);
+
+        let rev35 = write_psse_rev(&net, 35);
+        assert!(rev35.warnings.is_empty(), "{:?}", rev35.warnings);
+        assert_terminal_charging_round_trip(&rev35.text);
+    }
+
+    #[test]
+    fn transformer_magnetizing_admittance_writes_mag1_mag2() {
+        let mut net = Network::in_memory(
+            "xfmr-mag",
+            100.0,
+            vec![test_bus(1, BusType::Ref), test_bus(2, BusType::Pq)],
+            Vec::new(),
+        );
+        net.branches
+            .push(transformer_with_terminal_charging(BranchCharging {
+                g_fr: 0.01,
+                b_fr: 0.02,
+                g_to: 0.0,
+                b_to: 0.0,
+            }));
+
+        let conv = write_psse(&net);
+        assert!(
+            !conv
+                .warnings
+                .iter()
+                .any(|w| w.contains("magnetizing admittance")),
+            "{:?}",
+            conv.warnings
+        );
+        let back = parse_psse(&conv.text).unwrap();
+        let charging = back.branches[0].terminal_charging();
+        close(charging.g_fr, 0.01);
+        close(charging.b_fr, 0.02);
+        close(charging.g_to, 0.0);
+        close(charging.b_to, 0.0);
+        close(back.branches[0].b, 0.02);
+    }
+
+    #[test]
+    fn transformer_to_side_terminal_admittance_warns_and_collapses_to_mag() {
+        let mut net = Network::in_memory(
+            "xfmr-mag-collapse",
+            100.0,
+            vec![test_bus(1, BusType::Ref), test_bus(2, BusType::Pq)],
+            Vec::new(),
+        );
+        net.branches
+            .push(transformer_with_terminal_charging(BranchCharging {
+                g_fr: 0.01,
+                b_fr: 0.02,
+                g_to: 0.03,
+                b_to: 0.05,
+            }));
+
+        let conv = write_psse(&net);
+        assert!(
+            conv.warnings
+                .iter()
+                .any(|w| w.contains("magnetizing admittance")),
+            "{:?}",
+            conv.warnings
+        );
+        let back = parse_psse(&conv.text).unwrap();
+        let charging = back.branches[0].terminal_charging();
+        close(charging.g_fr, 0.04);
+        close(charging.b_fr, 0.07);
+        close(charging.g_to, 0.0);
+        close(charging.b_to, 0.0);
+        close(back.branches[0].b, 0.07);
+    }
+
     #[test]
     fn slash_inside_a_quoted_field_is_not_a_comment() {
         let raw = r"0, 100.00, 33, 0, 0, 60.00 / synthetic
@@ -1674,7 +2018,7 @@ Q
     }
 
     #[test]
-    fn load_zip_components_warn_fold_and_round_trip_through_extras() {
+    fn load_zip_components_are_typed_and_round_trip() {
         let raw = r"0, 100.00, 35, 0, 1, 60.00 / synthetic
 CASE
 COMMENT
@@ -1693,12 +2037,20 @@ Q
         assert_eq!(net.loads.len(), 1);
         close(net.loads[0].p, 13.0);
         close(net.loads[0].q, 5.0);
+        let Some(LoadVoltageModel::Zip {
+            p_constant_power,
+            q_constant_current,
+            p_constant_impedance,
+            ..
+        }) = &net.loads[0].voltage_model
+        else {
+            panic!("missing typed ZIP load model");
+        };
+        close(*p_constant_power, 10.0);
+        close(*q_constant_current, 0.5);
+        close(*p_constant_impedance, 2.0);
         assert!(
-            warnings.iter().any(|w| w.contains("IP/IQ/YP/YQ")),
-            "missing ZIP warning: {warnings:?}"
-        );
-        assert!(
-            warnings.iter().any(|w| w.contains("DG/type fields")),
+            warnings.iter().any(|w| w.contains("interruptible/DG/flag")),
             "missing load option warning: {warnings:?}"
         );
 
@@ -1714,6 +2066,100 @@ Q
         let net2 = parse_psse(&text).unwrap();
         close(net2.loads[0].p, 13.0);
         close(net2.loads[0].q, 5.0);
+    }
+
+    #[test]
+    fn tiny_nonzero_zip_components_are_preserved_as_typed_fields() {
+        let raw = r"0, 100.00, 35, 0, 1, 60.00 / synthetic
+CASE
+COMMENT
+0 / END OF SYSTEM-WIDE DATA, BEGIN BUS DATA
+1,'BUS1        ', 230.0,3,1,1,1,1.0,0.0,1.1,0.9,1.1,0.9
+2,'BUS2        ', 230.0,1,1,1,1,1.0,0.0,1.1,0.9,1.1,0.9
+0 / END OF BUS DATA, BEGIN LOAD DATA
+2,'L1',1,1,1,10.0,3.0,1e-20,0.0,0.0,0.0,1,1,0,0.0,0.0,0,''
+0 / END OF LOAD DATA, BEGIN FIXED SHUNT DATA
+Q
+";
+        let net = parse_psse(raw).unwrap();
+        let Some(LoadVoltageModel::Zip {
+            p_constant_current, ..
+        }) = &net.loads[0].voltage_model
+        else {
+            panic!("tiny nonzero ZIP component was not typed");
+        };
+        assert_eq!(p_constant_current.to_bits(), 1.0e-20_f64.to_bits());
+
+        let matpower = crate::format::matpower::write_matpower_conversion(&net);
+        assert!(
+            matpower
+                .warnings
+                .iter()
+                .any(|w| w.contains("voltage dependent load model")),
+            "missing MATPOWER voltage model warning: {:?}",
+            matpower.warnings
+        );
+    }
+
+    #[test]
+    fn typed_psse_load_scaling_and_type_write_without_extras() {
+        let raw = r"0, 100.00, 35, 0, 1, 60.00 / synthetic
+CASE
+COMMENT
+0 / END OF SYSTEM-WIDE DATA, BEGIN BUS DATA
+1,'BUS1        ', 230.0,3,1,1,1,1.0,0.0,1.1,0.9,1.1,0.9
+2,'BUS2        ', 230.0,1,1,1,1,1.0,0.0,1.1,0.9,1.1,0.9
+0 / END OF BUS DATA, BEGIN LOAD DATA
+2,'L1',1,1,1,10.0,3.0,1.0,0.5,2.0,1.5,1,1,0,0.0,0.0,0,''
+0 / END OF LOAD DATA, BEGIN FIXED SHUNT DATA
+Q
+";
+        let mut net = parse_psse(raw).unwrap();
+        let Some(LoadVoltageModel::Zip {
+            scaling,
+            load_type,
+            v_nom,
+            ..
+        }) = &mut net.loads[0].voltage_model
+        else {
+            panic!("missing typed ZIP load model");
+        };
+        *scaling = Some(0.0);
+        *load_type = Some(7);
+        *v_nom = Some(230_000.0);
+        net.loads[0].extras.remove("psse_scal");
+        net.loads[0].extras.remove("psse_loadtype");
+
+        let conv = write_psse_rev(&net, 35);
+
+        assert!(
+            conv.text.contains(", 1, 0, 0, 0.0, 0.0, 0, '7'"),
+            "typed SCAL/LOADTYPE were not written: {}",
+            conv.text
+        );
+        assert!(
+            conv.warnings.iter().any(|w| w.contains("nominal voltage")),
+            "missing nominal voltage warning: {:?}",
+            conv.warnings
+        );
+        let rev33 = write_psse(&net);
+        assert!(
+            rev33
+                .warnings
+                .iter()
+                .any(|w| w.contains("load type requires revision 35")),
+            "missing rev33 load type warning: {:?}",
+            rev33.warnings
+        );
+        let reparsed = parse_psse(&conv.text).unwrap();
+        let Some(LoadVoltageModel::Zip {
+            scaling, load_type, ..
+        }) = &reparsed.loads[0].voltage_model
+        else {
+            panic!("missing reparsed ZIP load model");
+        };
+        assert_eq!(*scaling, Some(0.0));
+        assert_eq!(*load_type, Some(7));
     }
 
     #[test]
@@ -1743,8 +2189,8 @@ Q
         assert!(
             conv.warnings
                 .iter()
-                .any(|w| w.contains("stale PL/QL/IP/IQ/YP/YQ")),
-            "missing stale extras warning: {:?}",
+                .any(|w| w.contains("stale voltage model components")),
+            "missing stale voltage model warning: {:?}",
             conv.warnings
         );
         let reparsed = parse_psse(&conv.text).unwrap();

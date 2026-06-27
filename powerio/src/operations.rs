@@ -172,6 +172,12 @@ impl Network {
             .filter(|br| kept.contains(&br.from) && kept.contains(&br.to))
             .cloned()
             .collect();
+        let switches = self
+            .switches
+            .iter()
+            .filter(|sw| kept.contains(&sw.from) && kept.contains(&sw.to))
+            .cloned()
+            .collect();
         let hvdc = self
             .hvdc
             .iter()
@@ -232,6 +238,7 @@ impl Network {
             loads,
             shunts,
             branches,
+            switches,
             generators,
             storage,
             hvdc,
@@ -292,6 +299,11 @@ impl Network {
             }
         }
         self.branches.retain(|b| b.from != b.to);
+        for sw in &mut self.switches {
+            remap(&mut sw.from);
+            remap(&mut sw.to);
+        }
+        self.switches.retain(|s| s.from != s.to);
         for d in &mut self.hvdc {
             remap(&mut d.from);
             remap(&mut d.to);
@@ -472,16 +484,19 @@ impl Network {
             to: other_end(s2, m),
             r: s1.r + s2.r,
             x: s1.x + s2.x,
-            b: s1.b + s2.b,
+            b: s1.legacy_total_charging_b() + s2.legacy_total_charging_b(),
+            charging: None,
             rate_a: combine_rate(s1.rate_a, s2.rate_a),
             rate_b: combine_rate(s1.rate_b, s2.rate_b),
             rate_c: combine_rate(s1.rate_c, s2.rate_c),
+            current_ratings: None,
             tap: 0.0,
             shift: 0.0,
             in_service: true,
             angmin,
             angmax,
             control: None,
+            solution: None,
             extras: Extras::new(),
         });
         self.buses.retain(|b| b.id != m);
@@ -562,15 +577,18 @@ mod tests {
             r: 0.0,
             x: 0.1,
             b: 0.0,
+            charging: None,
             rate_a: 0.0,
             rate_b: 0.0,
             rate_c: 0.0,
+            current_ratings: None,
             tap: 0.0,
             shift: 0.0,
             in_service: true,
             angmin: -360.0,
             angmax: 360.0,
             control: None,
+            solution: None,
             extras: Extras::new(),
         }
     }
@@ -580,6 +598,7 @@ mod tests {
             bus: BusId(bus),
             p: 10.0,
             q: 5.0,
+            voltage_model: None,
             in_service: true,
             extras: Extras::new(),
         }

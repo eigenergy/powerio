@@ -37,6 +37,11 @@ pub(crate) fn write_matpower_conversion(net: &Network) -> Conversion {
         };
     }
 
+    let warnings = canonical_warnings(net);
+    Conversion { text, warnings }
+}
+
+fn canonical_warnings(net: &Network) -> Vec<String> {
     // The canonical writer (see `canonical`) emits the standard bus/branch/gen/
     // gencost/storage blocks only. Report every neutral-model field it can't.
     let mut warnings = Vec::new();
@@ -44,6 +49,12 @@ pub(crate) fn write_matpower_conversion(net: &Network) -> Conversion {
         warnings.push(format!(
             "{} HVDC dcline(s) dropped: the canonical MATPOWER writer emits no `mpc.dcline` block",
             net.hvdc.len()
+        ));
+    }
+    if !net.switches.is_empty() {
+        warnings.push(format!(
+            "{} switch(es) dropped: MATPOWER has no switch table",
+            net.switches.len()
         ));
     }
     if !net.transformers_3w.is_empty() {
@@ -69,6 +80,46 @@ pub(crate) fn write_matpower_conversion(net: &Network) -> Conversion {
             "generator capability/ramp columns dropped for {with_caps} generator(s): the canonical MATPOWER writer emits only the standard gen columns"
         ));
     }
+    let non_matpower_charging = net
+        .branches
+        .iter()
+        .filter(|b| b.has_non_matpower_charging())
+        .count();
+    if non_matpower_charging > 0 {
+        warnings.push(format!(
+            "{non_matpower_charging} branch terminal admittance record(s) collapsed to total susceptance: MATPOWER cannot carry conductance or asymmetric terminal charging"
+        ));
+    }
+    let current_ratings = net
+        .branches
+        .iter()
+        .filter(|b| b.current_ratings.is_some())
+        .count();
+    if current_ratings > 0 {
+        warnings.push(format!(
+            "{current_ratings} branch current rating record(s) dropped: MATPOWER branch rows carry MVA ratings only"
+        ));
+    }
+    let branch_solutions = net.branches.iter().filter(|b| b.solution.is_some()).count();
+    if branch_solutions > 0 {
+        warnings.push(format!(
+            "{branch_solutions} branch solution value set(s) dropped: MATPOWER branch rows do not carry solved flow columns"
+        ));
+    }
+    let voltage_loads = net
+        .loads
+        .iter()
+        .filter(|l| {
+            l.voltage_model
+                .as_ref()
+                .is_some_and(crate::network::LoadVoltageModel::has_non_matpower_fields)
+        })
+        .count();
+    if voltage_loads > 0 {
+        warnings.push(format!(
+            "{voltage_loads} voltage dependent load model(s) dropped: MATPOWER carries only static Pd/Qd"
+        ));
+    }
     let with_cost = net.generators.iter().filter(|g| g.cost.is_some()).count();
     if with_cost > 0 && with_cost < net.generators.len() {
         warnings.push(format!(
@@ -87,7 +138,7 @@ pub(crate) fn write_matpower_conversion(net: &Network) -> Conversion {
             "source-format passthrough fields (extras) dropped: the canonical MATPOWER writer emits only named columns".to_string(),
         );
     }
-    Conversion { text, warnings }
+    warnings
 }
 
 /// Canonical MATPOWER from the neutral model, for networks with no MATPOWER
@@ -148,7 +199,7 @@ fn canonical(net: &Network) -> String {
             br.to,
             br.r,
             br.x,
-            br.b,
+            br.terminal_charging().total_b(),
             br.rate_a,
             br.rate_b,
             br.rate_c,

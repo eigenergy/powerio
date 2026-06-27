@@ -16,6 +16,7 @@ wheelhouse/
 __pycache__/
 .pytest_cache/
 .venv/
+.venv-validate/
 tests/data/large/
 
 # Scratch Julia project for the PMD oracle; its Manifest pins local paths.

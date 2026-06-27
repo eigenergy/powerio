@@ -4,7 +4,7 @@ use crate::indexed::IndexedNetwork;
 use crate::matrix::{
     BuildOptions, MatrixStats, Scheme, build_bdoubleprime, build_bprime, build_lacpf, build_ybus,
 };
-use crate::network::{Branch, Bus, BusId, BusType, Extras, Network, Shunt};
+use crate::network::{Branch, BranchCharging, Bus, BusId, BusType, Extras, Network, Shunt};
 use crate::parse_psse;
 
 fn bus(id: usize, kind: BusType) -> Bus {
@@ -32,15 +32,18 @@ fn br(from: usize, to: usize, r: f64, x: f64, b: f64) -> Branch {
         r,
         x,
         b,
+        charging: None,
         rate_a: 0.0,
         rate_b: 0.0,
         rate_c: 0.0,
+        current_ratings: None,
         tap: 0.0,
         shift: 0.0,
         in_service: true,
         angmin: -360.0,
         angmax: 360.0,
         control: None,
+        solution: None,
         extras: Extras::new(),
     }
 }
@@ -236,6 +239,36 @@ fn ybus_reciprocity_and_symmetry() {
             assert_relative_eq!(b[[i, j]], b[[j, i]], epsilon = 1e-12);
         }
     }
+}
+
+#[test]
+fn ybus_uses_asymmetric_terminal_admittance() {
+    let mut branch = br(1, 2, 0.0, 0.1, 0.0);
+    branch.charging = Some(BranchCharging {
+        g_fr: 0.01,
+        b_fr: 0.02,
+        g_to: 0.03,
+        b_to: 0.04,
+    });
+    let net = Network::in_memory(
+        "terminal-charging",
+        100.0,
+        vec![bus(1, BusType::Ref), bus(2, BusType::Pq)],
+        vec![branch],
+    );
+    let view = IndexedNetwork::new(&net);
+    let parts = build_ybus(&view, &BuildOptions::default()).unwrap();
+    let g = parts.g.to_dense();
+    let b = parts.b.to_dense();
+
+    assert_relative_eq!(g[[0, 0]], 0.01, epsilon = 1e-12);
+    assert_relative_eq!(g[[1, 1]], 0.03, epsilon = 1e-12);
+    assert_relative_eq!(g[[0, 1]], 0.0, epsilon = 1e-12);
+    assert_relative_eq!(g[[1, 0]], 0.0, epsilon = 1e-12);
+    assert_relative_eq!(b[[0, 0]], -9.98, epsilon = 1e-12);
+    assert_relative_eq!(b[[1, 1]], -9.96, epsilon = 1e-12);
+    assert_relative_eq!(b[[0, 1]], 10.0, epsilon = 1e-12);
+    assert_relative_eq!(b[[1, 0]], 10.0, epsilon = 1e-12);
 }
 
 #[test]
