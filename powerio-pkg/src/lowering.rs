@@ -11,7 +11,7 @@ use std::collections::BTreeSet;
 
 use serde::{Deserialize, Serialize};
 
-use powerio_dist::MulticonductorNetwork;
+use powerio_dist::{DistBus, MulticonductorNetwork};
 
 use crate::diagnostics::{DiagnosticSeverity, DiagnosticStage, StructuredDiagnostic};
 use crate::model::ModelKind;
@@ -153,18 +153,13 @@ fn check_bus_conductor_sets(
     net: &MulticonductorNetwork,
     report: &mut MulticonductorToBalancedReadiness,
 ) {
+    let neutral_terminals = global_neutral_terminals(net);
     let mut saw_neutral = false;
     for (i, bus) in net.buses.iter().enumerate() {
-        let grounded: BTreeSet<_> = bus.grounded.iter().map(String::as_str).collect();
-        if !grounded.is_empty() {
+        let active_count = active_terminal_count(&bus.terminals, Some(bus), &neutral_terminals);
+        if active_count < bus.terminals.len() {
             saw_neutral = true;
         }
-
-        let active_count = bus
-            .terminals
-            .iter()
-            .filter(|terminal| !grounded.contains(terminal.as_str()))
-            .count();
 
         match active_count {
             3 => {}
@@ -220,20 +215,35 @@ fn check_bus_conductor_sets(
     }
 }
 
+fn global_neutral_terminals(net: &MulticonductorNetwork) -> BTreeSet<String> {
+    net.buses
+        .iter()
+        .flat_map(|bus| bus.grounded.iter().cloned())
+        .collect()
+}
+
+fn active_terminal_count(
+    terminals: &[String],
+    bus: Option<&DistBus>,
+    neutral_terminals: &BTreeSet<String>,
+) -> usize {
+    terminals
+        .iter()
+        .filter(|terminal| {
+            !bus.is_some_and(|b| b.grounded.contains(*terminal))
+                && !neutral_terminals.contains(*terminal)
+        })
+        .count()
+}
+
 fn check_phase_reference(
     net: &MulticonductorNetwork,
     report: &mut MulticonductorToBalancedReadiness,
 ) {
+    let neutral_terminals = global_neutral_terminals(net);
     let has_three_phase_source = net.sources.iter().any(|source| {
-        net.bus(&source.bus).is_some_and(|bus| {
-            let grounded: BTreeSet<_> = bus.grounded.iter().map(String::as_str).collect();
-            source
-                .terminal_map
-                .iter()
-                .filter(|terminal| !grounded.contains(terminal.as_str()))
-                .count()
-                == 3
-        })
+        let bus = net.bus(&source.bus);
+        active_terminal_count(&source.terminal_map, bus, &neutral_terminals) == 3
     });
 
     if !has_three_phase_source {

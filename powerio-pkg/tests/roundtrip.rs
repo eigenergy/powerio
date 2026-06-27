@@ -475,6 +475,28 @@ fn lowering_preflight_records_kron_reduction_for_neutral() {
 }
 
 #[test]
+fn lowering_preflight_accepts_source_grounded_four_wire_fixture() {
+    let text = include_str!("../../tests/data/dist/micro/fourwire_linecode.dss");
+    let net = powerio_dist::parse_str(text, "dss").expect("parse four wire fixture");
+    let report = check_multiconductor_to_balanced_lowering(
+        &net,
+        powerio_pkg::MulticonductorToBalancedOptions::default(),
+    );
+
+    assert_eq!(report.status, ValidationStatus::Info);
+    assert!(report.is_ready(), "{:?}", report.diagnostics);
+    assert!(has_lowering_code(
+        &report,
+        "LOWER.MULTI_TO_BALANCED.KRON_REDUCTION_REQUIRED"
+    ));
+    assert!(
+        !has_lowering_code(&report, "LOWER.MULTI_TO_BALANCED.UNSUPPORTED_CONDUCTOR_SET"),
+        "{:?}",
+        report.diagnostics
+    );
+}
+
+#[test]
 fn lowering_preflight_rejects_one_phase_input() {
     let net = preflight_network(&["1"], &[]);
     let report = check_multiconductor_to_balanced_lowering(
