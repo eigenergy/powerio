@@ -1,0 +1,25 @@
+[package]
+name = "powerio-pkg"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+description = "The .pio.json compiler package: a versioned envelope around one PowerIO IR payload with explicit model kind, provenance, source maps, structured diagnostics, validation, and lowering history."
+readme = "README.md"
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+documentation = "https://docs.rs/powerio-pkg"
+keywords = ["powerio", "compiler", "ir", "diagnostics", "provenance"]
+categories = ["science", "data-structures"]
+
+[package.metadata.docs.rs]
+all-features = true
+
+[dependencies]
+powerio = { workspace = true }
+powerio-dist = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+
+[lints]
+workspace = true

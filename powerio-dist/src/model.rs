@@ -16,13 +16,16 @@
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
+use serde::{Deserialize, Serialize};
+
 pub type Extras = BTreeMap<String, serde_json::Value>;
 
 /// A square matrix in conductor order, row major.
 pub type Mat = Vec<Vec<f64>>;
 
 /// Where the network came from; fixes the echo tier target.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
 #[non_exhaustive]
 pub enum DistSourceFormat {
     Dss,
@@ -42,7 +45,7 @@ impl DistSourceFormat {
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Default)]
+#[derive(Clone, Debug, PartialEq, Default, Serialize, Deserialize)]
 pub struct DistBus {
     pub id: String,
     /// Ordered terminal names; OpenDSS node numbers as strings.
@@ -63,7 +66,7 @@ pub struct DistBus {
     pub extras: Extras,
 }
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct DistLineCode {
     pub name: String,
     pub n_conductors: usize,
@@ -81,7 +84,7 @@ pub struct DistLineCode {
     pub extras: Extras,
 }
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct DistLine {
     pub name: String,
     pub bus_from: String,
@@ -94,7 +97,7 @@ pub struct DistLine {
     pub extras: Extras,
 }
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct DistSwitch {
     pub name: String,
     pub bus_from: String,
@@ -106,7 +109,8 @@ pub struct DistSwitch {
     pub extras: Extras,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 #[non_exhaustive]
 pub enum Configuration {
     Wye,
@@ -114,7 +118,7 @@ pub enum Configuration {
     SinglePhase,
 }
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct DistLoad {
     pub name: String,
     pub bus: String,
@@ -128,7 +132,8 @@ pub struct DistLoad {
     pub extras: Extras,
 }
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "model", rename_all = "snake_case")]
 #[non_exhaustive]
 pub enum DistLoadVoltageModel {
     /// Constant power load. `v_nom` is volts per active phase when the source
@@ -178,7 +183,7 @@ impl DistLoadVoltageModel {
     }
 }
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct DistGenerator {
     pub name: String,
     pub bus: String,
@@ -196,7 +201,7 @@ pub struct DistGenerator {
     pub extras: Extras,
 }
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct DistShunt {
     pub name: String,
     pub bus: String,
@@ -207,14 +212,15 @@ pub struct DistShunt {
     pub extras: Extras,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 #[non_exhaustive]
 pub enum WindingConn {
     Wye,
     Delta,
 }
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Winding {
     pub bus: String,
     pub terminal_map: Vec<String>,
@@ -228,7 +234,7 @@ pub struct Winding {
     pub tap: f64,
 }
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct DistTransformer {
     pub name: String,
     pub windings: Vec<Winding>,
@@ -239,7 +245,7 @@ pub struct DistTransformer {
     pub extras: Extras,
 }
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct VoltageSource {
     pub name: String,
     pub bus: String,
@@ -253,7 +259,7 @@ pub struct VoltageSource {
 
 /// An object the reader recognized but does not type: preserved by class,
 /// name, and raw property text so conversions can warn precisely.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct UntypedObject {
     pub class: String,
     pub name: String,
@@ -265,7 +271,7 @@ pub struct UntypedObject {
 /// `source` retains the original text for the byte exact echo tier;
 /// `defaulted` records, per element (`"class.name"` key), the fields the
 /// reader materialized from format defaults rather than the source text.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct DistNetwork {
     pub name: Option<String>,
     /// Hz.
@@ -286,8 +292,19 @@ pub struct DistNetwork {
     /// (`solve`, `set mode=...`), in order, as (verb, args).
     pub commands: Vec<(String, String)>,
     pub options: Vec<(String, String)>,
+    /// Per-element record of which fields were materialized from a format
+    /// default. Skipped in the `.pio.json` payload: the field holds
+    /// `&'static str` (no `Deserialize`), and this provenance belongs in the
+    /// compiler package's `source_maps` as `mapping_kind = defaulted`, not in
+    /// the raw IR payload. See `docs/architecture/pio-json-schema.md`.
+    #[serde(skip)]
     pub defaulted: BTreeMap<String, Vec<&'static str>>,
     pub warnings: Vec<String>,
+    /// Retained source text for the byte-exact echo tier. Skipped in the
+    /// `.pio.json` payload (mirrors `powerio::Network::source`): keeping it out
+    /// avoids serde's `rc` feature, and retained source is an envelope concern
+    /// surfaced through `Origin::File { retained_source, .. }`.
+    #[serde(skip)]
     pub source: Option<Arc<String>>,
     pub source_format: Option<DistSourceFormat>,
     pub extras: Extras,
