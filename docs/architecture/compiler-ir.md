@@ -104,7 +104,10 @@ Every pass that transforms one model into another appends a `LoweringRecord`
 (input and output kind, options, assumptions, approximations, dropped fields,
 diagnostics, validation status) to `lowering_history`, so the transformation is
 auditable rather than implicit. This change set defines the record shape; the
-passes themselves are later work.
+passes themselves are later work. The v0.4.0 design contract for
+`MulticonductorNetwork` to `BalancedNetwork` lowering is in
+[v0.4-release-direction.md](v0.4-release-direction.md); the implementation is
+tracked in #145.
 
 ## Versioning
 
