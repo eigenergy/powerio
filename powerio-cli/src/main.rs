@@ -2,9 +2,10 @@
 //!
 //! Subcommands: `batch` (matrix families), `gen` (synthetic cases), `verify`,
 //! `dcopf` (DC OPF bundle), `sensitivities` (PTDF/LODF), `gridfm` (gridfm-datakit
-//! Parquet), and `convert`. With no subcommand it launches the TUI. Run
+//! Parquet), `package` (`.pio.json`), and `convert`. With no subcommand it launches the TUI. Run
 //! `powerio --help` for the full surface.
 
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 use anyhow::Context;
@@ -15,6 +16,10 @@ use powerio_matrix::matrix::{BuildOptions, DcConvention, Scheme, Units, sddm_che
 use powerio_matrix::opf_pipeline::{DcOpfOptions, write_dcopf_bundle};
 use powerio_matrix::pipeline::{MatrixKind, Pipeline, RhsKind};
 use powerio_matrix::synth::{SynthSpec, Topology};
+use powerio_pkg::{
+    CompilerPackage, DiagnosticSeverity, DiagnosticStage, Origin, SourceDescriptor,
+    StructuredDiagnostic, ValidationSummary,
+};
 use serde_json::json;
 mod tui;
 
@@ -116,6 +121,21 @@ enum Command {
         #[arg(long, value_enum)]
         from: Option<FormatArg>,
         /// With `--from gridfm`, which scenario to summarize.
+        #[arg(long, default_value_t = 0)]
+        scenario: i64,
+    },
+    /// Emit the `.pio.json` compiler package for one input.
+    #[command(visible_alias = "pkg")]
+    Package {
+        /// Input case file, PyPSA CSV folder, or gridfm dataset directory.
+        input: PathBuf,
+        /// Output file; `-` or omitted writes to stdout.
+        #[arg(short, long)]
+        output: Option<PathBuf>,
+        /// Override the inferred input format.
+        #[arg(long, value_enum)]
+        from: Option<FormatArg>,
+        /// With `--from gridfm`, which scenario to package.
         #[arg(long, default_value_t = 0)]
         scenario: i64,
     },
@@ -456,6 +476,12 @@ fn main() -> anyhow::Result<()> {
             from,
             scenario,
         } => run_summary(&input, from, scenario),
+        Command::Package {
+            input,
+            output,
+            from,
+            scenario,
+        } => run_package(&input, output.as_deref(), from, scenario),
         Command::Gridfm {
             inputs,
             output,
@@ -702,6 +728,181 @@ fn run_summary(input: &Path, from: Option<FormatArg>, scenario: i64) -> anyhow::
         };
     println!("{}", serde_json::to_string_pretty(&value)?);
     Ok(())
+}
+
+fn run_package(
+    input: &Path,
+    output: Option<&Path>,
+    from: Option<FormatArg>,
+    scenario: i64,
+) -> anyhow::Result<()> {
+    let text = package_text(input, from, scenario)?;
+    match output {
+        Some(p) if p.as_os_str() != "-" => {
+            std::fs::write(p, &text).with_context(|| format!("writing {}", p.display()))?;
+            eprintln!("wrote {}", p.display());
+        }
+        _ => print!("{text}"),
+    }
+    Ok(())
+}
+
+fn package_text(input: &Path, from: Option<FormatArg>, scenario: i64) -> anyhow::Result<String> {
+    let pkg = build_package(input, from, scenario)?;
+    let text = pkg
+        .to_json_pretty()
+        .context("serializing .pio.json package")?;
+    CompilerPackage::from_json(&text).context("validating .pio.json package readback")?;
+    Ok(text)
+}
+
+fn build_package(
+    input: &Path,
+    from: Option<FormatArg>,
+    scenario: i64,
+) -> anyhow::Result<CompilerPackage> {
+    if from == Some(FormatArg::Gridfm) || (from.is_none() && looks_like_gridfm_dir(input)) {
+        let read = powerio_matrix::read_gridfm_dataset(input, scenario)
+            .with_context(|| format!("reading gridfm dataset {}", input.display()))?;
+        let mut pkg = CompilerPackage::from_balanced(read.network);
+        add_read_warning_diagnostics(&mut pkg, "READ.GRIDFM.FIDELITY_WARNING", &read.warnings);
+        set_package_source(&mut pkg, input, PackageSourceKind::Folder, "gridfm", false);
+        return Ok(pkg);
+    }
+
+    if from.is_some_and(|f| f.distribution().is_some())
+        || (from.is_none() && looks_like_distribution_input(input)?)
+    {
+        let net = powerio_dist::parse_file(input, from.map(FormatArg::name))
+            .with_context(|| format!("reading {}", input.display()))?;
+        let format = net
+            .source_format
+            .map(powerio_dist::DistSourceFormat::name)
+            .or_else(|| from.map(FormatArg::name))
+            .unwrap_or("unknown");
+        let retained_source = net.source.is_some();
+        let mut pkg = CompilerPackage::from_multiconductor(net);
+        set_package_source(
+            &mut pkg,
+            input,
+            package_source_kind(input, format),
+            format,
+            retained_source,
+        );
+        return Ok(pkg);
+    }
+
+    let parsed = powerio_matrix::parse_file(input, from.map(FormatArg::name))
+        .with_context(|| format!("reading {}", input.display()))?;
+    let format = balanced_source_format_name(parsed.network.source_format);
+    let retained_source = parsed.network.source.is_some();
+    let mut pkg = CompilerPackage::from_balanced(parsed.network);
+    add_read_warning_diagnostics(
+        &mut pkg,
+        "READ.TRANSMISSION.PARSE_WARNING",
+        &parsed.warnings,
+    );
+    set_package_source(
+        &mut pkg,
+        input,
+        package_source_kind(input, format),
+        format,
+        retained_source,
+    );
+    Ok(pkg)
+}
+
+fn add_read_warning_diagnostics(pkg: &mut CompilerPackage, code: &str, warnings: &[String]) {
+    pkg.diagnostics.extend(warnings.iter().map(|w| {
+        StructuredDiagnostic::new(
+            code,
+            DiagnosticSeverity::Warning,
+            DiagnosticStage::Read,
+            w.clone(),
+        )
+    }));
+    pkg.validation = ValidationSummary::from_diagnostics(&pkg.diagnostics);
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum PackageSourceKind {
+    File,
+    BinaryFile,
+    Folder,
+}
+
+impl PackageSourceKind {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::File => "file",
+            Self::BinaryFile => "binary_file",
+            Self::Folder => "folder",
+        }
+    }
+}
+
+fn package_source_kind(input: &Path, format: &str) -> PackageSourceKind {
+    if input.is_dir() {
+        PackageSourceKind::Folder
+    } else if format == "powerworld-pwb" {
+        PackageSourceKind::BinaryFile
+    } else {
+        PackageSourceKind::File
+    }
+}
+
+fn set_package_source(
+    pkg: &mut CompilerPackage,
+    input: &Path,
+    kind: PackageSourceKind,
+    format: &str,
+    retained_source: bool,
+) {
+    let path = input.display().to_string();
+    pkg.origin = match kind {
+        PackageSourceKind::File => Origin::File {
+            path: path.clone(),
+            format: format.to_owned(),
+            hash: None,
+            retained_source,
+        },
+        PackageSourceKind::BinaryFile => Origin::BinaryFile {
+            path: path.clone(),
+            format: format.to_owned(),
+            hash: None,
+            decoded_sections: Vec::new(),
+        },
+        PackageSourceKind::Folder => Origin::Folder {
+            path: path.clone(),
+            format: format.to_owned(),
+            file_hashes: BTreeMap::new(),
+        },
+    };
+    pkg.sources = vec![SourceDescriptor {
+        id: "src0".to_owned(),
+        kind: kind.as_str().to_owned(),
+        path: Some(path),
+        format: Some(format.to_owned()),
+        hash: None,
+    }];
+}
+
+fn balanced_source_format_name(f: powerio_matrix::SourceFormat) -> &'static str {
+    match f {
+        powerio_matrix::SourceFormat::Matpower => "matpower",
+        powerio_matrix::SourceFormat::PowerModelsJson => "powermodels-json",
+        powerio_matrix::SourceFormat::EgretJson => "egret-json",
+        powerio_matrix::SourceFormat::Psse => "psse",
+        powerio_matrix::SourceFormat::PowerWorld => "powerworld",
+        powerio_matrix::SourceFormat::PandapowerJson => "pandapower-json",
+        powerio_matrix::SourceFormat::Pslf => "pslf",
+        powerio_matrix::SourceFormat::PowerWorldBinary => "powerworld-pwb",
+        powerio_matrix::SourceFormat::InMemory => "in-memory",
+        powerio_matrix::SourceFormat::Normalized => "normalized",
+        powerio_matrix::SourceFormat::Gridfm => "gridfm",
+        powerio_matrix::SourceFormat::PypsaCsv => "pypsa-csv",
+        _ => "unknown",
+    }
 }
 
 fn transmission_summary_json(
@@ -973,9 +1174,12 @@ fn read_network(
 #[cfg(test)]
 mod tests {
     use super::{
-        FormatArg, distribution_summary_json, infer_input_family, looks_like_distribution_input,
-        run_convert, transmission_summary_json,
+        Cli, Command, FormatArg, build_package, distribution_summary_json, infer_input_family,
+        looks_like_distribution_input, package_text, run_convert, run_package,
+        transmission_summary_json,
     };
+    use clap::Parser;
+    use powerio_pkg::{CompilerPackage, MappingKind, Origin};
     use std::path::Path;
     use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -1031,6 +1235,133 @@ mod tests {
         .unwrap();
         assert!(!looks_like_distribution_input(&tmp).unwrap());
         let _ = std::fs::remove_file(tmp);
+    }
+
+    #[test]
+    fn package_visible_alias_parses() {
+        let cli = Cli::try_parse_from(["powerio", "pkg", "case9.m"]).unwrap();
+        match cli.command.unwrap() {
+            Command::Package { input, .. } => assert_eq!(input, Path::new("case9.m")),
+            other => panic!("expected package command, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn package_text_matches_balanced_shape_and_provenance() {
+        let input = data("case9.m");
+        let text = package_text(&input, None, 0).unwrap();
+        let pkg = CompilerPackage::from_json(&text).unwrap();
+        assert_eq!(pkg.model_kind, powerio_pkg::ModelKind::Balanced);
+        assert!(pkg.kind_is_consistent());
+        assert_eq!(pkg.as_balanced().unwrap().buses.len(), 9);
+        match &pkg.origin {
+            Origin::File {
+                path,
+                format,
+                retained_source,
+                ..
+            } => {
+                assert_eq!(path, &input.display().to_string());
+                assert_eq!(format, "matpower");
+                assert!(*retained_source);
+            }
+            other => panic!("expected file origin, got {other:?}"),
+        }
+        assert_eq!(pkg.sources.len(), 1);
+        assert_eq!(pkg.sources[0].id, "src0");
+        assert_eq!(pkg.sources[0].kind, "file");
+        assert_eq!(
+            pkg.sources[0].path.as_deref(),
+            Some(input.to_str().unwrap())
+        );
+        assert_eq!(pkg.sources[0].format.as_deref(), Some("matpower"));
+    }
+
+    #[test]
+    fn package_command_writes_output_file() {
+        let stamp = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let output = std::env::temp_dir().join(format!("powerio-package-{stamp}.pio.json"));
+
+        run_package(&data("case9.m"), Some(&output), None, 0).unwrap();
+        let text = std::fs::read_to_string(&output).unwrap();
+        let pkg = CompilerPackage::from_json(&text).unwrap();
+        assert_eq!(pkg.model_kind, powerio_pkg::ModelKind::Balanced);
+        assert_eq!(pkg.sources[0].format.as_deref(), Some("matpower"));
+
+        let _ = std::fs::remove_file(output);
+    }
+
+    #[test]
+    fn package_helper_returns_stdout_text() {
+        let text = package_text(&data("case9.m"), None, 0).unwrap();
+        assert!(text.contains("\"schema\""));
+        let pkg = CompilerPackage::from_json(&text).unwrap();
+        assert_eq!(pkg.summary.elements["buses"], 9);
+    }
+
+    #[test]
+    fn package_distribution_fixture_keeps_defaulted_source_maps() {
+        let input = data("dist/micro/xfmr_single_phase.dss");
+        let pkg = build_package(&input, None, 0).unwrap();
+        assert_eq!(pkg.model_kind, powerio_pkg::ModelKind::Multiconductor);
+        match &pkg.origin {
+            Origin::File { path, format, .. } => {
+                assert_eq!(path, &input.display().to_string());
+                assert_eq!(format, "dss");
+            }
+            other => panic!("expected file origin, got {other:?}"),
+        }
+        assert_eq!(
+            pkg.sources[0].path.as_deref(),
+            Some(input.to_str().unwrap())
+        );
+        assert!(
+            pkg.source_maps
+                .iter()
+                .any(|e| e.mapping_kind == MappingKind::Defaulted),
+            "expected defaulted source map entries: {:?}",
+            pkg.source_maps
+        );
+    }
+
+    #[test]
+    fn package_rejects_non_finite_payload_before_writing() {
+        let stamp = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let input = std::env::temp_dir().join(format!("powerio-package-bad-{stamp}.m"));
+        let output = std::env::temp_dir().join(format!("powerio-package-bad-{stamp}.pio.json"));
+        std::fs::write(
+            &input,
+            "\
+function mpc = bad
+mpc.version = '2';
+mpc.baseMVA = 100;
+mpc.bus = [
+  1 3 0 0 0 0 1 1 0 230 1 1.1 0.9;
+  2 1 0 0 0 0 1 1 0 230 1 1.1 0.9;
+];
+mpc.branch = [
+  1 2 0.01 0.1 0 0 0 0 0 0 1 NaN Inf;
+];
+",
+        )
+        .unwrap();
+
+        let err = run_package(&input, Some(&output), None, 0).unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("validating .pio.json package readback"),
+            "{err}"
+        );
+        assert!(!output.exists());
+
+        let _ = std::fs::remove_file(input);
+        let _ = std::fs::remove_file(output);
     }
 
     #[test]

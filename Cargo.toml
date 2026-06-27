@@ -6,11 +6,12 @@ members = [
     "powerio-py",
     "powerio-capi",
     "powerio-dist",
+    "powerio-pkg",
 ]
 # Bare `cargo build`/`test`/`clippy` touch only the library + CLI crates, so the
 # toolchain never compiles the PyO3 extension (which needs libpython). Build the
 # binding explicitly with `-p powerio-py`.
-default-members = ["powerio", "powerio-matrix", "powerio-cli", "powerio-dist"]
+default-members = ["powerio", "powerio-matrix", "powerio-cli", "powerio-dist", "powerio-pkg"]
 # The fuzz harnesses need nightly + cargo-fuzz; they build on their own (see
 # fuzz/README.md), never as part of the workspace.
 exclude = ["fuzz"]
@@ -33,6 +34,7 @@ homepage = "https://eigenergy.github.io/powerio/"
 powerio = { path = "powerio", version = "0.3.3" }
 powerio-matrix = { path = "powerio-matrix", version = "0.3.3" }
 powerio-dist = { path = "powerio-dist", version = "0.3.3" }
+powerio-pkg = { path = "powerio-pkg", version = "0.3.3" }
 # Cross-crate type identity: `CsMat<f64>` (sprs) and the Arrow types cross crate
 # boundaries, so every crate must build against the same major.
 sprs = { version = "0.11", default-features = false }

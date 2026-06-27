@@ -2023,6 +2023,7 @@ dependencies = [
  "crossterm",
  "powerio-dist",
  "powerio-matrix",
+ "powerio-pkg",
  "ratatui",
  "serde_json",
  "sprs",
@@ -2059,6 +2060,16 @@ dependencies = [
  "sprs",
  "tempfile",
  "walkdir",
+]
+
+[[package]]
+name = "powerio-pkg"
+version = "0.3.3"
+dependencies = [
+ "powerio",
+ "powerio-dist",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]

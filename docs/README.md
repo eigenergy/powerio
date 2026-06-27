@@ -12,6 +12,8 @@ crate doc comment.
   `dcopf` subcommand writes for a downstream solver.
 - [languages.md](languages.md): canonical Rust, Python, Julia, and C ABI names.
 - [python.md](python.md): Python install extras and API examples.
+- [architecture/](architecture/README.md): the compiler-IR architecture and the
+  `.pio.json` compiler package and its schema.
 - Julia bindings: <https://github.com/eigenergy/PowerIO.jl>.
 
 Rendered API docs (rustdoc) for all crates:
