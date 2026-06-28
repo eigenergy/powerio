@@ -30,7 +30,7 @@ Four crates publish to crates.io, in dependency order; `powerio-capi` and
 `powerio-py` are `publish = false` (they ship as release tarballs and a PyPI
 wheel). Dry-run each first, publish, then wait for the index before the next:
 
-```
+```sh
 cargo publish -p powerio        --locked   # core, no workspace deps
 cargo publish -p powerio-matrix --locked   # depends on powerio
 cargo publish -p powerio-dist   --locked   # leaf (serde/serde_json/thiserror only)

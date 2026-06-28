@@ -3,7 +3,7 @@
 
 <p align="center">
   <img
-    src="https://raw.githubusercontent.com/eigenergy/powerio/main/docs/assets/powerio-hero.png"
+    src="https://raw.githubusercontent.com/eigenergy/powerio/main/docs/src/assets/powerio-hero.png"
     alt="PowerIO format and matrix flow"
     width="720"
   >
@@ -31,7 +31,7 @@ When writing back to the source format, PowerIO **returns the original file exac
 The following formats are currently supported:
 - [MATPOWER](https://matpower.org/) `.m`
 - [PSS/E](https://www.siemens.com/global/en/products/energy/grid-software/planning/pss-software/pss-e.html) `.raw` revisions 33, 34, and 35
-- [PowerWorld](https://www.powerworld.com/WebHelp/Content/MainDocumentation_HTML/Case_Formats.htm) `.aux`, plus read only `.pwb` binary cases; `.pwd` display files parse through the separate display API. Vintage coverage and decode evidence live in [docs/powerworld.md](docs/powerworld.md).
+- [PowerWorld](https://www.powerworld.com/WebHelp/Content/MainDocumentation_HTML/Case_Formats.htm) `.aux`, plus read only `.pwb` binary cases; `.pwd` display files parse through the separate display API. Vintage coverage and decode evidence live in the [PowerWorld guide](docs/src/powerworld.md).
 - GE PSLF `.epc` power flow cases
 - [PowerModels.jl](https://github.com/lanl-ansi/PowerModels.jl) network data JSON
 - [egret](https://pypi.org/project/gridx-egret/) `ModelData` JSON
@@ -70,7 +70,7 @@ and conversion separate from matrix, TUI, and data frame dependencies. The
 third party packages; matrix and graph helpers live behind extras.
 
 Docs site: <https://eigenergy.github.io/powerio/>.
-Language API map: [languages guide](https://eigenergy.github.io/powerio/guides/languages.html).
+Language API map: [languages guide](https://eigenergy.github.io/powerio/guide/languages.html).
 
 ## Install
 
@@ -161,7 +161,7 @@ the original file type from converting to a different file type.
 PowerWorld `.pwd` is display data, not a network case, so it is outside this
 conversion table and uses `parse_display_file` / `parse_display_bytes`. The
 decoded vintages and per field evidence live in
-[docs/powerworld.md](docs/powerworld.md).
+[PowerWorld guide](docs/src/powerworld.md).
 
 The distribution matrix (dss, PMD JSON, BMOPF JSON, per fixture) is generated into
 [powerio-dist/docs/conversion-matrix.md](https://github.com/eigenergy/powerio/blob/main/powerio-dist/docs/conversion-matrix.md).
@@ -169,7 +169,7 @@ Vendored test data keeps its own licenses, documented next to the fixtures
 (see [tests/data/dist/README.md](tests/data/dist/README.md)).
 
 Known limits for every format are documented in the
-[format fidelity guide](https://eigenergy.github.io/powerio/guides/format-fidelity.html).
+[format fidelity guide](https://eigenergy.github.io/powerio/guide/format-fidelity.html).
 
 ### Matrices
 
@@ -184,7 +184,7 @@ The `powerio-matrix` Rust crate derives an `IndexedNetwork` with dense bus indic
 - Matrix Market bundles for low-level OPF solvers
 - KKT operators for OPF solvers (experimental)
 
-Current conventions for signs, taps, phase shifts, per unit scaling, reference buses, and line parameters are documented in the [matrices guide](https://eigenergy.github.io/powerio/guides/matrices.html).
+Current conventions for signs, taps, phase shifts, per unit scaling, reference buses, and line parameters are documented in the [matrices guide](https://eigenergy.github.io/powerio/guide/matrices.html).
 
 ### Normalized Form
 
@@ -280,7 +280,7 @@ PowerIO is distributed under either of:
 
 <p align="center">
   <img
-    src="https://raw.githubusercontent.com/eigenergy/powerio/main/docs/assets/powerio-logo.svg"
+    src="https://raw.githubusercontent.com/eigenergy/powerio/main/docs/src/assets/powerio-logo.svg"
     alt="PowerIO logo"
     width="120"
   >

@@ -28,6 +28,7 @@ julia --project=benchmarks benchmarks/bench_julia.jl --json
   tests/data/large/case9241pegase.m \
   tests/data/large/case13659pegase.m \
   tests/data/large/case193k.m
+python3 benchmarks/render_tables.py
 python3 benchmarks/render_tables.py --check
 ```
 

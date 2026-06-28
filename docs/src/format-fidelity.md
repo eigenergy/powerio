@@ -80,7 +80,7 @@ validators run alongside this matrix and are reported as separate legs.
 
 ### Running it
 
-```
+```sh
 cargo build --release -p powerio-capi
 python3.12 -m venv .venv
 .venv/bin/python -m pip install --upgrade pip maturin -r benchmarks/requirements.txt

@@ -21,8 +21,8 @@ python3.12 -m venv .venv
 .venv/bin/python -m pip install --upgrade pip maturin -r benchmarks/requirements.txt
 env VIRTUAL_ENV=$PWD/.venv .venv/bin/maturin develop --release
 .venv/bin/pytest python/tests
-mdbook build
-mdbook test
+mdbook build docs
+mdbook test docs
 ```
 
 ## Route Changes
@@ -40,7 +40,7 @@ Use the smallest gate set that covers the changed surface, then run the full
 | Python package metadata or extras | `maturin build --release --out /tmp/powerio-wheel-check`; inspect wheel `METADATA` |
 | Julia binding compatibility | build `powerio-capi --features arrow,gridfm,dist`, then run `PowerIO.jl` tests with `POWERIO_CAPI` |
 | CLI behavior | `cargo test -p powerio-cli --test cli` |
-| documentation or website | `mdbook build`; `mdbook test`; check stale links to retired guide outputs |
+| documentation or website | `mdbook build docs`; `mdbook test docs`; check stale links to retired guide outputs |
 
 `benchmarks/run_validation.sh` requires the Python oracle stack in the same
 Python 3.11+ venv as the local wheel. Missing PyPSA, pandapower, or egret is a
@@ -58,6 +58,7 @@ cargo bench -p powerio --bench parse -- "parse_aux_|parse_pwb_"
 python3 benchmarks/extract_powerworld_bench.py
 cargo bench -p powerio-matrix --bench matrix
 python3 benchmarks/extract_matrix_bench.py
+python3 benchmarks/render_tables.py
 python3 benchmarks/render_tables.py --check
 ```
 

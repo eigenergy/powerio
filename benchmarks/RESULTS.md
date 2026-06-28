@@ -250,7 +250,7 @@ egret (.json)  ok    ok    ok      ok      ok     (case9/14/30, dcline3)
 PowerWorld and egret have validation coverage here: PowerWorld through the
 read-back bridge, egret against the `egret` package. The Rust suite also runs the
 all-pairs tests in `powerio/tests/roundtrip_formats.rs`. See
-[docs/format-fidelity.md](../docs/format-fidelity.md) for the conventions and limits.
+[docs/src/format-fidelity.md](../docs/src/format-fidelity.md) for the conventions and limits.
 
 ## Reproduce
 
@@ -262,7 +262,7 @@ python3.12 -m venv .venv                        # Python oracle venv
 env VIRTUAL_ENV=$PWD/.venv .venv/bin/maturin develop --release
 julia --project=benchmarks -e 'using Pkg; Pkg.instantiate()'
 
-julia --project=benchmarks benchmarks/bench_julia.jl       # parser speed table
+julia --project=benchmarks benchmarks/bench_julia.jl --json # parser speed table
 .venv/bin/python benchmarks/bench_parse.py --json \
   tests/data/case2869pegase.m \
   tests/data/large/case9241pegase.m \
@@ -274,6 +274,7 @@ POWERIO_BENCH_PWB=<Texas7k_20210804.PWB> \
 python3 benchmarks/extract_powerworld_bench.py
 cargo bench -p powerio-matrix --bench matrix           # sparse matrix and DC OPF builders
 python3 benchmarks/extract_matrix_bench.py
+python3 benchmarks/render_tables.py
 python3 benchmarks/render_tables.py --check
 bash benchmarks/run_validation.sh                          # correctness matrix
 ```

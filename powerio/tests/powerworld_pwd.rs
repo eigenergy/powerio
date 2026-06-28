@@ -6,7 +6,7 @@
 //! latitude/longitude; hand moved symbols and the June 2016 era transform
 //! keep the correlation just under exact). Hawaii40, never hand edited,
 //! reproduces the projection bit for bit and pins its constant.
-//! Evidence in docs/powerworld.md.
+//! Evidence in docs/src/powerworld.md.
 
 mod common;
 
