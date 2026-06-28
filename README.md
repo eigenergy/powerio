@@ -11,8 +11,10 @@
 
 PowerIO parses power system case files into a typed `Network`, converts between
 formats, and builds sparse matrices and graph representations for solver and analysis
-code. Same format writes return retained source text when the reader supports
-it; cross format writes report fields the target cannot carry in warnings.
+code. If you write a parsed file back to the same file type, PowerIO returns the
+original text when the reader kept it. If you convert to another file type,
+PowerIO writes the modeled power flow data and reports fields the target cannot
+carry in warnings.
 
 The core is implemented in [Rust](https://rust-lang.org). The
 [C ABI](https://github.com/eigenergy/powerio/tree/main/powerio-capi) exposes
@@ -67,7 +69,7 @@ and conversion separate from matrix, TUI, and data frame dependencies. The
 [Python package](https://pypi.org/project/powerio/) imports with no required
 third party packages; matrix and graph helpers live behind extras.
 
-API docs: <https://eigenergy.github.io/powerio/>.
+Docs site: <https://eigenergy.github.io/powerio/>.
 Language API map: [languages guide](https://eigenergy.github.io/powerio/guides/languages.html).
 
 ## Install
@@ -140,25 +142,25 @@ powerio
 
 ### Current Format Fidelity
 
-| reader / writer | MATPOWER | PowerModels JSON | PSS/E | PowerWorld | egret JSON | pandapower JSON |
-| --- | --- | --- | --- | --- | --- | --- |
-| MATPOWER | original text | full | partial | partial | partial | partial |
-| PowerModels JSON | partial | original text | partial | partial | partial | partial |
-| PSS/E | full | full | original text | partial | partial | partial |
-| PowerWorld | full | full | partial | original text | partial | partial |
-| PowerWorld `.pwb` | full | full | partial | partial | partial | partial |
-| PSLF `.epc` | partial | partial | partial | partial | partial | partial |
-| egret JSON | partial | full | partial | partial | original text | partial |
-| pandapower JSON | partial | partial | partial | partial | partial | original text |
+Every network reader lowers to `Network`. The table separates writing back to
+the original file type from converting to a different file type.
 
-`partial` means the target lacks fields present in the source. The writer reports
-those cases in `Conversion::warnings`. PowerWorld `.pwb` is read only (no
-writer, no retained source): the row shows where its decoded power flow core
-lands. PSLF `.epc` reads and writes the power flow core; same format writes
-echo retained source text, and unsupported EPC sections are reported as read
-warnings. PowerWorld `.pwd` is display data, not a network case, so it is
-outside this conversion table and uses `parse_display_file` /
-`parse_display_bytes`. The decoded vintages and per field evidence live in
+| file type | read | write | writing back to the original file type | converting to another file type |
+| --- | --- | --- | --- | --- |
+| MATPOWER `.m` | yes | yes | byte exact retained source | canonical MATPOWER blocks; warnings for fields MATPOWER cannot carry |
+| PowerModels JSON | yes | yes | byte exact retained source | per unit structured data checked against PowerModels.jl |
+| PSS/E `.raw` | yes | yes | byte exact only when writing the source revision | power flow core; revision downgrade and unsupported records are warned |
+| PowerWorld `.aux` | yes | yes | byte exact retained source | power flow core; PowerWorld only fields are projected or warned |
+| PowerWorld `.pwb` | yes | no | n/a | read only binary case; decoded core converts through every text writer |
+| PSLF `.epc` | yes | yes | byte exact retained source | power flow core; unsupported EPC sections are read warnings |
+| egret JSON | yes | yes | byte exact retained source | ModelData shape checked against egret and PowerModels.jl |
+| pandapower JSON | yes | yes | byte exact retained source | pandapower import validator checks counts and Y_bus |
+| PyPSA CSV folder | yes | yes | directory output, not text echo | PyPSA import validator checks the exported static components |
+| GridFM Parquet | yes | yes | directory output, deliberately lossy read | recovers the power flow core for conversion back to classical formats |
+
+PowerWorld `.pwd` is display data, not a network case, so it is outside this
+conversion table and uses `parse_display_file` / `parse_display_bytes`. The
+decoded vintages and per field evidence live in
 [docs/powerworld.md](docs/powerworld.md).
 
 The distribution matrix (dss, PMD JSON, BMOPF JSON, per fixture) is generated into
@@ -166,12 +168,8 @@ The distribution matrix (dss, PMD JSON, BMOPF JSON, per fixture) is generated in
 Vendored test data keeps its own licenses, documented next to the fixtures
 (see [tests/data/dist/README.md](tests/data/dist/README.md)).
 
-PyPSA CSV folders and GridFM Parquet are not in this table only because they
-are directory datasets, not single text outputs. Both read and write: PyPSA
-with regenerable committed fixtures (`tests/data/pypsa/README.md`), GridFM
-with a deliberately lossy read that recovers the power flow core. Known
-limits for every format are documented in
-the [format fidelity guide](https://eigenergy.github.io/powerio/guides/format-fidelity.html).
+Known limits for every format are documented in the
+[format fidelity guide](https://eigenergy.github.io/powerio/guides/format-fidelity.html).
 
 ### Matrices
 
@@ -256,8 +254,9 @@ The Rust test suite covers parsers, writers, format conversion, matrix
 builders, and normalization; the C ABI crate carries its own tests, and
 `pytest` covers the Python bindings. The benchmark validation suite compares
 selected outputs against PowerModels.jl, egret, ExaPowerIO.jl, and pandapower,
-and imports PowerIO's PyPSA CSV folders with PyPSA when the optional oracle is
-installed.
+and imports PowerIO's PyPSA CSV folders with PyPSA. Install the oracle stack
+from `benchmarks/requirements.txt` into the same Python 3.11+ venv that holds
+the local `powerio` wheel.
 
 ```
 cargo fmt --all --check

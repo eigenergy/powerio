@@ -10,7 +10,7 @@
 //! The reverse — [`read_gridfm_dataset`] / [`read_gridfm_scenarios`] /
 //! [`gridfm_base_case`], with the pure [`read_gridfm_network`] over in-memory
 //! batches — rebuilds a [`Network`] from such a dataset (lossy but
-//! power-flow-complete; see [`GridfmRead`]), the ML→classical return leg
+//! power flow complete; see [`GridfmRead`]), the ML→classical return leg
 //! (issue #60). One reader plus the existing writers means gridfm → any classical
 //! format. `y_bus_data` is ignored on read; branches carry raw `r/x/b`.
 //!
@@ -1044,7 +1044,7 @@ fn with_scenario_pair(
 // === Reader: gridfm dataset → Network (issue #60) ==========================
 //
 // The inverse of the writer above: select one `scenario` out of the gridfm tables
-// and rebuild a `Network`. Lossy but power-flow-complete — original bus ids are
+// and rebuild a `Network`. Lossy but power flow complete — original bus ids are
 // synthesized `1..n`, nodal load/shunt is folded to one synthetic element per
 // bus, and HVDC/storage/piecewise costs are gone (see [`GridfmRead::warnings`]).
 // `y_bus_data` is never read; branches carry raw `r/x/b`.
@@ -2595,7 +2595,7 @@ mod tests {
             );
         }
         // The in-service branch really carries flow at these voltages — guards
-        // against a flat-start false pass that would zero every branch anyway.
+        // against a flat start false pass that would zero every branch anyway.
         assert!(
             col_f64(br, "pf").value(1).abs() > 1e-6,
             "in-service branch should carry nonzero flow"
@@ -2794,7 +2794,7 @@ mod tests {
 
     // --- reader (issue #60) ------------------------------------------------
 
-    /// The power-flow-complete fingerprint the read contract preserves: element
+    /// The power flow complete fingerprint the read contract preserves: element
     /// counts, nodal load / generation totals, branch impedance sums, base_mva,
     /// and the reference-bus count. Bus ids, per-element granularity, costs, and
     /// HVDC/storage are excluded by the contract.
@@ -3113,7 +3113,7 @@ mod tests {
 
     #[test]
     fn read_allows_a_case_with_no_generators() {
-        // gen_data may be legitimately empty (a power-flow case with no mpc.gen);
+        // gen_data may be legitimately empty (a power flow case with no mpc.gen);
         // the scenario guard must not reject it — only a *partial* table (rows for
         // other scenarios but not this one) is an error.
         let net = Network::in_memory(

@@ -14,8 +14,10 @@ Four rows, from leanest to fullest:
 
     python benchmarks/bench_parse.py [path/to/case.m ...]
 
-Run it with the venv that has the extensions built (`maturin develop --release`).
-Install the comparison baselines with `pip install 'powerio[bench]'`.
+Run it with the venv that has the extension and benchmark baselines installed:
+
+    .venv/bin/python -m pip install --upgrade pip maturin -r benchmarks/requirements.txt
+    env VIRTUAL_ENV=$PWD/.venv .venv/bin/maturin develop --release
 """
 
 import json
@@ -88,11 +90,12 @@ def bench_case(path: Path):
 
         rows.append(("matpowercaseframes: parse", *timed(lambda: CaseFrames(str(path)))))
     except ImportError as exc:
-        # A present-but-broken install should show its own error, not "skipping".
         if getattr(exc, "name", None) not in ("matpowercaseframes", None):
             raise
-        print("matpowercaseframes not installed; skipping the baseline row.")
-        print("  pip install 'powerio[bench]'")
+        raise RuntimeError(
+            "matpowercaseframes is required for the published Python benchmark; "
+            "install benchmarks/requirements.txt into the same venv"
+        ) from exc
     except Exception as exc:  # noqa: BLE001 - baseline readers raise on some cases
         print(
             "matpowercaseframes failed on this case: "
@@ -108,9 +111,11 @@ def bench_case(path: Path):
             from pandapower.converter import from_mpc
 
             rows.append(("pandapower: from_mpc", *timed(lambda: from_mpc(str(path)))))
-        except ImportError:
-            print("pandapower not installed; skipping the pandapower row.")
-            print("  pip install pandapower matpowercaseframes")
+        except ImportError as exc:
+            raise RuntimeError(
+                "pandapower is required for the published Python benchmark; "
+                "install benchmarks/requirements.txt into the same venv"
+            ) from exc
         except Exception as exc:  # noqa: BLE001 - from_mpc raises on some cases (pp 3.2.2)
             print(f"pandapower from_mpc failed on this case: {type(exc).__name__}: {exc}")
 
@@ -121,13 +126,14 @@ def bench_case(path: Path):
         print(f"{name:<{width}}  {best:>10.1f}  {median:>12.1f}")
     print()
 
-    # The two rows render_tables.py needs for the RESULTS pandapower table; round to
-    # the 1 decimal the published table shows. matpowercaseframes is None when its
+    # Rows render_tables.py needs for the RESULTS pandapower table; round to the
+    # 1 decimal the published table shows. matpowercaseframes is None when its
     # baseline is unavailable for this case.
     medians = {name: median for name, _, median in rows}
     return {
         "case": path.stem,
         "powerio_parse_ms": round(medians["powerio: parse"], 1),
+        "powerio_matrix_ms": round(medians["powerio[matrix]: parse + Y_bus + B'"], 1),
         "matpowercaseframes_ms": round(medians["matpowercaseframes: parse"], 1)
         if "matpowercaseframes: parse" in medians else None,
     }

@@ -30,10 +30,11 @@
 # rendered into the matrix below.
 #
 # Prereqs: `cargo build --release -p powerio-capi`, the powerio Python extension
-# built into .venv (`maturin develop --release`), the Julia env instantiated
-# (`julia --project=benchmarks -e 'using Pkg; Pkg.instantiate()'`), and the Python
-# oracle tools (`pip install -r benchmarks/requirements.txt`). All oracle tools are
-# benchmark-scoped, not powerio deps.
+# built into the Python oracle venv (`.venv` by default), the Julia env
+# instantiated (`julia --project=benchmarks -e 'using Pkg; Pkg.instantiate()'`),
+# and the Python oracle tools (`.venv/bin/python -m pip install -r
+# benchmarks/requirements.txt`). All oracle tools are benchmark scoped, not
+# powerio deps.
 #
 #   bash benchmarks/run_validation.sh
 #
@@ -42,23 +43,39 @@
 set -uo pipefail
 cd "$(dirname "$0")/.."
 
-PY="${PYTHON:-.venv/bin/python}"
+export XDG_CACHE_HOME="${XDG_CACHE_HOME:-$PWD/.cache}"
+export MPLCONFIGDIR="${MPLCONFIGDIR:-$XDG_CACHE_HOME/matplotlib}"
+mkdir -p "$MPLCONFIGDIR" "$XDG_CACHE_HOME/fontconfig"
+
+if [ -n "${PYTHON:-}" ]; then
+    PY="$PYTHON"
+else
+    PY=""
+    for candidate in .venv/bin/python .venv-validate/bin/python .venv312/bin/python python3; do
+        if command -v "$candidate" >/dev/null 2>&1 &&
+            "$candidate" -c 'import sys; raise SystemExit(sys.version_info < (3, 11))' >/dev/null 2>&1; then
+            PY="$candidate"
+            break
+        fi
+    done
+    if [ -z "$PY" ]; then
+        echo "error: Python 3.11+ is required for the validation oracle stack" >&2
+        echo "hint: python3.12 -m venv .venv && .venv/bin/python -m pip install -r benchmarks/requirements.txt" >&2
+        exit 1
+    fi
+fi
 JL=(julia --project=benchmarks)
 TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT
 export PIO_RESULTS_TSV="$TMP/results.tsv"
 : > "$PIO_RESULTS_TSV"
 
-# The full 5x5 matrix needs the egret package (the egret oracle); it's a benchmark
-# dependency, not a powerio one. Skip that one leg with a notice if it isn't
-# installed, rather than failing the whole run. The egret read-side leg below
-# needs only powerio + PowerModels, so it runs regardless.
-have_egret=1
-"$PY" -c "import egret" 2>/dev/null || have_egret=0
-have_pypsa=1
-"$PY" -c "import pypsa" 2>/dev/null || have_pypsa=0
-have_pandapower=1
-"$PY" -c "import pandapower" 2>/dev/null || have_pandapower=0
+if ! "$PY" -c "import egret, pandapower, pypsa" >/dev/null 2>&1; then
+    echo "error: validation oracle imports failed for $PY" >&2
+    echo "hint: .venv/bin/python -m pip install -r benchmarks/requirements.txt" >&2
+    "$PY" -c "import egret, pandapower, pypsa"
+    exit 1
+fi
 
 MCASES=(
     tests/data/case9.m
@@ -101,38 +118,18 @@ echo "=== PowerModels + ExaPowerIO comparisons ==="
 # 4. pandapower parse + Y_bus over every case (one Python process; n/a where its
 #    reader can't parse the case). Nonzero exit == a real mismatch, counted below.
 # 4b. pandapower JSON converter output loaded by pandapower itself.
-# CI installs pandapower unconditionally; the guard keeps local runs without
-# the oracle stack from failing the leg count, mirroring the pypsa leg.
-if [ "$have_pandapower" -eq 0 ]; then
-    echo "=== pandapower: skipped (not installed; pip install -r benchmarks/requirements.txt) ==="
-    for c in "${MCASES[@]}"; do
-        printf '%s\tpp\tSKIP(pandapower)\n' "$(basename "${c%.m}")" >>"$PIO_RESULTS_TSV"
-        printf '%s\tpp-json\tSKIP(pandapower)\n' "$(basename "${c%.m}")" >>"$PIO_RESULTS_TSV"
-    done
-else
-    echo "=== pandapower (parse + Y_bus) ==="
-    "$PY" benchmarks/validate_pandapower.py "${MCASES[@]}" || true
-    echo "=== pandapower JSON converter ==="
-    "$PY" benchmarks/validate_pandapower_converter.py "${MCASES[@]}" || true
-fi
+echo "=== pandapower (parse + Y_bus) ==="
+"$PY" benchmarks/validate_pandapower.py "${MCASES[@]}" || true
+echo "=== pandapower JSON converter ==="
+"$PY" benchmarks/validate_pandapower_converter.py "${MCASES[@]}" || true
 
 # 4c. PyPSA CSV converter output loaded by PyPSA itself.
 echo "=== PyPSA CSV converter ==="
-if [ "$have_pypsa" -eq 0 ]; then
-    echo "  skipped: pypsa not installed (pip install -r benchmarks/requirements.txt)"
-    for c in "${MCASES[@]}"; do
-        printf '%s\tpypsa\tSKIP(pypsa)\n' "$(basename "${c%.m}")" >>"$PIO_RESULTS_TSV"
-    done
-else
-    "$PY" benchmarks/validate_pypsa.py "${MCASES[@]}" || true
-fi
+"$PY" benchmarks/validate_pypsa.py "${MCASES[@]}" || true
 
 # 5. Full reader x writer matrix (its own batched process).
 echo "=== full reader x writer matrix (PowerModels + egret oracles) ==="
-if [ "$have_egret" -eq 0 ]; then
-    echo "  skipped: egret not installed (pip install -r benchmarks/requirements.txt)"
-    printf 'matrix(5x5)\tall-cells\tSKIP(egret)\n' >>"$PIO_RESULTS_TSV"
-elif "$PY" benchmarks/validate_matrix.py; then
+if "$PY" benchmarks/validate_matrix.py; then
     printf 'matrix(5x5)\tall-cells\tok\n' >>"$PIO_RESULTS_TSV"
 else
     printf 'matrix(5x5)\tall-cells\tFAIL\n' >>"$PIO_RESULTS_TSV"

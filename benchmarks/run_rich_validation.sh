@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 # Rich data model validation tier.
 #
-# Strict committed fixtures fail this script. Local corpora are opt in and
-# reported under benchmarks/results without turning external data quirks into a
-# release gate.
+# Strict committed fixtures fail this script. The PowerModels rich oracle needs
+# Julia. Local corpora are opt in and reported under benchmarks/results without
+# turning external data quirks into a release gate.
 #
 #   bash benchmarks/run_rich_validation.sh
 #   bash benchmarks/run_rich_validation.sh --root /path/to/corpus --root /path/to/other/corpus
@@ -11,9 +11,26 @@
 set -uo pipefail
 cd "$(dirname "$0")/.."
 
-PY="${PYTHON:-.venv/bin/python}"
-if [ ! -x "$PY" ]; then
-    PY="${PYTHON:-python3}"
+export XDG_CACHE_HOME="${XDG_CACHE_HOME:-$PWD/.cache}"
+export MPLCONFIGDIR="${MPLCONFIGDIR:-$XDG_CACHE_HOME/matplotlib}"
+mkdir -p "$MPLCONFIGDIR" "$XDG_CACHE_HOME/fontconfig"
+
+if [ -n "${PYTHON:-}" ]; then
+    PY="$PYTHON"
+else
+    PY=""
+    for candidate in .venv/bin/python .venv-validate/bin/python .venv312/bin/python python3; do
+        if command -v "$candidate" >/dev/null 2>&1 &&
+            "$candidate" -c 'import sys; raise SystemExit(sys.version_info < (3, 11))' >/dev/null 2>&1; then
+            PY="$candidate"
+            break
+        fi
+    done
+    if [ -z "$PY" ]; then
+        echo "error: Python 3.11+ is required for the rich validation oracle stack" >&2
+        echo "hint: python3.12 -m venv .venv && .venv/bin/python -m pip install -r benchmarks/requirements.txt" >&2
+        exit 1
+    fi
 fi
 JL=(julia --project=benchmarks)
 OUT="${POWERIO_RICH_RESULTS_DIR:-benchmarks/results}"
@@ -101,7 +118,12 @@ cat >"$TMP/rich_powermodels.json" <<'JSON'
 }
 JSON
 
-if command -v julia >/dev/null 2>&1; then
+if ! command -v julia >/dev/null 2>&1; then
+    echo "error: julia is required for the PowerModels rich oracle" >&2
+    echo "hint: julia --project=benchmarks -e 'using Pkg; Pkg.instantiate()'" >&2
+    strict_fail=$((strict_fail + 1))
+    printf 'rich_powermodels_oracle\tPMrich\tFAIL\n' >"$OUT/rich_oracle.tsv"
+else
     echo "=== PowerModels rich oracle ==="
     : >"$TMP/results.tsv"
     if "${JL[@]}" benchmarks/validate_oracles.jl rich "$TMP" "$TMP/rich_powermodels.json"; then
@@ -110,9 +132,6 @@ if command -v julia >/dev/null 2>&1; then
         strict_fail=$((strict_fail + 1))
         cp "$TMP/results.tsv" "$OUT/rich_oracle.tsv" 2>/dev/null || true
     fi
-else
-    echo "=== PowerModels rich oracle: skipped (julia not on PATH) ==="
-    printf 'rich_powermodels_oracle\tPMrich\tSKIP(julia)\n' >"$OUT/rich_oracle.tsv"
 fi
 
 run_report "local rich corpus scan" \

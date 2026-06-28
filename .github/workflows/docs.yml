@@ -37,6 +37,8 @@ jobs:
         python-version: "3.12"
     - uses: dtolnay/rust-toolchain@stable
     - uses: Swatinem/rust-cache@v2
+    - name: Install mdBook
+      run: cargo install mdbook --version 0.5.2 --locked
     # -D warnings turns a broken intra-doc link into a failed build, so the docs
     # can't rot silently. --all-features renders the gridfm/arrow/kkt surface.
     - name: Build docs
@@ -128,6 +130,8 @@ jobs:
             (out / f"{name}.html").write_text(TPL.format(title=title, crumb=crumb, body=body))
             print("rendered", name)
         PY
+    - name: Build book
+      run: mdbook build
     # The landing page separates the two doc deployments so neither shadows the
     # other: docs.rs renders the crates.io releases of powerio/powerio-matrix,
     # while this site renders main (all four crates, including the publish=false
@@ -191,7 +195,7 @@ jobs:
           <img src="_assets/powerio-logo.svg" alt="PowerIO logo">
           <h1>PowerIO docs</h1>
         </header>
-        <p class="tagline">Fast case parsing and conversion: &ldquo;pandoc for power systems&rdquo;</p>
+        <p class="tagline">Case parsing, conversion, matrices, and language bindings.</p>
         <dl>
           <div>
             <dt>released / docs.rs</dt>
@@ -209,7 +213,8 @@ jobs:
           </div>
           <div>
             <dt>guides</dt>
-            <dd><a href="guides/index.html">overview</a>
+            <dd><a href="book/index.html">book</a>
+                <a href="guides/index.html">overview</a>
                 <a href="guides/format-fidelity.html">format fidelity</a>
                 <a href="guides/matrices.html">matrices</a>
                 <a href="guides/dcopf-bundle.html">DC OPF bundle</a>

@@ -52,9 +52,8 @@ jobs:
         path: ~/.cache/pip
         key: pip-validate-${{ runner.os }}-${{ hashFiles('benchmarks/requirements.txt') }}
         restore-keys: pip-validate-${{ runner.os }}-
-    # run_validation.sh defaults to .venv/bin/python; build the powerio wheel into
-    # that venv and add the pandapower + egret oracles. Local runs may skip egret,
-    # but CI verifies imports below.
+    # run_validation.sh defaults to .venv/bin/python when it is Python 3.11+.
+    # Build the powerio wheel into that venv and add the Python oracles.
     - name: Build the powerio wheel and oracles into .venv
       env:
         VIRTUAL_ENV: ${{ github.workspace }}/.venv
@@ -63,9 +62,8 @@ jobs:
         .venv/bin/pip install --upgrade pip maturin
         .venv/bin/maturin develop --release
         .venv/bin/pip install -r benchmarks/requirements.txt
-    # In CI the oracle stack must be present: a broken egret, pandapower, or
-    # pypsa import would otherwise let run_validation.sh skip that leg and
-    # still pass.
+    # The validation script also checks this, but keep the failure close to the
+    # setup step.
     - name: Verify the oracle stack imports
       run: .venv/bin/python -c "import egret, pandapower, pypsa"
     - name: Run the validation matrix

@@ -3,6 +3,8 @@
 Reference material that does not fit in the top level [README](../README.md) or a
 crate doc comment.
 
+- [book/](book/SUMMARY.md): the mdBook source for the reader-facing guides on
+  architecture, formats, matrices, GridFM, performance, reliability, and bindings.
 - [format-fidelity.md](format-fidelity.md): numeric conventions every reader
   and writer follows, how they're validated against four independent tools, and the
   per-format limits reported in `Conversion::warnings`.

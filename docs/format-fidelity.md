@@ -81,15 +81,19 @@ validators run alongside this matrix and are reported as separate legs.
 
 ```
 cargo build --release -p powerio-capi
-maturin develop --release                          # the powerio wheel
+python3.12 -m venv .venv
+.venv/bin/python -m pip install --upgrade pip maturin -r benchmarks/requirements.txt
+env VIRTUAL_ENV=$PWD/.venv .venv/bin/maturin develop --release
 julia --project=benchmarks -e 'using Pkg; Pkg.instantiate()'
-pip install -r benchmarks/requirements.txt         # pandapower + egret + PyPSA oracles
 bash benchmarks/run_validation.sh
 ```
 
 The oracle tools (PowerModels.jl, egret, ExaPowerIO.jl, pandapower, PyPSA) are
 benchmark scoped: they are declared in `benchmarks/Project.toml` and
 `benchmarks/requirements.txt`, never as dependencies of the powerio package.
+`benchmarks/run_validation.sh` requires the Python oracles to import in the
+selected Python 3.11+ environment; a missing PyPSA, pandapower, or egret import
+is a setup failure.
 
 ## Known limits
 

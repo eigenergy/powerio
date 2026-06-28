@@ -88,9 +88,9 @@ result was wrong everywhere it could be:
 7. **Concise headers, CSV delimiting, DataName, create_if_not_found,
    SCRIPT sections, multiline value rows: unsupported.** None appear in the
    ACTIVSg exports, all are legal aux per the format guide.
-8. **No structural fidelity.** Echoing back the same format relied entirely
-   on the retained source; converting aux to aux through the typed model
-   reduced 21 object types to the writer's 5.
+8. **No structural fidelity.** Writing PowerWorld AUX back as AUX relied
+   entirely on the retained source; rebuilding AUX from the typed model reduced
+   21 object types to the writer's 5.
 
 Counts that survived the baseline: 200 buses, 49 generators, 160 loads,
 4 shunts, 246 branches (180 + 66). The sibling `case_ACTIVSg200.m` carries
@@ -129,7 +129,7 @@ Counts that survived the baseline: 200 buses, 49 generators, 160 loads,
 - Branch identity (circuit ID, device type) and substation coordinates ride
   in element extras under PowerWorld field names (`LineCircuit`,
   `BranchDeviceType`, `Latitude:1`, ...), so the aux writer reproduces them
-  and cross format writers report them as extras.
+  and writers for other file types report them as extras.
 - Generator has no extras map (a deliberate performance decision), so GenID
   and regulation fields are reachable only through the generic layer.
 - Aux exports print f32 noise in some fields (`BusNomVolt`

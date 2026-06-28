@@ -120,10 +120,11 @@ impl Pipeline {
 
         let mut files = Vec::new();
         let mut matrices_meta = Vec::new();
+        let mut ybus_cache = None;
 
         for &kind in &self.matrices {
             let matrix_path = out_dir.join(format!("{}_{}.mtx", view.name(), kind.slug()));
-            let matrix = self.build(&view, kind)?;
+            let matrix = self.build_for_run(&view, kind, &mut ybus_cache)?;
             write_mtx(&matrix, &matrix_path)?;
             let stats = MatrixStats::from_csr(&matrix);
             let sddm = sddm_check(&matrix);
@@ -184,8 +185,17 @@ impl Pipeline {
         })
     }
 
-    fn build(&self, case: &IndexedNetwork, kind: MatrixKind) -> Result<sprs::CsMat<f64>> {
-        build_kind(case, kind, &self.options)
+    fn build_for_run(
+        &self,
+        case: &IndexedNetwork,
+        kind: MatrixKind,
+        ybus_cache: &mut Option<YbusCache>,
+    ) -> Result<sprs::CsMat<f64>> {
+        match kind {
+            MatrixKind::YbusG => take_ybus_g(case, &self.options, ybus_cache),
+            MatrixKind::YbusB => take_ybus_b(case, &self.options, ybus_cache),
+            _ => build_kind(case, kind, &self.options),
+        }
     }
 
     fn build_rhs(&self, case: &IndexedNetwork, kind: MatrixKind) -> Option<Vec<f64>> {
@@ -226,6 +236,53 @@ impl Pipeline {
         };
         Some(v)
     }
+}
+
+struct YbusCache {
+    g: Option<sprs::CsMat<f64>>,
+    b: Option<sprs::CsMat<f64>>,
+}
+
+fn fill_ybus_cache(
+    view: &IndexedNetwork,
+    opts: &BuildOptions,
+    ybus_cache: &mut Option<YbusCache>,
+) -> Result<()> {
+    let parts = build_ybus(view, opts)?;
+    *ybus_cache = Some(YbusCache {
+        g: Some(parts.g),
+        b: Some(parts.b),
+    });
+    Ok(())
+}
+
+fn take_ybus_g(
+    view: &IndexedNetwork,
+    opts: &BuildOptions,
+    ybus_cache: &mut Option<YbusCache>,
+) -> Result<sprs::CsMat<f64>> {
+    if ybus_cache.as_ref().is_none_or(|c| c.g.is_none()) {
+        fill_ybus_cache(view, opts, ybus_cache)?;
+    }
+    Ok(ybus_cache
+        .as_mut()
+        .and_then(|c| c.g.take())
+        .expect("Ybus cache was just filled, so the real part must be present"))
+}
+
+fn take_ybus_b(
+    view: &IndexedNetwork,
+    opts: &BuildOptions,
+    ybus_cache: &mut Option<YbusCache>,
+) -> Result<sprs::CsMat<f64>> {
+    if ybus_cache.as_ref().is_none_or(|c| c.b.is_none()) {
+        fill_ybus_cache(view, opts, ybus_cache)?;
+    }
+    let b = ybus_cache
+        .as_mut()
+        .and_then(|c| c.b.take())
+        .expect("Ybus cache was just filled, so the imaginary part must be present");
+    Ok(negate_into(b))
 }
 
 /// Build the square matrix for one [`MatrixKind`] from an indexed network. The

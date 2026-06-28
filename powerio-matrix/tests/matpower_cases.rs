@@ -141,6 +141,7 @@ fn pipeline_writes_expected_files_for_case9() {
         matrices: vec![
             MatrixKind::BPrime,
             MatrixKind::BDoublePrime,
+            MatrixKind::YbusG,
             MatrixKind::YbusB,
         ],
         options: BuildOptions::default(),
@@ -157,6 +158,7 @@ fn pipeline_writes_expected_files_for_case9() {
         .collect();
     assert!(names.iter().any(|n| n == "case9_bprime.mtx"));
     assert!(names.iter().any(|n| n == "case9_bdoubleprime.mtx"));
+    assert!(names.iter().any(|n| n == "case9_ybus_real.mtx"));
     assert!(names.iter().any(|n| n == "case9_ybus_imag.mtx"));
     assert!(names.iter().any(|n| n == "case9_meta.json"));
     assert!(names.iter().any(|n| n.contains("rhs.mtx")));
@@ -165,6 +167,16 @@ fn pipeline_writes_expected_files_for_case9() {
     let bprime_path = tmp.join("case9_bprime.mtx");
     let reread = powerio_matrix::io::read_mtx(&bprime_path).unwrap();
     assert!(sddm_check(&reread) || MatrixStats::from_csr(&reread).m_matrix_sign);
+
+    let view = IndexedNetwork::new(&net);
+    let ybus = build_ybus(&view, &BuildOptions::default()).unwrap();
+    let real = powerio_matrix::io::read_mtx(tmp.join("case9_ybus_real.mtx")).unwrap();
+    assert_csr_eq(&real, &ybus.g);
+
+    let mut expected_imag = ybus.b;
+    expected_imag.data_mut().iter_mut().for_each(|v| *v = -*v);
+    let imag = powerio_matrix::io::read_mtx(tmp.join("case9_ybus_imag.mtx")).unwrap();
+    assert_csr_eq(&imag, &expected_imag);
 }
 
 fn tempdir() -> PathBuf {
@@ -177,4 +189,14 @@ fn tempdir() -> PathBuf {
     ));
     std::fs::create_dir_all(&p).unwrap();
     p
+}
+
+fn assert_csr_eq(left: &sprs::CsMat<f64>, right: &sprs::CsMat<f64>) {
+    assert_eq!(left.rows(), right.rows());
+    assert_eq!(left.cols(), right.cols());
+    let left = left.to_dense();
+    let right = right.to_dense();
+    for ((i, j), &v) in left.indexed_iter() {
+        assert!((v - right[[i, j]]).abs() < 1e-12, "[{i},{j}]");
+    }
 }

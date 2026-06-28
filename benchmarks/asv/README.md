@@ -12,10 +12,14 @@ PATH.
 ```
 pip install asv
 cd benchmarks/asv
+asv check -E existing:../../.venv/bin/python
+asv run --quick --show-stderr -E existing:../../.venv/bin/python --dry-run
 asv run main^!          # benchmark the current commit
 asv run main~10..main   # or a range of history
 asv publish && asv preview
 ```
 
-The first `asv run` is also what validates the maturin `build_command`; if the wheel
-build needs a tweak for your platform, it surfaces there.
+The `existing` commands validate the benchmark package and do one unsaved smoke
+run against the local editable wheel, useful before committing changes. The
+first real `asv run` is also what validates the maturin `build_command`; if the
+wheel build needs a tweak for your platform, it surfaces there.
