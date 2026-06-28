@@ -1,8 +1,9 @@
 # Format fidelity and validation
 
 How powerio's readers and writers are validated, the conventions they follow, and
-the known limits. The headline fidelity table is in the [README](../README.md);
-this document covers the conventions and the proof behind it.
+the known limits. The headline fidelity table is in the
+[top level README](https://github.com/eigenergy/powerio#format-fidelity); this
+document covers the conventions and the proof behind it.
 
 ## Conventions
 
@@ -166,4 +167,5 @@ in Python), naming the table and counting the affected rows.
   a unity ratio, zero shift transformer in the source is thus read as a line (the
   power flow is identical). The losses are returned as a warnings list on
   `GridfmRead`, mirroring `Conversion::warnings`. The same direction writer is
-  documented in the [README](../README.md#gridfm).
+  documented in the
+  [top level README](https://github.com/eigenergy/powerio#gridfm).

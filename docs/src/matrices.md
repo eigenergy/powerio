@@ -28,6 +28,19 @@ reference bus. PTDF is dense `m×n`. The DC OPF
 instance bundle (`A`, `b`, `L`, costs, bounds, thermal limits, `C_g`) is documented in
 [dcopf-bundle.md](dcopf-bundle.md).
 
+## GridFM datasets
+
+The GridFM export is a Parquet dataset under `<case>/raw/` with `bus_data`,
+`gen_data`, `branch_data`, and `y_bus_data`. A single parsed case writes one
+scenario. A scenario batch row stacks snapshots that share the same element set
+and uses the `scenario` column as the key.
+
+GridFM read is the ML to classical return path. It recovers bus types, voltages,
+limits, nodal load and shunt totals, generator dispatch and bounds, branch
+parameters, and `base_mva`. It cannot recover original bus ids, per element load
+and shunt granularity, piecewise and cubic costs, HVDC, or storage; those losses
+are returned as warnings.
+
 ## Conventions
 
 - **Positive Laplacian matrices.** Off-diagonal `< 0`, diagonal `> 0`, with `diag = Σ|off-diag|`

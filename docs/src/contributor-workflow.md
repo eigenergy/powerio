@@ -40,7 +40,7 @@ Use the smallest gate set that covers the changed surface, then run the full
 | Python package metadata or extras | `maturin build --release --out /tmp/powerio-wheel-check`; inspect wheel `METADATA` |
 | Julia binding contract | build `powerio-capi --features arrow,gridfm,dist`, then run `PowerIO.jl` tests with `POWERIO_CAPI` |
 | CLI behavior | `cargo test -p powerio-cli --test cli` |
-| documentation or website | `mdbook build`; `mdbook test`; check old guide links that the book points at |
+| documentation or website | `mdbook build`; `mdbook test`; check stale links to retired guide outputs |
 
 `benchmarks/run_validation.sh` requires the Python oracle stack in the same
 Python 3.11+ venv as the local wheel. Missing PyPSA, pandapower, or egret is a

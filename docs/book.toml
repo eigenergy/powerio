@@ -3,14 +3,12 @@ title = "PowerIO"
 description = "Power system case parsing, conversion, matrix extraction, and language bindings."
 authors = ["PowerIO contributors"]
 language = "en"
-src = "docs/book"
 
 [build]
-build-dir = "target/doc/book"
 create-missing = false
 
 [output.html]
 git-repository-url = "https://github.com/eigenergy/powerio"
-edit-url-template = "https://github.com/eigenergy/powerio/edit/main/{path}"
-site-url = "/powerio/book/"
-additional-css = ["docs/book/theme/powerio.css"]
+edit-url-template = "https://github.com/eigenergy/powerio/edit/main/docs/{path}"
+site-url = "/powerio/guide/"
+additional-css = ["theme/powerio.css"]
