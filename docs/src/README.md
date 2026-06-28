@@ -33,7 +33,6 @@ Reference pages:
 - [reliability.md](reliability.md): local gates and what each gate proves.
 - [contributor-workflow.md](contributor-workflow.md): review, test, validation,
   and benchmark update workflow.
-- [releasing.md](releasing.md): release checklist.
 - Julia bindings: <https://github.com/eigenergy/PowerIO.jl>.
 
 Rendered API docs (rustdoc) for all crates:

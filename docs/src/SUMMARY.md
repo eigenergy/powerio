@@ -16,4 +16,3 @@
 - [Performance](performance.md)
 - [Reliability Evidence](reliability.md)
 - [Contributor Workflow](contributor-workflow.md)
-- [Releasing](releasing.md)
