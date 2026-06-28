@@ -1,5 +1,5 @@
 //! All-pairs converter harness. For every format with a reader, this checks the
-//! two-tier fidelity contract against the vendored cases:
+//! two-tier fidelity behavior against the vendored cases:
 //!
 //! - **core preservation** — MATPOWER → format → `Network` keeps the electrical
 //!   core (bus/branch/gen/load/shunt counts, total demand, total generation,

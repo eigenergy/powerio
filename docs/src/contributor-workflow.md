@@ -38,7 +38,7 @@ Use the smallest gate set that covers the changed surface, then run the full
 | PowerWorld binary reader | PowerWorld parser tests plus `cargo bench -p powerio --bench parse -- "parse_aux_|parse_pwb_"` |
 | C ABI | `scripts/capi-header-parity.sh`; `scripts/capi-smoke.sh`; `cargo test -p powerio-capi --no-default-features`; `cargo test -p powerio-capi --features arrow,gridfm,dist`; matching clippy runs |
 | Python package metadata or extras | `maturin build --release --out /tmp/powerio-wheel-check`; inspect wheel `METADATA` |
-| Julia binding contract | build `powerio-capi --features arrow,gridfm,dist`, then run `PowerIO.jl` tests with `POWERIO_CAPI` |
+| Julia binding compatibility | build `powerio-capi --features arrow,gridfm,dist`, then run `PowerIO.jl` tests with `POWERIO_CAPI` |
 | CLI behavior | `cargo test -p powerio-cli --test cli` |
 | documentation or website | `mdbook build`; `mdbook test`; check stale links to retired guide outputs |
 

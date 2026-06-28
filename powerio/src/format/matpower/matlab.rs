@@ -152,7 +152,7 @@ where
         }
     }
     // Entered the matrix (`[`) but never saw the closing `]`: the assignment is
-    // truncated. The old `find_matrix` rejected this; keep that contract rather
+    // truncated. The old `find_matrix` rejected this; keep that behavior rather
     // than silently accepting a partial matrix. A closed matrix sets `done`, so
     // a legitimate last row with no trailing `;` (handled by the flush below)
     // does not trip this.

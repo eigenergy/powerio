@@ -10,7 +10,7 @@ envelope shape and the stability policy. The crate is the implementation;
 A `.pio.json` file has two parts with different stability promises.
 
 1. **The envelope** — every field except `model`. This is the versioned,
-   documented contract: `schema`, `schema_version`, `producer`, `model_kind`,
+   documented surface: `schema`, `schema_version`, `producer`, `model_kind`,
    `origin`, `sources`, `source_maps`, `diagnostics`, `validation`, `summary`,
    `lowering_history`, `derived`. Its shape changes only under the versioning
    policy below.

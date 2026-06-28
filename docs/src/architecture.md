@@ -10,7 +10,7 @@ families and a `.pio.json` compiler package.
 - [pio-json-schema.md](pio-json-schema.md): the `.pio.json` field reference and
   the stability policy — the envelope is versioned, the nested IR payloads are
   experimental.
-- [v0.4-release-direction.md](v0.4-release-direction.md): the design contract
+- [v0.4-release-direction.md](v0.4-release-direction.md): the design direction
   for explicit `MulticonductorNetwork` to `BalancedNetwork` lowering.
 
 The package is implemented in the `powerio-pkg` crate.

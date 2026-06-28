@@ -47,7 +47,7 @@ fn activsg200_pwb_matches_its_aux_sibling() {
     // derived from the generators (PV where an in-service machine sits). The
     // aux marks exactly one Ref bus (189). The pwb bus types are therefore a
     // best effort, not asserted against the aux here; the electrical values
-    // above are the parity contract.
+    // above are the parity expectation.
     assert!(pwb.buses.iter().all(|b| b.kind != powerio::BusType::Ref));
     assert_eq!(
         aux.buses
@@ -60,7 +60,7 @@ fn activsg200_pwb_matches_its_aux_sibling() {
     // Loads and generators in per unit storage: f32 precision. Device
     // in-service status comes from a single byte whose meaning is only
     // partly validated (every device in this case is in service), so the
-    // electrical values are the parity contract, not the status flag.
+    // electrical values are the parity expectation, not the status flag.
     for (p, a) in pwb.loads.iter().zip(&aux.loads) {
         assert_eq!(p.bus, a.bus);
         assert!(
@@ -1188,7 +1188,7 @@ fn texas7k_pwb_matches_its_aux_and_matpower_siblings() {
     // The binary stores no slack flag and no bus type; the .m types every
     // generator bus PV whether or not its machines are in service, while
     // the derived pwb kinds mark only buses with an in service machine.
-    // The electrical values above are the bus parity contract.
+    // The electrical values above are the bus parity expectation.
     assert!(pwb.buses.iter().all(|b| b.kind != powerio::BusType::Ref));
 
     // Loads against the aux (f32 storage); per bus totals against the .m
@@ -1261,7 +1261,7 @@ fn texas7k_pwb_matches_its_aux_and_matpower_siblings() {
     assert_eq!(pwb.generators.iter().filter(|g| !g.in_service).count(), 94);
     // Placement, per bus dispatch, and statuses against the .m (printed at
     // 2 decimals; machine order within a bus is not preserved, so per bus
-    // aggregates are the contract).
+    // aggregates are the expectation).
     #[derive(Default)]
     #[allow(clippy::items_after_statements)]
     struct BusGens {

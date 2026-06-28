@@ -1,6 +1,6 @@
 name: Julia binding
 
-# Contract test: build this commit's C ABI and run PowerIO.jl's suite against it.
+# Compatibility test: build this commit's C ABI and run PowerIO.jl's suite against it.
 # A change to the pio_* surface or the Network JSON schema then fails in the repo
 # that caused it. The probe step checks out eigenergy/PowerIO.jl anonymously when
 # it is public; while it is private, add a token with read access to it as the
@@ -21,7 +21,7 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
-  contract:
+  compatibility:
     name: PowerIO.jl against this C ABI
     runs-on: ubuntu-latest
     steps:
@@ -36,7 +36,7 @@ jobs:
           echo "available=true" >> "$GITHUB_OUTPUT"
         else
           echo "available=false" >> "$GITHUB_OUTPUT"
-          echo "eigenergy/PowerIO.jl is unreachable (no POWERIO_JL_REPO_TOKEN secret, and the repo is not public); skipping the contract test."
+          echo "eigenergy/PowerIO.jl is unreachable (no POWERIO_JL_REPO_TOKEN secret, and the repo is not public); skipping the compatibility test."
         fi
     - uses: actions/checkout@v6
       if: steps.powerio-jl.outputs.available == 'true'

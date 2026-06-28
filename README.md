@@ -244,8 +244,8 @@ out in any classical format:
 powerio convert out/case14/raw --from gridfm --to matpower -o case14.m
 ```
 
-The `--from gridfm` read functionality is currently lossy. What it recovers, what it drops, and the warnings contract
-are in the [format fidelity guide](https://eigenergy.github.io/powerio/guides/format-fidelity.html). Improving `gridfm` read/write functionality is a key priority for the initial development of PowerIO.
+The `--from gridfm` read functionality is currently lossy. What it recovers, what it drops, and its warning behavior
+are in the [format fidelity guide](https://eigenergy.github.io/powerio/guide/format-fidelity.html). Improving `gridfm` read/write functionality is a key priority for the initial development of PowerIO.
 
 
 ## Validation

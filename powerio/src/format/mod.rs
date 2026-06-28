@@ -13,7 +13,7 @@
 //! numeric values, such as MATPOWER `Inf`/`NaN` angle limits, are written as
 //! JSON `null`.
 //!
-//! # Fidelity contract
+//! # Fidelity behavior
 //!
 //! Conversion is two-tier:
 //!

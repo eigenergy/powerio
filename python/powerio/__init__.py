@@ -666,7 +666,7 @@ def read_gridfm_scenarios(dir: Any) -> "list[GridfmRead]":
 
     Each scenario is rebuilt independently, so two scenarios may differ in branch
     status, bus types, and reference bus. See :func:`read_gridfm` for the lenient
-    directory resolution and the fidelity contract.
+    directory resolution and the fidelity behavior.
     """
     _require_gridfm()
     return [

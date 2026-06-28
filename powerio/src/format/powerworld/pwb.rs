@@ -8,7 +8,7 @@
 //! the file (substations, areas, contingencies, options) is inventoried in
 //! the docs and left undecoded.
 //!
-//! Robustness contract: every record is validated as it is parsed (bus
+//! Robustness rule: every record is validated as it is parsed (bus
 //! references must exist, floats must be finite and in range, record flags
 //! must be values this reader has seen and verified). A file that does not
 //! match the validated layout fails loudly; nothing is guessed silently.

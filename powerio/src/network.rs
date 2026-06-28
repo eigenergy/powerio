@@ -16,7 +16,7 @@
 //!   them and a cross-format writer can pass through what its target understands.
 //!
 //! Fully lossless any-to-any isn't possible (formats model different things);
-//! the contract is byte-exact same-format and maximal-fidelity cross-format with
+//! the guarantee is byte-exact same-format and maximal-fidelity cross-format with
 //! the writer reporting whatever it can't represent.
 
 use std::collections::BTreeMap;

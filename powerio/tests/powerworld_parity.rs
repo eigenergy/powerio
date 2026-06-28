@@ -133,7 +133,7 @@ fn activsg200_aux_vs_psse_structural() {
 /// Same day exports: aux values must match the MATPOWER sibling.
 #[test]
 // One sweep per quantity over the same fixture pair; splitting it would
-// scatter the parity contract.
+// scatter the parity rule.
 #[allow(clippy::too_many_lines)]
 fn activsg2000_june2016_aux_vs_matpower_values() {
     let (Some(aux_path), Some(m_path)) = (

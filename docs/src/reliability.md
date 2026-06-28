@@ -59,7 +59,7 @@ The gates prove these properties when all required legs pass:
 - PSS/E read and write paths agree with PowerModels.jl on counts and aggregate
   power quantities;
 - PowerModels JSON writer and reader paths are checked separately;
-- C ABI handle, string buffer, null, warning, and header/export contracts pass
+- C ABI handle, string buffer, null, warning, and header/export behavior passes
   their crate tests;
 - the checked in C header declares the same `pio_*` symbols exported from the
   Rust C ABI source;
@@ -78,4 +78,4 @@ The gates prove these properties when all required legs pass:
   integration tests.
 
 The gates do not prove every source format field is lossless. Known losses are
-part of the public contract and must surface as warnings.
+part of the public behavior and must surface as warnings.

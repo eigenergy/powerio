@@ -92,12 +92,12 @@ def test_basic_invariants(case14_raw):
     assert gen["is_slack_gen"].sum() >= 1
 
 
-def test_satisfies_graphkit_feature_contract(case14_raw):
+def test_satisfies_graphkit_feature_requirements(case14_raw):
     """The columns gridfm-graphkit's HeteroGridDatasetDisk reads, and the
     gen->bus reactive-limit aggregation it does, must work on our output.
 
     Replicates graphkit's column selection (powergrid_hetero_dataset.py) without
-    importing torch, so it proves the contract without the training stack.
+    importing torch, so it proves the expected shape without the training stack.
     """
     bus = pl.read_parquet(case14_raw / "bus_data.parquet")
     gen = pl.read_parquet(case14_raw / "gen_data.parquet")

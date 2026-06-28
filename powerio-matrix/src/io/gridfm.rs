@@ -2254,7 +2254,7 @@ mod tests {
     }
 
     /// case14 with every load and generator setpoint scaled — a perturbed
-    /// operating point on the same topology, the scenario-batch contract.
+    /// operating point on the same topology, the scenario-batch invariant.
     fn scaled(net: &Network, factor: f64) -> Network {
         let mut s = net.clone();
         for l in &mut s.loads {
@@ -2794,10 +2794,10 @@ mod tests {
 
     // --- reader (issue #60) ------------------------------------------------
 
-    /// The power flow complete fingerprint the read contract preserves: element
+    /// The power flow complete fingerprint the read path preserves: element
     /// counts, nodal load / generation totals, branch impedance sums, base_mva,
     /// and the reference-bus count. Bus ids, per-element granularity, costs, and
-    /// HVDC/storage are excluded by the contract.
+    /// HVDC/storage are excluded from that guarantee.
     #[allow(clippy::type_complexity)]
     fn fingerprint(
         net: &Network,

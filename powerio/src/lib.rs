@@ -6,7 +6,7 @@
 //! PowerWorld `.pwb` case files are read only; `.pwd` display files parse through
 //! [`parse_display_file`]. Case formats meet at the typed [`Network`], and
 //! [`Network::to_format`] reports whatever a target format cannot represent.
-//! See the [`crate::format`] module for the two-tier fidelity contract.
+//! See the [`crate::format`] module for the two-tier fidelity behavior.
 //!
 //! Writing back to the source format reproduces the file byte for byte:
 //! `parse → write → parse` returns the original text, down to comments and

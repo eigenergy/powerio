@@ -1929,7 +1929,7 @@ fn parse_str_rejects_malformed_pandapower_frames() {
 
 #[test]
 fn pypsa_written_folder_joins_on_bus_names() {
-    // The PyPSA import contract: every element bus column must match a
+    // The PyPSA import rule: every element bus column must match a
     // buses.csv name key exactly, or PyPSA rejects the folder. Write the
     // genuine fixture with named buses back out and check the join.
     let net = parse_file(data("pypsa/example"), None).unwrap().network;

@@ -26,7 +26,7 @@ pub fn write_matpower(net: &Network) -> String {
 /// MATPOWER conversion with fidelity warnings. The byte-exact echo path (a
 /// network that kept its MATPOWER source) drops nothing; the canonical path
 /// can't carry everything the neutral model holds, so it itemizes what it leaves
-/// out — the cross-format leg of the fidelity contract (see [`Conversion`]).
+/// out — the cross-format leg of the fidelity behavior (see [`Conversion`]).
 pub(crate) fn write_matpower_conversion(net: &Network) -> Conversion {
     let text = write_matpower(net);
     // Echoed retained MATPOWER source: byte-exact, nothing dropped.

@@ -45,7 +45,7 @@ snapshot, PyPSA CSV directories, and gridfm datasets are all format strings into
 language APIs keep their per-format conveniences (`to_matpower`, `from_json`,
 ...) as wrappers over the same paths.
 
-## C ABI and binding contracts
+## C ABI and binding compatibility
 
 The C ABI is the stable boundary for non Rust callers. Handles own parsed
 networks. Callers free network handles with `pio_network_free`, free returned
@@ -79,9 +79,9 @@ POWERIO_CAPI=$PWD/target/release/libpowerio_capi.dylib \
   julia --project=../PowerIO.jl -e 'using Pkg; Pkg.test()'
 ```
 
-Binding contracts checked in this audit:
+Binding checks covered in this audit:
 
-| surface | contract |
+| surface | behavior |
 | --- | --- |
 | Python base import | `import powerio` does not import NumPy, SciPy, NetworkX, Polars, pandas, pyarrow, or the MCP SDK |
 | Python optional paths | matrix, graph, GridFM inspection, pandas, MCP, and benchmark oracles live behind extras |
