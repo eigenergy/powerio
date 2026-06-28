@@ -2,15 +2,15 @@
 
 PowerIO parses power system case files into a typed `Network`, converts between
 formats, and builds sparse matrices and graph views for solver and analysis code.
-This guide is the reader facing documentation. Rustdoc remains the API reference.
+The guide covers behavior and workflows. Rustdoc covers API details.
 
-The trust model is evidence based:
+The rules these pages document are:
 
 - same format write back preserves retained source text;
 - cross format conversion keeps the electrical core and reports losses as
   warnings;
 - matrix builders state sign, tap, shift, shunt, and reference bus conventions;
-- benchmarks separate local wall time from correctness gates;
+- benchmarks keep local wall time separate from correctness gates;
 - C, Python, and Julia bindings share the same Rust parser and converter.
 
 Reference pages:
@@ -28,7 +28,7 @@ Reference pages:
 - [python.md](python.md): Python install extras and API examples.
 - [powerworld.md](powerworld.md): PowerWorld AUX, PWB, and PWD evidence.
 - [architecture.md](architecture.md): the compiler-IR architecture and the
-  `.pio.json` compiler package and its schema.
+  `.pio.json` package and its schema.
 - [performance.md](performance.md): benchmark tiers and refresh commands.
 - [reliability.md](reliability.md): local gates and what each gate proves.
 - [contributor-workflow.md](contributor-workflow.md): review, test, validation,
@@ -40,14 +40,13 @@ Rendered API docs (rustdoc) for all crates:
 
 ## Architecture
 
-`Network` is the canonical model: format neutral, with loads, shunts, branches,
-and generators as first-class records. Every reader produces a `Network` and every
-writer consumes one, so a format is one reader/writer at the hub rather than a
-pairwise converter, and adding one touches a single module. `IndexedNetwork` is the
-dense `[0, n)` analysis view derived from a `Network`; the matrix builders work from
-it. The parser, the hub, the source retaining writer, and the converters live in the
-`powerio` crate (light dependencies); the matrix builders and graph outputs live in
-`powerio-matrix`, which re-exports `powerio` so one import pulls in both layers.
+`Network` is the format neutral model. Loads, shunts, branches, and generators
+are first class records. Every reader produces a `Network`; every writer consumes
+one. Adding a format means adding one reader or writer at the hub, not pairwise
+converters. `IndexedNetwork` is the dense `[0, n)` analysis view derived from a
+`Network`; matrix builders work from that view. The parser, source retaining
+writer, and converters live in `powerio`; matrix builders and graph outputs live
+in `powerio-matrix`, which re-exports `powerio`.
 
 | crate | responsibility |
 | --- | --- |

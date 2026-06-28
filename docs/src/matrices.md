@@ -3,10 +3,11 @@
 The `powerio-matrix` crate builds sparse matrices and graph outputs for common power system representations. The outputs are derived from a parsed `Network`. The builders take the densely indexed `IndexedNetwork`, which maps bus ids to a
 contiguous `[0, n)`.
 
-**Note:** The experimental DC OPF bundle currently has its own schema in [dcopf-bundle.md](dcopf-bundle.md), and per-builder API
-detail is in the [crate docs](https://eigenergy.github.io/powerio/powerio_matrix/).
+The experimental DC OPF bundle has its own schema in
+[dcopf-bundle.md](dcopf-bundle.md). Per-builder API detail is in the
+[crate docs](https://eigenergy.github.io/powerio/powerio_matrix/).
 
-## Current capabilities
+## Capabilities
 
 | matrix | shape | builder | notes |
 | --- | --- | --- | --- |

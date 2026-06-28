@@ -219,7 +219,7 @@ What each column checks:
   MATPOWER uses). Compares counts, per-branch r/x/b/tap/shift, per-bus demand and
   shunt, and the full Y_bus element for element (re-indexed to powerio's bus order;
   endpoints renumbered to dense positions so makeYbus handles the gappy pegase bus
-  ids). powerio's first-class loads and shunts are summed back onto their bus for
+  ids). powerio's first class loads and shunts are summed back onto their bus for
   the per-bus comparison. `_m2ppc` is used instead of `from_mpc` because it runs
   before the `from_ppc` step that raises on dclines and parallel branches.
 - **pp-json** (`validate_pandapower_converter.py`): powerio's pandapower

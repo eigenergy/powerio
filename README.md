@@ -28,7 +28,7 @@ When writing back to the source format, PowerIO **returns the original file exac
 
 ### Formats
 
-The following formats are currently supported:
+Supported formats:
 - [MATPOWER](https://matpower.org/) `.m`
 - [PSS/E](https://www.siemens.com/global/en/products/energy/grid-software/planning/pss-software/pss-e.html) `.raw` revisions 33, 34, and 35
 - [PowerWorld](https://www.powerworld.com/WebHelp/Content/MainDocumentation_HTML/Case_Formats.htm) `.aux`, plus read only `.pwb` binary cases; `.pwd` display files parse through the separate display API. Vintage coverage and decode evidence live in the [PowerWorld guide](docs/src/powerworld.md).
@@ -181,7 +181,7 @@ The `powerio-matrix` Rust crate derives an `IndexedNetwork` with dense bus indic
 - Signed incidence, weighted Laplacian, and flow map matrices
 - PTDF and LODF sensitivity matrices
 - Adjacency matrix and `petgraph` graph output
-- Matrix Market bundles for low-level OPF solvers
+- Matrix Market bundles for OPF solvers
 - KKT operators for OPF solvers (experimental)
 
 Current conventions for signs, taps, phase shifts, per unit scaling, reference buses, and line parameters are documented in the [matrices guide](https://eigenergy.github.io/powerio/guide/matrices.html).
@@ -214,7 +214,7 @@ Build with `--features arrow` to enable `pio_to_arrow` over the
 ### PowerAgent
 
 
-PowerIO is part of the [PowerAgent](https://github.com/Power-Agent) community. The Python interface for PowerIO currently includes an optional MCP server exposing semantic tools for conversion, saving, summaries, parsing, normalization, matrix outputs, and display data.
+PowerIO is part of the [PowerAgent](https://github.com/Power-Agent) community. The Python package includes an optional MCP server with tools for conversion, saving, summaries, parsing, normalization, matrix outputs, and display data.
 
 
 ```
@@ -222,11 +222,10 @@ pip install 'powerio[mcp]'
 powerio-mcp
 ```
 
-The PowerIO MCP server is currently being integrated as the low-level data exchange substrate for the MCP server bundle in [PowerMCP](https://github.com/Power-Agent/PowerMCP). The PowerMCP bundle ships the same
-tool surface as PowerIO alongside a wide array of simulator servers, whose bridges ingest the transport directly.
+The PowerMCP bundle in [PowerMCP](https://github.com/Power-Agent/PowerMCP) uses the same PowerIO tool surface alongside simulator servers and bridge tools.
 
 ### GridFM (experimental)
-PowerIO ships first-class support for the [LF Energy](https://lfenergy.org/projects/gridfm/) open [Grid Foundation Model (GridFM)](https://github.com/gridfm) project. In the command line:
+PowerIO writes datasets for the [LF Energy](https://lfenergy.org/projects/gridfm/) open [Grid Foundation Model (GridFM)](https://github.com/gridfm) project. In the command line:
 
 ```
 powerio gridfm <case> -o <dir>
@@ -244,8 +243,8 @@ out in any classical format:
 powerio convert out/case14/raw --from gridfm --to matpower -o case14.m
 ```
 
-The `--from gridfm` read functionality is currently lossy. What it recovers, what it drops, and its warning behavior
-are in the [format fidelity guide](https://eigenergy.github.io/powerio/guide/format-fidelity.html). Improving `gridfm` read/write functionality is a key priority for the initial development of PowerIO.
+The `--from gridfm` read path is lossy. What it recovers, what it drops, and its warning behavior
+are in the [format fidelity guide](https://eigenergy.github.io/powerio/guide/format-fidelity.html).
 
 
 ## Validation

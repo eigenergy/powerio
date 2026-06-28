@@ -23,7 +23,7 @@ positive-sequence model for transmission power flow, OPF, matrices, and graph
 analysis. Every electrical quantity is a single `f64`, with no phase or conductor
 dimension. External bus ids are not dense matrix indices; the dense solver view
 is derived separately and preserves external ids. Loads and shunts are
-first-class records, not folded onto bus rows.
+first class records, not folded onto bus rows.
 
 ### `MulticonductorNetwork`
 
