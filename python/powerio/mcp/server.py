@@ -424,15 +424,19 @@ def _package_json_from_input(
 ) -> str:
     _one_input(path, content)
     opts = _opts(options)
+    from_l = _fmt(from_format)
     try:
         if path is not None:
             path = _local_path(path, purpose="path")
-            if Path(path).suffix.lower() == ".json":
+            if from_l in _PACKAGE_JSON_FORMATS or Path(path).suffix.lower() == ".json":
                 try:
                     text = Path(path).read_text(encoding="utf-8")
                 except OSError as exc:
                     raise ValueError(f"cannot read input: {exc}") from exc
-                if _looks_like_package_json(text):
+                if not _looks_like_package_json(text):
+                    if from_l in _PACKAGE_JSON_FORMATS:
+                        raise ValueError("input is not a .pio.json package envelope")
+                else:
                     powerio._powerio.package_model_kind(text)
                     return text
             return powerio._powerio.package_parse_file(
@@ -441,6 +445,8 @@ def _package_json_from_input(
         if _looks_like_package_json(content):
             powerio._powerio.package_model_kind(content)
             return content
+        if from_l in _PACKAGE_JSON_FORMATS:
+            raise ValueError("content is not a .pio.json package envelope")
         return powerio._powerio.package_parse_str(content, from_format)
     except powerio.PowerIOError as exc:
         raise ValueError(f"parse failed: {exc}") from exc
@@ -520,6 +526,14 @@ def _parse_any(
     _one_input(path, content)
     if path is not None:
         path = _local_path(path, purpose="path")
+    if _fmt(format) in _PACKAGE_JSON_FORMATS:
+        if path is not None:
+            try:
+                text = Path(path).read_text(encoding="utf-8")
+            except OSError as exc:
+                raise ValueError(f"cannot read input: {exc}") from exc
+            return _load_package(text)
+        return _load_package(content)
     if _is_gridfm_format(format):
         return _parse_transmission(path, content, format, options)
     if _is_dist_format(format):

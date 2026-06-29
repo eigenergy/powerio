@@ -513,15 +513,12 @@ fn build_package_from_str(text: &str, from_: Option<&str>) -> PyResult<CompilerP
         ));
     }
 
-    let distribution_format = if let Some(format) = from_ {
-        format_is_distribution(format).then(|| format.to_owned())
+    let source_format = if let Some(format) = from_ {
+        Some(format.to_owned())
     } else {
-        use powerio_matrix::format::routing::{Detection, Domain};
+        use powerio_matrix::format::routing::Detection;
         match powerio_matrix::format::routing::classify_json_text(text) {
-            Detection::Known(format) if format.domain() == Domain::Distribution => {
-                Some(format.name().to_owned())
-            }
-            Detection::Known(_) => None,
+            Detection::Known(format) => Some(format.name().to_owned()),
             Detection::Ambiguous => {
                 return Err(PyValueError::new_err("ambiguous JSON markers; pass from_"));
             }
@@ -529,14 +526,17 @@ fn build_package_from_str(text: &str, from_: Option<&str>) -> PyResult<CompilerP
         }
     };
 
-    if let Some(format) = distribution_format {
-        let net = powerio_dist::parse_str(text, &format).map_err(dist_to_pyerr)?;
-        let mut pkg = CompilerPackage::from_multiconductor(net);
-        pkg.run_sane_validation();
-        return Ok(pkg);
+    if let Some(format) = source_format.as_deref() {
+        if format_is_distribution(format) {
+            let net = powerio_dist::parse_str(text, format).map_err(dist_to_pyerr)?;
+            let mut pkg = CompilerPackage::from_multiconductor(net);
+            pkg.run_sane_validation();
+            return Ok(pkg);
+        }
     }
 
-    let parsed = powerio_matrix::parse_str(text, from_.unwrap_or("matpower")).map_err(to_pyerr)?;
+    let parsed = powerio_matrix::parse_str(text, source_format.as_deref().unwrap_or("matpower"))
+        .map_err(to_pyerr)?;
     let mut pkg = CompilerPackage::from_balanced(parsed.network);
     add_package_read_warning_diagnostics(
         &mut pkg,

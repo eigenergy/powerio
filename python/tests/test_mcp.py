@@ -159,6 +159,12 @@ def test_package_transport_flows_through_summary_matrix_and_save(tmp_path):
     server.save(out_path=str(out), package_json=package_json)
     assert powerio.parse_file(out).n_buses == 9
 
+    package_path = tmp_path / "case9.pio.json"
+    package_path.write_text(package_json)
+    assert server.summary(path=str(package_path), from_format="package")["elements"][
+        "buses"
+    ] == 9
+
 
 def test_package_transport_routes_distribution_by_model_kind():
     parsed = server.parse(path=str(DSS), transport="package")
@@ -215,6 +221,11 @@ def test_powermodels_json_still_routes_as_transmission():
     assert parsed["domain"] == "transmission"
     assert parsed["json_format"] == "powerio-json"
     assert parsed["summary"]["elements"]["buses"] == 9
+
+    packaged = server.parse(content=pm, transport="package")
+    assert packaged["domain"] == "transmission"
+    assert json.loads(packaged["package_json"])["model_kind"] == "balanced"
+    assert packaged["summary"]["elements"]["buses"] == 9
 
 
 def test_normalize_rejects_distribution():
