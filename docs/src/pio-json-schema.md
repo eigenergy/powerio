@@ -113,6 +113,16 @@ with `mapping_kind = defaulted`, and its retained source becomes
 `origin.retained_source`. Validation diagnostics attach the matching `source_ref`
 when the package has a source map for the reported field.
 
+`CompilerPackage::lower_multiconductor_to_balanced(options)` returns a new
+balanced package with `origin.kind = derived` and
+`origin.pass = "multiconductor-to-balanced"`. It preserves the parent
+`lowering_history` and appends a `LoweringRecord` whose options, assumptions,
+approximations, dropped fields, diagnostics, and validation status describe the
+pass. Lowered balanced source maps use `lowered`, `aggregated`,
+`converted_units`, `synthetic`, and `defaulted` mapping kinds. The pass is never
+implicit during package readback, format conversion, matrix construction,
+bindings, or MCP operations.
+
 ## Example
 
 ```json

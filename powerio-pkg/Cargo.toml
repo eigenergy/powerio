@@ -16,6 +16,7 @@ categories = ["science", "data-structures"]
 all-features = true
 
 [dependencies]
+num-complex = { workspace = true }
 powerio = { workspace = true }
 powerio-dist = { workspace = true }
 serde = { workspace = true }

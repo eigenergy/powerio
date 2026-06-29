@@ -109,11 +109,19 @@ by leading segment (`PARSE`, `READ`, `IR`, `VALIDATE`, `FIDELITY`, `LOWER`,
 Each pass that transforms one model into another appends a `LoweringRecord`
 (input and output kind, options, assumptions, approximations, dropped fields,
 diagnostics, validation status) to `lowering_history`. The record makes the
-transformation explicit. This change set defines the record shape; lowering
-implementations are separate work. The v0.4.0 direction for
-`MulticonductorNetwork` to `BalancedNetwork` lowering is in
-[the v0.4 release direction](https://eigenergy.github.io/powerio/guide/v0.4-release-direction.html); the implementation is
-tracked in #145.
+transformation explicit.
+
+`powerio_pkg::lower_multiconductor_to_balanced` lowers transparent three phase
+`MulticonductorNetwork` values into `BalancedNetwork` using the
+`FortescuePowerInvariant` sequence convention. Neutral conductors are Kron
+reduced before the sequence transform. One wire and two wire inputs,
+transformers, untyped objects, missing phase references, and closed switches
+return structured `LOWER.MULTI_TO_BALANCED.*` diagnostics. The package method
+`CompilerPackage::lower_multiconductor_to_balanced` returns a derived balanced
+package and appends the record. This pass is explicit only; readers, writers,
+matrix builders, bindings, and MCP operations do not run it implicitly. The
+v0.4.0 direction is in
+[the v0.4 release direction](https://eigenergy.github.io/powerio/guide/v0.4-release-direction.html).
 
 ## Versioning
 

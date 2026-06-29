@@ -9,8 +9,9 @@ use powerio_dist::{DistSourceFormat, MulticonductorNetwork};
 
 use crate::diagnostics::{DiagnosticSeverity, DiagnosticStage, StructuredDiagnostic};
 use crate::lowering::{
-    LoweringRecord, MulticonductorToBalancedOptions, MulticonductorToBalancedReadiness,
-    check_multiconductor_to_balanced_lowering,
+    LoweringRecord, MulticonductorToBalancedError, MulticonductorToBalancedOptions,
+    MulticonductorToBalancedReadiness, check_multiconductor_to_balanced_lowering,
+    lower_multiconductor_to_balanced,
 };
 use crate::model::{ModelKind, ModelPayload};
 use crate::provenance::{
@@ -260,7 +261,7 @@ impl CompilerPackage {
     }
 
     /// Check whether this package's multiconductor payload is ready for the
-    /// future explicit multiconductor to balanced lowering pass.
+    /// explicit multiconductor to balanced lowering pass.
     #[must_use]
     pub fn check_multiconductor_to_balanced_lowering(
         &self,
@@ -271,6 +272,52 @@ impl CompilerPackage {
                 MulticonductorToBalancedOptions::default(),
             )
         })
+    }
+
+    /// Explicitly lower a multiconductor package to a derived balanced package.
+    ///
+    /// This method only accepts packages whose payload is
+    /// [`ModelKind::Multiconductor`]. It does not mutate the input package.
+    pub fn lower_multiconductor_to_balanced(
+        &self,
+        options: MulticonductorToBalancedOptions,
+    ) -> Result<Self, MulticonductorToBalancedError> {
+        let Some(net) = self.as_multiconductor() else {
+            let diagnostic = StructuredDiagnostic::new(
+                "LOWER.MULTI_TO_BALANCED.WRONG_MODEL_KIND",
+                DiagnosticSeverity::Error,
+                DiagnosticStage::Lower,
+                format!(
+                    "multiconductor to balanced lowering requires a multiconductor package, got {:?}",
+                    self.model_kind
+                ),
+            );
+            return Err(MulticonductorToBalancedError::new(
+                options,
+                vec![diagnostic],
+            ));
+        };
+
+        let lowered = lower_multiconductor_to_balanced(net, options)?;
+        let mut record = lowered.record;
+        let mut output = CompilerPackage::from_balanced(lowered.network);
+        output.origin = Origin::Derived {
+            parent_package_id: self.package_id.clone(),
+            pass: "multiconductor-to-balanced".to_owned(),
+            options: record.options.clone(),
+        };
+        output.sources = derived_sources(self);
+        let source_id = output.sources.first().map(|source| source.id.as_str());
+        output.source_maps = match output.as_balanced() {
+            Some(balanced) => lowered_balanced_source_maps(net, balanced, source_id),
+            None => Vec::new(),
+        };
+        output.diagnostics.clone_from(&record.diagnostics);
+        output.lowering_history.clone_from(&self.lowering_history);
+        output.run_sane_validation();
+        record.validation_status = output.validation.status;
+        output.push_lowering(record);
+        Ok(output)
     }
 
     /// Run the package semantic validation profile and record its findings.
@@ -1291,6 +1338,258 @@ fn multiconductor_origin(net: &MulticonductorNetwork) -> Origin {
         },
         None => Origin::InMemory,
     }
+}
+
+fn derived_sources(parent: &CompilerPackage) -> Vec<SourceDescriptor> {
+    if !parent.sources.is_empty() {
+        return parent.sources.clone();
+    }
+    vec![SourceDescriptor {
+        id: "parent".to_owned(),
+        kind: "package".to_owned(),
+        path: None,
+        format: Some("pio-json".to_owned()),
+        hash: parent.package_id.clone(),
+    }]
+}
+
+fn lowered_balanced_source_maps(
+    input: &MulticonductorNetwork,
+    balanced: &BalancedNetwork,
+    source_id: Option<&str>,
+) -> Vec<SourceMapEntry> {
+    let Some(source_id) = source_id else {
+        return Vec::new();
+    };
+    let mut entries = Vec::new();
+    push_lowered_bus_maps(&mut entries, source_id, input);
+    push_lowered_branch_maps(&mut entries, source_id, input, balanced);
+    push_lowered_load_maps(&mut entries, source_id, input, balanced);
+    push_lowered_shunt_maps(&mut entries, source_id, input, balanced);
+    push_lowered_generator_maps(&mut entries, source_id, input, balanced);
+    entries
+}
+
+fn push_lowered_bus_maps(
+    entries: &mut Vec<SourceMapEntry>,
+    source_id: &str,
+    input: &MulticonductorNetwork,
+) {
+    for (idx, bus) in input.buses.iter().enumerate() {
+        for (field, mapping_kind) in [
+            ("id", MappingKind::Synthetic),
+            ("kind", MappingKind::Lowered),
+            ("vm", MappingKind::ConvertedUnits),
+            ("va", MappingKind::ConvertedUnits),
+            ("base_kv", MappingKind::ConvertedUnits),
+            ("area", MappingKind::Defaulted),
+            ("zone", MappingKind::Defaulted),
+            ("name", MappingKind::Lowered),
+        ] {
+            push_lowered_map(
+                entries,
+                source_id,
+                &format!("/model/balanced_network/buses/{idx}/{field}"),
+                "multiconductor_bus",
+                field,
+                mapping_kind,
+            );
+        }
+        for field in ["vmin", "vmax"] {
+            let mapping_kind = if bus.v_min.is_some() && bus.v_max.is_some() {
+                MappingKind::ConvertedUnits
+            } else {
+                MappingKind::Defaulted
+            };
+            push_lowered_map(
+                entries,
+                source_id,
+                &format!("/model/balanced_network/buses/{idx}/{field}"),
+                "multiconductor_bus",
+                field,
+                mapping_kind,
+            );
+        }
+    }
+}
+
+fn push_lowered_branch_maps(
+    entries: &mut Vec<SourceMapEntry>,
+    source_id: &str,
+    input: &MulticonductorNetwork,
+    balanced: &BalancedNetwork,
+) {
+    for (idx, branch) in balanced.branches.iter().enumerate() {
+        let record = "multiconductor_line";
+        for (field, mapping_kind) in [
+            ("from", MappingKind::Lowered),
+            ("to", MappingKind::Lowered),
+            ("r", MappingKind::ConvertedUnits),
+            ("x", MappingKind::ConvertedUnits),
+            ("b", MappingKind::ConvertedUnits),
+            ("in_service", MappingKind::Lowered),
+            ("tap", MappingKind::Defaulted),
+            ("shift", MappingKind::Defaulted),
+            ("angmin", MappingKind::Defaulted),
+            ("angmax", MappingKind::Defaulted),
+        ] {
+            push_lowered_map(
+                entries,
+                source_id,
+                &format!("/model/balanced_network/branches/{idx}/{field}"),
+                record,
+                field,
+                mapping_kind,
+            );
+        }
+        let has_rating = input
+            .lines
+            .get(idx)
+            .and_then(|line| input.linecode(&line.linecode))
+            .is_some_and(|code| code.i_max.is_some() || code.s_max.is_some());
+        let rate_kind = if has_rating {
+            MappingKind::ConvertedUnits
+        } else {
+            MappingKind::Defaulted
+        };
+        for field in ["rate_a", "rate_b", "rate_c"] {
+            push_lowered_map(
+                entries,
+                source_id,
+                &format!("/model/balanced_network/branches/{idx}/{field}"),
+                record,
+                field,
+                rate_kind,
+            );
+        }
+        if branch.charging.is_some() {
+            for field in ["g_fr", "b_fr", "g_to", "b_to"] {
+                push_lowered_map(
+                    entries,
+                    source_id,
+                    &format!("/model/balanced_network/branches/{idx}/charging/{field}"),
+                    record,
+                    field,
+                    MappingKind::ConvertedUnits,
+                );
+            }
+        }
+    }
+}
+
+fn push_lowered_load_maps(
+    entries: &mut Vec<SourceMapEntry>,
+    source_id: &str,
+    input: &MulticonductorNetwork,
+    balanced: &BalancedNetwork,
+) {
+    for idx in 0..balanced.loads.len().min(input.loads.len()) {
+        for (field, mapping_kind) in [
+            ("bus", MappingKind::Lowered),
+            ("p", MappingKind::Aggregated),
+            ("q", MappingKind::Aggregated),
+            ("in_service", MappingKind::Lowered),
+        ] {
+            push_lowered_map(
+                entries,
+                source_id,
+                &format!("/model/balanced_network/loads/{idx}/{field}"),
+                "multiconductor_load",
+                field,
+                mapping_kind,
+            );
+        }
+    }
+}
+
+fn push_lowered_shunt_maps(
+    entries: &mut Vec<SourceMapEntry>,
+    source_id: &str,
+    input: &MulticonductorNetwork,
+    balanced: &BalancedNetwork,
+) {
+    for idx in 0..balanced.shunts.len().min(input.shunts.len()) {
+        for (field, mapping_kind) in [
+            ("bus", MappingKind::Lowered),
+            ("g", MappingKind::Aggregated),
+            ("b", MappingKind::Aggregated),
+            ("in_service", MappingKind::Lowered),
+        ] {
+            push_lowered_map(
+                entries,
+                source_id,
+                &format!("/model/balanced_network/shunts/{idx}/{field}"),
+                "multiconductor_shunt",
+                field,
+                mapping_kind,
+            );
+        }
+    }
+}
+
+fn push_lowered_generator_maps(
+    entries: &mut Vec<SourceMapEntry>,
+    source_id: &str,
+    input: &MulticonductorNetwork,
+    balanced: &BalancedNetwork,
+) {
+    for idx in 0..balanced.generators.len().min(input.generators.len()) {
+        let generator = &input.generators[idx];
+        for (field, mapping_kind) in [
+            ("bus", MappingKind::Lowered),
+            ("pg", MappingKind::Aggregated),
+            ("qg", MappingKind::Aggregated),
+            ("vg", MappingKind::Defaulted),
+            ("mbase", MappingKind::Synthetic),
+            ("in_service", MappingKind::Lowered),
+        ] {
+            push_lowered_map(
+                entries,
+                source_id,
+                &format!("/model/balanced_network/generators/{idx}/{field}"),
+                "multiconductor_generator",
+                field,
+                mapping_kind,
+            );
+        }
+        for (field, present) in [
+            ("pmin", generator.p_min.is_some()),
+            ("pmax", generator.p_max.is_some()),
+            ("qmin", generator.q_min.is_some()),
+            ("qmax", generator.q_max.is_some()),
+        ] {
+            push_lowered_map(
+                entries,
+                source_id,
+                &format!("/model/balanced_network/generators/{idx}/{field}"),
+                "multiconductor_generator",
+                field,
+                if present {
+                    MappingKind::Aggregated
+                } else {
+                    MappingKind::Defaulted
+                },
+            );
+        }
+    }
+}
+
+fn push_lowered_map(
+    entries: &mut Vec<SourceMapEntry>,
+    source_id: &str,
+    element_path: &str,
+    record: &str,
+    field: &str,
+    mapping_kind: MappingKind,
+) {
+    entries.push(SourceMapEntry {
+        element_path: element_path.to_owned(),
+        source_ref: SourceRef::new(source_id)
+            .with_record(record)
+            .with_field(field),
+        mapping_kind,
+        confidence: Confidence::High,
+    });
 }
 
 /// Lift the `defaulted` map into source-map entries with `mapping_kind =

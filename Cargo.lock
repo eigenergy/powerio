@@ -2052,6 +2052,8 @@ dependencies = [
  "num-complex",
  "parquet",
  "powerio",
+ "powerio-dist",
+ "powerio-pkg",
  "rand 0.9.4",
  "rand_chacha",
  "rayon",
@@ -2067,6 +2069,7 @@ dependencies = [
 name = "powerio-pkg"
 version = "0.3.3"
 dependencies = [
+ "num-complex",
  "powerio",
  "powerio-dist",
  "serde",
