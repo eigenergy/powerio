@@ -28,7 +28,7 @@ pub enum ModelKind {
 /// The payload is a direct serde snapshot of the live PowerIO Rust IR
 /// ([`powerio::Network`] / [`powerio_dist::DistNetwork`]). It is experimental: it
 /// grows whenever the IR does, with no envelope version change. Only the envelope
-/// is versioned. See `docs/architecture/pio-json-schema.md`.
+/// is versioned. See `docs/src/pio-json-schema.md`.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum ModelPayload {

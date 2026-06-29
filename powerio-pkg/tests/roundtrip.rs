@@ -314,7 +314,7 @@ fn balanced_fields_lift_into_source_maps() {
                 && e.mapping_kind == MappingKind::Exact
                 && e.confidence == Confidence::High
                 && e.source_ref.record.as_deref() == Some("bus")
-                && e.source_ref.field.as_deref() == Some("vm")
+                && e.source_ref.field.as_deref() == Some("VM")
         }),
         "expected bus voltage source map: {:?}",
         pkg.source_maps
@@ -324,7 +324,7 @@ fn balanced_fields_lift_into_source_maps() {
             e.element_path == "/model/balanced_network/branches/0/angmax"
                 && e.mapping_kind == MappingKind::Exact
                 && e.source_ref.record.as_deref() == Some("branch")
-                && e.source_ref.field.as_deref() == Some("angmax")
+                && e.source_ref.field.as_deref() == Some("ANGMAX")
         }),
         "expected branch angle source map: {:?}",
         pkg.source_maps
@@ -354,6 +354,9 @@ mpc.baseMVA = 100;
 mpc.bus = [
 \t1\t3\t12\t3\t0.5\t0.25\t1\t1\t0\t230\t1\t1.1\t0.9;
 \t2\t1\t0\t0\t0\t0\t1\t1\t0\t230\t1\t1.1\t0.9;
+];
+mpc.gen = [
+\t1\t10\t2\t30\t-30\t1\t100\t1\t50\t0;
 ];
 mpc.branch = [
 \t1\t2\t0.01\t0.1\t0\t0\t0\t0\t0\t0\t1\t-360\t360;
@@ -387,6 +390,16 @@ mpc.branch = [
         "/model/balanced_network/shunts/0/b",
         "BS"
     ));
+    assert!(
+        pkg.source_maps.iter().any(|e| {
+            e.element_path == "/model/balanced_network/generators/0/pg"
+                && e.mapping_kind == MappingKind::Exact
+                && e.source_ref.record.as_deref() == Some("generator")
+                && e.source_ref.field.as_deref() == Some("PG")
+        }),
+        "expected generator dispatch source map: {:?}",
+        pkg.source_maps
+    );
     assert!(
         !pkg.source_maps
             .iter()
@@ -520,7 +533,7 @@ mpc.branch = [
             && d.details["field"] == "vm"
             && d.element_path.as_deref() == Some("/model/balanced_network/buses/0/vm")
             && d.source_ref.as_ref().and_then(|r| r.record.as_deref()) == Some("bus")
-            && d.source_ref.as_ref().and_then(|r| r.field.as_deref()) == Some("vm")),
+            && d.source_ref.as_ref().and_then(|r| r.field.as_deref()) == Some("VM")),
         "expected voltage magnitude finding: {:?}",
         pkg.diagnostics
     );

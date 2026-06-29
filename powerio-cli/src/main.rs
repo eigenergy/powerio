@@ -1508,7 +1508,7 @@ mod tests {
                     && entry.element_path == "/model/balanced_network/buses/0/vm"
                     && entry.source_ref.source_id == "src0"
                     && entry.source_ref.record.as_deref() == Some("bus")
-                    && entry.source_ref.field.as_deref() == Some("vm")
+                    && entry.source_ref.field.as_deref() == Some("VM")
             }),
             "expected balanced source map entries: {:?}",
             pkg.source_maps
