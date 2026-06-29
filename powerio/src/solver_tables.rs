@@ -297,222 +297,19 @@ impl Network {
 
 impl NormalizedSolverTables {
     pub fn from_network(source: &Network) -> Result<Self> {
-        let normalized = if source.is_normalized() {
-            source.clone()
-        } else {
-            source.to_normalized()?
-        };
+        let normalized = normalized_for_solver(source)?;
         let view = IndexedNetwork::new(&normalized);
         let net = view.network();
         let provenance = SourceRows::new(source, net);
 
-        let bus_ids: Vec<BusId> = net.buses.iter().map(|b| b.id).collect();
-        let reference_bus_indices = view.reference_bus_indices();
-        let component_labels = view.connected_component_labels();
-
-        let buses = net
-            .buses
-            .iter()
-            .enumerate()
-            .map(|(i, bus)| SolverBusRow {
-                index: i,
-                bus_id: bus.id,
-                source_row: provenance.bus[i],
-                kind: bus.kind,
-                vm: bus.vm,
-                va: bus.va,
-                base_kv: bus.base_kv,
-                vmax: bus.vmax,
-                vmin: bus.vmin,
-                evhi: bus.evhi,
-                evlo: bus.evlo,
-                area: bus.area,
-                zone: bus.zone,
-                pd: view.pd()[i],
-                qd: view.qd()[i],
-                gs: view.gs()[i],
-                bs: view.bs()[i],
-            })
-            .collect();
-
-        let loads = net
-            .loads
-            .iter()
-            .enumerate()
-            .map(|(i, load)| {
-                Ok(SolverLoadRow {
-                    index: i,
-                    source_row: provenance.load[i],
-                    bus_index: dense_bus(&view, load.bus, i)?,
-                    p: load.p,
-                    q: load.q,
-                    voltage_model: load.voltage_model.clone(),
-                })
-            })
-            .collect::<Result<Vec<_>>>()?;
-
-        let shunts = net
-            .shunts
-            .iter()
-            .enumerate()
-            .map(|(i, shunt)| {
-                Ok(SolverShuntRow {
-                    index: i,
-                    source_row: provenance.shunt[i],
-                    bus_index: dense_bus(&view, shunt.bus, i)?,
-                    g: shunt.g,
-                    b: shunt.b,
-                })
-            })
-            .collect::<Result<Vec<_>>>()?;
-
-        let mut branch_from_arc_indices = Vec::with_capacity(net.branches.len());
-        let mut branch_to_arc_indices = Vec::with_capacity(net.branches.len());
-        let mut arcs = Vec::with_capacity(net.branches.len() * 2);
-        let branches = net
-            .branches
-            .iter()
-            .enumerate()
-            .map(|(i, branch)| {
-                let from_bus_index = dense_bus(&view, branch.from, i)?;
-                let to_bus_index = dense_bus(&view, branch.to, i)?;
-                let charging = branch.terminal_charging();
-                let from_arc = arcs.len();
-                arcs.push(SolverArcRow {
-                    index: from_arc,
-                    branch_index: i,
-                    terminal: SolverArcTerminal::From,
-                    from_bus_index,
-                    to_bus_index,
-                    tap: branch.tap,
-                    shift: branch.shift,
-                    g_shunt: charging.g_fr,
-                    b_shunt: charging.b_fr,
-                    rate_a: branch.rate_a,
-                });
-                let to_arc = arcs.len();
-                arcs.push(SolverArcRow {
-                    index: to_arc,
-                    branch_index: i,
-                    terminal: SolverArcTerminal::To,
-                    from_bus_index: to_bus_index,
-                    to_bus_index: from_bus_index,
-                    tap: 1.0,
-                    shift: 0.0,
-                    g_shunt: charging.g_to,
-                    b_shunt: charging.b_to,
-                    rate_a: branch.rate_a,
-                });
-                branch_from_arc_indices.push(from_arc);
-                branch_to_arc_indices.push(to_arc);
-
-                Ok(SolverBranchRow {
-                    index: i,
-                    source_row: provenance.branch[i],
-                    from_bus_index,
-                    to_bus_index,
-                    r: branch.r,
-                    x: branch.x,
-                    b: branch.b,
-                    g_fr: charging.g_fr,
-                    b_fr: charging.b_fr,
-                    g_to: charging.g_to,
-                    b_to: charging.b_to,
-                    rate_a: branch.rate_a,
-                    rate_b: branch.rate_b,
-                    rate_c: branch.rate_c,
-                    current_ratings: branch.current_ratings,
-                    tap: branch.tap,
-                    shift: branch.shift,
-                    angmin: branch.angmin,
-                    angmax: branch.angmax,
-                })
-            })
-            .collect::<Result<Vec<_>>>()?;
-
-        let switches = net
-            .switches
-            .iter()
-            .enumerate()
-            .map(|(i, switch)| {
-                Ok(SolverSwitchRow {
-                    index: i,
-                    source_row: provenance.switch[i],
-                    from_bus_index: dense_bus(&view, switch.from, i)?,
-                    to_bus_index: dense_bus(&view, switch.to, i)?,
-                    closed: switch.closed,
-                    thermal_rating: switch.thermal_rating,
-                    current_rating: switch.current_rating,
-                    pf: switch.pf,
-                    qf: switch.qf,
-                    pt: switch.pt,
-                    qt: switch.qt,
-                })
-            })
-            .collect::<Result<Vec<_>>>()?;
-
-        let generators = net
-            .generators
-            .iter()
-            .enumerate()
-            .map(|(i, generator)| {
-                Ok(SolverGeneratorRow {
-                    index: i,
-                    source_row: provenance.generator[i],
-                    bus_index: dense_bus(&view, generator.bus, i)?,
-                    pg: generator.pg,
-                    qg: generator.qg,
-                    pmax: generator.pmax,
-                    pmin: generator.pmin,
-                    qmax: generator.qmax,
-                    qmin: generator.qmin,
-                    vg: generator.vg,
-                    mbase: generator.mbase,
-                    cost: generator.cost.as_ref().map(SolverCostRow::from),
-                    caps: generator.caps,
-                    regulated_bus_index: generator
-                        .regulated_bus
-                        .map(|bus| dense_bus(&view, bus, i))
-                        .transpose()?,
-                })
-            })
-            .collect::<Result<Vec<_>>>()?;
-
-        let storage = net
-            .storage
-            .iter()
-            .enumerate()
-            .map(|(i, storage)| {
-                Ok(SolverStorageRow {
-                    index: i,
-                    source_row: provenance.storage[i],
-                    bus_index: dense_bus(&view, storage.bus, i)?,
-                    ps: storage.ps,
-                    qs: storage.qs,
-                    energy: storage.energy,
-                    energy_rating: storage.energy_rating,
-                    charge_rating: storage.charge_rating,
-                    discharge_rating: storage.discharge_rating,
-                    charge_efficiency: storage.charge_efficiency,
-                    discharge_efficiency: storage.discharge_efficiency,
-                    thermal_rating: storage.thermal_rating,
-                    current_rating: storage.current_rating,
-                    qmin: storage.qmin,
-                    qmax: storage.qmax,
-                    r: storage.r,
-                    x: storage.x,
-                    p_loss: storage.p_loss,
-                    q_loss: storage.q_loss,
-                })
-            })
-            .collect::<Result<Vec<_>>>()?;
-
-        let hvdc = net
-            .hvdc
-            .iter()
-            .enumerate()
-            .map(|(i, hvdc)| hvdc_row(&view, &provenance, i, hvdc))
-            .collect::<Result<Vec<_>>>()?;
+        let branch_arcs = branch_and_arc_rows(&view, &provenance)?;
+        let buses = bus_rows(&view, &provenance);
+        let loads = load_rows(&view, &provenance)?;
+        let shunts = shunt_rows(&view, &provenance)?;
+        let switches = switch_rows(&view, &provenance)?;
+        let generators = generator_rows(&view, &provenance)?;
+        let storage = storage_rows(&view, &provenance)?;
+        let hvdc = hvdc_rows(&view, &provenance)?;
 
         Ok(Self {
             pass: NORMALIZED_SOLVER_TABLES_PASS.to_string(),
@@ -521,11 +318,11 @@ impl NormalizedSolverTables {
             base_frequency: net.base_frequency,
             units: SolverTableUnits::default(),
             index: SolverTableIndex {
-                bus_ids,
-                reference_bus_indices,
-                component_labels,
-                branch_from_arc_indices,
-                branch_to_arc_indices,
+                bus_ids: net.buses.iter().map(|b| b.id).collect(),
+                reference_bus_indices: view.reference_bus_indices(),
+                component_labels: view.connected_component_labels(),
+                branch_from_arc_indices: branch_arcs.branch_from_arc_indices,
+                branch_to_arc_indices: branch_arcs.branch_to_arc_indices,
                 bus_source_rows: provenance.bus,
                 load_source_rows: provenance.load,
                 shunt_source_rows: provenance.shunt,
@@ -538,14 +335,266 @@ impl NormalizedSolverTables {
             buses,
             loads,
             shunts,
-            branches,
+            branches: branch_arcs.branches,
             switches,
-            arcs,
+            arcs: branch_arcs.arcs,
             generators,
             storage,
             hvdc,
         })
     }
+}
+
+fn normalized_for_solver(source: &Network) -> Result<Network> {
+    if source.is_normalized() {
+        Ok(source.clone())
+    } else {
+        source.to_normalized()
+    }
+}
+
+fn bus_rows(view: &IndexedNetwork<'_>, provenance: &SourceRows) -> Vec<SolverBusRow> {
+    view.network()
+        .buses
+        .iter()
+        .enumerate()
+        .map(|(i, bus)| SolverBusRow {
+            index: i,
+            bus_id: bus.id,
+            source_row: provenance.bus[i],
+            kind: bus.kind,
+            vm: bus.vm,
+            va: bus.va,
+            base_kv: bus.base_kv,
+            vmax: bus.vmax,
+            vmin: bus.vmin,
+            evhi: bus.evhi,
+            evlo: bus.evlo,
+            area: bus.area,
+            zone: bus.zone,
+            pd: view.pd()[i],
+            qd: view.qd()[i],
+            gs: view.gs()[i],
+            bs: view.bs()[i],
+        })
+        .collect()
+}
+
+fn load_rows(view: &IndexedNetwork<'_>, provenance: &SourceRows) -> Result<Vec<SolverLoadRow>> {
+    view.network()
+        .loads
+        .iter()
+        .enumerate()
+        .map(|(i, load)| {
+            Ok(SolverLoadRow {
+                index: i,
+                source_row: provenance.load[i],
+                bus_index: dense_bus(view, load.bus, i)?,
+                p: load.p,
+                q: load.q,
+                voltage_model: load.voltage_model.clone(),
+            })
+        })
+        .collect()
+}
+
+fn shunt_rows(view: &IndexedNetwork<'_>, provenance: &SourceRows) -> Result<Vec<SolverShuntRow>> {
+    view.network()
+        .shunts
+        .iter()
+        .enumerate()
+        .map(|(i, shunt)| {
+            Ok(SolverShuntRow {
+                index: i,
+                source_row: provenance.shunt[i],
+                bus_index: dense_bus(view, shunt.bus, i)?,
+                g: shunt.g,
+                b: shunt.b,
+            })
+        })
+        .collect()
+}
+
+struct BranchArcRows {
+    branches: Vec<SolverBranchRow>,
+    arcs: Vec<SolverArcRow>,
+    branch_from_arc_indices: Vec<usize>,
+    branch_to_arc_indices: Vec<usize>,
+}
+
+fn branch_and_arc_rows(
+    view: &IndexedNetwork<'_>,
+    provenance: &SourceRows,
+) -> Result<BranchArcRows> {
+    let net = view.network();
+    let mut branch_from_arc_indices = Vec::with_capacity(net.branches.len());
+    let mut branch_to_arc_indices = Vec::with_capacity(net.branches.len());
+    let mut arcs = Vec::with_capacity(net.branches.len() * 2);
+    let branches = net
+        .branches
+        .iter()
+        .enumerate()
+        .map(|(i, branch)| {
+            let from_bus_index = dense_bus(view, branch.from, i)?;
+            let to_bus_index = dense_bus(view, branch.to, i)?;
+            let charging = branch.terminal_charging();
+            let from_arc = arcs.len();
+            arcs.push(SolverArcRow {
+                index: from_arc,
+                branch_index: i,
+                terminal: SolverArcTerminal::From,
+                from_bus_index,
+                to_bus_index,
+                tap: branch.tap,
+                shift: branch.shift,
+                g_shunt: charging.g_fr,
+                b_shunt: charging.b_fr,
+                rate_a: branch.rate_a,
+            });
+            let to_arc = arcs.len();
+            arcs.push(SolverArcRow {
+                index: to_arc,
+                branch_index: i,
+                terminal: SolverArcTerminal::To,
+                from_bus_index: to_bus_index,
+                to_bus_index: from_bus_index,
+                tap: 1.0,
+                shift: 0.0,
+                g_shunt: charging.g_to,
+                b_shunt: charging.b_to,
+                rate_a: branch.rate_a,
+            });
+            branch_from_arc_indices.push(from_arc);
+            branch_to_arc_indices.push(to_arc);
+
+            Ok(SolverBranchRow {
+                index: i,
+                source_row: provenance.branch[i],
+                from_bus_index,
+                to_bus_index,
+                r: branch.r,
+                x: branch.x,
+                b: branch.b,
+                g_fr: charging.g_fr,
+                b_fr: charging.b_fr,
+                g_to: charging.g_to,
+                b_to: charging.b_to,
+                rate_a: branch.rate_a,
+                rate_b: branch.rate_b,
+                rate_c: branch.rate_c,
+                current_ratings: branch.current_ratings,
+                tap: branch.tap,
+                shift: branch.shift,
+                angmin: branch.angmin,
+                angmax: branch.angmax,
+            })
+        })
+        .collect::<Result<Vec<_>>>()?;
+
+    Ok(BranchArcRows {
+        branches,
+        arcs,
+        branch_from_arc_indices,
+        branch_to_arc_indices,
+    })
+}
+
+fn switch_rows(view: &IndexedNetwork<'_>, provenance: &SourceRows) -> Result<Vec<SolverSwitchRow>> {
+    view.network()
+        .switches
+        .iter()
+        .enumerate()
+        .map(|(i, switch)| {
+            Ok(SolverSwitchRow {
+                index: i,
+                source_row: provenance.switch[i],
+                from_bus_index: dense_bus(view, switch.from, i)?,
+                to_bus_index: dense_bus(view, switch.to, i)?,
+                closed: switch.closed,
+                thermal_rating: switch.thermal_rating,
+                current_rating: switch.current_rating,
+                pf: switch.pf,
+                qf: switch.qf,
+                pt: switch.pt,
+                qt: switch.qt,
+            })
+        })
+        .collect()
+}
+
+fn generator_rows(
+    view: &IndexedNetwork<'_>,
+    provenance: &SourceRows,
+) -> Result<Vec<SolverGeneratorRow>> {
+    view.network()
+        .generators
+        .iter()
+        .enumerate()
+        .map(|(i, generator)| {
+            Ok(SolverGeneratorRow {
+                index: i,
+                source_row: provenance.generator[i],
+                bus_index: dense_bus(view, generator.bus, i)?,
+                pg: generator.pg,
+                qg: generator.qg,
+                pmax: generator.pmax,
+                pmin: generator.pmin,
+                qmax: generator.qmax,
+                qmin: generator.qmin,
+                vg: generator.vg,
+                mbase: generator.mbase,
+                cost: generator.cost.as_ref().map(SolverCostRow::from),
+                caps: generator.caps,
+                regulated_bus_index: generator
+                    .regulated_bus
+                    .map(|bus| dense_bus(view, bus, i))
+                    .transpose()?,
+            })
+        })
+        .collect()
+}
+
+fn storage_rows(
+    view: &IndexedNetwork<'_>,
+    provenance: &SourceRows,
+) -> Result<Vec<SolverStorageRow>> {
+    view.network()
+        .storage
+        .iter()
+        .enumerate()
+        .map(|(i, storage)| {
+            Ok(SolverStorageRow {
+                index: i,
+                source_row: provenance.storage[i],
+                bus_index: dense_bus(view, storage.bus, i)?,
+                ps: storage.ps,
+                qs: storage.qs,
+                energy: storage.energy,
+                energy_rating: storage.energy_rating,
+                charge_rating: storage.charge_rating,
+                discharge_rating: storage.discharge_rating,
+                charge_efficiency: storage.charge_efficiency,
+                discharge_efficiency: storage.discharge_efficiency,
+                thermal_rating: storage.thermal_rating,
+                current_rating: storage.current_rating,
+                qmin: storage.qmin,
+                qmax: storage.qmax,
+                r: storage.r,
+                x: storage.x,
+                p_loss: storage.p_loss,
+                q_loss: storage.q_loss,
+            })
+        })
+        .collect()
+}
+
+fn hvdc_rows(view: &IndexedNetwork<'_>, provenance: &SourceRows) -> Result<Vec<SolverHvdcRow>> {
+    view.network()
+        .hvdc
+        .iter()
+        .enumerate()
+        .map(|(i, hvdc)| hvdc_row(view, provenance, i, hvdc))
+        .collect()
 }
 
 fn hvdc_row(
