@@ -304,6 +304,35 @@ fn defaulted_fields_lift_into_source_maps() {
 }
 
 #[test]
+fn balanced_fields_lift_into_source_maps() {
+    let pkg = balanced_package();
+    assert_eq!(pkg.sources.len(), 1);
+    assert_eq!(pkg.sources[0].format.as_deref(), Some("matpower"));
+    assert!(
+        pkg.source_maps.iter().any(|e| {
+            e.element_path == "/model/balanced_network/buses/0/vm"
+                && e.mapping_kind == MappingKind::Exact
+                && e.confidence == Confidence::High
+                && e.source_ref.record.as_deref() == Some("bus")
+                && e.source_ref.field.as_deref() == Some("vm")
+        }),
+        "expected bus voltage source map: {:?}",
+        pkg.source_maps
+    );
+    assert!(
+        pkg.source_maps.iter().any(|e| {
+            e.element_path == "/model/balanced_network/branches/0/angmax"
+                && e.mapping_kind == MappingKind::Exact
+                && e.source_ref.record.as_deref() == Some("branch")
+                && e.source_ref.field.as_deref() == Some("angmax")
+        }),
+        "expected branch angle source map: {:?}",
+        pkg.source_maps
+    );
+    assert_json_roundtrips(&pkg);
+}
+
+#[test]
 fn origin_distinguishes_in_memory_from_file() {
     let in_mem = CompilerPackage::from_balanced(powerio::BalancedNetwork::in_memory(
         "t",
@@ -406,7 +435,10 @@ mpc.branch = [
     assert!(
         pkg.diagnostics.iter().any(|d| d.code
             == DiagnosticCode::new("VALIDATE.BALANCED.VALUE_DOMAIN")
-            && d.details["field"] == "vm"),
+            && d.details["field"] == "vm"
+            && d.element_path.as_deref() == Some("/model/balanced_network/buses/0/vm")
+            && d.source_ref.as_ref().and_then(|r| r.record.as_deref()) == Some("bus")
+            && d.source_ref.as_ref().and_then(|r| r.field.as_deref()) == Some("vm")),
         "expected voltage magnitude finding: {:?}",
         pkg.diagnostics
     );

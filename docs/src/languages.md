@@ -6,8 +6,9 @@ appear as a format string or convenience wrapper, not as a new naming scheme.
 
 Verb taxonomy:
 
-- `parse_*`: bytes, paths, or text to typed parsed values. Case parsers return
-  `Network`; display parsers return display data.
+- `parse_*`: bytes, paths, or text to typed parsed values. Transmission parsers
+  return a balanced network handle; distribution parsers return a
+  multiconductor network handle; display parsers return display data.
 - `to_*`: `Network` to a new value
 - `convert_file`: path to target text convenience
 - `write_*`: filesystem outputs (`write_gridfm`, `write_pypsa_csv_folder`,
@@ -97,15 +98,15 @@ The v1 naming direction separates the concrete model families from the package
 object that can hold either family. v0.4 starts that migration without changing
 parse or conversion behavior.
 
-| Surface | Removed or old name | v0.4 name | Notes |
-|---|---|---|---|
-| Rust transmission model | `powerio::Network` | `powerio::BalancedNetwork` alias | `Network` remains the concrete type in 0.4; the alias lets new code use the v1 family name. |
-| Rust distribution model | `powerio_dist::DistNetwork` | `powerio_dist::MulticonductorNetwork` alias | `DistNetwork` remains the concrete type in 0.4. |
-| Rust package object | n/a | `powerio_pkg::CompilerPackage` | Serializes to `.pio.json` and carries `model_kind`. |
-| Python transmission handle | `powerio.Case` | `powerio.Network` / `powerio.BalancedNetwork` | `Case` is removed in 0.4. |
-| Python distribution handle | `powerio.dist.DistCase` | `powerio.dist.MulticonductorNetwork` / `powerio.dist.DistNetwork` | `DistCase` is removed in 0.4. |
-| C ABI | n/a | unchanged `pio_*` / `pio_dist_*` handles | Symbol renames are not part of the 0.4 package spine. |
-| MCP | raw JSON transport | package transport later | `.pio.json` transport is tracked in #157. |
+| Surface | Old name | New name | First alias release | Removal timing | Notes |
+|---|---|---|---|---|---|
+| Rust transmission model | `powerio::Network` | `powerio::BalancedNetwork` alias | 0.4.0 | none in 0.4 | `Network` remains the concrete type in 0.4; the alias lets new code use the v1 family name. |
+| Rust distribution model | `powerio_dist::DistNetwork` | `powerio_dist::MulticonductorNetwork` alias | 0.4.0 | none in 0.4 | `DistNetwork` remains the concrete type in 0.4. |
+| Rust package object | n/a | `powerio_pkg::CompilerPackage` | n/a | n/a | Serializes to `.pio.json` and carries `model_kind`. |
+| Python transmission handle | `powerio.Case` | `powerio.Network` / `powerio.BalancedNetwork` | 0.3.3 | removed in 0.4.0 | `Case` is no longer importable. |
+| Python distribution handle | `powerio.dist.DistCase` | `powerio.dist.MulticonductorNetwork` / `powerio.dist.DistNetwork` | 0.3.3 | removed in 0.4.0 | `DistCase` is no longer importable. |
+| C ABI | `PioNetwork` / `PioDistNetwork` | unchanged `pio_*` / `pio_dist_*` handles | n/a | n/a | `PIO_ABI_VERSION` stays 4 and `PIO_DIST_ABI_VERSION` stays 1; symbol renames are not part of the 0.4 package spine. |
+| MCP | older case helper names | `parse`, `save`, `summary`, `display` | 0.3.3 | kept as Python compatibility wrappers in 0.4 | Advertised tools use the semantic names; `.pio.json` MCP transport is tracked in #157. |
 
 ## Distribution surface (`powerio-dist`)
 

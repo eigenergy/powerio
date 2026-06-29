@@ -136,6 +136,12 @@ impl SourceRef {
     }
 
     #[must_use]
+    pub fn with_record(mut self, record: impl Into<String>) -> Self {
+        self.record = Some(record.into());
+        self
+    }
+
+    #[must_use]
     pub fn with_line(mut self, line: u32) -> Self {
         self.line = Some(line);
         self

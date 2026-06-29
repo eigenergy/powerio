@@ -1502,6 +1502,17 @@ mod tests {
             Some(input.to_str().unwrap())
         );
         assert_eq!(pkg.sources[0].format.as_deref(), Some("matpower"));
+        assert!(
+            pkg.source_maps.iter().any(|entry| {
+                entry.mapping_kind == MappingKind::Exact
+                    && entry.element_path == "/model/balanced_network/buses/0/vm"
+                    && entry.source_ref.source_id == "src0"
+                    && entry.source_ref.record.as_deref() == Some("bus")
+                    && entry.source_ref.field.as_deref() == Some("vm")
+            }),
+            "expected balanced source map entries: {:?}",
+            pkg.source_maps
+        );
     }
 
     #[test]

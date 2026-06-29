@@ -99,9 +99,12 @@ A `source_map` entry records where a canonical field came from: an `element_path
 (a JSON pointer, or a best-effort locator in v0.1), a `source_ref` into a declared
 source, a `mapping_kind` (`exact`, `defaulted`, `inferred`, `converted_units`,
 `lowered`, `aggregated`, `split`, `synthetic`, `retained_extra`), and a
-`confidence` (`exact`, `high`, `medium`, `low`). When a multiconductor network is
-packaged, its `defaulted` fields lift into source maps with `mapping_kind =
-defaulted`, and its retained source becomes `origin.retained_source`.
+`confidence` (`exact`, `high`, `medium`, `low`). Balanced packages emit exact
+record and field maps for stable bus, load, shunt, branch, and generator fields.
+When a multiconductor network is packaged, its `defaulted` fields lift into
+source maps with `mapping_kind = defaulted`, and its retained source becomes
+`origin.retained_source`. Validation diagnostics attach the matching
+`source_ref` when the package has a source map for the reported field.
 
 ## Example
 

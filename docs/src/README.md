@@ -41,13 +41,18 @@ Rendered API docs (rustdoc) for all crates:
 
 ## Architecture
 
-`Network` is the format neutral model. Loads, shunts, branches, and generators
-are first class records. Every reader produces a `Network`; every writer consumes
-one. Adding a format means adding one reader or writer at the hub, not pairwise
+`powerio::Network` is the current balanced transmission model; v0.4 also exports
+`powerio::BalancedNetwork` as the v1 family name for that same type. Loads,
+shunts, branches, and generators are first class records. `powerio_dist` keeps
+the separate `MulticonductorNetwork` distribution model. `.pio.json` packages
+one of those model families with provenance, source maps, diagnostics,
+validation, summaries, and lowering history.
+
+Adding a format means adding one reader or writer at the hub, not pairwise
 converters. `IndexedNetwork` is the dense \\([0,n)\\) analysis view derived from a
-`Network`; matrix builders work from that view. The parser, source retaining
-writer, and converters live in `powerio`; matrix builders and graph outputs live
-in `powerio-matrix`, which re-exports `powerio`.
+balanced `Network`; matrix builders work from that view. The parser, source
+retaining writer, and converters live in `powerio`; matrix builders and graph
+outputs live in `powerio-matrix`, which re-exports `powerio`.
 
 | crate | responsibility |
 | --- | --- |

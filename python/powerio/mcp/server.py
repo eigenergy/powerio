@@ -5,10 +5,10 @@ The advertised MCP surface is semantic and format neutral:
 ``convert``, ``save``, ``summary``, ``parse``, ``normalize``, ``matrix``,
 ``display``.
 
-Network tools route transmission cases, distribution cases, PyPSA CSV folders,
-and gridfm datasets through the lower level powerio APIs. Transmission parses
-serialize through the ``powerio-json`` transport. Distribution parses serialize
-through canonical ``bmopf-json``.
+Network tools route balanced transmission models, multiconductor distribution
+models, PyPSA CSV folders, and gridfm datasets through the lower level powerio
+APIs. Transmission parses serialize through the ``powerio-json`` transport.
+Distribution parses serialize through canonical ``bmopf-json``.
 """
 
 from __future__ import annotations
@@ -839,7 +839,7 @@ def _summary_tool(
     json_format: Optional[str] = None,
     options: Optional[Dict[str, Any]] = None,
 ) -> dict:
-    """Return the canonical network summary JSON."""
+    """Return canonical summary JSON for a balanced or multiconductor model."""
     return _summary_impl(path, content, json, from_format, json_format, options)
 
 
@@ -850,7 +850,7 @@ def _parse_tool(
     from_format: Optional[str] = None,
     options: Optional[Dict[str, Any]] = None,
 ) -> dict:
-    """Parse a network and return its serial JSON transport plus summary."""
+    """Parse a balanced or multiconductor model and return JSON plus summary."""
     return _parse_impl(path, content, from_format, options)
 
 

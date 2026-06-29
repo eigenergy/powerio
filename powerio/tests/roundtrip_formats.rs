@@ -13,10 +13,11 @@
 //! value-for-value checks against the reference tools live in
 //! `benchmarks/validate_powermodels.jl` and `benchmarks/validate_egret.py`.
 
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 use powerio::{
-    Network, TargetFormat, parse_egret_json, parse_matpower_file, parse_powermodels_json,
+    BusType, Network, TargetFormat, parse_egret_json, parse_matpower_file, parse_powermodels_json,
     parse_powerworld, parse_pslf, parse_psse, write_as, write_egret_json, write_powermodels_json,
     write_powerworld, write_pslf, write_psse, write_psse_rev,
 };
@@ -66,6 +67,220 @@ fn fingerprint(net: &Network) -> Fingerprint {
         load_q: r(net.loads.iter().map(|l| l.q).sum()),
         gen_p: r(net.generators.iter().map(|g| g.pg).sum()),
         base_mva: r(net.base_mva),
+    }
+}
+
+#[derive(Debug, PartialEq)]
+struct ValueFingerprint {
+    base_mva: i64,
+    buses: Vec<BusValue>,
+    loads_by_bus: Vec<BusInjection>,
+    shunts_by_bus: Vec<BusInjection>,
+    branches: Vec<BranchValue>,
+    generators: Vec<GeneratorValue>,
+}
+
+#[derive(Debug, PartialEq)]
+struct BusValue {
+    id: usize,
+    kind: BusType,
+    vm: i64,
+    va: i64,
+    base_kv: i64,
+    vmax: i64,
+    vmin: i64,
+    area: usize,
+    zone: usize,
+}
+
+#[derive(Debug, PartialEq)]
+struct BusInjection {
+    bus: usize,
+    p_or_g: i64,
+    q_or_b: i64,
+}
+
+#[derive(Debug, PartialEq)]
+struct BranchValue {
+    from: usize,
+    to: usize,
+    occurrence: usize,
+    r: i64,
+    x: i64,
+    b: Option<i64>,
+    rate_a: i64,
+    rate_b: i64,
+    rate_c: i64,
+    tap: i64,
+    shift: i64,
+    in_service: bool,
+    angmin: i64,
+    angmax: i64,
+}
+
+#[derive(Debug, PartialEq)]
+struct GeneratorValue {
+    bus: usize,
+    occurrence: usize,
+    pg: i64,
+    qg: i64,
+    pmax: i64,
+    pmin: i64,
+    qmax: i64,
+    qmin: i64,
+    vg: Option<i64>,
+    mbase: i64,
+    in_service: bool,
+}
+
+fn round_value(x: f64) -> i64 {
+    (x * 1e5).round() as i64
+}
+
+fn value_fingerprint(net: &Network, target: TargetFormat) -> ValueFingerprint {
+    ValueFingerprint {
+        base_mva: round_value(net.base_mva),
+        buses: bus_values(net),
+        loads_by_bus: bus_injections(net.loads.iter().map(|load| (load.bus.0, load.p, load.q))),
+        shunts_by_bus: bus_injections(
+            net.shunts
+                .iter()
+                .map(|shunt| (shunt.bus.0, shunt.g, shunt.b)),
+        ),
+        branches: branch_values(net, target),
+        generators: generator_values(net, target),
+    }
+}
+
+fn bus_values(net: &Network) -> Vec<BusValue> {
+    let mut buses: Vec<_> = net
+        .buses
+        .iter()
+        .map(|bus| BusValue {
+            id: bus.id.0,
+            kind: bus.kind,
+            vm: round_value(bus.vm),
+            va: round_value(bus.va),
+            base_kv: round_value(bus.base_kv),
+            vmax: round_value(bus.vmax),
+            vmin: round_value(bus.vmin),
+            area: bus.area,
+            zone: bus.zone,
+        })
+        .collect();
+    buses.sort_by_key(|b| b.id);
+    buses
+}
+
+fn bus_injections<I>(values: I) -> Vec<BusInjection>
+where
+    I: IntoIterator<Item = (usize, f64, f64)>,
+{
+    let mut by_bus = BTreeMap::<usize, (f64, f64)>::new();
+    for (bus, p_or_g, q_or_b) in values {
+        let entry = by_bus.entry(bus).or_default();
+        entry.0 += p_or_g;
+        entry.1 += q_or_b;
+    }
+    by_bus
+        .into_iter()
+        .map(|(bus, (p_or_g, q_or_b))| BusInjection {
+            bus,
+            p_or_g: round_value(p_or_g),
+            q_or_b: round_value(q_or_b),
+        })
+        .collect()
+}
+
+fn branch_values(net: &Network, target: TargetFormat) -> Vec<BranchValue> {
+    let mut branch_counts = BTreeMap::<(usize, usize), usize>::new();
+    let mut branches: Vec<_> = net
+        .branches
+        .iter()
+        .map(|branch| {
+            let key = (branch.from.0, branch.to.0);
+            let occurrence = *branch_counts
+                .entry(key)
+                .and_modify(|n| *n += 1)
+                .or_insert(0);
+            BranchValue {
+                from: branch.from.0,
+                to: branch.to.0,
+                occurrence,
+                r: round_value(branch.r),
+                x: round_value(branch.x),
+                b: (!(target == TargetFormat::Pslf && branch.is_transformer()))
+                    .then_some(round_value(branch.legacy_total_charging_b())),
+                rate_a: round_value(branch.rate_a),
+                rate_b: round_value(branch.rate_b),
+                rate_c: round_value(branch.rate_c),
+                tap: round_value(branch.tap),
+                shift: round_value(branch.shift),
+                in_service: branch.in_service,
+                angmin: round_value(branch.angmin),
+                angmax: round_value(branch.angmax),
+            }
+        })
+        .collect();
+    branches.sort_by_key(|b| (b.from, b.to, b.occurrence));
+    branches
+}
+
+fn generator_values(net: &Network, target: TargetFormat) -> Vec<GeneratorValue> {
+    let mut generator_counts = BTreeMap::<usize, usize>::new();
+    let mut generators: Vec<_> = net
+        .generators
+        .iter()
+        .map(|generator| {
+            let occurrence = *generator_counts
+                .entry(generator.bus.0)
+                .and_modify(|n| *n += 1)
+                .or_insert(0);
+            GeneratorValue {
+                bus: generator.bus.0,
+                occurrence,
+                pg: round_value(generator.pg),
+                qg: round_value(generator.qg),
+                pmax: round_value(generator.pmax),
+                pmin: round_value(generator.pmin),
+                qmax: round_value(generator.qmax),
+                qmin: round_value(generator.qmin),
+                vg: (target != TargetFormat::Pslf).then_some(round_value(generator.vg)),
+                mbase: round_value(generator.mbase),
+                in_service: generator.in_service,
+            }
+        })
+        .collect();
+    generators.sort_by_key(|g| (g.bus, g.occurrence));
+    generators
+}
+
+fn assert_value_fingerprint_eq(got: &ValueFingerprint, expected: &ValueFingerprint, context: &str) {
+    assert_eq!(got.base_mva, expected.base_mva, "{context}: base_mva");
+    assert_eq!(got.buses, expected.buses, "{context}: buses");
+    assert_eq!(
+        got.loads_by_bus, expected.loads_by_bus,
+        "{context}: loads by bus"
+    );
+    assert_eq!(
+        got.shunts_by_bus, expected.shunts_by_bus,
+        "{context}: shunts by bus"
+    );
+    assert_eq!(
+        got.branches.len(),
+        expected.branches.len(),
+        "{context}: branch count"
+    );
+    for (i, (got, expected)) in got.branches.iter().zip(&expected.branches).enumerate() {
+        assert_eq!(got, expected, "{context}: branch {i}");
+    }
+    assert_eq!(
+        got.generators.len(),
+        expected.generators.len(),
+        "{context}: generator count"
+    );
+    for (i, (got, expected)) in got.generators.iter().zip(&expected.generators).enumerate() {
+        assert_eq!(got, expected, "{context}: generator {i}");
     }
 }
 
@@ -137,6 +352,22 @@ fn core_preserved_through_each_format() {
                 fp0,
                 "{case} via {}: electrical core changed",
                 fmt.name
+            );
+        }
+    }
+}
+
+#[test]
+fn stable_element_values_preserved_through_each_format() {
+    for case in CASES {
+        let net0 = parse_matpower_file(data(case)).unwrap();
+        for fmt in roundtrippable() {
+            let fp0 = value_fingerprint(&net0, fmt.format);
+            let net1 = (fmt.read)(&(fmt.write)(&net0));
+            assert_value_fingerprint_eq(
+                &value_fingerprint(&net1, fmt.format),
+                &fp0,
+                &format!("{case} via {}", fmt.name),
             );
         }
     }

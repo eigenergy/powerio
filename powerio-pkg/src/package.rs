@@ -100,6 +100,9 @@ impl CompilerPackage {
     pub fn from_balanced(net: BalancedNetwork) -> Self {
         let origin = balanced_origin(&net);
         let summary = balanced_summary(&net);
+        let sources = balanced_sources(&net);
+        let source_id = sources.first().map(|s| s.id.clone());
+        let source_maps = balanced_source_maps(&net, source_id.as_deref());
         Self {
             schema: default_schema_url(),
             schema_version: default_schema_version(),
@@ -109,8 +112,8 @@ impl CompilerPackage {
             model_kind: ModelKind::Balanced,
             model: ModelPayload::balanced(net),
             origin,
-            sources: Vec::new(),
-            source_maps: Vec::new(),
+            sources,
+            source_maps,
             diagnostics: Vec::new(),
             validation: ValidationSummary::ok(),
             summary,
@@ -279,13 +282,14 @@ impl CompilerPackage {
         self.diagnostics
             .retain(|d| !is_sane_validation_code(d.code.as_str()));
 
-        let (diagnostics, passes) = match &self.model {
+        let (mut diagnostics, passes) = match &self.model {
             ModelPayload::Balanced { balanced_network } => sane_validate_balanced(balanced_network),
             ModelPayload::Multiconductor {
                 multiconductor_network,
             } => sane_validate_multiconductor(multiconductor_network),
         };
 
+        attach_source_refs(&mut diagnostics, &self.source_maps);
         self.diagnostics.extend(diagnostics);
         self.validation =
             ValidationSummary::from_diagnostics(&self.diagnostics).with_passes(passes);
@@ -349,6 +353,13 @@ fn sane_validate_balanced(
 
     let mut value_domain = Vec::new();
     for finding in net.validate_values() {
+        let element_path = balanced_value_finding_path(net, &finding).unwrap_or_else(|| {
+            format!(
+                "/model/balanced_network/{}#{}",
+                finding.element.replace(' ', "_"),
+                finding.field
+            )
+        });
         let mut d = StructuredDiagnostic::new(
             "VALIDATE.BALANCED.VALUE_DOMAIN",
             DiagnosticSeverity::Warning,
@@ -358,11 +369,7 @@ fn sane_validate_balanced(
                 finding.element, finding.field, finding.new
             ),
         )
-        .with_element_path(format!(
-            "/model/balanced_network/{}#{}",
-            finding.element.replace(' ', "_"),
-            finding.field
-        ))
+        .with_element_path(element_path)
         .with_suggested_action("Run the explicit repair pass if these defaults are desired.");
         d.details
             .insert("element".to_owned(), serde_json::json!(finding.element));
@@ -383,6 +390,63 @@ fn sane_validate_balanced(
     ];
     structure.extend(value_domain);
     (structure, passes)
+}
+
+fn attach_source_refs(diagnostics: &mut [StructuredDiagnostic], source_maps: &[SourceMapEntry]) {
+    for diagnostic in diagnostics {
+        if diagnostic.source_ref.is_some() {
+            continue;
+        }
+        let Some(path) = diagnostic.element_path.as_deref() else {
+            continue;
+        };
+        if let Some(map) = source_maps.iter().find(|m| m.element_path == path) {
+            diagnostic.source_ref = Some(map.source_ref.clone());
+        }
+    }
+}
+
+fn balanced_value_finding_path(
+    net: &BalancedNetwork,
+    finding: &powerio::Diagnostic,
+) -> Option<String> {
+    if let Some(id) = finding
+        .element
+        .strip_prefix("bus ")
+        .and_then(|s| s.parse::<usize>().ok())
+    {
+        let idx = net.buses.iter().position(|b| b.id.0 == id)?;
+        return Some(format!(
+            "/model/balanced_network/buses/{idx}/{}",
+            finding.field
+        ));
+    }
+
+    if let Some(id) = finding
+        .element
+        .strip_prefix("generator at bus ")
+        .and_then(|s| s.parse::<usize>().ok())
+    {
+        let idx = net.generators.iter().position(|g| {
+            g.bus.0 == id
+                && generator_field(g, finding.field)
+                    .is_some_and(|v| v.to_bits() == finding.old.to_bits())
+        })?;
+        return Some(format!(
+            "/model/balanced_network/generators/{idx}/{}",
+            finding.field
+        ));
+    }
+
+    None
+}
+
+fn generator_field(generator: &powerio::Generator, field: &str) -> Option<f64> {
+    Some(match field {
+        "mbase" => generator.mbase,
+        "vg" => generator.vg,
+        _ => return None,
+    })
 }
 
 fn sane_validate_multiconductor(
@@ -798,6 +862,28 @@ fn balanced_origin(net: &BalancedNetwork) -> Origin {
     }
 }
 
+fn balanced_sources(net: &BalancedNetwork) -> Vec<SourceDescriptor> {
+    let Some(kind) = balanced_source_kind(net.source_format) else {
+        return Vec::new();
+    };
+    vec![SourceDescriptor {
+        id: "src0".to_owned(),
+        kind: kind.to_owned(),
+        path: None,
+        format: Some(balanced_format_name(net.source_format).to_owned()),
+        hash: None,
+    }]
+}
+
+fn balanced_source_kind(f: SourceFormat) -> Option<&'static str> {
+    match f {
+        SourceFormat::InMemory | SourceFormat::Normalized => None,
+        SourceFormat::Gridfm | SourceFormat::PypsaCsv => Some("folder"),
+        SourceFormat::PowerWorldBinary => Some("binary_file"),
+        _ => Some("file"),
+    }
+}
+
 fn balanced_summary(net: &BalancedNetwork) -> ObjectSummary {
     let mut elements = BTreeMap::new();
     elements.insert("buses".to_owned(), net.buses.len() as u64);
@@ -831,6 +917,161 @@ fn balanced_summary(net: &BalancedNetwork) -> ObjectSummary {
             base_mva: Some(net.base_mva),
         }),
     }
+}
+
+fn balanced_source_maps(net: &BalancedNetwork, source_id: Option<&str>) -> Vec<SourceMapEntry> {
+    let Some(source_id) = source_id else {
+        return Vec::new();
+    };
+    let mut entries = Vec::new();
+    push_balanced_map(
+        &mut entries,
+        source_id,
+        "/model/balanced_network/base_mva",
+        "case",
+        "base_mva",
+    );
+    push_balanced_map(
+        &mut entries,
+        source_id,
+        "/model/balanced_network/base_frequency",
+        "case",
+        "base_frequency",
+    );
+
+    push_balanced_record_maps(
+        &mut entries,
+        source_id,
+        "buses",
+        net.buses.len(),
+        "bus",
+        &[
+            "id", "kind", "vm", "va", "base_kv", "vmax", "vmin", "area", "zone",
+        ],
+    );
+    push_balanced_record_maps(
+        &mut entries,
+        source_id,
+        "loads",
+        net.loads.len(),
+        "load",
+        &["bus", "p", "q", "in_service"],
+    );
+    push_balanced_record_maps(
+        &mut entries,
+        source_id,
+        "shunts",
+        net.shunts.len(),
+        "shunt",
+        &["bus", "g", "b", "in_service"],
+    );
+
+    for (i, branch) in net.branches.iter().enumerate() {
+        push_balanced_record_map(
+            &mut entries,
+            source_id,
+            "branches",
+            i,
+            "branch",
+            &[
+                "from",
+                "to",
+                "r",
+                "x",
+                "b",
+                "rate_a",
+                "rate_b",
+                "rate_c",
+                "tap",
+                "shift",
+                "in_service",
+                "angmin",
+                "angmax",
+            ],
+        );
+        if branch.charging.is_some() {
+            for field in ["g_fr", "b_fr", "g_to", "b_to"] {
+                push_balanced_map(
+                    &mut entries,
+                    source_id,
+                    &format!("/model/balanced_network/branches/{i}/charging/{field}"),
+                    "branch",
+                    field,
+                );
+            }
+        }
+    }
+
+    push_balanced_record_maps(
+        &mut entries,
+        source_id,
+        "generators",
+        net.generators.len(),
+        "generator",
+        &[
+            "bus",
+            "pg",
+            "qg",
+            "pmax",
+            "pmin",
+            "qmax",
+            "qmin",
+            "vg",
+            "mbase",
+            "in_service",
+        ],
+    );
+
+    entries
+}
+
+fn push_balanced_record_maps(
+    entries: &mut Vec<SourceMapEntry>,
+    source_id: &str,
+    collection: &str,
+    len: usize,
+    record: &str,
+    fields: &[&str],
+) {
+    for i in 0..len {
+        push_balanced_record_map(entries, source_id, collection, i, record, fields);
+    }
+}
+
+fn push_balanced_record_map(
+    entries: &mut Vec<SourceMapEntry>,
+    source_id: &str,
+    collection: &str,
+    i: usize,
+    record: &str,
+    fields: &[&str],
+) {
+    for &field in fields {
+        push_balanced_map(
+            entries,
+            source_id,
+            &format!("/model/balanced_network/{collection}/{i}/{field}"),
+            record,
+            field,
+        );
+    }
+}
+
+fn push_balanced_map(
+    entries: &mut Vec<SourceMapEntry>,
+    source_id: &str,
+    element_path: &str,
+    record: &str,
+    field: &str,
+) {
+    entries.push(SourceMapEntry {
+        element_path: element_path.to_owned(),
+        source_ref: SourceRef::new(source_id)
+            .with_record(record)
+            .with_field(field),
+        mapping_kind: MappingKind::Exact,
+        confidence: Confidence::High,
+    });
 }
 
 fn multiconductor_summary(net: &MulticonductorNetwork) -> ObjectSummary {
