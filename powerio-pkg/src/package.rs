@@ -430,11 +430,20 @@ fn balanced_value_finding_path(
         .strip_prefix("generator at bus ")
         .and_then(|s| s.parse::<usize>().ok())
     {
-        let idx = net.generators.iter().position(|g| {
-            g.bus.0 == id
-                && generator_field(g, finding.field)
-                    .is_some_and(|v| v.to_bits() == finding.old.to_bits())
-        })?;
+        let mut matches = net
+            .generators
+            .iter()
+            .enumerate()
+            .filter(|(_, g)| {
+                g.bus.0 == id
+                    && generator_field(g, finding.field)
+                        .is_some_and(|v| v.to_bits() == finding.old.to_bits())
+            })
+            .map(|(idx, _)| idx);
+        let idx = matches.next()?;
+        if matches.next().is_some() {
+            return None;
+        }
         return Some(format!(
             "/model/balanced_network/generators/{idx}/{}",
             finding.field
@@ -927,51 +936,85 @@ fn balanced_source_maps(net: &BalancedNetwork, source_id: Option<&str>) -> Vec<S
         return Vec::new();
     };
     let mut entries = Vec::new();
+    push_balanced_network_maps(&mut entries, source_id, net.source_format);
+    push_balanced_bus_maps(&mut entries, source_id, net.buses.len());
+    push_balanced_injection_maps(&mut entries, source_id, net);
+    push_balanced_branch_maps(&mut entries, source_id, net);
+    push_balanced_generator_maps(&mut entries, source_id, net.generators.len());
+    entries
+}
+
+fn push_balanced_network_maps(
+    entries: &mut Vec<SourceMapEntry>,
+    source_id: &str,
+    source_format: SourceFormat,
+) {
     push_balanced_map(
-        &mut entries,
+        entries,
         source_id,
         "/model/balanced_network/base_mva",
         "case",
         "base_mva",
     );
-    push_balanced_map(
-        &mut entries,
-        source_id,
-        "/model/balanced_network/base_frequency",
-        "case",
-        "base_frequency",
-    );
+    if let Some((record, field)) = balanced_frequency_source(source_format) {
+        push_balanced_map(
+            entries,
+            source_id,
+            "/model/balanced_network/base_frequency",
+            record,
+            field,
+        );
+    }
+}
 
+fn push_balanced_bus_maps(entries: &mut Vec<SourceMapEntry>, source_id: &str, len: usize) {
     push_balanced_record_maps(
-        &mut entries,
+        entries,
         source_id,
         "buses",
-        net.buses.len(),
+        len,
         "bus",
         &[
             "id", "kind", "vm", "va", "base_kv", "vmax", "vmin", "area", "zone",
         ],
     );
-    push_balanced_record_maps(
-        &mut entries,
-        source_id,
-        "loads",
-        net.loads.len(),
-        "load",
-        &["bus", "p", "q", "in_service"],
-    );
-    push_balanced_record_maps(
-        &mut entries,
-        source_id,
-        "shunts",
-        net.shunts.len(),
-        "shunt",
-        &["bus", "g", "b", "in_service"],
-    );
+}
 
+fn push_balanced_injection_maps(
+    entries: &mut Vec<SourceMapEntry>,
+    source_id: &str,
+    net: &BalancedNetwork,
+) {
+    if net.source_format == SourceFormat::Matpower {
+        push_matpower_injection_maps(entries, source_id, net);
+    } else {
+        push_balanced_record_maps(
+            entries,
+            source_id,
+            "loads",
+            net.loads.len(),
+            "load",
+            &["bus", "p", "q", "in_service"],
+        );
+        push_balanced_record_maps(
+            entries,
+            source_id,
+            "shunts",
+            net.shunts.len(),
+            "shunt",
+            &["bus", "g", "b", "in_service"],
+        );
+    }
+}
+
+fn push_balanced_branch_maps(
+    entries: &mut Vec<SourceMapEntry>,
+    source_id: &str,
+    net: &BalancedNetwork,
+) {
     for (i, branch) in net.branches.iter().enumerate() {
         push_balanced_record_map(
-            &mut entries,
+            entries,
             source_id,
             "branches",
             i,
@@ -995,7 +1038,7 @@ fn balanced_source_maps(net: &BalancedNetwork, source_id: Option<&str>) -> Vec<S
         if branch.charging.is_some() {
             for field in ["g_fr", "b_fr", "g_to", "b_to"] {
                 push_balanced_map(
-                    &mut entries,
+                    entries,
                     source_id,
                     &format!("/model/balanced_network/branches/{i}/charging/{field}"),
                     "branch",
@@ -1004,12 +1047,14 @@ fn balanced_source_maps(net: &BalancedNetwork, source_id: Option<&str>) -> Vec<S
             }
         }
     }
+}
 
+fn push_balanced_generator_maps(entries: &mut Vec<SourceMapEntry>, source_id: &str, len: usize) {
     push_balanced_record_maps(
-        &mut entries,
+        entries,
         source_id,
         "generators",
-        net.generators.len(),
+        len,
         "generator",
         &[
             "bus",
@@ -1024,8 +1069,55 @@ fn balanced_source_maps(net: &BalancedNetwork, source_id: Option<&str>) -> Vec<S
             "in_service",
         ],
     );
+}
 
-    entries
+fn balanced_frequency_source(source_format: SourceFormat) -> Option<(&'static str, &'static str)> {
+    match source_format {
+        SourceFormat::Psse => Some(("header", "BASFRQ")),
+        SourceFormat::PandapowerJson => Some(("network", "f_hz")),
+        _ => None,
+    }
+}
+
+fn push_matpower_injection_maps(
+    entries: &mut Vec<SourceMapEntry>,
+    source_id: &str,
+    net: &BalancedNetwork,
+) {
+    for (i, load) in net.loads.iter().enumerate() {
+        if net.buses.iter().any(|b| b.id == load.bus) {
+            push_matpower_split_map(entries, source_id, "loads", i, "bus", "BUS_I");
+            push_matpower_split_map(entries, source_id, "loads", i, "p", "PD");
+            push_matpower_split_map(entries, source_id, "loads", i, "q", "QD");
+            push_matpower_split_map(entries, source_id, "loads", i, "in_service", "BUS_TYPE");
+        }
+    }
+    for (i, shunt) in net.shunts.iter().enumerate() {
+        if net.buses.iter().any(|b| b.id == shunt.bus) {
+            push_matpower_split_map(entries, source_id, "shunts", i, "bus", "BUS_I");
+            push_matpower_split_map(entries, source_id, "shunts", i, "g", "GS");
+            push_matpower_split_map(entries, source_id, "shunts", i, "b", "BS");
+            push_matpower_split_map(entries, source_id, "shunts", i, "in_service", "BUS_TYPE");
+        }
+    }
+}
+
+fn push_matpower_split_map(
+    entries: &mut Vec<SourceMapEntry>,
+    source_id: &str,
+    collection: &str,
+    i: usize,
+    field: &str,
+    source_field: &str,
+) {
+    entries.push(SourceMapEntry {
+        element_path: format!("/model/balanced_network/{collection}/{i}/{field}"),
+        source_ref: SourceRef::new(source_id)
+            .with_record("bus")
+            .with_field(source_field),
+        mapping_kind: MappingKind::Split,
+        confidence: Confidence::High,
+    });
 }
 
 fn push_balanced_record_maps(

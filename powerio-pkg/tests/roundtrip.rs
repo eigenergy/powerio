@@ -333,6 +333,70 @@ fn balanced_fields_lift_into_source_maps() {
 }
 
 #[test]
+fn matpower_default_frequency_is_not_mapped_as_source_field() {
+    let pkg = balanced_package();
+
+    assert!(
+        !pkg.source_maps
+            .iter()
+            .any(|e| e.element_path == "/model/balanced_network/base_frequency"),
+        "MATPOWER has no source frequency field: {:?}",
+        pkg.source_maps
+    );
+}
+
+#[test]
+fn matpower_loads_and_shunts_map_to_bus_row_fields() {
+    let src = "\
+function mpc = injections
+mpc.version = '2';
+mpc.baseMVA = 100;
+mpc.bus = [
+\t1\t3\t12\t3\t0.5\t0.25\t1\t1\t0\t230\t1\t1.1\t0.9;
+\t2\t1\t0\t0\t0\t0\t1\t1\t0\t230\t1\t1.1\t0.9;
+];
+mpc.branch = [
+\t1\t2\t0.01\t0.1\t0\t0\t0\t0\t0\t0\t1\t-360\t360;
+];
+";
+    let net = powerio::parse_str(src, "matpower").unwrap().network;
+    let pkg = CompilerPackage::from_balanced(net);
+
+    let has_split_bus_field = |path: &str, field: &str| {
+        pkg.source_maps.iter().any(|e| {
+            e.element_path == path
+                && e.mapping_kind == MappingKind::Split
+                && e.confidence == Confidence::High
+                && e.source_ref.record.as_deref() == Some("bus")
+                && e.source_ref.field.as_deref() == Some(field)
+        })
+    };
+    assert!(has_split_bus_field(
+        "/model/balanced_network/loads/0/p",
+        "PD"
+    ));
+    assert!(has_split_bus_field(
+        "/model/balanced_network/loads/0/q",
+        "QD"
+    ));
+    assert!(has_split_bus_field(
+        "/model/balanced_network/shunts/0/g",
+        "GS"
+    ));
+    assert!(has_split_bus_field(
+        "/model/balanced_network/shunts/0/b",
+        "BS"
+    ));
+    assert!(
+        !pkg.source_maps
+            .iter()
+            .any(|e| matches!(e.source_ref.record.as_deref(), Some("load" | "shunt"))),
+        "MATPOWER injections are bus row fields: {:?}",
+        pkg.source_maps
+    );
+}
+
+#[test]
 fn origin_distinguishes_in_memory_from_file() {
     let in_mem = CompilerPackage::from_balanced(powerio::BalancedNetwork::in_memory(
         "t",
@@ -454,6 +518,44 @@ mpc.branch = [
         pkg.validation.passes
     );
     assert_json_roundtrips(&pkg);
+}
+
+#[test]
+fn sane_validation_skips_ambiguous_generator_source_refs() {
+    let src = "\
+function mpc = duplicate_bad_gens
+mpc.version = '2';
+mpc.baseMVA = 100;
+mpc.bus = [
+\t1\t3\t0\t0\t0\t0\t1\t1\t0\t230\t1\t1.1\t0.9;
+\t2\t1\t0\t0\t0\t0\t1\t1\t0\t230\t1\t1.1\t0.9;
+];
+mpc.gen = [
+\t1\t10\t0\t30\t-30\t0\t100\t1\t50\t0;
+\t1\t20\t0\t30\t-30\t0\t100\t1\t60\t0;
+];
+mpc.branch = [
+\t1\t2\t0.01\t0.1\t0\t0\t0\t0\t0\t0\t1\t-360\t360;
+];
+";
+    let net = powerio::parse_str(src, "matpower").unwrap().network;
+    let mut pkg = CompilerPackage::from_balanced(net);
+    pkg.run_sane_validation();
+
+    let generator_vg: Vec<_> = pkg
+        .diagnostics
+        .iter()
+        .filter(|d| {
+            d.code == DiagnosticCode::new("VALIDATE.BALANCED.VALUE_DOMAIN")
+                && d.details["element"] == "generator at bus 1"
+                && d.details["field"] == "vg"
+        })
+        .collect();
+    assert_eq!(generator_vg.len(), 2, "{:?}", pkg.diagnostics);
+    assert!(
+        generator_vg.iter().all(|d| d.source_ref.is_none()),
+        "ambiguous generator diagnostics must not pick the first row: {generator_vg:?}"
+    );
 }
 
 #[test]
