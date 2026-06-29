@@ -45,8 +45,10 @@ pub mod validation;
 
 pub use diagnostics::{DiagnosticCode, DiagnosticSeverity, DiagnosticStage, StructuredDiagnostic};
 pub use lowering::{
-    LoweringRecord, MulticonductorToBalancedOptions, MulticonductorToBalancedReadiness,
+    LoweringRecord, MulticonductorToBalancedError, MulticonductorToBalancedLowering,
+    MulticonductorToBalancedOptions, MulticonductorToBalancedReadiness,
     SequenceTransformConvention, check_multiconductor_to_balanced_lowering,
+    lower_multiconductor_to_balanced,
 };
 pub use model::{ModelKind, ModelPayload};
 pub use package::{
