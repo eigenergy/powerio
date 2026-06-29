@@ -1,8 +1,8 @@
 # Language APIs
 
-PowerIO keeps the same IO vocabulary across Rust, Python, Julia, and the C ABI
-while using each language's own style. The goal is that a new format or dataset
-appears as a format string or convenience wrapper, not as a new naming scheme.
+PowerIO uses the same IO vocabulary across Rust, Python, Julia, and the C ABI,
+with language-specific spelling where needed. A new format or dataset should
+appear as a format string or convenience wrapper, not as a new naming scheme.
 
 Verb taxonomy:
 

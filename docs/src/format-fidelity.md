@@ -12,17 +12,17 @@ implementations and the matching powerio code:
 
 | Quantity | Convention | Reference | powerio |
 | --- | --- | --- | --- |
-| Bus type codes | \(1 = \mathrm{PQ}\), \(2 = \mathrm{PV}\), \(3 = \mathrm{ref}\), \(4 = \mathrm{isolated}\) | MATPOWER `idx_bus` | `network::BusType` |
+| Bus type codes | \\(1 = \mathrm{PQ}\\), \\(2 = \mathrm{PV}\\), \\(3 = \mathrm{ref}\\), \\(4 = \mathrm{isolated}\\) | MATPOWER `idx_bus` | `network::BusType` |
 | Impedance, susceptance | per unit on `baseMVA`, never rescaled | MATPOWER `idx_brch` (`BR_B` already per unit) | `format::matpower` |
 | Branch terminal admittance | MATPOWER `BR_B` splits half to each end; richer sources use canonical `g_fr`/`b_fr`/`g_to`/`b_to`; one-value targets receive the total susceptance projection | PowerModels `matpower.jl`; MATPOWER `idx_brch` | `network::BranchCharging`, `Branch::terminal_charging` |
 | Tap ratio | `0` means a line (treated as `1`); nonzero is a transformer | MATPOWER `idx_brch` `TAP` | `Branch::effective_tap` |
 | Phase shift, angle | degrees in the model; PowerModels JSON carries radians | PowerModels `make_per_unit!` | `format::powermodels` |
 | Angle limits | `angmin`/`angmax` default ±360 (unconstrained) | MATPOWER `idx_brch` `ANGMIN`/`ANGMAX` | `Branch::has_angle_limits` |
-| pandapower/PyPSA impedance | line `r/x` are converted between per unit and ohms with \(Z_{\mathrm{base}} = V_{\mathrm{kV}}^2 / \mathrm{baseMVA}\); pandapower line charging is capacitance per km (`c_nf_per_km`, converted via \(2\pi f \ell Z_{\mathrm{base}}\)); PyPSA line `b` is siemens | pandapower PPC conversion, PyPSA static components | `format::pandapower`, `format::pypsa` |
+| pandapower/PyPSA impedance | line `r/x` are converted between per unit and ohms with \\(Z_{\mathrm{base}} = V_{\mathrm{kV}}^2 / \mathrm{baseMVA}\\); pandapower line charging is capacitance per km (`c_nf_per_km`, converted via \\(2\pi f \ell Z_{\mathrm{base}}\\)); PyPSA line `b` is siemens | pandapower PPC conversion, PyPSA static components | `format::pandapower`, `format::pypsa` |
 | dcline `Pt`/`Qf`/`Qt` | sign flips vs MATPOWER | PowerModels `matpower.jl` | `format::powermodels` |
-| Generator cost | \(c_2 p^2 + c_1 p\) maps to \(q = 2c_2\), \(c = c_1\); coefficients high order first | MATPOWER `idx_cost`, egret `matpower_parser` | `GenCost::quadratic` |
+| Generator cost | \\(c_2 p^2 + c_1 p\\) maps to \\(q = 2c_2\\), \\(c = c_1\\); coefficients high order first | MATPOWER `idx_cost`, egret `matpower_parser` | `GenCost::quadratic` |
 | `source_id` | `["bus", id]` for bus-tied elements | PowerModels `matpower.jl` | `format::powermodels` |
-| PSLF shunts | EPC `pu_mw`/`pu_mvar` are per unit on `sbase`; `Network::Shunt` stores MW/MVAr at \(V = 1\) | paired EPC/RAW case checks | `format::pslf` |
+| PSLF shunts | EPC `pu_mw`/`pu_mvar` are per unit on `sbase`; `Network::Shunt` stores MW/MVAr at \\(V = 1\\) | paired EPC/RAW case checks | `format::pslf` |
 
 egret's own MATPOWER parser uses the same reductions (bus type as
 `matpower_bustype`, polynomial coefficients reversed to a `{degree: coefficient}`
@@ -52,9 +52,9 @@ sources into the non-PowerModels targets), rest on the Rust round trip suite.
 - **ExaPowerIO.jl** (`validate_exapowerio.jl`). Reads MATPOWER through powerio's C
   ABI and compares value for value.
 - **pandapower** (`validate_pandapower.py`,
-  `validate_pandapower_converter.py`). Cross-checks MATPOWER parse/\(Y_{\mathrm{bus}}\) and
+  `validate_pandapower_converter.py`). Cross-checks MATPOWER parse/\\(Y_{\mathrm{bus}}\\) and
   imports powerio's pandapower JSON output back into pandapower, comparing counts
-  and \(Y_{\mathrm{bus}}\).
+  and \\(Y_{\mathrm{bus}}\\).
 - **PyPSA** (`validate_pypsa.py`). Imports powerio's PyPSA CSV folder output and
   checks counts, totals, line r/x/b rebased from ohms on the bus0 voltage, and
   transformer r/x/tap_ratio/s_nom rebased from the transformer `s_nom` base; a
@@ -104,12 +104,12 @@ in Python), naming the table and counting the affected rows.
 `convert_file`/`convert_str` fold the read warnings into `Conversion::warnings`.
 
 - **PSS/E** reads revisions 33, 34, and 35. 3-winding transformers are kept as
-  typed records and star-lowered into \(Y_{\mathrm{bus}}\)/connectivity by the indexed view;
+  typed records and star-lowered into \\(Y_{\mathrm{bus}}\\)/connectivity by the indexed view;
   two-terminal DC lines map to the neutral HVDC model. A switched shunt keeps its
   steady-state susceptance `BINIT` as the shunt `b` and carries its mode, voltage
   band, regulated bus, and step blocks. A 2-winding transformer's magnetizing
-  susceptance round-trips through `MAG2` (\(\mathrm{CM} = 1\)). Impedances are assumed on the
-  system base (\(\mathrm{CZ} = \mathrm{CW} = 1\)).
+  susceptance round-trips through `MAG2` (\\(\mathrm{CM} = 1\\)). Impedances are assumed on the
+  system base (\\(\mathrm{CZ} = \mathrm{CW} = 1\\)).
 - **PowerWorld** `.aux` carries no system base, so the reader defaults to 100 MVA.
   No third-party `.aux` reader exists, so that writer is validated by powerio's own
   read back plus a PowerModels JSON bridge.
@@ -117,7 +117,7 @@ in Python), naming the table and counting the affected rows.
   buses, lines, two- and three-winding transformers, generators, loads, fixed
   shunts, controlled shunts at initial `g/b`, and limited two-terminal DC records.
   Three-winding transformers are kept as typed records and star-lowered into
-  \(Y_{\mathrm{bus}}\)/connectivity by the indexed view. Unsupported sections stay in the
+  \\(Y_{\mathrm{bus}}\\)/connectivity by the indexed view. Unsupported sections stay in the
   retained source text and emit warnings.
 - **MATPOWER** canonical output (for a case that did not originate as MATPOWER)
   omits dcline; the byte exact echo path keeps it when the case was read from
@@ -128,13 +128,13 @@ in Python), naming the table and counting the affected rows.
 - **pandapower JSON** writes the power flow core as split oriented
   `pandapowerNet` tables. Line ohms are referred to the from bus voltage, as
   pandapower's `build_branch` reads them; a bus with baseKV 0 writes
-  `vn_kv` set to \(1\) (warned) so the per unit impedances survive. A branch with a
+  `vn_kv` set to \\(1\\) (warned) so the per unit impedances survive. A branch with a
   tap, a shift, or terminals on two voltage levels becomes a `trafo` row with
   `tap_changer_type = "Ratio"`; its MATPOWER charging b rides as one bus
-  shunt per terminal (warned, \(Y_{\mathrm{bus}}\) exact) because pandapower's magnetizing
+  shunt per terminal (warned, \\(Y_{\mathrm{bus}}\\) exact) because pandapower's magnetizing
   model is inductive only.
-  The file is labeled with `f_hz` set to \(50\) and `c_nf_per_km` compensated, so
-  a 60 Hz source keeps its exact \(Y_{\mathrm{bus}}\). Reference buses without a generator
+  The file is labeled with `f_hz` set to \\(50\\) and `c_nf_per_km` compensated, so
+  a 60 Hz source keeps its exact \\(Y_{\mathrm{bus}}\\). Reference buses without a generator
   get an `ext_grid` row, which reads back as a Ref generator. The writer also
   warns on dropped HVDC, storage, capability columns, angle limits, rate B/C,
   non-finite values (written as JSON null), and costs `poly_cost` cannot
@@ -163,7 +163,7 @@ in Python), naming the table and counting the affected rows.
   it can't recover original bus ids (synthesized `1..n`), per element load/shunt
   granularity (folded one synthetic element per bus), piecewise/cubic gen costs
   (read as none), or HVDC/storage. Because the writer stores the *effective* tap,
-  a branch with unit tap and no phase shift is read back as a line (raw \(\mathrm{tap} = 0\));
+  a branch with unit tap and no phase shift is read back as a line (raw \\(\mathrm{tap} = 0\\));
   a unity ratio, zero shift transformer in the source is thus read as a line (the
   power flow is identical). The losses are returned as a warnings list on
   `GridfmRead`, mirroring `Conversion::warnings`. The same direction writer is

@@ -38,5 +38,5 @@ zero cost columns, but the manifest separates `missing_cost_gens`,
 `unsupported_cost_gens`, `zeroed_cost_gens`, and `synthesized_gen_costs`.
 
 OPFDataset is not a supported powerio format yet. Add a schema or sample fixture
-before implementing an adapter; if its schema requires cost columns, it should use
-the same policy rather than silently treating missing costs as real zeros.
+before implementing an adapter. If its schema requires cost columns, use the
+same policy rather than silently treating missing costs as real zeros.

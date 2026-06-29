@@ -2,14 +2,13 @@
 
 PowerIO is organized as a compiler for power system data: frontends parse source
 formats into typed IR, passes normalize and lower it, and backends emit target
-artifacts. This document defines the IR boundaries and the `.pio.json` compiler
-package that ties them together. The field-level reference for the package is in
+artifacts. The IR boundaries and the `.pio.json` package are below. The field
+reference for the package is in
 [the PIO JSON schema guide](https://eigenergy.github.io/powerio/guide/pio-json-schema.html).
 
-The governing decision is that there is no single flattened universal `Network`
-mega-struct. There are concrete model families, and a package object that wraps
-one payload at a time with the metadata that makes a compiler artifact
-trustworthy.
+There is no flattened universal `Network` mega-struct. PowerIO keeps concrete
+model families separate. The package wraps one payload at a time with source,
+diagnostic, validation, and lowering metadata.
 
 ## Model families
 
@@ -39,12 +38,17 @@ A balanced model cannot represent conductor-level asymmetry; a multiconductor
 model carries terminal and grounding data that has no place in a positive
 sequence struct. The two families never merge into one struct.
 
+BMOPF JSON is the strict exchange format for the distribution family. The
+`.pio.json` package uses the same `MulticonductorNetwork` model and wraps it
+with compiler metadata: model kind, provenance, source maps, diagnostics,
+validation, and lowering history.
+
 ## The compiler package (`.pio.json`)
 
 `powerio_pkg::CompilerPackage` is the readable envelope. It is the object that
-records how a source was interpreted, and it is the interchange layer for
-language bindings. Binary `.pio` is out of scope until the JSON package
-stabilizes.
+records how a source was interpreted. Language bindings can pass the package
+without guessing whether it holds balanced or multiconductor data. Binary `.pio`
+is out of scope until the JSON package settles.
 
 A package always carries:
 
@@ -72,16 +76,16 @@ reject a package where they do not.
 
 The envelope is the versioned, documented surface. The nested `balanced_network`
 / `multiconductor_network` payloads are direct serde snapshots of the live
-PowerIO Rust IR and are experimental until a v1 payload schema is declared; they
-grow whenever the IR grows. See
+PowerIO Rust IR. They can change whenever the Rust models change, until a v1
+payload schema is declared. See
 [the PIO JSON schema guide](https://eigenergy.github.io/powerio/guide/pio-json-schema.html).
 
 ### Provenance and source maps
 
 `Origin` distinguishes an in-memory model, a single file (with or without
 retained source), a folder dataset, a partially decoded binary, a derived
-product, or a composite. A `SourceMapEntry` answers "where did this canonical
-field come from?" with an `element_path`, a `SourceRef` into a declared source, a
+product, or a composite. A `SourceMapEntry` points from a payload field to its
+source with an `element_path`, a `SourceRef` into a declared source, a
 `mapping_kind` (`exact`, `defaulted`, `inferred`, `converted_units`, `lowered`,
 `aggregated`, `split`, `synthetic`, `retained_extra`), and a `confidence`. Parser
 bookkeeping that should not live in the IR payload (retained source text,
@@ -101,11 +105,11 @@ by leading segment (`PARSE`, `READ`, `IR`, `VALIDATE`, `FIDELITY`, `LOWER`,
 
 ### Lowering
 
-Every pass that transforms one model into another appends a `LoweringRecord`
+Each pass that transforms one model into another appends a `LoweringRecord`
 (input and output kind, options, assumptions, approximations, dropped fields,
-diagnostics, validation status) to `lowering_history`, so the transformation is
-auditable rather than implicit. This change set defines the record shape; the
-passes themselves are later work. The v0.4.0 design direction for
+diagnostics, validation status) to `lowering_history`. The record makes the
+transformation explicit. This change set defines the record shape; lowering
+implementations are separate work. The v0.4.0 direction for
 `MulticonductorNetwork` to `BalancedNetwork` lowering is in
 [the v0.4 release direction](https://eigenergy.github.io/powerio/guide/v0.4-release-direction.html); the implementation is
 tracked in #145.
