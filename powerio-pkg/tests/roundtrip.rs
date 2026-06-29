@@ -1035,6 +1035,65 @@ fn lowering_rejects_closed_switch_input() {
 }
 
 #[test]
+fn lowering_rejects_generator_unknown_bus() {
+    use powerio_dist::{Configuration, DistGenerator, Extras};
+
+    let mut net = preflight_network(&["1", "2", "3"], &[]);
+    net.generators.push(DistGenerator {
+        name: "g_missing".to_owned(),
+        bus: "missing".to_owned(),
+        terminal_map: strings(&["1", "2", "3"]),
+        configuration: Configuration::Wye,
+        p_nom: vec![1_000.0, 1_000.0, 1_000.0],
+        q_nom: vec![0.0, 0.0, 0.0],
+        p_min: None,
+        p_max: None,
+        q_min: None,
+        q_max: None,
+        cost: None,
+        extras: Extras::new(),
+    });
+
+    assert_lowering_rejects(&net, "LOWER.MULTI_TO_BALANCED.UNKNOWN_BUS");
+}
+
+#[test]
+fn lowering_preserves_single_phase_shunt_total() {
+    use powerio_dist::{DistShunt, Extras};
+
+    let mut net = preflight_network(&["1", "2", "3"], &[]);
+    net.shunts.push(DistShunt {
+        name: "s1".to_owned(),
+        bus: "loadbus".to_owned(),
+        terminal_map: strings(&["1"]),
+        g: vec![vec![0.03]],
+        b: vec![vec![0.06]],
+        extras: Extras::new(),
+    });
+
+    let lowered =
+        lower_multiconductor_to_balanced(&net, MulticonductorToBalancedOptions::default())
+            .expect("lower single phase shunt");
+    assert_eq!(lowered.network.shunts.len(), 1);
+
+    let expected_g = 0.03 * 240.0 * 240.0 / 1_000_000.0;
+    let expected_b = 0.06 * 240.0 * 240.0 / 1_000_000.0;
+    let shunt = &lowered.network.shunts[0];
+    assert!(
+        (shunt.g - expected_g).abs() < 1.0e-12,
+        "got {}, expected {}",
+        shunt.g,
+        expected_g
+    );
+    assert!(
+        (shunt.b - expected_b).abs() < 1.0e-12,
+        "got {}, expected {}",
+        shunt.b,
+        expected_b
+    );
+}
+
+#[test]
 fn package_lowering_returns_derived_balanced_package() {
     let mut parent =
         CompilerPackage::from_multiconductor(preflight_network(&["1", "2", "3", "4"], &["4"]));

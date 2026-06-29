@@ -296,6 +296,7 @@ impl<'a> LoweringState<'a> {
         let loads = self.lower_loads();
         let shunts = self.lower_shunts(base)?;
         let generators = self.lower_generators(&buses);
+        self.err_if_errors()?;
 
         let network = Network {
             name: self
@@ -804,11 +805,11 @@ impl<'a> LoweringState<'a> {
                 seq[1][1]
             } else {
                 self.record.approximations.push(format!(
-                    "shunt {} has {} active terminal(s); diagonal admittance averaged into balanced shunt",
+                    "shunt {} has {} active terminal(s); diagonal admittance projected with missing phases as zero",
                     shunt.name,
                     active.len()
                 ));
-                average_diagonal_admittance(&shunt.g, &shunt.b, &active)
+                partial_phase_admittance(&shunt.g, &shunt.b, &active)
             };
             let scale = base.line_to_line_volts * base.line_to_line_volts / 1_000_000.0;
             shunts.push(Shunt {
@@ -1263,9 +1264,8 @@ fn line_rate_mva(code: &DistLineCode, active: &[usize], line_to_line_volts: f64)
     Some(SQRT_3 * line_to_line_volts * amps / 1_000_000.0)
 }
 
-fn average_diagonal_admittance(g: &Mat, b: &Mat, active: &[usize]) -> Complex64 {
+fn partial_phase_admittance(g: &Mat, b: &Mat, active: &[usize]) -> Complex64 {
     let mut total = Complex64::new(0.0, 0.0);
-    let mut count = 0_u32;
     for &idx in active {
         let Some(g_row) = g.get(idx) else {
             continue;
@@ -1280,13 +1280,8 @@ fn average_diagonal_admittance(g: &Mat, b: &Mat, active: &[usize]) -> Complex64 
             continue;
         };
         total += Complex64::new(g_value, b_value);
-        count += 1;
     }
-    if count == 0 {
-        Complex64::new(0.0, 0.0)
-    } else {
-        total / f64::from(count)
-    }
+    total / 3.0
 }
 
 fn si_power_to_mega(value: f64) -> f64 {
