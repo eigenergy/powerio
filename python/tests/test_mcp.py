@@ -34,6 +34,8 @@ def test_tool_surface_is_semantic():
         "parse",
         "normalize",
         "matrix",
+        "diagnostics",
+        "capabilities",
         "display",
     }
     for name in ("parse", "summary", "normalize", "matrix", "display"):
@@ -48,6 +50,8 @@ def test_tool_surface_is_semantic():
     save_props = save_schema["properties"]
     assert "to_format" in save_props and "from_format" in save_props
     assert "to" not in save_props and "format" not in save_props
+    assert "package_json" in save_props
+    assert "transport" in tools["parse"].inputSchema["properties"]
 
 
 def test_summary_transmission_schema():
@@ -124,6 +128,70 @@ def test_parse_distribution_uses_bmopf_transport(tmp_path):
     out = tmp_path / "feeder.dss"
     server.save(out_path=str(out), json=parsed["json"], json_format=parsed["json_format"])
     assert "new circuit" in out.read_text().lower()
+
+
+def test_package_transport_flows_through_summary_matrix_and_save(tmp_path):
+    parsed = server.parse(path=str(DATA / "case9.m"), transport="package")
+    assert parsed["schema"] == "powerio.parse"
+    assert parsed["transport"] == "package"
+    assert parsed["json_format"] == "package"
+    assert parsed["domain"] == "transmission"
+    assert parsed["model"] == "balanced"
+    assert "package_json" in parsed
+    package = json.loads(parsed["package_json"])
+    assert package["schema"].endswith("/pio-package/0.1")
+    assert package["model_kind"] == "balanced"
+    assert package["model"]["kind"] == "balanced"
+
+    package_json = parsed["package_json"]
+    assert server.summary(json=package_json)["elements"]["buses"] == 9
+    assert server.summary(package_json=package_json)["elements"]["branches"] == 9
+
+    matrix = server.matrix("bprime", json=package_json)
+    assert matrix["kind"] == "bprime"
+    assert matrix["shape"] == [9, 9]
+
+    normalized = server.normalize(package_json=package_json)
+    assert normalized["domain"] == "transmission"
+    assert normalized["summary"]["elements"]["buses"] == 9
+
+    out = tmp_path / "case9.m"
+    server.save(out_path=str(out), package_json=package_json)
+    assert powerio.parse_file(out).n_buses == 9
+
+
+def test_package_transport_routes_distribution_by_model_kind():
+    parsed = server.parse(path=str(DSS), transport="package")
+    package = json.loads(parsed["package_json"])
+    assert package["model_kind"] == "multiconductor"
+    assert package["model"]["kind"] == "multiconductor"
+
+    summary = server.summary(json=parsed["package_json"])
+    assert summary["domain"] == "distribution"
+    assert summary["model"] == "multiconductor"
+    assert summary["elements"]["buses"] > 0
+
+
+def test_package_diagnostics_and_capabilities():
+    parsed = server.parse(path=str(DATA / "case9.m"), transport="package")
+    diag = server.diagnostics(parsed["package_json"])
+    assert diag["schema"] == "powerio.diagnostics"
+    assert diag["model_kind"] == "balanced"
+    assert diag["summary"]["status"] in {"ok", "info", "warning", "error", "fatal"}
+    assert isinstance(diag["summary"]["text"], str)
+    assert isinstance(diag["diagnostics"], list)
+
+    verbose = server.diagnostics(parsed["package_json"], verbose=True)
+    assert verbose["diagnostics"] == json.loads(parsed["package_json"]).get("diagnostics", [])
+
+    caps = server.capabilities()
+    assert caps["schema"] == "powerio.capabilities"
+    assert "balanced" in caps["model_kinds"]
+    assert "multiconductor" in caps["model_kinds"]
+    assert "matpower" in caps["source_formats"]["transmission"]
+    assert "bmopf-json" in caps["target_formats"]["distribution"]
+    assert "bprime" in caps["matrix_kinds"]
+    assert caps["optional_features"]["package"] is True
 
 
 def test_minimal_bmopf_json_routes_without_format(tmp_path):

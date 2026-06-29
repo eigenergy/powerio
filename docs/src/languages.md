@@ -106,7 +106,7 @@ parse or conversion behavior.
 | Python transmission handle | `powerio.Case` | `powerio.Network` / `powerio.BalancedNetwork` | 0.3.3 | removed in 0.4.0 | `Case` is no longer importable. |
 | Python distribution handle | `powerio.dist.DistCase` | `powerio.dist.MulticonductorNetwork` / `powerio.dist.DistNetwork` | 0.3.3 | removed in 0.4.0 | `DistCase` is no longer importable. |
 | C ABI | `PioNetwork` / `PioDistNetwork` | unchanged `pio_*` / `pio_dist_*` handles | n/a | n/a | `PIO_ABI_VERSION` stays 4 and `PIO_DIST_ABI_VERSION` stays 1; symbol renames are not part of the 0.4 package spine. |
-| MCP | older case helper names | `parse`, `save`, `summary`, `display` | 0.3.3 | kept as Python compatibility wrappers in 0.4 | Advertised tools use the semantic names; `.pio.json` MCP transport is tracked in #157. |
+| MCP | older case helper names | `parse`, `save`, `summary`, `display` | 0.3.3 | kept as Python compatibility wrappers in 0.4 | Advertised tools use the semantic names; `.pio.json` package transport is accepted by the network tools. |
 
 ## Distribution surface (`powerio-dist`)
 

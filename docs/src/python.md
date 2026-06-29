@@ -127,6 +127,22 @@ Use `powerio[pandas]` only for downstream code that expects pandas DataFrames.
 
 ## MCP path handling
 
+MCP clients can request `.pio.json` package output from `parse` and pass that
+same value back to the other network tools:
+
+```python
+parsed = parse(path="case9.m", transport="package")
+pkg = parsed["package_json"]
+summary(package_json=pkg)
+matrix("bprime", package_json=pkg)
+save(out_path="case9.raw", to_format="psse", package_json=pkg)
+diagnostics(pkg)
+```
+
+`summary`, `normalize`, `matrix`, and `save` also auto-detect a package passed
+through the legacy `json` argument. The package envelope's `model_kind` routes
+balanced and multiconductor payloads.
+
 The optional MCP server accepts local filesystem paths and `file://` URIs for
 `path` and `out_path` arguments. Remote URI schemes are rejected. Deployments
 that need filesystem containment can set `POWERIO_MCP_ALLOWED_ROOTS` to an
