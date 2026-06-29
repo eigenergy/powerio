@@ -87,7 +87,8 @@ retained source), a folder dataset, a partially decoded binary, a derived
 product, or a composite. A `SourceMapEntry` points from a payload field to its
 source with an `element_path`, a `SourceRef` into a declared source, a
 `mapping_kind` (`exact`, `defaulted`, `inferred`, `converted_units`, `lowered`,
-`aggregated`, `split`, `synthetic`, `retained_extra`), and a `confidence`. Parser
+`aggregated`, `split`, `synthetic`, `retained_extra`), and a `confidence`.
+Balanced `source_ref.field` values use canonical payload field names. Parser
 bookkeeping that should not live in the IR payload (retained source text,
 default-materialization records) is lifted into this layer rather than the raw
 payload.

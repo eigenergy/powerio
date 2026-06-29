@@ -208,7 +208,7 @@ fn diagnostics_roundtrip() {
             "PSS/E RAW target cannot represent branch angle limits.",
         )
         .with_element_path("/model/balanced_network/branches/0/angmin")
-        .with_source_ref(SourceRef::new("src0").with_field("ANGMIN").with_line(88))
+        .with_source_ref(SourceRef::new("src0").with_field("angmin").with_line(88))
         .with_suggested_action("Use MATPOWER if branch angle limits are required."),
     );
     pkg.validation = powerio_pkg::ValidationSummary::from_diagnostics(&pkg.diagnostics);
@@ -229,7 +229,7 @@ fn diagnostics_roundtrip() {
     );
     assert_eq!(
         d.source_ref.as_ref().unwrap().field.as_deref(),
-        Some("ANGMIN")
+        Some("angmin")
     );
     assert_eq!(
         back.validation.status,
@@ -257,7 +257,7 @@ fn source_references_roundtrip() {
         }])
         .with_source_maps(vec![SourceMapEntry {
             element_path: "/model/balanced_network/buses/0/vm".to_owned(),
-            source_ref: SourceRef::new("src0").with_field("VM").with_line(103),
+            source_ref: SourceRef::new("src0").with_field("vm").with_line(103),
             mapping_kind: MappingKind::Exact,
             confidence: Confidence::Exact,
         }]);
@@ -281,7 +281,7 @@ fn source_references_roundtrip() {
     assert_eq!(back.sources[0].id, "src0");
     assert_eq!(back.source_maps.len(), 1);
     assert_eq!(back.source_maps[0].mapping_kind, MappingKind::Exact);
-    assert_eq!(back.source_maps[0].source_ref.field.as_deref(), Some("VM"));
+    assert_eq!(back.source_maps[0].source_ref.field.as_deref(), Some("vm"));
 }
 
 #[test]
@@ -314,7 +314,7 @@ fn balanced_fields_lift_into_source_maps() {
                 && e.mapping_kind == MappingKind::Exact
                 && e.confidence == Confidence::High
                 && e.source_ref.record.as_deref() == Some("bus")
-                && e.source_ref.field.as_deref() == Some("VM")
+                && e.source_ref.field.as_deref() == Some("vm")
         }),
         "expected bus voltage source map: {:?}",
         pkg.source_maps
@@ -324,7 +324,7 @@ fn balanced_fields_lift_into_source_maps() {
             e.element_path == "/model/balanced_network/branches/0/angmax"
                 && e.mapping_kind == MappingKind::Exact
                 && e.source_ref.record.as_deref() == Some("branch")
-                && e.source_ref.field.as_deref() == Some("ANGMAX")
+                && e.source_ref.field.as_deref() == Some("angmax")
         }),
         "expected branch angle source map: {:?}",
         pkg.source_maps
@@ -376,26 +376,26 @@ mpc.branch = [
     };
     assert!(has_split_bus_field(
         "/model/balanced_network/loads/0/p",
-        "PD"
+        "p"
     ));
     assert!(has_split_bus_field(
         "/model/balanced_network/loads/0/q",
-        "QD"
+        "q"
     ));
     assert!(has_split_bus_field(
         "/model/balanced_network/shunts/0/g",
-        "GS"
+        "g"
     ));
     assert!(has_split_bus_field(
         "/model/balanced_network/shunts/0/b",
-        "BS"
+        "b"
     ));
     assert!(
         pkg.source_maps.iter().any(|e| {
             e.element_path == "/model/balanced_network/generators/0/pg"
                 && e.mapping_kind == MappingKind::Exact
                 && e.source_ref.record.as_deref() == Some("generator")
-                && e.source_ref.field.as_deref() == Some("PG")
+                && e.source_ref.field.as_deref() == Some("pg")
         }),
         "expected generator dispatch source map: {:?}",
         pkg.source_maps
@@ -533,7 +533,7 @@ mpc.branch = [
             && d.details["field"] == "vm"
             && d.element_path.as_deref() == Some("/model/balanced_network/buses/0/vm")
             && d.source_ref.as_ref().and_then(|r| r.record.as_deref()) == Some("bus")
-            && d.source_ref.as_ref().and_then(|r| r.field.as_deref()) == Some("VM")),
+            && d.source_ref.as_ref().and_then(|r| r.field.as_deref()) == Some("vm")),
         "expected voltage magnitude finding: {:?}",
         pkg.diagnostics
     );

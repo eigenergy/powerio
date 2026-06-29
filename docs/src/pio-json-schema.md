@@ -100,16 +100,18 @@ A `source_map` entry records where a canonical field came from: an `element_path
 source, a `mapping_kind` (`exact`, `defaulted`, `inferred`, `converted_units`,
 `lowered`, `aggregated`, `split`, `synthetic`, `retained_extra`), and a
 `confidence` (`exact`, `high`, `medium`, `low`). Balanced packages emit source
-maps for stable bus, load, shunt, branch, and generator fields. Most point to an
-exact source record and field. When a source format folds several canonical
-elements into one source row, the source map records that relation with another
-mapping kind; MATPOWER load and shunt fields use `mapping_kind = split` and point
-to the bus row `PD` / `QD` / `GS` / `BS` fields. Values that the source format
-does not carry are not marked as exact source fields; MATPOWER `base_frequency`
-has no source map. When a multiconductor network is packaged, its `defaulted`
-fields lift into source maps with `mapping_kind = defaulted`, and its retained
-source becomes `origin.retained_source`. Validation diagnostics attach the
-matching `source_ref` when the package has a source map for the reported field.
+maps for stable bus, load, shunt, branch, and generator fields. Balanced
+`source_ref.field` values use the same canonical field names as the payload, so
+they can be compared directly with `element_path`. When a source format folds
+several canonical elements into one source row, the source map records that
+relation with another mapping kind; MATPOWER load and shunt fields use
+`mapping_kind = split` and point to the bus record while keeping fields such as
+`p`, `q`, `g`, and `b`. Values that the source format does not carry are not
+marked as exact source fields; MATPOWER `base_frequency` has no source map. When
+a multiconductor network is packaged, its `defaulted` fields lift into source
+maps with `mapping_kind = defaulted`, and its retained source becomes
+`origin.retained_source`. Validation diagnostics attach the matching
+`source_ref` when the package has a source map for the reported field.
 
 ## Example
 
