@@ -197,12 +197,28 @@ impl CompilerPackage {
     /// Deserialize from `.pio.json`.
     pub fn from_json(text: &str) -> serde_json::Result<Self> {
         let pkg: Self = serde_json::from_str(text)?;
+        if !Self::supports_schema_version(&pkg.schema_version) {
+            return Err(<serde_json::Error as serde::de::Error>::custom(format!(
+                "unsupported .pio.json schema_version {}; this reader supports major version {}",
+                pkg.schema_version,
+                supported_schema_major()
+            )));
+        }
         if !pkg.kind_is_consistent() {
             return Err(<serde_json::Error as serde::de::Error>::custom(
                 "model_kind does not match model.kind",
             ));
         }
         Ok(pkg)
+    }
+
+    /// Whether this reader accepts the envelope schema version.
+    ///
+    /// The `.pio.json` compatibility contract is envelope scoped: unknown
+    /// future top-level fields are ignored, additive same major versions load,
+    /// and a different major version is rejected before payload use.
+    pub fn supports_schema_version(version: &str) -> bool {
+        schema_major(version).is_some_and(|major| major == supported_schema_major())
     }
 
     #[must_use]
@@ -274,6 +290,21 @@ impl CompilerPackage {
         self.validation =
             ValidationSummary::from_diagnostics(&self.diagnostics).with_passes(passes);
     }
+}
+
+fn schema_major(version: &str) -> Option<u64> {
+    let mut parts = version.split('.');
+    let major = parts.next()?;
+    let minor = parts.next()?;
+    let patch = parts.next()?;
+    if major.is_empty() || minor.is_empty() || patch.is_empty() {
+        return None;
+    }
+    major.parse().ok()
+}
+
+fn supported_schema_major() -> u64 {
+    schema_major(PIO_PACKAGE_SCHEMA_VERSION).expect("package schema version has a major number")
 }
 
 const SANE_VALIDATION_CODES: [&str; 6] = [

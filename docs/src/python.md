@@ -42,6 +42,16 @@ bprime = net.bprime()        # needs powerio[matrix]
 graph = net.to_networkx()    # needs powerio[graph]
 ```
 
+## Model names
+
+`powerio.Network` is the existing balanced transmission handle. v0.4 also
+exports `powerio.BalancedNetwork` as the v1 family name for the same handle.
+The old `powerio.Case` compatibility alias was removed in v0.4.
+
+For distribution models, use `powerio.dist.MulticonductorNetwork` or the
+existing `powerio.dist.DistNetwork` handle name. The old
+`powerio.dist.DistCase` alias was removed in v0.4.
+
 `parse_file(path, from_=None)` reads network case files (inferred from the
 extension, or forced with `from_`); `parse_str(text, format)` reads in-memory
 case text. Display artifacts are not network cases, so they use the separate

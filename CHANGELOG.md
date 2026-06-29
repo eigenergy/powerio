@@ -1,5 +1,15 @@
 # Changelog
 
+## Unreleased
+
+- `powerio-pkg`: `.pio.json` reads now enforce the envelope compatibility rule:
+  same major `schema_version` values load, while incompatible major versions
+  fail before payload use. The mdBook schema page documents the rule.
+- Python API: removed the one release `powerio.Case` and
+  `powerio.dist.DistCase` compatibility aliases. Use `powerio.Network` /
+  `powerio.BalancedNetwork` and `powerio.dist.MulticonductorNetwork` /
+  `powerio.dist.DistNetwork`.
+
 ## 0.3.3
 
 - MCP server: **unified the advertised tool surface** to semantic verbs:

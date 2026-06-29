@@ -335,6 +335,57 @@ fn unknown_future_fields_are_tolerated() {
 }
 
 #[test]
+fn future_same_major_schema_version_is_tolerated() {
+    let pkg = balanced_package();
+    let mut v = serde_json::to_value(&pkg).unwrap();
+    v.as_object_mut()
+        .unwrap()
+        .insert("schema_version".to_owned(), serde_json::json!("0.2.0"));
+    v.as_object_mut()
+        .unwrap()
+        .insert("future_field".to_owned(), serde_json::json!({"x": 1}));
+    let json = serde_json::to_string(&v).unwrap();
+
+    let back = CompilerPackage::from_json(&json).expect("same major schema version loads");
+    assert_eq!(back.schema_version, "0.2.0");
+    assert_eq!(back.model_kind(), ModelKind::Balanced);
+}
+
+#[test]
+fn incompatible_schema_major_is_rejected() {
+    let pkg = balanced_package();
+    let mut v = serde_json::to_value(&pkg).unwrap();
+    v.as_object_mut()
+        .unwrap()
+        .insert("schema_version".to_owned(), serde_json::json!("1.0.0"));
+    let json = serde_json::to_string(&v).unwrap();
+
+    let err = CompilerPackage::from_json(&json).expect_err("major version mismatch must fail");
+    assert!(
+        err.to_string()
+            .contains("unsupported .pio.json schema_version 1.0.0"),
+        "{err}"
+    );
+}
+
+#[test]
+fn invalid_schema_version_is_rejected() {
+    let pkg = balanced_package();
+    let mut v = serde_json::to_value(&pkg).unwrap();
+    v.as_object_mut()
+        .unwrap()
+        .insert("schema_version".to_owned(), serde_json::json!("0"));
+    let json = serde_json::to_string(&v).unwrap();
+
+    let err = CompilerPackage::from_json(&json).expect_err("invalid semver must fail");
+    assert!(
+        err.to_string()
+            .contains("unsupported .pio.json schema_version 0"),
+        "{err}"
+    );
+}
+
+#[test]
 fn sane_validation_records_balanced_value_domain_findings() {
     let src = "\
 function mpc = bad_values

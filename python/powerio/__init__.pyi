@@ -225,7 +225,7 @@ class Network:
         gen_cost_csv: Optional[Any] = ...,
     ) -> Dict[str, Any]: ...
 
-Case = Network
+BalancedNetwork = Network
 
 class Conversion(NamedTuple):
     text: str

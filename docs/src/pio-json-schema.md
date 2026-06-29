@@ -37,6 +37,8 @@ version yet; pin to `producer.version` if you depend on payload fields.
 - A reader tolerates unknown future top-level fields (they are ignored, not an
   error), so a package from a newer producer still loads. A future version may
   preserve them in an extras map instead of dropping them.
+- A reader accepts same major `schema_version` values and rejects a different
+  major version before using the payload.
 - Every package states `producer.version` and `schema_version`.
 
 ## Explicit model kind

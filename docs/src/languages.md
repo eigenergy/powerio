@@ -91,6 +91,22 @@ Binding checks covered in this audit:
 | GridFM | Julia and C read GridFM through `pio_read_dir` / `"gridfm"` and surface schema losses as warnings |
 | Distribution | Python, Julia, Rust, and C use separate distribution handles; transmission and distribution conversion paths do not mix |
 
+## v0.4 naming migration
+
+The v1 naming direction separates the concrete model families from the package
+object that can hold either family. v0.4 starts that migration without changing
+parse or conversion behavior.
+
+| Surface | Removed or old name | v0.4 name | Notes |
+|---|---|---|---|
+| Rust transmission model | `powerio::Network` | `powerio::BalancedNetwork` alias | `Network` remains the concrete type in 0.4; the alias lets new code use the v1 family name. |
+| Rust distribution model | `powerio_dist::DistNetwork` | `powerio_dist::MulticonductorNetwork` alias | `DistNetwork` remains the concrete type in 0.4. |
+| Rust package object | n/a | `powerio_pkg::CompilerPackage` | Serializes to `.pio.json` and carries `model_kind`. |
+| Python transmission handle | `powerio.Case` | `powerio.Network` / `powerio.BalancedNetwork` | `Case` is removed in 0.4. |
+| Python distribution handle | `powerio.dist.DistCase` | `powerio.dist.MulticonductorNetwork` / `powerio.dist.DistNetwork` | `DistCase` is removed in 0.4. |
+| C ABI | n/a | unchanged `pio_*` / `pio_dist_*` handles | Symbol renames are not part of the 0.4 package spine. |
+| MCP | raw JSON transport | package transport later | `.pio.json` transport is tracked in #157. |
+
 ## Distribution surface (`powerio-dist`)
 
 The multiconductor distribution model follows the same taxonomy under its own

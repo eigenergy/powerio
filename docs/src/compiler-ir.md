@@ -114,4 +114,6 @@ tracked in #145.
 
 `schema_version` is semver. Additive envelope fields bump the minor; field moves
 bump the major or ship a migration. Unknown future top-level fields are tolerated
-on read (ignored), so a package from a newer producer still deserializes.
+on read (ignored), so a package from a newer producer still deserializes when
+the `schema_version` major version matches. A different major version is
+rejected before payload use.
