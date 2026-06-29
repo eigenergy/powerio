@@ -296,7 +296,8 @@ pub struct DistNetwork {
     /// default. Skipped in the `.pio.json` payload: the field holds
     /// `&'static str` (no `Deserialize`), and this provenance belongs in the
     /// compiler package's `source_maps` as `mapping_kind = defaulted`, not in
-    /// the raw IR payload. See `docs/architecture/pio-json-schema.md`.
+    /// the raw IR payload. See
+    /// <https://eigenergy.github.io/powerio/guide/pio-json-schema.html>.
     #[serde(skip)]
     pub defaulted: BTreeMap<String, Vec<&'static str>>,
     pub warnings: Vec<String>,
