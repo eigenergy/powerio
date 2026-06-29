@@ -558,6 +558,7 @@ fn storage_rows(
     view: &IndexedNetwork<'_>,
     provenance: &SourceRows,
 ) -> Result<Vec<SolverStorageRow>> {
+    let base_mva = view.network().base_mva;
     view.network()
         .storage
         .iter()
@@ -567,8 +568,8 @@ fn storage_rows(
                 index: i,
                 source_row: provenance.storage[i],
                 bus_index: dense_bus(view, storage.bus, i)?,
-                ps: storage.ps,
-                qs: storage.qs,
+                ps: storage.ps / base_mva,
+                qs: storage.qs / base_mva,
                 energy: storage.energy,
                 energy_rating: storage.energy_rating,
                 charge_rating: storage.charge_rating,
@@ -603,6 +604,7 @@ fn hvdc_row(
     i: usize,
     hvdc: &Hvdc,
 ) -> Result<SolverHvdcRow> {
+    let base_mva = view.network().base_mva;
     Ok(SolverHvdcRow {
         index: i,
         source_row: provenance.hvdc[i],
@@ -614,8 +616,8 @@ fn hvdc_row(
         qt: hvdc.qt,
         vf: hvdc.vf,
         vt: hvdc.vt,
-        pmin: hvdc.pmin,
-        pmax: hvdc.pmax,
+        pmin: hvdc.pmin / base_mva,
+        pmax: hvdc.pmax / base_mva,
         qminf: hvdc.qminf,
         qmaxf: hvdc.qmaxf,
         qmint: hvdc.qmint,
@@ -747,7 +749,7 @@ fn resize_sources(len: usize, rows: impl Iterator<Item = usize>) -> Vec<Option<u
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::network::{Branch, Bus, Extras, Generator, Load, SourceFormat};
+    use crate::network::{Branch, Bus, Extras, Generator, Hvdc, Load, SourceFormat, Storage};
     use crate::parse_file;
 
     fn approx(a: f64, b: f64) -> bool {
@@ -898,5 +900,75 @@ mod tests {
         let bus_2 = &tables.buses[1];
         assert!(approx(bus_2.pd, 21.7 / 100.0));
         assert!(approx(bus_2.qd, 12.7 / 100.0));
+    }
+
+    #[test]
+    fn solver_tables_scale_storage_and_hvdc_power_fields_to_per_unit() {
+        let mut net = Network::in_memory(
+            "storage-hvdc",
+            100.0,
+            vec![bus(1, BusType::Ref), bus(2, BusType::Pq)],
+            Vec::new(),
+        );
+        net.generators.push(generator(1, true));
+        net.storage.push(Storage {
+            bus: BusId(2),
+            ps: 30.0,
+            qs: -10.0,
+            energy: 50.0,
+            energy_rating: 100.0,
+            charge_rating: 20.0,
+            discharge_rating: 25.0,
+            charge_efficiency: 0.9,
+            discharge_efficiency: 0.85,
+            thermal_rating: 40.0,
+            current_rating: None,
+            qmin: -15.0,
+            qmax: 15.0,
+            r: 0.01,
+            x: 0.02,
+            p_loss: 2.0,
+            q_loss: 1.0,
+            in_service: true,
+            extras: Extras::new(),
+        });
+        net.hvdc.push(Hvdc {
+            from: BusId(1),
+            to: BusId(2),
+            in_service: true,
+            pf: 20.0,
+            pt: -19.0,
+            qf: 5.0,
+            qt: -4.0,
+            vf: 1.0,
+            vt: 1.0,
+            pmin: -40.0,
+            pmax: 75.0,
+            qminf: -25.0,
+            qmaxf: 30.0,
+            qmint: -20.0,
+            qmaxt: 22.0,
+            loss0: 1.5,
+            loss1: 0.02,
+            cost: None,
+            extras: Extras::new(),
+        });
+
+        let tables = net.to_normalized_solver_tables().unwrap();
+
+        let storage = &tables.storage[0];
+        assert!(approx(storage.ps, 0.3));
+        assert!(approx(storage.qs, -0.1));
+        assert!(approx(storage.energy, 0.5));
+        assert!(approx(storage.thermal_rating, 0.4));
+        assert!(approx(storage.p_loss, 0.02));
+
+        let hvdc = &tables.hvdc[0];
+        assert!(approx(hvdc.pf, 0.2));
+        assert!(approx(hvdc.pt, -0.19));
+        assert!(approx(hvdc.pmin, -0.4));
+        assert!(approx(hvdc.pmax, 0.75));
+        assert!(approx(hvdc.qminf, -0.25));
+        assert!(approx(hvdc.loss0, 0.015));
     }
 }
