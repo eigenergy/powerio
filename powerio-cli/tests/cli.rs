@@ -125,7 +125,7 @@ fn package_overwrites_existing_output_file() {
     let value: serde_json::Value = serde_json::from_str(&text).unwrap();
     assert_eq!(
         value["schema"],
-        "https://powerio.dev/schema/pio-package/0.1"
+        "https://powerio.dev/schema/pio-package/0.2"
     );
     assert!(!text.contains("sentinel"), "{text}");
 
