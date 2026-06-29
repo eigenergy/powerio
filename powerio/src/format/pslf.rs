@@ -1421,14 +1421,31 @@ pub fn write_pslf(net: &Network) -> Conversion {
     if net.generators.iter().any(|g| g.cost.is_some()) {
         warnings.push("generator cost curves dropped: PSLF .epc carries no cost data".into());
     }
+    // Transformer branches drop their charging entirely (warned separately
+    // below), so exclude them here: only line records carry the collapsed total
+    // susceptance this message describes.
     let terminal_charging = net
         .branches
         .iter()
-        .filter(|b| b.has_non_matpower_charging())
+        .filter(|b| b.has_non_matpower_charging() && !b.is_transformer())
         .count();
     if terminal_charging > 0 {
         warnings.push(format!(
             "{terminal_charging} branch terminal admittance record(s) collapsed to total susceptance: PSLF branch records written here cannot carry conductance or asymmetric terminal charging"
+        ));
+    }
+    let transformer_charging = net
+        .branches
+        .iter()
+        .filter(|b| {
+            b.is_transformer()
+                && (b.terminal_charging().total_g().abs() > 1e-12
+                    || b.terminal_charging().total_b().abs() > 1e-12)
+        })
+        .count();
+    if transformer_charging > 0 {
+        warnings.push(format!(
+            "{transformer_charging} transformer charging admittance record(s) dropped: PSLF transformer records written here carry series impedance, tap, shift, and ratings only"
         ));
     }
     let current_ratings = net
@@ -1687,6 +1704,76 @@ end
         let mut warnings = Vec::new();
         let net = parse_pslf_source(Arc::new(epc.to_string()), None, &mut warnings).unwrap();
         assert_eq!(net.source.as_deref().map(String::as_str), Some(epc));
+    }
+
+    #[test]
+    fn transformer_charging_drop_is_warned_on_write() {
+        let mut net = Network::in_memory(
+            "charging",
+            100.0,
+            vec![
+                Bus {
+                    id: BusId(1),
+                    kind: BusType::Ref,
+                    vm: 1.0,
+                    va: 0.0,
+                    base_kv: 230.0,
+                    vmax: 1.1,
+                    vmin: 0.9,
+                    evhi: None,
+                    evlo: None,
+                    area: 1,
+                    zone: 1,
+                    name: None,
+                    extras: Extras::new(),
+                },
+                Bus {
+                    id: BusId(2),
+                    kind: BusType::Pq,
+                    vm: 1.0,
+                    va: 0.0,
+                    base_kv: 230.0,
+                    vmax: 1.1,
+                    vmin: 0.9,
+                    evhi: None,
+                    evlo: None,
+                    area: 1,
+                    zone: 1,
+                    name: None,
+                    extras: Extras::new(),
+                },
+            ],
+            Vec::new(),
+        );
+        net.branches.push(Branch {
+            from: BusId(1),
+            to: BusId(2),
+            r: 0.01,
+            x: 0.1,
+            b: 0.02,
+            charging: None,
+            rate_a: 100.0,
+            rate_b: 100.0,
+            rate_c: 100.0,
+            current_ratings: None,
+            tap: 1.0,
+            shift: 0.0,
+            in_service: true,
+            angmin: -360.0,
+            angmax: 360.0,
+            control: None,
+            solution: None,
+            extras: Extras::new(),
+        });
+
+        let conv = write_pslf(&net);
+        assert!(
+            conv.warnings
+                .iter()
+                .any(|w| w.contains("transformer charging admittance")),
+            "{:?}",
+            conv.warnings
+        );
     }
 
     #[test]

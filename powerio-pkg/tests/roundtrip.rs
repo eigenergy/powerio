@@ -208,7 +208,7 @@ fn diagnostics_roundtrip() {
             "PSS/E RAW target cannot represent branch angle limits.",
         )
         .with_element_path("/model/balanced_network/branches/0/angmin")
-        .with_source_ref(SourceRef::new("src0").with_field("ANGMIN").with_line(88))
+        .with_source_ref(SourceRef::new("src0").with_field("angmin").with_line(88))
         .with_suggested_action("Use MATPOWER if branch angle limits are required."),
     );
     pkg.validation = powerio_pkg::ValidationSummary::from_diagnostics(&pkg.diagnostics);
@@ -229,7 +229,7 @@ fn diagnostics_roundtrip() {
     );
     assert_eq!(
         d.source_ref.as_ref().unwrap().field.as_deref(),
-        Some("ANGMIN")
+        Some("angmin")
     );
     assert_eq!(
         back.validation.status,
@@ -257,7 +257,7 @@ fn source_references_roundtrip() {
         }])
         .with_source_maps(vec![SourceMapEntry {
             element_path: "/model/balanced_network/buses/0/vm".to_owned(),
-            source_ref: SourceRef::new("src0").with_field("VM").with_line(103),
+            source_ref: SourceRef::new("src0").with_field("vm").with_line(103),
             mapping_kind: MappingKind::Exact,
             confidence: Confidence::Exact,
         }]);
@@ -281,7 +281,7 @@ fn source_references_roundtrip() {
     assert_eq!(back.sources[0].id, "src0");
     assert_eq!(back.source_maps.len(), 1);
     assert_eq!(back.source_maps[0].mapping_kind, MappingKind::Exact);
-    assert_eq!(back.source_maps[0].source_ref.field.as_deref(), Some("VM"));
+    assert_eq!(back.source_maps[0].source_ref.field.as_deref(), Some("vm"));
 }
 
 #[test]
@@ -304,6 +304,112 @@ fn defaulted_fields_lift_into_source_maps() {
 }
 
 #[test]
+fn balanced_fields_lift_into_source_maps() {
+    let pkg = balanced_package();
+    assert_eq!(pkg.sources.len(), 1);
+    assert_eq!(pkg.sources[0].format.as_deref(), Some("matpower"));
+    assert!(
+        pkg.source_maps.iter().any(|e| {
+            e.element_path == "/model/balanced_network/buses/0/vm"
+                && e.mapping_kind == MappingKind::Exact
+                && e.confidence == Confidence::High
+                && e.source_ref.record.as_deref() == Some("bus")
+                && e.source_ref.field.as_deref() == Some("vm")
+        }),
+        "expected bus voltage source map: {:?}",
+        pkg.source_maps
+    );
+    assert!(
+        pkg.source_maps.iter().any(|e| {
+            e.element_path == "/model/balanced_network/branches/0/angmax"
+                && e.mapping_kind == MappingKind::Exact
+                && e.source_ref.record.as_deref() == Some("branch")
+                && e.source_ref.field.as_deref() == Some("angmax")
+        }),
+        "expected branch angle source map: {:?}",
+        pkg.source_maps
+    );
+    assert_json_roundtrips(&pkg);
+}
+
+#[test]
+fn matpower_default_frequency_is_not_mapped_as_source_field() {
+    let pkg = balanced_package();
+
+    assert!(
+        !pkg.source_maps
+            .iter()
+            .any(|e| e.element_path == "/model/balanced_network/base_frequency"),
+        "MATPOWER has no source frequency field: {:?}",
+        pkg.source_maps
+    );
+}
+
+#[test]
+fn matpower_loads_and_shunts_map_to_bus_row_fields() {
+    let src = "\
+function mpc = injections
+mpc.version = '2';
+mpc.baseMVA = 100;
+mpc.bus = [
+\t1\t3\t12\t3\t0.5\t0.25\t1\t1\t0\t230\t1\t1.1\t0.9;
+\t2\t1\t0\t0\t0\t0\t1\t1\t0\t230\t1\t1.1\t0.9;
+];
+mpc.gen = [
+\t1\t10\t2\t30\t-30\t1\t100\t1\t50\t0;
+];
+mpc.branch = [
+\t1\t2\t0.01\t0.1\t0\t0\t0\t0\t0\t0\t1\t-360\t360;
+];
+";
+    let net = powerio::parse_str(src, "matpower").unwrap().network;
+    let pkg = CompilerPackage::from_balanced(net);
+
+    let has_split_bus_field = |path: &str, field: &str| {
+        pkg.source_maps.iter().any(|e| {
+            e.element_path == path
+                && e.mapping_kind == MappingKind::Split
+                && e.confidence == Confidence::High
+                && e.source_ref.record.as_deref() == Some("bus")
+                && e.source_ref.field.as_deref() == Some(field)
+        })
+    };
+    assert!(has_split_bus_field(
+        "/model/balanced_network/loads/0/p",
+        "p"
+    ));
+    assert!(has_split_bus_field(
+        "/model/balanced_network/loads/0/q",
+        "q"
+    ));
+    assert!(has_split_bus_field(
+        "/model/balanced_network/shunts/0/g",
+        "g"
+    ));
+    assert!(has_split_bus_field(
+        "/model/balanced_network/shunts/0/b",
+        "b"
+    ));
+    assert!(
+        pkg.source_maps.iter().any(|e| {
+            e.element_path == "/model/balanced_network/generators/0/pg"
+                && e.mapping_kind == MappingKind::Exact
+                && e.source_ref.record.as_deref() == Some("generator")
+                && e.source_ref.field.as_deref() == Some("pg")
+        }),
+        "expected generator dispatch source map: {:?}",
+        pkg.source_maps
+    );
+    assert!(
+        !pkg.source_maps
+            .iter()
+            .any(|e| matches!(e.source_ref.record.as_deref(), Some("load" | "shunt"))),
+        "MATPOWER injections are bus row fields: {:?}",
+        pkg.source_maps
+    );
+}
+
+#[test]
 fn origin_distinguishes_in_memory_from_file() {
     let in_mem = CompilerPackage::from_balanced(powerio::BalancedNetwork::in_memory(
         "t",
@@ -315,6 +421,28 @@ fn origin_distinguishes_in_memory_from_file() {
 
     let from_file = balanced_package();
     assert!(matches!(from_file.origin, Origin::File { .. }));
+}
+
+#[test]
+fn balanced_origin_matches_source_artifact_kind() {
+    let mut net = powerio::parse_str(MATPOWER_SRC, "matpower")
+        .expect("parse matpower")
+        .network;
+
+    net.source_format = powerio::SourceFormat::Gridfm;
+    let gridfm = CompilerPackage::from_balanced(net.clone());
+    assert!(matches!(gridfm.origin, Origin::Folder { .. }));
+    assert_eq!(gridfm.sources[0].kind, "folder");
+
+    net.source_format = powerio::SourceFormat::PypsaCsv;
+    let pypsa = CompilerPackage::from_balanced(net.clone());
+    assert!(matches!(pypsa.origin, Origin::Folder { .. }));
+    assert_eq!(pypsa.sources[0].kind, "folder");
+
+    net.source_format = powerio::SourceFormat::PowerWorldBinary;
+    let pwb = CompilerPackage::from_balanced(net);
+    assert!(matches!(pwb.origin, Origin::BinaryFile { .. }));
+    assert_eq!(pwb.sources[0].kind, "binary_file");
 }
 
 #[test]
@@ -332,6 +460,84 @@ fn unknown_future_fields_are_tolerated() {
     assert_eq!(back.model_kind(), ModelKind::Balanced);
     assert!(back.kind_is_consistent());
     assert_eq!(back.as_balanced().unwrap().buses.len(), 2);
+}
+
+#[test]
+fn future_same_major_schema_version_is_tolerated() {
+    let pkg = balanced_package();
+    let mut v = serde_json::to_value(&pkg).unwrap();
+    v.as_object_mut()
+        .unwrap()
+        .insert("schema_version".to_owned(), serde_json::json!("0.2.0"));
+    v.as_object_mut()
+        .unwrap()
+        .insert("future_field".to_owned(), serde_json::json!({"x": 1}));
+    let json = serde_json::to_string(&v).unwrap();
+
+    let back = CompilerPackage::from_json(&json).expect("same major schema version loads");
+    assert_eq!(back.schema_version, "0.2.0");
+    assert_eq!(back.model_kind(), ModelKind::Balanced);
+}
+
+#[test]
+fn same_major_prerelease_or_build_schema_version_is_tolerated() {
+    for version in ["0.2.0-rc.1", "0.1.0+build.5", "0.3.0-alpha.2+exp"] {
+        let pkg = balanced_package();
+        let mut v = serde_json::to_value(&pkg).unwrap();
+        v.as_object_mut()
+            .unwrap()
+            .insert("schema_version".to_owned(), serde_json::json!(version));
+        let json = serde_json::to_string(&v).unwrap();
+
+        let back = CompilerPackage::from_json(&json)
+            .unwrap_or_else(|e| panic!("same-major {version} should load: {e}"));
+        assert_eq!(back.schema_version, version);
+    }
+}
+
+#[test]
+fn incompatible_schema_major_is_rejected() {
+    let pkg = balanced_package();
+    let mut v = serde_json::to_value(&pkg).unwrap();
+    v.as_object_mut()
+        .unwrap()
+        .insert("schema_version".to_owned(), serde_json::json!("1.0.0"));
+    let json = serde_json::to_string(&v).unwrap();
+
+    let err = CompilerPackage::from_json(&json).expect_err("major version mismatch must fail");
+    assert!(
+        err.to_string()
+            .contains("unsupported .pio.json schema_version 1.0.0"),
+        "{err}"
+    );
+}
+
+#[test]
+fn invalid_schema_version_is_rejected() {
+    let pkg = balanced_package();
+    for version in [
+        "0",
+        "0.x.0",
+        "0.1.0.1",
+        "00.1.0",
+        "0.1.0-",
+        "0.1.0+",
+        "0.1.0-alpha..1",
+        "0.1.0+build!",
+    ] {
+        let mut v = serde_json::to_value(&pkg).unwrap();
+        v.as_object_mut()
+            .unwrap()
+            .insert("schema_version".to_owned(), serde_json::json!(version));
+        let json = serde_json::to_string(&v).unwrap();
+
+        let err = CompilerPackage::from_json(&json).expect_err("invalid semver must fail");
+        assert!(
+            err.to_string()
+                .contains(&format!("unsupported .pio.json schema_version {version}")),
+            "{err}"
+        );
+    }
 }
 
 #[test]
@@ -355,7 +561,10 @@ mpc.branch = [
     assert!(
         pkg.diagnostics.iter().any(|d| d.code
             == DiagnosticCode::new("VALIDATE.BALANCED.VALUE_DOMAIN")
-            && d.details["field"] == "vm"),
+            && d.details["field"] == "vm"
+            && d.element_path.as_deref() == Some("/model/balanced_network/buses/0/vm")
+            && d.source_ref.as_ref().and_then(|r| r.record.as_deref()) == Some("bus")
+            && d.source_ref.as_ref().and_then(|r| r.field.as_deref()) == Some("vm")),
         "expected voltage magnitude finding: {:?}",
         pkg.diagnostics
     );
@@ -369,6 +578,44 @@ mpc.branch = [
         pkg.validation.passes
     );
     assert_json_roundtrips(&pkg);
+}
+
+#[test]
+fn sane_validation_skips_ambiguous_generator_source_refs() {
+    let src = "\
+function mpc = duplicate_bad_gens
+mpc.version = '2';
+mpc.baseMVA = 100;
+mpc.bus = [
+\t1\t3\t0\t0\t0\t0\t1\t1\t0\t230\t1\t1.1\t0.9;
+\t2\t1\t0\t0\t0\t0\t1\t1\t0\t230\t1\t1.1\t0.9;
+];
+mpc.gen = [
+\t1\t10\t0\t30\t-30\t0\t100\t1\t50\t0;
+\t1\t20\t0\t30\t-30\t0\t100\t1\t60\t0;
+];
+mpc.branch = [
+\t1\t2\t0.01\t0.1\t0\t0\t0\t0\t0\t0\t1\t-360\t360;
+];
+";
+    let net = powerio::parse_str(src, "matpower").unwrap().network;
+    let mut pkg = CompilerPackage::from_balanced(net);
+    pkg.run_sane_validation();
+
+    let generator_vg: Vec<_> = pkg
+        .diagnostics
+        .iter()
+        .filter(|d| {
+            d.code == DiagnosticCode::new("VALIDATE.BALANCED.VALUE_DOMAIN")
+                && d.details["element"] == "generator at bus 1"
+                && d.details["field"] == "vg"
+        })
+        .collect();
+    assert_eq!(generator_vg.len(), 2, "{:?}", pkg.diagnostics);
+    assert!(
+        generator_vg.iter().all(|d| d.source_ref.is_none()),
+        "ambiguous generator diagnostics must not pick the first row: {generator_vg:?}"
+    );
 }
 
 #[test]

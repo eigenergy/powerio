@@ -32,16 +32,17 @@ python3 benchmarks/render_tables.py
 python3 benchmarks/render_tables.py --check
 ```
 
-PowerWorld `.pwb` and `.aux` numbers come from Criterion. Fetch the public
-fixtures, run `cargo bench -p powerio --bench parse -- "parse_aux_|parse_pwb_"`,
-then run `python3 benchmarks/extract_powerworld_bench.py` before rendering the
-tables. If the Texas7k local row is published, pass its aux and pwb paths through
+PowerWorld `.pwb` and `.aux` parse timings are measured by the Rust Criterion
+benchmarks. Fetch the public fixtures, run
+`cargo bench -p powerio --bench parse -- "parse_aux_|parse_pwb_"`, then run
+`python3 benchmarks/extract_powerworld_bench.py` before rendering the tables. If
+the Texas7k local row is published, pass its aux and pwb paths through
 `POWERIO_BENCH_AUX` and `POWERIO_BENCH_PWB` during the Criterion run.
 
 Matrix builder timings are separate from parse timings. The matrix benchmark
 parses each fixture once, builds `IndexedNetwork` once, and times only derived
 matrix construction. Its pipeline row measures `Pipeline::run` for the paired
-\(Y_{\mathrm{bus}}\) export, including MTX, shunt, and metadata writes:
+\\(Y_{\mathrm{bus}}\\) export, including MTX, shunt, and metadata writes:
 
 ```sh
 cargo bench -p powerio-matrix --bench matrix

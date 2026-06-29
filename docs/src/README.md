@@ -2,7 +2,8 @@
 
 PowerIO parses power system case files into a typed `Network`, converts between
 formats, and builds sparse matrices and graph views for solver and analysis code.
-The guide covers behavior and workflows. Rustdoc covers API details.
+This guide records behavior, conventions, and release checks. Rustdoc covers API
+details.
 
 The rules these pages document are:
 
@@ -23,8 +24,8 @@ Reference pages:
 - [DC OPF bundle](https://eigenergy.github.io/powerio/guide/dcopf-bundle.html): the Matrix Market + manifest schema the
   `dcopf` subcommand writes for a downstream solver.
 - [Generator cost policy](https://eigenergy.github.io/powerio/guide/generator-cost-policy.html): how missing generator
-  costs are handled across PSS/E, MATPOWER, DC OPF, GridFM, and future adapters.
-- [Language APIs](https://eigenergy.github.io/powerio/guide/languages.html): canonical Rust, Python, Julia, and C ABI names.
+  costs are handled across PSS/E, MATPOWER, DC OPF, GridFM, and adapters.
+- [Language APIs](https://eigenergy.github.io/powerio/guide/languages.html): shared Rust, Python, Julia, and C ABI names.
 - [Python](https://eigenergy.github.io/powerio/guide/python.html): Python install extras and API examples.
 - [PowerWorld](https://eigenergy.github.io/powerio/guide/powerworld.html): PowerWorld AUX, PWB, and PWD evidence.
 - [Architecture](https://eigenergy.github.io/powerio/guide/architecture.html): the compiler-IR architecture and the
@@ -40,13 +41,18 @@ Rendered API docs (rustdoc) for all crates:
 
 ## Architecture
 
-`Network` is the format neutral model. Loads, shunts, branches, and generators
-are first class records. Every reader produces a `Network`; every writer consumes
-one. Adding a format means adding one reader or writer at the hub, not pairwise
-converters. `IndexedNetwork` is the dense \([0,n)\) analysis view derived from a
-`Network`; matrix builders work from that view. The parser, source retaining
-writer, and converters live in `powerio`; matrix builders and graph outputs live
-in `powerio-matrix`, which re-exports `powerio`.
+`powerio::Network` is the current balanced transmission model; v0.4 also exports
+`powerio::BalancedNetwork` as the v1 family name for that same type. Loads,
+shunts, branches, and generators are first class records. `powerio_dist` keeps
+the separate `MulticonductorNetwork` distribution model. `.pio.json` packages
+one of those model families with provenance, source maps, diagnostics,
+validation, summaries, and lowering history.
+
+Adding a format means adding one reader or writer at the hub, not pairwise
+converters. `IndexedNetwork` is the dense \\([0,n)\\) analysis view derived from a
+balanced `Network`; matrix builders work from that view. The parser, source
+retaining writer, and converters live in `powerio`; matrix builders and graph
+outputs live in `powerio-matrix`, which re-exports `powerio`.
 
 | crate | responsibility |
 | --- | --- |
@@ -54,7 +60,7 @@ in `powerio-matrix`, which re-exports `powerio`.
 | `powerio-matrix` | sparse matrices, graph views, DC OPF bundle, GridFM datasets |
 | `powerio-cli` | command line interface and TUI |
 | `powerio-py` | PyO3 extension for the Python package |
-| `powerio-capi` | C ABI used by C, C++, Julia, and other foreign function interfaces |
+| `powerio-capi` | C ABI for C, C++, Julia, and other foreign function interfaces |
 | `powerio-dist` | multiconductor distribution model and converters |
 | `powerio-pkg` | `.pio.json` package envelope |
 

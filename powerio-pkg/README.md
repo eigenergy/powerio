@@ -25,8 +25,8 @@ metadata a compiler artifact needs to be trustworthy:
 It serializes to `.pio.json`. Binary `.pio` is out of scope until the JSON
 package stabilizes.
 
-See `docs/architecture/compiler-ir.md` and
-`docs/architecture/pio-json-schema.md` in the repository root.
+See `docs/src/compiler-ir.md` and `docs/src/pio-json-schema.md` in the
+repository root.
 
 ```rust
 use powerio_pkg::{CompilerPackage, ModelKind};

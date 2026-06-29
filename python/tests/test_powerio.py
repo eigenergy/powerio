@@ -75,7 +75,9 @@ def test_parse_metadata(case9):
 
 def test_public_type_is_network(case9):
     assert isinstance(case9, powerio.Network)
-    assert powerio.Case is powerio.Network
+    assert powerio.BalancedNetwork is powerio.Network
+    assert "BalancedNetwork" in powerio.__all__
+    assert not hasattr(powerio, "Case")
     assert repr(case9).startswith("Network(")
 
 

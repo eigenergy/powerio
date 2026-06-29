@@ -12,9 +12,8 @@
 //! those payloads at a time, alongside the metadata a compiler artifact needs
 //! to be trustworthy: an explicit [`ModelKind`], producer and origin metadata,
 //! source maps, structured diagnostics, a validation summary, and lowering
-//! history. It serializes to `.pio.json`. See
-//! `docs/architecture/compiler-ir.md` for the architecture and
-//! `docs/architecture/pio-json-schema.md` for the field reference.
+//! history. It serializes to `.pio.json`. See `docs/src/compiler-ir.md` for the
+//! architecture and `docs/src/pio-json-schema.md` for the field reference.
 //!
 //! The package always carries [`CompilerPackage::model_kind`] explicitly; a
 //! reader must never infer whether the payload is balanced or multiconductor

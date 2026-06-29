@@ -1,9 +1,9 @@
 # The `.pio.json` schema
 
 `.pio.json` is the serialized form of `powerio_pkg::CompilerPackage`: a versioned
-envelope around one PowerIO IR payload. This document is the reference for the
-envelope shape and the stability policy. The crate is the implementation;
-`compiler-ir.md` is the architecture.
+envelope around one PowerIO IR payload. The envelope shape and stability policy
+are below. The crate is the implementation; `compiler-ir.md` is the architecture
+note.
 
 ## Two stability tiers
 
@@ -17,16 +17,21 @@ A `.pio.json` file has two parts with different stability promises.
 
 2. **The payload** — the `model` field's `balanced_network` /
    `multiconductor_network` object. This is a direct serde snapshot of the live
-   PowerIO Rust IR (`powerio::Network` / `powerio_dist::DistNetwork`). It is
-   **experimental**: it grows and changes whenever the IR does. Adding a new
-   typed field to a model appears in the payload with no envelope version
-   change. Do not treat the payload as a stable schema until
-   a v1 payload schema is declared. Tools that need stability should read the
-   envelope (model kind, summary, diagnostics, provenance) and treat the payload
-   as opaque or version-pinned to a producer.
+   PowerIO Rust IR (`powerio::Network` / `powerio_dist::DistNetwork`). It can
+   grow whenever the IR grows. Adding a typed field to a model appears in the
+   payload with no envelope version change. Until a v1 payload schema exists,
+   tools that need a stable contract should read the envelope (model kind,
+   summary, diagnostics, provenance) and treat the payload as opaque or pinned
+   to a producer version.
 
 `schema_version` versions the envelope only. The payload carries no separate
 version yet; pin to `producer.version` if you depend on payload fields.
+
+For distribution models, the payload follows the same multiconductor model used
+by the BMOPF reader and writer. The surrounding `.pio.json` object is the
+PowerIO package envelope: it adds model kind, provenance, source maps,
+diagnostics, validation, and lowering metadata around that model. Use the
+`bmopf-json` writer when a standalone BMOPF exchange file is needed.
 
 ## Versioning policy (envelope)
 
@@ -34,9 +39,11 @@ version yet; pin to `producer.version` if you depend on payload fields.
   `https://powerio.dev/schema/pio-package/0.1`.
 - Additive envelope fields bump the minor version.
 - Envelope field moves or removals bump the major version, or ship a migration.
-- A reader tolerates unknown future top-level fields (they are ignored, not an
-  error), so a package from a newer producer still loads. A future version may
+- A reader tolerates unknown later top-level fields (they are ignored, not an
+  error), so a package from a newer producer still loads. A later version can
   preserve them in an extras map instead of dropping them.
+- A reader accepts same major `schema_version` values and rejects a different
+  major version before using the payload.
 - Every package states `producer.version` and `schema_version`.
 
 ## Explicit model kind
@@ -54,7 +61,7 @@ reject a package where they disagree.
 ```
 
 `model_kind` values: `balanced`, `multiconductor` (the enum is non-exhaustive;
-future families may be added).
+later families can be added).
 
 ## Envelope reference
 
@@ -66,7 +73,7 @@ future families may be added).
 | `package_id` | string | no | stable content id, e.g. `"sha256:..."`; unset by the scaffold |
 | `created_at` | string (RFC 3339) | no | unset by default for deterministic output |
 | `model_kind` | enum | yes | `balanced` \| `multiconductor`; authoritative |
-| `model` | object | yes | `{kind, <kind>_network}`; the experimental payload |
+| `model` | object | yes | `{kind, <kind>_network}`; follows the Rust model payload |
 | `origin` | object | yes | tagged by `kind`: `in_memory` \| `file` \| `folder` \| `binary_file` \| `derived` \| `composite` |
 | `sources` | array | no | declared source artifacts: `{id, kind, path?, format?, hash?}` |
 | `source_maps` | array | no | `{element_path, source_ref, mapping_kind, confidence}` |
@@ -92,9 +99,19 @@ A `source_map` entry records where a canonical field came from: an `element_path
 (a JSON pointer, or a best-effort locator in v0.1), a `source_ref` into a declared
 source, a `mapping_kind` (`exact`, `defaulted`, `inferred`, `converted_units`,
 `lowered`, `aggregated`, `split`, `synthetic`, `retained_extra`), and a
-`confidence` (`exact`, `high`, `medium`, `low`). When a multiconductor network is
-packaged, its `defaulted` fields lift into source maps with `mapping_kind =
-defaulted`, and its retained source becomes `origin.retained_source`.
+`confidence` (`exact`, `high`, `medium`, `low`). Balanced packages emit source
+maps for stable bus, load, shunt, branch, and generator fields. Balanced
+`source_ref.field` values use the same canonical field names as the payload, so
+they can be compared directly with `element_path`. When a source format folds
+several canonical elements into one source row, the source map records that
+relation with another mapping kind; MATPOWER load and shunt fields use
+`mapping_kind = split` and point to the bus record while keeping fields such as
+`p`, `q`, `g`, and `b`. Values that the source format does not carry are not
+mapped as exact; MATPOWER `base_frequency` has no source map. When a
+multiconductor network is packaged, its `defaulted` fields lift into source maps
+with `mapping_kind = defaulted`, and its retained source becomes
+`origin.retained_source`. Validation diagnostics attach the matching `source_ref`
+when the package has a source map for the reported field.
 
 ## Example
 

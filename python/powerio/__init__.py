@@ -41,6 +41,7 @@ from ._powerio import PowerIODataError, PowerIOError, PowerIOParseError, __versi
 
 __all__ = [
     "Network",
+    "BalancedNetwork",
     "Incidence",
     "YbusParts",
     "Conversion",
@@ -476,9 +477,9 @@ class Network:
         return g
 
 
-# Deprecated compatibility alias. Kept out of ``__all__`` and docs; remove in
-# 0.4.0.
-Case = Network
+# v1 name for the scalar positive sequence model. ``Network`` remains the
+# existing Python handle name in 0.4.
+BalancedNetwork = Network
 
 
 def parse_file(path: Any, from_: Optional[str] = None) -> Network:

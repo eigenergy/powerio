@@ -1,6 +1,6 @@
 //! The `.pio.json` root object.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 
 use serde::{Deserialize, Serialize};
 
@@ -100,6 +100,9 @@ impl CompilerPackage {
     pub fn from_balanced(net: BalancedNetwork) -> Self {
         let origin = balanced_origin(&net);
         let summary = balanced_summary(&net);
+        let sources = balanced_sources(&net);
+        let source_id = sources.first().map(|s| s.id.clone());
+        let source_maps = balanced_source_maps(&net, source_id.as_deref());
         Self {
             schema: default_schema_url(),
             schema_version: default_schema_version(),
@@ -109,8 +112,8 @@ impl CompilerPackage {
             model_kind: ModelKind::Balanced,
             model: ModelPayload::balanced(net),
             origin,
-            sources: Vec::new(),
-            source_maps: Vec::new(),
+            sources,
+            source_maps,
             diagnostics: Vec::new(),
             validation: ValidationSummary::ok(),
             summary,
@@ -197,12 +200,28 @@ impl CompilerPackage {
     /// Deserialize from `.pio.json`.
     pub fn from_json(text: &str) -> serde_json::Result<Self> {
         let pkg: Self = serde_json::from_str(text)?;
+        if !Self::supports_schema_version(&pkg.schema_version) {
+            return Err(<serde_json::Error as serde::de::Error>::custom(format!(
+                "unsupported .pio.json schema_version {}; this reader supports major version {}",
+                pkg.schema_version,
+                supported_schema_major()
+            )));
+        }
         if !pkg.kind_is_consistent() {
             return Err(<serde_json::Error as serde::de::Error>::custom(
                 "model_kind does not match model.kind",
             ));
         }
         Ok(pkg)
+    }
+
+    /// Whether this reader accepts the envelope schema version.
+    ///
+    /// The `.pio.json` compatibility contract is envelope scoped: unknown
+    /// future top-level fields are ignored, additive same major versions load,
+    /// and a different major version is rejected before payload use.
+    pub fn supports_schema_version(version: &str) -> bool {
+        schema_major(version).is_some_and(|major| major == supported_schema_major())
     }
 
     #[must_use]
@@ -263,17 +282,71 @@ impl CompilerPackage {
         self.diagnostics
             .retain(|d| !is_sane_validation_code(d.code.as_str()));
 
-        let (diagnostics, passes) = match &self.model {
+        let (mut diagnostics, passes) = match &self.model {
             ModelPayload::Balanced { balanced_network } => sane_validate_balanced(balanced_network),
             ModelPayload::Multiconductor {
                 multiconductor_network,
             } => sane_validate_multiconductor(multiconductor_network),
         };
 
+        attach_source_refs(&mut diagnostics, &self.source_maps);
         self.diagnostics.extend(diagnostics);
         self.validation =
             ValidationSummary::from_diagnostics(&self.diagnostics).with_passes(passes);
     }
+}
+
+fn schema_major(version: &str) -> Option<u64> {
+    // Accept a semver core `MAJOR.MINOR.PATCH` with an optional prerelease
+    // (`-...`) or build (`+...`) tag: same-major additive versions load, so a
+    // forward-compatible writer that stamps e.g. `0.2.0-rc.1` is not rejected.
+    let (core, suffix) = match version.split_once('-') {
+        Some((core, rest)) => match rest.split_once('+') {
+            Some((pre, build)) => (core, Some((Some(pre), Some(build)))),
+            None => (core, Some((Some(rest), None))),
+        },
+        None => match version.split_once('+') {
+            Some((core, build)) => (core, Some((None, Some(build)))),
+            None => (version, None),
+        },
+    };
+    if let Some((pre, build)) = suffix {
+        if pre.is_some_and(|s| !valid_semver_suffix(s))
+            || build.is_some_and(|s| !valid_semver_suffix(s))
+        {
+            return None;
+        }
+    }
+    let mut parts = core.split('.');
+    let major = parts.next()?;
+    let minor = parts.next()?;
+    let patch = parts.next()?;
+    if parts.next().is_some() {
+        return None;
+    }
+    let major = parse_semver_number(major)?;
+    parse_semver_number(minor)?;
+    parse_semver_number(patch)?;
+    Some(major)
+}
+
+fn parse_semver_number(s: &str) -> Option<u64> {
+    if s.is_empty() || !s.bytes().all(|b| b.is_ascii_digit()) || (s.len() > 1 && s.starts_with('0'))
+    {
+        return None;
+    }
+    s.parse().ok()
+}
+
+fn valid_semver_suffix(s: &str) -> bool {
+    !s.is_empty()
+        && s.split('.').all(|part| {
+            !part.is_empty() && part.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-')
+        })
+}
+
+fn supported_schema_major() -> u64 {
+    schema_major(PIO_PACKAGE_SCHEMA_VERSION).expect("package schema version has a major number")
 }
 
 const SANE_VALIDATION_CODES: [&str; 6] = [
@@ -316,8 +389,22 @@ fn sane_validate_balanced(
         ));
     }
 
+    let bus_index: HashMap<usize, usize> = net
+        .buses
+        .iter()
+        .enumerate()
+        .map(|(idx, b)| (b.id.0, idx))
+        .collect();
     let mut value_domain = Vec::new();
     for finding in net.validate_values() {
+        let element_path =
+            balanced_value_finding_path(net, &bus_index, &finding).unwrap_or_else(|| {
+                format!(
+                    "/model/balanced_network/{}#{}",
+                    finding.element.replace(' ', "_"),
+                    finding.field
+                )
+            });
         let mut d = StructuredDiagnostic::new(
             "VALIDATE.BALANCED.VALUE_DOMAIN",
             DiagnosticSeverity::Warning,
@@ -327,11 +414,7 @@ fn sane_validate_balanced(
                 finding.element, finding.field, finding.new
             ),
         )
-        .with_element_path(format!(
-            "/model/balanced_network/{}#{}",
-            finding.element.replace(' ', "_"),
-            finding.field
-        ))
+        .with_element_path(element_path)
         .with_suggested_action("Run the explicit repair pass if these defaults are desired.");
         d.details
             .insert("element".to_owned(), serde_json::json!(finding.element));
@@ -352,6 +435,85 @@ fn sane_validate_balanced(
     ];
     structure.extend(value_domain);
     (structure, passes)
+}
+
+fn attach_source_refs(diagnostics: &mut [StructuredDiagnostic], source_maps: &[SourceMapEntry]) {
+    // Index by element path once: `source_maps` holds a row per field per
+    // element, so a per-diagnostic linear scan is quadratic. First entry wins,
+    // matching the previous `iter().find` order.
+    let mut by_path: HashMap<&str, &SourceRef> = HashMap::with_capacity(source_maps.len());
+    for map in source_maps {
+        by_path
+            .entry(map.element_path.as_str())
+            .or_insert(&map.source_ref);
+    }
+    for diagnostic in diagnostics {
+        if diagnostic.source_ref.is_some() {
+            continue;
+        }
+        let Some(path) = diagnostic.element_path.as_deref() else {
+            continue;
+        };
+        if let Some(source_ref) = by_path.get(path) {
+            diagnostic.source_ref = Some((*source_ref).clone());
+        }
+    }
+}
+
+fn balanced_value_finding_path(
+    net: &BalancedNetwork,
+    bus_index: &HashMap<usize, usize>,
+    finding: &powerio::Diagnostic,
+) -> Option<String> {
+    if let Some(id) = finding
+        .element
+        .strip_prefix("bus ")
+        .and_then(|s| s.parse::<usize>().ok())
+    {
+        let idx = *bus_index.get(&id)?;
+        return Some(format!(
+            "/model/balanced_network/buses/{idx}/{}",
+            finding.field
+        ));
+    }
+
+    if let Some(id) = finding
+        .element
+        .strip_prefix("generator at bus ")
+        .and_then(|s| s.parse::<usize>().ok())
+    {
+        // When several units at a bus share the same out-of-domain value the
+        // finding cannot be pinned to one array index, so skip the precise path
+        // rather than misattribute it (see the ambiguity test).
+        let mut matches = net
+            .generators
+            .iter()
+            .enumerate()
+            .filter(|(_, g)| {
+                g.bus.0 == id
+                    && generator_field(g, finding.field)
+                        .is_some_and(|v| v.to_bits() == finding.old.to_bits())
+            })
+            .map(|(idx, _)| idx);
+        let idx = matches.next()?;
+        if matches.next().is_some() {
+            return None;
+        }
+        return Some(format!(
+            "/model/balanced_network/generators/{idx}/{}",
+            finding.field
+        ));
+    }
+
+    None
+}
+
+fn generator_field(generator: &powerio::Generator, field: &str) -> Option<f64> {
+    Some(match field {
+        "mbase" => generator.mbase,
+        "vg" => generator.vg,
+        _ => return None,
+    })
 }
 
 fn sane_validate_multiconductor(
@@ -758,12 +920,45 @@ fn balanced_origin(net: &BalancedNetwork) -> Origin {
             pass: "normalize-balanced".to_owned(),
             options: serde_json::Map::new(),
         },
+        SourceFormat::Gridfm | SourceFormat::PypsaCsv => Origin::Folder {
+            path: String::new(),
+            format: balanced_format_name(net.source_format).to_owned(),
+            file_hashes: BTreeMap::new(),
+        },
+        SourceFormat::PowerWorldBinary => Origin::BinaryFile {
+            path: String::new(),
+            format: balanced_format_name(net.source_format).to_owned(),
+            hash: None,
+            decoded_sections: Vec::new(),
+        },
         other => Origin::File {
             path: String::new(),
             format: balanced_format_name(other).to_owned(),
             hash: None,
             retained_source: net.source.is_some(),
         },
+    }
+}
+
+fn balanced_sources(net: &BalancedNetwork) -> Vec<SourceDescriptor> {
+    let Some(kind) = balanced_source_kind(net.source_format) else {
+        return Vec::new();
+    };
+    vec![SourceDescriptor {
+        id: "src0".to_owned(),
+        kind: kind.to_owned(),
+        path: None,
+        format: Some(balanced_format_name(net.source_format).to_owned()),
+        hash: None,
+    }]
+}
+
+fn balanced_source_kind(f: SourceFormat) -> Option<&'static str> {
+    match f {
+        SourceFormat::InMemory | SourceFormat::Normalized => None,
+        SourceFormat::Gridfm | SourceFormat::PypsaCsv => Some("folder"),
+        SourceFormat::PowerWorldBinary => Some("binary_file"),
+        _ => Some("file"),
     }
 }
 
@@ -800,6 +995,250 @@ fn balanced_summary(net: &BalancedNetwork) -> ObjectSummary {
             base_mva: Some(net.base_mva),
         }),
     }
+}
+
+fn balanced_source_maps(net: &BalancedNetwork, source_id: Option<&str>) -> Vec<SourceMapEntry> {
+    let Some(source_id) = source_id else {
+        return Vec::new();
+    };
+    let mut entries = Vec::new();
+    push_balanced_network_maps(&mut entries, source_id, net.source_format);
+    push_balanced_bus_maps(&mut entries, source_id, net.buses.len());
+    push_balanced_injection_maps(&mut entries, source_id, net);
+    push_balanced_branch_maps(&mut entries, source_id, net);
+    push_balanced_generator_maps(&mut entries, source_id, net.generators.len());
+    entries
+}
+
+fn push_balanced_network_maps(
+    entries: &mut Vec<SourceMapEntry>,
+    source_id: &str,
+    source_format: SourceFormat,
+) {
+    push_balanced_map(
+        entries,
+        source_id,
+        "/model/balanced_network/base_mva",
+        "case",
+        "base_mva",
+        MappingKind::Exact,
+    );
+    if balanced_has_frequency_source(source_format) {
+        push_balanced_map(
+            entries,
+            source_id,
+            "/model/balanced_network/base_frequency",
+            "case",
+            "base_frequency",
+            MappingKind::Exact,
+        );
+    }
+}
+
+fn push_balanced_bus_maps(entries: &mut Vec<SourceMapEntry>, source_id: &str, len: usize) {
+    push_balanced_record_maps(
+        entries,
+        source_id,
+        "buses",
+        len,
+        "bus",
+        &[
+            "id", "kind", "vm", "va", "base_kv", "vmax", "vmin", "area", "zone",
+        ],
+        MappingKind::Exact,
+    );
+}
+
+fn push_balanced_injection_maps(
+    entries: &mut Vec<SourceMapEntry>,
+    source_id: &str,
+    net: &BalancedNetwork,
+) {
+    if net.source_format == SourceFormat::Matpower {
+        push_matpower_injection_maps(entries, source_id, net);
+    } else {
+        push_balanced_record_maps(
+            entries,
+            source_id,
+            "loads",
+            net.loads.len(),
+            "load",
+            &["bus", "p", "q", "in_service"],
+            MappingKind::Exact,
+        );
+        push_balanced_record_maps(
+            entries,
+            source_id,
+            "shunts",
+            net.shunts.len(),
+            "shunt",
+            &["bus", "g", "b", "in_service"],
+            MappingKind::Exact,
+        );
+    }
+}
+
+fn push_balanced_branch_maps(
+    entries: &mut Vec<SourceMapEntry>,
+    source_id: &str,
+    net: &BalancedNetwork,
+) {
+    for (i, branch) in net.branches.iter().enumerate() {
+        push_balanced_record_map(
+            entries,
+            source_id,
+            "branches",
+            i,
+            "branch",
+            &[
+                "from",
+                "to",
+                "r",
+                "x",
+                "b",
+                "rate_a",
+                "rate_b",
+                "rate_c",
+                "tap",
+                "shift",
+                "in_service",
+                "angmin",
+                "angmax",
+            ],
+            MappingKind::Exact,
+        );
+        if branch.charging.is_some() {
+            for field in ["g_fr", "b_fr", "g_to", "b_to"] {
+                push_balanced_map(
+                    entries,
+                    source_id,
+                    &format!("/model/balanced_network/branches/{i}/charging/{field}"),
+                    "branch",
+                    field,
+                    MappingKind::Exact,
+                );
+            }
+        }
+    }
+}
+
+fn push_balanced_generator_maps(entries: &mut Vec<SourceMapEntry>, source_id: &str, len: usize) {
+    push_balanced_record_maps(
+        entries,
+        source_id,
+        "generators",
+        len,
+        "generator",
+        &[
+            "bus",
+            "pg",
+            "qg",
+            "pmax",
+            "pmin",
+            "qmax",
+            "qmin",
+            "vg",
+            "mbase",
+            "in_service",
+        ],
+        MappingKind::Exact,
+    );
+}
+
+fn balanced_has_frequency_source(source_format: SourceFormat) -> bool {
+    matches!(
+        source_format,
+        SourceFormat::Psse | SourceFormat::PandapowerJson
+    )
+}
+
+fn push_matpower_injection_maps(
+    entries: &mut Vec<SourceMapEntry>,
+    source_id: &str,
+    net: &BalancedNetwork,
+) {
+    // MATPOWER folds loads and shunts into the bus record. Keep the source
+    // field token canonical like the rest of the balanced source maps; the
+    // record and mapping kind carry the folded-row relationship.
+    push_balanced_record_maps(
+        entries,
+        source_id,
+        "loads",
+        net.loads.len(),
+        "bus",
+        &["bus", "p", "q", "in_service"],
+        MappingKind::Split,
+    );
+    push_balanced_record_maps(
+        entries,
+        source_id,
+        "shunts",
+        net.shunts.len(),
+        "bus",
+        &["bus", "g", "b", "in_service"],
+        MappingKind::Split,
+    );
+}
+
+fn push_balanced_record_maps(
+    entries: &mut Vec<SourceMapEntry>,
+    source_id: &str,
+    collection: &str,
+    len: usize,
+    record: &str,
+    fields: &[&str],
+    mapping_kind: MappingKind,
+) {
+    for i in 0..len {
+        push_balanced_record_map(
+            entries,
+            source_id,
+            collection,
+            i,
+            record,
+            fields,
+            mapping_kind,
+        );
+    }
+}
+
+fn push_balanced_record_map(
+    entries: &mut Vec<SourceMapEntry>,
+    source_id: &str,
+    collection: &str,
+    i: usize,
+    record: &str,
+    fields: &[&str],
+    mapping_kind: MappingKind,
+) {
+    for &field in fields {
+        push_balanced_map(
+            entries,
+            source_id,
+            &format!("/model/balanced_network/{collection}/{i}/{field}"),
+            record,
+            field,
+            mapping_kind,
+        );
+    }
+}
+
+fn push_balanced_map(
+    entries: &mut Vec<SourceMapEntry>,
+    source_id: &str,
+    element_path: &str,
+    record: &str,
+    field: &str,
+    mapping_kind: MappingKind,
+) {
+    entries.push(SourceMapEntry {
+        element_path: element_path.to_owned(),
+        source_ref: SourceRef::new(source_id)
+            .with_record(record)
+            .with_field(field),
+        mapping_kind,
+        confidence: Confidence::High,
+    });
 }
 
 fn multiconductor_summary(net: &MulticonductorNetwork) -> ObjectSummary {

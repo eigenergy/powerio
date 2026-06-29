@@ -105,10 +105,10 @@ pub struct SourceRef {
     /// Byte offset, for binary sources.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub byte_offset: Option<u64>,
-    /// Record / section / object type, e.g. `BUS`.
+    /// Record / section / object type, e.g. `bus`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub record: Option<String>,
-    /// Field / property name, e.g. `VM`.
+    /// Canonical field / property name, e.g. `vm`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub field: Option<String>,
     /// Raw token / value, when safe to embed.
@@ -117,6 +117,7 @@ pub struct SourceRef {
 }
 
 impl SourceRef {
+    /// Create a reference to a declared source artifact.
     pub fn new(source_id: impl Into<String>) -> Self {
         Self {
             source_id: source_id.into(),
@@ -129,12 +130,21 @@ impl SourceRef {
         }
     }
 
+    /// Set the field or property name.
     #[must_use]
     pub fn with_field(mut self, field: impl Into<String>) -> Self {
         self.field = Some(field.into());
         self
     }
 
+    /// Set the source record, section, or object type.
+    #[must_use]
+    pub fn with_record(mut self, record: impl Into<String>) -> Self {
+        self.record = Some(record.into());
+        self
+    }
+
+    /// Set the source line number.
     #[must_use]
     pub fn with_line(mut self, line: u32) -> Self {
         self.line = Some(line);

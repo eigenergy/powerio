@@ -23,7 +23,7 @@ from . import Conversion, _powerio
 
 __all__ = [
     "DistNetwork",
-    "DistCase",
+    "MulticonductorNetwork",
     "parse_file",
     "parse_str",
     "convert_file",
@@ -96,12 +96,12 @@ class DistNetwork:
         return self._inner.__repr__()
 
 
-# Deprecated compatibility alias. Kept because it was exported before the
-# DistNetwork rename; remove in 0.4.0.
-DistCase = DistNetwork
+# v1 name for the wire coordinate distribution model. ``DistNetwork`` remains
+# available in 0.4 because it is the existing handle name.
+MulticonductorNetwork = DistNetwork
 
 
-def parse_file(path: Any, from_: Optional[str] = None) -> DistNetwork:
+def parse_file(path: Any, from_: Optional[str] = None) -> MulticonductorNetwork:
     """Parse a distribution network file.
 
     The format comes from ``from_`` when given, else from the file itself:
@@ -111,7 +111,7 @@ def parse_file(path: Any, from_: Optional[str] = None) -> DistNetwork:
     return DistNetwork(_powerio.dist_parse_file(str(path), from_))
 
 
-def parse_str(text: str, format: str) -> DistNetwork:
+def parse_str(text: str, format: str) -> MulticonductorNetwork:
     """Parse an in-memory distribution network of the named ``format``."""
     return DistNetwork(_powerio.dist_parse_str(text, format))
 

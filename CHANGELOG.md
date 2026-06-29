@@ -1,5 +1,25 @@
 # Changelog
 
+## Unreleased
+
+- `powerio-pkg`: `.pio.json` reads now enforce the envelope compatibility rule:
+  same major `schema_version` values load, while incompatible major versions
+  fail before payload use. The mdBook schema page documents the rule.
+- `powerio-pkg`: balanced package output now emits source maps for stable bus,
+  load, shunt, branch, and generator fields; validation diagnostics attach the
+  matching source reference where a map exists. Format folded fields use
+  mapping kinds such as `split`, and defaulted fields are not marked as exact
+  source fields.
+- Converter tests now compare stable per element values across writable legacy
+  formats, not only counts and totals. PSLF export now warns when transformer
+  charging admittance is dropped.
+- Python API: removed the one release `powerio.Case` and
+  `powerio.dist.DistCase` compatibility aliases. Use `powerio.Network` /
+  `powerio.BalancedNetwork` and `powerio.dist.MulticonductorNetwork` /
+  `powerio.dist.DistNetwork`.
+- No C ABI rename in this migration slice: `PIO_ABI_VERSION` stays 4 and
+  `PIO_DIST_ABI_VERSION` stays 1.
+
 ## 0.3.3
 
 - MCP server: **unified the advertised tool surface** to semantic verbs:
