@@ -21,6 +21,25 @@ mpc.branch = [
 ];
 ";
 
+const MATPOWER_WITH_GEN_SRC: &str = "\
+function mpc = example
+mpc.version = '2';
+mpc.baseMVA = 100;
+mpc.bus = [
+\t1\t3\t0\t0\t0\t0\t1\t1\t0\t230\t1\t1.1\t0.9;
+\t2\t1\t10\t5\t0\t0\t1\t1\t0\t230\t1\t1.1\t0.9;
+];
+mpc.gen = [
+\t1\t50\t0\t40\t-40\t1\t100\t1\t80\t0;
+];
+mpc.branch = [
+\t1\t2\t0.01\t0.1\t0\t100\t110\t120\t0\t0\t1\t-360\t360;
+];
+mpc.gencost = [
+\t2\t0\t0\t3\t0\t1\t0;
+];
+";
+
 fn balanced_package() -> CompilerPackage {
     let net = powerio::parse_str(MATPOWER_SRC, "matpower")
         .expect("parse matpower")
@@ -516,20 +535,20 @@ fn future_same_major_schema_version_is_tolerated() {
     let mut v = serde_json::to_value(&pkg).unwrap();
     v.as_object_mut()
         .unwrap()
-        .insert("schema_version".to_owned(), serde_json::json!("0.2.0"));
+        .insert("schema_version".to_owned(), serde_json::json!("0.3.0"));
     v.as_object_mut()
         .unwrap()
         .insert("future_field".to_owned(), serde_json::json!({"x": 1}));
     let json = serde_json::to_string(&v).unwrap();
 
     let back = CompilerPackage::from_json(&json).expect("same major schema version loads");
-    assert_eq!(back.schema_version, "0.2.0");
+    assert_eq!(back.schema_version, "0.3.0");
     assert_eq!(back.model_kind(), ModelKind::Balanced);
 }
 
 #[test]
 fn same_major_prerelease_or_build_schema_version_is_tolerated() {
-    for version in ["0.2.0-rc.1", "0.1.0+build.5", "0.3.0-alpha.2+exp"] {
+    for version in ["0.3.0-rc.1", "0.2.0+build.5", "0.4.0-alpha.2+exp"] {
         let pkg = balanced_package();
         let mut v = serde_json::to_value(&pkg).unwrap();
         v.as_object_mut()
@@ -541,6 +560,39 @@ fn same_major_prerelease_or_build_schema_version_is_tolerated() {
             .unwrap_or_else(|e| panic!("same-major {version} should load: {e}"));
         assert_eq!(back.schema_version, version);
     }
+}
+
+#[test]
+fn normalized_solver_table_metadata_records_dense_identities() {
+    let net = powerio::parse_str(MATPOWER_WITH_GEN_SRC, "matpower")
+        .expect("parse matpower")
+        .network;
+    let mut pkg = CompilerPackage::from_balanced(net);
+
+    assert!(pkg.attach_normalized_solver_table_metadata().unwrap());
+
+    let meta = pkg
+        .derived
+        .normalized_solver_tables
+        .as_ref()
+        .expect("metadata attached");
+    assert_eq!(meta.pass, powerio::NORMALIZED_SOLVER_TABLES_PASS);
+    assert_eq!(meta.units.power, "per_unit");
+    assert_eq!(meta.units.angle, "radian");
+    assert_eq!(meta.row_counts.buses, 2);
+    assert_eq!(meta.row_counts.loads, 1);
+    assert_eq!(meta.row_counts.branches, 1);
+    assert_eq!(meta.row_counts.arcs, 2);
+    assert_eq!(meta.row_counts.generators, 1);
+    assert_eq!(meta.bus_ids, vec![powerio::BusId(1), powerio::BusId(2)]);
+    assert_eq!(meta.reference_bus_indices, vec![0]);
+    assert_eq!(meta.branch_from_arc_indices, vec![0]);
+    assert_eq!(meta.branch_to_arc_indices, vec![1]);
+    assert_eq!(meta.source_rows.buses, vec![Some(0), Some(1)]);
+    assert_eq!(meta.source_rows.loads, vec![Some(0)]);
+    assert_eq!(meta.source_rows.branches, vec![Some(0)]);
+    assert_eq!(meta.source_rows.generators, vec![Some(0)]);
+    assert_json_roundtrips(&pkg);
 }
 
 #[test]

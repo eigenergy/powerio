@@ -52,7 +52,9 @@ pub use lowering::{
 };
 pub use model::{ModelKind, ModelPayload};
 pub use package::{
-    CompilerPackage, DerivedMetadata, PIO_PACKAGE_SCHEMA_URL, PIO_PACKAGE_SCHEMA_VERSION,
+    CompilerPackage, DerivedMetadata, NormalizedSolverTableMetadata,
+    NormalizedSolverTableRowCounts, NormalizedSolverTableSourceRows, PIO_PACKAGE_SCHEMA_URL,
+    PIO_PACKAGE_SCHEMA_VERSION,
 };
 pub use provenance::{
     Confidence, MappingKind, Origin, Producer, SourceDescriptor, SourceMapEntry, SourceRef,

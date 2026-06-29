@@ -64,6 +64,13 @@ A package always carries:
 - `lowering_history`;
 - optional `derived` metadata.
 
+For balanced payloads, `CompilerPackage::attach_normalized_solver_table_metadata`
+records the compact contract for
+`powerio::Network::to_normalized_solver_tables()`: pass name, units, row counts,
+dense bus ids, reference/component indices, branch to arc indices, and source row
+provenance. The package does not duplicate the full table rows; it records enough
+metadata for a compiler cache or sidecar artifact to verify table identity.
+
 ### Explicit model kind
 
 `model_kind` is a standalone field. A reader must never infer whether the payload

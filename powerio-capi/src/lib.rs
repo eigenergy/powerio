@@ -37,7 +37,10 @@ mod arrow_export;
 #[cfg(feature = "arrow")]
 pub use arrow_export::{
     PIO_ARROW_TABLE_BRANCH, PIO_ARROW_TABLE_BUS, PIO_ARROW_TABLE_GEN, PIO_ARROW_TABLE_LOAD,
-    PIO_ARROW_TABLE_SHUNT, PIO_ARROW_TABLE_SWITCH,
+    PIO_ARROW_TABLE_SHUNT, PIO_ARROW_TABLE_SOLVER_ARC, PIO_ARROW_TABLE_SOLVER_BRANCH,
+    PIO_ARROW_TABLE_SOLVER_BUS, PIO_ARROW_TABLE_SOLVER_GEN, PIO_ARROW_TABLE_SOLVER_HVDC,
+    PIO_ARROW_TABLE_SOLVER_LOAD, PIO_ARROW_TABLE_SOLVER_SHUNT, PIO_ARROW_TABLE_SOLVER_STORAGE,
+    PIO_ARROW_TABLE_SOLVER_SWITCH, PIO_ARROW_TABLE_SWITCH,
 };
 
 /// Opaque parsed network handle. Carries the parsed [`Network`], the
@@ -978,14 +981,16 @@ pub unsafe extern "C" fn pio_bus_shunt(
     }
 }
 
-/// Export one raw network table over the Arrow C Data Interface: the `to_`
+/// Export one network table over the Arrow C Data Interface: the `to_`
 /// conversion whose output type is Arrow structs rather than a string, and the
-/// bulk plane this ABI evolves on: new or richer columns arrive in the Arrow
-/// schema, leaving the C signatures fixed.
+/// bulk plane this ABI evolves on. Tables 0..5 are raw network tables; tables 6
+/// and up are normalized solver tables with per unit/radian values and dense
+/// zero based row ids. New or richer columns arrive in the Arrow schema, leaving
+/// the C signatures fixed.
 ///
-/// `table` is one of the `PIO_ARROW_TABLE_*` selectors (bus/branch/gen/load/
-/// shunt); the columns are the parsed network fields with EXTERNAL bus ids (the
-/// `pio_bus_ids` id space), not the gridfm schema. On success (returns `0`),
+/// `table` is one of the `PIO_ARROW_TABLE_*` selectors. Raw table columns use
+/// EXTERNAL bus ids (the `pio_bus_ids` id space), not the gridfm schema. On
+/// success (returns `0`),
 /// `out_array` and `out_schema` are populated with owned C Data Interface
 /// structs: ownership of the Arrow buffers transfers to the caller, both
 /// `release` callbacks are non-NULL, and the caller MUST invoke each exactly

@@ -4,7 +4,10 @@ use std::collections::{BTreeMap, BTreeSet, HashMap};
 
 use serde::{Deserialize, Serialize};
 
-use powerio::{BalancedNetwork, SourceFormat};
+use powerio::{
+    BalancedNetwork, BusId, NORMALIZED_SOLVER_TABLES_PASS, NormalizedSolverTables,
+    SolverTableUnits, SourceFormat,
+};
 use powerio_dist::{DistSourceFormat, MulticonductorNetwork};
 
 use crate::diagnostics::{DiagnosticSeverity, DiagnosticStage, StructuredDiagnostic};
@@ -21,11 +24,11 @@ use crate::summary::{ObjectSummary, ObjectTopology, ObjectUnits};
 use crate::validation::{ValidationPass, ValidationStatus, ValidationSummary};
 
 /// The canonical schema URL for this package version.
-pub const PIO_PACKAGE_SCHEMA_URL: &str = "https://powerio.dev/schema/pio-package/0.1";
+pub const PIO_PACKAGE_SCHEMA_URL: &str = "https://powerio.dev/schema/pio-package/0.2";
 
 /// The package schema version (semver). Additive fields bump the minor; field
 /// moves bump the major (or ship a migration pass).
-pub const PIO_PACKAGE_SCHEMA_VERSION: &str = "0.1.0";
+pub const PIO_PACKAGE_SCHEMA_VERSION: &str = "0.2.0";
 
 fn default_schema_url() -> String {
     PIO_PACKAGE_SCHEMA_URL.to_owned()
@@ -35,19 +38,103 @@ fn default_schema_version() -> String {
     PIO_PACKAGE_SCHEMA_VERSION.to_owned()
 }
 
-/// Optional derived metadata: matrix statistics and cache keys.
+/// Optional derived metadata: matrix statistics, solver table metadata, and
+/// cache keys.
 /// Empty by default; the scaffold never populates it.
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct DerivedMetadata {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub matrix_stats: Option<serde_json::Value>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub normalized_solver_tables: Option<NormalizedSolverTableMetadata>,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub cache_keys: BTreeMap<String, String>,
 }
 
 impl DerivedMetadata {
     fn is_empty(&self) -> bool {
-        self.matrix_stats.is_none() && self.cache_keys.is_empty()
+        self.matrix_stats.is_none()
+            && self.normalized_solver_tables.is_none()
+            && self.cache_keys.is_empty()
+    }
+}
+
+/// Compact package metadata for `Network::to_normalized_solver_tables`.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[non_exhaustive]
+pub struct NormalizedSolverTableMetadata {
+    pub pass: String,
+    pub units: SolverTableUnits,
+    pub row_counts: NormalizedSolverTableRowCounts,
+    pub bus_ids: Vec<BusId>,
+    pub reference_bus_indices: Vec<usize>,
+    pub component_labels: Vec<usize>,
+    pub branch_from_arc_indices: Vec<usize>,
+    pub branch_to_arc_indices: Vec<usize>,
+    pub source_rows: NormalizedSolverTableSourceRows,
+}
+
+/// Row counts for every normalized solver table.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[non_exhaustive]
+pub struct NormalizedSolverTableRowCounts {
+    pub buses: usize,
+    pub loads: usize,
+    pub shunts: usize,
+    pub branches: usize,
+    pub switches: usize,
+    pub arcs: usize,
+    pub generators: usize,
+    pub storage: usize,
+    pub hvdc: usize,
+}
+
+/// Source row provenance vectors for normalized solver tables.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[non_exhaustive]
+pub struct NormalizedSolverTableSourceRows {
+    pub buses: Vec<Option<usize>>,
+    pub loads: Vec<Option<usize>>,
+    pub shunts: Vec<Option<usize>>,
+    pub branches: Vec<Option<usize>>,
+    pub switches: Vec<Option<usize>>,
+    pub generators: Vec<Option<usize>>,
+    pub storage: Vec<Option<usize>>,
+    pub hvdc: Vec<Option<usize>>,
+}
+
+impl From<&NormalizedSolverTables> for NormalizedSolverTableMetadata {
+    fn from(tables: &NormalizedSolverTables) -> Self {
+        Self {
+            pass: NORMALIZED_SOLVER_TABLES_PASS.to_owned(),
+            units: tables.units.clone(),
+            row_counts: NormalizedSolverTableRowCounts {
+                buses: tables.buses.len(),
+                loads: tables.loads.len(),
+                shunts: tables.shunts.len(),
+                branches: tables.branches.len(),
+                switches: tables.switches.len(),
+                arcs: tables.arcs.len(),
+                generators: tables.generators.len(),
+                storage: tables.storage.len(),
+                hvdc: tables.hvdc.len(),
+            },
+            bus_ids: tables.index.bus_ids.clone(),
+            reference_bus_indices: tables.index.reference_bus_indices.clone(),
+            component_labels: tables.index.component_labels.clone(),
+            branch_from_arc_indices: tables.index.branch_from_arc_indices.clone(),
+            branch_to_arc_indices: tables.index.branch_to_arc_indices.clone(),
+            source_rows: NormalizedSolverTableSourceRows {
+                buses: tables.index.bus_source_rows.clone(),
+                loads: tables.index.load_source_rows.clone(),
+                shunts: tables.index.shunt_source_rows.clone(),
+                branches: tables.index.branch_source_rows.clone(),
+                switches: tables.index.switch_source_rows.clone(),
+                generators: tables.index.generator_source_rows.clone(),
+                storage: tables.index.storage_source_rows.clone(),
+                hvdc: tables.index.hvdc_source_rows.clone(),
+            },
+        }
     }
 }
 
@@ -258,6 +345,31 @@ impl CompilerPackage {
     /// Append a lowering record to the history.
     pub fn push_lowering(&mut self, record: LoweringRecord) {
         self.lowering_history.push(record);
+    }
+
+    /// Attach compact metadata for the normalized dense solver table lowering.
+    ///
+    /// Returns `Ok(false)` for non-balanced packages. The full table rows stay
+    /// outside the package payload; this records the pass name, row counts,
+    /// units, dense identities, and source row provenance a compiler cache needs
+    /// to validate external table artifacts.
+    pub fn attach_normalized_solver_table_metadata(
+        &mut self,
+    ) -> std::result::Result<bool, powerio::Error> {
+        let Some(net) = self.as_balanced() else {
+            return Ok(false);
+        };
+        let tables = net.to_normalized_solver_tables()?;
+        self.derived.normalized_solver_tables = Some(NormalizedSolverTableMetadata::from(&tables));
+        Ok(true)
+    }
+
+    /// Return a package with normalized solver table metadata attached.
+    pub fn with_normalized_solver_table_metadata(
+        mut self,
+    ) -> std::result::Result<Self, powerio::Error> {
+        self.attach_normalized_solver_table_metadata()?;
+        Ok(self)
     }
 
     /// Check whether this package's multiconductor payload is ready for the

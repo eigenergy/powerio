@@ -35,8 +35,8 @@ diagnostics, validation, and lowering metadata around that model. Use the
 
 ## Versioning policy (envelope)
 
-- `schema_version` is semver. The current value is `0.1.0`; the `schema` URL is
-  `https://powerio.dev/schema/pio-package/0.1`.
+- `schema_version` is semver. The current value is `0.2.0`; the `schema` URL is
+  `https://powerio.dev/schema/pio-package/0.2`.
 - Additive envelope fields bump the minor version.
 - Envelope field moves or removals bump the major version, or ship a migration.
 - A reader tolerates unknown later top-level fields (they are ignored, not an
@@ -81,7 +81,26 @@ later families can be added).
 | `validation` | object | yes | `{status, counts, passes[]}` |
 | `summary` | object | yes | `{elements{}, topology?, units?}` |
 | `lowering_history` | array | no | `LoweringRecord` per pass |
-| `derived` | object | no | optional matrix stats / cache keys |
+| `derived` | object | no | optional matrix stats, normalized solver table metadata, and cache keys |
+
+### Derived metadata
+
+`derived.normalized_solver_tables` records the compact identity metadata for
+`powerio::Network::to_normalized_solver_tables()` without embedding every table
+row in the package. The full tables are a derived artifact; this metadata lets a
+compiler cache prove it was built from the same lowering pass and row order.
+
+The block carries:
+
+- `pass`: `"balanced-to-normalized-solver-tables"`;
+- `units`: per unit power, per unit voltage, radian angles, per unit impedance
+  and admittance, zero based dense indices;
+- `row_counts`: counts for buses, loads, shunts, branches, switches, arcs,
+  generators, storage, and HVDC rows;
+- `bus_ids`, `reference_bus_indices`, and `component_labels`;
+- `branch_from_arc_indices` and `branch_to_arc_indices`;
+- `source_rows`: source row indices for rows that survived normalization, with
+  `null` for synthetic rows such as 3-winding star buses and branches.
 
 ### Diagnostics
 
@@ -127,8 +146,8 @@ bindings, or MCP operations.
 
 ```json
 {
-  "schema": "https://powerio.dev/schema/pio-package/0.1",
-  "schema_version": "0.1.0",
+  "schema": "https://powerio.dev/schema/pio-package/0.2",
+  "schema_version": "0.2.0",
   "producer": { "tool": "powerio", "version": "0.3.3" },
   "model_kind": "multiconductor",
   "model": {
