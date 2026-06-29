@@ -301,10 +301,13 @@ fn schema_major(version: &str) -> Option<u64> {
     let major = parts.next()?;
     let minor = parts.next()?;
     let patch = parts.next()?;
-    if major.is_empty() || minor.is_empty() || patch.is_empty() {
+    if major.is_empty() || minor.is_empty() || patch.is_empty() || parts.next().is_some() {
         return None;
     }
-    major.parse().ok()
+    let major = major.parse().ok()?;
+    let _minor: u64 = minor.parse().ok()?;
+    let _patch: u64 = patch.parse().ok()?;
+    Some(major)
 }
 
 fn supported_schema_major() -> u64 {

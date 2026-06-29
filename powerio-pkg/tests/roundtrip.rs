@@ -400,18 +400,20 @@ fn incompatible_schema_major_is_rejected() {
 #[test]
 fn invalid_schema_version_is_rejected() {
     let pkg = balanced_package();
-    let mut v = serde_json::to_value(&pkg).unwrap();
-    v.as_object_mut()
-        .unwrap()
-        .insert("schema_version".to_owned(), serde_json::json!("0"));
-    let json = serde_json::to_string(&v).unwrap();
+    for version in ["0", "0.x.0", "0.1.0.1"] {
+        let mut v = serde_json::to_value(&pkg).unwrap();
+        v.as_object_mut()
+            .unwrap()
+            .insert("schema_version".to_owned(), serde_json::json!(version));
+        let json = serde_json::to_string(&v).unwrap();
 
-    let err = CompilerPackage::from_json(&json).expect_err("invalid semver must fail");
-    assert!(
-        err.to_string()
-            .contains("unsupported .pio.json schema_version 0"),
-        "{err}"
-    );
+        let err = CompilerPackage::from_json(&json).expect_err("invalid semver must fail");
+        assert!(
+            err.to_string()
+                .contains(&format!("unsupported .pio.json schema_version {version}")),
+            "{err}"
+        );
+    }
 }
 
 #[test]
