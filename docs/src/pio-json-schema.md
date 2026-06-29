@@ -107,11 +107,11 @@ several canonical elements into one source row, the source map records that
 relation with another mapping kind; MATPOWER load and shunt fields use
 `mapping_kind = split` and point to the bus record while keeping fields such as
 `p`, `q`, `g`, and `b`. Values that the source format does not carry are not
-marked as exact source fields; MATPOWER `base_frequency` has no source map. When
-a multiconductor network is packaged, its `defaulted` fields lift into source
-maps with `mapping_kind = defaulted`, and its retained source becomes
-`origin.retained_source`. Validation diagnostics attach the matching
-`source_ref` when the package has a source map for the reported field.
+mapped as exact; MATPOWER `base_frequency` has no source map. When a
+multiconductor network is packaged, its `defaulted` fields lift into source maps
+with `mapping_kind = defaulted`, and its retained source becomes
+`origin.retained_source`. Validation diagnostics attach the matching `source_ref`
+when the package has a source map for the reported field.
 
 ## Example
 

@@ -979,6 +979,7 @@ fn push_balanced_network_maps(
         "/model/balanced_network/base_mva",
         "case",
         "base_mva",
+        MappingKind::Exact,
     );
     if balanced_has_frequency_source(source_format) {
         push_balanced_map(
@@ -987,6 +988,7 @@ fn push_balanced_network_maps(
             "/model/balanced_network/base_frequency",
             "case",
             "base_frequency",
+            MappingKind::Exact,
         );
     }
 }
@@ -1001,6 +1003,7 @@ fn push_balanced_bus_maps(entries: &mut Vec<SourceMapEntry>, source_id: &str, le
         &[
             "id", "kind", "vm", "va", "base_kv", "vmax", "vmin", "area", "zone",
         ],
+        MappingKind::Exact,
     );
 }
 
@@ -1019,6 +1022,7 @@ fn push_balanced_injection_maps(
             net.loads.len(),
             "load",
             &["bus", "p", "q", "in_service"],
+            MappingKind::Exact,
         );
         push_balanced_record_maps(
             entries,
@@ -1027,6 +1031,7 @@ fn push_balanced_injection_maps(
             net.shunts.len(),
             "shunt",
             &["bus", "g", "b", "in_service"],
+            MappingKind::Exact,
         );
     }
 }
@@ -1058,6 +1063,7 @@ fn push_balanced_branch_maps(
                 "angmin",
                 "angmax",
             ],
+            MappingKind::Exact,
         );
         if branch.charging.is_some() {
             for field in ["g_fr", "b_fr", "g_to", "b_to"] {
@@ -1067,6 +1073,7 @@ fn push_balanced_branch_maps(
                     &format!("/model/balanced_network/branches/{i}/charging/{field}"),
                     "branch",
                     field,
+                    MappingKind::Exact,
                 );
             }
         }
@@ -1092,6 +1099,7 @@ fn push_balanced_generator_maps(entries: &mut Vec<SourceMapEntry>, source_id: &s
             "mbase",
             "in_service",
         ],
+        MappingKind::Exact,
     );
 }
 
@@ -1110,51 +1118,24 @@ fn push_matpower_injection_maps(
     // MATPOWER folds loads and shunts into the bus record. Keep the source
     // field token canonical like the rest of the balanced source maps; the
     // record and mapping kind carry the folded-row relationship.
-    push_matpower_split_maps(
+    push_balanced_record_maps(
         entries,
         source_id,
         "loads",
         net.loads.len(),
+        "bus",
         &["bus", "p", "q", "in_service"],
+        MappingKind::Split,
     );
-    push_matpower_split_maps(
+    push_balanced_record_maps(
         entries,
         source_id,
         "shunts",
         net.shunts.len(),
+        "bus",
         &["bus", "g", "b", "in_service"],
+        MappingKind::Split,
     );
-}
-
-fn push_matpower_split_maps(
-    entries: &mut Vec<SourceMapEntry>,
-    source_id: &str,
-    collection: &str,
-    len: usize,
-    fields: &[&str],
-) {
-    for i in 0..len {
-        for &field in fields {
-            push_matpower_split_map(entries, source_id, collection, i, field);
-        }
-    }
-}
-
-fn push_matpower_split_map(
-    entries: &mut Vec<SourceMapEntry>,
-    source_id: &str,
-    collection: &str,
-    i: usize,
-    field: &str,
-) {
-    entries.push(SourceMapEntry {
-        element_path: format!("/model/balanced_network/{collection}/{i}/{field}"),
-        source_ref: SourceRef::new(source_id)
-            .with_record("bus")
-            .with_field(field),
-        mapping_kind: MappingKind::Split,
-        confidence: Confidence::High,
-    });
 }
 
 fn push_balanced_record_maps(
@@ -1164,9 +1145,18 @@ fn push_balanced_record_maps(
     len: usize,
     record: &str,
     fields: &[&str],
+    mapping_kind: MappingKind,
 ) {
     for i in 0..len {
-        push_balanced_record_map(entries, source_id, collection, i, record, fields);
+        push_balanced_record_map(
+            entries,
+            source_id,
+            collection,
+            i,
+            record,
+            fields,
+            mapping_kind,
+        );
     }
 }
 
@@ -1177,6 +1167,7 @@ fn push_balanced_record_map(
     i: usize,
     record: &str,
     fields: &[&str],
+    mapping_kind: MappingKind,
 ) {
     for &field in fields {
         push_balanced_map(
@@ -1185,6 +1176,7 @@ fn push_balanced_record_map(
             &format!("/model/balanced_network/{collection}/{i}/{field}"),
             record,
             field,
+            mapping_kind,
         );
     }
 }
@@ -1195,13 +1187,14 @@ fn push_balanced_map(
     element_path: &str,
     record: &str,
     field: &str,
+    mapping_kind: MappingKind,
 ) {
     entries.push(SourceMapEntry {
         element_path: element_path.to_owned(),
         source_ref: SourceRef::new(source_id)
             .with_record(record)
             .with_field(field),
-        mapping_kind: MappingKind::Exact,
+        mapping_kind,
         confidence: Confidence::High,
     });
 }
