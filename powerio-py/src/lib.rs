@@ -18,6 +18,9 @@
 //! `max(n_buses, n_branches)` (`2n` for the LACPF block), far under 2³¹, and
 //! `coo_triplets` guards the bound anyway.
 
+use std::collections::BTreeMap;
+use std::path::Path;
+
 use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
 use pyo3::types::{PyDict, PyList};
@@ -30,6 +33,10 @@ use powerio_matrix::matrix::{
 use powerio_matrix::opf_pipeline::{DcOpfOptions, write_dcopf_bundle as write_bundle};
 use powerio_matrix::{
     DisplayData, IndexCore, IndexedNetwork, MissingGenCostPolicy, Network, PwdDisplay, WriteOptions,
+};
+use powerio_pkg::{
+    CompilerPackage, DiagnosticSeverity, DiagnosticStage, Origin, SourceDescriptor,
+    StructuredDiagnostic, ValidationSummary,
 };
 
 #[cfg(feature = "gridfm")]
@@ -229,6 +236,315 @@ fn write_options(
         missing_gen_cost,
         gen_cost_patches,
     })
+}
+
+fn package_pyerr(e: serde_json::Error) -> PyErr {
+    PyValueError::new_err(format!("invalid .pio.json package: {e}"))
+}
+
+fn package_to_json(pkg: &CompilerPackage) -> PyResult<String> {
+    let text = pkg.to_json_pretty().map_err(package_pyerr)?;
+    CompilerPackage::from_json(&text).map_err(package_pyerr)?;
+    Ok(text)
+}
+
+fn package_warning_messages(pkg: &CompilerPackage) -> Vec<String> {
+    pkg.diagnostics
+        .iter()
+        .filter(|d| {
+            matches!(
+                d.severity,
+                DiagnosticSeverity::Warning | DiagnosticSeverity::Error | DiagnosticSeverity::Fatal
+            )
+        })
+        .map(|d| format!("{}: {}", d.code, d.message))
+        .collect()
+}
+
+fn package_to_balanced_py(pkg: CompilerPackage) -> PyResult<PyNetwork> {
+    let warnings = package_warning_messages(&pkg);
+    let inner = pkg
+        .as_balanced()
+        .ok_or_else(|| PyValueError::new_err("package model_kind is not balanced"))?
+        .clone();
+    let core = IndexCore::build(&inner);
+    Ok(PyNetwork {
+        inner,
+        core,
+        warnings,
+    })
+}
+
+fn package_to_dist_py(pkg: CompilerPackage) -> PyResult<PyDistNetwork> {
+    let net = pkg
+        .as_multiconductor()
+        .ok_or_else(|| PyValueError::new_err("package model_kind is not multiconductor"))?
+        .clone();
+    Ok(PyDistNetwork { net })
+}
+
+fn add_package_read_warning_diagnostics(
+    pkg: &mut CompilerPackage,
+    code: &str,
+    warnings: &[String],
+) {
+    pkg.diagnostics.extend(warnings.iter().map(|w| {
+        StructuredDiagnostic::new(
+            code,
+            DiagnosticSeverity::Warning,
+            DiagnosticStage::Read,
+            w.clone(),
+        )
+    }));
+    pkg.validation = ValidationSummary::from_diagnostics(&pkg.diagnostics);
+}
+
+#[derive(Clone, Copy)]
+enum PackageSourceKind {
+    File,
+    BinaryFile,
+    Folder,
+}
+
+impl PackageSourceKind {
+    const fn as_str(self) -> &'static str {
+        match self {
+            Self::File => "file",
+            Self::BinaryFile => "binary_file",
+            Self::Folder => "folder",
+        }
+    }
+}
+
+fn package_source_kind(input: &Path, format: &str) -> PackageSourceKind {
+    if input.is_dir() {
+        PackageSourceKind::Folder
+    } else if format == "powerworld-pwb" {
+        PackageSourceKind::BinaryFile
+    } else {
+        PackageSourceKind::File
+    }
+}
+
+fn set_package_source(
+    pkg: &mut CompilerPackage,
+    input: &Path,
+    kind: PackageSourceKind,
+    format: &str,
+    retained_source: bool,
+) {
+    let path = input.display().to_string();
+    pkg.origin = match kind {
+        PackageSourceKind::File => Origin::File {
+            path: path.clone(),
+            format: format.to_owned(),
+            hash: None,
+            retained_source,
+        },
+        PackageSourceKind::BinaryFile => Origin::BinaryFile {
+            path: path.clone(),
+            format: format.to_owned(),
+            hash: None,
+            decoded_sections: Vec::new(),
+        },
+        PackageSourceKind::Folder => Origin::Folder {
+            path: path.clone(),
+            format: format.to_owned(),
+            file_hashes: BTreeMap::new(),
+        },
+    };
+    pkg.sources = vec![SourceDescriptor {
+        id: "src0".to_owned(),
+        kind: kind.as_str().to_owned(),
+        path: Some(path),
+        format: Some(format.to_owned()),
+        hash: None,
+    }];
+}
+
+fn balanced_source_format_name(f: powerio_matrix::SourceFormat) -> &'static str {
+    match f {
+        powerio_matrix::SourceFormat::Matpower => "matpower",
+        powerio_matrix::SourceFormat::PowerModelsJson => "powermodels-json",
+        powerio_matrix::SourceFormat::EgretJson => "egret-json",
+        powerio_matrix::SourceFormat::Psse => "psse",
+        powerio_matrix::SourceFormat::PowerWorld => "powerworld",
+        powerio_matrix::SourceFormat::PandapowerJson => "pandapower-json",
+        powerio_matrix::SourceFormat::Pslf => "pslf",
+        powerio_matrix::SourceFormat::PowerWorldBinary => "powerworld-pwb",
+        powerio_matrix::SourceFormat::InMemory => "in-memory",
+        powerio_matrix::SourceFormat::Normalized => "normalized",
+        powerio_matrix::SourceFormat::Gridfm => "gridfm",
+        powerio_matrix::SourceFormat::PypsaCsv => "pypsa-csv",
+        _ => "unknown",
+    }
+}
+
+fn format_is_gridfm(format: &str) -> bool {
+    normalize(format) == "gridfm"
+}
+
+fn format_is_distribution(format: &str) -> bool {
+    use powerio_matrix::format::routing::{Detection, SourceFormat};
+    matches!(
+        powerio_matrix::format::routing::classify_format_name(format),
+        Detection::Known(SourceFormat::Distribution(_))
+    )
+}
+
+fn looks_like_gridfm_dir(input: &Path) -> bool {
+    input.join("bus_data.parquet").is_file()
+        || input.join("raw").join("bus_data.parquet").is_file()
+        || std::fs::read_dir(input).is_ok_and(|entries| {
+            entries
+                .filter_map(std::result::Result::ok)
+                .filter(|e| e.path().join("raw").join("bus_data.parquet").is_file())
+                .take(2)
+                .count()
+                == 1
+        })
+}
+
+fn looks_like_distribution_input(input: &Path) -> PyResult<bool> {
+    let ext = input
+        .extension()
+        .and_then(|e| e.to_str())
+        .map(str::to_ascii_lowercase);
+    match ext.as_deref() {
+        Some("m" | "raw" | "aux" | "epc" | "pwb") => return Ok(false),
+        Some("dss") => return Ok(true),
+        Some("json") => {}
+        _ => return Ok(false),
+    }
+    let text = std::fs::read_to_string(input).map_err(|e| {
+        PyValueError::new_err(format!(
+            "reading JSON format markers from {}: {e}",
+            input.display()
+        ))
+    })?;
+    use powerio_matrix::format::routing::{Detection, Domain};
+    match powerio_matrix::format::routing::classify_json_text(&text) {
+        Detection::Known(format) => Ok(format.domain() == Domain::Distribution),
+        Detection::Unknown => Ok(false),
+        Detection::Ambiguous => Err(PyValueError::new_err(format!(
+            "ambiguous JSON markers in {}; pass from_",
+            input.display()
+        ))),
+    }
+}
+
+fn build_package_from_path(
+    input: &Path,
+    from_: Option<&str>,
+    scenario: i64,
+) -> PyResult<CompilerPackage> {
+    let reads_gridfm = from_.is_some_and(format_is_gridfm)
+        || (from_.is_none() && input.is_dir() && looks_like_gridfm_dir(input));
+    if reads_gridfm {
+        #[cfg(feature = "gridfm")]
+        {
+            let read = gridfm_read_dataset(input.to_string_lossy().as_ref(), scenario)
+                .map_err(to_pyerr)?;
+            let mut pkg = CompilerPackage::from_balanced(read.network);
+            add_package_read_warning_diagnostics(
+                &mut pkg,
+                "READ.GRIDFM.FIDELITY_WARNING",
+                &read.warnings,
+            );
+            set_package_source(&mut pkg, input, PackageSourceKind::Folder, "gridfm", false);
+            pkg.run_sane_validation();
+            return Ok(pkg);
+        }
+        #[cfg(not(feature = "gridfm"))]
+        {
+            let _ = scenario;
+            return Err(PyValueError::new_err(
+                "powerio was built without the gridfm Parquet surface",
+            ));
+        }
+    }
+
+    if from_.is_some_and(format_is_distribution)
+        || (from_.is_none() && looks_like_distribution_input(input)?)
+    {
+        let net = powerio_dist::parse_file(input, from_).map_err(dist_to_pyerr)?;
+        let format = net
+            .source_format
+            .map(powerio_dist::DistSourceFormat::name)
+            .or(from_)
+            .unwrap_or("unknown");
+        let retained_source = net.source.is_some();
+        let mut pkg = CompilerPackage::from_multiconductor(net);
+        set_package_source(
+            &mut pkg,
+            input,
+            package_source_kind(input, format),
+            format,
+            retained_source,
+        );
+        pkg.run_sane_validation();
+        return Ok(pkg);
+    }
+
+    let parsed = powerio_matrix::parse_file(input, from_).map_err(to_pyerr)?;
+    let format = balanced_source_format_name(parsed.network.source_format);
+    let retained_source = parsed.network.source.is_some();
+    let mut pkg = CompilerPackage::from_balanced(parsed.network);
+    add_package_read_warning_diagnostics(
+        &mut pkg,
+        "READ.TRANSMISSION.PARSE_WARNING",
+        &parsed.warnings,
+    );
+    set_package_source(
+        &mut pkg,
+        input,
+        package_source_kind(input, format),
+        format,
+        retained_source,
+    );
+    pkg.run_sane_validation();
+    Ok(pkg)
+}
+
+fn build_package_from_str(text: &str, from_: Option<&str>) -> PyResult<CompilerPackage> {
+    if from_.is_some_and(format_is_gridfm) {
+        return Err(PyValueError::new_err(
+            "gridfm input is a dataset directory; provide a path",
+        ));
+    }
+
+    let source_format = if let Some(format) = from_ {
+        Some(format.to_owned())
+    } else {
+        use powerio_matrix::format::routing::Detection;
+        match powerio_matrix::format::routing::classify_json_text(text) {
+            Detection::Known(format) => Some(format.name().to_owned()),
+            Detection::Ambiguous => {
+                return Err(PyValueError::new_err("ambiguous JSON markers; pass from_"));
+            }
+            Detection::Unknown => None,
+        }
+    };
+
+    if let Some(format) = source_format.as_deref() {
+        if format_is_distribution(format) {
+            let net = powerio_dist::parse_str(text, format).map_err(dist_to_pyerr)?;
+            let mut pkg = CompilerPackage::from_multiconductor(net);
+            pkg.run_sane_validation();
+            return Ok(pkg);
+        }
+    }
+
+    let parsed = powerio_matrix::parse_str(text, source_format.as_deref().unwrap_or("matpower"))
+        .map_err(to_pyerr)?;
+    let mut pkg = CompilerPackage::from_balanced(parsed.network);
+    add_package_read_warning_diagnostics(
+        &mut pkg,
+        "READ.TRANSMISSION.PARSE_WARNING",
+        &parsed.warnings,
+    );
+    pkg.run_sane_validation();
+    Ok(pkg)
 }
 
 fn normalize(s: &str) -> String {
@@ -1068,6 +1384,52 @@ fn dist_convert_str(text: &str, to: &str, format: &str) -> PyResult<(String, Vec
     Ok((conv.text, conv.warnings))
 }
 
+/// Return the explicit top-level model kind from a validated `.pio.json`
+/// package.
+#[pyfunction]
+fn package_model_kind(text: &str) -> PyResult<String> {
+    let pkg = CompilerPackage::from_json(text).map_err(package_pyerr)?;
+    Ok(match pkg.model_kind() {
+        powerio_pkg::ModelKind::Balanced => "balanced",
+        powerio_pkg::ModelKind::Multiconductor => "multiconductor",
+        _ => "unknown",
+    }
+    .to_owned())
+}
+
+/// Parse a case file and return a `.pio.json` compiler package.
+#[pyfunction]
+#[pyo3(signature = (path, from_=None, scenario=0))]
+fn package_parse_file(path: &str, from_: Option<&str>, scenario: i64) -> PyResult<String> {
+    let pkg = build_package_from_path(Path::new(path), from_, scenario)?;
+    package_to_json(&pkg)
+}
+
+/// Parse in-memory case text and return a `.pio.json` compiler package.
+#[pyfunction]
+#[pyo3(signature = (text, from_=None))]
+fn package_parse_str(text: &str, from_: Option<&str>) -> PyResult<String> {
+    let pkg = build_package_from_str(text, from_)?;
+    package_to_json(&pkg)
+}
+
+/// Rebuild a balanced network handle from a validated `.pio.json` package.
+#[pyfunction]
+fn package_as_balanced(text: &str) -> PyResult<PyNetwork> {
+    CompilerPackage::from_json(text)
+        .map_err(package_pyerr)
+        .and_then(package_to_balanced_py)
+}
+
+/// Rebuild a multiconductor network handle from a validated `.pio.json`
+/// package.
+#[pyfunction]
+fn package_as_multiconductor(text: &str) -> PyResult<PyDistNetwork> {
+    CompilerPackage::from_json(text)
+        .map_err(package_pyerr)
+        .and_then(package_to_dist_py)
+}
+
 /// Classify top level JSON markers. Returns `(status, domain, format)` where
 /// `status` is `known`, `unknown`, or `ambiguous`.
 #[pyfunction]
@@ -1236,6 +1598,11 @@ fn _powerio(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(dist_parse_str, m)?)?;
     m.add_function(wrap_pyfunction!(dist_convert_file, m)?)?;
     m.add_function(wrap_pyfunction!(dist_convert_str, m)?)?;
+    m.add_function(wrap_pyfunction!(package_model_kind, m)?)?;
+    m.add_function(wrap_pyfunction!(package_parse_file, m)?)?;
+    m.add_function(wrap_pyfunction!(package_parse_str, m)?)?;
+    m.add_function(wrap_pyfunction!(package_as_balanced, m)?)?;
+    m.add_function(wrap_pyfunction!(package_as_multiconductor, m)?)?;
     m.add_function(wrap_pyfunction!(classify_json_text, m)?)?;
     // Whether the gridfm Parquet surface (arrow/parquet) was compiled in, so the
     // pure-Python layer can raise an ImportError instead of an AttributeError.

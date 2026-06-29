@@ -2082,7 +2082,9 @@ version = "0.3.3"
 dependencies = [
  "powerio-dist",
  "powerio-matrix",
+ "powerio-pkg",
  "pyo3",
+ "serde_json",
  "sprs",
 ]
 

@@ -221,6 +221,17 @@ pip install 'powerio[mcp]'
 powerio-mcp
 ```
 
+MCP clients can keep a case in the `.pio.json` package transport:
+
+```python
+parsed = parse(path="case9.m", transport="package")
+pkg = parsed["package_json"]
+summary(package_json=pkg)
+matrix("bprime", package_json=pkg)
+save(out_path="case9.raw", to_format="psse", package_json=pkg)
+diagnostics(pkg)
+```
+
 The PowerMCP bundle in [PowerMCP](https://github.com/Power-Agent/PowerMCP) uses the same PowerIO tool surface alongside simulator servers and bridge tools.
 
 ### GridFM (experimental)
