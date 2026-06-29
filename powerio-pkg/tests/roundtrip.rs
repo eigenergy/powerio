@@ -424,6 +424,28 @@ fn origin_distinguishes_in_memory_from_file() {
 }
 
 #[test]
+fn balanced_origin_matches_source_artifact_kind() {
+    let mut net = powerio::parse_str(MATPOWER_SRC, "matpower")
+        .expect("parse matpower")
+        .network;
+
+    net.source_format = powerio::SourceFormat::Gridfm;
+    let gridfm = CompilerPackage::from_balanced(net.clone());
+    assert!(matches!(gridfm.origin, Origin::Folder { .. }));
+    assert_eq!(gridfm.sources[0].kind, "folder");
+
+    net.source_format = powerio::SourceFormat::PypsaCsv;
+    let pypsa = CompilerPackage::from_balanced(net.clone());
+    assert!(matches!(pypsa.origin, Origin::Folder { .. }));
+    assert_eq!(pypsa.sources[0].kind, "folder");
+
+    net.source_format = powerio::SourceFormat::PowerWorldBinary;
+    let pwb = CompilerPackage::from_balanced(net);
+    assert!(matches!(pwb.origin, Origin::BinaryFile { .. }));
+    assert_eq!(pwb.sources[0].kind, "binary_file");
+}
+
+#[test]
 fn unknown_future_fields_are_tolerated() {
     let pkg = balanced_package();
     let mut v = serde_json::to_value(&pkg).unwrap();
@@ -493,7 +515,16 @@ fn incompatible_schema_major_is_rejected() {
 #[test]
 fn invalid_schema_version_is_rejected() {
     let pkg = balanced_package();
-    for version in ["0", "0.x.0", "0.1.0.1"] {
+    for version in [
+        "0",
+        "0.x.0",
+        "0.1.0.1",
+        "00.1.0",
+        "0.1.0-",
+        "0.1.0+",
+        "0.1.0-alpha..1",
+        "0.1.0+build!",
+    ] {
         let mut v = serde_json::to_value(&pkg).unwrap();
         v.as_object_mut()
             .unwrap()

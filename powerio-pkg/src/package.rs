@@ -300,7 +300,23 @@ fn schema_major(version: &str) -> Option<u64> {
     // Accept a semver core `MAJOR.MINOR.PATCH` with an optional prerelease
     // (`-...`) or build (`+...`) tag: same-major additive versions load, so a
     // forward-compatible writer that stamps e.g. `0.2.0-rc.1` is not rejected.
-    let core = version.split(['-', '+']).next().unwrap_or(version);
+    let (core, suffix) = match version.split_once('-') {
+        Some((core, rest)) => match rest.split_once('+') {
+            Some((pre, build)) => (core, Some((Some(pre), Some(build)))),
+            None => (core, Some((Some(rest), None))),
+        },
+        None => match version.split_once('+') {
+            Some((core, build)) => (core, Some((None, Some(build)))),
+            None => (version, None),
+        },
+    };
+    if let Some((pre, build)) = suffix {
+        if pre.is_some_and(|s| !valid_semver_suffix(s))
+            || build.is_some_and(|s| !valid_semver_suffix(s))
+        {
+            return None;
+        }
+    }
     let mut parts = core.split('.');
     let major = parts.next()?;
     let minor = parts.next()?;
@@ -308,10 +324,25 @@ fn schema_major(version: &str) -> Option<u64> {
     if parts.next().is_some() {
         return None;
     }
-    let major = major.parse().ok()?;
-    minor.parse::<u64>().ok()?;
-    patch.parse::<u64>().ok()?;
+    let major = parse_semver_number(major)?;
+    parse_semver_number(minor)?;
+    parse_semver_number(patch)?;
     Some(major)
+}
+
+fn parse_semver_number(s: &str) -> Option<u64> {
+    if s.is_empty() || !s.bytes().all(|b| b.is_ascii_digit()) || (s.len() > 1 && s.starts_with('0'))
+    {
+        return None;
+    }
+    s.parse().ok()
+}
+
+fn valid_semver_suffix(s: &str) -> bool {
+    !s.is_empty()
+        && s.split('.').all(|part| {
+            !part.is_empty() && part.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-')
+        })
 }
 
 fn supported_schema_major() -> u64 {
@@ -888,6 +919,17 @@ fn balanced_origin(net: &BalancedNetwork) -> Origin {
             parent_package_id: None,
             pass: "normalize-balanced".to_owned(),
             options: serde_json::Map::new(),
+        },
+        SourceFormat::Gridfm | SourceFormat::PypsaCsv => Origin::Folder {
+            path: String::new(),
+            format: balanced_format_name(net.source_format).to_owned(),
+            file_hashes: BTreeMap::new(),
+        },
+        SourceFormat::PowerWorldBinary => Origin::BinaryFile {
+            path: String::new(),
+            format: balanced_format_name(net.source_format).to_owned(),
+            hash: None,
+            decoded_sections: Vec::new(),
         },
         other => Origin::File {
             path: String::new(),
