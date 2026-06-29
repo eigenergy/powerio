@@ -3,7 +3,7 @@
 
 <p align="center">
   <img
-    src="https://raw.githubusercontent.com/eigenergy/powerio/main/docs/assets/powerio-hero.png"
+    src="https://raw.githubusercontent.com/eigenergy/powerio/main/docs/src/assets/powerio-hero.png"
     alt="PowerIO format and matrix flow"
     width="720"
   >
@@ -11,8 +11,10 @@
 
 PowerIO parses power system case files into a typed `Network`, converts between
 formats, and builds sparse matrices and graph representations for solver and analysis
-code. Same format writes return retained source text when the reader supports
-it; cross format writes report fields the target cannot carry in warnings.
+code. If you write a parsed file back to the same file type, PowerIO returns the
+original text when the reader kept it. If you convert to another file type,
+PowerIO writes the modeled power flow data and reports fields the target cannot
+carry in warnings.
 
 The core is implemented in [Rust](https://rust-lang.org). The
 [C ABI](https://github.com/eigenergy/powerio/tree/main/powerio-capi) exposes
@@ -26,10 +28,10 @@ When writing back to the source format, PowerIO **returns the original file exac
 
 ### Formats
 
-The following formats are currently supported:
+Supported formats:
 - [MATPOWER](https://matpower.org/) `.m`
 - [PSS/E](https://www.siemens.com/global/en/products/energy/grid-software/planning/pss-software/pss-e.html) `.raw` revisions 33, 34, and 35
-- [PowerWorld](https://www.powerworld.com/WebHelp/Content/MainDocumentation_HTML/Case_Formats.htm) `.aux`, plus read only `.pwb` binary cases; `.pwd` display files parse through the separate display API. Vintage coverage and decode evidence live in [docs/powerworld.md](docs/powerworld.md).
+- [PowerWorld](https://www.powerworld.com/WebHelp/Content/MainDocumentation_HTML/Case_Formats.htm) `.aux`, plus read only `.pwb` binary cases; `.pwd` display files parse through the separate display API. Vintage coverage and decode evidence live in the [PowerWorld guide](https://eigenergy.github.io/powerio/guide/powerworld.html).
 - GE PSLF `.epc` power flow cases
 - [PowerModels.jl](https://github.com/lanl-ansi/PowerModels.jl) network data JSON
 - [egret](https://pypi.org/project/gridx-egret/) `ModelData` JSON
@@ -67,8 +69,8 @@ and conversion separate from matrix, TUI, and data frame dependencies. The
 [Python package](https://pypi.org/project/powerio/) imports with no required
 third party packages; matrix and graph helpers live behind extras.
 
-API docs: <https://eigenergy.github.io/powerio/>.
-Language API map: [languages guide](https://eigenergy.github.io/powerio/guides/languages.html).
+Docs site: <https://eigenergy.github.io/powerio/>.
+Language API map: [languages guide](https://eigenergy.github.io/powerio/guide/languages.html).
 
 ## Install
 
@@ -140,38 +142,33 @@ powerio
 
 ### Current Format Fidelity
 
-| reader / writer | MATPOWER | PowerModels JSON | PSS/E | PowerWorld | egret JSON | pandapower JSON |
-| --- | --- | --- | --- | --- | --- | --- |
-| MATPOWER | original text | full | partial | partial | partial | partial |
-| PowerModels JSON | partial | original text | partial | partial | partial | partial |
-| PSS/E | full | full | original text | partial | partial | partial |
-| PowerWorld | full | full | partial | original text | partial | partial |
-| PowerWorld `.pwb` | full | full | partial | partial | partial | partial |
-| PSLF `.epc` | partial | partial | partial | partial | partial | partial |
-| egret JSON | partial | full | partial | partial | original text | partial |
-| pandapower JSON | partial | partial | partial | partial | partial | original text |
+Every network reader lowers to `Network`. The table separates writing back to
+the original file type from converting to a different file type.
 
-`partial` means the target lacks fields present in the source. The writer reports
-those cases in `Conversion::warnings`. PowerWorld `.pwb` is read only (no
-writer, no retained source): the row shows where its decoded power flow core
-lands. PSLF `.epc` reads and writes the power flow core; same format writes
-echo retained source text, and unsupported EPC sections are reported as read
-warnings. PowerWorld `.pwd` is display data, not a network case, so it is
-outside this conversion table and uses `parse_display_file` /
-`parse_display_bytes`. The decoded vintages and per field evidence live in
-[docs/powerworld.md](docs/powerworld.md).
+| file type | read | write | writing back to the original file type | converting to another file type |
+| --- | --- | --- | --- | --- |
+| MATPOWER `.m` | yes | yes | byte exact retained source | canonical MATPOWER blocks; warnings for fields MATPOWER cannot carry |
+| PowerModels JSON | yes | yes | byte exact retained source | per unit structured data checked against PowerModels.jl |
+| PSS/E `.raw` | yes | yes | byte exact only when writing the source revision | power flow core; revision downgrade and unsupported records are warned |
+| PowerWorld `.aux` | yes | yes | byte exact retained source | power flow core; PowerWorld only fields are projected or warned |
+| PowerWorld `.pwb` | yes | no | n/a | read only binary case; decoded core converts through every text writer |
+| PSLF `.epc` | yes | yes | byte exact retained source | power flow core; unsupported EPC sections are read warnings |
+| egret JSON | yes | yes | byte exact retained source | ModelData shape checked against egret and PowerModels.jl |
+| pandapower JSON | yes | yes | byte exact retained source | pandapower import validator checks counts and Y_bus |
+| PyPSA CSV folder | yes | yes | directory output, not text echo | PyPSA import validator checks the exported static components |
+| GridFM Parquet | yes | yes | directory output, deliberately lossy read | recovers the power flow core for conversion back to classical formats |
 
-The distribution matrix (dss, PMD JSON, BMOPF JSON, per fixture) is generated into
-[powerio-dist/docs/conversion-matrix.md](https://github.com/eigenergy/powerio/blob/main/powerio-dist/docs/conversion-matrix.md).
-Vendored test data keeps its own licenses, documented next to the fixtures
-(see [tests/data/dist/README.md](tests/data/dist/README.md)).
+PowerWorld `.pwd` is display data, not a network case, so it is outside this
+conversion table and uses `parse_display_file` / `parse_display_bytes`. The
+decoded vintages and per field evidence live in
+[PowerWorld guide](https://eigenergy.github.io/powerio/guide/powerworld.html).
 
-PyPSA CSV folders and GridFM Parquet are not in this table only because they
-are directory datasets, not single text outputs. Both read and write: PyPSA
-with regenerable committed fixtures (`tests/data/pypsa/README.md`), GridFM
-with a deliberately lossy read that recovers the power flow core. Known
-limits for every format are documented in
-the [format fidelity guide](https://eigenergy.github.io/powerio/guides/format-fidelity.html).
+The distribution matrix (dss, PMD JSON, BMOPF JSON, per fixture) is generated
+under `powerio-dist/docs/`. Vendored test data keeps its own licenses next to
+the fixtures under `tests/data/dist/`.
+
+Known limits for every format are documented in the
+[format fidelity guide](https://eigenergy.github.io/powerio/guide/format-fidelity.html).
 
 ### Matrices
 
@@ -183,10 +180,10 @@ The `powerio-matrix` Rust crate derives an `IndexedNetwork` with dense bus indic
 - Signed incidence, weighted Laplacian, and flow map matrices
 - PTDF and LODF sensitivity matrices
 - Adjacency matrix and `petgraph` graph output
-- Matrix Market bundles for low-level OPF solvers
+- Matrix Market bundles for OPF solvers
 - KKT operators for OPF solvers (experimental)
 
-Current conventions for signs, taps, phase shifts, per unit scaling, reference buses, and line parameters are documented in the [matrices guide](https://eigenergy.github.io/powerio/guides/matrices.html).
+Current conventions for signs, taps, phase shifts, per unit scaling, reference buses, and line parameters are documented in the [matrices guide](https://eigenergy.github.io/powerio/guide/matrices.html).
 
 ### Normalized Form
 
@@ -216,7 +213,7 @@ Build with `--features arrow` to enable `pio_to_arrow` over the
 ### PowerAgent
 
 
-PowerIO is part of the [PowerAgent](https://github.com/Power-Agent) community. The Python interface for PowerIO currently includes an optional MCP server exposing semantic tools for conversion, saving, summaries, parsing, normalization, matrix outputs, and display data.
+PowerIO is part of the [PowerAgent](https://github.com/Power-Agent) community. The Python package includes an optional MCP server with tools for conversion, saving, summaries, parsing, normalization, matrix outputs, and display data.
 
 
 ```
@@ -224,11 +221,10 @@ pip install 'powerio[mcp]'
 powerio-mcp
 ```
 
-The PowerIO MCP server is currently being integrated as the low-level data exchange substrate for the MCP server bundle in [PowerMCP](https://github.com/Power-Agent/PowerMCP). The PowerMCP bundle ships the same
-tool surface as PowerIO alongside a wide array of simulator servers, whose bridges ingest the transport directly.
+The PowerMCP bundle in [PowerMCP](https://github.com/Power-Agent/PowerMCP) uses the same PowerIO tool surface alongside simulator servers and bridge tools.
 
 ### GridFM (experimental)
-PowerIO ships first-class support for the [LF Energy](https://lfenergy.org/projects/gridfm/) open [Grid Foundation Model (GridFM)](https://github.com/gridfm) project. In the command line:
+PowerIO writes datasets for the [LF Energy](https://lfenergy.org/projects/gridfm/) open [Grid Foundation Model (GridFM)](https://github.com/gridfm) project. In the command line:
 
 ```
 powerio gridfm <case> -o <dir>
@@ -246,8 +242,8 @@ out in any classical format:
 powerio convert out/case14/raw --from gridfm --to matpower -o case14.m
 ```
 
-The `--from gridfm` read functionality is currently lossy. What it recovers, what it drops, and the warnings contract
-are in the [format fidelity guide](https://eigenergy.github.io/powerio/guides/format-fidelity.html). Improving `gridfm` read/write functionality is a key priority for the initial development of PowerIO.
+The `--from gridfm` read path is lossy. What it recovers, what it drops, and its warning behavior
+are in the [format fidelity guide](https://eigenergy.github.io/powerio/guide/format-fidelity.html).
 
 
 ## Validation
@@ -256,8 +252,9 @@ The Rust test suite covers parsers, writers, format conversion, matrix
 builders, and normalization; the C ABI crate carries its own tests, and
 `pytest` covers the Python bindings. The benchmark validation suite compares
 selected outputs against PowerModels.jl, egret, ExaPowerIO.jl, and pandapower,
-and imports PowerIO's PyPSA CSV folders with PyPSA when the optional oracle is
-installed.
+and imports PowerIO's PyPSA CSV folders with PyPSA. Install the oracle stack
+from `benchmarks/requirements.txt` into the same Python 3.11+ venv that holds
+the local `powerio` wheel.
 
 ```
 cargo fmt --all --check
@@ -268,8 +265,8 @@ pytest python/tests
 bash benchmarks/run_validation.sh
 ```
 
-Benchmark method, environment, and current tables are documented in
-[benchmarks/RESULTS.md](https://github.com/eigenergy/powerio/blob/main/benchmarks/RESULTS.md).
+Benchmark method, environment, and current tables are documented in the
+[performance guide](https://eigenergy.github.io/powerio/guide/performance.html).
 
 ## License
 
@@ -281,7 +278,7 @@ PowerIO is distributed under either of:
 
 <p align="center">
   <img
-    src="https://raw.githubusercontent.com/eigenergy/powerio/main/docs/assets/powerio-logo.svg"
+    src="https://raw.githubusercontent.com/eigenergy/powerio/main/docs/src/assets/powerio-logo.svg"
     alt="PowerIO logo"
     width="120"
   >

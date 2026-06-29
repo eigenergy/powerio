@@ -93,7 +93,7 @@ pub(crate) fn ground_with(matrix: &CsMat<f64>, g: &Grounding) -> CsMat<f64> {
     debug_assert_eq!(n, matrix.cols(), "ground_with expects a square matrix");
     // Hard assert: an out-of-range index removes no row/column
     // yet shrinks the builder. These are `pub` entry points, so guard the
-    // contract unconditionally.
+    // invariant unconditionally.
     if let Some(last) = g.max() {
         assert!(
             last < n,

@@ -1194,7 +1194,7 @@ fn gridfm_read_to_py(read: GridfmRead) -> (PyNetwork, i64, Vec<String>) {
 /// returning `(case, scenario, warnings)` (the pure-Python layer wraps it as a
 /// `GridfmRead` namedtuple). `dir` resolves leniently: the `raw/` leaf, a
 /// `<case>/` directory, or a parent with one `*/raw/` child. The read is lossy but
-/// power-flow-complete; `warnings` lists what the gridfm schema couldn't
+/// power flow complete; `warnings` lists what the gridfm schema couldn't
 /// round-trip. Available when the extension is built with the Rust `gridfm` feature.
 #[cfg(feature = "gridfm")]
 #[pyfunction]

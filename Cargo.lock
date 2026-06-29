@@ -2048,6 +2048,7 @@ version = "0.3.3"
 dependencies = [
  "approx",
  "arrow",
+ "criterion",
  "num-complex",
  "parquet",
  "powerio",

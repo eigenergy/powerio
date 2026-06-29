@@ -190,7 +190,7 @@ Hardening fixes only; no API or ABI change (`PIO_ABI_VERSION` stays 3).
   case, a vintage skew).
 - Full `.aux` fidelity (#95): all three field naming generations through
   Simulator 21+, validated against the vendored ACTIVSg200 set.
-- `docs/powerworld.md` records the decode evidence, mapping notes, and the
+- The PowerWorld guide records the decode evidence, mapping notes, and the
   coverage matrix the corpus tests assert.
 
 ## 0.1.1
@@ -242,4 +242,4 @@ First release.
 - `powerio-cli`: convert and validate from the shell.
 
 The C ABI history (versions 1 through 3) is tracked in
-[powerio-capi/README.md](powerio-capi/README.md).
+`powerio-capi/README.md`.

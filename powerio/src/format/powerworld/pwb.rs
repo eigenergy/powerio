@@ -3,12 +3,12 @@
 //! The format is undocumented; everything here was established by
 //! differential analysis of `.pwb`/`.aux` sibling exports of the ACTIVSg
 //! synthetic grids and is recorded with its evidence in
-//! `docs/powerworld.md`. The reader decodes the power flow core tables
-//! (buses, loads, generators, shunts, branches) and stops there; the rest of
-//! the file (substations, areas, contingencies, options) is inventoried in
-//! the docs and left undecoded.
+//! <https://eigenergy.github.io/powerio/guide/powerworld.html>. The reader
+//! decodes the power flow core tables (buses, loads, generators, shunts,
+//! branches) and stops there; the rest of the file (substations, areas,
+//! contingencies, options) is inventoried in the docs and left undecoded.
 //!
-//! Robustness contract: every record is validated as it is parsed (bus
+//! Robustness rule: every record is validated as it is parsed (bus
 //! references must exist, floats must be finite and in range, record flags
 //! must be values this reader has seen and verified). A file that does not
 //! match the validated layout fails loudly; nothing is guessed silently.
@@ -143,6 +143,12 @@ pub fn parse_pwb(bytes: &[u8], name_hint: Option<&str>) -> Result<Network> {
         },
     };
     let branch_count_can_include_trailer = header_constant == 554;
+    let narrow_glue = if header_constant == 425 {
+        DeviceGlue::old_425()
+    } else {
+        DeviceGlue::wide()
+    };
+    let wide_glue = DeviceGlue::wide();
     // The narrow bus glue window prices the common files (see
     // bus_table_candidates); the wide retry exists so a small node level
     // resave (a bus table under 256 records with the v21 writer's 52 byte
@@ -151,31 +157,45 @@ pub fn parse_pwb(bytes: &[u8], name_hint: Option<&str>) -> Result<Network> {
     // only the glue combinations the narrow pass could not reach, and
     // shares the bus run cache so nothing is walked twice.
     let bus_runs = RefCell::new(HashMap::new());
-    match search_table_chain(
+    if let Some(net) = search_table_chain(
         bytes,
         name_hint,
         gen_variants,
         branch_count_can_include_trailer,
         &bus_runs,
+        narrow_glue,
         false,
     ) {
-        Some(net) => net,
-        None => search_table_chain(
-            bytes,
-            name_hint,
-            gen_variants,
-            branch_count_can_include_trailer,
-            &bus_runs,
-            true,
-        )
-        .unwrap_or_else(|| {
-            Err(Error::FormatRead {
-                format: FMT,
-                message: "no table chain matches the validated .pwb layouts \
-                                  (buses, loads, generators, shunts, branches in sequence)"
-                    .into(),
+        net
+    } else {
+        let retry = |wide_bus_glue, device_glue| {
+            search_table_chain(
+                bytes,
+                name_hint,
+                gen_variants,
+                branch_count_can_include_trailer,
+                &bus_runs,
+                device_glue,
+                wide_bus_glue,
+            )
+        };
+        (wide_glue != narrow_glue)
+            .then(|| retry(false, wide_glue))
+            .flatten()
+            .or_else(|| retry(true, narrow_glue))
+            .or_else(|| {
+                (wide_glue != narrow_glue)
+                    .then(|| retry(true, wide_glue))
+                    .flatten()
             })
-        }),
+            .unwrap_or_else(|| {
+                Err(Error::FormatRead {
+                    format: FMT,
+                    message: "no table chain matches the validated .pwb layouts \
+                                  (buses, loads, generators, shunts, branches in sequence)"
+                        .into(),
+                })
+            })
     }
 }
 
@@ -191,6 +211,34 @@ struct GenVariants {
     simple_reg: bool,
 }
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+struct DeviceGlue {
+    load: usize,
+    plain_gen: usize,
+    reg_gen: usize,
+    simple_reg_gen: usize,
+}
+
+impl DeviceGlue {
+    fn old_425() -> Self {
+        Self {
+            load: 48,
+            plain_gen: 48,
+            reg_gen: 128,
+            simple_reg_gen: 128,
+        }
+    }
+
+    fn wide() -> Self {
+        Self {
+            load: 128,
+            plain_gen: 128,
+            reg_gen: 128,
+            simple_reg_gen: 128,
+        }
+    }
+}
+
 /// One full depth first search for the table chain; `None` when no chain
 /// matches. `wide_bus_glue` lifts the bus table's count gated glue window
 /// (see [`bus_table_candidates`]) for the retry pass.
@@ -201,16 +249,18 @@ fn search_table_chain(
     gen_variants: GenVariants,
     branch_count_can_include_trailer: bool,
     bus_runs: &RefCell<BusRuns>,
+    device_glue: DeviceGlue,
     wide_bus_glue: bool,
 ) -> Option<Result<Network>> {
     // A count word can be forged by record interiors and the case
     // description, so table location is a depth first search: a candidate at
-    // any stage is kept only if every later table parses behind it, and the
-    // first full chain wins. Wrong candidates die fast on their bounded
-    // windows; a file with no valid chain fails loudly. The run caches make
-    // the backtracking affordable: candidates pointing at the same first
-    // record share one walk however many count words and search retries
-    // reach it.
+    // any stage is kept only if every later table parses behind it. The
+    // common dedicated shunt table path returns on the first checked chain;
+    // the optional bus tail shunt paths keep the largest checked electrical
+    // core. Wrong candidates die fast on their bounded windows; a file with
+    // no valid chain fails loudly. The run caches make the backtracking
+    // affordable: candidates pointing at the same first record share one walk
+    // however many count words and search retries reach it.
     for (buses, bus_shunts, bus_end, last_bus_unk) in
         bus_table_candidates(bytes, bus_runs, wide_bus_glue)
     {
@@ -238,47 +288,34 @@ fn search_table_chain(
             &bus_ids,
             read_load_record,
             &load_runs,
-            128,
+            device_glue.load,
             12,
         ) {
             // The generator table reads through the record layouts the
             // header constant admits (see parse_pwb). A file's table uses
             // exactly one; each gets its own run cache and the structural
-            // gauntlets keep the wrong one from parsing. The newer layout's
-            // table glue runs to 86 bytes in the v21 resave; the older
-            // table glue reaches 104 bytes in the IEEE 24 bus save.
+            // gauntlets keep the wrong one from parsing. The 508 era is
+            // ambiguous in the corpus, so the regulated layout goes first:
+            // on Texas7k v21, the older probe can accept a false table
+            // before the true regulated table if it gets first refusal.
+            // The newer layout's table glue runs to 86 bytes in the v21
+            // resave; the older table glue reaches 104 bytes in the IEEE
+            // 24 bus save.
             let gen_candidates = gen_variants
-                .plain
+                .reg
                 .then(|| {
                     device_table_candidates(
                         bytes,
                         l_end..l_end.saturating_add(RESYNC_WINDOW),
                         &bus_ids,
-                        read_gen_record,
-                        &gen_runs,
-                        128,
-                        32,
+                        read_gen_reg_record,
+                        &gen_reg_runs,
+                        device_glue.reg_gen,
+                        40,
                     )
                 })
                 .into_iter()
                 .flatten()
-                .chain(
-                    gen_variants
-                        .reg
-                        .then(|| {
-                            device_table_candidates(
-                                bytes,
-                                l_end..l_end.saturating_add(RESYNC_WINDOW),
-                                &bus_ids,
-                                read_gen_reg_record,
-                                &gen_reg_runs,
-                                128,
-                                40,
-                            )
-                        })
-                        .into_iter()
-                        .flatten(),
-                )
                 .chain(
                     gen_variants
                         .simple_reg
@@ -289,8 +326,25 @@ fn search_table_chain(
                                 &bus_ids,
                                 read_gen_reg_simple_record,
                                 &gen_reg_simple_runs,
-                                128,
+                                device_glue.simple_reg_gen,
                                 40,
+                            )
+                        })
+                        .into_iter()
+                        .flatten(),
+                )
+                .chain(
+                    gen_variants
+                        .plain
+                        .then(|| {
+                            device_table_candidates(
+                                bytes,
+                                l_end..l_end.saturating_add(RESYNC_WINDOW),
+                                &bus_ids,
+                                read_gen_record,
+                                &gen_runs,
+                                device_glue.plain_gen,
+                                32,
                             )
                         })
                         .into_iter()
@@ -344,18 +398,16 @@ fn search_table_chain(
                     };
                     let mut shunts = shunts;
                     extend_unique_shunts(&mut shunts, &bus_shunts);
-                    keep_best_chain(
-                        &mut best,
-                        chain_score(&loads, &shunts, &branches, &generators),
-                        checked_network(
-                            name_hint,
-                            buses.clone(),
-                            loads.clone(),
-                            shunts,
-                            branches,
-                            generators.clone(),
-                        ),
+                    let score = chain_score(&loads, &shunts, &branches, &generators);
+                    let net = checked_network(
+                        name_hint,
+                        buses.clone(),
+                        loads.clone(),
+                        shunts,
+                        branches,
+                        generators.clone(),
                     );
+                    keep_best_chain(&mut best, score, net);
                 }
                 if let Some(branches) = find_branch_table(
                     bytes,
@@ -565,7 +617,8 @@ impl<'a> Cur<'a> {
 
 /// How far a bit 4 record's tail blob may push the next record: the largest
 /// observed blob is 406 KiB (an ACTIVSg500 branch record, see
-/// docs/powerworld.md), so four MiB is an order of magnitude of headroom
+/// <https://eigenergy.github.io/powerio/guide/powerworld.html>), so four MiB
+/// is an order of magnitude of headroom
 /// while bounding what a crafted file can make the scan walk per record.
 const BLOB_WINDOW: usize = 4 << 20;
 
@@ -702,7 +755,8 @@ fn unsupported_vintage(detail: impl std::fmt::Display) -> Error {
         format: FMT,
         message: format!(
             "unsupported PowerWorld .pwb vintage: {detail}; only the validated \
-             338/368/425/483/508/537/550/551/554 layouts are decoded (see docs/powerworld.md)"
+             338/368/425/483/508/537/550/551/554 layouts are decoded \
+             (see https://eigenergy.github.io/powerio/guide/powerworld.html)"
         ),
     }
 }

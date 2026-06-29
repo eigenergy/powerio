@@ -37,6 +37,8 @@ jobs:
         python-version: "3.12"
     - uses: dtolnay/rust-toolchain@stable
     - uses: Swatinem/rust-cache@v2
+    - name: Install mdBook
+      run: cargo install mdbook --version 0.5.2 --locked
     # -D warnings turns a broken intra-doc link into a failed build, so the docs
     # can't rot silently. --all-features renders the gridfm/arrow/kkt surface.
     - name: Build docs
@@ -48,95 +50,15 @@ jobs:
         python -m pip install --upgrade pip
         python -m pip install '.[all]' pdoc
         python -m pdoc powerio -o target/doc/python
-    # The guides render on this site (docs/*.md to guides/*.html) so readers
-    # stay on one domain; sibling .md links become .html, links that leave
-    # docs/ go to GitHub.
-    - name: Render guides
-      run: |
-        python -m pip install markdown
-        python - <<'PY'
-        import pathlib
-        import re
-
-        import markdown
-
-        TPL = """<!doctype html>
-        <html lang="en">
-        <meta charset="utf-8">
-        <meta name="viewport" content="width=device-width, initial-scale=1">
-        <title>{title}</title>
-        <link rel="icon" href="../_assets/powerio-logo.svg">
-        <style>
-          :root {{
-            --bg:#faf8f4; --fg:#26221b; --muted:#76705f;
-            --rust:#b7410e; --line:#e4ded2; --code:#f2eee5;
-          }}
-          @media (prefers-color-scheme: dark) {{
-            :root {{
-              --bg:#15120e; --fg:#e9e3d5; --muted:#9d958a;
-              --rust:#e0773f; --line:#2d2820; --code:#201c15;
-            }}
-          }}
-          html {{ border-top: 3px solid var(--rust); }}
-          body {{
-            font-family: "Charter", "Georgia", serif; font-size: 1.0625rem;
-            color: var(--fg); background: var(--bg);
-            max-width: 920px; margin: 3rem auto 5rem; padding: 0 2rem; line-height: 1.65;
-          }}
-          nav {{
-            font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
-            font-size: .78rem; color: var(--muted); margin-bottom: 2.4rem;
-          }}
-          nav a {{ color: var(--muted); }}
-          h1, h2, h3 {{ letter-spacing: -.01em; }}
-          h2 {{ border-bottom: 1px solid var(--line); padding-bottom: .25rem; margin-top: 2.4rem; }}
-          a {{ color: var(--rust); text-decoration: none; }}
-          a:hover {{ text-decoration: underline; text-underline-offset: 3px; }}
-          pre, code {{
-            font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
-            font-size: .86em; background: var(--code);
-          }}
-          pre {{ padding: .8rem 1rem; overflow-x: auto; border-left: 2px solid var(--line); }}
-          code {{ padding: .1rem .3rem; }}
-          pre code {{ padding: 0; }}
-          table {{ border-collapse: collapse; display: block; overflow-x: auto; max-width: 100%; }}
-          th {{ border-bottom: 2px solid var(--fg); text-align: left; }}
-          td {{ border-bottom: 1px solid var(--line); }}
-          th, td {{ padding: .4rem 1.1rem .4rem 0; vertical-align: top; }}
-          hr {{ border: 0; border-top: 1px solid var(--line); }}
-        </style>
-        <nav><a href="../index.html">powerio docs</a> / {crumb}</nav>
-        {body}
-        """
-
-        def rewrite(m):
-            target, anchor = m.group(1), m.group(2) or ""
-            if target.startswith(".."):
-                path = target.lstrip("./")
-                return f"](https://github.com/eigenergy/powerio/blob/main/{path}.md{anchor})"
-            return f"]({target}.html{anchor})"
-
-        out = pathlib.Path("target/doc/guides")
-        out.mkdir(parents=True, exist_ok=True)
-        for src in sorted(pathlib.Path("docs").glob("*.md")):
-            text = re.sub(r"\]\((?!https?://)([^)#]+?)\.md(#[^)]*)?\)", rewrite, src.read_text())
-            body = markdown.markdown(text, extensions=["tables", "fenced_code"])
-            heading = re.search(r"<h1>(.*?)</h1>", body)
-            title = heading.group(1) if heading else src.stem
-            name = "index" if src.stem == "README" else src.stem
-            crumb = "overview" if src.stem == "README" else src.stem
-            (out / f"{name}.html").write_text(TPL.format(title=title, crumb=crumb, body=body))
-            print("rendered", name)
-        PY
-    # The landing page separates the two doc deployments so neither shadows the
-    # other: docs.rs renders the crates.io releases of powerio/powerio-matrix,
-    # while this site renders main (all four crates, including the publish=false
-    # powerio-capi and powerio-py that docs.rs never hosts) plus the Python API
-    # reference (PyPI hosts no API docs) and the rendered docs/ guides.
+    - name: Build book
+      run: mdbook build docs --dest-dir target/doc/guide
+    # The landing page separates the doc deployments so neither shadows the
+    # other: docs.rs renders crates.io releases, while this site renders main
+    # rustdoc, the Python API reference, and the mdBook guide.
     - name: Landing page
       run: |
         mkdir -p target/doc/_assets
-        cp docs/assets/powerio-logo.svg target/doc/_assets/
+        cp docs/src/assets/powerio-logo.svg target/doc/_assets/
         cat > target/doc/index.html <<'HTML'
         <!doctype html>
         <html lang="en">
@@ -191,7 +113,7 @@ jobs:
           <img src="_assets/powerio-logo.svg" alt="PowerIO logo">
           <h1>PowerIO docs</h1>
         </header>
-        <p class="tagline">Fast case parsing and conversion: &ldquo;pandoc for power systems&rdquo;</p>
+        <p class="tagline">Case parsing, conversion, matrices, and language bindings.</p>
         <dl>
           <div>
             <dt>released / docs.rs</dt>
@@ -208,13 +130,13 @@ jobs:
                 <a href="python/powerio.html">python</a></dd>
           </div>
           <div>
-            <dt>guides</dt>
-            <dd><a href="guides/index.html">overview</a>
-                <a href="guides/format-fidelity.html">format fidelity</a>
-                <a href="guides/matrices.html">matrices</a>
-                <a href="guides/dcopf-bundle.html">DC OPF bundle</a>
-                <a href="guides/languages.html">language APIs</a>
-                <a href="guides/python.html">python</a></dd>
+            <dt>guide</dt>
+            <dd><a href="guide/index.html">overview</a>
+                <a href="guide/format-fidelity.html">format fidelity</a>
+                <a href="guide/matrices.html">matrices</a>
+                <a href="guide/dcopf-bundle.html">DC OPF bundle</a>
+                <a href="guide/languages.html">language APIs</a>
+                <a href="guide/python.html">python</a></dd>
           </div>
           <div>
             <dt>bindings</dt>

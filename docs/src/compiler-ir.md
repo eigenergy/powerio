@@ -4,7 +4,7 @@ PowerIO is organized as a compiler for power system data: frontends parse source
 formats into typed IR, passes normalize and lower it, and backends emit target
 artifacts. This document defines the IR boundaries and the `.pio.json` compiler
 package that ties them together. The field-level reference for the package is in
-[pio-json-schema.md](pio-json-schema.md).
+[the PIO JSON schema guide](https://eigenergy.github.io/powerio/guide/pio-json-schema.html).
 
 The governing decision is that there is no single flattened universal `Network`
 mega-struct. There are concrete model families, and a package object that wraps
@@ -23,7 +23,7 @@ positive-sequence model for transmission power flow, OPF, matrices, and graph
 analysis. Every electrical quantity is a single `f64`, with no phase or conductor
 dimension. External bus ids are not dense matrix indices; the dense solver view
 is derived separately and preserves external ids. Loads and shunts are
-first-class records, not folded onto bus rows.
+first class records, not folded onto bus rows.
 
 ### `MulticonductorNetwork`
 
@@ -70,10 +70,11 @@ reject a package where they do not.
 
 ### Payload stability
 
-The envelope is the versioned, documented contract. The nested `balanced_network`
+The envelope is the versioned, documented surface. The nested `balanced_network`
 / `multiconductor_network` payloads are direct serde snapshots of the live
 PowerIO Rust IR and are experimental until a v1 payload schema is declared; they
-grow whenever the IR grows. See [pio-json-schema.md](pio-json-schema.md).
+grow whenever the IR grows. See
+[the PIO JSON schema guide](https://eigenergy.github.io/powerio/guide/pio-json-schema.html).
 
 ### Provenance and source maps
 
@@ -104,9 +105,9 @@ Every pass that transforms one model into another appends a `LoweringRecord`
 (input and output kind, options, assumptions, approximations, dropped fields,
 diagnostics, validation status) to `lowering_history`, so the transformation is
 auditable rather than implicit. This change set defines the record shape; the
-passes themselves are later work. The v0.4.0 design contract for
+passes themselves are later work. The v0.4.0 design direction for
 `MulticonductorNetwork` to `BalancedNetwork` lowering is in
-[v0.4-release-direction.md](v0.4-release-direction.md); the implementation is
+[the v0.4 release direction](https://eigenergy.github.io/powerio/guide/v0.4-release-direction.html); the implementation is
 tracked in #145.
 
 ## Versioning

@@ -395,16 +395,52 @@ def test_import_and_parse_pull_in_no_optional_deps():
     # pollute it, and parse + write a real case so the whole IO path is covered.
     # `mcp` is checked too: the powerio.mcp submodule must never be imported from
     # powerio/__init__.py, so the optional MCP SDK stays out of `import powerio`.
+    optional_modules = [
+        "numpy",
+        "scipy",
+        "networkx",
+        "polars",
+        "pandas",
+        "pyarrow",
+        "mcp",
+    ]
     code = (
         "import sys, powerio\n"
         f"c = powerio.parse_file(r'{DATA / 'case9.m'}')\n"
         "assert c.to_matpower()\n"
-        "assert 'numpy' not in sys.modules, 'powerio dragged in numpy'\n"
-        "assert 'scipy' not in sys.modules, 'powerio dragged in scipy'\n"
-        "assert 'mcp' not in sys.modules, 'powerio dragged in the mcp SDK'\n"
+        f"for name in {optional_modules!r}:\n"
+        "    assert name not in sys.modules, f'powerio dragged in {name}'\n"
     )
     r = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True)
     assert r.returncode == 0, r.stderr
+
+
+def test_missing_matrix_extra_raises_clear_importerror(case9, monkeypatch):
+    def missing_module(name):
+        if name in {"numpy", "scipy.sparse"}:
+            raise ImportError(f"No module named {name!r}", name=name)
+        return original_import(name)
+
+    original_import = powerio.importlib.import_module
+    monkeypatch.setattr(powerio.importlib, "import_module", missing_module)
+
+    with pytest.raises(ImportError, match=r"powerio\[matrix\]"):
+        case9.to_dense()
+    with pytest.raises(ImportError, match=r"powerio\[matrix\]"):
+        case9.bprime()
+
+
+def test_missing_graph_extra_raises_clear_importerror(case9, monkeypatch):
+    def missing_module(name):
+        if name == "networkx":
+            raise ImportError(f"No module named {name!r}", name=name)
+        return original_import(name)
+
+    original_import = powerio.importlib.import_module
+    monkeypatch.setattr(powerio.importlib, "import_module", missing_module)
+
+    with pytest.raises(ImportError, match=r"powerio\[graph\]"):
+        case9.to_networkx()
 
 
 # --- matrix structure & values -----------------------------------------

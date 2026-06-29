@@ -102,12 +102,7 @@ jobs:
     # header, so a new, renamed, or removed entry point can't silently drift out
     # of sync with include/powerio.h.
     - name: Header symbol parity
-      run: |
-        grep -oE 'extern "C" fn pio_[a-z_]+' powerio-capi/src/lib.rs \
-          | grep -oE 'pio_[a-z_]+' | sort -u > rs_syms
-        grep -oE 'pio_[a-z_]+ *\(' powerio-capi/include/powerio.h \
-          | grep -oE 'pio_[a-z_]+' | sort -u > h_syms
-        diff rs_syms h_syms
+      run: bash scripts/capi-header-parity.sh
     # Drive the ABI from C against the built library: proves the header is valid
     # C, the symbols link, and the exercised signatures match. Dynamic-linked so
     # the platform resolves the Rust runtime deps.
@@ -140,12 +135,7 @@ jobs:
     # The cfg-gated pio_to_arrow still appears in the source symbol grep, so
     # it must be declared in the header (inside #ifdef PIO_ARROW); parity holds.
     - name: Header symbol parity
-      run: |
-        grep -oE 'extern "C" fn pio_[a-z_]+' powerio-capi/src/lib.rs \
-          | grep -oE 'pio_[a-z_]+' | sort -u > rs_syms
-        grep -oE 'pio_[a-z_]+ *\(' powerio-capi/include/powerio.h \
-          | grep -oE 'pio_[a-z_]+' | sort -u > h_syms
-        diff rs_syms h_syms
+      run: bash scripts/capi-header-parity.sh
     # Compile the smoke test with -DPIO_ARROW so it exercises the Arrow C Data
     # Interface export against the arrow-featured library.
     - name: Compile and run the C smoke test (arrow)
@@ -173,12 +163,7 @@ jobs:
     # so they must be declared in the header (inside their PIO_* guards);
     # parity holds for the release feature set.
     - name: Header symbol parity
-      run: |
-        grep -oE 'extern "C" fn pio_[a-z_]+' powerio-capi/src/lib.rs \
-          | grep -oE 'pio_[a-z_]+' | sort -u > rs_syms
-        grep -oE 'pio_[a-z_]+ *\(' powerio-capi/include/powerio.h \
-          | grep -oE 'pio_[a-z_]+' | sort -u > h_syms
-        diff rs_syms h_syms
+      run: bash scripts/capi-header-parity.sh
     # Compile the smoke test with every optional PIO_* define so it exercises
     # the same C surface the release artifacts export.
     - name: Compile and run the C smoke test (release features)
@@ -215,12 +200,7 @@ jobs:
     # grep, so they must be declared in the header (inside #ifdef PIO_DIST);
     # parity holds.
     - name: Header symbol parity
-      run: |
-        grep -oE 'extern "C" fn pio_[a-z_]+' powerio-capi/src/lib.rs \
-          | grep -oE 'pio_[a-z_]+' | sort -u > rs_syms
-        grep -oE 'pio_[a-z_]+ *\(' powerio-capi/include/powerio.h \
-          | grep -oE 'pio_[a-z_]+' | sort -u > h_syms
-        diff rs_syms h_syms
+      run: bash scripts/capi-header-parity.sh
     # Compile the smoke test with -DPIO_DIST so it exercises the distribution
     # entry points against the dist-featured library.
     - name: Compile and run the C smoke test (dist)

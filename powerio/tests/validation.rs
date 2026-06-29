@@ -118,7 +118,7 @@ fn psse_rejects_malformed_numeric_field() {
 
 #[test]
 fn powerworld_rejects_malformed_numeric_field() {
-    // Same contract as PSS/E, for the sibling .aux reader: write a valid file,
+    // Same expectation as PSS/E, for the sibling .aux reader: write a valid file,
     // corrupt one numeric field (a branch reactance), and the reader must error
     // rather than silently default it to 0.0.
     let mut br = branch(1, 2);

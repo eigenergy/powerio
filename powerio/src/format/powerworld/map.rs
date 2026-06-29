@@ -296,7 +296,7 @@ fn uid(r: &Row, key: &str) -> Result<usize> {
 }
 fn on(r: &Row, key: &str) -> Result<bool> {
     // A closed vocabulary: an unrecognized status token must not silently
-    // mean energized (the same contract f_or applies to numbers). Absent
+    // mean energized (the same rule applies to numbers in f_or). Absent
     // or empty keeps the documented in service default.
     match r.get(key).copied().map(str::trim) {
         None | Some("") => Ok(true),

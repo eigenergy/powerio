@@ -30,6 +30,8 @@ cargo test -p powerio-capi --no-default-features
 cargo test -p powerio-capi --features arrow
 cargo test -p powerio-capi --features gridfm
 cargo test -p powerio-capi --features dist
+scripts/capi-header-parity.sh
+scripts/capi-smoke.sh
 ```
 
 ## C

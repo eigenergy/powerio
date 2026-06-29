@@ -2,10 +2,11 @@
 """Regenerate the benchmark speed tables in benchmarks/RESULTS.md
 from the JSON the bench scripts emit, so the numbers stop being copy-pasted by hand.
 
-Reads benchmarks/results/{speed_julia,speed_python}.json (written by
-`bench_julia.jl --json` and `bench_parse.py --json`) and rewrites only the regions
-fenced by `<!-- BENCH:<id> START -->` / `<!-- BENCH:<id> END -->`. Prose outside the
-markers is never touched.
+Reads benchmarks/results/{speed_julia,speed_python,speed_powerworld,speed_matrix}.json
+(written by `bench_julia.jl --json`, `bench_parse.py --json`, and the
+Criterion extractors documented in RESULTS.md) and rewrites only the regions
+fenced by `<!-- BENCH:<id> START -->` / `<!-- BENCH:<id> END -->`.
+Prose outside the markers is never touched.
 
 Scope: the speed tables only. The correctness matrix and the version block in
 RESULTS.md stay hand-written — correctness is a boolean gated in CI (run_validation.sh),
@@ -32,8 +33,16 @@ SPEED_HEADER = (
     "| --- | --- | --- | --- | --- |"
 )
 PANDA_HEADER = (
-    "| case | powerio parse | matpowercaseframes (pandapower's `.m` reader) |\n"
-    "| --- | --- | --- |"
+    "| case | powerio parse | powerio parse + Y_bus + B' | matpowercaseframes (pandapower's `.m` reader) |\n"
+    "| --- | --- | --- | --- |"
+)
+POWERWORLD_HEADER = (
+    "| case | buses / branches | aux | pwb |\n"
+    "| --- | --- | --- | --- |"
+)
+MATRIX_HEADER = (
+    "| operation | case | buses / branches | mean |\n"
+    "| --- | --- | --- | --- |"
 )
 
 # Canonical case order per region. A region renders only when its JSON carries
@@ -44,6 +53,31 @@ SPEED_JULIA_CASES = [
     "case99k", "case193k",
 ]
 PANDA_CASES = ["case2869pegase", "case9241pegase", "case13659pegase", "case193k"]
+POWERWORLD_CASES = [
+    "ACTIVSg200",
+    "ACTIVSg2000 June 2016",
+    "RTS-GMLC",
+    "Texas7k (local TAMU copy)",
+]
+MATRIX_ROWS = [
+    ("B' sparse", "case118"),
+    ("B'' sparse", "case118"),
+    ("Y_bus sparse", "case118"),
+    ("LACPF block", "case118"),
+    ("adjacency", "case118"),
+    ("B' sparse", "case2869pegase"),
+    ("B'' sparse", "case2869pegase"),
+    ("Y_bus sparse", "case2869pegase"),
+    ("LACPF block", "case2869pegase"),
+    ("adjacency", "case2869pegase"),
+    ("DC OPF incidence", "case118"),
+    ("DC OPF weighted Laplacian", "case118"),
+    ("DC OPF grounded Laplacian", "case118"),
+    ("DC OPF flow map", "case118"),
+    ("DC OPF instance", "case118"),
+    ("PTDF + LODF", "case118"),
+    ("pipeline Y_bus pair", "case2869pegase"),
+]
 
 
 def ms(value):
@@ -74,9 +108,36 @@ def panda_rows(rows, cases):
     if selected is None:
         return None, missing
     lines = [
-        f"| {r['case']} | {ms(r['powerio_parse_ms'])} | {ms(r['matpowercaseframes_ms'])} |"
+        f"| {r['case']} | {ms(r['powerio_parse_ms'])} | "
+        f"{ms(r['powerio_matrix_ms'])} | {ms(r['matpowercaseframes_ms'])} |"
         for r in selected
     ]
+    return "\n".join(lines), []
+
+
+def powerworld_rows(rows, cases):
+    selected, missing = _select(rows, cases)
+    if selected is None:
+        return None, missing
+    lines = [
+        f"| {r['case']} | {r['buses']} / {r['branches']} | "
+        f"{ms(r['aux_ms'])} | {ms(r['pwb_ms'])} |"
+        for r in selected
+    ]
+    return "\n".join(lines), []
+
+
+def matrix_rows(rows, expected):
+    by_key = {(r["operation"], r["case"]): r for r in rows}
+    missing = [f"{op} / {case}" for op, case in expected if (op, case) not in by_key]
+    if missing:
+        return None, missing
+    lines = []
+    for op, case in expected:
+        r = by_key[(op, case)]
+        lines.append(
+            f"| {r['operation']} | {r['case']} | {r['buses']} / {r['branches']} | {ms(r['ms'])} |"
+        )
     return "\n".join(lines), []
 
 
@@ -101,6 +162,8 @@ def main():
     check = "--check" in sys.argv[1:]
     speed_julia = load("speed_julia.json")
     speed_python = load("speed_python.json")
+    speed_powerworld = load("speed_powerworld.json")
+    speed_matrix = load("speed_matrix.json")
 
     # (region id, target file, table body or None, list of missing cases)
     plan = []
@@ -110,6 +173,12 @@ def main():
     if speed_python is not None:
         body, missing = panda_rows(speed_python["rows"], PANDA_CASES)
         plan.append(("speed-pandapower", "benchmarks/RESULTS.md", PANDA_HEADER, body, missing))
+    if speed_powerworld is not None:
+        body, missing = powerworld_rows(speed_powerworld["rows"], POWERWORLD_CASES)
+        plan.append(("powerworld", "benchmarks/RESULTS.md", POWERWORLD_HEADER, body, missing))
+    if speed_matrix is not None:
+        body, missing = matrix_rows(speed_matrix["rows"], MATRIX_ROWS)
+        plan.append(("matrix", "benchmarks/RESULTS.md", MATRIX_HEADER, body, missing))
 
     if not plan:
         raise SystemExit(f"error: no JSON in {RESULTS_DIR} — run the bench scripts with --json first")

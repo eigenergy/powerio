@@ -2,7 +2,7 @@
 
 Three formats, lossless three way conversion: OpenDSS ``.dss``,
 PowerModelsDistribution ENGINEERING JSON (``pmd-json``), and the draft BMOPF
-task force JSON (``bmopf-json``). The fidelity contract matches the
+task force JSON (``bmopf-json``). The fidelity rules match the
 transmission surface: writing back to the source format echoes the retained
 source text byte for byte, and every cross format write reports each loss in
 the :class:`~powerio.Conversion` warnings instead of dropping it silently.

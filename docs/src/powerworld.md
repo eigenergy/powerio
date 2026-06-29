@@ -88,9 +88,9 @@ result was wrong everywhere it could be:
 7. **Concise headers, CSV delimiting, DataName, create_if_not_found,
    SCRIPT sections, multiline value rows: unsupported.** None appear in the
    ACTIVSg exports, all are legal aux per the format guide.
-8. **No structural fidelity.** Echoing back the same format relied entirely
-   on the retained source; converting aux to aux through the typed model
-   reduced 21 object types to the writer's 5.
+8. **No structural fidelity.** Writing PowerWorld AUX back as AUX relied
+   entirely on the retained source; rebuilding AUX from the typed model reduced
+   21 object types to the writer's 5.
 
 Counts that survived the baseline: 200 buses, 49 generators, 160 loads,
 4 shunts, 246 branches (180 + 66). The sibling `case_ACTIVSg200.m` carries
@@ -129,7 +129,7 @@ Counts that survived the baseline: 200 buses, 49 generators, 160 loads,
 - Branch identity (circuit ID, device type) and substation coordinates ride
   in element extras under PowerWorld field names (`LineCircuit`,
   `BranchDeviceType`, `Latitude:1`, ...), so the aux writer reproduces them
-  and cross format writers report them as extras.
+  and writers for other file types report them as extras.
 - Generator has no extras map (a deliberate performance decision), so GenID
   and regulation fields are reachable only through the generic layer.
 - Aux exports print f32 noise in some fields (`BusNomVolt`
@@ -464,7 +464,7 @@ Two structures carry substations when the display includes substation symbols:
   dual coordinate equality, magnitude in [1, 1e7), and a marker plus
   number link to every identity row in table order. Two real decoy groups
   force that gauntlet: the era B substation field label group (same
-  count, different order; positional pairing scores r² 0.01 against the
+  count, different order; positional pairing scores \(r^2 = 0.01\) against the
   oracle) and the Texas2016 interleaved label group (marker 0x05). Both
   fail the link check; if several groups ever pass, the reader rejects
   rather than guesses.
@@ -475,12 +475,22 @@ bus symbols and other drawing objects remain undecoded.
 
 The coordinates are diagram positions, not geography (no probed file
 stores latitude or longitude; needle scans came back empty). The auto
-generated layouts equal x = k·longitude, y = k·merc(latitude) with
-merc(lat) = degrees(ln(tan(45° + lat/2))): Hawaii40, never hand edited,
-reproduces it to f64 rounding (max residual 2.9e-11) and pins
-k = 535.8160803622592; the TAMU layouts carry hand moved symbols (median
-residual 0.006 to 43 units across files) and the June 2016 writer used a
-different transform entirely. The reader therefore exposes x/y as stored;
+generated layouts match:
+\[
+x = k \cdot \mathrm{longitude}, \qquad
+y = k \cdot \mathrm{merc}(\mathrm{latitude})
+\]
+with
+\[
+\mathrm{merc}(\mathrm{lat}) =
+\operatorname{degrees}\!\left(\ln\left(\tan\left(45^\circ + \frac{\mathrm{lat}}{2}\right)\right)\right)
+\]
+
+Hawaii40, never hand edited, reproduces it to f64 rounding (max residual
+\(2.9 \times 10^{-11}\)) and pins \(k = 535.8160803622592\). The TAMU layouts
+carry hand moved symbols (median residual 0.006 to 43 units across files), and
+the June 2016 writer used a different transform entirely. The reader therefore
+exposes x/y as stored;
 projecting back to geography is the consumer's choice, and consumers who
 want coordinates as data should read the aux Substation latitude and
 longitude instead.
@@ -488,7 +498,7 @@ longitude instead.
 Per file evidence (powerio/tests/powerworld_pwd.rs asserts the committed
 subset; the rest ran in the scout probes):
 
-| file | substations | aux (number, name) match | x vs longitude r² | y vs merc(lat) r² |
+| file | substations | aux (number, name) match | x vs longitude \(r^2\) | y vs merc(lat) \(r^2\) |
 |---|---|---|---|---|
 | ACTIVSg200 (vendored) | 111 | 111/111 | 0.99992 | 0.99980 |
 | Illinois display mislabeled ACTIVSg2000.pwd | 111 | 111/111 | 0.9972 | 0.9951 |
