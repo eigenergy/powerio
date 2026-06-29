@@ -242,4 +242,4 @@ First release.
 - `powerio-cli`: convert and validate from the shell.
 
 The C ABI history (versions 1 through 3) is tracked in
-[powerio-capi/README.md](powerio-capi/README.md).
+`powerio-capi/README.md`.

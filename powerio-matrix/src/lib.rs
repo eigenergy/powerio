@@ -29,7 +29,7 @@
 //! (`p_g ∈ ℝⁿ`), default susceptance `b = 1/x`, with [`DcConvention::Matpower`]
 //! the `1/(x·τ)` plus phase-shift variant. The full reference across every
 //! matrix is in
-//! [docs/src/matrices.md](https://github.com/eigenergy/powerio/blob/main/docs/src/matrices.md).
+//! [the matrix guide](https://eigenergy.github.io/powerio/guide/matrices.html).
 
 // Re-export the powerio data layer so this crate is a one-stop import, and so
 // the matrix modules' `crate::Error` / `crate::network` / `crate::format` paths

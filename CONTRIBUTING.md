@@ -14,7 +14,8 @@ The gridfm Parquet export is feature gated; exercise it with
 `cargo test -p powerio-matrix --features gridfm`.
 
 Python bindings: `maturin develop` against `powerio-py`, then
-`pytest python/tests`. See [docs/python.md](docs/python.md).
+`pytest python/tests`. See the
+[Python guide](https://eigenergy.github.io/powerio/guide/python.html).
 
 ## C ABI changes
 
@@ -30,7 +31,7 @@ built library. A breaking change to an existing `pio_*` signature bumps
 `PIO_ABI_VERSION` (in `powerio-capi/src/lib.rs`; the header `#define` follows
 from regeneration) and requires a lockstep PowerIO.jl release targeting the new
 version. Additive symbols don't bump it. The history is in
-[powerio-capi/README.md](powerio-capi/README.md).
+`powerio-capi/README.md`.
 
 ## Releasing
 
@@ -52,7 +53,8 @@ three lines of the root Cargo.toml (Cargo.lock follows on the next build). Then:
 
 ## Naming
 
-The cross-language verb taxonomy lives in [docs/languages.md](docs/languages.md):
+The cross-language verb taxonomy lives in the
+[language API guide](https://eigenergy.github.io/powerio/guide/languages.html):
 `parse_file` / `parse_str` / `from_json` produce a `Network`, `to_*` derive from
 it, `convert_file` goes file to text in one call. A Network is the parsed model;
 a case is the file it came from.

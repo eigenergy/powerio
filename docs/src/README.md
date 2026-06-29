@@ -15,23 +15,23 @@ The rules these pages document are:
 
 Reference pages:
 
-- [format-fidelity.md](format-fidelity.md): numeric conventions every reader
+- [Format fidelity](https://eigenergy.github.io/powerio/guide/format-fidelity.html): numeric conventions every reader
   and writer follows, how they're validated against four independent tools, and the
   per-format limits reported in `Conversion::warnings`.
-- [matrices.md](matrices.md): the matrix family `powerio-matrix` builds and the
+- [Matrix outputs and conventions](https://eigenergy.github.io/powerio/guide/matrices.html): the matrix family `powerio-matrix` builds and the
   sign, tap, per unit, DC, and GridFM conventions across them.
-- [dcopf-bundle.md](dcopf-bundle.md): the Matrix Market + manifest schema the
+- [DC OPF bundle](https://eigenergy.github.io/powerio/guide/dcopf-bundle.html): the Matrix Market + manifest schema the
   `dcopf` subcommand writes for a downstream solver.
-- [generator-cost-policy.md](generator-cost-policy.md): how missing generator
+- [Generator cost policy](https://eigenergy.github.io/powerio/guide/generator-cost-policy.html): how missing generator
   costs are handled across PSS/E, MATPOWER, DC OPF, GridFM, and future adapters.
-- [languages.md](languages.md): canonical Rust, Python, Julia, and C ABI names.
-- [python.md](python.md): Python install extras and API examples.
-- [powerworld.md](powerworld.md): PowerWorld AUX, PWB, and PWD evidence.
-- [architecture.md](architecture.md): the compiler-IR architecture and the
+- [Language APIs](https://eigenergy.github.io/powerio/guide/languages.html): canonical Rust, Python, Julia, and C ABI names.
+- [Python](https://eigenergy.github.io/powerio/guide/python.html): Python install extras and API examples.
+- [PowerWorld](https://eigenergy.github.io/powerio/guide/powerworld.html): PowerWorld AUX, PWB, and PWD evidence.
+- [Architecture](https://eigenergy.github.io/powerio/guide/architecture.html): the compiler-IR architecture and the
   `.pio.json` package and its schema.
-- [performance.md](performance.md): benchmark tiers and refresh commands.
-- [reliability.md](reliability.md): local gates and what each gate proves.
-- [contributor-workflow.md](contributor-workflow.md): review, test, validation,
+- [Performance](https://eigenergy.github.io/powerio/guide/performance.html): benchmark tiers and refresh commands.
+- [Reliability evidence](https://eigenergy.github.io/powerio/guide/reliability.html): local gates and what each gate proves.
+- [Contributor workflow](https://eigenergy.github.io/powerio/guide/contributor-workflow.html): review, test, validation,
   and benchmark update workflow.
 - Julia bindings: <https://github.com/eigenergy/PowerIO.jl>.
 
@@ -43,7 +43,7 @@ Rendered API docs (rustdoc) for all crates:
 `Network` is the format neutral model. Loads, shunts, branches, and generators
 are first class records. Every reader produces a `Network`; every writer consumes
 one. Adding a format means adding one reader or writer at the hub, not pairwise
-converters. `IndexedNetwork` is the dense `[0, n)` analysis view derived from a
+converters. `IndexedNetwork` is the dense \([0,n)\) analysis view derived from a
 `Network`; matrix builders work from that view. The parser, source retaining
 writer, and converters live in `powerio`; matrix builders and graph outputs live
 in `powerio-matrix`, which re-exports `powerio`.

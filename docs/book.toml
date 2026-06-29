@@ -9,6 +9,6 @@ create-missing = false
 
 [output.html]
 git-repository-url = "https://github.com/eigenergy/powerio"
-edit-url-template = "https://github.com/eigenergy/powerio/edit/main/docs/{path}"
 site-url = "/powerio/guide/"
 additional-css = ["theme/powerio.css"]
+mathjax-support = true

@@ -11,8 +11,8 @@ cross format conversion reports each field the target cannot represent in its
 warnings. The dss reader materializes every OpenDSS class default into an
 explicit model value (verified against the OpenDSS source and empirically
 against `opendssdirect`) and records which fields were defaulted, so BMOPF
-output is always fully explicit. The per fixture conversion matrix is
-generated into [docs/conversion-matrix.md](docs/conversion-matrix.md).
+output is always fully explicit. The per fixture conversion matrix is generated
+into `powerio-dist/docs/conversion-matrix.md`.
 
 ```rust
 let net = powerio_dist::parse_file("feeder.dss", None)?;

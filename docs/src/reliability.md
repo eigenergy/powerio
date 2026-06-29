@@ -55,7 +55,7 @@ The gates prove these properties when all required legs pass:
   formats whose readers keep it;
 - conversions to another file type preserve the electrical core checked by the
   oracle suite;
-- Y_bus agrees with pandapower/PYPOWER on the MATPOWER corpus;
+- \(Y_{\mathrm{bus}}\) agrees with pandapower/PYPOWER on the MATPOWER corpus;
 - PSS/E read and write paths agree with PowerModels.jl on counts and aggregate
   power quantities;
 - PowerModels JSON writer and reader paths are checked separately;
@@ -67,7 +67,7 @@ The gates prove these properties when all required legs pass:
   with Arrow, GridFM, and distribution features enabled;
 - Python parse, conversion, matrix, graph, package, and display paths pass their
   binding tests when extras are installed.
-- ASV discovers and runs the Python parse, Y_bus, and B' benchmark definitions
+- ASV discovers and runs the Python parse, \(Y_{\mathrm{bus}}\), and B' benchmark definitions
   against the installed wheel.
 - the parser fuzz targets build and enter libFuzzer, covering the hand written
   text and binary readers.

@@ -31,7 +31,7 @@ When writing back to the source format, PowerIO **returns the original file exac
 Supported formats:
 - [MATPOWER](https://matpower.org/) `.m`
 - [PSS/E](https://www.siemens.com/global/en/products/energy/grid-software/planning/pss-software/pss-e.html) `.raw` revisions 33, 34, and 35
-- [PowerWorld](https://www.powerworld.com/WebHelp/Content/MainDocumentation_HTML/Case_Formats.htm) `.aux`, plus read only `.pwb` binary cases; `.pwd` display files parse through the separate display API. Vintage coverage and decode evidence live in the [PowerWorld guide](docs/src/powerworld.md).
+- [PowerWorld](https://www.powerworld.com/WebHelp/Content/MainDocumentation_HTML/Case_Formats.htm) `.aux`, plus read only `.pwb` binary cases; `.pwd` display files parse through the separate display API. Vintage coverage and decode evidence live in the [PowerWorld guide](https://eigenergy.github.io/powerio/guide/powerworld.html).
 - GE PSLF `.epc` power flow cases
 - [PowerModels.jl](https://github.com/lanl-ansi/PowerModels.jl) network data JSON
 - [egret](https://pypi.org/project/gridx-egret/) `ModelData` JSON
@@ -161,12 +161,11 @@ the original file type from converting to a different file type.
 PowerWorld `.pwd` is display data, not a network case, so it is outside this
 conversion table and uses `parse_display_file` / `parse_display_bytes`. The
 decoded vintages and per field evidence live in
-[PowerWorld guide](docs/src/powerworld.md).
+[PowerWorld guide](https://eigenergy.github.io/powerio/guide/powerworld.html).
 
-The distribution matrix (dss, PMD JSON, BMOPF JSON, per fixture) is generated into
-[powerio-dist/docs/conversion-matrix.md](https://github.com/eigenergy/powerio/blob/main/powerio-dist/docs/conversion-matrix.md).
-Vendored test data keeps its own licenses, documented next to the fixtures
-(see [tests/data/dist/README.md](tests/data/dist/README.md)).
+The distribution matrix (dss, PMD JSON, BMOPF JSON, per fixture) is generated
+under `powerio-dist/docs/`. Vendored test data keeps its own licenses next to
+the fixtures under `tests/data/dist/`.
 
 Known limits for every format are documented in the
 [format fidelity guide](https://eigenergy.github.io/powerio/guide/format-fidelity.html).
@@ -266,8 +265,8 @@ pytest python/tests
 bash benchmarks/run_validation.sh
 ```
 
-Benchmark method, environment, and current tables are documented in
-[benchmarks/RESULTS.md](https://github.com/eigenergy/powerio/blob/main/benchmarks/RESULTS.md).
+Benchmark method, environment, and current tables are documented in the
+[performance guide](https://eigenergy.github.io/powerio/guide/performance.html).
 
 ## License
 

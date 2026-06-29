@@ -28,7 +28,8 @@ mdbook test docs
 ## Route Changes
 
 Use the smallest gate set that covers the changed surface, then run the full
-[Reliability Evidence](reliability.md) gates before a release claim.
+[reliability evidence](https://eigenergy.github.io/powerio/guide/reliability.html)
+gates before a release claim.
 
 | changed surface | extra gates |
 | --- | --- |
@@ -72,7 +73,8 @@ cd benchmarks/asv
 ```
 
 Do not update generated benchmark tables by hand. Update the snapshot
-environment in [benchmarks/RESULTS.md](https://github.com/eigenergy/powerio/blob/main/benchmarks/RESULTS.md)
+environment described in the
+[performance guide](https://eigenergy.github.io/powerio/guide/performance.html)
 when publishing new numbers: commit, tree cleanliness, machine, OS, toolchain,
 Python stack, Julia stack, commands, fixtures, and optional local data.
 

@@ -250,7 +250,8 @@ egret (.json)  ok    ok    ok      ok      ok     (case9/14/30, dcline3)
 PowerWorld and egret have validation coverage here: PowerWorld through the
 read-back bridge, egret against the `egret` package. The Rust suite also runs the
 all-pairs tests in `powerio/tests/roundtrip_formats.rs`. See
-[docs/src/format-fidelity.md](../docs/src/format-fidelity.md) for the conventions and limits.
+[the format fidelity guide](https://eigenergy.github.io/powerio/guide/format-fidelity.html)
+for the conventions and limits.
 
 ## Reproduce
 

@@ -1,5 +1,5 @@
 //! Corpus harness: every available PowerWorld binary classifies into exactly
-//! one support tier, and the committed coverage matrix in `docs/src/powerworld.md`
+//! one support tier, and the committed coverage matrix in the PowerWorld guide
 //! mirrors this table. Vendored and fetched entries carry committed
 //! expectations and skip when the fetch has not run. A gitignored local
 //! manifest (`tests/data/local_pwb_corpus.tsv`; tab separated `label`,

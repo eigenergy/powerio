@@ -9,9 +9,9 @@ PowerIO has four benchmark tiers. Keep them separate when publishing numbers.
 | Cross tool parser comparison | `julia --project=benchmarks benchmarks/bench_julia.jl --json` | powerio through the C ABI against ExaPowerIO.jl and PowerModels.jl |
 | Python parser comparison | `.venv/bin/python benchmarks/bench_parse.py --json <cases>` | Python package parse and matrix path against pandapower reader paths |
 
-The published table is
-[benchmarks/RESULTS.md](https://github.com/eigenergy/powerio/blob/main/benchmarks/RESULTS.md).
-Each refresh should update the snapshot environment there: machine model, chip,
+The published table lives in the repository benchmark results, and this guide is
+the public reference for how those numbers are produced. Each refresh should
+update the snapshot environment there: machine model, chip,
 core count, memory, OS, Rust, C compiler, Julia, Python, and the package
 versions used by the comparison harnesses. Regenerate the JSON inputs first,
 then splice only the marked regions:
@@ -41,7 +41,7 @@ tables. If the Texas7k local row is published, pass its aux and pwb paths throug
 Matrix builder timings are separate from parse timings. The matrix benchmark
 parses each fixture once, builds `IndexedNetwork` once, and times only derived
 matrix construction. Its pipeline row measures `Pipeline::run` for the paired
-Y_bus export, including MTX, shunt, and metadata writes:
+\(Y_{\mathrm{bus}}\) export, including MTX, shunt, and metadata writes:
 
 ```sh
 cargo bench -p powerio-matrix --bench matrix
