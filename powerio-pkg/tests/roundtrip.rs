@@ -445,6 +445,22 @@ fn future_same_major_schema_version_is_tolerated() {
 }
 
 #[test]
+fn same_major_prerelease_or_build_schema_version_is_tolerated() {
+    for version in ["0.2.0-rc.1", "0.1.0+build.5", "0.3.0-alpha.2+exp"] {
+        let pkg = balanced_package();
+        let mut v = serde_json::to_value(&pkg).unwrap();
+        v.as_object_mut()
+            .unwrap()
+            .insert("schema_version".to_owned(), serde_json::json!(version));
+        let json = serde_json::to_string(&v).unwrap();
+
+        let back = CompilerPackage::from_json(&json)
+            .unwrap_or_else(|e| panic!("same-major {version} should load: {e}"));
+        assert_eq!(back.schema_version, version);
+    }
+}
+
+#[test]
 fn incompatible_schema_major_is_rejected() {
     let pkg = balanced_package();
     let mut v = serde_json::to_value(&pkg).unwrap();

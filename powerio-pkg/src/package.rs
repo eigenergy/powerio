@@ -1,6 +1,6 @@
 //! The `.pio.json` root object.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 
 use serde::{Deserialize, Serialize};
 
@@ -297,16 +297,20 @@ impl CompilerPackage {
 }
 
 fn schema_major(version: &str) -> Option<u64> {
-    let mut parts = version.split('.');
+    // Accept a semver core `MAJOR.MINOR.PATCH` with an optional prerelease
+    // (`-...`) or build (`+...`) tag: same-major additive versions load, so a
+    // forward-compatible writer that stamps e.g. `0.2.0-rc.1` is not rejected.
+    let core = version.split(['-', '+']).next().unwrap_or(version);
+    let mut parts = core.split('.');
     let major = parts.next()?;
     let minor = parts.next()?;
     let patch = parts.next()?;
-    if major.is_empty() || minor.is_empty() || patch.is_empty() || parts.next().is_some() {
+    if parts.next().is_some() {
         return None;
     }
     let major = major.parse().ok()?;
-    let _minor: u64 = minor.parse().ok()?;
-    let _patch: u64 = patch.parse().ok()?;
+    minor.parse::<u64>().ok()?;
+    patch.parse::<u64>().ok()?;
     Some(major)
 }
 
@@ -354,15 +358,22 @@ fn sane_validate_balanced(
         ));
     }
 
+    let bus_index: HashMap<usize, usize> = net
+        .buses
+        .iter()
+        .enumerate()
+        .map(|(idx, b)| (b.id.0, idx))
+        .collect();
     let mut value_domain = Vec::new();
     for finding in net.validate_values() {
-        let element_path = balanced_value_finding_path(net, &finding).unwrap_or_else(|| {
-            format!(
-                "/model/balanced_network/{}#{}",
-                finding.element.replace(' ', "_"),
-                finding.field
-            )
-        });
+        let element_path =
+            balanced_value_finding_path(net, &bus_index, &finding).unwrap_or_else(|| {
+                format!(
+                    "/model/balanced_network/{}#{}",
+                    finding.element.replace(' ', "_"),
+                    finding.field
+                )
+            });
         let mut d = StructuredDiagnostic::new(
             "VALIDATE.BALANCED.VALUE_DOMAIN",
             DiagnosticSeverity::Warning,
@@ -396,6 +407,15 @@ fn sane_validate_balanced(
 }
 
 fn attach_source_refs(diagnostics: &mut [StructuredDiagnostic], source_maps: &[SourceMapEntry]) {
+    // Index by element path once: `source_maps` holds a row per field per
+    // element, so a per-diagnostic linear scan is quadratic. First entry wins,
+    // matching the previous `iter().find` order.
+    let mut by_path: HashMap<&str, &SourceRef> = HashMap::with_capacity(source_maps.len());
+    for map in source_maps {
+        by_path
+            .entry(map.element_path.as_str())
+            .or_insert(&map.source_ref);
+    }
     for diagnostic in diagnostics {
         if diagnostic.source_ref.is_some() {
             continue;
@@ -403,14 +423,15 @@ fn attach_source_refs(diagnostics: &mut [StructuredDiagnostic], source_maps: &[S
         let Some(path) = diagnostic.element_path.as_deref() else {
             continue;
         };
-        if let Some(map) = source_maps.iter().find(|m| m.element_path == path) {
-            diagnostic.source_ref = Some(map.source_ref.clone());
+        if let Some(source_ref) = by_path.get(path) {
+            diagnostic.source_ref = Some((*source_ref).clone());
         }
     }
 }
 
 fn balanced_value_finding_path(
     net: &BalancedNetwork,
+    bus_index: &HashMap<usize, usize>,
     finding: &powerio::Diagnostic,
 ) -> Option<String> {
     if let Some(id) = finding
@@ -418,7 +439,7 @@ fn balanced_value_finding_path(
         .strip_prefix("bus ")
         .and_then(|s| s.parse::<usize>().ok())
     {
-        let idx = net.buses.iter().position(|b| b.id.0 == id)?;
+        let idx = *bus_index.get(&id)?;
         return Some(format!(
             "/model/balanced_network/buses/{idx}/{}",
             finding.field
@@ -430,6 +451,9 @@ fn balanced_value_finding_path(
         .strip_prefix("generator at bus ")
         .and_then(|s| s.parse::<usize>().ok())
     {
+        // When several units at a bus share the same out-of-domain value the
+        // finding cannot be pinned to one array index, so skip the precise path
+        // rather than misattribute it (see the ambiguity test).
         let mut matches = net
             .generators
             .iter()
@@ -1084,20 +1108,46 @@ fn push_matpower_injection_maps(
     source_id: &str,
     net: &BalancedNetwork,
 ) {
-    for (i, load) in net.loads.iter().enumerate() {
-        if net.buses.iter().any(|b| b.id == load.bus) {
-            push_matpower_split_map(entries, source_id, "loads", i, "bus", "BUS_I");
-            push_matpower_split_map(entries, source_id, "loads", i, "p", "PD");
-            push_matpower_split_map(entries, source_id, "loads", i, "q", "QD");
-            push_matpower_split_map(entries, source_id, "loads", i, "in_service", "BUS_TYPE");
-        }
-    }
-    for (i, shunt) in net.shunts.iter().enumerate() {
-        if net.buses.iter().any(|b| b.id == shunt.bus) {
-            push_matpower_split_map(entries, source_id, "shunts", i, "bus", "BUS_I");
-            push_matpower_split_map(entries, source_id, "shunts", i, "g", "GS");
-            push_matpower_split_map(entries, source_id, "shunts", i, "b", "BS");
-            push_matpower_split_map(entries, source_id, "shunts", i, "in_service", "BUS_TYPE");
+    // MATPOWER folds loads and shunts into the bus record, so each canonical
+    // field maps back to a real bus column. Loads/shunts always reference an
+    // existing bus by construction, so no per-element bus existence check is
+    // needed.
+    push_matpower_split_maps(
+        entries,
+        source_id,
+        "loads",
+        net.loads.len(),
+        &[
+            ("bus", "BUS_I"),
+            ("p", "PD"),
+            ("q", "QD"),
+            ("in_service", "BUS_TYPE"),
+        ],
+    );
+    push_matpower_split_maps(
+        entries,
+        source_id,
+        "shunts",
+        net.shunts.len(),
+        &[
+            ("bus", "BUS_I"),
+            ("g", "GS"),
+            ("b", "BS"),
+            ("in_service", "BUS_TYPE"),
+        ],
+    );
+}
+
+fn push_matpower_split_maps(
+    entries: &mut Vec<SourceMapEntry>,
+    source_id: &str,
+    collection: &str,
+    len: usize,
+    fields: &[(&str, &str)],
+) {
+    for i in 0..len {
+        for &(field, source_field) in fields {
+            push_matpower_split_map(entries, source_id, collection, i, field, source_field);
         }
     }
 }

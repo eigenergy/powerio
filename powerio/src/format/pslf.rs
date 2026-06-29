@@ -1421,10 +1421,13 @@ pub fn write_pslf(net: &Network) -> Conversion {
     if net.generators.iter().any(|g| g.cost.is_some()) {
         warnings.push("generator cost curves dropped: PSLF .epc carries no cost data".into());
     }
+    // Transformer branches drop their charging entirely (warned separately
+    // below), so exclude them here: only line records carry the collapsed total
+    // susceptance this message describes.
     let terminal_charging = net
         .branches
         .iter()
-        .filter(|b| b.has_non_matpower_charging())
+        .filter(|b| b.has_non_matpower_charging() && !b.is_transformer())
         .count();
     if terminal_charging > 0 {
         warnings.push(format!(

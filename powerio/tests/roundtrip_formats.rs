@@ -141,10 +141,20 @@ fn value_fingerprint(net: &Network, target: TargetFormat) -> ValueFingerprint {
     ValueFingerprint {
         base_mva: round_value(net.base_mva),
         buses: bus_values(net),
-        loads_by_bus: bus_injections(net.loads.iter().map(|load| (load.bus.0, load.p, load.q))),
+        // Sum only in-service injections: the by-bus aggregation cannot carry a
+        // per-element service flag, so counting out-of-service p/q would both
+        // mask a writer that flips in_service and fail a writer that correctly
+        // drops out-of-service injections.
+        loads_by_bus: bus_injections(
+            net.loads
+                .iter()
+                .filter(|load| load.in_service)
+                .map(|load| (load.bus.0, load.p, load.q)),
+        ),
         shunts_by_bus: bus_injections(
             net.shunts
                 .iter()
+                .filter(|shunt| shunt.in_service)
                 .map(|shunt| (shunt.bus.0, shunt.g, shunt.b)),
         ),
         branches: branch_values(net, target),
