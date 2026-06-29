@@ -139,7 +139,7 @@ def test_package_transport_flows_through_summary_matrix_and_save(tmp_path):
     assert parsed["model"] == "balanced"
     assert "package_json" in parsed
     package = json.loads(parsed["package_json"])
-    assert package["schema"].endswith("/pio-package/0.2")
+    assert package["schema"].endswith("/pio-package/0.1")
     assert package["model_kind"] == "balanced"
     assert package["model"]["kind"] == "balanced"
 

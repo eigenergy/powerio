@@ -535,20 +535,20 @@ fn future_same_major_schema_version_is_tolerated() {
     let mut v = serde_json::to_value(&pkg).unwrap();
     v.as_object_mut()
         .unwrap()
-        .insert("schema_version".to_owned(), serde_json::json!("0.3.0"));
+        .insert("schema_version".to_owned(), serde_json::json!("0.2.0"));
     v.as_object_mut()
         .unwrap()
         .insert("future_field".to_owned(), serde_json::json!({"x": 1}));
     let json = serde_json::to_string(&v).unwrap();
 
     let back = CompilerPackage::from_json(&json).expect("same major schema version loads");
-    assert_eq!(back.schema_version, "0.3.0");
+    assert_eq!(back.schema_version, "0.2.0");
     assert_eq!(back.model_kind(), ModelKind::Balanced);
 }
 
 #[test]
 fn same_major_prerelease_or_build_schema_version_is_tolerated() {
-    for version in ["0.3.0-rc.1", "0.2.0+build.5", "0.4.0-alpha.2+exp"] {
+    for version in ["0.2.0-rc.1", "0.1.0+build.5", "0.3.0-alpha.2+exp"] {
         let pkg = balanced_package();
         let mut v = serde_json::to_value(&pkg).unwrap();
         v.as_object_mut()

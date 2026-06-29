@@ -35,8 +35,8 @@ diagnostics, validation, and lowering metadata around that model. Use the
 
 ## Versioning policy (envelope)
 
-- `schema_version` is semver. The current value is `0.2.0`; the `schema` URL is
-  `https://powerio.dev/schema/pio-package/0.2`.
+- `schema_version` is semver. The current value is `0.1.0`; the `schema` URL is
+  `https://powerio.dev/schema/pio-package/0.1`.
 - Additive envelope fields bump the minor version.
 - Envelope field moves or removals bump the major version, or ship a migration.
 - A reader tolerates unknown later top-level fields (they are ignored, not an
@@ -146,8 +146,8 @@ bindings, or MCP operations.
 
 ```json
 {
-  "schema": "https://powerio.dev/schema/pio-package/0.2",
-  "schema_version": "0.2.0",
+  "schema": "https://powerio.dev/schema/pio-package/0.1",
+  "schema_version": "0.1.0",
   "producer": { "tool": "powerio", "version": "0.3.3" },
   "model_kind": "multiconductor",
   "model": {
