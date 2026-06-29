@@ -117,6 +117,7 @@ pub struct SourceRef {
 }
 
 impl SourceRef {
+    /// Create a reference to a declared source artifact.
     pub fn new(source_id: impl Into<String>) -> Self {
         Self {
             source_id: source_id.into(),
@@ -129,18 +130,21 @@ impl SourceRef {
         }
     }
 
+    /// Set the source field or property name.
     #[must_use]
     pub fn with_field(mut self, field: impl Into<String>) -> Self {
         self.field = Some(field.into());
         self
     }
 
+    /// Set the source record, section, or object type.
     #[must_use]
     pub fn with_record(mut self, record: impl Into<String>) -> Self {
         self.record = Some(record.into());
         self
     }
 
+    /// Set the source line number.
     #[must_use]
     pub fn with_line(mut self, line: u32) -> Self {
         self.line = Some(line);

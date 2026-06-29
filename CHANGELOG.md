@@ -7,7 +7,9 @@
   fail before payload use. The mdBook schema page documents the rule.
 - `powerio-pkg`: balanced package output now emits source maps for stable bus,
   load, shunt, branch, and generator fields; validation diagnostics attach the
-  matching source reference where a map exists.
+  matching source reference where a map exists. Format folded fields use
+  mapping kinds such as `split`, and defaulted fields are not marked as exact
+  source fields.
 - Converter tests now compare stable per element values across writable legacy
   formats, not only counts and totals. PSLF export now warns when transformer
   charging admittance is dropped.
