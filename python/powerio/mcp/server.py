@@ -3,7 +3,7 @@
 The advertised MCP surface is semantic and format neutral:
 
 ``convert``, ``save``, ``summary``, ``parse``, ``normalize``, ``matrix``,
-``diagnostics``, ``capabilities``, ``display``.
+``diagnostics``, ``display``.
 
 Network tools route balanced transmission models, multiconductor distribution
 models, PyPSA CSV folders, and gridfm datasets through the lower level powerio
@@ -1050,60 +1050,6 @@ def _display_impl(path: str, from_format: Optional[str] = None) -> dict:
     }
 
 
-def _capabilities_impl() -> dict:
-    source_formats = {
-        "transmission": [
-            "matpower",
-            "powermodels-json",
-            "egret-json",
-            "psse",
-            "psse34",
-            "psse35",
-            "powerworld",
-            "pandapower-json",
-            "powerio-json",
-            "pypsa-csv",
-            "pslf",
-            "pwb",
-            "gridfm",
-        ],
-        "distribution": ["dss", "pmd-json", "bmopf-json"],
-        "package": ["package", "pio-json", "pio-package"],
-    }
-    target_formats = {
-        "transmission": [
-            "matpower",
-            "powermodels-json",
-            "egret-json",
-            "psse",
-            "psse34",
-            "psse35",
-            "powerworld",
-            "pandapower-json",
-            "powerio-json",
-            "pypsa-csv",
-            "pslf",
-            "gridfm",
-        ],
-        "distribution": ["dss", "pmd-json", "bmopf-json"],
-    }
-    return {
-        "schema": "powerio.capabilities",
-        "schema_version": _SCHEMA_VERSION,
-        "model_kinds": ["balanced", "multiconductor"],
-        "source_formats": source_formats,
-        "target_formats": target_formats,
-        "matrix_kinds": sorted(set(_MATRIX_KIND_ALIASES.values())),
-        "transports": ["powerio-json", "bmopf-json", "package"],
-        "optional_features": {
-            "gridfm": bool(getattr(powerio._powerio, "_has_gridfm", False)),
-            "mcp": True,
-            "distribution": True,
-            "package": True,
-        },
-    }
-
-
 @mcp.tool(name="convert")
 def _convert_tool(
     to_format: str,
@@ -1232,12 +1178,6 @@ def _matrix_tool(
 def _diagnostics_tool(package_json: str, verbose: bool = False) -> dict:
     """Return package diagnostics as structured JSON plus a concise summary."""
     return _diagnostics_payload(package_json, verbose)
-
-
-@mcp.tool(name="capabilities")
-def _capabilities_tool() -> dict:
-    """List supported model kinds, formats, matrix kinds, and optional features."""
-    return _capabilities_impl()
 
 
 @mcp.tool(name="display")
@@ -1396,10 +1336,6 @@ def display(
 
 def diagnostics(package_json: str, verbose: bool = False) -> dict:
     return _diagnostics_payload(package_json, verbose)
-
-
-def capabilities() -> dict:
-    return _capabilities_impl()
 
 
 def compute_matrix(*args: Any, **kwargs: Any) -> dict:

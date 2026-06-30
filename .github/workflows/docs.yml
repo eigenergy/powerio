@@ -1,9 +1,10 @@
 name: Docs
 
 # Build the workspace rustdoc and publish it to GitHub Pages. This renders all
-# five library crates, including powerio-capi and powerio-py (publish = false),
+# six library crates, including powerio-capi and powerio-py (publish = false),
 # whose //! docs docs.rs would never host. docs.rs takes over for the published
-# crates (powerio, powerio-matrix, powerio-dist) once they reach crates.io.
+# crates (powerio, powerio-matrix, powerio-dist, powerio-pkg) once they reach
+# crates.io.
 # PRs build the docs too (so a broken intra-doc link fails review, not main),
 # but only push to main / dispatch deploys to Pages; see the `deploy` gate.
 on:
@@ -44,7 +45,7 @@ jobs:
     - name: Build docs
       env:
         RUSTDOCFLAGS: "-D warnings"
-      run: cargo doc --no-deps --all-features -p powerio -p powerio-matrix -p powerio-dist -p powerio-capi -p powerio-py
+      run: cargo doc --no-deps --all-features -p powerio -p powerio-matrix -p powerio-dist -p powerio-pkg -p powerio-capi -p powerio-py
     - name: Build Python API docs
       run: |
         python -m pip install --upgrade pip
@@ -119,13 +120,15 @@ jobs:
             <dt>released / docs.rs</dt>
             <dd><a href="https://docs.rs/powerio">powerio</a>
                 <a href="https://docs.rs/powerio-matrix">powerio-matrix</a>
-                <a href="https://docs.rs/powerio-dist">powerio-dist</a></dd>
+                <a href="https://docs.rs/powerio-dist">powerio-dist</a>
+                <a href="https://docs.rs/powerio-pkg">powerio-pkg</a></dd>
           </div>
           <div>
             <dt>development / main</dt>
             <dd><a href="powerio/index.html">powerio</a>
                 <a href="powerio_matrix/index.html">powerio-matrix</a>
                 <a href="powerio_dist/index.html">powerio-dist</a>
+                <a href="powerio_pkg/index.html">powerio-pkg</a>
                 <a href="powerio_capi/index.html">powerio-capi</a>
                 <a href="python/powerio.html">python</a></dd>
           </div>

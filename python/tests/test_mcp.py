@@ -35,7 +35,6 @@ def test_tool_surface_is_semantic():
         "normalize",
         "matrix",
         "diagnostics",
-        "capabilities",
         "display",
     }
     for name in ("parse", "summary", "normalize", "matrix", "display"):
@@ -178,7 +177,7 @@ def test_package_transport_routes_distribution_by_model_kind():
     assert summary["elements"]["buses"] > 0
 
 
-def test_package_diagnostics_and_capabilities():
+def test_package_diagnostics():
     parsed = server.parse(path=str(DATA / "case9.m"), transport="package")
     diag = server.diagnostics(parsed["package_json"])
     assert diag["schema"] == "powerio.diagnostics"
@@ -189,16 +188,6 @@ def test_package_diagnostics_and_capabilities():
 
     verbose = server.diagnostics(parsed["package_json"], verbose=True)
     assert verbose["diagnostics"] == json.loads(parsed["package_json"]).get("diagnostics", [])
-
-    caps = server.capabilities()
-    assert caps["schema"] == "powerio.capabilities"
-    assert "balanced" in caps["model_kinds"]
-    assert "multiconductor" in caps["model_kinds"]
-    assert "matpower" in caps["source_formats"]["transmission"]
-    assert "bmopf-json" in caps["target_formats"]["distribution"]
-    assert "bprime" in caps["matrix_kinds"]
-    assert caps["optional_features"]["package"] is True
-
 
 def test_minimal_bmopf_json_routes_without_format(tmp_path):
     parsed = server.parse(content=MINIMAL_BMOPF)
