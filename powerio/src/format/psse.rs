@@ -899,14 +899,13 @@ fn section_after_marker(line: &str) -> Section {
         Some("LOAD") => Section::Load,
         Some("FIXED SHUNT") => Section::FixedShunt,
         Some("SWITCHED SHUNT") => Section::SwitchedShunt,
-        Some("GENERATOR") | Some("GEN") => Section::Generator,
+        Some("GENERATOR" | "GEN") => Section::Generator,
         Some("BRANCH") => Section::Branch,
         Some("TRANSFORMER") => Section::Transformer,
-        Some("TWO-TERMINAL DC")
-        | Some("TWO TERMINAL DC")
-        | Some("2-TERMINAL DC")
-        | Some("2 TERMINAL DC") => Section::TwoTerminalDc,
-        Some("AREA") | Some("AREA INTERCHANGE") => Section::Area,
+        Some("TWO-TERMINAL DC" | "TWO TERMINAL DC" | "2-TERMINAL DC" | "2 TERMINAL DC") => {
+            Section::TwoTerminalDc
+        }
+        Some("AREA" | "AREA INTERCHANGE") => Section::Area,
         _ => Section::Skip,
     }
 }
@@ -2330,7 +2329,7 @@ Q
 
     #[test]
     fn reads_start_of_section_markers_and_gen_alias() {
-        let raw = r#"0, 100.00, 33, 0, 0, 60.00 / synthetic v33 export
+        let raw = r"0, 100.00, 33, 0, 0, 60.00 / synthetic v33 export
 CASE
 COMMENT
 1,'BUS1        ', 230.0000,3,1,1,1,1.00000,0.0000,1.1000,0.9000,1.1000,0.9000
@@ -2345,7 +2344,7 @@ COMMENT
 0 / End of Branch Data, Start of Transformer Data
 0 / End of Transformer Data, Start of Area Interchange Data
 Q
-"#;
+";
 
         let net = parse_psse(raw).unwrap();
 
