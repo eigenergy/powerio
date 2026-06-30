@@ -148,7 +148,7 @@ bindings, or MCP operations.
 {
   "schema": "https://powerio.dev/schema/pio-package/0.1",
   "schema_version": "0.1.0",
-  "producer": { "tool": "powerio", "version": "0.3.3" },
+  "producer": { "tool": "powerio", "version": "0.4.0" },
   "model_kind": "multiconductor",
   "model": {
     "kind": "multiconductor",

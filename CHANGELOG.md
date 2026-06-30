@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.4.0
 
 - `powerio-pkg`: `.pio.json` reads now enforce the envelope compatibility rule:
   same major `schema_version` values load, while incompatible major versions
@@ -13,6 +13,10 @@
 - Converter tests now compare stable per element values across writable legacy
   formats, not only counts and totals. PSLF export now warns when transformer
   charging admittance is dropped.
+- `powerio-dist` BMOPF: OpenDSS fixed P/Q generators now emit as BMOPF
+  `generator.*` entries with pinned P/Q bounds instead of negative `load.*`
+  entries. The old negative load warning is gone; generators without source
+  costs keep the existing cost 0 warning.
 - Python API: removed the one release `powerio.Case` and
   `powerio.dist.DistCase` compatibility aliases. Use `powerio.Network` /
   `powerio.BalancedNetwork` and `powerio.dist.MulticonductorNetwork` /
