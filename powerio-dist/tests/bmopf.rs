@@ -6,7 +6,7 @@ use std::sync::Arc;
 
 use powerio_dist::dss::{parse_dss_file, parse_dss_str};
 use powerio_dist::{
-    Configuration, DistNetwork, DistTransformer, Extras, Winding, WindingConn, parse_bmopf_file,
+    Configuration, DistNetwork, DistTransformer, Winding, WindingConn, parse_bmopf_file,
     parse_bmopf_str, write_bmopf_json, write_dss,
 };
 
@@ -716,22 +716,23 @@ fn three_wire_wye_wye_is_unsupported_not_a_panic() {
     // Terminal maps without a trailing neutral cannot decompose per phase;
     // a map shorter than the phase count used to index out of bounds.
     let mut net = parse_bmopf_str(&doc_with("")).unwrap();
-    let winding = |map: &[&str]| Winding {
-        bus: "a".into(),
-        terminal_map: map.iter().map(ToString::to_string).collect(),
-        conn: WindingConn::Wye,
-        v_ref: 4160.0,
-        s_rating: 500_000.0,
-        r_pct: 0.5,
-        tap: 1.0,
+    let winding = |map: &[&str]| {
+        let mut winding = Winding::new(
+            "a",
+            map.iter().map(ToString::to_string).collect(),
+            WindingConn::Wye,
+            4160.0,
+            500_000.0,
+        );
+        winding.r_pct = 0.5;
+        winding
     };
-    net.transformers.push(DistTransformer {
-        name: "t3w".into(),
-        windings: vec![winding(&["1", "2", "3"]), winding(&["1", "2"])],
-        xsc_pct: vec![2.0],
-        phases: 3,
-        extras: Extras::new(),
-    });
+    net.transformers.push(DistTransformer::new(
+        "t3w",
+        vec![winding(&["1", "2", "3"]), winding(&["1", "2"])],
+        vec![2.0],
+        3,
+    ));
     let out = write_bmopf_json(&net);
     assert!(!out.text.contains("t3w"));
     assert!(

@@ -4,48 +4,17 @@ use crate::indexed::IndexedNetwork;
 use crate::matrix::{
     BuildOptions, MatrixStats, Scheme, build_bdoubleprime, build_bprime, build_lacpf, build_ybus,
 };
-use crate::network::{Branch, BranchCharging, Bus, BusId, BusType, Extras, Network, Shunt};
+use crate::network::{Branch, BranchCharging, Bus, BusId, BusType, Network, Shunt};
 use crate::parse_psse;
 
 fn bus(id: usize, kind: BusType) -> Bus {
-    Bus {
-        id: BusId(id),
-        kind,
-        vm: 1.0,
-        va: 0.0,
-        base_kv: 345.0,
-        vmax: 1.1,
-        vmin: 0.9,
-        evhi: None,
-        evlo: None,
-        area: 1,
-        zone: 1,
-        name: None,
-        extras: Extras::new(),
-    }
+    Bus::new(BusId(id), kind, 345.0)
 }
 
 fn br(from: usize, to: usize, r: f64, x: f64, b: f64) -> Branch {
-    Branch {
-        from: BusId(from),
-        to: BusId(to),
-        r,
-        x,
-        b,
-        charging: None,
-        rate_a: 0.0,
-        rate_b: 0.0,
-        rate_c: 0.0,
-        current_ratings: None,
-        tap: 0.0,
-        shift: 0.0,
-        in_service: true,
-        angmin: -360.0,
-        angmax: 360.0,
-        control: None,
-        solution: None,
-        extras: Extras::new(),
-    }
+    let mut branch = Branch::new(BusId(from), BusId(to), r, x);
+    branch.b = b;
+    branch
 }
 
 fn three_bus() -> Network {
@@ -194,30 +163,9 @@ fn bdoubleprime_with_shunts_is_strictly_dominant() {
     // Add capacitive shunts to break the singularity (negative bs → positive
     // contribution to −Im(Y_bus)).
     net.shunts = vec![
-        Shunt {
-            bus: BusId(1),
-            g: 0.0,
-            b: -10.0,
-            in_service: true,
-            control: None,
-            extras: Extras::new(),
-        },
-        Shunt {
-            bus: BusId(2),
-            g: 0.0,
-            b: -10.0,
-            in_service: true,
-            control: None,
-            extras: Extras::new(),
-        },
-        Shunt {
-            bus: BusId(3),
-            g: 0.0,
-            b: -10.0,
-            in_service: true,
-            control: None,
-            extras: Extras::new(),
-        },
+        Shunt::new(BusId(1), 0.0, -10.0),
+        Shunt::new(BusId(2), 0.0, -10.0),
+        Shunt::new(BusId(3), 0.0, -10.0),
     ];
     let view = IndexedNetwork::new(&net);
     let bpp = build_bdoubleprime(&view, &BuildOptions::default()).unwrap();
@@ -244,12 +192,7 @@ fn ybus_reciprocity_and_symmetry() {
 #[test]
 fn ybus_uses_asymmetric_terminal_admittance() {
     let mut branch = br(1, 2, 0.0, 0.1, 0.0);
-    branch.charging = Some(BranchCharging {
-        g_fr: 0.01,
-        b_fr: 0.02,
-        g_to: 0.03,
-        b_to: 0.04,
-    });
+    branch.charging = Some(BranchCharging::new(0.01, 0.02, 0.03, 0.04));
     let net = Network::in_memory(
         "terminal-charging",
         100.0,

@@ -58,6 +58,13 @@ fn default_base_frequency() -> f64 {
 #[serde(transparent)]
 pub struct BusId(pub usize);
 
+impl BusId {
+    #[must_use]
+    pub const fn new(id: usize) -> Self {
+        Self(id)
+    }
+}
+
 impl std::fmt::Display for BusId {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         self.0.fmt(f)
@@ -102,6 +109,7 @@ impl BusType {
 
 /// A generator cost curve (`mpc.gencost` row).
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct GenCost {
     /// 1 = piecewise linear, 2 = polynomial.
     pub model: u8,
@@ -115,6 +123,34 @@ pub struct GenCost {
 }
 
 impl GenCost {
+    #[must_use]
+    pub fn new(model: u8, startup: f64, shutdown: f64, coeffs: Vec<f64>) -> Self {
+        Self {
+            model,
+            startup,
+            shutdown,
+            ncost: coeffs.len(),
+            coeffs,
+        }
+    }
+
+    #[must_use]
+    pub fn with_ncost(
+        model: u8,
+        startup: f64,
+        shutdown: f64,
+        ncost: usize,
+        coeffs: Vec<f64>,
+    ) -> Self {
+        Self {
+            model,
+            startup,
+            shutdown,
+            ncost,
+            coeffs,
+        }
+    }
+
     /// `(q, c)` for the quadratic cost `½ q p² + c p` from a polynomial
     /// (model 2) row. MATPOWER stores `c2 p² + c1 p + c0`, so `q = 2·c2` and
     /// `c = c1`. Linear rows (`ncost == 2`) give `q = 0`. Piecewise (model 1)
@@ -178,6 +214,7 @@ pub enum SourceFormat {
 
 /// A format-neutral power network.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct Network {
     pub name: String,
     pub base_mva: f64,
@@ -237,6 +274,7 @@ pub struct Network {
 pub type BalancedNetwork = Network;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct Bus {
     /// Stable bus id (1-based in MATPOWER; preserved verbatim).
     pub id: BusId,
@@ -263,7 +301,29 @@ pub struct Bus {
     pub extras: Extras,
 }
 
+impl Bus {
+    #[must_use]
+    pub fn new(id: BusId, kind: BusType, base_kv: f64) -> Self {
+        Self {
+            id,
+            kind,
+            vm: 1.0,
+            va: 0.0,
+            base_kv,
+            vmax: 1.1,
+            vmin: 0.9,
+            evhi: None,
+            evlo: None,
+            area: 1,
+            zone: 1,
+            name: None,
+            extras: Extras::new(),
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct Load {
     pub bus: BusId,
     /// Active demand (MW).
@@ -275,6 +335,20 @@ pub struct Load {
     pub voltage_model: Option<LoadVoltageModel>,
     pub in_service: bool,
     pub extras: Extras,
+}
+
+impl Load {
+    #[must_use]
+    pub fn new(bus: BusId, p: f64, q: f64) -> Self {
+        Self {
+            bus,
+            p,
+            q,
+            voltage_model: None,
+            in_service: true,
+            extras: Extras::new(),
+        }
+    }
 }
 
 /// Voltage dependence for a transmission load.
@@ -344,6 +418,7 @@ impl LoadVoltageModel {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct Shunt {
     pub bus: BusId,
     /// Shunt conductance (MW at V = 1 p.u.).
@@ -358,6 +433,20 @@ pub struct Shunt {
     #[serde(default)]
     pub control: Option<SwitchedShuntControl>,
     pub extras: Extras,
+}
+
+impl Shunt {
+    #[must_use]
+    pub fn new(bus: BusId, g: f64, b: f64) -> Self {
+        Self {
+            bus,
+            g,
+            b,
+            in_service: true,
+            control: None,
+            extras: Extras::new(),
+        }
+    }
 }
 
 /// How a switched shunt adjusts its susceptance. Maps to the PSS/E `MODSW` code.
@@ -375,10 +464,18 @@ pub enum SwitchedShuntMode {
 
 /// One block of a switched shunt: `steps` equal increments of susceptance `b`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct ShuntBlock {
     pub steps: u32,
     /// Susceptance increment per step (MVAr at V = 1 p.u.).
     pub b: f64,
+}
+
+impl ShuntBlock {
+    #[must_use]
+    pub const fn new(steps: u32, b: f64) -> Self {
+        Self { steps, b }
+    }
 }
 
 /// Switching-control data for a switched shunt ([`Shunt::control`]): the mode,
@@ -399,7 +496,22 @@ pub struct SwitchedShuntControl {
     pub blocks: Vec<ShuntBlock>,
 }
 
+impl SwitchedShuntControl {
+    #[must_use]
+    pub fn new(mode: SwitchedShuntMode, vhigh: f64, vlow: f64, blocks: Vec<ShuntBlock>) -> Self {
+        Self {
+            mode,
+            vhigh,
+            vlow,
+            control_bus: None,
+            rmpct: 100.0,
+            blocks,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct Branch {
     pub from: BusId,
     pub to: BusId,
@@ -443,6 +555,7 @@ pub struct Branch {
 /// Per terminal branch shunt admittance in p.u. This is the canonical
 /// physical branch shunt model when present.
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct BranchCharging {
     pub g_fr: f64,
     pub b_fr: f64,
@@ -451,6 +564,16 @@ pub struct BranchCharging {
 }
 
 impl BranchCharging {
+    #[must_use]
+    pub const fn new(g_fr: f64, b_fr: f64, g_to: f64, b_to: f64) -> Self {
+        Self {
+            g_fr,
+            b_fr,
+            g_to,
+            b_to,
+        }
+    }
+
     #[must_use]
     pub fn from_total_b(b: f64) -> Self {
         Self {
@@ -481,14 +604,27 @@ impl BranchCharging {
 
 /// Current limits for a branch, in source units.
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct BranchCurrentRatings {
     pub c_rating_a: f64,
     pub c_rating_b: f64,
     pub c_rating_c: f64,
 }
 
+impl BranchCurrentRatings {
+    #[must_use]
+    pub const fn new(c_rating_a: f64, c_rating_b: f64, c_rating_c: f64) -> Self {
+        Self {
+            c_rating_a,
+            c_rating_b,
+            c_rating_c,
+        }
+    }
+}
+
 /// Solved branch terminal flows in MW/MVAr.
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct BranchSolution {
     pub pf: f64,
     pub qf: f64,
@@ -496,7 +632,38 @@ pub struct BranchSolution {
     pub qt: f64,
 }
 
+impl BranchSolution {
+    #[must_use]
+    pub const fn new(pf: f64, qf: f64, pt: f64, qt: f64) -> Self {
+        Self { pf, qf, pt, qt }
+    }
+}
+
 impl Branch {
+    #[must_use]
+    pub fn new(from: BusId, to: BusId, r: f64, x: f64) -> Self {
+        Self {
+            from,
+            to,
+            r,
+            x,
+            b: 0.0,
+            charging: None,
+            rate_a: 0.0,
+            rate_b: 0.0,
+            rate_c: 0.0,
+            current_ratings: None,
+            tap: 0.0,
+            shift: 0.0,
+            in_service: true,
+            angmin: -360.0,
+            angmax: 360.0,
+            control: None,
+            solution: None,
+            extras: Extras::new(),
+        }
+    }
+
     /// Effective tap ratio (0 ⇒ 1).
     #[must_use]
     pub fn effective_tap(&self) -> f64 {
@@ -544,6 +711,7 @@ impl Branch {
 /// A transmission switch. Closed switches are preserved as data; matrix builders
 /// do not lower them into zero impedance branches.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct Switch {
     pub from: BusId,
     pub to: BusId,
@@ -561,6 +729,24 @@ pub struct Switch {
     #[serde(default)]
     pub qt: Option<f64>,
     pub extras: Extras,
+}
+
+impl Switch {
+    #[must_use]
+    pub fn new(from: BusId, to: BusId, closed: bool) -> Self {
+        Self {
+            from,
+            to,
+            closed,
+            thermal_rating: None,
+            current_rating: None,
+            pf: None,
+            qf: None,
+            pt: None,
+            qt: None,
+            extras: Extras::new(),
+        }
+    }
 }
 
 /// What a regulating transformer's tap (or phase shift) automatically controls.
@@ -617,7 +803,18 @@ impl Default for TransformerControl {
     }
 }
 
+impl TransformerControl {
+    #[must_use]
+    pub fn new(mode: TransformerControlMode) -> Self {
+        Self {
+            mode,
+            ..Self::default()
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct Generator {
     pub bus: BusId,
     /// Real power set point (MW).
@@ -654,6 +851,25 @@ pub struct Generator {
 }
 
 impl Generator {
+    #[must_use]
+    pub fn new(bus: BusId) -> Self {
+        Self {
+            bus,
+            pg: 0.0,
+            qg: 0.0,
+            pmax: 0.0,
+            pmin: 0.0,
+            qmax: 0.0,
+            qmin: 0.0,
+            vg: 1.0,
+            mbase: 0.0,
+            in_service: true,
+            cost: None,
+            caps: default_caps(),
+            regulated_bus: None,
+        }
+    }
+
     /// True when any capability / ramp column is present. Formats without those
     /// fields (PSS/E, PowerWorld) use this to warn on what they drop.
     #[must_use]
@@ -712,6 +928,7 @@ mod caps_serde {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct Storage {
     pub bus: BusId,
     pub ps: f64,
@@ -735,6 +952,33 @@ pub struct Storage {
     pub extras: Extras,
 }
 
+impl Storage {
+    #[must_use]
+    pub fn new(bus: BusId) -> Self {
+        Self {
+            bus,
+            ps: 0.0,
+            qs: 0.0,
+            energy: 0.0,
+            energy_rating: 0.0,
+            charge_rating: 0.0,
+            discharge_rating: 0.0,
+            charge_efficiency: 1.0,
+            discharge_efficiency: 1.0,
+            thermal_rating: 0.0,
+            current_rating: None,
+            qmin: 0.0,
+            qmax: 0.0,
+            r: 0.0,
+            x: 0.0,
+            p_loss: 0.0,
+            q_loss: 0.0,
+            in_service: true,
+            extras: Extras::new(),
+        }
+    }
+}
+
 /// A two-terminal HVDC line (MATPOWER `dcline`).
 ///
 /// `pf`/`pt`/`qf`/`qt` are stored in MATPOWER's sign convention regardless of
@@ -743,6 +987,7 @@ pub struct Storage {
 /// opposite sign). The flip is a format-boundary translation, so a derived view
 /// like `to_normalized` keeps the MATPOWER convention and only scales to per unit.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct Hvdc {
     pub from: BusId,
     pub to: BusId,
@@ -766,6 +1011,33 @@ pub struct Hvdc {
     pub extras: Extras,
 }
 
+impl Hvdc {
+    #[must_use]
+    pub fn new(from: BusId, to: BusId) -> Self {
+        Self {
+            from,
+            to,
+            in_service: true,
+            pf: 0.0,
+            pt: 0.0,
+            qf: 0.0,
+            qt: 0.0,
+            vf: 1.0,
+            vt: 1.0,
+            pmin: 0.0,
+            pmax: 0.0,
+            qminf: 0.0,
+            qmaxf: 0.0,
+            qmint: 0.0,
+            qmaxt: 0.0,
+            loss0: 0.0,
+            loss1: 0.0,
+            cost: None,
+            extras: Extras::new(),
+        }
+    }
+}
+
 /// An area record: the area's scheduled net interchange and its swing bus.
 ///
 /// The [`number`](Area::number) matches the `area` field carried on each
@@ -783,6 +1055,19 @@ pub struct Area {
     /// Interchange tolerance bandwidth (MW).
     pub tolerance: f64,
     pub name: Option<String>,
+}
+
+impl Area {
+    #[must_use]
+    pub fn new(number: usize) -> Self {
+        Self {
+            number,
+            slack_bus: None,
+            net_interchange: 0.0,
+            tolerance: 0.0,
+            name: None,
+        }
+    }
 }
 
 /// Solver / solution-control metadata: the Newton tolerance and iteration cap,
@@ -815,6 +1100,11 @@ pub struct SolverParams {
 }
 
 impl SolverParams {
+    #[must_use]
+    pub fn new() -> Self {
+        Self::default()
+    }
+
     /// True when no field is set (so readers can avoid attaching an empty record).
     #[must_use]
     pub fn is_empty(&self) -> bool {
@@ -834,10 +1124,18 @@ impl SolverParams {
 /// (winding voltage base, turns-ratio units) as the transformer control work
 /// lands without reshaping the [`Transformer3W::z`] array.
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct Impedance {
     pub r: f64,
     pub x: f64,
     pub base_mva: f64,
+}
+
+impl Impedance {
+    #[must_use]
+    pub const fn new(r: f64, x: f64, base_mva: f64) -> Self {
+        Self { r, x, base_mva }
+    }
 }
 
 /// One winding of a [`Transformer3W`]: its terminal bus, off-nominal ratio, phase
@@ -855,6 +1153,21 @@ pub struct Winding {
     pub rate_a: f64,
     pub rate_b: f64,
     pub rate_c: f64,
+}
+
+impl Winding {
+    #[must_use]
+    pub fn new(bus: BusId) -> Self {
+        Self {
+            bus,
+            tap: 1.0,
+            shift: 0.0,
+            nominal_kv: 0.0,
+            rate_a: 0.0,
+            rate_b: 0.0,
+            rate_c: 0.0,
+        }
+    }
 }
 
 /// A three-winding transformer: three terminal buses joined at a common star
@@ -888,6 +1201,21 @@ pub struct Transformer3W {
 }
 
 impl Transformer3W {
+    #[must_use]
+    pub fn new(windings: [Winding; 3], z: [Impedance; 3]) -> Self {
+        Self {
+            windings,
+            z,
+            star_vm: 1.0,
+            star_va: 0.0,
+            mag_g: 0.0,
+            mag_b: 0.0,
+            in_service: true,
+            name: None,
+            extras: Extras::new(),
+        }
+    }
+
     /// The per-winding star impedances `(r, x)` — winding *k* to the star point —
     /// from the pairwise values, per unit on the system base.
     ///
@@ -1005,6 +1333,28 @@ fn repair_vg(vg: f64) -> Option<f64> {
 }
 
 impl Network {
+    #[must_use]
+    pub fn new(name: impl Into<String>, base_mva: f64) -> Network {
+        Network {
+            name: name.into(),
+            base_mva,
+            base_frequency: DEFAULT_BASE_FREQUENCY,
+            buses: Vec::new(),
+            loads: Vec::new(),
+            shunts: Vec::new(),
+            branches: Vec::new(),
+            switches: Vec::new(),
+            generators: Vec::new(),
+            storage: Vec::new(),
+            hvdc: Vec::new(),
+            transformers_3w: Vec::new(),
+            areas: Vec::new(),
+            solver: None,
+            source_format: SourceFormat::InMemory,
+            source: None,
+        }
+    }
+
     /// A network assembled in memory from buses and branches, with no loads,
     /// shunts, generators, storage, HVDC, or retained source document. Synthetic
     /// topology generators and tests use it instead of repeating the struct
@@ -1017,24 +1367,10 @@ impl Network {
         buses: Vec<Bus>,
         branches: Vec<Branch>,
     ) -> Network {
-        Network {
-            name: name.into(),
-            base_mva,
-            base_frequency: DEFAULT_BASE_FREQUENCY,
-            buses,
-            loads: Vec::new(),
-            shunts: Vec::new(),
-            branches,
-            switches: Vec::new(),
-            generators: Vec::new(),
-            storage: Vec::new(),
-            hvdc: Vec::new(),
-            transformers_3w: Vec::new(),
-            areas: Vec::new(),
-            solver: None,
-            source_format: SourceFormat::InMemory,
-            source: None,
-        }
+        let mut net = Self::new(name, base_mva);
+        net.buses = buses;
+        net.branches = branches;
+        net
     }
 
     /// Serialize the structured tables to JSON: the transport the C ABI

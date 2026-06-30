@@ -93,59 +93,39 @@ fn phase_reference(terminals: &[&str], grounded: &[&str]) -> (Vec<f64>, Vec<f64>
 }
 
 fn preflight_network(terminals: &[&str], grounded: &[&str]) -> powerio_dist::DistNetwork {
-    use powerio_dist::{DistBus, DistLine, DistLineCode, DistNetwork, Extras, VoltageSource};
+    use powerio_dist::{DistBus, DistLine, DistLineCode, DistNetwork, VoltageSource};
 
     let n = terminals.len();
     let terminal_map = strings(terminals);
     let (v_magnitude, v_angle) = phase_reference(terminals, grounded);
     let mut net = DistNetwork::default();
     for id in ["sourcebus", "loadbus"] {
-        net.buses.push(DistBus {
-            id: id.to_owned(),
-            terminals: terminal_map.clone(),
-            grounded: strings(grounded),
-            v_min: None,
-            v_max: None,
-            vpn_min: None,
-            vpn_max: None,
-            vpp_min: None,
-            vpp_max: None,
-            vsym_min: None,
-            vsym_max: None,
-            extras: Extras::new(),
-        });
+        let mut bus = DistBus::new(id, terminal_map.clone());
+        bus.grounded = strings(grounded);
+        net.buses.push(bus);
     }
-    net.linecodes.push(DistLineCode {
-        name: "lc".to_owned(),
-        n_conductors: n,
-        r_series: diagonal_matrix(n, 0.01),
-        x_series: diagonal_matrix(n, 0.10),
-        g_from: zero_matrix(n),
-        b_from: zero_matrix(n),
-        g_to: zero_matrix(n),
-        b_to: zero_matrix(n),
-        i_max: None,
-        s_max: None,
-        extras: Extras::new(),
-    });
-    net.lines.push(DistLine {
-        name: "l1".to_owned(),
-        bus_from: "sourcebus".to_owned(),
-        bus_to: "loadbus".to_owned(),
-        terminal_map_from: terminal_map.clone(),
-        terminal_map_to: terminal_map.clone(),
-        linecode: "lc".to_owned(),
-        length: 1.0,
-        extras: Extras::new(),
-    });
-    net.sources.push(VoltageSource {
-        name: "source".to_owned(),
-        bus: "sourcebus".to_owned(),
+    let mut linecode = DistLineCode::new("lc", diagonal_matrix(n, 0.01), diagonal_matrix(n, 0.10));
+    linecode.g_from = zero_matrix(n);
+    linecode.b_from = zero_matrix(n);
+    linecode.g_to = zero_matrix(n);
+    linecode.b_to = zero_matrix(n);
+    net.linecodes.push(linecode);
+    net.lines.push(DistLine::new(
+        "l1",
+        "sourcebus",
+        "loadbus",
+        terminal_map.clone(),
+        terminal_map.clone(),
+        "lc",
+        1.0,
+    ));
+    net.sources.push(VoltageSource::new(
+        "source",
+        "sourcebus",
         terminal_map,
         v_magnitude,
         v_angle,
-        extras: Extras::new(),
-    });
+    ));
     net
 }
 
@@ -720,38 +700,21 @@ mpc.branch = [
 
 #[test]
 fn sane_validation_records_multiconductor_structure_findings() {
-    use powerio_dist::{DistBus, DistLine, DistNetwork, Extras, UntypedObject};
+    use powerio_dist::{DistBus, DistLine, DistNetwork, UntypedObject};
 
     let mut net = DistNetwork::default();
-    net.buses.push(DistBus {
-        id: "a".to_owned(),
-        terminals: vec!["1".to_owned()],
-        grounded: Vec::new(),
-        v_min: None,
-        v_max: None,
-        vpn_min: None,
-        vpn_max: None,
-        vpp_min: None,
-        vpp_max: None,
-        vsym_min: None,
-        vsym_max: None,
-        extras: Extras::new(),
-    });
-    net.lines.push(DistLine {
-        name: "l1".to_owned(),
-        bus_from: "a".to_owned(),
-        bus_to: "missing".to_owned(),
-        terminal_map_from: vec!["2".to_owned()],
-        terminal_map_to: vec!["1".to_owned()],
-        linecode: "missing_code".to_owned(),
-        length: 1.0,
-        extras: Extras::new(),
-    });
-    net.untyped.push(UntypedObject {
-        class: "regcontrol".to_owned(),
-        name: "r1".to_owned(),
-        props: Vec::new(),
-    });
+    net.buses.push(DistBus::new("a", vec!["1".to_owned()]));
+    net.lines.push(DistLine::new(
+        "l1",
+        "a",
+        "missing",
+        vec!["2".to_owned()],
+        vec!["1".to_owned()],
+        "missing_code",
+        1.0,
+    ));
+    net.untyped
+        .push(UntypedObject::new("regcontrol", "r1", Vec::new()));
 
     let mut pkg = CompilerPackage::from_multiconductor(net);
     pkg.run_sane_validation();
@@ -880,11 +843,8 @@ fn lowering_preflight_rejects_untyped_objects() {
     use powerio_dist::UntypedObject;
 
     let mut net = preflight_network(&["1", "2", "3"], &[]);
-    net.untyped.push(UntypedObject {
-        class: "regcontrol".to_owned(),
-        name: "r1".to_owned(),
-        props: Vec::new(),
-    });
+    net.untyped
+        .push(UntypedObject::new("regcontrol", "r1", Vec::new()));
     let report = check_multiconductor_to_balanced_lowering(
         &net,
         powerio_pkg::MulticonductorToBalancedOptions::default(),
@@ -915,16 +875,11 @@ fn lowering_preflight_rejects_missing_phase_reference() {
 
 #[test]
 fn lowering_preflight_rejects_transformers() {
-    use powerio_dist::{DistTransformer, Extras};
+    use powerio_dist::DistTransformer;
 
     let mut net = preflight_network(&["1", "2", "3"], &[]);
-    net.transformers.push(DistTransformer {
-        name: "t1".to_owned(),
-        windings: Vec::new(),
-        xsc_pct: Vec::new(),
-        phases: 3,
-        extras: Extras::new(),
-    });
+    net.transformers
+        .push(DistTransformer::new("t1", Vec::new(), Vec::new(), 3));
     let report = check_multiconductor_to_balanced_lowering(
         &net,
         powerio_pkg::MulticonductorToBalancedOptions::default(),
@@ -1042,16 +997,11 @@ fn lowering_rejects_missing_phase_reference() {
 
 #[test]
 fn lowering_rejects_transformer_input() {
-    use powerio_dist::{DistTransformer, Extras};
+    use powerio_dist::DistTransformer;
 
     let mut net = preflight_network(&["1", "2", "3"], &[]);
-    net.transformers.push(DistTransformer {
-        name: "t1".to_owned(),
-        windings: Vec::new(),
-        xsc_pct: Vec::new(),
-        phases: 3,
-        extras: Extras::new(),
-    });
+    net.transformers
+        .push(DistTransformer::new("t1", Vec::new(), Vec::new(), 3));
     assert_lowering_rejects(&net, "LOWER.MULTI_TO_BALANCED.UNSUPPORTED_TRANSFORMER");
 }
 
@@ -1060,68 +1010,56 @@ fn lowering_rejects_untyped_object_input() {
     use powerio_dist::UntypedObject;
 
     let mut net = preflight_network(&["1", "2", "3"], &[]);
-    net.untyped.push(UntypedObject {
-        class: "regcontrol".to_owned(),
-        name: "r1".to_owned(),
-        props: Vec::new(),
-    });
+    net.untyped
+        .push(UntypedObject::new("regcontrol", "r1", Vec::new()));
     assert_lowering_rejects(&net, "LOWER.MULTI_TO_BALANCED.UNSUPPORTED_OBJECT");
 }
 
 #[test]
 fn lowering_rejects_closed_switch_input() {
-    use powerio_dist::{DistSwitch, Extras};
+    use powerio_dist::DistSwitch;
 
     let mut net = preflight_network(&["1", "2", "3"], &[]);
-    net.switches.push(DistSwitch {
-        name: "sw1".to_owned(),
-        bus_from: "sourcebus".to_owned(),
-        bus_to: "loadbus".to_owned(),
-        terminal_map_from: strings(&["1", "2", "3"]),
-        terminal_map_to: strings(&["1", "2", "3"]),
-        open: false,
-        i_max: None,
-        extras: Extras::new(),
-    });
+    net.switches.push(DistSwitch::new(
+        "sw1",
+        "sourcebus",
+        "loadbus",
+        strings(&["1", "2", "3"]),
+        strings(&["1", "2", "3"]),
+        false,
+    ));
     assert_lowering_rejects(&net, "LOWER.MULTI_TO_BALANCED.UNSUPPORTED_CLOSED_SWITCH");
 }
 
 #[test]
 fn lowering_rejects_generator_unknown_bus() {
-    use powerio_dist::{Configuration, DistGenerator, Extras};
+    use powerio_dist::{Configuration, DistGenerator};
 
     let mut net = preflight_network(&["1", "2", "3"], &[]);
-    net.generators.push(DistGenerator {
-        name: "g_missing".to_owned(),
-        bus: "missing".to_owned(),
-        terminal_map: strings(&["1", "2", "3"]),
-        configuration: Configuration::Wye,
-        p_nom: vec![1_000.0, 1_000.0, 1_000.0],
-        q_nom: vec![0.0, 0.0, 0.0],
-        p_min: None,
-        p_max: None,
-        q_min: None,
-        q_max: None,
-        cost: None,
-        extras: Extras::new(),
-    });
+    net.generators.push(DistGenerator::new(
+        "g_missing",
+        "missing",
+        strings(&["1", "2", "3"]),
+        Configuration::Wye,
+        vec![1_000.0, 1_000.0, 1_000.0],
+        vec![0.0, 0.0, 0.0],
+    ));
 
     assert_lowering_rejects(&net, "LOWER.MULTI_TO_BALANCED.UNKNOWN_BUS");
 }
 
 #[test]
 fn lowering_preserves_single_phase_shunt_total() {
-    use powerio_dist::{DistShunt, Extras};
+    use powerio_dist::DistShunt;
 
     let mut net = preflight_network(&["1", "2", "3"], &[]);
-    net.shunts.push(DistShunt {
-        name: "s1".to_owned(),
-        bus: "loadbus".to_owned(),
-        terminal_map: strings(&["1"]),
-        g: vec![vec![0.03]],
-        b: vec![vec![0.06]],
-        extras: Extras::new(),
-    });
+    net.shunts.push(DistShunt::new(
+        "s1",
+        "loadbus",
+        strings(&["1"]),
+        vec![vec![0.03]],
+        vec![vec![0.06]],
+    ));
 
     let lowered =
         lower_multiconductor_to_balanced(&net, MulticonductorToBalancedOptions::default())
@@ -1242,7 +1180,7 @@ fn lowering_record_roundtrips() {
 fn load_voltage_model_survives_package_roundtrip() {
     // The typed load voltage model (DistLoadVoltageModel) is part of the
     // multiconductor payload; prove it round-trips through the package JSON.
-    use powerio_dist::{Configuration, DistLoad, DistLoadVoltageModel, DistNetwork, Extras};
+    use powerio_dist::{Configuration, DistLoad, DistLoadVoltageModel, DistNetwork};
 
     let zip = DistLoadVoltageModel::Zip {
         v_nom: vec![230.0, 230.0, 230.0],
@@ -1254,21 +1192,21 @@ fn load_voltage_model_survives_package_roundtrip() {
         beta_p: vec![0.3, 0.3, 0.3],
     };
     let mut net = DistNetwork::default();
-    net.loads.push(DistLoad {
-        name: "l1".to_owned(),
-        bus: "b1".to_owned(),
-        terminal_map: vec![
+    let mut load = DistLoad::new(
+        "l1",
+        "b1",
+        vec![
             "a".to_owned(),
             "b".to_owned(),
             "c".to_owned(),
             "n".to_owned(),
         ],
-        configuration: Configuration::Wye,
-        p_nom: vec![100.0, 100.0, 100.0],
-        q_nom: vec![30.0, 30.0, 30.0],
-        voltage_model: zip.clone(),
-        extras: Extras::new(),
-    });
+        Configuration::Wye,
+        vec![100.0, 100.0, 100.0],
+        vec![30.0, 30.0, 30.0],
+    );
+    load.voltage_model = zip.clone();
+    net.loads.push(load);
 
     let pkg = CompilerPackage::from_multiconductor(net);
     assert_eq!(pkg.model_kind(), ModelKind::Multiconductor);

@@ -6,12 +6,12 @@
 use std::path::{Path, PathBuf};
 
 use powerio::{
-    Branch, BranchCharging, BranchCurrentRatings, BranchSolution, Bus, BusId, BusType, Error,
-    Extras, Load, LoadVoltageModel, MissingGenCostPolicy, Network, SourceFormat, TargetFormat,
-    WriteOptions, convert_file, parse_file, parse_gen_cost_csv, parse_matpower,
-    parse_matpower_file, parse_powermodels_json, parse_powerworld, parse_pslf, parse_psse,
-    read_pypsa_csv_folder, write_as, write_as_with_options, write_egret_json,
-    write_powermodels_json, write_powerworld, write_pslf, write_psse, write_pypsa_csv_folder,
+    Branch, BranchCharging, BranchCurrentRatings, BranchSolution, Bus, BusId, BusType, Error, Load,
+    LoadVoltageModel, MissingGenCostPolicy, Network, SourceFormat, TargetFormat, WriteOptions,
+    convert_file, parse_file, parse_gen_cost_csv, parse_matpower, parse_matpower_file,
+    parse_powermodels_json, parse_powerworld, parse_pslf, parse_psse, read_pypsa_csv_folder,
+    write_as, write_as_with_options, write_egret_json, write_powermodels_json, write_powerworld,
+    write_pslf, write_psse, write_pypsa_csv_folder,
 };
 use serde_json::Value;
 
@@ -25,21 +25,7 @@ fn data(name: &str) -> PathBuf {
 }
 
 fn audit_bus(id: usize, kind: BusType) -> Bus {
-    Bus {
-        id: BusId(id),
-        kind,
-        vm: 1.0,
-        va: 0.0,
-        base_kv: 230.0,
-        vmax: 1.1,
-        vmin: 0.9,
-        evhi: None,
-        evlo: None,
-        area: 1,
-        zone: 1,
-        name: None,
-        extras: Extras::default(),
-    }
+    Bus::new(BusId(id), kind, 230.0)
 }
 
 fn rich_audit_network() -> Network {
@@ -49,58 +35,25 @@ fn rich_audit_network() -> Network {
         vec![audit_bus(1, BusType::Ref), audit_bus(2, BusType::Pq)],
         Vec::new(),
     );
-    net.loads.push(Load {
-        bus: BusId(2),
-        p: 10.0,
-        q: 5.0,
-        voltage_model: Some(LoadVoltageModel::Zip {
-            p_constant_power: 5.0,
-            q_constant_power: 2.0,
-            p_constant_current: 2.0,
-            q_constant_current: 1.0,
-            p_constant_impedance: 3.0,
-            q_constant_impedance: 2.0,
-            v_nom: None,
-            load_type: None,
-            scaling: None,
-        }),
-        in_service: true,
-        extras: Extras::default(),
+    let mut load = Load::new(BusId(2), 10.0, 5.0);
+    load.voltage_model = Some(LoadVoltageModel::Zip {
+        p_constant_power: 5.0,
+        q_constant_power: 2.0,
+        p_constant_current: 2.0,
+        q_constant_current: 1.0,
+        p_constant_impedance: 3.0,
+        q_constant_impedance: 2.0,
+        v_nom: None,
+        load_type: None,
+        scaling: None,
     });
-    net.branches.push(Branch {
-        from: BusId(1),
-        to: BusId(2),
-        r: 0.01,
-        x: 0.1,
-        b: 0.0,
-        charging: Some(BranchCharging {
-            g_fr: 0.01,
-            b_fr: 0.02,
-            g_to: 0.0,
-            b_to: 0.05,
-        }),
-        rate_a: 100.0,
-        rate_b: 0.0,
-        rate_c: 0.0,
-        current_ratings: Some(BranchCurrentRatings {
-            c_rating_a: 500.0,
-            c_rating_b: 600.0,
-            c_rating_c: 700.0,
-        }),
-        tap: 0.0,
-        shift: 0.0,
-        in_service: true,
-        angmin: -360.0,
-        angmax: 360.0,
-        control: None,
-        solution: Some(BranchSolution {
-            pf: 1.0,
-            qf: 0.5,
-            pt: -0.9,
-            qt: -0.4,
-        }),
-        extras: Extras::default(),
-    });
+    net.loads.push(load);
+    let mut branch = Branch::new(BusId(1), BusId(2), 0.01, 0.1);
+    branch.charging = Some(BranchCharging::new(0.01, 0.02, 0.0, 0.05));
+    branch.rate_a = 100.0;
+    branch.current_ratings = Some(BranchCurrentRatings::new(500.0, 600.0, 700.0));
+    branch.solution = Some(BranchSolution::new(1.0, 0.5, -0.9, -0.4));
+    net.branches.push(branch);
     net
 }
 
@@ -111,31 +64,10 @@ fn terminal_projection_network() -> Network {
         vec![audit_bus(1, BusType::Ref), audit_bus(2, BusType::Pq)],
         Vec::new(),
     );
-    net.branches.push(Branch {
-        from: BusId(1),
-        to: BusId(2),
-        r: 0.01,
-        x: 0.1,
-        b: 0.0,
-        charging: Some(BranchCharging {
-            g_fr: 0.01,
-            b_fr: 0.02,
-            g_to: 0.03,
-            b_to: 0.05,
-        }),
-        rate_a: 100.0,
-        rate_b: 0.0,
-        rate_c: 0.0,
-        current_ratings: None,
-        tap: 0.0,
-        shift: 0.0,
-        in_service: true,
-        angmin: -360.0,
-        angmax: 360.0,
-        control: None,
-        solution: None,
-        extras: Extras::default(),
-    });
+    let mut branch = Branch::new(BusId(1), BusId(2), 0.01, 0.1);
+    branch.charging = Some(BranchCharging::new(0.01, 0.02, 0.03, 0.05));
+    branch.rate_a = 100.0;
+    net.branches.push(branch);
     net
 }
 
@@ -1330,13 +1262,12 @@ fn powermodels_dcline_flips_pt_qf_qt_sign() {
 fn powermodels_dcline_cost_round_trips() {
     let mut net = parse_matpower_file(data("t_case9_dcline.m")).unwrap();
     let dc = net.hvdc.first_mut().expect("fixture has dclines");
-    dc.cost = Some(powerio::network::GenCost {
-        model: 2,
-        startup: 0.0,
-        shutdown: 0.0,
-        ncost: 3,
-        coeffs: vec![0.02, 3.0, 10.0],
-    });
+    dc.cost = Some(powerio::network::GenCost::new(
+        2,
+        0.0,
+        0.0,
+        vec![0.02, 3.0, 10.0],
+    ));
 
     let back = parse_powermodels_json(&write_powermodels_json(&net).text).unwrap();
     let got = back.hvdc[0].cost.as_ref().expect("dcline cost survives");
@@ -1978,45 +1909,12 @@ fn pypsa_written_folder_joins_on_bus_names() {
 
 #[test]
 fn slackless_network_conversion_warns_for_power_flow_targets() {
-    use powerio::network::{Branch, Bus, BusType, Extras, Network};
+    use powerio::network::{Branch, Bus, BusType, Network};
     fn bus(id: usize, kind: BusType) -> Bus {
-        Bus {
-            id: BusId(id),
-            kind,
-            vm: 1.0,
-            va: 0.0,
-            base_kv: 1.0,
-            vmax: 1.1,
-            vmin: 0.9,
-            evhi: None,
-            evlo: None,
-            area: 1,
-            zone: 1,
-            name: None,
-            extras: Extras::new(),
-        }
+        Bus::new(BusId(id), kind, 1.0)
     }
     fn branch(from: usize, to: usize) -> Branch {
-        Branch {
-            from: BusId(from),
-            to: BusId(to),
-            r: 0.0,
-            x: 0.1,
-            b: 0.0,
-            charging: None,
-            rate_a: 0.0,
-            rate_b: 0.0,
-            rate_c: 0.0,
-            current_ratings: None,
-            tap: 0.0,
-            shift: 0.0,
-            in_service: true,
-            angmin: -360.0,
-            angmax: 360.0,
-            solution: None,
-            control: None,
-            extras: Extras::new(),
-        }
+        Branch::new(BusId(from), BusId(to), 0.0, 0.1)
     }
     // PowerWorld .pwb stores no slack designation; converting its network to
     // a format whose solvers need one must say so instead of silently

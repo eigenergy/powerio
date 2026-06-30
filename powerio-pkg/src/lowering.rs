@@ -298,28 +298,20 @@ impl<'a> LoweringState<'a> {
         let generators = self.lower_generators(&buses);
         self.err_if_errors()?;
 
-        let network = Network {
-            name: self
-                .net
+        let mut network = Network::new(
+            self.net
                 .name
                 .clone()
                 .unwrap_or_else(|| "lowered-multiconductor".to_owned()),
-            base_mva: self.options.base_mva,
-            base_frequency: self.net.base_frequency,
-            buses,
-            loads,
-            shunts,
-            branches,
-            switches: Vec::new(),
-            generators,
-            storage: Vec::new(),
-            hvdc: Vec::new(),
-            transformers_3w: Vec::new(),
-            areas: Vec::new(),
-            solver: None,
-            source_format: SourceFormat::InMemory,
-            source: None,
-        };
+            self.options.base_mva,
+        );
+        network.base_frequency = self.net.base_frequency;
+        network.buses = buses;
+        network.loads = loads;
+        network.shunts = shunts;
+        network.branches = branches;
+        network.generators = generators;
+        network.source_format = SourceFormat::InMemory;
 
         if let Err(err) = network.validate() {
             self.record.diagnostics.push(StructuredDiagnostic::new(
@@ -484,21 +476,18 @@ impl<'a> LoweringState<'a> {
                     }
                 };
                 self.record_bus_bound_drops(bus);
-                Bus {
-                    id: BusId(idx + 1),
-                    kind: self.bus_kind(&bus.id),
-                    vm,
-                    va,
-                    base_kv: base.line_to_line_volts / 1000.0,
-                    vmax,
-                    vmin,
-                    evhi: None,
-                    evlo: None,
-                    area: 1,
-                    zone: 1,
-                    name: Some(bus.id.clone()),
-                    extras: source_extra("multiconductor_bus_id", &bus.id),
-                }
+                let mut balanced = Bus::new(
+                    BusId(idx + 1),
+                    self.bus_kind(&bus.id),
+                    base.line_to_line_volts / 1000.0,
+                );
+                balanced.vm = vm;
+                balanced.va = va;
+                balanced.vmax = vmax;
+                balanced.vmin = vmin;
+                balanced.name = Some(bus.id.clone());
+                balanced.extras = source_extra("multiconductor_bus_id", &bus.id);
+                balanced
             })
             .collect()
     }
@@ -616,12 +605,12 @@ impl<'a> LoweringState<'a> {
             )?;
             let z_base = base.z_base_ohm(self.options.base_mva);
             let y_scale = z_base;
-            let charging = BranchCharging {
-                g_fr: y_from.re * y_scale,
-                b_fr: y_from.im * y_scale,
-                g_to: y_to.re * y_scale,
-                b_to: y_to.im * y_scale,
-            };
+            let charging = BranchCharging::new(
+                y_from.re * y_scale,
+                y_from.im * y_scale,
+                y_to.re * y_scale,
+                y_to.im * y_scale,
+            );
             let rate = line_rate_mva(code, &active, base.line_to_line_volts).unwrap_or_else(|| {
                 self.record.dropped_fields.push(format!(
                     "line {} thermal rating defaulted to 0 MVA",
@@ -629,26 +618,14 @@ impl<'a> LoweringState<'a> {
                 ));
                 0.0
             });
-            branches.push(Branch {
-                from,
-                to,
-                r: z_ohm.re / z_base,
-                x: z_ohm.im / z_base,
-                b: charging.total_b(),
-                charging: Some(charging),
-                rate_a: rate,
-                rate_b: rate,
-                rate_c: rate,
-                current_ratings: None,
-                tap: 0.0,
-                shift: 0.0,
-                in_service: true,
-                angmin: -360.0,
-                angmax: 360.0,
-                control: None,
-                solution: None,
-                extras: source_extra("multiconductor_line", &line.name),
-            });
+            let mut branch = Branch::new(from, to, z_ohm.re / z_base, z_ohm.im / z_base);
+            branch.b = charging.total_b();
+            branch.charging = Some(charging);
+            branch.rate_a = rate;
+            branch.rate_b = rate;
+            branch.rate_c = rate;
+            branch.extras = source_extra("multiconductor_line", &line.name);
+            branches.push(branch);
         }
         self.err_if_errors()?;
         Ok(branches)
@@ -772,14 +749,13 @@ impl<'a> LoweringState<'a> {
                         .with_element_path(format!("/model/multiconductor_network/loads/{idx}/voltage_model")),
                     );
                 }
-                Some(Load {
+                let mut balanced = Load::new(
                     bus,
-                    p: si_power_to_mega(load.p_nom.iter().sum()),
-                    q: si_power_to_mega(load.q_nom.iter().sum()),
-                    voltage_model: None,
-                    in_service: true,
-                    extras: source_extra("multiconductor_load", &load.name),
-                })
+                    si_power_to_mega(load.p_nom.iter().sum()),
+                    si_power_to_mega(load.q_nom.iter().sum()),
+                );
+                balanced.extras = source_extra("multiconductor_load", &load.name);
+                Some(balanced)
             })
             .collect()
     }
@@ -812,14 +788,9 @@ impl<'a> LoweringState<'a> {
                 partial_phase_admittance(&shunt.g, &shunt.b, &active)
             };
             let scale = base.line_to_line_volts * base.line_to_line_volts / 1_000_000.0;
-            shunts.push(Shunt {
-                bus,
-                g: y.re * scale,
-                b: y.im * scale,
-                in_service: true,
-                control: None,
-                extras: source_extra("multiconductor_shunt", &shunt.name),
-            });
+            let mut balanced = Shunt::new(bus, y.re * scale, y.im * scale);
+            balanced.extras = source_extra("multiconductor_shunt", &shunt.name);
+            shunts.push(balanced);
         }
         self.err_if_errors()?;
         Ok(shunts)
@@ -894,21 +865,16 @@ impl<'a> LoweringState<'a> {
                     .iter()
                     .find(|balanced_bus| balanced_bus.id == bus)
                     .map_or(1.0, |balanced_bus| balanced_bus.vm);
-                Some(Generator {
-                    bus,
-                    pg,
-                    qg,
-                    pmax,
-                    pmin,
-                    qmax,
-                    qmin,
-                    vg,
-                    mbase: self.options.base_mva,
-                    in_service: true,
-                    cost: None,
-                    caps: Default::default(),
-                    regulated_bus: None,
-                })
+                let mut balanced = Generator::new(bus);
+                balanced.pg = pg;
+                balanced.qg = qg;
+                balanced.pmax = pmax;
+                balanced.pmin = pmin;
+                balanced.qmax = qmax;
+                balanced.qmin = qmin;
+                balanced.vg = vg;
+                balanced.mbase = self.options.base_mva;
+                Some(balanced)
             })
             .collect()
     }

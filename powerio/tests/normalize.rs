@@ -4,7 +4,7 @@
 use std::path::{Path, PathBuf};
 
 use powerio::{
-    BusId, BusType, Error, Extras, IndexedNetwork, SourceFormat, Storage, TargetFormat, parse_file,
+    BusId, BusType, Error, IndexedNetwork, SourceFormat, Storage, TargetFormat, parse_file,
     parse_matpower_file, parse_str, write_as,
 };
 
@@ -564,27 +564,21 @@ mpc.branch = [
 ];
 ";
     let mut net = parse_str(src, "matpower").unwrap().network;
-    net.storage.push(Storage {
-        bus: BusId(2),
-        ps: 5.0,
-        qs: 3.0,
-        energy: 100.0,
-        energy_rating: 200.0,
-        charge_rating: 40.0,
-        discharge_rating: 40.0,
-        current_rating: None,
-        charge_efficiency: 0.95,
-        discharge_efficiency: 0.95,
-        thermal_rating: 60.0,
-        qmin: -30.0,
-        qmax: 30.0,
-        r: 0.0,
-        x: 0.0,
-        p_loss: 2.0,
-        q_loss: 1.0,
-        in_service: true,
-        extras: Extras::new(),
-    });
+    let mut storage = Storage::new(BusId(2));
+    storage.ps = 5.0;
+    storage.qs = 3.0;
+    storage.energy = 100.0;
+    storage.energy_rating = 200.0;
+    storage.charge_rating = 40.0;
+    storage.discharge_rating = 40.0;
+    storage.charge_efficiency = 0.95;
+    storage.discharge_efficiency = 0.95;
+    storage.thermal_rating = 60.0;
+    storage.qmin = -30.0;
+    storage.qmax = 30.0;
+    storage.p_loss = 2.0;
+    storage.q_loss = 1.0;
+    net.storage.push(storage);
     let base = 100.0;
     let s = &net.to_normalized().unwrap().storage[0];
     // Energy, ratings, reactive limits, and losses divide by base...

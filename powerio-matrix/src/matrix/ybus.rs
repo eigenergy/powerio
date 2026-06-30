@@ -150,12 +150,7 @@ pub(crate) fn branch_admittance(
     let y_series = Complex64::new(r / denom, -x / denom);
 
     let charging = if flags.zero_charging {
-        crate::network::BranchCharging {
-            g_fr: 0.0,
-            b_fr: 0.0,
-            g_to: 0.0,
-            b_to: 0.0,
-        }
+        crate::network::BranchCharging::new(0.0, 0.0, 0.0, 0.0)
     } else {
         br.terminal_charging()
     };

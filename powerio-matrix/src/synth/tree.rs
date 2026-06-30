@@ -4,7 +4,7 @@ use rand::Rng;
 use rand::SeedableRng;
 use rand_chacha::ChaCha8Rng;
 
-use crate::network::{Branch, Bus, BusId, BusType, Extras, Network};
+use crate::network::{Branch, Bus, BusId, BusType, Network};
 
 use super::SynthSpec;
 
@@ -40,21 +40,7 @@ pub(crate) fn make_buses(n: usize) -> Vec<Bus> {
 }
 
 pub(crate) fn make_bus(id: usize) -> Bus {
-    Bus {
-        id: BusId(id),
-        kind: BusType::Pq,
-        vm: 1.0,
-        va: 0.0,
-        base_kv: 345.0,
-        vmax: 1.1,
-        vmin: 0.9,
-        evhi: None,
-        evlo: None,
-        area: 1,
-        zone: 1,
-        name: None,
-        extras: Extras::new(),
-    }
+    Bus::new(BusId(id), BusType::Pq, 345.0)
 }
 
 pub(crate) fn make_branch(
@@ -69,24 +55,5 @@ pub(crate) fn make_branch(
     let log_x: f64 = rng.random_range(log_low..log_high);
     let x = log_x.exp().max(1e-6);
     let r = spec.r_over_x * x;
-    Branch {
-        from: BusId(from),
-        to: BusId(to),
-        r,
-        x,
-        b: 0.0,
-        charging: None,
-        rate_a: 0.0,
-        rate_b: 0.0,
-        rate_c: 0.0,
-        current_ratings: None,
-        tap: 0.0,
-        shift: 0.0,
-        in_service: true,
-        angmin: -360.0,
-        angmax: 360.0,
-        control: None,
-        solution: None,
-        extras: Extras::new(),
-    }
+    Branch::new(BusId(from), BusId(to), r, x)
 }

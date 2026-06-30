@@ -3,7 +3,7 @@
 
 use powerio_matrix::IndexedNetwork;
 use powerio_matrix::{
-    Branch, BuildOptions, Bus, BusId, BusType, DcConvention, Error, Extras, GenCost, Generator,
+    Branch, BuildOptions, Bus, BusId, BusType, DcConvention, Error, GenCost, Generator,
     MissingGenCostPolicy, Network, Scheme, Units, build_adjacency, build_bprime, build_flow_map,
     build_incidence, build_lodf, build_opf_instance, build_ptdf, build_weighted_laplacian,
     build_ybus, ground_at, parse_matpower_file,
@@ -33,10 +33,9 @@ fn net_with_gens(
     branches: Vec<Branch>,
     generators: Vec<Generator>,
 ) -> Network {
-    Network {
-        generators,
-        ..net(name, buses, branches)
-    }
+    let mut network = net(name, buses, branches);
+    network.generators = generators;
+    network
 }
 
 fn dense(m: &CsMat<f64>) -> Vec<Vec<f64>> {
@@ -405,21 +404,7 @@ fn lodf_diagonal_is_minus_one() {
 // ---------------------------------------------------------------------------
 
 fn bus(id: usize, kind: BusType) -> Bus {
-    Bus {
-        id: BusId(id),
-        kind,
-        vm: 1.0,
-        va: 0.0,
-        base_kv: 345.0,
-        vmax: 1.1,
-        vmin: 0.9,
-        evhi: None,
-        evlo: None,
-        area: 1,
-        zone: 1,
-        name: None,
-        extras: Extras::new(),
-    }
+    Bus::new(BusId(id), kind, 345.0)
 }
 
 fn branch(from: usize, to: usize, x: f64) -> Branch {
@@ -427,60 +412,27 @@ fn branch(from: usize, to: usize, x: f64) -> Branch {
 }
 
 fn branch_xts(from: usize, to: usize, x: f64, tap: f64, shift: f64) -> Branch {
-    Branch {
-        from: BusId(from),
-        to: BusId(to),
-        r: 0.0,
-        x,
-        b: 0.0,
-        charging: None,
-        rate_a: 0.0,
-        rate_b: 0.0,
-        rate_c: 0.0,
-        current_ratings: None,
-        tap,
-        shift,
-        in_service: true,
-        angmin: -360.0,
-        angmax: 360.0,
-        solution: None,
-        control: None,
-        extras: Extras::new(),
-    }
+    let mut branch = Branch::new(BusId(from), BusId(to), 0.0, x);
+    branch.tap = tap;
+    branch.shift = shift;
+    branch
 }
 
 /// Generator on `bus_id` with the given cost curve (pmax = 100 MW).
 fn gen_with_cost(bus: usize, cost: Option<GenCost>) -> Generator {
-    Generator {
-        bus: BusId(bus),
-        pg: 0.0,
-        qg: 0.0,
-        qmax: 0.0,
-        qmin: 0.0,
-        vg: 1.0,
-        mbase: 100.0,
-        pmax: 100.0,
-        pmin: 0.0,
-        in_service: true,
-        cost,
-        caps: Default::default(),
-        regulated_bus: None,
-    }
+    let mut generator = Generator::new(BusId(bus));
+    generator.mbase = 100.0;
+    generator.pmax = 100.0;
+    generator.cost = cost;
+    generator
 }
 
 /// Polynomial (model 2, quadratic) generator: cost `c2 p² + c1 p`.
 fn poly_gen(bus_id: usize, pmax: f64, c2: f64, c1: f64) -> Generator {
-    let cost = GenCost {
-        model: 2,
-        startup: 0.0,
-        shutdown: 0.0,
-        ncost: 3,
-        coeffs: vec![c2, c1, 0.0],
-    };
-    Generator {
-        pmax,
-        ..gen_with_cost(bus_id, Some(cost))
-    }
+    let cost = GenCost::new(2, 0.0, 0.0, vec![c2, c1, 0.0]);
+    let mut generator = gen_with_cost(bus_id, Some(cost));
+    generator.pmax = pmax;
+    generator
 }
 
 /// DC OPF instance for `case` under the default PaperPure convention. Returns
@@ -923,12 +875,8 @@ fn multi_generator_bus_sums_cost() {
 
 #[test]
 fn gencost_quadratic_branches() {
-    let mk = |model: u8, ncost: usize, coeffs: Vec<f64>| GenCost {
-        model,
-        startup: 0.0,
-        shutdown: 0.0,
-        ncost,
-        coeffs,
+    let mk = |model: u8, ncost: usize, coeffs: Vec<f64>| {
+        GenCost::with_ncost(model, 0.0, 0.0, ncost, coeffs)
     };
     // Quadratic: q = 2 c2, c = c1.
     assert_eq!(mk(2, 3, vec![1.5, 2.0, 9.0]).quadratic(), Some((3.0, 2.0)));
@@ -962,13 +910,7 @@ fn opf_distinguishes_missing_from_unsupported_cost() {
     ));
 
     // Present but piecewise-linear → UnsupportedCostModel.
-    let pwl = GenCost {
-        model: 1,
-        startup: 0.0,
-        shutdown: 0.0,
-        ncost: 2,
-        coeffs: vec![0.0, 0.0, 1.0, 1.0],
-    };
+    let pwl = GenCost::with_ncost(1, 0.0, 0.0, 2, vec![0.0, 0.0, 1.0, 1.0]);
     assert!(matches!(
         opf_of(&case("pwl", Some(pwl)), Units::Native).unwrap_err(),
         Error::UnsupportedCostModel {
