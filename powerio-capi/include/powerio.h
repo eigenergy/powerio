@@ -155,6 +155,42 @@ struct ArrowSchema;
 #define PIO_ARROW_TABLE_SWITCH 5
 #endif
 
+#if defined(PIO_ARROW)
+#define PIO_ARROW_TABLE_SOLVER_BUS 6
+#endif
+
+#if defined(PIO_ARROW)
+#define PIO_ARROW_TABLE_SOLVER_LOAD 7
+#endif
+
+#if defined(PIO_ARROW)
+#define PIO_ARROW_TABLE_SOLVER_SHUNT 8
+#endif
+
+#if defined(PIO_ARROW)
+#define PIO_ARROW_TABLE_SOLVER_BRANCH 9
+#endif
+
+#if defined(PIO_ARROW)
+#define PIO_ARROW_TABLE_SOLVER_SWITCH 10
+#endif
+
+#if defined(PIO_ARROW)
+#define PIO_ARROW_TABLE_SOLVER_ARC 11
+#endif
+
+#if defined(PIO_ARROW)
+#define PIO_ARROW_TABLE_SOLVER_GEN 12
+#endif
+
+#if defined(PIO_ARROW)
+#define PIO_ARROW_TABLE_SOLVER_STORAGE 13
+#endif
+
+#if defined(PIO_ARROW)
+#define PIO_ARROW_TABLE_SOLVER_HVDC 14
+#endif
+
 #if defined(PIO_DIST)
 /**
  * Opaque parsed distribution network handle (the multiconductor wire-coordinate
@@ -500,14 +536,16 @@ size_t pio_bus_shunt(const PioNetwork *net, double *gs, double *bs, size_t cap);
 
 #if defined(PIO_ARROW)
 /**
- * Export one raw network table over the Arrow C Data Interface: the `to_`
+ * Export one network table over the Arrow C Data Interface: the `to_`
  * conversion whose output type is Arrow structs rather than a string, and the
- * bulk plane this ABI evolves on: new or richer columns arrive in the Arrow
- * schema, leaving the C signatures fixed.
+ * bulk plane this ABI evolves on. Tables 0..5 are raw network tables; tables 6
+ * and up are normalized solver tables with per unit/radian values and dense
+ * zero based row ids. New or richer columns arrive in the Arrow schema, leaving
+ * the C signatures fixed.
  *
- * `table` is one of the `PIO_ARROW_TABLE_*` selectors (bus/branch/gen/load/
- * shunt); the columns are the parsed network fields with EXTERNAL bus ids (the
- * `pio_bus_ids` id space), not the gridfm schema. On success (returns `0`),
+ * `table` is one of the `PIO_ARROW_TABLE_*` selectors. Raw table columns use
+ * EXTERNAL bus ids (the `pio_bus_ids` id space), not the gridfm schema. On
+ * success (returns `0`),
  * `out_array` and `out_schema` are populated with owned C Data Interface
  * structs: ownership of the Arrow buffers transfers to the caller, both
  * `release` callbacks are non-NULL, and the caller MUST invoke each exactly

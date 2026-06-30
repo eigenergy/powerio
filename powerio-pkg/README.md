@@ -20,7 +20,9 @@ metadata a compiler artifact needs to be trustworthy:
   record, by what `mapping_kind`);
 - structured `diagnostics` with stable codes;
 - a `validation` summary;
-- `lowering_history`.
+- `lowering_history`;
+- optional `derived` metadata for matrix stats, normalized solver table
+  identities, and cache keys.
 
 It serializes to `.pio.json`. Binary `.pio` is out of scope until the JSON
 package stabilizes.
@@ -39,4 +41,13 @@ assert!(pkg.kind_is_consistent());
 let json = pkg.to_json_pretty().unwrap();
 let back = CompilerPackage::from_json(&json).unwrap();
 assert_eq!(back.model_kind(), ModelKind::Balanced);
+```
+
+Balanced packages can record the dense normalized solver table contract without
+embedding every table row:
+
+```rust
+let net = powerio::parse_str("...", "matpower").unwrap().network;
+let mut pkg = CompilerPackage::from_balanced(net);
+pkg.attach_normalized_solver_table_metadata().unwrap();
 ```

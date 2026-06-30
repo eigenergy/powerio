@@ -42,6 +42,7 @@ pub mod indexed;
 pub mod network;
 mod normalize;
 mod operations;
+pub mod solver_tables;
 
 pub use error::{ElementCounts, Error, ErrorCategory, Result, ScenarioMismatch};
 pub use format::{
@@ -64,3 +65,8 @@ pub use network::{
     TransformerControlMode, Winding,
 };
 pub use operations::Selector;
+pub use solver_tables::{
+    NORMALIZED_SOLVER_TABLES_PASS, NormalizedSolverTables, SolverArcRow, SolverArcTerminal,
+    SolverBranchRow, SolverBusRow, SolverCostRow, SolverGeneratorRow, SolverHvdcRow, SolverLoadRow,
+    SolverShuntRow, SolverStorageRow, SolverSwitchRow, SolverTableIndex, SolverTableUnits,
+};

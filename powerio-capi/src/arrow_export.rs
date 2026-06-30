@@ -9,9 +9,10 @@
 //! ABI's evolution valve: richer columns arrive here, never as new C
 //! signatures.
 //!
-//! These are the *raw* network fields, with EXTERNAL bus ids (the same id space
-//! as `pio_bus_ids`), not the gridfm-datakit schema — no admittances or flows
-//! (that schema needs the matrix layer; see issue #38).
+//! Tables 0..5 are the *raw* network fields, with EXTERNAL bus ids (the same id
+//! space as `pio_bus_ids`), not the gridfm-datakit schema. Tables 6 and up are
+//! the normalized solver table contract: per unit/radian values and dense zero
+//! based row ids.
 
 use std::sync::Arc;
 
@@ -20,7 +21,7 @@ use arrow::datatypes::{Field, Schema};
 use arrow::error::ArrowError;
 use arrow::ffi::{FFI_ArrowArray, FFI_ArrowSchema, to_ffi};
 use arrow::record_batch::RecordBatch;
-use powerio::{BusId, Network};
+use powerio::{BusId, Network, NormalizedSolverTables, SolverArcTerminal};
 
 /// Table selectors for [`pio_to_arrow`](crate::pio_to_arrow); the C
 /// header mirrors these as `PIO_ARROW_TABLE_*`.
@@ -30,10 +31,19 @@ pub const PIO_ARROW_TABLE_GEN: i32 = 2;
 pub const PIO_ARROW_TABLE_LOAD: i32 = 3;
 pub const PIO_ARROW_TABLE_SHUNT: i32 = 4;
 pub const PIO_ARROW_TABLE_SWITCH: i32 = 5;
+pub const PIO_ARROW_TABLE_SOLVER_BUS: i32 = 6;
+pub const PIO_ARROW_TABLE_SOLVER_LOAD: i32 = 7;
+pub const PIO_ARROW_TABLE_SOLVER_SHUNT: i32 = 8;
+pub const PIO_ARROW_TABLE_SOLVER_BRANCH: i32 = 9;
+pub const PIO_ARROW_TABLE_SOLVER_SWITCH: i32 = 10;
+pub const PIO_ARROW_TABLE_SOLVER_ARC: i32 = 11;
+pub const PIO_ARROW_TABLE_SOLVER_GEN: i32 = 12;
+pub const PIO_ARROW_TABLE_SOLVER_STORAGE: i32 = 13;
+pub const PIO_ARROW_TABLE_SOLVER_HVDC: i32 = 14;
 
 // These values are the ABI: the `PIO_ARROW_TABLE_*` macros in include/powerio.h
 // are hand-synced to them. The set is append-only: these ids and each table's
-// column order are frozen, a new table takes the next id (5, 6, ...) and extends
+// column order are frozen, a new table takes the next id and extends
 // this assert, and new columns append (nullable) at the end so consumers read by
 // name. Pin them so a Rust-side edit that drifts from the header (a renumber, a
 // reorder, a dropped table) fails the build instead of silently exporting the
@@ -45,6 +55,15 @@ const _: () = assert!(
         && PIO_ARROW_TABLE_LOAD == 3
         && PIO_ARROW_TABLE_SHUNT == 4
         && PIO_ARROW_TABLE_SWITCH == 5
+        && PIO_ARROW_TABLE_SOLVER_BUS == 6
+        && PIO_ARROW_TABLE_SOLVER_LOAD == 7
+        && PIO_ARROW_TABLE_SOLVER_SHUNT == 8
+        && PIO_ARROW_TABLE_SOLVER_BRANCH == 9
+        && PIO_ARROW_TABLE_SOLVER_SWITCH == 10
+        && PIO_ARROW_TABLE_SOLVER_ARC == 11
+        && PIO_ARROW_TABLE_SOLVER_GEN == 12
+        && PIO_ARROW_TABLE_SOLVER_STORAGE == 13
+        && PIO_ARROW_TABLE_SOLVER_HVDC == 14
 );
 
 /// Build the requested table and export it over the C Data Interface. The
@@ -52,19 +71,49 @@ const _: () = assert!(
 /// them.
 pub fn export(net: &Network, table: i32) -> Result<(FFI_ArrowArray, FFI_ArrowSchema), String> {
     let rb = match table {
-        PIO_ARROW_TABLE_BUS => bus_batch(net),
-        PIO_ARROW_TABLE_BRANCH => branch_batch(net),
-        PIO_ARROW_TABLE_GEN => gen_batch(net),
-        PIO_ARROW_TABLE_LOAD => load_batch(net),
-        PIO_ARROW_TABLE_SHUNT => shunt_batch(net),
-        PIO_ARROW_TABLE_SWITCH => switch_batch(net),
+        PIO_ARROW_TABLE_BUS => bus_batch(net).map_err(|e| e.to_string())?,
+        PIO_ARROW_TABLE_BRANCH => branch_batch(net).map_err(|e| e.to_string())?,
+        PIO_ARROW_TABLE_GEN => gen_batch(net).map_err(|e| e.to_string())?,
+        PIO_ARROW_TABLE_LOAD => load_batch(net).map_err(|e| e.to_string())?,
+        PIO_ARROW_TABLE_SHUNT => shunt_batch(net).map_err(|e| e.to_string())?,
+        PIO_ARROW_TABLE_SWITCH => switch_batch(net).map_err(|e| e.to_string())?,
+        PIO_ARROW_TABLE_SOLVER_BUS => {
+            solver_bus_batch(&solver_tables(net)?).map_err(|e| e.to_string())?
+        }
+        PIO_ARROW_TABLE_SOLVER_LOAD => {
+            solver_load_batch(&solver_tables(net)?).map_err(|e| e.to_string())?
+        }
+        PIO_ARROW_TABLE_SOLVER_SHUNT => {
+            solver_shunt_batch(&solver_tables(net)?).map_err(|e| e.to_string())?
+        }
+        PIO_ARROW_TABLE_SOLVER_BRANCH => {
+            solver_branch_batch(&solver_tables(net)?).map_err(|e| e.to_string())?
+        }
+        PIO_ARROW_TABLE_SOLVER_SWITCH => {
+            solver_switch_batch(&solver_tables(net)?).map_err(|e| e.to_string())?
+        }
+        PIO_ARROW_TABLE_SOLVER_ARC => {
+            solver_arc_batch(&solver_tables(net)?).map_err(|e| e.to_string())?
+        }
+        PIO_ARROW_TABLE_SOLVER_GEN => {
+            solver_gen_batch(&solver_tables(net)?).map_err(|e| e.to_string())?
+        }
+        PIO_ARROW_TABLE_SOLVER_STORAGE => {
+            solver_storage_batch(&solver_tables(net)?).map_err(|e| e.to_string())?
+        }
+        PIO_ARROW_TABLE_SOLVER_HVDC => {
+            solver_hvdc_batch(&solver_tables(net)?).map_err(|e| e.to_string())?
+        }
         other => return Err(format!("unknown Arrow table id {other}")),
-    }
-    .map_err(|e| e.to_string())?;
+    };
 
     // The C Data Interface represents a record batch as a struct array.
     let data = StructArray::from(rb).into_data();
     to_ffi(&data).map_err(|e| e.to_string())
+}
+
+fn solver_tables(net: &Network) -> Result<NormalizedSolverTables, String> {
+    net.to_normalized_solver_tables().map_err(|e| e.to_string())
 }
 
 fn bus_batch(net: &Network) -> Result<RecordBatch, ArrowError> {
@@ -251,6 +300,341 @@ fn switch_batch(net: &Network) -> Result<RecordBatch, ArrowError> {
     ])
 }
 
+fn solver_bus_batch(t: &NormalizedSolverTables) -> Result<RecordBatch, ArrowError> {
+    batch(vec![
+        (
+            "index",
+            i64s(t.buses.iter().map(|x| usz(x.index)).collect()),
+        ),
+        (
+            "bus_id",
+            i64s(t.buses.iter().map(|x| ext(x.bus_id)).collect()),
+        ),
+        (
+            "source_row",
+            i64s(t.buses.iter().map(|x| opt_usz(x.source_row)).collect()),
+        ),
+        (
+            "kind",
+            i64s(t.buses.iter().map(|x| i64::from(x.kind as u8)).collect()),
+        ),
+        ("vm", f64s(t.buses.iter().map(|x| x.vm).collect())),
+        ("va", f64s(t.buses.iter().map(|x| x.va).collect())),
+        ("base_kv", f64s(t.buses.iter().map(|x| x.base_kv).collect())),
+        ("vmax", f64s(t.buses.iter().map(|x| x.vmax).collect())),
+        ("vmin", f64s(t.buses.iter().map(|x| x.vmin).collect())),
+        ("pd", f64s(t.buses.iter().map(|x| x.pd).collect())),
+        ("qd", f64s(t.buses.iter().map(|x| x.qd).collect())),
+        ("gs", f64s(t.buses.iter().map(|x| x.gs).collect())),
+        ("bs", f64s(t.buses.iter().map(|x| x.bs).collect())),
+        (
+            "component_label",
+            i64s(t.index.component_labels.iter().map(|&x| usz(x)).collect()),
+        ),
+        (
+            "is_reference",
+            u8s(t
+                .buses
+                .iter()
+                .map(|x| u8::from(t.index.reference_bus_indices.contains(&x.index)))
+                .collect()),
+        ),
+    ])
+}
+
+fn solver_load_batch(t: &NormalizedSolverTables) -> Result<RecordBatch, ArrowError> {
+    batch(vec![
+        (
+            "index",
+            i64s(t.loads.iter().map(|x| usz(x.index)).collect()),
+        ),
+        (
+            "source_row",
+            i64s(t.loads.iter().map(|x| opt_usz(x.source_row)).collect()),
+        ),
+        (
+            "bus_index",
+            i64s(t.loads.iter().map(|x| usz(x.bus_index)).collect()),
+        ),
+        ("p", f64s(t.loads.iter().map(|x| x.p).collect())),
+        ("q", f64s(t.loads.iter().map(|x| x.q).collect())),
+    ])
+}
+
+fn solver_shunt_batch(t: &NormalizedSolverTables) -> Result<RecordBatch, ArrowError> {
+    batch(vec![
+        (
+            "index",
+            i64s(t.shunts.iter().map(|x| usz(x.index)).collect()),
+        ),
+        (
+            "source_row",
+            i64s(t.shunts.iter().map(|x| opt_usz(x.source_row)).collect()),
+        ),
+        (
+            "bus_index",
+            i64s(t.shunts.iter().map(|x| usz(x.bus_index)).collect()),
+        ),
+        ("g", f64s(t.shunts.iter().map(|x| x.g).collect())),
+        ("b", f64s(t.shunts.iter().map(|x| x.b).collect())),
+    ])
+}
+
+fn solver_branch_batch(t: &NormalizedSolverTables) -> Result<RecordBatch, ArrowError> {
+    batch(vec![
+        (
+            "index",
+            i64s(t.branches.iter().map(|x| usz(x.index)).collect()),
+        ),
+        (
+            "source_row",
+            i64s(t.branches.iter().map(|x| opt_usz(x.source_row)).collect()),
+        ),
+        (
+            "from_bus_index",
+            i64s(t.branches.iter().map(|x| usz(x.from_bus_index)).collect()),
+        ),
+        (
+            "to_bus_index",
+            i64s(t.branches.iter().map(|x| usz(x.to_bus_index)).collect()),
+        ),
+        ("r", f64s(t.branches.iter().map(|x| x.r).collect())),
+        ("x", f64s(t.branches.iter().map(|x| x.x).collect())),
+        ("b", f64s(t.branches.iter().map(|x| x.b).collect())),
+        ("g_fr", f64s(t.branches.iter().map(|x| x.g_fr).collect())),
+        ("b_fr", f64s(t.branches.iter().map(|x| x.b_fr).collect())),
+        ("g_to", f64s(t.branches.iter().map(|x| x.g_to).collect())),
+        ("b_to", f64s(t.branches.iter().map(|x| x.b_to).collect())),
+        (
+            "rate_a",
+            f64s(t.branches.iter().map(|x| x.rate_a).collect()),
+        ),
+        (
+            "rate_b",
+            f64s(t.branches.iter().map(|x| x.rate_b).collect()),
+        ),
+        (
+            "rate_c",
+            f64s(t.branches.iter().map(|x| x.rate_c).collect()),
+        ),
+        ("tap", f64s(t.branches.iter().map(|x| x.tap).collect())),
+        ("shift", f64s(t.branches.iter().map(|x| x.shift).collect())),
+        (
+            "angmin",
+            f64s(t.branches.iter().map(|x| x.angmin).collect()),
+        ),
+        (
+            "angmax",
+            f64s(t.branches.iter().map(|x| x.angmax).collect()),
+        ),
+    ])
+}
+
+fn solver_switch_batch(t: &NormalizedSolverTables) -> Result<RecordBatch, ArrowError> {
+    batch(vec![
+        (
+            "index",
+            i64s(t.switches.iter().map(|x| usz(x.index)).collect()),
+        ),
+        (
+            "source_row",
+            i64s(t.switches.iter().map(|x| opt_usz(x.source_row)).collect()),
+        ),
+        (
+            "from_bus_index",
+            i64s(t.switches.iter().map(|x| usz(x.from_bus_index)).collect()),
+        ),
+        (
+            "to_bus_index",
+            i64s(t.switches.iter().map(|x| usz(x.to_bus_index)).collect()),
+        ),
+        (
+            "closed",
+            u8s(t.switches.iter().map(|x| u8::from(x.closed)).collect()),
+        ),
+        (
+            "thermal_rating",
+            f64s(
+                t.switches
+                    .iter()
+                    .map(|x| x.thermal_rating.unwrap_or(0.0))
+                    .collect(),
+            ),
+        ),
+        (
+            "current_rating",
+            f64s(
+                t.switches
+                    .iter()
+                    .map(|x| x.current_rating.unwrap_or(0.0))
+                    .collect(),
+            ),
+        ),
+        (
+            "pf",
+            f64s(t.switches.iter().map(|x| x.pf.unwrap_or(0.0)).collect()),
+        ),
+        (
+            "qf",
+            f64s(t.switches.iter().map(|x| x.qf.unwrap_or(0.0)).collect()),
+        ),
+        (
+            "pt",
+            f64s(t.switches.iter().map(|x| x.pt.unwrap_or(0.0)).collect()),
+        ),
+        (
+            "qt",
+            f64s(t.switches.iter().map(|x| x.qt.unwrap_or(0.0)).collect()),
+        ),
+    ])
+}
+
+fn solver_arc_batch(t: &NormalizedSolverTables) -> Result<RecordBatch, ArrowError> {
+    batch(vec![
+        ("index", i64s(t.arcs.iter().map(|x| usz(x.index)).collect())),
+        (
+            "branch_index",
+            i64s(t.arcs.iter().map(|x| usz(x.branch_index)).collect()),
+        ),
+        (
+            "terminal",
+            i64s(
+                t.arcs
+                    .iter()
+                    .map(|x| match x.terminal {
+                        SolverArcTerminal::From => 0,
+                        SolverArcTerminal::To => 1,
+                    })
+                    .collect(),
+            ),
+        ),
+        (
+            "from_bus_index",
+            i64s(t.arcs.iter().map(|x| usz(x.from_bus_index)).collect()),
+        ),
+        (
+            "to_bus_index",
+            i64s(t.arcs.iter().map(|x| usz(x.to_bus_index)).collect()),
+        ),
+        ("tap", f64s(t.arcs.iter().map(|x| x.tap).collect())),
+        ("shift", f64s(t.arcs.iter().map(|x| x.shift).collect())),
+        ("g_shunt", f64s(t.arcs.iter().map(|x| x.g_shunt).collect())),
+        ("b_shunt", f64s(t.arcs.iter().map(|x| x.b_shunt).collect())),
+        ("rate_a", f64s(t.arcs.iter().map(|x| x.rate_a).collect())),
+    ])
+}
+
+fn solver_gen_batch(t: &NormalizedSolverTables) -> Result<RecordBatch, ArrowError> {
+    batch(vec![
+        (
+            "index",
+            i64s(t.generators.iter().map(|x| usz(x.index)).collect()),
+        ),
+        (
+            "source_row",
+            i64s(t.generators.iter().map(|x| opt_usz(x.source_row)).collect()),
+        ),
+        (
+            "bus_index",
+            i64s(t.generators.iter().map(|x| usz(x.bus_index)).collect()),
+        ),
+        ("pg", f64s(t.generators.iter().map(|x| x.pg).collect())),
+        ("qg", f64s(t.generators.iter().map(|x| x.qg).collect())),
+        ("pmax", f64s(t.generators.iter().map(|x| x.pmax).collect())),
+        ("pmin", f64s(t.generators.iter().map(|x| x.pmin).collect())),
+        ("qmax", f64s(t.generators.iter().map(|x| x.qmax).collect())),
+        ("qmin", f64s(t.generators.iter().map(|x| x.qmin).collect())),
+        ("vg", f64s(t.generators.iter().map(|x| x.vg).collect())),
+        (
+            "mbase",
+            f64s(t.generators.iter().map(|x| x.mbase).collect()),
+        ),
+        (
+            "regulated_bus_index",
+            i64s(
+                t.generators
+                    .iter()
+                    .map(|x| opt_usz(x.regulated_bus_index))
+                    .collect(),
+            ),
+        ),
+    ])
+}
+
+fn solver_storage_batch(t: &NormalizedSolverTables) -> Result<RecordBatch, ArrowError> {
+    batch(vec![
+        (
+            "index",
+            i64s(t.storage.iter().map(|x| usz(x.index)).collect()),
+        ),
+        (
+            "source_row",
+            i64s(t.storage.iter().map(|x| opt_usz(x.source_row)).collect()),
+        ),
+        (
+            "bus_index",
+            i64s(t.storage.iter().map(|x| usz(x.bus_index)).collect()),
+        ),
+        ("ps", f64s(t.storage.iter().map(|x| x.ps).collect())),
+        ("qs", f64s(t.storage.iter().map(|x| x.qs).collect())),
+        ("energy", f64s(t.storage.iter().map(|x| x.energy).collect())),
+        (
+            "energy_rating",
+            f64s(t.storage.iter().map(|x| x.energy_rating).collect()),
+        ),
+        (
+            "charge_rating",
+            f64s(t.storage.iter().map(|x| x.charge_rating).collect()),
+        ),
+        (
+            "discharge_rating",
+            f64s(t.storage.iter().map(|x| x.discharge_rating).collect()),
+        ),
+        (
+            "thermal_rating",
+            f64s(t.storage.iter().map(|x| x.thermal_rating).collect()),
+        ),
+        ("qmin", f64s(t.storage.iter().map(|x| x.qmin).collect())),
+        ("qmax", f64s(t.storage.iter().map(|x| x.qmax).collect())),
+        ("r", f64s(t.storage.iter().map(|x| x.r).collect())),
+        ("x", f64s(t.storage.iter().map(|x| x.x).collect())),
+        ("p_loss", f64s(t.storage.iter().map(|x| x.p_loss).collect())),
+        ("q_loss", f64s(t.storage.iter().map(|x| x.q_loss).collect())),
+    ])
+}
+
+fn solver_hvdc_batch(t: &NormalizedSolverTables) -> Result<RecordBatch, ArrowError> {
+    batch(vec![
+        ("index", i64s(t.hvdc.iter().map(|x| usz(x.index)).collect())),
+        (
+            "source_row",
+            i64s(t.hvdc.iter().map(|x| opt_usz(x.source_row)).collect()),
+        ),
+        (
+            "from_bus_index",
+            i64s(t.hvdc.iter().map(|x| usz(x.from_bus_index)).collect()),
+        ),
+        (
+            "to_bus_index",
+            i64s(t.hvdc.iter().map(|x| usz(x.to_bus_index)).collect()),
+        ),
+        ("pf", f64s(t.hvdc.iter().map(|x| x.pf).collect())),
+        ("pt", f64s(t.hvdc.iter().map(|x| x.pt).collect())),
+        ("qf", f64s(t.hvdc.iter().map(|x| x.qf).collect())),
+        ("qt", f64s(t.hvdc.iter().map(|x| x.qt).collect())),
+        ("vf", f64s(t.hvdc.iter().map(|x| x.vf).collect())),
+        ("vt", f64s(t.hvdc.iter().map(|x| x.vt).collect())),
+        ("pmin", f64s(t.hvdc.iter().map(|x| x.pmin).collect())),
+        ("pmax", f64s(t.hvdc.iter().map(|x| x.pmax).collect())),
+        ("qminf", f64s(t.hvdc.iter().map(|x| x.qminf).collect())),
+        ("qmaxf", f64s(t.hvdc.iter().map(|x| x.qmaxf).collect())),
+        ("qmint", f64s(t.hvdc.iter().map(|x| x.qmint).collect())),
+        ("qmaxt", f64s(t.hvdc.iter().map(|x| x.qmaxt).collect())),
+        ("loss0", f64s(t.hvdc.iter().map(|x| x.loss0).collect())),
+        ("loss1", f64s(t.hvdc.iter().map(|x| x.loss1).collect())),
+    ])
+}
+
 fn batch(cols: Vec<(&str, ArrayRef)>) -> Result<RecordBatch, ArrowError> {
     let fields: Vec<Field> = cols
         .iter()
@@ -267,6 +651,10 @@ fn ext(id: BusId) -> i64 {
 
 fn usz(n: usize) -> i64 {
     i64::try_from(n).unwrap_or(-1)
+}
+
+fn opt_usz(n: Option<usize>) -> i64 {
+    n.map_or(-1, usz)
 }
 
 fn i64s(v: Vec<i64>) -> ArrayRef {
@@ -389,6 +777,14 @@ mod tests {
             .unwrap()
     }
 
+    fn i64_col<'a>(sa: &'a StructArray, name: &str) -> &'a Int64Array {
+        sa.column_by_name(name)
+            .unwrap()
+            .as_any()
+            .downcast_ref::<Int64Array>()
+            .unwrap()
+    }
+
     #[test]
     fn bus_table_round_trips_with_external_ids() {
         let n = net("case9.m");
@@ -434,6 +830,45 @@ mod tests {
         );
         assert_eq!(round_trip(&n, PIO_ARROW_TABLE_LOAD).len(), n.loads.len());
         assert_eq!(round_trip(&n, PIO_ARROW_TABLE_SHUNT).len(), n.shunts.len());
+    }
+
+    #[test]
+    fn normalized_solver_tables_export_dense_per_unit_rows() {
+        let n = net("case14.m");
+        let tables = n.to_normalized_solver_tables().unwrap();
+
+        assert_eq!(
+            round_trip(&n, PIO_ARROW_TABLE_SOLVER_BUS).len(),
+            tables.buses.len()
+        );
+        assert_eq!(
+            round_trip(&n, PIO_ARROW_TABLE_SOLVER_BRANCH).len(),
+            tables.branches.len()
+        );
+        assert_eq!(
+            round_trip(&n, PIO_ARROW_TABLE_SOLVER_ARC).len(),
+            tables.arcs.len()
+        );
+        assert_eq!(
+            round_trip(&n, PIO_ARROW_TABLE_SOLVER_GEN).len(),
+            tables.generators.len()
+        );
+
+        let bus = round_trip(&n, PIO_ARROW_TABLE_SOLVER_BUS);
+        assert_eq!(i64_col(&bus, "index").value(1), 1);
+        assert_eq!(i64_col(&bus, "bus_id").value(1), 2);
+        assert_eq!(i64_col(&bus, "source_row").value(1), 1);
+        assert!((f64_col(&bus, "pd").value(1) - 21.7 / 100.0).abs() < 1e-12);
+
+        let branch = round_trip(&n, PIO_ARROW_TABLE_SOLVER_BRANCH);
+        assert_eq!(i64_col(&branch, "from_bus_index").value(0), 0);
+        assert_eq!(i64_col(&branch, "to_bus_index").value(0), 1);
+
+        let arc = round_trip(&n, PIO_ARROW_TABLE_SOLVER_ARC);
+        assert_eq!(i64_col(&arc, "branch_index").value(0), 0);
+        assert_eq!(i64_col(&arc, "terminal").value(0), 0);
+        assert_eq!(i64_col(&arc, "branch_index").value(1), 0);
+        assert_eq!(i64_col(&arc, "terminal").value(1), 1);
     }
 
     #[test]

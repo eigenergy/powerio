@@ -81,7 +81,26 @@ later families can be added).
 | `validation` | object | yes | `{status, counts, passes[]}` |
 | `summary` | object | yes | `{elements{}, topology?, units?}` |
 | `lowering_history` | array | no | `LoweringRecord` per pass |
-| `derived` | object | no | optional matrix stats / cache keys |
+| `derived` | object | no | optional matrix stats, normalized solver table metadata, and cache keys |
+
+### Derived metadata
+
+`derived.normalized_solver_tables` records the compact identity metadata for
+`powerio::Network::to_normalized_solver_tables()` without embedding every table
+row in the package. The full tables are a derived artifact; this metadata lets a
+compiler cache prove it was built from the same lowering pass and row order.
+
+The block carries:
+
+- `pass`: `"balanced-to-normalized-solver-tables"`;
+- `units`: per unit power, per unit voltage, radian angles, per unit impedance
+  and admittance, zero based dense indices;
+- `row_counts`: counts for buses, loads, shunts, branches, switches, arcs,
+  generators, storage, and HVDC rows;
+- `bus_ids`, `reference_bus_indices`, and `component_labels`;
+- `branch_from_arc_indices` and `branch_to_arc_indices`;
+- `source_rows`: source row indices for rows that survived normalization, with
+  `null` for synthetic rows such as 3-winding star buses and branches.
 
 ### Diagnostics
 
