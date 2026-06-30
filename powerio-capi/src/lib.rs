@@ -1067,119 +1067,11 @@ const _: fn() = || {
 };
 
 #[cfg(feature = "pkg")]
-#[derive(Default)]
-struct BalancedPackageOptions {
-    include_solver_metadata: bool,
-}
-
-#[cfg(feature = "pkg")]
-fn json_object_from_options(
-    options_json: *const c_char,
-    name: &str,
-) -> Result<serde_json::Map<String, serde_json::Value>, String> {
-    let Some(text) = optional_cstr(options_json, name)? else {
-        return Ok(serde_json::Map::new());
-    };
-    if text.trim().is_empty() {
-        return Ok(serde_json::Map::new());
+fn lowering_options(base_mva: f64) -> powerio_pkg::MulticonductorToBalancedOptions {
+    powerio_pkg::MulticonductorToBalancedOptions {
+        base_mva,
+        ..Default::default()
     }
-    let value: serde_json::Value =
-        serde_json::from_str(text).map_err(|e| format!("{name} is not valid JSON: {e}"))?;
-    match value {
-        serde_json::Value::Object(obj) => Ok(obj),
-        _ => Err(format!("{name} must be a JSON object")),
-    }
-}
-
-#[cfg(feature = "pkg")]
-fn take_bool_option(
-    obj: &mut serde_json::Map<String, serde_json::Value>,
-    key: &str,
-) -> Result<Option<bool>, String> {
-    match obj.remove(key) {
-        Some(serde_json::Value::Bool(value)) => Ok(Some(value)),
-        Some(_) => Err(format!("option `{key}` must be a boolean")),
-        None => Ok(None),
-    }
-}
-
-#[cfg(feature = "pkg")]
-fn take_f64_option(
-    obj: &mut serde_json::Map<String, serde_json::Value>,
-    key: &str,
-) -> Result<Option<f64>, String> {
-    match obj.remove(key) {
-        Some(serde_json::Value::Number(value)) => value
-            .as_f64()
-            .ok_or_else(|| format!("option `{key}` must be a finite number"))
-            .map(Some),
-        Some(_) => Err(format!("option `{key}` must be a number")),
-        None => Ok(None),
-    }
-}
-
-#[cfg(feature = "pkg")]
-fn take_string_option(
-    obj: &mut serde_json::Map<String, serde_json::Value>,
-    key: &str,
-) -> Result<Option<String>, String> {
-    match obj.remove(key) {
-        Some(serde_json::Value::String(value)) => Ok(Some(value)),
-        Some(_) => Err(format!("option `{key}` must be a string")),
-        None => Ok(None),
-    }
-}
-
-#[cfg(feature = "pkg")]
-fn reject_unknown_options(obj: &serde_json::Map<String, serde_json::Value>) -> Result<(), String> {
-    match obj.keys().next() {
-        Some(key) => Err(format!("unknown option `{key}`")),
-        None => Ok(()),
-    }
-}
-
-#[cfg(feature = "pkg")]
-fn parse_balanced_package_options(
-    options_json: *const c_char,
-) -> Result<BalancedPackageOptions, String> {
-    let mut obj = json_object_from_options(options_json, "options_json")?;
-    let include_solver_metadata =
-        take_bool_option(&mut obj, "include_solver_metadata")?.unwrap_or(false);
-    reject_unknown_options(&obj)?;
-    Ok(BalancedPackageOptions {
-        include_solver_metadata,
-    })
-}
-
-#[cfg(feature = "pkg")]
-fn parse_empty_package_options(options_json: *const c_char) -> Result<(), String> {
-    let obj = json_object_from_options(options_json, "options_json")?;
-    reject_unknown_options(&obj)
-}
-
-#[cfg(feature = "pkg")]
-fn parse_lowering_options(
-    options_json: *const c_char,
-) -> Result<powerio_pkg::MulticonductorToBalancedOptions, String> {
-    let mut obj = json_object_from_options(options_json, "options_json")?;
-    let mut options = powerio_pkg::MulticonductorToBalancedOptions::default();
-    if let Some(base_mva) = take_f64_option(&mut obj, "base_mva")? {
-        options.base_mva = base_mva;
-    }
-    if let Some(convention) = take_string_option(&mut obj, "convention")? {
-        options.convention = match convention.as_str() {
-            "fortescue_power_invariant" | "FortescuePowerInvariant" => {
-                powerio_pkg::SequenceTransformConvention::FortescuePowerInvariant
-            }
-            _ => {
-                return Err(format!(
-                    "unknown convention `{convention}`; expected `fortescue_power_invariant`"
-                ));
-            }
-        };
-    }
-    reject_unknown_options(&obj)?;
-    Ok(options)
 }
 
 #[cfg(feature = "pkg")]
@@ -1288,14 +1180,14 @@ pub unsafe extern "C" fn pio_package_to_json(
 }
 
 /// Wrap a balanced [`PioNetwork`] handle in a `.pio.json` package. The C handle
-/// name is historical; the payload is `powerio::BalancedNetwork`. `options_json`
-/// may be NULL or `{}`. The optional key `include_solver_metadata` attaches
-/// compact normalized solver table metadata.
+/// name is historical; the payload is `powerio::BalancedNetwork`.
+/// `include_solver_metadata != 0` attaches compact normalized solver table
+/// metadata.
 #[cfg(feature = "pkg")]
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_package_from_balanced_network(
     net: *const PioNetwork,
-    options_json: *const c_char,
+    include_solver_metadata: i32,
     errbuf: *mut c_char,
     errlen: usize,
 ) -> *mut PioPackage {
@@ -1306,9 +1198,8 @@ pub unsafe extern "C" fn pio_package_from_balanced_network(
             "panic while packaging balanced network",
             || {
                 let net = network_ref(net).ok_or_else(|| "network handle is NULL".to_string())?;
-                let options = parse_balanced_package_options(options_json)?;
                 let mut package = powerio_pkg::CompilerPackage::from_balanced(net.net.clone());
-                if options.include_solver_metadata {
+                if include_solver_metadata != 0 {
                     package
                         .attach_normalized_solver_table_metadata()
                         .map_err(|e| e.to_string())?;
@@ -1321,12 +1212,11 @@ pub unsafe extern "C" fn pio_package_from_balanced_network(
 
 /// Wrap a multiconductor [`PioDistNetwork`] handle in a `.pio.json` package. The
 /// C handle name is historical; the payload is
-/// `powerio_dist::MulticonductorNetwork`. `options_json` may be NULL or `{}`.
+/// `powerio_dist::MulticonductorNetwork`.
 #[cfg(all(feature = "pkg", feature = "dist"))]
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_package_from_multiconductor_network(
     net: *const PioDistNetwork,
-    options_json: *const c_char,
     errbuf: *mut c_char,
     errlen: usize,
 ) -> *mut PioPackage {
@@ -1339,7 +1229,6 @@ pub unsafe extern "C" fn pio_package_from_multiconductor_network(
                 let net = net
                     .as_ref()
                     .ok_or_else(|| "distribution network handle is NULL".to_string())?;
-                parse_empty_package_options(options_json)?;
                 Ok(powerio_pkg::CompilerPackage::from_multiconductor(
                     net.net.clone(),
                 ))
@@ -1440,14 +1329,13 @@ pub unsafe extern "C" fn pio_package_diagnostics_json(
 }
 
 /// Return the multiconductor-to-balanced lowering preflight report as JSON.
-/// `options_json` may be NULL or `{}`; accepted keys are `base_mva` and
-/// `convention`. Returns `NULL` if the package is not multiconductor or the
-/// options are invalid.
+/// `base_mva` is the three phase system power base used for the balanced
+/// per-unit projection. Returns `NULL` if the package is not multiconductor.
 #[cfg(feature = "pkg")]
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_package_multiconductor_to_balanced_preflight_json(
     pkg: *const PioPackage,
-    options_json: *const c_char,
+    base_mva: f64,
     errbuf: *mut c_char,
     errlen: usize,
 ) -> *mut c_char {
@@ -1456,14 +1344,16 @@ pub unsafe extern "C" fn pio_package_multiconductor_to_balanced_preflight_json(
             let pkg = pkg
                 .as_ref()
                 .ok_or_else(|| "package handle is NULL".to_string())?;
-            let options = parse_lowering_options(options_json)?;
             let net = pkg.package.as_multiconductor().ok_or_else(|| {
                 format!(
                     "multiconductor preflight requires a multiconductor package, got {:?}",
                     pkg.package.model_kind()
                 )
             })?;
-            let report = powerio_pkg::check_multiconductor_to_balanced_lowering(net, options);
+            let report = powerio_pkg::check_multiconductor_to_balanced_lowering(
+                net,
+                lowering_options(base_mva),
+            );
             serde_json::to_string(&report).map_err(|e| e.to_string())
         }));
         match result {
@@ -1482,13 +1372,13 @@ pub unsafe extern "C" fn pio_package_multiconductor_to_balanced_preflight_json(
 
 /// Lower a multiconductor package to a new balanced package. Call
 /// [`pio_package_multiconductor_to_balanced_preflight_json`] first when the
-/// caller needs structured blockers for unsupported inputs. `options_json` uses
-/// the same defaults and keys as the preflight function.
+/// caller needs structured blockers for unsupported inputs. `base_mva` is the
+/// three phase system power base used for the balanced per-unit projection.
 #[cfg(feature = "pkg")]
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_package_lower_multiconductor_to_balanced(
     pkg: *const PioPackage,
-    options_json: *const c_char,
+    base_mva: f64,
     errbuf: *mut c_char,
     errlen: usize,
 ) -> *mut PioPackage {
@@ -1497,9 +1387,8 @@ pub unsafe extern "C" fn pio_package_lower_multiconductor_to_balanced(
             let pkg = pkg
                 .as_ref()
                 .ok_or_else(|| "package handle is NULL".to_string())?;
-            let options = parse_lowering_options(options_json)?;
             pkg.package
-                .lower_multiconductor_to_balanced(options)
+                .lower_multiconductor_to_balanced(lowering_options(base_mva))
                 .map_err(|e| e.to_string())
         })
     }
@@ -2102,13 +1991,13 @@ mod tests {
             "PioPackage *pio_package_parse_str(const char *text, char *errbuf, size_t errlen);",
             "void pio_package_free(PioPackage *pkg);",
             "char *pio_package_to_json(const PioPackage *pkg, char *errbuf, size_t errlen);",
-            "PioPackage *pio_package_from_balanced_network(const PioNetwork *net, const char *options_json, char *errbuf, size_t errlen);",
-            "PioPackage *pio_package_from_multiconductor_network(const PioDistNetwork *net, const char *options_json, char *errbuf, size_t errlen);",
+            "PioPackage *pio_package_from_balanced_network(const PioNetwork *net, int32_t include_solver_metadata, char *errbuf, size_t errlen);",
+            "PioPackage *pio_package_from_multiconductor_network(const PioDistNetwork *net, char *errbuf, size_t errlen);",
             "int32_t pio_package_validate(PioPackage *pkg, char *errbuf, size_t errlen);",
             "char *pio_package_validation_json(const PioPackage *pkg, char *errbuf, size_t errlen);",
             "char *pio_package_diagnostics_json(const PioPackage *pkg, char *errbuf, size_t errlen);",
-            "char *pio_package_multiconductor_to_balanced_preflight_json(const PioPackage *pkg, const char *options_json, char *errbuf, size_t errlen);",
-            "PioPackage *pio_package_lower_multiconductor_to_balanced(const PioPackage *pkg, const char *options_json, char *errbuf, size_t errlen);",
+            "char *pio_package_multiconductor_to_balanced_preflight_json(const PioPackage *pkg, double base_mva, char *errbuf, size_t errlen);",
+            "PioPackage *pio_package_lower_multiconductor_to_balanced(const PioPackage *pkg, double base_mva, char *errbuf, size_t errlen);",
             "PioDistNetwork *pio_dist_parse_file(const char *path, const char *from, char *errbuf, size_t errlen);",
             "PioDistNetwork *pio_dist_parse_str(const char *text, const char *format, char *errbuf, size_t errlen);",
             "void pio_dist_network_free(PioDistNetwork *net);",
@@ -2810,15 +2699,9 @@ mpc.branch = [
     #[test]
     fn package_parse_free_to_json_and_reports() {
         let net = case9();
-        let options = CString::new(r#"{"include_solver_metadata":true}"#).unwrap();
         let mut err = [0 as c_char; PIO_ERRBUF_MIN];
         unsafe {
-            let pkg = pio_package_from_balanced_network(
-                net,
-                options.as_ptr(),
-                err.as_mut_ptr(),
-                err.len(),
-            );
+            let pkg = pio_package_from_balanced_network(net, 1, err.as_mut_ptr(), err.len());
             assert!(
                 !pkg.is_null(),
                 "package constructor failed: {}",
@@ -2876,40 +2759,19 @@ mpc.branch = [
 
     #[cfg(feature = "pkg")]
     #[test]
-    fn package_rejects_unknown_balanced_option() {
+    fn package_balanced_constructor_omits_solver_metadata_by_default() {
         let net = case9();
-        let options = CString::new(r#"{"include_sovler_metadata":true}"#).unwrap();
         let mut err = [0 as c_char; PIO_ERRBUF_MIN];
         unsafe {
-            let pkg = pio_package_from_balanced_network(
-                net,
-                options.as_ptr(),
-                err.as_mut_ptr(),
-                err.len(),
+            let pkg = pio_package_from_balanced_network(net, 0, err.as_mut_ptr(), err.len());
+            assert!(
+                !pkg.is_null(),
+                "package constructor failed: {}",
+                CStr::from_ptr(err.as_ptr()).to_str().unwrap()
             );
-            assert!(pkg.is_null());
-            let msg = CStr::from_ptr(err.as_ptr()).to_str().unwrap();
-            assert!(msg.contains("unknown option"), "got: {msg}");
-            pio_network_free(net);
-        }
-    }
-
-    #[cfg(feature = "pkg")]
-    #[test]
-    fn package_rejects_non_utf8_options() {
-        let net = case9();
-        let options = [0xff_u8, 0];
-        let mut err = [0 as c_char; PIO_ERRBUF_MIN];
-        unsafe {
-            let pkg = pio_package_from_balanced_network(
-                net,
-                options.as_ptr().cast::<c_char>(),
-                err.as_mut_ptr(),
-                err.len(),
-            );
-            assert!(pkg.is_null());
-            let msg = CStr::from_ptr(err.as_ptr()).to_str().unwrap();
-            assert!(msg.contains("options_json is not UTF-8"), "got: {msg}");
+            let v = package_json(pkg);
+            assert!(v["derived"].get("normalized_solver_tables").is_none());
+            pio_package_free(pkg);
             pio_network_free(net);
         }
     }
@@ -3022,12 +2884,8 @@ mpc.branch = [
             };
             let mut err = [0 as c_char; PIO_ERRBUF_MIN];
             unsafe {
-                let pkg = pio_package_from_multiconductor_network(
-                    &dist,
-                    std::ptr::null(),
-                    err.as_mut_ptr(),
-                    err.len(),
-                );
+                let pkg =
+                    pio_package_from_multiconductor_network(&dist, err.as_mut_ptr(), err.len());
                 assert!(
                     !pkg.is_null(),
                     "multiconductor package constructor failed: {}",
@@ -3036,10 +2894,9 @@ mpc.branch = [
                 let v = package_json(pkg);
                 assert_eq!(v["model_kind"], serde_json::json!("multiconductor"));
 
-                let preflight_opts = CString::new(r#"{"base_mva":50.0}"#).unwrap();
                 let report = pio_package_multiconductor_to_balanced_preflight_json(
                     pkg,
-                    preflight_opts.as_ptr(),
+                    50.0,
                     err.as_mut_ptr(),
                     err.len(),
                 );
@@ -3054,12 +2911,9 @@ mpc.branch = [
                 assert_eq!(report_json["base_mva"], serde_json::json!(50.0));
                 pio_string_free(report);
 
-                let lower_opts =
-                    CString::new(r#"{"base_mva":75.0,"convention":"fortescue_power_invariant"}"#)
-                        .unwrap();
                 let lowered = pio_package_lower_multiconductor_to_balanced(
                     pkg,
-                    lower_opts.as_ptr(),
+                    75.0,
                     err.as_mut_ptr(),
                     err.len(),
                 );
@@ -3078,6 +2932,39 @@ mpc.branch = [
                     lowered_json["lowering_history"][0]["pass"],
                     serde_json::json!("multiconductor-to-balanced")
                 );
+
+                let invalid_report = pio_package_multiconductor_to_balanced_preflight_json(
+                    pkg,
+                    0.0,
+                    err.as_mut_ptr(),
+                    err.len(),
+                );
+                assert!(
+                    !invalid_report.is_null(),
+                    "invalid-base preflight failed: {}",
+                    CStr::from_ptr(err.as_ptr()).to_str().unwrap()
+                );
+                let invalid_report_json: serde_json::Value =
+                    serde_json::from_str(CStr::from_ptr(invalid_report).to_str().unwrap()).unwrap();
+                assert_eq!(invalid_report_json["status"], serde_json::json!("error"));
+                assert!(
+                    invalid_report_json["diagnostics"]
+                        .as_array()
+                        .unwrap()
+                        .iter()
+                        .any(|d| d["code"] == "LOWER.MULTI_TO_BALANCED.INVALID_BASE_MVA")
+                );
+                pio_string_free(invalid_report);
+
+                let invalid_lowered = pio_package_lower_multiconductor_to_balanced(
+                    pkg,
+                    0.0,
+                    err.as_mut_ptr(),
+                    err.len(),
+                );
+                assert!(invalid_lowered.is_null());
+                let msg = CStr::from_ptr(err.as_ptr()).to_str().unwrap();
+                assert!(msg.contains("base_mva must be positive"), "got: {msg}");
 
                 pio_package_free(lowered);
                 pio_package_free(pkg);

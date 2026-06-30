@@ -614,12 +614,12 @@ char *pio_package_to_json(const PioPackage *pkg, char *errbuf, size_t errlen);
 #if defined(PIO_PKG)
 /**
  * Wrap a balanced [`PioNetwork`] handle in a `.pio.json` package. The C handle
- * name is historical; the payload is `powerio::BalancedNetwork`. `options_json`
- * may be NULL or `{}`. The optional key `include_solver_metadata` attaches
- * compact normalized solver table metadata.
+ * name is historical; the payload is `powerio::BalancedNetwork`.
+ * `include_solver_metadata != 0` attaches compact normalized solver table
+ * metadata.
  */
 PioPackage *pio_package_from_balanced_network(const PioNetwork *net,
-                                              const char *options_json,
+                                              int32_t include_solver_metadata,
                                               char *errbuf,
                                               size_t errlen);
 #endif
@@ -628,10 +628,9 @@ PioPackage *pio_package_from_balanced_network(const PioNetwork *net,
 /**
  * Wrap a multiconductor [`PioDistNetwork`] handle in a `.pio.json` package. The
  * C handle name is historical; the payload is
- * `powerio_dist::MulticonductorNetwork`. `options_json` may be NULL or `{}`.
+ * `powerio_dist::MulticonductorNetwork`.
  */
 PioPackage *pio_package_from_multiconductor_network(const PioDistNetwork *net,
-                                                    const char *options_json,
                                                     char *errbuf,
                                                     size_t errlen);
 #endif
@@ -663,12 +662,11 @@ char *pio_package_diagnostics_json(const PioPackage *pkg, char *errbuf, size_t e
 #if defined(PIO_PKG)
 /**
  * Return the multiconductor-to-balanced lowering preflight report as JSON.
- * `options_json` may be NULL or `{}`; accepted keys are `base_mva` and
- * `convention`. Returns `NULL` if the package is not multiconductor or the
- * options are invalid.
+ * `base_mva` is the three phase system power base used for the balanced
+ * per-unit projection. Returns `NULL` if the package is not multiconductor.
  */
 char *pio_package_multiconductor_to_balanced_preflight_json(const PioPackage *pkg,
-                                                            const char *options_json,
+                                                            double base_mva,
                                                             char *errbuf,
                                                             size_t errlen);
 #endif
@@ -677,11 +675,11 @@ char *pio_package_multiconductor_to_balanced_preflight_json(const PioPackage *pk
 /**
  * Lower a multiconductor package to a new balanced package. Call
  * [`pio_package_multiconductor_to_balanced_preflight_json`] first when the
- * caller needs structured blockers for unsupported inputs. `options_json` uses
- * the same defaults and keys as the preflight function.
+ * caller needs structured blockers for unsupported inputs. `base_mva` is the
+ * three phase system power base used for the balanced per-unit projection.
  */
 PioPackage *pio_package_lower_multiconductor_to_balanced(const PioPackage *pkg,
-                                                         const char *options_json,
+                                                         double base_mva,
                                                          char *errbuf,
                                                          size_t errlen);
 #endif

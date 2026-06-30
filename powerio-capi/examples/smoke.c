@@ -128,7 +128,7 @@ int main(int argc, char **argv) {
      * package, serialize it, and parse it back. */
     {
         CHECK(pio_has_feature("pkg") == 1, "pio_has_feature(pkg) should be 1");
-        PioPackage *pkg = pio_package_from_balanced_network(c, NULL, err, sizeof err);
+        PioPackage *pkg = pio_package_from_balanced_network(c, 0, err, sizeof err);
         CHECK(pkg != NULL, err);
         CHECK(pio_package_validate(pkg, err, sizeof err) == 0, err);
 

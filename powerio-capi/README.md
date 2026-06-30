@@ -140,11 +140,12 @@ compiler package handle, distinct from the parsed network handles:
   blockers before lowering, and `pio_package_lower_multiconductor_to_balanced`
   returns a new balanced package when the input is ready.
 
-Options cross as JSON objects. `NULL` and `{}` mean defaults. The balanced
-constructor accepts `include_solver_metadata` (default `false`). The
-multiconductor lowering calls accept `base_mva` (default `100.0`) and
-`convention` (default `fortescue_power_invariant`). Unknown option keys are
-errors.
+Constructor and lowering options cross as typed parameters. The balanced
+constructor takes `include_solver_metadata`; any nonzero value records compact
+normalized solver table metadata. The multiconductor lowering calls take
+`base_mva`, the three phase system power base used for the balanced per-unit
+projection. The transform convention is fixed by these functions; if another
+convention becomes a real public option, it should get a new additive symbol.
 
 ## API names
 
