@@ -123,6 +123,40 @@ int main(int argc, char **argv) {
     pio_string_free(json);
     pio_network_free(c2);
 
+#ifdef PIO_PKG
+    /* Compiler package surface: wrap the live balanced handle, validate the
+     * package, serialize it, and parse it back. */
+    {
+        CHECK(pio_has_feature("pkg") == 1, "pio_has_feature(pkg) should be 1");
+        PioPackage *pkg = pio_package_from_balanced_network(c, NULL, err, sizeof err);
+        CHECK(pkg != NULL, err);
+        CHECK(pio_package_validate(pkg, err, sizeof err) == 0, err);
+
+        char *validation = pio_package_validation_json(pkg, err, sizeof err);
+        CHECK(validation != NULL, err);
+        CHECK(strstr(validation, "\"status\":\"ok\"") != NULL,
+              "package validation JSON did not report ok");
+        pio_string_free(validation);
+
+        char *diagnostics = pio_package_diagnostics_json(pkg, err, sizeof err);
+        CHECK(diagnostics != NULL, err);
+        CHECK(strcmp(diagnostics, "[]") == 0, "unexpected package diagnostics");
+        pio_string_free(diagnostics);
+
+        char *pkg_json = pio_package_to_json(pkg, err, sizeof err);
+        CHECK(pkg_json != NULL, err);
+        CHECK(strstr(pkg_json, "\"model_kind\":\"balanced\"") != NULL,
+              "package JSON lost the balanced model kind");
+
+        PioPackage *pkg2 = pio_package_parse_str(pkg_json, err, sizeof err);
+        CHECK(pkg2 != NULL, err);
+        pio_package_free(pkg2);
+        pio_string_free(pkg_json);
+        pio_package_free(pkg);
+        printf("package surface OK\n");
+    }
+#endif
+
     /* In-memory parse: read the bytes ourselves and parse them with an explicit
      * format, then confirm it agrees with the path-based parse. */
     {

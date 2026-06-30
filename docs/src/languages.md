@@ -34,6 +34,7 @@ Verb taxonomy:
 | Parsed conversion | `net.to_format(to)` | `net.to_format(to)` | `to_format(net, to)` | `pio_to_format` |
 | MATPOWER text | `net.to_matpower()` | `net.to_matpower()` | `to_matpower(net)` | `pio_to_format` + `"matpower"` |
 | JSON text | `net.to_json()` | `net.to_json()` | `to_json(net)` | `pio_to_format` + `"powerio-json"` |
+| Package JSON | `CompilerPackage::to_json()` | package transport | `to_package` / `write_package` | `pio_package_*` |
 | Normalized copy | `net.to_normalized()` | `net.to_normalized()` | `to_normalized(net)` | `pio_normalize` |
 | Dense tables | typed table API | `to_dense` | `to_dense` | `pio_*` extractors |
 | PyPSA CSV folder | `read_pypsa_csv_folder` / `write_pypsa_csv_folder` | `read_pypsa_csv_folder` / `net.write_pypsa_csv_folder` | `parse_file(dir; from="pypsa-csv")` / `write_pypsa_csv_folder` | `pio_parse_file` / `pio_write_dir` + `"pypsa-csv"` |
@@ -49,9 +50,11 @@ language APIs keep their per-format conveniences (`to_matpower`, `from_json`,
 ## C ABI and binding compatibility
 
 The C ABI is the stable boundary for non Rust callers. Handles own parsed
-networks. Callers free network handles with `pio_network_free`, free returned
-text with `pio_string_free`, size output buffers before filling them, and treat
-every format name as a string routed through the same parser and writer hub.
+networks. `PioPackage` handles own `.pio.json` compiler packages. Callers free
+network handles with `pio_network_free`, package handles with
+`pio_package_free`, free returned text with `pio_string_free`, size output
+buffers before filling them, and treat every format name as a string routed
+through the same parser and writer hub.
 
 C ABI review points:
 
@@ -61,21 +64,22 @@ C ABI review points:
 - returned text and warning buffers must be NUL terminated when capacity permits;
 - reported lengths must let callers allocate exact buffers;
 - header declarations and exported Rust symbols must match;
-- feature gated exports such as Arrow and GridFM must be additive;
+- feature gated exports such as Arrow, GridFM, distribution, and packages must
+  be additive;
 - ownership rules must be documented in the header, README, and binding code.
 
-Julia's `PowerIO.jl` uses the C ABI for handles, dense extractors, Arrow, GridFM,
-PyPSA CSV folders, and distribution conversion. Whole-network transport uses
-`powerio-json`, so the binding does not stitch together a separate model from
-individual table calls. The Julia binding checks `pio_abi_version()` against
-`PIO_ABI_VERSION` on first use. Distribution calls also check
-`pio_dist_abi_version()`.
+Julia's `PowerIO.jl` uses the C ABI for handles, dense extractors, Arrow,
+GridFM, PyPSA CSV folders, distribution conversion, and `.pio.json` package
+construction. Whole-network transport uses `powerio-json`, so the binding does
+not stitch together a separate model from individual table calls. The Julia
+binding checks `pio_abi_version()` against `PIO_ABI_VERSION` on first use.
+Distribution calls also check `pio_dist_abi_version()`.
 
 During development, test the sibling Julia binding against the local C ABI
 instead of an artifact:
 
 ```sh
-cargo build -p powerio-capi --release --features arrow,gridfm,dist
+cargo build -p powerio-capi --release --features arrow,gridfm,dist,pkg
 POWERIO_CAPI=$PWD/target/release/libpowerio_capi.dylib \
   julia --project=../PowerIO.jl -e 'using Pkg; Pkg.test()'
 ```
@@ -105,7 +109,8 @@ parse or conversion behavior.
 | Rust package object | n/a | `powerio_pkg::CompilerPackage` | n/a | n/a | Serializes to `.pio.json` and carries `model_kind`. |
 | Python transmission handle | `powerio.Case` | `powerio.Network` / `powerio.BalancedNetwork` | 0.3.3 | removed in 0.4.0 | `Case` is no longer importable. |
 | Python distribution handle | `powerio.dist.DistCase` | `powerio.dist.MulticonductorNetwork` / `powerio.dist.DistNetwork` | 0.3.3 | removed in 0.4.0 | `DistCase` is no longer importable. |
-| C ABI | `PioNetwork` / `PioDistNetwork` | unchanged `pio_*` / `pio_dist_*` handles | n/a | n/a | `PIO_ABI_VERSION` stays 4 and `PIO_DIST_ABI_VERSION` stays 1; symbol renames are not part of the 0.4 package spine. |
+| C ABI network handles | `PioNetwork` / `PioDistNetwork` | unchanged `pio_*` / `pio_dist_*` handles | n/a | n/a | `PIO_ABI_VERSION` stays 4 and `PIO_DIST_ABI_VERSION` stays 1; symbol renames are not part of the 0.4 package spine. |
+| C ABI package handle | n/a | `PioPackage` / `pio_package_*` | 0.4.0 | n/a | The package functions use `balanced` and `multiconductor` where the model family matters. |
 | MCP | older case helper names | `parse`, `save`, `summary`, `display` | 0.3.3 | kept as Python compatibility wrappers in 0.4 | Advertised tools use the semantic names; `.pio.json` package transport is accepted by the network tools. |
 
 ## Distribution surface (`powerio-dist`)

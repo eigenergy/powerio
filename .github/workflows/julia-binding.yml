@@ -46,11 +46,10 @@ jobs:
       if: steps.powerio-jl.outputs.available == 'true'
     - name: Build powerio-capi
       if: steps.powerio-jl.outputs.available == 'true'
-      # --features arrow,gridfm,dist so PowerIO.jl's Arrow export, gridfm reader,
-      # and the pio_dist_* distribution surface bind against real symbols rather
-      # than skipping (arrow_available() / gridfm_available() / pio_has_feature
-      # gate them).
-      run: cargo build -p powerio-capi --release --features arrow,gridfm,dist
+      # --features arrow,gridfm,dist,pkg so PowerIO.jl's Arrow export, gridfm
+      # reader, distribution surface, and package surface bind against real
+      # symbols rather than skipping behind feature probes.
+      run: cargo build -p powerio-capi --release --features arrow,gridfm,dist,pkg
     - name: Check out PowerIO.jl
       if: steps.powerio-jl.outputs.available == 'true'
       uses: actions/checkout@v6

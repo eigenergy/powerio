@@ -13,15 +13,15 @@ cargo test
 cargo test -p powerio-cli --test cli
 cargo test -p powerio-capi
 cargo test -p powerio-capi --no-default-features
-cargo test -p powerio-capi --features arrow,gridfm,dist
+cargo test -p powerio-capi --features arrow,gridfm,dist,pkg
 cargo clippy -p powerio-capi --all-targets --no-default-features -- -D warnings
-cargo clippy -p powerio-capi --all-targets --features arrow,gridfm,dist -- -D warnings
+cargo clippy -p powerio-capi --all-targets --features arrow,gridfm,dist,pkg -- -D warnings
 cargo build -p powerio-py
 python3.12 -m venv .venv
 .venv/bin/python -m pip install --upgrade pip maturin -r benchmarks/requirements.txt
 env VIRTUAL_ENV=$PWD/.venv .venv/bin/maturin develop --release
 .venv/bin/pytest python/tests
-cargo build -p powerio-capi --release --features arrow,gridfm,dist
+cargo build -p powerio-capi --release --features arrow,gridfm,dist,pkg
 scripts/capi-header-parity.sh
 scripts/capi-smoke.sh
 POWERIO_CAPI=$PWD/target/release/libpowerio_capi.dylib \
@@ -64,7 +64,7 @@ When all required legs pass, the gates cover these properties:
 - the checked in C header declares the same `pio_*` symbols exported from the
   Rust C ABI source;
 - the checked in C and C++ examples compile and run against the release C ABI
-  with Arrow, GridFM, and distribution features enabled;
+  with Arrow, GridFM, distribution, and package features enabled;
 - Python parse, conversion, matrix, graph, package, and display paths pass their
   binding tests when extras are installed.
 - ASV discovers and runs the Python parse, \\(Y_{\mathrm{bus}}\\), and B' benchmark definitions
@@ -72,7 +72,7 @@ When all required legs pass, the gates cover these properties:
 - the parser fuzz targets build and enter libFuzzer, covering the hand written
   text and binary readers.
 - Julia's `PowerIO.jl` passes against the local release C ABI with Arrow,
-  GridFM, and distribution features enabled.
+  GridFM, distribution, and package features enabled.
 - CLI help, stdout/stderr, JSON summary, batch matrix export metadata,
   directory target errors, and family mismatch exits pass through the binary
   integration tests.
