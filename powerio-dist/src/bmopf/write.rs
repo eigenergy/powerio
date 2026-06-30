@@ -12,8 +12,8 @@ use serde_json::{Map, Value, json};
 
 use crate::convert::Conversion;
 use crate::model::{
-    Configuration, DistGenerator, DistLoadVoltageModel, DistNetwork, DistSourceFormat,
-    DistTransformer, Mat, Winding, WindingConn,
+    Configuration, DistGenerator, DistLoadVoltageModel, DistNetwork, DistTransformer, Mat, Winding,
+    WindingConn,
 };
 
 /// The `$schema` stamped into every document's `meta`: the canonical bmopf-report
@@ -281,25 +281,7 @@ impl Writer {
         }
         let mut gens = Map::new();
         for g in &net.generators {
-            if fixed_generation_as_negative_load(net, g) {
-                let load_name = unique_load_name(&loads, &g.name);
-                let mut o = Map::new();
-                let p_nom: Vec<f64> = g.p_nom.iter().map(|&p| -p).collect();
-                let q_nom: Vec<f64> = g.q_nom.iter().map(|&q| -q).collect();
-                o.insert("configuration".into(), json!(config_str(g.configuration)));
-                o.insert("p_nom".into(), self.nums(&p_nom, "load p_nom"));
-                o.insert("q_nom".into(), self.nums(&q_nom, "load q_nom"));
-                o.insert("bus".into(), json!(g.bus));
-                o.insert("terminal_map".into(), json!(g.terminal_map));
-                self.warn(format!(
-                    "generator {}: fixed P/Q generation encoded as BMOPF negative load `{load_name}`",
-                    g.name
-                ));
-                self.extras_dropped(&g.extras, &format!("generator {}", g.name));
-                loads.insert(load_name, Value::Object(o));
-            } else {
-                gens.insert(g.name.clone(), self.generator(g));
-            }
+            gens.insert(g.name.clone(), self.generator(g));
         }
         if !loads.is_empty() {
             doc.insert("load".into(), Value::Object(loads));
@@ -803,23 +785,6 @@ impl Writer {
     }
 }
 
-fn unique_load_name(loads: &Map<String, Value>, desired: &str) -> String {
-    if !loads.contains_key(desired) {
-        return desired.to_string();
-    }
-    let base = format!("generator_{desired}");
-    if !loads.contains_key(&base) {
-        return base;
-    }
-    for i in 2.. {
-        let candidate = format!("{base}_{i}");
-        if !loads.contains_key(&candidate) {
-            return candidate;
-        }
-    }
-    unreachable!("unbounded suffix search returns before overflow")
-}
-
 fn collect_bus_usage(value: &Value, refs: &mut BTreeMap<String, BTreeSet<String>>) {
     match value {
         Value::Object(o) => {
@@ -885,27 +850,6 @@ fn prune_string_array(
         ));
     }
     *values = kept;
-}
-
-fn fixed_generation(g: &DistGenerator) -> bool {
-    let has_setpoint = !g.p_nom.is_empty() || !g.q_nom.is_empty();
-    has_setpoint
-        && fixed_bounds(g.p_min.as_deref(), g.p_max.as_deref(), &g.p_nom)
-        && fixed_bounds(g.q_min.as_deref(), g.q_max.as_deref(), &g.q_nom)
-}
-
-fn fixed_generation_as_negative_load(net: &DistNetwork, g: &DistGenerator) -> bool {
-    g.cost.is_none()
-        && net.source_format != Some(DistSourceFormat::BmopfJson)
-        && fixed_generation(g)
-}
-
-fn fixed_bounds(lo: Option<&[f64]>, hi: Option<&[f64]>, nom: &[f64]) -> bool {
-    match (lo, hi) {
-        (None, None) => true,
-        (Some(lo), Some(hi)) => lo == nom && hi == nom,
-        _ => false,
-    }
 }
 
 enum Kind {

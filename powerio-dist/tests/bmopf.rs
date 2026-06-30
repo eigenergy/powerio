@@ -290,28 +290,39 @@ fn ten_conductor_linecode_is_schema_valid() {
 }
 
 #[test]
-fn fixed_generators_emit_as_negative_loads() {
+fn dss_fixed_generator_emits_as_bmopf_generator() {
     let v = schema_validator();
     let net = parse_dss_str(
-        "New Circuit.c\n\
-         New Generator.g bus1=b.1 phases=1 kv=2.4 kw=100 kvar=20",
+        "Clear\n\
+         New Circuit.generator_case basekv=12.47 bus1=sourcebus\n\
+         New Generator.g1 bus1=sourcebus.1 phases=1 kv=7.2 kw=10 kvar=2",
     );
     let out = write_bmopf_json(&net);
     assert_eq!(errors(&v, &out.text), Vec::<String>::new());
     assert!(
+        out.warnings.iter().all(|w| !w.contains("negative load")),
+        "obsolete fixed generator warning: {:?}",
+        out.warnings
+    );
+    assert!(
         out.warnings
             .iter()
-            .any(|w| w.contains("generator g") && w.contains("negative load")),
-        "missing fixed generator warning: {:?}",
+            .any(|w| w == "generator g1: no generation cost in the source; emitted cost 0"),
+        "missing zero cost warning: {:?}",
         out.warnings
     );
     let doc: serde_json::Value = serde_json::from_str(&out.text).unwrap();
     assert!(
-        doc.get("generator").is_none(),
-        "fixed generator was emitted"
+        doc.get("load").and_then(|loads| loads.get("g1")).is_none(),
+        "fixed generator was emitted as a load"
     );
-    assert_eq!(doc["load"]["g"]["p_nom"], serde_json::json!([-100_000.0]));
-    assert_eq!(doc["load"]["g"]["q_nom"], serde_json::json!([-20_000.0]));
+    let g = &doc["generator"]["g1"];
+    assert!(g.is_object(), "BMOPF generator g1 missing: {doc}");
+    assert_eq!(g["p_min"], serde_json::json!([10_000.0]));
+    assert_eq!(g["p_max"], serde_json::json!([10_000.0]));
+    assert_eq!(g["q_min"], serde_json::json!([2_000.0]));
+    assert_eq!(g["q_max"], serde_json::json!([2_000.0]));
+    assert_eq!(g["cost"], serde_json::json!([0.0]));
 }
 
 #[test]
