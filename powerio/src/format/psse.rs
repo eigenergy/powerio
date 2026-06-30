@@ -890,33 +890,24 @@ enum Section {
     Skip,
 }
 
-/// The section a `BEGIN <name> DATA` terminator introduces. Sections we don't
-/// model map to [`Section::Skip`]. Case-insensitive on the marker text, so the
-/// number of skipped sections between the modeled ones doesn't matter.
+/// The section a terminator introduces. Sections we don't model map to
+/// [`Section::Skip`]. Case-insensitive on the marker text, so the number of
+/// skipped sections between the modeled ones doesn't matter.
 fn section_after_marker(line: &str) -> Section {
-    let u = line.to_ascii_uppercase();
-    if u.contains("BEGIN BUS DATA") {
-        Section::Bus
-    } else if u.contains("BEGIN LOAD DATA") {
-        Section::Load
-    } else if u.contains("BEGIN FIXED SHUNT DATA") {
-        Section::FixedShunt
-    } else if u.contains("BEGIN SWITCHED SHUNT DATA") {
-        Section::SwitchedShunt
-    } else if u.contains("BEGIN GENERATOR DATA") {
-        Section::Generator
-    } else if u.contains("BEGIN BRANCH DATA") {
-        Section::Branch
-    } else if u.contains("BEGIN TRANSFORMER DATA") {
-        Section::Transformer
-    } else if u.contains("BEGIN TWO-TERMINAL DC DATA") {
-        Section::TwoTerminalDc
-    } else if u.contains("BEGIN AREA DATA") {
-        // Distinct from "BEGIN INTER-AREA TRANSFER DATA", which doesn't contain
-        // the exact "BEGIN AREA DATA" run.
-        Section::Area
-    } else {
-        Section::Skip
+    match introduced_section_name(line).as_deref() {
+        Some("BUS") => Section::Bus,
+        Some("LOAD") => Section::Load,
+        Some("FIXED SHUNT") => Section::FixedShunt,
+        Some("SWITCHED SHUNT") => Section::SwitchedShunt,
+        Some("GENERATOR") | Some("GEN") => Section::Generator,
+        Some("BRANCH") => Section::Branch,
+        Some("TRANSFORMER") => Section::Transformer,
+        Some("TWO-TERMINAL DC")
+        | Some("TWO TERMINAL DC")
+        | Some("2-TERMINAL DC")
+        | Some("2 TERMINAL DC") => Section::TwoTerminalDc,
+        Some("AREA") | Some("AREA INTERCHANGE") => Section::Area,
+        _ => Section::Skip,
     }
 }
 
@@ -976,13 +967,18 @@ fn is_section_marker(line: &str) -> bool {
         return false;
     }
     let u = line.to_ascii_uppercase();
-    u.contains("END OF") || u.contains("BEGIN ")
+    u.contains("END OF") || u.contains("BEGIN ") || u.contains("START OF ")
 }
 
-/// The upper-cased section name a `BEGIN <name> DATA` marker introduces.
-fn begin_section_name(line: &str) -> Option<String> {
+/// The upper-cased section name a `BEGIN <name> DATA` or `START OF <name> DATA`
+/// marker introduces.
+fn introduced_section_name(line: &str) -> Option<String> {
     let u = line.to_ascii_uppercase();
-    let start = u.find("BEGIN ")? + "BEGIN ".len();
+    let (start, prefix_len) = u
+        .find("BEGIN ")
+        .map(|idx| (idx, "BEGIN ".len()))
+        .or_else(|| u.find("START OF ").map(|idx| (idx, "START OF ".len())))?;
+    let start = start + prefix_len;
     let rest = &u[start..];
     let end = rest.find(" DATA")?;
     Some(rest[..end].trim().to_string())
@@ -1017,7 +1013,7 @@ fn warn_unmodeled_sections(content: &str, warnings: &mut Vec<String>) {
         if is_section_marker(t) {
             close(current.as_ref(), rows, &mut totals);
             rows = 0;
-            current = begin_section_name(t)
+            current = introduced_section_name(t)
                 .map(|n| (n, matches!(section_after_marker(t), Section::Skip)));
         } else {
             rows += 1;
@@ -2330,6 +2326,33 @@ Q
         assert_eq!(net.branches.len(), 1);
         close(net.branches[0].rate_a, 100.0);
         assert!(net.branches[0].in_service);
+    }
+
+    #[test]
+    fn reads_start_of_section_markers_and_gen_alias() {
+        let raw = r#"0, 100.00, 33, 0, 0, 60.00 / synthetic v33 export
+CASE
+COMMENT
+1,'BUS1        ', 230.0000,3,1,1,1,1.00000,0.0000,1.1000,0.9000,1.1000,0.9000
+2,'BUS2        ', 230.0000,1,1,1,1,1.00000,0.0000,1.1000,0.9000,1.1000,0.9000
+0 / End of Bus Data, Start of Load Data
+2,'1 ',1,1,1,10.0,5.0
+0 / End of Load Data, Start of Fixed Shunt Data
+0 / End of Fixed Shunt Data, Start of Gen Data
+1,'1 ',50.0,5.0,20.0,-10.0,1.0,0,100.0,0.0,1.0,0.0,0.0,1.0,1,100.0,80.0,10.0
+0 / End of Gen Data, Start of Branch Data
+1,2,'1 ',0.01,0.05,0.001,100.0,90.0,80.0,0.0,0.0,0.0,0.0,1,1,0.0,1,1
+0 / End of Branch Data, Start of Transformer Data
+0 / End of Transformer Data, Start of Area Interchange Data
+Q
+"#;
+
+        let net = parse_psse(raw).unwrap();
+
+        assert_eq!(net.buses.len(), 2);
+        assert_eq!(net.loads.len(), 1);
+        assert_eq!(net.generators.len(), 1);
+        assert_eq!(net.branches.len(), 1);
     }
 
     #[test]
