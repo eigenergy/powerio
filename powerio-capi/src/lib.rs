@@ -198,12 +198,13 @@ pub extern "C" fn pio_dist_abi_version() -> u32 {
 }
 
 /// Whether an optional build feature is compiled in: pass `"arrow"`, `"gridfm"`,
-/// or `"dist"`. Returns 1 if present, 0 otherwise (and 0 for a NULL or unknown
-/// name). The optional surfaces (`pio_to_arrow`, the `pio_read_dir`/gridfm path,
-/// the `pio_dist_*` block) are only linked when their feature is built, so a
-/// consumer that loaded the library at runtime probes for them here instead of
-/// resolving symbols blind. Feature names are strings — like format names, a new
-/// feature never changes this signature. Infallible.
+/// `"dist"`, or `"pkg"`. Returns 1 if present, 0 otherwise (and 0 for a NULL or
+/// unknown name). The optional surfaces (`pio_to_arrow`, the `pio_read_dir`/
+/// gridfm path, the `pio_dist_*` block, and the `pio_package_*` block) are only
+/// linked when their feature is built, so a consumer that loaded the library at
+/// runtime probes for them here instead of resolving symbols blind. Feature
+/// names are strings like format names, so a new feature never changes this
+/// signature. Infallible.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_has_feature(feature: *const c_char) -> i32 {
     unsafe {
@@ -213,6 +214,7 @@ pub unsafe extern "C" fn pio_has_feature(feature: *const c_char) -> i32 {
                 ("arrow", cfg!(feature = "arrow")),
                 ("gridfm", cfg!(feature = "gridfm")),
                 ("dist", cfg!(feature = "dist")),
+                ("pkg", cfg!(feature = "pkg")),
             ];
             i32::from(features.iter().any(|&(n, on)| n == name && on))
         })
@@ -245,6 +247,13 @@ fn optional_cstr<'a>(p: *const c_char, name: &str) -> Result<Option<&'a str>, St
             .map(Some)
             .ok_or_else(|| format!("{name} is not UTF-8"))
     }
+}
+
+/// Like [`cstr`] but a NULL or non-UTF-8 pointer is an error naming the
+/// offending parameter. Entry points use this for required strings.
+#[cfg(any(feature = "dist", feature = "pkg"))]
+fn required_cstr<'a>(p: *const c_char, name: &str) -> Result<&'a str, String> {
+    unsafe { cstr(p) }.ok_or_else(|| format!("{name} is NULL or not UTF-8"))
 }
 
 /// Parse `path` (format from extension, or `from` if non-NULL) into a network
@@ -1038,6 +1047,354 @@ pub unsafe extern "C" fn pio_to_arrow(
 }
 
 // ---------------------------------------------------------------------------
+// Package surface (`pkg` feature). `.pio.json` compiler packages sit above the
+// balanced and multiconductor handles: a package wraps exactly one payload and
+// carries provenance, validation, diagnostics, and lowering history.
+// ---------------------------------------------------------------------------
+
+/// Opaque `.pio.json` compiler package handle. A package owns one
+/// [`powerio_pkg::CompilerPackage`], which wraps either a balanced
+/// [`PioNetwork`] payload or a multiconductor [`PioDistNetwork`] payload.
+#[cfg(feature = "pkg")]
+pub struct PioPackage {
+    package: powerio_pkg::CompilerPackage,
+}
+
+#[cfg(feature = "pkg")]
+const _: fn() = || {
+    fn assert_send_sync<T: Send + Sync>() {}
+    assert_send_sync::<PioPackage>();
+};
+
+#[cfg(feature = "pkg")]
+fn lowering_options(base_mva: f64) -> powerio_pkg::MulticonductorToBalancedOptions {
+    powerio_pkg::MulticonductorToBalancedOptions {
+        base_mva,
+        ..Default::default()
+    }
+}
+
+#[cfg(feature = "pkg")]
+unsafe fn finish_package(
+    errbuf: *mut c_char,
+    errlen: usize,
+    panic_msg: &str,
+    f: impl FnOnce() -> Result<powerio_pkg::CompilerPackage, String>,
+) -> *mut PioPackage {
+    unsafe {
+        match catch_unwind(AssertUnwindSafe(f)) {
+            Ok(Ok(package)) => Box::into_raw(Box::new(PioPackage { package })),
+            Ok(Err(msg)) => {
+                copy_to_buf(errbuf, errlen, &msg);
+                std::ptr::null_mut()
+            }
+            Err(_) => {
+                copy_to_buf(errbuf, errlen, panic_msg);
+                std::ptr::null_mut()
+            }
+        }
+    }
+}
+
+/// Parse a `.pio.json` package file into an opaque package handle. This reads
+/// only the package envelope; case format names still enter through
+/// [`pio_parse_file`] / [`pio_dist_parse_file`] and package constructors.
+/// Returns `NULL` on error and writes the message into `errbuf`. Free the handle
+/// with [`pio_package_free`].
+#[cfg(feature = "pkg")]
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn pio_package_parse_file(
+    path: *const c_char,
+    errbuf: *mut c_char,
+    errlen: usize,
+) -> *mut PioPackage {
+    unsafe {
+        finish_package(errbuf, errlen, "panic while parsing package", || {
+            let path = required_cstr(path, "path")?;
+            let text = std::fs::read_to_string(path).map_err(|e| e.to_string())?;
+            powerio_pkg::CompilerPackage::from_json(&text).map_err(|e| e.to_string())
+        })
+    }
+}
+
+/// Parse in-memory `.pio.json` text into an opaque package handle. Returns
+/// `NULL` on error and writes the message into `errbuf`. Free the handle with
+/// [`pio_package_free`].
+#[cfg(feature = "pkg")]
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn pio_package_parse_str(
+    text: *const c_char,
+    errbuf: *mut c_char,
+    errlen: usize,
+) -> *mut PioPackage {
+    unsafe {
+        finish_package(errbuf, errlen, "panic while parsing package", || {
+            let text = required_cstr(text, "text")?;
+            powerio_pkg::CompilerPackage::from_json(text).map_err(|e| e.to_string())
+        })
+    }
+}
+
+/// Free a package handle returned by `pio_package_*`. NULL is a no-op; free
+/// exactly once.
+#[cfg(feature = "pkg")]
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn pio_package_free(pkg: *mut PioPackage) {
+    unsafe {
+        guard((), || {
+            if !pkg.is_null() {
+                drop(Box::from_raw(pkg));
+            }
+        });
+    }
+}
+
+/// Serialize a package handle to compact `.pio.json`. Returns an owned C string
+/// (free with [`pio_string_free`]) or `NULL` on error.
+#[cfg(feature = "pkg")]
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn pio_package_to_json(
+    pkg: *const PioPackage,
+    errbuf: *mut c_char,
+    errlen: usize,
+) -> *mut c_char {
+    unsafe {
+        let result = catch_unwind(AssertUnwindSafe(|| {
+            let pkg = pkg
+                .as_ref()
+                .ok_or_else(|| "package handle is NULL".to_string())?;
+            pkg.package.to_json().map_err(|e| e.to_string())
+        }));
+        match result {
+            Ok(Ok(text)) => finish_cstring(text, errbuf, errlen),
+            Ok(Err(msg)) => {
+                copy_to_buf(errbuf, errlen, &msg);
+                std::ptr::null_mut()
+            }
+            Err(_) => {
+                copy_to_buf(errbuf, errlen, "panic while serializing package");
+                std::ptr::null_mut()
+            }
+        }
+    }
+}
+
+/// Wrap a balanced [`PioNetwork`] handle in a `.pio.json` package. The C handle
+/// name is historical; the payload is `powerio::BalancedNetwork`.
+/// `include_solver_metadata != 0` attaches compact normalized solver table
+/// metadata.
+#[cfg(feature = "pkg")]
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn pio_package_from_balanced_network(
+    net: *const PioNetwork,
+    include_solver_metadata: i32,
+    errbuf: *mut c_char,
+    errlen: usize,
+) -> *mut PioPackage {
+    unsafe {
+        finish_package(
+            errbuf,
+            errlen,
+            "panic while packaging balanced network",
+            || {
+                let net = network_ref(net).ok_or_else(|| "network handle is NULL".to_string())?;
+                let mut package = powerio_pkg::CompilerPackage::from_balanced(net.net.clone());
+                if include_solver_metadata != 0 {
+                    package
+                        .attach_normalized_solver_table_metadata()
+                        .map_err(|e| e.to_string())?;
+                }
+                Ok(package)
+            },
+        )
+    }
+}
+
+/// Wrap a multiconductor [`PioDistNetwork`] handle in a `.pio.json` package. The
+/// C handle name is historical; the payload is
+/// `powerio_dist::MulticonductorNetwork`.
+#[cfg(all(feature = "pkg", feature = "dist"))]
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn pio_package_from_multiconductor_network(
+    net: *const PioDistNetwork,
+    errbuf: *mut c_char,
+    errlen: usize,
+) -> *mut PioPackage {
+    unsafe {
+        finish_package(
+            errbuf,
+            errlen,
+            "panic while packaging multiconductor network",
+            || {
+                let net = net
+                    .as_ref()
+                    .ok_or_else(|| "distribution network handle is NULL".to_string())?;
+                Ok(powerio_pkg::CompilerPackage::from_multiconductor(
+                    net.net.clone(),
+                ))
+            },
+        )
+    }
+}
+
+/// Run the package semantic validation profile in place. Returns `0` on
+/// success, `-1` on error.
+#[cfg(feature = "pkg")]
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn pio_package_validate(
+    pkg: *mut PioPackage,
+    errbuf: *mut c_char,
+    errlen: usize,
+) -> i32 {
+    unsafe {
+        let result = catch_unwind(AssertUnwindSafe(|| {
+            let pkg = pkg
+                .as_mut()
+                .ok_or_else(|| "package handle is NULL".to_string())?;
+            pkg.package.run_sane_validation();
+            Ok::<_, String>(())
+        }));
+        match result {
+            Ok(Ok(())) => 0,
+            Ok(Err(msg)) => {
+                copy_to_buf(errbuf, errlen, &msg);
+                -1
+            }
+            Err(_) => {
+                copy_to_buf(errbuf, errlen, "panic while validating package");
+                -1
+            }
+        }
+    }
+}
+
+/// Return the package validation summary as JSON. The returned string is owned
+/// by the library; free it with [`pio_string_free`].
+#[cfg(feature = "pkg")]
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn pio_package_validation_json(
+    pkg: *const PioPackage,
+    errbuf: *mut c_char,
+    errlen: usize,
+) -> *mut c_char {
+    unsafe {
+        let result = catch_unwind(AssertUnwindSafe(|| {
+            let pkg = pkg
+                .as_ref()
+                .ok_or_else(|| "package handle is NULL".to_string())?;
+            serde_json::to_string(&pkg.package.validation).map_err(|e| e.to_string())
+        }));
+        match result {
+            Ok(Ok(text)) => finish_cstring(text, errbuf, errlen),
+            Ok(Err(msg)) => {
+                copy_to_buf(errbuf, errlen, &msg);
+                std::ptr::null_mut()
+            }
+            Err(_) => {
+                copy_to_buf(errbuf, errlen, "panic while reading package validation");
+                std::ptr::null_mut()
+            }
+        }
+    }
+}
+
+/// Return the package structured diagnostics array as JSON. The returned string
+/// is owned by the library; free it with [`pio_string_free`].
+#[cfg(feature = "pkg")]
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn pio_package_diagnostics_json(
+    pkg: *const PioPackage,
+    errbuf: *mut c_char,
+    errlen: usize,
+) -> *mut c_char {
+    unsafe {
+        let result = catch_unwind(AssertUnwindSafe(|| {
+            let pkg = pkg
+                .as_ref()
+                .ok_or_else(|| "package handle is NULL".to_string())?;
+            serde_json::to_string(&pkg.package.diagnostics).map_err(|e| e.to_string())
+        }));
+        match result {
+            Ok(Ok(text)) => finish_cstring(text, errbuf, errlen),
+            Ok(Err(msg)) => {
+                copy_to_buf(errbuf, errlen, &msg);
+                std::ptr::null_mut()
+            }
+            Err(_) => {
+                copy_to_buf(errbuf, errlen, "panic while reading package diagnostics");
+                std::ptr::null_mut()
+            }
+        }
+    }
+}
+
+/// Return the multiconductor-to-balanced lowering preflight report as JSON.
+/// `base_mva` is the three phase system power base used for the balanced
+/// per-unit projection. Returns `NULL` if the package is not multiconductor.
+#[cfg(feature = "pkg")]
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn pio_package_multiconductor_to_balanced_preflight_json(
+    pkg: *const PioPackage,
+    base_mva: f64,
+    errbuf: *mut c_char,
+    errlen: usize,
+) -> *mut c_char {
+    unsafe {
+        let result = catch_unwind(AssertUnwindSafe(|| {
+            let pkg = pkg
+                .as_ref()
+                .ok_or_else(|| "package handle is NULL".to_string())?;
+            let net = pkg.package.as_multiconductor().ok_or_else(|| {
+                format!(
+                    "multiconductor preflight requires a multiconductor package, got {:?}",
+                    pkg.package.model_kind()
+                )
+            })?;
+            let report = powerio_pkg::check_multiconductor_to_balanced_lowering(
+                net,
+                lowering_options(base_mva),
+            );
+            serde_json::to_string(&report).map_err(|e| e.to_string())
+        }));
+        match result {
+            Ok(Ok(text)) => finish_cstring(text, errbuf, errlen),
+            Ok(Err(msg)) => {
+                copy_to_buf(errbuf, errlen, &msg);
+                std::ptr::null_mut()
+            }
+            Err(_) => {
+                copy_to_buf(errbuf, errlen, "panic while preflighting package lowering");
+                std::ptr::null_mut()
+            }
+        }
+    }
+}
+
+/// Lower a multiconductor package to a new balanced package. Call
+/// [`pio_package_multiconductor_to_balanced_preflight_json`] first when the
+/// caller needs structured blockers for unsupported inputs. `base_mva` is the
+/// three phase system power base used for the balanced per-unit projection.
+#[cfg(feature = "pkg")]
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn pio_package_lower_multiconductor_to_balanced(
+    pkg: *const PioPackage,
+    base_mva: f64,
+    errbuf: *mut c_char,
+    errlen: usize,
+) -> *mut PioPackage {
+    unsafe {
+        finish_package(errbuf, errlen, "panic while lowering package", || {
+            let pkg = pkg
+                .as_ref()
+                .ok_or_else(|| "package handle is NULL".to_string())?;
+            pkg.package
+                .lower_multiconductor_to_balanced(lowering_options(base_mva))
+                .map_err(|e| e.to_string())
+        })
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Distribution surface (`dist` feature). The multiconductor model behind its own
 // opaque `PioDistNetwork` handle and the `pio_dist_*` entry points. It is gated
 // on the `dist` feature / `PIO_DIST` define, exactly like `arrow`/`gridfm`; a
@@ -1046,13 +1403,6 @@ pub unsafe extern "C" fn pio_to_arrow(
 // schema is a draft: C signature changes bump `PIO_DIST_ABI_VERSION`, and the
 // JSON payloads (bmopf-json, powerio-dist-json) carry their own meta.version.
 // ---------------------------------------------------------------------------
-
-/// Like [`cstr`] but a NULL or non-UTF-8 pointer is an error naming the offending
-/// parameter. The dist entry points take mostly required strings.
-#[cfg(feature = "dist")]
-fn required_cstr<'a>(p: *const c_char, name: &str) -> Result<&'a str, String> {
-    unsafe { cstr(p) }.ok_or_else(|| format!("{name} is NULL or not UTF-8"))
-}
 
 /// Finish a handle-returning dist entry point: run `f` (the handle payload or an
 /// error message) under the panic guard and box the payload into an owned handle,
@@ -1412,6 +1762,46 @@ mod tests {
         }
     }
 
+    #[cfg(feature = "pkg")]
+    unsafe fn package_json_text(pkg: *const PioPackage) -> String {
+        let mut err = [0 as c_char; PIO_ERRBUF_MIN];
+        unsafe {
+            let s = pio_package_to_json(pkg, err.as_mut_ptr(), err.len());
+            assert!(
+                !s.is_null(),
+                "package to json failed: {}",
+                CStr::from_ptr(err.as_ptr()).to_str().unwrap()
+            );
+            let text = CStr::from_ptr(s).to_str().unwrap().to_owned();
+            pio_string_free(s);
+            text
+        }
+    }
+
+    #[cfg(feature = "pkg")]
+    unsafe fn package_json(pkg: *const PioPackage) -> serde_json::Value {
+        unsafe { serde_json::from_str(&package_json_text(pkg)).unwrap() }
+    }
+
+    #[cfg(feature = "pkg")]
+    unsafe fn package_report_json(
+        f: unsafe extern "C" fn(*const PioPackage, *mut c_char, usize) -> *mut c_char,
+        pkg: *const PioPackage,
+    ) -> serde_json::Value {
+        let mut err = [0 as c_char; PIO_ERRBUF_MIN];
+        unsafe {
+            let s = f(pkg, err.as_mut_ptr(), err.len());
+            assert!(
+                !s.is_null(),
+                "package report failed: {}",
+                CStr::from_ptr(err.as_ptr()).to_str().unwrap()
+            );
+            let text = CStr::from_ptr(s).to_str().unwrap().to_owned();
+            pio_string_free(s);
+            serde_json::from_str(&text).unwrap()
+        }
+    }
+
     #[test]
     fn version_surface() {
         // The ABI version is the load-time compatibility check; the version
@@ -1563,6 +1953,7 @@ mod tests {
             "#define PIO_ARROW_TABLE_SOLVER_HVDC 14",
             "typedef struct PioDistNetwork PioDistNetwork;",
             "typedef struct PioNetwork PioNetwork;",
+            "typedef struct PioPackage PioPackage;",
             "uint32_t pio_abi_version(void);",
             "uint32_t pio_dist_abi_version(void);",
             "int32_t pio_has_feature(const char *feature);",
@@ -1596,6 +1987,17 @@ mod tests {
             "size_t pio_bus_demand(const PioNetwork *net, double *pd, double *qd, size_t cap);",
             "size_t pio_bus_shunt(const PioNetwork *net, double *gs, double *bs, size_t cap);",
             "int32_t pio_to_arrow(const PioNetwork *net, int32_t table, struct ArrowArray *out_array, struct ArrowSchema *out_schema, char *errbuf, size_t errlen);",
+            "PioPackage *pio_package_parse_file(const char *path, char *errbuf, size_t errlen);",
+            "PioPackage *pio_package_parse_str(const char *text, char *errbuf, size_t errlen);",
+            "void pio_package_free(PioPackage *pkg);",
+            "char *pio_package_to_json(const PioPackage *pkg, char *errbuf, size_t errlen);",
+            "PioPackage *pio_package_from_balanced_network(const PioNetwork *net, int32_t include_solver_metadata, char *errbuf, size_t errlen);",
+            "PioPackage *pio_package_from_multiconductor_network(const PioDistNetwork *net, char *errbuf, size_t errlen);",
+            "int32_t pio_package_validate(PioPackage *pkg, char *errbuf, size_t errlen);",
+            "char *pio_package_validation_json(const PioPackage *pkg, char *errbuf, size_t errlen);",
+            "char *pio_package_diagnostics_json(const PioPackage *pkg, char *errbuf, size_t errlen);",
+            "char *pio_package_multiconductor_to_balanced_preflight_json(const PioPackage *pkg, double base_mva, char *errbuf, size_t errlen);",
+            "PioPackage *pio_package_lower_multiconductor_to_balanced(const PioPackage *pkg, double base_mva, char *errbuf, size_t errlen);",
             "PioDistNetwork *pio_dist_parse_file(const char *path, const char *from, char *errbuf, size_t errlen);",
             "PioDistNetwork *pio_dist_parse_str(const char *text, const char *format, char *errbuf, size_t errlen);",
             "void pio_dist_network_free(PioDistNetwork *net);",
@@ -2280,6 +2682,294 @@ mpc.branch = [
         unsafe { copy_to_buf(buf.as_mut_ptr(), buf.len(), "aé€") };
         let s = unsafe { CStr::from_ptr(buf.as_ptr()) }.to_str().unwrap();
         assert_eq!(s, "aé€");
+    }
+
+    #[cfg(feature = "pkg")]
+    #[test]
+    fn package_feature_is_reported() {
+        let pkg = CString::new("pkg").unwrap();
+        let nope = CString::new("nope").unwrap();
+        unsafe {
+            assert_eq!(pio_has_feature(pkg.as_ptr()), 1);
+            assert_eq!(pio_has_feature(nope.as_ptr()), 0);
+        }
+    }
+
+    #[cfg(feature = "pkg")]
+    #[test]
+    fn package_parse_free_to_json_and_reports() {
+        let net = case9();
+        let mut err = [0 as c_char; PIO_ERRBUF_MIN];
+        unsafe {
+            let pkg = pio_package_from_balanced_network(net, 1, err.as_mut_ptr(), err.len());
+            assert!(
+                !pkg.is_null(),
+                "package constructor failed: {}",
+                CStr::from_ptr(err.as_ptr()).to_str().unwrap()
+            );
+            let v = package_json(pkg);
+            assert_eq!(v["model_kind"], serde_json::json!("balanced"));
+            assert_eq!(v["model"]["kind"], serde_json::json!("balanced"));
+            assert_eq!(
+                v["derived"]["normalized_solver_tables"]["row_counts"]["buses"],
+                serde_json::json!(9)
+            );
+
+            let json = CString::new(package_json_text(pkg)).unwrap();
+            let parsed = pio_package_parse_str(json.as_ptr(), err.as_mut_ptr(), err.len());
+            assert!(
+                !parsed.is_null(),
+                "package parse_str failed: {}",
+                CStr::from_ptr(err.as_ptr()).to_str().unwrap()
+            );
+
+            let tmp = tempfile::tempdir().unwrap();
+            let path = tmp.path().join("case9.pio.json");
+            std::fs::write(&path, CStr::from_ptr(json.as_ptr()).to_bytes()).unwrap();
+            let path = CString::new(path.to_str().unwrap()).unwrap();
+            let parsed_file = pio_package_parse_file(path.as_ptr(), err.as_mut_ptr(), err.len());
+            assert!(
+                !parsed_file.is_null(),
+                "package parse_file failed: {}",
+                CStr::from_ptr(err.as_ptr()).to_str().unwrap()
+            );
+
+            assert_eq!(
+                pio_package_validate(parsed_file, err.as_mut_ptr(), err.len()),
+                0
+            );
+            let validation = package_report_json(pio_package_validation_json, parsed_file);
+            assert_eq!(validation["status"], serde_json::json!("ok"));
+            assert!(
+                validation["passes"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .any(|p| p["name"] == "balanced.structure")
+            );
+            let diagnostics = package_report_json(pio_package_diagnostics_json, parsed_file);
+            assert!(diagnostics.as_array().unwrap().is_empty());
+
+            pio_package_free(parsed_file);
+            pio_package_free(parsed);
+            pio_package_free(pkg);
+            pio_network_free(net);
+        }
+    }
+
+    #[cfg(feature = "pkg")]
+    #[test]
+    fn package_balanced_constructor_omits_solver_metadata_by_default() {
+        let net = case9();
+        let mut err = [0 as c_char; PIO_ERRBUF_MIN];
+        unsafe {
+            let pkg = pio_package_from_balanced_network(net, 0, err.as_mut_ptr(), err.len());
+            assert!(
+                !pkg.is_null(),
+                "package constructor failed: {}",
+                CStr::from_ptr(err.as_ptr()).to_str().unwrap()
+            );
+            let v = package_json(pkg);
+            assert!(v["derived"].get("normalized_solver_tables").is_none());
+            pio_package_free(pkg);
+            pio_network_free(net);
+        }
+    }
+
+    #[cfg(all(feature = "pkg", feature = "dist"))]
+    mod package_dist {
+        use super::*;
+
+        fn strings(values: &[&str]) -> Vec<String> {
+            values.iter().map(|v| (*v).to_owned()).collect()
+        }
+
+        fn zero_matrix(n: usize) -> powerio_dist::Mat {
+            vec![vec![0.0; n]; n]
+        }
+
+        fn diagonal_matrix(n: usize, value: f64) -> powerio_dist::Mat {
+            let mut matrix = zero_matrix(n);
+            for (idx, row) in matrix.iter_mut().enumerate() {
+                row[idx] = value;
+            }
+            matrix
+        }
+
+        fn phase_reference(terminals: &[&str], grounded: &[&str]) -> (Vec<f64>, Vec<f64>) {
+            let phase_angles = [
+                0.0,
+                -2.0 * std::f64::consts::PI / 3.0,
+                2.0 * std::f64::consts::PI / 3.0,
+            ];
+            let mut magnitudes = vec![0.0; terminals.len()];
+            let mut angles = vec![0.0; terminals.len()];
+            let mut active = 0;
+            for (idx, terminal) in terminals.iter().enumerate() {
+                if grounded.contains(terminal) || *terminal == "0" {
+                    continue;
+                }
+                magnitudes[idx] = 240.0;
+                if active < phase_angles.len() {
+                    angles[idx] = phase_angles[active];
+                }
+                active += 1;
+            }
+            (magnitudes, angles)
+        }
+
+        fn preflight_network(terminals: &[&str], grounded: &[&str]) -> powerio_dist::DistNetwork {
+            use powerio_dist::{
+                DistBus, DistLine, DistLineCode, DistNetwork, Extras, VoltageSource,
+            };
+
+            let n = terminals.len();
+            let terminal_map = strings(terminals);
+            let (v_magnitude, v_angle) = phase_reference(terminals, grounded);
+            let mut net = DistNetwork::default();
+            for id in ["sourcebus", "loadbus"] {
+                net.buses.push(DistBus {
+                    id: id.to_owned(),
+                    terminals: terminal_map.clone(),
+                    grounded: strings(grounded),
+                    v_min: None,
+                    v_max: None,
+                    vpn_min: None,
+                    vpn_max: None,
+                    vpp_min: None,
+                    vpp_max: None,
+                    vsym_min: None,
+                    vsym_max: None,
+                    extras: Extras::new(),
+                });
+            }
+            net.linecodes.push(DistLineCode {
+                name: "lc".to_owned(),
+                n_conductors: n,
+                r_series: diagonal_matrix(n, 0.01),
+                x_series: diagonal_matrix(n, 0.10),
+                g_from: zero_matrix(n),
+                b_from: zero_matrix(n),
+                g_to: zero_matrix(n),
+                b_to: zero_matrix(n),
+                i_max: None,
+                s_max: None,
+                extras: Extras::new(),
+            });
+            net.lines.push(DistLine {
+                name: "l1".to_owned(),
+                bus_from: "sourcebus".to_owned(),
+                bus_to: "loadbus".to_owned(),
+                terminal_map_from: terminal_map.clone(),
+                terminal_map_to: terminal_map.clone(),
+                linecode: "lc".to_owned(),
+                length: 1.0,
+                extras: Extras::new(),
+            });
+            net.sources.push(VoltageSource {
+                name: "source".to_owned(),
+                bus: "sourcebus".to_owned(),
+                terminal_map,
+                v_magnitude,
+                v_angle,
+                extras: Extras::new(),
+            });
+            net
+        }
+
+        #[test]
+        fn multiconductor_package_preflight_and_lowering() {
+            let dist = PioDistNetwork {
+                net: preflight_network(&["1", "2", "3"], &[]),
+            };
+            let mut err = [0 as c_char; PIO_ERRBUF_MIN];
+            unsafe {
+                let pkg =
+                    pio_package_from_multiconductor_network(&dist, err.as_mut_ptr(), err.len());
+                assert!(
+                    !pkg.is_null(),
+                    "multiconductor package constructor failed: {}",
+                    CStr::from_ptr(err.as_ptr()).to_str().unwrap()
+                );
+                let v = package_json(pkg);
+                assert_eq!(v["model_kind"], serde_json::json!("multiconductor"));
+
+                let report = pio_package_multiconductor_to_balanced_preflight_json(
+                    pkg,
+                    50.0,
+                    err.as_mut_ptr(),
+                    err.len(),
+                );
+                assert!(
+                    !report.is_null(),
+                    "preflight failed: {}",
+                    CStr::from_ptr(err.as_ptr()).to_str().unwrap()
+                );
+                let report_json: serde_json::Value =
+                    serde_json::from_str(CStr::from_ptr(report).to_str().unwrap()).unwrap();
+                assert_eq!(report_json["status"], serde_json::json!("ok"));
+                assert_eq!(report_json["base_mva"], serde_json::json!(50.0));
+                pio_string_free(report);
+
+                let lowered = pio_package_lower_multiconductor_to_balanced(
+                    pkg,
+                    75.0,
+                    err.as_mut_ptr(),
+                    err.len(),
+                );
+                assert!(
+                    !lowered.is_null(),
+                    "lowering failed: {}",
+                    CStr::from_ptr(err.as_ptr()).to_str().unwrap()
+                );
+                let lowered_json = package_json(lowered);
+                assert_eq!(lowered_json["model_kind"], serde_json::json!("balanced"));
+                assert_eq!(
+                    lowered_json["model"]["balanced_network"]["base_mva"],
+                    serde_json::json!(75.0)
+                );
+                assert_eq!(
+                    lowered_json["lowering_history"][0]["pass"],
+                    serde_json::json!("multiconductor-to-balanced")
+                );
+
+                let invalid_report = pio_package_multiconductor_to_balanced_preflight_json(
+                    pkg,
+                    0.0,
+                    err.as_mut_ptr(),
+                    err.len(),
+                );
+                assert!(
+                    !invalid_report.is_null(),
+                    "invalid-base preflight failed: {}",
+                    CStr::from_ptr(err.as_ptr()).to_str().unwrap()
+                );
+                let invalid_report_json: serde_json::Value =
+                    serde_json::from_str(CStr::from_ptr(invalid_report).to_str().unwrap()).unwrap();
+                assert_eq!(invalid_report_json["status"], serde_json::json!("error"));
+                assert!(
+                    invalid_report_json["diagnostics"]
+                        .as_array()
+                        .unwrap()
+                        .iter()
+                        .any(|d| d["code"] == "LOWER.MULTI_TO_BALANCED.INVALID_BASE_MVA")
+                );
+                pio_string_free(invalid_report);
+
+                let invalid_lowered = pio_package_lower_multiconductor_to_balanced(
+                    pkg,
+                    0.0,
+                    err.as_mut_ptr(),
+                    err.len(),
+                );
+                assert!(invalid_lowered.is_null());
+                let msg = CStr::from_ptr(err.as_ptr()).to_str().unwrap();
+                assert!(msg.contains("base_mva must be positive"), "got: {msg}");
+
+                pio_package_free(lowered);
+                pio_package_free(pkg);
+            }
+        }
     }
 
     #[cfg(feature = "arrow")]

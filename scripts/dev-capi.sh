@@ -7,8 +7,8 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
-# --features arrow so the sibling PowerIO.jl build gets pio_to_arrow; the
-# base ABI is identical with or without it.
+# --features arrow so the sibling PowerIO.jl build gets pio_to_arrow. The
+# default features already include the dist and package surfaces.
 cargo build -p powerio-capi --release --features arrow >&2
 
 case "$(uname -s)" in

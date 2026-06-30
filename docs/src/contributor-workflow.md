@@ -37,9 +37,9 @@ gates before a release claim.
 | rich model fields | `bash benchmarks/run_rich_validation.sh` |
 | matrix builders or DC OPF bundles | `cargo test -p powerio-matrix`; `cargo bench -p powerio-matrix --bench matrix` |
 | PowerWorld binary reader | PowerWorld parser tests plus `cargo bench -p powerio --bench parse -- "parse_aux_|parse_pwb_"` |
-| C ABI | `scripts/capi-header-parity.sh`; `scripts/capi-smoke.sh`; `cargo test -p powerio-capi --no-default-features`; `cargo test -p powerio-capi --features arrow,gridfm,dist`; matching clippy runs |
+| C ABI | `scripts/capi-header-parity.sh`; `scripts/capi-smoke.sh`; `cargo test -p powerio-capi --no-default-features`; `cargo test -p powerio-capi --features arrow,gridfm,dist,pkg`; matching clippy runs |
 | Python package metadata or extras | `maturin build --release --out /tmp/powerio-wheel-check`; inspect wheel `METADATA` |
-| Julia binding compatibility | build `powerio-capi --features arrow,gridfm,dist`, then run `PowerIO.jl` tests with `POWERIO_CAPI` |
+| Julia binding compatibility | build `powerio-capi --features arrow,gridfm,dist,pkg`, then run `PowerIO.jl` tests with `POWERIO_CAPI` |
 | CLI behavior | `cargo test -p powerio-cli --test cli` |
 | documentation or website | `mdbook build docs`; `mdbook test docs`; check stale links to retired guide outputs |
 

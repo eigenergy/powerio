@@ -68,17 +68,21 @@
  *
  * Optional: build with `--features arrow` for pio_to_arrow (guarded by
  * PIO_ARROW), `--features gridfm` for pio_read_dir / pio_scenario_ids
- * (guarded by PIO_GRIDFM), and `--features dist` for the pio_dist_* entry
+ * (guarded by PIO_GRIDFM), `--features dist` for the pio_dist_* entry
  * points (guarded by PIO_DIST): multiconductor distribution cases (OpenDSS,
  * PMD ENGINEERING JSON, BMOPF JSON) behind their own PioDistNetwork handle,
- * freed with pio_dist_network_free, string outputs freed with pio_string_free.
+ * freed with pio_dist_network_free, string outputs freed with pio_string_free,
+ * and `--features pkg` for the pio_package_* entry points (guarded by
+ * PIO_PKG): `.pio.json` compiler packages behind their own PioPackage handle,
+ * freed with pio_package_free.
  * The distribution surface is EXPERIMENTAL while the IEEE BMOPF schema is a
  * draft: supported dist C usage starts at PIO_DIST_ABI_VERSION = 1, with
  * pio_dist_convert_*(input, from, to, ...). Dist C signature changes bump
  * PIO_DIST_ABI_VERSION, not PIO_ABI_VERSION. Its JSON payloads (bmopf-json,
  * powerio-dist-json) carry their own meta.version and may evolve; pin a
  * vintage from the payload meta.
- * Probe optional surfaces at runtime with pio_has_feature("arrow"|"gridfm"|"dist").
+ * Probe optional surfaces at runtime with
+ * pio_has_feature("arrow"|"gridfm"|"dist"|"pkg").
  *
  * Checked in and generated; regenerate from the Rust source with
  *   cbindgen --config cbindgen.toml --crate powerio-capi --output include/powerio.h
@@ -209,6 +213,15 @@ typedef struct PioDistNetwork PioDistNetwork;
  */
 typedef struct PioNetwork PioNetwork;
 
+#if defined(PIO_PKG)
+/**
+ * Opaque `.pio.json` compiler package handle. A package owns one
+ * [`powerio_pkg::CompilerPackage`], which wraps either a balanced
+ * [`PioNetwork`] payload or a multiconductor [`PioDistNetwork`] payload.
+ */
+typedef struct PioPackage PioPackage;
+#endif
+
 #ifdef __cplusplus
 extern "C" {
 #endif // __cplusplus
@@ -230,12 +243,13 @@ uint32_t pio_dist_abi_version(void);
 
 /**
  * Whether an optional build feature is compiled in: pass `"arrow"`, `"gridfm"`,
- * or `"dist"`. Returns 1 if present, 0 otherwise (and 0 for a NULL or unknown
- * name). The optional surfaces (`pio_to_arrow`, the `pio_read_dir`/gridfm path,
- * the `pio_dist_*` block) are only linked when their feature is built, so a
- * consumer that loaded the library at runtime probes for them here instead of
- * resolving symbols blind. Feature names are strings — like format names, a new
- * feature never changes this signature. Infallible.
+ * `"dist"`, or `"pkg"`. Returns 1 if present, 0 otherwise (and 0 for a NULL or
+ * unknown name). The optional surfaces (`pio_to_arrow`, the `pio_read_dir`/
+ * gridfm path, the `pio_dist_*` block, and the `pio_package_*` block) are only
+ * linked when their feature is built, so a consumer that loaded the library at
+ * runtime probes for them here instead of resolving symbols blind. Feature
+ * names are strings like format names, so a new feature never changes this
+ * signature. Infallible.
  */
 int32_t pio_has_feature(const char *feature);
 
@@ -559,6 +573,115 @@ int32_t pio_to_arrow(const PioNetwork *net,
                      struct ArrowSchema *out_schema,
                      char *errbuf,
                      size_t errlen);
+#endif
+
+#if defined(PIO_PKG)
+/**
+ * Parse a `.pio.json` package file into an opaque package handle. This reads
+ * only the package envelope; case format names still enter through
+ * [`pio_parse_file`] / [`pio_dist_parse_file`] and package constructors.
+ * Returns `NULL` on error and writes the message into `errbuf`. Free the handle
+ * with [`pio_package_free`].
+ */
+PioPackage *pio_package_parse_file(const char *path, char *errbuf, size_t errlen);
+#endif
+
+#if defined(PIO_PKG)
+/**
+ * Parse in-memory `.pio.json` text into an opaque package handle. Returns
+ * `NULL` on error and writes the message into `errbuf`. Free the handle with
+ * [`pio_package_free`].
+ */
+PioPackage *pio_package_parse_str(const char *text, char *errbuf, size_t errlen);
+#endif
+
+#if defined(PIO_PKG)
+/**
+ * Free a package handle returned by `pio_package_*`. NULL is a no-op; free
+ * exactly once.
+ */
+void pio_package_free(PioPackage *pkg);
+#endif
+
+#if defined(PIO_PKG)
+/**
+ * Serialize a package handle to compact `.pio.json`. Returns an owned C string
+ * (free with [`pio_string_free`]) or `NULL` on error.
+ */
+char *pio_package_to_json(const PioPackage *pkg, char *errbuf, size_t errlen);
+#endif
+
+#if defined(PIO_PKG)
+/**
+ * Wrap a balanced [`PioNetwork`] handle in a `.pio.json` package. The C handle
+ * name is historical; the payload is `powerio::BalancedNetwork`.
+ * `include_solver_metadata != 0` attaches compact normalized solver table
+ * metadata.
+ */
+PioPackage *pio_package_from_balanced_network(const PioNetwork *net,
+                                              int32_t include_solver_metadata,
+                                              char *errbuf,
+                                              size_t errlen);
+#endif
+
+#if (defined(PIO_PKG) && defined(PIO_DIST))
+/**
+ * Wrap a multiconductor [`PioDistNetwork`] handle in a `.pio.json` package. The
+ * C handle name is historical; the payload is
+ * `powerio_dist::MulticonductorNetwork`.
+ */
+PioPackage *pio_package_from_multiconductor_network(const PioDistNetwork *net,
+                                                    char *errbuf,
+                                                    size_t errlen);
+#endif
+
+#if defined(PIO_PKG)
+/**
+ * Run the package semantic validation profile in place. Returns `0` on
+ * success, `-1` on error.
+ */
+int32_t pio_package_validate(PioPackage *pkg, char *errbuf, size_t errlen);
+#endif
+
+#if defined(PIO_PKG)
+/**
+ * Return the package validation summary as JSON. The returned string is owned
+ * by the library; free it with [`pio_string_free`].
+ */
+char *pio_package_validation_json(const PioPackage *pkg, char *errbuf, size_t errlen);
+#endif
+
+#if defined(PIO_PKG)
+/**
+ * Return the package structured diagnostics array as JSON. The returned string
+ * is owned by the library; free it with [`pio_string_free`].
+ */
+char *pio_package_diagnostics_json(const PioPackage *pkg, char *errbuf, size_t errlen);
+#endif
+
+#if defined(PIO_PKG)
+/**
+ * Return the multiconductor-to-balanced lowering preflight report as JSON.
+ * `base_mva` is the three phase system power base used for the balanced
+ * per-unit projection. Returns `NULL` if the package is not multiconductor.
+ */
+char *pio_package_multiconductor_to_balanced_preflight_json(const PioPackage *pkg,
+                                                            double base_mva,
+                                                            char *errbuf,
+                                                            size_t errlen);
+#endif
+
+#if defined(PIO_PKG)
+/**
+ * Lower a multiconductor package to a new balanced package. Call
+ * [`pio_package_multiconductor_to_balanced_preflight_json`] first when the
+ * caller needs structured blockers for unsupported inputs. `base_mva` is the
+ * three phase system power base used for the balanced per-unit projection.
+ */
+PioPackage *pio_package_lower_multiconductor_to_balanced(const PioPackage *pkg,
+                                                         double base_mva,
+                                                         char *errbuf,
+                                                         size_t errlen);
 #endif
 
 #if defined(PIO_DIST)

@@ -30,6 +30,7 @@ cargo test -p powerio-capi --no-default-features
 cargo test -p powerio-capi --features arrow
 cargo test -p powerio-capi --features gridfm
 cargo test -p powerio-capi --features dist
+cargo test -p powerio-capi --features arrow,gridfm,dist,pkg
 scripts/capi-header-parity.sh
 scripts/capi-smoke.sh
 ```
@@ -119,6 +120,33 @@ the transport the Julia package consumes: one call instead of stitching the
 snapshot omits, so a reloaded handle reformats on write rather than echoing a
 byte-exact original.
 
+## The `.pio.json` package surface
+
+The default build includes the package surface (`PIO_PKG`). Probe it with
+`pio_has_feature("pkg")` when loading dynamically. `PioPackage` is an opaque
+compiler package handle, distinct from the parsed network handles:
+
+- `pio_package_parse_file` and `pio_package_parse_str` read `.pio.json`.
+- `pio_package_to_json` returns compact `.pio.json`; free it with
+  `pio_string_free`.
+- `pio_package_from_balanced_network` wraps a `PioNetwork`, the historical C
+  handle for `powerio::BalancedNetwork`.
+- `pio_package_from_multiconductor_network` wraps a `PioDistNetwork`, the
+  historical C handle for `powerio_dist::MulticonductorNetwork`, when both
+  `PIO_PKG` and `PIO_DIST` are present.
+- `pio_package_validate`, `pio_package_validation_json`, and
+  `pio_package_diagnostics_json` expose structured validation state.
+- `pio_package_multiconductor_to_balanced_preflight_json` reports structured
+  blockers before lowering, and `pio_package_lower_multiconductor_to_balanced`
+  returns a new balanced package when the input is ready.
+
+Constructor and lowering options cross as typed parameters. The balanced
+constructor takes `include_solver_metadata`; any nonzero value records compact
+normalized solver table metadata. The multiconductor lowering calls take
+`base_mva`, the three phase system power base used for the balanced per-unit
+projection. The transform convention is fixed by these functions; if another
+convention becomes a real public option, it should get a new additive symbol.
+
 ## API names
 
 The grammar is written out in the header preamble; the short version:
@@ -129,6 +157,8 @@ The grammar is written out in the header preamble; the short version:
   `pio_convert_file`/`pio_convert_str` transcode without keeping a handle.
 - `pio_to_format` is the one text serializer; `pio_to_arrow` earns its own
   symbol only because its output type is Arrow C Data Interface structs.
+- `pio_package_*` functions operate on the package envelope, not on a new
+  network handle family.
 - Format names never appear in symbols: `matpower`, `psse`, `powerio-json`,
   `pypsa-csv`, `gridfm`, and every future format are strings, so a new format
   never changes this ABI.
@@ -156,7 +186,8 @@ Every entry point is hardened at the boundary:
   never dereferenced past its NUL.
 - Ownership is symmetric: handles from `pio_parse_*`/`pio_read_dir`/
   `pio_normalize` are freed with `pio_network_free`, strings from
-  `pio_to_format`/`pio_convert_*` with `pio_string_free`, each exactly once.
+  `pio_to_format`/`pio_convert_*` with `pio_string_free`, package handles with
+  `pio_package_free`, each exactly once.
   The Arrow export hands the caller two C Data Interface structs whose
   non-NULL `release` callbacks must each be invoked exactly once.
 - The table extractors (`pio_branches`, `pio_gens`, ...) write at most `cap`
@@ -199,9 +230,10 @@ the formats reversed. It is the reason the `pio_abi_version()` handshake is
 not optional.
 
 The grammar v4 fixed is the freeze: existing signatures never change again,
-new data means new symbols, and rich or multiconductor data rides the Arrow
-and `powerio-json` schemas, which evolve without touching a C signature. Any
-future break would bump `PIO_ABI_VERSION` in lockstep with PowerIO.jl.
+new data means new symbols, and rich or multiconductor data rides the Arrow,
+`powerio-json`, and `.pio.json` schemas, which evolve without touching a C
+signature. Any future break would bump `PIO_ABI_VERSION` in lockstep with
+PowerIO.jl.
 
 The optional `pio_dist_*` surface has its own version check:
 `pio_dist_abi_version()` against `PIO_DIST_ABI_VERSION`, after confirming
@@ -212,7 +244,7 @@ appeared before this split should be treated as experimental.
 
 Every public `PIO_*` macro, opaque typedef, and `pio_*` prototype in
 `powerio.h` is pinned by a Cargo test, and CI compiles the C smoke program
-against the no-default core ABI plus the arrow, gridfm, and dist feature
+against the no-default core ABI plus the arrow, gridfm, dist, and pkg feature
 surfaces. CI also compiles and links a C++ header sanity program to keep the
 `extern "C"` path honest. Source/header symbol parity is checked separately, so
 adding, renaming, or deleting a public entry point fails before release.

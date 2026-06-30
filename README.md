@@ -205,7 +205,8 @@ and Julia as `to_normalized(case)`.
 ### C ABI
 
 `powerio-capi` exposes parse, query, conversion, JSON transport, normalization,
-and numeric table extraction through `pio_*` functions. The public header is
+`.pio.json` package handles, and numeric table extraction through `pio_*`
+functions. The public header is
 [powerio-capi/include/powerio.h](https://github.com/eigenergy/powerio/blob/main/powerio-capi/include/powerio.h).
 Build with `--features arrow` to enable `pio_to_arrow` over the
 [Arrow C Data Interface](https://arrow.apache.org/docs/format/CDataInterface.html).

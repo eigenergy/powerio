@@ -15,9 +15,10 @@ name = "powerio_capi"
 crate-type = ["cdylib", "staticlib", "rlib"]
 
 [features]
-# Distribution is first class: every powerio build ships the pio_dist_* surface
-# by default. Opt out with --no-default-features for a transmission-only library.
-default = ["dist"]
+# Distribution and package support are first class: every default powerio build
+# ships the pio_dist_* and pio_package_* surfaces. Opt out with
+# --no-default-features for a transmission-only library.
+default = ["dist", "pkg"]
 # Zero-copy raw network export over the Arrow C Data Interface (`pio_to_arrow`).
 # Off by default so the base ABI pulls in nothing but `powerio`.
 arrow = ["dep:arrow"]
@@ -28,15 +29,19 @@ dist = ["dep:powerio-dist"]
 # Off by default so the base ABI pulls in nothing but `powerio`; enabling it pulls
 # in powerio-matrix (arrow + parquet) for the reader.
 gridfm = ["dep:powerio-matrix", "powerio-matrix/gridfm"]
+# `.pio.json` compiler package envelope (`pio_package_*`). On by default.
+pkg = ["dep:powerio-pkg"]
 
 [dependencies]
 powerio.workspace = true
 powerio-dist = { workspace = true, optional = true }
+powerio-pkg = { workspace = true, optional = true }
 # Only the C Data Interface (`ffi`) is needed; the heavy arrow defaults stay off.
 arrow = { workspace = true, features = ["ffi"], optional = true }
 # Pulled in only by the `gridfm` feature: the reader lives in powerio-matrix.
 # It re-exports powerio, so `Network` is the same type `make_network` already takes.
 powerio-matrix = { workspace = true, optional = true }
+serde_json = { workspace = true }
 
 [dev-dependencies]
 # Only the gridfm C-ABI test uses it (write a dataset to a temp dir, read it back).

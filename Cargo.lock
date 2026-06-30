@@ -2011,6 +2011,8 @@ dependencies = [
  "powerio",
  "powerio-dist",
  "powerio-matrix",
+ "powerio-pkg",
+ "serde_json",
  "tempfile",
 ]
 
