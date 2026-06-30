@@ -42,6 +42,23 @@ mpc.gencost = [
 ];
 """
 
+PSSE_START_OF_MARKERS = """0, 100.00, 33, 0, 0, 60.00 / synthetic v33 export
+CASE
+COMMENT
+1,'BUS1        ', 230.0000,3,1,1,1,1.00000,0.0000,1.1000,0.9000,1.1000,0.9000
+2,'BUS2        ', 230.0000,1,1,1,1,1.00000,0.0000,1.1000,0.9000,1.1000,0.9000
+0 / End of Bus Data, Start of Load Data
+2,'1 ',1,1,1,10.0,5.0
+0 / End of Load Data, Start of Fixed Shunt Data
+0 / End of Fixed Shunt Data, Start of Gen Data
+1,'1 ',50.0,5.0,20.0,-10.0,1.0,0,100.0,0.0,1.0,0.0,0.0,1.0,1,100.0,80.0,10.0
+0 / End of Gen Data, Start of Branch Data
+1,2,'1 ',0.01,0.05,0.001,100.0,90.0,80.0,0.0,0.0,0.0,0.0,1,1,0.0,1,1
+0 / End of Branch Data, Start of Transformer Data
+0 / End of Transformer Data, Start of Area Interchange Data
+Q
+"""
+
 
 def load(name):
     return powerio.parse_file(DATA / f"{name}.m")
@@ -685,6 +702,18 @@ def test_convert_round_trip_through_psse(tmp_path):
     back = powerio.convert_file(str(p), "matpower")  # PSS/E inferred from .raw extension
     case = powerio.parse_str(back.text)
     assert case.n_buses == 30
+
+
+def test_convert_psse_start_of_markers_to_powermodels(tmp_path):
+    p = tmp_path / "start_markers.raw"
+    p.write_text(PSSE_START_OF_MARKERS)
+
+    pm = json.loads(powerio.convert_file(p, "powermodels-json", from_="psse").text)
+
+    assert len(pm["bus"]) == 2
+    assert len(pm["load"]) == 1
+    assert len(pm["gen"]) == 1
+    assert len(pm["branch"]) == 1
 
 
 def test_convert_unknown_format_raises():
