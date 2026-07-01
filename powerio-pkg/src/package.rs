@@ -17,7 +17,9 @@ use crate::lowering::{
     lower_multiconductor_to_balanced,
 };
 use crate::model::{ModelKind, ModelPayload};
-use crate::operating::{OperatingPointSeries, apply_operating_point_to_model};
+use crate::operating::{
+    OperatingPointSeries, apply_operating_point_to_model, operating_point_update_paths,
+};
 use crate::provenance::{
     Confidence, MappingKind, Origin, Producer, SourceDescriptor, SourceMapEntry, SourceRef,
 };
@@ -167,8 +169,8 @@ pub struct CompilerPackage {
     /// Explicit model kind. Authoritative; never inferred from field presence.
     pub model_kind: ModelKind,
     pub model: ModelPayload,
-    /// Replayable operating states over the static payload. Omitted for static
-    /// single state cases.
+    /// Replayable operating states over the static payload. The package
+    /// constructors and setters omit empty series for static single state cases.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub operating_points: Option<OperatingPointSeries>,
     pub origin: Origin,
@@ -315,15 +317,50 @@ impl CompilerPackage {
         let series = self.operating_points.as_ref().ok_or_else(|| {
             <serde_json::Error as serde::de::Error>::custom("package has no operating points")
         })?;
-        let point = series.point(index).ok_or_else(|| {
+        let point = series.unique_point(index)?.ok_or_else(|| {
             <serde_json::Error as serde::de::Error>::custom(format!(
                 "package has no operating point {index}"
             ))
         })?;
+        let updated_paths = operating_point_update_paths(&self.model, point);
+        let had_normalized_solver_tables = self.derived.normalized_solver_tables.is_some();
+        let options = materialize_operating_point_options(index);
         let mut package = self.clone();
         package.model = apply_operating_point_to_model(&self.model, point)?;
         package.operating_points = None;
+        package.origin = Origin::Derived {
+            parent_package_id: self.package_id.clone(),
+            pass: "materialize-operating-point".to_owned(),
+            options: options.clone(),
+        };
+        package.derived = DerivedMetadata::default();
+        package
+            .source_maps
+            .retain(|entry| !updated_paths.contains(entry.element_path.as_str()));
+        package.diagnostics.retain(|diagnostic| {
+            diagnostic
+                .element_path
+                .as_deref()
+                .is_none_or(|path| !updated_paths.contains(path))
+        });
+        let mut record = LoweringRecord::new(
+            "materialize-operating-point",
+            self.model_kind,
+            self.model_kind,
+        );
+        record.options = options;
         package.run_sane_validation();
+        record.validation_status = package.validation.status;
+        package.push_lowering(record);
+        if had_normalized_solver_tables {
+            package
+                .attach_normalized_solver_table_metadata()
+                .map_err(|err| {
+                    <serde_json::Error as serde::de::Error>::custom(format!(
+                        "failed to recompute normalized solver table metadata: {err}"
+                    ))
+                })?;
+        }
         Ok(package)
     }
 
@@ -505,6 +542,12 @@ impl CompilerPackage {
         self.validation =
             ValidationSummary::from_diagnostics(&self.diagnostics).with_passes(passes);
     }
+}
+
+fn materialize_operating_point_options(index: usize) -> serde_json::Map<String, serde_json::Value> {
+    let mut options = serde_json::Map::new();
+    options.insert("index".to_owned(), serde_json::json!(index));
+    options
 }
 
 fn schema_major(version: &str) -> Option<u64> {

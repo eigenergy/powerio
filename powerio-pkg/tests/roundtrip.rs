@@ -339,6 +339,18 @@ fn materializes_balanced_operating_point_and_clears_series() {
     assert_close(net.generators[0].pg, 61.0);
     assert_close(net.generators[0].pmax, 90.0);
     assert!(!net.branches[0].in_service);
+    match &materialized.origin {
+        Origin::Derived { pass, options, .. } => {
+            assert_eq!(pass, "materialize-operating-point");
+            assert_eq!(options["index"], serde_json::json!(1));
+        }
+        other => panic!("expected derived origin, got {other:?}"),
+    }
+    assert_eq!(materialized.lowering_history.len(), 1);
+    assert_eq!(
+        materialized.lowering_history[0].pass,
+        "materialize-operating-point"
+    );
 }
 
 #[test]
@@ -354,6 +366,35 @@ fn materialize_operating_point_reports_missing_series_or_index() {
         .materialize_operating_point(9)
         .expect_err("missing point must fail");
     assert!(err.to_string().contains("package has no operating point 9"));
+}
+
+#[test]
+fn materialize_operating_point_rejects_duplicate_indices() {
+    let mut point0 = OperatingPoint::new(0);
+    point0.updates.push(ElementUpdate::new(
+        ElementRef::new("loads", 0),
+        fields(&[("p", serde_json::json!(11.0))]),
+    ));
+    let mut duplicate0 = OperatingPoint::new(0);
+    duplicate0.updates.push(ElementUpdate::new(
+        ElementRef::new("loads", 0),
+        fields(&[("p", serde_json::json!(22.0))]),
+    ));
+    let pkg = balanced_package_with_gen().with_operating_points(OperatingPointSeries::new(
+        TimeAxis::new(1).with_duration_hours(vec![1.0]),
+        vec![point0, duplicate0],
+    ));
+
+    let err = pkg
+        .materialize_operating_point(0)
+        .expect_err("duplicate indices must fail");
+
+    assert!(
+        err.to_string()
+            .contains("package has multiple operating points with index 0"),
+        "{err}"
+    );
+    assert_close(pkg.as_balanced().unwrap().loads[0].p, 10.0);
 }
 
 #[test]
@@ -414,6 +455,74 @@ fn materialize_operating_point_reports_unknown_field() {
         ),
         "{err}"
     );
+}
+
+#[test]
+fn materialize_operating_point_refreshes_derived_metadata() {
+    let mut pkg = balanced_package_with_gen().with_operating_points(sample_operating_points());
+    assert!(pkg.attach_normalized_solver_table_metadata().unwrap());
+    let before = pkg.derived.normalized_solver_tables.as_ref().unwrap();
+    assert_eq!(before.row_counts.branches, 1);
+    pkg.derived.matrix_stats = Some(serde_json::json!({"stale": true}));
+    pkg.derived
+        .cache_keys
+        .insert("matrix".to_owned(), "stale".to_owned());
+
+    let materialized = pkg.materialize_operating_point(1).unwrap();
+
+    assert!(materialized.derived.matrix_stats.is_none());
+    assert!(materialized.derived.cache_keys.is_empty());
+    let after = materialized
+        .derived
+        .normalized_solver_tables
+        .as_ref()
+        .expect("solver table metadata recomputed");
+    assert_eq!(after.row_counts.branches, 0);
+    assert_eq!(after.row_counts.arcs, 0);
+}
+
+#[test]
+fn materialize_operating_point_clears_stale_provenance_for_updated_fields() {
+    let mut point = OperatingPoint::new(0);
+    point.updates.push(ElementUpdate::new(
+        ElementRef::new("buses", 0),
+        fields(&[("vm", serde_json::json!(0.0))]),
+    ));
+    let pkg = balanced_package_with_gen().with_operating_points(OperatingPointSeries::new(
+        TimeAxis::new(1).with_duration_hours(vec![1.0]),
+        vec![point],
+    ));
+    assert!(pkg.source_maps.iter().any(|entry| {
+        entry.element_path == "/model/balanced_network/buses/0/vm"
+            && entry.source_ref.record.as_deref() == Some("bus")
+            && entry.source_ref.field.as_deref() == Some("vm")
+    }));
+    assert!(
+        pkg.source_maps
+            .iter()
+            .any(|entry| { entry.element_path == "/model/balanced_network/branches/0/angmax" })
+    );
+
+    let materialized = pkg.materialize_operating_point(0).unwrap();
+
+    assert!(
+        !materialized
+            .source_maps
+            .iter()
+            .any(|entry| { entry.element_path == "/model/balanced_network/buses/0/vm" })
+    );
+    assert!(
+        materialized
+            .source_maps
+            .iter()
+            .any(|entry| { entry.element_path == "/model/balanced_network/branches/0/angmax" })
+    );
+    assert!(materialized.diagnostics.iter().any(|d| {
+        d.code == DiagnosticCode::new("VALIDATE.BALANCED.VALUE_DOMAIN")
+            && d.details["field"] == "vm"
+            && d.element_path.as_deref() == Some("/model/balanced_network/buses/0/vm")
+            && d.source_ref.is_none()
+    }));
 }
 
 #[test]

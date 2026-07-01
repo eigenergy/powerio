@@ -1,6 +1,6 @@
 //! Replayable operating point overlays for `.pio.json` packages.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -33,9 +33,25 @@ impl OperatingPointSeries {
         self.time_axis.is_empty() && self.points.is_empty() && self.metadata.is_empty()
     }
 
+    /// Return the first point with `index`.
+    ///
+    /// Use [`OperatingPointSeries::unique_point`] when duplicate indices must be
+    /// rejected instead of collapsed.
     #[must_use]
     pub fn point(&self, index: usize) -> Option<&OperatingPoint> {
         self.points.iter().find(|point| point.index == index)
+    }
+
+    /// Return the only point with `index`, rejecting duplicate period indices.
+    pub fn unique_point(&self, index: usize) -> serde_json::Result<Option<&OperatingPoint>> {
+        let mut matches = self.points.iter().filter(|point| point.index == index);
+        let first = matches.next();
+        if matches.next().is_some() {
+            return Err(<serde_json::Error as serde::de::Error>::custom(format!(
+                "package has multiple operating points with index {index}"
+            )));
+        }
+        Ok(first)
     }
 
     #[must_use]
@@ -188,6 +204,25 @@ pub(crate) fn apply_operating_point_to_model(
     let updated = serde_json::from_value(value)?;
     validate_update_fields_survived(&updated, &point.updates)?;
     Ok(updated)
+}
+
+pub(crate) fn operating_point_update_paths(
+    model: &ModelPayload,
+    point: &OperatingPoint,
+) -> BTreeSet<String> {
+    let payload_key = payload_key(model);
+    point
+        .updates
+        .iter()
+        .flat_map(|update| {
+            update.fields.keys().map(move |field| {
+                format!(
+                    "/model/{payload_key}/{}/{}/{}",
+                    update.element.table, update.element.row, field
+                )
+            })
+        })
+        .collect()
 }
 
 fn payload_key(model: &ModelPayload) -> &'static str {
