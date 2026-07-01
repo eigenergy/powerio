@@ -37,15 +37,15 @@ Supported formats:
 - [egret](https://pypi.org/project/gridx-egret/) `ModelData` JSON
 - [pandapower](https://www.pandapower.org/) `pandapowerNet` JSON
 - [PyPSA](https://pypsa.org/) static CSV folders
+- [ARPA-E GO Competition Challenge 3](https://gocompetition.energy.gov/) JSON input data
+- [surge](https://github.com/amptimal/surge) `.surge.json`
 - [GridFM](https://github.com/gridfm) `.parquet`
+- PowerIO JSON snapshots (`powerio-json`) and `.pio.json` compiler packages
 
 Distribution networks are supported in wire coordinates via [`powerio-dist`](powerio-dist/):
 - [OpenDSS](https://www.epri.com/pages/sa/opendss) `.dss`
 - [PowerModelsDistribution.jl](https://github.com/lanl-ansi/PowerModelsDistribution.jl) ENGINEERING data JSON
 - The (draft) BMOPF JSON spec and schema of the [IEEE BMOPF task force](https://github.com/frederikgeth/bmopf-report) `.json`
-
-Support for the following formats is under development (see the open pull requests):
-- [surge](https://github.com/amptimal/surge) `.surge.json`
 
 Other formats are planned; see the GitHub issues. If a format you need is missing, open an issue or a pull request. All are welcome to contribute to this community project.
 
@@ -130,7 +130,10 @@ powerio convert tests/data/case14.m --to pandapower-json -o case14.pp.json
 powerio convert tests/data/case14.m --to pypsa-csv -o pypsa_case
 powerio convert pypsa_case --from pypsa-csv --to matpower -o case14.m
 powerio convert case.epc --from pslf --to matpower -o case.m
+powerio convert case.surge.json --from surge-json --to matpower -o case.m
+powerio convert goc3_case.json --from goc3-json --to matpower -o case.m
 powerio package tests/data/case14.m -o case14.pio.json
+powerio package goc3_case.json --from goc3-json -o goc3_case.pio.json
 powerio verify tests/data/case30.m --kind bdoubleprime
 powerio dcopf tests/data/case30.m -o out
 powerio sensitivities tests/data/case30.m -o out
@@ -156,7 +159,10 @@ the original file type from converting to a different file type.
 | egret JSON | yes | yes | byte exact retained source | ModelData shape checked against egret and PowerModels.jl |
 | pandapower JSON | yes | yes | byte exact retained source | pandapower import validator checks counts and Y_bus |
 | PyPSA CSV folder | yes | yes | directory output, not text echo | PyPSA import validator checks the exported static components |
+| GO Challenge 3 JSON | yes | source echo only | byte exact retained source | first interval maps to the static power flow core; `.pio.json` packages retain time series as operating points |
+| Surge JSON | yes | yes | byte exact retained source | versioned JSON network body; unsupported source sections stay in retained source or warnings |
 | GridFM Parquet | yes | yes | directory output, deliberately lossy read | recovers the power flow core for conversion back to classical formats |
+| PowerIO JSON | yes | yes | structured model snapshot, not byte exact source echo | lossless for `Network` fields except retained source text |
 
 PowerWorld `.pwd` is display data, not a network case, so it is outside this
 conversion table and uses `parse_display_file` / `parse_display_bytes`. The
@@ -234,6 +240,19 @@ diagnostics(pkg)
 ```
 
 The PowerMCP bundle in [PowerMCP](https://github.com/Power-Agent/PowerMCP) uses the same PowerIO tool surface alongside simulator servers and bridge tools.
+
+### Compiler Packages
+
+`.pio.json` packages wrap one balanced or multiconductor payload with provenance,
+source maps, diagnostics, validation, summaries, lowering history, optional
+derived metadata, and optional `operating_points`. A GO Challenge 3 package
+stores the static first interval in `model` and the full replayable time series
+in `operating_points`; materializing one point returns a static package with the
+updates applied and the series cleared.
+
+Rust uses `powerio_pkg::NetworkPackage`, Python uses the `powerio.Package`
+class, the C ABI uses `pio_package_*`, and the CLI writes packages with
+`powerio package`.
 
 ### GridFM (experimental)
 PowerIO writes datasets for the [LF Energy](https://lfenergy.org/projects/gridfm/) open [Grid Foundation Model (GridFM)](https://github.com/gridfm) project. In the command line:

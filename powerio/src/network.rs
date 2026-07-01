@@ -222,6 +222,38 @@ pub enum SourceFormat {
     /// Read from a PyPSA CSV folder. This is a folder format rather than a
     /// single retained text document, so same-format writes are canonicalized.
     PypsaCsv,
+    /// Read from an ARPA-E GO Challenge 3 JSON input document. The source is a
+    /// unit commitment data set; the neutral transmission model keeps a static
+    /// first interval network and retains the source text for the full data.
+    Goc3Json,
+    /// Read from a Surge native JSON document.
+    SurgeJson,
+}
+
+impl SourceFormat {
+    /// Stable lowercase token for provenance and reporting (package origin,
+    /// CLI summaries, Python bindings). The match is exhaustive here so a new
+    /// variant fails compilation at the one mapping instead of silently
+    /// reporting "unknown" from a downstream wildcard copy.
+    #[must_use]
+    pub fn name(self) -> &'static str {
+        match self {
+            SourceFormat::Matpower => "matpower",
+            SourceFormat::PowerModelsJson => "powermodels-json",
+            SourceFormat::EgretJson => "egret-json",
+            SourceFormat::Psse => "psse",
+            SourceFormat::PowerWorld => "powerworld",
+            SourceFormat::PandapowerJson => "pandapower-json",
+            SourceFormat::Pslf => "pslf",
+            SourceFormat::PowerWorldBinary => "powerworld-pwb",
+            SourceFormat::InMemory => "in-memory",
+            SourceFormat::Normalized => "normalized",
+            SourceFormat::Gridfm => "gridfm",
+            SourceFormat::PypsaCsv => "pypsa-csv",
+            SourceFormat::Goc3Json => "goc3-json",
+            SourceFormat::SurgeJson => "surge-json",
+        }
+    }
 }
 
 /// A format-neutral power network.

@@ -1,9 +1,10 @@
 """powerio: lossless power system case file IO, conversion, and matrices.
 
 Parse MATPOWER, PSS/E, PowerWorld, PSLF EPC, PowerModels JSON, egret JSON,
-pandapower JSON, and PyPSA CSV folders into one format neutral case; write retained text
-formats back byte exact; convert between formats; and pull the sparse matrices
-and graph outputs solvers need::
+pandapower JSON, PyPSA CSV folders, GO Challenge 3 JSON, Surge JSON, GridFM
+Parquet datasets, and PowerIO JSON snapshots into one format neutral case; write
+retained text formats back byte exact; convert between formats; package cases as
+``.pio.json``; and pull the sparse matrices and graph outputs solvers need::
 
     import powerio as pio
 
@@ -13,6 +14,8 @@ and graph outputs solvers need::
     raw, warnings = pio.convert_file("case9.m", "psse")
     pp_json, warnings = pio.convert_file("case9.m", "pandapower-json")
     pypsa_out = net.write_pypsa_csv_folder("case9-pypsa")
+    pkg = pio.Package.from_file("goc3_case.json", from_="goc3-json")
+    points = pkg.operating_points()
 
     B = net.bprime()                         # scipy.sparse, the FDPF B'
     Y = net.ybus()                           # complex csr, G + jB
@@ -21,6 +24,10 @@ and graph outputs solvers need::
 PyPSA CSV folders carry the static network topology (PyPSA's native component
 format for network definition); time series NetCDF/HDF5 scenarios are out of
 scope for now (https://github.com/eigenergy/powerio/issues/107).
+
+GO Challenge 3 JSON is read as a static balanced network using the first
+interval. When it is parsed as a ``.pio.json`` package, the full source time
+series is exposed as replayable operating points.
 
 ``import powerio`` and parsing/writing/converting pull in nothing but the
 interpreter. The matrix methods need scipy/numpy and the graph helper needs networkx; add them
@@ -33,6 +40,7 @@ wrappers here assemble scipy matrices and networkx graphs lazily.
 from __future__ import annotations
 
 import importlib
+import json as _json
 from collections import namedtuple
 from typing import Any, Optional
 
@@ -67,6 +75,7 @@ __all__ = [
     "to_matpower",
     "to_json",
     "to_dense",
+    "Package",
     "write_gridfm_batch",
     "read_gridfm",
     "read_gridfm_scenarios",
@@ -225,9 +234,8 @@ class Network:
     ``shunts``) and the non-matrix methods (``write``, ``reference_bus_index``,
     ``connectivity_report``, ``write_dcopf_bundle``) delegate to the compiled
     handle; the matrix methods below return ``scipy.sparse`` objects. Read
-    fidelity warnings from parse time are on ``read_warnings`` (empty for
-    readers that don't report any; currently all but pandapower JSON and
-    PyPSA CSV).
+    fidelity warnings from parse time are on ``read_warnings``. Readers use this
+    for source data they cannot model or assumptions they had to make.
 
     Errors: a bad file path raises the standard ``OSError`` subclass
     (``FileNotFoundError``); a malformed case raises :class:`PowerIOParseError`
@@ -523,11 +531,11 @@ def convert_file(
     """Convert a case file to another format through the neutral hub.
 
     ``to`` / ``from_`` are format names: ``matpower``, ``powermodels-json``,
-    ``egret-json``, ``pandapower-json``, ``psse``, ``powerworld`` (aliases
-    ``m``, ``pm``, ``egret``, ``pp``, ``raw``, ``aux``). The input format is
-    inferred from the file extension unless ``from_`` overrides it. PSLF EPC is
-    accepted as input with ``from_="pslf"`` / ``"epc"`` or a ``.epc`` extension,
-    but it is not a write target. PyPSA CSV folders are read with
+    ``egret-json``, ``pandapower-json``, ``psse``, ``powerworld``, ``pslf``,
+    ``goc3-json``, and ``surge-json`` (aliases ``m``, ``pm``, ``egret``,
+    ``pp``, ``raw``, ``aux``, ``epc``, ``goc3``, and ``surge``). The input format is
+    inferred from the file extension unless ``from_`` overrides it. GO Challenge
+    3 JSON is read only. PyPSA CSV folders are read with
     ``from_="pypsa-csv"`` and written with
     :meth:`Network.write_pypsa_csv_folder`. Returns a :class:`Conversion` with
     the text and any fidelity warnings.
@@ -682,3 +690,99 @@ def read_pypsa_csv_folder(path: Any) -> Network:
 
 
 from . import dist  # noqa: E402  (needs Conversion defined above)
+
+
+class Package:
+    """A parsed ``.pio.json`` package handle.
+
+    Parses the envelope once; every accessor reuses the handle instead of
+    re-reading the JSON text.
+    """
+
+    def __init__(self, inner: "_powerio._Package"):
+        self._inner = inner
+
+    @classmethod
+    def from_file(
+        cls, path: Any, from_: Optional[str] = None, scenario: int = 0
+    ) -> "Package":
+        """Build a package from a case file or folder."""
+        return cls(_powerio._Package.from_file(str(path), from_, scenario))
+
+    @classmethod
+    def from_str(cls, text: str, from_: Optional[str] = None) -> "Package":
+        """Build a package from in-memory case text."""
+        return cls(_powerio._Package.from_str(text, from_))
+
+    @classmethod
+    def from_json(cls, text: str) -> "Package":
+        """Parse ``.pio.json`` envelope text."""
+        return cls(_powerio._Package.from_json(text))
+
+    @classmethod
+    def from_balanced(
+        cls, network: Network, include_solver_metadata: bool = False
+    ) -> "Package":
+        """Wrap a balanced :class:`Network` in a package."""
+        return cls(
+            _powerio._Package.from_balanced(network._inner, include_solver_metadata)
+        )
+
+    @classmethod
+    def from_multiconductor(cls, network: "dist.MulticonductorNetwork") -> "Package":
+        """Wrap a multiconductor network in a package."""
+        return cls(_powerio._Package.from_multiconductor(network._inner))
+
+    @property
+    def model_kind(self) -> str:
+        """``"balanced"`` or ``"multiconductor"``."""
+        return self._inner.model_kind()
+
+    def to_json(self) -> str:
+        """Serialize to pretty ``.pio.json``."""
+        return self._inner.to_json()
+
+    def as_balanced(self) -> Network:
+        """Return the balanced payload as a :class:`Network`."""
+        return Network(self._inner.as_balanced())
+
+    def as_multiconductor(self) -> "dist.MulticonductorNetwork":
+        """Return the multiconductor payload."""
+        return dist.MulticonductorNetwork(self._inner.as_multiconductor())
+
+    def operating_points(self) -> Any:
+        """The operating point series as Python data, or ``None``.
+
+        GOC3 packages populate this from the source time series. Each point is
+        a set of field updates over the package's static payload.
+        """
+        return _json.loads(self._inner.operating_points_json())
+
+    def materialize_operating_point(self, index: int) -> "Package":
+        """Materialize one operating point into a new static package."""
+        return Package(self._inner.materialize_operating_point(index))
+
+    def validate(self) -> None:
+        """Run the package semantic validation profile in place."""
+        self._inner.validate()
+
+    def validation(self) -> Any:
+        """The validation summary as Python data."""
+        return _json.loads(self._inner.validation_json())
+
+    def diagnostics(self) -> Any:
+        """The structured diagnostics as a list of Python dicts."""
+        return _json.loads(self._inner.diagnostics_json())
+
+    def multiconductor_to_balanced_preflight(self, base_mva: float = 100.0) -> Any:
+        """Readiness report for multiconductor to balanced lowering."""
+        return _json.loads(
+            self._inner.multiconductor_to_balanced_preflight_json(base_mva)
+        )
+
+    def lower_multiconductor_to_balanced(self, base_mva: float = 100.0) -> "Package":
+        """Lower a multiconductor package to a new balanced package."""
+        return Package(self._inner.lower_multiconductor_to_balanced(base_mva))
+
+    def __repr__(self) -> str:
+        return repr(self._inner)

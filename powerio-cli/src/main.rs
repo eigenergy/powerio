@@ -18,7 +18,7 @@ use powerio_matrix::pipeline::{MatrixKind, Pipeline, RhsKind};
 use powerio_matrix::synth::{SynthSpec, Topology};
 use powerio_matrix::{MissingGenCostPolicy, WriteOptions};
 use powerio_pkg::{
-    CompilerPackage, DiagnosticSeverity, DiagnosticStage, Origin, SourceDescriptor,
+    DiagnosticSeverity, DiagnosticStage, NetworkPackage, Origin, SourceDescriptor,
     StructuredDiagnostic, ValidationSummary,
 };
 use serde_json::json;
@@ -260,10 +260,10 @@ impl<'a> GenCostCliOptions<'a> {
     }
 }
 
-/// A case interchange format, for `--to` / `--from`. `gridfm` and `pwb` are
+/// A case interchange format, for `--to` / `--from`. `gridfm`, `goc3-json`, and `pwb` are
 /// read-only here: `convert --from gridfm` reads a Parquet dataset, but writing
-/// a gridfm dataset is the dedicated `gridfm` subcommand, and PowerWorld `.pwb`
-/// has no writer.
+/// a gridfm dataset is the dedicated `gridfm` subcommand, GO Challenge 3 JSON is a
+/// unit commitment input document, and PowerWorld `.pwb` has no writer.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, ValueEnum)]
 enum FormatArg {
     #[value(name = "matpower", alias = "m")]
@@ -292,6 +292,12 @@ enum FormatArg {
     /// GE PSLF .epc case (read and write).
     #[value(name = "pslf", alias = "epc")]
     Pslf,
+    /// ARPA-E GO Challenge 3 JSON input data (read only).
+    #[value(name = "goc3-json", alias = "goc3", alias = "go3", alias = "c3")]
+    Goc3Json,
+    /// Surge native JSON network document.
+    #[value(name = "surge-json", alias = "surge")]
+    SurgeJson,
     /// Read a gridfm-datakit Parquet dataset directory (read only).
     #[value(name = "gridfm")]
     Gridfm,
@@ -326,6 +332,8 @@ impl FormatArg {
             FormatArg::PandapowerJson => TargetFormat::PandapowerJson,
             FormatArg::PowerioJson => TargetFormat::PowerioJson,
             FormatArg::Pslf => TargetFormat::Pslf,
+            FormatArg::Goc3Json => TargetFormat::Goc3Json,
+            FormatArg::SurgeJson => TargetFormat::SurgeJson,
             // PypsaCsv is a transmission format, but it writes a directory, not a
             // text target; `run_convert` handles it before reaching here. gridfm
             // is read only here, and Pwb is read only. The distribution formats
@@ -360,6 +368,8 @@ impl FormatArg {
             | FormatArg::PowerioJson
             | FormatArg::PypsaCsv
             | FormatArg::Pslf
+            | FormatArg::Goc3Json
+            | FormatArg::SurgeJson
             | FormatArg::Gridfm
             | FormatArg::Pwb => None,
         }
@@ -379,6 +389,8 @@ impl FormatArg {
             FormatArg::PowerioJson => "powerio-json",
             FormatArg::PypsaCsv => "pypsa-csv",
             FormatArg::Pslf => "pslf",
+            FormatArg::Goc3Json => "goc3-json",
+            FormatArg::SurgeJson => "surge-json",
             FormatArg::Gridfm => "gridfm",
             FormatArg::Pwb => "pwb",
             FormatArg::Dss => "dss",
@@ -960,7 +972,7 @@ fn package_text(input: &Path, from: Option<FormatArg>, scenario: i64) -> anyhow:
     let text = pkg
         .to_json_pretty()
         .context("serializing .pio.json package")?;
-    CompilerPackage::from_json(&text).context("validating .pio.json package readback")?;
+    NetworkPackage::from_json(&text).context("validating .pio.json package readback")?;
     Ok(text)
 }
 
@@ -968,11 +980,11 @@ fn build_package(
     input: &Path,
     from: Option<FormatArg>,
     scenario: i64,
-) -> anyhow::Result<CompilerPackage> {
+) -> anyhow::Result<NetworkPackage> {
     if from == Some(FormatArg::Gridfm) || (from.is_none() && looks_like_gridfm_dir(input)) {
         let read = powerio_matrix::read_gridfm_dataset(input, scenario)
             .with_context(|| format!("reading gridfm dataset {}", input.display()))?;
-        let mut pkg = CompilerPackage::from_balanced(read.network);
+        let mut pkg = NetworkPackage::from_balanced(read.network);
         add_read_warning_diagnostics(&mut pkg, "READ.GRIDFM.FIDELITY_WARNING", &read.warnings);
         set_package_source(&mut pkg, input, PackageSourceKind::Folder, "gridfm", false);
         pkg.run_sane_validation();
@@ -990,7 +1002,7 @@ fn build_package(
             .or_else(|| from.map(FormatArg::name))
             .unwrap_or("unknown");
         let retained_source = net.source.is_some();
-        let mut pkg = CompilerPackage::from_multiconductor(net);
+        let mut pkg = NetworkPackage::from_multiconductor(net);
         set_package_source(
             &mut pkg,
             input,
@@ -1004,9 +1016,9 @@ fn build_package(
 
     let parsed = powerio_matrix::parse_file(input, from.map(FormatArg::name))
         .with_context(|| format!("reading {}", input.display()))?;
-    let format = balanced_source_format_name(parsed.network.source_format);
+    let format = parsed.network.source_format.name();
     let retained_source = parsed.network.source.is_some();
-    let mut pkg = CompilerPackage::from_balanced(parsed.network);
+    let mut pkg = NetworkPackage::from_balanced(parsed.network);
     add_read_warning_diagnostics(
         &mut pkg,
         "READ.TRANSMISSION.PARSE_WARNING",
@@ -1023,7 +1035,7 @@ fn build_package(
     Ok(pkg)
 }
 
-fn add_read_warning_diagnostics(pkg: &mut CompilerPackage, code: &str, warnings: &[String]) {
+fn add_read_warning_diagnostics(pkg: &mut NetworkPackage, code: &str, warnings: &[String]) {
     pkg.diagnostics.extend(warnings.iter().map(|w| {
         StructuredDiagnostic::new(
             code,
@@ -1063,7 +1075,7 @@ fn package_source_kind(input: &Path, format: &str) -> PackageSourceKind {
 }
 
 fn set_package_source(
-    pkg: &mut CompilerPackage,
+    pkg: &mut NetworkPackage,
     input: &Path,
     kind: PackageSourceKind,
     format: &str,
@@ -1096,24 +1108,6 @@ fn set_package_source(
         format: Some(format.to_owned()),
         hash: None,
     }];
-}
-
-fn balanced_source_format_name(f: powerio_matrix::SourceFormat) -> &'static str {
-    match f {
-        powerio_matrix::SourceFormat::Matpower => "matpower",
-        powerio_matrix::SourceFormat::PowerModelsJson => "powermodels-json",
-        powerio_matrix::SourceFormat::EgretJson => "egret-json",
-        powerio_matrix::SourceFormat::Psse => "psse",
-        powerio_matrix::SourceFormat::PowerWorld => "powerworld",
-        powerio_matrix::SourceFormat::PandapowerJson => "pandapower-json",
-        powerio_matrix::SourceFormat::Pslf => "pslf",
-        powerio_matrix::SourceFormat::PowerWorldBinary => "powerworld-pwb",
-        powerio_matrix::SourceFormat::InMemory => "in-memory",
-        powerio_matrix::SourceFormat::Normalized => "normalized",
-        powerio_matrix::SourceFormat::Gridfm => "gridfm",
-        powerio_matrix::SourceFormat::PypsaCsv => "pypsa-csv",
-        _ => "unknown",
-    }
 }
 
 fn transmission_summary_json(
@@ -1249,6 +1243,9 @@ fn run_convert(
             "`convert` cannot write PowerWorld .pwb binary cases; use `--to powerworld` for AUX text"
         );
     }
+    // goc3-json is read only, but the library still echoes a goc3 source to a
+    // goc3 target byte for byte; every other case gets its precise
+    // WriteUnsupported error, so no CLI-level bail here.
     // PyPSA CSV is a transmission format that writes a directory, not a text
     // target, so it takes the folder path and returns early.
     if to == FormatArg::PypsaCsv {
@@ -1407,7 +1404,7 @@ mod tests {
         transmission_summary_json,
     };
     use clap::Parser;
-    use powerio_pkg::{CompilerPackage, MappingKind, Origin, ValidationStatus};
+    use powerio_pkg::{MappingKind, NetworkPackage, Origin, ValidationStatus};
     use std::path::Path;
     use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -1478,7 +1475,7 @@ mod tests {
     fn package_text_matches_balanced_shape_and_provenance() {
         let input = data("case9.m");
         let text = package_text(&input, None, 0).unwrap();
-        let pkg = CompilerPackage::from_json(&text).unwrap();
+        let pkg = NetworkPackage::from_json(&text).unwrap();
         assert_eq!(pkg.model_kind, powerio_pkg::ModelKind::Balanced);
         assert!(pkg.kind_is_consistent());
         assert_eq!(pkg.as_balanced().unwrap().buses.len(), 9);
@@ -1526,7 +1523,7 @@ mod tests {
 
         run_package(&data("case9.m"), Some(&output), None, 0).unwrap();
         let text = std::fs::read_to_string(&output).unwrap();
-        let pkg = CompilerPackage::from_json(&text).unwrap();
+        let pkg = NetworkPackage::from_json(&text).unwrap();
         assert_eq!(pkg.model_kind, powerio_pkg::ModelKind::Balanced);
         assert_eq!(pkg.sources[0].format.as_deref(), Some("matpower"));
 
@@ -1537,14 +1534,14 @@ mod tests {
     fn package_helper_returns_stdout_text() {
         let text = package_text(&data("case9.m"), None, 0).unwrap();
         assert!(text.contains("\"schema\""));
-        let pkg = CompilerPackage::from_json(&text).unwrap();
+        let pkg = NetworkPackage::from_json(&text).unwrap();
         assert_eq!(pkg.summary.elements["buses"], 9);
     }
 
     #[test]
     fn package_text_includes_validation_passes() {
         let text = package_text(&data("case9.m"), None, 0).unwrap();
-        let pkg = CompilerPackage::from_json(&text).unwrap();
+        let pkg = NetworkPackage::from_json(&text).unwrap();
         assert!(
             pkg.validation
                 .passes
@@ -1555,7 +1552,7 @@ mod tests {
         );
 
         let pretty = pkg.to_json_pretty().unwrap();
-        let back = CompilerPackage::from_json(&pretty).unwrap();
+        let back = NetworkPackage::from_json(&pretty).unwrap();
         assert_eq!(back.validation.passes, pkg.validation.passes);
     }
 

@@ -21,6 +21,14 @@ pip install 'powerio[all]'      # matrix, graph, and gridfm reads
 `to_matpower`, and `to_json` do not import NumPy, SciPy, NetworkX, Polars,
 pandas, or pyarrow.
 
+Transmission text and file format names accepted by `parse_*` and `convert_*` include
+`matpower`, `psse`, `powerworld`, `pslf`, `powermodels-json`, `egret-json`,
+`pandapower-json`, `goc3-json`, `surge-json`, and `powerio-json`, plus their
+documented aliases. PyPSA CSV folders and GridFM Parquet datasets are directory
+formats; use `read_pypsa_csv_folder`, `Network.write_pypsa_csv_folder`,
+`read_gridfm`, `Network.write_gridfm`, or the conversion/package helpers that
+take a path.
+
 ## Canonical use
 
 ```python
@@ -35,6 +43,9 @@ raw = pio.convert_file("case9.m", "psse")
 aux = pio.convert_str(json_text, "powerworld", format="powermodels-json")
 pypsa_out = net.write_pypsa_csv_folder("case9-pypsa")
 display = pio.parse_display_file("case.pwd")
+pkg = pio.Package.from_file("goc3_case.json", from_="goc3-json")
+points = pkg.operating_points()
+period_1 = pkg.materialize_operating_point(1)
 
 normalized = net.to_normalized()
 dense = net.to_dense()       # needs powerio[matrix]
@@ -73,7 +84,7 @@ For v0.2.2, `display.data` is a `PwdDisplay` with `canvas_width`,
 
 ## PyPSA folders
 
-PyPSA CSV folders are multi-file datasets, so they use explicit read/write
+PyPSA CSV folders are multi-file datasets, so they use explicit read and write
 helpers instead of `Conversion.text`.
 
 ```python
@@ -124,6 +135,32 @@ bus = pl.read_parquet(f"{out['dir']}/bus_data.parquet")
 ```
 
 Use `powerio[pandas]` only for downstream code that expects pandas DataFrames.
+
+## `.pio.json` packages
+
+`powerio.Package` is the handle for `.pio.json` packages: it parses the
+envelope once and every accessor reuses the handle. `Package.from_file` and
+`Package.from_str` build packages from case input, `Package.from_json` reads
+envelope text, and `Package.from_balanced` / `Package.from_multiconductor` wrap
+existing networks. `pkg.model_kind` names the package family;
+`pkg.as_balanced()` / `pkg.as_multiconductor()` rebuild typed network handles
+from the payload.
+
+`pkg.operating_points()` returns a Python dict for the replayable operating
+point series, or `None`. `pkg.materialize_operating_point(i)` returns a new
+static `Package` with one point applied. GOC3 packages populate this series
+from the source time series while the static payload holds the first interval.
+`pkg.validate()`, `pkg.validation()`, and `pkg.diagnostics()` expose the
+package validation profile, and multiconductor packages lower through
+`pkg.multiconductor_to_balanced_preflight()` and
+`pkg.lower_multiconductor_to_balanced()`.
+
+```python
+pkg = pio.Package.from_file("goc3_case.json", from_="goc3-json")
+series = pkg.operating_points()
+static_pkg = pkg.materialize_operating_point(0)
+net = static_pkg.as_balanced()
+```
 
 ## MCP path handling
 

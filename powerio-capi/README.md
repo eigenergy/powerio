@@ -136,6 +136,10 @@ compiler package handle, distinct from the parsed network handles:
   `PIO_PKG` and `PIO_DIST` are present.
 - `pio_package_validate`, `pio_package_validation_json`, and
   `pio_package_diagnostics_json` expose structured validation state.
+- `pio_package_operating_points_json` returns the replayable operating point
+  series, or JSON `null` when the package has none.
+- `pio_package_materialize_operating_point` returns a new static package with
+  one operating point applied.
 - `pio_package_multiconductor_to_balanced_preflight_json` reports structured
   blockers before lowering, and `pio_package_lower_multiconductor_to_balanced`
   returns a new balanced package when the input is ready.
@@ -160,8 +164,8 @@ The grammar is written out in the header preamble; the short version:
 - `pio_package_*` functions operate on the package envelope, not on a new
   network handle family.
 - Format names never appear in symbols: `matpower`, `psse`, `powerio-json`,
-  `pypsa-csv`, `gridfm`, and every future format are strings, so a new format
-  never changes this ABI.
+  `pypsa-csv`, `gridfm`, `goc3-json`, `surge-json`, and every future format are
+  strings, so a new format never changes this ABI.
 - Noun phrases are queries: `pio_n_*` counts, `pio_is_radial`,
   `pio_bus_ids`/`pio_branches`/`pio_gens`/`pio_bus_demand`/`pio_bus_shunt`
   extractors, `pio_warnings` for the handle's fidelity warnings.

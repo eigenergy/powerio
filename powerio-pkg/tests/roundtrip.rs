@@ -1,10 +1,13 @@
 //! Serde round-trip and invariant tests for the `.pio.json` compiler package.
 
+use std::collections::BTreeMap;
+
 use powerio_pkg::{
-    CompilerPackage, Confidence, DiagnosticCode, DiagnosticSeverity, DiagnosticStage, MappingKind,
-    ModelKind, MulticonductorToBalancedOptions, MulticonductorToBalancedReadiness, Origin,
-    PIO_PACKAGE_SCHEMA_URL, PIO_PACKAGE_SCHEMA_VERSION, SequenceTransformConvention,
-    SourceDescriptor, SourceMapEntry, SourceRef, StructuredDiagnostic, ValidationStatus,
+    Confidence, DiagnosticCode, DiagnosticSeverity, DiagnosticStage, ElementRef, ElementUpdate,
+    MappingKind, ModelKind, MulticonductorToBalancedOptions, MulticonductorToBalancedReadiness,
+    NetworkPackage, OperatingPoint, OperatingPointSeries, Origin, PIO_PACKAGE_SCHEMA_URL,
+    PIO_PACKAGE_SCHEMA_VERSION, SequenceTransformConvention, SourceDescriptor, SourceMapEntry,
+    SourceRef, StructuredDiagnostic, TimeAxis, ValidationStatus,
     check_multiconductor_to_balanced_lowering, lower_multiconductor_to_balanced,
 };
 
@@ -40,18 +43,99 @@ mpc.gencost = [
 ];
 ";
 
-fn balanced_package() -> CompilerPackage {
+const GOC3_PACKAGE_SRC: &str = r#"{
+  "network": {
+    "general": {"base_norm_mva": 100.0},
+    "bus": [
+      {"uid": "bus_00", "base_nom_volt": 230.0, "vm_lb": 0.95, "vm_ub": 1.05, "initial_status": {"vm": 1.0, "va": 0.0}},
+      {"uid": "bus_01", "base_nom_volt": 115.0, "vm_lb": 0.9, "vm_ub": 1.1, "initial_status": {"vm": 1.0, "va": 0.0}}
+    ],
+    "simple_dispatchable_device": [
+      {"uid": "prod", "bus": "bus_00", "device_type": "producer", "startup_cost": 5.0, "shutdown_cost": 6.0, "initial_status": {"on_status": 1, "p": 0.1, "q": 0.0}},
+      {"uid": "load", "bus": "bus_01", "device_type": "consumer", "initial_status": {"on_status": 1, "p": 0.4, "q": 0.1}}
+    ]
+  },
+  "time_series_input": {
+    "general": {"time_periods": 2, "interval_duration": [1.0, 2.0]},
+    "simple_dispatchable_device": [
+      {"uid": "prod", "p_lb": [0.1, 0.2], "p_ub": [1.0, 0.8], "q_lb": [-0.2, -0.1], "q_ub": [0.4, 0.3], "cost": [[[10.0, 0.1]], [[20.0, 0.2]]], "reserve_ub": [0.05, 0.07]},
+      {"uid": "load", "p_lb": [0.0, 0.0], "p_ub": [0.4, 0.3], "q_lb": [0.0, 0.0], "q_ub": [0.1, 0.2], "cost": [[[0.0, 0.4]], [[0.0, 0.3]]]}
+    ]
+  }
+}"#;
+
+fn balanced_package() -> NetworkPackage {
     let net = powerio::parse_str(MATPOWER_SRC, "matpower")
         .expect("parse matpower")
         .network;
-    CompilerPackage::from_balanced(net)
+    NetworkPackage::from_balanced(net)
 }
 
-fn multiconductor_package() -> CompilerPackage {
+fn multiconductor_package() -> NetworkPackage {
     // A bare circuit materializes a vsource with several defaulted fields, which
     // exercises the defaulted -> source-map lift.
     let net = powerio_dist::parse_str("New Circuit.c1", "dss").expect("parse dss");
-    CompilerPackage::from_multiconductor(net)
+    NetworkPackage::from_multiconductor(net)
+}
+
+fn balanced_package_with_gen() -> NetworkPackage {
+    let net = powerio::parse_str(MATPOWER_WITH_GEN_SRC, "matpower")
+        .expect("parse matpower with gen")
+        .network;
+    NetworkPackage::from_balanced(net)
+}
+
+fn fields(values: &[(&str, serde_json::Value)]) -> BTreeMap<String, serde_json::Value> {
+    values
+        .iter()
+        .map(|(key, value)| ((*key).to_owned(), value.clone()))
+        .collect()
+}
+
+fn assert_close(actual: f64, expected: f64) {
+    assert!((actual - expected).abs() < 1e-12, "{actual} != {expected}");
+}
+
+fn sample_operating_points() -> OperatingPointSeries {
+    let mut point0 = OperatingPoint::new(0);
+    point0.updates.push(ElementUpdate::new(
+        ElementRef::new("loads", 0).with_source_uid("load_1"),
+        fields(&[
+            ("p", serde_json::json!(12.0)),
+            ("q", serde_json::json!(6.0)),
+        ]),
+    ));
+
+    let mut point1 = OperatingPoint::new(1);
+    point1.updates.push(ElementUpdate::new(
+        ElementRef::new("loads", 0).with_source_uid("load_1"),
+        fields(&[
+            ("p", serde_json::json!(22.0)),
+            ("q", serde_json::json!(9.0)),
+        ]),
+    ));
+    point1.updates.push(ElementUpdate::new(
+        ElementRef::new("generators", 0).with_source_uid("gen_1"),
+        fields(&[
+            ("pg", serde_json::json!(61.0)),
+            ("pmax", serde_json::json!(90.0)),
+        ]),
+    ));
+    point1.updates.push(ElementUpdate::new(
+        ElementRef::new("branches", 0).with_source_uid("branch_1"),
+        fields(&[("in_service", serde_json::json!(false))]),
+    ));
+
+    OperatingPointSeries::new(
+        TimeAxis::new(2)
+            .with_duration_hours(vec![1.0, 2.0])
+            .with_labels(vec!["base".to_owned(), "peak".to_owned()]),
+        vec![point0, point1],
+    )
+    .with_metadata(BTreeMap::from([(
+        "source".to_owned(),
+        serde_json::json!("unit-test"),
+    )]))
 }
 
 fn strings(values: &[&str]) -> Vec<String> {
@@ -154,9 +238,9 @@ fn assert_lowering_rejects(net: &powerio_dist::DistNetwork, code: &str) {
 
 /// Serialize -> deserialize -> serialize must be byte-identical (deterministic
 /// serialization), the round-trip check for payloads without `PartialEq`.
-fn assert_json_roundtrips(pkg: &CompilerPackage) {
+fn assert_json_roundtrips(pkg: &NetworkPackage) {
     let json1 = pkg.to_json_pretty().expect("serialize");
-    let back = CompilerPackage::from_json(&json1).expect("deserialize");
+    let back = NetworkPackage::from_json(&json1).expect("deserialize");
     let json2 = back.to_json_pretty().expect("re-serialize");
     assert_eq!(json1, json2, "package JSON is not round-trip stable");
 }
@@ -173,7 +257,7 @@ fn schema_version_present_and_defaulted() {
     let obj = v.as_object_mut().unwrap();
     obj.remove("schema");
     obj.remove("schema_version");
-    let back = CompilerPackage::from_json(&serde_json::to_string(&v).unwrap()).unwrap();
+    let back = NetworkPackage::from_json(&serde_json::to_string(&v).unwrap()).unwrap();
     assert_eq!(back.schema, PIO_PACKAGE_SCHEMA_URL);
     assert_eq!(back.schema_version, PIO_PACKAGE_SCHEMA_VERSION);
 }
@@ -189,9 +273,85 @@ fn balanced_payload_roundtrips() {
 
     // The payload survives the round trip.
     let json = pkg.to_json_pretty().unwrap();
-    let back = CompilerPackage::from_json(&json).unwrap();
+    let back = NetworkPackage::from_json(&json).unwrap();
     assert_eq!(back.as_balanced().unwrap().buses.len(), 2);
     assert_eq!(back.as_balanced().unwrap().branches.len(), 1);
+}
+
+#[test]
+fn goc3_package_operating_points_materialize_static_snapshots() {
+    let net = powerio::parse_str(GOC3_PACKAGE_SRC, "goc3-json")
+        .expect("parse goc3")
+        .network;
+    assert_eq!(net.generators.len(), 1);
+    assert_eq!(net.loads.len(), 1);
+    assert_close(net.generators[0].pmax, 100.0);
+    assert_close(net.loads[0].p, 40.0);
+
+    let pkg = NetworkPackage::from_balanced(net);
+    let series = pkg.operating_points().expect("operating points");
+    assert_eq!(series.time_axis.periods, 2);
+    assert_eq!(series.time_axis.duration_hours, vec![1.0, 2.0]);
+    assert_eq!(series.points.len(), 2);
+    assert_eq!(series.points[1].updates.len(), 2);
+
+    let materialized = pkg
+        .materialize_balanced_operating_point(1)
+        .expect("materialize")
+        .expect("balanced payload");
+    assert_eq!(materialized.generators.len(), 1);
+    assert_eq!(materialized.loads.len(), 1);
+    assert_close(materialized.generators[0].pmax, 80.0);
+    assert_close(materialized.generators[0].pmin, 20.0);
+    assert_close(materialized.generators[0].qmax, 30.0);
+    assert_close(materialized.loads[0].p, 30.0);
+    assert_close(materialized.loads[0].q, 20.0);
+
+    let static_pkg = pkg.materialize_operating_point(0).expect("period 0");
+    assert!(static_pkg.operating_points().is_none());
+    assert_eq!(static_pkg.lowering_history.len(), 1);
+    assert_eq!(
+        static_pkg.lowering_history[0].pass,
+        "materialize-operating-point"
+    );
+}
+
+#[test]
+fn goc3_operating_points_follow_parser_row_assignment() {
+    // A device without a uid still occupies a payload row; the extractor
+    // must keep counting so later devices' updates land on their own rows,
+    // and the parent's package_id must not leak into the derived package.
+    let src = GOC3_PACKAGE_SRC.replacen(
+        r#"{"uid": "prod", "bus": "bus_00""#,
+        r#"{"bus": "bus_00", "device_type": "producer", "initial_status": {"on_status": 1, "p": 0.0, "q": 0.0}},
+      {"uid": "prod", "bus": "bus_00""#,
+        1,
+    );
+    let net = powerio::parse_str(&src, "goc3-json")
+        .expect("parse goc3")
+        .network;
+    assert_eq!(net.generators.len(), 2);
+
+    let pkg = NetworkPackage::from_balanced(net).with_package_id("parent");
+    let series = pkg.operating_points().expect("operating points");
+    let update = &series.points[1].updates[0];
+    assert_eq!(update.element.table, "generators");
+    assert_eq!(update.element.row, 1, "uid-less producer occupies row 0");
+    assert_eq!(update.element.source_uid.as_deref(), Some("prod"));
+
+    let materialized = pkg.materialize_operating_point(1).expect("materialize");
+    let balanced = materialized.as_balanced().expect("balanced payload");
+    // Row 0 (the uid-less device) keeps its static bounds; row 1 gets the
+    // period 1 update.
+    assert_close(balanced.generators[0].pmax, 0.0);
+    assert_close(balanced.generators[1].pmax, 80.0);
+    assert_eq!(materialized.package_id, None);
+    match &materialized.origin {
+        powerio_pkg::Origin::Derived {
+            parent_package_id, ..
+        } => assert_eq!(parent_package_id.as_deref(), Some("parent")),
+        other => panic!("expected derived origin, got {other:?}"),
+    }
 }
 
 #[test]
@@ -204,10 +364,294 @@ fn multiconductor_payload_roundtrips() {
     assert_json_roundtrips(&pkg);
 
     let json = pkg.to_json_pretty().unwrap();
-    let back = CompilerPackage::from_json(&json).unwrap();
+    let back = NetworkPackage::from_json(&json).unwrap();
     assert_eq!(back.model_kind(), ModelKind::Multiconductor);
     // The vsource is present in the payload after the round trip.
     assert!(!back.as_multiconductor().unwrap().sources.is_empty());
+}
+
+#[test]
+fn operating_points_are_omitted_when_absent_or_empty() {
+    let mut pkg = balanced_package();
+    assert!(pkg.operating_points().is_none());
+    let v = serde_json::to_value(&pkg).unwrap();
+    assert!(v.get("operating_points").is_none());
+
+    pkg.set_operating_points(OperatingPointSeries::default());
+    assert!(pkg.operating_points().is_none());
+    let v = serde_json::to_value(&pkg).unwrap();
+    assert!(v.get("operating_points").is_none());
+}
+
+#[test]
+fn operating_points_roundtrip() {
+    let mut pkg = balanced_package_with_gen();
+    let series = sample_operating_points();
+    pkg.set_operating_points(series.clone());
+
+    assert_eq!(pkg.operating_points(), Some(&series));
+    assert_json_roundtrips(&pkg);
+
+    let v = serde_json::to_value(&pkg).unwrap();
+    assert_eq!(
+        v["operating_points"]["time_axis"]["periods"],
+        serde_json::json!(2)
+    );
+    assert_eq!(
+        v["operating_points"]["points"][1]["updates"][0]["element"]["source_uid"],
+        serde_json::json!("load_1")
+    );
+
+    let back = NetworkPackage::from_json(&pkg.to_json_pretty().unwrap()).unwrap();
+    let back_series = back.operating_points().expect("operating points");
+    assert_eq!(
+        back_series.time_axis.labels,
+        vec!["base".to_owned(), "peak".to_owned()]
+    );
+    assert_eq!(back_series.point(1).unwrap().updates.len(), 3);
+}
+
+#[test]
+fn materializes_balanced_operating_point_and_clears_series() {
+    let pkg = balanced_package_with_gen().with_operating_points(sample_operating_points());
+    let materialized = pkg.materialize_operating_point(1).unwrap();
+
+    assert!(pkg.operating_points().is_some());
+    assert!(materialized.operating_points().is_none());
+    assert!(
+        serde_json::to_value(&materialized)
+            .unwrap()
+            .get("operating_points")
+            .is_none()
+    );
+
+    let net = materialized.as_balanced().unwrap();
+    assert_eq!(net.loads.len(), 1);
+    assert_close(net.loads[0].p, 22.0);
+    assert_close(net.loads[0].q, 9.0);
+    assert_close(net.generators[0].pg, 61.0);
+    assert_close(net.generators[0].pmax, 90.0);
+    assert!(!net.branches[0].in_service);
+    match &materialized.origin {
+        Origin::Derived { pass, options, .. } => {
+            assert_eq!(pass, "materialize-operating-point");
+            assert_eq!(options["index"], serde_json::json!(1));
+        }
+        other => panic!("expected derived origin, got {other:?}"),
+    }
+    assert_eq!(materialized.lowering_history.len(), 1);
+    assert_eq!(
+        materialized.lowering_history[0].pass,
+        "materialize-operating-point"
+    );
+}
+
+#[test]
+fn materialize_operating_point_reports_missing_series_or_index() {
+    let pkg = balanced_package_with_gen();
+    let err = pkg
+        .materialize_operating_point(0)
+        .expect_err("missing series must fail");
+    assert!(err.to_string().contains("package has no operating points"));
+
+    let pkg = pkg.with_operating_points(sample_operating_points());
+    let err = pkg
+        .materialize_operating_point(9)
+        .expect_err("missing point must fail");
+    assert!(err.to_string().contains("package has no operating point 9"));
+}
+
+#[test]
+fn materialize_operating_point_rejects_duplicate_indices() {
+    let mut point0 = OperatingPoint::new(0);
+    point0.updates.push(ElementUpdate::new(
+        ElementRef::new("loads", 0),
+        fields(&[("p", serde_json::json!(11.0))]),
+    ));
+    let mut duplicate0 = OperatingPoint::new(0);
+    duplicate0.updates.push(ElementUpdate::new(
+        ElementRef::new("loads", 0),
+        fields(&[("p", serde_json::json!(22.0))]),
+    ));
+    let pkg = balanced_package_with_gen().with_operating_points(OperatingPointSeries::new(
+        TimeAxis::new(1).with_duration_hours(vec![1.0]),
+        vec![point0, duplicate0],
+    ));
+
+    let err = pkg
+        .materialize_operating_point(0)
+        .expect_err("duplicate indices must fail");
+
+    assert!(
+        err.to_string()
+            .contains("package has multiple operating points with index 0"),
+        "{err}"
+    );
+    assert_close(pkg.as_balanced().unwrap().loads[0].p, 10.0);
+}
+
+#[test]
+fn materialize_operating_point_reports_invalid_table_or_row() {
+    let mut point = OperatingPoint::new(0);
+    point.updates.push(ElementUpdate::new(
+        ElementRef::new("not_a_table", 0),
+        fields(&[("p", serde_json::json!(1.0))]),
+    ));
+    let pkg = balanced_package_with_gen().with_operating_points(OperatingPointSeries::new(
+        TimeAxis::new(1).with_duration_hours(vec![1.0]),
+        vec![point],
+    ));
+    let err = pkg
+        .materialize_operating_point(0)
+        .expect_err("invalid table must fail");
+    assert!(
+        err.to_string()
+            .contains("operating point table `not_a_table`")
+    );
+
+    let mut point = OperatingPoint::new(0);
+    point.updates.push(ElementUpdate::new(
+        ElementRef::new("loads", 99),
+        fields(&[("p", serde_json::json!(1.0))]),
+    ));
+    let pkg = balanced_package_with_gen().with_operating_points(OperatingPointSeries::new(
+        TimeAxis::new(1).with_duration_hours(vec![1.0]),
+        vec![point],
+    ));
+    let err = pkg
+        .materialize_operating_point(0)
+        .expect_err("invalid row must fail");
+    assert!(
+        err.to_string()
+            .contains("operating point table `loads` has no object row 99")
+    );
+}
+
+#[test]
+fn materialize_operating_point_reports_unknown_field() {
+    let mut point = OperatingPoint::new(0);
+    point.updates.push(ElementUpdate::new(
+        ElementRef::new("generators", 0),
+        fields(&[("not_a_field", serde_json::json!(1.0))]),
+    ));
+    let pkg = balanced_package_with_gen().with_operating_points(OperatingPointSeries::new(
+        TimeAxis::new(1).with_duration_hours(vec![1.0]),
+        vec![point],
+    ));
+
+    let err = pkg
+        .materialize_operating_point(0)
+        .expect_err("unknown field must fail");
+    assert!(
+        err.to_string().contains(
+            "operating point field `not_a_field` is not present on table `generators` row 0"
+        ),
+        "{err}"
+    );
+}
+
+#[test]
+fn materialize_operating_point_refreshes_derived_metadata() {
+    let mut pkg = balanced_package_with_gen().with_operating_points(sample_operating_points());
+    assert!(pkg.attach_normalized_solver_table_metadata().unwrap());
+    let before = pkg.derived.normalized_solver_tables.as_ref().unwrap();
+    assert_eq!(before.row_counts.branches, 1);
+    pkg.derived.matrix_stats = Some(serde_json::json!({"stale": true}));
+    pkg.derived
+        .cache_keys
+        .insert("matrix".to_owned(), "stale".to_owned());
+
+    let materialized = pkg.materialize_operating_point(1).unwrap();
+
+    assert!(materialized.derived.matrix_stats.is_none());
+    assert!(materialized.derived.cache_keys.is_empty());
+    let after = materialized
+        .derived
+        .normalized_solver_tables
+        .as_ref()
+        .expect("solver table metadata recomputed");
+    assert_eq!(after.row_counts.branches, 0);
+    assert_eq!(after.row_counts.arcs, 0);
+}
+
+#[test]
+fn materialize_operating_point_clears_stale_provenance_for_updated_fields() {
+    let mut point = OperatingPoint::new(0);
+    point.updates.push(ElementUpdate::new(
+        ElementRef::new("buses", 0),
+        fields(&[("vm", serde_json::json!(0.0))]),
+    ));
+    let pkg = balanced_package_with_gen().with_operating_points(OperatingPointSeries::new(
+        TimeAxis::new(1).with_duration_hours(vec![1.0]),
+        vec![point],
+    ));
+    assert!(pkg.source_maps.iter().any(|entry| {
+        entry.element_path == "/model/balanced_network/buses/0/vm"
+            && entry.source_ref.record.as_deref() == Some("bus")
+            && entry.source_ref.field.as_deref() == Some("vm")
+    }));
+    assert!(
+        pkg.source_maps
+            .iter()
+            .any(|entry| { entry.element_path == "/model/balanced_network/branches/0/angmax" })
+    );
+
+    let materialized = pkg.materialize_operating_point(0).unwrap();
+
+    assert!(
+        !materialized
+            .source_maps
+            .iter()
+            .any(|entry| { entry.element_path == "/model/balanced_network/buses/0/vm" })
+    );
+    assert!(
+        materialized
+            .source_maps
+            .iter()
+            .any(|entry| { entry.element_path == "/model/balanced_network/branches/0/angmax" })
+    );
+    assert!(materialized.diagnostics.iter().any(|d| {
+        d.code == DiagnosticCode::new("VALIDATE.BALANCED.VALUE_DOMAIN")
+            && d.details["field"] == "vm"
+            && d.element_path.as_deref() == Some("/model/balanced_network/buses/0/vm")
+            && d.source_ref.is_none()
+    }));
+}
+
+#[test]
+fn materialize_operating_point_recomputes_validation() {
+    let mut point = OperatingPoint::new(0);
+    point.updates.push(ElementUpdate::new(
+        ElementRef::new("buses", 0),
+        fields(&[("vm", serde_json::json!(0.0))]),
+    ));
+    let pkg = balanced_package_with_gen().with_operating_points(OperatingPointSeries::new(
+        TimeAxis::new(1).with_duration_hours(vec![1.0]),
+        vec![point],
+    ));
+    assert_eq!(pkg.validation.status, ValidationStatus::Ok);
+
+    let materialized = pkg.materialize_operating_point(0).unwrap();
+
+    assert!(materialized.operating_points().is_none());
+    assert_eq!(materialized.validation.status, ValidationStatus::Warning);
+    assert!(
+        materialized.diagnostics.iter().any(|d| d.code
+            == DiagnosticCode::new("VALIDATE.BALANCED.VALUE_DOMAIN")
+            && d.details["field"] == "vm"
+            && d.element_path.as_deref() == Some("/model/balanced_network/buses/0/vm")),
+        "expected voltage magnitude finding: {:?}",
+        materialized.diagnostics
+    );
+    assert!(
+        materialized
+            .validation
+            .passes
+            .iter()
+            .any(|p| p.name == "balanced.value_domain" && p.status == ValidationStatus::Warning),
+        "missing balanced value domain pass: {:?}",
+        materialized.validation.passes
+    );
 }
 
 #[test]
@@ -237,7 +681,7 @@ fn mismatched_model_kind_is_rejected() {
         .insert("model_kind".to_owned(), serde_json::json!("multiconductor"));
     let json = serde_json::to_string(&v).unwrap();
 
-    let err = CompilerPackage::from_json(&json).expect_err("kind mismatch must be rejected");
+    let err = NetworkPackage::from_json(&json).expect_err("kind mismatch must be rejected");
     assert!(
         err.to_string().contains("model_kind does not match"),
         "{err}"
@@ -263,7 +707,7 @@ fn diagnostics_roundtrip() {
     assert_json_roundtrips(&pkg);
 
     let json = pkg.to_json_pretty().unwrap();
-    let back = CompilerPackage::from_json(&json).unwrap();
+    let back = NetworkPackage::from_json(&json).unwrap();
     assert_eq!(back.diagnostics.len(), 1);
     let d = &back.diagnostics[0];
     assert_eq!(d.code, DiagnosticCode::new("EMIT.PSSE.DROP_ANGLE_LIMITS"));
@@ -312,7 +756,7 @@ fn source_references_roundtrip() {
     assert_json_roundtrips(&pkg);
 
     let json = pkg.to_json_pretty().unwrap();
-    let back = CompilerPackage::from_json(&json).unwrap();
+    let back = NetworkPackage::from_json(&json).unwrap();
     match &back.origin {
         Origin::File {
             path,
@@ -410,7 +854,7 @@ mpc.branch = [
 ];
 ";
     let net = powerio::parse_str(src, "matpower").unwrap().network;
-    let pkg = CompilerPackage::from_balanced(net);
+    let pkg = NetworkPackage::from_balanced(net);
 
     let has_split_bus_field = |path: &str, field: &str| {
         pkg.source_maps.iter().any(|e| {
@@ -458,7 +902,7 @@ mpc.branch = [
 
 #[test]
 fn origin_distinguishes_in_memory_from_file() {
-    let in_mem = CompilerPackage::from_balanced(powerio::BalancedNetwork::in_memory(
+    let in_mem = NetworkPackage::from_balanced(powerio::BalancedNetwork::in_memory(
         "t",
         100.0,
         vec![],
@@ -477,17 +921,17 @@ fn balanced_origin_matches_source_artifact_kind() {
         .network;
 
     net.source_format = powerio::SourceFormat::Gridfm;
-    let gridfm = CompilerPackage::from_balanced(net.clone());
+    let gridfm = NetworkPackage::from_balanced(net.clone());
     assert!(matches!(gridfm.origin, Origin::Folder { .. }));
     assert_eq!(gridfm.sources[0].kind, "folder");
 
     net.source_format = powerio::SourceFormat::PypsaCsv;
-    let pypsa = CompilerPackage::from_balanced(net.clone());
+    let pypsa = NetworkPackage::from_balanced(net.clone());
     assert!(matches!(pypsa.origin, Origin::Folder { .. }));
     assert_eq!(pypsa.sources[0].kind, "folder");
 
     net.source_format = powerio::SourceFormat::PowerWorldBinary;
-    let pwb = CompilerPackage::from_balanced(net);
+    let pwb = NetworkPackage::from_balanced(net);
     assert!(matches!(pwb.origin, Origin::BinaryFile { .. }));
     assert_eq!(pwb.sources[0].kind, "binary_file");
 }
@@ -503,7 +947,7 @@ fn unknown_future_fields_are_tolerated() {
 
     // A package from a newer producer with an unknown field still deserializes,
     // and the known fields are intact.
-    let back = CompilerPackage::from_json(&json).expect("tolerate unknown field");
+    let back = NetworkPackage::from_json(&json).expect("tolerate unknown field");
     assert_eq!(back.model_kind(), ModelKind::Balanced);
     assert!(back.kind_is_consistent());
     assert_eq!(back.as_balanced().unwrap().buses.len(), 2);
@@ -515,14 +959,14 @@ fn future_same_major_schema_version_is_tolerated() {
     let mut v = serde_json::to_value(&pkg).unwrap();
     v.as_object_mut()
         .unwrap()
-        .insert("schema_version".to_owned(), serde_json::json!("0.2.0"));
+        .insert("schema_version".to_owned(), serde_json::json!("0.3.0"));
     v.as_object_mut()
         .unwrap()
         .insert("future_field".to_owned(), serde_json::json!({"x": 1}));
     let json = serde_json::to_string(&v).unwrap();
 
-    let back = CompilerPackage::from_json(&json).expect("same major schema version loads");
-    assert_eq!(back.schema_version, "0.2.0");
+    let back = NetworkPackage::from_json(&json).expect("same major schema version loads");
+    assert_eq!(back.schema_version, "0.3.0");
     assert_eq!(back.model_kind(), ModelKind::Balanced);
 }
 
@@ -536,7 +980,7 @@ fn same_major_prerelease_or_build_schema_version_is_tolerated() {
             .insert("schema_version".to_owned(), serde_json::json!(version));
         let json = serde_json::to_string(&v).unwrap();
 
-        let back = CompilerPackage::from_json(&json)
+        let back = NetworkPackage::from_json(&json)
             .unwrap_or_else(|e| panic!("same-major {version} should load: {e}"));
         assert_eq!(back.schema_version, version);
     }
@@ -547,7 +991,7 @@ fn normalized_solver_table_metadata_records_dense_identities() {
     let net = powerio::parse_str(MATPOWER_WITH_GEN_SRC, "matpower")
         .expect("parse matpower")
         .network;
-    let mut pkg = CompilerPackage::from_balanced(net);
+    let mut pkg = NetworkPackage::from_balanced(net);
 
     assert!(pkg.attach_normalized_solver_table_metadata().unwrap());
 
@@ -584,7 +1028,7 @@ fn incompatible_schema_major_is_rejected() {
         .insert("schema_version".to_owned(), serde_json::json!("1.0.0"));
     let json = serde_json::to_string(&v).unwrap();
 
-    let err = CompilerPackage::from_json(&json).expect_err("major version mismatch must fail");
+    let err = NetworkPackage::from_json(&json).expect_err("major version mismatch must fail");
     assert!(
         err.to_string()
             .contains("unsupported .pio.json schema_version 1.0.0"),
@@ -611,7 +1055,7 @@ fn invalid_schema_version_is_rejected() {
             .insert("schema_version".to_owned(), serde_json::json!(version));
         let json = serde_json::to_string(&v).unwrap();
 
-        let err = CompilerPackage::from_json(&json).expect_err("invalid semver must fail");
+        let err = NetworkPackage::from_json(&json).expect_err("invalid semver must fail");
         assert!(
             err.to_string()
                 .contains(&format!("unsupported .pio.json schema_version {version}")),
@@ -635,7 +1079,7 @@ mpc.branch = [
 ];
 ";
     let net = powerio::parse_str(src, "matpower").unwrap().network;
-    let mut pkg = CompilerPackage::from_balanced(net);
+    let mut pkg = NetworkPackage::from_balanced(net);
     pkg.run_sane_validation();
 
     assert!(
@@ -679,7 +1123,7 @@ mpc.branch = [
 ];
 ";
     let net = powerio::parse_str(src, "matpower").unwrap().network;
-    let mut pkg = CompilerPackage::from_balanced(net);
+    let mut pkg = NetworkPackage::from_balanced(net);
     pkg.run_sane_validation();
 
     let generator_vg: Vec<_> = pkg
@@ -716,7 +1160,7 @@ fn sane_validation_records_multiconductor_structure_findings() {
     net.untyped
         .push(UntypedObject::new("regcontrol", "r1", Vec::new()));
 
-    let mut pkg = CompilerPackage::from_multiconductor(net);
+    let mut pkg = NetworkPackage::from_multiconductor(net);
     pkg.run_sane_validation();
 
     for code in [
@@ -901,7 +1345,7 @@ fn package_lowering_preflight_helper_is_read_only() {
             .is_none()
     );
 
-    let pkg = CompilerPackage::from_multiconductor(preflight_network(&["1", "2", "3"], &[]));
+    let pkg = NetworkPackage::from_multiconductor(preflight_network(&["1", "2", "3"], &[]));
     assert!(pkg.lowering_history.is_empty());
     let report = pkg
         .check_multiconductor_to_balanced_lowering()
@@ -1086,7 +1530,7 @@ fn lowering_preserves_single_phase_shunt_total() {
 #[test]
 fn package_lowering_returns_derived_balanced_package() {
     let mut parent =
-        CompilerPackage::from_multiconductor(preflight_network(&["1", "2", "3", "4"], &["4"]));
+        NetworkPackage::from_multiconductor(preflight_network(&["1", "2", "3", "4"], &["4"]));
     parent.push_lowering(powerio_pkg::LoweringRecord::new(
         "previous-pass",
         ModelKind::Multiconductor,
@@ -1167,7 +1611,7 @@ fn lowering_record_roundtrips() {
     pkg.push_lowering(rec);
 
     assert_json_roundtrips(&pkg);
-    let back = CompilerPackage::from_json(&pkg.to_json_pretty().unwrap()).unwrap();
+    let back = NetworkPackage::from_json(&pkg.to_json_pretty().unwrap()).unwrap();
     assert_eq!(back.lowering_history.len(), 1);
     assert_eq!(
         back.lowering_history[0].input_kind,
@@ -1208,11 +1652,11 @@ fn load_voltage_model_survives_package_roundtrip() {
     load.voltage_model = zip.clone();
     net.loads.push(load);
 
-    let pkg = CompilerPackage::from_multiconductor(net);
+    let pkg = NetworkPackage::from_multiconductor(net);
     assert_eq!(pkg.model_kind(), ModelKind::Multiconductor);
     assert_json_roundtrips(&pkg);
 
-    let back = CompilerPackage::from_json(&pkg.to_json_pretty().unwrap()).unwrap();
+    let back = NetworkPackage::from_json(&pkg.to_json_pretty().unwrap()).unwrap();
     assert_eq!(
         back.as_multiconductor().unwrap().loads[0].voltage_model,
         zip

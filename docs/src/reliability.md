@@ -40,6 +40,9 @@ bash benchmarks/run_rich_validation.sh
 PowerModels.jl, ExaPowerIO.jl, egret, pandapower, and the full legacy reader to
 writer matrix. PyPSA, pandapower, and egret are required Python oracles for the
 validation run; a missing import is a setup failure.
+GOC3 and Surge are covered by the Rust parser, writer, routing, package, and
+round trip tests; there is no external oracle in this harness for those JSON
+formats.
 
 `benchmarks/run_rich_validation.sh` covers fields outside the MATPOWER row
 shape: branch terminal admittance, switches, branch current ratings and solution
@@ -67,6 +70,8 @@ When all required legs pass, the gates cover these properties:
   with Arrow, GridFM, distribution, and package features enabled;
 - Python parse, conversion, matrix, graph, package, and display paths pass their
   binding tests when extras are installed.
+- GOC3 source parsing, GOC3 package operating point materialization, and Surge
+  read and write paths pass the Rust test suite.
 - ASV discovers and runs the Python parse, \\(Y_{\mathrm{bus}}\\), and B' benchmark definitions
   against the installed wheel.
 - the parser fuzz targets build and enter libFuzzer, covering the hand written

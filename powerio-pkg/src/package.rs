@@ -17,6 +17,10 @@ use crate::lowering::{
     lower_multiconductor_to_balanced,
 };
 use crate::model::{ModelKind, ModelPayload};
+use crate::operating::{
+    OperatingPointSeries, apply_operating_point_to_model, goc3_operating_points_from_str,
+    operating_point_update_paths,
+};
 use crate::provenance::{
     Confidence, MappingKind, Origin, Producer, SourceDescriptor, SourceMapEntry, SourceRef,
 };
@@ -26,8 +30,9 @@ use crate::validation::{ValidationPass, ValidationStatus, ValidationSummary};
 /// The canonical schema URL for this package version.
 pub const PIO_PACKAGE_SCHEMA_URL: &str = "https://powerio.dev/schema/pio-package/0.1";
 
-/// The package schema version (semver). Additive fields bump the minor; field
-/// moves bump the major (or ship a migration pass).
+/// The package schema version (semver). Keep additive optional fields within
+/// the current version when older readers can ignore them; field moves bump the
+/// major (or ship a migration pass).
 pub const PIO_PACKAGE_SCHEMA_VERSION: &str = "0.1.0";
 
 fn default_schema_url() -> String {
@@ -143,11 +148,12 @@ impl From<&NormalizedSolverTables> for NormalizedSolverTableMetadata {
 /// artifact trustworthy. Serializes to `.pio.json`.
 ///
 /// `model_kind` is stored explicitly and is authoritative; the payload is also
-/// self-describing (tagged by `kind`). [`CompilerPackage::kind_is_consistent`]
+/// self-describing (tagged by `kind`). [`NetworkPackage::kind_is_consistent`]
 /// asserts the two agree. Unknown future top-level fields are tolerated on read
 /// (ignored) so a newer producer's package still deserializes here.
 #[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct CompilerPackage {
+#[non_exhaustive]
+pub struct NetworkPackage {
     /// The schema URL identifying this package format.
     #[serde(default = "default_schema_url")]
     pub schema: String,
@@ -165,6 +171,10 @@ pub struct CompilerPackage {
     /// Explicit model kind. Authoritative; never inferred from field presence.
     pub model_kind: ModelKind,
     pub model: ModelPayload,
+    /// Replayable operating states over the static payload. The package
+    /// constructors and setters omit empty series for static single state cases.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub operating_points: Option<OperatingPointSeries>,
     pub origin: Origin,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub sources: Vec<SourceDescriptor>,
@@ -181,16 +191,43 @@ pub struct CompilerPackage {
     pub derived: DerivedMetadata,
 }
 
-impl CompilerPackage {
+impl NetworkPackage {
     /// Wrap a balanced network. Origin is inferred from its source format:
     /// `InMemory` / `Derived` (normalized) / `File` (a parsed text format,
     /// recording whether source was retained; the path is not captured here).
+    /// GOC3 sources also lift their time series into `operating_points`.
     pub fn from_balanced(net: BalancedNetwork) -> Self {
         let origin = balanced_origin(&net);
         let summary = balanced_summary(&net);
         let sources = balanced_sources(&net);
         let source_id = sources.first().map(|s| s.id.clone());
         let source_maps = balanced_source_maps(&net, source_id.as_deref());
+        let mut diagnostics = Vec::new();
+        let operating_points = if net.source_format == SourceFormat::Goc3Json {
+            match net
+                .source
+                .as_deref()
+                .map(|source| goc3_operating_points_from_str(source))
+            {
+                Some(Ok(series)) => series,
+                Some(Err(err)) => {
+                    diagnostics.push(StructuredDiagnostic::new(
+                        "READ.GOC3.OPERATING_POINTS_DROPPED",
+                        DiagnosticSeverity::Warning,
+                        DiagnosticStage::Read,
+                        format!(
+                            "time series could not be lifted into operating points; \
+                             the package is static only: {err}"
+                        ),
+                    ));
+                    None
+                }
+                None => None,
+            }
+        } else {
+            None
+        };
+        let validation = ValidationSummary::from_diagnostics(&diagnostics);
         Self {
             schema: default_schema_url(),
             schema_version: default_schema_version(),
@@ -199,11 +236,12 @@ impl CompilerPackage {
             created_at: None,
             model_kind: ModelKind::Balanced,
             model: ModelPayload::balanced(net),
+            operating_points,
             origin,
             sources,
             source_maps,
-            diagnostics: Vec::new(),
-            validation: ValidationSummary::ok(),
+            diagnostics,
+            validation,
             summary,
             lowering_history: Vec::new(),
             derived: DerivedMetadata::default(),
@@ -243,6 +281,7 @@ impl CompilerPackage {
             created_at: None,
             model_kind: ModelKind::Multiconductor,
             model: ModelPayload::multiconductor(net),
+            operating_points: None,
             origin,
             sources,
             source_maps,
@@ -273,6 +312,140 @@ impl CompilerPackage {
     /// The multiconductor payload, if this package carries one.
     pub fn as_multiconductor(&self) -> Option<&MulticonductorNetwork> {
         self.model.as_multiconductor()
+    }
+
+    /// Replayable operating states over the static payload, when present.
+    #[must_use]
+    pub fn operating_points(&self) -> Option<&OperatingPointSeries> {
+        self.operating_points.as_ref()
+    }
+
+    /// Attach a format neutral operating point series to this package.
+    #[must_use]
+    pub fn with_operating_points(mut self, operating_points: OperatingPointSeries) -> Self {
+        self.set_operating_points(operating_points);
+        self
+    }
+
+    /// Attach or replace operating points in place. Empty series are omitted.
+    pub fn set_operating_points(&mut self, operating_points: OperatingPointSeries) {
+        self.operating_points = (!operating_points.is_empty()).then_some(operating_points);
+    }
+
+    /// Remove operating points from this package.
+    pub fn clear_operating_points(&mut self) {
+        self.operating_points = None;
+    }
+
+    /// Materialize one operating point into a static package.
+    ///
+    /// The returned package has the same metadata and model kind, with its
+    /// payload updated for `index`, `operating_points` cleared, and sane
+    /// validation recomputed for the updated payload.
+    pub fn materialize_operating_point(&self, index: usize) -> serde_json::Result<Self> {
+        let series = self.operating_points.as_ref().ok_or_else(|| {
+            <serde_json::Error as serde::de::Error>::custom("package has no operating points")
+        })?;
+        let point = series.unique_point(index)?.ok_or_else(|| {
+            <serde_json::Error as serde::de::Error>::custom(format!(
+                "package has no operating point {index}"
+            ))
+        })?;
+        let updated_paths = operating_point_update_paths(&self.model, point);
+        let had_normalized_solver_tables = self.derived.normalized_solver_tables.is_some();
+        let options = materialize_operating_point_options(index);
+        // Built field by field rather than cloned: cloning would deep copy the
+        // whole payload only to overwrite it, and a future envelope field must
+        // make an explicit carry-or-clear decision here instead of silently
+        // riding along stale.
+        let mut package = Self {
+            schema: self.schema.clone(),
+            schema_version: self.schema_version.clone(),
+            producer: self.producer.clone(),
+            // A derived package is new content: it records the parent's id in
+            // its origin and never inherits it as its own (as in
+            // `lower_multiconductor_to_balanced`).
+            package_id: None,
+            created_at: self.created_at.clone(),
+            model_kind: self.model_kind,
+            model: apply_operating_point_to_model(&self.model, point)?,
+            operating_points: None,
+            origin: Origin::Derived {
+                parent_package_id: self.package_id.clone(),
+                pass: "materialize-operating-point".to_owned(),
+                options: options.clone(),
+            },
+            sources: self.sources.clone(),
+            source_maps: self
+                .source_maps
+                .iter()
+                .filter(|entry| !updated_paths.contains(entry.element_path.as_str()))
+                .cloned()
+                .collect(),
+            diagnostics: self
+                .diagnostics
+                .iter()
+                .filter(|diagnostic| {
+                    diagnostic
+                        .element_path
+                        .as_deref()
+                        .is_none_or(|path| !updated_paths.contains(path))
+                })
+                .cloned()
+                .collect(),
+            // Replaced by run_sane_validation below.
+            validation: self.validation.clone(),
+            summary: self.summary.clone(),
+            lowering_history: self.lowering_history.clone(),
+            // Derived products are stale against the updated payload; solver
+            // table metadata is rebuilt below when the parent carried it.
+            derived: DerivedMetadata::default(),
+        };
+        let mut record = LoweringRecord::new(
+            "materialize-operating-point",
+            self.model_kind,
+            self.model_kind,
+        );
+        record.options = options;
+        package.run_sane_validation();
+        record.validation_status = package.validation.status;
+        package.push_lowering(record);
+        if had_normalized_solver_tables {
+            package
+                .attach_normalized_solver_table_metadata()
+                .map_err(|err| {
+                    <serde_json::Error as serde::de::Error>::custom(format!(
+                        "failed to recompute normalized solver table metadata: {err}"
+                    ))
+                })?;
+        }
+        Ok(package)
+    }
+
+    /// Materialize one operating point and return the balanced payload if this
+    /// is a balanced package.
+    pub fn materialize_balanced_operating_point(
+        &self,
+        index: usize,
+    ) -> serde_json::Result<Option<BalancedNetwork>> {
+        Ok(self
+            .materialize_operating_point(index)?
+            .model
+            .as_balanced()
+            .cloned())
+    }
+
+    /// Materialize one operating point and return the multiconductor payload if
+    /// this is a multiconductor package.
+    pub fn materialize_multiconductor_operating_point(
+        &self,
+        index: usize,
+    ) -> serde_json::Result<Option<MulticonductorNetwork>> {
+        Ok(self
+            .materialize_operating_point(index)?
+            .model
+            .as_multiconductor()
+            .cloned())
     }
 
     /// Serialize to compact `.pio.json`.
@@ -412,7 +585,7 @@ impl CompilerPackage {
 
         let lowered = lower_multiconductor_to_balanced(net, options)?;
         let mut record = lowered.record;
-        let mut output = CompilerPackage::from_balanced(lowered.network);
+        let mut output = NetworkPackage::from_balanced(lowered.network);
         output.origin = Origin::Derived {
             parent_package_id: self.package_id.clone(),
             pass: "multiconductor-to-balanced".to_owned(),
@@ -434,9 +607,9 @@ impl CompilerPackage {
 
     /// Run the package semantic validation profile and record its findings.
     ///
-    /// This pass is non mutating: it reports structural and semantic issues in
-    /// `diagnostics` and `validation.passes`, but it never repairs or rewrites
-    /// the payload.
+    /// This pass leaves the payload untouched: it reports structural and
+    /// semantic issues, but never repairs or rewrites the model. It does rewrite
+    /// the package's own `diagnostics` and `validation`, so it needs `&mut self`.
     pub fn run_sane_validation(&mut self) {
         self.diagnostics
             .retain(|d| !is_sane_validation_code(d.code.as_str()));
@@ -453,6 +626,12 @@ impl CompilerPackage {
         self.validation =
             ValidationSummary::from_diagnostics(&self.diagnostics).with_passes(passes);
     }
+}
+
+fn materialize_operating_point_options(index: usize) -> serde_json::Map<String, serde_json::Value> {
+    let mut options = serde_json::Map::new();
+    options.insert("index".to_owned(), serde_json::json!(index));
+    options
 }
 
 fn schema_major(version: &str) -> Option<u64> {
@@ -1053,24 +1232,6 @@ fn check_terminal_map(
 }
 
 /// Canonical format name for a balanced source format.
-fn balanced_format_name(f: SourceFormat) -> &'static str {
-    match f {
-        SourceFormat::Matpower => "matpower",
-        SourceFormat::PowerModelsJson => "powermodels-json",
-        SourceFormat::EgretJson => "egret-json",
-        SourceFormat::Psse => "psse",
-        SourceFormat::PowerWorld => "powerworld",
-        SourceFormat::PandapowerJson => "pandapower-json",
-        SourceFormat::Pslf => "pslf",
-        SourceFormat::PowerWorldBinary => "powerworld-pwb",
-        SourceFormat::InMemory => "in-memory",
-        SourceFormat::Normalized => "normalized",
-        SourceFormat::Gridfm => "gridfm",
-        SourceFormat::PypsaCsv => "pypsa-csv",
-        _ => "unknown",
-    }
-}
-
 fn balanced_origin(net: &BalancedNetwork) -> Origin {
     match net.source_format {
         SourceFormat::InMemory => Origin::InMemory,
@@ -1081,18 +1242,18 @@ fn balanced_origin(net: &BalancedNetwork) -> Origin {
         },
         SourceFormat::Gridfm | SourceFormat::PypsaCsv => Origin::Folder {
             path: String::new(),
-            format: balanced_format_name(net.source_format).to_owned(),
+            format: net.source_format.name().to_owned(),
             file_hashes: BTreeMap::new(),
         },
         SourceFormat::PowerWorldBinary => Origin::BinaryFile {
             path: String::new(),
-            format: balanced_format_name(net.source_format).to_owned(),
+            format: net.source_format.name().to_owned(),
             hash: None,
             decoded_sections: Vec::new(),
         },
         other => Origin::File {
             path: String::new(),
-            format: balanced_format_name(other).to_owned(),
+            format: other.name().to_owned(),
             hash: None,
             retained_source: net.source.is_some(),
         },
@@ -1107,7 +1268,7 @@ fn balanced_sources(net: &BalancedNetwork) -> Vec<SourceDescriptor> {
         id: "src0".to_owned(),
         kind: kind.to_owned(),
         path: None,
-        format: Some(balanced_format_name(net.source_format).to_owned()),
+        format: Some(net.source_format.name().to_owned()),
         hash: None,
     }]
 }
@@ -1452,7 +1613,7 @@ fn multiconductor_origin(net: &MulticonductorNetwork) -> Origin {
     }
 }
 
-fn derived_sources(parent: &CompilerPackage) -> Vec<SourceDescriptor> {
+fn derived_sources(parent: &NetworkPackage) -> Vec<SourceDescriptor> {
     if !parent.sources.is_empty() {
         return parent.sources.clone();
     }

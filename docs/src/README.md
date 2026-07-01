@@ -14,6 +14,13 @@ The rules these pages document are:
 - benchmarks keep local wall time separate from correctness gates;
 - C, Python, and Julia bindings share the same Rust parser and converter.
 
+Transmission readers cover MATPOWER, PSS/E revisions 33 through 35,
+PowerWorld AUX and PWB, PSLF EPC, PowerModels JSON, egret JSON, pandapower JSON,
+PyPSA CSV folders, GO Challenge 3 JSON, Surge JSON, GridFM Parquet datasets, and
+PowerIO JSON snapshots. PowerWorld PWD is a display artifact and uses the
+display API. Distribution readers and writers live in `powerio-dist` for
+OpenDSS, PowerModelsDistribution ENGINEERING JSON, and BMOPF JSON.
+
 Reference pages:
 
 - [Format fidelity](https://eigenergy.github.io/powerio/guide/format-fidelity.html): numeric conventions every reader
@@ -29,7 +36,7 @@ Reference pages:
 - [Python](https://eigenergy.github.io/powerio/guide/python.html): Python install extras and API examples.
 - [PowerWorld](https://eigenergy.github.io/powerio/guide/powerworld.html): PowerWorld AUX, PWB, and PWD evidence.
 - [Architecture](https://eigenergy.github.io/powerio/guide/architecture.html): the compiler-IR architecture and the
-  `.pio.json` package and its schema.
+  `.pio.json` package, operating points, and schema.
 - [Performance](https://eigenergy.github.io/powerio/guide/performance.html): benchmark tiers and refresh commands.
 - [Reliability evidence](https://eigenergy.github.io/powerio/guide/reliability.html): local gates and what each gate proves.
 - [Contributor workflow](https://eigenergy.github.io/powerio/guide/contributor-workflow.html): review, test, validation,

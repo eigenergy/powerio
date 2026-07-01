@@ -143,6 +143,12 @@ pub enum Error {
 
     #[error("unknown or unsupported case format: {0}")]
     UnknownFormat(String),
+
+    /// The target format is recognized but read only: it has no writer. A
+    /// same-format write can still echo retained source; everything else is
+    /// refused with this error rather than a misleading [`Error::UnknownFormat`].
+    #[error("{format} is a read only format with no writer")]
+    WriteUnsupported { format: &'static str },
 }
 
 /// Coarse classification of an [`enum@Error`], for callers that map onto their own
@@ -176,7 +182,10 @@ impl Error {
         use ErrorCategory as C;
         match self {
             Error::Io(_) => C::Io,
-            Error::UnknownFormat(_) => C::UnknownFormat,
+            // WriteUnsupported keeps the UnknownFormat category so bindings
+            // surface it the same way (a ValueError, not a data error): the
+            // request named a format the writer can't produce.
+            Error::UnknownFormat(_) | Error::WriteUnsupported { .. } => C::UnknownFormat,
             // Malformed or unparseable input. Only the parser/format readers
             // raise these.
             Error::MissingField(_)

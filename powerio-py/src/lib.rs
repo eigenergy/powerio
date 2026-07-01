@@ -35,7 +35,7 @@ use powerio_matrix::{
     DisplayData, IndexCore, IndexedNetwork, MissingGenCostPolicy, Network, PwdDisplay, WriteOptions,
 };
 use powerio_pkg::{
-    CompilerPackage, DiagnosticSeverity, DiagnosticStage, Origin, SourceDescriptor,
+    DiagnosticSeverity, DiagnosticStage, NetworkPackage, Origin, SourceDescriptor,
     StructuredDiagnostic, ValidationSummary,
 };
 
@@ -242,13 +242,13 @@ fn package_pyerr(e: serde_json::Error) -> PyErr {
     PyValueError::new_err(format!("invalid .pio.json package: {e}"))
 }
 
-fn package_to_json(pkg: &CompilerPackage) -> PyResult<String> {
+fn package_to_json(pkg: &NetworkPackage) -> PyResult<String> {
     let text = pkg.to_json_pretty().map_err(package_pyerr)?;
-    CompilerPackage::from_json(&text).map_err(package_pyerr)?;
+    NetworkPackage::from_json(&text).map_err(package_pyerr)?;
     Ok(text)
 }
 
-fn package_warning_messages(pkg: &CompilerPackage) -> Vec<String> {
+fn package_warning_messages(pkg: &NetworkPackage) -> Vec<String> {
     pkg.diagnostics
         .iter()
         .filter(|d| {
@@ -261,8 +261,8 @@ fn package_warning_messages(pkg: &CompilerPackage) -> Vec<String> {
         .collect()
 }
 
-fn package_to_balanced_py(pkg: CompilerPackage) -> PyResult<PyNetwork> {
-    let warnings = package_warning_messages(&pkg);
+fn package_to_balanced_py(pkg: &NetworkPackage) -> PyResult<PyNetwork> {
+    let warnings = package_warning_messages(pkg);
     let inner = pkg
         .as_balanced()
         .ok_or_else(|| PyValueError::new_err("package model_kind is not balanced"))?
@@ -275,7 +275,7 @@ fn package_to_balanced_py(pkg: CompilerPackage) -> PyResult<PyNetwork> {
     })
 }
 
-fn package_to_dist_py(pkg: CompilerPackage) -> PyResult<PyDistNetwork> {
+fn package_to_dist_py(pkg: &NetworkPackage) -> PyResult<PyDistNetwork> {
     let net = pkg
         .as_multiconductor()
         .ok_or_else(|| PyValueError::new_err("package model_kind is not multiconductor"))?
@@ -283,11 +283,7 @@ fn package_to_dist_py(pkg: CompilerPackage) -> PyResult<PyDistNetwork> {
     Ok(PyDistNetwork { net })
 }
 
-fn add_package_read_warning_diagnostics(
-    pkg: &mut CompilerPackage,
-    code: &str,
-    warnings: &[String],
-) {
+fn add_package_read_warning_diagnostics(pkg: &mut NetworkPackage, code: &str, warnings: &[String]) {
     pkg.diagnostics.extend(warnings.iter().map(|w| {
         StructuredDiagnostic::new(
             code,
@@ -327,7 +323,7 @@ fn package_source_kind(input: &Path, format: &str) -> PackageSourceKind {
 }
 
 fn set_package_source(
-    pkg: &mut CompilerPackage,
+    pkg: &mut NetworkPackage,
     input: &Path,
     kind: PackageSourceKind,
     format: &str,
@@ -360,24 +356,6 @@ fn set_package_source(
         format: Some(format.to_owned()),
         hash: None,
     }];
-}
-
-fn balanced_source_format_name(f: powerio_matrix::SourceFormat) -> &'static str {
-    match f {
-        powerio_matrix::SourceFormat::Matpower => "matpower",
-        powerio_matrix::SourceFormat::PowerModelsJson => "powermodels-json",
-        powerio_matrix::SourceFormat::EgretJson => "egret-json",
-        powerio_matrix::SourceFormat::Psse => "psse",
-        powerio_matrix::SourceFormat::PowerWorld => "powerworld",
-        powerio_matrix::SourceFormat::PandapowerJson => "pandapower-json",
-        powerio_matrix::SourceFormat::Pslf => "pslf",
-        powerio_matrix::SourceFormat::PowerWorldBinary => "powerworld-pwb",
-        powerio_matrix::SourceFormat::InMemory => "in-memory",
-        powerio_matrix::SourceFormat::Normalized => "normalized",
-        powerio_matrix::SourceFormat::Gridfm => "gridfm",
-        powerio_matrix::SourceFormat::PypsaCsv => "pypsa-csv",
-        _ => "unknown",
-    }
 }
 
 fn format_is_gridfm(format: &str) -> bool {
@@ -437,7 +415,7 @@ fn build_package_from_path(
     input: &Path,
     from_: Option<&str>,
     scenario: i64,
-) -> PyResult<CompilerPackage> {
+) -> PyResult<NetworkPackage> {
     let reads_gridfm = from_.is_some_and(format_is_gridfm)
         || (from_.is_none() && input.is_dir() && looks_like_gridfm_dir(input));
     if reads_gridfm {
@@ -445,7 +423,7 @@ fn build_package_from_path(
         {
             let read = gridfm_read_dataset(input.to_string_lossy().as_ref(), scenario)
                 .map_err(to_pyerr)?;
-            let mut pkg = CompilerPackage::from_balanced(read.network);
+            let mut pkg = NetworkPackage::from_balanced(read.network);
             add_package_read_warning_diagnostics(
                 &mut pkg,
                 "READ.GRIDFM.FIDELITY_WARNING",
@@ -474,7 +452,7 @@ fn build_package_from_path(
             .or(from_)
             .unwrap_or("unknown");
         let retained_source = net.source.is_some();
-        let mut pkg = CompilerPackage::from_multiconductor(net);
+        let mut pkg = NetworkPackage::from_multiconductor(net);
         set_package_source(
             &mut pkg,
             input,
@@ -487,9 +465,9 @@ fn build_package_from_path(
     }
 
     let parsed = powerio_matrix::parse_file(input, from_).map_err(to_pyerr)?;
-    let format = balanced_source_format_name(parsed.network.source_format);
+    let format = parsed.network.source_format.name();
     let retained_source = parsed.network.source.is_some();
-    let mut pkg = CompilerPackage::from_balanced(parsed.network);
+    let mut pkg = NetworkPackage::from_balanced(parsed.network);
     add_package_read_warning_diagnostics(
         &mut pkg,
         "READ.TRANSMISSION.PARSE_WARNING",
@@ -506,7 +484,7 @@ fn build_package_from_path(
     Ok(pkg)
 }
 
-fn build_package_from_str(text: &str, from_: Option<&str>) -> PyResult<CompilerPackage> {
+fn build_package_from_str(text: &str, from_: Option<&str>) -> PyResult<NetworkPackage> {
     if from_.is_some_and(format_is_gridfm) {
         return Err(PyValueError::new_err(
             "gridfm input is a dataset directory; provide a path",
@@ -529,7 +507,7 @@ fn build_package_from_str(text: &str, from_: Option<&str>) -> PyResult<CompilerP
     if let Some(format) = source_format.as_deref() {
         if format_is_distribution(format) {
             let net = powerio_dist::parse_str(text, format).map_err(dist_to_pyerr)?;
-            let mut pkg = CompilerPackage::from_multiconductor(net);
+            let mut pkg = NetworkPackage::from_multiconductor(net);
             pkg.run_sane_validation();
             return Ok(pkg);
         }
@@ -537,7 +515,7 @@ fn build_package_from_str(text: &str, from_: Option<&str>) -> PyResult<CompilerP
 
     let parsed = powerio_matrix::parse_str(text, source_format.as_deref().unwrap_or("matpower"))
         .map_err(to_pyerr)?;
-    let mut pkg = CompilerPackage::from_balanced(parsed.network);
+    let mut pkg = NetworkPackage::from_balanced(parsed.network);
     add_package_read_warning_diagnostics(
         &mut pkg,
         "READ.TRANSMISSION.PARSE_WARNING",
@@ -1147,7 +1125,7 @@ fn parse_file(path: &str, from_: Option<&str>) -> PyResult<PyNetwork> {
 
 /// Parse a case from in-memory text in the named `format` (`matpower`,
 /// `powermodels-json`, `egret-json`, `pandapower-json`, `psse`, `powerworld`,
-/// `pslf`; aliases `m`/`pm`/`egret`/`pp`/`raw`/`aux`/`epc`).
+/// `pslf`, `goc3-json`, `surge-json`; aliases `m`/`pm`/`egret`/`pp`/`raw`/`aux`/`epc`/`goc3`/`surge`).
 #[pyfunction]
 #[pyo3(signature = (text, format=None))]
 fn parse_str(text: &str, format: Option<&str>) -> PyResult<PyNetwork> {
@@ -1392,50 +1370,152 @@ fn dist_convert_str(text: &str, to: &str, format: &str) -> PyResult<(String, Vec
     Ok((conv.text, conv.warnings))
 }
 
-/// Return the explicit top-level model kind from a validated `.pio.json`
-/// package.
-#[pyfunction]
-fn package_model_kind(text: &str) -> PyResult<String> {
-    let pkg = CompilerPackage::from_json(text).map_err(package_pyerr)?;
-    Ok(match pkg.model_kind() {
-        powerio_pkg::ModelKind::Balanced => "balanced",
-        powerio_pkg::ModelKind::Multiconductor => "multiconductor",
-        _ => "unknown",
+/// Low level handle around a parsed `.pio.json` package. Parses the envelope
+/// once; the user facing `powerio.Package` wraps it. Not frozen: `validate`
+/// rewrites the handle's diagnostics in place, matching the Rust and C APIs.
+#[pyclass(name = "_Package")]
+struct PyPackage {
+    pkg: NetworkPackage,
+}
+
+#[pymethods]
+impl PyPackage {
+    /// Parse `.pio.json` envelope text into a package handle.
+    #[staticmethod]
+    fn from_json(text: &str) -> PyResult<Self> {
+        NetworkPackage::from_json(text)
+            .map_err(package_pyerr)
+            .map(|pkg| Self { pkg })
     }
-    .to_owned())
-}
 
-/// Parse a case file and return a `.pio.json` compiler package.
-#[pyfunction]
-#[pyo3(signature = (path, from_=None, scenario=0))]
-fn package_parse_file(path: &str, from_: Option<&str>, scenario: i64) -> PyResult<String> {
-    let pkg = build_package_from_path(Path::new(path), from_, scenario)?;
-    package_to_json(&pkg)
-}
+    /// Build a package from a case file or folder.
+    #[staticmethod]
+    #[pyo3(signature = (path, from_=None, scenario=0))]
+    fn from_file(path: &str, from_: Option<&str>, scenario: i64) -> PyResult<Self> {
+        build_package_from_path(Path::new(path), from_, scenario).map(|pkg| Self { pkg })
+    }
 
-/// Parse in-memory case text and return a `.pio.json` compiler package.
-#[pyfunction]
-#[pyo3(signature = (text, from_=None))]
-fn package_parse_str(text: &str, from_: Option<&str>) -> PyResult<String> {
-    let pkg = build_package_from_str(text, from_)?;
-    package_to_json(&pkg)
-}
+    /// Build a package from in-memory case text.
+    #[staticmethod]
+    #[pyo3(signature = (text, from_=None))]
+    fn from_str(text: &str, from_: Option<&str>) -> PyResult<Self> {
+        build_package_from_str(text, from_).map(|pkg| Self { pkg })
+    }
 
-/// Rebuild a balanced network handle from a validated `.pio.json` package.
-#[pyfunction]
-fn package_as_balanced(text: &str) -> PyResult<PyNetwork> {
-    CompilerPackage::from_json(text)
-        .map_err(package_pyerr)
-        .and_then(package_to_balanced_py)
-}
+    /// Wrap a balanced network handle in a package.
+    #[staticmethod]
+    #[pyo3(signature = (network, include_solver_metadata=false))]
+    fn from_balanced(
+        network: PyRef<'_, PyNetwork>,
+        include_solver_metadata: bool,
+    ) -> PyResult<Self> {
+        let mut pkg = NetworkPackage::from_balanced(network.inner.clone());
+        if include_solver_metadata {
+            pkg.attach_normalized_solver_table_metadata()
+                .map_err(to_pyerr)?;
+        }
+        Ok(Self { pkg })
+    }
 
-/// Rebuild a multiconductor network handle from a validated `.pio.json`
-/// package.
-#[pyfunction]
-fn package_as_multiconductor(text: &str) -> PyResult<PyDistNetwork> {
-    CompilerPackage::from_json(text)
-        .map_err(package_pyerr)
-        .and_then(package_to_dist_py)
+    /// Wrap a multiconductor network handle in a package.
+    #[staticmethod]
+    fn from_multiconductor(network: PyRef<'_, PyDistNetwork>) -> Self {
+        Self {
+            pkg: NetworkPackage::from_multiconductor(network.net.clone()),
+        }
+    }
+
+    /// The explicit top level model kind.
+    fn model_kind(&self) -> &'static str {
+        match self.pkg.model_kind() {
+            powerio_pkg::ModelKind::Balanced => "balanced",
+            powerio_pkg::ModelKind::Multiconductor => "multiconductor",
+            _ => "unknown",
+        }
+    }
+
+    /// Serialize to pretty `.pio.json`.
+    fn to_json(&self) -> PyResult<String> {
+        package_to_json(&self.pkg)
+    }
+
+    /// Rebuild a balanced network handle from the payload.
+    fn as_balanced(&self) -> PyResult<PyNetwork> {
+        package_to_balanced_py(&self.pkg)
+    }
+
+    /// Rebuild a multiconductor network handle from the payload.
+    fn as_multiconductor(&self) -> PyResult<PyDistNetwork> {
+        package_to_dist_py(&self.pkg)
+    }
+
+    /// The operating point series as JSON, or `null` when absent.
+    fn operating_points_json(&self) -> PyResult<String> {
+        serde_json::to_string(&self.pkg.operating_points).map_err(package_pyerr)
+    }
+
+    /// Materialize one operating point into a new static package handle.
+    fn materialize_operating_point(&self, index: usize) -> PyResult<Self> {
+        self.pkg
+            .materialize_operating_point(index)
+            .map_err(package_pyerr)
+            .map(|pkg| Self { pkg })
+    }
+
+    /// Run the package semantic validation profile in place.
+    fn validate(&mut self) {
+        self.pkg.run_sane_validation();
+    }
+
+    /// The validation summary as JSON.
+    fn validation_json(&self) -> PyResult<String> {
+        serde_json::to_string(&self.pkg.validation).map_err(package_pyerr)
+    }
+
+    /// The structured diagnostics array as JSON.
+    fn diagnostics_json(&self) -> PyResult<String> {
+        serde_json::to_string(&self.pkg.diagnostics).map_err(package_pyerr)
+    }
+
+    /// Readiness report for multiconductor to balanced lowering, as JSON.
+    #[pyo3(signature = (base_mva=100.0))]
+    fn multiconductor_to_balanced_preflight_json(&self, base_mva: f64) -> PyResult<String> {
+        let net = self.pkg.as_multiconductor().ok_or_else(|| {
+            PyValueError::new_err(format!(
+                "multiconductor preflight requires a multiconductor package, got {}",
+                self.model_kind()
+            ))
+        })?;
+        let report = powerio_pkg::check_multiconductor_to_balanced_lowering(
+            net,
+            powerio_pkg::MulticonductorToBalancedOptions {
+                base_mva,
+                ..Default::default()
+            },
+        );
+        serde_json::to_string(&report).map_err(package_pyerr)
+    }
+
+    /// Lower a multiconductor package to a new balanced package handle.
+    #[pyo3(signature = (base_mva=100.0))]
+    fn lower_multiconductor_to_balanced(&self, base_mva: f64) -> PyResult<Self> {
+        self.pkg
+            .lower_multiconductor_to_balanced(powerio_pkg::MulticonductorToBalancedOptions {
+                base_mva,
+                ..Default::default()
+            })
+            .map_err(|e| PowerIODataError::new_err(e.to_string()))
+            .map(|pkg| Self { pkg })
+    }
+
+    fn __repr__(&self) -> String {
+        format!(
+            "Package(model_kind={}, diagnostics={}, operating_points={})",
+            self.model_kind(),
+            self.pkg.diagnostics.len(),
+            self.pkg.operating_points().map_or(0, |s| s.points.len())
+        )
+    }
 }
 
 /// Classify top level JSON markers. Returns `(status, domain, format)` where
@@ -1606,11 +1686,7 @@ fn _powerio(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(dist_parse_str, m)?)?;
     m.add_function(wrap_pyfunction!(dist_convert_file, m)?)?;
     m.add_function(wrap_pyfunction!(dist_convert_str, m)?)?;
-    m.add_function(wrap_pyfunction!(package_model_kind, m)?)?;
-    m.add_function(wrap_pyfunction!(package_parse_file, m)?)?;
-    m.add_function(wrap_pyfunction!(package_parse_str, m)?)?;
-    m.add_function(wrap_pyfunction!(package_as_balanced, m)?)?;
-    m.add_function(wrap_pyfunction!(package_as_multiconductor, m)?)?;
+    m.add_class::<PyPackage>()?;
     m.add_function(wrap_pyfunction!(classify_json_text, m)?)?;
     // Whether the gridfm Parquet surface (arrow/parquet) was compiled in, so the
     // pure-Python layer can raise an ImportError instead of an AttributeError.

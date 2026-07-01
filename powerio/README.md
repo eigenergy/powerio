@@ -5,6 +5,10 @@ typed `Network`, retaining same format source text where the reader supports
 it, and converting through the format neutral model. The workspace README has
 the full format matrix and language bindings.
 
+Read and write support covers MATPOWER, PSS/E, PowerWorld AUX, PSLF,
+PowerModels JSON, egret JSON, pandapower JSON, PyPSA CSV folders, Surge JSON,
+and PowerIO JSON. GOC3 JSON and PowerWorld PWB are read only inputs.
+
 ```rust
 use powerio::{TargetFormat, parse_file};
 

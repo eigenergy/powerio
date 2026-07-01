@@ -60,8 +60,10 @@ header = """
  *   pio_parse_file / pio_parse_str / pio_read_dir / pio_normalize are freed
  *   with pio_network_free. Arrow buffers are freed through their own release
  *   callbacks (the C Data Interface release rule).
- * - A handle is immutable after construction: concurrent reads from any
- *   number of threads are safe; pio_network_free is not, free exactly once.
+ * - A handle is immutable after construction unless a function takes it
+ *   non-const (pio_package_validate rewrites its diagnostics): concurrent
+ *   reads from any number of threads are safe; a non-const entry point, and
+ *   pio_network_free, need exclusive access, and free exactly once.
  * - Every entry point catches Rust panics at the boundary and returns the
  *   documented failure value (NULL, 0, -1, 0.0) rather than unwinding across
  *   the ABI (requires the default panic = "unwind"; a panic = "abort" build

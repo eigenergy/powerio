@@ -5,12 +5,13 @@
 
 use std::path::{Path, PathBuf};
 
+use powerio::TransformerControlMode;
 use powerio::{
     Branch, BranchCharging, BranchCurrentRatings, BranchRatingSet, BranchSolution, Bus, BusId,
     BusType, Error, Load, LoadVoltageModel, MissingGenCostPolicy, Network, SourceFormat,
     TargetFormat, WriteOptions, convert_file, parse_file, parse_gen_cost_csv, parse_matpower,
     parse_matpower_file, parse_powermodels_json, parse_powerworld, parse_pslf, parse_psse,
-    read_pypsa_csv_folder, write_as, write_as_with_options, write_egret_json,
+    parse_str, read_pypsa_csv_folder, write_as, write_as_with_options, write_egret_json,
     write_powermodels_json, write_powerworld, write_pslf, write_psse, write_pypsa_csv_folder,
 };
 use serde_json::Value;
@@ -23,6 +24,78 @@ fn data(name: &str) -> PathBuf {
         .join("../tests/data")
         .join(name)
 }
+
+fn assert_close(actual: f64, expected: f64) {
+    assert!((actual - expected).abs() < 1e-12, "{actual} != {expected}");
+}
+
+const GOC3_TINY: &str = r#"{
+  "network": {
+    "general": {"base_norm_mva": 100.0},
+    "bus": [
+      {"uid": "bus_00", "base_nom_volt": 230.0, "vm_lb": 0.95, "vm_ub": 1.05, "initial_status": {"vm": 1.02, "va": 0.1}},
+      {"uid": "bus_01", "base_nom_volt": 115.0, "vm_lb": 0.9, "vm_ub": 1.1, "initial_status": {"vm": 0.99, "va": -0.2}}
+    ],
+    "ac_line": [
+      {"uid": "acl_000", "fr_bus": "bus_00", "to_bus": "bus_01", "r": 0.01, "x": 0.1, "b": 0.04, "mva_ub_nom": 2.0, "mva_ub_em": 2.5, "additional_shunt": 1, "g_fr": 0.001, "b_fr": 0.002, "g_to": 0.003, "b_to": 0.004, "initial_status": {"on_status": 1}}
+    ],
+    "two_winding_transformer": [
+      {"uid": "xf_000", "fr_bus": "bus_01", "to_bus": "bus_00", "r": 0.02, "x": 0.2, "b": 0.0, "mva_ub_nom": 1.2, "mva_ub_em": 1.5, "tm_lb": 0.9, "tm_ub": 1.1, "ta_lb": -0.1, "ta_ub": 0.1, "initial_status": {"on_status": 1, "tm": 1.03, "ta": 0.05}}
+    ],
+    "shunt": [
+      {"uid": "sh_00", "bus": "bus_01", "gs": 0.01, "bs": -0.02, "step_lb": 0, "step_ub": 2, "initial_status": {"step": 2}}
+    ],
+    "simple_dispatchable_device": [
+      {"uid": "sd_00", "bus": "bus_00", "device_type": "producer", "startup_cost": 5.0, "shutdown_cost": 6.0, "initial_status": {"on_status": 0, "p": 0.0, "q": 0.0}},
+      {"uid": "sd_01", "bus": "bus_01", "device_type": "consumer", "initial_status": {"on_status": 0, "p": 0.4, "q": 0.15}}
+    ],
+    "dc_line": [
+      {"uid": "dc_00", "fr_bus": "bus_00", "to_bus": "bus_01", "pdc_ub": 0.5, "qdc_fr_lb": -0.1, "qdc_fr_ub": 0.2, "qdc_to_lb": -0.15, "qdc_to_ub": 0.25, "initial_status": {"pdc_fr": 0.1, "qdc_fr": 0.02, "qdc_to": -0.03}}
+    ],
+    "active_zonal_reserve": []
+  },
+  "time_series_input": {
+    "general": {"time_periods": 2, "interval_duration": [1.0, 1.0]},
+    "simple_dispatchable_device": [
+      {"uid": "sd_00", "p_lb": [0.1, 0.2], "p_ub": [1.0, 0.8], "q_lb": [-0.2, -0.1], "q_ub": [0.4, 0.3], "cost": [[[1000.0, 0.1], [1200.0, 0.9]], [[900.0, 0.2], [1100.0, 0.6]]]},
+      {"uid": "sd_01", "p_lb": [0.0, 0.0], "p_ub": [0.4, 0.3], "q_lb": [-0.2, -0.2], "q_ub": [0.2, 0.2], "cost": [[[1000.0, 0.4]], [[1000.0, 0.3]]]}
+    ]
+  },
+  "reliability": {"contingency": []}
+}"#;
+
+const SURGE_TINY: &str = r#"{
+  "format": "surge-json",
+  "schema_version": "0.1.0",
+  "meta": {"producer": "surge", "profile": "network"},
+  "network": {
+    "name": "surge-tiny",
+    "base_mva": 100.0,
+    "freq_hz": 50.0,
+    "buses": [
+      {"number": 1, "name": "slack", "bus_type": "Slack", "base_kv": 230.0, "voltage_magnitude_pu": 1.01, "voltage_angle_rad": 0.1, "voltage_min_pu": 0.9, "voltage_max_pu": 1.1, "area": 1, "zone": 1},
+      {"number": 2, "name": "load", "bus_type": "PQ", "base_kv": 115.0, "voltage_magnitude_pu": 0.99, "voltage_angle_rad": -0.05, "voltage_min_pu": 0.92, "voltage_max_pu": 1.08, "area": 1, "zone": 2, "shunt_conductance_mw": 1.0, "shunt_susceptance_mvar": -2.0}
+    ],
+    "loads": [
+      {"id": "load_1", "bus": 2, "active_power_demand_mw": 10.0, "reactive_power_demand_mvar": 5.0, "in_service": true, "zip_p_impedance_frac": 0.3, "zip_p_current_frac": 0.2, "zip_p_power_frac": 0.5, "zip_q_impedance_frac": 0.4, "zip_q_current_frac": 0.2, "zip_q_power_frac": 0.4}
+    ],
+    "fixed_shunts": [
+      {"id": "shunt_1", "bus": 2, "g_mw": 0.5, "b_mvar": -1.5, "in_service": true}
+    ],
+    "branches": [
+      {"from_bus": 1, "to_bus": 2, "branch_type": "Line", "r": 0.01, "x": 0.1, "b": 0.07, "g_shunt_from": 0.001, "b_shunt_from": 0.002, "g_shunt_to": 0.003, "b_shunt_to": 0.004, "rating_a_mva": 100.0, "rating_b_mva": 110.0, "rating_c_mva": 120.0, "current_rating_a": 500.0, "current_rating_b": 600.0, "current_rating_c": 700.0, "tap": 1.0, "phase_shift_rad": 0.0, "angle_diff_min_rad": -0.5, "angle_diff_max_rad": 0.5, "pf_mw": 1.0, "qf_mvar": 0.5, "pt_mw": -0.9, "qt_mvar": -0.4, "in_service": true}
+    ],
+    "generators": [
+      {"id": "gen_1", "bus": 1, "reg_bus": 2, "p": 50.0, "q": 5.0, "pmax": 80.0, "pmin": 10.0, "qmax": 30.0, "qmin": -20.0, "voltage_setpoint_pu": 1.02, "machine_base_mva": 100.0, "in_service": true, "cost": {"Polynomial": {"coeffs": [0.01, 2.0, 0.0], "startup": 3.0, "shutdown": 4.0}}},
+      {"id": "storage_1", "bus": 2, "p": -3.0, "q": 1.0, "pmax": 10.0, "pmin": -12.0, "qmax": 5.0, "qmin": -5.0, "voltage_setpoint_pu": 1.0, "machine_base_mva": 12.0, "in_service": true, "storage": {"energy_capacity_mwh": 40.0, "soc_initial_mwh": 20.0, "charge_efficiency": 0.9, "discharge_efficiency": 0.92, "current_rating": 300.0}}
+    ],
+    "hvdc": {
+      "links": [
+        {"technology": "lcc", "mode": "PowerControl", "scheduled_setpoint": 25.0, "p_dc_min_mw": 0.0, "p_dc_max_mw": 50.0, "rectifier": {"bus": 1, "in_service": true, "ac_setpoint": 1.0, "q_min_mvar": -5.0, "q_max_mvar": 6.0}, "inverter": {"bus": 2, "in_service": true, "ac_setpoint": 0.99, "q_min_mvar": -4.0, "q_max_mvar": 5.0}}
+      ]
+    }
+  }
+}"#;
 
 fn audit_bus(id: usize, kind: BusType) -> Bus {
     Bus::new(BusId(id), kind, 230.0)
@@ -2175,4 +2248,316 @@ fn snapshot_json_file_is_sniffed_without_a_format_hint() {
     let back = parsed.unwrap().network;
     assert_eq!(back.buses.len(), 14);
     assert_eq!(back.source_format, SourceFormat::Matpower);
+}
+
+#[test]
+fn parses_goc3_json_static_network() {
+    let parsed = parse_str(GOC3_TINY, "goc3-json").unwrap();
+    let net = parsed.network;
+
+    assert_eq!(net.source_format, SourceFormat::Goc3Json);
+    assert_close(net.base_mva, 100.0);
+    assert_eq!(net.buses.len(), 2);
+    assert_eq!(net.buses[0].id, BusId(1));
+    assert_eq!(net.buses[0].kind, BusType::Ref);
+    assert!((net.buses[0].va - 0.1 * 180.0 / std::f64::consts::PI).abs() < 1e-12);
+    assert_eq!(net.buses[1].kind, BusType::Pq);
+
+    assert_eq!(net.branches.len(), 2);
+    assert_eq!(net.branches[0].from, BusId(1));
+    assert_eq!(net.branches[0].to, BusId(2));
+    assert_close(net.branches[0].rate_a, 2.0);
+    assert_close(net.branches[0].rate_b, 2.5);
+    // additional_shunt=1: b/2 per terminal is added to the extra shunts
+    // (b_fr = 0.04/2 + 0.002, b_to = 0.04/2 + 0.004).
+    assert_eq!(
+        net.branches[0].charging,
+        Some(BranchCharging::new(0.001, 0.022, 0.003, 0.024))
+    );
+    // ac_line carries no bus angle difference limit.
+    assert_close(net.branches[0].angmin, -360.0);
+    assert_close(net.branches[0].angmax, 360.0);
+    assert_close(net.branches[1].tap, 1.03);
+    assert!((net.branches[1].shift - 0.05 * 180.0 / std::f64::consts::PI).abs() < 1e-12);
+    // ta_lb/ta_ub are the phase shift control range, not an angle difference
+    // limit: they land on an ActiveFlow control, and angmin/angmax stay open.
+    assert_close(net.branches[1].angmin, -360.0);
+    assert_close(net.branches[1].angmax, 360.0);
+    let control = net.branches[1].control.as_ref().unwrap();
+    assert_eq!(control.mode, TransformerControlMode::ActiveFlow);
+    assert!((control.tap_min - (-0.1 * 180.0 / std::f64::consts::PI)).abs() < 1e-12);
+    assert!((control.tap_max - (0.1 * 180.0 / std::f64::consts::PI)).abs() < 1e-12);
+
+    assert_eq!(net.shunts.len(), 1);
+    assert_eq!(net.shunts[0].bus, BusId(2));
+    assert_close(net.shunts[0].g, 2.0);
+    assert_close(net.shunts[0].b, -4.0);
+
+    assert_eq!(net.generators.len(), 1);
+    let generator = &net.generators[0];
+    assert_eq!(generator.bus, BusId(1));
+    // initial_status.on_status = 0 marks the unit offline.
+    assert!(!generator.in_service);
+    assert_close(generator.pmin, 10.0);
+    assert_close(generator.pmax, 100.0);
+    assert_close(generator.qmin, -20.0);
+    assert_close(generator.qmax, 40.0);
+    let cost = generator.cost.as_ref().unwrap();
+    assert_eq!(cost.model, 1);
+    assert_close(cost.startup, 5.0);
+    assert_close(cost.shutdown, 6.0);
+    assert_eq!(cost.ncost, 3);
+    assert_eq!(cost.coeffs, vec![0.0, 0.0, 10.0, 100.0, 100.0, 1180.0]);
+
+    assert_eq!(net.loads.len(), 1);
+    assert_eq!(net.loads[0].bus, BusId(2));
+    assert!(!net.loads[0].in_service);
+    assert_close(net.loads[0].p, 40.0);
+    assert_close(net.loads[0].q, 15.0);
+
+    assert_eq!(net.hvdc.len(), 1);
+    assert_close(net.hvdc[0].pmax, 50.0);
+    assert_close(net.hvdc[0].pmin, -50.0);
+    assert_close(net.hvdc[0].pf, 10.0);
+    assert_close(net.hvdc[0].qmaxf, 20.0);
+    assert_close(net.hvdc[0].qmaxt, 25.0);
+
+    assert!(
+        parsed
+            .warnings
+            .iter()
+            .any(|w| w.contains("time_series_input reduced")),
+        "{:?}",
+        parsed.warnings
+    );
+    assert!(
+        parsed
+            .warnings
+            .iter()
+            .any(|w| w.contains("reliability contingencies")),
+        "{:?}",
+        parsed.warnings
+    );
+
+    let echo = write_as(&net, TargetFormat::Goc3Json).unwrap();
+    assert_eq!(echo.text, GOC3_TINY);
+    let matpower = write_as(&net, TargetFormat::Matpower).unwrap();
+    assert!(matpower.text.contains("mpc.bus"));
+}
+
+#[test]
+fn goc3_write_without_retained_source_is_write_unsupported() {
+    // A goc3 source echoes byte for byte (asserted above); any other network
+    // refuses with the read only error, not "unknown format".
+    let net = rich_audit_network();
+    let err = write_as(&net, TargetFormat::Goc3Json).unwrap_err();
+    assert!(matches!(
+        err,
+        Error::WriteUnsupported {
+            format: "goc3-json"
+        }
+    ));
+    assert_eq!(
+        err.to_string(),
+        "goc3-json is a read only format with no writer"
+    );
+}
+
+#[test]
+fn goc3_rejects_unknown_bus_ref_even_when_digits_match() {
+    let bad = GOC3_TINY.replacen(r#""to_bus": "bus_01""#, r#""to_bus": "missing_bus_01""#, 1);
+    let err = parse_str(&bad, "goc3-json").unwrap_err();
+    assert!(
+        err.to_string().contains("unknown bus uid `missing_bus_01`"),
+        "{err}"
+    );
+}
+
+#[test]
+fn goc3_accepts_nonnumeric_bus_uids_by_exact_reference() {
+    let src = r#"{
+      "network": {
+        "general": {"base_norm_mva": 100.0},
+        "bus": [
+          {"uid": "slack", "base_nom_volt": 230.0},
+          {"uid": "load", "base_nom_volt": 115.0}
+        ],
+        "ac_line": [
+          {"uid": "line", "fr_bus": "slack", "to_bus": "load", "r": 0.01, "x": 0.1, "initial_status": {"on_status": 1}}
+        ],
+        "simple_dispatchable_device": [
+          {"uid": "gen_a", "bus": "slack", "device_type": "producer", "initial_status": {"p": 0.1, "q": 0.0}},
+          {"uid": "load_a", "bus": "load", "device_type": "consumer", "initial_status": {"p": 0.2, "q": 0.1}}
+        ]
+      },
+      "time_series_input": {
+        "general": {"time_periods": 1, "interval_duration": [1.0]},
+        "simple_dispatchable_device": [
+          {"uid": "gen_a", "p_lb": [0.0], "p_ub": [1.0], "q_lb": [-0.5], "q_ub": [0.5]},
+          {"uid": "load_a", "p_ub": [0.2], "q_ub": [0.1]}
+        ]
+      }
+    }"#;
+    let net = parse_str(src, "goc3-json").unwrap().network;
+    assert_eq!(net.buses[0].id, BusId(1));
+    assert_eq!(net.buses[1].id, BusId(2));
+    assert_eq!(net.branches[0].from, BusId(1));
+    assert_eq!(net.branches[0].to, BusId(2));
+}
+
+#[test]
+fn infers_goc3_json_file() {
+    let stamp = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_nanos();
+    let path = std::env::temp_dir().join(format!("powerio-goc3-{stamp}.json"));
+    std::fs::write(&path, GOC3_TINY).unwrap();
+
+    let parsed = parse_file(&path, None).unwrap();
+    assert_eq!(parsed.network.source_format, SourceFormat::Goc3Json);
+    let conv = convert_file(&path, TargetFormat::Matpower, None).unwrap();
+    assert!(conv.text.contains("mpc.branch"));
+
+    let _ = std::fs::remove_file(path);
+}
+
+#[test]
+fn parses_surge_json_network() {
+    let parsed = parse_str(SURGE_TINY, "surge-json").unwrap();
+    let net = parsed.network;
+
+    assert_eq!(net.source_format, SourceFormat::SurgeJson);
+    assert_eq!(net.name, "surge-tiny");
+    assert_close(net.base_mva, 100.0);
+    assert_close(net.base_frequency, 50.0);
+    assert_eq!(net.buses.len(), 2);
+    assert_eq!(net.buses[0].kind, BusType::Ref);
+    assert!((net.buses[0].va - 0.1 * 180.0 / std::f64::consts::PI).abs() < 1e-12);
+
+    assert_eq!(net.loads.len(), 1);
+    match net.loads[0].voltage_model.as_ref().unwrap() {
+        LoadVoltageModel::Zip {
+            p_constant_power,
+            q_constant_power,
+            p_constant_current,
+            q_constant_current,
+            p_constant_impedance,
+            q_constant_impedance,
+            ..
+        } => {
+            assert_close(*p_constant_power, 5.0);
+            assert_close(*q_constant_power, 2.0);
+            assert_close(*p_constant_current, 2.0);
+            assert_close(*q_constant_current, 1.0);
+            assert_close(*p_constant_impedance, 3.0);
+            assert_close(*q_constant_impedance, 2.0);
+        }
+        other => panic!("unexpected load model: {other:?}"),
+    }
+
+    assert_eq!(net.shunts.len(), 2);
+    assert_close(net.shunts.iter().map(|s| s.g).sum(), 1.5);
+    assert_close(net.shunts.iter().map(|s| s.b).sum(), -3.5);
+
+    assert_eq!(net.branches.len(), 1);
+    let branch = &net.branches[0];
+    assert_close(branch.tap, 0.0);
+    assert_eq!(
+        branch.charging,
+        Some(BranchCharging::new(0.001, 0.002, 0.003, 0.004))
+    );
+    assert_eq!(
+        branch.current_ratings,
+        Some(BranchCurrentRatings::new(500.0, 600.0, 700.0))
+    );
+    assert_eq!(
+        branch.solution,
+        Some(BranchSolution::new(1.0, 0.5, -0.9, -0.4))
+    );
+
+    assert_eq!(net.generators.len(), 1);
+    let generator = &net.generators[0];
+    assert_eq!(generator.regulated_bus, Some(BusId(2)));
+    assert_close(generator.pg, 50.0);
+    assert_eq!(
+        generator.cost.as_ref().unwrap().coeffs,
+        vec![0.01, 2.0, 0.0]
+    );
+
+    assert_eq!(net.storage.len(), 1);
+    assert_eq!(net.storage[0].bus, BusId(2));
+    assert_close(net.storage[0].charge_rating, 12.0);
+    assert_close(net.storage[0].discharge_rating, 10.0);
+    assert_eq!(net.storage[0].current_rating, Some(300.0));
+
+    assert_eq!(net.hvdc.len(), 1);
+    assert_close(net.hvdc[0].pf, 25.0);
+    assert_close(net.hvdc[0].qmaxf, 6.0);
+    assert_close(net.hvdc[0].qmaxt, 5.0);
+
+    let echo = write_as(&net, TargetFormat::SurgeJson).unwrap();
+    assert_eq!(echo.text, SURGE_TINY);
+    let matpower = write_as(&net, TargetFormat::Matpower).unwrap();
+    assert!(matpower.text.contains("mpc.branch"));
+    assert!(has_warning(&matpower.warnings, "system base frequency"));
+}
+
+#[test]
+fn surge_storage_generator_is_not_duplicated_after_canonical_write() {
+    let mut net = parse_str(SURGE_TINY, "surge-json").unwrap().network;
+    assert_eq!(net.generators.len(), 1);
+    assert_eq!(net.storage.len(), 1);
+
+    net.source = None;
+    let surge = write_as(&net, TargetFormat::SurgeJson).unwrap();
+    let back = parse_str(&surge.text, "surge-json").unwrap().network;
+
+    assert_eq!(back.generators.len(), 1);
+    assert_eq!(back.storage.len(), 1);
+    assert_eq!(back.storage[0].bus, BusId(2));
+    assert!(surge.text.contains(r#""storage""#));
+}
+
+#[test]
+fn surge_writer_round_trips_supported_core_fields() {
+    let net = rich_audit_network();
+    let conv = write_as(&net, TargetFormat::SurgeJson).unwrap();
+    let back = parse_str(&conv.text, "surge-json").unwrap().network;
+
+    assert_eq!(back.source_format, SourceFormat::SurgeJson);
+    assert_eq!(back.loads.len(), 1);
+    assert!(matches!(
+        back.loads[0].voltage_model,
+        Some(LoadVoltageModel::Zip { .. })
+    ));
+    assert_eq!(
+        back.branches[0].charging,
+        Some(BranchCharging::new(0.01, 0.02, 0.0, 0.05))
+    );
+    assert_eq!(
+        back.branches[0].current_ratings,
+        Some(BranchCurrentRatings::new(500.0, 600.0, 700.0))
+    );
+    assert_eq!(
+        back.branches[0].solution,
+        Some(BranchSolution::new(1.0, 0.5, -0.9, -0.4))
+    );
+}
+
+#[test]
+fn infers_surge_json_file() {
+    let stamp = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_nanos();
+    let path = std::env::temp_dir().join(format!("powerio-surge-{stamp}.json"));
+    std::fs::write(&path, SURGE_TINY).unwrap();
+
+    let parsed = parse_file(&path, None).unwrap();
+    assert_eq!(parsed.network.source_format, SourceFormat::SurgeJson);
+    let conv = convert_file(&path, TargetFormat::Matpower, None).unwrap();
+    assert!(conv.text.contains("mpc.branch"));
+
+    let _ = std::fs::remove_file(path);
 }

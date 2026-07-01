@@ -1,6 +1,6 @@
 # The `.pio.json` schema
 
-`.pio.json` is the serialized form of `powerio_pkg::CompilerPackage`: a versioned
+`.pio.json` is the serialized form of `powerio_pkg::NetworkPackage`: a versioned
 envelope around one PowerIO IR payload. The envelope shape and stability policy
 are below. The crate is the implementation; `compiler-ir.md` is the architecture
 note.
@@ -12,8 +12,8 @@ A `.pio.json` file has two parts with different stability promises.
 1. **The envelope** — every field except `model`. This is the versioned,
    documented surface: `schema`, `schema_version`, `producer`, `model_kind`,
    `origin`, `sources`, `source_maps`, `diagnostics`, `validation`, `summary`,
-   `lowering_history`, `derived`. Its shape changes only under the versioning
-   policy below.
+   `lowering_history`, `operating_points`, `derived`. Its shape changes only
+   under the versioning policy below.
 
 2. **The payload** — the `model` field's `balanced_network` /
    `multiconductor_network` object. This is a direct serde snapshot of the live
@@ -37,7 +37,10 @@ diagnostics, validation, and lowering metadata around that model. Use the
 
 - `schema_version` is semver. The current value is `0.1.0`; the `schema` URL is
   `https://powerio.dev/schema/pio-package/0.1`.
-- Additive envelope fields bump the minor version.
+- Optional additive envelope fields (a reader that ignores them loses nothing
+  it relied on before) land without a version change; `operating_points` landed
+  this way. The minor version bumps when a reader needs to depend on a field
+  being present.
 - Envelope field moves or removals bump the major version, or ship a migration.
 - A reader tolerates unknown later top-level fields (they are ignored, not an
   error), so a package from a newer producer still loads. A later version can
@@ -52,7 +55,7 @@ diagnostics, validation, and lowering metadata around that model. Use the
 **must** branch on it and **must not** infer the payload kind from which field is
 present. The payload is additionally self-describing: `model` is tagged by
 `kind`, so `model.kind` and `model_kind` carry the same value.
-`CompilerPackage::kind_is_consistent` asserts the two agree; a reader should
+`NetworkPackage::kind_is_consistent` asserts the two agree; a reader should
 reject a package where they disagree.
 
 ```json
@@ -81,7 +84,53 @@ later families can be added).
 | `validation` | object | yes | `{status, counts, passes[]}` |
 | `summary` | object | yes | `{elements{}, topology?, units?}` |
 | `lowering_history` | array | no | `LoweringRecord` per pass |
+| `operating_points` | object | no | replayable updates over the one static payload |
 | `derived` | object | no | optional matrix stats, normalized solver table metadata, and cache keys |
+
+### Operating points
+
+`operating_points` records a time axis and an ordered list of payload field
+updates. A point names a table, zero based row, optional source UID, and the
+fields to overwrite. Materializing a point clones the static payload, applies
+those field updates, and clears `operating_points` in the returned package.
+
+The block shape is:
+
+| field | type | notes |
+|---|---|---|
+| `time_axis.periods` | integer | number of available operating points |
+| `time_axis.duration_hours` | array of numbers | optional per period duration |
+| `time_axis.labels` | array of strings | optional labels, such as `"1"`, `"2"`, ... |
+| `points[]` | array | one replayable state |
+| `points[].index` | integer | zero based period index; addresses `time_axis.duration_hours` and `time_axis.labels` |
+| `points[].updates[]` | array | row field updates to apply for this point |
+| `updates[].element.table` | string | payload table name, such as `generators`, `loads`, `branches`, or `hvdc` |
+| `updates[].element.row` | integer | zero based row in that table |
+| `updates[].element.source_uid` | string | optional source record UID |
+| `updates[].fields` | object | field names and JSON values to overwrite |
+| `metadata` | object | optional series or point metadata |
+
+GO Challenge 3 packages use this block for the scheduling time series. The
+static `model` reflects the first interval that can be represented by
+`Network`; `operating_points` carries replayable updates for every interval.
+`NetworkPackage::materialize_operating_point(index)` returns a new static
+package with `origin.kind = "derived"` and
+`origin.pass = "materialize-operating-point"`.
+
+```json
+"operating_points": {
+  "time_axis": { "periods": 2, "duration_hours": [1.0, 1.0], "labels": ["1", "2"] },
+  "points": [
+    { "index": 0, "updates": [] },
+    { "index": 1,
+      "updates": [
+        { "element": { "table": "loads", "row": 0, "source_uid": "device_1" },
+          "fields": { "p": 12.5, "q": 3.2 } }
+      ] }
+  ],
+  "metadata": { "source_format": "goc3-json" }
+}
+```
 
 ### Derived metadata
 
@@ -132,7 +181,7 @@ with `mapping_kind = defaulted`, and its retained source becomes
 `origin.retained_source`. Validation diagnostics attach the matching `source_ref`
 when the package has a source map for the reported field.
 
-`CompilerPackage::lower_multiconductor_to_balanced(options)` returns a new
+`NetworkPackage::lower_multiconductor_to_balanced(options)` returns a new
 balanced package with `origin.kind = derived` and
 `origin.pass = "multiconductor-to-balanced"`. It preserves the parent
 `lowering_history` and appends a `LoweringRecord` whose options, assumptions,
@@ -148,7 +197,7 @@ bindings, or MCP operations.
 {
   "schema": "https://powerio.dev/schema/pio-package/0.1",
   "schema_version": "0.1.0",
-  "producer": { "tool": "powerio", "version": "0.4.0" },
+  "producer": { "tool": "powerio", "version": "0.5.0" },
   "model_kind": "multiconductor",
   "model": {
     "kind": "multiconductor",

@@ -144,8 +144,13 @@ unsafe fn finish_network(
     f: impl FnOnce() -> Result<(Network, Vec<String>), String>,
 ) -> *mut PioNetwork {
     unsafe {
-        match catch_unwind(AssertUnwindSafe(f)) {
-            Ok(Ok((net, warnings))) => make_network(net, warnings),
+        // make_network runs inside the guard: IndexCore::build is part of the
+        // entry point's work and the header promises panics never cross the
+        // boundary.
+        match catch_unwind(AssertUnwindSafe(|| {
+            f().map(|(net, warnings)| make_network(net, warnings))
+        })) {
+            Ok(Ok(handle)) => handle,
             Ok(Err(msg)) => {
                 copy_to_buf(errbuf, errlen, &msg);
                 std::ptr::null_mut()
@@ -258,8 +263,8 @@ fn required_cstr<'a>(p: *const c_char, name: &str) -> Result<&'a str, String> {
 
 /// Parse `path` (format from extension, or `from` if non-NULL) into a network
 /// handle. `from` accepts the [`pio_parse_str`] format names plus
-/// `pypsa-csv`/`pypsa` and `pwb`; that includes `pslf`/`epc`, and `.epc` is
-/// inferred by extension. A PyPSA CSV folder is a directory, so it can only
+/// `pypsa-csv`/`pypsa`, `goc3-json`/`goc3`, `surge-json`/`surge`, and `pwb`;
+/// that includes `pslf`/`epc`, and `.epc` is inferred by extension. A PyPSA CSV folder is a directory, so it can only
 /// enter through this function, with `from = "pypsa-csv"` (or NULL when the
 /// directory holds a `network.csv`). Read fidelity warnings attach to the
 /// handle ([`pio_warnings`]). Returns `NULL` on error and writes the message
@@ -286,7 +291,7 @@ pub unsafe extern "C" fn pio_parse_file(
 /// Unlike [`pio_parse_file`] there is no path to infer from, so `format` is
 /// required: one of `matpower`/`m`, `powermodels`/`pm`, `egret`,
 /// `pandapower-json`/`pandapower`/`pp`, `psse`/`raw`, `powerworld`/`aux`,
-/// `pslf`/`epc`, or `powerio-json`/`json` (the canonical snapshot
+/// `pslf`/`epc`, `goc3-json`/`goc3`, `surge-json`/`surge`, or `powerio-json`/`json` (the canonical snapshot
 /// [`pio_to_format`] writes, validated on read). PyPSA CSV folders are
 /// directories, not text; parse them with [`pio_parse_file`] and
 /// `from = "pypsa-csv"`. Read fidelity warnings attach to the handle
@@ -1053,11 +1058,11 @@ pub unsafe extern "C" fn pio_to_arrow(
 // ---------------------------------------------------------------------------
 
 /// Opaque `.pio.json` compiler package handle. A package owns one
-/// [`powerio_pkg::CompilerPackage`], which wraps either a balanced
+/// [`powerio_pkg::NetworkPackage`], which wraps either a balanced
 /// [`PioNetwork`] payload or a multiconductor [`PioDistNetwork`] payload.
 #[cfg(feature = "pkg")]
 pub struct PioPackage {
-    package: powerio_pkg::CompilerPackage,
+    package: powerio_pkg::NetworkPackage,
 }
 
 #[cfg(feature = "pkg")]
@@ -1079,7 +1084,7 @@ unsafe fn finish_package(
     errbuf: *mut c_char,
     errlen: usize,
     panic_msg: &str,
-    f: impl FnOnce() -> Result<powerio_pkg::CompilerPackage, String>,
+    f: impl FnOnce() -> Result<powerio_pkg::NetworkPackage, String>,
 ) -> *mut PioPackage {
     unsafe {
         match catch_unwind(AssertUnwindSafe(f)) {
@@ -1112,7 +1117,7 @@ pub unsafe extern "C" fn pio_package_parse_file(
         finish_package(errbuf, errlen, "panic while parsing package", || {
             let path = required_cstr(path, "path")?;
             let text = std::fs::read_to_string(path).map_err(|e| e.to_string())?;
-            powerio_pkg::CompilerPackage::from_json(&text).map_err(|e| e.to_string())
+            powerio_pkg::NetworkPackage::from_json(&text).map_err(|e| e.to_string())
         })
     }
 }
@@ -1130,7 +1135,7 @@ pub unsafe extern "C" fn pio_package_parse_str(
     unsafe {
         finish_package(errbuf, errlen, "panic while parsing package", || {
             let text = required_cstr(text, "text")?;
-            powerio_pkg::CompilerPackage::from_json(text).map_err(|e| e.to_string())
+            powerio_pkg::NetworkPackage::from_json(text).map_err(|e| e.to_string())
         })
     }
 }
@@ -1149,6 +1154,39 @@ pub unsafe extern "C" fn pio_package_free(pkg: *mut PioPackage) {
     }
 }
 
+/// Finish a `*mut c_char` package accessor: run `f` on the non-NULL handle
+/// under the panic guard and hand back an owned C string, or write the error
+/// (`panic_msg` if `f` panicked) into `errbuf` and return NULL. The shared
+/// tail of the `pio_package_*_json` getters.
+#[cfg(feature = "pkg")]
+unsafe fn finish_package_json(
+    pkg: *const PioPackage,
+    errbuf: *mut c_char,
+    errlen: usize,
+    panic_msg: &str,
+    f: impl FnOnce(&PioPackage) -> Result<String, String>,
+) -> *mut c_char {
+    unsafe {
+        let result = catch_unwind(AssertUnwindSafe(|| {
+            let pkg = pkg
+                .as_ref()
+                .ok_or_else(|| "package handle is NULL".to_string())?;
+            f(pkg)
+        }));
+        match result {
+            Ok(Ok(text)) => finish_cstring(text, errbuf, errlen),
+            Ok(Err(msg)) => {
+                copy_to_buf(errbuf, errlen, &msg);
+                std::ptr::null_mut()
+            }
+            Err(_) => {
+                copy_to_buf(errbuf, errlen, panic_msg);
+                std::ptr::null_mut()
+            }
+        }
+    }
+}
+
 /// Serialize a package handle to compact `.pio.json`. Returns an owned C string
 /// (free with [`pio_string_free`]) or `NULL` on error.
 #[cfg(feature = "pkg")]
@@ -1159,23 +1197,13 @@ pub unsafe extern "C" fn pio_package_to_json(
     errlen: usize,
 ) -> *mut c_char {
     unsafe {
-        let result = catch_unwind(AssertUnwindSafe(|| {
-            let pkg = pkg
-                .as_ref()
-                .ok_or_else(|| "package handle is NULL".to_string())?;
-            pkg.package.to_json().map_err(|e| e.to_string())
-        }));
-        match result {
-            Ok(Ok(text)) => finish_cstring(text, errbuf, errlen),
-            Ok(Err(msg)) => {
-                copy_to_buf(errbuf, errlen, &msg);
-                std::ptr::null_mut()
-            }
-            Err(_) => {
-                copy_to_buf(errbuf, errlen, "panic while serializing package");
-                std::ptr::null_mut()
-            }
-        }
+        finish_package_json(
+            pkg,
+            errbuf,
+            errlen,
+            "panic while serializing package",
+            |p| p.package.to_json().map_err(|e| e.to_string()),
+        )
     }
 }
 
@@ -1198,7 +1226,7 @@ pub unsafe extern "C" fn pio_package_from_balanced_network(
             "panic while packaging balanced network",
             || {
                 let net = network_ref(net).ok_or_else(|| "network handle is NULL".to_string())?;
-                let mut package = powerio_pkg::CompilerPackage::from_balanced(net.net.clone());
+                let mut package = powerio_pkg::NetworkPackage::from_balanced(net.net.clone());
                 if include_solver_metadata != 0 {
                     package
                         .attach_normalized_solver_table_metadata()
@@ -1229,7 +1257,7 @@ pub unsafe extern "C" fn pio_package_from_multiconductor_network(
                 let net = net
                     .as_ref()
                     .ok_or_else(|| "distribution network handle is NULL".to_string())?;
-                Ok(powerio_pkg::CompilerPackage::from_multiconductor(
+                Ok(powerio_pkg::NetworkPackage::from_multiconductor(
                     net.net.clone(),
                 ))
             },
@@ -1239,6 +1267,12 @@ pub unsafe extern "C" fn pio_package_from_multiconductor_network(
 
 /// Run the package semantic validation profile in place. Returns `0` on
 /// success, `-1` on error.
+///
+/// Unlike the read-only accessors, this rewrites the handle's `diagnostics` and
+/// `validation` (the payload is untouched), so it takes the handle non-`const`
+/// and needs exclusive access: no other call may touch the same handle
+/// concurrently. This is the one exception to the header's blanket
+/// concurrent-read guarantee.
 #[cfg(feature = "pkg")]
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_package_validate(
@@ -1278,23 +1312,13 @@ pub unsafe extern "C" fn pio_package_validation_json(
     errlen: usize,
 ) -> *mut c_char {
     unsafe {
-        let result = catch_unwind(AssertUnwindSafe(|| {
-            let pkg = pkg
-                .as_ref()
-                .ok_or_else(|| "package handle is NULL".to_string())?;
-            serde_json::to_string(&pkg.package.validation).map_err(|e| e.to_string())
-        }));
-        match result {
-            Ok(Ok(text)) => finish_cstring(text, errbuf, errlen),
-            Ok(Err(msg)) => {
-                copy_to_buf(errbuf, errlen, &msg);
-                std::ptr::null_mut()
-            }
-            Err(_) => {
-                copy_to_buf(errbuf, errlen, "panic while reading package validation");
-                std::ptr::null_mut()
-            }
-        }
+        finish_package_json(
+            pkg,
+            errbuf,
+            errlen,
+            "panic while reading package validation",
+            |p| serde_json::to_string(&p.package.validation).map_err(|e| e.to_string()),
+        )
     }
 }
 
@@ -1308,23 +1332,65 @@ pub unsafe extern "C" fn pio_package_diagnostics_json(
     errlen: usize,
 ) -> *mut c_char {
     unsafe {
-        let result = catch_unwind(AssertUnwindSafe(|| {
-            let pkg = pkg
-                .as_ref()
-                .ok_or_else(|| "package handle is NULL".to_string())?;
-            serde_json::to_string(&pkg.package.diagnostics).map_err(|e| e.to_string())
-        }));
-        match result {
-            Ok(Ok(text)) => finish_cstring(text, errbuf, errlen),
-            Ok(Err(msg)) => {
-                copy_to_buf(errbuf, errlen, &msg);
-                std::ptr::null_mut()
-            }
-            Err(_) => {
-                copy_to_buf(errbuf, errlen, "panic while reading package diagnostics");
-                std::ptr::null_mut()
-            }
-        }
+        finish_package_json(
+            pkg,
+            errbuf,
+            errlen,
+            "panic while reading package diagnostics",
+            |p| serde_json::to_string(&p.package.diagnostics).map_err(|e| e.to_string()),
+        )
+    }
+}
+
+/// Return the package operating point series as JSON, or `null` when absent.
+/// The returned string is owned by the library; free it with
+/// [`pio_string_free`].
+#[cfg(feature = "pkg")]
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn pio_package_operating_points_json(
+    pkg: *const PioPackage,
+    errbuf: *mut c_char,
+    errlen: usize,
+) -> *mut c_char {
+    unsafe {
+        finish_package_json(
+            pkg,
+            errbuf,
+            errlen,
+            "panic while reading package operating points",
+            |p| serde_json::to_string(&p.package.operating_points).map_err(|e| e.to_string()),
+        )
+    }
+}
+
+/// Materialize one operating point into a new static package.
+///
+/// The returned handle owns a package with the selected updates applied and no
+/// operating point series. Free it with [`pio_package_free`].
+#[cfg(feature = "pkg")]
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn pio_package_materialize_operating_point(
+    pkg: *const PioPackage,
+    index: i64,
+    errbuf: *mut c_char,
+    errlen: usize,
+) -> *mut PioPackage {
+    unsafe {
+        finish_package(
+            errbuf,
+            errlen,
+            "panic while materializing package operating point",
+            || {
+                let pkg = pkg
+                    .as_ref()
+                    .ok_or_else(|| "package handle is NULL".to_string())?;
+                let index = usize::try_from(index)
+                    .map_err(|_| "operating point index must be non-negative".to_string())?;
+                pkg.package
+                    .materialize_operating_point(index)
+                    .map_err(|e| e.to_string())
+            },
+        )
     }
 }
 
@@ -1437,6 +1503,14 @@ unsafe fn finish_handle<H>(
 pub struct PioDistNetwork {
     net: powerio_dist::DistNetwork,
 }
+
+// Same cross-thread read guarantee as `PioNetwork` (see that assertion): pin
+// `Send + Sync` so a future non-`Sync` field fails the build.
+#[cfg(feature = "dist")]
+const _: fn() = || {
+    fn assert_send_sync<T: Send + Sync>() {}
+    assert_send_sync::<PioDistNetwork>();
+};
 
 /// Parse a distribution case file into a [`PioDistNetwork`] handle. The format
 /// comes from `from` if non-NULL (`dss`, `pmd`, or `bmopf`), else from the file
@@ -1932,6 +2006,8 @@ mod tests {
             "int32_t pio_package_validate(PioPackage *pkg, char *errbuf, size_t errlen);",
             "char *pio_package_validation_json(const PioPackage *pkg, char *errbuf, size_t errlen);",
             "char *pio_package_diagnostics_json(const PioPackage *pkg, char *errbuf, size_t errlen);",
+            "char *pio_package_operating_points_json(const PioPackage *pkg, char *errbuf, size_t errlen);",
+            "PioPackage *pio_package_materialize_operating_point(const PioPackage *pkg, int64_t index, char *errbuf, size_t errlen);",
             "char *pio_package_multiconductor_to_balanced_preflight_json(const PioPackage *pkg, double base_mva, char *errbuf, size_t errlen);",
             "PioPackage *pio_package_lower_multiconductor_to_balanced(const PioPackage *pkg, double base_mva, char *errbuf, size_t errlen);",
             "PioDistNetwork *pio_dist_parse_file(const char *path, const char *from, char *errbuf, size_t errlen);",
@@ -2644,6 +2720,7 @@ mpc.branch = [
                 CStr::from_ptr(err.as_ptr()).to_str().unwrap()
             );
             let v = package_json(pkg);
+            assert_eq!(v["schema_version"], serde_json::json!("0.1.0"));
             assert_eq!(v["model_kind"], serde_json::json!("balanced"));
             assert_eq!(v["model"]["kind"], serde_json::json!("balanced"));
             assert_eq!(

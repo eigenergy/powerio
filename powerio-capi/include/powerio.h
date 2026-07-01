@@ -47,8 +47,10 @@
  *   pio_parse_file / pio_parse_str / pio_read_dir / pio_normalize are freed
  *   with pio_network_free. Arrow buffers are freed through their own release
  *   callbacks (the C Data Interface release rule).
- * - A handle is immutable after construction: concurrent reads from any
- *   number of threads are safe; pio_network_free is not, free exactly once.
+ * - A handle is immutable after construction unless a function takes it
+ *   non-const (pio_package_validate rewrites its diagnostics): concurrent
+ *   reads from any number of threads are safe; a non-const entry point, and
+ *   pio_network_free, need exclusive access, and free exactly once.
  * - Every entry point catches Rust panics at the boundary and returns the
  *   documented failure value (NULL, 0, -1, 0.0) rather than unwinding across
  *   the ABI (requires the default panic = "unwind"; a panic = "abort" build
@@ -216,7 +218,7 @@ typedef struct PioNetwork PioNetwork;
 #if defined(PIO_PKG)
 /**
  * Opaque `.pio.json` compiler package handle. A package owns one
- * [`powerio_pkg::CompilerPackage`], which wraps either a balanced
+ * [`powerio_pkg::NetworkPackage`], which wraps either a balanced
  * [`PioNetwork`] payload or a multiconductor [`PioDistNetwork`] payload.
  */
 typedef struct PioPackage PioPackage;
@@ -263,28 +265,34 @@ const char *pio_version(void);
 /**
  * Parse `path` (format from extension, or `from` if non-NULL) into a network
  * handle. `from` accepts the [`pio_parse_str`] format names plus
- * `pypsa-csv`/`pypsa` and `pwb`; that includes `pslf`/`epc`, and `.epc` is
- * inferred by extension. A PyPSA CSV folder is a directory, so it can only
+ * `pypsa-csv`/`pypsa`, `goc3-json`/`goc3`, `surge-json`/`surge`, and `pwb`;
+ * that includes `pslf`/`epc`, and `.epc` is inferred by extension. A PyPSA CSV folder is a directory, so it can only
  * enter through this function, with `from = "pypsa-csv"` (or NULL when the
  * directory holds a `network.csv`). Read fidelity warnings attach to the
  * handle ([`pio_warnings`]). Returns `NULL` on error and writes the message
  * into `errbuf`. Free the handle with [`pio_network_free`].
  */
-PioNetwork *pio_parse_file(const char *path, const char *from, char *errbuf, size_t errlen);
+PioNetwork *pio_parse_file(const char *path,
+                           const char *from,
+                           char *errbuf,
+                           size_t errlen);
 
 /**
  * Parse in-memory case `text` of the named `format` into a network handle.
  * Unlike [`pio_parse_file`] there is no path to infer from, so `format` is
  * required: one of `matpower`/`m`, `powermodels`/`pm`, `egret`,
  * `pandapower-json`/`pandapower`/`pp`, `psse`/`raw`, `powerworld`/`aux`,
- * `pslf`/`epc`, or `powerio-json`/`json` (the canonical snapshot
+ * `pslf`/`epc`, `goc3-json`/`goc3`, `surge-json`/`surge`, or `powerio-json`/`json` (the canonical snapshot
  * [`pio_to_format`] writes, validated on read). PyPSA CSV folders are
  * directories, not text; parse them with [`pio_parse_file`] and
  * `from = "pypsa-csv"`. Read fidelity warnings attach to the handle
  * ([`pio_warnings`]). Returns `NULL` on error and writes the message into
  * `errbuf`. Free the handle with [`pio_network_free`].
  */
-PioNetwork *pio_parse_str(const char *text, const char *format, char *errbuf, size_t errlen);
+PioNetwork *pio_parse_str(const char *text,
+                          const char *format,
+                          char *errbuf,
+                          size_t errlen);
 
 #if defined(PIO_GRIDFM)
 /**
@@ -639,6 +647,12 @@ PioPackage *pio_package_from_multiconductor_network(const PioDistNetwork *net,
 /**
  * Run the package semantic validation profile in place. Returns `0` on
  * success, `-1` on error.
+ *
+ * Unlike the read-only accessors, this rewrites the handle's `diagnostics` and
+ * `validation` (the payload is untouched), so it takes the handle non-`const`
+ * and needs exclusive access: no other call may touch the same handle
+ * concurrently. This is the one exception to the header's blanket
+ * concurrent-read guarantee.
  */
 int32_t pio_package_validate(PioPackage *pkg, char *errbuf, size_t errlen);
 #endif
@@ -657,6 +671,28 @@ char *pio_package_validation_json(const PioPackage *pkg, char *errbuf, size_t er
  * is owned by the library; free it with [`pio_string_free`].
  */
 char *pio_package_diagnostics_json(const PioPackage *pkg, char *errbuf, size_t errlen);
+#endif
+
+#if defined(PIO_PKG)
+/**
+ * Return the package operating point series as JSON, or `null` when absent.
+ * The returned string is owned by the library; free it with
+ * [`pio_string_free`].
+ */
+char *pio_package_operating_points_json(const PioPackage *pkg, char *errbuf, size_t errlen);
+#endif
+
+#if defined(PIO_PKG)
+/**
+ * Materialize one operating point into a new static package.
+ *
+ * The returned handle owns a package with the selected updates applied and no
+ * operating point series. Free it with [`pio_package_free`].
+ */
+PioPackage *pio_package_materialize_operating_point(const PioPackage *pkg,
+                                                    int64_t index,
+                                                    char *errbuf,
+                                                    size_t errlen);
 #endif
 
 #if defined(PIO_PKG)

@@ -1,9 +1,9 @@
 use std::path::PathBuf;
 
 use powerio::{
-    Bus, BusId, BusType, Generator, Network, Shunt, ShuntBlock, SourceFormat, SwitchedShuntControl,
-    SwitchedShuntMode, TargetFormat, parse_file, parse_pslf, parse_psse, parse_str,
-    target_format_from_name, write_as, write_pslf,
+    Bus, BusId, BusType, Generator, Load, Network, Shunt, ShuntBlock, SourceFormat,
+    SwitchedShuntControl, SwitchedShuntMode, TargetFormat, parse_file, parse_pslf, parse_psse,
+    parse_str, target_format_from_name, write_as, write_pslf,
 };
 
 const EPC: &str = r#"title
@@ -241,6 +241,71 @@ fn pslf_write_reports_dropped_switched_shunt_control() {
         "expected switched-shunt warning, got {:?}",
         conv.warnings
     );
+}
+
+#[test]
+fn pslf_write_gives_parallel_devices_distinct_ids() {
+    // Two loads and two shunts on one bus must not collapse onto (bus, "1"):
+    // GE PSLF keys devices by (bus, id).
+    let mut net = Network::new("parallel", 100.0);
+    net.buses.push(Bus::new(BusId(1), BusType::Ref, 230.0));
+    net.loads.push(Load::new(BusId(1), 10.0, 3.0));
+    net.loads.push(Load::new(BusId(1), 20.0, 6.0));
+    net.shunts.push(Shunt::new(BusId(1), 0.0, 5.0));
+    net.shunts.push(Shunt::new(BusId(1), 0.0, 7.0));
+
+    let back = parse_pslf(&write_pslf(&net).text).unwrap();
+
+    assert_eq!(back.loads.len(), 2);
+    assert_eq!(back.shunts.len(), 2);
+    let id = |extras: &powerio::Extras| {
+        extras
+            .get("id")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or_default()
+            .to_string()
+    };
+    let load_ids: Vec<String> = back.loads.iter().map(|l| id(&l.extras)).collect();
+    let shunt_ids: Vec<String> = back.shunts.iter().map(|s| id(&s.extras)).collect();
+    assert_ne!(load_ids[0], load_ids[1], "loads share an id: {load_ids:?}");
+    assert_ne!(
+        shunt_ids[0], shunt_ids[1],
+        "shunts share an id: {shunt_ids:?}"
+    );
+}
+
+#[test]
+fn pslf_load_id_round_trips_into_extras() {
+    // The lhs id token lands in extras["id"] (the PSS/E reader's key) and the
+    // writer replays it, so a PSLF-sourced id survives cross-format writes.
+    let epc = r#"title
+device ids
+!
+solution parameters
+sbase 100.0000
+!
+bus data [1] ty vsched volt angle ar zone vmax vmin
+1 "B1          " 230.0000 : 1 1.0 1.0 0.0 1 1 1.1 0.9
+load data [1] id long_id st mw mvar mw_i mvar_i mw_z mvar_z ar zone
+1 "B1          " 230.00 "L7 " "load" : 1 10 3 0 0 0 0 1 1
+shunt data [1] id ck se long_id st ar zone pu_mw pu_mvar
+1 "B1          " 230.00 "S2 " : 1 1 1 0 0.05
+end
+"#;
+    let net = parse_pslf(epc).unwrap();
+    let as_id = |extras: &powerio::Extras| {
+        extras
+            .get("id")
+            .and_then(serde_json::Value::as_str)
+            .map(str::to_string)
+    };
+    assert_eq!(as_id(&net.loads[0].extras).as_deref(), Some("L7"));
+    assert_eq!(as_id(&net.shunts[0].extras).as_deref(), Some("S2"));
+
+    // The direct writer (no retained-source echo) keeps the ids.
+    let back = parse_pslf(&write_pslf(&net).text).unwrap();
+    assert_eq!(as_id(&back.loads[0].extras).as_deref(), Some("L7"));
+    assert_eq!(as_id(&back.shunts[0].extras).as_deref(), Some("S2"));
 }
 
 #[test]
