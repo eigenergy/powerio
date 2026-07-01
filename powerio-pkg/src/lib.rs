@@ -12,8 +12,10 @@
 //! those payloads at a time, alongside the metadata a compiler artifact needs
 //! to be trustworthy: an explicit [`ModelKind`], producer and origin metadata,
 //! source maps, structured diagnostics, a validation summary, and lowering
-//! history. It serializes to `.pio.json`. See `docs/src/compiler-ir.md` for the
-//! architecture and `docs/src/pio-json-schema.md` for the field reference.
+//! history. It can also carry optional operating points that replay state
+//! updates over the static payload. It serializes to `.pio.json`. See
+//! `docs/src/compiler-ir.md` for the architecture and
+//! `docs/src/pio-json-schema.md` for the field reference.
 //!
 //! The package always carries [`CompilerPackage::model_kind`] explicitly; a
 //! reader must never infer whether the payload is balanced or multiconductor
@@ -38,6 +40,7 @@
 pub mod diagnostics;
 pub mod lowering;
 pub mod model;
+pub mod operating;
 pub mod package;
 pub mod provenance;
 pub mod summary;
@@ -51,6 +54,7 @@ pub use lowering::{
     lower_multiconductor_to_balanced,
 };
 pub use model::{ModelKind, ModelPayload};
+pub use operating::{ElementRef, ElementUpdate, OperatingPoint, OperatingPointSeries, TimeAxis};
 pub use package::{
     CompilerPackage, DerivedMetadata, NormalizedSolverTableMetadata,
     NormalizedSolverTableRowCounts, NormalizedSolverTableSourceRows, PIO_PACKAGE_SCHEMA_URL,

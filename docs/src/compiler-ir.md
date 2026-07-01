@@ -62,7 +62,12 @@ A package always carries:
 - `validation`;
 - `summary`;
 - `lowering_history`;
+- optional `operating_points`;
 - optional `derived` metadata.
+
+`operating_points` is a format neutral series of replayable field updates over
+the package's single static payload. Materializing one point returns a static
+package with those updates applied and the series cleared.
 
 For balanced payloads, `CompilerPackage::attach_normalized_solver_table_metadata`
 records the compact contract for

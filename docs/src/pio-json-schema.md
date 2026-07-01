@@ -12,8 +12,8 @@ A `.pio.json` file has two parts with different stability promises.
 1. **The envelope** — every field except `model`. This is the versioned,
    documented surface: `schema`, `schema_version`, `producer`, `model_kind`,
    `origin`, `sources`, `source_maps`, `diagnostics`, `validation`, `summary`,
-   `lowering_history`, `derived`. Its shape changes only under the versioning
-   policy below.
+   `lowering_history`, `operating_points`, `derived`. Its shape changes only
+   under the versioning policy below.
 
 2. **The payload** — the `model` field's `balanced_network` /
    `multiconductor_network` object. This is a direct serde snapshot of the live
@@ -35,7 +35,7 @@ diagnostics, validation, and lowering metadata around that model. Use the
 
 ## Versioning policy (envelope)
 
-- `schema_version` is semver. The current value is `0.1.0`; the `schema` URL is
+- `schema_version` is semver. The current value is `0.2.0`; the `schema` URL is
   `https://powerio.dev/schema/pio-package/0.1`.
 - Additive envelope fields bump the minor version.
 - Envelope field moves or removals bump the major version, or ship a migration.
@@ -81,7 +81,15 @@ later families can be added).
 | `validation` | object | yes | `{status, counts, passes[]}` |
 | `summary` | object | yes | `{elements{}, topology?, units?}` |
 | `lowering_history` | array | no | `LoweringRecord` per pass |
+| `operating_points` | object | no | replayable updates over the one static payload |
 | `derived` | object | no | optional matrix stats, normalized solver table metadata, and cache keys |
+
+### Operating points
+
+`operating_points` records a time axis and an ordered list of payload field
+updates. A point names a table, zero based row, optional source UID, and the
+fields to overwrite. Materializing a point clones the static payload, applies
+those field updates, and clears `operating_points` in the returned package.
 
 ### Derived metadata
 
@@ -147,7 +155,7 @@ bindings, or MCP operations.
 ```json
 {
   "schema": "https://powerio.dev/schema/pio-package/0.1",
-  "schema_version": "0.1.0",
+  "schema_version": "0.2.0",
   "producer": { "tool": "powerio", "version": "0.4.0" },
   "model_kind": "multiconductor",
   "model": {

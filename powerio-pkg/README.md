@@ -21,6 +21,7 @@ metadata a compiler artifact needs to be trustworthy:
 - structured `diagnostics` with stable codes;
 - a `validation` summary;
 - `lowering_history`;
+- optional `operating_points` for replayable states over the static payload;
 - optional `derived` metadata for matrix stats, normalized solver table
   identities, and cache keys.
 

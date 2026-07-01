@@ -17,6 +17,7 @@ use crate::lowering::{
     lower_multiconductor_to_balanced,
 };
 use crate::model::{ModelKind, ModelPayload};
+use crate::operating::{OperatingPointSeries, apply_operating_point_to_model};
 use crate::provenance::{
     Confidence, MappingKind, Origin, Producer, SourceDescriptor, SourceMapEntry, SourceRef,
 };
@@ -28,7 +29,7 @@ pub const PIO_PACKAGE_SCHEMA_URL: &str = "https://powerio.dev/schema/pio-package
 
 /// The package schema version (semver). Additive fields bump the minor; field
 /// moves bump the major (or ship a migration pass).
-pub const PIO_PACKAGE_SCHEMA_VERSION: &str = "0.1.0";
+pub const PIO_PACKAGE_SCHEMA_VERSION: &str = "0.2.0";
 
 fn default_schema_url() -> String {
     PIO_PACKAGE_SCHEMA_URL.to_owned()
@@ -147,6 +148,7 @@ impl From<&NormalizedSolverTables> for NormalizedSolverTableMetadata {
 /// asserts the two agree. Unknown future top-level fields are tolerated on read
 /// (ignored) so a newer producer's package still deserializes here.
 #[derive(Clone, Debug, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct CompilerPackage {
     /// The schema URL identifying this package format.
     #[serde(default = "default_schema_url")]
@@ -165,6 +167,10 @@ pub struct CompilerPackage {
     /// Explicit model kind. Authoritative; never inferred from field presence.
     pub model_kind: ModelKind,
     pub model: ModelPayload,
+    /// Replayable operating states over the static payload. Omitted for static
+    /// single state cases.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub operating_points: Option<OperatingPointSeries>,
     pub origin: Origin,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub sources: Vec<SourceDescriptor>,
@@ -199,6 +205,7 @@ impl CompilerPackage {
             created_at: None,
             model_kind: ModelKind::Balanced,
             model: ModelPayload::balanced(net),
+            operating_points: None,
             origin,
             sources,
             source_maps,
@@ -243,6 +250,7 @@ impl CompilerPackage {
             created_at: None,
             model_kind: ModelKind::Multiconductor,
             model: ModelPayload::multiconductor(net),
+            operating_points: None,
             origin,
             sources,
             source_maps,
@@ -273,6 +281,48 @@ impl CompilerPackage {
     /// The multiconductor payload, if this package carries one.
     pub fn as_multiconductor(&self) -> Option<&MulticonductorNetwork> {
         self.model.as_multiconductor()
+    }
+
+    /// Replayable operating states over the static payload, when present.
+    #[must_use]
+    pub fn operating_points(&self) -> Option<&OperatingPointSeries> {
+        self.operating_points.as_ref()
+    }
+
+    /// Attach a format neutral operating point series to this package.
+    #[must_use]
+    pub fn with_operating_points(mut self, operating_points: OperatingPointSeries) -> Self {
+        self.set_operating_points(operating_points);
+        self
+    }
+
+    /// Attach or replace operating points in place. Empty series are omitted.
+    pub fn set_operating_points(&mut self, operating_points: OperatingPointSeries) {
+        self.operating_points = (!operating_points.is_empty()).then_some(operating_points);
+    }
+
+    /// Remove operating points from this package.
+    pub fn clear_operating_points(&mut self) {
+        self.operating_points = None;
+    }
+
+    /// Materialize one operating point into a static package.
+    ///
+    /// The returned package has the same metadata and model kind, with its
+    /// payload updated for `index` and `operating_points` cleared.
+    pub fn materialize_operating_point(&self, index: usize) -> serde_json::Result<Self> {
+        let series = self.operating_points.as_ref().ok_or_else(|| {
+            <serde_json::Error as serde::de::Error>::custom("package has no operating points")
+        })?;
+        let point = series.point(index).ok_or_else(|| {
+            <serde_json::Error as serde::de::Error>::custom(format!(
+                "package has no operating point {index}"
+            ))
+        })?;
+        let mut package = self.clone();
+        package.model = apply_operating_point_to_model(&self.model, point)?;
+        package.operating_points = None;
+        Ok(package)
     }
 
     /// Serialize to compact `.pio.json`.
