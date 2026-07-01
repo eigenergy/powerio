@@ -569,10 +569,6 @@ impl Reader<'_> {
             for (name, v) in items {
                 let Value::Object(o) = v else { continue };
                 match subtype.as_str() {
-                    "single_phase" | "center_tap" | "wye_delta" | "delta_wye" => {
-                        let t = self.transformer(subtype, name, o);
-                        self.net.transformers.push(t);
-                    }
                     "n_winding" => {
                         let t = self.n_winding_transformer(name, o);
                         self.net.transformers.push(t);
@@ -596,6 +592,7 @@ impl Reader<'_> {
         }
     }
 
+    #[allow(clippy::too_many_lines)] // one BMOPF transformer record maps many optional schema aliases
     fn transformer(
         &mut self,
         subtype: &str,

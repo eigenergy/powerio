@@ -1028,6 +1028,7 @@ impl Reader<'_> {
 
     // ----- transformer ---------------------------------------------------
 
+    #[allow(clippy::too_many_lines)] // OpenDSS transformer edits must be replayed in order
     fn transformer(&mut self, obj: &RawObject) -> DistTransformer {
         // Order matters: wdg= switches the winding under edit, windings=
         // reallocates. Walk assignments sequentially.
@@ -1136,7 +1137,7 @@ impl Reader<'_> {
             pair_keys(n_windings)
                 .into_iter()
                 .map(|pair| {
-                    x_pairs.get(&pair).copied().unwrap_or_else(|| match pair {
+                    x_pairs.get(&pair).copied().unwrap_or(match pair {
                         (0, 1) => xhl,
                         (0, 2) => xht,
                         (1, 2) => xlt,

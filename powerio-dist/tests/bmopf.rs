@@ -503,7 +503,7 @@ fn transformer_tap_fields_round_trip_through_bmopf() {
     assert_eq!(t["tap"], 1.05);
     assert_eq!(t["tap_min"], 0.9);
     assert_eq!(t["tap_max"], 1.1);
-    assert_eq!(t["g_no_load"], serde_json::json!(0.000001));
+    assert_eq!(t["g_no_load"], serde_json::json!(0.000_001));
     assert_eq!(t["b_no_load"], serde_json::json!(0.0));
 }
 
@@ -647,8 +647,8 @@ fn three_phase_transformer_no_load_fields_round_trip_through_bmopf() {
     let t = &doc["transformer"]["wye_delta"]["t"];
     assert_eq!(t["v_nom_from"], serde_json::json!(7200.0));
     assert_eq!(t["v_nom_to"], serde_json::json!(480.0));
-    assert_eq!(t["g_no_load"], serde_json::json!(0.000002));
-    assert_eq!(t["b_no_load"], serde_json::json!(-0.000003));
+    assert_eq!(t["g_no_load"], serde_json::json!(0.000_002));
+    assert_eq!(t["b_no_load"], serde_json::json!(-0.000_003));
 }
 
 #[test]

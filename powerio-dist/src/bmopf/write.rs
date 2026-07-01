@@ -203,7 +203,7 @@ impl Writer {
         self.untyped_bmopf_tables(net, &mut doc);
 
         for u in &net.untyped {
-            if self.is_emitted_untyped(u) {
+            if Self::is_emitted_untyped(u) {
                 continue;
             }
             self.warn(format!(
@@ -215,7 +215,7 @@ impl Writer {
         Value::Object(doc)
     }
 
-    fn is_emitted_untyped(&self, u: &crate::model::UntypedObject) -> bool {
+    fn is_emitted_untyped(u: &crate::model::UntypedObject) -> bool {
         RAW_BMOPF_TOP_LEVEL.contains(&u.class.as_str()) || u.class.starts_with("transformer.")
     }
 
@@ -787,7 +787,7 @@ impl Writer {
     }
 
     fn n_winding(&mut self, t: &DistTransformer) -> Value {
-        let s = t.windings.first().map(|w| w.s_rating).unwrap_or(f64::NAN);
+        let s = t.windings.first().map_or(f64::NAN, |w| w.s_rating);
         if t.windings
             .iter()
             .any(|w| w.s_rating.to_bits() != s.to_bits())
