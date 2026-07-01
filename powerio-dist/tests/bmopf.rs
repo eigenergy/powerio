@@ -43,6 +43,36 @@ fn vendored_examples_validate_after_canonicalization() {
     }
 }
 
+/// The raw vendored fixtures aren't all schema valid as shipped: ieee13's
+/// transformers still use the legacy `v_ref_from`/`v_ref_to` names the
+/// schema renamed to `v_nom_from`/`v_nom_to` (the reader accepts both via
+/// `value_alias` in bmopf/read.rs; the schema's `additionalProperties:
+/// false` rejects the old names outright). Pin the known drift so any
+/// *other* raw validation failure — a real schema mismatch, not the legacy
+/// rename — fails loudly instead of being silently absorbed here.
+#[test]
+fn vendored_examples_raw_validation_is_known_and_bounded() {
+    let v = schema_validator();
+
+    let enwl = std::fs::read_to_string(fixture("bmopf/example_enwl_n1_f2.json")).unwrap();
+    assert_eq!(errors(&v, &enwl), Vec::<String>::new(), "enwl example");
+
+    let ieee13 = std::fs::read_to_string(fixture("bmopf/example_ieee13.json")).unwrap();
+    let errs = errors(&v, &ieee13);
+    assert!(
+        !errs.is_empty(),
+        "ieee13 example now validates raw; the legacy v_ref_from/v_ref_to \
+         workaround above is no longer needed and this test can be deleted"
+    );
+    assert!(
+        errs.iter().all(|e| e.contains("v_nom_from")
+            || e.contains("v_nom_to")
+            || e.contains("v_ref_from")
+            || e.contains("v_ref_to")),
+        "unexpected raw validation error beyond the known v_ref_from/v_ref_to rename: {errs:?}"
+    );
+}
+
 #[test]
 fn parse_the_public_examples() {
     let net = parse_bmopf_file(fixture("bmopf/example_ieee13.json")).unwrap();
@@ -666,7 +696,9 @@ fn dss_noloadloss_derives_bmopf_no_load_fields() {
     let expected_g = 0.2 / 100.0 * 25_000.0 / (7200.0 * 7200.0);
     let g = t["g_no_load"].as_f64().unwrap();
     assert!((g - expected_g).abs() < 1e-18, "g_no_load = {g}");
-    assert_eq!(t["b_no_load"], serde_json::json!(0.0));
+    let expected_b = 0.5 / 100.0 * 25_000.0 / (7200.0 * 7200.0);
+    let b = t["b_no_load"].as_f64().unwrap();
+    assert!((b - expected_b).abs() < 1e-18, "b_no_load = {b}");
     assert_eq!(errors(&schema_validator(), &out.text), Vec::<String>::new());
 }
 
@@ -692,6 +724,37 @@ fn dss_phase_to_phase_noloadloss_does_not_emit_bmopf_ground_shunt() {
         out.warnings
     );
     assert_eq!(errors(&schema_validator(), &out.text), Vec::<String>::new());
+}
+
+#[test]
+fn wye_wye_3_extras_drop_warns_once_not_per_phase() {
+    let from = Winding::new(
+        "a",
+        vec!["1".into(), "2".into(), "3".into(), "n".into()],
+        WindingConn::Wye,
+        7200.0,
+        25_000.0,
+    );
+    let to = Winding::new(
+        "b",
+        vec!["1".into(), "2".into(), "3".into(), "n".into()],
+        WindingConn::Wye,
+        240.0,
+        25_000.0,
+    );
+    let mut t = DistTransformer::new("t", vec![from, to], vec![4.0], 3);
+    t.extras
+        .insert("unknown_key".into(), serde_json::json!("x"));
+    let mut net = DistNetwork::default();
+    net.transformers.push(t);
+
+    let out = write_bmopf_json(&net);
+    let count = out
+        .warnings
+        .iter()
+        .filter(|w| w.contains("unknown_key"))
+        .count();
+    assert_eq!(count, 1, "{:?}", out.warnings);
 }
 
 #[test]

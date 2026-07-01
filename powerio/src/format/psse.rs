@@ -1090,7 +1090,14 @@ fn is_bare_terminator(line: &str) -> bool {
 
 fn transformer_basis_codes(f: &[String]) -> Result<(i64, i64)> {
     let cw = num_at(f, 4, 1.0)?;
+    if cw.fract() != 0.0 {
+        return Err(bad_field(4, f.get(4).map_or("", String::as_str)));
+    }
     let cz = num_at(f, 5, 1.0)?;
+    if cz.fract() != 0.0 {
+        return Err(bad_field(5, f.get(5).map_or("", String::as_str)));
+    }
+    #[allow(clippy::cast_possible_truncation)]
     Ok((cw as i64, cz as i64))
 }
 
@@ -2606,6 +2613,32 @@ Q
         assert_eq!(net.branches.len(), 1);
         close(net.branches[0].r, 0.0);
         close(net.branches[0].x, 0.10);
+    }
+
+    #[test]
+    fn transformer_non_integral_cz_is_a_hard_error() {
+        // A malformed CZ like `2.9` must not silently truncate to a valid
+        // looking code `2`; that would apply the wrong impedance base
+        // conversion without ever surfacing an "unsupported CZ" warning.
+        let raw = r"0, 100.00, 33, 0, 0, 60.00 / synthetic
+CASE
+COMMENT
+1,'BUS1        ', 230.0,3,1,1,1,1.0,0.0,1.1,0.9,1.1,0.9
+2,'BUS2        ', 115.0,1,1,1,1,1.0,0.0,1.1,0.9,1.1,0.9
+0 / END OF BUS DATA, BEGIN LOAD DATA
+0 / END OF LOAD DATA, BEGIN FIXED SHUNT DATA
+0 / END OF FIXED SHUNT DATA, BEGIN GENERATOR DATA
+0 / END OF GENERATOR DATA, BEGIN BRANCH DATA
+0 / END OF BRANCH DATA, BEGIN TRANSFORMER DATA
+1,2,0,'1 ',1,2.9,1,0,0,1,'xf',1
+0,0.10,100.0
+1.0,230.0,0.0,100.0,90.0,80.0,0,0,1.1,0.9,1.1,0.9,33
+1.0,230.0
+0 / END OF TRANSFORMER DATA, BEGIN AREA DATA
+Q
+";
+        let err = parse_psse(raw).unwrap_err().to_string();
+        assert!(err.contains("field 5") && err.contains("2.9"), "{err}");
     }
 
     #[test]

@@ -621,6 +621,42 @@ fn matrix_extent(m: &Mat) -> usize {
     m.iter().map(Vec::len).fold(m.len(), usize::max)
 }
 
+/// Windings per phase for an n-winding transformer terminal map: WYE counts
+/// the hot terminals (excluding the shared neutral), DELTA counts terminals
+/// directly except the phase to phase two terminal case.
+pub(crate) fn n_winding_phase_count(conn: WindingConn, terminal_map: &[String]) -> usize {
+    match conn {
+        WindingConn::Wye => terminal_map.len().saturating_sub(1).max(1),
+        WindingConn::Delta => {
+            if terminal_map.len() == 2 {
+                1
+            } else {
+                terminal_map.len().max(1)
+            }
+        }
+    }
+}
+
+/// `phases * v_nom^2 / s`, the impedance base for an n-winding transformer
+/// winding, or `None` if any input isn't a positive finite number.
+pub(crate) fn n_winding_impedance_base(phases: usize, v_nom: f64, s: f64) -> Option<f64> {
+    let phases = phases as f64;
+    (phases > 0.0 && v_nom.is_finite() && v_nom > 0.0 && s.is_finite() && s > 0.0)
+        .then_some(phases * v_nom * v_nom / s)
+}
+
+/// Upper triangular `(i, j)` winding index pairs for `n` windings, the order
+/// short circuit test pairs (`x_sc`/`xsc_pct`) are keyed by.
+pub(crate) fn pair_keys(n: usize) -> Vec<(usize, usize)> {
+    let mut pairs = Vec::new();
+    for i in 0..n {
+        for j in i + 1..n {
+            pairs.push((i, j));
+        }
+    }
+    pairs
+}
+
 /// Builds an `n`x`n` matrix from lower triangle rows (the OpenDSS matrix
 /// entry convention) or full rows; symmetric completion for the triangle.
 pub(crate) fn square_from_rows(rows: &[Vec<f64>], n: usize) -> Option<Mat> {

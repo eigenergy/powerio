@@ -308,7 +308,11 @@ fn sanitize_report_text(text: &str) -> String {
     const GENERATED_DSS_DIR: &str = "powerio-conversion-matrix/";
     if let Some(dir_idx) = text.find(GENERATED_DSS_DIR) {
         let prefix = &text[..dir_idx];
-        let path_start = prefix.rfind(char::is_whitespace).map_or(0, |idx| idx + 1);
+        let path_start = prefix
+            .char_indices()
+            .rev()
+            .find(|(_, c)| c.is_whitespace())
+            .map_or(0, |(idx, c)| idx + c.len_utf8());
         let prelude = prefix[..path_start].trim_end();
         let suffix = &text[dir_idx + GENERATED_DSS_DIR.len()..];
         if prelude.is_empty() {
@@ -322,6 +326,15 @@ fn sanitize_report_text(text: &str) -> String {
         .replace(&temp_dir, "<tmp>")
         .replace(env!("CARGO_MANIFEST_DIR"), "<crate>");
     code_object_name(&text)
+}
+
+#[test]
+fn sanitize_report_text_handles_multibyte_whitespace_before_generated_dss_dir() {
+    // A non-breaking space (U+00A0, 2 UTF-8 bytes) immediately before the
+    // generated DSS dir marker must not panic on a non char boundary slice.
+    let text = "wrote\u{a0}/tmp/xyz/powerio-conversion-matrix/case.dss";
+    let sanitized = sanitize_report_text(text);
+    assert_eq!(sanitized, "wrote generated DSS case.dss");
 }
 
 fn code_object_name(text: &str) -> String {

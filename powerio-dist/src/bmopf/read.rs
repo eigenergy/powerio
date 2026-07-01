@@ -17,7 +17,8 @@ use crate::error::{Error, Result};
 use crate::model::{
     Configuration, DistBus, DistGenerator, DistLine, DistLineCode, DistLoad, DistLoadVoltageModel,
     DistNetwork, DistShunt, DistSourceFormat, DistSwitch, DistTransformer, Extras, Mat,
-    UntypedObject, VoltageSource, Winding, WindingConn,
+    UntypedObject, VoltageSource, Winding, WindingConn, n_winding_impedance_base,
+    n_winding_phase_count, pair_keys,
 };
 
 pub fn parse_bmopf_file(path: impl AsRef<Path>) -> Result<DistNetwork> {
@@ -66,6 +67,24 @@ fn floats(v: Option<&Value>) -> Option<Vec<f64>> {
 fn first_float(v: Option<&Value>) -> Option<f64> {
     match v? {
         Value::Array(a) => a.first().map(f),
+        v => Some(f(v)),
+    }
+}
+
+/// Like [`first_float`], but the field is per-phase-terminal in the schema
+/// while powerio's model holds one value; warn when collapsing loses a
+/// genuine per-phase difference instead of dropping it silently.
+fn first_float_collapsed(v: Option<&Value>, what: &str, warnings: &mut Vec<String>) -> Option<f64> {
+    match v? {
+        Value::Array(a) => {
+            let vals: Vec<f64> = a.iter().map(f).collect();
+            if vals.windows(2).any(|w| w[0].to_bits() != w[1].to_bits()) {
+                warnings.push(format!(
+                    "{what}: per-phase-terminal bound is non-uniform; collapsed to the first entry"
+                ));
+            }
+            vals.first().copied()
+        }
         v => Some(f(v)),
     }
 }
@@ -242,8 +261,16 @@ impl Reader<'_> {
                 id: id.clone(),
                 terminals: strings(o.get("terminal_names")),
                 grounded: strings(o.get("perfectly_grounded_terminals")),
-                v_min: first_float(o.get("v_min")),
-                v_max: first_float(o.get("v_max")),
+                v_min: first_float_collapsed(
+                    o.get("v_min"),
+                    &format!("bus {id} v_min"),
+                    &mut self.net.warnings,
+                ),
+                v_max: first_float_collapsed(
+                    o.get("v_max"),
+                    &format!("bus {id} v_max"),
+                    &mut self.net.warnings,
+                ),
                 vpn_min: floats(o.get("vpn_min")),
                 vpn_max: floats(o.get("vpn_max")),
                 vpp_min: floats(o.get("vpp_min")),
@@ -846,19 +873,6 @@ fn expand_center_tap_windings(subtype: &str, windings: &mut Vec<Winding>) {
     windings.push(other_half);
 }
 
-fn n_winding_phase_count(conn: WindingConn, terminal_map: &[String]) -> usize {
-    match conn {
-        WindingConn::Wye => terminal_map.len().saturating_sub(1).max(1),
-        WindingConn::Delta => {
-            if terminal_map.len() == 2 {
-                1
-            } else {
-                terminal_map.len().max(1)
-            }
-        }
-    }
-}
-
 fn n_winding_internal_v_ref(conn: WindingConn, terminal_map: &[String], bmopf_v_nom: f64) -> f64 {
     if conn == WindingConn::Wye && n_winding_phase_count(conn, terminal_map) >= 2 {
         bmopf_v_nom * 3f64.sqrt()
@@ -881,9 +895,7 @@ fn n_winding_base_from_bmopf(
     bmopf_v_nom: f64,
     s: f64,
 ) -> Option<f64> {
-    let phases = n_winding_phase_count(conn, terminal_map) as f64;
-    (phases > 0.0 && bmopf_v_nom.is_finite() && bmopf_v_nom > 0.0 && s.is_finite() && s > 0.0)
-        .then_some(phases * bmopf_v_nom * bmopf_v_nom / s)
+    n_winding_impedance_base(n_winding_phase_count(conn, terminal_map), bmopf_v_nom, s)
 }
 
 fn n_winding_base_from_internal(w: &Winding, s: f64) -> Option<f64> {
@@ -893,14 +905,4 @@ fn n_winding_base_from_internal(w: &Winding, s: f64) -> Option<f64> {
         n_winding_bmopf_v_nom_from_internal(w),
         s,
     )
-}
-
-fn pair_keys(n: usize) -> Vec<(usize, usize)> {
-    let mut pairs = Vec::new();
-    for i in 0..n {
-        for j in i + 1..n {
-            pairs.push((i, j));
-        }
-    }
-    pairs
 }

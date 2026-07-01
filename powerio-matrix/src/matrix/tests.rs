@@ -339,3 +339,29 @@ fn zero_impedance_policy_can_error_instead_of_skipping() {
     let inc = build_incidence(&view, DcConvention::PaperPure, &opts).unwrap_err();
     assert!(matches!(inc, crate::Error::ZeroImpedance { row: 0 }));
 }
+
+#[test]
+fn self_loop_with_zero_reactance_drops_unconditionally() {
+    // A self-loop (from == to) is documented as always dropped, independent
+    // of skip_zero_impedance; it must not be misrouted through the
+    // zero-impedance accounting or the ZeroImpedance error path.
+    let net = Network::in_memory(
+        "self-loop",
+        100.0,
+        vec![bus(1, BusType::Ref), bus(2, BusType::Pq)],
+        vec![br(1, 2, 0.0, 0.1, 0.0), br(1, 1, 0.0, 0.0, 0.0)],
+    );
+    let view = IndexedNetwork::new(&net);
+
+    let opts = BuildOptions::default();
+    let inc = build_incidence(&view, DcConvention::PaperPure, &opts).unwrap();
+    assert_eq!(inc.skipped_zero_impedance.count, 0);
+    assert!(inc.skipped_zero_impedance.branch_indices.is_empty());
+
+    let strict = BuildOptions {
+        skip_zero_impedance: false,
+        ..Default::default()
+    };
+    build_incidence(&view, DcConvention::PaperPure, &strict)
+        .expect("a self-loop must not trip ZeroImpedance even when skip_zero_impedance is false");
+}

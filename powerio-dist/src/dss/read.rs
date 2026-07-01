@@ -22,7 +22,7 @@ use crate::error::{Error, Result};
 use crate::model::{
     Configuration, DistBus, DistGenerator, DistLine, DistLineCode, DistLoad, DistLoadVoltageModel,
     DistNetwork, DistShunt, DistSourceFormat, DistSwitch, DistTransformer, Extras, Mat,
-    UntypedObject, VoltageSource, Winding, WindingConn, square_from_rows,
+    UntypedObject, VoltageSource, Winding, WindingConn, pair_keys, square_from_rows,
 };
 
 /// Parses a `.dss` file, following includes, into the canonical model.
@@ -1728,16 +1728,6 @@ fn x_pair_key(name: &str) -> Option<(usize, usize)> {
         return None;
     }
     Some((i.min(j) - 1, i.max(j) - 1))
-}
-
-fn pair_keys(n: usize) -> Vec<(usize, usize)> {
-    let mut pairs = Vec::new();
-    for i in 0..n {
-        for j in i + 1..n {
-            pairs.push((i, j));
-        }
-    }
-    pairs
 }
 
 /// A load's power state after the last edit boundary: the engine's

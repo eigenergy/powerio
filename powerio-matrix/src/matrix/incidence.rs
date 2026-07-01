@@ -81,7 +81,7 @@ pub fn build_incidence(
             element_index: idx,
         })?;
         if i == j || br.x == 0.0 {
-            if br.x == 0.0 {
+            if i != j && br.x == 0.0 {
                 if !opts.skip_zero_impedance {
                     return Err(Error::ZeroImpedance { row: idx });
                 }

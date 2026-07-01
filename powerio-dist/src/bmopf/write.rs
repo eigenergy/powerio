@@ -13,7 +13,7 @@ use serde_json::{Map, Value, json};
 use crate::convert::Conversion;
 use crate::model::{
     Configuration, DistGenerator, DistLoadVoltageModel, DistNetwork, DistTransformer, Mat, Winding,
-    WindingConn,
+    WindingConn, n_winding_impedance_base, pair_keys,
 };
 
 /// The `$schema` stamped into every document's `meta`: the current BMOPF
@@ -581,11 +581,11 @@ impl Writer {
                             t.name
                         ));
                     }
-                    let v = self.two_winding(t, &t.windings[0], &t.windings[1], 1.0, true);
+                    let v = self.two_winding(t, &t.windings[0], &t.windings[1], 1.0, true, true);
                     insert("single_phase", t.name.clone(), v, &mut by_subtype);
                 }
                 Kind::SinglePhaseShape(sub) => {
-                    let v = self.two_winding(t, &t.windings[0], &t.windings[1], 1.0, true);
+                    let v = self.two_winding(t, &t.windings[0], &t.windings[1], 1.0, true, true);
                     insert(sub, t.name.clone(), v, &mut by_subtype);
                 }
                 Kind::CenterTap => {
@@ -630,6 +630,7 @@ impl Writer {
         to: &Winding,
         s_scale: f64,
         emit_no_load: bool,
+        warn_extras: bool,
     ) -> Value {
         let s = from.s_rating * s_scale;
         let zb_from = from.v_ref * from.v_ref / s;
@@ -674,7 +675,9 @@ impl Writer {
         if emit_no_load {
             self.transformer_no_load_fields(&mut o, t, from, s);
         }
-        self.transformer_extras_dropped(t, &TRANSFORMER_TWO_WINDING_ALLOWED_EXTRAS);
+        if warn_extras {
+            self.transformer_extras_dropped(t, &TRANSFORMER_TWO_WINDING_ALLOWED_EXTRAS);
+        }
         o.into()
     }
 
@@ -737,7 +740,7 @@ impl Writer {
                 t.name, w2.s_rating, w3.s_rating, from.s_rating
             ));
         }
-        self.two_winding(t, from, &to, 1.0, true)
+        self.two_winding(t, from, &to, 1.0, true, true)
     }
 
     /// `wye_delta` / `delta_wye`: one series impedance in ohms on the wye
@@ -883,13 +886,14 @@ impl Writer {
             let to_1 = per(to);
             let mut t1 = t.clone();
             t1.windings = vec![f.clone(), to_1.clone()];
-            let v = self.two_winding(&t1, &f, &to_1, 1.0, false);
+            let v = self.two_winding(&t1, &f, &to_1, 1.0, false, false);
             out.push((format!("{}_{}", t.name, k + 1), v));
         }
         self.warn(format!(
             "transformer {}: three phase wye-wye decomposed into {} single_phase units",
             t.name, t.phases
         ));
+        self.transformer_extras_dropped(t, &TRANSFORMER_TWO_WINDING_ALLOWED_EXTRAS);
         out
     }
 
@@ -962,9 +966,29 @@ impl Writer {
 
         if let Some(v) = t.extras.get("b_no_load") {
             o.insert("b_no_load".into(), v.clone());
+        } else if let Some(imag_pct) = extras_number(&t.extras, "%imag") {
+            if self.is_phase_to_phase_single_phase(from) {
+                self.warn(format!(
+                    "transformer {}: phase-to-phase %imag cannot be represented as a BMOPF no-load shunt; dropped",
+                    t.name
+                ));
+            } else {
+                let v_stamp = no_load_voltage_base(from);
+                if s.is_finite() && s > 0.0 && v_stamp.is_finite() && v_stamp > 0.0 {
+                    let y_base = s / (v_stamp * v_stamp);
+                    o.insert(
+                        "b_no_load".into(),
+                        self.num(imag_pct / 100.0 * y_base, "transformer b_no_load"),
+                    );
+                } else {
+                    self.warn(format!(
+                        "transformer {}: %imag cannot be converted without a positive s_rating and v_nom_from",
+                        t.name
+                    ));
+                }
+            }
         } else if !self.is_phase_to_phase_single_phase(from)
-            && (extras_number(&t.extras, "%noloadloss").is_some()
-                || extras_number(&t.extras, "%imag").is_some())
+            && extras_number(&t.extras, "%noloadloss").is_some()
         {
             o.insert("b_no_load".into(), json!(0.0));
         }
@@ -1170,16 +1194,7 @@ fn extras_number(extras: &crate::model::Extras, key: &str) -> Option<f64> {
 }
 
 fn n_winding_phase_count(w: &Winding) -> usize {
-    match w.conn {
-        WindingConn::Wye => w.terminal_map.len().saturating_sub(1).max(1),
-        WindingConn::Delta => {
-            if w.terminal_map.len() == 2 {
-                1
-            } else {
-                w.terminal_map.len().max(1)
-            }
-        }
-    }
+    crate::model::n_winding_phase_count(w.conn, &w.terminal_map)
 }
 
 fn n_winding_bmopf_v_nom(w: &Winding) -> f64 {
@@ -1191,10 +1206,7 @@ fn n_winding_bmopf_v_nom(w: &Winding) -> f64 {
 }
 
 fn n_winding_base(w: &Winding, s: f64) -> Option<f64> {
-    let phases = n_winding_phase_count(w) as f64;
-    let v_nom = n_winding_bmopf_v_nom(w);
-    (phases > 0.0 && v_nom.is_finite() && v_nom > 0.0 && s.is_finite() && s > 0.0)
-        .then_some(phases * v_nom * v_nom / s)
+    n_winding_impedance_base(n_winding_phase_count(w), n_winding_bmopf_v_nom(w), s)
 }
 
 fn no_load_voltage_base(from: &Winding) -> f64 {
@@ -1207,16 +1219,6 @@ fn no_load_voltage_base(from: &Winding) -> f64 {
     } else {
         from.v_ref
     }
-}
-
-fn pair_keys(n: usize) -> Vec<(usize, usize)> {
-    let mut pairs = Vec::new();
-    for i in 0..n {
-        for j in i + 1..n {
-            pairs.push((i, j));
-        }
-    }
-    pairs
 }
 
 fn config_str(c: Configuration) -> &'static str {

@@ -54,7 +54,7 @@ slug() {
 
 classify_failure() {
     local log="$1"
-    if grep -Eiq 'unsupported|not implemented|not supported|unknown format|failed to infer|cannot infer JSON format|pass --from to choose|no conversion path|cannot write|cannot read|read only|not a recognized|header magic mismatch|case has no buses|valid UTF-8' "$log"; then
+    if grep -Eiq 'unsupported|not implemented|not supported|unknown format|failed to infer|cannot infer JSON format|pass --from to choose|no conversion path|cannot write|cannot read|read only|not a recognized|header magic mismatch|case has no buses|valid UTF-8|is display data, not a Network case' "$log"; then
         printf "UNSUPPORTED"
     else
         printf "FAIL"
@@ -224,7 +224,11 @@ while IFS= read -r path; do
 done < <(list_ext_cases pwb)
 
 while IFS= read -r path; do
-    run_transmission_case "$path" pwb
+    # .pwd is a PowerWorld oneline display, not a Network case; there is no
+    # `--from` case reader for it (see powerio/src/format/mod.rs display_file_guidance).
+    # Confirm the CLI rejects it as a case rather than silently smoke testing
+    # it through the wrong reader.
+    run_capture "summary-pwd" "$path" "$BIN" summary "$path"
 done < <(list_ext_cases pwd)
 
 while IFS= read -r path; do
