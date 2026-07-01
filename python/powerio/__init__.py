@@ -14,8 +14,8 @@ retained text formats back byte exact; convert between formats; package cases as
     raw, warnings = pio.convert_file("case9.m", "psse")
     pp_json, warnings = pio.convert_file("case9.m", "pandapower-json")
     pypsa_out = net.write_pypsa_csv_folder("case9-pypsa")
-    pkg = pio.package_parse_file("goc3_case.json", from_="goc3-json")
-    points = pio.package_operating_points(pkg)
+    pkg = pio.Package.from_file("goc3_case.json", from_="goc3-json")
+    points = pkg.operating_points()
 
     B = net.bprime()                         # scipy.sparse, the FDPF B'
     Y = net.ybus()                           # complex csr, G + jB
@@ -75,13 +75,7 @@ __all__ = [
     "to_matpower",
     "to_json",
     "to_dense",
-    "package_model_kind",
-    "package_parse_file",
-    "package_parse_str",
-    "package_as_balanced",
-    "package_as_multiconductor",
-    "package_operating_points",
-    "package_materialize_operating_point",
+    "Package",
     "write_gridfm_batch",
     "read_gridfm",
     "read_gridfm_scenarios",
@@ -698,44 +692,97 @@ def read_pypsa_csv_folder(path: Any) -> Network:
 from . import dist  # noqa: E402  (needs Conversion defined above)
 
 
-def package_model_kind(package_json: str) -> str:
-    """Return ``"balanced"`` or ``"multiconductor"`` for a ``.pio.json`` package."""
-    return _powerio.package_model_kind(package_json)
+class Package:
+    """A parsed ``.pio.json`` package handle.
 
-
-def package_parse_file(path: Any, from_: Optional[str] = None, scenario: int = 0) -> str:
-    """Parse a file or folder into a ``.pio.json`` package string."""
-    return _powerio.package_parse_file(str(path), from_, scenario)
-
-
-def package_parse_str(text: str, from_: Optional[str] = None) -> str:
-    """Parse in-memory case text into a ``.pio.json`` package string."""
-    return _powerio.package_parse_str(text, from_)
-
-
-def package_as_balanced(package_json: str) -> Network:
-    """Return the balanced payload from a ``.pio.json`` package."""
-    return Network(_powerio.package_as_balanced(package_json))
-
-
-def package_as_multiconductor(package_json: str) -> "dist.MulticonductorNetwork":
-    """Return the multiconductor payload from a ``.pio.json`` package."""
-    return dist.MulticonductorNetwork(_powerio.package_as_multiconductor(package_json))
-
-
-def package_operating_points(package_json: str) -> Any:
-    """Return the package operating point series as Python data, or ``None``.
-
-    GOC3 packages populate this from the source time series. Each point is a set
-    of field updates over the package's static payload.
+    Parses the envelope once; every accessor reuses the handle instead of
+    re-reading the JSON text.
     """
-    return _json.loads(_powerio.package_operating_points(package_json))
 
+    def __init__(self, inner: "_powerio._Package"):
+        self._inner = inner
 
-def package_materialize_operating_point(package_json: str, index: int) -> str:
-    """Return static ``.pio.json`` for one materialized operating point.
+    @classmethod
+    def from_file(
+        cls, path: Any, from_: Optional[str] = None, scenario: int = 0
+    ) -> "Package":
+        """Build a package from a case file or folder."""
+        return cls(_powerio._Package.from_file(str(path), from_, scenario))
 
-    The returned package has the selected field updates applied and no
-    ``operating_points`` block.
-    """
-    return _powerio.package_materialize_operating_point(package_json, index)
+    @classmethod
+    def from_str(cls, text: str, from_: Optional[str] = None) -> "Package":
+        """Build a package from in-memory case text."""
+        return cls(_powerio._Package.from_str(text, from_))
+
+    @classmethod
+    def from_json(cls, text: str) -> "Package":
+        """Parse ``.pio.json`` envelope text."""
+        return cls(_powerio._Package.from_json(text))
+
+    @classmethod
+    def from_balanced(
+        cls, network: Network, include_solver_metadata: bool = False
+    ) -> "Package":
+        """Wrap a balanced :class:`Network` in a package."""
+        return cls(
+            _powerio._Package.from_balanced(network._inner, include_solver_metadata)
+        )
+
+    @classmethod
+    def from_multiconductor(cls, network: "dist.MulticonductorNetwork") -> "Package":
+        """Wrap a multiconductor network in a package."""
+        return cls(_powerio._Package.from_multiconductor(network._inner))
+
+    @property
+    def model_kind(self) -> str:
+        """``"balanced"`` or ``"multiconductor"``."""
+        return self._inner.model_kind()
+
+    def to_json(self) -> str:
+        """Serialize to pretty ``.pio.json``."""
+        return self._inner.to_json()
+
+    def as_balanced(self) -> Network:
+        """Return the balanced payload as a :class:`Network`."""
+        return Network(self._inner.as_balanced())
+
+    def as_multiconductor(self) -> "dist.MulticonductorNetwork":
+        """Return the multiconductor payload."""
+        return dist.MulticonductorNetwork(self._inner.as_multiconductor())
+
+    def operating_points(self) -> Any:
+        """The operating point series as Python data, or ``None``.
+
+        GOC3 packages populate this from the source time series. Each point is
+        a set of field updates over the package's static payload.
+        """
+        return _json.loads(self._inner.operating_points_json())
+
+    def materialize_operating_point(self, index: int) -> "Package":
+        """Materialize one operating point into a new static package."""
+        return Package(self._inner.materialize_operating_point(index))
+
+    def validate(self) -> None:
+        """Run the package semantic validation profile in place."""
+        self._inner.validate()
+
+    def validation(self) -> Any:
+        """The validation summary as Python data."""
+        return _json.loads(self._inner.validation_json())
+
+    def diagnostics(self) -> Any:
+        """The structured diagnostics as a list of Python dicts."""
+        return _json.loads(self._inner.diagnostics_json())
+
+    def multiconductor_to_balanced_preflight(self, base_mva: float = 100.0) -> Any:
+        """Readiness report for multiconductor to balanced lowering."""
+        return _json.loads(
+            self._inner.multiconductor_to_balanced_preflight_json(base_mva)
+        )
+
+    def lower_multiconductor_to_balanced(self, base_mva: float = 100.0) -> "Package":
+        """Lower a multiconductor package to a new balanced package."""
+        return Package(self._inner.lower_multiconductor_to_balanced(base_mva))
+
+    def __repr__(self) -> str:
+        return repr(self._inner)

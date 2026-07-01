@@ -3,11 +3,11 @@
 use std::collections::BTreeMap;
 
 use powerio_pkg::{
-    CompilerPackage, Confidence, DiagnosticCode, DiagnosticSeverity, DiagnosticStage, ElementRef,
-    ElementUpdate, MappingKind, ModelKind, MulticonductorToBalancedOptions,
-    MulticonductorToBalancedReadiness, NetworkPackage, OperatingPoint, OperatingPointSeries,
-    Origin, PIO_PACKAGE_SCHEMA_URL, PIO_PACKAGE_SCHEMA_VERSION, SequenceTransformConvention,
-    SourceDescriptor, SourceMapEntry, SourceRef, StructuredDiagnostic, TimeAxis, ValidationStatus,
+    Confidence, DiagnosticCode, DiagnosticSeverity, DiagnosticStage, ElementRef, ElementUpdate,
+    MappingKind, ModelKind, MulticonductorToBalancedOptions, MulticonductorToBalancedReadiness,
+    NetworkPackage, OperatingPoint, OperatingPointSeries, Origin, PIO_PACKAGE_SCHEMA_URL,
+    PIO_PACKAGE_SCHEMA_VERSION, SequenceTransformConvention, SourceDescriptor, SourceMapEntry,
+    SourceRef, StructuredDiagnostic, TimeAxis, ValidationStatus,
     check_multiconductor_to_balanced_lowering, lower_multiconductor_to_balanced,
 };
 
@@ -64,25 +64,25 @@ const GOC3_PACKAGE_SRC: &str = r#"{
   }
 }"#;
 
-fn balanced_package() -> CompilerPackage {
+fn balanced_package() -> NetworkPackage {
     let net = powerio::parse_str(MATPOWER_SRC, "matpower")
         .expect("parse matpower")
         .network;
-    CompilerPackage::from_balanced(net)
+    NetworkPackage::from_balanced(net)
 }
 
-fn multiconductor_package() -> CompilerPackage {
+fn multiconductor_package() -> NetworkPackage {
     // A bare circuit materializes a vsource with several defaulted fields, which
     // exercises the defaulted -> source-map lift.
     let net = powerio_dist::parse_str("New Circuit.c1", "dss").expect("parse dss");
-    CompilerPackage::from_multiconductor(net)
+    NetworkPackage::from_multiconductor(net)
 }
 
-fn balanced_package_with_gen() -> CompilerPackage {
+fn balanced_package_with_gen() -> NetworkPackage {
     let net = powerio::parse_str(MATPOWER_WITH_GEN_SRC, "matpower")
         .expect("parse matpower with gen")
         .network;
-    CompilerPackage::from_balanced(net)
+    NetworkPackage::from_balanced(net)
 }
 
 fn fields(values: &[(&str, serde_json::Value)]) -> BTreeMap<String, serde_json::Value> {
@@ -98,8 +98,6 @@ fn assert_close(actual: f64, expected: f64) {
 
 fn sample_operating_points() -> OperatingPointSeries {
     let mut point0 = OperatingPoint::new(0);
-    point0.label = Some("base".to_owned());
-    point0.duration_hours = Some(1.0);
     point0.updates.push(ElementUpdate::new(
         ElementRef::new("loads", 0).with_source_uid("load_1"),
         fields(&[
@@ -109,8 +107,6 @@ fn sample_operating_points() -> OperatingPointSeries {
     ));
 
     let mut point1 = OperatingPoint::new(1);
-    point1.label = Some("peak".to_owned());
-    point1.duration_hours = Some(2.0);
     point1.updates.push(ElementUpdate::new(
         ElementRef::new("loads", 0).with_source_uid("load_1"),
         fields(&[
@@ -242,9 +238,9 @@ fn assert_lowering_rejects(net: &powerio_dist::DistNetwork, code: &str) {
 
 /// Serialize -> deserialize -> serialize must be byte-identical (deterministic
 /// serialization), the round-trip check for payloads without `PartialEq`.
-fn assert_json_roundtrips(pkg: &CompilerPackage) {
+fn assert_json_roundtrips(pkg: &NetworkPackage) {
     let json1 = pkg.to_json_pretty().expect("serialize");
-    let back = CompilerPackage::from_json(&json1).expect("deserialize");
+    let back = NetworkPackage::from_json(&json1).expect("deserialize");
     let json2 = back.to_json_pretty().expect("re-serialize");
     assert_eq!(json1, json2, "package JSON is not round-trip stable");
 }
@@ -261,22 +257,9 @@ fn schema_version_present_and_defaulted() {
     let obj = v.as_object_mut().unwrap();
     obj.remove("schema");
     obj.remove("schema_version");
-    let back = CompilerPackage::from_json(&serde_json::to_string(&v).unwrap()).unwrap();
+    let back = NetworkPackage::from_json(&serde_json::to_string(&v).unwrap()).unwrap();
     assert_eq!(back.schema, PIO_PACKAGE_SCHEMA_URL);
     assert_eq!(back.schema_version, PIO_PACKAGE_SCHEMA_VERSION);
-}
-
-#[test]
-fn network_package_alias_matches_compiler_package_api() {
-    let net = powerio::parse_str(MATPOWER_SRC, "matpower")
-        .expect("parse matpower")
-        .network;
-    let pkg = NetworkPackage::from_balanced(net);
-    assert_eq!(pkg.model_kind(), ModelKind::Balanced);
-    assert!(pkg.kind_is_consistent());
-    let json = pkg.to_json_pretty().unwrap();
-    let back = NetworkPackage::from_json(&json).unwrap();
-    assert_eq!(back.model_kind(), ModelKind::Balanced);
 }
 
 #[test]
@@ -290,7 +273,7 @@ fn balanced_payload_roundtrips() {
 
     // The payload survives the round trip.
     let json = pkg.to_json_pretty().unwrap();
-    let back = CompilerPackage::from_json(&json).unwrap();
+    let back = NetworkPackage::from_json(&json).unwrap();
     assert_eq!(back.as_balanced().unwrap().buses.len(), 2);
     assert_eq!(back.as_balanced().unwrap().branches.len(), 1);
 }
@@ -305,7 +288,7 @@ fn goc3_package_operating_points_materialize_static_snapshots() {
     assert_close(net.generators[0].pmax, 100.0);
     assert_close(net.loads[0].p, 40.0);
 
-    let pkg = CompilerPackage::from_balanced(net);
+    let pkg = NetworkPackage::from_balanced(net);
     let series = pkg.operating_points().expect("operating points");
     assert_eq!(series.time_axis.periods, 2);
     assert_eq!(series.time_axis.duration_hours, vec![1.0, 2.0]);
@@ -349,7 +332,7 @@ fn goc3_operating_points_follow_parser_row_assignment() {
         .network;
     assert_eq!(net.generators.len(), 2);
 
-    let pkg = CompilerPackage::from_balanced(net).with_package_id("parent");
+    let pkg = NetworkPackage::from_balanced(net).with_package_id("parent");
     let series = pkg.operating_points().expect("operating points");
     let update = &series.points[1].updates[0];
     assert_eq!(update.element.table, "generators");
@@ -381,7 +364,7 @@ fn multiconductor_payload_roundtrips() {
     assert_json_roundtrips(&pkg);
 
     let json = pkg.to_json_pretty().unwrap();
-    let back = CompilerPackage::from_json(&json).unwrap();
+    let back = NetworkPackage::from_json(&json).unwrap();
     assert_eq!(back.model_kind(), ModelKind::Multiconductor);
     // The vsource is present in the payload after the round trip.
     assert!(!back.as_multiconductor().unwrap().sources.is_empty());
@@ -419,7 +402,7 @@ fn operating_points_roundtrip() {
         serde_json::json!("load_1")
     );
 
-    let back = CompilerPackage::from_json(&pkg.to_json_pretty().unwrap()).unwrap();
+    let back = NetworkPackage::from_json(&pkg.to_json_pretty().unwrap()).unwrap();
     let back_series = back.operating_points().expect("operating points");
     assert_eq!(
         back_series.time_axis.labels,
@@ -698,7 +681,7 @@ fn mismatched_model_kind_is_rejected() {
         .insert("model_kind".to_owned(), serde_json::json!("multiconductor"));
     let json = serde_json::to_string(&v).unwrap();
 
-    let err = CompilerPackage::from_json(&json).expect_err("kind mismatch must be rejected");
+    let err = NetworkPackage::from_json(&json).expect_err("kind mismatch must be rejected");
     assert!(
         err.to_string().contains("model_kind does not match"),
         "{err}"
@@ -724,7 +707,7 @@ fn diagnostics_roundtrip() {
     assert_json_roundtrips(&pkg);
 
     let json = pkg.to_json_pretty().unwrap();
-    let back = CompilerPackage::from_json(&json).unwrap();
+    let back = NetworkPackage::from_json(&json).unwrap();
     assert_eq!(back.diagnostics.len(), 1);
     let d = &back.diagnostics[0];
     assert_eq!(d.code, DiagnosticCode::new("EMIT.PSSE.DROP_ANGLE_LIMITS"));
@@ -773,7 +756,7 @@ fn source_references_roundtrip() {
     assert_json_roundtrips(&pkg);
 
     let json = pkg.to_json_pretty().unwrap();
-    let back = CompilerPackage::from_json(&json).unwrap();
+    let back = NetworkPackage::from_json(&json).unwrap();
     match &back.origin {
         Origin::File {
             path,
@@ -871,7 +854,7 @@ mpc.branch = [
 ];
 ";
     let net = powerio::parse_str(src, "matpower").unwrap().network;
-    let pkg = CompilerPackage::from_balanced(net);
+    let pkg = NetworkPackage::from_balanced(net);
 
     let has_split_bus_field = |path: &str, field: &str| {
         pkg.source_maps.iter().any(|e| {
@@ -919,7 +902,7 @@ mpc.branch = [
 
 #[test]
 fn origin_distinguishes_in_memory_from_file() {
-    let in_mem = CompilerPackage::from_balanced(powerio::BalancedNetwork::in_memory(
+    let in_mem = NetworkPackage::from_balanced(powerio::BalancedNetwork::in_memory(
         "t",
         100.0,
         vec![],
@@ -938,17 +921,17 @@ fn balanced_origin_matches_source_artifact_kind() {
         .network;
 
     net.source_format = powerio::SourceFormat::Gridfm;
-    let gridfm = CompilerPackage::from_balanced(net.clone());
+    let gridfm = NetworkPackage::from_balanced(net.clone());
     assert!(matches!(gridfm.origin, Origin::Folder { .. }));
     assert_eq!(gridfm.sources[0].kind, "folder");
 
     net.source_format = powerio::SourceFormat::PypsaCsv;
-    let pypsa = CompilerPackage::from_balanced(net.clone());
+    let pypsa = NetworkPackage::from_balanced(net.clone());
     assert!(matches!(pypsa.origin, Origin::Folder { .. }));
     assert_eq!(pypsa.sources[0].kind, "folder");
 
     net.source_format = powerio::SourceFormat::PowerWorldBinary;
-    let pwb = CompilerPackage::from_balanced(net);
+    let pwb = NetworkPackage::from_balanced(net);
     assert!(matches!(pwb.origin, Origin::BinaryFile { .. }));
     assert_eq!(pwb.sources[0].kind, "binary_file");
 }
@@ -964,7 +947,7 @@ fn unknown_future_fields_are_tolerated() {
 
     // A package from a newer producer with an unknown field still deserializes,
     // and the known fields are intact.
-    let back = CompilerPackage::from_json(&json).expect("tolerate unknown field");
+    let back = NetworkPackage::from_json(&json).expect("tolerate unknown field");
     assert_eq!(back.model_kind(), ModelKind::Balanced);
     assert!(back.kind_is_consistent());
     assert_eq!(back.as_balanced().unwrap().buses.len(), 2);
@@ -982,7 +965,7 @@ fn future_same_major_schema_version_is_tolerated() {
         .insert("future_field".to_owned(), serde_json::json!({"x": 1}));
     let json = serde_json::to_string(&v).unwrap();
 
-    let back = CompilerPackage::from_json(&json).expect("same major schema version loads");
+    let back = NetworkPackage::from_json(&json).expect("same major schema version loads");
     assert_eq!(back.schema_version, "0.3.0");
     assert_eq!(back.model_kind(), ModelKind::Balanced);
 }
@@ -997,7 +980,7 @@ fn same_major_prerelease_or_build_schema_version_is_tolerated() {
             .insert("schema_version".to_owned(), serde_json::json!(version));
         let json = serde_json::to_string(&v).unwrap();
 
-        let back = CompilerPackage::from_json(&json)
+        let back = NetworkPackage::from_json(&json)
             .unwrap_or_else(|e| panic!("same-major {version} should load: {e}"));
         assert_eq!(back.schema_version, version);
     }
@@ -1008,7 +991,7 @@ fn normalized_solver_table_metadata_records_dense_identities() {
     let net = powerio::parse_str(MATPOWER_WITH_GEN_SRC, "matpower")
         .expect("parse matpower")
         .network;
-    let mut pkg = CompilerPackage::from_balanced(net);
+    let mut pkg = NetworkPackage::from_balanced(net);
 
     assert!(pkg.attach_normalized_solver_table_metadata().unwrap());
 
@@ -1045,7 +1028,7 @@ fn incompatible_schema_major_is_rejected() {
         .insert("schema_version".to_owned(), serde_json::json!("1.0.0"));
     let json = serde_json::to_string(&v).unwrap();
 
-    let err = CompilerPackage::from_json(&json).expect_err("major version mismatch must fail");
+    let err = NetworkPackage::from_json(&json).expect_err("major version mismatch must fail");
     assert!(
         err.to_string()
             .contains("unsupported .pio.json schema_version 1.0.0"),
@@ -1072,7 +1055,7 @@ fn invalid_schema_version_is_rejected() {
             .insert("schema_version".to_owned(), serde_json::json!(version));
         let json = serde_json::to_string(&v).unwrap();
 
-        let err = CompilerPackage::from_json(&json).expect_err("invalid semver must fail");
+        let err = NetworkPackage::from_json(&json).expect_err("invalid semver must fail");
         assert!(
             err.to_string()
                 .contains(&format!("unsupported .pio.json schema_version {version}")),
@@ -1096,7 +1079,7 @@ mpc.branch = [
 ];
 ";
     let net = powerio::parse_str(src, "matpower").unwrap().network;
-    let mut pkg = CompilerPackage::from_balanced(net);
+    let mut pkg = NetworkPackage::from_balanced(net);
     pkg.run_sane_validation();
 
     assert!(
@@ -1140,7 +1123,7 @@ mpc.branch = [
 ];
 ";
     let net = powerio::parse_str(src, "matpower").unwrap().network;
-    let mut pkg = CompilerPackage::from_balanced(net);
+    let mut pkg = NetworkPackage::from_balanced(net);
     pkg.run_sane_validation();
 
     let generator_vg: Vec<_> = pkg
@@ -1177,7 +1160,7 @@ fn sane_validation_records_multiconductor_structure_findings() {
     net.untyped
         .push(UntypedObject::new("regcontrol", "r1", Vec::new()));
 
-    let mut pkg = CompilerPackage::from_multiconductor(net);
+    let mut pkg = NetworkPackage::from_multiconductor(net);
     pkg.run_sane_validation();
 
     for code in [
@@ -1362,7 +1345,7 @@ fn package_lowering_preflight_helper_is_read_only() {
             .is_none()
     );
 
-    let pkg = CompilerPackage::from_multiconductor(preflight_network(&["1", "2", "3"], &[]));
+    let pkg = NetworkPackage::from_multiconductor(preflight_network(&["1", "2", "3"], &[]));
     assert!(pkg.lowering_history.is_empty());
     let report = pkg
         .check_multiconductor_to_balanced_lowering()
@@ -1547,7 +1530,7 @@ fn lowering_preserves_single_phase_shunt_total() {
 #[test]
 fn package_lowering_returns_derived_balanced_package() {
     let mut parent =
-        CompilerPackage::from_multiconductor(preflight_network(&["1", "2", "3", "4"], &["4"]));
+        NetworkPackage::from_multiconductor(preflight_network(&["1", "2", "3", "4"], &["4"]));
     parent.push_lowering(powerio_pkg::LoweringRecord::new(
         "previous-pass",
         ModelKind::Multiconductor,
@@ -1628,7 +1611,7 @@ fn lowering_record_roundtrips() {
     pkg.push_lowering(rec);
 
     assert_json_roundtrips(&pkg);
-    let back = CompilerPackage::from_json(&pkg.to_json_pretty().unwrap()).unwrap();
+    let back = NetworkPackage::from_json(&pkg.to_json_pretty().unwrap()).unwrap();
     assert_eq!(back.lowering_history.len(), 1);
     assert_eq!(
         back.lowering_history[0].input_kind,
@@ -1669,11 +1652,11 @@ fn load_voltage_model_survives_package_roundtrip() {
     load.voltage_model = zip.clone();
     net.loads.push(load);
 
-    let pkg = CompilerPackage::from_multiconductor(net);
+    let pkg = NetworkPackage::from_multiconductor(net);
     assert_eq!(pkg.model_kind(), ModelKind::Multiconductor);
     assert_json_roundtrips(&pkg);
 
-    let back = CompilerPackage::from_json(&pkg.to_json_pretty().unwrap()).unwrap();
+    let back = NetworkPackage::from_json(&pkg.to_json_pretty().unwrap()).unwrap();
     assert_eq!(
         back.as_multiconductor().unwrap().loads[0].voltage_model,
         zip

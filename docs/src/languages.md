@@ -34,9 +34,9 @@ Verb taxonomy:
 | Parsed conversion | `net.to_format(to)` | `net.to_format(to)` | `to_format(net, to)` | `pio_to_format` |
 | MATPOWER text | `net.to_matpower()` | `net.to_matpower()` | `to_matpower(net)` | `pio_to_format` + `"matpower"` |
 | JSON text | `net.to_json()` | `net.to_json()` | `to_json(net)` | `pio_to_format` + `"powerio-json"` |
-| Package JSON | `CompilerPackage::to_json()` | package transport | `to_package` / `write_package` | `pio_package_*` |
-| Package operating points | `pkg.operating_points()` | `package_operating_points(pkg)` | planned | `pio_package_operating_points_json` |
-| Materialize operating point | `pkg.materialize_operating_point(i)` | `package_materialize_operating_point(pkg, i)` | planned | `pio_package_materialize_operating_point` |
+| Package JSON | `NetworkPackage::to_json()` | `Package` class / package transport | `to_package` / `write_package` | `pio_package_*` |
+| Package operating points | `pkg.operating_points()` | `pkg.operating_points()` | planned | `pio_package_operating_points_json` |
+| Materialize operating point | `pkg.materialize_operating_point(i)` | `pkg.materialize_operating_point(i)` | planned | `pio_package_materialize_operating_point` |
 | Normalized copy | `net.to_normalized()` | `net.to_normalized()` | `to_normalized(net)` | `pio_normalize` |
 | Dense tables | typed table API | `to_dense` | `to_dense` | `pio_*` extractors |
 | PyPSA CSV folder | `read_pypsa_csv_folder` / `write_pypsa_csv_folder` | `read_pypsa_csv_folder` / `net.write_pypsa_csv_folder` | `parse_file(dir; from="pypsa-csv")` / `write_pypsa_csv_folder` | `pio_parse_file` / `pio_write_dir` + `"pypsa-csv"` |
@@ -113,7 +113,7 @@ parse or conversion behavior.
 |---|---|---|---|---|---|
 | Rust transmission model | `powerio::Network` | `powerio::BalancedNetwork` alias | 0.4.0 | none in 0.4 | `Network` remains the concrete type in 0.4; the alias lets new code use the v1 family name. |
 | Rust distribution model | `powerio_dist::DistNetwork` | `powerio_dist::MulticonductorNetwork` alias | 0.4.0 | none in 0.4 | `DistNetwork` remains the concrete type in 0.4. |
-| Rust package object | n/a | `powerio_pkg::CompilerPackage` | n/a | n/a | Serializes to `.pio.json` and carries `model_kind`. |
+| Rust package object | n/a | `powerio_pkg::NetworkPackage` | n/a | n/a | Serializes to `.pio.json` and carries `model_kind`. |
 | Python transmission handle | `powerio.Case` | `powerio.Network` / `powerio.BalancedNetwork` | 0.3.3 | removed in 0.4.0 | `Case` is no longer importable. |
 | Python distribution handle | `powerio.dist.DistCase` | `powerio.dist.MulticonductorNetwork` / `powerio.dist.DistNetwork` | 0.3.3 | removed in 0.4.0 | `DistCase` is no longer importable. |
 | C ABI network handles | `PioNetwork` / `PioDistNetwork` | unchanged `pio_*` / `pio_dist_*` handles | n/a | n/a | `PIO_ABI_VERSION` stays 4 and `PIO_DIST_ABI_VERSION` stays 1; symbol renames are not part of the 0.4 package spine. |

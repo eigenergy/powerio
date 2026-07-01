@@ -1,7 +1,18 @@
 # Changelog
 
-## 0.4.0
+## 0.5.0
 
+- `powerio-pkg`: `NetworkPackage` is the one package type name (`CompilerPackage`
+  is gone); the Julia binding already leads with `NetworkPackage`. The `.pio.json`
+  format is unchanged.
+- Python API: the seven module level `package_*` functions are replaced by the
+  `powerio.Package` handle class, which parses the envelope once and exposes
+  `model_kind`, `operating_points()`, `materialize_operating_point()`,
+  `as_balanced()`/`as_multiconductor()`, `validate()`, `validation()`,
+  `diagnostics()`, and the multiconductor to balanced preflight and lowering.
+- `.pio.json` operating points: the per point `label` and `duration_hours` fields
+  are gone; `time_axis.labels` and `time_axis.duration_hours` (indexed by
+  `points[].index`) are the one source of truth. Readers ignore the old fields.
 - Transmission formats: added GOC3 JSON input and Surge JSON read and write paths.
   GOC3 packages lift source time series into `.pio.json` `operating_points`,
   and package APIs can materialize one point into a static package.
@@ -41,6 +52,9 @@
   compile time `Send + Sync` assertion as the other handles.
 - `SourceFormat::name()` is the one source format name mapping; the package,
   CLI, and Python copies are gone.
+
+## 0.4.0
+
 - `powerio-pkg`: `.pio.json` reads now enforce the envelope compatibility rule:
   same major `schema_version` values load, while incompatible major versions
   fail before payload use. The mdBook schema page documents the rule.

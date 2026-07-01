@@ -117,14 +117,9 @@ impl TimeAxis {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[non_exhaustive]
 pub struct OperatingPoint {
-    /// Zero based period index.
+    /// Zero based period index. Labels and durations live on the shared
+    /// [`TimeAxis`], indexed by this.
     pub index: usize,
-    /// Optional display label for this point.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub label: Option<String>,
-    /// Optional duration for this point, in hours.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub duration_hours: Option<f64>,
     /// Field updates to apply to the static payload.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub updates: Vec<ElementUpdate>,
@@ -138,8 +133,6 @@ impl OperatingPoint {
     pub fn new(index: usize) -> Self {
         Self {
             index,
-            label: None,
-            duration_hours: None,
             updates: Vec::new(),
             metadata: BTreeMap::new(),
         }
@@ -232,13 +225,7 @@ pub(crate) fn goc3_operating_points_from_str(
     let device_ts = uid_map(section(time_series, "simple_dispatchable_device")?);
     let output = root.get("time_series_output").and_then(Value::as_object);
 
-    let mut points = (0..periods)
-        .map(|index| {
-            let mut point = OperatingPoint::new(index);
-            point.duration_hours = duration_hours.get(index).copied();
-            point
-        })
-        .collect::<Vec<_>>();
+    let mut points = (0..periods).map(OperatingPoint::new).collect::<Vec<_>>();
 
     let base_mva = network
         .get("general")

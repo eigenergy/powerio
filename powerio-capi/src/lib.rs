@@ -1058,11 +1058,11 @@ pub unsafe extern "C" fn pio_to_arrow(
 // ---------------------------------------------------------------------------
 
 /// Opaque `.pio.json` compiler package handle. A package owns one
-/// [`powerio_pkg::CompilerPackage`], which wraps either a balanced
+/// [`powerio_pkg::NetworkPackage`], which wraps either a balanced
 /// [`PioNetwork`] payload or a multiconductor [`PioDistNetwork`] payload.
 #[cfg(feature = "pkg")]
 pub struct PioPackage {
-    package: powerio_pkg::CompilerPackage,
+    package: powerio_pkg::NetworkPackage,
 }
 
 #[cfg(feature = "pkg")]
@@ -1084,7 +1084,7 @@ unsafe fn finish_package(
     errbuf: *mut c_char,
     errlen: usize,
     panic_msg: &str,
-    f: impl FnOnce() -> Result<powerio_pkg::CompilerPackage, String>,
+    f: impl FnOnce() -> Result<powerio_pkg::NetworkPackage, String>,
 ) -> *mut PioPackage {
     unsafe {
         match catch_unwind(AssertUnwindSafe(f)) {
@@ -1117,7 +1117,7 @@ pub unsafe extern "C" fn pio_package_parse_file(
         finish_package(errbuf, errlen, "panic while parsing package", || {
             let path = required_cstr(path, "path")?;
             let text = std::fs::read_to_string(path).map_err(|e| e.to_string())?;
-            powerio_pkg::CompilerPackage::from_json(&text).map_err(|e| e.to_string())
+            powerio_pkg::NetworkPackage::from_json(&text).map_err(|e| e.to_string())
         })
     }
 }
@@ -1135,7 +1135,7 @@ pub unsafe extern "C" fn pio_package_parse_str(
     unsafe {
         finish_package(errbuf, errlen, "panic while parsing package", || {
             let text = required_cstr(text, "text")?;
-            powerio_pkg::CompilerPackage::from_json(text).map_err(|e| e.to_string())
+            powerio_pkg::NetworkPackage::from_json(text).map_err(|e| e.to_string())
         })
     }
 }
@@ -1226,7 +1226,7 @@ pub unsafe extern "C" fn pio_package_from_balanced_network(
             "panic while packaging balanced network",
             || {
                 let net = network_ref(net).ok_or_else(|| "network handle is NULL".to_string())?;
-                let mut package = powerio_pkg::CompilerPackage::from_balanced(net.net.clone());
+                let mut package = powerio_pkg::NetworkPackage::from_balanced(net.net.clone());
                 if include_solver_metadata != 0 {
                     package
                         .attach_normalized_solver_table_metadata()
@@ -1257,7 +1257,7 @@ pub unsafe extern "C" fn pio_package_from_multiconductor_network(
                 let net = net
                     .as_ref()
                     .ok_or_else(|| "distribution network handle is NULL".to_string())?;
-                Ok(powerio_pkg::CompilerPackage::from_multiconductor(
+                Ok(powerio_pkg::NetworkPackage::from_multiconductor(
                     net.net.clone(),
                 ))
             },

@@ -45,7 +45,7 @@ validation, and lowering history.
 
 ## The compiler package (`.pio.json`)
 
-`powerio_pkg::CompilerPackage` is the readable envelope. It is the object that
+`powerio_pkg::NetworkPackage` is the readable envelope. It is the object that
 records how a source was interpreted. Language bindings can pass the package
 without guessing whether it holds balanced or multiconductor data. Binary `.pio`
 is out of scope until the JSON package settles.
@@ -72,7 +72,7 @@ GO Challenge 3 package construction fills this block from `time_series_input`:
 the balanced payload holds the first interval, while every interval is available
 as an operating point.
 
-For balanced payloads, `CompilerPackage::attach_normalized_solver_table_metadata`
+For balanced payloads, `NetworkPackage::attach_normalized_solver_table_metadata`
 records the compact contract for
 `powerio::Network::to_normalized_solver_tables()`: pass name, units, row counts,
 dense bus ids, reference/component indices, branch to arc indices, and source row
@@ -84,7 +84,7 @@ metadata for a compiler cache or sidecar artifact to verify table identity.
 `model_kind` is a standalone field. A reader must never infer whether the payload
 is balanced or multiconductor from which field is present. The payload enum is
 also tagged by `kind`, so the payload is self-describing too;
-`CompilerPackage::kind_is_consistent` asserts the two agree, and a reader should
+`NetworkPackage::kind_is_consistent` asserts the two agree, and a reader should
 reject a package where they do not.
 
 ### Payload stability
@@ -132,7 +132,7 @@ transformation explicit.
 reduced before the sequence transform. One wire and two wire inputs,
 transformers, untyped objects, missing phase references, and closed switches
 return structured `LOWER.MULTI_TO_BALANCED.*` diagnostics. The package method
-`CompilerPackage::lower_multiconductor_to_balanced` returns a derived balanced
+`NetworkPackage::lower_multiconductor_to_balanced` returns a derived balanced
 package and appends the record. This pass is explicit only; readers, writers,
 matrix builders, bindings, and MCP operations do not run it implicitly. The
 v0.4.0 direction is in
@@ -140,7 +140,7 @@ v0.4.0 direction is in
 
 ### Operating point materialization
 
-`CompilerPackage::materialize_operating_point(index)` clones the package, applies
+`NetworkPackage::materialize_operating_point(index)` clones the package, applies
 one point's field updates to the typed payload, clears `operating_points`, drops
 stale source maps and diagnostics for changed fields, recomputes validation, and
 records a `LoweringRecord` with `pass = "materialize-operating-point"`. If the

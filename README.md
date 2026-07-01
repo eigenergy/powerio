@@ -250,10 +250,9 @@ stores the static first interval in `model` and the full replayable time series
 in `operating_points`; materializing one point returns a static package with the
 updates applied and the series cleared.
 
-Rust uses `powerio_pkg::CompilerPackage`, Python uses
-`package_parse_file` / `package_operating_points` /
-`package_materialize_operating_point`, the C ABI uses `pio_package_*`, and the
-CLI writes packages with `powerio package`.
+Rust uses `powerio_pkg::NetworkPackage`, Python uses the `powerio.Package`
+class, the C ABI uses `pio_package_*`, and the CLI writes packages with
+`powerio package`.
 
 ### GridFM (experimental)
 PowerIO writes datasets for the [LF Energy](https://lfenergy.org/projects/gridfm/) open [Grid Foundation Model (GridFM)](https://github.com/gridfm) project. In the command line:

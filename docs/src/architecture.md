@@ -5,7 +5,7 @@ models, passes derive normalized or lowered views, and writers emit target
 artifacts.
 
 - [Compiler IR](https://eigenergy.github.io/powerio/guide/compiler-ir.html): the IR layers, the `BalancedNetwork` and
-  `MulticonductorNetwork` model families, and the `CompilerPackage` (`.pio.json`)
+  `MulticonductorNetwork` model families, and the `NetworkPackage` (`.pio.json`)
   envelope — explicit model kind, provenance, source maps, structured
   diagnostics, validation, operating points, and lowering.
 - [PIO JSON schema](https://eigenergy.github.io/powerio/guide/pio-json-schema.html): the `.pio.json` field reference and

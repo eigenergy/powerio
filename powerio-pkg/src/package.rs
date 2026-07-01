@@ -148,12 +148,12 @@ impl From<&NormalizedSolverTables> for NormalizedSolverTableMetadata {
 /// artifact trustworthy. Serializes to `.pio.json`.
 ///
 /// `model_kind` is stored explicitly and is authoritative; the payload is also
-/// self-describing (tagged by `kind`). [`CompilerPackage::kind_is_consistent`]
+/// self-describing (tagged by `kind`). [`NetworkPackage::kind_is_consistent`]
 /// asserts the two agree. Unknown future top-level fields are tolerated on read
 /// (ignored) so a newer producer's package still deserializes here.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[non_exhaustive]
-pub struct CompilerPackage {
+pub struct NetworkPackage {
     /// The schema URL identifying this package format.
     #[serde(default = "default_schema_url")]
     pub schema: String,
@@ -191,10 +191,7 @@ pub struct CompilerPackage {
     pub derived: DerivedMetadata,
 }
 
-/// Alternate package name used by the v0.5 API direction.
-pub type NetworkPackage = CompilerPackage;
-
-impl CompilerPackage {
+impl NetworkPackage {
     /// Wrap a balanced network. Origin is inferred from its source format:
     /// `InMemory` / `Derived` (normalized) / `File` (a parsed text format,
     /// recording whether source was retained; the path is not captured here).
@@ -357,28 +354,53 @@ impl CompilerPackage {
         let updated_paths = operating_point_update_paths(&self.model, point);
         let had_normalized_solver_tables = self.derived.normalized_solver_tables.is_some();
         let options = materialize_operating_point_options(index);
-        let mut package = self.clone();
-        package.model = apply_operating_point_to_model(&self.model, point)?;
-        package.operating_points = None;
-        // A derived package is new content: it records the parent's id in its
-        // origin and never inherits it as its own (as in
-        // `lower_multiconductor_to_balanced`).
-        package.package_id = None;
-        package.origin = Origin::Derived {
-            parent_package_id: self.package_id.clone(),
-            pass: "materialize-operating-point".to_owned(),
-            options: options.clone(),
+        // Built field by field rather than cloned: cloning would deep copy the
+        // whole payload only to overwrite it, and a future envelope field must
+        // make an explicit carry-or-clear decision here instead of silently
+        // riding along stale.
+        let mut package = Self {
+            schema: self.schema.clone(),
+            schema_version: self.schema_version.clone(),
+            producer: self.producer.clone(),
+            // A derived package is new content: it records the parent's id in
+            // its origin and never inherits it as its own (as in
+            // `lower_multiconductor_to_balanced`).
+            package_id: None,
+            created_at: self.created_at.clone(),
+            model_kind: self.model_kind,
+            model: apply_operating_point_to_model(&self.model, point)?,
+            operating_points: None,
+            origin: Origin::Derived {
+                parent_package_id: self.package_id.clone(),
+                pass: "materialize-operating-point".to_owned(),
+                options: options.clone(),
+            },
+            sources: self.sources.clone(),
+            source_maps: self
+                .source_maps
+                .iter()
+                .filter(|entry| !updated_paths.contains(entry.element_path.as_str()))
+                .cloned()
+                .collect(),
+            diagnostics: self
+                .diagnostics
+                .iter()
+                .filter(|diagnostic| {
+                    diagnostic
+                        .element_path
+                        .as_deref()
+                        .is_none_or(|path| !updated_paths.contains(path))
+                })
+                .cloned()
+                .collect(),
+            // Replaced by run_sane_validation below.
+            validation: self.validation.clone(),
+            summary: self.summary.clone(),
+            lowering_history: self.lowering_history.clone(),
+            // Derived products are stale against the updated payload; solver
+            // table metadata is rebuilt below when the parent carried it.
+            derived: DerivedMetadata::default(),
         };
-        package.derived = DerivedMetadata::default();
-        package
-            .source_maps
-            .retain(|entry| !updated_paths.contains(entry.element_path.as_str()));
-        package.diagnostics.retain(|diagnostic| {
-            diagnostic
-                .element_path
-                .as_deref()
-                .is_none_or(|path| !updated_paths.contains(path))
-        });
         let mut record = LoweringRecord::new(
             "materialize-operating-point",
             self.model_kind,
@@ -563,7 +585,7 @@ impl CompilerPackage {
 
         let lowered = lower_multiconductor_to_balanced(net, options)?;
         let mut record = lowered.record;
-        let mut output = CompilerPackage::from_balanced(lowered.network);
+        let mut output = NetworkPackage::from_balanced(lowered.network);
         output.origin = Origin::Derived {
             parent_package_id: self.package_id.clone(),
             pass: "multiconductor-to-balanced".to_owned(),
@@ -1591,7 +1613,7 @@ fn multiconductor_origin(net: &MulticonductorNetwork) -> Origin {
     }
 }
 
-fn derived_sources(parent: &CompilerPackage) -> Vec<SourceDescriptor> {
+fn derived_sources(parent: &NetworkPackage) -> Vec<SourceDescriptor> {
     if !parent.sources.is_empty() {
         return parent.sources.clone();
     }

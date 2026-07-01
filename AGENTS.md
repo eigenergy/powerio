@@ -132,7 +132,7 @@ powerio-cli/                  # the `powerio` binary (CLI + TUI)
 └── src/tui/                 # ratatui app (app.rs, screens.rs, log_pane.rs, sparsity.rs, theme.rs)
 
 powerio-pkg/                  # .pio.json compiler package envelope
-├── src/package.rs           # CompilerPackage, schema version, materialization
+├── src/package.rs           # NetworkPackage, schema version, materialization
 ├── src/operating.rs         # replayable operating point overlays
 └── src/lowering.rs          # multiconductor → balanced lowering
 
@@ -178,7 +178,7 @@ benchmarks/                  # parse benchmarks + Julia validation harnesses
   transport; over the C ABI it is the `powerio-json` format through `pio_to_format`/`pio_parse_str`. The retained
   `source` text is `#[serde(skip)]`, so JSON carries the tables, not the
   byte exact echo, and a `from_json` round trip returns `source` as `None`.
-- **`.pio.json` packages.** `CompilerPackage` wraps one balanced or
+- **`.pio.json` packages.** `NetworkPackage` wraps one balanced or
   multiconductor payload with provenance, source maps, diagnostics, validation,
   lowering history, optional derived metadata, and optional `operating_points`.
   GOC3 package construction stores the static first interval in `model` and the

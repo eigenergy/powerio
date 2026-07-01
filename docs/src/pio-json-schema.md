@@ -1,6 +1,6 @@
 # The `.pio.json` schema
 
-`.pio.json` is the serialized form of `powerio_pkg::CompilerPackage`: a versioned
+`.pio.json` is the serialized form of `powerio_pkg::NetworkPackage`: a versioned
 envelope around one PowerIO IR payload. The envelope shape and stability policy
 are below. The crate is the implementation; `compiler-ir.md` is the architecture
 note.
@@ -55,7 +55,7 @@ diagnostics, validation, and lowering metadata around that model. Use the
 **must** branch on it and **must not** infer the payload kind from which field is
 present. The payload is additionally self-describing: `model` is tagged by
 `kind`, so `model.kind` and `model_kind` carry the same value.
-`CompilerPackage::kind_is_consistent` asserts the two agree; a reader should
+`NetworkPackage::kind_is_consistent` asserts the two agree; a reader should
 reject a package where they disagree.
 
 ```json
@@ -102,9 +102,7 @@ The block shape is:
 | `time_axis.duration_hours` | array of numbers | optional per period duration |
 | `time_axis.labels` | array of strings | optional labels, such as `"1"`, `"2"`, ... |
 | `points[]` | array | one replayable state |
-| `points[].index` | integer | zero based period index |
-| `points[].label` | string | optional point label |
-| `points[].duration_hours` | number | optional point duration |
+| `points[].index` | integer | zero based period index; addresses `time_axis.duration_hours` and `time_axis.labels` |
 | `points[].updates[]` | array | row field updates to apply for this point |
 | `updates[].element.table` | string | payload table name, such as `generators`, `loads`, `branches`, or `hvdc` |
 | `updates[].element.row` | integer | zero based row in that table |
@@ -115,7 +113,7 @@ The block shape is:
 GO Challenge 3 packages use this block for the scheduling time series. The
 static `model` reflects the first interval that can be represented by
 `Network`; `operating_points` carries replayable updates for every interval.
-`CompilerPackage::materialize_operating_point(index)` returns a new static
+`NetworkPackage::materialize_operating_point(index)` returns a new static
 package with `origin.kind = "derived"` and
 `origin.pass = "materialize-operating-point"`.
 
@@ -183,7 +181,7 @@ with `mapping_kind = defaulted`, and its retained source becomes
 `origin.retained_source`. Validation diagnostics attach the matching `source_ref`
 when the package has a source map for the reported field.
 
-`CompilerPackage::lower_multiconductor_to_balanced(options)` returns a new
+`NetworkPackage::lower_multiconductor_to_balanced(options)` returns a new
 balanced package with `origin.kind = derived` and
 `origin.pass = "multiconductor-to-balanced"`. It preserves the parent
 `lowering_history` and appends a `LoweringRecord` whose options, assumptions,
@@ -199,7 +197,7 @@ bindings, or MCP operations.
 {
   "schema": "https://powerio.dev/schema/pio-package/0.1",
   "schema_version": "0.1.0",
-  "producer": { "tool": "powerio", "version": "0.4.0" },
+  "producer": { "tool": "powerio", "version": "0.5.0" },
   "model_kind": "multiconductor",
   "model": {
     "kind": "multiconductor",

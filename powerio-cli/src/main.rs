@@ -18,7 +18,7 @@ use powerio_matrix::pipeline::{MatrixKind, Pipeline, RhsKind};
 use powerio_matrix::synth::{SynthSpec, Topology};
 use powerio_matrix::{MissingGenCostPolicy, WriteOptions};
 use powerio_pkg::{
-    CompilerPackage, DiagnosticSeverity, DiagnosticStage, Origin, SourceDescriptor,
+    DiagnosticSeverity, DiagnosticStage, NetworkPackage, Origin, SourceDescriptor,
     StructuredDiagnostic, ValidationSummary,
 };
 use serde_json::json;
@@ -972,7 +972,7 @@ fn package_text(input: &Path, from: Option<FormatArg>, scenario: i64) -> anyhow:
     let text = pkg
         .to_json_pretty()
         .context("serializing .pio.json package")?;
-    CompilerPackage::from_json(&text).context("validating .pio.json package readback")?;
+    NetworkPackage::from_json(&text).context("validating .pio.json package readback")?;
     Ok(text)
 }
 
@@ -980,11 +980,11 @@ fn build_package(
     input: &Path,
     from: Option<FormatArg>,
     scenario: i64,
-) -> anyhow::Result<CompilerPackage> {
+) -> anyhow::Result<NetworkPackage> {
     if from == Some(FormatArg::Gridfm) || (from.is_none() && looks_like_gridfm_dir(input)) {
         let read = powerio_matrix::read_gridfm_dataset(input, scenario)
             .with_context(|| format!("reading gridfm dataset {}", input.display()))?;
-        let mut pkg = CompilerPackage::from_balanced(read.network);
+        let mut pkg = NetworkPackage::from_balanced(read.network);
         add_read_warning_diagnostics(&mut pkg, "READ.GRIDFM.FIDELITY_WARNING", &read.warnings);
         set_package_source(&mut pkg, input, PackageSourceKind::Folder, "gridfm", false);
         pkg.run_sane_validation();
@@ -1002,7 +1002,7 @@ fn build_package(
             .or_else(|| from.map(FormatArg::name))
             .unwrap_or("unknown");
         let retained_source = net.source.is_some();
-        let mut pkg = CompilerPackage::from_multiconductor(net);
+        let mut pkg = NetworkPackage::from_multiconductor(net);
         set_package_source(
             &mut pkg,
             input,
@@ -1018,7 +1018,7 @@ fn build_package(
         .with_context(|| format!("reading {}", input.display()))?;
     let format = parsed.network.source_format.name();
     let retained_source = parsed.network.source.is_some();
-    let mut pkg = CompilerPackage::from_balanced(parsed.network);
+    let mut pkg = NetworkPackage::from_balanced(parsed.network);
     add_read_warning_diagnostics(
         &mut pkg,
         "READ.TRANSMISSION.PARSE_WARNING",
@@ -1035,7 +1035,7 @@ fn build_package(
     Ok(pkg)
 }
 
-fn add_read_warning_diagnostics(pkg: &mut CompilerPackage, code: &str, warnings: &[String]) {
+fn add_read_warning_diagnostics(pkg: &mut NetworkPackage, code: &str, warnings: &[String]) {
     pkg.diagnostics.extend(warnings.iter().map(|w| {
         StructuredDiagnostic::new(
             code,
@@ -1075,7 +1075,7 @@ fn package_source_kind(input: &Path, format: &str) -> PackageSourceKind {
 }
 
 fn set_package_source(
-    pkg: &mut CompilerPackage,
+    pkg: &mut NetworkPackage,
     input: &Path,
     kind: PackageSourceKind,
     format: &str,
@@ -1404,7 +1404,7 @@ mod tests {
         transmission_summary_json,
     };
     use clap::Parser;
-    use powerio_pkg::{CompilerPackage, MappingKind, Origin, ValidationStatus};
+    use powerio_pkg::{MappingKind, NetworkPackage, Origin, ValidationStatus};
     use std::path::Path;
     use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -1475,7 +1475,7 @@ mod tests {
     fn package_text_matches_balanced_shape_and_provenance() {
         let input = data("case9.m");
         let text = package_text(&input, None, 0).unwrap();
-        let pkg = CompilerPackage::from_json(&text).unwrap();
+        let pkg = NetworkPackage::from_json(&text).unwrap();
         assert_eq!(pkg.model_kind, powerio_pkg::ModelKind::Balanced);
         assert!(pkg.kind_is_consistent());
         assert_eq!(pkg.as_balanced().unwrap().buses.len(), 9);
@@ -1523,7 +1523,7 @@ mod tests {
 
         run_package(&data("case9.m"), Some(&output), None, 0).unwrap();
         let text = std::fs::read_to_string(&output).unwrap();
-        let pkg = CompilerPackage::from_json(&text).unwrap();
+        let pkg = NetworkPackage::from_json(&text).unwrap();
         assert_eq!(pkg.model_kind, powerio_pkg::ModelKind::Balanced);
         assert_eq!(pkg.sources[0].format.as_deref(), Some("matpower"));
 
@@ -1534,14 +1534,14 @@ mod tests {
     fn package_helper_returns_stdout_text() {
         let text = package_text(&data("case9.m"), None, 0).unwrap();
         assert!(text.contains("\"schema\""));
-        let pkg = CompilerPackage::from_json(&text).unwrap();
+        let pkg = NetworkPackage::from_json(&text).unwrap();
         assert_eq!(pkg.summary.elements["buses"], 9);
     }
 
     #[test]
     fn package_text_includes_validation_passes() {
         let text = package_text(&data("case9.m"), None, 0).unwrap();
-        let pkg = CompilerPackage::from_json(&text).unwrap();
+        let pkg = NetworkPackage::from_json(&text).unwrap();
         assert!(
             pkg.validation
                 .passes
@@ -1552,7 +1552,7 @@ mod tests {
         );
 
         let pretty = pkg.to_json_pretty().unwrap();
-        let back = CompilerPackage::from_json(&pretty).unwrap();
+        let back = NetworkPackage::from_json(&pretty).unwrap();
         assert_eq!(back.validation.passes, pkg.validation.passes);
     }
 

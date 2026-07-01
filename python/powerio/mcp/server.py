@@ -342,7 +342,7 @@ def _diagnostics_payload(package_json: str, verbose: bool = False) -> Dict[str, 
     kind = _package_model_kind(value)
     # Validate with the Rust package reader so schema version and payload
     # consistency checks stay in one place.
-    powerio._powerio.package_model_kind(package_json)
+    powerio.Package.from_json(package_json)
     raw = value.get("diagnostics", [])
     diagnostics = [item for item in raw if isinstance(item, dict)]
     if not verbose:
@@ -391,9 +391,9 @@ def _load_package(package_json: str) -> _Loaded:
         raise ValueError("package_json is not a .pio.json package envelope")
     kind = _package_model_kind(value)
     try:
+        pkg = powerio.Package.from_json(package_json)
         if kind == "multiconductor":
-            inner = powerio._powerio.package_as_multiconductor(package_json)
-            net = dist.DistNetwork(inner)
+            net = pkg.as_multiconductor()
             return _Loaded(
                 "distribution",
                 net,
@@ -401,8 +401,7 @@ def _load_package(package_json: str) -> _Loaded:
                 "bmopf-json",
                 package_json=package_json,
             )
-        inner = powerio._powerio.package_as_balanced(package_json)
-        net = powerio.Network(inner)
+        net = pkg.as_balanced()
         return _Loaded(
             "transmission",
             net,
@@ -437,17 +436,17 @@ def _package_json_from_input(
                     if from_l in _PACKAGE_JSON_FORMATS:
                         raise ValueError("input is not a .pio.json package envelope")
                 else:
-                    powerio._powerio.package_model_kind(text)
+                    powerio.Package.from_json(text)
                     return text
-            return powerio._powerio.package_parse_file(
+            return powerio.Package.from_file(
                 path, from_format, int(opts.get("scenario", 0))
-            )
+            ).to_json()
         if _looks_like_package_json(content):
-            powerio._powerio.package_model_kind(content)
+            powerio.Package.from_json(content)
             return content
         if from_l in _PACKAGE_JSON_FORMATS:
             raise ValueError("content is not a .pio.json package envelope")
-        return powerio._powerio.package_parse_str(content, from_format)
+        return powerio.Package.from_str(content, from_format).to_json()
     except powerio.PowerIOError as exc:
         raise ValueError(f"parse failed: {exc}") from exc
     except FileNotFoundError as exc:
