@@ -46,6 +46,15 @@ fn dense(m: &CsMat<f64>) -> Vec<Vec<f64>> {
     d
 }
 
+fn operator<'a>(meta: &'a serde_json::Value, name: &str) -> &'a serde_json::Value {
+    meta["operators"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|op| op["name"] == name)
+        .unwrap_or_else(|| panic!("missing operator {name}"))
+}
+
 /// Positive definiteness via dense Cholesky; small matrices only.
 // k indexes l[i][k] and l[j][k] in the same inner product; an iterator rewrite
 // would only obscure the Cholesky recurrence.
@@ -289,6 +298,44 @@ fn dcopf_bundle_can_fill_missing_costs_explicitly() {
     let c_gen = powerio_matrix::io::read_vector_mtx(out.dir.join("c_gen.mtx")).unwrap();
     assert_eq!(q_gen, vec![0.0]);
     assert_eq!(c_gen, vec![0.0]);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn dcopf_manifest_records_zero_impedance_skips() {
+    let case = net_with_gens(
+        "zero_dcopf",
+        vec![bus(1, BusType::Ref), bus(2, BusType::Pq)],
+        vec![branch(1, 2, 0.0), branch(1, 2, 0.1)],
+        vec![gen_with_cost(
+            1,
+            Some(GenCost::new(2, 0.0, 0.0, vec![0.0, 1.0, 0.0])),
+        )],
+    );
+    let dir = std::env::temp_dir().join("powerio_dcopf_zero_impedance_test");
+    let _ = std::fs::remove_dir_all(&dir);
+    let out =
+        powerio_matrix::write_dcopf_bundle(&case, &dir, &powerio_matrix::DcOpfOptions::default())
+            .unwrap();
+    let meta: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(out.dir.join("dcopf_meta.json")).unwrap())
+            .unwrap();
+
+    assert_eq!(meta["dimensions"]["n_source_branches"], 2);
+    assert_eq!(meta["dimensions"]["n_branch_columns"], 1);
+    assert_eq!(meta["zero_impedance"]["skip"], true);
+    assert_eq!(meta["zero_impedance"]["rule"], "Reactance");
+    assert_eq!(meta["zero_impedance"]["skipped"]["count"], 1);
+    assert_eq!(
+        meta["zero_impedance"]["skipped"]["branch_indices"],
+        serde_json::json!([0])
+    );
+    assert_eq!(meta["m"], 1);
+
+    let fmax = operator(&meta, "branch_flow_limit");
+    assert_eq!(fmax["file"], "fmax.mtx");
+    assert_eq!(fmax["rows"], 1);
+    assert_eq!(fmax["cols"], 1);
     let _ = std::fs::remove_dir_all(&dir);
 }
 
@@ -570,6 +617,24 @@ fn bundle_vectors_round_trip() {
     let meta: serde_json::Value =
         serde_json::from_str(&std::fs::read_to_string(out.dir.join("dcopf_meta.json")).unwrap())
             .unwrap();
+    assert_eq!(meta["schema"], "powerio.dcopf");
+    assert_eq!(meta["schema_version"], "0.2");
+    assert_eq!(meta["dimensions"]["n_buses"], view.n());
+    assert_eq!(
+        meta["dimensions"]["n_source_branches"],
+        view.branches().len()
+    );
+    assert_eq!(meta["dimensions"]["n_branch_columns"], inc.m());
+    assert_eq!(meta["dimensions"]["n_generators"], opf.n_gen());
+    assert_eq!(meta["dimensions"]["n_reference_buses"], 1);
+    assert_eq!(meta["dimensions"]["n_grounded_buses"], view.n() - 1);
+    assert_eq!(meta["index_base"]["dense"], 0);
+    assert_eq!(meta["index_base"]["matrix_market"], 1);
+    assert_eq!(meta["dc_convention"], "PaperPure");
+    assert_eq!(meta["build_options"]["skip_zero_impedance"], true);
+    assert_eq!(meta["zero_impedance"]["skipped"]["count"], 0);
+    assert_eq!(meta["grounding"]["grounded_operator"], "L_grounded");
+    assert_eq!(meta["grounding"]["reference_selector"], "e_r");
     assert_eq!(meta["n_gen"].as_u64().unwrap() as usize, opf.n_gen());
     let ref_buses: Vec<usize> = meta["reference_buses"]
         .as_array()
@@ -581,8 +646,28 @@ fn bundle_vectors_round_trip() {
         ref_buses,
         IndexedNetwork::new(&case).reference_bus_indices()
     );
+    assert_eq!(
+        meta["grounding"]["reference_buses"],
+        meta["reference_buses"]
+    );
+    assert_eq!(
+        meta["grounding"]["removed_rows_and_columns"],
+        meta["reference_buses"]
+    );
     assert_eq!(meta["units"], "PerUnit");
     assert_eq!(meta["convention"], "PaperPure");
+
+    let operators = meta["operators"].as_array().unwrap();
+    assert_eq!(operators.len(), 18);
+    let signed_incidence = operator(&meta, "signed_incidence");
+    assert_eq!(signed_incidence["file"], "A.mtx");
+    assert_eq!(signed_incidence["rows"], view.n());
+    assert_eq!(signed_incidence["cols"], inc.m());
+    assert_eq!(signed_incidence["index_space"], "bus_by_branch");
+    let grounded = operator(&meta, "grounded_laplacian");
+    assert_eq!(grounded["file"], "L_grounded.mtx");
+    assert_eq!(grounded["rows"], view.n() - ref_buses.len());
+    assert_eq!(grounded["cols"], view.n() - ref_buses.len());
 
     let _ = std::fs::remove_dir_all(&dir);
 }
