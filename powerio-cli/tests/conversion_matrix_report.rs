@@ -1,0 +1,567 @@
+use std::fmt::Write as _;
+use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
+
+use powerio_dist::{DistNetwork, DistTargetFormat};
+use powerio_matrix::{
+    Network, TargetFormat, parse_matpower_file, parse_str as parse_transmission_str,
+    write_as as write_transmission_as,
+};
+
+const REPORT_ENV: &str = "POWERIO_CONVERSION_MATRIX_REPORT";
+const REPORT_MARKER: &str = "<!-- powerio-conversion-matrix-report -->";
+static DSS_TEMP_COUNTER: AtomicU64 = AtomicU64::new(0);
+
+#[test]
+fn conversion_matrix_report_matches_expected() {
+    let report = build_report();
+    if let Ok(path) = std::env::var(REPORT_ENV) {
+        let path = PathBuf::from(path);
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent).unwrap();
+        }
+        std::fs::write(&path, &report.markdown).unwrap();
+    }
+    assert!(
+        report.failures.is_empty(),
+        "{}\n\n{}",
+        report.failures.join("\n"),
+        report.markdown
+    );
+}
+
+struct Report {
+    markdown: String,
+    failures: Vec<String>,
+}
+
+fn build_report() -> Report {
+    let transmission = run_transmission_matrix();
+    let distribution = run_distribution_matrix();
+    let mut failures = Vec::new();
+    failures.extend(transmission.failures.clone());
+    failures.extend(distribution.failures.clone());
+
+    let mut markdown = String::new();
+    writeln!(markdown, "{REPORT_MARKER}").unwrap();
+    writeln!(markdown).unwrap();
+    writeln!(markdown, "## Conversion Matrix").unwrap();
+    writeln!(markdown).unwrap();
+    writeln!(
+        markdown,
+        "Cells show `observed/expected` warnings across source parse, target write, and target readback."
+    )
+    .unwrap();
+    writeln!(
+        markdown,
+        "🟢 means zero warnings, 🟡 means expected warnings, and 🔴 means a failed invariant or warning count drift."
+    )
+    .unwrap();
+    writeln!(markdown).unwrap();
+    write_matrix_section(&mut markdown, "Transmission", &transmission);
+    writeln!(markdown).unwrap();
+    write_matrix_section(&mut markdown, "Distribution", &distribution);
+
+    Report { markdown, failures }
+}
+
+#[derive(Clone)]
+struct MatrixReport {
+    formats: Vec<&'static str>,
+    cells: Vec<Vec<Cell>>,
+    failures: Vec<String>,
+}
+
+#[derive(Clone)]
+struct Cell {
+    observed_warnings: usize,
+    expected_warnings: usize,
+    cases: usize,
+    failures: Vec<String>,
+}
+
+impl Cell {
+    fn new(expected_warnings: usize) -> Self {
+        Self {
+            observed_warnings: 0,
+            expected_warnings,
+            cases: 0,
+            failures: Vec::new(),
+        }
+    }
+
+    fn ok(&self) -> bool {
+        self.failures.is_empty() && self.observed_warnings == self.expected_warnings
+    }
+
+    fn parity(&self) -> bool {
+        self.ok() && self.observed_warnings == 0
+    }
+}
+
+fn write_matrix_section(markdown: &mut String, title: &str, report: &MatrixReport) {
+    writeln!(markdown, "### {title}").unwrap();
+    writeln!(markdown).unwrap();
+    write!(markdown, "| from \\ to |").unwrap();
+    for format in &report.formats {
+        write!(markdown, " {format} |").unwrap();
+    }
+    writeln!(markdown).unwrap();
+    write!(markdown, "| --- |").unwrap();
+    for _ in &report.formats {
+        write!(markdown, " --- |").unwrap();
+    }
+    writeln!(markdown).unwrap();
+    for (source, row) in report.formats.iter().zip(&report.cells) {
+        write!(markdown, "| {source} |").unwrap();
+        for cell in row {
+            write!(markdown, " {} |", cell_summary(cell)).unwrap();
+        }
+        writeln!(markdown).unwrap();
+    }
+}
+
+fn cell_summary(cell: &Cell) -> String {
+    let icon = if cell.parity() {
+        "🟢"
+    } else if cell.ok() {
+        "🟡"
+    } else {
+        "🔴"
+    };
+    let status = if !cell.failures.is_empty() {
+        "failed"
+    } else if cell.observed_warnings != cell.expected_warnings {
+        "warning drift"
+    } else if cell.observed_warnings == 0 {
+        "parity"
+    } else {
+        "expected warnings"
+    };
+    format!(
+        "{icon} {}/{} warn<br>{status}<br>{} cases",
+        cell.observed_warnings, cell.expected_warnings, cell.cases
+    )
+}
+
+#[derive(Clone, Copy)]
+struct TransmissionFormat {
+    name: &'static str,
+    token: &'static str,
+    target: TargetFormat,
+}
+
+const TRANSMISSION_FORMATS: [TransmissionFormat; 8] = [
+    TransmissionFormat {
+        name: "MATPOWER",
+        token: "matpower",
+        target: TargetFormat::Matpower,
+    },
+    TransmissionFormat {
+        name: "PowerIO JSON",
+        token: "powerio-json",
+        target: TargetFormat::PowerioJson,
+    },
+    TransmissionFormat {
+        name: "PowerModels JSON",
+        token: "powermodels-json",
+        target: TargetFormat::PowerModelsJson,
+    },
+    TransmissionFormat {
+        name: "PSS/E",
+        token: "psse",
+        target: TargetFormat::Psse { rev: 33 },
+    },
+    TransmissionFormat {
+        name: "PowerWorld",
+        token: "powerworld",
+        target: TargetFormat::PowerWorld,
+    },
+    TransmissionFormat {
+        name: "egret JSON",
+        token: "egret-json",
+        target: TargetFormat::EgretJson,
+    },
+    TransmissionFormat {
+        name: "pandapower JSON",
+        token: "pandapower-json",
+        target: TargetFormat::PandapowerJson,
+    },
+    TransmissionFormat {
+        name: "PSLF",
+        token: "pslf",
+        target: TargetFormat::Pslf,
+    },
+];
+
+const TRANSMISSION_EXPECTED_WARNINGS: [[usize; 8]; 8] = [
+    [0, 0, 0, 8, 8, 0, 5, 11],
+    [6, 0, 1, 14, 14, 1, 11, 16],
+    [6, 0, 0, 14, 14, 1, 11, 16],
+    [13, 0, 1, 0, 1, 1, 3, 10],
+    [12, 0, 0, 0, 0, 0, 2, 5],
+    [0, 0, 0, 8, 8, 0, 5, 11],
+    [6, 0, 0, 11, 11, 5, 0, 11],
+    [17, 4, 5, 5, 5, 5, 7, 8],
+];
+
+const TRANSMISSION_CASES: [(&str, &str); 6] = [
+    ("case9", "case9.m"),
+    ("case14", "case14.m"),
+    ("case30", "case30.m"),
+    ("dcline", "t_case9_dcline.m"),
+    ("out of service", "t_case9_oos.m"),
+    ("PGLib 5", "pglib/pglib_opf_case5_pjm.m"),
+];
+
+struct TransmissionPayload {
+    label: &'static str,
+    network: Network,
+    parse_warnings: Vec<String>,
+    core: TransmissionCore,
+}
+
+#[derive(Debug, PartialEq, Eq)]
+struct TransmissionCore {
+    buses: usize,
+    branches: usize,
+    generators: usize,
+    loads: usize,
+    shunts: usize,
+    load_p: i64,
+    load_q: i64,
+    gen_p: i64,
+    base_mva: i64,
+}
+
+fn run_transmission_matrix() -> MatrixReport {
+    let formats = TRANSMISSION_FORMATS.iter().map(|fmt| fmt.name).collect();
+    let mut cells = Vec::new();
+    let mut failures = Vec::new();
+
+    for (source_idx, source) in TRANSMISSION_FORMATS.iter().enumerate() {
+        let payloads = transmission_payloads(*source);
+        let mut row = Vec::new();
+        for (target_idx, target) in TRANSMISSION_FORMATS.iter().enumerate() {
+            let mut cell = Cell::new(TRANSMISSION_EXPECTED_WARNINGS[source_idx][target_idx]);
+            match &payloads {
+                Ok(payloads) => {
+                    for payload in payloads {
+                        cell.cases += 1;
+                        cell.observed_warnings += payload.parse_warnings.len();
+                        validate_transmission_pair(payload, *target, &mut cell);
+                    }
+                }
+                Err(err) => cell.failures.push(err.clone()),
+            }
+            if !cell.ok() {
+                failures.push(format!(
+                    "transmission {} -> {}: observed {} warnings, expected {}; {}",
+                    source.name,
+                    target.name,
+                    cell.observed_warnings,
+                    cell.expected_warnings,
+                    cell.failures.join("; ")
+                ));
+            }
+            row.push(cell);
+        }
+        cells.push(row);
+    }
+
+    MatrixReport {
+        formats,
+        cells,
+        failures,
+    }
+}
+
+fn transmission_payloads(format: TransmissionFormat) -> Result<Vec<TransmissionPayload>, String> {
+    TRANSMISSION_CASES
+        .iter()
+        .map(|(label, rel)| {
+            let mut base =
+                parse_matpower_file(data(rel)).map_err(|err| format!("parse {rel}: {err}"))?;
+            base.source = None;
+            let rendered = write_transmission_as(&base, format.target)
+                .map_err(|err| format!("write {rel} as {}: {err}", format.name))?;
+            let parsed = parse_transmission_str(&rendered.text, format.token)
+                .map_err(|err| format!("read generated {rel} as {}: {err}", format.name))?;
+            let core = transmission_core(&parsed.network);
+            Ok(TransmissionPayload {
+                label,
+                network: parsed.network,
+                parse_warnings: parsed.warnings,
+                core,
+            })
+        })
+        .collect()
+}
+
+fn validate_transmission_pair(
+    payload: &TransmissionPayload,
+    target: TransmissionFormat,
+    cell: &mut Cell,
+) {
+    match write_transmission_as(&payload.network, target.target) {
+        Ok(conversion) => {
+            cell.observed_warnings += conversion.warnings.len();
+            match parse_transmission_str(&conversion.text, target.token) {
+                Ok(parsed) => {
+                    cell.observed_warnings += parsed.warnings.len();
+                    let actual = transmission_core(&parsed.network);
+                    if actual != payload.core {
+                        cell.failures.push(format!(
+                            "{} core changed for {}: before {:?}, after {:?}",
+                            payload.label, target.name, payload.core, actual
+                        ));
+                    }
+                }
+                Err(err) => cell.failures.push(format!(
+                    "{} output did not parse as {}: {err}",
+                    payload.label, target.name
+                )),
+            }
+        }
+        Err(err) => cell.failures.push(format!(
+            "{} did not write as {}: {err}",
+            payload.label, target.name
+        )),
+    }
+}
+
+fn transmission_core(net: &Network) -> TransmissionCore {
+    let rounded = |x: f64| (x * 1e3).round() as i64;
+    TransmissionCore {
+        buses: net.buses.len(),
+        branches: net.branches.len(),
+        generators: net.generators.len(),
+        loads: net.loads.len(),
+        shunts: net.shunts.len(),
+        load_p: rounded(net.loads.iter().map(|load| load.p).sum()),
+        load_q: rounded(net.loads.iter().map(|load| load.q).sum()),
+        gen_p: rounded(net.generators.iter().map(|generator| generator.pg).sum()),
+        base_mva: rounded(net.base_mva),
+    }
+}
+
+fn data(rel: &str) -> PathBuf {
+    Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../tests/data")
+        .join(rel)
+}
+
+#[derive(Clone, Copy)]
+struct DistributionFormat {
+    name: &'static str,
+    token: &'static str,
+    target: DistTargetFormat,
+}
+
+const DISTRIBUTION_FORMATS: [DistributionFormat; 3] = [
+    DistributionFormat {
+        name: "DSS",
+        token: "dss",
+        target: DistTargetFormat::Dss,
+    },
+    DistributionFormat {
+        name: "BMOPF JSON",
+        token: "bmopf-json",
+        target: DistTargetFormat::BmopfJson,
+    },
+    DistributionFormat {
+        name: "PMD JSON",
+        token: "pmd-json",
+        target: DistTargetFormat::PmdJson,
+    },
+];
+
+const DISTRIBUTION_EXPECTED_WARNINGS: [[usize; 3]; 3] = [[0, 152, 84], [1, 0, 0], [22, 117, 0]];
+
+const DISTRIBUTION_CASES: [(&str, &str, DistributionFormat); 7] = [
+    (
+        "single phase transformer",
+        "dist/micro/xfmr_single_phase.dss",
+        DISTRIBUTION_FORMATS[0],
+    ),
+    (
+        "center tap transformer",
+        "dist/micro/xfmr_center_tap.dss",
+        DISTRIBUTION_FORMATS[0],
+    ),
+    (
+        "switch states",
+        "dist/micro/switch.dss",
+        DISTRIBUTION_FORMATS[0],
+    ),
+    (
+        "four wire linecode",
+        "dist/micro/fourwire_linecode.dss",
+        DISTRIBUTION_FORMATS[0],
+    ),
+    (
+        "ten conductor linecode",
+        "dist/micro/linecode_10x10.dss",
+        DISTRIBUTION_FORMATS[0],
+    ),
+    (
+        "BMOPF IEEE 13",
+        "dist/bmopf/example_ieee13.json",
+        DISTRIBUTION_FORMATS[1],
+    ),
+    (
+        "PMD four wire",
+        "dist/pmd/fourwire_linecode.json",
+        DISTRIBUTION_FORMATS[2],
+    ),
+];
+
+struct DistributionPayload {
+    label: &'static str,
+    network: DistNetwork,
+    parse_warnings: Vec<String>,
+    core: DistributionCore,
+}
+
+#[derive(Debug, PartialEq, Eq)]
+struct DistributionCore {
+    buses: usize,
+    loads: usize,
+    generators: usize,
+    shunts: usize,
+    load_p: i64,
+    load_q: i64,
+}
+
+fn run_distribution_matrix() -> MatrixReport {
+    let formats = DISTRIBUTION_FORMATS.iter().map(|fmt| fmt.name).collect();
+    let mut cells = Vec::new();
+    let mut failures = Vec::new();
+
+    for (source_idx, source) in DISTRIBUTION_FORMATS.iter().enumerate() {
+        let payloads = distribution_payloads(*source);
+        let mut row = Vec::new();
+        for (target_idx, target) in DISTRIBUTION_FORMATS.iter().enumerate() {
+            let mut cell = Cell::new(DISTRIBUTION_EXPECTED_WARNINGS[source_idx][target_idx]);
+            match &payloads {
+                Ok(payloads) => {
+                    for payload in payloads {
+                        cell.cases += 1;
+                        cell.observed_warnings += payload.parse_warnings.len();
+                        validate_distribution_pair(payload, *target, &mut cell);
+                    }
+                }
+                Err(err) => cell.failures.push(err.clone()),
+            }
+            if !cell.ok() {
+                failures.push(format!(
+                    "distribution {} -> {}: observed {} warnings, expected {}; {}",
+                    source.name,
+                    target.name,
+                    cell.observed_warnings,
+                    cell.expected_warnings,
+                    cell.failures.join("; ")
+                ));
+            }
+            row.push(cell);
+        }
+        cells.push(row);
+    }
+
+    MatrixReport {
+        formats,
+        cells,
+        failures,
+    }
+}
+
+fn distribution_payloads(format: DistributionFormat) -> Result<Vec<DistributionPayload>, String> {
+    DISTRIBUTION_CASES
+        .iter()
+        .map(|(label, rel, native_format)| {
+            let mut base = powerio_dist::parse_file(data(rel), Some(native_format.token))
+                .map_err(|err| format!("parse {rel}: {err}"))?;
+            base.source = None;
+            base.source_format = None;
+            let rendered = base.to_format(format.target);
+            let mut parsed = parse_distribution_text(&rendered.text, format)
+                .map_err(|err| format!("read generated {rel} as {}: {err}", format.name))?;
+            let warnings = std::mem::take(&mut parsed.warnings);
+            let core = distribution_core(&parsed);
+            Ok(DistributionPayload {
+                label,
+                network: parsed,
+                parse_warnings: warnings,
+                core,
+            })
+        })
+        .collect()
+}
+
+fn validate_distribution_pair(
+    payload: &DistributionPayload,
+    target: DistributionFormat,
+    cell: &mut Cell,
+) {
+    let conversion = payload.network.to_format(target.target);
+    cell.observed_warnings += conversion.warnings.len();
+    match parse_distribution_text(&conversion.text, target) {
+        Ok(mut parsed) => {
+            cell.observed_warnings += parsed.warnings.len();
+            parsed.warnings.clear();
+            let actual = distribution_core(&parsed);
+            if actual != payload.core {
+                cell.failures.push(format!(
+                    "{} core changed for {}: before {:?}, after {:?}",
+                    payload.label, target.name, payload.core, actual
+                ));
+            }
+        }
+        Err(err) => cell.failures.push(format!(
+            "{} output did not parse as {}: {err}",
+            payload.label, target.name
+        )),
+    }
+}
+
+fn parse_distribution_text(
+    text: &str,
+    format: DistributionFormat,
+) -> powerio_dist::Result<DistNetwork> {
+    if format.target != DistTargetFormat::Dss {
+        return powerio_dist::parse_str(text, format.token);
+    }
+
+    let dir = std::env::temp_dir().join("powerio-conversion-matrix");
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join(format!(
+        "case-{}.dss",
+        DSS_TEMP_COUNTER.fetch_add(1, Ordering::Relaxed)
+    ));
+    std::fs::write(&path, text).unwrap();
+    let parsed = powerio_dist::parse_file(&path, Some(format.token));
+    let _ = std::fs::remove_file(path);
+    parsed
+}
+
+fn distribution_core(net: &DistNetwork) -> DistributionCore {
+    let rounded = |x: f64| (x * 1e3).round() as i64;
+    DistributionCore {
+        buses: net.buses.len(),
+        loads: net.loads.len(),
+        generators: net.generators.len(),
+        shunts: net.shunts.len(),
+        load_p: rounded(
+            net.loads
+                .iter()
+                .flat_map(|load| load.p_nom.iter())
+                .sum::<f64>(),
+        ),
+        load_q: rounded(
+            net.loads
+                .iter()
+                .flat_map(|load| load.q_nom.iter())
+                .sum::<f64>(),
+        ),
+    }
+}
