@@ -6,8 +6,8 @@ use std::sync::Arc;
 
 use powerio_dist::dss::{parse_dss_file, parse_dss_str};
 use powerio_dist::{
-    Configuration, DistNetwork, DistTransformer, Winding, WindingConn, parse_bmopf_file,
-    parse_bmopf_str, write_bmopf_json, write_dss,
+    Configuration, DistLineCode, DistNetwork, DistTransformer, Winding, WindingConn,
+    parse_bmopf_file, parse_bmopf_str, write_bmopf_json, write_dss,
 };
 
 fn fixture(rel: &str) -> PathBuf {
@@ -992,6 +992,43 @@ fn x_only_linecode_sizes_from_x_and_keeps_required_keys() {
     assert_eq!(errors(&schema_validator(), &out.text), Vec::<String>::new());
     let doc: serde_json::Value = serde_json::from_str(&out.text).unwrap();
     assert_eq!(doc["linecode"]["lc"]["R_series_1_1"], 0.0);
+}
+
+#[test]
+fn linecode_constructor_sizes_x_only_matrix_from_x() {
+    let lc = DistLineCode::new("lc", Vec::new(), vec![vec![0.4]]);
+    assert_eq!(lc.n_conductors, 1);
+    assert_eq!(lc.r_series, Vec::<Vec<f64>>::new());
+    assert_eq!(lc.g_from, vec![vec![0.0]]);
+    assert_eq!(lc.b_from, vec![vec![0.0]]);
+    assert_eq!(lc.g_to, vec![vec![0.0]]);
+    assert_eq!(lc.b_to, vec![vec![0.0]]);
+
+    let mut net = DistNetwork::default();
+    net.linecodes.push(lc);
+    let out = write_bmopf_json(&net);
+    assert_eq!(errors(&schema_validator(), &out.text), Vec::<String>::new());
+    let doc: serde_json::Value = serde_json::from_str(&out.text).unwrap();
+    assert_eq!(doc["linecode"]["lc"]["R_series_1_1"], 0.0);
+    assert_eq!(doc["linecode"]["lc"]["X_series_1_1"], 0.4);
+
+    let again = parse_bmopf_str(&out.text).unwrap();
+    let back = again.linecode("lc").unwrap();
+    assert_eq!(back.n_conductors, 1);
+    assert_eq!(back.r_series, vec![vec![0.0]]);
+    assert_eq!(back.x_series, vec![vec![0.4]]);
+}
+
+#[test]
+fn linecode_constructor_sizes_from_widest_series_matrix() {
+    let lc = DistLineCode::new("lc", vec![vec![0.2]], vec![vec![0.4, 0.1], vec![0.1, 0.4]]);
+    assert_eq!(lc.n_conductors, 2);
+    assert_eq!(lc.r_series, vec![vec![0.2]]);
+    assert_eq!(lc.x_series, vec![vec![0.4, 0.1], vec![0.1, 0.4]]);
+    assert_eq!(lc.g_from, vec![vec![0.0; 2]; 2]);
+    assert_eq!(lc.b_from, vec![vec![0.0; 2]; 2]);
+    assert_eq!(lc.g_to, vec![vec![0.0; 2]; 2]);
+    assert_eq!(lc.b_to, vec![vec![0.0; 2]; 2]);
 }
 
 #[test]

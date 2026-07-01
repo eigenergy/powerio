@@ -123,13 +123,25 @@ pub struct GenCost {
 }
 
 impl GenCost {
+    /// Build a cost row from the values carried after `ncost`.
+    ///
+    /// Polynomial rows (`model == 2`) store `ncost` coefficients. Piecewise
+    /// linear rows (`model == 1`) store flattened `(x, y)` breakpoint pairs, so
+    /// `ncost` is half the coefficient count. Use [`GenCost::with_ncost`] for
+    /// malformed source rows or callers that need to preserve an explicit
+    /// `ncost`.
     #[must_use]
     pub fn new(model: u8, startup: f64, shutdown: f64, coeffs: Vec<f64>) -> Self {
+        let ncost = if model == 1 {
+            coeffs.len() / 2
+        } else {
+            coeffs.len()
+        };
         Self {
             model,
             startup,
             shutdown,
-            ncost: coeffs.len(),
+            ncost,
             coeffs,
         }
     }

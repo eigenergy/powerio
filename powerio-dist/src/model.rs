@@ -109,7 +109,7 @@ pub struct DistLineCode {
 impl DistLineCode {
     #[must_use]
     pub fn new(name: impl Into<String>, r_series: Mat, x_series: Mat) -> Self {
-        let n_conductors = r_series.len();
+        let n_conductors = r_series.len().max(x_series.len());
         Self {
             name: name.into(),
             n_conductors,
