@@ -4,6 +4,7 @@ on:
   pull_request:
 
 permissions:
+  actions: read
   contents: read
   issues: write
   pull-requests: write
@@ -11,6 +12,7 @@ permissions:
 env:
   CARGO_TERM_COLOR: always
   POWERIO_CONVERSION_MATRIX_REPORT: ${{ github.workspace }}/target/conversion-matrix-report.md
+  POWERIO_CONVERSION_MATRIX_DETAILS: ${{ github.workspace }}/target/conversion-matrix-warning-details.md
 
 jobs:
   report:
@@ -21,6 +23,13 @@ jobs:
     - uses: Swatinem/rust-cache@v2
     - name: Generate conversion matrix
       run: cargo test -p powerio-cli --test conversion_matrix_report -- --nocapture
+    - name: Upload warning details
+      if: always()
+      uses: actions/upload-artifact@v7
+      with:
+        name: conversion-matrix-warning-details
+        path: ${{ env.POWERIO_CONVERSION_MATRIX_DETAILS }}
+        if-no-files-found: ignore
     - name: Comment on PR
       if: always()
       uses: actions/github-script@v8
@@ -29,6 +38,7 @@ jobs:
           const fs = require("fs");
           const marker = "<!-- powerio-conversion-matrix-report -->";
           const reportPath = process.env.POWERIO_CONVERSION_MATRIX_REPORT;
+          const detailsPath = process.env.POWERIO_CONVERSION_MATRIX_DETAILS;
           let body;
           if (fs.existsSync(reportPath)) {
             body = fs.readFileSync(reportPath, "utf8");
@@ -38,6 +48,23 @@ jobs:
 
           const issue_number = context.payload.pull_request.number;
           const { owner, repo } = context.repo;
+          const runUrl = `${context.serverUrl}/${owner}/${repo}/actions/runs/${context.runId}`;
+          if (fs.existsSync(detailsPath)) {
+            let detailsUrl = runUrl;
+            const artifacts = await github.paginate(github.rest.actions.listWorkflowRunArtifacts, {
+              owner,
+              repo,
+              run_id: context.runId,
+              per_page: 100,
+            });
+            const detailsArtifact = artifacts.find((artifact) =>
+              artifact.name === "conversion-matrix-warning-details"
+            );
+            if (detailsArtifact) {
+              detailsUrl = `${runUrl}/artifacts/${detailsArtifact.id}`;
+            }
+            body += `\n\nFull warning details: [download \`conversion-matrix-warning-details\`](${detailsUrl}) for this workflow run.`;
+          }
           const comments = await github.paginate(github.rest.issues.listComments, {
             owner,
             repo,
