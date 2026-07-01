@@ -93,6 +93,13 @@ stored as its lower triangle with the `symmetric` header and 1-based indices
 (`io::mtx::write_mtx`). The `sensitivities` and `dcopf` CLI subcommands bundle
 the relevant family with a JSON manifest.
 
+The standard case solver property fixture lives at
+`powerio-matrix/tests/fixtures/solver_matrix_stats.json`. It records B',
+B'', and `ybus_imag` stats for `case9`, `case14`, `case30`, `case57`, and
+`case118`: `n`, `nnz`, min diagonal, M-matrix sign pattern, diagonal dominance
+margin, zero impedance skips, row sum checks, SPD checks, and a condition
+estimate when the solver input is SPD.
+
 `IndexedNetwork::to_petgraph` returns the network as an undirected
 [petgraph](https://docs.rs/petgraph) graph, one node per bus and one edge per
 in-service branch. The connectivity report and the radial check are built on
