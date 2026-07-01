@@ -406,7 +406,7 @@ fn item_uid(item: SectionItem<'_>, obj: &Map<String, Value>) -> Option<String> {
         .filter(|uid| !uid.is_empty())
 }
 
-fn uid_map<'a>(items: Vec<SectionItem<'a>>) -> HashMap<String, &'a Value> {
+fn uid_map(items: Vec<SectionItem<'_>>) -> HashMap<String, &Value> {
     let mut out = HashMap::new();
     for item in items {
         if let Some(obj) = item.value.as_object()
