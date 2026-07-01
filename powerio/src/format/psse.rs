@@ -149,11 +149,14 @@ pub fn write_psse(net: &Network) -> Conversion {
 /// Serialize `net` to PSS/E `.raw` at `rev` (33, 34, or 35).
 ///
 /// Revisions 34 and 35 add the expanded system-wide header with its
-/// end-of-system-wide-data marker, the named 12-rating branch record (the reader
-/// keys its branch layout off the header revision), and the load
-/// distributed-generation / load-type trailing columns. Any other `rev` falls
-/// back to the 33 layout. Same-format byte-exact echo still rides the retained
-/// source (see [`crate::write_as`]); this serializer is the cross-format path.
+/// end-of-system-wide-data marker, the named 12-rating branch record, the
+/// 12-rating transformer winding line (COD at 15, NODE after CONT), and the
+/// load distributed-generation / load-type trailing columns; 35 also inserts
+/// the generator NREG/BASLOD columns and the switched shunt ID/NREG columns
+/// with (S, N, B) step triples. The reader keys each layout off the header
+/// revision. Any other `rev` falls back to the 33 layout. Same-format
+/// byte-exact echo still rides the retained source (see [`crate::write_as`]);
+/// this serializer is the cross-format path.
 #[must_use]
 // A flat serializer: one stanza per PSS/E record type; splitting it would add
 // indirection without clarity.
@@ -354,9 +357,11 @@ pub fn write_psse_rev(net: &Network, rev: u32) -> Conversion {
         let id = positional_id(g.bus, &mut gen_ids);
         // IREG (field 7): the remote regulated bus, or 0 for own-terminal control.
         let ireg = g.regulated_bus.map_or(0, |b| b.0);
+        // v35 inserts NREG after IREG and BASLOD after PB; v34 keeps the v33 layout.
+        let (nreg, baslod) = if rev >= 35 { (" 0,", " 0,") } else { ("", "") };
         let _ = writeln!(
             s,
-            "{}, '{id}', {}, {}, {}, {}, {}, {}, {}, 0, 1, 0, 0, 1, {}, 100, {}, {}, 1, 1",
+            "{}, '{id}', {}, {}, {}, {}, {}, {},{nreg} {}, 0, 1, 0, 0, 1, {}, 100, {}, {},{baslod} 1, 1",
             g.bus,
             num(g.pg),
             num(g.qg),
@@ -447,7 +452,12 @@ pub fn write_psse_rev(net: &Network, rev: u32) -> Conversion {
     }
     let _ = writeln!(s, "0 / END OF BRANCH DATA, BEGIN TRANSFORMER DATA");
 
-    for br in net.branches.iter().filter(|b| b.is_transformer()) {
+    for (branch_index, br) in net
+        .branches
+        .iter()
+        .enumerate()
+        .filter(|(_, b)| b.is_transformer())
+    {
         // 2-winding, 4-line record. CW=1 (turns ratio p.u.), CZ=1 (Z on system
         // base). Record 1 carries the full owner block (O1..O4,F1..F4) and the
         // VECGRP string: PSS/E v33 readers count a 2-winding transformer as a
@@ -477,19 +487,49 @@ pub fn write_psse_rev(net: &Network, rev: u32) -> Conversion {
             (c.tap_max, c.tap_min, c.band_max, c.band_min, c.ntp)
         });
         let _ = writeln!(s, "{}, {}, {}", num(br.r), num(br.x), num(sbase));
-        let _ = writeln!(
-            s,
-            "{}, 0, {}, {}, {}, {}, {cod}, {cont}, {}, {}, {}, {}, {ntp}, 0, 0, 0, 0",
-            num(br.effective_tap()),
-            num(br.shift),
-            num(br.rate_a),
-            num(br.rate_b),
-            num(br.rate_c),
-            num(rma),
-            num(rmi),
-            num(vma),
-            num(vmi)
-        );
+        if modern {
+            // v34+ winding line: twelve ratings (RATE4-RATE12 from extra rating
+            // sets), then COD, CONT, NODE, RMA, RMI, VMA, VMI, NTP, TAB, CR,
+            // CX, CNXA — COD at 15, matching the reader.
+            let extra_ratings = psse_extra_rating_values(br, branch_index, &mut warnings);
+            let _ = writeln!(
+                s,
+                "{}, 0, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, \
+                 {cod}, {cont}, 0, {}, {}, {}, {}, {ntp}, 0, 0, 0, 0",
+                num(br.effective_tap()),
+                num(br.shift),
+                num(br.rate_a),
+                num(br.rate_b),
+                num(br.rate_c),
+                num(extra_ratings[0]),
+                num(extra_ratings[1]),
+                num(extra_ratings[2]),
+                num(extra_ratings[3]),
+                num(extra_ratings[4]),
+                num(extra_ratings[5]),
+                num(extra_ratings[6]),
+                num(extra_ratings[7]),
+                num(extra_ratings[8]),
+                num(rma),
+                num(rmi),
+                num(vma),
+                num(vmi)
+            );
+        } else {
+            let _ = writeln!(
+                s,
+                "{}, 0, {}, {}, {}, {}, {cod}, {cont}, {}, {}, {}, {}, {ntp}, 0, 0, 0, 0",
+                num(br.effective_tap()),
+                num(br.shift),
+                num(br.rate_a),
+                num(br.rate_b),
+                num(br.rate_c),
+                num(rma),
+                num(rmi),
+                num(vma),
+                num(vmi)
+            );
+        }
         let _ = writeln!(s, "1.0, 0");
     }
 
@@ -532,16 +572,32 @@ pub fn write_psse_rev(net: &Network, rev: u32) -> Conversion {
             num(t.star_va)
         );
         for w in &t.windings {
-            let _ = writeln!(
-                s,
-                "{}, {}, {}, {}, {}, {}, 0, 0, 1.1, 0.9, 1.1, 0.9, 33, 0, 0, 0, 0",
-                num(w.tap),
-                num(w.nominal_kv),
-                num(w.shift),
-                num(w.rate_a),
-                num(w.rate_b),
-                num(w.rate_c)
-            );
+            if modern {
+                // v34+ winding layout (twelve ratings, NODE after CONT); the
+                // Winding model carries three ratings, so RATE4-RATE12 are 0.
+                let _ = writeln!(
+                    s,
+                    "{}, {}, {}, {}, {}, {}, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, \
+                     0, 0, 0, 1.1, 0.9, 1.1, 0.9, 33, 0, 0, 0, 0",
+                    num(w.tap),
+                    num(w.nominal_kv),
+                    num(w.shift),
+                    num(w.rate_a),
+                    num(w.rate_b),
+                    num(w.rate_c)
+                );
+            } else {
+                let _ = writeln!(
+                    s,
+                    "{}, {}, {}, {}, {}, {}, 0, 0, 1.1, 0.9, 1.1, 0.9, 33, 0, 0, 0, 0",
+                    num(w.tap),
+                    num(w.nominal_kv),
+                    num(w.shift),
+                    num(w.rate_a),
+                    num(w.rate_b),
+                    num(w.rate_c)
+                );
+            }
         }
     }
     let _ = writeln!(s, "0 / END OF TRANSFORMER DATA, BEGIN AREA DATA");
@@ -602,9 +658,10 @@ pub fn write_psse_rev(net: &Network, rev: u32) -> Conversion {
         let _ = writeln!(s, "{line}");
     }
     // Switched shunts: BINIT becomes the susceptance, the control record the rest.
-    // v35 inserts a quoted shunt ID at field 1; the reader reads it back at that
-    // same offset (o = 1), so the writer must emit it or every later field is read
-    // one column off. v33/34 have no ID column.
+    // v35 inserts a quoted shunt ID at field 1 and NREG after SWREG, and its step
+    // blocks are (S, N, B) triples with a leading per-block status; v33/34 have
+    // neither and use (N, B) pairs. The writer must match the reader's layout at
+    // each revision or every later field is read columns off.
     let mut sw_ids: BTreeMap<BusId, BTreeSet<String>> = BTreeMap::new();
     for sh in net.shunts.iter().filter(|s| s.control.is_some()) {
         let Some(c) = sh.control.as_ref() else {
@@ -613,25 +670,40 @@ pub fn write_psse_rev(net: &Network, rev: u32) -> Conversion {
         let swrem = c.control_bus.map_or(0, |b| b.0);
         let mut blocks = String::new();
         for blk in &c.blocks {
-            let _ = write!(blocks, ", {}, {}", blk.steps, num(blk.b));
+            if rev >= 35 {
+                // The neutral model has no per-block status: every block is in
+                // service (S = 1).
+                let _ = write!(blocks, ", 1, {}, {}", blk.steps, num(blk.b));
+            } else {
+                let _ = write!(blocks, ", {}, {}", blk.steps, num(blk.b));
+            }
         }
-        let id_field = if rev >= 35 {
+        if rev >= 35 {
             let id = quoted_device_id(&sh.extras, sh.bus, &mut sw_ids, &mut sanitized_quoted);
-            format!(", '{id}'")
+            let _ = writeln!(
+                s,
+                "{}, '{id}', {}, 0, {}, {}, {}, {swrem}, 0, {}, '', {}{blocks}",
+                sh.bus,
+                mode_to_modsw(c.mode),
+                i32::from(sh.in_service),
+                num(c.vhigh),
+                num(c.vlow),
+                num(c.rmpct),
+                num(sh.b)
+            );
         } else {
-            String::new()
-        };
-        let _ = writeln!(
-            s,
-            "{}{id_field}, {}, 0, {}, {}, {}, {swrem}, {}, '', {}{blocks}",
-            sh.bus,
-            mode_to_modsw(c.mode),
-            i32::from(sh.in_service),
-            num(c.vhigh),
-            num(c.vlow),
-            num(c.rmpct),
-            num(sh.b)
-        );
+            let _ = writeln!(
+                s,
+                "{}, {}, 0, {}, {}, {}, {swrem}, {}, '', {}{blocks}",
+                sh.bus,
+                mode_to_modsw(c.mode),
+                i32::from(sh.in_service),
+                num(c.vhigh),
+                num(c.vlow),
+                num(c.rmpct),
+                num(sh.b)
+            );
+        }
     }
     for line in &EMPTY_SECTIONS[10..] {
         let _ = writeln!(s, "{line}");
@@ -926,11 +998,14 @@ pub(crate) fn parse_psse_source(
             Section::Load => loads.push(read_load(&f, raw_rev, warnings)?),
             Section::FixedShunt => shunts.push(read_shunt(&f)?),
             Section::SwitchedShunt => shunts.push(read_switched_shunt(&f, raw_rev)?),
-            Section::Generator => generators.push(read_gen(&f)?),
+            Section::Generator => generators.push(read_gen(&f, raw_rev)?),
             Section::Branch => branches.push(read_branch(&f, raw_rev)?),
             Section::Transformer => {
                 // 2-winding = 4 lines (K field == 0); 3-winding = 5 lines.
-                let two_winding = f.get(2).and_then(|x| x.parse::<i64>().ok()) == Some(0);
+                // int_at parses through f64: v34/35 exporters write K in float
+                // form ("0.00"), and an i64 parse would misclassify the record
+                // as 3-winding and desynchronize the section.
+                let two_winding = int_at(&f, 2, 0)? == 0;
                 let l2 = next_continuation_line(
                     &mut lines,
                     "transformer",
@@ -955,6 +1030,7 @@ pub(crate) fn parse_psse_source(
                         &fields(l2),
                         &fields(l3),
                         &fields(l4),
+                        raw_rev,
                         base_mva,
                         &bus_base_kv,
                         warnings,
@@ -1634,19 +1710,24 @@ fn read_shunt(f: &[String]) -> Result<Shunt> {
 
 fn read_switched_shunt(f: &[String], rev: u32) -> Result<Shunt> {
     // v33/34: I, MODSW, ADJM, STAT, VSWHI, VSWLO, SWREM, RMPCT, RMIDNT, BINIT(9),
-    // N1, B1, ... v35 inserts a quoted shunt ID at field 1, shifting the rest by
-    // one. BINIT becomes the shunt `b` (gs = 0); the mode, voltage band, regulated
-    // bus, RMPCT, and (Ni, Bi) step blocks ride on the switching-control record.
+    // then (Ni, Bi) step pairs. v35: I, ID, MODSW, ADJM, ST, VSWHI, VSWLO,
+    // SWREG, NREG, RMPCT, RMIDNT, BINIT(11), then (Si, Ni, Bi) triples — the ID
+    // shifts everything by one and NREG shifts the fields after SWREG by another.
+    // BINIT becomes the shunt `b` (gs = 0); the mode, voltage band, regulated
+    // bus, RMPCT, and step blocks ride on the switching-control record.
     let o = usize::from(rev >= 35);
+    let o2 = 2 * o;
     let bus = id_at(f, 0, 0)?;
     let swrem = id_at(f, 6 + o, 0)?;
-    // Step blocks are (count, susceptance) pairs from BINIT+1; stop at the first
-    // empty (padding) block or the end of the record.
+    // Step blocks follow BINIT; stop at the first empty (padding) block or the
+    // end of the record. The v35 per-block status Si leads each triple; the
+    // neutral ShuntBlock carries no block status, so keep the block either way.
     let mut blocks = Vec::new();
-    let mut i = 10 + o;
-    while i + 1 < f.len() {
-        let steps = int_at(f, i, 0)?;
-        let b = num_at(f, i + 1, 0.0)?;
+    let mut i = 10 + o2;
+    let stride = 2 + o;
+    while i + stride <= f.len() {
+        let steps = int_at(f, i + o, 0)?;
+        let b = num_at(f, i + o + 1, 0.0)?;
         if steps == 0 && b == 0.0 {
             break;
         }
@@ -1654,20 +1735,20 @@ fn read_switched_shunt(f: &[String], rev: u32) -> Result<Shunt> {
             steps: steps.clamp(0, i64::from(u32::MAX)) as u32,
             b,
         });
-        i += 2;
+        i += stride;
     }
     let control = SwitchedShuntControl {
         mode: modsw_to_mode(int_at(f, 1 + o, 1)?),
         vhigh: num_at(f, 4 + o, 0.0)?,
         vlow: num_at(f, 5 + o, 0.0)?,
         control_bus: (swrem != 0 && swrem != bus).then_some(BusId(swrem)),
-        rmpct: num_at(f, 7 + o, 100.0)?,
+        rmpct: num_at(f, 7 + o2, 100.0)?,
         blocks,
     };
     Ok(Shunt {
         bus: BusId(bus),
         g: 0.0,
-        b: num_at(f, 9 + o, 0.0)?,
+        b: num_at(f, 9 + o2, 0.0)?,
         in_service: on_at(f, 3 + o, true)?,
         control: Some(control),
         // Keep the v35 shunt ID so it survives a round trip.
@@ -1713,8 +1794,11 @@ fn read_area(f: &[String]) -> Result<Area> {
     })
 }
 
-fn read_gen(f: &[String]) -> Result<Generator> {
-    // I, ID, PG, QG, QT, QB, VS, IREG, MBASE, ..., STAT(14), ..., PT(16), PB(17)
+fn read_gen(f: &[String], raw_rev: u32) -> Result<Generator> {
+    // v33/34: I, ID, PG, QG, QT, QB, VS, IREG, MBASE(8), ..., STAT(14), ...,
+    // PT(16), PB(17). v35 inserts NREG after IREG (and BASLOD after PB),
+    // shifting MBASE through PB by one; v34 keeps the v33 layout.
+    let o = usize::from(raw_rev >= 35);
     let bus = id_at(f, 0, 0)?;
     // IREG names a remote regulated bus; 0 (or the generator's own bus) means it
     // regulates its own terminal, which the neutral model leaves as `None`.
@@ -1726,10 +1810,10 @@ fn read_gen(f: &[String]) -> Result<Generator> {
         qmax: num_at(f, 4, 0.0)?,
         qmin: num_at(f, 5, 0.0)?,
         vg: num_at(f, 6, 1.0)?,
-        mbase: num_at(f, 8, 100.0)?,
-        in_service: on_at(f, 14, true)?,
-        pmax: num_at(f, 16, 0.0)?,
-        pmin: num_at(f, 17, 0.0)?,
+        mbase: num_at(f, 8 + o, 100.0)?,
+        in_service: on_at(f, 14 + o, true)?,
+        pmax: num_at(f, 16 + o, 0.0)?,
+        pmin: num_at(f, 17 + o, 0.0)?,
         cost: None,
         caps: Default::default(),
         regulated_bus: (ireg != 0 && ireg != bus).then_some(BusId(ireg)),
@@ -1781,19 +1865,24 @@ fn read_branch(f: &[String], raw_rev: u32) -> Result<Branch> {
     })
 }
 
+#[expect(clippy::too_many_arguments)]
 fn read_transformer(
     l1: &[String],
     l2: &[String],
     l3: &[String],
     l4: &[String],
+    raw_rev: u32,
     system_base: f64,
     bus_base_kv: &BTreeMap<BusId, f64>,
     warnings: &mut Vec<String>,
 ) -> Result<Branch> {
     // l1: I, J, K, CKT, CW, CZ, CM, MAG1, MAG2, NMETR, NAME, STAT(11)
     // l2: R1-2, X1-2, SBASE1-2
-    // l3: WINDV1, NOMV1, ANG1, RATA1, RATB1, RATC1, COD1, CONT1, RMA1, RMI1,
-    //     VMA1, VMI1, NTP1, ...
+    // l3 at v33: WINDV1, NOMV1, ANG1, RATA1, RATB1, RATC1, COD1(6), CONT1,
+    //     RMA1, RMI1, VMA1, VMI1, NTP1(12), ...
+    // v34/35 widen the winding line to twelve ratings (RATE1..3 succeed
+    // RATA/B/C in place) and insert NODE after CONT: COD1 lands at 15, CONT1
+    // at 16, and RMA1..NTP1 at 18..22.
     // A nonzero control code COD1 marks a regulating winding; capture its limits
     // and regulated bus, else leave the branch's control unset.
     let (cw, cz) = transformer_basis_codes(l1)?;
@@ -1812,18 +1901,20 @@ fn read_transformer(
         warnings,
     );
     let tap = two_winding_tap(l1, l3, l4, from, to, cw, bus_base_kv, warnings)?;
-    let cod = int_at(l3, 6, 0)?;
+    let modern = raw_rev >= 34;
+    let (cod_i, cont_i, rma_i) = if modern { (15, 16, 18) } else { (6, 7, 8) };
+    let cod = int_at(l3, cod_i, 0)?;
     let control = (cod != 0)
         .then(|| -> Result<TransformerControl> {
-            let cont = id_at(l3, 7, 0)?;
+            let cont = id_at(l3, cont_i, 0)?;
             Ok(TransformerControl {
                 mode: cod_to_mode(cod),
                 controlled_bus: (cont != 0).then_some(BusId(cont)),
-                tap_max: num_at(l3, 8, 1.1)?,
-                tap_min: num_at(l3, 9, 0.9)?,
-                band_max: num_at(l3, 10, 1.1)?,
-                band_min: num_at(l3, 11, 0.9)?,
-                ntp: int_at(l3, 12, 33)?.clamp(0, i64::from(u32::MAX)) as u32,
+                tap_max: num_at(l3, rma_i, 1.1)?,
+                tap_min: num_at(l3, rma_i + 1, 0.9)?,
+                band_max: num_at(l3, rma_i + 2, 1.1)?,
+                band_min: num_at(l3, rma_i + 3, 0.9)?,
+                ntp: int_at(l3, rma_i + 4, 33)?.clamp(0, i64::from(u32::MAX)) as u32,
                 mva_base: sbase,
             })
         })
@@ -1853,7 +1944,7 @@ fn read_transformer(
         rate_a: num_at(l3, 3, 0.0)?,
         rate_b: num_at(l3, 4, 0.0)?,
         rate_c: num_at(l3, 5, 0.0)?,
-        rating_sets: Vec::new(),
+        rating_sets: read_extra_branch_ratings(l3, 3, modern)?,
         current_ratings: None,
         tap,
         shift: num_at(l3, 2, 0.0)?,
@@ -2826,6 +2917,56 @@ Q
     }
 
     #[test]
+    fn v34_transformer_reads_float_k_and_modern_winding_columns() {
+        // v34/35 exporters write K in float form: "0.00" must classify the
+        // record as 2-winding (4 lines), or the reader consumes a fifth line and
+        // desynchronizes every later section. The winding line uses the v34
+        // layout (twelve ratings, NODE after CONT), putting COD at 15 and
+        // RMA..NTP at 18..22.
+        let raw = r"0, 100.00, 34, 0, 0, 60.00 / synthetic v34 export
+CASE
+COMMENT
+0 / END OF SYSTEM-WIDE DATA, BEGIN BUS DATA
+1,'B1          ', 230.0,3,1,1,1,1.0,0.0,1.1,0.9,1.1,0.9
+2,'B2          ', 18.0,2,1,1,1,1.0,0.0,1.1,0.9,1.1,0.9
+0 / END OF BUS DATA, BEGIN LOAD DATA
+0 / END OF LOAD DATA, BEGIN FIXED SHUNT DATA
+0 / END OF FIXED SHUNT DATA, BEGIN GENERATOR DATA
+0 / END OF GENERATOR DATA, BEGIN BRANCH DATA
+0 / END OF BRANCH DATA, BEGIN TRANSFORMER DATA
+1, 2, 0.00, '1', 1, 1, 1, 0.0, 0.0, 2, 'T1          ', 1, 1, 1.0, 0, 1, 0, 1, 0, 1, '            '
+0.01, 0.10, 100.0
+1.05, 0.0, 0.0, 100.0, 90.0, 80.0, 70.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1, 2, 0, 1.08, 0.92, 1.05, 0.98, 17, 0, 0, 0, 0
+1.0, 0.0
+0 / END OF TRANSFORMER DATA, BEGIN AREA DATA
+1, 1, 0.0, 0.0, 'AREA        '
+Q
+";
+        let net = parse_psse(raw).unwrap();
+        assert_eq!(net.branches.len(), 1, "K = 0.00 is a 2-winding record");
+        assert!(net.transformers_3w.is_empty());
+        assert_eq!(
+            net.areas.len(),
+            1,
+            "the section after the transformer parsed"
+        );
+        let br = &net.branches[0];
+        close(br.tap, 1.05);
+        close(br.rate_a, 100.0);
+        assert_eq!(br.rating_sets.len(), 1);
+        assert_eq!(br.rating_sets[0].name, "RATE4");
+        close(br.rating_sets[0].rate_mva, 70.0);
+        let c = br.control.as_ref().expect("COD at 15 marks the control");
+        assert_eq!(c.mode, TransformerControlMode::Voltage);
+        assert_eq!(c.controlled_bus, Some(BusId(2)));
+        close(c.tap_max, 1.08);
+        close(c.tap_min, 0.92);
+        close(c.band_max, 1.05);
+        close(c.band_min, 0.98);
+        assert_eq!(c.ntp, 17);
+    }
+
+    #[test]
     fn v34_warns_when_custom_rating_name_is_emitted_as_rate_slot() {
         let mut net = Network::in_memory(
             "ratings",
@@ -3203,9 +3344,10 @@ Q
 
     #[test]
     fn v35_switched_shunt_write_round_trips_through_the_id_column() {
-        // v35 inserts a quoted shunt ID at field 1; the writer must emit it or the
-        // reader (o = 1 at rev >= 35) reads every later field one column off. Build
-        // a switched shunt, write the v35 layout, and confirm it reads back intact.
+        // v35 inserts a quoted shunt ID at field 1 and NREG after SWREG, and its
+        // step blocks are (S, N, B) triples; the writer must emit that layout or
+        // the reader misplaces every later field. Build a switched shunt, write
+        // the v35 layout, and confirm it reads back intact.
         let raw = r"0, 100.00, 33, 0, 0, 60.00 / x
 CASE
 COMMENT
@@ -3280,6 +3422,43 @@ Q
         assert_eq!(g3b.regulated_bus, Some(BusId(7)));
         let g1b = net2.generators.iter().find(|g| g.bus == BusId(1)).unwrap();
         assert_eq!(g1b.regulated_bus, None);
+    }
+
+    #[test]
+    fn reads_a_v35_generator_record_with_nreg() {
+        // v35 inserts NREG after IREG (and BASLOD after PB), shifting MBASE,
+        // STAT, PT, and PB by one. Reading at the v33 offsets takes NREG as
+        // MBASE and GTAP (1.0) as STAT, silently returning this out of service
+        // unit to service.
+        let raw = "0, 100.00, 35, 0, 0, 60.00 / x
+CASE
+COMMENT
+1,'B1          ', 230.0,3,1,1,1,1.0,0.0,1.1,0.9,1.1,0.9
+0 / END OF BUS DATA, BEGIN LOAD DATA
+0 / END OF LOAD DATA, BEGIN FIXED SHUNT DATA
+0 / END OF FIXED SHUNT DATA, BEGIN GENERATOR DATA
+1,'1 ',50.0,5.0,20.0,-10.0,1.0,0,2,900.0,0.0,1.0,0.0,0.0,1.0,0,100.0,80.0,10.0,0.0,1,1.0
+0 / END OF GENERATOR DATA, BEGIN BRANCH DATA
+0 / END OF BRANCH DATA, BEGIN TRANSFORMER DATA
+0 / END OF TRANSFORMER DATA, BEGIN AREA DATA
+Q
+";
+        let net = parse_psse(raw).unwrap();
+        assert_eq!(net.generators.len(), 1);
+        let g = &net.generators[0];
+        close(g.mbase, 900.0);
+        assert!(!g.in_service, "STAT = 0 at the shifted index");
+        close(g.pmax, 80.0);
+        close(g.pmin, 10.0);
+        assert_eq!(g.regulated_bus, None, "IREG stays at field 7");
+
+        // The v35 writer emits NREG and BASLOD, so the record reads back intact.
+        let net2 = parse_psse(&write_psse_rev(&net, 35).text).unwrap();
+        let g2 = &net2.generators[0];
+        close(g2.mbase, 900.0);
+        assert!(!g2.in_service);
+        close(g2.pmax, 80.0);
+        close(g2.pmin, 10.0);
     }
 
     #[test]
@@ -3413,13 +3592,15 @@ Q
 
     #[test]
     fn reads_a_v35_switched_shunt_with_an_id_column() {
-        // v35 inserts a quoted shunt ID at field 1, shifting every later column.
-        // Reading it at the v33 offsets misparses VSWLO as SWREM (regression: a
-        // real v35 case pointed switched-shunt control at a nonexistent bus 1).
+        // v35: I, ID, MODSW, ADJM, ST, VSWHI, VSWLO, SWREG, NREG, RMPCT, RMIDNT,
+        // BINIT, then (S, N, B) triples. Reading it at the v33 offsets misparses
+        // VSWLO as SWREM (regression: a real v35 case pointed switched-shunt
+        // control at a nonexistent bus 1) and NREG as RMPCT.
         let raw = "0, 100.00, 35, 0, 0, 60.00 / x
 CASE
 COMMENT
 5,'B5          ', 230.0,1,1,1,1,1.0,0.0,1.1,0.9,1.1,0.9
+7,'B7          ', 230.0,1,1,1,1,1.0,0.0,1.1,0.9,1.1,0.9
 0 / END OF BUS DATA, BEGIN LOAD DATA
 0 / END OF LOAD DATA, BEGIN FIXED SHUNT DATA
 0 / END OF FIXED SHUNT DATA, BEGIN GENERATOR DATA
@@ -3427,7 +3608,7 @@ COMMENT
 0 / END OF BRANCH DATA, BEGIN TRANSFORMER DATA
 0 / END OF TRANSFORMER DATA, BEGIN AREA DATA
 0 / END OF AREA DATA, BEGIN SWITCHED SHUNT DATA
-5,'1 ',2,0,1,1.05,0.95,0,100.0,'',19.0,2,25.0
+5,'1 ',2,0,1,1.05,0.95,7,3,80.0,'',19.0,1,2,25.0,0,1,50.0
 0 / END OF SWITCHED SHUNT DATA, BEGIN GNE DEVICE DATA
 Q
 ";
@@ -3436,17 +3617,23 @@ Q
         let sh = &net.shunts[0];
         assert_eq!(sh.bus, BusId(5));
         close(sh.b, 19.0);
+        assert!(sh.in_service);
         let c = sh.control.as_ref().expect("switched-shunt control parsed");
         assert_eq!(c.mode, SwitchedShuntMode::Discrete);
         close(c.vhigh, 1.05);
         close(c.vlow, 0.95);
         assert_eq!(
-            c.control_bus, None,
-            "SWREM 0 means own-bus control, not bus 1"
+            c.control_bus,
+            Some(BusId(7)),
+            "SWREG at field 7, not NREG at 8"
         );
-        assert_eq!(c.blocks.len(), 1);
+        close(c.rmpct, 80.0);
+        // Both (S, N, B) blocks are kept; the leading status column is skipped.
+        assert_eq!(c.blocks.len(), 2);
         assert_eq!(c.blocks[0].steps, 2);
         close(c.blocks[0].b, 25.0);
+        assert_eq!(c.blocks[1].steps, 1);
+        close(c.blocks[1].b, 50.0);
     }
 
     #[test]

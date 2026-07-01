@@ -76,7 +76,7 @@
 //! - Branch angle limits have no PowerWorld field at all; branches read
 //!   with the +-360 degree placeholder every reader uses for absence.
 
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
 use std::collections::hash_map::Entry;
 
@@ -97,6 +97,40 @@ const MVA_BASE: f64 = 100.0;
 /// enough for every observed record tail, small enough that a derailed parse
 /// fails fast instead of wandering.
 const RESYNC_WINDOW: usize = 1024;
+
+/// Cap on table-location probes across the whole chain search. A count word is
+/// attacker-controlled, so a crafted file can pack the header window with
+/// valid-looking table heads that never complete a chain and force the nested
+/// bus × load × generator × shunt × branch search to run to exhaustion (a bit-4
+/// tail on the last bus record stretches the load scan to `BLOB_WINDOW`, so the
+/// blowup is multiplicative). A probe is one candidate `(count, glue)` attempt
+/// or one scanned record head position, charged at every scan site. The
+/// largest corpus file (Texas7k, 13.7 MB) spends 16M probes and a 64 KB
+/// truncation fixture peaks at 42M; exceeding the cap means the bytes are not
+/// a decodable layout, so the search stops and reports a read error instead
+/// of spinning.
+const SEARCH_PROBE_BUDGET: u64 = 128_000_000;
+
+/// Shared probe counter for one `parse_pwb` call. `tick` charges one probe and
+/// returns whether the budget still has room; `exhausted` reports afterward
+/// whether the search stopped because it ran out.
+struct SearchBudget(Cell<u64>);
+
+impl SearchBudget {
+    fn new() -> Self {
+        Self(Cell::new(0))
+    }
+
+    fn tick(&self) -> bool {
+        let spent = self.0.get().saturating_add(1);
+        self.0.set(spent);
+        spent <= SEARCH_PROBE_BUDGET
+    }
+
+    fn exhausted(&self) -> bool {
+        self.0.get() > SEARCH_PROBE_BUDGET
+    }
+}
 
 /// The probe layer's error type. Probe rejections are pure control flow (the
 /// table search discards them wholesale and the loud user visible errors are
@@ -157,7 +191,8 @@ pub fn parse_pwb(bytes: &[u8], name_hint: Option<&str>) -> Result<Network> {
     // only the glue combinations the narrow pass could not reach, and
     // shares the bus run cache so nothing is walked twice.
     let bus_runs = RefCell::new(HashMap::new());
-    if let Some(net) = search_table_chain(
+    let budget = SearchBudget::new();
+    let found = search_table_chain(
         bytes,
         name_hint,
         gen_variants,
@@ -165,9 +200,9 @@ pub fn parse_pwb(bytes: &[u8], name_hint: Option<&str>) -> Result<Network> {
         &bus_runs,
         narrow_glue,
         false,
-    ) {
-        net
-    } else {
+        &budget,
+    )
+    .or_else(|| {
         let retry = |wide_bus_glue, device_glue| {
             search_table_chain(
                 bytes,
@@ -177,6 +212,7 @@ pub fn parse_pwb(bytes: &[u8], name_hint: Option<&str>) -> Result<Network> {
                 &bus_runs,
                 device_glue,
                 wide_bus_glue,
+                &budget,
             )
         };
         (wide_glue != narrow_glue)
@@ -188,15 +224,23 @@ pub fn parse_pwb(bytes: &[u8], name_hint: Option<&str>) -> Result<Network> {
                     .then(|| retry(true, wide_glue))
                     .flatten()
             })
-            .unwrap_or_else(|| {
-                Err(Error::FormatRead {
-                    format: FMT,
-                    message: "no table chain matches the validated .pwb layouts \
-                                  (buses, loads, generators, shunts, branches in sequence)"
-                        .into(),
-                })
-            })
-    }
+    });
+    found.unwrap_or_else(|| {
+        if budget.exhausted() {
+            return Err(Error::FormatRead {
+                format: FMT,
+                message: "table search exceeded its work budget; the bytes are not a \
+                              decodable .pwb layout"
+                    .into(),
+            });
+        }
+        Err(Error::FormatRead {
+            format: FMT,
+            message: "no table chain matches the validated .pwb layouts \
+                          (buses, loads, generators, shunts, branches in sequence)"
+                .into(),
+        })
+    })
 }
 
 /// Which generator record layouts the header constant admits (see
@@ -242,7 +286,7 @@ impl DeviceGlue {
 /// One full depth first search for the table chain; `None` when no chain
 /// matches. `wide_bus_glue` lifts the bus table's count gated glue window
 /// (see [`bus_table_candidates`]) for the retry pass.
-#[expect(clippy::too_many_lines)]
+#[expect(clippy::too_many_lines, clippy::too_many_arguments)]
 fn search_table_chain(
     bytes: &[u8],
     name_hint: Option<&str>,
@@ -251,6 +295,7 @@ fn search_table_chain(
     bus_runs: &RefCell<BusRuns>,
     device_glue: DeviceGlue,
     wide_bus_glue: bool,
+    budget: &SearchBudget,
 ) -> Option<Result<Network>> {
     // A count word can be forged by record interiors and the case
     // description, so table location is a depth first search: a candidate at
@@ -262,7 +307,7 @@ fn search_table_chain(
     // affordable: candidates pointing at the same first record share one walk
     // however many count words and search retries reach it.
     for (buses, bus_shunts, bus_end, last_bus_unk) in
-        bus_table_candidates(bytes, bus_runs, wide_bus_glue)
+        bus_table_candidates(bytes, bus_runs, wide_bus_glue, budget)
     {
         let Some(bus_ids) = BusIdSet::new(&buses) else {
             continue; // duplicate ids: not a real bus table
@@ -290,6 +335,7 @@ fn search_table_chain(
             &load_runs,
             device_glue.load,
             12,
+            budget,
         ) {
             // The generator table reads through the record layouts the
             // header constant admits (see parse_pwb). A file's table uses
@@ -312,6 +358,7 @@ fn search_table_chain(
                         &gen_reg_runs,
                         device_glue.reg_gen,
                         40,
+                        budget,
                     )
                 })
                 .into_iter()
@@ -328,6 +375,7 @@ fn search_table_chain(
                                 &gen_reg_simple_runs,
                                 device_glue.simple_reg_gen,
                                 40,
+                                budget,
                             )
                         })
                         .into_iter()
@@ -345,13 +393,14 @@ fn search_table_chain(
                                 &gen_runs,
                                 device_glue.plain_gen,
                                 32,
+                                budget,
                             )
                         })
                         .into_iter()
                         .flatten(),
                 );
             for (generators, g_end) in gen_candidates {
-                if gen_table_continues(bytes, g_end, &bus_ids, gen_variants) {
+                if gen_table_continues(bytes, g_end, &bus_ids, gen_variants, budget) {
                     continue;
                 }
                 if !bus_shunts.is_empty() {
@@ -362,6 +411,7 @@ fn search_table_chain(
                         &bus_names,
                         &branch_runs,
                         branch_count_can_include_trailer,
+                        budget,
                     ) {
                         keep_best_chain(
                             &mut best,
@@ -385,6 +435,7 @@ fn search_table_chain(
                     &shunt_runs,
                     48,
                     28,
+                    budget,
                 ) {
                     let Some(branches) = find_branch_table(
                         bytes,
@@ -393,6 +444,7 @@ fn search_table_chain(
                         &bus_names,
                         &branch_runs,
                         branch_count_can_include_trailer,
+                        budget,
                     ) else {
                         continue;
                     };
@@ -416,6 +468,7 @@ fn search_table_chain(
                     &bus_names,
                     &branch_runs,
                     branch_count_can_include_trailer,
+                    budget,
                 ) {
                     keep_best_chain(
                         &mut best,
@@ -491,12 +544,15 @@ fn gen_table_continues(
     after: usize,
     bus_ids: &BusIdSet,
     variants: GenVariants,
+    budget: &SearchBudget,
 ) -> bool {
-    (after..after.saturating_add(RESYNC_WINDOW).min(bytes.len())).any(|p| {
-        (variants.plain && read_gen_record(bytes, p, bus_ids).is_ok())
-            || (variants.reg && read_gen_reg_record(bytes, p, bus_ids).is_ok())
-            || (variants.simple_reg && read_gen_reg_simple_record(bytes, p, bus_ids).is_ok())
-    })
+    (after..after.saturating_add(RESYNC_WINDOW).min(bytes.len()))
+        .take_while(|_| budget.tick())
+        .any(|p| {
+            (variants.plain && read_gen_record(bytes, p, bus_ids).is_ok())
+                || (variants.reg && read_gen_reg_record(bytes, p, bus_ids).is_ok())
+                || (variants.simple_reg && read_gen_reg_simple_record(bytes, p, bus_ids).is_ok())
+        })
 }
 
 /// Assemble the decoded tables and run the common reference checks.
@@ -922,54 +978,60 @@ fn bus_table_candidates<'a>(
     b: &'a [u8],
     runs: &'a RefCell<BusRuns>,
     wide_glue: bool,
+    budget: &'a SearchBudget,
 ) -> impl Iterator<Item = (Vec<Bus>, Vec<Shunt>, usize, u32)> + 'a {
     let limit = b.len().saturating_sub(4).min(0x10000);
-    (0x20..limit).flat_map(move |at| {
-        let count = u32::from_le_bytes(b[at..at + 4].try_into().unwrap()) as usize;
-        // Table glue between the count and the first record varies by a few
-        // bytes per table and vintage; scan a small window for the record.
-        // The v21 resave's bus glue runs 52 bytes, past the 48 every other
-        // export observes; the first search pass widens the window only for
-        // large counts (every observed wide glue table is a node level
-        // resave with thousands of buses, and forged count words are
-        // overwhelmingly small values, so widening their window prices
-        // every file). The retry pass covers exactly the complement (the
-        // wide glues for small counts), so with the shared run cache the
-        // two passes together cost one full sweep.
-        let glues = if wide_glue {
-            (count != 0 && count < 256).then_some(49..=96)
-        } else {
-            let max_glue = if count >= 256 { 96 } else { 48 };
-            (count != 0 && count <= 2_000_000).then_some(0..=max_glue)
-        };
-        glues
-            .into_iter()
-            .flatten()
-            .filter_map(move |glue| {
-                let first = at.checked_add(4)?.checked_add(glue)?;
-                count_fits(b, first, count, 32)
-                    .then(|| bus_run(b, runs, first, count))
-                    .flatten()
-            })
-            .map(|(heads, end)| {
-                let last_unk = heads.last().map_or(0, |(_, unk, _)| *unk);
-                let shunts = heads
-                    .iter()
-                    .filter_map(|(bus, _, shunt)| {
-                        shunt.clone().map(|mut shunt| {
-                            shunt.bus = bus.id;
-                            shunt
+    (0x20..limit)
+        .take_while(move |_| !budget.exhausted())
+        .flat_map(move |at| {
+            let count = u32::from_le_bytes(b[at..at + 4].try_into().unwrap()) as usize;
+            // Table glue between the count and the first record varies by a few
+            // bytes per table and vintage; scan a small window for the record.
+            // The v21 resave's bus glue runs 52 bytes, past the 48 every other
+            // export observes; the first search pass widens the window only for
+            // large counts (every observed wide glue table is a node level
+            // resave with thousands of buses, and forged count words are
+            // overwhelmingly small values, so widening their window prices
+            // every file). The retry pass covers exactly the complement (the
+            // wide glues for small counts), so with the shared run cache the
+            // two passes together cost one full sweep.
+            let glues = if wide_glue {
+                (count != 0 && count < 256).then_some(49..=96)
+            } else {
+                let max_glue = if count >= 256 { 96 } else { 48 };
+                (count != 0 && count <= 2_000_000).then_some(0..=max_glue)
+            };
+            glues
+                .into_iter()
+                .flatten()
+                .filter_map(move |glue| {
+                    if !budget.tick() {
+                        return None;
+                    }
+                    let first = at.checked_add(4)?.checked_add(glue)?;
+                    count_fits(b, first, count, 32)
+                        .then(|| bus_run(b, runs, first, count, budget))
+                        .flatten()
+                })
+                .map(|(heads, end)| {
+                    let last_unk = heads.last().map_or(0, |(_, unk, _)| *unk);
+                    let shunts = heads
+                        .iter()
+                        .filter_map(|(bus, _, shunt)| {
+                            shunt.clone().map(|mut shunt| {
+                                shunt.bus = bus.id;
+                                shunt
+                            })
                         })
-                    })
-                    .collect();
-                (
-                    heads.into_iter().map(|(bus, _, _)| bus).collect(),
-                    shunts,
-                    end,
-                    last_unk,
-                )
-            })
-    })
+                        .collect();
+                    (
+                        heads.into_iter().map(|(bus, _, _)| bus).collect(),
+                        shunts,
+                        end,
+                        last_unk,
+                    )
+                })
+        })
 }
 
 /// The bus record run from `first`, extended to `count` records if the bytes
@@ -983,6 +1045,7 @@ fn bus_run(
     runs: &RefCell<BusRuns>,
     first: usize,
     count: usize,
+    budget: &SearchBudget,
 ) -> Option<(Vec<BusRunItem>, usize)> {
     let mut map = runs.borrow_mut();
     let (run, family) = match map.entry(first) {
@@ -1001,12 +1064,14 @@ fn bus_run(
         // The record tail (undecoded; longer when flag bit 4 inserts a
         // count prefixed list) separates this record from the next; find
         // the next head by bounded scan (see resync_end).
-        (after..resync_end(b, after, prev.1 & 0x10 != 0)).find_map(|p| {
-            read_bus_head(b, p)
-                .ok()
-                .filter(|(h, _)| bus_family(h.unk) == family)
-                .map(|(h, end)| ((h.bus, h.unk, h.shunt), end))
-        })
+        (after..resync_end(b, after, prev.1 & 0x10 != 0))
+            .take_while(|_| budget.tick())
+            .find_map(|p| {
+                read_bus_head(b, p)
+                    .ok()
+                    .filter(|(h, _)| bus_family(h.unk) == family)
+                    .map(|(h, end)| ((h.bus, h.unk, h.shunt), end))
+            })
     })
 }
 
@@ -1182,6 +1247,7 @@ fn read_shunt_record(b: &[u8], at: usize, bus_ids: &BusIdSet) -> Probe<(Shunt, u
 /// Candidates for a count prefixed device table after `from`: every
 /// `(count, glue)` whose full record walk succeeds, in scan order. The caller
 /// keeps a candidate only if the tables that must follow it parse too.
+#[expect(clippy::too_many_arguments)]
 fn device_table_candidates<'a, T: Clone + 'a>(
     b: &'a [u8],
     scan: std::ops::Range<usize>,
@@ -1190,18 +1256,24 @@ fn device_table_candidates<'a, T: Clone + 'a>(
     runs: &'a RefCell<HashMap<usize, Run<T>>>,
     max_glue: usize,
     min_record_len: usize,
+    budget: &'a SearchBudget,
 ) -> impl Iterator<Item = (Vec<T>, usize)> + 'a {
     let limit = scan.end.min(b.len().saturating_sub(4));
-    (scan.start..limit).flat_map(move |at| {
-        let count = u32::from_le_bytes(b[at..at + 4].try_into().unwrap()) as usize;
-        let glues = (count != 0 && count <= 10_000_000).then_some(0..=max_glue);
-        glues.into_iter().flatten().filter_map(move |glue| {
-            let first = at.checked_add(4)?.checked_add(glue)?;
-            count_fits(b, first, count, min_record_len)
-                .then(|| device_run(b, runs, first, count, bus_ids, read))
-                .flatten()
+    (scan.start..limit)
+        .take_while(move |_| !budget.exhausted())
+        .flat_map(move |at| {
+            let count = u32::from_le_bytes(b[at..at + 4].try_into().unwrap()) as usize;
+            let glues = (count != 0 && count <= 10_000_000).then_some(0..=max_glue);
+            glues.into_iter().flatten().filter_map(move |glue| {
+                if !budget.tick() {
+                    return None;
+                }
+                let first = at.checked_add(4)?.checked_add(glue)?;
+                count_fits(b, first, count, min_record_len)
+                    .then(|| device_run(b, runs, first, count, bus_ids, read, budget))
+                    .flatten()
+            })
         })
-    })
 }
 
 /// The device record run from `first`, extended to `count` records if the
@@ -1213,6 +1285,7 @@ fn device_run<T: Clone>(
     count: usize,
     bus_ids: &BusIdSet,
     read: impl ReadRecord<T>,
+    budget: &SearchBudget,
 ) -> Option<(Vec<T>, usize)> {
     let mut map = runs.borrow_mut();
     let run = match map.entry(first) {
@@ -1226,6 +1299,7 @@ fn device_run<T: Clone>(
     run.prefix(count, |after, _| {
         // The undecoded record tail separates this record from the next.
         (after..after.saturating_add(RESYNC_WINDOW).min(b.len()))
+            .take_while(|_| budget.tick())
             .find_map(|p| read(b, p, bus_ids).ok())
     })
 }
@@ -1519,6 +1593,7 @@ fn find_branch_table(
     bus_names: &HashMap<String, BusId>,
     runs: &RefCell<HashMap<usize, Run<(Branch, u16)>>>,
     count_can_include_trailer: bool,
+    budget: &SearchBudget,
 ) -> Option<Vec<Branch>> {
     // The gap between the shunt table end and the branch count word can
     // exceed one resync window; two cover every observed file.
@@ -1533,6 +1608,7 @@ fn find_branch_table(
         // The branch table glue is longer than the device tables'; scan a
         // window after the count for the first record.
         let Some(first) = (at.saturating_add(4)..at.saturating_add(64).min(b.len()))
+            .take_while(|_| budget.tick())
             .find(|&p| read_branch_head(b, p, bus_ids, bus_names).is_ok())
         else {
             continue;
@@ -1546,7 +1622,7 @@ fn find_branch_table(
                 continue;
             }
             if let Some((branches, after)) =
-                branch_run(b, runs, first, effective_count, bus_ids, bus_names)
+                branch_run(b, runs, first, effective_count, bus_ids, bus_names, budget)
             {
                 // The end check must step exactly like the run: a bit 4 tail on
                 // the last record can hold more than one window of blob, and a
@@ -1554,7 +1630,13 @@ fn find_branch_table(
                 // read as "no further record" and win.
                 let last_bit4 = branches.last().is_some_and(|(_, flags)| flags & 0x10 != 0);
                 let continues = (after..resync_end(b, after, last_bit4))
+                    .take_while(|_| budget.tick())
                     .any(|p| read_branch_head(b, p, bus_ids, bus_names).is_ok());
+                // A scan cut short by the budget cannot vouch that the table
+                // ends here; reject rather than accept a possibly forged count.
+                if budget.exhausted() {
+                    return None;
+                }
                 if !continues {
                     return Some(branches.into_iter().map(|(br, _)| br).collect());
                 }
@@ -1574,6 +1656,7 @@ fn branch_run(
     count: usize,
     bus_ids: &BusIdSet,
     bus_names: &HashMap<String, BusId>,
+    budget: &SearchBudget,
 ) -> Option<(Vec<(Branch, u16)>, usize)> {
     let mut map = runs.borrow_mut();
     let run = match map.entry(first) {
@@ -1587,11 +1670,13 @@ fn branch_run(
     run.prefix(count, |after, prev| {
         // The undecoded record tail separates this record from the next;
         // find the next head by bounded scan (see resync_end).
-        (after..resync_end(b, after, prev.1 & 0x10 != 0)).find_map(|p| {
-            read_branch_head(b, p, bus_ids, bus_names)
-                .ok()
-                .map(|(br, end, flags)| ((br, flags), end))
-        })
+        (after..resync_end(b, after, prev.1 & 0x10 != 0))
+            .take_while(|_| budget.tick())
+            .find_map(|p| {
+                read_branch_head(b, p, bus_ids, bus_names)
+                    .ok()
+                    .map(|(br, end, flags)| ((br, flags), end))
+            })
     })
 }
 

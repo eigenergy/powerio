@@ -13,7 +13,10 @@
 
 use std::path::{Path, PathBuf};
 
-use powerio::{Network, parse_matpower_file, parse_psse};
+use powerio::{
+    Network, TransformerControl, TransformerControlMode, parse_matpower_file, parse_psse,
+    write_psse_rev,
+};
 
 fn data(name: &str) -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -60,4 +63,49 @@ fn v34_and_v35_fixtures_match_the_matpower_source() {
     // Frequency rides the header at every revision.
     assert_eq!(v34.base_frequency, 60.0);
     assert_eq!(v35.base_frequency, 60.0);
+}
+
+#[test]
+fn transformer_control_round_trips_at_v34_and_v35() {
+    // The count/sum checks above cannot see the winding line control columns:
+    // v34/35 widen the line to twelve ratings and insert NODE after CONT, so
+    // COD sits at 15 and RMA..NTP at 18..22. A regulating control must survive
+    // a write/read cycle at both revisions.
+    let mut net = parse_matpower_file(data("case14.m")).unwrap();
+    let idx = net
+        .branches
+        .iter()
+        .position(powerio::Branch::is_transformer)
+        .expect("case14 has a transformer");
+    let (from, to) = (net.branches[idx].from, net.branches[idx].to);
+    let mut ctl = TransformerControl::new(TransformerControlMode::Voltage);
+    ctl.controlled_bus = Some(to);
+    ctl.tap_max = 1.08;
+    ctl.tap_min = 0.92;
+    ctl.band_max = 1.05;
+    ctl.band_min = 0.98;
+    ctl.ntp = 17;
+    ctl.mva_base = 100.0;
+    net.branches[idx].control = Some(ctl);
+
+    for rev in [34u32, 35] {
+        let text = write_psse_rev(&net, rev).text;
+        let back = parse_psse(&text).unwrap();
+        let br = back
+            .branches
+            .iter()
+            .find(|b| b.from == from && b.to == to)
+            .unwrap();
+        let c = br
+            .control
+            .as_ref()
+            .unwrap_or_else(|| panic!("rev {rev} lost the transformer control"));
+        assert_eq!(c.mode, TransformerControlMode::Voltage, "rev {rev} COD");
+        assert_eq!(c.controlled_bus, Some(to), "rev {rev} CONT");
+        assert!((c.tap_max - 1.08).abs() < 1e-12, "rev {rev} RMA");
+        assert!((c.tap_min - 0.92).abs() < 1e-12, "rev {rev} RMI");
+        assert!((c.band_max - 1.05).abs() < 1e-12, "rev {rev} VMA");
+        assert!((c.band_min - 0.98).abs() < 1e-12, "rev {rev} VMI");
+        assert_eq!(c.ntp, 17, "rev {rev} NTP");
+    }
 }

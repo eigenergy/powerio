@@ -47,8 +47,10 @@
  *   pio_parse_file / pio_parse_str / pio_read_dir / pio_normalize are freed
  *   with pio_network_free. Arrow buffers are freed through their own release
  *   callbacks (the C Data Interface release rule).
- * - A handle is immutable after construction: concurrent reads from any
- *   number of threads are safe; pio_network_free is not, free exactly once.
+ * - A handle is immutable after construction unless a function takes it
+ *   non-const (pio_package_validate rewrites its diagnostics): concurrent
+ *   reads from any number of threads are safe; a non-const entry point, and
+ *   pio_network_free, need exclusive access, and free exactly once.
  * - Every entry point catches Rust panics at the boundary and returns the
  *   documented failure value (NULL, 0, -1, 0.0) rather than unwinding across
  *   the ABI (requires the default panic = "unwind"; a panic = "abort" build
@@ -270,7 +272,10 @@ const char *pio_version(void);
  * handle ([`pio_warnings`]). Returns `NULL` on error and writes the message
  * into `errbuf`. Free the handle with [`pio_network_free`].
  */
-PioNetwork *pio_parse_file(const char *path, const char *from, char *errbuf, size_t errlen);
+PioNetwork *pio_parse_file(const char *path,
+                           const char *from,
+                           char *errbuf,
+                           size_t errlen);
 
 /**
  * Parse in-memory case `text` of the named `format` into a network handle.
@@ -284,7 +289,10 @@ PioNetwork *pio_parse_file(const char *path, const char *from, char *errbuf, siz
  * ([`pio_warnings`]). Returns `NULL` on error and writes the message into
  * `errbuf`. Free the handle with [`pio_network_free`].
  */
-PioNetwork *pio_parse_str(const char *text, const char *format, char *errbuf, size_t errlen);
+PioNetwork *pio_parse_str(const char *text,
+                          const char *format,
+                          char *errbuf,
+                          size_t errlen);
 
 #if defined(PIO_GRIDFM)
 /**
@@ -639,6 +647,12 @@ PioPackage *pio_package_from_multiconductor_network(const PioDistNetwork *net,
 /**
  * Run the package semantic validation profile in place. Returns `0` on
  * success, `-1` on error.
+ *
+ * Unlike the read-only accessors, this rewrites the handle's `diagnostics` and
+ * `validation` (the payload is untouched), so it takes the handle non-`const`
+ * and needs exclusive access: no other call may touch the same handle
+ * concurrently. This is the one exception to the header's blanket
+ * concurrent-read guarantee.
  */
 int32_t pio_package_validate(PioPackage *pkg, char *errbuf, size_t errlen);
 #endif
@@ -662,11 +676,10 @@ char *pio_package_diagnostics_json(const PioPackage *pkg, char *errbuf, size_t e
 #if defined(PIO_PKG)
 /**
  * Return the package operating point series as JSON, or `null` when absent.
- * The returned string is owned by the library; free it with [`pio_string_free`].
+ * The returned string is owned by the library; free it with
+ * [`pio_string_free`].
  */
-char *pio_package_operating_points_json(const PioPackage *pkg,
-                                        char *errbuf,
-                                        size_t errlen);
+char *pio_package_operating_points_json(const PioPackage *pkg, char *errbuf, size_t errlen);
 #endif
 
 #if defined(PIO_PKG)

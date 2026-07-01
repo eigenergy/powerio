@@ -10,18 +10,18 @@ use std::sync::Arc;
 
 use serde_json::{Map, Value};
 
-use super::{Conversion, Parsed, finish, jnum};
+use super::{Conversion, Parsed, finish, jnum, warn_extra_branch_rating_sets};
 use crate::network::{
     Branch, BranchCharging, BranchCurrentRatings, BranchSolution, Bus, BusId, BusType, Extras,
     GEN_EXTRA_KEYS, GenCaps, GenCost, Generator, Hvdc, Load, LoadVoltageModel, Network, Shunt,
     SourceFormat, Storage,
 };
+use crate::normalize;
 use crate::{Error, Result};
 
 const FMT: &str = "Surge JSON";
 const FORMAT_VALUE: &str = "surge-json";
 const SCHEMA_VERSION: &str = "0.1.0";
-const DEG_PER_RAD: f64 = 180.0 / std::f64::consts::PI;
 const EPS: f64 = 1e-12;
 
 #[must_use]
@@ -90,6 +90,7 @@ pub fn write_surge_json(net: &Network) -> Conversion {
     root.insert("meta".into(), Value::Object(meta));
     root.insert("network".into(), Value::Object(network));
 
+    warn_extra_branch_rating_sets(FMT, net, &mut warnings);
     finish(root, warnings)
 }
 
@@ -596,7 +597,7 @@ fn read_bus(value: &Value) -> Result<(Bus, Option<Shunt>)> {
         id,
         kind: read_bus_type(string_map(obj, "bus_type").unwrap_or("PQ"))?,
         vm: f_map_or(obj, "voltage_magnitude_pu", 1.0)?,
-        va: f_map_or(obj, "voltage_angle_rad", 0.0)? * DEG_PER_RAD,
+        va: f_map_or(obj, "voltage_angle_rad", 0.0)? * normalize::RAD_TO_DEG,
         base_kv: f_map_or(obj, "base_kv", 0.0)?,
         vmax: f_map_or(obj, "voltage_max_pu", 1.1)?,
         vmin: f_map_or(obj, "voltage_min_pu", 0.9)?,
@@ -686,7 +687,7 @@ fn read_branch(value: &Value) -> Result<Branch> {
     let obj = object(value, "branch record")?;
     let branch_type = string_map(obj, "branch_type").unwrap_or("Line");
     let tap_value = f_map_or(obj, "tap", 1.0)?;
-    let shift = f_map_or(obj, "phase_shift_rad", 0.0)? * DEG_PER_RAD;
+    let shift = f_map_or(obj, "phase_shift_rad", 0.0)? * normalize::RAD_TO_DEG;
     let tap = if branch_type == "Line" && (tap_value - 1.0).abs() < EPS {
         0.0
     } else {
@@ -708,8 +709,9 @@ fn read_branch(value: &Value) -> Result<Branch> {
         tap,
         shift,
         in_service: bool_map_or(obj, "in_service", true)?,
-        angmin: f_map_or(obj, "angle_diff_min_rad", -std::f64::consts::TAU)? * DEG_PER_RAD,
-        angmax: f_map_or(obj, "angle_diff_max_rad", std::f64::consts::TAU)? * DEG_PER_RAD,
+        angmin: f_map_or(obj, "angle_diff_min_rad", -std::f64::consts::TAU)?
+            * normalize::RAD_TO_DEG,
+        angmax: f_map_or(obj, "angle_diff_max_rad", std::f64::consts::TAU)? * normalize::RAD_TO_DEG,
         control: None,
         solution: read_branch_solution(obj)?,
         extras: Extras::new(),
@@ -1449,7 +1451,7 @@ mod tests {
         }))
         .unwrap();
         assert!(branch.tap.abs() < EPS);
-        assert!((branch.shift - 0.1 * DEG_PER_RAD).abs() < EPS);
+        assert!((branch.shift - 0.1 * normalize::RAD_TO_DEG).abs() < EPS);
 
         let branch = read_branch(&serde_json::json!({
             "from_bus": 1,

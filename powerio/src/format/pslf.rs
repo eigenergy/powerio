@@ -703,6 +703,7 @@ fn read_load(
         );
     }
     let mut extras = extras(rec, "load data", 5, 20);
+    capture_device_id(&mut extras, &rec.lhs);
     extras.insert("pslf_mw".into(), number_value(p_const));
     extras.insert("pslf_mvar".into(), number_value(q_const));
     extras.insert("pslf_mw_i".into(), number_value(p_i));
@@ -734,6 +735,7 @@ fn read_shunt(rec: &Record, base_mva: f64) -> Result<Shunt> {
     let g_pu = num_at(&rec.rhs, 3, 0.0, "shunt pu_mw", rec)?;
     let b_pu = num_at(&rec.rhs, 4, 0.0, "shunt pu_mvar", rec)?;
     let mut extras = extras(rec, "shunt data", 10, 29);
+    capture_device_id(&mut extras, &rec.lhs);
     extras.insert("pslf_pu_mw".into(), number_value(g_pu));
     extras.insert("pslf_pu_mvar".into(), number_value(b_pu));
     Ok(Shunt {
@@ -765,6 +767,7 @@ fn read_svd(
     let g_pu = num_at(&rec.rhs, 7, 0.0, "svd g", rec)?;
     let b_pu = num_at(&rec.rhs, 8, 0.0, "svd b", rec)?;
     let mut extras = extras(rec, "svd data", 5, 30);
+    capture_device_id(&mut extras, &rec.lhs);
     extras.insert("pslf_device".into(), Value::String("svd".into()));
     extras.insert("pslf_pu_g".into(), number_value(g_pu));
     extras.insert("pslf_pu_b".into(), number_value(b_pu));
@@ -953,6 +956,15 @@ fn extras(rec: &Record, section: &str, used_lhs: usize, used_rhs: usize) -> Extr
     extras
 }
 
+/// Capture a load/shunt/svd record's id (lhs token 3) into `extras["id"]` — the
+/// key the PSS/E reader uses — so the id survives cross-format writes and
+/// parallel devices on a bus stay distinguishable.
+fn capture_device_id(extras: &mut Extras, lhs: &[String]) {
+    if let Some(id) = lhs.get(3).map(|s| s.trim()).filter(|s| !s.is_empty()) {
+        extras.insert("id".into(), Value::String(id.to_string()));
+    }
+}
+
 /// Convert strings to a JSON array for `extras`.
 fn string_array(values: impl IntoIterator<Item = String>) -> Value {
     Value::Array(values.into_iter().map(Value::String).collect())
@@ -1063,6 +1075,7 @@ pub fn write_pslf(net: &Network) -> Conversion {
     let mut warnings = Vec::new();
     let mut nonfinite = false;
     let mut sanitized_names = 0usize;
+    let mut sanitized_ids = 0usize;
     let mut s = String::new();
 
     let mut num = |x: f64| -> String {
@@ -1156,13 +1169,17 @@ pub fn write_pslf(net: &Network) -> Conversion {
             "load data [{}] id long_id st mw mvar mw_i mvar_i mw_z mvar_z ar zone",
             net.loads.len()
         );
+        // Parallel loads on one bus get distinct ids; a captured `extras["id"]`
+        // (from a PSS/E or PSLF source) wins, else positional.
+        let mut load_ids: BTreeMap<BusId, BTreeSet<String>> = BTreeMap::new();
         for l in &net.loads {
             let r = bus_ref(l.bus);
             let (mw, mvar, mw_i, mvar_i, mw_z, mvar_z) =
                 load_components_for_write(l, &mut warnings);
+            let id = device_id(&l.extras, l.bus, &mut load_ids, &mut sanitized_ids);
             let _ = writeln!(
                 s,
-                "{} {} {} \"1\" \"load\" : {} {} {} {} {} {} {} {} {}",
+                "{} {} {} \"{id}\" \"load\" : {} {} {} {} {} {} {} {} {}",
                 l.bus,
                 name_tok(r.name),
                 num(r.base_kv),
@@ -1186,6 +1203,8 @@ pub fn write_pslf(net: &Network) -> Conversion {
             "shunt data [{}] id ck se long_id st ar zone pu_mw pu_mvar",
             net.shunts.len()
         );
+        // Same per-bus id rule as loads: `(bus, id)` must stay unique.
+        let mut shunt_ids: BTreeMap<BusId, BTreeSet<String>> = BTreeMap::new();
         for sh in &net.shunts {
             let r = bus_ref(sh.bus);
             // PSLF stores shunt G/B per unit on the system base; replay the read
@@ -1196,9 +1215,10 @@ pub fn write_pslf(net: &Network) -> Conversion {
             let pu_mvar = extra_f64(&sh.extras, "pslf_pu_mvar")
                 .or_else(|| extra_f64(&sh.extras, "pslf_pu_b"))
                 .unwrap_or_else(|| safe_div(sh.b, net.base_mva));
+            let id = device_id(&sh.extras, sh.bus, &mut shunt_ids, &mut sanitized_ids);
             let _ = writeln!(
                 s,
-                "{} {} {} \"1\" : {} {} {} {} {}",
+                "{} {} {} \"{id}\" : {} {} {} {} {}",
                 sh.bus,
                 name_tok(r.name),
                 num(r.base_kv),
@@ -1541,9 +1561,10 @@ pub fn write_pslf(net: &Network) -> Conversion {
              writer emits has no switching-control columns (mode/band/step blocks)"
         ));
     }
-    if sanitized_names > 0 {
+    let sanitized = sanitized_names + sanitized_ids;
+    if sanitized > 0 {
         warnings.push(format!(
-            "{sanitized_names} name(s) contained a double quote that would corrupt an EPC \
+            "{sanitized} quoted field(s) contained a double quote that would corrupt an EPC \
              record; replaced with spaces"
         ));
     }
@@ -1562,6 +1583,30 @@ fn pslf_type(kind: BusType) -> u8 {
         BusType::Isolated => 4,
         BusType::Pq => 1,
     }
+}
+
+/// A per-bus unique load/shunt id: the captured `extras["id"]` (trimmed,
+/// sanitized) when still free on this bus, else the lowest free positional id,
+/// so parallel devices keep the `(bus, id)` uniqueness the EPC section requires.
+fn device_id(
+    extras: &Extras,
+    bus: BusId,
+    used: &mut BTreeMap<BusId, BTreeSet<String>>,
+    sanitized: &mut usize,
+) -> String {
+    let preferred = extras
+        .get("id")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|id| !id.is_empty())
+        .map(|id| {
+            let clean = sanitize_quoted(id, NAME_FORBIDDEN, ' ');
+            if matches!(clean, std::borrow::Cow::Owned(_)) {
+                *sanitized += 1;
+            }
+            clean.into_owned()
+        });
+    super::allocate_circuit_id(preferred.as_deref(), bus, used)
 }
 
 /// The branch/transformer circuit id token, replayed from `pslf_circuit` when a

@@ -13,7 +13,7 @@ use serde_json::{Map, Value};
 
 use crate::network::{
     Branch, BranchCharging, BranchRatingSet, Bus, BusId, BusType, Extras, GenCost, Generator, Hvdc,
-    Load, Network, Shunt, SourceFormat,
+    Load, Network, Shunt, SourceFormat, TransformerControl, TransformerControlMode,
 };
 use crate::normalize;
 use crate::{Error, Result};
@@ -111,15 +111,16 @@ pub(crate) fn parse_goc3_source(
     let mut generator_buses = HashSet::new();
     let mut reference_candidate: Option<(BusId, f64)> = None;
 
-    for item in section(network, "simple_dispatchable_device")? {
-        let obj = item_object(item, "simple_dispatchable_device")?;
-        let uid = item_uid(item, obj, "simple_dispatchable_device");
-        let device_type = string(obj, "device_type").unwrap_or("producer");
+    for device in device_rows(network)? {
+        let obj = device.obj;
         let bus = bus_ref(obj, "bus", &bus_map)?;
-        let ts = uid.as_deref().and_then(|key| device_ts.get(key).copied());
+        let ts = device
+            .uid
+            .as_deref()
+            .and_then(|key| device_ts.get(key).copied());
 
-        match device_type {
-            "producer" => {
+        match device.table {
+            DeviceTable::Generators => {
                 let generator = read_producer(obj, ts, bus, base_mva);
                 generator_buses.insert(bus);
                 if reference_candidate
@@ -130,15 +131,7 @@ pub(crate) fn parse_goc3_source(
                 }
                 generators.push(generator);
             }
-            "consumer" => {
-                loads.push(read_consumer(obj, ts, bus, base_mva));
-            }
-            other => {
-                return Err(bad(format!(
-                    "simple_dispatchable_device `{}` has unsupported `device_type` `{other}`",
-                    uid.unwrap_or_else(|| "?".into())
-                )));
-            }
+            DeviceTable::Loads => loads.push(read_consumer(obj, ts, bus, base_mva)),
         }
     }
 
@@ -183,7 +176,7 @@ fn read_buses(network: &Map<String, Value>) -> Result<(Vec<Bus>, Goc3BusMap)> {
     let mut seen_uids = HashSet::new();
     for item in items {
         let obj = item_object(item, "bus")?;
-        let uid = item_uid(item, obj, "bus").ok_or_else(|| bad("bus record missing `uid`"))?;
+        let uid = item_uid(item, obj).ok_or_else(|| bad("bus record missing `uid`"))?;
         if !seen_uids.insert(uid.clone()) {
             return Err(bad(format!("duplicate bus uid `{uid}`")));
         }
@@ -246,14 +239,16 @@ fn read_branches(
             let b = number(obj, "b").unwrap_or(0.0);
             let rate_a = number(obj, "mva_ub_nom").unwrap_or(0.0);
             let rate_b = number(obj, "mva_ub_em").unwrap_or(rate_a);
+            // GO Challenge 3 puts b/2 per terminal in addition to the extra
+            // g_fr/b_fr/g_to/b_to shunts (PNNL-35792 eq. 149/151).
             let charging = if number(obj, "additional_shunt").unwrap_or(0.0) == 0.0 {
                 BranchCharging::from_total_b(b)
             } else {
                 BranchCharging {
                     g_fr: number(obj, "g_fr").unwrap_or(0.0),
-                    b_fr: number(obj, "b_fr").unwrap_or(0.0),
+                    b_fr: b / 2.0 + number(obj, "b_fr").unwrap_or(0.0),
                     g_to: number(obj, "g_to").unwrap_or(0.0),
-                    b_to: number(obj, "b_to").unwrap_or(0.0),
+                    b_to: b / 2.0 + number(obj, "b_to").unwrap_or(0.0),
                 }
             };
             let tap = if transformer {
@@ -287,17 +282,9 @@ fn read_branches(
                 tap,
                 shift,
                 in_service: initial_status_flag(obj, true),
-                angmin: if transformer {
-                    number(obj, "ta_lb").unwrap_or(-std::f64::consts::TAU) * normalize::RAD_TO_DEG
-                } else {
-                    -360.0
-                },
-                angmax: if transformer {
-                    number(obj, "ta_ub").unwrap_or(std::f64::consts::TAU) * normalize::RAD_TO_DEG
-                } else {
-                    360.0
-                },
-                control: None,
+                angmin: -360.0,
+                angmax: 360.0,
+                control: shifter_control(obj, transformer),
                 solution: None,
                 extras: extras(
                     obj,
@@ -325,6 +312,25 @@ fn read_branches(
             })
         })
         .collect()
+}
+
+/// GOC3 `ta_lb`/`ta_ub` bound the phase shift decision variable: a device
+/// control range, not a bus angle difference limit, so they map to an
+/// `ActiveFlow` control block (whose tap limits carry the phase angle in
+/// degrees), never to `angmin`/`angmax`.
+fn shifter_control(obj: &Map<String, Value>, transformer: bool) -> Option<TransformerControl> {
+    if !transformer {
+        return None;
+    }
+    let lb = number(obj, "ta_lb");
+    let ub = number(obj, "ta_ub");
+    if lb.is_none() && ub.is_none() {
+        return None;
+    }
+    let mut control = TransformerControl::new(TransformerControlMode::ActiveFlow);
+    control.tap_min = lb.unwrap_or(-std::f64::consts::TAU) * normalize::RAD_TO_DEG;
+    control.tap_max = ub.unwrap_or(std::f64::consts::TAU) * normalize::RAD_TO_DEG;
+    Some(control)
 }
 
 fn read_shunts(
@@ -379,8 +385,8 @@ fn read_producer(
         qmin: first_number(ts, "q_lb").unwrap_or(0.0) * base_mva,
         vg: 1.0,
         mbase: base_mva,
-        in_service: true,
-        cost: first_cost(obj, ts, base_mva),
+        in_service: initial_status_flag(obj, true),
+        cost: cost_at(obj, ts, 0, base_mva),
         caps: [None; crate::network::GEN_EXTRA_KEYS.len()],
         regulated_bus: None,
     }
@@ -405,7 +411,7 @@ fn read_consumer(obj: &Map<String, Value>, ts: Option<&Value>, bus: BusId, base_
         p,
         q,
         voltage_model: None,
-        in_service: true,
+        in_service: initial_status_flag(obj, true),
         extras: extras(
             obj,
             &[
@@ -473,24 +479,85 @@ fn assign_bus_types(
     warnings: &mut Vec<String>,
 ) {
     for bus in generator_buses {
-        if let Some(index) = bus_pos.get(bus).copied() {
-            buses[index].kind = BusType::Pv;
-        }
+        super::set_bus_kind(buses, bus_pos, *bus, BusType::Pv);
     }
-    if let Some((bus, _)) = reference_candidate {
-        if let Some(index) = bus_pos.get(&bus).copied() {
-            buses[index].kind = BusType::Ref;
-            warnings.push(format!(
-                "GO Challenge 3 has no explicit reference bus; selected bus {} from the largest producer pmax",
-                bus.0
-            ));
-        }
+    if let Some((bus, _)) = reference_candidate
+        && bus_pos.contains_key(&bus)
+    {
+        super::set_bus_kind(buses, bus_pos, bus, BusType::Ref);
+        warnings.push(format!(
+            "GO Challenge 3 has no explicit reference bus; selected bus {} from the largest producer pmax",
+            bus.0
+        ));
     }
 }
 
-fn first_cost(obj: &Map<String, Value>, ts: Option<&Value>, base_mva: f64) -> Option<GenCost> {
+/// Which payload table a simple dispatchable device row lands in.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum DeviceTable {
+    Generators,
+    Loads,
+}
+
+/// One simple dispatchable device with the payload row index the parser
+/// assigns it.
+pub struct DeviceRow<'a> {
+    pub table: DeviceTable,
+    pub row: usize,
+    pub uid: Option<String>,
+    pub obj: &'a Map<String, Value>,
+}
+
+/// Enumerate simple dispatchable devices with their generator/load row
+/// indices. Row assignment lives here and nowhere else: a consumer that
+/// addresses payload rows by index (the operating point extractor in
+/// `powerio-pkg`) must enumerate devices through this function so its indices
+/// match the parsed network, uid or no uid.
+pub fn device_rows(network: &Map<String, Value>) -> Result<Vec<DeviceRow<'_>>> {
+    let mut rows = Vec::new();
+    let mut generators = 0usize;
+    let mut loads = 0usize;
+    for item in section(network, "simple_dispatchable_device")? {
+        let obj = item_object(item, "simple_dispatchable_device")?;
+        let uid = item_uid(item, obj);
+        let (table, row) = match string(obj, "device_type").unwrap_or("producer") {
+            "producer" => {
+                generators += 1;
+                (DeviceTable::Generators, generators - 1)
+            }
+            "consumer" => {
+                loads += 1;
+                (DeviceTable::Loads, loads - 1)
+            }
+            other => {
+                return Err(bad(format!(
+                    "simple_dispatchable_device `{}` has unsupported `device_type` `{other}`",
+                    uid.unwrap_or_else(|| "?".into())
+                )));
+            }
+        };
+        rows.push(DeviceRow {
+            table,
+            row,
+            uid,
+            obj,
+        });
+    }
+    Ok(rows)
+}
+
+/// Piecewise marginal cost blocks for period `index`, integrated into a
+/// cumulative MATPOWER piecewise linear curve. Shared with the operating point
+/// extractor so a materialized period matches what this parser builds for the
+/// static payload.
+pub fn cost_at(
+    obj: &Map<String, Value>,
+    ts: Option<&Value>,
+    index: usize,
+    base_mva: f64,
+) -> Option<GenCost> {
     let periods = ts?.get("cost")?.as_array()?;
-    let curve = periods.first()?.as_array()?;
+    let curve = periods.get(index)?.as_array()?;
     let mut coeffs = vec![0.0, 0.0];
     let mut p = 0.0;
     let mut y = 0.0;
@@ -568,12 +635,15 @@ fn warn_static_reduction(
 }
 
 #[derive(Clone, Copy)]
-struct SectionItem<'a> {
-    key: Option<&'a str>,
-    value: &'a Value,
+pub struct SectionItem<'a> {
+    pub key: Option<&'a str>,
+    pub value: &'a Value,
 }
 
-fn section<'a>(parent: &'a Map<String, Value>, name: &'static str) -> Result<Vec<SectionItem<'a>>> {
+pub fn section<'a>(
+    parent: &'a Map<String, Value>,
+    name: &'static str,
+) -> Result<Vec<SectionItem<'a>>> {
     let Some(value) = parent.get(name) else {
         return Ok(Vec::new());
     };
@@ -612,21 +682,23 @@ fn item_object<'a>(
     })
 }
 
-fn item_uid(
-    item: SectionItem<'_>,
-    obj: &Map<String, Value>,
-    _section_name: &'static str,
-) -> Option<String> {
+pub fn item_uid(item: SectionItem<'_>, obj: &Map<String, Value>) -> Option<String> {
     string(obj, "uid")
         .map(str::to_owned)
         .or_else(|| item.key.map(str::to_owned))
         .filter(|uid| !uid.is_empty())
 }
 
+// Numeric keys sort by value ahead of non-numeric keys, which sort
+// lexicographically. The tiers keep this a total order on mixed key sets
+// ("2" < "10" numerically while "10" < "1x" < "2" lexically is a cycle, and
+// sort_by panics on a comparator that is not a strict weak ordering).
 fn compare_keys(a: &str, b: &str) -> Ordering {
     match (a.parse::<u64>(), b.parse::<u64>()) {
-        (Ok(a), Ok(b)) => a.cmp(&b),
-        _ => a.cmp(b),
+        (Ok(a_num), Ok(b_num)) => a_num.cmp(&b_num).then_with(|| a.cmp(b)),
+        (Ok(_), Err(_)) => Ordering::Less,
+        (Err(_), Ok(_)) => Ordering::Greater,
+        (Err(_), Err(_)) => a.cmp(b),
     }
 }
 
@@ -646,7 +718,7 @@ fn string<'a>(obj: &'a Map<String, Value>, key: &str) -> Option<&'a str> {
     obj.get(key).and_then(Value::as_str)
 }
 
-fn number(obj: &Map<String, Value>, key: &str) -> Option<f64> {
+pub fn number(obj: &Map<String, Value>, key: &str) -> Option<f64> {
     obj.get(key).and_then(Value::as_f64)
 }
 
@@ -699,4 +771,14 @@ fn bad(message: impl Into<String>) -> Error {
         format: FMT,
         message: message.into(),
     }
+}
+
+/// Document-walking helpers shared with `powerio-pkg`'s operating point
+/// extractor, which must interpret a GOC3 document exactly as this parser
+/// does: same section ordering, same device row assignment, same cost
+/// mapping. Hidden: not part of the public format API.
+pub mod bridge {
+    pub use super::{
+        DeviceRow, DeviceTable, SectionItem, cost_at, device_rows, item_uid, number, section,
+    };
 }

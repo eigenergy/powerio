@@ -362,26 +362,6 @@ fn set_package_source(
     }];
 }
 
-fn balanced_source_format_name(f: powerio_matrix::SourceFormat) -> &'static str {
-    match f {
-        powerio_matrix::SourceFormat::Matpower => "matpower",
-        powerio_matrix::SourceFormat::PowerModelsJson => "powermodels-json",
-        powerio_matrix::SourceFormat::EgretJson => "egret-json",
-        powerio_matrix::SourceFormat::Psse => "psse",
-        powerio_matrix::SourceFormat::PowerWorld => "powerworld",
-        powerio_matrix::SourceFormat::PandapowerJson => "pandapower-json",
-        powerio_matrix::SourceFormat::Pslf => "pslf",
-        powerio_matrix::SourceFormat::Goc3Json => "goc3-json",
-        powerio_matrix::SourceFormat::SurgeJson => "surge-json",
-        powerio_matrix::SourceFormat::PowerWorldBinary => "powerworld-pwb",
-        powerio_matrix::SourceFormat::InMemory => "in-memory",
-        powerio_matrix::SourceFormat::Normalized => "normalized",
-        powerio_matrix::SourceFormat::Gridfm => "gridfm",
-        powerio_matrix::SourceFormat::PypsaCsv => "pypsa-csv",
-        _ => "unknown",
-    }
-}
-
 fn format_is_gridfm(format: &str) -> bool {
     normalize(format) == "gridfm"
 }
@@ -489,7 +469,7 @@ fn build_package_from_path(
     }
 
     let parsed = powerio_matrix::parse_file(input, from_).map_err(to_pyerr)?;
-    let format = balanced_source_format_name(parsed.network.source_format);
+    let format = parsed.network.source_format.name();
     let retained_source = parsed.network.source.is_some();
     let mut pkg = CompilerPackage::from_balanced(parsed.network);
     add_package_read_warning_diagnostics(

@@ -51,6 +51,8 @@ pub mod routing;
 mod surge;
 
 pub use egret::{parse_egret_json, write_egret_json};
+#[doc(hidden)]
+pub use goc3::bridge as goc3_bridge;
 pub use goc3::parse_goc3_json;
 pub use matpower::{parse_matpower, parse_matpower_file, write_matpower};
 pub use pandapower::{parse_pandapower_json, write_pandapower_json};
@@ -673,9 +675,9 @@ pub fn write_as(net: &Network, format: TargetFormat) -> Result<Conversion> {
         TargetFormat::Pslf => write_pslf(net),
         TargetFormat::SurgeJson => write_surge_json(net),
         TargetFormat::Goc3Json => {
-            return Err(Error::UnknownFormat(
-                "goc3-json is a read-only source format".into(),
-            ));
+            return Err(Error::WriteUnsupported {
+                format: "goc3-json",
+            });
         }
     };
     warn_normalized_tap(net, format, &mut conv);

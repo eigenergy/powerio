@@ -5,6 +5,7 @@
 
 use std::path::{Path, PathBuf};
 
+use powerio::TransformerControlMode;
 use powerio::{
     Branch, BranchCharging, BranchCurrentRatings, BranchRatingSet, BranchSolution, Bus, BusId,
     BusType, Error, Load, LoadVoltageModel, MissingGenCostPolicy, Network, SourceFormat,
@@ -2267,12 +2268,25 @@ fn parses_goc3_json_static_network() {
     assert_eq!(net.branches[0].to, BusId(2));
     assert_close(net.branches[0].rate_a, 2.0);
     assert_close(net.branches[0].rate_b, 2.5);
+    // additional_shunt=1: b/2 per terminal is added to the extra shunts
+    // (b_fr = 0.04/2 + 0.002, b_to = 0.04/2 + 0.004).
     assert_eq!(
         net.branches[0].charging,
-        Some(BranchCharging::new(0.001, 0.002, 0.003, 0.004))
+        Some(BranchCharging::new(0.001, 0.022, 0.003, 0.024))
     );
+    // ac_line carries no bus angle difference limit.
+    assert_close(net.branches[0].angmin, -360.0);
+    assert_close(net.branches[0].angmax, 360.0);
     assert_close(net.branches[1].tap, 1.03);
     assert!((net.branches[1].shift - 0.05 * 180.0 / std::f64::consts::PI).abs() < 1e-12);
+    // ta_lb/ta_ub are the phase shift control range, not an angle difference
+    // limit: they land on an ActiveFlow control, and angmin/angmax stay open.
+    assert_close(net.branches[1].angmin, -360.0);
+    assert_close(net.branches[1].angmax, 360.0);
+    let control = net.branches[1].control.as_ref().unwrap();
+    assert_eq!(control.mode, TransformerControlMode::ActiveFlow);
+    assert!((control.tap_min - (-0.1 * 180.0 / std::f64::consts::PI)).abs() < 1e-12);
+    assert!((control.tap_max - (0.1 * 180.0 / std::f64::consts::PI)).abs() < 1e-12);
 
     assert_eq!(net.shunts.len(), 1);
     assert_eq!(net.shunts[0].bus, BusId(2));
@@ -2282,6 +2296,8 @@ fn parses_goc3_json_static_network() {
     assert_eq!(net.generators.len(), 1);
     let generator = &net.generators[0];
     assert_eq!(generator.bus, BusId(1));
+    // initial_status.on_status = 0 marks the unit offline.
+    assert!(!generator.in_service);
     assert_close(generator.pmin, 10.0);
     assert_close(generator.pmax, 100.0);
     assert_close(generator.qmin, -20.0);
@@ -2295,6 +2311,7 @@ fn parses_goc3_json_static_network() {
 
     assert_eq!(net.loads.len(), 1);
     assert_eq!(net.loads[0].bus, BusId(2));
+    assert!(!net.loads[0].in_service);
     assert_close(net.loads[0].p, 40.0);
     assert_close(net.loads[0].q, 15.0);
 
@@ -2326,6 +2343,24 @@ fn parses_goc3_json_static_network() {
     assert_eq!(echo.text, GOC3_TINY);
     let matpower = write_as(&net, TargetFormat::Matpower).unwrap();
     assert!(matpower.text.contains("mpc.bus"));
+}
+
+#[test]
+fn goc3_write_without_retained_source_is_write_unsupported() {
+    // A goc3 source echoes byte for byte (asserted above); any other network
+    // refuses with the read only error, not "unknown format".
+    let net = rich_audit_network();
+    let err = write_as(&net, TargetFormat::Goc3Json).unwrap_err();
+    assert!(matches!(
+        err,
+        Error::WriteUnsupported {
+            format: "goc3-json"
+        }
+    ));
+    assert_eq!(
+        err.to_string(),
+        "goc3-json is a read only format with no writer"
+    );
 }
 
 #[test]

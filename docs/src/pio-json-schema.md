@@ -37,7 +37,10 @@ diagnostics, validation, and lowering metadata around that model. Use the
 
 - `schema_version` is semver. The current value is `0.1.0`; the `schema` URL is
   `https://powerio.dev/schema/pio-package/0.1`.
-- Additive envelope fields bump the minor version.
+- Optional additive envelope fields (a reader that ignores them loses nothing
+  it relied on before) land without a version change; `operating_points` landed
+  this way. The minor version bumps when a reader needs to depend on a field
+  being present.
 - Envelope field moves or removals bump the major version, or ship a migration.
 - A reader tolerates unknown later top-level fields (they are ignored, not an
   error), so a package from a newer producer still loads. A later version can

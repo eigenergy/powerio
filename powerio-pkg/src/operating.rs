@@ -1,10 +1,16 @@
 //! Replayable operating point overlays for `.pio.json` packages.
 
-use std::cmp::Ordering;
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value, json};
+
+// The bridge shares the GOC3 parser's document walking, so this extractor's
+// section ordering, device row assignment, and cost mapping match the static
+// payload by construction.
+use powerio::format::goc3_bridge::{
+    DeviceTable, SectionItem, cost_at, device_rows, item_uid, number,
+};
 
 use crate::model::ModelPayload;
 
@@ -270,70 +276,55 @@ fn add_goc3_device_updates(
     base_mva: f64,
     points: &mut [OperatingPoint],
 ) -> serde_json::Result<()> {
-    let mut producer_row = 0usize;
-    let mut consumer_row = 0usize;
-    for item in section(network, "simple_dispatchable_device")? {
-        let Some(obj) = item.value.as_object() else {
+    for device in device_rows(network).map_err(|err| json_error(err.to_string()))? {
+        let Some(uid) = device.uid else {
             continue;
         };
-        let Some(uid) = item_uid(item, obj) else {
+        let Some(ts_value) = device_ts.get(uid.as_str()) else {
             continue;
         };
-        let device_type = obj
-            .get("device_type")
-            .and_then(Value::as_str)
-            .unwrap_or("producer");
-        let Some(ts) = device_ts
-            .get(uid.as_str())
-            .and_then(|value| value.as_object())
-        else {
-            match device_type {
-                "producer" => producer_row += 1,
-                "consumer" => consumer_row += 1,
-                _ => {}
-            }
+        let Some(ts) = ts_value.as_object() else {
             continue;
         };
-        match device_type {
-            "producer" => {
+        match device.table {
+            DeviceTable::Generators => {
                 for point in points.iter_mut() {
                     let mut fields = BTreeMap::new();
                     insert_scaled_at(&mut fields, ts, "p_ub", "pmax", point.index, base_mva);
                     insert_scaled_at(&mut fields, ts, "p_lb", "pmin", point.index, base_mva);
                     insert_scaled_at(&mut fields, ts, "q_ub", "qmax", point.index, base_mva);
                     insert_scaled_at(&mut fields, ts, "q_lb", "qmin", point.index, base_mva);
-                    if let Some(cost) = goc3_cost_at(obj, ts, point.index, base_mva)? {
+                    if let Some(cost) = cost_at(device.obj, Some(ts_value), point.index, base_mva)
+                        .map(serde_json::to_value)
+                        .transpose()?
+                    {
                         fields.insert("cost".to_owned(), cost);
                     }
                     if !fields.is_empty() {
                         let mut update = ElementUpdate::new(
-                            ElementRef::new("generators", producer_row)
-                                .with_source_uid(uid.clone()),
+                            ElementRef::new("generators", device.row).with_source_uid(uid.clone()),
                             fields,
                         );
                         update.metadata = per_period_metadata(ts, point.index);
                         point.updates.push(update);
                     }
                 }
-                producer_row += 1;
             }
-            "consumer" => {
+            DeviceTable::Loads => {
                 for point in points.iter_mut() {
                     let mut fields = BTreeMap::new();
                     insert_abs_scaled_at(&mut fields, ts, "p_ub", "p", point.index, base_mva);
                     insert_abs_scaled_at(&mut fields, ts, "q_ub", "q", point.index, base_mva);
                     if !fields.is_empty() {
                         let mut update = ElementUpdate::new(
-                            ElementRef::new("loads", consumer_row).with_source_uid(uid.clone()),
+                            ElementRef::new("loads", device.row).with_source_uid(uid.clone()),
                             fields,
                         );
                         update.metadata = per_period_metadata(ts, point.index);
                         point.updates.push(update);
                     }
                 }
-                consumer_row += 1;
             }
-            _ => {}
         }
     }
     Ok(())
@@ -377,48 +368,11 @@ fn add_goc3_status_updates(
     Ok(())
 }
 
-#[derive(Clone, Copy)]
-struct SectionItem<'a> {
-    key: Option<&'a str>,
-    value: &'a Value,
-}
-
 fn section<'a>(
     parent: &'a Map<String, Value>,
     name: &'static str,
 ) -> serde_json::Result<Vec<SectionItem<'a>>> {
-    let Some(value) = parent.get(name) else {
-        return Ok(Vec::new());
-    };
-    match value {
-        Value::Array(items) => Ok(items
-            .iter()
-            .map(|value| SectionItem { key: None, value })
-            .collect()),
-        Value::Object(map) => {
-            let mut items: Vec<_> = map
-                .iter()
-                .map(|(key, value)| SectionItem {
-                    key: Some(key.as_str()),
-                    value,
-                })
-                .collect();
-            items.sort_by(|a, b| compare_keys(a.key.unwrap_or(""), b.key.unwrap_or("")));
-            Ok(items)
-        }
-        other => Err(json_error(format!(
-            "`{name}` is not an array or object, got {}",
-            kind(other)
-        ))),
-    }
-}
-
-fn item_uid(item: SectionItem<'_>, obj: &Map<String, Value>) -> Option<String> {
-    obj.get("uid")
-        .and_then(Value::as_str)
-        .map(str::to_owned)
-        .or_else(|| item.key.map(str::to_owned))
-        .filter(|uid| !uid.is_empty())
+    powerio::format::goc3_bridge::section(parent, name).map_err(|err| json_error(err.to_string()))
 }
 
 fn uid_map(items: Vec<SectionItem<'_>>) -> HashMap<String, &Value> {
@@ -476,72 +430,6 @@ fn per_period_metadata(obj: &Map<String, Value>, index: usize) -> BTreeMap<Strin
         }
     }
     metadata
-}
-
-fn goc3_cost_at(
-    device: &Map<String, Value>,
-    ts: &Map<String, Value>,
-    index: usize,
-    base_mva: f64,
-) -> serde_json::Result<Option<Value>> {
-    let Some(periods) = ts.get("cost").and_then(Value::as_array) else {
-        return Ok(None);
-    };
-    let Some(curve) = periods.get(index).and_then(Value::as_array) else {
-        return Ok(None);
-    };
-    let mut coeffs = vec![0.0, 0.0];
-    let mut p = 0.0;
-    let mut y = 0.0;
-    for segment in curve {
-        let Some(values) = segment.as_array() else {
-            continue;
-        };
-        let Some(marginal) = values.first().and_then(Value::as_f64) else {
-            continue;
-        };
-        let Some(width) = values.get(1).and_then(Value::as_f64) else {
-            continue;
-        };
-        if !marginal.is_finite() || !width.is_finite() || width <= 0.0 {
-            continue;
-        }
-        p += width * base_mva;
-        y += marginal * width;
-        coeffs.push(p);
-        coeffs.push(y);
-    }
-    if coeffs.len() < 4 {
-        return Ok(None);
-    }
-    Ok(Some(serde_json::to_value(powerio::GenCost::new(
-        1,
-        number(device, "startup_cost").unwrap_or(0.0),
-        number(device, "shutdown_cost").unwrap_or(0.0),
-        coeffs,
-    ))?))
-}
-
-fn number(obj: &Map<String, Value>, key: &str) -> Option<f64> {
-    obj.get(key).and_then(Value::as_f64)
-}
-
-fn compare_keys(a: &str, b: &str) -> Ordering {
-    match (a.parse::<u64>(), b.parse::<u64>()) {
-        (Ok(a), Ok(b)) => a.cmp(&b),
-        _ => a.cmp(b),
-    }
-}
-
-fn kind(value: &Value) -> &'static str {
-    match value {
-        Value::Null => "null",
-        Value::Bool(_) => "bool",
-        Value::Number(_) => "number",
-        Value::String(_) => "string",
-        Value::Array(_) => "array",
-        Value::Object(_) => "object",
-    }
 }
 
 fn json_error(message: impl Into<String>) -> serde_json::Error {

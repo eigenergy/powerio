@@ -5,6 +5,42 @@
 - Transmission formats: added GOC3 JSON input and Surge JSON read and write paths.
   GOC3 packages lift source time series into `.pio.json` `operating_points`,
   and package APIs can materialize one point into a static package.
+- GOC3 reader fixes: branches with `additional_shunt` keep the line charging
+  (`b/2` per terminal added to the extra shunts, per the GO Challenge 3
+  formulation); `ta_lb`/`ta_ub` map to an `ActiveFlow` transformer control
+  range instead of fabricating `angmin`/`angmax` bus angle limits; producers
+  and consumers honor `initial_status.on_status` like every other record type;
+  object form section keys sort under a total order (mixed numeric and non
+  numeric keys no longer risk a sort panic).
+- `powerio-pkg`: GOC3 operating point extraction now consumes the parser's own
+  document walking (`device_rows`, `section`, `cost_at` shared through a
+  bridge), so update row indices match the payload by construction, including
+  devices without a `uid`. A failed extraction attaches a
+  `READ.GOC3.OPERATING_POINTS_DROPPED` diagnostic instead of silently
+  producing a static only package. Materialized packages clear `package_id`
+  (the parent id lives in `origin.parent_package_id`).
+- PSS/E `.raw`: revision aware record layouts for v34/v35 transformer winding
+  lines (twelve ratings, `NODE`), v35 generator records (`NREG`, `BASLOD`),
+  and v35 switched shunts (`NREG`, per block status triples), on both read and
+  write; the 2W/3W transformer split accepts float form `K` fields. The
+  `case14_v34.raw`/`case14_v35.raw` fixtures are regenerated in the genuine
+  layouts.
+- PSLF `.epc` writer: parallel loads and shunts on one bus get distinct ids
+  (`extras["id"]` preferred, positional fallback); the reader captures load,
+  shunt, and SVD ids into `extras["id"]` so they survive cross format writes.
+- PowerWorld `.pwb`: the table location search runs under a work budget, so a
+  crafted file fails with a read error instead of pinning a core for hours.
+- Surge JSON writer warns when named branch rating sets are dropped, like every
+  other lossy writer.
+- Writing a read only format (`goc3-json`) returns the new
+  `Error::WriteUnsupported` instead of a misleading `UnknownFormat`.
+- C ABI: the panic guard now covers index construction in the parse entry
+  points; `pio_package_validate` documents its exclusive access requirement
+  (the one non `const` entry point) and the header preamble scopes the
+  concurrent read guarantee accordingly; `PioDistNetwork` gains the same
+  compile time `Send + Sync` assertion as the other handles.
+- `SourceFormat::name()` is the one source format name mapping; the package,
+  CLI, and Python copies are gone.
 - `powerio-pkg`: `.pio.json` reads now enforce the envelope compatibility rule:
   same major `schema_version` values load, while incompatible major versions
   fail before payload use. The mdBook schema page documents the rule.

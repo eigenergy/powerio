@@ -149,8 +149,9 @@ rebuilt for the updated static payload.
 
 ## Versioning
 
-`schema_version` is semver. Additive envelope fields bump the minor; field moves
-bump the major or ship a migration. Unknown future top-level fields are tolerated
+`schema_version` is semver. Optional additive envelope fields land without a
+version change (`operating_points` did); the minor bumps when a reader needs to
+depend on a field being present; field moves bump the major or ship a migration. Unknown future top-level fields are tolerated
 on read (ignored), so a package from a newer producer still deserializes when
 the `schema_version` major version matches. A different major version is
 rejected before payload use.

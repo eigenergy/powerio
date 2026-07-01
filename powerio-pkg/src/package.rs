@@ -205,13 +205,32 @@ impl CompilerPackage {
         let sources = balanced_sources(&net);
         let source_id = sources.first().map(|s| s.id.clone());
         let source_maps = balanced_source_maps(&net, source_id.as_deref());
+        let mut diagnostics = Vec::new();
         let operating_points = if net.source_format == SourceFormat::Goc3Json {
-            net.source
-                .as_ref()
-                .and_then(|source| goc3_operating_points_from_str(source).ok().flatten())
+            match net
+                .source
+                .as_deref()
+                .map(|source| goc3_operating_points_from_str(source))
+            {
+                Some(Ok(series)) => series,
+                Some(Err(err)) => {
+                    diagnostics.push(StructuredDiagnostic::new(
+                        "READ.GOC3.OPERATING_POINTS_DROPPED",
+                        DiagnosticSeverity::Warning,
+                        DiagnosticStage::Read,
+                        format!(
+                            "time series could not be lifted into operating points; \
+                             the package is static only: {err}"
+                        ),
+                    ));
+                    None
+                }
+                None => None,
+            }
         } else {
             None
         };
+        let validation = ValidationSummary::from_diagnostics(&diagnostics);
         Self {
             schema: default_schema_url(),
             schema_version: default_schema_version(),
@@ -224,8 +243,8 @@ impl CompilerPackage {
             origin,
             sources,
             source_maps,
-            diagnostics: Vec::new(),
-            validation: ValidationSummary::ok(),
+            diagnostics,
+            validation,
             summary,
             lowering_history: Vec::new(),
             derived: DerivedMetadata::default(),
@@ -341,6 +360,10 @@ impl CompilerPackage {
         let mut package = self.clone();
         package.model = apply_operating_point_to_model(&self.model, point)?;
         package.operating_points = None;
+        // A derived package is new content: it records the parent's id in its
+        // origin and never inherits it as its own (as in
+        // `lower_multiconductor_to_balanced`).
+        package.package_id = None;
         package.origin = Origin::Derived {
             parent_package_id: self.package_id.clone(),
             pass: "materialize-operating-point".to_owned(),
@@ -562,9 +585,9 @@ impl CompilerPackage {
 
     /// Run the package semantic validation profile and record its findings.
     ///
-    /// This pass is non mutating: it reports structural and semantic issues in
-    /// `diagnostics` and `validation.passes`, but it never repairs or rewrites
-    /// the payload.
+    /// This pass leaves the payload untouched: it reports structural and
+    /// semantic issues, but never repairs or rewrites the model. It does rewrite
+    /// the package's own `diagnostics` and `validation`, so it needs `&mut self`.
     pub fn run_sane_validation(&mut self) {
         self.diagnostics
             .retain(|d| !is_sane_validation_code(d.code.as_str()));
@@ -1187,26 +1210,6 @@ fn check_terminal_map(
 }
 
 /// Canonical format name for a balanced source format.
-fn balanced_format_name(f: SourceFormat) -> &'static str {
-    match f {
-        SourceFormat::Matpower => "matpower",
-        SourceFormat::PowerModelsJson => "powermodels-json",
-        SourceFormat::EgretJson => "egret-json",
-        SourceFormat::Psse => "psse",
-        SourceFormat::PowerWorld => "powerworld",
-        SourceFormat::PandapowerJson => "pandapower-json",
-        SourceFormat::Pslf => "pslf",
-        SourceFormat::Goc3Json => "goc3-json",
-        SourceFormat::SurgeJson => "surge-json",
-        SourceFormat::PowerWorldBinary => "powerworld-pwb",
-        SourceFormat::InMemory => "in-memory",
-        SourceFormat::Normalized => "normalized",
-        SourceFormat::Gridfm => "gridfm",
-        SourceFormat::PypsaCsv => "pypsa-csv",
-        _ => "unknown",
-    }
-}
-
 fn balanced_origin(net: &BalancedNetwork) -> Origin {
     match net.source_format {
         SourceFormat::InMemory => Origin::InMemory,
@@ -1217,18 +1220,18 @@ fn balanced_origin(net: &BalancedNetwork) -> Origin {
         },
         SourceFormat::Gridfm | SourceFormat::PypsaCsv => Origin::Folder {
             path: String::new(),
-            format: balanced_format_name(net.source_format).to_owned(),
+            format: net.source_format.name().to_owned(),
             file_hashes: BTreeMap::new(),
         },
         SourceFormat::PowerWorldBinary => Origin::BinaryFile {
             path: String::new(),
-            format: balanced_format_name(net.source_format).to_owned(),
+            format: net.source_format.name().to_owned(),
             hash: None,
             decoded_sections: Vec::new(),
         },
         other => Origin::File {
             path: String::new(),
-            format: balanced_format_name(other).to_owned(),
+            format: other.name().to_owned(),
             hash: None,
             retained_source: net.source.is_some(),
         },
@@ -1243,7 +1246,7 @@ fn balanced_sources(net: &BalancedNetwork) -> Vec<SourceDescriptor> {
         id: "src0".to_owned(),
         kind: kind.to_owned(),
         path: None,
-        format: Some(balanced_format_name(net.source_format).to_owned()),
+        format: Some(net.source_format.name().to_owned()),
         hash: None,
     }]
 }

@@ -1016,7 +1016,7 @@ fn build_package(
 
     let parsed = powerio_matrix::parse_file(input, from.map(FormatArg::name))
         .with_context(|| format!("reading {}", input.display()))?;
-    let format = balanced_source_format_name(parsed.network.source_format);
+    let format = parsed.network.source_format.name();
     let retained_source = parsed.network.source.is_some();
     let mut pkg = CompilerPackage::from_balanced(parsed.network);
     add_read_warning_diagnostics(
@@ -1108,26 +1108,6 @@ fn set_package_source(
         format: Some(format.to_owned()),
         hash: None,
     }];
-}
-
-fn balanced_source_format_name(f: powerio_matrix::SourceFormat) -> &'static str {
-    match f {
-        powerio_matrix::SourceFormat::Matpower => "matpower",
-        powerio_matrix::SourceFormat::PowerModelsJson => "powermodels-json",
-        powerio_matrix::SourceFormat::EgretJson => "egret-json",
-        powerio_matrix::SourceFormat::Psse => "psse",
-        powerio_matrix::SourceFormat::PowerWorld => "powerworld",
-        powerio_matrix::SourceFormat::PandapowerJson => "pandapower-json",
-        powerio_matrix::SourceFormat::Pslf => "pslf",
-        powerio_matrix::SourceFormat::Goc3Json => "goc3-json",
-        powerio_matrix::SourceFormat::SurgeJson => "surge-json",
-        powerio_matrix::SourceFormat::PowerWorldBinary => "powerworld-pwb",
-        powerio_matrix::SourceFormat::InMemory => "in-memory",
-        powerio_matrix::SourceFormat::Normalized => "normalized",
-        powerio_matrix::SourceFormat::Gridfm => "gridfm",
-        powerio_matrix::SourceFormat::PypsaCsv => "pypsa-csv",
-        _ => "unknown",
-    }
 }
 
 fn transmission_summary_json(
@@ -1263,9 +1243,9 @@ fn run_convert(
             "`convert` cannot write PowerWorld .pwb binary cases; use `--to powerworld` for AUX text"
         );
     }
-    if matches!(to, FormatArg::Goc3Json) {
-        anyhow::bail!("`convert` cannot write GO Challenge 3 JSON; it is an input format");
-    }
+    // goc3-json is read only, but the library still echoes a goc3 source to a
+    // goc3 target byte for byte; every other case gets its precise
+    // WriteUnsupported error, so no CLI-level bail here.
     // PyPSA CSV is a transmission format that writes a directory, not a text
     // target, so it takes the folder path and returns early.
     if to == FormatArg::PypsaCsv {

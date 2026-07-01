@@ -334,6 +334,44 @@ fn goc3_package_operating_points_materialize_static_snapshots() {
 }
 
 #[test]
+fn goc3_operating_points_follow_parser_row_assignment() {
+    // A device without a uid still occupies a payload row; the extractor
+    // must keep counting so later devices' updates land on their own rows,
+    // and the parent's package_id must not leak into the derived package.
+    let src = GOC3_PACKAGE_SRC.replacen(
+        r#"{"uid": "prod", "bus": "bus_00""#,
+        r#"{"bus": "bus_00", "device_type": "producer", "initial_status": {"on_status": 1, "p": 0.0, "q": 0.0}},
+      {"uid": "prod", "bus": "bus_00""#,
+        1,
+    );
+    let net = powerio::parse_str(&src, "goc3-json")
+        .expect("parse goc3")
+        .network;
+    assert_eq!(net.generators.len(), 2);
+
+    let pkg = CompilerPackage::from_balanced(net).with_package_id("parent");
+    let series = pkg.operating_points().expect("operating points");
+    let update = &series.points[1].updates[0];
+    assert_eq!(update.element.table, "generators");
+    assert_eq!(update.element.row, 1, "uid-less producer occupies row 0");
+    assert_eq!(update.element.source_uid.as_deref(), Some("prod"));
+
+    let materialized = pkg.materialize_operating_point(1).expect("materialize");
+    let balanced = materialized.as_balanced().expect("balanced payload");
+    // Row 0 (the uid-less device) keeps its static bounds; row 1 gets the
+    // period 1 update.
+    assert_close(balanced.generators[0].pmax, 0.0);
+    assert_close(balanced.generators[1].pmax, 80.0);
+    assert_eq!(materialized.package_id, None);
+    match &materialized.origin {
+        powerio_pkg::Origin::Derived {
+            parent_package_id, ..
+        } => assert_eq!(parent_package_id.as_deref(), Some("parent")),
+        other => panic!("expected derived origin, got {other:?}"),
+    }
+}
+
+#[test]
 fn multiconductor_payload_roundtrips() {
     let pkg = multiconductor_package();
     assert_eq!(pkg.model_kind(), ModelKind::Multiconductor);
