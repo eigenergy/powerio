@@ -1,3 +1,4 @@
+use std::collections::BTreeMap;
 use std::fmt::Write as _;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -10,10 +11,11 @@ use powerio_matrix::{
 
 const REPORT_ENV: &str = "POWERIO_CONVERSION_MATRIX_REPORT";
 const REPORT_MARKER: &str = "<!-- powerio-conversion-matrix-report -->";
+const MAX_WARNING_SUMMARY_ROWS: usize = 12;
 static DSS_TEMP_COUNTER: AtomicU64 = AtomicU64::new(0);
 
 #[test]
-fn conversion_matrix_report_matches_expected() {
+fn conversion_matrix_report_matches_baseline() {
     let report = build_report();
     if let Ok(path) = std::env::var(REPORT_ENV) {
         let path = PathBuf::from(path);
@@ -49,12 +51,17 @@ fn build_report() -> Report {
     writeln!(markdown).unwrap();
     writeln!(
         markdown,
-        "Cells show `observed/expected` warnings across source parse, target write, and target readback."
+        "Cells show `X/Y` warning counts as observed/baseline across source parse, target write, and target readback; `Z cases` is the fixture count."
     )
     .unwrap();
     writeln!(
         markdown,
-        "🟢 means zero warnings, 🟡 means expected warnings, and 🔴 means a failed invariant or warning count drift."
+        "🟢 = `0/0`, 🟡 = observed warnings match a nonzero baseline, 🔴 = invariant failure or warning count drift."
+    )
+    .unwrap();
+    writeln!(
+        markdown,
+        "Baselines are fixed in this test, so CI fails when a conversion starts adding or losing warnings."
     )
     .unwrap();
     writeln!(markdown).unwrap();
@@ -75,27 +82,36 @@ struct MatrixReport {
 #[derive(Clone)]
 struct Cell {
     observed_warnings: usize,
-    expected_warnings: usize,
+    baseline_warnings: usize,
     cases: usize,
     failures: Vec<String>,
+    warning_counts: BTreeMap<String, usize>,
 }
 
 impl Cell {
-    fn new(expected_warnings: usize) -> Self {
+    fn new(baseline_warnings: usize) -> Self {
         Self {
             observed_warnings: 0,
-            expected_warnings,
+            baseline_warnings,
             cases: 0,
             failures: Vec::new(),
+            warning_counts: BTreeMap::new(),
         }
     }
 
     fn ok(&self) -> bool {
-        self.failures.is_empty() && self.observed_warnings == self.expected_warnings
+        self.failures.is_empty() && self.observed_warnings == self.baseline_warnings
     }
 
     fn parity(&self) -> bool {
         self.ok() && self.observed_warnings == 0
+    }
+
+    fn record_warnings(&mut self, warnings: &[String]) {
+        self.observed_warnings += warnings.len();
+        for warning in warnings {
+            *self.warning_counts.entry(warning.clone()).or_default() += 1;
+        }
     }
 }
 
@@ -119,6 +135,8 @@ fn write_matrix_section(markdown: &mut String, title: &str, report: &MatrixRepor
         }
         writeln!(markdown).unwrap();
     }
+    writeln!(markdown).unwrap();
+    write_warning_summary(markdown, title, report);
 }
 
 fn cell_summary(cell: &Cell) -> String {
@@ -129,19 +147,44 @@ fn cell_summary(cell: &Cell) -> String {
     } else {
         "🔴"
     };
-    let status = if !cell.failures.is_empty() {
-        "failed"
-    } else if cell.observed_warnings != cell.expected_warnings {
-        "warning drift"
-    } else if cell.observed_warnings == 0 {
-        "parity"
-    } else {
-        "expected warnings"
-    };
     format!(
-        "{icon} {}/{} warn<br>{status}<br>{} cases",
-        cell.observed_warnings, cell.expected_warnings, cell.cases
+        "{icon} {}/{}<br>{} cases",
+        cell.observed_warnings, cell.baseline_warnings, cell.cases
     )
+}
+
+fn write_warning_summary(markdown: &mut String, title: &str, report: &MatrixReport) {
+    let mut warning_counts: BTreeMap<String, usize> = BTreeMap::new();
+    for cell in report.cells.iter().flatten() {
+        for (warning, count) in &cell.warning_counts {
+            *warning_counts.entry(warning.clone()).or_default() += count;
+        }
+    }
+
+    writeln!(markdown, "#### {title} Warning Summary").unwrap();
+    writeln!(markdown).unwrap();
+    if warning_counts.is_empty() {
+        writeln!(markdown, "No warnings observed.").unwrap();
+        return;
+    }
+
+    let mut rows: Vec<_> = warning_counts.into_iter().collect();
+    rows.sort_by(|(warning_a, count_a), (warning_b, count_b)| {
+        count_b.cmp(count_a).then_with(|| warning_a.cmp(warning_b))
+    });
+    writeln!(markdown, "| count | warning |").unwrap();
+    writeln!(markdown, "| ---: | --- |").unwrap();
+    for (warning, count) in rows.iter().take(MAX_WARNING_SUMMARY_ROWS) {
+        writeln!(markdown, "| {count} | {} |", escape_table_cell(warning)).unwrap();
+    }
+    let omitted = rows.len().saturating_sub(MAX_WARNING_SUMMARY_ROWS);
+    if omitted > 0 {
+        writeln!(markdown, "|  | {omitted} more warning texts omitted |").unwrap();
+    }
+}
+
+fn escape_table_cell(text: &str) -> String {
+    text.replace('|', "\\|").replace('\n', "<br>")
 }
 
 #[derive(Clone, Copy)]
@@ -194,7 +237,7 @@ const TRANSMISSION_FORMATS: [TransmissionFormat; 8] = [
     },
 ];
 
-const TRANSMISSION_EXPECTED_WARNINGS: [[usize; 8]; 8] = [
+const TRANSMISSION_WARNING_BASELINE: [[usize; 8]; 8] = [
     [0, 0, 0, 8, 8, 0, 5, 11],
     [6, 0, 1, 14, 14, 1, 11, 16],
     [6, 0, 0, 14, 14, 1, 11, 16],
@@ -243,12 +286,12 @@ fn run_transmission_matrix() -> MatrixReport {
         let payloads = transmission_payloads(*source);
         let mut row = Vec::new();
         for (target_idx, target) in TRANSMISSION_FORMATS.iter().enumerate() {
-            let mut cell = Cell::new(TRANSMISSION_EXPECTED_WARNINGS[source_idx][target_idx]);
+            let mut cell = Cell::new(TRANSMISSION_WARNING_BASELINE[source_idx][target_idx]);
             match &payloads {
                 Ok(payloads) => {
                     for payload in payloads {
                         cell.cases += 1;
-                        cell.observed_warnings += payload.parse_warnings.len();
+                        cell.record_warnings(&payload.parse_warnings);
                         validate_transmission_pair(payload, *target, &mut cell);
                     }
                 }
@@ -256,11 +299,11 @@ fn run_transmission_matrix() -> MatrixReport {
             }
             if !cell.ok() {
                 failures.push(format!(
-                    "transmission {} -> {}: observed {} warnings, expected {}; {}",
+                    "transmission {} -> {}: observed {} warnings, baseline {}; {}",
                     source.name,
                     target.name,
                     cell.observed_warnings,
-                    cell.expected_warnings,
+                    cell.baseline_warnings,
                     cell.failures.join("; ")
                 ));
             }
@@ -305,10 +348,10 @@ fn validate_transmission_pair(
 ) {
     match write_transmission_as(&payload.network, target.target) {
         Ok(conversion) => {
-            cell.observed_warnings += conversion.warnings.len();
+            cell.record_warnings(&conversion.warnings);
             match parse_transmission_str(&conversion.text, target.token) {
                 Ok(parsed) => {
-                    cell.observed_warnings += parsed.warnings.len();
+                    cell.record_warnings(&parsed.warnings);
                     let actual = transmission_core(&parsed.network);
                     if actual != payload.core {
                         cell.failures.push(format!(
@@ -376,7 +419,7 @@ const DISTRIBUTION_FORMATS: [DistributionFormat; 3] = [
     },
 ];
 
-const DISTRIBUTION_EXPECTED_WARNINGS: [[usize; 3]; 3] = [[0, 152, 84], [1, 0, 0], [22, 117, 0]];
+const DISTRIBUTION_WARNING_BASELINE: [[usize; 3]; 3] = [[0, 152, 84], [1, 0, 0], [22, 117, 0]];
 
 const DISTRIBUTION_CASES: [(&str, &str, DistributionFormat); 7] = [
     (
@@ -442,12 +485,12 @@ fn run_distribution_matrix() -> MatrixReport {
         let payloads = distribution_payloads(*source);
         let mut row = Vec::new();
         for (target_idx, target) in DISTRIBUTION_FORMATS.iter().enumerate() {
-            let mut cell = Cell::new(DISTRIBUTION_EXPECTED_WARNINGS[source_idx][target_idx]);
+            let mut cell = Cell::new(DISTRIBUTION_WARNING_BASELINE[source_idx][target_idx]);
             match &payloads {
                 Ok(payloads) => {
                     for payload in payloads {
                         cell.cases += 1;
-                        cell.observed_warnings += payload.parse_warnings.len();
+                        cell.record_warnings(&payload.parse_warnings);
                         validate_distribution_pair(payload, *target, &mut cell);
                     }
                 }
@@ -455,11 +498,11 @@ fn run_distribution_matrix() -> MatrixReport {
             }
             if !cell.ok() {
                 failures.push(format!(
-                    "distribution {} -> {}: observed {} warnings, expected {}; {}",
+                    "distribution {} -> {}: observed {} warnings, baseline {}; {}",
                     source.name,
                     target.name,
                     cell.observed_warnings,
-                    cell.expected_warnings,
+                    cell.baseline_warnings,
                     cell.failures.join("; ")
                 ));
             }
@@ -504,10 +547,10 @@ fn validate_distribution_pair(
     cell: &mut Cell,
 ) {
     let conversion = payload.network.to_format(target.target);
-    cell.observed_warnings += conversion.warnings.len();
+    cell.record_warnings(&conversion.warnings);
     match parse_distribution_text(&conversion.text, target) {
         Ok(mut parsed) => {
-            cell.observed_warnings += parsed.warnings.len();
+            cell.record_warnings(&parsed.warnings);
             parsed.warnings.clear();
             let actual = distribution_core(&parsed);
             if actual != payload.core {
