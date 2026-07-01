@@ -1440,6 +1440,23 @@ fn package_as_multiconductor(text: &str) -> PyResult<PyDistNetwork> {
         .and_then(package_to_dist_py)
 }
 
+/// Return the package operating point series as JSON, or `null` when absent.
+#[pyfunction]
+fn package_operating_points(text: &str) -> PyResult<String> {
+    let pkg = CompilerPackage::from_json(text).map_err(package_pyerr)?;
+    serde_json::to_string(&pkg.operating_points).map_err(package_pyerr)
+}
+
+/// Materialize one operating point and return the resulting static package JSON.
+#[pyfunction]
+fn package_materialize_operating_point(text: &str, index: usize) -> PyResult<String> {
+    let pkg = CompilerPackage::from_json(text).map_err(package_pyerr)?;
+    let materialized = pkg
+        .materialize_operating_point(index)
+        .map_err(package_pyerr)?;
+    package_to_json(&materialized)
+}
+
 /// Classify top level JSON markers. Returns `(status, domain, format)` where
 /// `status` is `known`, `unknown`, or `ambiguous`.
 #[pyfunction]
@@ -1613,6 +1630,8 @@ fn _powerio(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(package_parse_str, m)?)?;
     m.add_function(wrap_pyfunction!(package_as_balanced, m)?)?;
     m.add_function(wrap_pyfunction!(package_as_multiconductor, m)?)?;
+    m.add_function(wrap_pyfunction!(package_operating_points, m)?)?;
+    m.add_function(wrap_pyfunction!(package_materialize_operating_point, m)?)?;
     m.add_function(wrap_pyfunction!(classify_json_text, m)?)?;
     // Whether the gridfm Parquet surface (arrow/parquet) was compiled in, so the
     // pure-Python layer can raise an ImportError instead of an AttributeError.

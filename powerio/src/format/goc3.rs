@@ -20,6 +20,20 @@ use crate::{Error, Result};
 
 const FMT: &str = "GO Challenge 3 JSON";
 
+#[derive(Debug)]
+struct Goc3BusMap {
+    by_uid: HashMap<String, BusId>,
+}
+
+impl Goc3BusMap {
+    fn get(&self, uid: &str) -> Result<BusId> {
+        self.by_uid
+            .get(uid)
+            .copied()
+            .ok_or_else(|| bad(format!("unknown bus uid `{uid}`")))
+    }
+}
+
 /// Parse a GO Challenge 3 JSON input file.
 pub fn parse_goc3_json(content: &str) -> Result<super::Parsed> {
     let mut warnings = Vec::new();
@@ -73,7 +87,7 @@ pub(crate) fn parse_goc3_source(
 
     warn_static_reduction(root, network, warnings);
 
-    let mut buses = read_buses(network)?;
+    let (mut buses, bus_map) = read_buses(network)?;
     let bus_pos: HashMap<BusId, usize> = buses
         .iter()
         .enumerate()
@@ -83,10 +97,15 @@ pub(crate) fn parse_goc3_source(
     let device_ts = device_time_series(time_series)?;
 
     let mut branches = Vec::new();
-    branches.extend(read_branches(network, "ac_line", false)?);
-    branches.extend(read_branches(network, "two_winding_transformer", true)?);
+    branches.extend(read_branches(network, "ac_line", false, &bus_map)?);
+    branches.extend(read_branches(
+        network,
+        "two_winding_transformer",
+        true,
+        &bus_map,
+    )?);
 
-    let shunts = read_shunts(network, base_mva)?;
+    let shunts = read_shunts(network, base_mva, &bus_map)?;
     let mut loads = Vec::new();
     let mut generators = Vec::new();
     let mut generator_buses = HashSet::new();
@@ -96,7 +115,7 @@ pub(crate) fn parse_goc3_source(
         let obj = item_object(item, "simple_dispatchable_device")?;
         let uid = item_uid(item, obj, "simple_dispatchable_device");
         let device_type = string(obj, "device_type").unwrap_or("producer");
-        let bus = bus_ref(obj, "bus")?;
+        let bus = bus_ref(obj, "bus", &bus_map)?;
         let ts = uid.as_deref().and_then(|key| device_ts.get(key).copied());
 
         match device_type {
@@ -131,7 +150,7 @@ pub(crate) fn parse_goc3_source(
         warnings,
     );
 
-    let hvdc = read_hvdc(network, base_mva)?;
+    let hvdc = read_hvdc(network, base_mva, &bus_map)?;
 
     let net = Network {
         name,
@@ -155,50 +174,74 @@ pub(crate) fn parse_goc3_source(
     Ok(net)
 }
 
-fn read_buses(network: &Map<String, Value>) -> Result<Vec<Bus>> {
+fn read_buses(network: &Map<String, Value>) -> Result<(Vec<Bus>, Goc3BusMap)> {
     let items = section(network, "bus")?;
     if items.is_empty() {
         return Err(bad("missing non-empty `network.bus` section"));
     }
-    items
-        .into_iter()
-        .map(|item| {
-            let obj = item_object(item, "bus")?;
-            let uid = item_uid(item, obj, "bus").ok_or_else(|| bad("bus record missing `uid`"))?;
-            let initial = initial_status(obj);
-            Ok(Bus {
-                id: bus_id(&uid)?,
-                kind: BusType::Pq,
-                vm: initial.and_then(|s| number(s, "vm")).unwrap_or(1.0),
-                va: initial.and_then(|s| number(s, "va")).unwrap_or(0.0) * normalize::RAD_TO_DEG,
-                base_kv: number(obj, "base_nom_volt").unwrap_or(0.0),
-                vmax: number(obj, "vm_ub").unwrap_or(1.1),
-                vmin: number(obj, "vm_lb").unwrap_or(0.9),
-                evhi: None,
-                evlo: None,
-                area: 1,
-                zone: 1,
-                name: Some(uid),
-                extras: extras(
-                    obj,
-                    &["uid", "base_nom_volt", "vm_ub", "vm_lb", "initial_status"],
-                ),
-            })
-        })
-        .collect()
+    let mut records = Vec::with_capacity(items.len());
+    let mut seen_uids = HashSet::new();
+    for item in items {
+        let obj = item_object(item, "bus")?;
+        let uid = item_uid(item, obj, "bus").ok_or_else(|| bad("bus record missing `uid`"))?;
+        if !seen_uids.insert(uid.clone()) {
+            return Err(bad(format!("duplicate bus uid `{uid}`")));
+        }
+        records.push((uid, obj));
+    }
+
+    let suffixes: Option<Vec<usize>> = records
+        .iter()
+        .map(|(uid, _)| official_bus_suffix(uid))
+        .collect();
+    let suffixes_unique = suffixes
+        .as_ref()
+        .is_some_and(|values| values.iter().copied().collect::<HashSet<_>>().len() == values.len());
+
+    let mut by_uid = HashMap::with_capacity(records.len());
+    let mut buses = Vec::with_capacity(records.len());
+    for (index, (uid, obj)) in records.into_iter().enumerate() {
+        let id = if suffixes_unique {
+            BusId(official_bus_suffix(&uid).expect("suffix checked above") + 1)
+        } else {
+            BusId(index + 1)
+        };
+        by_uid.insert(uid.clone(), id);
+        let initial = initial_status(obj);
+        buses.push(Bus {
+            id,
+            kind: BusType::Pq,
+            vm: initial.and_then(|s| number(s, "vm")).unwrap_or(1.0),
+            va: initial.and_then(|s| number(s, "va")).unwrap_or(0.0) * normalize::RAD_TO_DEG,
+            base_kv: number(obj, "base_nom_volt").unwrap_or(0.0),
+            vmax: number(obj, "vm_ub").unwrap_or(1.1),
+            vmin: number(obj, "vm_lb").unwrap_or(0.9),
+            evhi: None,
+            evlo: None,
+            area: 1,
+            zone: 1,
+            name: Some(uid),
+            extras: extras(
+                obj,
+                &["uid", "base_nom_volt", "vm_ub", "vm_lb", "initial_status"],
+            ),
+        });
+    }
+    Ok((buses, Goc3BusMap { by_uid }))
 }
 
 fn read_branches(
     network: &Map<String, Value>,
     section_name: &'static str,
     transformer: bool,
+    buses: &Goc3BusMap,
 ) -> Result<Vec<Branch>> {
     section(network, section_name)?
         .into_iter()
         .map(|item| {
             let obj = item_object(item, section_name)?;
-            let from = bus_ref(obj, "fr_bus")?;
-            let to = bus_ref(obj, "to_bus")?;
+            let from = bus_ref(obj, "fr_bus", buses)?;
+            let to = bus_ref(obj, "to_bus", buses)?;
             let initial = initial_status(obj);
             let b = number(obj, "b").unwrap_or(0.0);
             let rate_a = number(obj, "mva_ub_nom").unwrap_or(0.0);
@@ -284,7 +327,11 @@ fn read_branches(
         .collect()
 }
 
-fn read_shunts(network: &Map<String, Value>, base_mva: f64) -> Result<Vec<Shunt>> {
+fn read_shunts(
+    network: &Map<String, Value>,
+    base_mva: f64,
+    buses: &Goc3BusMap,
+) -> Result<Vec<Shunt>> {
     section(network, "shunt")?
         .into_iter()
         .map(|item| {
@@ -293,7 +340,7 @@ fn read_shunts(network: &Map<String, Value>, base_mva: f64) -> Result<Vec<Shunt>
                 .and_then(|s| number(s, "step"))
                 .unwrap_or(1.0);
             Ok(Shunt {
-                bus: bus_ref(obj, "bus")?,
+                bus: bus_ref(obj, "bus", buses)?,
                 g: number(obj, "gs").unwrap_or(0.0) * step * base_mva,
                 b: number(obj, "bs").unwrap_or(0.0) * step * base_mva,
                 in_service: step != 0.0,
@@ -373,7 +420,7 @@ fn read_consumer(obj: &Map<String, Value>, ts: Option<&Value>, bus: BusId, base_
     }
 }
 
-fn read_hvdc(network: &Map<String, Value>, base_mva: f64) -> Result<Vec<Hvdc>> {
+fn read_hvdc(network: &Map<String, Value>, base_mva: f64, buses: &Goc3BusMap) -> Result<Vec<Hvdc>> {
     section(network, "dc_line")?
         .into_iter()
         .map(|item| {
@@ -381,8 +428,8 @@ fn read_hvdc(network: &Map<String, Value>, base_mva: f64) -> Result<Vec<Hvdc>> {
             let initial = initial_status(obj);
             let pdc = initial.and_then(|s| number(s, "pdc_fr")).unwrap_or(0.0) * base_mva;
             Ok(Hvdc {
-                from: bus_ref(obj, "fr_bus")?,
-                to: bus_ref(obj, "to_bus")?,
+                from: bus_ref(obj, "fr_bus", buses)?,
+                to: bus_ref(obj, "to_bus", buses)?,
                 in_service: initial_status_flag(obj, true),
                 pf: pdc,
                 pt: -pdc,
@@ -583,20 +630,16 @@ fn compare_keys(a: &str, b: &str) -> Ordering {
     }
 }
 
-fn bus_ref(obj: &Map<String, Value>, key: &'static str) -> Result<BusId> {
+fn bus_ref(obj: &Map<String, Value>, key: &'static str, buses: &Goc3BusMap) -> Result<BusId> {
     let uid = string(obj, key).ok_or_else(|| bad(format!("missing string `{key}`")))?;
-    bus_id(uid)
+    buses.get(uid)
 }
 
-fn bus_id(uid: &str) -> Result<BusId> {
-    let digits: String = uid.chars().filter(char::is_ascii_digit).collect();
-    if digits.is_empty() {
-        return Err(bad(format!("bus uid `{uid}` has no numeric id")));
-    }
-    let zero_based = digits
-        .parse::<usize>()
-        .map_err(|e| bad(format!("bus uid `{uid}` numeric id is invalid: {e}")))?;
-    Ok(BusId(zero_based + 1))
+fn official_bus_suffix(uid: &str) -> Option<usize> {
+    let rest = uid.strip_prefix("bus_")?;
+    (!rest.is_empty() && rest.chars().all(|c| c.is_ascii_digit()))
+        .then(|| rest.parse::<usize>().ok())
+        .flatten()
 }
 
 fn string<'a>(obj: &'a Map<String, Value>, key: &str) -> Option<&'a str> {

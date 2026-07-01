@@ -338,11 +338,18 @@ fn cost_obj(cost: &GenCost, warnings: &mut Vec<String>) -> Option<Value> {
 }
 
 fn storage_gen_obj(storage: &Storage, counts: &mut BTreeMap<BusId, usize>) -> Value {
-    let mut obj = Map::new();
-    obj.insert(
-        "id".into(),
-        Value::String(next_id("storage", counts, storage.bus)),
-    );
+    let mut obj = storage
+        .extras
+        .get("surge_generator")
+        .and_then(Value::as_object)
+        .cloned()
+        .unwrap_or_default();
+    if !obj.contains_key("id") {
+        obj.insert(
+            "id".into(),
+            Value::String(next_id("storage", counts, storage.bus)),
+        );
+    }
     obj.insert("bus".into(), Value::from(storage.bus.0 as u64));
     obj.insert("p".into(), jnum(storage.ps));
     obj.insert("q".into(), jnum(storage.qs));
@@ -356,12 +363,18 @@ fn storage_gen_obj(storage: &Storage, counts: &mut BTreeMap<BusId, usize>) -> Va
         jnum(storage.thermal_rating.max(1.0)),
     );
     obj.insert("in_service".into(), Value::Bool(storage.in_service));
-    obj.insert("gen_type".into(), Value::String("Synchronous".into()));
-    obj.insert("pfr_eligible".into(), Value::Bool(true));
-    obj.insert("quick_start".into(), Value::Bool(false));
-    obj.insert("voltage_regulated".into(), Value::Bool(false));
+    obj.entry("gen_type")
+        .or_insert_with(|| Value::String("Synchronous".into()));
+    obj.entry("pfr_eligible").or_insert(Value::Bool(true));
+    obj.entry("quick_start").or_insert(Value::Bool(false));
+    obj.entry("voltage_regulated").or_insert(Value::Bool(false));
 
-    let mut storage_obj = Map::new();
+    let mut storage_obj = storage
+        .extras
+        .get("surge_storage")
+        .and_then(Value::as_object)
+        .cloned()
+        .unwrap_or_default();
     storage_obj.insert("energy_capacity_mwh".into(), jnum(storage.energy_rating));
     storage_obj.insert("soc_initial_mwh".into(), jnum(storage.energy));
     storage_obj.insert("soc_min_mwh".into(), jnum(0.0));
@@ -371,12 +384,15 @@ fn storage_gen_obj(storage: &Storage, counts: &mut BTreeMap<BusId, usize>) -> Va
         "discharge_efficiency".into(),
         jnum(storage.discharge_efficiency),
     );
-    storage_obj.insert("variable_cost_per_mwh".into(), jnum(0.0));
-    storage_obj.insert("degradation_cost_per_mwh".into(), jnum(0.0));
-    storage_obj.insert(
-        "dispatch_mode".into(),
-        Value::String("CostMinimization".into()),
-    );
+    storage_obj
+        .entry("variable_cost_per_mwh")
+        .or_insert_with(|| jnum(0.0));
+    storage_obj
+        .entry("degradation_cost_per_mwh")
+        .or_insert_with(|| jnum(0.0));
+    storage_obj
+        .entry("dispatch_mode")
+        .or_insert_with(|| Value::String("CostMinimization".into()));
     obj.insert("storage".into(), Value::Object(storage_obj));
 
     Value::Object(obj)
@@ -483,7 +499,9 @@ pub(crate) fn parse_surge_source(
     let mut storage = Vec::new();
     for value in array_field(network, "generators", false)? {
         let (generator, storage_record) = read_generator(value)?;
-        generators.push(generator);
+        if let Some(generator) = generator {
+            generators.push(generator);
+        }
         if let Some(storage_record) = storage_record {
             storage.push(storage_record);
         }
@@ -760,7 +778,7 @@ fn read_branch_solution(obj: &Map<String, Value>) -> Result<Option<BranchSolutio
     }))
 }
 
-fn read_generator(value: &Value) -> Result<(Generator, Option<Storage>)> {
+fn read_generator(value: &Value) -> Result<(Option<Generator>, Option<Storage>)> {
     let obj = object(value, "generator record")?;
     let mut caps: GenCaps = [None; GEN_EXTRA_KEYS.len()];
     if let Some(apf) = obj.get("agc_participation_factor").and_then(Value::as_f64)
@@ -799,12 +817,28 @@ fn read_generator(value: &Value) -> Result<(Generator, Option<Storage>)> {
 
     let storage = match obj.get("storage") {
         Some(Value::Null) | None => None,
-        Some(value) => Some(read_storage(
-            value, bus, pg, qg, pmax, pmin, qmax, qmin, in_service,
-        )?),
+        Some(value) => {
+            let mut storage = read_storage(value, bus, pg, qg, pmax, pmin, qmax, qmin, in_service)?;
+            retain_storage_generator_metadata(&mut storage, obj);
+            Some(storage)
+        }
     };
 
-    Ok((generator, storage))
+    if storage.is_some() {
+        Ok((None, storage))
+    } else {
+        Ok((Some(generator), None))
+    }
+}
+
+fn retain_storage_generator_metadata(storage: &mut Storage, generator: &Map<String, Value>) {
+    let mut metadata = generator.clone();
+    metadata.remove("storage");
+    if !metadata.is_empty() {
+        storage
+            .extras
+            .insert("surge_generator".to_owned(), Value::Object(metadata));
+    }
 }
 
 fn read_cost(value: &Value) -> Result<GenCost> {
@@ -866,7 +900,7 @@ fn read_storage(
         1.0
     };
     let energy_rating = f_map_alias_or(obj, &["energy_capacity_mwh", "soc_max_mwh"], 0.0)?;
-    Ok(Storage {
+    let mut out = Storage {
         bus,
         ps: pg,
         qs: qg,
@@ -886,7 +920,10 @@ fn read_storage(
         q_loss: 0.0,
         in_service,
         extras: Extras::new(),
-    })
+    };
+    out.extras
+        .insert("surge_storage".to_owned(), Value::Object(obj.clone()));
+    Ok(out)
 }
 
 fn read_hvdc(network: &Map<String, Value>) -> Result<Vec<Hvdc>> {

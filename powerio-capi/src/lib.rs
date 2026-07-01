@@ -1328,6 +1328,69 @@ pub unsafe extern "C" fn pio_package_diagnostics_json(
     }
 }
 
+/// Return the package operating point series as JSON, or `null` when absent.
+/// The returned string is owned by the library; free it with
+/// [`pio_string_free`].
+#[cfg(feature = "pkg")]
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn pio_package_operating_points_json(
+    pkg: *const PioPackage,
+    errbuf: *mut c_char,
+    errlen: usize,
+) -> *mut c_char {
+    unsafe {
+        let result = catch_unwind(AssertUnwindSafe(|| {
+            let pkg = pkg
+                .as_ref()
+                .ok_or_else(|| "package handle is NULL".to_string())?;
+            serde_json::to_string(&pkg.package.operating_points).map_err(|e| e.to_string())
+        }));
+        match result {
+            Ok(Ok(text)) => finish_cstring(text, errbuf, errlen),
+            Ok(Err(msg)) => {
+                copy_to_buf(errbuf, errlen, &msg);
+                std::ptr::null_mut()
+            }
+            Err(_) => {
+                copy_to_buf(
+                    errbuf,
+                    errlen,
+                    "panic while reading package operating points",
+                );
+                std::ptr::null_mut()
+            }
+        }
+    }
+}
+
+/// Materialize one operating point into a new static package.
+#[cfg(feature = "pkg")]
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn pio_package_materialize_operating_point(
+    pkg: *const PioPackage,
+    index: i64,
+    errbuf: *mut c_char,
+    errlen: usize,
+) -> *mut PioPackage {
+    unsafe {
+        finish_package(
+            errbuf,
+            errlen,
+            "panic while materializing package operating point",
+            || {
+                let pkg = pkg
+                    .as_ref()
+                    .ok_or_else(|| "package handle is NULL".to_string())?;
+                let index = usize::try_from(index)
+                    .map_err(|_| "operating point index must be non-negative".to_string())?;
+                pkg.package
+                    .materialize_operating_point(index)
+                    .map_err(|e| e.to_string())
+            },
+        )
+    }
+}
+
 /// Return the multiconductor-to-balanced lowering preflight report as JSON.
 /// `base_mva` is the three phase system power base used for the balanced
 /// per-unit projection. Returns `NULL` if the package is not multiconductor.
@@ -1932,6 +1995,8 @@ mod tests {
             "int32_t pio_package_validate(PioPackage *pkg, char *errbuf, size_t errlen);",
             "char *pio_package_validation_json(const PioPackage *pkg, char *errbuf, size_t errlen);",
             "char *pio_package_diagnostics_json(const PioPackage *pkg, char *errbuf, size_t errlen);",
+            "char *pio_package_operating_points_json(const PioPackage *pkg, char *errbuf, size_t errlen);",
+            "PioPackage *pio_package_materialize_operating_point(const PioPackage *pkg, int64_t index, char *errbuf, size_t errlen);",
             "char *pio_package_multiconductor_to_balanced_preflight_json(const PioPackage *pkg, double base_mva, char *errbuf, size_t errlen);",
             "PioPackage *pio_package_lower_multiconductor_to_balanced(const PioPackage *pkg, double base_mva, char *errbuf, size_t errlen);",
             "PioDistNetwork *pio_dist_parse_file(const char *path, const char *from, char *errbuf, size_t errlen);",

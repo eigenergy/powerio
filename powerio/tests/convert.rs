@@ -2329,6 +2329,48 @@ fn parses_goc3_json_static_network() {
 }
 
 #[test]
+fn goc3_rejects_unknown_bus_ref_even_when_digits_match() {
+    let bad = GOC3_TINY.replacen(r#""to_bus": "bus_01""#, r#""to_bus": "missing_bus_01""#, 1);
+    let err = parse_str(&bad, "goc3-json").unwrap_err();
+    assert!(
+        err.to_string().contains("unknown bus uid `missing_bus_01`"),
+        "{err}"
+    );
+}
+
+#[test]
+fn goc3_accepts_nonnumeric_bus_uids_by_exact_reference() {
+    let src = r#"{
+      "network": {
+        "general": {"base_norm_mva": 100.0},
+        "bus": [
+          {"uid": "slack", "base_nom_volt": 230.0},
+          {"uid": "load", "base_nom_volt": 115.0}
+        ],
+        "ac_line": [
+          {"uid": "line", "fr_bus": "slack", "to_bus": "load", "r": 0.01, "x": 0.1, "initial_status": {"on_status": 1}}
+        ],
+        "simple_dispatchable_device": [
+          {"uid": "gen_a", "bus": "slack", "device_type": "producer", "initial_status": {"p": 0.1, "q": 0.0}},
+          {"uid": "load_a", "bus": "load", "device_type": "consumer", "initial_status": {"p": 0.2, "q": 0.1}}
+        ]
+      },
+      "time_series_input": {
+        "general": {"time_periods": 1, "interval_duration": [1.0]},
+        "simple_dispatchable_device": [
+          {"uid": "gen_a", "p_lb": [0.0], "p_ub": [1.0], "q_lb": [-0.5], "q_ub": [0.5]},
+          {"uid": "load_a", "p_ub": [0.2], "q_ub": [0.1]}
+        ]
+      }
+    }"#;
+    let net = parse_str(src, "goc3-json").unwrap().network;
+    assert_eq!(net.buses[0].id, BusId(1));
+    assert_eq!(net.buses[1].id, BusId(2));
+    assert_eq!(net.branches[0].from, BusId(1));
+    assert_eq!(net.branches[0].to, BusId(2));
+}
+
+#[test]
 fn infers_goc3_json_file() {
     let stamp = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -2399,7 +2441,7 @@ fn parses_surge_json_network() {
         Some(BranchSolution::new(1.0, 0.5, -0.9, -0.4))
     );
 
-    assert_eq!(net.generators.len(), 2);
+    assert_eq!(net.generators.len(), 1);
     let generator = &net.generators[0];
     assert_eq!(generator.regulated_bus, Some(BusId(2)));
     assert_close(generator.pg, 50.0);
@@ -2424,6 +2466,22 @@ fn parses_surge_json_network() {
     let matpower = write_as(&net, TargetFormat::Matpower).unwrap();
     assert!(matpower.text.contains("mpc.branch"));
     assert!(has_warning(&matpower.warnings, "system base frequency"));
+}
+
+#[test]
+fn surge_storage_generator_is_not_duplicated_after_canonical_write() {
+    let mut net = parse_str(SURGE_TINY, "surge-json").unwrap().network;
+    assert_eq!(net.generators.len(), 1);
+    assert_eq!(net.storage.len(), 1);
+
+    net.source = None;
+    let surge = write_as(&net, TargetFormat::SurgeJson).unwrap();
+    let back = parse_str(&surge.text, "surge-json").unwrap().network;
+
+    assert_eq!(back.generators.len(), 1);
+    assert_eq!(back.storage.len(), 1);
+    assert_eq!(back.storage[0].bus, BusId(2));
+    assert!(surge.text.contains(r#""storage""#));
 }
 
 #[test]

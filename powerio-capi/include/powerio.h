@@ -661,6 +661,26 @@ char *pio_package_diagnostics_json(const PioPackage *pkg, char *errbuf, size_t e
 
 #if defined(PIO_PKG)
 /**
+ * Return the package operating point series as JSON, or `null` when absent.
+ * The returned string is owned by the library; free it with [`pio_string_free`].
+ */
+char *pio_package_operating_points_json(const PioPackage *pkg,
+                                        char *errbuf,
+                                        size_t errlen);
+#endif
+
+#if defined(PIO_PKG)
+/**
+ * Materialize one operating point into a new static package.
+ */
+PioPackage *pio_package_materialize_operating_point(const PioPackage *pkg,
+                                                    int64_t index,
+                                                    char *errbuf,
+                                                    size_t errlen);
+#endif
+
+#if defined(PIO_PKG)
+/**
  * Return the multiconductor-to-balanced lowering preflight report as JSON.
  * `base_mva` is the three phase system power base used for the balanced
  * per-unit projection. Returns `NULL` if the package is not multiconductor.

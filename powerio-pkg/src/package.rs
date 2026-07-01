@@ -18,7 +18,8 @@ use crate::lowering::{
 };
 use crate::model::{ModelKind, ModelPayload};
 use crate::operating::{
-    OperatingPointSeries, apply_operating_point_to_model, operating_point_update_paths,
+    OperatingPointSeries, apply_operating_point_to_model, goc3_operating_points_from_str,
+    operating_point_update_paths,
 };
 use crate::provenance::{
     Confidence, MappingKind, Origin, Producer, SourceDescriptor, SourceMapEntry, SourceRef,
@@ -199,6 +200,13 @@ impl CompilerPackage {
         let sources = balanced_sources(&net);
         let source_id = sources.first().map(|s| s.id.clone());
         let source_maps = balanced_source_maps(&net, source_id.as_deref());
+        let operating_points = if net.source_format == SourceFormat::Goc3Json {
+            net.source
+                .as_ref()
+                .and_then(|source| goc3_operating_points_from_str(source).ok().flatten())
+        } else {
+            None
+        };
         Self {
             schema: default_schema_url(),
             schema_version: default_schema_version(),
@@ -207,7 +215,7 @@ impl CompilerPackage {
             created_at: None,
             model_kind: ModelKind::Balanced,
             model: ModelPayload::balanced(net),
-            operating_points: None,
+            operating_points,
             origin,
             sources,
             source_maps,
@@ -362,6 +370,32 @@ impl CompilerPackage {
                 })?;
         }
         Ok(package)
+    }
+
+    /// Materialize one operating point and return the balanced payload if this
+    /// is a balanced package.
+    pub fn materialize_balanced_operating_point(
+        &self,
+        index: usize,
+    ) -> serde_json::Result<Option<BalancedNetwork>> {
+        Ok(self
+            .materialize_operating_point(index)?
+            .model
+            .as_balanced()
+            .cloned())
+    }
+
+    /// Materialize one operating point and return the multiconductor payload if
+    /// this is a multiconductor package.
+    pub fn materialize_multiconductor_operating_point(
+        &self,
+        index: usize,
+    ) -> serde_json::Result<Option<MulticonductorNetwork>> {
+        Ok(self
+            .materialize_operating_point(index)?
+            .model
+            .as_multiconductor()
+            .cloned())
     }
 
     /// Serialize to compact `.pio.json`.

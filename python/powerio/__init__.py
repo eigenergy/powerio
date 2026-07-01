@@ -33,6 +33,7 @@ wrappers here assemble scipy matrices and networkx graphs lazily.
 from __future__ import annotations
 
 import importlib
+import json as _json
 from collections import namedtuple
 from typing import Any, Optional
 
@@ -67,6 +68,13 @@ __all__ = [
     "to_matpower",
     "to_json",
     "to_dense",
+    "package_model_kind",
+    "package_parse_file",
+    "package_parse_str",
+    "package_as_balanced",
+    "package_as_multiconductor",
+    "package_operating_points",
+    "package_materialize_operating_point",
     "write_gridfm_batch",
     "read_gridfm",
     "read_gridfm_scenarios",
@@ -682,3 +690,38 @@ def read_pypsa_csv_folder(path: Any) -> Network:
 
 
 from . import dist  # noqa: E402  (needs Conversion defined above)
+
+
+def package_model_kind(package_json: str) -> str:
+    """Return ``"balanced"`` or ``"multiconductor"`` for a ``.pio.json`` package."""
+    return _powerio.package_model_kind(package_json)
+
+
+def package_parse_file(path: Any, from_: Optional[str] = None, scenario: int = 0) -> str:
+    """Parse a file or folder into a ``.pio.json`` package string."""
+    return _powerio.package_parse_file(str(path), from_, scenario)
+
+
+def package_parse_str(text: str, from_: Optional[str] = None) -> str:
+    """Parse in-memory case text into a ``.pio.json`` package string."""
+    return _powerio.package_parse_str(text, from_)
+
+
+def package_as_balanced(package_json: str) -> Network:
+    """Return the balanced payload from a ``.pio.json`` package."""
+    return Network(_powerio.package_as_balanced(package_json))
+
+
+def package_as_multiconductor(package_json: str) -> "dist.MulticonductorNetwork":
+    """Return the multiconductor payload from a ``.pio.json`` package."""
+    return dist.MulticonductorNetwork(_powerio.package_as_multiconductor(package_json))
+
+
+def package_operating_points(package_json: str) -> Any:
+    """Return the package operating point series as Python data, or ``None``."""
+    return _json.loads(_powerio.package_operating_points(package_json))
+
+
+def package_materialize_operating_point(package_json: str, index: int) -> str:
+    """Return static ``.pio.json`` for one materialized operating point."""
+    return _powerio.package_materialize_operating_point(package_json, index)

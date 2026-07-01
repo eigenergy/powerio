@@ -43,6 +43,27 @@ mpc.gencost = [
 ];
 ";
 
+const GOC3_PACKAGE_SRC: &str = r#"{
+  "network": {
+    "general": {"base_norm_mva": 100.0},
+    "bus": [
+      {"uid": "bus_00", "base_nom_volt": 230.0, "vm_lb": 0.95, "vm_ub": 1.05, "initial_status": {"vm": 1.0, "va": 0.0}},
+      {"uid": "bus_01", "base_nom_volt": 115.0, "vm_lb": 0.9, "vm_ub": 1.1, "initial_status": {"vm": 1.0, "va": 0.0}}
+    ],
+    "simple_dispatchable_device": [
+      {"uid": "prod", "bus": "bus_00", "device_type": "producer", "startup_cost": 5.0, "shutdown_cost": 6.0, "initial_status": {"on_status": 1, "p": 0.1, "q": 0.0}},
+      {"uid": "load", "bus": "bus_01", "device_type": "consumer", "initial_status": {"on_status": 1, "p": 0.4, "q": 0.1}}
+    ]
+  },
+  "time_series_input": {
+    "general": {"time_periods": 2, "interval_duration": [1.0, 2.0]},
+    "simple_dispatchable_device": [
+      {"uid": "prod", "p_lb": [0.1, 0.2], "p_ub": [1.0, 0.8], "q_lb": [-0.2, -0.1], "q_ub": [0.4, 0.3], "cost": [[[10.0, 0.1]], [[20.0, 0.2]]], "reserve_ub": [0.05, 0.07]},
+      {"uid": "load", "p_lb": [0.0, 0.0], "p_ub": [0.4, 0.3], "q_lb": [0.0, 0.0], "q_ub": [0.1, 0.2], "cost": [[[0.0, 0.4]], [[0.0, 0.3]]]}
+    ]
+  }
+}"#;
+
 fn balanced_package() -> CompilerPackage {
     let net = powerio::parse_str(MATPOWER_SRC, "matpower")
         .expect("parse matpower")
@@ -259,6 +280,44 @@ fn balanced_payload_roundtrips() {
     let back = CompilerPackage::from_json(&json).unwrap();
     assert_eq!(back.as_balanced().unwrap().buses.len(), 2);
     assert_eq!(back.as_balanced().unwrap().branches.len(), 1);
+}
+
+#[test]
+fn goc3_package_operating_points_materialize_static_snapshots() {
+    let net = powerio::parse_str(GOC3_PACKAGE_SRC, "goc3-json")
+        .expect("parse goc3")
+        .network;
+    assert_eq!(net.generators.len(), 1);
+    assert_eq!(net.loads.len(), 1);
+    assert_close(net.generators[0].pmax, 100.0);
+    assert_close(net.loads[0].p, 40.0);
+
+    let pkg = CompilerPackage::from_balanced(net);
+    let series = pkg.operating_points().expect("operating points");
+    assert_eq!(series.time_axis.periods, 2);
+    assert_eq!(series.time_axis.duration_hours, vec![1.0, 2.0]);
+    assert_eq!(series.points.len(), 2);
+    assert_eq!(series.points[1].updates.len(), 2);
+
+    let materialized = pkg
+        .materialize_balanced_operating_point(1)
+        .expect("materialize")
+        .expect("balanced payload");
+    assert_eq!(materialized.generators.len(), 1);
+    assert_eq!(materialized.loads.len(), 1);
+    assert_close(materialized.generators[0].pmax, 80.0);
+    assert_close(materialized.generators[0].pmin, 20.0);
+    assert_close(materialized.generators[0].qmax, 30.0);
+    assert_close(materialized.loads[0].p, 30.0);
+    assert_close(materialized.loads[0].q, 20.0);
+
+    let static_pkg = pkg.materialize_operating_point(0).expect("period 0");
+    assert!(static_pkg.operating_points().is_none());
+    assert_eq!(static_pkg.lowering_history.len(), 1);
+    assert_eq!(
+        static_pkg.lowering_history[0].pass,
+        "materialize-operating-point"
+    );
 }
 
 #[test]
