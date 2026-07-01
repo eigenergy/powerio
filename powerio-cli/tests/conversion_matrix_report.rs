@@ -13,7 +13,10 @@ const REPORT_ENV: &str = "POWERIO_CONVERSION_MATRIX_REPORT";
 const DETAILS_ENV: &str = "POWERIO_CONVERSION_MATRIX_DETAILS";
 const REPORT_MARKER: &str = "<!-- powerio-conversion-matrix-report -->";
 const DETAILS_MARKER: &str = "<!-- powerio-conversion-matrix-details -->";
-const MAX_WARNING_DETAILS_PER_PAIR: usize = 3;
+const MAX_WARNING_DETAILS_PER_PAIR: usize = 6;
+const SOURCE_PARSE: &str = "source parse";
+const TARGET_WRITE: &str = "target write";
+const TARGET_READBACK: &str = "target readback";
 static DSS_TEMP_COUNTER: AtomicU64 = AtomicU64::new(0);
 
 #[test]
@@ -122,6 +125,11 @@ fn build_report() -> Report {
     .unwrap();
     writeln!(
         details_markdown,
+        "Warning lines are tagged by phase: source parse, target write, or target readback."
+    )
+    .unwrap();
+    writeln!(
+        details_markdown,
         "Expected counts live in `powerio-cli/tests/conversion_matrix_report.rs`; update the matching baseline value in the same PR when warning count changes are intentional."
     )
     .unwrap();
@@ -150,7 +158,7 @@ struct Cell {
     observed_warnings: usize,
     baseline_warnings: usize,
     failures: Vec<String>,
-    warning_counts: BTreeMap<String, usize>,
+    warning_counts: BTreeMap<(String, String), usize>,
 }
 
 impl Cell {
@@ -171,12 +179,12 @@ impl Cell {
         self.ok() && self.observed_warnings == 0
     }
 
-    fn record_warnings(&mut self, warnings: &[String]) {
+    fn record_warnings(&mut self, phase: &str, warnings: &[String]) {
         self.observed_warnings += warnings.len();
         for warning in warnings {
             *self
                 .warning_counts
-                .entry(sanitize_report_text(warning))
+                .entry((phase.to_string(), sanitize_report_text(warning)))
                 .or_default() += 1;
         }
     }
@@ -187,7 +195,7 @@ fn write_matrix_section(markdown: &mut String, title: &str, report: &MatrixRepor
     writeln!(markdown).unwrap();
     writeln!(markdown, "{} cases.", report.case_count).unwrap();
     writeln!(markdown).unwrap();
-    write!(markdown, "| Source ↓<br>target → |").unwrap();
+    write!(markdown, "| Source ↓ / target → |").unwrap();
     for format in &report.formats {
         write!(markdown, " {format} |").unwrap();
     }
@@ -229,9 +237,6 @@ fn write_warning_summary(markdown: &mut String, title: &str, report: &MatrixRepo
     )
     .unwrap();
     writeln!(markdown).unwrap();
-    writeln!(markdown, "| source | target | warnings | details |").unwrap();
-    writeln!(markdown, "| --- | --- | ---: | --- |").unwrap();
-
     let mut wrote_row = false;
     for (source, row) in report.formats.iter().zip(&report.cells) {
         for (target, cell) in report.formats.iter().zip(row) {
@@ -241,32 +246,36 @@ fn write_warning_summary(markdown: &mut String, title: &str, report: &MatrixRepo
             wrote_row = true;
             writeln!(
                 markdown,
-                "| {source} | {target} | {}/{} | {} |",
-                cell.observed_warnings,
-                cell.baseline_warnings,
-                cell_details(cell)
+                "- **{source} → {target}** (`{}/{}`)",
+                cell.observed_warnings, cell.baseline_warnings
             )
             .unwrap();
+            write_cell_details(markdown, cell);
         }
     }
 
     if !wrote_row {
-        writeln!(markdown, "|  |  | 0/0 | No warnings observed. |").unwrap();
+        writeln!(markdown, "No warnings observed.").unwrap();
     }
 }
 
-fn cell_details(cell: &Cell) -> String {
+fn write_cell_details(markdown: &mut String, cell: &Cell) {
     let mut details = Vec::new();
     for failure in &cell.failures {
         details.push(format!("failure: {}", sanitize_report_text(failure)));
     }
 
     let mut warnings: Vec<_> = cell.warning_counts.iter().collect();
-    warnings.sort_by(|(warning_a, count_a), (warning_b, count_b)| {
-        count_b.cmp(count_a).then_with(|| warning_a.cmp(warning_b))
-    });
-    for (warning, count) in warnings.iter().take(MAX_WARNING_DETAILS_PER_PAIR) {
-        details.push(format!("{count}x {warning}"));
+    warnings.sort_by(
+        |((phase_a, warning_a), count_a), ((phase_b, warning_b), count_b)| {
+            count_b
+                .cmp(count_a)
+                .then_with(|| phase_order(phase_a).cmp(&phase_order(phase_b)))
+                .then_with(|| warning_a.cmp(warning_b))
+        },
+    );
+    for ((phase, warning), count) in warnings.iter().take(MAX_WARNING_DETAILS_PER_PAIR) {
+        details.push(format!("{phase}: {count}x {warning}"));
     }
     let omitted = warnings.len().saturating_sub(MAX_WARNING_DETAILS_PER_PAIR);
     if omitted > 0 {
@@ -274,13 +283,25 @@ fn cell_details(cell: &Cell) -> String {
     }
 
     if details.is_empty() {
-        return "No warning text recorded.".to_string();
+        writeln!(markdown, "  - No warning text recorded.").unwrap();
+        return;
     }
-    escape_table_cell(&details.join("<br>"))
+    for detail in details {
+        writeln!(markdown, "  - {}", markdown_list_text(&detail)).unwrap();
+    }
 }
 
-fn escape_table_cell(text: &str) -> String {
-    text.replace('|', "\\|").replace('\n', "<br>")
+fn phase_order(phase: &str) -> usize {
+    match phase {
+        SOURCE_PARSE => 0,
+        TARGET_WRITE => 1,
+        TARGET_READBACK => 2,
+        _ => 3,
+    }
+}
+
+fn markdown_list_text(text: &str) -> String {
+    text.replace('\n', " ")
 }
 
 fn sanitize_report_text(text: &str) -> String {
@@ -297,8 +318,42 @@ fn sanitize_report_text(text: &str) -> String {
     }
 
     let temp_dir = std::env::temp_dir().to_string_lossy().into_owned();
-    text.replace(&temp_dir, "<tmp>")
-        .replace(env!("CARGO_MANIFEST_DIR"), "<crate>")
+    let text = text
+        .replace(&temp_dir, "<tmp>")
+        .replace(env!("CARGO_MANIFEST_DIR"), "<crate>");
+    code_object_name(&text)
+}
+
+fn code_object_name(text: &str) -> String {
+    const OBJECT_PREFIXES: &[&str] = &[
+        "voltage source",
+        "vsource",
+        "load",
+        "capacitor",
+        "reactor",
+        "generator",
+        "shunt",
+        "transformer",
+        "switch",
+        "linecode",
+        "line",
+        "bus",
+    ];
+
+    for prefix in OBJECT_PREFIXES {
+        let Some(rest) = text.strip_prefix(prefix).and_then(|s| s.strip_prefix(' ')) else {
+            continue;
+        };
+        let Some((name, suffix)) = rest.split_once(':') else {
+            continue;
+        };
+        if name.contains(char::is_whitespace) || name.starts_with('`') {
+            continue;
+        }
+        return format!("{prefix} `{name}`:{suffix}");
+    }
+
+    text.to_string()
 }
 
 #[derive(Clone, Copy)]
@@ -404,7 +459,7 @@ fn run_transmission_matrix() -> MatrixReport {
             match &payloads {
                 Ok(payloads) => {
                     for payload in payloads {
-                        cell.record_warnings(&payload.parse_warnings);
+                        cell.record_warnings(SOURCE_PARSE, &payload.parse_warnings);
                         validate_transmission_pair(payload, *target, &mut cell);
                     }
                 }
@@ -462,10 +517,10 @@ fn validate_transmission_pair(
 ) {
     match write_transmission_as(&payload.network, target.target) {
         Ok(conversion) => {
-            cell.record_warnings(&conversion.warnings);
+            cell.record_warnings(TARGET_WRITE, &conversion.warnings);
             match parse_transmission_str(&conversion.text, target.token) {
                 Ok(parsed) => {
-                    cell.record_warnings(&parsed.warnings);
+                    cell.record_warnings(TARGET_READBACK, &parsed.warnings);
                     let actual = transmission_core(&parsed.network);
                     if actual != payload.core {
                         cell.failures.push(format!(
@@ -603,7 +658,7 @@ fn run_distribution_matrix() -> MatrixReport {
             match &payloads {
                 Ok(payloads) => {
                     for payload in payloads {
-                        cell.record_warnings(&payload.parse_warnings);
+                        cell.record_warnings(SOURCE_PARSE, &payload.parse_warnings);
                         validate_distribution_pair(payload, *target, &mut cell);
                     }
                 }
@@ -661,10 +716,10 @@ fn validate_distribution_pair(
     cell: &mut Cell,
 ) {
     let conversion = payload.network.to_format(target.target);
-    cell.record_warnings(&conversion.warnings);
+    cell.record_warnings(TARGET_WRITE, &conversion.warnings);
     match parse_distribution_text(&conversion.text, target) {
         Ok(mut parsed) => {
-            cell.record_warnings(&parsed.warnings);
+            cell.record_warnings(TARGET_READBACK, &parsed.warnings);
             parsed.warnings.clear();
             let actual = distribution_core(&parsed);
             if actual != payload.core {
