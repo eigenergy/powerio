@@ -759,11 +759,13 @@ pub(crate) fn parse_psse_source(
     let mut hvdc = Vec::new();
     let mut areas = Vec::new();
     let mut solver = SolverParams::default();
+    let mut unmodeled_sections: BTreeMap<String, usize> = BTreeMap::new();
 
     // Sections appear in fixed order, each ended by a record whose first field is
     // `0`. We read the ones we model and treat the rest as skipped.
     let mut section = Section::Bus;
     let mut saw_bus_marker = false;
+    let mut skipped_section_name: Option<String> = None;
     let mut lines = lines.peekable();
     while let Some(raw) = lines.next() {
         let line = raw.trim();
@@ -781,7 +783,10 @@ pub(crate) fn parse_psse_source(
             // SWITCHED SHUNT DATA"); read that rather than counting, so the many
             // unmodeled sections between transformers and switched shunts don't
             // throw off the position.
-            section = section_after_marker(line);
+            let next_section = section_after_marker(line);
+            skipped_section_name =
+                introduced_section_name(line).filter(|_| matches!(next_section, Section::Skip));
+            section = next_section;
             saw_bus_marker |= matches!(section, Section::Bus);
             continue;
         }
@@ -847,13 +852,17 @@ pub(crate) fn parse_psse_source(
             }
             Section::Area => areas.push(read_area(&f)?),
             Section::SystemWide => parse_solver_line(&f, &mut solver),
-            Section::Skip => {}
+            Section::Skip => {
+                if let Some(name) = skipped_section_name.as_ref() {
+                    *unmodeled_sections.entry(name.clone()).or_default() += 1;
+                }
+            }
         }
     }
 
-    warn_unmodeled_sections(content, warnings);
+    warn_unmodeled_sections(unmodeled_sections, warnings);
 
-    let net = Network {
+    let mut net = Network {
         name,
         base_mva,
         base_frequency,
@@ -871,6 +880,7 @@ pub(crate) fn parse_psse_source(
         source_format: SourceFormat::Psse,
         source: Some(source),
     };
+    drop_stale_control_pointers(&mut net, warnings);
     net.check_references(FMT)?;
     Ok(net)
 }
@@ -920,21 +930,24 @@ fn next_continuation_line<'a>(
     record: &str,
     expected: &str,
 ) -> Result<&'a str> {
-    let Some(line) = lines.next().map(str::trim) else {
-        return Err(Error::FormatRead {
-            format: FMT,
-            message: format!("PSS/E {record} record ended before {expected}"),
-        });
-    };
-    if line.eq_ignore_ascii_case("q") || is_section_marker(line) || is_bare_terminator(line) {
-        return Err(Error::FormatRead {
-            format: FMT,
-            message: format!(
-                "PSS/E {record} record ended before {expected}: found section terminator `{line}`"
-            ),
-        });
+    for line in lines.by_ref().map(str::trim) {
+        if line.is_empty() || is_comment(line) {
+            continue;
+        }
+        if line.eq_ignore_ascii_case("q") || is_section_marker(line) || is_bare_terminator(line) {
+            return Err(Error::FormatRead {
+                format: FMT,
+                message: format!(
+                    "PSS/E {record} record ended before {expected}: found section terminator `{line}`"
+                ),
+            });
+        }
+        return Ok(line);
     }
-    Ok(line)
+    Err(Error::FormatRead {
+        format: FMT,
+        message: format!("PSS/E {record} record ended before {expected}"),
+    })
 }
 
 fn is_bare_terminator(line: &str) -> bool {
@@ -985,45 +998,79 @@ fn introduced_section_name(line: &str) -> Option<String> {
 
 /// Warn about non-empty PSS/E sections the reader does not model (VSC and
 /// multi-terminal DC, impedance correction, substation/node, multi-section line,
-/// induction machine, FACTS, GNE, owner/zone, ...). Their content survives a
-/// same-format `.raw` write (the retained source is echoed) but is dropped on a
-/// cross-format write or after the source is discarded (e.g. a JSON round trip),
-/// so the loss is reported at read time rather than silently. The line count is
-/// approximate (multi-line records count once per line).
-fn warn_unmodeled_sections(content: &str, warnings: &mut Vec<String>) {
-    fn close(current: Option<&(String, bool)>, rows: usize, totals: &mut BTreeMap<String, usize>) {
-        if let Some((name, true)) = current {
-            if rows > 0 {
-                *totals.entry(name.clone()).or_default() += rows;
-            }
-        }
-    }
-    // Aggregate by section name: a substation block repeats its TERMINAL/SWITCHING
-    // sub-sections per station, so one warning per name beats hundreds.
-    let mut totals: BTreeMap<String, usize> = BTreeMap::new();
-    // (section name, is it a skipped/unmodeled section).
-    let mut current: Option<(String, bool)> = None;
-    let mut rows: usize = 0;
-    for line in content.lines() {
-        let t = line.trim();
-        if t.is_empty() || is_comment(t) || t.eq_ignore_ascii_case("q") {
-            continue;
-        }
-        if is_section_marker(t) {
-            close(current.as_ref(), rows, &mut totals);
-            rows = 0;
-            current = introduced_section_name(t)
-                .map(|n| (n, matches!(section_after_marker(t), Section::Skip)));
-        } else {
-            rows += 1;
-        }
-    }
-    close(current.as_ref(), rows, &mut totals);
+/// induction machine, FACTS, GNE, owner/zone, ...). Counts come from the parser
+/// pass itself, so bare `0` terminators and malformed continuation boundaries are
+/// classified the same way as the records that get skipped.
+fn warn_unmodeled_sections(totals: BTreeMap<String, usize>, warnings: &mut Vec<String>) {
     for (name, rows) in totals {
         warnings.push(format!(
             "PSS/E {name} section ({rows} record line(s)) is not modeled: preserved only in a \
              same-format .raw echo, dropped on any other write"
         ));
+    }
+}
+
+fn drop_stale_control_pointers(net: &mut Network, warnings: &mut Vec<String>) {
+    let bus_ids: BTreeSet<BusId> = net.buses.iter().map(|b| b.id).collect();
+    let missing = |bus: BusId| !bus_ids.contains(&bus);
+
+    for (idx, g) in net.generators.iter_mut().enumerate() {
+        let Some(bus) = g.regulated_bus.filter(|b| missing(*b)) else {
+            continue;
+        };
+        warnings.push(format!(
+            "PSS/E GENERATOR DATA record {} at bus {}: IREG references missing bus id {}; dropped remote voltage control",
+            idx + 1,
+            g.bus,
+            bus
+        ));
+        g.regulated_bus = None;
+    }
+
+    for (idx, br) in net.branches.iter_mut().enumerate() {
+        let Some(control) = br.control.as_mut() else {
+            continue;
+        };
+        let Some(bus) = control.controlled_bus.filter(|b| missing(*b)) else {
+            continue;
+        };
+        warnings.push(format!(
+            "PSS/E TRANSFORMER DATA record {} ({}-{}): CONT references missing bus id {}; dropped transformer control pointer",
+            idx + 1,
+            br.from,
+            br.to,
+            bus
+        ));
+        control.controlled_bus = None;
+    }
+
+    for (idx, shunt) in net.shunts.iter_mut().enumerate() {
+        let Some(control) = shunt.control.as_mut() else {
+            continue;
+        };
+        let Some(bus) = control.control_bus.filter(|b| missing(*b)) else {
+            continue;
+        };
+        warnings.push(format!(
+            "PSS/E SWITCHED SHUNT DATA record {} at bus {}: SWREM references missing bus id {}; dropped switched shunt control pointer",
+            idx + 1,
+            shunt.bus,
+            bus
+        ));
+        control.control_bus = None;
+    }
+
+    for (idx, area) in net.areas.iter_mut().enumerate() {
+        let Some(bus) = area.slack_bus.filter(|b| missing(*b)) else {
+            continue;
+        };
+        warnings.push(format!(
+            "PSS/E AREA DATA record {} area {}: ISW references missing bus id {}; dropped area swing pointer",
+            idx + 1,
+            area.number,
+            bus
+        ));
+        area.slack_bus = None;
     }
 }
 
@@ -2750,25 +2797,131 @@ Q
     }
 
     #[test]
-    fn rejects_a_generator_regulating_an_unknown_bus() {
+    fn stale_control_pointers_warn_and_drop() {
         let raw = r"0, 100.00, 33, 0, 0, 60.00 / x
 CASE
 COMMENT
 1,'B1          ', 230.0,3,1,1,1,1.0,0.0,1.1,0.9,1.1,0.9
-3,'B3          ', 18.0,2,1,1,1,1.0,0.0,1.1,0.9,1.1,0.9
+2,'B2          ', 18.0,2,1,1,1,1.0,0.0,1.1,0.9,1.1,0.9
 0 / END OF BUS DATA, BEGIN LOAD DATA
 0 / END OF LOAD DATA, BEGIN FIXED SHUNT DATA
 0 / END OF FIXED SHUNT DATA, BEGIN GENERATOR DATA
-3,'1', 50.0, 5.0, 30.0, -20.0, 1.02, 99, 100.0, 0, 1, 0, 0, 1, 1, 100.0, 80.0, 0.0, 1, 1
+1,'1', 50.0, 5.0, 30.0, -20.0, 1.02, 99, 100.0, 0, 1, 0, 0, 1, 1, 100.0, 80.0, 0.0, 1, 1
 0 / END OF GENERATOR DATA, BEGIN BRANCH DATA
 0 / END OF BRANCH DATA, BEGIN TRANSFORMER DATA
+1, 2, 0, '1', 1, 1, 1, 0, 0, 2, 'REG         ', 1, 1, 1, 0, 1, 0, 1, 0, 1, '            '
+0.01, 0.10, 100.0
+1.025, 0, 2.5, 100.0, 90.0, 80.0, 1, 98, 1.08, 0.92, 1.05, 0.98, 17, 0, 0, 0, 0
+1.0, 0
+0 / END OF TRANSFORMER DATA, BEGIN AREA DATA
+1, 97, 0.0, 0.0, 'AREA        '
+0 / END OF AREA DATA, BEGIN TWO-TERMINAL DC DATA
+0 / END OF TWO-TERMINAL DC DATA, BEGIN VSC DC LINE DATA
+0 / END OF VSC DC LINE DATA, BEGIN IMPEDANCE CORRECTION DATA
+0 / END OF IMPEDANCE CORRECTION DATA, BEGIN MULTI-TERMINAL DC DATA
+0 / END OF MULTI-TERMINAL DC DATA, BEGIN MULTI-SECTION LINE DATA
+0 / END OF MULTI-SECTION LINE DATA, BEGIN ZONE DATA
+0 / END OF ZONE DATA, BEGIN INTER-AREA TRANSFER DATA
+0 / END OF INTER-AREA TRANSFER DATA, BEGIN OWNER DATA
+0 / END OF OWNER DATA, BEGIN FACTS DEVICE DATA
+0 / END OF FACTS DEVICE DATA, BEGIN SWITCHED SHUNT DATA
+2, 2, 0, 1, 1.05, 0.95, 96, 100.0, '', 19.0, 2, 25.0
+0 / END OF SWITCHED SHUNT DATA, BEGIN GNE DEVICE DATA
+Q
+";
+        let mut warnings = Vec::new();
+        let net =
+            parse_psse_source(std::sync::Arc::new(raw.to_string()), None, &mut warnings).unwrap();
+
+        assert_eq!(net.generators[0].regulated_bus, None);
+        assert_eq!(
+            net.branches[0]
+                .control
+                .as_ref()
+                .and_then(|c| c.controlled_bus),
+            None
+        );
+        assert_eq!(
+            net.shunts[0].control.as_ref().and_then(|c| c.control_bus),
+            None
+        );
+        assert_eq!(net.areas[0].slack_bus, None);
+        assert!(
+            warnings.iter().any(|w| w.contains("GENERATOR DATA")
+                && w.contains("IREG")
+                && w.contains("missing bus id 99")),
+            "missing IREG warning: {warnings:?}"
+        );
+        assert!(
+            warnings.iter().any(|w| w.contains("TRANSFORMER DATA")
+                && w.contains("CONT")
+                && w.contains("missing bus id 98")),
+            "missing CONT warning: {warnings:?}"
+        );
+        assert!(
+            warnings.iter().any(|w| w.contains("SWITCHED SHUNT DATA")
+                && w.contains("SWREM")
+                && w.contains("missing bus id 96")),
+            "missing SWREM warning: {warnings:?}"
+        );
+        assert!(
+            warnings.iter().any(|w| w.contains("AREA DATA")
+                && w.contains("ISW")
+                && w.contains("missing bus id 97")),
+            "missing ISW warning: {warnings:?}"
+        );
+    }
+
+    #[test]
+    fn truncated_transformer_continuation_names_expected_line() {
+        let raw = r"0, 100.00, 33, 0, 0, 60.00 / x
+CASE
+COMMENT
+1,'B1          ', 230.0,3,1,1,1,1.0,0.0,1.1,0.9,1.1,0.9
+2,'B2          ', 18.0,2,1,1,1,1.0,0.0,1.1,0.9,1.1,0.9
+0 / END OF BUS DATA, BEGIN LOAD DATA
+0 / END OF LOAD DATA, BEGIN FIXED SHUNT DATA
+0 / END OF FIXED SHUNT DATA, BEGIN GENERATOR DATA
+0 / END OF GENERATOR DATA, BEGIN BRANCH DATA
+0 / END OF BRANCH DATA, BEGIN TRANSFORMER DATA
+1, 2, 0, '1', 1, 1, 1, 0, 0, 2, 'REG         ', 1, 1, 1, 0, 1, 0, 1, 0, 1, '            '
 0 / END OF TRANSFORMER DATA, BEGIN AREA DATA
 Q
 ";
         let err = parse_psse(raw).unwrap_err().to_string();
         assert!(
-            err.contains("generator voltage control references unknown bus 99"),
+            err.contains("transformer record ended before transformer impedance line"),
             "got {err}"
+        );
+    }
+
+    #[test]
+    fn unmodeled_section_counts_skip_bare_terminators() {
+        let raw = r"0, 100.00, 33, 0, 0, 60.00 / x
+CASE
+COMMENT
+1,'B1          ', 230.0,3,1,1,1,1.0,0.0,1.1,0.9,1.1,0.9
+0 / END OF BUS DATA, BEGIN LOAD DATA
+0 / END OF LOAD DATA, BEGIN FIXED SHUNT DATA
+0 / END OF FIXED SHUNT DATA, BEGIN GENERATOR DATA
+0 / END OF GENERATOR DATA, BEGIN BRANCH DATA
+0 / END OF BRANCH DATA, BEGIN TRANSFORMER DATA
+0 / END OF TRANSFORMER DATA, BEGIN AREA DATA
+0 / END OF AREA DATA, BEGIN TWO-TERMINAL DC DATA
+0 / END OF TWO-TERMINAL DC DATA, BEGIN VSC DC LINE DATA
+'VSC1', 1
+2, 3
+0
+0 / END OF VSC DC LINE DATA, BEGIN IMPEDANCE CORRECTION DATA
+Q
+";
+        let mut warnings = Vec::new();
+        parse_psse_source(std::sync::Arc::new(raw.to_string()), None, &mut warnings).unwrap();
+        assert!(
+            warnings
+                .iter()
+                .any(|w| w.contains("VSC DC LINE section (2 record line(s))")),
+            "bare terminator should not be counted as skipped data: {warnings:?}"
         );
     }
 
