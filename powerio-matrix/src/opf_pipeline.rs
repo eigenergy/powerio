@@ -13,6 +13,7 @@ use sprs::CsMat;
 use crate::Result;
 use crate::indexed::IndexedNetwork;
 use crate::io::mtx::{write_mtx, write_vector_mtx};
+use crate::matrix::BuildOptions;
 use crate::matrix::incidence::{DcConvention, build_flow_map, build_incidence};
 use crate::matrix::laplacian::{build_weighted_laplacian, ground_at_each, reference_indicator};
 use crate::matrix::opf::{Units, build_opf_instance};
