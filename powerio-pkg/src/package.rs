@@ -309,7 +309,8 @@ impl CompilerPackage {
     /// Materialize one operating point into a static package.
     ///
     /// The returned package has the same metadata and model kind, with its
-    /// payload updated for `index` and `operating_points` cleared.
+    /// payload updated for `index`, `operating_points` cleared, and sane
+    /// validation recomputed for the updated payload.
     pub fn materialize_operating_point(&self, index: usize) -> serde_json::Result<Self> {
         let series = self.operating_points.as_ref().ok_or_else(|| {
             <serde_json::Error as serde::de::Error>::custom("package has no operating points")
@@ -322,6 +323,7 @@ impl CompilerPackage {
         let mut package = self.clone();
         package.model = apply_operating_point_to_model(&self.model, point)?;
         package.operating_points = None;
+        package.run_sane_validation();
         Ok(package)
     }
 

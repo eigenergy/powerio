@@ -171,10 +171,7 @@ pub(crate) fn apply_operating_point_to_model(
     let root = value.as_object_mut().ok_or_else(|| {
         <serde_json::Error as serde::de::Error>::custom("model payload did not serialize to object")
     })?;
-    let payload_key = match model {
-        ModelPayload::Balanced { .. } => "balanced_network",
-        ModelPayload::Multiconductor { .. } => "multiconductor_network",
-    };
+    let payload_key = payload_key(model);
     let payload = root
         .get_mut(payload_key)
         .and_then(Value::as_object_mut)
@@ -188,7 +185,16 @@ pub(crate) fn apply_operating_point_to_model(
         apply_update(payload, update)?;
     }
 
-    serde_json::from_value(value)
+    let updated = serde_json::from_value(value)?;
+    validate_update_fields_survived(&updated, &point.updates)?;
+    Ok(updated)
+}
+
+fn payload_key(model: &ModelPayload) -> &'static str {
+    match model {
+        ModelPayload::Balanced { .. } => "balanced_network",
+        ModelPayload::Multiconductor { .. } => "multiconductor_network",
+    }
 }
 
 fn apply_update(
@@ -216,6 +222,56 @@ fn apply_update(
 
     for (field, value) in &update.fields {
         row.insert(field.clone(), value.clone());
+    }
+    Ok(())
+}
+
+fn validate_update_fields_survived(
+    model: &ModelPayload,
+    updates: &[ElementUpdate],
+) -> serde_json::Result<()> {
+    let value = serde_json::to_value(model)?;
+    let root = value.as_object().ok_or_else(|| {
+        <serde_json::Error as serde::de::Error>::custom("model payload did not serialize to object")
+    })?;
+    let payload_key = payload_key(model);
+    let payload = root
+        .get(payload_key)
+        .and_then(Value::as_object)
+        .ok_or_else(|| {
+            <serde_json::Error as serde::de::Error>::custom(format!(
+                "model payload missing `{payload_key}` object"
+            ))
+        })?;
+
+    for update in updates {
+        let table_name = update.element.table.as_str();
+        let table = payload
+            .get(table_name)
+            .and_then(Value::as_array)
+            .ok_or_else(|| {
+                <serde_json::Error as serde::de::Error>::custom(format!(
+                    "operating point table `{table_name}` is not present after typed materialization"
+                ))
+            })?;
+        let row = table
+            .get(update.element.row)
+            .and_then(Value::as_object)
+            .ok_or_else(|| {
+                <serde_json::Error as serde::de::Error>::custom(format!(
+                    "operating point table `{table_name}` has no object row {} after typed materialization",
+                    update.element.row
+                ))
+            })?;
+
+        for field in update.fields.keys() {
+            if !row.contains_key(field) {
+                return Err(<serde_json::Error as serde::de::Error>::custom(format!(
+                    "operating point field `{field}` is not present on table `{table_name}` row {}",
+                    update.element.row
+                )));
+            }
+        }
     }
     Ok(())
 }

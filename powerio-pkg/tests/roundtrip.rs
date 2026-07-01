@@ -394,6 +394,65 @@ fn materialize_operating_point_reports_invalid_table_or_row() {
 }
 
 #[test]
+fn materialize_operating_point_reports_unknown_field() {
+    let mut point = OperatingPoint::new(0);
+    point.updates.push(ElementUpdate::new(
+        ElementRef::new("generators", 0),
+        fields(&[("not_a_field", serde_json::json!(1.0))]),
+    ));
+    let pkg = balanced_package_with_gen().with_operating_points(OperatingPointSeries::new(
+        TimeAxis::new(1).with_duration_hours(vec![1.0]),
+        vec![point],
+    ));
+
+    let err = pkg
+        .materialize_operating_point(0)
+        .expect_err("unknown field must fail");
+    assert!(
+        err.to_string().contains(
+            "operating point field `not_a_field` is not present on table `generators` row 0"
+        ),
+        "{err}"
+    );
+}
+
+#[test]
+fn materialize_operating_point_recomputes_validation() {
+    let mut point = OperatingPoint::new(0);
+    point.updates.push(ElementUpdate::new(
+        ElementRef::new("buses", 0),
+        fields(&[("vm", serde_json::json!(0.0))]),
+    ));
+    let pkg = balanced_package_with_gen().with_operating_points(OperatingPointSeries::new(
+        TimeAxis::new(1).with_duration_hours(vec![1.0]),
+        vec![point],
+    ));
+    assert_eq!(pkg.validation.status, ValidationStatus::Ok);
+
+    let materialized = pkg.materialize_operating_point(0).unwrap();
+
+    assert!(materialized.operating_points().is_none());
+    assert_eq!(materialized.validation.status, ValidationStatus::Warning);
+    assert!(
+        materialized.diagnostics.iter().any(|d| d.code
+            == DiagnosticCode::new("VALIDATE.BALANCED.VALUE_DOMAIN")
+            && d.details["field"] == "vm"
+            && d.element_path.as_deref() == Some("/model/balanced_network/buses/0/vm")),
+        "expected voltage magnitude finding: {:?}",
+        materialized.diagnostics
+    );
+    assert!(
+        materialized
+            .validation
+            .passes
+            .iter()
+            .any(|p| p.name == "balanced.value_domain" && p.status == ValidationStatus::Warning),
+        "missing balanced value domain pass: {:?}",
+        materialized.validation.passes
+    );
+}
+
+#[test]
 fn explicit_model_kind_is_authoritative() {
     let pkg = balanced_package();
     let v = serde_json::to_value(&pkg).unwrap();
