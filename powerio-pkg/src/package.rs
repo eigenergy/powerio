@@ -190,6 +190,9 @@ pub struct CompilerPackage {
     pub derived: DerivedMetadata,
 }
 
+/// Alternate package name used by the v0.5 API direction.
+pub type NetworkPackage = CompilerPackage;
+
 impl CompilerPackage {
     /// Wrap a balanced network. Origin is inferred from its source format:
     /// `InMemory` / `Derived` (normalized) / `File` (a parsed text format,

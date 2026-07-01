@@ -52,3 +52,6 @@ let net = powerio::parse_str("...", "matpower").unwrap().network;
 let mut pkg = CompilerPackage::from_balanced(net);
 pkg.attach_normalized_solver_table_metadata().unwrap();
 ```
+
+`NetworkPackage` is an alias for `CompilerPackage` for callers using the v0.5
+package naming direction.

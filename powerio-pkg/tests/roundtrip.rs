@@ -5,8 +5,8 @@ use std::collections::BTreeMap;
 use powerio_pkg::{
     CompilerPackage, Confidence, DiagnosticCode, DiagnosticSeverity, DiagnosticStage, ElementRef,
     ElementUpdate, MappingKind, ModelKind, MulticonductorToBalancedOptions,
-    MulticonductorToBalancedReadiness, OperatingPoint, OperatingPointSeries, Origin,
-    PIO_PACKAGE_SCHEMA_URL, PIO_PACKAGE_SCHEMA_VERSION, SequenceTransformConvention,
+    MulticonductorToBalancedReadiness, NetworkPackage, OperatingPoint, OperatingPointSeries,
+    Origin, PIO_PACKAGE_SCHEMA_URL, PIO_PACKAGE_SCHEMA_VERSION, SequenceTransformConvention,
     SourceDescriptor, SourceMapEntry, SourceRef, StructuredDiagnostic, TimeAxis, ValidationStatus,
     check_multiconductor_to_balanced_lowering, lower_multiconductor_to_balanced,
 };
@@ -264,6 +264,19 @@ fn schema_version_present_and_defaulted() {
     let back = CompilerPackage::from_json(&serde_json::to_string(&v).unwrap()).unwrap();
     assert_eq!(back.schema, PIO_PACKAGE_SCHEMA_URL);
     assert_eq!(back.schema_version, PIO_PACKAGE_SCHEMA_VERSION);
+}
+
+#[test]
+fn network_package_alias_matches_compiler_package_api() {
+    let net = powerio::parse_str(MATPOWER_SRC, "matpower")
+        .expect("parse matpower")
+        .network;
+    let pkg = NetworkPackage::from_balanced(net);
+    assert_eq!(pkg.model_kind(), ModelKind::Balanced);
+    assert!(pkg.kind_is_consistent());
+    let json = pkg.to_json_pretty().unwrap();
+    let back = NetworkPackage::from_json(&json).unwrap();
+    assert_eq!(back.model_kind(), ModelKind::Balanced);
 }
 
 #[test]

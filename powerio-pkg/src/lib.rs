@@ -36,6 +36,9 @@
 //!
 //! Binary `.pio` is out of scope until the JSON package stabilizes; this crate
 //! is JSON only.
+//!
+//! [`NetworkPackage`] is an alias for [`CompilerPackage`] for callers using the
+//! v0.5 package naming direction.
 
 pub mod diagnostics;
 pub mod lowering;
@@ -56,7 +59,7 @@ pub use lowering::{
 pub use model::{ModelKind, ModelPayload};
 pub use operating::{ElementRef, ElementUpdate, OperatingPoint, OperatingPointSeries, TimeAxis};
 pub use package::{
-    CompilerPackage, DerivedMetadata, NormalizedSolverTableMetadata,
+    CompilerPackage, DerivedMetadata, NetworkPackage, NormalizedSolverTableMetadata,
     NormalizedSolverTableRowCounts, NormalizedSolverTableSourceRows, PIO_PACKAGE_SCHEMA_URL,
     PIO_PACKAGE_SCHEMA_VERSION,
 };
