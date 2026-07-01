@@ -6,7 +6,7 @@ Guidance for agents working in this repo.
 
 A Cargo workspace of Rust crates plus a Python package. Parses power network
 case files, converts losslessly between formats, and emits sparse matrices and
-graph views for any downstream solver. (Planned) feeds the GridFM ML pipeline.
+graph views for any downstream solver. Feeds the GridFM ML pipeline.
 
 - **`powerio`**: the parser, the format-neutral `Network` hub, the lossless
   writer, and the format converters. Light deps (thiserror, num-complex,
@@ -21,15 +21,21 @@ graph views for any downstream solver. (Planned) feeds the GridFM ML pipeline.
   C, C++, Julia, and other FFI users. `--features arrow` adds
   `pio_to_arrow`, an Arrow C Data Interface export; `--features gridfm` adds
   `pio_read_dir` / `pio_scenario_ids` (the gridfm-datakit Parquet
-  reader, pulling in `powerio-matrix`). Both are additive/feature-gated, so no
-  ABI bump.
+  reader, pulling in `powerio-matrix`); `--features dist` adds `pio_dist_*`;
+  `--features pkg` adds `pio_package_*`. All are additive and feature gated, so
+  no ABI bump.
 
 `Network` is the one canonical model (format neutral, loads/shunts first class);
 `IndexedNetwork` is the dense indexed analysis view derived from it.
 
-Formats. MATPOWER `.m`, PowerModels JSON, PSS/E `.raw` (v33), PowerWorld
-`.aux`, and egret JSON all read and write. Every format meets at `Network`,
-so a new format is one reader/writer at the hub, not a pairwise converter.
+Formats. MATPOWER `.m`, PowerModels JSON, PSS/E `.raw` (v33/34/35),
+PowerWorld `.aux`, PSLF `.epc`, egret JSON, pandapower JSON, PyPSA CSV folders,
+Surge JSON, and PowerIO JSON all read and write. GO Challenge 3 JSON is a read
+only input with byte exact same source echo; PowerWorld `.pwb` is a read only
+binary input with no writer. PowerWorld `.pwd` display files use the display
+API. GridFM Parquet datasets read and write through directory helpers.
+Every balanced case format meets at `Network`, so a new format is one
+reader/writer at the hub, not a pairwise converter.
 
 Matrix outputs (powerio-matrix):
 - B' (FDPF, shuntless). Singular positive Laplacian, rank n-1.
@@ -59,6 +65,7 @@ powerio verify tests/data/case30.m --kind bdoubleprime
 powerio dcopf tests/data/case30.m -o out
 powerio sensitivities tests/data/case30.m -o out
 powerio convert tests/data/case14.m --to psse -o case14.raw
+powerio package tests/data/case14.m -o case14.pio.json
 powerio gridfm tests/data/case14.m -o out      # gridfm-datakit Parquet dataset
 
 # C ABI (cdylib + staticlib; header powerio-capi/include/powerio.h):
@@ -93,6 +100,11 @@ powerio/                      # parser + Network hub + converters
 │   ├── matpower/            # tokens, matlab, locate, rows, writer
 │   │                        #   (the lossless source retaining path)
 │   ├── powermodels.rs       # PowerModels JSON reader + writer
+│   ├── goc3.rs              # GO Challenge 3 JSON reader
+│   ├── surge.rs             # Surge JSON reader + writer
+│   ├── pandapower.rs        # pandapower JSON reader + writer
+│   ├── pypsa.rs             # PyPSA CSV folder reader + writer
+│   ├── pslf.rs              # PSLF EPC reader + writer
 │   ├── psse.rs              # PSS/E .raw reader + writer
 │   ├── powerworld.rs        # PowerWorld .aux reader + writer
 │   └── egret.rs             # egret JSON reader + writer
@@ -118,6 +130,11 @@ powerio-matrix/               # matrices + graph views on powerio
 powerio-cli/                  # the `powerio` binary (CLI + TUI)
 ├── src/main.rs              # clap CLI: tui/batch/gen/verify/dcopf/sensitivities/convert
 └── src/tui/                 # ratatui app (app.rs, screens.rs, log_pane.rs, sparsity.rs, theme.rs)
+
+powerio-pkg/                  # .pio.json compiler package envelope
+├── src/package.rs           # CompilerPackage, schema version, materialization
+├── src/operating.rs         # replayable operating point overlays
+└── src/lowering.rs          # multiconductor → balanced lowering
 
 powerio-py/src/lib.rs        # PyO3 extension → COO triplets (module `_powerio`)
 python/powerio/              # importable package (scipy/networkx assembly, lazy)
@@ -161,6 +178,12 @@ benchmarks/                  # parse benchmarks + Julia validation harnesses
   transport; over the C ABI it is the `powerio-json` format through `pio_to_format`/`pio_parse_str`. The retained
   `source` text is `#[serde(skip)]`, so JSON carries the tables, not the
   byte exact echo, and a `from_json` round trip returns `source` as `None`.
+- **`.pio.json` packages.** `CompilerPackage` wraps one balanced or
+  multiconductor payload with provenance, source maps, diagnostics, validation,
+  lowering history, optional derived metadata, and optional `operating_points`.
+  GOC3 package construction stores the static first interval in `model` and the
+  source time series in replayable operating points. Materializing a point
+  returns a derived static package with the series cleared.
 - **Sign convention.** Positive Laplacian: off diag negative, diag positive, `diag = sum |off-diag|` for B'. The positive (M-matrix) Laplacian form SDDM solvers expect.
 - **Bus IDs.** MATPOWER 1 based; `IndexedNetwork::bus_index(id)` is the only mapping into dense `[0, n)`. Don't clamp out of range; return `Error::UnknownBus`.
 - **`BR_B` is already per unit.** Never divide by `base_mva` again.

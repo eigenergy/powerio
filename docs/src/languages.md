@@ -35,9 +35,12 @@ Verb taxonomy:
 | MATPOWER text | `net.to_matpower()` | `net.to_matpower()` | `to_matpower(net)` | `pio_to_format` + `"matpower"` |
 | JSON text | `net.to_json()` | `net.to_json()` | `to_json(net)` | `pio_to_format` + `"powerio-json"` |
 | Package JSON | `CompilerPackage::to_json()` | package transport | `to_package` / `write_package` | `pio_package_*` |
+| Package operating points | `pkg.operating_points()` | `package_operating_points(pkg)` | planned | `pio_package_operating_points_json` |
+| Materialize operating point | `pkg.materialize_operating_point(i)` | `package_materialize_operating_point(pkg, i)` | planned | `pio_package_materialize_operating_point` |
 | Normalized copy | `net.to_normalized()` | `net.to_normalized()` | `to_normalized(net)` | `pio_normalize` |
 | Dense tables | typed table API | `to_dense` | `to_dense` | `pio_*` extractors |
 | PyPSA CSV folder | `read_pypsa_csv_folder` / `write_pypsa_csv_folder` | `read_pypsa_csv_folder` / `net.write_pypsa_csv_folder` | `parse_file(dir; from="pypsa-csv")` / `write_pypsa_csv_folder` | `pio_parse_file` / `pio_write_dir` + `"pypsa-csv"` |
+| gridfm write | `write_gridfm_dataset` / `write_gridfm_batch` | `net.write_gridfm` / `write_gridfm_batch` | planned | planned |
 | gridfm read | `read_gridfm_dataset(dir, scenario)` | `read_gridfm(dir, scenario=0)` | `read_gridfm(dir; scenario=0)` | `pio_read_dir` + `"gridfm"` |
 | Arrow handoff | internal/C ABI | later | `to_arrow` | `pio_to_arrow` |
 
@@ -74,6 +77,10 @@ construction. Whole-network transport uses `powerio-json`, so the binding does
 not stitch together a separate model from individual table calls. The Julia
 binding checks `pio_abi_version()` against `PIO_ABI_VERSION` on first use.
 Distribution calls also check `pio_dist_abi_version()`.
+
+GOC3 package construction is the first package operating point path backed by a
+source format. The static balanced payload carries the first interval; the
+replayable series is exposed through the package APIs above.
 
 During development, test the sibling Julia binding against the local C ABI
 instead of an artifact:

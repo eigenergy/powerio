@@ -12,9 +12,12 @@ use crate::model::ModelPayload;
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 #[non_exhaustive]
 pub struct OperatingPointSeries {
+    /// Shared period count, durations, and labels.
     pub time_axis: TimeAxis,
+    /// Ordered operating states. Each state is addressed by its `index`.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub points: Vec<OperatingPoint>,
+    /// Metadata from the source format, such as `source_format`.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub metadata: BTreeMap<String, Value>,
 }
@@ -66,9 +69,12 @@ impl OperatingPointSeries {
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 #[non_exhaustive]
 pub struct TimeAxis {
+    /// Number of periods available in the series.
     pub periods: usize,
+    /// Optional duration per period, in hours.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub duration_hours: Vec<f64>,
+    /// Optional display labels for the periods.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub labels: Vec<String>,
 }
@@ -107,12 +113,16 @@ impl TimeAxis {
 pub struct OperatingPoint {
     /// Zero based period index.
     pub index: usize,
+    /// Optional display label for this point.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub label: Option<String>,
+    /// Optional duration for this point, in hours.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub duration_hours: Option<f64>,
+    /// Field updates to apply to the static payload.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub updates: Vec<ElementUpdate>,
+    /// Metadata from the source format for this point.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub metadata: BTreeMap<String, Value>,
 }
@@ -134,9 +144,11 @@ impl OperatingPoint {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[non_exhaustive]
 pub struct ElementRef {
+    /// Payload table name, such as `loads`, `generators`, `branches`, or `hvdc`.
     pub table: String,
     /// Zero based row index in `table`.
     pub row: usize,
+    /// Optional source record UID for diagnostics and provenance.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub source_uid: Option<String>,
 }
@@ -162,9 +174,12 @@ impl ElementRef {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[non_exhaustive]
 pub struct ElementUpdate {
+    /// Table row to update.
     pub element: ElementRef,
+    /// JSON field values to overwrite on that row.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub fields: BTreeMap<String, Value>,
+    /// Metadata from the source format for this update.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub metadata: BTreeMap<String, Value>,
 }

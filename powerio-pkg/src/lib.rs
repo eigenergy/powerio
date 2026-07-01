@@ -13,7 +13,10 @@
 //! to be trustworthy: an explicit [`ModelKind`], producer and origin metadata,
 //! source maps, structured diagnostics, a validation summary, and lowering
 //! history. It can also carry optional operating points that replay state
-//! updates over the static payload. It serializes to `.pio.json`. See
+//! updates over the static payload. GOC3 packages use that block for the source
+//! time series: the payload holds one static interval, and
+//! [`CompilerPackage::materialize_operating_point`] derives another static
+//! package from a selected period. It serializes to `.pio.json`. See
 //! `docs/src/compiler-ir.md` for the architecture and
 //! `docs/src/pio-json-schema.md` for the field reference.
 //!

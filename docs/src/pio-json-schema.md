@@ -35,7 +35,7 @@ diagnostics, validation, and lowering metadata around that model. Use the
 
 ## Versioning policy (envelope)
 
-- `schema_version` is semver. The current value is `0.2.0`; the `schema` URL is
+- `schema_version` is semver. The current value is `0.1.0`; the `schema` URL is
   `https://powerio.dev/schema/pio-package/0.1`.
 - Additive envelope fields bump the minor version.
 - Envelope field moves or removals bump the major version, or ship a migration.
@@ -90,6 +90,46 @@ later families can be added).
 updates. A point names a table, zero based row, optional source UID, and the
 fields to overwrite. Materializing a point clones the static payload, applies
 those field updates, and clears `operating_points` in the returned package.
+
+The block shape is:
+
+| field | type | notes |
+|---|---|---|
+| `time_axis.periods` | integer | number of available operating points |
+| `time_axis.duration_hours` | array of numbers | optional per period duration |
+| `time_axis.labels` | array of strings | optional labels, such as `"1"`, `"2"`, ... |
+| `points[]` | array | one replayable state |
+| `points[].index` | integer | zero based period index |
+| `points[].label` | string | optional point label |
+| `points[].duration_hours` | number | optional point duration |
+| `points[].updates[]` | array | row field updates to apply for this point |
+| `updates[].element.table` | string | payload table name, such as `generators`, `loads`, `branches`, or `hvdc` |
+| `updates[].element.row` | integer | zero based row in that table |
+| `updates[].element.source_uid` | string | optional source record UID |
+| `updates[].fields` | object | field names and JSON values to overwrite |
+| `metadata` | object | optional series or point metadata |
+
+GO Challenge 3 packages use this block for the scheduling time series. The
+static `model` reflects the first interval that can be represented by
+`Network`; `operating_points` carries replayable updates for every interval.
+`CompilerPackage::materialize_operating_point(index)` returns a new static
+package with `origin.kind = "derived"` and
+`origin.pass = "materialize-operating-point"`.
+
+```json
+"operating_points": {
+  "time_axis": { "periods": 2, "duration_hours": [1.0, 1.0], "labels": ["1", "2"] },
+  "points": [
+    { "index": 0, "updates": [] },
+    { "index": 1,
+      "updates": [
+        { "element": { "table": "loads", "row": 0, "source_uid": "device_1" },
+          "fields": { "p": 12.5, "q": 3.2 } }
+      ] }
+  ],
+  "metadata": { "source_format": "goc3-json" }
+}
+```
 
 ### Derived metadata
 
@@ -155,7 +195,7 @@ bindings, or MCP operations.
 ```json
 {
   "schema": "https://powerio.dev/schema/pio-package/0.1",
-  "schema_version": "0.2.0",
+  "schema_version": "0.1.0",
   "producer": { "tool": "powerio", "version": "0.4.0" },
   "model_kind": "multiconductor",
   "model": {

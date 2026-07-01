@@ -672,6 +672,9 @@ char *pio_package_operating_points_json(const PioPackage *pkg,
 #if defined(PIO_PKG)
 /**
  * Materialize one operating point into a new static package.
+ *
+ * The returned handle owns a package with the selected updates applied and no
+ * operating point series. Free it with [`pio_package_free`].
  */
 PioPackage *pio_package_materialize_operating_point(const PioPackage *pkg,
                                                     int64_t index,

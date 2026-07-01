@@ -198,6 +198,7 @@ impl CompilerPackage {
     /// Wrap a balanced network. Origin is inferred from its source format:
     /// `InMemory` / `Derived` (normalized) / `File` (a parsed text format,
     /// recording whether source was retained; the path is not captured here).
+    /// GOC3 sources also lift their time series into `operating_points`.
     pub fn from_balanced(net: BalancedNetwork) -> Self {
         let origin = balanced_origin(&net);
         let summary = balanced_summary(&net);

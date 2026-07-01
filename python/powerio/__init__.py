@@ -1,9 +1,10 @@
 """powerio: lossless power system case file IO, conversion, and matrices.
 
 Parse MATPOWER, PSS/E, PowerWorld, PSLF EPC, PowerModels JSON, egret JSON,
-pandapower JSON, and PyPSA CSV folders into one format neutral case; write retained text
-formats back byte exact; convert between formats; and pull the sparse matrices
-and graph outputs solvers need::
+pandapower JSON, PyPSA CSV folders, GO Challenge 3 JSON, Surge JSON, GridFM
+Parquet datasets, and PowerIO JSON snapshots into one format neutral case; write
+retained text formats back byte exact; convert between formats; package cases as
+``.pio.json``; and pull the sparse matrices and graph outputs solvers need::
 
     import powerio as pio
 
@@ -13,6 +14,8 @@ and graph outputs solvers need::
     raw, warnings = pio.convert_file("case9.m", "psse")
     pp_json, warnings = pio.convert_file("case9.m", "pandapower-json")
     pypsa_out = net.write_pypsa_csv_folder("case9-pypsa")
+    pkg = pio.package_parse_file("goc3_case.json", from_="goc3-json")
+    points = pio.package_operating_points(pkg)
 
     B = net.bprime()                         # scipy.sparse, the FDPF B'
     Y = net.ybus()                           # complex csr, G + jB
@@ -21,6 +24,10 @@ and graph outputs solvers need::
 PyPSA CSV folders carry the static network topology (PyPSA's native component
 format for network definition); time series NetCDF/HDF5 scenarios are out of
 scope for now (https://github.com/eigenergy/powerio/issues/107).
+
+GO Challenge 3 JSON is read as a static balanced network using the first
+interval. When it is parsed as a ``.pio.json`` package, the full source time
+series is exposed as replayable operating points.
 
 ``import powerio`` and parsing/writing/converting pull in nothing but the
 interpreter. The matrix methods need scipy/numpy and the graph helper needs networkx; add them
@@ -233,9 +240,8 @@ class Network:
     ``shunts``) and the non-matrix methods (``write``, ``reference_bus_index``,
     ``connectivity_report``, ``write_dcopf_bundle``) delegate to the compiled
     handle; the matrix methods below return ``scipy.sparse`` objects. Read
-    fidelity warnings from parse time are on ``read_warnings`` (empty for
-    readers that don't report any; currently all but pandapower JSON and
-    PyPSA CSV).
+    fidelity warnings from parse time are on ``read_warnings``. Readers use this
+    for source data they cannot model or assumptions they had to make.
 
     Errors: a bad file path raises the standard ``OSError`` subclass
     (``FileNotFoundError``); a malformed case raises :class:`PowerIOParseError`
@@ -718,10 +724,18 @@ def package_as_multiconductor(package_json: str) -> "dist.MulticonductorNetwork"
 
 
 def package_operating_points(package_json: str) -> Any:
-    """Return the package operating point series as Python data, or ``None``."""
+    """Return the package operating point series as Python data, or ``None``.
+
+    GOC3 packages populate this from the source time series. Each point is a set
+    of field updates over the package's static payload.
+    """
     return _json.loads(_powerio.package_operating_points(package_json))
 
 
 def package_materialize_operating_point(package_json: str, index: int) -> str:
-    """Return static ``.pio.json`` for one materialized operating point."""
+    """Return static ``.pio.json`` for one materialized operating point.
+
+    The returned package has the selected field updates applied and no
+    ``operating_points`` block.
+    """
     return _powerio.package_materialize_operating_point(package_json, index)

@@ -3,7 +3,7 @@
 //! Each format module owns its reader and/or writer: MATPOWER `.m`,
 //! PowerModels JSON, PSS/E `.raw`, PowerWorld `.aux`, egret `ModelData` JSON,
 //! pandapower JSON, PyPSA CSV folders, PSLF `.epc`, GO Challenge 3 JSON, and
-//! Surge JSON. PowerWorld `.pwb` cases, GO Challenge 3 JSON as a write target,
+//! Surge JSON. PowerWorld `.pwb` cases, GO Challenge 3 JSON canonical output,
 //! and PowerWorld `.pwd` displays are read only. Case input and
 //! output formats meet here, so adding a writable format is one module plus
 //! one hub registration.
@@ -224,11 +224,12 @@ pub fn display_format_from_name(name: &str) -> Option<DisplayFormat> {
 /// if unrecognized. Accepts `matpower`/`m`, `powermodels-json`/`powermodels`/`pm`,
 /// `egret-json`/`egret`, `pandapower-json`/`pandapower`/`pp`, `psse`/`raw`,
 /// `powerworld`/`aux`, `powerio-json`/`powerio`/`json` (the canonical snapshot;
-/// plain `json` means this one, the foreign JSON dialects are namespaced).
-/// Case-insensitive. The one place the bindings (Python, C
-/// ABI) share, so a new text format means one new arm here, not three. PyPSA
-/// CSV folders are directory inputs with no text target; their aliases are
-/// matched by the private `is_pypsa_csv_name` next to this.
+/// plain `json` means this one, the foreign JSON dialects are namespaced),
+/// `pslf`/`epc`, `goc3-json`/`goc3`, and `surge-json`/`surge`.
+/// Case-insensitive. The one place the bindings (Python, C ABI) share, so a new
+/// text format means one new arm here, not three. PyPSA CSV folders, GridFM
+/// datasets, and PowerWorld `.pwb` are directory or read only inputs with no
+/// text target; they are routed by [`crate::format::routing`].
 ///
 /// The `powermodelsjson`/`egretjson`/`pandapowerjson` aliases let a
 /// [`SourceFormat`]'s string form (`{:?}` lowercased, e.g. `"PowerModelsJson"`)

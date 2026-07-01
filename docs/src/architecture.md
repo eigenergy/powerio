@@ -7,7 +7,7 @@ artifacts.
 - [Compiler IR](https://eigenergy.github.io/powerio/guide/compiler-ir.html): the IR layers, the `BalancedNetwork` and
   `MulticonductorNetwork` model families, and the `CompilerPackage` (`.pio.json`)
   envelope — explicit model kind, provenance, source maps, structured
-  diagnostics, validation, and lowering.
+  diagnostics, validation, operating points, and lowering.
 - [PIO JSON schema](https://eigenergy.github.io/powerio/guide/pio-json-schema.html): the `.pio.json` field reference and
   the stability policy. The envelope is versioned; the nested IR payloads still
   follow the Rust models.
@@ -15,3 +15,5 @@ artifacts.
   for explicit `MulticonductorNetwork` to `BalancedNetwork` lowering.
 
 The package is implemented in the `powerio-pkg` crate.
+GOC3 package construction uses `operating_points` to preserve the source time
+series while keeping the payload itself static.

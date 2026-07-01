@@ -41,6 +41,8 @@ class PyNetwork:
         "Normalized",
         "Gridfm",
         "PypsaCsv",
+        "Goc3Json",
+        "SurgeJson",
     ]: ...
     @property
     def read_warnings(self) -> list[str]: ...

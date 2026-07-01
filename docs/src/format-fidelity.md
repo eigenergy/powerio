@@ -2,7 +2,7 @@
 
 How powerio's readers and writers are validated, the conventions they follow, and
 the known limits. The headline fidelity table is in the
-[top level README](https://github.com/eigenergy/powerio#format-fidelity); this
+[top level README](https://github.com/eigenergy/powerio#current-format-fidelity); this
 document covers the conventions and the proof behind it.
 
 ## Conventions
@@ -23,6 +23,8 @@ implementations and the matching powerio code:
 | Generator cost | \\(c_2 p^2 + c_1 p\\) maps to \\(q = 2c_2\\), \\(c = c_1\\); coefficients high order first | MATPOWER `idx_cost`, egret `matpower_parser` | `GenCost::quadratic` |
 | `source_id` | `["bus", id]` for bus-tied elements | PowerModels `matpower.jl` | `format::powermodels` |
 | PSLF shunts | EPC `pu_mw`/`pu_mvar` are per unit on `sbase`; `Network::Shunt` stores MW/MVAr at \\(V = 1\\) | paired EPC/RAW case checks | `format::pslf` |
+| GO Challenge 3 time series | `Network` stores the first interval as a static case; `.pio.json` packages carry replayable later intervals in `operating_points` | Rust GOC3 package tests | `format::goc3`, `powerio_pkg::operating` |
+| Surge angles | Surge JSON carries voltage angles, phase shifts, and angle limits in radians; `Network` stores degrees | Rust Surge round trip tests | `format::surge` |
 
 egret's own MATPOWER parser uses the same reductions (bus type as
 `matpower_bustype`, polynomial coefficients reversed to a `{degree: coefficient}`
@@ -39,8 +41,9 @@ and the PMread leg covers the PowerModels JSON read side. pandapower JSON and
 PyPSA CSV folders have dedicated import validators because pandapower has its
 own JSON schema and PyPSA is a directory format; both validate the write
 direction only — the pandapower JSON and PyPSA readers have no external oracle.
-They, and the remaining source/target pairs (PowerModels JSON and PowerWorld
-sources into the non-PowerModels targets), rest on the Rust round trip suite.
+They, GO Challenge 3 JSON, Surge JSON, and the remaining source/target pairs
+(PowerModels JSON and PowerWorld sources into the non-PowerModels targets) rest
+on the Rust round trip suite.
 
 - **PowerModels.jl** (`validate_powermodels.jl`, `validate_psse.jl`,
   `core_json.jl`). Reads MATPOWER, PowerModels JSON, and PSS/E. The MATPOWER to
@@ -155,6 +158,22 @@ in Python), naming the table and counting the affected rows.
   isolated buses, non-finite p limits, and slackless or normalized networks.
   Nonnumeric bus names read back as dense synthetic ids with the originals on
   `Bus.name`.
+- **GO Challenge 3 JSON** reads ARPA-E GO Competition Challenge 3 input data
+  into the balanced transmission model. `Network` is static, so the reader maps
+  the first time interval into generator/load bounds and status fields, keeps
+  the original JSON for byte exact source echo, and warns about scheduling data
+  left in the retained source. There is no canonical GOC3 writer from an
+  arbitrary `Network`; `TargetFormat::Goc3Json` only succeeds as a same format
+  source echo. When a GOC3 `Network` is wrapped in `.pio.json`, `powerio-pkg`
+  extracts the full input time axis into `operating_points`. Materializing one
+  point applies those updates to the static payload and clears the series.
+- **Surge JSON** reads and writes the versioned `surge-json` network document.
+  The reader maps buses, loads, fixed shunts, branches, generators, storage, and
+  HVDC links into `Network`, retains the original source for same format echo,
+  and warns about source sections that stay only in the retained document. The
+  writer emits a canonical Surge network body for the supported power flow core;
+  richer MATPOWER generator capability or ramp columns and unsupported cost
+  shapes are reported in `Conversion::warnings`.
 - **gridfm** (read, the `gridfm` feature in `powerio-matrix`) reconstructs a
   `Network` from the gridfm-datakit Parquet dataset: lossy, but it recovers
   everything a power flow needs. That is bus types/voltages/limits, nodal load

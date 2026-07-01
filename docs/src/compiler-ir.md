@@ -68,6 +68,9 @@ A package always carries:
 `operating_points` is a format neutral series of replayable field updates over
 the package's single static payload. Materializing one point returns a static
 package with those updates applied and the series cleared.
+GO Challenge 3 package construction fills this block from `time_series_input`:
+the balanced payload holds the first interval, while every interval is available
+as an operating point.
 
 For balanced payloads, `CompilerPackage::attach_normalized_solver_table_metadata`
 records the compact contract for
@@ -134,6 +137,15 @@ package and appends the record. This pass is explicit only; readers, writers,
 matrix builders, bindings, and MCP operations do not run it implicitly. The
 v0.4.0 direction is in
 [the v0.4 release direction](https://eigenergy.github.io/powerio/guide/v0.4-release-direction.html).
+
+### Operating point materialization
+
+`CompilerPackage::materialize_operating_point(index)` clones the package, applies
+one point's field updates to the typed payload, clears `operating_points`, drops
+stale source maps and diagnostics for changed fields, recomputes validation, and
+records a `LoweringRecord` with `pass = "materialize-operating-point"`. If the
+package already carried normalized solver table metadata, the metadata is
+rebuilt for the updated static payload.
 
 ## Versioning
 

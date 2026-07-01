@@ -173,7 +173,7 @@ pub enum MappingKind {
     Split,
     /// Synthesized with no direct source (e.g. a generated bus id).
     Synthetic,
-    /// A source-specific extra preserved verbatim.
+    /// Extra data from the source preserved verbatim.
     RetainedExtra,
 }
 

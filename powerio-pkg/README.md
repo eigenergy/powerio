@@ -28,6 +28,11 @@ metadata a compiler artifact needs to be trustworthy:
 It serializes to `.pio.json`. Binary `.pio` is out of scope until the JSON
 package stabilizes.
 
+Operating points are overlays, not separate payloads. Each point names table
+rows and fields to update on the one static payload. GOC3 package construction
+extracts the time series into this block while the balanced payload holds the
+first interval.
+
 See `docs/src/compiler-ir.md` and `docs/src/pio-json-schema.md` in the
 repository root.
 
@@ -51,6 +56,19 @@ embedding every table row:
 let net = powerio::parse_str("...", "matpower").unwrap().network;
 let mut pkg = CompilerPackage::from_balanced(net);
 pkg.attach_normalized_solver_table_metadata().unwrap();
+```
+
+Operating points can be inspected or materialized:
+
+```rust
+let text = std::fs::read_to_string("goc3_case.json").unwrap();
+let parsed = powerio::parse_str(&text, "goc3-json").unwrap();
+let pkg = CompilerPackage::from_balanced(parsed.network);
+if let Some(series) = pkg.operating_points() {
+    println!("{} periods", series.time_axis.periods);
+}
+let static_pkg = pkg.materialize_operating_point(0).unwrap();
+assert!(static_pkg.operating_points().is_none());
 ```
 
 `NetworkPackage` is an alias for `CompilerPackage` for callers using the v0.5

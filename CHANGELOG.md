@@ -2,6 +2,9 @@
 
 ## 0.4.0
 
+- Transmission formats: added GOC3 JSON input and Surge JSON read and write paths.
+  GOC3 packages lift source time series into `.pio.json` `operating_points`,
+  and package APIs can materialize one point into a static package.
 - `powerio-pkg`: `.pio.json` reads now enforce the envelope compatibility rule:
   same major `schema_version` values load, while incompatible major versions
   fail before payload use. The mdBook schema page documents the rule.
