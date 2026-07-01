@@ -11,12 +11,13 @@ use powerio_matrix::{
 
 const REPORT_ENV: &str = "POWERIO_CONVERSION_MATRIX_REPORT";
 const REPORT_MARKER: &str = "<!-- powerio-conversion-matrix-report -->";
-const MAX_WARNING_SUMMARY_ROWS: usize = 12;
+const MAX_WARNING_DETAILS_PER_PAIR: usize = 3;
 static DSS_TEMP_COUNTER: AtomicU64 = AtomicU64::new(0);
 
 #[test]
 fn conversion_matrix_report_matches_baseline() {
     let report = build_report();
+    assert_no_report_path_leaks(&report.markdown);
     if let Ok(path) = std::env::var(REPORT_ENV) {
         let path = PathBuf::from(path);
         if let Some(parent) = path.parent() {
@@ -29,6 +30,22 @@ fn conversion_matrix_report_matches_baseline() {
         "{}\n\n{}",
         report.failures.join("\n"),
         report.markdown
+    );
+}
+
+fn assert_no_report_path_leaks(markdown: &str) {
+    let temp_dir = std::env::temp_dir().to_string_lossy().into_owned();
+    assert!(
+        !markdown.contains(&temp_dir),
+        "report leaked temp dir: {temp_dir}"
+    );
+    assert!(
+        !markdown.contains(env!("CARGO_MANIFEST_DIR")),
+        "report leaked cargo manifest dir"
+    );
+    assert!(
+        !markdown.contains("powerio-conversion-matrix/"),
+        "report leaked generated temp file path"
     );
 }
 
@@ -49,19 +66,50 @@ fn build_report() -> Report {
     writeln!(markdown).unwrap();
     writeln!(markdown, "## Conversion Matrix").unwrap();
     writeln!(markdown).unwrap();
+    writeln!(markdown, "### Legend").unwrap();
+    writeln!(markdown).unwrap();
     writeln!(
         markdown,
-        "Cells show `X/Y` warning counts as observed/baseline across source parse, target write, and target readback; `Z cases` is the fixture count."
+        "Rows are source formats. Columns are target formats. Each cell converts the section's fixture set from the row format to the column format, then parses the result back."
     )
     .unwrap();
     writeln!(
         markdown,
-        "🟢 = `0/0`, 🟡 = observed warnings match a nonzero baseline, 🔴 = invariant failure or warning count drift."
+        "Cells show `X/Y`, where `X` is the observed warning count and `Y` is the expected warning count committed in this test. Warnings include source parse, target write, and target readback."
+    )
+    .unwrap();
+    writeln!(markdown).unwrap();
+    writeln!(
+        markdown,
+        "- 🟢 `0/0`: no warnings and checked invariants held."
     )
     .unwrap();
     writeln!(
         markdown,
-        "Baselines are fixed in this test, so CI fails when a conversion starts adding or losing warnings."
+        "- 🟡 `X=Y`: observed warnings match the reviewed expected count, and that count is nonzero."
+    )
+    .unwrap();
+    writeln!(
+        markdown,
+        "- 🔴 `X!=Y` or invariant failure: behavior changed. If warnings decreased because fidelity improved, update the expected counts in the same PR."
+    )
+    .unwrap();
+    writeln!(markdown).unwrap();
+    writeln!(markdown, "### Format Notes").unwrap();
+    writeln!(markdown).unwrap();
+    writeln!(
+        markdown,
+        "- PowerIO JSON is the canonical JSON transport for the `Network` hub, so it exercises the internal structured representation used between readers and writers."
+    )
+    .unwrap();
+    writeln!(
+        markdown,
+        "- PowerWorld means `.aux` text conversion. Binary `.pwb` is not in this matrix."
+    )
+    .unwrap();
+    writeln!(
+        markdown,
+        "- PSS/E means `.raw` revision 33, and PSLF means `.epc`."
     )
     .unwrap();
     writeln!(markdown).unwrap();
@@ -75,6 +123,7 @@ fn build_report() -> Report {
 #[derive(Clone)]
 struct MatrixReport {
     formats: Vec<&'static str>,
+    case_count: usize,
     cells: Vec<Vec<Cell>>,
     failures: Vec<String>,
 }
@@ -83,7 +132,6 @@ struct MatrixReport {
 struct Cell {
     observed_warnings: usize,
     baseline_warnings: usize,
-    cases: usize,
     failures: Vec<String>,
     warning_counts: BTreeMap<String, usize>,
 }
@@ -93,7 +141,6 @@ impl Cell {
         Self {
             observed_warnings: 0,
             baseline_warnings,
-            cases: 0,
             failures: Vec::new(),
             warning_counts: BTreeMap::new(),
         }
@@ -110,7 +157,10 @@ impl Cell {
     fn record_warnings(&mut self, warnings: &[String]) {
         self.observed_warnings += warnings.len();
         for warning in warnings {
-            *self.warning_counts.entry(warning.clone()).or_default() += 1;
+            *self
+                .warning_counts
+                .entry(sanitize_report_text(warning))
+                .or_default() += 1;
         }
     }
 }
@@ -118,7 +168,14 @@ impl Cell {
 fn write_matrix_section(markdown: &mut String, title: &str, report: &MatrixReport) {
     writeln!(markdown, "### {title}").unwrap();
     writeln!(markdown).unwrap();
-    write!(markdown, "| from \\ to |").unwrap();
+    writeln!(
+        markdown,
+        "Each cell covers {} cases. Rows are source formats; columns are target formats.",
+        report.case_count
+    )
+    .unwrap();
+    writeln!(markdown).unwrap();
+    write!(markdown, "| Source ↓<br>target → |").unwrap();
     for format in &report.formats {
         write!(markdown, " {format} |").unwrap();
     }
@@ -148,43 +205,90 @@ fn cell_summary(cell: &Cell) -> String {
         "🔴"
     };
     format!(
-        "{icon} {}/{}<br>{} cases",
-        cell.observed_warnings, cell.baseline_warnings, cell.cases
+        "{icon} {}/{}",
+        cell.observed_warnings, cell.baseline_warnings
     )
 }
 
 fn write_warning_summary(markdown: &mut String, title: &str, report: &MatrixReport) {
-    let mut warning_counts: BTreeMap<String, usize> = BTreeMap::new();
-    for cell in report.cells.iter().flatten() {
-        for (warning, count) in &cell.warning_counts {
-            *warning_counts.entry(warning.clone()).or_default() += count;
+    writeln!(markdown, "#### {title} Warning Details").unwrap();
+    writeln!(markdown).unwrap();
+    writeln!(
+        markdown,
+        "Rows list only source to target pairs that produced warnings or failed an invariant."
+    )
+    .unwrap();
+    writeln!(markdown).unwrap();
+    writeln!(markdown, "| source | target | warnings | details |").unwrap();
+    writeln!(markdown, "| --- | --- | ---: | --- |").unwrap();
+
+    let mut wrote_row = false;
+    for (source, row) in report.formats.iter().zip(&report.cells) {
+        for (target, cell) in report.formats.iter().zip(row) {
+            if cell.observed_warnings == 0 && cell.failures.is_empty() {
+                continue;
+            }
+            wrote_row = true;
+            writeln!(
+                markdown,
+                "| {source} | {target} | {}/{} | {} |",
+                cell.observed_warnings,
+                cell.baseline_warnings,
+                cell_details(cell)
+            )
+            .unwrap();
         }
     }
 
-    writeln!(markdown, "#### {title} Warning Summary").unwrap();
-    writeln!(markdown).unwrap();
-    if warning_counts.is_empty() {
-        writeln!(markdown, "No warnings observed.").unwrap();
-        return;
+    if !wrote_row {
+        writeln!(markdown, "|  |  | 0/0 | No warnings observed. |").unwrap();
+    }
+}
+
+fn cell_details(cell: &Cell) -> String {
+    let mut details = Vec::new();
+    for failure in &cell.failures {
+        details.push(format!("failure: {}", sanitize_report_text(failure)));
     }
 
-    let mut rows: Vec<_> = warning_counts.into_iter().collect();
-    rows.sort_by(|(warning_a, count_a), (warning_b, count_b)| {
+    let mut warnings: Vec<_> = cell.warning_counts.iter().collect();
+    warnings.sort_by(|(warning_a, count_a), (warning_b, count_b)| {
         count_b.cmp(count_a).then_with(|| warning_a.cmp(warning_b))
     });
-    writeln!(markdown, "| count | warning |").unwrap();
-    writeln!(markdown, "| ---: | --- |").unwrap();
-    for (warning, count) in rows.iter().take(MAX_WARNING_SUMMARY_ROWS) {
-        writeln!(markdown, "| {count} | {} |", escape_table_cell(warning)).unwrap();
+    for (warning, count) in warnings.iter().take(MAX_WARNING_DETAILS_PER_PAIR) {
+        details.push(format!("{count}x {warning}"));
     }
-    let omitted = rows.len().saturating_sub(MAX_WARNING_SUMMARY_ROWS);
+    let omitted = warnings.len().saturating_sub(MAX_WARNING_DETAILS_PER_PAIR);
     if omitted > 0 {
-        writeln!(markdown, "|  | {omitted} more warning texts omitted |").unwrap();
+        details.push(format!("{omitted} more warning texts"));
     }
+
+    if details.is_empty() {
+        return "No warning text recorded.".to_string();
+    }
+    escape_table_cell(&details.join("<br>"))
 }
 
 fn escape_table_cell(text: &str) -> String {
     text.replace('|', "\\|").replace('\n', "<br>")
+}
+
+fn sanitize_report_text(text: &str) -> String {
+    const GENERATED_DSS_DIR: &str = "powerio-conversion-matrix/";
+    if let Some(dir_idx) = text.find(GENERATED_DSS_DIR) {
+        let prefix = &text[..dir_idx];
+        let path_start = prefix.rfind(char::is_whitespace).map_or(0, |idx| idx + 1);
+        let prelude = prefix[..path_start].trim_end();
+        let suffix = &text[dir_idx + GENERATED_DSS_DIR.len()..];
+        if prelude.is_empty() {
+            return format!("generated DSS {suffix}");
+        }
+        return format!("{prelude} generated DSS {suffix}");
+    }
+
+    let temp_dir = std::env::temp_dir().to_string_lossy().into_owned();
+    text.replace(&temp_dir, "<tmp>")
+        .replace(env!("CARGO_MANIFEST_DIR"), "<crate>")
 }
 
 #[derive(Clone, Copy)]
@@ -196,7 +300,7 @@ struct TransmissionFormat {
 
 const TRANSMISSION_FORMATS: [TransmissionFormat; 8] = [
     TransmissionFormat {
-        name: "MATPOWER",
+        name: "MATPOWER .m",
         token: "matpower",
         target: TargetFormat::Matpower,
     },
@@ -211,12 +315,12 @@ const TRANSMISSION_FORMATS: [TransmissionFormat; 8] = [
         target: TargetFormat::PowerModelsJson,
     },
     TransmissionFormat {
-        name: "PSS/E",
+        name: "PSS/E .raw",
         token: "psse",
         target: TargetFormat::Psse { rev: 33 },
     },
     TransmissionFormat {
-        name: "PowerWorld",
+        name: "PowerWorld .aux",
         token: "powerworld",
         target: TargetFormat::PowerWorld,
     },
@@ -231,7 +335,7 @@ const TRANSMISSION_FORMATS: [TransmissionFormat; 8] = [
         target: TargetFormat::PandapowerJson,
     },
     TransmissionFormat {
-        name: "PSLF",
+        name: "PSLF .epc",
         token: "pslf",
         target: TargetFormat::Pslf,
     },
@@ -290,7 +394,6 @@ fn run_transmission_matrix() -> MatrixReport {
             match &payloads {
                 Ok(payloads) => {
                     for payload in payloads {
-                        cell.cases += 1;
                         cell.record_warnings(&payload.parse_warnings);
                         validate_transmission_pair(payload, *target, &mut cell);
                     }
@@ -314,6 +417,7 @@ fn run_transmission_matrix() -> MatrixReport {
 
     MatrixReport {
         formats,
+        case_count: TRANSMISSION_CASES.len(),
         cells,
         failures,
     }
@@ -403,7 +507,7 @@ struct DistributionFormat {
 
 const DISTRIBUTION_FORMATS: [DistributionFormat; 3] = [
     DistributionFormat {
-        name: "DSS",
+        name: "OpenDSS .dss",
         token: "dss",
         target: DistTargetFormat::Dss,
     },
@@ -489,7 +593,6 @@ fn run_distribution_matrix() -> MatrixReport {
             match &payloads {
                 Ok(payloads) => {
                     for payload in payloads {
-                        cell.cases += 1;
                         cell.record_warnings(&payload.parse_warnings);
                         validate_distribution_pair(payload, *target, &mut cell);
                     }
@@ -513,6 +616,7 @@ fn run_distribution_matrix() -> MatrixReport {
 
     MatrixReport {
         formats,
+        case_count: DISTRIBUTION_CASES.len(),
         cells,
         failures,
     }
