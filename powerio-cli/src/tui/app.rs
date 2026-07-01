@@ -13,7 +13,7 @@ use sprs::CsMat;
 
 use powerio_matrix::matrix::{MatrixStats, sddm_check};
 use powerio_matrix::network::Network;
-use powerio_matrix::pipeline::{MatrixKind, RhsKind};
+use powerio_matrix::pipeline::{MatrixKind, RhsKind, matrix_stats_for_kind};
 use powerio_matrix::synth::{SynthSpec, Topology};
 
 use super::log_pane::LogBuf;
@@ -273,7 +273,7 @@ impl App {
         let mut matrices = BTreeMap::new();
         for &kind in MatrixKind::ALL {
             let mat = powerio_matrix::build_kind(&view, kind, &opts)?;
-            let stats = MatrixStats::from_csr(&mat);
+            let stats = matrix_stats_for_kind(&mat, &view, kind, &opts);
             let sddm = sddm_check(&mat);
             matrices.insert(
                 MatrixKindOrd::from_kind(kind),

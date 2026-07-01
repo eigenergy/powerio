@@ -67,12 +67,14 @@ are returned as warnings.
 - **B' scheme.** `Scheme` selects between the two fast decoupled load flow
   variants for B': `Xb` weights a branch by \\(1/x\\) (series resistance ignored),
   `Bx` (the default) by \\(x/(r^2 + x^2)\\).
-- **Zero impedance branches.** B' skips them by default
-  (`BuildOptions::skip_zero_impedance`; set it `false` to get
-  `Error::ZeroImpedance`). \\(Y_{\mathrm{bus}}\\) scatters no admittance for them
-  (\\(r^2 + x^2 = 0\\))
-  and the incidence builder drops them, both unconditionally. The gridfm export
-  counts the drops (`dropped_zero_impedance` in `gridfm_meta.json`).
+- **Zero impedance branches.** `BuildOptions::skip_zero_impedance` controls the
+  builders whose branch denominator can be zero. The default `true` skips the
+  branch and records the skipped source branch rows in `MatrixStats` as
+  `skipped_zero_impedance` and `skipped_zero_impedance_branches`; `false`
+  returns `Error::ZeroImpedance`. Full AC admittance builders use
+  \\(r^2 + x^2\\); DC incidence and reactance only FDPF variants use \\(x\\).
+  The gridfm export still zeros its admittance and flow columns for these rows
+  and records `dropped_zero_impedance` in `gridfm_meta.json`.
 - **Reference coverage.** `IndexedNetwork::check_reference_coverage` verifies that
   every in-service island has a reference bus.
 - **Susceptance conventions for the DC approximation.** `DcConvention` selects

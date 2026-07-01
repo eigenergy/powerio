@@ -95,7 +95,8 @@ fn laplacian_equals_bprime_xb() {
     for path in CASES {
         let case = load(path);
         let view = IndexedNetwork::new(&case);
-        let inc = build_incidence(&view, DcConvention::PaperPure).unwrap();
+        let inc =
+            build_incidence(&view, DcConvention::PaperPure, &BuildOptions::default()).unwrap();
         let l = build_weighted_laplacian(&inc.a, &inc.b);
         let bp = build_bprime(
             &view,
@@ -125,7 +126,8 @@ fn incidence_structure() {
     for path in CASES {
         let case = load(path);
         let view = IndexedNetwork::new(&case);
-        let inc = build_incidence(&view, DcConvention::PaperPure).unwrap();
+        let inc =
+            build_incidence(&view, DcConvention::PaperPure, &BuildOptions::default()).unwrap();
         let (n, m) = (inc.n(), inc.m());
         assert_eq!(inc.a.rows(), n);
         assert_eq!(inc.a.cols(), m);
@@ -155,7 +157,8 @@ fn laplacian_is_psd_with_constant_kernel() {
     for path in CASES {
         let case = load(path);
         let view = IndexedNetwork::new(&case);
-        let inc = build_incidence(&view, DcConvention::PaperPure).unwrap();
+        let inc =
+            build_incidence(&view, DcConvention::PaperPure, &BuildOptions::default()).unwrap();
         let l = build_weighted_laplacian(&inc.a, &inc.b);
         let d = dense(&l);
         let n = d.len();
@@ -176,7 +179,8 @@ fn grounded_laplacian_is_spd() {
         let case = load(path);
         let view = IndexedNetwork::new(&case);
         let r = view.reference_bus_index().unwrap();
-        let inc = build_incidence(&view, DcConvention::PaperPure).unwrap();
+        let inc =
+            build_incidence(&view, DcConvention::PaperPure, &BuildOptions::default()).unwrap();
         let l = build_weighted_laplacian(&inc.a, &inc.b);
         let lg = ground_at(&l, r);
         assert_eq!(lg.rows(), view.n() - 1);
@@ -190,7 +194,8 @@ fn flow_map_reconstructs_laplacian() {
     for path in CASES {
         let case = load(path);
         let view = IndexedNetwork::new(&case);
-        let inc = build_incidence(&view, DcConvention::PaperPure).unwrap();
+        let inc =
+            build_incidence(&view, DcConvention::PaperPure, &BuildOptions::default()).unwrap();
         let flow = build_flow_map(&inc.a, &inc.b); // B Aᵀ, m×n
         assert_eq!(flow.rows(), inc.m());
         assert_eq!(flow.cols(), inc.n());
@@ -217,7 +222,8 @@ fn opf_instance_shapes_and_cg() {
     for path in CASES {
         let case = load(path);
         let view = IndexedNetwork::new(&case);
-        let inc = build_incidence(&view, DcConvention::PaperPure).unwrap();
+        let inc =
+            build_incidence(&view, DcConvention::PaperPure, &BuildOptions::default()).unwrap();
         let opf = build_opf_instance(&view, &inc, Units::PerUnit).unwrap();
         let (n, m, n_gen) = (view.n(), inc.m(), opf.n_gen());
         assert_eq!(opf.bus.q.len(), n);
@@ -298,7 +304,7 @@ fn no_generators_errors() {
     };
     let case = powerio_matrix::synth::generate(&spec);
     let view = IndexedNetwork::new(&case);
-    let inc = build_incidence(&view, DcConvention::PaperPure).unwrap();
+    let inc = build_incidence(&view, DcConvention::PaperPure, &BuildOptions::default()).unwrap();
     let err = build_opf_instance(&view, &inc, Units::PerUnit).unwrap_err();
     assert!(matches!(err, Error::NoGenerators), "got {err:?}");
 }
@@ -353,7 +359,8 @@ fn ptdf_satisfies_kcl() {
         let case = load(path);
         let view = IndexedNetwork::new(&case);
         let r = view.reference_bus_index().unwrap();
-        let inc = build_incidence(&view, DcConvention::PaperPure).unwrap();
+        let inc =
+            build_incidence(&view, DcConvention::PaperPure, &BuildOptions::default()).unwrap();
         let ptdf = build_ptdf(&view, DcConvention::PaperPure).unwrap();
         assert_eq!(ptdf.rows(), inc.m());
         assert_eq!(ptdf.cols(), view.n());
@@ -385,7 +392,8 @@ fn lodf_diagonal_is_minus_one() {
         let case = load(path);
         let view = IndexedNetwork::new(&case);
         let lodf = build_lodf(&view, DcConvention::PaperPure).unwrap();
-        let inc = build_incidence(&view, DcConvention::PaperPure).unwrap();
+        let inc =
+            build_incidence(&view, DcConvention::PaperPure, &BuildOptions::default()).unwrap();
         assert_eq!(lodf.rows(), inc.m());
         assert_eq!(lodf.cols(), inc.m());
         let d = dense(&lodf);
@@ -439,7 +447,7 @@ fn poly_gen(bus_id: usize, pmax: f64, c2: f64, c1: f64) -> Generator {
 /// the `Result` so error-path tests can assert on the failure.
 fn opf_of(case: &Network, units: Units) -> powerio_matrix::Result<powerio_matrix::OpfInstance> {
     let view = IndexedNetwork::new(case);
-    let inc = build_incidence(&view, DcConvention::PaperPure)?;
+    let inc = build_incidence(&view, DcConvention::PaperPure, &BuildOptions::default())?;
     build_opf_instance(&view, &inc, units)
 }
 
@@ -518,12 +526,12 @@ fn matpower_convention_tap_and_shift() {
     let view = IndexedNetwork::new(&case);
 
     // PaperPure ignores tap and shift: b = 1/x, no phase injection.
-    let pp = build_incidence(&view, DcConvention::PaperPure).unwrap();
+    let pp = build_incidence(&view, DcConvention::PaperPure, &BuildOptions::default()).unwrap();
     assert!((pp.b[0] - 1.0 / x).abs() < 1e-12);
     assert!(pp.p_shift.iter().all(|&v| v == 0.0));
 
     // Matpower: b = 1/(x·τ); makeBdc injection ±b·shift at from/to.
-    let mp = build_incidence(&view, DcConvention::Matpower).unwrap();
+    let mp = build_incidence(&view, DcConvention::Matpower, &BuildOptions::default()).unwrap();
     let b_e = 1.0 / (x * tap);
     let shift_rad = shift_deg.to_radians();
     assert!((mp.b[0] - b_e).abs() < 1e-12, "b_e {} != {b_e}", mp.b[0]);
@@ -542,7 +550,7 @@ fn bundle_vectors_round_trip() {
 
     // Default options are PaperPure + PerUnit; rebuild the instance to compare.
     let view = IndexedNetwork::new(&case);
-    let inc = build_incidence(&view, DcConvention::PaperPure).unwrap();
+    let inc = build_incidence(&view, DcConvention::PaperPure, &BuildOptions::default()).unwrap();
     let opf = build_opf_instance(&view, &inc, Units::PerUnit).unwrap();
 
     let check = |name: &str, want: &[f64]| {
@@ -817,8 +825,18 @@ fn incidence_matpower_pshift_invariant_to_normalization() {
         vec![poly_gen(1, 100.0, 0.0, 1.0)],
     );
     let norm = raw.to_normalized().unwrap();
-    let ir = build_incidence(&IndexedNetwork::new(&raw), DcConvention::Matpower).unwrap();
-    let in_ = build_incidence(&IndexedNetwork::new(&norm), DcConvention::Matpower).unwrap();
+    let ir = build_incidence(
+        &IndexedNetwork::new(&raw),
+        DcConvention::Matpower,
+        &BuildOptions::default(),
+    )
+    .unwrap();
+    let in_ = build_incidence(
+        &IndexedNetwork::new(&norm),
+        DcConvention::Matpower,
+        &BuildOptions::default(),
+    )
+    .unwrap();
     assert_eq!(ir.p_shift.len(), in_.p_shift.len());
     for (a, b) in ir.p_shift.iter().zip(&in_.p_shift) {
         assert!((a - b).abs() < 1e-12, "p_shift differs: {a} vs {b}");

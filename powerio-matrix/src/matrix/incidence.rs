@@ -12,6 +12,8 @@ use crate::indexed::IndexedNetwork;
 use crate::matrix::triplet::CooBuilder;
 use crate::{Error, Result};
 
+use super::{BuildOptions, ZeroImpedanceSkips};
+
 /// DC susceptance convention for `b_e` and the Laplacian.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
 #[non_exhaustive]
@@ -38,6 +40,8 @@ pub struct IncidenceParts {
     pub p_shift: Vec<f64>,
     /// Column `k` → index into `case.branches`.
     pub branch_of_col: Vec<usize>,
+    /// In-service branch rows skipped because their DC denominator is zero.
+    pub skipped_zero_impedance: ZeroImpedanceSkips,
 }
 
 impl IncidenceParts {
@@ -54,13 +58,19 @@ impl IncidenceParts {
 
 /// Build `A`, `b`, the phase shift injection, and the column→branch map.
 ///
-/// Self-loops (from == to) and branches with `x == 0` (no DC susceptance)
-/// are dropped, so `m` counts only the branches that contribute a column.
-pub fn build_incidence(case: &IndexedNetwork, conv: DcConvention) -> Result<IncidenceParts> {
+/// Self-loops (from == to) are dropped. Branches with `x == 0` have no finite DC
+/// susceptance; they are skipped when `opts.skip_zero_impedance` is true and
+/// rejected with [`Error::ZeroImpedance`] when it is false.
+pub fn build_incidence(
+    case: &IndexedNetwork,
+    conv: DcConvention,
+    opts: &BuildOptions,
+) -> Result<IncidenceParts> {
     let n = case.n();
 
     // Pass 1: resolve and filter, fixing the column order.
     let mut cols: Vec<Column> = Vec::new();
+    let mut skipped_zero_impedance = Vec::new();
     for (idx, br) in case.in_service_branches() {
         let i = case.bus_index(br.from).ok_or(Error::UnknownBus {
             bus_id: br.from,
@@ -71,6 +81,12 @@ pub fn build_incidence(case: &IndexedNetwork, conv: DcConvention) -> Result<Inci
             element_index: idx,
         })?;
         if i == j || br.x == 0.0 {
+            if br.x == 0.0 {
+                if !opts.skip_zero_impedance {
+                    return Err(Error::ZeroImpedance { row: idx });
+                }
+                skipped_zero_impedance.push(idx);
+            }
             continue;
         }
         let b_e = match conv {
@@ -121,6 +137,7 @@ pub fn build_incidence(case: &IndexedNetwork, conv: DcConvention) -> Result<Inci
         b,
         p_shift,
         branch_of_col,
+        skipped_zero_impedance: ZeroImpedanceSkips::new(skipped_zero_impedance),
     })
 }
 

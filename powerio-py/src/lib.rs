@@ -1023,7 +1023,7 @@ impl PyNetwork {
     ) -> PyResult<Bound<'py, PyAny>> {
         let conv = parse_convention(convention.unwrap_or("paper"))?;
         let view = IndexedNetwork::with_core(&self.inner, &self.core);
-        let parts = build_incidence(&view, conv).map_err(to_pyerr)?;
+        let parts = build_incidence(&view, conv, &BuildOptions::default()).map_err(to_pyerr)?;
         let a = coo_triplets(py, &parts.a)?;
         let b = parts.b;
         let p_shift = parts.p_shift;
@@ -1040,7 +1040,7 @@ impl PyNetwork {
     ) -> PyResult<Bound<'py, PyAny>> {
         let conv = parse_convention(convention.unwrap_or("paper"))?;
         let view = IndexedNetwork::with_core(&self.inner, &self.core);
-        let parts = build_incidence(&view, conv).map_err(to_pyerr)?;
+        let parts = build_incidence(&view, conv, &BuildOptions::default()).map_err(to_pyerr)?;
         let l = build_weighted_laplacian(&parts.a, &parts.b);
         coo_triplets(py, &l)
     }

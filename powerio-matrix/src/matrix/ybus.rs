@@ -29,16 +29,30 @@ pub struct YbusParts {
 }
 
 /// Internal flags used to derive B', B'' from `Y_bus` per MATPOWER `makeB`.
-// Five independent on/off switches into one Y_bus kernel; an enum per pair
+// Six independent on/off switches into one Y_bus kernel; an enum per pair
 // would just spread the same state across more types.
 #[allow(clippy::struct_excessive_bools)]
-#[derive(Debug, Clone, Copy, Default)]
+#[derive(Debug, Clone, Copy)]
 pub(crate) struct YbusFlags {
     pub zero_resistance: bool,
     pub zero_charging: bool,
     pub unity_taps: bool,
     pub zero_shifts: bool,
     pub skip_bus_shunts: bool,
+    pub skip_zero_impedance: bool,
+}
+
+impl Default for YbusFlags {
+    fn default() -> Self {
+        Self {
+            zero_resistance: false,
+            zero_charging: false,
+            unity_taps: false,
+            zero_shifts: false,
+            skip_bus_shunts: false,
+            skip_zero_impedance: true,
+        }
+    }
 }
 
 pub fn build_ybus(case: &IndexedNetwork, opts: &super::BuildOptions) -> Result<YbusParts> {
@@ -48,6 +62,7 @@ pub fn build_ybus(case: &IndexedNetwork, opts: &super::BuildOptions) -> Result<Y
         unity_taps: !opts.include_taps,
         zero_shifts: !opts.include_shifts,
         skip_bus_shunts: false,
+        skip_zero_impedance: opts.skip_zero_impedance,
     };
     build_ybus_with_flags(case, flags)
 }
@@ -139,7 +154,10 @@ pub(crate) fn branch_admittance(
     let x = br.x;
     let denom = r * r + x * x;
     if denom == 0.0 {
-        return Ok(None);
+        if flags.skip_zero_impedance {
+            return Ok(None);
+        }
+        return Err(Error::ZeroImpedance { row });
     }
     // NaN/Inf r or x makes `denom` non-finite (and slips past `== 0.0`), which
     // would write NaN into Y_bus and silently break the downstream M-matrix/SDDM

@@ -2,10 +2,12 @@ use approx::assert_relative_eq;
 
 use crate::indexed::IndexedNetwork;
 use crate::matrix::{
-    BuildOptions, MatrixStats, Scheme, build_bdoubleprime, build_bprime, build_lacpf, build_ybus,
+    BuildOptions, DcConvention, MatrixStats, Scheme, build_bdoubleprime, build_bprime,
+    build_incidence, build_lacpf, build_ybus,
 };
 use crate::network::{Branch, BranchCharging, Bus, BusId, BusType, Network, Shunt};
 use crate::parse_psse;
+use crate::pipeline::{MatrixKind, matrix_stats_for_kind};
 
 fn bus(id: usize, kind: BusType) -> Bus {
     Bus::new(BusId(id), kind, 345.0)
@@ -31,6 +33,15 @@ fn three_bus() -> Network {
             br(1, 3, 0.0, 0.2, 0.0),
             br(2, 3, 0.0, 0.25, 0.0),
         ],
+    )
+}
+
+fn zero_impedance_bus_pair() -> Network {
+    Network::in_memory(
+        "zero",
+        100.0,
+        vec![bus(1, BusType::Ref), bus(2, BusType::Pq)],
+        vec![br(1, 2, 0.0, 0.0, 0.0)],
     )
 }
 
@@ -289,4 +300,42 @@ fn ybus_rejects_nan_reactance() {
     let view = IndexedNetwork::new(&net);
     let err = build_ybus(&view, &BuildOptions::default()).unwrap_err();
     assert!(matches!(err, crate::Error::NonFiniteSusceptance { .. }));
+}
+
+#[test]
+fn zero_impedance_policy_is_shared_across_matrix_builders() {
+    let net = zero_impedance_bus_pair();
+    let view = IndexedNetwork::new(&net);
+    let opts = BuildOptions::default();
+
+    let bprime = build_bprime(&view, &opts).unwrap();
+    let bprime_stats = matrix_stats_for_kind(&bprime, &view, MatrixKind::BPrime, &opts);
+    assert_eq!(bprime_stats.skipped_zero_impedance, 1);
+    assert_eq!(bprime_stats.skipped_zero_impedance_branches, vec![0]);
+
+    let ybus = build_ybus(&view, &opts).unwrap();
+    let ybus_stats = matrix_stats_for_kind(&ybus.b, &view, MatrixKind::YbusB, &opts);
+    assert_eq!(ybus_stats.skipped_zero_impedance, 1);
+    assert_eq!(ybus_stats.skipped_zero_impedance_branches, vec![0]);
+
+    let inc = build_incidence(&view, DcConvention::PaperPure, &opts).unwrap();
+    assert_eq!(inc.skipped_zero_impedance.count, 1);
+    assert_eq!(inc.skipped_zero_impedance.branch_indices, vec![0]);
+}
+
+#[test]
+fn zero_impedance_policy_can_error_instead_of_skipping() {
+    let net = zero_impedance_bus_pair();
+    let view = IndexedNetwork::new(&net);
+    let opts = BuildOptions {
+        skip_zero_impedance: false,
+        ..Default::default()
+    };
+
+    let bprime = build_bprime(&view, &opts).unwrap_err();
+    assert!(matches!(bprime, crate::Error::ZeroImpedance { row: 0 }));
+    let ybus = build_ybus(&view, &opts).unwrap_err();
+    assert!(matches!(ybus, crate::Error::ZeroImpedance { row: 0 }));
+    let inc = build_incidence(&view, DcConvention::PaperPure, &opts).unwrap_err();
+    assert!(matches!(inc, crate::Error::ZeroImpedance { row: 0 }));
 }

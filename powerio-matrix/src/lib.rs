@@ -56,13 +56,17 @@ pub mod synth;
 
 pub use matrix::{
     BuildOptions, BusCosts, DcConvention, GenCosts, GroundedIndexMap, IncidenceParts, MatrixStats,
-    OpfInstance, Scheme, Units, build_adjacency, build_bdoubleprime, build_bprime, build_flow_map,
-    build_incidence, build_lacpf, build_lodf, build_opf_instance, build_ptdf, build_ptdf_lodf,
-    build_weighted_laplacian, build_ybus, ground_at, ground_at_each, reference_indicator,
-    sddm_check, susceptance_diag, unit_vector,
+    OpfInstance, Scheme, Units, ZeroImpedanceRule, ZeroImpedanceSkips, build_adjacency,
+    build_bdoubleprime, build_bprime, build_flow_map, build_incidence, build_lacpf, build_lodf,
+    build_opf_instance, build_ptdf, build_ptdf_lodf, build_weighted_laplacian, build_ybus,
+    ground_at, ground_at_each, reference_indicator, sddm_check, skipped_zero_impedance,
+    susceptance_diag, unit_vector,
 };
 pub use opf_pipeline::{DcOpfOptions, DcOpfOutputs, write_dcopf_bundle};
-pub use pipeline::{MatrixKind, Pipeline, PipelineOutputs, RhsKind, build_kind};
+pub use pipeline::{
+    MatrixKind, Pipeline, PipelineOutputs, RhsKind, build_kind, matrix_stats_for_kind,
+    zero_impedance_rule_for_kind, zero_impedance_skips_for_kind,
+};
 
 #[cfg(feature = "gridfm")]
 pub use io::gridfm::{

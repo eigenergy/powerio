@@ -13,6 +13,7 @@ use sprs::CsMat;
 use crate::Result;
 use crate::indexed::IndexedNetwork;
 use crate::io::mtx::{write_mtx, write_vector_mtx};
+use crate::matrix::BuildOptions;
 use crate::matrix::incidence::{DcConvention, build_flow_map, build_incidence};
 use crate::matrix::laplacian::{build_weighted_laplacian, ground_at_each, reference_indicator};
 use crate::matrix::opf::{Units, build_opf_instance};
@@ -81,7 +82,8 @@ pub fn write_dcopf_bundle(
 
     view.check_reference_coverage()?;
     let refs = view.reference_bus_indices();
-    let inc = build_incidence(&view, opts.convention)?;
+    let build_options = BuildOptions::default();
+    let inc = build_incidence(&view, opts.convention, &build_options)?;
     let l = build_weighted_laplacian(&inc.a, &inc.b);
     let l_grounded = ground_at_each(&l, &refs);
     let flow = build_flow_map(&inc.a, &inc.b);

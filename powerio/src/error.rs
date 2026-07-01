@@ -33,7 +33,7 @@ pub enum Error {
     #[error("element references unknown bus id {bus_id} (in-service index {element_index})")]
     UnknownBus { bus_id: BusId, element_index: usize },
 
-    #[error("branch row {row} has zero impedance (r=0, x=0); not representable in B'")]
+    #[error("branch row {row} has a zero matrix denominator under the selected build options")]
     ZeroImpedance { row: usize },
 
     #[error("branch row {row} has non-finite DC susceptance b = 1/x (x is NaN, Inf, or denormal)")]
