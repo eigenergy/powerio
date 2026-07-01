@@ -25,6 +25,7 @@ const MATRICES: &[(MatrixKind, &str)] = &[
 ];
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[allow(clippy::struct_excessive_bools)]
 struct SolverMatrixRecord {
     case: String,
     matrix: String,
@@ -341,6 +342,7 @@ fn power_iteration(a: &[f64], n: usize) -> Option<f64> {
     Some(rayleigh(a, n, &x))
 }
 
+#[allow(clippy::many_single_char_names)]
 fn inverse_power_iteration(a: &[f64], l: &[f64], n: usize) -> Option<f64> {
     let mut x = vec![1.0 / (n as f64).sqrt(); n];
     for _ in 0..80 {
@@ -356,6 +358,7 @@ fn inverse_power_iteration(a: &[f64], l: &[f64], n: usize) -> Option<f64> {
     Some(rayleigh(a, n, &x))
 }
 
+#[allow(clippy::many_single_char_names)]
 fn chol_solve(l: &[f64], n: usize, b: &[f64]) -> Vec<f64> {
     let mut y = vec![0.0; n];
     for i in 0..n {

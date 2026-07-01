@@ -197,6 +197,7 @@ impl MatrixStats {
         }
     }
 
+    #[must_use]
     pub fn with_zero_impedance_skips(mut self, skips: ZeroImpedanceSkips) -> Self {
         self.skipped_zero_impedance = skips.count;
         self.skipped_zero_impedance_branches = skips.branch_indices;

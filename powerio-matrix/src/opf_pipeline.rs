@@ -83,6 +83,7 @@ struct DcOpfMeta {
 }
 
 #[derive(Serialize)]
+#[allow(clippy::struct_field_names)]
 struct DcOpfDimensions {
     n_buses: usize,
     n_source_branches: usize,
@@ -230,6 +231,7 @@ pub fn write_dcopf_bundle(
     Ok(DcOpfOutputs { dir, files })
 }
 
+#[allow(clippy::too_many_lines)]
 fn operator_meta(n: usize, m: usize, n_ref: usize, n_gen: usize) -> Vec<OperatorMeta> {
     let n_grounded = n - n_ref;
     vec![
