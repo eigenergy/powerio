@@ -2709,6 +2709,7 @@ mpc.branch = [
                 CStr::from_ptr(err.as_ptr()).to_str().unwrap()
             );
             let v = package_json(pkg);
+            assert_eq!(v["schema_version"], serde_json::json!("0.1.0"));
             assert_eq!(v["model_kind"], serde_json::json!("balanced"));
             assert_eq!(v["model"]["kind"], serde_json::json!("balanced"));
             assert_eq!(

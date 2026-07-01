@@ -30,9 +30,10 @@ use crate::validation::{ValidationPass, ValidationStatus, ValidationSummary};
 /// The canonical schema URL for this package version.
 pub const PIO_PACKAGE_SCHEMA_URL: &str = "https://powerio.dev/schema/pio-package/0.1";
 
-/// The package schema version (semver). Additive fields bump the minor; field
-/// moves bump the major (or ship a migration pass).
-pub const PIO_PACKAGE_SCHEMA_VERSION: &str = "0.2.0";
+/// The package schema version (semver). Keep additive optional fields within
+/// the current version when older readers can ignore them; field moves bump the
+/// major (or ship a migration pass).
+pub const PIO_PACKAGE_SCHEMA_VERSION: &str = "0.1.0";
 
 fn default_schema_url() -> String {
     PIO_PACKAGE_SCHEMA_URL.to_owned()
