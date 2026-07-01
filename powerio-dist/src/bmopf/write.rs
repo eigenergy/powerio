@@ -13,14 +13,34 @@ use serde_json::{Map, Value, json};
 use crate::convert::Conversion;
 use crate::model::{
     Configuration, DistGenerator, DistLoadVoltageModel, DistNetwork, DistTransformer, Mat, Winding,
-    WindingConn,
+    WindingConn, n_winding_impedance_base, pair_keys,
 };
 
-/// The `$schema` stamped into every document's `meta`: the canonical bmopf-report
-/// schema id, so a file always points back to the one authoritative schema
-/// vintage. Matches the `$id` of the vendored schema.
+/// The `$schema` stamped into every document's `meta`: the current BMOPF
+/// schema URI used by BMOPFTools.
 const BMOPF_SCHEMA_ID: &str =
-    "https://github.com/frederikgeth/bmopf-report/draft_schema_and_networks";
+    "https://raw.githubusercontent.com/frederikgeth/bmopf-report/main/schema/bmopf.json";
+
+const RAW_BMOPF_TOP_LEVEL: &[&str] = &[
+    "capacitor",
+    "ibr",
+    "control_profile",
+    "dc_bus",
+    "dc_line",
+    "dc_load",
+    "dc_source",
+];
+
+const TRANSFORMER_NO_LOAD_ALLOWED_EXTRAS: [&str; 4] =
+    ["g_no_load", "b_no_load", "%noloadloss", "%imag"];
+const TRANSFORMER_TWO_WINDING_ALLOWED_EXTRAS: [&str; 6] = [
+    "tap_min",
+    "tap_max",
+    "g_no_load",
+    "b_no_load",
+    "%noloadloss",
+    "%imag",
+];
 
 /// Writes the strict BMOPF document. Every field the schema cannot carry
 /// is reported in the warnings.
@@ -32,6 +52,11 @@ const BMOPF_SCHEMA_ID: &str =
 pub fn write_bmopf_json(net: &DistNetwork) -> Conversion {
     let mut w = Writer {
         warnings: Vec::new(),
+        grounded: net
+            .buses
+            .iter()
+            .map(|b| (b.id.to_ascii_lowercase(), b.grounded.clone()))
+            .collect(),
     };
     let doc = w.document(net);
     Conversion {
@@ -42,6 +67,7 @@ pub fn write_bmopf_json(net: &DistNetwork) -> Conversion {
 
 struct Writer {
     warnings: Vec<String>,
+    grounded: BTreeMap<String, Vec<String>>,
 }
 
 impl Writer {
@@ -105,10 +131,10 @@ impl Writer {
                 o.insert("perfectly_grounded_terminals".into(), json!(b.grounded));
             }
             if let Some(v) = b.v_min {
-                o.insert("v_min".into(), self.num(v, "bus v_min"));
+                o.insert("v_min".into(), Value::Array(vec![self.num(v, "bus v_min")]));
             }
             if let Some(v) = b.v_max {
-                o.insert("v_max".into(), self.num(v, "bus v_max"));
+                o.insert("v_max".into(), Value::Array(vec![self.num(v, "bus v_max")]));
             }
             for (key, bound) in [
                 ("vpn_min", &b.vpn_min),
@@ -174,7 +200,12 @@ impl Writer {
             doc.insert("transformer".into(), Value::Object(transformers));
         }
 
+        self.untyped_bmopf_tables(net, &mut doc);
+
         for u in &net.untyped {
+            if Self::is_emitted_untyped(u) {
+                continue;
+            }
             self.warn(format!(
                 "{} {}: class is not represented in BMOPF; dropped from the output",
                 u.class, u.name
@@ -182,6 +213,39 @@ impl Writer {
         }
         self.prune_unreferenced_buses(&mut doc);
         Value::Object(doc)
+    }
+
+    fn is_emitted_untyped(u: &crate::model::UntypedObject) -> bool {
+        RAW_BMOPF_TOP_LEVEL.contains(&u.class.as_str()) || u.class.starts_with("transformer.")
+    }
+
+    fn untyped_bmopf_tables(&mut self, net: &DistNetwork, doc: &mut Map<String, Value>) {
+        for u in &net.untyped {
+            let Some(value) = raw_bmopf_value(u) else {
+                self.warn(format!(
+                    "{} {}: untyped BMOPF object could not be parsed as JSON; dropped from the output",
+                    u.class, u.name
+                ));
+                continue;
+            };
+            if RAW_BMOPF_TOP_LEVEL.contains(&u.class.as_str()) {
+                doc.entry(u.class.clone())
+                    .or_insert_with(|| Value::Object(Map::new()))
+                    .as_object_mut()
+                    .expect("BMOPF tables are objects")
+                    .insert(u.name.clone(), value);
+            } else if let Some(subtype) = u.class.strip_prefix("transformer.") {
+                doc.entry("transformer")
+                    .or_insert_with(|| Value::Object(Map::new()))
+                    .as_object_mut()
+                    .expect("transformer table is an object")
+                    .entry(subtype.to_string())
+                    .or_insert_with(|| Value::Object(Map::new()))
+                    .as_object_mut()
+                    .expect("transformer subtype table is an object")
+                    .insert(u.name.clone(), value);
+            }
+        }
     }
 
     fn prune_unreferenced_buses(&mut self, doc: &mut Map<String, Value>) {
@@ -341,7 +405,11 @@ impl Writer {
             );
             o.insert("bus".into(), json!(vs.bus));
             o.insert("terminal_map".into(), json!(vs.terminal_map));
-            self.extras_dropped(&vs.extras, &format!("voltage source {}", vs.name));
+            let mut extras = vs.extras.clone();
+            if let Some(cost) = extras.remove("cost") {
+                o.insert("cost".into(), cost);
+            }
+            self.extras_dropped(&extras, &format!("voltage source {}", vs.name));
             sources.insert(vs.name.clone(), Value::Object(o));
         }
         doc.insert("voltage_source".into(), Value::Object(sources));
@@ -497,7 +565,6 @@ impl Writer {
                 .insert(name, v);
         };
         for t in &net.transformers {
-            self.extras_dropped(&t.extras, &format!("transformer {}", t.name));
             match classify(t) {
                 Kind::SinglePhase => {
                     if t.windings.iter().any(|w| w.conn == WindingConn::Delta) {
@@ -514,11 +581,11 @@ impl Writer {
                             t.name
                         ));
                     }
-                    let v = self.two_winding(t, &t.windings[0], &t.windings[1], 1.0);
+                    let v = self.two_winding(t, &t.windings[0], &t.windings[1], 1.0, true, true);
                     insert("single_phase", t.name.clone(), v, &mut by_subtype);
                 }
                 Kind::SinglePhaseShape(sub) => {
-                    let v = self.two_winding(t, &t.windings[0], &t.windings[1], 1.0);
+                    let v = self.two_winding(t, &t.windings[0], &t.windings[1], 1.0, true, true);
                     insert(sub, t.name.clone(), v, &mut by_subtype);
                 }
                 Kind::CenterTap => {
@@ -537,6 +604,10 @@ impl Writer {
                     for (k, v) in self.decompose_wye_wye(t) {
                         insert("single_phase", k, v, &mut by_subtype);
                     }
+                }
+                Kind::NWinding => {
+                    let v = self.n_winding(t);
+                    insert("n_winding", t.name.clone(), v, &mut by_subtype);
                 }
                 Kind::Unsupported(why) => {
                     self.warn(format!(
@@ -558,6 +629,8 @@ impl Writer {
         from: &Winding,
         to: &Winding,
         s_scale: f64,
+        emit_no_load: bool,
+        warn_extras: bool,
     ) -> Value {
         let s = from.s_rating * s_scale;
         let zb_from = from.v_ref * from.v_ref / s;
@@ -567,12 +640,12 @@ impl Writer {
         o.insert("bus_to".into(), json!(to.bus));
         o.insert("s_rating".into(), self.num(s, "transformer s_rating"));
         o.insert(
-            "v_ref_from".into(),
-            self.num(from.v_ref, "transformer v_ref_from"),
+            "v_nom_from".into(),
+            self.num(from.v_ref, "transformer v_nom_from"),
         );
         o.insert(
-            "v_ref_to".into(),
-            self.num(to.v_ref, "transformer v_ref_to"),
+            "v_nom_to".into(),
+            self.num(to.v_ref, "transformer v_nom_to"),
         );
         o.insert(
             "r_series_from".into(),
@@ -598,7 +671,13 @@ impl Writer {
         o.insert("x_series_to".into(), json!(0.0));
         o.insert("terminal_map_from".into(), json!(from.terminal_map));
         o.insert("terminal_map_to".into(), json!(to.terminal_map));
-        self.taps_dropped(t);
+        self.transformer_tap_fields(&mut o, t, from);
+        if emit_no_load {
+            self.transformer_no_load_fields(&mut o, t, from, s);
+        }
+        if warn_extras {
+            self.transformer_extras_dropped(t, &TRANSFORMER_TWO_WINDING_ALLOWED_EXTRAS);
+        }
         o.into()
     }
 
@@ -661,7 +740,7 @@ impl Writer {
                 t.name, w2.s_rating, w3.s_rating, from.s_rating
             ));
         }
-        self.two_winding(t, from, &to, 1.0)
+        self.two_winding(t, from, &to, 1.0, true, true)
     }
 
     /// `wye_delta` / `delta_wye`: one series impedance in ohms on the wye
@@ -677,12 +756,12 @@ impl Writer {
         o.insert("bus_to".into(), json!(to.bus));
         o.insert("s_rating".into(), self.num(s, "transformer s_rating"));
         o.insert(
-            "v_ref_from".into(),
-            self.num(from.v_ref, "transformer v_ref_from"),
+            "v_nom_from".into(),
+            self.num(from.v_ref, "transformer v_nom_from"),
         );
         o.insert(
-            "v_ref_to".into(),
-            self.num(to.v_ref, "transformer v_ref_to"),
+            "v_nom_to".into(),
+            self.num(to.v_ref, "transformer v_nom_to"),
         );
         o.insert(
             "r_series".into(),
@@ -704,7 +783,79 @@ impl Writer {
         );
         o.insert("terminal_map_from".into(), json!(from.terminal_map));
         o.insert("terminal_map_to".into(), json!(to.terminal_map));
+        self.transformer_tap_fields(&mut o, t, from);
+        self.transformer_no_load_fields(&mut o, t, from, s);
+        self.transformer_extras_dropped(t, &TRANSFORMER_TWO_WINDING_ALLOWED_EXTRAS);
+        o.into()
+    }
+
+    fn n_winding(&mut self, t: &DistTransformer) -> Value {
+        let s = t.windings.first().map_or(f64::NAN, |w| w.s_rating);
+        if t.windings
+            .iter()
+            .any(|w| w.s_rating.to_bits() != s.to_bits())
+        {
+            self.warn(format!(
+                "transformer {}: n_winding BMOPF carries one s_rating; emitted the first winding rating",
+                t.name
+            ));
+        }
+        let mut o = Map::new();
+        o.insert("s_rating".into(), self.num(s, "transformer s_rating"));
+        let windings: Vec<Value> = t
+            .windings
+            .iter()
+            .map(|w| {
+                let mut wj = Map::new();
+                wj.insert("bus".into(), json!(w.bus));
+                wj.insert("terminal_map".into(), json!(w.terminal_map));
+                wj.insert(
+                    "v_nom".into(),
+                    self.num(n_winding_bmopf_v_nom(w), "transformer winding v_nom"),
+                );
+                wj.insert(
+                    "configuration".into(),
+                    json!(match w.conn {
+                        WindingConn::Wye => "WYE",
+                        WindingConn::Delta => "DELTA",
+                    }),
+                );
+                let zbase = n_winding_base(w, s).unwrap_or(f64::NAN);
+                wj.insert(
+                    "r_winding".into(),
+                    self.num(w.r_pct / 100.0 * zbase, "transformer winding r_winding"),
+                );
+                Value::Object(wj)
+            })
+            .collect();
+        o.insert("windings".into(), Value::Array(windings));
+        let base_z = t
+            .windings
+            .first()
+            .and_then(|w| n_winding_base(w, s))
+            .unwrap_or(f64::NAN);
+        let mut x_sc = Map::new();
+        for (idx, (i, j)) in pair_keys(t.windings.len()).into_iter().enumerate() {
+            let x_pct = t.xsc_pct.get(idx).copied().unwrap_or_else(|| {
+                self.warn(format!(
+                    "transformer {}: missing x_sc for winding pair {}_{}; emitted 0",
+                    t.name,
+                    i + 1,
+                    j + 1
+                ));
+                0.0
+            });
+            x_sc.insert(
+                format!("{}_{}", i + 1, j + 1),
+                self.num(x_pct / 100.0 * base_z, "transformer x_sc"),
+            );
+        }
+        o.insert("x_sc".into(), Value::Object(x_sc));
+        if let Some(first) = t.windings.first() {
+            self.transformer_no_load_fields(&mut o, t, first, s);
+        }
         self.taps_dropped(t);
+        self.transformer_extras_dropped(t, &TRANSFORMER_NO_LOAD_ALLOWED_EXTRAS);
         o.into()
     }
 
@@ -735,13 +886,14 @@ impl Writer {
             let to_1 = per(to);
             let mut t1 = t.clone();
             t1.windings = vec![f.clone(), to_1.clone()];
-            let v = self.two_winding(&t1, &f, &to_1, 1.0);
+            let v = self.two_winding(&t1, &f, &to_1, 1.0, false, false);
             out.push((format!("{}_{}", t.name, k + 1), v));
         }
         self.warn(format!(
             "transformer {}: three phase wye-wye decomposed into {} single_phase units",
             t.name, t.phases
         ));
+        self.transformer_extras_dropped(t, &TRANSFORMER_TWO_WINDING_ALLOWED_EXTRAS);
         out
     }
 
@@ -753,6 +905,112 @@ impl Writer {
                     t.name, w.tap
                 ));
             }
+        }
+    }
+
+    fn transformer_tap_fields(
+        &mut self,
+        o: &mut Map<String, Value>,
+        t: &DistTransformer,
+        from: &Winding,
+    ) {
+        if (from.tap - 1.0).abs() > 1e-12 || t.extras.contains_key("tap") {
+            o.insert("tap".into(), self.num(from.tap, "transformer tap"));
+        }
+        for key in ["tap_min", "tap_max"] {
+            if let Some(v) = extras_number(&t.extras, key) {
+                o.insert(key.into(), self.num(v, &format!("transformer {key}")));
+            }
+        }
+        for w in t.windings.iter().skip(1) {
+            if (w.tap - 1.0).abs() > 1e-12 {
+                self.warn(format!(
+                    "transformer {}: non-from-side tap {} has no BMOPF field; dropped",
+                    t.name, w.tap
+                ));
+            }
+        }
+    }
+
+    fn transformer_no_load_fields(
+        &mut self,
+        o: &mut Map<String, Value>,
+        t: &DistTransformer,
+        from: &Winding,
+        s: f64,
+    ) {
+        if let Some(v) = t.extras.get("g_no_load") {
+            o.insert("g_no_load".into(), v.clone());
+        } else if let Some(loss_pct) = extras_number(&t.extras, "%noloadloss") {
+            if self.is_phase_to_phase_single_phase(from) {
+                self.warn(format!(
+                    "transformer {}: phase-to-phase %noloadloss cannot be represented as a BMOPF no-load shunt; dropped",
+                    t.name
+                ));
+            } else {
+                let v_stamp = no_load_voltage_base(from);
+                if s.is_finite() && s > 0.0 && v_stamp.is_finite() && v_stamp > 0.0 {
+                    let y_base = s / (v_stamp * v_stamp);
+                    o.insert(
+                        "g_no_load".into(),
+                        self.num(loss_pct / 100.0 * y_base, "transformer g_no_load"),
+                    );
+                } else {
+                    self.warn(format!(
+                        "transformer {}: %noloadloss cannot be converted without a positive s_rating and v_nom_from",
+                        t.name
+                    ));
+                }
+            }
+        }
+
+        if let Some(v) = t.extras.get("b_no_load") {
+            o.insert("b_no_load".into(), v.clone());
+        } else if let Some(imag_pct) = extras_number(&t.extras, "%imag") {
+            if self.is_phase_to_phase_single_phase(from) {
+                self.warn(format!(
+                    "transformer {}: phase-to-phase %imag cannot be represented as a BMOPF no-load shunt; dropped",
+                    t.name
+                ));
+            } else {
+                let v_stamp = no_load_voltage_base(from);
+                if s.is_finite() && s > 0.0 && v_stamp.is_finite() && v_stamp > 0.0 {
+                    let y_base = s / (v_stamp * v_stamp);
+                    o.insert(
+                        "b_no_load".into(),
+                        self.num(imag_pct / 100.0 * y_base, "transformer b_no_load"),
+                    );
+                } else {
+                    self.warn(format!(
+                        "transformer {}: %imag cannot be converted without a positive s_rating and v_nom_from",
+                        t.name
+                    ));
+                }
+            }
+        } else if !self.is_phase_to_phase_single_phase(from)
+            && extras_number(&t.extras, "%noloadloss").is_some()
+        {
+            o.insert("b_no_load".into(), json!(0.0));
+        }
+    }
+
+    fn is_phase_to_phase_single_phase(&self, winding: &Winding) -> bool {
+        n_winding_phase_count(winding) == 1
+            && !self
+                .grounded
+                .get(&winding.bus.to_ascii_lowercase())
+                .is_some_and(|g| winding.terminal_map.iter().any(|t| g.contains(t)))
+    }
+
+    fn transformer_extras_dropped(&mut self, t: &DistTransformer, allowed: &[&str]) {
+        for key in t.extras.keys() {
+            if key == "bmopf_subtype" || key == "tap" || allowed.contains(&key.as_str()) {
+                continue;
+            }
+            self.warn(format!(
+                "transformer {}: `{key}` has no place in the BMOPF schema; dropped from the output",
+                t.name
+            ));
         }
     }
 
@@ -861,6 +1119,7 @@ enum Kind {
     WyeDelta,
     DeltaWye,
     WyeWye3,
+    NWinding,
     Unsupported(String),
 }
 
@@ -869,15 +1128,18 @@ fn classify(t: &DistTransformer) -> Kind {
     // back reproduces the grouping (center tap reads as two windings).
     // An unknown or shape mismatched subtype falls through to the shape
     // based classification below.
-    if let Some(sub) = t.extras.get("bmopf_subtype").and_then(|v| v.as_str())
-        && t.windings.len() == 2
-    {
-        match sub {
-            "single_phase" => return Kind::SinglePhase,
-            "center_tap" => return Kind::SinglePhaseShape("center_tap"),
-            "wye_delta" => return Kind::WyeDelta,
-            "delta_wye" => return Kind::DeltaWye,
-            _ => {}
+    if let Some(sub) = t.extras.get("bmopf_subtype").and_then(|v| v.as_str()) {
+        if t.windings.len() == 2 {
+            match sub {
+                "single_phase" => return Kind::SinglePhase,
+                "center_tap" => return Kind::SinglePhaseShape("center_tap"),
+                "wye_delta" => return Kind::WyeDelta,
+                "delta_wye" => return Kind::DeltaWye,
+                _ => {}
+            }
+        }
+        if sub == "n_winding" && t.windings.len() >= 2 {
+            return Kind::NWinding;
         }
     }
     let conns: Vec<WindingConn> = t.windings.iter().map(|w| w.conn).collect();
@@ -908,12 +1170,54 @@ fn classify(t: &DistTransformer) -> Kind {
         (3, [WindingConn::Wye, WindingConn::Wye]) => Kind::Unsupported(
             "three phase wye-wye whose terminal maps do not list each phase plus a neutral".into(),
         ),
+        (_, _) if t.windings.len() >= 3 => Kind::NWinding,
         _ => Kind::Unsupported(format!(
             "{} phase with {} windings ({:?})",
             t.phases,
             t.windings.len(),
             conns
         )),
+    }
+}
+
+fn raw_bmopf_value(u: &crate::model::UntypedObject) -> Option<Value> {
+    let (_, text) = u.props.first()?;
+    serde_json::from_str(text).ok()
+}
+
+fn extras_number(extras: &crate::model::Extras, key: &str) -> Option<f64> {
+    let v = extras.get(key)?;
+    v.as_f64()
+        .or_else(|| v.as_i64().map(|v| v as f64))
+        .or_else(|| v.as_str().and_then(|s| s.parse().ok()))
+        .filter(|v| v.is_finite())
+}
+
+fn n_winding_phase_count(w: &Winding) -> usize {
+    crate::model::n_winding_phase_count(w.conn, &w.terminal_map)
+}
+
+fn n_winding_bmopf_v_nom(w: &Winding) -> f64 {
+    if w.conn == WindingConn::Wye && n_winding_phase_count(w) >= 2 {
+        w.v_ref / 3f64.sqrt()
+    } else {
+        w.v_ref
+    }
+}
+
+fn n_winding_base(w: &Winding, s: f64) -> Option<f64> {
+    n_winding_impedance_base(n_winding_phase_count(w), n_winding_bmopf_v_nom(w), s)
+}
+
+fn no_load_voltage_base(from: &Winding) -> f64 {
+    let phases = match from.conn {
+        WindingConn::Wye => from.terminal_map.len().saturating_sub(1),
+        WindingConn::Delta => from.terminal_map.len(),
+    };
+    if phases >= 3 {
+        from.v_ref / 3f64.sqrt()
+    } else {
+        from.v_ref
     }
 }
 

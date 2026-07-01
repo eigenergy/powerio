@@ -682,84 +682,20 @@ mod tests {
     }
 
     fn terminal_projection_net() -> Network {
-        use powerio::{
-            Branch, BranchCharging, Bus, BusId, BusType, DEFAULT_BASE_FREQUENCY, Extras,
-            SourceFormat,
-        };
+        use powerio::{Branch, BranchCharging, Bus, BusId, BusType};
 
-        Network {
-            name: "terminal-projection".into(),
-            base_mva: 100.0,
-            base_frequency: DEFAULT_BASE_FREQUENCY,
-            buses: vec![
-                Bus {
-                    id: BusId(1),
-                    kind: BusType::Ref,
-                    vm: 1.0,
-                    va: 0.0,
-                    base_kv: 230.0,
-                    vmax: 1.1,
-                    vmin: 0.9,
-                    evhi: None,
-                    evlo: None,
-                    area: 1,
-                    zone: 1,
-                    name: None,
-                    extras: Extras::new(),
-                },
-                Bus {
-                    id: BusId(2),
-                    kind: BusType::Pq,
-                    vm: 1.0,
-                    va: 0.0,
-                    base_kv: 230.0,
-                    vmax: 1.1,
-                    vmin: 0.9,
-                    evhi: None,
-                    evlo: None,
-                    area: 1,
-                    zone: 1,
-                    name: None,
-                    extras: Extras::new(),
-                },
+        let mut branch = Branch::new(BusId(1), BusId(2), 0.01, 0.1);
+        branch.charging = Some(BranchCharging::new(0.01, 0.02, 0.03, 0.05));
+        branch.rate_a = 100.0;
+        Network::in_memory(
+            "terminal-projection",
+            100.0,
+            vec![
+                Bus::new(BusId(1), BusType::Ref, 230.0),
+                Bus::new(BusId(2), BusType::Pq, 230.0),
             ],
-            loads: Vec::new(),
-            shunts: Vec::new(),
-            branches: vec![Branch {
-                from: BusId(1),
-                to: BusId(2),
-                r: 0.01,
-                x: 0.1,
-                b: 0.0,
-                charging: Some(BranchCharging {
-                    g_fr: 0.01,
-                    b_fr: 0.02,
-                    g_to: 0.03,
-                    b_to: 0.05,
-                }),
-                rate_a: 100.0,
-                rate_b: 0.0,
-                rate_c: 0.0,
-                current_ratings: None,
-                tap: 0.0,
-                shift: 0.0,
-                in_service: true,
-                angmin: -360.0,
-                angmax: 360.0,
-                control: None,
-                solution: None,
-                extras: Extras::new(),
-            }],
-            switches: Vec::new(),
-            generators: Vec::new(),
-            storage: Vec::new(),
-            hvdc: Vec::new(),
-            transformers_3w: Vec::new(),
-            areas: Vec::new(),
-            solver: None,
-            source_format: SourceFormat::InMemory,
-            source: None,
-        }
+            vec![branch],
+        )
     }
 
     fn round_trip(net: &Network, table: i32) -> StructArray {

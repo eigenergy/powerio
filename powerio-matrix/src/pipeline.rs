@@ -17,8 +17,9 @@ use crate::indexed::IndexedNetwork;
 use crate::io::meta::{CaseMetadata, MatrixMetadata, write_meta_json};
 use crate::io::mtx::{write_mtx, write_vector_mtx};
 use crate::matrix::{
-    BuildOptions, MatrixStats, build_adjacency, build_bdoubleprime, build_bprime, build_lacpf,
-    build_ybus, negate_into, sddm_check,
+    BuildOptions, MatrixStats, ZeroImpedanceRule, ZeroImpedanceSkips, build_adjacency,
+    build_bdoubleprime, build_bprime, build_lacpf, build_ybus, negate_into, sddm_check,
+    skipped_zero_impedance,
 };
 use crate::network::Network;
 
@@ -126,7 +127,7 @@ impl Pipeline {
             let matrix_path = out_dir.join(format!("{}_{}.mtx", view.name(), kind.slug()));
             let matrix = self.build_for_run(&view, kind, &mut ybus_cache)?;
             write_mtx(&matrix, &matrix_path)?;
-            let stats = MatrixStats::from_csr(&matrix);
+            let stats = matrix_stats_for_kind(&matrix, &view, kind, &self.options);
             let sddm = sddm_check(&matrix);
             matrices_meta.push(MatrixMetadata {
                 kind: kind.slug().to_string(),
@@ -301,6 +302,49 @@ pub fn build_kind(
         MatrixKind::Lacpf => build_lacpf(view, opts),
         MatrixKind::Adjacency => build_adjacency(view),
     }
+}
+
+pub fn zero_impedance_rule_for_kind(
+    kind: MatrixKind,
+    opts: &BuildOptions,
+) -> Option<ZeroImpedanceRule> {
+    match kind {
+        MatrixKind::BPrime => Some(match opts.scheme {
+            crate::matrix::Scheme::Bx => ZeroImpedanceRule::Series,
+            crate::matrix::Scheme::Xb => ZeroImpedanceRule::Reactance,
+        }),
+        MatrixKind::BDoublePrime => Some(match opts.scheme {
+            crate::matrix::Scheme::Bx => ZeroImpedanceRule::Reactance,
+            crate::matrix::Scheme::Xb => ZeroImpedanceRule::Series,
+        }),
+        MatrixKind::YbusG | MatrixKind::YbusB | MatrixKind::Lacpf => {
+            Some(ZeroImpedanceRule::Series)
+        }
+        MatrixKind::Adjacency => None,
+    }
+}
+
+pub fn zero_impedance_skips_for_kind(
+    view: &IndexedNetwork,
+    kind: MatrixKind,
+    opts: &BuildOptions,
+) -> ZeroImpedanceSkips {
+    if !opts.skip_zero_impedance {
+        return ZeroImpedanceSkips::default();
+    }
+    zero_impedance_rule_for_kind(kind, opts).map_or_else(ZeroImpedanceSkips::default, |rule| {
+        skipped_zero_impedance(view, rule)
+    })
+}
+
+pub fn matrix_stats_for_kind(
+    matrix: &sprs::CsMat<f64>,
+    view: &IndexedNetwork,
+    kind: MatrixKind,
+    opts: &BuildOptions,
+) -> MatrixStats {
+    MatrixStats::from_csr(matrix)
+        .with_zero_impedance_skips(zero_impedance_skips_for_kind(view, kind, opts))
 }
 
 fn sha256_hex(bytes: &[u8]) -> String {

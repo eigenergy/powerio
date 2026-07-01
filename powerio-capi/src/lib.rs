@@ -1646,84 +1646,20 @@ mod tests {
     }
 
     fn terminal_projection_case() -> *mut PioNetwork {
-        use powerio::{
-            Branch, BranchCharging, Bus, BusId, BusType, DEFAULT_BASE_FREQUENCY, Extras,
-            SourceFormat,
-        };
+        use powerio::{Branch, BranchCharging, Bus, BusId, BusType};
 
-        let net = Network {
-            name: "terminal-projection".into(),
-            base_mva: 100.0,
-            base_frequency: DEFAULT_BASE_FREQUENCY,
-            buses: vec![
-                Bus {
-                    id: BusId(1),
-                    kind: BusType::Ref,
-                    vm: 1.0,
-                    va: 0.0,
-                    base_kv: 230.0,
-                    vmax: 1.1,
-                    vmin: 0.9,
-                    evhi: None,
-                    evlo: None,
-                    area: 1,
-                    zone: 1,
-                    name: None,
-                    extras: Extras::new(),
-                },
-                Bus {
-                    id: BusId(2),
-                    kind: BusType::Pq,
-                    vm: 1.0,
-                    va: 0.0,
-                    base_kv: 230.0,
-                    vmax: 1.1,
-                    vmin: 0.9,
-                    evhi: None,
-                    evlo: None,
-                    area: 1,
-                    zone: 1,
-                    name: None,
-                    extras: Extras::new(),
-                },
+        let mut branch = Branch::new(BusId(1), BusId(2), 0.01, 0.1);
+        branch.charging = Some(BranchCharging::new(0.01, 0.02, 0.03, 0.05));
+        branch.rate_a = 100.0;
+        let net = Network::in_memory(
+            "terminal-projection",
+            100.0,
+            vec![
+                Bus::new(BusId(1), BusType::Ref, 230.0),
+                Bus::new(BusId(2), BusType::Pq, 230.0),
             ],
-            loads: Vec::new(),
-            shunts: Vec::new(),
-            branches: vec![Branch {
-                from: BusId(1),
-                to: BusId(2),
-                r: 0.01,
-                x: 0.1,
-                b: 0.0,
-                charging: Some(BranchCharging {
-                    g_fr: 0.01,
-                    b_fr: 0.02,
-                    g_to: 0.03,
-                    b_to: 0.05,
-                }),
-                rate_a: 100.0,
-                rate_b: 0.0,
-                rate_c: 0.0,
-                current_ratings: None,
-                tap: 0.0,
-                shift: 0.0,
-                in_service: true,
-                angmin: -360.0,
-                angmax: 360.0,
-                control: None,
-                solution: None,
-                extras: Extras::new(),
-            }],
-            switches: Vec::new(),
-            generators: Vec::new(),
-            storage: Vec::new(),
-            hvdc: Vec::new(),
-            transformers_3w: Vec::new(),
-            areas: Vec::new(),
-            solver: None,
-            source_format: SourceFormat::InMemory,
-            source: None,
-        };
+            vec![branch],
+        );
         let text = CString::new(net.to_json().unwrap()).unwrap();
         let format = CString::new("powerio-json").unwrap();
         let mut err = [0 as c_char; 256];
@@ -2819,61 +2755,40 @@ mpc.branch = [
         }
 
         fn preflight_network(terminals: &[&str], grounded: &[&str]) -> powerio_dist::DistNetwork {
-            use powerio_dist::{
-                DistBus, DistLine, DistLineCode, DistNetwork, Extras, VoltageSource,
-            };
+            use powerio_dist::{DistBus, DistLine, DistLineCode, DistNetwork, VoltageSource};
 
             let n = terminals.len();
             let terminal_map = strings(terminals);
             let (v_magnitude, v_angle) = phase_reference(terminals, grounded);
             let mut net = DistNetwork::default();
             for id in ["sourcebus", "loadbus"] {
-                net.buses.push(DistBus {
-                    id: id.to_owned(),
-                    terminals: terminal_map.clone(),
-                    grounded: strings(grounded),
-                    v_min: None,
-                    v_max: None,
-                    vpn_min: None,
-                    vpn_max: None,
-                    vpp_min: None,
-                    vpp_max: None,
-                    vsym_min: None,
-                    vsym_max: None,
-                    extras: Extras::new(),
-                });
+                let mut bus = DistBus::new(id, terminal_map.clone());
+                bus.grounded = strings(grounded);
+                net.buses.push(bus);
             }
-            net.linecodes.push(DistLineCode {
-                name: "lc".to_owned(),
-                n_conductors: n,
-                r_series: diagonal_matrix(n, 0.01),
-                x_series: diagonal_matrix(n, 0.10),
-                g_from: zero_matrix(n),
-                b_from: zero_matrix(n),
-                g_to: zero_matrix(n),
-                b_to: zero_matrix(n),
-                i_max: None,
-                s_max: None,
-                extras: Extras::new(),
-            });
-            net.lines.push(DistLine {
-                name: "l1".to_owned(),
-                bus_from: "sourcebus".to_owned(),
-                bus_to: "loadbus".to_owned(),
-                terminal_map_from: terminal_map.clone(),
-                terminal_map_to: terminal_map.clone(),
-                linecode: "lc".to_owned(),
-                length: 1.0,
-                extras: Extras::new(),
-            });
-            net.sources.push(VoltageSource {
-                name: "source".to_owned(),
-                bus: "sourcebus".to_owned(),
+            let mut linecode =
+                DistLineCode::new("lc", diagonal_matrix(n, 0.01), diagonal_matrix(n, 0.10));
+            linecode.g_from = zero_matrix(n);
+            linecode.b_from = zero_matrix(n);
+            linecode.g_to = zero_matrix(n);
+            linecode.b_to = zero_matrix(n);
+            net.linecodes.push(linecode);
+            net.lines.push(DistLine::new(
+                "l1",
+                "sourcebus",
+                "loadbus",
+                terminal_map.clone(),
+                terminal_map.clone(),
+                "lc",
+                1.0,
+            ));
+            net.sources.push(VoltageSource::new(
+                "source",
+                "sourcebus",
                 terminal_map,
                 v_magnitude,
                 v_angle,
-                extras: Extras::new(),
-            });
+            ));
             net
         }
 

@@ -58,11 +58,11 @@ pub use format::{
 pub use gen_cost::{GenCostPatch, GenCostPolicyReport, MissingGenCostPolicy, parse_gen_cost_csv};
 pub use indexed::{ConnectivityReport, IndexCore, IndexedNetwork};
 pub use network::{
-    Area, BalancedNetwork, Branch, BranchCharging, BranchCurrentRatings, BranchSolution, Bus,
-    BusId, BusType, DEFAULT_BASE_FREQUENCY, Diagnostic, Extras, GenCaps, GenCost, Generator, Hvdc,
-    Impedance, Load, LoadVoltageModel, Network, Shunt, ShuntBlock, SolverParams, SourceFormat,
-    Storage, Switch, SwitchedShuntControl, SwitchedShuntMode, Transformer3W, TransformerControl,
-    TransformerControlMode, Winding,
+    Area, BalancedNetwork, Branch, BranchCharging, BranchCurrentRatings, BranchRatingSet,
+    BranchSolution, Bus, BusId, BusType, DEFAULT_BASE_FREQUENCY, Diagnostic, Extras, GenCaps,
+    GenCost, Generator, Hvdc, Impedance, Load, LoadVoltageModel, Network, Shunt, ShuntBlock,
+    SolverParams, SourceFormat, Storage, Switch, SwitchedShuntControl, SwitchedShuntMode,
+    Transformer3W, TransformerControl, TransformerControlMode, Winding,
 };
 pub use operations::Selector;
 pub use solver_tables::{

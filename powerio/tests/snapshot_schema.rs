@@ -14,7 +14,7 @@
 
 use std::path::Path;
 
-use powerio::{Branch, Bus, BusId, BusType, Extras, GenCaps, Generator, Network, SourceFormat};
+use powerio::{Branch, Bus, BusId, BusType, GenCaps, Generator, Network, SourceFormat};
 
 /// A v4-vintage snapshot, written by `powerio convert case30.m --to powerio-json`.
 /// Regenerate ONLY on a deliberate schema change, and then bump `PIO_ABI_VERSION`.
@@ -81,77 +81,24 @@ fn snapshot_ignores_unknown_fields_and_defaults_omitted_caps() {
 }
 
 fn small_net() -> Network {
-    let bus = |id, kind| Bus {
-        id: BusId(id),
-        kind,
-        vm: 1.0,
-        va: 0.0,
-        base_kv: 230.0,
-        vmax: 1.1,
-        vmin: 0.9,
-        evhi: None,
-        evlo: None,
-        area: 1,
-        zone: 1,
-        name: None,
-        extras: Extras::new(),
-    };
+    let bus = |id, kind| Bus::new(BusId(id), kind, 230.0);
     // Length-agnostic: GEN_EXTRA_KEYS is pub(crate), so the integration crate
     // can't write `[None; GEN_EXTRA_KEYS.len()]`; `GenCaps::default()` tracks the
     // array length so this test still compiles when a capability column is added.
     let mut caps: GenCaps = GenCaps::default();
     caps[8] = Some(1.5); // ramp_30
-    let g = Generator {
-        bus: BusId(1),
-        pg: 10.0,
-        qg: 0.0,
-        pmax: 100.0,
-        pmin: 0.0,
-        qmax: 50.0,
-        qmin: -50.0,
-        vg: 1.0,
-        mbase: 100.0,
-        in_service: true,
-        cost: None,
-        caps,
-        regulated_bus: None,
-    };
-    let branch = Branch {
-        from: BusId(1),
-        to: BusId(2),
-        r: 0.01,
-        x: 0.1,
-        b: 0.0,
-        charging: None,
-        rate_a: 0.0,
-        rate_b: 0.0,
-        rate_c: 0.0,
-        current_ratings: None,
-        tap: 0.0,
-        shift: 0.0,
-        in_service: true,
-        angmin: -360.0,
-        angmax: 360.0,
-        solution: None,
-        control: None,
-        extras: Extras::new(),
-    };
-    Network {
-        name: "schema_lock".into(),
-        base_mva: 100.0,
-        base_frequency: 60.0,
-        buses: vec![bus(1, BusType::Ref), bus(2, BusType::Pq)],
-        loads: vec![],
-        shunts: vec![],
-        branches: vec![branch],
-        generators: vec![g],
-        switches: vec![],
-        storage: vec![],
-        hvdc: vec![],
-        transformers_3w: vec![],
-        areas: vec![],
-        solver: None,
-        source_format: SourceFormat::InMemory,
-        source: None,
-    }
+    let mut g = Generator::new(BusId(1));
+    g.pg = 10.0;
+    g.pmax = 100.0;
+    g.qmax = 50.0;
+    g.qmin = -50.0;
+    g.mbase = 100.0;
+    g.caps = caps;
+    let branch = Branch::new(BusId(1), BusId(2), 0.01, 0.1);
+    let mut net = Network::new("schema_lock", 100.0);
+    net.buses = vec![bus(1, BusType::Ref), bus(2, BusType::Pq)];
+    net.branches = vec![branch];
+    net.generators = vec![g];
+    net.source_format = SourceFormat::InMemory;
+    net
 }

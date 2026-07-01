@@ -46,6 +46,7 @@ impl DistSourceFormat {
 }
 
 #[derive(Clone, Debug, PartialEq, Default, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct DistBus {
     pub id: String,
     /// Ordered terminal names; OpenDSS node numbers as strings.
@@ -66,7 +67,28 @@ pub struct DistBus {
     pub extras: Extras,
 }
 
+impl DistBus {
+    #[must_use]
+    pub fn new(id: impl Into<String>, terminals: Vec<String>) -> Self {
+        Self {
+            id: id.into(),
+            terminals,
+            grounded: Vec::new(),
+            v_min: None,
+            v_max: None,
+            vpn_min: None,
+            vpn_max: None,
+            vpp_min: None,
+            vpp_max: None,
+            vsym_min: None,
+            vsym_max: None,
+            extras: Extras::new(),
+        }
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct DistLineCode {
     pub name: String,
     pub n_conductors: usize,
@@ -84,7 +106,28 @@ pub struct DistLineCode {
     pub extras: Extras,
 }
 
+impl DistLineCode {
+    #[must_use]
+    pub fn new(name: impl Into<String>, r_series: Mat, x_series: Mat) -> Self {
+        let n_conductors = matrix_extent(&r_series).max(matrix_extent(&x_series));
+        Self {
+            name: name.into(),
+            n_conductors,
+            r_series,
+            x_series,
+            g_from: zero_mat(n_conductors),
+            b_from: zero_mat(n_conductors),
+            g_to: zero_mat(n_conductors),
+            b_to: zero_mat(n_conductors),
+            i_max: None,
+            s_max: None,
+            extras: Extras::new(),
+        }
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct DistLine {
     pub name: String,
     pub bus_from: String,
@@ -97,7 +140,32 @@ pub struct DistLine {
     pub extras: Extras,
 }
 
+impl DistLine {
+    #[must_use]
+    pub fn new(
+        name: impl Into<String>,
+        bus_from: impl Into<String>,
+        bus_to: impl Into<String>,
+        terminal_map_from: Vec<String>,
+        terminal_map_to: Vec<String>,
+        linecode: impl Into<String>,
+        length: f64,
+    ) -> Self {
+        Self {
+            name: name.into(),
+            bus_from: bus_from.into(),
+            bus_to: bus_to.into(),
+            terminal_map_from,
+            terminal_map_to,
+            linecode: linecode.into(),
+            length,
+            extras: Extras::new(),
+        }
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct DistSwitch {
     pub name: String,
     pub bus_from: String,
@@ -107,6 +175,29 @@ pub struct DistSwitch {
     pub open: bool,
     pub i_max: Option<Vec<f64>>,
     pub extras: Extras,
+}
+
+impl DistSwitch {
+    #[must_use]
+    pub fn new(
+        name: impl Into<String>,
+        bus_from: impl Into<String>,
+        bus_to: impl Into<String>,
+        terminal_map_from: Vec<String>,
+        terminal_map_to: Vec<String>,
+        open: bool,
+    ) -> Self {
+        Self {
+            name: name.into(),
+            bus_from: bus_from.into(),
+            bus_to: bus_to.into(),
+            terminal_map_from,
+            terminal_map_to,
+            open,
+            i_max: None,
+            extras: Extras::new(),
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -119,6 +210,7 @@ pub enum Configuration {
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct DistLoad {
     pub name: String,
     pub bus: String,
@@ -130,6 +222,29 @@ pub struct DistLoad {
     pub q_nom: Vec<f64>,
     pub voltage_model: DistLoadVoltageModel,
     pub extras: Extras,
+}
+
+impl DistLoad {
+    #[must_use]
+    pub fn new(
+        name: impl Into<String>,
+        bus: impl Into<String>,
+        terminal_map: Vec<String>,
+        configuration: Configuration,
+        p_nom: Vec<f64>,
+        q_nom: Vec<f64>,
+    ) -> Self {
+        Self {
+            name: name.into(),
+            bus: bus.into(),
+            terminal_map,
+            configuration,
+            p_nom,
+            q_nom,
+            voltage_model: DistLoadVoltageModel::default(),
+            extras: Extras::new(),
+        }
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -184,6 +299,7 @@ impl DistLoadVoltageModel {
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct DistGenerator {
     pub name: String,
     pub bus: String,
@@ -201,7 +317,35 @@ pub struct DistGenerator {
     pub extras: Extras,
 }
 
+impl DistGenerator {
+    #[must_use]
+    pub fn new(
+        name: impl Into<String>,
+        bus: impl Into<String>,
+        terminal_map: Vec<String>,
+        configuration: Configuration,
+        p_nom: Vec<f64>,
+        q_nom: Vec<f64>,
+    ) -> Self {
+        Self {
+            name: name.into(),
+            bus: bus.into(),
+            terminal_map,
+            configuration,
+            p_nom,
+            q_nom,
+            p_min: None,
+            p_max: None,
+            q_min: None,
+            q_max: None,
+            cost: None,
+            extras: Extras::new(),
+        }
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct DistShunt {
     pub name: String,
     pub bus: String,
@@ -210,6 +354,26 @@ pub struct DistShunt {
     pub g: Mat,
     pub b: Mat,
     pub extras: Extras,
+}
+
+impl DistShunt {
+    #[must_use]
+    pub fn new(
+        name: impl Into<String>,
+        bus: impl Into<String>,
+        terminal_map: Vec<String>,
+        g: Mat,
+        b: Mat,
+    ) -> Self {
+        Self {
+            name: name.into(),
+            bus: bus.into(),
+            terminal_map,
+            g,
+            b,
+            extras: Extras::new(),
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -221,6 +385,7 @@ pub enum WindingConn {
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct Winding {
     pub bus: String,
     pub terminal_map: Vec<String>,
@@ -234,7 +399,29 @@ pub struct Winding {
     pub tap: f64,
 }
 
+impl Winding {
+    #[must_use]
+    pub fn new(
+        bus: impl Into<String>,
+        terminal_map: Vec<String>,
+        conn: WindingConn,
+        v_ref: f64,
+        s_rating: f64,
+    ) -> Self {
+        Self {
+            bus: bus.into(),
+            terminal_map,
+            conn,
+            v_ref,
+            s_rating,
+            r_pct: 0.0,
+            tap: 1.0,
+        }
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct DistTransformer {
     pub name: String,
     pub windings: Vec<Winding>,
@@ -245,7 +432,26 @@ pub struct DistTransformer {
     pub extras: Extras,
 }
 
+impl DistTransformer {
+    #[must_use]
+    pub fn new(
+        name: impl Into<String>,
+        windings: Vec<Winding>,
+        xsc_pct: Vec<f64>,
+        phases: usize,
+    ) -> Self {
+        Self {
+            name: name.into(),
+            windings,
+            xsc_pct,
+            phases,
+            extras: Extras::new(),
+        }
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct VoltageSource {
     pub name: String,
     pub bus: String,
@@ -257,13 +463,49 @@ pub struct VoltageSource {
     pub extras: Extras,
 }
 
+impl VoltageSource {
+    #[must_use]
+    pub fn new(
+        name: impl Into<String>,
+        bus: impl Into<String>,
+        terminal_map: Vec<String>,
+        v_magnitude: Vec<f64>,
+        v_angle: Vec<f64>,
+    ) -> Self {
+        Self {
+            name: name.into(),
+            bus: bus.into(),
+            terminal_map,
+            v_magnitude,
+            v_angle,
+            extras: Extras::new(),
+        }
+    }
+}
+
 /// An object the reader recognized but does not type: preserved by class,
 /// name, and raw property text so conversions can warn precisely.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct UntypedObject {
     pub class: String,
     pub name: String,
     pub props: Vec<(Option<String>, String)>,
+}
+
+impl UntypedObject {
+    #[must_use]
+    pub fn new(
+        class: impl Into<String>,
+        name: impl Into<String>,
+        props: Vec<(Option<String>, String)>,
+    ) -> Self {
+        Self {
+            class: class.into(),
+            name: name.into(),
+            props,
+        }
+    }
 }
 
 /// A multiconductor distribution network.
@@ -272,6 +514,7 @@ pub struct UntypedObject {
 /// `defaulted` records, per element (`"class.name"` key), the fields the
 /// reader materialized from format defaults rather than the source text.
 #[derive(Clone, Debug, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct DistNetwork {
     pub name: Option<String>,
     /// Hz.
@@ -344,6 +587,19 @@ impl Default for DistNetwork {
 }
 
 impl DistNetwork {
+    #[must_use]
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    #[must_use]
+    pub fn named(name: impl Into<String>) -> Self {
+        Self {
+            name: Some(name.into()),
+            ..Self::default()
+        }
+    }
+
     /// Case insensitive, matching the source formats' name semantics.
     pub fn bus(&self, id: &str) -> Option<&DistBus> {
         self.buses.iter().find(|b| b.id.eq_ignore_ascii_case(id))
@@ -355,6 +611,50 @@ impl DistNetwork {
             .iter()
             .find(|c| c.name.eq_ignore_ascii_case(name))
     }
+}
+
+fn zero_mat(n: usize) -> Mat {
+    vec![vec![0.0; n]; n]
+}
+
+fn matrix_extent(m: &Mat) -> usize {
+    m.iter().map(Vec::len).fold(m.len(), usize::max)
+}
+
+/// Windings per phase for an n-winding transformer terminal map: WYE counts
+/// the hot terminals (excluding the shared neutral), DELTA counts terminals
+/// directly except the phase to phase two terminal case.
+pub(crate) fn n_winding_phase_count(conn: WindingConn, terminal_map: &[String]) -> usize {
+    match conn {
+        WindingConn::Wye => terminal_map.len().saturating_sub(1).max(1),
+        WindingConn::Delta => {
+            if terminal_map.len() == 2 {
+                1
+            } else {
+                terminal_map.len().max(1)
+            }
+        }
+    }
+}
+
+/// `phases * v_nom^2 / s`, the impedance base for an n-winding transformer
+/// winding, or `None` if any input isn't a positive finite number.
+pub(crate) fn n_winding_impedance_base(phases: usize, v_nom: f64, s: f64) -> Option<f64> {
+    let phases = phases as f64;
+    (phases > 0.0 && v_nom.is_finite() && v_nom > 0.0 && s.is_finite() && s > 0.0)
+        .then_some(phases * v_nom * v_nom / s)
+}
+
+/// Upper triangular `(i, j)` winding index pairs for `n` windings, the order
+/// short circuit test pairs (`x_sc`/`xsc_pct`) are keyed by.
+pub(crate) fn pair_keys(n: usize) -> Vec<(usize, usize)> {
+    let mut pairs = Vec::new();
+    for i in 0..n {
+        for j in i + 1..n {
+            pairs.push((i, j));
+        }
+    }
+    pairs
 }
 
 /// Builds an `n`x`n` matrix from lower triangle rows (the OpenDSS matrix

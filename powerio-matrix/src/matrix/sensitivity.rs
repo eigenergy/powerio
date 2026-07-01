@@ -18,6 +18,7 @@
 use sprs::CsMat;
 
 use crate::indexed::IndexedNetwork;
+use crate::matrix::BuildOptions;
 use crate::matrix::incidence::{DcConvention, IncidenceParts, build_flow_map, build_incidence};
 use crate::matrix::laplacian::{Grounding, build_weighted_laplacian, ground_with};
 use crate::matrix::triplet::CooBuilder;
@@ -34,7 +35,7 @@ const PRUNE: f64 = 1e-12;
 pub fn build_ptdf(case: &IndexedNetwork, conv: DcConvention) -> Result<CsMat<f64>> {
     case.check_reference_coverage()?;
     let refs = case.reference_bus_indices();
-    let inc = build_incidence(case, conv)?;
+    let inc = build_incidence(case, conv, &BuildOptions::default())?;
     let (dense, m, n) = ptdf_dense(&inc, &refs)?;
     Ok(dense_to_csr(&dense, m, n))
 }
@@ -45,7 +46,7 @@ pub fn build_ptdf(case: &IndexedNetwork, conv: DcConvention) -> Result<CsMat<f64
 pub fn build_lodf(case: &IndexedNetwork, conv: DcConvention) -> Result<CsMat<f64>> {
     case.check_reference_coverage()?;
     let refs = case.reference_bus_indices();
-    let inc = build_incidence(case, conv)?;
+    let inc = build_incidence(case, conv, &BuildOptions::default())?;
     let (ptdf, m, n) = ptdf_dense(&inc, &refs)?;
     Ok(lodf_from_dense(&ptdf, &inc.a, m, n))
 }
@@ -61,7 +62,7 @@ pub fn build_ptdf_lodf(
 ) -> Result<(CsMat<f64>, CsMat<f64>)> {
     case.check_reference_coverage()?;
     let refs = case.reference_bus_indices();
-    let inc = build_incidence(case, conv)?;
+    let inc = build_incidence(case, conv, &BuildOptions::default())?;
     let (dense, m, n) = ptdf_dense(&inc, &refs)?;
     let ptdf = dense_to_csr(&dense, m, n);
     let lodf = lodf_from_dense(&dense, &inc.a, m, n);

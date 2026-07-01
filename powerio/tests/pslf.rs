@@ -1,7 +1,8 @@
 use std::path::PathBuf;
 
 use powerio::{
-    SourceFormat, TargetFormat, parse_file, parse_pslf, parse_psse, parse_str,
+    Bus, BusId, BusType, Generator, Network, Shunt, ShuntBlock, SourceFormat, SwitchedShuntControl,
+    SwitchedShuntMode, TargetFormat, parse_file, parse_pslf, parse_psse, parse_str,
     target_format_from_name, write_as, write_pslf,
 };
 
@@ -164,6 +165,80 @@ fn pslf_write_reports_dropped_generator_regulated_bus() {
             .iter()
             .any(|w| w.contains("remote regulated bus")),
         "expected a regulated-bus-drop warning, got {:?}",
+        conv.warnings
+    );
+}
+
+#[test]
+fn pslf_generator_reg_kv_sets_voltage_setpoint() {
+    let epc = r#"title
+gen setpoint
+!
+solution parameters
+sbase 100.0000
+!
+bus data [1] ty vsched volt angle ar zone vmax vmin
+1 "B1          " 230.0000 : 0 1.0000 1.0000 0.0 1 1 1.1 0.9
+generator data [1] id long_id st no reg_name reg_kv prf qrf ar zone pgen pmax pmin qgen qmax qmin mbase
+1 "B1          " "1" "gen" : 1 1 0 239.2 1 1 1 1 50 80 0 5 30 -20 100
+end
+"#;
+    let parsed = parse_str(epc, "pslf").unwrap();
+
+    assert_eq!(parsed.network.generators.len(), 1);
+    assert!(
+        (parsed.network.generators[0].vg - 1.04).abs() < 1e-12,
+        "reg_kv should convert to p.u. on the bus base"
+    );
+}
+
+#[test]
+fn pslf_write_preserves_generator_voltage_setpoint() {
+    let mut bus = Bus::new(BusId(1), BusType::Ref, 230.0);
+    bus.vm = 1.0;
+    let mut generator = Generator::new(BusId(1));
+    generator.pg = 50.0;
+    generator.pmax = 80.0;
+    generator.qg = 5.0;
+    generator.qmax = 30.0;
+    generator.qmin = -20.0;
+    generator.vg = 1.04;
+    generator.mbase = 100.0;
+    let mut net = Network::new("gen-vg", 100.0);
+    net.buses.push(bus);
+    net.generators.push(generator);
+
+    let text = write_pslf(&net).text;
+    let reparsed = parse_pslf(&text).unwrap();
+
+    assert_eq!(reparsed.generators.len(), 1);
+    assert!(
+        (reparsed.generators[0].vg - 1.04).abs() < 1e-12,
+        "generator vg did not round trip through reg_kv: {}",
+        reparsed.generators[0].vg
+    );
+}
+
+#[test]
+fn pslf_write_reports_dropped_switched_shunt_control() {
+    let mut net = Network::new("switched-shunt", 100.0);
+    net.buses.push(Bus::new(BusId(1), BusType::Ref, 230.0));
+    let mut shunt = Shunt::new(BusId(1), 0.0, 10.0);
+    shunt.control = Some(SwitchedShuntControl::new(
+        SwitchedShuntMode::Discrete,
+        1.05,
+        0.95,
+        vec![ShuntBlock::new(2, 5.0)],
+    ));
+    net.shunts.push(shunt);
+
+    let conv = write_pslf(&net);
+
+    assert!(
+        conv.warnings
+            .iter()
+            .any(|w| w.contains("switched shunt") && w.contains("fixed")),
+        "expected switched-shunt warning, got {:?}",
         conv.warnings
     );
 }

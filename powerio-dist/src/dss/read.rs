@@ -22,7 +22,7 @@ use crate::error::{Error, Result};
 use crate::model::{
     Configuration, DistBus, DistGenerator, DistLine, DistLineCode, DistLoad, DistLoadVoltageModel,
     DistNetwork, DistShunt, DistSourceFormat, DistSwitch, DistTransformer, Extras, Mat,
-    UntypedObject, VoltageSource, Winding, WindingConn, square_from_rows,
+    UntypedObject, VoltageSource, Winding, WindingConn, pair_keys, square_from_rows,
 };
 
 /// Parses a `.dss` file, following includes, into the canonical model.
@@ -1028,6 +1028,7 @@ impl Reader<'_> {
 
     // ----- transformer ---------------------------------------------------
 
+    #[allow(clippy::too_many_lines)] // OpenDSS transformer edits must be replayed in order
     fn transformer(&mut self, obj: &RawObject) -> DistTransformer {
         // Order matters: wdg= switches the winding under edit, windings=
         // reallocates. Walk assignments sequentially.
@@ -1039,6 +1040,7 @@ impl Reader<'_> {
         let mut xht = dd::transformer::XHT;
         let mut xlt = dd::transformer::XLT;
         let mut xhl_specified = false;
+        let mut x_pairs: BTreeMap<(usize, usize), f64> = BTreeMap::new();
         let mut extras = Extras::new();
         let conn_is_delta =
             |t: &str| t.to_ascii_lowercase().starts_with('d') || t.eq_ignore_ascii_case("ll");
@@ -1104,9 +1106,22 @@ impl Reader<'_> {
                 "xhl" | "x12" => {
                     xhl = self.f64_prop(Some(v)).unwrap_or(xhl);
                     xhl_specified = true;
+                    x_pairs.insert((0, 1), xhl);
                 }
-                "xht" | "x13" => xht = self.f64_prop(Some(v)).unwrap_or(xht),
-                "xlt" | "x23" => xlt = self.f64_prop(Some(v)).unwrap_or(xlt),
+                "xht" | "x13" => {
+                    xht = self.f64_prop(Some(v)).unwrap_or(xht);
+                    x_pairs.insert((0, 2), xht);
+                }
+                "xlt" | "x23" => {
+                    xlt = self.f64_prop(Some(v)).unwrap_or(xlt);
+                    x_pairs.insert((1, 2), xlt);
+                }
+                other if x_pair_key(other).is_some() => {
+                    if let Some((i, j)) = x_pair_key(other) {
+                        let x = self.f64_prop(Some(v)).unwrap_or(0.0);
+                        x_pairs.insert((i, j), x);
+                    }
+                }
                 other => {
                     extras.insert(other.to_string(), v.text.clone().into());
                 }
@@ -1119,7 +1134,17 @@ impl Reader<'_> {
         let out = self.finish_windings(&windings, phases, &obj.name);
 
         let xsc_pct = if n_windings >= 3 {
-            vec![xhl, xht, xlt]
+            pair_keys(n_windings)
+                .into_iter()
+                .map(|pair| {
+                    x_pairs.get(&pair).copied().unwrap_or(match pair {
+                        (0, 1) => xhl,
+                        (0, 2) => xht,
+                        (1, 2) => xlt,
+                        _ => 0.0,
+                    })
+                })
+                .collect()
         } else {
             vec![xhl]
         };
@@ -1689,6 +1714,20 @@ fn apply_winding_numbers(windings: &mut [WindingRaw], name: &str, items: &[f64])
             _ => w.r_pct = item,
         }
     }
+}
+
+fn x_pair_key(name: &str) -> Option<(usize, usize)> {
+    let rest = name.strip_prefix('x')?;
+    if rest.len() != 2 || !rest.chars().all(|c| c.is_ascii_digit()) {
+        return None;
+    }
+    let mut chars = rest.chars();
+    let i = chars.next()?.to_digit(10)? as usize;
+    let j = chars.next()?.to_digit(10)? as usize;
+    if i == 0 || j == 0 || i == j {
+        return None;
+    }
+    Some((i.min(j) - 1, i.max(j) - 1))
 }
 
 /// A load's power state after the last edit boundary: the engine's

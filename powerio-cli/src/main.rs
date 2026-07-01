@@ -898,10 +898,10 @@ fn run_verify(input: &Path, kind: MatrixKind, scheme: Scheme) -> anyhow::Result<
     };
     let view = powerio_matrix::IndexedNetwork::new(&mpc);
     let matrix = powerio_matrix::build_kind(&view, kind, &opts)?;
-    let stats = powerio_matrix::matrix::MatrixStats::from_csr(&matrix);
+    let stats = powerio_matrix::matrix_stats_for_kind(&matrix, &view, kind, &opts);
     let sddm = sddm_check(&matrix);
     println!(
-        "{} ({}): n={} nnz={} min_diag={:.3e} max_diag={:.3e} dd_margin={:.3e} M-sign={} ‖A‖_F={:.3e} SDDM={}",
+        "{} ({}): n={} nnz={} min_diag={:.3e} max_diag={:.3e} dd_margin={:.3e} M-sign={} ‖A‖_F={:.3e} skipped_zero_impedance={} SDDM={}",
         kind.label(),
         mpc.name,
         stats.n,
@@ -911,6 +911,7 @@ fn run_verify(input: &Path, kind: MatrixKind, scheme: Scheme) -> anyhow::Result<
         stats.min_dd_margin,
         stats.m_matrix_sign,
         stats.frobenius_norm,
+        stats.skipped_zero_impedance,
         sddm
     );
     Ok(())

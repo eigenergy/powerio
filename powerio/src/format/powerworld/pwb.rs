@@ -1683,6 +1683,7 @@ fn read_standard_branch_head(
         rate_a: rates[0],
         rate_b: rates[1],
         rate_c: rates[2],
+        rating_sets: Vec::new(),
         current_ratings: None,
         tap,
         // Phase shift is undecoded: every available case has zero phase, so
@@ -1772,6 +1773,7 @@ fn read_step_up_transformer_head(
         rate_a: 0.0,
         rate_b: 0.0,
         rate_c: 0.0,
+        rating_sets: Vec::new(),
         current_ratings: None,
         tap: 1.0,
         shift: 0.0,

@@ -33,7 +33,7 @@ use std::sync::Arc;
 use serde_json::{Map, Value};
 
 use crate::gen_cost::{GenCostPatch, MissingGenCostPolicy};
-use crate::network::{Bus, BusId, BusType, Network, SourceFormat};
+use crate::network::{Branch, BranchRatingSet, Bus, BusId, BusType, Network, SourceFormat};
 use crate::{Error, Result};
 use routing::{Detection, SourceFormat as DetectedFormat, TransmissionFormat};
 
@@ -790,6 +790,40 @@ fn warn_dropped_transformer_charging(net: &Network, format: TargetFormat, conv: 
             "{n} transformer(s) carry line charging that the PSLF .epc transformer \
              record cannot represent; the charging was dropped"
         ));
+    }
+}
+
+pub(super) fn branch_rating_set_drop_warning(
+    target: &str,
+    branch_index: usize,
+    branch: &Branch,
+    rating: &BranchRatingSet,
+) -> String {
+    format!(
+        "branch {} ({} to {}) rating set {}={} MVA dropped: {} has no field for branch rating sets beyond rate_a, rate_b, and rate_c",
+        branch_index + 1,
+        branch.from,
+        branch.to,
+        rating.name,
+        rating.rate_mva,
+        target
+    )
+}
+
+pub(super) fn warn_extra_branch_rating_sets(
+    target: &str,
+    net: &Network,
+    warnings: &mut Vec<String>,
+) {
+    for (branch_index, branch) in net.branches.iter().enumerate() {
+        for rating in &branch.rating_sets {
+            warnings.push(branch_rating_set_drop_warning(
+                target,
+                branch_index,
+                branch,
+                rating,
+            ));
+        }
     }
 }
 

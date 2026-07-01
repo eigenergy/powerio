@@ -15,7 +15,7 @@ use std::sync::Arc;
 
 use serde_json::{Map, Value};
 
-use super::{Conversion, finish, jnum};
+use super::{Conversion, finish, jnum, warn_extra_branch_rating_sets};
 use crate::network::{
     Branch, Bus, BusId, BusType, Extras, GenCost, Generator, Hvdc, Load, LoadVoltageModel, Network,
     Shunt, SourceFormat,
@@ -144,6 +144,7 @@ fn warn_egret_writer_losses(net: &Network, warnings: &mut Vec<String>) {
             "{current_ratings} branch current rating record(s) dropped: egret branch records carry MVA ratings only"
         ));
     }
+    warn_extra_branch_rating_sets("egret JSON", net, warnings);
     let branch_solutions = net.branches.iter().filter(|b| b.solution.is_some()).count();
     if branch_solutions > 0 {
         warnings.push(format!(
@@ -571,6 +572,7 @@ fn read_branch(v: &Value) -> Result<Branch> {
         rate_a: f(v, "rating_long_term")?,
         rate_b: f(v, "rating_short_term")?,
         rate_c: f(v, "rating_emergency")?,
+        rating_sets: Vec::new(),
         current_ratings: None,
         tap: if is_xf {
             f_or(v, "transformer_tap_ratio", 1.0)?

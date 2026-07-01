@@ -194,6 +194,7 @@ pub(super) fn branch_row(row: &[f64], i: usize) -> Result<Branch> {
         rate_a: row[branch_col::RATE_A],
         rate_b: row[branch_col::RATE_B],
         rate_c: row[branch_col::RATE_C],
+        rating_sets: Vec::new(),
         current_ratings: None,
         tap: row[branch_col::TAP],
         shift: row[branch_col::SHIFT],

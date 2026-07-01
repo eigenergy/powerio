@@ -1,7 +1,7 @@
 use super::parse_matpower as parse_mpc;
 use super::write_matpower;
 use crate::indexed::IndexedNetwork;
-use crate::network::{BusId, SourceFormat};
+use crate::network::{Branch, Bus, BusId, BusType, GenCost, Generator, Network, SourceFormat};
 
 const CASE_TINY: &str = r"
 function mpc = tiny
@@ -308,4 +308,36 @@ mpc.gencost = [
         reparsed.generators[1].cost.as_ref().unwrap().coeffs.len(),
         2
     );
+}
+
+#[test]
+fn piecewise_gencost_constructor_counts_breakpoints() {
+    let mut generator = Generator::new(BusId(1));
+    generator.cost = Some(GenCost::new(1, 0.0, 0.0, vec![0.0, 0.0, 1.0, 1.0]));
+    let mut net = Network::in_memory(
+        "pwl_cost_constructor",
+        100.0,
+        vec![
+            Bus::new(BusId(1), BusType::Ref, 230.0),
+            Bus::new(BusId(2), BusType::Pq, 230.0),
+        ],
+        vec![Branch::new(BusId(1), BusId(2), 0.01, 0.1)],
+    );
+    net.generators = vec![generator];
+
+    let cost = net.generators[0].cost.as_ref().unwrap();
+    assert_eq!(cost.ncost, 2);
+    assert_eq!(cost.coeffs, vec![0.0, 0.0, 1.0, 1.0]);
+
+    let restored = Network::from_json(&net.to_json().unwrap()).unwrap();
+    let restored_cost = restored.generators[0].cost.as_ref().unwrap();
+    assert_eq!(restored_cost.ncost, 2);
+    assert_eq!(restored_cost.coeffs, vec![0.0, 0.0, 1.0, 1.0]);
+
+    let text = write_matpower(&net);
+    let reparsed = parse_mpc(&text).expect("constructor PWL cost should reparse");
+    let reparsed_cost = reparsed.generators[0].cost.as_ref().unwrap();
+    assert_eq!(reparsed_cost.model, 1);
+    assert_eq!(reparsed_cost.ncost, 2);
+    assert_eq!(reparsed_cost.coeffs, vec![0.0, 0.0, 1.0, 1.0]);
 }

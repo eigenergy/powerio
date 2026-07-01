@@ -4,9 +4,9 @@
 //! 2- and 3-winding transformer records — which together carry a transmission
 //! power flow case. A switched shunt keeps its steady-state susceptance `BINIT`
 //! as the shunt `b` and carries its mode, voltage band, regulated bus, RMPCT, and
-//! step blocks on [`SwitchedShuntControl`]. Impedances are written on the system base with
-//! per unit turns ratios (`CZ = 1`, `CW = 1`); the reader warns on other
-//! impedance/turns bases and reads them verbatim rather than converting them.
+//! step blocks on [`SwitchedShuntControl`]. Transformer impedance and winding
+//! bases (`CZ`/`CW`) are normalized to the system base and per unit tap ratios;
+//! the writer emits the canonical `CZ = 1`, `CW = 1` form.
 //! Two-terminal DC lines read and write as the neutral
 //! [`Hvdc`] (power-setpoint model; converter firing-angle/transformer detail
 //! rides through in extras). The other advanced sections (VSC and multi-terminal
@@ -21,16 +21,117 @@ use std::sync::Arc;
 
 use serde_json::Value;
 
-use super::{Conversion, jnum, sanitize_quoted};
+use super::{
+    Conversion, branch_rating_set_drop_warning, jnum, sanitize_quoted,
+    warn_extra_branch_rating_sets,
+};
 use crate::network::{
-    Area, Branch, BranchCharging, Bus, BusId, BusType, Extras, Generator, Hvdc, Impedance, Load,
-    LoadVoltageModel, Network, Shunt, ShuntBlock, SolverParams, SourceFormat, SwitchedShuntControl,
-    SwitchedShuntMode, Transformer3W, TransformerControl, TransformerControlMode, Winding,
+    Area, Branch, BranchCharging, BranchRatingSet, Bus, BusId, BusType, Extras, Generator, Hvdc,
+    Impedance, Load, LoadVoltageModel, Network, Shunt, ShuntBlock, SolverParams, SourceFormat,
+    SwitchedShuntControl, SwitchedShuntMode, Transformer3W, TransformerControl,
+    TransformerControlMode, Winding,
 };
 use crate::{Error, Result};
 
 const FMT: &str = "PSS/E .raw";
 const REV: u32 = 33;
+const PSSE_EXTRA_BRANCH_RATINGS: usize = 9;
+
+fn psse_extra_rating_name(slot: usize) -> String {
+    format!("RATE{}", slot + 4)
+}
+
+fn psse_extra_rating_slot(name: &str) -> Option<usize> {
+    let upper = name.trim().to_ascii_uppercase();
+    let suffix = upper
+        .strip_prefix("RATE")
+        .or_else(|| upper.strip_prefix("RATING"))?
+        .trim_start_matches([' ', '_']);
+    let n = suffix.parse::<usize>().ok()?;
+    (4..=12).contains(&n).then_some(n - 4)
+}
+
+fn read_extra_branch_ratings(
+    fields: &[String],
+    rating_start: usize,
+    named_record: bool,
+) -> Result<Vec<BranchRatingSet>> {
+    if !named_record {
+        return Ok(Vec::new());
+    }
+    let mut ratings = Vec::new();
+    for slot in 0..PSSE_EXTRA_BRANCH_RATINGS {
+        let rate_mva = num_at(fields, rating_start + 3 + slot, 0.0)?;
+        if rate_mva.abs() > f64::EPSILON {
+            ratings.push(BranchRatingSet::new(psse_extra_rating_name(slot), rate_mva));
+        }
+    }
+    Ok(ratings)
+}
+
+fn psse_extra_rating_values(
+    branch: &Branch,
+    branch_index: usize,
+    warnings: &mut Vec<String>,
+) -> [f64; PSSE_EXTRA_BRANCH_RATINGS] {
+    let mut values = [0.0; PSSE_EXTRA_BRANCH_RATINGS];
+    let mut used = [false; PSSE_EXTRA_BRANCH_RATINGS];
+    let mut deferred = Vec::new();
+
+    for rating in &branch.rating_sets {
+        if let Some(slot) = psse_extra_rating_slot(&rating.name) {
+            if !used[slot] {
+                values[slot] = rating.rate_mva;
+                used[slot] = true;
+                continue;
+            }
+        }
+        deferred.push(rating);
+    }
+
+    for rating in deferred {
+        if let Some(slot) = used.iter().position(|is_used| !*is_used) {
+            values[slot] = rating.rate_mva;
+            used[slot] = true;
+            warnings.push(branch_rating_set_rename_warning(
+                branch_index,
+                branch,
+                rating,
+                &psse_extra_rating_name(slot),
+            ));
+        } else {
+            warnings.push(branch_rating_set_drop_warning(
+                "PSS/E v34/v35",
+                branch_index,
+                branch,
+                rating,
+            ));
+        }
+    }
+
+    values
+}
+
+fn branch_rating_set_rename_warning(
+    branch_index: usize,
+    branch: &Branch,
+    rating: &BranchRatingSet,
+    emitted_name: &str,
+) -> String {
+    format!(
+        "branch {} ({} to {}) rating set {}={} MVA emitted as {} in PSS/E v34/v35; rating set names outside RATE4-RATE12 are not preserved",
+        branch_index + 1,
+        branch.from,
+        branch.to,
+        rating.name,
+        rating.rate_mva,
+        emitted_name
+    )
+}
+
+fn warn_psse_extra_branch_ratings_dropped(net: &Network, warnings: &mut Vec<String>) {
+    warn_extra_branch_rating_sets("PSS/E v33", net, warnings);
+}
 
 /// Characters that would corrupt a single-quoted PSS/E name field. The quote
 /// toggles the reader's quoted state early, and `/` truncates the record at the
@@ -275,7 +376,12 @@ pub fn write_psse_rev(net: &Network, rev: u32) -> Conversion {
     // Parallel branches between the same bus pair get distinct circuit ids (PSS/E
     // keys a branch on (I, J, CKT)); a captured source CKT wins.
     let mut branch_ids: BTreeMap<(BusId, BusId), BTreeSet<String>> = BTreeMap::new();
-    for br in net.branches.iter().filter(|b| !b.is_transformer()) {
+    for (branch_index, br) in net
+        .branches
+        .iter()
+        .enumerate()
+        .filter(|(_, b)| !b.is_transformer())
+    {
         let ckt = quoted_circuit_id(
             br.extras.get("id").and_then(Value::as_str),
             (br.from, br.to),
@@ -290,11 +396,12 @@ pub fn write_psse_rev(net: &Network, rev: u32) -> Conversion {
         if modern {
             // v34+: a quoted line NAME at field 6, then twelve rating columns,
             // pushing STAT to field 23 (the layout the reader expects at rev>=34).
-            // ratings 4-12 default to 0 (powerio carries only rate_a/b/c).
+            // RATE4-RATE12 come from extra branch rating sets when present.
+            let extra_ratings = psse_extra_rating_values(br, branch_index, &mut warnings);
             let _ = writeln!(
                 s,
                 "{}, {}, '{ckt}', {}, {}, {}, '            ', {}, {}, {}, \
-                 0, 0, 0, 0, 0, 0, 0, 0, 0, {}, {}, {}, {}, {}, 1, 0, 1, 1",
+                 {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, 1, 0, 1, 1",
                 br.from,
                 br.to,
                 num(br.r),
@@ -303,6 +410,15 @@ pub fn write_psse_rev(net: &Network, rev: u32) -> Conversion {
                 num(br.rate_a),
                 num(br.rate_b),
                 num(br.rate_c),
+                num(extra_ratings[0]),
+                num(extra_ratings[1]),
+                num(extra_ratings[2]),
+                num(extra_ratings[3]),
+                num(extra_ratings[4]),
+                num(extra_ratings[5]),
+                num(extra_ratings[6]),
+                num(extra_ratings[7]),
+                num(extra_ratings[8]),
                 num(charging.g_fr),
                 num(bi),
                 num(charging.g_to),
@@ -558,6 +674,9 @@ pub fn write_psse_rev(net: &Network, rev: u32) -> Conversion {
             "{current_ratings} branch current rating record(s) dropped: PSS/E branch ratings are MVA ratings"
         ));
     }
+    if !modern {
+        warn_psse_extra_branch_ratings_dropped(net, &mut warnings);
+    }
     let branch_solutions = net.branches.iter().filter(|b| b.solution.is_some()).count();
     if branch_solutions > 0 {
         warnings.push(format!(
@@ -759,11 +878,14 @@ pub(crate) fn parse_psse_source(
     let mut hvdc = Vec::new();
     let mut areas = Vec::new();
     let mut solver = SolverParams::default();
+    let mut bus_base_kv: BTreeMap<BusId, f64> = BTreeMap::new();
+    let mut unmodeled_sections: BTreeMap<String, usize> = BTreeMap::new();
 
     // Sections appear in fixed order, each ended by a record whose first field is
     // `0`. We read the ones we model and treat the rest as skipped.
     let mut section = Section::Bus;
     let mut saw_bus_marker = false;
+    let mut skipped_section_name: Option<String> = None;
     let mut lines = lines.peekable();
     while let Some(raw) = lines.next() {
         let line = raw.trim();
@@ -781,7 +903,10 @@ pub(crate) fn parse_psse_source(
             // SWITCHED SHUNT DATA"); read that rather than counting, so the many
             // unmodeled sections between transformers and switched shunts don't
             // throw off the position.
-            section = section_after_marker(line);
+            let next_section = section_after_marker(line);
+            skipped_section_name =
+                introduced_section_name(line).filter(|_| matches!(next_section, Section::Skip));
+            section = next_section;
             saw_bus_marker |= matches!(section, Section::Bus);
             continue;
         }
@@ -793,7 +918,11 @@ pub(crate) fn parse_psse_source(
                 section = Section::SystemWide;
                 parse_solver_line(&f, &mut solver);
             }
-            Section::Bus => buses.push(read_bus(&f)?),
+            Section::Bus => {
+                let bus = read_bus(&f)?;
+                bus_base_kv.insert(bus.id, bus.base_kv);
+                buses.push(bus);
+            }
             Section::Load => loads.push(read_load(&f, raw_rev, warnings)?),
             Section::FixedShunt => shunts.push(read_shunt(&f)?),
             Section::SwitchedShunt => shunts.push(read_switched_shunt(&f, raw_rev)?),
@@ -810,7 +939,6 @@ pub(crate) fn parse_psse_source(
                 let l3 = next_continuation_line(&mut lines, "transformer", "winding data line 1")?;
                 let l4 = next_continuation_line(&mut lines, "transformer", "winding data line 2")?;
                 if two_winding {
-                    warn_non_unit_transformer_basis(&f, warnings)?;
                     // MAG2 maps to the branch charging b only at CM = 1; a CM != 1
                     // record states magnetizing data in units this reader does not
                     // convert, so read_transformer drops it. Name the loss.
@@ -822,9 +950,16 @@ pub(crate) fn parse_psse_source(
                             f.get(1).map_or("?", String::as_str),
                         ));
                     }
-                    branches.push(read_transformer(&f, &fields(l2), &fields(l3), &fields(l4))?);
+                    branches.push(read_transformer(
+                        &f,
+                        &fields(l2),
+                        &fields(l3),
+                        &fields(l4),
+                        base_mva,
+                        &bus_base_kv,
+                        warnings,
+                    )?);
                 } else {
-                    warn_non_unit_transformer_basis(&f, warnings)?;
                     let l5 =
                         next_continuation_line(&mut lines, "transformer", "winding data line 3")?;
                     transformers_3w.push(read_transformer_3w(
@@ -833,6 +968,9 @@ pub(crate) fn parse_psse_source(
                         &fields(l3),
                         &fields(l4),
                         &fields(l5),
+                        base_mva,
+                        &bus_base_kv,
+                        warnings,
                     )?);
                 }
             }
@@ -847,13 +985,17 @@ pub(crate) fn parse_psse_source(
             }
             Section::Area => areas.push(read_area(&f)?),
             Section::SystemWide => parse_solver_line(&f, &mut solver),
-            Section::Skip => {}
+            Section::Skip => {
+                if let Some(name) = skipped_section_name.as_ref() {
+                    *unmodeled_sections.entry(name.clone()).or_default() += 1;
+                }
+            }
         }
     }
 
-    warn_unmodeled_sections(content, warnings);
+    warn_unmodeled_sections(unmodeled_sections, warnings);
 
-    let net = Network {
+    let mut net = Network {
         name,
         base_mva,
         base_frequency,
@@ -871,6 +1013,7 @@ pub(crate) fn parse_psse_source(
         source_format: SourceFormat::Psse,
         source: Some(source),
     };
+    drop_stale_control_pointers(&mut net, warnings);
     net.check_references(FMT)?;
     Ok(net)
 }
@@ -920,21 +1063,24 @@ fn next_continuation_line<'a>(
     record: &str,
     expected: &str,
 ) -> Result<&'a str> {
-    let Some(line) = lines.next().map(str::trim) else {
-        return Err(Error::FormatRead {
-            format: FMT,
-            message: format!("PSS/E {record} record ended before {expected}"),
-        });
-    };
-    if line.eq_ignore_ascii_case("q") || is_section_marker(line) || is_bare_terminator(line) {
-        return Err(Error::FormatRead {
-            format: FMT,
-            message: format!(
-                "PSS/E {record} record ended before {expected}: found section terminator `{line}`"
-            ),
-        });
+    for line in lines.by_ref().map(str::trim) {
+        if line.is_empty() || is_comment(line) {
+            continue;
+        }
+        if line.eq_ignore_ascii_case("q") || is_section_marker(line) || is_bare_terminator(line) {
+            return Err(Error::FormatRead {
+                format: FMT,
+                message: format!(
+                    "PSS/E {record} record ended before {expected}: found section terminator `{line}`"
+                ),
+            });
+        }
+        return Ok(line);
     }
-    Ok(line)
+    Err(Error::FormatRead {
+        format: FMT,
+        message: format!("PSS/E {record} record ended before {expected}"),
+    })
 }
 
 fn is_bare_terminator(line: &str) -> bool {
@@ -942,21 +1088,150 @@ fn is_bare_terminator(line: &str) -> bool {
     f.len() == 1 && f.first().map(String::as_str) == Some("0")
 }
 
-fn warn_non_unit_transformer_basis(f: &[String], warnings: &mut Vec<String>) -> Result<()> {
+fn transformer_basis_codes(f: &[String]) -> Result<(i64, i64)> {
     let cw = num_at(f, 4, 1.0)?;
-    let cz = num_at(f, 5, 1.0)?;
-    let non_unit = |v: f64| !v.is_finite() || (v - 1.0).abs() > f64::EPSILON;
-    if non_unit(cw) || non_unit(cz) {
-        let i = f.first().map_or("?", String::as_str);
-        let j = f.get(1).map_or("?", String::as_str);
-        let k = f.get(2).map_or("?", String::as_str);
-        let id = f.get(3).map_or("", String::as_str);
-        warnings.push(format!(
-            "PSS/E transformer {i}-{j}-{k} id {id:?}: non-unit CW/CZ ({cw}/{cz}) not \
-             converted; impedance and turns fields were read as if CW=CZ=1"
-        ));
+    if cw.fract() != 0.0 {
+        return Err(bad_field(4, f.get(4).map_or("", String::as_str)));
     }
-    Ok(())
+    let cz = num_at(f, 5, 1.0)?;
+    if cz.fract() != 0.0 {
+        return Err(bad_field(5, f.get(5).map_or("", String::as_str)));
+    }
+    #[allow(clippy::cast_possible_truncation)]
+    Ok((cw as i64, cz as i64))
+}
+
+fn transformer_label(f: &[String]) -> String {
+    let i = f.first().map_or("?", String::as_str);
+    let j = f.get(1).map_or("?", String::as_str);
+    let k = f.get(2).map_or("?", String::as_str);
+    let id = f.get(3).map_or("", String::as_str);
+    format!("{i}-{j}-{k} id {id:?}")
+}
+
+#[expect(clippy::too_many_arguments)]
+fn convert_transformer_impedance(
+    r: f64,
+    x: f64,
+    sbase: f64,
+    system_base: f64,
+    cz: i64,
+    label: &str,
+    pair: &str,
+    warnings: &mut Vec<String>,
+) -> (f64, f64) {
+    let base_ok = sbase.is_finite() && sbase > 0.0;
+    match cz {
+        1 => (r, x),
+        2 => {
+            if base_ok {
+                let scale = system_base / sbase;
+                (r * scale, x * scale)
+            } else {
+                warnings.push(format!(
+                    "PSS/E transformer {label} pair {pair}: CZ=2 impedance has invalid SBASE {sbase}; read as system-base p.u."
+                ));
+                (r, x)
+            }
+        }
+        3 => {
+            if !base_ok {
+                warnings.push(format!(
+                    "PSS/E transformer {label} pair {pair}: CZ=3 impedance has invalid SBASE {sbase}; read as system-base p.u."
+                ));
+                return (r, x);
+            }
+            let r_pair = (r / 1_000_000.0) / sbase;
+            let z_pair = x.abs();
+            let x_pair = (z_pair.mul_add(z_pair, -(r_pair * r_pair)))
+                .max(0.0)
+                .sqrt()
+                .copysign(x);
+            let scale = system_base / sbase;
+            (r_pair * scale, x_pair * scale)
+        }
+        other => {
+            warnings.push(format!(
+                "PSS/E transformer {label} pair {pair}: unsupported CZ={other}; read impedance as system-base p.u."
+            ));
+            (r, x)
+        }
+    }
+}
+
+fn default_windv(cw: i64, bus: BusId, bus_base_kv: &BTreeMap<BusId, f64>) -> f64 {
+    if cw == 2 {
+        bus_base_kv
+            .get(&bus)
+            .copied()
+            .filter(|v| *v > 0.0)
+            .unwrap_or(1.0)
+    } else {
+        1.0
+    }
+}
+
+fn winding_ratio(
+    w: &[String],
+    bus: BusId,
+    cw: i64,
+    bus_base_kv: &BTreeMap<BusId, f64>,
+    label: &str,
+    winding: &str,
+    warnings: &mut Vec<String>,
+) -> Result<f64> {
+    let windv = num_at(w, 0, default_windv(cw, bus, bus_base_kv))?;
+    let nomv = num_at(w, 1, 0.0)?;
+    let base_kv = bus_base_kv.get(&bus).copied().unwrap_or(0.0);
+    let needs_base = matches!(cw, 2 | 3);
+    if needs_base && !(base_kv.is_finite() && base_kv > 0.0) {
+        warnings.push(format!(
+            "PSS/E transformer {label} {winding}: CW={cw} needs a positive bus base kV for bus {bus}; read WINDV as a p.u. tap ratio"
+        ));
+        return Ok(windv);
+    }
+    match cw {
+        1 => Ok(windv),
+        2 => Ok(windv / base_kv),
+        3 => {
+            let nominal = if nomv.is_finite() && nomv > 0.0 {
+                nomv
+            } else {
+                base_kv
+            };
+            Ok(windv * nominal / base_kv)
+        }
+        other => {
+            warnings.push(format!(
+                "PSS/E transformer {label} {winding}: unsupported CW={other}; read WINDV as a p.u. tap ratio"
+            ));
+            Ok(windv)
+        }
+    }
+}
+
+#[expect(clippy::too_many_arguments)]
+fn two_winding_tap(
+    l1: &[String],
+    l3: &[String],
+    l4: &[String],
+    from: BusId,
+    to: BusId,
+    cw: i64,
+    bus_base_kv: &BTreeMap<BusId, f64>,
+    warnings: &mut Vec<String>,
+) -> Result<f64> {
+    let label = transformer_label(l1);
+    let ratio1 = winding_ratio(l3, from, cw, bus_base_kv, &label, "winding 1", warnings)?;
+    let ratio2 = winding_ratio(l4, to, cw, bus_base_kv, &label, "winding 2", warnings)?;
+    if ratio2.abs() <= f64::EPSILON {
+        warnings.push(format!(
+            "PSS/E transformer {label}: winding 2 ratio is zero; used winding 1 ratio as the branch tap"
+        ));
+        Ok(ratio1)
+    } else {
+        Ok(ratio1 / ratio2)
+    }
 }
 
 /// A terminator that also delimits a named section (`... END OF X DATA, BEGIN Y
@@ -985,45 +1260,79 @@ fn introduced_section_name(line: &str) -> Option<String> {
 
 /// Warn about non-empty PSS/E sections the reader does not model (VSC and
 /// multi-terminal DC, impedance correction, substation/node, multi-section line,
-/// induction machine, FACTS, GNE, owner/zone, ...). Their content survives a
-/// same-format `.raw` write (the retained source is echoed) but is dropped on a
-/// cross-format write or after the source is discarded (e.g. a JSON round trip),
-/// so the loss is reported at read time rather than silently. The line count is
-/// approximate (multi-line records count once per line).
-fn warn_unmodeled_sections(content: &str, warnings: &mut Vec<String>) {
-    fn close(current: Option<&(String, bool)>, rows: usize, totals: &mut BTreeMap<String, usize>) {
-        if let Some((name, true)) = current {
-            if rows > 0 {
-                *totals.entry(name.clone()).or_default() += rows;
-            }
-        }
-    }
-    // Aggregate by section name: a substation block repeats its TERMINAL/SWITCHING
-    // sub-sections per station, so one warning per name beats hundreds.
-    let mut totals: BTreeMap<String, usize> = BTreeMap::new();
-    // (section name, is it a skipped/unmodeled section).
-    let mut current: Option<(String, bool)> = None;
-    let mut rows: usize = 0;
-    for line in content.lines() {
-        let t = line.trim();
-        if t.is_empty() || is_comment(t) || t.eq_ignore_ascii_case("q") {
-            continue;
-        }
-        if is_section_marker(t) {
-            close(current.as_ref(), rows, &mut totals);
-            rows = 0;
-            current = introduced_section_name(t)
-                .map(|n| (n, matches!(section_after_marker(t), Section::Skip)));
-        } else {
-            rows += 1;
-        }
-    }
-    close(current.as_ref(), rows, &mut totals);
+/// induction machine, FACTS, GNE, owner/zone, ...). Counts come from the parser
+/// pass itself, so bare `0` terminators and malformed continuation boundaries are
+/// classified the same way as the records that get skipped.
+fn warn_unmodeled_sections(totals: BTreeMap<String, usize>, warnings: &mut Vec<String>) {
     for (name, rows) in totals {
         warnings.push(format!(
             "PSS/E {name} section ({rows} record line(s)) is not modeled: preserved only in a \
              same-format .raw echo, dropped on any other write"
         ));
+    }
+}
+
+fn drop_stale_control_pointers(net: &mut Network, warnings: &mut Vec<String>) {
+    let bus_ids: BTreeSet<BusId> = net.buses.iter().map(|b| b.id).collect();
+    let missing = |bus: BusId| !bus_ids.contains(&bus);
+
+    for (idx, g) in net.generators.iter_mut().enumerate() {
+        let Some(bus) = g.regulated_bus.filter(|b| missing(*b)) else {
+            continue;
+        };
+        warnings.push(format!(
+            "PSS/E GENERATOR DATA record {} at bus {}: IREG references missing bus id {}; dropped remote voltage control",
+            idx + 1,
+            g.bus,
+            bus
+        ));
+        g.regulated_bus = None;
+    }
+
+    for (idx, br) in net.branches.iter_mut().enumerate() {
+        let Some(control) = br.control.as_mut() else {
+            continue;
+        };
+        let Some(bus) = control.controlled_bus.filter(|b| missing(*b)) else {
+            continue;
+        };
+        warnings.push(format!(
+            "PSS/E TRANSFORMER DATA record {} ({}-{}): CONT references missing bus id {}; dropped transformer control pointer",
+            idx + 1,
+            br.from,
+            br.to,
+            bus
+        ));
+        control.controlled_bus = None;
+    }
+
+    for (idx, shunt) in net.shunts.iter_mut().enumerate() {
+        let Some(control) = shunt.control.as_mut() else {
+            continue;
+        };
+        let Some(bus) = control.control_bus.filter(|b| missing(*b)) else {
+            continue;
+        };
+        warnings.push(format!(
+            "PSS/E SWITCHED SHUNT DATA record {} at bus {}: SWREM references missing bus id {}; dropped switched shunt control pointer",
+            idx + 1,
+            shunt.bus,
+            bus
+        ));
+        control.control_bus = None;
+    }
+
+    for (idx, area) in net.areas.iter_mut().enumerate() {
+        let Some(bus) = area.slack_bus.filter(|b| missing(*b)) else {
+            continue;
+        };
+        warnings.push(format!(
+            "PSS/E AREA DATA record {} area {}: ISW references missing bus id {}; dropped area swing pointer",
+            idx + 1,
+            area.number,
+            bus
+        ));
+        area.slack_bus = None;
     }
 }
 
@@ -1458,6 +1767,7 @@ fn read_branch(f: &[String], raw_rev: u32) -> Result<Branch> {
         rate_a: num_at(f, rating, 0.0)?,
         rate_b: num_at(f, rating + 1, 0.0)?,
         rate_c: num_at(f, rating + 2, 0.0)?,
+        rating_sets: read_extra_branch_ratings(f, rating, named_record)?,
         current_ratings: None,
         tap: 0.0,
         shift: 0.0,
@@ -1471,13 +1781,37 @@ fn read_branch(f: &[String], raw_rev: u32) -> Result<Branch> {
     })
 }
 
-fn read_transformer(l1: &[String], l2: &[String], l3: &[String], _l4: &[String]) -> Result<Branch> {
+fn read_transformer(
+    l1: &[String],
+    l2: &[String],
+    l3: &[String],
+    l4: &[String],
+    system_base: f64,
+    bus_base_kv: &BTreeMap<BusId, f64>,
+    warnings: &mut Vec<String>,
+) -> Result<Branch> {
     // l1: I, J, K, CKT, CW, CZ, CM, MAG1, MAG2, NMETR, NAME, STAT(11)
     // l2: R1-2, X1-2, SBASE1-2
     // l3: WINDV1, NOMV1, ANG1, RATA1, RATB1, RATC1, COD1, CONT1, RMA1, RMI1,
     //     VMA1, VMI1, NTP1, ...
     // A nonzero control code COD1 marks a regulating winding; capture its limits
     // and regulated bus, else leave the branch's control unset.
+    let (cw, cz) = transformer_basis_codes(l1)?;
+    let from = BusId(id_at(l1, 0, 0)?);
+    let to = BusId(id_at(l1, 1, 0)?);
+    let sbase = num_at(l2, 2, system_base)?;
+    let label = transformer_label(l1);
+    let (r, x) = convert_transformer_impedance(
+        num_at(l2, 0, 0.0)?,
+        num_at(l2, 1, 0.0)?,
+        sbase,
+        system_base,
+        cz,
+        &label,
+        "1-2",
+        warnings,
+    );
+    let tap = two_winding_tap(l1, l3, l4, from, to, cw, bus_base_kv, warnings)?;
     let cod = int_at(l3, 6, 0)?;
     let control = (cod != 0)
         .then(|| -> Result<TransformerControl> {
@@ -1490,7 +1824,7 @@ fn read_transformer(l1: &[String], l2: &[String], l3: &[String], _l4: &[String])
                 band_max: num_at(l3, 10, 1.1)?,
                 band_min: num_at(l3, 11, 0.9)?,
                 ntp: int_at(l3, 12, 33)?.clamp(0, i64::from(u32::MAX)) as u32,
-                mva_base: num_at(l2, 2, 0.0)?,
+                mva_base: sbase,
             })
         })
         .transpose()?;
@@ -1505,10 +1839,10 @@ fn read_transformer(l1: &[String], l2: &[String], l3: &[String], _l4: &[String])
         0.0
     };
     Ok(Branch {
-        from: BusId(id_at(l1, 0, 0)?),
-        to: BusId(id_at(l1, 1, 0)?),
-        r: num_at(l2, 0, 0.0)?,
-        x: num_at(l2, 1, 0.0)?,
+        from,
+        to,
+        r,
+        x,
         b: mag_b,
         charging: Some(BranchCharging {
             g_fr: mag_g,
@@ -1519,8 +1853,9 @@ fn read_transformer(l1: &[String], l2: &[String], l3: &[String], _l4: &[String])
         rate_a: num_at(l3, 3, 0.0)?,
         rate_b: num_at(l3, 4, 0.0)?,
         rate_c: num_at(l3, 5, 0.0)?,
+        rating_sets: Vec::new(),
         current_ratings: None,
-        tap: num_at(l3, 0, 1.0)?,
+        tap,
         shift: num_at(l3, 2, 0.0)?,
         in_service: on_at(l1, 11, true)?,
         angmin: -360.0,
@@ -1554,43 +1889,79 @@ fn mode_to_cod(mode: TransformerControlMode) -> i64 {
 }
 
 /// Read a 5-line 3-winding transformer record into a [`Transformer3W`].
-///
-/// As with the 2-winding reader, `CZ = 1` is assumed, so the pairwise R/X are
-/// taken on the system base verbatim (a non-unit `CZ` is misread — the same
-/// limitation the 2-winding path has).
+#[expect(clippy::too_many_arguments)]
 fn read_transformer_3w(
     l1: &[String],
     l2: &[String],
     l3: &[String],
     l4: &[String],
     l5: &[String],
+    system_base: f64,
+    bus_base_kv: &BTreeMap<BusId, f64>,
+    warnings: &mut Vec<String>,
 ) -> Result<Transformer3W> {
     // l1: I, J, K, CKT, CW, CZ, CM, MAG1, MAG2, NMETR, NAME, STAT(11)
     // l2: R1-2,X1-2,SBASE1-2, R2-3,X2-3,SBASE2-3, R3-1,X3-1,SBASE3-1, VMSTAR, ANSTAR
     // l3/l4/l5: WINDVk, NOMVk, ANGk, RATAk, RATBk, RATCk, ...
-    // (R, X, SBASE) for a winding pair; at CZ = 1 the impedance is already on the
-    // system base, so the SBASE column is carried only to write it back.
-    let imp = |off: usize| -> Result<Impedance> {
-        Ok(Impedance {
-            r: num_at(l2, off, 0.0)?,
-            x: num_at(l2, off + 1, 0.0)?,
-            base_mva: num_at(l2, off + 2, 0.0)?,
-        })
+    let (cw, cz) = transformer_basis_codes(l1)?;
+    let label = transformer_label(l1);
+    let buses = [
+        BusId(id_at(l1, 0, 0)?),
+        BusId(id_at(l1, 1, 0)?),
+        BusId(id_at(l1, 2, 0)?),
+    ];
+    let z = {
+        let mut imp = |off: usize, pair: &str| -> Result<Impedance> {
+            let sbase = num_at(l2, off + 2, system_base)?;
+            let (r, x) = convert_transformer_impedance(
+                num_at(l2, off, 0.0)?,
+                num_at(l2, off + 1, 0.0)?,
+                sbase,
+                system_base,
+                cz,
+                &label,
+                pair,
+                warnings,
+            );
+            Ok(Impedance {
+                r,
+                x,
+                base_mva: sbase,
+            })
+        };
+        [imp(0, "1-2")?, imp(3, "2-3")?, imp(6, "3-1")?]
     };
-    let winding = |bus_field: usize, w: &[String]| -> Result<Winding> {
-        Ok(Winding {
-            bus: BusId(id_at(l1, bus_field, 0)?),
-            tap: num_at(w, 0, 1.0)?,
-            shift: num_at(w, 2, 0.0)?,
-            nominal_kv: num_at(w, 1, 0.0)?,
-            rate_a: num_at(w, 3, 0.0)?,
-            rate_b: num_at(w, 4, 0.0)?,
-            rate_c: num_at(w, 5, 0.0)?,
-        })
+    let windings = {
+        let mut winding = |idx: usize, w: &[String]| -> Result<Winding> {
+            let bus = buses[idx];
+            let tap = winding_ratio(
+                w,
+                bus,
+                cw,
+                bus_base_kv,
+                &label,
+                match idx {
+                    0 => "winding 1",
+                    1 => "winding 2",
+                    _ => "winding 3",
+                },
+                warnings,
+            )?;
+            Ok(Winding {
+                bus,
+                tap,
+                shift: num_at(w, 2, 0.0)?,
+                nominal_kv: num_at(w, 1, 0.0)?,
+                rate_a: num_at(w, 3, 0.0)?,
+                rate_b: num_at(w, 4, 0.0)?,
+                rate_c: num_at(w, 5, 0.0)?,
+            })
+        };
+        [winding(0, l3)?, winding(1, l4)?, winding(2, l5)?]
     };
     Ok(Transformer3W {
-        windings: [winding(0, l3)?, winding(1, l4)?, winding(2, l5)?],
-        z: [imp(0)?, imp(3)?, imp(6)?],
+        windings,
+        z,
         star_vm: num_at(l2, 9, 1.0)?,
         star_va: num_at(l2, 10, 0.0)?,
         mag_g: num_at(l1, 7, 0.0)?,
@@ -1865,6 +2236,7 @@ mod tests {
             rate_a: 100.0,
             rate_b: 110.0,
             rate_c: 120.0,
+            rating_sets: Vec::new(),
             current_ratings: None,
             tap: 0.0,
             shift: 0.0,
@@ -1888,6 +2260,7 @@ mod tests {
             rate_a: 100.0,
             rate_b: 110.0,
             rate_c: 120.0,
+            rating_sets: Vec::new(),
             current_ratings: None,
             tap: 1.05,
             shift: 0.0,
@@ -2243,33 +2616,139 @@ Q
     }
 
     #[test]
-    fn warns_on_non_unit_transformer_basis_codes() {
+    fn transformer_non_integral_cz_is_a_hard_error() {
+        // A malformed CZ like `2.9` must not silently truncate to a valid
+        // looking code `2`; that would apply the wrong impedance base
+        // conversion without ever surfacing an "unsupported CZ" warning.
         let raw = r"0, 100.00, 33, 0, 0, 60.00 / synthetic
 CASE
 COMMENT
 1,'BUS1        ', 230.0,3,1,1,1,1.0,0.0,1.1,0.9,1.1,0.9
-2,'BUS2        ', 230.0,1,1,1,1,1.0,0.0,1.1,0.9,1.1,0.9
+2,'BUS2        ', 115.0,1,1,1,1,1.0,0.0,1.1,0.9,1.1,0.9
 0 / END OF BUS DATA, BEGIN LOAD DATA
 0 / END OF LOAD DATA, BEGIN FIXED SHUNT DATA
 0 / END OF FIXED SHUNT DATA, BEGIN GENERATOR DATA
 0 / END OF GENERATOR DATA, BEGIN BRANCH DATA
 0 / END OF BRANCH DATA, BEGIN TRANSFORMER DATA
-1,2,0,'1 ',2,3,1,0,0,1,'xf',1
-0.01,0.10,100.0
+1,2,0,'1 ',1,2.9,1,0,0,1,'xf',1
+0,0.10,100.0
 1.0,230.0,0.0,100.0,90.0,80.0,0,0,1.1,0.9,1.1,0.9,33
 1.0,230.0
 0 / END OF TRANSFORMER DATA, BEGIN AREA DATA
 Q
 ";
+        let err = parse_psse(raw).unwrap_err().to_string();
+        assert!(err.contains("field 5") && err.contains("2.9"), "{err}");
+    }
+
+    #[test]
+    fn non_unit_two_winding_transformer_bases_are_converted() {
+        let raw = r"0, 100.00, 33, 0, 0, 60.00 / synthetic
+CASE
+COMMENT
+1,'BUS1        ', 230.0,3,1,1,1,1.0,0.0,1.1,0.9,1.1,0.9
+2,'BUS2        ', 115.0,1,1,1,1,1.0,0.0,1.1,0.9,1.1,0.9
+0 / END OF BUS DATA, BEGIN LOAD DATA
+0 / END OF LOAD DATA, BEGIN FIXED SHUNT DATA
+0 / END OF FIXED SHUNT DATA, BEGIN GENERATOR DATA
+0 / END OF GENERATOR DATA, BEGIN BRANCH DATA
+0 / END OF BRANCH DATA, BEGIN TRANSFORMER DATA
+1,2,0,'1 ',2,2,1,0,0,1,'xf',1
+0.01,0.10,50.0
+241.5,230.0,0.0,100.0,90.0,80.0,0,0,1.1,0.9,1.1,0.9,33
+115.0,115.0
+0 / END OF TRANSFORMER DATA, BEGIN AREA DATA
+Q
+";
         let parsed = crate::parse_str(raw, "psse").unwrap();
         assert!(
-            parsed
+            !parsed
                 .warnings
                 .iter()
-                .any(|w| w.contains("non-unit CW/CZ") && w.contains("not converted")),
-            "missing transformer basis warning: {:?}",
+                .any(|w| w.contains("unsupported CZ") || w.contains("unsupported CW")),
+            "unexpected transformer base warning: {:?}",
             parsed.warnings
         );
+        let br = &parsed.network.branches[0];
+        close(br.r, 0.02);
+        close(br.x, 0.20);
+        close(br.tap, 1.05);
+    }
+
+    #[test]
+    fn cz3_load_loss_and_cw3_nominal_voltage_are_converted() {
+        let raw = r"0, 100.00, 33, 0, 0, 60.00 / synthetic
+CASE
+COMMENT
+1,'BUS1        ', 230.0,3,1,1,1,1.0,0.0,1.1,0.9,1.1,0.9
+2,'BUS2        ', 115.0,1,1,1,1,1.0,0.0,1.1,0.9,1.1,0.9
+0 / END OF BUS DATA, BEGIN LOAD DATA
+0 / END OF LOAD DATA, BEGIN FIXED SHUNT DATA
+0 / END OF FIXED SHUNT DATA, BEGIN GENERATOR DATA
+0 / END OF GENERATOR DATA, BEGIN BRANCH DATA
+0 / END OF BRANCH DATA, BEGIN TRANSFORMER DATA
+1,2,0,'1 ',3,3,1,0,0,1,'xf',1
+250000.0,0.10,50.0
+1.05,230.0,0.0,100.0,90.0,80.0,0,0,1.1,0.9,1.1,0.9,33
+1.0,115.0
+0 / END OF TRANSFORMER DATA, BEGIN AREA DATA
+Q
+";
+        let parsed = crate::parse_str(raw, "psse").unwrap();
+        assert!(
+            !parsed
+                .warnings
+                .iter()
+                .any(|w| w.contains("unsupported CZ") || w.contains("unsupported CW")),
+            "unexpected transformer base warning: {:?}",
+            parsed.warnings
+        );
+        let br = &parsed.network.branches[0];
+        close(br.r, 0.01);
+        close(br.x, (0.10_f64 * 0.10 - 0.005_f64 * 0.005).sqrt() * 2.0);
+        close(br.tap, 1.05);
+    }
+
+    #[test]
+    fn non_unit_three_winding_transformer_bases_are_converted() {
+        let raw = r"0, 100.00, 33, 0, 0, 60.00 / synthetic
+CASE
+COMMENT
+1,'BUS1        ', 230.0,3,1,1,1,1.0,0.0,1.1,0.9,1.1,0.9
+2,'BUS2        ', 115.0,1,1,1,1,1.0,0.0,1.1,0.9,1.1,0.9
+3,'BUS3        ', 13.8,1,1,1,1,1.0,0.0,1.1,0.9,1.1,0.9
+0 / END OF BUS DATA, BEGIN LOAD DATA
+0 / END OF LOAD DATA, BEGIN FIXED SHUNT DATA
+0 / END OF FIXED SHUNT DATA, BEGIN GENERATOR DATA
+0 / END OF GENERATOR DATA, BEGIN BRANCH DATA
+0 / END OF BRANCH DATA, BEGIN TRANSFORMER DATA
+1,2,3,'1 ',2,2,1,0,0,1,'xf3',1
+0.01,0.10,50.0,0.02,0.20,100.0,0.03,0.30,200.0,1.0,0.0
+241.5,230.0,0.0,100.0,90.0,80.0,0,0,1.1,0.9,1.1,0.9,33
+115.0,115.0,0.0,100.0,90.0,80.0,0,0,1.1,0.9,1.1,0.9,33
+13.8,13.8,0.0,100.0,90.0,80.0,0,0,1.1,0.9,1.1,0.9,33
+0 / END OF TRANSFORMER DATA, BEGIN AREA DATA
+Q
+";
+        let parsed = crate::parse_str(raw, "psse").unwrap();
+        assert!(
+            !parsed
+                .warnings
+                .iter()
+                .any(|w| w.contains("unsupported CZ") || w.contains("unsupported CW")),
+            "unexpected transformer base warning: {:?}",
+            parsed.warnings
+        );
+        let t = &parsed.network.transformers_3w[0];
+        close(t.z[0].r, 0.02);
+        close(t.z[0].x, 0.20);
+        close(t.z[1].r, 0.02);
+        close(t.z[1].x, 0.20);
+        close(t.z[2].r, 0.015);
+        close(t.z[2].x, 0.15);
+        close(t.windings[0].tap, 1.05);
+        close(t.windings[1].tap, 1.0);
+        close(t.windings[2].tap, 1.0);
     }
 
     #[test]
@@ -2310,13 +2789,13 @@ RATING, 1, "      ", "                                "
 1,'1 ',50.0,5.0,20.0,-10.0,1.0,0,100.0,0.0,1.0,0.0,0.0,1.0,1,100.0,80.0,10.0
 0 / END OF GENERATOR DATA, BEGIN BRANCH DATA
 @!   I,     J,'CKT',     R,          X,         B,                    'N A M E'                 ,   RATE1,   RATE2,   RATE3,   RATE4,   RATE5,   RATE6,   RATE7,   RATE8,   RATE9,  RATE10,  RATE11,  RATE12,    GI,       BI,       GJ,       BJ,STAT,MET,  LEN
-1,2,'1 ',0.01,0.05,0.001,'named branch',100.0,90.0,80.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,1,1,0.0
+1,2,'1 ',0.01,0.05,0.001,'named branch',100.0,90.0,80.0,70.0,0.0,60.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,1,1,0.0
 0 / END OF BRANCH DATA, BEGIN TRANSFORMER DATA
 0 / END OF TRANSFORMER DATA, BEGIN AREA DATA
 Q
 "#;
 
-        let net = parse_psse(raw).unwrap();
+        let mut net = parse_psse(raw).unwrap();
 
         close(net.base_mva, 100.0);
         assert_eq!(net.buses.len(), 2);
@@ -2324,7 +2803,61 @@ Q
         assert_eq!(net.generators.len(), 1);
         assert_eq!(net.branches.len(), 1);
         close(net.branches[0].rate_a, 100.0);
+        assert_eq!(net.branches[0].rating_sets.len(), 2);
+        assert_eq!(net.branches[0].rating_sets[0].name, "RATE4");
+        close(net.branches[0].rating_sets[0].rate_mva, 70.0);
+        assert_eq!(net.branches[0].rating_sets[1].name, "RATE6");
+        close(net.branches[0].rating_sets[1].rate_mva, 60.0);
         assert!(net.branches[0].in_service);
+
+        net.source = None;
+        let written = write_psse_rev(&net, 34);
+        assert!(
+            !written.warnings.iter().any(|w| w.contains("rating set")),
+            "v34 should carry RATE4-RATE12, got {:?}",
+            written.warnings
+        );
+        let back = parse_psse(&written.text).unwrap();
+        assert_eq!(back.branches[0].rating_sets.len(), 2);
+        assert_eq!(back.branches[0].rating_sets[0].name, "RATE4");
+        close(back.branches[0].rating_sets[0].rate_mva, 70.0);
+        assert_eq!(back.branches[0].rating_sets[1].name, "RATE6");
+        close(back.branches[0].rating_sets[1].rate_mva, 60.0);
+    }
+
+    #[test]
+    fn v34_warns_when_custom_rating_name_is_emitted_as_rate_slot() {
+        let mut net = Network::in_memory(
+            "ratings",
+            100.0,
+            vec![
+                Bus::new(BusId(1), BusType::Ref, 230.0),
+                Bus::new(BusId(2), BusType::Pq, 230.0),
+            ],
+            Vec::new(),
+        );
+        let mut branch = Branch::new(BusId(1), BusId(2), 0.01, 0.05);
+        branch.rate_a = 100.0;
+        branch
+            .rating_sets
+            .push(BranchRatingSet::new("emergency", 125.0));
+        net.branches.push(branch);
+
+        let written = write_psse_rev(&net, 34);
+
+        assert!(
+            written.warnings.iter().any(|w| {
+                w.contains("rating set emergency=125")
+                    && w.contains("emitted as RATE4")
+                    && w.contains("names outside RATE4-RATE12 are not preserved")
+            }),
+            "missing rating rename warning: {:?}",
+            written.warnings
+        );
+        let back = parse_psse(&written.text).unwrap();
+        assert_eq!(back.branches[0].rating_sets.len(), 1);
+        assert_eq!(back.branches[0].rating_sets[0].name, "RATE4");
+        close(back.branches[0].rating_sets[0].rate_mva, 125.0);
     }
 
     #[test]
@@ -2750,25 +3283,131 @@ Q
     }
 
     #[test]
-    fn rejects_a_generator_regulating_an_unknown_bus() {
+    fn stale_control_pointers_warn_and_drop() {
         let raw = r"0, 100.00, 33, 0, 0, 60.00 / x
 CASE
 COMMENT
 1,'B1          ', 230.0,3,1,1,1,1.0,0.0,1.1,0.9,1.1,0.9
-3,'B3          ', 18.0,2,1,1,1,1.0,0.0,1.1,0.9,1.1,0.9
+2,'B2          ', 18.0,2,1,1,1,1.0,0.0,1.1,0.9,1.1,0.9
 0 / END OF BUS DATA, BEGIN LOAD DATA
 0 / END OF LOAD DATA, BEGIN FIXED SHUNT DATA
 0 / END OF FIXED SHUNT DATA, BEGIN GENERATOR DATA
-3,'1', 50.0, 5.0, 30.0, -20.0, 1.02, 99, 100.0, 0, 1, 0, 0, 1, 1, 100.0, 80.0, 0.0, 1, 1
+1,'1', 50.0, 5.0, 30.0, -20.0, 1.02, 99, 100.0, 0, 1, 0, 0, 1, 1, 100.0, 80.0, 0.0, 1, 1
 0 / END OF GENERATOR DATA, BEGIN BRANCH DATA
 0 / END OF BRANCH DATA, BEGIN TRANSFORMER DATA
+1, 2, 0, '1', 1, 1, 1, 0, 0, 2, 'REG         ', 1, 1, 1, 0, 1, 0, 1, 0, 1, '            '
+0.01, 0.10, 100.0
+1.025, 0, 2.5, 100.0, 90.0, 80.0, 1, 98, 1.08, 0.92, 1.05, 0.98, 17, 0, 0, 0, 0
+1.0, 0
+0 / END OF TRANSFORMER DATA, BEGIN AREA DATA
+1, 97, 0.0, 0.0, 'AREA        '
+0 / END OF AREA DATA, BEGIN TWO-TERMINAL DC DATA
+0 / END OF TWO-TERMINAL DC DATA, BEGIN VSC DC LINE DATA
+0 / END OF VSC DC LINE DATA, BEGIN IMPEDANCE CORRECTION DATA
+0 / END OF IMPEDANCE CORRECTION DATA, BEGIN MULTI-TERMINAL DC DATA
+0 / END OF MULTI-TERMINAL DC DATA, BEGIN MULTI-SECTION LINE DATA
+0 / END OF MULTI-SECTION LINE DATA, BEGIN ZONE DATA
+0 / END OF ZONE DATA, BEGIN INTER-AREA TRANSFER DATA
+0 / END OF INTER-AREA TRANSFER DATA, BEGIN OWNER DATA
+0 / END OF OWNER DATA, BEGIN FACTS DEVICE DATA
+0 / END OF FACTS DEVICE DATA, BEGIN SWITCHED SHUNT DATA
+2, 2, 0, 1, 1.05, 0.95, 96, 100.0, '', 19.0, 2, 25.0
+0 / END OF SWITCHED SHUNT DATA, BEGIN GNE DEVICE DATA
+Q
+";
+        let mut warnings = Vec::new();
+        let net =
+            parse_psse_source(std::sync::Arc::new(raw.to_string()), None, &mut warnings).unwrap();
+
+        assert_eq!(net.generators[0].regulated_bus, None);
+        assert_eq!(
+            net.branches[0]
+                .control
+                .as_ref()
+                .and_then(|c| c.controlled_bus),
+            None
+        );
+        assert_eq!(
+            net.shunts[0].control.as_ref().and_then(|c| c.control_bus),
+            None
+        );
+        assert_eq!(net.areas[0].slack_bus, None);
+        assert!(
+            warnings.iter().any(|w| w.contains("GENERATOR DATA")
+                && w.contains("IREG")
+                && w.contains("missing bus id 99")),
+            "missing IREG warning: {warnings:?}"
+        );
+        assert!(
+            warnings.iter().any(|w| w.contains("TRANSFORMER DATA")
+                && w.contains("CONT")
+                && w.contains("missing bus id 98")),
+            "missing CONT warning: {warnings:?}"
+        );
+        assert!(
+            warnings.iter().any(|w| w.contains("SWITCHED SHUNT DATA")
+                && w.contains("SWREM")
+                && w.contains("missing bus id 96")),
+            "missing SWREM warning: {warnings:?}"
+        );
+        assert!(
+            warnings.iter().any(|w| w.contains("AREA DATA")
+                && w.contains("ISW")
+                && w.contains("missing bus id 97")),
+            "missing ISW warning: {warnings:?}"
+        );
+    }
+
+    #[test]
+    fn truncated_transformer_continuation_names_expected_line() {
+        let raw = r"0, 100.00, 33, 0, 0, 60.00 / x
+CASE
+COMMENT
+1,'B1          ', 230.0,3,1,1,1,1.0,0.0,1.1,0.9,1.1,0.9
+2,'B2          ', 18.0,2,1,1,1,1.0,0.0,1.1,0.9,1.1,0.9
+0 / END OF BUS DATA, BEGIN LOAD DATA
+0 / END OF LOAD DATA, BEGIN FIXED SHUNT DATA
+0 / END OF FIXED SHUNT DATA, BEGIN GENERATOR DATA
+0 / END OF GENERATOR DATA, BEGIN BRANCH DATA
+0 / END OF BRANCH DATA, BEGIN TRANSFORMER DATA
+1, 2, 0, '1', 1, 1, 1, 0, 0, 2, 'REG         ', 1, 1, 1, 0, 1, 0, 1, 0, 1, '            '
 0 / END OF TRANSFORMER DATA, BEGIN AREA DATA
 Q
 ";
         let err = parse_psse(raw).unwrap_err().to_string();
         assert!(
-            err.contains("generator voltage control references unknown bus 99"),
+            err.contains("transformer record ended before transformer impedance line"),
             "got {err}"
+        );
+    }
+
+    #[test]
+    fn unmodeled_section_counts_skip_bare_terminators() {
+        let raw = r"0, 100.00, 33, 0, 0, 60.00 / x
+CASE
+COMMENT
+1,'B1          ', 230.0,3,1,1,1,1.0,0.0,1.1,0.9,1.1,0.9
+0 / END OF BUS DATA, BEGIN LOAD DATA
+0 / END OF LOAD DATA, BEGIN FIXED SHUNT DATA
+0 / END OF FIXED SHUNT DATA, BEGIN GENERATOR DATA
+0 / END OF GENERATOR DATA, BEGIN BRANCH DATA
+0 / END OF BRANCH DATA, BEGIN TRANSFORMER DATA
+0 / END OF TRANSFORMER DATA, BEGIN AREA DATA
+0 / END OF AREA DATA, BEGIN TWO-TERMINAL DC DATA
+0 / END OF TWO-TERMINAL DC DATA, BEGIN VSC DC LINE DATA
+'VSC1', 1
+2, 3
+0
+0 / END OF VSC DC LINE DATA, BEGIN IMPEDANCE CORRECTION DATA
+Q
+";
+        let mut warnings = Vec::new();
+        parse_psse_source(std::sync::Arc::new(raw.to_string()), None, &mut warnings).unwrap();
+        assert!(
+            warnings
+                .iter()
+                .any(|w| w.contains("VSC DC LINE section (2 record line(s))")),
+            "bare terminator should not be counted as skipped data: {warnings:?}"
         );
     }
 

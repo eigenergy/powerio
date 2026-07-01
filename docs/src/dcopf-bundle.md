@@ -53,9 +53,24 @@ unlimited per MATPOWER). Generator-space provenance (length \\(n_{\mathrm{gen}}\
 
 ## Manifest (`dcopf_meta.json`)
 
-`case_name, base_mva, n, m, n_gen, reference_buses` (0-based), `convention`,
-`units`, `cost_policy`, `synthesized_gen_costs`, `patched_gen_costs`, `files[]`,
-`powerio_version`.
+Schema `powerio.dcopf` version `0.1.0` writes Matrix Market files plus
+structured metadata:
+
+- `dimensions`: `n_buses`, `n_source_branches`, `n_branch_columns`,
+  `n_generators`, `n_reference_buses`, and `n_grounded_buses`.
+- `index_base`: `dense = 0` for manifest bus, branch, generator, and reference
+  indices; `matrix_market = 1` for `.mtx` coordinates.
+- `dc_convention`, `units`, `build_options`, and `zero_impedance`. The zero
+  impedance block records the skip flag, denominator rule, skipped count, and
+  skipped source branch rows.
+- `grounding`: reference buses, removed rows and columns, the grounded operator
+  (`L_grounded`), and the reference selector (`e_r`).
+- `operators[]`: one entry per emitted operator with `name`, `file`, `kind`,
+  `rows`, `cols`, `index_space`, and `units`.
+
+The legacy aliases `n`, `m`, `n_gen`, `reference_buses`, and `convention` remain
+for current readers. `cost_policy`, `synthesized_gen_costs`,
+`patched_gen_costs`, `files[]`, and `powerio_version` remain top level fields.
 
 ## Solving with it
 

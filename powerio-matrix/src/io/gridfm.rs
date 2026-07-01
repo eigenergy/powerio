@@ -74,7 +74,7 @@ use serde::Serialize;
 
 use crate::indexed::IndexedNetwork;
 use crate::matrix::{BuildOptions, YbusFlags, branch_admittance, branch_flows, build_ybus};
-use crate::network::{Branch, Bus, BusId, BusType, Extras, Generator, Load, Shunt, SourceFormat};
+use crate::network::{Branch, Bus, BusId, BusType, Generator, Load, Shunt, SourceFormat};
 use crate::{
     ElementCounts, Error, GenCost, GenCostPatch, MissingGenCostPolicy, Network, Result,
     ScenarioMismatch,
@@ -1325,41 +1325,20 @@ fn build_network_from_columns(
         } else {
             BusType::Pq
         };
-        buses.push(Bus {
-            id,
-            kind,
-            vm: vm[r],
-            va: va[r],
-            base_kv: vn_kv[r],
-            vmax: max_vm[r],
-            vmin: min_vm[r],
-            evhi: None,
-            evlo: None,
-            area: 0,
-            zone: 0,
-            name: None,
-            extras: Extras::new(),
-        });
+        let mut bus = Bus::new(id, kind, vn_kv[r]);
+        bus.vm = vm[r];
+        bus.va = va[r];
+        bus.vmax = max_vm[r];
+        bus.vmin = min_vm[r];
+        bus.area = 0;
+        bus.zone = 0;
+        buses.push(bus);
         if pd[r] != 0.0 || qd[r] != 0.0 {
-            loads.push(Load {
-                bus: id,
-                p: pd[r],
-                q: qd[r],
-                voltage_model: None,
-                in_service: true,
-                extras: Extras::new(),
-            });
+            loads.push(Load::new(id, pd[r], qd[r]));
         }
         // Undo the writer's `/ base_mva` (gridfm.rs:487) to recover MW/MVAr at V=1.
         if gs[r] != 0.0 || bs[r] != 0.0 {
-            shunts.push(Shunt {
-                bus: id,
-                g: gs[r] * base_mva,
-                b: bs[r] * base_mva,
-                in_service: true,
-                control: None,
-                extras: Extras::new(),
-            });
+            shunts.push(Shunt::new(id, gs[r] * base_mva, bs[r] * base_mva));
         }
     }
 
@@ -1385,34 +1364,25 @@ fn build_network_from_columns(
         // polynomial cost, or a piecewise/cubic+ cost the writer couldn't represent
         // (all written as `(0, 0, 0)`) — so it reads back as `None` (see warnings).
         let cost = if cp0[r] != 0.0 || cp1[r] != 0.0 || cp2[r] != 0.0 {
-            Some(GenCost {
-                model: 2,
-                startup: 0.0,
-                shutdown: 0.0,
-                ncost: 3,
-                coeffs: vec![cp2[r], cp1[r], cp0[r]],
-            })
+            Some(GenCost::new(2, 0.0, 0.0, vec![cp2[r], cp1[r], cp0[r]]))
         } else {
             None
         };
-        generators.push(Generator {
-            bus: dense_bus_id(g_bus[r])?,
-            pg: p_mw[r],
-            qg: q_mvar[r],
-            pmax: max_p[r],
-            pmin: min_p[r],
-            qmax: max_q[r],
-            qmin: min_q[r],
-            // The schema has no gen vg; recover the setpoint from the bus's Vm
-            // (falls back to 1.0 only if the gen references an absent bus, which
-            // `validate()` below then rejects).
-            vg: bus_vm.get(&g_bus[r]).copied().unwrap_or(1.0),
-            mbase: base_mva,
-            in_service: g_in[r] != 0,
-            cost,
-            caps: [None; 11],
-            regulated_bus: None,
-        });
+        let mut generator = Generator::new(dense_bus_id(g_bus[r])?);
+        generator.pg = p_mw[r];
+        generator.qg = q_mvar[r];
+        generator.pmax = max_p[r];
+        generator.pmin = min_p[r];
+        generator.qmax = max_q[r];
+        generator.qmin = min_q[r];
+        // The schema has no gen vg; recover the setpoint from the bus's Vm
+        // (falls back to 1.0 only if the gen references an absent bus, which
+        // `validate()` below then rejects).
+        generator.vg = bus_vm.get(&g_bus[r]).copied().unwrap_or(1.0);
+        generator.mbase = base_mva;
+        generator.in_service = g_in[r] != 0;
+        generator.cost = cost;
+        generators.push(generator);
     }
 
     // --- branches (branch_data); Y** and pf/qf/pt/qt are ignored ---
@@ -1447,46 +1417,29 @@ fn build_network_from_columns(
         } else {
             tap[row]
         };
-        branches.push(Branch {
-            from: dense_bus_id(from_bus[row])?,
-            to: dense_bus_id(to_bus[row])?,
-            r: r_col[row],
-            x: x_col[row],
-            b: b_col[row],
-            charging: None,
-            rate_a: rate_a[row],
-            rate_b: 0.0,
-            rate_c: 0.0,
-            current_ratings: None,
-            tap: tap_out,
-            shift: shift_v,
-            in_service: br_status[row] != 0,
-            angmin: ang_min[row],
-            angmax: ang_max[row],
-            control: None,
-            solution: None,
-            extras: Extras::new(),
-        });
+        let mut branch = Branch::new(
+            dense_bus_id(from_bus[row])?,
+            dense_bus_id(to_bus[row])?,
+            r_col[row],
+            x_col[row],
+        );
+        branch.b = b_col[row];
+        branch.rate_a = rate_a[row];
+        branch.tap = tap_out;
+        branch.shift = shift_v;
+        branch.in_service = br_status[row] != 0;
+        branch.angmin = ang_min[row];
+        branch.angmax = ang_max[row];
+        branches.push(branch);
     }
 
-    let net = Network {
-        name: name.to_string(),
-        base_mva,
-        base_frequency: crate::network::DEFAULT_BASE_FREQUENCY,
-        buses,
-        loads,
-        shunts,
-        branches,
-        switches: Vec::new(),
-        generators,
-        storage: Vec::new(),
-        hvdc: Vec::new(),
-        transformers_3w: Vec::new(),
-        areas: Vec::new(),
-        solver: None,
-        source_format: SourceFormat::Gridfm,
-        source: None,
-    };
+    let mut net = Network::new(name, base_mva);
+    net.buses = buses;
+    net.loads = loads;
+    net.shunts = shunts;
+    net.branches = branches;
+    net.generators = generators;
+    net.source_format = SourceFormat::Gridfm;
     net.validate()?;
 
     // --- fidelity warnings: what the gridfm schema couldn't carry back ---
@@ -1759,7 +1712,7 @@ fn f64_col(batches: &[RecordBatch], name: &str) -> Result<Vec<f64>> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::network::{Branch, BranchCharging, Bus, BusId, BusType, Extras, Generator};
+    use crate::network::{Branch, BranchCharging, Bus, BusId, BusType, Generator};
     use arrow::array::{Float64Array, Int64Array};
     use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
 
@@ -1899,12 +1852,7 @@ mod tests {
             Vec::new(),
         );
         let mut br = branch(1, 2, 0.01, 0.1);
-        br.charging = Some(BranchCharging {
-            g_fr: 0.01,
-            b_fr: 0.02,
-            g_to: 0.03,
-            b_to: 0.05,
-        });
+        br.charging = Some(BranchCharging::new(0.01, 0.02, 0.03, 0.05));
         net.branches.push(br);
 
         let tables = gridfm_record_batches(&net, 0, &GridfmOptions::default()).unwrap();
@@ -2609,72 +2557,25 @@ mod tests {
     }
 
     fn bus(id: usize, kind: BusType) -> Bus {
-        Bus {
-            id: BusId(id),
-            kind,
-            vm: 1.0,
-            va: 0.0,
-            base_kv: 1.0,
-            vmax: 1.1,
-            vmin: 0.9,
-            evhi: None,
-            evlo: None,
-            area: 1,
-            zone: 1,
-            name: None,
-            extras: Extras::new(),
-        }
+        Bus::new(BusId(id), kind, 1.0)
     }
 
     fn branch(from: usize, to: usize, r: f64, x: f64) -> Branch {
-        Branch {
-            from: BusId(from),
-            to: BusId(to),
-            r,
-            x,
-            b: 0.0,
-            charging: None,
-            rate_a: 0.0,
-            rate_b: 0.0,
-            rate_c: 0.0,
-            current_ratings: None,
-            tap: 0.0,
-            shift: 0.0,
-            in_service: true,
-            angmin: -360.0,
-            angmax: 360.0,
-            solution: None,
-            control: None,
-            extras: Extras::new(),
-        }
+        Branch::new(BusId(from), BusId(to), r, x)
     }
 
     fn gencost(model: u8, ncost: usize, coeffs: Vec<f64>) -> GenCost {
-        GenCost {
-            model,
-            startup: 0.0,
-            shutdown: 0.0,
-            ncost,
-            coeffs,
-        }
+        GenCost::with_ncost(model, 0.0, 0.0, ncost, coeffs)
     }
 
     fn gen_at(bus: usize, cost: GenCost) -> Generator {
-        Generator {
-            bus: BusId(bus),
-            pg: 0.0,
-            qg: 0.0,
-            pmax: 100.0,
-            pmin: 0.0,
-            qmax: 50.0,
-            qmin: -50.0,
-            vg: 1.0,
-            mbase: 100.0,
-            in_service: true,
-            cost: Some(cost),
-            caps: [None; 11],
-            regulated_bus: None,
-        }
+        let mut generator = Generator::new(BusId(bus));
+        generator.pmax = 100.0;
+        generator.qmax = 50.0;
+        generator.qmin = -50.0;
+        generator.mbase = 100.0;
+        generator.cost = Some(cost);
+        generator
     }
 
     #[test]

@@ -11,7 +11,7 @@ use std::fmt::Write as _;
 use std::sync::Arc;
 
 use super::auxiliary::{AuxFile, AuxObject, parse_aux};
-use crate::format::{Conversion, sanitize_quoted};
+use crate::format::{Conversion, sanitize_quoted, warn_extra_branch_rating_sets};
 use crate::network::{
     Branch, Bus, BusId, BusType, Extras, Generator, Load, LoadVoltageModel, Network, Shunt,
     SourceFormat,
@@ -591,6 +591,7 @@ fn read_branch(r: &Row, bus_labels: &HashMap<&str, BusId>) -> Result<Branch> {
         rate_a: f_alias(r, &["LineAMVA", "LimitMVAA"], 0.0)?,
         rate_b: f_alias(r, &["LineAMVA:1", "LineBMVA", "LimitMVAB"], 0.0)?,
         rate_c: f_alias(r, &["LineAMVA:2", "LineCMVA", "LimitMVAC"], 0.0)?,
+        rating_sets: Vec::new(),
         current_ratings: None,
         tap: if is_xf { tap } else { 0.0 },
         shift: f_alias(r, &["LinePhase", "Phase"], 0.0)?,
@@ -835,6 +836,7 @@ pub fn write_powerworld(net: &Network) -> Conversion {
             "{current_ratings} branch current rating record(s) dropped: PowerWorld aux branch rows written here carry MVA ratings only"
         ));
     }
+    warn_extra_branch_rating_sets("PowerWorld .aux", net, &mut warnings);
     let branch_solutions = net.branches.iter().filter(|b| b.solution.is_some()).count();
     if branch_solutions > 0 {
         warnings.push(format!(

@@ -351,6 +351,7 @@ fn draw_stats_panel(frame: &mut Frame, app: &App, area: Rect) {
         kv_inline("DD margin", dd_span),
         kv_inline("M-matrix sign", m_sign_span),
         kv_inline("SDDM", sddm_span),
+        kv("zero skips", s.skipped_zero_impedance.to_string()),
         kv("‖A‖_F", format!("{:.3e}", s.frobenius_norm)),
         Line::raw(""),
         Line::from(Span::styled(

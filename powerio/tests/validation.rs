@@ -3,48 +3,15 @@
 
 use std::path::Path;
 
-use powerio::network::{Branch, Bus, BusId, BusType, Extras, Network};
+use powerio::network::{Branch, Bus, BusId, BusType, Network};
 use powerio::{Error, parse_powerworld, parse_psse, write_powerworld};
 
 fn bus(id: usize, kind: BusType) -> Bus {
-    Bus {
-        id: BusId(id),
-        kind,
-        vm: 1.0,
-        va: 0.0,
-        base_kv: 1.0,
-        vmax: 1.1,
-        vmin: 0.9,
-        evhi: None,
-        evlo: None,
-        area: 1,
-        zone: 1,
-        name: None,
-        extras: Extras::new(),
-    }
+    Bus::new(BusId(id), kind, 1.0)
 }
 
 fn branch(from: usize, to: usize) -> Branch {
-    Branch {
-        from: BusId(from),
-        to: BusId(to),
-        r: 0.0,
-        x: 0.1,
-        b: 0.0,
-        charging: None,
-        rate_a: 0.0,
-        rate_b: 0.0,
-        rate_c: 0.0,
-        current_ratings: None,
-        tap: 0.0,
-        shift: 0.0,
-        in_service: true,
-        angmin: -360.0,
-        angmax: 360.0,
-        solution: None,
-        control: None,
-        extras: Extras::new(),
-    }
+    Branch::new(BusId(from), BusId(to), 0.0, 0.1)
 }
 
 #[test]

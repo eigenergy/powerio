@@ -80,6 +80,60 @@ impl Default for BuildOptions {
     }
 }
 
+/// Which branch denominator a matrix builder uses when deciding whether a branch
+/// can contribute a finite admittance or susceptance.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[non_exhaustive]
+pub enum ZeroImpedanceRule {
+    /// Full series impedance, `r² + x²`. Used by Y_bus, LACPF, B' in BX mode,
+    /// and B'' in XB mode.
+    Series,
+    /// Reactance only denominator, `x`. Used by DC incidence, B' in XB mode,
+    /// and B'' in BX mode after resistance is zeroed.
+    Reactance,
+}
+
+/// Branch rows skipped because the selected builder cannot represent a zero
+/// branch denominator.
+#[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[non_exhaustive]
+pub struct ZeroImpedanceSkips {
+    pub count: usize,
+    pub branch_indices: Vec<usize>,
+}
+
+impl ZeroImpedanceSkips {
+    pub fn new(branch_indices: Vec<usize>) -> Self {
+        Self {
+            count: branch_indices.len(),
+            branch_indices,
+        }
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.count == 0
+    }
+}
+
+/// Count in-service branch rows the given builder rule will skip. This is the
+/// shared accounting used by matrix metadata and solver property regressions.
+pub fn skipped_zero_impedance(
+    case: &crate::indexed::IndexedNetwork,
+    rule: ZeroImpedanceRule,
+) -> ZeroImpedanceSkips {
+    let branch_indices = case
+        .in_service_branches()
+        .filter_map(|(row, br)| {
+            let zero = match rule {
+                ZeroImpedanceRule::Series => br.r * br.r + br.x * br.x == 0.0,
+                ZeroImpedanceRule::Reactance => br.x == 0.0,
+            };
+            zero.then_some(row)
+        })
+        .collect();
+    ZeroImpedanceSkips::new(branch_indices)
+}
+
 /// Common stats over a sparse matrix used by the TUI and `meta.json`.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 #[non_exhaustive]
@@ -94,6 +148,12 @@ pub struct MatrixStats {
     /// Whether all off-diagonals are ≤ 0 (M-matrix sign pattern).
     pub m_matrix_sign: bool,
     pub frobenius_norm: f64,
+    /// Branch rows skipped under `BuildOptions::skip_zero_impedance`.
+    #[serde(default)]
+    pub skipped_zero_impedance: usize,
+    /// Source branch row indices skipped under `BuildOptions::skip_zero_impedance`.
+    #[serde(default)]
+    pub skipped_zero_impedance_branches: Vec<usize>,
 }
 
 impl MatrixStats {
@@ -132,7 +192,16 @@ impl MatrixStats {
             min_dd_margin: min_dd,
             m_matrix_sign: m_sign,
             frobenius_norm: fro_sq.sqrt(),
+            skipped_zero_impedance: 0,
+            skipped_zero_impedance_branches: Vec::new(),
         }
+    }
+
+    #[must_use]
+    pub fn with_zero_impedance_skips(mut self, skips: ZeroImpedanceSkips) -> Self {
+        self.skipped_zero_impedance = skips.count;
+        self.skipped_zero_impedance_branches = skips.branch_indices;
+        self
     }
 }
 

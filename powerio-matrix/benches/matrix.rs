@@ -55,10 +55,18 @@ fn bench_dcopf_parts(c: &mut Criterion) {
     let view = IndexedNetwork::new(&net);
 
     c.bench_function("dcopf_incidence_case118", |b| {
-        b.iter(|| build_incidence(black_box(&view), black_box(DcConvention::PaperPure)).unwrap());
+        b.iter(|| {
+            build_incidence(
+                black_box(&view),
+                black_box(DcConvention::PaperPure),
+                black_box(&BuildOptions::default()),
+            )
+            .unwrap()
+        });
     });
 
-    let incidence = build_incidence(&view, DcConvention::PaperPure).unwrap();
+    let incidence =
+        build_incidence(&view, DcConvention::PaperPure, &BuildOptions::default()).unwrap();
     c.bench_function("dcopf_laplacian_case118", |b| {
         b.iter(|| build_weighted_laplacian(black_box(&incidence.a), black_box(&incidence.b)));
     });

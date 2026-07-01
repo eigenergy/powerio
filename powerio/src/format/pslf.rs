@@ -13,7 +13,7 @@ use std::sync::Arc;
 
 use serde_json::{Number, Value};
 
-use super::{Conversion, sanitize_quoted};
+use super::{Conversion, sanitize_quoted, warn_extra_branch_rating_sets};
 use crate::network::{
     Branch, Bus, BusId, BusType, Extras, Generator, Hvdc, Impedance, Load, LoadVoltageModel,
     Network, Shunt, SourceFormat, Transformer3W, Winding,
@@ -48,10 +48,10 @@ pub(crate) fn parse_pslf_source(
     let mut once = HashSet::new();
 
     let mut buses = Vec::new();
-    let mut bus_vm = HashMap::new();
+    let mut bus_voltage = HashMap::new();
     for rec in doc.records("bus data") {
         let bus = read_bus(rec)?;
-        bus_vm.insert(bus.id, bus.vm);
+        bus_voltage.insert(bus.id, (bus.vm, bus.base_kv));
         buses.push(bus);
     }
 
@@ -103,7 +103,7 @@ pub(crate) fn parse_pslf_source(
 
     let mut generators = Vec::new();
     for rec in doc.records("generator data") {
-        generators.push(read_generator(rec, &bus_vm)?);
+        generators.push(read_generator(rec, &bus_voltage, warnings)?);
     }
 
     let dc_converters = read_dc_converters(&doc, warnings);
@@ -508,6 +508,7 @@ fn read_branch(rec: &Record) -> Result<Branch> {
         rate_a: num_at(&rec.rhs, 4, 0.0, "branch rate1", rec)?,
         rate_b: num_at(&rec.rhs, 5, 0.0, "branch rate2", rec)?,
         rate_c: num_at(&rec.rhs, 6, 0.0, "branch rate3", rec)?,
+        rating_sets: Vec::new(),
         current_ratings: None,
         tap: 0.0,
         shift: 0.0,
@@ -624,6 +625,7 @@ fn read_transformer(rec: &Record) -> Result<TransformerRecord> {
         rate_a,
         rate_b,
         rate_c,
+        rating_sets: Vec::new(),
         current_ratings: None,
         tap: if tap == 0.0 { 1.0 } else { tap },
         shift,
@@ -638,10 +640,27 @@ fn read_transformer(rec: &Record) -> Result<TransformerRecord> {
 
 /// Map one `generator data` record.
 ///
-/// EPC stores the controlled voltage on the bus row, so the generator `vg`
-/// field is filled from the bus voltage map.
-fn read_generator(rec: &Record, bus_vm: &HashMap<BusId, f64>) -> Result<Generator> {
+/// EPC stores generator voltage setpoints as controlled kV (`reg_kv`) when
+/// present. Older or sparse rows leave it zero, so fall back to the solved bus
+/// voltage.
+fn read_generator(
+    rec: &Record,
+    bus_voltage: &HashMap<BusId, (f64, f64)>,
+    warnings: &mut Vec<String>,
+) -> Result<Generator> {
     let bus = BusId(req_id(&rec.lhs, 0, "generator bus", rec)?);
+    let (bus_vm, base_kv) = bus_voltage.get(&bus).copied().unwrap_or((1.0, 0.0));
+    let reg_kv = num_at(&rec.rhs, 3, 0.0, "generator reg_kv", rec)?;
+    let vg = if reg_kv > 0.0 && base_kv > 0.0 {
+        reg_kv / base_kv
+    } else {
+        if reg_kv > 0.0 {
+            warnings.push(format!(
+                "PSLF generator at bus {bus}: reg_kv present but bus base kV is missing; used bus voltage"
+            ));
+        }
+        bus_vm
+    };
     Ok(Generator {
         bus,
         pg: num_at(&rec.rhs, 8, 0.0, "generator pgen", rec)?,
@@ -650,7 +669,7 @@ fn read_generator(rec: &Record, bus_vm: &HashMap<BusId, f64>) -> Result<Generato
         pmin: num_at(&rec.rhs, 10, 0.0, "generator pmin", rec)?,
         qmax: num_at(&rec.rhs, 12, 0.0, "generator qmax", rec)?,
         qmin: num_at(&rec.rhs, 13, 0.0, "generator qmin", rec)?,
-        vg: bus_vm.get(&bus).copied().unwrap_or(1.0),
+        vg,
         mbase: num_at(&rec.rhs, 14, 100.0, "generator mbase", rec)?,
         in_service: on_at(&rec.rhs, 0, true, "generator status", rec)?,
         cost: None,
@@ -1324,15 +1343,27 @@ pub fn write_pslf(net: &Network) -> Conversion {
         );
         for g in &net.generators {
             let r = bus_ref(g.bus);
-            // rhs indices the reader reads: status 0, pgen 8, pmax 9, pmin 10,
-            // qgen 11, qmax 12, qmin 13, mbase 14. The reader takes vg from the bus
-            // voltage, so it is not carried here.
+            // rhs indices the reader reads: status 0, reg_kv 3, pgen 8, pmax 9,
+            // pmin 10, qgen 11, qmax 12, qmin 13, mbase 14. `reg_name` is left as
+            // 0 because this writer only represents own-terminal regulation.
+            let reg_kv = if g.vg.is_finite() && r.base_kv > 0.0 {
+                g.vg * r.base_kv
+            } else {
+                if g.vg.is_finite() && (g.vg - 1.0).abs() > 1e-9 {
+                    warnings.push(format!(
+                        "PSLF generator at bus {}: voltage setpoint {} p.u. could not be written because bus base kV is missing",
+                        g.bus, g.vg
+                    ));
+                }
+                0.0
+            };
             let _ = writeln!(
                 s,
-                "{} {} \"1\" \"gen\" : {} 1 0 0 1 1 {} {} {} {} {} {} {} {} {}",
+                "{} {} \"1\" \"gen\" : {} 1 0 {} 1 1 {} {} {} {} {} {} {} {} {}",
                 g.bus,
                 name_tok(r.name),
                 i32::from(g.in_service),
+                num(reg_kv),
                 r.area,
                 r.zone,
                 num(g.pg),
@@ -1458,6 +1489,7 @@ pub fn write_pslf(net: &Network) -> Conversion {
             "{current_ratings} branch current rating record(s) dropped: PSLF branch records written here carry MVA ratings only"
         ));
     }
+    warn_extra_branch_rating_sets("PSLF .epc", net, &mut warnings);
     let branch_solutions = net.branches.iter().filter(|b| b.solution.is_some()).count();
     if branch_solutions > 0 {
         warnings.push(format!(
@@ -1755,6 +1787,7 @@ end
             rate_a: 100.0,
             rate_b: 100.0,
             rate_c: 100.0,
+            rating_sets: Vec::new(),
             current_ratings: None,
             tap: 1.0,
             shift: 0.0,

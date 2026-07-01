@@ -795,6 +795,14 @@ impl PyNetwork {
             d.set_item("rate_a", br.rate_a)?;
             d.set_item("rate_b", br.rate_b)?;
             d.set_item("rate_c", br.rate_c)?;
+            let mut rating_sets = Vec::with_capacity(br.rating_sets.len());
+            for rating in &br.rating_sets {
+                let item = PyDict::new(py);
+                item.set_item("name", &rating.name)?;
+                item.set_item("rate_mva", rating.rate_mva)?;
+                rating_sets.push(item);
+            }
+            d.set_item("rating_sets", PyList::new(py, rating_sets)?)?;
             d.set_item("c_rating_a", br.current_ratings.map(|r| r.c_rating_a))?;
             d.set_item("c_rating_b", br.current_ratings.map(|r| r.c_rating_b))?;
             d.set_item("c_rating_c", br.current_ratings.map(|r| r.c_rating_c))?;
@@ -1015,7 +1023,7 @@ impl PyNetwork {
     ) -> PyResult<Bound<'py, PyAny>> {
         let conv = parse_convention(convention.unwrap_or("paper"))?;
         let view = IndexedNetwork::with_core(&self.inner, &self.core);
-        let parts = build_incidence(&view, conv).map_err(to_pyerr)?;
+        let parts = build_incidence(&view, conv, &BuildOptions::default()).map_err(to_pyerr)?;
         let a = coo_triplets(py, &parts.a)?;
         let b = parts.b;
         let p_shift = parts.p_shift;
@@ -1032,7 +1040,7 @@ impl PyNetwork {
     ) -> PyResult<Bound<'py, PyAny>> {
         let conv = parse_convention(convention.unwrap_or("paper"))?;
         let view = IndexedNetwork::with_core(&self.inner, &self.core);
-        let parts = build_incidence(&view, conv).map_err(to_pyerr)?;
+        let parts = build_incidence(&view, conv, &BuildOptions::default()).map_err(to_pyerr)?;
         let l = build_weighted_laplacian(&parts.a, &parts.b);
         coo_triplets(py, &l)
     }

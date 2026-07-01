@@ -3,7 +3,7 @@
 
 use powerio_matrix::IndexedNetwork;
 use powerio_matrix::{
-    Branch, BuildOptions, Bus, BusId, BusType, DcConvention, Error, Extras, GenCost, Generator,
+    Branch, BuildOptions, Bus, BusId, BusType, DcConvention, Error, GenCost, Generator,
     MissingGenCostPolicy, Network, Scheme, Units, build_adjacency, build_bprime, build_flow_map,
     build_incidence, build_lodf, build_opf_instance, build_ptdf, build_weighted_laplacian,
     build_ybus, ground_at, parse_matpower_file,
@@ -33,10 +33,9 @@ fn net_with_gens(
     branches: Vec<Branch>,
     generators: Vec<Generator>,
 ) -> Network {
-    Network {
-        generators,
-        ..net(name, buses, branches)
-    }
+    let mut network = net(name, buses, branches);
+    network.generators = generators;
+    network
 }
 
 fn dense(m: &CsMat<f64>) -> Vec<Vec<f64>> {
@@ -45,6 +44,15 @@ fn dense(m: &CsMat<f64>) -> Vec<Vec<f64>> {
         d[i][j] = v;
     }
     d
+}
+
+fn operator<'a>(meta: &'a serde_json::Value, name: &str) -> &'a serde_json::Value {
+    meta["operators"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|op| op["name"] == name)
+        .unwrap_or_else(|| panic!("missing operator {name}"))
 }
 
 /// Positive definiteness via dense Cholesky; small matrices only.
@@ -96,7 +104,8 @@ fn laplacian_equals_bprime_xb() {
     for path in CASES {
         let case = load(path);
         let view = IndexedNetwork::new(&case);
-        let inc = build_incidence(&view, DcConvention::PaperPure).unwrap();
+        let inc =
+            build_incidence(&view, DcConvention::PaperPure, &BuildOptions::default()).unwrap();
         let l = build_weighted_laplacian(&inc.a, &inc.b);
         let bp = build_bprime(
             &view,
@@ -126,7 +135,8 @@ fn incidence_structure() {
     for path in CASES {
         let case = load(path);
         let view = IndexedNetwork::new(&case);
-        let inc = build_incidence(&view, DcConvention::PaperPure).unwrap();
+        let inc =
+            build_incidence(&view, DcConvention::PaperPure, &BuildOptions::default()).unwrap();
         let (n, m) = (inc.n(), inc.m());
         assert_eq!(inc.a.rows(), n);
         assert_eq!(inc.a.cols(), m);
@@ -156,7 +166,8 @@ fn laplacian_is_psd_with_constant_kernel() {
     for path in CASES {
         let case = load(path);
         let view = IndexedNetwork::new(&case);
-        let inc = build_incidence(&view, DcConvention::PaperPure).unwrap();
+        let inc =
+            build_incidence(&view, DcConvention::PaperPure, &BuildOptions::default()).unwrap();
         let l = build_weighted_laplacian(&inc.a, &inc.b);
         let d = dense(&l);
         let n = d.len();
@@ -177,7 +188,8 @@ fn grounded_laplacian_is_spd() {
         let case = load(path);
         let view = IndexedNetwork::new(&case);
         let r = view.reference_bus_index().unwrap();
-        let inc = build_incidence(&view, DcConvention::PaperPure).unwrap();
+        let inc =
+            build_incidence(&view, DcConvention::PaperPure, &BuildOptions::default()).unwrap();
         let l = build_weighted_laplacian(&inc.a, &inc.b);
         let lg = ground_at(&l, r);
         assert_eq!(lg.rows(), view.n() - 1);
@@ -191,7 +203,8 @@ fn flow_map_reconstructs_laplacian() {
     for path in CASES {
         let case = load(path);
         let view = IndexedNetwork::new(&case);
-        let inc = build_incidence(&view, DcConvention::PaperPure).unwrap();
+        let inc =
+            build_incidence(&view, DcConvention::PaperPure, &BuildOptions::default()).unwrap();
         let flow = build_flow_map(&inc.a, &inc.b); // B Aᵀ, m×n
         assert_eq!(flow.rows(), inc.m());
         assert_eq!(flow.cols(), inc.n());
@@ -218,7 +231,8 @@ fn opf_instance_shapes_and_cg() {
     for path in CASES {
         let case = load(path);
         let view = IndexedNetwork::new(&case);
-        let inc = build_incidence(&view, DcConvention::PaperPure).unwrap();
+        let inc =
+            build_incidence(&view, DcConvention::PaperPure, &BuildOptions::default()).unwrap();
         let opf = build_opf_instance(&view, &inc, Units::PerUnit).unwrap();
         let (n, m, n_gen) = (view.n(), inc.m(), opf.n_gen());
         assert_eq!(opf.bus.q.len(), n);
@@ -288,6 +302,44 @@ fn dcopf_bundle_can_fill_missing_costs_explicitly() {
 }
 
 #[test]
+fn dcopf_manifest_records_zero_impedance_skips() {
+    let case = net_with_gens(
+        "zero_dcopf",
+        vec![bus(1, BusType::Ref), bus(2, BusType::Pq)],
+        vec![branch(1, 2, 0.0), branch(1, 2, 0.1)],
+        vec![gen_with_cost(
+            1,
+            Some(GenCost::new(2, 0.0, 0.0, vec![0.0, 1.0, 0.0])),
+        )],
+    );
+    let dir = std::env::temp_dir().join("powerio_dcopf_zero_impedance_test");
+    let _ = std::fs::remove_dir_all(&dir);
+    let out =
+        powerio_matrix::write_dcopf_bundle(&case, &dir, &powerio_matrix::DcOpfOptions::default())
+            .unwrap();
+    let meta: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(out.dir.join("dcopf_meta.json")).unwrap())
+            .unwrap();
+
+    assert_eq!(meta["dimensions"]["n_source_branches"], 2);
+    assert_eq!(meta["dimensions"]["n_branch_columns"], 1);
+    assert_eq!(meta["zero_impedance"]["skip"], true);
+    assert_eq!(meta["zero_impedance"]["rule"], "Reactance");
+    assert_eq!(meta["zero_impedance"]["skipped"]["count"], 1);
+    assert_eq!(
+        meta["zero_impedance"]["skipped"]["branch_indices"],
+        serde_json::json!([0])
+    );
+    assert_eq!(meta["m"], 1);
+
+    let fmax = operator(&meta, "branch_flow_limit");
+    assert_eq!(fmax["file"], "fmax.mtx");
+    assert_eq!(fmax["rows"], 1);
+    assert_eq!(fmax["cols"], 1);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
 fn no_generators_errors() {
     // A synthetic case has branches but no generators.
     let spec = powerio_matrix::synth::SynthSpec {
@@ -299,7 +351,7 @@ fn no_generators_errors() {
     };
     let case = powerio_matrix::synth::generate(&spec);
     let view = IndexedNetwork::new(&case);
-    let inc = build_incidence(&view, DcConvention::PaperPure).unwrap();
+    let inc = build_incidence(&view, DcConvention::PaperPure, &BuildOptions::default()).unwrap();
     let err = build_opf_instance(&view, &inc, Units::PerUnit).unwrap_err();
     assert!(matches!(err, Error::NoGenerators), "got {err:?}");
 }
@@ -354,7 +406,8 @@ fn ptdf_satisfies_kcl() {
         let case = load(path);
         let view = IndexedNetwork::new(&case);
         let r = view.reference_bus_index().unwrap();
-        let inc = build_incidence(&view, DcConvention::PaperPure).unwrap();
+        let inc =
+            build_incidence(&view, DcConvention::PaperPure, &BuildOptions::default()).unwrap();
         let ptdf = build_ptdf(&view, DcConvention::PaperPure).unwrap();
         assert_eq!(ptdf.rows(), inc.m());
         assert_eq!(ptdf.cols(), view.n());
@@ -386,7 +439,8 @@ fn lodf_diagonal_is_minus_one() {
         let case = load(path);
         let view = IndexedNetwork::new(&case);
         let lodf = build_lodf(&view, DcConvention::PaperPure).unwrap();
-        let inc = build_incidence(&view, DcConvention::PaperPure).unwrap();
+        let inc =
+            build_incidence(&view, DcConvention::PaperPure, &BuildOptions::default()).unwrap();
         assert_eq!(lodf.rows(), inc.m());
         assert_eq!(lodf.cols(), inc.m());
         let d = dense(&lodf);
@@ -405,21 +459,7 @@ fn lodf_diagonal_is_minus_one() {
 // ---------------------------------------------------------------------------
 
 fn bus(id: usize, kind: BusType) -> Bus {
-    Bus {
-        id: BusId(id),
-        kind,
-        vm: 1.0,
-        va: 0.0,
-        base_kv: 345.0,
-        vmax: 1.1,
-        vmin: 0.9,
-        evhi: None,
-        evlo: None,
-        area: 1,
-        zone: 1,
-        name: None,
-        extras: Extras::new(),
-    }
+    Bus::new(BusId(id), kind, 345.0)
 }
 
 fn branch(from: usize, to: usize, x: f64) -> Branch {
@@ -427,67 +467,34 @@ fn branch(from: usize, to: usize, x: f64) -> Branch {
 }
 
 fn branch_xts(from: usize, to: usize, x: f64, tap: f64, shift: f64) -> Branch {
-    Branch {
-        from: BusId(from),
-        to: BusId(to),
-        r: 0.0,
-        x,
-        b: 0.0,
-        charging: None,
-        rate_a: 0.0,
-        rate_b: 0.0,
-        rate_c: 0.0,
-        current_ratings: None,
-        tap,
-        shift,
-        in_service: true,
-        angmin: -360.0,
-        angmax: 360.0,
-        solution: None,
-        control: None,
-        extras: Extras::new(),
-    }
+    let mut branch = Branch::new(BusId(from), BusId(to), 0.0, x);
+    branch.tap = tap;
+    branch.shift = shift;
+    branch
 }
 
 /// Generator on `bus_id` with the given cost curve (pmax = 100 MW).
 fn gen_with_cost(bus: usize, cost: Option<GenCost>) -> Generator {
-    Generator {
-        bus: BusId(bus),
-        pg: 0.0,
-        qg: 0.0,
-        qmax: 0.0,
-        qmin: 0.0,
-        vg: 1.0,
-        mbase: 100.0,
-        pmax: 100.0,
-        pmin: 0.0,
-        in_service: true,
-        cost,
-        caps: Default::default(),
-        regulated_bus: None,
-    }
+    let mut generator = Generator::new(BusId(bus));
+    generator.mbase = 100.0;
+    generator.pmax = 100.0;
+    generator.cost = cost;
+    generator
 }
 
 /// Polynomial (model 2, quadratic) generator: cost `c2 p² + c1 p`.
 fn poly_gen(bus_id: usize, pmax: f64, c2: f64, c1: f64) -> Generator {
-    let cost = GenCost {
-        model: 2,
-        startup: 0.0,
-        shutdown: 0.0,
-        ncost: 3,
-        coeffs: vec![c2, c1, 0.0],
-    };
-    Generator {
-        pmax,
-        ..gen_with_cost(bus_id, Some(cost))
-    }
+    let cost = GenCost::new(2, 0.0, 0.0, vec![c2, c1, 0.0]);
+    let mut generator = gen_with_cost(bus_id, Some(cost));
+    generator.pmax = pmax;
+    generator
 }
 
 /// DC OPF instance for `case` under the default PaperPure convention. Returns
 /// the `Result` so error-path tests can assert on the failure.
 fn opf_of(case: &Network, units: Units) -> powerio_matrix::Result<powerio_matrix::OpfInstance> {
     let view = IndexedNetwork::new(case);
-    let inc = build_incidence(&view, DcConvention::PaperPure)?;
+    let inc = build_incidence(&view, DcConvention::PaperPure, &BuildOptions::default())?;
     build_opf_instance(&view, &inc, units)
 }
 
@@ -566,12 +573,12 @@ fn matpower_convention_tap_and_shift() {
     let view = IndexedNetwork::new(&case);
 
     // PaperPure ignores tap and shift: b = 1/x, no phase injection.
-    let pp = build_incidence(&view, DcConvention::PaperPure).unwrap();
+    let pp = build_incidence(&view, DcConvention::PaperPure, &BuildOptions::default()).unwrap();
     assert!((pp.b[0] - 1.0 / x).abs() < 1e-12);
     assert!(pp.p_shift.iter().all(|&v| v == 0.0));
 
     // Matpower: b = 1/(x·τ); makeBdc injection ±b·shift at from/to.
-    let mp = build_incidence(&view, DcConvention::Matpower).unwrap();
+    let mp = build_incidence(&view, DcConvention::Matpower, &BuildOptions::default()).unwrap();
     let b_e = 1.0 / (x * tap);
     let shift_rad = shift_deg.to_radians();
     assert!((mp.b[0] - b_e).abs() < 1e-12, "b_e {} != {b_e}", mp.b[0]);
@@ -590,7 +597,7 @@ fn bundle_vectors_round_trip() {
 
     // Default options are PaperPure + PerUnit; rebuild the instance to compare.
     let view = IndexedNetwork::new(&case);
-    let inc = build_incidence(&view, DcConvention::PaperPure).unwrap();
+    let inc = build_incidence(&view, DcConvention::PaperPure, &BuildOptions::default()).unwrap();
     let opf = build_opf_instance(&view, &inc, Units::PerUnit).unwrap();
 
     let check = |name: &str, want: &[f64]| {
@@ -610,6 +617,24 @@ fn bundle_vectors_round_trip() {
     let meta: serde_json::Value =
         serde_json::from_str(&std::fs::read_to_string(out.dir.join("dcopf_meta.json")).unwrap())
             .unwrap();
+    assert_eq!(meta["schema"], "powerio.dcopf");
+    assert_eq!(meta["schema_version"], "0.1.0");
+    assert_eq!(meta["dimensions"]["n_buses"], view.n());
+    assert_eq!(
+        meta["dimensions"]["n_source_branches"],
+        view.branches().len()
+    );
+    assert_eq!(meta["dimensions"]["n_branch_columns"], inc.m());
+    assert_eq!(meta["dimensions"]["n_generators"], opf.n_gen());
+    assert_eq!(meta["dimensions"]["n_reference_buses"], 1);
+    assert_eq!(meta["dimensions"]["n_grounded_buses"], view.n() - 1);
+    assert_eq!(meta["index_base"]["dense"], 0);
+    assert_eq!(meta["index_base"]["matrix_market"], 1);
+    assert_eq!(meta["dc_convention"], "PaperPure");
+    assert_eq!(meta["build_options"]["skip_zero_impedance"], true);
+    assert_eq!(meta["zero_impedance"]["skipped"]["count"], 0);
+    assert_eq!(meta["grounding"]["grounded_operator"], "L_grounded");
+    assert_eq!(meta["grounding"]["reference_selector"], "e_r");
     assert_eq!(meta["n_gen"].as_u64().unwrap() as usize, opf.n_gen());
     let ref_buses: Vec<usize> = meta["reference_buses"]
         .as_array()
@@ -621,8 +646,28 @@ fn bundle_vectors_round_trip() {
         ref_buses,
         IndexedNetwork::new(&case).reference_bus_indices()
     );
+    assert_eq!(
+        meta["grounding"]["reference_buses"],
+        meta["reference_buses"]
+    );
+    assert_eq!(
+        meta["grounding"]["removed_rows_and_columns"],
+        meta["reference_buses"]
+    );
     assert_eq!(meta["units"], "PerUnit");
     assert_eq!(meta["convention"], "PaperPure");
+
+    let operators = meta["operators"].as_array().unwrap();
+    assert_eq!(operators.len(), 18);
+    let signed_incidence = operator(&meta, "signed_incidence");
+    assert_eq!(signed_incidence["file"], "A.mtx");
+    assert_eq!(signed_incidence["rows"], view.n());
+    assert_eq!(signed_incidence["cols"], inc.m());
+    assert_eq!(signed_incidence["index_space"], "bus_by_branch");
+    let grounded = operator(&meta, "grounded_laplacian");
+    assert_eq!(grounded["file"], "L_grounded.mtx");
+    assert_eq!(grounded["rows"], view.n() - ref_buses.len());
+    assert_eq!(grounded["cols"], view.n() - ref_buses.len());
 
     let _ = std::fs::remove_dir_all(&dir);
 }
@@ -865,8 +910,18 @@ fn incidence_matpower_pshift_invariant_to_normalization() {
         vec![poly_gen(1, 100.0, 0.0, 1.0)],
     );
     let norm = raw.to_normalized().unwrap();
-    let ir = build_incidence(&IndexedNetwork::new(&raw), DcConvention::Matpower).unwrap();
-    let in_ = build_incidence(&IndexedNetwork::new(&norm), DcConvention::Matpower).unwrap();
+    let ir = build_incidence(
+        &IndexedNetwork::new(&raw),
+        DcConvention::Matpower,
+        &BuildOptions::default(),
+    )
+    .unwrap();
+    let in_ = build_incidence(
+        &IndexedNetwork::new(&norm),
+        DcConvention::Matpower,
+        &BuildOptions::default(),
+    )
+    .unwrap();
     assert_eq!(ir.p_shift.len(), in_.p_shift.len());
     for (a, b) in ir.p_shift.iter().zip(&in_.p_shift) {
         assert!((a - b).abs() < 1e-12, "p_shift differs: {a} vs {b}");
@@ -923,12 +978,8 @@ fn multi_generator_bus_sums_cost() {
 
 #[test]
 fn gencost_quadratic_branches() {
-    let mk = |model: u8, ncost: usize, coeffs: Vec<f64>| GenCost {
-        model,
-        startup: 0.0,
-        shutdown: 0.0,
-        ncost,
-        coeffs,
+    let mk = |model: u8, ncost: usize, coeffs: Vec<f64>| {
+        GenCost::with_ncost(model, 0.0, 0.0, ncost, coeffs)
     };
     // Quadratic: q = 2 c2, c = c1.
     assert_eq!(mk(2, 3, vec![1.5, 2.0, 9.0]).quadratic(), Some((3.0, 2.0)));
@@ -962,13 +1013,7 @@ fn opf_distinguishes_missing_from_unsupported_cost() {
     ));
 
     // Present but piecewise-linear → UnsupportedCostModel.
-    let pwl = GenCost {
-        model: 1,
-        startup: 0.0,
-        shutdown: 0.0,
-        ncost: 2,
-        coeffs: vec![0.0, 0.0, 1.0, 1.0],
-    };
+    let pwl = GenCost::with_ncost(1, 0.0, 0.0, 2, vec![0.0, 0.0, 1.0, 1.0]);
     assert!(matches!(
         opf_of(&case("pwl", Some(pwl)), Units::Native).unwrap_err(),
         Error::UnsupportedCostModel {

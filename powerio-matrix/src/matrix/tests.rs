@@ -2,50 +2,21 @@ use approx::assert_relative_eq;
 
 use crate::indexed::IndexedNetwork;
 use crate::matrix::{
-    BuildOptions, MatrixStats, Scheme, build_bdoubleprime, build_bprime, build_lacpf, build_ybus,
+    BuildOptions, DcConvention, MatrixStats, Scheme, build_bdoubleprime, build_bprime,
+    build_incidence, build_lacpf, build_ybus,
 };
-use crate::network::{Branch, BranchCharging, Bus, BusId, BusType, Extras, Network, Shunt};
+use crate::network::{Branch, BranchCharging, Bus, BusId, BusType, Network, Shunt};
 use crate::parse_psse;
+use crate::pipeline::{MatrixKind, matrix_stats_for_kind};
 
 fn bus(id: usize, kind: BusType) -> Bus {
-    Bus {
-        id: BusId(id),
-        kind,
-        vm: 1.0,
-        va: 0.0,
-        base_kv: 345.0,
-        vmax: 1.1,
-        vmin: 0.9,
-        evhi: None,
-        evlo: None,
-        area: 1,
-        zone: 1,
-        name: None,
-        extras: Extras::new(),
-    }
+    Bus::new(BusId(id), kind, 345.0)
 }
 
 fn br(from: usize, to: usize, r: f64, x: f64, b: f64) -> Branch {
-    Branch {
-        from: BusId(from),
-        to: BusId(to),
-        r,
-        x,
-        b,
-        charging: None,
-        rate_a: 0.0,
-        rate_b: 0.0,
-        rate_c: 0.0,
-        current_ratings: None,
-        tap: 0.0,
-        shift: 0.0,
-        in_service: true,
-        angmin: -360.0,
-        angmax: 360.0,
-        control: None,
-        solution: None,
-        extras: Extras::new(),
-    }
+    let mut branch = Branch::new(BusId(from), BusId(to), r, x);
+    branch.b = b;
+    branch
 }
 
 fn three_bus() -> Network {
@@ -62,6 +33,15 @@ fn three_bus() -> Network {
             br(1, 3, 0.0, 0.2, 0.0),
             br(2, 3, 0.0, 0.25, 0.0),
         ],
+    )
+}
+
+fn zero_impedance_bus_pair() -> Network {
+    Network::in_memory(
+        "zero",
+        100.0,
+        vec![bus(1, BusType::Ref), bus(2, BusType::Pq)],
+        vec![br(1, 2, 0.0, 0.0, 0.0)],
     )
 }
 
@@ -194,30 +174,9 @@ fn bdoubleprime_with_shunts_is_strictly_dominant() {
     // Add capacitive shunts to break the singularity (negative bs → positive
     // contribution to −Im(Y_bus)).
     net.shunts = vec![
-        Shunt {
-            bus: BusId(1),
-            g: 0.0,
-            b: -10.0,
-            in_service: true,
-            control: None,
-            extras: Extras::new(),
-        },
-        Shunt {
-            bus: BusId(2),
-            g: 0.0,
-            b: -10.0,
-            in_service: true,
-            control: None,
-            extras: Extras::new(),
-        },
-        Shunt {
-            bus: BusId(3),
-            g: 0.0,
-            b: -10.0,
-            in_service: true,
-            control: None,
-            extras: Extras::new(),
-        },
+        Shunt::new(BusId(1), 0.0, -10.0),
+        Shunt::new(BusId(2), 0.0, -10.0),
+        Shunt::new(BusId(3), 0.0, -10.0),
     ];
     let view = IndexedNetwork::new(&net);
     let bpp = build_bdoubleprime(&view, &BuildOptions::default()).unwrap();
@@ -244,12 +203,7 @@ fn ybus_reciprocity_and_symmetry() {
 #[test]
 fn ybus_uses_asymmetric_terminal_admittance() {
     let mut branch = br(1, 2, 0.0, 0.1, 0.0);
-    branch.charging = Some(BranchCharging {
-        g_fr: 0.01,
-        b_fr: 0.02,
-        g_to: 0.03,
-        b_to: 0.04,
-    });
+    branch.charging = Some(BranchCharging::new(0.01, 0.02, 0.03, 0.04));
     let net = Network::in_memory(
         "terminal-charging",
         100.0,
@@ -346,4 +300,68 @@ fn ybus_rejects_nan_reactance() {
     let view = IndexedNetwork::new(&net);
     let err = build_ybus(&view, &BuildOptions::default()).unwrap_err();
     assert!(matches!(err, crate::Error::NonFiniteSusceptance { .. }));
+}
+
+#[test]
+fn zero_impedance_policy_is_shared_across_matrix_builders() {
+    let net = zero_impedance_bus_pair();
+    let view = IndexedNetwork::new(&net);
+    let opts = BuildOptions::default();
+
+    let bprime = build_bprime(&view, &opts).unwrap();
+    let bprime_stats = matrix_stats_for_kind(&bprime, &view, MatrixKind::BPrime, &opts);
+    assert_eq!(bprime_stats.skipped_zero_impedance, 1);
+    assert_eq!(bprime_stats.skipped_zero_impedance_branches, vec![0]);
+
+    let ybus = build_ybus(&view, &opts).unwrap();
+    let ybus_stats = matrix_stats_for_kind(&ybus.b, &view, MatrixKind::YbusB, &opts);
+    assert_eq!(ybus_stats.skipped_zero_impedance, 1);
+    assert_eq!(ybus_stats.skipped_zero_impedance_branches, vec![0]);
+
+    let inc = build_incidence(&view, DcConvention::PaperPure, &opts).unwrap();
+    assert_eq!(inc.skipped_zero_impedance.count, 1);
+    assert_eq!(inc.skipped_zero_impedance.branch_indices, vec![0]);
+}
+
+#[test]
+fn zero_impedance_policy_can_error_instead_of_skipping() {
+    let net = zero_impedance_bus_pair();
+    let view = IndexedNetwork::new(&net);
+    let opts = BuildOptions {
+        skip_zero_impedance: false,
+        ..Default::default()
+    };
+
+    let bprime = build_bprime(&view, &opts).unwrap_err();
+    assert!(matches!(bprime, crate::Error::ZeroImpedance { row: 0 }));
+    let ybus = build_ybus(&view, &opts).unwrap_err();
+    assert!(matches!(ybus, crate::Error::ZeroImpedance { row: 0 }));
+    let inc = build_incidence(&view, DcConvention::PaperPure, &opts).unwrap_err();
+    assert!(matches!(inc, crate::Error::ZeroImpedance { row: 0 }));
+}
+
+#[test]
+fn self_loop_with_zero_reactance_drops_unconditionally() {
+    // A self-loop (from == to) is documented as always dropped, independent
+    // of skip_zero_impedance; it must not be misrouted through the
+    // zero-impedance accounting or the ZeroImpedance error path.
+    let net = Network::in_memory(
+        "self-loop",
+        100.0,
+        vec![bus(1, BusType::Ref), bus(2, BusType::Pq)],
+        vec![br(1, 2, 0.0, 0.1, 0.0), br(1, 1, 0.0, 0.0, 0.0)],
+    );
+    let view = IndexedNetwork::new(&net);
+
+    let opts = BuildOptions::default();
+    let inc = build_incidence(&view, DcConvention::PaperPure, &opts).unwrap();
+    assert_eq!(inc.skipped_zero_impedance.count, 0);
+    assert!(inc.skipped_zero_impedance.branch_indices.is_empty());
+
+    let strict = BuildOptions {
+        skip_zero_impedance: false,
+        ..Default::default()
+    };
+    build_incidence(&view, DcConvention::PaperPure, &strict)
+        .expect("a self-loop must not trip ZeroImpedance even when skip_zero_impedance is false");
 }

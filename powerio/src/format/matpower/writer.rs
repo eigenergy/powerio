@@ -10,7 +10,7 @@
 use std::collections::BTreeMap;
 use std::fmt::Write as _;
 
-use crate::format::Conversion;
+use crate::format::{Conversion, warn_extra_branch_rating_sets};
 use crate::network::{BusId, Network, SourceFormat};
 
 /// Serialize `net` to MATPOWER `.m` text. Echoes the retained source verbatim
@@ -41,6 +41,7 @@ pub(crate) fn write_matpower_conversion(net: &Network) -> Conversion {
     Conversion { text, warnings }
 }
 
+#[expect(clippy::too_many_lines)]
 fn canonical_warnings(net: &Network) -> Vec<String> {
     // The canonical writer (see `canonical`) emits the standard bus/branch/gen/
     // gencost/storage blocks only. Report every neutral-model field it can't.
@@ -100,6 +101,7 @@ fn canonical_warnings(net: &Network) -> Vec<String> {
             "{current_ratings} branch current rating record(s) dropped: MATPOWER branch rows carry MVA ratings only"
         ));
     }
+    warn_extra_branch_rating_sets("MATPOWER .m", net, &mut warnings);
     let branch_solutions = net.branches.iter().filter(|b| b.solution.is_some()).count();
     if branch_solutions > 0 {
         warnings.push(format!(

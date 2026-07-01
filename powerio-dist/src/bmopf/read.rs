@@ -17,7 +17,8 @@ use crate::error::{Error, Result};
 use crate::model::{
     Configuration, DistBus, DistGenerator, DistLine, DistLineCode, DistLoad, DistLoadVoltageModel,
     DistNetwork, DistShunt, DistSourceFormat, DistSwitch, DistTransformer, Extras, Mat,
-    UntypedObject, VoltageSource, Winding, WindingConn,
+    UntypedObject, VoltageSource, Winding, WindingConn, n_winding_impedance_base,
+    n_winding_phase_count, pair_keys,
 };
 
 pub fn parse_bmopf_file(path: impl AsRef<Path>) -> Result<DistNetwork> {
@@ -61,6 +62,35 @@ fn f(v: &Value) -> f64 {
 
 fn floats(v: Option<&Value>) -> Option<Vec<f64>> {
     v?.as_array().map(|a| a.iter().map(f).collect())
+}
+
+fn first_float(v: Option<&Value>) -> Option<f64> {
+    match v? {
+        Value::Array(a) => a.first().map(f),
+        v => Some(f(v)),
+    }
+}
+
+/// Like [`first_float`], but the field is per-phase-terminal in the schema
+/// while powerio's model holds one value; warn when collapsing loses a
+/// genuine per-phase difference instead of dropping it silently.
+fn first_float_collapsed(v: Option<&Value>, what: &str, warnings: &mut Vec<String>) -> Option<f64> {
+    match v? {
+        Value::Array(a) => {
+            let vals: Vec<f64> = a.iter().map(f).collect();
+            if vals.windows(2).any(|w| w[0].to_bits() != w[1].to_bits()) {
+                warnings.push(format!(
+                    "{what}: per-phase-terminal bound is non-uniform; collapsed to the first entry"
+                ));
+            }
+            vals.first().copied()
+        }
+        v => Some(f(v)),
+    }
+}
+
+fn value_alias<'a>(o: &'a Map<String, Value>, primary: &str, legacy: &str) -> Option<&'a Value> {
+    o.get(primary).or_else(|| o.get(legacy))
 }
 
 fn strings(v: Option<&Value>) -> Vec<String> {
@@ -173,6 +203,13 @@ impl Reader<'_> {
         if let Some(name) = doc.get("name").and_then(Value::as_str) {
             self.net.name = Some(name.to_string());
         }
+        if let Some(frequency) =
+            first_float(doc.get("base_frequency")).or_else(|| first_float(doc.get("frequency")))
+            && frequency.is_finite()
+            && frequency > 0.0
+        {
+            self.net.base_frequency = frequency;
+        }
         for (key, value) in doc {
             let Value::Object(items) = value else {
                 continue;
@@ -224,8 +261,16 @@ impl Reader<'_> {
                 id: id.clone(),
                 terminals: strings(o.get("terminal_names")),
                 grounded: strings(o.get("perfectly_grounded_terminals")),
-                v_min: o.get("v_min").map(f),
-                v_max: o.get("v_max").map(f),
+                v_min: first_float_collapsed(
+                    o.get("v_min"),
+                    &format!("bus {id} v_min"),
+                    &mut self.net.warnings,
+                ),
+                v_max: first_float_collapsed(
+                    o.get("v_max"),
+                    &format!("bus {id} v_max"),
+                    &mut self.net.warnings,
+                ),
                 vpn_min: floats(o.get("vpn_min")),
                 vpn_max: floats(o.get("vpn_max")),
                 vpp_min: floats(o.get("vpp_min")),
@@ -550,12 +595,31 @@ impl Reader<'_> {
             };
             for (name, v) in items {
                 let Value::Object(o) = v else { continue };
-                let t = self.transformer(subtype, name, o);
-                self.net.transformers.push(t);
+                match subtype.as_str() {
+                    "n_winding" => {
+                        let t = self.n_winding_transformer(name, o);
+                        self.net.transformers.push(t);
+                    }
+                    "single_phase_autotransformer" | "open_delta_regulator" => {
+                        self.net.warnings.push(format!(
+                            "transformer {name}: subtype `{subtype}` is not typed yet; kept untyped"
+                        ));
+                        self.net.untyped.push(UntypedObject {
+                            class: format!("transformer.{subtype}"),
+                            name: name.clone(),
+                            props: vec![(None, v.to_string())],
+                        });
+                    }
+                    _ => {
+                        let t = self.transformer(subtype, name, o);
+                        self.net.transformers.push(t);
+                    }
+                }
             }
         }
     }
 
+    #[allow(clippy::too_many_lines)] // one BMOPF transformer record maps many optional schema aliases
     fn transformer(
         &mut self,
         subtype: &str,
@@ -568,14 +632,21 @@ impl Reader<'_> {
             "terminal_map_from",
             "terminal_map_to",
             "s_rating",
+            "v_nom_from",
+            "v_nom_to",
             "v_ref_from",
             "v_ref_to",
+            "g_no_load",
+            "b_no_load",
             "r_series",
             "x_series",
             "r_series_from",
             "r_series_to",
             "x_series_from",
             "x_series_to",
+            "tap",
+            "tap_min",
+            "tap_max",
         ];
         if !matches!(
             subtype,
@@ -587,12 +658,12 @@ impl Reader<'_> {
             ));
         }
         let s = o.get("s_rating").map_or(f64::NAN, f);
-        let v_from = o.get("v_ref_from").map_or(f64::NAN, f);
-        let v_to = o.get("v_ref_to").map_or(f64::NAN, f);
+        let v_from = value_alias(o, "v_nom_from", "v_ref_from").map_or(f64::NAN, f);
+        let v_to = value_alias(o, "v_nom_to", "v_ref_to").map_or(f64::NAN, f);
         let positive = |v: f64| v.is_finite() && v > 0.0;
         if !positive(s) || !positive(v_from) || !positive(v_to) {
             self.net.warnings.push(format!(
-                "transformer {name}: s_rating or v_ref missing or nonpositive; \
+                "transformer {name}: s_rating or v_nom missing or nonpositive; \
                  impedances read as zero"
             ));
         }
@@ -636,7 +707,7 @@ impl Reader<'_> {
                 v_ref: v_from,
                 s_rating: s,
                 r_pct: r_from_pct,
-                tap: 1.0,
+                tap: first_float(o.get("tap")).unwrap_or(1.0),
             },
             Winding {
                 bus: string(o.get("bus_to")),
@@ -656,6 +727,16 @@ impl Reader<'_> {
             &mut self.net.warnings,
             &[],
         );
+        for key in ["tap_min", "tap_max"] {
+            if let Some(v) = o.get(key) {
+                extras.insert(key.into(), v.clone());
+            }
+        }
+        for key in ["g_no_load", "b_no_load"] {
+            if let Some(v) = o.get(key) {
+                extras.insert(key.into(), v.clone());
+            }
+        }
         // Windings alone cannot tell single_phase from center_tap back
         // apart; record the subtype for the writer.
         extras.insert("bmopf_subtype".into(), subtype.into());
@@ -664,6 +745,99 @@ impl Reader<'_> {
             windings,
             xsc_pct: vec![xsc],
             phases,
+            extras,
+        }
+    }
+
+    fn n_winding_transformer(&mut self, name: &str, o: &Map<String, Value>) -> DistTransformer {
+        let known = ["windings", "x_sc", "s_rating", "g_no_load", "b_no_load"];
+        let s = o.get("s_rating").map_or(f64::NAN, f);
+        let mut windings = Vec::new();
+        if let Some(items) = o.get("windings").and_then(Value::as_array) {
+            for (idx, item) in items.iter().enumerate() {
+                let Some(w) = item.as_object() else {
+                    self.net.warnings.push(format!(
+                        "transformer {name}: winding {} is not an object; skipped",
+                        idx + 1
+                    ));
+                    continue;
+                };
+                let terminal_map = strings(w.get("terminal_map"));
+                let bmopf_v_nom = value_alias(w, "v_nom", "v_ref").map_or(f64::NAN, f);
+                let r_winding = w.get("r_winding").map_or(0.0, f);
+                let connection = w
+                    .get("configuration")
+                    .or_else(|| w.get("connection"))
+                    .and_then(Value::as_str)
+                    .unwrap_or("WYE")
+                    .to_ascii_uppercase();
+                if !matches!(connection.as_str(), "WYE" | "DELTA") {
+                    self.net.warnings.push(format!(
+                        "transformer {name}: winding {} connection `{connection}` is not WYE or DELTA; read as WYE",
+                        idx + 1
+                    ));
+                }
+                let conn = if connection == "DELTA" {
+                    WindingConn::Delta
+                } else {
+                    WindingConn::Wye
+                };
+                let r_pct = if let Some(base_z) =
+                    n_winding_base_from_bmopf(conn, &terminal_map, bmopf_v_nom, s)
+                {
+                    r_winding / base_z * 100.0
+                } else {
+                    0.0
+                };
+                windings.push(Winding {
+                    bus: string(w.get("bus")),
+                    terminal_map: terminal_map.clone(),
+                    conn,
+                    v_ref: n_winding_internal_v_ref(conn, &terminal_map, bmopf_v_nom),
+                    s_rating: s,
+                    r_pct,
+                    tap: 1.0,
+                });
+            }
+        }
+        let base_z = windings
+            .first()
+            .and_then(|w| n_winding_base_from_internal(w, s))
+            .unwrap_or(f64::NAN);
+        let mut xsc_pct = Vec::new();
+        let x_sc = o.get("x_sc").and_then(Value::as_object);
+        for (i, j) in pair_keys(windings.len()) {
+            let key = format!("{}_{}", i + 1, j + 1);
+            let x = x_sc.and_then(|m| m.get(&key)).map_or(0.0, f);
+            xsc_pct.push(if base_z.is_finite() && base_z > 0.0 {
+                x / base_z * 100.0
+            } else {
+                0.0
+            });
+        }
+        let mut extras = take_extras(
+            o,
+            &known,
+            &format!("transformer {name}"),
+            &mut self.net.warnings,
+            &[],
+        );
+        extras.insert("bmopf_subtype".into(), "n_winding".into());
+        for key in ["g_no_load", "b_no_load"] {
+            if let Some(v) = o.get(key) {
+                extras.insert(key.into(), v.clone());
+            }
+        }
+        DistTransformer {
+            name: name.to_string(),
+            phases: windings
+                .iter()
+                .map(|w| n_winding_phase_count(w.conn, &w.terminal_map))
+                .max()
+                .unwrap_or(1)
+                .max(1),
+            windings,
+            xsc_pct,
             extras,
         }
     }
@@ -697,4 +871,38 @@ fn expand_center_tap_windings(subtype: &str, windings: &mut Vec<Winding>) {
     };
     windings.push(half);
     windings.push(other_half);
+}
+
+fn n_winding_internal_v_ref(conn: WindingConn, terminal_map: &[String], bmopf_v_nom: f64) -> f64 {
+    if conn == WindingConn::Wye && n_winding_phase_count(conn, terminal_map) >= 2 {
+        bmopf_v_nom * 3f64.sqrt()
+    } else {
+        bmopf_v_nom
+    }
+}
+
+fn n_winding_bmopf_v_nom_from_internal(w: &Winding) -> f64 {
+    if w.conn == WindingConn::Wye && n_winding_phase_count(w.conn, &w.terminal_map) >= 2 {
+        w.v_ref / 3f64.sqrt()
+    } else {
+        w.v_ref
+    }
+}
+
+fn n_winding_base_from_bmopf(
+    conn: WindingConn,
+    terminal_map: &[String],
+    bmopf_v_nom: f64,
+    s: f64,
+) -> Option<f64> {
+    n_winding_impedance_base(n_winding_phase_count(conn, terminal_map), bmopf_v_nom, s)
+}
+
+fn n_winding_base_from_internal(w: &Winding, s: f64) -> Option<f64> {
+    n_winding_base_from_bmopf(
+        w.conn,
+        &w.terminal_map,
+        n_winding_bmopf_v_nom_from_internal(w),
+        s,
+    )
 }

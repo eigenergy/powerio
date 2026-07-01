@@ -16,8 +16,12 @@ use crate::io::mtx::{write_mtx, write_vector_mtx};
 use crate::matrix::incidence::{DcConvention, build_flow_map, build_incidence};
 use crate::matrix::laplacian::{build_weighted_laplacian, ground_at_each, reference_indicator};
 use crate::matrix::opf::{Units, build_opf_instance};
+use crate::matrix::{BuildOptions, ZeroImpedanceRule, ZeroImpedanceSkips};
 use crate::network::Network;
 use crate::{GenCostPatch, MissingGenCostPolicy};
+
+const DCOPF_SCHEMA: &str = "powerio.dcopf";
+const DCOPF_SCHEMA_VERSION: &str = "0.1.0";
 
 #[derive(Debug, Clone)]
 pub struct DcOpfOptions {
@@ -46,16 +50,29 @@ pub struct DcOpfOutputs {
 
 #[derive(Serialize)]
 struct DcOpfMeta {
+    schema: &'static str,
+    schema_version: &'static str,
     case_name: String,
     base_mva: f64,
+    dimensions: DcOpfDimensions,
+    index_base: IndexBaseMeta,
+    dc_convention: DcConvention,
+    build_options: BuildOptions,
+    zero_impedance: ZeroImpedanceMeta,
+    grounding: GroundingMeta,
+    operators: Vec<OperatorMeta>,
+    /// Backward compatible aliases retained for current readers.
     n: usize,
+    /// Backward compatible alias for the number of incidence columns.
     m: usize,
+    /// Backward compatible alias for in-service generators.
     n_gen: usize,
     /// Dense indices of every grounded reference (slack) bus. Several entries
     /// mean one reference per island, or several reference buses fixed in one
     /// island. The solver grounds the Laplacian at all of them, matching
     /// `L_grounded` and `e_r`.
     reference_buses: Vec<usize>,
+    /// Backward compatible alias for `dc_convention`.
     convention: DcConvention,
     units: Units,
     cost_policy: MissingGenCostPolicy,
@@ -63,6 +80,49 @@ struct DcOpfMeta {
     patched_gen_costs: usize,
     files: Vec<String>,
     powerio_version: String,
+}
+
+#[derive(Serialize)]
+#[allow(clippy::struct_field_names)]
+struct DcOpfDimensions {
+    n_buses: usize,
+    n_source_branches: usize,
+    n_branch_columns: usize,
+    n_generators: usize,
+    n_reference_buses: usize,
+    n_grounded_buses: usize,
+}
+
+#[derive(Serialize)]
+struct IndexBaseMeta {
+    dense: usize,
+    matrix_market: usize,
+}
+
+#[derive(Serialize)]
+struct ZeroImpedanceMeta {
+    skip: bool,
+    rule: ZeroImpedanceRule,
+    skipped: ZeroImpedanceSkips,
+}
+
+#[derive(Serialize)]
+struct GroundingMeta {
+    reference_buses: Vec<usize>,
+    removed_rows_and_columns: Vec<usize>,
+    grounded_operator: &'static str,
+    reference_selector: &'static str,
+}
+
+#[derive(Serialize)]
+struct OperatorMeta {
+    name: &'static str,
+    file: &'static str,
+    kind: &'static str,
+    rows: usize,
+    cols: usize,
+    index_space: &'static str,
+    units: &'static str,
 }
 
 /// Build and write the DC OPF bundle into `out_dir/<case>_dcopf/`.
@@ -81,7 +141,8 @@ pub fn write_dcopf_bundle(
 
     view.check_reference_coverage()?;
     let refs = view.reference_bus_indices();
-    let inc = build_incidence(&view, opts.convention)?;
+    let build_options = BuildOptions::default();
+    let inc = build_incidence(&view, opts.convention, &build_options)?;
     let l = build_weighted_laplacian(&inc.a, &inc.b);
     let l_grounded = ground_at_each(&l, &refs);
     let flow = build_flow_map(&inc.a, &inc.b);
@@ -117,8 +178,36 @@ pub fn write_dcopf_bundle(
     put_vec(&dir, "pmin_gen.mtx", &opf.gen_costs.pmin, &mut files)?;
 
     let meta = DcOpfMeta {
+        schema: DCOPF_SCHEMA,
+        schema_version: DCOPF_SCHEMA_VERSION,
         case_name: view.name().to_string(),
         base_mva: view.base_mva(),
+        dimensions: DcOpfDimensions {
+            n_buses: view.n(),
+            n_source_branches: view.branches().len(),
+            n_branch_columns: inc.m(),
+            n_generators: opf.n_gen(),
+            n_reference_buses: refs.len(),
+            n_grounded_buses: view.n() - refs.len(),
+        },
+        index_base: IndexBaseMeta {
+            dense: 0,
+            matrix_market: 1,
+        },
+        dc_convention: opts.convention,
+        build_options: build_options.clone(),
+        zero_impedance: ZeroImpedanceMeta {
+            skip: build_options.skip_zero_impedance,
+            rule: ZeroImpedanceRule::Reactance,
+            skipped: inc.skipped_zero_impedance.clone(),
+        },
+        grounding: GroundingMeta {
+            reference_buses: refs.clone(),
+            removed_rows_and_columns: refs.clone(),
+            grounded_operator: "L_grounded",
+            reference_selector: "e_r",
+        },
+        operators: operator_meta(view.n(), inc.m(), refs.len(), opf.n_gen()),
         n: view.n(),
         m: inc.m(),
         n_gen: opf.n_gen(),
@@ -140,6 +229,195 @@ pub fn write_dcopf_bundle(
     files.push(meta_path);
 
     Ok(DcOpfOutputs { dir, files })
+}
+
+#[allow(clippy::too_many_lines)]
+fn operator_meta(n: usize, m: usize, n_ref: usize, n_gen: usize) -> Vec<OperatorMeta> {
+    let n_grounded = n - n_ref;
+    vec![
+        op(
+            "signed_incidence",
+            "A.mtx",
+            "matrix",
+            n,
+            m,
+            "bus_by_branch",
+            "unitless",
+        ),
+        op(
+            "branch_susceptance",
+            "b.mtx",
+            "vector",
+            m,
+            1,
+            "branch",
+            "per_unit_susceptance",
+        ),
+        op(
+            "weighted_laplacian",
+            "L.mtx",
+            "matrix",
+            n,
+            n,
+            "bus_by_bus",
+            "per_unit_susceptance",
+        ),
+        op(
+            "grounded_laplacian",
+            "L_grounded.mtx",
+            "matrix",
+            n_grounded,
+            n_grounded,
+            "grounded_bus_by_grounded_bus",
+            "per_unit_susceptance",
+        ),
+        op(
+            "flow_map",
+            "BAt.mtx",
+            "matrix",
+            m,
+            n,
+            "branch_by_bus",
+            "per_unit_susceptance",
+        ),
+        op(
+            "generator_to_bus",
+            "Cg.mtx",
+            "matrix",
+            n,
+            n_gen,
+            "bus_by_generator",
+            "unitless",
+        ),
+        op(
+            "phase_shift_injection",
+            "p_shift.mtx",
+            "vector",
+            n,
+            1,
+            "bus",
+            "per_unit_power",
+        ),
+        op(
+            "reference_selector",
+            "e_r.mtx",
+            "vector",
+            n,
+            1,
+            "bus",
+            "indicator",
+        ),
+        op(
+            "bus_cost_quadratic",
+            "q.mtx",
+            "vector",
+            n,
+            1,
+            "bus",
+            "selected_cost_units",
+        ),
+        op(
+            "bus_cost_linear",
+            "c.mtx",
+            "vector",
+            n,
+            1,
+            "bus",
+            "selected_cost_units",
+        ),
+        op(
+            "bus_generation_upper",
+            "pmax.mtx",
+            "vector",
+            n,
+            1,
+            "bus",
+            "selected_power_units",
+        ),
+        op(
+            "bus_generation_lower",
+            "pmin.mtx",
+            "vector",
+            n,
+            1,
+            "bus",
+            "selected_power_units",
+        ),
+        op(
+            "branch_flow_limit",
+            "fmax.mtx",
+            "vector",
+            m,
+            1,
+            "branch",
+            "selected_power_units",
+        ),
+        op(
+            "bus_load",
+            "pd.mtx",
+            "vector",
+            n,
+            1,
+            "bus",
+            "selected_power_units",
+        ),
+        op(
+            "generator_cost_quadratic",
+            "q_gen.mtx",
+            "vector",
+            n_gen,
+            1,
+            "generator",
+            "selected_cost_units",
+        ),
+        op(
+            "generator_cost_linear",
+            "c_gen.mtx",
+            "vector",
+            n_gen,
+            1,
+            "generator",
+            "selected_cost_units",
+        ),
+        op(
+            "generator_upper",
+            "pmax_gen.mtx",
+            "vector",
+            n_gen,
+            1,
+            "generator",
+            "selected_power_units",
+        ),
+        op(
+            "generator_lower",
+            "pmin_gen.mtx",
+            "vector",
+            n_gen,
+            1,
+            "generator",
+            "selected_power_units",
+        ),
+    ]
+}
+
+fn op(
+    name: &'static str,
+    file: &'static str,
+    kind: &'static str,
+    rows: usize,
+    cols: usize,
+    index_space: &'static str,
+    units: &'static str,
+) -> OperatorMeta {
+    OperatorMeta {
+        name,
+        file,
+        kind,
+        rows,
+        cols,
+        index_space,
+        units,
+    }
 }
 
 fn put_mat(dir: &Path, name: &str, m: &CsMat<f64>, files: &mut Vec<PathBuf>) -> Result<()> {

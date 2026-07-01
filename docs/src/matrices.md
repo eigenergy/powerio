@@ -67,12 +67,14 @@ are returned as warnings.
 - **B' scheme.** `Scheme` selects between the two fast decoupled load flow
   variants for B': `Xb` weights a branch by \\(1/x\\) (series resistance ignored),
   `Bx` (the default) by \\(x/(r^2 + x^2)\\).
-- **Zero impedance branches.** B' skips them by default
-  (`BuildOptions::skip_zero_impedance`; set it `false` to get
-  `Error::ZeroImpedance`). \\(Y_{\mathrm{bus}}\\) scatters no admittance for them
-  (\\(r^2 + x^2 = 0\\))
-  and the incidence builder drops them, both unconditionally. The gridfm export
-  counts the drops (`dropped_zero_impedance` in `gridfm_meta.json`).
+- **Zero impedance branches.** `BuildOptions::skip_zero_impedance` controls the
+  builders whose branch denominator can be zero. The default `true` skips the
+  branch and records the skipped source branch rows in `MatrixStats` as
+  `skipped_zero_impedance` and `skipped_zero_impedance_branches`; `false`
+  returns `Error::ZeroImpedance`. Full AC admittance builders use
+  \\(r^2 + x^2\\); DC incidence and reactance only FDPF variants use \\(x\\).
+  The gridfm export still zeros its admittance and flow columns for these rows
+  and records `dropped_zero_impedance` in `gridfm_meta.json`.
 - **Reference coverage.** `IndexedNetwork::check_reference_coverage` verifies that
   every in-service island has a reference bus.
 - **Susceptance conventions for the DC approximation.** `DcConvention` selects
@@ -90,6 +92,13 @@ Matrices write as Matrix Market files or stay in memory. A symmetric matrix is
 stored as its lower triangle with the `symmetric` header and 1-based indices
 (`io::mtx::write_mtx`). The `sensitivities` and `dcopf` CLI subcommands bundle
 the relevant family with a JSON manifest.
+
+The standard case solver property fixture lives at
+`powerio-matrix/tests/fixtures/solver_matrix_stats.json`. It records B',
+B'', and `ybus_imag` stats for `case9`, `case14`, `case30`, `case57`, and
+`case118`: `n`, `nnz`, min diagonal, M-matrix sign pattern, diagonal dominance
+margin, zero impedance skips, row sum checks, SPD checks, and a condition
+estimate when the solver input is SPD.
 
 `IndexedNetwork::to_petgraph` returns the network as an undirected
 [petgraph](https://docs.rs/petgraph) graph, one node per bus and one edge per
