@@ -63,6 +63,17 @@ fn floats(v: Option<&Value>) -> Option<Vec<f64>> {
     v?.as_array().map(|a| a.iter().map(f).collect())
 }
 
+fn first_float(v: Option<&Value>) -> Option<f64> {
+    match v? {
+        Value::Array(a) => a.first().map(f),
+        v => Some(f(v)),
+    }
+}
+
+fn value_alias<'a>(o: &'a Map<String, Value>, primary: &str, legacy: &str) -> Option<&'a Value> {
+    o.get(primary).or_else(|| o.get(legacy))
+}
+
 fn strings(v: Option<&Value>) -> Vec<String> {
     v.and_then(Value::as_array)
         .map(|a| {
@@ -173,6 +184,13 @@ impl Reader<'_> {
         if let Some(name) = doc.get("name").and_then(Value::as_str) {
             self.net.name = Some(name.to_string());
         }
+        if let Some(frequency) =
+            first_float(doc.get("base_frequency")).or_else(|| first_float(doc.get("frequency")))
+            && frequency.is_finite()
+            && frequency > 0.0
+        {
+            self.net.base_frequency = frequency;
+        }
         for (key, value) in doc {
             let Value::Object(items) = value else {
                 continue;
@@ -224,8 +242,8 @@ impl Reader<'_> {
                 id: id.clone(),
                 terminals: strings(o.get("terminal_names")),
                 grounded: strings(o.get("perfectly_grounded_terminals")),
-                v_min: o.get("v_min").map(f),
-                v_max: o.get("v_max").map(f),
+                v_min: first_float(o.get("v_min")),
+                v_max: first_float(o.get("v_max")),
                 vpn_min: floats(o.get("vpn_min")),
                 vpn_max: floats(o.get("vpn_max")),
                 vpp_min: floats(o.get("vpp_min")),
@@ -550,8 +568,30 @@ impl Reader<'_> {
             };
             for (name, v) in items {
                 let Value::Object(o) = v else { continue };
-                let t = self.transformer(subtype, name, o);
-                self.net.transformers.push(t);
+                match subtype.as_str() {
+                    "single_phase" | "center_tap" | "wye_delta" | "delta_wye" => {
+                        let t = self.transformer(subtype, name, o);
+                        self.net.transformers.push(t);
+                    }
+                    "n_winding" => {
+                        let t = self.n_winding_transformer(name, o);
+                        self.net.transformers.push(t);
+                    }
+                    "single_phase_autotransformer" | "open_delta_regulator" => {
+                        self.net.warnings.push(format!(
+                            "transformer {name}: subtype `{subtype}` is not typed yet; kept untyped"
+                        ));
+                        self.net.untyped.push(UntypedObject {
+                            class: format!("transformer.{subtype}"),
+                            name: name.clone(),
+                            props: vec![(None, v.to_string())],
+                        });
+                    }
+                    _ => {
+                        let t = self.transformer(subtype, name, o);
+                        self.net.transformers.push(t);
+                    }
+                }
             }
         }
     }
@@ -568,14 +608,21 @@ impl Reader<'_> {
             "terminal_map_from",
             "terminal_map_to",
             "s_rating",
+            "v_nom_from",
+            "v_nom_to",
             "v_ref_from",
             "v_ref_to",
+            "g_no_load",
+            "b_no_load",
             "r_series",
             "x_series",
             "r_series_from",
             "r_series_to",
             "x_series_from",
             "x_series_to",
+            "tap",
+            "tap_min",
+            "tap_max",
         ];
         if !matches!(
             subtype,
@@ -587,12 +634,12 @@ impl Reader<'_> {
             ));
         }
         let s = o.get("s_rating").map_or(f64::NAN, f);
-        let v_from = o.get("v_ref_from").map_or(f64::NAN, f);
-        let v_to = o.get("v_ref_to").map_or(f64::NAN, f);
+        let v_from = value_alias(o, "v_nom_from", "v_ref_from").map_or(f64::NAN, f);
+        let v_to = value_alias(o, "v_nom_to", "v_ref_to").map_or(f64::NAN, f);
         let positive = |v: f64| v.is_finite() && v > 0.0;
         if !positive(s) || !positive(v_from) || !positive(v_to) {
             self.net.warnings.push(format!(
-                "transformer {name}: s_rating or v_ref missing or nonpositive; \
+                "transformer {name}: s_rating or v_nom missing or nonpositive; \
                  impedances read as zero"
             ));
         }
@@ -636,7 +683,7 @@ impl Reader<'_> {
                 v_ref: v_from,
                 s_rating: s,
                 r_pct: r_from_pct,
-                tap: 1.0,
+                tap: first_float(o.get("tap")).unwrap_or(1.0),
             },
             Winding {
                 bus: string(o.get("bus_to")),
@@ -656,6 +703,16 @@ impl Reader<'_> {
             &mut self.net.warnings,
             &[],
         );
+        for key in ["tap_min", "tap_max"] {
+            if let Some(v) = o.get(key) {
+                extras.insert(key.into(), v.clone());
+            }
+        }
+        for key in ["g_no_load", "b_no_load"] {
+            if let Some(v) = o.get(key) {
+                extras.insert(key.into(), v.clone());
+            }
+        }
         // Windings alone cannot tell single_phase from center_tap back
         // apart; record the subtype for the writer.
         extras.insert("bmopf_subtype".into(), subtype.into());
@@ -664,6 +721,99 @@ impl Reader<'_> {
             windings,
             xsc_pct: vec![xsc],
             phases,
+            extras,
+        }
+    }
+
+    fn n_winding_transformer(&mut self, name: &str, o: &Map<String, Value>) -> DistTransformer {
+        let known = ["windings", "x_sc", "s_rating", "g_no_load", "b_no_load"];
+        let s = o.get("s_rating").map_or(f64::NAN, f);
+        let mut windings = Vec::new();
+        if let Some(items) = o.get("windings").and_then(Value::as_array) {
+            for (idx, item) in items.iter().enumerate() {
+                let Some(w) = item.as_object() else {
+                    self.net.warnings.push(format!(
+                        "transformer {name}: winding {} is not an object; skipped",
+                        idx + 1
+                    ));
+                    continue;
+                };
+                let terminal_map = strings(w.get("terminal_map"));
+                let bmopf_v_nom = value_alias(w, "v_nom", "v_ref").map_or(f64::NAN, f);
+                let r_winding = w.get("r_winding").map_or(0.0, f);
+                let connection = w
+                    .get("configuration")
+                    .or_else(|| w.get("connection"))
+                    .and_then(Value::as_str)
+                    .unwrap_or("WYE")
+                    .to_ascii_uppercase();
+                if !matches!(connection.as_str(), "WYE" | "DELTA") {
+                    self.net.warnings.push(format!(
+                        "transformer {name}: winding {} connection `{connection}` is not WYE or DELTA; read as WYE",
+                        idx + 1
+                    ));
+                }
+                let conn = if connection == "DELTA" {
+                    WindingConn::Delta
+                } else {
+                    WindingConn::Wye
+                };
+                let r_pct = if let Some(base_z) =
+                    n_winding_base_from_bmopf(conn, &terminal_map, bmopf_v_nom, s)
+                {
+                    r_winding / base_z * 100.0
+                } else {
+                    0.0
+                };
+                windings.push(Winding {
+                    bus: string(w.get("bus")),
+                    terminal_map: terminal_map.clone(),
+                    conn,
+                    v_ref: n_winding_internal_v_ref(conn, &terminal_map, bmopf_v_nom),
+                    s_rating: s,
+                    r_pct,
+                    tap: 1.0,
+                });
+            }
+        }
+        let base_z = windings
+            .first()
+            .and_then(|w| n_winding_base_from_internal(w, s))
+            .unwrap_or(f64::NAN);
+        let mut xsc_pct = Vec::new();
+        let x_sc = o.get("x_sc").and_then(Value::as_object);
+        for (i, j) in pair_keys(windings.len()) {
+            let key = format!("{}_{}", i + 1, j + 1);
+            let x = x_sc.and_then(|m| m.get(&key)).map_or(0.0, f);
+            xsc_pct.push(if base_z.is_finite() && base_z > 0.0 {
+                x / base_z * 100.0
+            } else {
+                0.0
+            });
+        }
+        let mut extras = take_extras(
+            o,
+            &known,
+            &format!("transformer {name}"),
+            &mut self.net.warnings,
+            &[],
+        );
+        extras.insert("bmopf_subtype".into(), "n_winding".into());
+        for key in ["g_no_load", "b_no_load"] {
+            if let Some(v) = o.get(key) {
+                extras.insert(key.into(), v.clone());
+            }
+        }
+        DistTransformer {
+            name: name.to_string(),
+            phases: windings
+                .iter()
+                .map(|w| n_winding_phase_count(w.conn, &w.terminal_map))
+                .max()
+                .unwrap_or(1)
+                .max(1),
+            windings,
+            xsc_pct,
             extras,
         }
     }
@@ -697,4 +847,63 @@ fn expand_center_tap_windings(subtype: &str, windings: &mut Vec<Winding>) {
     };
     windings.push(half);
     windings.push(other_half);
+}
+
+fn n_winding_phase_count(conn: WindingConn, terminal_map: &[String]) -> usize {
+    match conn {
+        WindingConn::Wye => terminal_map.len().saturating_sub(1).max(1),
+        WindingConn::Delta => {
+            if terminal_map.len() == 2 {
+                1
+            } else {
+                terminal_map.len().max(1)
+            }
+        }
+    }
+}
+
+fn n_winding_internal_v_ref(conn: WindingConn, terminal_map: &[String], bmopf_v_nom: f64) -> f64 {
+    if conn == WindingConn::Wye && n_winding_phase_count(conn, terminal_map) >= 2 {
+        bmopf_v_nom * 3f64.sqrt()
+    } else {
+        bmopf_v_nom
+    }
+}
+
+fn n_winding_bmopf_v_nom_from_internal(w: &Winding) -> f64 {
+    if w.conn == WindingConn::Wye && n_winding_phase_count(w.conn, &w.terminal_map) >= 2 {
+        w.v_ref / 3f64.sqrt()
+    } else {
+        w.v_ref
+    }
+}
+
+fn n_winding_base_from_bmopf(
+    conn: WindingConn,
+    terminal_map: &[String],
+    bmopf_v_nom: f64,
+    s: f64,
+) -> Option<f64> {
+    let phases = n_winding_phase_count(conn, terminal_map) as f64;
+    (phases > 0.0 && bmopf_v_nom.is_finite() && bmopf_v_nom > 0.0 && s.is_finite() && s > 0.0)
+        .then_some(phases * bmopf_v_nom * bmopf_v_nom / s)
+}
+
+fn n_winding_base_from_internal(w: &Winding, s: f64) -> Option<f64> {
+    n_winding_base_from_bmopf(
+        w.conn,
+        &w.terminal_map,
+        n_winding_bmopf_v_nom_from_internal(w),
+        s,
+    )
+}
+
+fn pair_keys(n: usize) -> Vec<(usize, usize)> {
+    let mut pairs = Vec::new();
+    for i in 0..n {
+        for j in i + 1..n {
+            pairs.push((i, j));
+        }
+    }
+    pairs
 }

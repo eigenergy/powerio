@@ -285,6 +285,14 @@ fn source_phases(net: &DistNetwork, vs: &crate::model::VoltageSource) -> usize {
     if let Some(p) = extras_usize(&vs.extras, "phases") {
         return p.max(1);
     }
+    let energized = vs.v_magnitude.iter().filter(|&&v| v > 0.0).count();
+    if energized > 0
+        && vs.v_magnitude.len() == vs.terminal_map.len()
+        && energized + 1 == vs.v_magnitude.len()
+        && vs.v_magnitude.last().is_some_and(|&v| v == 0.0)
+    {
+        return energized;
+    }
     let grounded = net
         .buses
         .iter()
@@ -895,7 +903,7 @@ impl DssWriter {
             self.check_name("load", &l.name);
             let phases =
                 self.element_phases(&l.extras, &l.terminal_map, l.configuration, "load", &l.name);
-            let conn = element_conn(&l.extras, l.configuration);
+            let conn = self.element_conn(&l.extras, l.configuration, &l.bus, &l.terminal_map);
             // The reader's nconds: a 3 phase delta has no neutral conductor,
             // every other connection carries phases + 1.
             let nconds = if conn == "delta" && phases == 3 {
@@ -1058,6 +1066,37 @@ impl DssWriter {
             v_phase
         };
         Some(v / 1e3)
+    }
+
+    /// Emitted `conn=`: delta for typed delta, for a stashed DSS delta token,
+    /// and for a single phase two terminal map that does not include a grounded
+    /// return conductor.
+    fn element_conn(
+        &self,
+        extras: &Extras,
+        configuration: Configuration,
+        bus: &str,
+        terminal_map: &[String],
+    ) -> &'static str {
+        let stash_delta = extras
+            .get("conn")
+            .and_then(|v| v.as_str())
+            .is_some_and(|t| {
+                t.to_ascii_lowercase().starts_with('d') || t.eq_ignore_ascii_case("ll")
+            });
+        let has_grounded_return = self
+            .grounded
+            .get(&bus.to_ascii_lowercase())
+            .is_some_and(|g| terminal_map.iter().any(|t| g.contains(t)));
+        match configuration {
+            Configuration::Delta => "delta",
+            Configuration::SinglePhase
+                if stash_delta || (terminal_map.len() == 2 && !has_grounded_return) =>
+            {
+                "delta"
+            }
+            _ => "wye",
+        }
     }
 
     fn write_impedance_shunt(&mut self, sh: &crate::model::DistShunt, phases: usize) {
@@ -1247,7 +1286,7 @@ impl DssWriter {
                 "generator",
                 &g.name,
             );
-            let conn = element_conn(&g.extras, g.configuration);
+            let conn = self.element_conn(&g.extras, g.configuration, &g.bus, &g.terminal_map);
             let nconds = if conn == "delta" && phases == 3 {
                 phases
             } else {
@@ -1294,21 +1333,6 @@ impl DssWriter {
             s.push_str(&self.extras_tail("generator", &g.name, &extras));
             self.line_out(&s);
         }
-    }
-}
-
-/// Emitted `conn=`: delta for a typed delta, and for a single phase
-/// element whose stashed conn token was delta (the reader types 1 phase
-/// delta as `SinglePhase`, which would otherwise re-emit as wye).
-fn element_conn(extras: &Extras, configuration: Configuration) -> &'static str {
-    let stash_delta = extras
-        .get("conn")
-        .and_then(|v| v.as_str())
-        .is_some_and(|t| t.to_ascii_lowercase().starts_with('d') || t.eq_ignore_ascii_case("ll"));
-    match configuration {
-        Configuration::Delta => "delta",
-        Configuration::SinglePhase if stash_delta => "delta",
-        _ => "wye",
     }
 }
 

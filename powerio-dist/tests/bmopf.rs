@@ -33,11 +33,13 @@ fn errors(validator: &jsonschema::Validator, text: &str) -> Vec<String> {
 }
 
 #[test]
-fn vendored_examples_validate() {
+fn vendored_examples_validate_after_canonicalization() {
     let v = schema_validator();
     for example in ["bmopf/example_ieee13.json", "bmopf/example_enwl_n1_f2.json"] {
         let text = std::fs::read_to_string(fixture(example)).unwrap();
-        assert_eq!(errors(&v, &text), Vec::<String>::new(), "{example}");
+        let net = parse_bmopf_str(&text).unwrap();
+        let out = write_bmopf_json(&net);
+        assert_eq!(errors(&v, &out.text), Vec::<String>::new(), "{example}");
     }
 }
 
@@ -383,6 +385,389 @@ fn fixed_bmopf_generators_with_cost_stay_generators() {
 }
 
 #[test]
+fn raw_ibr_and_control_profile_tables_round_trip() {
+    let v = schema_validator();
+    let net = parse_bmopf_str(
+        r#"{
+          "bus": {
+            "b": {"terminal_names": ["1", "2", "3", "n"], "perfectly_grounded_terminals": ["n"]}
+          },
+          "voltage_source": {
+            "source": {
+              "v_magnitude": [240.0, 240.0, 240.0, 0.0],
+              "v_angle": [0.0, -2.0943951023931953, 2.0943951023931953, 0.0],
+              "bus": "b",
+              "terminal_map": ["1", "2", "3", "n"]
+            }
+          },
+          "control_profile": {
+            "cp": {"power_factor": {"pf": 0.98}}
+          },
+          "ibr": {
+            "pv": {
+              "bus": "b",
+              "terminal_map": ["1", "2", "3", "n"],
+              "topology": "FOUR_LEG",
+              "prime_mover": "PV",
+              "s_max": [1000.0, 1000.0, 1000.0],
+              "control_profile": "cp"
+            }
+          }
+        }"#,
+    )
+    .unwrap();
+
+    let out = write_bmopf_json(&net);
+
+    assert_eq!(errors(&v, &out.text), Vec::<String>::new());
+    let doc: serde_json::Value = serde_json::from_str(&out.text).unwrap();
+    assert_eq!(doc["ibr"]["pv"]["control_profile"], "cp");
+    assert_eq!(doc["control_profile"]["cp"]["power_factor"]["pf"], 0.98);
+    assert!(
+        out.warnings
+            .iter()
+            .all(|w| !w.contains("ibr") && !w.contains("control_profile")),
+        "{:?}",
+        out.warnings
+    );
+}
+
+#[test]
+fn voltage_source_cost_round_trips_as_extra() {
+    let net = parse_bmopf_str(
+        r#"{
+          "bus": {"b": {"terminal_names": ["1"]}},
+          "voltage_source": {
+            "source": {
+              "v_magnitude": [240.0],
+              "v_angle": [0.0],
+              "bus": "b",
+              "terminal_map": ["1"],
+              "cost": [1.0]
+            }
+          }
+        }"#,
+    )
+    .unwrap();
+
+    let out = write_bmopf_json(&net);
+
+    let doc: serde_json::Value = serde_json::from_str(&out.text).unwrap();
+    assert_eq!(
+        doc["voltage_source"]["source"]["cost"],
+        serde_json::json!([1.0])
+    );
+    assert!(
+        out.warnings.iter().all(|w| !w.contains("cost")),
+        "{:?}",
+        out.warnings
+    );
+}
+
+#[test]
+fn transformer_tap_fields_round_trip_through_bmopf() {
+    let v = schema_validator();
+    let net = parse_bmopf_str(
+        r#"{
+          "bus": {
+            "a": {"terminal_names": ["1", "n"], "perfectly_grounded_terminals": ["n"]},
+            "b": {"terminal_names": ["1", "n"], "perfectly_grounded_terminals": ["n"]}
+          },
+          "voltage_source": {
+            "source": {"v_magnitude": [7200.0, 0.0], "v_angle": [0.0, 0.0], "bus": "a", "terminal_map": ["1", "n"]}
+          },
+          "transformer": {
+            "single_phase": {
+              "t": {
+                "bus_from": "a", "bus_to": "b",
+                "terminal_map_from": ["1", "n"], "terminal_map_to": ["1", "n"],
+                "s_rating": 25000.0,
+                "v_nom_from": 7200.0, "v_nom_to": 240.0,
+                "r_series_from": 1.0, "r_series_to": 0.01,
+                "x_series_from": 4.0, "x_series_to": 0.0,
+                "tap": 1.05, "tap_min": 0.9, "tap_max": 1.1,
+                "g_no_load": 0.000001,
+                "b_no_load": 0.0
+              }
+            }
+          }
+        }"#,
+    )
+    .unwrap();
+
+    assert!((net.transformers[0].windings[0].tap - 1.05).abs() < 1e-12);
+    let out = write_bmopf_json(&net);
+    assert_eq!(errors(&v, &out.text), Vec::<String>::new());
+    let doc: serde_json::Value = serde_json::from_str(&out.text).unwrap();
+    let t = &doc["transformer"]["single_phase"]["t"];
+    assert_eq!(t["tap"], 1.05);
+    assert_eq!(t["tap_min"], 0.9);
+    assert_eq!(t["tap_max"], 1.1);
+    assert_eq!(t["g_no_load"], serde_json::json!(0.000001));
+    assert_eq!(t["b_no_load"], serde_json::json!(0.0));
+}
+
+#[test]
+fn n_winding_transformer_round_trips_through_bmopf() {
+    let v = schema_validator();
+    let net = parse_bmopf_str(
+        r#"{
+          "bus": {
+            "a": {"terminal_names": ["1", "2", "3"]},
+            "b": {"terminal_names": ["1", "2", "3", "n"], "perfectly_grounded_terminals": ["n"]},
+            "c": {"terminal_names": ["1", "2", "3", "n"], "perfectly_grounded_terminals": ["n"]}
+          },
+          "voltage_source": {
+            "source": {"v_magnitude": [100.0, 100.0, 100.0], "v_angle": [0.0, -2.0943951023931953, 2.0943951023931953], "bus": "a", "terminal_map": ["1", "2", "3"]}
+          },
+          "transformer": {
+            "n_winding": {
+              "t3": {
+                "s_rating": 10000.0,
+                "windings": [
+                  {"bus": "a", "terminal_map": ["1", "2", "3"], "v_nom": 100.0, "configuration": "DELTA", "r_winding": 0.01},
+                  {"bus": "b", "terminal_map": ["1", "2", "3", "n"], "v_nom": 100.0, "configuration": "WYE", "r_winding": 0.02},
+                  {"bus": "c", "terminal_map": ["1", "2", "3", "n"], "v_nom": 100.0, "configuration": "WYE", "r_winding": 0.03}
+                ],
+                "x_sc": {"1_2": 0.04, "1_3": 0.05, "2_3": 0.06},
+                "g_no_load": 0.001,
+                "b_no_load": -0.002
+              }
+            }
+          }
+        }"#,
+    )
+    .unwrap();
+
+    assert_eq!(net.transformers[0].windings.len(), 3);
+    let model_t = &net.transformers[0];
+    assert!((model_t.windings[1].v_ref - 100.0 * 3f64.sqrt()).abs() < 1e-12);
+    assert!((model_t.windings[0].r_pct - 0.01 / 3.0 * 100.0).abs() < 1e-12);
+    assert!((model_t.windings[1].r_pct - 0.02 / 3.0 * 100.0).abs() < 1e-12);
+    assert!((model_t.xsc_pct[0] - 0.04 / 3.0 * 100.0).abs() < 1e-12);
+    let out = write_bmopf_json(&net);
+    assert_eq!(errors(&v, &out.text), Vec::<String>::new());
+    let doc: serde_json::Value = serde_json::from_str(&out.text).unwrap();
+    let t = &doc["transformer"]["n_winding"]["t3"];
+    assert_eq!(t["windings"].as_array().unwrap().len(), 3);
+    assert_eq!(t["windings"][1]["v_nom"], serde_json::json!(100.0));
+    assert_eq!(t["x_sc"]["1_2"], serde_json::json!(0.04));
+    assert_eq!(t["g_no_load"], serde_json::json!(0.001));
+    assert_eq!(t["b_no_load"], serde_json::json!(-0.002));
+}
+
+#[test]
+fn legacy_transformer_aliases_write_current_bmopf_names() {
+    let v = schema_validator();
+    let net = parse_bmopf_str(
+        r#"{
+          "bus": {
+            "a": {"terminal_names": ["1", "2", "3", "n"], "perfectly_grounded_terminals": ["n"]},
+            "b": {"terminal_names": ["1", "2", "3", "n"], "perfectly_grounded_terminals": ["n"]},
+            "c": {"terminal_names": ["1", "2", "3", "n"], "perfectly_grounded_terminals": ["n"]}
+          },
+          "voltage_source": {
+            "source": {"v_magnitude": [7200.0, 7200.0, 7200.0, 0.0], "v_angle": [0.0, -2.0943951023931953, 2.0943951023931953, 0.0], "bus": "a", "terminal_map": ["1", "2", "3", "n"]}
+          },
+          "transformer": {
+            "single_phase": {
+              "t": {
+                "bus_from": "a", "bus_to": "b",
+                "terminal_map_from": ["1", "n"], "terminal_map_to": ["1", "n"],
+                "s_rating": 25000.0,
+                "v_ref_from": 7200.0, "v_ref_to": 240.0,
+                "r_series_from": 1.0, "r_series_to": 0.01,
+                "x_series_from": 4.0, "x_series_to": 0.0
+              }
+            },
+            "n_winding": {
+              "t3": {
+                "s_rating": 10000.0,
+                "windings": [
+                  {"bus": "a", "terminal_map": ["1", "2", "3", "n"], "v_ref": 7200.0, "connection": "WYE", "r_winding": 0.01},
+                  {"bus": "b", "terminal_map": ["1", "2", "3", "n"], "v_ref": 240.0, "connection": "WYE", "r_winding": 0.02},
+                  {"bus": "c", "terminal_map": ["1", "2", "3", "n"], "v_ref": 240.0, "connection": "WYE", "r_winding": 0.03}
+                ],
+                "x_sc": {"1_2": 0.04, "1_3": 0.05, "2_3": 0.06}
+              }
+            }
+          }
+        }"#,
+    )
+    .unwrap();
+
+    let out = write_bmopf_json(&net);
+    assert_eq!(errors(&v, &out.text), Vec::<String>::new());
+    let doc: serde_json::Value = serde_json::from_str(&out.text).unwrap();
+    let two = &doc["transformer"]["single_phase"]["t"];
+    assert_eq!(two["v_nom_from"], serde_json::json!(7200.0));
+    assert_eq!(two["v_nom_to"], serde_json::json!(240.0));
+    assert!(two.get("v_ref_from").is_none());
+    assert!(two.get("v_ref_to").is_none());
+    let winding = &doc["transformer"]["n_winding"]["t3"]["windings"][0];
+    assert_eq!(winding["v_nom"], serde_json::json!(7200.0));
+    assert_eq!(winding["configuration"], serde_json::json!("WYE"));
+    assert!(winding.get("v_ref").is_none());
+    assert!(winding.get("connection").is_none());
+}
+
+#[test]
+fn three_phase_transformer_no_load_fields_round_trip_through_bmopf() {
+    let v = schema_validator();
+    let net = parse_bmopf_str(
+        r#"{
+          "bus": {
+            "a": {"terminal_names": ["1", "2", "3", "n"], "perfectly_grounded_terminals": ["n"]},
+            "b": {"terminal_names": ["1", "2", "3"]}
+          },
+          "voltage_source": {
+            "source": {"v_magnitude": [7200.0, 7200.0, 7200.0, 0.0], "v_angle": [0.0, -2.0943951023931953, 2.0943951023931953, 0.0], "bus": "a", "terminal_map": ["1", "2", "3", "n"]}
+          },
+          "transformer": {
+            "wye_delta": {
+              "t": {
+                "bus_from": "a", "bus_to": "b",
+                "terminal_map_from": ["1", "2", "3", "n"], "terminal_map_to": ["1", "2", "3"],
+                "s_rating": 50000.0,
+                "v_nom_from": 7200.0, "v_nom_to": 480.0,
+                "r_series": 0.1,
+                "x_series": 0.2,
+                "g_no_load": 0.000002,
+                "b_no_load": -0.000003
+              }
+            }
+          }
+        }"#,
+    )
+    .unwrap();
+
+    let out = write_bmopf_json(&net);
+    assert_eq!(errors(&v, &out.text), Vec::<String>::new());
+    let doc: serde_json::Value = serde_json::from_str(&out.text).unwrap();
+    let t = &doc["transformer"]["wye_delta"]["t"];
+    assert_eq!(t["v_nom_from"], serde_json::json!(7200.0));
+    assert_eq!(t["v_nom_to"], serde_json::json!(480.0));
+    assert_eq!(t["g_no_load"], serde_json::json!(0.000002));
+    assert_eq!(t["b_no_load"], serde_json::json!(-0.000003));
+}
+
+#[test]
+fn dss_noloadloss_derives_bmopf_no_load_fields() {
+    let net = parse_dss_str(
+        "Clear\n\
+         New Circuit.core basekv=7.2 pu=1.0 phases=1 bus1=src.1\n\
+         New Transformer.t1 phases=1 windings=2 buses=(src.1.0, load.1.0) \
+         kvs=(7.2 0.24) kvas=(25 25) %Rs=(1 1) xhl=2 \
+         %noloadloss=0.2 %imag=0.5\n",
+    );
+    let out = write_bmopf_json(&net);
+    let doc: serde_json::Value = serde_json::from_str(&out.text).unwrap();
+    let t = &doc["transformer"]["single_phase"]["t1"];
+    let expected_g = 0.2 / 100.0 * 25_000.0 / (7200.0 * 7200.0);
+    let g = t["g_no_load"].as_f64().unwrap();
+    assert!((g - expected_g).abs() < 1e-18, "g_no_load = {g}");
+    assert_eq!(t["b_no_load"], serde_json::json!(0.0));
+    assert_eq!(errors(&schema_validator(), &out.text), Vec::<String>::new());
+}
+
+#[test]
+fn dss_phase_to_phase_noloadloss_does_not_emit_bmopf_ground_shunt() {
+    let net = parse_dss_str(
+        "Clear\n\
+         New Circuit.core basekv=12.47 pu=1.0 phases=1 bus1=src.1.2\n\
+         New Transformer.t1 phases=1 windings=2 buses=(src.1.2, load.1.2) \
+         kvs=(12.47 0.48) kvas=(25 25) %Rs=(1 1) xhl=2 \
+         %noloadloss=0.2 %imag=0.5\n",
+    );
+    let out = write_bmopf_json(&net);
+    let doc: serde_json::Value = serde_json::from_str(&out.text).unwrap();
+    let t = &doc["transformer"]["single_phase"]["t1"];
+    assert!(t.get("g_no_load").is_none(), "{t}");
+    assert!(t.get("b_no_load").is_none(), "{t}");
+    assert!(
+        out.warnings
+            .iter()
+            .any(|w| w.contains("phase-to-phase") && w.contains("%noloadloss")),
+        "{:?}",
+        out.warnings
+    );
+    assert_eq!(errors(&schema_validator(), &out.text), Vec::<String>::new());
+}
+
+#[test]
+fn bmopf_frequency_hint_reaches_dss() {
+    let net = parse_bmopf_str(
+        r#"{
+          "base_frequency": 50.0,
+          "bus": {"b": {"terminal_names": ["1"]}},
+          "voltage_source": {
+            "source": {"v_magnitude": [240.0], "v_angle": [0.0], "bus": "b", "terminal_map": ["1"]}
+          }
+        }"#,
+    )
+    .unwrap();
+
+    assert!((net.base_frequency - 50.0).abs() < 1e-12);
+    let out = write_dss(&net);
+    assert!(
+        out.text.contains("Set DefaultBaseFrequency=50"),
+        "{}",
+        out.text
+    );
+}
+
+#[test]
+fn bmopf_phase_to_phase_single_phase_load_emits_delta_dss() {
+    let net = parse_bmopf_str(
+        r#"{
+          "bus": {"b": {"terminal_names": ["1", "2"]}},
+          "voltage_source": {
+            "source": {"v_magnitude": [240.0], "v_angle": [0.0], "bus": "b", "terminal_map": ["1"]}
+          },
+          "load": {
+            "ld": {
+              "bus": "b",
+              "terminal_map": ["1", "2"],
+              "configuration": "SINGLE_PHASE",
+              "p_nom": [1000.0],
+              "q_nom": [250.0],
+              "v_nom": [240.0]
+            }
+          }
+        }"#,
+    )
+    .unwrap();
+
+    let out = write_dss(&net);
+    let line = out.text.lines().find(|l| l.contains("Load.ld")).unwrap();
+    assert!(line.contains("phases=1 conn=delta"), "{line}");
+}
+
+#[test]
+fn zero_voltage_source_neutral_does_not_inflate_dss_phases() {
+    let net = parse_bmopf_str(
+        r#"{
+          "bus": {
+            "src": {"terminal_names": ["1", "2", "3", "4", "5"], "perfectly_grounded_terminals": ["5"]}
+          },
+          "voltage_source": {
+            "source": {
+              "v_magnitude": [2400.0, 2400.0, 2400.0, 0.0],
+              "v_angle": [0.0, -2.0943951023931953, 2.0943951023931953, 0.0],
+              "bus": "src",
+              "terminal_map": ["1", "2", "3", "4"]
+            }
+          }
+        }"#,
+    )
+    .unwrap();
+
+    let out = write_dss(&net);
+    let line = out.text.lines().find(|l| l.contains("Circuit.")).unwrap();
+    assert!(line.contains("phases=3"), "{line}");
+}
+
+#[test]
 fn negative_validation_cases() {
     let v = schema_validator();
     let base: serde_json::Value = serde_json::from_str(
@@ -503,7 +888,7 @@ fn center_tap_collapse_converts_resistance_through_ohms() {
     let out = write_bmopf_json(&net);
     let doc: serde_json::Value = serde_json::from_str(&out.text).unwrap();
     let t = &doc["transformer"]["center_tap"]["t1"];
-    assert_eq!(t["v_ref_to"], 240.0);
+    assert_eq!(t["v_nom_to"], 240.0);
     let r_to = t["r_series_to"].as_f64().unwrap();
     assert!((r_to - 0.013_824).abs() < 1e-12, "r_series_to = {r_to}");
     // The primary is untouched by the collapse: %R=0.6 on 7.2 kV/25 kVA.
@@ -534,8 +919,8 @@ fn bmopf_center_tap_rebuilds_dss_grounded_center() {
                     "terminal_map_from": ["1", "2"],
                     "terminal_map_to": ["1", "2", "3"],
                     "s_rating": 25000.0,
-                    "v_ref_from": 7200.0,
-                    "v_ref_to": 240.0,
+                    "v_nom_from": 7200.0,
+                    "v_nom_to": 240.0,
                     "r_series_from": 12.4416,
                     "r_series_to": 0.013824,
                     "x_series_from": 42.2784,
@@ -576,7 +961,7 @@ fn center_tap_collapse_uses_each_half_windings_own_s_rating() {
     let out = write_bmopf_json(&net);
     let doc: serde_json::Value = serde_json::from_str(&out.text).unwrap();
     let t = &doc["transformer"]["center_tap"]["t1"];
-    assert_eq!(t["v_ref_to"], 240.0);
+    assert_eq!(t["v_nom_to"], 240.0);
     let expected = 0.02 * 120.0 * 120.0 / 50e3 + 0.04 * 120.0 * 120.0 / 25e3;
     let r_to = t["r_series_to"].as_f64().unwrap();
     assert!((r_to - expected).abs() < 1e-12, "r_series_to = {r_to}");
@@ -680,7 +1065,7 @@ fn unrecognized_configuration_and_subtype_warn() {
                 "configuration": "zigzag", "terminal_map": ["1", "2"]}},
         "transformer": {"open_delta": {"t1": {"bus_from": "a", "bus_to": "a",
             "terminal_map_from": ["1", "2"], "terminal_map_to": ["1", "2"],
-            "s_rating": 5000.0, "v_ref_from": 240.0, "v_ref_to": 240.0}}}"#,
+            "s_rating": 5000.0, "v_nom_from": 240.0, "v_nom_to": 240.0}}}"#,
     );
     let net = parse_bmopf_str(&text).unwrap();
     // A recognized value in the wrong case is tolerated without a warning.
