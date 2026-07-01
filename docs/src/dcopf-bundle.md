@@ -53,8 +53,8 @@ unlimited per MATPOWER). Generator-space provenance (length \\(n_{\mathrm{gen}}\
 
 ## Manifest (`dcopf_meta.json`)
 
-Schema `powerio.dcopf` version `0.2` keeps the Matrix Market files from the
-earlier bundle layout and adds structured metadata:
+Schema `powerio.dcopf` version `0.1.0` writes Matrix Market files plus
+structured metadata:
 
 - `dimensions`: `n_buses`, `n_source_branches`, `n_branch_columns`,
   `n_generators`, `n_reference_buses`, and `n_grounded_buses`.

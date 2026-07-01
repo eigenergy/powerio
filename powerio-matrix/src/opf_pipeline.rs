@@ -21,7 +21,7 @@ use crate::network::Network;
 use crate::{GenCostPatch, MissingGenCostPolicy};
 
 const DCOPF_SCHEMA: &str = "powerio.dcopf";
-const DCOPF_SCHEMA_VERSION: &str = "0.2";
+const DCOPF_SCHEMA_VERSION: &str = "0.1.0";
 
 #[derive(Debug, Clone)]
 pub struct DcOpfOptions {

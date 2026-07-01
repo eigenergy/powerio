@@ -618,7 +618,7 @@ fn bundle_vectors_round_trip() {
         serde_json::from_str(&std::fs::read_to_string(out.dir.join("dcopf_meta.json")).unwrap())
             .unwrap();
     assert_eq!(meta["schema"], "powerio.dcopf");
-    assert_eq!(meta["schema_version"], "0.2");
+    assert_eq!(meta["schema_version"], "0.1.0");
     assert_eq!(meta["dimensions"]["n_buses"], view.n());
     assert_eq!(
         meta["dimensions"]["n_source_branches"],
