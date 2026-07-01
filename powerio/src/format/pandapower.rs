@@ -9,7 +9,10 @@ use std::sync::Arc;
 
 use serde_json::{Map, Value};
 
-use super::{Conversion, Parsed, bus_kv, finish, jnum, nonzero_differs, set_bus_kind, zbase};
+use super::{
+    Conversion, Parsed, bus_kv, finish, jnum, nonzero_differs, set_bus_kind,
+    warn_extra_branch_rating_sets, zbase,
+};
 use crate::network::{
     Branch, BranchCharging, BranchCurrentRatings, Bus, BusId, BusType, Extras, GenCost, Generator,
     Hvdc, Load, LoadVoltageModel, Network, Shunt, SourceFormat, Storage,
@@ -333,6 +336,7 @@ pub(crate) fn parse_pandapower_source(
                 },
                 rate_b: 0.0,
                 rate_c: 0.0,
+                rating_sets: Vec::new(),
                 current_ratings: (max_i_ka > 0.0 && max_i_ka < MAX_I_KA).then_some(
                     BranchCurrentRatings {
                         c_rating_a: max_i_ka * par,
@@ -473,6 +477,7 @@ pub(crate) fn parse_pandapower_source(
                 rate_a: sn * par,
                 rate_b: 0.0,
                 rate_c: 0.0,
+                rating_sets: Vec::new(),
                 current_ratings: None,
                 tap,
                 shift,
@@ -821,6 +826,7 @@ fn warn_pandapower_branch_losses(net: &Network, warnings: &mut Vec<String>) {
             "{current_ratings} branch current rating record(s) dropped: pandapower line/trafo tables carry MVA loading limits, not current ratings"
         ));
     }
+    warn_extra_branch_rating_sets("pandapower JSON", net, warnings);
     let branch_solutions = net.branches.iter().filter(|b| b.solution.is_some()).count();
     if branch_solutions > 0 {
         warnings.push(format!(
@@ -2856,6 +2862,7 @@ mod tests {
             rate_a: 0.0,
             rate_b: 0.0,
             rate_c: 0.0,
+            rating_sets: Vec::new(),
             current_ratings: None,
             tap,
             shift: 0.0,

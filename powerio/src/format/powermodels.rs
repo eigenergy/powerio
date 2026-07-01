@@ -17,7 +17,7 @@ use std::sync::Arc;
 
 use serde_json::{Map, Value};
 
-use super::{Conversion, finish, jnum};
+use super::{Conversion, finish, jnum, warn_extra_branch_rating_sets};
 use crate::network::{
     Branch, BranchCharging, BranchCurrentRatings, BranchSolution, Bus, BusId, BusType,
     GEN_EXTRA_KEYS, GenCost, Generator, Hvdc, Load, LoadVoltageModel, Network, Shunt, SourceFormat,
@@ -27,6 +27,7 @@ use crate::normalize::{self, GEN_PU_KEYS};
 use crate::{Error, Result};
 
 #[must_use]
+#[expect(clippy::too_many_lines)]
 pub fn write_powermodels_json(net: &Network) -> Conversion {
     let mut warnings = Vec::new();
 
@@ -111,6 +112,7 @@ pub fn write_powermodels_json(net: &Network) -> Conversion {
             "{voltage_loads} voltage dependent load model(s) dropped: PowerModels load records carry static pd/qd only"
         ));
     }
+    warn_extra_branch_rating_sets("PowerModels JSON", net, &mut warnings);
     if net
         .buses
         .iter()
@@ -661,6 +663,7 @@ fn read_branch(v: &Value, pscale: f64, ascale: f64) -> Branch {
         rate_a: f(v, "rate_a") * pscale,
         rate_b: f(v, "rate_b") * pscale,
         rate_c: f(v, "rate_c") * pscale,
+        rating_sets: Vec::new(),
         current_ratings: has_any(v, &["c_rating_a", "c_rating_b", "c_rating_c"]).then_some(
             BranchCurrentRatings {
                 c_rating_a: f(v, "c_rating_a"),

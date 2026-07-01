@@ -795,6 +795,14 @@ impl PyNetwork {
             d.set_item("rate_a", br.rate_a)?;
             d.set_item("rate_b", br.rate_b)?;
             d.set_item("rate_c", br.rate_c)?;
+            let mut rating_sets = Vec::with_capacity(br.rating_sets.len());
+            for rating in &br.rating_sets {
+                let item = PyDict::new(py);
+                item.set_item("name", &rating.name)?;
+                item.set_item("rate_mva", rating.rate_mva)?;
+                rating_sets.push(item);
+            }
+            d.set_item("rating_sets", PyList::new(py, rating_sets)?)?;
             d.set_item("c_rating_a", br.current_ratings.map(|r| r.c_rating_a))?;
             d.set_item("c_rating_b", br.current_ratings.map(|r| r.c_rating_b))?;
             d.set_item("c_rating_c", br.current_ratings.map(|r| r.c_rating_c))?;

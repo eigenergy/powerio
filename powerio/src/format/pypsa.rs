@@ -8,7 +8,7 @@ use std::collections::{HashMap, HashSet};
 use std::fmt::Write as _;
 use std::path::{Path, PathBuf};
 
-use super::{Parsed, bus_kv, set_bus_kind, zbase};
+use super::{Parsed, bus_kv, set_bus_kind, warn_extra_branch_rating_sets, zbase};
 use crate::network::{
     Branch, BranchCharging, Bus, BusId, BusType, Extras, GenCost, Generator, Hvdc, Load,
     LoadVoltageModel, Network, Shunt, SourceFormat, Storage,
@@ -219,6 +219,7 @@ fn read_pypsa_csv_folder_inner(path: &Path, warnings: &mut Vec<String>) -> Resul
                 rate_a: row.f("s_nom").unwrap_or(0.0),
                 rate_b: 0.0,
                 rate_c: 0.0,
+                rating_sets: Vec::new(),
                 current_ratings: None,
                 tap: 0.0,
                 shift: 0.0,
@@ -263,6 +264,7 @@ fn read_pypsa_csv_folder_inner(path: &Path, warnings: &mut Vec<String>) -> Resul
                 rate_a: s_nom,
                 rate_b: 0.0,
                 rate_c: 0.0,
+                rating_sets: Vec::new(),
                 current_ratings: None,
                 tap: row.f("tap_ratio").unwrap_or(1.0),
                 shift: row.f("phase_shift").unwrap_or(0.0),
@@ -543,6 +545,7 @@ pub fn write_pypsa_csv_folder(net: &Network, out_dir: impl AsRef<Path>) -> Resul
             "{current_ratings} branch current rating record(s) dropped: PyPSA static branch tables carry s_nom, not source current ratings"
         ));
     }
+    warn_extra_branch_rating_sets("PyPSA CSV", net, &mut warnings);
     let branch_solutions = net.branches.iter().filter(|b| b.solution.is_some()).count();
     if branch_solutions > 0 {
         warnings.push(format!(
@@ -1177,6 +1180,7 @@ mod tests {
             rate_a,
             rate_b: 0.0,
             rate_c: 0.0,
+            rating_sets: Vec::new(),
             current_ratings: None,
             tap: 1.05,
             shift: 0.0,
@@ -1200,6 +1204,7 @@ mod tests {
             rate_a: 100.0,
             rate_b: 0.0,
             rate_c: 0.0,
+            rating_sets: Vec::new(),
             current_ratings: None,
             tap: 0.0,
             shift: 0.0,

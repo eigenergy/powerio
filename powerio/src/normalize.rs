@@ -15,8 +15,8 @@
 use std::collections::{HashMap, HashSet};
 
 use crate::network::{
-    Branch, Bus, BusId, BusType, GEN_EXTRA_KEYS, GenCost, Generator, Hvdc, Load, LoadVoltageModel,
-    Network, Shunt, SourceFormat, Storage, Switch, Transformer3W,
+    Branch, BranchRatingSet, Bus, BusId, BusType, GEN_EXTRA_KEYS, GenCost, Generator, Hvdc, Load,
+    LoadVoltageModel, Network, Shunt, SourceFormat, Storage, Switch, Transformer3W,
 };
 use crate::{Error, Result};
 
@@ -207,6 +207,14 @@ fn norm_branches(branches: &[Branch], base: f64, map: &HashMap<BusId, BusId>) ->
                 rate_a: br.rate_a / base,
                 rate_b: br.rate_b / base,
                 rate_c: br.rate_c / base,
+                rating_sets: br
+                    .rating_sets
+                    .iter()
+                    .map(|r| BranchRatingSet {
+                        name: r.name.clone(),
+                        rate_mva: r.rate_mva / base,
+                    })
+                    .collect(),
                 tap: br.effective_tap(),
                 shift: br.shift * DEG_TO_RAD,
                 angmin: br.angmin * DEG_TO_RAD,
@@ -538,6 +546,7 @@ mod tests {
             rate_a: 0.0,
             rate_b: 0.0,
             rate_c: 0.0,
+            rating_sets: Vec::new(),
             current_ratings: None,
             tap: 0.0,
             shift: 0.0,

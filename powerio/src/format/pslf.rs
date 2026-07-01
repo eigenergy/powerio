@@ -13,7 +13,7 @@ use std::sync::Arc;
 
 use serde_json::{Number, Value};
 
-use super::{Conversion, sanitize_quoted};
+use super::{Conversion, sanitize_quoted, warn_extra_branch_rating_sets};
 use crate::network::{
     Branch, Bus, BusId, BusType, Extras, Generator, Hvdc, Impedance, Load, LoadVoltageModel,
     Network, Shunt, SourceFormat, Transformer3W, Winding,
@@ -508,6 +508,7 @@ fn read_branch(rec: &Record) -> Result<Branch> {
         rate_a: num_at(&rec.rhs, 4, 0.0, "branch rate1", rec)?,
         rate_b: num_at(&rec.rhs, 5, 0.0, "branch rate2", rec)?,
         rate_c: num_at(&rec.rhs, 6, 0.0, "branch rate3", rec)?,
+        rating_sets: Vec::new(),
         current_ratings: None,
         tap: 0.0,
         shift: 0.0,
@@ -624,6 +625,7 @@ fn read_transformer(rec: &Record) -> Result<TransformerRecord> {
         rate_a,
         rate_b,
         rate_c,
+        rating_sets: Vec::new(),
         current_ratings: None,
         tap: if tap == 0.0 { 1.0 } else { tap },
         shift,
@@ -1487,6 +1489,7 @@ pub fn write_pslf(net: &Network) -> Conversion {
             "{current_ratings} branch current rating record(s) dropped: PSLF branch records written here carry MVA ratings only"
         ));
     }
+    warn_extra_branch_rating_sets("PSLF .epc", net, &mut warnings);
     let branch_solutions = net.branches.iter().filter(|b| b.solution.is_some()).count();
     if branch_solutions > 0 {
         warnings.push(format!(
@@ -1784,6 +1787,7 @@ end
             rate_a: 100.0,
             rate_b: 100.0,
             rate_c: 100.0,
+            rating_sets: Vec::new(),
             current_ratings: None,
             tap: 1.0,
             shift: 0.0,

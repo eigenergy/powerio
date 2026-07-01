@@ -10,7 +10,8 @@ use std::collections::{HashMap, HashSet};
 use serde::{Deserialize, Serialize};
 
 use crate::network::{
-    BranchCurrentRatings, BusId, BusType, GenCaps, GenCost, Hvdc, LoadVoltageModel, Network,
+    BranchCurrentRatings, BranchRatingSet, BusId, BusType, GenCaps, GenCost, Hvdc,
+    LoadVoltageModel, Network,
 };
 use crate::{Error, IndexedNetwork, Result};
 
@@ -149,6 +150,7 @@ pub struct SolverBranchRow {
     pub rate_a: f64,
     pub rate_b: f64,
     pub rate_c: f64,
+    pub rating_sets: Vec<BranchRatingSet>,
     pub current_ratings: Option<BranchCurrentRatings>,
     pub tap: f64,
     pub shift: f64,
@@ -482,6 +484,7 @@ fn branch_and_arc_rows(
                 rate_a: branch.rate_a,
                 rate_b: branch.rate_b,
                 rate_c: branch.rate_c,
+                rating_sets: branch.rating_sets.clone(),
                 current_ratings: branch.current_ratings,
                 tap: branch.tap,
                 shift: branch.shift,
@@ -785,6 +788,7 @@ mod tests {
             rate_a: 100.0,
             rate_b: 110.0,
             rate_c: 120.0,
+            rating_sets: Vec::new(),
             current_ratings: None,
             tap: 0.0,
             shift: 30.0,

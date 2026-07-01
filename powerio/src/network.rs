@@ -530,6 +530,10 @@ pub struct Branch {
     pub rate_a: f64,
     pub rate_b: f64,
     pub rate_c: f64,
+    /// Additional MVA rating sets beyond A/B/C. Matrix builders continue to use
+    /// `rate_a` unless they opt into one of these named sets.
+    #[serde(default)]
+    pub rating_sets: Vec<BranchRatingSet>,
     /// Current ratings, when the source distinguishes them from MVA ratings.
     #[serde(default)]
     pub current_ratings: Option<BranchCurrentRatings>,
@@ -550,6 +554,24 @@ pub struct Branch {
     #[serde(default)]
     pub solution: Option<BranchSolution>,
     pub extras: Extras,
+}
+
+/// Extra branch MVA rating set beyond the canonical A/B/C columns.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[non_exhaustive]
+pub struct BranchRatingSet {
+    pub name: String,
+    pub rate_mva: f64,
+}
+
+impl BranchRatingSet {
+    #[must_use]
+    pub fn new(name: impl Into<String>, rate_mva: f64) -> Self {
+        Self {
+            name: name.into(),
+            rate_mva,
+        }
+    }
 }
 
 /// Per terminal branch shunt admittance in p.u. This is the canonical
@@ -652,6 +674,7 @@ impl Branch {
             rate_a: 0.0,
             rate_b: 0.0,
             rate_c: 0.0,
+            rating_sets: Vec::new(),
             current_ratings: None,
             tap: 0.0,
             shift: 0.0,
@@ -1267,6 +1290,7 @@ impl Transformer3W {
             rate_a: w.rate_a,
             rate_b: w.rate_b,
             rate_c: w.rate_c,
+            rating_sets: Vec::new(),
             current_ratings: None,
             tap: w.tap,
             shift: w.shift,
@@ -1511,7 +1535,7 @@ impl Network {
         }
         for (i, br) in self.branches.iter().enumerate() {
             #[rustfmt::skip]
-            let Branch { from: _, to: _, r, x, b, charging, rate_a, rate_b, rate_c, current_ratings, tap, shift, in_service: _, angmin, angmax, control: _, solution, extras: _ } = br;
+            let Branch { from: _, to: _, r, x, b, charging, rate_a, rate_b, rate_c, rating_sets, current_ratings, tap, shift, in_service: _, angmin, angmax, control: _, solution, extras: _ } = br;
             let fields = [
                 ("r", *r),
                 ("x", *x),
@@ -1525,6 +1549,13 @@ impl Network {
                 ("angmax", *angmax),
             ];
             out.extend(bad(fields).map(|f| format!("branches[{i}].{f}")));
+            out.extend(
+                rating_sets
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, r)| !r.rate_mva.is_finite())
+                    .map(|(j, _)| format!("branches[{i}].rating_sets[{j}].rate_mva")),
+            );
             if let Some(charging) = charging {
                 let BranchCharging {
                     g_fr,
@@ -2134,6 +2165,7 @@ mod tests {
             rate_a: 0.0,
             rate_b: 0.0,
             rate_c: 0.0,
+            rating_sets: Vec::new(),
             current_ratings: None,
             tap: 1.0,
             shift: 0.0,
@@ -2245,6 +2277,7 @@ mod tests {
             rate_a: 0.0,
             rate_b: 0.0,
             rate_c: 0.0,
+            rating_sets: Vec::new(),
             current_ratings: None,
             tap: 0.0,
             shift: 0.0,

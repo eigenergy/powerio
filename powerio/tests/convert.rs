@@ -6,12 +6,12 @@
 use std::path::{Path, PathBuf};
 
 use powerio::{
-    Branch, BranchCharging, BranchCurrentRatings, BranchSolution, Bus, BusId, BusType, Error, Load,
-    LoadVoltageModel, MissingGenCostPolicy, Network, SourceFormat, TargetFormat, WriteOptions,
-    convert_file, parse_file, parse_gen_cost_csv, parse_matpower, parse_matpower_file,
-    parse_powermodels_json, parse_powerworld, parse_pslf, parse_psse, read_pypsa_csv_folder,
-    write_as, write_as_with_options, write_egret_json, write_powermodels_json, write_powerworld,
-    write_pslf, write_psse, write_pypsa_csv_folder,
+    Branch, BranchCharging, BranchCurrentRatings, BranchRatingSet, BranchSolution, Bus, BusId,
+    BusType, Error, Load, LoadVoltageModel, MissingGenCostPolicy, Network, SourceFormat,
+    TargetFormat, WriteOptions, convert_file, parse_file, parse_gen_cost_csv, parse_matpower,
+    parse_matpower_file, parse_powermodels_json, parse_powerworld, parse_pslf, parse_psse,
+    read_pypsa_csv_folder, write_as, write_as_with_options, write_egret_json,
+    write_powermodels_json, write_powerworld, write_pslf, write_psse, write_pypsa_csv_folder,
 };
 use serde_json::Value;
 
@@ -51,6 +51,9 @@ fn rich_audit_network() -> Network {
     let mut branch = Branch::new(BusId(1), BusId(2), 0.01, 0.1);
     branch.charging = Some(BranchCharging::new(0.01, 0.02, 0.0, 0.05));
     branch.rate_a = 100.0;
+    branch
+        .rating_sets
+        .push(BranchRatingSet::new("RATE4", 125.0));
     branch.current_ratings = Some(BranchCurrentRatings::new(500.0, 600.0, 700.0));
     branch.solution = Some(BranchSolution::new(1.0, 0.5, -0.9, -0.4));
     net.branches.push(branch);
@@ -109,6 +112,10 @@ fn rich_writer_warnings_cover_simple_formats() {
         "branch terminal admittance"
     ));
     assert!(has_warning(&matpower.warnings, "branch current rating"));
+    assert!(has_warning(
+        &matpower.warnings,
+        "branch 1 (1 to 2) rating set RATE4=125"
+    ));
     assert!(has_warning(&matpower.warnings, "branch solution value"));
     assert!(has_warning(
         &matpower.warnings,
@@ -118,11 +125,13 @@ fn rich_writer_warnings_cover_simple_formats() {
     let pm = write_powermodels_json(&net);
     assert!(has_warning(&pm.warnings, "voltage dependent load model"));
     assert!(!has_warning(&pm.warnings, "branch current rating"));
+    assert!(has_warning(&pm.warnings, "rating set RATE4=125"));
     assert!(!has_warning(&pm.warnings, "branch solution value"));
 
     let egret = write_egret_json(&net);
     assert!(has_warning(&egret.warnings, "branch terminal admittance"));
     assert!(has_warning(&egret.warnings, "branch current rating"));
+    assert!(has_warning(&egret.warnings, "rating set RATE4=125"));
     assert!(has_warning(&egret.warnings, "branch solution value"));
     assert!(has_warning(&egret.warnings, "voltage dependent load model"));
 
@@ -132,6 +141,7 @@ fn rich_writer_warnings_cover_simple_formats() {
         "branch terminal admittance"
     ));
     assert!(has_warning(&powerworld.warnings, "branch current rating"));
+    assert!(has_warning(&powerworld.warnings, "rating set RATE4=125"));
     assert!(has_warning(&powerworld.warnings, "branch solution value"));
     assert!(has_warning(
         &powerworld.warnings,
@@ -141,12 +151,25 @@ fn rich_writer_warnings_cover_simple_formats() {
     let psse = write_psse(&net);
     assert!(!has_warning(&psse.warnings, "branch terminal admittance"));
     assert!(has_warning(&psse.warnings, "branch current rating"));
+    assert!(has_warning(&psse.warnings, "rating set RATE4=125"));
     assert!(has_warning(&psse.warnings, "branch solution value"));
 
     let pslf = write_pslf(&net);
     assert!(has_warning(&pslf.warnings, "branch terminal admittance"));
     assert!(has_warning(&pslf.warnings, "branch current rating"));
+    assert!(has_warning(&pslf.warnings, "rating set RATE4=125"));
     assert!(has_warning(&pslf.warnings, "branch solution value"));
+}
+
+#[test]
+fn extra_branch_rating_sets_survive_powerio_json() {
+    let net = rich_audit_network();
+
+    let back = Network::from_json(&net.to_json().unwrap()).unwrap();
+
+    assert_eq!(back.branches[0].rating_sets.len(), 1);
+    assert_eq!(back.branches[0].rating_sets[0].name, "RATE4");
+    assert!((back.branches[0].rating_sets[0].rate_mva - 125.0).abs() < 1e-12);
 }
 
 #[test]

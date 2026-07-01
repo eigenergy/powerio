@@ -46,6 +46,10 @@ class Shunt(TypedDict):
     b: float
     in_service: bool
 
+class BranchRatingSet(TypedDict):
+    name: str
+    rate_mva: float
+
 class Branch(TypedDict):
     from_id: int
     to_id: int
@@ -55,6 +59,7 @@ class Branch(TypedDict):
     rate_a: float
     rate_b: float
     rate_c: float
+    rating_sets: List[BranchRatingSet]
     tap: float
     shift: float
     in_service: bool

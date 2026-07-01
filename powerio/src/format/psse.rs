@@ -21,16 +21,94 @@ use std::sync::Arc;
 
 use serde_json::Value;
 
-use super::{Conversion, jnum, sanitize_quoted};
+use super::{
+    Conversion, branch_rating_set_drop_warning, jnum, sanitize_quoted,
+    warn_extra_branch_rating_sets,
+};
 use crate::network::{
-    Area, Branch, BranchCharging, Bus, BusId, BusType, Extras, Generator, Hvdc, Impedance, Load,
-    LoadVoltageModel, Network, Shunt, ShuntBlock, SolverParams, SourceFormat, SwitchedShuntControl,
-    SwitchedShuntMode, Transformer3W, TransformerControl, TransformerControlMode, Winding,
+    Area, Branch, BranchCharging, BranchRatingSet, Bus, BusId, BusType, Extras, Generator, Hvdc,
+    Impedance, Load, LoadVoltageModel, Network, Shunt, ShuntBlock, SolverParams, SourceFormat,
+    SwitchedShuntControl, SwitchedShuntMode, Transformer3W, TransformerControl,
+    TransformerControlMode, Winding,
 };
 use crate::{Error, Result};
 
 const FMT: &str = "PSS/E .raw";
 const REV: u32 = 33;
+const PSSE_EXTRA_BRANCH_RATINGS: usize = 9;
+
+fn psse_extra_rating_name(slot: usize) -> String {
+    format!("RATE{}", slot + 4)
+}
+
+fn psse_extra_rating_slot(name: &str) -> Option<usize> {
+    let upper = name.trim().to_ascii_uppercase();
+    let suffix = upper
+        .strip_prefix("RATE")
+        .or_else(|| upper.strip_prefix("RATING"))?
+        .trim_start_matches([' ', '_']);
+    let n = suffix.parse::<usize>().ok()?;
+    (4..=12).contains(&n).then_some(n - 4)
+}
+
+fn read_extra_branch_ratings(
+    fields: &[String],
+    rating_start: usize,
+    named_record: bool,
+) -> Result<Vec<BranchRatingSet>> {
+    if !named_record {
+        return Ok(Vec::new());
+    }
+    let mut ratings = Vec::new();
+    for slot in 0..PSSE_EXTRA_BRANCH_RATINGS {
+        let rate_mva = num_at(fields, rating_start + 3 + slot, 0.0)?;
+        if rate_mva.abs() > f64::EPSILON {
+            ratings.push(BranchRatingSet::new(psse_extra_rating_name(slot), rate_mva));
+        }
+    }
+    Ok(ratings)
+}
+
+fn psse_extra_rating_values(
+    branch: &Branch,
+    branch_index: usize,
+    warnings: &mut Vec<String>,
+) -> [f64; PSSE_EXTRA_BRANCH_RATINGS] {
+    let mut values = [0.0; PSSE_EXTRA_BRANCH_RATINGS];
+    let mut used = [false; PSSE_EXTRA_BRANCH_RATINGS];
+    let mut deferred = Vec::new();
+
+    for rating in &branch.rating_sets {
+        if let Some(slot) = psse_extra_rating_slot(&rating.name) {
+            if !used[slot] {
+                values[slot] = rating.rate_mva;
+                used[slot] = true;
+                continue;
+            }
+        }
+        deferred.push(rating);
+    }
+
+    for rating in deferred {
+        if let Some(slot) = used.iter().position(|is_used| !*is_used) {
+            values[slot] = rating.rate_mva;
+            used[slot] = true;
+        } else {
+            warnings.push(branch_rating_set_drop_warning(
+                "PSS/E v34/v35",
+                branch_index,
+                branch,
+                rating,
+            ));
+        }
+    }
+
+    values
+}
+
+fn warn_psse_extra_branch_ratings_dropped(net: &Network, warnings: &mut Vec<String>) {
+    warn_extra_branch_rating_sets("PSS/E v33", net, warnings);
+}
 
 /// Characters that would corrupt a single-quoted PSS/E name field. The quote
 /// toggles the reader's quoted state early, and `/` truncates the record at the
@@ -275,7 +353,12 @@ pub fn write_psse_rev(net: &Network, rev: u32) -> Conversion {
     // Parallel branches between the same bus pair get distinct circuit ids (PSS/E
     // keys a branch on (I, J, CKT)); a captured source CKT wins.
     let mut branch_ids: BTreeMap<(BusId, BusId), BTreeSet<String>> = BTreeMap::new();
-    for br in net.branches.iter().filter(|b| !b.is_transformer()) {
+    for (branch_index, br) in net
+        .branches
+        .iter()
+        .enumerate()
+        .filter(|(_, b)| !b.is_transformer())
+    {
         let ckt = quoted_circuit_id(
             br.extras.get("id").and_then(Value::as_str),
             (br.from, br.to),
@@ -290,11 +373,12 @@ pub fn write_psse_rev(net: &Network, rev: u32) -> Conversion {
         if modern {
             // v34+: a quoted line NAME at field 6, then twelve rating columns,
             // pushing STAT to field 23 (the layout the reader expects at rev>=34).
-            // ratings 4-12 default to 0 (powerio carries only rate_a/b/c).
+            // RATE4-RATE12 come from extra branch rating sets when present.
+            let extra_ratings = psse_extra_rating_values(br, branch_index, &mut warnings);
             let _ = writeln!(
                 s,
                 "{}, {}, '{ckt}', {}, {}, {}, '            ', {}, {}, {}, \
-                 0, 0, 0, 0, 0, 0, 0, 0, 0, {}, {}, {}, {}, {}, 1, 0, 1, 1",
+                 {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, 1, 0, 1, 1",
                 br.from,
                 br.to,
                 num(br.r),
@@ -303,6 +387,15 @@ pub fn write_psse_rev(net: &Network, rev: u32) -> Conversion {
                 num(br.rate_a),
                 num(br.rate_b),
                 num(br.rate_c),
+                num(extra_ratings[0]),
+                num(extra_ratings[1]),
+                num(extra_ratings[2]),
+                num(extra_ratings[3]),
+                num(extra_ratings[4]),
+                num(extra_ratings[5]),
+                num(extra_ratings[6]),
+                num(extra_ratings[7]),
+                num(extra_ratings[8]),
                 num(charging.g_fr),
                 num(bi),
                 num(charging.g_to),
@@ -557,6 +650,9 @@ pub fn write_psse_rev(net: &Network, rev: u32) -> Conversion {
         warnings.push(format!(
             "{current_ratings} branch current rating record(s) dropped: PSS/E branch ratings are MVA ratings"
         ));
+    }
+    if !modern {
+        warn_psse_extra_branch_ratings_dropped(net, &mut warnings);
     }
     let branch_solutions = net.branches.iter().filter(|b| b.solution.is_some()).count();
     if branch_solutions > 0 {
@@ -983,6 +1079,7 @@ fn transformer_label(f: &[String]) -> String {
     format!("{i}-{j}-{k} id {id:?}")
 }
 
+#[expect(clippy::too_many_arguments)]
 fn convert_transformer_impedance(
     r: f64,
     x: f64,
@@ -997,14 +1094,14 @@ fn convert_transformer_impedance(
     match cz {
         1 => (r, x),
         2 => {
-            if !base_ok {
+            if base_ok {
+                let scale = system_base / sbase;
+                (r * scale, x * scale)
+            } else {
                 warnings.push(format!(
                     "PSS/E transformer {label} pair {pair}: CZ=2 impedance has invalid SBASE {sbase}; read as system-base p.u."
                 ));
                 (r, x)
-            } else {
-                let scale = system_base / sbase;
-                (r * scale, x * scale)
             }
         }
         3 => {
@@ -1083,6 +1180,7 @@ fn winding_ratio(
     }
 }
 
+#[expect(clippy::too_many_arguments)]
 fn two_winding_tap(
     l1: &[String],
     l3: &[String],
@@ -1639,6 +1737,7 @@ fn read_branch(f: &[String], raw_rev: u32) -> Result<Branch> {
         rate_a: num_at(f, rating, 0.0)?,
         rate_b: num_at(f, rating + 1, 0.0)?,
         rate_c: num_at(f, rating + 2, 0.0)?,
+        rating_sets: read_extra_branch_ratings(f, rating, named_record)?,
         current_ratings: None,
         tap: 0.0,
         shift: 0.0,
@@ -1724,6 +1823,7 @@ fn read_transformer(
         rate_a: num_at(l3, 3, 0.0)?,
         rate_b: num_at(l3, 4, 0.0)?,
         rate_c: num_at(l3, 5, 0.0)?,
+        rating_sets: Vec::new(),
         current_ratings: None,
         tap,
         shift: num_at(l3, 2, 0.0)?,
@@ -1759,6 +1859,7 @@ fn mode_to_cod(mode: TransformerControlMode) -> i64 {
 }
 
 /// Read a 5-line 3-winding transformer record into a [`Transformer3W`].
+#[expect(clippy::too_many_arguments)]
 fn read_transformer_3w(
     l1: &[String],
     l2: &[String],
@@ -2105,6 +2206,7 @@ mod tests {
             rate_a: 100.0,
             rate_b: 110.0,
             rate_c: 120.0,
+            rating_sets: Vec::new(),
             current_ratings: None,
             tap: 0.0,
             shift: 0.0,
@@ -2128,6 +2230,7 @@ mod tests {
             rate_a: 100.0,
             rate_b: 110.0,
             rate_c: 120.0,
+            rating_sets: Vec::new(),
             current_ratings: None,
             tap: 1.05,
             shift: 0.0,
@@ -2630,13 +2733,13 @@ RATING, 1, "      ", "                                "
 1,'1 ',50.0,5.0,20.0,-10.0,1.0,0,100.0,0.0,1.0,0.0,0.0,1.0,1,100.0,80.0,10.0
 0 / END OF GENERATOR DATA, BEGIN BRANCH DATA
 @!   I,     J,'CKT',     R,          X,         B,                    'N A M E'                 ,   RATE1,   RATE2,   RATE3,   RATE4,   RATE5,   RATE6,   RATE7,   RATE8,   RATE9,  RATE10,  RATE11,  RATE12,    GI,       BI,       GJ,       BJ,STAT,MET,  LEN
-1,2,'1 ',0.01,0.05,0.001,'named branch',100.0,90.0,80.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,1,1,0.0
+1,2,'1 ',0.01,0.05,0.001,'named branch',100.0,90.0,80.0,70.0,0.0,60.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,1,1,0.0
 0 / END OF BRANCH DATA, BEGIN TRANSFORMER DATA
 0 / END OF TRANSFORMER DATA, BEGIN AREA DATA
 Q
 "#;
 
-        let net = parse_psse(raw).unwrap();
+        let mut net = parse_psse(raw).unwrap();
 
         close(net.base_mva, 100.0);
         assert_eq!(net.buses.len(), 2);
@@ -2644,7 +2747,26 @@ Q
         assert_eq!(net.generators.len(), 1);
         assert_eq!(net.branches.len(), 1);
         close(net.branches[0].rate_a, 100.0);
+        assert_eq!(net.branches[0].rating_sets.len(), 2);
+        assert_eq!(net.branches[0].rating_sets[0].name, "RATE4");
+        close(net.branches[0].rating_sets[0].rate_mva, 70.0);
+        assert_eq!(net.branches[0].rating_sets[1].name, "RATE6");
+        close(net.branches[0].rating_sets[1].rate_mva, 60.0);
         assert!(net.branches[0].in_service);
+
+        net.source = None;
+        let written = write_psse_rev(&net, 34);
+        assert!(
+            !written.warnings.iter().any(|w| w.contains("rating set")),
+            "v34 should carry RATE4-RATE12, got {:?}",
+            written.warnings
+        );
+        let back = parse_psse(&written.text).unwrap();
+        assert_eq!(back.branches[0].rating_sets.len(), 2);
+        assert_eq!(back.branches[0].rating_sets[0].name, "RATE4");
+        close(back.branches[0].rating_sets[0].rate_mva, 70.0);
+        assert_eq!(back.branches[0].rating_sets[1].name, "RATE6");
+        close(back.branches[0].rating_sets[1].rate_mva, 60.0);
     }
 
     #[test]
