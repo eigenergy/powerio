@@ -93,6 +93,12 @@ fn psse_extra_rating_values(
         if let Some(slot) = used.iter().position(|is_used| !*is_used) {
             values[slot] = rating.rate_mva;
             used[slot] = true;
+            warnings.push(branch_rating_set_rename_warning(
+                branch_index,
+                branch,
+                rating,
+                &psse_extra_rating_name(slot),
+            ));
         } else {
             warnings.push(branch_rating_set_drop_warning(
                 "PSS/E v34/v35",
@@ -104,6 +110,23 @@ fn psse_extra_rating_values(
     }
 
     values
+}
+
+fn branch_rating_set_rename_warning(
+    branch_index: usize,
+    branch: &Branch,
+    rating: &BranchRatingSet,
+    emitted_name: &str,
+) -> String {
+    format!(
+        "branch {} ({} to {}) rating set {}={} MVA emitted as {} in PSS/E v34/v35; rating set names outside RATE4-RATE12 are not preserved",
+        branch_index + 1,
+        branch.from,
+        branch.to,
+        rating.name,
+        rating.rate_mva,
+        emitted_name
+    )
 }
 
 fn warn_psse_extra_branch_ratings_dropped(net: &Network, warnings: &mut Vec<String>) {
@@ -2767,6 +2790,41 @@ Q
         close(back.branches[0].rating_sets[0].rate_mva, 70.0);
         assert_eq!(back.branches[0].rating_sets[1].name, "RATE6");
         close(back.branches[0].rating_sets[1].rate_mva, 60.0);
+    }
+
+    #[test]
+    fn v34_warns_when_custom_rating_name_is_emitted_as_rate_slot() {
+        let mut net = Network::in_memory(
+            "ratings",
+            100.0,
+            vec![
+                Bus::new(BusId(1), BusType::Ref, 230.0),
+                Bus::new(BusId(2), BusType::Pq, 230.0),
+            ],
+            Vec::new(),
+        );
+        let mut branch = Branch::new(BusId(1), BusId(2), 0.01, 0.05);
+        branch.rate_a = 100.0;
+        branch
+            .rating_sets
+            .push(BranchRatingSet::new("emergency", 125.0));
+        net.branches.push(branch);
+
+        let written = write_psse_rev(&net, 34);
+
+        assert!(
+            written.warnings.iter().any(|w| {
+                w.contains("rating set emergency=125")
+                    && w.contains("emitted as RATE4")
+                    && w.contains("names outside RATE4-RATE12 are not preserved")
+            }),
+            "missing rating rename warning: {:?}",
+            written.warnings
+        );
+        let back = parse_psse(&written.text).unwrap();
+        assert_eq!(back.branches[0].rating_sets.len(), 1);
+        assert_eq!(back.branches[0].rating_sets[0].name, "RATE4");
+        close(back.branches[0].rating_sets[0].rate_mva, 125.0);
     }
 
     #[test]

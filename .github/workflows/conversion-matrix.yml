@@ -31,7 +31,7 @@ jobs:
         path: ${{ env.POWERIO_CONVERSION_MATRIX_DETAILS }}
         if-no-files-found: ignore
     - name: Comment on PR
-      if: always()
+      if: always() && github.event.pull_request.head.repo.full_name == github.repository
       uses: actions/github-script@v8
       with:
         script: |

@@ -1032,6 +1032,18 @@ fn linecode_constructor_sizes_from_widest_series_matrix() {
 }
 
 #[test]
+fn linecode_constructor_sizes_from_matrix_row_width() {
+    let lc = DistLineCode::new("lc", Vec::new(), vec![vec![0.4, 0.1]]);
+    assert_eq!(lc.n_conductors, 2);
+    assert_eq!(lc.r_series, Vec::<Vec<f64>>::new());
+    assert_eq!(lc.x_series, vec![vec![0.4, 0.1]]);
+    assert_eq!(lc.g_from, vec![vec![0.0; 2]; 2]);
+    assert_eq!(lc.b_from, vec![vec![0.0; 2]; 2]);
+    assert_eq!(lc.g_to, vec![vec![0.0; 2]; 2]);
+    assert_eq!(lc.b_to, vec![vec![0.0; 2]; 2]);
+}
+
+#[test]
 fn matrixless_linecode_and_shunt_emit_required_zero_matrices_loudly() {
     let text = doc_with(
         r#", "linecode": {"bare": {"i_max": [400.0]}},

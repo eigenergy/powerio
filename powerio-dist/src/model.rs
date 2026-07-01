@@ -109,7 +109,7 @@ pub struct DistLineCode {
 impl DistLineCode {
     #[must_use]
     pub fn new(name: impl Into<String>, r_series: Mat, x_series: Mat) -> Self {
-        let n_conductors = r_series.len().max(x_series.len());
+        let n_conductors = matrix_extent(&r_series).max(matrix_extent(&x_series));
         Self {
             name: name.into(),
             n_conductors,
@@ -615,6 +615,10 @@ impl DistNetwork {
 
 fn zero_mat(n: usize) -> Mat {
     vec![vec![0.0; n]; n]
+}
+
+fn matrix_extent(m: &Mat) -> usize {
+    m.iter().map(Vec::len).fold(m.len(), usize::max)
 }
 
 /// Builds an `n`x`n` matrix from lower triangle rows (the OpenDSS matrix
