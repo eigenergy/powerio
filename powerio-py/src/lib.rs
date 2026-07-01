@@ -371,6 +371,8 @@ fn balanced_source_format_name(f: powerio_matrix::SourceFormat) -> &'static str 
         powerio_matrix::SourceFormat::PowerWorld => "powerworld",
         powerio_matrix::SourceFormat::PandapowerJson => "pandapower-json",
         powerio_matrix::SourceFormat::Pslf => "pslf",
+        powerio_matrix::SourceFormat::Goc3Json => "goc3-json",
+        powerio_matrix::SourceFormat::SurgeJson => "surge-json",
         powerio_matrix::SourceFormat::PowerWorldBinary => "powerworld-pwb",
         powerio_matrix::SourceFormat::InMemory => "in-memory",
         powerio_matrix::SourceFormat::Normalized => "normalized",
@@ -1147,7 +1149,7 @@ fn parse_file(path: &str, from_: Option<&str>) -> PyResult<PyNetwork> {
 
 /// Parse a case from in-memory text in the named `format` (`matpower`,
 /// `powermodels-json`, `egret-json`, `pandapower-json`, `psse`, `powerworld`,
-/// `pslf`; aliases `m`/`pm`/`egret`/`pp`/`raw`/`aux`/`epc`).
+/// `pslf`, `goc3-json`, `surge-json`; aliases `m`/`pm`/`egret`/`pp`/`raw`/`aux`/`epc`/`goc3`/`surge`).
 #[pyfunction]
 #[pyo3(signature = (text, format=None))]
 fn parse_str(text: &str, format: Option<&str>) -> PyResult<PyNetwork> {

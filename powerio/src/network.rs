@@ -222,6 +222,12 @@ pub enum SourceFormat {
     /// Read from a PyPSA CSV folder. This is a folder format rather than a
     /// single retained text document, so same-format writes are canonicalized.
     PypsaCsv,
+    /// Read from an ARPA-E GO Challenge 3 JSON input document. The source is a
+    /// unit commitment data set; the neutral transmission model keeps a static
+    /// first interval network and retains the source text for the full data.
+    Goc3Json,
+    /// Read from a Surge native JSON document.
+    SurgeJson,
 }
 
 /// A format-neutral power network.

@@ -523,11 +523,11 @@ def convert_file(
     """Convert a case file to another format through the neutral hub.
 
     ``to`` / ``from_`` are format names: ``matpower``, ``powermodels-json``,
-    ``egret-json``, ``pandapower-json``, ``psse``, ``powerworld`` (aliases
-    ``m``, ``pm``, ``egret``, ``pp``, ``raw``, ``aux``). The input format is
-    inferred from the file extension unless ``from_`` overrides it. PSLF EPC is
-    accepted as input with ``from_="pslf"`` / ``"epc"`` or a ``.epc`` extension,
-    but it is not a write target. PyPSA CSV folders are read with
+    ``egret-json``, ``pandapower-json``, ``psse``, ``powerworld``, ``pslf``,
+    ``goc3-json``, and ``surge-json`` (aliases ``m``, ``pm``, ``egret``,
+    ``pp``, ``raw``, ``aux``, ``epc``, ``goc3``, and ``surge``). The input format is
+    inferred from the file extension unless ``from_`` overrides it. GO Challenge
+    3 JSON is read only. PyPSA CSV folders are read with
     ``from_="pypsa-csv"`` and written with
     :meth:`Network.write_pypsa_csv_folder`. Returns a :class:`Conversion` with
     the text and any fidelity warnings.

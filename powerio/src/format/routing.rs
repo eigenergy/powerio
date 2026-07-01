@@ -43,6 +43,8 @@ pub enum TransmissionFormat {
     Pslf,
     Pwb,
     Gridfm,
+    Goc3Json,
+    SurgeJson,
 }
 
 impl TransmissionFormat {
@@ -61,6 +63,8 @@ impl TransmissionFormat {
             Self::Pslf => "pslf",
             Self::Pwb => "pwb",
             Self::Gridfm => "gridfm",
+            Self::Goc3Json => "goc3-json",
+            Self::SurgeJson => "surge-json",
         }
     }
 }
@@ -135,6 +139,8 @@ pub fn transmission_format_from_name(name: &str) -> Option<TransmissionFormat> {
         "pslf" | "epc" | "pslfepc" => Some(TransmissionFormat::Pslf),
         "pwb" => Some(TransmissionFormat::Pwb),
         "gridfm" => Some(TransmissionFormat::Gridfm),
+        "goc3" | "goc3json" | "go3" | "gochallenge3" | "c3" => Some(TransmissionFormat::Goc3Json),
+        "surge" | "surgejson" => Some(TransmissionFormat::SurgeJson),
         _ => None,
     }
 }
@@ -196,6 +202,18 @@ impl JsonShape {
     fn classify(&self) -> Detection<JsonFormat> {
         let is_pandapower = self.string("_class") == Some("pandapowerNet");
         let is_egret = self.has("elements") && self.has("system");
+        let is_goc3 = self.has("network")
+            && (self.has("time_series_input") || self.has("reliability"))
+            && self.object.get("network").is_some_and(|network| {
+                network.as_object().is_some_and(|obj| {
+                    obj.contains_key("simple_dispatchable_device")
+                        || obj.contains_key("ac_line")
+                        || obj.contains_key("two_winding_transformer")
+                })
+            });
+        let is_surge = self.string("format") == Some("surge-json")
+            && self.has("schema_version")
+            && self.has("network");
         let is_powerio = self.has("buses")
             && (self.has("branches")
                 || self.has("base_mva")
@@ -203,7 +221,8 @@ impl JsonShape {
                 || self.has("generators"));
         let is_power_models =
             self.has("baseMVA") || self.has("branch") || self.has("gen") || self.has("gencost");
-        let transmission = is_pandapower || is_egret || is_powerio || is_power_models;
+        let transmission =
+            is_pandapower || is_egret || is_goc3 || is_surge || is_powerio || is_power_models;
 
         let is_pmd = self.has("data_model");
         let strong_bmopf = self.has("line")
@@ -223,6 +242,10 @@ impl JsonShape {
                 TransmissionFormat::PandapowerJson
             } else if is_egret {
                 TransmissionFormat::EgretJson
+            } else if is_goc3 {
+                TransmissionFormat::Goc3Json
+            } else if is_surge {
+                TransmissionFormat::SurgeJson
             } else if is_powerio {
                 TransmissionFormat::PowerioJson
             } else {
@@ -304,6 +327,48 @@ mod tests {
             classify_json_text(r#"{"elements":{},"system":{}}"#),
             Detection::Known(SourceFormat::Transmission(TransmissionFormat::EgretJson))
         );
+    }
+
+    #[test]
+    fn classifies_goc3_json() {
+        assert_eq!(
+            classify_json_text(
+                r#"{"network":{"bus":[],"simple_dispatchable_device":[]},"time_series_input":{}}"#
+            ),
+            Detection::Known(SourceFormat::Transmission(TransmissionFormat::Goc3Json))
+        );
+    }
+
+    #[test]
+    fn resolves_goc3_aliases() {
+        for alias in ["goc3-json", "goc3", "go3", "go-challenge-3", "c3"] {
+            assert_eq!(
+                super::transmission_format_from_name(alias),
+                Some(TransmissionFormat::Goc3Json),
+                "{alias}"
+            );
+        }
+    }
+
+    #[test]
+    fn classifies_surge_json() {
+        assert_eq!(
+            classify_json_text(
+                r#"{"format":"surge-json","schema_version":"0.1.0","network":{"buses":[]}}"#
+            ),
+            Detection::Known(SourceFormat::Transmission(TransmissionFormat::SurgeJson))
+        );
+    }
+
+    #[test]
+    fn resolves_surge_aliases() {
+        for alias in ["surge-json", "surge", "surgejson"] {
+            assert_eq!(
+                super::transmission_format_from_name(alias),
+                Some(TransmissionFormat::SurgeJson),
+                "{alias}"
+            );
+        }
     }
 
     #[test]

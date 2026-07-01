@@ -376,7 +376,7 @@ struct TransmissionFormat {
     target: TargetFormat,
 }
 
-const TRANSMISSION_FORMATS: [TransmissionFormat; 8] = [
+const TRANSMISSION_FORMATS: [TransmissionFormat; 9] = [
     TransmissionFormat {
         name: "MATPOWER .m",
         token: "matpower",
@@ -413,21 +413,27 @@ const TRANSMISSION_FORMATS: [TransmissionFormat; 8] = [
         target: TargetFormat::PandapowerJson,
     },
     TransmissionFormat {
+        name: "Surge JSON",
+        token: "surge-json",
+        target: TargetFormat::SurgeJson,
+    },
+    TransmissionFormat {
         name: "PSLF .epc",
         token: "pslf",
         target: TargetFormat::Pslf,
     },
 ];
 
-const TRANSMISSION_WARNING_BASELINE: [[usize; 8]; 8] = [
-    [0, 0, 0, 8, 8, 0, 5, 11],
-    [6, 0, 1, 14, 14, 1, 11, 16],
-    [6, 0, 0, 14, 14, 1, 11, 16],
-    [13, 0, 1, 0, 1, 1, 3, 10],
-    [12, 0, 0, 0, 0, 0, 2, 5],
-    [0, 0, 0, 8, 8, 0, 5, 11],
-    [6, 0, 0, 11, 11, 5, 0, 11],
-    [17, 4, 5, 5, 5, 5, 7, 8],
+const TRANSMISSION_WARNING_BASELINE: [[usize; 9]; 9] = [
+    [0, 0, 0, 8, 8, 0, 5, 0, 11],
+    [6, 0, 1, 14, 14, 1, 11, 24, 16],
+    [6, 0, 0, 14, 14, 1, 11, 24, 16],
+    [13, 0, 1, 0, 1, 1, 3, 1, 10],
+    [12, 0, 0, 0, 0, 0, 2, 0, 5],
+    [0, 0, 0, 8, 8, 0, 5, 0, 11],
+    [6, 0, 0, 11, 11, 5, 0, 0, 11],
+    [2, 1, 2, 10, 10, 2, 7, 2, 17],
+    [17, 4, 5, 5, 5, 5, 7, 5, 8],
 ];
 
 const TRANSMISSION_CASES: [(&str, &str); 6] = [

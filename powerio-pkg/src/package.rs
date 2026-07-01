@@ -1157,6 +1157,8 @@ fn balanced_format_name(f: SourceFormat) -> &'static str {
         SourceFormat::PowerWorld => "powerworld",
         SourceFormat::PandapowerJson => "pandapower-json",
         SourceFormat::Pslf => "pslf",
+        SourceFormat::Goc3Json => "goc3-json",
+        SourceFormat::SurgeJson => "surge-json",
         SourceFormat::PowerWorldBinary => "powerworld-pwb",
         SourceFormat::InMemory => "in-memory",
         SourceFormat::Normalized => "normalized",

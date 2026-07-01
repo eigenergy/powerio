@@ -2,8 +2,9 @@
 //! files.
 //!
 //! Readers and writers cover MATPOWER `.m`, PowerModels JSON, PSS/E `.raw`,
-//! PowerWorld `.aux`, pandapower JSON, PyPSA CSV, egret JSON, and PSLF `.epc`.
-//! PowerWorld `.pwb` case files are read only; `.pwd` display files parse through
+//! PowerWorld `.aux`, pandapower JSON, PyPSA CSV, egret JSON, PSLF `.epc`, GO
+//! Challenge 3 JSON, and Surge JSON. PowerWorld `.pwb` case files and GO
+//! Challenge 3 JSON output are read only; `.pwd` display files parse through
 //! [`parse_display_file`]. Case formats meet at the typed [`Network`], and
 //! [`Network::to_format`] reports whatever a target format cannot represent.
 //! See the [`crate::format`] module for the two-tier fidelity behavior.
@@ -49,11 +50,12 @@ pub use format::{
     Conversion, DisplayData, DisplayFormat, Parsed, PwdDisplay, PwdSubstation, PypsaCsvOutputs,
     TargetFormat, WriteOptions, convert_file, convert_file_with_options, convert_str,
     convert_str_with_options, display_format_from_name, parse_display_bytes, parse_display_file,
-    parse_egret_json, parse_file, parse_matpower, parse_matpower_file, parse_pandapower_json,
-    parse_powermodels_json, parse_powerworld, parse_pslf, parse_psse, parse_str,
-    read_pypsa_csv_folder, target_format_from_name, write_as, write_as_with_options, write_dir,
-    write_egret_json, write_matpower, write_pandapower_json, write_powermodels_json,
-    write_powerworld, write_pslf, write_psse, write_psse_rev, write_pypsa_csv_folder,
+    parse_egret_json, parse_file, parse_goc3_json, parse_matpower, parse_matpower_file,
+    parse_pandapower_json, parse_powermodels_json, parse_powerworld, parse_pslf, parse_psse,
+    parse_str, parse_surge_json, read_pypsa_csv_folder, target_format_from_name, write_as,
+    write_as_with_options, write_dir, write_egret_json, write_matpower, write_pandapower_json,
+    write_powermodels_json, write_powerworld, write_pslf, write_psse, write_psse_rev,
+    write_pypsa_csv_folder, write_surge_json,
 };
 pub use gen_cost::{GenCostPatch, GenCostPolicyReport, MissingGenCostPolicy, parse_gen_cost_csv};
 pub use indexed::{ConnectivityReport, IndexCore, IndexedNetwork};

@@ -260,10 +260,10 @@ impl<'a> GenCostCliOptions<'a> {
     }
 }
 
-/// A case interchange format, for `--to` / `--from`. `gridfm` and `pwb` are
+/// A case interchange format, for `--to` / `--from`. `gridfm`, `goc3-json`, and `pwb` are
 /// read-only here: `convert --from gridfm` reads a Parquet dataset, but writing
-/// a gridfm dataset is the dedicated `gridfm` subcommand, and PowerWorld `.pwb`
-/// has no writer.
+/// a gridfm dataset is the dedicated `gridfm` subcommand, GO Challenge 3 JSON is a
+/// unit commitment input document, and PowerWorld `.pwb` has no writer.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, ValueEnum)]
 enum FormatArg {
     #[value(name = "matpower", alias = "m")]
@@ -292,6 +292,12 @@ enum FormatArg {
     /// GE PSLF .epc case (read and write).
     #[value(name = "pslf", alias = "epc")]
     Pslf,
+    /// ARPA-E GO Challenge 3 JSON input data (read only).
+    #[value(name = "goc3-json", alias = "goc3", alias = "go3", alias = "c3")]
+    Goc3Json,
+    /// Surge native JSON network document.
+    #[value(name = "surge-json", alias = "surge")]
+    SurgeJson,
     /// Read a gridfm-datakit Parquet dataset directory (read only).
     #[value(name = "gridfm")]
     Gridfm,
@@ -326,6 +332,8 @@ impl FormatArg {
             FormatArg::PandapowerJson => TargetFormat::PandapowerJson,
             FormatArg::PowerioJson => TargetFormat::PowerioJson,
             FormatArg::Pslf => TargetFormat::Pslf,
+            FormatArg::Goc3Json => TargetFormat::Goc3Json,
+            FormatArg::SurgeJson => TargetFormat::SurgeJson,
             // PypsaCsv is a transmission format, but it writes a directory, not a
             // text target; `run_convert` handles it before reaching here. gridfm
             // is read only here, and Pwb is read only. The distribution formats
@@ -360,6 +368,8 @@ impl FormatArg {
             | FormatArg::PowerioJson
             | FormatArg::PypsaCsv
             | FormatArg::Pslf
+            | FormatArg::Goc3Json
+            | FormatArg::SurgeJson
             | FormatArg::Gridfm
             | FormatArg::Pwb => None,
         }
@@ -379,6 +389,8 @@ impl FormatArg {
             FormatArg::PowerioJson => "powerio-json",
             FormatArg::PypsaCsv => "pypsa-csv",
             FormatArg::Pslf => "pslf",
+            FormatArg::Goc3Json => "goc3-json",
+            FormatArg::SurgeJson => "surge-json",
             FormatArg::Gridfm => "gridfm",
             FormatArg::Pwb => "pwb",
             FormatArg::Dss => "dss",
@@ -1107,6 +1119,8 @@ fn balanced_source_format_name(f: powerio_matrix::SourceFormat) -> &'static str 
         powerio_matrix::SourceFormat::PowerWorld => "powerworld",
         powerio_matrix::SourceFormat::PandapowerJson => "pandapower-json",
         powerio_matrix::SourceFormat::Pslf => "pslf",
+        powerio_matrix::SourceFormat::Goc3Json => "goc3-json",
+        powerio_matrix::SourceFormat::SurgeJson => "surge-json",
         powerio_matrix::SourceFormat::PowerWorldBinary => "powerworld-pwb",
         powerio_matrix::SourceFormat::InMemory => "in-memory",
         powerio_matrix::SourceFormat::Normalized => "normalized",
@@ -1248,6 +1262,9 @@ fn run_convert(
         anyhow::bail!(
             "`convert` cannot write PowerWorld .pwb binary cases; use `--to powerworld` for AUX text"
         );
+    }
+    if matches!(to, FormatArg::Goc3Json) {
+        anyhow::bail!("`convert` cannot write GO Challenge 3 JSON; it is an input format");
     }
     // PyPSA CSV is a transmission format that writes a directory, not a text
     // target, so it takes the folder path and returns early.
