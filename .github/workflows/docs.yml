@@ -148,6 +148,22 @@ jobs:
         </dl>
         <footer><a href="https://github.com/eigenergy/powerio">github.com/eigenergy/powerio</a></footer>
         HTML
+    # The schema URLs stamped into .pio.json files (`schema`, `payload_schema`)
+    # are identifiers first, but the site serves them so they also resolve:
+    # each lands on the schema guide chapter. Relative targets keep the pages
+    # working under both powerio.dev and eigenergy.github.io/powerio.
+    - name: Schema identifier pages
+      run: |
+        for id in pio-package/0.1 pio-payload-balanced/1 pio-payload-multiconductor/1; do
+          mkdir -p "target/doc/schema/$id"
+          cat > "target/doc/schema/$id/index.html" <<HTML
+        <!doctype html>
+        <meta charset="utf-8">
+        <meta http-equiv="refresh" content="0; url=../../../guide/pio-json-schema.html">
+        <title>PowerIO schema: $id</title>
+        <a href="../../../guide/pio-json-schema.html">PowerIO schema $id — see the .pio.json schema guide</a>
+        HTML
+        done
     - uses: actions/upload-pages-artifact@v5
       with:
         path: target/doc
