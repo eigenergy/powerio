@@ -19,11 +19,13 @@ permissions:
   pages: write
   id-token: write
 
-# Serialize per ref: main's Pages deploys supersede each other, and a PR's doc
-# build can't cancel main's in-flight deploy.
+# Serialize per ref, queueing rather than cancelling: a cancelled in-flight
+# Pages deployment can leave the backend rejecting the next deployment
+# ("Deployment failed, try again later"), so successive main pushes must each
+# deploy in order. A PR's doc build still can't touch main's deploy.
 concurrency:
   group: pages-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: false
 
 env:
   CARGO_TERM_COLOR: always
