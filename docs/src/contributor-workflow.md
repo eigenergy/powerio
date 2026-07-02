@@ -1,11 +1,11 @@
-# Contributor Workflow
+# Testing and release checks
 
 Keep changes reviewable. A numerical semantics change needs tests and a short
-reason in code or docs. A performance change needs before and after measurements.
-A documentation change should link to evidence instead of expanding the README
-into a second manual.
+reason in code or docs. A performance change needs before and after
+measurements. A documentation change should link to evidence instead of
+expanding the README into a second manual.
 
-## Baseline Checks
+## Baseline checks
 
 These commands cover the Rust workspace, the Python extension build, the Python
 binding tests, and the book:
@@ -25,11 +25,10 @@ mdbook build docs
 mdbook test docs
 ```
 
-## Route Changes
+## Route changes
 
-Use the smallest gate set that covers the changed surface, then run the full
-[reliability evidence](https://eigenergy.github.io/powerio/guide/reliability.html)
-gates before a release claim.
+Use the smallest gate set that covers the changed surface, then run the
+[release gates](#release-gates) before a release claim.
 
 | changed surface | extra gates |
 | --- | --- |
@@ -40,6 +39,7 @@ gates before a release claim.
 | C ABI | `scripts/capi-header-parity.sh`; `scripts/capi-smoke.sh`; `cargo test -p powerio-capi --no-default-features`; `cargo test -p powerio-capi --features arrow,gridfm,dist,pkg`; matching clippy runs |
 | Python package metadata or extras | `maturin build --release --out /tmp/powerio-wheel-check`; inspect wheel `METADATA` |
 | Julia binding compatibility | build `powerio-capi --features arrow,gridfm,dist,pkg`, then run `PowerIO.jl` tests with `POWERIO_CAPI` |
+| shared surface with PowerIO.jl | push a same-named PowerIO.jl companion branch; the tandem CI job tests against it |
 | CLI behavior | `cargo test -p powerio-cli --test cli` |
 | documentation or website | `mdbook build docs`; `mdbook test docs`; check stale links to retired guide outputs |
 
@@ -48,7 +48,43 @@ Python 3.11+ venv as the local wheel. Missing PyPSA, pandapower, or egret is a
 setup failure. `benchmarks/run_rich_validation.sh` treats the committed
 PowerModels rich oracle as strict; missing Julia is a setup failure.
 
-## Benchmark Updates
+## Release gates
+
+The full set, beyond the baseline, before publishing a release claim:
+
+```sh
+cargo test -p powerio-capi --no-default-features
+cargo test -p powerio-capi --features arrow,gridfm,dist,pkg
+cargo clippy -p powerio-capi --all-targets --no-default-features -- -D warnings
+cargo clippy -p powerio-capi --all-targets --features arrow,gridfm,dist,pkg -- -D warnings
+cargo build -p powerio-capi --release --features arrow,gridfm,dist,pkg
+scripts/capi-header-parity.sh
+scripts/capi-smoke.sh
+POWERIO_CAPI=$PWD/target/release/libpowerio_capi.dylib \
+  julia --project=../PowerIO.jl -e 'using Pkg; Pkg.test()'
+cargo bench -p powerio-matrix --bench matrix -- 'matrix_bprime|matrix_ybus|dcopf_'
+(cd benchmarks/asv && ../../.venv/bin/asv check -E existing:../../.venv/bin/python)
+(cd benchmarks/asv && ../../.venv/bin/asv run --quick --show-stderr -E existing:../../.venv/bin/python --dry-run)
+for target in matpower psse pslf powerio_json powerworld_aux pwb pwd; do
+  cargo +nightly fuzz run "$target" -- -runs=1
+done
+bash benchmarks/run_validation.sh
+bash benchmarks/run_rich_validation.sh
+```
+
+`run_validation.sh` checks the classic transmission paths against
+PowerModels.jl, ExaPowerIO.jl, egret, pandapower, and the full legacy reader to
+writer matrix; `run_rich_validation.sh` covers fields outside the MATPOWER row
+shape (branch terminal admittance, switches, current ratings, solution values,
+HVDC costs, load voltage models). GOC3 and Surge have no external oracle in
+this harness; the Rust parser, writer, routing, package, and round trip tests
+cover them. What the oracle legs prove, per format, is in the
+[format fidelity chapter](https://eigenergy.github.io/powerio/guide/format-fidelity.html).
+
+The gates do not prove every source format field is lossless. Known losses are
+part of the public behavior and surface as warnings.
+
+## Benchmark updates
 
 Regenerate benchmark JSON before changing published tables:
 

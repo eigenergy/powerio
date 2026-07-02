@@ -142,6 +142,14 @@ jobs:
                 <a href="guide/python.html">python</a></dd>
           </div>
           <div>
+            <dt>.pio.json schema</dt>
+            <dd><a href="guide/pio-json-schema.html">field reference &amp; versioning</a>
+                <a href="guide/compiler-ir.html">compiler IR</a>
+                <a href="schema/pio-package/0.1/">pio-package/0.1</a>
+                <a href="schema/pio-payload-balanced/1/">pio-payload-balanced/1</a>
+                <a href="schema/pio-payload-multiconductor/1/">pio-payload-multiconductor/1</a></dd>
+          </div>
+          <div>
             <dt>bindings</dt>
             <dd><a href="https://eigenergy.github.io/PowerIO.jl/dev/">PowerIO.jl</a></dd>
           </div>

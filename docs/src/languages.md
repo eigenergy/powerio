@@ -91,7 +91,7 @@ POWERIO_CAPI=$PWD/target/release/libpowerio_capi.dylib \
   julia --project=../PowerIO.jl -e 'using Pkg; Pkg.test()'
 ```
 
-Binding checks covered in this audit:
+Binding compatibility checks:
 
 | surface | behavior |
 | --- | --- |
@@ -102,23 +102,6 @@ Binding checks covered in this audit:
 | Arrow | C returns Arrow C Data Interface structs; Julia's default `to_arrow` copies to owned vectors, while `copy=false` keeps the wrapper alive for zero copy reads |
 | GridFM | Julia and C read GridFM through `pio_read_dir` / `"gridfm"` and surface schema losses as warnings |
 | Distribution | Python, Julia, Rust, and C use separate distribution handles; transmission and distribution conversion paths do not mix |
-
-## v0.4 naming migration
-
-The v1 naming direction separates the concrete model families from the package
-object that can hold either family. v0.4 starts that migration without changing
-parse or conversion behavior.
-
-| Surface | Old name | New name | First alias release | Removal timing | Notes |
-|---|---|---|---|---|---|
-| Rust transmission model | `powerio::Network` | `powerio::BalancedNetwork` alias | 0.4.0 | none in 0.4 | `Network` remains the concrete type in 0.4; the alias lets new code use the v1 family name. |
-| Rust distribution model | `powerio_dist::DistNetwork` | `powerio_dist::MulticonductorNetwork` alias | 0.4.0 | none in 0.4 | `DistNetwork` remains the concrete type in 0.4. |
-| Rust package object | n/a | `powerio_pkg::NetworkPackage` | n/a | n/a | Serializes to `.pio.json` and carries `model_kind`. |
-| Python transmission handle | `powerio.Case` | `powerio.Network` / `powerio.BalancedNetwork` | 0.3.3 | removed in 0.4.0 | `Case` is no longer importable. |
-| Python distribution handle | `powerio.dist.DistCase` | `powerio.dist.MulticonductorNetwork` / `powerio.dist.DistNetwork` | 0.3.3 | removed in 0.4.0 | `DistCase` is no longer importable. |
-| C ABI network handles | `PioNetwork` / `PioDistNetwork` | unchanged `pio_*` / `pio_dist_*` handles | n/a | n/a | `PIO_ABI_VERSION` stays 4 and `PIO_DIST_ABI_VERSION` stays 1; symbol renames are not part of the 0.4 package spine. |
-| C ABI package handle | n/a | `PioPackage` / `pio_package_*` | 0.4.0 | n/a | The package functions use `balanced` and `multiconductor` where the model family matters. |
-| MCP | older case helper names | `parse`, `save`, `summary`, `display` | 0.3.3 | kept as Python compatibility wrappers in 0.4 | Advertised tools use the semantic names; `.pio.json` package transport is accepted by the network tools. |
 
 ## Distribution surface (`powerio-dist`)
 
