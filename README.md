@@ -11,25 +11,23 @@
 
 PowerIO is compiler infrastructure for power systems. Case files from a dozen
 transmission and distribution formats parse into typed intermediate
-representations; explicit, recorded passes normalize, validate, and lower them;
-writers emit any supported target format, sparse matrix families, and ML
-datasets. The `.pio.json` package is the compiler object: one network payload
-under declared [schema versions](https://powerio.dev/guide/pio-json-schema.html),
-with provenance, source maps, structured diagnostics, validation, and replayable
-operating points.
+representations (IR). Once parsed, you can perform explicit, recorded operations, like normalization, validation, and lowering.
+You can compile/write the case back into any supported target format, sparse matrix families, and ML model formats. 
 
-Fidelity is the contract. Writing a parsed file back to its own format returns
-the original text when the reader kept it. Converting to another format writes
+The `.pio.json` package serves as a unified network payload under declared [schema versions](https://powerio.dev/guide/pio-json-schema.html),
+which records where the data came from, and how it maps back to the original source file. 
+Furthermore, the package contains structured diagnostics, validation, and replayable operating points, enabling many downstream tasks.
+
+Data fidelity and interoperability is the primary goal of the PowerIO project. Writing a parsed file back to its own format returns
+the original text when the reader kept it. Converting to another format writes 
 the modeled electrical data and reports every field the target cannot carry in
 `Conversion::warnings`.
 
-The core is [Rust](https://rust-lang.org). The
-[C ABI](https://github.com/eigenergy/powerio/tree/main/powerio-capi) exposes it
-to C, C++, [Julia](https://github.com/eigenergy/PowerIO.jl), and other foreign
-function interfaces; the Python package and the command line interface sit on
-the same code.
+The core of PowerIO is written in [Rust](https://rust-lang.org). The Rust version is used to create the Python package and the command line interface, both of which sit in this repo. The Rust implementation also enables the creation of a [C ABI](https://github.com/eigenergy/powerio/tree/main/powerio-capi), which exposes PowerIO capabilities to C, C++, [Julia](https://github.com/eigenergy/PowerIO.jl), and other foreign function interfaces (FFIs). 
 
 ## Overview
+
+PowerIO is a community infrastructure project intended to serve all developers working on electric power systems. Everyone is welcome to use, build upon, and contribute to the PowerIO infrastructure project. 
 
 ### Formats
 

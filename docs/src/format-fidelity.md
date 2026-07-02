@@ -113,9 +113,9 @@ in Python), naming the table and counting the affected rows.
   band, regulated bus, and step blocks. A 2-winding transformer's magnetizing
   susceptance round-trips through `MAG2` (\\(\mathrm{CM} = 1\\)). Impedances are assumed on the
   system base (\\(\mathrm{CZ} = \mathrm{CW} = 1\\)).
-- **PowerWorld** `.aux` reads and writes; `.pwb` binary cases are read only;
-  `.pwd` display files parse through the separate display API. `.aux` carries no
-  system base, so the reader defaults to 100 MVA. No third-party `.aux` reader
+- **PowerWorld** `.aux` is read and written. `.pwb` binary cases are read
+  only, and `.pwd` display files parse through the separate display API.
+  `.aux` carries no system base, so the reader defaults to 100 MVA. No third-party `.aux` reader
   exists, so that writer is validated by powerio's own read back plus a
   PowerModels JSON bridge. The `.pwb` layouts are reverse engineered; the decode
   evidence and coverage matrix are maintainer notes at
@@ -197,7 +197,7 @@ in Python), naming the table and counting the affected rows.
 
 PSS/E `.raw` files carry no generator cost curves. Converting a PSS/E case to
 MATPOWER writes `mpc.gen` and omits `mpc.gencost` with a warning; powerio does
-not invent zero costs. Workflows that need costs state a policy:
+not invent zero costs. A workflow that needs costs must pick an explicit policy:
 
 ```sh
 powerio convert case.raw --from psse --to matpower --missing-gen-cost zero -o case.m

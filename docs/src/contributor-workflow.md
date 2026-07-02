@@ -50,7 +50,8 @@ PowerModels rich oracle as strict; missing Julia is a setup failure.
 
 ## Release gates
 
-The full set, beyond the baseline, before publishing a release claim:
+Run the full set below, in addition to the baseline checks, before publishing
+a release claim:
 
 ```sh
 cargo test -p powerio-capi --no-default-features

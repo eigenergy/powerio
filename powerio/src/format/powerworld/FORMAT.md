@@ -3,7 +3,7 @@
 Maintainer notes for the readers in this module: the aux grammar, the decode
 evidence behind the `.pwb` binary layouts (no official specification exists),
 and the `.pwd` display coordinates. This file is the format reference the
-reader code cites; the user-facing behavior summary lives in the guide's
+reader code cites. The user-facing behavior summary lives in the guide's
 format fidelity chapter. Fixture provenance is in
 `tests/data/powerworld/README.md`.
 

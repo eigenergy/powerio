@@ -1,12 +1,13 @@
 # PowerIO Guide
 
 PowerIO is compiler infrastructure for power system data. Source formats parse
-into typed models, explicit passes normalize and lower them, writers emit
-target artifacts, and the `.pio.json` package records how a source was
-interpreted: model kind, provenance, source maps, structured diagnostics,
-validation, and lowering history. Sparse matrices and graph views build from
-the same models for solver and analysis code. This guide records behavior,
-conventions, and release checks; rustdoc covers API detail.
+into typed models. Explicit, recorded passes normalize, validate, and lower
+them, and writers emit any supported target format. The `.pio.json` package
+records how a source was interpreted: model kind, provenance, source maps,
+structured diagnostics, validation, and lowering history. Sparse matrices and
+graph views are built from the same models for solver and analysis code. This
+guide records behavior, conventions, and release checks. Rustdoc covers API
+detail.
 
 The rules these pages document:
 
