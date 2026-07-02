@@ -4,7 +4,7 @@
 
 - [Architecture](architecture.md)
   - [Compiler IR](compiler-ir.md)
-  - [PIO JSON Schema](pio-json-schema.md)
+  - [The .pio.json format](pio-json-schema.md)
 - [Format Fidelity](format-fidelity.md)
 - [Matrix Outputs](matrices.md)
 - [DC OPF Bundle](dcopf-bundle.md)

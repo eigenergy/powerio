@@ -144,12 +144,12 @@ jobs:
                 <a href="guide/python.html">python</a></dd>
           </div>
           <div>
-            <dt>.pio.json schema</dt>
+            <dt>.pio.json format</dt>
             <dd><a href="guide/pio-json-schema.html">field reference &amp; versioning</a>
                 <a href="guide/compiler-ir.html">compiler IR</a>
-                <a href="schema/pio-package/0.1/">pio-package/0.1</a>
-                <a href="schema/pio-payload-balanced/1/">pio-payload-balanced/1</a>
-                <a href="schema/pio-payload-multiconductor/1/">pio-payload-multiconductor/1</a></dd>
+                <a href="guide/pio-json-schema.html#pio-package">pio-package/0.1</a>
+                <a href="guide/pio-json-schema.html#pio-payload-balanced">pio-payload-balanced/1</a>
+                <a href="guide/pio-json-schema.html#pio-payload-multiconductor">pio-payload-multiconductor/1</a></dd>
           </div>
           <div>
             <dt>bindings</dt>
@@ -160,52 +160,29 @@ jobs:
         HTML
     # The schema URLs stamped into .pio.json files (`schema`, `payload_schema`)
     # are identifiers first, but the site serves them so they also resolve.
-    # Each page states what its URL names and links the field reference and the
-    # normative Rust type. Relative targets keep the pages working under both
-    # powerio.dev and eigenergy.github.io/powerio.
+    # Each redirects to its section of the format chapter. Relative targets
+    # keep the redirects working under both powerio.dev and
+    # eigenergy.github.io/powerio.
     - name: Schema identifier pages
       run: |
-        write_schema_page() {
+        redirect_schema_page() {
+          # A redirect to a missing anchor would land at the page top; fail
+          # the build instead.
+          anchor="${1%/*}"
+          grep -q "id=\"$anchor\"" target/doc/guide/pio-json-schema.html
+          target="../../../guide/pio-json-schema.html#$anchor"
           mkdir -p "target/doc/schema/$1"
           cat > "target/doc/schema/$1/index.html" <<HTML
         <!doctype html>
         <meta charset="utf-8">
-        <meta name="viewport" content="width=device-width, initial-scale=1">
+        <meta http-equiv="refresh" content="0; url=$target">
         <title>$1</title>
-        <style>body{font-family:Georgia,serif;max-width:600px;margin:5rem auto;padding:0 1.5rem;line-height:1.6}</style>
-        <h1><code>$1</code></h1>
-        <p>$2</p>
-        <p>Current version: <code>$3</code>. Additive optional fields bump the
-        minor version; field moves or removals bump the major. The
-        <a href="../../../guide/pio-json-schema.html">.pio.json schema guide</a>
-        is the field reference.</p>
-        $4
+        <a href="$target">$1</a>
         HTML
         }
-        write_schema_page pio-package/0.1 \
-          "The <code>.pio.json</code> package envelope: the versioned wrapper
-           (provenance, source maps, diagnostics, validation, operating points,
-           lowering history) around one network payload. Stamped as
-           <code>schema</code> on every package." \
-          "0.1.1" ""
-        write_schema_page pio-payload-balanced/1 \
-          "The balanced transmission payload: the serde snapshot of the
-           <code>powerio::Network</code> model under
-           <code>model.balanced_network</code>. Stamped as
-           <code>payload_schema</code> on balanced packages." \
-          "1.0.0" \
-          '<p>The normative shape is the Rust model:
-           <a href="../../../powerio/network/struct.Network.html">powerio::Network</a>.</p>'
-        write_schema_page pio-payload-multiconductor/1 \
-          "The multiconductor distribution payload: the serde snapshot of the
-           <code>powerio_dist::DistNetwork</code> model under
-           <code>model.multiconductor_network</code>. Stamped as
-           <code>payload_schema</code> on multiconductor packages. For a
-           standalone distribution exchange file, use the BMOPF writer instead
-           of this payload." \
-          "1.0.0" \
-          '<p>The normative shape is the Rust model:
-           <a href="../../../powerio_dist/model/struct.DistNetwork.html">powerio_dist::DistNetwork</a>.</p>'
+        redirect_schema_page pio-package/0.1
+        redirect_schema_page pio-payload-balanced/1
+        redirect_schema_page pio-payload-multiconductor/1
     - uses: actions/upload-pages-artifact@v5
       with:
         path: target/doc

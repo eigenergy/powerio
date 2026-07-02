@@ -1,43 +1,83 @@
-# The `.pio.json` schema
+# The `.pio.json` format
 
-`.pio.json` is the serialized form of `powerio_pkg::NetworkPackage`: a versioned
-envelope around one PowerIO IR payload. The envelope shape and stability policy
-are below. The crate is the implementation; `compiler-ir.md` is the architecture
-note.
+A `.pio.json` file is a compiled network case: one typed network model plus the
+record of how it was produced. The payload is the PowerIO IR serialized exactly
+as the Rust structs define it, either `powerio::Network` (balanced) or
+`powerio_dist::DistNetwork` (multiconductor). The envelope around it records
+provenance, source maps, structured diagnostics, validation results, lowering
+history, and optional operating points. `powerio_pkg::NetworkPackage` is the
+implementation; [Compiler IR](compiler-ir.md) is the architecture note.
+
+## Why a package format
+
+Source formats carry data, not interpretation. A MATPOWER or OpenDSS file
+states the case; it cannot state how a parser read it: which fields were
+defaulted or inferred, what validation found, or how a multiconductor model was
+lowered to a balanced one. The envelope records that work next to the model, so
+a downstream tool can audit a conversion instead of trusting it.
+
+The package is also the handoff object between PowerIO consumers. The CLI, the
+Julia bindings, and the Python bindings exchange one artifact whose model kind
+is explicit, instead of guessing what a bare network JSON contains.
+
+## Relation to interchange formats {#interchange}
+
+`.pio.json` is not an interchange format. Interchange formats (MATPOWER,
+PSS/E, BMOPF, GOC3) stay at the converter boundary: PowerIO reads and writes
+them, and the package records what happened in between.
+
+The nearest neighbor is BMOPF, and the differences are deliberate. BMOPF is an
+exchange schema for multiconductor distribution OPF cases, defined by the IEEE
+PES task force on benchmarking multiconductor OPF in
+[bmopf-report](https://github.com/frederikgeth/bmopf-report). Its contract is
+a JSON Schema 2020-12 document with `additionalProperties: false`, its units
+are SI, and independent tools validate instances against the schema file. It
+defines no transmission model and no provenance envelope, and it evolves under
+task force review.
+
+`.pio.json` is the output of one toolchain. It covers both IR families, wraps
+the payload in the compilation record above, and versions with PowerIO
+releases. Its contract is the Rust model that writes and reads it rather than
+a schema document: the payload is what the model serializes and the semver
+fields below govern change. Pinning the payload to an external draft
+schema would push every task force revision into every PowerIO consumer.
+
+The two formats meet at the multiconductor model. The BMOPF reader and writer
+translate to and from the same `DistNetwork` the multiconductor payload
+serializes, so crossing the boundary loses nothing the model can represent. To
+exchange a distribution case with tools outside PowerIO, write BMOPF
+(`powerio convert --to bmopf-json`). To carry a compiled case between PowerIO
+consumers with its provenance intact, use `.pio.json`.
 
 ## Two stability tiers
 
 A `.pio.json` file has two parts with different stability promises.
 
 1. **The envelope** — every field except `model`. This is the versioned,
-   documented surface: `schema`, `schema_version`, `producer`, `model_kind`,
-   `origin`, `sources`, `source_maps`, `diagnostics`, `validation`, `summary`,
-   `lowering_history`, `operating_points`, `derived`. Its shape changes only
-   under the versioning policy below.
+   documented surface; the envelope section below gives the policy and the
+   field table.
 
 2. **The payload** — the `model` field's `balanced_network` /
-   `multiconductor_network` object: the serde snapshot of the PowerIO Rust IR
-   (`powerio::Network` / `powerio_dist::DistNetwork`). The payload is a declared
-   contract of its own, named by the top-level `payload_schema` URL and
-   versioned by `payload_schema_version`. A consumer that computes on payload
-   fields pins the payload version; a tool that routes or audits packages pins
-   the envelope version and can keep treating the payload as opaque.
+   `multiconductor_network` object. The payload is a declared contract of its
+   own, named by the top-level `payload_schema` URL and versioned by
+   `payload_schema_version`. A consumer that computes on payload fields pins
+   the payload version; a tool that routes or audits packages pins the
+   envelope version and can keep treating the payload as opaque.
 
 The two versions are independent because they change at different rates and
 break different consumers: the payload grows whenever the IR grows (a minor
 `payload_schema_version` bump), while the envelope bookkeeping barely moves.
 
-The payload is PowerIO's own IR schema for both model kinds. Interchange
-formats stay at the converter boundary: for distribution models the
-multiconductor payload is the same model the BMOPF reader and writer translate
-to and from, and `powerio convert --to bmopf-json` emits a standalone BMOPF
-exchange file when one is needed. The BMOPF schema itself (bmopf-report) never
-defines the payload.
+The schema URLs are identifiers, not fetch locations (the JSON Schema `$id`
+convention). The site serves them anyway; each redirects to its section of
+this chapter.
 
-## Versioning policy (envelope)
+## The envelope: `pio-package/0.1` {#pio-package}
 
-- `schema_version` is semver. The current value is `0.1.1`; the `schema` URL is
-  `https://powerio.dev/schema/pio-package/0.1`.
+The `schema` field on every package names the envelope contract:
+`https://powerio.dev/schema/pio-package/0.1`. `schema_version` is semver; the
+current value is `0.1.1`.
+
 - Optional additive envelope fields (a reader that ignores them loses nothing
   it relied on before) land without a version change; `operating_points` landed
   this way. The minor version bumps when a reader needs to depend on a field
@@ -48,29 +88,89 @@ defines the payload.
   preserve them in an extras map instead of dropping them.
 - A reader accepts same major `schema_version` values and rejects a different
   major version before using the payload.
-- Every package states `producer.version` and `schema_version`.
 
-## Versioning policy (payload)
+### Envelope reference
 
-- `payload_schema` names the payload contract per model kind:
-  `https://powerio.dev/schema/pio-payload-balanced/1` and
-  `https://powerio.dev/schema/pio-payload-multiconductor/1`. The URLs are
-  identifiers, not fetch locations (the JSON Schema `$id` convention).
-- `payload_schema_version` is semver, currently `1.0.0` for both kinds.
-  Additive optional fields bump the minor; field moves or removals bump the
-  major.
-- A reader rejects a `payload_schema_version` with a different major (or one
-  that does not parse as semver) before computing on payload fields. Absent
-  fields — every package written before 0.1.1 — are accepted; such payloads
-  predate the declared contract.
-- The payload field tables are the rustdoc of `powerio::Network` and
-  `powerio_dist::DistNetwork`; the serde snapshot of those structs is the
-  normative shape.
+| field | type | required | notes |
+|---|---|---|---|
+| `schema` | string (URL) | yes | identifies the package format; defaults to the current URL on read |
+| `schema_version` | string (semver) | yes | envelope version; defaults to current on read |
+| `producer` | object | yes | `{tool, version, git_commit?, features[]}` |
+| `package_id` | string | no | stable content id, e.g. `"sha256:..."`; unset by the scaffold |
+| `created_at` | string (RFC 3339) | no | unset by default for deterministic output |
+| `model_kind` | enum | yes | `balanced` \| `multiconductor`; authoritative |
+| `payload_schema` | string (URL) | no | declared payload contract for `model_kind`; absent on pre-0.1.1 packages |
+| `payload_schema_version` | string (semver) | no | payload version; a different major is rejected on read |
+| `model` | object | yes | `{kind, <kind>_network}`; the serialized Rust model payload |
+| `origin` | object | yes | tagged by `kind`: `in_memory` \| `file` \| `folder` \| `binary_file` \| `derived` \| `composite` |
+| `sources` | array | no | declared source artifacts: `{id, kind, path?, format?, hash?}` |
+| `source_maps` | array | no | `{element_path, source_ref, mapping_kind, confidence}` |
+| `diagnostics` | array | no | structured findings (see below) |
+| `validation` | object | yes | `{status, counts, passes[]}` |
+| `summary` | object | yes | `{elements{}, topology?, units?}` |
+| `lowering_history` | array | no | `LoweringRecord` per pass |
+| `operating_points` | object | no | replayable updates over the one static payload |
+| `derived` | object | no | optional matrix stats, normalized solver table metadata, and cache keys |
+
+## Explicit model kind
+
+`model_kind` is a standalone top-level field and is authoritative. A reader
+**must** branch on it and **must not** infer the payload kind from which field is
+present. The payload is additionally self-describing: `model` is tagged by
+`kind`, so `model.kind` and `model_kind` carry the same value.
+`NetworkPackage::kind_is_consistent` asserts the two agree; a reader should
+reject a package where they disagree.
+
+```json
+"model_kind": "balanced",
+"model": { "kind": "balanced", "balanced_network": { "...": "..." } }
+```
+
+`model_kind` values: `balanced`, `multiconductor` (the enum is non-exhaustive;
+later families can be added).
+
+## The payloads
+
+`payload_schema` names the payload contract per model kind and
+`payload_schema_version` versions it, currently `1.0.0` for both kinds.
+Additive optional fields bump the minor; field moves or removals bump the
+major. A reader rejects a different major (or a version that does not parse as
+semver) before computing on payload fields. Both fields are absent on packages
+written before envelope 0.1.1; such payloads predate the declared contract and
+are accepted.
+
+There is no separate schema document for the payloads. Each payload is what
+its Rust model serializes, and the model's rustdoc is the field reference. The
+balanced payload's wire form is additionally held to a committed golden file
+by `powerio/tests/snapshot_schema.rs`.
+
+### The balanced payload: `pio-payload-balanced/1` {#pio-payload-balanced}
+
+`https://powerio.dev/schema/pio-payload-balanced/1` names the serde form of
+`powerio::Network` under `model.balanced_network`, stamped when `model_kind`
+is `balanced`: the scalar positive-sequence transmission model. The tables are
+`buses`, `loads`, `shunts`, `branches`, `switches`, `generators`, `storage`,
+`hvdc`, `transformers_3w`, and `areas`, alongside `name`, `base_mva`,
+`base_frequency`, `source_format`, and optional solver metadata. Units follow the MATPOWER
+conventions: MW and MVAr power, per unit voltage magnitudes and impedances on
+the system base, degree angles. Every element carries an `extras` map for
+source format fields the model does not name. The field reference is the
+[`powerio::Network` rustdoc](../powerio/network/struct.Network.html).
+
+### The multiconductor payload: `pio-payload-multiconductor/1` {#pio-payload-multiconductor}
+
+`https://powerio.dev/schema/pio-payload-multiconductor/1` names the serde form
+of `powerio_dist::DistNetwork` under `model.multiconductor_network`, stamped
+when `model_kind` is `multiconductor`: the wire-coordinate distribution model,
+in SI units with radian angles. [Compiler IR](compiler-ir.md) describes the
+model family. The field reference is the
+[`powerio_dist::DistNetwork` rustdoc](../powerio_dist/model/struct.DistNetwork.html).
+For a standalone distribution exchange file, write BMOPF instead of extracting
+this payload ([relation to interchange formats](#interchange)).
 
 ## Row identity
 
-Every row of the balanced payload tables (`buses`, `loads`, `shunts`,
-`branches`, `switches`, `generators`, `storage`, `hvdc`, `transformers_3w`)
+Every row of every balanced payload table except `areas`
 carries a `uid` string: the source record uid where the format defines one
 (GOC3), and a `{table}:{row}` value synthesized at package build otherwise. A
 synthesized uid records the row the element had when the package was built and
@@ -93,33 +193,7 @@ reject a package where they disagree.
 "model": { "kind": "balanced", "balanced_network": { "...": "..." } }
 ```
 
-`model_kind` values: `balanced`, `multiconductor` (the enum is non-exhaustive;
-later families can be added).
-
-## Envelope reference
-
-| field | type | required | notes |
-|---|---|---|---|
-| `schema` | string (URL) | yes | identifies the package format; defaults to the current URL on read |
-| `schema_version` | string (semver) | yes | envelope version; defaults to current on read |
-| `producer` | object | yes | `{tool, version, git_commit?, features[]}` |
-| `package_id` | string | no | stable content id, e.g. `"sha256:..."`; unset by the scaffold |
-| `created_at` | string (RFC 3339) | no | unset by default for deterministic output |
-| `model_kind` | enum | yes | `balanced` \| `multiconductor`; authoritative |
-| `payload_schema` | string (URL) | no | declared payload contract for `model_kind`; absent on pre-0.1.1 packages |
-| `payload_schema_version` | string (semver) | no | payload version; a different major is rejected on read |
-| `model` | object | yes | `{kind, <kind>_network}`; follows the Rust model payload |
-| `origin` | object | yes | tagged by `kind`: `in_memory` \| `file` \| `folder` \| `binary_file` \| `derived` \| `composite` |
-| `sources` | array | no | declared source artifacts: `{id, kind, path?, format?, hash?}` |
-| `source_maps` | array | no | `{element_path, source_ref, mapping_kind, confidence}` |
-| `diagnostics` | array | no | structured findings (see below) |
-| `validation` | object | yes | `{status, counts, passes[]}` |
-| `summary` | object | yes | `{elements{}, topology?, units?}` |
-| `lowering_history` | array | no | `LoweringRecord` per pass |
-| `operating_points` | object | no | replayable updates over the one static payload |
-| `derived` | object | no | optional matrix stats, normalized solver table metadata, and cache keys |
-
-### Operating points
+## Operating points
 
 `operating_points` records a time axis and an ordered list of payload field
 updates. A point names a table, a row identity and/or a zero based row, and the
@@ -173,7 +247,7 @@ package with `origin.kind = "derived"` and
 }
 ```
 
-### Derived metadata
+## Derived metadata
 
 `derived.normalized_solver_tables` records the compact identity metadata for
 `powerio::Network::to_normalized_solver_tables()` without embedding every table
@@ -192,7 +266,7 @@ The block carries:
 - `source_rows`: source row indices for rows that survived normalization, with
   `null` for synthetic rows such as 3-winding star buses and branches.
 
-### Diagnostics
+## Diagnostics
 
 Each diagnostic carries a stable dotted `code`, a `severity` (`debug`, `info`,
 `warning`, `error`, `fatal`; ordered worst-last), the `stage` it came from
@@ -202,7 +276,7 @@ a `details` object, a `suggested_action`, and a `safe_to_ignore` list. Code
 namespaces by leading segment: `PARSE`, `READ`, `IR`, `VALIDATE`, `FIDELITY`,
 `LOWER`, `EMIT`, `BINDING`, `PARTNER`, `PERF`.
 
-### Source maps
+## Source maps
 
 A `source_map` entry records where a canonical field came from: an `element_path`
 (a JSON pointer, or a best-effort locator in v0.1), a `source_ref` into a declared

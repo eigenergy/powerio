@@ -4,7 +4,7 @@ PowerIO is organized as a compiler for power system data: frontends parse source
 formats into typed IR, passes normalize and lower it, and backends emit target
 artifacts. The IR boundaries and the `.pio.json` package are below. The field
 reference for the package is in
-[the PIO JSON schema guide](https://eigenergy.github.io/powerio/guide/pio-json-schema.html).
+[the `.pio.json` format chapter](pio-json-schema.md).
 
 There is no flattened universal `Network` mega-struct. PowerIO keeps concrete
 model families separate. The package wraps one payload at a time with source,
@@ -41,7 +41,9 @@ sequence struct. The two families never merge into one struct.
 BMOPF JSON is the strict exchange format for the distribution family. The
 `.pio.json` package uses the same `MulticonductorNetwork` model and wraps it
 with compiler metadata: model kind, provenance, source maps, diagnostics,
-validation, and lowering history.
+validation, and lowering history. The two formats and the reasons they both
+exist are contrasted in
+[the `.pio.json` format chapter](pio-json-schema.md#interchange).
 
 ## The compiler package (`.pio.json`)
 
@@ -81,22 +83,16 @@ metadata for a compiler cache or sidecar artifact to verify table identity.
 
 ### Explicit model kind
 
-`model_kind` is a standalone field. A reader must never infer whether the payload
-is balanced or multiconductor from which field is present. The payload enum is
-also tagged by `kind`, so the payload is self-describing too;
-`NetworkPackage::kind_is_consistent` asserts the two agree, and a reader should
-reject a package where they do not.
+`model_kind` is a standalone, authoritative field: a reader branches on it
+rather than inferring the payload kind from which field is present. The reader
+requirements are in [the `.pio.json` format chapter](pio-json-schema.md).
 
 ### Payload stability
 
-The envelope and the payload are versioned independently. The nested
-`balanced_network` / `multiconductor_network` payloads are serde snapshots of
-the PowerIO Rust IR, declared by the package's `payload_schema` /
-`payload_schema_version` fields: additive IR growth bumps the payload minor,
-moves or removals bump its major, and a reader rejects a foreign major before
-computing on payload fields. Payload rows carry stable `uid` identities that
-operating point updates resolve against. See
-[the PIO JSON schema guide](https://eigenergy.github.io/powerio/guide/pio-json-schema.html).
+The envelope and the payload are versioned independently, declared by the
+package's `payload_schema` / `payload_schema_version` fields. Payload rows
+carry stable `uid` identities that operating point updates resolve against.
+The bump rules are in [the `.pio.json` format chapter](pio-json-schema.md).
 
 ### Provenance and source maps
 
@@ -150,9 +146,5 @@ rebuilt for the updated static payload.
 
 ## Versioning
 
-`schema_version` is semver. Optional additive envelope fields land without a
-version change (`operating_points` did); the minor bumps when a reader needs to
-depend on a field being present; field moves bump the major or ship a migration. Unknown future top-level fields are tolerated
-on read (ignored), so a package from a newer producer still deserializes when
-the `schema_version` major version matches. A different major version is
-rejected before payload use.
+The envelope and payload versioning policies are in
+[the `.pio.json` format chapter](pio-json-schema.md#pio-package).
