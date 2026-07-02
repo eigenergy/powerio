@@ -342,6 +342,12 @@ pub struct Bus {
     pub area: usize,
     pub zone: usize,
     pub name: Option<String>,
+    /// Stable row identity for `.pio.json` payloads and operating point updates:
+    /// the source record uid where the format defines one (GOC3), synthesized at
+    /// package build otherwise. `#[serde(default)]` so JSON written before the
+    /// field existed still deserializes.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub uid: Option<String>,
     pub extras: Extras,
 }
 
@@ -361,6 +367,7 @@ impl Bus {
             area: 1,
             zone: 1,
             name: None,
+            uid: None,
             extras: Extras::new(),
         }
     }
@@ -378,6 +385,9 @@ pub struct Load {
     #[serde(default)]
     pub voltage_model: Option<LoadVoltageModel>,
     pub in_service: bool,
+    /// Stable row identity; see [`Bus::uid`].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub uid: Option<String>,
     pub extras: Extras,
 }
 
@@ -390,6 +400,7 @@ impl Load {
             q,
             voltage_model: None,
             in_service: true,
+            uid: None,
             extras: Extras::new(),
         }
     }
@@ -476,6 +487,9 @@ pub struct Shunt {
     /// existed still deserializes.
     #[serde(default)]
     pub control: Option<SwitchedShuntControl>,
+    /// Stable row identity; see [`Bus::uid`].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub uid: Option<String>,
     pub extras: Extras,
 }
 
@@ -488,6 +502,7 @@ impl Shunt {
             b,
             in_service: true,
             control: None,
+            uid: None,
             extras: Extras::new(),
         }
     }
@@ -597,6 +612,9 @@ pub struct Branch {
     /// Solved branch flow values, when present in a case snapshot.
     #[serde(default)]
     pub solution: Option<BranchSolution>,
+    /// Stable row identity; see [`Bus::uid`].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub uid: Option<String>,
     pub extras: Extras,
 }
 
@@ -727,6 +745,7 @@ impl Branch {
             angmax: 360.0,
             control: None,
             solution: None,
+            uid: None,
             extras: Extras::new(),
         }
     }
@@ -795,6 +814,9 @@ pub struct Switch {
     pub pt: Option<f64>,
     #[serde(default)]
     pub qt: Option<f64>,
+    /// Stable row identity; see [`Bus::uid`].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub uid: Option<String>,
     pub extras: Extras,
 }
 
@@ -811,6 +833,7 @@ impl Switch {
             qf: None,
             pt: None,
             qt: None,
+            uid: None,
             extras: Extras::new(),
         }
     }
@@ -915,6 +938,9 @@ pub struct Generator {
     /// JSON written before the field existed still deserializes.
     #[serde(default)]
     pub regulated_bus: Option<BusId>,
+    /// Stable row identity; see [`Bus::uid`].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub uid: Option<String>,
 }
 
 impl Generator {
@@ -934,6 +960,7 @@ impl Generator {
             cost: None,
             caps: default_caps(),
             regulated_bus: None,
+            uid: None,
         }
     }
 
@@ -1016,6 +1043,9 @@ pub struct Storage {
     pub p_loss: f64,
     pub q_loss: f64,
     pub in_service: bool,
+    /// Stable row identity; see [`Bus::uid`].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub uid: Option<String>,
     pub extras: Extras,
 }
 
@@ -1041,6 +1071,7 @@ impl Storage {
             p_loss: 0.0,
             q_loss: 0.0,
             in_service: true,
+            uid: None,
             extras: Extras::new(),
         }
     }
@@ -1075,6 +1106,9 @@ pub struct Hvdc {
     pub loss1: f64,
     #[serde(default)]
     pub cost: Option<GenCost>,
+    /// Stable row identity; see [`Bus::uid`].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub uid: Option<String>,
     pub extras: Extras,
 }
 
@@ -1100,6 +1134,7 @@ impl Hvdc {
             loss0: 0.0,
             loss1: 0.0,
             cost: None,
+            uid: None,
             extras: Extras::new(),
         }
     }
@@ -1264,6 +1299,9 @@ pub struct Transformer3W {
     pub mag_b: f64,
     pub in_service: bool,
     pub name: Option<String>,
+    /// Stable row identity; see [`Bus::uid`].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub uid: Option<String>,
     pub extras: Extras,
 }
 
@@ -1279,6 +1317,7 @@ impl Transformer3W {
             mag_b: 0.0,
             in_service: true,
             name: None,
+            uid: None,
             extras: Extras::new(),
         }
     }
@@ -1321,6 +1360,7 @@ impl Transformer3W {
             area: 0,
             zone: 0,
             name: self.name.clone(),
+            uid: self.uid.clone(),
             extras: Extras::new(),
         };
         let zs = self.star_impedances();
@@ -1343,6 +1383,7 @@ impl Transformer3W {
             angmax: 360.0,
             control: None,
             solution: None,
+            uid: None,
             extras: Extras::new(),
         };
         let branches = [
@@ -1493,7 +1534,7 @@ impl Network {
         }
         for (i, b) in self.buses.iter().enumerate() {
             #[rustfmt::skip]
-            let Bus { id: _, kind: _, vm, va, base_kv, vmax, vmin, evhi: _, evlo: _, area: _, zone: _, name: _, extras: _ } = b;
+            let Bus { id: _, kind: _, vm, va, base_kv, vmax, vmin, evhi: _, evlo: _, area: _, zone: _, name: _, uid: _, extras: _ } = b;
             let fields = [
                 ("vm", *vm),
                 ("va", *va),
@@ -1510,6 +1551,7 @@ impl Network {
                 q,
                 voltage_model,
                 in_service: _,
+                uid: _,
                 extras: _,
             } = l;
             out.extend(bad([("p", *p), ("q", *q)]).map(|f| format!("loads[{i}].{f}")));
@@ -1573,13 +1615,14 @@ impl Network {
                 b,
                 in_service: _,
                 control: _,
+                uid: _,
                 extras: _,
             } = s;
             out.extend(bad([("g", *g), ("b", *b)]).map(|f| format!("shunts[{i}].{f}")));
         }
         for (i, br) in self.branches.iter().enumerate() {
             #[rustfmt::skip]
-            let Branch { from: _, to: _, r, x, b, charging, rate_a, rate_b, rate_c, rating_sets, current_ratings, tap, shift, in_service: _, angmin, angmax, control: _, solution, extras: _ } = br;
+            let Branch { from: _, to: _, r, x, b, charging, rate_a, rate_b, rate_c, rating_sets, current_ratings, tap, shift, in_service: _, angmin, angmax, control: _, solution, uid: _, extras: _ } = br;
             let fields = [
                 ("r", *r),
                 ("x", *x),
@@ -1647,6 +1690,7 @@ impl Network {
                 qf,
                 pt,
                 qt,
+                uid: _,
                 extras: _,
             } = sw;
             for (field, value) in [
@@ -1664,7 +1708,7 @@ impl Network {
         }
         for (i, g) in self.generators.iter().enumerate() {
             #[rustfmt::skip]
-            let Generator { bus: _, pg, qg, pmax, pmin, qmax, qmin, vg, mbase, in_service: _, cost, caps, regulated_bus: _ } = g;
+            let Generator { bus: _, pg, qg, pmax, pmin, qmax, qmin, vg, mbase, in_service: _, cost, caps, regulated_bus: _, uid: _ } = g;
             let fields = [
                 ("pg", *pg),
                 ("qg", *qg),
@@ -1703,7 +1747,7 @@ impl Network {
         }
         for (i, s) in self.storage.iter().enumerate() {
             #[rustfmt::skip]
-            let Storage { bus: _, ps, qs, energy, energy_rating, charge_rating, discharge_rating, charge_efficiency, discharge_efficiency, thermal_rating, current_rating, qmin, qmax, r, x, p_loss, q_loss, in_service: _, extras: _ } = s;
+            let Storage { bus: _, ps, qs, energy, energy_rating, charge_rating, discharge_rating, charge_efficiency, discharge_efficiency, thermal_rating, current_rating, qmin, qmax, r, x, p_loss, q_loss, in_service: _, uid: _, extras: _ } = s;
             let fields = [
                 ("ps", *ps),
                 ("qs", *qs),
@@ -1728,7 +1772,7 @@ impl Network {
         }
         for (i, h) in self.hvdc.iter().enumerate() {
             #[rustfmt::skip]
-            let Hvdc { from: _, to: _, in_service: _, pf, pt, qf, qt, vf, vt, pmin, pmax, qminf, qmaxf, qmint, qmaxt, loss0, loss1, cost, extras: _ } = h;
+            let Hvdc { from: _, to: _, in_service: _, pf, pt, qf, qt, vf, vt, pmin, pmax, qminf, qmaxf, qmint, qmaxt, loss0, loss1, cost, uid: _, extras: _ } = h;
             let fields = [
                 ("pf", *pf),
                 ("pt", *pt),
@@ -1980,6 +2024,7 @@ impl Network {
                     b: t.mag_b * scale,
                     in_service: true,
                     control: None,
+                    uid: None,
                     extras: Extras::new(),
                 });
             }
@@ -2107,6 +2152,7 @@ mod tests {
             area: 1,
             zone: 1,
             name: None,
+            uid: None,
             extras: Extras::new(),
         }
     }
@@ -2138,6 +2184,7 @@ mod tests {
             mag_b: 0.0,
             in_service: true,
             name: Some("T1".into()),
+            uid: None,
             extras: Extras::new(),
         }
     }
@@ -2227,6 +2274,7 @@ mod tests {
                 mva_base: 100.0,
             }),
             solution: None,
+            uid: None,
             extras: Extras::new(),
         }
     }
@@ -2264,6 +2312,7 @@ mod tests {
             cost: None,
             caps,
             regulated_bus: None,
+            uid: None,
         };
 
         // caps is a name-keyed object emitting only the present slots, not a
@@ -2309,6 +2358,7 @@ mod tests {
             area: 1,
             zone: 1,
             name: None,
+            uid: None,
             extras: Extras::new(),
         };
         let branch = Branch {
@@ -2330,6 +2380,7 @@ mod tests {
             angmax: 360.0,
             control: None,
             solution: None,
+            uid: None,
             extras: Extras::new(),
         };
         // A non-finite generator capability reports at its exact key path
@@ -2348,6 +2399,7 @@ mod tests {
             cost: None,
             caps: GenCaps::default(),
             regulated_bus: None,
+            uid: None,
         };
         g.caps[8] = Some(f64::INFINITY); // ramp_30
         // Three distinct non-finite fields: a bus vm (NaN), a branch x (Inf), and
@@ -2402,6 +2454,7 @@ mod tests {
                     ShuntBlock { steps: 1, b: 50.0 },
                 ],
             }),
+            uid: None,
             extras: Extras::new(),
         }
     }
@@ -2450,6 +2503,7 @@ mod tests {
             cost: None,
             caps: Default::default(),
             regulated_bus: None,
+            uid: None,
         });
 
         let diags = net.validate_values();

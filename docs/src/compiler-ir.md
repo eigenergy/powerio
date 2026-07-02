@@ -89,10 +89,13 @@ reject a package where they do not.
 
 ### Payload stability
 
-The envelope is the versioned, documented surface. The nested `balanced_network`
-/ `multiconductor_network` payloads are direct serde snapshots of the live
-PowerIO Rust IR. They can change whenever the Rust models change, until a v1
-payload schema is declared. See
+The envelope and the payload are versioned independently. The nested
+`balanced_network` / `multiconductor_network` payloads are serde snapshots of
+the PowerIO Rust IR, declared by the package's `payload_schema` /
+`payload_schema_version` fields: additive IR growth bumps the payload minor,
+moves or removals bump its major, and a reader rejects a foreign major before
+computing on payload fields. Payload rows carry stable `uid` identities that
+operating point updates resolve against. See
 [the PIO JSON schema guide](https://eigenergy.github.io/powerio/guide/pio-json-schema.html).
 
 ### Provenance and source maps

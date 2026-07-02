@@ -534,6 +534,7 @@ fn read_bus(key: &str, v: &Value) -> Result<Bus> {
         area: usize_or(v, "area", 0)?,
         zone: usize_or(v, "zone", 0)?,
         name: v.get("name").and_then(Value::as_str).map(str::to_string),
+        uid: None,
         extras: Extras::new(),
     })
 }
@@ -545,6 +546,7 @@ fn read_load(v: &Value) -> Result<Load> {
         q: f(v, "q_load")?,
         voltage_model: None,
         in_service: flag(v, "in_service", true)?,
+        uid: None,
         extras: Extras::new(),
     })
 }
@@ -556,6 +558,7 @@ fn read_shunt(v: &Value) -> Result<Shunt> {
         b: f(v, "bs")?,
         in_service: flag(v, "in_service", true)?,
         control: None,
+        uid: None,
         extras: Extras::new(),
     })
 }
@@ -585,6 +588,7 @@ fn read_branch(v: &Value) -> Result<Branch> {
         angmax: f_or(v, "angle_diff_max", 360.0)?,
         control: None,
         solution: None,
+        uid: None,
         extras: Extras::new(),
     })
 }
@@ -615,6 +619,7 @@ fn read_gen(v: &Value) -> Result<Generator> {
         cost,
         caps: Default::default(),
         regulated_bus: None,
+        uid: None,
     })
 }
 
@@ -638,6 +643,7 @@ fn read_dc_branch(v: &Value) -> Result<Hvdc> {
         loss0: f(v, "loss0")?,
         loss1: f_or(v, "loss_factor", 0.0)?,
         cost: None,
+        uid: None,
         extras: Extras::new(),
     })
 }

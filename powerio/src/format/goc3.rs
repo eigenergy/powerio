@@ -121,7 +121,7 @@ pub(crate) fn parse_goc3_source(
 
         match device.table {
             DeviceTable::Generators => {
-                let generator = read_producer(obj, ts, bus, base_mva);
+                let generator = read_producer(obj, ts, bus, base_mva, device.uid.clone());
                 generator_buses.insert(bus);
                 if reference_candidate
                     .as_ref()
@@ -131,7 +131,9 @@ pub(crate) fn parse_goc3_source(
                 }
                 generators.push(generator);
             }
-            DeviceTable::Loads => loads.push(read_consumer(obj, ts, bus, base_mva)),
+            DeviceTable::Loads => {
+                loads.push(read_consumer(obj, ts, bus, base_mva, device.uid.clone()));
+            }
         }
     }
 
@@ -213,7 +215,8 @@ fn read_buses(network: &Map<String, Value>) -> Result<(Vec<Bus>, Goc3BusMap)> {
             evlo: None,
             area: 1,
             zone: 1,
-            name: Some(uid),
+            name: Some(uid.clone()),
+            uid: Some(uid),
             extras: extras(
                 obj,
                 &["uid", "base_nom_volt", "vm_ub", "vm_lb", "initial_status"],
@@ -286,6 +289,7 @@ fn read_branches(
                 angmax: 360.0,
                 control: shifter_control(obj, transformer),
                 solution: None,
+                uid: item_uid(item, obj),
                 extras: extras(
                     obj,
                     &[
@@ -351,6 +355,7 @@ fn read_shunts(
                 b: number(obj, "bs").unwrap_or(0.0) * step * base_mva,
                 in_service: step != 0.0,
                 control: None,
+                uid: item_uid(item, obj),
                 extras: extras(
                     obj,
                     &[
@@ -373,6 +378,7 @@ fn read_producer(
     ts: Option<&Value>,
     bus: BusId,
     base_mva: f64,
+    uid: Option<String>,
 ) -> Generator {
     let initial = initial_status(obj);
     Generator {
@@ -389,10 +395,17 @@ fn read_producer(
         cost: cost_at(obj, ts, 0, base_mva),
         caps: [None; crate::network::GEN_EXTRA_KEYS.len()],
         regulated_bus: None,
+        uid,
     }
 }
 
-fn read_consumer(obj: &Map<String, Value>, ts: Option<&Value>, bus: BusId, base_mva: f64) -> Load {
+fn read_consumer(
+    obj: &Map<String, Value>,
+    ts: Option<&Value>,
+    bus: BusId,
+    base_mva: f64,
+    uid: Option<String>,
+) -> Load {
     let initial = initial_status(obj);
     let p = initial
         .and_then(|s| number(s, "p"))
@@ -412,6 +425,7 @@ fn read_consumer(obj: &Map<String, Value>, ts: Option<&Value>, bus: BusId, base_
         q,
         voltage_model: None,
         in_service: initial_status_flag(obj, true),
+        uid,
         extras: extras(
             obj,
             &[
@@ -452,6 +466,7 @@ fn read_hvdc(network: &Map<String, Value>, base_mva: f64, buses: &Goc3BusMap) ->
                 loss0: 0.0,
                 loss1: 0.0,
                 cost: None,
+                uid: item_uid(item, obj),
                 extras: extras(
                     obj,
                     &[

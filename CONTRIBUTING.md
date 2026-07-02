@@ -74,3 +74,14 @@ writing bespoke fixtures; pin their bytes.
 ## PRs
 
 Conventional commit subjects (`feat:`, `fix:`, `refactor:`); squash merge.
+
+## Tandem changes with PowerIO.jl
+
+The `Julia binding` CI job builds this repo's C ABI and runs PowerIO.jl's test
+suite against it. A PR that moves the shared surface (JSON shapes, schema
+versions, `pio_*` behavior) fails that job against PowerIO.jl main by
+construction. Push a PowerIO.jl branch with the **same name** as the powerio
+branch; the job tests against the companion branch when it exists. Open both
+PRs, merge in either order, and keep PowerIO.jl test assertions on the shared
+surface at contract strength (same major, shape present) rather than byte
+equality, so additive powerio changes do not fail the tandem job.

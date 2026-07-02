@@ -6,6 +6,13 @@ name: Julia binding
 # it is public; while it is private, add a token with read access to it as the
 # POWERIO_JL_REPO_TOKEN secret. With neither, the job prints a skip notice and
 # passes, so missing external access never blocks a PR.
+#
+# Companion branches: a PR that moves the shared surface (JSON shapes, schema
+# versions, pio_* behavior) pushes a PowerIO.jl branch with the SAME name; this
+# job tests against that branch when it exists and falls back to PowerIO.jl
+# main. That breaks the lockstep deadlock where a powerio PR can only go green
+# after PowerIO.jl main changes, which can only be validated after the powerio
+# PR merges. Merge either side first; the companion branch keeps both green.
 on:
   push:
     branches: [ "main" ]
@@ -50,12 +57,27 @@ jobs:
       # reader, distribution surface, and package surface bind against real
       # symbols rather than skipping behind feature probes.
       run: cargo build -p powerio-capi --release --features arrow,gridfm,dist,pkg
+    - name: Resolve PowerIO.jl companion branch
+      id: powerio-jl-ref
+      if: steps.powerio-jl.outputs.available == 'true'
+      env:
+        BRANCH: ${{ github.head_ref || github.ref_name }}
+      run: |
+        if [ -n "$BRANCH" ] && [ "$BRANCH" != "main" ] \
+          && git ls-remote --exit-code --heads \
+            https://github.com/eigenergy/PowerIO.jl.git "refs/heads/$BRANCH" >/dev/null 2>&1; then
+          echo "ref=$BRANCH" >> "$GITHUB_OUTPUT"
+          echo "PowerIO.jl has a companion branch '$BRANCH'; testing against it instead of main."
+        else
+          echo "ref=main" >> "$GITHUB_OUTPUT"
+        fi
     - name: Check out PowerIO.jl
       if: steps.powerio-jl.outputs.available == 'true'
       uses: actions/checkout@v6
       with:
         repository: eigenergy/PowerIO.jl
         path: PowerIO.jl
+        ref: ${{ steps.powerio-jl-ref.outputs.ref }}
         # Falls back to the workflow token, which suffices once the repo is public.
         token: ${{ secrets.POWERIO_JL_REPO_TOKEN || github.token }}
     - uses: julia-actions/setup-julia@v3

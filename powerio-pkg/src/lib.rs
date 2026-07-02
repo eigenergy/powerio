@@ -61,6 +61,8 @@ pub use operating::{ElementRef, ElementUpdate, OperatingPoint, OperatingPointSer
 pub use package::{
     DerivedMetadata, NetworkPackage, NormalizedSolverTableMetadata, NormalizedSolverTableRowCounts,
     NormalizedSolverTableSourceRows, PIO_PACKAGE_SCHEMA_URL, PIO_PACKAGE_SCHEMA_VERSION,
+    PIO_PAYLOAD_BALANCED_SCHEMA_URL, PIO_PAYLOAD_BALANCED_SCHEMA_VERSION,
+    PIO_PAYLOAD_MULTICONDUCTOR_SCHEMA_URL, PIO_PAYLOAD_MULTICONDUCTOR_SCHEMA_VERSION,
 };
 pub use provenance::{
     Confidence, MappingKind, Origin, Producer, SourceDescriptor, SourceMapEntry, SourceRef,

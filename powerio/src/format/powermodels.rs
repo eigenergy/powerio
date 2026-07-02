@@ -590,6 +590,7 @@ fn read_bus(v: &Value, ascale: f64) -> Result<Bus> {
         area: uid(v, "area"),
         zone: uid(v, "zone"),
         name: v.get("name").and_then(Value::as_str).map(str::to_string),
+        uid: None,
         extras: extras_excluding(
             v,
             &[
@@ -617,6 +618,7 @@ fn read_load(v: &Value, pscale: f64) -> Load {
         q: f(v, "qd") * pscale,
         voltage_model: None,
         in_service: flag(v, "status"),
+        uid: None,
         extras: extras_excluding(v, &["load_bus", "pd", "qd", "status", "index", "source_id"]),
     }
 }
@@ -628,6 +630,7 @@ fn read_shunt(v: &Value, pscale: f64) -> Shunt {
         b: f(v, "bs") * pscale,
         in_service: flag(v, "status"),
         control: None,
+        uid: None,
         extras: extras_excluding(
             v,
             &["shunt_bus", "gs", "bs", "status", "index", "source_id"],
@@ -683,6 +686,7 @@ fn read_branch(v: &Value, pscale: f64, ascale: f64) -> Branch {
             pt: f(v, "pt") * pscale,
             qt: f(v, "qt") * pscale,
         }),
+        uid: None,
         extras: extras_excluding(
             v,
             &[
@@ -740,6 +744,7 @@ fn read_switch(v: &Value, pscale: f64) -> Switch {
         qf: v.get("qf").and_then(Value::as_f64).map(|x| x * pscale),
         pt: v.get("pt").and_then(Value::as_f64).map(|x| x * pscale),
         qt: v.get("qt").and_then(Value::as_f64).map(|x| x * pscale),
+        uid: None,
         extras: extras_excluding(
             v,
             &[
@@ -789,6 +794,7 @@ fn read_gen(v: &Value, pscale: f64, base_mva: f64, per_unit: bool) -> Generator 
         cost,
         caps,
         regulated_bus: None,
+        uid: None,
     }
 }
 
@@ -857,6 +863,7 @@ fn read_hvdc(v: &Value, pscale: f64, base_mva: f64, per_unit: bool) -> Hvdc {
         loss0: f(v, "loss0") * pscale,
         loss1: f(v, "loss1"),
         cost: v.get("model").map(|_| read_cost(v, base_mva, per_unit)),
+        uid: None,
         extras: extras_excluding(
             v,
             &[
@@ -916,6 +923,7 @@ fn read_storage(v: &Value, pscale: f64) -> Storage {
         p_loss: f(v, "p_loss") * pscale,
         q_loss: f(v, "q_loss") * pscale,
         in_service: flag(v, "status"),
+        uid: None,
         extras: extras_excluding(
             v,
             &[

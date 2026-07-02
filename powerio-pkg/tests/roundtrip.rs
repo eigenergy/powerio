@@ -6,9 +6,11 @@ use powerio_pkg::{
     Confidence, DiagnosticCode, DiagnosticSeverity, DiagnosticStage, ElementRef, ElementUpdate,
     MappingKind, ModelKind, MulticonductorToBalancedOptions, MulticonductorToBalancedReadiness,
     NetworkPackage, OperatingPoint, OperatingPointSeries, Origin, PIO_PACKAGE_SCHEMA_URL,
-    PIO_PACKAGE_SCHEMA_VERSION, SequenceTransformConvention, SourceDescriptor, SourceMapEntry,
-    SourceRef, StructuredDiagnostic, TimeAxis, ValidationStatus,
-    check_multiconductor_to_balanced_lowering, lower_multiconductor_to_balanced,
+    PIO_PACKAGE_SCHEMA_VERSION, PIO_PAYLOAD_BALANCED_SCHEMA_URL,
+    PIO_PAYLOAD_BALANCED_SCHEMA_VERSION, PIO_PAYLOAD_MULTICONDUCTOR_SCHEMA_URL,
+    SequenceTransformConvention, SourceDescriptor, SourceMapEntry, SourceRef, StructuredDiagnostic,
+    TimeAxis, ValidationStatus, check_multiconductor_to_balanced_lowering,
+    lower_multiconductor_to_balanced,
 };
 
 const MATPOWER_SRC: &str = "\
@@ -79,9 +81,14 @@ fn multiconductor_package() -> NetworkPackage {
 }
 
 fn balanced_package_with_gen() -> NetworkPackage {
-    let net = powerio::parse_str(MATPOWER_WITH_GEN_SRC, "matpower")
+    let mut net = powerio::parse_str(MATPOWER_WITH_GEN_SRC, "matpower")
         .expect("parse matpower with gen")
         .network;
+    // Source uids the sample operating point updates resolve against; every
+    // other row gets a synthesized `{table}:{row}` uid at package build.
+    net.loads[0].uid = Some("load_1".to_owned());
+    net.generators[0].uid = Some("gen_1".to_owned());
+    net.branches[0].uid = Some("branch_1".to_owned());
     NetworkPackage::from_balanced(net)
 }
 
@@ -523,7 +530,7 @@ fn materialize_operating_point_reports_invalid_table_or_row() {
         .expect_err("invalid row must fail");
     assert!(
         err.to_string()
-            .contains("operating point table `loads` has no object row 99")
+            .contains("operating point table `loads` has no row 99")
     );
 }
 
@@ -1668,4 +1675,288 @@ fn load_voltage_model_survives_package_roundtrip() {
         v["model"]["multiconductor_network"]["loads"][0]["voltage_model"]["model"],
         serde_json::json!("zip")
     );
+}
+
+// --- declared payload schema and row identity ------------------------------
+
+fn single_point_series(point: OperatingPoint) -> OperatingPointSeries {
+    OperatingPointSeries::new(TimeAxis::new(1).with_duration_hours(vec![1.0]), vec![point])
+}
+
+#[test]
+fn package_declares_payload_schema_and_synthesizes_row_identity() {
+    let pkg = balanced_package();
+    assert_eq!(
+        pkg.payload_schema.as_deref(),
+        Some(PIO_PAYLOAD_BALANCED_SCHEMA_URL)
+    );
+    assert_eq!(
+        pkg.payload_schema_version.as_deref(),
+        Some(PIO_PAYLOAD_BALANCED_SCHEMA_VERSION)
+    );
+    // MATPOWER has no source uids, so every row gets a synthesized identity.
+    let net = pkg.as_balanced().unwrap();
+    assert_eq!(net.buses[0].uid.as_deref(), Some("buses:0"));
+    assert_eq!(net.buses[1].uid.as_deref(), Some("buses:1"));
+    assert_eq!(net.branches[0].uid.as_deref(), Some("branches:0"));
+
+    let v = serde_json::to_value(&pkg).unwrap();
+    assert_eq!(
+        v["schema_version"],
+        serde_json::json!(PIO_PACKAGE_SCHEMA_VERSION)
+    );
+    assert_eq!(
+        v["model"]["balanced_network"]["buses"][0]["uid"],
+        serde_json::json!("buses:0")
+    );
+    assert_json_roundtrips(&pkg);
+
+    let multi = multiconductor_package();
+    assert_eq!(
+        multi.payload_schema.as_deref(),
+        Some(PIO_PAYLOAD_MULTICONDUCTOR_SCHEMA_URL)
+    );
+}
+
+#[test]
+fn identity_only_update_resolves_without_row() {
+    let mut point = OperatingPoint::new(0);
+    point.updates.push(ElementUpdate::new(
+        ElementRef::by_source_uid("loads", "load_1"),
+        fields(&[("p", serde_json::json!(33.0))]),
+    ));
+    let pkg = balanced_package_with_gen().with_operating_points(single_point_series(point));
+
+    // The wire form omits `row` entirely.
+    let v = serde_json::to_value(&pkg).unwrap();
+    let element = &v["operating_points"]["points"][0]["updates"][0]["element"];
+    assert!(element.get("row").is_none());
+    assert_eq!(element["source_uid"], serde_json::json!("load_1"));
+
+    let back = NetworkPackage::from_json(&pkg.to_json_pretty().unwrap()).unwrap();
+    let materialized = back.materialize_operating_point(0).unwrap();
+    assert_close(materialized.as_balanced().unwrap().loads[0].p, 33.0);
+}
+
+#[test]
+fn row_identity_mismatch_is_rejected() {
+    let mut point = OperatingPoint::new(0);
+    point.updates.push(ElementUpdate::new(
+        ElementRef::new("generators", 7).with_source_uid("gen_1"),
+        fields(&[("pg", serde_json::json!(1.0))]),
+    ));
+    let pkg = balanced_package_with_gen().with_operating_points(single_point_series(point));
+    let err = pkg
+        .materialize_operating_point(0)
+        .expect_err("row/uid mismatch must fail");
+    assert!(
+        err.to_string()
+            .contains("names uid `gen_1` (row 0) but carries row 7"),
+        "{err}"
+    );
+}
+
+#[test]
+fn unknown_identity_is_rejected_and_reported_by_validation() {
+    let mut point = OperatingPoint::new(0);
+    point.updates.push(ElementUpdate::new(
+        ElementRef::by_source_uid("loads", "nope"),
+        fields(&[("p", serde_json::json!(1.0))]),
+    ));
+    let mut pkg = balanced_package_with_gen().with_operating_points(single_point_series(point));
+    let err = pkg
+        .materialize_operating_point(0)
+        .expect_err("unknown identity must fail");
+    assert!(err.to_string().contains("unknown identity"), "{err}");
+
+    // The same finding surfaces through validation without materializing.
+    pkg.run_sane_validation();
+    assert_eq!(pkg.validation.status, ValidationStatus::Error);
+    let diagnostic = pkg
+        .diagnostics
+        .iter()
+        .find(|d| d.code.as_str() == "VALIDATE.PACKAGE.OPERATING_IDENTITY")
+        .expect("identity diagnostic");
+    assert_eq!(
+        diagnostic.element_path.as_deref(),
+        Some("/operating_points/points/0/updates/0")
+    );
+}
+
+#[test]
+fn duplicate_payload_identities_are_rejected() {
+    let mut net = powerio::parse_str(MATPOWER_SRC, "matpower")
+        .expect("parse matpower")
+        .network;
+    net.buses[0].uid = Some("dup".to_owned());
+    net.buses[1].uid = Some("dup".to_owned());
+    let mut point = OperatingPoint::new(0);
+    point.updates.push(ElementUpdate::new(
+        ElementRef::by_source_uid("buses", "dup"),
+        fields(&[("vm", serde_json::json!(1.02))]),
+    ));
+    let pkg = NetworkPackage::from_balanced(net).with_operating_points(single_point_series(point));
+    let err = pkg
+        .materialize_operating_point(0)
+        .expect_err("duplicate identity must fail");
+    assert!(err.to_string().contains("more than one row"), "{err}");
+}
+
+#[test]
+fn update_must_not_overwrite_uid() {
+    let mut point = OperatingPoint::new(0);
+    point.updates.push(ElementUpdate::new(
+        ElementRef::by_source_uid("loads", "load_1"),
+        fields(&[("uid", serde_json::json!("other"))]),
+    ));
+    let pkg = balanced_package_with_gen().with_operating_points(single_point_series(point));
+    let err = pkg
+        .materialize_operating_point(0)
+        .expect_err("uid overwrite must fail");
+    assert!(
+        err.to_string().contains("must not overwrite `uid`"),
+        "{err}"
+    );
+}
+
+#[test]
+fn legacy_payload_without_uids_keeps_row_semantics() {
+    // A pre-0.1.1 package: payload rows carry no uids and the envelope has no
+    // payload schema declaration, while updates still carry advisory
+    // source_uid values. The wire row must keep addressing alone.
+    let pkg = balanced_package_with_gen().with_operating_points(sample_operating_points());
+    let mut v = serde_json::to_value(&pkg).unwrap();
+    let payload = v["model"]["balanced_network"].as_object_mut().unwrap();
+    for table in [
+        "buses",
+        "loads",
+        "shunts",
+        "branches",
+        "switches",
+        "generators",
+        "storage",
+        "hvdc",
+        "transformers_3w",
+    ] {
+        if let Some(rows) = payload.get_mut(table).and_then(|t| t.as_array_mut()) {
+            for row in rows {
+                row.as_object_mut().unwrap().remove("uid");
+            }
+        }
+    }
+    let root = v.as_object_mut().unwrap();
+    root.remove("payload_schema");
+    root.remove("payload_schema_version");
+    root.insert("schema_version".to_owned(), serde_json::json!("0.1.0"));
+
+    let legacy = NetworkPackage::from_json(&v.to_string()).unwrap();
+    assert!(legacy.payload_schema.is_none());
+    let materialized = legacy.materialize_operating_point(0).unwrap();
+    assert_close(materialized.as_balanced().unwrap().loads[0].p, 12.0);
+}
+
+#[test]
+fn payload_schema_version_gate() {
+    let pkg = balanced_package();
+    let mut v = serde_json::to_value(&pkg).unwrap();
+
+    v["payload_schema_version"] = serde_json::json!("1.9.3");
+    NetworkPackage::from_json(&v.to_string()).expect("same major accepted");
+
+    v["payload_schema_version"] = serde_json::json!("2.0.0");
+    let err = NetworkPackage::from_json(&v.to_string()).expect_err("major bump rejected");
+    assert!(
+        err.to_string()
+            .contains("unsupported payload_schema_version"),
+        "{err}"
+    );
+
+    v["payload_schema_version"] = serde_json::json!("not-semver");
+    let err = NetworkPackage::from_json(&v.to_string()).expect_err("invalid semver rejected");
+    assert!(
+        err.to_string()
+            .contains("unsupported payload_schema_version"),
+        "{err}"
+    );
+
+    v.as_object_mut().unwrap().remove("payload_schema_version");
+    NetworkPackage::from_json(&v.to_string()).expect("absent version accepted");
+}
+
+#[test]
+fn element_ref_wire_requires_row_or_identity() {
+    let err = serde_json::from_str::<ElementRef>(r#"{"table": "loads"}"#)
+        .expect_err("neither row nor identity");
+    assert!(err.to_string().contains("needs `row` or `source_uid`"));
+
+    let by_uid: ElementRef =
+        serde_json::from_str(r#"{"table": "loads", "source_uid": "l1"}"#).unwrap();
+    assert_eq!(by_uid, ElementRef::by_source_uid("loads", "l1"));
+    assert_eq!(by_uid.wire_row(), None);
+
+    let by_row: ElementRef = serde_json::from_str(r#"{"table": "loads", "row": 3}"#).unwrap();
+    assert_eq!(by_row, ElementRef::new("loads", 3));
+    assert_eq!(by_row.wire_row(), Some(3));
+}
+
+#[test]
+fn goc3_updates_resolve_by_identity_not_row_order() {
+    // The uid-less producer fixture from the row assignment test: `prod` is
+    // payload row 1 and row 0 is a synthesized identity. Identity alone finds
+    // the right row; a contradicting row or an unknown uid fails.
+    let src = GOC3_PACKAGE_SRC.replacen(
+        r#"{"uid": "prod", "bus": "bus_00""#,
+        r#"{"bus": "bus_00", "device_type": "producer", "initial_status": {"on_status": 1, "p": 0.0, "q": 0.0}},
+      {"uid": "prod", "bus": "bus_00""#,
+        1,
+    );
+    let net = powerio::parse_str(&src, "goc3-json")
+        .expect("parse goc3")
+        .network;
+    assert_eq!(net.generators[1].uid.as_deref(), Some("prod"));
+    let pkg = NetworkPackage::from_balanced(net);
+    let balanced = pkg.as_balanced().unwrap();
+    assert_eq!(balanced.generators[0].uid.as_deref(), Some("generators:0"));
+    assert_eq!(balanced.buses[0].uid.as_deref(), Some("bus_00"));
+
+    let mut by_identity = OperatingPoint::new(0);
+    by_identity.updates.push(ElementUpdate::new(
+        ElementRef::by_source_uid("generators", "prod"),
+        fields(&[("pmax", serde_json::json!(123.0))]),
+    ));
+    let materialized = pkg
+        .clone()
+        .with_operating_points(single_point_series(by_identity))
+        .materialize_operating_point(0)
+        .expect("identity resolves");
+    let updated = materialized.as_balanced().unwrap();
+    assert_close(updated.generators[1].pmax, 123.0);
+    assert_close(updated.generators[0].pmax, 0.0);
+
+    let mut wrong_row = OperatingPoint::new(0);
+    wrong_row.updates.push(ElementUpdate::new(
+        ElementRef::new("generators", 0).with_source_uid("prod"),
+        fields(&[("pmax", serde_json::json!(123.0))]),
+    ));
+    let err = pkg
+        .clone()
+        .with_operating_points(single_point_series(wrong_row))
+        .materialize_operating_point(0)
+        .expect_err("row/uid mismatch must fail");
+    assert!(
+        err.to_string()
+            .contains("names uid `prod` (row 1) but carries row 0"),
+        "{err}"
+    );
+
+    let mut unknown = OperatingPoint::new(0);
+    unknown.updates.push(ElementUpdate::new(
+        ElementRef::by_source_uid("generators", "ghost"),
+        fields(&[("pmax", serde_json::json!(123.0))]),
+    ));
+    let err = pkg
+        .with_operating_points(single_point_series(unknown))
+        .materialize_operating_point(0)
+        .expect_err("unknown uid must fail");
+    assert!(err.to_string().contains("unknown identity"), "{err}");
 }

@@ -120,6 +120,7 @@ pub(crate) fn parse_pandapower_source(
             area: 1,
             zone: row.usize_or("zone", 1),
             name: row.string("name"),
+            uid: None,
             extras: Extras::default(),
         });
     }
@@ -187,6 +188,7 @@ pub(crate) fn parse_pandapower_source(
                 q,
                 voltage_model,
                 in_service: row.bool_or("in_service", true),
+                uid: None,
                 extras: Extras::default(),
             });
         }
@@ -214,6 +216,7 @@ pub(crate) fn parse_pandapower_source(
                 b: -row.f_or("q_mvar", 0.0) * step * v_ratio,
                 in_service: row.bool_or("in_service", true),
                 control: None,
+                uid: None,
                 extras: Extras::default(),
             });
         }
@@ -246,6 +249,7 @@ pub(crate) fn parse_pandapower_source(
                 cost: costs.get(&(CostElement::Gen, idx)).cloned(),
                 caps: [None; crate::network::GEN_EXTRA_KEYS.len()],
                 regulated_bus: None,
+                uid: None,
             });
         }
     }
@@ -268,6 +272,7 @@ pub(crate) fn parse_pandapower_source(
                 cost: costs.get(&(CostElement::ExtGrid, idx)).cloned(),
                 caps: [None; crate::network::GEN_EXTRA_KEYS.len()],
                 regulated_bus: None,
+                uid: None,
             });
         }
     }
@@ -293,6 +298,7 @@ pub(crate) fn parse_pandapower_source(
                 cost: costs.get(&(CostElement::Sgen, idx)).cloned(),
                 caps: [None; crate::network::GEN_EXTRA_KEYS.len()],
                 regulated_bus: None,
+                uid: None,
             });
         }
     }
@@ -351,6 +357,7 @@ pub(crate) fn parse_pandapower_source(
                 angmax: 360.0,
                 control: None,
                 solution: None,
+                uid: None,
                 extras: Extras::default(),
             });
         }
@@ -486,6 +493,7 @@ pub(crate) fn parse_pandapower_source(
                 angmax: 360.0,
                 control: None,
                 solution: None,
+                uid: None,
                 extras: Extras::default(),
             });
         }
@@ -529,6 +537,7 @@ pub(crate) fn parse_pandapower_source(
                 p_loss: 0.0,
                 q_loss: 0.0,
                 in_service: row.bool_or("in_service", true),
+                uid: None,
                 extras: Extras::default(),
             });
         }
@@ -562,6 +571,7 @@ pub(crate) fn parse_pandapower_source(
                 loss0: loss_mw,
                 loss1: loss_percent / 100.0,
                 cost: None,
+                uid: None,
                 extras: Extras::default(),
             });
         }
@@ -2611,6 +2621,7 @@ mod tests {
             q: 0.5,
             voltage_model: None,
             in_service: true,
+            uid: None,
             extras: Extras::default(),
         });
         let conv = write_pandapower_json(&net);
@@ -2808,6 +2819,7 @@ mod tests {
             area: 1,
             zone: 1,
             name: None,
+            uid: None,
             extras: Extras::default(),
         }
     }
@@ -2848,6 +2860,7 @@ mod tests {
             cost,
             caps: [None; crate::network::GEN_EXTRA_KEYS.len()],
             regulated_bus: None,
+            uid: None,
         }
     }
 
@@ -2871,6 +2884,7 @@ mod tests {
             angmax: 360.0,
             control: None,
             solution: None,
+            uid: None,
             extras: Extras::default(),
         }
     }
@@ -2910,6 +2924,7 @@ mod tests {
             q: 0.0,
             voltage_model: None,
             in_service: true,
+            uid: None,
             extras: Extras::default(),
         });
         net.generators.push(test_gen(3, None));
@@ -2967,6 +2982,7 @@ mod tests {
                 scaling: Some(0.5),
             }),
             in_service: true,
+            uid: None,
             extras: Extras::default(),
         });
 

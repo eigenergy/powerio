@@ -159,6 +159,7 @@ pub(super) fn bus_row(row: &[f64], i: usize) -> Result<(Bus, Option<Load>, Optio
         area: row[bus_col::BUS_AREA] as usize,
         zone: row[bus_col::ZONE] as usize,
         name: None,
+        uid: None,
         extras: Extras::new(),
     };
     let (pd, qd) = (row[bus_col::PD], row[bus_col::QD]);
@@ -168,6 +169,7 @@ pub(super) fn bus_row(row: &[f64], i: usize) -> Result<(Bus, Option<Load>, Optio
         q: qd,
         voltage_model: None,
         in_service,
+        uid: None,
         extras: Extras::new(),
     });
     let (gs, bs) = (row[bus_col::GS], row[bus_col::BS]);
@@ -177,6 +179,7 @@ pub(super) fn bus_row(row: &[f64], i: usize) -> Result<(Bus, Option<Load>, Optio
         b: bs,
         in_service,
         control: None,
+        uid: None,
         extras: Extras::new(),
     });
     Ok((bus, load, shunt))
@@ -203,6 +206,7 @@ pub(super) fn branch_row(row: &[f64], i: usize) -> Result<Branch> {
         angmax: row[branch_col::ANGMAX],
         control: None,
         solution: None,
+        uid: None,
         extras: Extras::new(),
     })
 }
@@ -235,6 +239,7 @@ pub(super) fn gen_row(row: &[f64], i: usize) -> Result<Generator> {
         cost: None,
         caps,
         regulated_bus: None,
+        uid: None,
     })
 }
 
@@ -291,6 +296,7 @@ pub(super) fn storage_row(row: &[f64], i: usize) -> Result<Storage> {
         p_loss: row[storage_col::P_LOSS],
         q_loss: row[storage_col::Q_LOSS],
         in_service: is_in_service(row[storage_col::STATUS]),
+        uid: None,
         extras: Extras::new(),
     })
 }
@@ -316,6 +322,7 @@ pub(super) fn hvdc_row(row: &[f64], i: usize) -> Result<Hvdc> {
         loss0: row[dcline_col::LOSS0],
         loss1: row[dcline_col::LOSS1],
         cost: None,
+        uid: None,
         extras: Extras::new(),
     })
 }

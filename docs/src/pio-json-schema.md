@@ -16,26 +16,27 @@ A `.pio.json` file has two parts with different stability promises.
    under the versioning policy below.
 
 2. **The payload** — the `model` field's `balanced_network` /
-   `multiconductor_network` object. This is a direct serde snapshot of the live
-   PowerIO Rust IR (`powerio::Network` / `powerio_dist::DistNetwork`). It can
-   grow whenever the IR grows. Adding a typed field to a model appears in the
-   payload with no envelope version change. Until a v1 payload schema exists,
-   tools that need a stable contract should read the envelope (model kind,
-   summary, diagnostics, provenance) and treat the payload as opaque or pinned
-   to a producer version.
+   `multiconductor_network` object: the serde snapshot of the PowerIO Rust IR
+   (`powerio::Network` / `powerio_dist::DistNetwork`). The payload is a declared
+   contract of its own, named by the top-level `payload_schema` URL and
+   versioned by `payload_schema_version`. A consumer that computes on payload
+   fields pins the payload version; a tool that routes or audits packages pins
+   the envelope version and can keep treating the payload as opaque.
 
-`schema_version` versions the envelope only. The payload carries no separate
-version yet; pin to `producer.version` if you depend on payload fields.
+The two versions are independent because they change at different rates and
+break different consumers: the payload grows whenever the IR grows (a minor
+`payload_schema_version` bump), while the envelope bookkeeping barely moves.
 
-For distribution models, the payload follows the same multiconductor model used
-by the BMOPF reader and writer. The surrounding `.pio.json` object is the
-PowerIO package envelope: it adds model kind, provenance, source maps,
-diagnostics, validation, and lowering metadata around that model. Use the
-`bmopf-json` writer when a standalone BMOPF exchange file is needed.
+The payload is PowerIO's own IR schema for both model kinds. Interchange
+formats stay at the converter boundary: for distribution models the
+multiconductor payload is the same model the BMOPF reader and writer translate
+to and from, and `powerio convert --to bmopf-json` emits a standalone BMOPF
+exchange file when one is needed. The BMOPF schema itself (bmopf-report) never
+defines the payload.
 
 ## Versioning policy (envelope)
 
-- `schema_version` is semver. The current value is `0.1.0`; the `schema` URL is
+- `schema_version` is semver. The current value is `0.1.1`; the `schema` URL is
   `https://powerio.dev/schema/pio-package/0.1`.
 - Optional additive envelope fields (a reader that ignores them loses nothing
   it relied on before) land without a version change; `operating_points` landed
@@ -48,6 +49,35 @@ diagnostics, validation, and lowering metadata around that model. Use the
 - A reader accepts same major `schema_version` values and rejects a different
   major version before using the payload.
 - Every package states `producer.version` and `schema_version`.
+
+## Versioning policy (payload)
+
+- `payload_schema` names the payload contract per model kind:
+  `https://powerio.dev/schema/pio-payload-balanced/1` and
+  `https://powerio.dev/schema/pio-payload-multiconductor/1`. The URLs are
+  identifiers, not fetch locations (the JSON Schema `$id` convention).
+- `payload_schema_version` is semver, currently `1.0.0` for both kinds.
+  Additive optional fields bump the minor; field moves or removals bump the
+  major.
+- A reader rejects a `payload_schema_version` with a different major (or one
+  that does not parse as semver) before computing on payload fields. Absent
+  fields — every package written before 0.1.1 — are accepted; such payloads
+  predate the declared contract.
+- The payload field tables are the rustdoc of `powerio::Network` and
+  `powerio_dist::DistNetwork`; the serde snapshot of those structs is the
+  normative shape.
+
+## Row identity
+
+Every row of the balanced payload tables (`buses`, `loads`, `shunts`,
+`branches`, `switches`, `generators`, `storage`, `hvdc`, `transformers_3w`)
+carries a `uid` string: the source record uid where the format defines one
+(GOC3), and a `{table}:{row}` value synthesized at package build otherwise. A
+synthesized uid records the row the element had when the package was built and
+sticks to the element from then on. Uids are unique per table; a duplicate is a
+validation error. Operating point updates resolve against these identities
+(below). Rows in packages written before 0.1.1 carry no `uid`, which is what
+keeps their row-addressed operating points valid.
 
 ## Explicit model kind
 
@@ -76,6 +106,8 @@ later families can be added).
 | `package_id` | string | no | stable content id, e.g. `"sha256:..."`; unset by the scaffold |
 | `created_at` | string (RFC 3339) | no | unset by default for deterministic output |
 | `model_kind` | enum | yes | `balanced` \| `multiconductor`; authoritative |
+| `payload_schema` | string (URL) | no | declared payload contract for `model_kind`; absent on pre-0.1.1 packages |
+| `payload_schema_version` | string (semver) | no | payload version; a different major is rejected on read |
 | `model` | object | yes | `{kind, <kind>_network}`; follows the Rust model payload |
 | `origin` | object | yes | tagged by `kind`: `in_memory` \| `file` \| `folder` \| `binary_file` \| `derived` \| `composite` |
 | `sources` | array | no | declared source artifacts: `{id, kind, path?, format?, hash?}` |
@@ -90,9 +122,18 @@ later families can be added).
 ### Operating points
 
 `operating_points` records a time axis and an ordered list of payload field
-updates. A point names a table, zero based row, optional source UID, and the
+updates. A point names a table, a row identity and/or a zero based row, and the
 fields to overwrite. Materializing a point clones the static payload, applies
 those field updates, and clears `operating_points` in the returned package.
+
+Updates resolve by identity first. When the referenced table carries `uid`
+values, `element.source_uid` is authoritative: it selects the row, a present
+`element.row` must agree with the resolved row, and an unknown or duplicated
+uid is an error (reported by validation and fatal to materialization). A
+producer that knows the identity can omit `row` entirely. When the table
+carries no uids (packages written before 0.1.1), `source_uid` is advisory and
+`row` addresses the update alone. An update may not overwrite `uid` itself, and
+an element ref with neither `row` nor `source_uid` does not parse.
 
 The block shape is:
 
@@ -105,8 +146,8 @@ The block shape is:
 | `points[].index` | integer | zero based period index; addresses `time_axis.duration_hours` and `time_axis.labels` |
 | `points[].updates[]` | array | row field updates to apply for this point |
 | `updates[].element.table` | string | payload table name, such as `generators`, `loads`, `branches`, or `hvdc` |
-| `updates[].element.row` | integer | zero based row in that table |
-| `updates[].element.source_uid` | string | optional source record UID |
+| `updates[].element.row` | integer | zero based row; optional when `source_uid` is present, then a consistency check |
+| `updates[].element.source_uid` | string | the target row's payload identity (`uid`); authoritative when the table carries uids |
 | `updates[].fields` | object | field names and JSON values to overwrite |
 | `metadata` | object | optional series or point metadata |
 
@@ -196,9 +237,11 @@ bindings, or MCP operations.
 ```json
 {
   "schema": "https://powerio.dev/schema/pio-package/0.1",
-  "schema_version": "0.1.0",
-  "producer": { "tool": "powerio", "version": "0.5.0" },
+  "schema_version": "0.1.1",
+  "producer": { "tool": "powerio", "version": "0.5.1" },
   "model_kind": "multiconductor",
+  "payload_schema": "https://powerio.dev/schema/pio-payload-multiconductor/1",
+  "payload_schema_version": "1.0.0",
   "model": {
     "kind": "multiconductor",
     "multiconductor_network": {

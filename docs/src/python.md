@@ -148,8 +148,11 @@ from the payload.
 
 `pkg.operating_points()` returns a Python dict for the replayable operating
 point series, or `None`. `pkg.materialize_operating_point(i)` returns a new
-static `Package` with one point applied. GOC3 packages populate this series
-from the source time series while the static payload holds the first interval.
+static `Package` with one point applied; updates resolve by the payload rows'
+`uid` identities, and an unknown identity or a row that contradicts one raises
+`ValueError`. GOC3 packages populate this series from the source time series
+while the static payload holds the first interval. Network table dicts
+(`net.buses`, `net.loads`, ...) expose each row's `uid`.
 `pkg.validate()`, `pkg.validation()`, and `pkg.diagnostics()` expose the
 package validation profile, and multiconductor packages lower through
 `pkg.multiconductor_to_balanced_preflight()` and

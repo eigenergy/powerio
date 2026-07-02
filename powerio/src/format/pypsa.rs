@@ -105,6 +105,7 @@ fn read_pypsa_csv_folder_inner(path: &Path, warnings: &mut Vec<String>) -> Resul
             area: 1,
             zone: 1,
             name: bus_name,
+            uid: None,
             extras: Extras::default(),
         });
     }
@@ -119,6 +120,7 @@ fn read_pypsa_csv_folder_inner(path: &Path, warnings: &mut Vec<String>) -> Resul
                 q: row.f("q_set").unwrap_or(0.0),
                 voltage_model: None,
                 in_service: row.bool("active").unwrap_or(true),
+                uid: None,
                 extras: Extras::default(),
             });
         }
@@ -135,6 +137,7 @@ fn read_pypsa_csv_folder_inner(path: &Path, warnings: &mut Vec<String>) -> Resul
                 b: row.f("b").unwrap_or(0.0) * zb * base_mva,
                 in_service: row.bool("active").unwrap_or(true),
                 control: None,
+                uid: None,
                 extras: Extras::default(),
             });
         }
@@ -190,6 +193,7 @@ fn read_pypsa_csv_folder_inner(path: &Path, warnings: &mut Vec<String>) -> Resul
                 },
                 caps: [None; crate::network::GEN_EXTRA_KEYS.len()],
                 regulated_bus: None,
+                uid: None,
             });
         }
     }
@@ -228,6 +232,7 @@ fn read_pypsa_csv_folder_inner(path: &Path, warnings: &mut Vec<String>) -> Resul
                 angmax: row.f("v_ang_max").unwrap_or(360.0),
                 control: None,
                 solution: None,
+                uid: None,
                 extras: Extras::default(),
             });
         }
@@ -273,6 +278,7 @@ fn read_pypsa_csv_folder_inner(path: &Path, warnings: &mut Vec<String>) -> Resul
                 angmax: 360.0,
                 control: None,
                 solution: None,
+                uid: None,
                 extras: Extras::default(),
             });
         }
@@ -302,6 +308,7 @@ fn read_pypsa_csv_folder_inner(path: &Path, warnings: &mut Vec<String>) -> Resul
                 p_loss: 0.0,
                 q_loss: 0.0,
                 in_service: row.bool("active").unwrap_or(true),
+                uid: None,
                 extras: Extras::default(),
             });
         }
@@ -334,6 +341,7 @@ fn read_pypsa_csv_folder_inner(path: &Path, warnings: &mut Vec<String>) -> Resul
                 loss0: 0.0,
                 loss1: 1.0 - efficiency,
                 cost: None,
+                uid: None,
                 extras: Extras::default(),
             });
         }
@@ -1123,6 +1131,7 @@ mod tests {
             area: 1,
             zone: 1,
             name: name.map(str::to_string),
+            uid: None,
             extras: Extras::default(),
         }
     }
@@ -1142,6 +1151,7 @@ mod tests {
             cost,
             caps: [None; crate::network::GEN_EXTRA_KEYS.len()],
             regulated_bus: None,
+            uid: None,
         }
     }
 
@@ -1165,6 +1175,7 @@ mod tests {
             p_loss: 0.0,
             q_loss: 0.0,
             in_service: true,
+            uid: None,
             extras: Extras::default(),
         }
     }
@@ -1189,6 +1200,7 @@ mod tests {
             angmax: 360.0,
             control: None,
             solution: None,
+            uid: None,
             extras: Extras::default(),
         }
     }
@@ -1213,6 +1225,7 @@ mod tests {
             angmax: 360.0,
             control: None,
             solution: None,
+            uid: None,
             extras: Extras::default(),
         }
     }
@@ -1545,6 +1558,7 @@ mod tests {
             q: 1.0,
             voltage_model: None,
             in_service: true,
+            uid: None,
             extras: Extras::default(),
         }];
         let dir = tmp_dir("named-join");
@@ -1567,6 +1581,7 @@ mod tests {
             q: 1.0,
             voltage_model: None,
             in_service: true,
+            uid: None,
             extras: Extras::default(),
         }];
         let dir = tmp_dir("dup-keys");

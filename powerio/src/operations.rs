@@ -498,6 +498,7 @@ impl Network {
             angmax,
             control: None,
             solution: None,
+            uid: None,
             extras: Extras::new(),
         });
         self.buses.retain(|b| b.id != m);
@@ -567,6 +568,7 @@ mod tests {
             area,
             zone: 1,
             name: None,
+            uid: None,
             extras: Extras::new(),
         }
     }
@@ -591,6 +593,7 @@ mod tests {
             angmax: 360.0,
             control: None,
             solution: None,
+            uid: None,
             extras: Extras::new(),
         }
     }
@@ -602,6 +605,7 @@ mod tests {
             q: 5.0,
             voltage_model: None,
             in_service: true,
+            uid: None,
             extras: Extras::new(),
         }
     }
@@ -644,6 +648,7 @@ mod tests {
             mag_b: 0.0,
             in_service: true,
             name: None,
+            uid: None,
             extras: Extras::new(),
         }
     }
@@ -663,6 +668,7 @@ mod tests {
             cost: None,
             caps: Default::default(),
             regulated_bus: Some(BusId(regulated)),
+            uid: None,
         }
     }
 

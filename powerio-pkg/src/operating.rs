@@ -140,16 +140,26 @@ impl OperatingPoint {
 }
 
 /// A row in one table of the static payload.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+///
+/// `source_uid` is the row's payload identity: when the referenced table
+/// carries `uid` values, a present `source_uid` resolves the target row and a
+/// present `row` must agree with it. In a table without uids (packages written
+/// before payload identity existed), `source_uid` is advisory and `row`
+/// addresses the update alone. On the wire, `row` may be omitted when
+/// `source_uid` is given.
+#[derive(Clone, Debug, PartialEq, Eq)]
 #[non_exhaustive]
 pub struct ElementRef {
     /// Payload table name, such as `loads`, `generators`, `branches`, or `hvdc`.
     pub table: String,
-    /// Zero based row index in `table`.
+    /// Zero based row index in `table`. Meaningful only when the wire carried
+    /// one; read [`ElementRef::wire_row`] before trusting it.
     pub row: usize,
-    /// Optional source record UID for diagnostics and provenance.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    /// The row's payload identity (its `uid` field), when the producer knows it.
     pub source_uid: Option<String>,
+    /// Whether the wire carried `row`. Refs built by
+    /// [`ElementRef::by_source_uid`] have no truthful row to serialize.
+    row_present: bool,
 }
 
 impl ElementRef {
@@ -159,6 +169,18 @@ impl ElementRef {
             table: table.into(),
             row,
             source_uid: None,
+            row_present: true,
+        }
+    }
+
+    /// Address a row by payload identity alone; no `row` is serialized.
+    #[must_use]
+    pub fn by_source_uid(table: impl Into<String>, uid: impl Into<String>) -> Self {
+        Self {
+            table: table.into(),
+            row: 0,
+            source_uid: Some(uid.into()),
+            row_present: false,
         }
     }
 
@@ -166,6 +188,53 @@ impl ElementRef {
     pub fn with_source_uid(mut self, uid: impl Into<String>) -> Self {
         self.source_uid = Some(uid.into());
         self
+    }
+
+    /// The wire `row`, when one was given.
+    #[must_use]
+    pub fn wire_row(&self) -> Option<usize> {
+        self.row_present.then_some(self.row)
+    }
+}
+
+impl Serialize for ElementRef {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        use serde::ser::SerializeStruct;
+        let len = 1 + usize::from(self.row_present) + usize::from(self.source_uid.is_some());
+        let mut state = serializer.serialize_struct("ElementRef", len)?;
+        state.serialize_field("table", &self.table)?;
+        if self.row_present {
+            state.serialize_field("row", &self.row)?;
+        }
+        if let Some(uid) = &self.source_uid {
+            state.serialize_field("source_uid", uid)?;
+        }
+        state.end()
+    }
+}
+
+impl<'de> Deserialize<'de> for ElementRef {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        #[derive(Deserialize)]
+        struct Wire {
+            table: String,
+            #[serde(default)]
+            row: Option<usize>,
+            #[serde(default)]
+            source_uid: Option<String>,
+        }
+        let wire = Wire::deserialize(deserializer)?;
+        if wire.row.is_none() && wire.source_uid.is_none() {
+            return Err(serde::de::Error::custom(
+                "element ref needs `row` or `source_uid`",
+            ));
+        }
+        Ok(Self {
+            table: wire.table,
+            row_present: wire.row.is_some(),
+            row: wire.row.unwrap_or(0),
+            source_uid: wire.source_uid,
+        })
     }
 }
 
@@ -423,10 +492,14 @@ fn json_error(message: impl Into<String>) -> serde_json::Error {
     <serde_json::Error as serde::de::Error>::custom(message.into())
 }
 
+/// Apply one operating point to the payload and return the updated model plus
+/// the JSON Pointer paths of every field written, computed from the resolved
+/// rows so stale provenance cleanup follows identity resolution, never a stale
+/// wire row.
 pub(crate) fn apply_operating_point_to_model(
     model: &ModelPayload,
     point: &OperatingPoint,
-) -> serde_json::Result<ModelPayload> {
+) -> serde_json::Result<(ModelPayload, BTreeSet<String>)> {
     let mut value = serde_json::to_value(model)?;
     let root = value.as_object_mut().ok_or_else(|| {
         <serde_json::Error as serde::de::Error>::custom("model payload did not serialize to object")
@@ -441,32 +514,66 @@ pub(crate) fn apply_operating_point_to_model(
             ))
         })?;
 
+    let mut indexes = HashMap::new();
+    let mut resolved_rows = Vec::with_capacity(point.updates.len());
     for update in &point.updates {
-        apply_update(payload, update)?;
+        let row = resolve_update(payload, &mut indexes, update).map_err(json_error)?;
+        apply_update_fields(payload, &update.element.table, row, &update.fields)?;
+        resolved_rows.push(row);
     }
 
-    let updated = serde_json::from_value(value)?;
-    validate_update_fields_survived(&updated, &point.updates)?;
-    Ok(updated)
-}
-
-pub(crate) fn operating_point_update_paths(
-    model: &ModelPayload,
-    point: &OperatingPoint,
-) -> BTreeSet<String> {
-    let payload_key = payload_key(model);
-    point
+    let updated_paths = point
         .updates
         .iter()
-        .flat_map(|update| {
+        .zip(&resolved_rows)
+        .flat_map(|(update, row)| {
             update.fields.keys().map(move |field| {
                 format!(
-                    "/model/{payload_key}/{}/{}/{}",
-                    update.element.table, update.element.row, field
+                    "/model/{payload_key}/{}/{row}/{}",
+                    update.element.table, field
                 )
             })
         })
-        .collect()
+        .collect();
+
+    let updated = serde_json::from_value(value)?;
+    validate_update_fields_survived(&updated, &point.updates, &resolved_rows)?;
+    Ok((updated, updated_paths))
+}
+
+/// Dry run identity resolution over a whole series, returning `(point_position,
+/// update_position, message)` for every update that fails to resolve. The
+/// payload is serialized once and the per table indexes are shared across the
+/// series.
+pub(crate) fn check_series_identities(
+    model: &ModelPayload,
+    series: &OperatingPointSeries,
+) -> Vec<(usize, usize, String)> {
+    let payload_key = payload_key(model);
+    let payload = match serde_json::to_value(model) {
+        Ok(Value::Object(mut root)) => match root.remove(payload_key) {
+            Some(Value::Object(payload)) => payload,
+            _ => {
+                return vec![(
+                    0,
+                    0,
+                    format!("model payload missing `{payload_key}` object"),
+                )];
+            }
+        },
+        _ => return vec![(0, 0, "model payload did not serialize to object".to_owned())],
+    };
+
+    let mut indexes = HashMap::new();
+    let mut findings = Vec::new();
+    for (point_pos, point) in series.points.iter().enumerate() {
+        for (update_pos, update) in point.updates.iter().enumerate() {
+            if let Err(message) = resolve_update(&payload, &mut indexes, update) {
+                findings.push((point_pos, update_pos, message));
+            }
+        }
+    }
+    findings
 }
 
 fn payload_key(model: &ModelPayload) -> &'static str {
@@ -476,31 +583,132 @@ fn payload_key(model: &ModelPayload) -> &'static str {
     }
 }
 
-fn apply_update(
-    payload: &mut serde_json::Map<String, Value>,
+/// The uid -> row index for one payload table.
+struct IdentityIndex {
+    by_uid: HashMap<String, usize>,
+    /// Uids on more than one row; resolving through one is ambiguous.
+    duplicates: BTreeSet<String>,
+    /// Whether any row carries a uid. A table with none keeps the row-only
+    /// semantics packages had before payload identity existed.
+    has_uids: bool,
+}
+
+fn table_identity_index(table: &[Value]) -> IdentityIndex {
+    let mut by_uid = HashMap::with_capacity(table.len());
+    let mut duplicates = BTreeSet::new();
+    let mut has_uids = false;
+    for (row, value) in table.iter().enumerate() {
+        let Some(uid) = value.get("uid").and_then(Value::as_str) else {
+            continue;
+        };
+        has_uids = true;
+        if by_uid.insert(uid.to_owned(), row).is_some() {
+            duplicates.insert(uid.to_owned());
+        }
+    }
+    IdentityIndex {
+        by_uid,
+        duplicates,
+        has_uids,
+    }
+}
+
+/// Resolve one update to its payload row, first rejecting any update that would
+/// rewrite `uid`. Identity is immutable: letting a field write change it would
+/// invalidate the per table indexes mid application.
+fn resolve_update(
+    payload: &Map<String, Value>,
+    indexes: &mut HashMap<String, IdentityIndex>,
     update: &ElementUpdate,
+) -> Result<usize, String> {
+    if update.fields.contains_key("uid") {
+        return Err(format!(
+            "operating point update on table `{}` must not overwrite `uid`",
+            update.element.table
+        ));
+    }
+    resolve_update_row(payload, indexes, &update.element)
+}
+
+/// Resolve one element ref to a payload row. A `source_uid` that resolves in a
+/// uid bearing table is authoritative and a present wire `row` must agree with
+/// it; an unknown or duplicated uid in such a table is an error; a table without
+/// uids falls back to the wire row.
+fn resolve_update_row(
+    payload: &Map<String, Value>,
+    indexes: &mut HashMap<String, IdentityIndex>,
+    element: &ElementRef,
+) -> Result<usize, String> {
+    let table_name = element.table.as_str();
+    let Some(table) = payload.get(table_name).and_then(Value::as_array) else {
+        return Err(format!(
+            "operating point table `{table_name}` is not present or is not an array"
+        ));
+    };
+    let index = indexes
+        .entry(table_name.to_owned())
+        .or_insert_with(|| table_identity_index(table));
+    let resolved = match element.source_uid.as_deref() {
+        Some(uid) if index.duplicates.contains(uid) => {
+            return Err(format!(
+                "payload table `{table_name}` carries uid `{uid}` on more than one row; \
+                 identity resolution is ambiguous"
+            ));
+        }
+        Some(uid) => match index.by_uid.get(uid) {
+            Some(&row) => {
+                if let Some(wire_row) = element.wire_row()
+                    && wire_row != row
+                {
+                    return Err(format!(
+                        "update for table `{table_name}` names uid `{uid}` (row {row}) \
+                         but carries row {wire_row}"
+                    ));
+                }
+                row
+            }
+            None if index.has_uids => {
+                return Err(format!(
+                    "unknown identity: table `{table_name}` has no row with uid `{uid}`"
+                ));
+            }
+            None => element.wire_row().ok_or_else(|| {
+                format!(
+                    "update for table `{table_name}` names uid `{uid}`, but the payload rows \
+                     carry no uids and the update has no row to fall back on"
+                )
+            })?,
+        },
+        None => element.wire_row().ok_or_else(|| {
+            format!("update for table `{table_name}` has neither row nor source_uid")
+        })?,
+    };
+    if resolved >= table.len() {
+        return Err(format!(
+            "operating point table `{table_name}` has no row {resolved}"
+        ));
+    }
+    Ok(resolved)
+}
+
+fn apply_update_fields(
+    payload: &mut serde_json::Map<String, Value>,
+    table_name: &str,
+    row: usize,
+    fields: &BTreeMap<String, Value>,
 ) -> serde_json::Result<()> {
-    let table_name = update.element.table.as_str();
-    let table = payload
+    let row_object = payload
         .get_mut(table_name)
         .and_then(Value::as_array_mut)
-        .ok_or_else(|| {
-            <serde_json::Error as serde::de::Error>::custom(format!(
-                "operating point table `{table_name}` is not present or is not an array"
-            ))
-        })?;
-    let row = table
-        .get_mut(update.element.row)
+        .and_then(|table| table.get_mut(row))
         .and_then(Value::as_object_mut)
         .ok_or_else(|| {
-            <serde_json::Error as serde::de::Error>::custom(format!(
-                "operating point table `{table_name}` has no object row {}",
-                update.element.row
+            json_error(format!(
+                "operating point table `{table_name}` has no object row {row}"
             ))
         })?;
-
-    for (field, value) in &update.fields {
-        row.insert(field.clone(), value.clone());
+    for (field, value) in fields {
+        row_object.insert(field.clone(), value.clone());
     }
     Ok(())
 }
@@ -508,6 +716,7 @@ fn apply_update(
 fn validate_update_fields_survived(
     model: &ModelPayload,
     updates: &[ElementUpdate],
+    resolved_rows: &[usize],
 ) -> serde_json::Result<()> {
     let value = serde_json::to_value(model)?;
     let root = value.as_object().ok_or_else(|| {
@@ -523,31 +732,25 @@ fn validate_update_fields_survived(
             ))
         })?;
 
-    for update in updates {
+    for (update, &resolved_row) in updates.iter().zip(resolved_rows) {
         let table_name = update.element.table.as_str();
-        let table = payload
+        let row = payload
             .get(table_name)
             .and_then(Value::as_array)
-            .ok_or_else(|| {
-                <serde_json::Error as serde::de::Error>::custom(format!(
-                    "operating point table `{table_name}` is not present after typed materialization"
-                ))
-            })?;
-        let row = table
-            .get(update.element.row)
+            .and_then(|table| table.get(resolved_row))
             .and_then(Value::as_object)
             .ok_or_else(|| {
-                <serde_json::Error as serde::de::Error>::custom(format!(
-                    "operating point table `{table_name}` has no object row {} after typed materialization",
-                    update.element.row
+                json_error(format!(
+                    "operating point table `{table_name}` has no object row {resolved_row} \
+                     after typed materialization"
                 ))
             })?;
 
         for field in update.fields.keys() {
             if !row.contains_key(field) {
-                return Err(<serde_json::Error as serde::de::Error>::custom(format!(
-                    "operating point field `{field}` is not present on table `{table_name}` row {}",
-                    update.element.row
+                return Err(json_error(format!(
+                    "operating point field `{field}` is not present on table `{table_name}` \
+                     row {resolved_row}"
                 )));
             }
         }

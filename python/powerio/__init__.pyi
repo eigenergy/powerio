@@ -33,18 +33,21 @@ class Bus(TypedDict):
     zone: int
     vmax: float
     vmin: float
+    uid: Optional[str]
 
 class Load(TypedDict):
     bus: int
     p: float
     q: float
     in_service: bool
+    uid: Optional[str]
 
 class Shunt(TypedDict):
     bus: int
     g: float
     b: float
     in_service: bool
+    uid: Optional[str]
 
 class BranchRatingSet(TypedDict):
     name: str
@@ -65,6 +68,7 @@ class Branch(TypedDict):
     in_service: bool
     angmin: float
     angmax: float
+    uid: Optional[str]
 
 class Gen(TypedDict):
     bus: int
@@ -78,6 +82,7 @@ class Gen(TypedDict):
     mbase: float
     in_service: bool
     cost: Optional[GenCost]
+    uid: Optional[str]
 
 class Incidence(NamedTuple):
     A: Any  # scipy.sparse.csr_matrix, (n, m)

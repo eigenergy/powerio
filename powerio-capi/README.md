@@ -139,7 +139,9 @@ compiler package handle, distinct from the parsed network handles:
 - `pio_package_operating_points_json` returns the replayable operating point
   series, or JSON `null` when the package has none.
 - `pio_package_materialize_operating_point` returns a new static package with
-  one operating point applied.
+  one operating point applied. Updates resolve by the payload rows' `uid`
+  identities; an unknown identity, an ambiguous (duplicated) uid, or a row that
+  contradicts a resolved identity returns `NULL` with the message in `errbuf`.
 - `pio_package_multiconductor_to_balanced_preflight_json` reports structured
   blockers before lowering, and `pio_package_lower_multiconductor_to_balanced`
   returns a new balanced package when the input is ready.

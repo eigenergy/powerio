@@ -102,3 +102,19 @@ fn small_net() -> Network {
     net.source_format = SourceFormat::InMemory;
     net
 }
+
+#[test]
+fn uid_survives_snapshot_roundtrip_and_stays_off_the_wire_when_absent() {
+    let mut net = small_net();
+    net.generators[0].uid = Some("gen-a".to_owned());
+
+    let v: serde_json::Value = serde_json::from_str(&net.to_json().unwrap()).unwrap();
+    assert_eq!(v["generators"][0]["uid"], serde_json::json!("gen-a"));
+    // A row without a uid omits the key instead of writing null, so snapshots
+    // from parsers that never set it are byte-identical to the pre-uid vintage.
+    assert!(v["buses"][0].get("uid").is_none());
+
+    let parsed = Network::from_json(&serde_json::to_string(&v).unwrap()).unwrap();
+    assert_eq!(parsed.generators[0].uid.as_deref(), Some("gen-a"));
+    assert_eq!(parsed.buses[0].uid, None);
+}
