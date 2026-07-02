@@ -159,21 +159,53 @@ jobs:
         <footer><a href="https://github.com/eigenergy/powerio">github.com/eigenergy/powerio</a></footer>
         HTML
     # The schema URLs stamped into .pio.json files (`schema`, `payload_schema`)
-    # are identifiers first, but the site serves them so they also resolve:
-    # each lands on the schema guide chapter. Relative targets keep the pages
-    # working under both powerio.dev and eigenergy.github.io/powerio.
+    # are identifiers first, but the site serves them so they also resolve.
+    # Each page states what its URL names and links the field reference and the
+    # normative Rust type. Relative targets keep the pages working under both
+    # powerio.dev and eigenergy.github.io/powerio.
     - name: Schema identifier pages
       run: |
-        for id in pio-package/0.1 pio-payload-balanced/1 pio-payload-multiconductor/1; do
-          mkdir -p "target/doc/schema/$id"
-          cat > "target/doc/schema/$id/index.html" <<HTML
+        write_schema_page() {
+          mkdir -p "target/doc/schema/$1"
+          cat > "target/doc/schema/$1/index.html" <<HTML
         <!doctype html>
         <meta charset="utf-8">
-        <meta http-equiv="refresh" content="0; url=../../../guide/pio-json-schema.html">
-        <title>PowerIO schema: $id</title>
-        <a href="../../../guide/pio-json-schema.html">PowerIO schema $id — see the .pio.json schema guide</a>
+        <meta name="viewport" content="width=device-width, initial-scale=1">
+        <title>$1</title>
+        <style>body{font-family:Georgia,serif;max-width:600px;margin:5rem auto;padding:0 1.5rem;line-height:1.6}</style>
+        <h1><code>$1</code></h1>
+        <p>$2</p>
+        <p>Current version: <code>$3</code>. Additive optional fields bump the
+        minor version; field moves or removals bump the major. The
+        <a href="../../../guide/pio-json-schema.html">.pio.json schema guide</a>
+        is the field reference.</p>
+        $4
         HTML
-        done
+        }
+        write_schema_page pio-package/0.1 \
+          "The <code>.pio.json</code> package envelope: the versioned wrapper
+           (provenance, source maps, diagnostics, validation, operating points,
+           lowering history) around one network payload. Stamped as
+           <code>schema</code> on every package." \
+          "0.1.1" ""
+        write_schema_page pio-payload-balanced/1 \
+          "The balanced transmission payload: the serde snapshot of the
+           <code>powerio::Network</code> model under
+           <code>model.balanced_network</code>. Stamped as
+           <code>payload_schema</code> on balanced packages." \
+          "1.0.0" \
+          '<p>The normative shape is the Rust model:
+           <a href="../../../powerio/network/struct.Network.html">powerio::Network</a>.</p>'
+        write_schema_page pio-payload-multiconductor/1 \
+          "The multiconductor distribution payload: the serde snapshot of the
+           <code>powerio_dist::DistNetwork</code> model under
+           <code>model.multiconductor_network</code>. Stamped as
+           <code>payload_schema</code> on multiconductor packages. For a
+           standalone distribution exchange file, use the BMOPF writer instead
+           of this payload." \
+          "1.0.0" \
+          '<p>The normative shape is the Rust model:
+           <a href="../../../powerio_dist/model/struct.DistNetwork.html">powerio_dist::DistNetwork</a>.</p>'
     - uses: actions/upload-pages-artifact@v5
       with:
         path: target/doc
