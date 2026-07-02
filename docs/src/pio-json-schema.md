@@ -31,16 +31,15 @@ exchange schema for multiconductor distribution OPF cases, defined by the IEEE
 PES task force on benchmarking multiconductor OPF in
 [bmopf-report](https://github.com/frederikgeth/bmopf-report). Its contract is
 a JSON Schema 2020-12 document with `additionalProperties: false`, its units
-are SI, and independent tools validate instances against the schema file. It
-defines no transmission model and no provenance envelope, and it evolves under
-task force review.
+are SI, and independent tools validate instances against the schema file. A
+transmission model and a provenance envelope are outside its scope.
 
-`.pio.json` is the output of one toolchain. It covers both IR families, wraps
-the payload in the compilation record above, and versions with PowerIO
-releases. Its contract is the Rust model that writes and reads it rather than
-a schema document: the payload is what the model serializes and the semver
-fields below govern change. Pinning the payload to an external draft
-schema would push every task force revision into every PowerIO consumer.
+`.pio.json` is the output of one toolchain. It covers both IR families and
+wraps the payload in the compilation record above. Its contract is the Rust
+model that writes and reads it rather than a schema document: the payload is
+what the model serializes and the semver fields below govern change. The two
+formats also version on different schedules: the payload with PowerIO
+releases, BMOPF with the task force.
 
 The two formats meet at the multiconductor model. The BMOPF reader and writer
 translate to and from the same `DistNetwork` the multiconductor payload
