@@ -3,7 +3,7 @@
 
 <p align="center">
   <img
-    src="https://raw.githubusercontent.com/eigenergy/powerio/main/docs/src/assets/powerio-hero.png"
+    src="https://raw.githubusercontent.com/eigenergy/powerio/60e0126c/docs/src/assets/powerio-hero.png"
     alt="PowerIO format and matrix flow"
     width="720"
   >
