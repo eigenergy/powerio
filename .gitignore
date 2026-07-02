@@ -33,3 +33,4 @@ benchmarks/asv/html/
 tests/data/local_pwb_corpus.tsv
 docs/book/
 docs/src/releasing*.md
+private/

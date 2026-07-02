@@ -113,9 +113,13 @@ in Python), naming the table and counting the affected rows.
   band, regulated bus, and step blocks. A 2-winding transformer's magnetizing
   susceptance round-trips through `MAG2` (\\(\mathrm{CM} = 1\\)). Impedances are assumed on the
   system base (\\(\mathrm{CZ} = \mathrm{CW} = 1\\)).
-- **PowerWorld** `.aux` carries no system base, so the reader defaults to 100 MVA.
-  No third-party `.aux` reader exists, so that writer is validated by powerio's own
-  read back plus a PowerModels JSON bridge.
+- **PowerWorld** `.aux` is read and written. `.pwb` binary cases are read
+  only, and `.pwd` display files parse through the separate display API.
+  `.aux` carries no system base, so the reader defaults to 100 MVA. No third-party `.aux` reader
+  exists, so that writer is validated by powerio's own read back plus a
+  PowerModels JSON bridge. The `.pwb` layouts are reverse engineered; the decode
+  evidence and coverage matrix are maintainer notes at
+  [`powerio/src/format/powerworld/FORMAT.md`](https://github.com/eigenergy/powerio/blob/main/powerio/src/format/powerworld/FORMAT.md).
 - **PSLF** `.epc` is read and written. The reader maps the static power flow core:
   buses, lines, two- and three-winding transformers, generators, loads, fixed
   shunts, controlled shunts at initial `g/b`, and limited two-terminal DC records.
@@ -188,3 +192,28 @@ in Python), naming the table and counting the affected rows.
   `GridfmRead`, mirroring `Conversion::warnings`. The same direction writer is
   documented in the
   [top level README](https://github.com/eigenergy/powerio#gridfm).
+
+## Missing generator costs
+
+PSS/E `.raw` files carry no generator cost curves. Converting a PSS/E case to
+MATPOWER writes `mpc.gen` and omits `mpc.gencost` with a warning; powerio does
+not invent zero costs. A workflow that needs costs must pick an explicit policy:
+
+```sh
+powerio convert case.raw --from psse --to matpower --missing-gen-cost zero -o case.m
+powerio dcopf case.m -o out --missing-gen-cost quadratic --default-gen-cost 0.01,2.0,0.0
+powerio gridfm case.raw --from psse -o out --missing-gen-cost zero
+```
+
+- `preserve`: leave missing costs absent (default for conversion and GridFM export);
+- `require`: fail on an in-service generator without cost (default for DC OPF export);
+- `zero`: fill missing rows with a MATPOWER polynomial cost `[0, 0, 0]`;
+- `quadratic`: fill missing rows with `--default-gen-cost C2,C1,C0`.
+
+`--gen-cost-csv` overrides costs by generator row before the missing-cost policy
+runs. The header is `gen_index,bus,c2,c1,c0,startup,shutdown`: `gen_index` is
+zero based in the current generator table, `bus` must match that generator's bus
+id (catching stale tables after reordering), and `startup`/`shutdown` default to
+zero. GridFM stores `cp0/cp1/cp2` columns; missing or unsupported costs still
+write zero columns, and the manifest separates `missing_cost_gens`,
+`unsupported_cost_gens`, `zeroed_cost_gens`, and `synthesized_gen_costs`.

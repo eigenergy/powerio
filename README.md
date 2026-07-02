@@ -9,29 +9,32 @@
   >
 </p>
 
-PowerIO parses power system case files into a typed `Network`, converts between
-formats, and builds sparse matrices and graph representations for solver and analysis
-code. If you write a parsed file back to the same file type, PowerIO returns the
-original text when the reader kept it. If you convert to another file type,
-PowerIO writes the modeled power flow data and reports fields the target cannot
-carry in warnings.
+PowerIO is compiler infrastructure for power systems. Case files from a dozen
+transmission and distribution formats parse into typed intermediate
+representations (IR). Once parsed, you can perform explicit, recorded operations, like normalization, validation, and lowering.
+You can compile/write the case back into any supported target format, sparse matrix families, and ML model formats. 
 
-The core is implemented in [Rust](https://rust-lang.org). The
-[C ABI](https://github.com/eigenergy/powerio/tree/main/powerio-capi) exposes
-the same parser and converter to C, C++, Julia, and other foreign function
-interfaces. The Python package and command line interface sit on top of the
-same Rust code.
+The `.pio.json` package serves as a unified network payload under declared [schema versions](https://powerio.dev/guide/pio-json-schema.html),
+which records where the data came from, and how it maps back to the original source file. 
+Furthermore, the package contains structured diagnostics, validation, and replayable operating points, enabling many downstream tasks.
+
+Data fidelity and interoperability is the primary goal of the PowerIO project. Writing a parsed file back to its own format returns
+the original text when the reader kept it. Converting to another format writes 
+the modeled electrical data and reports every field the target cannot carry in
+`Conversion::warnings`.
+
+The core of PowerIO is written in [Rust](https://rust-lang.org). The Rust version is used to create the Python package and the command line interface, both of which sit in this repo. The Rust implementation also enables the creation of a [C ABI](https://github.com/eigenergy/powerio/tree/main/powerio-capi), which exposes PowerIO capabilities to C, C++, [Julia](https://github.com/eigenergy/PowerIO.jl), and other foreign function interfaces (FFIs). 
 
 ## Overview
 
-When writing back to the source format, PowerIO **returns the original file exactly** when the parser retained it. Cross format conversion obeys **sane defaults** and explicitly emits `Conversion::warnings` for fields the target format cannot represent.
+PowerIO is a community infrastructure project intended to serve all developers working on electric power systems. Everyone is welcome to use, build upon, and contribute to the PowerIO infrastructure project. 
 
 ### Formats
 
 Supported formats:
 - [MATPOWER](https://matpower.org/) `.m`
 - [PSS/E](https://www.siemens.com/global/en/products/energy/grid-software/planning/pss-software/pss-e.html) `.raw` revisions 33, 34, and 35
-- [PowerWorld](https://www.powerworld.com/WebHelp/Content/MainDocumentation_HTML/Case_Formats.htm) `.aux`, plus read only `.pwb` binary cases; `.pwd` display files parse through the separate display API. Vintage coverage and decode evidence live in the [PowerWorld guide](https://eigenergy.github.io/powerio/guide/powerworld.html).
+- [PowerWorld](https://www.powerworld.com/WebHelp/Content/MainDocumentation_HTML/Case_Formats.htm) `.aux`, plus read only `.pwb` binary cases; `.pwd` display files parse through the separate display API. Behavior and limits are in the [format fidelity guide](https://powerio.dev/guide/format-fidelity.html).
 - GE PSLF `.epc` power flow cases
 - [PowerModels.jl](https://github.com/lanl-ansi/PowerModels.jl) network data JSON
 - [egret](https://pypi.org/project/gridx-egret/) `ModelData` JSON
@@ -69,7 +72,7 @@ and conversion separate from matrix, TUI, and data frame dependencies. The
 [Python package](https://pypi.org/project/powerio/) imports with no required
 third party packages; matrix and graph helpers live behind extras.
 
-Docs site: <https://eigenergy.github.io/powerio/>.
+Docs site: <https://powerio.dev>.
 Language API map: [languages guide](https://eigenergy.github.io/powerio/guide/languages.html).
 
 ## Install
@@ -166,8 +169,8 @@ the original file type from converting to a different file type.
 
 PowerWorld `.pwd` is display data, not a network case, so it is outside this
 conversion table and uses `parse_display_file` / `parse_display_bytes`. The
-decoded vintages and per field evidence live in
-[PowerWorld guide](https://eigenergy.github.io/powerio/guide/powerworld.html).
+decoded vintages and per field evidence are maintainer notes at
+[`powerio/src/format/powerworld/FORMAT.md`](powerio/src/format/powerworld/FORMAT.md).
 
 The distribution matrix (dss, PMD JSON, BMOPF JSON, per fixture) is generated
 under `powerio-dist/docs/`. Vendored test data keeps its own licenses next to

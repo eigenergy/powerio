@@ -11,7 +11,7 @@
 //! latitude/longitude its same vintage aux carries per substation, except
 //! the v19 resave, which matches 1248/1250 against the published case
 //! across a vintage skew) is in
-//! <https://eigenergy.github.io/powerio/guide/powerworld.html>.
+//! `powerio/src/format/powerworld/FORMAT.md`.
 //!
 //! Two structures carry the data, both present in every probed save:
 //!

@@ -6,7 +6,7 @@
 //! latitude/longitude; hand moved symbols and the June 2016 era transform
 //! keep the correlation just under exact). Hawaii40, never hand edited,
 //! reproduces the projection bit for bit and pins its constant.
-//! Evidence is in <https://eigenergy.github.io/powerio/guide/powerworld.html>.
+//! Evidence is in `powerio/src/format/powerworld/FORMAT.md`.
 
 mod common;
 

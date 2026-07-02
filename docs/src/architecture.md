@@ -12,8 +12,6 @@ artifacts.
   the stability policy. The envelope and the IR payload are versioned
   independently (`schema_version` vs `payload_schema_version`); the payload
   shape follows the Rust models.
-- [v0.4 release direction](https://eigenergy.github.io/powerio/guide/v0.4-release-direction.html): the design direction
-  for explicit `MulticonductorNetwork` to `BalancedNetwork` lowering.
 
 The package is implemented in the `powerio-pkg` crate.
 GOC3 package construction uses `operating_points` to preserve the source time

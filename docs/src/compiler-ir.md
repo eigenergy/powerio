@@ -137,9 +137,7 @@ transformers, untyped objects, missing phase references, and closed switches
 return structured `LOWER.MULTI_TO_BALANCED.*` diagnostics. The package method
 `NetworkPackage::lower_multiconductor_to_balanced` returns a derived balanced
 package and appends the record. This pass is explicit only; readers, writers,
-matrix builders, bindings, and MCP operations do not run it implicitly. The
-v0.4.0 direction is in
-[the v0.4 release direction](https://eigenergy.github.io/powerio/guide/v0.4-release-direction.html).
+matrix builders, bindings, and MCP operations do not run it implicitly.
 
 ### Operating point materialization
 

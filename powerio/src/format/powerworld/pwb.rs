@@ -3,7 +3,7 @@
 //! The format is undocumented; everything here was established by
 //! differential analysis of `.pwb`/`.aux` sibling exports of the ACTIVSg
 //! synthetic grids and is recorded with its evidence in
-//! <https://eigenergy.github.io/powerio/guide/powerworld.html>. The reader
+//! `powerio/src/format/powerworld/FORMAT.md`. The reader
 //! decodes the power flow core tables (buses, loads, generators, shunts,
 //! branches) and stops there; the rest of the file (substations, areas,
 //! contingencies, options) is inventoried in the docs and left undecoded.
@@ -673,7 +673,7 @@ impl<'a> Cur<'a> {
 
 /// How far a bit 4 record's tail blob may push the next record: the largest
 /// observed blob is 406 KiB (an ACTIVSg500 branch record, see
-/// <https://eigenergy.github.io/powerio/guide/powerworld.html>), so four MiB
+/// `powerio/src/format/powerworld/FORMAT.md`), so four MiB
 /// is an order of magnitude of headroom
 /// while bounding what a crafted file can make the scan walk per record.
 const BLOB_WINDOW: usize = 4 << 20;
@@ -812,7 +812,7 @@ fn unsupported_vintage(detail: impl std::fmt::Display) -> Error {
         message: format!(
             "unsupported PowerWorld .pwb vintage: {detail}; only the validated \
              338/368/425/483/508/537/550/551/554 layouts are decoded \
-             (see https://eigenergy.github.io/powerio/guide/powerworld.html)"
+             (see powerio/src/format/powerworld/FORMAT.md)"
         ),
     }
 }

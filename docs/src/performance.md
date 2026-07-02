@@ -61,7 +61,3 @@ Criterion compares against the local `target/criterion` baseline. Treat a
 claim by itself. A release note or benchmark page needs the commit, tree
 cleanliness, machine, toolchain, command, fixtures, and whether optional large
 cases were present.
-
-Optimization work should start from measurement. The first audit targets are
-allocation count, clone count, string churn, repeated dense work on sparse data,
-quadratic scans, and cache behavior in parser and matrix hot paths.
