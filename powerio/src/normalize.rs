@@ -534,6 +534,7 @@ mod tests {
             area: 1,
             zone: 1,
             name: None,
+            uid: None,
             extras: Extras::new(),
         };
         let branch = Branch {
@@ -555,6 +556,7 @@ mod tests {
             angmax: 360.0,
             control: None,
             solution: None,
+            uid: None,
             extras: Extras::new(),
         };
         // Bus 3 is isolated, so to_normalized drops it.
@@ -582,6 +584,7 @@ mod tests {
             cost: None,
             caps: Default::default(),
             regulated_bus: None,
+            uid: None,
         });
         // A switched shunt on bus 2 whose control bus is the (dropped) isolated bus 3.
         net.shunts.push(Shunt {
@@ -597,6 +600,7 @@ mod tests {
                 rmpct: 100.0,
                 blocks: Vec::new(),
             }),
+            uid: None,
             extras: Extras::new(),
         });
 
@@ -626,6 +630,7 @@ mod tests {
             area: 1,
             zone: 1,
             name: None,
+            uid: None,
             extras: Extras::new(),
         };
         let mkgen = |bus: usize, pmax: f64| Generator {
@@ -642,6 +647,7 @@ mod tests {
             cost: None,
             caps: Default::default(),
             regulated_bus: None,
+            uid: None,
         };
         let mut net = Network::in_memory("n", 100.0, vec![mkbus(1), mkbus(2)], Vec::new());
         net.generators = vec![mkgen(1, f64::NAN), mkgen(2, 10.0)];

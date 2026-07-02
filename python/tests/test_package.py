@@ -101,3 +101,30 @@ def test_package_from_network_constructors():
 def test_package_invalid_json_raises_value_error():
     with pytest.raises(ValueError):
         pio.Package.from_json("{}")
+
+
+def test_package_declares_payload_schema_and_row_identity():
+    import json
+
+    pkg = pio.Package.from_file(DATA / "case9.m")
+    doc = json.loads(pkg.to_json())
+    assert doc["schema_version"] == "0.1.1"
+    assert doc["payload_schema"].endswith("/pio-payload-balanced/1")
+    assert doc["payload_schema_version"] == "1.0.0"
+    # Every payload row carries an identity; case9 has no source uids, so they
+    # are synthesized from the build position.
+    assert doc["model"]["balanced_network"]["generators"][0]["uid"] == "generators:0"
+    assert pkg.as_balanced().generators[0]["uid"] == "generators:0"
+
+
+def test_package_materialize_rejects_unknown_identity():
+    import json
+
+    pkg = pio.Package.from_str(GOC3_SRC, from_="goc3-json")
+    doc = json.loads(pkg.to_json())
+    update = doc["operating_points"]["points"][0]["updates"][0]
+    update["element"]["source_uid"] = "no-such-uid"
+    del update["element"]["row"]
+    broken = pio.Package.from_json(json.dumps(doc))
+    with pytest.raises(ValueError, match="unknown identity"):
+        broken.materialize_operating_point(0)

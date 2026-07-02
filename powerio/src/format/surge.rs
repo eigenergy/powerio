@@ -588,6 +588,7 @@ fn read_bus(value: &Value) -> Result<(Bus, Option<Shunt>)> {
             b,
             in_service: true,
             control: None,
+            uid: None,
             extras: Extras::new(),
         })
     } else {
@@ -608,6 +609,7 @@ fn read_bus(value: &Value) -> Result<(Bus, Option<Shunt>)> {
         name: string_map(obj, "name")
             .filter(|name| !name.is_empty())
             .map(str::to_string),
+        uid: None,
         extras: Extras::new(),
     };
     Ok((bus, shunt))
@@ -633,6 +635,7 @@ fn read_load(value: &Value) -> Result<Load> {
         q,
         voltage_model: read_load_voltage_model(obj, p, q)?,
         in_service: bool_map_or(obj, "in_service", true)?,
+        uid: None,
         extras: Extras::new(),
     })
 }
@@ -679,6 +682,7 @@ fn read_fixed_shunt(value: &Value) -> Result<Shunt> {
         b: f_map_alias_or(obj, &["b_mvar", "susceptance_mvar"], 0.0)?,
         in_service: bool_map_or(obj, "in_service", true)?,
         control: None,
+        uid: None,
         extras: Extras::new(),
     })
 }
@@ -714,6 +718,7 @@ fn read_branch(value: &Value) -> Result<Branch> {
         angmax: f_map_or(obj, "angle_diff_max_rad", std::f64::consts::TAU)? * normalize::RAD_TO_DEG,
         control: None,
         solution: read_branch_solution(obj)?,
+        uid: None,
         extras: Extras::new(),
     })
 }
@@ -815,6 +820,7 @@ fn read_generator(value: &Value) -> Result<(Option<Generator>, Option<Storage>)>
         },
         caps,
         regulated_bus: optional_usize(obj, "reg_bus")?.map(BusId),
+        uid: None,
     };
 
     let storage = match obj.get("storage") {
@@ -921,6 +927,7 @@ fn read_storage(
         p_loss: 0.0,
         q_loss: 0.0,
         in_service,
+        uid: None,
         extras: Extras::new(),
     };
     out.extras
@@ -995,6 +1002,7 @@ fn read_hvdc_link(value: &Value) -> Result<Hvdc> {
         loss1: f_map_or(from_terminal, "loss_linear", 0.0)?
             + f_map_or(to_terminal, "loss_linear", 0.0)?,
         cost: None,
+        uid: None,
         extras: Extras::new(),
     })
 }

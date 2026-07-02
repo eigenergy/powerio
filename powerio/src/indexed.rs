@@ -420,6 +420,7 @@ mod tests {
             area: 1,
             zone: 1,
             name: None,
+            uid: None,
             extras: Extras::new(),
         }
     }
@@ -437,6 +438,7 @@ mod tests {
             q: 5.0,
             voltage_model: None,
             in_service: true,
+            uid: None,
             extras: Extras::new(),
         });
         net.loads.push(Load {
@@ -445,6 +447,7 @@ mod tests {
             q: 1.0,
             voltage_model: None,
             in_service: true,
+            uid: None,
             extras: Extras::new(),
         });
         net.shunts.push(Shunt {
@@ -453,6 +456,7 @@ mod tests {
             b: 0.4,
             in_service: true,
             control: None,
+            uid: None,
             extras: Extras::new(),
         });
         net.shunts.push(Shunt {
@@ -461,6 +465,7 @@ mod tests {
             b: 0.3,
             in_service: true,
             control: None,
+            uid: None,
             extras: Extras::new(),
         });
         net
@@ -501,6 +506,7 @@ mod tests {
             mag_b: 0.0,
             in_service: true,
             name: None,
+            uid: None,
             extras: Extras::new(),
         }
     }

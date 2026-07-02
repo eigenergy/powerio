@@ -1,5 +1,33 @@
 # Changelog
 
+## 0.5.1
+
+- `.pio.json` payload schema declared (#173): new optional envelope fields
+  `payload_schema` and `payload_schema_version` name and version the IR payload
+  contract per model kind (`pio-payload-balanced/1`,
+  `pio-payload-multiconductor/1`, both `1.0.0`), independent of the envelope
+  `schema_version` (now `0.1.1`). A reader rejects a foreign payload major;
+  packages without the fields (0.5.0 and earlier) read unchanged. The JSON
+  shape of `model` is untouched.
+- Payload row identity: balanced IR elements gained `uid: Option<String>`
+  (serde additive). The GOC3 parser keeps source uids on buses, devices,
+  branches, and dc lines; package construction synthesizes `{table}:{row}` uids
+  for the rest, so every powerio built payload row has a stable identity.
+- Operating point updates resolve by identity: `ElementRef.source_uid` is
+  authoritative when the payload table carries uids — a present `row` must
+  agree with the resolved row, unknown or duplicated identities are rejected
+  (at materialization and by `pio_package_validate` via the
+  `VALIDATE.PACKAGE.OPERATING_IDENTITY` pass), and `row` may be omitted on the
+  wire (`ElementRef::by_source_uid`). Tables without uids keep the pre-0.5.1
+  row-only semantics, so existing packages materialize as before. Provenance
+  cleanup paths now come from the resolved row, not the wire row.
+- Python: network table dicts expose `uid`; unknown identities raise
+  `ValueError` from `Package.materialize_operating_point`. C ABI: no signature
+  changes; materialization reports identity failures through `errbuf`.
+- `powerio-pkg`: `ElementRef.row` is meaningful only when
+  `ElementRef::wire_row()` is `Some`; refs built by `by_source_uid` serialize
+  without `row`.
+
 ## 0.5.0
 
 - `powerio-pkg`: `NetworkPackage` is the one package type name (`CompilerPackage`

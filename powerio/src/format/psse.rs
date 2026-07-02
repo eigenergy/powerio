@@ -1599,6 +1599,7 @@ fn read_bus(f: &[String]) -> Result<Bus> {
         area: id_at(f, 4, 0)?,
         zone: id_at(f, 5, 0)?,
         name,
+        uid: None,
         extras: Extras::new(),
     })
 }
@@ -1692,6 +1693,7 @@ fn read_load(f: &[String], raw_rev: u32, warnings: &mut Vec<String>) -> Result<L
         q: ql + iq + yq,
         voltage_model,
         in_service: on_at(f, 2, true)?,
+        uid: None,
         extras,
     })
 }
@@ -1704,6 +1706,7 @@ fn read_shunt(f: &[String]) -> Result<Shunt> {
         b: num_at(f, 4, 0.0)?,
         in_service: on_at(f, 2, true)?,
         control: None,
+        uid: None,
         extras: device_extras(f, 1),
     })
 }
@@ -1751,6 +1754,7 @@ fn read_switched_shunt(f: &[String], rev: u32) -> Result<Shunt> {
         b: num_at(f, 9 + o2, 0.0)?,
         in_service: on_at(f, 3 + o, true)?,
         control: Some(control),
+        uid: None,
         // Keep the v35 shunt ID so it survives a round trip.
         extras: if rev >= 35 {
             device_extras(f, 1)
@@ -1817,6 +1821,7 @@ fn read_gen(f: &[String], raw_rev: u32) -> Result<Generator> {
         cost: None,
         caps: Default::default(),
         regulated_bus: (ireg != 0 && ireg != bus).then_some(BusId(ireg)),
+        uid: None,
     })
 }
 
@@ -1860,6 +1865,7 @@ fn read_branch(f: &[String], raw_rev: u32) -> Result<Branch> {
         angmax: 360.0,
         control: None,
         solution: None,
+        uid: None,
         // Capture CKT (field 2) so parallel circuits stay distinct on write-back.
         extras: device_extras(f, 2),
     })
@@ -1953,6 +1959,7 @@ fn read_transformer(
         angmax: 360.0,
         control,
         solution: None,
+        uid: None,
         extras: Extras::new(),
     })
 }
@@ -2064,6 +2071,7 @@ fn read_transformer_3w(
             .get(10)
             .filter(|n| !n.is_empty())
             .map(|n| n.trim().to_string()),
+        uid: None,
         extras: Extras::new(),
     })
 }
@@ -2111,6 +2119,7 @@ fn read_dc_line(l1: &[String], rect: &[String], inv: &[String]) -> Result<Hvdc> 
         loss0: 0.0,
         loss1: 0.0,
         cost: None,
+        uid: None,
         extras,
     })
 }
@@ -2307,6 +2316,7 @@ mod tests {
             area: 1,
             zone: 1,
             name: None,
+            uid: None,
             extras: Extras::default(),
         }
     }
@@ -2336,6 +2346,7 @@ mod tests {
             angmax: 360.0,
             control: None,
             solution: None,
+            uid: None,
             extras: Extras::default(),
         }
     }
@@ -2360,6 +2371,7 @@ mod tests {
             angmax: 360.0,
             control: None,
             solution: None,
+            uid: None,
             extras: Extras::default(),
         }
     }

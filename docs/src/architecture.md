@@ -9,8 +9,9 @@ artifacts.
   envelope — explicit model kind, provenance, source maps, structured
   diagnostics, validation, operating points, and lowering.
 - [PIO JSON schema](https://eigenergy.github.io/powerio/guide/pio-json-schema.html): the `.pio.json` field reference and
-  the stability policy. The envelope is versioned; the nested IR payloads still
-  follow the Rust models.
+  the stability policy. The envelope and the IR payload are versioned
+  independently (`schema_version` vs `payload_schema_version`); the payload
+  shape follows the Rust models.
 - [v0.4 release direction](https://eigenergy.github.io/powerio/guide/v0.4-release-direction.html): the design direction
   for explicit `MulticonductorNetwork` to `BalancedNetwork` lowering.
 

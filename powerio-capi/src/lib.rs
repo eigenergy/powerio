@@ -2709,6 +2709,50 @@ mpc.branch = [
 
     #[cfg(feature = "pkg")]
     #[test]
+    fn package_materialize_reports_unknown_identity() {
+        use powerio_pkg::{
+            ElementRef, ElementUpdate, NetworkPackage, OperatingPoint, OperatingPointSeries,
+            TimeAxis,
+        };
+
+        let case = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../tests/data")
+            .join("case9.m");
+        let net = powerio::parse_str(&std::fs::read_to_string(case).unwrap(), "matpower")
+            .unwrap()
+            .network;
+        let mut point = OperatingPoint::new(0);
+        point.updates.push(ElementUpdate::new(
+            ElementRef::by_source_uid("generators", "no-such-uid"),
+            std::collections::BTreeMap::from([("pg".to_owned(), serde_json::json!(1.0))]),
+        ));
+        let package = NetworkPackage::from_balanced(net).with_operating_points(
+            OperatingPointSeries::new(TimeAxis::new(1).with_duration_hours(vec![1.0]), vec![point]),
+        );
+        let json = CString::new(package.to_json().unwrap()).unwrap();
+
+        let mut err = [0 as c_char; PIO_ERRBUF_MIN];
+        unsafe {
+            let pkg = pio_package_parse_str(json.as_ptr(), err.as_mut_ptr(), err.len());
+            assert!(
+                !pkg.is_null(),
+                "package parse_str failed: {}",
+                CStr::from_ptr(err.as_ptr()).to_str().unwrap()
+            );
+            let materialized =
+                pio_package_materialize_operating_point(pkg, 0, err.as_mut_ptr(), err.len());
+            assert!(materialized.is_null(), "unknown identity must fail");
+            let message = CStr::from_ptr(err.as_ptr()).to_str().unwrap();
+            assert!(
+                message.contains("unknown identity"),
+                "unexpected error: {message}"
+            );
+            pio_package_free(pkg);
+        }
+    }
+
+    #[cfg(feature = "pkg")]
+    #[test]
     fn package_parse_free_to_json_and_reports() {
         let net = case9();
         let mut err = [0 as c_char; PIO_ERRBUF_MIN];
@@ -2720,9 +2764,17 @@ mpc.branch = [
                 CStr::from_ptr(err.as_ptr()).to_str().unwrap()
             );
             let v = package_json(pkg);
-            assert_eq!(v["schema_version"], serde_json::json!("0.1.0"));
+            assert_eq!(v["schema_version"], serde_json::json!("0.1.1"));
             assert_eq!(v["model_kind"], serde_json::json!("balanced"));
             assert_eq!(v["model"]["kind"], serde_json::json!("balanced"));
+            assert_eq!(
+                v["payload_schema"],
+                serde_json::json!(powerio_pkg::PIO_PAYLOAD_BALANCED_SCHEMA_URL)
+            );
+            assert_eq!(
+                v["payload_schema_version"],
+                serde_json::json!(powerio_pkg::PIO_PAYLOAD_BALANCED_SCHEMA_VERSION)
+            );
             assert_eq!(
                 v["derived"]["normalized_solver_tables"]["row_counts"]["buses"],
                 serde_json::json!(9)

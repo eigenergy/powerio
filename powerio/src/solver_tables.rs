@@ -773,6 +773,7 @@ mod tests {
             area: 1,
             zone: 1,
             name: None,
+            uid: None,
             extras: Extras::new(),
         }
     }
@@ -797,6 +798,7 @@ mod tests {
             angmax: 360.0,
             control: None,
             solution: None,
+            uid: None,
             extras: Extras::new(),
         }
     }
@@ -816,6 +818,7 @@ mod tests {
             cost: None,
             caps: [None; crate::network::GEN_EXTRA_KEYS.len()],
             regulated_bus: None,
+            uid: None,
         }
     }
 
@@ -864,6 +867,7 @@ mod tests {
             q: 5.0,
             voltage_model: None,
             in_service: true,
+            uid: None,
             extras: Extras::new(),
         });
         net.loads.push(Load {
@@ -872,6 +876,7 @@ mod tests {
             q: 99.0,
             voltage_model: None,
             in_service: true,
+            uid: None,
             extras: Extras::new(),
         });
         net.generators.push(generator(1, true));
@@ -934,6 +939,7 @@ mod tests {
             p_loss: 2.0,
             q_loss: 1.0,
             in_service: true,
+            uid: None,
             extras: Extras::new(),
         });
         net.hvdc.push(Hvdc {
@@ -955,6 +961,7 @@ mod tests {
             loss0: 1.5,
             loss1: 0.02,
             cost: None,
+            uid: None,
             extras: Extras::new(),
         });
 

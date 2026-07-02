@@ -475,6 +475,7 @@ fn read_bus(rec: &Record) -> Result<Bus> {
         area: id_at(&rec.rhs, 4, 1, "bus area", rec)?,
         zone: id_at(&rec.rhs, 5, 1, "bus zone", rec)?,
         name,
+        uid: None,
         extras: extras(rec, "bus data", 3, 21),
     })
 }
@@ -517,6 +518,7 @@ fn read_branch(rec: &Record) -> Result<Branch> {
         angmax: 360.0,
         control: None,
         solution: None,
+        uid: None,
         extras,
     })
 }
@@ -605,6 +607,7 @@ fn read_transformer(rec: &Record) -> Result<TransformerRecord> {
             mag_b: 0.0,
             in_service,
             name,
+            uid: None,
             extras,
         };
         return Ok(TransformerRecord::ThreeWinding(t3));
@@ -634,6 +637,7 @@ fn read_transformer(rec: &Record) -> Result<TransformerRecord> {
         angmax: 360.0,
         control: None,
         solution: None,
+        uid: None,
         extras,
     }))
 }
@@ -675,6 +679,7 @@ fn read_generator(
         cost: None,
         caps: Default::default(),
         regulated_bus: None,
+        uid: None,
     })
 }
 
@@ -726,6 +731,7 @@ fn read_load(
             scaling: None,
         }),
         in_service: on_at(&rec.rhs, 0, true, "load status", rec)?,
+        uid: None,
         extras,
     })
 }
@@ -744,6 +750,7 @@ fn read_shunt(rec: &Record, base_mva: f64) -> Result<Shunt> {
         b: b_pu * base_mva,
         in_service: on_at(&rec.rhs, 0, true, "shunt status", rec)?,
         control: None,
+        uid: None,
         extras,
     })
 }
@@ -777,6 +784,7 @@ fn read_svd(
         b: b_pu * base_mva,
         in_service: on_at(&rec.rhs, 0, true, "svd status", rec)?,
         control: None,
+        uid: None,
         extras,
     })
 }
@@ -891,6 +899,7 @@ fn read_dc_lines(
                 loss0: 0.0,
                 loss1: 0.0,
                 cost: None,
+                uid: None,
                 extras,
             })
         })();
@@ -1802,6 +1811,7 @@ end
                     area: 1,
                     zone: 1,
                     name: None,
+                    uid: None,
                     extras: Extras::new(),
                 },
                 Bus {
@@ -1817,6 +1827,7 @@ end
                     area: 1,
                     zone: 1,
                     name: None,
+                    uid: None,
                     extras: Extras::new(),
                 },
             ],
@@ -1841,6 +1852,7 @@ end
             angmax: 360.0,
             control: None,
             solution: None,
+            uid: None,
             extras: Extras::new(),
         });
 

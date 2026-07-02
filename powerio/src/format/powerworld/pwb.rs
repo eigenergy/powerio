@@ -1150,6 +1150,7 @@ fn read_bus_head(b: &[u8], at: usize) -> Probe<(BusHead, usize)> {
         area,
         zone,
         name: Some(String::from_utf8_lossy(name).into_owned()),
+        uid: None,
         extras: Extras::new(),
     };
     let shunt = bus_tail_shunt(b, c.pos, BusId(num));
@@ -1184,6 +1185,7 @@ fn bus_tail_shunt(b: &[u8], after_head: usize, bus: BusId) -> Option<Shunt> {
         b: b_pu * MVA_BASE,
         in_service: true,
         control: None,
+        uid: None,
         extras,
     })
 }
@@ -1349,6 +1351,7 @@ fn read_load(c: &mut Cur, bus: BusId, id: &[u8]) -> Probe<Load> {
         q,
         voltage_model: None,
         in_service,
+        uid: None,
         extras,
     })
 }
@@ -1424,6 +1427,7 @@ fn gen_from_block(bus: BusId, v: &[f64; 8], in_service: bool) -> Generator {
         cost: None,
         caps: Default::default(),
         regulated_bus: None,
+        uid: None,
     }
 }
 
@@ -1551,6 +1555,7 @@ fn read_shunt(c: &mut Cur, bus: BusId, id: &[u8]) -> Probe<Shunt> {
         b: b_mvar,
         in_service: true,
         control: None,
+        uid: None,
         extras,
     })
 }
@@ -1782,6 +1787,7 @@ fn read_standard_branch_head(
         angmax: 360.0,
         control: None,
         solution: None,
+        uid: None,
         extras,
     };
     Ok((br, c.pos, flags))
@@ -1867,6 +1873,7 @@ fn read_step_up_transformer_head(
         angmax: 360.0,
         control: None,
         solution: None,
+        uid: None,
         extras,
     };
     Ok((

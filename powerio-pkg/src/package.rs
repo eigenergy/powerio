@@ -18,8 +18,8 @@ use crate::lowering::{
 };
 use crate::model::{ModelKind, ModelPayload};
 use crate::operating::{
-    OperatingPointSeries, apply_operating_point_to_model, goc3_operating_points_from_str,
-    operating_point_update_paths,
+    OperatingPointSeries, apply_operating_point_to_model, check_series_identities,
+    goc3_operating_points_from_str,
 };
 use crate::provenance::{
     Confidence, MappingKind, Origin, Producer, SourceDescriptor, SourceMapEntry, SourceRef,
@@ -33,7 +33,30 @@ pub const PIO_PACKAGE_SCHEMA_URL: &str = "https://powerio.dev/schema/pio-package
 /// The package schema version (semver). Keep additive optional fields within
 /// the current version when older readers can ignore them; field moves bump the
 /// major (or ship a migration pass).
-pub const PIO_PACKAGE_SCHEMA_VERSION: &str = "0.1.0";
+pub const PIO_PACKAGE_SCHEMA_VERSION: &str = "0.1.1";
+
+/// The declared schema URL for the balanced payload (`model.balanced_network`).
+///
+/// Payload schema URLs are identifiers, not fetch locations (the same
+/// convention as JSON Schema `$id`). The payload contract they name is the
+/// serde snapshot documented in `docs/src/pio-json-schema.md`.
+pub const PIO_PAYLOAD_BALANCED_SCHEMA_URL: &str =
+    "https://powerio.dev/schema/pio-payload-balanced/1";
+
+/// The balanced payload schema version (semver). Additive optional fields bump
+/// the minor; field moves or removals bump the major. Versioned independently
+/// of the envelope: [`PIO_PACKAGE_SCHEMA_VERSION`] covers the package
+/// bookkeeping, this covers the network tables a consumer computes on.
+pub const PIO_PAYLOAD_BALANCED_SCHEMA_VERSION: &str = "1.0.0";
+
+/// The declared schema URL for the multiconductor payload
+/// (`model.multiconductor_network`).
+pub const PIO_PAYLOAD_MULTICONDUCTOR_SCHEMA_URL: &str =
+    "https://powerio.dev/schema/pio-payload-multiconductor/1";
+
+/// The multiconductor payload schema version (semver); the same policy as
+/// [`PIO_PAYLOAD_BALANCED_SCHEMA_VERSION`].
+pub const PIO_PAYLOAD_MULTICONDUCTOR_SCHEMA_VERSION: &str = "1.0.0";
 
 fn default_schema_url() -> String {
     PIO_PACKAGE_SCHEMA_URL.to_owned()
@@ -41,6 +64,20 @@ fn default_schema_url() -> String {
 
 fn default_schema_version() -> String {
     PIO_PACKAGE_SCHEMA_VERSION.to_owned()
+}
+
+/// The declared payload schema URL and version for a model kind.
+fn payload_schema_for(kind: ModelKind) -> (&'static str, &'static str) {
+    match kind {
+        ModelKind::Balanced => (
+            PIO_PAYLOAD_BALANCED_SCHEMA_URL,
+            PIO_PAYLOAD_BALANCED_SCHEMA_VERSION,
+        ),
+        ModelKind::Multiconductor => (
+            PIO_PAYLOAD_MULTICONDUCTOR_SCHEMA_URL,
+            PIO_PAYLOAD_MULTICONDUCTOR_SCHEMA_VERSION,
+        ),
+    }
 }
 
 /// Optional derived metadata: matrix statistics, solver table metadata, and
@@ -170,6 +207,17 @@ pub struct NetworkPackage {
     pub created_at: Option<String>,
     /// Explicit model kind. Authoritative; never inferred from field presence.
     pub model_kind: ModelKind,
+    /// The declared schema URL for the payload family named by `model_kind`.
+    /// `None` on packages written before the payload contract was declared.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub payload_schema: Option<String>,
+    /// The declared payload schema version (semver), independent of the
+    /// envelope `schema_version`: the envelope versions the package
+    /// bookkeeping, this versions the network tables. A reader rejects a
+    /// different major before computing on payload fields; `None` (legacy
+    /// packages) is accepted.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub payload_schema_version: Option<String>,
     pub model: ModelPayload,
     /// Replayable operating states over the static payload. The package
     /// constructors and setters omit empty series for static single state cases.
@@ -197,6 +245,8 @@ impl NetworkPackage {
     /// recording whether source was retained; the path is not captured here).
     /// GOC3 sources also lift their time series into `operating_points`.
     pub fn from_balanced(net: BalancedNetwork) -> Self {
+        let mut net = net;
+        ensure_balanced_payload_uids(&mut net);
         let origin = balanced_origin(&net);
         let summary = balanced_summary(&net);
         let sources = balanced_sources(&net);
@@ -228,6 +278,7 @@ impl NetworkPackage {
             None
         };
         let validation = ValidationSummary::from_diagnostics(&diagnostics);
+        let (payload_schema, payload_schema_version) = payload_schema_for(ModelKind::Balanced);
         Self {
             schema: default_schema_url(),
             schema_version: default_schema_version(),
@@ -235,6 +286,8 @@ impl NetworkPackage {
             package_id: None,
             created_at: None,
             model_kind: ModelKind::Balanced,
+            payload_schema: Some(payload_schema.to_owned()),
+            payload_schema_version: Some(payload_schema_version.to_owned()),
             model: ModelPayload::balanced(net),
             operating_points,
             origin,
@@ -273,6 +326,8 @@ impl NetworkPackage {
             .collect();
         let validation = ValidationSummary::from_diagnostics(&diagnostics);
 
+        let (payload_schema, payload_schema_version) =
+            payload_schema_for(ModelKind::Multiconductor);
         Self {
             schema: default_schema_url(),
             schema_version: default_schema_version(),
@@ -280,6 +335,8 @@ impl NetworkPackage {
             package_id: None,
             created_at: None,
             model_kind: ModelKind::Multiconductor,
+            payload_schema: Some(payload_schema.to_owned()),
+            payload_schema_version: Some(payload_schema_version.to_owned()),
             model: ModelPayload::multiconductor(net),
             operating_points: None,
             origin,
@@ -351,7 +408,10 @@ impl NetworkPackage {
                 "package has no operating point {index}"
             ))
         })?;
-        let updated_paths = operating_point_update_paths(&self.model, point);
+        // Applying resolves each update's row (identity first, wire row as
+        // fallback), so the stale provenance paths come from the same
+        // resolution rather than the wire row values.
+        let (updated_model, updated_paths) = apply_operating_point_to_model(&self.model, point)?;
         let had_normalized_solver_tables = self.derived.normalized_solver_tables.is_some();
         let options = materialize_operating_point_options(index);
         // Built field by field rather than cloned: cloning would deep copy the
@@ -368,7 +428,11 @@ impl NetworkPackage {
             package_id: None,
             created_at: self.created_at.clone(),
             model_kind: self.model_kind,
-            model: apply_operating_point_to_model(&self.model, point)?,
+            // The payload content derives from the parent, so the derived
+            // package restates the parent's declared payload contract.
+            payload_schema: self.payload_schema.clone(),
+            payload_schema_version: self.payload_schema_version.clone(),
+            model: updated_model,
             operating_points: None,
             origin: Origin::Derived {
                 parent_package_id: self.package_id.clone(),
@@ -472,6 +536,16 @@ impl NetworkPackage {
             return Err(<serde_json::Error as serde::de::Error>::custom(
                 "model_kind does not match model.kind",
             ));
+        }
+        if let Some(version) = pkg.payload_schema_version.as_deref() {
+            let supported = supported_payload_schema_major(pkg.model_kind);
+            if schema_major(version) != Some(supported) {
+                return Err(<serde_json::Error as serde::de::Error>::custom(format!(
+                    "unsupported payload_schema_version {version}; this reader supports \
+                     major version {supported} for {:?} payloads",
+                    pkg.model_kind
+                )));
+            }
         }
         Ok(pkg)
     }
@@ -614,12 +688,19 @@ impl NetworkPackage {
         self.diagnostics
             .retain(|d| !is_sane_validation_code(d.code.as_str()));
 
-        let (mut diagnostics, passes) = match &self.model {
+        let (mut diagnostics, mut passes) = match &self.model {
             ModelPayload::Balanced { balanced_network } => sane_validate_balanced(balanced_network),
             ModelPayload::Multiconductor {
                 multiconductor_network,
             } => sane_validate_multiconductor(multiconductor_network),
         };
+
+        if let Some(series) = &self.operating_points {
+            let (identity_diagnostics, identity_pass) =
+                validate_operating_identity(&self.model, series);
+            diagnostics.extend(identity_diagnostics);
+            passes.push(identity_pass);
+        }
 
         attach_source_refs(&mut diagnostics, &self.source_maps);
         self.diagnostics.extend(diagnostics);
@@ -687,14 +768,75 @@ fn supported_schema_major() -> u64 {
     schema_major(PIO_PACKAGE_SCHEMA_VERSION).expect("package schema version has a major number")
 }
 
-const SANE_VALIDATION_CODES: [&str; 6] = [
+fn supported_payload_schema_major(kind: ModelKind) -> u64 {
+    schema_major(payload_schema_for(kind).1).expect("payload schema version has a major number")
+}
+
+/// Give every payload row a stable identity: keep source uids (GOC3) and
+/// synthesize `{table}:{row}` for the rest, so identity based operating point
+/// updates can resolve against any powerio built package. Synthesized values
+/// record the row an element had at package build; they stay put if rows
+/// reorder later, which is the point.
+fn ensure_balanced_payload_uids(net: &mut BalancedNetwork) {
+    macro_rules! fill {
+        ($table:ident) => {
+            for (row, element) in net.$table.iter_mut().enumerate() {
+                if element.uid.is_none() {
+                    element.uid = Some(format!(concat!(stringify!($table), ":{}"), row));
+                }
+            }
+        };
+    }
+    fill!(buses);
+    fill!(loads);
+    fill!(shunts);
+    fill!(branches);
+    fill!(switches);
+    fill!(generators);
+    fill!(storage);
+    fill!(hvdc);
+    fill!(transformers_3w);
+}
+
+const SANE_VALIDATION_CODES: [&str; 7] = [
     "VALIDATE.BALANCED.STRUCTURE",
     "VALIDATE.BALANCED.VALUE_DOMAIN",
     "VALIDATE.MULTI.STRUCTURE",
     "VALIDATE.MULTI.TERMINAL_MAP",
     "VALIDATE.MULTI.UNTYPED_OBJECT",
     "VALIDATE.MULTI.NO_VOLTAGE_SOURCE",
+    "VALIDATE.PACKAGE.OPERATING_IDENTITY",
 ];
+
+/// Check every operating point update against the payload's identity index:
+/// unknown `source_uid`, a wire `row` that contradicts the resolved row,
+/// ambiguous (duplicate) payload uids, and rows out of range all become Error
+/// diagnostics, so `pio_package_validate` rejects a package whose updates
+/// reference unknown identities without materializing it.
+fn validate_operating_identity(
+    model: &ModelPayload,
+    series: &OperatingPointSeries,
+) -> (Vec<StructuredDiagnostic>, ValidationPass) {
+    let diagnostics: Vec<StructuredDiagnostic> = check_series_identities(model, series)
+        .into_iter()
+        .map(|(point_pos, update_pos, message)| {
+            StructuredDiagnostic::new(
+                "VALIDATE.PACKAGE.OPERATING_IDENTITY",
+                DiagnosticSeverity::Error,
+                DiagnosticStage::Validate,
+                message,
+            )
+            .with_element_path(format!(
+                "/operating_points/points/{point_pos}/updates/{update_pos}"
+            ))
+        })
+        .collect();
+    let status = validation_status(&diagnostics);
+    (
+        diagnostics,
+        ValidationPass::new("package.operating_identity", status),
+    )
+}
 
 fn is_sane_validation_code(code: &str) -> bool {
     SANE_VALIDATION_CODES.contains(&code)

@@ -29,9 +29,12 @@ It serializes to `.pio.json`. Binary `.pio` is out of scope until the JSON
 package stabilizes.
 
 Operating points are overlays, not separate payloads. Each point names table
-rows and fields to update on the one static payload. GOC3 package construction
-extracts the time series into this block while the balanced payload holds the
-first interval.
+rows and fields to update on the one static payload. Payload rows carry stable
+`uid` identities (source uids where the format has them, synthesized
+`{table}:{row}` values otherwise); an update's `source_uid` resolves against
+them and is authoritative, with the wire `row` as a fallback and consistency
+check. GOC3 package construction extracts the time series into this block while
+the balanced payload holds the first interval.
 
 See `docs/src/compiler-ir.md` and `docs/src/pio-json-schema.md` in the
 repository root.

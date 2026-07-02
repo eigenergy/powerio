@@ -722,6 +722,7 @@ impl PyNetwork {
             d.set_item("zone", b.zone)?;
             d.set_item("vmax", b.vmax)?;
             d.set_item("vmin", b.vmin)?;
+            d.set_item("uid", b.uid.as_deref())?;
             rows.push(d);
         }
         PyList::new(py, rows)
@@ -736,6 +737,7 @@ impl PyNetwork {
             d.set_item("p", l.p)?;
             d.set_item("q", l.q)?;
             d.set_item("in_service", l.in_service)?;
+            d.set_item("uid", l.uid.as_deref())?;
             rows.push(d);
         }
         PyList::new(py, rows)
@@ -750,6 +752,7 @@ impl PyNetwork {
             d.set_item("g", s.g)?;
             d.set_item("b", s.b)?;
             d.set_item("in_service", s.in_service)?;
+            d.set_item("uid", s.uid.as_deref())?;
             rows.push(d);
         }
         PyList::new(py, rows)
@@ -793,6 +796,7 @@ impl PyNetwork {
             d.set_item("qf", br.solution.map(|s| s.qf))?;
             d.set_item("pt", br.solution.map(|s| s.pt))?;
             d.set_item("qt", br.solution.map(|s| s.qt))?;
+            d.set_item("uid", br.uid.as_deref())?;
             rows.push(d);
         }
         PyList::new(py, rows)
@@ -812,6 +816,7 @@ impl PyNetwork {
             d.set_item("qf", sw.qf)?;
             d.set_item("pt", sw.pt)?;
             d.set_item("qt", sw.qt)?;
+            d.set_item("uid", sw.uid.as_deref())?;
             rows.push(d);
         }
         PyList::new(py, rows)
@@ -844,6 +849,7 @@ impl PyNetwork {
                 }
                 None => d.set_item("cost", py.None())?,
             }
+            d.set_item("uid", g.uid.as_deref())?;
             rows.push(d);
         }
         PyList::new(py, rows)

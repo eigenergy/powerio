@@ -464,6 +464,7 @@ fn read_bus(r: &Row) -> Result<Bus> {
         area: uid_alias(r, &["AreaNum", "AreaNumber"])?,
         zone: uid_alias(r, &["ZoneNum", "ZoneNumber"])?,
         name,
+        uid: None,
         extras,
     })
 }
@@ -505,6 +506,7 @@ fn read_load(r: &Row, bus_labels: &HashMap<&str, BusId>) -> Result<Load> {
         q,
         voltage_model: None,
         in_service: on_alias(r, &["LoadStatus", "Status"])?,
+        uid: None,
         extras,
     })
 }
@@ -520,6 +522,7 @@ fn read_shunt(r: &Row, bus_labels: &HashMap<&str, BusId>) -> Result<Shunt> {
         b: f_alias(r, &["ShuntMVR", "SSNMVR", "MvarNom"], 0.0)?,
         in_service: on_alias(r, &["ShuntStatus", "SSStatus", "Status"])?,
         control: None,
+        uid: None,
         extras,
     })
 }
@@ -545,6 +548,7 @@ fn read_gen(r: &Row, bus_labels: &HashMap<&str, BusId>) -> Result<Generator> {
         cost: None,
         caps: Default::default(),
         regulated_bus: None,
+        uid: None,
     })
 }
 
@@ -600,6 +604,7 @@ fn read_branch(r: &Row, bus_labels: &HashMap<&str, BusId>) -> Result<Branch> {
         angmax: 360.0,
         control: None,
         solution: None,
+        uid: None,
         extras,
     })
 }
