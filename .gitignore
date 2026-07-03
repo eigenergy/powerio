@@ -34,3 +34,6 @@ tests/data/local_pwb_corpus.tsv
 docs/book/
 docs/src/releasing*.md
 private/
+
+# Playwright MCP browser session artifacts
+.playwright-mcp/
