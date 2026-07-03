@@ -400,11 +400,16 @@ fn looks_like_distribution_input(input: &Path) -> PyResult<bool> {
             input.display()
         ))
     })?;
-    use powerio_matrix::format::routing::{Detection, Domain};
+    use powerio_matrix::format::routing::{Detection, Domain, JsonClass};
     match powerio_matrix::format::routing::classify_json_text(&text) {
-        Detection::Known(format) => Ok(format.domain() == Domain::Distribution),
-        Detection::Unknown => Ok(false),
-        Detection::Ambiguous => Err(PyValueError::new_err(format!(
+        JsonClass::Package => Err(PyValueError::new_err(format!(
+            "{} is a .pio.json package envelope, not a case; read it with \
+             powerio.Package.from_json",
+            input.display()
+        ))),
+        JsonClass::Case(Detection::Known(format)) => Ok(format.domain() == Domain::Distribution),
+        JsonClass::Case(Detection::Unknown) => Ok(false),
+        JsonClass::Case(Detection::Ambiguous) => Err(PyValueError::new_err(format!(
             "ambiguous JSON markers in {}; pass from_",
             input.display()
         ))),
@@ -494,13 +499,19 @@ fn build_package_from_str(text: &str, from_: Option<&str>) -> PyResult<NetworkPa
     let source_format = if let Some(format) = from_ {
         Some(format.to_owned())
     } else {
-        use powerio_matrix::format::routing::Detection;
+        use powerio_matrix::format::routing::{Detection, JsonClass};
         match powerio_matrix::format::routing::classify_json_text(text) {
-            Detection::Known(format) => Some(format.name().to_owned()),
-            Detection::Ambiguous => {
+            JsonClass::Package => {
+                return Err(PyValueError::new_err(
+                    "text is a .pio.json package envelope, not a case; read it with \
+                     powerio.Package.from_json",
+                ));
+            }
+            JsonClass::Case(Detection::Known(format)) => Some(format.name().to_owned()),
+            JsonClass::Case(Detection::Ambiguous) => {
                 return Err(PyValueError::new_err("ambiguous JSON markers; pass from_"));
             }
-            Detection::Unknown => None,
+            JsonClass::Case(Detection::Unknown) => None,
         }
     };
 
@@ -1525,21 +1536,24 @@ impl PyPackage {
 }
 
 /// Classify top level JSON markers. Returns `(status, domain, format)` where
-/// `status` is `known`, `unknown`, or `ambiguous`.
+/// `status` is `known`, `package` (a `.pio.json` envelope), `unknown`, or
+/// `ambiguous`.
 #[pyfunction]
 fn classify_json_text(text: &str) -> (String, Option<String>, Option<String>) {
+    use powerio_matrix::format::routing::{Detection, Domain, JsonClass};
     match powerio_matrix::format::routing::classify_json_text(text) {
-        powerio_matrix::format::routing::Detection::Known(format) => (
+        JsonClass::Package => ("package".into(), None, None),
+        JsonClass::Case(Detection::Known(format)) => (
             "known".into(),
             Some(match format.domain() {
-                powerio_matrix::format::routing::Domain::Transmission => "transmission".into(),
-                powerio_matrix::format::routing::Domain::Distribution => "distribution".into(),
+                Domain::Transmission => "transmission".into(),
+                Domain::Distribution => "distribution".into(),
                 _ => "unknown".into(),
             }),
             Some(format.name().into()),
         ),
-        powerio_matrix::format::routing::Detection::Unknown => ("unknown".into(), None, None),
-        powerio_matrix::format::routing::Detection::Ambiguous => ("ambiguous".into(), None, None),
+        JsonClass::Case(Detection::Unknown) => ("unknown".into(), None, None),
+        JsonClass::Case(Detection::Ambiguous) => ("ambiguous".into(), None, None),
     }
 }
 

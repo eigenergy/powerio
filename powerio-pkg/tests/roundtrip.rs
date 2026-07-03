@@ -343,7 +343,11 @@ fn goc3_operating_points_follow_parser_row_assignment() {
     let series = pkg.operating_points().expect("operating points");
     let update = &series.points[1].updates[0];
     assert_eq!(update.element.table, "generators");
-    assert_eq!(update.element.row, 1, "uid-less producer occupies row 0");
+    assert_eq!(
+        update.element.row,
+        Some(1),
+        "uid-less producer occupies row 0"
+    );
     assert_eq!(update.element.source_uid.as_deref(), Some("prod"));
 
     let materialized = pkg.materialize_operating_point(1).expect("materialize");
@@ -1892,11 +1896,11 @@ fn element_ref_wire_requires_row_or_identity() {
     let by_uid: ElementRef =
         serde_json::from_str(r#"{"table": "loads", "source_uid": "l1"}"#).unwrap();
     assert_eq!(by_uid, ElementRef::by_source_uid("loads", "l1"));
-    assert_eq!(by_uid.wire_row(), None);
+    assert_eq!(by_uid.row, None);
 
     let by_row: ElementRef = serde_json::from_str(r#"{"table": "loads", "row": 3}"#).unwrap();
     assert_eq!(by_row, ElementRef::new("loads", 3));
-    assert_eq!(by_row.wire_row(), Some(3));
+    assert_eq!(by_row.row, Some(3));
 }
 
 #[test]

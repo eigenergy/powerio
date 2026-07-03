@@ -1,5 +1,51 @@
 # Changelog
 
+## 0.6.0
+
+- Breaking (#175): `ElementRef.row` is `Option<usize>`, the honest form of the
+  0.5.1 wire semantics. `None` addresses by identity alone (refs built with
+  `by_source_uid`); the private wire-presence shim (`wire_row()`) is gone, and
+  `row` itself says whether the wire carried one. The `.pio.json` wire format
+  is unchanged. The other break collected in #175, keyed-object addressing for
+  multiconductor operating point updates, needs design and moves to the 1.0
+  window (#196).
+- C ABI: the package payload extraction inverses land as additive symbols (no
+  ABI version change; probe the symbols like the other feature surfaces):
+  `pio_package_to_balanced_network` and `pio_package_to_multiconductor_network`
+  materialize an owned network handle from a parsed `.pio.json` package handle,
+  the inverses of the `pio_package_from_*` constructors. A handle built from a
+  payload retains no source text, so a same-format write is a fresh
+  serialization rather than a byte-exact echo; the multiconductor payload's
+  parse warnings ride along.
+- C ABI: `pio_to_json` / `pio_from_json` are the function form of the balanced
+  model JSON (byte identical to the `powerio-json` writer); the format token
+  remains as a compatibility alias for file based workflows. This is the
+  additive half of #194; retiring the token waits for 1.0.
+- C ABI: `pio_dist_to_json` / `pio_dist_from_json` serialize a distribution
+  handle to its model JSON and back in one call each: the same object a
+  `.pio.json` document carries under `model.multiconductor_network`, without
+  the surrounding document. Bindings materialize element tables with this
+  instead of building a throwaway package; it is not a case format (the
+  converter, CLI, and inference do not know it), so BMOPF JSON remains the
+  distribution JSON exchanged with other tools.
+- C ABI: `pio_classify_str` classifies in-memory JSON by the same top level
+  markers the transmission parser's `.json` sniffing uses, and recognizes
+  `.pio.json` envelopes: `transmission:<format>`, `distribution:<format>`,
+  `package`, `ambiguous`, or `unknown`, size-then-fill. Bindings can route a
+  bare `.json` before choosing a parser instead of matching error text.
+- The JSON classifier reports a `.pio.json` envelope as its own outcome
+  (`routing::JsonClass`), so every consumer handles it: the CLI, the Python
+  readers, and the Python `classify_json_text` now name the package surface
+  for an envelope instead of a generic cannot-infer error (or, for the Python
+  string reader, a MATPOWER syntax error). Envelope detection requires
+  `model_kind` to be `balanced` or `multiconductor`, so a case document
+  carrying those key names with other values still classifies as a case, and
+  classification parses the document once.
+- Directed errors at the transmission boundary: a `.dss` path, a distribution
+  `from` token (`dss`/`pmd`/`bmopf`), and a `.pio.json` envelope handed to the
+  balanced parser now name the surface that reads them instead of a generic
+  unknown-format message.
+
 ## 0.5.1
 
 - `.pio.json` payload schema declared (#173): new optional envelope fields

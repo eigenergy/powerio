@@ -155,16 +155,41 @@ pub fn distribution_format_from_name(name: &str) -> Option<DistributionFormat> {
     }
 }
 
-/// Classify a JSON document across the transmission and distribution domains.
+/// Top level classification of bare JSON text: a `.pio.json` package envelope
+/// or a case document with its format detection. The envelope outcome lives in
+/// the classifier's result rather than a separate predicate, so every consumer
+/// handles it, and one parse answers both questions.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum JsonClass {
+    /// A `.pio.json` package envelope. A package is not a converter boundary
+    /// format, so it stays out of [`SourceFormat`]; callers route it to the
+    /// package reader instead of a case parser.
+    Package,
+    /// A case document and its format detection.
+    Case(Detection<JsonFormat>),
+}
+
+/// Classify a JSON document: a `.pio.json` package envelope, or a case
+/// document across the transmission and distribution domains.
 ///
-/// Unknown means there is no recognized top level marker. Ambiguous means a
-/// document contains strong markers from both domains, so the caller must ask
-/// the user for an explicit format.
-pub fn classify_json_text(text: &str) -> Detection<JsonFormat> {
+/// An envelope is recognized by a top level `model_kind` of `"balanced"` or
+/// `"multiconductor"` plus a `model` key; the value check keeps a case
+/// document that happens to carry those key names from being misrouted.
+/// For a case, Unknown means there is no recognized top level marker, and
+/// Ambiguous means the document contains strong markers from both domains, so
+/// the caller must ask the user for an explicit format.
+pub fn classify_json_text(text: &str) -> JsonClass {
     let Ok(shape) = JsonShape::try_from(text) else {
-        return Detection::Unknown;
+        return JsonClass::Case(Detection::Unknown);
     };
-    shape.classify()
+    if matches!(
+        shape.string("model_kind"),
+        Some("balanced" | "multiconductor")
+    ) && shape.has("model")
+    {
+        return JsonClass::Package;
+    }
+    JsonClass::Case(shape.classify())
 }
 
 fn canonical_key(name: &str) -> String {
@@ -264,14 +289,47 @@ impl JsonShape {
 #[cfg(test)]
 mod tests {
     use super::{
-        Detection, DistributionFormat, SourceFormat, TransmissionFormat, classify_json_text,
+        Detection, DistributionFormat, JsonClass, SourceFormat, TransmissionFormat,
+        classify_json_text,
     };
+
+    #[test]
+    fn classifies_package_envelope() {
+        assert_eq!(
+            classify_json_text(
+                r#"{"model_kind":"multiconductor","model":{"kind":"multiconductor"}}"#
+            ),
+            JsonClass::Package
+        );
+        assert_eq!(
+            classify_json_text(r#"{"model_kind":"balanced","model":{}}"#),
+            JsonClass::Package
+        );
+        // A payload alone is not an envelope, and neither is a case document,
+        // even one that carries the envelope key names with case-file values.
+        assert_eq!(
+            classify_json_text(r#"{"buses":[],"linecodes":[]}"#),
+            JsonClass::Case(Detection::Unknown)
+        );
+        assert_eq!(
+            classify_json_text(r#"{"baseMVA":100.0,"bus":{},"model":"ACP","model_kind":"opf"}"#),
+            JsonClass::Case(Detection::Known(SourceFormat::Transmission(
+                TransmissionFormat::PowerModelsJson
+            )))
+        );
+        assert_eq!(
+            classify_json_text("not json"),
+            JsonClass::Case(Detection::Unknown)
+        );
+    }
 
     #[test]
     fn classifies_pmd_json() {
         assert_eq!(
             classify_json_text(r#"{"data_model":"ENGINEERING","bus":{}}"#),
-            Detection::Known(SourceFormat::Distribution(DistributionFormat::PmdJson))
+            JsonClass::Case(Detection::Known(SourceFormat::Distribution(
+                DistributionFormat::PmdJson
+            )))
         );
     }
 
@@ -279,7 +337,9 @@ mod tests {
     fn classifies_full_bmopf_json() {
         assert_eq!(
             classify_json_text(r#"{"bus":{},"linecode":{},"voltage_source":{}}"#),
-            Detection::Known(SourceFormat::Distribution(DistributionFormat::BmopfJson))
+            JsonClass::Case(Detection::Known(SourceFormat::Distribution(
+                DistributionFormat::BmopfJson
+            )))
         );
     }
 
@@ -287,7 +347,9 @@ mod tests {
     fn classifies_minimal_bmopf_json() {
         assert_eq!(
             classify_json_text(r#"{"bus":{"a":{"terminal_names":["1"]}}}"#),
-            Detection::Known(SourceFormat::Distribution(DistributionFormat::BmopfJson))
+            JsonClass::Case(Detection::Known(SourceFormat::Distribution(
+                DistributionFormat::BmopfJson
+            )))
         );
     }
 
@@ -297,9 +359,9 @@ mod tests {
             classify_json_text(
                 r#"{"baseMVA":100.0,"bus":{},"branch":{},"gen":{},"load":{},"switch":{}}"#
             ),
-            Detection::Known(SourceFormat::Transmission(
+            JsonClass::Case(Detection::Known(SourceFormat::Transmission(
                 TransmissionFormat::PowerModelsJson
-            ))
+            )))
         );
     }
 
@@ -307,7 +369,9 @@ mod tests {
     fn classifies_powerio_json() {
         assert_eq!(
             classify_json_text(r#"{"base_mva":100.0,"buses":[],"branches":[]}"#),
-            Detection::Known(SourceFormat::Transmission(TransmissionFormat::PowerioJson))
+            JsonClass::Case(Detection::Known(SourceFormat::Transmission(
+                TransmissionFormat::PowerioJson
+            )))
         );
     }
 
@@ -315,9 +379,9 @@ mod tests {
     fn classifies_pandapower_json() {
         assert_eq!(
             classify_json_text(r#"{"_class":"pandapowerNet","_object":{}}"#),
-            Detection::Known(SourceFormat::Transmission(
+            JsonClass::Case(Detection::Known(SourceFormat::Transmission(
                 TransmissionFormat::PandapowerJson
-            ))
+            )))
         );
     }
 
@@ -325,7 +389,9 @@ mod tests {
     fn classifies_egret_json() {
         assert_eq!(
             classify_json_text(r#"{"elements":{},"system":{}}"#),
-            Detection::Known(SourceFormat::Transmission(TransmissionFormat::EgretJson))
+            JsonClass::Case(Detection::Known(SourceFormat::Transmission(
+                TransmissionFormat::EgretJson
+            )))
         );
     }
 
@@ -335,7 +401,9 @@ mod tests {
             classify_json_text(
                 r#"{"network":{"bus":[],"simple_dispatchable_device":[]},"time_series_input":{}}"#
             ),
-            Detection::Known(SourceFormat::Transmission(TransmissionFormat::Goc3Json))
+            JsonClass::Case(Detection::Known(SourceFormat::Transmission(
+                TransmissionFormat::Goc3Json
+            )))
         );
     }
 
@@ -356,7 +424,9 @@ mod tests {
             classify_json_text(
                 r#"{"format":"surge-json","schema_version":"0.1.0","network":{"buses":[]}}"#
             ),
-            Detection::Known(SourceFormat::Transmission(TransmissionFormat::SurgeJson))
+            JsonClass::Case(Detection::Known(SourceFormat::Transmission(
+                TransmissionFormat::SurgeJson
+            )))
         );
     }
 
@@ -373,14 +443,17 @@ mod tests {
 
     #[test]
     fn unknown_json_has_no_signal() {
-        assert_eq!(classify_json_text(r#"{"name":"case"}"#), Detection::Unknown);
+        assert_eq!(
+            classify_json_text(r#"{"name":"case"}"#),
+            JsonClass::Case(Detection::Unknown)
+        );
     }
 
     #[test]
     fn mixed_transmission_and_distribution_markers_are_ambiguous() {
         assert_eq!(
             classify_json_text(r#"{"baseMVA":100.0,"voltage_source":{}}"#),
-            Detection::Ambiguous
+            JsonClass::Case(Detection::Ambiguous)
         );
     }
 }

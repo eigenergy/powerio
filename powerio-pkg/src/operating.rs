@@ -147,19 +147,19 @@ impl OperatingPoint {
 /// before payload identity existed), `source_uid` is advisory and `row`
 /// addresses the update alone. On the wire, `row` may be omitted when
 /// `source_uid` is given.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 #[non_exhaustive]
 pub struct ElementRef {
     /// Payload table name, such as `loads`, `generators`, `branches`, or `hvdc`.
     pub table: String,
-    /// Zero based row index in `table`. Meaningful only when the wire carried
-    /// one; read [`ElementRef::wire_row`] before trusting it.
-    pub row: usize,
+    /// Zero based row index in `table`, when the producer addressed one.
+    /// `None` on refs built by [`ElementRef::by_source_uid`], which address by
+    /// identity alone.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub row: Option<usize>,
     /// The row's payload identity (its `uid` field), when the producer knows it.
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub source_uid: Option<String>,
-    /// Whether the wire carried `row`. Refs built by
-    /// [`ElementRef::by_source_uid`] have no truthful row to serialize.
-    row_present: bool,
 }
 
 impl ElementRef {
@@ -167,9 +167,8 @@ impl ElementRef {
     pub fn new(table: impl Into<String>, row: usize) -> Self {
         Self {
             table: table.into(),
-            row,
+            row: Some(row),
             source_uid: None,
-            row_present: true,
         }
     }
 
@@ -178,9 +177,8 @@ impl ElementRef {
     pub fn by_source_uid(table: impl Into<String>, uid: impl Into<String>) -> Self {
         Self {
             table: table.into(),
-            row: 0,
+            row: None,
             source_uid: Some(uid.into()),
-            row_present: false,
         }
     }
 
@@ -188,28 +186,6 @@ impl ElementRef {
     pub fn with_source_uid(mut self, uid: impl Into<String>) -> Self {
         self.source_uid = Some(uid.into());
         self
-    }
-
-    /// The wire `row`, when one was given.
-    #[must_use]
-    pub fn wire_row(&self) -> Option<usize> {
-        self.row_present.then_some(self.row)
-    }
-}
-
-impl Serialize for ElementRef {
-    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
-        use serde::ser::SerializeStruct;
-        let len = 1 + usize::from(self.row_present) + usize::from(self.source_uid.is_some());
-        let mut state = serializer.serialize_struct("ElementRef", len)?;
-        state.serialize_field("table", &self.table)?;
-        if self.row_present {
-            state.serialize_field("row", &self.row)?;
-        }
-        if let Some(uid) = &self.source_uid {
-            state.serialize_field("source_uid", uid)?;
-        }
-        state.end()
     }
 }
 
@@ -231,8 +207,7 @@ impl<'de> Deserialize<'de> for ElementRef {
         }
         Ok(Self {
             table: wire.table,
-            row_present: wire.row.is_some(),
-            row: wire.row.unwrap_or(0),
+            row: wire.row,
             source_uid: wire.source_uid,
         })
     }
@@ -657,7 +632,7 @@ fn resolve_update_row(
         }
         Some(uid) => match index.by_uid.get(uid) {
             Some(&row) => {
-                if let Some(wire_row) = element.wire_row()
+                if let Some(wire_row) = element.row
                     && wire_row != row
                 {
                     return Err(format!(
@@ -672,14 +647,14 @@ fn resolve_update_row(
                     "unknown identity: table `{table_name}` has no row with uid `{uid}`"
                 ));
             }
-            None => element.wire_row().ok_or_else(|| {
+            None => element.row.ok_or_else(|| {
                 format!(
                     "update for table `{table_name}` names uid `{uid}`, but the payload rows \
                      carry no uids and the update has no row to fall back on"
                 )
             })?,
         },
-        None => element.wire_row().ok_or_else(|| {
+        None => element.row.ok_or_else(|| {
             format!("update for table `{table_name}` has neither row nor source_uid")
         })?,
     };

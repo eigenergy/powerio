@@ -294,6 +294,43 @@ PioNetwork *pio_parse_str(const char *text,
                           char *errbuf,
                           size_t errlen);
 
+/**
+ * Classify in-memory JSON case `text` by its top level markers, without
+ * parsing the case. Writes one of
+ *
+ * - `transmission:<format>` (e.g. `transmission:powermodels-json`)
+ * - `distribution:<format>` (e.g. `distribution:pmd-json`)
+ * - `package` (a `.pio.json` envelope; read it with the package entry points)
+ * - `ambiguous` (strong markers from both domains; pass an explicit format)
+ * - `unknown` (no recognized marker, or not a JSON object)
+ *
+ * into the caller `outbuf` (truncated to fit, always NUL-terminated) and
+ * returns the total byte length of the classification string (the
+ * size-then-fill idiom of [`pio_warnings`]). Returns 0 for NULL `text`. The
+ * markers are the same ones the transmission parser's `.json` sniffing uses,
+ * so a binding can route a bare `.json` before choosing a parser.
+ */
+size_t pio_classify_str(const char *text, char *outbuf, size_t outlen);
+
+/**
+ * Serialize `net` to its model JSON: the same object a `.pio.json` package
+ * carries under `model.balanced_network`, without the surrounding document,
+ * and the same text the `powerio-json` format token writes. This is the
+ * bindings' data transport; the token remains as a compatibility alias for
+ * file based workflows. Returns an owned C string (free with
+ * [`pio_string_free`]), `NULL` on error.
+ */
+char *pio_to_json(const PioNetwork *net, char *errbuf, size_t errlen);
+
+/**
+ * Parse model JSON produced by [`pio_to_json`] (or lifted from a `.pio.json`
+ * document's `model.balanced_network`) back into an owned handle, the
+ * inverse of [`pio_to_json`] and the function form of parsing under the
+ * `powerio-json` token. Returns `NULL` on error. Free with
+ * [`pio_network_free`].
+ */
+PioNetwork *pio_from_json(const char *text, char *errbuf, size_t errlen);
+
 #if defined(PIO_GRIDFM)
 /**
  * Read one scenario of a dataset directory in the named `from` format into a
@@ -645,6 +682,33 @@ PioPackage *pio_package_from_multiconductor_network(const PioDistNetwork *net,
 
 #if defined(PIO_PKG)
 /**
+ * Materialize the balanced payload of a package handle as an owned network
+ * handle: the inverse of [`pio_package_from_balanced_network`]. Errors when
+ * the package holds a different model kind. The handle is built from the
+ * payload alone: it retains no source text, so a same-format write is a fresh
+ * serialization rather than a byte-exact echo, and it carries no parse
+ * warnings. Free with [`pio_network_free`].
+ */
+PioNetwork *pio_package_to_balanced_network(const PioPackage *pkg, char *errbuf, size_t errlen);
+#endif
+
+#if (defined(PIO_PKG) && defined(PIO_DIST))
+/**
+ * Materialize the multiconductor payload of a package handle as an owned
+ * distribution network handle: the inverse of
+ * [`pio_package_from_multiconductor_network`]. Errors when the package holds
+ * a different model kind. The handle retains no source text, so a
+ * same-format write is a fresh serialization; the payload's parse warnings
+ * ride along and stay readable via [`pio_dist_warnings`]. Free with
+ * [`pio_dist_network_free`].
+ */
+PioDistNetwork *pio_package_to_multiconductor_network(const PioPackage *pkg,
+                                                      char *errbuf,
+                                                      size_t errlen);
+#endif
+
+#if defined(PIO_PKG)
+/**
  * Run the package semantic validation profile in place. Returns `0` on
  * success, `-1` on error.
  *
@@ -765,6 +829,30 @@ void pio_dist_network_free(PioDistNetwork *net);
  * idiom as [`pio_warnings`]. Returns 0 for a NULL handle.
  */
 size_t pio_dist_warnings(const PioDistNetwork *net, char *warnbuf, size_t warnlen);
+#endif
+
+#if defined(PIO_DIST)
+/**
+ * Serialize `net` to its model JSON: the same object a `.pio.json` package
+ * carries under `model.multiconductor_network`, without the surrounding
+ * document. This is the bindings' data transport, not a case format: the
+ * converter, CLI, and format inference do not know it; distribution cases
+ * exchanged with other tools are BMOPF JSON ([`pio_dist_to_format`]).
+ * Returns an owned C string (free with [`pio_string_free`]), `NULL` on error.
+ */
+char *pio_dist_to_json(const PioDistNetwork *net, char *errbuf, size_t errlen);
+#endif
+
+#if defined(PIO_DIST)
+/**
+ * Parse model JSON produced by [`pio_dist_to_json`] (or lifted from a
+ * `.pio.json` document's `model.multiconductor_network`) back into an owned
+ * handle: the inverse of [`pio_dist_to_json`]. The rebuilt handle retains
+ * no source text, so a same-format write is a fresh serialization; the model
+ * JSON's `warnings` ride along. Returns `NULL` on error. Free with
+ * [`pio_dist_network_free`].
+ */
+PioDistNetwork *pio_dist_from_json(const char *text, char *errbuf, size_t errlen);
 #endif
 
 #if defined(PIO_DIST)

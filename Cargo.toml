@@ -21,7 +21,7 @@ resolver = "2"
 # via `key.workspace = true`, so a release bump touches this version and the
 # workspace dependency pins below.
 [workspace.package]
-version = "0.5.1"
+version = "0.6.0"
 edition = "2024"
 rust-version = "1.86"
 license = "MIT OR Apache-2.0"
@@ -31,10 +31,10 @@ homepage = "https://eigenergy.github.io/powerio/"
 [workspace.dependencies]
 # The intra-workspace deps carry the version pin `cargo publish` needs; keeping
 # them here means the pin moves with the [workspace.package] version.
-powerio = { path = "powerio", version = "0.5.1" }
-powerio-matrix = { path = "powerio-matrix", version = "0.5.1" }
-powerio-dist = { path = "powerio-dist", version = "0.5.1" }
-powerio-pkg = { path = "powerio-pkg", version = "0.5.1" }
+powerio = { path = "powerio", version = "0.6.0" }
+powerio-matrix = { path = "powerio-matrix", version = "0.6.0" }
+powerio-dist = { path = "powerio-dist", version = "0.6.0" }
+powerio-pkg = { path = "powerio-pkg", version = "0.6.0" }
 # Cross-crate type identity: `CsMat<f64>` (sprs) and the Arrow types cross crate
 # boundaries, so every crate must build against the same major.
 sprs = { version = "0.11", default-features = false }
