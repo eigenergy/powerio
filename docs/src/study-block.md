@@ -120,5 +120,6 @@ display concern.
 - C ABI: `pio_package_study_json` and `pio_package_materialize_study_commit`,
   additive symbols beside the operating point calls, no ABI bump.
 
-Tracking issues: filed per phase; see the pull request that introduced this
-chapter.
+Tracking issues: [#181](https://github.com/eigenergy/powerio/issues/181)
+(block, materialization, uid contract),
+[#185](https://github.com/eigenergy/powerio/issues/185) (bindings).

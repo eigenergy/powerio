@@ -188,5 +188,8 @@ in the consumer. A consumer that computes a layout can write it back with
 4. `.pwd` promotion and the Mercator helper.
 5. C ABI and Python bindings.
 
-Tracking issues: filed per phase; see the pull request that introduced this
-chapter.
+Tracking issues: [#180](https://github.com/eigenergy/powerio/issues/180)
+(typed fields), [#183](https://github.com/eigenergy/powerio/issues/183)
+(balanced formats), [#184](https://github.com/eigenergy/powerio/issues/184)
+(GeoLayer and `.pwd`), [#185](https://github.com/eigenergy/powerio/issues/185)
+(bindings).
