@@ -1,6 +1,6 @@
 # Geographic and display data
 
-> **Status: design.** Nothing in this chapter ships in 0.5.x. The tracking
+> **Status: design.** Nothing in this chapter ships in 0.5.x or 0.6.x. The tracking
 > issues are linked at the end.
 
 Power system case files disagree about where equipment sits on a map, and most
@@ -25,7 +25,7 @@ Both model families gain the same optional fields:
 - `Network.geo: Option<GeoMeta>` and `DistNetwork.geo: Option<GeoMeta>`;
 - later, polyline routing: `Branch.route` and `DistLine.route`.
 
-The types are small and plain:
+The types are small:
 
 ```rust
 pub struct Location {
@@ -57,7 +57,7 @@ pub enum CoordinateSpace {
 }
 ```
 
-The coordinate space is a network property, not a bus property; a network with
+The coordinate space is a network property and is not a bus property. A network with
 per bus coordinate systems cannot be rendered. Per point `kind` exists so a
 partially hand placed network round trips: three buses pinned manually, the
 rest from a synthetic layout, and a renderer knows which points it may move.
@@ -68,9 +68,10 @@ defined in `powerio::geo` and mirrored in `powerio_dist::geo`, the same
 arrangement `Extras` already uses. A parity test in `powerio-pkg` serializes
 both and asserts identical JSON, so the copies cannot drift.
 
+Before this is implemented, it is worth considering whether a `powerio-geo` or `powerio-format` crate make be necessary.
+
 Because the fields are additive and skipped when absent, they ride the
-`.pio.json` payloads as a minor bump: both payload schemas go 1.0.0 to 1.1.0
-and the envelope is untouched.
+`.pio.json` payloads as a minor bump.
 
 ## Layer 2: the geographic document
 
