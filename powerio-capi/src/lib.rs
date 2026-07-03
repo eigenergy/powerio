@@ -119,7 +119,8 @@ fn finish_cstring(s: String, errbuf: *mut c_char, errlen: usize) -> *mut c_char 
 /// message) under the panic guard and hand back an owned C string, or write
 /// the error (`panic_msg` if `f` panicked) into `errbuf` and return NULL. The
 /// shared tail of the string-returning functions that carry no warning buffer.
-#[cfg(any(feature = "dist", feature = "pkg"))]
+/// Used by the always built `pio_to_json` as well as the dist and pkg
+/// surfaces, so it carries no feature gate.
 unsafe fn finish_string(
     errbuf: *mut c_char,
     errlen: usize,
@@ -391,6 +392,49 @@ fn classify_label(text: &str) -> String {
         }
         JsonClass::Case(Detection::Ambiguous) => "ambiguous".to_string(),
         JsonClass::Case(Detection::Unknown) => "unknown".to_string(),
+    }
+}
+
+/// Serialize `net` to its model JSON: the same object a `.pio.json` package
+/// carries under `model.balanced_network`, without the surrounding document,
+/// and the same text the `powerio-json` format token writes. This is the
+/// bindings' data transport; the token remains as a compatibility alias for
+/// file based workflows. Returns an owned C string (free with
+/// [`pio_string_free`]), `NULL` on error.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn pio_to_json(
+    net: *const PioNetwork,
+    errbuf: *mut c_char,
+    errlen: usize,
+) -> *mut c_char {
+    unsafe {
+        finish_string(errbuf, errlen, "panic while serializing model JSON", || {
+            let net = net
+                .as_ref()
+                .ok_or_else(|| "network handle is NULL".to_string())?;
+            net.net.to_json().map_err(|e| e.to_string())
+        })
+    }
+}
+
+/// Parse model JSON produced by [`pio_to_json`] (or lifted from a `.pio.json`
+/// document's `model.balanced_network`) back into an owned handle, the
+/// inverse of [`pio_to_json`] and the function form of parsing under the
+/// `powerio-json` token. Returns `NULL` on error. Free with
+/// [`pio_network_free`].
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn pio_from_json(
+    text: *const c_char,
+    errbuf: *mut c_char,
+    errlen: usize,
+) -> *mut PioNetwork {
+    unsafe {
+        finish_network(errbuf, errlen, "panic while parsing model JSON", || {
+            let text = required_cstr(text, "text")?;
+            Network::from_json(text)
+                .map(|net| (net, Vec::new()))
+                .map_err(|e| e.to_string())
+        })
     }
 }
 
@@ -2166,6 +2210,8 @@ mod tests {
             "PioNetwork *pio_parse_file(const char *path, const char *from, char *errbuf, size_t errlen);",
             "PioNetwork *pio_parse_str(const char *text, const char *format, char *errbuf, size_t errlen);",
             "size_t pio_classify_str(const char *text, char *outbuf, size_t outlen);",
+            "char *pio_to_json(const PioNetwork *net, char *errbuf, size_t errlen);",
+            "PioNetwork *pio_from_json(const char *text, char *errbuf, size_t errlen);",
             "PioNetwork *pio_read_dir(const char *dir, const char *from, int64_t scenario, char *errbuf, size_t errlen);",
             "ptrdiff_t pio_scenario_ids(const char *dir, const char *from, int64_t *out, size_t cap, char *errbuf, size_t errlen);",
             "size_t pio_warnings(const PioNetwork *net, char *warnbuf, size_t warnlen);",
@@ -3603,6 +3649,29 @@ mpc.branch = [
             assert_eq!(unsafe { pio_has_feature(dist.as_ptr()) }, 1);
             let nope = CString::new("nope").unwrap();
             assert_eq!(unsafe { pio_has_feature(nope.as_ptr()) }, 0);
+        }
+    }
+
+    /// The balanced model JSON pair: one call out, one call back, byte
+    /// identical to the `powerio-json` token writer.
+    #[test]
+    fn balanced_model_json_round_trip_matches_token_writer() {
+        let net = case9();
+        let mut err = [0 as c_char; PIO_ERRBUF_MIN];
+        let json = unsafe { pio_to_json(net, err.as_mut_ptr(), err.len()) };
+        assert!(!json.is_null());
+        let text = unsafe { CStr::from_ptr(json) }.to_str().unwrap().to_owned();
+        unsafe { pio_string_free(json) };
+        assert_eq!(text, unsafe { to_format(net, "powerio-json") });
+
+        let c = CString::new(text).unwrap();
+        let back = unsafe { pio_from_json(c.as_ptr(), err.as_mut_ptr(), err.len()) };
+        assert!(!back.is_null());
+        unsafe {
+            assert_eq!(pio_n_buses(back), pio_n_buses(net));
+            close(pio_base_mva(back), pio_base_mva(net));
+            pio_network_free(back);
+            pio_network_free(net);
         }
     }
 

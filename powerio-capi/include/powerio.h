@@ -312,6 +312,25 @@ PioNetwork *pio_parse_str(const char *text,
  */
 size_t pio_classify_str(const char *text, char *outbuf, size_t outlen);
 
+/**
+ * Serialize `net` to its model JSON: the same object a `.pio.json` package
+ * carries under `model.balanced_network`, without the surrounding document,
+ * and the same text the `powerio-json` format token writes. This is the
+ * bindings' data transport; the token remains as a compatibility alias for
+ * file based workflows. Returns an owned C string (free with
+ * [`pio_string_free`]), `NULL` on error.
+ */
+char *pio_to_json(const PioNetwork *net, char *errbuf, size_t errlen);
+
+/**
+ * Parse model JSON produced by [`pio_to_json`] (or lifted from a `.pio.json`
+ * document's `model.balanced_network`) back into an owned handle, the
+ * inverse of [`pio_to_json`] and the function form of parsing under the
+ * `powerio-json` token. Returns `NULL` on error. Free with
+ * [`pio_network_free`].
+ */
+PioNetwork *pio_from_json(const char *text, char *errbuf, size_t errlen);
+
 #if defined(PIO_GRIDFM)
 /**
  * Read one scenario of a dataset directory in the named `from` format into a

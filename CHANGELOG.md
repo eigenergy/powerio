@@ -10,6 +10,10 @@
   payload retains no source text, so a same-format write is a fresh
   serialization rather than a byte-exact echo; the multiconductor payload's
   parse warnings ride along.
+- C ABI: `pio_to_json` / `pio_from_json` are the function form of the balanced
+  model JSON (byte identical to the `powerio-json` writer); the format token
+  remains as a compatibility alias for file based workflows. This is the
+  additive half of #194; retiring the token waits for 1.0.
 - C ABI: `pio_dist_to_json` / `pio_dist_from_json` serialize a distribution
   handle to its model JSON and back in one call each: the same object a
   `.pio.json` document carries under `model.multiconductor_network`, without
