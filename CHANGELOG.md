@@ -2,6 +2,13 @@
 
 ## 0.6.0
 
+- Breaking (#175): `ElementRef.row` is `Option<usize>`, the honest form of the
+  0.5.1 wire semantics. `None` addresses by identity alone (refs built with
+  `by_source_uid`); the private wire-presence shim (`wire_row()`) is gone, and
+  `row` itself says whether the wire carried one. The `.pio.json` wire format
+  is unchanged. The other break collected in #175, keyed-object addressing for
+  multiconductor operating point updates, needs design and moves to the 1.0
+  window (#196).
 - C ABI: the package payload extraction inverses land as additive symbols (no
   ABI version change; probe the symbols like the other feature surfaces):
   `pio_package_to_balanced_network` and `pio_package_to_multiconductor_network`
