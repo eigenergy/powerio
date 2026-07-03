@@ -285,8 +285,12 @@ mod tests {
             r#"{"model_kind":"multiconductor","model":{"kind":"multiconductor"}}"#
         ));
         // A payload alone is not an envelope, and neither is a case document.
-        assert!(!looks_like_package_envelope(r#"{"buses":[],"linecodes":[]}"#));
-        assert!(!looks_like_package_envelope(r#"{"baseMVA":100.0,"bus":{}}"#));
+        assert!(!looks_like_package_envelope(
+            r#"{"buses":[],"linecodes":[]}"#
+        ));
+        assert!(!looks_like_package_envelope(
+            r#"{"baseMVA":100.0,"bus":{}}"#
+        ));
         assert!(!looks_like_package_envelope("not json"));
     }
 

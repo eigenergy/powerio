@@ -256,7 +256,8 @@ fn optional_cstr<'a>(p: *const c_char, name: &str) -> Result<Option<&'a str>, St
 
 /// Like [`cstr`] but a NULL or non-UTF-8 pointer is an error naming the
 /// offending parameter. Entry points use this for required strings.
-#[cfg(any(feature = "dist", feature = "pkg"))]
+/// Used by the always-built `pio_classify_str` as well as the dist and pkg
+/// surfaces, so it carries no feature gate.
 fn required_cstr<'a>(p: *const c_char, name: &str) -> Result<&'a str, String> {
     unsafe { cstr(p) }.ok_or_else(|| format!("{name} is NULL or not UTF-8"))
 }
@@ -3546,9 +3547,7 @@ mpc.branch = [
             let text = unsafe { CStr::from_ptr(json) }.to_str().unwrap().to_owned();
             unsafe { pio_string_free(json) };
             let c = CString::new(text).unwrap();
-            let reread = unsafe {
-                pio_package_parse_str(c.as_ptr(), err.as_mut_ptr(), err.len())
-            };
+            let reread = unsafe { pio_package_parse_str(c.as_ptr(), err.as_mut_ptr(), err.len()) };
             assert!(!reread.is_null());
             unsafe { pio_package_free(pkg) };
             reread
@@ -3558,25 +3557,21 @@ mpc.branch = [
         fn balanced_wrap_extract_across_json() {
             let net = case9();
             let mut err = [0 as c_char; PIO_ERRBUF_MIN];
-            let pkg = unsafe {
-                pio_package_from_balanced_network(net, 0, err.as_mut_ptr(), err.len())
-            };
+            let pkg =
+                unsafe { pio_package_from_balanced_network(net, 0, err.as_mut_ptr(), err.len()) };
             assert!(!pkg.is_null());
             let pkg = unsafe { envelope_round_trip(pkg) };
 
             // Wrong-kind extraction refuses with a directed message.
             #[cfg(feature = "dist")]
             unsafe {
-                let wrong =
-                    pio_package_to_multiconductor_network(pkg, err.as_mut_ptr(), err.len());
+                let wrong = pio_package_to_multiconductor_network(pkg, err.as_mut_ptr(), err.len());
                 assert!(wrong.is_null());
                 let msg = CStr::from_ptr(err.as_ptr()).to_str().unwrap();
                 assert!(msg.contains("balanced"), "got: {msg}");
             }
 
-            let back = unsafe {
-                pio_package_to_balanced_network(pkg, err.as_mut_ptr(), err.len())
-            };
+            let back = unsafe { pio_package_to_balanced_network(pkg, err.as_mut_ptr(), err.len()) };
             assert!(
                 !back.is_null(),
                 "{}",
@@ -3612,9 +3607,8 @@ mpc.branch = [
             };
             assert!(!pkg.is_null());
             let pkg = unsafe { envelope_round_trip(pkg) };
-            let back = unsafe {
-                pio_package_to_multiconductor_network(pkg, err.as_mut_ptr(), err.len())
-            };
+            let back =
+                unsafe { pio_package_to_multiconductor_network(pkg, err.as_mut_ptr(), err.len()) };
             assert!(
                 !back.is_null(),
                 "{}",

@@ -1215,10 +1215,7 @@ mod tests {
     #[test]
     fn dss_extension_error_names_the_distribution_surface() {
         let err = parse_file("feeder.dss", None).unwrap_err();
-        assert!(
-            err.to_string().contains("distribution"),
-            "got: {err}"
-        );
+        assert!(err.to_string().contains("distribution"), "got: {err}");
     }
 
     #[test]
