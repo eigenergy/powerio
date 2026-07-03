@@ -434,7 +434,7 @@ pub fn parse_file(path: impl AsRef<std::path::Path>, from: Option<&str>) -> Resu
             if display_format_from_name(f).is_some() {
                 return Err(display_file_guidance());
             }
-            Some(target_format_from_name(f).ok_or_else(|| Error::UnknownFormat(f.to_string()))?)
+            Some(target_format_from_name(f).ok_or_else(|| unknown_source_format(f))?)
         }
         None => {
             // Everything but `.json` (sniffed below) resolves without the text.
@@ -443,6 +443,15 @@ pub fn parse_file(path: impl AsRef<std::path::Path>, from: Option<&str>) -> Resu
                 Some("raw") => Some(TargetFormat::Psse { rev: 33 }),
                 Some("aux") => Some(TargetFormat::PowerWorld),
                 Some("json") => None,
+                Some("dss") => {
+                    return Err(Error::UnknownFormat(
+                        "\"dss\" is an OpenDSS distribution case; this parser reads only \
+                         balanced transmission formats -- use the distribution surface \
+                         (powerio_dist::parse_file, pio_dist_parse_file in C, or the \
+                         format-routed parse_file in the bindings)"
+                            .into(),
+                    ));
+                }
                 other => {
                     return Err(Error::UnknownFormat(format!(
                         "cannot infer from file extension {other:?}; \
@@ -518,10 +527,33 @@ pub(crate) fn reject_empty_case(net: &Network, format: &'static str) -> Result<(
     Ok(())
 }
 
+/// An unrecognized source format token. When the token names a distribution
+/// format (`dss`, `pmd`, `bmopf`), the error points at the distribution
+/// surface instead of echoing the token: this parser reads only balanced
+/// transmission formats.
+fn unknown_source_format(name: &str) -> Error {
+    if let Some(dist) = routing::distribution_format_from_name(name) {
+        return Error::UnknownFormat(format!(
+            "`{}` is a distribution format; this parser reads only balanced transmission \
+             formats -- use the distribution surface (powerio_dist::parse_file, \
+             pio_dist_parse_file in C, or the format-routed parse_file in the bindings)",
+            dist.name()
+        ));
+    }
+    Error::UnknownFormat(name.to_string())
+}
+
 /// The JSON formats share the `.json` extension, so an explicit source format
 /// isn't always given. Classification lives here so the CLI and bindings use
 /// the same top level markers as the Rust parsers.
 fn sniff_json(text: &str) -> Result<TargetFormat> {
+    if routing::looks_like_package_envelope(text) {
+        return Err(Error::UnknownFormat(
+            "JSON is a .pio.json package envelope, not a case format; read it with the \
+             package entry points (pio_package_parse_str / read_package in the bindings)"
+                .into(),
+        ));
+    }
     match routing::classify_json_text(text) {
         Detection::Known(DetectedFormat::Transmission(format)) => transmission_json_target(format),
         Detection::Known(DetectedFormat::Distribution(format)) => {
@@ -568,8 +600,7 @@ pub fn parse_str(text: &str, format: &str) -> Result<Parsed> {
         reject_empty_case(&network, "PSLF .epc")?;
         return Ok(Parsed { network, warnings });
     }
-    let fmt =
-        target_format_from_name(format).ok_or_else(|| Error::UnknownFormat(format.to_string()))?;
+    let fmt = target_format_from_name(format).ok_or_else(|| unknown_source_format(format))?;
     read_source(Arc::new(text.to_owned()), fmt, None)
 }
 
@@ -1180,6 +1211,35 @@ fn collect_null_keys(value: &Value, out: &mut BTreeSet<String>) {
 mod tests {
     use super::*;
     use crate::network::SourceFormat;
+
+    #[test]
+    fn dss_extension_error_names_the_distribution_surface() {
+        let err = parse_file("feeder.dss", None).unwrap_err();
+        assert!(
+            err.to_string().contains("distribution"),
+            "got: {err}"
+        );
+    }
+
+    #[test]
+    fn distribution_from_token_error_names_the_distribution_surface() {
+        for token in ["dss", "pmd", "bmopf"] {
+            let err = parse_str("anything", token).unwrap_err();
+            assert!(
+                err.to_string().contains("distribution surface"),
+                "{token}: {err}"
+            );
+        }
+        // A genuinely unknown token still echoes plainly.
+        let err = parse_str("anything", "nonesuch").unwrap_err();
+        assert!(err.to_string().contains("nonesuch"));
+    }
+
+    #[test]
+    fn package_envelope_json_error_names_the_package_reader() {
+        let err = sniff_json(r#"{"model_kind":"balanced","model":{}}"#).unwrap_err();
+        assert!(err.to_string().contains(".pio.json"), "got: {err}");
+    }
 
     #[test]
     fn source_format_strings_round_trip_to_a_target() {

@@ -1,5 +1,25 @@
 # Changelog
 
+## Unreleased
+
+- C ABI: the package payload extraction inverses land as additive symbols (no
+  ABI version change; probe the symbols like the other feature surfaces):
+  `pio_package_to_balanced_network` and `pio_package_to_multiconductor_network`
+  materialize an owned network handle from a parsed `.pio.json` package handle,
+  the inverses of the `pio_package_from_*` constructors. A handle built from a
+  payload retains no source text, so a same-format write is a fresh
+  serialization rather than a byte-exact echo; the multiconductor payload's
+  parse warnings ride along.
+- C ABI: `pio_classify_str` classifies in-memory JSON by the same top level
+  markers the transmission parser's `.json` sniffing uses, and recognizes
+  `.pio.json` envelopes: `transmission:<format>`, `distribution:<format>`,
+  `package`, `ambiguous`, or `unknown`, size-then-fill. Bindings can route a
+  bare `.json` before choosing a parser instead of matching error text.
+- Directed errors at the transmission boundary: a `.dss` path, a distribution
+  `from` token (`dss`/`pmd`/`bmopf`), and a `.pio.json` envelope handed to the
+  balanced parser now name the surface that reads them instead of a generic
+  unknown-format message.
+
 ## 0.5.1
 
 - `.pio.json` payload schema declared (#173): new optional envelope fields

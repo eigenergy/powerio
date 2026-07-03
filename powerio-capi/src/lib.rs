@@ -315,6 +315,55 @@ pub unsafe extern "C" fn pio_parse_str(
     }
 }
 
+/// Classify in-memory JSON case `text` by its top level markers, without
+/// parsing the case. Writes one of
+///
+/// - `transmission:<format>` (e.g. `transmission:powermodels-json`)
+/// - `distribution:<format>` (e.g. `distribution:pmd-json`)
+/// - `package` (a `.pio.json` envelope; read it with the package entry points)
+/// - `ambiguous` (strong markers from both domains; pass an explicit format)
+/// - `unknown` (no recognized marker, or not a JSON object)
+///
+/// into the caller `outbuf` (truncated to fit, always NUL-terminated) and
+/// returns the total byte length of the classification string -- the
+/// size-then-fill idiom of [`pio_warnings`]. Returns 0 for NULL `text`. The
+/// markers are the same ones the transmission parser's `.json` sniffing uses,
+/// so a binding can route a bare `.json` before choosing a parser.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn pio_classify_str(
+    text: *const c_char,
+    outbuf: *mut c_char,
+    outlen: usize,
+) -> usize {
+    unsafe {
+        guard(0, || {
+            let Ok(text) = required_cstr(text, "text") else {
+                return 0;
+            };
+            let label = classify_label(text);
+            copy_to_buf(outbuf, outlen, &label);
+            label.len()
+        })
+    }
+}
+
+fn classify_label(text: &str) -> String {
+    use powerio::format::routing::{self, Detection, SourceFormat};
+    if routing::looks_like_package_envelope(text) {
+        return "package".to_string();
+    }
+    match routing::classify_json_text(text) {
+        Detection::Known(SourceFormat::Transmission(f)) => {
+            format!("transmission:{}", f.name())
+        }
+        Detection::Known(SourceFormat::Distribution(f)) => {
+            format!("distribution:{}", f.name())
+        }
+        Detection::Ambiguous => "ambiguous".to_string(),
+        _ => "unknown".to_string(),
+    }
+}
+
 /// Read one scenario of a dataset directory in the named `from` format into a
 /// network handle: the directory sibling of [`pio_parse_file`]. `gridfm` (the
 /// gridfm-datakit Parquet layout; `dir` resolves leniently: the `raw/` leaf,
@@ -1265,6 +1314,73 @@ pub unsafe extern "C" fn pio_package_from_multiconductor_network(
     }
 }
 
+/// Materialize the balanced payload of a package handle as an owned network
+/// handle -- the inverse of [`pio_package_from_balanced_network`]. Errors when
+/// the package holds a different model kind. The handle is built from the
+/// payload alone: it retains no source text, so a same-format write is a fresh
+/// serialization rather than a byte-exact echo, and it carries no parse
+/// warnings. Free with [`pio_network_free`].
+#[cfg(feature = "pkg")]
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn pio_package_to_balanced_network(
+    pkg: *const PioPackage,
+    errbuf: *mut c_char,
+    errlen: usize,
+) -> *mut PioNetwork {
+    unsafe {
+        finish_network(
+            errbuf,
+            errlen,
+            "panic while extracting balanced network",
+            || {
+                let pkg = pkg
+                    .as_ref()
+                    .ok_or_else(|| "package handle is NULL".to_string())?;
+                let net = pkg.package.model.as_balanced().ok_or_else(|| {
+                    "package holds a multiconductor model, not balanced; use \
+                     pio_package_to_multiconductor_network"
+                        .to_string()
+                })?;
+                Ok((net.clone(), Vec::new()))
+            },
+        )
+    }
+}
+
+/// Materialize the multiconductor payload of a package handle as an owned
+/// distribution network handle -- the inverse of
+/// [`pio_package_from_multiconductor_network`]. Errors when the package holds
+/// a different model kind. The handle retains no source text (`source` never
+/// enters the payload), so a same-format write is a fresh serialization; the
+/// payload's parse warnings ride along and stay readable via
+/// [`pio_dist_warnings`]. Free with [`pio_dist_network_free`].
+#[cfg(all(feature = "pkg", feature = "dist"))]
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn pio_package_to_multiconductor_network(
+    pkg: *const PioPackage,
+    errbuf: *mut c_char,
+    errlen: usize,
+) -> *mut PioDistNetwork {
+    unsafe {
+        finish_handle(
+            errbuf,
+            errlen,
+            "panic while extracting multiconductor network",
+            || {
+                let pkg = pkg
+                    .as_ref()
+                    .ok_or_else(|| "package handle is NULL".to_string())?;
+                let net = pkg.package.model.as_multiconductor().ok_or_else(|| {
+                    "package holds a balanced model, not multiconductor; use \
+                     pio_package_to_balanced_network"
+                        .to_string()
+                })?;
+                Ok(PioDistNetwork { net: net.clone() })
+            },
+        )
+    }
+}
+
 /// Run the package semantic validation profile in place. Returns `0` on
 /// success, `-1` on error.
 ///
@@ -1970,6 +2086,7 @@ mod tests {
             "const char *pio_version(void);",
             "PioNetwork *pio_parse_file(const char *path, const char *from, char *errbuf, size_t errlen);",
             "PioNetwork *pio_parse_str(const char *text, const char *format, char *errbuf, size_t errlen);",
+            "size_t pio_classify_str(const char *text, char *outbuf, size_t outlen);",
             "PioNetwork *pio_read_dir(const char *dir, const char *from, int64_t scenario, char *errbuf, size_t errlen);",
             "ptrdiff_t pio_scenario_ids(const char *dir, const char *from, int64_t *out, size_t cap, char *errbuf, size_t errlen);",
             "size_t pio_warnings(const PioNetwork *net, char *warnbuf, size_t warnlen);",
@@ -2003,6 +2120,8 @@ mod tests {
             "char *pio_package_to_json(const PioPackage *pkg, char *errbuf, size_t errlen);",
             "PioPackage *pio_package_from_balanced_network(const PioNetwork *net, int32_t include_solver_metadata, char *errbuf, size_t errlen);",
             "PioPackage *pio_package_from_multiconductor_network(const PioDistNetwork *net, char *errbuf, size_t errlen);",
+            "PioNetwork *pio_package_to_balanced_network(const PioPackage *pkg, char *errbuf, size_t errlen);",
+            "PioDistNetwork *pio_package_to_multiconductor_network(const PioPackage *pkg, char *errbuf, size_t errlen);",
             "int32_t pio_package_validate(PioPackage *pkg, char *errbuf, size_t errlen);",
             "char *pio_package_validation_json(const PioPackage *pkg, char *errbuf, size_t errlen);",
             "char *pio_package_diagnostics_json(const PioPackage *pkg, char *errbuf, size_t errlen);",
@@ -3375,6 +3494,164 @@ mpc.branch = [
             assert_eq!(unsafe { pio_has_feature(dist.as_ptr()) }, 1);
             let nope = CString::new("nope").unwrap();
             assert_eq!(unsafe { pio_has_feature(nope.as_ptr()) }, 0);
+        }
+    }
+
+    /// `pio_classify_str` labels: same markers as the `.json` sniffing.
+    #[test]
+    fn classify_str_labels() {
+        fn classify(text: &str) -> String {
+            let c = CString::new(text).unwrap();
+            let mut out = [0 as c_char; 64];
+            let n = unsafe { pio_classify_str(c.as_ptr(), out.as_mut_ptr(), out.len()) };
+            let label = unsafe { CStr::from_ptr(out.as_ptr()) }.to_str().unwrap();
+            assert_eq!(n, label.len(), "size-then-fill length disagrees");
+            label.to_string()
+        }
+        assert_eq!(
+            classify(r#"{"baseMVA": 100.0, "bus": {}}"#),
+            "transmission:powermodels-json"
+        );
+        assert_eq!(
+            classify(r#"{"data_model": "ENGINEERING"}"#),
+            "distribution:pmd-json"
+        );
+        assert_eq!(
+            classify(r#"{"line": {}, "bus": {}}"#),
+            "distribution:bmopf-json"
+        );
+        assert_eq!(
+            classify(r#"{"model_kind": "balanced", "model": {}}"#),
+            "package"
+        );
+        assert_eq!(classify("not json"), "unknown");
+        assert_eq!(classify(r#"{"nothing": 1}"#), "unknown");
+        assert_eq!(
+            unsafe { pio_classify_str(std::ptr::null(), std::ptr::null_mut(), 0) },
+            0
+        );
+    }
+
+    /// The package inverse pair: wrap a handle, cross the JSON envelope, and
+    /// extract an owned handle again -- the binding materialization path.
+    #[cfg(feature = "pkg")]
+    mod package_inverse {
+        use super::*;
+        use std::ffi::CStr;
+
+        unsafe fn envelope_round_trip(pkg: *mut PioPackage) -> *mut PioPackage {
+            let mut err = [0 as c_char; PIO_ERRBUF_MIN];
+            let json = unsafe { pio_package_to_json(pkg, err.as_mut_ptr(), err.len()) };
+            assert!(!json.is_null());
+            let text = unsafe { CStr::from_ptr(json) }.to_str().unwrap().to_owned();
+            unsafe { pio_string_free(json) };
+            let c = CString::new(text).unwrap();
+            let reread = unsafe {
+                pio_package_parse_str(c.as_ptr(), err.as_mut_ptr(), err.len())
+            };
+            assert!(!reread.is_null());
+            unsafe { pio_package_free(pkg) };
+            reread
+        }
+
+        #[test]
+        fn balanced_wrap_extract_across_json() {
+            let net = case9();
+            let mut err = [0 as c_char; PIO_ERRBUF_MIN];
+            let pkg = unsafe {
+                pio_package_from_balanced_network(net, 0, err.as_mut_ptr(), err.len())
+            };
+            assert!(!pkg.is_null());
+            let pkg = unsafe { envelope_round_trip(pkg) };
+
+            // Wrong-kind extraction refuses with a directed message.
+            #[cfg(feature = "dist")]
+            unsafe {
+                let wrong =
+                    pio_package_to_multiconductor_network(pkg, err.as_mut_ptr(), err.len());
+                assert!(wrong.is_null());
+                let msg = CStr::from_ptr(err.as_ptr()).to_str().unwrap();
+                assert!(msg.contains("balanced"), "got: {msg}");
+            }
+
+            let back = unsafe {
+                pio_package_to_balanced_network(pkg, err.as_mut_ptr(), err.len())
+            };
+            assert!(
+                !back.is_null(),
+                "{}",
+                unsafe { CStr::from_ptr(err.as_ptr()) }.to_str().unwrap()
+            );
+            unsafe {
+                assert_eq!(pio_n_buses(back), pio_n_buses(net));
+                assert_eq!(pio_n_gens(back), pio_n_gens(net));
+                close(pio_base_mva(back), pio_base_mva(net));
+                pio_package_free(pkg);
+                pio_network_free(back);
+                pio_network_free(net);
+            }
+        }
+
+        #[cfg(feature = "dist")]
+        #[test]
+        fn multiconductor_wrap_extract_across_json() {
+            let path = CString::new(
+                std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                    .join("../tests/data/dist/micro/fourwire_linecode.dss")
+                    .to_str()
+                    .unwrap(),
+            )
+            .unwrap();
+            let mut err = [0 as c_char; PIO_ERRBUF_MIN];
+            let net = unsafe {
+                pio_dist_parse_file(path.as_ptr(), std::ptr::null(), err.as_mut_ptr(), err.len())
+            };
+            assert!(!net.is_null());
+            let pkg = unsafe {
+                pio_package_from_multiconductor_network(net, err.as_mut_ptr(), err.len())
+            };
+            assert!(!pkg.is_null());
+            let pkg = unsafe { envelope_round_trip(pkg) };
+            let back = unsafe {
+                pio_package_to_multiconductor_network(pkg, err.as_mut_ptr(), err.len())
+            };
+            assert!(
+                !back.is_null(),
+                "{}",
+                unsafe { CStr::from_ptr(err.as_ptr()) }.to_str().unwrap()
+            );
+
+            // The extracted model writes the same BMOPF text as the original:
+            // nothing the model represents is lost crossing the envelope.
+            unsafe fn bmopf(net: *const PioDistNetwork) -> String {
+                let to = CString::new("bmopf").unwrap();
+                let mut warn = [0 as c_char; 4096];
+                let mut err = [0 as c_char; PIO_ERRBUF_MIN];
+                let s = unsafe {
+                    pio_dist_to_format(
+                        net,
+                        to.as_ptr(),
+                        warn.as_mut_ptr(),
+                        warn.len(),
+                        err.as_mut_ptr(),
+                        err.len(),
+                    )
+                };
+                assert!(!s.is_null());
+                let text = unsafe { CStr::from_ptr(s) }.to_str().unwrap().to_owned();
+                unsafe { pio_string_free(s) };
+                text
+            }
+            unsafe {
+                assert_eq!(bmopf(back), bmopf(net));
+                let wrong = pio_package_to_balanced_network(pkg, err.as_mut_ptr(), err.len());
+                assert!(wrong.is_null());
+                let msg = CStr::from_ptr(err.as_ptr()).to_str().unwrap();
+                assert!(msg.contains("multiconductor"), "got: {msg}");
+                pio_package_free(pkg);
+                pio_dist_network_free(back);
+                pio_dist_network_free(net);
+            }
         }
     }
 }

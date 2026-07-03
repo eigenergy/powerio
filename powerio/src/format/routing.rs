@@ -167,6 +167,17 @@ pub fn classify_json_text(text: &str) -> Detection<JsonFormat> {
     shape.classify()
 }
 
+/// True when `text` is a `.pio.json` package envelope (top level `model_kind`
+/// and `model`). A package is not a converter-boundary format, so envelope
+/// detection stays out of [`SourceFormat`]; callers route an envelope to the
+/// package reader instead of a case parser.
+pub fn looks_like_package_envelope(text: &str) -> bool {
+    let Ok(shape) = JsonShape::try_from(text) else {
+        return false;
+    };
+    shape.has("model_kind") && shape.has("model")
+}
+
 fn canonical_key(name: &str) -> String {
     name.to_ascii_lowercase()
         .chars()
@@ -265,7 +276,19 @@ impl JsonShape {
 mod tests {
     use super::{
         Detection, DistributionFormat, SourceFormat, TransmissionFormat, classify_json_text,
+        looks_like_package_envelope,
     };
+
+    #[test]
+    fn package_envelope_predicate() {
+        assert!(looks_like_package_envelope(
+            r#"{"model_kind":"multiconductor","model":{"kind":"multiconductor"}}"#
+        ));
+        // A payload alone is not an envelope, and neither is a case document.
+        assert!(!looks_like_package_envelope(r#"{"buses":[],"linecodes":[]}"#));
+        assert!(!looks_like_package_envelope(r#"{"baseMVA":100.0,"bus":{}}"#));
+        assert!(!looks_like_package_envelope("not json"));
+    }
 
     #[test]
     fn classifies_pmd_json() {
