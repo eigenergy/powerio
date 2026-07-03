@@ -11,7 +11,7 @@
   serialization rather than a byte-exact echo; the multiconductor payload's
   parse warnings ride along.
 - C ABI: `pio_dist_to_json` / `pio_dist_from_json` serialize a distribution
-  handle to its model JSON and back in one call each -- the same object a
+  handle to its model JSON and back in one call each: the same object a
   `.pio.json` document carries under `model.multiconductor_network`, without
   the surrounding document. Bindings materialize element tables with this
   instead of building a throwaway package; it is not a case format (the
@@ -22,6 +22,14 @@
   `.pio.json` envelopes: `transmission:<format>`, `distribution:<format>`,
   `package`, `ambiguous`, or `unknown`, size-then-fill. Bindings can route a
   bare `.json` before choosing a parser instead of matching error text.
+- The JSON classifier reports a `.pio.json` envelope as its own outcome
+  (`routing::JsonClass`), so every consumer handles it: the CLI, the Python
+  readers, and the Python `classify_json_text` now name the package surface
+  for an envelope instead of a generic cannot-infer error (or, for the Python
+  string reader, a MATPOWER syntax error). Envelope detection requires
+  `model_kind` to be `balanced` or `multiconductor`, so a case document
+  carrying those key names with other values still classifies as a case, and
+  classification parses the document once.
 - Directed errors at the transmission boundary: a `.dss` path, a distribution
   `from` token (`dss`/`pmd`/`bmopf`), and a `.pio.json` envelope handed to the
   balanced parser now name the surface that reads them instead of a generic

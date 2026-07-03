@@ -36,7 +36,7 @@ use serde_json::{Map, Value};
 use crate::gen_cost::{GenCostPatch, MissingGenCostPolicy};
 use crate::network::{Branch, BranchRatingSet, Bus, BusId, BusType, Network, SourceFormat};
 use crate::{Error, Result};
-use routing::{Detection, SourceFormat as DetectedFormat, TransmissionFormat};
+use routing::{Detection, JsonClass, SourceFormat as DetectedFormat, TransmissionFormat};
 
 mod egret;
 mod goc3;
@@ -443,15 +443,7 @@ pub fn parse_file(path: impl AsRef<std::path::Path>, from: Option<&str>) -> Resu
                 Some("raw") => Some(TargetFormat::Psse { rev: 33 }),
                 Some("aux") => Some(TargetFormat::PowerWorld),
                 Some("json") => None,
-                Some("dss") => {
-                    return Err(Error::UnknownFormat(
-                        "\"dss\" is an OpenDSS distribution case; this parser reads only \
-                         balanced transmission formats -- use the distribution surface \
-                         (powerio_dist::parse_file, pio_dist_parse_file in C, or the \
-                         format-routed parse_file in the bindings)"
-                            .into(),
-                    ));
-                }
+                Some("dss") => return Err(unknown_source_format("dss")),
                 other => {
                     return Err(Error::UnknownFormat(format!(
                         "cannot infer from file extension {other:?}; \
@@ -534,8 +526,8 @@ pub(crate) fn reject_empty_case(net: &Network, format: &'static str) -> Result<(
 fn unknown_source_format(name: &str) -> Error {
     if let Some(dist) = routing::distribution_format_from_name(name) {
         return Error::UnknownFormat(format!(
-            "`{}` is a distribution format; this parser reads only balanced transmission \
-             formats -- use the distribution surface (powerio_dist::parse_file, \
+            "`{}` is a distribution format, and this parser reads only balanced \
+             transmission formats; use the distribution surface (powerio_dist::parse_file, \
              pio_dist_parse_file in C, or the format-routed parse_file in the bindings)",
             dist.name()
         ));
@@ -547,25 +539,26 @@ fn unknown_source_format(name: &str) -> Error {
 /// isn't always given. Classification lives here so the CLI and bindings use
 /// the same top level markers as the Rust parsers.
 fn sniff_json(text: &str) -> Result<TargetFormat> {
-    if routing::looks_like_package_envelope(text) {
-        return Err(Error::UnknownFormat(
-            "JSON is a .pio.json package envelope, not a case format; read it with the \
-             package entry points (pio_package_parse_str / read_package in the bindings)"
-                .into(),
-        ));
-    }
     match routing::classify_json_text(text) {
-        Detection::Known(DetectedFormat::Transmission(format)) => transmission_json_target(format),
-        Detection::Known(DetectedFormat::Distribution(format)) => {
+        JsonClass::Package => Err(Error::UnknownFormat(
+            "JSON is a .pio.json package envelope, not a case format; read it with the \
+             package entry points (pio_package_parse_str in C, powerio.Package.from_json \
+             in Python, read_package in Julia)"
+                .into(),
+        )),
+        JsonClass::Case(Detection::Known(DetectedFormat::Transmission(format))) => {
+            transmission_json_target(format)
+        }
+        JsonClass::Case(Detection::Known(DetectedFormat::Distribution(format))) => {
             Err(Error::UnknownFormat(format!(
                 "JSON looks like distribution `{}`; use the distribution parser or pass an explicit transmission format",
                 format.name()
             )))
         }
-        Detection::Ambiguous => Err(Error::UnknownFormat(
+        JsonClass::Case(Detection::Ambiguous) => Err(Error::UnknownFormat(
             "ambiguous JSON markers; pass an explicit source format".into(),
         )),
-        Detection::Unknown => Err(Error::UnknownFormat(
+        JsonClass::Case(Detection::Unknown) => Err(Error::UnknownFormat(
             "cannot infer JSON format; pass an explicit source format".into(),
         )),
     }

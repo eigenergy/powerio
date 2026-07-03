@@ -10,7 +10,7 @@ use std::path::{Path, PathBuf};
 
 use anyhow::Context;
 use clap::{Parser, Subcommand, ValueEnum};
-use powerio_matrix::format::routing::{Detection, SourceFormat as DetectedFormat};
+use powerio_matrix::format::routing::{Detection, JsonClass, SourceFormat as DetectedFormat};
 use powerio_matrix::io::gridfm::{GridfmOptions, numbered_snapshots, write_gridfm_batch};
 use powerio_matrix::matrix::{BuildOptions, DcConvention, Scheme, Units, sddm_check};
 use powerio_matrix::opf_pipeline::{DcOpfOptions, write_dcopf_bundle};
@@ -1208,17 +1208,23 @@ fn infer_input_family(input: &Path) -> anyhow::Result<Option<bool>> {
     let text = std::fs::read_to_string(input)
         .with_context(|| format!("reading JSON format markers from {}", input.display()))?;
     match powerio_matrix::format::routing::classify_json_text(&text) {
-        Detection::Known(DetectedFormat::Distribution(_)) => Ok(Some(true)),
-        Detection::Known(DetectedFormat::Transmission(_)) => Ok(Some(false)),
-        Detection::Ambiguous => anyhow::bail!(
+        JsonClass::Package => anyhow::bail!(
+            "{} is a .pio.json package envelope, not a case file; the `package` \
+             subcommand writes envelopes, and the bindings read them \
+             (powerio.Package.from_json in Python, read_package in Julia)",
+            input.display()
+        ),
+        JsonClass::Case(Detection::Known(DetectedFormat::Distribution(_))) => Ok(Some(true)),
+        JsonClass::Case(Detection::Known(DetectedFormat::Transmission(_))) => Ok(Some(false)),
+        JsonClass::Case(Detection::Ambiguous) => anyhow::bail!(
             "ambiguous JSON markers in {}; pass --from to choose a format",
             input.display()
         ),
-        Detection::Unknown => anyhow::bail!(
+        JsonClass::Case(Detection::Unknown) => anyhow::bail!(
             "cannot infer JSON format for {}; pass --from to choose a format",
             input.display()
         ),
-        Detection::Known(_) => anyhow::bail!(
+        JsonClass::Case(Detection::Known(_)) => anyhow::bail!(
             "unrecognized JSON format family in {}; pass --from to choose a format",
             input.display()
         ),

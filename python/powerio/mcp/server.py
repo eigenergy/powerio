@@ -275,6 +275,11 @@ def _format_from_json_class(
     where = f" in {path}" if path is not None else ""
     if status == "known" and domain is not None and format is not None:
         return domain, format
+    if status == "package":
+        raise ValueError(
+            f"JSON{where} is a .pio.json package envelope, not a case; "
+            "pass it as `json_format=\"package\"` or read it as a package"
+        )
     if status == "ambiguous":
         raise ValueError(
             f"ambiguous JSON markers{where}; pass `from_format` or `json_format`"

@@ -305,8 +305,8 @@ PioNetwork *pio_parse_str(const char *text,
  * - `unknown` (no recognized marker, or not a JSON object)
  *
  * into the caller `outbuf` (truncated to fit, always NUL-terminated) and
- * returns the total byte length of the classification string -- the
- * size-then-fill idiom of [`pio_warnings`]. Returns 0 for NULL `text`. The
+ * returns the total byte length of the classification string (the
+ * size-then-fill idiom of [`pio_warnings`]). Returns 0 for NULL `text`. The
  * markers are the same ones the transmission parser's `.json` sniffing uses,
  * so a binding can route a bare `.json` before choosing a parser.
  */
@@ -664,7 +664,7 @@ PioPackage *pio_package_from_multiconductor_network(const PioDistNetwork *net,
 #if defined(PIO_PKG)
 /**
  * Materialize the balanced payload of a package handle as an owned network
- * handle -- the inverse of [`pio_package_from_balanced_network`]. Errors when
+ * handle: the inverse of [`pio_package_from_balanced_network`]. Errors when
  * the package holds a different model kind. The handle is built from the
  * payload alone: it retains no source text, so a same-format write is a fresh
  * serialization rather than a byte-exact echo, and it carries no parse
@@ -676,12 +676,12 @@ PioNetwork *pio_package_to_balanced_network(const PioPackage *pkg, char *errbuf,
 #if (defined(PIO_PKG) && defined(PIO_DIST))
 /**
  * Materialize the multiconductor payload of a package handle as an owned
- * distribution network handle -- the inverse of
+ * distribution network handle: the inverse of
  * [`pio_package_from_multiconductor_network`]. Errors when the package holds
- * a different model kind. The handle retains no source text (`source` never
- * enters the payload), so a same-format write is a fresh serialization; the
- * payload's parse warnings ride along and stay readable via
- * [`pio_dist_warnings`]. Free with [`pio_dist_network_free`].
+ * a different model kind. The handle retains no source text, so a
+ * same-format write is a fresh serialization; the payload's parse warnings
+ * ride along and stay readable via [`pio_dist_warnings`]. Free with
+ * [`pio_dist_network_free`].
  */
 PioDistNetwork *pio_package_to_multiconductor_network(const PioPackage *pkg,
                                                       char *errbuf,
@@ -816,7 +816,7 @@ size_t pio_dist_warnings(const PioDistNetwork *net, char *warnbuf, size_t warnle
 /**
  * Serialize `net` to its model JSON: the same object a `.pio.json` package
  * carries under `model.multiconductor_network`, without the surrounding
- * document. This is the bindings' data transport, not a case format -- the
+ * document. This is the bindings' data transport, not a case format: the
  * converter, CLI, and format inference do not know it; distribution cases
  * exchanged with other tools are BMOPF JSON ([`pio_dist_to_format`]).
  * Returns an owned C string (free with [`pio_string_free`]), `NULL` on error.
@@ -828,7 +828,7 @@ char *pio_dist_to_json(const PioDistNetwork *net, char *errbuf, size_t errlen);
 /**
  * Parse model JSON produced by [`pio_dist_to_json`] (or lifted from a
  * `.pio.json` document's `model.multiconductor_network`) back into an owned
- * handle -- the inverse of [`pio_dist_to_json`]. The rebuilt handle retains
+ * handle: the inverse of [`pio_dist_to_json`]. The rebuilt handle retains
  * no source text, so a same-format write is a fresh serialization; the model
  * JSON's `warnings` ride along. Returns `NULL` on error. Free with
  * [`pio_dist_network_free`].
