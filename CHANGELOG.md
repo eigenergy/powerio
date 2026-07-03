@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.6.0
 
 - C ABI: the package payload extraction inverses land as additive symbols (no
   ABI version change; probe the symbols like the other feature surfaces):
