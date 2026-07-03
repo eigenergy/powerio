@@ -1583,8 +1583,9 @@ pub unsafe extern "C" fn pio_package_lower_multiconductor_to_balanced(
 // on the `dist` feature / `PIO_DIST` define, exactly like `arrow`/`gridfm`; a
 // runtime consumer probes it with `pio_has_feature("dist")`, then checks
 // `pio_dist_abi_version()`. The surface is EXPERIMENTAL while the IEEE BMOPF
-// schema is a draft: C signature changes bump `PIO_DIST_ABI_VERSION`, and the
-// JSON payloads (bmopf-json, powerio-dist-json) carry their own meta.version.
+// schema is a draft: C signature changes bump `PIO_DIST_ABI_VERSION`. BMOPF
+// JSON carries its own meta.version; the model JSON of `pio_dist_to_json` is
+// versioned by the pio-payload-multiconductor identifier in powerio-pkg.
 // ---------------------------------------------------------------------------
 
 /// Finish a handle-returning dist entry point: run `f` (the handle payload or an
@@ -1711,6 +1712,63 @@ pub unsafe extern "C" fn pio_dist_warnings(
             let msg = c.net.warnings.join("\n");
             copy_to_buf(warnbuf, warnlen, &msg);
             msg.len()
+        })
+    }
+}
+
+/// Serialize `net` to its model JSON: the same object a `.pio.json` package
+/// carries under `model.multiconductor_network`, without the surrounding
+/// document. This is the bindings' data transport, not a case format -- the
+/// converter, CLI, and format inference do not know it; distribution cases
+/// exchanged with other tools are BMOPF JSON ([`pio_dist_to_format`]).
+/// Returns an owned C string (free with [`pio_string_free`]), `NULL` on error.
+#[cfg(feature = "dist")]
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn pio_dist_to_json(
+    net: *const PioDistNetwork,
+    errbuf: *mut c_char,
+    errlen: usize,
+) -> *mut c_char {
+    unsafe {
+        let result = catch_unwind(AssertUnwindSafe(|| {
+            let net = net
+                .as_ref()
+                .ok_or_else(|| "distribution network handle is NULL".to_string())?;
+            serde_json::to_string(&net.net).map_err(|e| e.to_string())
+        }));
+        match result {
+            Ok(Ok(text)) => finish_cstring(text, errbuf, errlen),
+            Ok(Err(msg)) => {
+                copy_to_buf(errbuf, errlen, &msg);
+                std::ptr::null_mut()
+            }
+            Err(_) => {
+                copy_to_buf(errbuf, errlen, "panic while serializing model JSON");
+                std::ptr::null_mut()
+            }
+        }
+    }
+}
+
+/// Parse model JSON produced by [`pio_dist_to_json`] (or lifted from a
+/// `.pio.json` document's `model.multiconductor_network`) back into an owned
+/// handle -- the inverse of [`pio_dist_to_json`]. The rebuilt handle retains
+/// no source text, so a same-format write is a fresh serialization; the model
+/// JSON's `warnings` ride along. Returns `NULL` on error. Free with
+/// [`pio_dist_network_free`].
+#[cfg(feature = "dist")]
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn pio_dist_from_json(
+    text: *const c_char,
+    errbuf: *mut c_char,
+    errlen: usize,
+) -> *mut PioDistNetwork {
+    unsafe {
+        finish_handle(errbuf, errlen, "panic while parsing model JSON", || {
+            let text = required_cstr(text, "text")?;
+            serde_json::from_str::<powerio_dist::DistNetwork>(text)
+                .map(|net| PioDistNetwork { net })
+                .map_err(|e| format!("model JSON: {e}"))
         })
     }
 }
@@ -2134,6 +2192,8 @@ mod tests {
             "PioDistNetwork *pio_dist_parse_str(const char *text, const char *format, char *errbuf, size_t errlen);",
             "void pio_dist_network_free(PioDistNetwork *net);",
             "size_t pio_dist_warnings(const PioDistNetwork *net, char *warnbuf, size_t warnlen);",
+            "char *pio_dist_to_json(const PioDistNetwork *net, char *errbuf, size_t errlen);",
+            "PioDistNetwork *pio_dist_from_json(const char *text, char *errbuf, size_t errlen);",
             "char *pio_dist_to_format(const PioDistNetwork *net, const char *to, char *warnbuf, size_t warnlen, char *errbuf, size_t errlen);",
             "char *pio_dist_convert_file(const char *path, const char *from, const char *to, char *warnbuf, size_t warnlen, char *errbuf, size_t errlen);",
             "char *pio_dist_convert_str(const char *text, const char *from, const char *to, char *warnbuf, size_t warnlen, char *errbuf, size_t errlen);",
@@ -3584,6 +3644,74 @@ mpc.branch = [
                 pio_package_free(pkg);
                 pio_network_free(back);
                 pio_network_free(net);
+            }
+        }
+
+        #[cfg(feature = "dist")]
+        #[test]
+        fn dist_model_json_round_trip_matches_package_field() {
+            let path = CString::new(
+                std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                    .join("../tests/data/dist/micro/fourwire_linecode.dss")
+                    .to_str()
+                    .unwrap(),
+            )
+            .unwrap();
+            let mut err = [0 as c_char; PIO_ERRBUF_MIN];
+            let net = unsafe {
+                pio_dist_parse_file(path.as_ptr(), std::ptr::null(), err.as_mut_ptr(), err.len())
+            };
+            assert!(!net.is_null());
+
+            // One call out, one call back: bmopf output survives unchanged.
+            let json = unsafe { pio_dist_to_json(net, err.as_mut_ptr(), err.len()) };
+            assert!(!json.is_null());
+            let text = unsafe { CStr::from_ptr(json) }.to_str().unwrap().to_owned();
+            unsafe { pio_string_free(json) };
+            let c = CString::new(text.clone()).unwrap();
+            let back = unsafe { pio_dist_from_json(c.as_ptr(), err.as_mut_ptr(), err.len()) };
+            assert!(!back.is_null());
+
+            unsafe fn bmopf(net: *const PioDistNetwork) -> String {
+                let to = CString::new("bmopf").unwrap();
+                let mut warn = [0 as c_char; 4096];
+                let mut err = [0 as c_char; PIO_ERRBUF_MIN];
+                let s = unsafe {
+                    pio_dist_to_format(
+                        net,
+                        to.as_ptr(),
+                        warn.as_mut_ptr(),
+                        warn.len(),
+                        err.as_mut_ptr(),
+                        err.len(),
+                    )
+                };
+                assert!(!s.is_null());
+                let text = unsafe { CStr::from_ptr(s) }.to_str().unwrap().to_owned();
+                unsafe { pio_string_free(s) };
+                text
+            }
+            unsafe { assert_eq!(bmopf(back), bmopf(net)) };
+
+            // The model JSON is the same object the .pio.json document carries
+            // under model.multiconductor_network.
+            let pkg = unsafe {
+                pio_package_from_multiconductor_network(net, err.as_mut_ptr(), err.len())
+            };
+            assert!(!pkg.is_null());
+            let pkg_json = unsafe { pio_package_to_json(pkg, err.as_mut_ptr(), err.len()) };
+            assert!(!pkg_json.is_null());
+            let doc: serde_json::Value =
+                serde_json::from_str(unsafe { CStr::from_ptr(pkg_json) }.to_str().unwrap())
+                    .unwrap();
+            let direct: serde_json::Value = serde_json::from_str(&text).unwrap();
+            assert_eq!(doc["model"]["multiconductor_network"], direct);
+
+            unsafe {
+                pio_string_free(pkg_json);
+                pio_package_free(pkg);
+                pio_dist_network_free(back);
+                pio_dist_network_free(net);
             }
         }
 

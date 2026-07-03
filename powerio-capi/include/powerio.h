@@ -814,6 +814,30 @@ size_t pio_dist_warnings(const PioDistNetwork *net, char *warnbuf, size_t warnle
 
 #if defined(PIO_DIST)
 /**
+ * Serialize `net` to its model JSON: the same object a `.pio.json` package
+ * carries under `model.multiconductor_network`, without the surrounding
+ * document. This is the bindings' data transport, not a case format -- the
+ * converter, CLI, and format inference do not know it; distribution cases
+ * exchanged with other tools are BMOPF JSON ([`pio_dist_to_format`]).
+ * Returns an owned C string (free with [`pio_string_free`]), `NULL` on error.
+ */
+char *pio_dist_to_json(const PioDistNetwork *net, char *errbuf, size_t errlen);
+#endif
+
+#if defined(PIO_DIST)
+/**
+ * Parse model JSON produced by [`pio_dist_to_json`] (or lifted from a
+ * `.pio.json` document's `model.multiconductor_network`) back into an owned
+ * handle -- the inverse of [`pio_dist_to_json`]. The rebuilt handle retains
+ * no source text, so a same-format write is a fresh serialization; the model
+ * JSON's `warnings` ride along. Returns `NULL` on error. Free with
+ * [`pio_dist_network_free`].
+ */
+PioDistNetwork *pio_dist_from_json(const char *text, char *errbuf, size_t errlen);
+#endif
+
+#if defined(PIO_DIST)
+/**
  * Serialize `net` to distribution format `to` (`dss`, `pmd`, or `bmopf`).
  * Writing back to the format the handle was parsed from echoes the source text
  * byte for byte; a cross-format write reports every fidelity loss in `warnbuf`

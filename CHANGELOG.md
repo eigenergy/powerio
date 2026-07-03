@@ -10,6 +10,13 @@
   payload retains no source text, so a same-format write is a fresh
   serialization rather than a byte-exact echo; the multiconductor payload's
   parse warnings ride along.
+- C ABI: `pio_dist_to_json` / `pio_dist_from_json` serialize a distribution
+  handle to its model JSON and back in one call each -- the same object a
+  `.pio.json` document carries under `model.multiconductor_network`, without
+  the surrounding document. Bindings materialize element tables with this
+  instead of building a throwaway package; it is not a case format (the
+  converter, CLI, and inference do not know it), so BMOPF JSON remains the
+  distribution JSON exchanged with other tools.
 - C ABI: `pio_classify_str` classifies in-memory JSON by the same top level
   markers the transmission parser's `.json` sniffing uses, and recognizes
   `.pio.json` envelopes: `transmission:<format>`, `distribution:<format>`,
