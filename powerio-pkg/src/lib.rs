@@ -46,6 +46,7 @@ pub mod model;
 pub mod operating;
 pub mod package;
 pub mod provenance;
+pub mod study;
 pub mod summary;
 pub mod validation;
 
@@ -63,9 +64,11 @@ pub use package::{
     NormalizedSolverTableSourceRows, PIO_PACKAGE_SCHEMA_URL, PIO_PACKAGE_SCHEMA_VERSION,
     PIO_PAYLOAD_BALANCED_SCHEMA_URL, PIO_PAYLOAD_BALANCED_SCHEMA_VERSION,
     PIO_PAYLOAD_MULTICONDUCTOR_SCHEMA_URL, PIO_PAYLOAD_MULTICONDUCTOR_SCHEMA_VERSION,
+    READ_GRIDFM_FIDELITY_WARNING, READ_TRANSMISSION_PARSE_WARNING, ensure_payload_uids,
 };
 pub use provenance::{
     Confidence, MappingKind, Origin, Producer, SourceDescriptor, SourceMapEntry, SourceRef,
 };
+pub use study::{StudyBlock, StudyCommit, StudyEdit};
 pub use summary::{ObjectSummary, ObjectTopology, ObjectUnits};
 pub use validation::{ValidationCounts, ValidationPass, ValidationStatus, ValidationSummary};

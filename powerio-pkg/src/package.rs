@@ -24,6 +24,7 @@ use crate::operating::{
 use crate::provenance::{
     Confidence, MappingKind, Origin, Producer, SourceDescriptor, SourceMapEntry, SourceRef,
 };
+use crate::study::{StudyBlock, apply_study_to_model, check_study_identities};
 use crate::summary::{ObjectSummary, ObjectTopology, ObjectUnits};
 use crate::validation::{ValidationPass, ValidationStatus, ValidationSummary};
 
@@ -57,6 +58,9 @@ pub const PIO_PAYLOAD_MULTICONDUCTOR_SCHEMA_URL: &str =
 /// The multiconductor payload schema version (semver); the same policy as
 /// [`PIO_PAYLOAD_BALANCED_SCHEMA_VERSION`].
 pub const PIO_PAYLOAD_MULTICONDUCTOR_SCHEMA_VERSION: &str = "1.0.0";
+
+pub const READ_TRANSMISSION_PARSE_WARNING: &str = "READ.TRANSMISSION.PARSE_WARNING";
+pub const READ_GRIDFM_FIDELITY_WARNING: &str = "READ.GRIDFM.FIDELITY_WARNING";
 
 fn default_schema_url() -> String {
     PIO_PACKAGE_SCHEMA_URL.to_owned()
@@ -223,6 +227,9 @@ pub struct NetworkPackage {
     /// constructors and setters omit empty series for static single state cases.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub operating_points: Option<OperatingPointSeries>,
+    /// Cumulative interactive edits over the package payload.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub study: Option<StudyBlock>,
     pub origin: Origin,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub sources: Vec<SourceDescriptor>,
@@ -246,7 +253,7 @@ impl NetworkPackage {
     /// GOC3 sources also lift their time series into `operating_points`.
     pub fn from_balanced(net: BalancedNetwork) -> Self {
         let mut net = net;
-        ensure_balanced_payload_uids(&mut net);
+        ensure_payload_uids(&mut net);
         let origin = balanced_origin(&net);
         let summary = balanced_summary(&net);
         let sources = balanced_sources(&net);
@@ -290,6 +297,7 @@ impl NetworkPackage {
             payload_schema_version: Some(payload_schema_version.to_owned()),
             model: ModelPayload::balanced(net),
             operating_points,
+            study: None,
             origin,
             sources,
             source_maps,
@@ -299,6 +307,56 @@ impl NetworkPackage {
             lowering_history: Vec::new(),
             derived: DerivedMetadata::default(),
         }
+    }
+
+    /// Wrap the result of a balanced case reader and lift its warnings into
+    /// package diagnostics.
+    pub fn from_parsed_balanced(parsed: powerio::Parsed) -> Self {
+        Self::from_balanced_with_read_warnings(
+            parsed.network,
+            READ_TRANSMISSION_PARSE_WARNING,
+            parsed.warnings,
+        )
+    }
+
+    /// Wrap a balanced network and lift reader warnings into structured
+    /// diagnostics under `code`.
+    pub fn from_balanced_with_read_warnings<I, S>(
+        net: BalancedNetwork,
+        code: &str,
+        warnings: I,
+    ) -> Self
+    where
+        I: IntoIterator<Item = S>,
+        S: Into<String>,
+    {
+        let mut package = Self::from_balanced(net);
+        package.record_read_warnings(code, warnings);
+        package
+    }
+
+    /// Append reader warnings to package diagnostics.
+    pub fn record_read_warnings<I, S>(&mut self, code: &str, warnings: I)
+    where
+        I: IntoIterator<Item = S>,
+        S: Into<String>,
+    {
+        let diagnostics: Vec<StructuredDiagnostic> = warnings
+            .into_iter()
+            .map(|w| {
+                StructuredDiagnostic::new(
+                    code,
+                    DiagnosticSeverity::Warning,
+                    DiagnosticStage::Read,
+                    w.into(),
+                )
+            })
+            .collect();
+        if diagnostics.is_empty() {
+            return;
+        }
+        self.diagnostics.extend(diagnostics);
+        self.validation = ValidationSummary::from_diagnostics(&self.diagnostics);
     }
 
     /// Wrap a multiconductor network. Parse `warnings` are lifted into structured
@@ -339,6 +397,7 @@ impl NetworkPackage {
             payload_schema_version: Some(payload_schema_version.to_owned()),
             model: ModelPayload::multiconductor(net),
             operating_points: None,
+            study: None,
             origin,
             sources,
             source_maps,
@@ -394,6 +453,29 @@ impl NetworkPackage {
         self.operating_points = None;
     }
 
+    /// Cumulative study edits over the static payload, when present.
+    #[must_use]
+    pub fn study(&self) -> Option<&StudyBlock> {
+        self.study.as_ref()
+    }
+
+    /// Attach a study block to this package. Empty blocks are omitted.
+    #[must_use]
+    pub fn with_study(mut self, study: StudyBlock) -> Self {
+        self.set_study(study);
+        self
+    }
+
+    /// Attach or replace the study block in place. Empty blocks are omitted.
+    pub fn set_study(&mut self, study: StudyBlock) {
+        self.study = (!study.is_empty()).then_some(study);
+    }
+
+    /// Remove the study block from this package.
+    pub fn clear_study(&mut self) {
+        self.study = None;
+    }
+
     /// Materialize one operating point into a static package.
     ///
     /// The returned package has the same metadata and model kind, with its
@@ -434,6 +516,7 @@ impl NetworkPackage {
             payload_schema_version: self.payload_schema_version.clone(),
             model: updated_model,
             operating_points: None,
+            study: None,
             origin: Origin::Derived {
                 parent_package_id: self.package_id.clone(),
                 pass: "materialize-operating-point".to_owned(),
@@ -509,6 +592,98 @@ impl NetworkPackage {
             .materialize_operating_point(index)?
             .model
             .as_multiconductor()
+            .cloned())
+    }
+
+    /// Materialize a study commit into a static package.
+    ///
+    /// The returned package folds commits `0..=commit_index`, clears
+    /// `operating_points` and `study`, and records the replay pass in
+    /// `lowering_history`.
+    pub fn materialize_study_commit(&self, commit_index: usize) -> serde_json::Result<Self> {
+        let study = self.study.as_ref().ok_or_else(|| {
+            <serde_json::Error as serde::de::Error>::custom("package has no study block")
+        })?;
+        let base = if let Some(index) = study.base_operating_point {
+            self.materialize_operating_point(index)?
+        } else {
+            self.clone()
+        };
+        let (updated_model, updated_paths) =
+            apply_study_to_model(&base.model, study, commit_index)?;
+        let had_normalized_solver_tables = base.derived.normalized_solver_tables.is_some();
+        let options = materialize_study_commit_options(study, commit_index);
+
+        let mut package = Self {
+            schema: base.schema.clone(),
+            schema_version: base.schema_version.clone(),
+            producer: base.producer.clone(),
+            package_id: None,
+            created_at: base.created_at.clone(),
+            model_kind: base.model_kind,
+            payload_schema: base.payload_schema.clone(),
+            payload_schema_version: base.payload_schema_version.clone(),
+            model: updated_model,
+            operating_points: None,
+            study: None,
+            origin: Origin::Derived {
+                parent_package_id: self.package_id.clone(),
+                pass: "materialize-study-commit".to_owned(),
+                options: options.clone(),
+            },
+            sources: base.sources.clone(),
+            source_maps: base
+                .source_maps
+                .iter()
+                .filter(|entry| !updated_paths.contains(entry.element_path.as_str()))
+                .cloned()
+                .collect(),
+            diagnostics: base
+                .diagnostics
+                .iter()
+                .filter(|diagnostic| {
+                    diagnostic
+                        .element_path
+                        .as_deref()
+                        .is_none_or(|path| !updated_paths.contains(path))
+                })
+                .cloned()
+                .collect(),
+            validation: base.validation.clone(),
+            summary: base.summary.clone(),
+            lowering_history: base.lowering_history.clone(),
+            derived: DerivedMetadata::default(),
+        };
+        let mut record =
+            LoweringRecord::new("materialize-study-commit", base.model_kind, base.model_kind);
+        record.options = options;
+        record
+            .assumptions
+            .push(format!("applied study commits 0..={commit_index}"));
+        package.run_sane_validation();
+        record.validation_status = package.validation.status;
+        package.push_lowering(record);
+        if had_normalized_solver_tables {
+            package
+                .attach_normalized_solver_table_metadata()
+                .map_err(|err| {
+                    <serde_json::Error as serde::de::Error>::custom(format!(
+                        "failed to recompute normalized solver table metadata: {err}"
+                    ))
+                })?;
+        }
+        Ok(package)
+    }
+
+    /// Materialize a study commit and return the balanced payload.
+    pub fn materialize_balanced_study_commit(
+        &self,
+        commit_index: usize,
+    ) -> serde_json::Result<Option<BalancedNetwork>> {
+        Ok(self
+            .materialize_study_commit(commit_index)?
+            .model
+            .as_balanced()
             .cloned())
     }
 
@@ -701,6 +876,11 @@ impl NetworkPackage {
             diagnostics.extend(identity_diagnostics);
             passes.push(identity_pass);
         }
+        if let Some(study) = &self.study {
+            let (study_diagnostics, study_pass) = validate_study(&self.model, study);
+            diagnostics.extend(study_diagnostics);
+            passes.push(study_pass);
+        }
 
         attach_source_refs(&mut diagnostics, &self.source_maps);
         self.diagnostics.extend(diagnostics);
@@ -712,6 +892,18 @@ impl NetworkPackage {
 fn materialize_operating_point_options(index: usize) -> serde_json::Map<String, serde_json::Value> {
     let mut options = serde_json::Map::new();
     options.insert("index".to_owned(), serde_json::json!(index));
+    options
+}
+
+fn materialize_study_commit_options(
+    study: &StudyBlock,
+    commit_index: usize,
+) -> serde_json::Map<String, serde_json::Value> {
+    let mut options = serde_json::Map::new();
+    options.insert("commit_index".to_owned(), serde_json::json!(commit_index));
+    if let Some(index) = study.base_operating_point {
+        options.insert("base_operating_point".to_owned(), serde_json::json!(index));
+    }
     options
 }
 
@@ -777,7 +969,7 @@ fn supported_payload_schema_major(kind: ModelKind) -> u64 {
 /// updates can resolve against any powerio built package. Synthesized values
 /// record the row an element had at package build; they stay put if rows
 /// reorder later, which is the point.
-fn ensure_balanced_payload_uids(net: &mut BalancedNetwork) {
+pub fn ensure_payload_uids(net: &mut BalancedNetwork) {
     macro_rules! fill {
         ($table:ident) => {
             for (row, element) in net.$table.iter_mut().enumerate() {
@@ -798,7 +990,7 @@ fn ensure_balanced_payload_uids(net: &mut BalancedNetwork) {
     fill!(transformers_3w);
 }
 
-const SANE_VALIDATION_CODES: [&str; 7] = [
+const SANE_VALIDATION_CODES: [&str; 9] = [
     "VALIDATE.BALANCED.STRUCTURE",
     "VALIDATE.BALANCED.VALUE_DOMAIN",
     "VALIDATE.MULTI.STRUCTURE",
@@ -806,6 +998,8 @@ const SANE_VALIDATION_CODES: [&str; 7] = [
     "VALIDATE.MULTI.UNTYPED_OBJECT",
     "VALIDATE.MULTI.NO_VOLTAGE_SOURCE",
     "VALIDATE.PACKAGE.OPERATING_IDENTITY",
+    "VALIDATE.PACKAGE.STUDY_MODEL_KIND",
+    "VALIDATE.PACKAGE.STUDY_IDENTITY",
 ];
 
 /// Check every operating point update against the payload's identity index:
@@ -835,6 +1029,45 @@ fn validate_operating_identity(
     (
         diagnostics,
         ValidationPass::new("package.operating_identity", status),
+    )
+}
+
+fn validate_study(
+    model: &ModelPayload,
+    study: &StudyBlock,
+) -> (Vec<StructuredDiagnostic>, ValidationPass) {
+    if !matches!(model, ModelPayload::Balanced { .. }) {
+        let diagnostics = vec![
+            StructuredDiagnostic::new(
+                "VALIDATE.PACKAGE.STUDY_MODEL_KIND",
+                DiagnosticSeverity::Error,
+                DiagnosticStage::Validate,
+                "study blocks are only defined for balanced packages",
+            )
+            .with_element_path("/study"),
+        ];
+        return (
+            diagnostics,
+            ValidationPass::new("package.study", ValidationStatus::Error),
+        );
+    }
+
+    let diagnostics: Vec<StructuredDiagnostic> = check_study_identities(model, study)
+        .into_iter()
+        .map(|(commit_pos, edit_pos, message)| {
+            StructuredDiagnostic::new(
+                "VALIDATE.PACKAGE.STUDY_IDENTITY",
+                DiagnosticSeverity::Error,
+                DiagnosticStage::Validate,
+                message,
+            )
+            .with_element_path(format!("/study/commits/{commit_pos}/edits/{edit_pos}"))
+        })
+        .collect();
+    let status = validation_status(&diagnostics);
+    (
+        diagnostics,
+        ValidationPass::new("package.study_identity", status),
     )
 }
 
