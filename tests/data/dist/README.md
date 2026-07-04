@@ -54,11 +54,12 @@ constructor defaults (`defaults_degenerate`), and a ten conductor linecode
 with double digit matrix indices (`linecode_10x10`), plus a four wire feeder
 whose neutral is grounded through an explicit reactor
 (`neutral_grounding_reactor`) and two single phase load model cases
-(`onephase_cvr_load`, `onephase_zip_load`). All thirteen solve in OpenDSS
-(opendssdirect 0.9.4). `benchmarks/validate_opendss.py` compares the twelve
-solve fidelity fixtures against their canonical regenerated decks; it excludes
-`defaults_degenerate` because that fixture intentionally relies on constructor
-defaults, including omitted load voltage bounds.
+(`onephase_cvr_load`, `onephase_zip_load`), plus one inverter based resource
+case with `PVSystem` and `InvControl` (`ibr_pv_control`). All fourteen solve in
+OpenDSS (opendssdirect 0.9.4). `benchmarks/validate_opendss.py` compares the
+thirteen solve fidelity fixtures against their canonical regenerated decks; it
+excludes `defaults_degenerate` because that fixture intentionally relies on
+constructor defaults, including omitted load voltage bounds.
 
 ## pmd/
 

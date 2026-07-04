@@ -12,7 +12,9 @@ use serde_json::{Map, Value, json};
 
 use crate::convert::Conversion;
 use crate::model::{
-    Configuration, DistGenerator, DistLoadVoltageModel, DistNetwork, DistTransformer, Mat, Winding,
+    ActivePowerReference, ActivePowerUnit, Configuration, ControlVoltageReference,
+    DistControlProfile, DistGenerator, DistIbr, DistLoadVoltageModel, DistNetwork, DistTransformer,
+    Mat, ReactivePowerReference, ReactivePowerUnit, VoltVarControl, VoltWattControl, Winding,
     WindingConn, n_winding_impedance_base, pair_keys,
 };
 
@@ -29,6 +31,26 @@ const RAW_BMOPF_TOP_LEVEL: &[&str] = &[
     "dc_line",
     "dc_load",
     "dc_source",
+];
+
+const IBR_EXTRA_FIELDS: &[&str] = &[
+    "dc_link_coupled",
+    "p_dc_min",
+    "p_dc_max",
+    "dc_bus",
+    "dc_terminal_map",
+    "dc_control",
+    "dc_v_set",
+    "dc_p_ref",
+    "dc_droop",
+    "dc_deadband",
+    "r_filter",
+    "x_filter",
+    "b_filter_shunt",
+    "grid_forming",
+    "v_ref_internal",
+    "cost",
+    "time_series",
 ];
 
 const TRANSFORMER_NO_LOAD_ALLOWED_EXTRAS: [&str; 4] =
@@ -198,6 +220,8 @@ impl Writer {
 
         self.branches(net, &mut doc);
         self.injections(net, &mut doc);
+        self.control_profiles(net, &mut doc);
+        self.ibrs(net, &mut doc);
 
         let transformers = self.transformers(net);
         if !transformers.is_empty() {
@@ -417,6 +441,155 @@ impl Writer {
             sources.insert(vs.name.clone(), Value::Object(o));
         }
         doc.insert("voltage_source".into(), Value::Object(sources));
+    }
+
+    fn control_profiles(&mut self, net: &DistNetwork, doc: &mut Map<String, Value>) {
+        if net.control_profiles.is_empty() {
+            return;
+        }
+        let mut profiles = Map::new();
+        for profile in &net.control_profiles {
+            profiles.insert(profile.name.clone(), self.control_profile(profile));
+        }
+        doc.insert("control_profile".into(), Value::Object(profiles));
+    }
+
+    fn control_profile(&mut self, profile: &DistControlProfile) -> Value {
+        let mut o = Map::new();
+        if let Some(pf) = &profile.power_factor {
+            o.insert(
+                "power_factor".into(),
+                json!({ "pf": self.num(pf.pf, "power factor") }),
+            );
+        }
+        if let Some(vv) = &profile.volt_var {
+            o.insert("volt_var".into(), self.volt_var(vv));
+        }
+        if let Some(vw) = &profile.volt_watt {
+            o.insert("volt_watt".into(), self.volt_watt(vw));
+        }
+        for (key, value) in &profile.extras {
+            if value.is_object() {
+                o.insert(key.clone(), value.clone());
+            } else {
+                self.warn(format!(
+                    "control_profile {}: extra `{key}` is not an object; dropped from the output",
+                    profile.name
+                ));
+            }
+        }
+        Value::Object(o)
+    }
+
+    fn volt_var(&mut self, vv: &VoltVarControl) -> Value {
+        let mut o = Map::new();
+        if let Some(v) = vv.voltage_reference {
+            o.insert("voltage_reference".into(), json_enum(v));
+        }
+        o.insert(
+            "breakpoints".into(),
+            self.nums(&vv.breakpoints, "volt_var breakpoints"),
+        );
+        o.insert(
+            "q_limits".into(),
+            self.nums(&vv.q_limits, "volt_var q_limits"),
+        );
+        if let Some(v) = vv.q_unit {
+            o.insert("q_unit".into(), json_enum::<ReactivePowerUnit>(v));
+        }
+        if let Some(v) = vv.q_ref {
+            o.insert("q_ref".into(), json_enum::<ReactivePowerReference>(v));
+        }
+        if let Some(v) = vv.p_min_for_q {
+            o.insert("p_min_for_q".into(), self.num(v, "volt_var p_min_for_q"));
+        }
+        if let Some(v) = vv.p_min_for_q_max {
+            o.insert(
+                "p_min_for_q_max".into(),
+                self.num(v, "volt_var p_min_for_q_max"),
+            );
+        }
+        Value::Object(o)
+    }
+
+    fn volt_watt(&mut self, vw: &VoltWattControl) -> Value {
+        let mut o = Map::new();
+        if let Some(v) = vw.voltage_reference {
+            o.insert(
+                "voltage_reference".into(),
+                json_enum::<ControlVoltageReference>(v),
+            );
+        }
+        o.insert(
+            "breakpoints".into(),
+            self.nums(&vw.breakpoints, "volt_watt breakpoints"),
+        );
+        o.insert(
+            "p_limits".into(),
+            self.nums(&vw.p_limits, "volt_watt p_limits"),
+        );
+        if let Some(v) = vw.p_unit {
+            o.insert("p_unit".into(), json_enum::<ActivePowerUnit>(v));
+        }
+        if let Some(v) = vw.p_ref {
+            o.insert("p_ref".into(), json_enum::<ActivePowerReference>(v));
+        }
+        Value::Object(o)
+    }
+
+    fn ibrs(&mut self, net: &DistNetwork, doc: &mut Map<String, Value>) {
+        if net.ibrs.is_empty() {
+            return;
+        }
+        let mut ibrs = Map::new();
+        for ibr in &net.ibrs {
+            ibrs.insert(ibr.name.clone(), self.ibr(ibr));
+        }
+        doc.insert("ibr".into(), Value::Object(ibrs));
+    }
+
+    fn ibr(&mut self, ibr: &DistIbr) -> Value {
+        let mut o = Map::new();
+        o.insert("bus".into(), json!(ibr.bus));
+        o.insert("terminal_map".into(), json!(ibr.terminal_map));
+        o.insert("topology".into(), json_enum(ibr.topology));
+        o.insert("prime_mover".into(), json_enum(ibr.prime_mover));
+        o.insert("s_max".into(), self.nums(&ibr.s_max, "ibr s_max"));
+        if let Some(v) = &ibr.i_max {
+            o.insert("i_max".into(), self.nums(v, "ibr i_max"));
+        }
+        if let Some(v) = ibr.p_avail {
+            o.insert("p_avail".into(), self.num(v, "ibr p_avail"));
+        }
+        if let Some(v) = &ibr.p_min {
+            o.insert("p_min".into(), self.nums(v, "ibr p_min"));
+        }
+        if let Some(v) = &ibr.p_max {
+            o.insert("p_max".into(), self.nums(v, "ibr p_max"));
+        }
+        if let Some(v) = &ibr.q_min {
+            o.insert("q_min".into(), self.nums(v, "ibr q_min"));
+        }
+        if let Some(v) = &ibr.q_max {
+            o.insert("q_max".into(), self.nums(v, "ibr q_max"));
+        }
+        if let Some(v) = &ibr.control_profile {
+            o.insert("control_profile".into(), json!(v));
+        }
+        if let Some(v) = ibr.voltage_aggregation {
+            o.insert("voltage_aggregation".into(), json_enum(v));
+        }
+        for (key, value) in &ibr.extras {
+            if IBR_EXTRA_FIELDS.contains(&key.as_str()) {
+                o.insert(key.clone(), value.clone());
+            } else {
+                self.warn(format!(
+                    "ibr {}: extra `{key}` has no place in the BMOPF schema; dropped from the output",
+                    ibr.name
+                ));
+            }
+        }
+        Value::Object(o)
     }
 
     fn load_voltage_model(
@@ -1311,6 +1484,10 @@ fn config_str(c: Configuration) -> &'static str {
         Configuration::Delta => "DELTA",
         Configuration::SinglePhase => "SINGLE_PHASE",
     }
+}
+
+fn json_enum<T: serde::Serialize>(value: T) -> Value {
+    serde_json::to_value(value).expect("enum serializes to a string")
 }
 
 #[cfg(test)]

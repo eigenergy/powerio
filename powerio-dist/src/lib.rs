@@ -61,8 +61,11 @@ pub use dss::{
 };
 pub use error::{Error, Result};
 pub use model::{
-    Configuration, DistBus, DistGenerator, DistLine, DistLineCode, DistLoad, DistLoadVoltageModel,
-    DistNetwork, DistShunt, DistSourceFormat, DistSwitch, DistTransformer, Extras, Mat,
-    MulticonductorNetwork, UntypedObject, VoltageSource, Winding, WindingConn,
+    ActivePowerReference, ActivePowerUnit, Configuration, ControlVoltageReference, DistBus,
+    DistControlProfile, DistGenerator, DistIbr, DistLine, DistLineCode, DistLoad,
+    DistLoadVoltageModel, DistNetwork, DistShunt, DistSourceFormat, DistSwitch, DistTransformer,
+    Extras, IbrPrimeMover, IbrTopology, IbrVoltageAggregation, Mat, MulticonductorNetwork,
+    PowerFactorControl, ReactivePowerReference, ReactivePowerUnit, UntypedObject, VoltVarControl,
+    VoltWattControl, VoltageSource, Winding, WindingConn,
 };
 pub use pmd::{parse_pmd_file, parse_pmd_str, write_pmd_json};

@@ -17,7 +17,10 @@ use std::fmt::Write as _;
 
 use crate::convert::Conversion;
 use crate::model::{
-    Configuration, DistBus, DistLoadVoltageModel, DistNetwork, Extras, Mat, Winding, WindingConn,
+    ActivePowerReference, Configuration, ControlVoltageReference, DistBus, DistControlProfile,
+    DistIbr, DistLoadVoltageModel, DistNetwork, Extras, IbrPrimeMover, IbrTopology,
+    IbrVoltageAggregation, Mat, ReactivePowerReference, VoltVarControl, VoltWattControl, Winding,
+    WindingConn,
 };
 
 use super::read::delta_edges;
@@ -600,6 +603,7 @@ impl DssWriter {
         self.loads(net);
         self.shunts(net);
         self.generators(net);
+        self.ibrs(net);
 
         for u in &net.untyped {
             self.warn(format!(
@@ -1400,6 +1404,373 @@ impl DssWriter {
             self.line_out(&s);
         }
     }
+
+    fn ibrs(&mut self, net: &DistNetwork) {
+        for ibr in &net.ibrs {
+            self.check_name("pvsystem", &ibr.name);
+            if ibr_is_fixed_dispatch(ibr) {
+                self.write_fixed_ibr_generator(ibr);
+            } else {
+                self.write_pvsystem(ibr, net);
+            }
+        }
+        for ibr in &net.ibrs {
+            if !ibr_is_fixed_dispatch(ibr) {
+                self.write_ibr_controls(ibr, net);
+            }
+        }
+        if !net.ibrs.is_empty() {
+            self.out.push('\n');
+        }
+    }
+
+    fn write_fixed_ibr_generator(&mut self, ibr: &DistIbr) {
+        let phases = ibr_phases(ibr);
+        let configuration = ibr_configuration(ibr);
+        let conn = self.element_conn(&ibr.extras, configuration, &ibr.bus, &ibr.terminal_map);
+        let kv = self.ibr_kv(ibr, phases, configuration, "generator");
+        let kw = ibr
+            .p_min
+            .as_ref()
+            .map_or(0.0, |p| p.iter().sum::<f64>() / 1e3);
+        let kvar = ibr
+            .q_min
+            .as_ref()
+            .map_or(0.0, |q| q.iter().sum::<f64>() / 1e3);
+        let mut line = format!(
+            "New Generator.{} bus1={} phases={phases} conn={conn} kv={} kw={} kvar={} model=1 vminpu=0 vmaxpu=2",
+            ibr.name,
+            self.bus_ref(&ibr.bus, &ibr.terminal_map),
+            num(kv),
+            num(kw),
+            num(kvar),
+        );
+        if let Some(q) = &ibr.q_max {
+            let _ = write!(line, " maxkvar={}", num(q.iter().sum::<f64>() / 1e3));
+        }
+        if let Some(q) = &ibr.q_min {
+            let _ = write!(line, " minkvar={}", num(q.iter().sum::<f64>() / 1e3));
+        }
+        self.warn_ibr_dss_drops(ibr);
+        self.line_out(&line);
+    }
+
+    fn write_pvsystem(&mut self, ibr: &DistIbr, net: &DistNetwork) {
+        let phases = ibr_phases(ibr);
+        let configuration = ibr_configuration(ibr);
+        let conn = self.element_conn(&ibr.extras, configuration, &ibr.bus, &ibr.terminal_map);
+        let kv = self.ibr_kv(ibr, phases, configuration, "pvsystem");
+        let kva = ibr.s_max.iter().sum::<f64>() / 1e3;
+        let pmpp = ibr
+            .p_avail
+            .or_else(|| ibr.p_max.as_ref().map(|p| p.iter().sum()))
+            .unwrap_or(0.0)
+            / 1e3;
+        let mut line = format!(
+            "New PVSystem.{} bus1={} phases={phases} conn={conn} kv={} kVA={} Pmpp={} irradiance=1 %Pmpp=100 WattPriority=No VarFollowInverter=Yes",
+            ibr.name,
+            self.bus_ref(&ibr.bus, &ibr.terminal_map),
+            num(kv),
+            num(kva),
+            num(pmpp),
+        );
+        if let Some(q) = &ibr.q_max {
+            let _ = write!(line, " kvarMax={}", num(q.iter().sum::<f64>() / 1e3));
+        }
+        if let Some(q) = &ibr.q_min {
+            let _ = write!(
+                line,
+                " kvarMaxAbs={}",
+                num(q.iter().map(|v| v.abs()).sum::<f64>() / 1e3)
+            );
+        }
+        if let Some(profile) = ibr_profile(ibr, net) {
+            if let Some(pf) = &profile.power_factor {
+                let _ = write!(line, " pf={}", num(pf.pf));
+            }
+            if let Some(vv) = &profile.volt_var {
+                if let Some(v) = vv.p_min_for_q {
+                    let _ = write!(line, " %PminNoVars={}", num(v));
+                }
+                if let Some(v) = vv.p_min_for_q_max {
+                    let _ = write!(line, " %PminkvarMax={}", num(v));
+                }
+            }
+        }
+        self.warn_ibr_dss_drops(ibr);
+        self.line_out(&line);
+    }
+
+    fn write_ibr_controls(&mut self, ibr: &DistIbr, net: &DistNetwork) {
+        let Some(profile) = ibr_profile(ibr, net) else {
+            if let Some(name) = &ibr.control_profile {
+                self.warn(format!(
+                    "ibr {}: control_profile `{name}` not found; no InvControl emitted",
+                    ibr.name
+                ));
+            }
+            return;
+        };
+        let phases = ibr_phases(ibr);
+        let configuration = ibr_configuration(ibr);
+        let kv = self.ibr_kv(ibr, phases, configuration, "pvsystem");
+        let base_v = if phases >= 2 && configuration != Configuration::Delta {
+            kv * 1e3 / 3f64.sqrt()
+        } else {
+            kv * 1e3
+        };
+        let mut curves = Vec::new();
+        let mut has_vv = false;
+        let mut has_vw = false;
+        if let Some(vv) = &profile.volt_var
+            && let Some(curve) = self.volt_var_curve(ibr, vv, base_v)
+        {
+            curves.push(curve);
+            has_vv = true;
+        }
+        if let Some(vw) = &profile.volt_watt
+            && let Some(curve) = self.volt_watt_curve(ibr, vw, base_v)
+        {
+            curves.push(curve);
+            has_vw = true;
+        }
+        for line in &curves {
+            self.line_out(line);
+        }
+        if !has_vv && !has_vw {
+            return;
+        }
+        let mon = self.control_mon_voltage(ibr, profile);
+        let inv_name = format!("ivc_{}", ibr.name);
+        self.check_name("invcontrol", &inv_name);
+        let mut line = format!(
+            "New InvControl.{inv_name} DERList=[PVSystem.{}] voltage_curvex_ref=rated monVoltageCalc={mon}",
+            ibr.name
+        );
+        match (has_vv, has_vw) {
+            (true, true) => {
+                let _ = write!(
+                    line,
+                    " CombiMode=VV_VW vvc_curve1=vv_{} voltwatt_curve=vw_{}",
+                    ibr.name, ibr.name
+                );
+                if let Some(vv) = &profile.volt_var {
+                    let _ = write!(
+                        line,
+                        " RefReactivePower={}",
+                        reactive_reference(vv.q_ref.unwrap_or(ReactivePowerReference::VarMax))
+                    );
+                }
+                if let Some(vw) = &profile.volt_watt {
+                    let _ = write!(
+                        line,
+                        " VoltwattYAxis={}",
+                        active_reference(vw.p_ref.unwrap_or(ActivePowerReference::SMax))
+                    );
+                }
+            }
+            (true, false) => {
+                line.push_str(" mode=VOLTVAR");
+                let _ = write!(line, " vvc_curve1=vv_{}", ibr.name);
+                if let Some(vv) = &profile.volt_var {
+                    let _ = write!(
+                        line,
+                        " RefReactivePower={}",
+                        reactive_reference(vv.q_ref.unwrap_or(ReactivePowerReference::VarMax))
+                    );
+                }
+            }
+            (false, true) => {
+                line.push_str(" mode=VOLTWATT");
+                let _ = write!(line, " voltwatt_curve=vw_{}", ibr.name);
+                if let Some(vw) = &profile.volt_watt {
+                    let _ = write!(
+                        line,
+                        " VoltwattYAxis={}",
+                        active_reference(vw.p_ref.unwrap_or(ActivePowerReference::SMax))
+                    );
+                }
+            }
+            (false, false) => {}
+        }
+        self.line_out(&line);
+    }
+
+    fn volt_var_curve(
+        &mut self,
+        ibr: &DistIbr,
+        vv: &VoltVarControl,
+        base_v: f64,
+    ) -> Option<String> {
+        self.check_control_reference(ibr, vv.voltage_reference)?;
+        if !matches!(
+            vv.q_unit,
+            None | Some(crate::model::ReactivePowerUnit::VaFraction)
+        ) {
+            self.warn(format!(
+                "ibr {}: volt_var q_unit is absolute VAR; DSS export only maps VA_FRACTION",
+                ibr.name
+            ));
+            return None;
+        }
+        if vv.breakpoints.len() < 4 || vv.q_limits.len() < 2 || base_v <= 0.0 {
+            self.warn(format!(
+                "ibr {}: volt_var profile is incomplete; no XYcurve emitted",
+                ibr.name
+            ));
+            return None;
+        }
+        let xs: Vec<String> = vv
+            .breakpoints
+            .iter()
+            .take(4)
+            .map(|v| num(v / base_v))
+            .collect();
+        let ys = [num(vv.q_limits[1]), num(0.0), num(0.0), num(vv.q_limits[0])];
+        Some(format!(
+            "New XYcurve.vv_{} npts=4 Xarray=[{}] Yarray=[{}]",
+            ibr.name,
+            xs.join(" "),
+            ys.join(" ")
+        ))
+    }
+
+    fn volt_watt_curve(
+        &mut self,
+        ibr: &DistIbr,
+        vw: &VoltWattControl,
+        base_v: f64,
+    ) -> Option<String> {
+        self.check_control_reference(ibr, vw.voltage_reference)?;
+        if !matches!(
+            vw.p_unit,
+            None | Some(crate::model::ActivePowerUnit::VaFraction)
+        ) {
+            self.warn(format!(
+                "ibr {}: volt_watt p_unit is absolute W; DSS export only maps VA_FRACTION",
+                ibr.name
+            ));
+            return None;
+        }
+        if vw.breakpoints.len() < 2 || vw.p_limits.len() < 2 || base_v <= 0.0 {
+            self.warn(format!(
+                "ibr {}: volt_watt profile is incomplete; no XYcurve emitted",
+                ibr.name
+            ));
+            return None;
+        }
+        let xs: Vec<String> = vw
+            .breakpoints
+            .iter()
+            .take(2)
+            .map(|v| num(v / base_v))
+            .collect();
+        let ys = [num(vw.p_limits[1]), num(vw.p_limits[0])];
+        Some(format!(
+            "New XYcurve.vw_{} npts=2 Xarray=[{}] Yarray=[{}]",
+            ibr.name,
+            xs.join(" "),
+            ys.join(" ")
+        ))
+    }
+
+    fn check_control_reference(
+        &mut self,
+        ibr: &DistIbr,
+        reference: Option<ControlVoltageReference>,
+    ) -> Option<()> {
+        match reference.unwrap_or(ControlVoltageReference::PnPerPhase) {
+            ControlVoltageReference::PgPerPhase | ControlVoltageReference::PgAveraged => Some(()),
+            ControlVoltageReference::PnPerPhase | ControlVoltageReference::PnAveraged => {
+                self.warn(format!(
+                    "ibr {}: PN voltage control is approximated by OpenDSS phase-to-ground InvControl",
+                    ibr.name
+                ));
+                Some(())
+            }
+            ControlVoltageReference::PpPerPhase | ControlVoltageReference::PpAveraged => {
+                self.warn(format!(
+                    "ibr {}: PP voltage control is not representable by OpenDSS InvControl; skipped",
+                    ibr.name
+                ));
+                None
+            }
+        }
+    }
+
+    fn control_mon_voltage(&mut self, ibr: &DistIbr, profile: &DistControlProfile) -> &'static str {
+        let reference = profile
+            .volt_var
+            .as_ref()
+            .and_then(|vv| vv.voltage_reference)
+            .or_else(|| {
+                profile
+                    .volt_watt
+                    .as_ref()
+                    .and_then(|vw| vw.voltage_reference)
+            })
+            .unwrap_or(ControlVoltageReference::PnPerPhase);
+        let averaged = matches!(
+            ibr.voltage_aggregation,
+            Some(IbrVoltageAggregation::Average)
+        ) || matches!(
+            reference,
+            ControlVoltageReference::PgAveraged
+                | ControlVoltageReference::PnAveraged
+                | ControlVoltageReference::PpAveraged
+        );
+        if !averaged && ibr_phases(ibr) > 1 {
+            self.warn(format!(
+                "ibr {}: per phase InvControl needs split PVSystems; emitted AVG monitor",
+                ibr.name
+            ));
+        }
+        "AVG"
+    }
+
+    fn ibr_kv(
+        &mut self,
+        ibr: &DistIbr,
+        phases: usize,
+        configuration: Configuration,
+        class: &'static str,
+    ) -> f64 {
+        self.element_kv(
+            &ibr.extras,
+            ElementKv {
+                bus: &ibr.bus,
+                phases,
+                configuration,
+                name: &ibr.name,
+                class,
+                typed_kv: None,
+            },
+        )
+    }
+
+    fn warn_ibr_dss_drops(&mut self, ibr: &DistIbr) {
+        for key in ibr.extras.keys() {
+            if matches!(key.as_str(), "kv" | "phases") {
+                continue;
+            }
+            self.warn(format!(
+                "ibr {}: `{key}` has no OpenDSS export mapping; dropped",
+                ibr.name
+            ));
+        }
+        if ibr.i_max.is_some() {
+            self.warn(format!(
+                "ibr {}: i_max has no OpenDSS PVSystem current limit field; dropped",
+                ibr.name
+            ));
+        }
+        if !matches!(ibr.prime_mover, IbrPrimeMover::Pv | IbrPrimeMover::Generic) {
+            self.warn(format!(
+                "ibr {}: prime_mover {:?} has no dedicated OpenDSS export path; emitted with the generic inverter mapping",
+                ibr.name, ibr.prime_mover
+            ));
+        }
+    }
 }
 
 /// Drop the shunt keys the writer regenerates from the typed model so a stale
@@ -1407,6 +1778,49 @@ impl DssWriter {
 fn strip_shunt_extras(extras: &mut Extras) {
     for key in ["kv", "kvar", "phases", "conn"] {
         extras.remove(key);
+    }
+}
+
+fn ibr_is_fixed_dispatch(ibr: &DistIbr) -> bool {
+    ibr.control_profile.is_none()
+        && matches!((&ibr.p_min, &ibr.p_max), (Some(a), Some(b)) if a == b)
+        && matches!((&ibr.q_min, &ibr.q_max), (Some(a), Some(b)) if a == b)
+}
+
+fn ibr_profile<'a>(ibr: &DistIbr, net: &'a DistNetwork) -> Option<&'a DistControlProfile> {
+    let name = ibr.control_profile.as_ref()?;
+    net.control_profiles
+        .iter()
+        .find(|profile| profile.name.eq_ignore_ascii_case(name))
+}
+
+fn ibr_phases(ibr: &DistIbr) -> usize {
+    match ibr.topology {
+        IbrTopology::SinglePhase => 1,
+        IbrTopology::ThreeLeg | IbrTopology::FourLeg => 3,
+    }
+}
+
+fn ibr_configuration(ibr: &DistIbr) -> Configuration {
+    match ibr.topology {
+        IbrTopology::SinglePhase => Configuration::SinglePhase,
+        IbrTopology::ThreeLeg => Configuration::Delta,
+        IbrTopology::FourLeg => Configuration::Wye,
+    }
+}
+
+fn reactive_reference(reference: ReactivePowerReference) -> &'static str {
+    match reference {
+        ReactivePowerReference::VarMax => "VARMAX",
+        ReactivePowerReference::VarAvailable => "VARAVAL_WATTS",
+    }
+}
+
+fn active_reference(reference: ActivePowerReference) -> &'static str {
+    match reference {
+        ActivePowerReference::SMax => "KVARATINGPU",
+        ActivePowerReference::PAvailable => "PAVAILABLEPU",
+        ActivePowerReference::PMax => "PMPPPU",
     }
 }
 
@@ -1559,8 +1973,9 @@ mod tests {
     use super::super::read::parse_dss_str;
     use super::*;
     use crate::model::{
-        DistGenerator, DistLine, DistLineCode, DistLoad, DistShunt, DistSwitch, DistTransformer,
-        VoltageSource, Winding,
+        ControlVoltageReference, DistControlProfile, DistGenerator, DistIbr, DistLine,
+        DistLineCode, DistLoad, DistShunt, DistSwitch, DistTransformer, IbrPrimeMover, IbrTopology,
+        ReactivePowerReference, ReactivePowerUnit, VoltVarControl, VoltageSource, Winding,
     };
 
     fn strings(v: &[&str]) -> Vec<String> {
@@ -2609,5 +3024,129 @@ mod tests {
             .unwrap();
         assert!(line.contains("phases=2 conn=delta"), "{line}");
         assert_eq!(line.matches("phases=").count(), 1, "{line}");
+    }
+
+    #[test]
+    fn fixed_dispatch_ibr_exports_as_generator_model_one() {
+        let (b, vs) = three_phase_source(240.0);
+        let ibr = DistIbr {
+            name: "pv".into(),
+            bus: "sb".into(),
+            terminal_map: strings(&["1", "2", "3", "4"]),
+            topology: IbrTopology::FourLeg,
+            prime_mover: IbrPrimeMover::Pv,
+            s_max: vec![10_000.0; 3],
+            i_max: None,
+            p_avail: Some(24_000.0),
+            p_min: Some(vec![8_000.0; 3]),
+            p_max: Some(vec![8_000.0; 3]),
+            q_min: Some(vec![0.0; 3]),
+            q_max: Some(vec![0.0; 3]),
+            control_profile: None,
+            voltage_aggregation: None,
+            extras: Extras::from([("kv".to_string(), serde_json::json!("0.416"))]),
+        };
+        let net = DistNetwork {
+            name: Some("fixed".into()),
+            base_frequency: 60.0,
+            buses: vec![b],
+            sources: vec![vs],
+            ibrs: vec![ibr],
+            ..DistNetwork::default()
+        };
+
+        let out = write_dss(&net);
+
+        assert!(out.warnings.is_empty(), "{:?}", out.warnings);
+        let line = out
+            .text
+            .lines()
+            .find(|l| l.starts_with("New Generator.pv"))
+            .unwrap();
+        assert!(line.contains("model=1 vminpu=0 vmaxpu=2"), "{line}");
+        assert!(line.contains("kw=24"), "{line}");
+        assert!(!out.text.contains("PVSystem.pv"), "{}", out.text);
+    }
+
+    #[test]
+    fn volt_var_ibr_exports_pvsystem_xycurve_and_invcontrol() {
+        let (b, vs) = three_phase_source(240.0);
+        let base_v = 416.0 / 3f64.sqrt();
+        let ibr = DistIbr {
+            name: "pv".into(),
+            bus: "sb".into(),
+            terminal_map: strings(&["1", "2", "3", "4"]),
+            topology: IbrTopology::FourLeg,
+            prime_mover: IbrPrimeMover::Pv,
+            s_max: vec![10_000.0; 3],
+            i_max: None,
+            p_avail: Some(24_000.0),
+            p_min: Some(vec![0.0; 3]),
+            p_max: Some(vec![8_000.0; 3]),
+            q_min: Some(vec![-4_000.0; 3]),
+            q_max: Some(vec![4_000.0; 3]),
+            control_profile: Some("cp".into()),
+            voltage_aggregation: None,
+            extras: Extras::from([("kv".to_string(), serde_json::json!("0.416"))]),
+        };
+        let profile = DistControlProfile {
+            name: "cp".into(),
+            power_factor: None,
+            volt_var: Some(VoltVarControl {
+                voltage_reference: Some(ControlVoltageReference::PgAveraged),
+                breakpoints: [0.92, 0.98, 1.02, 1.08]
+                    .into_iter()
+                    .map(|v| v * base_v)
+                    .collect(),
+                q_limits: vec![-0.44, 0.44],
+                q_unit: Some(ReactivePowerUnit::VaFraction),
+                q_ref: Some(ReactivePowerReference::VarMax),
+                p_min_for_q: Some(10.0),
+                p_min_for_q_max: Some(50.0),
+            }),
+            volt_watt: None,
+            extras: Extras::new(),
+        };
+        let net = DistNetwork {
+            name: Some("controlled".into()),
+            base_frequency: 60.0,
+            buses: vec![b],
+            sources: vec![vs],
+            ibrs: vec![ibr],
+            control_profiles: vec![profile],
+            ..DistNetwork::default()
+        };
+
+        let out = write_dss(&net);
+
+        assert!(out.warnings.is_empty(), "{:?}", out.warnings);
+        let pv = out
+            .text
+            .lines()
+            .find(|l| l.starts_with("New PVSystem.pv"))
+            .unwrap();
+        assert!(pv.contains("WattPriority=No VarFollowInverter=Yes"), "{pv}");
+        assert!(pv.contains("kvarMax=12"), "{pv}");
+        assert!(pv.contains("kvarMaxAbs=12"), "{pv}");
+        assert!(pv.contains("%PminNoVars=10"), "{pv}");
+        assert!(pv.contains("%PminkvarMax=50"), "{pv}");
+
+        let curve = out
+            .text
+            .lines()
+            .find(|l| l.starts_with("New XYcurve.vv_pv"))
+            .unwrap();
+        assert!(curve.contains("Xarray=[0.92 0.98 1.02 1.08]"), "{curve}");
+        assert!(curve.contains("Yarray=[0.44 0 0 -0.44]"), "{curve}");
+
+        let inv = out
+            .text
+            .lines()
+            .find(|l| l.starts_with("New InvControl.ivc_pv"))
+            .unwrap();
+        assert!(inv.contains("mode=VOLTVAR"), "{inv}");
+        assert!(inv.contains("vvc_curve1=vv_pv"), "{inv}");
+        assert!(inv.contains("RefReactivePower=VARMAX"), "{inv}");
+        assert!(inv.contains("monVoltageCalc=AVG"), "{inv}");
     }
 }

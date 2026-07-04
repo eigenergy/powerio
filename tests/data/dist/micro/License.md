@@ -1,6 +1,6 @@
 # License
 
-The eight `.dss` cases in this directory are original works written for
+The fourteen `.dss` cases in this directory are original works written for
 powerio-dist (no upstream source). They are released under the Creative
 Commons Attribution 4.0 International license
 (<https://creativecommons.org/licenses/by/4.0/>).

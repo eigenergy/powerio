@@ -83,6 +83,15 @@ pub mod generator {
     pub const PF: f64 = 0.88;
 }
 
+pub mod pvsystem {
+    pub const PHASES: usize = 3;
+    pub const KV: f64 = 12.47;
+    pub const IRRADIANCE: f64 = 1.0;
+    pub const PMPP: f64 = 500.0;
+    pub const PCT_PMPP: f64 = 100.0;
+    pub const PF: f64 = 1.0;
+}
+
 /// Base frequency when no `Set DefaultBaseFrequency` appears.
 pub const BASE_FREQUENCY: f64 = 60.0;
 

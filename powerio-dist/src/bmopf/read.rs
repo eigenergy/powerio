@@ -11,14 +11,18 @@
 use std::path::Path;
 use std::sync::Arc;
 
+use serde::de::DeserializeOwned;
 use serde_json::{Map, Value};
 
 use crate::error::{Error, Result};
 use crate::model::{
-    Configuration, DistBus, DistGenerator, DistLine, DistLineCode, DistLoad, DistLoadVoltageModel,
-    DistNetwork, DistShunt, DistSourceFormat, DistSwitch, DistTransformer, Extras, Mat,
-    UntypedObject, VoltageSource, Winding, WindingConn, n_winding_impedance_base,
-    n_winding_phase_count, pair_keys,
+    ActivePowerReference, ActivePowerUnit, Configuration, ControlVoltageReference, DistBus,
+    DistControlProfile, DistGenerator, DistIbr, DistLine, DistLineCode, DistLoad,
+    DistLoadVoltageModel, DistNetwork, DistShunt, DistSourceFormat, DistSwitch, DistTransformer,
+    Extras, IbrPrimeMover, IbrTopology, IbrVoltageAggregation, Mat, PowerFactorControl,
+    ReactivePowerReference, ReactivePowerUnit, UntypedObject, VoltVarControl, VoltWattControl,
+    VoltageSource, Winding, WindingConn, n_winding_impedance_base, n_winding_phase_count,
+    pair_keys,
 };
 
 pub fn parse_bmopf_file(path: impl AsRef<Path>) -> Result<DistNetwork> {
@@ -105,6 +109,21 @@ fn strings(v: Option<&Value>) -> Vec<String> {
 
 fn string(v: Option<&Value>) -> String {
     v.and_then(Value::as_str).unwrap_or_default().to_string()
+}
+
+fn enum_field<T: DeserializeOwned>(
+    v: Option<&Value>,
+    what: &str,
+    warnings: &mut Vec<String>,
+) -> Option<T> {
+    let value = v?;
+    match serde_json::from_value(value.clone()) {
+        Ok(parsed) => Some(parsed),
+        Err(err) => {
+            warnings.push(format!("{what}: {err}; field ignored"));
+            None
+        }
+    }
 }
 
 /// Case insensitive on the recognized values (the dss reader's tolerance);
@@ -221,6 +240,8 @@ impl Reader<'_> {
                 "switch" => self.switches(items),
                 "load" => self.loads(items),
                 "generator" => self.generators(items),
+                "ibr" => self.ibrs(items),
+                "control_profile" => self.control_profiles(items),
                 "shunt" => self.shunts(items),
                 "voltage_source" => self.sources(items),
                 "transformer" => self.transformers(items),
@@ -239,6 +260,130 @@ impl Reader<'_> {
                     }
                 }
             }
+        }
+    }
+
+    fn ibrs(&mut self, items: &Map<String, Value>) {
+        const TYPED: &[&str] = &[
+            "bus",
+            "terminal_map",
+            "topology",
+            "prime_mover",
+            "s_max",
+            "i_max",
+            "p_avail",
+            "p_min",
+            "p_max",
+            "q_min",
+            "q_max",
+            "control_profile",
+            "voltage_aggregation",
+        ];
+        for (name, v) in items {
+            let Value::Object(o) = v else { continue };
+            let topology = enum_field::<IbrTopology>(
+                o.get("topology"),
+                &format!("ibr {name} topology"),
+                &mut self.net.warnings,
+            )
+            .unwrap_or(IbrTopology::SinglePhase);
+            let prime_mover = enum_field::<IbrPrimeMover>(
+                o.get("prime_mover"),
+                &format!("ibr {name} prime_mover"),
+                &mut self.net.warnings,
+            )
+            .unwrap_or(IbrPrimeMover::Generic);
+            let mut extras = Extras::new();
+            for (key, value) in o {
+                if !TYPED.contains(&key.as_str()) {
+                    extras.insert(key.clone(), value.clone());
+                }
+            }
+            self.net.ibrs.push(DistIbr {
+                name: name.clone(),
+                bus: string(o.get("bus")),
+                terminal_map: strings(o.get("terminal_map")),
+                topology,
+                prime_mover,
+                s_max: floats(o.get("s_max")).unwrap_or_default(),
+                i_max: floats(o.get("i_max")),
+                p_avail: first_float(o.get("p_avail")),
+                p_min: floats(o.get("p_min")),
+                p_max: floats(o.get("p_max")),
+                q_min: floats(o.get("q_min")),
+                q_max: floats(o.get("q_max")),
+                control_profile: o
+                    .get("control_profile")
+                    .and_then(Value::as_str)
+                    .map(str::to_string),
+                voltage_aggregation: enum_field::<IbrVoltageAggregation>(
+                    o.get("voltage_aggregation"),
+                    &format!("ibr {name} voltage_aggregation"),
+                    &mut self.net.warnings,
+                ),
+                extras,
+            });
+        }
+    }
+
+    fn control_profiles(&mut self, items: &Map<String, Value>) {
+        for (name, v) in items {
+            let Value::Object(o) = v else { continue };
+            let mut profile = DistControlProfile::new(name.clone());
+            if let Some(Value::Object(pf)) = o.get("power_factor") {
+                profile.power_factor =
+                    first_float(pf.get("pf")).map(|pf| PowerFactorControl { pf });
+            }
+            if let Some(Value::Object(vv)) = o.get("volt_var") {
+                profile.volt_var = Some(VoltVarControl {
+                    voltage_reference: enum_field::<ControlVoltageReference>(
+                        vv.get("voltage_reference"),
+                        &format!("control_profile {name} volt_var voltage_reference"),
+                        &mut self.net.warnings,
+                    ),
+                    breakpoints: floats(vv.get("breakpoints")).unwrap_or_default(),
+                    q_limits: floats(vv.get("q_limits")).unwrap_or_default(),
+                    q_unit: enum_field::<ReactivePowerUnit>(
+                        vv.get("q_unit"),
+                        &format!("control_profile {name} volt_var q_unit"),
+                        &mut self.net.warnings,
+                    ),
+                    q_ref: enum_field::<ReactivePowerReference>(
+                        vv.get("q_ref"),
+                        &format!("control_profile {name} volt_var q_ref"),
+                        &mut self.net.warnings,
+                    ),
+                    p_min_for_q: first_float(vv.get("p_min_for_q")),
+                    p_min_for_q_max: first_float(vv.get("p_min_for_q_max")),
+                });
+            }
+            if let Some(Value::Object(vw)) = o.get("volt_watt") {
+                profile.volt_watt = Some(VoltWattControl {
+                    voltage_reference: enum_field::<ControlVoltageReference>(
+                        vw.get("voltage_reference"),
+                        &format!("control_profile {name} volt_watt voltage_reference"),
+                        &mut self.net.warnings,
+                    ),
+                    breakpoints: floats(vw.get("breakpoints")).unwrap_or_default(),
+                    p_limits: floats(vw.get("p_limits")).unwrap_or_default(),
+                    p_unit: enum_field::<ActivePowerUnit>(
+                        vw.get("p_unit"),
+                        &format!("control_profile {name} volt_watt p_unit"),
+                        &mut self.net.warnings,
+                    ),
+                    p_ref: enum_field::<ActivePowerReference>(
+                        vw.get("p_ref"),
+                        &format!("control_profile {name} volt_watt p_ref"),
+                        &mut self.net.warnings,
+                    ),
+                });
+            }
+            for (key, value) in o {
+                if !matches!(key.as_str(), "power_factor" | "volt_var" | "volt_watt") {
+                    profile.extras.insert(key.clone(), value.clone());
+                }
+            }
+            self.net.control_profiles.push(profile);
         }
     }
 
