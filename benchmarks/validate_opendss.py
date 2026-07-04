@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import argparse
 import math
 import os
 import sys
@@ -87,6 +88,14 @@ def validate_case(case: Path) -> list[str]:
 
 
 def main() -> int:
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--count", action="store_true", help="print the number of validated cases")
+    args = parser.parse_args()
+
+    if args.count:
+        print(len(FIXTURES))
+        return 0
+
     failures: list[str] = []
     for case in FIXTURES:
         try:

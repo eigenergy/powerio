@@ -11,7 +11,6 @@ name: Validation
 # off doc-only PRs. The fixtures are all vendored, so no large-case fetch is needed.
 on:
   pull_request:
-    branches: [ "main" ]
     paths:
       - "powerio/**"
       - "powerio-dist/**"
@@ -19,6 +18,8 @@ on:
       - "powerio-capi/**"
       - "powerio-py/**"
       - "benchmarks/**"
+      - "tests/data/dist/**"
+      - "powerio-dist/examples/**"
       - ".github/workflows/validation.yml"
 
 permissions:
@@ -66,6 +67,6 @@ jobs:
     # The validation script also checks this, but keep the failure close to the
     # setup step.
     - name: Verify the oracle stack imports
-      run: .venv/bin/python -c "import egret, opendssdirect, pandapower, pypsa"
+      run: .venv/bin/python -c "import egret, jsonschema, opendssdirect, pandapower, pypsa"
     - name: Run the validation matrix
       run: bash benchmarks/run_validation.sh
