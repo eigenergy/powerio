@@ -790,6 +790,14 @@ char *pio_package_operating_points_json(const PioPackage *pkg, char *errbuf, siz
 
 #if defined(PIO_PKG)
 /**
+ * Return the package study block as JSON, or `null` when absent. The returned
+ * string is owned by the library; free it with [`pio_string_free`].
+ */
+char *pio_package_study_json(const PioPackage *pkg, char *errbuf, size_t errlen);
+#endif
+
+#if defined(PIO_PKG)
+/**
  * Materialize one operating point into a new static package.
  *
  * The returned handle owns a package with the selected updates applied and no
@@ -799,6 +807,19 @@ PioPackage *pio_package_materialize_operating_point(const PioPackage *pkg,
                                                     int64_t index,
                                                     char *errbuf,
                                                     size_t errlen);
+#endif
+
+#if defined(PIO_PKG)
+/**
+ * Materialize one study commit into a new static package.
+ *
+ * The returned handle owns a package with commits `0..=index` applied and no
+ * operating point series or study block. Free it with [`pio_package_free`].
+ */
+PioPackage *pio_package_materialize_study_commit(const PioPackage *pkg,
+                                                 int64_t index,
+                                                 char *errbuf,
+                                                 size_t errlen);
 #endif
 
 #if defined(PIO_PKG)
@@ -883,6 +904,15 @@ size_t pio_dist_warnings(const PioDistNetwork *net, char *warnbuf, size_t warnle
  * Returns an owned C string (free with [`pio_string_free`]), `NULL` on error.
  */
 char *pio_dist_to_json(const PioDistNetwork *net, char *errbuf, size_t errlen);
+#endif
+
+#if defined(PIO_DIST)
+/**
+ * Serialize the collapsed bus and terminal graph projection for `net` as JSON.
+ * The returned string is owned by the library; free it with
+ * [`pio_string_free`].
+ */
+char *pio_dist_graph_json(const PioDistNetwork *net, char *errbuf, size_t errlen);
 #endif
 
 #if defined(PIO_DIST)

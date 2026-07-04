@@ -44,6 +44,19 @@ def test_cross_format_writes():
     assert "bus" in json.loads(bmopf.text)
 
 
+def test_graph_projection():
+    graph = dist.parse_file(FOURWIRE).graph()
+    assert {bus["id"] for bus in graph["buses"]} == {"sourcebus", "loadbus"}
+    source = next(bus for bus in graph["buses"] if bus["id"] == "sourcebus")
+    assert source["has_source"] is True
+    edge = next(edge for edge in graph["edges"] if edge["id"] == "l1")
+    assert edge["kind"] == "line"
+    assert edge["from"] == "sourcebus"
+    assert edge["to"] == "loadbus"
+    assert edge["n_phases"] == 4
+    assert len(edge["conductors"]) == 4
+
+
 def test_json_sniffing_round_trip(tmp_path):
     case = dist.parse_file(FOURWIRE)
     for fmt in ("pmd-json", "bmopf-json"):

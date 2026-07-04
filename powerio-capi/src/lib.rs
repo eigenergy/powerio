@@ -1616,6 +1616,26 @@ pub unsafe extern "C" fn pio_package_operating_points_json(
     }
 }
 
+/// Return the package study block as JSON, or `null` when absent. The returned
+/// string is owned by the library; free it with [`pio_string_free`].
+#[cfg(feature = "pkg")]
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn pio_package_study_json(
+    pkg: *const PioPackage,
+    errbuf: *mut c_char,
+    errlen: usize,
+) -> *mut c_char {
+    unsafe {
+        finish_package_json(
+            pkg,
+            errbuf,
+            errlen,
+            "panic while reading package study block",
+            |p| serde_json::to_string(&p.package.study).map_err(|e| e.to_string()),
+        )
+    }
+}
+
 /// Materialize one operating point into a new static package.
 ///
 /// The returned handle owns a package with the selected updates applied and no
@@ -1641,6 +1661,37 @@ pub unsafe extern "C" fn pio_package_materialize_operating_point(
                     .map_err(|_| "operating point index must be non-negative".to_string())?;
                 pkg.package
                     .materialize_operating_point(index)
+                    .map_err(|e| e.to_string())
+            },
+        )
+    }
+}
+
+/// Materialize one study commit into a new static package.
+///
+/// The returned handle owns a package with commits `0..=index` applied and no
+/// operating point series or study block. Free it with [`pio_package_free`].
+#[cfg(feature = "pkg")]
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn pio_package_materialize_study_commit(
+    pkg: *const PioPackage,
+    index: i64,
+    errbuf: *mut c_char,
+    errlen: usize,
+) -> *mut PioPackage {
+    unsafe {
+        finish_package(
+            errbuf,
+            errlen,
+            "panic while materializing package study commit",
+            || {
+                let pkg = pkg
+                    .as_ref()
+                    .ok_or_else(|| "package handle is NULL".to_string())?;
+                let index = usize::try_from(index)
+                    .map_err(|_| "study commit index must be non-negative".to_string())?;
+                pkg.package
+                    .materialize_study_commit(index)
                     .map_err(|e| e.to_string())
             },
         )
@@ -1865,6 +1916,26 @@ pub unsafe extern "C" fn pio_dist_to_json(
                 .as_ref()
                 .ok_or_else(|| "distribution network handle is NULL".to_string())?;
             serde_json::to_string(&net.net).map_err(|e| e.to_string())
+        })
+    }
+}
+
+/// Serialize the collapsed bus and terminal graph projection for `net` as JSON.
+/// The returned string is owned by the library; free it with
+/// [`pio_string_free`].
+#[cfg(feature = "dist")]
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn pio_dist_graph_json(
+    net: *const PioDistNetwork,
+    errbuf: *mut c_char,
+    errlen: usize,
+) -> *mut c_char {
+    unsafe {
+        finish_string(errbuf, errlen, "panic while serializing graph JSON", || {
+            let net = net
+                .as_ref()
+                .ok_or_else(|| "distribution network handle is NULL".to_string())?;
+            serde_json::to_string(&net.net.graph()).map_err(|e| e.to_string())
         })
     }
 }
@@ -2361,7 +2432,9 @@ mod tests {
             "char *pio_package_validation_json(const PioPackage *pkg, char *errbuf, size_t errlen);",
             "char *pio_package_diagnostics_json(const PioPackage *pkg, char *errbuf, size_t errlen);",
             "char *pio_package_operating_points_json(const PioPackage *pkg, char *errbuf, size_t errlen);",
+            "char *pio_package_study_json(const PioPackage *pkg, char *errbuf, size_t errlen);",
             "PioPackage *pio_package_materialize_operating_point(const PioPackage *pkg, int64_t index, char *errbuf, size_t errlen);",
+            "PioPackage *pio_package_materialize_study_commit(const PioPackage *pkg, int64_t index, char *errbuf, size_t errlen);",
             "char *pio_package_multiconductor_to_balanced_preflight_json(const PioPackage *pkg, double base_mva, char *errbuf, size_t errlen);",
             "PioPackage *pio_package_lower_multiconductor_to_balanced(const PioPackage *pkg, double base_mva, char *errbuf, size_t errlen);",
             "PioDistNetwork *pio_dist_parse_file(const char *path, const char *from, char *errbuf, size_t errlen);",
@@ -2369,6 +2442,7 @@ mod tests {
             "void pio_dist_network_free(PioDistNetwork *net);",
             "size_t pio_dist_warnings(const PioDistNetwork *net, char *warnbuf, size_t warnlen);",
             "char *pio_dist_to_json(const PioDistNetwork *net, char *errbuf, size_t errlen);",
+            "char *pio_dist_graph_json(const PioDistNetwork *net, char *errbuf, size_t errlen);",
             "PioDistNetwork *pio_dist_from_json(const char *text, char *errbuf, size_t errlen);",
             "char *pio_dist_to_format(const PioDistNetwork *net, const char *to, char *warnbuf, size_t warnlen, char *errbuf, size_t errlen);",
             "char *pio_dist_convert_file(const char *path, const char *from, const char *to, char *warnbuf, size_t warnlen, char *errbuf, size_t errlen);",
@@ -3211,6 +3285,79 @@ mpc.branch = [
 
     #[cfg(feature = "pkg")]
     #[test]
+    fn package_study_json_and_materialize_commit() {
+        use powerio_pkg::{ElementRef, NetworkPackage, StudyBlock, StudyCommit, StudyEdit};
+
+        let case = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../tests/data")
+            .join("case9.m");
+        let net = powerio::parse_str(&std::fs::read_to_string(case).unwrap(), "matpower")
+            .unwrap()
+            .network;
+        let mut commit = StudyCommit::default();
+        commit.label = Some("load step".to_owned());
+        commit.edits.push(StudyEdit::DemandDelta {
+            bus: ElementRef::by_source_uid("buses", "buses:0"),
+            p_mw: 7.0,
+            q_mvar: Some(3.0),
+        });
+        let mut study = StudyBlock::default();
+        study.label = Some("binding study".to_owned());
+        study.commits.push(commit);
+        let package = NetworkPackage::from_balanced(net).with_study(study);
+        let json = CString::new(package.to_json().unwrap()).unwrap();
+
+        let mut err = [0 as c_char; PIO_ERRBUF_MIN];
+        unsafe {
+            let pkg = pio_package_parse_str(json.as_ptr(), err.as_mut_ptr(), err.len());
+            assert!(
+                !pkg.is_null(),
+                "package parse_str failed: {}",
+                CStr::from_ptr(err.as_ptr()).to_str().unwrap()
+            );
+
+            let study = package_report_json(pio_package_study_json, pkg);
+            assert_eq!(study["label"], serde_json::json!("binding study"));
+            assert_eq!(
+                study["commits"][0]["edits"][0]["kind"],
+                serde_json::json!("demand_delta")
+            );
+
+            let materialized =
+                pio_package_materialize_study_commit(pkg, 0, err.as_mut_ptr(), err.len());
+            assert!(
+                !materialized.is_null(),
+                "study materialization failed: {}",
+                CStr::from_ptr(err.as_ptr()).to_str().unwrap()
+            );
+            let materialized_json = package_json(materialized);
+            assert!(materialized_json.get("study").is_none());
+            assert!(materialized_json.get("operating_points").is_none());
+            let loads = materialized_json["model"]["balanced_network"]["loads"]
+                .as_array()
+                .unwrap();
+            assert!(loads.iter().any(|load| {
+                load["uid"] == serde_json::json!("study:load:buses:0")
+                    && load["p"] == serde_json::json!(7.0)
+                    && load["q"] == serde_json::json!(3.0)
+            }));
+
+            let negative =
+                pio_package_materialize_study_commit(pkg, -1, err.as_mut_ptr(), err.len());
+            assert!(negative.is_null());
+            let message = CStr::from_ptr(err.as_ptr()).to_str().unwrap();
+            assert!(
+                message.contains("study commit index must be non-negative"),
+                "unexpected error: {message}"
+            );
+
+            pio_package_free(materialized);
+            pio_package_free(pkg);
+        }
+    }
+
+    #[cfg(feature = "pkg")]
+    #[test]
     fn package_parse_free_to_json_and_reports() {
         let net = case9();
         let mut err = [0 as c_char; PIO_ERRBUF_MIN];
@@ -3701,6 +3848,49 @@ mpc.branch = [
             unsafe { pio_string_free(s) };
 
             unsafe { pio_dist_network_free(net) };
+        }
+
+        #[test]
+        fn graph_json_reports_bus_edge_projection() {
+            let path = fourwire_cstr();
+            let mut err = [0 as c_char; PIO_ERRBUF_MIN];
+            let net = unsafe {
+                pio_dist_parse_file(path.as_ptr(), std::ptr::null(), err.as_mut_ptr(), err.len())
+            };
+            assert!(
+                !net.is_null(),
+                "{}",
+                unsafe { CStr::from_ptr(err.as_ptr()) }.to_str().unwrap()
+            );
+
+            let graph = unsafe { pio_dist_graph_json(net, err.as_mut_ptr(), err.len()) };
+            assert!(
+                !graph.is_null(),
+                "graph json failed: {}",
+                unsafe { CStr::from_ptr(err.as_ptr()) }.to_str().unwrap()
+            );
+            let graph_json: serde_json::Value =
+                serde_json::from_str(unsafe { CStr::from_ptr(graph) }.to_str().unwrap()).unwrap();
+            let buses = graph_json["buses"].as_array().unwrap();
+            assert_eq!(buses.len(), 2);
+            assert!(buses.iter().any(|bus| {
+                bus["id"] == serde_json::json!("sourcebus")
+                    && bus["has_source"] == serde_json::json!(true)
+            }));
+            let edges = graph_json["edges"].as_array().unwrap();
+            assert!(edges.iter().any(|edge| {
+                edge["kind"] == serde_json::json!("line")
+                    && edge["id"] == serde_json::json!("l1")
+                    && edge["from"] == serde_json::json!("sourcebus")
+                    && edge["to"] == serde_json::json!("loadbus")
+                    && edge["n_phases"] == serde_json::json!(4)
+                    && edge["conductors"].as_array().unwrap().len() == 4
+            }));
+
+            unsafe {
+                pio_string_free(graph);
+                pio_dist_network_free(net);
+            }
         }
 
         #[test]
