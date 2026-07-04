@@ -14,5 +14,6 @@ pandapower==3.2.2      # validate_pandapower.py: parse + Y_bus cross-check (pinn
 matpowercaseframes<2   # pandapower's .m reader; 2.x's reader is broken (loadcase bug), 1.x works
 gridx-egret>=0.6       # validate_egret.py / validate_matrix.py: the egret oracle
 pypsa>=1.0             # validate_pypsa.py: PyPSA CSV folder import oracle
+opendssdirect.py>=0.9,<0.10  # validate_opendss.py: OpenDSS solve oracle
 pillow>=12.2.0; python_version >= "3.10"
 pytest>=9.0.3; python_version >= "3.10"

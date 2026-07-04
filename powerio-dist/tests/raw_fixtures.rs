@@ -75,6 +75,9 @@ fn micro_cases_parse_without_warnings() {
         "micro/xfmr_delta_wye.dss",
         "micro/switch.dss",
         "micro/fourwire_linecode.dss",
+        "micro/neutral_grounding_reactor.dss",
+        "micro/onephase_cvr_load.dss",
+        "micro/onephase_zip_load.dss",
         "micro/defaults_degenerate.dss",
         "micro/linecode_10x10.dss",
     ] {

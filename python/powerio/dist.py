@@ -92,6 +92,11 @@ class DistNetwork:
         text, warnings = self._inner.to_format(to)
         return Conversion(text, warnings)
 
+    def to_canonical_format(self, to: str) -> Conversion:
+        """Serialize to ``to`` from the typed model, bypassing source echo."""
+        text, warnings = self._inner.to_canonical_format(to)
+        return Conversion(text, warnings)
+
     def __repr__(self) -> str:
         return self._inner.__repr__()
 

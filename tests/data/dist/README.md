@@ -47,12 +47,18 @@ license in `opendss/License.txt`, with no relicensing.
 
 Original cases written for this crate (no upstream source). Each isolates one
 construct: the four BMOPF transformer subtypes (`xfmr_single_phase`,
-`xfmr_center_tap`, `xfmr_wye_delta`, `xfmr_delta_wye`), switch state with
-SwtControl (`switch`), an explicit four wire linecode (`fourwire_linecode`),
-OpenDSS constructor defaults (`defaults_degenerate`), and a ten conductor
-linecode with double digit matrix indices (`linecode_10x10`). All eight solve
-in OpenDSS (opendssdirect 0.9.4); `powerio-dist/tools/solve_dss.py` reproduces
-the reference solutions.
+`xfmr_center_tap`, `xfmr_wye_delta`, `xfmr_delta_wye`), two additional
+single phase transformer wiring cases, switch state with SwtControl
+(`switch`), an explicit four wire linecode (`fourwire_linecode`), OpenDSS
+constructor defaults (`defaults_degenerate`), and a ten conductor linecode
+with double digit matrix indices (`linecode_10x10`), plus a four wire feeder
+whose neutral is grounded through an explicit reactor
+(`neutral_grounding_reactor`) and two single phase load model cases
+(`onephase_cvr_load`, `onephase_zip_load`). All thirteen solve in OpenDSS
+(opendssdirect 0.9.4). `benchmarks/validate_opendss.py` compares the twelve
+solve fidelity fixtures against their canonical regenerated decks; it excludes
+`defaults_degenerate` because that fixture intentionally relies on constructor
+defaults, including omitted load voltage bounds.
 
 ## pmd/
 

@@ -7,7 +7,7 @@
 use std::collections::BTreeMap;
 use std::path::PathBuf;
 
-use powerio_dist::dss::parse_dss_file;
+use powerio_dist::dss::{parse_dss_file, write_dss};
 use powerio_dist::{Configuration, DistNetwork, WindingConn};
 
 fn fixture(rel: &str) -> PathBuf {
@@ -378,6 +378,52 @@ fn grounding_reactor_bus2_uses_the_dss_fill_rule() {
     );
     let sh = net.shunts.iter().find(|s| s.name == "rz").unwrap();
     assert_eq!(sh.terminal_map, vec!["1", "2", "3"]);
+}
+
+#[test]
+#[allow(clippy::float_cmp)]
+fn default_phase_single_terminal_reactor_preserves_physical_neutral() {
+    let net = parse("micro/neutral_grounding_reactor.dss");
+    assert!(
+        net.untyped
+            .iter()
+            .all(|o| !o.name.eq_ignore_ascii_case("source_neutral")),
+        "{:?}",
+        net.warnings
+    );
+
+    let source = net
+        .buses
+        .iter()
+        .find(|b| b.id.eq_ignore_ascii_case("sourcebus"))
+        .unwrap();
+    assert_eq!(source.terminals, vec!["1", "2", "3", "4", "5"]);
+    assert_eq!(source.grounded, vec!["5"]);
+
+    let vs = &net.sources[0];
+    assert_eq!(vs.terminal_map, vec!["1", "2", "3", "5"]);
+
+    let line = net.lines.iter().find(|l| l.name == "l1").unwrap();
+    assert_eq!(line.terminal_map_from, vec!["1", "2", "3", "4"]);
+
+    let sh = net
+        .shunts
+        .iter()
+        .find(|s| s.name == "source_neutral")
+        .unwrap();
+    assert_eq!(sh.terminal_map, vec!["4"]);
+    assert!((sh.g[0][0] - 1000.0).abs() < 1e-9, "{}", sh.g[0][0]);
+    assert_eq!(sh.b[0][0], 0.0);
+
+    let out = write_dss(&net);
+    assert!(out.warnings.is_empty(), "{:?}", out.warnings);
+    assert!(out.text.contains("New Line.l1 bus1=sourcebus.1.2.3.4"));
+    assert!(
+        out.text
+            .contains("New Reactor.source_neutral bus1=sourcebus.4 bus2=sourcebus.0 phases=1"),
+        "{}",
+        out.text
+    );
 }
 
 #[test]

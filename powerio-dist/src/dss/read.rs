@@ -614,6 +614,9 @@ impl Reader<'_> {
                 .get(k0)
                 .and_then(|v| v.to_f64(Some(self.vars)).ok())
                 .unwrap_or(d0);
+            if n == 1 {
+                return vec![vec![v1]];
+            }
             // Symmetric component to phase: diag (2 z1 + z0)/3, off
             // diagonal (z0 - z1)/3.
             let s = (2.0 * v1 + v0) / 3.0;
@@ -1236,9 +1239,13 @@ impl Reader<'_> {
         }
         let bus = bus_spec(props.get("bus1"), "");
         let bus2 = props.get("bus2").map(super::lex::Value::to_bus_spec);
-        let grounding_return = bus2
+        let explicit_single_grounding = bus2
             .as_ref()
-            .is_some_and(|return_bus| same_bus_ground_return(&bus, return_bus, phases));
+            .is_some_and(|return_bus| explicit_single_terminal_ground_return(&bus, return_bus));
+        let grounding_return = explicit_single_grounding
+            || bus2
+                .as_ref()
+                .is_some_and(|return_bus| same_bus_ground_return(&bus, return_bus, phases));
 
         if bus2.is_some() && !grounding_return {
             self.warn(format!(
@@ -1263,7 +1270,8 @@ impl Reader<'_> {
         let has_rx = props.by_name.contains_key("r") || props.by_name.contains_key("x");
         if has_rx {
             if grounding_return {
-                self.grounding_impedance_reactor(obj, &props, &bus, phases);
+                let grounding_phases = if explicit_single_grounding { 1 } else { phases };
+                self.grounding_impedance_reactor(obj, &props, &bus, grounding_phases);
             } else {
                 let form = if props.by_name.contains_key("r") {
                     "r"
@@ -1627,6 +1635,13 @@ fn same_bus_ground_return(bus: &BusSpec, return_bus: &BusSpec, phases: usize) ->
             .all(|&n| n <= 0)
 }
 
+fn explicit_single_terminal_ground_return(bus: &BusSpec, return_bus: &BusSpec) -> bool {
+    bus.name.eq_ignore_ascii_case(&return_bus.name)
+        && bus.nodes.len() == 1
+        && return_bus.nodes.len() == 1
+        && return_bus.nodes[0] <= 0
+}
+
 /// The line to line branches of a delta bank over `n` terminals: a closed
 /// ring for a 3+ phase bank, an open chain otherwise. Shared with the writer
 /// so the reader and writer cannot disagree on the branch topology.
@@ -1875,6 +1890,19 @@ mod tests {
         let (r, len) = r_and_length(" units=km", " length=500 units=m");
         assert!((len - 500.0).abs() < 1e-9);
         assert!((r * len - 0.25).abs() < 1e-12);
+    }
+
+    #[test]
+    fn one_phase_inline_sequence_values_stay_positive_sequence() {
+        let net = parse_dss_str(
+            "New Circuit.c\n\
+             New Line.l1 bus1=a.1 bus2=b.1 phases=1 length=0.5 units=km r1=0.5 x1=0.2 c1=3",
+        );
+        let line = net.lines.iter().find(|l| l.name == "l1").unwrap();
+        let code = net.linecode(&line.linecode).unwrap();
+        assert!((line.length - 500.0).abs() < 1e-9);
+        assert!((code.r_series[0][0] * line.length - 0.25).abs() < 1e-12);
+        assert!((code.x_series[0][0] * line.length - 0.1).abs() < 1e-12);
     }
 
     #[test]

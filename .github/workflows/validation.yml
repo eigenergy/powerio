@@ -66,6 +66,6 @@ jobs:
     # The validation script also checks this, but keep the failure close to the
     # setup step.
     - name: Verify the oracle stack imports
-      run: .venv/bin/python -c "import egret, pandapower, pypsa"
+      run: .venv/bin/python -c "import egret, opendssdirect, pandapower, pypsa"
     - name: Run the validation matrix
       run: bash benchmarks/run_validation.sh

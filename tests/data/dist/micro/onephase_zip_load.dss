@@ -1,0 +1,16 @@
+! Single phase ZIP load with an inline positive sequence line.
+! The load voltage bounds keep the ZIP polynomial active across the solve.
+Clear
+Set DefaultBaseFrequency=60
+
+New Circuit.onephase_zip basekv=0.240 pu=1.0 phases=1 bus1=src.1.0 model=ideal
+
+New Line.l1 bus1=src.1 bus2=loadbus.1 phases=1 length=0.5 units=km r1=0.5 x1=0.2
+
+New Load.ld1 bus1=loadbus.1 phases=1 kv=0.240 kw=15 kvar=5 model=8 zipv=(0.5 0.2 0.3 0.4 0.3 0.3 0.0) vminpu=0 vmaxpu=2
+
+Set VoltageBases=[0.240]
+CalcVoltageBases
+Set Tolerance=1e-8
+Set MaxIterations=100
+Solve

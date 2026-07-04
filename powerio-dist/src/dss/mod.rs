@@ -16,4 +16,4 @@ mod write;
 pub use lex::{BusSpec, Param, Scanner, Value, VarMap};
 pub use raw::{BusCoord, RawCommand, RawDss, RawObject, RawProp, parse_raw_file, parse_raw_with};
 pub use read::{network_from_raw, parse_dss_file, parse_dss_str};
-pub use write::write_dss;
+pub use write::{DssLoadVoltageBounds, DssWriteOptions, write_dss, write_dss_with_options};

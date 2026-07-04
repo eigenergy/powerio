@@ -23,11 +23,51 @@ use crate::model::{
 use super::read::delta_edges;
 use super::{lex, prop};
 
+/// Options for canonical OpenDSS output.
+#[derive(Clone, Debug, PartialEq)]
+#[non_exhaustive]
+pub struct DssWriteOptions {
+    /// Default voltage validity band emitted on loads that do not already
+    /// carry `vminpu` / `vmaxpu` extras.
+    pub default_load_voltage_bounds: Option<DssLoadVoltageBounds>,
+}
+
+impl Default for DssWriteOptions {
+    fn default() -> Self {
+        Self {
+            default_load_voltage_bounds: Some(DssLoadVoltageBounds::default()),
+        }
+    }
+}
+
+/// OpenDSS per unit load voltage validity band.
+#[derive(Clone, Copy, Debug, PartialEq)]
+#[non_exhaustive]
+pub struct DssLoadVoltageBounds {
+    pub vminpu: f64,
+    pub vmaxpu: f64,
+}
+
+impl Default for DssLoadVoltageBounds {
+    fn default() -> Self {
+        Self {
+            vminpu: 0.0,
+            vmaxpu: 2.0,
+        }
+    }
+}
+
 /// Writes canonical `.dss` text from the model.
 pub fn write_dss(net: &DistNetwork) -> Conversion {
+    write_dss_with_options(net, &DssWriteOptions::default())
+}
+
+/// Writes canonical `.dss` text from the model with explicit options.
+pub fn write_dss_with_options(net: &DistNetwork, options: &DssWriteOptions) -> Conversion {
     let mut w = DssWriter {
         out: String::new(),
         warnings: Vec::new(),
+        options: options.clone(),
         grounded: net
             .buses
             .iter()
@@ -50,6 +90,7 @@ pub fn write_dss(net: &DistNetwork) -> Conversion {
 struct DssWriter {
     out: String,
     warnings: Vec<String>,
+    options: DssWriteOptions,
     /// Bus id (lowercase) → perfectly grounded terminal names.
     grounded: BTreeMap<String, Vec<String>>,
     /// Bus id (lowercase) → ordered terminal names.
@@ -1009,10 +1050,22 @@ impl DssWriter {
                     ));
                 }
             }
+            self.add_default_load_voltage_bounds(&mut extras);
             s.push_str(&self.extras_tail("load", &l.name, &extras));
             self.line_out(&s);
         }
         self.out.push('\n');
+    }
+
+    fn add_default_load_voltage_bounds(&self, extras: &mut Extras) {
+        if let Some(bounds) = self.options.default_load_voltage_bounds {
+            extras
+                .entry("vminpu".into())
+                .or_insert_with(|| bounds.vminpu.into());
+            extras
+                .entry("vmaxpu".into())
+                .or_insert_with(|| bounds.vmaxpu.into());
+        }
     }
 
     /// `kv` for a load or capacitor: the recorded value when the source
@@ -1556,6 +1609,62 @@ mod tests {
         let first = write_dss(net);
         let second = write_dss(&parse_dss_str(&first.text));
         (first.text, second.text)
+    }
+
+    #[test]
+    fn constant_power_loads_get_wide_voltage_bounds_by_default() {
+        let (b, vs) = three_phase_source(2400.0);
+        let load = load_on("sb", &["1"], Configuration::Wye);
+        let net = DistNetwork {
+            base_frequency: 60.0,
+            buses: vec![b],
+            sources: vec![vs],
+            loads: vec![load],
+            ..DistNetwork::default()
+        };
+        let out = write_dss(&net);
+        let line = out.text.lines().find(|l| l.contains("Load.ld")).unwrap();
+        assert!(line.contains("vminpu=0"), "{line}");
+        assert!(line.contains("vmaxpu=2"), "{line}");
+    }
+
+    #[test]
+    fn explicit_load_voltage_bounds_are_preserved() {
+        let (b, vs) = three_phase_source(2400.0);
+        let mut load = load_on("sb", &["1"], Configuration::Wye);
+        load.extras.insert("vminpu".into(), serde_json::json!(0.8));
+        load.extras.insert("vmaxpu".into(), serde_json::json!(1.2));
+        let net = DistNetwork {
+            base_frequency: 60.0,
+            buses: vec![b],
+            sources: vec![vs],
+            loads: vec![load],
+            ..DistNetwork::default()
+        };
+        let out = write_dss(&net);
+        let line = out.text.lines().find(|l| l.contains("Load.ld")).unwrap();
+        assert!(line.contains("vminpu=0.8"), "{line}");
+        assert!(line.contains("vmaxpu=1.2"), "{line}");
+    }
+
+    #[test]
+    fn default_load_voltage_bounds_can_be_disabled() {
+        let (b, vs) = three_phase_source(2400.0);
+        let load = load_on("sb", &["1"], Configuration::Wye);
+        let net = DistNetwork {
+            base_frequency: 60.0,
+            buses: vec![b],
+            sources: vec![vs],
+            loads: vec![load],
+            ..DistNetwork::default()
+        };
+        let options = DssWriteOptions {
+            default_load_voltage_bounds: None,
+        };
+        let out = write_dss_with_options(&net, &options);
+        let line = out.text.lines().find(|l| l.contains("Load.ld")).unwrap();
+        assert!(!line.contains("vminpu="), "{line}");
+        assert!(!line.contains("vmaxpu="), "{line}");
     }
 
     #[test]
