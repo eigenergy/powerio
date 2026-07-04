@@ -56,9 +56,17 @@ const IBR_EXTRA_FIELDS: &[&str] = &[
 
 const TRANSFORMER_NO_LOAD_ALLOWED_EXTRAS: [&str; 4] =
     ["g_no_load", "b_no_load", "%noloadloss", "%imag"];
-const TRANSFORMER_TWO_WINDING_ALLOWED_EXTRAS: [&str; 10] = [
+const TRANSFORMER_TWO_WINDING_ALLOWED_EXTRAS: [&str; 18] = [
     "tap_min",
     "tap_max",
+    "mintap",
+    "maxtap",
+    "numtaps",
+    "pmd_tm_set",
+    "pmd_tm_lb",
+    "pmd_tm_ub",
+    "pmd_tm_fix",
+    "pmd_tm_step",
     "g_no_load",
     "b_no_load",
     "r_neutral_from",
@@ -794,6 +802,7 @@ impl Writer {
                 .insert(name, v);
         };
         for t in &net.transformers {
+            self.warn_nonuniform_per_phase_taps(t);
             match classify(t) {
                 Kind::SinglePhase => {
                     if t.windings.iter().any(|w| w.conn == WindingConn::Delta) {
@@ -928,7 +937,7 @@ impl Writer {
         o.insert("terminal_map_from".into(), json!(from.terminal_map));
         o.insert("terminal_map_to".into(), json!(to.terminal_map));
         self.transformer_neutral_fields(&mut o, t, from, to);
-        self.transformer_tap_fields(&mut o, t, from);
+        self.transformer_tap_fields(&mut o, t, from, to);
         if emit_no_load {
             self.transformer_no_load_fields(&mut o, t, from, s);
         }
@@ -971,6 +980,21 @@ impl Writer {
             / (v_new * v_new);
         let r_neutral = self.center_tap_neutral(t, "r_neutral", w2.r_neutral, w3.r_neutral);
         let x_neutral = self.center_tap_neutral(t, "x_neutral", w2.x_neutral, w3.x_neutral);
+        if (w2.tap - w3.tap).abs() > 1e-9 {
+            let mut details = Map::new();
+            details.insert("from_tap".into(), json!(from.tap));
+            details.insert("secondary_taps".into(), json!([w2.tap, w3.tap]));
+            details.insert("emitted_secondary_tap".into(), json!(w2.tap));
+            self.transformer_diagnostic(
+                t,
+                "EMIT.BMOPF.TRANSFORMER_CENTER_TAP_TAP_COLLAPSED",
+                format!(
+                    "transformer {}: center tap secondary half winding taps ({}, {}) differ; emitted the first half tap",
+                    t.name, w2.tap, w3.tap
+                ),
+                details,
+            );
+        }
         let to = Winding {
             bus: w2.bus.clone(),
             terminal_map: {
@@ -982,7 +1006,7 @@ impl Writer {
             v_ref: v_new,
             s_rating: from.s_rating,
             r_pct: r_pct_new,
-            tap: 1.0,
+            tap: w2.tap,
             r_neutral,
             x_neutral,
         };
@@ -1063,7 +1087,7 @@ impl Writer {
         o.insert("terminal_map_from".into(), json!(from.terminal_map));
         o.insert("terminal_map_to".into(), json!(to.terminal_map));
         self.transformer_neutral_fields(&mut o, t, from, to);
-        self.transformer_tap_fields(&mut o, t, from);
+        self.transformer_tap_fields(&mut o, t, from, to);
         self.transformer_no_load_fields(&mut o, t, from, s);
         self.transformer_extras_dropped(t, &TRANSFORMER_TWO_WINDING_ALLOWED_EXTRAS);
         o.into()
@@ -1229,25 +1253,59 @@ impl Writer {
         o: &mut Map<String, Value>,
         t: &DistTransformer,
         from: &Winding,
+        to: &Winding,
     ) {
-        if (from.tap - 1.0).abs() > 1e-12 || t.extras.contains_key("tap") {
-            o.insert("tap".into(), self.num(from.tap, "transformer tap"));
+        if to.tap.abs() <= 1e-12 {
+            if (from.tap - 1.0).abs() > 1e-12 || (to.tap - 1.0).abs() > 1e-12 {
+                let mut details = Map::new();
+                details.insert("from_tap".into(), json!(from.tap));
+                details.insert("to_tap".into(), json!(to.tap));
+                self.transformer_diagnostic(
+                    t,
+                    "EMIT.BMOPF.TRANSFORMER_TAP_DROPPED",
+                    format!(
+                        "transformer {}: to-side tap {} cannot form a finite BMOPF ratio; dropped",
+                        t.name, to.tap
+                    ),
+                    details,
+                );
+            }
+        } else {
+            let tap = from.tap / to.tap;
+            if (tap - 1.0).abs() > 1e-12 || t.extras.contains_key("tap") {
+                o.insert("tap".into(), self.num(tap, "transformer tap"));
+            }
         }
         for key in ["tap_min", "tap_max"] {
             if let Some(v) = extras_number(&t.extras, key) {
                 o.insert(key.into(), self.num(v, &format!("transformer {key}")));
             }
         }
-        for w in t.windings.iter().skip(1) {
-            if (w.tap - 1.0).abs() > 1e-12 {
+    }
+
+    fn warn_nonuniform_per_phase_taps(&mut self, t: &DistTransformer) {
+        let Some(tm_set) = t.extras.get("pmd_tm_set").and_then(Value::as_array) else {
+            return;
+        };
+        for (idx, raw) in tm_set.iter().enumerate() {
+            let Some(taps) = tap_values(raw) else {
+                continue;
+            };
+            let Some(first) = taps.first().copied() else {
+                continue;
+            };
+            if taps.iter().any(|tap| (tap - first).abs() > 1e-9) {
                 let mut details = Map::new();
-                details.insert("tap".into(), json!(w.tap));
+                details.insert("winding".into(), json!(idx + 1));
+                details.insert("source_taps".into(), json!(taps));
+                details.insert("emitted_winding_tap".into(), json!(first));
                 self.transformer_diagnostic(
                     t,
-                    "EMIT.BMOPF.TRANSFORMER_TAP_DROPPED",
+                    "EMIT.BMOPF.TRANSFORMER_PER_PHASE_TAP_COLLAPSED",
                     format!(
-                        "transformer {}: non-from-side tap {} has no BMOPF field; dropped",
-                        t.name, w.tap
+                        "transformer {}: winding {} has non-uniform per phase taps; emitted the first phase tap",
+                        t.name,
+                        idx + 1
                     ),
                     details,
                 );
@@ -1636,6 +1694,22 @@ fn raw_bmopf_value(u: &crate::model::UntypedObject) -> Option<Value> {
 
 fn extras_number(extras: &crate::model::Extras, key: &str) -> Option<f64> {
     let v = extras.get(key)?;
+    v.as_f64()
+        .or_else(|| v.as_i64().map(|v| v as f64))
+        .or_else(|| v.as_str().and_then(|s| s.parse().ok()))
+        .filter(|v| v.is_finite())
+}
+
+fn tap_values(v: &Value) -> Option<Vec<f64>> {
+    if let Some(items) = v.as_array() {
+        let out: Vec<f64> = items.iter().filter_map(value_number).collect();
+        Some(out)
+    } else {
+        value_number(v).map(|tap| vec![tap])
+    }
+}
+
+fn value_number(v: &Value) -> Option<f64> {
     v.as_f64()
         .or_else(|| v.as_i64().map(|v| v as f64))
         .or_else(|| v.as_str().and_then(|s| s.parse().ok()))

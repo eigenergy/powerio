@@ -7,8 +7,8 @@ use std::sync::Arc;
 use powerio_dist::dss::{parse_dss_file, parse_dss_str};
 use powerio_dist::{
     Configuration, DiagnosticSeverity, DiagnosticStage, DistBus, DistLineCode, DistNetwork,
-    DistTransformer, Winding, WindingConn, parse_bmopf_file, parse_bmopf_str, write_bmopf_json,
-    write_dss,
+    DistTransformer, Winding, WindingConn, parse_bmopf_file, parse_bmopf_str, parse_pmd_str,
+    write_bmopf_json, write_dss,
 };
 
 fn fixture(rel: &str) -> PathBuf {
@@ -709,6 +709,157 @@ fn transformer_tap_fields_round_trip_through_bmopf() {
     assert_eq!(t["tap_max"], 1.1);
     assert_eq!(t["g_no_load"], serde_json::json!(0.000_001));
     assert_eq!(t["b_no_load"], serde_json::json!(0.0));
+}
+
+#[test]
+fn dss_fixed_to_side_tap_emits_bmopf_ratio_without_bounds() {
+    let v = schema_validator();
+    let net = parse_dss_str(
+        "New Circuit.tap basekv=7.2 pu=1.0 phases=1 bus1=src.1\n\
+         New Transformer.t1 phases=1 windings=2 buses=(src.1, load.1) \
+         conns=(wye, wye) kvs=(7.2, 0.24) kvas=(25, 25) taps=(1.0, 1.05) \
+         mintap=0.9 maxtap=1.1 numtaps=32 xhl=2.0 %Rs=(0.5, 0.5)\n",
+    );
+    assert!((net.transformers[0].windings[1].tap - 1.05).abs() < 1e-12);
+
+    let out = write_bmopf_json(&net);
+    assert_eq!(errors(&v, &out.text), Vec::<String>::new());
+    assert!(
+        out.warnings.iter().all(|w| !w.contains("TAP_DROPPED")),
+        "{:?}",
+        out.warnings
+    );
+    assert!(
+        out.warnings
+            .iter()
+            .all(|w| !w.contains("mintap") && !w.contains("maxtap") && !w.contains("numtaps")),
+        "{:?}",
+        out.warnings
+    );
+
+    let doc: serde_json::Value = serde_json::from_str(&out.text).unwrap();
+    let t = &doc["transformer"]["single_phase"]["t1"];
+    assert!((t["tap"].as_f64().unwrap() - (1.0 / 1.05)).abs() < 1e-12);
+    assert!(t.get("tap_min").is_none(), "{t:?}");
+    assert!(t.get("tap_max").is_none(), "{t:?}");
+}
+
+#[test]
+fn dss_center_tap_uses_first_secondary_tap_and_warns_if_halves_differ() {
+    let net = parse_dss_str(
+        "New Circuit.ct basekv=7.2 pu=1.0 phases=1 bus1=sourcebus.1\n\
+         New Transformer.t1 phases=1 windings=3\n\
+         ~ wdg=1 bus=sourcebus.1 kv=7.2 kva=25 conn=wye tap=1.02 %R=0.6\n\
+         ~ wdg=2 bus=secondary.1.0 kv=0.12 kva=25 conn=wye tap=1.01 %R=1.2\n\
+         ~ wdg=3 bus=secondary.0.2 kv=0.12 kva=25 conn=wye tap=1.03 %R=1.2\n\
+         ~ xhl=2.04 xht=2.04 xlt=1.36\n",
+    );
+
+    let out = write_bmopf_json(&net);
+    assert!(
+        out.warnings
+            .iter()
+            .any(|w| w.contains("EMIT.BMOPF.TRANSFORMER_CENTER_TAP_TAP_COLLAPSED")),
+        "{:?}",
+        out.warnings
+    );
+    let diag = diagnostic(
+        &out,
+        "EMIT.BMOPF.TRANSFORMER_CENTER_TAP_TAP_COLLAPSED",
+        "transformer t1",
+    );
+    assert_eq!(
+        diag.details["secondary_taps"],
+        serde_json::json!([1.01, 1.03])
+    );
+
+    let doc: serde_json::Value = serde_json::from_str(&out.text).unwrap();
+    let t = &doc["transformer"]["center_tap"]["t1"];
+    assert!((t["tap"].as_f64().unwrap() - (1.02 / 1.01)).abs() < 1e-12);
+}
+
+#[test]
+fn pmd_uniform_per_phase_taps_emit_ratio_without_warning() {
+    let net = parse_pmd_str(
+        r#"{
+          "data_model": "ENGINEERING",
+          "transformer": {"reg": {"bus": ["b1", "b2"],
+            "connections": [[1, 2, 3, 4], [1, 2, 3, 4]],
+            "configuration": ["WYE", "WYE"], "polarity": [1, 1],
+            "rw": [0.005, 0.005], "xsc": [0.01],
+            "sm_nom": [1666.0, 1666.0], "vm_nom": [2.4, 2.4],
+            "tm_set": [[1.0, 1.0, 1.0], [1.05, 1.05, 1.05]],
+            "tm_lb": [[0.9, 0.9, 0.9], [0.9, 0.9, 0.9]],
+            "tm_ub": [[1.1, 1.1, 1.1], [1.1, 1.1, 1.1]],
+            "tm_fix": [[true, true, true], [false, false, false]],
+            "tm_step": [[0.03125, 0.03125, 0.03125], [0.03125, 0.03125, 0.03125]],
+            "status": "ENABLED"}}
+        }"#,
+    )
+    .unwrap();
+
+    let out = write_bmopf_json(&net);
+    assert!(
+        out.warnings
+            .iter()
+            .all(|w| !w.contains("TRANSFORMER_PER_PHASE_TAP_COLLAPSED")),
+        "{:?}",
+        out.warnings
+    );
+    assert!(
+        out.warnings
+            .iter()
+            .all(|w| !w.contains("TRANSFORMER_EXTRA_DROPPED") && !w.contains("pmd_tm_")),
+        "{:?}",
+        out.warnings
+    );
+    let doc: serde_json::Value = serde_json::from_str(&out.text).unwrap();
+    let t = &doc["transformer"]["single_phase"]["reg_1"];
+    assert!((t["tap"].as_f64().unwrap() - (1.0 / 1.05)).abs() < 1e-12);
+    assert!(t.get("tap_min").is_none());
+    assert!(t.get("tap_max").is_none());
+}
+
+#[test]
+fn pmd_nonuniform_per_phase_taps_warn_with_stable_code() {
+    let net = parse_pmd_str(
+        r#"{
+          "data_model": "ENGINEERING",
+          "transformer": {"reg": {"bus": ["b1", "b2"],
+            "connections": [[1, 2, 3, 4], [1, 2, 3, 4]],
+            "configuration": ["WYE", "WYE"], "polarity": [1, 1],
+            "rw": [0.005, 0.005], "xsc": [0.01],
+            "sm_nom": [1666.0, 1666.0], "vm_nom": [2.4, 2.4],
+            "tm_set": [[1.0, 1.0, 1.0], [1.05, 1.04, 1.05]],
+            "status": "ENABLED"}}
+        }"#,
+    )
+    .unwrap();
+
+    let out = write_bmopf_json(&net);
+    assert!(
+        out.warnings
+            .iter()
+            .any(|w| w.contains("EMIT.BMOPF.TRANSFORMER_PER_PHASE_TAP_COLLAPSED")),
+        "{:?}",
+        out.warnings
+    );
+    let diag = diagnostic(
+        &out,
+        "EMIT.BMOPF.TRANSFORMER_PER_PHASE_TAP_COLLAPSED",
+        "transformer reg",
+    );
+    assert_eq!(diag.severity, DiagnosticSeverity::Warning);
+    assert_eq!(diag.stage, DiagnosticStage::Emit);
+    assert_eq!(diag.details["winding"], serde_json::json!(2));
+    assert_eq!(
+        diag.details["source_taps"],
+        serde_json::json!([1.05, 1.04, 1.05])
+    );
+
+    let doc: serde_json::Value = serde_json::from_str(&out.text).unwrap();
+    let t = &doc["transformer"]["single_phase"]["reg_1"];
+    assert!((t["tap"].as_f64().unwrap() - (1.0 / 1.05)).abs() < 1e-12);
 }
 
 #[test]
