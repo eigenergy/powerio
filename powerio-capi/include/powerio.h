@@ -69,7 +69,8 @@
  * and wire forms stay fixed. This is what PIO_ABI_VERSION freezes.
  *
  * Optional: build with `--features arrow` for pio_to_arrow (guarded by
- * PIO_ARROW), `--features gridfm` for pio_read_dir / pio_scenario_ids
+ * PIO_ARROW), add `--features matrix` for the balanced matrix Arrow tables,
+ * `--features gridfm` for pio_read_dir / pio_scenario_ids
  * (guarded by PIO_GRIDFM), `--features dist` for the pio_dist_* entry
  * points (guarded by PIO_DIST): multiconductor distribution cases (OpenDSS,
  * PMD ENGINEERING JSON, BMOPF JSON) behind their own PioDistNetwork handle,
@@ -84,7 +85,7 @@
  * powerio-dist-json) carry their own meta.version and may evolve; pin a
  * vintage from the payload meta.
  * Probe optional surfaces at runtime with
- * pio_has_feature("arrow"|"gridfm"|"dist"|"pkg").
+ * pio_has_feature("arrow"|"matrix"|"gridfm"|"dist"|"pkg").
  *
  * Checked in and generated; regenerate from the Rust source with
  *   cbindgen --config cbindgen.toml --crate powerio-capi --output include/powerio.h
@@ -197,6 +198,22 @@ struct ArrowSchema;
 #define PIO_ARROW_TABLE_SOLVER_HVDC 14
 #endif
 
+#if defined(PIO_ARROW)
+#define PIO_ARROW_TABLE_YBUS 15
+#endif
+
+#if defined(PIO_ARROW)
+#define PIO_ARROW_TABLE_INCIDENCE 16
+#endif
+
+#if defined(PIO_ARROW)
+#define PIO_ARROW_TABLE_BPRIME 17
+#endif
+
+#if defined(PIO_ARROW)
+#define PIO_ARROW_TABLE_BDOUBLEPRIME 18
+#endif
+
 #if defined(PIO_DIST)
 /**
  * Opaque parsed distribution network handle (the multiconductor wire-coordinate
@@ -244,14 +261,21 @@ uint32_t pio_dist_abi_version(void);
 #endif
 
 /**
- * Whether an optional build feature is compiled in: pass `"arrow"`, `"gridfm"`,
- * `"dist"`, or `"pkg"`. Returns 1 if present, 0 otherwise (and 0 for a NULL or
- * unknown name). The optional surfaces (`pio_to_arrow`, the `pio_read_dir`/
- * gridfm path, the `pio_dist_*` block, and the `pio_package_*` block) are only
- * linked when their feature is built, so a consumer that loaded the library at
- * runtime probes for them here instead of resolving symbols blind. Feature
- * names are strings like format names, so a new feature never changes this
- * signature. Infallible.
+ * Whether the matrix Arrow table surface is usable in this build. Returns 1
+ * only when both `arrow` and `matrix` are compiled in, since the matrices ride
+ * `pio_to_arrow`. Infallible.
+ */
+int32_t pio_matrix_available(void);
+
+/**
+ * Whether an optional build feature is compiled in: pass `"arrow"`, `"matrix"`,
+ * `"gridfm"`, `"dist"`, or `"pkg"`. Returns 1 if present, 0 otherwise (and 0
+ * for a NULL or unknown name). The optional surfaces (`pio_to_arrow`, the
+ * matrix Arrow tables, the `pio_read_dir`/gridfm path, the `pio_dist_*` block,
+ * and the `pio_package_*` block) are only linked when their feature is built,
+ * so a consumer that loaded the library at runtime probes for them here
+ * instead of resolving symbols blind. Feature names are strings like format
+ * names, so a new feature never changes this signature. Infallible.
  */
 int32_t pio_has_feature(const char *feature);
 
@@ -597,10 +621,11 @@ size_t pio_bus_shunt(const PioNetwork *net, double *gs, double *bs, size_t cap);
 /**
  * Export one network table over the Arrow C Data Interface: the `to_`
  * conversion whose output type is Arrow structs rather than a string, and the
- * bulk plane this ABI evolves on. Tables 0..5 are raw network tables; tables 6
- * and up are normalized solver tables with per unit/radian values and dense
- * zero based row ids. New or richer columns arrive in the Arrow schema, leaving
- * the C signatures fixed.
+ * bulk plane this ABI evolves on. Tables 0..5 are raw network tables; tables
+ * 6..14 are normalized solver tables with per unit/radian values and dense
+ * zero based row ids; the matrix tables carry COO triplets in that dense index
+ * space with dimensions in schema metadata. New or richer columns arrive in
+ * the Arrow schema, leaving the C signatures fixed.
  *
  * `table` is one of the `PIO_ARROW_TABLE_*` selectors. Raw table columns use
  * EXTERNAL bus ids (the `pio_bus_ids` id space), not the gridfm schema. On

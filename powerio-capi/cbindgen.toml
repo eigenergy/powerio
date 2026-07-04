@@ -82,7 +82,8 @@ header = """
  * and wire forms stay fixed. This is what PIO_ABI_VERSION freezes.
  *
  * Optional: build with `--features arrow` for pio_to_arrow (guarded by
- * PIO_ARROW), `--features gridfm` for pio_read_dir / pio_scenario_ids
+ * PIO_ARROW), add `--features matrix` for the balanced matrix Arrow tables,
+ * `--features gridfm` for pio_read_dir / pio_scenario_ids
  * (guarded by PIO_GRIDFM), `--features dist` for the pio_dist_* entry
  * points (guarded by PIO_DIST): multiconductor distribution cases (OpenDSS,
  * PMD ENGINEERING JSON, BMOPF JSON) behind their own PioDistNetwork handle,
@@ -97,7 +98,7 @@ header = """
  * powerio-dist-json) carry their own meta.version and may evolve; pin a
  * vintage from the payload meta.
  * Probe optional surfaces at runtime with
- * pio_has_feature("arrow"|"gridfm"|"dist"|"pkg").
+ * pio_has_feature("arrow"|"matrix"|"gridfm"|"dist"|"pkg").
  *
  * Checked in and generated; regenerate from the Rust source with
  *   cbindgen --config cbindgen.toml --crate powerio-capi --output include/powerio.h

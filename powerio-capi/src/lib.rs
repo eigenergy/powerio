@@ -36,11 +36,12 @@ use powerio::{IndexCore, IndexedNetwork, Network, TargetFormat};
 mod arrow_export;
 #[cfg(feature = "arrow")]
 pub use arrow_export::{
-    PIO_ARROW_TABLE_BRANCH, PIO_ARROW_TABLE_BUS, PIO_ARROW_TABLE_GEN, PIO_ARROW_TABLE_LOAD,
+    PIO_ARROW_TABLE_BDOUBLEPRIME, PIO_ARROW_TABLE_BPRIME, PIO_ARROW_TABLE_BRANCH,
+    PIO_ARROW_TABLE_BUS, PIO_ARROW_TABLE_GEN, PIO_ARROW_TABLE_INCIDENCE, PIO_ARROW_TABLE_LOAD,
     PIO_ARROW_TABLE_SHUNT, PIO_ARROW_TABLE_SOLVER_ARC, PIO_ARROW_TABLE_SOLVER_BRANCH,
     PIO_ARROW_TABLE_SOLVER_BUS, PIO_ARROW_TABLE_SOLVER_GEN, PIO_ARROW_TABLE_SOLVER_HVDC,
     PIO_ARROW_TABLE_SOLVER_LOAD, PIO_ARROW_TABLE_SOLVER_SHUNT, PIO_ARROW_TABLE_SOLVER_STORAGE,
-    PIO_ARROW_TABLE_SOLVER_SWITCH, PIO_ARROW_TABLE_SWITCH,
+    PIO_ARROW_TABLE_SOLVER_SWITCH, PIO_ARROW_TABLE_SWITCH, PIO_ARROW_TABLE_YBUS,
 };
 
 /// Opaque parsed network handle. Carries the parsed [`Network`], the
@@ -229,14 +230,22 @@ pub extern "C" fn pio_dist_abi_version() -> u32 {
     PIO_DIST_ABI_VERSION
 }
 
-/// Whether an optional build feature is compiled in: pass `"arrow"`, `"gridfm"`,
-/// `"dist"`, or `"pkg"`. Returns 1 if present, 0 otherwise (and 0 for a NULL or
-/// unknown name). The optional surfaces (`pio_to_arrow`, the `pio_read_dir`/
-/// gridfm path, the `pio_dist_*` block, and the `pio_package_*` block) are only
-/// linked when their feature is built, so a consumer that loaded the library at
-/// runtime probes for them here instead of resolving symbols blind. Feature
-/// names are strings like format names, so a new feature never changes this
-/// signature. Infallible.
+/// Whether the matrix Arrow table surface is usable in this build. Returns 1
+/// only when both `arrow` and `matrix` are compiled in, since the matrices ride
+/// `pio_to_arrow`. Infallible.
+#[unsafe(no_mangle)]
+pub extern "C" fn pio_matrix_available() -> i32 {
+    i32::from(cfg!(all(feature = "arrow", feature = "matrix")))
+}
+
+/// Whether an optional build feature is compiled in: pass `"arrow"`, `"matrix"`,
+/// `"gridfm"`, `"dist"`, or `"pkg"`. Returns 1 if present, 0 otherwise (and 0
+/// for a NULL or unknown name). The optional surfaces (`pio_to_arrow`, the
+/// matrix Arrow tables, the `pio_read_dir`/gridfm path, the `pio_dist_*` block,
+/// and the `pio_package_*` block) are only linked when their feature is built,
+/// so a consumer that loaded the library at runtime probes for them here
+/// instead of resolving symbols blind. Feature names are strings like format
+/// names, so a new feature never changes this signature. Infallible.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_has_feature(feature: *const c_char) -> i32 {
     unsafe {
@@ -244,6 +253,7 @@ pub unsafe extern "C" fn pio_has_feature(feature: *const c_char) -> i32 {
             let Some(name) = cstr(feature) else { return 0 };
             let features: &[(&str, bool)] = &[
                 ("arrow", cfg!(feature = "arrow")),
+                ("matrix", cfg!(feature = "matrix")),
                 ("gridfm", cfg!(feature = "gridfm")),
                 ("dist", cfg!(feature = "dist")),
                 ("pkg", cfg!(feature = "pkg")),
@@ -1120,10 +1130,11 @@ pub unsafe extern "C" fn pio_bus_shunt(
 
 /// Export one network table over the Arrow C Data Interface: the `to_`
 /// conversion whose output type is Arrow structs rather than a string, and the
-/// bulk plane this ABI evolves on. Tables 0..5 are raw network tables; tables 6
-/// and up are normalized solver tables with per unit/radian values and dense
-/// zero based row ids. New or richer columns arrive in the Arrow schema, leaving
-/// the C signatures fixed.
+/// bulk plane this ABI evolves on. Tables 0..5 are raw network tables; tables
+/// 6..14 are normalized solver tables with per unit/radian values and dense
+/// zero based row ids; the matrix tables carry COO triplets in that dense index
+/// space with dimensions in schema metadata. New or richer columns arrive in
+/// the Arrow schema, leaving the C signatures fixed.
 ///
 /// `table` is one of the `PIO_ARROW_TABLE_*` selectors. Raw table columns use
 /// EXTERNAL bus ids (the `pio_bus_ids` id space), not the gridfm schema. On
@@ -1150,7 +1161,7 @@ pub unsafe extern "C" fn pio_to_arrow(
                 return Err("out_array or out_schema is NULL".to_string());
             }
             let c = network_ref(net).ok_or_else(|| "network handle is NULL".to_string())?;
-            arrow_export::export(&c.net, table)
+            arrow_export::export(&c.net, &c.core, table)
         }));
         match r {
             Ok(Ok((array, schema))) => {
@@ -2062,6 +2073,21 @@ mod tests {
         assert!(!v.is_empty());
     }
 
+    #[test]
+    fn matrix_probe_matches_build_features() {
+        let matrix = CString::new("matrix").unwrap();
+        unsafe {
+            assert_eq!(
+                pio_has_feature(matrix.as_ptr()),
+                i32::from(cfg!(feature = "matrix"))
+            );
+        }
+        assert_eq!(
+            pio_matrix_available(),
+            i32::from(cfg!(all(feature = "arrow", feature = "matrix")))
+        );
+    }
+
     fn strip_c_comments(input: &str) -> String {
         let mut out = String::with_capacity(input.len());
         let mut chars = input.chars().peekable();
@@ -2200,11 +2226,16 @@ mod tests {
             "#define PIO_ARROW_TABLE_SOLVER_GEN 12",
             "#define PIO_ARROW_TABLE_SOLVER_STORAGE 13",
             "#define PIO_ARROW_TABLE_SOLVER_HVDC 14",
+            "#define PIO_ARROW_TABLE_YBUS 15",
+            "#define PIO_ARROW_TABLE_INCIDENCE 16",
+            "#define PIO_ARROW_TABLE_BPRIME 17",
+            "#define PIO_ARROW_TABLE_BDOUBLEPRIME 18",
             "typedef struct PioDistNetwork PioDistNetwork;",
             "typedef struct PioNetwork PioNetwork;",
             "typedef struct PioPackage PioPackage;",
             "uint32_t pio_abi_version(void);",
             "uint32_t pio_dist_abi_version(void);",
+            "int32_t pio_matrix_available(void);",
             "int32_t pio_has_feature(const char *feature);",
             "const char *pio_version(void);",
             "PioNetwork *pio_parse_file(const char *path, const char *from, char *errbuf, size_t errlen);",

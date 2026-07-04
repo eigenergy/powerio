@@ -28,9 +28,10 @@ surfaces before changing `powerio.h` or an exported `pio_*` function:
 ```
 cargo test -p powerio-capi --no-default-features
 cargo test -p powerio-capi --features arrow
+cargo test -p powerio-capi --features arrow,matrix
 cargo test -p powerio-capi --features gridfm
 cargo test -p powerio-capi --features dist
-cargo test -p powerio-capi --features arrow,gridfm,dist,pkg
+cargo test -p powerio-capi --features arrow,matrix,gridfm,dist,pkg
 scripts/capi-header-parity.sh
 scripts/capi-smoke.sh
 ```
@@ -250,17 +251,18 @@ appeared before this split should be treated as experimental.
 
 Every public `PIO_*` macro, opaque typedef, and `pio_*` prototype in
 `powerio.h` is pinned by a Cargo test, and CI compiles the C smoke program
-against the no-default core ABI plus the arrow, gridfm, dist, and pkg feature
-surfaces. CI also compiles and links a C++ header sanity program to keep the
+against the no-default core ABI plus the arrow, matrix, gridfm, dist, and pkg
+feature surfaces. CI also compiles and links a C++ header sanity program to keep the
 `extern "C"` path honest. Source/header symbol parity is checked separately, so
 adding, renaming, or deleting a public entry point fails before release.
 
 ## Scope
 
 powerio-capi covers the `powerio` surface: parse / convert / query / table
-and JSON extraction. It deliberately has no matrix builders; those live in
-`powerio-matrix`. The one `powerio-matrix` surface it does expose is the gridfm
-reader (`--features gridfm`), because it just returns a plain network handle. A
-future `powerio-matrix-capi` can hand back assembled CSR matrices (B', Y_bus,
-PTDF, DC OPF) over the same ABI style; for now a consumer builds matrices from
-the extracted tables.
+and JSON extraction. Build with `--features arrow,matrix` to export the first
+balanced sparse matrix family over `pio_to_arrow` as COO triplet tables:
+`ybus`, `incidence`, `bprime`, and `bdoubleprime`, all in dense solver bus index
+space with dimensions in Arrow schema metadata. Runtime consumers can call
+`pio_matrix_available()` before selecting those table ids. Larger matrix
+families such as PTDF, LODF, and DC OPF bundles still live in `powerio-matrix`
+and are not C ABI surfaces yet.

@@ -36,9 +36,9 @@ Use the smallest gate set that covers the changed surface, then run the
 | rich model fields | `bash benchmarks/run_rich_validation.sh` |
 | matrix builders or DC OPF bundles | `cargo test -p powerio-matrix`; `cargo bench -p powerio-matrix --bench matrix` |
 | PowerWorld binary reader | PowerWorld parser tests plus `cargo bench -p powerio --bench parse -- "parse_aux_|parse_pwb_"` |
-| C ABI | `scripts/capi-header-parity.sh`; `scripts/capi-smoke.sh`; `cargo test -p powerio-capi --no-default-features`; `cargo test -p powerio-capi --features arrow,gridfm,dist,pkg`; matching clippy runs |
+| C ABI | `scripts/capi-header-parity.sh`; `scripts/capi-smoke.sh`; `cargo test -p powerio-capi --no-default-features`; `cargo test -p powerio-capi --features arrow,matrix,gridfm,dist,pkg`; matching clippy runs |
 | Python package metadata or extras | `maturin build --release --out /tmp/powerio-wheel-check`; inspect wheel `METADATA` |
-| Julia binding compatibility | build `powerio-capi --features arrow,gridfm,dist,pkg`, then run `PowerIO.jl` tests with `POWERIO_CAPI` |
+| Julia binding compatibility | build `powerio-capi --features arrow,matrix,gridfm,dist,pkg`, then run `PowerIO.jl` tests with `POWERIO_CAPI` |
 | shared surface with PowerIO.jl | push a same-named PowerIO.jl companion branch; the tandem CI job tests against it |
 | CLI behavior | `cargo test -p powerio-cli --test cli` |
 | documentation or website | `mdbook build docs`; `mdbook test docs`; check stale links to retired guide outputs |
@@ -55,10 +55,10 @@ a release claim:
 
 ```sh
 cargo test -p powerio-capi --no-default-features
-cargo test -p powerio-capi --features arrow,gridfm,dist,pkg
+cargo test -p powerio-capi --features arrow,matrix,gridfm,dist,pkg
 cargo clippy -p powerio-capi --all-targets --no-default-features -- -D warnings
-cargo clippy -p powerio-capi --all-targets --features arrow,gridfm,dist,pkg -- -D warnings
-cargo build -p powerio-capi --release --features arrow,gridfm,dist,pkg
+cargo clippy -p powerio-capi --all-targets --features arrow,matrix,gridfm,dist,pkg -- -D warnings
+cargo build -p powerio-capi --release --features arrow,matrix,gridfm,dist,pkg
 scripts/capi-header-parity.sh
 scripts/capi-smoke.sh
 POWERIO_CAPI=$PWD/target/release/libpowerio_capi.dylib \

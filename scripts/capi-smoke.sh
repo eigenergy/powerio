@@ -7,7 +7,7 @@ tmp="${TMPDIR:-/tmp}/powerio-capi-smoke-$$"
 mkdir -p "$tmp"
 trap 'rm -rf "$tmp"' EXIT
 
-cargo build -p powerio-capi --release --features arrow,gridfm,dist,pkg
+cargo build -p powerio-capi --release --features arrow,matrix,gridfm,dist,pkg
 cargo run -p powerio-cli -- gridfm tests/data/case9.m -o "$tmp/gridfm" >/dev/null
 cp tests/data/case9.m "$tmp/case9.m"
 

@@ -18,8 +18,13 @@ static_assert(PIO_ARROW_TABLE_BRANCH == 1);
 static_assert(PIO_ARROW_TABLE_GEN == 2);
 static_assert(PIO_ARROW_TABLE_LOAD == 3);
 static_assert(PIO_ARROW_TABLE_SHUNT == 4);
+static_assert(PIO_ARROW_TABLE_YBUS == 15);
+static_assert(PIO_ARROW_TABLE_INCIDENCE == 16);
+static_assert(PIO_ARROW_TABLE_BPRIME == 17);
+static_assert(PIO_ARROW_TABLE_BDOUBLEPRIME == 18);
 #endif
 
 int main() {
+    (void)pio_matrix_available();
     return pio_abi_version() == PIO_ABI_VERSION ? 0 : 1;
 }

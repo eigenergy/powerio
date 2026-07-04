@@ -10,18 +10,24 @@
 //! signatures.
 //!
 //! Tables 0..5 are the *raw* network fields, with EXTERNAL bus ids (the same id
-//! space as `pio_bus_ids`), not the gridfm-datakit schema. Tables 6 and up are
-//! the normalized solver table contract: per unit/radian values and dense zero
-//! based row ids.
+//! space as `pio_bus_ids`), not the gridfm-datakit schema. Tables 6..14 are the
+//! normalized solver table contract: per unit/radian values and dense zero based
+//! row ids. Matrix table ids after that carry COO triplets in the same dense bus
+//! index space, with matrix dimensions stored in Arrow schema metadata.
 
+#[cfg(feature = "matrix")]
+use std::collections::BTreeMap;
+use std::collections::HashMap;
 use std::sync::Arc;
 
 use arrow::array::{Array, ArrayRef, Float64Array, Int64Array, StructArray, UInt8Array};
 use arrow::datatypes::{Field, Schema};
 use arrow::error::ArrowError;
-use arrow::ffi::{FFI_ArrowArray, FFI_ArrowSchema, to_ffi};
+use arrow::ffi::{FFI_ArrowArray, FFI_ArrowSchema};
 use arrow::record_batch::RecordBatch;
-use powerio::{BusId, Network, NormalizedSolverTables, SolverArcTerminal};
+#[cfg(feature = "matrix")]
+use powerio::IndexedNetwork;
+use powerio::{BusId, IndexCore, Network, NormalizedSolverTables, SolverArcTerminal};
 
 /// Table selectors for [`pio_to_arrow`](crate::pio_to_arrow); the C
 /// header mirrors these as `PIO_ARROW_TABLE_*`.
@@ -40,6 +46,10 @@ pub const PIO_ARROW_TABLE_SOLVER_ARC: i32 = 11;
 pub const PIO_ARROW_TABLE_SOLVER_GEN: i32 = 12;
 pub const PIO_ARROW_TABLE_SOLVER_STORAGE: i32 = 13;
 pub const PIO_ARROW_TABLE_SOLVER_HVDC: i32 = 14;
+pub const PIO_ARROW_TABLE_YBUS: i32 = 15;
+pub const PIO_ARROW_TABLE_INCIDENCE: i32 = 16;
+pub const PIO_ARROW_TABLE_BPRIME: i32 = 17;
+pub const PIO_ARROW_TABLE_BDOUBLEPRIME: i32 = 18;
 
 // These values are the ABI: the `PIO_ARROW_TABLE_*` macros in include/powerio.h
 // are hand-synced to them. The set is append-only: these ids and each table's
@@ -64,12 +74,20 @@ const _: () = assert!(
         && PIO_ARROW_TABLE_SOLVER_GEN == 12
         && PIO_ARROW_TABLE_SOLVER_STORAGE == 13
         && PIO_ARROW_TABLE_SOLVER_HVDC == 14
+        && PIO_ARROW_TABLE_YBUS == 15
+        && PIO_ARROW_TABLE_INCIDENCE == 16
+        && PIO_ARROW_TABLE_BPRIME == 17
+        && PIO_ARROW_TABLE_BDOUBLEPRIME == 18
 );
 
 /// Build the requested table and export it over the C Data Interface. The
 /// returned FFI structs own the columnar buffers until the consumer releases
 /// them.
-pub fn export(net: &Network, table: i32) -> Result<(FFI_ArrowArray, FFI_ArrowSchema), String> {
+pub fn export(
+    net: &Network,
+    core: &IndexCore,
+    table: i32,
+) -> Result<(FFI_ArrowArray, FFI_ArrowSchema), String> {
     let rb = match table {
         PIO_ARROW_TABLE_BUS => bus_batch(net).map_err(|e| e.to_string())?,
         PIO_ARROW_TABLE_BRANCH => branch_batch(net).map_err(|e| e.to_string())?,
@@ -104,12 +122,19 @@ pub fn export(net: &Network, table: i32) -> Result<(FFI_ArrowArray, FFI_ArrowSch
         PIO_ARROW_TABLE_SOLVER_HVDC => {
             solver_hvdc_batch(&solver_tables(net)?).map_err(|e| e.to_string())?
         }
+        PIO_ARROW_TABLE_YBUS => matrix_ybus_batch(net, core)?,
+        PIO_ARROW_TABLE_INCIDENCE => matrix_incidence_batch(net, core)?,
+        PIO_ARROW_TABLE_BPRIME => matrix_bprime_batch(net, core)?,
+        PIO_ARROW_TABLE_BDOUBLEPRIME => matrix_bdoubleprime_batch(net, core)?,
         other => return Err(format!("unknown Arrow table id {other}")),
     };
 
-    // The C Data Interface represents a record batch as a struct array.
+    // The C Data Interface represents a record batch as a struct array. Build
+    // the schema from the RecordBatch, not from ArrayData, so table metadata
+    // such as matrix dimensions survives the FFI boundary.
+    let schema = FFI_ArrowSchema::try_from(rb.schema().as_ref()).map_err(|e| e.to_string())?;
     let data = StructArray::from(rb).into_data();
-    to_ffi(&data).map_err(|e| e.to_string())
+    Ok((FFI_ArrowArray::new(&data), schema))
 }
 
 fn solver_tables(net: &Network) -> Result<NormalizedSolverTables, String> {
@@ -635,13 +660,182 @@ fn solver_hvdc_batch(t: &NormalizedSolverTables) -> Result<RecordBatch, ArrowErr
     ])
 }
 
+#[cfg(feature = "matrix")]
+macro_rules! real_matrix_batch {
+    ($table_name:expr, $matrix:expr) => {{
+        let matrix = $matrix;
+        let mut row_index = Vec::with_capacity(matrix.nnz());
+        let mut col_index = Vec::with_capacity(matrix.nnz());
+        let mut value = Vec::with_capacity(matrix.nnz());
+        for (row, vec) in matrix.outer_iterator().enumerate() {
+            for (col, &entry) in vec.iter() {
+                row_index.push(usz(row));
+                col_index.push(usz(col));
+                value.push(entry);
+            }
+        }
+        matrix_real_batch(
+            $table_name,
+            matrix.rows(),
+            matrix.cols(),
+            row_index,
+            col_index,
+            value,
+        )
+    }};
+}
+
+#[cfg(feature = "matrix")]
+fn matrix_ybus_batch(net: &Network, core: &IndexCore) -> Result<RecordBatch, String> {
+    let view = IndexedNetwork::with_core(net, core);
+    let parts = powerio_matrix::build_ybus(&view, &powerio_matrix::BuildOptions::default())
+        .map_err(|e| e.to_string())?;
+    let mut entries: BTreeMap<(usize, usize), (f64, f64)> = BTreeMap::new();
+    for (row, vec) in parts.g.outer_iterator().enumerate() {
+        for (col, &value) in vec.iter() {
+            entries.entry((row, col)).or_default().0 = value;
+        }
+    }
+    for (row, vec) in parts.b.outer_iterator().enumerate() {
+        for (col, &value) in vec.iter() {
+            entries.entry((row, col)).or_default().1 = value;
+        }
+    }
+
+    let mut row_index = Vec::with_capacity(entries.len());
+    let mut col_index = Vec::with_capacity(entries.len());
+    let mut g = Vec::with_capacity(entries.len());
+    let mut b = Vec::with_capacity(entries.len());
+    for ((row, col), (g_value, b_value)) in entries {
+        row_index.push(usz(row));
+        col_index.push(usz(col));
+        g.push(g_value);
+        b.push(b_value);
+    }
+    matrix_ybus_record_batch(parts.g.rows(), parts.g.cols(), row_index, col_index, g, b)
+        .map_err(|e| e.to_string())
+}
+
+#[cfg(not(feature = "matrix"))]
+fn matrix_ybus_batch(_net: &Network, _core: &IndexCore) -> Result<RecordBatch, String> {
+    Err(matrix_feature_error())
+}
+
+#[cfg(feature = "matrix")]
+fn matrix_incidence_batch(net: &Network, core: &IndexCore) -> Result<RecordBatch, String> {
+    let view = IndexedNetwork::with_core(net, core);
+    let parts = powerio_matrix::build_incidence(
+        &view,
+        powerio_matrix::DcConvention::PaperPure,
+        &powerio_matrix::BuildOptions::default(),
+    )
+    .map_err(|e| e.to_string())?;
+    real_matrix_batch!("incidence", parts.a).map_err(|e| e.to_string())
+}
+
+#[cfg(not(feature = "matrix"))]
+fn matrix_incidence_batch(_net: &Network, _core: &IndexCore) -> Result<RecordBatch, String> {
+    Err(matrix_feature_error())
+}
+
+#[cfg(feature = "matrix")]
+fn matrix_bprime_batch(net: &Network, core: &IndexCore) -> Result<RecordBatch, String> {
+    let view = IndexedNetwork::with_core(net, core);
+    let matrix = powerio_matrix::build_bprime(&view, &powerio_matrix::BuildOptions::default())
+        .map_err(|e| e.to_string())?;
+    real_matrix_batch!("bprime", matrix).map_err(|e| e.to_string())
+}
+
+#[cfg(not(feature = "matrix"))]
+fn matrix_bprime_batch(_net: &Network, _core: &IndexCore) -> Result<RecordBatch, String> {
+    Err(matrix_feature_error())
+}
+
+#[cfg(feature = "matrix")]
+fn matrix_bdoubleprime_batch(net: &Network, core: &IndexCore) -> Result<RecordBatch, String> {
+    let view = IndexedNetwork::with_core(net, core);
+    let matrix =
+        powerio_matrix::build_bdoubleprime(&view, &powerio_matrix::BuildOptions::default())
+            .map_err(|e| e.to_string())?;
+    real_matrix_batch!("bdoubleprime", matrix).map_err(|e| e.to_string())
+}
+
+#[cfg(not(feature = "matrix"))]
+fn matrix_bdoubleprime_batch(_net: &Network, _core: &IndexCore) -> Result<RecordBatch, String> {
+    Err(matrix_feature_error())
+}
+
+#[cfg(not(feature = "matrix"))]
+fn matrix_feature_error() -> String {
+    "matrix Arrow tables require the matrix cargo feature".to_owned()
+}
+
+#[cfg(feature = "matrix")]
+fn matrix_real_batch(
+    table: &str,
+    rows: usize,
+    cols: usize,
+    row_index: Vec<i64>,
+    col_index: Vec<i64>,
+    value: Vec<f64>,
+) -> Result<RecordBatch, ArrowError> {
+    batch_with_metadata(
+        vec![
+            ("row_index", i64s(row_index)),
+            ("col_index", i64s(col_index)),
+            ("value", f64s(value)),
+        ],
+        matrix_metadata(table, rows, cols),
+    )
+}
+
+#[cfg(feature = "matrix")]
+fn matrix_ybus_record_batch(
+    rows: usize,
+    cols: usize,
+    row_index: Vec<i64>,
+    col_index: Vec<i64>,
+    g: Vec<f64>,
+    b: Vec<f64>,
+) -> Result<RecordBatch, ArrowError> {
+    batch_with_metadata(
+        vec![
+            ("row_index", i64s(row_index)),
+            ("col_index", i64s(col_index)),
+            ("g", f64s(g)),
+            ("b", f64s(b)),
+        ],
+        matrix_metadata("ybus", rows, cols),
+    )
+}
+
 fn batch(cols: Vec<(&str, ArrayRef)>) -> Result<RecordBatch, ArrowError> {
+    batch_with_metadata(cols, HashMap::new())
+}
+
+fn batch_with_metadata(
+    cols: Vec<(&str, ArrayRef)>,
+    metadata: HashMap<String, String>,
+) -> Result<RecordBatch, ArrowError> {
     let fields: Vec<Field> = cols
         .iter()
         .map(|(name, arr)| Field::new(*name, arr.data_type().clone(), false))
         .collect();
     let arrays: Vec<ArrayRef> = cols.into_iter().map(|(_, arr)| arr).collect();
-    RecordBatch::try_new(Arc::new(Schema::new(fields)), arrays)
+    RecordBatch::try_new(
+        Arc::new(Schema::new_with_metadata(fields, metadata)),
+        arrays,
+    )
+}
+
+#[cfg(feature = "matrix")]
+fn matrix_metadata(table: &str, rows: usize, cols: usize) -> HashMap<String, String> {
+    HashMap::from([
+        ("powerio.table".to_owned(), table.to_owned()),
+        ("powerio.index_space".to_owned(), "solver_bus".to_owned()),
+        ("powerio.row_count".to_owned(), rows.to_string()),
+        ("powerio.col_count".to_owned(), cols.to_string()),
+    ])
 }
 
 /// External bus id as i64 (`-1` if it somehow overflows), matching `pio_branches`.
@@ -699,7 +893,8 @@ mod tests {
     }
 
     fn round_trip(net: &Network, table: i32) -> StructArray {
-        let (array, schema) = export(net, table).unwrap();
+        let core = IndexCore::build(net);
+        let (array, schema) = export(net, &core, table).unwrap();
         // from_ffi consumes the array and borrows the schema (zero-copy import).
         let data = unsafe { from_ffi(array, &schema) }.unwrap();
         StructArray::from(data)
@@ -719,6 +914,141 @@ mod tests {
             .as_any()
             .downcast_ref::<Int64Array>()
             .unwrap()
+    }
+
+    #[cfg(feature = "matrix")]
+    fn rb_f64_col<'a>(rb: &'a RecordBatch, name: &str) -> &'a Float64Array {
+        rb.column_by_name(name)
+            .unwrap()
+            .as_any()
+            .downcast_ref::<Float64Array>()
+            .unwrap()
+    }
+
+    #[cfg(feature = "matrix")]
+    fn rb_i64_col<'a>(rb: &'a RecordBatch, name: &str) -> &'a Int64Array {
+        rb.column_by_name(name)
+            .unwrap()
+            .as_any()
+            .downcast_ref::<Int64Array>()
+            .unwrap()
+    }
+
+    #[cfg(feature = "matrix")]
+    fn matrix_record_batch(net: &Network, table: i32) -> RecordBatch {
+        let core = IndexCore::build(net);
+        match table {
+            PIO_ARROW_TABLE_YBUS => matrix_ybus_batch(net, &core).unwrap(),
+            PIO_ARROW_TABLE_INCIDENCE => matrix_incidence_batch(net, &core).unwrap(),
+            PIO_ARROW_TABLE_BPRIME => matrix_bprime_batch(net, &core).unwrap(),
+            PIO_ARROW_TABLE_BDOUBLEPRIME => matrix_bdoubleprime_batch(net, &core).unwrap(),
+            _ => panic!("not a matrix table id: {table}"),
+        }
+    }
+
+    #[cfg(feature = "matrix")]
+    fn f64_bits(values: &Float64Array) -> Vec<String> {
+        values
+            .values()
+            .iter()
+            .map(|value| format!("0x{:016x}", value.to_bits()))
+            .collect()
+    }
+
+    #[cfg(feature = "matrix")]
+    fn matrix_table_json(table_name: &str, rb: &RecordBatch) -> serde_json::Value {
+        let metadata = rb.schema();
+        let metadata = metadata.metadata();
+        let mut obj = serde_json::Map::new();
+        obj.insert("table".to_owned(), serde_json::json!(table_name));
+        obj.insert(
+            "row_count".to_owned(),
+            serde_json::json!(
+                metadata
+                    .get("powerio.row_count")
+                    .unwrap()
+                    .parse::<usize>()
+                    .unwrap()
+            ),
+        );
+        obj.insert(
+            "col_count".to_owned(),
+            serde_json::json!(
+                metadata
+                    .get("powerio.col_count")
+                    .unwrap()
+                    .parse::<usize>()
+                    .unwrap()
+            ),
+        );
+        obj.insert(
+            "row_index".to_owned(),
+            serde_json::json!(rb_i64_col(rb, "row_index").values().to_vec()),
+        );
+        obj.insert(
+            "col_index".to_owned(),
+            serde_json::json!(rb_i64_col(rb, "col_index").values().to_vec()),
+        );
+        if table_name == "ybus" {
+            obj.insert(
+                "g_bits".to_owned(),
+                serde_json::json!(f64_bits(rb_f64_col(rb, "g"))),
+            );
+            obj.insert(
+                "b_bits".to_owned(),
+                serde_json::json!(f64_bits(rb_f64_col(rb, "b"))),
+            );
+        } else {
+            obj.insert(
+                "value_bits".to_owned(),
+                serde_json::json!(f64_bits(rb_f64_col(rb, "value"))),
+            );
+        }
+        serde_json::Value::Object(obj)
+    }
+
+    #[cfg(feature = "matrix")]
+    fn matrix_golden_json(case_file: &str) -> serde_json::Value {
+        let n = net(case_file);
+        let tables = [
+            ("ybus", PIO_ARROW_TABLE_YBUS),
+            ("incidence", PIO_ARROW_TABLE_INCIDENCE),
+            ("bprime", PIO_ARROW_TABLE_BPRIME),
+            ("bdoubleprime", PIO_ARROW_TABLE_BDOUBLEPRIME),
+        ];
+        let mut table_obj = serde_json::Map::new();
+        for (name, table) in tables {
+            let rb = matrix_record_batch(&n, table);
+            table_obj.insert(name.to_owned(), matrix_table_json(name, &rb));
+        }
+        serde_json::json!({
+            "case": case_file,
+            "tables": table_obj,
+        })
+    }
+
+    #[cfg(feature = "matrix")]
+    fn assert_ffi_matches_record_batch(table: i32, value_cols: &[&str]) {
+        let n = net("case9.m");
+        let rb = matrix_record_batch(&n, table);
+        let sa = round_trip(&n, table);
+
+        assert_eq!(sa.len(), rb.num_rows());
+        assert_eq!(
+            i64_col(&sa, "row_index").values(),
+            rb_i64_col(&rb, "row_index").values()
+        );
+        assert_eq!(
+            i64_col(&sa, "col_index").values(),
+            rb_i64_col(&rb, "col_index").values()
+        );
+        for &name in value_cols {
+            assert_eq!(
+                f64_bits(f64_col(&sa, name)),
+                f64_bits(rb_f64_col(&rb, name)),
+                "{name} column changed through FFI"
+            );
+        }
     }
 
     #[test]
@@ -822,6 +1152,75 @@ mod tests {
     #[test]
     fn unknown_table_id_errors() {
         let n = net("case9.m");
-        assert!(export(&n, 99).is_err());
+        let core = IndexCore::build(&n);
+        assert!(export(&n, &core, 99).is_err());
+    }
+
+    #[cfg(not(feature = "matrix"))]
+    #[test]
+    fn matrix_table_requires_matrix_feature() {
+        let n = net("case9.m");
+        let core = IndexCore::build(&n);
+        let err = export(&n, &core, PIO_ARROW_TABLE_BPRIME).unwrap_err();
+        assert!(err.contains("matrix cargo feature"), "{err}");
+    }
+
+    #[cfg(feature = "matrix")]
+    #[test]
+    fn matrix_tables_round_trip_through_ffi() {
+        assert_ffi_matches_record_batch(PIO_ARROW_TABLE_YBUS, &["g", "b"]);
+        assert_ffi_matches_record_batch(PIO_ARROW_TABLE_INCIDENCE, &["value"]);
+        assert_ffi_matches_record_batch(PIO_ARROW_TABLE_BPRIME, &["value"]);
+        assert_ffi_matches_record_batch(PIO_ARROW_TABLE_BDOUBLEPRIME, &["value"]);
+    }
+
+    #[cfg(feature = "matrix")]
+    #[test]
+    fn matrix_tables_carry_schema_dimensions() {
+        let n = net("case9.m");
+        let rb = matrix_record_batch(&n, PIO_ARROW_TABLE_BPRIME);
+        let metadata = rb.schema();
+        let metadata = metadata.metadata();
+        assert_eq!(metadata.get("powerio.table").unwrap(), "bprime");
+        assert_eq!(metadata.get("powerio.index_space").unwrap(), "solver_bus");
+        assert_eq!(metadata.get("powerio.row_count").unwrap(), "9");
+        assert_eq!(metadata.get("powerio.col_count").unwrap(), "9");
+
+        let core = IndexCore::build(&n);
+        let (array, schema) = export(&n, &core, PIO_ARROW_TABLE_BPRIME).unwrap();
+        let imported_schema = Schema::try_from(&schema).unwrap();
+        let metadata = imported_schema.metadata();
+        assert_eq!(metadata.get("powerio.table").unwrap(), "bprime");
+        assert_eq!(metadata.get("powerio.index_space").unwrap(), "solver_bus");
+        assert_eq!(metadata.get("powerio.row_count").unwrap(), "9");
+        assert_eq!(metadata.get("powerio.col_count").unwrap(), "9");
+        let _data = unsafe { from_ffi(array, &schema) }.unwrap();
+    }
+
+    #[cfg(feature = "matrix")]
+    #[test]
+    fn matrix_arrow_golden_fixtures_match() {
+        let dir =
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../tests/data/capi_matrix");
+        for case_file in ["case9.m", "case30.m"] {
+            let fixture = dir.join(case_file.replace(".m", "_arrow_coo.json"));
+            let expected: serde_json::Value =
+                serde_json::from_str(&std::fs::read_to_string(&fixture).unwrap()).unwrap();
+            assert_eq!(matrix_golden_json(case_file), expected, "{case_file}");
+        }
+    }
+
+    #[cfg(feature = "matrix")]
+    #[ignore = "rewrites committed matrix Arrow COO fixtures"]
+    #[test]
+    fn rewrite_matrix_arrow_golden_fixtures() {
+        let dir =
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../tests/data/capi_matrix");
+        std::fs::create_dir_all(&dir).unwrap();
+        for case_file in ["case9.m", "case30.m"] {
+            let fixture = dir.join(case_file.replace(".m", "_arrow_coo.json"));
+            let text = serde_json::to_string_pretty(&matrix_golden_json(case_file)).unwrap();
+            std::fs::write(fixture, format!("{text}\n")).unwrap();
+        }
     }
 }

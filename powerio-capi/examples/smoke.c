@@ -37,7 +37,9 @@
 #ifdef PIO_ARROW
 #if PIO_ARROW_TABLE_BUS != 0 || PIO_ARROW_TABLE_BRANCH != 1 ||                \
     PIO_ARROW_TABLE_GEN != 2 || PIO_ARROW_TABLE_LOAD != 3 ||                  \
-    PIO_ARROW_TABLE_SHUNT != 4
+    PIO_ARROW_TABLE_SHUNT != 4 || PIO_ARROW_TABLE_YBUS != 15 ||               \
+    PIO_ARROW_TABLE_INCIDENCE != 16 || PIO_ARROW_TABLE_BPRIME != 17 ||         \
+    PIO_ARROW_TABLE_BDOUBLEPRIME != 18
 #error "PIO_ARROW_TABLE_* ids changed without updating the C ABI smoke test"
 #endif
 #endif
@@ -320,6 +322,21 @@ int main(int argc, char **argv) {
         arr.release(&arr);
         sch.release(&sch);
         printf("arrow export OK: %zu bus rows\n", nb);
+    }
+    {
+        CHECK(pio_matrix_available() == 1, "matrix Arrow tables should be available");
+        struct ArrowArray arr;
+        struct ArrowSchema sch;
+        memset(&arr, 0, sizeof arr);
+        memset(&sch, 0, sizeof sch);
+        int rc = pio_to_arrow(c, PIO_ARROW_TABLE_BPRIME, &arr, &sch, err, sizeof err);
+        CHECK(rc == 0, err);
+        CHECK(arr.length > 0, "Bprime table should not be empty for case9");
+        CHECK(arr.release != NULL && sch.release != NULL,
+              "missing matrix arrow release callbacks");
+        arr.release(&arr);
+        sch.release(&sch);
+        printf("matrix arrow export OK\n");
     }
 #endif
 

@@ -22,6 +22,9 @@ default = ["dist", "pkg"]
 # Zero-copy raw network export over the Arrow C Data Interface (`pio_to_arrow`).
 # Off by default so the base ABI pulls in nothing but `powerio`.
 arrow = ["dep:arrow"]
+# Sparse balanced matrix tables over `pio_to_arrow`. Enable with `arrow` for
+# the export symbol itself; `pio_matrix_available()` reports whether both are on.
+matrix = ["dep:powerio-matrix"]
 # Multiconductor distribution formats (OpenDSS, PMD ENGINEERING JSON, BMOPF
 # JSON): the pio_dist_* entry points. On by default (see `default` above).
 dist = ["dep:powerio-dist"]

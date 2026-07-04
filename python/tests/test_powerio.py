@@ -572,6 +572,80 @@ def test_weighted_laplacian_matches_incidence(case9):
     assert np.allclose(case9.weighted_laplacian().toarray(), rebuilt.toarray())
 
 
+def _float_bits(value):
+    return f"0x{np.asarray([value], dtype=np.float64).view(np.uint64)[0]:016x}"
+
+
+def _real_matrix_arrow_payload(matrix, table):
+    csr = matrix.tocsr()
+    row_index = []
+    col_index = []
+    value_bits = []
+    for row in range(csr.shape[0]):
+        start, end = csr.indptr[row], csr.indptr[row + 1]
+        for col, value in zip(csr.indices[start:end], csr.data[start:end]):
+            row_index.append(row)
+            col_index.append(int(col))
+            value_bits.append(_float_bits(value))
+    return {
+        "col_count": csr.shape[1],
+        "col_index": col_index,
+        "row_count": csr.shape[0],
+        "row_index": row_index,
+        "table": table,
+        "value_bits": value_bits,
+    }
+
+
+def _ybus_arrow_payload(case):
+    g, b = case.ybus_parts()
+    entries = {}
+    for key, matrix in [("g_bits", g.tocsr()), ("b_bits", b.tocsr())]:
+        for row in range(matrix.shape[0]):
+            start, end = matrix.indptr[row], matrix.indptr[row + 1]
+            for col, value in zip(matrix.indices[start:end], matrix.data[start:end]):
+                entries.setdefault((row, int(col)), {})[key] = _float_bits(value)
+
+    row_index = []
+    col_index = []
+    g_bits = []
+    b_bits = []
+    for row, col in sorted(entries):
+        row_index.append(row)
+        col_index.append(col)
+        values = entries[(row, col)]
+        g_bits.append(values.get("g_bits", "0x0000000000000000"))
+        b_bits.append(values.get("b_bits", "0x0000000000000000"))
+
+    return {
+        "col_count": g.shape[1],
+        "col_index": col_index,
+        "row_count": g.shape[0],
+        "row_index": row_index,
+        "table": "ybus",
+        "g_bits": g_bits,
+        "b_bits": b_bits,
+    }
+
+
+@pytest.mark.parametrize("name", ["case9", "case30"])
+def test_matrix_methods_match_rust_arrow_golden(name):
+    case = load(name)
+    actual = {
+        "case": f"{name}.m",
+        "tables": {
+            "bdoubleprime": _real_matrix_arrow_payload(
+                case.bdoubleprime(), "bdoubleprime"
+            ),
+            "bprime": _real_matrix_arrow_payload(case.bprime(), "bprime"),
+            "incidence": _real_matrix_arrow_payload(case.incidence().A, "incidence"),
+            "ybus": _ybus_arrow_payload(case),
+        },
+    }
+    expected = json.loads((DATA / "capi_matrix" / f"{name}_arrow_coo.json").read_text())
+    assert actual == expected
+
+
 # --- string-kwarg parsing (aliases + errors) ---------------------------
 
 

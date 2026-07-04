@@ -86,7 +86,7 @@ During development, test the sibling Julia binding against the local C ABI
 instead of an artifact:
 
 ```sh
-cargo build -p powerio-capi --release --features arrow,gridfm,dist,pkg
+cargo build -p powerio-capi --release --features arrow,matrix,gridfm,dist,pkg
 POWERIO_CAPI=$PWD/target/release/libpowerio_capi.dylib \
   julia --project=../PowerIO.jl -e 'using Pkg; Pkg.test()'
 ```
