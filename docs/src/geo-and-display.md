@@ -3,12 +3,12 @@
 > **Status: partial.** The distribution graph projection from #182 ships as
 > Rust `DistNetwork::graph()`, Python `dist_net.graph()`, and C
 > `pio_dist_graph_json`. The typed coordinate model and DSS/BMOPF coordinate
-> paths ship as layer 1. GeoLayer interchange remains design work.
+> paths ship as layer 1. GeoLayer documents remain design work.
 
 Power system case files disagree about where equipment sits on a map, and most
 say nothing at all. PowerWorld aux exports carry substation latitude and
 longitude; OpenDSS distributes coordinates in a separate `Buscoords` file;
-pandapower has a `geo` column; MATPOWER, PSS/E, and the BMOPF exchange schema
+pandapower has a `geo` column; MATPOWER, PSS/E, and the BMOPF task force schema
 carry no geometry. Today PowerIO keeps what it happens to see in per element
 `extras` maps and loses it at most writers. Consumers that render networks
 re-derive coordinates from those maps per source format, which is parsing work
@@ -16,7 +16,7 @@ that belongs here.
 
 This chapter specifies a canonical coordinate model in two layers. The shipped
 layer is typed optional fields on the network models. The planned layer is a
-standalone geographic document for interchange. Both are optional everywhere. A
+standalone geographic document for sidecar use. Both are optional everywhere. A
 case without coordinates serializes byte identically to today, and no writer
 invents geometry.
 
@@ -163,7 +163,7 @@ Planned writer support:
 - **PowerWorld aux**: `Latitude:1`/`Longitude:1` bus columns.
 - **GeoJSON**: the canonical `GeoLayer` document.
 - Formats with no geometry concept warn that locations were dropped, the same
-  contract `base_frequency` uses. A future `powerio geo extract` writes the
+  rule `base_frequency` uses. A future `powerio geo extract` writes the
   sidecar as the escape hatch.
 
 ## PowerWorld `.pwd` promotion

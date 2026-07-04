@@ -5,8 +5,8 @@ export, DC OPF bundles, PTDF/LODF exports, GridFM Parquet export, synthetic case
 generation, `.pio.json` document emission, verification, and the ratatui TUI.
 Transmission conversion covers MATPOWER, PSS/E, PowerWorld AUX, PSLF, PowerModels
 JSON, egret JSON, pandapower JSON, PyPSA CSV folders, GOC3 JSON input, Surge
-JSON, GridFM reads, and PowerIO JSON snapshots. Distribution conversion covers
-OpenDSS, PMD JSON, and BMOPF JSON.
+JSON, and GridFM reads. Distribution conversion covers OpenDSS, PMD JSON, and
+BMOPF JSON.
 
 ```
 powerio convert tests/data/case14.m --to psse -o case14.raw

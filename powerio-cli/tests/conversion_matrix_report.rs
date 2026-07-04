@@ -376,16 +376,11 @@ struct TransmissionFormat {
     target: TargetFormat,
 }
 
-const TRANSMISSION_FORMATS: [TransmissionFormat; 9] = [
+const TRANSMISSION_FORMATS: [TransmissionFormat; 8] = [
     TransmissionFormat {
         name: "MATPOWER .m",
         token: "matpower",
         target: TargetFormat::Matpower,
-    },
-    TransmissionFormat {
-        name: "PowerIO JSON",
-        token: "powerio-json",
-        target: TargetFormat::PowerioJson,
     },
     TransmissionFormat {
         name: "PowerModels JSON",
@@ -424,16 +419,15 @@ const TRANSMISSION_FORMATS: [TransmissionFormat; 9] = [
     },
 ];
 
-const TRANSMISSION_WARNING_BASELINE: [[usize; 9]; 9] = [
-    [0, 0, 0, 8, 8, 0, 5, 0, 11],
-    [6, 0, 1, 14, 14, 1, 11, 24, 16],
-    [6, 0, 0, 14, 14, 1, 11, 24, 16],
-    [13, 0, 1, 0, 1, 1, 3, 1, 10],
-    [12, 0, 0, 0, 0, 0, 2, 0, 5],
-    [0, 0, 0, 8, 8, 0, 5, 0, 11],
-    [6, 0, 0, 11, 11, 5, 0, 0, 11],
-    [2, 1, 2, 10, 10, 2, 7, 2, 17],
-    [17, 4, 5, 5, 5, 5, 7, 5, 8],
+const TRANSMISSION_WARNING_BASELINE: [[usize; 8]; 8] = [
+    [0, 0, 8, 8, 0, 5, 0, 11],
+    [6, 0, 14, 14, 1, 11, 24, 16],
+    [13, 1, 0, 1, 1, 3, 1, 10],
+    [12, 0, 0, 0, 0, 2, 0, 5],
+    [0, 0, 8, 8, 0, 5, 0, 11],
+    [6, 0, 11, 11, 5, 0, 0, 11],
+    [2, 2, 10, 10, 2, 7, 2, 17],
+    [17, 5, 5, 5, 5, 7, 5, 8],
 ];
 
 const TRANSMISSION_CASES: [(&str, &str); 6] = [

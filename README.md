@@ -43,7 +43,6 @@ Supported formats:
 - [ARPA-E GO Competition Challenge 3](https://gocompetition.energy.gov/) JSON input data
 - [surge](https://github.com/amptimal/surge) `.surge.json`
 - [GridFM](https://github.com/gridfm) `.parquet`
-- PowerIO JSON snapshots (`powerio-json`) and `.pio.json` documents
 
 Distribution networks are supported in wire coordinates via [`powerio-dist`](powerio-dist/):
 - [OpenDSS](https://www.epri.com/pages/sa/opendss) `.dss`
@@ -165,7 +164,6 @@ the original file type from converting to a different file type.
 | GO Challenge 3 JSON | yes | source echo only | byte exact retained source | first interval maps to the static power flow core; `.pio.json` documents retain time series as operating points |
 | Surge JSON | yes | yes | byte exact retained source | versioned JSON network body; unsupported source sections stay in retained source or warnings |
 | GridFM Parquet | yes | yes | directory output, deliberately lossy read | recovers the power flow core for conversion back to classical formats |
-| PowerIO JSON | yes | yes | structured model snapshot, not byte exact source echo | lossless for `Network` fields except retained source text |
 
 PowerWorld `.pwd` is display data, not a network case, so it is outside this
 conversion table and uses `parse_display_file` / `parse_display_bytes`. The

@@ -2,9 +2,9 @@
 
 Parse MATPOWER, PSS/E, PowerWorld, PSLF EPC, PowerModels JSON, egret JSON,
 pandapower JSON, PyPSA CSV folders, GO Challenge 3 JSON, Surge JSON, GridFM
-Parquet datasets, and PowerIO JSON snapshots into one format neutral case; write
-retained text formats back byte exact; convert between formats; package cases as
-``.pio.json``; and pull the sparse matrices and graph outputs solvers need::
+Parquet datasets into one format neutral case; write retained text formats back
+byte exact; convert between formats; package cases as ``.pio.json``; and pull
+the sparse matrices and graph outputs solvers need::
 
     import powerio as pio
 

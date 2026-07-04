@@ -4766,7 +4766,7 @@
       ]
     },
     "payload_schema": {
-      "description": "The declared schema URL for the payload family named by `model_kind`.\n`None` on packages written before the payload contract was declared.",
+      "description": "The declared schema URL for the payload family named by `model_kind`.\n`None` on packages written before the payload schema was declared.",
       "type": [
         "string",
         "null"

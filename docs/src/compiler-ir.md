@@ -39,12 +39,11 @@ A balanced model cannot represent conductor-level asymmetry; a multiconductor
 model carries terminal and grounding data that has no place in a positive
 sequence struct. The two families never merge into one struct.
 
-BMOPF JSON is the strict exchange format for the distribution family. The
-`.pio.json` document uses the same `MulticonductorNetwork` model and wraps it
-with metadata: model kind, provenance, source maps, diagnostics, validation,
-and lowering history. The two formats and the reasons they both exist are
-contrasted in
-[the `.pio.json` format chapter](pio-json-schema.md#interchange).
+BMOPF JSON is a strict case format for the distribution family. The `.pio.json`
+document uses the same `MulticonductorNetwork` model and wraps it with
+metadata: model kind, provenance, source maps, diagnostics, validation, and
+lowering history. The `.pio.json` chapter explains why the document is not a
+case format.
 
 ## The `.pio.json` Document
 
@@ -76,7 +75,7 @@ the balanced model JSON holds the first interval, while every interval is
 available as an operating point.
 
 For balanced model JSON, `NetworkPackage::attach_normalized_solver_table_metadata`
-records the compact contract for
+records compact metadata for
 `powerio::Network::to_normalized_solver_tables()`: pass name, units, row counts,
 dense bus ids, reference/component indices, branch to arc indices, and source row
 provenance. The document does not duplicate the full table rows; it records enough

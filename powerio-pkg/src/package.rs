@@ -39,8 +39,8 @@ pub const PIO_PACKAGE_SCHEMA_VERSION: &str = "0.1.1";
 /// The declared schema URL for the balanced payload (`model.balanced_network`).
 ///
 /// Payload schema URLs are identifiers, not fetch locations (the same
-/// convention as JSON Schema `$id`). The payload contract they name is the
-/// serde snapshot documented in `docs/src/pio-json-schema.md`.
+/// convention as JSON Schema `$id`). They name the model JSON shape inside a
+/// `.pio.json` document, not a standalone case format.
 pub const PIO_PAYLOAD_BALANCED_SCHEMA_URL: &str =
     "https://powerio.dev/schema/pio-payload-balanced/1";
 
@@ -217,7 +217,7 @@ pub struct NetworkPackage {
     /// Explicit model kind. Authoritative; never inferred from field presence.
     pub model_kind: ModelKind,
     /// The declared schema URL for the payload family named by `model_kind`.
-    /// `None` on packages written before the payload contract was declared.
+    /// `None` on packages written before the payload schema was declared.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub payload_schema: Option<String>,
     /// The declared payload schema version (semver), independent of the
@@ -516,7 +516,7 @@ impl NetworkPackage {
             created_at: self.created_at.clone(),
             model_kind: self.model_kind,
             // The payload content derives from the parent, so the derived
-            // package restates the parent's declared payload contract.
+            // package restates the parent's declared payload schema.
             payload_schema: self.payload_schema.clone(),
             payload_schema_version: self.payload_schema_version.clone(),
             model: updated_model,
@@ -732,7 +732,7 @@ impl NetworkPackage {
 
     /// Whether this reader accepts the envelope schema version.
     ///
-    /// The `.pio.json` compatibility contract is envelope scoped: unknown
+    /// The `.pio.json` compatibility rule is envelope scoped: unknown
     /// future top-level fields are ignored, additive same major versions load,
     /// and a different major version is rejected before payload use.
     pub fn supports_schema_version(version: &str) -> bool {

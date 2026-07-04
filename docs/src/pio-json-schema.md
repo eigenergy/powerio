@@ -16,37 +16,31 @@ defaulted or inferred, what validation found, or how a multiconductor model was
 lowered to a balanced one. The metadata records that work next to the model, so
 a downstream tool can audit a conversion instead of trusting it.
 
-The `.pio.json` document is also the handoff object between PowerIO consumers.
-The CLI, Julia bindings, and Python bindings exchange one artifact whose model
-kind is explicit, instead of guessing what a bare network JSON contains.
+The `.pio.json` document is also the handoff object between PowerIO consumers:
+one artifact whose model kind is explicit, with provenance intact.
 
-## Relation to interchange formats {#interchange}
+## `.pio.json` is not a case format {#not-a-case-format}
 
-`.pio.json` is not an interchange format. Interchange formats (MATPOWER,
-PSS/E, BMOPF, GOC3) stay at the converter boundary: PowerIO reads and writes
-them, and the `.pio.json` document records what happened in between.
+Case formats move cases between tools: MATPOWER, PSS/E, OpenDSS, PMD JSON,
+BMOPF, GOC3, and the other rows in the conversion tables. PowerIO reads and
+writes those formats at converter boundaries. A `.pio.json` document is
+PowerIO's compiled artifact: the model plus the record of how that model was
+produced.
 
-The nearest neighbor is BMOPF, and the differences are deliberate. BMOPF is an
-exchange schema for multiconductor distribution OPF cases, defined by the IEEE
-PES task force on benchmarking multiconductor OPF in
-[bmopf-report](https://github.com/frederikgeth/bmopf-report). Its contract is
-a JSON Schema 2020-12 document with `additionalProperties: false`, its units
-are SI, and independent tools validate instances against the schema file. A
-transmission model and provenance metadata are outside its scope.
+Pick a case format by what the receiving tool reads. Use `.pio.json` when the
+receiving consumer is PowerIO or a binding that wants provenance, diagnostics,
+operating points, and the explicit model kind. Use BMOPF, OpenDSS, PMD JSON, or
+another supported case format when the next tool expects that format.
 
-`.pio.json` is the output of one toolchain. It covers both IR families and
-wraps model JSON in the compilation record above. Its contract is the Rust
-model that writes and reads it rather than a schema document: the model JSON is
-what the model serializes and the semver fields below govern change. The two
-formats also version on different schedules: model JSON with PowerIO releases,
-BMOPF with the task force.
+`powerio-json` remains supported in v0.6.2 for existing CLI, C ABI, Python,
+Julia, and MCP paths. It is bare balanced `Network` JSON, without package
+metadata or source maps, and is deprecated for CLI file handoffs. New
+PowerIO file handoffs should use `.pio.json`; external tool workflows should
+use the case format that external tool reads.
 
-The two formats meet at the multiconductor model. The BMOPF reader and writer
-translate to and from the same `DistNetwork` the multiconductor model JSON
-serializes, so crossing the boundary loses nothing the model can represent. To
-exchange a distribution case with tools outside PowerIO, write BMOPF
-(`powerio convert --to bmopf-json`). To carry a compiled case between PowerIO
-consumers with its provenance intact, use `.pio.json`.
+A future v0.7.0 release may demote `powerio-json` from the public case format
+surface while keeping `Network::to_json` / `Network::from_json` and binding
+JSON paths available for internal and programmatic use.
 
 ## Two stability tiers
 
@@ -57,8 +51,8 @@ A `.pio.json` file has two parts with different stability promises.
    field table.
 
 2. **Model JSON** — the `model` field's `balanced_network` /
-   `multiconductor_network` object. The model JSON is a declared contract of
-   its own, named by the top-level `payload_schema` URL and versioned by
+   `multiconductor_network` object. The model JSON is a declared schema of its
+   own, named by the top-level `payload_schema` URL and versioned by
    `payload_schema_version`. A consumer that computes on model fields pins the
    model JSON version; a tool that routes or audits documents pins the metadata
    version and can keep treating the model JSON as opaque.
@@ -69,11 +63,13 @@ break different consumers: the model JSON grows whenever the IR grows (a minor
 
 The schema URLs are JSON Schema `$id` identifiers. The docs site also serves a
 generated schema at each identifier path under `schema.json`, so consumers can
-fetch a machine readable view of the serde contract.
+fetch a machine readable view of the serde model shape. These generated schemas
+validate the model fields inside `.pio.json` documents and let consumers pin a
+payload major; they do not define standalone case formats.
 
 ## The metadata: `pio-package/0.1` {#pio-package}
 
-The `schema` field on every `.pio.json` document names the metadata contract:
+The `schema` field on every `.pio.json` document names the metadata schema:
 `https://powerio.dev/schema/pio-package/0.1`. `schema_version` is semver; the
 current value is `0.1.1`.
 The generated schema is served at
@@ -100,7 +96,7 @@ The generated schema is served at
 | `package_id` | string | no | stable content id, e.g. `"sha256:..."`; unset by the scaffold |
 | `created_at` | string (RFC 3339) | no | unset by default for deterministic output |
 | `model_kind` | enum | yes | `balanced` \| `multiconductor`; authoritative |
-| `payload_schema` | string (URL) | no | declared model JSON contract for `model_kind`; absent on pre-0.1.1 documents |
+| `payload_schema` | string (URL) | no | declared model JSON schema for `model_kind`; absent on pre-0.1.1 documents |
 | `payload_schema_version` | string (semver) | no | model JSON version; a different major is rejected on read |
 | `model` | object | yes | `{kind, <kind>_network}`; the serialized Rust model JSON |
 | `origin` | object | yes | tagged by `kind`: `in_memory` \| `file` \| `folder` \| `binary_file` \| `derived` \| `composite` |
@@ -132,13 +128,13 @@ later families can be added).
 
 ## The Model JSON
 
-`payload_schema` names the model JSON contract per model kind and
+`payload_schema` names the model JSON schema per model kind and
 `payload_schema_version` versions it, currently `1.1.0` for both kinds.
 Additive optional fields bump the minor; field moves or removals bump the
 major. A reader rejects a different major (or a version that does not parse as
 semver) before computing on model fields. Both fields are absent on documents
 written before metadata version 0.1.1; such model JSON predates the declared
-contract and is accepted.
+schema and is accepted.
 
 Each payload is what its Rust model serializes. The generated JSON Schema is
 derived from those serde models and checked in CI against the committed
@@ -171,8 +167,9 @@ model family. The field reference is the
 [`powerio_dist::DistNetwork` rustdoc](../powerio_dist/model/struct.DistNetwork.html).
 The generated schema is served at
 `https://powerio.dev/schema/pio-payload-multiconductor/1/schema.json`.
-For a standalone distribution exchange file, write BMOPF instead of extracting
-this model JSON ([relation to interchange formats](#interchange)).
+Do not extract this object as a distribution case file. Use `.pio.json` for
+PowerIO artifacts; when a receiving tool expects BMOPF, PMD JSON, or OpenDSS,
+write that case format through `powerio convert`.
 
 ## Row identity
 

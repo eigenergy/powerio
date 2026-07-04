@@ -34,6 +34,10 @@
   versions move from `1.0.0` to `1.1.0` for the additive geographic fields.
   The package metadata schema, C ABI version, and Python package surface stay
   in the 0.6 compatibility band.
+- JSON strategy: `.pio.json` docs now state that it is PowerIO's compiled
+  artifact, not a case format; payload schemas are for validating model JSON
+  inside `.pio.json` documents; `powerio-json` remains supported, is deprecated
+  for CLI file handoffs, and is no longer shown in the PR conversion matrix.
 
 ## 0.6.1
 

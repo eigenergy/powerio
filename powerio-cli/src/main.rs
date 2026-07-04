@@ -263,7 +263,7 @@ impl<'a> GenCostCliOptions<'a> {
     }
 }
 
-/// A case interchange format, for `--to` / `--from`. `gridfm`, `goc3-json`, and `pwb` are
+/// A case format, for `--to` / `--from`. `gridfm`, `goc3-json`, and `pwb` are
 /// read-only here: `convert --from gridfm` reads a Parquet dataset, but writing
 /// a gridfm dataset is the dedicated `gridfm` subcommand, GO Challenge 3 JSON is a
 /// unit commitment input document, and PowerWorld `.pwb` has no writer.
@@ -287,7 +287,7 @@ enum FormatArg {
     PowerWorld,
     #[value(name = "pandapower-json", alias = "pandapower", alias = "pp")]
     PandapowerJson,
-    /// The canonical lossless snapshot (`Network` as validated JSON).
+    /// Deprecated: bare `Network` model JSON.
     #[value(name = "powerio-json", alias = "powerio", alias = "json")]
     PowerioJson,
     #[value(name = "pypsa-csv", alias = "pypsa")]
@@ -401,6 +401,13 @@ impl FormatArg {
             FormatArg::BmopfJson => "bmopf-json",
         }
     }
+}
+
+fn warn_deprecated_powerio_json() {
+    eprintln!(
+        "warning: `powerio-json` is deprecated for CLI file handoffs; use `.pio.json` \
+         for PowerIO artifacts or the receiving tool's case format"
+    );
 }
 
 #[derive(Clone, Copy, Debug, ValueEnum)]
@@ -1030,6 +1037,10 @@ fn build_package(
     from: Option<FormatArg>,
     scenario: i64,
 ) -> anyhow::Result<NetworkPackage> {
+    if from == Some(FormatArg::PowerioJson) {
+        warn_deprecated_powerio_json();
+    }
+
     if from == Some(FormatArg::Gridfm) || (from.is_none() && looks_like_gridfm_dir(input)) {
         let read = powerio_matrix::read_gridfm_dataset(input, scenario)
             .with_context(|| format!("reading gridfm dataset {}", input.display()))?;
@@ -1274,6 +1285,10 @@ fn run_convert(
     scenario: i64,
     gen_cost_options: GenCostCliOptions<'_>,
 ) -> anyhow::Result<()> {
+    if to == FormatArg::PowerioJson {
+        warn_deprecated_powerio_json();
+    }
+
     // gridfm has no convert writer; the dataset writer is the `gridfm`
     // subcommand.
     if matches!(to, FormatArg::Gridfm) {
@@ -1434,6 +1449,9 @@ fn read_network(
     from: Option<FormatArg>,
 ) -> anyhow::Result<powerio_matrix::Network> {
     if let Some(f) = from {
+        if f == FormatArg::PowerioJson {
+            warn_deprecated_powerio_json();
+        }
         if matches!(f, FormatArg::Gridfm) {
             anyhow::bail!(
                 "gridfm datasets are read by `convert --from gridfm` or the `gridfm` \
