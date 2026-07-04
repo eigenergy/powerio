@@ -319,6 +319,108 @@ fn single_phase_wye_delta_keeps_both_delta_terminals() {
 }
 
 #[test]
+fn delta_wye_leakage_uses_each_winding_base() {
+    let v = schema_validator();
+    let net = parse_dss_file(fixture("micro/xfmr_delta_wye.dss")).unwrap();
+    let out = write_bmopf_json(&net);
+    assert_eq!(errors(&v, &out.text), Vec::<String>::new());
+
+    let doc: serde_json::Value = serde_json::from_str(&out.text).unwrap();
+    let t = &doc["transformer"]["delta_wye"]["t1"];
+    assert!(t.get("r_series").is_none(), "{t:?}");
+    assert!(t.get("x_series").is_none(), "{t:?}");
+
+    let z_from = 12_470.0 * 12_470.0 / 300_000.0;
+    let z_to = 208.0 * 208.0 / 300_000.0;
+    let r_from = t["r_series_from"].as_f64().unwrap();
+    let r_to = t["r_series_to"].as_f64().unwrap();
+    let x_from = t["x_series_from"].as_f64().unwrap();
+    let x_to = t["x_series_to"].as_f64().unwrap();
+    assert!(
+        (r_from - 0.005 * z_from).abs() < 1e-12,
+        "r_series_from = {r_from}"
+    );
+    assert!((r_to - 0.005 * z_to).abs() < 1e-12, "r_series_to = {r_to}");
+    assert!(
+        (x_from - 0.0575 / 2.0 * z_from).abs() < 1e-12,
+        "x_series_from = {x_from}"
+    );
+    assert!(
+        (x_to - 0.0575 / 2.0 * z_to).abs() < 1e-12,
+        "x_series_to = {x_to}"
+    );
+
+    let round_trip = parse_bmopf_str(&out.text).unwrap();
+    let t = round_trip
+        .transformers
+        .iter()
+        .find(|t| t.name == "t1")
+        .unwrap();
+    assert_eq!(t.windings[0].conn, WindingConn::Delta);
+    assert_eq!(t.windings[1].conn, WindingConn::Wye);
+    assert!((t.windings[0].r_pct - 0.5).abs() < 1e-12);
+    assert!((t.windings[1].r_pct - 0.5).abs() < 1e-12);
+    assert_eq!(t.xsc_pct.len(), 1);
+    assert!((t.xsc_pct[0] - 5.75).abs() < 1e-12);
+}
+
+#[test]
+fn delta_wye_split_leakage_uses_each_winding_rating() {
+    let net = parse_dss_str(
+        "Clear\n\
+         New Circuit.dw basekv=12.47 pu=1.0 phases=3 bus1=sourcebus\n\
+         New Transformer.t1 phases=3 windings=2 buses=(sourcebus, secondary) \
+         conns=(delta, wye) kvs=(12.47, 0.208) kvas=(500, 300) \
+         xhl=5.75 %Rs=(0.5, 0.7)\n",
+    );
+    let out = write_bmopf_json(&net);
+    assert_eq!(errors(&schema_validator(), &out.text), Vec::<String>::new());
+
+    let doc: serde_json::Value = serde_json::from_str(&out.text).unwrap();
+    let t = &doc["transformer"]["delta_wye"]["t1"];
+    let z_from = 12_470.0 * 12_470.0 / 500_000.0;
+    let z_to = 208.0 * 208.0 / 300_000.0;
+    let r_from = t["r_series_from"].as_f64().unwrap();
+    let r_to = t["r_series_to"].as_f64().unwrap();
+    let x_from = t["x_series_from"].as_f64().unwrap();
+    let x_to = t["x_series_to"].as_f64().unwrap();
+    assert!(
+        (r_from - 0.005 * z_from).abs() < 1e-12,
+        "r_series_from = {r_from}"
+    );
+    assert!((r_to - 0.007 * z_to).abs() < 1e-12, "r_series_to = {r_to}");
+    assert!(
+        (x_from - 0.0575 / 2.0 * z_from).abs() < 1e-12,
+        "x_series_from = {x_from}"
+    );
+    assert!(
+        (x_to - 0.0575 / 2.0 * z_to).abs() < 1e-12,
+        "x_series_to = {x_to}"
+    );
+}
+
+#[test]
+fn wye_delta_leakage_stays_on_legacy_wye_side_fields() {
+    let v = schema_validator();
+    let net = parse_dss_file(fixture("micro/xfmr_wye_delta.dss")).unwrap();
+    let out = write_bmopf_json(&net);
+    assert_eq!(errors(&v, &out.text), Vec::<String>::new());
+
+    let doc: serde_json::Value = serde_json::from_str(&out.text).unwrap();
+    let t = &doc["transformer"]["wye_delta"]["t1"];
+    assert!(t.get("r_series_from").is_none(), "{t:?}");
+    assert!(t.get("r_series_to").is_none(), "{t:?}");
+    assert!(t.get("x_series_from").is_none(), "{t:?}");
+    assert!(t.get("x_series_to").is_none(), "{t:?}");
+
+    let z_wye = 12_470.0 * 12_470.0 / 500_000.0;
+    let r = t["r_series"].as_f64().unwrap();
+    let x = t["x_series"].as_f64().unwrap();
+    assert!((r - 0.01 * z_wye).abs() < 1e-12, "r_series = {r}");
+    assert!((x - 0.0575 * z_wye).abs() < 1e-12, "x_series = {x}");
+}
+
+#[test]
 fn ieee13_conversion_warnings_name_every_loss() {
     let net = parse_dss_file(fixture("opendss/ieee13/IEEE13Nodeckt.dss")).unwrap();
     let out = write_bmopf_json(&net);

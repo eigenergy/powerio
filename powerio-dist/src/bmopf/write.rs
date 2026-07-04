@@ -1069,14 +1069,13 @@ impl Writer {
         (emitted_from, 0.0)
     }
 
-    /// `wye_delta` / `delta_wye`: one series impedance in ohms on the wye
-    /// side. `wye_idx` names which winding is the wye one.
+    /// `wye_delta` stays in the legacy lumped wye side form. `delta_wye`
+    /// uses split fields referred to each winding's own base.
     fn three_phase(&mut self, t: &DistTransformer, wye_idx: usize) -> Value {
         let from = &t.windings[0];
         let to = &t.windings[1];
-        let wye = &t.windings[wye_idx];
+        let is_delta_wye = wye_idx == 1;
         let s = from.s_rating;
-        let zb_wye = wye.v_ref * wye.v_ref / s;
         let mut o = Map::new();
         o.insert("bus_from".into(), json!(from.bus));
         o.insert("bus_to".into(), json!(to.bus));
@@ -1089,29 +1088,57 @@ impl Writer {
             "v_nom_to".into(),
             self.num(to.v_ref, "transformer v_nom_to"),
         );
-        o.insert(
-            "r_series".into(),
-            self.num(
-                (from.r_pct + to.r_pct) / 100.0 * zb_wye,
-                "transformer r_series",
-            ),
-        );
         if t.xsc_pct.is_empty() {
+            let emitted = if is_delta_wye {
+                "x_series_from=0 and x_series_to=0"
+            } else {
+                "x_series=0"
+            };
             self.transformer_diagnostic(
                 t,
                 "EMIT.BMOPF.TRANSFORMER_MISSING_XSC",
                 format!(
-                    "transformer {}: xsc_pct is empty; emitted x_series=0",
-                    t.name
+                    "transformer {}: xsc_pct is empty; emitted {emitted}",
+                    t.name,
                 ),
                 Map::new(),
             );
         }
         let xhl = t.xsc_pct.first().copied().unwrap_or(0.0);
-        o.insert(
-            "x_series".into(),
-            self.num(xhl / 100.0 * zb_wye, "transformer x_series"),
-        );
+        if is_delta_wye {
+            let zb_from = winding_base(from);
+            let zb_to = winding_base(to);
+            o.insert(
+                "r_series_from".into(),
+                self.num(from.r_pct / 100.0 * zb_from, "transformer r_series_from"),
+            );
+            o.insert(
+                "r_series_to".into(),
+                self.num(to.r_pct / 100.0 * zb_to, "transformer r_series_to"),
+            );
+            o.insert(
+                "x_series_from".into(),
+                self.num(xhl / 2.0 / 100.0 * zb_from, "transformer x_series_from"),
+            );
+            o.insert(
+                "x_series_to".into(),
+                self.num(xhl / 2.0 / 100.0 * zb_to, "transformer x_series_to"),
+            );
+        } else {
+            let wye = &t.windings[wye_idx];
+            let zb_wye = wye.v_ref * wye.v_ref / s;
+            o.insert(
+                "r_series".into(),
+                self.num(
+                    (from.r_pct + to.r_pct) / 100.0 * zb_wye,
+                    "transformer r_series",
+                ),
+            );
+            o.insert(
+                "x_series".into(),
+                self.num(xhl / 100.0 * zb_wye, "transformer x_series"),
+            );
+        }
         o.insert("terminal_map_from".into(), json!(from.terminal_map));
         o.insert("terminal_map_to".into(), json!(to.terminal_map));
         self.transformer_neutral_fields(&mut o, t, from, to);

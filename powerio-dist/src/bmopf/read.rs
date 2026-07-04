@@ -826,7 +826,21 @@ impl Reader<'_> {
                 0.0
             }
         };
-        let (r_from_pct, r_to_pct, xsc_pct) = if three_phase {
+        let has_split_three_phase_fields = [
+            "r_series_from",
+            "r_series_to",
+            "x_series_from",
+            "x_series_to",
+        ]
+        .iter()
+        .any(|k| o.contains_key(*k));
+        let (r_from_pct, r_to_pct, xsc_pct) = if three_phase && has_split_three_phase_fields {
+            let r_from = pct(o.get("r_series_from").map_or(0.0, f), v_from);
+            let r_to = pct(o.get("r_series_to").map_or(0.0, f), v_to);
+            let x_from = pct(o.get("x_series_from").map_or(0.0, f), v_from);
+            let x_to = pct(o.get("x_series_to").map_or(0.0, f), v_to);
+            (r_from, r_to, vec![x_from + x_to])
+        } else if three_phase {
             let wye_v = if subtype == "wye_delta" { v_from } else { v_to };
             // The schema puts one series impedance on the wye side; the
             // model splits resistance evenly across the windings.
