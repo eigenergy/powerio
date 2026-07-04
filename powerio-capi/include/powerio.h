@@ -260,6 +260,18 @@ uint32_t pio_abi_version(void);
 uint32_t pio_dist_abi_version(void);
 #endif
 
+#if defined(PIO_DIST)
+/**
+ * Return distribution capability flags as owned JSON. Free the returned string
+ * with [`pio_string_free`]. Only linked when the `dist` feature is compiled in;
+ * runtime loaders can either check `pio_has_feature("dist")` or probe for this
+ * symbol directly. The JSON schema is versioned separately from
+ * [`PIO_DIST_ABI_VERSION`] so new additive flags do not force a C signature
+ * change.
+ */
+char *pio_dist_capabilities_json(void);
+#endif
+
 /**
  * Whether the matrix Arrow table surface is usable in this build. Returns 1
  * only when both `arrow` and `matrix` are compiled in, since the matrices ride

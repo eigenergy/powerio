@@ -303,6 +303,25 @@ int main(int argc, char **argv) {
         CHECK(pio_has_feature("dist") == 1, "pio_has_feature(dist) should be 1");
         CHECK(pio_dist_abi_version() == PIO_DIST_ABI_VERSION,
               "dist ABI version mismatch");
+        char *dist_caps = pio_dist_capabilities_json();
+        CHECK(dist_caps != NULL, "pio_dist_capabilities_json returned NULL");
+        CHECK(strstr(dist_caps, "\"dist\":true") != NULL,
+              "dist capabilities did not report dist=true");
+        CHECK(strstr(dist_caps, "\"schema_version\":\"1.0.0\"") != NULL,
+              "dist capabilities schema_version mismatch");
+        CHECK(strstr(dist_caps, "\"bmopf_fixed_taps\":true") != NULL,
+              "fixed tap capability missing");
+        CHECK(strstr(dist_caps, "\"bmopf_center_tap_leakage\":true") != NULL,
+              "center tap capability missing");
+        CHECK(strstr(dist_caps, "\"bmopf_delta_wye_leakage\":true") != NULL,
+              "delta wye leakage capability missing");
+        CHECK(strstr(dist_caps, "\"bmopf_delta_roll\":true") != NULL,
+              "delta roll capability missing");
+        CHECK(strstr(dist_caps, "\"bmopf_voltage_source_merge\":true") != NULL,
+              "voltage source merge capability missing");
+        CHECK(strstr(dist_caps, "\"bmopf_transformer_diagnostics\":true") != NULL,
+              "transformer diagnostics capability missing");
+        pio_string_free(dist_caps);
         printf("dist surface OK\n");
     }
 #endif
