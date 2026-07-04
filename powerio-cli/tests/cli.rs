@@ -182,6 +182,51 @@ fn batch_writes_requested_matrices_rhs_and_metadata() {
 }
 
 #[test]
+fn sensitivities_write_solver_metadata() {
+    let stamp = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_nanos();
+    let out_dir = std::env::temp_dir().join(format!("powerio-cli-sensitivities-{stamp}"));
+
+    let case = repo_file("tests/data/case9.m");
+    let out = run(&[
+        "sensitivities",
+        case.to_str().unwrap(),
+        "-o",
+        out_dir.to_str().unwrap(),
+        "--solver",
+        "iterative",
+        "--drop-tolerance",
+        "1e-10",
+    ]);
+    assert_success(&out);
+
+    for name in [
+        "case9_ptdf.mtx",
+        "case9_lodf.mtx",
+        "case9_sensitivity_meta.json",
+    ] {
+        assert!(out_dir.join(name).is_file(), "missing {name}");
+    }
+
+    let meta: serde_json::Value = serde_json::from_str(
+        &std::fs::read_to_string(out_dir.join("case9_sensitivity_meta.json")).unwrap(),
+    )
+    .unwrap();
+    assert_eq!(meta["case"], "case9");
+    assert_eq!(meta["sensitivity"]["requested_solver"], "iterative");
+    assert_eq!(meta["sensitivity"]["solver_path"], "iterative_cg");
+    assert_eq!(meta["sensitivity"]["drop_tolerance"], 1e-10);
+    assert_eq!(meta["sensitivity"]["ptdf"]["rows"], 9);
+    assert_eq!(meta["sensitivity"]["ptdf"]["cols"], 9);
+    assert_eq!(meta["sensitivity"]["lodf"]["rows"], 9);
+    assert_eq!(meta["sensitivity"]["lodf"]["cols"], 9);
+
+    let _ = std::fs::remove_dir_all(out_dir);
+}
+
+#[test]
 fn pypsa_directory_target_requires_output_directory() {
     let case = repo_file("tests/data/case9.m");
     let out = run(&["convert", case.to_str().unwrap(), "--to", "pypsa-csv"]);

@@ -87,6 +87,17 @@ pub enum Error {
     )]
     SingularNetwork,
 
+    #[error("invalid DC sensitivity option: {reason}")]
+    InvalidSensitivityOptions { reason: String },
+
+    #[error(
+        "DC sensitivity iterative solve did not converge after {iterations} iterations (relative residual {relative_residual:.3e})"
+    )]
+    SensitivitySolveDidNotConverge {
+        iterations: usize,
+        relative_residual: f64,
+    },
+
     #[error(
         "{components} connected component(s) have no reference (slack) bus to ground; DC sensitivities need at least one reference per island"
     )]
@@ -215,6 +226,8 @@ impl Error {
             | Error::InvalidNormalizeOption { .. }
             | Error::ShapeMismatch { .. }
             | Error::SingularNetwork
+            | Error::InvalidSensitivityOptions { .. }
+            | Error::SensitivitySolveDidNotConverge { .. }
             | Error::UngroundedComponent { .. }
             | Error::EmptyScenarioBatch
             | Error::ScenarioIdOverflow { .. }

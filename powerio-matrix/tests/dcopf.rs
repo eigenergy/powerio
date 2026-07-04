@@ -2,11 +2,16 @@
 //! bundle. Run against vendored MATPOWER cases.
 
 use powerio_matrix::IndexedNetwork;
+use powerio_matrix::io::{read_mtx, write_sensitivity_mtx_with_options};
 use powerio_matrix::{
     Branch, BuildOptions, Bus, BusId, BusType, DcConvention, Error, GenCost, Generator,
     MissingGenCostPolicy, Network, Scheme, Units, build_adjacency, build_bprime, build_flow_map,
     build_incidence, build_lodf, build_opf_instance, build_ptdf, build_weighted_laplacian,
     build_ybus, ground_at, parse_matpower_file,
+};
+use powerio_matrix::{
+    SensitivityOptions, SensitivitySolver, SensitivitySolverPath, build_ptdf_lodf,
+    build_ptdf_lodf_with_options,
 };
 use sprs::CsMat;
 
@@ -44,6 +49,24 @@ fn dense(m: &CsMat<f64>) -> Vec<Vec<f64>> {
         d[i][j] = v;
     }
     d
+}
+
+fn assert_matrix_close(left: &CsMat<f64>, right: &CsMat<f64>, tol: f64, label: &str) {
+    assert_eq!(left.rows(), right.rows(), "{label}: row count");
+    assert_eq!(left.cols(), right.cols(), "{label}: col count");
+    let dl = dense(left);
+    let dr = dense(right);
+    for i in 0..left.rows() {
+        for j in 0..left.cols() {
+            let err = (dl[i][j] - dr[i][j]).abs();
+            assert!(
+                err <= tol,
+                "{label}[{i},{j}] differs by {err}: {} vs {}",
+                dl[i][j],
+                dr[i][j]
+            );
+        }
+    }
 }
 
 fn operator<'a>(meta: &'a serde_json::Value, name: &str) -> &'a serde_json::Value {
@@ -451,6 +474,196 @@ fn lodf_diagonal_is_minus_one() {
             }
         }
     }
+}
+
+#[test]
+fn iterative_sensitivities_match_dense_oracle() {
+    for path in [
+        "../tests/data/case9.m",
+        "../tests/data/case14.m",
+        "../tests/data/case30.m",
+    ] {
+        let case = load(path);
+        let view = IndexedNetwork::new(&case);
+        let (dense_ptdf, dense_lodf) = build_ptdf_lodf(&view, DcConvention::PaperPure).unwrap();
+        let iterative = build_ptdf_lodf_with_options(
+            &view,
+            &SensitivityOptions {
+                solver: SensitivitySolver::Iterative,
+                drop_tolerance: 1e-12,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        assert_eq!(
+            iterative.metadata.solver_path,
+            SensitivitySolverPath::IterativeCg,
+            "{path}: solver path"
+        );
+        assert_matrix_close(&iterative.ptdf, &dense_ptdf, 1e-7, path);
+        assert_matrix_close(&iterative.lodf, &dense_lodf, 1e-7, path);
+    }
+}
+
+#[test]
+fn sensitivity_drop_tolerance_records_dropped_entries() {
+    let case = load("../tests/data/case30.m");
+    let view = IndexedNetwork::new(&case);
+    let full = build_ptdf_lodf_with_options(
+        &view,
+        &SensitivityOptions {
+            solver: SensitivitySolver::Dense,
+            drop_tolerance: 0.0,
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    let pruned = build_ptdf_lodf_with_options(
+        &view,
+        &SensitivityOptions {
+            solver: SensitivitySolver::Dense,
+            drop_tolerance: 0.2,
+            ..Default::default()
+        },
+    )
+    .unwrap();
+
+    assert!(pruned.metadata.ptdf.dropped_entries > 0);
+    assert!(pruned.metadata.lodf.dropped_entries > 0);
+    assert!(pruned.ptdf.nnz() < full.ptdf.nnz());
+    assert!(pruned.lodf.nnz() < full.lodf.nnz());
+    assert_eq!(pruned.metadata.ptdf.rows, pruned.ptdf.rows());
+    assert_eq!(pruned.metadata.ptdf.cols, pruned.ptdf.cols());
+    assert_eq!(pruned.metadata.lodf.rows, pruned.lodf.rows());
+    assert_eq!(pruned.metadata.lodf.cols, pruned.lodf.cols());
+}
+
+#[test]
+fn streamed_iterative_sensitivities_match_in_memory() {
+    let case = load("../tests/data/case30.m");
+    let view = IndexedNetwork::new(&case);
+    let options = SensitivityOptions {
+        solver: SensitivitySolver::Iterative,
+        drop_tolerance: 1e-9,
+        ..Default::default()
+    };
+    let expected = build_ptdf_lodf_with_options(&view, &options).unwrap();
+    let temp = tempfile::tempdir().unwrap();
+    let ptdf_path = temp.path().join("ptdf.mtx");
+    let lodf_path = temp.path().join("lodf.mtx");
+
+    let meta = write_sensitivity_mtx_with_options(&view, &options, &ptdf_path, &lodf_path).unwrap();
+    let ptdf = read_mtx(&ptdf_path).unwrap();
+    let lodf = read_mtx(&lodf_path).unwrap();
+
+    assert_eq!(meta.solver_path, SensitivitySolverPath::IterativeCg);
+    assert_eq!(meta.ptdf.nnz, ptdf.nnz());
+    assert_eq!(meta.lodf.nnz, lodf.nnz());
+    assert_matrix_close(&ptdf, &expected.ptdf, 0.0, "streamed PTDF");
+    assert_matrix_close(&lodf, &expected.lodf, 0.0, "streamed LODF");
+}
+
+#[test]
+fn auto_sensitivity_solver_switches_to_iterative_above_threshold() {
+    let case = load("../tests/data/case118.m");
+    let view = IndexedNetwork::new(&case);
+    let out = build_ptdf_lodf_with_options(
+        &view,
+        &SensitivityOptions {
+            solver: SensitivitySolver::Auto,
+            auto_dense_threshold: 16,
+            drop_tolerance: 1e-9,
+            ..Default::default()
+        },
+    )
+    .unwrap();
+
+    assert_eq!(out.metadata.requested_solver, SensitivitySolver::Auto);
+    assert_eq!(out.metadata.solver_path, SensitivitySolverPath::IterativeCg);
+    assert_eq!(out.metadata.ptdf.rows, out.ptdf.rows());
+    assert_eq!(out.metadata.ptdf.cols, out.ptdf.cols());
+    assert_eq!(out.metadata.lodf.rows, out.lodf.rows());
+    assert_eq!(out.metadata.lodf.cols, out.lodf.cols());
+    assert!(out.metadata.reduced_dimension > 16);
+}
+
+#[test]
+fn default_auto_writes_iterative_outputs_above_dense_threshold() {
+    let n = 600;
+    let mut buses = Vec::with_capacity(n);
+    buses.push(bus(1, BusType::Ref));
+    for id in 2..=n {
+        buses.push(bus(id, BusType::Pq));
+    }
+    let branches = (2..=n).map(|id| branch(1, id, 0.1)).collect::<Vec<_>>();
+    let branch_count = branches.len();
+    let case = net("star600", buses, branches);
+    let view = IndexedNetwork::new(&case);
+    let reduced_dimension = view.n() - view.reference_bus_indices().len();
+    assert!(reduced_dimension > 512);
+
+    let temp = tempfile::tempdir().unwrap();
+    let ptdf_path = temp.path().join("ptdf.mtx");
+    let lodf_path = temp.path().join("lodf.mtx");
+    let meta = write_sensitivity_mtx_with_options(
+        &view,
+        &SensitivityOptions::default(),
+        &ptdf_path,
+        &lodf_path,
+    )
+    .unwrap();
+    let ptdf = read_mtx(&ptdf_path).unwrap();
+    let lodf = read_mtx(&lodf_path).unwrap();
+
+    assert_eq!(meta.solver_path, SensitivitySolverPath::IterativeCg);
+    assert_eq!(meta.reduced_dimension, reduced_dimension);
+    assert_eq!(ptdf.rows(), branch_count);
+    assert_eq!(ptdf.cols(), n);
+    assert_eq!(lodf.rows(), branch_count);
+    assert_eq!(lodf.cols(), branch_count);
+    assert_eq!(meta.ptdf.nnz, ptdf.nnz());
+    assert_eq!(meta.lodf.nnz, lodf.nnz());
+    assert!(meta.ptdf.nnz <= branch_count);
+    assert_eq!(meta.lodf.nnz, branch_count);
+}
+
+#[test]
+fn auto_iterative_rejects_non_positive_susceptance() {
+    let case = net(
+        "negative_x",
+        vec![bus(1, BusType::Ref), bus(2, BusType::Pq)],
+        vec![branch(1, 2, -0.1)],
+    );
+    let view = IndexedNetwork::new(&case);
+    let err = build_ptdf_lodf_with_options(
+        &view,
+        &SensitivityOptions {
+            solver: SensitivitySolver::Auto,
+            auto_dense_threshold: 0,
+            ..Default::default()
+        },
+    )
+    .unwrap_err();
+
+    match err {
+        Error::InvalidSensitivityOptions { reason } => {
+            assert!(reason.contains("positive finite branch susceptances"));
+        }
+        other => panic!("unexpected error: {other}"),
+    }
+
+    let dense = build_ptdf_lodf_with_options(
+        &view,
+        &SensitivityOptions {
+            solver: SensitivitySolver::Dense,
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    assert_eq!(
+        dense.metadata.solver_path,
+        SensitivitySolverPath::DenseInverse
+    );
 }
 
 // ---------------------------------------------------------------------------

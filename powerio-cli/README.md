@@ -16,9 +16,13 @@ powerio package tests/data/case14.m -o case14.pio.json
 powerio package goc3_case.json --from goc3-json -o goc3_case.pio.json
 powerio verify tests/data/case30.m --kind bdoubleprime
 powerio dcopf tests/data/case30.m -o out
-powerio sensitivities tests/data/case30.m -o out
+powerio sensitivities tests/data/case30.m -o out --solver auto --drop-tolerance 1e-10
 powerio
 ```
+
+`powerio sensitivities --solver iterative` writes Matrix Market coordinates
+through temp files, so the command does not keep the full sparse PTDF/LODF
+output in memory.
 
 The workspace README has install notes and library examples:
 <https://github.com/eigenergy/powerio>.
