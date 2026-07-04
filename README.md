@@ -218,7 +218,8 @@ and Julia as `to_normalized(case)`.
 functions. The public header is
 [powerio-capi/include/powerio.h](https://github.com/eigenergy/powerio/blob/main/powerio-capi/include/powerio.h).
 Build with `--features arrow` to enable `pio_to_arrow` over the
-[Arrow C Data Interface](https://arrow.apache.org/docs/format/CDataInterface.html).
+[Arrow C Data Interface](https://arrow.apache.org/docs/format/CDataInterface.html),
+and add `--features matrix` for sparse matrix COO tables.
 
 ### PowerAgent
 
