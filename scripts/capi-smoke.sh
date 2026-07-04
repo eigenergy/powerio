@@ -22,13 +22,13 @@ else
     lib_path="$PWD/target/release"
 fi
 
-cc -DPIO_ARROW -DPIO_GRIDFM -DPIO_DIST -DPIO_PKG \
+cc -DPIO_ARROW -DPIO_MATRIX -DPIO_GRIDFM -DPIO_DIST -DPIO_PKG \
    -I powerio-capi/include powerio-capi/examples/smoke.c \
    -L target/release -lpowerio_capi -o "$tmp/pio_smoke"
 env "$lib_env=$lib_path" "$tmp/pio_smoke" \
    "$tmp/case9.m" "$tmp/gridfm/case9/raw"
 
-c++ -std=c++17 -DPIO_ARROW -DPIO_GRIDFM -DPIO_DIST -DPIO_PKG \
+c++ -std=c++17 -DPIO_ARROW -DPIO_MATRIX -DPIO_GRIDFM -DPIO_DIST -DPIO_PKG \
     -I powerio-capi/include powerio-capi/examples/header_cpp.cpp \
     -L target/release -lpowerio_capi -o "$tmp/pio_header_cpp"
 env "$lib_env=$lib_path" "$tmp/pio_header_cpp"

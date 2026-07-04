@@ -323,6 +323,7 @@ int main(int argc, char **argv) {
         sch.release(&sch);
         printf("arrow export OK: %zu bus rows\n", nb);
     }
+#ifdef PIO_MATRIX
     {
         CHECK(pio_matrix_available() == 1, "matrix Arrow tables should be available");
         struct ArrowArray arr;
@@ -338,6 +339,19 @@ int main(int argc, char **argv) {
         sch.release(&sch);
         printf("matrix arrow export OK\n");
     }
+#else
+    {
+        CHECK(pio_matrix_available() == 0,
+              "matrix Arrow tables should be unavailable without PIO_MATRIX");
+        struct ArrowArray arr;
+        struct ArrowSchema sch;
+        memset(&arr, 0, sizeof arr);
+        memset(&sch, 0, sizeof sch);
+        int rc = pio_to_arrow(c, PIO_ARROW_TABLE_BPRIME, &arr, &sch, err, sizeof err);
+        CHECK(rc == -1, "matrix Arrow table should fail without matrix support");
+        CHECK(strlen(err) > 0, "matrix Arrow failure should explain the missing feature");
+    }
+#endif
 #endif
 
     /* NULL handle is the documented safe default. */
