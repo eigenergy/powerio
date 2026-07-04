@@ -1,5 +1,40 @@
 # Changelog
 
+## 0.6.2
+
+- Normalization (#210): angle bound clamping now keeps every repaired branch
+  interval ordered. One sided intervals wholly outside the supported window are
+  widened to the configured pad instead of producing `angmin > angmax`; Rust,
+  C ABI, and Python normalize option coverage pin the behavior.
+- Binding coverage (#185): the already shipped study block and distribution
+  graph projection now have C ABI and Python accessors. The remaining geo
+  binding symbols stay in the v0.6.3 follow through.
+- BMOPF diagnostics (#219): distribution conversions now carry structured
+  diagnostics alongside warning strings, and transformer export losses expose
+  stable `EMIT.BMOPF.*` codes for downstream tests and capability checks.
+- BMOPF transformer fidelity (#214, #215, #216, #217): OpenDSS fixed
+  transformer taps, center tap convention fields, delta_wye leakage referral,
+  and n_winding `delta_roll` now export directly in BMOPF form with regression
+  coverage against schema valid output and unaffected fixture byte identity.
+- BMOPF source fidelity (#218): per phase OpenDSS voltage sources on the same
+  bus merge into one BMOPF `voltage_source` when their phase angles are
+  coherent; ambiguous, bounded, priced, or conflicting source banks stay split
+  with warnings.
+- Distribution capabilities (#213): the C ABI `dist` feature exposes
+  `pio_dist_capabilities_json`, reporting the six BMOPF fidelity flags that
+  PowerIO.jl and downstream tools can probe at runtime.
+- Geographic fields (#180): balanced and distribution models now share typed
+  `GeoMeta` / `Location` JSON shapes. `Network.geo`, `Bus.location`,
+  `DistNetwork.geo`, and `DistBus.location` are optional and omitted when
+  absent. OpenDSS Buscoords and BMOPF longitude/latitude sideloads promote into
+  typed bus locations; OpenDSS writes a Buscoords sidecar when locations are
+  present, while BMOPF longitude/latitude output remains opt in and only emits
+  declared geographic coordinates.
+- `.pio.json` model JSON: the balanced and multiconductor payload schema
+  versions move from `1.0.0` to `1.1.0` for the additive geographic fields.
+  The package metadata schema, C ABI version, and Python package surface stay
+  in the 0.6 compatibility band.
+
 ## 0.6.1
 
 - CI: added wasm32 coverage for the core Rust crates (#186), external BMOPF

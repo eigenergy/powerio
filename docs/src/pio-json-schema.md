@@ -304,7 +304,7 @@ bindings, or MCP operations.
 {
   "schema": "https://powerio.dev/schema/pio-package/0.1",
   "schema_version": "0.1.1",
-  "producer": { "tool": "powerio", "version": "0.6.1" },
+  "producer": { "tool": "powerio", "version": "0.6.2" },
   "model_kind": "multiconductor",
   "payload_schema": "https://powerio.dev/schema/pio-payload-multiconductor/1",
   "payload_schema_version": "1.1.0",
