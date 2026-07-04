@@ -230,6 +230,29 @@ pub extern "C" fn pio_dist_abi_version() -> u32 {
     PIO_DIST_ABI_VERSION
 }
 
+#[cfg(feature = "dist")]
+const DIST_CAPABILITIES_JSON: &str = concat!(
+    r#"{"dist":true,"schema_version":"1.0.0","#,
+    r#""bmopf_fixed_taps":true,"#,
+    r#""bmopf_center_tap_leakage":true,"#,
+    r#""bmopf_delta_wye_leakage":true,"#,
+    r#""bmopf_delta_roll":true,"#,
+    r#""bmopf_voltage_source_merge":true,"#,
+    r#""bmopf_transformer_diagnostics":true}"#
+);
+
+/// Return distribution capability flags as owned JSON. Free the returned string
+/// with [`pio_string_free`]. Only linked when the `dist` feature is compiled in;
+/// runtime loaders can either check `pio_has_feature("dist")` or probe for this
+/// symbol directly. The JSON schema is versioned separately from
+/// [`PIO_DIST_ABI_VERSION`] so new additive flags do not force a C signature
+/// change.
+#[cfg(feature = "dist")]
+#[unsafe(no_mangle)]
+pub extern "C" fn pio_dist_capabilities_json() -> *mut c_char {
+    into_cstring(DIST_CAPABILITIES_JSON.to_owned()).unwrap_or(std::ptr::null_mut())
+}
+
 /// Whether the matrix Arrow table surface is usable in this build. Returns 1
 /// only when both `arrow` and `matrix` are compiled in, since the matrices ride
 /// `pio_to_arrow`. Infallible.
@@ -2384,6 +2407,7 @@ mod tests {
             "typedef struct PioPackage PioPackage;",
             "uint32_t pio_abi_version(void);",
             "uint32_t pio_dist_abi_version(void);",
+            "char *pio_dist_capabilities_json(void);",
             "int32_t pio_matrix_available(void);",
             "int32_t pio_has_feature(const char *feature);",
             "const char *pio_version(void);",
@@ -3792,6 +3816,29 @@ mpc.branch = [
             assert_eq!(PIO_DIST_ABI_VERSION, 1);
             let feature = CString::new("dist").unwrap();
             assert_eq!(unsafe { pio_has_feature(feature.as_ptr()) }, 1);
+        }
+
+        #[test]
+        fn dist_capabilities_json_reports_bmopf_fidelity_flags() {
+            let ptr = pio_dist_capabilities_json();
+            assert!(!ptr.is_null(), "dist capabilities JSON returned NULL");
+            let text = unsafe { CStr::from_ptr(ptr) }.to_str().unwrap().to_owned();
+            unsafe { pio_string_free(ptr) };
+
+            let caps: serde_json::Value = serde_json::from_str(&text).unwrap();
+            assert_eq!(
+                caps,
+                serde_json::json!({
+                    "dist": true,
+                    "schema_version": "1.0.0",
+                    "bmopf_fixed_taps": true,
+                    "bmopf_center_tap_leakage": true,
+                    "bmopf_delta_wye_leakage": true,
+                    "bmopf_delta_roll": true,
+                    "bmopf_voltage_source_merge": true,
+                    "bmopf_transformer_diagnostics": true,
+                })
+            );
         }
 
         #[test]
