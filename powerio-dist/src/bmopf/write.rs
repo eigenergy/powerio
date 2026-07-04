@@ -13,6 +13,7 @@ use serde_json::{Map, Value, json};
 
 use crate::convert::Conversion;
 use crate::diagnostics::{DiagnosticSeverity, DiagnosticStage, StructuredDiagnostic};
+use crate::geo::CoordinateSpace;
 use crate::model::{
     ActivePowerReference, ActivePowerUnit, Configuration, ControlVoltageReference,
     DistControlProfile, DistGenerator, DistIbr, DistLoadVoltageModel, DistNetwork, DistTransformer,
@@ -85,6 +86,17 @@ const TRANSFORMER_TWO_WINDING_ALLOWED_EXTRAS: [&str; 18] = [
     "%imag",
 ];
 
+/// Options for BMOPF JSON output.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct BmopfWriteOptions {
+    /// Emit the BMOPFTools coordinate sideload fields on buses.
+    ///
+    /// The default stays schema strict because the BMOPF schema rejects these
+    /// fields with `additionalProperties: false`.
+    pub sideload_coordinates: bool,
+}
+
 /// Writes the strict BMOPF document. Every field the schema cannot carry
 /// is reported in the warnings.
 ///
@@ -93,7 +105,18 @@ const TRANSFORMER_TWO_WINDING_ALLOWED_EXTRAS: [&str; 18] = [
 /// Never in practice: the document is maps, strings, and finite numbers,
 /// which always serialize.
 pub fn write_bmopf_json(net: &DistNetwork) -> Conversion {
+    write_bmopf_json_with_options(net, &BmopfWriteOptions::default())
+}
+
+/// Writes BMOPF JSON with explicit options.
+///
+/// # Panics
+///
+/// Never in practice: the document is maps, strings, and finite numbers,
+/// which always serialize.
+pub fn write_bmopf_json_with_options(net: &DistNetwork, options: &BmopfWriteOptions) -> Conversion {
     let mut w = Writer {
+        options: *options,
         warnings: Vec::new(),
         diagnostics: Vec::new(),
         grounded: net
@@ -105,12 +128,14 @@ pub fn write_bmopf_json(net: &DistNetwork) -> Conversion {
     let doc = w.document(net);
     Conversion {
         text: serde_json::to_string_pretty(&doc).expect("maps and finite numbers") + "\n",
+        sidecars: Vec::new(),
         warnings: w.warnings,
         diagnostics: w.diagnostics,
     }
 }
 
 struct Writer {
+    options: BmopfWriteOptions,
     warnings: Vec<String>,
     diagnostics: Vec<StructuredDiagnostic>,
     grounded: BTreeMap<String, Vec<String>>,
@@ -226,7 +251,8 @@ impl Writer {
                     o.insert(key.into(), self.nums(v, &format!("bus {key}")));
                 }
             }
-            // Coordinates and other extras have no bus fields in the schema.
+            self.bus_location(&mut o, b, net);
+            // Other extras have no bus fields in the schema.
             self.extras_dropped(&b.extras, &format!("bus {}", b.id));
             buses.insert(b.id.clone(), Value::Object(o));
         }
@@ -284,6 +310,79 @@ impl Writer {
         self.warn_unemitted_untyped(net);
         self.prune_unreferenced_buses(&mut doc);
         Value::Object(doc)
+    }
+
+    fn bus_location(
+        &mut self,
+        o: &mut Map<String, Value>,
+        b: &crate::model::DistBus,
+        net: &DistNetwork,
+    ) {
+        let Some(location) = b.location else {
+            return;
+        };
+        if !self.options.sideload_coordinates {
+            self.diagnostic(
+                "EMIT.BMOPF.BUS_LOCATION_DROPPED",
+                format!("bus {}", b.id),
+                format!(
+                    "bus {}: location has no place in the BMOPF schema; dropped from the output",
+                    b.id
+                ),
+                json!({
+                    "bus": b.id,
+                    "x": location.x,
+                    "y": location.y,
+                })
+                .as_object()
+                .expect("object literal")
+                .clone(),
+            );
+            return;
+        }
+        if !matches!(
+            net.geo.as_ref().map(|geo| &geo.space),
+            Some(CoordinateSpace::Geographic { .. })
+        ) {
+            self.diagnostic(
+                "EMIT.BMOPF.BUS_LOCATION_DROPPED",
+                format!("bus {}", b.id),
+                format!(
+                    "bus {}: non-geographic or undeclared location cannot be emitted as BMOPF longitude/latitude",
+                    b.id
+                ),
+                json!({
+                    "bus": b.id,
+                    "x": location.x,
+                    "y": location.y,
+                })
+                .as_object()
+                .expect("object literal")
+                .clone(),
+            );
+            return;
+        }
+        if !location.x.is_finite() || !location.y.is_finite() {
+            self.diagnostic(
+                "EMIT.BMOPF.BUS_LOCATION_DROPPED",
+                format!("bus {}", b.id),
+                format!(
+                    "bus {}: nonfinite location cannot be emitted as BMOPF longitude/latitude",
+                    b.id
+                ),
+                json!({
+                    "bus": b.id,
+                    "x": location.x,
+                    "y": location.y,
+                })
+                .as_object()
+                .expect("object literal")
+                .clone(),
+            );
+            return;
+        }
+        o.insert("longitude".into(), self.num(location.x, "bus longitude"));
+        o.insert("latitude".into(), self.num(location.y, "bus latitude"));
     }
 
     fn warn_unemitted_untyped(&mut self, net: &DistNetwork) {

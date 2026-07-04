@@ -481,6 +481,7 @@ pub(crate) fn parse_powermodels_json_source(
         name,
         base_mva,
         base_frequency: crate::network::DEFAULT_BASE_FREQUENCY,
+        geo: None,
         buses: sorted(root, "bus", "index")
             .iter()
             .map(|v| read_bus(v, ascale))
@@ -591,6 +592,7 @@ fn read_bus(v: &Value, ascale: f64) -> Result<Bus> {
         zone: uid(v, "zone"),
         name: v.get("name").and_then(Value::as_str).map(str::to_string),
         uid: None,
+        location: None,
         extras: extras_excluding(
             v,
             &[

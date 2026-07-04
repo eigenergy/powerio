@@ -583,6 +583,7 @@ impl Network {
             name: self.name.clone(),
             base_mva: base,
             base_frequency: self.base_frequency,
+            geo: self.geo.clone(),
             buses,
             loads,
             shunts,
@@ -703,6 +704,7 @@ mod tests {
             zone: 1,
             name: None,
             uid: None,
+            location: None,
             extras: Extras::new(),
         };
         let branch = Branch {
@@ -799,6 +801,7 @@ mod tests {
             zone: 1,
             name: None,
             uid: None,
+            location: None,
             extras: Extras::new(),
         };
         let mkgen = |bus: usize, pmax: f64| Generator {

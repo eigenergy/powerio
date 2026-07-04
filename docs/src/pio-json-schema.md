@@ -133,7 +133,7 @@ later families can be added).
 ## The Model JSON
 
 `payload_schema` names the model JSON contract per model kind and
-`payload_schema_version` versions it, currently `1.0.0` for both kinds.
+`payload_schema_version` versions it, currently `1.1.0` for both kinds.
 Additive optional fields bump the minor; field moves or removals bump the
 major. A reader rejects a different major (or a version that does not parse as
 semver) before computing on model fields. Both fields are absent on documents
@@ -307,7 +307,7 @@ bindings, or MCP operations.
   "producer": { "tool": "powerio", "version": "0.6.1" },
   "model_kind": "multiconductor",
   "payload_schema": "https://powerio.dev/schema/pio-payload-multiconductor/1",
-  "payload_schema_version": "1.0.0",
+  "payload_schema_version": "1.1.0",
   "model": {
     "kind": "multiconductor",
     "multiconductor_network": {

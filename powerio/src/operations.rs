@@ -234,6 +234,7 @@ impl Network {
             name: format!("{} (subset)", self.name),
             base_mva: self.base_mva,
             base_frequency: self.base_frequency,
+            geo: self.geo.clone(),
             buses,
             loads,
             shunts,
@@ -569,6 +570,7 @@ mod tests {
             zone: 1,
             name: None,
             uid: None,
+            location: None,
             extras: Extras::new(),
         }
     }

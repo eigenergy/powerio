@@ -121,6 +121,7 @@ pub(crate) fn parse_pandapower_source(
             zone: row.usize_or("zone", 1),
             name: row.string("name"),
             uid: None,
+            location: None,
             extras: Extras::default(),
         });
     }
@@ -634,6 +635,7 @@ pub(crate) fn parse_pandapower_source(
         name,
         base_mva,
         base_frequency: f_hz,
+        geo: None,
         buses,
         loads,
         shunts,
@@ -2820,6 +2822,7 @@ mod tests {
             zone: 1,
             name: None,
             uid: None,
+            location: None,
             extras: Extras::default(),
         }
     }
@@ -2829,6 +2832,7 @@ mod tests {
             name: "t".into(),
             base_mva: 100.0,
             base_frequency: crate::network::DEFAULT_BASE_FREQUENCY,
+            geo: None,
             buses,
             loads: Vec::new(),
             shunts: Vec::new(),

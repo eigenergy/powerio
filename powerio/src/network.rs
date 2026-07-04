@@ -26,6 +26,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use crate::Error;
+use crate::geo::{GeoMeta, Location};
 
 /// Source-format fields the neutral model doesn't name, kept for round-trip and
 /// cross-format passthrough. Keys are the field names; values are JSON scalars.
@@ -275,6 +276,8 @@ pub struct Network {
     /// frequency field.
     #[serde(default = "default_base_frequency")]
     pub base_frequency: f64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub geo: Option<GeoMeta>,
     pub buses: Vec<Bus>,
     pub loads: Vec<Load>,
     pub shunts: Vec<Shunt>,
@@ -354,6 +357,9 @@ pub struct Bus {
     /// field existed still deserializes.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub uid: Option<String>,
+    /// Optional bus coordinates in the network coordinate space.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub location: Option<Location>,
     pub extras: Extras,
 }
 
@@ -374,6 +380,7 @@ impl Bus {
             zone: 1,
             name: None,
             uid: None,
+            location: None,
             extras: Extras::new(),
         }
     }
@@ -1390,6 +1397,7 @@ impl Transformer3W {
             zone: 0,
             name: self.name.clone(),
             uid: self.uid.clone(),
+            location: None,
             extras: Extras::new(),
         };
         let zs = self.star_impedances();
@@ -1477,6 +1485,7 @@ impl Network {
             name: name.into(),
             base_mva,
             base_frequency: DEFAULT_BASE_FREQUENCY,
+            geo: None,
             buses: Vec::new(),
             loads: Vec::new(),
             shunts: Vec::new(),
@@ -1563,7 +1572,7 @@ impl Network {
         }
         for (i, b) in self.buses.iter().enumerate() {
             #[rustfmt::skip]
-            let Bus { id: _, kind: _, vm, va, base_kv, vmax, vmin, evhi: _, evlo: _, area: _, zone: _, name: _, uid: _, extras: _ } = b;
+            let Bus { id: _, kind: _, vm, va, base_kv, vmax, vmin, evhi: _, evlo: _, area: _, zone: _, name: _, uid: _, location, extras: _ } = b;
             let fields = [
                 ("vm", *vm),
                 ("va", *va),
@@ -1572,6 +1581,10 @@ impl Network {
                 ("vmin", *vmin),
             ];
             out.extend(bad(fields).map(|f| format!("buses[{i}].{f}")));
+            if let Some(location) = location {
+                let fields = [("location.x", location.x), ("location.y", location.y)];
+                out.extend(bad(fields).map(|f| format!("buses[{i}].{f}")));
+            }
         }
         for (i, l) in self.loads.iter().enumerate() {
             let Load {
@@ -2182,6 +2195,7 @@ mod tests {
             zone: 1,
             name: None,
             uid: None,
+            location: None,
             extras: Extras::new(),
         }
     }
@@ -2388,6 +2402,7 @@ mod tests {
             zone: 1,
             name: None,
             uid: None,
+            location: None,
             extras: Extras::new(),
         };
         let branch = Branch {

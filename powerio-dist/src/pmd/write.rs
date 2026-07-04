@@ -16,9 +16,10 @@ use std::collections::BTreeSet;
 use serde_json::{Map, Value, json};
 
 use crate::convert::Conversion;
+use crate::geo::CoordinateSpace;
 use crate::model::{
-    Configuration, DistLineCode, DistLoadVoltageModel, DistNetwork, DistTransformer, Extras, Mat,
-    VoltageSource, Winding, WindingConn,
+    Configuration, DistBus, DistLineCode, DistLoadVoltageModel, DistNetwork, DistTransformer,
+    Extras, Mat, VoltageSource, Winding, WindingConn,
 };
 
 /// Writes the ENGINEERING document.
@@ -34,6 +35,7 @@ pub fn write_pmd_json(net: &DistNetwork) -> Conversion {
     let doc = w.document(net);
     Conversion {
         text: serde_json::to_string_pretty(&doc).expect("maps and finite numbers") + "\n",
+        sidecars: Vec::new(),
         warnings: w.warnings,
         diagnostics: Vec::new(),
     }
@@ -123,6 +125,37 @@ impl Writer {
             .unwrap_or_else(|| json!("ENABLED"))
     }
 
+    fn bus_coordinates(&mut self, o: &mut Map<String, Value>, b: &DistBus, net: &DistNetwork) {
+        if let Some(location) = b.location {
+            if !matches!(
+                net.geo.as_ref().map(|geo| &geo.space),
+                Some(CoordinateSpace::Geographic { .. })
+            ) {
+                self.warnings.push(format!(
+                    "bus {}: non-geographic or undeclared location is not emitted to PMD lon/lat",
+                    b.id
+                ));
+                return;
+            }
+            if location.x.is_finite() && location.y.is_finite() {
+                o.insert("lon".into(), json!(location.x));
+                o.insert("lat".into(), json!(location.y));
+            } else {
+                self.warnings.push(format!(
+                    "bus {}: nonfinite location is not emitted to PMD JSON",
+                    b.id
+                ));
+            }
+            return;
+        }
+        if let Some(x) = Self::extras_f64(&b.extras, "x") {
+            o.insert("lon".into(), json!(x));
+        }
+        if let Some(y) = Self::extras_f64(&b.extras, "y") {
+            o.insert("lat".into(), json!(y));
+        }
+    }
+
     fn document(&mut self, net: &DistNetwork) -> Value {
         let mut doc = Map::new();
         doc.insert("data_model".into(), json!("ENGINEERING"));
@@ -184,12 +217,7 @@ impl Writer {
             }
             o.insert("grounded".into(), json!(grounded));
             o.insert("status".into(), Self::status(&b.extras));
-            if let Some(x) = Self::extras_f64(&b.extras, "x") {
-                o.insert("lon".into(), json!(x));
-            }
-            if let Some(y) = Self::extras_f64(&b.extras, "y") {
-                o.insert("lat".into(), json!(y));
-            }
+            self.bus_coordinates(&mut o, b, net);
             // Voltage bound families have no ENGINEERING fields in volts;
             // they drop loudly (PMD bounds are per unit).
             for (key, present) in [

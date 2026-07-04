@@ -518,6 +518,7 @@ pub(crate) fn parse_surge_source(
         name,
         base_mva: f_map_or(network, "base_mva", 100.0)?,
         base_frequency: f_map_or(network, "freq_hz", crate::network::DEFAULT_BASE_FREQUENCY)?,
+        geo: None,
         buses,
         loads: array_field(network, "loads", false)?
             .into_iter()
@@ -610,6 +611,7 @@ fn read_bus(value: &Value) -> Result<(Bus, Option<Shunt>)> {
             .filter(|name| !name.is_empty())
             .map(str::to_string),
         uid: None,
+        location: None,
         extras: Extras::new(),
     };
     Ok((bus, shunt))

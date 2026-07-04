@@ -160,6 +160,7 @@ pub(super) fn bus_row(row: &[f64], i: usize) -> Result<(Bus, Option<Load>, Optio
         zone: row[bus_col::ZONE] as usize,
         name: None,
         uid: None,
+        location: None,
         extras: Extras::new(),
     };
     let (pd, qd) = (row[bus_col::PD], row[bus_col::QD]);

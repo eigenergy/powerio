@@ -48,14 +48,18 @@ pub mod convert;
 pub mod diagnostics;
 pub mod dss;
 pub mod error;
+pub mod geo;
 pub mod graph;
 pub mod model;
 pub mod pmd;
 
-pub use bmopf::{parse_bmopf_file, parse_bmopf_str, write_bmopf_json};
+pub use bmopf::{
+    BmopfWriteOptions, parse_bmopf_file, parse_bmopf_str, write_bmopf_json,
+    write_bmopf_json_with_options,
+};
 pub use convert::{
-    Conversion, DistTargetFormat, convert_file, convert_str, dist_target_from_name, parse_file,
-    parse_str,
+    Conversion, ConversionSidecar, DistTargetFormat, convert_file, convert_str,
+    dist_target_from_name, parse_file, parse_str,
 };
 pub use diagnostics::{DiagnosticCode, DiagnosticSeverity, DiagnosticStage, StructuredDiagnostic};
 pub use dss::{
@@ -63,6 +67,7 @@ pub use dss::{
     write_dss_with_options,
 };
 pub use error::{Error, Result};
+pub use geo::{Canvas, CoordinateSpace, CoordsKind, GeoMeta, Location};
 pub use graph::{
     DistGraph, DistGraphAttachment, DistGraphAttachmentKind, DistGraphBus, DistGraphEdge,
     DistGraphEdgeKind,

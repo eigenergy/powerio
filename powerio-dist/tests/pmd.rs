@@ -7,7 +7,10 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use powerio_dist::dss::parse_dss_file;
-use powerio_dist::{DistNetwork, parse_pmd_file, parse_pmd_str, write_bmopf_json, write_pmd_json};
+use powerio_dist::{
+    CoordinateSpace, CoordsKind, DistBus, DistNetwork, GeoMeta, Location, parse_pmd_file,
+    parse_pmd_str, write_bmopf_json, write_pmd_json,
+};
 
 fn fixture(rel: &str) -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
@@ -186,12 +189,20 @@ fn dss_to_pmd_reproduces_the_reference_essentials() {
             .unwrap();
 
     assert_eq!(emitted["data_model"], reference["data_model"]);
-    // Bus terminals, grounding, and coordinates match the reference.
+    assert!(
+        out.warnings
+            .iter()
+            .any(|w| w.contains("non-geographic or undeclared location")),
+        "{:?}",
+        out.warnings
+    );
+    // Bus terminals and grounding match the reference. DSS Buscoords are typed
+    // as unknown space, so they do not emit as PMD lon/lat.
     for (id, bus) in reference["bus"].as_object().unwrap() {
         let ours = &emitted["bus"][id];
         assert_eq!(ours["terminals"], bus["terminals"], "bus {id}");
         assert_eq!(ours["grounded"], bus["grounded"], "bus {id}");
-        assert_eq!(ours["lat"], bus["lat"], "bus {id}");
+        assert!(ours.get("lat").is_none(), "bus {id}");
         assert_eq!(ours["status"], bus["status"], "bus {id}");
     }
     // Loads match in power, model enum, and nominal voltage.
@@ -237,6 +248,40 @@ fn dss_to_pmd_reproduces_the_reference_essentials() {
         assert_eq!(ours["connections"], want["connections"], "{id}");
         assert_eq!(ours["tm_step"], want["tm_step"], "{id}");
     }
+}
+
+#[test]
+fn pmd_typed_locations_emit_only_when_geographic() {
+    let mut bus = DistBus::new("b1", vec!["1".to_owned()]);
+    bus.location = Some(Location {
+        x: -80.0,
+        y: 35.0,
+        kind: None,
+    });
+    let mut net = DistNetwork::default();
+    net.buses = vec![bus];
+
+    let unknown = write_pmd_json(&net);
+    let doc: serde_json::Value = serde_json::from_str(&unknown.text).unwrap();
+    assert!(doc["bus"]["b1"].get("lon").is_none());
+    assert!(doc["bus"]["b1"].get("lat").is_none());
+    assert!(
+        unknown
+            .warnings
+            .iter()
+            .any(|w| w.contains("non-geographic or undeclared location")),
+        "{:?}",
+        unknown.warnings
+    );
+
+    net.geo = Some(GeoMeta {
+        space: CoordinateSpace::Geographic { crs: None },
+        kind: Some(CoordsKind::Source),
+    });
+    let geographic = write_pmd_json(&net);
+    let doc: serde_json::Value = serde_json::from_str(&geographic.text).unwrap();
+    assert_eq!(doc["bus"]["b1"]["lon"], serde_json::json!(-80.0));
+    assert_eq!(doc["bus"]["b1"]["lat"], serde_json::json!(35.0));
 }
 
 fn rewrite(text: &str) -> serde_json::Value {

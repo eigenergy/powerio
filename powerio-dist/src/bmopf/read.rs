@@ -15,6 +15,7 @@ use serde::de::DeserializeOwned;
 use serde_json::{Map, Value};
 
 use crate::error::{Error, Result};
+use crate::geo::{CoordinateSpace, CoordsKind, GeoMeta, Location};
 use crate::model::{
     ActivePowerReference, ActivePowerUnit, Configuration, ControlVoltageReference, DistBus,
     DistControlProfile, DistGenerator, DistIbr, DistLine, DistLineCode, DistLoad,
@@ -400,6 +401,8 @@ impl Reader<'_> {
             let known = [
                 "terminal_names",
                 "perfectly_grounded_terminals",
+                "longitude",
+                "latitude",
                 "v_min",
                 "v_max",
                 "vpn_min",
@@ -409,6 +412,36 @@ impl Reader<'_> {
                 "vsym_min",
                 "vsym_max",
             ];
+            let lon = first_float(o.get("longitude")).filter(|v| v.is_finite());
+            let lat = first_float(o.get("latitude")).filter(|v| v.is_finite());
+            let has_lon = o.contains_key("longitude");
+            let has_lat = o.contains_key("latitude");
+            let location = match (lon, lat) {
+                (Some(x), Some(y)) => {
+                    self.net.geo = Some(GeoMeta {
+                        space: CoordinateSpace::Geographic { crs: None },
+                        kind: Some(CoordsKind::Source),
+                    });
+                    Some(Location { x, y, kind: None })
+                }
+                _ if has_lon || has_lat => {
+                    self.net.warnings.push(format!(
+                        "bus {id}: longitude/latitude sideload is incomplete or nonfinite; kept in extras"
+                    ));
+                    None
+                }
+                _ => None,
+            };
+            let mut extras =
+                take_extras(o, &known, &format!("bus {id}"), &mut self.net.warnings, &[]);
+            if location.is_none() {
+                if let Some(value) = o.get("longitude") {
+                    extras.insert("longitude".into(), value.clone());
+                }
+                if let Some(value) = o.get("latitude") {
+                    extras.insert("latitude".into(), value.clone());
+                }
+            }
             self.net.buses.push(DistBus {
                 id: id.clone(),
                 terminals: strings(o.get("terminal_names")),
@@ -429,7 +462,8 @@ impl Reader<'_> {
                 vpp_max: floats(o.get("vpp_max")),
                 vsym_min: floats(o.get("vsym_min")),
                 vsym_max: floats(o.get("vsym_max")),
-                extras: take_extras(o, &known, &format!("bus {id}"), &mut self.net.warnings, &[]),
+                location,
+                extras,
             });
         }
     }

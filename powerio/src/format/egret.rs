@@ -380,6 +380,7 @@ pub(crate) fn parse_egret_source(source: Arc<String>, name_hint: Option<&str>) -
         name,
         base_mva,
         base_frequency: crate::network::DEFAULT_BASE_FREQUENCY,
+        geo: None,
         buses,
         loads,
         shunts,
@@ -535,6 +536,7 @@ fn read_bus(key: &str, v: &Value) -> Result<Bus> {
         zone: usize_or(v, "zone", 0)?,
         name: v.get("name").and_then(Value::as_str).map(str::to_string),
         uid: None,
+        location: None,
         extras: Extras::new(),
     })
 }

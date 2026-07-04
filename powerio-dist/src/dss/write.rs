@@ -15,7 +15,7 @@
 use std::collections::BTreeMap;
 use std::fmt::Write as _;
 
-use crate::convert::Conversion;
+use crate::convert::{Conversion, ConversionSidecar};
 use crate::model::{
     ActivePowerReference, Configuration, ControlVoltageReference, DistBus, DistControlProfile,
     DistIbr, DistLoadVoltageModel, DistNetwork, Extras, IbrPrimeMover, IbrTopology,
@@ -33,12 +33,16 @@ pub struct DssWriteOptions {
     /// Default voltage validity band emitted on loads that do not already
     /// carry `vminpu` / `vmaxpu` extras.
     pub default_load_voltage_bounds: Option<DssLoadVoltageBounds>,
+    /// Relative companion file named by the emitted `Buscoords` command.
+    /// `None` drops typed bus locations with a warning.
+    pub buscoords_filename: Option<String>,
 }
 
 impl Default for DssWriteOptions {
     fn default() -> Self {
         Self {
             default_load_voltage_bounds: Some(DssLoadVoltageBounds::default()),
+            buscoords_filename: Some("buscoords.csv".to_owned()),
         }
     }
 }
@@ -69,6 +73,7 @@ pub fn write_dss(net: &DistNetwork) -> Conversion {
 pub fn write_dss_with_options(net: &DistNetwork, options: &DssWriteOptions) -> Conversion {
     let mut w = DssWriter {
         out: String::new(),
+        sidecars: Vec::new(),
         warnings: Vec::new(),
         options: options.clone(),
         grounded: net
@@ -86,6 +91,7 @@ pub fn write_dss_with_options(net: &DistNetwork, options: &DssWriteOptions) -> C
     w.network(net);
     Conversion {
         text: w.out,
+        sidecars: w.sidecars,
         warnings: w.warnings,
         diagnostics: Vec::new(),
     }
@@ -93,6 +99,7 @@ pub fn write_dss_with_options(net: &DistNetwork, options: &DssWriteOptions) -> C
 
 struct DssWriter {
     out: String,
+    sidecars: Vec<ConversionSidecar>,
     warnings: Vec<String>,
     options: DssWriteOptions,
     /// Bus id (lowercase) → perfectly grounded terminal names.
@@ -596,6 +603,7 @@ impl DssWriter {
         ));
         self.out.push('\n');
 
+        self.buscoords(net);
         self.sources(net);
         self.linecodes(net);
         self.lines(net);
@@ -684,7 +692,7 @@ impl DssWriter {
     fn bus_extras(&mut self, b: &DistBus) {
         for key in b.extras.keys() {
             if key == "x" || key == "y" {
-                continue; // coordinates have no command in canonical output yet
+                continue; // legacy coordinate extras are superseded by `location`
             }
             self.warnings.push(format!(
                 "bus {}: extra `{key}` is not regenerated in canonical dss output",
@@ -708,6 +716,56 @@ impl DssWriter {
                 ));
             }
         }
+    }
+
+    fn buscoords(&mut self, net: &DistNetwork) {
+        let rows: Vec<(&DistBus, crate::geo::Location)> = net
+            .buses
+            .iter()
+            .filter_map(|b| b.location.map(|location| (b, location)))
+            .collect();
+        if rows.is_empty() {
+            return;
+        }
+        let Some(path) = self.options.buscoords_filename.clone() else {
+            self.warn("typed bus locations have no OpenDSS buscoords filename; dropped");
+            return;
+        };
+        if path.is_empty() {
+            self.warn("typed bus locations have an empty OpenDSS buscoords filename; dropped");
+            return;
+        }
+        let (path_out, path_representable) = dss_value_out(&path);
+        if !path_representable {
+            self.warn(format!(
+                "buscoords filename `{path}` contains every dss quote closer and splits when scanned bare; emitted as written and a reparse will not see the same value"
+            ));
+        }
+
+        let mut text = String::new();
+        for (bus, location) in rows {
+            if !location.x.is_finite() || !location.y.is_finite() {
+                self.warn(format!(
+                    "bus {}: nonfinite location is not emitted to OpenDSS buscoords",
+                    bus.id
+                ));
+                continue;
+            }
+            let (bus_out, bus_representable) = dss_value_out(&bus.id);
+            if !bus_representable {
+                self.warn(format!(
+                    "bus {}: id contains every dss quote closer and splits in buscoords; coordinates dropped",
+                    bus.id
+                ));
+                continue;
+            }
+            let _ = writeln!(text, "{bus_out},{},{}", num(location.x), num(location.y));
+        }
+        if text.is_empty() {
+            return;
+        }
+        self.line_out(&format!("Buscoords {path_out}"));
+        self.sidecars.push(ConversionSidecar { path, text });
     }
 
     fn sources(&mut self, net: &DistNetwork) {
@@ -2076,6 +2134,7 @@ mod tests {
         };
         let options = DssWriteOptions {
             default_load_voltage_bounds: None,
+            ..DssWriteOptions::default()
         };
         let out = write_dss_with_options(&net, &options);
         let line = out.text.lines().find(|l| l.contains("Load.ld")).unwrap();

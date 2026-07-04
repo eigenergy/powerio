@@ -9,8 +9,8 @@ use std::path::PathBuf;
 
 use powerio_dist::dss::{parse_dss_file, write_dss};
 use powerio_dist::{
-    Configuration, DistNetwork, IbrPrimeMover, IbrTopology, ReactivePowerReference,
-    ReactivePowerUnit, WindingConn,
+    Configuration, CoordinateSpace, CoordsKind, DistNetwork, IbrPrimeMover, IbrTopology,
+    ReactivePowerReference, ReactivePowerUnit, WindingConn,
 };
 
 fn fixture(rel: &str) -> PathBuf {
@@ -21,6 +21,13 @@ fn fixture(rel: &str) -> PathBuf {
 
 fn parse(rel: &str) -> DistNetwork {
     parse_dss_file(fixture(rel)).expect("fixture parses")
+}
+
+fn temp_case_dir(name: &str) -> PathBuf {
+    let dir = std::env::temp_dir().join(format!("powerio-{name}-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    dir
 }
 
 /// Bus id (lowercased) → phase terminal names, excluding the materialized
@@ -39,6 +46,56 @@ fn phase_terminals(net: &DistNetwork) -> BTreeMap<String, Vec<String>> {
             )
         })
         .collect()
+}
+
+#[test]
+fn buscoords_promote_to_locations_and_write_a_sidecar() {
+    let dir = temp_case_dir("dss-geo");
+    std::fs::write(
+        dir.join("master.dss"),
+        "\
+New Circuit.geo basekv=12.47 pu=1 phases=3 bus1=a
+New Line.l1 bus1=a.1.2.3 bus2=b.1.2.3 phases=3 r1=0.1 x1=0.2 length=1 units=km
+New Load.ld bus1=b.1.2.3 phases=3 conn=wye kv=7.2 kw=10 kvar=1
+Buscoords coords.csv
+",
+    )
+    .unwrap();
+    std::fs::write(dir.join("coords.csv"), "a,-80,35\nb,-80.5,35.25\n").unwrap();
+
+    let net = parse_dss_file(dir.join("master.dss")).unwrap();
+    let geo = net.geo.as_ref().expect("geo metadata");
+    assert_eq!(geo.space, CoordinateSpace::Unknown);
+    assert_eq!(geo.kind, Some(CoordsKind::Source));
+    assert!(
+        net.warnings
+            .iter()
+            .any(|w| w.contains("fit longitude/latitude ranges")),
+        "{:?}",
+        net.warnings
+    );
+    let a = net.buses.iter().find(|b| b.id == "a").unwrap();
+    assert_eq!(a.location.unwrap().x.to_bits(), (-80.0f64).to_bits());
+    assert_eq!(a.location.unwrap().y.to_bits(), 35.0f64.to_bits());
+    assert!(!a.extras.contains_key("x"));
+    assert!(!a.extras.contains_key("y"));
+
+    let out = write_dss(&net);
+    assert!(out.text.contains("Buscoords buscoords.csv"), "{}", out.text);
+    assert_eq!(out.sidecars.len(), 1);
+    assert_eq!(out.sidecars[0].path, "buscoords.csv");
+    assert!(out.sidecars[0].text.contains("a,-80,35"));
+    assert!(out.sidecars[0].text.contains("b,-80.5,35.25"));
+
+    let out_dir = temp_case_dir("dss-geo-out");
+    std::fs::write(out_dir.join("master.dss"), &out.text).unwrap();
+    for sidecar in &out.sidecars {
+        std::fs::write(out_dir.join(&sidecar.path), &sidecar.text).unwrap();
+    }
+    let reparsed = parse_dss_file(out_dir.join("master.dss")).unwrap();
+    let b = reparsed.buses.iter().find(|b| b.id == "b").unwrap();
+    assert_eq!(b.location.unwrap().x.to_bits(), (-80.5f64).to_bits());
+    assert_eq!(b.location.unwrap().y.to_bits(), 35.25f64.to_bits());
 }
 
 #[test]
@@ -97,9 +154,11 @@ fn ieee13_matches_the_engine_bus_map() {
     assert_eq!(sw.name, "671692");
     assert!(!sw.open);
 
-    // Bus coordinates landed as extras.
+    // Bus coordinates promote out of extras into the typed field.
     let b = net.bus("611").unwrap();
-    assert!(b.extras.contains_key("x"));
+    assert!(b.location.is_some());
+    assert!(!b.extras.contains_key("x"));
+    assert!(!b.extras.contains_key("y"));
 
     // Load 671 is 3 phase delta: 1155 kW total, 660 kvar.
     let l671 = net.loads.iter().find(|l| l.name == "671").unwrap();
