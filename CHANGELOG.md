@@ -1,5 +1,36 @@
 # Changelog
 
+## 0.6.1
+
+- CI: added wasm32 coverage for the core Rust crates (#186), external BMOPF
+  JSON Schema validation for emitted distribution documents (#192), and
+  generated `.pio.json` / model JSON schema drift checks (#178).
+- Distribution fidelity (#197): OpenDSS and BMOPF writers preserve transformer
+  winding voltage bases, no load admittance, tap settings, neutral impedances,
+  and multi winding transformer structure. Roundtripped OpenDSS decks now run
+  through a solve oracle that checks voltage agreement, load voltage model
+  behavior, and neutral return handling.
+- Distribution DER mapping (#197): typed IBR and control profile data now round
+  trips through OpenDSS `PVSystem` / `Generator` / `InvControl` and BMOPF
+  `ibr` / `control_profile` records, with warnings for unsupported control
+  details.
+- `.pio.json` documents (#181, #193): added the study block for replayable
+  balanced model edits, materialization helpers, deterministic uid stamping,
+  and balanced reader warnings as structured `.pio.json` diagnostics.
+- Normalization (#188): added an opt-in angle bound clamp pass with Rust, C ABI,
+  and Python entry points; existing normalization behavior is unchanged.
+- Distribution graph projection (#182): added a bus and terminal graph view for
+  `DistNetwork`, including transformers, open switches, and terminal metadata.
+- Matrix bindings (#190): added Arrow C ABI matrix exports as COO triplet tables
+  for Ybus, incidence, B', and B'', with C and Python golden coverage.
+- Sensitivities (#8): added sparse and iterative PTDF/LODF export paths with
+  drop tolerance metadata, while retaining the dense path as the small case
+  oracle.
+- Documentation (#191): standardized released docs, READMEs, and crate metadata
+  around `.pio.json` document, model JSON, and metadata terminology.
+  `powerio-py` continues to inherit the workspace version; no separate Python
+  version bump is needed.
+
 ## 0.6.0
 
 - Breaking (#175): `ElementRef.row` is `Option<usize>`, the honest form of the

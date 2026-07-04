@@ -2,7 +2,7 @@
 
 `powerio-cli` provides the `powerio` command for format conversion, matrix
 export, DC OPF bundles, PTDF/LODF exports, GridFM Parquet export, synthetic case
-generation, `.pio.json` package emission, verification, and the ratatui TUI.
+generation, `.pio.json` document emission, verification, and the ratatui TUI.
 Transmission conversion covers MATPOWER, PSS/E, PowerWorld AUX, PSLF, PowerModels
 JSON, egret JSON, pandapower JSON, PyPSA CSV folders, GOC3 JSON input, Surge
 JSON, GridFM reads, and PowerIO JSON snapshots. Distribution conversion covers

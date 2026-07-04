@@ -121,11 +121,11 @@ the transport the Julia package consumes: one call instead of stitching the
 snapshot omits, so a reloaded handle reformats on write rather than echoing a
 byte-exact original.
 
-## The `.pio.json` package surface
+## The `.pio.json` Document Surface
 
 The default build includes the package surface (`PIO_PKG`). Probe it with
 `pio_has_feature("pkg")` when loading dynamically. `PioPackage` is an opaque
-compiler package handle, distinct from the parsed network handles:
+`.pio.json` document handle, distinct from the parsed network handles:
 
 - `pio_package_parse_file` and `pio_package_parse_str` read `.pio.json`.
 - `pio_package_to_json` returns compact `.pio.json`; free it with
@@ -138,14 +138,14 @@ compiler package handle, distinct from the parsed network handles:
 - `pio_package_validate`, `pio_package_validation_json`, and
   `pio_package_diagnostics_json` expose structured validation state.
 - `pio_package_operating_points_json` returns the replayable operating point
-  series, or JSON `null` when the package has none.
-- `pio_package_materialize_operating_point` returns a new static package with
-  one operating point applied. Updates resolve by the payload rows' `uid`
+  series, or JSON `null` when the document has none.
+- `pio_package_materialize_operating_point` returns a new static document with
+  one operating point applied. Updates resolve by the model rows' `uid`
   identities; an unknown identity, an ambiguous (duplicated) uid, or a row that
   contradicts a resolved identity returns `NULL` with the message in `errbuf`.
 - `pio_package_multiconductor_to_balanced_preflight_json` reports structured
-  blockers before lowering, and `pio_package_lower_multiconductor_to_balanced`
-  returns a new balanced package when the input is ready.
+blockers before lowering, and `pio_package_lower_multiconductor_to_balanced`
+  returns a new balanced document when the input is ready.
 
 Constructor and lowering options cross as typed parameters. The balanced
 constructor takes `include_solver_metadata`; any nonzero value records compact
@@ -164,7 +164,7 @@ The grammar is written out in the header preamble; the short version:
   `pio_convert_file`/`pio_convert_str` transcode without keeping a handle.
 - `pio_to_format` is the one text serializer; `pio_to_arrow` earns its own
   symbol only because its output type is Arrow C Data Interface structs.
-- `pio_package_*` functions operate on the package envelope, not on a new
+- `pio_package_*` functions operate on `.pio.json` document metadata, not on a new
   network handle family.
 - Format names never appear in symbols: `matpower`, `psse`, `powerio-json`,
   `pypsa-csv`, `gridfm`, `goc3-json`, `surge-json`, and every future format are

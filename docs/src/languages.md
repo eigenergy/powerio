@@ -34,8 +34,8 @@ Verb taxonomy:
 | Parsed conversion | `net.to_format(to)` | `net.to_format(to)` | `to_format(net, to)` | `pio_to_format` |
 | MATPOWER text | `net.to_matpower()` | `net.to_matpower()` | `to_matpower(net)` | `pio_to_format` + `"matpower"` |
 | JSON text | `net.to_json()` | `net.to_json()` | `to_json(net)` | `pio_to_format` + `"powerio-json"` |
-| Package JSON | `NetworkPackage::to_json()` | `Package` class / package transport | `to_package` / `write_package` | `pio_package_*` |
-| Package operating points | `pkg.operating_points()` | `pkg.operating_points()` | planned | `pio_package_operating_points_json` |
+| `.pio.json` document JSON | `NetworkPackage::to_json()` | `Package` class / package transport | `to_package` / `write_package` | `pio_package_*` |
+| `.pio.json` operating points | `pkg.operating_points()` | `pkg.operating_points()` | planned | `pio_package_operating_points_json` |
 | Materialize operating point | `pkg.materialize_operating_point(i)` | `pkg.materialize_operating_point(i)` | planned | `pio_package_materialize_operating_point` |
 | Normalized copy | `net.to_normalized()` | `net.to_normalized()` | `to_normalized(net)` | `pio_normalize` |
 | Dense tables | typed table API | `to_dense` | `to_dense` | `pio_*` extractors |
@@ -53,7 +53,7 @@ language APIs keep their per-format conveniences (`to_matpower`, `from_json`,
 ## C ABI and binding compatibility
 
 The C ABI is the stable boundary for non Rust callers. Handles own parsed
-networks. `PioPackage` handles own `.pio.json` compiler packages. Callers free
+networks. `PioPackage` handles own `.pio.json` documents. Callers free
 network handles with `pio_network_free`, package handles with
 `pio_package_free`, free returned text with `pio_string_free`, size output
 buffers before filling them, and treat every format name as a string routed
@@ -72,15 +72,15 @@ C ABI review points:
 - ownership rules must be documented in the header, README, and binding code.
 
 Julia's `PowerIO.jl` uses the C ABI for handles, dense extractors, Arrow,
-GridFM, PyPSA CSV folders, distribution conversion, and `.pio.json` package
+GridFM, PyPSA CSV folders, distribution conversion, and `.pio.json` document
 construction. Whole-network transport uses `powerio-json`, so the binding does
 not stitch together a separate model from individual table calls. The Julia
 binding checks `pio_abi_version()` against `PIO_ABI_VERSION` on first use.
 Distribution calls also check `pio_dist_abi_version()`.
 
-GOC3 package construction is the first package operating point path backed by a
-source format. The static balanced payload carries the first interval; the
-replayable series is exposed through the package APIs above.
+GOC3 document construction is the first `.pio.json` operating point path backed
+by a source format. The static balanced model JSON carries the first interval;
+the replayable series is exposed through the package APIs above.
 
 During development, test the sibling Julia binding against the local C ABI
 instead of an artifact:

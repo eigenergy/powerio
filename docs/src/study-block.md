@@ -9,15 +9,16 @@ log to reconstruct the current operating point. tellegen's `Study` works this
 way: every commit re-solves from a fresh copy of the base, so the state is
 always the base plus the whole log, never accumulated drift. That object has
 no on disk form today. This chapter specifies one: an additive `study` block in
-the `.pio.json` envelope, so a saved study is an ordinary package that any
-PowerIO consumer can validate, replay, materialize, and convert.
+the `.pio.json` document metadata, so a saved study is an ordinary `.pio.json`
+document that any PowerIO consumer can validate, replay, materialize, and
+convert.
 
 ## Why not operating points
 
-The package already carries `operating_points`, and the two mechanisms look
-similar from a distance. They differ in both axes that matter:
+The `.pio.json` document already carries `operating_points`, and the two
+mechanisms look similar from a distance. They differ in both axes that matter:
 
-- an `ElementUpdate` overwrites fields on one existing payload row, while an
+- an `ElementUpdate` overwrites fields on one existing model row, while an
   interactive edit is a delta, and the most common one (add demand at a bus) is
   legal at a bus with no load rows at all;
 - operating points are independent overlays on the base (materializing point k
@@ -26,7 +27,7 @@ similar from a distance. They differ in both axes that matter:
 
 Retrofitting deltas and a cumulative axis onto the series would change a
 contract GO Challenge 3 consumers already rely on. The study block is its own
-envelope field and reuses the operating point machinery where it fits: element
+metadata field and reuses the operating point machinery where it fits: element
 addressing and identity resolution through `ElementRef`.
 
 ## Shape
@@ -49,11 +50,11 @@ addressing and identity resolution through `ElementRef`.
 ```
 
 `StudyBlock` carries optional `label`, `author`, `created_at`, an optional
-`base_operating_point` (a study over a materialized snapshot of this package's
+`base_operating_point` (a study over a materialized snapshot of this document's
 series), the ordered `commits`, an `app` map, and free `metadata`. Each
 `StudyCommit` carries optional `label` and `created_at`, its `edits`, and
-`metadata`. The block is additive: packages without one are unchanged, and the
-envelope version does not move, the same rule `operating_points` landed under.
+`metadata`. The block is additive: documents without one are unchanged, and the
+metadata version does not move, the same rule `operating_points` landed under.
 
 ## The edit vocabulary
 
@@ -71,15 +72,16 @@ envelope version does not move, the same rule `operating_points` landed under.
 
 Element references are `ElementRef`s resolved identity first, exactly as in
 operating point updates. Producers should write `source_uid` and let `row` be
-the legacy fallback. Package validation dry runs every reference in every
+the legacy fallback. Document validation dry runs every reference in every
 commit, mirroring the operating point identity check.
 
 ## Materialization
 
 `NetworkPackage::materialize_study_commit(k)` folds commits 0 through k into
-cumulative deltas, applies them to a clone of the payload, clears the block,
+cumulative deltas, applies them to a clone of the model JSON, clears the block,
 and records the transformation in `lowering_history`. The result is a static
-package: convert it, build matrices from it, or hand it to a solver.
+`.pio.json` document: convert it, build matrices from it, or hand it to a
+solver.
 
 Lowering `demand_delta` to concrete load rows is the one semantic decision.
 The delta distributes proportionally across the in service load rows at the
@@ -87,8 +89,8 @@ bus, preserving each load's share and power factor. At a bus with no in
 service load (or zero total demand) a synthetic load row is appended with
 uid `study:load:{bus_uid}` and metadata marking it synthetic.
 
-The v1 block is defined for balanced payloads; a study on a multiconductor
-payload is a clean validation error until there is a consumer.
+The v1 block is defined for balanced model JSON; a study on multiconductor
+model JSON is a clean validation error until there is a consumer.
 
 ## The app namespace
 
@@ -100,11 +102,11 @@ network states ignores the map entirely.
 
 ## Identity
 
-Edits address rows by payload `uid`, so the uid contract tightens from
+Edits address rows by model `uid`, so the uid contract tightens from
 implementation detail to public guarantee:
 
 - parsing the same bytes yields the same uids;
-- synthesized uids are `{table}:{row}` at package build, and source defined
+- synthesized uids are `{table}:{row}` at document build, and source defined
   uids are never overwritten;
 - uids survive the network JSON round trip.
 

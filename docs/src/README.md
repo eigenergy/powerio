@@ -2,7 +2,7 @@
 
 PowerIO is compiler infrastructure for power system data. Source formats parse
 into typed models. Explicit, recorded passes normalize, validate, and lower
-them, and writers emit any supported target format. The `.pio.json` package
+them, and writers emit any supported target format. The `.pio.json` document
 records how a source was interpreted: model kind, provenance, source maps,
 structured diagnostics, validation, and lowering history. Sparse matrices and
 graph views are built from the same models for solver and analysis code. This
@@ -30,9 +30,9 @@ Where to look:
 
 - [Compiler IR](https://powerio.dev/guide/compiler-ir.html): the
   `BalancedNetwork` and `MulticonductorNetwork` model families and the
-  `.pio.json` package.
+  `.pio.json` document.
 - [PIO JSON schema](https://powerio.dev/guide/pio-json-schema.html): the
-  `.pio.json` field reference, envelope and payload versioning, and row
+  `.pio.json` field reference, metadata and model JSON versioning, and row
   identity.
 - [Format fidelity](https://powerio.dev/guide/format-fidelity.html): numeric
   conventions, the validation oracles, known limits per format, and the missing
@@ -54,7 +54,7 @@ Rendered API docs (rustdoc) for all crates: <https://powerio.dev>.
 | `powerio` | parsers, writers, `Network`, `IndexedNetwork`, normalization, format routing |
 | `powerio-matrix` | sparse matrices, graph views, DC OPF bundle, GridFM datasets |
 | `powerio-dist` | multiconductor distribution model and converters |
-| `powerio-pkg` | `.pio.json` package envelope |
+| `powerio-pkg` | `.pio.json` document metadata and model JSON |
 | `powerio-cli` | command line interface and TUI |
 | `powerio-py` | PyO3 extension for the Python package |
 | `powerio-capi` | C ABI for C, C++, Julia, and other foreign function interfaces |

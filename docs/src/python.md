@@ -136,25 +136,26 @@ bus = pl.read_parquet(f"{out['dir']}/bus_data.parquet")
 
 Use `powerio[pandas]` only for downstream code that expects pandas DataFrames.
 
-## `.pio.json` packages
+## `.pio.json` documents
 
-`powerio.Package` is the handle for `.pio.json` packages: it parses the
-envelope once and every accessor reuses the handle. `Package.from_file` and
-`Package.from_str` build packages from case input, `Package.from_json` reads
-envelope text, and `Package.from_balanced` / `Package.from_multiconductor` wrap
-existing networks. `pkg.model_kind` names the package family;
+`powerio.Package` is the handle for `.pio.json` documents: it parses the
+document metadata once and every accessor reuses the handle. `Package.from_file`
+and `Package.from_str` build documents from case input, `Package.from_json`
+reads document text, and `Package.from_balanced` /
+`Package.from_multiconductor` wrap existing networks. `pkg.model_kind` names
+the document family;
 `pkg.as_balanced()` / `pkg.as_multiconductor()` rebuild typed network handles
-from the payload.
+from the model JSON.
 
 `pkg.operating_points()` returns a Python dict for the replayable operating
 point series, or `None`. `pkg.materialize_operating_point(i)` returns a new
-static `Package` with one point applied; updates resolve by the payload rows'
+static `Package` with one point applied; updates resolve by the model rows'
 `uid` identities, and an unknown identity or a row that contradicts one raises
-`ValueError`. GOC3 packages populate this series from the source time series
-while the static payload holds the first interval. Network table dicts
+`ValueError`. GOC3 documents populate this series from the source time series
+while the static model JSON holds the first interval. Network table dicts
 (`net.buses`, `net.loads`, ...) expose each row's `uid`.
 `pkg.validate()`, `pkg.validation()`, and `pkg.diagnostics()` expose the
-package validation profile, and multiconductor packages lower through
+document validation profile, and multiconductor documents lower through
 `pkg.multiconductor_to_balanced_preflight()` and
 `pkg.lower_multiconductor_to_balanced()`.
 
@@ -167,8 +168,8 @@ net = static_pkg.as_balanced()
 
 ## MCP path handling
 
-MCP clients can request `.pio.json` package output from `parse` and pass that
-same value back to the other network tools:
+MCP clients can request `.pio.json` document output from `parse` through the
+`package` transport and pass that same value back to the other network tools:
 
 ```python
 parsed = parse(path="case9.m", transport="package")
@@ -179,9 +180,9 @@ save(out_path="case9.raw", to_format="psse", package_json=pkg)
 diagnostics(pkg)
 ```
 
-`summary`, `normalize`, `matrix`, and `save` also auto-detect a package passed
-through the legacy `json` argument. The package envelope's `model_kind` routes
-balanced and multiconductor payloads.
+`summary`, `normalize`, `matrix`, and `save` also auto-detect `.pio.json`
+document JSON passed through the legacy `json` argument. The document
+metadata's `model_kind` routes balanced and multiconductor model JSON.
 
 The optional MCP server accepts local filesystem paths and `file://` URIs for
 `path` and `out_path` arguments. Remote URI schemes are rejected. Deployments
