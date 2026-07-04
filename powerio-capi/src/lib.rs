@@ -602,7 +602,9 @@ pub unsafe extern "C" fn pio_normalize(
 /// repairs.
 /// `clamp_angle_bounds != 0` applies the same branch angle difference bound
 /// repair as PowerModels (`angmin <= -pi/2`, `angmax >= pi/2`, and zero/zero
-/// bounds replaced by `±angle_bound_pad`). The default pad is 1.0472 radians.
+/// bounds replaced by `[-angle_bound_pad, angle_bound_pad]`). A repair that
+/// would invert the interval widens to that same window. The default pad is
+/// 1.0472 radians.
 /// Existing read warnings and repair warnings are attached to the returned
 /// handle and can be read with [`pio_warnings`].
 #[unsafe(no_mangle)]
@@ -2984,10 +2986,31 @@ mpc.branch = [
                 v["branches"][2]["angmax"].as_f64().unwrap(),
                 std::f64::consts::PI / 6.0,
             );
+            close(
+                v["branches"][3]["angmin"].as_f64().unwrap(),
+                -POWER_MODELS_ANGLE_BOUND_PAD,
+            );
+            close(
+                v["branches"][3]["angmax"].as_f64().unwrap(),
+                POWER_MODELS_ANGLE_BOUND_PAD,
+            );
+            close(
+                v["branches"][4]["angmin"].as_f64().unwrap(),
+                -POWER_MODELS_ANGLE_BOUND_PAD,
+            );
+            close(
+                v["branches"][4]["angmax"].as_f64().unwrap(),
+                POWER_MODELS_ANGLE_BOUND_PAD,
+            );
+            for branch in v["branches"].as_array().unwrap() {
+                assert!(branch["angmin"].as_f64().unwrap() <= branch["angmax"].as_f64().unwrap());
+            }
 
             let warnings = warning_text(cn);
             assert!(warnings.contains("branch 0 angle difference bounds clamped"));
             assert!(warnings.contains("branch 1 angle difference bounds clamped"));
+            assert!(warnings.contains("branch 3 angle difference bounds clamped"));
+            assert!(warnings.contains("branch 4 angle difference bounds clamped"));
 
             pio_network_free(cn);
             pio_network_free(c);

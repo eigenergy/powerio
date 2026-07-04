@@ -338,6 +338,10 @@ def test_to_normalized_with_options_clamps_angle_bounds():
     assert plain.branches[0]["angmax"] == pytest.approx(2.0 * math.pi)
     assert plain.branches[1]["angmin"] == pytest.approx(0.0)
     assert plain.branches[1]["angmax"] == pytest.approx(0.0)
+    assert plain.branches[3]["angmin"] == pytest.approx(-120.0 * math.pi / 180.0)
+    assert plain.branches[3]["angmax"] == pytest.approx(-100.0 * math.pi / 180.0)
+    assert plain.branches[4]["angmin"] == pytest.approx(100.0 * math.pi / 180.0)
+    assert plain.branches[4]["angmax"] == pytest.approx(120.0 * math.pi / 180.0)
 
     repaired = case.to_normalized_with_options(clamp_angle_bounds=True)
     assert repaired.branches[0]["angmin"] == pytest.approx(-1.0472)
@@ -346,12 +350,25 @@ def test_to_normalized_with_options_clamps_angle_bounds():
     assert repaired.branches[1]["angmax"] == pytest.approx(1.0472)
     assert repaired.branches[2]["angmin"] == pytest.approx(-math.pi / 6.0)
     assert repaired.branches[2]["angmax"] == pytest.approx(math.pi / 6.0)
+    assert repaired.branches[3]["angmin"] == pytest.approx(-1.0472)
+    assert repaired.branches[3]["angmax"] == pytest.approx(1.0472)
+    assert repaired.branches[4]["angmin"] == pytest.approx(-1.0472)
+    assert repaired.branches[4]["angmax"] == pytest.approx(1.0472)
+    assert all(branch["angmin"] <= branch["angmax"] for branch in repaired.branches)
     assert any(
         "branch 0 angle difference bounds clamped" in warning
         for warning in repaired.read_warnings
     )
     assert any(
         "branch 1 angle difference bounds clamped" in warning
+        for warning in repaired.read_warnings
+    )
+    assert any(
+        "branch 3 angle difference bounds clamped" in warning
+        for warning in repaired.read_warnings
+    )
+    assert any(
+        "branch 4 angle difference bounds clamped" in warning
         for warning in repaired.read_warnings
     )
 

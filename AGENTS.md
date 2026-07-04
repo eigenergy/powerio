@@ -79,6 +79,43 @@ maturin develop -E all       # also pull scipy/numpy/networkx for the matrix + g
 pytest python/tests
 ```
 
+## Release flow
+
+PowerIO releases are tag driven.
+
+1. Wait for `main` CI to pass on the merge commit that should become the
+   release.
+2. Check that the tag does not already exist, then create an annotated tag on
+   `origin/main` and push it:
+
+   ```
+   git fetch origin main --tags
+   git ls-remote --tags origin refs/tags/vX.Y.Z
+   git tag -a vX.Y.Z origin/main -m vX.Y.Z
+   git push origin vX.Y.Z
+   ```
+
+3. `.github/workflows/release-binaries.yml` runs on tag pushes. It builds the
+   `powerio-capi` release tarballs for `aarch64-apple-darwin`,
+   `aarch64-linux-gnu`, `x86_64-apple-darwin`, `x86_64-linux-gnu`, and
+   `x86_64-w64-mingw32`, with the release features
+   `arrow,matrix,gridfm,dist,pkg`.
+4. That workflow creates or updates a **draft** GitHub release and attaches the
+   five binary assets. Do not expect a draft release to exist before the tag
+   workflow runs.
+5. A human inspects and publishes the draft release.
+6. Publishing the release triggers `.github/workflows/notify-powerio-jl.yml`.
+   If `POWERIO_JL_DISPATCH_TOKEN` is configured, it sends a
+   `powerio-release` repository dispatch to `eigenergy/PowerIO.jl`. If the
+   token is absent, the PowerIO.jl daily schedule or manual dispatch is the
+   fallback.
+7. PowerIO.jl's `.github/workflows/update-artifacts.yml` runs
+   `julia gen/update_artifacts.jl <tag>`, tests the regenerated artifact, and
+   opens or updates an `artifacts/<tag>` PR if `Artifacts.toml` changes. This
+   workflow targets the PowerIO.jl default branch; it does not mutate an
+   in flight bindings PR. Manual `update_artifacts` commands are a fallback,
+   not the normal path.
+
 ## Layout
 
 ```
@@ -189,6 +226,10 @@ benchmarks/                  # parse benchmarks + Julia validation harnesses
 - **`BR_B` is already per unit.** Never divide by `base_mva` again.
 - **`tap == 0` ⇒ `tap = 1`.** Use `Branch::effective_tap()`.
 - **B' ignores taps and shifts. B'' zeros only shifts. Y_bus keeps both.**
+- **Angle bound clamp postcondition.** When editing `clamp_angle_bounds`, test
+  intervals wholly below `-pi/2` and wholly above `pi/2`; normalized branches
+  must leave `angmin <= angmax`. Wide symmetric bounds and `0/0` already have
+  coverage.
 - **DC OPF Laplacian.** `L = A diag(b) Aᵀ` is built from the same `A`, `b` factors `build_incidence` returns (so `L` and the reweighted `L₁` share a factorization), and equals `build_bprime` in the XB scheme. Default `b = 1/x` (paper-pure); `DcConvention::Matpower` uses `1/(x·τ)` plus a phase-shift injection.
 - **DC OPF is bus indexed.** Generation is nodal (`p_g ∈ ℝⁿ`), so `Q`, `c`, and bounds are length n (zero at load buses), scattered from generator space through `C_g`; gen-space vectors (`OpfInstance::gen_costs`) ride along as provenance. Cost map: MATPOWER `c2 p² + c1 p` → `q = 2c2`, `c = c1`. Per-unit by default (`Units::PerUnit` scales `q` by `base²`, `c` by `base`).
 - **`gen`/`gencost` are optional.** A power flow case with no `mpc.gen` parses with `gens` empty; the OPF builders return `Error::NoGenerators`.
