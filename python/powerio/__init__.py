@@ -471,8 +471,10 @@ class Network:
         """A normalized copy with explicit normalization options.
 
         ``clamp_angle_bounds=True`` applies the PowerModels angle difference
-        bound repair: limits at or beyond ±π/2 and zero/zero windows become
-        ±``angle_bound_pad``. The default pad is 1.0472 radians.
+        bound repair: limits at or beyond ``+/-pi/2`` and zero/zero windows
+        become ``[-angle_bound_pad, angle_bound_pad]``. A repair that would
+        invert the interval widens to that same window. The default pad is
+        1.0472 radians.
         """
         return Network(
             self._inner.to_normalized_with_options(

@@ -301,6 +301,16 @@ fn clamp_angle_bounds(branches: &mut [Branch], pad: f64, warnings: &mut Vec<Stri
             br.angmax = pad;
             changes.push(format!("angmin/angmax 0 -> [{}, {}]", br.angmin, br.angmax));
         }
+        if !changes.is_empty() && br.angmin > br.angmax {
+            let repaired_min = br.angmin;
+            let repaired_max = br.angmax;
+            br.angmin = -pad;
+            br.angmax = pad;
+            changes.push(format!(
+                "repaired interval {repaired_min}..{repaired_max} widened to [{}, {}]",
+                br.angmin, br.angmax
+            ));
+        }
 
         if !changes.is_empty() {
             warnings.push(format!(
@@ -626,6 +636,10 @@ mod tests {
         assert!(approx(plain.branches[0].angmax, std::f64::consts::TAU));
         assert!(approx(plain.branches[1].angmin, 0.0));
         assert!(approx(plain.branches[1].angmax, 0.0));
+        assert!(approx(plain.branches[3].angmin, -120.0 * DEG_TO_RAD));
+        assert!(approx(plain.branches[3].angmax, -100.0 * DEG_TO_RAD));
+        assert!(approx(plain.branches[4].angmin, 100.0 * DEG_TO_RAD));
+        assert!(approx(plain.branches[4].angmax, 120.0 * DEG_TO_RAD));
 
         let out = net
             .to_normalized_with_options(&NormalizeOptions {
@@ -633,9 +647,11 @@ mod tests {
                 ..NormalizeOptions::default()
             })
             .unwrap();
-        assert_eq!(out.warnings.len(), 2);
+        assert_eq!(out.warnings.len(), 4);
         assert!(out.warnings[0].contains("branch 0"));
         assert!(out.warnings[1].contains("branch 1"));
+        assert!(out.warnings[2].contains("branch 3"));
+        assert!(out.warnings[3].contains("branch 4"));
 
         let branches = &out.network.branches;
         assert!(approx(branches[0].angmin, -POWER_MODELS_ANGLE_BOUND_PAD));
@@ -644,6 +660,11 @@ mod tests {
         assert!(approx(branches[1].angmax, POWER_MODELS_ANGLE_BOUND_PAD));
         assert!(approx(branches[2].angmin, -30.0 * DEG_TO_RAD));
         assert!(approx(branches[2].angmax, 30.0 * DEG_TO_RAD));
+        assert!(approx(branches[3].angmin, -POWER_MODELS_ANGLE_BOUND_PAD));
+        assert!(approx(branches[3].angmax, POWER_MODELS_ANGLE_BOUND_PAD));
+        assert!(approx(branches[4].angmin, -POWER_MODELS_ANGLE_BOUND_PAD));
+        assert!(approx(branches[4].angmax, POWER_MODELS_ANGLE_BOUND_PAD));
+        assert!(branches.iter().all(|br| br.angmin <= br.angmax));
     }
 
     #[test]

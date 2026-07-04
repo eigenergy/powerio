@@ -426,7 +426,9 @@ PioNetwork *pio_normalize(const PioNetwork *net, char *errbuf, size_t errlen);
  * repairs.
  * `clamp_angle_bounds != 0` applies the same branch angle difference bound
  * repair as PowerModels (`angmin <= -pi/2`, `angmax >= pi/2`, and zero/zero
- * bounds replaced by `±angle_bound_pad`). The default pad is 1.0472 radians.
+ * bounds replaced by `[-angle_bound_pad, angle_bound_pad]`). A repair that
+ * would invert the interval widens to that same window. The default pad is
+ * 1.0472 radians.
  * Existing read warnings and repair warnings are attached to the returned
  * handle and can be read with [`pio_warnings`].
  */
