@@ -1415,25 +1415,42 @@ fn shunt_size_mismatch_pads_the_smaller_matrix() {
 }
 
 #[test]
-fn center_tap_collapse_converts_resistance_through_ohms() {
-    // Each 120 V half carries %R=1.2 on 25 kVA: 0.012 * 120^2/25000 =
-    // 0.006912 ohm, so the series path across the outer terminals is
-    // 0.013824 ohm. Percent does not transfer to the 240 V base (zb
-    // scales 4x), so the collapse converts through ohms.
+fn center_tap_emits_bmopf_convention_and_star_leakage() {
+    // Each 120 V half carries %R=1.2 on 25 kVA:
+    // 0.012 * 120^2 / 25000 = 0.006912 ohm. BMOPF stores the per leg
+    // voltage and per leg to side series arm, not the full 240 V path.
     let net = parse_dss_file(fixture("micro/xfmr_center_tap.dss")).unwrap();
     let out = write_bmopf_json(&net);
+    assert_eq!(errors(&schema_validator(), &out.text), Vec::<String>::new());
+    assert!(
+        out.warnings
+            .iter()
+            .all(|w| !w.contains("EMIT.BMOPF.TRANSFORMER_CENTER_TAP_COLLAPSED")),
+        "{:?}",
+        out.warnings
+    );
     let doc: serde_json::Value = serde_json::from_str(&out.text).unwrap();
     let t = &doc["transformer"]["center_tap"]["t1"];
-    assert_eq!(t["v_nom_to"], 240.0);
+    assert_eq!(t["terminal_map_to"], serde_json::json!(["1", "4", "2"]));
+    assert_eq!(t["v_nom_to"], 120.0);
     let r_to = t["r_series_to"].as_f64().unwrap();
-    assert!((r_to - 0.013_824).abs() < 1e-12, "r_series_to = {r_to}");
-    // The primary is untouched by the collapse: %R=0.6 on 7.2 kV/25 kVA.
+    assert!((r_to - 0.006_912).abs() < 1e-12, "r_series_to = {r_to}");
+    // The primary is untouched: %R=0.6 on 7.2 kV/25 kVA.
     let r_from = t["r_series_from"].as_f64().unwrap();
     assert!((r_from - 12.4416).abs() < 1e-9, "r_series_from = {r_from}");
+    // xhl=2.04, xht=2.04, xlt=1.36 gives symmetric star arms:
+    // x_from=(xhl+xht-xlt)/2=1.36%, x_to=(xhl+xlt-xht)/2=0.68%.
+    let x_from = t["x_series_from"].as_f64().unwrap();
+    assert!(
+        (x_from - 28.200_96).abs() < 1e-9,
+        "x_series_from = {x_from}"
+    );
+    let x_to = t["x_series_to"].as_f64().unwrap();
+    assert!((x_to - 0.003_916_8).abs() < 1e-12, "x_series_to = {x_to}");
 }
 
 #[test]
-fn bmopf_center_tap_rebuilds_dss_grounded_center() {
+fn bmopf_center_tap_canonical_order_rebuilds_dss_grounded_center() {
     let text = r#"{
         "bus": {
             "src": {"terminal_names": ["1", "2"], "perfectly_grounded_terminals": ["2"]},
@@ -1453,14 +1470,14 @@ fn bmopf_center_tap_rebuilds_dss_grounded_center() {
                     "bus_from": "src",
                     "bus_to": "lv",
                     "terminal_map_from": ["1", "2"],
-                    "terminal_map_to": ["1", "2", "3"],
+                    "terminal_map_to": ["1", "3", "2"],
                     "s_rating": 25000.0,
                     "v_nom_from": 7200.0,
-                    "v_nom_to": 240.0,
+                    "v_nom_to": 120.0,
                     "r_series_from": 12.4416,
-                    "r_series_to": 0.013824,
-                    "x_series_from": 42.2784,
-                    "x_series_to": 0.0
+                    "r_series_to": 0.006912,
+                    "x_series_from": 28.20096,
+                    "x_series_to": 0.0039168
                 }
             }
         }
@@ -1479,7 +1496,7 @@ fn bmopf_center_tap_rebuilds_dss_grounded_center() {
     );
     assert_eq!(
         doc["transformer"]["center_tap"]["ct"]["terminal_map_to"],
-        serde_json::json!(["1", "2", "4"])
+        serde_json::json!(["1", "4", "2"])
     );
 }
 
@@ -1538,10 +1555,9 @@ fn bmopf_center_tap_neutral_grounding_rebuilds_once() {
 }
 
 #[test]
-fn center_tap_collapse_uses_each_half_windings_own_s_rating() {
-    // Legal OpenDSS: the two 120 V halves carry different kva ratings, so
-    // each half's impedance base is its own v^2/s. The series path across
-    // the outer terminals is the sum of the per half ohms.
+fn center_tap_collapse_uses_first_secondary_half_rating() {
+    // BMOPF carries one to side series arm, so unequal half ratings collapse
+    // to the first secondary half rating with a warning.
     let net = parse_dss_str(
         "Clear\n\
          New Circuit.ct basekv=7.2 pu=1.0 phases=1 bus1=src.1\n\
@@ -1551,18 +1567,45 @@ fn center_tap_collapse_uses_each_half_windings_own_s_rating() {
     let out = write_bmopf_json(&net);
     let doc: serde_json::Value = serde_json::from_str(&out.text).unwrap();
     let t = &doc["transformer"]["center_tap"]["t1"];
-    assert_eq!(t["v_nom_to"], 240.0);
-    let expected = 0.02 * 120.0 * 120.0 / 50e3 + 0.04 * 120.0 * 120.0 / 25e3;
+    assert_eq!(t["v_nom_to"], 120.0);
+    let expected = 0.02 * 120.0 * 120.0 / 50e3;
     let r_to = t["r_series_to"].as_f64().unwrap();
     assert!((r_to - expected).abs() < 1e-12, "r_series_to = {r_to}");
-    // The collapsed winding keeps one s_rating; the half ratings drop loudly.
     assert!(
-        out.warnings
-            .iter()
-            .any(|w| w.contains("transformer t1") && w.contains("s_rating")),
+        out.warnings.iter().any(|w| w
+            .contains("EMIT.BMOPF.TRANSFORMER_CENTER_TAP_RATING_COLLAPSED")
+            && w.contains("first secondary half rating")),
         "{:?}",
         out.warnings
     );
+}
+
+#[test]
+fn center_tap_negative_star_arm_warns_and_falls_back_schema_valid() {
+    let net = parse_dss_str(
+        "Clear\n\
+         New Circuit.ct basekv=7.2 pu=1.0 phases=1 bus1=src.1\n\
+         New Transformer.t1 phases=1 windings=3 buses=(src.1.0, lv.1.0, lv.0.2) \
+         kvs=(7.2 0.12 0.12) kvas=(25 25 25) %Rs=(1 2 2) xhl=2 xht=10 xlt=2\n",
+    );
+    let out = write_bmopf_json(&net);
+    assert_eq!(errors(&schema_validator(), &out.text), Vec::<String>::new());
+    let diag = diagnostic(
+        &out,
+        "EMIT.BMOPF.TRANSFORMER_CENTER_TAP_LEAKAGE_UNREPRESENTABLE",
+        "transformer t1",
+    );
+    assert_eq!(diag.details["xsc_pct"], serde_json::json!([2.0, 10.0, 2.0]));
+    assert_eq!(
+        diag.details["emitted_percentages"],
+        serde_json::json!([2.0, 0.0])
+    );
+
+    let doc: serde_json::Value = serde_json::from_str(&out.text).unwrap();
+    let t = &doc["transformer"]["center_tap"]["t1"];
+    let x_from = t["x_series_from"].as_f64().unwrap();
+    assert!((x_from - 41.472).abs() < 1e-12, "x_series_from = {x_from}");
+    assert_eq!(t["x_series_to"], serde_json::json!(0.0));
 }
 
 #[test]

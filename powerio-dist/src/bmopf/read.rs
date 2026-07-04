@@ -826,19 +826,24 @@ impl Reader<'_> {
                 0.0
             }
         };
-        let (r_from_pct, r_to_pct, xsc) = if three_phase {
+        let (r_from_pct, r_to_pct, xsc_pct) = if three_phase {
             let wye_v = if subtype == "wye_delta" { v_from } else { v_to };
             // The schema puts one series impedance on the wye side; the
             // model splits resistance evenly across the windings.
             let r = pct(o.get("r_series").map_or(0.0, f), wye_v);
             let x = pct(o.get("x_series").map_or(0.0, f), wye_v);
-            (r / 2.0, r / 2.0, x)
+            (r / 2.0, r / 2.0, vec![x])
         } else {
             let r_from = pct(o.get("r_series_from").map_or(0.0, f), v_from);
             let r_to = pct(o.get("r_series_to").map_or(0.0, f), v_to);
-            let x = pct(o.get("x_series_from").map_or(0.0, f), v_from)
-                + pct(o.get("x_series_to").map_or(0.0, f), v_to);
-            (r_from, r_to, x)
+            let x_from = pct(o.get("x_series_from").map_or(0.0, f), v_from);
+            let x_to = pct(o.get("x_series_to").map_or(0.0, f), v_to);
+            let xsc = if subtype == "center_tap" {
+                vec![x_from + x_to, x_from + x_to, 2.0 * x_to]
+            } else {
+                vec![x_from + x_to]
+            };
+            (r_from, r_to, xsc)
         };
 
         let conn = |delta: bool| {
@@ -872,7 +877,7 @@ impl Reader<'_> {
                 x_neutral: first_float(o.get("x_neutral_to")),
             },
         ];
-        expand_center_tap_windings(subtype, &mut windings);
+        expand_center_tap_windings(subtype, &mut windings, &self.net.buses);
         let mut extras = take_extras(
             o,
             &known,
@@ -896,7 +901,7 @@ impl Reader<'_> {
         DistTransformer {
             name: name.to_string(),
             windings,
-            xsc_pct: vec![xsc],
+            xsc_pct,
             phases,
             extras,
         }
@@ -998,21 +1003,35 @@ impl Reader<'_> {
     }
 }
 
-fn expand_center_tap_windings(subtype: &str, windings: &mut Vec<Winding>) {
+fn expand_center_tap_windings(subtype: &str, windings: &mut Vec<Winding>, buses: &[DistBus]) {
     if subtype != "center_tap" || windings[1].terminal_map.len() < 3 {
         return;
     }
     let to = windings.pop().expect("secondary winding exists");
-    let common = to.terminal_map.last().cloned().unwrap_or_default();
-    let hot_a = to.terminal_map[0].clone();
-    let hot_b = to.terminal_map[1].clone();
+    let neutral_idx = center_tap_neutral_index(&to, buses);
+    let canonical = neutral_idx == 1;
+    let common = to
+        .terminal_map
+        .get(neutral_idx)
+        .cloned()
+        .unwrap_or_default();
+    let hots: Vec<String> = to
+        .terminal_map
+        .iter()
+        .enumerate()
+        .filter_map(|(idx, term)| (idx != neutral_idx).then_some(term.clone()))
+        .collect();
+    let hot_a = hots.first().cloned().unwrap_or_default();
+    let hot_b = hots.get(1).cloned().unwrap_or_default();
+    let v_ref = if canonical { to.v_ref } else { to.v_ref / 2.0 };
+    let r_pct = if canonical { to.r_pct } else { to.r_pct * 2.0 };
     let half = Winding {
         bus: to.bus.clone(),
         terminal_map: vec![hot_a, common.clone()],
         conn: WindingConn::Wye,
-        v_ref: to.v_ref / 2.0,
+        v_ref,
         s_rating: to.s_rating,
-        r_pct: to.r_pct * 2.0,
+        r_pct,
         tap: to.tap,
         r_neutral: to.r_neutral,
         x_neutral: to.x_neutral,
@@ -1021,15 +1040,31 @@ fn expand_center_tap_windings(subtype: &str, windings: &mut Vec<Winding>) {
         bus: to.bus,
         terminal_map: vec![common, hot_b],
         conn: WindingConn::Wye,
-        v_ref: to.v_ref / 2.0,
+        v_ref,
         s_rating: to.s_rating,
-        r_pct: to.r_pct * 2.0,
+        r_pct,
         tap: to.tap,
         r_neutral: None,
         x_neutral: None,
     };
     windings.push(half);
     windings.push(other_half);
+}
+
+fn center_tap_neutral_index(to: &Winding, buses: &[DistBus]) -> usize {
+    if let Some(bus) = buses.iter().find(|bus| bus.id == to.bus)
+        && let Some((idx, _)) = to
+            .terminal_map
+            .iter()
+            .enumerate()
+            .find(|(_, term)| bus.grounded.iter().any(|ground| ground == *term))
+    {
+        return idx;
+    }
+    to.terminal_map
+        .iter()
+        .position(|term| term.eq_ignore_ascii_case("n") || term == "4")
+        .unwrap_or_else(|| to.terminal_map.len() - 1)
 }
 
 fn n_winding_internal_v_ref(conn: WindingConn, terminal_map: &[String], bmopf_v_nom: f64) -> f64 {
