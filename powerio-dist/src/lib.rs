@@ -45,6 +45,7 @@
 
 pub mod bmopf;
 pub mod convert;
+pub mod diagnostics;
 pub mod dss;
 pub mod error;
 pub mod graph;
@@ -56,6 +57,7 @@ pub use convert::{
     Conversion, DistTargetFormat, convert_file, convert_str, dist_target_from_name, parse_file,
     parse_str,
 };
+pub use diagnostics::{DiagnosticCode, DiagnosticSeverity, DiagnosticStage, StructuredDiagnostic};
 pub use dss::{
     DssLoadVoltageBounds, DssWriteOptions, parse_dss_file, parse_dss_str, write_dss,
     write_dss_with_options,

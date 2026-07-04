@@ -35,6 +35,7 @@ pub fn write_pmd_json(net: &DistNetwork) -> Conversion {
     Conversion {
         text: serde_json::to_string_pretty(&doc).expect("maps and finite numbers") + "\n",
         warnings: w.warnings,
+        diagnostics: Vec::new(),
     }
 }
 

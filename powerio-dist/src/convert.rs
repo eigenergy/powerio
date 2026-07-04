@@ -10,6 +10,12 @@ use crate::model::{DistNetwork, DistSourceFormat};
 pub struct Conversion {
     pub text: String,
     pub warnings: Vec<String>,
+    /// Structured diagnostics for warning paths with stable codes.
+    ///
+    /// The legacy `warnings` strings remain the compatibility surface for C,
+    /// Python, Julia, and CLI callers. New code should prefer this field when
+    /// it needs stable assertions.
+    pub diagnostics: Vec<crate::diagnostics::StructuredDiagnostic>,
 }
 
 /// A writable distribution format.
@@ -142,6 +148,7 @@ fn convert(net: &DistNetwork, target: DistTargetFormat) -> Conversion {
     Conversion {
         text: conv.text,
         warnings,
+        diagnostics: conv.diagnostics,
     }
 }
 
@@ -199,6 +206,7 @@ impl DistNetwork {
                 return Conversion {
                     text: source.as_ref().clone(),
                     warnings: Vec::new(),
+                    diagnostics: Vec::new(),
                 };
             }
         }
