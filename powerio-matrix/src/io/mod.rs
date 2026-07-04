@@ -5,6 +5,7 @@
 pub mod gridfm;
 pub mod meta;
 pub mod mtx;
+pub mod sensitivity;
 
 #[cfg(feature = "gridfm")]
 pub use gridfm::{
@@ -14,6 +15,7 @@ pub use gridfm::{
 };
 pub use meta::{CaseMetadata, MatrixMetadata, write_meta_json};
 pub use mtx::{read_mtx, read_vector_mtx, write_mtx, write_vector_mtx};
+pub use sensitivity::write_sensitivity_mtx_with_options;
 
 /// Read one scenario of a dataset directory in the named `from` format: the
 /// directory sibling of [`powerio::parse_file`], and the one place dataset

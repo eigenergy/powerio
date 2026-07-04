@@ -139,7 +139,7 @@ powerio package tests/data/case14.m -o case14.pio.json
 powerio package goc3_case.json --from goc3-json -o goc3_case.pio.json
 powerio verify tests/data/case30.m --kind bdoubleprime
 powerio dcopf tests/data/case30.m -o out
-powerio sensitivities tests/data/case30.m -o out
+powerio sensitivities tests/data/case30.m -o out --solver auto --drop-tolerance 1e-10
 powerio gridfm tests/data/case14.m -o out
 powerio
 ```
@@ -187,7 +187,8 @@ The `powerio-matrix` Rust crate derives an `IndexedNetwork` with dense bus indic
 - Nodal admittance matrix
 - LACPF block matrix
 - Signed incidence, weighted Laplacian, and flow map matrices
-- PTDF and LODF sensitivity matrices
+- PTDF and LODF sensitivity matrices, with dense and iterative solver paths
+- Streamed CLI PTDF/LODF writes for iterative sensitivity exports
 - Adjacency matrix and `petgraph` graph output
 - Matrix Market bundles for OPF solvers
 - KKT operators for OPF solvers (experimental)

@@ -16,7 +16,7 @@ use powerio_matrix::matrix::{BuildOptions, DcConvention, Scheme, Units, sddm_che
 use powerio_matrix::opf_pipeline::{DcOpfOptions, write_dcopf_bundle};
 use powerio_matrix::pipeline::{MatrixKind, Pipeline, RhsKind};
 use powerio_matrix::synth::{SynthSpec, Topology};
-use powerio_matrix::{MissingGenCostPolicy, WriteOptions};
+use powerio_matrix::{MissingGenCostPolicy, SensitivityOptions, SensitivitySolver, WriteOptions};
 use powerio_pkg::{NetworkPackage, Origin, READ_GRIDFM_FIDELITY_WARNING, SourceDescriptor};
 use serde_json::json;
 mod tui;
@@ -119,6 +119,12 @@ enum Command {
         /// DC susceptance convention.
         #[arg(long, value_enum, default_value = "paper-pure")]
         convention: DcConvArg,
+        /// Sensitivity solve path.
+        #[arg(long, value_enum, default_value = "auto")]
+        solver: SensitivitySolverArg,
+        /// Omit written PTDF/LODF entries with absolute value at or below this.
+        #[arg(long, default_value_t = 1e-12)]
+        drop_tolerance: f64,
     },
     /// Print the canonical network summary JSON.
     Summary {
@@ -457,6 +463,23 @@ impl From<DcConvArg> for DcConvention {
 }
 
 #[derive(Clone, Copy, Debug, ValueEnum)]
+enum SensitivitySolverArg {
+    Auto,
+    Dense,
+    Iterative,
+}
+
+impl From<SensitivitySolverArg> for SensitivitySolver {
+    fn from(value: SensitivitySolverArg) -> Self {
+        match value {
+            SensitivitySolverArg::Auto => Self::Auto,
+            SensitivitySolverArg::Dense => Self::Dense,
+            SensitivitySolverArg::Iterative => Self::Iterative,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, ValueEnum)]
 enum UnitsArg {
     PerUnit,
     Native,
@@ -553,7 +576,9 @@ fn main() -> anyhow::Result<()> {
             input,
             output,
             convention,
-        } => run_sensitivities(&input, &output, convention.into()),
+            solver,
+            drop_tolerance,
+        } => run_sensitivities(&input, &output, convention, solver, drop_tolerance),
         Command::Summary {
             input,
             from,
@@ -724,21 +749,48 @@ fn run_gen(
     Ok(())
 }
 
-fn run_sensitivities(input: &Path, output: &Path, convention: DcConvention) -> anyhow::Result<()> {
+fn run_sensitivities(
+    input: &Path,
+    output: &Path,
+    convention: DcConvArg,
+    solver: SensitivitySolverArg,
+    drop_tolerance: f64,
+) -> anyhow::Result<()> {
     let mpc = powerio_matrix::parse_matpower_file(input)
         .with_context(|| format!("parse {}", input.display()))?;
     std::fs::create_dir_all(output)?;
     let view = powerio_matrix::IndexedNetwork::new(&mpc);
-    let (ptdf, lodf) = powerio_matrix::build_ptdf_lodf(&view, convention)
-        .with_context(|| format!("DC sensitivities for {}", input.display()))?;
+    let options = SensitivityOptions {
+        convention: convention.into(),
+        solver: solver.into(),
+        drop_tolerance,
+        ..Default::default()
+    };
     let ptdf_path = output.join(format!("{}_ptdf.mtx", view.name()));
     let lodf_path = output.join(format!("{}_lodf.mtx", view.name()));
-    powerio_matrix::io::mtx::write_mtx(&ptdf, &ptdf_path)?;
-    powerio_matrix::io::mtx::write_mtx(&lodf, &lodf_path)?;
+    let meta_path = output.join(format!("{}_sensitivity_meta.json", view.name()));
+    let metadata = powerio_matrix::io::write_sensitivity_mtx_with_options(
+        &view, &options, &ptdf_path, &lodf_path,
+    )
+    .with_context(|| format!("DC sensitivities for {}", input.display()))?;
+    let meta = json!({
+        "case": view.name(),
+        "convention": options.convention,
+        "files": {
+            "ptdf": ptdf_path.file_name().and_then(|s| s.to_str()).unwrap_or(""),
+            "lodf": lodf_path.file_name().and_then(|s| s.to_str()).unwrap_or("")
+        },
+        "sensitivity": &metadata
+    });
+    serde_json::to_writer_pretty(std::fs::File::create(&meta_path)?, &meta)?;
     tracing::info!(
         case = %view.name(),
         ptdf = %ptdf_path.display(),
         lodf = %lodf_path.display(),
+        metadata = %meta_path.display(),
+        solver = metadata.solver_path.as_str(),
+        ptdf_dropped = metadata.ptdf.dropped_entries,
+        lodf_dropped = metadata.lodf.dropped_entries,
         "wrote DC sensitivities"
     );
     Ok(())

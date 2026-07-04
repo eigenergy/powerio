@@ -37,7 +37,11 @@ pub use laplacian::{
     unit_vector,
 };
 pub use opf::{BusCosts, GenCosts, OpfInstance, Units, build_opf_instance};
-pub use sensitivity::{build_lodf, build_ptdf, build_ptdf_lodf};
+pub use sensitivity::{
+    SensitivityMatrices, SensitivityMatrixMetadata, SensitivityMetadata, SensitivityOptions,
+    SensitivitySolver, SensitivitySolverPath, build_lodf, build_ptdf, build_ptdf_lodf,
+    build_ptdf_lodf_with_options,
+};
 pub use ybus::{YbusParts, build_ybus};
 // Crate-internal: the gridfm columnar export reuses the per-branch admittance and
 // flow kernels so its branch table and Y_bus agree with `build_ybus` by construction.
