@@ -607,7 +607,7 @@ const DISTRIBUTION_FORMATS: [DistributionFormat; 3] = [
     },
 ];
 
-const DISTRIBUTION_WARNING_BASELINE: [[usize; 3]; 3] = [[0, 188, 120], [1, 0, 0], [22, 117, 0]];
+const DISTRIBUTION_WARNING_BASELINE: [[usize; 3]; 3] = [[0, 188, 120], [1, 0, 0], [22, 72, 0]];
 
 const DISTRIBUTION_CASES: [(&str, &str, DistributionFormat); 7] = [
     (
