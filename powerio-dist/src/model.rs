@@ -397,6 +397,10 @@ pub struct Winding {
     /// Winding resistance, percent of the winding base.
     pub r_pct: f64,
     pub tap: f64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub r_neutral: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub x_neutral: Option<f64>,
 }
 
 impl Winding {
@@ -416,6 +420,8 @@ impl Winding {
             s_rating,
             r_pct: 0.0,
             tap: 1.0,
+            r_neutral: None,
+            x_neutral: None,
         }
     }
 }

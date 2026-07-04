@@ -6,7 +6,7 @@ use std::sync::Arc;
 
 use powerio_dist::dss::{parse_dss_file, parse_dss_str};
 use powerio_dist::{
-    Configuration, DistLineCode, DistNetwork, DistTransformer, Winding, WindingConn,
+    Configuration, DistBus, DistLineCode, DistNetwork, DistTransformer, Winding, WindingConn,
     parse_bmopf_file, parse_bmopf_str, write_bmopf_json, write_dss,
 };
 
@@ -703,6 +703,69 @@ fn dss_noloadloss_derives_bmopf_no_load_fields() {
 }
 
 #[test]
+fn transformer_neutral_impedance_round_trips_dss_and_bmopf() {
+    let net = parse_dss_str(
+        "Clear\n\
+         New Circuit.neutral basekv=7.2 pu=1.0 phases=1 bus1=src.1\n\
+         New Transformer.t1 phases=1 windings=2 buses=(src.1.0, load.1.0) \
+         kvs=(7.2 0.24) kvas=(25 25) %Rs=(1 1) xhl=2\n\
+         ~ wdg=1 rneut=5 xneut=6\n\
+         ~ wdg=2 rneut=7 xneut=8\n",
+    );
+    let t = &net.transformers[0];
+    assert_eq!(t.windings[0].r_neutral, Some(5.0));
+    assert_eq!(t.windings[0].x_neutral, Some(6.0));
+    assert_eq!(t.windings[1].r_neutral, Some(7.0));
+    assert_eq!(t.windings[1].x_neutral, Some(8.0));
+
+    let dss = write_dss(&net).text;
+    assert!(!dss.contains("NaN"), "{dss}");
+    assert!(dss.contains("kvs=(7.2, 0.24)"), "{dss}");
+    assert!(dss.contains("~ wdg=1 rneut=5 xneut=6"), "{dss}");
+    assert!(dss.contains("~ wdg=2 rneut=7 xneut=8"), "{dss}");
+
+    let out = write_bmopf_json(&net);
+    assert_eq!(errors(&schema_validator(), &out.text), Vec::<String>::new());
+    let doc: serde_json::Value = serde_json::from_str(&out.text).unwrap();
+    let t = &doc["transformer"]["single_phase"]["t1"];
+    assert_eq!(t["r_neutral_from"], serde_json::json!(5.0));
+    assert_eq!(t["x_neutral_from"], serde_json::json!(6.0));
+    assert_eq!(t["r_neutral_to"], serde_json::json!(7.0));
+    assert_eq!(t["x_neutral_to"], serde_json::json!(8.0));
+
+    let reparsed = parse_bmopf_str(&out.text).unwrap();
+    let rt = &reparsed.transformers[0];
+    assert_eq!(rt.windings[0].r_neutral, Some(5.0));
+    assert_eq!(rt.windings[0].x_neutral, Some(6.0));
+    assert_eq!(rt.windings[1].r_neutral, Some(7.0));
+    assert_eq!(rt.windings[1].x_neutral, Some(8.0));
+
+    let net = parse_dss_str(
+        "Clear\n\
+         New Circuit.neutral basekv=7.2 pu=1.0 phases=1 bus1=src.1\n\
+         New Transformer.t1 phases=1 windings=2 buses=(src.1.0, load.1.0) \
+         kvs=(7.2 0.24) kvas=(25 25) %Rs=(1 1) xhl=2\n\
+         ~ wdg=1 rneut=-1 xneut=-2\n",
+    );
+    let dss = write_dss(&net).text;
+    assert!(dss.contains("~ wdg=1 rneut=-1 xneut=-2"), "{dss}");
+    let out = write_bmopf_json(&net);
+    assert_eq!(errors(&schema_validator(), &out.text), Vec::<String>::new());
+    assert!(!out.text.contains("r_neutral_from"), "{out:?}");
+    assert!(!out.text.contains("x_neutral_from"), "{out:?}");
+    assert!(
+        out.warnings.iter().any(|w| w.contains("r_neutral_from=-1")),
+        "{:?}",
+        out.warnings
+    );
+    assert!(
+        out.warnings.iter().any(|w| w.contains("x_neutral_from=-2")),
+        "{:?}",
+        out.warnings
+    );
+}
+
+#[test]
 fn dss_phase_to_phase_noloadloss_does_not_emit_bmopf_ground_shunt() {
     let net = parse_dss_str(
         "Clear\n\
@@ -755,6 +818,91 @@ fn wye_wye_3_extras_drop_warns_once_not_per_phase() {
         .filter(|w| w.contains("unknown_key"))
         .count();
     assert_eq!(count, 1, "{:?}", out.warnings);
+}
+
+#[test]
+fn wye_wye_3_neutral_grounding_decomposes_once_not_per_phase() {
+    let net = parse_dss_str(
+        "Clear\n\
+         New Circuit.wyewye basekv=7.2 pu=1.0 phases=3 bus1=src.1.2.3.0\n\
+         New Transformer.t phases=3 windings=2 buses=(src.1.2.3.0, load.1.2.3.0) \
+         conns=(wye wye) kvs=(12.47 0.48) kvas=(75 75) %Rs=(1 1) xhl=2 \
+         %noloadloss=0.3 %imag=0.6\n\
+         ~ wdg=1 rneut=5 xneut=6\n\
+         ~ wdg=2 rneut=7 xneut=8\n",
+    );
+    let out = write_bmopf_json(&net);
+    assert_eq!(errors(&schema_validator(), &out.text), Vec::<String>::new());
+    let doc: serde_json::Value = serde_json::from_str(&out.text).unwrap();
+    let sp = doc["transformer"]["single_phase"].as_object().unwrap();
+    assert_eq!(sp.len(), 3);
+    assert_eq!(sp["t_1"]["r_neutral_from"], serde_json::json!(5.0));
+    assert_eq!(sp["t_1"]["x_neutral_from"], serde_json::json!(6.0));
+    assert_eq!(sp["t_1"]["r_neutral_to"], serde_json::json!(7.0));
+    assert_eq!(sp["t_1"]["x_neutral_to"], serde_json::json!(8.0));
+    let expected_g = 0.3 / 100.0 * (75_000.0 / 3.0) / ((12_470.0 / 3f64.sqrt()).powi(2));
+    let expected_b = 0.6 / 100.0 * (75_000.0 / 3.0) / ((12_470.0 / 3f64.sqrt()).powi(2));
+    for name in ["t_1", "t_2", "t_3"] {
+        let t = &sp[name];
+        let g = t["g_no_load"].as_f64().unwrap();
+        assert!((g - expected_g).abs() < 1e-18, "{name} g_no_load = {g}");
+        let b = t["b_no_load"].as_f64().unwrap();
+        assert!((b - expected_b).abs() < 1e-18, "{name} b_no_load = {b}");
+    }
+    for name in ["t_2", "t_3"] {
+        let t = &sp[name];
+        assert!(t.get("r_neutral_from").is_none(), "{name}: {t}");
+        assert!(t.get("x_neutral_from").is_none(), "{name}: {t}");
+        assert!(t.get("r_neutral_to").is_none(), "{name}: {t}");
+        assert!(t.get("x_neutral_to").is_none(), "{name}: {t}");
+    }
+}
+
+#[test]
+fn wye_wye_3_raw_no_load_splits_across_decomposition() {
+    let from = Winding::new(
+        "a",
+        vec!["1".into(), "2".into(), "3".into(), "n".into()],
+        WindingConn::Wye,
+        7200.0,
+        30_000.0,
+    );
+    let to = Winding::new(
+        "b",
+        vec!["1".into(), "2".into(), "3".into(), "n".into()],
+        WindingConn::Wye,
+        240.0,
+        30_000.0,
+    );
+    let mut t = DistTransformer::new("t", vec![from, to], vec![4.0], 3);
+    t.extras
+        .insert("g_no_load".into(), serde_json::json!(0.000_009));
+    t.extras
+        .insert("b_no_load".into(), serde_json::json!(-0.000_012));
+
+    let mut net = DistNetwork::default();
+    net.buses = vec![
+        DistBus::new("a", vec!["1".into(), "2".into(), "3".into(), "n".into()]),
+        DistBus::new("b", vec!["1".into(), "2".into(), "3".into(), "n".into()]),
+    ];
+    net.transformers.push(t);
+
+    let out = write_bmopf_json(&net);
+    assert_eq!(errors(&schema_validator(), &out.text), Vec::<String>::new());
+    let doc: serde_json::Value = serde_json::from_str(&out.text).unwrap();
+    let sp = doc["transformer"]["single_phase"].as_object().unwrap();
+    assert_eq!(sp.len(), 3);
+    let mut g_sum = 0.0;
+    let mut b_sum = 0.0;
+    for name in ["t_1", "t_2", "t_3"] {
+        let t = &sp[name];
+        assert_eq!(t["g_no_load"], serde_json::json!(0.000_003));
+        assert_eq!(t["b_no_load"], serde_json::json!(-0.000_004));
+        g_sum += t["g_no_load"].as_f64().unwrap();
+        b_sum += t["b_no_load"].as_f64().unwrap();
+    }
+    assert!((g_sum - 0.000_009).abs() < 1e-18);
+    assert!((b_sum + 0.000_012).abs() < 1e-18);
 }
 
 #[test]
@@ -1008,6 +1156,60 @@ fn bmopf_center_tap_rebuilds_dss_grounded_center() {
         doc["transformer"]["center_tap"]["ct"]["terminal_map_to"],
         serde_json::json!(["1", "2", "4"])
     );
+}
+
+#[test]
+fn bmopf_center_tap_neutral_grounding_rebuilds_once() {
+    let text = r#"{
+        "bus": {
+            "src": {"terminal_names": ["1", "2"], "perfectly_grounded_terminals": ["2"]},
+            "lv": {"terminal_names": ["1", "2", "3"], "perfectly_grounded_terminals": ["3"]}
+        },
+        "voltage_source": {
+            "source": {
+                "v_magnitude": [7200.0, 0.0],
+                "v_angle": [0.0, 0.0],
+                "bus": "src",
+                "terminal_map": ["1", "2"]
+            }
+        },
+        "transformer": {
+            "center_tap": {
+                "ct": {
+                    "bus_from": "src",
+                    "bus_to": "lv",
+                    "terminal_map_from": ["1", "2"],
+                    "terminal_map_to": ["1", "2", "3"],
+                    "s_rating": 25000.0,
+                    "v_nom_from": 7200.0,
+                    "v_nom_to": 240.0,
+                    "r_series_from": 12.4416,
+                    "r_series_to": 0.013824,
+                    "x_series_from": 42.2784,
+                    "x_series_to": 0.0,
+                    "r_neutral_to": 5.0,
+                    "x_neutral_to": 6.0
+                }
+            }
+        }
+    }"#;
+    let net = parse_bmopf_str(text).unwrap();
+    let t = &net.transformers[0];
+    assert_eq!(t.windings[1].r_neutral, Some(5.0));
+    assert_eq!(t.windings[1].x_neutral, Some(6.0));
+    assert_eq!(t.windings[2].r_neutral, None);
+    assert_eq!(t.windings[2].x_neutral, None);
+
+    let dss = write_dss(&net).text;
+    assert_eq!(dss.matches("rneut=5").count(), 1, "{dss}");
+    assert_eq!(dss.matches("xneut=6").count(), 1, "{dss}");
+
+    let out = write_bmopf_json(&parse_dss_str(&dss));
+    assert_eq!(errors(&schema_validator(), &out.text), Vec::<String>::new());
+    let doc: serde_json::Value = serde_json::from_str(&out.text).unwrap();
+    let t = &doc["transformer"]["center_tap"]["ct"];
+    assert_eq!(t["r_neutral_to"], serde_json::json!(5.0));
+    assert_eq!(t["x_neutral_to"], serde_json::json!(6.0));
 }
 
 #[test]
