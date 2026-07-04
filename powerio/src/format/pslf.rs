@@ -115,6 +115,7 @@ pub(crate) fn parse_pslf_source(
         name,
         base_mva,
         base_frequency: crate::network::DEFAULT_BASE_FREQUENCY,
+        geo: None,
         buses,
         loads,
         shunts,
@@ -476,6 +477,7 @@ fn read_bus(rec: &Record) -> Result<Bus> {
         zone: id_at(&rec.rhs, 5, 1, "bus zone", rec)?,
         name,
         uid: None,
+        location: None,
         extras: extras(rec, "bus data", 3, 21),
     })
 }
@@ -1812,6 +1814,7 @@ end
                     zone: 1,
                     name: None,
                     uid: None,
+                    location: None,
                     extras: Extras::new(),
                 },
                 Bus {
@@ -1828,6 +1831,7 @@ end
                     zone: 1,
                     name: None,
                     uid: None,
+                    location: None,
                     extras: Extras::new(),
                 },
             ],

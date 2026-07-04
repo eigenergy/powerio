@@ -19,6 +19,7 @@ use super::defaults as dd;
 use super::lex::{BusSpec, Value, VarMap};
 use super::raw::{RawDss, RawObject, parse_raw_with};
 use crate::error::{Error, Result};
+use crate::geo::{CoordinateSpace, CoordsKind, GeoMeta, Location};
 use crate::model::{
     ActivePowerReference, ActivePowerUnit, Configuration, ControlVoltageReference, DistBus,
     DistControlProfile, DistGenerator, DistIbr, DistLine, DistLineCode, DistLoad,
@@ -200,10 +201,27 @@ fn finish_buses(mut rd: Reader, raw: &RawDss) -> DistNetwork {
             neutral_names.insert(id.clone(), neutral.to_string());
         }
         if let Some((x, y)) = coords.get(&id) {
-            bus.extras.insert("x".into(), (*x).into());
-            bus.extras.insert("y".into(), (*y).into());
+            bus.location = Some(Location {
+                x: *x,
+                y: *y,
+                kind: None,
+            });
         }
         net.buses.push(bus);
+    }
+    if !coords.is_empty() {
+        net.geo = Some(GeoMeta {
+            space: CoordinateSpace::Unknown,
+            kind: Some(CoordsKind::Source),
+        });
+        if coords
+            .values()
+            .all(|(x, y)| (-180.0..=180.0).contains(x) && (-90.0..=90.0).contains(y))
+        {
+            net.warnings.push(
+                "OpenDSS buscoords fit longitude/latitude ranges; coordinate space remains unknown because Buscoords does not declare a CRS".to_owned(),
+            );
+        }
     }
 
     let rewrite = |bus: &str, map: &mut [String]| {

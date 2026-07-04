@@ -18,6 +18,8 @@ use std::sync::Arc;
 
 use serde::{Deserialize, Serialize};
 
+use crate::geo::{GeoMeta, Location};
+
 pub type Extras = BTreeMap<String, serde_json::Value>;
 
 /// A square matrix in conductor order, row major.
@@ -66,6 +68,9 @@ pub struct DistBus {
     pub vpp_max: Option<Vec<f64>>,
     pub vsym_min: Option<Vec<f64>>,
     pub vsym_max: Option<Vec<f64>>,
+    /// Optional bus coordinates in the network coordinate space.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub location: Option<Location>,
     pub extras: Extras,
 }
 
@@ -84,6 +89,7 @@ impl DistBus {
             vpp_max: None,
             vsym_min: None,
             vsym_max: None,
+            location: None,
             extras: Extras::new(),
         }
     }
@@ -731,6 +737,8 @@ pub struct DistNetwork {
     pub name: Option<String>,
     /// Hz.
     pub base_frequency: f64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub geo: Option<GeoMeta>,
     pub buses: Vec<DistBus>,
     pub linecodes: Vec<DistLineCode>,
     pub lines: Vec<DistLine>,
@@ -781,6 +789,7 @@ impl Default for DistNetwork {
         DistNetwork {
             name: None,
             base_frequency: crate::dss::defaults::BASE_FREQUENCY,
+            geo: None,
             buses: Vec::new(),
             linecodes: Vec::new(),
             lines: Vec::new(),

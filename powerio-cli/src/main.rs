@@ -1312,7 +1312,7 @@ fn run_convert(
             to.name()
         );
     }
-    let (text, warnings) = if let Some(target) = to.transmission() {
+    let (text, sidecars, warnings) = if let Some(target) = to.transmission() {
         let options = gen_cost_options.write_options()?;
         // gridfm reads a Parquet dataset directory (the parquet-free
         // `parse_file` can't), so it routes through powerio-matrix's reader,
@@ -1329,7 +1329,7 @@ fn run_convert(
         };
         let conv = powerio_matrix::write_as_with_options(&net, target, &options)
             .with_context(|| format!("serializing to {target}"))?;
-        (conv.text, conv.warnings)
+        (conv.text, Vec::new(), conv.warnings)
     } else {
         let net = powerio_dist::parse_file(input, from.map(FormatArg::name))
             .with_context(|| format!("reading {}", input.display()))?;
@@ -1340,7 +1340,7 @@ fn run_convert(
             .distribution()
             .expect("the family check routed a transmission target here");
         let conv = net.to_format(target);
-        (conv.text, conv.warnings)
+        (conv.text, conv.sidecars, conv.warnings)
     };
     for w in &warnings {
         eprintln!("fidelity: {w}");
@@ -1349,8 +1349,27 @@ fn run_convert(
         Some(p) if p.as_os_str() != "-" => {
             std::fs::write(p, &text).with_context(|| format!("writing {}", p.display()))?;
             eprintln!("wrote {}", p.display());
+            let base = p.parent().unwrap_or_else(|| std::path::Path::new("."));
+            for sidecar in &sidecars {
+                let path = base.join(&sidecar.path);
+                if let Some(parent) = path.parent() {
+                    std::fs::create_dir_all(parent)
+                        .with_context(|| format!("creating {}", parent.display()))?;
+                }
+                std::fs::write(&path, &sidecar.text)
+                    .with_context(|| format!("writing {}", path.display()))?;
+                eprintln!("wrote {}", path.display());
+            }
         }
-        _ => print!("{text}"),
+        _ => {
+            for sidecar in &sidecars {
+                eprintln!(
+                    "fidelity: sidecar `{}` was not written because output is stdout",
+                    sidecar.path
+                );
+            }
+            print!("{text}");
+        }
     }
     Ok(())
 }
@@ -1717,6 +1736,60 @@ mpc.branch = [
 
         let _ = std::fs::remove_dir_all(input);
         let _ = std::fs::remove_file(output);
+    }
+
+    #[test]
+    fn convert_writes_distribution_sidecars_next_to_output_file() {
+        let stamp = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let dir = std::env::temp_dir().join(format!("powerio-convert-sidecar-{stamp}"));
+        std::fs::create_dir_all(&dir).unwrap();
+        let input = dir.join("geo.bmopf.json");
+        let output = dir.join("geo.dss");
+
+        let mut bus = powerio_dist::DistBus::new("sourcebus", vec!["1".to_owned(), "4".to_owned()]);
+        bus.grounded = vec!["4".to_owned()];
+        bus.location = Some(powerio_dist::Location {
+            x: -80.0,
+            y: 35.0,
+            kind: None,
+        });
+        let mut net = powerio_dist::DistNetwork::default();
+        net.geo = Some(powerio_dist::GeoMeta {
+            space: powerio_dist::CoordinateSpace::Geographic { crs: None },
+            kind: Some(powerio_dist::CoordsKind::Source),
+        });
+        net.buses = vec![bus];
+        net.sources.push(powerio_dist::VoltageSource::new(
+            "source",
+            "sourcebus",
+            vec!["1".to_owned(), "4".to_owned()],
+            vec![7200.0, 0.0],
+            vec![0.0, 0.0],
+        ));
+        let mut options = powerio_dist::BmopfWriteOptions::default();
+        options.sideload_coordinates = true;
+        let bmopf = powerio_dist::write_bmopf_json_with_options(&net, &options);
+        std::fs::write(&input, bmopf.text).unwrap();
+
+        run_convert(
+            &input,
+            FormatArg::Dss,
+            Some(&output),
+            Some(FormatArg::BmopfJson),
+            0,
+            GenCostCliOptions::preserve(),
+        )
+        .unwrap();
+
+        let dss = std::fs::read_to_string(&output).unwrap();
+        let coords = std::fs::read_to_string(dir.join("buscoords.csv")).unwrap();
+        assert!(dss.contains("Buscoords buscoords.csv"), "{dss}");
+        assert!(coords.contains("sourcebus,-80,35"), "{coords}");
+
+        let _ = std::fs::remove_dir_all(dir);
     }
 
     #[test]

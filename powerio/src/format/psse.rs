@@ -1075,6 +1075,7 @@ pub(crate) fn parse_psse_source(
         name,
         base_mva,
         base_frequency,
+        geo: None,
         buses,
         loads,
         shunts,
@@ -1600,6 +1601,7 @@ fn read_bus(f: &[String]) -> Result<Bus> {
         zone: id_at(f, 5, 0)?,
         name,
         uid: None,
+        location: None,
         extras: Extras::new(),
     })
 }
@@ -2317,6 +2319,7 @@ mod tests {
             zone: 1,
             name: None,
             uid: None,
+            location: None,
             extras: Extras::default(),
         }
     }

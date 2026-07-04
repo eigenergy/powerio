@@ -2,8 +2,8 @@
 
 > **Status: partial.** The distribution graph projection from #182 ships as
 > Rust `DistNetwork::graph()`, Python `dist_net.graph()`, and C
-> `pio_dist_graph_json`. The coordinate model and GeoLayer interchange remain
-> design work.
+> `pio_dist_graph_json`. The typed coordinate model and DSS/BMOPF coordinate
+> paths ship as layer 1. GeoLayer interchange remains design work.
 
 Power system case files disagree about where equipment sits on a map, and most
 say nothing at all. PowerWorld aux exports carry substation latitude and
@@ -70,7 +70,8 @@ defined in `powerio::geo` and mirrored in `powerio_dist::geo`, the same
 arrangement `Extras` already uses. A parity test in `powerio-pkg` serializes
 both and asserts identical JSON, so the copies cannot drift.
 
-Before this is implemented, it is worth considering whether a `powerio-geo` or `powerio-format` crate make be necessary.
+If the mirrored types grow beyond small data carriers, a `powerio-geo` or
+`powerio-format` crate may become worth the dependency split.
 
 Because the fields are additive and skipped when absent, they ride the
 `.pio.json` model JSON as a minor bump.

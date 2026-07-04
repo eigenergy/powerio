@@ -9,8 +9,8 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use powerio_dist::{
-    DistLoadVoltageModel, DistNetwork, DistTargetFormat, Result, parse_bmopf_str, parse_dss_file,
-    parse_pmd_str,
+    Conversion, ConversionSidecar, DistLoadVoltageModel, DistNetwork, DistTargetFormat, Result,
+    parse_bmopf_str, parse_dss_file, parse_pmd_str,
 };
 
 fn fixture(rel: &str) -> PathBuf {
@@ -35,22 +35,36 @@ impl Fmt {
         }
     }
 
-    fn parse(self, text: &str) -> Result<DistNetwork> {
+    fn parse_conversion(self, conv: &Conversion) -> Result<DistNetwork> {
+        self.parse_text_and_sidecars(&conv.text, &conv.sidecars)
+    }
+
+    fn parse_text_and_sidecars(
+        self,
+        text: &str,
+        sidecars: &[ConversionSidecar],
+    ) -> Result<DistNetwork> {
         match self {
             Fmt::Dss => {
                 // Unique path per call: the harness tests run in parallel
                 // threads and must not race on a shared temp file.
                 use std::sync::atomic::{AtomicU64, Ordering};
                 static COUNTER: AtomicU64 = AtomicU64::new(0);
-                let dir = std::env::temp_dir().join("powerio-dist-matrix");
+                let dir = std::env::temp_dir()
+                    .join("powerio-dist-matrix")
+                    .join(format!("{}", COUNTER.fetch_add(1, Ordering::Relaxed)));
                 std::fs::create_dir_all(&dir).unwrap();
-                let path = dir.join(format!(
-                    "roundtrip-{}.dss",
-                    COUNTER.fetch_add(1, Ordering::Relaxed)
-                ));
+                let path = dir.join("roundtrip.dss");
                 std::fs::write(&path, text).unwrap();
+                for sidecar in sidecars {
+                    let sidecar_path = dir.join(&sidecar.path);
+                    if let Some(parent) = sidecar_path.parent() {
+                        std::fs::create_dir_all(parent).unwrap();
+                    }
+                    std::fs::write(sidecar_path, &sidecar.text).unwrap();
+                }
                 let parsed = powerio_dist::dss::parse_dss_file(&path);
-                let _ = std::fs::remove_file(&path);
+                let _ = std::fs::remove_dir_all(&dir);
                 parsed
             }
             Fmt::Bmopf => parse_bmopf_str(text),
@@ -574,7 +588,7 @@ fn canonical_writers_are_idempotent() {
                 Fmt::Bmopf => powerio_dist::write_bmopf_json(&net),
                 Fmt::Pmd => powerio_dist::write_pmd_json(&net),
             };
-            let reparsed = match target.parse(&first.text) {
+            let reparsed = match target.parse_conversion(&first) {
                 Ok(n) => n,
                 Err(e) => panic!("{} → {}: reparse failed: {e}", case.label, target.name()),
             };
@@ -605,7 +619,7 @@ fn off_diagonal_round_trips() {
             let what = format!("{} → {} → back", case.label, target.name());
             let out = net.to_format(target.target());
             let back = target
-                .parse(&out.text)
+                .parse_conversion(&out)
                 .unwrap_or_else(|e| panic!("{what}: {e}"));
             let transformers = !(target == Fmt::Bmopf && case.bmopf_restates_transformers);
             let (expected, actual) = if target == Fmt::Bmopf {
@@ -657,7 +671,7 @@ fn write_conversion_matrix() {
                 continue;
             }
             let out = net.to_format(target.target());
-            match target.parse(&out.text) {
+            match target.parse_conversion(&out) {
                 Ok(_) => {
                     if out.warnings.is_empty() {
                         cells.push("ok".to_string());

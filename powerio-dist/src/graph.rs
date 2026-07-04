@@ -348,6 +348,12 @@ fn bus_key(id: &str) -> String {
 }
 
 fn bus_xy(bus: &DistBus) -> Option<[f64; 2]> {
+    if let Some(location) = bus.location
+        && location.x.is_finite()
+        && location.y.is_finite()
+    {
+        return Some([location.x, location.y]);
+    }
     let x = number_extra(&bus.extras, &["x", "lon", "lng", "longitude"])?;
     let y = number_extra(&bus.extras, &["y", "lat", "latitude"])?;
     Some([x, y])

@@ -320,6 +320,17 @@
         "kind": {
           "$ref": "#/$defs/BusType"
         },
+        "location": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Location"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Optional bus coordinates in the network coordinate space."
+        },
         "name": {
           "type": [
             "string",
@@ -384,6 +395,42 @@
         "PV",
         "REF",
         "ISOLATED"
+      ],
+      "type": "string"
+    },
+    "Canvas": {
+      "description": "Diagram canvas metadata.",
+      "properties": {
+        "height": {
+          "format": "double",
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "units": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "width": {
+          "format": "double",
+          "type": [
+            "number",
+            "null"
+          ]
+        }
+      },
+      "type": "object"
+    },
+    "CoordsKind": {
+      "description": "Coordinate provenance.",
+      "enum": [
+        "source",
+        "synthetic",
+        "manual",
+        "derived"
       ],
       "type": "string"
     },
@@ -523,6 +570,99 @@
         "mbase",
         "in_service"
       ],
+      "type": "object"
+    },
+    "GeoMeta": {
+      "description": "Network level coordinate metadata.",
+      "oneOf": [
+        {
+          "description": "x = longitude and y = latitude in decimal degrees. `None` means EPSG:4326.",
+          "properties": {
+            "crs": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "space": {
+              "const": "geographic",
+              "type": "string"
+            }
+          },
+          "required": [
+            "space"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "Planar coordinates, with the CRS named when known.",
+          "properties": {
+            "crs": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "space": {
+              "const": "projected",
+              "type": "string"
+            }
+          },
+          "required": [
+            "space"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "Drawing coordinates with no earth referent.",
+          "properties": {
+            "canvas": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/Canvas"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "space": {
+              "const": "diagram",
+              "type": "string"
+            }
+          },
+          "required": [
+            "space"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "The source did not declare a coordinate space.",
+          "properties": {
+            "space": {
+              "const": "unknown",
+              "type": "string"
+            }
+          },
+          "required": [
+            "space"
+          ],
+          "type": "object"
+        }
+      ],
+      "properties": {
+        "kind": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/CoordsKind"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Default provenance for points without their own `kind`."
+        }
+      },
       "type": "object"
     },
     "Hvdc": {
@@ -839,6 +979,37 @@
           "type": "object"
         }
       ]
+    },
+    "Location": {
+      "description": "A point attached to one model element.",
+      "properties": {
+        "kind": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/CoordsKind"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Per point provenance when it differs from the network default."
+        },
+        "x": {
+          "description": "X coordinate. In geographic space this is longitude.",
+          "format": "double",
+          "type": "number"
+        },
+        "y": {
+          "description": "Y coordinate. In geographic space this is latitude.",
+          "format": "double",
+          "type": "number"
+        }
+      },
+      "required": [
+        "x",
+        "y"
+      ],
+      "type": "object"
     },
     "Shunt": {
       "properties": {
@@ -1525,6 +1696,16 @@
         "$ref": "#/$defs/Generator"
       },
       "type": "array"
+    },
+    "geo": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/GeoMeta"
+        },
+        {
+          "type": "null"
+        }
+      ]
     },
     "hvdc": {
       "items": {

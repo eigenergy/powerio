@@ -569,6 +569,7 @@ fn checked_network(
         name: name_hint.unwrap_or("case").to_string(),
         base_mva: MVA_BASE,
         base_frequency: crate::network::DEFAULT_BASE_FREQUENCY,
+        geo: None,
         buses,
         loads,
         shunts,
@@ -1151,6 +1152,7 @@ fn read_bus_head(b: &[u8], at: usize) -> Probe<(BusHead, usize)> {
         zone,
         name: Some(String::from_utf8_lossy(name).into_owned()),
         uid: None,
+        location: None,
         extras: Extras::new(),
     };
     let shunt = bus_tail_shunt(b, c.pos, BusId(num));
@@ -1939,6 +1941,7 @@ mod tests {
             name: name.to_string(),
             base_mva: MVA_BASE,
             base_frequency: crate::network::DEFAULT_BASE_FREQUENCY,
+            geo: None,
             buses: Vec::new(),
             loads: Vec::new(),
             shunts: Vec::new(),

@@ -151,6 +151,7 @@ pub(crate) fn parse_goc3_source(
         name,
         base_mva,
         base_frequency: crate::network::DEFAULT_BASE_FREQUENCY,
+        geo: None,
         buses,
         loads,
         shunts,
@@ -217,6 +218,7 @@ fn read_buses(network: &Map<String, Value>) -> Result<(Vec<Bus>, Goc3BusMap)> {
             zone: 1,
             name: Some(uid.clone()),
             uid: Some(uid),
+            location: None,
             extras: extras(
                 obj,
                 &["uid", "base_nom_volt", "vm_ub", "vm_lb", "initial_status"],

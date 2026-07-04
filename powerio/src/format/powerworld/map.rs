@@ -35,6 +35,7 @@ pub(super) const BRANCH_DEVICE_TYPE: &str = "BranchDeviceType";
 /// Owned-source entry used by the format hub: parse by borrowing `source`, then
 /// move the buffer into the retained source (no copy). `name_hint` (e.g. a file
 /// stem) names the network when the `.aux` carries no export marker.
+#[expect(clippy::too_many_lines)]
 pub(crate) fn parse_powerworld_source(
     source: Arc<String>,
     name_hint: Option<&str>,
@@ -143,6 +144,7 @@ pub(crate) fn parse_powerworld_source(
         name,
         base_mva,
         base_frequency: crate::network::DEFAULT_BASE_FREQUENCY,
+        geo: None,
         buses,
         loads,
         shunts,
@@ -465,6 +467,7 @@ fn read_bus(r: &Row) -> Result<Bus> {
         zone: uid_alias(r, &["ZoneNum", "ZoneNumber"])?,
         name,
         uid: None,
+        location: None,
         extras,
     })
 }

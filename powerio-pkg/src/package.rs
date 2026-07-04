@@ -48,7 +48,7 @@ pub const PIO_PAYLOAD_BALANCED_SCHEMA_URL: &str =
 /// the minor; field moves or removals bump the major. Versioned independently
 /// of the envelope: [`PIO_PACKAGE_SCHEMA_VERSION`] covers the package
 /// bookkeeping, this covers the network tables a consumer computes on.
-pub const PIO_PAYLOAD_BALANCED_SCHEMA_VERSION: &str = "1.0.0";
+pub const PIO_PAYLOAD_BALANCED_SCHEMA_VERSION: &str = "1.1.0";
 
 /// The declared schema URL for the multiconductor payload
 /// (`model.multiconductor_network`).
@@ -57,7 +57,7 @@ pub const PIO_PAYLOAD_MULTICONDUCTOR_SCHEMA_URL: &str =
 
 /// The multiconductor payload schema version (semver); the same policy as
 /// [`PIO_PAYLOAD_BALANCED_SCHEMA_VERSION`].
-pub const PIO_PAYLOAD_MULTICONDUCTOR_SCHEMA_VERSION: &str = "1.0.0";
+pub const PIO_PAYLOAD_MULTICONDUCTOR_SCHEMA_VERSION: &str = "1.1.0";
 
 pub const READ_TRANSMISSION_PARSE_WARNING: &str = "READ.TRANSMISSION.PARSE_WARNING";
 pub const READ_GRIDFM_FIDELITY_WARNING: &str = "READ.GRIDFM.FIDELITY_WARNING";

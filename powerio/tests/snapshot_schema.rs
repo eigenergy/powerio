@@ -14,7 +14,10 @@
 
 use std::path::Path;
 
-use powerio::{Branch, Bus, BusId, BusType, GenCaps, Generator, Network, SourceFormat};
+use powerio::{
+    Branch, Bus, BusId, BusType, CoordinateSpace, CoordsKind, GenCaps, Generator, GeoMeta,
+    Location, Network, SourceFormat,
+};
 
 /// A v4-vintage snapshot, written by `powerio convert case30.m --to powerio-json`.
 /// Regenerate ONLY on a deliberate schema change, and then bump `PIO_ABI_VERSION`.
@@ -117,4 +120,41 @@ fn uid_survives_snapshot_roundtrip_and_stays_off_the_wire_when_absent() {
     let parsed = Network::from_json(&serde_json::to_string(&v).unwrap()).unwrap();
     assert_eq!(parsed.generators[0].uid.as_deref(), Some("gen-a"));
     assert_eq!(parsed.buses[0].uid, None);
+}
+
+#[test]
+fn geo_fields_roundtrip_and_stay_off_the_wire_when_absent() {
+    let net = small_net();
+    let text = net.to_json().unwrap();
+    assert!(!text.contains(r#""geo""#));
+    assert!(!text.contains(r#""location""#));
+    let parsed = Network::from_json(&text).unwrap();
+    assert_eq!(parsed.to_json().unwrap(), text);
+
+    let v: serde_json::Value = serde_json::from_str(&text).unwrap();
+    assert!(v.get("geo").is_none());
+    assert!(v["buses"][0].get("location").is_none());
+
+    let mut with_geo = net;
+    with_geo.geo = Some(GeoMeta {
+        space: CoordinateSpace::Geographic { crs: None },
+        kind: Some(CoordsKind::Source),
+    });
+    with_geo.buses[0].location = Some(Location {
+        x: -80.0,
+        y: 35.0,
+        kind: None,
+    });
+
+    let v: serde_json::Value = serde_json::from_str(&with_geo.to_json().unwrap()).unwrap();
+    assert_eq!(
+        v["geo"],
+        serde_json::json!({"space": "geographic", "kind": "source"})
+    );
+    assert_eq!(v["buses"][0]["location"]["x"], serde_json::json!(-80.0));
+    assert_eq!(v["buses"][0]["location"]["y"], serde_json::json!(35.0));
+
+    let parsed = Network::from_json(&serde_json::to_string(&v).unwrap()).unwrap();
+    assert_eq!(parsed.geo, with_geo.geo);
+    assert_eq!(parsed.buses[0].location, with_geo.buses[0].location);
 }

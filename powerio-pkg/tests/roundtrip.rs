@@ -8,9 +8,10 @@ use powerio_pkg::{
     NetworkPackage, OperatingPoint, OperatingPointSeries, Origin, PIO_PACKAGE_SCHEMA_URL,
     PIO_PACKAGE_SCHEMA_VERSION, PIO_PAYLOAD_BALANCED_SCHEMA_URL,
     PIO_PAYLOAD_BALANCED_SCHEMA_VERSION, PIO_PAYLOAD_MULTICONDUCTOR_SCHEMA_URL,
-    READ_TRANSMISSION_PARSE_WARNING, SequenceTransformConvention, SourceDescriptor, SourceMapEntry,
-    SourceRef, StructuredDiagnostic, StudyBlock, StudyCommit, StudyEdit, TimeAxis,
-    ValidationStatus, check_multiconductor_to_balanced_lowering, ensure_payload_uids,
+    PIO_PAYLOAD_MULTICONDUCTOR_SCHEMA_VERSION, READ_TRANSMISSION_PARSE_WARNING,
+    SequenceTransformConvention, SourceDescriptor, SourceMapEntry, SourceRef, StructuredDiagnostic,
+    StudyBlock, StudyCommit, StudyEdit, TimeAxis, ValidationStatus,
+    check_multiconductor_to_balanced_lowering, ensure_payload_uids,
     lower_multiconductor_to_balanced,
 };
 
@@ -1733,6 +1734,50 @@ fn package_declares_payload_schema_and_synthesizes_row_identity() {
         multi.payload_schema.as_deref(),
         Some(PIO_PAYLOAD_MULTICONDUCTOR_SCHEMA_URL)
     );
+    assert_eq!(
+        multi.payload_schema_version.as_deref(),
+        Some(PIO_PAYLOAD_MULTICONDUCTOR_SCHEMA_VERSION)
+    );
+}
+
+#[test]
+fn geo_types_share_the_same_json_shape() {
+    let balanced_location = powerio::Location {
+        x: -80.0,
+        y: 35.0,
+        kind: Some(powerio::CoordsKind::Manual),
+    };
+    let dist_location = powerio_dist::Location {
+        x: -80.0,
+        y: 35.0,
+        kind: Some(powerio_dist::CoordsKind::Manual),
+    };
+    assert_eq!(
+        serde_json::to_value(balanced_location).unwrap(),
+        serde_json::to_value(dist_location).unwrap()
+    );
+
+    let balanced_geo = powerio::GeoMeta {
+        space: powerio::CoordinateSpace::Geographic { crs: None },
+        kind: Some(powerio::CoordsKind::Source),
+    };
+    let dist_geo = powerio_dist::GeoMeta {
+        space: powerio_dist::CoordinateSpace::Geographic { crs: None },
+        kind: Some(powerio_dist::CoordsKind::Source),
+    };
+    let expected = serde_json::json!({"space": "geographic", "kind": "source"});
+    assert_eq!(serde_json::to_value(&balanced_geo).unwrap(), expected);
+    assert_eq!(
+        serde_json::to_value(balanced_geo).unwrap(),
+        serde_json::to_value(dist_geo).unwrap()
+    );
+
+    let empty_dist = powerio_dist::DistNetwork::default();
+    let v = serde_json::to_value(empty_dist).unwrap();
+    assert!(v.get("geo").is_none());
+    let bus = powerio_dist::DistBus::new("b1", vec!["1".to_owned()]);
+    let v = serde_json::to_value(bus).unwrap();
+    assert!(v.get("location").is_none());
 }
 
 #[test]

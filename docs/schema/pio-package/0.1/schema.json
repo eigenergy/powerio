@@ -335,6 +335,17 @@
         "kind": {
           "$ref": "#/$defs/BusType"
         },
+        "location": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Location"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Optional bus coordinates in the network coordinate space."
+        },
         "name": {
           "type": [
             "string",
@@ -402,6 +413,58 @@
       ],
       "type": "string"
     },
+    "Canvas": {
+      "description": "Diagram canvas metadata.",
+      "properties": {
+        "height": {
+          "format": "double",
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "units": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "width": {
+          "format": "double",
+          "type": [
+            "number",
+            "null"
+          ]
+        }
+      },
+      "type": "object"
+    },
+    "Canvas2": {
+      "description": "Diagram canvas metadata.",
+      "properties": {
+        "height": {
+          "format": "double",
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "units": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "width": {
+          "format": "double",
+          "type": [
+            "number",
+            "null"
+          ]
+        }
+      },
+      "type": "object"
+    },
     "Confidence": {
       "description": "How confident the source map entry is.",
       "enum": [
@@ -428,6 +491,26 @@
         "PG_AVERAGED",
         "PN_AVERAGED",
         "PG_PER_PHASE"
+      ],
+      "type": "string"
+    },
+    "CoordsKind": {
+      "description": "Coordinate provenance.",
+      "enum": [
+        "source",
+        "synthetic",
+        "manual",
+        "derived"
+      ],
+      "type": "string"
+    },
+    "CoordsKind2": {
+      "description": "Coordinate provenance.",
+      "enum": [
+        "source",
+        "synthetic",
+        "manual",
+        "derived"
       ],
       "type": "string"
     },
@@ -517,6 +600,17 @@
         },
         "id": {
           "type": "string"
+        },
+        "location": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Location2"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Optional bus coordinates in the network coordinate space."
         },
         "terminals": {
           "description": "Ordered terminal names; OpenDSS node numbers as strings.",
@@ -1302,6 +1396,16 @@
           },
           "type": "array"
         },
+        "geo": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/GeoMeta2"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
         "ibrs": {
           "items": {
             "$ref": "#/$defs/DistIbr"
@@ -1778,6 +1882,192 @@
       ],
       "type": "object"
     },
+    "GeoMeta": {
+      "description": "Network level coordinate metadata.",
+      "oneOf": [
+        {
+          "description": "x = longitude and y = latitude in decimal degrees. `None` means EPSG:4326.",
+          "properties": {
+            "crs": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "space": {
+              "const": "geographic",
+              "type": "string"
+            }
+          },
+          "required": [
+            "space"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "Planar coordinates, with the CRS named when known.",
+          "properties": {
+            "crs": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "space": {
+              "const": "projected",
+              "type": "string"
+            }
+          },
+          "required": [
+            "space"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "Drawing coordinates with no earth referent.",
+          "properties": {
+            "canvas": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/Canvas"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "space": {
+              "const": "diagram",
+              "type": "string"
+            }
+          },
+          "required": [
+            "space"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "The source did not declare a coordinate space.",
+          "properties": {
+            "space": {
+              "const": "unknown",
+              "type": "string"
+            }
+          },
+          "required": [
+            "space"
+          ],
+          "type": "object"
+        }
+      ],
+      "properties": {
+        "kind": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/CoordsKind"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Default provenance for points without their own `kind`."
+        }
+      },
+      "type": "object"
+    },
+    "GeoMeta2": {
+      "description": "Network level coordinate metadata.",
+      "oneOf": [
+        {
+          "description": "x = longitude and y = latitude in decimal degrees. `None` means EPSG:4326.",
+          "properties": {
+            "crs": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "space": {
+              "const": "geographic",
+              "type": "string"
+            }
+          },
+          "required": [
+            "space"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "Planar coordinates, with the CRS named when known.",
+          "properties": {
+            "crs": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "space": {
+              "const": "projected",
+              "type": "string"
+            }
+          },
+          "required": [
+            "space"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "Drawing coordinates with no earth referent.",
+          "properties": {
+            "canvas": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/Canvas2"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "space": {
+              "const": "diagram",
+              "type": "string"
+            }
+          },
+          "required": [
+            "space"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "The source did not declare a coordinate space.",
+          "properties": {
+            "space": {
+              "const": "unknown",
+              "type": "string"
+            }
+          },
+          "required": [
+            "space"
+          ],
+          "type": "object"
+        }
+      ],
+      "properties": {
+        "kind": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/CoordsKind2"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Default provenance for points without their own `kind`."
+        }
+      },
+      "type": "object"
+    },
     "Hvdc": {
       "description": "A two-terminal HVDC line (MATPOWER `dcline`).\n\n`pf`/`pt`/`qf`/`qt` are stored in MATPOWER's sign convention regardless of\nsource: the PowerModels reader un-flips `pt`/`qf`/`qt` on the way in, and the\nPowerModels writer re-flips them on the way out (PowerModels.jl uses the\nopposite sign). The flip is a format-boundary translation, so a derived view\nlike `to_normalized` keeps the MATPOWER convention and only scales to per unit.",
       "properties": {
@@ -2118,6 +2408,68 @@
         }
       ]
     },
+    "Location": {
+      "description": "A point attached to one model element.",
+      "properties": {
+        "kind": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/CoordsKind"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Per point provenance when it differs from the network default."
+        },
+        "x": {
+          "description": "X coordinate. In geographic space this is longitude.",
+          "format": "double",
+          "type": "number"
+        },
+        "y": {
+          "description": "Y coordinate. In geographic space this is latitude.",
+          "format": "double",
+          "type": "number"
+        }
+      },
+      "required": [
+        "x",
+        "y"
+      ],
+      "type": "object"
+    },
+    "Location2": {
+      "description": "A point attached to one model element.",
+      "properties": {
+        "kind": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/CoordsKind2"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Per point provenance when it differs from the network default."
+        },
+        "x": {
+          "description": "X coordinate. In geographic space this is longitude.",
+          "format": "double",
+          "type": "number"
+        },
+        "y": {
+          "description": "Y coordinate. In geographic space this is latitude.",
+          "format": "double",
+          "type": "number"
+        }
+      },
+      "required": [
+        "x",
+        "y"
+      ],
+      "type": "object"
+    },
     "LoweringRecord": {
       "description": "One lowering/normalization/emission pass and what it changed.",
       "properties": {
@@ -2314,6 +2666,16 @@
             "$ref": "#/$defs/Generator"
           },
           "type": "array"
+        },
+        "geo": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/GeoMeta"
+            },
+            {
+              "type": "null"
+            }
+          ]
         },
         "hvdc": {
           "items": {

@@ -6,9 +6,10 @@ use std::sync::Arc;
 
 use powerio_dist::dss::{parse_dss_file, parse_dss_str};
 use powerio_dist::{
-    Configuration, DiagnosticSeverity, DiagnosticStage, DistBus, DistLineCode, DistNetwork,
-    DistTransformer, Extras, VoltageSource, Winding, WindingConn, parse_bmopf_file,
-    parse_bmopf_str, parse_pmd_str, write_bmopf_json, write_dss,
+    BmopfWriteOptions, Configuration, CoordinateSpace, CoordsKind, DiagnosticSeverity,
+    DiagnosticStage, DistBus, DistLineCode, DistNetwork, DistTransformer, Extras, GeoMeta,
+    Location, VoltageSource, Winding, WindingConn, parse_bmopf_file, parse_bmopf_str,
+    parse_pmd_str, write_bmopf_json, write_bmopf_json_with_options, write_dss,
 };
 
 fn fixture(rel: &str) -> PathBuf {
@@ -31,6 +32,32 @@ fn errors(validator: &jsonschema::Validator, text: &str) -> Vec<String> {
         .iter_errors(&doc)
         .map(|e| format!("{}: {e}", e.instance_path()))
         .collect()
+}
+
+#[test]
+fn bmopf_sideloaded_coordinates_promote_to_locations() {
+    let net = parse_bmopf_str(
+        r#"{
+  "bus": {
+    "b1": {
+      "terminal_names": ["1", "2", "3", "4"],
+      "perfectly_grounded_terminals": ["4"],
+      "longitude": -80.0,
+      "latitude": 35.0
+    }
+  }
+}"#,
+    )
+    .unwrap();
+    assert!(net.warnings.is_empty(), "{:?}", net.warnings);
+    let geo = net.geo.as_ref().expect("geo metadata");
+    assert_eq!(geo.space, CoordinateSpace::Geographic { crs: None });
+    assert_eq!(geo.kind, Some(CoordsKind::Source));
+    let bus = &net.buses[0];
+    assert_eq!(bus.location.unwrap().x.to_bits(), (-80.0f64).to_bits());
+    assert_eq!(bus.location.unwrap().y.to_bits(), 35.0f64.to_bits());
+    assert!(!bus.extras.contains_key("longitude"));
+    assert!(!bus.extras.contains_key("latitude"));
 }
 
 fn diagnostic<'a>(
@@ -793,6 +820,71 @@ fn split_source_network(sources: Vec<VoltageSource>) -> DistNetwork {
     net.buses = vec![bus];
     net.sources = sources;
     net
+}
+
+#[test]
+fn bmopf_coordinates_are_strict_by_default_and_opt_in_as_sideloads() {
+    let mut net =
+        split_source_network(vec![single_phase_source("source", "1", 0.0, Extras::new())]);
+    net.geo = Some(GeoMeta {
+        space: CoordinateSpace::Geographic { crs: None },
+        kind: Some(CoordsKind::Source),
+    });
+    net.buses[0].location = Some(Location {
+        x: -80.0,
+        y: 35.0,
+        kind: None,
+    });
+
+    let strict = write_bmopf_json(&net);
+    let strict_doc: serde_json::Value = serde_json::from_str(&strict.text).unwrap();
+    assert!(strict_doc["bus"]["sourcebus"].get("longitude").is_none());
+    assert!(
+        strict
+            .warnings
+            .iter()
+            .any(|w| w.contains("EMIT.BMOPF.BUS_LOCATION_DROPPED")),
+        "{:?}",
+        strict.warnings
+    );
+    assert_eq!(
+        diagnostic(&strict, "EMIT.BMOPF.BUS_LOCATION_DROPPED", "bus sourcebus").severity,
+        DiagnosticSeverity::Warning
+    );
+
+    let mut options = BmopfWriteOptions::default();
+    options.sideload_coordinates = true;
+    let sideloaded = write_bmopf_json_with_options(&net, &options);
+    let doc: serde_json::Value = serde_json::from_str(&sideloaded.text).unwrap();
+    assert_eq!(
+        doc["bus"]["sourcebus"]["longitude"],
+        serde_json::json!(-80.0)
+    );
+    assert_eq!(doc["bus"]["sourcebus"]["latitude"], serde_json::json!(35.0));
+    assert!(
+        sideloaded
+            .warnings
+            .iter()
+            .all(|w| !w.contains("BUS_LOCATION_DROPPED")),
+        "{:?}",
+        sideloaded.warnings
+    );
+
+    net.geo = Some(GeoMeta {
+        space: CoordinateSpace::Unknown,
+        kind: Some(CoordsKind::Source),
+    });
+    let unknown = write_bmopf_json_with_options(&net, &options);
+    let doc: serde_json::Value = serde_json::from_str(&unknown.text).unwrap();
+    assert!(doc["bus"]["sourcebus"].get("longitude").is_none());
+    assert!(
+        unknown
+            .warnings
+            .iter()
+            .any(|w| w.contains("EMIT.BMOPF.BUS_LOCATION_DROPPED")),
+        "{:?}",
+        unknown.warnings
+    );
 }
 
 #[test]

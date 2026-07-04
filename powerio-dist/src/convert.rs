@@ -2,6 +2,16 @@
 
 use crate::model::{DistNetwork, DistSourceFormat};
 
+/// Extra files a writer generated beside the primary text payload.
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct ConversionSidecar {
+    /// Relative file path the primary text refers to.
+    pub path: String,
+    /// File content.
+    pub text: String,
+}
+
 /// Text in the target format plus every fidelity loss the writer took.
 /// Nothing drops silently: a field the target cannot represent appears
 /// here as a warning naming the element and field.
@@ -9,6 +19,8 @@ use crate::model::{DistNetwork, DistSourceFormat};
 #[non_exhaustive]
 pub struct Conversion {
     pub text: String,
+    /// Extra files referenced by `text`, such as OpenDSS `Buscoords` CSV.
+    pub sidecars: Vec<ConversionSidecar>,
     pub warnings: Vec<String>,
     /// Structured diagnostics for warning paths with stable codes.
     ///
@@ -147,6 +159,7 @@ fn convert(net: &DistNetwork, target: DistTargetFormat) -> Conversion {
     warnings.extend(conv.warnings);
     Conversion {
         text: conv.text,
+        sidecars: conv.sidecars,
         warnings,
         diagnostics: conv.diagnostics,
     }
@@ -205,6 +218,7 @@ impl DistNetwork {
             if format.matches(source_format) {
                 return Conversion {
                     text: source.as_ref().clone(),
+                    sidecars: Vec::new(),
                     warnings: Vec::new(),
                     diagnostics: Vec::new(),
                 };

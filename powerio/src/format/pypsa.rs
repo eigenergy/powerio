@@ -106,6 +106,7 @@ fn read_pypsa_csv_folder_inner(path: &Path, warnings: &mut Vec<String>) -> Resul
             zone: 1,
             name: bus_name,
             uid: None,
+            location: None,
             extras: Extras::default(),
         });
     }
@@ -399,6 +400,7 @@ fn read_pypsa_csv_folder_inner(path: &Path, warnings: &mut Vec<String>) -> Resul
         name,
         base_mva,
         base_frequency: crate::network::DEFAULT_BASE_FREQUENCY,
+        geo: None,
         buses,
         loads,
         shunts,
@@ -1132,6 +1134,7 @@ mod tests {
             zone: 1,
             name: name.map(str::to_string),
             uid: None,
+            location: None,
             extras: Extras::default(),
         }
     }

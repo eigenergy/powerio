@@ -788,6 +788,7 @@ mod tests {
             zone: 1,
             name: None,
             uid: None,
+            location: None,
             extras: Extras::new(),
         }
     }
