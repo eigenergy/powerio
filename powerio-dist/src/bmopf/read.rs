@@ -60,6 +60,8 @@ struct Reader<'a> {
     net: &'a mut DistNetwork,
 }
 
+const BMOPF_DELTA_ROLLS_EXTRA: &str = "bmopf_delta_rolls";
+
 fn f(v: &Value) -> f64 {
     v.as_f64().unwrap_or(f64::NAN)
 }
@@ -73,6 +75,11 @@ fn first_float(v: Option<&Value>) -> Option<f64> {
         Value::Array(a) => a.first().map(f),
         v => Some(f(v)),
     }
+}
+
+fn delta_roll_value(v: Option<&Value>) -> Option<i64> {
+    v.and_then(Value::as_i64)
+        .filter(|roll| matches!(*roll, -1 | 1))
 }
 
 /// Like [`first_float`], but the field is per-phase-terminal in the schema
@@ -925,6 +932,7 @@ impl Reader<'_> {
         let known = ["windings", "x_sc", "s_rating", "g_no_load", "b_no_load"];
         let s = o.get("s_rating").map_or(f64::NAN, f);
         let mut windings = Vec::new();
+        let mut delta_rolls = Map::new();
         if let Some(items) = o.get("windings").and_then(Value::as_array) {
             for (idx, item) in items.iter().enumerate() {
                 let Some(w) = item.as_object() else {
@@ -954,6 +962,9 @@ impl Reader<'_> {
                 } else {
                     WindingConn::Wye
                 };
+                if let Some(delta_roll) = delta_roll_value(w.get("delta_roll")) {
+                    delta_rolls.insert((idx + 1).to_string(), Value::from(delta_roll));
+                }
                 let r_pct = if let Some(base_z) =
                     n_winding_base_from_bmopf(conn, &terminal_map, bmopf_v_nom, s)
                 {
@@ -997,6 +1008,9 @@ impl Reader<'_> {
             &[],
         );
         extras.insert("bmopf_subtype".into(), "n_winding".into());
+        if !delta_rolls.is_empty() {
+            extras.insert(BMOPF_DELTA_ROLLS_EXTRA.into(), Value::Object(delta_rolls));
+        }
         for key in ["g_no_load", "b_no_load"] {
             if let Some(v) = o.get(key) {
                 extras.insert(key.into(), v.clone());
