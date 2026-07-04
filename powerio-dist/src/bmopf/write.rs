@@ -33,11 +33,15 @@ const RAW_BMOPF_TOP_LEVEL: &[&str] = &[
 
 const TRANSFORMER_NO_LOAD_ALLOWED_EXTRAS: [&str; 4] =
     ["g_no_load", "b_no_load", "%noloadloss", "%imag"];
-const TRANSFORMER_TWO_WINDING_ALLOWED_EXTRAS: [&str; 6] = [
+const TRANSFORMER_TWO_WINDING_ALLOWED_EXTRAS: [&str; 10] = [
     "tap_min",
     "tap_max",
     "g_no_load",
     "b_no_load",
+    "r_neutral_from",
+    "x_neutral_from",
+    "r_neutral_to",
+    "x_neutral_to",
     "%noloadloss",
     "%imag",
 ];
@@ -671,6 +675,7 @@ impl Writer {
         o.insert("x_series_to".into(), json!(0.0));
         o.insert("terminal_map_from".into(), json!(from.terminal_map));
         o.insert("terminal_map_to".into(), json!(to.terminal_map));
+        self.transformer_neutral_fields(&mut o, t, from, to);
         self.transformer_tap_fields(&mut o, t, from);
         if emit_no_load {
             self.transformer_no_load_fields(&mut o, t, from, s);
@@ -712,6 +717,8 @@ impl Writer {
         let r_pct_new = (w2.r_pct * w2.v_ref * w2.v_ref * (from.s_rating / w2.s_rating)
             + w3.r_pct * w3.v_ref * w3.v_ref * (from.s_rating / w3.s_rating))
             / (v_new * v_new);
+        let r_neutral = self.center_tap_neutral(t, "r_neutral", w2.r_neutral, w3.r_neutral);
+        let x_neutral = self.center_tap_neutral(t, "x_neutral", w2.x_neutral, w3.x_neutral);
         let to = Winding {
             bus: w2.bus.clone(),
             terminal_map: {
@@ -724,6 +731,8 @@ impl Writer {
             s_rating: from.s_rating,
             r_pct: r_pct_new,
             tap: 1.0,
+            r_neutral,
+            x_neutral,
         };
         self.warn(format!(
             "transformer {}: center tap secondary collapsed to one winding; the \
@@ -783,6 +792,7 @@ impl Writer {
         );
         o.insert("terminal_map_from".into(), json!(from.terminal_map));
         o.insert("terminal_map_to".into(), json!(to.terminal_map));
+        self.transformer_neutral_fields(&mut o, t, from, to);
         self.transformer_tap_fields(&mut o, t, from);
         self.transformer_no_load_fields(&mut o, t, from, s);
         self.transformer_extras_dropped(t, &TRANSFORMER_TWO_WINDING_ALLOWED_EXTRAS);
@@ -854,6 +864,7 @@ impl Writer {
         if let Some(first) = t.windings.first() {
             self.transformer_no_load_fields(&mut o, t, first, s);
         }
+        self.warn_unrepresented_neutral_fields(t, "n_winding BMOPF");
         self.taps_dropped(t);
         self.transformer_extras_dropped(t, &TRANSFORMER_NO_LOAD_ALLOWED_EXTRAS);
         o.into()
@@ -880,13 +891,16 @@ impl Writer {
                     s_rating: w.s_rating / 3.0,
                     r_pct: w.r_pct,
                     tap: w.tap,
+                    r_neutral: if k == 0 { w.r_neutral } else { None },
+                    x_neutral: if k == 0 { w.x_neutral } else { None },
                 }
             };
             let f = per(from);
             let to_1 = per(to);
             let mut t1 = t.clone();
             t1.windings = vec![f.clone(), to_1.clone()];
-            let v = self.two_winding(&t1, &f, &to_1, 1.0, false, false);
+            split_no_load_extras(&mut t1, t.phases);
+            let v = self.two_winding(&t1, &f, &to_1, 1.0, true, false);
             out.push((format!("{}_{}", t.name, k + 1), v));
         }
         self.warn(format!(
@@ -927,6 +941,67 @@ impl Writer {
                 self.warn(format!(
                     "transformer {}: non-from-side tap {} has no BMOPF field; dropped",
                     t.name, w.tap
+                ));
+            }
+        }
+    }
+
+    fn transformer_neutral_fields(
+        &mut self,
+        o: &mut Map<String, Value>,
+        t: &DistTransformer,
+        from: &Winding,
+        to: &Winding,
+    ) {
+        self.transformer_neutral_field(o, t, "r_neutral_from", from.r_neutral);
+        self.transformer_neutral_field(o, t, "x_neutral_from", from.x_neutral);
+        self.transformer_neutral_field(o, t, "r_neutral_to", to.r_neutral);
+        self.transformer_neutral_field(o, t, "x_neutral_to", to.x_neutral);
+    }
+
+    fn transformer_neutral_field(
+        &mut self,
+        o: &mut Map<String, Value>,
+        t: &DistTransformer,
+        key: &str,
+        value: Option<f64>,
+    ) {
+        let Some(v) = value else {
+            return;
+        };
+        if v.is_finite() && v >= 0.0 {
+            o.insert(key.into(), json!(v));
+        } else {
+            self.warn(format!(
+                "transformer {}: {key}={v} is not a nonnegative finite BMOPF neutral impedance; dropped",
+                t.name
+            ));
+        }
+    }
+
+    fn center_tap_neutral(
+        &mut self,
+        t: &DistTransformer,
+        field: &str,
+        a: Option<f64>,
+        b: Option<f64>,
+    ) -> Option<f64> {
+        if let (Some(a), Some(b)) = (a, b) {
+            self.warn(format!(
+                "transformer {}: center tap secondary has two {field} values ({a}, {b}); emitted the first",
+                t.name
+            ));
+        }
+        a.or(b)
+    }
+
+    fn warn_unrepresented_neutral_fields(&mut self, t: &DistTransformer, target: &str) {
+        for (idx, w) in t.windings.iter().enumerate() {
+            if w.r_neutral.is_some() || w.x_neutral.is_some() {
+                self.warn(format!(
+                    "transformer {} winding {}: neutral impedance has no {target} field; dropped",
+                    t.name,
+                    idx + 1
                 ));
             }
         }
@@ -1191,6 +1266,15 @@ fn extras_number(extras: &crate::model::Extras, key: &str) -> Option<f64> {
         .or_else(|| v.as_i64().map(|v| v as f64))
         .or_else(|| v.as_str().and_then(|s| s.parse().ok()))
         .filter(|v| v.is_finite())
+}
+
+fn split_no_load_extras(t: &mut DistTransformer, phases: usize) {
+    let phases = phases.max(1) as f64;
+    for key in ["g_no_load", "b_no_load"] {
+        if let Some(v) = extras_number(&t.extras, key) {
+            t.extras.insert(key.into(), json!(v / phases));
+        }
+    }
 }
 
 fn n_winding_phase_count(w: &Winding) -> usize {

@@ -1063,7 +1063,7 @@ impl Reader<'_> {
                 }
                 "bus" => windings[active].bus = Some(v.to_bus_spec()),
                 "conn" => windings[active].conn_delta = conn_is_delta(&v.text),
-                "kv" | "kva" | "tap" | "%r" => {
+                "kv" | "kva" | "tap" | "%r" | "rneut" | "xneut" => {
                     let parsed = self.f64_prop(Some(v));
                     let w = &mut windings[active];
                     match name.as_str() {
@@ -1076,7 +1076,10 @@ impl Reader<'_> {
                             w.kva_specified = true;
                         }
                         "tap" => w.tap = parsed.unwrap_or(w.tap),
-                        _ => w.r_pct = parsed.unwrap_or(w.r_pct),
+                        "%r" => w.r_pct = parsed.unwrap_or(w.r_pct),
+                        "rneut" => w.r_neutral = parsed,
+                        "xneut" => w.x_neutral = parsed,
+                        _ => unreachable!("matched transformer scalar property"),
                     }
                 }
                 "buses" | "conns" => {
@@ -1200,6 +1203,8 @@ impl Reader<'_> {
                 s_rating: w.kva * 1e3,
                 r_pct: w.r_pct,
                 tap: w.tap,
+                r_neutral: w.r_neutral,
+                x_neutral: w.x_neutral,
             });
         }
         out
@@ -1764,6 +1769,8 @@ struct WindingRaw {
     kva: f64,
     tap: f64,
     r_pct: f64,
+    r_neutral: Option<f64>,
+    x_neutral: Option<f64>,
     kv_specified: bool,
     kva_specified: bool,
 }
@@ -1777,6 +1784,8 @@ impl Default for WindingRaw {
             kva: dd::transformer::KVA,
             tap: dd::transformer::TAP,
             r_pct: dd::transformer::PCT_R,
+            r_neutral: None,
+            x_neutral: None,
             kv_specified: false,
             kva_specified: false,
         }

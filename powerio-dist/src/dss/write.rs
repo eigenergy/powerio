@@ -894,6 +894,19 @@ impl DssWriter {
             }
             s.push_str(&self.extras_tail("transformer", &t.name, &t.extras));
             self.line_out(&s);
+            for (idx, w) in t.windings.iter().enumerate() {
+                if w.r_neutral.is_none() && w.x_neutral.is_none() {
+                    continue;
+                }
+                let mut edit = format!("~ wdg={}", idx + 1);
+                if let Some(r) = w.r_neutral {
+                    let _ = write!(edit, " rneut={}", num(r));
+                }
+                if let Some(x) = w.x_neutral {
+                    let _ = write!(edit, " xneut={}", num(x));
+                }
+                self.line_out(&edit);
+            }
         }
         self.out.push('\n');
     }
@@ -1845,6 +1858,8 @@ mod tests {
                     s_rating: 25e3,
                     r_pct: 0.5,
                     tap: 1.0,
+                    r_neutral: None,
+                    x_neutral: None,
                 },
                 Winding {
                     bus: "b2".into(),
@@ -1854,6 +1869,8 @@ mod tests {
                     s_rating: 25e3,
                     r_pct: 0.5,
                     tap: 1.0,
+                    r_neutral: None,
+                    x_neutral: None,
                 },
             ],
             xsc_pct: Vec::new(),

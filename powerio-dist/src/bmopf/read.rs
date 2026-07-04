@@ -644,6 +644,10 @@ impl Reader<'_> {
             "r_series_to",
             "x_series_from",
             "x_series_to",
+            "r_neutral_from",
+            "x_neutral_from",
+            "r_neutral_to",
+            "x_neutral_to",
             "tap",
             "tap_min",
             "tap_max",
@@ -708,6 +712,8 @@ impl Reader<'_> {
                 s_rating: s,
                 r_pct: r_from_pct,
                 tap: first_float(o.get("tap")).unwrap_or(1.0),
+                r_neutral: first_float(o.get("r_neutral_from")),
+                x_neutral: first_float(o.get("x_neutral_from")),
             },
             Winding {
                 bus: string(o.get("bus_to")),
@@ -717,6 +723,8 @@ impl Reader<'_> {
                 s_rating: s,
                 r_pct: r_to_pct,
                 tap: 1.0,
+                r_neutral: first_float(o.get("r_neutral_to")),
+                x_neutral: first_float(o.get("x_neutral_to")),
             },
         ];
         expand_center_tap_windings(subtype, &mut windings);
@@ -797,6 +805,8 @@ impl Reader<'_> {
                     s_rating: s,
                     r_pct,
                     tap: 1.0,
+                    r_neutral: None,
+                    x_neutral: None,
                 });
             }
         }
@@ -859,6 +869,8 @@ fn expand_center_tap_windings(subtype: &str, windings: &mut Vec<Winding>) {
         s_rating: to.s_rating,
         r_pct: to.r_pct * 2.0,
         tap: to.tap,
+        r_neutral: to.r_neutral,
+        x_neutral: to.x_neutral,
     };
     let other_half = Winding {
         bus: to.bus,
@@ -868,6 +880,8 @@ fn expand_center_tap_windings(subtype: &str, windings: &mut Vec<Winding>) {
         s_rating: to.s_rating,
         r_pct: to.r_pct * 2.0,
         tap: to.tap,
+        r_neutral: None,
+        x_neutral: None,
     };
     windings.push(half);
     windings.push(other_half);

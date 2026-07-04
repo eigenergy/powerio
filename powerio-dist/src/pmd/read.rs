@@ -289,6 +289,8 @@ fn build_windings(
             s_rating: nums.sm_nom.get(w).copied().unwrap_or(f64::NAN) * 1e3,
             r_pct: nums.rw.get(w).copied().unwrap_or(0.0) * 100.0,
             tap: nums.tm_set.get(w).copied().unwrap_or(1.0),
+            r_neutral: None,
+            x_neutral: None,
         });
     }
     (windings, phases, unrolled)
