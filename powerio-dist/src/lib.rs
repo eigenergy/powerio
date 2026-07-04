@@ -47,6 +47,7 @@ pub mod bmopf;
 pub mod convert;
 pub mod dss;
 pub mod error;
+pub mod graph;
 pub mod model;
 pub mod pmd;
 
@@ -60,6 +61,10 @@ pub use dss::{
     write_dss_with_options,
 };
 pub use error::{Error, Result};
+pub use graph::{
+    DistGraph, DistGraphAttachment, DistGraphAttachmentKind, DistGraphBus, DistGraphEdge,
+    DistGraphEdgeKind,
+};
 pub use model::{
     ActivePowerReference, ActivePowerUnit, Configuration, ControlVoltageReference, DistBus,
     DistControlProfile, DistGenerator, DistIbr, DistLine, DistLineCode, DistLoad,
