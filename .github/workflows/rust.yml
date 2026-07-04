@@ -87,6 +87,18 @@ jobs:
         cargo clippy -p powerio-matrix --all-targets --features gridfm -- -D warnings
         cargo test -p powerio-matrix --features gridfm --verbose
 
+  wasm32:
+    name: wasm32 check
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v6
+    - uses: dtolnay/rust-toolchain@stable
+      with:
+        targets: wasm32-unknown-unknown
+    - uses: Swatinem/rust-cache@v2
+    - name: Check wasm32 parser crates
+      run: cargo check --target wasm32-unknown-unknown -p powerio -p powerio-dist -p powerio-pkg
+
   c-abi:
     name: C ABI (core no-default + C smoke test)
     runs-on: ubuntu-latest
