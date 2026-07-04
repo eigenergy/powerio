@@ -51,6 +51,7 @@ normalized = net.to_normalized()
 dense = net.to_dense()       # needs powerio[matrix]
 bprime = net.bprime()        # needs powerio[matrix]
 graph = net.to_networkx()    # needs powerio[graph]
+dist_graph = pio.dist.parse_file("feeder.dss").graph()
 ```
 
 ## Model names
@@ -61,7 +62,8 @@ The old `powerio.Case` compatibility alias was removed in v0.4.
 
 For distribution models, use `powerio.dist.MulticonductorNetwork` or the
 existing `powerio.dist.DistNetwork` handle name. The old
-`powerio.dist.DistCase` alias was removed in v0.4.
+`powerio.dist.DistCase` alias was removed in v0.4. `dist_net.graph()` returns
+the collapsed bus and terminal graph as Python data.
 
 `parse_file(path, from_=None)` reads network case files (inferred from the
 extension, or forced with `from_`); `parse_str(text, format)` reads in-memory
@@ -154,6 +156,9 @@ static `Package` with one point applied; updates resolve by the model rows'
 `ValueError`. GOC3 documents populate this series from the source time series
 while the static model JSON holds the first interval. Network table dicts
 (`net.buses`, `net.loads`, ...) expose each row's `uid`.
+`pkg.study()` returns a Python dict for the package study block, or `None`;
+`pkg.materialize_study_commit(i)` folds cumulative commits through `i` into a
+new static package and clears both replay blocks.
 `pkg.validate()`, `pkg.validation()`, and `pkg.diagnostics()` expose the
 document validation profile, and multiconductor documents lower through
 `pkg.multiconductor_to_balanced_preflight()` and

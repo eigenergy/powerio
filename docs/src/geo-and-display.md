@@ -1,8 +1,9 @@
 # Geographic and display data
 
-> **Status: partial.** The distribution graph projection from #182 ships in
-> 0.6.1 as `DistNetwork::graph()`. The coordinate model and GeoLayer
-> interchange remain design work.
+> **Status: partial.** The distribution graph projection from #182 ships as
+> Rust `DistNetwork::graph()`, Python `dist_net.graph()`, and C
+> `pio_dist_graph_json`. The coordinate model and GeoLayer interchange remain
+> design work.
 
 Power system case files disagree about where equipment sits on a map, and most
 say nothing at all. PowerWorld aux exports carry substation latitude and

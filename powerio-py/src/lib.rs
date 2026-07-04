@@ -1341,6 +1341,12 @@ impl PyDistNetwork {
         Ok((conv.text, conv.warnings))
     }
 
+    /// The collapsed bus and terminal graph projection as JSON.
+    fn graph_json(&self) -> PyResult<String> {
+        serde_json::to_string(&self.net.graph())
+            .map_err(|e| PowerIOError::new_err(format!("serializing graph JSON: {e}")))
+    }
+
     fn __repr__(&self) -> String {
         format!(
             "DistNetwork(n_buses={}, n_lines={}, n_transformers={}, n_loads={})",
@@ -1485,10 +1491,23 @@ impl PyPackage {
         serde_json::to_string(&self.pkg.operating_points).map_err(package_pyerr)
     }
 
+    /// The study block as JSON, or `null` when absent.
+    fn study_json(&self) -> PyResult<String> {
+        serde_json::to_string(&self.pkg.study).map_err(package_pyerr)
+    }
+
     /// Materialize one operating point into a new static package handle.
     fn materialize_operating_point(&self, index: usize) -> PyResult<Self> {
         self.pkg
             .materialize_operating_point(index)
+            .map_err(package_pyerr)
+            .map(|pkg| Self { pkg })
+    }
+
+    /// Materialize one study commit into a new static package handle.
+    fn materialize_study_commit(&self, index: usize) -> PyResult<Self> {
+        self.pkg
+            .materialize_study_commit(index)
             .map_err(package_pyerr)
             .map(|pkg| Self { pkg })
     }

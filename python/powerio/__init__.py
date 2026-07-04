@@ -775,9 +775,17 @@ class Package:
         """
         return _json.loads(self._inner.operating_points_json())
 
+    def study(self) -> Any:
+        """The study block as Python data, or ``None``."""
+        return _json.loads(self._inner.study_json())
+
     def materialize_operating_point(self, index: int) -> "Package":
         """Materialize one operating point into a new static package."""
         return Package(self._inner.materialize_operating_point(index))
+
+    def materialize_study_commit(self, index: int) -> "Package":
+        """Materialize one study commit into a new static package."""
+        return Package(self._inner.materialize_study_commit(index))
 
     def validate(self) -> None:
         """Run the package semantic validation profile in place."""

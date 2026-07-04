@@ -17,6 +17,7 @@ the :class:`~powerio.Conversion` warnings instead of dropping it silently.
 
 from __future__ import annotations
 
+import json as _json
 from typing import Any, Optional
 
 from . import Conversion, _powerio
@@ -96,6 +97,10 @@ class DistNetwork:
         """Serialize to ``to`` from the typed model, bypassing source echo."""
         text, warnings = self._inner.to_canonical_format(to)
         return Conversion(text, warnings)
+
+    def graph(self) -> Any:
+        """Collapsed bus and terminal graph as Python data."""
+        return _json.loads(self._inner.graph_json())
 
     def __repr__(self) -> str:
         return self._inner.__repr__()

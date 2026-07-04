@@ -56,6 +56,42 @@ def test_package_operating_points_and_materialize():
     assert sum(dense.demand.pd) == pytest.approx(30.0)
 
 
+def test_package_study_and_materialize_commit():
+    import json
+
+    pkg = pio.Package.from_file(DATA / "case9.m")
+    doc = json.loads(pkg.to_json())
+    doc["study"] = {
+        "label": "binding study",
+        "commits": [
+            {
+                "label": "load step",
+                "edits": [
+                    {
+                        "kind": "demand_delta",
+                        "bus": {"table": "buses", "source_uid": "buses:0"},
+                        "p_mw": 7.0,
+                        "q_mvar": 3.0,
+                    }
+                ],
+            }
+        ],
+    }
+    pkg = pio.Package.from_json(json.dumps(doc))
+
+    assert pkg.study()["label"] == "binding study"
+    static_pkg = pkg.materialize_study_commit(0)
+    assert static_pkg.study() is None
+    assert static_pkg.operating_points() is None
+    loads = static_pkg.as_balanced().loads
+    assert any(
+        load["uid"] == "study:load:buses:0"
+        and load["p"] == pytest.approx(7.0)
+        and load["q"] == pytest.approx(3.0)
+        for load in loads
+    )
+
+
 def test_package_without_operating_points():
     pkg = pio.Package.from_file(DATA / "case9.m")
     assert pkg.operating_points() is None
