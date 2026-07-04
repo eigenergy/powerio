@@ -7,8 +7,8 @@ use std::sync::Arc;
 use powerio_dist::dss::{parse_dss_file, parse_dss_str};
 use powerio_dist::{
     Configuration, DiagnosticSeverity, DiagnosticStage, DistBus, DistLineCode, DistNetwork,
-    DistTransformer, Winding, WindingConn, parse_bmopf_file, parse_bmopf_str, parse_pmd_str,
-    write_bmopf_json, write_dss,
+    DistTransformer, Extras, VoltageSource, Winding, WindingConn, parse_bmopf_file,
+    parse_bmopf_str, parse_pmd_str, write_bmopf_json, write_dss,
 };
 
 fn fixture(rel: &str) -> PathBuf {
@@ -768,6 +768,201 @@ fn voltage_source_cost_round_trips_as_extra() {
         "{:?}",
         out.warnings
     );
+}
+
+fn single_phase_source(name: &str, phase: &str, angle: f64, extras: Extras) -> VoltageSource {
+    let mut source = VoltageSource::new(
+        name,
+        "sourcebus",
+        vec![phase.into(), "4".into()],
+        vec![7200.0, 0.0],
+        vec![angle, 0.0],
+    );
+    source.extras = extras;
+    source
+}
+
+fn split_source_network(sources: Vec<VoltageSource>) -> DistNetwork {
+    let mut bus = DistBus::new(
+        "sourcebus",
+        vec!["1".into(), "2".into(), "3".into(), "4".into()],
+    );
+    bus.grounded = vec!["4".into()];
+    let mut net = DistNetwork::default();
+    net.name = Some("split".into());
+    net.buses = vec![bus];
+    net.sources = sources;
+    net
+}
+
+#[test]
+fn opendss_split_voltage_sources_merge_in_bmopf() {
+    let third = 2.0 * std::f64::consts::FRAC_PI_3;
+    let net = parse_dss_str(
+        "Clear\n\
+         New Circuit.split phases=1 basekv=7.2 pu=1.0 angle=0 bus1=SourceBus.1\n\
+         New Vsource.phb phases=1 basekv=7.2 pu=1.0 angle=-120 bus1=sourcebus.2\n\
+         New Vsource.phc phases=1 basekv=7.2 pu=1.0 angle=120 bus1=SOURCEBUS.3\n",
+    );
+    assert_eq!(net.sources.len(), 3);
+
+    let out = write_bmopf_json(&net);
+    assert_eq!(errors(&schema_validator(), &out.text), Vec::<String>::new());
+    assert!(
+        out.warnings
+            .iter()
+            .all(|w| !w.contains("expects exactly one source")),
+        "{:?}",
+        out.warnings
+    );
+    assert!(
+        out.warnings
+            .iter()
+            .any(|w| w.contains("voltage source phb: `angle`")),
+        "{:?}",
+        out.warnings
+    );
+    assert!(
+        out.warnings
+            .iter()
+            .any(|w| w.contains("voltage source phc: `basekv`")),
+        "{:?}",
+        out.warnings
+    );
+    let doc: serde_json::Value = serde_json::from_str(&out.text).unwrap();
+    assert!(doc["bus"].get("SourceBus").is_some(), "{}", out.text);
+    let sources = doc["voltage_source"].as_object().unwrap();
+    assert_eq!(sources.len(), 1, "{sources:?}");
+    let source = &sources["source"];
+    assert_eq!(source["bus"], serde_json::json!("SourceBus"));
+    assert_eq!(
+        source["terminal_map"],
+        serde_json::json!(["1", "2", "3", "4"])
+    );
+    assert_eq!(
+        source["v_magnitude"],
+        serde_json::json!([7200.0, 7200.0, 7200.0, 0.0])
+    );
+    let angles = source["v_angle"].as_array().unwrap();
+    assert_eq!(angles.len(), 4);
+    for (actual, expected) in angles.iter().zip([0.0, -third, third, 0.0]) {
+        let actual = actual.as_f64().unwrap();
+        assert!(
+            (actual - expected).abs() < 1e-12,
+            "v_angle entry = {actual}, expected {expected}"
+        );
+    }
+}
+
+#[test]
+fn two_phase_split_voltage_sources_merge_in_bmopf() {
+    let third = 2.0 * std::f64::consts::FRAC_PI_3;
+    let net = parse_dss_str(
+        "Clear\n\
+         New Circuit.split phases=1 basekv=7.2 pu=1.0 angle=0 bus1=sourcebus.1\n\
+         New Vsource.phb phases=1 basekv=7.2 pu=1.0 angle=-120 bus1=sourcebus.2\n",
+    );
+    assert_eq!(net.sources.len(), 2);
+
+    let out = write_bmopf_json(&net);
+    assert_eq!(errors(&schema_validator(), &out.text), Vec::<String>::new());
+    assert!(
+        out.warnings
+            .iter()
+            .all(|w| !w.contains("expects exactly one source")),
+        "{:?}",
+        out.warnings
+    );
+    let doc: serde_json::Value = serde_json::from_str(&out.text).unwrap();
+    let sources = doc["voltage_source"].as_object().unwrap();
+    assert_eq!(sources.len(), 1, "{sources:?}");
+    let source = &sources["source"];
+    assert_eq!(source["terminal_map"], serde_json::json!(["1", "2", "4"]));
+    assert_eq!(
+        source["v_magnitude"],
+        serde_json::json!([7200.0, 7200.0, 0.0])
+    );
+    let angles = source["v_angle"].as_array().unwrap();
+    assert_eq!(angles.len(), 3);
+    for (actual, expected) in angles.iter().zip([0.0, -third, 0.0]) {
+        let actual = actual.as_f64().unwrap();
+        assert!(
+            (actual - expected).abs() < 1e-12,
+            "v_angle entry = {actual}, expected {expected}"
+        );
+    }
+}
+
+#[test]
+fn split_voltage_source_merge_declines_ambiguous_banks() {
+    let third = 2.0 * std::f64::consts::FRAC_PI_3;
+    let cases = [
+        (
+            "quadrature",
+            vec![
+                single_phase_source("source", "1", 0.0, Extras::new()),
+                single_phase_source("phb", "2", std::f64::consts::FRAC_PI_2, Extras::new()),
+            ],
+        ),
+        (
+            "anti phase",
+            vec![
+                single_phase_source("source", "1", 0.0, Extras::new()),
+                single_phase_source("phb", "2", std::f64::consts::PI, Extras::new()),
+            ],
+        ),
+        (
+            "incoherent",
+            vec![
+                single_phase_source("source", "1", 0.0, Extras::new()),
+                single_phase_source("phb", "2", -third, Extras::new()),
+                single_phase_source("phc", "3", 0.25, Extras::new()),
+            ],
+        ),
+        (
+            "phase conflict",
+            vec![
+                single_phase_source("source", "1", 0.0, Extras::new()),
+                single_phase_source("other", "1", -third, Extras::new()),
+            ],
+        ),
+        ("bounded", {
+            let mut extras = Extras::new();
+            extras.insert("p_min".into(), serde_json::json!([-1.0]));
+            vec![
+                single_phase_source("source", "1", 0.0, extras),
+                single_phase_source("phb", "2", -third, Extras::new()),
+                single_phase_source("phc", "3", third, Extras::new()),
+            ]
+        }),
+        ("priced", {
+            let mut extras = Extras::new();
+            extras.insert("cost".into(), serde_json::json!([1.0]));
+            vec![
+                single_phase_source("source", "1", 0.0, extras),
+                single_phase_source("phb", "2", -third, Extras::new()),
+                single_phase_source("phc", "3", third, Extras::new()),
+            ]
+        }),
+    ];
+
+    for (case, sources) in cases {
+        let source_count = sources.len();
+        let out = write_bmopf_json(&split_source_network(sources));
+        if case != "priced" {
+            assert_eq!(errors(&schema_validator(), &out.text), Vec::<String>::new());
+        }
+        let doc: serde_json::Value = serde_json::from_str(&out.text).unwrap();
+        let emitted = doc["voltage_source"].as_object().unwrap();
+        assert_eq!(emitted.len(), source_count, "{case}: {emitted:?}");
+        assert!(
+            out.warnings
+                .iter()
+                .any(|w| w.contains("expects exactly one source")),
+            "{case}: {:?}",
+            out.warnings
+        );
+    }
 }
 
 #[test]

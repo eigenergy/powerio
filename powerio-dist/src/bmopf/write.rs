@@ -7,6 +7,7 @@
 //! naming the element and field.
 
 use std::collections::{BTreeMap, BTreeSet};
+use std::f64::consts::{FRAC_PI_2, PI, TAU};
 
 use serde_json::{Map, Value, json};
 
@@ -15,8 +16,8 @@ use crate::diagnostics::{DiagnosticSeverity, DiagnosticStage, StructuredDiagnost
 use crate::model::{
     ActivePowerReference, ActivePowerUnit, Configuration, ControlVoltageReference,
     DistControlProfile, DistGenerator, DistIbr, DistLoadVoltageModel, DistNetwork, DistTransformer,
-    Mat, ReactivePowerReference, ReactivePowerUnit, VoltVarControl, VoltWattControl, Winding,
-    WindingConn, n_winding_impedance_base, pair_keys,
+    Extras, Mat, ReactivePowerReference, ReactivePowerUnit, VoltVarControl, VoltWattControl,
+    VoltageSource, Winding, WindingConn, n_winding_impedance_base, pair_keys,
 };
 
 /// The `$schema` stamped into every document's `meta`: the current BMOPF
@@ -476,17 +477,18 @@ impl Writer {
             }
             doc.insert("shunt".into(), Value::Object(shunts));
         }
+        let emitted_sources = bmopf_voltage_sources(net);
         let mut sources = Map::new();
-        if net.sources.is_empty() {
+        if emitted_sources.is_empty() {
             self.warn("network has no voltage source; BMOPF requires exactly one");
         }
-        for (i, vs) in net.sources.iter().enumerate() {
+        for (i, vs) in emitted_sources.iter().enumerate() {
             if i > 0 {
                 self.warn(format!(
                     "voltage source {}: the BMOPF formulation expects exactly one source; \
                      this network has {}",
                     vs.name,
-                    net.sources.len()
+                    emitted_sources.len()
                 ));
             }
             let mut o = Map::new();
@@ -498,13 +500,16 @@ impl Writer {
                 "v_angle".into(),
                 self.nums(&vs.v_angle, "voltage_source v_angle"),
             );
-            o.insert("bus".into(), json!(vs.bus));
-            o.insert("terminal_map".into(), json!(vs.terminal_map));
+            o.insert("bus".into(), json!(&vs.bus));
+            o.insert("terminal_map".into(), json!(&vs.terminal_map));
             let mut extras = vs.extras.clone();
             if let Some(cost) = extras.remove("cost") {
                 o.insert("cost".into(), cost);
             }
             self.extras_dropped(&extras, &format!("voltage source {}", vs.name));
+            for (name, extras) in &vs.dropped_extras {
+                self.extras_dropped(extras, &format!("voltage source {name}"));
+            }
             sources.insert(vs.name.clone(), Value::Object(o));
         }
         doc.insert("voltage_source".into(), Value::Object(sources));
@@ -1681,6 +1686,252 @@ fn prune_string_array(
         ));
     }
     *values = kept;
+}
+
+#[derive(Clone)]
+struct SourceEmit {
+    name: String,
+    bus: String,
+    terminal_map: Vec<String>,
+    v_magnitude: Vec<f64>,
+    v_angle: Vec<f64>,
+    extras: Extras,
+    dropped_extras: Vec<(String, Extras)>,
+}
+
+impl From<&VoltageSource> for SourceEmit {
+    fn from(source: &VoltageSource) -> Self {
+        Self {
+            name: source.name.clone(),
+            bus: source.bus.clone(),
+            terminal_map: source.terminal_map.clone(),
+            v_magnitude: source.v_magnitude.clone(),
+            v_angle: source.v_angle.clone(),
+            extras: source.extras.clone(),
+            dropped_extras: Vec::new(),
+        }
+    }
+}
+
+#[derive(Clone)]
+struct PhaseSource {
+    label: String,
+    magnitude: f64,
+    angle: f64,
+    neutral: Option<String>,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum PhaseArrangement {
+    Zero,
+    Quadrature,
+    Positive,
+    Negative,
+    AntiPhase,
+    Incoherent,
+}
+
+fn bmopf_voltage_sources(net: &DistNetwork) -> Vec<SourceEmit> {
+    let emitted: Vec<SourceEmit> = net.sources.iter().map(SourceEmit::from).collect();
+    let bus_ids: BTreeMap<String, String> = net
+        .buses
+        .iter()
+        .map(|bus| (bus.id.to_ascii_lowercase(), bus.id.clone()))
+        .collect();
+    let mut by_bus: BTreeMap<String, Vec<usize>> = BTreeMap::new();
+    for (i, source) in emitted.iter().enumerate() {
+        by_bus
+            .entry(source.bus.to_ascii_lowercase())
+            .or_default()
+            .push(i);
+    }
+
+    let mut replacements = BTreeMap::new();
+    let mut removed = BTreeSet::new();
+    for (bus_key, indices) in by_bus.iter().filter(|(_, indices)| indices.len() > 1) {
+        if let Some((keep, merged)) =
+            merge_voltage_source_group(&emitted, indices, bus_ids.get(bus_key))
+        {
+            replacements.insert(keep, merged);
+            removed.extend(indices.iter().copied().filter(|i| *i != keep));
+        }
+    }
+
+    emitted
+        .into_iter()
+        .enumerate()
+        .filter_map(|(i, source)| {
+            if removed.contains(&i) {
+                None
+            } else {
+                Some(replacements.remove(&i).unwrap_or(source))
+            }
+        })
+        .collect()
+}
+
+fn merge_voltage_source_group(
+    sources: &[SourceEmit],
+    indices: &[usize],
+    bus_id: Option<&String>,
+) -> Option<(usize, SourceEmit)> {
+    let mut sorted = indices.to_vec();
+    sorted.sort_by(|a, b| sources[*a].name.cmp(&sources[*b].name));
+
+    let mut phases = Vec::new();
+    let mut seen = BTreeSet::new();
+    for index in &sorted {
+        let source = &sources[*index];
+        if source_has_bounds_or_cost(&source.extras) {
+            return None;
+        }
+        let (rank, phase) = single_phase_source(source)?;
+        if !seen.insert(rank) {
+            return None;
+        }
+        phases.push((rank, phase));
+    }
+
+    if phases.len() < 2 {
+        return None;
+    }
+    phases.sort_by_key(|(rank, _)| *rank);
+
+    let neutral = phases.first()?.1.neutral.clone();
+    if phases.iter().any(|(_, phase)| phase.neutral != neutral) {
+        return None;
+    }
+
+    match phase_arrangement(phases.iter().map(|(_, phase)| phase.angle)) {
+        PhaseArrangement::Zero | PhaseArrangement::Positive | PhaseArrangement::Negative => {}
+        PhaseArrangement::Quadrature
+        | PhaseArrangement::AntiPhase
+        | PhaseArrangement::Incoherent => {
+            return None;
+        }
+    }
+
+    let keep = sorted
+        .iter()
+        .copied()
+        .find(|i| sources[*i].name == "source")
+        .unwrap_or(sorted[0]);
+    let mut merged = sources[keep].clone();
+    if let Some(bus_id) = bus_id {
+        merged.bus.clone_from(bus_id);
+    }
+    merged.terminal_map = phases
+        .iter()
+        .map(|(_, phase)| phase.label.clone())
+        .collect();
+    merged.v_magnitude = phases.iter().map(|(_, phase)| phase.magnitude).collect();
+    merged.v_angle = phases.iter().map(|(_, phase)| phase.angle).collect();
+    if let Some(neutral) = neutral {
+        merged.terminal_map.push(neutral);
+        merged.v_magnitude.push(0.0);
+        merged.v_angle.push(0.0);
+    }
+    merged.dropped_extras = sorted
+        .iter()
+        .copied()
+        .filter(|i| *i != keep)
+        .map(|i| (sources[i].name.clone(), sources[i].extras.clone()))
+        .collect();
+    Some((keep, merged))
+}
+
+fn source_has_bounds_or_cost(extras: &Extras) -> bool {
+    ["p_min", "p_max", "q_min", "q_max", "cost"]
+        .iter()
+        .any(|key| extras.contains_key(*key))
+}
+
+fn single_phase_source(source: &SourceEmit) -> Option<(usize, PhaseSource)> {
+    let mut phase = None;
+    let mut neutral = None;
+    for (i, label) in source.terminal_map.iter().enumerate() {
+        if let Some(rank) = phase_rank(label) {
+            if phase.replace((rank, label.clone(), i)).is_some() {
+                return None;
+            }
+        } else if neutral.replace(label.clone()).is_some() {
+            return None;
+        }
+    }
+    let (rank, label, index) = phase?;
+    Some((
+        rank,
+        PhaseSource {
+            label,
+            magnitude: *source.v_magnitude.get(index)?,
+            angle: *source.v_angle.get(index)?,
+            neutral,
+        },
+    ))
+}
+
+fn phase_rank(label: &str) -> Option<usize> {
+    match label {
+        "1" | "a" | "A" => Some(0),
+        "2" | "b" | "B" => Some(1),
+        "3" | "c" | "C" => Some(2),
+        _ => None,
+    }
+}
+
+fn phase_arrangement(angles: impl IntoIterator<Item = f64>) -> PhaseArrangement {
+    let angles: Vec<f64> = angles.into_iter().collect();
+    if angles.len() < 2 {
+        return PhaseArrangement::Incoherent;
+    }
+    if angles.len() == 2 {
+        return separation_of_diff(angles[0] - angles[1]);
+    }
+    let mut arrangement = None;
+    for i in 0..angles.len() {
+        let next = (i + 1) % angles.len();
+        let current = separation_of_diff(angles[i] - angles[next]);
+        if current == PhaseArrangement::Incoherent {
+            return PhaseArrangement::Incoherent;
+        }
+        if let Some(previous) = arrangement {
+            if previous != current {
+                return PhaseArrangement::Incoherent;
+            }
+        } else {
+            arrangement = Some(current);
+        }
+    }
+    arrangement.unwrap_or(PhaseArrangement::Incoherent)
+}
+
+fn separation_of_diff(diff: f64) -> PhaseArrangement {
+    let diff = wrap_pi(diff);
+    let adiff = diff.abs();
+    if adiff <= PI / 6.0 {
+        PhaseArrangement::Zero
+    } else if (adiff - FRAC_PI_2).abs() <= PI / 12.0 {
+        PhaseArrangement::Quadrature
+    } else if (adiff - TAU / 3.0).abs() <= PI / 6.0 {
+        if diff > 0.0 {
+            PhaseArrangement::Positive
+        } else {
+            PhaseArrangement::Negative
+        }
+    } else if (adiff - PI).abs() <= PI / 12.0 {
+        PhaseArrangement::AntiPhase
+    } else {
+        PhaseArrangement::Incoherent
+    }
+}
+
+fn wrap_pi(angle: f64) -> f64 {
+    let wrapped = (angle + PI).rem_euclid(TAU) - PI;
+    if (wrapped + PI).abs() < f64::EPSILON {
+        PI
+    } else {
+        wrapped
+    }
 }
 
 enum Kind {
