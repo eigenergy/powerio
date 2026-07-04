@@ -463,7 +463,7 @@ fn per_period_metadata(obj: &Map<String, Value>, index: usize) -> BTreeMap<Strin
     metadata
 }
 
-fn json_error(message: impl Into<String>) -> serde_json::Error {
+pub(crate) fn json_error(message: impl Into<String>) -> serde_json::Error {
     <serde_json::Error as serde::de::Error>::custom(message.into())
 }
 
@@ -551,7 +551,7 @@ pub(crate) fn check_series_identities(
     findings
 }
 
-fn payload_key(model: &ModelPayload) -> &'static str {
+pub(crate) fn payload_key(model: &ModelPayload) -> &'static str {
     match model {
         ModelPayload::Balanced { .. } => "balanced_network",
         ModelPayload::Multiconductor { .. } => "multiconductor_network",
@@ -559,7 +559,7 @@ fn payload_key(model: &ModelPayload) -> &'static str {
 }
 
 /// The uid -> row index for one payload table.
-struct IdentityIndex {
+pub(crate) struct IdentityIndex {
     by_uid: HashMap<String, usize>,
     /// Uids on more than one row; resolving through one is ambiguous.
     duplicates: BTreeSet<String>,
@@ -591,7 +591,7 @@ fn table_identity_index(table: &[Value]) -> IdentityIndex {
 /// Resolve one update to its payload row, first rejecting any update that would
 /// rewrite `uid`. Identity is immutable: letting a field write change it would
 /// invalidate the per table indexes mid application.
-fn resolve_update(
+pub(crate) fn resolve_update(
     payload: &Map<String, Value>,
     indexes: &mut HashMap<String, IdentityIndex>,
     update: &ElementUpdate,
@@ -609,7 +609,7 @@ fn resolve_update(
 /// uid bearing table is authoritative and a present wire `row` must agree with
 /// it; an unknown or duplicated uid in such a table is an error; a table without
 /// uids falls back to the wire row.
-fn resolve_update_row(
+pub(crate) fn resolve_update_row(
     payload: &Map<String, Value>,
     indexes: &mut HashMap<String, IdentityIndex>,
     element: &ElementRef,
@@ -666,7 +666,7 @@ fn resolve_update_row(
     Ok(resolved)
 }
 
-fn apply_update_fields(
+pub(crate) fn apply_update_fields(
     payload: &mut serde_json::Map<String, Value>,
     table_name: &str,
     row: usize,
@@ -688,7 +688,7 @@ fn apply_update_fields(
     Ok(())
 }
 
-fn validate_update_fields_survived(
+pub(crate) fn validate_update_fields_survived(
     model: &ModelPayload,
     updates: &[ElementUpdate],
     resolved_rows: &[usize],

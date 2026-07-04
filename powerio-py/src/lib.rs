@@ -36,8 +36,7 @@ use powerio_matrix::{
     POWER_MODELS_ANGLE_BOUND_PAD, PwdDisplay, WriteOptions,
 };
 use powerio_pkg::{
-    DiagnosticSeverity, DiagnosticStage, NetworkPackage, Origin, SourceDescriptor,
-    StructuredDiagnostic, ValidationSummary,
+    DiagnosticSeverity, NetworkPackage, Origin, READ_TRANSMISSION_PARSE_WARNING, SourceDescriptor,
 };
 
 #[cfg(feature = "gridfm")]
@@ -284,18 +283,6 @@ fn package_to_dist_py(pkg: &NetworkPackage) -> PyResult<PyDistNetwork> {
     Ok(PyDistNetwork { net })
 }
 
-fn add_package_read_warning_diagnostics(pkg: &mut NetworkPackage, code: &str, warnings: &[String]) {
-    pkg.diagnostics.extend(warnings.iter().map(|w| {
-        StructuredDiagnostic::new(
-            code,
-            DiagnosticSeverity::Warning,
-            DiagnosticStage::Read,
-            w.clone(),
-        )
-    }));
-    pkg.validation = ValidationSummary::from_diagnostics(&pkg.diagnostics);
-}
-
 #[derive(Clone, Copy)]
 enum PackageSourceKind {
     File,
@@ -429,11 +416,10 @@ fn build_package_from_path(
         {
             let read = gridfm_read_dataset(input.to_string_lossy().as_ref(), scenario)
                 .map_err(to_pyerr)?;
-            let mut pkg = NetworkPackage::from_balanced(read.network);
-            add_package_read_warning_diagnostics(
-                &mut pkg,
-                "READ.GRIDFM.FIDELITY_WARNING",
-                &read.warnings,
+            let mut pkg = NetworkPackage::from_balanced_with_read_warnings(
+                read.network,
+                powerio_pkg::READ_GRIDFM_FIDELITY_WARNING,
+                read.warnings,
             );
             set_package_source(&mut pkg, input, PackageSourceKind::Folder, "gridfm", false);
             pkg.run_sane_validation();
@@ -473,12 +459,7 @@ fn build_package_from_path(
     let parsed = powerio_matrix::parse_file(input, from_).map_err(to_pyerr)?;
     let format = parsed.network.source_format.name();
     let retained_source = parsed.network.source.is_some();
-    let mut pkg = NetworkPackage::from_balanced(parsed.network);
-    add_package_read_warning_diagnostics(
-        &mut pkg,
-        "READ.TRANSMISSION.PARSE_WARNING",
-        &parsed.warnings,
-    );
+    let mut pkg = NetworkPackage::from_parsed_balanced(parsed);
     set_package_source(
         &mut pkg,
         input,
@@ -527,12 +508,7 @@ fn build_package_from_str(text: &str, from_: Option<&str>) -> PyResult<NetworkPa
 
     let parsed = powerio_matrix::parse_str(text, source_format.as_deref().unwrap_or("matpower"))
         .map_err(to_pyerr)?;
-    let mut pkg = NetworkPackage::from_balanced(parsed.network);
-    add_package_read_warning_diagnostics(
-        &mut pkg,
-        "READ.TRANSMISSION.PARSE_WARNING",
-        &parsed.warnings,
-    );
+    let mut pkg = NetworkPackage::from_parsed_balanced(parsed);
     pkg.run_sane_validation();
     Ok(pkg)
 }
@@ -1460,7 +1436,11 @@ impl PyPackage {
         network: PyRef<'_, PyNetwork>,
         include_solver_metadata: bool,
     ) -> PyResult<Self> {
-        let mut pkg = NetworkPackage::from_balanced(network.inner.clone());
+        let mut pkg = NetworkPackage::from_balanced_with_read_warnings(
+            network.inner.clone(),
+            READ_TRANSMISSION_PARSE_WARNING,
+            network.warnings.clone(),
+        );
         if include_solver_metadata {
             pkg.attach_normalized_solver_table_metadata()
                 .map_err(to_pyerr)?;

@@ -1376,7 +1376,11 @@ pub unsafe extern "C" fn pio_package_from_balanced_network(
             "panic while packaging balanced network",
             || {
                 let net = network_ref(net).ok_or_else(|| "network handle is NULL".to_string())?;
-                let mut package = powerio_pkg::NetworkPackage::from_balanced(net.net.clone());
+                let mut package = powerio_pkg::NetworkPackage::from_balanced_with_read_warnings(
+                    net.net.clone(),
+                    powerio_pkg::READ_TRANSMISSION_PARSE_WARNING,
+                    net.warnings.clone(),
+                );
                 if include_solver_metadata != 0 {
                     package
                         .attach_normalized_solver_table_metadata()

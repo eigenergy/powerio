@@ -1,7 +1,8 @@
 # The study block
 
-> **Status: design.** Nothing in this chapter ships in 0.5.x. The tracking
-> issues are linked at the end.
+> **Status: Rust package surface.** The `.pio.json` block, validation, uid
+> stamping, and materialization APIs ship in the Rust package crate. CLI,
+> Python, Julia, and C binding surfaces are tracked by #185.
 
 Interactive tools hold a base case plus an ordered log of edits, and replay the
 log to reconstruct the current operating point. tellegen's `Study` works this
@@ -114,12 +115,10 @@ display concern.
 
 ## API surface
 
-- `NetworkPackage::study()`, `with_study`, `clear_study`,
-  `materialize_study_commit(k)`;
-- `powerio study materialize --commit k --to <format>` in the CLI;
-- C ABI: `pio_package_study_json` and `pio_package_materialize_study_commit`,
-  additive symbols beside the operating point calls, no ABI bump.
+- `NetworkPackage::study()`, `with_study`, `set_study`, `clear_study`,
+  `materialize_study_commit(k)`, `materialize_balanced_study_commit(k)`;
+- `ensure_payload_uids(&mut Network)` for deterministic payload row identity.
 
 Tracking issues: [#181](https://github.com/eigenergy/powerio/issues/181)
 (block, materialization, uid contract),
-[#185](https://github.com/eigenergy/powerio/issues/185) (bindings).
+[#185](https://github.com/eigenergy/powerio/issues/185) (bindings and CLI).

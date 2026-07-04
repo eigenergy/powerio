@@ -17,10 +17,7 @@ use powerio_matrix::opf_pipeline::{DcOpfOptions, write_dcopf_bundle};
 use powerio_matrix::pipeline::{MatrixKind, Pipeline, RhsKind};
 use powerio_matrix::synth::{SynthSpec, Topology};
 use powerio_matrix::{MissingGenCostPolicy, WriteOptions};
-use powerio_pkg::{
-    DiagnosticSeverity, DiagnosticStage, NetworkPackage, Origin, SourceDescriptor,
-    StructuredDiagnostic, ValidationSummary,
-};
+use powerio_pkg::{NetworkPackage, Origin, READ_GRIDFM_FIDELITY_WARNING, SourceDescriptor};
 use serde_json::json;
 mod tui;
 
@@ -984,8 +981,11 @@ fn build_package(
     if from == Some(FormatArg::Gridfm) || (from.is_none() && looks_like_gridfm_dir(input)) {
         let read = powerio_matrix::read_gridfm_dataset(input, scenario)
             .with_context(|| format!("reading gridfm dataset {}", input.display()))?;
-        let mut pkg = NetworkPackage::from_balanced(read.network);
-        add_read_warning_diagnostics(&mut pkg, "READ.GRIDFM.FIDELITY_WARNING", &read.warnings);
+        let mut pkg = NetworkPackage::from_balanced_with_read_warnings(
+            read.network,
+            READ_GRIDFM_FIDELITY_WARNING,
+            read.warnings,
+        );
         set_package_source(&mut pkg, input, PackageSourceKind::Folder, "gridfm", false);
         pkg.run_sane_validation();
         return Ok(pkg);
@@ -1018,12 +1018,7 @@ fn build_package(
         .with_context(|| format!("reading {}", input.display()))?;
     let format = parsed.network.source_format.name();
     let retained_source = parsed.network.source.is_some();
-    let mut pkg = NetworkPackage::from_balanced(parsed.network);
-    add_read_warning_diagnostics(
-        &mut pkg,
-        "READ.TRANSMISSION.PARSE_WARNING",
-        &parsed.warnings,
-    );
+    let mut pkg = NetworkPackage::from_parsed_balanced(parsed);
     set_package_source(
         &mut pkg,
         input,
@@ -1033,18 +1028,6 @@ fn build_package(
     );
     pkg.run_sane_validation();
     Ok(pkg)
-}
-
-fn add_read_warning_diagnostics(pkg: &mut NetworkPackage, code: &str, warnings: &[String]) {
-    pkg.diagnostics.extend(warnings.iter().map(|w| {
-        StructuredDiagnostic::new(
-            code,
-            DiagnosticSeverity::Warning,
-            DiagnosticStage::Read,
-            w.clone(),
-        )
-    }));
-    pkg.validation = ValidationSummary::from_diagnostics(&pkg.diagnostics);
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

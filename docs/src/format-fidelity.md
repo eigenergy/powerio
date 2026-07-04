@@ -105,6 +105,10 @@ Write side losses are reported in `Conversion::warnings`; the pandapower and
 PyPSA readers itemize what they ignore in `Parsed::warnings` (`read_warnings`
 in Python), naming the table and counting the affected rows.
 `convert_file`/`convert_str` fold the read warnings into `Conversion::warnings`.
+Package builders lift balanced reader warnings into structured diagnostics with
+code `READ.TRANSMISSION.PARSE_WARNING`. GridFM package reads use
+`READ.GRIDFM.FIDELITY_WARNING`; distribution packages already carry
+`READ.DIST.PARSE_WARNING`.
 
 - **PSS/E** reads revisions 33, 34, and 35. 3-winding transformers are kept as
   typed records and star-lowered into \\(Y_{\mathrm{bus}}\\)/connectivity by the indexed view;

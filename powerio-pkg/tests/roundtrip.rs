@@ -8,8 +8,9 @@ use powerio_pkg::{
     NetworkPackage, OperatingPoint, OperatingPointSeries, Origin, PIO_PACKAGE_SCHEMA_URL,
     PIO_PACKAGE_SCHEMA_VERSION, PIO_PAYLOAD_BALANCED_SCHEMA_URL,
     PIO_PAYLOAD_BALANCED_SCHEMA_VERSION, PIO_PAYLOAD_MULTICONDUCTOR_SCHEMA_URL,
-    SequenceTransformConvention, SourceDescriptor, SourceMapEntry, SourceRef, StructuredDiagnostic,
-    TimeAxis, ValidationStatus, check_multiconductor_to_balanced_lowering,
+    READ_TRANSMISSION_PARSE_WARNING, SequenceTransformConvention, SourceDescriptor, SourceMapEntry,
+    SourceRef, StructuredDiagnostic, StudyBlock, StudyCommit, StudyEdit, TimeAxis,
+    ValidationStatus, check_multiconductor_to_balanced_lowering, ensure_payload_uids,
     lower_multiconductor_to_balanced,
 };
 
@@ -143,6 +144,18 @@ fn sample_operating_points() -> OperatingPointSeries {
         "source".to_owned(),
         serde_json::json!("unit-test"),
     )]))
+}
+
+fn study_commit(edits: Vec<StudyEdit>) -> StudyCommit {
+    let mut commit = StudyCommit::default();
+    commit.edits = edits;
+    commit
+}
+
+fn study_block(commits: Vec<StudyCommit>) -> StudyBlock {
+    let mut study = StudyBlock::default();
+    study.commits = commits;
+    study
 }
 
 fn strings(values: &[&str]) -> Vec<String> {
@@ -1963,4 +1976,263 @@ fn goc3_updates_resolve_by_identity_not_row_order() {
         .materialize_operating_point(0)
         .expect_err("unknown uid must fail");
     assert!(err.to_string().contains("unknown identity"), "{err}");
+}
+
+#[test]
+fn package_balanced_reader_warnings_become_diagnostics() {
+    let parsed = powerio::parse_str(MATPOWER_SRC, "matpower").expect("parse matpower");
+    let mut pkg = NetworkPackage::from_balanced_with_read_warnings(
+        parsed.network,
+        READ_TRANSMISSION_PARSE_WARNING,
+        vec!["ignored source table".to_owned()],
+    );
+
+    assert!(pkg.diagnostics.iter().any(|d| {
+        d.code.as_str() == READ_TRANSMISSION_PARSE_WARNING
+            && d.severity == DiagnosticSeverity::Warning
+            && d.stage == DiagnosticStage::Read
+            && d.message == "ignored source table"
+    }));
+
+    pkg.run_sane_validation();
+    assert!(
+        pkg.diagnostics
+            .iter()
+            .any(|d| d.code.as_str() == READ_TRANSMISSION_PARSE_WARNING),
+        "reader warning diagnostic was dropped by validation"
+    );
+}
+
+#[test]
+fn ensure_payload_uids_is_public_and_deterministic() {
+    let mut net = powerio::parse_str(MATPOWER_WITH_GEN_SRC, "matpower")
+        .expect("parse matpower")
+        .network;
+    net.buses[0].uid = Some("source-bus".to_owned());
+    net.loads[0].uid = Some("source-load".to_owned());
+
+    ensure_payload_uids(&mut net);
+    let first = serde_json::to_value(&net).expect("serialize network with uids");
+    ensure_payload_uids(&mut net);
+    let second = serde_json::to_value(&net).expect("serialize network with uids again");
+
+    assert_eq!(first, second);
+    assert_eq!(net.buses[0].uid.as_deref(), Some("source-bus"));
+    assert_eq!(net.buses[1].uid.as_deref(), Some("buses:1"));
+    assert_eq!(net.loads[0].uid.as_deref(), Some("source-load"));
+    assert_eq!(net.generators[0].uid.as_deref(), Some("generators:0"));
+}
+
+#[test]
+fn study_commit_materialization_folds_commits_and_set_fields() {
+    let study = study_block(vec![
+        study_commit(vec![
+            StudyEdit::DemandDelta {
+                bus: ElementRef::by_source_uid("buses", "buses:1"),
+                p_mw: 5.0,
+                q_mvar: None,
+            },
+            StudyEdit::RatingDelta {
+                branch: ElementRef::by_source_uid("branches", "branch_1"),
+                delta_mw: -10.0,
+            },
+        ]),
+        study_commit(vec![
+            StudyEdit::DemandDelta {
+                bus: ElementRef::by_source_uid("buses", "buses:1"),
+                p_mw: 5.0,
+                q_mvar: Some(1.0),
+            },
+            StudyEdit::SetFields {
+                update: ElementUpdate::new(
+                    ElementRef::by_source_uid("generators", "gen_1"),
+                    fields(&[("pg", serde_json::json!(55.0))]),
+                ),
+            },
+        ]),
+    ]);
+    let pkg = balanced_package_with_gen()
+        .with_package_id("parent")
+        .with_study(study);
+
+    let materialized = pkg.materialize_study_commit(1).expect("materialize study");
+    assert!(materialized.study.is_none());
+    assert!(materialized.operating_points.is_none());
+    assert!(matches!(materialized.origin, Origin::Derived { .. }));
+    assert!(
+        materialized
+            .lowering_history
+            .iter()
+            .any(|record| record.pass == "materialize-study-commit")
+    );
+
+    let net = materialized.as_balanced().expect("balanced output");
+    assert_close(net.loads[0].p, 20.0);
+    assert_close(net.loads[0].q, 8.5);
+    assert_close(net.branches[0].rate_a, 90.0);
+    assert_close(net.generators[0].pg, 55.0);
+}
+
+#[test]
+fn study_demand_delta_distributes_over_existing_loads() {
+    let mut net = powerio::parse_str(MATPOWER_WITH_GEN_SRC, "matpower")
+        .expect("parse matpower")
+        .network;
+    net.loads[0].uid = Some("load_1".to_owned());
+    let mut extra_load = powerio::Load::new(powerio::BusId(2), 30.0, 15.0);
+    extra_load.uid = Some("load_2".to_owned());
+    net.loads.push(extra_load);
+
+    let study = study_block(vec![study_commit(vec![StudyEdit::DemandDelta {
+        bus: ElementRef::by_source_uid("buses", "buses:1"),
+        p_mw: 8.0,
+        q_mvar: None,
+    }])]);
+    let materialized = NetworkPackage::from_balanced(net)
+        .with_study(study)
+        .materialize_study_commit(0)
+        .expect("materialize proportional demand delta");
+    let net = materialized.as_balanced().expect("balanced output");
+
+    assert_close(net.loads[0].p, 12.0);
+    assert_close(net.loads[0].q, 6.0);
+    assert_close(net.loads[1].p, 36.0);
+    assert_close(net.loads[1].q, 18.0);
+}
+
+#[test]
+fn study_demand_delta_appends_synthetic_load_for_empty_bus() {
+    let mut net = powerio::parse_str(MATPOWER_SRC, "matpower")
+        .expect("parse matpower")
+        .network;
+    net.loads.clear();
+    let study = study_block(vec![study_commit(vec![StudyEdit::DemandDelta {
+        bus: ElementRef::by_source_uid("buses", "buses:1"),
+        p_mw: 12.0,
+        q_mvar: Some(3.0),
+    }])]);
+
+    let materialized = NetworkPackage::from_balanced(net)
+        .with_study(study)
+        .materialize_study_commit(0)
+        .expect("materialize synthetic load");
+    let net = materialized.as_balanced().expect("balanced output");
+
+    assert_eq!(net.loads.len(), 1);
+    assert_eq!(net.loads[0].bus, powerio::BusId(2));
+    assert_close(net.loads[0].p, 12.0);
+    assert_close(net.loads[0].q, 3.0);
+    assert_eq!(net.loads[0].uid.as_deref(), Some("study:load:buses:1"));
+    assert_eq!(
+        net.loads[0]
+            .extras
+            .get("study")
+            .and_then(|v| v.get("synthetic"))
+            .and_then(serde_json::Value::as_bool),
+        Some(true)
+    );
+}
+
+#[test]
+fn study_uses_base_operating_point_before_commits() {
+    let mut study = study_block(vec![study_commit(vec![StudyEdit::DemandDelta {
+        bus: ElementRef::by_source_uid("buses", "buses:1"),
+        p_mw: 2.0,
+        q_mvar: Some(1.0),
+    }])]);
+    study.base_operating_point = Some(1);
+
+    let materialized = balanced_package_with_gen()
+        .with_operating_points(sample_operating_points())
+        .with_study(study)
+        .materialize_study_commit(0)
+        .expect("materialize study from operating point");
+    let net = materialized.as_balanced().expect("balanced output");
+
+    assert_close(net.loads[0].p, 24.0);
+    assert_close(net.loads[0].q, 10.0);
+    assert!(materialized.operating_points.is_none());
+    assert!(materialized.study.is_none());
+    assert_eq!(
+        materialized
+            .lowering_history
+            .iter()
+            .map(|record| record.pass.as_str())
+            .collect::<Vec<_>>(),
+        vec!["materialize-operating-point", "materialize-study-commit"]
+    );
+}
+
+#[test]
+fn study_unknown_edit_kind_roundtrips_and_refuses_materialization() {
+    let mut value = serde_json::to_value(balanced_package()).expect("serialize package");
+    value["study"] = serde_json::json!({
+        "commits": [
+            {
+                "edits": [
+                    {
+                        "kind": "solver_knob",
+                        "value": {"name": "shed", "enabled": false},
+                        "extra": [1, 2, 3]
+                    }
+                ]
+            }
+        ]
+    });
+
+    let pkg: NetworkPackage = serde_json::from_value(value.clone()).expect("parse package");
+    let round_trip = serde_json::to_value(&pkg).expect("serialize package again");
+    assert_eq!(round_trip["study"], value["study"]);
+
+    let err = pkg
+        .materialize_study_commit(0)
+        .expect_err("unknown study edit kind must fail");
+    assert!(err.to_string().contains("STUDY.UNKNOWN_EDIT_KIND"), "{err}");
+    assert!(err.to_string().contains("solver_knob"), "{err}");
+}
+
+#[test]
+fn study_set_fields_rejects_fields_not_in_typed_model() {
+    let study = study_block(vec![study_commit(vec![StudyEdit::SetFields {
+        update: ElementUpdate::new(
+            ElementRef::by_source_uid("loads", "load_1"),
+            fields(&[("ghost_field", serde_json::json!(1.0))]),
+        ),
+    }])]);
+
+    let err = balanced_package_with_gen()
+        .with_study(study)
+        .materialize_study_commit(0)
+        .expect_err("unknown field should not survive typed materialization");
+    assert!(err.to_string().contains("field `ghost_field`"), "{err}");
+}
+
+#[test]
+fn study_validation_reports_bad_identity() {
+    let study = study_block(vec![study_commit(vec![StudyEdit::DemandDelta {
+        bus: ElementRef::by_source_uid("buses", "ghost"),
+        p_mw: 1.0,
+        q_mvar: None,
+    }])]);
+    let mut pkg = balanced_package().with_study(study);
+    pkg.run_sane_validation();
+
+    assert!(pkg.diagnostics.iter().any(|d| {
+        d.code.as_str() == "VALIDATE.PACKAGE.STUDY_IDENTITY"
+            && d.element_path.as_deref() == Some("/study/commits/0/edits/0")
+    }));
+    assert_eq!(pkg.validation.status, ValidationStatus::Error);
+}
+
+#[test]
+fn study_validation_rejects_multiconductor_payload() {
+    let study = study_block(vec![study_commit(Vec::new())]);
+    let mut pkg = multiconductor_package().with_study(study);
+    pkg.run_sane_validation();
+
+    assert!(pkg.diagnostics.iter().any(|d| {
+        d.code.as_str() == "VALIDATE.PACKAGE.STUDY_MODEL_KIND"
+            && d.element_path.as_deref() == Some("/study")
+    }));
+    assert_eq!(pkg.validation.status, ValidationStatus::Error);
 }
