@@ -381,7 +381,7 @@ size_t pio_warnings(const PioNetwork *net, char *warnbuf, size_t warnlen);
 
 /**
  * Free a network handle from [`pio_parse_file`], [`pio_parse_str`],
- * [`pio_read_dir`], or [`pio_normalize`].
+ * [`pio_read_dir`], [`pio_normalize`], or [`pio_normalize_with_options`].
  */
 void pio_network_free(PioNetwork *net);
 
@@ -396,6 +396,21 @@ void pio_network_free(PioNetwork *net);
  * base MVA) and writes the message into `errbuf`.
  */
 PioNetwork *pio_normalize(const PioNetwork *net, char *errbuf, size_t errlen);
+
+/**
+ * Normalize `net` into a NEW network handle, with opt in solver preparation
+ * repairs.
+ * `clamp_angle_bounds != 0` applies the same branch angle difference bound
+ * repair as PowerModels (`angmin <= -pi/2`, `angmax >= pi/2`, and zero/zero
+ * bounds replaced by `±angle_bound_pad`). The default pad is 1.0472 radians.
+ * Existing read warnings and repair warnings are attached to the returned
+ * handle and can be read with [`pio_warnings`].
+ */
+PioNetwork *pio_normalize_with_options(const PioNetwork *net,
+                                       int32_t clamp_angle_bounds,
+                                       double angle_bound_pad,
+                                       char *errbuf,
+                                       size_t errlen);
 
 size_t pio_n_buses(const PioNetwork *net);
 

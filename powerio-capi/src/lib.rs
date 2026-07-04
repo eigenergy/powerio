@@ -30,7 +30,7 @@
 use std::ffi::{CStr, CString, c_char};
 use std::panic::{AssertUnwindSafe, catch_unwind};
 
-use powerio::{IndexCore, IndexedNetwork, Network, TargetFormat};
+use powerio::{IndexCore, IndexedNetwork, Network, NormalizeOptions, TargetFormat};
 
 #[cfg(feature = "arrow")]
 mod arrow_export;
@@ -536,7 +536,7 @@ pub unsafe extern "C" fn pio_warnings(
 }
 
 /// Free a network handle from [`pio_parse_file`], [`pio_parse_str`],
-/// [`pio_read_dir`], or [`pio_normalize`].
+/// [`pio_read_dir`], [`pio_normalize`], or [`pio_normalize_with_options`].
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_network_free(net: *mut PioNetwork) {
     unsafe {
@@ -585,6 +585,44 @@ pub unsafe extern "C" fn pio_normalize(
                 .map(|n| (n, c.warnings.clone()))
                 .map_err(|e| e.to_string())
         })
+    }
+}
+
+/// Normalize `net` into a NEW network handle, with opt in solver preparation
+/// repairs.
+/// `clamp_angle_bounds != 0` applies the same branch angle difference bound
+/// repair as PowerModels (`angmin <= -pi/2`, `angmax >= pi/2`, and zero/zero
+/// bounds replaced by `±angle_bound_pad`). The default pad is 1.0472 radians.
+/// Existing read warnings and repair warnings are attached to the returned
+/// handle and can be read with [`pio_warnings`].
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn pio_normalize_with_options(
+    net: *const PioNetwork,
+    clamp_angle_bounds: i32,
+    angle_bound_pad: f64,
+    errbuf: *mut c_char,
+    errlen: usize,
+) -> *mut PioNetwork {
+    unsafe {
+        finish_network(
+            errbuf,
+            errlen,
+            "panic while normalizing with options",
+            || {
+                let c = network_ref(net).ok_or_else(|| "network handle is NULL".to_string())?;
+                let options = NormalizeOptions {
+                    clamp_angle_bounds: clamp_angle_bounds != 0,
+                    angle_bound_pad,
+                };
+                let out = c
+                    .net
+                    .to_normalized_with_options(&options)
+                    .map_err(|e| e.to_string())?;
+                let mut warnings = c.warnings.clone();
+                warnings.extend(out.warnings);
+                Ok((out.network, warnings))
+            },
+        )
     }
 }
 
@@ -1932,6 +1970,7 @@ fn dist_target_from_c(to: *const c_char) -> Result<powerio_dist::DistTargetForma
 #[cfg(test)]
 mod tests {
     use super::*;
+    use powerio::POWER_MODELS_ANGLE_BOUND_PAD;
     use std::ffi::CString;
 
     fn data_path(name: &str) -> CString {
@@ -1951,6 +1990,15 @@ mod tests {
 
     fn case9() -> *mut PioNetwork {
         let path = data_path("case9.m");
+        let mut err = [0 as c_char; 256];
+        let c =
+            unsafe { pio_parse_file(path.as_ptr(), std::ptr::null(), err.as_mut_ptr(), err.len()) };
+        assert!(!c.is_null(), "parse returned null");
+        c
+    }
+
+    fn angle_bounds_case() -> *mut PioNetwork {
+        let path = data_path("angle_bounds_clamp.m");
         let mut err = [0 as c_char; 256];
         let c =
             unsafe { pio_parse_file(path.as_ptr(), std::ptr::null(), err.as_mut_ptr(), err.len()) };
@@ -2008,6 +2056,30 @@ mod tests {
             let text = CStr::from_ptr(s).to_str().unwrap().to_owned();
             pio_string_free(s);
             text
+        }
+    }
+
+    unsafe fn network_json(net: *const PioNetwork) -> serde_json::Value {
+        let mut err = [0 as c_char; PIO_ERRBUF_MIN];
+        unsafe {
+            let s = pio_to_json(net, err.as_mut_ptr(), err.len());
+            assert!(
+                !s.is_null(),
+                "to_json failed: {}",
+                CStr::from_ptr(err.as_ptr()).to_str().unwrap()
+            );
+            let text = CStr::from_ptr(s).to_str().unwrap().to_owned();
+            pio_string_free(s);
+            serde_json::from_str(&text).unwrap()
+        }
+    }
+
+    unsafe fn warning_text(net: *const PioNetwork) -> String {
+        let n = unsafe { pio_warnings(net, std::ptr::null_mut(), 0) };
+        let mut buf = vec![0 as c_char; n + 1];
+        unsafe {
+            pio_warnings(net, buf.as_mut_ptr(), buf.len());
+            CStr::from_ptr(buf.as_ptr()).to_str().unwrap().to_owned()
         }
     }
 
@@ -2217,6 +2289,7 @@ mod tests {
             "size_t pio_warnings(const PioNetwork *net, char *warnbuf, size_t warnlen);",
             "void pio_network_free(PioNetwork *net);",
             "PioNetwork *pio_normalize(const PioNetwork *net, char *errbuf, size_t errlen);",
+            "PioNetwork *pio_normalize_with_options(const PioNetwork *net, int32_t clamp_angle_bounds, double angle_bound_pad, char *errbuf, size_t errlen);",
             "size_t pio_n_buses(const PioNetwork *net);",
             "size_t pio_n_branches(const PioNetwork *net);",
             "size_t pio_n_switches(const PioNetwork *net);",
@@ -2698,6 +2771,16 @@ mod tests {
             // The two FFI constructors reject a NULL input rather than crash.
             let mut err = [0 as c_char; 128];
             assert!(pio_normalize(nil, err.as_mut_ptr(), err.len()).is_null());
+            assert!(
+                pio_normalize_with_options(
+                    nil,
+                    1,
+                    POWER_MODELS_ANGLE_BOUND_PAD,
+                    err.as_mut_ptr(),
+                    err.len()
+                )
+                .is_null()
+            );
             let fmt = CString::new("matpower").unwrap();
             assert!(
                 pio_parse_str(std::ptr::null(), fmt.as_ptr(), err.as_mut_ptr(), err.len())
@@ -2821,6 +2904,77 @@ mpc.branch = [
 
             pio_network_free(cn);
             pio_network_free(cs);
+        }
+    }
+
+    #[test]
+    fn normalize_with_options_clamps_angle_bounds_and_warns() {
+        let c = angle_bounds_case();
+        let mut err = [0 as c_char; PIO_ERRBUF_MIN];
+        unsafe {
+            let cn = pio_normalize_with_options(
+                c,
+                1,
+                POWER_MODELS_ANGLE_BOUND_PAD,
+                err.as_mut_ptr(),
+                err.len(),
+            );
+            assert!(
+                !cn.is_null(),
+                "normalize with options returned null: {}",
+                CStr::from_ptr(err.as_ptr()).to_str().unwrap()
+            );
+            let v = network_json(cn);
+            close(
+                v["branches"][0]["angmin"].as_f64().unwrap(),
+                -POWER_MODELS_ANGLE_BOUND_PAD,
+            );
+            close(
+                v["branches"][0]["angmax"].as_f64().unwrap(),
+                POWER_MODELS_ANGLE_BOUND_PAD,
+            );
+            close(
+                v["branches"][1]["angmin"].as_f64().unwrap(),
+                -POWER_MODELS_ANGLE_BOUND_PAD,
+            );
+            close(
+                v["branches"][1]["angmax"].as_f64().unwrap(),
+                POWER_MODELS_ANGLE_BOUND_PAD,
+            );
+            close(
+                v["branches"][2]["angmin"].as_f64().unwrap(),
+                -std::f64::consts::PI / 6.0,
+            );
+            close(
+                v["branches"][2]["angmax"].as_f64().unwrap(),
+                std::f64::consts::PI / 6.0,
+            );
+
+            let warnings = warning_text(cn);
+            assert!(warnings.contains("branch 0 angle difference bounds clamped"));
+            assert!(warnings.contains("branch 1 angle difference bounds clamped"));
+
+            pio_network_free(cn);
+            pio_network_free(c);
+        }
+    }
+
+    #[test]
+    fn normalize_with_options_rejects_invalid_angle_pad() {
+        let c = angle_bounds_case();
+        let mut err = [0 as c_char; PIO_ERRBUF_MIN];
+        unsafe {
+            let cn = pio_normalize_with_options(
+                c,
+                1,
+                std::f64::consts::FRAC_PI_2,
+                err.as_mut_ptr(),
+                err.len(),
+            );
+            assert!(cn.is_null());
+            let msg = CStr::from_ptr(err.as_ptr()).to_str().unwrap();
+            assert!(msg.contains("angle_bound_pad"), "{msg}");
+            pio_network_free(c);
         }
     }
 

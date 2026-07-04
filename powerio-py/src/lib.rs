@@ -32,7 +32,8 @@ use powerio_matrix::matrix::{
 };
 use powerio_matrix::opf_pipeline::{DcOpfOptions, write_dcopf_bundle as write_bundle};
 use powerio_matrix::{
-    DisplayData, IndexCore, IndexedNetwork, MissingGenCostPolicy, Network, PwdDisplay, WriteOptions,
+    DisplayData, IndexCore, IndexedNetwork, MissingGenCostPolicy, Network, NormalizeOptions,
+    POWER_MODELS_ANGLE_BOUND_PAD, PwdDisplay, WriteOptions,
 };
 use powerio_pkg::{
     DiagnosticSeverity, DiagnosticStage, NetworkPackage, Origin, SourceDescriptor,
@@ -923,6 +924,30 @@ impl PyNetwork {
             inner,
             core,
             warnings: self.warnings.clone(),
+        })
+    }
+
+    #[pyo3(signature = (clamp_angle_bounds=false, angle_bound_pad=None))]
+    fn to_normalized_with_options(
+        &self,
+        clamp_angle_bounds: bool,
+        angle_bound_pad: Option<f64>,
+    ) -> PyResult<PyNetwork> {
+        let options = NormalizeOptions {
+            clamp_angle_bounds,
+            angle_bound_pad: angle_bound_pad.unwrap_or(POWER_MODELS_ANGLE_BOUND_PAD),
+        };
+        let normalized = self
+            .inner
+            .to_normalized_with_options(&options)
+            .map_err(to_pyerr)?;
+        let core = IndexCore::build(&normalized.network);
+        let mut warnings = self.warnings.clone();
+        warnings.extend(normalized.warnings);
+        Ok(PyNetwork {
+            inner: normalized.network,
+            core,
+            warnings,
         })
     }
 

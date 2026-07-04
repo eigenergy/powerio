@@ -72,6 +72,9 @@ pub enum Error {
     #[error("base MVA must be a positive, finite number, got {base}")]
     InvalidBaseMva { base: f64 },
 
+    #[error("invalid normalize option `{field}`: {value}")]
+    InvalidNormalizeOption { field: &'static str, value: f64 },
+
     #[error("dimension mismatch: `{what}` expected length {expected}, got {got}")]
     ShapeMismatch {
         what: &'static str,
@@ -209,6 +212,7 @@ impl Error {
             | Error::GenCostCountMismatch { .. }
             | Error::ReferenceBusCount { .. }
             | Error::InvalidBaseMva { .. }
+            | Error::InvalidNormalizeOption { .. }
             | Error::ShapeMismatch { .. }
             | Error::SingularNetwork
             | Error::UngroundedComponent { .. }
