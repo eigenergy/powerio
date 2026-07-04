@@ -1007,10 +1007,84 @@ fn n_winding_transformer_round_trips_through_bmopf() {
     let doc: serde_json::Value = serde_json::from_str(&out.text).unwrap();
     let t = &doc["transformer"]["n_winding"]["t3"];
     assert_eq!(t["windings"].as_array().unwrap().len(), 3);
+    assert_eq!(t["windings"][0]["delta_roll"], serde_json::json!(-1));
+    assert!(t["windings"][1].get("delta_roll").is_none(), "{t:?}");
+    assert!(t["windings"][2].get("delta_roll").is_none(), "{t:?}");
     assert_eq!(t["windings"][1]["v_nom"], serde_json::json!(100.0));
     assert_eq!(t["x_sc"]["1_2"], serde_json::json!(0.04));
     assert_eq!(t["g_no_load"], serde_json::json!(0.001));
     assert_eq!(t["b_no_load"], serde_json::json!(-0.002));
+}
+
+#[test]
+fn n_winding_explicit_delta_roll_round_trips_through_bmopf() {
+    let v = schema_validator();
+    let net = parse_bmopf_str(
+        r#"{
+          "bus": {
+            "a": {"terminal_names": ["1", "2", "3"]},
+            "b": {"terminal_names": ["1", "2", "3", "n"], "perfectly_grounded_terminals": ["n"]},
+            "c": {"terminal_names": ["1", "2", "3", "n"], "perfectly_grounded_terminals": ["n"]}
+          },
+          "transformer": {
+            "n_winding": {
+              "t3": {
+                "s_rating": 10000.0,
+                "windings": [
+                  {"bus": "a", "terminal_map": ["1", "2", "3"], "v_nom": 100.0, "configuration": "DELTA", "r_winding": 0.01, "delta_roll": 1},
+                  {"bus": "b", "terminal_map": ["1", "2", "3", "n"], "v_nom": 100.0, "configuration": "WYE", "r_winding": 0.02},
+                  {"bus": "c", "terminal_map": ["1", "2", "3", "n"], "v_nom": 100.0, "configuration": "WYE", "r_winding": 0.03}
+                ],
+                "x_sc": {"1_2": 0.04, "1_3": 0.05, "2_3": 0.06}
+              }
+            }
+          }
+        }"#,
+    )
+    .unwrap();
+
+    let out = write_bmopf_json(&net);
+    assert_eq!(errors(&v, &out.text), Vec::<String>::new());
+    assert!(
+        out.warnings
+            .iter()
+            .all(|w| !w.contains("bmopf_delta_rolls")),
+        "{:?}",
+        out.warnings
+    );
+    let doc: serde_json::Value = serde_json::from_str(&out.text).unwrap();
+    let t = &doc["transformer"]["n_winding"]["t3"];
+    assert_eq!(t["windings"][0]["delta_roll"], serde_json::json!(1));
+
+    let again = parse_bmopf_str(&out.text).unwrap();
+    let out2 = write_bmopf_json(&again);
+    assert_eq!(out.text, out2.text);
+}
+
+#[test]
+fn opendss_n_winding_delta_emits_delta_roll() {
+    let net = parse_dss_str(
+        "Clear\n\
+         New Circuit.dyn basekv=12.47 pu=1.0 phases=3 bus1=sourcebus\n\
+         New Transformer.t1 phases=3 windings=3 buses=(sourcebus, mid, low) \
+         conns=(delta, wye, wye) kvs=(12.47, 4.16, 0.48) \
+         kvas=(1000, 1000, 1000) %Rs=(0.5, 0.5, 0.5) xhl=5 xht=6 xlt=4\n",
+    );
+    let t = &net.transformers[0];
+    assert_eq!(t.windings.len(), 3);
+    assert_eq!(t.windings[0].conn, WindingConn::Delta);
+
+    let out = write_bmopf_json(&net);
+    assert_eq!(errors(&schema_validator(), &out.text), Vec::<String>::new());
+    let doc: serde_json::Value = serde_json::from_str(&out.text).unwrap();
+    let t = &doc["transformer"]["n_winding"]["t1"];
+    assert_eq!(
+        t["windings"][0]["configuration"],
+        serde_json::json!("DELTA")
+    );
+    assert_eq!(t["windings"][0]["delta_roll"], serde_json::json!(-1));
+    assert!(t["windings"][1].get("delta_roll").is_none(), "{t:?}");
+    assert!(t["windings"][2].get("delta_roll").is_none(), "{t:?}");
 }
 
 #[test]

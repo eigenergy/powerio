@@ -54,8 +54,15 @@ const IBR_EXTRA_FIELDS: &[&str] = &[
     "time_series",
 ];
 
-const TRANSFORMER_NO_LOAD_ALLOWED_EXTRAS: [&str; 4] =
-    ["g_no_load", "b_no_load", "%noloadloss", "%imag"];
+const BMOPF_DELTA_ROLLS_EXTRA: &str = "bmopf_delta_rolls";
+
+const TRANSFORMER_NO_LOAD_ALLOWED_EXTRAS: [&str; 5] = [
+    "g_no_load",
+    "b_no_load",
+    "%noloadloss",
+    "%imag",
+    BMOPF_DELTA_ROLLS_EXTRA,
+];
 const TRANSFORMER_TWO_WINDING_ALLOWED_EXTRAS: [&str; 18] = [
     "tap_min",
     "tap_max",
@@ -1174,7 +1181,8 @@ impl Writer {
         let windings: Vec<Value> = t
             .windings
             .iter()
-            .map(|w| {
+            .enumerate()
+            .map(|(idx, w)| {
                 let mut wj = Map::new();
                 wj.insert("bus".into(), json!(w.bus));
                 wj.insert("terminal_map".into(), json!(w.terminal_map));
@@ -1194,6 +1202,9 @@ impl Writer {
                     "r_winding".into(),
                     self.num(w.r_pct / 100.0 * zbase, "transformer winding r_winding"),
                 );
+                if let Some(delta_roll) = bmopf_delta_roll(t, idx, w) {
+                    wj.insert("delta_roll".into(), json!(delta_roll));
+                }
                 Value::Object(wj)
             })
             .collect();
@@ -1847,6 +1858,19 @@ fn n_winding_bmopf_v_nom(w: &Winding) -> f64 {
 
 fn n_winding_base(w: &Winding, s: f64) -> Option<f64> {
     n_winding_impedance_base(n_winding_phase_count(w), n_winding_bmopf_v_nom(w), s)
+}
+
+fn bmopf_delta_roll(t: &DistTransformer, idx: usize, w: &Winding) -> Option<i64> {
+    if w.conn != WindingConn::Delta {
+        return None;
+    }
+    t.extras
+        .get(BMOPF_DELTA_ROLLS_EXTRA)
+        .and_then(Value::as_object)
+        .and_then(|rolls| rolls.get(&(idx + 1).to_string()))
+        .and_then(Value::as_i64)
+        .filter(|roll| *roll == 1 || *roll == -1)
+        .or(Some(-1))
 }
 
 fn no_load_voltage_base(from: &Winding) -> f64 {
