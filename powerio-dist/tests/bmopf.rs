@@ -140,6 +140,8 @@ fn assert_model_eq(a: &DistNetwork, b: &DistNetwork) {
     assert_eq!(a.switches, b.switches);
     assert_eq!(a.loads, b.loads);
     assert_eq!(a.generators, b.generators);
+    assert_eq!(a.ibrs, b.ibrs);
+    assert_eq!(a.control_profiles, b.control_profiles);
     assert_eq!(a.shunts, b.shunts);
     assert_eq!(a.sources, b.sources);
     assert_eq!(a.transformers, b.transformers);
@@ -161,6 +163,7 @@ fn dss_fixtures_emit_valid_bmopf() {
         "micro/switch.dss",
         "micro/fourwire_linecode.dss",
         "micro/defaults_degenerate.dss",
+        "micro/ibr_pv_control.dss",
     ] {
         let net = parse_dss_file(fixture(case)).unwrap();
         let out = write_bmopf_json(&net);
@@ -431,7 +434,18 @@ fn raw_ibr_and_control_profile_tables_round_trip() {
             }
           },
           "control_profile": {
-            "cp": {"power_factor": {"pf": 0.98}}
+            "cp": {
+              "power_factor": {"pf": 0.98},
+              "volt_var": {
+                "voltage_reference": "PN_PER_PHASE",
+                "breakpoints": [216.0, 228.0, 252.0, 264.0],
+                "q_limits": [-0.44, 0.44],
+                "q_unit": "VA_FRACTION",
+                "q_ref": "VAR_MAX",
+                "p_min_for_q": 10.0,
+                "p_min_for_q_max": 50.0
+              }
+            }
           },
           "ibr": {
             "pv": {
@@ -447,12 +461,28 @@ fn raw_ibr_and_control_profile_tables_round_trip() {
     )
     .unwrap();
 
+    assert_eq!(net.ibrs.len(), 1);
+    assert_eq!(net.control_profiles.len(), 1);
+    let ibr = &net.ibrs[0];
+    assert_eq!(ibr.name, "pv");
+    assert_eq!(ibr.control_profile.as_deref(), Some("cp"));
+    let cp = &net.control_profiles[0];
+    let vv = cp.volt_var.as_ref().expect("volt var typed");
+    assert_eq!(vv.q_limits, vec![-0.44, 0.44]);
+    assert_eq!(vv.p_min_for_q, Some(10.0));
+    assert_eq!(vv.p_min_for_q_max, Some(50.0));
+
     let out = write_bmopf_json(&net);
 
     assert_eq!(errors(&v, &out.text), Vec::<String>::new());
     let doc: serde_json::Value = serde_json::from_str(&out.text).unwrap();
     assert_eq!(doc["ibr"]["pv"]["control_profile"], "cp");
     assert_eq!(doc["control_profile"]["cp"]["power_factor"]["pf"], 0.98);
+    assert_eq!(
+        doc["control_profile"]["cp"]["volt_var"]["voltage_reference"],
+        "PN_PER_PHASE"
+    );
+    assert_eq!(doc["control_profile"]["cp"]["volt_var"]["q_ref"], "VAR_MAX");
     assert!(
         out.warnings
             .iter()
@@ -460,6 +490,106 @@ fn raw_ibr_and_control_profile_tables_round_trip() {
         "{:?}",
         out.warnings
     );
+    let again = parse_bmopf_str(&out.text).unwrap();
+    assert_model_eq(&net, &again);
+}
+
+#[test]
+fn bmopf_fixed_dispatch_ibr_emits_dss_generator() {
+    let net = parse_bmopf_str(
+        r#"{
+          "bus": {
+            "b": {"terminal_names": ["1", "2", "3", "n"], "perfectly_grounded_terminals": ["n"]}
+          },
+          "voltage_source": {
+            "source": {
+              "v_magnitude": [240.0, 240.0, 240.0, 0.0],
+              "v_angle": [0.0, -2.0943951023931953, 2.0943951023931953, 0.0],
+              "bus": "b",
+              "terminal_map": ["1", "2", "3", "n"]
+            }
+          },
+          "ibr": {
+            "pv": {
+              "bus": "b",
+              "terminal_map": ["1", "2", "3", "n"],
+              "topology": "FOUR_LEG",
+              "prime_mover": "PV",
+              "s_max": [10000.0, 10000.0, 10000.0],
+              "p_min": [8000.0, 8000.0, 8000.0],
+              "p_max": [8000.0, 8000.0, 8000.0],
+              "q_min": [0.0, 0.0, 0.0],
+              "q_max": [0.0, 0.0, 0.0]
+            }
+          }
+        }"#,
+    )
+    .unwrap();
+
+    let out = write_dss(&net);
+
+    assert!(out.warnings.is_empty(), "{:?}", out.warnings);
+    let line = out
+        .text
+        .lines()
+        .find(|l| l.starts_with("New Generator.pv"))
+        .unwrap();
+    assert!(line.contains("model=1 vminpu=0 vmaxpu=2"), "{line}");
+    assert!(line.contains("kw=24"), "{line}");
+    assert!(!out.text.contains("PVSystem.pv"), "{}", out.text);
+}
+
+#[test]
+fn bmopf_volt_var_ibr_emits_dss_pvsystem_control() {
+    let net = parse_bmopf_str(
+        r#"{
+          "bus": {
+            "b": {"terminal_names": ["1", "2", "3", "n"], "perfectly_grounded_terminals": ["n"]}
+          },
+          "voltage_source": {
+            "source": {
+              "v_magnitude": [240.0, 240.0, 240.0, 0.0],
+              "v_angle": [0.0, -2.0943951023931953, 2.0943951023931953, 0.0],
+              "bus": "b",
+              "terminal_map": ["1", "2", "3", "n"]
+            }
+          },
+          "control_profile": {
+            "cp": {
+              "volt_var": {
+                "voltage_reference": "PG_AVERAGED",
+                "breakpoints": [220.8, 235.2, 244.8, 259.2],
+                "q_limits": [-0.44, 0.44],
+                "q_unit": "VA_FRACTION",
+                "q_ref": "VAR_MAX"
+              }
+            }
+          },
+          "ibr": {
+            "pv": {
+              "bus": "b",
+              "terminal_map": ["1", "2", "3", "n"],
+              "topology": "FOUR_LEG",
+              "prime_mover": "PV",
+              "s_max": [10000.0, 10000.0, 10000.0],
+              "p_avail": 24000.0,
+              "q_min": [-4000.0, -4000.0, -4000.0],
+              "q_max": [4000.0, 4000.0, 4000.0],
+              "control_profile": "cp"
+            }
+          }
+        }"#,
+    )
+    .unwrap();
+
+    let out = write_dss(&net);
+
+    assert!(out.warnings.is_empty(), "{:?}", out.warnings);
+    assert!(out.text.contains("New PVSystem.pv"), "{}", out.text);
+    assert!(out.text.contains("New XYcurve.vv_pv"), "{}", out.text);
+    assert!(out.text.contains("New InvControl.ivc_pv"), "{}", out.text);
+    assert!(out.text.contains("mode=VOLTVAR"), "{}", out.text);
+    assert!(out.text.contains("RefReactivePower=VARMAX"), "{}", out.text);
 }
 
 #[test]

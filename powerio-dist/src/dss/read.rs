@@ -20,10 +20,29 @@ use super::lex::{BusSpec, Value, VarMap};
 use super::raw::{RawDss, RawObject, parse_raw_with};
 use crate::error::{Error, Result};
 use crate::model::{
-    Configuration, DistBus, DistGenerator, DistLine, DistLineCode, DistLoad, DistLoadVoltageModel,
-    DistNetwork, DistShunt, DistSourceFormat, DistSwitch, DistTransformer, Extras, Mat,
-    UntypedObject, VoltageSource, Winding, WindingConn, pair_keys, square_from_rows,
+    ActivePowerReference, ActivePowerUnit, Configuration, ControlVoltageReference, DistBus,
+    DistControlProfile, DistGenerator, DistIbr, DistLine, DistLineCode, DistLoad,
+    DistLoadVoltageModel, DistNetwork, DistShunt, DistSourceFormat, DistSwitch, DistTransformer,
+    Extras, IbrPrimeMover, IbrTopology, Mat, PowerFactorControl, ReactivePowerReference,
+    ReactivePowerUnit, UntypedObject, VoltVarControl, VoltWattControl, VoltageSource, Winding,
+    WindingConn, pair_keys, square_from_rows,
 };
+
+const TYPED_DSS_CLASSES: &[&str] = &[
+    "linecode",
+    "vsource",
+    "line",
+    "transformer",
+    "load",
+    "capacitor",
+    "reactor",
+    "generator",
+    "pvsystem",
+    "xycurve",
+    "invcontrol",
+    "swtcontrol",
+    "regcontrol",
+];
 
 /// Parses a `.dss` file, following includes, into the canonical model.
 pub fn parse_dss_file(path: impl AsRef<Path>) -> Result<DistNetwork> {
@@ -59,6 +78,7 @@ pub fn network_from_raw(raw: &RawDss, source: Arc<String>) -> DistNetwork {
         buses: BTreeMap::new(),
         bus_order: Vec::new(),
         linecode_units: BTreeMap::new(),
+        xycurves: BTreeMap::new(),
         vars: &raw.vars,
     };
 
@@ -110,6 +130,7 @@ pub fn network_from_raw(raw: &RawDss, source: Arc<String>) -> DistNetwork {
         let g = rd.generator(obj);
         rd.net.generators.push(g);
     }
+    read_ibr_objects(&mut rd, raw);
     for obj in raw.of_class("swtcontrol") {
         rd.swtcontrol(obj);
     }
@@ -117,19 +138,7 @@ pub fn network_from_raw(raw: &RawDss, source: Arc<String>) -> DistNetwork {
         rd.regcontrol(obj);
     }
     for obj in &raw.objects {
-        if !matches!(
-            obj.class.as_str(),
-            "linecode"
-                | "vsource"
-                | "line"
-                | "transformer"
-                | "load"
-                | "capacitor"
-                | "reactor"
-                | "generator"
-                | "swtcontrol"
-                | "regcontrol"
-        ) {
+        if !TYPED_DSS_CLASSES.contains(&obj.class.as_str()) {
             rd.net.untyped.push(UntypedObject::from(obj));
         }
     }
@@ -232,6 +241,18 @@ fn finish_buses(mut rd: Reader, raw: &RawDss) -> DistNetwork {
     net
 }
 
+fn read_ibr_objects(rd: &mut Reader<'_>, raw: &RawDss) {
+    for obj in raw.of_class("pvsystem") {
+        rd.pvsystem(obj);
+    }
+    for obj in raw.of_class("xycurve") {
+        rd.xycurve(obj);
+    }
+    for obj in raw.of_class("invcontrol") {
+        rd.invcontrol(obj);
+    }
+}
+
 impl From<&RawObject> for UntypedObject {
     fn from(obj: &RawObject) -> Self {
         UntypedObject {
@@ -259,6 +280,7 @@ struct Reader<'a> {
     /// the linecode has no units. Lines need it: `ConvertLineUnits` couples
     /// the two sides' units.
     linecode_units: BTreeMap<String, Option<f64>>,
+    xycurves: BTreeMap<String, XyCurveRaw>,
     vars: &'a VarMap,
 }
 
@@ -336,6 +358,12 @@ const REACTOR_KVAR_SHUNT: KvarShuntSpec = KvarShuntSpec {
     default_kv: dd::reactor::KV,
     b_sign: -1.0,
 };
+
+#[derive(Clone, Debug)]
+struct XyCurveRaw {
+    x: Vec<f64>,
+    y: Vec<f64>,
+}
 
 impl Reader<'_> {
     fn warn(&mut self, msg: impl Into<String>) {
@@ -1556,6 +1584,318 @@ impl Reader<'_> {
         }
     }
 
+    // ----- PVSystem / InvControl ----------------------------------------
+
+    fn pvsystem(&mut self, obj: &RawObject) {
+        let props = Props::new(obj);
+        let phases = self.usize_or(
+            &props,
+            "phases",
+            "pvsystem",
+            &obj.name,
+            dd::pvsystem::PHASES,
+        );
+        if phases == 0 {
+            self.warn(format!(
+                "pvsystem {}: nonpositive `phases` value is not typed; kept untyped",
+                obj.name
+            ));
+            self.net.untyped.push(UntypedObject::from(obj));
+            return;
+        }
+        let conn_delta = props.get("conn").is_some_and(|v| {
+            v.text.to_ascii_lowercase().starts_with('d') || v.text.eq_ignore_ascii_case("ll")
+        });
+        let spec = bus_spec(props.get("bus1"), "");
+        let nconds = if conn_delta && phases == 3 {
+            phases
+        } else {
+            phases + 1
+        };
+        let map = self.terminals(&spec, phases, nconds, nconds);
+        let kv = self.f64_or(&props, "kv", "pvsystem", &obj.name, dd::pvsystem::KV);
+        let irradiance = self.f64_or(
+            &props,
+            "irradiance",
+            "pvsystem",
+            &obj.name,
+            dd::pvsystem::IRRADIANCE,
+        );
+        let pmpp = self.f64_or(&props, "pmpp", "pvsystem", &obj.name, dd::pvsystem::PMPP);
+        let pct_pmpp = self
+            .f64_prop(props.get("%pmpp"))
+            .or_else(|| self.f64_prop(props.get("pctpmpp")))
+            .unwrap_or(dd::pvsystem::PCT_PMPP);
+        let kva = self
+            .f64_prop(props.get("kva"))
+            .unwrap_or(pmpp.max(f64::EPSILON));
+        let per_phase = |total_kw: f64| vec![total_kw * 1e3 / phases as f64; phases];
+        let p_avail = pmpp * irradiance * pct_pmpp / 100.0 * 1e3;
+        let q_max = self
+            .f64_prop(props.get("kvarmax"))
+            .map(per_phase)
+            .or_else(|| Some(vec![kva * 1e3 / phases as f64; phases]));
+        let q_min = self
+            .f64_prop(props.get("kvarmaxabs"))
+            .map(|v| vec![-v * 1e3 / phases as f64; phases])
+            .or_else(|| q_max.as_ref().map(|v| v.iter().map(|x| -*x).collect()));
+        let topology = if phases == 1 {
+            IbrTopology::SinglePhase
+        } else if conn_delta {
+            IbrTopology::ThreeLeg
+        } else {
+            IbrTopology::FourLeg
+        };
+        let pf = self.f64_prop(props.get("pf"));
+        let mut extras = extras_from_leftovers(&props);
+        self.stash_kv_and_phases(&props, &mut extras, kv, phases);
+        extras.remove("conn");
+        let mut ibr = DistIbr {
+            name: obj.name.clone(),
+            bus: spec.name,
+            terminal_map: map,
+            topology,
+            prime_mover: IbrPrimeMover::Pv,
+            s_max: vec![kva * 1e3 / phases as f64; phases],
+            i_max: None,
+            p_avail: Some(p_avail),
+            p_min: Some(vec![0.0; phases]),
+            p_max: Some(per_phase(pmpp * pct_pmpp / 100.0)),
+            q_min,
+            q_max,
+            control_profile: None,
+            voltage_aggregation: None,
+            extras,
+        };
+        if let Some(pf) = pf {
+            let profile = format!("{}_pf", obj.name);
+            ibr.control_profile = Some(profile.clone());
+            self.net.control_profiles.push(DistControlProfile {
+                name: profile,
+                power_factor: Some(PowerFactorControl { pf }),
+                volt_var: None,
+                volt_watt: None,
+                extras: Extras::new(),
+            });
+        }
+        self.net.ibrs.push(ibr);
+    }
+
+    fn xycurve(&mut self, obj: &RawObject) {
+        let props = Props::new(obj);
+        let x = props
+            .get("xarray")
+            .and_then(|v| v.to_vector(Some(self.vars)).ok())
+            .unwrap_or_default();
+        let y = props
+            .get("yarray")
+            .and_then(|v| v.to_vector(Some(self.vars)).ok())
+            .unwrap_or_default();
+        if x.is_empty() || y.is_empty() {
+            self.warn(format!(
+                "xycurve {}: xarray/yarray are incomplete; kept untyped",
+                obj.name
+            ));
+            self.net.untyped.push(UntypedObject::from(obj));
+            return;
+        }
+        self.xycurves
+            .insert(obj.name.to_ascii_lowercase(), XyCurveRaw { x, y });
+    }
+
+    fn invcontrol(&mut self, obj: &RawObject) {
+        let props = Props::new(obj);
+        let derlist = props
+            .get("derlist")
+            .map(|v| dss_name_list(&v.text))
+            .unwrap_or_default();
+        let mode = props
+            .get("mode")
+            .map(|v| v.text.to_ascii_lowercase())
+            .unwrap_or_default();
+        let combimode = props
+            .get("combimode")
+            .map(|v| v.text.to_ascii_lowercase())
+            .unwrap_or_default();
+        let mon = props
+            .get("monvoltagecalc")
+            .map(|v| v.text.to_ascii_lowercase())
+            .unwrap_or_default();
+        let voltage_reference = if mon.contains("avg") {
+            ControlVoltageReference::PgAveraged
+        } else {
+            ControlVoltageReference::PgPerPhase
+        };
+        let mut profile = DistControlProfile::new(obj.name.clone());
+        profile.volt_var =
+            self.invcontrol_volt_var(obj, &props, &derlist, voltage_reference, &mode, &combimode);
+        profile.volt_watt =
+            self.invcontrol_volt_watt(&props, &derlist, voltage_reference, &mode, &combimode);
+        if profile.power_factor.is_none()
+            && profile.volt_var.is_none()
+            && profile.volt_watt.is_none()
+        {
+            self.warn(format!(
+                "invcontrol {}: control mode is not typed; kept untyped",
+                obj.name
+            ));
+            self.net.untyped.push(UntypedObject::from(obj));
+            return;
+        }
+        for der in derlist {
+            let name = der.rsplit_once('.').map_or(der.as_str(), |(_, name)| name);
+            if let Some(ibr) = self
+                .net
+                .ibrs
+                .iter_mut()
+                .find(|ibr| ibr.name.eq_ignore_ascii_case(name))
+            {
+                ibr.control_profile = Some(profile.name.clone());
+                if profile.volt_var.is_some() {
+                    ibr.extras.remove("%pminnovars");
+                    ibr.extras.remove("%pminkvarmax");
+                }
+            } else {
+                self.warn(format!(
+                    "invcontrol {}: DER `{der}` does not match a typed PVSystem",
+                    obj.name
+                ));
+            }
+        }
+        self.net.control_profiles.push(profile);
+    }
+
+    fn invcontrol_volt_var(
+        &mut self,
+        obj: &RawObject,
+        props: &Props<'_>,
+        derlist: &[String],
+        voltage_reference: ControlVoltageReference,
+        mode: &str,
+        combimode: &str,
+    ) -> Option<VoltVarControl> {
+        if !(mode.contains("voltvar") || combimode.contains("vv")) {
+            return None;
+        }
+        let curve_name = props.get("vvc_curve1").map(|v| v.text.clone())?;
+        let curve = self
+            .xycurves
+            .get(&curve_name.to_ascii_lowercase())
+            .cloned()?;
+        let base_v = self.control_base_voltage(derlist).unwrap_or_else(|| {
+            self.warn(format!(
+                "invcontrol {}: no rated voltage found for vvc_curve1; using 1 pu as 1 V",
+                obj.name
+            ));
+            1.0
+        });
+        let q_ref = props
+            .get("refreactivepower")
+            .map(|v| v.text.to_ascii_uppercase())
+            .filter(|s| s.contains("VARAVAL"))
+            .map_or(ReactivePowerReference::VarMax, |_| {
+                ReactivePowerReference::VarAvailable
+            });
+        let p_min_for_q = self
+            .ibr_extra_f64(derlist, "%pminnovars")
+            .or_else(|| self.f64_prop(props.get("%pminnovars")));
+        let p_min_for_q_max = self
+            .ibr_extra_f64(derlist, "%pminkvarmax")
+            .or_else(|| self.f64_prop(props.get("%pminkvarmax")));
+        Some(VoltVarControl {
+            voltage_reference: Some(voltage_reference),
+            breakpoints: curve.x.iter().map(|x| x * base_v).collect(),
+            q_limits: if curve.y.len() >= 4 {
+                vec![curve.y[3], curve.y[0]]
+            } else {
+                curve.y
+            },
+            q_unit: Some(ReactivePowerUnit::VaFraction),
+            q_ref: Some(q_ref),
+            p_min_for_q,
+            p_min_for_q_max,
+        })
+    }
+
+    fn invcontrol_volt_watt(
+        &mut self,
+        props: &Props<'_>,
+        derlist: &[String],
+        voltage_reference: ControlVoltageReference,
+        mode: &str,
+        combimode: &str,
+    ) -> Option<VoltWattControl> {
+        if !(mode.contains("voltwatt") || combimode.contains("vw")) {
+            return None;
+        }
+        let curve_name = props
+            .get("voltwatt_curve")
+            .or_else(|| props.get("volt_watt_curve"))
+            .map(|v| v.text.clone())?;
+        let curve = self
+            .xycurves
+            .get(&curve_name.to_ascii_lowercase())
+            .cloned()?;
+        let base_v = self.control_base_voltage(derlist).unwrap_or(1.0);
+        let p_ref = props
+            .get("voltwattyaxis")
+            .map(|v| v.text.to_ascii_uppercase())
+            .map_or(ActivePowerReference::SMax, |s| {
+                if s.contains("PAVAILABLE") {
+                    ActivePowerReference::PAvailable
+                } else if s.contains("PMPP") {
+                    ActivePowerReference::PMax
+                } else {
+                    ActivePowerReference::SMax
+                }
+            });
+        Some(VoltWattControl {
+            voltage_reference: Some(voltage_reference),
+            breakpoints: curve.x.iter().map(|x| x * base_v).collect(),
+            p_limits: if curve.y.len() >= 2 {
+                vec![curve.y[1], curve.y[0]]
+            } else {
+                curve.y
+            },
+            p_unit: Some(ActivePowerUnit::VaFraction),
+            p_ref: Some(p_ref),
+        })
+    }
+
+    fn ibr_extra_f64(&self, derlist: &[String], key: &str) -> Option<f64> {
+        derlist.iter().find_map(|der| {
+            let name = der.rsplit_once('.').map_or(der.as_str(), |(_, name)| name);
+            self.net
+                .ibrs
+                .iter()
+                .find(|ibr| ibr.name.eq_ignore_ascii_case(name))
+                .and_then(|ibr| ibr.extras.get(key))
+                .and_then(json_value_f64)
+        })
+    }
+
+    fn control_base_voltage(&self, derlist: &[String]) -> Option<f64> {
+        let der = derlist.first()?;
+        let name = der.rsplit_once('.').map_or(der.as_str(), |(_, name)| name);
+        let ibr = self
+            .net
+            .ibrs
+            .iter()
+            .find(|ibr| ibr.name.eq_ignore_ascii_case(name))?;
+        let kv = ibr
+            .extras
+            .get("kv")
+            .and_then(|v| {
+                v.as_f64()
+                    .or_else(|| v.as_str().and_then(|s| s.parse().ok()))
+            })
+            .unwrap_or(dd::pvsystem::KV);
+        Some(match ibr.topology {
+            IbrTopology::FourLeg => kv * 1e3 / 3f64.sqrt(),
+            IbrTopology::SinglePhase | IbrTopology::ThreeLeg => kv * 1e3,
+        })
+    }
+
     // ----- controls ------------------------------------------------------
 
     fn swtcontrol(&mut self, obj: &RawObject) {
@@ -1640,6 +1980,20 @@ fn explicit_single_terminal_ground_return(bus: &BusSpec, return_bus: &BusSpec) -
         && bus.nodes.len() == 1
         && return_bus.nodes.len() == 1
         && return_bus.nodes[0] <= 0
+}
+
+fn dss_name_list(text: &str) -> Vec<String> {
+    text.trim_matches(|c: char| matches!(c, '[' | ']' | '(' | ')'))
+        .split(|c: char| c == ',' || c.is_whitespace())
+        .filter(|s| !s.is_empty())
+        .map(str::to_string)
+        .collect()
+}
+
+fn json_value_f64(value: &serde_json::Value) -> Option<f64> {
+    value
+        .as_f64()
+        .or_else(|| value.as_str().and_then(|s| s.parse().ok()))
 }
 
 /// The line to line branches of a delta bank over `n` terminals: a closed

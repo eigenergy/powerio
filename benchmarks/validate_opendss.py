@@ -14,6 +14,7 @@ from opendssdirect import dss
 
 FIXTURES = [
     Path("tests/data/dist/micro/fourwire_linecode.dss"),
+    Path("tests/data/dist/micro/ibr_pv_control.dss"),
     Path("tests/data/dist/micro/linecode_10x10.dss"),
     Path("tests/data/dist/micro/neutral_grounding_reactor.dss"),
     Path("tests/data/dist/micro/onephase_cvr_load.dss"),

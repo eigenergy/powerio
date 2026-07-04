@@ -8,7 +8,10 @@ use std::collections::BTreeMap;
 use std::path::PathBuf;
 
 use powerio_dist::dss::{parse_dss_file, write_dss};
-use powerio_dist::{Configuration, DistNetwork, WindingConn};
+use powerio_dist::{
+    Configuration, DistNetwork, IbrPrimeMover, IbrTopology, ReactivePowerReference,
+    ReactivePowerUnit, WindingConn,
+};
 
 fn fixture(rel: &str) -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
@@ -261,6 +264,60 @@ fn four_wire_line_keeps_the_neutral() {
     // The load on phase 1 returns through terminal 4, not ground.
     let la = net.loads.iter().find(|l| l.name == "la").unwrap();
     assert_eq!(la.terminal_map, vec!["1", "4"]);
+}
+
+#[test]
+fn pvsystem_and_invcontrol_type_to_ibr_profile() {
+    use powerio_dist::parse_dss_str;
+    let net = parse_dss_str(
+        "New Circuit.c basekv=0.416 phases=3 bus1=sourcebus\n\
+         New PVSystem.pv1 bus1=loadbus.1.2.3.4 phases=3 conn=wye kv=0.416 kva=30 pmpp=24 \
+             irradiance=1 %pmpp=100 kvarMax=12 kvarMaxAbs=9 WattPriority=No \
+             VarFollowInverter=Yes %PminNoVars=10 %PminkvarMax=50\n\
+         New XYcurve.vv npts=4 Xarray=[0.92 0.98 1.02 1.08] Yarray=[0.44 0 0 -0.44]\n\
+         New InvControl.ivc DERList=[PVSystem.pv1] mode=VOLTVAR vvc_curve1=vv \
+             RefReactivePower=VARMAX voltage_curvex_ref=rated monVoltageCalc=AVG\n",
+    );
+
+    assert_eq!(net.ibrs.len(), 1, "{:?}", net.warnings);
+    assert_eq!(net.control_profiles.len(), 1);
+    let ibr = &net.ibrs[0];
+    assert_eq!(ibr.name, "pv1");
+    assert_eq!(ibr.bus, "loadbus");
+    assert_eq!(ibr.terminal_map, vec!["1", "2", "3", "4"]);
+    assert_eq!(ibr.topology, IbrTopology::FourLeg);
+    assert_eq!(ibr.prime_mover, IbrPrimeMover::Pv);
+    assert_eq!(ibr.s_max, vec![10_000.0; 3]);
+    assert_eq!(ibr.p_avail, Some(24_000.0));
+    assert_eq!(ibr.p_max.as_deref(), Some(&[8_000.0, 8_000.0, 8_000.0][..]));
+    assert_eq!(ibr.q_max.as_deref(), Some(&[4_000.0, 4_000.0, 4_000.0][..]));
+    assert_eq!(
+        ibr.q_min.as_deref(),
+        Some(&[-3_000.0, -3_000.0, -3_000.0][..])
+    );
+    assert_eq!(ibr.control_profile.as_deref(), Some("ivc"));
+    assert!(!ibr.extras.contains_key("%pminnovars"));
+    assert!(!ibr.extras.contains_key("%pminkvarmax"));
+
+    let profile = &net.control_profiles[0];
+    let vv = profile.volt_var.as_ref().expect("volt var profile");
+    let base_v = 416.0 / 3f64.sqrt();
+    let expected = [0.92, 0.98, 1.02, 1.08].map(|v| v * base_v);
+    for (actual, expected) in vv.breakpoints.iter().zip(expected) {
+        assert!((actual - expected).abs() < 1e-9, "{actual} != {expected}");
+    }
+    assert_eq!(vv.q_limits, vec![-0.44, 0.44]);
+    assert_eq!(vv.q_unit, Some(ReactivePowerUnit::VaFraction));
+    assert_eq!(vv.q_ref, Some(ReactivePowerReference::VarMax));
+    assert_eq!(vv.p_min_for_q, Some(10.0));
+    assert_eq!(vv.p_min_for_q_max, Some(50.0));
+    assert!(
+        net.untyped
+            .iter()
+            .all(|o| !matches!(o.class.as_str(), "pvsystem" | "xycurve" | "invcontrol")),
+        "{:?}",
+        net.untyped
+    );
 }
 
 #[test]

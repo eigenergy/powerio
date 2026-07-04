@@ -383,6 +383,105 @@ class!(
 );
 
 class!(
+    PVSYSTEM,
+    "pvsystem",
+    [
+        "phases",
+        "bus1",
+        "kv",
+        "irradiance",
+        "pmpp",
+        "%pmpp",
+        "temperature",
+        "pf",
+        "conn",
+        "kvar",
+        "kva",
+        "%cutin",
+        "%cutout",
+        "effcurve",
+        "ptcurve",
+        "daily",
+        "yearly",
+        "duty",
+        "tdaily",
+        "tyearly",
+        "tduty",
+        "class",
+        "user_model",
+        "user_data",
+        "debugtrace",
+        "varfollowinverter",
+        "duty_start",
+        "wattpriority",
+        "pfpriority",
+        "pctpmpp",
+        "pctcutin",
+        "pctcutout",
+        "kvarmax",
+        "kvarmaxabs",
+        "kvarlimit",
+        "kvarlimitneg",
+        "%pminnovars",
+        "%pminkvarmax",
+        "vminpu",
+        "vmaxpu",
+        // inherited
+        "spectrum",
+        "basefreq",
+        "enabled",
+        "like",
+    ]
+);
+
+class!(
+    XYCURVE,
+    "xycurve",
+    [
+        "npts", "points", "yarray", "xarray", "csvfile", "sngfile", "dblfile", "x", "y",
+        // inherited
+        "like",
+    ]
+);
+
+class!(
+    INVCONTROL,
+    "invcontrol",
+    [
+        "derlist",
+        "mode",
+        "combimode",
+        "vvc_curve1",
+        "hysteresis_offset",
+        "voltage_curvex_ref",
+        "avgwindowlen",
+        "volt_watt_curve",
+        "dbvmin",
+        "dbvmax",
+        "armingtime",
+        "deltaq_factor",
+        "voltagechange_tolerance",
+        "varchange_tolerance",
+        "voltwatt_curve",
+        "voltwattyaxis",
+        "rateofchange_mode",
+        "lpftau",
+        "riseFallLimit",
+        "deltaP_factor",
+        "eventlog",
+        "refreactivepower",
+        "activepchange_tolerance",
+        "monvoltagecalc",
+        "monbus",
+        "monbusesvbase",
+        // inherited
+        "basefreq",
+        "enabled",
+        "like",
+    ]
+);
+
+class!(
     SWTCONTROL,
     "swtcontrol",
     [
@@ -455,6 +554,9 @@ static CLASSES: &[&DssClass] = &[
     &CAPACITOR,
     &REACTOR,
     &GENERATOR,
+    &PVSYSTEM,
+    &XYCURVE,
+    &INVCONTROL,
     &SWTCONTROL,
     &REGCONTROL,
 ];

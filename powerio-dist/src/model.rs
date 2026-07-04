@@ -344,6 +344,183 @@ impl DistGenerator {
     }
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
+#[non_exhaustive]
+pub enum IbrTopology {
+    SinglePhase,
+    ThreeLeg,
+    FourLeg,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
+#[non_exhaustive]
+pub enum IbrPrimeMover {
+    Pv,
+    Battery,
+    Generic,
+    Statcom,
+    Dstatcom,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
+#[non_exhaustive]
+pub enum IbrVoltageAggregation {
+    PerPhase,
+    Average,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[non_exhaustive]
+pub struct DistIbr {
+    pub name: String,
+    pub bus: String,
+    pub terminal_map: Vec<String>,
+    pub topology: IbrTopology,
+    pub prime_mover: IbrPrimeMover,
+    /// Per phase apparent power nameplate ratings, volt amperes.
+    pub s_max: Vec<f64>,
+    /// Per conductor current limits, amperes.
+    pub i_max: Option<Vec<f64>>,
+    /// Available active power, watts.
+    pub p_avail: Option<f64>,
+    pub p_min: Option<Vec<f64>>,
+    pub p_max: Option<Vec<f64>>,
+    pub q_min: Option<Vec<f64>>,
+    pub q_max: Option<Vec<f64>>,
+    pub control_profile: Option<String>,
+    pub voltage_aggregation: Option<IbrVoltageAggregation>,
+    pub extras: Extras,
+}
+
+impl DistIbr {
+    #[must_use]
+    pub fn new(
+        name: impl Into<String>,
+        bus: impl Into<String>,
+        terminal_map: Vec<String>,
+        topology: IbrTopology,
+        prime_mover: IbrPrimeMover,
+        s_max: Vec<f64>,
+    ) -> Self {
+        Self {
+            name: name.into(),
+            bus: bus.into(),
+            terminal_map,
+            topology,
+            prime_mover,
+            s_max,
+            i_max: None,
+            p_avail: None,
+            p_min: None,
+            p_max: None,
+            q_min: None,
+            q_max: None,
+            control_profile: None,
+            voltage_aggregation: None,
+            extras: Extras::new(),
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
+#[non_exhaustive]
+pub enum ControlVoltageReference {
+    PnPerPhase,
+    PpPerPhase,
+    PpAveraged,
+    PgAveraged,
+    PnAveraged,
+    PgPerPhase,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
+#[non_exhaustive]
+pub enum ReactivePowerUnit {
+    VaFraction,
+    Var,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
+#[non_exhaustive]
+pub enum ActivePowerUnit {
+    VaFraction,
+    W,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
+#[non_exhaustive]
+pub enum ReactivePowerReference {
+    VarMax,
+    VarAvailable,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
+#[non_exhaustive]
+pub enum ActivePowerReference {
+    PAvailable,
+    PMax,
+    SMax,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[non_exhaustive]
+pub struct PowerFactorControl {
+    pub pf: f64,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[non_exhaustive]
+pub struct VoltVarControl {
+    pub voltage_reference: Option<ControlVoltageReference>,
+    pub breakpoints: Vec<f64>,
+    pub q_limits: Vec<f64>,
+    pub q_unit: Option<ReactivePowerUnit>,
+    pub q_ref: Option<ReactivePowerReference>,
+    pub p_min_for_q: Option<f64>,
+    pub p_min_for_q_max: Option<f64>,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[non_exhaustive]
+pub struct VoltWattControl {
+    pub voltage_reference: Option<ControlVoltageReference>,
+    pub breakpoints: Vec<f64>,
+    pub p_limits: Vec<f64>,
+    pub p_unit: Option<ActivePowerUnit>,
+    pub p_ref: Option<ActivePowerReference>,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[non_exhaustive]
+pub struct DistControlProfile {
+    pub name: String,
+    pub power_factor: Option<PowerFactorControl>,
+    pub volt_var: Option<VoltVarControl>,
+    pub volt_watt: Option<VoltWattControl>,
+    pub extras: Extras,
+}
+
+impl DistControlProfile {
+    #[must_use]
+    pub fn new(name: impl Into<String>) -> Self {
+        Self {
+            name: name.into(),
+            power_factor: None,
+            volt_var: None,
+            volt_watt: None,
+            extras: Extras::new(),
+        }
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[non_exhaustive]
 pub struct DistShunt {
@@ -532,6 +709,10 @@ pub struct DistNetwork {
     pub transformers: Vec<DistTransformer>,
     pub loads: Vec<DistLoad>,
     pub generators: Vec<DistGenerator>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub ibrs: Vec<DistIbr>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub control_profiles: Vec<DistControlProfile>,
     pub shunts: Vec<DistShunt>,
     /// BMOPF allows exactly one; the model allows any number and the BMOPF
     /// writer warns beyond the first.
@@ -578,6 +759,8 @@ impl Default for DistNetwork {
             transformers: Vec::new(),
             loads: Vec::new(),
             generators: Vec::new(),
+            ibrs: Vec::new(),
+            control_profiles: Vec::new(),
             shunts: Vec::new(),
             sources: Vec::new(),
             untyped: Vec::new(),
