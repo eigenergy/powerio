@@ -6,8 +6,9 @@ use std::sync::Arc;
 
 use powerio_dist::dss::{parse_dss_file, parse_dss_str};
 use powerio_dist::{
-    Configuration, DistBus, DistLineCode, DistNetwork, DistTransformer, Winding, WindingConn,
-    parse_bmopf_file, parse_bmopf_str, write_bmopf_json, write_dss,
+    Configuration, DiagnosticSeverity, DiagnosticStage, DistBus, DistLineCode, DistNetwork,
+    DistTransformer, Winding, WindingConn, parse_bmopf_file, parse_bmopf_str, write_bmopf_json,
+    write_dss,
 };
 
 fn fixture(rel: &str) -> PathBuf {
@@ -30,6 +31,17 @@ fn errors(validator: &jsonschema::Validator, text: &str) -> Vec<String> {
         .iter_errors(&doc)
         .map(|e| format!("{}: {e}", e.instance_path()))
         .collect()
+}
+
+fn diagnostic<'a>(
+    conv: &'a powerio_dist::Conversion,
+    code: &str,
+    element_path: &str,
+) -> &'a powerio_dist::StructuredDiagnostic {
+    conv.diagnostics
+        .iter()
+        .find(|d| d.code.as_str() == code && d.element_path.as_deref() == Some(element_path))
+        .unwrap_or_else(|| panic!("missing diagnostic {code} for {element_path}: {conv:?}"))
 }
 
 #[test]
@@ -261,6 +273,22 @@ fn single_phase_wye_delta_keeps_both_delta_terminals() {
         "missing the wye/delta fidelity note: {:?}",
         out.warnings
     );
+    assert!(
+        out.warnings
+            .iter()
+            .any(|w| w.contains("EMIT.BMOPF.TRANSFORMER_CONNECTION_LOSSY")),
+        "missing the wye/delta diagnostic code: {:?}",
+        out.warnings
+    );
+    let diag = diagnostic(
+        &out,
+        "EMIT.BMOPF.TRANSFORMER_CONNECTION_LOSSY",
+        "transformer t1",
+    );
+    assert_eq!(diag.severity, DiagnosticSeverity::Warning);
+    assert_eq!(diag.stage, DiagnosticStage::Emit);
+    assert_eq!(diag.details["transformer"], serde_json::json!("t1"));
+    assert_eq!(diag.details["connection"], serde_json::json!("wye/delta"));
     let doc: serde_json::Value = serde_json::from_str(&out.text).unwrap();
     let sp = &doc["transformer"]["single_phase"];
     assert_eq!(sp["t1"]["terminal_map_to"], serde_json::json!(["1", "2"]));
@@ -283,6 +311,11 @@ fn single_phase_wye_delta_keeps_both_delta_terminals() {
         doc["transformer"]["single_phase"]["t1"]["terminal_map_from"],
         serde_json::json!(["1", "2"])
     );
+    assert!(
+        !out.text.contains("EMIT.BMOPF"),
+        "diagnostic codes must stay out of BMOPF JSON: {}",
+        out.text
+    );
 }
 
 #[test]
@@ -296,6 +329,17 @@ fn ieee13_conversion_warnings_name_every_loss() {
             .any(|w| w.contains("XFM1") && w.contains("single_phase"))
     );
     assert!(out.warnings.iter().any(|w| w.contains("regcontrol")));
+    assert!(
+        out.warnings
+            .iter()
+            .any(|w| w.contains("EMIT.BMOPF.REGCONTROL_DROPPED")),
+        "missing regcontrol diagnostic code: {:?}",
+        out.warnings
+    );
+    let diag = diagnostic(&out, "EMIT.BMOPF.REGCONTROL_DROPPED", "regcontrol Reg1");
+    assert_eq!(diag.severity, DiagnosticSeverity::Warning);
+    assert_eq!(diag.stage, DiagnosticStage::Emit);
+    assert_eq!(diag.details["class"], serde_json::json!("regcontrol"));
     // No silent extras: every warning leads with a `class name:` element
     // identifier ("load 671: ...", "voltage source source: ...").
     for w in &out.warnings {
@@ -1570,6 +1614,53 @@ fn three_wire_wye_wye_is_unsupported_not_a_panic() {
             .any(|w| w.contains("transformer t3w") && w.contains("dropped")),
         "{:?}",
         out.warnings
+    );
+    assert!(
+        out.warnings
+            .iter()
+            .any(|w| w.contains("EMIT.BMOPF.TRANSFORMER_UNSUPPORTED")),
+        "missing unsupported transformer diagnostic code: {:?}",
+        out.warnings
+    );
+    let diag = diagnostic(
+        &out,
+        "EMIT.BMOPF.TRANSFORMER_UNSUPPORTED",
+        "transformer t3w",
+    );
+    assert_eq!(diag.severity, DiagnosticSeverity::Warning);
+    assert_eq!(diag.stage, DiagnosticStage::Emit);
+    assert_eq!(diag.details["transformer"], serde_json::json!("t3w"));
+    assert_eq!(diag.details["phases"], serde_json::json!(3));
+}
+
+#[test]
+fn dss_autotransformer_drop_has_stable_diagnostic() {
+    let net = parse_dss_str(
+        "Clear\n\
+         New Circuit.auto basekv=12.47 bus1=sourcebus.1\n\
+         New AutoTrans.at1 phases=1 windings=2 buses=(sourcebus.1.0, loadbus.1.0) \
+         kvs=(7.2 0.24) kvas=(25 25) xhl=2\n",
+    );
+    assert_eq!(net.untyped.len(), 1, "{:?}", net.untyped);
+    assert_eq!(net.untyped[0].class, "autotrans");
+
+    let out = write_bmopf_json(&net);
+    assert!(
+        out.warnings
+            .iter()
+            .any(|w| w.contains("EMIT.BMOPF.AUTOTRANSFORMER_DROPPED")),
+        "missing autotransformer diagnostic code: {:?}",
+        out.warnings
+    );
+    let diag = diagnostic(&out, "EMIT.BMOPF.AUTOTRANSFORMER_DROPPED", "autotrans at1");
+    assert_eq!(diag.severity, DiagnosticSeverity::Warning);
+    assert_eq!(diag.stage, DiagnosticStage::Emit);
+    assert_eq!(diag.details["class"], serde_json::json!("autotrans"));
+    assert_eq!(diag.details["name"], serde_json::json!("at1"));
+    assert!(
+        !out.text.contains("at1"),
+        "untyped AutoTrans must not silently enter BMOPF JSON: {}",
+        out.text
     );
 }
 

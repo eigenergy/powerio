@@ -87,6 +87,7 @@ pub fn write_dss_with_options(net: &DistNetwork, options: &DssWriteOptions) -> C
     Conversion {
         text: w.out,
         warnings: w.warnings,
+        diagnostics: Vec::new(),
     }
 }
 

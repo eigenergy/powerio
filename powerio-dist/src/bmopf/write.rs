@@ -11,6 +11,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use serde_json::{Map, Value, json};
 
 use crate::convert::Conversion;
+use crate::diagnostics::{DiagnosticSeverity, DiagnosticStage, StructuredDiagnostic};
 use crate::model::{
     ActivePowerReference, ActivePowerUnit, Configuration, ControlVoltageReference,
     DistControlProfile, DistGenerator, DistIbr, DistLoadVoltageModel, DistNetwork, DistTransformer,
@@ -78,6 +79,7 @@ const TRANSFORMER_TWO_WINDING_ALLOWED_EXTRAS: [&str; 10] = [
 pub fn write_bmopf_json(net: &DistNetwork) -> Conversion {
     let mut w = Writer {
         warnings: Vec::new(),
+        diagnostics: Vec::new(),
         grounded: net
             .buses
             .iter()
@@ -88,17 +90,51 @@ pub fn write_bmopf_json(net: &DistNetwork) -> Conversion {
     Conversion {
         text: serde_json::to_string_pretty(&doc).expect("maps and finite numbers") + "\n",
         warnings: w.warnings,
+        diagnostics: w.diagnostics,
     }
 }
 
 struct Writer {
     warnings: Vec<String>,
+    diagnostics: Vec<StructuredDiagnostic>,
     grounded: BTreeMap<String, Vec<String>>,
 }
 
 impl Writer {
     fn warn(&mut self, msg: impl Into<String>) {
         self.warnings.push(msg.into());
+    }
+
+    fn diagnostic(
+        &mut self,
+        code: &'static str,
+        element_path: impl Into<String>,
+        message: impl Into<String>,
+        details: Map<String, Value>,
+    ) {
+        let message = message.into();
+        self.warnings.push(format!("{message} [{code}]"));
+        self.diagnostics.push(
+            StructuredDiagnostic::new(
+                code,
+                DiagnosticSeverity::Warning,
+                DiagnosticStage::Emit,
+                message,
+            )
+            .with_element_path(element_path)
+            .with_details(details),
+        );
+    }
+
+    fn transformer_diagnostic(
+        &mut self,
+        t: &DistTransformer,
+        code: &'static str,
+        message: impl Into<String>,
+        mut details: Map<String, Value>,
+    ) {
+        details.insert("transformer".into(), json!(&t.name));
+        self.diagnostic(code, format!("transformer {}", t.name), message, details);
     }
 
     /// Finite number guard (the jnum pattern): JSON has no Inf/NaN.
@@ -229,18 +265,34 @@ impl Writer {
         }
 
         self.untyped_bmopf_tables(net, &mut doc);
+        self.warn_unemitted_untyped(net);
+        self.prune_unreferenced_buses(&mut doc);
+        Value::Object(doc)
+    }
 
+    fn warn_unemitted_untyped(&mut self, net: &DistNetwork) {
         for u in &net.untyped {
             if Self::is_emitted_untyped(u) {
                 continue;
             }
-            self.warn(format!(
+            let message = format!(
                 "{} {}: class is not represented in BMOPF; dropped from the output",
                 u.class, u.name
-            ));
+            );
+            if u.class == "regcontrol" || u.class == "autotrans" {
+                let mut details = Map::new();
+                details.insert("class".into(), json!(&u.class));
+                details.insert("name".into(), json!(&u.name));
+                let code = if u.class == "regcontrol" {
+                    "EMIT.BMOPF.REGCONTROL_DROPPED"
+                } else {
+                    "EMIT.BMOPF.AUTOTRANSFORMER_DROPPED"
+                };
+                self.diagnostic(code, format!("{} {}", u.class, u.name), message, details);
+            } else {
+                self.warn(message);
+            }
         }
-        self.prune_unreferenced_buses(&mut doc);
-        Value::Object(doc)
     }
 
     fn is_emitted_untyped(u: &crate::model::UntypedObject) -> bool {
@@ -751,12 +803,25 @@ impl Writer {
                         // consumer that models the subtype literally reads it
                         // as a wye-wye unit. Flag it; the line to line topology
                         // survives in the terminal map.
-                        self.warn(format!(
-                            "transformer {}: single phase wye/delta emitted as single_phase; \
-                             the wye/delta connection is not encoded in the subtype, only the \
-                             line to line terminal map",
-                            t.name
-                        ));
+                        let connection = match (t.windings[0].conn, t.windings[1].conn) {
+                            (WindingConn::Wye, WindingConn::Delta) => "wye/delta",
+                            (WindingConn::Delta, WindingConn::Wye) => "delta/wye",
+                            _ => "delta",
+                        };
+                        let mut details = Map::new();
+                        details.insert("connection".into(), json!(connection));
+                        details.insert("emitted_subtype".into(), json!("single_phase"));
+                        self.transformer_diagnostic(
+                            t,
+                            "EMIT.BMOPF.TRANSFORMER_CONNECTION_LOSSY",
+                            format!(
+                                "transformer {}: single phase wye/delta emitted as single_phase; \
+                                 the wye/delta connection is not encoded in the subtype, only the \
+                                 line to line terminal map",
+                                t.name
+                            ),
+                            details,
+                        );
                     }
                     let v = self.two_winding(t, &t.windings[0], &t.windings[1], 1.0, true, true);
                     insert("single_phase", t.name.clone(), v, &mut by_subtype);
@@ -787,11 +852,20 @@ impl Writer {
                     insert("n_winding", t.name.clone(), v, &mut by_subtype);
                 }
                 Kind::Unsupported(why) => {
-                    self.warn(format!(
-                        "transformer {}: {why}; not representable in the four BMOPF \
-                         subtypes, dropped from the output",
-                        t.name
-                    ));
+                    let mut details = Map::new();
+                    details.insert("reason".into(), json!(&why));
+                    details.insert("phases".into(), json!(t.phases));
+                    details.insert("windings".into(), json!(t.windings.len()));
+                    self.transformer_diagnostic(
+                        t,
+                        "EMIT.BMOPF.TRANSFORMER_UNSUPPORTED",
+                        format!(
+                            "transformer {}: {why}; not representable in the four BMOPF \
+                             subtypes, dropped from the output",
+                            t.name
+                        ),
+                        details,
+                    );
                 }
             }
         }
@@ -835,10 +909,15 @@ impl Writer {
         // The whole leakage reactance rides on the from side, the
         // convention the public example uses.
         if t.xsc_pct.is_empty() {
-            self.warn(format!(
-                "transformer {}: xsc_pct is empty; emitted x_series_from=0",
-                t.name
-            ));
+            self.transformer_diagnostic(
+                t,
+                "EMIT.BMOPF.TRANSFORMER_MISSING_XSC",
+                format!(
+                    "transformer {}: xsc_pct is empty; emitted x_series_from=0",
+                    t.name
+                ),
+                Map::new(),
+            );
         }
         let xhl = t.xsc_pct.first().copied().unwrap_or(0.0);
         o.insert(
@@ -907,20 +986,33 @@ impl Writer {
             r_neutral,
             x_neutral,
         };
-        self.warn(format!(
-            "transformer {}: center tap secondary collapsed to one winding; the \
-             xht/xlt impedance split is not representable and was dropped",
-            t.name
-        ));
+        self.transformer_diagnostic(
+            t,
+            "EMIT.BMOPF.TRANSFORMER_CENTER_TAP_COLLAPSED",
+            format!(
+                "transformer {}: center tap secondary collapsed to one winding; the \
+                 xht/xlt impedance split is not representable and was dropped",
+                t.name
+            ),
+            Map::new(),
+        );
         if w2.s_rating.to_bits() != from.s_rating.to_bits()
             || w3.s_rating.to_bits() != from.s_rating.to_bits()
         {
-            self.warn(format!(
-                "transformer {}: center tap half winding s_ratings ({}, {}) differ \
-                 from the primary's {}; the collapsed winding keeps the primary \
-                 rating, the half ratings only survive in the resistance conversion",
-                t.name, w2.s_rating, w3.s_rating, from.s_rating
-            ));
+            let mut details = Map::new();
+            details.insert("from_s_rating".into(), json!(from.s_rating));
+            details.insert("half_s_ratings".into(), json!([w2.s_rating, w3.s_rating]));
+            self.transformer_diagnostic(
+                t,
+                "EMIT.BMOPF.TRANSFORMER_CENTER_TAP_RATING_COLLAPSED",
+                format!(
+                    "transformer {}: center tap half winding s_ratings ({}, {}) differ \
+                     from the primary's {}; the collapsed winding keeps the primary \
+                     rating, the half ratings only survive in the resistance conversion",
+                    t.name, w2.s_rating, w3.s_rating, from.s_rating
+                ),
+                details,
+            );
         }
         self.two_winding(t, from, &to, 1.0, true, true)
     }
@@ -953,10 +1045,15 @@ impl Writer {
             ),
         );
         if t.xsc_pct.is_empty() {
-            self.warn(format!(
-                "transformer {}: xsc_pct is empty; emitted x_series=0",
-                t.name
-            ));
+            self.transformer_diagnostic(
+                t,
+                "EMIT.BMOPF.TRANSFORMER_MISSING_XSC",
+                format!(
+                    "transformer {}: xsc_pct is empty; emitted x_series=0",
+                    t.name
+                ),
+                Map::new(),
+            );
         }
         let xhl = t.xsc_pct.first().copied().unwrap_or(0.0);
         o.insert(
@@ -978,10 +1075,20 @@ impl Writer {
             .iter()
             .any(|w| w.s_rating.to_bits() != s.to_bits())
         {
-            self.warn(format!(
-                "transformer {}: n_winding BMOPF carries one s_rating; emitted the first winding rating",
-                t.name
-            ));
+            let mut details = Map::new();
+            details.insert(
+                "s_ratings".into(),
+                json!(t.windings.iter().map(|w| w.s_rating).collect::<Vec<_>>()),
+            );
+            self.transformer_diagnostic(
+                t,
+                "EMIT.BMOPF.TRANSFORMER_N_WINDING_RATING_COLLAPSED",
+                format!(
+                    "transformer {}: n_winding BMOPF carries one s_rating; emitted the first winding rating",
+                    t.name
+                ),
+                details,
+            );
         }
         let mut o = Map::new();
         o.insert("s_rating".into(), self.num(s, "transformer s_rating"));
@@ -1020,12 +1127,19 @@ impl Writer {
         let mut x_sc = Map::new();
         for (idx, (i, j)) in pair_keys(t.windings.len()).into_iter().enumerate() {
             let x_pct = t.xsc_pct.get(idx).copied().unwrap_or_else(|| {
-                self.warn(format!(
-                    "transformer {}: missing x_sc for winding pair {}_{}; emitted 0",
-                    t.name,
-                    i + 1,
-                    j + 1
-                ));
+                let mut details = Map::new();
+                details.insert("winding_pair".into(), json!(format!("{}_{}", i + 1, j + 1)));
+                self.transformer_diagnostic(
+                    t,
+                    "EMIT.BMOPF.TRANSFORMER_MISSING_XSC",
+                    format!(
+                        "transformer {}: missing x_sc for winding pair {}_{}; emitted 0",
+                        t.name,
+                        i + 1,
+                        j + 1
+                    ),
+                    details,
+                );
                 0.0
             });
             x_sc.insert(
@@ -1076,10 +1190,18 @@ impl Writer {
             let v = self.two_winding(&t1, &f, &to_1, 1.0, true, false);
             out.push((format!("{}_{}", t.name, k + 1), v));
         }
-        self.warn(format!(
-            "transformer {}: three phase wye-wye decomposed into {} single_phase units",
-            t.name, t.phases
-        ));
+        let mut details = Map::new();
+        details.insert("emitted_subtype".into(), json!("single_phase"));
+        details.insert("units".into(), json!(t.phases));
+        self.transformer_diagnostic(
+            t,
+            "EMIT.BMOPF.TRANSFORMER_WYE_WYE_DECOMPOSED",
+            format!(
+                "transformer {}: three phase wye-wye decomposed into {} single_phase units",
+                t.name, t.phases
+            ),
+            details,
+        );
         self.transformer_extras_dropped(t, &TRANSFORMER_TWO_WINDING_ALLOWED_EXTRAS);
         out
     }
@@ -1087,10 +1209,17 @@ impl Writer {
     fn taps_dropped(&mut self, t: &DistTransformer) {
         for w in &t.windings {
             if (w.tap - 1.0).abs() > 1e-12 {
-                self.warn(format!(
-                    "transformer {}: off nominal tap {} has no BMOPF field; dropped",
-                    t.name, w.tap
-                ));
+                let mut details = Map::new();
+                details.insert("tap".into(), json!(w.tap));
+                self.transformer_diagnostic(
+                    t,
+                    "EMIT.BMOPF.TRANSFORMER_TAP_DROPPED",
+                    format!(
+                        "transformer {}: off nominal tap {} has no BMOPF field; dropped",
+                        t.name, w.tap
+                    ),
+                    details,
+                );
             }
         }
     }
@@ -1111,10 +1240,17 @@ impl Writer {
         }
         for w in t.windings.iter().skip(1) {
             if (w.tap - 1.0).abs() > 1e-12 {
-                self.warn(format!(
-                    "transformer {}: non-from-side tap {} has no BMOPF field; dropped",
-                    t.name, w.tap
-                ));
+                let mut details = Map::new();
+                details.insert("tap".into(), json!(w.tap));
+                self.transformer_diagnostic(
+                    t,
+                    "EMIT.BMOPF.TRANSFORMER_TAP_DROPPED",
+                    format!(
+                        "transformer {}: non-from-side tap {} has no BMOPF field; dropped",
+                        t.name, w.tap
+                    ),
+                    details,
+                );
             }
         }
     }
@@ -1145,10 +1281,18 @@ impl Writer {
         if v.is_finite() && v >= 0.0 {
             o.insert(key.into(), json!(v));
         } else {
-            self.warn(format!(
-                "transformer {}: {key}={v} is not a nonnegative finite BMOPF neutral impedance; dropped",
-                t.name
-            ));
+            let mut details = Map::new();
+            details.insert("field".into(), json!(key));
+            details.insert("value".into(), json!(v));
+            self.transformer_diagnostic(
+                t,
+                "EMIT.BMOPF.TRANSFORMER_NEUTRAL_DROPPED",
+                format!(
+                    "transformer {}: {key}={v} is not a nonnegative finite BMOPF neutral impedance; dropped",
+                    t.name
+                ),
+                details,
+            );
         }
     }
 
@@ -1160,10 +1304,18 @@ impl Writer {
         b: Option<f64>,
     ) -> Option<f64> {
         if let (Some(a), Some(b)) = (a, b) {
-            self.warn(format!(
-                "transformer {}: center tap secondary has two {field} values ({a}, {b}); emitted the first",
-                t.name
-            ));
+            let mut details = Map::new();
+            details.insert("field".into(), json!(field));
+            details.insert("values".into(), json!([a, b]));
+            self.transformer_diagnostic(
+                t,
+                "EMIT.BMOPF.TRANSFORMER_CENTER_TAP_NEUTRAL_COLLAPSED",
+                format!(
+                    "transformer {}: center tap secondary has two {field} values ({a}, {b}); emitted the first",
+                    t.name
+                ),
+                details,
+            );
         }
         a.or(b)
     }
@@ -1171,11 +1323,19 @@ impl Writer {
     fn warn_unrepresented_neutral_fields(&mut self, t: &DistTransformer, target: &str) {
         for (idx, w) in t.windings.iter().enumerate() {
             if w.r_neutral.is_some() || w.x_neutral.is_some() {
-                self.warn(format!(
-                    "transformer {} winding {}: neutral impedance has no {target} field; dropped",
-                    t.name,
-                    idx + 1
-                ));
+                let mut details = Map::new();
+                details.insert("target".into(), json!(target));
+                details.insert("winding".into(), json!(idx + 1));
+                self.transformer_diagnostic(
+                    t,
+                    "EMIT.BMOPF.TRANSFORMER_NEUTRAL_DROPPED",
+                    format!(
+                        "transformer {} winding {}: neutral impedance has no {target} field; dropped",
+                        t.name,
+                        idx + 1
+                    ),
+                    details,
+                );
             }
         }
     }
@@ -1191,10 +1351,18 @@ impl Writer {
             o.insert("g_no_load".into(), v.clone());
         } else if let Some(loss_pct) = extras_number(&t.extras, "%noloadloss") {
             if self.is_phase_to_phase_single_phase(from) {
-                self.warn(format!(
-                    "transformer {}: phase-to-phase %noloadloss cannot be represented as a BMOPF no-load shunt; dropped",
-                    t.name
-                ));
+                let mut details = Map::new();
+                details.insert("field".into(), json!("%noloadloss"));
+                details.insert("reason".into(), json!("phase_to_phase_single_phase"));
+                self.transformer_diagnostic(
+                    t,
+                    "EMIT.BMOPF.TRANSFORMER_NO_LOAD_SHUNT_DROPPED",
+                    format!(
+                        "transformer {}: phase-to-phase %noloadloss cannot be represented as a BMOPF no-load shunt; dropped",
+                        t.name
+                    ),
+                    details,
+                );
             } else {
                 let v_stamp = no_load_voltage_base(from);
                 if s.is_finite() && s > 0.0 && v_stamp.is_finite() && v_stamp > 0.0 {
@@ -1204,10 +1372,19 @@ impl Writer {
                         self.num(loss_pct / 100.0 * y_base, "transformer g_no_load"),
                     );
                 } else {
-                    self.warn(format!(
-                        "transformer {}: %noloadloss cannot be converted without a positive s_rating and v_nom_from",
-                        t.name
-                    ));
+                    let mut details = Map::new();
+                    details.insert("field".into(), json!("%noloadloss"));
+                    details.insert("s_rating".into(), json!(s));
+                    details.insert("v_nom_from".into(), json!(v_stamp));
+                    self.transformer_diagnostic(
+                        t,
+                        "EMIT.BMOPF.TRANSFORMER_NO_LOAD_SHUNT_UNCONVERTIBLE",
+                        format!(
+                            "transformer {}: %noloadloss cannot be converted without a positive s_rating and v_nom_from",
+                            t.name
+                        ),
+                        details,
+                    );
                 }
             }
         }
@@ -1216,10 +1393,18 @@ impl Writer {
             o.insert("b_no_load".into(), v.clone());
         } else if let Some(imag_pct) = extras_number(&t.extras, "%imag") {
             if self.is_phase_to_phase_single_phase(from) {
-                self.warn(format!(
-                    "transformer {}: phase-to-phase %imag cannot be represented as a BMOPF no-load shunt; dropped",
-                    t.name
-                ));
+                let mut details = Map::new();
+                details.insert("field".into(), json!("%imag"));
+                details.insert("reason".into(), json!("phase_to_phase_single_phase"));
+                self.transformer_diagnostic(
+                    t,
+                    "EMIT.BMOPF.TRANSFORMER_NO_LOAD_SHUNT_DROPPED",
+                    format!(
+                        "transformer {}: phase-to-phase %imag cannot be represented as a BMOPF no-load shunt; dropped",
+                        t.name
+                    ),
+                    details,
+                );
             } else {
                 let v_stamp = no_load_voltage_base(from);
                 if s.is_finite() && s > 0.0 && v_stamp.is_finite() && v_stamp > 0.0 {
@@ -1229,10 +1414,19 @@ impl Writer {
                         self.num(imag_pct / 100.0 * y_base, "transformer b_no_load"),
                     );
                 } else {
-                    self.warn(format!(
-                        "transformer {}: %imag cannot be converted without a positive s_rating and v_nom_from",
-                        t.name
-                    ));
+                    let mut details = Map::new();
+                    details.insert("field".into(), json!("%imag"));
+                    details.insert("s_rating".into(), json!(s));
+                    details.insert("v_nom_from".into(), json!(v_stamp));
+                    self.transformer_diagnostic(
+                        t,
+                        "EMIT.BMOPF.TRANSFORMER_NO_LOAD_SHUNT_UNCONVERTIBLE",
+                        format!(
+                            "transformer {}: %imag cannot be converted without a positive s_rating and v_nom_from",
+                            t.name
+                        ),
+                        details,
+                    );
                 }
             }
         } else if !self.is_phase_to_phase_single_phase(from)
@@ -1255,10 +1449,17 @@ impl Writer {
             if key == "bmopf_subtype" || key == "tap" || allowed.contains(&key.as_str()) {
                 continue;
             }
-            self.warn(format!(
-                "transformer {}: `{key}` has no place in the BMOPF schema; dropped from the output",
-                t.name
-            ));
+            let mut details = Map::new();
+            details.insert("field".into(), json!(key));
+            self.transformer_diagnostic(
+                t,
+                "EMIT.BMOPF.TRANSFORMER_EXTRA_DROPPED",
+                format!(
+                    "transformer {}: `{key}` has no place in the BMOPF schema; dropped from the output",
+                    t.name
+                ),
+                details,
+            );
         }
     }
 
