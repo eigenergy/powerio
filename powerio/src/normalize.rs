@@ -34,6 +34,36 @@ pub(crate) const RAD_TO_DEG: f64 = 180.0 / std::f64::consts::PI;
 /// between the reader, the writer, and [`Network::to_normalized`].
 pub(crate) const GEN_PU_KEYS: [&str; 4] = ["ramp_agc", "ramp_10", "ramp_30", "ramp_q"];
 
+/// Default branch angle difference bound used by PowerModels parse time repair.
+#[allow(clippy::approx_constant)]
+pub const POWER_MODELS_ANGLE_BOUND_PAD: f64 = 1.0472;
+
+/// Options for [`Network::to_normalized_with_options`].
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct NormalizeOptions {
+    /// Clamp branch angle difference bounds to the interval PowerModels relaxations
+    /// accept. Disabled by default so [`Network::to_normalized`] stays unchanged.
+    pub clamp_angle_bounds: bool,
+    /// Replacement magnitude, in radians, for clamped angle bounds.
+    pub angle_bound_pad: f64,
+}
+
+impl Default for NormalizeOptions {
+    fn default() -> Self {
+        Self {
+            clamp_angle_bounds: false,
+            angle_bound_pad: POWER_MODELS_ANGLE_BOUND_PAD,
+        }
+    }
+}
+
+/// Output of [`Network::to_normalized_with_options`].
+#[derive(Clone, Debug)]
+pub struct NormalizedNetwork {
+    pub network: Network,
+    pub warnings: Vec<String>,
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum CostModel {
     Piecewise,
@@ -238,6 +268,49 @@ fn norm_branches(branches: &[Branch], base: f64, map: &HashMap<BusId, BusId>) ->
         .collect()
 }
 
+fn validate_normalize_options(options: &NormalizeOptions) -> Result<()> {
+    if options.clamp_angle_bounds
+        && (!options.angle_bound_pad.is_finite()
+            || options.angle_bound_pad <= 0.0
+            || options.angle_bound_pad >= std::f64::consts::FRAC_PI_2)
+    {
+        return Err(Error::InvalidNormalizeOption {
+            field: "angle_bound_pad",
+            value: options.angle_bound_pad,
+        });
+    }
+    Ok(())
+}
+
+fn clamp_angle_bounds(branches: &mut [Branch], pad: f64, warnings: &mut Vec<String>) {
+    for (idx, br) in branches.iter_mut().enumerate() {
+        let old_min = br.angmin;
+        let old_max = br.angmax;
+        let mut changes = Vec::new();
+
+        if old_min <= -std::f64::consts::FRAC_PI_2 {
+            br.angmin = -pad;
+            changes.push(format!("angmin {old_min} -> {}", br.angmin));
+        }
+        if old_max >= std::f64::consts::FRAC_PI_2 {
+            br.angmax = pad;
+            changes.push(format!("angmax {old_max} -> {}", br.angmax));
+        }
+        if old_min == 0.0 && old_max == 0.0 {
+            br.angmin = -pad;
+            br.angmax = pad;
+            changes.push(format!("angmin/angmax 0 -> [{}, {}]", br.angmin, br.angmax));
+        }
+
+        if !changes.is_empty() {
+            warnings.push(format!(
+                "branch {idx} angle difference bounds clamped: {}",
+                changes.join(", ")
+            ));
+        }
+    }
+}
+
 fn norm_gens(gens: &[Generator], base: f64, map: &HashMap<BusId, BusId>) -> Vec<Generator> {
     gens.iter()
         .filter(|g| g.in_service)
@@ -409,9 +482,11 @@ impl Network {
     /// the per-unit/radian model instead of echoing the raw bytes, and a consumer
     /// can tell it apart from a raw in-memory network.
     ///
-    /// Scope is the universal canonicalization only. It does not pad angle bounds,
-    /// synthesize a missing `rate_a`, or restrict the gen-cost model — those are
-    /// solver-prep choices a consumer applies on top. The cost *rescale* is
+    /// Scope is the universal canonicalization only. It does not synthesize a
+    /// missing `rate_a` or restrict the gen-cost model — those are solver
+    /// preparation choices a consumer applies on top. Use
+    /// [`Network::to_normalized_with_options`] for the opt in PowerModels angle
+    /// bound repair. The cost *rescale* is
     /// universal and lives here; the model *restriction* does not.
     ///
     /// # Errors
@@ -421,6 +496,18 @@ impl Network {
     /// [`Error::ReferenceBusCount`] if no reference bus can be established — no `REF`
     /// survives and there is no in-service generator to anchor one.
     pub fn to_normalized(&self) -> Result<Network> {
+        Ok(self
+            .to_normalized_with_options(&NormalizeOptions::default())?
+            .network)
+    }
+
+    /// Like [`Network::to_normalized`], with opt in solver preparation repairs
+    /// that report fidelity warnings.
+    pub fn to_normalized_with_options(
+        &self,
+        options: &NormalizeOptions,
+    ) -> Result<NormalizedNetwork> {
+        validate_normalize_options(options)?;
         self.check_base_mva()?;
         let base = self.base_mva;
 
@@ -440,7 +527,11 @@ impl Network {
         }
         let loads = norm_loads(&self.loads, base, &id_map);
         let shunts = norm_shunts(&self.shunts, base, &id_map);
-        let branches = norm_branches(&self.branches, base, &id_map);
+        let mut branches = norm_branches(&self.branches, base, &id_map);
+        let mut warnings = Vec::new();
+        if options.clamp_angle_bounds {
+            clamp_angle_bounds(&mut branches, options.angle_bound_pad, &mut warnings);
+        }
         let switches = norm_switches(&self.switches, base, &id_map);
         let generators = norm_gens(&self.generators, base, &id_map);
         let storage = norm_storage(&self.storage, base, &id_map);
@@ -505,7 +596,10 @@ impl Network {
             net.validate().is_ok(),
             "to_normalized produced a dangling reference"
         );
-        Ok(net)
+        Ok(NormalizedNetwork {
+            network: net,
+            warnings,
+        })
     }
 }
 
@@ -515,6 +609,59 @@ mod tests {
 
     fn approx(a: f64, b: f64) -> bool {
         (a - b).abs() < 1e-9
+    }
+
+    fn angle_bound_fixture() -> Network {
+        let path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../tests/data/angle_bounds_clamp.m");
+        crate::parse_file(path, None).unwrap().network
+    }
+
+    #[test]
+    fn angle_bound_clamp_is_opt_in_and_matches_powermodels_rules() {
+        let net = angle_bound_fixture();
+
+        let plain = net.to_normalized().unwrap();
+        assert!(approx(plain.branches[0].angmin, -std::f64::consts::TAU));
+        assert!(approx(plain.branches[0].angmax, std::f64::consts::TAU));
+        assert!(approx(plain.branches[1].angmin, 0.0));
+        assert!(approx(plain.branches[1].angmax, 0.0));
+
+        let out = net
+            .to_normalized_with_options(&NormalizeOptions {
+                clamp_angle_bounds: true,
+                ..NormalizeOptions::default()
+            })
+            .unwrap();
+        assert_eq!(out.warnings.len(), 2);
+        assert!(out.warnings[0].contains("branch 0"));
+        assert!(out.warnings[1].contains("branch 1"));
+
+        let branches = &out.network.branches;
+        assert!(approx(branches[0].angmin, -POWER_MODELS_ANGLE_BOUND_PAD));
+        assert!(approx(branches[0].angmax, POWER_MODELS_ANGLE_BOUND_PAD));
+        assert!(approx(branches[1].angmin, -POWER_MODELS_ANGLE_BOUND_PAD));
+        assert!(approx(branches[1].angmax, POWER_MODELS_ANGLE_BOUND_PAD));
+        assert!(approx(branches[2].angmin, -30.0 * DEG_TO_RAD));
+        assert!(approx(branches[2].angmax, 30.0 * DEG_TO_RAD));
+    }
+
+    #[test]
+    fn angle_bound_clamp_rejects_invalid_pad() {
+        let net = angle_bound_fixture();
+        let err = net
+            .to_normalized_with_options(&NormalizeOptions {
+                clamp_angle_bounds: true,
+                angle_bound_pad: std::f64::consts::FRAC_PI_2,
+            })
+            .unwrap_err();
+        assert!(matches!(
+            err,
+            Error::InvalidNormalizeOption {
+                field: "angle_bound_pad",
+                ..
+            }
+        ));
     }
 
     #[test]

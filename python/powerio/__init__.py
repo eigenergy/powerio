@@ -463,6 +463,23 @@ class Network:
         """
         return Network(self._inner.to_normalized())
 
+    def to_normalized_with_options(
+        self,
+        clamp_angle_bounds: bool = False,
+        angle_bound_pad: Optional[float] = None,
+    ) -> "Network":
+        """A normalized copy with explicit normalization options.
+
+        ``clamp_angle_bounds=True`` applies the PowerModels angle difference
+        bound repair: limits at or beyond ±π/2 and zero/zero windows become
+        ±``angle_bound_pad``. The default pad is 1.0472 radians.
+        """
+        return Network(
+            self._inner.to_normalized_with_options(
+                clamp_angle_bounds, angle_bound_pad
+            )
+        )
+
     def to_networkx(self):
         """Undirected networkx graph keyed by bus id.
 

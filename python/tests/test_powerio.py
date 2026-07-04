@@ -5,6 +5,7 @@ tests need the optional extras: `pip install '.[all]'`.
 """
 
 import json
+import math
 import subprocess
 import sys
 from pathlib import Path
@@ -327,6 +328,35 @@ mpc.branch = [
     assert n.loads[0]["bus"] == 10
     assert n.branches[-1]["from_id"] == 4
     assert n.branches[-1]["to_id"] == 10
+
+
+def test_to_normalized_with_options_clamps_angle_bounds():
+    case = powerio.parse_file(DATA / "angle_bounds_clamp.m")
+
+    plain = case.to_normalized()
+    assert plain.branches[0]["angmin"] == pytest.approx(-2.0 * math.pi)
+    assert plain.branches[0]["angmax"] == pytest.approx(2.0 * math.pi)
+    assert plain.branches[1]["angmin"] == pytest.approx(0.0)
+    assert plain.branches[1]["angmax"] == pytest.approx(0.0)
+
+    repaired = case.to_normalized_with_options(clamp_angle_bounds=True)
+    assert repaired.branches[0]["angmin"] == pytest.approx(-1.0472)
+    assert repaired.branches[0]["angmax"] == pytest.approx(1.0472)
+    assert repaired.branches[1]["angmin"] == pytest.approx(-1.0472)
+    assert repaired.branches[1]["angmax"] == pytest.approx(1.0472)
+    assert repaired.branches[2]["angmin"] == pytest.approx(-math.pi / 6.0)
+    assert repaired.branches[2]["angmax"] == pytest.approx(math.pi / 6.0)
+    assert any(
+        "branch 0 angle difference bounds clamped" in warning
+        for warning in repaired.read_warnings
+    )
+    assert any(
+        "branch 1 angle difference bounds clamped" in warning
+        for warning in repaired.read_warnings
+    )
+
+    with pytest.raises(powerio.PowerIODataError):
+        case.to_normalized_with_options(True, math.pi / 2.0)
 
 
 def test_parse_bad_path_raises():

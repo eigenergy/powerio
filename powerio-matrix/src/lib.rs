@@ -37,9 +37,10 @@
 pub use powerio::{
     Branch, Bus, BusId, BusType, ConnectivityReport, Conversion, DisplayData, DisplayFormat,
     ElementCounts, Error, ErrorCategory, Extras, GenCost, GenCostPatch, GenCostPolicyReport,
-    Generator, Hvdc, IndexCore, IndexedNetwork, Load, MissingGenCostPolicy, Network, Parsed,
-    PwdDisplay, PwdSubstation, PypsaCsvOutputs, Result, ScenarioMismatch, Shunt, SourceFormat,
-    Storage, TargetFormat, WriteOptions, convert_file, convert_file_with_options, convert_str,
+    Generator, Hvdc, IndexCore, IndexedNetwork, Load, MissingGenCostPolicy, Network,
+    NormalizeOptions, NormalizedNetwork, POWER_MODELS_ANGLE_BOUND_PAD, Parsed, PwdDisplay,
+    PwdSubstation, PypsaCsvOutputs, Result, ScenarioMismatch, Shunt, SourceFormat, Storage,
+    TargetFormat, WriteOptions, convert_file, convert_file_with_options, convert_str,
     convert_str_with_options, display_format_from_name, error, format, gen_cost, indexed, network,
     parse_display_bytes, parse_display_file, parse_file, parse_gen_cost_csv, parse_matpower,
     parse_matpower_file, parse_pandapower_json, parse_powermodels_json, parse_powerworld,
