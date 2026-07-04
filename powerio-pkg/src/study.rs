@@ -13,6 +13,7 @@ use crate::operating::{
 
 /// Additive study block stored on a package envelope.
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[non_exhaustive]
 pub struct StudyBlock {
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -46,6 +47,7 @@ impl StudyBlock {
 
 /// One cumulative commit in a study block.
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[non_exhaustive]
 pub struct StudyCommit {
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -90,6 +92,64 @@ impl StudyEdit {
             Self::SetFields { .. } => "set_fields",
             Self::Unknown { kind, .. } => kind,
         }
+    }
+}
+
+#[cfg(feature = "schema")]
+impl schemars::JsonSchema for StudyEdit {
+    fn schema_name() -> std::borrow::Cow<'static, str> {
+        "StudyEdit".into()
+    }
+
+    fn json_schema(generator: &mut schemars::SchemaGenerator) -> schemars::Schema {
+        let element_ref = generator.subschema_for::<ElementRef>().to_value();
+        let element_update = generator.subschema_for::<ElementUpdate>().to_value();
+        let schema = json!({
+            "type": "object",
+            "oneOf": [
+                {
+                    "type": "object",
+                    "required": ["kind", "bus", "p_mw"],
+                    "properties": {
+                        "kind": { "const": "demand_delta" },
+                        "bus": element_ref,
+                        "p_mw": { "type": "number" },
+                        "q_mvar": { "type": "number" }
+                    }
+                },
+                {
+                    "type": "object",
+                    "required": ["kind", "branch", "delta_mw"],
+                    "properties": {
+                        "kind": { "const": "rating_delta" },
+                        "branch": element_ref,
+                        "delta_mw": { "type": "number" }
+                    }
+                },
+                {
+                    "type": "object",
+                    "required": ["kind", "update"],
+                    "properties": {
+                        "kind": { "const": "set_fields" },
+                        "update": element_update
+                    }
+                },
+                {
+                    "type": "object",
+                    "required": ["kind"],
+                    "properties": {
+                        "kind": {
+                            "type": "string",
+                            "not": {
+                                "enum": ["demand_delta", "rating_delta", "set_fields"]
+                            }
+                        }
+                    },
+                    "additionalProperties": true
+                }
+            ]
+        });
+        schemars::Schema::try_from(schema).expect("study edit schema is an object")
     }
 }
 

@@ -55,6 +55,7 @@ fn default_base_frequency() -> f64 {
 /// `#[serde(transparent)]` so the JSON transport carries a bare integer, not a
 /// wrapper object; the wire format is unchanged.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(transparent)]
 pub struct BusId(pub usize);
 
@@ -73,6 +74,7 @@ impl std::fmt::Display for BusId {
 
 /// Bus type per MATPOWER convention: 1=PQ, 2=PV, 3=ref/slack, 4=isolated.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "UPPERCASE")]
 #[repr(u8)]
 #[non_exhaustive]
@@ -109,6 +111,7 @@ impl BusType {
 
 /// A generator cost curve (`mpc.gencost` row).
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[non_exhaustive]
 pub struct GenCost {
     /// 1 = piecewise linear, 2 = polynomial.
@@ -188,6 +191,7 @@ impl GenCost {
 /// Which format a [`Network`] was read from. Drives the same format byte exact
 /// echo on write.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[non_exhaustive]
 pub enum SourceFormat {
     Matpower,
@@ -258,6 +262,7 @@ impl SourceFormat {
 
 /// A format-neutral power network.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[non_exhaustive]
 pub struct Network {
     pub name: String,
@@ -318,6 +323,7 @@ pub struct Network {
 pub type BalancedNetwork = Network;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[non_exhaustive]
 pub struct Bus {
     /// Stable bus id (1-based in MATPOWER; preserved verbatim).
@@ -374,6 +380,7 @@ impl Bus {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[non_exhaustive]
 pub struct Load {
     pub bus: BusId,
@@ -408,6 +415,7 @@ impl Load {
 
 /// Voltage dependence for a transmission load.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(tag = "kind", rename_all = "snake_case")]
 #[non_exhaustive]
 pub enum LoadVoltageModel {
@@ -473,6 +481,7 @@ impl LoadVoltageModel {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[non_exhaustive]
 pub struct Shunt {
     pub bus: BusId,
@@ -510,6 +519,7 @@ impl Shunt {
 
 /// How a switched shunt adjusts its susceptance. Maps to the PSS/E `MODSW` code.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "snake_case")]
 #[non_exhaustive]
 pub enum SwitchedShuntMode {
@@ -523,6 +533,7 @@ pub enum SwitchedShuntMode {
 
 /// One block of a switched shunt: `steps` equal increments of susceptance `b`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[non_exhaustive]
 pub struct ShuntBlock {
     pub steps: u32,
@@ -542,6 +553,7 @@ impl ShuntBlock {
 /// adjustable susceptance blocks. The shunt's [`b`](Shunt::b) is the initial
 /// value within the blocks' total range.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[non_exhaustive]
 pub struct SwitchedShuntControl {
     pub mode: SwitchedShuntMode,
@@ -570,6 +582,7 @@ impl SwitchedShuntControl {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[non_exhaustive]
 pub struct Branch {
     pub from: BusId,
@@ -620,6 +633,7 @@ pub struct Branch {
 
 /// Extra branch MVA rating set beyond the canonical A/B/C columns.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[non_exhaustive]
 pub struct BranchRatingSet {
     pub name: String,
@@ -639,6 +653,7 @@ impl BranchRatingSet {
 /// Per terminal branch shunt admittance in p.u. This is the canonical
 /// physical branch shunt model when present.
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[non_exhaustive]
 pub struct BranchCharging {
     pub g_fr: f64,
@@ -688,6 +703,7 @@ impl BranchCharging {
 
 /// Current limits for a branch, in source units.
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[non_exhaustive]
 pub struct BranchCurrentRatings {
     pub c_rating_a: f64,
@@ -708,6 +724,7 @@ impl BranchCurrentRatings {
 
 /// Solved branch terminal flows in MW/MVAr.
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[non_exhaustive]
 pub struct BranchSolution {
     pub pf: f64,
@@ -797,6 +814,7 @@ impl Branch {
 /// A transmission switch. Closed switches are preserved as data; matrix builders
 /// do not lower them into zero impedance branches.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[non_exhaustive]
 pub struct Switch {
     pub from: BusId,
@@ -842,6 +860,7 @@ impl Switch {
 /// What a regulating transformer's tap (or phase shift) automatically controls.
 /// Maps to the PSS/E control code `COD` and the PSLF transformer `type`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "snake_case")]
 #[non_exhaustive]
 pub enum TransformerControlMode {
@@ -865,6 +884,7 @@ pub enum TransformerControlMode {
 /// `controlled_bus` is the regulated bus (`None` = the transformer's own
 /// terminal). `mva_base` is the winding MVA base the impedance is referred to.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[non_exhaustive]
 pub struct TransformerControl {
     pub mode: TransformerControlMode,
@@ -904,6 +924,7 @@ impl TransformerControl {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[non_exhaustive]
 pub struct Generator {
     pub bus: BusId,
@@ -929,6 +950,7 @@ pub struct Generator {
     /// schema stays additive when `GEN_EXTRA_KEYS` grows; `#[serde(default)]` so a
     /// snapshot that omits it deserializes to the empty set.
     #[serde(default = "default_caps", with = "caps_serde")]
+    #[cfg_attr(feature = "schema", schemars(with = "BTreeMap<String, f64>"))]
     pub caps: GenCaps,
     /// The remote bus whose voltage this generator regulates, when that is not its
     /// own terminal bus (PSS/E `IREG`). `None` means it regulates its own bus.
@@ -1022,6 +1044,7 @@ mod caps_serde {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[non_exhaustive]
 pub struct Storage {
     pub bus: BusId,
@@ -1085,6 +1108,7 @@ impl Storage {
 /// opposite sign). The flip is a format-boundary translation, so a derived view
 /// like `to_normalized` keeps the MATPOWER convention and only scales to per unit.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[non_exhaustive]
 pub struct Hvdc {
     pub from: BusId,
@@ -1147,6 +1171,7 @@ impl Hvdc {
 /// the area slack) that the bus number alone can't. Maps to the PSS/E area record
 /// (`I, ISW, PDES, PTOL, ARNAME`).
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[non_exhaustive]
 pub struct Area {
     pub number: usize,
@@ -1181,6 +1206,7 @@ impl Area {
 /// (`GENERAL THRSHZ`, `NEWTON TOLN`/`ITMXN`, `SOLVER ACTAPS`/`AREAIN`/`PHSHFT`/
 /// `DCTAPS`/`SWSHNT`).
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[non_exhaustive]
 pub struct SolverParams {
     /// Newton power flow mismatch tolerance (`NEWTON TOLN`).
@@ -1226,6 +1252,7 @@ impl SolverParams {
 /// (winding voltage base, turns-ratio units) as the transformer control work
 /// lands without reshaping the [`Transformer3W::z`] array.
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[non_exhaustive]
 pub struct Impedance {
     pub r: f64,
@@ -1243,6 +1270,7 @@ impl Impedance {
 /// One winding of a [`Transformer3W`]: its terminal bus, off-nominal ratio, phase
 /// shift, nominal voltage, and thermal ratings.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[non_exhaustive]
 pub struct Winding {
     pub bus: BusId,
@@ -1283,6 +1311,7 @@ impl Winding {
 /// [`IndexedNetwork`](crate::IndexedNetwork) applies it before building any matrix,
 /// so a 3-winding transformer contributes to `Y_bus` and connectivity.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[non_exhaustive]
 pub struct Transformer3W {
     /// The three windings, in order (primary, secondary, tertiary).

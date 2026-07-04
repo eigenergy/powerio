@@ -25,6 +25,7 @@ pub const NORMALIZED_SOLVER_TABLES_PASS: &str = "balanced-to-normalized-solver-t
 /// buses and branches. Source ids are preserved as metadata; every reference used
 /// for computation is dense and zero based.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[non_exhaustive]
 pub struct NormalizedSolverTables {
     pub pass: String,
@@ -46,6 +47,7 @@ pub struct NormalizedSolverTables {
 
 /// Units carried by [`NormalizedSolverTables`].
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[non_exhaustive]
 pub struct SolverTableUnits {
     pub power: String,
@@ -71,6 +73,7 @@ impl Default for SolverTableUnits {
 
 /// Identity and provenance vectors that apply across the tables.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[non_exhaustive]
 pub struct SolverTableIndex {
     /// Source bus id for each dense bus row. Synthetic 3-winding star buses also
@@ -91,6 +94,7 @@ pub struct SolverTableIndex {
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[non_exhaustive]
 pub struct SolverBusRow {
     pub index: usize,
@@ -113,6 +117,7 @@ pub struct SolverBusRow {
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[non_exhaustive]
 pub struct SolverLoadRow {
     pub index: usize,
@@ -124,6 +129,7 @@ pub struct SolverLoadRow {
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[non_exhaustive]
 pub struct SolverShuntRow {
     pub index: usize,
@@ -134,6 +140,7 @@ pub struct SolverShuntRow {
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[non_exhaustive]
 pub struct SolverBranchRow {
     pub index: usize,
@@ -159,6 +166,7 @@ pub struct SolverBranchRow {
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[non_exhaustive]
 pub struct SolverSwitchRow {
     pub index: usize,
@@ -175,6 +183,7 @@ pub struct SolverSwitchRow {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "snake_case")]
 pub enum SolverArcTerminal {
     From,
@@ -182,6 +191,7 @@ pub enum SolverArcTerminal {
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[non_exhaustive]
 pub struct SolverArcRow {
     pub index: usize,
@@ -197,6 +207,7 @@ pub struct SolverArcRow {
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[non_exhaustive]
 pub struct SolverGeneratorRow {
     pub index: usize,
@@ -216,6 +227,7 @@ pub struct SolverGeneratorRow {
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[non_exhaustive]
 pub struct SolverStorageRow {
     pub index: usize,
@@ -240,6 +252,7 @@ pub struct SolverStorageRow {
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[non_exhaustive]
 pub struct SolverHvdcRow {
     pub index: usize,
@@ -264,6 +277,7 @@ pub struct SolverHvdcRow {
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[non_exhaustive]
 pub struct SolverCostRow {
     pub model: u8,

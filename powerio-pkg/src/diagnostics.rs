@@ -17,6 +17,7 @@ use crate::provenance::SourceRef;
 /// `PARSE`, `READ`, `IR`, `VALIDATE`, `FIDELITY`, `LOWER`, `EMIT`, `BINDING`,
 /// `PARTNER`, `PERF`. The conventional shape is `NAMESPACE.SOURCE_OR_TARGET.SPECIFIC`.
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(transparent)]
 pub struct DiagnosticCode(pub String);
 
@@ -56,6 +57,7 @@ impl From<String> for DiagnosticCode {
 
 /// Severity, ordered worst-last so [`Ord`] gives the dominant severity of a set.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "snake_case")]
 pub enum DiagnosticSeverity {
     /// Useful in development; normally hidden.
@@ -74,6 +76,7 @@ pub enum DiagnosticSeverity {
 
 /// The compiler stage that emitted a diagnostic.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "snake_case")]
 #[non_exhaustive]
 pub enum DiagnosticStage {
@@ -89,6 +92,7 @@ pub enum DiagnosticStage {
 
 /// One structured finding.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct StructuredDiagnostic {
     pub code: DiagnosticCode,
     pub severity: DiagnosticSeverity,

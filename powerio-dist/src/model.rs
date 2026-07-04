@@ -25,6 +25,7 @@ pub type Mat = Vec<Vec<f64>>;
 
 /// Where the network came from; fixes the echo tier target.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "kebab-case")]
 #[non_exhaustive]
 pub enum DistSourceFormat {
@@ -46,6 +47,7 @@ impl DistSourceFormat {
 }
 
 #[derive(Clone, Debug, PartialEq, Default, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[non_exhaustive]
 pub struct DistBus {
     pub id: String,
@@ -88,6 +90,7 @@ impl DistBus {
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[non_exhaustive]
 pub struct DistLineCode {
     pub name: String,
@@ -127,6 +130,7 @@ impl DistLineCode {
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[non_exhaustive]
 pub struct DistLine {
     pub name: String,
@@ -165,6 +169,7 @@ impl DistLine {
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[non_exhaustive]
 pub struct DistSwitch {
     pub name: String,
@@ -201,6 +206,7 @@ impl DistSwitch {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "snake_case")]
 #[non_exhaustive]
 pub enum Configuration {
@@ -210,6 +216,7 @@ pub enum Configuration {
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[non_exhaustive]
 pub struct DistLoad {
     pub name: String,
@@ -248,6 +255,7 @@ impl DistLoad {
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(tag = "model", rename_all = "snake_case")]
 #[non_exhaustive]
 pub enum DistLoadVoltageModel {
@@ -299,6 +307,7 @@ impl DistLoadVoltageModel {
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[non_exhaustive]
 pub struct DistGenerator {
     pub name: String,
@@ -345,6 +354,7 @@ impl DistGenerator {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "SCREAMING_SNAKE_CASE")]
 #[non_exhaustive]
 pub enum IbrTopology {
@@ -354,6 +364,7 @@ pub enum IbrTopology {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "SCREAMING_SNAKE_CASE")]
 #[non_exhaustive]
 pub enum IbrPrimeMover {
@@ -365,6 +376,7 @@ pub enum IbrPrimeMover {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "SCREAMING_SNAKE_CASE")]
 #[non_exhaustive]
 pub enum IbrVoltageAggregation {
@@ -373,6 +385,7 @@ pub enum IbrVoltageAggregation {
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[non_exhaustive]
 pub struct DistIbr {
     pub name: String,
@@ -426,6 +439,7 @@ impl DistIbr {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "SCREAMING_SNAKE_CASE")]
 #[non_exhaustive]
 pub enum ControlVoltageReference {
@@ -438,6 +452,7 @@ pub enum ControlVoltageReference {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "SCREAMING_SNAKE_CASE")]
 #[non_exhaustive]
 pub enum ReactivePowerUnit {
@@ -446,6 +461,7 @@ pub enum ReactivePowerUnit {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "SCREAMING_SNAKE_CASE")]
 #[non_exhaustive]
 pub enum ActivePowerUnit {
@@ -454,6 +470,7 @@ pub enum ActivePowerUnit {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "SCREAMING_SNAKE_CASE")]
 #[non_exhaustive]
 pub enum ReactivePowerReference {
@@ -462,6 +479,7 @@ pub enum ReactivePowerReference {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "SCREAMING_SNAKE_CASE")]
 #[non_exhaustive]
 pub enum ActivePowerReference {
@@ -471,12 +489,14 @@ pub enum ActivePowerReference {
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[non_exhaustive]
 pub struct PowerFactorControl {
     pub pf: f64,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[non_exhaustive]
 pub struct VoltVarControl {
     pub voltage_reference: Option<ControlVoltageReference>,
@@ -489,6 +509,7 @@ pub struct VoltVarControl {
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[non_exhaustive]
 pub struct VoltWattControl {
     pub voltage_reference: Option<ControlVoltageReference>,
@@ -499,6 +520,7 @@ pub struct VoltWattControl {
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[non_exhaustive]
 pub struct DistControlProfile {
     pub name: String,
@@ -522,6 +544,7 @@ impl DistControlProfile {
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[non_exhaustive]
 pub struct DistShunt {
     pub name: String,
@@ -554,6 +577,7 @@ impl DistShunt {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "snake_case")]
 #[non_exhaustive]
 pub enum WindingConn {
@@ -562,6 +586,7 @@ pub enum WindingConn {
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[non_exhaustive]
 pub struct Winding {
     pub bus: String,
@@ -604,6 +629,7 @@ impl Winding {
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[non_exhaustive]
 pub struct DistTransformer {
     pub name: String,
@@ -634,6 +660,7 @@ impl DistTransformer {
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[non_exhaustive]
 pub struct VoltageSource {
     pub name: String,
@@ -669,6 +696,7 @@ impl VoltageSource {
 /// An object the reader recognized but does not type: preserved by class,
 /// name, and raw property text so conversions can warn precisely.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[non_exhaustive]
 pub struct UntypedObject {
     pub class: String,
@@ -697,6 +725,7 @@ impl UntypedObject {
 /// `defaulted` records, per element (`"class.name"` key), the fields the
 /// reader materialized from format defaults rather than the source text.
 #[derive(Clone, Debug, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[non_exhaustive]
 pub struct DistNetwork {
     pub name: Option<String>,

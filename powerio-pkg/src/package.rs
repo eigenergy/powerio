@@ -88,6 +88,7 @@ fn payload_schema_for(kind: ModelKind) -> (&'static str, &'static str) {
 /// cache keys.
 /// Empty by default; the scaffold never populates it.
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct DerivedMetadata {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub matrix_stats: Option<serde_json::Value>,
@@ -107,6 +108,7 @@ impl DerivedMetadata {
 
 /// Compact package metadata for `Network::to_normalized_solver_tables`.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[non_exhaustive]
 pub struct NormalizedSolverTableMetadata {
     pub pass: String,
@@ -122,6 +124,7 @@ pub struct NormalizedSolverTableMetadata {
 
 /// Row counts for every normalized solver table.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[non_exhaustive]
 pub struct NormalizedSolverTableRowCounts {
     pub buses: usize,
@@ -137,6 +140,7 @@ pub struct NormalizedSolverTableRowCounts {
 
 /// Source row provenance vectors for normalized solver tables.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[non_exhaustive]
 pub struct NormalizedSolverTableSourceRows {
     pub buses: Vec<Option<usize>>,
@@ -193,6 +197,7 @@ impl From<&NormalizedSolverTables> for NormalizedSolverTableMetadata {
 /// asserts the two agree. Unknown future top-level fields are tolerated on read
 /// (ignored) so a newer producer's package still deserializes here.
 #[derive(Clone, Debug, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[non_exhaustive]
 pub struct NetworkPackage {
     /// The schema URL identifying this package format.

@@ -13,6 +13,7 @@ use powerio_dist::MulticonductorNetwork;
 
 /// Which concrete static-grid IR family the payload is.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "snake_case")]
 #[non_exhaustive]
 pub enum ModelKind {
@@ -31,6 +32,7 @@ pub enum ModelKind {
 /// independently of the envelope: additive IR growth bumps the payload minor
 /// with no envelope version change. See `docs/src/pio-json-schema.md`.
 #[derive(Clone, Debug, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum ModelPayload {
     Balanced {

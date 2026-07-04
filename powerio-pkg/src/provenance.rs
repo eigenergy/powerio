@@ -10,6 +10,7 @@ use serde::{Deserialize, Serialize};
 
 /// The tool and build that produced the package.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct Producer {
     pub tool: String,
     pub version: String,
@@ -38,6 +39,7 @@ impl Producer {
 ///
 /// The `hash` field is named consistently across all `Origin` variants.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(tag = "kind", rename_all = "snake_case")]
 #[non_exhaustive]
 pub enum Origin {
@@ -83,6 +85,7 @@ pub enum Origin {
 /// A declared source artifact, referenced from source maps and diagnostics by
 /// its `id`. (`sources[]` in the package.)
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct SourceDescriptor {
     pub id: String,
     pub kind: String,
@@ -96,6 +99,7 @@ pub struct SourceDescriptor {
 
 /// A pointer into one source artifact: where a canonical field came from.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct SourceRef {
     pub source_id: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -154,6 +158,7 @@ impl SourceRef {
 
 /// How a canonical field relates to its source value.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "snake_case")]
 #[non_exhaustive]
 pub enum MappingKind {
@@ -179,6 +184,7 @@ pub enum MappingKind {
 
 /// How confident the source map entry is.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "snake_case")]
 pub enum Confidence {
     Exact,
@@ -189,6 +195,7 @@ pub enum Confidence {
 
 /// One `element_path -> source` mapping.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct SourceMapEntry {
     /// JSON pointer (or best-effort locator) into the package payload.
     pub element_path: String,

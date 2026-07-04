@@ -67,15 +67,17 @@ The two versions are independent because they change at different rates and
 break different consumers: the payload grows whenever the IR grows (a minor
 `payload_schema_version` bump), while the envelope bookkeeping barely moves.
 
-The schema URLs are identifiers, not fetch locations (the JSON Schema `$id`
-convention). The site serves them anyway; each redirects to its section of
-this chapter.
+The schema URLs are JSON Schema `$id` identifiers. The docs site also serves a
+generated schema at each identifier path under `schema.json`, so consumers can
+fetch a machine readable view of the serde contract.
 
 ## The envelope: `pio-package/0.1` {#pio-package}
 
 The `schema` field on every package names the envelope contract:
 `https://powerio.dev/schema/pio-package/0.1`. `schema_version` is semver; the
 current value is `0.1.1`.
+The generated schema is served at
+`https://powerio.dev/schema/pio-package/0.1/schema.json`.
 
 - Optional additive envelope fields (a reader that ignores them loses nothing
   it relied on before) land without a version change; `operating_points` landed
@@ -138,10 +140,11 @@ semver) before computing on payload fields. Both fields are absent on packages
 written before envelope 0.1.1; such payloads predate the declared contract and
 are accepted.
 
-There is no separate schema document for the payloads. Each payload is what
-its Rust model serializes, and the model's rustdoc is the field reference. The
-balanced payload's wire form is additionally held to a committed golden file
-by `powerio/tests/snapshot_schema.rs`.
+Each payload is what its Rust model serializes. The generated JSON Schema is
+derived from those serde models and checked in CI against the committed
+`docs/schema/**/schema.json` files. The model's rustdoc is the field reference,
+and the balanced payload's wire form is additionally held to a committed
+golden file by `powerio/tests/snapshot_schema.rs`.
 
 ### The balanced payload: `pio-payload-balanced/1` {#pio-payload-balanced}
 
@@ -155,6 +158,8 @@ conventions: MW and MVAr power, per unit voltage magnitudes and impedances on
 the system base, degree angles. Every element carries an `extras` map for
 source format fields the model does not name. The field reference is the
 [`powerio::Network` rustdoc](../powerio/network/struct.Network.html).
+The generated schema is served at
+`https://powerio.dev/schema/pio-payload-balanced/1/schema.json`.
 
 ### The multiconductor payload: `pio-payload-multiconductor/1` {#pio-payload-multiconductor}
 
@@ -164,6 +169,8 @@ when `model_kind` is `multiconductor`: the wire-coordinate distribution model,
 in SI units with radian angles. [Compiler IR](compiler-ir.md) describes the
 model family. The field reference is the
 [`powerio_dist::DistNetwork` rustdoc](../powerio_dist/model/struct.DistNetwork.html).
+The generated schema is served at
+`https://powerio.dev/schema/pio-payload-multiconductor/1/schema.json`.
 For a standalone distribution exchange file, write BMOPF instead of extracting
 this payload ([relation to interchange formats](#interchange)).
 
