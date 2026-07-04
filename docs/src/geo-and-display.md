@@ -1,7 +1,8 @@
 # Geographic and display data
 
-> **Status: design.** Nothing in this chapter ships in 0.5.x or 0.6.x. The tracking
-> issues are linked at the end.
+> **Status: partial.** The distribution graph projection from #182 ships in
+> 0.6.1 as `DistNetwork::graph()`. The coordinate model and GeoLayer
+> interchange remain design work.
 
 Power system case files disagree about where equipment sits on a map, and most
 say nothing at all. PowerWorld aux exports carry substation latitude and
