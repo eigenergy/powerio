@@ -18,6 +18,9 @@ categories = ["science", "parsing"]
 [package.metadata.docs.rs]
 all-features = true
 
+[features]
+schema = ["dep:schemars"]
+
 [dependencies]
 thiserror = "2"
 num-complex.workspace = true
@@ -28,6 +31,7 @@ petgraph = "0.8"
 serde.workspace = true
 # Format converters (PowerModels / egret JSON) serialize the typed model.
 serde_json.workspace = true
+schemars = { workspace = true, optional = true }
 
 [dev-dependencies]
 criterion = { version = "0.5", default-features = false, features = ["cargo_bench_support"] }

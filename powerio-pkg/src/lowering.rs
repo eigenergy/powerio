@@ -25,6 +25,7 @@ use crate::validation::ValidationStatus;
 
 /// One lowering/normalization/emission pass and what it changed.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct LoweringRecord {
     /// A stable pass name, e.g. `normalize-balanced` or `multiconductor-to-balanced`.
     pub pass: String,
@@ -64,6 +65,7 @@ impl LoweringRecord {
 
 /// Sequence transform used by the multiconductor to balanced lowering.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "snake_case")]
 pub enum SequenceTransformConvention {
     FortescuePowerInvariant,
@@ -87,6 +89,7 @@ fn default_lowering_base_mva() -> f64 {
 
 /// Options for the multiconductor to balanced lowering preflight and pass.
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct MulticonductorToBalancedOptions {
     pub convention: SequenceTransformConvention,
     /// Three phase system power base used for the balanced per-unit projection.
@@ -105,6 +108,7 @@ impl Default for MulticonductorToBalancedOptions {
 
 /// Readiness report for the multiconductor to balanced lowering pass.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct MulticonductorToBalancedReadiness {
     pub convention: SequenceTransformConvention,
     pub base_mva: f64,
@@ -126,6 +130,7 @@ impl MulticonductorToBalancedReadiness {
 
 /// A successful raw multiconductor to balanced lowering result.
 #[derive(Clone, Debug, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct MulticonductorToBalancedLowering {
     pub network: BalancedNetwork,
     pub record: LoweringRecord,
@@ -133,6 +138,7 @@ pub struct MulticonductorToBalancedLowering {
 
 /// Structured failure from the raw multiconductor to balanced lowering pass.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct MulticonductorToBalancedError {
     pub options: MulticonductorToBalancedOptions,
     pub status: ValidationStatus,

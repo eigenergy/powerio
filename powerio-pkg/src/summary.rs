@@ -7,6 +7,7 @@ use serde::{Deserialize, Serialize};
 /// Element counts, topology, and unit conventions, for a quick read of a package
 /// without deserializing the whole payload.
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct ObjectSummary {
     /// Element type name -> count, e.g. `{"buses": 118, "branches": 186}`.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
@@ -18,6 +19,7 @@ pub struct ObjectSummary {
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct ObjectTopology {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub connected_components: Option<u64>,
@@ -28,6 +30,7 @@ pub struct ObjectTopology {
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct ObjectUnits {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub power: Option<String>,

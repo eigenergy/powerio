@@ -1917,6 +1917,25 @@ fn element_ref_wire_requires_row_or_identity() {
 }
 
 #[test]
+#[cfg(feature = "schema")]
+fn element_ref_schema_requires_non_null_row_or_identity() {
+    let schema = serde_json::to_value(schemars::schema_for!(ElementRef)).unwrap();
+    let any_of = schema
+        .get("anyOf")
+        .and_then(serde_json::Value::as_array)
+        .expect("ElementRef schema has anyOf");
+
+    assert!(any_of.iter().any(|entry| {
+        entry.get("required") == Some(&serde_json::json!(["row"]))
+            && entry.pointer("/properties/row/type") == Some(&serde_json::json!("integer"))
+    }));
+    assert!(any_of.iter().any(|entry| {
+        entry.get("required") == Some(&serde_json::json!(["source_uid"]))
+            && entry.pointer("/properties/source_uid/type") == Some(&serde_json::json!("string"))
+    }));
+}
+
+#[test]
 fn goc3_updates_resolve_by_identity_not_row_order() {
     // The uid-less producer fixture from the row assignment test: `prod` is
     // payload row 1 and row 0 is a synthesized identity. Identity alone finds

@@ -15,6 +15,9 @@ categories = ["science", "parsing"]
 [package.metadata.docs.rs]
 all-features = true
 
+[features]
+schema = ["dep:schemars"]
+
 [dependencies]
 thiserror = "2"
 serde.workspace = true
@@ -22,6 +25,7 @@ serde.workspace = true
 # representation its own serializer prints; the round trip contracts need
 # parse(print(x)) == x exactly.
 serde_json = { workspace = true, features = ["float_roundtrip"] }
+schemars = { workspace = true, optional = true }
 
 [dev-dependencies]
 # Draft 2020-12 validation against the vendored BMOPF schema in tests.

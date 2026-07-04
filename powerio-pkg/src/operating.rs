@@ -16,6 +16,7 @@ use crate::model::ModelPayload;
 
 /// A format neutral series of operating points over a package's static payload.
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[non_exhaustive]
 pub struct OperatingPointSeries {
     /// Shared period count, durations, and labels.
@@ -73,6 +74,7 @@ impl OperatingPointSeries {
 
 /// The time axis shared by every operating point in the series.
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[non_exhaustive]
 pub struct TimeAxis {
     /// Number of periods available in the series.
@@ -115,6 +117,7 @@ impl TimeAxis {
 
 /// One replayable operating state over the package's static payload.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[non_exhaustive]
 pub struct OperatingPoint {
     /// Zero based period index. Labels and durations live on the shared
@@ -148,6 +151,8 @@ impl OperatingPoint {
 /// addresses the update alone. On the wire, `row` may be omitted when
 /// `source_uid` is given.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[cfg_attr(feature = "schema", schemars(transform = element_ref_schema))]
 #[non_exhaustive]
 pub struct ElementRef {
     /// Payload table name, such as `loads`, `generators`, `branches`, or `hvdc`.
@@ -189,9 +194,35 @@ impl ElementRef {
     }
 }
 
+#[cfg(feature = "schema")]
+fn element_ref_schema(schema: &mut schemars::Schema) {
+    schema.ensure_object().insert(
+        "anyOf".to_owned(),
+        json!([
+            {
+                "required": ["row"],
+                "properties": {
+                    "row": {
+                        "format": "uint",
+                        "minimum": 0,
+                        "type": "integer"
+                    }
+                }
+            },
+            {
+                "required": ["source_uid"],
+                "properties": {
+                    "source_uid": { "type": "string" }
+                }
+            }
+        ]),
+    );
+}
+
 impl<'de> Deserialize<'de> for ElementRef {
     fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
         #[derive(Deserialize)]
+        #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
         struct Wire {
             table: String,
             #[serde(default)]
@@ -215,6 +246,7 @@ impl<'de> Deserialize<'de> for ElementRef {
 
 /// Field values to apply to one static payload row.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[non_exhaustive]
 pub struct ElementUpdate {
     /// Table row to update.

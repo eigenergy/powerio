@@ -6,6 +6,7 @@ use crate::diagnostics::{DiagnosticSeverity, StructuredDiagnostic};
 
 /// Overall validation status, ordered worst-last.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "snake_case")]
 pub enum ValidationStatus {
     Ok,
@@ -29,6 +30,7 @@ impl ValidationStatus {
 
 /// Counts per severity. All five are always present; zero where unused.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct ValidationCounts {
     #[serde(default)]
     pub fatal: u32,
@@ -56,6 +58,7 @@ impl ValidationCounts {
 
 /// The status of one named validation pass.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct ValidationPass {
     pub name: String,
     pub status: ValidationStatus,
@@ -73,6 +76,7 @@ impl ValidationPass {
 /// A cheap-to-inspect summary of validation: an overall status, per-severity
 /// counts, and the named passes that ran.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct ValidationSummary {
     pub status: ValidationStatus,
     pub counts: ValidationCounts,

@@ -160,9 +160,9 @@ jobs:
         HTML
     # The schema URLs stamped into .pio.json files (`schema`, `payload_schema`)
     # are identifiers first, but the site serves them so they also resolve.
-    # Each redirects to its section of the format chapter. Relative targets
-    # keep the redirects working under both powerio.dev and
-    # eigenergy.github.io/powerio.
+    # Each path exposes the machine-readable schema and redirects browsers to
+    # its section of the format chapter. Relative targets keep the redirects
+    # working under both powerio.dev and eigenergy.github.io/powerio.
     - name: Schema identifier pages
       run: |
         redirect_schema_page() {
@@ -172,6 +172,8 @@ jobs:
           grep -q "id=\"$anchor\"" target/doc/guide/pio-json-schema.html
           target="../../../guide/pio-json-schema.html#$anchor"
           mkdir -p "target/doc/schema/$1"
+          test -f "docs/schema/$1/schema.json"
+          cp "docs/schema/$1/schema.json" "target/doc/schema/$1/schema.json"
           cat > "target/doc/schema/$1/index.html" <<HTML
         <!doctype html>
         <meta charset="utf-8">

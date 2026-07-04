@@ -15,12 +15,16 @@ categories = ["science", "data-structures"]
 [package.metadata.docs.rs]
 all-features = true
 
+[features]
+schema = ["dep:schemars", "powerio/schema", "powerio-dist/schema"]
+
 [dependencies]
 num-complex = { workspace = true }
 powerio = { workspace = true }
 powerio-dist = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
+schemars = { workspace = true, optional = true }
 
 [lints]
 workspace = true
