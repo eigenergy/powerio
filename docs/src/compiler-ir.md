@@ -2,18 +2,19 @@
 
 PowerIO is organized as a compiler for power system data: frontends parse source
 formats into typed IR, passes normalize and lower it, and backends emit target
-artifacts. The IR boundaries and the `.pio.json` package are below. The field
-reference for the package is in
+artifacts. The IR boundaries and the `.pio.json` document are below. The field
+reference for the document is in
 [the `.pio.json` format chapter](pio-json-schema.md).
 
 There is no flattened universal `Network` mega-struct. PowerIO keeps concrete
-model families separate. The package wraps one payload at a time with source,
-diagnostic, validation, and lowering metadata.
+model families separate. The `.pio.json` document stores one model JSON object
+at a time with source, diagnostic, validation, and lowering metadata.
 
 ## Model families
 
 PowerIO keeps two concrete static-grid IR families distinct. They share
-conventions, not types; code that needs both holds a package, not a union struct.
+conventions, not types; code that needs both holds a `.pio.json` document, not a
+union struct.
 
 ### `BalancedNetwork`
 
@@ -39,25 +40,25 @@ model carries terminal and grounding data that has no place in a positive
 sequence struct. The two families never merge into one struct.
 
 BMOPF JSON is the strict exchange format for the distribution family. The
-`.pio.json` package uses the same `MulticonductorNetwork` model and wraps it
-with compiler metadata: model kind, provenance, source maps, diagnostics,
-validation, and lowering history. The two formats and the reasons they both
-exist are contrasted in
+`.pio.json` document uses the same `MulticonductorNetwork` model and wraps it
+with metadata: model kind, provenance, source maps, diagnostics, validation,
+and lowering history. The two formats and the reasons they both exist are
+contrasted in
 [the `.pio.json` format chapter](pio-json-schema.md#interchange).
 
-## The compiler package (`.pio.json`)
+## The `.pio.json` Document
 
-`powerio_pkg::NetworkPackage` is the readable envelope. It is the object that
-records how a source was interpreted. Language bindings can pass the package
-without guessing whether it holds balanced or multiconductor data. Binary `.pio`
-is out of scope until the JSON package settles.
+`powerio_pkg::NetworkPackage` is the implementation type for a `.pio.json`
+document. It records how a source was interpreted. Language bindings can pass
+the document without guessing whether it holds balanced or multiconductor data.
+Binary `.pio` is out of scope until the JSON document settles.
 
-A package always carries:
+A `.pio.json` document always carries:
 
 - `schema` (URL) and `schema_version` (semver);
 - `producer` metadata;
 - `model_kind`, explicit and authoritative;
-- `model`, the one typed payload, tagged by `kind`;
+- `model`, the one typed model JSON object, tagged by `kind`;
 - `origin` and `sources`;
 - `source_maps`;
 - `diagnostics`;
@@ -68,29 +69,29 @@ A package always carries:
 - optional `derived` metadata.
 
 `operating_points` is a format neutral series of replayable field updates over
-the package's single static payload. Materializing one point returns a static
-package with those updates applied and the series cleared.
-GO Challenge 3 package construction fills this block from `time_series_input`:
-the balanced payload holds the first interval, while every interval is available
-as an operating point.
+the document's single static model JSON object. Materializing one point returns
+a static document with those updates applied and the series cleared. GO
+Challenge 3 document construction fills this block from `time_series_input`:
+the balanced model JSON holds the first interval, while every interval is
+available as an operating point.
 
-For balanced payloads, `NetworkPackage::attach_normalized_solver_table_metadata`
+For balanced model JSON, `NetworkPackage::attach_normalized_solver_table_metadata`
 records the compact contract for
 `powerio::Network::to_normalized_solver_tables()`: pass name, units, row counts,
 dense bus ids, reference/component indices, branch to arc indices, and source row
-provenance. The package does not duplicate the full table rows; it records enough
+provenance. The document does not duplicate the full table rows; it records enough
 metadata for a compiler cache or sidecar artifact to verify table identity.
 
 ### Explicit model kind
 
 `model_kind` is a standalone, authoritative field: a reader branches on it
-rather than inferring the payload kind from which field is present. The reader
+rather than inferring the model kind from which field is present. The reader
 requirements are in [the `.pio.json` format chapter](pio-json-schema.md).
 
-### Payload stability
+### Model JSON Stability
 
-The envelope and the payload are versioned independently, declared by the
-package's `payload_schema` / `payload_schema_version` fields. Payload rows
+The metadata and the model JSON are versioned independently, declared by the
+document's `payload_schema` / `payload_schema_version` fields. Model rows
 carry stable `uid` identities that operating point updates resolve against.
 The bump rules are in [the `.pio.json` format chapter](pio-json-schema.md).
 
@@ -98,14 +99,14 @@ The bump rules are in [the `.pio.json` format chapter](pio-json-schema.md).
 
 `Origin` distinguishes an in-memory model, a single file (with or without
 retained source), a folder dataset, a partially decoded binary, a derived
-product, or a composite. A `SourceMapEntry` points from a payload field to its
+product, or a composite. A `SourceMapEntry` points from a model field to its
 source with an `element_path`, a `SourceRef` into a declared source, a
 `mapping_kind` (`exact`, `defaulted`, `inferred`, `converted_units`, `lowered`,
 `aggregated`, `split`, `synthetic`, `retained_extra`), and a `confidence`.
-Balanced `source_ref.field` values use canonical payload field names. Parser
-bookkeeping that should not live in the IR payload (retained source text,
+Balanced `source_ref.field` values use canonical model field names. Parser
+bookkeeping that should not live in the model JSON (retained source text,
 default-materialization records) is lifted into this layer rather than the raw
-payload.
+model JSON.
 
 ### Structured diagnostics
 
@@ -130,21 +131,21 @@ transformation explicit.
 `FortescuePowerInvariant` sequence convention. Neutral conductors are Kron
 reduced before the sequence transform. One wire and two wire inputs,
 transformers, untyped objects, missing phase references, and closed switches
-return structured `LOWER.MULTI_TO_BALANCED.*` diagnostics. The package method
+return structured `LOWER.MULTI_TO_BALANCED.*` diagnostics.
 `NetworkPackage::lower_multiconductor_to_balanced` returns a derived balanced
-package and appends the record. This pass is explicit only; readers, writers,
+document and appends the record. This pass is explicit only; readers, writers,
 matrix builders, bindings, and MCP operations do not run it implicitly.
 
 ### Operating point materialization
 
-`NetworkPackage::materialize_operating_point(index)` clones the package, applies
-one point's field updates to the typed payload, clears `operating_points`, drops
+`NetworkPackage::materialize_operating_point(index)` clones the document, applies
+one point's field updates to the typed model JSON, clears `operating_points`, drops
 stale source maps and diagnostics for changed fields, recomputes validation, and
 records a `LoweringRecord` with `pass = "materialize-operating-point"`. If the
-package already carried normalized solver table metadata, the metadata is
-rebuilt for the updated static payload.
+document already carried normalized solver table metadata, the metadata is
+rebuilt for the updated static model JSON.
 
 ## Versioning
 
-The envelope and payload versioning policies are in
+The metadata and model JSON versioning policies are in
 [the `.pio.json` format chapter](pio-json-schema.md#pio-package).

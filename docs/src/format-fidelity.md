@@ -23,7 +23,7 @@ implementations and the matching powerio code:
 | Generator cost | \\(c_2 p^2 + c_1 p\\) maps to \\(q = 2c_2\\), \\(c = c_1\\); coefficients high order first | MATPOWER `idx_cost`, egret `matpower_parser` | `GenCost::quadratic` |
 | `source_id` | `["bus", id]` for bus-tied elements | PowerModels `matpower.jl` | `format::powermodels` |
 | PSLF shunts | EPC `pu_mw`/`pu_mvar` are per unit on `sbase`; `Network::Shunt` stores MW/MVAr at \\(V = 1\\) | paired EPC/RAW case checks | `format::pslf` |
-| GO Challenge 3 time series | `Network` stores the first interval as a static case; `.pio.json` packages carry replayable later intervals in `operating_points` | Rust GOC3 package tests | `format::goc3`, `powerio_pkg::operating` |
+| GO Challenge 3 time series | `Network` stores the first interval as a static case; `.pio.json` documents carry replayable later intervals in `operating_points` | Rust GOC3 package tests | `format::goc3`, `powerio_pkg::operating` |
 | Surge angles | Surge JSON carries voltage angles, phase shifts, and angle limits in radians; `Network` stores degrees | Rust Surge round trip tests | `format::surge` |
 
 egret's own MATPOWER parser uses the same reductions (bus type as
@@ -174,7 +174,7 @@ code `READ.TRANSMISSION.PARSE_WARNING`. GridFM package reads use
   arbitrary `Network`; `TargetFormat::Goc3Json` only succeeds as a same format
   source echo. When a GOC3 `Network` is wrapped in `.pio.json`, `powerio-pkg`
   extracts the full input time axis into `operating_points`. Materializing one
-  point applies those updates to the static payload and clears the series.
+  point applies those updates to the static model JSON and clears the series.
 - **Surge JSON** reads and writes the versioned `surge-json` network document.
   The reader maps buses, loads, fixed shunts, branches, generators, storage, and
   HVDC links into `Network`, retains the original source for same format echo,

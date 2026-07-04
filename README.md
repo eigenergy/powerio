@@ -14,9 +14,9 @@ transmission and distribution formats parse into typed intermediate
 representations (IR). Once parsed, you can perform explicit, recorded operations, like normalization, validation, and lowering.
 You can compile/write the case back into any supported target format, sparse matrix families, and ML model formats. 
 
-The `.pio.json` package serves as a unified network payload under declared [schema versions](https://powerio.dev/guide/pio-json-schema.html),
-which records where the data came from, and how it maps back to the original source file. 
-Furthermore, the package contains structured diagnostics, validation, and replayable operating points, enabling many downstream tasks.
+The `.pio.json` document carries one model JSON object under declared [schema versions](https://powerio.dev/guide/pio-json-schema.html),
+with metadata that records where the data came from and how it maps back to the original source file.
+It also contains structured diagnostics, validation, and replayable operating points.
 
 Data fidelity and interoperability is the primary goal of the PowerIO project. Writing a parsed file back to its own format returns
 the original text when the reader kept it. Converting to another format writes 
@@ -43,7 +43,7 @@ Supported formats:
 - [ARPA-E GO Competition Challenge 3](https://gocompetition.energy.gov/) JSON input data
 - [surge](https://github.com/amptimal/surge) `.surge.json`
 - [GridFM](https://github.com/gridfm) `.parquet`
-- PowerIO JSON snapshots (`powerio-json`) and `.pio.json` compiler packages
+- PowerIO JSON snapshots (`powerio-json`) and `.pio.json` documents
 
 Distribution networks are supported in wire coordinates via [`powerio-dist`](powerio-dist/):
 - [OpenDSS](https://www.epri.com/pages/sa/opendss) `.dss`
@@ -60,7 +60,7 @@ This repository contains multiple packages.
 powerio          # parser, Network model, source retaining writers, converters
 powerio-matrix   # sparse matrices, DC sensitivity factors, graph representations
 powerio-dist     # multiconductor distribution model, dss/PMD/BMOPF converters
-powerio-pkg      # .pio.json compiler package envelope
+powerio-pkg      # .pio.json document metadata and model JSON
 powerio-cli      # the `powerio` command and ratatui TUI
 powerio-py       # PyO3 extension for the Python `powerio` package
 powerio-capi     # C ABI for C, C++, Julia, and other foreign function interfaces
@@ -162,7 +162,7 @@ the original file type from converting to a different file type.
 | egret JSON | yes | yes | byte exact retained source | ModelData shape checked against egret and PowerModels.jl |
 | pandapower JSON | yes | yes | byte exact retained source | pandapower import validator checks counts and Y_bus |
 | PyPSA CSV folder | yes | yes | directory output, not text echo | PyPSA import validator checks the exported static components |
-| GO Challenge 3 JSON | yes | source echo only | byte exact retained source | first interval maps to the static power flow core; `.pio.json` packages retain time series as operating points |
+| GO Challenge 3 JSON | yes | source echo only | byte exact retained source | first interval maps to the static power flow core; `.pio.json` documents retain time series as operating points |
 | Surge JSON | yes | yes | byte exact retained source | versioned JSON network body; unsupported source sections stay in retained source or warnings |
 | GridFM Parquet | yes | yes | directory output, deliberately lossy read | recovers the power flow core for conversion back to classical formats |
 | PowerIO JSON | yes | yes | structured model snapshot, not byte exact source echo | lossless for `Network` fields except retained source text |
@@ -215,7 +215,7 @@ and Julia as `to_normalized(case)`.
 ### C ABI
 
 `powerio-capi` exposes parse, query, conversion, JSON transport, normalization,
-`.pio.json` package handles, and numeric table extraction through `pio_*`
+`.pio.json` document handles, and numeric table extraction through `pio_*`
 functions. The public header is
 [powerio-capi/include/powerio.h](https://github.com/eigenergy/powerio/blob/main/powerio-capi/include/powerio.h).
 Build with `--features arrow` to enable `pio_to_arrow` over the
@@ -233,7 +233,8 @@ pip install 'powerio[mcp]'
 powerio-mcp
 ```
 
-MCP clients can keep a case in the `.pio.json` package transport:
+MCP clients can keep a case in `.pio.json` document JSON through the `package`
+transport:
 
 ```python
 parsed = parse(path="case9.m", transport="package")
@@ -246,17 +247,17 @@ diagnostics(pkg)
 
 The PowerMCP bundle in [PowerMCP](https://github.com/Power-Agent/PowerMCP) uses the same PowerIO tool surface alongside simulator servers and bridge tools.
 
-### Compiler Packages
+### `.pio.json` Documents
 
-`.pio.json` packages wrap one balanced or multiconductor payload with provenance,
-source maps, diagnostics, validation, summaries, lowering history, optional
-derived metadata, and optional `operating_points`. A GO Challenge 3 package
-stores the static first interval in `model` and the full replayable time series
-in `operating_points`; materializing one point returns a static package with the
-updates applied and the series cleared.
+`.pio.json` documents carry one balanced or multiconductor model JSON object
+with metadata: provenance, source maps, diagnostics, validation, summaries,
+lowering history, optional derived metadata, and optional `operating_points`. A
+GO Challenge 3 document stores the static first interval in `model` and the full
+replayable time series in `operating_points`; materializing one point returns a
+static document with the updates applied and the series cleared.
 
 Rust uses `powerio_pkg::NetworkPackage`, Python uses the `powerio.Package`
-class, the C ABI uses `pio_package_*`, and the CLI writes packages with
+class, the C ABI uses `pio_package_*`, and the CLI writes documents with
 `powerio package`.
 
 ### GridFM (experimental)

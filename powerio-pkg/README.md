@@ -1,7 +1,6 @@
 # powerio-pkg
 
-The `.pio.json` compiler package: a versioned envelope around one PowerIO IR
-payload.
+The `.pio.json` document: one PowerIO model JSON object with versioned metadata.
 
 PowerIO has no single flattened "universal network" struct. It keeps two
 concrete static-grid IR families distinct:
@@ -11,8 +10,8 @@ concrete static-grid IR families distinct:
 - `powerio_dist::MulticonductorNetwork` — the wire-coordinate distribution model
   (historically `powerio_dist::DistNetwork`).
 
-A `NetworkPackage` wraps exactly one of those payloads at a time and carries the
-metadata a compiler artifact needs to be trustworthy:
+A `NetworkPackage` owns exactly one of those model JSON objects at a time and
+carries the metadata a compiler artifact needs to be trustworthy:
 
 - an explicit `model_kind` (never inferred from which field is present);
 - `producer` and `origin` metadata;
@@ -21,20 +20,20 @@ metadata a compiler artifact needs to be trustworthy:
 - structured `diagnostics` with stable codes;
 - a `validation` summary;
 - `lowering_history`;
-- optional `operating_points` for replayable states over the static payload;
+- optional `operating_points` for replayable states over the static model JSON;
 - optional `derived` metadata for matrix stats, normalized solver table
   identities, and cache keys.
 
 It serializes to `.pio.json`. Binary `.pio` is out of scope until the JSON
-package stabilizes.
+document stabilizes.
 
-Operating points are overlays, not separate payloads. Each point names table
-rows and fields to update on the one static payload. Payload rows carry stable
-`uid` identities (source uids where the format has them, synthesized
-`{table}:{row}` values otherwise); an update's `source_uid` resolves against
-them and is authoritative, with the wire `row` as a fallback and consistency
-check. GOC3 package construction extracts the time series into this block while
-the balanced payload holds the first interval.
+Operating points are overlays, not separate model JSON objects. Each point
+names table rows and fields to update on the one static model JSON object.
+Model rows carry stable `uid` identities (source uids where the format has
+them, synthesized `{table}:{row}` values otherwise); an update's `source_uid`
+resolves against them and is authoritative, with the wire `row` as a fallback
+and consistency check. GOC3 document construction extracts the time series into
+this block while the balanced model JSON holds the first interval.
 
 See `docs/src/compiler-ir.md` and `docs/src/pio-json-schema.md` in the
 repository root.
@@ -52,7 +51,7 @@ let back = NetworkPackage::from_json(&json).unwrap();
 assert_eq!(back.model_kind(), ModelKind::Balanced);
 ```
 
-Balanced packages can record the dense normalized solver table contract without
+Balanced documents can record the dense normalized solver table contract without
 embedding every table row:
 
 ```rust

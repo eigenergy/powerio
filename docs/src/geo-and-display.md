@@ -72,7 +72,7 @@ both and asserts identical JSON, so the copies cannot drift.
 Before this is implemented, it is worth considering whether a `powerio-geo` or `powerio-format` crate make be necessary.
 
 Because the fields are additive and skipped when absent, they ride the
-`.pio.json` payloads as a minor bump.
+`.pio.json` model JSON as a minor bump.
 
 ## Layer 2: the geographic document
 
@@ -114,7 +114,7 @@ the wire, so one document format serves balanced integer bus ids,
 multiconductor string ids, and BMOPF ids. Branch paths additionally fall back
 to the unordered `(from, to)` bus pair. Positional branch indices are accepted
 on read as a legacy alias and never written; the durable identity is the
-payload `uid`.
+model `uid`.
 
 ## Harvest and emit
 
@@ -181,12 +181,12 @@ in the consumer. A consumer that computes a layout can write it back with
 
 ## Phasing
 
-1. Typed fields plus the OpenDSS and BMOPF harvest and emit paths (payload
+1. Typed fields plus the OpenDSS and BMOPF harvest and emit paths (model JSON
    1.1.0).
 2. Balanced harvest and emit: PowerWorld aux, pandapower, PyPSA, fidelity
    warnings.
 3. `GeoLayer`, `DisplayData::Geo`, branch routing, the CLI subcommand
-   (payload 1.2.0).
+   (model JSON 1.2.0).
 4. `.pwd` promotion and the Mercator helper.
 5. C ABI and Python bindings.
 
