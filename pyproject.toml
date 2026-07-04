@@ -36,6 +36,7 @@ bench = [
     "matpowercaseframes<2; python_version >= '3.11'",
     "gridx-egret>=0.6; python_version >= '3.11'",
     "pypsa>=1.0; python_version >= '3.11'",
+    "opendssdirect.py>=0.9,<0.10; python_version >= '3.11'",
 ]
 # The published wheel includes the native gridfm writer. This extra installs
 # Python packages for reading and inspecting the Parquet output.

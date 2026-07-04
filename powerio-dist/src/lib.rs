@@ -55,7 +55,10 @@ pub use convert::{
     Conversion, DistTargetFormat, convert_file, convert_str, dist_target_from_name, parse_file,
     parse_str,
 };
-pub use dss::{parse_dss_file, parse_dss_str, write_dss};
+pub use dss::{
+    DssLoadVoltageBounds, DssWriteOptions, parse_dss_file, parse_dss_str, write_dss,
+    write_dss_with_options,
+};
 pub use error::{Error, Result};
 pub use model::{
     Configuration, DistBus, DistGenerator, DistLine, DistLineCode, DistLoad, DistLoadVoltageModel,

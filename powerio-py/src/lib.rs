@@ -1331,6 +1331,15 @@ impl PyDistNetwork {
         Ok((conv.text, conv.warnings))
     }
 
+    /// Serialize to `to`, bypassing source echo for the same format.
+    fn to_canonical_format(&self, to: &str) -> PyResult<(String, Vec<String>)> {
+        let target = to
+            .parse::<powerio_dist::DistTargetFormat>()
+            .map_err(dist_to_pyerr)?;
+        let conv = self.net.to_canonical_format(target);
+        Ok((conv.text, conv.warnings))
+    }
+
     fn __repr__(&self) -> String {
         format!(
             "DistNetwork(n_buses={}, n_lines={}, n_transformers={}, n_loads={})",

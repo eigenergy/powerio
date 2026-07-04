@@ -174,6 +174,15 @@ impl DistTargetFormat {
 }
 
 impl DistNetwork {
+    /// Writes the network in `format`, bypassing byte exact source echo.
+    pub fn to_canonical_format(&self, format: DistTargetFormat) -> Conversion {
+        match format {
+            DistTargetFormat::Dss => crate::dss::write_dss(self),
+            DistTargetFormat::BmopfJson => crate::bmopf::write_bmopf_json(self),
+            DistTargetFormat::PmdJson => crate::pmd::write_pmd_json(self),
+        }
+    }
+
     /// Writes the network in `format`.
     ///
     /// Writing back to the source format echoes the retained source text
@@ -193,11 +202,7 @@ impl DistNetwork {
                 };
             }
         }
-        match format {
-            DistTargetFormat::Dss => crate::dss::write_dss(self),
-            DistTargetFormat::BmopfJson => crate::bmopf::write_bmopf_json(self),
-            DistTargetFormat::PmdJson => crate::pmd::write_pmd_json(self),
-        }
+        self.to_canonical_format(format)
     }
 }
 
@@ -250,6 +255,26 @@ mod tests {
             conv.warnings.iter().any(|w| w.contains("furlong")),
             "parse warnings must surface through the one-shot converter: {:?}",
             conv.warnings
+        );
+    }
+
+    #[test]
+    fn canonical_format_bypasses_same_format_dss_echo() {
+        let src = "Clear\n\
+                   New Circuit.c basekv=12.47 bus1=sourcebus\n\
+                   New Load.l1 bus1=sourcebus.1 phases=1 conn=wye kv=7.2 kw=10 kvar=2\n";
+        let net = parse_str(src, "dss").unwrap();
+        assert_eq!(net.to_format(DistTargetFormat::Dss).text, src);
+
+        let canonical = net.to_canonical_format(DistTargetFormat::Dss);
+        assert_ne!(canonical.text, src);
+        assert!(
+            canonical
+                .text
+                .lines()
+                .any(|l| l.contains("Load.l1") && l.contains("vminpu=0")),
+            "{}",
+            canonical.text
         );
     }
 }

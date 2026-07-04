@@ -11,6 +11,8 @@
 #   pp      — powerio's parse + Y_bus vs pandapower (_m2ppc + makeYbus).
 #   pp-json — powerio's pandapower JSON output imported by pandapower.
 #   pypsa   — powerio's PyPSA CSV folder output imported by PyPSA.
+#   OpenDSS — original micro distribution decks vs canonical DSS regeneration,
+#             compared by solved node voltage magnitude.
 #
 # Then the read sides and the full conversion matrix:
 #   PSSE-read   — powerio reads a real PSS/E .raw, emits PowerModels JSON, compared
@@ -70,10 +72,10 @@ trap 'rm -rf "$TMP"' EXIT
 export PIO_RESULTS_TSV="$TMP/results.tsv"
 : > "$PIO_RESULTS_TSV"
 
-if ! "$PY" -c "import egret, pandapower, pypsa" >/dev/null 2>&1; then
+if ! "$PY" -c "import egret, opendssdirect, pandapower, pypsa" >/dev/null 2>&1; then
     echo "error: validation oracle imports failed for $PY" >&2
     echo "hint: .venv/bin/python -m pip install -r benchmarks/requirements.txt" >&2
-    "$PY" -c "import egret, pandapower, pypsa"
+    "$PY" -c "import egret, opendssdirect, pandapower, pypsa"
     exit 1
 fi
 
@@ -127,6 +129,10 @@ echo "=== pandapower JSON converter ==="
 echo "=== PyPSA CSV converter ==="
 "$PY" benchmarks/validate_pypsa.py "${MCASES[@]}" || true
 
+# 4d. OpenDSS solves over the distribution micro fixtures.
+echo "=== OpenDSS distribution solve oracle ==="
+"$PY" benchmarks/validate_opendss.py || true
+
 # 5. Full reader x writer matrix (its own batched process).
 echo "=== full reader x writer matrix (PowerModels + egret oracles) ==="
 if "$PY" benchmarks/validate_matrix.py; then
@@ -148,8 +154,8 @@ awk -F'\t' '
 # (fewer rows than legs run) means a phase crashed before recording — fail loudly.
 mark_fails=$(awk -F'\t' '$3 == "FAIL" { c++ } END { print c + 0 }' "$PIO_RESULTS_TSV")
 # 7 legs per .m case (PMjson, PMread, PSSE, Exa, pp, pp-json, pypsa)
-# + 1 per raw + 1 per egret + 1 matrix.
-expected=$((${#MCASES[@]} * 7 + ${#RAWCASES[@]} + ${#EGCASES[@]} + 1))
+# + 1 per raw + 1 per egret + 12 OpenDSS micro fixtures + 1 matrix.
+expected=$((${#MCASES[@]} * 7 + ${#RAWCASES[@]} + ${#EGCASES[@]} + 12 + 1))
 got=$(wc -l <"$PIO_RESULTS_TSV")
 short=0
 [ "$got" -lt "$expected" ] && short=1

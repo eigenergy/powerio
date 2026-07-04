@@ -1,0 +1,25 @@
+! Four wire feeder whose carried neutral is grounded through an explicit
+! reactor. The source is connected to node 0; node 4 is a physical conductor
+! on the line and must not be rewritten as ground.
+Clear
+Set DefaultBaseFrequency=60
+
+New Circuit.neutral_grounding basekv=0.416 pu=1.0 phases=3 bus1=sourcebus.1.2.3 MVAsc3=2000 MVAsc1=2100
+
+New Reactor.source_neutral bus1=sourcebus.4 bus2=sourcebus.0 r=0.001 x=0
+
+New Linecode.lc4 nphases=4 basefreq=60 units=km
+~ rmatrix = (0.211 | 0.049 0.211 | 0.049 0.049 0.211 | 0.049 0.049 0.049 0.211)
+~ xmatrix = (0.747 | 0.673 0.747 | 0.651 0.673 0.747 | 0.673 0.651 0.673 0.747)
+~ cmatrix = (10.0 | 0.0 10.0 | 0.0 0.0 10.0 | 0.0 0.0 0.0 10.0)
+~ normamps=185 emergamps=240
+
+New Line.l1 bus1=sourcebus.1.2.3.4 bus2=loadbus.1.2.3.4 phases=4 linecode=lc4 length=0.4 units=km
+
+New Load.la bus1=loadbus.1.4 phases=1 conn=wye kv=0.24 kw=8 pf=0.95 model=1 vminpu=0 vmaxpu=2
+New Load.lb bus1=loadbus.2.4 phases=1 conn=wye kv=0.24 kw=6 pf=0.95 model=1 vminpu=0 vmaxpu=2
+New Load.lc bus1=loadbus.3.4 phases=1 conn=wye kv=0.24 kw=10 pf=0.95 model=1 vminpu=0 vmaxpu=2
+
+Set VoltageBases=[0.416]
+Calcvoltagebases
+Solve
