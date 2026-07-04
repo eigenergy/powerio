@@ -948,36 +948,9 @@ impl Writer {
     }
 
     fn center_tap(&mut self, t: &DistTransformer) -> Value {
-        // The split secondary collapses to one to side winding: voltage is
-        // the full 240 V across the outer terminals, the center tap is the
-        // shared terminal, listed last.
         let from = &t.windings[0];
         let (w2, w3) = (&t.windings[1], &t.windings[2]);
-        let common = w2
-            .terminal_map
-            .iter()
-            .find(|term| w3.terminal_map.contains(term))
-            .cloned()
-            .unwrap_or_default();
-        let mut hots: Vec<String> = Vec::new();
-        for term in w2.terminal_map.iter().chain(&w3.terminal_map) {
-            if *term != common && !hots.contains(term) {
-                hots.push(term.clone());
-            }
-        }
-        // Percent resistance does not transfer to the doubled voltage:
-        // each winding's impedance base is its own v^2/s (PMD eng2math
-        // builds zbase per winding from vnom^2/snom). Convert each half to
-        // ohms on its own base, sum the series path, and express the total
-        // on the base two_winding gives the combined winding,
-        // v_new^2/from.s_rating. Equal ratings make the s factors exactly
-        // 1, leaving the plain v^2 weighting. The leakage reactance needs
-        // no such move: two_winding applies xsc_pct at the from side,
-        // whose base the collapse does not touch.
-        let v_new = w2.v_ref + w3.v_ref;
-        let r_pct_new = (w2.r_pct * w2.v_ref * w2.v_ref * (from.s_rating / w2.s_rating)
-            + w3.r_pct * w3.v_ref * w3.v_ref * (from.s_rating / w3.s_rating))
-            / (v_new * v_new);
+        let common = center_tap_common_terminal(w2, w3);
         let r_neutral = self.center_tap_neutral(t, "r_neutral", w2.r_neutral, w3.r_neutral);
         let x_neutral = self.center_tap_neutral(t, "x_neutral", w2.x_neutral, w3.x_neutral);
         if (w2.tap - w3.tap).abs() > 1e-9 {
@@ -995,31 +968,7 @@ impl Writer {
                 details,
             );
         }
-        let to = Winding {
-            bus: w2.bus.clone(),
-            terminal_map: {
-                let mut m = hots;
-                m.push(common);
-                m
-            },
-            conn: WindingConn::Wye,
-            v_ref: v_new,
-            s_rating: from.s_rating,
-            r_pct: r_pct_new,
-            tap: w2.tap,
-            r_neutral,
-            x_neutral,
-        };
-        self.transformer_diagnostic(
-            t,
-            "EMIT.BMOPF.TRANSFORMER_CENTER_TAP_COLLAPSED",
-            format!(
-                "transformer {}: center tap secondary collapsed to one winding; the \
-                 xht/xlt impedance split is not representable and was dropped",
-                t.name
-            ),
-            Map::new(),
-        );
+        let to = center_tap_to_winding(w2, w3, &common, from.s_rating, r_neutral, x_neutral);
         if w2.s_rating.to_bits() != from.s_rating.to_bits()
             || w3.s_rating.to_bits() != from.s_rating.to_bits()
         {
@@ -1031,14 +980,93 @@ impl Writer {
                 "EMIT.BMOPF.TRANSFORMER_CENTER_TAP_RATING_COLLAPSED",
                 format!(
                     "transformer {}: center tap half winding s_ratings ({}, {}) differ \
-                     from the primary's {}; the collapsed winding keeps the primary \
-                     rating, the half ratings only survive in the resistance conversion",
+                     from the primary's {}; BMOPF carries one transformer rating, and \
+                     the first secondary half rating is used for the to-side impedance base",
                     t.name, w2.s_rating, w3.s_rating, from.s_rating
                 ),
                 details,
             );
         }
-        self.two_winding(t, from, &to, 1.0, true, true)
+        let s = from.s_rating;
+        let zb_from = winding_base(from);
+        let zb_to = winding_base(w2);
+        if t.xsc_pct.is_empty() {
+            self.transformer_diagnostic(
+                t,
+                "EMIT.BMOPF.TRANSFORMER_MISSING_XSC",
+                format!(
+                    "transformer {}: xsc_pct is empty; emitted x_series_from=0",
+                    t.name
+                ),
+                Map::new(),
+            );
+        }
+        let (x_from_pct, x_to_pct) = self.center_tap_leakage_percentages(t);
+
+        let mut o = Map::new();
+        o.insert("bus_from".into(), json!(from.bus));
+        o.insert("bus_to".into(), json!(to.bus));
+        o.insert("s_rating".into(), self.num(s, "transformer s_rating"));
+        o.insert(
+            "v_nom_from".into(),
+            self.num(from.v_ref, "transformer v_nom_from"),
+        );
+        o.insert(
+            "v_nom_to".into(),
+            self.num(to.v_ref, "transformer v_nom_to"),
+        );
+        o.insert(
+            "r_series_from".into(),
+            self.num(from.r_pct / 100.0 * zb_from, "transformer r_series_from"),
+        );
+        o.insert(
+            "r_series_to".into(),
+            self.num(w2.r_pct / 100.0 * zb_to, "transformer r_series_to"),
+        );
+        o.insert(
+            "x_series_from".into(),
+            self.num(x_from_pct / 100.0 * zb_from, "transformer x_series_from"),
+        );
+        o.insert(
+            "x_series_to".into(),
+            self.num(x_to_pct / 100.0 * zb_to, "transformer x_series_to"),
+        );
+        o.insert("terminal_map_from".into(), json!(from.terminal_map));
+        o.insert("terminal_map_to".into(), json!(to.terminal_map));
+        self.transformer_neutral_fields(&mut o, t, from, &to);
+        self.transformer_tap_fields(&mut o, t, from, &to);
+        self.transformer_no_load_fields(&mut o, t, from, s);
+        self.transformer_extras_dropped(t, &TRANSFORMER_TWO_WINDING_ALLOWED_EXTRAS);
+        o.into()
+    }
+
+    fn center_tap_leakage_percentages(&mut self, t: &DistTransformer) -> (f64, f64) {
+        let (x_from_pct, x_to_pct) = center_tap_star_percentages(&t.xsc_pct);
+        if x_from_pct.is_finite()
+            && x_to_pct.is_finite()
+            && x_from_pct >= -1e-12
+            && x_to_pct >= -1e-12
+        {
+            return (x_from_pct.max(0.0), x_to_pct.max(0.0));
+        }
+        let xhl = t.xsc_pct.first().copied().unwrap_or(0.0);
+        let emitted_from = if xhl.is_finite() { xhl.max(0.0) } else { 0.0 };
+        let mut details = Map::new();
+        details.insert("xsc_pct".into(), json!(&t.xsc_pct));
+        details.insert("star_percentages".into(), json!([x_from_pct, x_to_pct]));
+        details.insert("emitted_percentages".into(), json!([emitted_from, 0.0]));
+        self.transformer_diagnostic(
+            t,
+            "EMIT.BMOPF.TRANSFORMER_CENTER_TAP_LEAKAGE_UNREPRESENTABLE",
+            format!(
+                "transformer {}: center tap leakage star arms ({x_from_pct}, {x_to_pct}) \
+                 are not representable as nonnegative BMOPF fields; emitted xhl on the \
+                 from side and zero on the to side",
+                t.name
+            ),
+            details,
+        );
+        (emitted_from, 0.0)
     }
 
     /// `wye_delta` / `delta_wye`: one series impedance in ohms on the wye
@@ -1723,6 +1751,59 @@ fn split_no_load_extras(t: &mut DistTransformer, phases: usize) {
             t.extras.insert(key.into(), json!(v / phases));
         }
     }
+}
+
+fn center_tap_common_terminal(w2: &Winding, w3: &Winding) -> String {
+    w2.terminal_map
+        .iter()
+        .find(|term| w3.terminal_map.contains(term))
+        .cloned()
+        .unwrap_or_default()
+}
+
+fn center_tap_to_winding(
+    w2: &Winding,
+    w3: &Winding,
+    common: &str,
+    s_rating: f64,
+    r_neutral: Option<f64>,
+    x_neutral: Option<f64>,
+) -> Winding {
+    let terminal_map = center_tap_terminal_map(w2, w3, common);
+    Winding {
+        bus: w2.bus.clone(),
+        terminal_map,
+        conn: WindingConn::Wye,
+        v_ref: w2.v_ref,
+        s_rating,
+        r_pct: w2.r_pct,
+        tap: w2.tap,
+        r_neutral,
+        x_neutral,
+    }
+}
+
+fn center_tap_terminal_map(w2: &Winding, w3: &Winding, common: &str) -> Vec<String> {
+    let mut hots: Vec<String> = Vec::new();
+    for term in w2.terminal_map.iter().chain(&w3.terminal_map) {
+        if term != common && !hots.contains(term) {
+            hots.push(term.clone());
+        }
+    }
+    let first = hots.first().cloned().unwrap_or_default();
+    let second = hots.get(1).cloned().unwrap_or_default();
+    vec![first, common.to_string(), second]
+}
+
+fn center_tap_star_percentages(xsc_pct: &[f64]) -> (f64, f64) {
+    let xhl = xsc_pct.first().copied().unwrap_or(0.0);
+    let xht = xsc_pct.get(1).copied().unwrap_or(xhl);
+    let xlt = xsc_pct.get(2).copied().unwrap_or(0.0);
+    ((xhl + xht - xlt) / 2.0, (xhl + xlt - xht) / 2.0)
+}
+
+fn winding_base(w: &Winding) -> f64 {
+    w.v_ref * w.v_ref / w.s_rating
 }
 
 fn n_winding_phase_count(w: &Winding) -> usize {
