@@ -944,7 +944,10 @@ def test_large_case_pegase():
     assert c.n_buses == 2869
     b = c.bprime()
     assert b.shape == (2869, 2869)
-    assert is_symmetric(b)
+    # MATPOWER Bp keeps phase shifts. This case has phase shifters, so the
+    # off diagonal entries are asymmetric.
+    assert not is_symmetric(b)
+    assert np.isfinite(b.data).all()
 
 
 # --- gridfm Parquet surface --------------------------------------------
