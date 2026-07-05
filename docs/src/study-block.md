@@ -27,8 +27,8 @@ mechanisms look similar from a distance. They differ in both axes that matter:
   ignores point k−1), while commits are cumulative (state k is the base plus
   commits 0 through k).
 
-Retrofitting deltas and a cumulative axis onto the series would change a
-contract GO Challenge 3 consumers already rely on. The study block is its own
+Retrofitting deltas and a cumulative axis onto the series would change behavior
+GO Challenge 3 consumers already rely on. The study block is its own
 metadata field and reuses the operating point machinery where it fits: element
 addressing and identity resolution through `ElementRef`.
 
@@ -91,8 +91,8 @@ bus, preserving each load's share and power factor. At a bus with no in
 service load (or zero total demand) a synthetic load row is appended with
 uid `study:load:{bus_uid}` and metadata marking it synthetic.
 
-The v1 block is defined for balanced model JSON; a study on multiconductor
-model JSON is a clean validation error until there is a consumer.
+The initial study block is defined for balanced model JSON; a study on
+multiconductor model JSON is a clean validation error until there is a consumer.
 
 ## The app namespace
 
@@ -104,8 +104,8 @@ network states ignores the map entirely.
 
 ## Identity
 
-Edits address rows by model `uid`, so the uid contract tightens from
-implementation detail to public guarantee:
+Edits address rows by model `uid`, so the uid rule moves from implementation
+detail to public guarantee:
 
 - parsing the same bytes yields the same uids;
 - synthesized uids are `{table}:{row}` at document build, and source defined
@@ -127,6 +127,6 @@ display concern.
 - `ensure_payload_uids(&mut Network)` for deterministic payload row identity.
 
 Tracking issues: [#181](https://github.com/eigenergy/powerio/issues/181)
-(block, materialization, uid contract),
+(block, materialization, uid rules),
 [#185](https://github.com/eigenergy/powerio/issues/185) (remaining bindings and
 CLI).

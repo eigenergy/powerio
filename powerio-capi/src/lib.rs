@@ -38,10 +38,11 @@ mod arrow_export;
 pub use arrow_export::{
     PIO_ARROW_TABLE_BDOUBLEPRIME, PIO_ARROW_TABLE_BPRIME, PIO_ARROW_TABLE_BRANCH,
     PIO_ARROW_TABLE_BUS, PIO_ARROW_TABLE_GEN, PIO_ARROW_TABLE_INCIDENCE, PIO_ARROW_TABLE_LOAD,
-    PIO_ARROW_TABLE_SHUNT, PIO_ARROW_TABLE_SOLVER_ARC, PIO_ARROW_TABLE_SOLVER_BRANCH,
-    PIO_ARROW_TABLE_SOLVER_BUS, PIO_ARROW_TABLE_SOLVER_GEN, PIO_ARROW_TABLE_SOLVER_HVDC,
-    PIO_ARROW_TABLE_SOLVER_LOAD, PIO_ARROW_TABLE_SOLVER_SHUNT, PIO_ARROW_TABLE_SOLVER_STORAGE,
-    PIO_ARROW_TABLE_SOLVER_SWITCH, PIO_ARROW_TABLE_SWITCH, PIO_ARROW_TABLE_YBUS,
+    PIO_ARROW_TABLE_MATRIX_BRANCH, PIO_ARROW_TABLE_MATRIX_BUS, PIO_ARROW_TABLE_SHUNT,
+    PIO_ARROW_TABLE_SOLVER_ARC, PIO_ARROW_TABLE_SOLVER_BRANCH, PIO_ARROW_TABLE_SOLVER_BUS,
+    PIO_ARROW_TABLE_SOLVER_GEN, PIO_ARROW_TABLE_SOLVER_HVDC, PIO_ARROW_TABLE_SOLVER_LOAD,
+    PIO_ARROW_TABLE_SOLVER_SHUNT, PIO_ARROW_TABLE_SOLVER_STORAGE, PIO_ARROW_TABLE_SOLVER_SWITCH,
+    PIO_ARROW_TABLE_SWITCH, PIO_ARROW_TABLE_YBUS,
 };
 
 /// Opaque parsed network handle. Carries the parsed [`Network`], the
@@ -192,21 +193,24 @@ unsafe fn finish_network(
 }
 
 /// ABI version of this C interface. Bump on any breaking change to an existing
-/// `pio_*` signature or to the `powerio-json` snapshot schema (new additive
-/// symbols don't require a bump). A consumer compares [`pio_abi_version`]
-/// against the value it was built against (the `PIO_ABI_VERSION` macro in
-/// `powerio.h`) and refuses a mismatched library instead of calling in blind.
+/// `pio_*` signature or documented behavior, including removing a supported
+/// format token from the C surface. New additive symbols do not require a bump.
+/// A consumer compares [`pio_abi_version`] against the value it was built
+/// against (the `PIO_ABI_VERSION` macro in `powerio.h`) and refuses a
+/// mismatched library instead of calling in blind.
 ///
 /// v4 froze the naming grammar and conventions (see the header preamble); the
 /// surface evolves additively from here: new data means new symbols, and rich
-/// or multiconductor data rides the Arrow and `powerio-json` schemas, which
-/// carry their own structure and never force a signature change.
+/// or multiconductor data rides Arrow tables, `.pio.json` packages, or
+/// format-specific JSON payloads with their own schema/version rules.
 pub const PIO_ABI_VERSION: u32 = 4;
 
 /// ABI version of the optional `pio_dist_*` C surface. This is separate from
 /// [`PIO_ABI_VERSION`] so distribution C entry points can evolve without forcing
 /// a core ABI bump. Version 1 is the supported dist surface with conversion
-/// order `(input, from, to, ...)`.
+/// order `(input, from, to, ...)`. Distribution JSON payload versions remain in
+/// those payloads; this integer tracks the C entry points and their documented
+/// behavior.
 #[cfg(feature = "dist")]
 pub const PIO_DIST_ABI_VERSION: u32 = 1;
 
@@ -1245,6 +1249,28 @@ pub unsafe extern "C" fn pio_to_arrow(
                 -1
             }
         }
+    }
+}
+
+/// Return the Arrow table catalog as owned compact JSON.
+///
+/// The catalog is feature based rather than handle based: it describes what
+/// this library build can export, not what a particular network contains. Top
+/// level fields are `schema_version`, `producer`, and `tables`. Each table
+/// entry includes `id`, `name`, `schema_version`, `format`,
+/// `feature_requirements`, `available`, `row_axis`, `col_axis`, `units`, and
+/// `columns`. Each column entry includes `name`, `type`, and `nullable`.
+///
+/// Free the returned string with [`pio_string_free`]. On error this returns
+/// NULL and writes the message into `errbuf`. Only built with the `arrow` cargo
+/// feature.
+#[cfg(feature = "arrow")]
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn pio_arrow_catalog_json(errbuf: *mut c_char, errlen: usize) -> *mut c_char {
+    unsafe {
+        finish_string(errbuf, errlen, "panic while building Arrow catalog", || {
+            Ok(arrow_export::catalog_json())
+        })
     }
 }
 
@@ -2402,6 +2428,8 @@ mod tests {
             "#define PIO_ARROW_TABLE_INCIDENCE 16",
             "#define PIO_ARROW_TABLE_BPRIME 17",
             "#define PIO_ARROW_TABLE_BDOUBLEPRIME 18",
+            "#define PIO_ARROW_TABLE_MATRIX_BUS 19",
+            "#define PIO_ARROW_TABLE_MATRIX_BRANCH 20",
             "typedef struct PioDistNetwork PioDistNetwork;",
             "typedef struct PioNetwork PioNetwork;",
             "typedef struct PioPackage PioPackage;",
@@ -2444,6 +2472,7 @@ mod tests {
             "size_t pio_bus_demand(const PioNetwork *net, double *pd, double *qd, size_t cap);",
             "size_t pio_bus_shunt(const PioNetwork *net, double *gs, double *bs, size_t cap);",
             "int32_t pio_to_arrow(const PioNetwork *net, int32_t table, struct ArrowArray *out_array, struct ArrowSchema *out_schema, char *errbuf, size_t errlen);",
+            "char *pio_arrow_catalog_json(char *errbuf, size_t errlen);",
             "PioPackage *pio_package_parse_file(const char *path, char *errbuf, size_t errlen);",
             "PioPackage *pio_package_parse_str(const char *text, char *errbuf, size_t errlen);",
             "void pio_package_free(PioPackage *pkg);",
@@ -3665,6 +3694,26 @@ mpc.branch = [
         let msg = unsafe { CStr::from_ptr(err.as_ptr()) }.to_str().unwrap();
         assert!(!msg.is_empty(), "expected an error message");
         unsafe { pio_network_free(c) };
+    }
+
+    #[cfg(feature = "arrow")]
+    #[test]
+    fn arrow_catalog_json_symbol_returns_table_catalog() {
+        let mut err = [0 as c_char; PIO_ERRBUF_MIN];
+        let ptr = unsafe { pio_arrow_catalog_json(err.as_mut_ptr(), err.len()) };
+        assert!(
+            !ptr.is_null(),
+            "{}",
+            unsafe { CStr::from_ptr(err.as_ptr()) }.to_str().unwrap()
+        );
+        let text = unsafe { CStr::from_ptr(ptr) }.to_str().unwrap().to_owned();
+        unsafe { pio_string_free(ptr) };
+        let catalog: serde_json::Value = serde_json::from_str(&text).unwrap();
+        assert_eq!(catalog["schema_version"], "1");
+        assert!(catalog["tables"].as_array().unwrap().iter().any(|table| {
+            table["id"] == serde_json::json!(PIO_ARROW_TABLE_MATRIX_BUS)
+                && table["name"] == serde_json::json!("matrix_bus")
+        }));
     }
 
     #[cfg(feature = "gridfm")]

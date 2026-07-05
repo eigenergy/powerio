@@ -1,7 +1,121 @@
 {
+  "axes": {
+    "matrix_branch": {
+      "format": "axis_map",
+      "from_bus_id": [
+        1,
+        4,
+        5,
+        3,
+        6,
+        7,
+        8,
+        8,
+        9
+      ],
+      "index": [
+        0,
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7,
+        8
+      ],
+      "row_axis": "matrix_branch",
+      "schema_version": "1",
+      "source_row": [
+        0,
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7,
+        8
+      ],
+      "table": "matrix_branch",
+      "to_bus_id": [
+        4,
+        5,
+        6,
+        6,
+        7,
+        8,
+        2,
+        9,
+        4
+      ]
+    },
+    "matrix_bus": {
+      "bus_id": [
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7,
+        8,
+        9
+      ],
+      "component": [
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0
+      ],
+      "format": "axis_map",
+      "index": [
+        0,
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7,
+        8
+      ],
+      "is_reference": [
+        1,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0
+      ],
+      "row_axis": "matrix_bus",
+      "schema_version": "1",
+      "source_row": [
+        0,
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7,
+        8
+      ],
+      "table": "matrix_bus"
+    }
+  },
   "case": "case9.m",
   "tables": {
     "bdoubleprime": {
+      "col_axis": "matrix_bus",
       "col_count": 9,
       "col_index": [
         0,
@@ -32,6 +146,8 @@
         7,
         8
       ],
+      "format": "coo",
+      "row_axis": "matrix_bus",
       "row_count": 9,
       "row_index": [
         0,
@@ -62,6 +178,7 @@
         8,
         8
       ],
+      "schema_version": "1",
       "table": "bdoubleprime",
       "value_bits": [
         "0x40315c71c71c71c7",
@@ -94,6 +211,7 @@
       ]
     },
     "bprime": {
+      "col_axis": "matrix_bus",
       "col_count": 9,
       "col_index": [
         0,
@@ -124,6 +242,8 @@
         7,
         8
       ],
+      "format": "coo",
+      "row_axis": "matrix_bus",
       "row_count": 9,
       "row_index": [
         0,
@@ -154,6 +274,7 @@
         8,
         8
       ],
+      "schema_version": "1",
       "table": "bprime",
       "value_bits": [
         "0x40315c71c71c71c7",
@@ -186,6 +307,7 @@
       ]
     },
     "incidence": {
+      "col_axis": "matrix_branch",
       "col_count": 9,
       "col_index": [
         0,
@@ -207,6 +329,8 @@
         7,
         8
       ],
+      "format": "coo",
+      "row_axis": "matrix_bus",
       "row_count": 9,
       "row_index": [
         0,
@@ -228,6 +352,7 @@
         8,
         8
       ],
+      "schema_version": "1",
       "table": "incidence",
       "value_bits": [
         "0x3ff0000000000000",
@@ -280,6 +405,7 @@
         "0x4017e689aac70ae0",
         "0xc03156963f62c4f3"
       ],
+      "col_axis": "matrix_bus",
       "col_count": 9,
       "col_index": [
         0,
@@ -310,6 +436,7 @@
         7,
         8
       ],
+      "format": "coo",
       "g_bits": [
         "0x0000000000000000",
         "0x0000000000000000",
@@ -339,6 +466,7 @@
         "0xbff3006d731a4512",
         "0x40046c1e42b9b1d2"
       ],
+      "row_axis": "matrix_bus",
       "row_count": 9,
       "row_index": [
         0,
@@ -369,6 +497,7 @@
         8,
         8
       ],
+      "schema_version": "1",
       "table": "ybus"
     }
   }

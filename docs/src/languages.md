@@ -46,11 +46,12 @@ Verb taxonomy:
 | gridfm read | `read_gridfm_dataset(dir, scenario)` | `read_gridfm(dir, scenario=0)` | `read_gridfm(dir; scenario=0)` | `pio_read_dir` + `"gridfm"` |
 | Arrow handoff | internal/C ABI | later | `to_arrow` | `pio_to_arrow` |
 
-**Note:** the C ABI carries no per-format symbols: matpower, the powerio-json
-snapshot, PyPSA CSV directories, and gridfm datasets are all format strings into
-`pio_to_format` / `pio_parse_str` / `pio_write_dir` / `pio_read_dir`. The
-language APIs keep their per-format conveniences (`to_matpower`, `from_json`,
-...) as wrappers over the same paths.
+**Note:** the C ABI carries no per-format symbols: matpower, `powerio-json`,
+PyPSA CSV directories, and gridfm datasets are all format strings into
+`pio_to_format` / `pio_parse_str` / `pio_write_dir` / `pio_read_dir`. Removing
+or changing a documented format token is a C behavior change even though the C
+signature stays the same. The language APIs keep their per-format conveniences
+(`to_matpower`, `from_json`, ...) as wrappers over the same paths.
 
 ## C ABI and binding compatibility
 
@@ -75,10 +76,10 @@ C ABI review points:
 
 Julia's `PowerIO.jl` uses the C ABI for handles, dense extractors, Arrow,
 GridFM, PyPSA CSV folders, distribution conversion, and `.pio.json` document
-construction. Whole-network transport uses `powerio-json`, so the binding does
-not stitch together a separate model from individual table calls. The Julia
-binding checks `pio_abi_version()` against `PIO_ABI_VERSION` on first use.
-Distribution calls also check `pio_dist_abi_version()`.
+construction. Programmatic whole-network JSON remains available through
+`powerio-json`; file handoffs should use `.pio.json`. The Julia binding checks
+`pio_abi_version()` against `PIO_ABI_VERSION` on first use. Distribution calls
+also check `pio_dist_abi_version()`.
 
 GOC3 document construction is the first `.pio.json` operating point path backed
 by a source format. The static balanced model JSON carries the first interval;
