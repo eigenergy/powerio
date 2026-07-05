@@ -32,6 +32,7 @@ cargo test -p powerio-capi --features arrow,matrix
 cargo test -p powerio-capi --features gridfm
 cargo test -p powerio-capi --features dist
 cargo test -p powerio-capi --features arrow,matrix,gridfm,dist,pkg
+bash scripts/ci-clippy.sh capi-release
 scripts/capi-header-parity.sh
 scripts/capi-smoke.sh
 ```

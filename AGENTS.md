@@ -59,7 +59,7 @@ Matrix outputs (powerio-matrix):
 cargo build --release        # powerio + powerio-matrix + powerio-cli (default-members)
 cargo test                   # powerio + powerio-matrix (default-members)
 cargo test -p powerio-capi   # the C ABI tests (not in default-members)
-cargo clippy --all-targets
+bash scripts/ci-clippy.sh    # full CI clippy matrix; run before pushing Rust/C ABI changes
 cargo fmt --all --check      # rustfmt is enforced (edition 2024)
 
 # CLI (the binary is `powerio`):
@@ -194,6 +194,11 @@ benchmarks/                  # parse benchmarks + Julia validation harnesses
   paths resolve unchanged and a single `use powerio_matrix::...` pulls in both
   layers. Keep the parser/converter in `powerio` (light deps) and matrices in
   `powerio-matrix`.
+- **Clippy must match CI.** Root `cargo clippy --all-targets` skips feature
+  combinations and the PyO3 extension, so it misses failures that CI catches.
+  Run `bash scripts/ci-clippy.sh` before pushing Rust, C ABI, Arrow, matrix,
+  feature, or Python extension changes. Use a target such as
+  `bash scripts/ci-clippy.sh capi-release` only while iterating on one failure.
 - **One Python wheel (maturin mixed layout).** `powerio-py/` is the Rust PyO3
   crate; it compiles to one native module, `powerio._powerio` (`[lib] name =
   _powerio`, `crate-type = cdylib`). `python/powerio/` is the pure-Python

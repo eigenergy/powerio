@@ -298,7 +298,7 @@ the local `powerio` wheel.
 cargo fmt --all --check
 cargo test
 cargo test -p powerio-capi
-cargo clippy --all-targets
+bash scripts/ci-clippy.sh
 pytest python/tests
 bash benchmarks/run_validation.sh
 ```
