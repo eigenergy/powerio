@@ -551,7 +551,7 @@ fn draw_synth(frame: &mut Frame, app: &App, area: Rect) {
             frame.render_widget(Sparsity::new(&b), inner);
         } else {
             frame.render_widget(
-                Paragraph::new("(failed to build B')").block(preview_block),
+                Paragraph::new("(failed to build Bp)").block(preview_block),
                 split[1],
             );
         }
@@ -630,7 +630,7 @@ fn draw_help(frame: &mut Frame, _app: &App, area: Rect) {
         Line::raw("  R          re-scan data directory"),
         Line::raw(""),
         Line::raw("Inspect"),
-        Line::raw("  Tab/Shift-Tab cycle matrix kind (B', B'', G, -B, LACPF)"),
+        Line::raw("  Tab/Shift-Tab cycle matrix kind (Bp, Bpp, G, -B, LACPF)"),
         Line::raw("  s          toggle BX ↔ XB scheme (rebuilds matrices)"),
         Line::raw("  e          export current matrix to out_dir"),
         Line::raw("  Esc        back to Browse"),

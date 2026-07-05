@@ -2,7 +2,7 @@
 //!
 //! One Rust↔Python boundary for both halves of PowerIO: the dependency-light IO
 //! surface (parse, lossless write, cross-format convert) and the matrix surface
-//! (B'/B''/Y_bus, PTDF/LODF, incidence, weighted Laplacian, adjacency, DC OPF).
+//! (MATPOWER Bp/Bpp/Y_bus, PTDF/LODF, incidence, weighted Laplacian, adjacency, DC OPF).
 //! Parse and convert cross the boundary as plain dicts and strings, so
 //! `import powerio` pulls in nothing but the interpreter.
 //!
@@ -929,8 +929,7 @@ impl PyNetwork {
 
     // --- matrix builders: each returns a COO tuple ----------------------
 
-    /// PowerIO B': a shuntless positive susceptance Laplacian. Tap ratios and
-    /// phase shifts are ignored.
+    /// MATPOWER FDPF Bp matrix.
     #[pyo3(signature = (scheme=None))]
     fn bprime<'py>(&self, py: Python<'py>, scheme: Option<&str>) -> PyResult<Bound<'py, PyAny>> {
         let opts = BuildOptions {
@@ -942,8 +941,7 @@ impl PyNetwork {
         coo_triplets(py, &m)
     }
 
-    /// B'' always keeps tap ratios and zeroes phase shifts (MATPOWER `makeB`);
-    /// only the FDPF `scheme` (`"bx"`/`"xb"`) changes its result.
+    /// MATPOWER FDPF Bpp matrix.
     #[pyo3(signature = (scheme=None))]
     fn bdoubleprime<'py>(
         &self,

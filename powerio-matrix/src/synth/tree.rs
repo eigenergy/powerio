@@ -1,4 +1,4 @@
-//! Random spanning tree topology. Produces a singular Laplacian B' (rank n-1).
+//! Random spanning tree topology. Produces a singular weighted Laplacian (rank n-1).
 
 use rand::Rng;
 use rand::SeedableRng;

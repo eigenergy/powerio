@@ -28,7 +28,7 @@ pub struct YbusParts {
     pub b: CsMat<f64>,
 }
 
-/// Internal flags used to derive B', B'' from `Y_bus` per MATPOWER `makeB`.
+/// Internal flags used to derive MATPOWER `Bp` and `Bpp` from `Y_bus`.
 // Six independent on/off switches into one Y_bus kernel; an enum per pair
 // would just spread the same state across more types.
 #[allow(clippy::struct_excessive_bools)]

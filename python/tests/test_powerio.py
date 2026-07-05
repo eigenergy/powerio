@@ -530,7 +530,7 @@ def test_bprime_is_singular_laplacian(name):
 
 
 def test_bprime_xb_equals_weighted_laplacian(case9):
-    # Exact cross-check across two boundary paths: B' in the XB scheme is the
+    # Exact cross-check across two boundary paths: Bp in the XB scheme is the
     # paper-convention weighted Laplacian (b = 1/x). Catches a shared bug in
     # the COO conversion that the symmetric self-check can't.
     assert np.allclose(
@@ -543,7 +543,7 @@ def test_bdoubleprime_shunts_and_scheme():
     c = load("case30")  # has bus shunts
     bpp = c.bdoubleprime()
     assert bpp.shape == (c.n_buses, c.n_buses)
-    # B'' keeps shunts, so it differs from the shuntless B'.
+    # Bpp keeps shunts, so it differs from Bp on this case.
     assert not np.allclose(bpp.toarray(), c.bprime().toarray())
     # The scheme kwarg is wired: BX zeroes line resistance, XB does not.
     assert not np.allclose(c.bdoubleprime("bx").toarray(), c.bdoubleprime("xb").toarray())

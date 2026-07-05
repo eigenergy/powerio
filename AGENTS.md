@@ -39,10 +39,12 @@ Every balanced case format meets at `Network`, so a new format is one
 reader/writer at the hub, not a pairwise converter.
 
 Matrix outputs (powerio-matrix):
-- B' shuntless positive susceptance Laplacian. Singular positive Laplacian,
-  rank n-1. This is the PowerIO convention, not exact MATPOWER `makeB` `Bp` in
-  phase shifter cases.
-- B'' (FDPF, with shunts and taps). SDDM when bus shunts are present.
+- MATPOWER FDPF `Bp` (`bprime`): `-Im(Y_bus)` after clearing bus shunts and
+  line charging and setting tap magnitudes to one. XB clears resistance. Phase
+  shifts remain, matching MATPOWER `makeB`.
+- MATPOWER FDPF `Bpp` (`bdoubleprime`): `-Im(Y_bus)` after clearing phase
+  shifts. BX clears resistance. Line charging, bus shunts, and tap magnitudes
+  remain.
 - `Re(Y_bus)`, `-Im(Y_bus)` (full).
 - LACPF block `[[G, -B], [-B, -G]]` (linear AC power flow, flat start, 2n×2n, indefinite).
 - Adjacency (`MatrixKind::Adjacency`); PTDF and LODF (`sensitivities` subcommand).
@@ -207,7 +209,7 @@ benchmarks/                  # parse benchmarks + Julia validation harnesses
   and the writer returns it, so `parse → write → parse` keeps the exact bytes:
   every `mpc.*` field, in-matrix comments, and exact tokens like `7e-05`. Don't
   reformat through `f64` round-trips; don't drop fields the typed model ignores.
-- **Two-tier fidelity contract.** Same format round trip is byte exact.
+- **Two-tier fidelity rules.** Same format round trip is byte exact.
   Cross-format conversion keeps maximal fidelity and reports anything the target
   can't represent in `Conversion::warnings`; never drop it silently.
 - **Adding a format.** A reader and/or writer in `powerio/src/format/<name>.rs`
@@ -224,19 +226,26 @@ benchmarks/                  # parse benchmarks + Julia validation harnesses
   GOC3 package construction stores the static first interval in `model` and the
   source time series in replayable operating points. Materializing a point
   returns a derived static package with the series cleared.
-- **Sign convention.** Positive Laplacian: off diag negative, diag positive, `diag = sum |off-diag|` for B'. The positive (M-matrix) Laplacian form SDDM solvers expect.
+- **Sign convention.** Positive Laplacians use negative off diag entries,
+  positive diagonal entries, and `diag = sum |off-diag|`. This is the
+  M-matrix form SDDM solvers expect.
 - **Bus IDs.** MATPOWER 1 based; `IndexedNetwork::bus_index(id)` is the only mapping into dense `[0, n)`. Don't clamp out of range; return `Error::UnknownBus`.
 - **`BR_B` is already per unit.** Never divide by `base_mva` again.
 - **`tap == 0` ⇒ `tap = 1`.** Use `Branch::effective_tap()`.
-- **B' ignores taps and shifts.** It is PowerIO's shuntless positive
-  susceptance Laplacian. MATPOWER `makeB` cancels tap magnitudes for `Bp` but
-  leaves `SHIFT` in the temporary branch table, so phase shifters differ. B''
-  zeros only shifts. Y_bus keeps both.
+- **MATPOWER FDPF matrices.** `build_bprime` follows MATPOWER `makeB` `Bp`:
+  bus shunts and line charging are cleared, tap magnitudes are set to one, XB
+  clears resistance, and phase shifts remain. `build_bdoubleprime` follows
+  MATPOWER `Bpp`: phase shifts are cleared, BX clears resistance, and shunts,
+  line charging, and tap magnitudes remain. `Y_bus` keeps taps and shifts.
 - **Angle bound clamp postcondition.** When editing `clamp_angle_bounds`, test
   intervals wholly below `-pi/2` and wholly above `pi/2`; normalized branches
   must leave `angmin <= angmax`. Wide symmetric bounds and `0/0` already have
   coverage.
-- **DC OPF Laplacian.** `L = A diag(b) Aᵀ` is built from the same `A`, `b` factors `build_incidence` returns (so `L` and the reweighted `L₁` share a factorization), and equals `build_bprime` in the XB scheme. Default `b = 1/x` (paper-pure); `DcConvention::Matpower` uses `1/(x·τ)` plus a phase-shift injection.
+- **DC OPF Laplacian.** `L = A diag(b) Aᵀ` is built from the same `A`, `b`
+  factors `build_incidence` returns, so `L` and the reweighted `L₁` share a
+  factorization. With zero phase shifts, it equals MATPOWER `Bp` in the XB
+  scheme. Default `b = 1/x` (paper-pure); `DcConvention::Matpower` uses
+  `1/(x·τ)` plus a phase shift injection.
 - **DC OPF is bus indexed.** Generation is nodal (`p_g ∈ ℝⁿ`), so `Q`, `c`, and bounds are length n (zero at load buses), scattered from generator space through `C_g`; gen-space vectors (`OpfInstance::gen_costs`) ride along as provenance. Cost map: MATPOWER `c2 p² + c1 p` → `q = 2c2`, `c = c1`. Per-unit by default (`Units::PerUnit` scales `q` by `base²`, `c` by `base`).
 - **`gen`/`gencost` are optional.** A power flow case with no `mpc.gen` parses with `gens` empty; the OPF builders return `Error::NoGenerators`.
 - **Reference (slack) buses are a set, grounded one row/column each.** `IndexedNetwork::reference_bus_indices` returns every `BusType::Ref`; the matrix builders ground the whole set, so a network needs one reference *per connected component* (`IndexedNetwork::check_reference_coverage`). Several within one island is a distributed-slack solve. `reference_bus_index` is the exactly-one convenience query (errors otherwise) for the single-slack C/Python/gridfm paths.

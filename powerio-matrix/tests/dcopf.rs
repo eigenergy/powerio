@@ -123,7 +123,7 @@ fn parses_generators_and_costs() {
 
 #[test]
 fn laplacian_equals_bprime_xb() {
-    // L = A diag(1/x) Aᵀ is exactly B' in the XB scheme.
+    // With zero phase shifts, L = A diag(1/x) Aᵀ matches Bp in the XB scheme.
     for path in CASES {
         let case = load(path);
         let view = IndexedNetwork::new(&case);
@@ -144,7 +144,7 @@ fn laplacian_equals_bprime_xb() {
             for j in 0..dl.len() {
                 assert!(
                     (dl[i][j] - db[i][j]).abs() < 1e-9,
-                    "{path}: L[{i}][{j}]={} != B'[{i}][{j}]={}",
+                    "{path}: L[{i}][{j}]={} != Bp[{i}][{j}]={}",
                     dl[i][j],
                     db[i][j]
                 );

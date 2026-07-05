@@ -50,7 +50,7 @@ fn three_winding_transformer_enters_the_matrices_and_connects_its_windings() {
     // Three buses (1 reference, 2 and 3 PQ) joined only by a 3-winding
     // transformer, no other branch. The indexed view star-lowers it, so the
     // windings land in one grounded component (plus the synthetic star point)
-    // instead of three ungrounded islands, and the star branches scatter into B'.
+    // instead of three ungrounded islands, and the star branches scatter into Bp.
     let raw = r"0, 100.00, 33, 0, 0, 60.00 / x
 CASE
 COMMENT
@@ -127,10 +127,10 @@ fn bprime_is_symmetric_and_laplacian() {
 }
 
 #[test]
-fn bprime_ignores_taps_and_phase_shifts() {
+fn bprime_cancels_tap_magnitude_and_keeps_phase_shift() {
     let mut shifted = br(1, 2, 0.0, 0.2, 0.0);
     shifted.tap = 1.25;
-    shifted.shift = 30.0;
+    shifted.shift = 60.0;
     let net = Network::in_memory(
         "phase-shifter",
         100.0,
@@ -148,10 +148,13 @@ fn bprime_ignores_taps_and_phase_shifts() {
     .unwrap()
     .to_dense();
 
+    // MATPOWER `makeB` sets TAP to 1 for `Bp` and keeps SHIFT. With r=0,
+    // x=0.2, shift=60°, the diagonal is 1/x = 5 and off diagonal entries are
+    // -cos(60°)/x = -2.5.
     assert_relative_eq!(b[[0, 0]], 5.0, max_relative = 1e-12);
     assert_relative_eq!(b[[1, 1]], 5.0, max_relative = 1e-12);
-    assert_relative_eq!(b[[0, 1]], -5.0, max_relative = 1e-12);
-    assert_relative_eq!(b[[1, 0]], -5.0, max_relative = 1e-12);
+    assert_relative_eq!(b[[0, 1]], -2.5, max_relative = 1e-12);
+    assert_relative_eq!(b[[1, 0]], -2.5, max_relative = 1e-12);
 
     let ybus = build_ybus(&view, &BuildOptions::default())
         .unwrap()
@@ -159,8 +162,8 @@ fn bprime_ignores_taps_and_phase_shifts() {
         .to_dense();
     let minus_im_ybus_offdiag = -ybus[[0, 1]];
     assert!(
-        (minus_im_ybus_offdiag + 5.0).abs() > 1e-6,
-        "Ybus keeps the transformer tap and phase shift, so it must differ from B'"
+        (minus_im_ybus_offdiag + 2.5).abs() > 1e-6,
+        "Ybus keeps the transformer tap magnitude"
     );
 }
 

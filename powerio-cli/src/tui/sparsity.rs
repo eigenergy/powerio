@@ -9,7 +9,7 @@
 //! ```
 //!
 //! Negative values render with one color (the M-matrix off-diagonal pattern
-//! we expect for FDPF B'), positive with another, zero is blank.
+//! we expect for MATPOWER Bp), positive with another, zero is blank.
 
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;

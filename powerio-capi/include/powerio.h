@@ -234,12 +234,12 @@ struct ArrowSchema;
 #endif
 
 #if defined(PIO_ARROW)
-/** B' shuntless positive Laplacian COO table. Rows and columns use `matrix_bus`. */
+/** MATPOWER Bp COO table. Rows and columns use `matrix_bus`. */
 #define PIO_ARROW_TABLE_BPRIME 17
 #endif
 
 #if defined(PIO_ARROW)
-/** B'' COO table. Rows and columns use the `matrix_bus` axis. */
+/** MATPOWER Bpp COO table. Rows and columns use the `matrix_bus` axis. */
 #define PIO_ARROW_TABLE_BDOUBLEPRIME 18
 #endif
 

@@ -33,7 +33,7 @@ SPEED_HEADER = (
     "| --- | --- | --- | --- | --- |"
 )
 PANDA_HEADER = (
-    "| case | powerio parse | powerio parse + Y_bus + B' | matpowercaseframes (pandapower's `.m` reader) |\n"
+    "| case | powerio parse | powerio parse + Y_bus + Bp | matpowercaseframes (pandapower's `.m` reader) |\n"
     "| --- | --- | --- | --- |"
 )
 POWERWORLD_HEADER = (
@@ -60,13 +60,13 @@ POWERWORLD_CASES = [
     "Texas7k (local TAMU copy)",
 ]
 MATRIX_ROWS = [
-    ("B' sparse", "case118"),
-    ("B'' sparse", "case118"),
+    ("Bp sparse", "case118"),
+    ("Bpp sparse", "case118"),
     ("Y_bus sparse", "case118"),
     ("LACPF block", "case118"),
     ("adjacency", "case118"),
-    ("B' sparse", "case2869pegase"),
-    ("B'' sparse", "case2869pegase"),
+    ("Bp sparse", "case2869pegase"),
+    ("Bpp sparse", "case2869pegase"),
     ("Y_bus sparse", "case2869pegase"),
     ("LACPF block", "case2869pegase"),
     ("adjacency", "case2869pegase"),

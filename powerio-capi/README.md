@@ -57,7 +57,7 @@ int main(void) {
     int64_t *from = malloc(m * sizeof *from), *to = malloc(m * sizeof *to);
     double  *x    = malloc(m * sizeof *x);
     pio_branches(c, from, to, NULL, x, NULL, NULL, NULL, NULL, m);
-    /* ... assemble B' from (from, to, 1/x) ... */
+    /* ... assemble a DC weighted Laplacian from (from, to, 1/x) ... */
 
     /* Every format is a string: matpower echoes byte-exact, powerio-json is
      * the lossless snapshot, powermodels-json/psse/... convert with warnings. */
@@ -263,7 +263,7 @@ and JSON extraction. Build with `--features arrow,matrix` to export the first
 balanced sparse matrix family over `pio_to_arrow` as COO triplet tables:
 `ybus`, `incidence`, `bprime`, and `bdoubleprime`, all in dense solver bus index
 space with dimensions and axis names in Arrow schema metadata. The planned
-stable matrix ABI is Arrow COO plus `matrix_bus` and `matrix_branch` axis map
+the stable matrix ABI is Arrow COO plus `matrix_bus` and `matrix_branch` axis map
 tables; C stays language neutral, while Julia, Python, and other bindings own
 their native sparse matrix assembly. Runtime consumers can call
 `pio_matrix_available()` before selecting those table ids. Larger matrix

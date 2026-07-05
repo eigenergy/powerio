@@ -61,7 +61,7 @@ then `from_mpc` builds its `net`. `benchmarks/bench_parse.py`, same machine,
 median wall time:
 
 <!-- BENCH:speed-pandapower START -->
-| case | powerio parse | powerio parse + Y_bus + B' | matpowercaseframes (pandapower's `.m` reader) |
+| case | powerio parse | powerio parse + Y_bus + Bp | matpowercaseframes (pandapower's `.m` reader) |
 | --- | --- | --- | --- |
 | case2869pegase | 1.9 ms | 7.2 ms | n/a |
 | case9241pegase | 6.2 ms | 25.1 ms | n/a |
@@ -75,7 +75,7 @@ reader works. With current `matpowercaseframes` 1.1.6, case2869pegase and
 case9241pegase raise `OverflowError` on `Inf` limits, so those baselines are
 recorded as n/a. The `powerio: parse` row uses the base Python package and reads
 from disk. The matrix column includes parsing plus building the SciPy Y_bus and
-B' matrices.
+Bp matrices.
 
 ## PowerWorld aux and pwb
 
@@ -142,13 +142,13 @@ time, same machine as above.
 <!-- BENCH:matrix START -->
 | operation | case | buses / branches | mean |
 | --- | --- | --- | --- |
-| B' sparse | case118 | 118 / 186 | 0.02 ms |
-| B'' sparse | case118 | 118 / 186 | 0.021 ms |
+| Bp sparse | case118 | 118 / 186 | 0.02 ms |
+| Bpp sparse | case118 | 118 / 186 | 0.021 ms |
 | Y_bus sparse | case118 | 118 / 186 | 0.035 ms |
 | LACPF block | case118 | 118 / 186 | 0.065 ms |
 | adjacency | case118 | 118 / 186 | 0.018 ms |
-| B' sparse | case2869pegase | 2869 / 4582 | 0.57 ms |
-| B'' sparse | case2869pegase | 2869 / 4582 | 0.601 ms |
+| Bp sparse | case2869pegase | 2869 / 4582 | 0.57 ms |
+| Bpp sparse | case2869pegase | 2869 / 4582 | 0.601 ms |
 | Y_bus sparse | case2869pegase | 2869 / 4582 | 1.057 ms |
 | LACPF block | case2869pegase | 2869 / 4582 | 2.007 ms |
 | adjacency | case2869pegase | 2869 / 4582 | 0.48 ms |

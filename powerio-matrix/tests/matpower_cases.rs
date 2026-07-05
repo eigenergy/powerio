@@ -49,11 +49,11 @@ fn bprime_is_singular_laplacian_on_real_cases() {
         let view = IndexedNetwork::new(&net);
         let b = build_bprime(&view, &BuildOptions::default()).unwrap();
         let stats = MatrixStats::from_csr(&b);
-        assert!(stats.m_matrix_sign, "{name}: B' must have M-matrix signs");
+        assert!(stats.m_matrix_sign, "{name}: Bp must have M-matrix signs");
         // Singular Laplacian: diag exactly equals row-sum of |off-diag|.
         assert!(
             stats.min_dd_margin.abs() < 1e-9,
-            "{name}: B' should be exactly Laplacian, got margin {}",
+            "{name}: Bp should have zero diagonal dominance margin for these cases, got {}",
             stats.min_dd_margin
         );
         assert!(stats.min_diag > 0.0);
@@ -71,7 +71,7 @@ fn bdoubleprime_includes_shunts_on_case30() {
     // case30 has explicit bus shunts → strict diagonal dominance.
     assert!(
         stats.min_dd_margin > 1e-9 || stats.m_matrix_sign,
-        "B'' on case30 should be at least M-matrix-signed"
+        "Bpp on case30 should be at least M-matrix-signed"
     );
 }
 
@@ -163,7 +163,7 @@ fn pipeline_writes_expected_files_for_case9() {
     assert!(names.iter().any(|n| n == "case9_meta.json"));
     assert!(names.iter().any(|n| n.contains("rhs.mtx")));
 
-    // Sanity check: re-read B' from disk and verify it's still SDDM-signed.
+    // Sanity check: re-read Bp from disk and verify its sign pattern.
     let bprime_path = tmp.join("case9_bprime.mtx");
     let reread = powerio_matrix::io::read_mtx(&bprime_path).unwrap();
     assert!(sddm_check(&reread) || MatrixStats::from_csr(&reread).m_matrix_sign);

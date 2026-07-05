@@ -1,10 +1,10 @@
 //! Sparse matrix builders for power system cases.
 //!
-//! Sign convention: the susceptance matrix has the form `B = A diag(b) Aᵀ`
+//! Sign convention: the weighted DC Laplacian has the form `L = A diag(b) Aᵀ`
 //! with the node-by-edge incidence `A` (n×m) and per-edge weight `b_e = x/(r²+x²)`
-//! (see `bprime.rs` for the entry-level form). Resulting matrices satisfy positive
-//! diagonal, negative off-diagonal, `diag = sum of |off-diagonal|` — the
-//! positive (M-matrix) Laplacian form SDDM solvers expect.
+//! for the BX approximation. Resulting matrices satisfy positive diagonal,
+//! negative off-diagonal, and `diag = sum of |off-diagonal|`; this is the
+//! M-matrix form SDDM solvers expect.
 
 mod adjacency;
 mod bdoubleprime;
@@ -50,10 +50,10 @@ pub(crate) use ybus::{YbusFlags, branch_admittance, branch_flows};
 
 use sprs::CsMat;
 
-/// Which branch weighting scheme to use for PowerIO's B' Laplacian.
+/// Which MATPOWER fast decoupled scheme to use.
 ///
-/// - `Bx`: B' uses `-x / (r² + x²)` (what most modern solvers do).
-/// - `Xb`: B' uses `-1 / x` (original Stott/Alsac 1974). Requires `x ≠ 0`.
+/// - `Bx`: clears resistance for `Bpp`.
+/// - `Xb`: clears resistance for `Bp`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
 #[non_exhaustive]
 pub enum Scheme {
@@ -65,9 +65,11 @@ pub enum Scheme {
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct BuildOptions {
     pub scheme: Scheme,
-    /// Apply tap ratios when building B″ and Y-bus. (B′ always ignores taps.)
+    /// Apply tap ratios when building Y_bus. MATPOWER `Bp` sets tap magnitudes
+    /// to one and `Bpp` keeps them.
     pub include_taps: bool,
-    /// Apply phase shifts when building Y-bus. (B′/B″ always ignore shifts.)
+    /// Apply phase shifts when building Y_bus. MATPOWER `Bp` keeps phase
+    /// shifts and `Bpp` clears them.
     pub include_shifts: bool,
     /// Drop branches whose `r² + x² = 0` (true) or error out (false).
     pub skip_zero_impedance: bool,
@@ -89,11 +91,11 @@ impl Default for BuildOptions {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[non_exhaustive]
 pub enum ZeroImpedanceRule {
-    /// Full series impedance, `r² + x²`. Used by Y_bus, LACPF, B' in BX mode,
-    /// and B'' in XB mode.
+    /// Full series impedance, `r² + x²`. Used by Y_bus, LACPF, Bp in BX mode,
+    /// and Bpp in XB mode.
     Series,
-    /// Reactance only denominator, `x`. Used by DC incidence, B' in XB mode,
-    /// and B'' in BX mode after resistance is zeroed.
+    /// Reactance only denominator, `x`. Used by DC incidence, Bp in XB mode,
+    /// and Bpp in BX mode after resistance is zeroed.
     Reactance,
 }
 

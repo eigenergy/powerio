@@ -6,7 +6,7 @@ Four rows, from leanest to fullest:
 - ``powerio: parse`` — the zero-dependency parser (no numpy/scipy). This is the
   apples-to-apples number against matpowercaseframes: parse a MATPOWER file into
   the tool's in-memory model, nothing more.
-- ``powerio[matrix]: parse + Y_bus + B'`` — powerio's parse plus building the two
+- ``powerio[matrix]: parse + Y_bus + Bp`` — powerio's parse plus building the two
   matrices scipy callers usually want, against issue #5's 100 ms target for
   case2869pegase.
 - ``matpowercaseframes: parse`` — pandapower's ``.m`` reader (pandas DataFrames).
@@ -83,7 +83,7 @@ def bench_case(path: Path):
         c.ybus()
         c.bprime()
 
-    rows.append(("powerio[matrix]: parse + Y_bus + B'", *timed(full_path)))
+    rows.append(("powerio[matrix]: parse + Y_bus + Bp", *timed(full_path)))
 
     try:
         from matpowercaseframes import CaseFrames
@@ -133,7 +133,7 @@ def bench_case(path: Path):
     return {
         "case": path.stem,
         "powerio_parse_ms": round(medians["powerio: parse"], 1),
-        "powerio_matrix_ms": round(medians["powerio[matrix]: parse + Y_bus + B'"], 1),
+        "powerio_matrix_ms": round(medians["powerio[matrix]: parse + Y_bus + Bp"], 1),
         "matpowercaseframes_ms": round(medians["matpowercaseframes: parse"], 1)
         if "matpowercaseframes: parse" in medians else None,
     }

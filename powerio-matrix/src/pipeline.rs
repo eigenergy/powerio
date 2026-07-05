@@ -26,9 +26,9 @@ use crate::network::Network;
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[non_exhaustive]
 pub enum MatrixKind {
-    /// Shuntless positive susceptance Laplacian, exposed as B'.
+    /// MATPOWER FDPF Bp matrix.
     BPrime,
-    /// FDPF B'' (with shunts, taps; r=0 if BX scheme).
+    /// MATPOWER FDPF Bpp matrix.
     BDoublePrime,
     /// `Re(Y_bus)` — full conductance matrix.
     YbusG,
@@ -63,8 +63,8 @@ impl MatrixKind {
 
     pub fn label(self) -> &'static str {
         match self {
-            Self::BPrime => "B' (shuntless Laplacian)",
-            Self::BDoublePrime => "B'' (FDPF, with shunts)",
+            Self::BPrime => "MATPOWER Bp (FDPF)",
+            Self::BDoublePrime => "MATPOWER Bpp (FDPF)",
             Self::YbusG => "Re(Y_bus)",
             Self::YbusB => "-Im(Y_bus)",
             Self::Lacpf => "LACPF block (2n×2n)",

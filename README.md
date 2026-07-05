@@ -111,7 +111,7 @@ std::fs::write("case14.json", conv.text)?;
 import powerio as pio
 
 case = pio.parse_file("case9.m")
-bprime = case.bprime()            # scipy.sparse, needs powerio[matrix]
+bprime = case.bprime()            # MATPOWER Bp, scipy.sparse, needs powerio[matrix]
 display = pio.parse_display_file("case.pwd")
 raw, warnings = pio.convert_file("case9.m", "psse")
 ```
@@ -181,7 +181,8 @@ Known limits for every format are documented in the
 
 The `powerio-matrix` Rust crate derives an `IndexedNetwork` with dense bus indices. It enables you to build common power system matrices with minimal dependencies:
 
-- B' and B'' DCPF and FDPF matrices
+- MATPOWER Bp/Bpp FDPF matrices
+- DC weighted Laplacian and flow map matrices
 - Nodal admittance matrix
 - LACPF block matrix
 - Signed incidence, weighted Laplacian, and flow map matrices

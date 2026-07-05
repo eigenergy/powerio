@@ -63,33 +63,33 @@ fn solver_matrix_property_fixture_matches_standard_cases() {
 
     for record in &actual {
         if record.matrix == "bprime" {
-            assert!(record.m_matrix_sign, "{} B' sign pattern", record.case);
+            assert!(record.m_matrix_sign, "{} Bp sign pattern", record.case);
             assert!(
                 record.min_dd_margin.abs() < 1e-8,
-                "{} B' diagonal dominance margin {}",
+                "{} Bp diagonal dominance margin {}",
                 record.case,
                 record.min_dd_margin
             );
             assert!(
                 record.max_abs_row_sum < 1e-7,
-                "{} B' row sum {}",
+                "{} Bp row sum {}",
                 record.case,
                 record.max_abs_row_sum
             );
             assert_eq!(
                 record.grounded_spd,
                 Some(true),
-                "{} B' grounded SPD",
+                "{} Bp grounded SPD",
                 record.case
             );
             assert!(
                 record.condition_estimate.is_some(),
-                "{} B' condition estimate",
+                "{} Bp condition estimate",
                 record.case
             );
         }
         if record.matrix == "bdoubleprime" && record.sddm {
-            assert!(record.full_spd, "{} B'' SDDM should be SPD", record.case);
+            assert!(record.full_spd, "{} Bpp SDDM should be SPD", record.case);
         }
     }
 }

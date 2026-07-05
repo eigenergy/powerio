@@ -11,8 +11,8 @@ The DC OPF bundle has its own schema in
 
 | matrix | shape | builder | notes |
 | --- | --- | --- | --- |
-| B' shuntless Laplacian | \\(n \times n\\) | `build_bprime` | singular positive Laplacian, \\(\operatorname{rank}(L) = n - 1\\), shuntless |
-| B'' (FDPF) | \\(n \times n\\) | `build_bdoubleprime` | SDDM when bus shunts are present |
+| MATPOWER `Bp` (FDPF) | \\(n \times n\\) | `build_bprime` | `-Im(Y_bus)` after the `makeB` `Bp` edits |
+| MATPOWER `Bpp` (FDPF) | \\(n \times n\\) | `build_bdoubleprime` | `-Im(Y_bus)` after the `makeB` `Bpp` edits |
 | \\(\Re(Y_{\mathrm{bus}})\\), \\(-\Im(Y_{\mathrm{bus}})\\) | \\(n \times n\\) | `build_ybus` | full admittance, keeps taps and shifts |
 | LACPF (linear AC power flow) block | \\(2n \times 2n\\) | `build_lacpf` | \\(\begin{bmatrix}G & -B \\\\ -B & -G\end{bmatrix}\\), flat start, indefinite |
 | signed incidence \\(A\\) | \\(n \times m\\) | `build_incidence` | column \\(e\\) has \\(+1\\) at from-bus, \\(-1\\) at to-bus |
@@ -56,7 +56,7 @@ are returned as warnings.
 
 - **Positive Laplacian matrices.** Off-diagonal \\(< 0\\), diagonal \\(> 0\\), with
   \\(L_{ii} = \sum_j \lvert L_{ij} \rvert\\)
-  for B' susceptance matrices. This is the M-matrix form an SDDM (symmetric diagonally dominant
+  for weighted DC Laplacians. This is the M-matrix form an SDDM (symmetric diagonally dominant
   M-matrix) or Cholesky solver expects; a consumer can recover an edge weight as
   \\(-L_{ij} > 0\\).
 - **Bus indexing.** Bus ids are 1-based and preserved on the model as a newtype
@@ -64,21 +64,19 @@ are returned as warnings.
   `IndexedNetwork::bus_index(id)` is the only mapping into the dense \\([0,n)\\); an id
   out of range is an `Error::UnknownBus`.
 - **Taps and shifts.** \\(\mathrm{tap} = 0\\) means \\(\mathrm{tap} = 1\\)
-  (`Branch::effective_tap`). B' ignores taps and shifts by definition: it is
-  PowerIO's shuntless positive susceptance Laplacian, not an exact MATPOWER
-  `makeB` `Bp` for phase shifter cases. MATPOWER cancels tap magnitudes for
-  `Bp` but leaves `SHIFT` in the temporary branch table passed to `makeYbus`,
-  so a phase shifter changes MATPOWER `Bp`. B'' keeps taps and zeros only
-  shifts; \\(Y_{\mathrm{bus}}\\) keeps both.
+  (`Branch::effective_tap`). MATPOWER `Bp` clears bus shunts and line
+  charging, sets tap magnitudes to one, and keeps phase shifts. MATPOWER `Bpp`
+  keeps bus shunts, line charging, and tap magnitudes while clearing phase
+  shifts. \\(Y_{\mathrm{bus}}\\) keeps both tap magnitudes and phase shifts.
 - **Branch shunt admittance is stored per unit.** `Branch::charging` is the
   stored per terminal admittance when present: `g_fr`, `b_fr`, `g_to`, and
   `b_to` are already per unit on the system base. `Branch::b` is the legacy
   MATPOWER `BR_B` total projection for formats that carry only one charging
   value. Matrix builders use `Branch::terminal_charging()`, so terminal values
   feed \\(Y_{\mathrm{bus}}\\) even when the legacy total is zero or stale.
-- **B' scheme.** `Scheme` selects between the two fast decoupled load flow
-  variants for B': `Xb` weights a branch by \\(1/x\\) (series resistance ignored),
-  `Bx` (the default) by \\(x/(r^2 + x^2)\\).
+- **FDPF scheme.** `Scheme` selects between the two MATPOWER fast decoupled
+  variants. `Xb` clears resistance for `Bp`; `Bx` clears resistance for `Bpp`.
+  The default is `Bx`.
 - **Zero impedance branches.** `BuildOptions::skip_zero_impedance` controls the
   builders whose branch denominator can be zero. The default `true` skips the
   branch and records the skipped source branch rows in `MatrixStats` as
@@ -94,7 +92,8 @@ are returned as warnings.
   the DC OPF bundle) use. The default `PaperPure` is the textbook DC power flow
   weight \\(b = 1/x\\), taps and shifts ignored; the resulting
   \\(L = A \operatorname{diag}(b) A^\mathsf{T}\\)
-  equals B' under `Scheme::Xb`. `Matpower` reproduces MATPOWER's `makeBdc`:
+  matches MATPOWER `Bp` under `Scheme::Xb` when phase shifts are zero.
+  `Matpower` reproduces MATPOWER's `makeBdc`:
   \\(b = 1/(x\tau)\\) for a transformer with tap ratio \\(\tau\\), plus the phase shift
   injection vector `p_shift`.
 
@@ -115,8 +114,8 @@ tolerance, and dropped entry counts. The `dcopf` CLI subcommand bundles its
 matrix family with a JSON manifest.
 
 The standard case solver property fixture lives at
-`powerio-matrix/tests/fixtures/solver_matrix_stats.json`. It records B',
-B'', and `ybus_imag` stats for `case9`, `case14`, `case30`, `case57`, and
+`powerio-matrix/tests/fixtures/solver_matrix_stats.json`. It records `bprime`,
+`bdoubleprime`, and `ybus_imag` stats for `case9`, `case14`, `case30`, `case57`, and
 `case118`: `n`, `nnz`, min diagonal, M-matrix sign pattern, diagonal dominance
 margin, zero impedance skips, row sum checks, SPD checks, and a condition
 estimate when the solver input is SPD.

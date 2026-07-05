@@ -29,14 +29,14 @@ def row(operation, case, buses, branches, bench):
 
 
 ROWS = [
-    row("B' sparse", "case118", 118, 186, "matrix_bprime_case118"),
-    row("B'' sparse", "case118", 118, 186, "matrix_bdoubleprime_case118"),
+    row("Bp sparse", "case118", 118, 186, "matrix_bprime_case118"),
+    row("Bpp sparse", "case118", 118, 186, "matrix_bdoubleprime_case118"),
     row("Y_bus sparse", "case118", 118, 186, "matrix_ybus_case118"),
     row("LACPF block", "case118", 118, 186, "matrix_lacpf_case118"),
     row("adjacency", "case118", 118, 186, "matrix_adjacency_case118"),
-    row("B' sparse", "case2869pegase", 2869, 4582, "matrix_bprime_case2869pegase"),
+    row("Bp sparse", "case2869pegase", 2869, 4582, "matrix_bprime_case2869pegase"),
     row(
-        "B'' sparse",
+        "Bpp sparse",
         "case2869pegase",
         2869,
         4582,

@@ -61,7 +61,8 @@
 - Distribution graph projection (#182): added a bus and terminal graph view for
   `DistNetwork`, including transformers, open switches, and terminal metadata.
 - Matrix bindings (#190): added Arrow C ABI matrix exports as COO triplet tables
-  for Ybus, incidence, B', and B'', with C and Python golden coverage.
+  for Ybus, incidence, MATPOWER Bp, and MATPOWER Bpp, with C and Python golden
+  coverage.
 - Sensitivities (#8): added sparse and iterative PTDF/LODF export paths with
   drop tolerance metadata, while retaining the dense path as the small case
   oracle.
@@ -120,7 +121,7 @@
 
 - `.pio.json` payload schema declared (#173): new optional envelope fields
   `payload_schema` and `payload_schema_version` name and version the IR payload
-  contract per model kind (`pio-payload-balanced/1`,
+  schema id per model kind (`pio-payload-balanced/1`,
   `pio-payload-multiconductor/1`, both `1.0.0`), independent of the envelope
   `schema_version` (now `0.1.1`). A reader rejects a foreign payload major;
   packages without the fields (0.5.0 and earlier) read unchanged. The JSON

@@ -116,7 +116,7 @@ impl Default for GridfmOptions {
 
 impl GridfmOptions {
     /// The Y_bus build flags these options select (only taps and shifts matter
-    /// for the gridfm admittances; the B'/B'' scheme and zero-impedance policy
+    /// for the gridfm admittances; the Bp/Bpp scheme and zero-impedance policy
     /// don't apply).
     fn build_options(&self) -> BuildOptions {
         BuildOptions {

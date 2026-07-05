@@ -1,12 +1,11 @@
-//! FDPF `B''` matrix. Reactive power Jacobian.
+//! MATPOWER-compatible FDPF `Bpp` matrix.
 //!
 //! Per MATPOWER `makeB.m`:
-//! - **XB scheme**: `B'' = -Im(Y_bus)` with phase shifts zeroed.
-//! - **BX scheme**: `B'' = -Im(Y_bus)` with line resistance and phase shifts
+//! - **XB scheme**: `Bpp = -Im(Y_bus)` with phase shifts zeroed.
+//! - **BX scheme**: `Bpp = -Im(Y_bus)` with line resistance and phase shifts
 //!   zeroed.
 //!
-//! Tap ratios, line charging, and bus shunts are kept in both schemes —
-//! they are what give B″ its strict diagonal dominance (full rank).
+//! Tap ratios, line charging, and bus shunts are kept in both schemes.
 
 use sprs::CsMat;
 
