@@ -7,14 +7,55 @@
 //! flow map, and generator→bus matrices.
 
 use std::collections::HashMap;
+use std::hash::{BuildHasherDefault, Hasher};
 
 use sprs::{CsMat, TriMat};
+
+type CoordinateMap = HashMap<usize, f64, BuildHasherDefault<CoordinateHasher>>;
+
+#[derive(Default)]
+struct CoordinateHasher {
+    state: u64,
+}
+
+impl CoordinateHasher {
+    #[inline]
+    fn mix(mut x: u64) -> u64 {
+        x ^= x >> 30;
+        x = x.wrapping_mul(0xbf58_476d_1ce4_e5b9);
+        x ^= x >> 27;
+        x = x.wrapping_mul(0x94d0_49bb_1331_11eb);
+        x ^ (x >> 31)
+    }
+}
+
+impl Hasher for CoordinateHasher {
+    #[inline]
+    fn finish(&self) -> u64 {
+        self.state
+    }
+
+    #[inline]
+    fn write(&mut self, bytes: &[u8]) {
+        let mut x = 0xcbf2_9ce4_8422_2325_u64;
+        for &b in bytes {
+            x ^= u64::from(b);
+            x = x.wrapping_mul(0x0000_0100_0000_01b3);
+        }
+        self.state = Self::mix(x);
+    }
+
+    #[inline]
+    fn write_usize(&mut self, i: usize) {
+        self.state = Self::mix(i as u64);
+    }
+}
 
 #[derive(Debug, Clone)]
 pub struct CooBuilder {
     rows: usize,
     cols: usize,
-    entries: HashMap<(usize, usize), f64>,
+    entries: CoordinateMap,
 }
 
 impl CooBuilder {
@@ -33,7 +74,7 @@ impl CooBuilder {
         Self {
             rows,
             cols,
-            entries: HashMap::new(),
+            entries: CoordinateMap::default(),
         }
     }
 
@@ -42,7 +83,10 @@ impl CooBuilder {
         Self {
             rows,
             cols,
-            entries: HashMap::with_capacity(capacity),
+            entries: CoordinateMap::with_capacity_and_hasher(
+                capacity,
+                BuildHasherDefault::default(),
+            ),
         }
     }
 
@@ -59,13 +103,20 @@ impl CooBuilder {
     }
 
     /// Accumulate `v` into entry `(i, j)`. Skips the insert if `v == 0.0`.
+    ///
+    /// # Panics
+    /// Panics if the packed coordinate key overflows `usize`.
     #[inline]
     pub fn add(&mut self, i: usize, j: usize, v: f64) {
         if v == 0.0 {
             return;
         }
         debug_assert!(i < self.rows && j < self.cols);
-        *self.entries.entry((i, j)).or_insert(0.0) += v;
+        let key = i
+            .checked_mul(self.cols)
+            .and_then(|base| base.checked_add(j))
+            .expect("COO matrix dimensions overflow usize");
+        *self.entries.entry(key).or_insert(0.0) += v;
     }
 
     /// Symmetrically accumulate `v` into both `(i, j)` and `(j, i)`. Square
@@ -83,8 +134,10 @@ impl CooBuilder {
     /// Materialize as a `CsMat<f64>` (CSR) with explicit zeros pruned.
     pub fn finish_csr(self) -> CsMat<f64> {
         let mut tri = TriMat::with_capacity((self.rows, self.cols), self.entries.len());
-        for ((i, j), v) in self.entries {
+        for (key, v) in self.entries {
             if v != 0.0 {
+                let i = key / self.cols;
+                let j = key % self.cols;
                 tri.add_triplet(i, j, v);
             }
         }

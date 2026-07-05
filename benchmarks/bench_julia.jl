@@ -1,24 +1,26 @@
-# Cross-tool parse benchmark in one process: powerio (via its C ABI), ExaPowerIO.jl,
-# and PowerModels.jl on the same MATPOWER files, small cases up to 193k buses.
-# Median wall time per tool + the bus count each returns. Measuring all three
-# under the same BenchmarkTools harness is the apples-to-apples comparison;
-# powerio used to be timed by a separate Rust example and pasted in by hand.
+# Cross tool parse and Ybus benchmark in one Julia process. The headline PowerIO
+# rows use the public PowerIO.jl API; the raw C ABI rows stay as lower bound
+# diagnostics for separating parser core time from Julia wrapper time.
 #
 #   cargo build --release -p powerio-capi --features arrow,matrix  # once
 #   julia --project=benchmarks -e 'using Pkg; Pkg.instantiate()'   # once
 #   julia --project=benchmarks benchmarks/bench_julia.jl
 #
 # Fetch the large cases first: `bash benchmarks/fetch_cases.sh`.
-# Numbers are per-machine; record them in RESULTS.md rather than hardcoding.
+# Numbers are per machine; record them in RESULTS.md rather than hardcoding.
 #
 # Note on the bus count: ExaPowerIO defaults to `filtered=true`, which drops
 # isolated (type-4) buses, so on cases that have them its count is below powerio's
-# full, lossless count. That is a parse-policy difference, not a discrepancy; the
-# value-level cross-checks live in validate_exapowerio.jl / validate_pandapower.py.
+# full, lossless count. That is a parse policy difference; the value level
+# cross checks live in validate_exapowerio.jl / validate_pandapower.py.
 
-using ExaPowerIO, PowerModels, BenchmarkTools, SparseArrays, Logging
+const POWERIO_JL_CHECKOUT = normpath(joinpath(@__DIR__, "..", "..", "PowerIO.jl"))
+isdir(POWERIO_JL_CHECKOUT) && pushfirst!(LOAD_PATH, POWERIO_JL_CHECKOUT)
+
+using ExaPowerIO, PowerModels, BenchmarkTools, SparseArrays, Logging, PowerIO
 PowerModels.silence()
 include(joinpath(@__DIR__, "powerio_ffi.jl"))
+PowerIO.set_library!(get(ENV, "POWERIO_CAPI", LIBPOWERIO))
 
 # (name, path, run_powermodels?) — PowerModels is skipped on the huge cases
 # where it takes minutes and the gap is already settled.
@@ -92,9 +94,13 @@ function write_speed_julia(path, rows, matrix_rows)
         println(io, "  \"rows\": [")
         for (i, r) in enumerate(rows)
             pm = r.powermodels_ms === nothing ? "null" : string(r.powermodels_ms)
+            data_ms = r.powerio_data_ms === nothing ? "null" : string(r.powerio_data_ms)
             tail = i < length(rows) ? "," : ""
             println(io, "    {\"case\": \"$(r.case)\", \"buses\": $(r.buses), \"branches\": $(r.branches), " *
-                        "\"powerio_ms\": $(r.powerio_ms), \"exapowerio_ms\": $(r.exapowerio_ms), " *
+                        "\"powerio_jl_ms\": $(r.powerio_jl_ms), " *
+                        "\"powerio_data_ms\": $data_ms, " *
+                        "\"rust_c_abi_ms\": $(r.rust_c_abi_ms), " *
+                        "\"exapowerio_ms\": $(r.exapowerio_ms), " *
                         "\"powermodels_ms\": $pm}$tail")
         end
         println(io, "  ],")
@@ -103,7 +109,8 @@ function write_speed_julia(path, rows, matrix_rows)
             pm = r.powermodels_ybus_ms === nothing ? "null" : string(r.powermodels_ybus_ms)
             tail = i < length(matrix_rows) ? "," : ""
             println(io, "    {\"case\": \"$(r.case)\", \"buses\": $(r.buses), \"branches\": $(r.branches), " *
-                        "\"powerio_ybus_ms\": $(r.powerio_ybus_ms), " *
+                        "\"powerio_jl_ybus_ms\": $(r.powerio_jl_ybus_ms), " *
+                        "\"rust_c_abi_ybus_arrow_ms\": $(r.rust_c_abi_ybus_arrow_ms), " *
                         "\"exapowerio_ybus_ms\": $(r.exapowerio_ybus_ms), " *
                         "\"powermodels_ybus_ms\": $pm}$tail")
         end
@@ -113,23 +120,49 @@ function write_speed_julia(path, rows, matrix_rows)
     println("wrote $path ($(length(rows)) rows)")
 end
 
-println(rpad("case", 20), rpad("powerio", 13), rpad("ExaPowerIO", 13),
-        rpad("PowerModels", 13), "buses (powerio / ExaPowerIO)")
+function free_network!(net)
+    net === nothing && return
+    h = getfield(net, :handle)
+    h === nothing || h.ptr == C_NULL || finalize(h)
+    return
+end
+
+function powerio_jl_materialize_data(path)
+    net = PowerIO.parse_file(path)
+    try
+        return net.data
+    finally
+        free_network!(net)
+    end
+end
+
+println(rpad("case", 20), rpad("PowerIO.jl", 13), rpad("ExaPowerIO", 13),
+        rpad("PowerModels", 13), rpad("Rust C ABI", 13), rpad("net.data", 13),
+        "buses (PowerIO / ExaPowerIO)")
 for (name, f, run_pm) in CASES
     if !isfile(f)
         @warn "bench_julia: fixture missing, dropping it from the run" case = name path = f
         continue
     end
 
-    # powerio through the C ABI. Time only the parse (read + build the model) and
-    # free in an untimed teardown — matching ExaPowerIO/PowerModels, whose returned
-    # data is GC'd outside the @benchmark sample rather than freed inside it. The
-    # handle reaches teardown through a Ref, so no sample leaks.
     h = pio_parse_file(f); nbuses = pio_n_buses(h); nbranch = pio_n_branches(h); pio_free(h)
     samples = nbuses > 30_000 ? 5 : 30
+
+    netref = Ref{Any}(nothing)
+    bj = @benchmark $netref[] = PowerIO.parse_file($f) teardown = (free_network!($netref[]); $netref[] = nothing) samples = samples evals = 1
+    pj = ms(bj)
+
+    data_ms = nothing
+    data_display = "skip"
+    if nbuses <= 15_000
+        bd = @benchmark powerio_jl_materialize_data($f) samples = samples evals = 1
+        data_ms = ms(bd)
+        data_display = "$(data_ms) ms"
+    end
+
     href = Ref{Ptr{Cvoid}}(C_NULL)
     bc = @benchmark $href[] = pio_parse_file($f) teardown = (pio_free($href[])) samples = samples evals = 1
-    c = ms(bc)
+    rust_c = ms(bc)
 
     ed = exapowerio_parse_matpower(f)
     be = @benchmark exapowerio_parse_matpower($f) samples = samples evals = 1
@@ -144,15 +177,17 @@ for (name, f, run_pm) in CASES
     end
 
     count = nbuses == length(ed.bus) ? string(nbuses) : "$nbuses / $(length(ed.bus))"
-    println(rpad(name, 20), rpad("$(c) ms", 13), rpad("$(e) ms", 13),
-            rpad(p, 13), count)
+    println(rpad(name, 20), rpad("$(pj) ms", 13), rpad("$(e) ms", 13),
+            rpad(p, 13), rpad("$(rust_c) ms", 13), rpad(data_display, 13), count)
     push!(jrows, (case = name, buses = nbuses, branches = nbranch,
-                  powerio_ms = c, exapowerio_ms = e, powermodels_ms = pm_ms))
+                  powerio_jl_ms = pj, powerio_data_ms = data_ms,
+                  rust_c_abi_ms = rust_c, exapowerio_ms = e,
+                  powermodels_ms = pm_ms))
 end
 
 println()
-println(rpad("case", 20), rpad("powerio Ybus", 15), rpad("Exa Ybus", 15),
-        rpad("PM Ybus", 13), "nnz rows")
+println(rpad("case", 20), rpad("PowerIO.jl Ybus", 18), rpad("Exa Ybus", 15),
+        rpad("Rust C ABI", 13), rpad("PM Ybus", 13), "nnz rows")
 for (name, f, run_pm) in CASES
     if !isfile(f)
         continue
@@ -162,8 +197,11 @@ for (name, f, run_pm) in CASES
     samples = nbuses > 30_000 ? 5 : 30
 
     nnz_rows = powerio_parse_ybus_arrow(f)
-    bp = @benchmark powerio_parse_ybus_arrow($f) samples = samples evals = 1
+    bp = @benchmark PowerIO.calc_admittance_matrix($f) samples = samples evals = 1
     pio_ms = ms(bp)
+
+    braw = @benchmark powerio_parse_ybus_arrow($f) samples = samples evals = 1
+    raw_ms = ms(braw)
 
     be = @benchmark exapowerio_parse_ybus($f) samples = samples evals = 1
     exa_ms = ms(be)
@@ -176,10 +214,11 @@ for (name, f, run_pm) in CASES
         pm_display = "$(pm_ybus_ms) ms"
     end
 
-    println(rpad(name, 20), rpad("$(pio_ms) ms", 15), rpad("$(exa_ms) ms", 15),
-            rpad(pm_display, 13), nnz_rows)
+    println(rpad(name, 20), rpad("$(pio_ms) ms", 18), rpad("$(exa_ms) ms", 15),
+            rpad("$(raw_ms) ms", 13), rpad(pm_display, 13), nnz_rows)
     push!(matrix_jrows, (case = name, buses = nbuses, branches = nbranch,
-                         powerio_ybus_ms = pio_ms,
+                         powerio_jl_ybus_ms = pio_ms,
+                         rust_c_abi_ybus_arrow_ms = raw_ms,
                          exapowerio_ybus_ms = exa_ms,
                          powermodels_ybus_ms = pm_ybus_ms))
 end

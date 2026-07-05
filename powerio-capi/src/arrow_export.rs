@@ -15,8 +15,6 @@
 //! row ids. Matrix table ids after that carry COO triplets in the same dense bus
 //! index space, with matrix dimensions stored in Arrow schema metadata.
 
-#[cfg(feature = "matrix")]
-use std::collections::BTreeMap;
 use std::collections::HashMap;
 use std::sync::Arc;
 
@@ -935,50 +933,41 @@ fn matrix_bus_batch(_net: &Network, _core: &IndexCore) -> Result<RecordBatch, St
 #[cfg(feature = "matrix")]
 fn matrix_branch_batch(net: &Network, core: &IndexCore) -> Result<RecordBatch, String> {
     let view = IndexedNetwork::with_core(net, core);
-    let parts = powerio_matrix::build_incidence(
-        &view,
-        powerio_matrix::DcConvention::PaperPure,
-        &powerio_matrix::BuildOptions::default(),
-    )
-    .map_err(|e| e.to_string())?;
-    let branches = view.branches();
+    let mut branch_cols = Vec::new();
+    for (idx, br) in view.in_service_branches() {
+        let i = view
+            .bus_index(br.from)
+            .ok_or_else(|| format!("unknown from bus {} on branch row {idx}", br.from.0))?;
+        let j = view
+            .bus_index(br.to)
+            .ok_or_else(|| format!("unknown to bus {} on branch row {idx}", br.to.0))?;
+        if i == j || br.x == 0.0 {
+            continue;
+        }
+        let b_e = 1.0 / br.x;
+        if !b_e.is_finite() {
+            return Err(format!("non-finite branch susceptance at row {idx}"));
+        }
+        branch_cols.push((idx, br.from, br.to));
+    }
+
+    let mut index = Vec::with_capacity(branch_cols.len());
+    let mut source_row = Vec::with_capacity(branch_cols.len());
+    let mut from_bus_id = Vec::with_capacity(branch_cols.len());
+    let mut to_bus_id = Vec::with_capacity(branch_cols.len());
+    for (col, &(idx, from, to)) in branch_cols.iter().enumerate() {
+        index.push(usz(col));
+        source_row.push((idx < net.branches.len()).then_some(idx).map_or(-1, usz));
+        from_bus_id.push(ext(from));
+        to_bus_id.push(ext(to));
+    }
 
     batch_with_metadata(
         vec![
-            (
-                "index",
-                i64s((0..parts.branch_of_col.len()).map(usz).collect::<Vec<_>>()),
-            ),
-            (
-                "source_row",
-                i64s(
-                    parts
-                        .branch_of_col
-                        .iter()
-                        .map(|&idx| (idx < net.branches.len()).then_some(idx).map_or(-1, usz))
-                        .collect(),
-                ),
-            ),
-            (
-                "from_bus_id",
-                i64s(
-                    parts
-                        .branch_of_col
-                        .iter()
-                        .map(|&idx| ext(branches[idx].from))
-                        .collect(),
-                ),
-            ),
-            (
-                "to_bus_id",
-                i64s(
-                    parts
-                        .branch_of_col
-                        .iter()
-                        .map(|&idx| ext(branches[idx].to))
-                        .collect(),
-                ),
-            ),
+            ("index", i64s(index)),
+            ("source_row", i64s(source_row)),
+            ("from_bus_id", i64s(from_bus_id)),
+            ("to_bus_id", i64s(to_bus_id)),
         ],
         axis_metadata("matrix_branch"),
     )
@@ -995,37 +984,40 @@ fn matrix_ybus_batch(net: &Network, core: &IndexCore) -> Result<RecordBatch, Str
     let view = IndexedNetwork::with_core(net, core);
     let parts = powerio_matrix::build_ybus(&view, &powerio_matrix::BuildOptions::default())
         .map_err(|e| e.to_string())?;
-    let mut entries: BTreeMap<(usize, usize), (f64, f64)> = BTreeMap::new();
-    for (row, vec) in parts.g.outer_iterator().enumerate() {
-        for (col, &value) in vec.iter() {
-            entries.entry((row, col)).or_default().0 = value;
+    let mut cols = YbusColumns {
+        row_index: Vec::with_capacity(parts.g.nnz() + parts.b.nnz()),
+        col_index: Vec::with_capacity(parts.g.nnz() + parts.b.nnz()),
+        g: Vec::with_capacity(parts.g.nnz() + parts.b.nnz()),
+        b: Vec::with_capacity(parts.g.nnz() + parts.b.nnz()),
+    };
+    for row in 0..parts.g.rows() {
+        match (parts.g.outer_view(row), parts.b.outer_view(row)) {
+            (Some(g_row), Some(b_row)) => push_ybus_row(
+                row,
+                g_row.indices(),
+                g_row.data(),
+                b_row.indices(),
+                b_row.data(),
+                &mut cols,
+            ),
+            (Some(g_row), None) => {
+                push_ybus_row(row, g_row.indices(), g_row.data(), &[], &[], &mut cols);
+            }
+            (None, Some(b_row)) => {
+                push_ybus_row(row, &[], &[], b_row.indices(), b_row.data(), &mut cols);
+            }
+            (None, None) => {}
         }
-    }
-    for (row, vec) in parts.b.outer_iterator().enumerate() {
-        for (col, &value) in vec.iter() {
-            entries.entry((row, col)).or_default().1 = value;
-        }
-    }
-
-    let mut row_index = Vec::with_capacity(entries.len());
-    let mut col_index = Vec::with_capacity(entries.len());
-    let mut g = Vec::with_capacity(entries.len());
-    let mut b = Vec::with_capacity(entries.len());
-    for ((row, col), (g_value, b_value)) in entries {
-        row_index.push(usz(row));
-        col_index.push(usz(col));
-        g.push(g_value);
-        b.push(b_value);
     }
     matrix_ybus_record_batch(
         MatrixShape {
             rows: parts.g.rows(),
             cols: parts.g.cols(),
         },
-        row_index,
-        col_index,
-        g,
-        b,
+        cols.row_index,
+        cols.col_index,
+        cols.g,
+        cols.b,
         MatrixAxes {
             row: "matrix_bus",
             col: "matrix_bus",
@@ -1037,6 +1029,59 @@ fn matrix_ybus_batch(net: &Network, core: &IndexCore) -> Result<RecordBatch, Str
 #[cfg(not(feature = "matrix"))]
 fn matrix_ybus_batch(_net: &Network, _core: &IndexCore) -> Result<RecordBatch, String> {
     Err(matrix_feature_error())
+}
+
+#[cfg(feature = "matrix")]
+struct YbusColumns {
+    row_index: Vec<i64>,
+    col_index: Vec<i64>,
+    g: Vec<f64>,
+    b: Vec<f64>,
+}
+
+#[cfg(feature = "matrix")]
+fn push_ybus_row(
+    row: usize,
+    g_indices: &[usize],
+    g_data: &[f64],
+    b_indices: &[usize],
+    b_data: &[f64],
+    cols: &mut YbusColumns,
+) {
+    let mut gi = 0;
+    let mut bi = 0;
+    while gi < g_indices.len() || bi < b_indices.len() {
+        let (col, g_value, b_value) = match (g_indices.get(gi), b_indices.get(bi)) {
+            (Some(&g_col), Some(&b_col)) => match g_col.cmp(&b_col) {
+                std::cmp::Ordering::Less => {
+                    gi += 1;
+                    (g_col, g_data[gi - 1], 0.0)
+                }
+                std::cmp::Ordering::Greater => {
+                    bi += 1;
+                    (b_col, 0.0, b_data[bi - 1])
+                }
+                std::cmp::Ordering::Equal => {
+                    gi += 1;
+                    bi += 1;
+                    (g_col, g_data[gi - 1], b_data[bi - 1])
+                }
+            },
+            (Some(&g_col), None) => {
+                gi += 1;
+                (g_col, g_data[gi - 1], 0.0)
+            }
+            (None, Some(&b_col)) => {
+                bi += 1;
+                (b_col, 0.0, b_data[bi - 1])
+            }
+            (None, None) => unreachable!(),
+        };
+        cols.row_index.push(usz(row));
+        cols.col_index.push(usz(col));
+        cols.g.push(g_value);
+        cols.b.push(b_value);
+    }
 }
 
 #[cfg(feature = "matrix")]

@@ -690,6 +690,43 @@ pub unsafe extern "C" fn pio_base_mva(net: *const PioNetwork) -> f64 {
     unsafe { guard(0.0, || network_ref(net).map_or(0.0, |c| c.net.base_mva)) }
 }
 
+/// Case name. Writes UTF-8 bytes into `out`, up to `cap`, NUL-terminates when
+/// possible, and returns the byte length needed excluding the NUL. `NULL` or
+/// `cap == 0` is a size query.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn pio_network_name(
+    net: *const PioNetwork,
+    out: *mut c_char,
+    cap: usize,
+) -> usize {
+    unsafe {
+        guard(0, || {
+            let Some(c) = network_ref(net) else { return 0 };
+            copy_to_buf(out, cap, &c.net.name);
+            c.net.name.len()
+        })
+    }
+}
+
+/// Source format enum spelling used by the JSON snapshot, for example
+/// `Matpower`, `PowerModelsJson`, or `Normalized`. Uses the same cap/count
+/// string convention as [`pio_network_name`].
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn pio_source_format(
+    net: *const PioNetwork,
+    out: *mut c_char,
+    cap: usize,
+) -> usize {
+    unsafe {
+        guard(0, || {
+            let Some(c) = network_ref(net) else { return 0 };
+            let name = format!("{:?}", c.net.source_format);
+            copy_to_buf(out, cap, &name);
+            name.len()
+        })
+    }
+}
+
 /// Dense `[0, n)` index of the single reference (slack) bus, or `-1` if not
 /// exactly one. An INDEX into the [`pio_bus_ids`] ordering, not a bus id;
 /// `pio_branches` from/to carry ids, so the unit is in the name. A network may
@@ -2454,6 +2491,8 @@ mod tests {
             "size_t pio_n_switches(const PioNetwork *net);",
             "size_t pio_n_gens(const PioNetwork *net);",
             "double pio_base_mva(const PioNetwork *net);",
+            "size_t pio_network_name(const PioNetwork *net, char *out, size_t cap);",
+            "size_t pio_source_format(const PioNetwork *net, char *out, size_t cap);",
             "int64_t pio_ref_bus_index(const PioNetwork *net);",
             "size_t pio_ref_bus_indices(const PioNetwork *net, int64_t *out, size_t cap);",
             "size_t pio_n_islands(const PioNetwork *net);",
@@ -2522,6 +2561,17 @@ mod tests {
             assert_eq!(pio_n_branches(c), 9);
             assert_eq!(pio_n_gens(c), 3);
             assert_eq!(pio_base_mva(c), 100.0);
+            let mut name = [0 as c_char; 64];
+            let name_len = pio_network_name(c, name.as_mut_ptr(), name.len());
+            assert_eq!(CStr::from_ptr(name.as_ptr()).to_str().unwrap(), "case9");
+            assert_eq!(name_len, 5);
+            let mut source_format = [0 as c_char; 64];
+            let fmt_len = pio_source_format(c, source_format.as_mut_ptr(), source_format.len());
+            assert_eq!(
+                CStr::from_ptr(source_format.as_ptr()).to_str().unwrap(),
+                "Matpower"
+            );
+            assert_eq!(fmt_len, 8);
             assert_eq!(pio_n_islands(c), 1);
             assert!(pio_ref_bus_index(c) >= 0);
             // The MATPOWER reader is total: no warnings, zero bytes.

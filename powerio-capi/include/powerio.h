@@ -500,6 +500,20 @@ size_t pio_n_gens(const PioNetwork *net);
 double pio_base_mva(const PioNetwork *net);
 
 /**
+ * Case name. Writes UTF-8 bytes into `out`, up to `cap`, NUL-terminates when
+ * possible, and returns the byte length needed excluding the NUL. NULL or
+ * `cap == 0` is a size query.
+ */
+size_t pio_network_name(const PioNetwork *net, char *out, size_t cap);
+
+/**
+ * Source format enum spelling used by the JSON snapshot, for example
+ * `Matpower`, `PowerModelsJson`, or `Normalized`. Uses the same cap/count
+ * string convention as [`pio_network_name`].
+ */
+size_t pio_source_format(const PioNetwork *net, char *out, size_t cap);
+
+/**
  * Dense `[0, n)` index of the single reference (slack) bus, or `-1` if not
  * exactly one. An INDEX into the [`pio_bus_ids`] ordering, not a bus id;
  * `pio_branches` from/to carry ids, so the unit is in the name. A network may

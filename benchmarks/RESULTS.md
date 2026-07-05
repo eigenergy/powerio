@@ -27,32 +27,49 @@ shown here.
 
 ## Speed
 
-All three parsers run in one Julia process under the same
-`BenchmarkTools.@benchmark` harness (`benchmarks/bench_julia.jl`). powerio is
-called through its C ABI (`pio_parse_file`, built with `cargo build --release -p
-powerio-capi`), so it reads the file from disk and builds its case the way
-ExaPowerIO and PowerModels do. The powerio handle is freed in an untimed
-teardown, matching the other two, whose returned data is collected after the
-sample rather than inside it.
+All parser timings run in one Julia process under the same
+`BenchmarkTools.@benchmark` harness (`benchmarks/bench_julia.jl`). The headline
+PowerIO column calls the public `PowerIO.jl parse_file` API. The raw Rust C ABI
+handle timing stays in the table as a lower bound. `net.data` measures the
+explicit JSON shaped view materialization that `parse_file` now avoids.
 
 <!-- BENCH:speed-julia START -->
-| case | buses / branches | powerio | ExaPowerIO.jl | PowerModels.jl |
-| --- | --- | --- | --- | --- |
-| case2869pegase | 2869 / 4582 | 1.82 ms | 2.91 ms | 126.7 ms |
-| case_ACTIVSg2000 | 2000 / 3206 | 2.36 ms | 2.26 ms | 126.9 ms |
-| case9241pegase | 9241 / 16049 | 6.0 ms | 9.39 ms | 572.0 ms |
-| case13659pegase | 13659 / 20467 | 9.3 ms | 13.83 ms | 811.1 ms |
-| case_ACTIVSg10k | 10000 / 12706 | 9.91 ms | 9.58 ms | n/a |
-| case_ACTIVSg25k | 25000 / 32230 | 24.55 ms | 23.48 ms | n/a |
-| case_ACTIVSg70k | 70000 / 88207 | 66.56 ms | 62.51 ms | n/a |
-| case_SyntheticUSA | 82000 / 104121 | 80.39 ms | 80.87 ms | n/a |
-| case99k | 99396 / 117860 | 92.63 ms | 97.94 ms | n/a |
-| case193k | 192768 / 228574 | 177.16 ms | 267.54 ms | n/a |
+| case | buses / branches | PowerIO.jl parse_file | ExaPowerIO.jl parse | PowerModels.jl parse | Rust C ABI handle | net.data |
+| --- | --- | --- | --- | --- | --- | --- |
+| case2869pegase | 2869 / 4582 | 1.79 ms | 2.83 ms | 118.4 ms | 1.79 ms | 40.78 ms |
+| case_ACTIVSg2000 | 2000 / 3206 | 2.15 ms | 2.12 ms | 127.9 ms | 2.09 ms | 27.41 ms |
+| case9241pegase | 9241 / 16049 | 5.86 ms | 9.39 ms | 541.8 ms | 5.87 ms | 219.57 ms |
+| case13659pegase | 13659 / 20467 | 8.91 ms | 13.83 ms | 818.8 ms | 8.82 ms | 285.35 ms |
+| case_ACTIVSg10k | 10000 / 12706 | 9.98 ms | 9.34 ms | n/a | 9.23 ms | 127.11 ms |
+| case_ACTIVSg25k | 25000 / 32230 | 23.93 ms | 22.6 ms | n/a | 23.8 ms | n/a |
+| case_ACTIVSg70k | 70000 / 88207 | 66.45 ms | 62.26 ms | n/a | 66.36 ms | n/a |
+| case_SyntheticUSA | 82000 / 104121 | 79.1 ms | 86.6 ms | n/a | 79.4 ms | n/a |
+| case99k | 99396 / 117860 | 91.52 ms | 96.97 ms | n/a | 91.24 ms | n/a |
+| case193k | 192768 / 228574 | 178.31 ms | 179.27 ms | n/a | 178.38 ms | n/a |
 <!-- BENCH:speed-julia END -->
 
+The Ybus table times the public PowerIO.jl sparse matrix API. The Rust C ABI
+Arrow column is the raw parse plus Arrow export lower bound; it does not build a
+Julia `SparseMatrixCSC`.
+
+<!-- BENCH:speed-julia-ybus START -->
+| case | buses / branches | PowerIO.jl Ybus | ExaPowerIO.jl Ybus | Rust C ABI Arrow | PowerModels.jl Ybus |
+| --- | --- | --- | --- | --- | --- |
+| case2869pegase | 2869 / 4582 | 2.79 ms | 3.04 ms | 2.61 ms | 139.1 ms |
+| case_ACTIVSg2000 | 2000 / 3206 | 2.76 ms | 2.26 ms | 2.63 ms | 134.2 ms |
+| case9241pegase | 9241 / 16049 | 9.84 ms | 10.08 ms | 9.31 ms | 622.0 ms |
+| case13659pegase | 13659 / 20467 | 14.8 ms | 14.47 ms | 14.13 ms | 877.5 ms |
+| case_ACTIVSg10k | 10000 / 12706 | 13.06 ms | 9.78 ms | 12.65 ms | n/a |
+| case_ACTIVSg25k | 25000 / 32230 | 33.73 ms | 24.26 ms | 32.86 ms | n/a |
+| case_ACTIVSg70k | 70000 / 88207 | 96.93 ms | 71.47 ms | 93.63 ms | n/a |
+| case_SyntheticUSA | 82000 / 104121 | 118.56 ms | 167.6 ms | 116.0 ms | n/a |
+| case99k | 99396 / 117860 | 134.36 ms | 181.73 ms | 132.93 ms | n/a |
+| case193k | 192768 / 228574 | 279.33 ms | 279.61 ms | 263.08 ms | n/a |
+<!-- BENCH:speed-julia-ybus END -->
+
 PowerModels is skipped past case13659 because those runs take minutes on this
-machine. The comparison is a benchmark record, not a feature gate. Validation
-below is the correctness gate.
+machine. The comparison records benchmark timing. Validation below is the
+correctness gate.
 
 ## vs pandapower
 
