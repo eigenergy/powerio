@@ -1982,6 +1982,52 @@ pub unsafe extern "C" fn pio_dist_warnings(
     }
 }
 
+/// Serialize a compact summary of a distribution handle as JSON. This lets
+/// bindings answer display and scalar queries without forcing
+/// [`pio_dist_to_json`]'s full model payload.
+#[cfg(feature = "dist")]
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn pio_dist_summary_json(
+    net: *const PioDistNetwork,
+    errbuf: *mut c_char,
+    errlen: usize,
+) -> *mut c_char {
+    unsafe {
+        finish_string(
+            errbuf,
+            errlen,
+            "panic while serializing summary JSON",
+            || {
+                let net = net
+                    .as_ref()
+                    .ok_or_else(|| "distribution network handle is NULL".to_string())?;
+                let summary = serde_json::json!({
+                    "schema_version": 1,
+                    "name": net.net.name.as_deref(),
+                    "source_format": net.net.source_format.map(|f| f.name()),
+                    "base_frequency": net.net.base_frequency,
+                    "counts": {
+                        "buses": net.net.buses.len(),
+                        "linecodes": net.net.linecodes.len(),
+                        "lines": net.net.lines.len(),
+                        "switches": net.net.switches.len(),
+                        "transformers": net.net.transformers.len(),
+                        "loads": net.net.loads.len(),
+                        "generators": net.net.generators.len(),
+                        "ibrs": net.net.ibrs.len(),
+                        "control_profiles": net.net.control_profiles.len(),
+                        "shunts": net.net.shunts.len(),
+                        "sources": net.net.sources.len(),
+                        "untyped": net.net.untyped.len(),
+                        "warnings": net.net.warnings.len(),
+                    },
+                });
+                serde_json::to_string(&summary).map_err(|e| e.to_string())
+            },
+        )
+    }
+}
+
 /// Serialize `net` to its model JSON: the same object a `.pio.json` package
 /// carries under `model.multiconductor_network`, without the surrounding
 /// document. This is the bindings' data transport, not a case format: the
@@ -2532,6 +2578,7 @@ mod tests {
             "PioDistNetwork *pio_dist_parse_str(const char *text, const char *format, char *errbuf, size_t errlen);",
             "void pio_dist_network_free(PioDistNetwork *net);",
             "size_t pio_dist_warnings(const PioDistNetwork *net, char *warnbuf, size_t warnlen);",
+            "char *pio_dist_summary_json(const PioDistNetwork *net, char *errbuf, size_t errlen);",
             "char *pio_dist_to_json(const PioDistNetwork *net, char *errbuf, size_t errlen);",
             "char *pio_dist_graph_json(const PioDistNetwork *net, char *errbuf, size_t errlen);",
             "PioDistNetwork *pio_dist_from_json(const char *text, char *errbuf, size_t errlen);",
@@ -4034,6 +4081,40 @@ mpc.branch = [
 
             unsafe {
                 pio_string_free(graph);
+                pio_dist_network_free(net);
+            }
+        }
+
+        #[test]
+        fn summary_json_reports_counts_without_model_payload() {
+            let path = fourwire_cstr();
+            let mut err = [0 as c_char; PIO_ERRBUF_MIN];
+            let net = unsafe {
+                pio_dist_parse_file(path.as_ptr(), std::ptr::null(), err.as_mut_ptr(), err.len())
+            };
+            assert!(
+                !net.is_null(),
+                "{}",
+                unsafe { CStr::from_ptr(err.as_ptr()) }.to_str().unwrap()
+            );
+
+            let summary = unsafe { pio_dist_summary_json(net, err.as_mut_ptr(), err.len()) };
+            assert!(
+                !summary.is_null(),
+                "summary json failed: {}",
+                unsafe { CStr::from_ptr(err.as_ptr()) }.to_str().unwrap()
+            );
+            let value: serde_json::Value =
+                serde_json::from_str(unsafe { CStr::from_ptr(summary) }.to_str().unwrap()).unwrap();
+            assert_eq!(value["schema_version"], serde_json::json!(1));
+            assert_eq!(value["source_format"], serde_json::json!("dss"));
+            assert_eq!(value["base_frequency"], serde_json::json!(60.0));
+            assert_eq!(value["counts"]["buses"], serde_json::json!(2));
+            assert_eq!(value["counts"]["lines"], serde_json::json!(1));
+            assert_eq!(value["counts"]["loads"], serde_json::json!(3));
+
+            unsafe {
+                pio_string_free(summary);
                 pio_dist_network_free(net);
             }
         }

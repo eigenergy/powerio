@@ -978,6 +978,15 @@ size_t pio_dist_warnings(const PioDistNetwork *net, char *warnbuf, size_t warnle
 
 #if defined(PIO_DIST)
 /**
+ * Serialize a compact summary of a distribution handle as JSON. This lets
+ * bindings answer display and scalar queries without forcing
+ * [`pio_dist_to_json`]'s full model payload.
+ */
+char *pio_dist_summary_json(const PioDistNetwork *net, char *errbuf, size_t errlen);
+#endif
+
+#if defined(PIO_DIST)
+/**
  * Serialize `net` to its model JSON: the same object a `.pio.json` package
  * carries under `model.multiconductor_network`, without the surrounding
  * document. This is the bindings' data transport, not a case format: the

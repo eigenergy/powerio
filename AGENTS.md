@@ -225,6 +225,11 @@ benchmarks/                  # parse benchmarks + Julia validation harnesses
   transport; over the C ABI it is the `powerio-json` format through `pio_to_format`/`pio_parse_str`. The retained
   `source` text is `#[serde(skip)]`, so JSON carries the tables, not the
   byte exact echo, and a `from_json` round trip returns `source` as `None`.
+- **Distribution bindings stay lazy.** `pio_dist_parse_file` and
+  `pio_dist_parse_str` return a live multiconductor handle. Julia display and
+  scalar access use `pio_dist_summary_json`; `pio_dist_to_json` is the full
+  element payload and should only run when a caller asks for `net.data` or an
+  element table.
 - **`.pio.json` packages.** `NetworkPackage` wraps one balanced or
   multiconductor payload with provenance, source maps, diagnostics, validation,
   lowering history, optional derived metadata, and optional `operating_points`.
