@@ -57,7 +57,7 @@ int main(void) {
     int64_t *from = malloc(m * sizeof *from), *to = malloc(m * sizeof *to);
     double  *x    = malloc(m * sizeof *x);
     pio_branches(c, from, to, NULL, x, NULL, NULL, NULL, NULL, m);
-    /* ... assemble a DC weighted Laplacian from (from, to, 1/x) ... */
+    /* ... assemble L = A diag(1/x) A^T from (from, to, x) ... */
 
     /* Every format is a string: matpower echoes byte-exact, powerio-json is
      * the lossless snapshot, powermodels-json/psse/... convert with warnings. */

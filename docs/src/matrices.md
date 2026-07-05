@@ -16,7 +16,7 @@ The DC OPF bundle has its own schema in
 | \\(\Re(Y_{\mathrm{bus}})\\), \\(-\Im(Y_{\mathrm{bus}})\\) | \\(n \times n\\) | `build_ybus` | full admittance, keeps taps and shifts |
 | LACPF (linear AC power flow) block | \\(2n \times 2n\\) | `build_lacpf` | \\(\begin{bmatrix}G & -B \\\\ -B & -G\end{bmatrix}\\), flat start, indefinite |
 | signed incidence \\(A\\) | \\(n \times m\\) | `build_incidence` | column \\(e\\) has \\(+1\\) at from-bus, \\(-1\\) at to-bus |
-| weighted Laplacian \\(L\\) | \\(n \times n\\) | `build_weighted_laplacian` | \\(L = A \operatorname{diag}(w) A^\mathsf{T}\\), `ground_at` removes a row/col |
+| DC OPF / sensitivity Laplacian \\(L\\) | \\(n \times n\\) | `build_weighted_laplacian` | \\(L = A \operatorname{diag}(w) A^\mathsf{T}\\), `ground_at` removes a row/col |
 | flow map \\(B A^\mathsf{T}\\) | \\(m \times n\\) | `build_flow_map` | \\(f = B A^\mathsf{T}\theta\\) |
 | PTDF | \\(m \times n\\) | `build_ptdf` | dense oracle builder; `build_ptdf_lodf_with_options` can use iterative solves |
 | LODF | \\(m \times m\\) | `build_lodf` | dense oracle builder; option based builds can prune small output entries |
@@ -39,6 +39,12 @@ The DC OPF
 instance bundle (\\(A\\), \\(b\\), \\(L\\), costs, bounds, thermal limits, \\(C_g\\)) is documented in
 [the DC OPF bundle guide](https://eigenergy.github.io/powerio/guide/dcopf-bundle.html).
 
+`Bp` and `Bpp` are the fast decoupled power flow matrices from MATPOWER
+`makeB`. Solvers reduce `Bp` to PV+PQ buses for active power mismatch to voltage
+angle updates, and reduce `Bpp` to PQ buses for reactive power mismatch to
+voltage magnitude updates. PowerIO exports the full \\(n \times n\\) matrices so
+callers can apply their own bus type reduction.
+
 ## GridFM datasets
 
 The GridFM export is a Parquet dataset under `<case>/raw/` with `bus_data`,
@@ -56,7 +62,7 @@ are returned as warnings.
 
 - **Positive Laplacian matrices.** Off-diagonal \\(< 0\\), diagonal \\(> 0\\), with
   \\(L_{ii} = \sum_j \lvert L_{ij} \rvert\\)
-  for weighted DC Laplacians. This is the M-matrix form an SDDM (symmetric diagonally dominant
+  for incidence Laplacians. This is the M-matrix form an SDDM (symmetric diagonally dominant
   M-matrix) or Cholesky solver expects; a consumer can recover an edge weight as
   \\(-L_{ij} > 0\\).
 - **Bus indexing.** Bus ids are 1-based and preserved on the model as a newtype
@@ -88,7 +94,7 @@ are returned as warnings.
 - **Reference coverage.** `IndexedNetwork::check_reference_coverage` verifies that
   every in-service island has a reference bus.
 - **Susceptance conventions for the DC approximation.** `DcConvention` selects
-  the branch weight the DC builders (incidence, weighted Laplacian, PTDF/LODF,
+  the branch weight the DC builders (incidence, `A diag(b) A^T`, PTDF/LODF,
   the DC OPF bundle) use. The default `PaperPure` is the textbook DC power flow
   weight \\(b = 1/x\\), taps and shifts ignored; the resulting
   \\(L = A \operatorname{diag}(b) A^\mathsf{T}\\)

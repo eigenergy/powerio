@@ -1,5 +1,8 @@
 //! MATPOWER-compatible FDPF `Bp` matrix.
 //!
+//! In fast decoupled power flow, `Bp` is the fixed approximation to the active
+//! power versus voltage angle Jacobian block used for the P step.
+//!
 //! Per MATPOWER `makeB.m`, `Bp` is built as `-Im(Y_bus)` after modifying the
 //! network data used for that one matrix:
 //!

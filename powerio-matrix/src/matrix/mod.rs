@@ -1,9 +1,9 @@
 //! Sparse matrix builders for power system cases.
 //!
-//! Sign convention: the weighted DC Laplacian has the form `L = A diag(b) Aᵀ`
-//! with the node-by-edge incidence `A` (n×m) and per-edge weight `b_e = x/(r²+x²)`
-//! for the BX approximation. Resulting matrices satisfy positive diagonal,
-//! negative off-diagonal, and `diag = sum of |off-diagonal|`; this is the
+//! DC OPF and sensitivity builders use incidence Laplacians of the form
+//! `L = A diag(b) Aᵀ`, with the node-by-edge incidence `A` (n×m) and positive
+//! branch weights `b`. Such matrices have positive diagonal entries, negative
+//! off diagonal entries, and `diag = sum of |off-diagonal|`; this is the
 //! M-matrix form SDDM solvers expect.
 
 mod adjacency;

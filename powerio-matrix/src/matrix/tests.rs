@@ -3,7 +3,7 @@ use approx::assert_relative_eq;
 use crate::indexed::IndexedNetwork;
 use crate::matrix::{
     BuildOptions, DcConvention, MatrixStats, Scheme, build_bdoubleprime, build_bprime,
-    build_incidence, build_lacpf, build_ybus,
+    build_incidence, build_lacpf, build_weighted_laplacian, build_ybus,
 };
 use crate::network::{Branch, BranchCharging, Bus, BusId, BusType, Network, Shunt};
 use crate::parse_psse;
@@ -165,6 +165,121 @@ fn bprime_cancels_tap_magnitude_and_keeps_phase_shift() {
         (minus_im_ybus_offdiag + 2.5).abs() > 1e-6,
         "Ybus keeps the transformer tap magnitude"
     );
+
+    let inc = build_incidence(&view, DcConvention::PaperPure, &BuildOptions::default()).unwrap();
+    let dc_l = build_weighted_laplacian(&inc.a, &inc.b).to_dense();
+    assert_relative_eq!(dc_l[[0, 1]], -5.0, max_relative = 1e-12);
+    assert!(
+        (b[[0, 1]] - dc_l[[0, 1]]).abs() > 1e-6,
+        "phase shifts make Bp differ from A diag(1/x) A^T"
+    );
+}
+
+#[test]
+fn bprime_ignores_bus_shunts_and_line_charging() {
+    let base = three_bus();
+    let mut decorated = base.clone();
+    decorated.shunts = vec![
+        Shunt::new(BusId(1), 1.0, -10.0),
+        Shunt::new(BusId(2), 0.0, 15.0),
+        Shunt::new(BusId(3), 0.5, -20.0),
+    ];
+    decorated.branches[0].b = 0.8;
+    decorated.branches[1].charging = Some(BranchCharging::new(0.01, 0.3, 0.02, 0.5));
+    decorated.branches[2].b = -0.4;
+
+    let base_view = IndexedNetwork::new(&base);
+    let decorated_view = IndexedNetwork::new(&decorated);
+    let base_b = build_bprime(&base_view, &BuildOptions::default())
+        .unwrap()
+        .to_dense();
+    let decorated_b = build_bprime(&decorated_view, &BuildOptions::default())
+        .unwrap()
+        .to_dense();
+
+    for i in 0..3 {
+        for j in 0..3 {
+            assert_relative_eq!(decorated_b[[i, j]], base_b[[i, j]], epsilon = 1e-12);
+        }
+    }
+}
+
+#[test]
+fn bdoubleprime_clears_phase_shifts() {
+    let mut shifted = three_bus();
+    shifted.branches[0].shift = 30.0;
+    shifted.branches[1].shift = -25.0;
+
+    let mut unshifted = shifted.clone();
+    for br in &mut unshifted.branches {
+        br.shift = 0.0;
+    }
+
+    let shifted_view = IndexedNetwork::new(&shifted);
+    let unshifted_view = IndexedNetwork::new(&unshifted);
+    let shifted_bpp = build_bdoubleprime(&shifted_view, &BuildOptions::default())
+        .unwrap()
+        .to_dense();
+    let unshifted_bpp = build_bdoubleprime(&unshifted_view, &BuildOptions::default())
+        .unwrap()
+        .to_dense();
+
+    for i in 0..3 {
+        for j in 0..3 {
+            assert_relative_eq!(shifted_bpp[[i, j]], unshifted_bpp[[i, j]], epsilon = 1e-12);
+        }
+    }
+
+    let shifted_bp = build_bprime(
+        &shifted_view,
+        &BuildOptions {
+            scheme: Scheme::Xb,
+            ..Default::default()
+        },
+    )
+    .unwrap()
+    .to_dense();
+    let unshifted_bp = build_bprime(
+        &unshifted_view,
+        &BuildOptions {
+            scheme: Scheme::Xb,
+            ..Default::default()
+        },
+    )
+    .unwrap()
+    .to_dense();
+    assert!(
+        (shifted_bp[[0, 1]] - unshifted_bp[[0, 1]]).abs() > 1e-6,
+        "Bp keeps the same phase shifts Bpp clears"
+    );
+}
+
+#[test]
+fn bdoubleprime_keeps_shunts_charging_and_taps() {
+    let mut branch = br(1, 2, 0.0, 0.2, 0.4);
+    branch.tap = 2.0;
+    branch.shift = 45.0;
+    let mut net = Network::in_memory(
+        "bpp-shunts-charging-tap",
+        100.0,
+        vec![bus(1, BusType::Ref), bus(2, BusType::Pq)],
+        vec![branch],
+    );
+    net.shunts = vec![
+        Shunt::new(BusId(1), 0.0, -10.0),
+        Shunt::new(BusId(2), 0.0, -20.0),
+    ];
+    let view = IndexedNetwork::new(&net);
+    let bpp = build_bdoubleprime(&view, &BuildOptions::default())
+        .unwrap()
+        .to_dense();
+
+    // Bpp clears the 45° shift, but keeps tap = 2, total line charging 0.4,
+    // and bus shunts -10/-20 MVAr on base 100. With x=0.2, y = -j5.
+    assert_relative_eq!(bpp[[0, 0]], 1.3, max_relative = 1e-12);
+    assert_relative_eq!(bpp[[1, 1]], 5.0, max_relative = 1e-12);
+    assert_relative_eq!(bpp[[0, 1]], -2.5, max_relative = 1e-12);
+    assert_relative_eq!(bpp[[1, 0]], -2.5, max_relative = 1e-12);
 }
 
 #[test]

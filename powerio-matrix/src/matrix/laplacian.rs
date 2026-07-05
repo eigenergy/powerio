@@ -1,4 +1,4 @@
-//! The weighted Laplacian `L = A diag(w) Aᵀ`, reference grounding, and the
+//! Incidence Laplacians `L = A diag(w) Aᵀ`, reference grounding, and the
 //! index bookkeeping for mapping a grounded solve back to full size.
 //!
 //! Built from the same `A`, `w` factors the incidence module produces, so

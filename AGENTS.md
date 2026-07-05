@@ -48,7 +48,7 @@ Matrix outputs (powerio-matrix):
 - `Re(Y_bus)`, `-Im(Y_bus)` (full).
 - LACPF block `[[G, -B], [-B, -G]]` (linear AC power flow, flat start, 2n×2n, indefinite).
 - Adjacency (`MatrixKind::Adjacency`); PTDF and LODF (`sensitivities` subcommand).
-- DC OPF instance bundle (`dcopf` subcommand, `opf_pipeline::write_dcopf_bundle`): signed incidence `A` (n×m), branch susceptance `b`, weighted Laplacian `L = A diag(b) Aᵀ` and its reference-grounded form, flow map `B Aᵀ`, generator cost `Q`/`c`, bounds, thermal limits `f̄`, generator→bus `C_g`, nodal load `p_d`, `e_r`.
+- DC OPF instance bundle (`dcopf` subcommand, `opf_pipeline::write_dcopf_bundle`): signed incidence `A` (n×m), branch susceptance `b`, DC OPF Laplacian `L = A diag(b) Aᵀ` and its reference-grounded form, flow map `B Aᵀ`, generator cost `Q`/`c`, bounds, thermal limits `f̄`, generator→bus `C_g`, nodal load `p_d`, `e_r`.
 - petgraph `UnGraph<bus_idx, branch_idx>` view + connectivity / radial diagnostics.
 - gridfm-datakit Parquet dataset (`gridfm` subcommand, `io::gridfm::write_gridfm_dataset`, `--features gridfm`): the `bus_data`/`gen_data`/`branch_data`/`y_bus_data` tables a single parsed case maps to, matching gridfm-datakit's column schema so gridfm-graphkit trains on it directly.
 - gridfm dataset → `Network` reader, the ML→classical return leg (`io::gridfm::read_gridfm_dataset` / `read_gridfm_scenarios` / `gridfm_base_case`, pure inverse `read_gridfm_network`; `--features gridfm`, issue #60). Lossy but complete for power flow: recovers bus types/voltages/limits, nodal load & shunt totals, generator dispatch & bounds (`vg` from bus `Vm`), branch `r/x/b/tap/shift/rate_a/angle-limits`, and `base_mva`; can't recover original bus ids (synthesized `1..n`), per element granularity (folded to one synthetic `Load`/`Shunt` per bus), piecewise/cubic costs, or HVDC/storage. Branches with unit effective tap and zero shift read back as lines (raw `tap 0`). Returns `GridfmRead { network, scenario, warnings }`; sets `SourceFormat::Gridfm`. One reader ⇒ gridfm → any classical writer for free. CLI: `convert <dataset-dir> --from gridfm [--scenario N] --to <fmt>` (kept out of the `parse_file` hub that has no parquet dependency). `y_bus_data` is ignored on read (branches carry raw `r/x/b`). Python: `read_gridfm(dir, scenario=0)` / `read_gridfm_scenarios(dir)` → `GridfmRead(network, scenario, warnings)`.
@@ -233,10 +233,13 @@ benchmarks/                  # parse benchmarks + Julia validation harnesses
 - **`BR_B` is already per unit.** Never divide by `base_mva` again.
 - **`tap == 0` ⇒ `tap = 1`.** Use `Branch::effective_tap()`.
 - **MATPOWER FDPF matrices.** `build_bprime` follows MATPOWER `makeB` `Bp`:
-  bus shunts and line charging are cleared, tap magnitudes are set to one, XB
-  clears resistance, and phase shifts remain. `build_bdoubleprime` follows
-  MATPOWER `Bpp`: phase shifts are cleared, BX clears resistance, and shunts,
-  line charging, and tap magnitudes remain. `Y_bus` keeps taps and shifts.
+  it approximates the active power versus voltage angle Jacobian block, clears
+  bus shunts and line charging, sets tap magnitudes to one, clears resistance
+  in the XB scheme, and keeps phase shifts. `build_bdoubleprime` follows
+  MATPOWER `Bpp`: it approximates the reactive power versus voltage magnitude
+  Jacobian block, clears phase shifts, clears resistance in the BX scheme, and
+  keeps shunts, line charging, and tap magnitudes. `Y_bus` keeps taps and
+  shifts.
 - **Angle bound clamp postcondition.** When editing `clamp_angle_bounds`, test
   intervals wholly below `-pi/2` and wholly above `pi/2`; normalized branches
   must leave `angmin <= angmax`. Wide symmetric bounds and `0/0` already have

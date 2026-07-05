@@ -182,10 +182,10 @@ Known limits for every format are documented in the
 The `powerio-matrix` Rust crate derives an `IndexedNetwork` with dense bus indices. It enables you to build common power system matrices with minimal dependencies:
 
 - MATPOWER Bp/Bpp FDPF matrices
-- DC weighted Laplacian and flow map matrices
+- DC OPF `A diag(b) A^T` and flow map matrices
 - Nodal admittance matrix
 - LACPF block matrix
-- Signed incidence, weighted Laplacian, and flow map matrices
+- Signed incidence, DC OPF Laplacian, and flow map matrices
 - PTDF and LODF sensitivity matrices, with dense and iterative solver paths
 - Streamed CLI PTDF/LODF writes for iterative sensitivity exports
 - Adjacency matrix and `petgraph` graph output

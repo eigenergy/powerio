@@ -1,5 +1,8 @@
 //! MATPOWER-compatible FDPF `Bpp` matrix.
 //!
+//! In fast decoupled power flow, `Bpp` is the fixed approximation to the
+//! reactive power versus voltage magnitude Jacobian block used for the Q step.
+//!
 //! Per MATPOWER `makeB.m`:
 //! - **XB scheme**: `Bpp = -Im(Y_bus)` with phase shifts zeroed.
 //! - **BX scheme**: `Bpp = -Im(Y_bus)` with line resistance and phase shifts
