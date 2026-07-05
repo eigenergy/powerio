@@ -218,7 +218,9 @@ functions. The public header is
 [powerio-capi/include/powerio.h](https://github.com/eigenergy/powerio/blob/main/powerio-capi/include/powerio.h).
 Build with `--features arrow` to enable `pio_to_arrow` over the
 [Arrow C Data Interface](https://arrow.apache.org/docs/format/CDataInterface.html),
-and add `--features matrix` for sparse matrix COO tables.
+and add `--features matrix` for sparse matrix COO tables. Matrix Arrow ABI v1
+is COO plus explicit `matrix_bus` and `matrix_branch` axis map tables; language
+bindings assemble native sparse matrix types on their side.
 
 ### PowerAgent
 

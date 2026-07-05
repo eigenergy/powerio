@@ -1,4 +1,4 @@
-//! Fast Decoupled Power Flow (FDPF) B' matrix — shuntless.
+//! Shuntless susceptance Laplacian used as PowerIO's B' matrix.
 //!
 //! Per Stott & Alsac (1974), B' is the susceptance Laplacian with all
 //! shunts removed and tap ratios / phase shifts ignored:
@@ -9,6 +9,12 @@
 //!
 //! Result: positive diag, negative off-diag, diag = sum of |off-diag| — the
 //! positive (M-matrix) Laplacian convention SDDM solvers expect.
+//!
+//! This is intentionally not an exact reproduction of MATPOWER `makeB` for
+//! phase shifter cases. MATPOWER cancels tap magnitudes while leaving `SHIFT`
+//! in the temporary branch table used for `Bp`; PowerIO treats B' as an
+//! undirected edge Laplacian and leaves phase shifter injections to the DC
+//! builders.
 
 use sprs::CsMat;
 

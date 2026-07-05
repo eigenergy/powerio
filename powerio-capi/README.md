@@ -262,7 +262,10 @@ powerio-capi covers the `powerio` surface: parse / convert / query / table
 and JSON extraction. Build with `--features arrow,matrix` to export the first
 balanced sparse matrix family over `pio_to_arrow` as COO triplet tables:
 `ybus`, `incidence`, `bprime`, and `bdoubleprime`, all in dense solver bus index
-space with dimensions in Arrow schema metadata. Runtime consumers can call
+space with dimensions and axis names in Arrow schema metadata. The planned
+stable matrix ABI is Arrow COO plus `matrix_bus` and `matrix_branch` axis map
+tables; C stays language neutral, while Julia, Python, and other bindings own
+their native sparse matrix assembly. Runtime consumers can call
 `pio_matrix_available()` before selecting those table ids. Larger matrix
 families such as PTDF, LODF, and DC OPF bundles still live in `powerio-matrix`
 and are not C ABI surfaces yet.

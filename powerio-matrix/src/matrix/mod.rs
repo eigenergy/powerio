@@ -1,4 +1,4 @@
-//! Sparse matrix builders for MATPOWER cases.
+//! Sparse matrix builders for power system cases.
 //!
 //! Sign convention: the susceptance matrix has the form `B = A diag(b) Aᵀ`
 //! with the node-by-edge incidence `A` (n×m) and per-edge weight `b_e = x/(r²+x²)`
@@ -50,7 +50,7 @@ pub(crate) use ybus::{YbusFlags, branch_admittance, branch_flows};
 
 use sprs::CsMat;
 
-/// Which FDPF scheme to use for B'.
+/// Which branch weighting scheme to use for PowerIO's B' Laplacian.
 ///
 /// - `Bx`: B' uses `-x / (r² + x²)` (what most modern solvers do).
 /// - `Xb`: B' uses `-1 / x` (original Stott/Alsac 1974). Requires `x ≠ 0`.

@@ -23,7 +23,8 @@ graph views for any downstream solver. Feeds the GridFM ML pipeline.
   `pio_read_dir` / `pio_scenario_ids` (the gridfm-datakit Parquet
   reader, pulling in `powerio-matrix`); `--features dist` adds `pio_dist_*`;
   `--features pkg` adds `pio_package_*`. All are additive and feature gated, so
-  no ABI bump.
+  no ABI bump. Matrix Arrow ABI v1 is COO tables plus append only axis maps
+  `matrix_bus` and `matrix_branch`.
 
 `Network` is the one canonical model (format neutral, loads/shunts first class);
 `IndexedNetwork` is the dense indexed analysis view derived from it.
@@ -38,7 +39,9 @@ Every balanced case format meets at `Network`, so a new format is one
 reader/writer at the hub, not a pairwise converter.
 
 Matrix outputs (powerio-matrix):
-- B' (FDPF, shuntless). Singular positive Laplacian, rank n-1.
+- B' shuntless positive susceptance Laplacian. Singular positive Laplacian,
+  rank n-1. This is the PowerIO convention, not exact MATPOWER `makeB` `Bp` in
+  phase shifter cases.
 - B'' (FDPF, with shunts and taps). SDDM when bus shunts are present.
 - `Re(Y_bus)`, `-Im(Y_bus)` (full).
 - LACPF block `[[G, -B], [-B, -G]]` (linear AC power flow, flat start, 2n×2n, indefinite).
@@ -46,7 +49,7 @@ Matrix outputs (powerio-matrix):
 - DC OPF instance bundle (`dcopf` subcommand, `opf_pipeline::write_dcopf_bundle`): signed incidence `A` (n×m), branch susceptance `b`, weighted Laplacian `L = A diag(b) Aᵀ` and its reference-grounded form, flow map `B Aᵀ`, generator cost `Q`/`c`, bounds, thermal limits `f̄`, generator→bus `C_g`, nodal load `p_d`, `e_r`.
 - petgraph `UnGraph<bus_idx, branch_idx>` view + connectivity / radial diagnostics.
 - gridfm-datakit Parquet dataset (`gridfm` subcommand, `io::gridfm::write_gridfm_dataset`, `--features gridfm`): the `bus_data`/`gen_data`/`branch_data`/`y_bus_data` tables a single parsed case maps to, matching gridfm-datakit's column schema so gridfm-graphkit trains on it directly.
-- gridfm dataset → `Network` reader, the ML→classical return leg (`io::gridfm::read_gridfm_dataset` / `read_gridfm_scenarios` / `gridfm_base_case`, pure inverse `read_gridfm_network`; `--features gridfm`, issue #60). Lossy but power-flow-complete: recovers bus types/voltages/limits, nodal load & shunt totals, generator dispatch & bounds (`vg` from bus `Vm`), branch `r/x/b/tap/shift/rate_a/angle-limits`, and `base_mva`; can't recover original bus ids (synthesized `1..n`), per-element granularity (folded to one synthetic `Load`/`Shunt` per bus), piecewise/cubic costs, or HVDC/storage. Unit effective-tap/zero-shift branches read back as lines (raw `tap 0`). Returns `GridfmRead { network, scenario, warnings }`; sets `SourceFormat::Gridfm`. One reader ⇒ gridfm → any classical writer for free. CLI: `convert <dataset-dir> --from gridfm [--scenario N] --to <fmt>` (stays out of the parquet-free `parse_file` hub). `y_bus_data` is ignored on read (branches carry raw `r/x/b`). Python: `read_gridfm(dir, scenario=0)` / `read_gridfm_scenarios(dir)` → `GridfmRead(network, scenario, warnings)`.
+- gridfm dataset → `Network` reader, the ML→classical return leg (`io::gridfm::read_gridfm_dataset` / `read_gridfm_scenarios` / `gridfm_base_case`, pure inverse `read_gridfm_network`; `--features gridfm`, issue #60). Lossy but complete for power flow: recovers bus types/voltages/limits, nodal load & shunt totals, generator dispatch & bounds (`vg` from bus `Vm`), branch `r/x/b/tap/shift/rate_a/angle-limits`, and `base_mva`; can't recover original bus ids (synthesized `1..n`), per element granularity (folded to one synthetic `Load`/`Shunt` per bus), piecewise/cubic costs, or HVDC/storage. Branches with unit effective tap and zero shift read back as lines (raw `tap 0`). Returns `GridfmRead { network, scenario, warnings }`; sets `SourceFormat::Gridfm`. One reader ⇒ gridfm → any classical writer for free. CLI: `convert <dataset-dir> --from gridfm [--scenario N] --to <fmt>` (kept out of the `parse_file` hub that has no parquet dependency). `y_bus_data` is ignored on read (branches carry raw `r/x/b`). Python: `read_gridfm(dir, scenario=0)` / `read_gridfm_scenarios(dir)` → `GridfmRead(network, scenario, warnings)`.
 
 ## Commands
 
@@ -225,7 +228,10 @@ benchmarks/                  # parse benchmarks + Julia validation harnesses
 - **Bus IDs.** MATPOWER 1 based; `IndexedNetwork::bus_index(id)` is the only mapping into dense `[0, n)`. Don't clamp out of range; return `Error::UnknownBus`.
 - **`BR_B` is already per unit.** Never divide by `base_mva` again.
 - **`tap == 0` ⇒ `tap = 1`.** Use `Branch::effective_tap()`.
-- **B' ignores taps and shifts. B'' zeros only shifts. Y_bus keeps both.**
+- **B' ignores taps and shifts.** It is PowerIO's shuntless positive
+  susceptance Laplacian. MATPOWER `makeB` cancels tap magnitudes for `Bp` but
+  leaves `SHIFT` in the temporary branch table, so phase shifters differ. B''
+  zeros only shifts. Y_bus keeps both.
 - **Angle bound clamp postcondition.** When editing `clamp_angle_bounds`, test
   intervals wholly below `-pi/2` and wholly above `pi/2`; normalized branches
   must leave `angmin <= angmax`. Wide symmetric bounds and `0/0` already have

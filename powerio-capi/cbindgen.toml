@@ -69,17 +69,16 @@ header = """
  *   the ABI (requires the default panic = "unwind"; a panic = "abort" build
  *   aborts the process instead).
  *
- * Evolution policy: existing signatures are frozen. New data means new
- * symbols; rich or multiconductor data rides the Arrow C Data Interface
- * (pio_to_arrow) and the powerio-json snapshot, whose schemas carry their own
- * structure and grow without touching a C signature. The dense extractors are
- * the frozen balanced positive-sequence projection, complete as-is. The Arrow
- * tables and the powerio-json schema are append-only: the existing
- * PIO_ARROW_TABLE_* ids and each table's column order are frozen, a new table
- * takes the next id and new columns append (nullable) at the end, and a
- * consumer addresses columns by name, never by position. The powerio-json
- * snapshot adds only optional or defaulted fields; existing field names, types,
- * and wire forms stay fixed. This is what PIO_ABI_VERSION freezes.
+ * Evolution policy: existing signatures and documented behavior are frozen.
+ * New data means new symbols; rich or multiconductor data rides the Arrow C
+ * Data Interface (pio_to_arrow), `.pio.json` packages, or format-specific JSON
+ * payloads with their own schema/version rules. The dense extractors are the
+ * frozen balanced positive-sequence projection, complete as-is. The Arrow
+ * tables are append-only: existing PIO_ARROW_TABLE_* ids and each table's
+ * column order are frozen, a new table takes the next id and new columns append
+ * at the end, and a consumer addresses columns by name, never by position.
+ * Removing a supported format token or changing its documented C behavior
+ * requires a PIO_ABI_VERSION bump.
  *
  * Optional: build with `--features arrow` for pio_to_arrow (guarded by
  * PIO_ARROW), add `--features matrix` for the balanced matrix Arrow tables,

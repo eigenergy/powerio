@@ -234,7 +234,7 @@ struct ArrowSchema;
 #endif
 
 #if defined(PIO_ARROW)
-/** B' COO table. Rows and columns use the `matrix_bus` axis. */
+/** B' shuntless positive Laplacian COO table. Rows and columns use `matrix_bus`. */
 #define PIO_ARROW_TABLE_BPRIME 17
 #endif
 
@@ -597,8 +597,7 @@ int32_t pio_write_dir(const PioNetwork *net,
                       size_t errlen);
 
 /**
- * Free a string returned by [`pio_to_format`], [`pio_convert_file`], or
- * [`pio_convert_str`].
+ * Free any owned C string returned by this API.
  */
 void pio_string_free(char *s);
 

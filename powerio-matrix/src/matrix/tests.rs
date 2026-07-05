@@ -127,6 +127,44 @@ fn bprime_is_symmetric_and_laplacian() {
 }
 
 #[test]
+fn bprime_ignores_taps_and_phase_shifts() {
+    let mut shifted = br(1, 2, 0.0, 0.2, 0.0);
+    shifted.tap = 1.25;
+    shifted.shift = 30.0;
+    let net = Network::in_memory(
+        "phase-shifter",
+        100.0,
+        vec![bus(1, BusType::Ref), bus(2, BusType::Pq)],
+        vec![shifted],
+    );
+    let view = IndexedNetwork::new(&net);
+    let b = build_bprime(
+        &view,
+        &BuildOptions {
+            scheme: Scheme::Xb,
+            ..Default::default()
+        },
+    )
+    .unwrap()
+    .to_dense();
+
+    assert_relative_eq!(b[[0, 0]], 5.0, max_relative = 1e-12);
+    assert_relative_eq!(b[[1, 1]], 5.0, max_relative = 1e-12);
+    assert_relative_eq!(b[[0, 1]], -5.0, max_relative = 1e-12);
+    assert_relative_eq!(b[[1, 0]], -5.0, max_relative = 1e-12);
+
+    let ybus = build_ybus(&view, &BuildOptions::default())
+        .unwrap()
+        .b
+        .to_dense();
+    let minus_im_ybus_offdiag = -ybus[[0, 1]];
+    assert!(
+        (minus_im_ybus_offdiag + 5.0).abs() > 1e-6,
+        "Ybus keeps the transformer tap and phase shift, so it must differ from B'"
+    );
+}
+
+#[test]
 fn bprime_ignores_out_of_service() {
     let mut net = three_bus();
     net.branches[0].in_service = false;

@@ -17,7 +17,7 @@ the sparse matrices and graph outputs solvers need::
     pkg = pio.Package.from_file("goc3_case.json", from_="goc3-json")
     points = pkg.operating_points()
 
-    B = net.bprime()                         # scipy.sparse, the FDPF B'
+    B = net.bprime()                         # scipy.sparse, shuntless B'
     Y = net.ybus()                           # complex csr, G + jB
     G = net.to_networkx()                    # networkx.Graph keyed by bus id
 
@@ -362,7 +362,7 @@ class Network:
     # --- matrix builders (scipy.sparse) ---------------------------------
 
     def bprime(self, scheme: str = "bx"):
-        """FDPF B' (shuntless). ``scheme`` is ``"bx"`` or ``"xb"``."""
+        """Shuntless positive susceptance Laplacian. Taps and shifts are ignored."""
         return _to_csr(self._inner.bprime(scheme))
 
     def bdoubleprime(self, scheme: str = "bx"):

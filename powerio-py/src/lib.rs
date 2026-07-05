@@ -929,6 +929,8 @@ impl PyNetwork {
 
     // --- matrix builders: each returns a COO tuple ----------------------
 
+    /// PowerIO B': a shuntless positive susceptance Laplacian. Tap ratios and
+    /// phase shifts are ignored.
     #[pyo3(signature = (scheme=None))]
     fn bprime<'py>(&self, py: Python<'py>, scheme: Option<&str>) -> PyResult<Bound<'py, PyAny>> {
         let opts = BuildOptions {

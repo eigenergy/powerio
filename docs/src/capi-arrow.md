@@ -32,13 +32,17 @@ powerio.schema_version
 powerio.format
 powerio.row_axis
 powerio.col_axis
+powerio.row_count
+powerio.col_count
 powerio.index_space   # legacy alias, still "solver_bus" for bus indexed matrices
 ```
 
 `matrix_bus` gives bindings a dense matrix row and column map without inferring
 from `solver_bus`. It includes the dense index, source bus id, source row,
 reference flag, and component label. `matrix_branch` gives incidence column
-meaning: dense branch column, source branch row, from bus id, and to bus id.
+meaning: dense incidence column, source branch row, from bus id, and to bus id.
+Branches that do not contribute an incidence column, such as self-loops or
+skipped zero reactance rows, are not on this axis.
 
 ## Arrow catalog JSON
 
@@ -65,7 +69,7 @@ Shape:
       "col_axis": "matrix_bus",
       "units": {
         "value": "per_unit",
-        "index_base": "zero_based_dense"
+        "matrix_index_base": "zero"
       },
       "columns": [
         {"name": "row_index", "type": "int64", "nullable": false},

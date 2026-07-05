@@ -902,8 +902,7 @@ pub unsafe extern "C" fn pio_write_dir(
     }
 }
 
-/// Free a string returned by [`pio_to_format`], [`pio_convert_file`], or
-/// [`pio_convert_str`].
+/// Free any owned C string returned by this API.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_string_free(s: *mut c_char) {
     unsafe {

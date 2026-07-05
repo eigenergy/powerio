@@ -23,8 +23,9 @@
 //! B' and the Laplacians use the positive (M-matrix) form: off-diagonal `< 0`,
 //! diagonal `> 0`, `diag = Σ|off-diag|`. Bus ids are 1-based on the
 //! model; [`IndexedNetwork`] maps them to a dense `[0, n)`. `tap == 0` means
-//! `tap = 1`; B' ignores taps and shifts, B'' keeps taps and zeros shifts,
-//! Y_bus keeps both. Branch terminal admittance is stored per unit. DC OPF is
+//! `tap = 1`; B' is PowerIO's shuntless positive susceptance Laplacian and
+//! ignores taps and shifts, B'' keeps taps and zeros shifts, Y_bus keeps both.
+//! Branch terminal admittance is stored per unit. DC OPF is
 //! bus indexed
 //! (`p_g ∈ ℝⁿ`), default susceptance `b = 1/x`, with [`DcConvention::Matpower`]
 //! the `1/(x·τ)` plus phase-shift variant. The full reference across every

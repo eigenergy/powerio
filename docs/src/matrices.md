@@ -11,7 +11,7 @@ The DC OPF bundle has its own schema in
 
 | matrix | shape | builder | notes |
 | --- | --- | --- | --- |
-| B' (FDPF) | \\(n \times n\\) | `build_bprime` | singular positive Laplacian, \\(\operatorname{rank}(L) = n - 1\\), shuntless |
+| B' shuntless Laplacian | \\(n \times n\\) | `build_bprime` | singular positive Laplacian, \\(\operatorname{rank}(L) = n - 1\\), shuntless |
 | B'' (FDPF) | \\(n \times n\\) | `build_bdoubleprime` | SDDM when bus shunts are present |
 | \\(\Re(Y_{\mathrm{bus}})\\), \\(-\Im(Y_{\mathrm{bus}})\\) | \\(n \times n\\) | `build_ybus` | full admittance, keeps taps and shifts |
 | LACPF (linear AC power flow) block | \\(2n \times 2n\\) | `build_lacpf` | \\(\begin{bmatrix}G & -B \\\\ -B & -G\end{bmatrix}\\), flat start, indefinite |
@@ -64,8 +64,12 @@ are returned as warnings.
   `IndexedNetwork::bus_index(id)` is the only mapping into the dense \\([0,n)\\); an id
   out of range is an `Error::UnknownBus`.
 - **Taps and shifts.** \\(\mathrm{tap} = 0\\) means \\(\mathrm{tap} = 1\\)
-  (`Branch::effective_tap`). B' ignores taps and shifts; B'' keeps taps and
-  zeros only shifts; \\(Y_{\mathrm{bus}}\\) keeps both.
+  (`Branch::effective_tap`). B' ignores taps and shifts by definition: it is
+  PowerIO's shuntless positive susceptance Laplacian, not an exact MATPOWER
+  `makeB` `Bp` for phase shifter cases. MATPOWER cancels tap magnitudes for
+  `Bp` but leaves `SHIFT` in the temporary branch table passed to `makeYbus`,
+  so a phase shifter changes MATPOWER `Bp`. B'' keeps taps and zeros only
+  shifts; \\(Y_{\mathrm{bus}}\\) keeps both.
 - **Branch shunt admittance is stored per unit.** `Branch::charging` is the
   stored per terminal admittance when present: `g_fr`, `b_fr`, `g_to`, and
   `b_to` are already per unit on the system base. `Branch::b` is the legacy

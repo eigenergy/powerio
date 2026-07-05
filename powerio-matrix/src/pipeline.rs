@@ -26,7 +26,7 @@ use crate::network::Network;
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[non_exhaustive]
 pub enum MatrixKind {
-    /// FDPF B' (shuntless, taps=1, shifts=0).
+    /// Shuntless positive susceptance Laplacian, exposed as B'.
     BPrime,
     /// FDPF B'' (with shunts, taps; r=0 if BX scheme).
     BDoublePrime,
@@ -63,7 +63,7 @@ impl MatrixKind {
 
     pub fn label(self) -> &'static str {
         match self {
-            Self::BPrime => "B' (FDPF, shuntless)",
+            Self::BPrime => "B' (shuntless Laplacian)",
             Self::BDoublePrime => "B'' (FDPF, with shunts)",
             Self::YbusG => "Re(Y_bus)",
             Self::YbusB => "-Im(Y_bus)",

@@ -22,6 +22,8 @@ static_assert(PIO_ARROW_TABLE_YBUS == 15);
 static_assert(PIO_ARROW_TABLE_INCIDENCE == 16);
 static_assert(PIO_ARROW_TABLE_BPRIME == 17);
 static_assert(PIO_ARROW_TABLE_BDOUBLEPRIME == 18);
+static_assert(PIO_ARROW_TABLE_MATRIX_BUS == 19);
+static_assert(PIO_ARROW_TABLE_MATRIX_BRANCH == 20);
 #endif
 
 int main() {
