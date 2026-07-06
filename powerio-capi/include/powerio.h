@@ -514,6 +514,12 @@ size_t pio_network_name(const PioNetwork *net, char *out, size_t cap);
 size_t pio_source_format(const PioNetwork *net, char *out, size_t cap);
 
 /**
+ * Serialize a compact balanced network summary as JSON. This is for display
+ * and cheap scalar queries without forcing [`pio_to_json`]'s full payload.
+ */
+char *pio_summary_json(const PioNetwork *net, char *errbuf, size_t errlen);
+
+/**
  * Dense `[0, n)` index of the single reference (slack) bus, or `-1` if not
  * exactly one. An INDEX into the [`pio_bus_ids`] ordering, not a bus id;
  * `pio_branches` from/to carry ids, so the unit is in the name. A network may

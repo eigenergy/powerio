@@ -727,6 +727,59 @@ pub unsafe extern "C" fn pio_source_format(
     }
 }
 
+/// Serialize a compact balanced network summary as JSON. This is for display
+/// and cheap scalar queries without forcing [`pio_to_json`]'s full payload.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn pio_summary_json(
+    net: *const PioNetwork,
+    errbuf: *mut c_char,
+    errlen: usize,
+) -> *mut c_char {
+    unsafe {
+        finish_string(
+            errbuf,
+            errlen,
+            "panic while serializing summary JSON",
+            || {
+                let c = network_ref(net).ok_or_else(|| "network handle is NULL".to_string())?;
+                let v = IndexedNetwork::with_core(&c.net, &c.core);
+                let reference_bus_indices = v.reference_bus_indices();
+                let reference_bus_ids: Vec<usize> = reference_bus_indices
+                    .iter()
+                    .filter_map(|&idx| c.net.buses.get(idx).map(|b| b.id.0))
+                    .collect();
+                let summary = serde_json::json!({
+                    "schema_version": 1,
+                    "name": c.net.name,
+                    "source_format": format!("{:?}", c.net.source_format),
+                    "base_mva": c.net.base_mva,
+                    "base_frequency": c.net.base_frequency,
+                    "counts": {
+                        "buses": c.net.buses.len(),
+                        "loads": c.net.loads.len(),
+                        "shunts": c.net.shunts.len(),
+                        "branches": c.net.branches.len(),
+                        "switches": c.net.switches.len(),
+                        "generators": c.net.generators.len(),
+                        "storage": c.net.storage.len(),
+                        "hvdc": c.net.hvdc.len(),
+                        "transformers_3w": c.net.transformers_3w.len(),
+                        "areas": c.net.areas.len(),
+                        "warnings": c.warnings.len(),
+                    },
+                    "topology": {
+                        "reference_bus_ids": reference_bus_ids,
+                        "reference_bus_indices": reference_bus_indices,
+                        "n_components": v.n_connected_components(),
+                        "is_radial": v.is_radial(),
+                    },
+                });
+                serde_json::to_string(&summary).map_err(|e| e.to_string())
+            },
+        )
+    }
+}
+
 /// Dense `[0, n)` index of the single reference (slack) bus, or `-1` if not
 /// exactly one. An INDEX into the [`pio_bus_ids`] ordering, not a bus id;
 /// `pio_branches` from/to carry ids, so the unit is in the name. A network may
@@ -2539,6 +2592,7 @@ mod tests {
             "double pio_base_mva(const PioNetwork *net);",
             "size_t pio_network_name(const PioNetwork *net, char *out, size_t cap);",
             "size_t pio_source_format(const PioNetwork *net, char *out, size_t cap);",
+            "char *pio_summary_json(const PioNetwork *net, char *errbuf, size_t errlen);",
             "int64_t pio_ref_bus_index(const PioNetwork *net);",
             "size_t pio_ref_bus_indices(const PioNetwork *net, int64_t *out, size_t cap);",
             "size_t pio_n_islands(const PioNetwork *net);",
@@ -2619,6 +2673,28 @@ mod tests {
                 "Matpower"
             );
             assert_eq!(fmt_len, 8);
+            let mut err = [0 as c_char; 256];
+            let summary = pio_summary_json(c, err.as_mut_ptr(), err.len());
+            assert!(
+                !summary.is_null(),
+                "summary json failed: {}",
+                CStr::from_ptr(err.as_ptr()).to_str().unwrap()
+            );
+            let summary_value: serde_json::Value =
+                serde_json::from_str(CStr::from_ptr(summary).to_str().unwrap()).unwrap();
+            assert_eq!(summary_value["name"], "case9");
+            assert_eq!(summary_value["source_format"], "Matpower");
+            assert_eq!(summary_value["base_mva"], 100.0);
+            assert_eq!(summary_value["counts"]["buses"], 9);
+            assert_eq!(summary_value["counts"]["branches"], 9);
+            assert_eq!(summary_value["counts"]["generators"], 3);
+            assert_eq!(
+                summary_value["topology"]["reference_bus_ids"],
+                serde_json::json!([1])
+            );
+            assert_eq!(summary_value["topology"]["n_components"], 1);
+            assert_eq!(summary_value["topology"]["is_radial"], false);
+            pio_string_free(summary);
             assert_eq!(pio_n_islands(c), 1);
             assert!(pio_ref_bus_index(c) >= 0);
             // The MATPOWER reader is total: no warnings, zero bytes.
