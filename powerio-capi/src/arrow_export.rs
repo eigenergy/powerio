@@ -1829,6 +1829,105 @@ mod tests {
     }
 
     #[cfg(feature = "matrix")]
+    fn transformer_3w_net() -> Network {
+        // Three buses joined only by a 3-winding transformer. The indexed view
+        // star-lowers it, adding a synthetic star bus, so the matrix bus axis has
+        // one more row than the handle's bus count.
+        let raw = "0, 100.00, 33, 0, 0, 60.00 / x\n\
+CASE\n\
+COMMENT\n\
+1,'B1          ', 230.0,3,1,1,1,1.00000,0.0,1.1,0.9,1.1,0.9\n\
+2,'B2          ', 138.0,1,1,1,1,1.00000,0.0,1.1,0.9,1.1,0.9\n\
+3,'B3          ', 13.8,1,1,1,1,1.00000,0.0,1.1,0.9,1.1,0.9\n\
+0 / END OF BUS DATA, BEGIN LOAD DATA\n\
+0 / END OF LOAD DATA, BEGIN FIXED SHUNT DATA\n\
+0 / END OF FIXED SHUNT DATA, BEGIN GENERATOR DATA\n\
+0 / END OF GENERATOR DATA, BEGIN BRANCH DATA\n\
+0 / END OF BRANCH DATA, BEGIN TRANSFORMER DATA\n\
+1, 2, 3, '1', 1, 1, 1, 0.0, 0.0, 2, 'T3W         ', 1, 1, 1, 0, 1, 0, 1, 0, 1, '            '\n\
+0.01, 0.10, 100.0, 0.02, 0.20, 100.0, 0.03, 0.30, 100.0, 0.98, -1.5\n\
+1.0, 230.0, 0.0, 100.0, 90.0, 80.0, 0, 0, 1.1, 0.9, 1.1, 0.9, 33, 0, 0, 0, 0\n\
+1.025, 138.0, 0.0, 110.0, 0, 0, 0, 0, 1.1, 0.9, 1.1, 0.9, 33, 0, 0, 0, 0\n\
+0.95, 13.8, 30.0, 50.0, 0, 0, 0, 0, 1.1, 0.9, 1.1, 0.9, 33, 0, 0, 0, 0\n\
+0 / END OF TRANSFORMER DATA, BEGIN AREA DATA\n\
+Q\n";
+        powerio::parse_str(raw, "psse").unwrap().network
+    }
+
+    // A 3-winding transformer star-lowers into an extra synthetic bus, so the
+    // matrix bus axis has more rows than the handle's bus count and the matrix
+    // bus order diverges from `pio_bus_ids`. The Julia binding maps matrix rows
+    // to bus ids ONLY through this `matrix_bus` axis (index -> bus_id), never by
+    // assuming handle bus order, so the producer must keep the COO row index
+    // space, `row_count`, and `matrix_bus` in lockstep. Lock that here.
+    #[cfg(feature = "matrix")]
+    #[test]
+    fn matrix_bus_axis_covers_star_lowered_rows() {
+        let n = transformer_3w_net();
+        assert_eq!(n.buses.len(), 3, "handle carries the three source buses");
+        assert!(n.branches.is_empty(), "a 3W is not folded into branches");
+        assert_eq!(n.transformers_3w.len(), 1);
+
+        let bus = matrix_record_batch(&n, PIO_ARROW_TABLE_MATRIX_BUS);
+        // The matrix bus axis exceeds the handle bus count: the star point is a
+        // matrix row with no `pio_bus_ids` entry.
+        assert_eq!(bus.num_rows(), n.buses.len() + 1);
+
+        let index = rb_i64_col(&bus, "index").values();
+        let bus_id = rb_i64_col(&bus, "bus_id").values();
+        let source_row = rb_i64_col(&bus, "source_row").values();
+
+        // (a) The axis index column is dense 0..len, so matrix row k reads its
+        // external bus id at `bus_id[k]` (the map the Julia side relies on).
+        let expected_index: Vec<i64> = (0..bus.num_rows() as i64).collect();
+        assert_eq!(index, expected_index.as_slice());
+
+        // The three source buses map to their external ids and source rows in
+        // order; the trailing star row carries a synthetic id outside the
+        // handle id space.
+        assert_eq!(bus_id, &[1, 2, 3, 4]);
+        let handle_ids: Vec<i64> = n.buses.iter().map(|b| ext(b.id)).collect();
+        assert!(
+            !handle_ids.contains(&bus_id[bus.num_rows() - 1]),
+            "star bus id must not collide with a handle bus id"
+        );
+
+        // (b) The star-point row has no source bus row.
+        assert_eq!(source_row[..3], [0, 1, 2]);
+        assert_eq!(
+            source_row[bus.num_rows() - 1],
+            -1,
+            "star-point bus has no source row"
+        );
+
+        // (c) Every symmetric bus-indexed matrix reports row_count/col_count
+        // equal to the matrix bus axis length, and its COO indices stay inside
+        // that axis, so index k always resolves through `matrix_bus`.
+        for table in [PIO_ARROW_TABLE_YBUS, PIO_ARROW_TABLE_BPRIME] {
+            let rb = matrix_record_batch(&n, table);
+            let meta = rb.schema();
+            let meta = meta.metadata();
+            assert_eq!(
+                meta.get("powerio.row_count").unwrap(),
+                &bus.num_rows().to_string(),
+                "row_count must match matrix_bus length"
+            );
+            assert_eq!(
+                meta.get("powerio.col_count").unwrap(),
+                &bus.num_rows().to_string(),
+                "col_count must match matrix_bus length"
+            );
+            let n_rows = bus.num_rows() as i64;
+            for &r in rb_i64_col(&rb, "row_index").values() {
+                assert!((0..n_rows).contains(&r), "COO row index within axis");
+            }
+            for &c in rb_i64_col(&rb, "col_index").values() {
+                assert!((0..n_rows).contains(&c), "COO col index within axis");
+            }
+        }
+    }
+
+    #[cfg(feature = "matrix")]
     #[test]
     fn matrix_branch_axis_matches_incidence_branch_columns() {
         let n = incidence_filter_net();
