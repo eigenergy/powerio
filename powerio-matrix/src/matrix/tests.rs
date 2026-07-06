@@ -3,7 +3,8 @@ use approx::assert_relative_eq;
 use crate::indexed::IndexedNetwork;
 use crate::matrix::{
     BuildOptions, DcConvention, MatrixStats, Scheme, build_bdoubleprime, build_bprime,
-    build_incidence, build_lacpf, build_weighted_laplacian, build_ybus,
+    build_incidence, build_lacpf, build_weighted_laplacian, build_ybus, sddm_check,
+    triplet::CooBuilder,
 };
 use crate::network::{Branch, BranchCharging, Bus, BusId, BusType, Network, Shunt};
 use crate::parse_psse;
@@ -176,6 +177,24 @@ fn bprime_cancels_tap_magnitude_and_keeps_phase_shift() {
 }
 
 #[test]
+fn bprime_with_phase_shift_and_resistance_is_not_sddm() {
+    let mut shifted = br(1, 2, 0.05, 0.2, 0.0);
+    shifted.shift = 45.0;
+    let net = Network::in_memory(
+        "asymmetric-bp",
+        100.0,
+        vec![bus(1, BusType::Ref), bus(2, BusType::Pq)],
+        vec![shifted],
+    );
+    let view = IndexedNetwork::new(&net);
+    let b = build_bprime(&view, &BuildOptions::default()).unwrap();
+    let stats = MatrixStats::from_csr(&b);
+    assert!(stats.m_matrix_sign);
+    assert!(stats.min_dd_margin >= -1e-12);
+    assert!(!sddm_check(&b), "asymmetric Bp must not be marked SDDM");
+}
+
+#[test]
 fn bprime_ignores_bus_shunts_and_line_charging() {
     let base = three_bus();
     let mut decorated = base.clone();
@@ -202,6 +221,52 @@ fn bprime_ignores_bus_shunts_and_line_charging() {
             assert_relative_eq!(decorated_b[[i, j]], base_b[[i, j]], epsilon = 1e-12);
         }
     }
+}
+
+#[test]
+fn bprime_drops_nonzero_self_loop_before_ybus_fold() {
+    let branch = br(1, 2, 0.0, 0.1, 0.0);
+    let mut loop_branch = br(1, 1, 0.05, 0.2, 0.4);
+    loop_branch.tap = 1.25;
+    loop_branch.shift = 60.0;
+
+    let base = Network::in_memory(
+        "without-self-loop",
+        100.0,
+        vec![bus(1, BusType::Ref), bus(2, BusType::Pq)],
+        vec![branch.clone()],
+    );
+    let with_loop = Network::in_memory(
+        "with-self-loop",
+        100.0,
+        vec![bus(1, BusType::Ref), bus(2, BusType::Pq)],
+        vec![branch, loop_branch],
+    );
+
+    let base_view = IndexedNetwork::new(&base);
+    let loop_view = IndexedNetwork::new(&with_loop);
+    let base_bp = build_bprime(&base_view, &BuildOptions::default())
+        .unwrap()
+        .to_dense();
+    let loop_bp = build_bprime(&loop_view, &BuildOptions::default())
+        .unwrap()
+        .to_dense();
+    for i in 0..2 {
+        for j in 0..2 {
+            assert_relative_eq!(loop_bp[[i, j]], base_bp[[i, j]], epsilon = 1e-12);
+        }
+    }
+
+    let base_bpp = build_bdoubleprime(&base_view, &BuildOptions::default())
+        .unwrap()
+        .to_dense();
+    let loop_bpp = build_bdoubleprime(&loop_view, &BuildOptions::default())
+        .unwrap()
+        .to_dense();
+    assert!(
+        (loop_bpp[[0, 0]] - base_bpp[[0, 0]]).abs() > 1e-6,
+        "Bpp keeps self-loop shunt effects"
+    );
 }
 
 #[test]
@@ -520,4 +585,11 @@ fn self_loop_with_zero_reactance_drops_unconditionally() {
     };
     build_incidence(&view, DcConvention::PaperPure, &strict)
         .expect("a self-loop must not trip ZeroImpedance even when skip_zero_impedance is false");
+}
+
+#[test]
+#[should_panic(expected = "COO coordinate (0, 2) out of bounds")]
+fn coo_builder_rejects_out_of_bounds_column() {
+    let mut coo = CooBuilder::new_rect(2, 2);
+    coo.add(0, 2, 1.0);
 }

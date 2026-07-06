@@ -222,6 +222,23 @@ pub(crate) fn negate_into(mut a: CsMat<f64>) -> CsMat<f64> {
 /// Whether a matrix is SDDM (symmetric diagonally dominant M-matrix).
 /// Useful as a quick sanity check before feeding it to an SDDM solver.
 pub fn sddm_check(a: &CsMat<f64>) -> bool {
+    if !is_symmetric(a) {
+        return false;
+    }
     let stats = MatrixStats::from_csr(a);
     stats.m_matrix_sign && stats.min_dd_margin >= -1e-12 && stats.min_diag > 0.0
+}
+
+fn is_symmetric(a: &CsMat<f64>) -> bool {
+    if a.rows() != a.cols() {
+        return false;
+    }
+    for (&v, (i, j)) in a {
+        let other = a.get(j, i).copied().unwrap_or(0.0);
+        let scale = v.abs().max(other.abs()).max(1.0);
+        if (v - other).abs() > 1e-12 * scale {
+            return false;
+        }
+    }
+    true
 }

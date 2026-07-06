@@ -40,6 +40,7 @@ pub(crate) struct YbusFlags {
     pub zero_shifts: bool,
     pub skip_bus_shunts: bool,
     pub skip_zero_impedance: bool,
+    pub skip_self_loops: bool,
 }
 
 impl Default for YbusFlags {
@@ -51,6 +52,7 @@ impl Default for YbusFlags {
             zero_shifts: false,
             skip_bus_shunts: false,
             skip_zero_impedance: true,
+            skip_self_loops: false,
         }
     }
 }
@@ -63,6 +65,7 @@ pub fn build_ybus(case: &IndexedNetwork, opts: &super::BuildOptions) -> Result<Y
         zero_shifts: !opts.include_shifts,
         skip_bus_shunts: false,
         skip_zero_impedance: opts.skip_zero_impedance,
+        skip_self_loops: false,
     };
     build_ybus_with_flags(case, flags)
 }
@@ -84,6 +87,10 @@ pub(crate) fn build_ybus_with_flags(case: &IndexedNetwork, flags: YbusFlags) -> 
             bus_id: br.to,
             element_index: row_idx,
         })?;
+
+        if flags.skip_self_loops && i == j {
+            continue;
+        }
 
         let shift_rad = if flags.zero_shifts {
             0.0

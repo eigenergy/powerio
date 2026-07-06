@@ -933,33 +933,26 @@ fn matrix_bus_batch(_net: &Network, _core: &IndexCore) -> Result<RecordBatch, St
 #[cfg(feature = "matrix")]
 fn matrix_branch_batch(net: &Network, core: &IndexCore) -> Result<RecordBatch, String> {
     let view = IndexedNetwork::with_core(net, core);
-    let mut branch_cols = Vec::new();
-    for (idx, br) in view.in_service_branches() {
-        let i = view
-            .bus_index(br.from)
-            .ok_or_else(|| format!("unknown from bus {} on branch row {idx}", br.from.0))?;
-        let j = view
-            .bus_index(br.to)
-            .ok_or_else(|| format!("unknown to bus {} on branch row {idx}", br.to.0))?;
-        if i == j || br.x == 0.0 {
-            continue;
-        }
-        let b_e = 1.0 / br.x;
-        if !b_e.is_finite() {
-            return Err(format!("non-finite branch susceptance at row {idx}"));
-        }
-        branch_cols.push((idx, br.from, br.to));
-    }
+    let parts = powerio_matrix::build_incidence(
+        &view,
+        powerio_matrix::DcConvention::PaperPure,
+        &powerio_matrix::BuildOptions::default(),
+    )
+    .map_err(|e| e.to_string())?;
 
-    let mut index = Vec::with_capacity(branch_cols.len());
-    let mut source_row = Vec::with_capacity(branch_cols.len());
-    let mut from_bus_id = Vec::with_capacity(branch_cols.len());
-    let mut to_bus_id = Vec::with_capacity(branch_cols.len());
-    for (col, &(idx, from, to)) in branch_cols.iter().enumerate() {
+    let mut index = Vec::with_capacity(parts.branch_of_col.len());
+    let mut source_row = Vec::with_capacity(parts.branch_of_col.len());
+    let mut from_bus_id = Vec::with_capacity(parts.branch_of_col.len());
+    let mut to_bus_id = Vec::with_capacity(parts.branch_of_col.len());
+    for (col, &idx) in parts.branch_of_col.iter().enumerate() {
+        let br = view
+            .branches()
+            .get(idx)
+            .ok_or_else(|| format!("incidence branch column {col} points to missing row {idx}"))?;
         index.push(usz(col));
         source_row.push((idx < net.branches.len()).then_some(idx).map_or(-1, usz));
-        from_bus_id.push(ext(from));
-        to_bus_id.push(ext(to));
+        from_bus_id.push(ext(br.from));
+        to_bus_id.push(ext(br.to));
     }
 
     batch_with_metadata(
@@ -1292,6 +1285,26 @@ mod tests {
                 Bus::new(BusId(2), BusType::Pq, 230.0),
             ],
             vec![branch],
+        )
+    }
+
+    #[cfg(feature = "matrix")]
+    fn incidence_filter_net() -> Network {
+        use powerio::{Branch, Bus, BusId, BusType};
+
+        Network::in_memory(
+            "incidence-filter",
+            100.0,
+            vec![
+                Bus::new(BusId(1), BusType::Ref, 230.0),
+                Bus::new(BusId(2), BusType::Pq, 230.0),
+                Bus::new(BusId(3), BusType::Pq, 230.0),
+            ],
+            vec![
+                Branch::new(BusId(1), BusId(1), 0.0, 0.1),
+                Branch::new(BusId(1), BusId(2), 0.0, 0.0),
+                Branch::new(BusId(2), BusId(3), 0.0, 0.2),
+            ],
         )
     }
 
@@ -1813,6 +1826,41 @@ mod tests {
         assert_eq!(i64_col(&branch, "source_row").value(0), 0);
         assert_eq!(i64_col(&branch, "from_bus_id").value(0), 1);
         assert_eq!(i64_col(&branch, "to_bus_id").value(0), 2);
+    }
+
+    #[cfg(feature = "matrix")]
+    #[test]
+    fn matrix_branch_axis_matches_incidence_branch_columns() {
+        let n = incidence_filter_net();
+        let core = IndexCore::build(&n);
+        let view = IndexedNetwork::with_core(&n, &core);
+        let incidence = powerio_matrix::build_incidence(
+            &view,
+            powerio_matrix::DcConvention::PaperPure,
+            &powerio_matrix::BuildOptions::default(),
+        )
+        .unwrap();
+
+        let branch = matrix_record_batch(&n, PIO_ARROW_TABLE_MATRIX_BRANCH);
+        let source_rows = rb_i64_col(&branch, "source_row").values().to_vec();
+        let expected = incidence
+            .branch_of_col
+            .iter()
+            .map(|&idx| i64::try_from(idx).unwrap())
+            .collect::<Vec<_>>();
+        assert_eq!(source_rows, expected);
+        assert_eq!(source_rows, vec![2]);
+
+        let incidence_batch = matrix_record_batch(&n, PIO_ARROW_TABLE_INCIDENCE);
+        assert_eq!(
+            incidence_batch
+                .schema()
+                .metadata()
+                .get("powerio.col_count")
+                .unwrap(),
+            "1"
+        );
+        assert_eq!(branch.num_rows(), 1);
     }
 
     #[cfg(feature = "matrix")]

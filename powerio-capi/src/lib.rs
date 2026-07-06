@@ -746,7 +746,7 @@ pub unsafe extern "C" fn pio_summary_json(
                 let reference_bus_indices = v.reference_bus_indices();
                 let reference_bus_ids: Vec<usize> = reference_bus_indices
                     .iter()
-                    .filter_map(|&idx| c.net.buses.get(idx).map(|b| b.id.0))
+                    .map(|&idx| v.bus_id(idx).0)
                     .collect();
                 let summary = serde_json::json!({
                     "schema_version": 1,
