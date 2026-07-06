@@ -22,16 +22,16 @@ in a paper, release note, or package page.
 
 Snapshot environment: MacBook Pro `Mac17,8`, Apple M5 Pro, 18 cores, 64 GB RAM,
 macOS 26.4.1 (`25E253`), arm64. Rust `rustc 1.95.0`, `cargo 1.95.0`; Apple
-clang 21.0.0; Julia 1.12.6; Python 3.12.13 in `.venv`. The repository was a
-local working tree based on `72e35ad566d2` with the benchmark and documentation
-changes shown here.
+clang 21.0.0; Julia 1.12.6; Python 3.12.13 in `.venv`. The metadata table
+records the commit and UTC time for each suite because the Julia suite was
+rerun after the other benchmark tables.
 
 Benchmark run metadata:
 
 <!-- BENCH:metadata START -->
 | suite | performed at (UTC) | commit | command |
 | --- | --- | --- | --- |
-| PowerIO.jl parse and Ybus | 2026-07-06T18:56:32.202Z | 72e35ad566d2 | `julia --project=benchmarks benchmarks/bench_julia.jl --json` |
+| PowerIO.jl parse and Ybus | 2026-07-06T19:35:05.007Z | 7010271a4c05 | `julia --project=benchmarks benchmarks/bench_julia.jl --json` |
 | Python parse | 2026-07-06T19:15:26Z | 72e35ad566d2 | `python benchmarks/bench_parse.py --json tests/data/case2869pegase.m tests/data/large/case9241pegase.m tests/data/large/case13659pegase.m tests/data/large/case193k.m` |
 | PowerWorld readers | 2026-07-06T19:06:18Z | 72e35ad566d2 | `POWERIO_BENCH_AUX=<Texas7k_20210804.AUX> POWERIO_BENCH_PWB=<Texas7k_20210804.PWB> cargo bench -p powerio --bench parse -- "parse_aux_\|parse_pwb_" && python3 benchmarks/extract_powerworld_bench.py` |
 | matrix builders | 2026-07-06T19:18:48Z | 72e35ad566d2 | `cargo bench -p powerio-matrix --bench matrix && python3 benchmarks/extract_matrix_bench.py` |
@@ -48,16 +48,16 @@ explicit JSON shaped view materialization that `parse_file` now avoids.
 <!-- BENCH:speed-julia START -->
 | case | buses / branches | PowerIO.jl parse_file | ExaPowerIO.jl parse | PowerModels.jl parse | Rust C ABI handle | net.data |
 | --- | --- | --- | --- | --- | --- | --- |
-| case2869pegase | 2869 / 4582 | 1.78 +/- 0.08 ms | 2.98 +/- 0.13 ms | 136.5 +/- 35.9 ms | 1.8 +/- 0.09 ms | 43.22 +/- 42.03 ms |
-| case_ACTIVSg2000 | 2000 / 3206 | 2.13 +/- 0.08 ms | 2.16 +/- 0.18 ms | 150.3 +/- 38.7 ms | 2.13 +/- 0.05 ms | 29.27 +/- 28.21 ms |
-| case9241pegase | 9241 / 16049 | 6.64 +/- 0.2 ms | 10.89 +/- 0.85 ms | 666 +/- 49.6 ms | 6.96 +/- 0.21 ms | 231.75 +/- 50.31 ms |
-| case13659pegase | 13659 / 20467 | 10.49 +/- 0.22 ms | 15.45 +/- 18.57 ms | 854.8 +/- 41.1 ms | 10.63 +/- 0.2 ms | 313.54 +/- 69.64 ms |
-| case_ACTIVSg10k | 10000 / 12706 | 9.75 +/- 0.22 ms | 10.15 +/- 1.07 ms | n/a | 10.64 +/- 0.2 ms | 135.67 +/- 46.55 ms |
-| case_ACTIVSg25k | 25000 / 32230 | 26.11 +/- 0.27 ms | 24.6 +/- 24.46 ms | n/a | 26.19 +/- 0.25 ms | n/a |
-| case_ACTIVSg70k | 70000 / 88207 | 70.81 +/- 0.53 ms | 74.87 +/- 40.36 ms | n/a | 70.79 +/- 0.3 ms | n/a |
-| case_SyntheticUSA | 82000 / 104121 | 84.01 +/- 0.56 ms | 83.1 +/- 44.65 ms | n/a | 84.61 +/- 0.52 ms | n/a |
-| case99k | 99396 / 117860 | 96.6 +/- 0.26 ms | 101.57 +/- 44.32 ms | n/a | 96.5 +/- 0.58 ms | n/a |
-| case193k | 192768 / 228574 | 190.19 +/- 17.9 ms | 183.81 +/- 62.85 ms | n/a | 190.02 +/- 0.92 ms | n/a |
+| case2869pegase | 2869 / 4582 | 1.8 +/- 0.07 ms | 2.8 +/- 0.12 ms | 127.6 +/- 38 ms | 1.77 +/- 0.06 ms | 39.53 +/- 41.18 ms |
+| case_ACTIVSg2000 | 2000 / 3206 | 2.14 +/- 0.06 ms | 2.19 +/- 0.13 ms | 141.7 +/- 39.2 ms | 2.11 +/- 0.04 ms | 27.69 +/- 23.58 ms |
+| case9241pegase | 9241 / 16049 | 6.39 +/- 0.34 ms | 9.47 +/- 0.3 ms | 578.9 +/- 57.9 ms | 6.07 +/- 0.58 ms | 218.19 +/- 46.12 ms |
+| case13659pegase | 13659 / 20467 | 9.04 +/- 0.31 ms | 13.77 +/- 16.77 ms | 822.5 +/- 18.1 ms | 9.03 +/- 0.18 ms | 291.28 +/- 21.18 ms |
+| case_ACTIVSg10k | 10000 / 12706 | 9.43 +/- 0.2 ms | 9.47 +/- 1.41 ms | 715.2 +/- 69.7 ms | 9.4 +/- 0.15 ms | 169.26 +/- 44.86 ms |
+| case_ACTIVSg25k | 25000 / 32230 | 24.35 +/- 0.28 ms | 22.72 +/- 28.45 ms | 1819 +/- 12 ms | 24.3 +/- 0.3 ms | n/a |
+| case_ACTIVSg70k | 70000 / 88207 | 66.81 +/- 0.42 ms | 61.96 +/- 2.88 ms | 5382.2 +/- 191 ms | 67.55 +/- 0.43 ms | n/a |
+| case_SyntheticUSA | 82000 / 104121 | 81.03 +/- 0.93 ms | 77.65 +/- 43.29 ms | 6474.8 +/- 149.7 ms | 80.35 +/- 0.22 ms | n/a |
+| case99k | 99396 / 117860 | 91.17 +/- 0.48 ms | 97.81 +/- 47.6 ms | n/a | 92.01 +/- 0.51 ms | n/a |
+| case193k | 192768 / 228574 | 178.44 +/- 0.24 ms | 179.32 +/- 53.46 ms | n/a | 179.34 +/- 0.41 ms | n/a |
 <!-- BENCH:speed-julia END -->
 
 The Ybus table times the public PowerIO.jl sparse matrix API. The Rust C ABI
@@ -67,21 +67,25 @@ Julia `SparseMatrixCSC`.
 <!-- BENCH:speed-julia-ybus START -->
 | case | buses / branches | PowerIO.jl Ybus | ExaPowerIO.jl Ybus | Rust C ABI Arrow | PowerModels.jl Ybus |
 | --- | --- | --- | --- | --- | --- |
-| case2869pegase | 2869 / 4582 | 2.9 +/- 0.18 ms | 3.18 +/- 0.31 ms | 2.77 +/- 0.07 ms | 161.8 +/- 42.5 ms |
-| case_ACTIVSg2000 | 2000 / 3206 | 2.97 +/- 0.14 ms | 2.31 +/- 0.14 ms | 2.85 +/- 0.04 ms | 159.9 +/- 41.5 ms |
-| case9241pegase | 9241 / 16049 | 11.71 +/- 0.45 ms | 10.67 +/- 18.84 ms | 11.46 +/- 1.41 ms | 689.6 +/- 43.4 ms |
-| case13659pegase | 13659 / 20467 | 16.61 +/- 0.34 ms | 15.99 +/- 18.74 ms | 16.04 +/- 0.3 ms | 984.7 +/- 38.9 ms |
-| case_ACTIVSg10k | 10000 / 12706 | 14.21 +/- 0.16 ms | 10.32 +/- 18.21 ms | 13.83 +/- 0.19 ms | n/a |
-| case_ACTIVSg25k | 25000 / 32230 | 36.23 +/- 0.6 ms | 26.16 +/- 34.06 ms | 34.84 +/- 1.04 ms | n/a |
-| case_ACTIVSg70k | 70000 / 88207 | 99.56 +/- 0.78 ms | 77.74 +/- 49.07 ms | 96.3 +/- 1.14 ms | n/a |
-| case_SyntheticUSA | 82000 / 104121 | 123 +/- 3.38 ms | 175.03 +/- 47.99 ms | 117.45 +/- 0.75 ms | n/a |
-| case99k | 99396 / 117860 | 136.13 +/- 3.26 ms | 194.37 +/- 50.62 ms | 134.29 +/- 1.03 ms | n/a |
-| case193k | 192768 / 228574 | 284.52 +/- 49.19 ms | 286.53 +/- 3.2 ms | 269.01 +/- 6.43 ms | n/a |
+| case2869pegase | 2869 / 4582 | 2.77 +/- 0.09 ms | 2.97 +/- 0.13 ms | 2.58 +/- 0.08 ms | 136.2 +/- 39.1 ms |
+| case_ACTIVSg2000 | 2000 / 3206 | 2.75 +/- 0.13 ms | 2.2 +/- 0.1 ms | 2.63 +/- 0.06 ms | 133.7 +/- 40.1 ms |
+| case9241pegase | 9241 / 16049 | 9.84 +/- 0.25 ms | 9.86 +/- 16.89 ms | 9.23 +/- 0.12 ms | 605.8 +/- 42.8 ms |
+| case13659pegase | 13659 / 20467 | 14.61 +/- 0.24 ms | 14.38 +/- 23.58 ms | 13.92 +/- 0.19 ms | 903.9 +/- 46.8 ms |
+| case_ACTIVSg10k | 10000 / 12706 | 13.02 +/- 0.36 ms | 9.87 +/- 17.08 ms | 12.52 +/- 0.17 ms | 751 +/- 14.7 ms |
+| case_ACTIVSg25k | 25000 / 32230 | 33.89 +/- 0.3 ms | 24.02 +/- 31.93 ms | 33.02 +/- 0.22 ms | 1921.1 +/- 38.6 ms |
+| case_ACTIVSg70k | 70000 / 88207 | 99.13 +/- 1.12 ms | 71.59 +/- 48.14 ms | 95.76 +/- 0.24 ms | 5684.7 +/- 135.2 ms |
+| case_SyntheticUSA | 82000 / 104121 | 120.98 +/- 0.96 ms | 169.2 +/- 47.32 ms | 116.39 +/- 1.24 ms | n/a |
+| case99k | 99396 / 117860 | 135.81 +/- 40.84 ms | 184.33 +/- 50.12 ms | 132.42 +/- 1.02 ms | n/a |
+| case193k | 192768 / 228574 | 277.18 +/- 49.58 ms | 276.64 +/- 4.29 ms | 263.4 +/- 2.31 ms | n/a |
 <!-- BENCH:speed-julia-ybus END -->
 
-PowerModels is skipped past case13659 because those runs take minutes on this
-machine. The comparison records benchmark timing. Validation below is the
-correctness gate.
+PowerModels `n/a` cells do not mean slow runs. In this run,
+`case_SyntheticUSA` parsed in the table above but has no PowerModels Ybus value
+because `calc_admittance_matrix` rejects dclines. `case99k` and `case193k` are
+`n/a` because PowerModels 0.21.6 failed in its MATPOWER parser with
+`AssertionError: occursin(".", matrix_assignment)`. The ACTIVSg PowerModels rows
+are measured; the largest row here is about 5.7 s for Ybus. Validation below is
+the correctness gate.
 
 ## vs pandapower
 

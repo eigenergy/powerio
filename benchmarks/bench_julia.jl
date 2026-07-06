@@ -23,19 +23,21 @@ PowerModels.silence()
 include(joinpath(@__DIR__, "powerio_ffi.jl"))
 PowerIO.set_library!(get(ENV, "POWERIO_CAPI", LIBPOWERIO))
 
-# (name, path, run_powermodels?) — PowerModels is skipped on the huge cases
-# where it takes minutes and the gap is already settled.
+# (name, path, run_powermodels_parse?, run_powermodels_ybus?)
+# A false PowerModels flag means this harness records n/a for that column; it is
+# not a wall time claim. Parse and Ybus are separate because some cases parse but
+# PowerModels cannot build Ybus for them.
 const CASES = [
-    ("case2869pegase", "tests/data/case2869pegase.m", true),
-    ("case_ACTIVSg2000", "tests/data/large/case_ACTIVSg2000.m", true),
-    ("case9241pegase", "tests/data/large/case9241pegase.m", true),
-    ("case13659pegase", "tests/data/large/case13659pegase.m", true),
-    ("case_ACTIVSg10k", "tests/data/large/case_ACTIVSg10k.m", false),
-    ("case_ACTIVSg25k", "tests/data/large/case_ACTIVSg25k.m", false),
-    ("case_ACTIVSg70k", "tests/data/large/case_ACTIVSg70k.m", false),
-    ("case_SyntheticUSA", "tests/data/large/case_SyntheticUSA.m", false),
-    ("case99k", "tests/data/large/case99k.m", false),
-    ("case193k", "tests/data/large/case193k.m", false),
+    ("case2869pegase", "tests/data/case2869pegase.m", true, true),
+    ("case_ACTIVSg2000", "tests/data/large/case_ACTIVSg2000.m", true, true),
+    ("case9241pegase", "tests/data/large/case9241pegase.m", true, true),
+    ("case13659pegase", "tests/data/large/case13659pegase.m", true, true),
+    ("case_ACTIVSg10k", "tests/data/large/case_ACTIVSg10k.m", true, true),
+    ("case_ACTIVSg25k", "tests/data/large/case_ACTIVSg25k.m", true, true),
+    ("case_ACTIVSg70k", "tests/data/large/case_ACTIVSg70k.m", true, true),
+    ("case_SyntheticUSA", "tests/data/large/case_SyntheticUSA.m", true, false),
+    ("case99k", "tests/data/large/case99k.m", false, false),
+    ("case193k", "tests/data/large/case193k.m", false, false),
 ]
 
 function trial_stats(b; digits = 2)
@@ -139,7 +141,7 @@ end
 println(rpad("case", 20), rpad("PowerIO.jl", 24), rpad("ExaPowerIO", 24),
         rpad("PowerModels", 24), rpad("Rust C ABI", 24), rpad("net.data", 24),
         "buses (PowerIO / ExaPowerIO)")
-for (name, f, run_pm) in CASES
+for (name, f, run_pm_parse, _run_pm_ybus) in CASES
     if !isfile(f)
         @warn "bench_julia: fixture missing, dropping it from the run" case = name path = f
         continue
@@ -170,10 +172,14 @@ for (name, f, run_pm) in CASES
 
     pm = nothing
     p = "skip"
-    if run_pm
-        bp = @benchmark PowerModels.parse_file($f) samples = 5 evals = 1
-        pm = trial_stats(bp; digits = 1)
-        p = show_stat(pm)
+    if run_pm_parse
+        try
+            bp = @benchmark PowerModels.parse_file($f) samples = 5 evals = 1 seconds = 60
+            pm = trial_stats(bp; digits = 1)
+            p = show_stat(pm)
+        catch e
+            @warn "PowerModels parse benchmark failed" case = name error = sprint(showerror, e)
+        end
     end
 
     count = nbuses == length(ed.bus) ? string(nbuses) : "$nbuses / $(length(ed.bus))"
@@ -195,7 +201,7 @@ end
 println()
 println(rpad("case", 20), rpad("PowerIO.jl Ybus", 24), rpad("Exa Ybus", 24),
         rpad("Rust C ABI", 24), rpad("PM Ybus", 24), "nnz rows")
-for (name, f, run_pm) in CASES
+for (name, f, _run_pm_parse, run_pm_ybus) in CASES
     if !isfile(f)
         continue
     end
@@ -215,10 +221,14 @@ for (name, f, run_pm) in CASES
 
     pm_ybus = nothing
     pm_display = "skip"
-    if run_pm
-        bpm = @benchmark powermodels_parse_ybus($f) samples = 5 evals = 1
-        pm_ybus = trial_stats(bpm; digits = 1)
-        pm_display = show_stat(pm_ybus)
+    if run_pm_ybus
+        try
+            bpm = @benchmark powermodels_parse_ybus($f) samples = 5 evals = 1 seconds = 60
+            pm_ybus = trial_stats(bpm; digits = 1)
+            pm_display = show_stat(pm_ybus)
+        catch e
+            @warn "PowerModels Ybus benchmark failed" case = name error = sprint(showerror, e)
+        end
     end
 
     println(rpad(name, 20), rpad(show_stat(pio), 24), rpad(show_stat(exa), 24),

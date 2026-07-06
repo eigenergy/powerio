@@ -38,8 +38,8 @@ warnings.filterwarnings("ignore", category=FutureWarning)
 warnings.filterwarnings("ignore", category=UserWarning)
 logging.getLogger("pandapower").setLevel(logging.ERROR)
 
-# from_mpc builds a full `net`; above this many buses it's minutes per call and
-# errors on some topologies, so skip it and keep the matpowercaseframes baseline.
+# from_mpc builds a full `net` and errors on some topologies, so large rows keep
+# the matpowercaseframes reader baseline instead.
 FROM_MPC_MAX_BUSES = 25_000
 
 DEFAULT_CASES = [
