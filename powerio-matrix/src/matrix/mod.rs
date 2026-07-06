@@ -1,10 +1,11 @@
 //! Sparse matrix builders for power system cases.
 //!
-//! DC OPF and sensitivity builders use incidence Laplacians of the form
-//! `L = A diag(b) Aᵀ`, with the node-by-edge incidence `A` (n×m) and positive
-//! branch weights `b`. Such matrices have positive diagonal entries, negative
-//! off diagonal entries, and `diag = sum of |off-diagonal|`; this is the
-//! M-matrix form SDDM solvers expect.
+//! DC OPF and sensitivity builders use the DC bus susceptance matrix
+//! `L = A diag(b) Aᵀ`, where `A` is the signed bus by branch incidence matrix
+//! (n×m) and `b` is the positive branch susceptance vector. Stored nonzero off
+//! diagonal entries are negative, diagonals are nonnegative, and
+//! `diag = sum of |off-diagonal|`; this is the M-matrix form SDDM solvers expect
+//! once the grounded matrix is positive definite.
 
 mod adjacency;
 mod bdoubleprime;

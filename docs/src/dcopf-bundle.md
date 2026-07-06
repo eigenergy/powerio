@@ -11,11 +11,11 @@ Everything is a pure function of the case. The files and conventions are below.
   triangle only. Vectors are `array real general`, one value per line.
 - **Index base.** `.mtx` row/column indices are **1-based** (Matrix Market
   standard). `reference_buses` in the manifest are **0-based** dense bus indices.
-- **Sign convention.** The Laplacians are the **positive (M-matrix) form**:
-  diagonal \\(> 0\\), off-diagonal \\(< 0\\), with
-  \\(L_{ii} = \sum_j \lvert L_{ij} \rvert\\) for \\(L\\). An off-diagonal entry is
-  \\(L_{ij} = -b_e\\) for the branch between \\(i\\) and \\(j\\), so a consumer
-  recovers the edge weight as \\(-L_{ij} > 0\\).
+- **Sign convention.** The DC bus susceptance matrix \\(L\\) uses the positive
+  M-matrix form: stored nonzero off-diagonal entries are negative, diagonals are
+  nonnegative, and \\(L_{ii} = \sum_j \lvert L_{ij} \rvert\\). An off-diagonal
+  entry is \\(L_{ij} = -b_e\\) for the branch between \\(i\\) and \\(j\\), so a
+  consumer recovers the branch susceptance as \\(-L_{ij} > 0\\).
 - **Units.** `PerUnit` by default: power divided by `base_mva`, cost scaled so
   it is a function of per unit power:
   \\(q \leftarrow 2c_2 \cdot \mathrm{base}^2\\) and
@@ -36,8 +36,8 @@ Everything is a pure function of the case. The files and conventions are below.
 
 | file | shape | what |
 |------|-------|------|
-| `A.mtx` | \\(n \times m\\) | signed incidence; column \\(e\\) has \\(+1\\) at from-bus, \\(-1\\) at to-bus |
-| `L.mtx` | \\(n \times n\\) | generic Laplacian \\(L = A \operatorname{diag}(b) A^\mathsf{T}\\), singular with \\(\operatorname{rank}(L) = n - 1\\), \\(\mathbf{1} \in \ker L\\) |
+| `A.mtx` | \\(n \times m\\) | signed incidence matrix; column \\(e\\) has \\(+1\\) at from-bus, \\(-1\\) at to-bus |
+| `L.mtx` | \\(n \times n\\) | DC bus susceptance matrix \\(L = A \operatorname{diag}(b) A^\mathsf{T}\\), singular with \\(\operatorname{rank}(L) = n - 1\\), \\(\mathbf{1} \in \ker L\\) |
 | `L_grounded.mtx` | \\((n-k) \times (n-k)\\) | \\(L\\) with \\(k\\) reference rows and columns removed; SPD when every island is grounded |
 | `BAt.mtx` | \\(m \times n\\) | flow map \\(B A^\mathsf{T}\\), where \\(f = B A^\mathsf{T} \theta\\) |
 | `Cg.mtx` | \\(n \times n_{\mathrm{gen}}\\) | generator-to-bus incidence, one \\(1\\) per column |
@@ -82,6 +82,6 @@ reference angle to \\(0\\). `e_r` identifies the grounded buses without parsing 
 manifest. The full singular \\(L\\) can be used instead with a consistent zero-sum
 RHS.
 
-An interior point DC OPF solver builds *reweighted* Laplacians each Newton step
-from the same `A` and `b` (only the edge weights change), so `A` is the durable
-operator to hand over.
+An interior point DC OPF solver builds reweighted bus Laplacians each Newton
+step from the same `A` and `b` (only the edge weights change), so `A` is the
+durable operator to hand over.

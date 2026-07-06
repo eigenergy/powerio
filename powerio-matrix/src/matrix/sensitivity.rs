@@ -2,12 +2,13 @@
 //!
 //! PTDF maps nodal injections to branch flows (`f = PTDF · p`); LODF maps a
 //! branch outage to the flow it redistributes onto the others. Both come from
-//! the reference grounded DC Laplacian `ABA = ground_with(L, refs)`: one
-//! row/column removed per reference bus. The default public builders keep the
-//! dense Cholesky path, with dense Gaussian elimination as the nonsingular
-//! indefinite fallback. Option based builders can choose an iterative path that
-//! solves one grounded right hand side at a time and writes directly into sparse
-//! output. Disconnected networks with one reference per island are supported.
+//! the reference grounded DC bus susceptance matrix
+//! `ABA = ground_with(L, refs)`: one row/column removed per reference bus. The
+//! default public builders keep the dense Cholesky path, with dense Gaussian
+//! elimination as the nonsingular indefinite fallback. Option based builders can
+//! choose an iterative path that solves one grounded right hand side at a time
+//! and writes directly into sparse output. Disconnected networks with one
+//! reference per island are supported.
 //! Several references in one island are fixed angle buses; this is not a
 //! participation factor based distributed slack model.
 
@@ -171,10 +172,10 @@ pub struct SensitivityMatrixMetadata {
 }
 
 /// PTDF (`m × n`): branch flows from nodal injections, `f = PTDF · p`. Every
-/// reference-bus column is zero. The Laplacian is grounded at the whole
-/// reference set (`reference_bus_indices`), one row/column per slack. One
-/// reference per island handles disconnected networks; several references within
-/// one island fixes all of those bus angles to zero.
+/// reference bus column is zero. The DC bus susceptance matrix is grounded at
+/// the whole reference set (`reference_bus_indices`), one row/column per slack.
+/// One reference per island handles disconnected networks; several references
+/// within one island fixes all of those bus angles to zero.
 pub fn build_ptdf(case: &IndexedNetwork, conv: DcConvention) -> Result<CsMat<f64>> {
     case.check_reference_coverage()?;
     let refs = case.reference_bus_indices();
@@ -194,10 +195,10 @@ pub fn build_lodf(case: &IndexedNetwork, conv: DcConvention) -> Result<CsMat<f64
     Ok(lodf_from_dense(&ptdf, &inc.a, m, n))
 }
 
-/// Both DC sensitivity matrices `(PTDF, LODF)` from a single Laplacian
+/// Both DC sensitivity matrices `(PTDF, LODF)` from one DC bus susceptance matrix
 /// factorization. When a caller needs both for the same case (the
-/// `sensitivities` bundle), this factors and inverts the grounded Laplacian
-/// once instead of paying the O(n³) twice across separate
+/// `sensitivities` bundle), this factors and inverts the grounded DC bus
+/// susceptance matrix once instead of paying the O(n³) twice across separate
 /// [`build_ptdf`]/[`build_lodf`] calls.
 pub fn build_ptdf_lodf(
     case: &IndexedNetwork,
@@ -388,7 +389,7 @@ fn lodf_from_dense_with_drop(
 }
 
 /// Dense PTDF (`m × n`, row-major) plus its shape. `refs` is the reference set;
-/// the Laplacian is grounded at every entry (one row/column each).
+/// the DC bus susceptance matrix is grounded at every entry (one row/column each).
 fn ptdf_dense(inc: &IncidenceParts, refs: &[usize]) -> Result<(Vec<f64>, usize, usize)> {
     let (ptdf, m, n, _) = ptdf_dense_with_path(inc, refs)?;
     Ok((ptdf, m, n))
@@ -403,7 +404,7 @@ fn ptdf_dense_with_path(
     let g = Grounding::new(refs);
     let nr = n - g.len();
 
-    // Reduced inverse of the grounded Laplacian: Rinv = (ABA_refs)^{-1}.
+    // Reduced inverse of the grounded DC bus susceptance matrix: Rinv = (ABA_refs)^{-1}.
     let lr = ground_with(&build_weighted_laplacian(&inc.a, &inc.b), &g);
     let dense_lr = densify(&lr, nr);
     let (rinv, solver_path) = DenseCholesky::factor(&dense_lr, nr).map_or_else(
@@ -683,7 +684,7 @@ impl<'a> CgSolver<'a> {
         let n = a.rows();
         if a.cols() != n {
             return Err(Error::ShapeMismatch {
-                what: "grounded Laplacian columns",
+                what: "grounded DC bus susceptance matrix columns",
                 expected: n,
                 got: a.cols(),
             });

@@ -12,9 +12,9 @@
 //! - line resistance is cleared in the XB scheme
 //! - phase shifts remain
 //!
-//! With zero phase shifts this has the usual Laplacian sign pattern: positive
-//! diagonal entries and negative off diagonal entries. Phase shifters change
-//! the off diagonal terms, matching MATPOWER.
+//! With zero phase shifts this has the usual weighted bus Laplacian sign
+//! pattern: stored nonzero off diagonal entries are negative and diagonals are
+//! nonnegative. Phase shifters change the off diagonal terms, matching MATPOWER.
 
 use sprs::CsMat;
 

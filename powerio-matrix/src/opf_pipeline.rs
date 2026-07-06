@@ -1,9 +1,10 @@
 //! Writes the static DC OPF bundle for a case: one directory of named
 //! Matrix Market files plus a JSON manifest.
 //!
-//! Everything here is a pure function of the case: the incidence `A`, the
-//! DC Laplacian `L` and its reference-grounded form, the flow map `B Aᵀ`, the
-//! generator cost and limit data, the generator→bus map, and nodal load.
+//! Everything here is a pure function of the case: the signed incidence matrix
+//! `A`, the DC bus susceptance matrix `L = A diag(b) Aᵀ` and its
+//! reference-grounded form, the flow map `B Aᵀ`, the generator cost and limit
+//! data, the generator→bus map, and nodal load.
 
 use std::path::{Path, PathBuf};
 
@@ -69,7 +70,7 @@ struct DcOpfMeta {
     n_gen: usize,
     /// Dense indices of every grounded reference (slack) bus. Several entries
     /// mean one reference per island, or several reference buses fixed in one
-    /// island. The solver grounds the Laplacian at all of them, matching
+    /// island. The solver grounds the DC bus susceptance matrix at all of them, matching
     /// `L_grounded` and `e_r`.
     reference_buses: Vec<usize>,
     /// Backward compatible alias for `dc_convention`.

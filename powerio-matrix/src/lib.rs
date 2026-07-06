@@ -2,10 +2,11 @@
 //! built on [`powerio`] (re-exported, so one `use powerio_matrix::...` pulls in
 //! both layers).
 //!
-//! Signed incidence `A`, weighted Laplacian `L = A diag(b) Aᵀ` and its
-//! reference-grounded form, MATPOWER Bp/Bpp/Y_bus, PTDF/LODF, adjacency, the LACPF block,
-//! and the DC OPF instance bundle, plus a petgraph representation. The builders take the
-//! dense-indexed [`IndexedNetwork`] view of a [`Network`].
+//! Signed incidence matrix `A`, DC bus susceptance matrix `L = A diag(b) Aᵀ`
+//! and its reference-grounded form, MATPOWER Bp/Bpp/Y_bus, PTDF/LODF, adjacency,
+//! the LACPF block, and the DC OPF instance bundle, plus a petgraph
+//! representation. The builders take the dense-indexed [`IndexedNetwork`] view
+//! of a [`Network`].
 //!
 //! ```
 //! use powerio_matrix::{parse_file, IndexedNetwork, build_bprime, BuildOptions};
@@ -20,9 +21,10 @@
 //!
 //! # Conventions
 //!
-//! Weighted DC Laplacians use the positive (M-matrix) form: off-diagonal `< 0`,
-//! diagonal `> 0`, `diag = Σ|off-diag|`. Bus ids are 1-based on the
-//! model; [`IndexedNetwork`] maps them to a dense `[0, n)`. `tap == 0` means
+//! The DC bus susceptance matrix and other weighted bus Laplacians use the
+//! positive M-matrix form: stored nonzero off-diagonal entries are negative,
+//! diagonals are nonnegative, and `diag = Σ|off-diag|`. Bus ids are 1-based on
+//! the model; [`IndexedNetwork`] maps them to a dense `[0, n)`. `tap == 0` means
 //! `tap = 1`. `build_bprime` and `build_bdoubleprime` follow MATPOWER `makeB`;
 //! Y_bus keeps tap magnitudes and phase shifts.
 //! Branch terminal admittance is stored per unit. DC OPF is
