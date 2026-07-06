@@ -1,5 +1,24 @@
 # Changelog
 
+## 0.6.3
+
+- Arrow matrix axes (#234): the C ABI Arrow export gains a table catalog and
+  dense matrix axis maps. `pio_to_arrow` exposes `matrix_bus` and
+  `matrix_branch` axis tables alongside the `ybus`, `incidence`, `bprime`, and
+  `bdoubleprime` COO tables, which carry `powerio.row_axis` / `powerio.col_axis`
+  schema metadata so a consumer maps dense matrix rows and incidence columns
+  back to source bus and branch rows. Matrix rows are labeled with the
+  `matrix_bus` axis, which stays correct when 3-winding transformer star-point
+  lowering expands the bus set past the handle bus order.
+- FDPF matrices (#234): `bprime` / `bdoubleprime` follow MATPOWER `makeB`
+  semantics, with self-loop handling and asymmetric Matrix Market writes pinned
+  by Rust, C ABI, and Python coverage.
+- Summary JSON (#234): the C ABI exposes balanced (`pio_summary_json`) and
+  distribution summary JSON, so a binding can render network summaries without
+  materializing the full model payload.
+- Matrix Arrow export (#234): the numeric matrix export path fills Julia-owned
+  buffers directly for the copy-free fast path.
+
 ## 0.6.2
 
 - Normalization (#210): angle bound clamping now keeps every repaired branch
