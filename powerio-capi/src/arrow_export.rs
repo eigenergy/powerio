@@ -865,7 +865,7 @@ macro_rules! real_matrix_batch {
         }
         matrix_real_batch(
             $table_name,
-            MatrixShape {
+            MatrixDims {
                 rows: matrix.rows(),
                 cols: matrix.cols(),
             },
@@ -1010,7 +1010,7 @@ fn matrix_ybus_batch(net: &Network, core: &IndexCore) -> Result<RecordBatch, Str
         }
     }
     matrix_ybus_record_batch(
-        MatrixShape {
+        MatrixDims {
             rows: parts.g.rows(),
             cols: parts.g.cols(),
         },
@@ -1136,7 +1136,7 @@ fn matrix_feature_error() -> String {
 }
 
 #[cfg(feature = "matrix")]
-struct MatrixShape {
+struct MatrixDims {
     rows: usize,
     cols: usize,
 }
@@ -1150,7 +1150,7 @@ struct MatrixAxes<'a> {
 #[cfg(feature = "matrix")]
 fn matrix_real_batch(
     table: &str,
-    shape: MatrixShape,
+    dims: MatrixDims,
     row_index: Vec<i64>,
     col_index: Vec<i64>,
     value: Vec<f64>,
@@ -1162,13 +1162,13 @@ fn matrix_real_batch(
             ("col_index", i64s(col_index)),
             ("value", f64s(value)),
         ],
-        matrix_metadata(table, shape.rows, shape.cols, axes.row, axes.col),
+        matrix_metadata(table, dims.rows, dims.cols, axes.row, axes.col),
     )
 }
 
 #[cfg(feature = "matrix")]
 fn matrix_ybus_record_batch(
-    shape: MatrixShape,
+    dims: MatrixDims,
     row_index: Vec<i64>,
     col_index: Vec<i64>,
     g: Vec<f64>,
@@ -1182,7 +1182,7 @@ fn matrix_ybus_record_batch(
             ("g", f64s(g)),
             ("b", f64s(b)),
         ],
-        matrix_metadata("ybus", shape.rows, shape.cols, axes.row, axes.col),
+        matrix_metadata("ybus", dims.rows, dims.cols, axes.row, axes.col),
     )
 }
 

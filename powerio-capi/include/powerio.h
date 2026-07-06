@@ -3,7 +3,7 @@
  * pio_abi_version() against PIO_ABI_VERSION at load; the integer is the
  * compatibility check, the version string is informational.
  *
- * Naming grammar (fixed; the surface evolves additively from here):
+ * Naming grammar (fixed; the C API evolves additively from here):
  * - Verb-led names are operations and the verb fixes the return family:
  *   parse/read/normalize return a new handle, write has a filesystem effect,
  *   convert transcodes without keeping a handle, free destroys.
@@ -16,10 +16,10 @@
  *   "psse", "powerio-json", ...), so a new format never changes this ABI.
  *
  * Vocabulary (one meaning per word, transmission and distribution alike):
- * - bus: a named connection point, any number of phases. This surface is bus
+ * - bus: a named connection point, any number of phases. This API is bus
  *   granular (pio_n_buses, pio_bus_ids, pio_bus_demand, ...).
  * - node: one conductor's point at a bus (OpenDSS bus.1.2.3). Reserved for
- *   the multiconductor surface; never a synonym for bus here.
+ *   the multiconductor API; never a synonym for bus here.
  * - branch: any two-terminal series element, lines and transformers alike
  *   (circuit theory; MATPOWER mpc.branch; the Branch Flow Model). "line" is
  *   the transformer-excluding subset and never names the umbrella table.
@@ -30,9 +30,9 @@
  *   read is detectable and a caller buffer can never silently overflow.
  * - Bus ids are int64 in the range 1..2^63-1 (a v4 invariant). pio_bus_ids and
  *   every per-bus column keyed to its ordering are int64; a source whose ids are
- *   strings or exceed 2^63-1 has no representation on this surface and is mapped
+ *   strings or exceed 2^63-1 has no representation in this API and is mapped
  *   to dense int64 at read (with a warning) or routed through the multiconductor
- *   surface. Never hand a raw oversized id to this surface.
+ *   API. Never hand a raw oversized id to this API.
  * - errbuf/errlen caller buffers (the libpcap/curl idiom: allocation-free
  *   across the boundary, no thread-local state). NULL or length 0 discards
  *   the message; a long message truncates on a UTF-8 character boundary and
@@ -77,13 +77,13 @@
  * and `--features pkg` for the pio_package_* entry points (guarded by
  * PIO_PKG): `.pio.json` compiler packages behind their own PioPackage handle,
  * freed with pio_package_free.
- * The distribution surface is EXPERIMENTAL while the IEEE BMOPF schema is a
+ * The distribution C API is EXPERIMENTAL while the IEEE BMOPF schema is a
  * draft: supported dist C usage starts at PIO_DIST_ABI_VERSION = 1, with
  * pio_dist_convert_*(input, from, to, ...). Dist C signature changes bump
  * PIO_DIST_ABI_VERSION, not PIO_ABI_VERSION. Its JSON payloads (bmopf-json,
  * powerio-dist-json) carry their own meta.version and may evolve; pin a
  * vintage from the payload meta.
- * Probe optional surfaces at runtime with
+ * Probe optional features at runtime with
  * pio_has_feature("arrow"|"matrix"|"gridfm"|"dist"|"pkg").
  *
  * Checked in and generated; regenerate from the Rust source with
@@ -106,13 +106,13 @@ struct ArrowSchema;
 /**
  * ABI version of this C interface. Bump on any breaking change to an existing
  * `pio_*` signature or documented behavior, including removing a supported
- * format token from the C surface. New additive symbols do not require a bump.
+ * format token from the C API. New additive symbols do not require a bump.
  * A consumer compares [`pio_abi_version`] against the value it was built
  * against (the `PIO_ABI_VERSION` macro in `powerio.h`) and refuses a mismatched
  * library instead of calling in blind.
  *
  * v4 froze the naming grammar and conventions (see the header preamble); the
- * surface evolves additively from here: new data means new symbols, and rich
+ * C API evolves additively from here: new data means new symbols, and rich
  * or multiconductor data rides Arrow tables, `.pio.json` packages, or
  * format-specific JSON payloads with their own schema/version rules.
  */
@@ -120,9 +120,9 @@ struct ArrowSchema;
 
 #if defined(PIO_DIST)
 /**
- * ABI version of the optional `pio_dist_*` C surface. This is separate from
+ * ABI version of the optional `pio_dist_*` C API. This is separate from
  * [`PIO_ABI_VERSION`] so distribution C entry points can evolve without forcing
- * a core ABI bump. Version 1 is the supported dist surface with conversion
+ * a core ABI bump. Version 1 is the supported dist API with conversion
  * order `(input, from, to, ...)`. Distribution JSON payload versions remain in
  * those payloads; this integer tracks the C entry points and their documented
  * behavior.
@@ -292,7 +292,7 @@ uint32_t pio_abi_version(void);
 
 #if defined(PIO_DIST)
 /**
- * The ABI version of the optional `pio_dist_*` surface. Only linked when the
+ * The ABI version of the optional `pio_dist_*` C API. Only linked when the
  * `dist` feature is compiled in; probe that first with `pio_has_feature("dist")`
  * if loading dynamically.
  */
@@ -312,7 +312,7 @@ char *pio_dist_capabilities_json(void);
 #endif
 
 /**
- * Whether the matrix Arrow table surface is usable in this build. Returns 1
+ * Whether the matrix Arrow table API is usable in this build. Returns 1
  * only when both `arrow` and `matrix` are compiled in, since the matrices ride
  * `pio_to_arrow`. Infallible.
  */
@@ -321,7 +321,7 @@ int32_t pio_matrix_available(void);
 /**
  * Whether an optional build feature is compiled in: pass `"arrow"`, `"matrix"`,
  * `"gridfm"`, `"dist"`, or `"pkg"`. Returns 1 if present, 0 otherwise (and 0
- * for a NULL or unknown name). The optional surfaces (`pio_to_arrow`, the
+ * for a NULL or unknown name). The optional entry points (`pio_to_arrow`, the
  * matrix Arrow tables, the `pio_read_dir`/gridfm path, the `pio_dist_*` block,
  * and the `pio_package_*` block) are only linked when their feature is built,
  * so a consumer that loaded the library at runtime probes for them here
@@ -601,7 +601,7 @@ char *pio_convert_str(const char *text,
                       size_t errlen);
 
 /**
- * Write `net` into the directory `out_dir` as the named directory-shaped
+ * Write `net` into the directory `out_dir` as the named directory style
  * format `to`: the directory sibling of [`pio_to_format`]. PyPSA CSV
  * (`pypsa-csv`/`pypsa`) is the one such format today; a text format name is
  * an error pointing back at [`pio_to_format`]. Returns `0` on success and

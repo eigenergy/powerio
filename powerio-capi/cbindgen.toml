@@ -16,7 +16,7 @@ header = """
  * pio_abi_version() against PIO_ABI_VERSION at load; the integer is the
  * compatibility check, the version string is informational.
  *
- * Naming grammar (fixed; the surface evolves additively from here):
+ * Naming grammar (fixed; the C API evolves additively from here):
  * - Verb-led names are operations and the verb fixes the return family:
  *   parse/read/normalize return a new handle, write has a filesystem effect,
  *   convert transcodes without keeping a handle, free destroys.
@@ -29,10 +29,10 @@ header = """
  *   "psse", "powerio-json", ...), so a new format never changes this ABI.
  *
  * Vocabulary (one meaning per word, transmission and distribution alike):
- * - bus: a named connection point, any number of phases. This surface is bus
+ * - bus: a named connection point, any number of phases. This API is bus
  *   granular (pio_n_buses, pio_bus_ids, pio_bus_demand, ...).
  * - node: one conductor's point at a bus (OpenDSS bus.1.2.3). Reserved for
- *   the multiconductor surface; never a synonym for bus here.
+ *   the multiconductor API; never a synonym for bus here.
  * - branch: any two-terminal series element, lines and transformers alike
  *   (circuit theory; MATPOWER mpc.branch; the Branch Flow Model). "line" is
  *   the transformer-excluding subset and never names the umbrella table.
@@ -43,9 +43,9 @@ header = """
  *   read is detectable and a caller buffer can never silently overflow.
  * - Bus ids are int64 in the range 1..2^63-1 (a v4 invariant). pio_bus_ids and
  *   every per-bus column keyed to its ordering are int64; a source whose ids are
- *   strings or exceed 2^63-1 has no representation on this surface and is mapped
+ *   strings or exceed 2^63-1 has no representation in this API and is mapped
  *   to dense int64 at read (with a warning) or routed through the multiconductor
- *   surface. Never hand a raw oversized id to this surface.
+ *   API. Never hand a raw oversized id to this API.
  * - errbuf/errlen caller buffers (the libpcap/curl idiom: allocation-free
  *   across the boundary, no thread-local state). NULL or length 0 discards
  *   the message; a long message truncates on a UTF-8 character boundary and
@@ -90,13 +90,13 @@ header = """
  * and `--features pkg` for the pio_package_* entry points (guarded by
  * PIO_PKG): `.pio.json` compiler packages behind their own PioPackage handle,
  * freed with pio_package_free.
- * The distribution surface is EXPERIMENTAL while the IEEE BMOPF schema is a
+ * The distribution C API is EXPERIMENTAL while the IEEE BMOPF schema is a
  * draft: supported dist C usage starts at PIO_DIST_ABI_VERSION = 1, with
  * pio_dist_convert_*(input, from, to, ...). Dist C signature changes bump
  * PIO_DIST_ABI_VERSION, not PIO_ABI_VERSION. Its JSON payloads (bmopf-json,
  * powerio-dist-json) carry their own meta.version and may evolve; pin a
  * vintage from the payload meta.
- * Probe optional surfaces at runtime with
+ * Probe optional features at runtime with
  * pio_has_feature("arrow"|"matrix"|"gridfm"|"dist"|"pkg").
  *
  * Checked in and generated; regenerate from the Rust source with
