@@ -1,5 +1,7 @@
-//! The weighted Laplacian `L = A diag(w) Aᵀ`, reference grounding, and the
-//! index bookkeeping for mapping a grounded solve back to full size.
+//! Weighted bus Laplacians `L = A diag(w) Aᵀ`, reference grounding, and the
+//! index bookkeeping for mapping a grounded solve back to full size. For DC
+//! power flow, `w` is the branch susceptance vector `b`, and `L` is the DC bus
+//! susceptance matrix.
 //!
 //! Built from the same `A`, `w` factors the incidence module produces, so
 //! `L` and its reference-grounded form share an exact factorization.
@@ -9,8 +11,9 @@ use sprs::CsMat;
 use crate::matrix::incidence::diagonal;
 use crate::matrix::triplet::CooBuilder;
 
-/// `L = A diag(w) Aᵀ` (n×n). With `w = b` this is the DC Laplacian; with
-/// `w = b²·θ_f⁻¹` it is the reweighted Laplacian `L₁` from the KKT system.
+/// `L = A diag(w) Aᵀ` (n×n). With `w = b` this is the DC bus susceptance matrix;
+/// with `w = b²·θ_f⁻¹` it is the reweighted bus Laplacian `L₁` from the KKT
+/// system.
 pub fn build_weighted_laplacian(a: &CsMat<f64>, w: &[f64]) -> CsMat<f64> {
     let d = diagonal(w);
     let at = a.transpose_view().to_csr();

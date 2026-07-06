@@ -83,5 +83,5 @@ versions, `pio_*` behavior) fails that job against PowerIO.jl main by
 construction. Push a PowerIO.jl branch with the **same name** as the powerio
 branch; the job tests against the companion branch when it exists. Open both
 PRs, merge in either order, and keep PowerIO.jl test assertions on the shared
-surface at contract strength (same major, shape present) rather than byte
+surface at schema strength (same major, shape present) rather than byte
 equality, so additive powerio changes do not fail the tandem job.

@@ -3,7 +3,7 @@
  * pio_abi_version() against PIO_ABI_VERSION at load; the integer is the
  * compatibility check, the version string is informational.
  *
- * Naming grammar (fixed; the surface evolves additively from here):
+ * Naming grammar (fixed; the C API evolves additively from here):
  * - Verb-led names are operations and the verb fixes the return family:
  *   parse/read/normalize return a new handle, write has a filesystem effect,
  *   convert transcodes without keeping a handle, free destroys.
@@ -16,10 +16,10 @@
  *   "psse", "powerio-json", ...), so a new format never changes this ABI.
  *
  * Vocabulary (one meaning per word, transmission and distribution alike):
- * - bus: a named connection point, any number of phases. This surface is bus
+ * - bus: a named connection point, any number of phases. This API is bus
  *   granular (pio_n_buses, pio_bus_ids, pio_bus_demand, ...).
  * - node: one conductor's point at a bus (OpenDSS bus.1.2.3). Reserved for
- *   the multiconductor surface; never a synonym for bus here.
+ *   the multiconductor API; never a synonym for bus here.
  * - branch: any two-terminal series element, lines and transformers alike
  *   (circuit theory; MATPOWER mpc.branch; the Branch Flow Model). "line" is
  *   the transformer-excluding subset and never names the umbrella table.
@@ -30,9 +30,9 @@
  *   read is detectable and a caller buffer can never silently overflow.
  * - Bus ids are int64 in the range 1..2^63-1 (a v4 invariant). pio_bus_ids and
  *   every per-bus column keyed to its ordering are int64; a source whose ids are
- *   strings or exceed 2^63-1 has no representation on this surface and is mapped
+ *   strings or exceed 2^63-1 has no representation in this API and is mapped
  *   to dense int64 at read (with a warning) or routed through the multiconductor
- *   surface. Never hand a raw oversized id to this surface.
+ *   API. Never hand a raw oversized id to this API.
  * - errbuf/errlen caller buffers (the libpcap/curl idiom: allocation-free
  *   across the boundary, no thread-local state). NULL or length 0 discards
  *   the message; a long message truncates on a UTF-8 character boundary and
@@ -56,17 +56,16 @@
  *   the ABI (requires the default panic = "unwind"; a panic = "abort" build
  *   aborts the process instead).
  *
- * Evolution policy: existing signatures are frozen. New data means new
- * symbols; rich or multiconductor data rides the Arrow C Data Interface
- * (pio_to_arrow) and the powerio-json snapshot, whose schemas carry their own
- * structure and grow without touching a C signature. The dense extractors are
- * the frozen balanced positive-sequence projection, complete as-is. The Arrow
- * tables and the powerio-json schema are append-only: the existing
- * PIO_ARROW_TABLE_* ids and each table's column order are frozen, a new table
- * takes the next id and new columns append (nullable) at the end, and a
- * consumer addresses columns by name, never by position. The powerio-json
- * snapshot adds only optional or defaulted fields; existing field names, types,
- * and wire forms stay fixed. This is what PIO_ABI_VERSION freezes.
+ * Evolution policy: existing signatures and documented behavior are frozen.
+ * New data means new symbols; rich or multiconductor data rides the Arrow C
+ * Data Interface (pio_to_arrow), `.pio.json` packages, or format-specific JSON
+ * payloads with their own schema/version rules. The dense extractors are the
+ * frozen balanced positive-sequence projection, complete as-is. The Arrow
+ * tables are append-only: existing PIO_ARROW_TABLE_* ids and each table's
+ * column order are frozen, a new table takes the next id and new columns append
+ * at the end, and a consumer addresses columns by name, never by position.
+ * Removing a supported format token or changing its documented C behavior
+ * requires a PIO_ABI_VERSION bump.
  *
  * Optional: build with `--features arrow` for pio_to_arrow (guarded by
  * PIO_ARROW), add `--features matrix` for the balanced matrix Arrow tables,
@@ -78,13 +77,13 @@
  * and `--features pkg` for the pio_package_* entry points (guarded by
  * PIO_PKG): `.pio.json` compiler packages behind their own PioPackage handle,
  * freed with pio_package_free.
- * The distribution surface is EXPERIMENTAL while the IEEE BMOPF schema is a
+ * The distribution C API is EXPERIMENTAL while the IEEE BMOPF schema is a
  * draft: supported dist C usage starts at PIO_DIST_ABI_VERSION = 1, with
  * pio_dist_convert_*(input, from, to, ...). Dist C signature changes bump
  * PIO_DIST_ABI_VERSION, not PIO_ABI_VERSION. Its JSON payloads (bmopf-json,
  * powerio-dist-json) carry their own meta.version and may evolve; pin a
  * vintage from the payload meta.
- * Probe optional surfaces at runtime with
+ * Probe optional features at runtime with
  * pio_has_feature("arrow"|"matrix"|"gridfm"|"dist"|"pkg").
  *
  * Checked in and generated; regenerate from the Rust source with
@@ -106,24 +105,27 @@ struct ArrowSchema;
 
 /**
  * ABI version of this C interface. Bump on any breaking change to an existing
- * `pio_*` signature or to the `powerio-json` snapshot schema (new additive
- * symbols don't require a bump). A consumer compares [`pio_abi_version`]
- * against the value it was built against (the `PIO_ABI_VERSION` macro in
- * `powerio.h`) and refuses a mismatched library instead of calling in blind.
+ * `pio_*` signature or documented behavior, including removing a supported
+ * format token from the C API. New additive symbols do not require a bump.
+ * A consumer compares [`pio_abi_version`] against the value it was built
+ * against (the `PIO_ABI_VERSION` macro in `powerio.h`) and refuses a mismatched
+ * library instead of calling in blind.
  *
  * v4 froze the naming grammar and conventions (see the header preamble); the
- * surface evolves additively from here: new data means new symbols, and rich
- * or multiconductor data rides the Arrow and `powerio-json` schemas, which
- * carry their own structure and never force a signature change.
+ * C API evolves additively from here: new data means new symbols, and rich
+ * or multiconductor data rides Arrow tables, `.pio.json` packages, or
+ * format-specific JSON payloads with their own schema/version rules.
  */
 #define PIO_ABI_VERSION 4
 
 #if defined(PIO_DIST)
 /**
- * ABI version of the optional `pio_dist_*` C surface. This is separate from
+ * ABI version of the optional `pio_dist_*` C API. This is separate from
  * [`PIO_ABI_VERSION`] so distribution C entry points can evolve without forcing
- * a core ABI bump. Version 1 is the supported dist surface with conversion
- * order `(input, from, to, ...)`.
+ * a core ABI bump. Version 1 is the supported dist API with conversion
+ * order `(input, from, to, ...)`. Distribution JSON payload versions remain in
+ * those payloads; this integer tracks the C entry points and their documented
+ * behavior.
  */
 #define PIO_DIST_ABI_VERSION 1
 #endif
@@ -138,80 +140,117 @@ struct ArrowSchema;
 /**
  * Table selectors for [`pio_to_arrow`](crate::pio_to_arrow); the C
  * header mirrors these as `PIO_ARROW_TABLE_*`.
+ *
+ * Raw tables use source units and external bus ids. Solver tables use
+ * normalized per unit/radian values and dense zero based row ids. Matrix tables
+ * use COO triplets plus schema metadata, and their row and column axes are
+ * described by the `matrix_bus` and `matrix_branch` axis map tables.
+ *
+ * Consumers should prefer `pio_arrow_catalog_json` when available instead of
+ * hard coding ids. These macros remain for C callers that compile against this
+ * header.
  */
 #define PIO_ARROW_TABLE_BUS 0
 #endif
 
 #if defined(PIO_ARROW)
+/** Raw branch table in source units; bus columns use external bus ids. */
 #define PIO_ARROW_TABLE_BRANCH 1
 #endif
 
 #if defined(PIO_ARROW)
+/** Raw generator table in source units; bus columns use external bus ids. */
 #define PIO_ARROW_TABLE_GEN 2
 #endif
 
 #if defined(PIO_ARROW)
+/** Raw load table in source units; bus columns use external bus ids. */
 #define PIO_ARROW_TABLE_LOAD 3
 #endif
 
 #if defined(PIO_ARROW)
+/** Raw shunt table in source units; bus columns use external bus ids. */
 #define PIO_ARROW_TABLE_SHUNT 4
 #endif
 
 #if defined(PIO_ARROW)
+/** Raw switch table in source units; bus columns use external bus ids. */
 #define PIO_ARROW_TABLE_SWITCH 5
 #endif
 
 #if defined(PIO_ARROW)
+/** Normalized dense bus table; `index` is the solver bus index. */
 #define PIO_ARROW_TABLE_SOLVER_BUS 6
 #endif
 
 #if defined(PIO_ARROW)
+/** Normalized dense load table keyed by solver load index and solver bus index. */
 #define PIO_ARROW_TABLE_SOLVER_LOAD 7
 #endif
 
 #if defined(PIO_ARROW)
+/** Normalized dense shunt table keyed by solver shunt index and solver bus index. */
 #define PIO_ARROW_TABLE_SOLVER_SHUNT 8
 #endif
 
 #if defined(PIO_ARROW)
+/** Normalized dense branch table keyed by solver branch index and bus endpoints. */
 #define PIO_ARROW_TABLE_SOLVER_BRANCH 9
 #endif
 
 #if defined(PIO_ARROW)
+/** Normalized dense switch table keyed by solver switch index and bus endpoints. */
 #define PIO_ARROW_TABLE_SOLVER_SWITCH 10
 #endif
 
 #if defined(PIO_ARROW)
+/** Normalized arc table, one row per branch terminal. */
 #define PIO_ARROW_TABLE_SOLVER_ARC 11
 #endif
 
 #if defined(PIO_ARROW)
+/** Normalized dense generator table keyed by solver generator index and bus index. */
 #define PIO_ARROW_TABLE_SOLVER_GEN 12
 #endif
 
 #if defined(PIO_ARROW)
+/** Normalized dense storage table keyed by solver storage index and bus index. */
 #define PIO_ARROW_TABLE_SOLVER_STORAGE 13
 #endif
 
 #if defined(PIO_ARROW)
+/** Normalized dense HVDC table keyed by solver HVDC index and bus endpoints. */
 #define PIO_ARROW_TABLE_SOLVER_HVDC 14
 #endif
 
 #if defined(PIO_ARROW)
+/** Y bus COO table. Rows and columns use the `matrix_bus` axis. */
 #define PIO_ARROW_TABLE_YBUS 15
 #endif
 
 #if defined(PIO_ARROW)
+/** Signed incidence COO table. Rows use `matrix_bus`; columns use `matrix_branch`. */
 #define PIO_ARROW_TABLE_INCIDENCE 16
 #endif
 
 #if defined(PIO_ARROW)
+/** MATPOWER Bp COO table. Rows and columns use `matrix_bus`. */
 #define PIO_ARROW_TABLE_BPRIME 17
 #endif
 
 #if defined(PIO_ARROW)
+/** MATPOWER Bpp COO table. Rows and columns use the `matrix_bus` axis. */
 #define PIO_ARROW_TABLE_BDOUBLEPRIME 18
+#endif
+
+#if defined(PIO_ARROW)
+/** Matrix bus axis map: dense index, source bus id, source row, reference flag, component. */
+#define PIO_ARROW_TABLE_MATRIX_BUS 19
+#endif
+
+#if defined(PIO_ARROW)
+/** Matrix branch axis map: incidence column, source row, and endpoint bus ids. */
+#define PIO_ARROW_TABLE_MATRIX_BRANCH 20
 #endif
 
 #if defined(PIO_DIST)
@@ -253,7 +292,7 @@ uint32_t pio_abi_version(void);
 
 #if defined(PIO_DIST)
 /**
- * The ABI version of the optional `pio_dist_*` surface. Only linked when the
+ * The ABI version of the optional `pio_dist_*` C API. Only linked when the
  * `dist` feature is compiled in; probe that first with `pio_has_feature("dist")`
  * if loading dynamically.
  */
@@ -273,7 +312,7 @@ char *pio_dist_capabilities_json(void);
 #endif
 
 /**
- * Whether the matrix Arrow table surface is usable in this build. Returns 1
+ * Whether the matrix Arrow table API is usable in this build. Returns 1
  * only when both `arrow` and `matrix` are compiled in, since the matrices ride
  * `pio_to_arrow`. Infallible.
  */
@@ -282,7 +321,7 @@ int32_t pio_matrix_available(void);
 /**
  * Whether an optional build feature is compiled in: pass `"arrow"`, `"matrix"`,
  * `"gridfm"`, `"dist"`, or `"pkg"`. Returns 1 if present, 0 otherwise (and 0
- * for a NULL or unknown name). The optional surfaces (`pio_to_arrow`, the
+ * for a NULL or unknown name). The optional entry points (`pio_to_arrow`, the
  * matrix Arrow tables, the `pio_read_dir`/gridfm path, the `pio_dist_*` block,
  * and the `pio_package_*` block) are only linked when their feature is built,
  * so a consumer that loaded the library at runtime probes for them here
@@ -461,6 +500,26 @@ size_t pio_n_gens(const PioNetwork *net);
 double pio_base_mva(const PioNetwork *net);
 
 /**
+ * Case name. Writes UTF-8 bytes into `out`, up to `cap`, NUL-terminates when
+ * possible, and returns the byte length needed excluding the NUL. NULL or
+ * `cap == 0` is a size query.
+ */
+size_t pio_network_name(const PioNetwork *net, char *out, size_t cap);
+
+/**
+ * Source format enum spelling used by the JSON snapshot, for example
+ * `Matpower`, `PowerModelsJson`, or `Normalized`. Uses the same cap/count
+ * string convention as [`pio_network_name`].
+ */
+size_t pio_source_format(const PioNetwork *net, char *out, size_t cap);
+
+/**
+ * Serialize a compact balanced network summary as JSON. This is for display
+ * and cheap scalar queries without forcing [`pio_to_json`]'s full payload.
+ */
+char *pio_summary_json(const PioNetwork *net, char *errbuf, size_t errlen);
+
+/**
  * Dense `[0, n)` index of the single reference (slack) bus, or `-1` if not
  * exactly one. An INDEX into the [`pio_bus_ids`] ordering, not a bus id;
  * `pio_branches` from/to carry ids, so the unit is in the name. A network may
@@ -542,7 +601,7 @@ char *pio_convert_str(const char *text,
                       size_t errlen);
 
 /**
- * Write `net` into the directory `out_dir` as the named directory-shaped
+ * Write `net` into the directory `out_dir` as the named directory style
  * format `to`: the directory sibling of [`pio_to_format`]. PyPSA CSV
  * (`pypsa-csv`/`pypsa`) is the one such format today; a text format name is
  * an error pointing back at [`pio_to_format`]. Returns `0` on success and
@@ -558,8 +617,7 @@ int32_t pio_write_dir(const PioNetwork *net,
                       size_t errlen);
 
 /**
- * Free a string returned by [`pio_to_format`], [`pio_convert_file`], or
- * [`pio_convert_str`].
+ * Free any owned C string returned by this API.
  */
 void pio_string_free(char *s);
 
@@ -650,11 +708,11 @@ size_t pio_bus_shunt(const PioNetwork *net, double *gs, double *bs, size_t cap);
 /**
  * Export one network table over the Arrow C Data Interface: the `to_`
  * conversion whose output type is Arrow structs rather than a string, and the
- * bulk plane this ABI evolves on. Tables 0..5 are raw network tables; tables
- * 6..14 are normalized solver tables with per unit/radian values and dense
- * zero based row ids; the matrix tables carry COO triplets in that dense index
- * space with dimensions in schema metadata. New or richer columns arrive in
- * the Arrow schema, leaving the C signatures fixed.
+ * bulk table path. Tables 0..5 are raw network tables; tables 6..14 are
+ * normalized solver tables with per unit/radian values and dense zero based row
+ * ids; the matrix tables carry COO triplets, dimensions, and axis metadata.
+ * New or richer columns arrive in the Arrow schema, leaving the C signatures
+ * fixed.
  *
  * `table` is one of the `PIO_ARROW_TABLE_*` selectors. Raw table columns use
  * EXTERNAL bus ids (the `pio_bus_ids` id space), not the gridfm schema. On
@@ -672,6 +730,24 @@ int32_t pio_to_arrow(const PioNetwork *net,
                      struct ArrowSchema *out_schema,
                      char *errbuf,
                      size_t errlen);
+#endif
+
+#if defined(PIO_ARROW)
+/**
+ * Return the Arrow table catalog as owned compact JSON. The catalog is feature
+ * based rather than handle based: it describes what this library build can
+ * export, not what a particular network contains.
+ *
+ * Top level fields: `schema_version`, `producer`, and `tables`.
+ * Each table entry includes `id`, `name`, `schema_version`, `format`,
+ * `feature_requirements`, `available`, `row_axis`, `col_axis`, `units`, and
+ * `columns`. Each column entry includes `name`, `type`, and `nullable`.
+ *
+ * The returned string is allocated by PowerIO. Free it with `pio_string_free`.
+ * On error, this returns NULL and writes the message into `errbuf`. Only built
+ * with the `arrow` cargo feature.
+ */
+char *pio_arrow_catalog_json(char *errbuf, size_t errlen);
 #endif
 
 #if defined(PIO_PKG)
@@ -904,6 +980,15 @@ void pio_dist_network_free(PioDistNetwork *net);
  * idiom as [`pio_warnings`]. Returns 0 for a NULL handle.
  */
 size_t pio_dist_warnings(const PioDistNetwork *net, char *warnbuf, size_t warnlen);
+#endif
+
+#if defined(PIO_DIST)
+/**
+ * Serialize a compact summary of a distribution handle as JSON. This lets
+ * bindings answer display and scalar queries without forcing
+ * [`pio_dist_to_json`]'s full model payload.
+ */
+char *pio_dist_summary_json(const PioDistNetwork *net, char *errbuf, size_t errlen);
 #endif
 
 #if defined(PIO_DIST)

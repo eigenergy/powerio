@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Regenerate the benchmark speed tables in benchmarks/RESULTS.md
-from the JSON the bench scripts emit, so the numbers stop being copy-pasted by hand.
+from the JSON the bench scripts emit, so the numbers stop being copied by hand.
 
 Reads benchmarks/results/{speed_julia,speed_python,speed_powerworld,speed_matrix}.json
 (written by `bench_julia.jl --json`, `bench_parse.py --json`, and the
@@ -9,8 +9,8 @@ fenced by `<!-- BENCH:<id> START -->` / `<!-- BENCH:<id> END -->`.
 Prose outside the markers is never touched.
 
 Scope: the speed tables only. The correctness matrix and the version block in
-RESULTS.md stay hand-written — correctness is a boolean gated in CI (run_validation.sh),
-not a table that drifts every run.
+RESULTS.md stay written by hand; correctness is a boolean gated in CI
+(run_validation.sh), separate from per run timing noise.
 
     python benchmarks/render_tables.py            # rewrite the tables in place
     python benchmarks/render_tables.py --check    # exit 1 if a table is out of date
@@ -28,12 +28,20 @@ from pathlib import Path
 REPO = Path(__file__).resolve().parent.parent
 RESULTS_DIR = REPO / "benchmarks" / "results"
 
+METADATA_HEADER = (
+    "| suite | performed at (UTC) | commit | command |\n"
+    "| --- | --- | --- | --- |"
+)
 SPEED_HEADER = (
-    "| case | buses / branches | powerio | ExaPowerIO.jl | PowerModels.jl |\n"
-    "| --- | --- | --- | --- | --- |"
+    "| case | buses / branches | PowerIO.jl parse_file | ExaPowerIO.jl parse | PowerModels.jl parse | Rust C ABI handle | net.data |\n"
+    "| --- | --- | --- | --- | --- | --- | --- |"
+)
+SPEED_YBUS_HEADER = (
+    "| case | buses / branches | PowerIO.jl Ybus | ExaPowerIO.jl Ybus | Rust C ABI Arrow | PowerModels.jl Ybus |\n"
+    "| --- | --- | --- | --- | --- | --- |"
 )
 PANDA_HEADER = (
-    "| case | powerio parse | powerio parse + Y_bus + B' | matpowercaseframes (pandapower's `.m` reader) |\n"
+    "| case | powerio parse | powerio parse + Y_bus + Bp | matpowercaseframes (pandapower's `.m` reader) |\n"
     "| --- | --- | --- | --- |"
 )
 POWERWORLD_HEADER = (
@@ -41,7 +49,7 @@ POWERWORLD_HEADER = (
     "| --- | --- | --- | --- |"
 )
 MATRIX_HEADER = (
-    "| operation | case | buses / branches | mean |\n"
+    "| operation | case | buses / branches | median +/- std |\n"
     "| --- | --- | --- | --- |"
 )
 
@@ -60,13 +68,13 @@ POWERWORLD_CASES = [
     "Texas7k (local TAMU copy)",
 ]
 MATRIX_ROWS = [
-    ("B' sparse", "case118"),
-    ("B'' sparse", "case118"),
+    ("Bp sparse", "case118"),
+    ("Bpp sparse", "case118"),
     ("Y_bus sparse", "case118"),
     ("LACPF block", "case118"),
     ("adjacency", "case118"),
-    ("B' sparse", "case2869pegase"),
-    ("B'' sparse", "case2869pegase"),
+    ("Bp sparse", "case2869pegase"),
+    ("Bpp sparse", "case2869pegase"),
     ("Y_bus sparse", "case2869pegase"),
     ("LACPF block", "case2869pegase"),
     ("adjacency", "case2869pegase"),
@@ -80,8 +88,47 @@ MATRIX_ROWS = [
 ]
 
 
-def ms(value):
-    return "n/a" if value is None else f"{value} ms"
+def escape_cell(value):
+    return str(value).replace("|", "\\|").replace("\n", " ") if value is not None else "n/a"
+
+
+def ms(value, std=None):
+    if value is None:
+        return "n/a"
+    if std is None:
+        return f"{fmt_number(value)} ms"
+    return f"{fmt_number(value)} +/- {fmt_number(std)} ms"
+
+
+def fmt_number(value):
+    if isinstance(value, float):
+        return f"{value:.5f}".rstrip("0").rstrip(".")
+    return str(value)
+
+
+def timing(row, key):
+    if key == "ms":
+        std_key = "std_ms"
+    elif key.endswith("_ms"):
+        std_key = f"{key[:-3]}_std_ms"
+    else:
+        std_key = f"{key}_std_ms"
+    return ms(row.get(key), row.get(std_key))
+
+
+def benchmark_metadata_rows(datasets):
+    lines = []
+    for suite, data in datasets:
+        if data is None:
+            continue
+        metadata = data.get("metadata", {})
+        commit = metadata.get("git_commit")
+        commit = commit[:12] if commit else None
+        lines.append(
+            f"| {escape_cell(suite)} | {escape_cell(metadata.get('benchmark_time_utc'))} | "
+            f"{escape_cell(commit)} | `{escape_cell(metadata.get('command'))}` |"
+        )
+    return "\n".join(lines), []
 
 
 def _select(rows, cases):
@@ -97,7 +144,21 @@ def julia_rows(rows, cases):
         return None, missing
     lines = [
         f"| {r['case']} | {r['buses']} / {r['branches']} | "
-        f"{ms(r['powerio_ms'])} | {ms(r['exapowerio_ms'])} | {ms(r['powermodels_ms'])} |"
+        f"{timing(r, 'powerio_jl_ms')} | {timing(r, 'exapowerio_ms')} | "
+        f"{timing(r, 'powermodels_ms')} | {timing(r, 'rust_c_abi_ms')} | {timing(r, 'powerio_data_ms')} |"
+        for r in selected
+    ]
+    return "\n".join(lines), []
+
+
+def julia_ybus_rows(rows, cases):
+    selected, missing = _select(rows, cases)
+    if selected is None:
+        return None, missing
+    lines = [
+        f"| {r['case']} | {r['buses']} / {r['branches']} | "
+        f"{timing(r, 'powerio_jl_ybus_ms')} | {timing(r, 'exapowerio_ybus_ms')} | "
+        f"{timing(r, 'rust_c_abi_ybus_arrow_ms')} | {timing(r, 'powermodels_ybus_ms')} |"
         for r in selected
     ]
     return "\n".join(lines), []
@@ -108,8 +169,8 @@ def panda_rows(rows, cases):
     if selected is None:
         return None, missing
     lines = [
-        f"| {r['case']} | {ms(r['powerio_parse_ms'])} | "
-        f"{ms(r['powerio_matrix_ms'])} | {ms(r['matpowercaseframes_ms'])} |"
+        f"| {r['case']} | {timing(r, 'powerio_parse_ms')} | "
+        f"{timing(r, 'powerio_matrix_ms')} | {timing(r, 'matpowercaseframes_ms')} |"
         for r in selected
     ]
     return "\n".join(lines), []
@@ -121,7 +182,7 @@ def powerworld_rows(rows, cases):
         return None, missing
     lines = [
         f"| {r['case']} | {r['buses']} / {r['branches']} | "
-        f"{ms(r['aux_ms'])} | {ms(r['pwb_ms'])} |"
+        f"{timing(r, 'aux_ms')} | {timing(r, 'pwb_ms')} |"
         for r in selected
     ]
     return "\n".join(lines), []
@@ -136,7 +197,7 @@ def matrix_rows(rows, expected):
     for op, case in expected:
         r = by_key[(op, case)]
         lines.append(
-            f"| {r['operation']} | {r['case']} | {r['buses']} / {r['branches']} | {ms(r['ms'])} |"
+            f"| {r['operation']} | {r['case']} | {r['buses']} / {r['branches']} | {timing(r, 'ms')} |"
         )
     return "\n".join(lines), []
 
@@ -167,9 +228,22 @@ def main():
 
     # (region id, target file, table body or None, list of missing cases)
     plan = []
+    metadata_body, metadata_missing = benchmark_metadata_rows(
+        [
+            ("PowerIO.jl parse and Ybus", speed_julia),
+            ("Python parse", speed_python),
+            ("PowerWorld readers", speed_powerworld),
+            ("matrix builders", speed_matrix),
+        ]
+    )
+    if metadata_body:
+        plan.append(("metadata", "benchmarks/RESULTS.md", METADATA_HEADER, metadata_body, metadata_missing))
     if speed_julia is not None:
         body, missing = julia_rows(speed_julia["rows"], SPEED_JULIA_CASES)
         plan.append(("speed-julia", "benchmarks/RESULTS.md", SPEED_HEADER, body, missing))
+        if "matrix_rows" in speed_julia:
+            body, missing = julia_ybus_rows(speed_julia["matrix_rows"], SPEED_JULIA_CASES)
+            plan.append(("speed-julia-ybus", "benchmarks/RESULTS.md", SPEED_YBUS_HEADER, body, missing))
     if speed_python is not None:
         body, missing = panda_rows(speed_python["rows"], PANDA_CASES)
         plan.append(("speed-pandapower", "benchmarks/RESULTS.md", PANDA_HEADER, body, missing))

@@ -27,7 +27,7 @@ jobs:
       # `cargo clippy` at the root skips powerio-py (it's not in default-members),
       # so lint the extension explicitly with the same native features as wheels.
       - name: Clippy (powerio-py)
-        run: cargo clippy -p powerio-py --no-deps --features extension-module,gridfm -- -D warnings
+        run: bash scripts/ci-clippy.sh powerio-py
 
   test:
     runs-on: ubuntu-latest

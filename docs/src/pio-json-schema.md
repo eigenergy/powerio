@@ -38,9 +38,11 @@ metadata or source maps, and is deprecated for CLI file handoffs. New
 PowerIO file handoffs should use `.pio.json`; external tool workflows should
 use the case format that external tool reads.
 
-A future v0.7.0 release may demote `powerio-json` from the public case format
-surface while keeping `Network::to_json` / `Network::from_json` and binding
-JSON paths available for internal and programmatic use.
+A future v0.7.0 release may demote `powerio-json` from the public file handoff
+surface while keeping `Network::to_json` / `Network::from_json`, the C format
+token, and binding JSON paths available for internal and programmatic use.
+Removing the C format token or changing its documented behavior is a C
+compatibility change, separate from `.pio.json` schema evolution.
 
 ## Two stability tiers
 

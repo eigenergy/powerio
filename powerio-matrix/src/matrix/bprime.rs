@@ -1,74 +1,38 @@
-//! Fast Decoupled Power Flow (FDPF) B' matrix — shuntless.
+//! MATPOWER-compatible FDPF `Bp` matrix.
 //!
-//! Per Stott & Alsac (1974), B' is the susceptance Laplacian with all
-//! shunts removed and tap ratios / phase shifts ignored:
+//! In fast decoupled power flow, `Bp` is the fixed approximation to the active
+//! power versus voltage angle Jacobian block used for the P step.
 //!
-//! - Off-diagonal `B'_ij = -x / (r² + x²)`  (BX scheme; default)
-//!   or `B'_ij = -1 / x`              (XB scheme)
-//! - Diagonal     `B'_ii = sum_j |B'_ij|`
+//! Per MATPOWER `makeB.m`, `Bp` is built as `-Im(Y_bus)` after modifying the
+//! network data used for that one matrix:
 //!
-//! Result: positive diag, negative off-diag, diag = sum of |off-diag| — the
-//! positive (M-matrix) Laplacian convention SDDM solvers expect.
+//! - bus shunts are cleared
+//! - line charging is cleared
+//! - tap magnitudes are set to one
+//! - line resistance is cleared in the XB scheme
+//! - phase shifts remain
+//!
+//! With zero phase shifts this has the usual weighted bus Laplacian sign
+//! pattern: stored nonzero off diagonal entries are negative and diagonals are
+//! nonnegative. Phase shifters change the off diagonal terms, matching MATPOWER.
 
 use sprs::CsMat;
 
+use crate::Result;
 use crate::indexed::IndexedNetwork;
-use crate::{Error, Result};
 
-use super::{BuildOptions, Scheme, triplet::CooBuilder};
+use super::ybus::{YbusFlags, build_ybus_with_flags};
+use super::{BuildOptions, Scheme, negate_into};
 
 pub fn build_bprime(case: &IndexedNetwork, opts: &BuildOptions) -> Result<CsMat<f64>> {
-    let n = case.n();
-    let mut coo = CooBuilder::with_capacity(n, 4 * case.branches().len() + n);
-
-    for (row_idx, br) in case.in_service_branches() {
-        let i = case.bus_index(br.from).ok_or(Error::UnknownBus {
-            bus_id: br.from,
-            element_index: row_idx,
-        })?;
-        let j = case.bus_index(br.to).ok_or(Error::UnknownBus {
-            bus_id: br.to,
-            element_index: row_idx,
-        })?;
-
-        let b_off = match opts.scheme {
-            Scheme::Bx => {
-                let denom = br.r * br.r + br.x * br.x;
-                if denom == 0.0 {
-                    if opts.skip_zero_impedance {
-                        continue;
-                    }
-                    return Err(Error::ZeroImpedance { row: row_idx });
-                }
-                -br.x / denom
-            }
-            Scheme::Xb => {
-                if br.x == 0.0 {
-                    if opts.skip_zero_impedance {
-                        continue;
-                    }
-                    return Err(Error::ZeroImpedance { row: row_idx });
-                }
-                -1.0 / br.x
-            }
-        };
-
-        // A NaN/Inf reactance (the MATPOWER tokenizer accepts `NaN`/`Inf`) slips
-        // past the `== 0.0` checks above and would write a non-finite entry that
-        // silently poisons MatrixStats / sddm_check. Reject it loudly instead.
-        if !b_off.is_finite() {
-            return Err(Error::NonFiniteSusceptance { row: row_idx });
-        }
-
-        if i == j {
-            // self-loop: contributes only as a shunt, has no place in B'
-            continue;
-        }
-
-        coo.add_sym(i, j, b_off);
-        coo.add(i, i, -b_off);
-        coo.add(j, j, -b_off);
-    }
-
-    Ok(coo.finish_csr())
+    let flags = YbusFlags {
+        zero_resistance: matches!(opts.scheme, Scheme::Xb),
+        zero_charging: true,
+        unity_taps: true,
+        zero_shifts: false,
+        skip_bus_shunts: true,
+        skip_zero_impedance: opts.skip_zero_impedance,
+    };
+    let parts = build_ybus_with_flags(case, flags)?;
+    Ok(negate_into(parts.b))
 }

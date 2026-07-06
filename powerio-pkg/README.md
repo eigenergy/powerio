@@ -51,7 +51,7 @@ let back = NetworkPackage::from_json(&json).unwrap();
 assert_eq!(back.model_kind(), ModelKind::Balanced);
 ```
 
-Balanced documents can record the dense normalized solver table contract without
+Balanced documents can record the dense normalized solver table layout without
 embedding every table row:
 
 ```rust

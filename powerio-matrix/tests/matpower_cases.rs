@@ -49,17 +49,37 @@ fn bprime_is_singular_laplacian_on_real_cases() {
         let view = IndexedNetwork::new(&net);
         let b = build_bprime(&view, &BuildOptions::default()).unwrap();
         let stats = MatrixStats::from_csr(&b);
-        assert!(stats.m_matrix_sign, "{name}: B' must have M-matrix signs");
+        assert!(stats.m_matrix_sign, "{name}: Bp must have M-matrix signs");
         // Singular Laplacian: diag exactly equals row-sum of |off-diag|.
         assert!(
             stats.min_dd_margin.abs() < 1e-9,
-            "{name}: B' should be exactly Laplacian, got margin {}",
+            "{name}: Bp should have zero diagonal dominance margin for these cases, got {}",
             stats.min_dd_margin
         );
         assert!(stats.min_diag > 0.0);
         assert_eq!(b.rows(), net.buses.len());
         assert_eq!(b.cols(), net.buses.len());
     }
+}
+
+#[test]
+fn case2869pegase_bprime_is_asymmetric_and_not_sddm() {
+    let net = parse_matpower_file(fixture("case2869pegase.m")).unwrap();
+    let view = IndexedNetwork::new(&net);
+    let b = build_bprime(&view, &BuildOptions::default()).unwrap();
+    let stats = MatrixStats::from_csr(&b);
+
+    assert_eq!(b.rows(), net.buses.len());
+    assert_eq!(b.cols(), net.buses.len());
+    assert!(stats.m_matrix_sign, "pegase Bp should keep M-matrix signs");
+    assert!(
+        !is_symmetric(&b),
+        "phase shifters make pegase Bp asymmetric"
+    );
+    assert!(
+        !sddm_check(&b),
+        "asymmetric pegase Bp must not be labeled SDDM"
+    );
 }
 
 #[test]
@@ -71,7 +91,7 @@ fn bdoubleprime_includes_shunts_on_case30() {
     // case30 has explicit bus shunts → strict diagonal dominance.
     assert!(
         stats.min_dd_margin > 1e-9 || stats.m_matrix_sign,
-        "B'' on case30 should be at least M-matrix-signed"
+        "Bpp on case30 should be at least M-matrix-signed"
     );
 }
 
@@ -163,7 +183,7 @@ fn pipeline_writes_expected_files_for_case9() {
     assert!(names.iter().any(|n| n == "case9_meta.json"));
     assert!(names.iter().any(|n| n.contains("rhs.mtx")));
 
-    // Sanity check: re-read B' from disk and verify it's still SDDM-signed.
+    // Sanity check: re-read Bp from disk and verify its sign pattern.
     let bprime_path = tmp.join("case9_bprime.mtx");
     let reread = powerio_matrix::io::read_mtx(&bprime_path).unwrap();
     assert!(sddm_check(&reread) || MatrixStats::from_csr(&reread).m_matrix_sign);
@@ -189,6 +209,22 @@ fn tempdir() -> PathBuf {
     ));
     std::fs::create_dir_all(&p).unwrap();
     p
+}
+
+fn is_symmetric(matrix: &sprs::CsMat<f64>) -> bool {
+    if matrix.rows() != matrix.cols() {
+        return false;
+    }
+    for (outer, row) in matrix.outer_iterator().enumerate() {
+        for (inner, &value) in row.iter() {
+            let transpose = matrix.get(inner, outer).copied().unwrap_or(0.0);
+            let scale = value.abs().max(transpose.abs()).max(1.0);
+            if (value - transpose).abs() > 1e-12 * scale {
+                return false;
+            }
+        }
+    }
+    true
 }
 
 fn assert_csr_eq(left: &sprs::CsMat<f64>, right: &sprs::CsMat<f64>) {

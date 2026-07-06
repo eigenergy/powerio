@@ -6,7 +6,7 @@ Four rows, from leanest to fullest:
 - ``powerio: parse`` — the zero-dependency parser (no numpy/scipy). This is the
   apples-to-apples number against matpowercaseframes: parse a MATPOWER file into
   the tool's in-memory model, nothing more.
-- ``powerio[matrix]: parse + Y_bus + B'`` — powerio's parse plus building the two
+- ``powerio[matrix]: parse + Y_bus + Bp`` — powerio's parse plus building the two
   matrices scipy callers usually want, against issue #5's 100 ms target for
   case2869pegase.
 - ``matpowercaseframes: parse`` — pandapower's ``.m`` reader (pandas DataFrames).
@@ -22,10 +22,12 @@ Run it with the venv that has the extension and benchmark baselines installed:
 
 import json
 import logging
+import subprocess
 import statistics
 import sys
 import time
 import warnings
+from datetime import datetime, timezone
 from pathlib import Path
 
 import powerio
@@ -36,8 +38,8 @@ warnings.filterwarnings("ignore", category=FutureWarning)
 warnings.filterwarnings("ignore", category=UserWarning)
 logging.getLogger("pandapower").setLevel(logging.ERROR)
 
-# from_mpc builds a full `net`; above this many buses it's minutes per call and
-# errors on some topologies, so skip it and keep the matpowercaseframes baseline.
+# from_mpc builds a full `net` and errors on some topologies, so large rows keep
+# the matpowercaseframes reader baseline instead.
 FROM_MPC_MAX_BUSES = 25_000
 
 DEFAULT_CASES = [
@@ -45,15 +47,41 @@ DEFAULT_CASES = [
 ]
 
 
-def best_median(fn, n, warmup):
+def sample_stats(fn, n, warmup):
     for _ in range(warmup):
         fn()
     samples = []
     for _ in range(n):
         start = time.perf_counter()
         fn()
-        samples.append(time.perf_counter() - start)
-    return min(samples) * 1e3, statistics.median(samples) * 1e3
+        samples.append((time.perf_counter() - start) * 1e3)
+    return {
+        "best": min(samples),
+        "median": statistics.median(samples),
+        "std": statistics.stdev(samples) if len(samples) > 1 else 0.0,
+        "n": len(samples),
+    }
+
+
+def benchmark_metadata(args):
+    repo = Path(__file__).resolve().parent.parent
+    try:
+        commit = subprocess.run(
+            ["git", "rev-parse", "HEAD"],
+            cwd=repo,
+            check=False,
+            capture_output=True,
+            text=True,
+        ).stdout.strip() or None
+    except OSError:
+        commit = None
+    return {
+        "benchmark_time_utc": datetime.now(timezone.utc)
+        .isoformat(timespec="seconds")
+        .replace("+00:00", "Z"),
+        "git_commit": commit,
+        "command": " ".join(["python", "benchmarks/bench_parse.py"] + args),
+    }
 
 
 def samples_for(nbuses):
@@ -74,21 +102,21 @@ def bench_case(path: Path):
     n, warm = samples_for(case.n_buses)
 
     def timed(fn):
-        return best_median(fn, n, warm)
+        return sample_stats(fn, n, warm)
 
-    rows = [("powerio: parse", *timed(lambda: powerio.parse_file(str(path))))]
+    rows = [("powerio: parse", timed(lambda: powerio.parse_file(str(path))))]
 
     def full_path():
         c = powerio.parse_file(str(path))
         c.ybus()
         c.bprime()
 
-    rows.append(("powerio[matrix]: parse + Y_bus + B'", *timed(full_path)))
+    rows.append(("powerio[matrix]: parse + Y_bus + Bp", timed(full_path)))
 
     try:
         from matpowercaseframes import CaseFrames
 
-        rows.append(("matpowercaseframes: parse", *timed(lambda: CaseFrames(str(path)))))
+        rows.append(("matpowercaseframes: parse", timed(lambda: CaseFrames(str(path)))))
     except ImportError as exc:
         if getattr(exc, "name", None) not in ("matpowercaseframes", None):
             raise
@@ -110,7 +138,7 @@ def bench_case(path: Path):
         try:
             from pandapower.converter import from_mpc
 
-            rows.append(("pandapower: from_mpc", *timed(lambda: from_mpc(str(path)))))
+            rows.append(("pandapower: from_mpc", timed(lambda: from_mpc(str(path)))))
         except ImportError as exc:
             raise RuntimeError(
                 "pandapower is required for the published Python benchmark; "
@@ -119,23 +147,42 @@ def bench_case(path: Path):
         except Exception as exc:  # noqa: BLE001 - from_mpc raises on some cases (pp 3.2.2)
             print(f"pandapower from_mpc failed on this case: {type(exc).__name__}: {exc}")
 
-    width = max(len(name) for name, *_ in rows)
-    print(f"{'task':<{width}}  {'best (ms)':>10}  {'median (ms)':>12}")
-    print("-" * (width + 26))
-    for name, best, median in rows:
-        print(f"{name:<{width}}  {best:>10.1f}  {median:>12.1f}")
+    width = max(len(name) for name, _ in rows)
+    print(f"{'task':<{width}}  {'best (ms)':>10}  {'median (ms)':>12}  {'std (ms)':>10}  {'n':>4}")
+    print("-" * (width + 44))
+    for name, stats in rows:
+        print(
+            f"{name:<{width}}  {stats['best']:>10.1f}  {stats['median']:>12.1f}  "
+            f"{stats['std']:>10.1f}  {stats['n']:>4}"
+        )
     print()
 
     # Rows render_tables.py needs for the RESULTS pandapower table; round to the
     # 1 decimal the published table shows. matpowercaseframes is None when its
     # baseline is unavailable for this case.
-    medians = {name: median for name, _, median in rows}
+    stats_by_name = {name: stats for name, stats in rows}
+
+    def rounded(name, field):
+        if name not in stats_by_name:
+            return None
+        return round(stats_by_name[name][field], 1)
+
+    def count(name):
+        if name not in stats_by_name:
+            return 0
+        return stats_by_name[name]["n"]
+
     return {
         "case": path.stem,
-        "powerio_parse_ms": round(medians["powerio: parse"], 1),
-        "powerio_matrix_ms": round(medians["powerio[matrix]: parse + Y_bus + B'"], 1),
-        "matpowercaseframes_ms": round(medians["matpowercaseframes: parse"], 1)
-        if "matpowercaseframes: parse" in medians else None,
+        "powerio_parse_ms": rounded("powerio: parse", "median"),
+        "powerio_parse_std_ms": rounded("powerio: parse", "std"),
+        "powerio_parse_n": count("powerio: parse"),
+        "powerio_matrix_ms": rounded("powerio[matrix]: parse + Y_bus + Bp", "median"),
+        "powerio_matrix_std_ms": rounded("powerio[matrix]: parse + Y_bus + Bp", "std"),
+        "powerio_matrix_n": count("powerio[matrix]: parse + Y_bus + Bp"),
+        "matpowercaseframes_ms": rounded("matpowercaseframes: parse", "median"),
+        "matpowercaseframes_std_ms": rounded("matpowercaseframes: parse", "std"),
+        "matpowercaseframes_n": count("matpowercaseframes: parse"),
     }
 
 
@@ -147,7 +194,13 @@ def main():
     if json_out:
         out = Path(__file__).resolve().parent / "results" / "speed_python.json"
         out.parent.mkdir(parents=True, exist_ok=True)
-        out.write_text(json.dumps({"rows": results}, indent=2) + "\n")
+        out.write_text(
+            json.dumps(
+                {"metadata": benchmark_metadata(args), "rows": results},
+                indent=2,
+            )
+            + "\n"
+        )
         print(f"wrote {out} ({len(results)} rows)")
 
 

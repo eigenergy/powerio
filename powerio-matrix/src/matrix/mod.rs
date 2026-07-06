@@ -1,10 +1,11 @@
-//! Sparse matrix builders for MATPOWER cases.
+//! Sparse matrix builders for power system cases.
 //!
-//! Sign convention: the susceptance matrix has the form `B = A diag(b) Aᵀ`
-//! with the node-by-edge incidence `A` (n×m) and per-edge weight `b_e = x/(r²+x²)`
-//! (see `bprime.rs` for the entry-level form). Resulting matrices satisfy positive
-//! diagonal, negative off-diagonal, `diag = sum of |off-diagonal|` — the
-//! positive (M-matrix) Laplacian form SDDM solvers expect.
+//! DC OPF and sensitivity builders use the DC bus susceptance matrix
+//! `L = A diag(b) Aᵀ`, where `A` is the signed bus by branch incidence matrix
+//! (n×m) and `b` is the positive branch susceptance vector. Stored nonzero off
+//! diagonal entries are negative, diagonals are nonnegative, and
+//! `diag = sum of |off-diagonal|`; this is the M-matrix form SDDM solvers expect
+//! once the grounded matrix is positive definite.
 
 mod adjacency;
 mod bdoubleprime;
@@ -50,10 +51,10 @@ pub(crate) use ybus::{YbusFlags, branch_admittance, branch_flows};
 
 use sprs::CsMat;
 
-/// Which FDPF scheme to use for B'.
+/// Which MATPOWER fast decoupled scheme to use.
 ///
-/// - `Bx`: B' uses `-x / (r² + x²)` (what most modern solvers do).
-/// - `Xb`: B' uses `-1 / x` (original Stott/Alsac 1974). Requires `x ≠ 0`.
+/// - `Bx`: clears resistance for `Bpp`.
+/// - `Xb`: clears resistance for `Bp`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
 #[non_exhaustive]
 pub enum Scheme {
@@ -65,9 +66,11 @@ pub enum Scheme {
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct BuildOptions {
     pub scheme: Scheme,
-    /// Apply tap ratios when building B″ and Y-bus. (B′ always ignores taps.)
+    /// Apply tap ratios when building Y_bus. MATPOWER `Bp` sets tap magnitudes
+    /// to one and `Bpp` keeps them.
     pub include_taps: bool,
-    /// Apply phase shifts when building Y-bus. (B′/B″ always ignore shifts.)
+    /// Apply phase shifts when building Y_bus. MATPOWER `Bp` keeps phase
+    /// shifts and `Bpp` clears them.
     pub include_shifts: bool,
     /// Drop branches whose `r² + x² = 0` (true) or error out (false).
     pub skip_zero_impedance: bool,
@@ -89,11 +92,11 @@ impl Default for BuildOptions {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[non_exhaustive]
 pub enum ZeroImpedanceRule {
-    /// Full series impedance, `r² + x²`. Used by Y_bus, LACPF, B' in BX mode,
-    /// and B'' in XB mode.
+    /// Full series impedance, `r² + x²`. Used by Y_bus, LACPF, Bp in BX mode,
+    /// and Bpp in XB mode.
     Series,
-    /// Reactance only denominator, `x`. Used by DC incidence, B' in XB mode,
-    /// and B'' in BX mode after resistance is zeroed.
+    /// Reactance only denominator, `x`. Used by DC incidence, Bp in XB mode,
+    /// and Bpp in BX mode after resistance is zeroed.
     Reactance,
 }
 
@@ -220,6 +223,23 @@ pub(crate) fn negate_into(mut a: CsMat<f64>) -> CsMat<f64> {
 /// Whether a matrix is SDDM (symmetric diagonally dominant M-matrix).
 /// Useful as a quick sanity check before feeding it to an SDDM solver.
 pub fn sddm_check(a: &CsMat<f64>) -> bool {
+    if !is_symmetric(a) {
+        return false;
+    }
     let stats = MatrixStats::from_csr(a);
     stats.m_matrix_sign && stats.min_dd_margin >= -1e-12 && stats.min_diag > 0.0
+}
+
+fn is_symmetric(a: &CsMat<f64>) -> bool {
+    if a.rows() != a.cols() {
+        return false;
+    }
+    for (&v, (i, j)) in a {
+        let other = a.get(j, i).copied().unwrap_or(0.0);
+        let scale = v.abs().max(other.abs()).max(1.0);
+        if (v - other).abs() > 1e-12 * scale {
+            return false;
+        }
+    }
+    true
 }

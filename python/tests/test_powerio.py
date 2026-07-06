@@ -530,7 +530,7 @@ def test_bprime_is_singular_laplacian(name):
 
 
 def test_bprime_xb_equals_weighted_laplacian(case9):
-    # Exact cross-check across two boundary paths: B' in the XB scheme is the
+    # Exact cross-check across two boundary paths: Bp in the XB scheme is the
     # paper-convention weighted Laplacian (b = 1/x). Catches a shared bug in
     # the COO conversion that the symmetric self-check can't.
     assert np.allclose(
@@ -543,7 +543,7 @@ def test_bdoubleprime_shunts_and_scheme():
     c = load("case30")  # has bus shunts
     bpp = c.bdoubleprime()
     assert bpp.shape == (c.n_buses, c.n_buses)
-    # B'' keeps shunts, so it differs from the shuntless B'.
+    # Bpp keeps shunts, so it differs from Bp on this case.
     assert not np.allclose(bpp.toarray(), c.bprime().toarray())
     # The scheme kwarg is wired: BX zeroes line resistance, XB does not.
     assert not np.allclose(c.bdoubleprime("bx").toarray(), c.bdoubleprime("xb").toarray())
@@ -637,8 +637,12 @@ def _real_matrix_arrow_payload(matrix, table):
     return {
         "col_count": csr.shape[1],
         "col_index": col_index,
+        "col_axis": "matrix_branch" if table == "incidence" else "matrix_bus",
+        "format": "coo",
         "row_count": csr.shape[0],
         "row_index": row_index,
+        "row_axis": "matrix_bus",
+        "schema_version": "1",
         "table": table,
         "value_bits": value_bits,
     }
@@ -667,11 +671,46 @@ def _ybus_arrow_payload(case):
     return {
         "col_count": g.shape[1],
         "col_index": col_index,
+        "col_axis": "matrix_bus",
+        "format": "coo",
         "row_count": g.shape[0],
         "row_index": row_index,
+        "row_axis": "matrix_bus",
+        "schema_version": "1",
         "table": "ybus",
         "g_bits": g_bits,
         "b_bits": b_bits,
+    }
+
+
+def _matrix_axis_payload(case):
+    inc = case.incidence()
+    return {
+        "matrix_bus": {
+            "bus_id": [bus["id"] for bus in case.buses],
+            "component": [0] * case.n_buses,
+            "format": "axis_map",
+            "index": list(range(case.n_buses)),
+            "is_reference": [1 if bus["kind"] == "REF" else 0 for bus in case.buses],
+            "row_axis": "matrix_bus",
+            "schema_version": "1",
+            "source_row": list(range(case.n_buses)),
+            "table": "matrix_bus",
+        },
+        "matrix_branch": {
+            "format": "axis_map",
+            "from_bus_id": [
+                case.branches[int(idx)]["from_id"] for idx in inc.branch_of_col
+            ],
+            "index": list(range(len(inc.branch_of_col))),
+            "row_axis": "matrix_branch",
+            "schema_version": "1",
+            "source_row": [int(idx) for idx in inc.branch_of_col],
+            "table": "matrix_branch",
+            "to_bus_id": [
+                case.branches[int(idx)]["to_id"] for idx in inc.branch_of_col
+            ],
+        },
     }
 
 
@@ -679,6 +718,7 @@ def _ybus_arrow_payload(case):
 def test_matrix_methods_match_rust_arrow_golden(name):
     case = load(name)
     actual = {
+        "axes": _matrix_axis_payload(case),
         "case": f"{name}.m",
         "tables": {
             "bdoubleprime": _real_matrix_arrow_payload(
@@ -904,7 +944,10 @@ def test_large_case_pegase():
     assert c.n_buses == 2869
     b = c.bprime()
     assert b.shape == (2869, 2869)
-    assert is_symmetric(b)
+    # MATPOWER Bp keeps phase shifts. This case has phase shifters, so the
+    # off diagonal entries are asymmetric.
+    assert not is_symmetric(b)
+    assert np.isfinite(b.data).all()
 
 
 # --- gridfm Parquet surface --------------------------------------------

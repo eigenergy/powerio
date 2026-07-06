@@ -20,9 +20,10 @@ use crate::{Error, Result};
 pub enum Units {
     /// Power divided by `baseMVA`; cost coefficients scaled so the cost is a
     /// function of per unit power (`q ← 2c₂·base²`, `c ← c₁·base`). Keeps the
-    /// whole instance dimensionally consistent with the per unit Laplacian. A
-    /// network from [`to_normalized`](powerio::Network::to_normalized) is already
-    /// per unit, so this leaves it unchanged (the scaling divisor is `1.0`).
+    /// whole instance dimensionally consistent with the per unit DC bus
+    /// susceptance matrix. A network from
+    /// [`to_normalized`](powerio::Network::to_normalized) is already per unit,
+    /// so this leaves it unchanged (the scaling divisor is `1.0`).
     #[default]
     PerUnit,
     /// Raw MATPOWER units: power in MW, cost in native `$·MWh⁻¹` coefficients.

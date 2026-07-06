@@ -14,7 +14,7 @@ use crate::{Error, Result};
 
 use super::{BuildOptions, ZeroImpedanceSkips};
 
-/// DC susceptance convention for `b_e` and the Laplacian.
+/// DC susceptance convention for `b_e` and the derived DC bus susceptance matrix.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
 #[non_exhaustive]
 pub enum DcConvention {

@@ -15,7 +15,7 @@
 //! ```
 //!
 //! Satisfies `p = G ε - B θ`, `q = -B ε - G θ`. Indefinite (saddle point);
-//! emitted as a hard input alongside the SDDM B', B'', and ±Im(Y_bus).
+//! emitted as a hard input alongside Bp, Bpp, and ±Im(Y_bus).
 
 use sprs::CsMat;
 

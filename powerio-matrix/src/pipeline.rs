@@ -26,13 +26,13 @@ use crate::network::Network;
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[non_exhaustive]
 pub enum MatrixKind {
-    /// FDPF B' (shuntless, taps=1, shifts=0).
+    /// MATPOWER FDPF Bp matrix.
     BPrime,
-    /// FDPF B'' (with shunts, taps; r=0 if BX scheme).
+    /// MATPOWER FDPF Bpp matrix.
     BDoublePrime,
     /// `Re(Y_bus)` — full conductance matrix.
     YbusG,
-    /// `-Im(Y_bus)` — full susceptance Laplacian (positive convention).
+    /// `-Im(Y_bus)` — full bus susceptance matrix (positive convention).
     YbusB,
     /// LACPF block: `[[G, -B], [-B, -G]]`, 2n × 2n indefinite.
     Lacpf,
@@ -63,8 +63,8 @@ impl MatrixKind {
 
     pub fn label(self) -> &'static str {
         match self {
-            Self::BPrime => "B' (FDPF, shuntless)",
-            Self::BDoublePrime => "B'' (FDPF, with shunts)",
+            Self::BPrime => "MATPOWER Bp (FDPF)",
+            Self::BDoublePrime => "MATPOWER Bpp (FDPF)",
             Self::YbusG => "Re(Y_bus)",
             Self::YbusB => "-Im(Y_bus)",
             Self::Lacpf => "LACPF block (2n×2n)",

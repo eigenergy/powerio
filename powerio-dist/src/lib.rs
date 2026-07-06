@@ -20,9 +20,9 @@
 //! # Ok::<(), powerio_dist::Error>(())
 //! ```
 //!
-//! # Fidelity contract
+//! # Fidelity rules
 //!
-//! The contract matches `powerio`. Writing back to the source format
+//! The rules match `powerio`. Writing back to the source format
 //! reproduces the file byte for byte via retained source text. Every cross
 //! format conversion regenerates from the typed model and reports each field
 //! the target cannot represent in [`Conversion::warnings`]; nothing drops

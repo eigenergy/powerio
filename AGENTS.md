@@ -23,7 +23,8 @@ graph views for any downstream solver. Feeds the GridFM ML pipeline.
   `pio_read_dir` / `pio_scenario_ids` (the gridfm-datakit Parquet
   reader, pulling in `powerio-matrix`); `--features dist` adds `pio_dist_*`;
   `--features pkg` adds `pio_package_*`. All are additive and feature gated, so
-  no ABI bump.
+  no ABI bump. Matrix Arrow ABI v1 is COO tables plus append only axis maps
+  `matrix_bus` and `matrix_branch`.
 
 `Network` is the one canonical model (format neutral, loads/shunts first class);
 `IndexedNetwork` is the dense indexed analysis view derived from it.
@@ -38,15 +39,19 @@ Every balanced case format meets at `Network`, so a new format is one
 reader/writer at the hub, not a pairwise converter.
 
 Matrix outputs (powerio-matrix):
-- B' (FDPF, shuntless). Singular positive Laplacian, rank n-1.
-- B'' (FDPF, with shunts and taps). SDDM when bus shunts are present.
+- MATPOWER FDPF `Bp` (`bprime`): `-Im(Y_bus)` after clearing bus shunts and
+  line charging and setting tap magnitudes to one. XB clears resistance. Phase
+  shifts remain, matching MATPOWER `makeB`.
+- MATPOWER FDPF `Bpp` (`bdoubleprime`): `-Im(Y_bus)` after clearing phase
+  shifts. BX clears resistance. Line charging, bus shunts, and tap magnitudes
+  remain.
 - `Re(Y_bus)`, `-Im(Y_bus)` (full).
 - LACPF block `[[G, -B], [-B, -G]]` (linear AC power flow, flat start, 2n×2n, indefinite).
 - Adjacency (`MatrixKind::Adjacency`); PTDF and LODF (`sensitivities` subcommand).
-- DC OPF instance bundle (`dcopf` subcommand, `opf_pipeline::write_dcopf_bundle`): signed incidence `A` (n×m), branch susceptance `b`, weighted Laplacian `L = A diag(b) Aᵀ` and its reference-grounded form, flow map `B Aᵀ`, generator cost `Q`/`c`, bounds, thermal limits `f̄`, generator→bus `C_g`, nodal load `p_d`, `e_r`.
+- DC OPF instance bundle (`dcopf` subcommand, `opf_pipeline::write_dcopf_bundle`): signed incidence `A` (n×m), branch susceptance `b`, DC OPF Laplacian `L = A diag(b) Aᵀ` and its reference-grounded form, flow map `B Aᵀ`, generator cost `Q`/`c`, bounds, thermal limits `f̄`, generator→bus `C_g`, nodal load `p_d`, `e_r`.
 - petgraph `UnGraph<bus_idx, branch_idx>` view + connectivity / radial diagnostics.
 - gridfm-datakit Parquet dataset (`gridfm` subcommand, `io::gridfm::write_gridfm_dataset`, `--features gridfm`): the `bus_data`/`gen_data`/`branch_data`/`y_bus_data` tables a single parsed case maps to, matching gridfm-datakit's column schema so gridfm-graphkit trains on it directly.
-- gridfm dataset → `Network` reader, the ML→classical return leg (`io::gridfm::read_gridfm_dataset` / `read_gridfm_scenarios` / `gridfm_base_case`, pure inverse `read_gridfm_network`; `--features gridfm`, issue #60). Lossy but power-flow-complete: recovers bus types/voltages/limits, nodal load & shunt totals, generator dispatch & bounds (`vg` from bus `Vm`), branch `r/x/b/tap/shift/rate_a/angle-limits`, and `base_mva`; can't recover original bus ids (synthesized `1..n`), per-element granularity (folded to one synthetic `Load`/`Shunt` per bus), piecewise/cubic costs, or HVDC/storage. Unit effective-tap/zero-shift branches read back as lines (raw `tap 0`). Returns `GridfmRead { network, scenario, warnings }`; sets `SourceFormat::Gridfm`. One reader ⇒ gridfm → any classical writer for free. CLI: `convert <dataset-dir> --from gridfm [--scenario N] --to <fmt>` (stays out of the parquet-free `parse_file` hub). `y_bus_data` is ignored on read (branches carry raw `r/x/b`). Python: `read_gridfm(dir, scenario=0)` / `read_gridfm_scenarios(dir)` → `GridfmRead(network, scenario, warnings)`.
+- gridfm dataset → `Network` reader, the ML→classical return leg (`io::gridfm::read_gridfm_dataset` / `read_gridfm_scenarios` / `gridfm_base_case`, pure inverse `read_gridfm_network`; `--features gridfm`, issue #60). Lossy but complete for power flow: recovers bus types/voltages/limits, nodal load & shunt totals, generator dispatch & bounds (`vg` from bus `Vm`), branch `r/x/b/tap/shift/rate_a/angle-limits`, and `base_mva`; can't recover original bus ids (synthesized `1..n`), per element granularity (folded to one synthetic `Load`/`Shunt` per bus), piecewise/cubic costs, or HVDC/storage. Branches with unit effective tap and zero shift read back as lines (raw `tap 0`). Returns `GridfmRead { network, scenario, warnings }`; sets `SourceFormat::Gridfm`. One reader ⇒ gridfm → any classical writer for free. CLI: `convert <dataset-dir> --from gridfm [--scenario N] --to <fmt>` (kept out of the `parse_file` hub that has no parquet dependency). `y_bus_data` is ignored on read (branches carry raw `r/x/b`). Python: `read_gridfm(dir, scenario=0)` / `read_gridfm_scenarios(dir)` → `GridfmRead(network, scenario, warnings)`.
 
 ## Commands
 
@@ -54,7 +59,7 @@ Matrix outputs (powerio-matrix):
 cargo build --release        # powerio + powerio-matrix + powerio-cli (default-members)
 cargo test                   # powerio + powerio-matrix (default-members)
 cargo test -p powerio-capi   # the C ABI tests (not in default-members)
-cargo clippy --all-targets
+bash scripts/ci-clippy.sh    # full CI clippy matrix; run before pushing Rust/C ABI changes
 cargo fmt --all --check      # rustfmt is enforced (edition 2024)
 
 # CLI (the binary is `powerio`):
@@ -189,6 +194,11 @@ benchmarks/                  # parse benchmarks + Julia validation harnesses
   paths resolve unchanged and a single `use powerio_matrix::...` pulls in both
   layers. Keep the parser/converter in `powerio` (light deps) and matrices in
   `powerio-matrix`.
+- **Clippy must match CI.** Root `cargo clippy --all-targets` skips feature
+  combinations and the PyO3 extension, so it misses failures that CI catches.
+  Run `bash scripts/ci-clippy.sh` before pushing Rust, C ABI, Arrow, matrix,
+  feature, or Python extension changes. Use a target such as
+  `bash scripts/ci-clippy.sh capi-release` only while iterating on one failure.
 - **One Python wheel (maturin mixed layout).** `powerio-py/` is the Rust PyO3
   crate; it compiles to one native module, `powerio._powerio` (`[lib] name =
   _powerio`, `crate-type = cdylib`). `python/powerio/` is the pure-Python
@@ -204,7 +214,7 @@ benchmarks/                  # parse benchmarks + Julia validation harnesses
   and the writer returns it, so `parse → write → parse` keeps the exact bytes:
   every `mpc.*` field, in-matrix comments, and exact tokens like `7e-05`. Don't
   reformat through `f64` round-trips; don't drop fields the typed model ignores.
-- **Two-tier fidelity contract.** Same format round trip is byte exact.
+- **Two-tier fidelity rules.** Same format round trip is byte exact.
   Cross-format conversion keeps maximal fidelity and reports anything the target
   can't represent in `Conversion::warnings`; never drop it silently.
 - **Adding a format.** A reader and/or writer in `powerio/src/format/<name>.rs`
@@ -215,22 +225,40 @@ benchmarks/                  # parse benchmarks + Julia validation harnesses
   transport; over the C ABI it is the `powerio-json` format through `pio_to_format`/`pio_parse_str`. The retained
   `source` text is `#[serde(skip)]`, so JSON carries the tables, not the
   byte exact echo, and a `from_json` round trip returns `source` as `None`.
+- **Distribution bindings stay lazy.** `pio_dist_parse_file` and
+  `pio_dist_parse_str` return a live multiconductor handle. Julia display and
+  scalar access use `pio_dist_summary_json`; `pio_dist_to_json` is the full
+  element payload and should only run when a caller asks for `net.data` or an
+  element table.
 - **`.pio.json` packages.** `NetworkPackage` wraps one balanced or
   multiconductor payload with provenance, source maps, diagnostics, validation,
   lowering history, optional derived metadata, and optional `operating_points`.
   GOC3 package construction stores the static first interval in `model` and the
   source time series in replayable operating points. Materializing a point
   returns a derived static package with the series cleared.
-- **Sign convention.** Positive Laplacian: off diag negative, diag positive, `diag = sum |off-diag|` for B'. The positive (M-matrix) Laplacian form SDDM solvers expect.
+- **Sign convention.** Positive Laplacians use negative off diag entries,
+  positive diagonal entries, and `diag = sum |off-diag|`. This is the
+  M-matrix form SDDM solvers expect.
 - **Bus IDs.** MATPOWER 1 based; `IndexedNetwork::bus_index(id)` is the only mapping into dense `[0, n)`. Don't clamp out of range; return `Error::UnknownBus`.
 - **`BR_B` is already per unit.** Never divide by `base_mva` again.
 - **`tap == 0` ⇒ `tap = 1`.** Use `Branch::effective_tap()`.
-- **B' ignores taps and shifts. B'' zeros only shifts. Y_bus keeps both.**
+- **MATPOWER FDPF matrices.** `build_bprime` follows MATPOWER `makeB` `Bp`:
+  it approximates the active power versus voltage angle Jacobian block, clears
+  bus shunts and line charging, sets tap magnitudes to one, clears resistance
+  in the XB scheme, and keeps phase shifts. `build_bdoubleprime` follows
+  MATPOWER `Bpp`: it approximates the reactive power versus voltage magnitude
+  Jacobian block, clears phase shifts, clears resistance in the BX scheme, and
+  keeps shunts, line charging, and tap magnitudes. `Y_bus` keeps taps and
+  shifts.
 - **Angle bound clamp postcondition.** When editing `clamp_angle_bounds`, test
   intervals wholly below `-pi/2` and wholly above `pi/2`; normalized branches
   must leave `angmin <= angmax`. Wide symmetric bounds and `0/0` already have
   coverage.
-- **DC OPF Laplacian.** `L = A diag(b) Aᵀ` is built from the same `A`, `b` factors `build_incidence` returns (so `L` and the reweighted `L₁` share a factorization), and equals `build_bprime` in the XB scheme. Default `b = 1/x` (paper-pure); `DcConvention::Matpower` uses `1/(x·τ)` plus a phase-shift injection.
+- **DC OPF Laplacian.** `L = A diag(b) Aᵀ` is built from the same `A`, `b`
+  factors `build_incidence` returns, so `L` and the reweighted `L₁` share a
+  factorization. With zero phase shifts, it equals MATPOWER `Bp` in the XB
+  scheme. Default `b = 1/x` (paper-pure); `DcConvention::Matpower` uses
+  `1/(x·τ)` plus a phase shift injection.
 - **DC OPF is bus indexed.** Generation is nodal (`p_g ∈ ℝⁿ`), so `Q`, `c`, and bounds are length n (zero at load buses), scattered from generator space through `C_g`; gen-space vectors (`OpfInstance::gen_costs`) ride along as provenance. Cost map: MATPOWER `c2 p² + c1 p` → `q = 2c2`, `c = c1`. Per-unit by default (`Units::PerUnit` scales `q` by `base²`, `c` by `base`).
 - **`gen`/`gencost` are optional.** A power flow case with no `mpc.gen` parses with `gens` empty; the OPF builders return `Error::NoGenerators`.
 - **Reference (slack) buses are a set, grounded one row/column each.** `IndexedNetwork::reference_bus_indices` returns every `BusType::Ref`; the matrix builders ground the whole set, so a network needs one reference *per connected component* (`IndexedNetwork::check_reference_coverage`). Several within one island is a distributed-slack solve. `reference_bus_index` is the exactly-one convenience query (errors otherwise) for the single-slack C/Python/gridfm paths.

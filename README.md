@@ -111,7 +111,7 @@ std::fs::write("case14.json", conv.text)?;
 import powerio as pio
 
 case = pio.parse_file("case9.m")
-bprime = case.bprime()            # scipy.sparse, needs powerio[matrix]
+bprime = case.bprime()            # MATPOWER Bp, scipy.sparse, needs powerio[matrix]
 display = pio.parse_display_file("case.pwd")
 raw, warnings = pio.convert_file("case9.m", "psse")
 ```
@@ -181,10 +181,11 @@ Known limits for every format are documented in the
 
 The `powerio-matrix` Rust crate derives an `IndexedNetwork` with dense bus indices. It enables you to build common power system matrices with minimal dependencies:
 
-- B' and B'' DCPF and FDPF matrices
+- MATPOWER Bp/Bpp FDPF matrices
+- DC bus susceptance matrix `L = A diag(b) A^T` and flow map matrices
 - Nodal admittance matrix
 - LACPF block matrix
-- Signed incidence, weighted Laplacian, and flow map matrices
+- Signed incidence matrix
 - PTDF and LODF sensitivity matrices, with dense and iterative solver paths
 - Streamed CLI PTDF/LODF writes for iterative sensitivity exports
 - Adjacency matrix and `petgraph` graph output
@@ -218,7 +219,9 @@ functions. The public header is
 [powerio-capi/include/powerio.h](https://github.com/eigenergy/powerio/blob/main/powerio-capi/include/powerio.h).
 Build with `--features arrow` to enable `pio_to_arrow` over the
 [Arrow C Data Interface](https://arrow.apache.org/docs/format/CDataInterface.html),
-and add `--features matrix` for sparse matrix COO tables.
+and add `--features matrix` for sparse matrix COO tables. Matrix Arrow ABI v1
+is COO plus explicit `matrix_bus` and `matrix_branch` axis map tables; language
+bindings assemble native sparse matrix types on their side.
 
 ### PowerAgent
 
@@ -295,7 +298,7 @@ the local `powerio` wheel.
 cargo fmt --all --check
 cargo test
 cargo test -p powerio-capi
-cargo clippy --all-targets
+bash scripts/ci-clippy.sh
 pytest python/tests
 bash benchmarks/run_validation.sh
 ```

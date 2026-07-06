@@ -28,9 +28,9 @@ use crate::{Error, Result};
 /// ungrounded forms and the diagonal `D = Dg⁻¹`.
 #[derive(Debug, Clone)]
 pub struct KktOperators {
-    /// `L₁ = A diag(b²·θf⁻¹) Aᵀ`, the reweighted Laplacian (n×n).
+    /// `L₁ = A diag(b²·θf⁻¹) Aᵀ`, the reweighted bus Laplacian (n×n).
     pub l1: CsMat<f64>,
-    /// `L₂ = L`, the DC Laplacian (n×n).
+    /// `L₂ = L`, the DC bus susceptance matrix (n×n).
     pub l2: CsMat<f64>,
     /// `D = Dg⁻¹ = (Q + Θg⁻¹)⁻¹`, positive diagonal, length n.
     pub d: Vec<f64>,

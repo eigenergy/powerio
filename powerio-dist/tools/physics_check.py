@@ -8,7 +8,7 @@ For every dss sourced fixture the harness writes three regenerated cases
 under target/physics (canonical, via BMOPF, via PMD). This script solves
 each against the original and reports the maximum per node voltage
 deviation in per unit of the original node magnitude (nodes below 1 volt
-are compared absolutely, in volts). The conversion contract bound is 1e-8.
+are compared absolutely, in volts). The conversion tolerance is 1e-8.
 """
 
 import glob

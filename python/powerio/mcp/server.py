@@ -72,7 +72,7 @@ _MATRIX_KIND_ALIASES = {
 }
 
 _MATRIX_HELP = (
-    "bprime/b/b1 (FDPF B'), bdoubleprime/b2/bpp (FDPF B''), "
+    "bprime/b/b1 (MATPOWER Bp), bdoubleprime/b2/bpp (MATPOWER Bpp), "
     "ybus_real/g, ybus_imag/negB/b_lap, adjacency/adj, ptdf, lodf, "
     "laplacian, lacpf"
 )

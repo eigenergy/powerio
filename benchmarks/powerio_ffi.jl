@@ -1,7 +1,7 @@
 # Thin Julia binding over the powerio C ABI (powerio-capi), shared by the parse
 # benchmark and the ExaPowerIO validator. Build the library first:
 #
-#   cargo build --release -p powerio-capi
+#   cargo build --release -p powerio-capi --features arrow,matrix
 #
 # The C ABI returns raw MATPOWER values: demand/shunt/gen in MW/MVAr (not per
 # unit), branch `shift` in degrees, branch `b` as the total line charging, and a
@@ -10,8 +10,9 @@
 
 const _LIBEXT = Sys.iswindows() ? "dll" : (Sys.isapple() ? "dylib" : "so")
 const LIBPOWERIO = abspath(joinpath(@__DIR__, "..", "target", "release", "libpowerio_capi.$_LIBEXT"))
+const PIO_ARROW_TABLE_YBUS = Int32(15)
 
-isfile(LIBPOWERIO) || error("libpowerio_capi not found at $LIBPOWERIO — run `cargo build --release -p powerio-capi`")
+isfile(LIBPOWERIO) || error("libpowerio_capi not found at $LIBPOWERIO — run `cargo build --release -p powerio-capi --features arrow,matrix`")
 
 # Parse `path` (format inferred from the extension); returns an opaque handle.
 # Free it with pio_free. Errors with the C message on failure.
@@ -30,6 +31,73 @@ pio_n_buses(h)    = Int(ccall((:pio_n_buses, LIBPOWERIO),    Csize_t, (Ptr{Cvoid
 pio_n_branches(h) = Int(ccall((:pio_n_branches, LIBPOWERIO), Csize_t, (Ptr{Cvoid},), h))
 pio_n_gens(h)     = Int(ccall((:pio_n_gens, LIBPOWERIO),     Csize_t, (Ptr{Cvoid},), h))
 pio_base_mva(h)   = ccall((:pio_base_mva, LIBPOWERIO),       Cdouble, (Ptr{Cvoid},), h)
+
+mutable struct CArrowArray
+    length::Int64
+    null_count::Int64
+    offset::Int64
+    n_buffers::Int64
+    n_children::Int64
+    buffers::Ptr{Ptr{Cvoid}}
+    children::Ptr{Ptr{Cvoid}}
+    dictionary::Ptr{Cvoid}
+    release::Ptr{Cvoid}
+    private_data::Ptr{Cvoid}
+end
+
+mutable struct CArrowSchema
+    format::Ptr{Cchar}
+    name::Ptr{Cchar}
+    metadata::Ptr{Cchar}
+    flags::Int64
+    n_children::Int64
+    children::Ptr{Ptr{Cvoid}}
+    dictionary::Ptr{Cvoid}
+    release::Ptr{Cvoid}
+    private_data::Ptr{Cvoid}
+end
+
+CArrowArray() = CArrowArray(0, 0, 0, 0, 0, Ptr{Ptr{Cvoid}}(C_NULL),
+                            Ptr{Ptr{Cvoid}}(C_NULL), C_NULL, C_NULL, C_NULL)
+CArrowSchema() = CArrowSchema(C_NULL, C_NULL, C_NULL, 0, 0,
+                              Ptr{Ptr{Cvoid}}(C_NULL), C_NULL, C_NULL, C_NULL)
+
+function _release_arrow_array!(arr::Base.RefValue{CArrowArray})
+    release = arr[].release
+    release == C_NULL || ccall(release, Cvoid, (Ref{CArrowArray},), arr)
+    return nothing
+end
+
+function _release_arrow_schema!(sch::Base.RefValue{CArrowSchema})
+    release = sch[].release
+    release == C_NULL || ccall(release, Cvoid, (Ref{CArrowSchema},), sch)
+    return nothing
+end
+
+function pio_export_ybus_arrow(h)
+    arr = Ref(CArrowArray())
+    sch = Ref(CArrowSchema())
+    errbuf = Vector{UInt8}(undef, 256)
+    code = ccall((:pio_to_arrow, LIBPOWERIO), Cint,
+                 (Ptr{Cvoid}, Cint, Ref{CArrowArray}, Ref{CArrowSchema}, Ptr{UInt8}, Csize_t),
+                 h, PIO_ARROW_TABLE_YBUS, arr, sch, errbuf, length(errbuf))
+    code == 0 || error("powerio Ybus Arrow export failed: " * unsafe_string(pointer(errbuf)))
+    try
+        return Int(arr[].length)
+    finally
+        _release_arrow_array!(arr)
+        _release_arrow_schema!(sch)
+    end
+end
+
+function powerio_parse_ybus_arrow(path::AbstractString)
+    h = pio_parse_file(path)
+    try
+        return pio_export_ybus_arrow(h)
+    finally
+        pio_free(h)
+    end
+end
 
 # ABI v4 extractors: every array call passes a cap and returns the total
 # available (NULL out is the count query). The caps below come from the

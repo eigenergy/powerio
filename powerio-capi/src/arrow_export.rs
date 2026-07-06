@@ -11,12 +11,10 @@
 //!
 //! Tables 0..5 are the *raw* network fields, with EXTERNAL bus ids (the same id
 //! space as `pio_bus_ids`), not the gridfm-datakit schema. Tables 6..14 are the
-//! normalized solver table contract: per unit/radian values and dense zero based
+//! normalized solver table rules: per unit/radian values and dense zero based
 //! row ids. Matrix table ids after that carry COO triplets in the same dense bus
 //! index space, with matrix dimensions stored in Arrow schema metadata.
 
-#[cfg(feature = "matrix")]
-use std::collections::BTreeMap;
 use std::collections::HashMap;
 use std::sync::Arc;
 
@@ -50,6 +48,10 @@ pub const PIO_ARROW_TABLE_YBUS: i32 = 15;
 pub const PIO_ARROW_TABLE_INCIDENCE: i32 = 16;
 pub const PIO_ARROW_TABLE_BPRIME: i32 = 17;
 pub const PIO_ARROW_TABLE_BDOUBLEPRIME: i32 = 18;
+pub const PIO_ARROW_TABLE_MATRIX_BUS: i32 = 19;
+pub const PIO_ARROW_TABLE_MATRIX_BRANCH: i32 = 20;
+
+const ARROW_SCHEMA_VERSION: &str = "1";
 
 // These values are the ABI: the `PIO_ARROW_TABLE_*` macros in include/powerio.h
 // are hand-synced to them. The set is append-only: these ids and each table's
@@ -78,6 +80,8 @@ const _: () = assert!(
         && PIO_ARROW_TABLE_INCIDENCE == 16
         && PIO_ARROW_TABLE_BPRIME == 17
         && PIO_ARROW_TABLE_BDOUBLEPRIME == 18
+        && PIO_ARROW_TABLE_MATRIX_BUS == 19
+        && PIO_ARROW_TABLE_MATRIX_BRANCH == 20
 );
 
 /// Build the requested table and export it over the C Data Interface. The
@@ -126,6 +130,8 @@ pub fn export(
         PIO_ARROW_TABLE_INCIDENCE => matrix_incidence_batch(net, core)?,
         PIO_ARROW_TABLE_BPRIME => matrix_bprime_batch(net, core)?,
         PIO_ARROW_TABLE_BDOUBLEPRIME => matrix_bdoubleprime_batch(net, core)?,
+        PIO_ARROW_TABLE_MATRIX_BUS => matrix_bus_batch(net, core)?,
+        PIO_ARROW_TABLE_MATRIX_BRANCH => matrix_branch_batch(net, core)?,
         other => return Err(format!("unknown Arrow table id {other}")),
     };
 
@@ -135,6 +141,189 @@ pub fn export(
     let schema = FFI_ArrowSchema::try_from(rb.schema().as_ref()).map_err(|e| e.to_string())?;
     let data = StructArray::from(rb).into_data();
     Ok((FFI_ArrowArray::new(&data), schema))
+}
+
+/// Return the Arrow table catalog as compact JSON.
+pub fn catalog_json() -> String {
+    serde_json::to_string(&catalog_value()).expect("Arrow catalog JSON is serializable")
+}
+
+fn catalog_value() -> serde_json::Value {
+    let matrix_available = cfg!(feature = "matrix");
+    let table_spec = |id: i32,
+                      name: &str,
+                      format: &str,
+                      feature_requirements: &[&str],
+                      available: bool,
+                      row_axis: Option<&str>,
+                      col_axis: Option<&str>,
+                      units: serde_json::Value,
+                      columns: &[(&str, &str)]| {
+        serde_json::json!({
+            "id": id,
+            "name": name,
+            "schema_version": ARROW_SCHEMA_VERSION,
+            "format": format,
+            "feature_requirements": feature_requirements,
+            "available": available,
+            "row_axis": row_axis,
+            "col_axis": col_axis,
+            "units": units,
+            "columns": columns.iter().map(|(name, dtype)| {
+                serde_json::json!({"name": name, "type": dtype, "nullable": false})
+            }).collect::<Vec<_>>(),
+        })
+    };
+    serde_json::json!({
+        "schema_version": ARROW_SCHEMA_VERSION,
+        "producer": "powerio-capi",
+        "tables": [
+            table_spec(PIO_ARROW_TABLE_BUS, "bus", "record_batch", &["arrow"], true, None, None, units_source(), &[
+                ("id", "int64"), ("kind", "int64"), ("vm", "float64"), ("va", "float64"),
+                ("base_kv", "float64"), ("vmax", "float64"), ("vmin", "float64"),
+                ("area", "int64"), ("zone", "int64"),
+            ]),
+            table_spec(PIO_ARROW_TABLE_BRANCH, "branch", "record_batch", &["arrow"], true, None, None, units_source(), &[
+                ("from", "int64"), ("to", "int64"), ("r", "float64"), ("x", "float64"),
+                ("b", "float64"), ("rate_a", "float64"), ("rate_b", "float64"),
+                ("rate_c", "float64"), ("tap", "float64"), ("shift", "float64"),
+                ("in_service", "uint8"), ("angmin", "float64"), ("angmax", "float64"),
+                ("g_fr", "float64"), ("b_fr", "float64"), ("g_to", "float64"),
+                ("b_to", "float64"), ("c_rating_a", "float64"), ("c_rating_b", "float64"),
+                ("c_rating_c", "float64"), ("pf", "float64"), ("qf", "float64"),
+                ("pt", "float64"), ("qt", "float64"),
+            ]),
+            table_spec(PIO_ARROW_TABLE_GEN, "gen", "record_batch", &["arrow"], true, None, None, units_source(), &[
+                ("bus", "int64"), ("pg", "float64"), ("qg", "float64"),
+                ("pmax", "float64"), ("pmin", "float64"), ("qmax", "float64"),
+                ("qmin", "float64"), ("vg", "float64"), ("mbase", "float64"),
+                ("in_service", "uint8"),
+            ]),
+            table_spec(PIO_ARROW_TABLE_LOAD, "load", "record_batch", &["arrow"], true, None, None, units_source(), &[
+                ("bus", "int64"), ("p", "float64"), ("q", "float64"), ("in_service", "uint8"),
+            ]),
+            table_spec(PIO_ARROW_TABLE_SHUNT, "shunt", "record_batch", &["arrow"], true, None, None, units_source(), &[
+                ("bus", "int64"), ("g", "float64"), ("b", "float64"), ("in_service", "uint8"),
+            ]),
+            table_spec(PIO_ARROW_TABLE_SWITCH, "switch", "record_batch", &["arrow"], true, None, None, units_source(), &[
+                ("from", "int64"), ("to", "int64"), ("closed", "uint8"),
+                ("thermal_rating", "float64"), ("current_rating", "float64"),
+                ("pf", "float64"), ("qf", "float64"), ("pt", "float64"), ("qt", "float64"),
+            ]),
+            table_spec(PIO_ARROW_TABLE_SOLVER_BUS, "solver_bus", "record_batch", &["arrow"], true, Some("solver_bus"), None, units_solver(), &[
+                ("index", "int64"), ("bus_id", "int64"), ("source_row", "int64"),
+                ("kind", "int64"), ("vm", "float64"), ("va", "float64"),
+                ("base_kv", "float64"), ("vmax", "float64"), ("vmin", "float64"),
+                ("pd", "float64"), ("qd", "float64"), ("gs", "float64"),
+                ("bs", "float64"), ("component_label", "int64"), ("is_reference", "uint8"),
+            ]),
+            table_spec(PIO_ARROW_TABLE_SOLVER_LOAD, "solver_load", "record_batch", &["arrow"], true, Some("solver_load"), None, units_solver(), &[
+                ("index", "int64"), ("source_row", "int64"), ("bus_index", "int64"),
+                ("p", "float64"), ("q", "float64"),
+            ]),
+            table_spec(PIO_ARROW_TABLE_SOLVER_SHUNT, "solver_shunt", "record_batch", &["arrow"], true, Some("solver_shunt"), None, units_solver(), &[
+                ("index", "int64"), ("source_row", "int64"), ("bus_index", "int64"),
+                ("g", "float64"), ("b", "float64"),
+            ]),
+            table_spec(PIO_ARROW_TABLE_SOLVER_BRANCH, "solver_branch", "record_batch", &["arrow"], true, Some("solver_branch"), None, units_solver(), &[
+                ("index", "int64"), ("source_row", "int64"), ("from_bus_index", "int64"),
+                ("to_bus_index", "int64"), ("r", "float64"), ("x", "float64"),
+                ("b", "float64"), ("g_fr", "float64"), ("b_fr", "float64"),
+                ("g_to", "float64"), ("b_to", "float64"), ("rate_a", "float64"),
+                ("rate_b", "float64"), ("rate_c", "float64"), ("tap", "float64"),
+                ("shift", "float64"), ("angmin", "float64"), ("angmax", "float64"),
+            ]),
+            table_spec(PIO_ARROW_TABLE_SOLVER_SWITCH, "solver_switch", "record_batch", &["arrow"], true, Some("solver_switch"), None, units_solver(), &[
+                ("index", "int64"), ("source_row", "int64"), ("from_bus_index", "int64"),
+                ("to_bus_index", "int64"), ("closed", "uint8"), ("thermal_rating", "float64"),
+                ("current_rating", "float64"), ("pf", "float64"), ("qf", "float64"),
+                ("pt", "float64"), ("qt", "float64"),
+            ]),
+            table_spec(PIO_ARROW_TABLE_SOLVER_ARC, "solver_arc", "record_batch", &["arrow"], true, Some("solver_arc"), None, units_solver(), &[
+                ("index", "int64"), ("branch_index", "int64"), ("terminal", "int64"),
+                ("from_bus_index", "int64"), ("to_bus_index", "int64"), ("tap", "float64"),
+                ("shift", "float64"), ("g_shunt", "float64"), ("b_shunt", "float64"),
+                ("rate_a", "float64"),
+            ]),
+            table_spec(PIO_ARROW_TABLE_SOLVER_GEN, "solver_gen", "record_batch", &["arrow"], true, Some("solver_gen"), None, units_solver(), &[
+                ("index", "int64"), ("source_row", "int64"), ("bus_index", "int64"),
+                ("pg", "float64"), ("qg", "float64"), ("pmax", "float64"),
+                ("pmin", "float64"), ("qmax", "float64"), ("qmin", "float64"),
+                ("vg", "float64"), ("mbase", "float64"), ("regulated_bus_index", "int64"),
+            ]),
+            table_spec(PIO_ARROW_TABLE_SOLVER_STORAGE, "solver_storage", "record_batch", &["arrow"], true, Some("solver_storage"), None, units_solver(), &[
+                ("index", "int64"), ("source_row", "int64"), ("bus_index", "int64"),
+                ("ps", "float64"), ("qs", "float64"), ("energy", "float64"),
+                ("energy_rating", "float64"), ("charge_rating", "float64"),
+                ("discharge_rating", "float64"), ("thermal_rating", "float64"),
+                ("qmin", "float64"), ("qmax", "float64"), ("r", "float64"),
+                ("x", "float64"), ("p_loss", "float64"), ("q_loss", "float64"),
+            ]),
+            table_spec(PIO_ARROW_TABLE_SOLVER_HVDC, "solver_hvdc", "record_batch", &["arrow"], true, Some("solver_hvdc"), None, units_solver(), &[
+                ("index", "int64"), ("source_row", "int64"), ("from_bus_index", "int64"),
+                ("to_bus_index", "int64"), ("pf", "float64"), ("pt", "float64"),
+                ("qf", "float64"), ("qt", "float64"), ("vf", "float64"), ("vt", "float64"),
+                ("pmin", "float64"), ("pmax", "float64"), ("qminf", "float64"),
+                ("qmaxf", "float64"), ("qmint", "float64"), ("qmaxt", "float64"),
+                ("loss0", "float64"), ("loss1", "float64"),
+            ]),
+            table_spec(PIO_ARROW_TABLE_YBUS, "ybus", "coo", &["arrow", "matrix"], matrix_available, Some("matrix_bus"), Some("matrix_bus"), units_matrix(), &[
+                ("row_index", "int64"), ("col_index", "int64"), ("g", "float64"), ("b", "float64"),
+            ]),
+            table_spec(PIO_ARROW_TABLE_INCIDENCE, "incidence", "coo", &["arrow", "matrix"], matrix_available, Some("matrix_bus"), Some("matrix_branch"), units_matrix(), &[
+                ("row_index", "int64"), ("col_index", "int64"), ("value", "float64"),
+            ]),
+            table_spec(PIO_ARROW_TABLE_BPRIME, "bprime", "coo", &["arrow", "matrix"], matrix_available, Some("matrix_bus"), Some("matrix_bus"), units_matrix(), &[
+                ("row_index", "int64"), ("col_index", "int64"), ("value", "float64"),
+            ]),
+            table_spec(PIO_ARROW_TABLE_BDOUBLEPRIME, "bdoubleprime", "coo", &["arrow", "matrix"], matrix_available, Some("matrix_bus"), Some("matrix_bus"), units_matrix(), &[
+                ("row_index", "int64"), ("col_index", "int64"), ("value", "float64"),
+            ]),
+            table_spec(PIO_ARROW_TABLE_MATRIX_BUS, "matrix_bus", "axis_map", &["arrow", "matrix"], matrix_available, Some("matrix_bus"), None, units_axis(), &[
+                ("index", "int64"), ("bus_id", "int64"), ("source_row", "int64"),
+                ("is_reference", "uint8"), ("component", "int64"),
+            ]),
+            table_spec(PIO_ARROW_TABLE_MATRIX_BRANCH, "matrix_branch", "axis_map", &["arrow", "matrix"], matrix_available, Some("matrix_branch"), None, units_axis(), &[
+                ("index", "int64"), ("source_row", "int64"), ("from_bus_id", "int64"),
+                ("to_bus_id", "int64"),
+            ]),
+        ]
+    })
+}
+
+fn units_source() -> serde_json::Value {
+    serde_json::json!({
+        "power": "source",
+        "voltage": "source",
+        "angle": "degree",
+        "index_base": "external_bus_id"
+    })
+}
+
+fn units_solver() -> serde_json::Value {
+    serde_json::json!({
+        "power": "per_unit",
+        "voltage": "per_unit",
+        "angle": "radian",
+        "impedance": "per_unit",
+        "admittance": "per_unit",
+        "index_base": "zero"
+    })
+}
+
+fn units_matrix() -> serde_json::Value {
+    serde_json::json!({
+        "matrix_index_base": "zero",
+        "value": "per_unit"
+    })
+}
+
+fn units_axis() -> serde_json::Value {
+    serde_json::json!({
+        "index_base": "zero",
+        "source_row_base": "zero",
+        "missing_source_row": -1
+    })
 }
 
 fn solver_tables(net: &Network) -> Result<NormalizedSolverTables, String> {
@@ -662,7 +851,7 @@ fn solver_hvdc_batch(t: &NormalizedSolverTables) -> Result<RecordBatch, ArrowErr
 
 #[cfg(feature = "matrix")]
 macro_rules! real_matrix_batch {
-    ($table_name:expr, $matrix:expr) => {{
+    ($table_name:expr, $matrix:expr, $row_axis:expr, $col_axis:expr) => {{
         let matrix = $matrix;
         let mut row_index = Vec::with_capacity(matrix.nnz());
         let mut col_index = Vec::with_capacity(matrix.nnz());
@@ -676,13 +865,111 @@ macro_rules! real_matrix_batch {
         }
         matrix_real_batch(
             $table_name,
-            matrix.rows(),
-            matrix.cols(),
+            MatrixDims {
+                rows: matrix.rows(),
+                cols: matrix.cols(),
+            },
             row_index,
             col_index,
             value,
+            MatrixAxes {
+                row: $row_axis,
+                col: $col_axis,
+            },
         )
     }};
+}
+
+#[cfg(feature = "matrix")]
+fn matrix_bus_batch(net: &Network, core: &IndexCore) -> Result<RecordBatch, String> {
+    let view = IndexedNetwork::with_core(net, core);
+    let refs = view.reference_bus_indices();
+    let components = view.connected_component_labels();
+    let source_rows: HashMap<BusId, usize> = net
+        .buses
+        .iter()
+        .enumerate()
+        .map(|(idx, bus)| (bus.id, idx))
+        .collect();
+
+    let buses = &view.network().buses;
+    batch_with_metadata(
+        vec![
+            ("index", i64s((0..buses.len()).map(usz).collect::<Vec<_>>())),
+            (
+                "bus_id",
+                i64s(buses.iter().map(|bus| ext(bus.id)).collect()),
+            ),
+            (
+                "source_row",
+                i64s(
+                    buses
+                        .iter()
+                        .map(|bus| source_rows.get(&bus.id).copied().map_or(-1, usz))
+                        .collect(),
+                ),
+            ),
+            (
+                "is_reference",
+                u8s((0..buses.len())
+                    .map(|idx| u8::from(refs.contains(&idx)))
+                    .collect()),
+            ),
+            (
+                "component",
+                i64s(components.iter().map(|&label| usz(label)).collect()),
+            ),
+        ],
+        axis_metadata("matrix_bus"),
+    )
+    .map_err(|e| e.to_string())
+}
+
+#[cfg(not(feature = "matrix"))]
+fn matrix_bus_batch(_net: &Network, _core: &IndexCore) -> Result<RecordBatch, String> {
+    Err(matrix_feature_error())
+}
+
+#[cfg(feature = "matrix")]
+fn matrix_branch_batch(net: &Network, core: &IndexCore) -> Result<RecordBatch, String> {
+    let view = IndexedNetwork::with_core(net, core);
+    let parts = powerio_matrix::build_incidence(
+        &view,
+        powerio_matrix::DcConvention::PaperPure,
+        &powerio_matrix::BuildOptions::default(),
+    )
+    .map_err(|e| e.to_string())?;
+
+    let mut index = Vec::with_capacity(parts.branch_of_col.len());
+    let mut source_row = Vec::with_capacity(parts.branch_of_col.len());
+    let mut from_bus_id = Vec::with_capacity(parts.branch_of_col.len());
+    let mut to_bus_id = Vec::with_capacity(parts.branch_of_col.len());
+    for (col, &idx) in parts.branch_of_col.iter().enumerate() {
+        let br = view
+            .branches()
+            .get(idx)
+            .ok_or_else(|| format!("incidence branch column {col} points to missing row {idx}"))?;
+        index.push(usz(col));
+        source_row.push((idx < net.branches.len()).then_some(idx).map_or(-1, usz));
+        from_bus_id.push(ext(br.from));
+        to_bus_id.push(ext(br.to));
+    }
+
+    batch_with_metadata(
+        vec![
+            ("index", i64s(index)),
+            ("source_row", i64s(source_row)),
+            ("from_bus_id", i64s(from_bus_id)),
+            ("to_bus_id", i64s(to_bus_id)),
+        ],
+        axis_metadata("matrix_branch"),
+    )
+    .map_err(|e| e.to_string())
+}
+
+#[cfg(not(feature = "matrix"))]
+fn matrix_branch_batch(_net: &Network, _core: &IndexCore) -> Result<RecordBatch, String> {
+    Err(matrix_feature_error())
 }
 
 #[cfg(feature = "matrix")]
@@ -690,35 +977,104 @@ fn matrix_ybus_batch(net: &Network, core: &IndexCore) -> Result<RecordBatch, Str
     let view = IndexedNetwork::with_core(net, core);
     let parts = powerio_matrix::build_ybus(&view, &powerio_matrix::BuildOptions::default())
         .map_err(|e| e.to_string())?;
-    let mut entries: BTreeMap<(usize, usize), (f64, f64)> = BTreeMap::new();
-    for (row, vec) in parts.g.outer_iterator().enumerate() {
-        for (col, &value) in vec.iter() {
-            entries.entry((row, col)).or_default().0 = value;
+    let mut cols = YbusColumns {
+        row_index: Vec::with_capacity(parts.g.nnz() + parts.b.nnz()),
+        col_index: Vec::with_capacity(parts.g.nnz() + parts.b.nnz()),
+        g: Vec::with_capacity(parts.g.nnz() + parts.b.nnz()),
+        b: Vec::with_capacity(parts.g.nnz() + parts.b.nnz()),
+    };
+    for row in 0..parts.g.rows() {
+        match (parts.g.outer_view(row), parts.b.outer_view(row)) {
+            (Some(g_row), Some(b_row)) => push_ybus_row(
+                row,
+                g_row.indices(),
+                g_row.data(),
+                b_row.indices(),
+                b_row.data(),
+                &mut cols,
+            ),
+            (Some(g_row), None) => {
+                push_ybus_row(row, g_row.indices(), g_row.data(), &[], &[], &mut cols);
+            }
+            (None, Some(b_row)) => {
+                push_ybus_row(row, &[], &[], b_row.indices(), b_row.data(), &mut cols);
+            }
+            (None, None) => {}
         }
     }
-    for (row, vec) in parts.b.outer_iterator().enumerate() {
-        for (col, &value) in vec.iter() {
-            entries.entry((row, col)).or_default().1 = value;
-        }
-    }
-
-    let mut row_index = Vec::with_capacity(entries.len());
-    let mut col_index = Vec::with_capacity(entries.len());
-    let mut g = Vec::with_capacity(entries.len());
-    let mut b = Vec::with_capacity(entries.len());
-    for ((row, col), (g_value, b_value)) in entries {
-        row_index.push(usz(row));
-        col_index.push(usz(col));
-        g.push(g_value);
-        b.push(b_value);
-    }
-    matrix_ybus_record_batch(parts.g.rows(), parts.g.cols(), row_index, col_index, g, b)
-        .map_err(|e| e.to_string())
+    matrix_ybus_record_batch(
+        MatrixDims {
+            rows: parts.g.rows(),
+            cols: parts.g.cols(),
+        },
+        cols.row_index,
+        cols.col_index,
+        cols.g,
+        cols.b,
+        MatrixAxes {
+            row: "matrix_bus",
+            col: "matrix_bus",
+        },
+    )
+    .map_err(|e| e.to_string())
 }
 
 #[cfg(not(feature = "matrix"))]
 fn matrix_ybus_batch(_net: &Network, _core: &IndexCore) -> Result<RecordBatch, String> {
     Err(matrix_feature_error())
+}
+
+#[cfg(feature = "matrix")]
+struct YbusColumns {
+    row_index: Vec<i64>,
+    col_index: Vec<i64>,
+    g: Vec<f64>,
+    b: Vec<f64>,
+}
+
+#[cfg(feature = "matrix")]
+fn push_ybus_row(
+    row: usize,
+    g_indices: &[usize],
+    g_data: &[f64],
+    b_indices: &[usize],
+    b_data: &[f64],
+    cols: &mut YbusColumns,
+) {
+    let mut gi = 0;
+    let mut bi = 0;
+    while gi < g_indices.len() || bi < b_indices.len() {
+        let (col, g_value, b_value) = match (g_indices.get(gi), b_indices.get(bi)) {
+            (Some(&g_col), Some(&b_col)) => match g_col.cmp(&b_col) {
+                std::cmp::Ordering::Less => {
+                    gi += 1;
+                    (g_col, g_data[gi - 1], 0.0)
+                }
+                std::cmp::Ordering::Greater => {
+                    bi += 1;
+                    (b_col, 0.0, b_data[bi - 1])
+                }
+                std::cmp::Ordering::Equal => {
+                    gi += 1;
+                    bi += 1;
+                    (g_col, g_data[gi - 1], b_data[bi - 1])
+                }
+            },
+            (Some(&g_col), None) => {
+                gi += 1;
+                (g_col, g_data[gi - 1], 0.0)
+            }
+            (None, Some(&b_col)) => {
+                bi += 1;
+                (b_col, 0.0, b_data[bi - 1])
+            }
+            (None, None) => unreachable!(),
+        };
+        cols.row_index.push(usz(row));
+        cols.col_index.push(usz(col));
+        cols.g.push(g_value);
+        cols.b.push(b_value);
+    }
 }
 
 #[cfg(feature = "matrix")]
@@ -730,7 +1086,8 @@ fn matrix_incidence_batch(net: &Network, core: &IndexCore) -> Result<RecordBatch
         &powerio_matrix::BuildOptions::default(),
     )
     .map_err(|e| e.to_string())?;
-    real_matrix_batch!("incidence", parts.a).map_err(|e| e.to_string())
+    real_matrix_batch!("incidence", parts.a, "matrix_bus", "matrix_branch")
+        .map_err(|e| e.to_string())
 }
 
 #[cfg(not(feature = "matrix"))]
@@ -743,7 +1100,7 @@ fn matrix_bprime_batch(net: &Network, core: &IndexCore) -> Result<RecordBatch, S
     let view = IndexedNetwork::with_core(net, core);
     let matrix = powerio_matrix::build_bprime(&view, &powerio_matrix::BuildOptions::default())
         .map_err(|e| e.to_string())?;
-    real_matrix_batch!("bprime", matrix).map_err(|e| e.to_string())
+    real_matrix_batch!("bprime", matrix, "matrix_bus", "matrix_bus").map_err(|e| e.to_string())
 }
 
 #[cfg(not(feature = "matrix"))]
@@ -757,7 +1114,8 @@ fn matrix_bdoubleprime_batch(net: &Network, core: &IndexCore) -> Result<RecordBa
     let matrix =
         powerio_matrix::build_bdoubleprime(&view, &powerio_matrix::BuildOptions::default())
             .map_err(|e| e.to_string())?;
-    real_matrix_batch!("bdoubleprime", matrix).map_err(|e| e.to_string())
+    real_matrix_batch!("bdoubleprime", matrix, "matrix_bus", "matrix_bus")
+        .map_err(|e| e.to_string())
 }
 
 #[cfg(not(feature = "matrix"))]
@@ -771,13 +1129,25 @@ fn matrix_feature_error() -> String {
 }
 
 #[cfg(feature = "matrix")]
-fn matrix_real_batch(
-    table: &str,
+struct MatrixDims {
     rows: usize,
     cols: usize,
+}
+
+#[cfg(feature = "matrix")]
+struct MatrixAxes<'a> {
+    row: &'a str,
+    col: &'a str,
+}
+
+#[cfg(feature = "matrix")]
+fn matrix_real_batch(
+    table: &str,
+    dims: MatrixDims,
     row_index: Vec<i64>,
     col_index: Vec<i64>,
     value: Vec<f64>,
+    axes: MatrixAxes<'_>,
 ) -> Result<RecordBatch, ArrowError> {
     batch_with_metadata(
         vec![
@@ -785,18 +1155,18 @@ fn matrix_real_batch(
             ("col_index", i64s(col_index)),
             ("value", f64s(value)),
         ],
-        matrix_metadata(table, rows, cols),
+        matrix_metadata(table, dims.rows, dims.cols, axes.row, axes.col),
     )
 }
 
 #[cfg(feature = "matrix")]
 fn matrix_ybus_record_batch(
-    rows: usize,
-    cols: usize,
+    dims: MatrixDims,
     row_index: Vec<i64>,
     col_index: Vec<i64>,
     g: Vec<f64>,
     b: Vec<f64>,
+    axes: MatrixAxes<'_>,
 ) -> Result<RecordBatch, ArrowError> {
     batch_with_metadata(
         vec![
@@ -805,7 +1175,7 @@ fn matrix_ybus_record_batch(
             ("g", f64s(g)),
             ("b", f64s(b)),
         ],
-        matrix_metadata("ybus", rows, cols),
+        matrix_metadata("ybus", dims.rows, dims.cols, axes.row, axes.col),
     )
 }
 
@@ -829,12 +1199,38 @@ fn batch_with_metadata(
 }
 
 #[cfg(feature = "matrix")]
-fn matrix_metadata(table: &str, rows: usize, cols: usize) -> HashMap<String, String> {
+fn matrix_metadata(
+    table: &str,
+    rows: usize,
+    cols: usize,
+    row_axis: &str,
+    col_axis: &str,
+) -> HashMap<String, String> {
     HashMap::from([
         ("powerio.table".to_owned(), table.to_owned()),
+        (
+            "powerio.schema_version".to_owned(),
+            ARROW_SCHEMA_VERSION.to_owned(),
+        ),
+        ("powerio.format".to_owned(), "coo".to_owned()),
         ("powerio.index_space".to_owned(), "solver_bus".to_owned()),
+        ("powerio.row_axis".to_owned(), row_axis.to_owned()),
+        ("powerio.col_axis".to_owned(), col_axis.to_owned()),
         ("powerio.row_count".to_owned(), rows.to_string()),
         ("powerio.col_count".to_owned(), cols.to_string()),
+    ])
+}
+
+#[cfg(feature = "matrix")]
+fn axis_metadata(table: &str) -> HashMap<String, String> {
+    HashMap::from([
+        ("powerio.table".to_owned(), table.to_owned()),
+        (
+            "powerio.schema_version".to_owned(),
+            ARROW_SCHEMA_VERSION.to_owned(),
+        ),
+        ("powerio.format".to_owned(), "axis_map".to_owned()),
+        ("powerio.row_axis".to_owned(), table.to_owned()),
     ])
 }
 
@@ -892,6 +1288,26 @@ mod tests {
         )
     }
 
+    #[cfg(feature = "matrix")]
+    fn incidence_filter_net() -> Network {
+        use powerio::{Branch, Bus, BusId, BusType};
+
+        Network::in_memory(
+            "incidence-filter",
+            100.0,
+            vec![
+                Bus::new(BusId(1), BusType::Ref, 230.0),
+                Bus::new(BusId(2), BusType::Pq, 230.0),
+                Bus::new(BusId(3), BusType::Pq, 230.0),
+            ],
+            vec![
+                Branch::new(BusId(1), BusId(1), 0.0, 0.1),
+                Branch::new(BusId(1), BusId(2), 0.0, 0.0),
+                Branch::new(BusId(2), BusId(3), 0.0, 0.2),
+            ],
+        )
+    }
+
     fn round_trip(net: &Network, table: i32) -> StructArray {
         let core = IndexCore::build(net);
         let (array, schema) = export(net, &core, table).unwrap();
@@ -913,6 +1329,15 @@ mod tests {
             .unwrap()
             .as_any()
             .downcast_ref::<Int64Array>()
+            .unwrap()
+    }
+
+    #[cfg(feature = "matrix")]
+    fn u8_col<'a>(sa: &'a StructArray, name: &str) -> &'a UInt8Array {
+        sa.column_by_name(name)
+            .unwrap()
+            .as_any()
+            .downcast_ref::<UInt8Array>()
             .unwrap()
     }
 
@@ -942,6 +1367,8 @@ mod tests {
             PIO_ARROW_TABLE_INCIDENCE => matrix_incidence_batch(net, &core).unwrap(),
             PIO_ARROW_TABLE_BPRIME => matrix_bprime_batch(net, &core).unwrap(),
             PIO_ARROW_TABLE_BDOUBLEPRIME => matrix_bdoubleprime_batch(net, &core).unwrap(),
+            PIO_ARROW_TABLE_MATRIX_BUS => matrix_bus_batch(net, &core).unwrap(),
+            PIO_ARROW_TABLE_MATRIX_BRANCH => matrix_branch_batch(net, &core).unwrap(),
             _ => panic!("not a matrix table id: {table}"),
         }
     }
@@ -961,6 +1388,22 @@ mod tests {
         let metadata = metadata.metadata();
         let mut obj = serde_json::Map::new();
         obj.insert("table".to_owned(), serde_json::json!(table_name));
+        obj.insert(
+            "schema_version".to_owned(),
+            serde_json::json!(metadata.get("powerio.schema_version").unwrap()),
+        );
+        obj.insert(
+            "format".to_owned(),
+            serde_json::json!(metadata.get("powerio.format").unwrap()),
+        );
+        obj.insert(
+            "row_axis".to_owned(),
+            serde_json::json!(metadata.get("powerio.row_axis").unwrap()),
+        );
+        obj.insert(
+            "col_axis".to_owned(),
+            serde_json::json!(metadata.get("powerio.col_axis").unwrap()),
+        );
         obj.insert(
             "row_count".to_owned(),
             serde_json::json!(
@@ -1008,6 +1451,66 @@ mod tests {
     }
 
     #[cfg(feature = "matrix")]
+    fn axis_table_json(table_name: &str, rb: &RecordBatch) -> serde_json::Value {
+        let metadata = rb.schema();
+        let metadata = metadata.metadata();
+        let mut obj = serde_json::Map::new();
+        obj.insert("table".to_owned(), serde_json::json!(table_name));
+        obj.insert(
+            "schema_version".to_owned(),
+            serde_json::json!(metadata.get("powerio.schema_version").unwrap()),
+        );
+        obj.insert(
+            "format".to_owned(),
+            serde_json::json!(metadata.get("powerio.format").unwrap()),
+        );
+        obj.insert(
+            "row_axis".to_owned(),
+            serde_json::json!(metadata.get("powerio.row_axis").unwrap()),
+        );
+        obj.insert(
+            "index".to_owned(),
+            serde_json::json!(rb_i64_col(rb, "index").values().to_vec()),
+        );
+        obj.insert(
+            "source_row".to_owned(),
+            serde_json::json!(rb_i64_col(rb, "source_row").values().to_vec()),
+        );
+        if table_name == "matrix_bus" {
+            obj.insert(
+                "bus_id".to_owned(),
+                serde_json::json!(rb_i64_col(rb, "bus_id").values().to_vec()),
+            );
+            obj.insert(
+                "is_reference".to_owned(),
+                serde_json::json!(
+                    rb.column_by_name("is_reference")
+                        .unwrap()
+                        .as_any()
+                        .downcast_ref::<UInt8Array>()
+                        .unwrap()
+                        .values()
+                        .to_vec()
+                ),
+            );
+            obj.insert(
+                "component".to_owned(),
+                serde_json::json!(rb_i64_col(rb, "component").values().to_vec()),
+            );
+        } else {
+            obj.insert(
+                "from_bus_id".to_owned(),
+                serde_json::json!(rb_i64_col(rb, "from_bus_id").values().to_vec()),
+            );
+            obj.insert(
+                "to_bus_id".to_owned(),
+                serde_json::json!(rb_i64_col(rb, "to_bus_id").values().to_vec()),
+            );
+        }
+        serde_json::Value::Object(obj)
+    }
+
+    #[cfg(feature = "matrix")]
     fn matrix_golden_json(case_file: &str) -> serde_json::Value {
         let n = net(case_file);
         let tables = [
@@ -1021,8 +1524,18 @@ mod tests {
             let rb = matrix_record_batch(&n, table);
             table_obj.insert(name.to_owned(), matrix_table_json(name, &rb));
         }
+        let axes = [
+            ("matrix_bus", PIO_ARROW_TABLE_MATRIX_BUS),
+            ("matrix_branch", PIO_ARROW_TABLE_MATRIX_BRANCH),
+        ];
+        let mut axis_obj = serde_json::Map::new();
+        for (name, table) in axes {
+            let rb = matrix_record_batch(&n, table);
+            axis_obj.insert(name.to_owned(), axis_table_json(name, &rb));
+        }
         serde_json::json!({
             "case": case_file,
+            "axes": axis_obj,
             "tables": table_obj,
         })
     }
@@ -1156,12 +1669,77 @@ mod tests {
         assert!(export(&n, &core, 99).is_err());
     }
 
+    #[test]
+    fn arrow_table_ids_are_append_only() {
+        assert_eq!(PIO_ARROW_TABLE_BUS, 0);
+        assert_eq!(PIO_ARROW_TABLE_BRANCH, 1);
+        assert_eq!(PIO_ARROW_TABLE_GEN, 2);
+        assert_eq!(PIO_ARROW_TABLE_LOAD, 3);
+        assert_eq!(PIO_ARROW_TABLE_SHUNT, 4);
+        assert_eq!(PIO_ARROW_TABLE_SWITCH, 5);
+        assert_eq!(PIO_ARROW_TABLE_SOLVER_BUS, 6);
+        assert_eq!(PIO_ARROW_TABLE_SOLVER_LOAD, 7);
+        assert_eq!(PIO_ARROW_TABLE_SOLVER_SHUNT, 8);
+        assert_eq!(PIO_ARROW_TABLE_SOLVER_BRANCH, 9);
+        assert_eq!(PIO_ARROW_TABLE_SOLVER_SWITCH, 10);
+        assert_eq!(PIO_ARROW_TABLE_SOLVER_ARC, 11);
+        assert_eq!(PIO_ARROW_TABLE_SOLVER_GEN, 12);
+        assert_eq!(PIO_ARROW_TABLE_SOLVER_STORAGE, 13);
+        assert_eq!(PIO_ARROW_TABLE_SOLVER_HVDC, 14);
+        assert_eq!(PIO_ARROW_TABLE_YBUS, 15);
+        assert_eq!(PIO_ARROW_TABLE_INCIDENCE, 16);
+        assert_eq!(PIO_ARROW_TABLE_BPRIME, 17);
+        assert_eq!(PIO_ARROW_TABLE_BDOUBLEPRIME, 18);
+        assert_eq!(PIO_ARROW_TABLE_MATRIX_BUS, 19);
+        assert_eq!(PIO_ARROW_TABLE_MATRIX_BRANCH, 20);
+    }
+
+    #[test]
+    fn arrow_catalog_lists_ids_columns_axes_and_features() {
+        let catalog: serde_json::Value = serde_json::from_str(&catalog_json()).unwrap();
+        assert_eq!(catalog["schema_version"], ARROW_SCHEMA_VERSION);
+        let tables = catalog["tables"].as_array().unwrap();
+        let find = |name: &str| {
+            tables
+                .iter()
+                .find(|table| table["name"] == name)
+                .unwrap_or_else(|| panic!("missing catalog table {name}"))
+        };
+
+        let bus = find("bus");
+        assert_eq!(bus["id"], PIO_ARROW_TABLE_BUS);
+        assert_eq!(bus["feature_requirements"], serde_json::json!(["arrow"]));
+        assert_eq!(bus["columns"][0]["name"], "id");
+
+        let bprime = find("bprime");
+        assert_eq!(bprime["id"], PIO_ARROW_TABLE_BPRIME);
+        assert_eq!(bprime["format"], "coo");
+        assert_eq!(bprime["row_axis"], "matrix_bus");
+        assert_eq!(bprime["col_axis"], "matrix_bus");
+        assert_eq!(
+            bprime["feature_requirements"],
+            serde_json::json!(["arrow", "matrix"])
+        );
+        assert_eq!(bprime["available"], cfg!(feature = "matrix"));
+
+        let incidence = find("incidence");
+        assert_eq!(incidence["row_axis"], "matrix_bus");
+        assert_eq!(incidence["col_axis"], "matrix_branch");
+
+        let axis = find("matrix_bus");
+        assert_eq!(axis["id"], PIO_ARROW_TABLE_MATRIX_BUS);
+        assert_eq!(axis["format"], "axis_map");
+        assert_eq!(axis["columns"][1]["name"], "bus_id");
+    }
+
     #[cfg(not(feature = "matrix"))]
     #[test]
     fn matrix_table_requires_matrix_feature() {
         let n = net("case9.m");
         let core = IndexCore::build(&n);
         let err = export(&n, &core, PIO_ARROW_TABLE_BPRIME).unwrap_err();
+        assert!(err.contains("matrix cargo feature"), "{err}");
+        let err = export(&n, &core, PIO_ARROW_TABLE_MATRIX_BUS).unwrap_err();
         assert!(err.contains("matrix cargo feature"), "{err}");
     }
 
@@ -1182,7 +1760,11 @@ mod tests {
         let metadata = rb.schema();
         let metadata = metadata.metadata();
         assert_eq!(metadata.get("powerio.table").unwrap(), "bprime");
+        assert_eq!(metadata.get("powerio.schema_version").unwrap(), "1");
+        assert_eq!(metadata.get("powerio.format").unwrap(), "coo");
         assert_eq!(metadata.get("powerio.index_space").unwrap(), "solver_bus");
+        assert_eq!(metadata.get("powerio.row_axis").unwrap(), "matrix_bus");
+        assert_eq!(metadata.get("powerio.col_axis").unwrap(), "matrix_bus");
         assert_eq!(metadata.get("powerio.row_count").unwrap(), "9");
         assert_eq!(metadata.get("powerio.col_count").unwrap(), "9");
 
@@ -1191,10 +1773,193 @@ mod tests {
         let imported_schema = Schema::try_from(&schema).unwrap();
         let metadata = imported_schema.metadata();
         assert_eq!(metadata.get("powerio.table").unwrap(), "bprime");
+        assert_eq!(metadata.get("powerio.schema_version").unwrap(), "1");
+        assert_eq!(metadata.get("powerio.format").unwrap(), "coo");
         assert_eq!(metadata.get("powerio.index_space").unwrap(), "solver_bus");
+        assert_eq!(metadata.get("powerio.row_axis").unwrap(), "matrix_bus");
+        assert_eq!(metadata.get("powerio.col_axis").unwrap(), "matrix_bus");
         assert_eq!(metadata.get("powerio.row_count").unwrap(), "9");
         assert_eq!(metadata.get("powerio.col_count").unwrap(), "9");
         let _data = unsafe { from_ffi(array, &schema) }.unwrap();
+    }
+
+    #[cfg(feature = "matrix")]
+    #[test]
+    fn incidence_uses_branch_axis_metadata() {
+        let n = net("case9.m");
+        let rb = matrix_record_batch(&n, PIO_ARROW_TABLE_INCIDENCE);
+        let metadata = rb.schema();
+        let metadata = metadata.metadata();
+        assert_eq!(metadata.get("powerio.table").unwrap(), "incidence");
+        assert_eq!(metadata.get("powerio.format").unwrap(), "coo");
+        assert_eq!(metadata.get("powerio.row_axis").unwrap(), "matrix_bus");
+        assert_eq!(metadata.get("powerio.col_axis").unwrap(), "matrix_branch");
+        assert_eq!(metadata.get("powerio.row_count").unwrap(), "9");
+        assert_eq!(metadata.get("powerio.col_count").unwrap(), "9");
+    }
+
+    #[cfg(feature = "matrix")]
+    #[test]
+    fn matrix_axis_maps_export_dense_rows() {
+        let n = net("case14.m");
+        let bus = round_trip(&n, PIO_ARROW_TABLE_MATRIX_BUS);
+        assert_eq!(bus.len(), 14);
+        assert_eq!(i64_col(&bus, "index").value(0), 0);
+        assert_eq!(i64_col(&bus, "bus_id").value(0), 1);
+        assert_eq!(i64_col(&bus, "source_row").value(0), 0);
+        assert_eq!(u8_col(&bus, "is_reference").value(0), 1);
+        assert_eq!(i64_col(&bus, "component").value(0), 0);
+        assert_eq!(i64_col(&bus, "index").value(13), 13);
+        assert_eq!(i64_col(&bus, "bus_id").value(13), 14);
+
+        let branch = round_trip(&n, PIO_ARROW_TABLE_MATRIX_BRANCH);
+        let incidence = matrix_record_batch(&n, PIO_ARROW_TABLE_INCIDENCE);
+        let col_count = incidence
+            .schema()
+            .metadata()
+            .get("powerio.col_count")
+            .unwrap()
+            .parse::<usize>()
+            .unwrap();
+        assert_eq!(branch.len(), col_count);
+        assert_eq!(i64_col(&branch, "index").value(0), 0);
+        assert_eq!(i64_col(&branch, "source_row").value(0), 0);
+        assert_eq!(i64_col(&branch, "from_bus_id").value(0), 1);
+        assert_eq!(i64_col(&branch, "to_bus_id").value(0), 2);
+    }
+
+    #[cfg(feature = "matrix")]
+    fn transformer_3w_net() -> Network {
+        // Three buses joined only by a 3-winding transformer. The indexed view
+        // star-lowers it, adding a synthetic star bus, so the matrix bus axis has
+        // one more row than the handle's bus count.
+        let raw = "0, 100.00, 33, 0, 0, 60.00 / x\n\
+CASE\n\
+COMMENT\n\
+1,'B1          ', 230.0,3,1,1,1,1.00000,0.0,1.1,0.9,1.1,0.9\n\
+2,'B2          ', 138.0,1,1,1,1,1.00000,0.0,1.1,0.9,1.1,0.9\n\
+3,'B3          ', 13.8,1,1,1,1,1.00000,0.0,1.1,0.9,1.1,0.9\n\
+0 / END OF BUS DATA, BEGIN LOAD DATA\n\
+0 / END OF LOAD DATA, BEGIN FIXED SHUNT DATA\n\
+0 / END OF FIXED SHUNT DATA, BEGIN GENERATOR DATA\n\
+0 / END OF GENERATOR DATA, BEGIN BRANCH DATA\n\
+0 / END OF BRANCH DATA, BEGIN TRANSFORMER DATA\n\
+1, 2, 3, '1', 1, 1, 1, 0.0, 0.0, 2, 'T3W         ', 1, 1, 1, 0, 1, 0, 1, 0, 1, '            '\n\
+0.01, 0.10, 100.0, 0.02, 0.20, 100.0, 0.03, 0.30, 100.0, 0.98, -1.5\n\
+1.0, 230.0, 0.0, 100.0, 90.0, 80.0, 0, 0, 1.1, 0.9, 1.1, 0.9, 33, 0, 0, 0, 0\n\
+1.025, 138.0, 0.0, 110.0, 0, 0, 0, 0, 1.1, 0.9, 1.1, 0.9, 33, 0, 0, 0, 0\n\
+0.95, 13.8, 30.0, 50.0, 0, 0, 0, 0, 1.1, 0.9, 1.1, 0.9, 33, 0, 0, 0, 0\n\
+0 / END OF TRANSFORMER DATA, BEGIN AREA DATA\n\
+Q\n";
+        powerio::parse_str(raw, "psse").unwrap().network
+    }
+
+    // A 3-winding transformer star-lowers into an extra synthetic bus, so the
+    // matrix bus axis has more rows than the handle's bus count and the matrix
+    // bus order diverges from `pio_bus_ids`. The Julia binding maps matrix rows
+    // to bus ids ONLY through this `matrix_bus` axis (index -> bus_id), never by
+    // assuming handle bus order, so the producer must keep the COO row index
+    // space, `row_count`, and `matrix_bus` in lockstep. Lock that here.
+    #[cfg(feature = "matrix")]
+    #[test]
+    fn matrix_bus_axis_covers_star_lowered_rows() {
+        let n = transformer_3w_net();
+        assert_eq!(n.buses.len(), 3, "handle carries the three source buses");
+        assert!(n.branches.is_empty(), "a 3W is not folded into branches");
+        assert_eq!(n.transformers_3w.len(), 1);
+
+        let bus = matrix_record_batch(&n, PIO_ARROW_TABLE_MATRIX_BUS);
+        // The matrix bus axis exceeds the handle bus count: the star point is a
+        // matrix row with no `pio_bus_ids` entry.
+        assert_eq!(bus.num_rows(), n.buses.len() + 1);
+
+        let index = rb_i64_col(&bus, "index").values();
+        let bus_id = rb_i64_col(&bus, "bus_id").values();
+        let source_row = rb_i64_col(&bus, "source_row").values();
+
+        // (a) The axis index column is dense 0..len, so matrix row k reads its
+        // external bus id at `bus_id[k]` (the map the Julia side relies on).
+        let expected_index: Vec<i64> = (0..bus.num_rows() as i64).collect();
+        assert_eq!(index, expected_index.as_slice());
+
+        // The three source buses map to their external ids and source rows in
+        // order; the trailing star row carries a synthetic id outside the
+        // handle id space.
+        assert_eq!(bus_id, &[1, 2, 3, 4]);
+        let handle_ids: Vec<i64> = n.buses.iter().map(|b| ext(b.id)).collect();
+        assert!(
+            !handle_ids.contains(&bus_id[bus.num_rows() - 1]),
+            "star bus id must not collide with a handle bus id"
+        );
+
+        // (b) The star-point row has no source bus row.
+        assert_eq!(source_row[..3], [0, 1, 2]);
+        assert_eq!(
+            source_row[bus.num_rows() - 1],
+            -1,
+            "star-point bus has no source row"
+        );
+
+        // (c) Every symmetric bus-indexed matrix reports row_count/col_count
+        // equal to the matrix bus axis length, and its COO indices stay inside
+        // that axis, so index k always resolves through `matrix_bus`.
+        for table in [PIO_ARROW_TABLE_YBUS, PIO_ARROW_TABLE_BPRIME] {
+            let rb = matrix_record_batch(&n, table);
+            let meta = rb.schema();
+            let meta = meta.metadata();
+            assert_eq!(
+                meta.get("powerio.row_count").unwrap(),
+                &bus.num_rows().to_string(),
+                "row_count must match matrix_bus length"
+            );
+            assert_eq!(
+                meta.get("powerio.col_count").unwrap(),
+                &bus.num_rows().to_string(),
+                "col_count must match matrix_bus length"
+            );
+            let n_rows = bus.num_rows() as i64;
+            for &r in rb_i64_col(&rb, "row_index").values() {
+                assert!((0..n_rows).contains(&r), "COO row index within axis");
+            }
+            for &c in rb_i64_col(&rb, "col_index").values() {
+                assert!((0..n_rows).contains(&c), "COO col index within axis");
+            }
+        }
+    }
+
+    #[cfg(feature = "matrix")]
+    #[test]
+    fn matrix_branch_axis_matches_incidence_branch_columns() {
+        let n = incidence_filter_net();
+        let core = IndexCore::build(&n);
+        let view = IndexedNetwork::with_core(&n, &core);
+        let incidence = powerio_matrix::build_incidence(
+            &view,
+            powerio_matrix::DcConvention::PaperPure,
+            &powerio_matrix::BuildOptions::default(),
+        )
+        .unwrap();
+
+        let branch = matrix_record_batch(&n, PIO_ARROW_TABLE_MATRIX_BRANCH);
+        let source_rows = rb_i64_col(&branch, "source_row").values().to_vec();
+        let expected = incidence
+            .branch_of_col
+            .iter()
+            .map(|&idx| i64::try_from(idx).unwrap())
+            .collect::<Vec<_>>();
+        assert_eq!(source_rows, expected);
+        assert_eq!(source_rows, vec![2]);
+
+        let incidence_batch = matrix_record_batch(&n, PIO_ARROW_TABLE_INCIDENCE);
+        assert_eq!(
+            incidence_batch
+                .schema()
+                .metadata()
+                .get("powerio.col_count")
+                .unwrap(),
+            "1"
+        );
+        assert_eq!(branch.num_rows(), 1);
     }
 
     #[cfg(feature = "matrix")]

@@ -2,10 +2,11 @@
 //! built on [`powerio`] (re-exported, so one `use powerio_matrix::...` pulls in
 //! both layers).
 //!
-//! Signed incidence `A`, weighted Laplacian `L = A diag(b) Aᵀ` and its
-//! reference-grounded form, B'/B''/Y_bus, PTDF/LODF, adjacency, the LACPF block,
-//! and the DC OPF instance bundle, plus a petgraph representation. The builders take the
-//! dense-indexed [`IndexedNetwork`] view of a [`Network`].
+//! Signed incidence matrix `A`, DC bus susceptance matrix `L = A diag(b) Aᵀ`
+//! and its reference-grounded form, MATPOWER Bp/Bpp/Y_bus, PTDF/LODF, adjacency,
+//! the LACPF block, and the DC OPF instance bundle, plus a petgraph
+//! representation. The builders take the dense-indexed [`IndexedNetwork`] view
+//! of a [`Network`].
 //!
 //! ```
 //! use powerio_matrix::{parse_file, IndexedNetwork, build_bprime, BuildOptions};
@@ -14,17 +15,19 @@
 //! let net = parse_file(case, None)?.network;   // re-exported from powerio
 //! let g = IndexedNetwork::new(&net);           // dense [0, n) analysis view
 //! let bprime = build_bprime(&g, &BuildOptions::default())?;
-//! assert_eq!(bprime.rows(), g.n());            // B' is n×n
+//! assert_eq!(bprime.rows(), g.n());            // Bp is n×n
 //! # Ok::<(), powerio_matrix::Error>(())
 //! ```
 //!
 //! # Conventions
 //!
-//! B' and the Laplacians use the positive (M-matrix) form: off-diagonal `< 0`,
-//! diagonal `> 0`, `diag = Σ|off-diag|`. Bus ids are 1-based on the
-//! model; [`IndexedNetwork`] maps them to a dense `[0, n)`. `tap == 0` means
-//! `tap = 1`; B' ignores taps and shifts, B'' keeps taps and zeros shifts,
-//! Y_bus keeps both. Branch terminal admittance is stored per unit. DC OPF is
+//! The DC bus susceptance matrix and other weighted bus Laplacians use the
+//! positive M-matrix form: stored nonzero off-diagonal entries are negative,
+//! diagonals are nonnegative, and `diag = Σ|off-diag|`. Bus ids are 1-based on
+//! the model; [`IndexedNetwork`] maps them to a dense `[0, n)`. `tap == 0` means
+//! `tap = 1`. `build_bprime` and `build_bdoubleprime` follow MATPOWER `makeB`;
+//! Y_bus keeps tap magnitudes and phase shifts.
+//! Branch terminal admittance is stored per unit. DC OPF is
 //! bus indexed
 //! (`p_g ∈ ℝⁿ`), default susceptance `b = 1/x`, with [`DcConvention::Matpower`]
 //! the `1/(x·τ)` plus phase-shift variant. The full reference across every

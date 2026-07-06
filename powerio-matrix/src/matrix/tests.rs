@@ -3,7 +3,8 @@ use approx::assert_relative_eq;
 use crate::indexed::IndexedNetwork;
 use crate::matrix::{
     BuildOptions, DcConvention, MatrixStats, Scheme, build_bdoubleprime, build_bprime,
-    build_incidence, build_lacpf, build_ybus,
+    build_incidence, build_lacpf, build_weighted_laplacian, build_ybus, sddm_check,
+    triplet::CooBuilder,
 };
 use crate::network::{Branch, BranchCharging, Bus, BusId, BusType, Network, Shunt};
 use crate::parse_psse;
@@ -50,7 +51,7 @@ fn three_winding_transformer_enters_the_matrices_and_connects_its_windings() {
     // Three buses (1 reference, 2 and 3 PQ) joined only by a 3-winding
     // transformer, no other branch. The indexed view star-lowers it, so the
     // windings land in one grounded component (plus the synthetic star point)
-    // instead of three ungrounded islands, and the star branches scatter into B'.
+    // instead of three ungrounded islands, and the star branches scatter into Bp.
     let raw = r"0, 100.00, 33, 0, 0, 60.00 / x
 CASE
 COMMENT
@@ -124,6 +125,225 @@ fn bprime_is_symmetric_and_laplacian() {
     assert!(stats.m_matrix_sign);
     assert_relative_eq!(stats.min_dd_margin, 0.0, epsilon = 1e-12);
     assert!(stats.min_diag > 0.0);
+}
+
+#[test]
+fn bprime_cancels_tap_magnitude_and_keeps_phase_shift() {
+    let mut shifted = br(1, 2, 0.0, 0.2, 0.0);
+    shifted.tap = 1.25;
+    shifted.shift = 60.0;
+    let net = Network::in_memory(
+        "phase-shifter",
+        100.0,
+        vec![bus(1, BusType::Ref), bus(2, BusType::Pq)],
+        vec![shifted],
+    );
+    let view = IndexedNetwork::new(&net);
+    let b = build_bprime(
+        &view,
+        &BuildOptions {
+            scheme: Scheme::Xb,
+            ..Default::default()
+        },
+    )
+    .unwrap()
+    .to_dense();
+
+    // MATPOWER `makeB` sets TAP to 1 for `Bp` and keeps SHIFT. With r=0,
+    // x=0.2, shift=60°, the diagonal is 1/x = 5 and off diagonal entries are
+    // -cos(60°)/x = -2.5.
+    assert_relative_eq!(b[[0, 0]], 5.0, max_relative = 1e-12);
+    assert_relative_eq!(b[[1, 1]], 5.0, max_relative = 1e-12);
+    assert_relative_eq!(b[[0, 1]], -2.5, max_relative = 1e-12);
+    assert_relative_eq!(b[[1, 0]], -2.5, max_relative = 1e-12);
+
+    let ybus = build_ybus(&view, &BuildOptions::default())
+        .unwrap()
+        .b
+        .to_dense();
+    let minus_im_ybus_offdiag = -ybus[[0, 1]];
+    assert!(
+        (minus_im_ybus_offdiag + 2.5).abs() > 1e-6,
+        "Ybus keeps the transformer tap magnitude"
+    );
+
+    let inc = build_incidence(&view, DcConvention::PaperPure, &BuildOptions::default()).unwrap();
+    let dc_l = build_weighted_laplacian(&inc.a, &inc.b).to_dense();
+    assert_relative_eq!(dc_l[[0, 1]], -5.0, max_relative = 1e-12);
+    assert!(
+        (b[[0, 1]] - dc_l[[0, 1]]).abs() > 1e-6,
+        "phase shifts make Bp differ from A diag(1/x) A^T"
+    );
+}
+
+#[test]
+fn bprime_with_phase_shift_and_resistance_is_not_sddm() {
+    let mut shifted = br(1, 2, 0.05, 0.2, 0.0);
+    shifted.shift = 45.0;
+    let net = Network::in_memory(
+        "asymmetric-bp",
+        100.0,
+        vec![bus(1, BusType::Ref), bus(2, BusType::Pq)],
+        vec![shifted],
+    );
+    let view = IndexedNetwork::new(&net);
+    let b = build_bprime(&view, &BuildOptions::default()).unwrap();
+    let stats = MatrixStats::from_csr(&b);
+    assert!(stats.m_matrix_sign);
+    assert!(stats.min_dd_margin >= -1e-12);
+    assert!(!sddm_check(&b), "asymmetric Bp must not be marked SDDM");
+}
+
+#[test]
+fn bprime_ignores_bus_shunts_and_line_charging() {
+    let base = three_bus();
+    let mut decorated = base.clone();
+    decorated.shunts = vec![
+        Shunt::new(BusId(1), 1.0, -10.0),
+        Shunt::new(BusId(2), 0.0, 15.0),
+        Shunt::new(BusId(3), 0.5, -20.0),
+    ];
+    decorated.branches[0].b = 0.8;
+    decorated.branches[1].charging = Some(BranchCharging::new(0.01, 0.3, 0.02, 0.5));
+    decorated.branches[2].b = -0.4;
+
+    let base_view = IndexedNetwork::new(&base);
+    let decorated_view = IndexedNetwork::new(&decorated);
+    let base_b = build_bprime(&base_view, &BuildOptions::default())
+        .unwrap()
+        .to_dense();
+    let decorated_b = build_bprime(&decorated_view, &BuildOptions::default())
+        .unwrap()
+        .to_dense();
+
+    for i in 0..3 {
+        for j in 0..3 {
+            assert_relative_eq!(decorated_b[[i, j]], base_b[[i, j]], epsilon = 1e-12);
+        }
+    }
+}
+
+#[test]
+fn bprime_folds_phase_shifted_self_loop_like_make_ybus() {
+    let branch = br(1, 2, 0.0, 0.1, 0.0);
+    let mut loop_branch = br(1, 1, 0.0, 0.2, 0.0);
+    loop_branch.tap = 1.25;
+    loop_branch.shift = 60.0;
+
+    let base = Network::in_memory(
+        "without-self-loop",
+        100.0,
+        vec![bus(1, BusType::Ref), bus(2, BusType::Pq)],
+        vec![branch.clone()],
+    );
+    let with_loop = Network::in_memory(
+        "with-self-loop",
+        100.0,
+        vec![bus(1, BusType::Ref), bus(2, BusType::Pq)],
+        vec![branch, loop_branch],
+    );
+
+    let base_view = IndexedNetwork::new(&base);
+    let loop_view = IndexedNetwork::new(&with_loop);
+    let base_bp = build_bprime(&base_view, &BuildOptions::default())
+        .unwrap()
+        .to_dense();
+    let loop_bp = build_bprime(&loop_view, &BuildOptions::default())
+        .unwrap()
+        .to_dense();
+    assert_relative_eq!(loop_bp[[0, 0]] - base_bp[[0, 0]], 5.0, epsilon = 1e-12);
+    assert_relative_eq!(loop_bp[[0, 1]], base_bp[[0, 1]], epsilon = 1e-12);
+    assert_relative_eq!(loop_bp[[1, 0]], base_bp[[1, 0]], epsilon = 1e-12);
+    assert_relative_eq!(loop_bp[[1, 1]], base_bp[[1, 1]], epsilon = 1e-12);
+
+    let base_bpp = build_bdoubleprime(&base_view, &BuildOptions::default())
+        .unwrap()
+        .to_dense();
+    let loop_bpp = build_bdoubleprime(&loop_view, &BuildOptions::default())
+        .unwrap()
+        .to_dense();
+    assert!(
+        (loop_bpp[[0, 0]] - base_bpp[[0, 0]]).abs() > 1e-6,
+        "Bpp keeps self-loop shunt effects"
+    );
+}
+
+#[test]
+fn bdoubleprime_clears_phase_shifts() {
+    let mut shifted = three_bus();
+    shifted.branches[0].shift = 30.0;
+    shifted.branches[1].shift = -25.0;
+
+    let mut unshifted = shifted.clone();
+    for br in &mut unshifted.branches {
+        br.shift = 0.0;
+    }
+
+    let shifted_view = IndexedNetwork::new(&shifted);
+    let unshifted_view = IndexedNetwork::new(&unshifted);
+    let shifted_bpp = build_bdoubleprime(&shifted_view, &BuildOptions::default())
+        .unwrap()
+        .to_dense();
+    let unshifted_bpp = build_bdoubleprime(&unshifted_view, &BuildOptions::default())
+        .unwrap()
+        .to_dense();
+
+    for i in 0..3 {
+        for j in 0..3 {
+            assert_relative_eq!(shifted_bpp[[i, j]], unshifted_bpp[[i, j]], epsilon = 1e-12);
+        }
+    }
+
+    let shifted_bp = build_bprime(
+        &shifted_view,
+        &BuildOptions {
+            scheme: Scheme::Xb,
+            ..Default::default()
+        },
+    )
+    .unwrap()
+    .to_dense();
+    let unshifted_bp = build_bprime(
+        &unshifted_view,
+        &BuildOptions {
+            scheme: Scheme::Xb,
+            ..Default::default()
+        },
+    )
+    .unwrap()
+    .to_dense();
+    assert!(
+        (shifted_bp[[0, 1]] - unshifted_bp[[0, 1]]).abs() > 1e-6,
+        "Bp keeps the same phase shifts Bpp clears"
+    );
+}
+
+#[test]
+fn bdoubleprime_keeps_shunts_charging_and_taps() {
+    let mut branch = br(1, 2, 0.0, 0.2, 0.4);
+    branch.tap = 2.0;
+    branch.shift = 45.0;
+    let mut net = Network::in_memory(
+        "bpp-shunts-charging-tap",
+        100.0,
+        vec![bus(1, BusType::Ref), bus(2, BusType::Pq)],
+        vec![branch],
+    );
+    net.shunts = vec![
+        Shunt::new(BusId(1), 0.0, -10.0),
+        Shunt::new(BusId(2), 0.0, -20.0),
+    ];
+    let view = IndexedNetwork::new(&net);
+    let bpp = build_bdoubleprime(&view, &BuildOptions::default())
+        .unwrap()
+        .to_dense();
+
+    // Bpp clears the 45° shift, but keeps tap = 2, total line charging 0.4,
+    // and bus shunts -10/-20 MVAr on base 100. With x=0.2, y = -j5.
+    assert_relative_eq!(bpp[[0, 0]], 1.3, max_relative = 1e-12);
+    assert_relative_eq!(bpp[[1, 1]], 5.0, max_relative = 1e-12);
+    assert_relative_eq!(bpp[[0, 1]], -2.5, max_relative = 1e-12);
+    assert_relative_eq!(bpp[[1, 0]], -2.5, max_relative = 1e-12);
 }
 
 #[test]
@@ -364,4 +584,11 @@ fn self_loop_with_zero_reactance_drops_unconditionally() {
     };
     build_incidence(&view, DcConvention::PaperPure, &strict)
         .expect("a self-loop must not trip ZeroImpedance even when skip_zero_impedance is false");
+}
+
+#[test]
+#[should_panic(expected = "COO coordinate (0, 2) out of bounds")]
+fn coo_builder_rejects_out_of_bounds_column() {
+    let mut coo = CooBuilder::new_rect(2, 2);
+    coo.add(0, 2, 1.0);
 }

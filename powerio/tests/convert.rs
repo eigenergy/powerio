@@ -809,7 +809,7 @@ fn rich_powermodels_typed_fields_survive_json_transport() {
 }
 
 #[test]
-fn rich_matpower_terminal_admittance_warning_contract() {
+fn rich_matpower_terminal_admittance_warning_shape() {
     let base = r#"{
         "name": "mp-charging",
         "baseMVA": 100.0,

@@ -6,7 +6,7 @@ second times derived matrix construction from already parsed and indexed cases.
 This directory contains extractors, comparison harnesses, and validation
 harnesses that call each tool through its own runtime.
 
-The top-level questions are:
+The top level questions are:
 
 1. **Speed**: parser wall time for powerio, ExaPowerIO.jl, PowerModels.jl, and
    pandapower's reader, PowerWorld aux/pwb reader timing, and matrix builder
@@ -14,59 +14,91 @@ The top-level questions are:
 2. **Correctness**: powerio parse output, conversions, and Y_bus checked against
    PowerModels.jl, ExaPowerIO.jl, egret, and pandapower.
 
-Numbers below come from one local snapshot, release build. Parser comparison
-tables use median wall time; Criterion tables use mean estimates. Re-run the
-scripts below before using the numbers in a paper, release note, or package
-page.
+Numbers below come from one local snapshot, release build. Tables report median
+wall time +/- sample standard deviation; the JSON under `benchmarks/results/`
+also records sample counts. Criterion backed rows use Criterion's median and
+standard deviation estimates. Re-run the scripts below before using the numbers
+in a paper, release note, or package page.
 
 Snapshot environment: MacBook Pro `Mac17,8`, Apple M5 Pro, 18 cores, 64 GB RAM,
 macOS 26.4.1 (`25E253`), arm64. Rust `rustc 1.95.0`, `cargo 1.95.0`; Apple
-clang 21.0.0; Julia 1.12.6; Python 3.12.13 in `.venv`. The repository was a
-local working tree at `23dd4f94` with the benchmark and documentation changes
-shown here.
+clang 21.0.0; Julia 1.12.6; Python 3.12.13 in `.venv`. The metadata table
+records the commit and UTC time for each suite because the Julia suite was
+rerun after the other benchmark tables.
+
+Benchmark run metadata:
+
+<!-- BENCH:metadata START -->
+| suite | performed at (UTC) | commit | command |
+| --- | --- | --- | --- |
+| PowerIO.jl parse and Ybus | 2026-07-06T19:35:05.007Z | 7010271a4c05 | `julia --project=benchmarks benchmarks/bench_julia.jl --json` |
+| Python parse | 2026-07-06T19:15:26Z | 72e35ad566d2 | `python benchmarks/bench_parse.py --json tests/data/case2869pegase.m tests/data/large/case9241pegase.m tests/data/large/case13659pegase.m tests/data/large/case193k.m` |
+| PowerWorld readers | 2026-07-06T19:06:18Z | 72e35ad566d2 | `POWERIO_BENCH_AUX=<Texas7k_20210804.AUX> POWERIO_BENCH_PWB=<Texas7k_20210804.PWB> cargo bench -p powerio --bench parse -- "parse_aux_\|parse_pwb_" && python3 benchmarks/extract_powerworld_bench.py` |
+| matrix builders | 2026-07-06T19:18:48Z | 72e35ad566d2 | `cargo bench -p powerio-matrix --bench matrix && python3 benchmarks/extract_matrix_bench.py` |
+<!-- BENCH:metadata END -->
 
 ## Speed
 
-All three parsers run in one Julia process under the same
-`BenchmarkTools.@benchmark` harness (`benchmarks/bench_julia.jl`). powerio is
-called through its C ABI (`pio_parse_file`, built with `cargo build --release -p
-powerio-capi`), so it reads the file from disk and builds its case the way
-ExaPowerIO and PowerModels do. The powerio handle is freed in an untimed
-teardown, matching the other two, whose returned data is collected after the
-sample rather than inside it.
+All parser timings run in one Julia process under the same
+`BenchmarkTools.@benchmark` harness (`benchmarks/bench_julia.jl`). The headline
+PowerIO column calls the public `PowerIO.jl parse_file` API. The raw Rust C ABI
+handle timing stays in the table as a lower bound. `net.data` measures the
+explicit JSON shaped view materialization that `parse_file` now avoids.
 
 <!-- BENCH:speed-julia START -->
-| case | buses / branches | powerio | ExaPowerIO.jl | PowerModels.jl |
-| --- | --- | --- | --- | --- |
-| case2869pegase | 2869 / 4582 | 1.82 ms | 2.91 ms | 126.7 ms |
-| case_ACTIVSg2000 | 2000 / 3206 | 2.36 ms | 2.26 ms | 126.9 ms |
-| case9241pegase | 9241 / 16049 | 6.0 ms | 9.39 ms | 572.0 ms |
-| case13659pegase | 13659 / 20467 | 9.3 ms | 13.83 ms | 811.1 ms |
-| case_ACTIVSg10k | 10000 / 12706 | 9.91 ms | 9.58 ms | n/a |
-| case_ACTIVSg25k | 25000 / 32230 | 24.55 ms | 23.48 ms | n/a |
-| case_ACTIVSg70k | 70000 / 88207 | 66.56 ms | 62.51 ms | n/a |
-| case_SyntheticUSA | 82000 / 104121 | 80.39 ms | 80.87 ms | n/a |
-| case99k | 99396 / 117860 | 92.63 ms | 97.94 ms | n/a |
-| case193k | 192768 / 228574 | 177.16 ms | 267.54 ms | n/a |
+| case | buses / branches | PowerIO.jl parse_file | ExaPowerIO.jl parse | PowerModels.jl parse | Rust C ABI handle | net.data |
+| --- | --- | --- | --- | --- | --- | --- |
+| case2869pegase | 2869 / 4582 | 1.8 +/- 0.07 ms | 2.8 +/- 0.12 ms | 127.6 +/- 38 ms | 1.77 +/- 0.06 ms | 39.53 +/- 41.18 ms |
+| case_ACTIVSg2000 | 2000 / 3206 | 2.14 +/- 0.06 ms | 2.19 +/- 0.13 ms | 141.7 +/- 39.2 ms | 2.11 +/- 0.04 ms | 27.69 +/- 23.58 ms |
+| case9241pegase | 9241 / 16049 | 6.39 +/- 0.34 ms | 9.47 +/- 0.3 ms | 578.9 +/- 57.9 ms | 6.07 +/- 0.58 ms | 218.19 +/- 46.12 ms |
+| case13659pegase | 13659 / 20467 | 9.04 +/- 0.31 ms | 13.77 +/- 16.77 ms | 822.5 +/- 18.1 ms | 9.03 +/- 0.18 ms | 291.28 +/- 21.18 ms |
+| case_ACTIVSg10k | 10000 / 12706 | 9.43 +/- 0.2 ms | 9.47 +/- 1.41 ms | 715.2 +/- 69.7 ms | 9.4 +/- 0.15 ms | 169.26 +/- 44.86 ms |
+| case_ACTIVSg25k | 25000 / 32230 | 24.35 +/- 0.28 ms | 22.72 +/- 28.45 ms | 1819 +/- 12 ms | 24.3 +/- 0.3 ms | n/a |
+| case_ACTIVSg70k | 70000 / 88207 | 66.81 +/- 0.42 ms | 61.96 +/- 2.88 ms | 5382.2 +/- 191 ms | 67.55 +/- 0.43 ms | n/a |
+| case_SyntheticUSA | 82000 / 104121 | 81.03 +/- 0.93 ms | 77.65 +/- 43.29 ms | 6474.8 +/- 149.7 ms | 80.35 +/- 0.22 ms | n/a |
+| case99k | 99396 / 117860 | 91.17 +/- 0.48 ms | 97.81 +/- 47.6 ms | n/a | 92.01 +/- 0.51 ms | n/a |
+| case193k | 192768 / 228574 | 178.44 +/- 0.24 ms | 179.32 +/- 53.46 ms | n/a | 179.34 +/- 0.41 ms | n/a |
 <!-- BENCH:speed-julia END -->
 
-PowerModels is skipped past case13659 because those runs take minutes on this
-machine. The comparison is a benchmark record, not a feature gate. Validation
-below is the correctness gate.
+The Ybus table times the public PowerIO.jl sparse matrix API. The Rust C ABI
+Arrow column is the raw parse plus Arrow export lower bound; it does not build a
+Julia `SparseMatrixCSC`.
+
+<!-- BENCH:speed-julia-ybus START -->
+| case | buses / branches | PowerIO.jl Ybus | ExaPowerIO.jl Ybus | Rust C ABI Arrow | PowerModels.jl Ybus |
+| --- | --- | --- | --- | --- | --- |
+| case2869pegase | 2869 / 4582 | 2.77 +/- 0.09 ms | 2.97 +/- 0.13 ms | 2.58 +/- 0.08 ms | 136.2 +/- 39.1 ms |
+| case_ACTIVSg2000 | 2000 / 3206 | 2.75 +/- 0.13 ms | 2.2 +/- 0.1 ms | 2.63 +/- 0.06 ms | 133.7 +/- 40.1 ms |
+| case9241pegase | 9241 / 16049 | 9.84 +/- 0.25 ms | 9.86 +/- 16.89 ms | 9.23 +/- 0.12 ms | 605.8 +/- 42.8 ms |
+| case13659pegase | 13659 / 20467 | 14.61 +/- 0.24 ms | 14.38 +/- 23.58 ms | 13.92 +/- 0.19 ms | 903.9 +/- 46.8 ms |
+| case_ACTIVSg10k | 10000 / 12706 | 13.02 +/- 0.36 ms | 9.87 +/- 17.08 ms | 12.52 +/- 0.17 ms | 751 +/- 14.7 ms |
+| case_ACTIVSg25k | 25000 / 32230 | 33.89 +/- 0.3 ms | 24.02 +/- 31.93 ms | 33.02 +/- 0.22 ms | 1921.1 +/- 38.6 ms |
+| case_ACTIVSg70k | 70000 / 88207 | 99.13 +/- 1.12 ms | 71.59 +/- 48.14 ms | 95.76 +/- 0.24 ms | 5684.7 +/- 135.2 ms |
+| case_SyntheticUSA | 82000 / 104121 | 120.98 +/- 0.96 ms | 169.2 +/- 47.32 ms | 116.39 +/- 1.24 ms | n/a |
+| case99k | 99396 / 117860 | 135.81 +/- 40.84 ms | 184.33 +/- 50.12 ms | 132.42 +/- 1.02 ms | n/a |
+| case193k | 192768 / 228574 | 277.18 +/- 49.58 ms | 276.64 +/- 4.29 ms | 263.4 +/- 2.31 ms | n/a |
+<!-- BENCH:speed-julia-ybus END -->
+
+PowerModels `n/a` cells do not mean slow runs. In this run,
+`case_SyntheticUSA` parsed in the table above but has no PowerModels Ybus value
+because `calc_admittance_matrix` rejects dclines. `case99k` and `case193k` are
+`n/a` because PowerModels 0.21.6 failed in its MATPOWER parser with
+`AssertionError: occursin(".", matrix_assignment)`. The ACTIVSg PowerModels rows
+are measured; the largest row here is about 5.7 s for Ybus. Validation below is
+the correctness gate.
 
 ## vs pandapower
 
 pandapower reads MATPOWER `.m` through `matpowercaseframes` (a pandas reader) and
-then `from_mpc` builds its `net`. `benchmarks/bench_parse.py`, same machine,
-median wall time:
+then `from_mpc` builds its `net`. `benchmarks/bench_parse.py`, same machine:
 
 <!-- BENCH:speed-pandapower START -->
-| case | powerio parse | powerio parse + Y_bus + B' | matpowercaseframes (pandapower's `.m` reader) |
+| case | powerio parse | powerio parse + Y_bus + Bp | matpowercaseframes (pandapower's `.m` reader) |
 | --- | --- | --- | --- |
-| case2869pegase | 1.9 ms | 7.2 ms | n/a |
-| case9241pegase | 6.2 ms | 25.1 ms | n/a |
-| case13659pegase | 9.7 ms | 34.2 ms | 114.4 ms |
-| case193k | 176.5 ms | 526.6 ms | 1789.3 ms |
+| case2869pegase | 1.9 +/- 0.1 ms | 6.7 +/- 0.2 ms | n/a |
+| case9241pegase | 6.1 +/- 0.2 ms | 24.1 +/- 0.5 ms | n/a |
+| case13659pegase | 9.5 +/- 0.3 ms | 33.8 +/- 0.2 ms | 115.3 +/- 12.5 ms |
+| case193k | 190.5 +/- 14 ms | 530.1 +/- 5.5 ms | 1794.4 +/- 7.9 ms |
 <!-- BENCH:speed-pandapower END -->
 
 `from_mpc` raises `IndexError` on case118 and the pegase cases in pandapower
@@ -75,7 +107,7 @@ reader works. With current `matpowercaseframes` 1.1.6, case2869pegase and
 case9241pegase raise `OverflowError` on `Inf` limits, so those baselines are
 recorded as n/a. The `powerio: parse` row uses the base Python package and reads
 from disk. The matrix column includes parsing plus building the SciPy Y_bus and
-B' matrices.
+Bp matrices.
 
 ## PowerWorld aux and pwb
 
@@ -83,15 +115,15 @@ B' matrices.
 readers on the same cases: the vendored 200 bus pair, the fetched 2000 bus
 pair and RTS-GMLC (`benchmarks/fetch_powerworld.sh`), and any file passed
 through `POWERIO_BENCH_AUX`/`POWERIO_BENCH_PWB` for cases that cannot be
-fetched. Criterion mean wall time, same machine as above.
+fetched. Criterion median wall time, same machine as above.
 
 <!-- BENCH:powerworld START -->
 | case | buses / branches | aux | pwb |
 | --- | --- | --- | --- |
-| ACTIVSg200 | 200 / 246 | 2.84 ms | 0.43 ms |
-| ACTIVSg2000 June 2016 | 2007 / 3043 | 32.95 ms | 3.48 ms |
-| RTS-GMLC | 73 / 120 | n/a | 0.44 ms |
-| Texas7k (local TAMU copy) | 6717 / 9140 | 77.64 ms | 17.12 ms |
+| ACTIVSg200 | 200 / 246 | 2.79 +/- 0.05 ms | 1.93 +/- 0.02 ms |
+| ACTIVSg2000 June 2016 | 2007 / 3043 | 30.86 +/- 0.51 ms | 7.73 +/- 0.2 ms |
+| RTS-GMLC | 73 / 120 | n/a | 2.54 +/- 0.03 ms |
+| Texas7k (local TAMU copy) | 6717 / 9140 | 76.59 +/- 1.04 ms | 35.52 +/- 0.63 ms |
 <!-- BENCH:powerworld END -->
 
 The `.pwb` reader locates each table by a depth first search over count
@@ -136,29 +168,29 @@ network is worse than a slow loud parse).
 component, and dense sensitivity builders. Each fixture is parsed once and
 wrapped in `IndexedNetwork` before the timed loop, so the rows below do not
 include parser or indexing time. The pipeline row additionally includes writing
-the requested MTX files, the shunt sidecar, and metadata. Criterion mean wall
+the requested MTX files, the shunt sidecar, and metadata. Criterion median wall
 time, same machine as above.
 
 <!-- BENCH:matrix START -->
-| operation | case | buses / branches | mean |
+| operation | case | buses / branches | median +/- std |
 | --- | --- | --- | --- |
-| B' sparse | case118 | 118 / 186 | 0.02 ms |
-| B'' sparse | case118 | 118 / 186 | 0.021 ms |
-| Y_bus sparse | case118 | 118 / 186 | 0.035 ms |
-| LACPF block | case118 | 118 / 186 | 0.065 ms |
-| adjacency | case118 | 118 / 186 | 0.018 ms |
-| B' sparse | case2869pegase | 2869 / 4582 | 0.57 ms |
-| B'' sparse | case2869pegase | 2869 / 4582 | 0.601 ms |
-| Y_bus sparse | case2869pegase | 2869 / 4582 | 1.057 ms |
-| LACPF block | case2869pegase | 2869 / 4582 | 2.007 ms |
-| adjacency | case2869pegase | 2869 / 4582 | 0.48 ms |
-| DC OPF incidence | case118 | 118 / 186 | 0.014 ms |
-| DC OPF weighted Laplacian | case118 | 118 / 186 | 0.012 ms |
-| DC OPF grounded Laplacian | case118 | 118 / 186 | 0.037 ms |
-| DC OPF flow map | case118 | 118 / 186 | 0.009 ms |
-| DC OPF instance | case118 | 118 / 186 | 0.003 ms |
-| PTDF + LODF | case118 | 118 / 186 | 2.927 ms |
-| pipeline Y_bus pair | case2869pegase | 2869 / 4582 | 3.01 ms |
+| Bp sparse | case118 | 118 / 186 | 0.0198 +/- 0.00018 ms |
+| Bpp sparse | case118 | 118 / 186 | 0.0126 +/- 0.00009 ms |
+| Y_bus sparse | case118 | 118 / 186 | 0.0199 +/- 0.00021 ms |
+| LACPF block | case118 | 118 / 186 | 0.0495 +/- 0.00022 ms |
+| adjacency | case118 | 118 / 186 | 0.0149 +/- 0.00009 ms |
+| Bp sparse | case2869pegase | 2869 / 4582 | 0.5883 +/- 0.00652 ms |
+| Bpp sparse | case2869pegase | 2869 / 4582 | 0.3729 +/- 0.00294 ms |
+| Y_bus sparse | case2869pegase | 2869 / 4582 | 0.598 +/- 0.00534 ms |
+| LACPF block | case2869pegase | 2869 / 4582 | 1.529 +/- 0.01364 ms |
+| adjacency | case2869pegase | 2869 / 4582 | 0.42 +/- 0.00317 ms |
+| DC OPF incidence | case118 | 118 / 186 | 0.0088 +/- 0.00007 ms |
+| DC OPF weighted Laplacian | case118 | 118 / 186 | 0.0099 +/- 0.0001 ms |
+| DC OPF grounded Laplacian | case118 | 118 / 186 | 0.0219 +/- 0.00022 ms |
+| DC OPF flow map | case118 | 118 / 186 | 0.0062 +/- 0.00022 ms |
+| DC OPF instance | case118 | 118 / 186 | 0.0024 +/- 0.00003 ms |
+| PTDF + LODF | case118 | 118 / 186 | 2.1657 +/- 0.03555 ms |
+| pipeline Y_bus pair | case2869pegase | 2869 / 4582 | 2.5867 +/- 0.1166 ms |
 <!-- BENCH:matrix END -->
 
 Refresh those rows with:

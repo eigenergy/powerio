@@ -32,6 +32,7 @@ cargo test -p powerio-capi --features arrow,matrix
 cargo test -p powerio-capi --features gridfm
 cargo test -p powerio-capi --features dist
 cargo test -p powerio-capi --features arrow,matrix,gridfm,dist,pkg
+bash scripts/ci-clippy.sh capi-release
 scripts/capi-header-parity.sh
 scripts/capi-smoke.sh
 ```
@@ -57,7 +58,7 @@ int main(void) {
     int64_t *from = malloc(m * sizeof *from), *to = malloc(m * sizeof *to);
     double  *x    = malloc(m * sizeof *x);
     pio_branches(c, from, to, NULL, x, NULL, NULL, NULL, NULL, m);
-    /* ... assemble B' from (from, to, 1/x) ... */
+    /* ... assemble L = A diag(1/x) A^T from (from, to, x) ... */
 
     /* Every format is a string: matpower echoes byte-exact, powerio-json is
      * the lossless snapshot, powermodels-json/psse/... convert with warnings. */
@@ -262,7 +263,10 @@ powerio-capi covers the `powerio` surface: parse / convert / query / table
 and JSON extraction. Build with `--features arrow,matrix` to export the first
 balanced sparse matrix family over `pio_to_arrow` as COO triplet tables:
 `ybus`, `incidence`, `bprime`, and `bdoubleprime`, all in dense solver bus index
-space with dimensions in Arrow schema metadata. Runtime consumers can call
+space with dimensions and axis names in Arrow schema metadata. The stable matrix
+ABI is Arrow COO plus `matrix_bus` and `matrix_branch` axis map tables; C stays
+language neutral, while Julia, Python, and other bindings own their native
+sparse matrix assembly. Runtime consumers can call
 `pio_matrix_available()` before selecting those table ids. Larger matrix
 families such as PTDF, LODF, and DC OPF bundles still live in `powerio-matrix`
 and are not C ABI surfaces yet.

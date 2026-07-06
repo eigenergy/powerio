@@ -6,15 +6,16 @@
 //! Square by default (`new`), rectangular via `new_rect` for the incidence,
 //! flow map, and generator→bus matrices.
 
-use std::collections::HashMap;
-
+use rustc_hash::{FxBuildHasher, FxHashMap};
 use sprs::{CsMat, TriMat};
+
+type CoordinateMap = FxHashMap<usize, f64>;
 
 #[derive(Debug, Clone)]
 pub struct CooBuilder {
     rows: usize,
     cols: usize,
-    entries: HashMap<(usize, usize), f64>,
+    entries: CoordinateMap,
 }
 
 impl CooBuilder {
@@ -33,7 +34,7 @@ impl CooBuilder {
         Self {
             rows,
             cols,
-            entries: HashMap::new(),
+            entries: CoordinateMap::default(),
         }
     }
 
@@ -42,7 +43,7 @@ impl CooBuilder {
         Self {
             rows,
             cols,
-            entries: HashMap::with_capacity(capacity),
+            entries: CoordinateMap::with_capacity_and_hasher(capacity, FxBuildHasher),
         }
     }
 
@@ -59,13 +60,26 @@ impl CooBuilder {
     }
 
     /// Accumulate `v` into entry `(i, j)`. Skips the insert if `v == 0.0`.
+    ///
+    /// # Panics
+    /// Panics if `(i, j)` is outside the matrix shape or the packed coordinate
+    /// key overflows `usize`.
     #[inline]
     pub fn add(&mut self, i: usize, j: usize, v: f64) {
         if v == 0.0 {
             return;
         }
-        debug_assert!(i < self.rows && j < self.cols);
-        *self.entries.entry((i, j)).or_insert(0.0) += v;
+        assert!(
+            i < self.rows && j < self.cols,
+            "COO coordinate ({i}, {j}) out of bounds for shape {}x{}",
+            self.rows,
+            self.cols
+        );
+        let key = i
+            .checked_mul(self.cols)
+            .and_then(|base| base.checked_add(j))
+            .expect("COO matrix dimensions overflow usize");
+        *self.entries.entry(key).or_insert(0.0) += v;
     }
 
     /// Symmetrically accumulate `v` into both `(i, j)` and `(j, i)`. Square
@@ -83,8 +97,10 @@ impl CooBuilder {
     /// Materialize as a `CsMat<f64>` (CSR) with explicit zeros pruned.
     pub fn finish_csr(self) -> CsMat<f64> {
         let mut tri = TriMat::with_capacity((self.rows, self.cols), self.entries.len());
-        for ((i, j), v) in self.entries {
+        for (key, v) in self.entries {
             if v != 0.0 {
+                let i = key / self.cols;
+                let j = key % self.cols;
                 tri.add_triplet(i, j, v);
             }
         }

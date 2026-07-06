@@ -39,7 +39,8 @@
     PIO_ARROW_TABLE_GEN != 2 || PIO_ARROW_TABLE_LOAD != 3 ||                  \
     PIO_ARROW_TABLE_SHUNT != 4 || PIO_ARROW_TABLE_YBUS != 15 ||               \
     PIO_ARROW_TABLE_INCIDENCE != 16 || PIO_ARROW_TABLE_BPRIME != 17 ||         \
-    PIO_ARROW_TABLE_BDOUBLEPRIME != 18
+    PIO_ARROW_TABLE_BDOUBLEPRIME != 18 ||                                      \
+    PIO_ARROW_TABLE_MATRIX_BUS != 19 || PIO_ARROW_TABLE_MATRIX_BRANCH != 20
 #error "PIO_ARROW_TABLE_* ids changed without updating the C ABI smoke test"
 #endif
 #endif
@@ -356,6 +357,23 @@ int main(int argc, char **argv) {
               "missing matrix arrow release callbacks");
         arr.release(&arr);
         sch.release(&sch);
+        memset(&arr, 0, sizeof arr);
+        memset(&sch, 0, sizeof sch);
+        rc = pio_to_arrow(c, PIO_ARROW_TABLE_MATRIX_BUS, &arr, &sch, err, sizeof err);
+        CHECK(rc == 0, err);
+        CHECK(arr.length == (int64_t)nb, "matrix_bus axis row count mismatch");
+        CHECK(arr.release != NULL && sch.release != NULL,
+              "missing matrix_bus arrow release callbacks");
+        arr.release(&arr);
+        sch.release(&sch);
+
+        char *catalog = pio_arrow_catalog_json(err, sizeof err);
+        CHECK(catalog != NULL, err);
+        CHECK(strstr(catalog, "\"name\":\"matrix_bus\"") != NULL,
+              "Arrow catalog missing matrix_bus");
+        CHECK(strstr(catalog, "\"name\":\"matrix_branch\"") != NULL,
+              "Arrow catalog missing matrix_branch");
+        pio_string_free(catalog);
         printf("matrix arrow export OK\n");
     }
 #else

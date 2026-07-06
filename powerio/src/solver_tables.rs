@@ -3,7 +3,7 @@
 //! `Network::to_normalized` keeps source bus ids because it is still a network
 //! model. Solver inputs want dense row ids, stable row order, and enough
 //! provenance to map lowered data back to the source case. This module provides
-//! that table contract without changing the lossless `Network` representation.
+//! that table layout without changing the lossless `Network` representation.
 
 use std::collections::{HashMap, HashSet};
 

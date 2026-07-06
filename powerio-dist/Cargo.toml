@@ -22,7 +22,7 @@ schema = ["dep:schemars"]
 thiserror = "2"
 serde.workspace = true
 # float_roundtrip: the default float parser can be one ULP off the shortest
-# representation its own serializer prints; the round trip contracts need
+# representation its own serializer prints; the round trip rules need
 # parse(print(x)) == x exactly.
 serde_json = { workspace = true, features = ["float_roundtrip"] }
 schemars = { workspace = true, optional = true }

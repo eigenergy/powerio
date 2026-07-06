@@ -79,7 +79,7 @@ jobs:
     # Deny the workspace pedantic lints on the non-extension crates. The PyO3
     # ext crates are linted in the Python workflow with their feature enabled.
     - name: Clippy
-      run: cargo clippy --all-targets -p powerio -p powerio-matrix -p powerio-cli -p powerio-capi -p powerio-dist -p powerio-pkg -- -D warnings
+      run: bash scripts/ci-clippy.sh workspace
     # Bare `cargo test` only covers the default-members; name the C ABI crate
     # explicitly so its end-to-end ABI tests run in CI too.
     - name: Run tests
@@ -88,7 +88,7 @@ jobs:
     # clippy) explicitly so coverage doesn't depend on CLI feature unification.
     - name: Clippy + tests (gridfm feature)
       run: |
-        cargo clippy -p powerio-matrix --all-targets --features gridfm -- -D warnings
+        bash scripts/ci-clippy.sh matrix-gridfm
         cargo test -p powerio-matrix --features gridfm --verbose
 
   wasm32:
@@ -135,7 +135,7 @@ jobs:
     - name: Tests + clippy (core no-default)
       run: |
         cargo test -p powerio-capi --no-default-features --verbose
-        cargo clippy -p powerio-capi --all-targets --no-default-features -- -D warnings
+        bash scripts/ci-clippy.sh capi-no-default
 
   c-abi-arrow:
     name: C ABI (arrow feature)
@@ -162,7 +162,7 @@ jobs:
     - name: Tests + clippy (arrow feature)
       run: |
         cargo test -p powerio-capi --features arrow --verbose
-        cargo clippy -p powerio-capi --all-targets --features arrow -- -D warnings
+        bash scripts/ci-clippy.sh capi-arrow
 
   c-abi-gridfm:
     name: C ABI (release features)
@@ -199,7 +199,7 @@ jobs:
     - name: Tests + clippy (release features)
       run: |
         cargo test -p powerio-capi --features arrow,matrix,gridfm,dist,pkg --verbose
-        cargo clippy -p powerio-capi --all-targets --features arrow,matrix,gridfm,dist,pkg -- -D warnings
+        bash scripts/ci-clippy.sh capi-release
 
   c-abi-dist:
     name: C ABI (dist feature)
@@ -227,4 +227,4 @@ jobs:
     - name: Tests + clippy (dist feature)
       run: |
         cargo test -p powerio-capi --features dist --verbose
-        cargo clippy -p powerio-capi --all-targets --features dist -- -D warnings
+        bash scripts/ci-clippy.sh capi-dist
