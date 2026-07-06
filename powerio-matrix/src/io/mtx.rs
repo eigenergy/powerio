@@ -15,7 +15,7 @@ use crate::{Error, Result};
 
 pub fn write_mtx(matrix: &CsMat<f64>, path: impl AsRef<Path>) -> Result<()> {
     let path = path.as_ref();
-    if is_structurally_symmetric(matrix) {
+    if is_numerically_symmetric(matrix) {
         write_symmetric_mtx(matrix, path)
     } else {
         sprs::io::write_matrix_market(path, matrix.view()).map_err(|e| Error::Mtx(e.to_string()))
@@ -95,17 +95,54 @@ pub fn write_vector_mtx(values: &[f64], path: impl AsRef<Path>) -> Result<()> {
     Ok(())
 }
 
-fn is_structurally_symmetric(a: &CsMat<f64>) -> bool {
+fn is_numerically_symmetric(a: &CsMat<f64>) -> bool {
     if a.rows() != a.cols() {
         return false;
     }
     for (i, row) in a.outer_iterator().enumerate() {
         for (j, &v) in row.iter() {
             let mirror = a.get(j, i).copied().unwrap_or(0.0);
-            if (v - mirror).abs() > 1e-12 {
+            let scale = v.abs().max(mirror.abs()).max(1.0);
+            if (v - mirror).abs() > 1e-12 * scale {
                 return false;
             }
         }
     }
     true
+}
+
+#[cfg(test)]
+mod tests {
+    use sprs::TriMat;
+
+    use super::write_mtx;
+
+    #[test]
+    fn value_asymmetric_matrix_writes_general_mtx() {
+        let mut tri = TriMat::new((2, 2));
+        tri.add_triplet(0, 0, 2.0);
+        tri.add_triplet(0, 1, -1.0);
+        tri.add_triplet(1, 0, -2.0);
+        tri.add_triplet(1, 1, 2.0);
+        let matrix = tri.to_csr();
+
+        let path = temp_path("value-asymmetric");
+        write_mtx(&matrix, &path).unwrap();
+        let text = std::fs::read_to_string(&path).unwrap();
+        let _ = std::fs::remove_file(&path);
+
+        assert!(
+            text.lines().next().unwrap().ends_with("general"),
+            "value-asymmetric matrices must not be written with a symmetric header"
+        );
+    }
+
+    fn temp_path(stem: &str) -> std::path::PathBuf {
+        let mut path = std::env::temp_dir();
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_or(0, |d| d.as_nanos());
+        path.push(format!("powerio-{stem}-{nanos}.mtx"));
+        path
+    }
 }
