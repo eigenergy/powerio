@@ -224,9 +224,9 @@ fn bprime_ignores_bus_shunts_and_line_charging() {
 }
 
 #[test]
-fn bprime_drops_nonzero_self_loop_before_ybus_fold() {
+fn bprime_folds_phase_shifted_self_loop_like_make_ybus() {
     let branch = br(1, 2, 0.0, 0.1, 0.0);
-    let mut loop_branch = br(1, 1, 0.05, 0.2, 0.4);
+    let mut loop_branch = br(1, 1, 0.0, 0.2, 0.0);
     loop_branch.tap = 1.25;
     loop_branch.shift = 60.0;
 
@@ -251,11 +251,10 @@ fn bprime_drops_nonzero_self_loop_before_ybus_fold() {
     let loop_bp = build_bprime(&loop_view, &BuildOptions::default())
         .unwrap()
         .to_dense();
-    for i in 0..2 {
-        for j in 0..2 {
-            assert_relative_eq!(loop_bp[[i, j]], base_bp[[i, j]], epsilon = 1e-12);
-        }
-    }
+    assert_relative_eq!(loop_bp[[0, 0]] - base_bp[[0, 0]], 5.0, epsilon = 1e-12);
+    assert_relative_eq!(loop_bp[[0, 1]], base_bp[[0, 1]], epsilon = 1e-12);
+    assert_relative_eq!(loop_bp[[1, 0]], base_bp[[1, 0]], epsilon = 1e-12);
+    assert_relative_eq!(loop_bp[[1, 1]], base_bp[[1, 1]], epsilon = 1e-12);
 
     let base_bpp = build_bdoubleprime(&base_view, &BuildOptions::default())
         .unwrap()

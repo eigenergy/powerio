@@ -63,6 +63,26 @@ fn bprime_is_singular_laplacian_on_real_cases() {
 }
 
 #[test]
+fn case2869pegase_bprime_is_asymmetric_and_not_sddm() {
+    let net = parse_matpower_file(fixture("case2869pegase.m")).unwrap();
+    let view = IndexedNetwork::new(&net);
+    let b = build_bprime(&view, &BuildOptions::default()).unwrap();
+    let stats = MatrixStats::from_csr(&b);
+
+    assert_eq!(b.rows(), net.buses.len());
+    assert_eq!(b.cols(), net.buses.len());
+    assert!(stats.m_matrix_sign, "pegase Bp should keep M-matrix signs");
+    assert!(
+        !is_symmetric(&b),
+        "phase shifters make pegase Bp asymmetric"
+    );
+    assert!(
+        !sddm_check(&b),
+        "asymmetric pegase Bp must not be labeled SDDM"
+    );
+}
+
+#[test]
 fn bdoubleprime_includes_shunts_on_case30() {
     let net = parse_matpower_file(fixture("case30.m")).unwrap();
     let view = IndexedNetwork::new(&net);
@@ -189,6 +209,22 @@ fn tempdir() -> PathBuf {
     ));
     std::fs::create_dir_all(&p).unwrap();
     p
+}
+
+fn is_symmetric(matrix: &sprs::CsMat<f64>) -> bool {
+    if matrix.rows() != matrix.cols() {
+        return false;
+    }
+    for (outer, row) in matrix.outer_iterator().enumerate() {
+        for (inner, &value) in row.iter() {
+            let transpose = matrix.get(inner, outer).copied().unwrap_or(0.0);
+            let scale = value.abs().max(transpose.abs()).max(1.0);
+            if (value - transpose).abs() > 1e-12 * scale {
+                return false;
+            }
+        }
+    }
+    true
 }
 
 fn assert_csr_eq(left: &sprs::CsMat<f64>, right: &sprs::CsMat<f64>) {

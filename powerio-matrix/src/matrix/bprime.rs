@@ -32,7 +32,6 @@ pub fn build_bprime(case: &IndexedNetwork, opts: &BuildOptions) -> Result<CsMat<
         zero_shifts: false,
         skip_bus_shunts: true,
         skip_zero_impedance: opts.skip_zero_impedance,
-        skip_self_loops: true,
     };
     let parts = build_ybus_with_flags(case, flags)?;
     Ok(negate_into(parts.b))

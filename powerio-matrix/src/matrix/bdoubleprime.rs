@@ -26,7 +26,6 @@ pub fn build_bdoubleprime(case: &IndexedNetwork, opts: &BuildOptions) -> Result<
         zero_shifts: true,
         skip_bus_shunts: false,
         skip_zero_impedance: opts.skip_zero_impedance,
-        skip_self_loops: false,
     };
     // `parts.b` is owned and discarded here, so negate it in place rather than
     // cloning the structure.

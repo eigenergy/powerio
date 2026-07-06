@@ -18,6 +18,7 @@ const POWERIO_JL_CHECKOUT = normpath(joinpath(@__DIR__, "..", "..", "PowerIO.jl"
 isdir(POWERIO_JL_CHECKOUT) && pushfirst!(LOAD_PATH, POWERIO_JL_CHECKOUT)
 
 using ExaPowerIO, PowerModels, BenchmarkTools, SparseArrays, Logging, PowerIO
+using JSON, Dates, Statistics
 PowerModels.silence()
 include(joinpath(@__DIR__, "powerio_ffi.jl"))
 PowerIO.set_library!(get(ENV, "POWERIO_CAPI", LIBPOWERIO))
@@ -37,11 +38,34 @@ const CASES = [
     ("case193k", "tests/data/large/case193k.m", false),
 ]
 
-ms(b) = round(median(b).time / 1e6, digits = 2)
+function trial_stats(b; digits = 2)
+    times_ms = Float64.(b.times) ./ 1e6
+    return (
+        ms = round(median(times_ms), digits = digits),
+        std_ms = round(length(times_ms) > 1 ? std(times_ms) : 0.0, digits = digits),
+        n = length(times_ms),
+    )
+end
+
+show_stat(s) = "$(s.ms) +/- $(s.std_ms) ms"
+
+function git_commit()
+    try
+        return chomp(read(`git -C $(normpath(joinpath(@__DIR__, ".."))) rev-parse HEAD`, String))
+    catch
+        return nothing
+    end
+end
+
+function benchmark_metadata()
+    return (
+        benchmark_time_utc = Dates.format(Dates.now(Dates.UTC), dateformat"yyyy-mm-ddTHH:MM:SS.sss") * "Z",
+        git_commit = git_commit(),
+        command = join(vcat(["julia", "--project=benchmarks", "benchmarks/bench_julia.jl"], ARGS), " "),
+    )
+end
 
 # `--json`: also write benchmarks/results/speed_julia.json for render_tables.py.
-# Case names are plain ASCII and values are numbers or null, so a hand-rolled
-# writer keeps the bench env free of a JSON dependency.
 const JSON_OUT = "--json" in ARGS
 jrows = NamedTuple[]
 matrix_jrows = NamedTuple[]
@@ -90,32 +114,8 @@ end
 function write_speed_julia(path, rows, matrix_rows)
     mkpath(dirname(path))
     open(path, "w") do io
-        println(io, "{")
-        println(io, "  \"rows\": [")
-        for (i, r) in enumerate(rows)
-            pm = r.powermodels_ms === nothing ? "null" : string(r.powermodels_ms)
-            data_ms = r.powerio_data_ms === nothing ? "null" : string(r.powerio_data_ms)
-            tail = i < length(rows) ? "," : ""
-            println(io, "    {\"case\": \"$(r.case)\", \"buses\": $(r.buses), \"branches\": $(r.branches), " *
-                        "\"powerio_jl_ms\": $(r.powerio_jl_ms), " *
-                        "\"powerio_data_ms\": $data_ms, " *
-                        "\"rust_c_abi_ms\": $(r.rust_c_abi_ms), " *
-                        "\"exapowerio_ms\": $(r.exapowerio_ms), " *
-                        "\"powermodels_ms\": $pm}$tail")
-        end
-        println(io, "  ],")
-        println(io, "  \"matrix_rows\": [")
-        for (i, r) in enumerate(matrix_rows)
-            pm = r.powermodels_ybus_ms === nothing ? "null" : string(r.powermodels_ybus_ms)
-            tail = i < length(matrix_rows) ? "," : ""
-            println(io, "    {\"case\": \"$(r.case)\", \"buses\": $(r.buses), \"branches\": $(r.branches), " *
-                        "\"powerio_jl_ybus_ms\": $(r.powerio_jl_ybus_ms), " *
-                        "\"rust_c_abi_ybus_arrow_ms\": $(r.rust_c_abi_ybus_arrow_ms), " *
-                        "\"exapowerio_ybus_ms\": $(r.exapowerio_ybus_ms), " *
-                        "\"powermodels_ybus_ms\": $pm}$tail")
-        end
-        println(io, "  ]")
-        println(io, "}")
+        JSON.print(io, (metadata = benchmark_metadata(), rows = rows, matrix_rows = matrix_rows), 2)
+        println(io)
     end
     println("wrote $path ($(length(rows)) rows)")
 end
@@ -136,8 +136,8 @@ function powerio_jl_materialize_data(path)
     end
 end
 
-println(rpad("case", 20), rpad("PowerIO.jl", 13), rpad("ExaPowerIO", 13),
-        rpad("PowerModels", 13), rpad("Rust C ABI", 13), rpad("net.data", 13),
+println(rpad("case", 20), rpad("PowerIO.jl", 24), rpad("ExaPowerIO", 24),
+        rpad("PowerModels", 24), rpad("Rust C ABI", 24), rpad("net.data", 24),
         "buses (PowerIO / ExaPowerIO)")
 for (name, f, run_pm) in CASES
     if !isfile(f)
@@ -150,44 +150,51 @@ for (name, f, run_pm) in CASES
 
     netref = Ref{Any}(nothing)
     bj = @benchmark $netref[] = PowerIO.parse_file($f) teardown = (free_network!($netref[]); $netref[] = nothing) samples = samples evals = 1
-    pj = ms(bj)
+    pj = trial_stats(bj)
 
-    data_ms = nothing
+    data = nothing
     data_display = "skip"
     if nbuses <= 15_000
         bd = @benchmark powerio_jl_materialize_data($f) samples = samples evals = 1
-        data_ms = ms(bd)
-        data_display = "$(data_ms) ms"
+        data = trial_stats(bd)
+        data_display = show_stat(data)
     end
 
     href = Ref{Ptr{Cvoid}}(C_NULL)
     bc = @benchmark $href[] = pio_parse_file($f) teardown = (pio_free($href[])) samples = samples evals = 1
-    rust_c = ms(bc)
+    rust_c = trial_stats(bc)
 
     ed = exapowerio_parse_matpower(f)
     be = @benchmark exapowerio_parse_matpower($f) samples = samples evals = 1
-    e = ms(be)
+    e = trial_stats(be)
 
-    pm_ms = nothing
+    pm = nothing
     p = "skip"
     if run_pm
         bp = @benchmark PowerModels.parse_file($f) samples = 5 evals = 1
-        pm_ms = round(median(bp).time / 1e6, digits = 1)
-        p = "$(pm_ms) ms"
+        pm = trial_stats(bp; digits = 1)
+        p = show_stat(pm)
     end
 
     count = nbuses == length(ed.bus) ? string(nbuses) : "$nbuses / $(length(ed.bus))"
-    println(rpad(name, 20), rpad("$(pj) ms", 13), rpad("$(e) ms", 13),
-            rpad(p, 13), rpad("$(rust_c) ms", 13), rpad(data_display, 13), count)
+    println(rpad(name, 20), rpad(show_stat(pj), 24), rpad(show_stat(e), 24),
+            rpad(p, 24), rpad(show_stat(rust_c), 24), rpad(data_display, 24), count)
     push!(jrows, (case = name, buses = nbuses, branches = nbranch,
-                  powerio_jl_ms = pj, powerio_data_ms = data_ms,
-                  rust_c_abi_ms = rust_c, exapowerio_ms = e,
-                  powermodels_ms = pm_ms))
+                  powerio_jl_ms = pj.ms, powerio_jl_std_ms = pj.std_ms, powerio_jl_n = pj.n,
+                  powerio_data_ms = data === nothing ? nothing : data.ms,
+                  powerio_data_std_ms = data === nothing ? nothing : data.std_ms,
+                  powerio_data_n = data === nothing ? 0 : data.n,
+                  rust_c_abi_ms = rust_c.ms, rust_c_abi_std_ms = rust_c.std_ms,
+                  rust_c_abi_n = rust_c.n,
+                  exapowerio_ms = e.ms, exapowerio_std_ms = e.std_ms, exapowerio_n = e.n,
+                  powermodels_ms = pm === nothing ? nothing : pm.ms,
+                  powermodels_std_ms = pm === nothing ? nothing : pm.std_ms,
+                  powermodels_n = pm === nothing ? 0 : pm.n))
 end
 
 println()
-println(rpad("case", 20), rpad("PowerIO.jl Ybus", 18), rpad("Exa Ybus", 15),
-        rpad("Rust C ABI", 13), rpad("PM Ybus", 13), "nnz rows")
+println(rpad("case", 20), rpad("PowerIO.jl Ybus", 24), rpad("Exa Ybus", 24),
+        rpad("Rust C ABI", 24), rpad("PM Ybus", 24), "nnz rows")
 for (name, f, run_pm) in CASES
     if !isfile(f)
         continue
@@ -198,29 +205,37 @@ for (name, f, run_pm) in CASES
 
     nnz_rows = powerio_parse_ybus_arrow(f)
     bp = @benchmark PowerIO.calc_admittance_matrix($f) samples = samples evals = 1
-    pio_ms = ms(bp)
+    pio = trial_stats(bp)
 
     braw = @benchmark powerio_parse_ybus_arrow($f) samples = samples evals = 1
-    raw_ms = ms(braw)
+    raw = trial_stats(braw)
 
     be = @benchmark exapowerio_parse_ybus($f) samples = samples evals = 1
-    exa_ms = ms(be)
+    exa = trial_stats(be)
 
-    pm_ybus_ms = nothing
+    pm_ybus = nothing
     pm_display = "skip"
     if run_pm
         bpm = @benchmark powermodels_parse_ybus($f) samples = 5 evals = 1
-        pm_ybus_ms = round(median(bpm).time / 1e6, digits = 1)
-        pm_display = "$(pm_ybus_ms) ms"
+        pm_ybus = trial_stats(bpm; digits = 1)
+        pm_display = show_stat(pm_ybus)
     end
 
-    println(rpad(name, 20), rpad("$(pio_ms) ms", 18), rpad("$(exa_ms) ms", 15),
-            rpad("$(raw_ms) ms", 13), rpad(pm_display, 13), nnz_rows)
+    println(rpad(name, 20), rpad(show_stat(pio), 24), rpad(show_stat(exa), 24),
+            rpad(show_stat(raw), 24), rpad(pm_display, 24), nnz_rows)
     push!(matrix_jrows, (case = name, buses = nbuses, branches = nbranch,
-                         powerio_jl_ybus_ms = pio_ms,
-                         rust_c_abi_ybus_arrow_ms = raw_ms,
-                         exapowerio_ybus_ms = exa_ms,
-                         powermodels_ybus_ms = pm_ybus_ms))
+                         powerio_jl_ybus_ms = pio.ms,
+                         powerio_jl_ybus_std_ms = pio.std_ms,
+                         powerio_jl_ybus_n = pio.n,
+                         rust_c_abi_ybus_arrow_ms = raw.ms,
+                         rust_c_abi_ybus_arrow_std_ms = raw.std_ms,
+                         rust_c_abi_ybus_arrow_n = raw.n,
+                         exapowerio_ybus_ms = exa.ms,
+                         exapowerio_ybus_std_ms = exa.std_ms,
+                         exapowerio_ybus_n = exa.n,
+                         powermodels_ybus_ms = pm_ybus === nothing ? nothing : pm_ybus.ms,
+                         powermodels_ybus_std_ms = pm_ybus === nothing ? nothing : pm_ybus.std_ms,
+                         powermodels_ybus_n = pm_ybus === nothing ? 0 : pm_ybus.n))
 end
 
 JSON_OUT && write_speed_julia(joinpath(@__DIR__, "results", "speed_julia.json"), jrows, matrix_jrows)
