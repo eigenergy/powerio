@@ -11,7 +11,7 @@ Targets:
   matrix-gridfm   powerio-matrix with the gridfm feature.
   capi-no-default powerio-capi with no default features.
   capi-arrow      powerio-capi with arrow.
-  capi-release    powerio-capi with arrow,matrix,gridfm,dist,pkg.
+  capi-release    powerio-capi with arrow,matrix,gridfm,dist,pkg,prob.
   capi-dist       powerio-capi with dist.
   powerio-py      PyO3 extension with extension-module,gridfm.
 
@@ -61,7 +61,7 @@ case "$target" in
     run cargo clippy -p powerio-capi --all-targets --features arrow -- -D warnings
     ;;
   capi-release)
-    run cargo clippy -p powerio-capi --all-targets --features arrow,matrix,gridfm,dist,pkg -- -D warnings
+    run cargo clippy -p powerio-capi --all-targets --features arrow,matrix,gridfm,dist,pkg,prob -- -D warnings
     ;;
   capi-dist)
     run cargo clippy -p powerio-capi --all-targets --features dist -- -D warnings

@@ -22,8 +22,9 @@ graph views for any downstream solver. Feeds the GridFM ML pipeline.
   `pio_to_arrow`, an Arrow C Data Interface export; `--features gridfm` adds
   `pio_read_dir` / `pio_scenario_ids` (the gridfm-datakit Parquet
   reader, pulling in `powerio-matrix`); `--features dist` adds `pio_dist_*`;
-  `--features pkg` adds `pio_package_*`. All are additive and feature gated, so
-  no ABI bump. Matrix Arrow ABI v1 is COO tables plus append only axis maps
+  `--features pkg` adds `pio_package_*`; `--features prob` adds `pio_scopf_*`.
+  All are additive and feature gated, so no ABI bump. Matrix Arrow ABI v1 is
+  COO tables plus append only axis maps
   `matrix_bus` and `matrix_branch`.
 
 `Network` is the one canonical model (format neutral, loads/shunts first class);
@@ -104,7 +105,7 @@ PowerIO releases are tag driven.
    `powerio-capi` release tarballs for `aarch64-apple-darwin`,
    `aarch64-linux-gnu`, `x86_64-apple-darwin`, `x86_64-linux-gnu`, and
    `x86_64-w64-mingw32`, with the release features
-   `arrow,matrix,gridfm,dist,pkg`.
+   `arrow,matrix,gridfm,dist,pkg,prob`.
 4. That workflow creates or updates a **draft** GitHub release and attaches the
    five binary assets. Do not expect a draft release to exist before the tag
    workflow runs.

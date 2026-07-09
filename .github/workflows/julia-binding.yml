@@ -53,11 +53,11 @@ jobs:
       if: steps.powerio-jl.outputs.available == 'true'
     - name: Build powerio-capi
       if: steps.powerio-jl.outputs.available == 'true'
-      # --features arrow,matrix,gridfm,dist,pkg so PowerIO.jl's Arrow export,
+      # --features arrow,matrix,gridfm,dist,pkg,prob so PowerIO.jl's Arrow export,
       # matrix Arrow export, gridfm reader, distribution surface, and package
       # surface bind against real symbols rather than skipping behind feature
       # probes.
-      run: cargo build -p powerio-capi --release --features arrow,matrix,gridfm,dist,pkg
+      run: cargo build -p powerio-capi --release --features arrow,matrix,gridfm,dist,pkg,prob
     - name: Resolve PowerIO.jl companion branch
       id: powerio-jl-ref
       if: steps.powerio-jl.outputs.available == 'true'

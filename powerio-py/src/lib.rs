@@ -1621,6 +1621,20 @@ fn classify_json_text(text: &str) -> (String, Option<String>, Option<String>) {
     }
 }
 
+/// Parse SCOPF source text and return the versioned wire document as JSON.
+#[pyfunction(signature = (text, from_ = "goc3-json"))]
+fn parse_scopf(text: &str, from_: &str) -> PyResult<String> {
+    if from_ != "goc3-json" {
+        return Err(PyValueError::new_err(format!(
+            "unsupported SCOPF source format {from_:?}"
+        )));
+    }
+    let instance = powerio_prob::build_scopf_instance_from_str(text)
+        .map_err(|error| PowerIOParseError::new_err(error.to_string()))?;
+    powerio_prob::scopf::wire::to_wire_json(&instance)
+        .map_err(|error| PowerIOParseError::new_err(error.to_string()))
+}
+
 /// Build a `{dir, files}` dict from an outputs directory and its written files.
 /// Shared by the DC OPF and gridfm write paths. Paths go through [`path_to_str`]
 /// (so a non-UTF8 path raises instead of being mangled).
@@ -1772,6 +1786,7 @@ fn _powerio(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(dist_convert_str, m)?)?;
     m.add_class::<PyPackage>()?;
     m.add_function(wrap_pyfunction!(classify_json_text, m)?)?;
+    m.add_function(wrap_pyfunction!(parse_scopf, m)?)?;
     // Whether the gridfm Parquet surface (arrow/parquet) was compiled in, so the
     // pure-Python layer can raise an ImportError instead of an AttributeError.
     m.add("_has_gridfm", cfg!(feature = "gridfm"))?;

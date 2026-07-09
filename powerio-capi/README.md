@@ -31,7 +31,7 @@ cargo test -p powerio-capi --features arrow
 cargo test -p powerio-capi --features arrow,matrix
 cargo test -p powerio-capi --features gridfm
 cargo test -p powerio-capi --features dist
-cargo test -p powerio-capi --features arrow,matrix,gridfm,dist,pkg
+cargo test -p powerio-capi --features arrow,matrix,gridfm,dist,pkg,prob
 bash scripts/ci-clippy.sh capi-release
 scripts/capi-header-parity.sh
 scripts/capi-smoke.sh
@@ -158,6 +158,16 @@ normalized solver table metadata. The multiconductor lowering calls take
 projection. The transform convention is fixed by these functions; if another
 convention becomes a real public option, it should get a new additive symbol.
 
+## Problem instances
+
+Build with `--features prob` and define `PIO_PROB` when compiling C code.
+`pio_scopf_parse_str` accepts source text and a format name. The first supported
+format is `goc3-json`. It returns an owned `PioScopfInstance` handle.
+
+`pio_scopf_to_json` returns the versioned SCOPF wire document. The document
+records its schema version and 1-based index convention. Free the string with
+`pio_string_free` and the instance with `pio_scopf_instance_free`.
+
 ## API names
 
 The grammar is written out in the header preamble; the short version:
@@ -255,7 +265,7 @@ appeared before this split should be treated as experimental.
 
 Every public `PIO_*` macro, opaque typedef, and `pio_*` prototype in
 `powerio.h` is pinned by a Cargo test, and CI compiles the C smoke program
-against the no-default core ABI plus the arrow, matrix, gridfm, dist, and pkg
+against the no-default core ABI plus the arrow, matrix, gridfm, dist, pkg, and prob
 feature surfaces. CI also compiles and links a C++ header sanity program to keep the
 `extern "C"` path honest. Source/header symbol parity is checked separately, so
 adding, renaming, or deleting a public entry point fails before release.
@@ -271,5 +281,5 @@ ABI is Arrow COO plus `matrix_bus` and `matrix_branch` axis map tables; C stays
 language neutral, while Julia, Python, and other bindings own their native
 sparse matrix assembly. Runtime consumers can call
 `pio_matrix_available()` before selecting those table ids. Larger matrix
-PTDF and LODF remain in `powerio-matrix`. DC OPF problem instances and bundles
-live in `powerio-prob`; they are not C ABI surfaces yet.
+PTDF and LODF remain in `powerio-matrix`. The `prob` feature exposes matrix free
+SCOPF instances. DC OPF instances and bundles do not yet have C entry points.

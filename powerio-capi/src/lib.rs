@@ -266,7 +266,7 @@ pub extern "C" fn pio_matrix_available() -> i32 {
 }
 
 /// Whether an optional build feature is compiled in: pass `"arrow"`, `"matrix"`,
-/// `"gridfm"`, `"dist"`, or `"pkg"`. Returns 1 if present, 0 otherwise (and 0
+/// `"gridfm"`, `"dist"`, `"pkg"`, or `"prob"`. Returns 1 if present, 0 otherwise (and 0
 /// for a NULL or unknown name). The optional entry points (`pio_to_arrow`, the
 /// matrix Arrow tables, the `pio_read_dir`/gridfm path, the `pio_dist_*` block,
 /// and the `pio_package_*` block) are only linked when their feature is built,
@@ -284,6 +284,7 @@ pub unsafe extern "C" fn pio_has_feature(feature: *const c_char) -> i32 {
                 ("gridfm", cfg!(feature = "gridfm")),
                 ("dist", cfg!(feature = "dist")),
                 ("pkg", cfg!(feature = "pkg")),
+                ("prob", cfg!(feature = "prob")),
             ];
             i32::from(features.iter().any(|&(n, on)| n == name && on))
         })
@@ -1941,6 +1942,86 @@ pub unsafe extern "C" fn pio_package_lower_multiconductor_to_balanced(
 }
 
 // ---------------------------------------------------------------------------
+// Problem instance API (`prob` feature).
+// ---------------------------------------------------------------------------
+
+/// Opaque matrix free SCOPF instance.
+#[cfg(feature = "prob")]
+pub struct PioScopfInstance {
+    instance: powerio_prob::ScopfInstance,
+}
+
+#[cfg(feature = "prob")]
+const _: fn() = || {
+    fn assert_send_sync<T: Send + Sync>() {}
+    assert_send_sync::<PioScopfInstance>();
+};
+
+/// Parse SCOPF source text into an owned problem instance. `from` currently
+/// accepts `"goc3-json"`. Returns `NULL` on error and writes the message into
+/// `errbuf`. Free the handle with [`pio_scopf_instance_free`].
+#[cfg(feature = "prob")]
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn pio_scopf_parse_str(
+    text: *const c_char,
+    from: *const c_char,
+    errbuf: *mut c_char,
+    errlen: usize,
+) -> *mut PioScopfInstance {
+    unsafe {
+        finish_handle(errbuf, errlen, "panic while parsing SCOPF instance", || {
+            let text = required_cstr(text, "text")?;
+            let from = required_cstr(from, "from")?;
+            if from != "goc3-json" {
+                return Err(format!("unsupported SCOPF source format `{from}`"));
+            }
+            let instance = powerio_prob::build_scopf_instance_from_str(text)
+                .map_err(|error| error.to_string())?;
+            Ok(PioScopfInstance { instance })
+        })
+    }
+}
+
+/// Serialize a SCOPF instance using the versioned wire schema. The JSON records
+/// its schema version and index base. Free the returned string with
+/// [`pio_string_free`]. Returns `NULL` for a null handle or serialization error.
+#[cfg(feature = "prob")]
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn pio_scopf_to_json(
+    instance: *const PioScopfInstance,
+    errbuf: *mut c_char,
+    errlen: usize,
+) -> *mut c_char {
+    unsafe {
+        finish_string(
+            errbuf,
+            errlen,
+            "panic while serializing SCOPF instance",
+            || {
+                let instance = instance
+                    .as_ref()
+                    .ok_or_else(|| "SCOPF instance handle is NULL".to_string())?;
+                powerio_prob::scopf::wire::to_wire_json(&instance.instance)
+                    .map_err(|error| error.to_string())
+            },
+        )
+    }
+}
+
+/// Free a SCOPF instance handle. `NULL` is a no-op; free each handle once.
+#[cfg(feature = "prob")]
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn pio_scopf_instance_free(instance: *mut PioScopfInstance) {
+    unsafe {
+        guard((), || {
+            if !instance.is_null() {
+                drop(Box::from_raw(instance));
+            }
+        });
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Distribution API (`dist` feature). The multiconductor model behind its own
 // opaque `PioDistNetwork` handle and the `pio_dist_*` entry points. It is gated
 // on the `dist` feature / `PIO_DIST` define, exactly like `arrow`/`gridfm`; a
@@ -1951,10 +2032,10 @@ pub unsafe extern "C" fn pio_package_lower_multiconductor_to_balanced(
 // versioned by the pio-payload-multiconductor identifier in powerio-pkg.
 // ---------------------------------------------------------------------------
 
-/// Finish a handle-returning dist entry point: run `f` (the handle payload or an
+/// Finish a handle-returning entry point: run `f` (the handle payload or an
 /// error message) under the panic guard and box the payload into an owned handle,
 /// or write the error (`panic_msg` if `f` panicked) into `errbuf` and return NULL.
-#[cfg(feature = "dist")]
+#[cfg(any(feature = "dist", feature = "prob"))]
 unsafe fn finish_handle<H>(
     errbuf: *mut c_char,
     errlen: usize,
@@ -2465,6 +2546,17 @@ mod tests {
         );
     }
 
+    #[test]
+    fn prob_probe_matches_build_features() {
+        let prob = CString::new("prob").unwrap();
+        unsafe {
+            assert_eq!(
+                pio_has_feature(prob.as_ptr()),
+                i32::from(cfg!(feature = "prob"))
+            );
+        }
+    }
+
     fn strip_c_comments(input: &str) -> String {
         let mut out = String::with_capacity(input.len());
         let mut chars = input.chars().peekable();
@@ -2612,6 +2704,7 @@ mod tests {
             "typedef struct PioDistNetwork PioDistNetwork;",
             "typedef struct PioNetwork PioNetwork;",
             "typedef struct PioPackage PioPackage;",
+            "typedef struct PioScopfInstance PioScopfInstance;",
             "uint32_t pio_abi_version(void);",
             "uint32_t pio_dist_abi_version(void);",
             "char *pio_dist_capabilities_json(void);",
@@ -2673,6 +2766,9 @@ mod tests {
             "PioPackage *pio_package_materialize_study_commit(const PioPackage *pkg, int64_t index, char *errbuf, size_t errlen);",
             "char *pio_package_multiconductor_to_balanced_preflight_json(const PioPackage *pkg, double base_mva, char *errbuf, size_t errlen);",
             "PioPackage *pio_package_lower_multiconductor_to_balanced(const PioPackage *pkg, double base_mva, char *errbuf, size_t errlen);",
+            "PioScopfInstance *pio_scopf_parse_str(const char *text, const char *from, char *errbuf, size_t errlen);",
+            "char *pio_scopf_to_json(const PioScopfInstance *instance, char *errbuf, size_t errlen);",
+            "void pio_scopf_instance_free(PioScopfInstance *instance);",
             "PioDistNetwork *pio_dist_parse_file(const char *path, const char *from, char *errbuf, size_t errlen);",
             "PioDistNetwork *pio_dist_parse_str(const char *text, const char *format, char *errbuf, size_t errlen);",
             "void pio_dist_network_free(PioDistNetwork *net);",
@@ -3818,6 +3914,81 @@ mpc.branch = [
             assert!(v["derived"].get("normalized_solver_tables").is_none());
             pio_package_free(pkg);
             pio_network_free(net);
+        }
+    }
+
+    #[cfg(feature = "prob")]
+    const GOC3_SMALL_FIXTURE: &str = include_str!("../../powerio-prob/tests/data/goc3_small.json");
+
+    #[cfg(feature = "prob")]
+    #[test]
+    fn scopf_handle_serializes_versioned_wire_json() {
+        let text = CString::new(GOC3_SMALL_FIXTURE).unwrap();
+        let from = CString::new("goc3-json").unwrap();
+        let feature = CString::new("prob").unwrap();
+        let mut err = [0 as c_char; PIO_ERRBUF_MIN];
+        unsafe {
+            assert_eq!(pio_has_feature(feature.as_ptr()), 1);
+            let instance =
+                pio_scopf_parse_str(text.as_ptr(), from.as_ptr(), err.as_mut_ptr(), err.len());
+            assert!(
+                !instance.is_null(),
+                "pio_scopf_parse_str failed: {}",
+                CStr::from_ptr(err.as_ptr()).to_str().unwrap()
+            );
+            let json = pio_scopf_to_json(instance, err.as_mut_ptr(), err.len());
+            assert!(!json.is_null());
+            let text = CStr::from_ptr(json).to_str().unwrap().to_owned();
+            let v: serde_json::Value = serde_json::from_str(&text).unwrap();
+
+            assert_eq!(v["schema"], "powerio.scopf.julia");
+            assert_eq!(v["schema_version"], "1.0.0");
+            assert_eq!(v["index_base"], 1);
+            assert_eq!(v["instance"]["lengths"]["I"], 2);
+            assert_eq!(v["instance"]["static"]["acl_branch"][0]["j_ln"], 1);
+
+            pio_string_free(json);
+            pio_scopf_instance_free(instance);
+            pio_scopf_instance_free(std::ptr::null_mut());
+        }
+    }
+
+    #[cfg(feature = "prob")]
+    #[test]
+    fn scopf_handle_reports_format_parse_and_null_errors() {
+        let valid = CString::new(GOC3_SMALL_FIXTURE).unwrap();
+        let text = CString::new("not json").unwrap();
+        let from = CString::new("goc3-json").unwrap();
+        let unsupported = CString::new("matpower").unwrap();
+        let mut err = [0 as c_char; PIO_ERRBUF_MIN];
+        unsafe {
+            let instance =
+                pio_scopf_parse_str(text.as_ptr(), from.as_ptr(), err.as_mut_ptr(), err.len());
+            assert!(instance.is_null());
+            assert!(!CStr::from_ptr(err.as_ptr()).to_bytes().is_empty());
+
+            let instance = pio_scopf_parse_str(
+                valid.as_ptr(),
+                unsupported.as_ptr(),
+                err.as_mut_ptr(),
+                err.len(),
+            );
+            assert!(instance.is_null());
+            assert!(
+                CStr::from_ptr(err.as_ptr())
+                    .to_str()
+                    .unwrap()
+                    .contains("unsupported SCOPF source format")
+            );
+
+            let json = pio_scopf_to_json(std::ptr::null(), err.as_mut_ptr(), err.len());
+            assert!(json.is_null());
+            assert!(
+                CStr::from_ptr(err.as_ptr())
+                    .to_str()
+                    .unwrap()
+                    .contains("handle is NULL")
+            );
         }
     }
 
