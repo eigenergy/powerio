@@ -2077,6 +2077,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "powerio-opf"
+version = "0.6.3"
+dependencies = [
+ "powerio",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "powerio-pkg"
 version = "0.6.3"
 dependencies = [

@@ -83,7 +83,7 @@ jobs:
     # Bare `cargo test` only covers the default-members; name the C ABI crate
     # explicitly so its end-to-end ABI tests run in CI too.
     - name: Run tests
-      run: cargo test -p powerio -p powerio-matrix -p powerio-cli -p powerio-capi -p powerio-dist -p powerio-pkg --verbose
+      run: cargo test -p powerio -p powerio-matrix -p powerio-opf -p powerio-cli -p powerio-capi -p powerio-dist -p powerio-pkg --verbose
     # The gridfm Parquet export is behind a cargo feature; exercise it (and its
     # clippy) explicitly so coverage doesn't depend on CLI feature unification.
     - name: Clippy + tests (gridfm feature)
