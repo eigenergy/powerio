@@ -777,8 +777,10 @@ class Package:
         return _json.loads(self._inner.operating_points_json())
 
     def set_operating_points(self, points: Any) -> None:
-        """Attach an operating point series in place, replacing any series
-        already present. ``None`` or an empty series clears it."""
+        """Replace the operating point series and rerun package validation.
+
+        ``None`` or an empty series clears it.
+        """
         self._inner.set_operating_points_json(_json.dumps(points))
 
     def study(self) -> Any:

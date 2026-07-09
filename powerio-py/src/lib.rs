@@ -1492,9 +1492,8 @@ impl PyPackage {
         serde_json::to_string(&self.pkg.operating_points).map_err(package_pyerr)
     }
 
-    /// Parse `json` into an operating point series and attach it to the
-    /// package in place, replacing any series already present. `null` or an
-    /// empty series clears the package's operating points.
+    /// Replace the operating point series from JSON and rerun validation.
+    /// `null` or an empty series clears it.
     fn set_operating_points_json(&mut self, json: &str) -> PyResult<()> {
         let series: Option<OperatingPointSeries> =
             serde_json::from_str(json).map_err(package_pyerr)?;
@@ -1502,6 +1501,7 @@ impl PyPackage {
             Some(series) => self.pkg.set_operating_points(series),
             None => self.pkg.clear_operating_points(),
         }
+        self.pkg.run_sane_validation();
         Ok(())
     }
 

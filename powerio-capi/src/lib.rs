@@ -1754,11 +1754,9 @@ pub unsafe extern "C" fn pio_package_operating_points_json(
     }
 }
 
-/// Parse `json` into an operating point series and attach it to the package in
-/// place, replacing any series already present. `null` clears the package's
-/// operating points; an empty but present series clears it too, matching
-/// [`powerio_pkg::NetworkPackage::set_operating_points`]. Returns `0` on
-/// success, `-1` on error with the message in `errbuf`.
+/// Replace the package's operating point series from `json`. `null` or an
+/// empty series clears it. Validation is recomputed before this function
+/// returns. Returns `0` on success and `-1` on error.
 #[cfg(feature = "pkg")]
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_package_set_operating_points_json(
@@ -1779,6 +1777,7 @@ pub unsafe extern "C" fn pio_package_set_operating_points_json(
                 Some(series) => pkg.package.set_operating_points(series),
                 None => pkg.package.clear_operating_points(),
             }
+            pkg.package.run_sane_validation();
             Ok::<_, String>(())
         }));
         match result {
@@ -3612,6 +3611,20 @@ mpc.branch = [
             let echoed = package_report_json(pio_package_operating_points_json, pkg);
             assert_eq!(echoed, expected, "attached series did not echo back");
 
+            let invalid = CString::new("not json").unwrap();
+            let status = pio_package_set_operating_points_json(
+                pkg,
+                invalid.as_ptr(),
+                err.as_mut_ptr(),
+                err.len(),
+            );
+            assert_eq!(status, -1);
+            assert_eq!(
+                package_report_json(pio_package_operating_points_json, pkg),
+                expected,
+                "a parse error must not replace the existing series"
+            );
+
             let materialized =
                 pio_package_materialize_operating_point(pkg, 0, err.as_mut_ptr(), err.len());
             assert!(
@@ -3636,6 +3649,10 @@ mpc.branch = [
             );
             assert_eq!(status, 0);
             assert!(package_report_json(pio_package_operating_points_json, pkg).is_null());
+            assert_eq!(
+                package_report_json(pio_package_validation_json, pkg)["status"],
+                serde_json::json!("ok")
+            );
 
             pio_package_free(pkg);
         }

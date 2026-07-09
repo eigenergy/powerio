@@ -76,12 +76,34 @@ def test_package_set_operating_points_attaches_and_clears():
     }
     pkg.set_operating_points(series)
     assert pkg.operating_points() == series
+    assert pkg.validation()["status"] == "ok"
 
     static_pkg = pkg.materialize_operating_point(0)
     assert static_pkg.as_balanced().generators[0]["pg"] == pytest.approx(1.5)
 
+    invalid_series = {
+        **series,
+        "points": [
+            {
+                "index": 0,
+                "updates": [
+                    {
+                        "element": {
+                            "table": "generators",
+                            "source_uid": "missing",
+                        },
+                        "fields": {"pg": 1.5},
+                    }
+                ],
+            }
+        ],
+    }
+    pkg.set_operating_points(invalid_series)
+    assert pkg.validation()["status"] == "error"
+
     pkg.set_operating_points(None)
     assert pkg.operating_points() is None
+    assert pkg.validation()["status"] == "ok"
 
 
 def test_package_study_and_materialize_commit():
