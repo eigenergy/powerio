@@ -275,11 +275,19 @@ benchmarks/                  # parse benchmarks + Julia validation harnesses
 
 `tests/data/case{9,14,30,57,118}.m` and `case2869pegase.m` are vendored verbatim
 from `https://github.com/MATPOWER/matpower/tree/master/data` (BSD-3). Also
-`t_case9_dcline.m`, `pglib/` (PGLib OPF), and `psse/*.raw` (PSS/E fixtures). Add
-new sizes by curl from upstream.
+`t_case9_dcline.m`, `pglib/` (PGLib OPF), and `psse/*.raw` (PSS/E fixtures).
 `tests/data/pandapower/example.json` was written by pandapower 3.2.2 and
 `tests/data/pypsa/example/` by PyPSA 1.2.2; both are committed byte exact as
 the tool wrote them (generation snippets in the READMEs next to them).
+
+Use the smallest fixture that exercises the behavior under test. Never add a
+fixture larger than 100 KiB unless the user explicitly approves that exact file
+after being told its byte count, line count, source, license, and effect on the
+pull request. Approval of a broader implementation plan does not authorize
+vendoring its test data. Do not commit a fixture without a license that permits
+redistribution. Prefer synthetic fixtures unless byte exact source fidelity is
+the behavior under test. Run `wc -lc` and inspect `git diff --stat` before
+committing any new fixture.
 
 ## Relationship to GridFM
 

@@ -6,7 +6,6 @@ use powerio_prob::{
 use serde_json::Value;
 
 const SMALL: &str = include_str!("data/goc3_small.json");
-const REAL_14_BUS: &str = include_str!("data/goc3_14bus_20220707.json");
 
 fn small_instance() -> ScopfInstance {
     build_scopf_instance_from_str(SMALL).expect("build small SCOPF instance")
@@ -196,22 +195,6 @@ fn period_mismatch_is_rejected() {
 fn parse_errors_use_the_scopf_error_type() {
     let result: Result<ScopfInstance, ScopfError> = build_scopf_instance_from_str("{");
     assert!(matches!(result, Err(ScopfError::Source(_))));
-}
-
-#[test]
-fn vendored_real_case_runs_in_normal_tests() {
-    let instance = build_scopf_instance_from_str(REAL_14_BUS).expect("build real 14-bus case");
-    let lengths = instance.lengths;
-    assert_eq!(lengths.i, 14);
-    assert_eq!((lengths.l_j_ln, lengths.l_j_xf, lengths.l_j_dc), (17, 3, 0));
-    assert_eq!((lengths.l_j_pr, lengths.l_j_cs, lengths.l_t), (6, 11, 24));
-    assert_eq!(instance.static_data.prod.len(), 6);
-    assert_eq!(instance.static_data.cons.len(), 11);
-    assert_eq!(instance.price_blocks.producer.len(), 720);
-    assert_eq!(instance.price_blocks.consumer.len(), 1056);
-    assert_eq!(instance.ac_contingency_survivors.ln.len(), 19);
-    assert_eq!(instance.ac_contingency_survivors.xf.len(), 19);
-    assert!(instance.dc_contingency_flows.is_empty());
 }
 
 fn build_from_value(value: &Value) -> Result<ScopfInstance, ScopfError> {

@@ -24,7 +24,3 @@ tests/data/dist/** linguist-vendored
 # test (which normalizes only the read side) fails. The PSS/E `.raw` fixtures are
 # intentionally CRLF (the format's native DOS line ending) and stay CRLF. #72.
 tests/data/** -text
-
-# Pinned GOC3 fixture copied byte for byte from C3DataUtilities. The upstream
-# blob uses CRLF, so keep it binary for checkout and diff purposes.
-powerio-prob/tests/data/goc3_14bus_20220707.json linguist-vendored -text -diff
