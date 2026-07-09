@@ -68,8 +68,15 @@ Windows editors accordingly.
 
 ## Test fixtures
 
-Vendor real cases from the upstream projects (MATPOWER, pglib) rather than
-writing bespoke fixtures; pin their bytes.
+Use the smallest fixture that exercises the behavior under test. New fixtures
+larger than 100 KiB require explicit maintainer approval for that exact file
+after its byte count, line count, source, and license are stated in the pull
+request. Approval of a feature or test plan is not approval to vendor its input
+data. Do not commit material without a license that permits redistribution.
+
+Prefer synthetic fixtures for parser and problem assembly tests. Use licensed
+upstream cases only when source fidelity is itself under test. Before committing
+a fixture, run `wc -lc` on it and inspect the pull request diff statistics.
 
 ## PRs
 
