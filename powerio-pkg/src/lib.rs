@@ -41,6 +41,7 @@
 //! is JSON only.
 
 pub mod diagnostics;
+pub mod goc3_scopf;
 pub mod lowering;
 pub mod model;
 pub mod operating;
@@ -51,6 +52,19 @@ pub mod summary;
 pub mod validation;
 
 pub use diagnostics::{DiagnosticCode, DiagnosticSeverity, DiagnosticStage, StructuredDiagnostic};
+pub use goc3_scopf::{
+    Goc3AcContingencySurvivors, Goc3AcLineRow, Goc3AcLineSurvivorRow, Goc3ActiveReserveRow,
+    Goc3ActiveReserveSetRow, Goc3BusRow, Goc3CostRow, Goc3DcContingencyFlowRow, Goc3DcLineRow,
+    Goc3DeviceRow, Goc3EnergyWindowMaxCsRow, Goc3EnergyWindowMaxPrRow, Goc3EnergyWindowMinCsRow,
+    Goc3EnergyWindowMinPrRow, Goc3EnergyWindowPeriodMaxCsRow, Goc3EnergyWindowPeriodMaxPrRow,
+    Goc3EnergyWindowPeriodMinCsRow, Goc3EnergyWindowPeriodMinPrRow, Goc3EnergyWindows,
+    Goc3FixedPhaseRow, Goc3FixedRatioRow, Goc3Lengths, Goc3PriceBlockRow, Goc3PriceBlocks,
+    Goc3ReactiveReserveRow, Goc3ReactiveReserveSetRow, Goc3ScopfData, Goc3ShuntRow, Goc3Static,
+    Goc3StaticProjection, Goc3Tables, Goc3TransformerRow, Goc3TransformerSurvivorRow,
+    Goc3VariablePhaseRow, Goc3VariableRatioRow, goc3_ac_contingency_survivors,
+    goc3_dc_contingency_flows, goc3_energy_windows, goc3_price_blocks, goc3_scopf_data,
+    goc3_scopf_data_from_str, goc3_static_data,
+};
 pub use lowering::{
     LoweringRecord, MulticonductorToBalancedError, MulticonductorToBalancedLowering,
     MulticonductorToBalancedOptions, MulticonductorToBalancedReadiness,

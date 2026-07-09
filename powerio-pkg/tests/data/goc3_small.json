@@ -1,0 +1,140 @@
+{
+  "network": {
+    "bus": [
+      {
+        "uid": "bus_00",
+        "vm_lb": 0.9,
+        "vm_ub": 1.1,
+        "active_reserve_uids": ["azr_00"],
+        "reactive_reserve_uids": ["rzr_00"]
+      },
+      {
+        "uid": "bus_01",
+        "vm_lb": 0.9,
+        "vm_ub": 1.1,
+        "active_reserve_uids": ["azr_00"],
+        "reactive_reserve_uids": ["rzr_00"]
+      }
+    ],
+    "shunt": [
+      {"uid": "sh_00", "bus": "bus_00", "gs": 0.0, "bs": 3.0}
+    ],
+    "ac_line": [
+      {
+        "uid": "acl_00", "to_bus": "bus_01", "fr_bus": "bus_00",
+        "r": 0.0, "x": 2.0, "mva_ub_em": 7.0,
+        "connection_cost": 0.0, "disconnection_cost": 0.0, "mva_ub_nom": 1.0,
+        "b": 0.0, "additional_shunt": 0
+      },
+      {
+        "uid": "acl_01", "to_bus": "bus_01", "fr_bus": "bus_00",
+        "r": 0.0, "x": 1.0, "mva_ub_em": 8.0,
+        "connection_cost": 0.0, "disconnection_cost": 0.0, "mva_ub_nom": 1.0,
+        "b": 0.0, "additional_shunt": 0
+      }
+    ],
+    "two_winding_transformer": [
+      {
+        "uid": "xf_00", "to_bus": "bus_01", "fr_bus": "bus_00",
+        "r": 0.0, "x": 4.0, "mva_ub_em": 6.0,
+        "ta_lb": 0.0, "ta_ub": 0.0, "tm_lb": 1.0, "tm_ub": 1.0,
+        "initial_status": {"ta": 0.0, "tm": 1.0},
+        "connection_cost": 0.0, "disconnection_cost": 0.0, "mva_ub_nom": 1.0,
+        "b": 0.0, "additional_shunt": 0
+      }
+    ],
+    "dc_line": [
+      {
+        "uid": "dc_00", "to_bus": "bus_01", "fr_bus": "bus_00",
+        "pdc_ub": 1.0, "qdc_fr_lb": -1.0, "qdc_to_lb": -1.0,
+        "qdc_fr_ub": 1.0, "qdc_to_ub": 1.0
+      }
+    ],
+    "simple_dispatchable_device": [
+      {
+        "uid": "sd_00", "device_type": "producer", "bus": "bus_00",
+        "initial_status": {"on_status": 1, "p": 10.0, "q": 0.0},
+        "energy_req_ub": [[0.0, 2.0, 9.0]],
+        "energy_req_lb": [[0.0, 2.0, 1.0]],
+        "on_cost": 1.0, "startup_cost": 2.0, "shutdown_cost": 3.0,
+        "p_ramp_up_ub": 1.0, "p_ramp_down_ub": 1.0,
+        "p_startup_ramp_ub": 1.0, "p_shutdown_ramp_ub": 1.0,
+        "p_reg_res_up_ub": 0.0, "p_reg_res_down_ub": 0.0,
+        "p_syn_res_ub": 0.0, "p_nsyn_res_ub": 0.0,
+        "p_ramp_res_up_online_ub": 0.0, "p_ramp_res_up_offline_ub": 0.0,
+        "p_ramp_res_down_online_ub": 0.0, "p_ramp_res_down_offline_ub": 0.0,
+        "startup_states": []
+      },
+      {
+        "uid": "sd_01", "device_type": "consumer", "bus": "bus_01",
+        "initial_status": {"on_status": 1, "p": 4.0, "q": 0.0},
+        "energy_req_ub": [],
+        "energy_req_lb": [],
+        "on_cost": 1.0, "startup_cost": 2.0, "shutdown_cost": 3.0,
+        "p_ramp_up_ub": 1.0, "p_ramp_down_ub": 1.0,
+        "p_startup_ramp_ub": 1.0, "p_shutdown_ramp_ub": 1.0,
+        "p_reg_res_up_ub": 0.0, "p_reg_res_down_ub": 0.0,
+        "p_syn_res_ub": 0.0, "p_nsyn_res_ub": 0.0,
+        "p_ramp_res_up_online_ub": 0.0, "p_ramp_res_up_offline_ub": 0.0,
+        "p_ramp_res_down_online_ub": 0.0, "p_ramp_res_down_offline_ub": 0.0,
+        "startup_states": []
+      }
+    ],
+    "active_zonal_reserve": [
+      {
+        "uid": "azr_00",
+        "REG_UP_vio_cost": 1.0, "REG_DOWN_vio_cost": 1.0,
+        "SYN_vio_cost": 1.0, "NSYN_vio_cost": 1.0,
+        "RAMPING_RESERVE_UP_vio_cost": 1.0, "RAMPING_RESERVE_DOWN_vio_cost": 1.0,
+        "REG_UP": 1.0, "REG_DOWN": 1.0, "SYN": 1.0, "NSYN": 1.0
+      }
+    ],
+    "reactive_zonal_reserve": [
+      {"uid": "rzr_00", "REACT_UP_vio_cost": 1.0, "REACT_DOWN_vio_cost": 1.0}
+    ],
+    "violation_cost": {
+      "p_bus_vio_cost": 1.0, "q_bus_vio_cost": 1.0,
+      "s_vio_cost": 1.0, "e_vio_cost": 1.0
+    }
+  },
+  "time_series_input": {
+    "general": {"time_periods": 2, "interval_duration": [1.0, 1.0]},
+    "simple_dispatchable_device": [
+      {
+        "uid": "sd_00",
+        "cost": [[[10.0, 5.0]], [[11.0, 6.0]]],
+        "p_lb": [2.0, 3.0],
+        "p_reg_res_up_cost": [0.0, 0.0], "p_reg_res_down_cost": [0.0, 0.0],
+        "p_syn_res_cost": [0.0, 0.0], "p_nsyn_res_cost": [0.0, 0.0],
+        "p_ramp_res_up_online_cost": [0.0, 0.0], "p_ramp_res_up_offline_cost": [0.0, 0.0],
+        "p_ramp_res_down_online_cost": [0.0, 0.0], "p_ramp_res_down_offline_cost": [0.0, 0.0],
+        "q_res_up_cost": [0.0, 0.0], "q_res_down_cost": [0.0, 0.0],
+        "p_ub": [5.0, 5.0], "q_ub": [1.0, 1.0], "q_lb": [-1.0, -1.0]
+      },
+      {
+        "uid": "sd_01",
+        "cost": [[[20.0, 5.0]], [[21.0, 6.0]]],
+        "p_lb": [0.0, 0.0],
+        "p_reg_res_up_cost": [0.0, 0.0], "p_reg_res_down_cost": [0.0, 0.0],
+        "p_syn_res_cost": [0.0, 0.0], "p_nsyn_res_cost": [0.0, 0.0],
+        "p_ramp_res_up_online_cost": [0.0, 0.0], "p_ramp_res_up_offline_cost": [0.0, 0.0],
+        "p_ramp_res_down_online_cost": [0.0, 0.0], "p_ramp_res_down_offline_cost": [0.0, 0.0],
+        "q_res_up_cost": [0.0, 0.0], "q_res_down_cost": [0.0, 0.0],
+        "p_ub": [5.0, 5.0], "q_ub": [1.0, 1.0], "q_lb": [-1.0, -1.0]
+      }
+    ],
+    "active_zonal_reserve": [
+      {"uid": "azr_00", "RAMPING_RESERVE_UP": [0.0, 0.0], "RAMPING_RESERVE_DOWN": [0.0, 0.0]}
+    ],
+    "reactive_zonal_reserve": [
+      {"uid": "rzr_00", "REACT_UP": [0.0, 0.0], "REACT_DOWN": [0.0, 0.0]}
+    ]
+  },
+  "reliability": {
+    "contingency": [
+      {"uid": "ctg_00", "components": ["acl_00"]},
+      {"uid": "ctg_01", "components": ["dc_00"]},
+      {"uid": "ctg_02", "components": ["acl_00", "xf_00"]}
+    ]
+  }
+}
