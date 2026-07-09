@@ -56,6 +56,34 @@ def test_package_operating_points_and_materialize():
     assert sum(dense.demand.pd) == pytest.approx(30.0)
 
 
+def test_package_set_operating_points_attaches_and_clears():
+    pkg = pio.Package.from_file(DATA / "case9.m")
+    assert pkg.operating_points() is None
+
+    series = {
+        "time_axis": {"periods": 1, "duration_hours": [1.0]},
+        "points": [
+            {
+                "index": 0,
+                "updates": [
+                    {
+                        "element": {"table": "generators", "source_uid": "generators:0"},
+                        "fields": {"pg": 1.5},
+                    }
+                ],
+            }
+        ],
+    }
+    pkg.set_operating_points(series)
+    assert pkg.operating_points() == series
+
+    static_pkg = pkg.materialize_operating_point(0)
+    assert static_pkg.as_balanced().generators[0]["pg"] == pytest.approx(1.5)
+
+    pkg.set_operating_points(None)
+    assert pkg.operating_points() is None
+
+
 def test_package_study_and_materialize_commit():
     import json
 

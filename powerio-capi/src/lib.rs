@@ -1754,6 +1754,51 @@ pub unsafe extern "C" fn pio_package_operating_points_json(
     }
 }
 
+/// Parse `json` into an operating point series and attach it to the package in
+/// place, replacing any series already present. `null` clears the package's
+/// operating points; an empty but present series clears it too, matching
+/// [`powerio_pkg::NetworkPackage::set_operating_points`]. Returns `0` on
+/// success, `-1` on error with the message in `errbuf`.
+#[cfg(feature = "pkg")]
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn pio_package_set_operating_points_json(
+    pkg: *mut PioPackage,
+    json: *const c_char,
+    errbuf: *mut c_char,
+    errlen: usize,
+) -> i32 {
+    unsafe {
+        let result = catch_unwind(AssertUnwindSafe(|| {
+            let pkg = pkg
+                .as_mut()
+                .ok_or_else(|| "package handle is NULL".to_string())?;
+            let json = required_cstr(json, "json")?;
+            let series: Option<powerio_pkg::OperatingPointSeries> =
+                serde_json::from_str(json).map_err(|e| e.to_string())?;
+            match series {
+                Some(series) => pkg.package.set_operating_points(series),
+                None => pkg.package.clear_operating_points(),
+            }
+            Ok::<_, String>(())
+        }));
+        match result {
+            Ok(Ok(())) => 0,
+            Ok(Err(msg)) => {
+                copy_to_buf(errbuf, errlen, &msg);
+                -1
+            }
+            Err(_) => {
+                copy_to_buf(
+                    errbuf,
+                    errlen,
+                    "panic while setting package operating points",
+                );
+                -1
+            }
+        }
+    }
+}
+
 /// Return the package study block as JSON, or `null` when absent. The returned
 /// string is owned by the library; free it with [`pio_string_free`].
 #[cfg(feature = "pkg")]
@@ -2623,6 +2668,7 @@ mod tests {
             "char *pio_package_validation_json(const PioPackage *pkg, char *errbuf, size_t errlen);",
             "char *pio_package_diagnostics_json(const PioPackage *pkg, char *errbuf, size_t errlen);",
             "char *pio_package_operating_points_json(const PioPackage *pkg, char *errbuf, size_t errlen);",
+            "int32_t pio_package_set_operating_points_json(PioPackage *pkg, const char *json, char *errbuf, size_t errlen);",
             "char *pio_package_study_json(const PioPackage *pkg, char *errbuf, size_t errlen);",
             "PioPackage *pio_package_materialize_operating_point(const PioPackage *pkg, int64_t index, char *errbuf, size_t errlen);",
             "PioPackage *pio_package_materialize_study_commit(const PioPackage *pkg, int64_t index, char *errbuf, size_t errlen);",
@@ -3504,6 +3550,93 @@ mpc.branch = [
                 message.contains("unknown identity"),
                 "unexpected error: {message}"
             );
+            pio_package_free(pkg);
+        }
+    }
+
+    #[cfg(feature = "pkg")]
+    #[test]
+    fn package_set_operating_points_json_round_trips() {
+        use powerio_pkg::NetworkPackage;
+
+        let case = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../tests/data")
+            .join("case9.m");
+        let net = powerio::parse_str(&std::fs::read_to_string(case).unwrap(), "matpower")
+            .unwrap()
+            .network;
+        let json = CString::new(NetworkPackage::from_balanced(net).to_json().unwrap()).unwrap();
+        let series_text = r#"{
+            "time_axis": {"periods": 1, "duration_hours": [1.0]},
+            "points": [
+                {
+                    "index": 0,
+                    "updates": [
+                        {
+                            "element": {"table": "generators", "source_uid": "generators:0"},
+                            "fields": {"pg": 1.5}
+                        }
+                    ]
+                }
+            ]
+        }"#;
+        let series = CString::new(series_text).unwrap();
+
+        let mut err = [0 as c_char; PIO_ERRBUF_MIN];
+        unsafe {
+            let pkg = pio_package_parse_str(json.as_ptr(), err.as_mut_ptr(), err.len());
+            assert!(
+                !pkg.is_null(),
+                "package parse_str failed: {}",
+                CStr::from_ptr(err.as_ptr()).to_str().unwrap()
+            );
+            assert!(
+                package_report_json(pio_package_operating_points_json, pkg).is_null(),
+                "freshly parsed package must start with no operating points"
+            );
+
+            let status = pio_package_set_operating_points_json(
+                pkg,
+                series.as_ptr(),
+                err.as_mut_ptr(),
+                err.len(),
+            );
+            assert_eq!(
+                status,
+                0,
+                "set_operating_points_json failed: {}",
+                CStr::from_ptr(err.as_ptr()).to_str().unwrap()
+            );
+
+            let expected: serde_json::Value = serde_json::from_str(series_text).unwrap();
+            let echoed = package_report_json(pio_package_operating_points_json, pkg);
+            assert_eq!(echoed, expected, "attached series did not echo back");
+
+            let materialized =
+                pio_package_materialize_operating_point(pkg, 0, err.as_mut_ptr(), err.len());
+            assert!(
+                !materialized.is_null(),
+                "materialize failed: {}",
+                CStr::from_ptr(err.as_ptr()).to_str().unwrap()
+            );
+            let materialized_json = package_json(materialized);
+            assert_eq!(
+                materialized_json["model"]["balanced_network"]["generators"][0]["pg"],
+                serde_json::json!(1.5)
+            );
+            pio_package_free(materialized);
+
+            // Attaching `null` clears the series back out.
+            let clear = CString::new("null").unwrap();
+            let status = pio_package_set_operating_points_json(
+                pkg,
+                clear.as_ptr(),
+                err.as_mut_ptr(),
+                err.len(),
+            );
+            assert_eq!(status, 0);
+            assert!(package_report_json(pio_package_operating_points_json, pkg).is_null());
+
             pio_package_free(pkg);
         }
     }

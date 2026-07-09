@@ -878,6 +878,20 @@ char *pio_package_operating_points_json(const PioPackage *pkg, char *errbuf, siz
 
 #if defined(PIO_PKG)
 /**
+ * Parse `json` into an operating point series and attach it to the package in
+ * place, replacing any series already present. `null` clears the package's
+ * operating points; an empty but present series clears it too, matching
+ * [`powerio_pkg::NetworkPackage::set_operating_points`]. Returns `0` on
+ * success, `-1` on error with the message in `errbuf`.
+ */
+int32_t pio_package_set_operating_points_json(PioPackage *pkg,
+                                              const char *json,
+                                              char *errbuf,
+                                              size_t errlen);
+#endif
+
+#if defined(PIO_PKG)
+/**
  * Return the package study block as JSON, or `null` when absent. The returned
  * string is owned by the library; free it with [`pio_string_free`].
  */

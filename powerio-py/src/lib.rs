@@ -36,7 +36,8 @@ use powerio_matrix::{
     POWER_MODELS_ANGLE_BOUND_PAD, PwdDisplay, WriteOptions,
 };
 use powerio_pkg::{
-    DiagnosticSeverity, NetworkPackage, Origin, READ_TRANSMISSION_PARSE_WARNING, SourceDescriptor,
+    DiagnosticSeverity, NetworkPackage, OperatingPointSeries, Origin,
+    READ_TRANSMISSION_PARSE_WARNING, SourceDescriptor,
 };
 
 #[cfg(feature = "gridfm")]
@@ -1489,6 +1490,19 @@ impl PyPackage {
     /// The operating point series as JSON, or `null` when absent.
     fn operating_points_json(&self) -> PyResult<String> {
         serde_json::to_string(&self.pkg.operating_points).map_err(package_pyerr)
+    }
+
+    /// Parse `json` into an operating point series and attach it to the
+    /// package in place, replacing any series already present. `null` or an
+    /// empty series clears the package's operating points.
+    fn set_operating_points_json(&mut self, json: &str) -> PyResult<()> {
+        let series: Option<OperatingPointSeries> =
+            serde_json::from_str(json).map_err(package_pyerr)?;
+        match series {
+            Some(series) => self.pkg.set_operating_points(series),
+            None => self.pkg.clear_operating_points(),
+        }
+        Ok(())
     }
 
     /// The study block as JSON, or `null` when absent.

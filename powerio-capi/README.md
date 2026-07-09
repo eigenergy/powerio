@@ -140,6 +140,9 @@ The default build includes the package surface (`PIO_PKG`). Probe it with
   `pio_package_diagnostics_json` expose structured validation state.
 - `pio_package_operating_points_json` returns the replayable operating point
   series, or JSON `null` when the document has none.
+- `pio_package_set_operating_points_json` parses JSON into an operating point
+  series and attaches it to the document in place, replacing any series
+  already present; `null` or an empty series clears it.
 - `pio_package_materialize_operating_point` returns a new static document with
   one operating point applied. Updates resolve by the model rows' `uid`
   identities; an unknown identity, an ambiguous (duplicated) uid, or a row that
