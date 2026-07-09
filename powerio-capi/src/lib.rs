@@ -1760,7 +1760,7 @@ pub unsafe extern "C" fn pio_package_operating_points_json(
 /// returns. Returns `0` on success and `-1` on error.
 #[cfg(feature = "pkg")]
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn pio_package_set_operating_points_json(
+pub unsafe extern "C" fn pio_package_set_operating_points(
     pkg: *mut PioPackage,
     json: *const c_char,
     errbuf: *mut c_char,
@@ -2760,7 +2760,7 @@ mod tests {
             "char *pio_package_validation_json(const PioPackage *pkg, char *errbuf, size_t errlen);",
             "char *pio_package_diagnostics_json(const PioPackage *pkg, char *errbuf, size_t errlen);",
             "char *pio_package_operating_points_json(const PioPackage *pkg, char *errbuf, size_t errlen);",
-            "int32_t pio_package_set_operating_points_json(PioPackage *pkg, const char *json, char *errbuf, size_t errlen);",
+            "int32_t pio_package_set_operating_points(PioPackage *pkg, const char *json, char *errbuf, size_t errlen);",
             "char *pio_package_study_json(const PioPackage *pkg, char *errbuf, size_t errlen);",
             "PioPackage *pio_package_materialize_operating_point(const PioPackage *pkg, int64_t index, char *errbuf, size_t errlen);",
             "PioPackage *pio_package_materialize_study_commit(const PioPackage *pkg, int64_t index, char *errbuf, size_t errlen);",
@@ -3651,7 +3651,7 @@ mpc.branch = [
 
     #[cfg(feature = "pkg")]
     #[test]
-    fn package_set_operating_points_json_round_trips() {
+    fn package_set_operating_points_round_trips() {
         use powerio_pkg::NetworkPackage;
 
         let case = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -3690,16 +3690,12 @@ mpc.branch = [
                 "freshly parsed package must start with no operating points"
             );
 
-            let status = pio_package_set_operating_points_json(
-                pkg,
-                series.as_ptr(),
-                err.as_mut_ptr(),
-                err.len(),
-            );
+            let status =
+                pio_package_set_operating_points(pkg, series.as_ptr(), err.as_mut_ptr(), err.len());
             assert_eq!(
                 status,
                 0,
-                "set_operating_points_json failed: {}",
+                "set_operating_points failed: {}",
                 CStr::from_ptr(err.as_ptr()).to_str().unwrap()
             );
 
@@ -3708,7 +3704,7 @@ mpc.branch = [
             assert_eq!(echoed, expected, "attached series did not echo back");
 
             let invalid = CString::new("not json").unwrap();
-            let status = pio_package_set_operating_points_json(
+            let status = pio_package_set_operating_points(
                 pkg,
                 invalid.as_ptr(),
                 err.as_mut_ptr(),
@@ -3737,12 +3733,8 @@ mpc.branch = [
 
             // Attaching `null` clears the series back out.
             let clear = CString::new("null").unwrap();
-            let status = pio_package_set_operating_points_json(
-                pkg,
-                clear.as_ptr(),
-                err.as_mut_ptr(),
-                err.len(),
-            );
+            let status =
+                pio_package_set_operating_points(pkg, clear.as_ptr(), err.as_mut_ptr(), err.len());
             assert_eq!(status, 0);
             assert!(package_report_json(pio_package_operating_points_json, pkg).is_null());
             assert_eq!(

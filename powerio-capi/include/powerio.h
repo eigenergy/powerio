@@ -861,10 +861,10 @@ char *pio_package_operating_points_json(const PioPackage *pkg, char *errbuf, siz
  * empty series clears it. Validation is recomputed before this function
  * returns. Returns `0` on success and `-1` on error.
  */
-int32_t pio_package_set_operating_points_json(PioPackage *pkg,
-                                              const char *json,
-                                              char *errbuf,
-                                              size_t errlen);
+int32_t pio_package_set_operating_points(PioPackage *pkg,
+                                         const char *json,
+                                         char *errbuf,
+                                         size_t errlen);
 #endif
 
 #if defined(PIO_PKG)
