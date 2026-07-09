@@ -155,6 +155,35 @@ normalized solver table metadata. The multiconductor lowering calls take
 projection. The transform convention is fixed by these functions; if another
 convention becomes a real public option, it should get a new additive symbol.
 
+## GOC3 SCOPF data
+
+`pio_goc3_scopf_data_json` (also gated on `PIO_PKG`) takes GOC3 JSON input
+text and returns the security-constrained OPF instance a GOC3 case reduces
+to, as JSON: buses, shunts, AC/DC branches, transformer control sets,
+producers, consumers, zonal reserves, device-zone membership, multi-period
+energy windows, flattened price blocks, and per-contingency survivor sets,
+with no model-specific stacked variable numbering (`powerio_pkg::goc3_scopf`,
+ported from `goc3_scopf_data`/`_goc3_*` in PowerIO.jl's `src/goc3.jl`). Row
+fields carry Julia's exact field names on the wire (`L_J_ln`, `I`, `σ_rgu`,
+...) so the eventual PowerIO.jl binding is a body swap. This is the only GOC3
+SCOPF symbol: PowerIO.jl exports `goc3_scopf_data` but keeps its five
+`_goc3_*` builders internal, so the individual projections stay Rust-only
+(`powerio_pkg::goc3_scopf::{goc3_static_data, goc3_energy_windows,
+goc3_price_blocks, goc3_ac_contingency_survivors,
+goc3_dc_contingency_flows}`) for a future `powerio-opf` crate to build on,
+without a matching C ABI entry point apiece.
+
+`goc3` is the one deliberate exception to "format names never appear in
+symbols" below: that rule targets operations that generalize across every
+case format (`pio_parse_str`, `pio_convert_str`, `pio_to_format`), where
+naming a format in the symbol would force a new symbol per format. This
+entry point's output has no such generalization — its shape (reserves,
+energy windows, contingency survivor sets) is GOC3-specific input data, not
+a `Network`/`PioNetwork` reduction any format could produce, the same reason
+PowerIO.jl names the Julia function `goc3_scopf_data`, not `scopf_data(data,
+format)`. `text` is GOC3 JSON document text specifically, not a
+format-neutral handle.
+
 ## API names
 
 The grammar is written out in the header preamble; the short version:
@@ -169,7 +198,9 @@ The grammar is written out in the header preamble; the short version:
   network handle family.
 - Format names never appear in symbols: `matpower`, `psse`, `powerio-json`,
   `pypsa-csv`, `gridfm`, `goc3-json`, `surge-json`, and every future format are
-  strings, so a new format never changes this ABI.
+  strings, so a new format never changes this ABI. `pio_goc3_scopf_data_json`
+  is the deliberate exception (see `## GOC3 SCOPF data` above): it names data
+  that is GOC3-specific, not an operation that generalizes across formats.
 - Noun phrases are queries: `pio_n_*` counts, `pio_is_radial`,
   `pio_bus_ids`/`pio_branches`/`pio_gens`/`pio_bus_demand`/`pio_bus_shunt`
   extractors, `pio_warnings` for the handle's fidelity warnings.

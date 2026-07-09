@@ -1897,6 +1897,53 @@ pub unsafe extern "C" fn pio_package_lower_multiconductor_to_balanced(
 }
 
 // ---------------------------------------------------------------------------
+// GOC3 SCOPF data (`pkg` feature). Not a `pio_package_*` operation: it never
+// touches a `PioPackage` handle, only GOC3 JSON text in and JSON out, so it
+// gets its own symbol stem rather than living under a Package or a Network
+// verb. `goc3` is deliberately the one exception to "format names never
+// appear in symbols" (see the `## API names` grammar in README.md): that
+// rule is about operations that generalize across every case format
+// (`pio_parse_str`, `pio_convert_str`, `pio_to_format`), where a symbol
+// naming a format would force a new symbol per format. This entry point's
+// output shape (reserves, energy windows, contingency survivor sets) has no
+// such generalization; it is GOC3-specific input data, the same way
+// PowerIO.jl names the Julia function `goc3_scopf_data`, not
+// `scopf_data(data, format)`.
+// ---------------------------------------------------------------------------
+
+/// Build the GO Challenge 3 SCOPF instance
+/// (`powerio_pkg::goc3_scopf::goc3_scopf_data`) from GOC3 JSON input text and
+/// return it as JSON: buses, shunts, AC/DC branches, transformer control
+/// sets, producers, consumers, zonal reserves, device-zone membership,
+/// multi-period energy windows, flattened price blocks, and per-contingency
+/// survivor sets, with no model-specific stacked variable numbering. Mirrors
+/// PowerIO.jl's public `goc3_scopf_data`; the five `_goc3_*` builders behind
+/// it are internal there too, so this is the only GOC3 SCOPF C ABI symbol
+/// (see `powerio-capi/README.md`). Returns an owned C string (free with
+/// [`pio_string_free`]) or `NULL` on error.
+#[cfg(feature = "pkg")]
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn pio_goc3_scopf_data_json(
+    text: *const c_char,
+    errbuf: *mut c_char,
+    errlen: usize,
+) -> *mut c_char {
+    unsafe {
+        finish_string(
+            errbuf,
+            errlen,
+            "panic while building GOC3 SCOPF data",
+            || {
+                let text = required_cstr(text, "text")?;
+                let scopf = powerio_pkg::goc3_scopf::goc3_scopf_data_from_str(text)
+                    .map_err(|e| e.to_string())?;
+                serde_json::to_string(&scopf).map_err(|e| e.to_string())
+            },
+        )
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Distribution API (`dist` feature). The multiconductor model behind its own
 // opaque `PioDistNetwork` handle and the `pio_dist_*` entry points. It is gated
 // on the `dist` feature / `PIO_DIST` define, exactly like `arrow`/`gridfm`; a
@@ -2628,6 +2675,7 @@ mod tests {
             "PioPackage *pio_package_materialize_study_commit(const PioPackage *pkg, int64_t index, char *errbuf, size_t errlen);",
             "char *pio_package_multiconductor_to_balanced_preflight_json(const PioPackage *pkg, double base_mva, char *errbuf, size_t errlen);",
             "PioPackage *pio_package_lower_multiconductor_to_balanced(const PioPackage *pkg, double base_mva, char *errbuf, size_t errlen);",
+            "char *pio_goc3_scopf_data_json(const char *text, char *errbuf, size_t errlen);",
             "PioDistNetwork *pio_dist_parse_file(const char *path, const char *from, char *errbuf, size_t errlen);",
             "PioDistNetwork *pio_dist_parse_str(const char *text, const char *format, char *errbuf, size_t errlen);",
             "void pio_dist_network_free(PioDistNetwork *net);",
@@ -3668,6 +3716,71 @@ mpc.branch = [
             assert!(v["derived"].get("normalized_solver_tables").is_none());
             pio_package_free(pkg);
             pio_network_free(net);
+        }
+    }
+
+    /// The 2-bus/2-AC-line/1-transformer/1-DC-line/1-producer/1-consumer
+    /// synthetic GOC3 fixture `powerio-pkg` cross-checks against
+    /// PowerIO.jl's `test/test_goc3_static.jl` (see
+    /// `powerio-pkg/src/goc3_scopf.rs`), reused here so the C ABI end to end
+    /// test exercises the same hand-verified numbers instead of a fresh
+    /// fixture.
+    #[cfg(feature = "pkg")]
+    const GOC3_SMALL_FIXTURE: &str = include_str!("../../powerio-pkg/tests/data/goc3_small.json");
+
+    #[cfg(feature = "pkg")]
+    #[test]
+    fn goc3_scopf_data_json_matches_hand_checked_small_fixture() {
+        let text = CString::new(GOC3_SMALL_FIXTURE).unwrap();
+        let mut err = [0 as c_char; PIO_ERRBUF_MIN];
+        unsafe {
+            let json = pio_goc3_scopf_data_json(text.as_ptr(), err.as_mut_ptr(), err.len());
+            assert!(
+                !json.is_null(),
+                "pio_goc3_scopf_data_json failed: {}",
+                CStr::from_ptr(err.as_ptr()).to_str().unwrap()
+            );
+            let text = CStr::from_ptr(json).to_str().unwrap().to_owned();
+            let v: serde_json::Value = serde_json::from_str(&text).unwrap();
+
+            assert_eq!(v["lengths"]["I"], serde_json::json!(2));
+            assert_eq!(v["lengths"]["L_J_ln"], serde_json::json!(2));
+            assert_eq!(v["lengths"]["L_J_xf"], serde_json::json!(1));
+            assert_eq!(v["lengths"]["L_T"], serde_json::json!(2));
+            assert_eq!(v["static"]["prod"][0]["uid"], serde_json::json!("sd_00"));
+            assert_eq!(v["static"]["cons"][0]["uid"], serde_json::json!("sd_01"));
+            assert_eq!(
+                v["static"]["active_reserve"][0]["σ_rgu"],
+                serde_json::json!(1.0)
+            );
+            assert_eq!(
+                v["energy_windows"]["W_en_max_pr"][0]["e_max"],
+                serde_json::json!(9.0)
+            );
+            assert_eq!(
+                v["price_blocks"]["producer"][0]["c_en"],
+                serde_json::json!(10.0)
+            );
+            let ac_survivors = v["ac_contingency_survivors"]["ln"].as_array().unwrap();
+            assert_eq!(ac_survivors.len(), 3);
+            assert_eq!(ac_survivors[0][0]["uid"], serde_json::json!("acl_01"));
+            let dc_flows = v["dc_contingency_flows"].as_array().unwrap();
+            assert_eq!(dc_flows.len(), 4);
+
+            pio_string_free(json);
+        }
+    }
+
+    #[cfg(feature = "pkg")]
+    #[test]
+    fn goc3_scopf_data_json_reports_parse_errors() {
+        let text = CString::new("not json").unwrap();
+        let mut err = [0 as c_char; PIO_ERRBUF_MIN];
+        unsafe {
+            let json = pio_goc3_scopf_data_json(text.as_ptr(), err.as_mut_ptr(), err.len());
+            assert!(json.is_null());
+            let message = CStr::from_ptr(err.as_ptr()).to_str().unwrap();
+            assert!(!message.is_empty(), "expected a parse error message");
         }
     }
 

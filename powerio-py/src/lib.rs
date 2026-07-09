@@ -1590,6 +1590,19 @@ fn classify_json_text(text: &str) -> (String, Option<String>, Option<String>) {
     }
 }
 
+/// Build the GO Challenge 3 SCOPF instance from GOC3 JSON input text and
+/// return it as JSON: buses, shunts, AC/DC branches, transformer control
+/// sets, producers, consumers, zonal reserves, device-zone membership,
+/// multi-period energy windows, flattened price blocks, and per-contingency
+/// survivor sets, with no model-specific stacked variable numbering. Mirrors
+/// `powerio-capi`'s `pio_goc3_scopf_data_json` and PowerIO.jl's public
+/// `goc3_scopf_data`.
+#[pyfunction]
+fn goc3_scopf_data_json(text: &str) -> PyResult<String> {
+    let scopf = powerio_pkg::goc3_scopf::goc3_scopf_data_from_str(text).map_err(package_pyerr)?;
+    serde_json::to_string(&scopf).map_err(package_pyerr)
+}
+
 /// Build a `{dir, files}` dict from an outputs directory and its written files.
 /// Shared by the DC OPF and gridfm write paths. Paths go through [`path_to_str`]
 /// (so a non-UTF8 path raises instead of being mangled).
@@ -1741,6 +1754,7 @@ fn _powerio(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(dist_convert_str, m)?)?;
     m.add_class::<PyPackage>()?;
     m.add_function(wrap_pyfunction!(classify_json_text, m)?)?;
+    m.add_function(wrap_pyfunction!(goc3_scopf_data_json, m)?)?;
     // Whether the gridfm Parquet surface (arrow/parquet) was compiled in, so the
     // pure-Python layer can raise an ImportError instead of an AttributeError.
     m.add("_has_gridfm", cfg!(feature = "gridfm"))?;

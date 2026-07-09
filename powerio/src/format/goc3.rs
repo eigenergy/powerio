@@ -177,31 +177,21 @@ fn read_buses(network: &Map<String, Value>) -> Result<(Vec<Bus>, Goc3BusMap)> {
     }
     let mut records = Vec::with_capacity(items.len());
     let mut seen_uids = HashSet::new();
-    for item in items {
-        let obj = item_object(item, "bus")?;
-        let uid = item_uid(item, obj).ok_or_else(|| bad("bus record missing `uid`"))?;
+    for item in &items {
+        let obj = item_object(*item, "bus")?;
+        let uid = item_uid(*item, obj).ok_or_else(|| bad("bus record missing `uid`"))?;
         if !seen_uids.insert(uid.clone()) {
             return Err(bad(format!("duplicate bus uid `{uid}`")));
         }
         records.push((uid, obj));
     }
 
-    let suffixes: Option<Vec<usize>> = records
-        .iter()
-        .map(|(uid, _)| official_bus_suffix(uid))
-        .collect();
-    let suffixes_unique = suffixes
-        .as_ref()
-        .is_some_and(|values| values.iter().copied().collect::<HashSet<_>>().len() == values.len());
+    let ids = bus_id_by_uid(&items)?;
 
     let mut by_uid = HashMap::with_capacity(records.len());
     let mut buses = Vec::with_capacity(records.len());
-    for (index, (uid, obj)) in records.into_iter().enumerate() {
-        let id = if suffixes_unique {
-            BusId(official_bus_suffix(&uid).expect("suffix checked above") + 1)
-        } else {
-            BusId(index + 1)
-        };
+    for (uid, obj) in records {
+        let id = ids[&uid];
         by_uid.insert(uid.clone(), id);
         let initial = initial_status(obj);
         buses.push(Bus {
@@ -731,7 +721,45 @@ fn official_bus_suffix(uid: &str) -> Option<usize> {
         .flatten()
 }
 
-fn string<'a>(obj: &'a Map<String, Value>, key: &str) -> Option<&'a str> {
+/// Map GOC3 bus uids to the same 1-based row positions [`read_buses`] assigns
+/// as `BusId`: the numeric `bus_<n>` suffix + 1 when every bus in `items` has
+/// one and they are unique, else the 1-based position in document order.
+/// Shared with `powerio-pkg`'s GOC3 SCOPF projections so their bus indices
+/// agree with `BalancedNetwork`'s `BusId` for the same document.
+pub fn bus_id_by_uid(items: &[SectionItem<'_>]) -> Result<HashMap<String, BusId>> {
+    let mut uids = Vec::with_capacity(items.len());
+    for item in items {
+        let obj = item
+            .value
+            .as_object()
+            .ok_or_else(|| bad("bus section item is not an object"))?;
+        let uid = item_uid(*item, obj).ok_or_else(|| bad("bus section item missing `uid`"))?;
+        uids.push(uid);
+    }
+    let suffixes: Vec<Option<usize>> = uids.iter().map(|uid| official_bus_suffix(uid)).collect();
+    let suffixes_unique = suffixes.iter().all(Option::is_some)
+        && suffixes
+            .iter()
+            .flatten()
+            .copied()
+            .collect::<HashSet<_>>()
+            .len()
+            == suffixes.len();
+    Ok(uids
+        .into_iter()
+        .zip(suffixes)
+        .enumerate()
+        .map(|(index, (uid, suffix))| {
+            let id = match suffix {
+                Some(suffix) if suffixes_unique => suffix + 1,
+                _ => index + 1,
+            };
+            (uid, BusId(id))
+        })
+        .collect())
+}
+
+pub fn string<'a>(obj: &'a Map<String, Value>, key: &str) -> Option<&'a str> {
     obj.get(key).and_then(Value::as_str)
 }
 
@@ -743,7 +771,7 @@ fn first_number(value: Option<&Value>, key: &str) -> Option<f64> {
     value?.get(key)?.as_array()?.first().and_then(Value::as_f64)
 }
 
-fn initial_status(obj: &Map<String, Value>) -> Option<&Map<String, Value>> {
+pub fn initial_status(obj: &Map<String, Value>) -> Option<&Map<String, Value>> {
     obj.get("initial_status").and_then(Value::as_object)
 }
 
@@ -796,6 +824,7 @@ fn bad(message: impl Into<String>) -> Error {
 /// mapping. Hidden: not part of the public format API.
 pub mod bridge {
     pub use super::{
-        DeviceRow, DeviceTable, SectionItem, cost_at, device_rows, item_uid, number, section,
+        DeviceRow, DeviceTable, SectionItem, bus_id_by_uid, cost_at, device_rows, initial_status,
+        item_uid, number, section, string,
     };
 }
