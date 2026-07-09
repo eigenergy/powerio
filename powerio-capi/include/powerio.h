@@ -878,6 +878,18 @@ char *pio_package_operating_points_json(const PioPackage *pkg, char *errbuf, siz
 
 #if defined(PIO_PKG)
 /**
+ * Replace the package's operating point series from `json`. `null` or an
+ * empty series clears it. Validation is recomputed before this function
+ * returns. Returns `0` on success and `-1` on error.
+ */
+int32_t pio_package_set_operating_points_json(PioPackage *pkg,
+                                              const char *json,
+                                              char *errbuf,
+                                              size_t errlen);
+#endif
+
+#if defined(PIO_PKG)
+/**
  * Return the package study block as JSON, or `null` when absent. The returned
  * string is owned by the library; free it with [`pio_string_free`].
  */

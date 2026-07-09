@@ -176,7 +176,7 @@ fn batch_writes_requested_matrices_rhs_and_metadata() {
     assert_eq!(meta["matrices"].as_array().unwrap().len(), 2);
     assert_eq!(meta["matrices"][0]["kind"], "ybus_real");
     assert_eq!(meta["matrices"][1]["kind"], "ybus_imag");
-    assert!(meta["source_sha256"].as_str().unwrap().len() == 64);
+    assert_eq!(meta["source_sha256"].as_str().unwrap().len(), 64);
 
     let _ = std::fs::remove_dir_all(out_dir);
 }
