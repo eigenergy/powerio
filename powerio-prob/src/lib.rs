@@ -4,6 +4,7 @@
 //! Enable `matrix` to derive sparse operators from an instance.
 
 mod dc;
+pub mod scopf;
 
 #[cfg(feature = "matrix")]
 pub mod matrix;
@@ -13,3 +14,6 @@ pub use dc::{
     build_dc_opf_instance,
 };
 pub use powerio::{DcConvention, Error, Result};
+pub use scopf::{
+    ScopfError, ScopfInstance, ScopfResult, build_scopf_instance, build_scopf_instance_from_str,
+};
