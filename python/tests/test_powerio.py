@@ -18,6 +18,13 @@ import scipy.sparse as sp
 import powerio
 
 DATA = Path(__file__).resolve().parents[2] / "tests" / "data"
+SCOPF_SMALL = (
+    Path(__file__).resolve().parents[2]
+    / "powerio-prob"
+    / "tests"
+    / "data"
+    / "goc3_small.json"
+)
 SMALL = ["case9", "case30"]
 
 # A 3-bus case authored inline so tests can reach paths the vendored fixtures
@@ -89,6 +96,23 @@ def test_parse_metadata(case9):
     assert case9.base_mva == 100.0
     assert not case9.is_radial  # case9 is meshed
     assert case9.n_connected_components == 1
+
+
+def test_parse_scopf_uses_public_versioned_wire_document():
+    instance = powerio.parse_scopf(SCOPF_SMALL.read_text())
+    assert instance["schema"] == "powerio.scopf.julia"
+    assert instance["schema_version"] == "1.0.0"
+    assert instance["index_base"] == 1
+    assert instance["instance"]["lengths"]["I"] == 2
+    assert instance["instance"]["static"]["acl_branch"][0]["j_ln"] == 1
+    assert "parse_scopf" in powerio.__all__
+
+
+def test_parse_scopf_rejects_bad_input_and_unknown_format():
+    with pytest.raises(powerio.PowerIOParseError):
+        powerio.parse_scopf("not json")
+    with pytest.raises(ValueError, match="unsupported SCOPF source format"):
+        powerio.parse_scopf(SCOPF_SMALL.read_text(), from_="matpower")
 
 
 def test_public_type_is_network(case9):

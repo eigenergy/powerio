@@ -74,9 +74,10 @@
  * points (guarded by PIO_DIST): multiconductor distribution cases (OpenDSS,
  * PMD ENGINEERING JSON, BMOPF JSON) behind their own PioDistNetwork handle,
  * freed with pio_dist_network_free, string outputs freed with pio_string_free,
- * and `--features pkg` for the pio_package_* entry points (guarded by
+ * `--features pkg` for the pio_package_* entry points (guarded by
  * PIO_PKG): `.pio.json` compiler packages behind their own PioPackage handle,
- * freed with pio_package_free.
+ * freed with pio_package_free, and `--features prob` for the pio_scopf_*
+ * entry points (guarded by PIO_PROB), behind a PioScopfInstance handle.
  * The distribution C API is EXPERIMENTAL while the IEEE BMOPF schema is a
  * draft: supported dist C usage starts at PIO_DIST_ABI_VERSION = 1, with
  * pio_dist_convert_*(input, from, to, ...). Dist C signature changes bump
@@ -84,7 +85,7 @@
  * powerio-dist-json) carry their own meta.version and may evolve; pin a
  * vintage from the payload meta.
  * Probe optional features at runtime with
- * pio_has_feature("arrow"|"matrix"|"gridfm"|"dist"|"pkg").
+ * pio_has_feature("arrow"|"matrix"|"gridfm"|"dist"|"pkg"|"prob").
  *
  * Checked in and generated; regenerate from the Rust source with
  *   cbindgen --config cbindgen.toml --crate powerio-capi --output include/powerio.h
@@ -108,8 +109,8 @@ struct ArrowSchema;
  * `pio_*` signature or documented behavior, including removing a supported
  * format token from the C API. New additive symbols do not require a bump.
  * A consumer compares [`pio_abi_version`] against the value it was built
- * against (the `PIO_ABI_VERSION` macro in `powerio.h`) and refuses a mismatched
- * library instead of calling in blind.
+ * against (the `PIO_ABI_VERSION` macro in `powerio.h`) and refuses a
+ * mismatched library instead of calling in blind.
  *
  * v4 froze the naming grammar and conventions (see the header preamble); the
  * C API evolves additively from here: new data means new symbols, and rich
@@ -140,116 +141,87 @@ struct ArrowSchema;
 /**
  * Table selectors for [`pio_to_arrow`](crate::pio_to_arrow); the C
  * header mirrors these as `PIO_ARROW_TABLE_*`.
- *
- * Raw tables use source units and external bus ids. Solver tables use
- * normalized per unit/radian values and dense zero based row ids. Matrix tables
- * use COO triplets plus schema metadata, and their row and column axes are
- * described by the `matrix_bus` and `matrix_branch` axis map tables.
- *
- * Consumers should prefer `pio_arrow_catalog_json` when available instead of
- * hard coding ids. These macros remain for C callers that compile against this
- * header.
  */
 #define PIO_ARROW_TABLE_BUS 0
 #endif
 
 #if defined(PIO_ARROW)
-/** Raw branch table in source units; bus columns use external bus ids. */
 #define PIO_ARROW_TABLE_BRANCH 1
 #endif
 
 #if defined(PIO_ARROW)
-/** Raw generator table in source units; bus columns use external bus ids. */
 #define PIO_ARROW_TABLE_GEN 2
 #endif
 
 #if defined(PIO_ARROW)
-/** Raw load table in source units; bus columns use external bus ids. */
 #define PIO_ARROW_TABLE_LOAD 3
 #endif
 
 #if defined(PIO_ARROW)
-/** Raw shunt table in source units; bus columns use external bus ids. */
 #define PIO_ARROW_TABLE_SHUNT 4
 #endif
 
 #if defined(PIO_ARROW)
-/** Raw switch table in source units; bus columns use external bus ids. */
 #define PIO_ARROW_TABLE_SWITCH 5
 #endif
 
 #if defined(PIO_ARROW)
-/** Normalized dense bus table; `index` is the solver bus index. */
 #define PIO_ARROW_TABLE_SOLVER_BUS 6
 #endif
 
 #if defined(PIO_ARROW)
-/** Normalized dense load table keyed by solver load index and solver bus index. */
 #define PIO_ARROW_TABLE_SOLVER_LOAD 7
 #endif
 
 #if defined(PIO_ARROW)
-/** Normalized dense shunt table keyed by solver shunt index and solver bus index. */
 #define PIO_ARROW_TABLE_SOLVER_SHUNT 8
 #endif
 
 #if defined(PIO_ARROW)
-/** Normalized dense branch table keyed by solver branch index and bus endpoints. */
 #define PIO_ARROW_TABLE_SOLVER_BRANCH 9
 #endif
 
 #if defined(PIO_ARROW)
-/** Normalized dense switch table keyed by solver switch index and bus endpoints. */
 #define PIO_ARROW_TABLE_SOLVER_SWITCH 10
 #endif
 
 #if defined(PIO_ARROW)
-/** Normalized arc table, one row per branch terminal. */
 #define PIO_ARROW_TABLE_SOLVER_ARC 11
 #endif
 
 #if defined(PIO_ARROW)
-/** Normalized dense generator table keyed by solver generator index and bus index. */
 #define PIO_ARROW_TABLE_SOLVER_GEN 12
 #endif
 
 #if defined(PIO_ARROW)
-/** Normalized dense storage table keyed by solver storage index and bus index. */
 #define PIO_ARROW_TABLE_SOLVER_STORAGE 13
 #endif
 
 #if defined(PIO_ARROW)
-/** Normalized dense HVDC table keyed by solver HVDC index and bus endpoints. */
 #define PIO_ARROW_TABLE_SOLVER_HVDC 14
 #endif
 
 #if defined(PIO_ARROW)
-/** Y bus COO table. Rows and columns use the `matrix_bus` axis. */
 #define PIO_ARROW_TABLE_YBUS 15
 #endif
 
 #if defined(PIO_ARROW)
-/** Signed incidence COO table. Rows use `matrix_bus`; columns use `matrix_branch`. */
 #define PIO_ARROW_TABLE_INCIDENCE 16
 #endif
 
 #if defined(PIO_ARROW)
-/** MATPOWER Bp COO table. Rows and columns use `matrix_bus`. */
 #define PIO_ARROW_TABLE_BPRIME 17
 #endif
 
 #if defined(PIO_ARROW)
-/** MATPOWER Bpp COO table. Rows and columns use the `matrix_bus` axis. */
 #define PIO_ARROW_TABLE_BDOUBLEPRIME 18
 #endif
 
 #if defined(PIO_ARROW)
-/** Matrix bus axis map: dense index, source bus id, source row, reference flag, component. */
 #define PIO_ARROW_TABLE_MATRIX_BUS 19
 #endif
 
 #if defined(PIO_ARROW)
-/** Matrix branch axis map: incidence column, source row, and endpoint bus ids. */
 #define PIO_ARROW_TABLE_MATRIX_BRANCH 20
 #endif
 
@@ -278,6 +250,13 @@ typedef struct PioNetwork PioNetwork;
  * [`PioNetwork`] payload or a multiconductor [`PioDistNetwork`] payload.
  */
 typedef struct PioPackage PioPackage;
+#endif
+
+#if defined(PIO_PROB)
+/**
+ * Opaque matrix free SCOPF instance.
+ */
+typedef struct PioScopfInstance PioScopfInstance;
 #endif
 
 #ifdef __cplusplus
@@ -320,7 +299,7 @@ int32_t pio_matrix_available(void);
 
 /**
  * Whether an optional build feature is compiled in: pass `"arrow"`, `"matrix"`,
- * `"gridfm"`, `"dist"`, or `"pkg"`. Returns 1 if present, 0 otherwise (and 0
+ * `"gridfm"`, `"dist"`, `"pkg"`, or `"prob"`. Returns 1 if present, 0 otherwise (and 0
  * for a NULL or unknown name). The optional entry points (`pio_to_arrow`, the
  * matrix Arrow tables, the `pio_read_dir`/gridfm path, the `pio_dist_*` block,
  * and the `pio_package_*` block) are only linked when their feature is built,
@@ -501,7 +480,7 @@ double pio_base_mva(const PioNetwork *net);
 
 /**
  * Case name. Writes UTF-8 bytes into `out`, up to `cap`, NUL-terminates when
- * possible, and returns the byte length needed excluding the NUL. NULL or
+ * possible, and returns the byte length needed excluding the NUL. `NULL` or
  * `cap == 0` is a size query.
  */
 size_t pio_network_name(const PioNetwork *net, char *out, size_t cap);
@@ -708,11 +687,11 @@ size_t pio_bus_shunt(const PioNetwork *net, double *gs, double *bs, size_t cap);
 /**
  * Export one network table over the Arrow C Data Interface: the `to_`
  * conversion whose output type is Arrow structs rather than a string, and the
- * bulk table path. Tables 0..5 are raw network tables; tables 6..14 are
- * normalized solver tables with per unit/radian values and dense zero based row
- * ids; the matrix tables carry COO triplets, dimensions, and axis metadata.
- * New or richer columns arrive in the Arrow schema, leaving the C signatures
- * fixed.
+ * bulk plane this ABI evolves on. Tables 0..5 are raw network tables; tables
+ * 6..14 are normalized solver tables with per unit/radian values and dense
+ * zero based row ids; the matrix tables carry COO triplets in that dense index
+ * space with dimensions in schema metadata. New or richer columns arrive in
+ * the Arrow schema, leaving the C signatures fixed.
  *
  * `table` is one of the `PIO_ARROW_TABLE_*` selectors. Raw table columns use
  * EXTERNAL bus ids (the `pio_bus_ids` id space), not the gridfm schema. On
@@ -734,18 +713,18 @@ int32_t pio_to_arrow(const PioNetwork *net,
 
 #if defined(PIO_ARROW)
 /**
- * Return the Arrow table catalog as owned compact JSON. The catalog is feature
- * based rather than handle based: it describes what this library build can
- * export, not what a particular network contains.
+ * Return the Arrow table catalog as owned compact JSON.
  *
- * Top level fields: `schema_version`, `producer`, and `tables`.
- * Each table entry includes `id`, `name`, `schema_version`, `format`,
+ * The catalog is feature based rather than handle based: it describes what
+ * this library build can export, not what a particular network contains. Top
+ * level fields are `schema_version`, `producer`, and `tables`. Each table
+ * entry includes `id`, `name`, `schema_version`, `format`,
  * `feature_requirements`, `available`, `row_axis`, `col_axis`, `units`, and
  * `columns`. Each column entry includes `name`, `type`, and `nullable`.
  *
- * The returned string is allocated by PowerIO. Free it with `pio_string_free`.
- * On error, this returns NULL and writes the message into `errbuf`. Only built
- * with the `arrow` cargo feature.
+ * Free the returned string with [`pio_string_free`]. On error this returns
+ * NULL and writes the message into `errbuf`. Only built with the `arrow` cargo
+ * feature.
  */
 char *pio_arrow_catalog_json(char *errbuf, size_t errlen);
 #endif
@@ -945,6 +924,34 @@ PioPackage *pio_package_lower_multiconductor_to_balanced(const PioPackage *pkg,
                                                          double base_mva,
                                                          char *errbuf,
                                                          size_t errlen);
+#endif
+
+#if defined(PIO_PROB)
+/**
+ * Parse SCOPF source text into an owned problem instance. `from` currently
+ * accepts `"goc3-json"`. Returns `NULL` on error and writes the message into
+ * `errbuf`. Free the handle with [`pio_scopf_instance_free`].
+ */
+PioScopfInstance *pio_scopf_parse_str(const char *text,
+                                      const char *from,
+                                      char *errbuf,
+                                      size_t errlen);
+#endif
+
+#if defined(PIO_PROB)
+/**
+ * Serialize a SCOPF instance using the versioned wire schema. The JSON records
+ * its schema version and index base. Free the returned string with
+ * [`pio_string_free`]. Returns `NULL` for a null handle or serialization error.
+ */
+char *pio_scopf_to_json(const PioScopfInstance *instance, char *errbuf, size_t errlen);
+#endif
+
+#if defined(PIO_PROB)
+/**
+ * Free a SCOPF instance handle. `NULL` is a no-op; free each handle once.
+ */
+void pio_scopf_instance_free(PioScopfInstance *instance);
 #endif
 
 #if defined(PIO_DIST)

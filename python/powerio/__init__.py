@@ -68,6 +68,7 @@ __all__ = [
     "parse_display_file",
     "parse_display_bytes",
     "parse_str",
+    "parse_scopf",
     "from_json",
     "convert_file",
     "convert_str",
@@ -531,6 +532,11 @@ def parse_display_bytes(data: bytes, format: str) -> DisplayData:
 def parse_str(text: str, format: str = "matpower") -> Network:
     """Parse a case from in-memory text in the named ``format``."""
     return Network(_powerio.parse_str(text, format))
+
+
+def parse_scopf(text: str, from_: str = "goc3-json") -> dict[str, Any]:
+    """Parse SCOPF source text into a versioned problem instance document."""
+    return _json.loads(_powerio.parse_scopf(text, from_))
 
 
 def from_json(text: str) -> Network:

@@ -2019,6 +2019,7 @@ dependencies = [
  "powerio-dist",
  "powerio-matrix",
  "powerio-pkg",
+ "powerio-prob",
  "serde_json",
  "tempfile",
 ]

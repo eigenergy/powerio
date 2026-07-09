@@ -87,9 +87,10 @@ header = """
  * points (guarded by PIO_DIST): multiconductor distribution cases (OpenDSS,
  * PMD ENGINEERING JSON, BMOPF JSON) behind their own PioDistNetwork handle,
  * freed with pio_dist_network_free, string outputs freed with pio_string_free,
- * and `--features pkg` for the pio_package_* entry points (guarded by
+ * `--features pkg` for the pio_package_* entry points (guarded by
  * PIO_PKG): `.pio.json` compiler packages behind their own PioPackage handle,
- * freed with pio_package_free.
+ * freed with pio_package_free, and `--features prob` for the pio_scopf_*
+ * entry points (guarded by PIO_PROB), behind a PioScopfInstance handle.
  * The distribution C API is EXPERIMENTAL while the IEEE BMOPF schema is a
  * draft: supported dist C usage starts at PIO_DIST_ABI_VERSION = 1, with
  * pio_dist_convert_*(input, from, to, ...). Dist C signature changes bump
@@ -97,7 +98,7 @@ header = """
  * powerio-dist-json) carry their own meta.version and may evolve; pin a
  * vintage from the payload meta.
  * Probe optional features at runtime with
- * pio_has_feature("arrow"|"matrix"|"gridfm"|"dist"|"pkg").
+ * pio_has_feature("arrow"|"matrix"|"gridfm"|"dist"|"pkg"|"prob").
  *
  * Checked in and generated; regenerate from the Rust source with
  *   cbindgen --config cbindgen.toml --crate powerio-capi --output include/powerio.h
@@ -116,14 +117,14 @@ struct ArrowSchema;
 
 [export]
 prefix = ""
-include = ["PioNetwork", "PioDistNetwork", "PioPackage"]
+include = ["PioNetwork", "PioDistNetwork", "PioPackage", "PioScopfInstance"]
 
 [export.rename]
 "FFI_ArrowArray" = "struct ArrowArray"
 "FFI_ArrowSchema" = "struct ArrowSchema"
 
 # Gate the optional features behind #ifdef (PIO_ARROW for `arrow`, PIO_DIST
-# for `dist`, PIO_GRIDFM for `gridfm`, PIO_PKG for `pkg`): cbindgen emits the
+# for `dist`, PIO_GRIDFM for `gridfm`, PIO_PKG for `pkg`, PIO_PROB for `prob`): cbindgen emits the
 # cfg-gated symbols inside `#if defined(...)` even on a default (no-feature)
 # generation, so the checked-in header always carries every block.
 [defines]
@@ -131,6 +132,7 @@ include = ["PioNetwork", "PioDistNetwork", "PioPackage"]
 "feature = dist" = "PIO_DIST"
 "feature = gridfm" = "PIO_GRIDFM"
 "feature = pkg" = "PIO_PKG"
+"feature = prob" = "PIO_PROB"
 
 [parse]
 parse_deps = false
