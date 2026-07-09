@@ -51,7 +51,7 @@
 //!   columns — and is counted in the manifest. The `_eur` suffixes are
 //!   datakit's column names, not a unit powerio converts to.
 //! - `bus`, `from_bus`, `to_bus` are dense `[0, n)` indices; `idx` is the
-//!   0-based generator/branch row. An out-of-service branch keeps its physical
+//!   0-based generator/branch row. An out of service branch keeps its physical
 //!   `Y**` admittances but carries zero flows (its `br_status` is 0).
 
 // Bus/branch indices and Y_bus nnz counts cast to `i64` for the Arrow columns;
@@ -167,7 +167,7 @@ impl<'a> GridfmSnapshot<'a> {
 /// would reuse them. (The raw network Arrow export that ships in powerio-capi is
 /// a different, lighter schema.)
 ///
-/// For a scenario batch the tables are row-stacked: each table holds the rows of
+/// For a scenario batch the tables are row stacked: each table holds the rows of
 /// every snapshot back-to-back, keyed by the `scenario` column (0-based dense bus
 /// indices and generator/branch `idx` reset per scenario).
 #[derive(Debug, Clone)]
@@ -263,7 +263,7 @@ pub fn gridfm_record_batches(
     gridfm_record_batches_batch(std::slice::from_ref(&snap), opts)
 }
 
-/// Build the four gridfm tables for a batch of scenarios, row-stacked and keyed
+/// Build the four gridfm tables for a batch of scenarios, row stacked and keyed
 /// by the `scenario` column. Pure (no I/O). Each snapshot carries its own
 /// scenario id; the `include_y_bus`/taps/shifts flags apply to every snapshot.
 ///

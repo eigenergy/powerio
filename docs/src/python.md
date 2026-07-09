@@ -1,7 +1,7 @@
 # Python API
 
 Install the base package for parsing, writing, JSON transport, and file
-conversion with zero dependencies:
+conversion. It has no required third party Python packages:
 
 ```bash
 pip install powerio
@@ -52,6 +52,7 @@ dense = net.to_dense()       # needs powerio[matrix]
 bprime = net.bprime()        # needs powerio[matrix]
 graph = net.to_networkx()    # needs powerio[graph]
 dist_graph = pio.dist.parse_file("feeder.dss").graph()
+scopf = pio.parse_scopf(goc3_text, from_="goc3-json")
 ```
 
 ## Model names
@@ -82,8 +83,17 @@ first = display.data.substations[0]
 print(first.number, first.name, first.x, first.y)
 ```
 
-For v0.2.2, `display.data` is a `PwdDisplay` with `canvas_width`,
+`display.data` is a `PwdDisplay` with `canvas_width`,
 `canvas_height`, `stamp`, and `substations`.
+
+## Problem instances
+
+`parse_scopf(text, from_="goc3-json")` assembles a matrix free SCOPF problem
+instance and returns its versioned wire document as a Python dictionary. The
+document declares its schema version and uses 1-based indices for language
+compatibility. Source UIDs and source bus IDs remain separate from those
+indices. Invalid JSON, duplicate identities, missing references, and period
+length mismatches raise `PowerIOError` subclasses.
 
 ## PyPSA folders
 
@@ -105,8 +115,8 @@ dependency of powerio.
 CSV folders are PyPSA's native static component format and carry the network
 topology: buses, lines, transformers, generators, loads, shunts, storage
 units, and links (read as HVDC).
-Time series scenarios in NetCDF/HDF5 are out of scope for now; support is
-tracked in [#107](https://github.com/eigenergy/powerio/issues/107).
+NetCDF and HDF5 time series are not supported. They are tracked in
+[#107](https://github.com/eigenergy/powerio/issues/107).
 
 ## GridFM reads
 

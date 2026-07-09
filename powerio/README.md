@@ -1,9 +1,9 @@
 # powerio
 
-`powerio` is the core Rust crate for parsing power system case files into a
-typed `Network`, retaining same format source text where the reader supports
-it, and converting through the format neutral model. The workspace README has
-the full format matrix and language bindings.
+`powerio` parses power system case files into a typed `Network`. Readers retain
+source text where supported, so writing back to the same format can return the
+original bytes. Cross format conversion passes through the format neutral
+network model and reports fields the target cannot represent.
 
 Read and write support covers MATPOWER, PSS/E, PowerWorld AUX, PSLF,
 PowerModels JSON, egret JSON, pandapower JSON, PyPSA CSV folders, and Surge
@@ -18,5 +18,5 @@ let converted = net.to_format(TargetFormat::PowerModelsJson)?;
 std::fs::write("case14.json", converted.text)?;
 ```
 
-The workspace README covers the CLI, Python package, C ABI, matrix builders, and
-validation suite: <https://github.com/eigenergy/powerio>.
+The [workspace README](https://github.com/eigenergy/powerio) lists the CLI,
+language bindings, matrix builders, and validation commands.

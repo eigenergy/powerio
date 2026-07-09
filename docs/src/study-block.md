@@ -1,38 +1,28 @@
-# The study block
+# Study blocks
 
-> **Status: Rust plus C and Python read and materialization surface.** The
-> `.pio.json` block, validation, uid stamping, and materialization APIs ship in
-> the Rust package crate. C and Python expose study readback and commit
-> materialization. CLI, authoring helpers, Julia, and geo related bindings
-> remain tracked by #185.
+A `study` block stores cumulative edits to a `.pio.json` package. Rust, C, and
+Python can read the block and materialize a study commit. The CLI, authoring
+helpers, Julia bindings, and geographic edits are tracked in
+[#185](https://github.com/eigenergy/powerio/issues/185).
 
-Interactive tools hold a base case plus an ordered log of edits, and replay the
-log to reconstruct the current operating point. tellegen's `Study` works this
-way: every commit re-solves from a fresh copy of the base, so the state is
-always the base plus the whole log, never accumulated drift. That object has
-no on disk form today. This chapter specifies one: an additive `study` block in
-the `.pio.json` document metadata, so a saved study is an ordinary `.pio.json`
-document that any PowerIO consumer can validate, replay, materialize, and
-convert.
+Each study commit applies after every preceding commit. Materializing commit
+`k` applies commits 0 through `k` to a fresh copy of the base payload. This
+avoids numerical drift from repeatedly modifying an already materialized
+network.
 
-## Why not operating points
+## Study commits and operating points
 
-The `.pio.json` document already carries `operating_points`, and the two
-mechanisms look similar from a distance. They differ in both axes that matter:
+Operating points and study commits have different update rules:
 
-- an `ElementUpdate` overwrites fields on one existing model row, while an
-  interactive edit is a delta, and the most common one (add demand at a bus) is
-  legal at a bus with no load rows at all;
-- operating points are independent overlays on the base (materializing point k
-  ignores point k−1), while commits are cumulative (state k is the base plus
-  commits 0 through k).
+- An operating point independently overwrites fields on existing payload rows.
+  Materializing point `k` ignores every other point.
+- A study commit applies deltas and field updates after all preceding commits.
+  A demand delta can address a bus that has no load row.
 
-Retrofitting deltas and a cumulative axis onto the series would change behavior
-GO Challenge 3 consumers already rely on. The study block is its own
-metadata field and reuses the operating point machinery where it fits: element
-addressing and identity resolution through `ElementRef`.
+The two blocks share `ElementRef` identity resolution. They do not share time
+axis or accumulation semantics.
 
-## Shape
+## Document shape
 
 ```json
 "study": {
@@ -51,82 +41,76 @@ addressing and identity resolution through `ElementRef`.
 }
 ```
 
-`StudyBlock` carries optional `label`, `author`, `created_at`, an optional
-`base_operating_point` (a study over a materialized snapshot of this document's
-series), the ordered `commits`, an `app` map, and free `metadata`. Each
-`StudyCommit` carries optional `label` and `created_at`, its `edits`, and
-`metadata`. The block is additive: documents without one are unchanged, and the
-metadata version does not move, the same rule `operating_points` landed under.
+`StudyBlock` contains optional `label`, `author`, `created_at`, and
+`base_operating_point` fields; an ordered `commits` array; an `app` map; and
+free form `metadata`. `base_operating_point` selects a snapshot from the
+package's operating point series before applying the first commit.
 
-## The edit vocabulary
+Each `StudyCommit` contains optional `label` and `created_at` fields, its
+`edits`, and free form `metadata`. Packages without a `study` block retain their
+existing behavior and metadata schema version.
 
-`StudyEdit` is a tagged enum that grows additively:
+## Edit kinds
 
-- `demand_delta { bus, p_mw, q_mvar? }` adds to the total demand at a bus.
-  Bus level on purpose: it is defined at a bus with zero load rows.
+`StudyEdit` supports these tagged variants:
+
+- `demand_delta { bus, p_mw, q_mvar? }` adds demand at a bus, including a bus
+  with no load rows.
 - `rating_delta { branch, delta_mw }` adds to a branch thermal rating.
-- `set_fields { update }` wraps an `ElementUpdate` for absolute overwrites of
-  one row, the escape hatch for future edits that are naturally absolute
-  (service status, setpoints).
-- An unrecognized `kind` is preserved verbatim on read and refused loudly at
-  materialization. Reading never fails on an unknown edit; silently dropping
-  one would silently change the operating point.
+- `set_fields { update }` wraps an `ElementUpdate` and overwrites fields on one
+  payload row.
+- An unknown `kind` is retained during parsing. Materialization returns an
+  error rather than ignoring the edit.
 
-Element references are `ElementRef`s resolved identity first, exactly as in
-operating point updates. Producers should write `source_uid` and let `row` be
-the legacy fallback. Document validation dry runs every reference in every
-commit, mirroring the operating point identity check.
+References resolve by identity before row number, as operating point updates
+do. Producers should set `source_uid`; `row` remains a compatibility fallback
+and consistency check. Package validation resolves every reference in every
+commit without modifying the package.
 
 ## Materialization
 
-`NetworkPackage::materialize_study_commit(k)` folds commits 0 through k into
-cumulative deltas, applies them to a clone of the model JSON, clears the block,
-and records the transformation in `lowering_history`. The result is a static
-`.pio.json` document: convert it, build matrices from it, or hand it to a
-solver.
+`NetworkPackage::materialize_study_commit(k)` applies commits 0 through `k` to
+a copy of the model payload. It removes the study and operating point blocks
+from the result and records the operation in `lowering_history`. The returned
+package is static and can be converted, projected into matrices, or passed to a
+problem instance builder.
 
-Lowering `demand_delta` to concrete load rows is the one semantic decision.
-The delta distributes proportionally across the in service load rows at the
-bus, preserving each load's share and power factor. At a bus with no in
-service load (or zero total demand) a synthetic load row is appended with
-uid `study:load:{bus_uid}` and metadata marking it synthetic.
+A demand delta is divided among the in service load rows at its bus in
+proportion to their existing demand. This preserves each load's share and power
+factor. If the bus has no in service load or its total demand is zero,
+materialization appends a synthetic load with UID `study:load:{bus_uid}` and
+marks it as synthetic in metadata.
 
-The initial study block is defined for balanced model JSON; a study on
-multiconductor model JSON is a clean validation error until there is a consumer.
+Study materialization accepts balanced model payloads. A multiconductor payload
+returns a validation error.
 
-## The app namespace
+## Application metadata
 
-A study is replayed by a solver, and solver vocabulary (formulation names,
-options) is not PowerIO's to define or validate. The `app` map gives each tool
-a namespace that PowerIO round trips verbatim: tellegen keeps its formulation
-and solve options under `app["tellegen"]`. A consumer that only wants the
-network states ignores the map entirely.
+The `app` map stores application specific data that PowerIO retains without
+validation. A solver can keep its formulation and options under a private key,
+for example `app["tellegen"]`. Consumers that only need the network states can
+ignore this map.
 
-## Identity
+## Row identity
 
-Edits address rows by model `uid`, so the uid rule moves from implementation
-detail to public guarantee:
+Study edits address payload rows by UID:
 
-- parsing the same bytes yields the same uids;
-- synthesized uids are `{table}:{row}` at document build, and source defined
-  uids are never overwritten;
-- uids survive the network JSON round trip.
+- Parsing the same source bytes produces the same UIDs.
+- Generated UIDs use `{table}:{row}` when the source format has no UID.
+- A source UID is retained rather than replaced by a generated value.
+- UIDs survive a network JSON round trip.
 
-`ensure_payload_uids` becomes public so a consumer can stamp uids on a parsed
-network before building its own edit state, instead of inventing positional
-ids. Consumers should key interactive state by uid and treat row order as a
-display concern.
+`ensure_payload_uids(&mut Network)` adds missing UIDs before a consumer builds
+its own edit state. Use UIDs for stored references and row order for display.
 
-## API surface
+## APIs
 
-- `NetworkPackage::study()`, `with_study`, `set_study`, `clear_study`,
-  `materialize_study_commit(k)`, `materialize_balanced_study_commit(k)`;
-- Python: `pkg.study()` and `pkg.materialize_study_commit(k)`;
-- C ABI: `pio_package_study_json` and
-  `pio_package_materialize_study_commit`;
-- `ensure_payload_uids(&mut Network)` for deterministic payload row identity.
+- Rust: `NetworkPackage::study`, `with_study`, `set_study`, `clear_study`,
+  `materialize_study_commit`, `materialize_balanced_study_commit`, and
+  `ensure_payload_uids`.
+- Python: `pkg.study()` and `pkg.materialize_study_commit(k)`.
+- C: `pio_package_study_json` and
+  `pio_package_materialize_study_commit`.
 
-Tracking issues: [#181](https://github.com/eigenergy/powerio/issues/181)
-(block, materialization, uid rules),
-[#185](https://github.com/eigenergy/powerio/issues/185) (remaining bindings and
-CLI).
+The block, materialization rules, and UID behavior are tracked in
+[#181](https://github.com/eigenergy/powerio/issues/181).

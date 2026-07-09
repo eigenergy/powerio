@@ -1,18 +1,17 @@
 # powerio-dist
 
-`powerio-dist` parses multiconductor distribution network cases into a typed
-model in wire coordinates and converts between OpenDSS `.dss`,
+`powerio-dist` parses multiconductor distribution networks into a typed model
+in wire coordinates. It converts between OpenDSS `.dss`,
 PowerModelsDistribution ENGINEERING JSON, and the draft BMOPF schema from the
 IEEE PES Task Force on Benchmarking Multiconductor OPF
 (<https://github.com/frederikgeth/bmopf-report>).
 
-Writing back to the source format reproduces the file byte for byte; every
-cross format conversion reports each field the target cannot represent in its
-warnings. The dss reader materializes every OpenDSS class default into an
-explicit model value (verified against the OpenDSS source and empirically
-against `opendssdirect`) and records which fields were defaulted, so BMOPF
-output is always fully explicit. The per fixture conversion matrix is generated
-into `powerio-dist/docs/conversion-matrix.md`.
+Writing back to the source format reproduces the retained bytes. Cross format
+conversion reports fields the target cannot represent. The DSS reader expands
+OpenDSS class defaults into explicit model values and records which values came
+from defaults. BMOPF output therefore contains explicit values for those
+fields. The generated conversion matrix records behavior for each fixture in
+`powerio-dist/docs/conversion-matrix.md`.
 
 ```rust
 let net = powerio_dist::parse_file("feeder.dss", None)?;

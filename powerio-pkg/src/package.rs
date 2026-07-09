@@ -188,14 +188,13 @@ impl From<&NormalizedSolverTables> for NormalizedSolverTableMetadata {
     }
 }
 
-/// The compiler package: a versioned envelope around one IR payload plus the
-/// provenance, diagnostics, validation, and lowering history that make the
-/// artifact trustworthy. Serializes to `.pio.json`.
+/// A versioned package containing one model payload, provenance, diagnostics,
+/// validation results, and lowering history. Serializes to `.pio.json`.
 ///
 /// `model_kind` is stored explicitly and is authoritative; the payload is also
 /// self-describing (tagged by `kind`). [`NetworkPackage::kind_is_consistent`]
-/// asserts the two agree. Unknown future top-level fields are tolerated on read
-/// (ignored) so a newer producer's package still deserializes here.
+/// asserts the two agree. The reader ignores unknown top level fields from a
+/// newer producer.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[non_exhaustive]
@@ -969,11 +968,11 @@ fn supported_payload_schema_major(kind: ModelKind) -> u64 {
     schema_major(payload_schema_for(kind).1).expect("payload schema version has a major number")
 }
 
-/// Give every payload row a stable identity: keep source uids (GOC3) and
-/// synthesize `{table}:{row}` for the rest, so identity based operating point
-/// updates can resolve against any powerio built package. Synthesized values
-/// record the row an element had at package build; they stay put if rows
-/// reorder later, which is the point.
+/// Add a stable UID to each payload row that does not have one.
+///
+/// Source UIDs remain unchanged. Generated values use `{table}:{row}` and stay
+/// attached to the element if rows are reordered. Operating point and study
+/// references resolve against these values.
 pub fn ensure_payload_uids(net: &mut BalancedNetwork) {
     macro_rules! fill {
         ($table:ident) => {

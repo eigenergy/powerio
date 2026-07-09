@@ -1077,7 +1077,7 @@ struct BusRef<'a> {
 /// not name under a `pslf_*` extras key (the ZIP load split, the per unit shunt
 /// G/B, the branch circuit id, the transformer winding base), the writer replays
 /// it; otherwise it synthesizes the column. Same-format byte-exact echo rides the
-/// retained source (see [`crate::write_as`]); this is the cross-format path and
+/// retained source (see [`crate::write_as`]); this is the cross format path and
 /// the fallback when the source text was dropped (e.g. after a JSON round trip).
 #[must_use]
 // A flat serializer: one stanza per EPC section; splitting it would add

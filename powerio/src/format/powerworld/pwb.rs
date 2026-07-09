@@ -1,17 +1,14 @@
 //! Read PowerWorld `.pwb` binary case files (read only).
 //!
-//! The format is undocumented; everything here was established by
-//! differential analysis of `.pwb`/`.aux` sibling exports of the ACTIVSg
-//! synthetic grids and is recorded with its evidence in
-//! `powerio/src/format/powerworld/FORMAT.md`. The reader
-//! decodes the power flow core tables (buses, loads, generators, shunts,
-//! branches) and stops there; the rest of the file (substations, areas,
-//! contingencies, options) is inventoried in the docs and left undecoded.
+//! The format is undocumented. The decoder was verified against paired `.pwb`
+//! and `.aux` exports of the ACTIVSg synthetic grids; the evidence is recorded
+//! in `powerio/src/format/powerworld/FORMAT.md`. It reads buses, loads,
+//! generators, shunts, and branches. Substations, areas, contingencies, and
+//! options remain undecoded.
 //!
-//! Robustness rule: every record is validated as it is parsed (bus
-//! references must exist, floats must be finite and in range, record flags
-//! must be values this reader has seen and verified). A file that does not
-//! match the validated layout fails loudly; nothing is guessed silently.
+//! Each parsed record must use known flags, reference an existing bus, and
+//! contain finite values within the validated ranges. An unsupported layout
+//! returns an error rather than guessing a record shape.
 //!
 //! Supported header constants: 338, 368, 425, 483, 508, 537, 550, 551, and 554.
 //! These constants gate only the writer era; a recognized constant still has
@@ -22,29 +19,6 @@
 //! heads are more general: their flag words are Delphi field presence bitmasks,
 //! so one decoded head model admits the observed 0x06, 0x26, and 0x66 families
 //! as long as the later table walk still validates.
-//!
-//! The emerging structure is useful but bounded: the file is a sequence of
-//! count-word tables separated by writer metadata, each record starts with a
-//! small stable head, optional fields are controlled by bitmasks or short kind
-//! markers, and long tails are skipped only after anchors prove the record kind.
-//! That gives a general path for new vintages without guessing at fields.
-//!
-//! To add a new vintage, start with the smallest stable facts: header words,
-//! bus flag census, table count positions, record anchors, and companion
-//! export parity. Prefer widening a presence bit or table glue window only
-//! after a full record walk still validates every later table. A new layout
-//! belongs behind its own probe until a sibling `.aux`, `.raw`, `.epc`, or
-//! `.m` file proves that it shares an existing record family.
-//!
-//! The table search prices the format's structure (no field dictionary, so
-//! every table is located by validating record walks behind count word
-//! candidates), and the probe layer is built so that search allocates only
-//! for records it accepts: probe rejections carry `&'static str` reasons
-//! instead of formatted strings ([`Probe`]), bus membership is a bitmap
-//! over the id range instead of a hash set ([`BusIdSet`]), and record runs
-//! are cached by first record offset ([`Run`]) so count word candidates
-//! that point at the same records share one walk. Issue #99 records the
-//! measurements.
 //!
 //! Known limits, documented rather than guessed:
 //!

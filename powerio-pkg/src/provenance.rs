@@ -1,8 +1,7 @@
 //! Producer, origin, source descriptors, and source maps.
 //!
-//! These answer the trust questions a compiler artifact must answer: which tool
-//! produced it, what the source was, and which canonical field came from which
-//! source record by what kind of mapping.
+//! These records identify the producing tool, source artifacts, and the source
+//! record mapped to each model field.
 
 use std::collections::BTreeMap;
 

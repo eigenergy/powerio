@@ -1,7 +1,6 @@
 //! Shared format alias and JSON shape routing for the `powerio` crate.
 //!
-//! This module is deliberately parser free. It only answers routing questions:
-//! what a format name means, and what top level JSON markers imply.
+//! It maps format names and top level JSON markers without parsing a document.
 
 /// A classification result that can be known, absent, or unsafe to choose.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

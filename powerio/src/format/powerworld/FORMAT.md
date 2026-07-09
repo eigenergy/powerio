@@ -66,7 +66,7 @@ result was wrong everywhere it could be:
    the header's first line were mapped; every later field silently defaulted.
    Measured damage: all 246 branches parsed with R = X = 0 (the impedance
    fields sit past line one), every bus came back PQ (BusCat unread; the
-   sibling case has 48 PV, 1 slack), vmax/vmin/area/zone all defaulted.
+   paired MATPOWER case has 48 PV, 1 slack), vmax/vmin/area/zone all defaulted.
 2. **ZIP load components unread.** The export carries no `LoadMW`; it writes
    `LoadSMW/LoadSMVR/LoadIMW/LoadIMVR/LoadZMW/LoadZMVR`. The reader looked up
    `LoadMW`, found nothing, and emitted 160 loads of 0 MW.
@@ -95,10 +95,10 @@ result was wrong everywhere it could be:
    21 object types to the writer's 5.
 
 Counts that survived the baseline: 200 buses, 49 generators, 160 loads,
-4 shunts, 246 branches (180 + 66). The sibling `case_ACTIVSg200.m` carries
+4 shunts, 246 branches (180 + 66). The paired `case_ACTIVSg200.m` carries
 245 branches; reconciling the difference is part of the parity work.
 
-## Mapping notes (established against the sibling exports)
+## Mapping notes (established against paired exports)
 
 - Complete case exports spread one object type over several DATA sections
   with complementary field groups (the 2016 Texas2000 export writes Bus
@@ -139,11 +139,11 @@ Counts that survived the baseline: 200 buses, 49 generators, 160 loads,
 
 ## Parity findings (vendored ACTIVSg200 set)
 
-The vendored siblings are different case revisions: `.aux`/`.pwb` are a June
+The vendored files are different case revisions: `.aux`/`.pwb` are a June
 2018 pair, `case_ACTIVSg200.m` is October 2017, `.RAW` is May 2017. Identity
 and impedance data agree (impedances to 5e-6, all 66 taps exact); the 2018
 revision adds one line (82-64) absent from 2017, and the solved states and
-load values differ between revisions. The June 2016 ACTIVSg2000 sibling set
+load values differ between revisions. The June 2016 ACTIVSg2000 paired export set
 (fetched) was exported in one day from one case and gives full value parity:
 vm/va to 1e-6/1e-4, ZIP load totals vs MATPOWER Pd/Qd to the .m print
 quantum, dispatch and branch values likewise. `powerio/tests/`
@@ -154,10 +154,10 @@ quantum, dispatch and branch values likewise. `powerio/tests/`
 Established by differential analysis of three lawfully obtained files, no
 PowerWorld software involved: ACTIVSg200.pwb (Simulator 20 era, June 2018,
 same snapshot as the vendored aux), Texas2000_June2016.pwb (June 2016, same
-day as its aux sibling), and ACTIV_SG_2000_v19.pwb (April 2017, validated
+day as its paired aux export), and ACTIV_SG_2000_v19.pwb (April 2017, validated
 against the published ACTIVSg2000 case with the snapshot deltas pinned in
 the parity test). Every claim below was verified by value match against a
-sibling on every record unless noted. Offsets are from the field listed;
+the paired export on every record unless noted. Offsets are from the field listed;
 integers and floats are little endian.
 
 ### Header (identical prefix in all three files)
@@ -282,7 +282,7 @@ aux uses the 2022 concise vocabulary (see the mapping notes).
 The header constants past 508 fell with the Texas7k saves. The v21
 resave (508) needed the bus bit 6 family fix and a 52 byte bus table
 glue plus an 86 byte generator table glue (string metadata sits between
-the count word and the first record); with those, the whole sibling
+the count word and the first record); with those, the whole paired
 family decodes through one record model set: the v22 save (551), the
 2030 build (550, 7132 buses with the pres bit 5 generator records and
 the long bit 4 bus lists), the 2030 v22 save (537), and the November
@@ -379,10 +379,10 @@ byte before the kind byte for the kind, which made every 2018 line read as
 a zero tap transformer in extras until the v19 parallel circuits exposed
 both.
 
-Sibling print precision matters for transformer parity: the aux transformer
+Paired export precision matters for transformer parity: the aux transformer
 Branch section prints impedances at 6 decimals while the line section prints
 the f64 widening of the stored f32 at 20 decimals. The binary stores the
-full f32 either way, confirmed by the RAW sibling's 6 significant digits:
+full f32 either way, confirmed by the paired RAW export's 6 significant digits:
 transformer (15,14) R reads 0.000637329 from the binary, prints 6.37329E-4
 in the RAW and 0.000637 in the aux and the .m. Parity tests therefore
 compare transformers against the aux at its print quantum and against the
@@ -433,7 +433,7 @@ is `DisplayData::PowerWorld(PwdDisplay { canvas_width, canvas_height,
 stamp, substations })`; Python returns `DisplayData("powerworld",
 PwdDisplay(...))`.
 
-The `.pwd` decoder reads one subset of the display sibling, the substation
+The `.pwd` decoder reads one subset of the display file, the substation
 symbols, established by differential analysis of seven files spanning the
 June 2016 through 2022 writer eras. Every other drawing object type (buses,
 branch pies, transmission lines, field labels), the palettes, fonts,
@@ -530,8 +530,8 @@ rejected, out of scope.
 | Texas7k 2030 saved as v22 | local only | 537 | 0x66-0x167 | aux, offline strict alignment | decoded, counts committed | 7132 buses, 9555 branches |
 | Texas7k 2021 scenario snapshot | local only | 537 | 0x66-0x167 | same grid as the 2021 export | decoded, counts match the 2021 case | 6717 buses, 9140 branches |
 | IEEE 14 PowerWorld save | local only | 554 | 0x06/0x07 | standard IEEE 14 topology | decoded offline | 14 buses, 20 branches |
-| 39 bus sample case | local only | 425 | 0x06/0x07 | RAW/EPC sibling | decoded; counts, totals, and branch topology match | 39 buses, 46 branches |
-| 118 bus sample case | local only | 338 | 0x06 family | RAW/EPC sibling | decoded; counts, totals, and branch topology match | 118 buses, 186 branches |
+| 39 bus sample case | local only | 425 | 0x06/0x07 | paired RAW/EPC exports | decoded; counts, totals, and branch topology match | 39 buses, 46 branches |
+| 118 bus sample case | local only | 338 | 0x06 family | paired RAW/EPC exports | decoded; counts, totals, and branch topology match | 118 buses, 186 branches |
 | 12 bus course case | local only | 134 | — | — | rejected: header constant | |
 | 10 bus sample case | local only | 196 | — | — | rejected: header constant | |
 | 3 bus sample case | local only | pre 425 shape | — | — | rejected: header words | |
@@ -540,7 +540,7 @@ rejected, out of scope.
 | ACTIVSg2000 current era export | local only | 425 | 0x66-0x177 | published case | decoded, counts verified; value parity test pending | 2000 buses, 3206 branches |
 | Hawaii40 2022 export | local only | 508 | 0x66-0x167 | same set aux (2022 vocabulary) | decoded, parity on every quantity | 37 buses, 89 branches |
 | 12 bus course case saved as v21 | local only | 508 | — | — | decoded, counts verified | 12 buses, 18 branches |
-| .pwd display files | local/fetched | 50 | — | sibling aux Substation latitude/longitude | substation coordinates decoded, matched 1-1 (see the .pwd section) | 111 through 1500 substations across seven files |
+| .pwd display files | local/fetched | 50 | — | paired aux Substation latitude/longitude | substation coordinates decoded, matched 1-1 (see the .pwd section) | 111 through 1500 substations across seven files |
 
 ## Object inventory of ACTIVSg200.aux
 

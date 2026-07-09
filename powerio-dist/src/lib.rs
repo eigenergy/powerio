@@ -1,15 +1,13 @@
-//! `powerio-dist`: a multiconductor distribution network model and lossless
-//! converters between OpenDSS `.dss`, PowerModelsDistribution ENGINEERING
+//! Multiconductor distribution network models and converters for OpenDSS
+//! `.dss`, PowerModelsDistribution ENGINEERING
 //! JSON ("PMD JSON"), and the draft JSON schema of the IEEE PES Task Force on
 //! Benchmarking Multiconductor OPF ("BMOPF JSON",
 //! <https://github.com/frederikgeth/bmopf-report>).
 //!
-//! The canonical model is a network in wire coordinates: string bus ids,
-//! ordered string terminal names per bus, explicit grounding, terminal maps
-//! on every element, SI units and radians internally (BMOPF semantics, the
-//! most explicit of the three formats). The transmission model in the
-//! `powerio` crate is positive sequence and stays separate; the two crates
-//! share conventions, not types.
+//! The model uses wire coordinates: string bus IDs, ordered terminal names,
+//! explicit grounding, terminal maps on every element, SI units, and radians.
+//! The transmission model in `powerio` is positive sequence and remains a
+//! separate type.
 //!
 //! ```no_run
 //! let net = powerio_dist::parse_file("feeder.dss", None)?;
@@ -22,13 +20,11 @@
 //!
 //! # Fidelity rules
 //!
-//! The rules match `powerio`. Writing back to the source format
-//! reproduces the file byte for byte via retained source text. Every cross
-//! format conversion regenerates from the typed model and reports each field
-//! the target cannot represent in [`Conversion::warnings`]; nothing drops
-//! silently. The dss reader materializes every OpenDSS class default into an
-//! explicit model value and records which fields were defaulted
-//! ([`DistNetwork::defaulted`]), so BMOPF output is always fully explicit.
+//! Writing to the retained source format returns the original bytes. Cross
+//! format conversion writes from the typed model and reports fields the target
+//! cannot represent in [`Conversion::warnings`]. The DSS reader expands OpenDSS
+//! class defaults into explicit model values and records them in
+//! [`DistNetwork::defaulted`]. BMOPF output includes those values.
 //! The per fixture results live in `docs/conversion-matrix.md`.
 //!
 //! # Float formatting

@@ -1,12 +1,8 @@
-# C ABI Arrow Policy
-
-This page records the C ABI Arrow rules while PowerIO prepares for v1. It does
-not describe a v1 release. The next releases are expected to be v0.6.3 and
-v0.7.0 before v1.
+# C ABI Arrow policy
 
 The C ABI stays handle based. Parsed transmission cases use `PioNetwork`,
 distribution cases use `PioDistNetwork`, and `.pio.json` documents use
-`PioPackage`. Callers get rich model transport through JSON, small copied
+`PioPackage`. Callers get full model transport through JSON, small copied
 arrays through dense extractors, and bulk typed tables through the Arrow C Data
 Interface.
 
@@ -92,87 +88,14 @@ columns into owned Julia vectors and releases the producer Arrow structs
 immediately. `copy=false` remains opt in and keeps the Arrow owner alive so zero
 copy views cannot outlive their buffers.
 
-The Julia binding is not a generic Arrow engine. It decodes the primitive table
-shapes PowerIO exports today. New Arrow tables need binding tests for copied and
-zero copy lifetime behavior before they are considered stable.
+The Julia binding decodes the primitive table shapes listed in the catalog. A
+new Arrow table requires binding tests for copied and zero copy lifetime
+behavior.
 
-## Deferred solver cost tables
+## Problem data boundary
 
-Normalized solver cost Arrow tables are not part of this pass. The current
-normalized generator cost model has variable width polynomial coefficients and
-policy choices for absent costs. Exporting that cleanly needs a separate schema
-and binding decoder work, so it should not ride on the axis map change.
-
-## Future Derived Product Handle
-
-DC OPF bundles and sensitivity products should use a separate opaque handle
-later, not new `PioNetwork` table ids in this pass.
-
-Sketch:
-
-```c
-typedef struct PioDerivedProduct PioDerivedProduct;
-
-PioDerivedProduct *pio_derive_product(const PioNetwork *net,
-                                      const char *kind,
-                                      const char *options_json,
-                                      char *errbuf,
-                                      size_t errlen);
-
-char *pio_derived_catalog_json(const PioDerivedProduct *product,
-                               char *errbuf,
-                               size_t errlen);
-
-int32_t pio_derived_to_arrow(const PioDerivedProduct *product,
-                             int32_t table,
-                             struct ArrowArray *out_array,
-                             struct ArrowSchema *out_schema,
-                             char *errbuf,
-                             size_t errlen);
-
-char *pio_derived_to_json(const PioDerivedProduct *product,
-                          const char *name,
-                          char *errbuf,
-                          size_t errlen);
-
-void pio_derived_product_free(PioDerivedProduct *product);
-```
-
-Rules:
-
-- `kind` selects a product family such as `dcopf` or `sensitivities`.
-- `options_json` carries choices that would otherwise grow the C ABI: DC
-  convention, grounding, units, missing cost policy, and selected sensitivity
-  columns.
-- The derived handle owns the computed product. Arrow exports move their own
-  buffers to the caller and remain valid after `pio_derived_product_free`.
-- The product catalog owns its table id space. It must not reuse or renumber the
-  `PioNetwork` Arrow ids.
-- Product table metadata uses the same keys as matrix tables:
-  `powerio.schema_version`, `powerio.format`, `powerio.row_axis`, and
-  `powerio.col_axis`.
-
-Schema sketches:
-
-| product | table | format | row axis | col axis | columns |
-| --- | --- | --- | --- | --- | --- |
-| `dcopf` | `dcopf_bus` | `axis_map` | `dcopf_bus` | | `index`, `matrix_bus`, `bus_id`, `is_reference`, `is_grounded` |
-| `dcopf` | `dcopf_branch` | `axis_map` | `dcopf_branch` | | `index`, `matrix_branch`, `source_row`, `from_bus_id`, `to_bus_id` |
-| `dcopf` | `dcopf_incidence` | `coo` | `dcopf_bus` | `dcopf_branch` | `row_index`, `col_index`, `value` |
-| `dcopf` | `dcopf_laplacian` | `coo` | `dcopf_bus` | `dcopf_bus` | `row_index`, `col_index`, `value` |
-| `dcopf` | `dcopf_grounded_laplacian` | `coo` | `dcopf_grounded_bus` | `dcopf_grounded_bus` | `row_index`, `col_index`, `value` |
-| `dcopf` | `dcopf_cost` | `dense` | `dcopf_bus` | | `bus_index`, `q`, `c`, `pmin`, `pmax`, `pd` |
-| `sensitivities` | `ptdf` | `dense_matrix` | `matrix_branch` | `matrix_bus` | `row_index`, `col_index`, `value` |
-| `sensitivities` | `lodf` | `dense_matrix` | `matrix_branch` | `matrix_branch` | `row_index`, `col_index`, `value` |
-
-Benchmark gates for that future work:
-
-- Rust: product construction time, Arrow export time, and memory peak against
-  the existing `powerio-matrix` direct builders.
-- Julia: copied and zero copy table lifetime tests, plus sparse constructor time
-  driven only by catalog axes.
-- Cross tool: parse plus matrix construction in `benchmarks/bench_julia.jl`
-  stays alongside PowerModels.jl and ExaPowerIO.jl, with product handle timings
-  added as separate rows.
-- Size: release dylib sizes for core, `arrow,matrix`, and all features before
-  and after enabling the product feature.
+`PioNetwork` Arrow tables describe a network or a generic matrix projection.
+They do not carry solver cost policy or a solver formulation. `powerio-prob`
+owns complete problem instances. The C `prob` feature currently exposes a
+matrix free SCOPF instance through a versioned JSON wire document. DC OPF
+instances and bundles have no C entry points.

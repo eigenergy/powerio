@@ -4,14 +4,15 @@
 
 ```
 cargo build
-cargo test -p powerio -p powerio-matrix -p powerio-cli -p powerio-capi
+cargo test
+cargo test -p powerio-capi
 cargo fmt --all --check
-cargo clippy --all-targets -p powerio -p powerio-matrix -p powerio-cli -p powerio-capi -- -D warnings
+bash scripts/ci-clippy.sh
 ```
 
-CI denies clippy warnings and requires rustfmt-clean code (edition 2024 style).
-The gridfm Parquet export is feature gated; exercise it with
-`cargo test -p powerio-matrix --features gridfm`.
+CI denies clippy warnings and requires Rust code formatted for edition 2024.
+The clippy script covers the feature combinations used by CI, including the
+Python extension and optional C surfaces.
 
 Python bindings: `maturin develop` against `powerio-py`, then
 `pytest python/tests`. See the
@@ -35,15 +36,15 @@ version. Additive symbols don't bump it. The history is in
 
 ## Releasing
 
-The release version lives in `[workspace.package]` plus the four workspace
-dependency pins in `[workspace.dependencies]`; a bump touches exactly those five
-lines of the root Cargo.toml (Cargo.lock follows on the next build). Then:
+The release version lives in `[workspace.package]` and the workspace dependency
+pins in `[workspace.dependencies]`. Update them together; the next Cargo command
+updates `Cargo.lock`. Then:
 
 1. Merge the bump, tag the commit `vX.Y.Z`, push the tag. The release-binaries
    workflow builds the C ABI tarballs and stages a draft GitHub release.
 2. Publish the draft release. The release event fires the PyPI publish
    (python.yml) and the crates.io publish (crates.yml: powerio, powerio-dist,
-   powerio-pkg, powerio-matrix, powerio-cli, in dependency order). Both deploy
+   powerio-pkg, powerio-matrix, powerio-prob, powerio-cli, in dependency order). Both deploy
    through reviewer protected environments (`pypi`, `crates-io`; the protection
    lives in the repo settings). PyPI skips already-uploaded files and crates.io
    skips versions already in the index, so a partial failure is recovered by
@@ -74,9 +75,30 @@ after its byte count, line count, source, and license are stated in the pull
 request. Approval of a feature or test plan is not approval to vendor its input
 data. Do not commit material without a license that permits redistribution.
 
-Prefer synthetic fixtures for parser and problem assembly tests. Use licensed
-upstream cases only when source fidelity is itself under test. Before committing
-a fixture, run `wc -lc` on it and inspect the pull request diff statistics.
+When source fidelity is itself under test, vendor real cases from the upstream
+projects (MATPOWER, pglib) rather than writing bespoke fixtures: record the
+source URL, upstream commit, and license, then pin the fixture bytes. Prefer
+synthetic fixtures for parser and problem assembly tests. Before committing a
+fixture, run `wc -lc` on it and inspect the pull request diff statistics.
+
+## Documentation prose
+
+Public documentation states behavior, inputs, outputs, conventions, and failure
+conditions before implementation detail. Use short sentences for ownership,
+units, indices, feature gates, and errors. Use these terms consistently:
+network, package, payload, problem instance, source ID, dense index, operating
+point, and study commit.
+
+Define an architectural rule once and link to it elsewhere. Keep design debate,
+implementation history, and proposed APIs in issues. Remove sentences that
+repeat a heading or add no technical information. Reviewers enforce these rules
+as prose; the project does not use an AI detector or phrase blacklist.
+
+Run `mdbook build docs`, `mdbook test docs`, and
+`RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps` after changing
+public prose or examples. Regenerate committed schemas when their source
+rustdoc changes. Regenerate `powerio.h` and run
+`scripts/capi-header-parity.sh` when C doc comments change.
 
 ## PRs
 
@@ -84,10 +106,10 @@ Conventional commit subjects (`feat:`, `fix:`, `refactor:`); squash merge.
 
 ## Tandem changes with PowerIO.jl
 
-The `Julia binding` CI job builds this repo's C ABI and runs PowerIO.jl's test
+The `Julia binding` CI job builds this repository's C ABI and runs PowerIO.jl's test
 suite against it. A PR that moves the shared surface (JSON shapes, schema
-versions, `pio_*` behavior) fails that job against PowerIO.jl main by
-construction. Push a PowerIO.jl branch with the **same name** as the powerio
+versions, `pio_*` behavior) can fail that job against PowerIO.jl main. Push a
+PowerIO.jl branch with the **same name** as the powerio
 branch; the job tests against the companion branch when it exists. Open both
 PRs, merge in either order, and keep PowerIO.jl test assertions on the shared
 surface at schema strength (same major, shape present) rather than byte

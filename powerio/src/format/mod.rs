@@ -257,8 +257,8 @@ pub fn target_format_from_name(name: &str) -> Option<TargetFormat> {
     })
 }
 
-/// Output of a display parse. v0.2.2 supports PowerWorld `.pwd`; future display
-/// formats can add variants without changing the parse entry point.
+/// Output of a display parse. PowerWorld `.pwd` produces
+/// [`DisplayData::PowerWorld`].
 #[derive(Debug, Clone, PartialEq)]
 #[non_exhaustive]
 pub enum DisplayData {
@@ -300,7 +300,8 @@ pub fn parse_display_bytes(bytes: &[u8], format: &str) -> Result<DisplayData> {
 }
 
 /// Parse the display file at `path`, choosing the reader from `from` or, when
-/// `None`, from the extension. v0.2.2 infers PowerWorld `.pwd`.
+/// `None`, from the extension. A `.pwd` extension selects PowerWorld display
+/// data.
 ///
 /// # Errors
 /// [`Error::UnknownFormat`] if `from` is unrecognized or the extension cannot
@@ -649,8 +650,8 @@ impl WriteOptions {
 /// the retained source text; otherwise the network is serialized into the target.
 ///
 /// # Errors
-/// Only a `PowerioJson` serialization failure (none arise from this model
-/// today). A non-finite value is not an error: readers legitimately produce
+/// Only a `PowerioJson` serialization failure. A non-finite value is not an
+/// error: readers can produce
 /// `Inf` limits and the bindings materialize every network through the
 /// snapshot, so it is written as `null` with a fidelity warning naming the
 /// field: that output serves the one-way transports but does not read back
@@ -924,9 +925,9 @@ pub fn convert_file_with_options(
 /// Convert in-memory case `text` of the named `format` (see
 /// [`target_format_from_name`]) to `to`.
 ///
-/// The in-memory sibling of [`convert_file`], shared by the bindings: parses
-/// `text` once and writes the resulting [`Network`] to `to`, with no file
-/// staging in between. Warnings are read side first, as in [`convert_file`].
+/// Parses `text` once and writes the resulting [`Network`] to `to` without a
+/// temporary file. Warnings are ordered read side first, as in
+/// [`convert_file`].
 ///
 /// # Errors
 /// As [`parse_str`].
@@ -954,9 +955,9 @@ pub fn convert_str_with_options(
     Ok(conv)
 }
 
-/// Write `net` into the directory `out_dir` as the named directory-shaped
-/// format: the directory sibling of [`write_as`], sharing its name-dispatch
-/// role for the bindings. PyPSA CSV (`pypsa-csv`/`pypsa`) is the one such
+/// Write `net` into `out_dir` as the named directory format. This function
+/// dispatches directory format names for the bindings. PyPSA CSV
+/// (`pypsa-csv`/`pypsa`) is the one such
 /// format today; a text format name is rejected by name, pointing at
 /// [`write_as`]. Returns the write's fidelity warnings.
 ///

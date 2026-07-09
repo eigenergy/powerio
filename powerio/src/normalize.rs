@@ -10,7 +10,7 @@
 //!   `Network`. The cost rescale is the one piece subtle enough that a second copy
 //!   would drift, so it has a single home.
 //! - **[`Network::to_normalized`]**: a derived, computation-ready form, per unit,
-//!   radians, out-of-service filtered, source id preserving, bus types canonicalized.
+//!   radians, out of service filtered, source ID preserving, bus types canonicalized.
 
 use std::collections::{HashMap, HashSet};
 

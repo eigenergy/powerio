@@ -17,10 +17,10 @@ pub use meta::{CaseMetadata, MatrixMetadata, write_meta_json};
 pub use mtx::{read_mtx, read_vector_mtx, write_mtx, write_vector_mtx};
 pub use sensitivity::write_sensitivity_mtx_with_options;
 
-/// Read one scenario of a dataset directory in the named `from` format: the
-/// directory sibling of [`powerio::parse_file`], and the one place dataset
-/// format names are dispatched (the C ABI's `pio_read_dir` is a thin wrapper).
-/// `gridfm` is the one dataset format today; `scenario` selects within it.
+/// Read one scenario from a dataset directory in the named `from` format.
+/// This function dispatches dataset format names; the C ABI's `pio_read_dir`
+/// wraps it.
+/// `gridfm` is the currently supported dataset format; `scenario` selects within it.
 /// PyPSA CSV directories are case inputs, not datasets, and parse through
 /// `parse_file`.
 ///
@@ -37,9 +37,9 @@ pub fn read_dataset_dir(
     read_gridfm_dataset(dir, scenario)
 }
 
-/// The distinct scenario ids of the dataset directory `dir` in the named
-/// `from` format, ascending, the introspection sibling of
-/// [`read_dataset_dir`] (and the C ABI's `pio_scenario_ids`).
+/// Return the distinct scenario IDs in ascending order for dataset directory
+/// `dir` in the named `from` format. The C ABI exposes the same query through
+/// `pio_scenario_ids`.
 ///
 /// # Errors
 /// As [`read_dataset_dir`].

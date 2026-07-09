@@ -1,15 +1,14 @@
-# PowerIO Guide
+# PowerIO guide
 
-PowerIO is compiler infrastructure for power system data. Source formats parse
-into typed models. Explicit, recorded passes normalize, validate, and lower
-them, and writers emit any supported target format. The `.pio.json` document
-records how a source was interpreted: model kind, provenance, source maps,
+Readers parse power system source formats into typed models. Explicit passes
+normalize, validate, and lower them, and writers emit supported target formats.
+The `.pio.json` document records how a source was interpreted: model kind,
+provenance, source maps,
 structured diagnostics, validation, and lowering history. Sparse matrices and
-graph views are built from the same models for solver and analysis code. This
-guide records behavior, conventions, and release checks. Rustdoc covers API
-detail.
+graph views are built from the same models for solver and analysis code.
+Rustdoc covers API detail.
 
-The rules these pages document:
+Public conventions:
 
 - same format write back preserves retained source text;
 - cross format conversion keeps the electrical core and reports losses as
@@ -28,7 +27,7 @@ PowerModelsDistribution ENGINEERING JSON, and BMOPF JSON.
 
 Where to look:
 
-- [Compiler IR](https://powerio.dev/guide/compiler-ir.html): the
+- [Compiler model layers](https://powerio.dev/guide/compiler-ir.html): the
   `BalancedNetwork` and `MulticonductorNetwork` model families and the
   `.pio.json` document.
 - [PIO JSON schema](https://powerio.dev/guide/pio-json-schema.html): the
@@ -63,5 +62,5 @@ Rendered API docs (rustdoc) for all crates: <https://powerio.dev>.
 Adding a format means adding one reader or writer at the hub, not pairwise
 converters. `IndexedNetwork` is the dense \\([0,n)\\) analysis view derived from
 a balanced `Network`; matrix builders work from that view. Code that maps
-source bus ids to dense rows must use `IndexedNetwork::bus_index`; it must not
-clamp ids or assume 1 based contiguous ids.
+source bus IDs to dense rows must use `IndexedNetwork::bus_index`; it must not
+clamp IDs or assume 1-based contiguous IDs.

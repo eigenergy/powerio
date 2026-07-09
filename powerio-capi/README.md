@@ -1,8 +1,8 @@
 # powerio-capi
 
-A C ABI over `powerio`: parse any supported power system case format, query it,
-convert it, and pull out the numeric tables a solver needs to assemble matrices.
-Any language with a C foreign function interface can call it.
+The C ABI parses, queries, and converts PowerIO networks through opaque handles.
+It also exposes copied numeric tables, Arrow tables, `.pio.json` packages, and
+SCOPF problem instances behind feature gates.
 
 The header is
 [`include/powerio.h`](https://github.com/eigenergy/powerio/blob/main/powerio-capi/include/powerio.h).
@@ -82,7 +82,7 @@ int main(void) {
 
 For a typed Julia API, use [PowerIO.jl](https://github.com/eigenergy/PowerIO.jl),
 which wraps this ABI (`set_library!`, `parse_file`, `parse_str`, `convert_file`,
-and the `to_*` transforms). The raw `ccall` below is the low-level reference it
+and the `to_*` transforms). The raw `ccall` below is the low level reference it
 builds on.
 
 ```julia
@@ -122,7 +122,7 @@ instead of echoing the original source.
 ABI v4 still accepts `powerio-json` in `pio_to_format` and `pio_parse_str`.
 Those names are compatibility aliases for the explicit model JSON functions.
 
-## The `.pio.json` Document Surface
+## The `.pio.json` document surface
 
 The default build includes the package surface (`PIO_PKG`). Probe it with
 `pio_has_feature("pkg")` when loading dynamically. `PioPackage` is an opaque
@@ -148,7 +148,7 @@ The default build includes the package surface (`PIO_PKG`). Probe it with
   identities; an unknown identity, an ambiguous (duplicated) uid, or a row that
   contradicts a resolved identity returns `NULL` with the message in `errbuf`.
 - `pio_package_multiconductor_to_balanced_preflight_json` reports structured
-blockers before lowering, and `pio_package_lower_multiconductor_to_balanced`
+  blockers before lowering, and `pio_package_lower_multiconductor_to_balanced`
   returns a new balanced document when the input is ready.
 
 Constructor and lowering options cross as typed parameters. The balanced
@@ -160,13 +160,16 @@ convention becomes a real public option, it should get a new additive symbol.
 
 ## Problem instances
 
-Build with `--features prob` and define `PIO_PROB` when compiling C code.
-`pio_scopf_parse_str` accepts source text and a format name. The first supported
-format is `goc3-json`. It returns an owned `PioScopfInstance` handle.
+Build the library with `--features prob`; the generated header guards this
+surface with `PIO_PROB`. `pio_scopf_parse_str` accepts source text and a format
+name. It currently accepts `goc3-json` and returns an owned
+`PioScopfInstance` handle. A null result indicates a parse or assembly error;
+`errbuf` receives the message.
 
 `pio_scopf_to_json` returns the versioned SCOPF wire document. The document
-records its schema version and 1-based index convention. Free the string with
-`pio_string_free` and the instance with `pio_scopf_instance_free`.
+records its schema version and 1-based index convention. Free the returned
+string with `pio_string_free` and the instance with
+`pio_scopf_instance_free`.
 
 ## API names
 
@@ -194,16 +197,16 @@ The grammar is written out in the header preamble; the short version:
 
 Every entry point is hardened at the boundary:
 
-- Panics never cross the FFI boundary: each function catches unwinds and turns
-  them into an error return (NULL handle, `-1`, or a zero count) with a message
-  in `errbuf`.
+- With Rust's default unwind panic strategy, each function catches a panic and
+  returns its documented error value (a null handle, `-1`, or a zero count).
 - NULL is safe everywhere: a NULL handle returns the documented default, NULL
   output pointers are skipped rather than written, and a NULL/zero-length
   `errbuf` suppresses the message.
 - Error and warning buffers are always NUL-terminated; a message longer than
-  the buffer is truncated to fit. `PIO_ERRBUF_MIN` (256) is a comfortable size.
-- Input strings must be valid UTF-8; anything else is rejected as an error,
-  never dereferenced past its NUL.
+  the buffer is truncated to fit. `PIO_ERRBUF_MIN` (256) is the recommended
+  size.
+- Input strings must be valid UTF-8 and NUL terminated. Invalid UTF-8 returns an
+  error.
 - Ownership is symmetric: handles from `pio_parse_*`/`pio_read_dir`/
   `pio_normalize` are freed with `pio_network_free`, strings from
   `pio_to_format`/`pio_convert_*` with `pio_string_free`, package handles with
@@ -217,16 +220,10 @@ Every entry point is hardened at the boundary:
 - A handle is immutable after construction: concurrent reads from any number
   of threads are safe. `pio_network_free` is not; free exactly once.
 
-Two notes on the trust model:
-
-- Malformed or hostile input surfaces as an error or, at worst, a caught
-  panic; the parsers are safe Rust and fuzzed (see `fuzz/`), so undefined
-  behavior is out of reach on any input. Resource use is the caveat: memory
-  scales with input size and no size caps are enforced, so cap untrusted
-  inputs yourself if you parse them in bulk.
-- The panic guards assume the default `panic = "unwind"`. A downstream
-  rebuild with `panic = "abort"` turns a caught-class bug into an orderly
-  process abort instead of an error return.
+Input size is not capped. Callers that accept untrusted input must impose their
+own byte and resource limits. The panic guards require the default
+`panic = "unwind"`; a build with `panic = "abort"` terminates the process on a
+panic.
 
 ## ABI history
 
@@ -266,11 +263,11 @@ Every public `PIO_*` macro, opaque typedef, and `pio_*` prototype in
 against the no-default core ABI plus the arrow, matrix, gridfm, dist, pkg, and prob
 feature surfaces. CI also compiles and links a C++ header sanity program to keep the
 `extern "C"` path honest. Source/header symbol parity is checked separately, so
-adding, renaming, or deleting a public entry point fails before release.
+adding, renaming, or deleting a public entry point fails CI.
 
 ## Scope
 
-powerio-capi covers the `powerio` surface: parse / convert / query / table
+`powerio-capi` covers the `powerio` parse, convert, query, table,
 and JSON extraction. Build with `--features arrow,matrix` to export the first
 balanced sparse matrix family over `pio_to_arrow` as COO triplet tables:
 `ybus`, `incidence`, `bprime`, and `bdoubleprime`, all in dense solver bus index

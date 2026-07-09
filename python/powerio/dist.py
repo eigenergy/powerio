@@ -1,11 +1,9 @@
-"""Multiconductor distribution networks in wire coordinates.
+"""Parse and convert multiconductor distribution networks.
 
-Three formats, lossless three way conversion: OpenDSS ``.dss``,
-PowerModelsDistribution ENGINEERING JSON (``pmd-json``), and the draft BMOPF
-task force JSON (``bmopf-json``). The fidelity rules match the
-transmission surface: writing back to the source format echoes the retained
-source text byte for byte, and every cross format write reports each loss in
-the :class:`~powerio.Conversion` warnings instead of dropping it silently.
+The typed model uses wire coordinates. Supported formats are OpenDSS ``.dss``,
+PowerModelsDistribution ENGINEERING JSON (``pmd-json``), and BMOPF JSON
+(``bmopf-json``). Same format writes can return retained source bytes. Cross
+format writes report unsupported fields in :class:`~powerio.Conversion`.
 
     import powerio.dist as dist
 
@@ -33,12 +31,12 @@ __all__ = [
 
 
 class DistNetwork:
-    """A parsed multiconductor distribution network.
+    """A parsed multiconductor distribution network in wire coordinates.
 
     Buses carry named terminals, lines carry conductor impedance matrices, and
-    transformers carry per winding connections; nothing is collapsed to
-    positive sequence. Distinct from :class:`powerio.Network` (the
-    transmission model); the matrix builders do not accept it.
+    transformers carry per winding connections. This type is distinct from the
+    positive sequence :class:`powerio.Network`; balanced matrix builders do not
+    accept it.
     """
 
     def __init__(self, inner) -> None:
@@ -56,7 +54,7 @@ class DistNetwork:
 
     @property
     def warnings(self) -> "list[str]":
-        """Parse warnings: everything the reader could not represent or had to assume."""
+        """Return source fields not represented and assumptions made while parsing."""
         return self._inner.warnings()
 
     @property

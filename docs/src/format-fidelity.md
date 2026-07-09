@@ -1,9 +1,9 @@
 # Format fidelity and validation
 
-How powerio's readers and writers are validated, the conventions they follow, and
-the known limits. The headline fidelity table is in the
-[top level README](https://github.com/eigenergy/powerio#current-format-fidelity); this
-document covers the conventions and the proof behind it.
+PowerIO validates readers and writers against independent tools and committed
+round trip tests. The
+[top level fidelity table](https://github.com/eigenergy/powerio#current-format-fidelity)
+summarizes the supported directions; the conventions and evidence are below.
 
 ## Conventions
 
@@ -119,7 +119,7 @@ code `READ.TRANSMISSION.PARSE_WARNING`. GridFM package reads use
   system base (\\(\mathrm{CZ} = \mathrm{CW} = 1\\)).
 - **PowerWorld** `.aux` is read and written. `.pwb` binary cases are read
   only, and `.pwd` display files parse through the separate display API.
-  `.aux` carries no system base, so the reader defaults to 100 MVA. No third-party `.aux` reader
+  `.aux` carries no system base, so the reader defaults to 100 MVA. No third party `.aux` reader
   exists, so that writer is validated by powerio's own read back plus a
   PowerModels JSON bridge. The `.pwb` layouts are reverse engineered; the decode
   evidence and coverage matrix are maintainer notes at

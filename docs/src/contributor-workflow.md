@@ -37,12 +37,12 @@ Use the smallest gate set that covers the changed surface, then run the
 | matrix builders | `cargo test -p powerio-matrix`; `cargo bench -p powerio-matrix --bench matrix` |
 | problem instances or DC OPF bundles | `cargo test -p powerio-prob --no-default-features`; `cargo test -p powerio-prob --features matrix` |
 | PowerWorld binary reader | PowerWorld parser tests plus `cargo bench -p powerio --bench parse -- "parse_aux_|parse_pwb_"` |
-| C ABI | `scripts/capi-header-parity.sh`; `scripts/capi-smoke.sh`; `cargo test -p powerio-capi --no-default-features`; `cargo test -p powerio-capi --features arrow,matrix,gridfm,dist,pkg`; `bash scripts/ci-clippy.sh capi-no-default`; `bash scripts/ci-clippy.sh capi-release` |
+| C ABI | `scripts/capi-header-parity.sh`; `scripts/capi-smoke.sh`; `cargo test -p powerio-capi --no-default-features`; `cargo test -p powerio-capi --features arrow,matrix,gridfm,dist,pkg,prob`; `bash scripts/ci-clippy.sh capi-no-default`; `bash scripts/ci-clippy.sh capi-release` |
 | Python package metadata or extras | `maturin build --release --out /tmp/powerio-wheel-check`; inspect wheel `METADATA` |
-| Julia binding compatibility | build `powerio-capi --features arrow,matrix,gridfm,dist,pkg`, then run `PowerIO.jl` tests with `POWERIO_CAPI` |
+| Julia binding compatibility | build `powerio-capi --features arrow,matrix,gridfm,dist,pkg,prob`, then run `PowerIO.jl` tests with `POWERIO_CAPI` |
 | shared surface with PowerIO.jl | push a same-named PowerIO.jl companion branch; the tandem CI job tests against it |
 | CLI behavior | `cargo test -p powerio-cli --test cli` |
-| documentation or website | `mdbook build docs`; `mdbook test docs`; check stale links to retired guide outputs |
+| documentation or website | `mdbook build docs`; `mdbook test docs`; `RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps`; regenerate schemas and the C header when their source rustdoc changes; run `scripts/capi-header-parity.sh`; check links to retired guide outputs |
 
 `benchmarks/run_validation.sh` requires the Python oracle stack in the same
 Python 3.11+ venv as the local wheel. Missing PyPSA, pandapower, or egret is a
@@ -56,10 +56,10 @@ a release claim:
 
 ```sh
 cargo test -p powerio-capi --no-default-features
-cargo test -p powerio-capi --features arrow,matrix,gridfm,dist,pkg
+cargo test -p powerio-capi --features arrow,matrix,gridfm,dist,pkg,prob
 bash scripts/ci-clippy.sh capi-no-default
 bash scripts/ci-clippy.sh capi-release
-cargo build -p powerio-capi --release --features arrow,matrix,gridfm,dist,pkg
+cargo build -p powerio-capi --release --features arrow,matrix,gridfm,dist,pkg,prob
 scripts/capi-header-parity.sh
 scripts/capi-smoke.sh
 POWERIO_CAPI=$PWD/target/release/libpowerio_capi.dylib \

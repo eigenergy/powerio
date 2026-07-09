@@ -1,10 +1,9 @@
-"""powerio: lossless power system case file IO, conversion, and matrices.
+"""Parse, convert, and project power system data.
 
-Parse MATPOWER, PSS/E, PowerWorld, PSLF EPC, PowerModels JSON, egret JSON,
-pandapower JSON, PyPSA CSV folders, GO Challenge 3 JSON, Surge JSON, GridFM
-Parquet datasets into one format neutral case; write retained text formats back
-byte exact; convert between formats; package cases as ``.pio.json``; and pull
-the sparse matrices and graph outputs solvers need::
+Readers produce a format neutral network model. Writers return retained source
+bytes where supported or report fields that a target format cannot represent.
+Packages, sparse matrices, graphs, and problem instances use the same parsed
+data::
 
     import powerio as pio
 
@@ -21,20 +20,17 @@ the sparse matrices and graph outputs solvers need::
     Y = net.ybus()                           # complex csr, G + jB
     G = net.to_networkx()                    # networkx.Graph keyed by bus id
 
-PyPSA CSV folders carry the static network topology (PyPSA's native component
-format for network definition); time series NetCDF/HDF5 scenarios are out of
-scope for now (https://github.com/eigenergy/powerio/issues/107).
+PyPSA CSV folders carry static network topology. NetCDF and HDF5 time series
+are tracked in https://github.com/eigenergy/powerio/issues/107.
 
 GO Challenge 3 JSON is read as a static balanced network using the first
 interval. When it is parsed as a ``.pio.json`` package, the full source time
 series is exposed as replayable operating points.
 
-``import powerio`` and parsing/writing/converting pull in nothing but the
-interpreter. The matrix methods need scipy/numpy and the graph helper needs networkx; add them
-with ``pip install 'powerio[matrix]'``, ``[graph]``, or ``[all]``. A missing
-extra raises a clear ImportError, never a link error: the compiled core
-(``powerio._powerio``) returns COO triplets as plain Python lists, and the
-wrappers here assemble scipy matrices and networkx graphs lazily.
+``import powerio`` and the base parse, write, and conversion paths require no
+third party Python package. Matrix methods require SciPy and NumPy. Graph
+methods require NetworkX. Install them with ``powerio[matrix]``,
+``powerio[graph]``, or ``powerio[all]``. Missing extras raise ``ImportError``.
 """
 
 from __future__ import annotations
@@ -96,16 +92,17 @@ target format could not represent (empty for a faithful conversion).
 GridfmRead = namedtuple("GridfmRead", ["network", "scenario", "warnings"])
 GridfmRead.__doc__ = """Output of :func:`read_gridfm` / :func:`read_gridfm_scenarios`.
 
-``network`` is the reconstructed :class:`Network`; ``scenario`` is the scenario
-id these rows came from; ``warnings`` lists what the gridfm schema could not
-round-trip (synthesized bus ids, folded per-bus load/shunt, dropped HVDC/storage,
-piecewise costs). The read is lossy but recovers everything a power flow needs.
+``network`` is the reconstructed :class:`Network`; ``scenario`` is the source
+scenario ID; ``warnings`` lists fields the GridFM schema cannot retain,
+including source bus IDs, per element load and shunt rows, HVDC, storage, and
+piecewise costs.
 """
 
 DisplayData = namedtuple("DisplayData", ["kind", "data"])
 DisplayData.__doc__ = """Output of :func:`parse_display_file` / :func:`parse_display_bytes`.
 
-``kind`` names the display format. For v0.2.2, ``kind == "powerworld"`` and
+``kind`` names the display format. For PowerWorld PWD data,
+``kind == "powerworld"`` and
 ``data`` is a :class:`PwdDisplay`.
 """
 
@@ -229,7 +226,7 @@ def _wrap_display(raw) -> DisplayData:
 
 
 class Network:
-    """A parsed power network case.
+    """A parsed balanced power network.
 
     The data attributes (``buses``, ``branches``, ``gens``, ``loads``,
     ``shunts``) and the non-matrix methods (``write``, ``reference_bus_index``,
@@ -270,7 +267,7 @@ class Network:
         """Serialize to MATPOWER ``.m`` text.
 
         A case parsed from MATPOWER keeps its original source, so this returns a
-        byte-exact echo. Derived cases serialize from the format-neutral model.
+        byte-exact echo. Derived cases serialize from the format neutral model.
         """
         return self._inner.to_matpower()
 
@@ -454,11 +451,12 @@ class Network:
         return self._inner.write_pypsa_csv_folder(str(out_dir))
 
     def to_normalized(self) -> "Network":
-        """A normalized, computation-ready copy of this case: per unit, radians,
-        out-of-service filtered, source bus ids preserved, bus types
-        canonicalized. The original case is unchanged; the result carries no
-        retained source, so :meth:`write` serializes the per-unit model rather
-        than echoing it. Raises :class:`PowerIODataError` if the case can't be
+        """Return a normalized copy with per unit power and radian angles.
+
+        The result removes out of service elements, preserves source bus IDs,
+        and normalizes bus types. It carries no retained source, so
+        :meth:`write` serializes the derived model. Raises
+        :class:`PowerIODataError` if the network cannot be
         normalized (no reference bus can be chosen, or a non-positive base MVA).
         """
         return Network(self._inner.to_normalized())
@@ -468,7 +466,7 @@ class Network:
         clamp_angle_bounds: bool = False,
         angle_bound_pad: Optional[float] = None,
     ) -> "Network":
-        """A normalized copy with explicit normalization options.
+        """Return a normalized copy with explicit normalization options.
 
         ``clamp_angle_bounds=True`` applies the PowerModels angle difference
         bound repair: limits at or beyond ``+/-pi/2`` and zero/zero windows
@@ -535,7 +533,12 @@ def parse_str(text: str, format: str = "matpower") -> Network:
 
 
 def parse_scopf(text: str, from_: str = "goc3-json") -> dict[str, Any]:
-    """Parse SCOPF source text into a versioned problem instance document."""
+    """Return a versioned SCOPF problem instance document.
+
+    ``from_`` currently accepts ``"goc3-json"``. The returned dictionary uses
+    the wire schema's declared 1-based indices and retains source identities in
+    separate fields. Parse and assembly failures raise :class:`PowerIOError`.
+    """
     return _json.loads(_powerio.parse_scopf(text, from_))
 
 
@@ -552,7 +555,7 @@ def convert_file(
     default_gen_cost: Optional[str] = None,
     gen_cost_csv: Optional[Any] = None,
 ) -> Conversion:
-    """Convert a case file to another format through the neutral hub.
+    """Convert a case file to another format through the network model.
 
     ``to`` / ``from_`` are format names: ``matpower``, ``powermodels-json``,
     ``egret-json``, ``pandapower-json``, ``psse``, ``powerworld``, ``pslf``,
@@ -583,8 +586,8 @@ def convert_str(
     default_gen_cost: Optional[str] = None,
     gen_cost_csv: Optional[Any] = None,
 ) -> Conversion:
-    """Convert in-memory case ``text`` to another format through the neutral
-    hub, with no file staging.
+    """Convert in-memory case ``text`` through the network model without a
+    temporary file.
 
     ``to`` and ``format`` are format names as in :func:`convert_file`;
     ``format`` names the input (default ``matpower``). Returns a
@@ -643,7 +646,7 @@ def write_gridfm_batch(
     default_gen_cost: Optional[str] = None,
     gen_cost_csv: Optional[Any] = None,
 ) -> dict:
-    """Write several networks as one gridfm-datakit dataset, row-stacked and
+    """Write several networks as one gridfm-datakit dataset, row stacked and
     keyed by the ``scenario`` column.
 
     Each network is one snapshot; the k-th is stamped ``base_scenario + k``. The
@@ -678,11 +681,11 @@ def read_gridfm(dir: Any, scenario: int = 0) -> GridfmRead:
     ``scenario`` selects one snapshot from a batch (``0``, the base case, by
     default). Returns a :class:`GridfmRead` ``(network, scenario, warnings)``.
 
-    The read is lossy but recovers everything a power flow needs: bus types,
-    voltages and limits, nodal load and shunt totals, generator dispatch and
-    bounds, branch ``r/x/b/tap/shift/rate_a``/angle limits, and ``baseMVA``,
-    enough to write a runnable case. It cannot recover original bus ids,
-    per-element load/shunt granularity, piecewise/cubic costs, or HVDC/storage;
+    The read recovers bus types, voltages and limits, nodal load and shunt
+    totals, generator dispatch and bounds, branch
+    ``r/x/b/tap/shift/rate_a`` values, angle limits, and ``baseMVA``. It cannot
+    recover source bus IDs, per element load/shunt granularity, piecewise or
+    cubic costs, HVDC, or storage;
     what it can't recover is listed in ``warnings``. Published wheels include the
     native reader; custom source builds without the Rust ``gridfm`` feature raise
     ``ImportError``.
@@ -717,10 +720,9 @@ from . import dist  # noqa: E402  (needs Conversion defined above)
 
 
 class Package:
-    """A parsed ``.pio.json`` package handle.
+    """A parsed ``.pio.json`` package.
 
-    Parses the envelope once; every accessor reuses the handle instead of
-    re-reading the JSON text.
+    Parsing occurs once; every accessor reuses the native handle.
     """
 
     def __init__(self, inner: "_powerio._Package"):
@@ -740,7 +742,7 @@ class Package:
 
     @classmethod
     def from_json(cls, text: str) -> "Package":
-        """Parse ``.pio.json`` envelope text."""
+        """Parse a ``.pio.json`` document."""
         return cls(_powerio._Package.from_json(text))
 
     @classmethod

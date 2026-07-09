@@ -1,12 +1,9 @@
-//! `powerio-matrix`: sparse matrices and graph outputs for power system case files,
-//! built on [`powerio`] (re-exported, so one `use powerio_matrix::...` pulls in
-//! both layers).
+//! Sparse matrix and graph projections from PowerIO networks.
 //!
-//! Signed incidence matrix `A`, DC bus susceptance matrix `L = A diag(b) Aᵀ`
-//! and its reference-grounded form, MATPOWER Bp/Bpp/Y_bus, PTDF/LODF, adjacency,
-//! the LACPF block, and a petgraph representation. The builders take the
-//! dense-indexed [`IndexedNetwork`] view
-//! of a [`Network`].
+//! Outputs include signed incidence, weighted bus Laplacian, MATPOWER Bp/Bpp,
+//! Y bus, PTDF, LODF, adjacency, LACPF, and petgraph views. Builders take the
+//! dense [`IndexedNetwork`] view of a [`Network`]. The crate reexports
+//! [`powerio`] types and functions.
 //!
 //! ```
 //! use powerio_matrix::{parse_file, IndexedNetwork, build_bprime, BuildOptions};
@@ -23,8 +20,8 @@
 //!
 //! The DC bus susceptance matrix and other weighted bus Laplacians use the
 //! positive M-matrix form: stored nonzero off-diagonal entries are negative,
-//! diagonals are nonnegative, and `diag = Σ|off-diag|`. Bus ids are 1-based on
-//! the model; [`IndexedNetwork`] maps them to a dense `[0, n)`. `tap == 0` means
+//! diagonals are nonnegative, and `diag = Σ|off-diag|`. Source bus IDs remain on
+//! the model; [`IndexedNetwork`] maps them to dense indices in `[0, n)`. `tap == 0` means
 //! `tap = 1`. `build_bprime` and `build_bdoubleprime` follow MATPOWER `makeB`;
 //! Y_bus keeps tap magnitudes and phase shifts.
 //! Branch terminal admittance is stored per unit. DC incidence uses `b = 1/x`
