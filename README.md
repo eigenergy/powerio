@@ -192,7 +192,6 @@ The `powerio-matrix` Rust crate derives an `IndexedNetwork` with dense bus indic
 - Streamed CLI PTDF/LODF writes for iterative sensitivity exports
 - Adjacency matrix and `petgraph` graph output
 - Matrix Market bundles for OPF solvers
-- KKT operators for OPF solvers (experimental)
 
 Current conventions for signs, taps, phase shifts, per unit scaling, reference buses, and line parameters are documented in the [matrices guide](https://eigenergy.github.io/powerio/guide/matrices.html).
 

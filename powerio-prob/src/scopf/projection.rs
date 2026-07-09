@@ -1,9 +1,10 @@
 use std::collections::HashSet;
 
-use powerio::{BusId, Goc3Document};
+use powerio::BusId;
+use powerio::format::goc3::Goc3Document;
 use serde_json::{Map, Value};
 
-use super::error::ScopfResult;
+use super::error::{ScopfError, ScopfResult};
 use super::goc3::{
     Goc3Adapter, cost_cube, float_matrix, float_vec, initial_status, json_error, require_field,
     require_num, require_str,
@@ -951,14 +952,16 @@ fn project_scopf_instance(tables: &Goc3Adapter) -> Result<ScopfInstance> {
     })
 }
 
-/// Build a matrix free SCOPF instance from one parsed GOC3 document.
-pub fn build_scopf_instance(document: &Goc3Document) -> Result<ScopfInstance> {
+fn build_scopf_instance(document: &Goc3Document) -> Result<ScopfInstance> {
     let tables = Goc3Adapter::from_document(document)?;
     project_scopf_instance(&tables)
 }
 
-/// Parse GOC3 JSON text and build its SCOPF instance.
-pub fn build_scopf_instance_from_str(text: &str) -> Result<ScopfInstance> {
+/// Parse source text and build its SCOPF instance.
+pub fn build_scopf_instance_from_str(text: &str, from: &str) -> Result<ScopfInstance> {
+    if from != "goc3-json" {
+        return Err(ScopfError::UnsupportedFormat(from.to_owned()));
+    }
     let document = Goc3Document::parse(text)?;
     build_scopf_instance(&document)
 }

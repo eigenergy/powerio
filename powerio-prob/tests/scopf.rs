@@ -1,14 +1,12 @@
-use powerio::{BusId, Goc3Document};
+use powerio::BusId;
 use powerio_prob::scopf::wire::{SCOPF_WIRE_SCHEMA, SCOPF_WIRE_VERSION, to_wire_value};
-use powerio_prob::{
-    ScopfError, ScopfInstance, build_scopf_instance, build_scopf_instance_from_str,
-};
+use powerio_prob::{ScopfError, ScopfInstance, build_scopf_instance_from_str};
 use serde_json::Value;
 
 const SMALL: &str = include_str!("data/goc3_small.json");
 
 fn small_instance() -> ScopfInstance {
-    build_scopf_instance_from_str(SMALL).expect("build small SCOPF instance")
+    build_scopf_instance_from_str(SMALL, "goc3-json").expect("build small SCOPF instance")
 }
 
 #[test]
@@ -87,16 +85,6 @@ fn small_instance_preserves_source_ids_and_uses_zero_based_indices() {
 }
 
 #[test]
-fn shared_document_builds_the_same_instance() {
-    let document = Goc3Document::parse(SMALL).expect("parse shared document");
-    let from_document = build_scopf_instance(&document).expect("build from document");
-    assert_eq!(from_document, small_instance());
-    assert!(document.network().is_ok());
-    assert!(document.time_series_input().is_ok());
-    assert!(document.reliability().is_some());
-}
-
-#[test]
 fn julia_wire_adapter_is_versioned_and_one_based() {
     let instance = small_instance();
     let internal = serde_json::to_value(&instance).expect("serialize internal instance");
@@ -146,8 +134,9 @@ fn arbitrary_uids_preserve_document_order() {
     replace_exact_strings(&mut value, &replacements);
     let text = serde_json::to_string(&value).expect("serialize renamed fixture");
 
-    let first = build_scopf_instance_from_str(&text).expect("build renamed fixture");
-    let second = build_scopf_instance_from_str(&text).expect("rebuild renamed fixture");
+    let first = build_scopf_instance_from_str(&text, "goc3-json").expect("build renamed fixture");
+    let second =
+        build_scopf_instance_from_str(&text, "goc3-json").expect("rebuild renamed fixture");
     assert_eq!(first, second);
     assert_eq!(first.static_data.acl_branch[0].uid, "line-zeta");
     assert_eq!(first.static_data.acl_branch[0].j_ln, 0);
@@ -193,13 +182,20 @@ fn period_mismatch_is_rejected() {
 
 #[test]
 fn parse_errors_use_the_scopf_error_type() {
-    let result: Result<ScopfInstance, ScopfError> = build_scopf_instance_from_str("{");
+    let result: Result<ScopfInstance, ScopfError> = build_scopf_instance_from_str("{", "goc3-json");
     assert!(matches!(result, Err(ScopfError::Source(_))));
+}
+
+#[test]
+fn source_format_is_explicit() {
+    let error = build_scopf_instance_from_str(SMALL, "powerio-json")
+        .expect_err("reject unsupported SCOPF format");
+    assert!(matches!(error, ScopfError::UnsupportedFormat(_)));
 }
 
 fn build_from_value(value: &Value) -> Result<ScopfInstance, ScopfError> {
     let text = serde_json::to_string(value).expect("serialize test document");
-    build_scopf_instance_from_str(&text)
+    build_scopf_instance_from_str(&text, "goc3-json")
 }
 
 fn replace_exact_strings(value: &mut Value, replacements: &[(&str, &str)]) {

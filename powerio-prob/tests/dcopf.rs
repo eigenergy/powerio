@@ -234,7 +234,6 @@ fn serde_round_trip() {
 #[cfg(feature = "matrix")]
 mod matrix_tests {
     use powerio::{GenCostPolicyReport, MissingGenCostPolicy};
-    use powerio_prob::matrix::kkt::{assemble_kkt, assemble_reduced_kkt};
     use powerio_prob::matrix::{
         DcOpfBundleMetadata, DcOpfBundleOptions, build_dc_opf_matrices, write_dcopf_bundle,
     };
@@ -297,25 +296,5 @@ mod matrix_tests {
         );
         assert_eq!(manifest["patched_gen_costs"], 1);
         assert_eq!(manifest["cost_policy"]["mode"], "require");
-    }
-
-    #[test]
-    fn kkt_operators_consume_the_instance() {
-        let net = case9();
-        let problem = build_dc_opf_instance(&IndexedNetwork::new(&net), &DcOpfOptions::default())
-            .expect("build");
-        let theta_f = vec![1.0; problem.n_branches()];
-        let theta_g = vec![1.0; problem.n_buses];
-        let reference = problem.reference_buses[0];
-        let operators = assemble_kkt(&problem, &theta_f, &theta_g, reference, true).expect("kkt");
-        assert_eq!(operators.l1.rows(), problem.n_buses);
-        assert_eq!(operators.l1_grounded.rows(), problem.n_buses - 1);
-        assert!(operators.l_eff_grounded.is_some());
-        let reduced =
-            assemble_reduced_kkt(&problem, &theta_f, &theta_g, reference).expect("reduced");
-        assert_eq!(
-            reduced.rows(),
-            3 * problem.n_buses + 2 * problem.n_branches() + 1
-        );
     }
 }

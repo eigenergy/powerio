@@ -289,7 +289,7 @@ enum FormatArg {
     #[value(name = "pandapower-json", alias = "pandapower", alias = "pp")]
     PandapowerJson,
     /// Deprecated: bare `Network` model JSON.
-    #[value(name = "powerio-json", alias = "powerio", alias = "json")]
+    #[value(name = "powerio-json", alias = "powerio", alias = "json", hide = true)]
     PowerioJson,
     #[value(name = "pypsa-csv", alias = "pypsa")]
     PypsaCsv,

@@ -255,7 +255,6 @@ impl NetworkPackage {
     /// Wrap a balanced network. Origin is inferred from its source format:
     /// `InMemory` / `Derived` (normalized) / `File` (a parsed text format,
     /// recording whether source was retained; the path is not captured here).
-    /// GOC3 sources also lift their time series into `operating_points`.
     pub fn from_balanced(net: BalancedNetwork) -> Self {
         let mut net = net;
         ensure_payload_uids(&mut net);
@@ -264,31 +263,7 @@ impl NetworkPackage {
         let sources = balanced_sources(&net);
         let source_id = sources.first().map(|s| s.id.clone());
         let source_maps = balanced_source_maps(&net, source_id.as_deref());
-        let mut diagnostics = Vec::new();
-        let operating_points = if net.source_format == SourceFormat::Goc3Json {
-            match net
-                .source
-                .as_deref()
-                .map(|source| goc3_operating_points_from_str(source))
-            {
-                Some(Ok(series)) => series,
-                Some(Err(err)) => {
-                    diagnostics.push(StructuredDiagnostic::new(
-                        "READ.GOC3.OPERATING_POINTS_DROPPED",
-                        DiagnosticSeverity::Warning,
-                        DiagnosticStage::Read,
-                        format!(
-                            "time series could not be lifted into operating points; \
-                             the package is static only: {err}"
-                        ),
-                    ));
-                    None
-                }
-                None => None,
-            }
-        } else {
-            None
-        };
+        let diagnostics = Vec::new();
         let validation = ValidationSummary::from_diagnostics(&diagnostics);
         let (payload_schema, payload_schema_version) = payload_schema_for(ModelKind::Balanced);
         Self {
@@ -301,7 +276,7 @@ impl NetworkPackage {
             payload_schema: Some(payload_schema.to_owned()),
             payload_schema_version: Some(payload_schema_version.to_owned()),
             model: ModelPayload::balanced(net),
-            operating_points,
+            operating_points: None,
             study: None,
             origin,
             sources,
@@ -314,14 +289,39 @@ impl NetworkPackage {
         }
     }
 
-    /// Wrap the result of a balanced case reader and lift its warnings into
-    /// package diagnostics.
+    /// Wrap the result of a balanced case reader. Reader adapters can attach
+    /// source data that is not part of the balanced network model.
     pub fn from_parsed_balanced(parsed: powerio::Parsed) -> Self {
-        Self::from_balanced_with_read_warnings(
+        let source_format = parsed.network.source_format;
+        let retained_source = parsed.network.source.clone();
+        let mut package = Self::from_balanced_with_read_warnings(
             parsed.network,
             READ_TRANSMISSION_PARSE_WARNING,
             parsed.warnings,
-        )
+        );
+        if source_format == SourceFormat::Goc3Json {
+            package.attach_goc3_operating_points(retained_source.as_deref().map(String::as_str));
+        }
+        package
+    }
+
+    fn attach_goc3_operating_points(&mut self, source: Option<&str>) {
+        match source.map(goc3_operating_points_from_str) {
+            Some(Ok(series)) => self.operating_points = series,
+            Some(Err(error)) => {
+                self.diagnostics.push(StructuredDiagnostic::new(
+                    "READ.GOC3.OPERATING_POINTS_DROPPED",
+                    DiagnosticSeverity::Warning,
+                    DiagnosticStage::Read,
+                    format!(
+                        "time series could not be lifted into operating points; \
+                         the package is static only: {error}"
+                    ),
+                ));
+                self.validation = ValidationSummary::from_diagnostics(&self.diagnostics);
+            }
+            None => {}
+        }
     }
 
     /// Wrap a balanced network and lift reader warnings into structured

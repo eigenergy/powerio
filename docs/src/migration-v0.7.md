@@ -24,8 +24,8 @@ coefficients for several generators at one bus. Call
 required; it returns an error if the reduction would change the objective.
 
 The default `powerio-prob` feature set contains no sparse matrix dependency.
-Enable `matrix` for incidence, Laplacian, flow, generator map, bundle, and KKT
-operators:
+Enable `matrix` for incidence, Laplacian, flow, generator map, and bundle
+output:
 
 ```toml
 [dependencies]
@@ -35,3 +35,6 @@ powerio-prob = { version = "0.7", features = ["matrix"] }
 `powerio_prob::matrix::write_dcopf_bundle` accepts an assembled instance. Cost
 policy handling happens before assembly. The writer does not read the source
 network again.
+
+Solver formulations and KKT operators are not part of `powerio-prob`. Build
+them in the solver from the indexed instance and optional matrix projections.

@@ -32,17 +32,14 @@ receiving consumer is PowerIO or a binding that wants provenance, diagnostics,
 operating points, and the explicit model kind. Use BMOPF, OpenDSS, PMD JSON, or
 another supported case format when the next tool expects that format.
 
-`powerio-json` remains supported in v0.6.2 for existing CLI, C ABI, Python,
-Julia, and MCP paths. It is bare balanced `Network` JSON, without package
-metadata or source maps, and is deprecated for CLI file handoffs. New
-PowerIO file handoffs should use `.pio.json`; external tool workflows should
-use the case format that external tool reads.
+`powerio-json` is bare balanced `Network` JSON, without package metadata or
+source maps. Version 0.7 removes it from advertised CLI file formats. Use
+`Network::to_json` and `Network::from_json` for model JSON. The C ABI exposes
+the same operations as `pio_to_json` and `pio_from_json`.
 
-A future v0.7.0 release may demote `powerio-json` from the public file handoff
-surface while keeping `Network::to_json` / `Network::from_json`, the C format
-token, and binding JSON paths available for internal and programmatic use.
-Removing the C format token or changing its documented behavior is a C
-compatibility change, separate from `.pio.json` schema evolution.
+ABI v4 continues to accept `powerio-json` in `pio_parse_str` and
+`pio_to_format`. Those format tokens are compatibility aliases, not new file
+handoff APIs. Removing them requires a future C ABI version change.
 
 ## Two stability tiers
 

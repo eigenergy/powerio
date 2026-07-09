@@ -25,8 +25,9 @@ header = """
  *   pio_to_format returns text for every named format, pio_to_arrow fills
  *   Arrow C Data Interface structs.
  * - Noun phrases are queries (no get_); n_ prefixes counts, is_ predicates.
- * - Format names never appear in symbols. Formats are strings ("matpower",
- *   "psse", "powerio-json", ...), so a new format never changes this ABI.
+ * - Case format names never appear in symbols. Formats are strings
+ *   ("matpower", "psse", ...), so a new format never changes this ABI.
+ *   pio_to_json and pio_from_json carry balanced model JSON.
  *
  * Vocabulary (one meaning per word, transmission and distribution alike):
  * - bus: a named connection point, any number of phases. This API is bus

@@ -16,8 +16,8 @@
 //!   format string (`pio_to_format`) unless the output type differs
 //!   (`pio_to_arrow` fills Arrow C Data Interface structs).
 //! - Format names never appear in symbols: formats are strings, so a new
-//!   format never changes this ABI. The canonical snapshot is the
-//!   `powerio-json` format name.
+//!   format never changes this ABI. Model JSON uses `pio_to_json` and
+//!   `pio_from_json`.
 //! - Array extractors share the cap/count convention: write up to `cap`
 //!   values, return the total available, `NULL` out is a pure count query.
 //! - Vocabulary: a *bus* is a named connection point (this API is bus
@@ -357,12 +357,12 @@ pub unsafe extern "C" fn pio_parse_file(
 /// Unlike [`pio_parse_file`] there is no path to infer from, so `format` is
 /// required: one of `matpower`/`m`, `powermodels`/`pm`, `egret`,
 /// `pandapower-json`/`pandapower`/`pp`, `psse`/`raw`, `powerworld`/`aux`,
-/// `pslf`/`epc`, `goc3-json`/`goc3`, `surge-json`/`surge`, or `powerio-json`/`json` (the canonical snapshot
-/// [`pio_to_format`] writes, validated on read). PyPSA CSV folders are
+/// `pslf`/`epc`, `goc3-json`/`goc3`, or `surge-json`/`surge`. PyPSA CSV folders are
 /// directories, not text; parse them with [`pio_parse_file`] and
 /// `from = "pypsa-csv"`. Read fidelity warnings attach to the handle
 /// ([`pio_warnings`]). Returns `NULL` on error and writes the message into
-/// `errbuf`. Free the handle with [`pio_network_free`].
+/// `errbuf`. Free the handle with [`pio_network_free`]. ABI v4 also accepts
+/// `powerio-json`/`json` as compatibility aliases for [`pio_from_json`].
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_parse_str(
     text: *const c_char,
@@ -839,12 +839,11 @@ pub unsafe extern "C" fn pio_is_radial(net: *const PioNetwork) -> i32 {
 
 /// Serialize `net` to the named format `to`: the one text serializer; every
 /// format is named by a string. Accepts the [`pio_parse_str`] names:
-/// `matpower` is a byte-exact echo when the handle was parsed from MATPOWER,
-/// and `powerio-json` is the canonical snapshot (validated by [`pio_parse_str`]
-/// on the way back; the retained source text is the one field it omits). The
-/// snapshot is lossless except for a non-finite `f64` (`Inf`/`NaN`), which JSON
-/// cannot represent: it is written as `null`, named in a fidelity warning, and
-/// then fails to read back; pass `warnbuf` to detect it.
+/// `matpower` is a byte-exact echo when the handle was parsed from MATPOWER.
+/// ABI v4 also accepts `powerio-json` as a compatibility alias for
+/// [`pio_to_json`]. Model JSON cannot represent a non-finite `f64` (`Inf`/`NaN`):
+/// it writes `null`, records the field in `warnbuf`, and fails validation when
+/// read back.
 ///
 /// Returns the text as an owned C string (free with [`pio_string_free`]),
 /// `NULL` on error (message into `errbuf`). Fidelity warnings, if any, are
@@ -1972,10 +1971,7 @@ pub unsafe extern "C" fn pio_scopf_parse_str(
         finish_handle(errbuf, errlen, "panic while parsing SCOPF instance", || {
             let text = required_cstr(text, "text")?;
             let from = required_cstr(from, "from")?;
-            if from != "goc3-json" {
-                return Err(format!("unsupported SCOPF source format `{from}`"));
-            }
-            let instance = powerio_prob::build_scopf_instance_from_str(text)
+            let instance = powerio_prob::build_scopf_instance_from_str(text, from)
                 .map_err(|error| error.to_string())?;
             Ok(PioScopfInstance { instance })
         })

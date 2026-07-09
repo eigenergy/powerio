@@ -4,8 +4,9 @@
 
 - Add `powerio-prob` for complete numerical problem instances. Its default
   build is matrix free; the `matrix` feature adds sparse projections, DC OPF
-  bundle output, and experimental KKT operators.
+  bundle output.
 - Move DC OPF instance types and bundle output out of `powerio-matrix`.
+- Keep solver formulations and KKT operators outside `powerio-prob`.
 
 ## 0.6.3
 
