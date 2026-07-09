@@ -1,6 +1,7 @@
 # DC OPF Bundle Schema
 
-`powerio dcopf <case>.m -o <out>` (or `opf_pipeline::write_dcopf_bundle`) writes
+`powerio dcopf <case>.m -o <out>` (or
+`powerio_prob::matrix::write_dcopf_bundle`) writes
 `<out>/<case>_dcopf/`: a set of Matrix Market files plus `dcopf_meta.json`.
 Everything is a pure function of the case. The files and conventions are below.
 
@@ -53,7 +54,7 @@ unlimited per MATPOWER). Generator-space provenance (length \\(n_{\mathrm{gen}}\
 
 ## Manifest (`dcopf_meta.json`)
 
-Schema `powerio.dcopf` version `0.1.0` writes Matrix Market files plus
+Schema `powerio.dcopf` version `0.2.0` writes Matrix Market files plus
 structured metadata:
 
 - `dimensions`: `n_buses`, `n_source_branches`, `n_branch_columns`,

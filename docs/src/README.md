@@ -52,7 +52,8 @@ Rendered API docs (rustdoc) for all crates: <https://powerio.dev>.
 | crate | responsibility |
 | --- | --- |
 | `powerio` | parsers, writers, `Network`, `IndexedNetwork`, normalization, format routing |
-| `powerio-matrix` | sparse matrices, graph views, DC OPF bundle, GridFM datasets |
+| `powerio-matrix` | generic sparse matrices, graph views, and GridFM datasets |
+| `powerio-prob` | complete problem instances and optional matrix projections |
 | `powerio-dist` | multiconductor distribution model and converters |
 | `powerio-pkg` | `.pio.json` document metadata and model JSON |
 | `powerio-cli` | command line interface and TUI |

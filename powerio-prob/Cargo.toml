@@ -1,0 +1,37 @@
+[package]
+name = "powerio-prob"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+description = "Problem instance builders for power system analysis and optimization."
+readme = "README.md"
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+documentation = "https://docs.rs/powerio-prob"
+keywords = ["power-systems", "optimization", "opf", "operations-research"]
+categories = ["science", "mathematics"]
+
+[package.metadata.docs.rs]
+all-features = true
+
+[features]
+default = []
+matrix = ["dep:powerio-matrix"]
+
+[lib]
+name = "powerio_prob"
+path = "src/lib.rs"
+
+[dependencies]
+powerio.workspace = true
+powerio-matrix = { workspace = true, optional = true }
+serde.workspace = true
+serde_json.workspace = true
+
+[dev-dependencies]
+serde_json.workspace = true
+tempfile = "3"
+
+[lints]
+workspace = true

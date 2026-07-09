@@ -37,7 +37,7 @@ jobs:
           set -o pipefail
           actual="$(cargo metadata --no-deps --format-version 1 \
             | jq -r '[.packages[] | select(.publish == null) | .name] | sort | join(" ")')"
-          if [ "$actual" != "powerio powerio-cli powerio-dist powerio-matrix powerio-pkg" ]; then
+          if [ "$actual" != "powerio powerio-cli powerio-dist powerio-matrix powerio-pkg powerio-prob" ]; then
             echo "publishable workspace members ($actual) do not match the publish list in crates.yml" >&2
             exit 1
           fi
@@ -73,7 +73,7 @@ jobs:
         # skip-existing), so a re-run after a partial publish only publishes
         # what's missing.
         run: |
-          for crate in powerio powerio-dist powerio-pkg powerio-matrix powerio-cli; do
+          for crate in powerio powerio-dist powerio-pkg powerio-matrix powerio-prob powerio-cli; do
             resp="$RUNNER_TEMP/$crate.json"
             code="$(curl -sS -A "$UA" --max-time 30 -o "$resp" -w '%{http_code}' \
               "https://crates.io/api/v1/crates/$crate/$VERSION")" || code=unreachable

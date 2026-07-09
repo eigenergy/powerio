@@ -6,9 +6,9 @@
 
 use criterion::{Criterion, criterion_group, criterion_main};
 use powerio_matrix::matrix::{
-    BuildOptions, DcConvention, Units, build_adjacency, build_bdoubleprime, build_bprime,
-    build_flow_map, build_incidence, build_lacpf, build_opf_instance, build_ptdf_lodf,
-    build_weighted_laplacian, build_ybus, ground_at_each,
+    BuildOptions, DcConvention, build_adjacency, build_bdoubleprime, build_bprime, build_flow_map,
+    build_incidence, build_lacpf, build_ptdf_lodf, build_weighted_laplacian, build_ybus,
+    ground_at_each,
 };
 use powerio_matrix::pipeline::{MatrixKind, Pipeline, RhsKind};
 use powerio_matrix::{IndexedNetwork, parse_matpower};
@@ -79,16 +79,6 @@ fn bench_dcopf_parts(c: &mut Criterion) {
     });
     c.bench_function("dcopf_flow_map_case118", |b| {
         b.iter(|| build_flow_map(black_box(&incidence.a), black_box(&incidence.b)));
-    });
-    c.bench_function("dcopf_instance_case118", |b| {
-        b.iter(|| {
-            build_opf_instance(
-                black_box(&view),
-                black_box(&incidence),
-                black_box(Units::PerUnit),
-            )
-            .unwrap()
-        });
     });
 }
 

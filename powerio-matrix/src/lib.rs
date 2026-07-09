@@ -4,8 +4,8 @@
 //!
 //! Signed incidence matrix `A`, DC bus susceptance matrix `L = A diag(b) Aᵀ`
 //! and its reference-grounded form, MATPOWER Bp/Bpp/Y_bus, PTDF/LODF, adjacency,
-//! the LACPF block, and the DC OPF instance bundle, plus a petgraph
-//! representation. The builders take the dense-indexed [`IndexedNetwork`] view
+//! the LACPF block, and a petgraph representation. The builders take the
+//! dense-indexed [`IndexedNetwork`] view
 //! of a [`Network`].
 //!
 //! ```
@@ -27,14 +27,12 @@
 //! the model; [`IndexedNetwork`] maps them to a dense `[0, n)`. `tap == 0` means
 //! `tap = 1`. `build_bprime` and `build_bdoubleprime` follow MATPOWER `makeB`;
 //! Y_bus keeps tap magnitudes and phase shifts.
-//! Branch terminal admittance is stored per unit. DC OPF is
-//! bus indexed
-//! (`p_g ∈ ℝⁿ`), default susceptance `b = 1/x`, with [`DcConvention::Matpower`]
-//! the `1/(x·τ)` plus phase-shift variant. The full reference across every
-//! matrix is in
+//! Branch terminal admittance is stored per unit. DC incidence uses `b = 1/x`
+//! by default. [`DcConvention::Matpower`] uses `1/(x·τ)` and phase shift
+//! injection. The full reference across every matrix is in
 //! [the matrix guide](https://eigenergy.github.io/powerio/guide/matrices.html).
 
-// Re-export the powerio data layer so this crate is a one-stop import, and so
+// Re-export the powerio data layer so one import covers model and matrix types, and so
 // the matrix modules' `crate::Error` / `crate::network` / `crate::format` paths
 // resolve unchanged after the split.
 pub use powerio::{
@@ -52,22 +50,23 @@ pub use powerio::{
     write_powermodels_json, write_powerworld, write_psse, write_pypsa_csv_folder,
 };
 
+/// Compressed sparse row matrix used by the projection builders.
+pub type SparseMatrix = sprs::CsMat<f64>;
+
 pub mod io;
 pub mod matrix;
-pub mod opf_pipeline;
 pub mod pipeline;
 pub mod synth;
 
 pub use matrix::{
-    BuildOptions, BusCosts, DcConvention, GenCosts, GroundedIndexMap, IncidenceParts, MatrixStats,
-    OpfInstance, Scheme, SensitivityMatrices, SensitivityMatrixMetadata, SensitivityMetadata,
-    SensitivityOptions, SensitivitySolver, SensitivitySolverPath, Units, ZeroImpedanceRule,
-    ZeroImpedanceSkips, build_adjacency, build_bdoubleprime, build_bprime, build_flow_map,
-    build_incidence, build_lacpf, build_lodf, build_opf_instance, build_ptdf, build_ptdf_lodf,
-    build_ptdf_lodf_with_options, build_weighted_laplacian, build_ybus, ground_at, ground_at_each,
-    reference_indicator, sddm_check, skipped_zero_impedance, susceptance_diag, unit_vector,
+    BuildOptions, DcConvention, GroundedIndexMap, IncidenceParts, MatrixStats, Scheme,
+    SensitivityMatrices, SensitivityMatrixMetadata, SensitivityMetadata, SensitivityOptions,
+    SensitivitySolver, SensitivitySolverPath, ZeroImpedanceRule, ZeroImpedanceSkips,
+    build_adjacency, build_bdoubleprime, build_bprime, build_flow_map, build_incidence,
+    build_lacpf, build_lodf, build_ptdf, build_ptdf_lodf, build_ptdf_lodf_with_options,
+    build_weighted_laplacian, build_ybus, ground_at, ground_at_each, reference_indicator,
+    sddm_check, skipped_zero_impedance, susceptance_diag, unit_vector,
 };
-pub use opf_pipeline::{DcOpfOptions, DcOpfOutputs, write_dcopf_bundle};
 pub use pipeline::{
     MatrixKind, Pipeline, PipelineOutputs, RhsKind, build_kind, matrix_stats_for_kind,
     zero_impedance_rule_for_kind, zero_impedance_skips_for_kind,

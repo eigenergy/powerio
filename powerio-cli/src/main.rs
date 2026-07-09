@@ -12,12 +12,13 @@ use anyhow::Context;
 use clap::{Parser, Subcommand, ValueEnum};
 use powerio_matrix::format::routing::{Detection, JsonClass, SourceFormat as DetectedFormat};
 use powerio_matrix::io::gridfm::{GridfmOptions, numbered_snapshots, write_gridfm_batch};
-use powerio_matrix::matrix::{BuildOptions, DcConvention, Scheme, Units, sddm_check};
-use powerio_matrix::opf_pipeline::{DcOpfOptions, write_dcopf_bundle};
+use powerio_matrix::matrix::{BuildOptions, DcConvention, Scheme, sddm_check};
 use powerio_matrix::pipeline::{MatrixKind, Pipeline, RhsKind};
 use powerio_matrix::synth::{SynthSpec, Topology};
 use powerio_matrix::{MissingGenCostPolicy, SensitivityOptions, SensitivitySolver, WriteOptions};
 use powerio_pkg::{NetworkPackage, Origin, READ_GRIDFM_FIDELITY_WARNING, SourceDescriptor};
+use powerio_prob::matrix::{DcOpfBundleMetadata, DcOpfBundleOptions, write_dcopf_bundle};
+use powerio_prob::{DcOpfOptions, Units, build_dc_opf_instance};
 use serde_json::json;
 mod tui;
 
@@ -885,13 +886,25 @@ fn run_dcopf(
     let mpc = powerio_matrix::parse_matpower_file(input)
         .with_context(|| format!("parse {}", input.display()))?;
     let cost_opts = write_options(missing_gen_cost, default_gen_cost, gen_cost_csv)?;
-    let opts = DcOpfOptions {
-        convention,
-        units,
-        missing_gen_cost: cost_opts.missing_gen_cost,
-        gen_cost_patches: cost_opts.gen_cost_patches,
+    let mut policy_network = mpc.clone();
+    let cost_report = policy_network
+        .apply_gen_cost_policy(&cost_opts.gen_cost_patches, cost_opts.missing_gen_cost)?;
+    let view = powerio_matrix::IndexedNetwork::new(&policy_network);
+    let instance = build_dc_opf_instance(
+        &view,
+        &DcOpfOptions {
+            convention,
+            units,
+            ..DcOpfOptions::default()
+        },
+    )?;
+    let bundle_options = DcOpfBundleOptions {
+        metadata: DcOpfBundleMetadata {
+            cost_policy: cost_opts.missing_gen_cost,
+            cost_report,
+        },
     };
-    let outputs = write_dcopf_bundle(&mpc, output, &opts)
+    let outputs = write_dcopf_bundle(&instance, output, &bundle_options)
         .with_context(|| format!("export DC OPF bundle for {}", input.display()))?;
     tracing::info!(
         case = %mpc.name,

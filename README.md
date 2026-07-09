@@ -57,7 +57,8 @@ This repository contains multiple packages.
 
 ```
 powerio          # parser, Network model, source retaining writers, converters
-powerio-matrix   # sparse matrices, DC sensitivity factors, graph representations
+powerio-matrix   # generic sparse matrices, sensitivity factors, graph projections
+powerio-prob     # complete problem instances; optional matrix projections
 powerio-dist     # multiconductor distribution model, dss/PMD/BMOPF converters
 powerio-pkg      # .pio.json document metadata and model JSON
 powerio-cli      # the `powerio` command and ratatui TUI
@@ -79,6 +80,7 @@ Language API map: [languages guide](https://eigenergy.github.io/powerio/guide/la
 ```
 cargo add powerio
 cargo add powerio-matrix
+cargo add powerio-prob
 cargo install powerio-cli
 
 pip install powerio

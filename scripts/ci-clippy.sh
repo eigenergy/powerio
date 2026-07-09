@@ -44,6 +44,7 @@ case "$target" in
     run cargo clippy --all-targets \
       -p powerio \
       -p powerio-matrix \
+      -p powerio-prob \
       -p powerio-cli \
       -p powerio-capi \
       -p powerio-dist \

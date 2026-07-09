@@ -3,7 +3,8 @@
 The `powerio-matrix` crate builds sparse matrices and graph outputs for common power system representations. The outputs are derived from a parsed `Network`. The builders take the densely indexed `IndexedNetwork`, which maps bus ids to a
 contiguous \\([0,n)\\).
 
-The DC OPF bundle has its own schema in
+`powerio-prob` builds problem instances and its `matrix` feature projects those
+instances into sparse operators. The DC OPF bundle schema is in
 [the DC OPF bundle guide](https://eigenergy.github.io/powerio/guide/dcopf-bundle.html). Per-builder API detail is in the
 [crate docs](https://eigenergy.github.io/powerio/powerio_matrix/).
 
@@ -35,9 +36,9 @@ be large. The iterative path requires positive finite branch susceptances, so
 the grounded DC bus susceptance matrix is positive definite after reference
 coverage is checked; the dense path remains the fallback for nonsingular
 indefinite cases.
-Every connected component must contain at least one reference bus.
-The DC OPF
-instance bundle (\\(A\\), \\(b\\), \\(L\\), costs, bounds, thermal limits, \\(C_g\\)) is documented in
+Every connected component must contain at least one reference bus. The DC OPF
+instance bundle (\\(A\\), \\(b\\), \\(L\\), costs, bounds, thermal limits,
+\\(C_g\\)) is produced by `powerio-prob` and documented in
 [the DC OPF bundle guide](https://eigenergy.github.io/powerio/guide/dcopf-bundle.html).
 
 `Bp` and `Bpp` are the fast decoupled power flow matrices from MATPOWER
@@ -102,7 +103,7 @@ are returned as warnings.
   phase shift injection. The signed incidence matrix \\(A\\) combines with
   \\(b\\) to form the DC bus susceptance matrix
   \\(L = A \operatorname{diag}(b) A^\mathsf{T}\\), which feeds PTDF/LODF and the
-  DC OPF bundle. The default `PaperPure` is the textbook DC power flow weight
+  DC OPF matrix projection. The default `PaperPure` is the textbook DC power flow weight
   \\(b = 1/x\\), taps and shifts ignored; the resulting
   \\(L = A \operatorname{diag}(b) A^\mathsf{T}\\)
   matches MATPOWER `Bp` under `Scheme::Xb` when phase shifts are zero.

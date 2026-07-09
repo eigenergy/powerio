@@ -113,8 +113,8 @@ pub(crate) fn ground_with(matrix: &CsMat<f64>, g: &Grounding) -> CsMat<f64> {
 }
 
 /// Maps indices between the full `[0, n)` space and the grounded `[0, n−1)`
-/// space (row/column `r` removed). Used by the DC OPF interior point operators
-/// (the `kkt` feature) to place a grounded solve back into full bus order.
+/// space (row/column `r` removed). Problem specific solvers use it to place a
+/// grounded solve back into full bus order.
 #[derive(Debug, Clone, Copy)]
 pub struct GroundedIndexMap {
     pub n: usize,

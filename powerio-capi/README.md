@@ -271,5 +271,5 @@ ABI is Arrow COO plus `matrix_bus` and `matrix_branch` axis map tables; C stays
 language neutral, while Julia, Python, and other bindings own their native
 sparse matrix assembly. Runtime consumers can call
 `pio_matrix_available()` before selecting those table ids. Larger matrix
-families such as PTDF, LODF, and DC OPF bundles still live in `powerio-matrix`
-and are not C ABI surfaces yet.
+PTDF and LODF remain in `powerio-matrix`. DC OPF problem instances and bundles
+live in `powerio-prob`; they are not C ABI surfaces yet.

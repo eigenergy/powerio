@@ -27,10 +27,9 @@ use pyo3::types::{PyDict, PyList};
 use sprs::CsMat;
 
 use powerio_matrix::matrix::{
-    BuildOptions, DcConvention, Scheme, Units, build_adjacency, build_bdoubleprime, build_bprime,
+    BuildOptions, DcConvention, Scheme, build_adjacency, build_bdoubleprime, build_bprime,
     build_incidence, build_lacpf, build_lodf, build_ptdf, build_weighted_laplacian, build_ybus,
 };
-use powerio_matrix::opf_pipeline::{DcOpfOptions, write_dcopf_bundle as write_bundle};
 use powerio_matrix::{
     DisplayData, IndexCore, IndexedNetwork, MissingGenCostPolicy, Network, NormalizeOptions,
     POWER_MODELS_ANGLE_BOUND_PAD, PwdDisplay, WriteOptions,
@@ -39,6 +38,10 @@ use powerio_pkg::{
     DiagnosticSeverity, NetworkPackage, OperatingPointSeries, Origin,
     READ_TRANSMISSION_PARSE_WARNING, SourceDescriptor,
 };
+use powerio_prob::matrix::{
+    DcOpfBundleMetadata, DcOpfBundleOptions, write_dcopf_bundle as write_bundle,
+};
+use powerio_prob::{DcOpfOptions, Units, build_dc_opf_instance};
 
 #[cfg(feature = "gridfm")]
 use powerio_matrix::io::gridfm::{
@@ -1062,13 +1065,27 @@ impl PyNetwork {
             gen_cost_csv,
             MissingGenCostPolicy::Require,
         )?;
-        let opts = DcOpfOptions {
-            convention: parse_convention(convention.unwrap_or("paper"))?,
-            units: parse_units(units.unwrap_or("perunit"))?,
-            missing_gen_cost: cost_opts.missing_gen_cost,
-            gen_cost_patches: cost_opts.gen_cost_patches,
+        let mut policy_network = self.inner.clone();
+        let cost_report = policy_network
+            .apply_gen_cost_policy(&cost_opts.gen_cost_patches, cost_opts.missing_gen_cost)
+            .map_err(to_pyerr)?;
+        let view = IndexedNetwork::new(&policy_network);
+        let instance = build_dc_opf_instance(
+            &view,
+            &DcOpfOptions {
+                convention: parse_convention(convention.unwrap_or("paper"))?,
+                units: parse_units(units.unwrap_or("perunit"))?,
+                ..DcOpfOptions::default()
+            },
+        )
+        .map_err(to_pyerr)?;
+        let options = DcOpfBundleOptions {
+            metadata: DcOpfBundleMetadata {
+                cost_policy: cost_opts.missing_gen_cost,
+                cost_report,
+            },
         };
-        let outputs = write_bundle(&self.inner, out_dir, &opts).map_err(to_pyerr)?;
+        let outputs = write_bundle(&instance, out_dir, &options).map_err(to_pyerr)?;
         dir_files_dict(py, &outputs.dir, &outputs.files)
     }
 
