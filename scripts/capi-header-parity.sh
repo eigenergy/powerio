@@ -6,12 +6,12 @@ cd "$(dirname "$0")/.."
 tmp="$(mktemp -d)"
 trap 'rm -rf "$tmp"' EXIT
 
-grep -oE 'extern "C" fn pio_[a-z_]+' powerio-capi/src/lib.rs \
-    | grep -oE 'pio_[a-z_]+' \
+grep -oE 'extern "C" fn pio_[a-z0-9_]+' powerio-capi/src/lib.rs \
+    | grep -oE 'pio_[a-z0-9_]+' \
     | sort -u >"$tmp/rs_syms"
 
-grep -oE 'pio_[a-z_]+ *\(' powerio-capi/include/powerio.h \
-    | grep -oE 'pio_[a-z_]+' \
+grep -oE 'pio_[a-z0-9_]+ *\(' powerio-capi/include/powerio.h \
+    | grep -oE 'pio_[a-z0-9_]+' \
     | sort -u >"$tmp/h_syms"
 
 if ! diff -u "$tmp/rs_syms" "$tmp/h_syms"; then

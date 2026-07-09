@@ -29,26 +29,55 @@ use powerio::{BusId, IndexCore, Network, NormalizedSolverTables, SolverArcTermin
 
 /// Table selectors for [`pio_to_arrow`](crate::pio_to_arrow); the C
 /// header mirrors these as `PIO_ARROW_TABLE_*`.
+///
+/// Raw tables use source units and external bus ids. Solver tables use
+/// normalized per unit/radian values and dense zero based row ids. Matrix tables
+/// use COO triplets plus schema metadata, and their row and column axes are
+/// described by the `matrix_bus` and `matrix_branch` axis map tables.
+///
+/// Consumers should prefer `pio_arrow_catalog_json` when available instead of
+/// hard coding ids. These macros remain for C callers that compile against this
+/// header.
 pub const PIO_ARROW_TABLE_BUS: i32 = 0;
+/// Raw branch table in source units; bus columns use external bus ids.
 pub const PIO_ARROW_TABLE_BRANCH: i32 = 1;
+/// Raw generator table in source units; bus columns use external bus ids.
 pub const PIO_ARROW_TABLE_GEN: i32 = 2;
+/// Raw load table in source units; bus columns use external bus ids.
 pub const PIO_ARROW_TABLE_LOAD: i32 = 3;
+/// Raw shunt table in source units; bus columns use external bus ids.
 pub const PIO_ARROW_TABLE_SHUNT: i32 = 4;
+/// Raw switch table in source units; bus columns use external bus ids.
 pub const PIO_ARROW_TABLE_SWITCH: i32 = 5;
+/// Normalized dense bus table; `index` is the solver bus index.
 pub const PIO_ARROW_TABLE_SOLVER_BUS: i32 = 6;
+/// Normalized dense load table keyed by solver load index and solver bus index.
 pub const PIO_ARROW_TABLE_SOLVER_LOAD: i32 = 7;
+/// Normalized dense shunt table keyed by solver shunt index and solver bus index.
 pub const PIO_ARROW_TABLE_SOLVER_SHUNT: i32 = 8;
+/// Normalized dense branch table keyed by solver branch index and bus endpoints.
 pub const PIO_ARROW_TABLE_SOLVER_BRANCH: i32 = 9;
+/// Normalized dense switch table keyed by solver switch index and bus endpoints.
 pub const PIO_ARROW_TABLE_SOLVER_SWITCH: i32 = 10;
+/// Normalized arc table, one row per branch terminal.
 pub const PIO_ARROW_TABLE_SOLVER_ARC: i32 = 11;
+/// Normalized dense generator table keyed by solver generator index and bus index.
 pub const PIO_ARROW_TABLE_SOLVER_GEN: i32 = 12;
+/// Normalized dense storage table keyed by solver storage index and bus index.
 pub const PIO_ARROW_TABLE_SOLVER_STORAGE: i32 = 13;
+/// Normalized dense HVDC table keyed by solver HVDC index and bus endpoints.
 pub const PIO_ARROW_TABLE_SOLVER_HVDC: i32 = 14;
+/// Y bus COO table. Rows and columns use the `matrix_bus` axis.
 pub const PIO_ARROW_TABLE_YBUS: i32 = 15;
+/// Signed incidence COO table. Rows use `matrix_bus`; columns use `matrix_branch`.
 pub const PIO_ARROW_TABLE_INCIDENCE: i32 = 16;
+/// MATPOWER Bp COO table. Rows and columns use `matrix_bus`.
 pub const PIO_ARROW_TABLE_BPRIME: i32 = 17;
+/// MATPOWER Bpp COO table. Rows and columns use the `matrix_bus` axis.
 pub const PIO_ARROW_TABLE_BDOUBLEPRIME: i32 = 18;
+/// Matrix bus axis map: dense index, source bus id, source row, reference flag, component.
 pub const PIO_ARROW_TABLE_MATRIX_BUS: i32 = 19;
+/// Matrix branch axis map: incidence column, source row, and endpoint bus ids.
 pub const PIO_ARROW_TABLE_MATRIX_BRANCH: i32 = 20;
 
 const ARROW_SCHEMA_VERSION: &str = "1";

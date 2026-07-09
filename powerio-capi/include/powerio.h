@@ -108,8 +108,8 @@ struct ArrowSchema;
  * `pio_*` signature or documented behavior, including removing a supported
  * format token from the C API. New additive symbols do not require a bump.
  * A consumer compares [`pio_abi_version`] against the value it was built
- * against (the `PIO_ABI_VERSION` macro in `powerio.h`) and refuses a mismatched
- * library instead of calling in blind.
+ * against (the `PIO_ABI_VERSION` macro in `powerio.h`) and refuses a
+ * mismatched library instead of calling in blind.
  *
  * v4 froze the naming grammar and conventions (see the header preamble); the
  * C API evolves additively from here: new data means new symbols, and rich
@@ -154,102 +154,142 @@ struct ArrowSchema;
 #endif
 
 #if defined(PIO_ARROW)
-/** Raw branch table in source units; bus columns use external bus ids. */
+/**
+ * Raw branch table in source units; bus columns use external bus ids.
+ */
 #define PIO_ARROW_TABLE_BRANCH 1
 #endif
 
 #if defined(PIO_ARROW)
-/** Raw generator table in source units; bus columns use external bus ids. */
+/**
+ * Raw generator table in source units; bus columns use external bus ids.
+ */
 #define PIO_ARROW_TABLE_GEN 2
 #endif
 
 #if defined(PIO_ARROW)
-/** Raw load table in source units; bus columns use external bus ids. */
+/**
+ * Raw load table in source units; bus columns use external bus ids.
+ */
 #define PIO_ARROW_TABLE_LOAD 3
 #endif
 
 #if defined(PIO_ARROW)
-/** Raw shunt table in source units; bus columns use external bus ids. */
+/**
+ * Raw shunt table in source units; bus columns use external bus ids.
+ */
 #define PIO_ARROW_TABLE_SHUNT 4
 #endif
 
 #if defined(PIO_ARROW)
-/** Raw switch table in source units; bus columns use external bus ids. */
+/**
+ * Raw switch table in source units; bus columns use external bus ids.
+ */
 #define PIO_ARROW_TABLE_SWITCH 5
 #endif
 
 #if defined(PIO_ARROW)
-/** Normalized dense bus table; `index` is the solver bus index. */
+/**
+ * Normalized dense bus table; `index` is the solver bus index.
+ */
 #define PIO_ARROW_TABLE_SOLVER_BUS 6
 #endif
 
 #if defined(PIO_ARROW)
-/** Normalized dense load table keyed by solver load index and solver bus index. */
+/**
+ * Normalized dense load table keyed by solver load index and solver bus index.
+ */
 #define PIO_ARROW_TABLE_SOLVER_LOAD 7
 #endif
 
 #if defined(PIO_ARROW)
-/** Normalized dense shunt table keyed by solver shunt index and solver bus index. */
+/**
+ * Normalized dense shunt table keyed by solver shunt index and solver bus index.
+ */
 #define PIO_ARROW_TABLE_SOLVER_SHUNT 8
 #endif
 
 #if defined(PIO_ARROW)
-/** Normalized dense branch table keyed by solver branch index and bus endpoints. */
+/**
+ * Normalized dense branch table keyed by solver branch index and bus endpoints.
+ */
 #define PIO_ARROW_TABLE_SOLVER_BRANCH 9
 #endif
 
 #if defined(PIO_ARROW)
-/** Normalized dense switch table keyed by solver switch index and bus endpoints. */
+/**
+ * Normalized dense switch table keyed by solver switch index and bus endpoints.
+ */
 #define PIO_ARROW_TABLE_SOLVER_SWITCH 10
 #endif
 
 #if defined(PIO_ARROW)
-/** Normalized arc table, one row per branch terminal. */
+/**
+ * Normalized arc table, one row per branch terminal.
+ */
 #define PIO_ARROW_TABLE_SOLVER_ARC 11
 #endif
 
 #if defined(PIO_ARROW)
-/** Normalized dense generator table keyed by solver generator index and bus index. */
+/**
+ * Normalized dense generator table keyed by solver generator index and bus index.
+ */
 #define PIO_ARROW_TABLE_SOLVER_GEN 12
 #endif
 
 #if defined(PIO_ARROW)
-/** Normalized dense storage table keyed by solver storage index and bus index. */
+/**
+ * Normalized dense storage table keyed by solver storage index and bus index.
+ */
 #define PIO_ARROW_TABLE_SOLVER_STORAGE 13
 #endif
 
 #if defined(PIO_ARROW)
-/** Normalized dense HVDC table keyed by solver HVDC index and bus endpoints. */
+/**
+ * Normalized dense HVDC table keyed by solver HVDC index and bus endpoints.
+ */
 #define PIO_ARROW_TABLE_SOLVER_HVDC 14
 #endif
 
 #if defined(PIO_ARROW)
-/** Y bus COO table. Rows and columns use the `matrix_bus` axis. */
+/**
+ * Y bus COO table. Rows and columns use the `matrix_bus` axis.
+ */
 #define PIO_ARROW_TABLE_YBUS 15
 #endif
 
 #if defined(PIO_ARROW)
-/** Signed incidence COO table. Rows use `matrix_bus`; columns use `matrix_branch`. */
+/**
+ * Signed incidence COO table. Rows use `matrix_bus`; columns use `matrix_branch`.
+ */
 #define PIO_ARROW_TABLE_INCIDENCE 16
 #endif
 
 #if defined(PIO_ARROW)
-/** MATPOWER Bp COO table. Rows and columns use `matrix_bus`. */
+/**
+ * MATPOWER Bp COO table. Rows and columns use `matrix_bus`.
+ */
 #define PIO_ARROW_TABLE_BPRIME 17
 #endif
 
 #if defined(PIO_ARROW)
-/** MATPOWER Bpp COO table. Rows and columns use the `matrix_bus` axis. */
+/**
+ * MATPOWER Bpp COO table. Rows and columns use the `matrix_bus` axis.
+ */
 #define PIO_ARROW_TABLE_BDOUBLEPRIME 18
 #endif
 
 #if defined(PIO_ARROW)
-/** Matrix bus axis map: dense index, source bus id, source row, reference flag, component. */
+/**
+ * Matrix bus axis map: dense index, source bus id, source row, reference flag, component.
+ */
 #define PIO_ARROW_TABLE_MATRIX_BUS 19
 #endif
 
 #if defined(PIO_ARROW)
-/** Matrix branch axis map: incidence column, source row, and endpoint bus ids. */
+/**
+ * Matrix branch axis map: incidence column, source row, and endpoint bus ids.
+ */
 #define PIO_ARROW_TABLE_MATRIX_BRANCH 20
 #endif
 
@@ -501,7 +541,7 @@ double pio_base_mva(const PioNetwork *net);
 
 /**
  * Case name. Writes UTF-8 bytes into `out`, up to `cap`, NUL-terminates when
- * possible, and returns the byte length needed excluding the NUL. NULL or
+ * possible, and returns the byte length needed excluding the NUL. `NULL` or
  * `cap == 0` is a size query.
  */
 size_t pio_network_name(const PioNetwork *net, char *out, size_t cap);
@@ -708,11 +748,11 @@ size_t pio_bus_shunt(const PioNetwork *net, double *gs, double *bs, size_t cap);
 /**
  * Export one network table over the Arrow C Data Interface: the `to_`
  * conversion whose output type is Arrow structs rather than a string, and the
- * bulk table path. Tables 0..5 are raw network tables; tables 6..14 are
- * normalized solver tables with per unit/radian values and dense zero based row
- * ids; the matrix tables carry COO triplets, dimensions, and axis metadata.
- * New or richer columns arrive in the Arrow schema, leaving the C signatures
- * fixed.
+ * bulk plane this ABI evolves on. Tables 0..5 are raw network tables; tables
+ * 6..14 are normalized solver tables with per unit/radian values and dense
+ * zero based row ids; the matrix tables carry COO triplets in that dense index
+ * space with dimensions in schema metadata. New or richer columns arrive in
+ * the Arrow schema, leaving the C signatures fixed.
  *
  * `table` is one of the `PIO_ARROW_TABLE_*` selectors. Raw table columns use
  * EXTERNAL bus ids (the `pio_bus_ids` id space), not the gridfm schema. On
@@ -734,18 +774,18 @@ int32_t pio_to_arrow(const PioNetwork *net,
 
 #if defined(PIO_ARROW)
 /**
- * Return the Arrow table catalog as owned compact JSON. The catalog is feature
- * based rather than handle based: it describes what this library build can
- * export, not what a particular network contains.
+ * Return the Arrow table catalog as owned compact JSON.
  *
- * Top level fields: `schema_version`, `producer`, and `tables`.
- * Each table entry includes `id`, `name`, `schema_version`, `format`,
+ * The catalog is feature based rather than handle based: it describes what
+ * this library build can export, not what a particular network contains. Top
+ * level fields are `schema_version`, `producer`, and `tables`. Each table
+ * entry includes `id`, `name`, `schema_version`, `format`,
  * `feature_requirements`, `available`, `row_axis`, `col_axis`, `units`, and
  * `columns`. Each column entry includes `name`, `type`, and `nullable`.
  *
- * The returned string is allocated by PowerIO. Free it with `pio_string_free`.
- * On error, this returns NULL and writes the message into `errbuf`. Only built
- * with the `arrow` cargo feature.
+ * Free the returned string with [`pio_string_free`]. On error this returns
+ * NULL and writes the message into `errbuf`. Only built with the `arrow` cargo
+ * feature.
  */
 char *pio_arrow_catalog_json(char *errbuf, size_t errlen);
 #endif
@@ -933,6 +973,22 @@ PioPackage *pio_package_lower_multiconductor_to_balanced(const PioPackage *pkg,
                                                          double base_mva,
                                                          char *errbuf,
                                                          size_t errlen);
+#endif
+
+#if defined(PIO_PKG)
+/**
+ * Build the GO Challenge 3 SCOPF instance
+ * (`powerio_pkg::goc3_scopf::goc3_scopf_data`) from GOC3 JSON input text and
+ * return it as JSON: buses, shunts, AC/DC branches, transformer control
+ * sets, producers, consumers, zonal reserves, device-zone membership,
+ * multi-period energy windows, flattened price blocks, and per-contingency
+ * survivor sets, with no model-specific stacked variable numbering. Mirrors
+ * PowerIO.jl's public `goc3_scopf_data`; the five `_goc3_*` builders behind
+ * it are internal there too, so this is the only GOC3 SCOPF C ABI symbol
+ * (see `powerio-capi/README.md`). Returns an owned C string (free with
+ * [`pio_string_free`]) or `NULL` on error.
+ */
+char *pio_goc3_scopf_data_json(const char *text, char *errbuf, size_t errlen);
 #endif
 
 #if defined(PIO_DIST)
