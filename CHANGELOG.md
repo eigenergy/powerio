@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.7.0 - Unreleased
+
+- Add `powerio-prob` for complete numerical problem instances. Its default
+  build is matrix free; the `matrix` feature adds sparse projections, DC OPF
+  bundle output, and experimental KKT operators.
+- Move DC OPF instance types and bundle output out of `powerio-matrix`.
+
 ## 0.6.3
 
 - Arrow matrix axes (#234): the C ABI Arrow export gains a table catalog and

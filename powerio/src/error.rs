@@ -48,6 +48,11 @@ pub enum Error {
     #[error("generator {gen_index} has no cost data")]
     MissingGenCost { gen_index: usize },
 
+    #[error(
+        "bus {bus_id} has several in-service generators; an exact nodal quadratic cost reduction is not available"
+    )]
+    MultipleGeneratorsAtBus { bus_id: BusId },
+
     #[error("default generator cost field `{field}` is not finite: {value}")]
     NonFiniteGenCost { field: &'static str, value: f64 },
 
@@ -217,6 +222,7 @@ impl Error {
             | Error::DimensionMismatch { .. }
             | Error::NoGenerators
             | Error::MissingGenCost { .. }
+            | Error::MultipleGeneratorsAtBus { .. }
             | Error::NonFiniteGenCost { .. }
             | Error::InvalidGenCostPatch { .. }
             | Error::UnsupportedCostModel { .. }

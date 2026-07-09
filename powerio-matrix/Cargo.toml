@@ -12,14 +12,11 @@ documentation = "https://docs.rs/powerio-matrix"
 keywords = ["matpower", "sparse", "ptdf", "dc-opf"]
 categories = ["science", "mathematics"]
 
-# Render the feature-gated surface (gridfm Parquet export, the kkt operators) on
-# docs.rs when this crate is published.
+# Render the feature-gated gridfm Parquet export on docs.rs.
 [package.metadata.docs.rs]
 all-features = true
 
 [features]
-# Experimental DC OPF interior point operators (optional).
-kkt = []
 # GridFM interchange: write the gridfm-datakit Parquet schema (and the shared
 # Arrow record batches behind it). Pulls in arrow + parquet, off by default.
 gridfm = ["dep:arrow", "dep:parquet"]

@@ -3,7 +3,7 @@ name: Docs
 # Build the workspace rustdoc and publish it to GitHub Pages. This renders all
 # seven library crates, including powerio-capi and powerio-py (publish = false),
 # whose //! docs docs.rs would never host. docs.rs takes over for the published
-# crates (powerio, powerio-matrix, powerio-opf, powerio-dist, powerio-pkg) once
+# crates (powerio, powerio-matrix, powerio-prob, powerio-dist, powerio-pkg) once
 # they reach crates.io.
 # PRs build the docs too (so a broken intra-doc link fails review, not main),
 # but only push to main / dispatch deploys to Pages; see the `deploy` gate.
@@ -43,11 +43,11 @@ jobs:
     - name: Install mdBook
       run: cargo install mdbook --version 0.5.2 --locked
     # -D warnings turns a broken intra-doc link into a failed build, so the docs
-    # can't rot silently. --all-features renders the gridfm/arrow/kkt surface.
+    # can't rot silently. --all-features renders each feature gated surface.
     - name: Build docs
       env:
         RUSTDOCFLAGS: "-D warnings"
-      run: cargo doc --no-deps --all-features -p powerio -p powerio-matrix -p powerio-opf -p powerio-dist -p powerio-pkg -p powerio-capi -p powerio-py
+      run: cargo doc --no-deps --all-features -p powerio -p powerio-matrix -p powerio-prob -p powerio-dist -p powerio-pkg -p powerio-capi -p powerio-py
     - name: Build Python API docs
       run: |
         python -m pip install --upgrade pip
@@ -122,7 +122,7 @@ jobs:
             <dt>released / docs.rs</dt>
             <dd><a href="https://docs.rs/powerio">powerio</a>
                 <a href="https://docs.rs/powerio-matrix">powerio-matrix</a>
-                <a href="https://docs.rs/powerio-opf">powerio-opf</a>
+                <a href="https://docs.rs/powerio-prob">powerio-prob</a>
                 <a href="https://docs.rs/powerio-dist">powerio-dist</a>
                 <a href="https://docs.rs/powerio-pkg">powerio-pkg</a></dd>
           </div>
@@ -130,7 +130,7 @@ jobs:
             <dt>development / main</dt>
             <dd><a href="powerio/index.html">powerio</a>
                 <a href="powerio_matrix/index.html">powerio-matrix</a>
-                <a href="powerio_opf/index.html">powerio-opf</a>
+                <a href="powerio_prob/index.html">powerio-prob</a>
                 <a href="powerio_dist/index.html">powerio-dist</a>
                 <a href="powerio_pkg/index.html">powerio-pkg</a>
                 <a href="powerio_capi/index.html">powerio-capi</a>

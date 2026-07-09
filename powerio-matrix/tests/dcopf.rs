@@ -4,10 +4,9 @@
 use powerio_matrix::IndexedNetwork;
 use powerio_matrix::io::{read_mtx, write_sensitivity_mtx_with_options};
 use powerio_matrix::{
-    Branch, BuildOptions, Bus, BusId, BusType, DcConvention, Error, GenCost, Generator,
-    MissingGenCostPolicy, Network, Scheme, Units, build_adjacency, build_bprime, build_flow_map,
-    build_incidence, build_lodf, build_opf_instance, build_ptdf, build_weighted_laplacian,
-    build_ybus, ground_at, parse_matpower_file,
+    Branch, BuildOptions, Bus, BusId, BusType, DcConvention, Error, GenCost, Generator, Network,
+    Scheme, build_adjacency, build_bprime, build_flow_map, build_incidence, build_lodf, build_ptdf,
+    build_weighted_laplacian, build_ybus, ground_at, parse_matpower_file,
 };
 use powerio_matrix::{
     SensitivityOptions, SensitivitySolver, SensitivitySolverPath, build_ptdf_lodf,
@@ -67,15 +66,6 @@ fn assert_matrix_close(left: &CsMat<f64>, right: &CsMat<f64>, tol: f64, label: &
             );
         }
     }
-}
-
-fn operator<'a>(meta: &'a serde_json::Value, name: &str) -> &'a serde_json::Value {
-    meta["operators"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .find(|op| op["name"] == name)
-        .unwrap_or_else(|| panic!("missing operator {name}"))
 }
 
 /// Positive definiteness via dense Cholesky; small matrices only.
@@ -247,136 +237,6 @@ fn flow_map_reconstructs_laplacian() {
             assert!(s.abs() < 1e-9, "{path}: BAᵀ row {k} sum {s}");
         }
     }
-}
-
-#[test]
-fn opf_instance_shapes_and_cg() {
-    for path in CASES {
-        let case = load(path);
-        let view = IndexedNetwork::new(&case);
-        let inc =
-            build_incidence(&view, DcConvention::PaperPure, &BuildOptions::default()).unwrap();
-        let opf = build_opf_instance(&view, &inc, Units::PerUnit).unwrap();
-        let (n, m, n_gen) = (view.n(), inc.m(), opf.n_gen());
-        assert_eq!(opf.bus.q.len(), n);
-        assert_eq!(opf.bus.c.len(), n);
-        assert_eq!(opf.bus.pmax.len(), n);
-        assert_eq!(opf.bus.p_d.len(), n);
-        assert_eq!(opf.f_max.len(), m);
-        assert_eq!(opf.gen_costs.q.len(), n_gen);
-        assert_eq!(opf.c_g.rows(), n);
-        assert_eq!(opf.c_g.cols(), n_gen);
-        // C_g: one 1 per generator column.
-        assert_eq!(opf.c_g.nnz(), n_gen);
-        let mut col_sum = vec![0.0; n_gen];
-        for (&v, (_, g)) in &opf.c_g {
-            assert!((v - 1.0).abs() < 1e-12);
-            col_sum[g] += v;
-        }
-        assert!(col_sum.iter().all(|&s| (s - 1.0).abs() < 1e-12));
-    }
-}
-
-#[test]
-fn bundle_round_trips() {
-    let case = load("../tests/data/case14.m");
-    let dir = std::env::temp_dir().join("powerio_dcopf_test");
-    let _ = std::fs::remove_dir_all(&dir);
-    let out =
-        powerio_matrix::write_dcopf_bundle(&case, &dir, &powerio_matrix::DcOpfOptions::default())
-            .unwrap();
-    assert!(out.dir.join("A.mtx").exists());
-    assert!(out.dir.join("L.mtx").exists());
-    assert!(out.dir.join("dcopf_meta.json").exists());
-
-    let a = powerio_matrix::io::read_mtx(out.dir.join("A.mtx")).unwrap();
-    assert_eq!(a.rows(), case.buses.len());
-    let l = powerio_matrix::io::read_mtx(out.dir.join("L.mtx")).unwrap();
-    assert_eq!(l.rows(), case.buses.len());
-    assert_eq!(l.cols(), case.buses.len());
-    let _ = std::fs::remove_dir_all(&dir);
-}
-
-#[test]
-fn dcopf_bundle_can_fill_missing_costs_explicitly() {
-    let case = net_with_gens(
-        "nocost_dcopf",
-        vec![bus(1, BusType::Ref), bus(2, BusType::Pq)],
-        vec![branch(1, 2, 0.1)],
-        vec![gen_with_cost(1, None)],
-    );
-    let dir = std::env::temp_dir().join("powerio_dcopf_fill_cost_test");
-    let _ = std::fs::remove_dir_all(&dir);
-    let opts = powerio_matrix::DcOpfOptions {
-        missing_gen_cost: MissingGenCostPolicy::zero(),
-        ..Default::default()
-    };
-    let out = powerio_matrix::write_dcopf_bundle(&case, &dir, &opts).unwrap();
-    let meta: serde_json::Value =
-        serde_json::from_str(&std::fs::read_to_string(out.dir.join("dcopf_meta.json")).unwrap())
-            .unwrap();
-    assert_eq!(meta["synthesized_gen_costs"], 1);
-    assert_eq!(meta["cost_policy"]["mode"], "fill");
-    let q_gen = powerio_matrix::io::read_vector_mtx(out.dir.join("q_gen.mtx")).unwrap();
-    let c_gen = powerio_matrix::io::read_vector_mtx(out.dir.join("c_gen.mtx")).unwrap();
-    assert_eq!(q_gen, vec![0.0]);
-    assert_eq!(c_gen, vec![0.0]);
-    let _ = std::fs::remove_dir_all(&dir);
-}
-
-#[test]
-fn dcopf_manifest_records_zero_impedance_skips() {
-    let case = net_with_gens(
-        "zero_dcopf",
-        vec![bus(1, BusType::Ref), bus(2, BusType::Pq)],
-        vec![branch(1, 2, 0.0), branch(1, 2, 0.1)],
-        vec![gen_with_cost(
-            1,
-            Some(GenCost::new(2, 0.0, 0.0, vec![0.0, 1.0, 0.0])),
-        )],
-    );
-    let dir = std::env::temp_dir().join("powerio_dcopf_zero_impedance_test");
-    let _ = std::fs::remove_dir_all(&dir);
-    let out =
-        powerio_matrix::write_dcopf_bundle(&case, &dir, &powerio_matrix::DcOpfOptions::default())
-            .unwrap();
-    let meta: serde_json::Value =
-        serde_json::from_str(&std::fs::read_to_string(out.dir.join("dcopf_meta.json")).unwrap())
-            .unwrap();
-
-    assert_eq!(meta["dimensions"]["n_source_branches"], 2);
-    assert_eq!(meta["dimensions"]["n_branch_columns"], 1);
-    assert_eq!(meta["zero_impedance"]["skip"], true);
-    assert_eq!(meta["zero_impedance"]["rule"], "Reactance");
-    assert_eq!(meta["zero_impedance"]["skipped"]["count"], 1);
-    assert_eq!(
-        meta["zero_impedance"]["skipped"]["branch_indices"],
-        serde_json::json!([0])
-    );
-    assert_eq!(meta["m"], 1);
-
-    let fmax = operator(&meta, "branch_flow_limit");
-    assert_eq!(fmax["file"], "fmax.mtx");
-    assert_eq!(fmax["rows"], 1);
-    assert_eq!(fmax["cols"], 1);
-    let _ = std::fs::remove_dir_all(&dir);
-}
-
-#[test]
-fn no_generators_errors() {
-    // A synthetic case has branches but no generators.
-    let spec = powerio_matrix::synth::SynthSpec {
-        topology: powerio_matrix::synth::Topology::Tree,
-        n: 16,
-        r_over_x: 0.1,
-        mean_x: 0.05,
-        seed: 1,
-    };
-    let case = powerio_matrix::synth::generate(&spec);
-    let view = IndexedNetwork::new(&case);
-    let inc = build_incidence(&view, DcConvention::PaperPure, &BuildOptions::default()).unwrap();
-    let err = build_opf_instance(&view, &inc, Units::PerUnit).unwrap_err();
-    assert!(matches!(err, Error::NoGenerators), "got {err:?}");
 }
 
 #[test]
@@ -703,14 +563,6 @@ fn poly_gen(bus_id: usize, pmax: f64, c2: f64, c1: f64) -> Generator {
     generator
 }
 
-/// DC OPF instance for `case` under the default PaperPure convention. Returns
-/// the `Result` so error-path tests can assert on the failure.
-fn opf_of(case: &Network, units: Units) -> powerio_matrix::Result<powerio_matrix::OpfInstance> {
-    let view = IndexedNetwork::new(case);
-    let inc = build_incidence(&view, DcConvention::PaperPure, &BuildOptions::default())?;
-    build_opf_instance(&view, &inc, units)
-}
-
 /// Symmetric 3-bus triangle, slack at bus 1, unit susceptance on every branch.
 /// Branch order fixes the incidence columns: e0=1→2, e1=1→3, e2=2→3.
 fn triangle() -> Network {
@@ -797,92 +649,6 @@ fn matpower_convention_tap_and_shift() {
     assert!((mp.b[0] - b_e).abs() < 1e-12, "b_e {} != {b_e}", mp.b[0]);
     assert!((mp.p_shift[0] - (-b_e * shift_rad)).abs() < 1e-12);
     assert!((mp.p_shift[1] - (b_e * shift_rad)).abs() < 1e-12);
-}
-
-#[test]
-fn bundle_vectors_round_trip() {
-    let case = load("../tests/data/case14.m");
-    let dir = std::env::temp_dir().join("powerio_dcopf_vectors_test");
-    let _ = std::fs::remove_dir_all(&dir);
-    let out =
-        powerio_matrix::write_dcopf_bundle(&case, &dir, &powerio_matrix::DcOpfOptions::default())
-            .unwrap();
-
-    // Default options are PaperPure + PerUnit; rebuild the instance to compare.
-    let view = IndexedNetwork::new(&case);
-    let inc = build_incidence(&view, DcConvention::PaperPure, &BuildOptions::default()).unwrap();
-    let opf = build_opf_instance(&view, &inc, Units::PerUnit).unwrap();
-
-    let check = |name: &str, want: &[f64]| {
-        let got = powerio_matrix::io::read_vector_mtx(out.dir.join(name)).unwrap();
-        assert_eq!(got.len(), want.len(), "{name}: length");
-        for (i, (&g, &w)) in got.iter().zip(want).enumerate() {
-            assert!((g - w).abs() < 1e-9, "{name}[{i}]={g} != {w}");
-        }
-    };
-    check("q.mtx", &opf.bus.q);
-    check("c.mtx", &opf.bus.c);
-    check("fmax.mtx", &opf.f_max);
-    check("pd.mtx", &opf.bus.p_d);
-    check("b.mtx", &inc.b);
-
-    // Manifest agrees with the case.
-    let meta: serde_json::Value =
-        serde_json::from_str(&std::fs::read_to_string(out.dir.join("dcopf_meta.json")).unwrap())
-            .unwrap();
-    assert_eq!(meta["schema"], "powerio.dcopf");
-    assert_eq!(meta["schema_version"], "0.1.0");
-    assert_eq!(meta["dimensions"]["n_buses"], view.n());
-    assert_eq!(
-        meta["dimensions"]["n_source_branches"],
-        view.branches().len()
-    );
-    assert_eq!(meta["dimensions"]["n_branch_columns"], inc.m());
-    assert_eq!(meta["dimensions"]["n_generators"], opf.n_gen());
-    assert_eq!(meta["dimensions"]["n_reference_buses"], 1);
-    assert_eq!(meta["dimensions"]["n_grounded_buses"], view.n() - 1);
-    assert_eq!(meta["index_base"]["dense"], 0);
-    assert_eq!(meta["index_base"]["matrix_market"], 1);
-    assert_eq!(meta["dc_convention"], "PaperPure");
-    assert_eq!(meta["build_options"]["skip_zero_impedance"], true);
-    assert_eq!(meta["zero_impedance"]["skipped"]["count"], 0);
-    assert_eq!(meta["grounding"]["grounded_operator"], "L_grounded");
-    assert_eq!(meta["grounding"]["reference_selector"], "e_r");
-    assert_eq!(meta["n_gen"].as_u64().unwrap() as usize, opf.n_gen());
-    let ref_buses: Vec<usize> = meta["reference_buses"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .map(|v| v.as_u64().unwrap() as usize)
-        .collect();
-    assert_eq!(
-        ref_buses,
-        IndexedNetwork::new(&case).reference_bus_indices()
-    );
-    assert_eq!(
-        meta["grounding"]["reference_buses"],
-        meta["reference_buses"]
-    );
-    assert_eq!(
-        meta["grounding"]["removed_rows_and_columns"],
-        meta["reference_buses"]
-    );
-    assert_eq!(meta["units"], "PerUnit");
-    assert_eq!(meta["convention"], "PaperPure");
-
-    let operators = meta["operators"].as_array().unwrap();
-    assert_eq!(operators.len(), 18);
-    let signed_incidence = operator(&meta, "signed_incidence");
-    assert_eq!(signed_incidence["file"], "A.mtx");
-    assert_eq!(signed_incidence["rows"], view.n());
-    assert_eq!(signed_incidence["cols"], inc.m());
-    assert_eq!(signed_incidence["index_space"], "bus_by_branch");
-    let grounded = operator(&meta, "grounded_laplacian");
-    assert_eq!(grounded["file"], "L_grounded.mtx");
-    assert_eq!(grounded["rows"], view.n() - ref_buses.len());
-    assert_eq!(grounded["cols"], view.n() - ref_buses.len());
-
-    let _ = std::fs::remove_dir_all(&dir);
 }
 
 #[test]
@@ -1147,49 +913,6 @@ fn incidence_matpower_pshift_invariant_to_normalization() {
 }
 
 #[test]
-fn perunit_scales_native_by_base() {
-    let case = load("../tests/data/case9.m");
-    let base = case.base_mva;
-    let native = opf_of(&case, Units::Native).unwrap();
-    let pu = opf_of(&case, Units::PerUnit).unwrap();
-    for i in 0..case.buses.len() {
-        assert!(
-            (pu.bus.q[i] - native.bus.q[i] * base * base).abs() < 1e-6,
-            "q[{i}]"
-        );
-        assert!(
-            (pu.bus.c[i] - native.bus.c[i] * base).abs() < 1e-6,
-            "c[{i}]"
-        );
-        assert!(
-            (pu.bus.pmax[i] - native.bus.pmax[i] / base).abs() < 1e-9,
-            "pmax[{i}]"
-        );
-        assert!(
-            (pu.bus.p_d[i] - native.bus.p_d[i] / base).abs() < 1e-9,
-            "pd[{i}]"
-        );
-    }
-}
-
-#[test]
-fn multi_generator_bus_sums_cost() {
-    // Two in-service generators on bus 1; the bus-indexed vectors sum them.
-    let case = net_with_gens(
-        "twogen",
-        vec![bus(1, BusType::Ref), bus(2, BusType::Pq)],
-        vec![branch(1, 2, 0.1)],
-        vec![poly_gen(1, 100.0, 1.0, 2.0), poly_gen(1, 50.0, 3.0, 4.0)],
-    );
-    let opf = opf_of(&case, Units::Native).unwrap();
-    assert_eq!(opf.n_gen(), 2);
-    let b0 = IndexedNetwork::new(&case).bus_index(BusId(1)).unwrap();
-    assert!((opf.bus.q[b0] - (opf.gen_costs.q[0] + opf.gen_costs.q[1])).abs() < 1e-12);
-    assert!((opf.bus.c[b0] - (opf.gen_costs.c[0] + opf.gen_costs.c[1])).abs() < 1e-12);
-    assert!((opf.bus.pmax[b0] - (opf.gen_costs.pmax[0] + opf.gen_costs.pmax[1])).abs() < 1e-12);
-}
-
-#[test]
 fn gencost_quadratic_branches() {
     let mk = |model: u8, ncost: usize, coeffs: Vec<f64>| {
         GenCost::with_ncost(model, 0.0, 0.0, ncost, coeffs)
@@ -1206,33 +929,4 @@ fn gencost_quadratic_branches() {
     assert_eq!(mk(2, 4, vec![1.0, 2.0, 3.0, 4.0]).quadratic(), None);
     // Coefficient slice shorter than ncost: rejected, not misread by position.
     assert_eq!(mk(2, 3, vec![1.0]).quadratic(), None);
-}
-
-#[test]
-fn opf_distinguishes_missing_from_unsupported_cost() {
-    let case = |name: &str, cost: Option<GenCost>| {
-        net_with_gens(
-            name,
-            vec![bus(1, BusType::Ref), bus(2, BusType::Pq)],
-            vec![branch(1, 2, 0.1)],
-            vec![gen_with_cost(1, cost)],
-        )
-    };
-
-    // No cost row → MissingGenCost.
-    assert!(matches!(
-        opf_of(&case("nocost", None), Units::Native).unwrap_err(),
-        Error::MissingGenCost { gen_index: 0 }
-    ));
-
-    // Present but piecewise-linear → UnsupportedCostModel.
-    let pwl = GenCost::with_ncost(1, 0.0, 0.0, 2, vec![0.0, 0.0, 1.0, 1.0]);
-    assert!(matches!(
-        opf_of(&case("pwl", Some(pwl)), Units::Native).unwrap_err(),
-        Error::UnsupportedCostModel {
-            gen_index: 0,
-            model: 1,
-            ..
-        }
-    ));
 }

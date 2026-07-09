@@ -11,14 +11,8 @@ mod adjacency;
 mod bdoubleprime;
 mod bprime;
 pub mod incidence;
-// The DC-OPF interior-point operators are experimental and off by default,
-// built only under `--features kkt`, which the default build and the main CI
-// jobs skip.
-#[cfg(feature = "kkt")]
-pub mod kkt;
 mod lacpf;
 pub mod laplacian;
-pub mod opf;
 pub mod sensitivity;
 pub mod triplet;
 mod ybus;
@@ -37,7 +31,6 @@ pub use laplacian::{
     GroundedIndexMap, build_weighted_laplacian, ground_at, ground_at_each, reference_indicator,
     unit_vector,
 };
-pub use opf::{BusCosts, GenCosts, OpfInstance, Units, build_opf_instance};
 pub use sensitivity::{
     SensitivityMatrices, SensitivityMatrixMetadata, SensitivityMetadata, SensitivityOptions,
     SensitivitySolver, SensitivitySolverPath, build_lodf, build_ptdf, build_ptdf_lodf,

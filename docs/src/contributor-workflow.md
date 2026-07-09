@@ -34,7 +34,8 @@ Use the smallest gate set that covers the changed surface, then run the
 | --- | --- |
 | parser or writer semantics | `bash benchmarks/run_validation.sh`; format round trip tests; affected `cargo +nightly fuzz run <target> -- -runs=1` harnesses |
 | rich model fields | `bash benchmarks/run_rich_validation.sh` |
-| matrix builders or DC OPF bundles | `cargo test -p powerio-matrix`; `cargo bench -p powerio-matrix --bench matrix` |
+| matrix builders | `cargo test -p powerio-matrix`; `cargo bench -p powerio-matrix --bench matrix` |
+| problem instances or DC OPF bundles | `cargo test -p powerio-prob --no-default-features`; `cargo test -p powerio-prob --features matrix` |
 | PowerWorld binary reader | PowerWorld parser tests plus `cargo bench -p powerio --bench parse -- "parse_aux_|parse_pwb_"` |
 | C ABI | `scripts/capi-header-parity.sh`; `scripts/capi-smoke.sh`; `cargo test -p powerio-capi --no-default-features`; `cargo test -p powerio-capi --features arrow,matrix,gridfm,dist,pkg`; `bash scripts/ci-clippy.sh capi-no-default`; `bash scripts/ci-clippy.sh capi-release` |
 | Python package metadata or extras | `maturin build --release --out /tmp/powerio-wheel-check`; inspect wheel `METADATA` |

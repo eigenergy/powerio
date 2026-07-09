@@ -8,24 +8,13 @@
 
 use sprs::CsMat;
 
+pub use powerio::DcConvention;
+
 use crate::indexed::IndexedNetwork;
 use crate::matrix::triplet::CooBuilder;
 use crate::{Error, Result};
 
 use super::{BuildOptions, ZeroImpedanceSkips};
-
-/// DC susceptance convention for `b_e` and the derived DC bus susceptance matrix.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
-#[non_exhaustive]
-pub enum DcConvention {
-    /// `b_e = 1/x_e`; taps and phase shifts ignored: the textbook DC power
-    /// flow weight.
-    #[default]
-    PaperPure,
-    /// `b_e = 1/(x_e·τ_e)` with a phase shift injection vector, matching
-    /// MATPOWER `makeBdc`.
-    Matpower,
-}
 
 /// The incidence factorization of a case under one DC convention.
 #[derive(Debug, Clone)]
@@ -89,20 +78,18 @@ pub fn build_incidence(
             }
             continue;
         }
-        let b_e = match conv {
-            DcConvention::PaperPure => 1.0 / br.x,
-            DcConvention::Matpower => 1.0 / (br.x * br.effective_tap()),
-        };
+        let b_e = conv.branch_susceptance(br.x, br.effective_tap());
         // A NaN reactance slips past the `x == 0.0` guard above, and a
         // denormal `x` yields Inf; either poisons the whole Laplacian.
         if !b_e.is_finite() {
             return Err(Error::NonFiniteSusceptance { row: idx });
         }
-        let shift_rad = match conv {
-            DcConvention::PaperPure => 0.0,
-            // angle_radians, not to_radians: a normalized network's shift is
-            // already in radians, so converting again would double-scale it.
-            DcConvention::Matpower => case.angle_radians(br.shift),
+        // angle_radians, not to_radians: a normalized network's shift is
+        // already in radians, so converting again would double-scale it.
+        let shift_rad = if conv.includes_phase_shifts() {
+            case.angle_radians(br.shift)
+        } else {
+            0.0
         };
         cols.push(Column {
             i,

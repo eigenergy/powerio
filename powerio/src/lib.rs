@@ -37,6 +37,7 @@
 //! # Ok::<(), powerio::Error>(())
 //! ```
 
+pub mod dc;
 pub mod error;
 pub mod format;
 pub mod gen_cost;
@@ -47,6 +48,7 @@ mod normalize;
 mod operations;
 pub mod solver_tables;
 
+pub use dc::DcConvention;
 pub use error::{ElementCounts, Error, ErrorCategory, Result, ScenarioMismatch};
 pub use format::{
     Conversion, DisplayData, DisplayFormat, Parsed, PwdDisplay, PwdSubstation, PypsaCsvOutputs,

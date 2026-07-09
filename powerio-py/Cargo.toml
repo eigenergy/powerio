@@ -26,6 +26,7 @@ gridfm = ["powerio-matrix/gridfm"]
 
 [dependencies]
 powerio-matrix.workspace = true
+powerio-prob = { workspace = true, features = ["matrix"] }
 # Unconditional: the wheel always ships the distribution surface (powerio.dist);
 # only the C ABI gates it behind a feature.
 powerio-dist.workspace = true

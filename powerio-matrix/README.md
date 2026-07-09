@@ -13,6 +13,8 @@ let bprime = build_bprime(&view, &BuildOptions::default())?;
 ```
 
 Outputs include MATPOWER Bp/Bpp, Y_bus components, LACPF, signed incidence,
-weighted bus Laplacians, PTDF, LODF, DC OPF bundles, adjacency, and a petgraph
-graph. The workspace README has the full format and validation overview:
+weighted bus Laplacians, PTDF, LODF, adjacency, and a petgraph graph.
+`powerio-prob` builds complete problem instances and its optional matrix
+feature derives problem specific operators. The workspace README has the full
+format and validation overview:
 <https://github.com/eigenergy/powerio>.
