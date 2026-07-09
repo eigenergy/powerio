@@ -51,15 +51,16 @@ pub mod solver_tables;
 pub use dc::DcConvention;
 pub use error::{ElementCounts, Error, ErrorCategory, Result, ScenarioMismatch};
 pub use format::{
-    Conversion, DisplayData, DisplayFormat, Parsed, PwdDisplay, PwdSubstation, PypsaCsvOutputs,
-    TargetFormat, WriteOptions, convert_file, convert_file_with_options, convert_str,
-    convert_str_with_options, display_format_from_name, parse_display_bytes, parse_display_file,
-    parse_egret_json, parse_file, parse_goc3_json, parse_matpower, parse_matpower_file,
-    parse_pandapower_json, parse_powermodels_json, parse_powerworld, parse_pslf, parse_psse,
-    parse_str, parse_surge_json, read_pypsa_csv_folder, target_format_from_name, write_as,
-    write_as_with_options, write_dir, write_egret_json, write_matpower, write_pandapower_json,
-    write_powermodels_json, write_powerworld, write_pslf, write_psse, write_psse_rev,
-    write_pypsa_csv_folder, write_surge_json,
+    Conversion, DisplayData, DisplayFormat, Goc3DeviceKind, Goc3DeviceRecord, Goc3Document,
+    Goc3Record, Parsed, PwdDisplay, PwdSubstation, PypsaCsvOutputs, TargetFormat, WriteOptions,
+    convert_file, convert_file_with_options, convert_str, convert_str_with_options,
+    display_format_from_name, parse_display_bytes, parse_display_file, parse_egret_json,
+    parse_file, parse_goc3_json, parse_matpower, parse_matpower_file, parse_pandapower_json,
+    parse_powermodels_json, parse_powerworld, parse_pslf, parse_psse, parse_str, parse_surge_json,
+    read_pypsa_csv_folder, target_format_from_name, write_as, write_as_with_options, write_dir,
+    write_egret_json, write_matpower, write_pandapower_json, write_powermodels_json,
+    write_powerworld, write_pslf, write_psse, write_psse_rev, write_pypsa_csv_folder,
+    write_surge_json,
 };
 pub use gen_cost::{GenCostPatch, GenCostPolicyReport, MissingGenCostPolicy, parse_gen_cost_csv};
 pub use geo::{Canvas, CoordinateSpace, CoordsKind, GeoMeta, Location};

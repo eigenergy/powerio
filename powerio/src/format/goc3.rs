@@ -20,6 +20,100 @@ use crate::{Error, Result};
 
 const FMT: &str = "GO Challenge 3 JSON";
 
+/// Parsed GOC3 input shared by network, operating point, and problem builders.
+#[derive(Clone, Debug)]
+pub struct Goc3Document {
+    root: Map<String, Value>,
+}
+
+impl Goc3Document {
+    /// Parse one GOC3 JSON document.
+    pub fn parse(text: &str) -> Result<Self> {
+        let value: Value = serde_json::from_str(text).map_err(|error| bad(error.to_string()))?;
+        let root = value
+            .as_object()
+            .cloned()
+            .ok_or_else(|| bad("top level is not a JSON object"))?;
+        Ok(Self { root })
+    }
+
+    #[must_use]
+    pub fn root(&self) -> &Map<String, Value> {
+        &self.root
+    }
+
+    pub fn network(&self) -> Result<&Map<String, Value>> {
+        self.root
+            .get("network")
+            .and_then(Value::as_object)
+            .ok_or_else(|| bad("missing object `network`"))
+    }
+
+    pub fn time_series_input(&self) -> Result<&Map<String, Value>> {
+        self.root
+            .get("time_series_input")
+            .and_then(Value::as_object)
+            .ok_or_else(|| bad("missing object `time_series_input`"))
+    }
+
+    #[must_use]
+    pub fn time_series_output(&self) -> Option<&Map<String, Value>> {
+        self.root
+            .get("time_series_output")
+            .and_then(Value::as_object)
+    }
+
+    #[must_use]
+    pub fn reliability(&self) -> Option<&Map<String, Value>> {
+        self.root.get("reliability").and_then(Value::as_object)
+    }
+
+    /// Read a network section in source document order.
+    pub fn network_records(&self, name: &'static str) -> Result<Vec<Goc3Record<'_>>> {
+        records(self.network()?, name)
+    }
+
+    /// Read a time series input section in source document order.
+    pub fn time_series_input_records(&self, name: &'static str) -> Result<Vec<Goc3Record<'_>>> {
+        records(self.time_series_input()?, name)
+    }
+
+    /// Read a time series output section in source document order.
+    pub fn time_series_output_records(&self, name: &'static str) -> Result<Vec<Goc3Record<'_>>> {
+        self.time_series_output()
+            .map_or_else(|| Ok(Vec::new()), |output| records(output, name))
+    }
+
+    /// Enumerate dispatchable devices with the balanced model row assignment.
+    pub fn dispatchable_devices(&self) -> Result<Vec<Goc3DeviceRecord<'_>>> {
+        device_rows(self.network()?)
+    }
+
+    /// Map bus UIDs to the external bus IDs assigned by the balanced reader.
+    pub fn bus_ids(&self) -> Result<HashMap<String, BusId>> {
+        bus_id_by_uid(&section(self.network()?, "bus")?)
+    }
+
+    /// Build the period cost curve used by the balanced reader.
+    #[must_use]
+    pub fn dispatchable_device_cost_at(
+        &self,
+        device: &Map<String, Value>,
+        time_series: Option<&Value>,
+        period: usize,
+        base_mva: f64,
+    ) -> Option<GenCost> {
+        cost_at(device, time_series, period, base_mva)
+    }
+}
+
+/// One GOC3 section record in source document order.
+#[derive(Clone, Debug)]
+pub struct Goc3Record<'a> {
+    pub uid: Option<String>,
+    pub value: &'a Value,
+}
+
 #[derive(Debug)]
 struct Goc3BusMap {
     by_uid: HashMap<String, BusId>,
@@ -47,14 +141,9 @@ pub(crate) fn parse_goc3_source(
     name_hint: Option<&str>,
     warnings: &mut Vec<String>,
 ) -> Result<Network> {
-    let root: Value = serde_json::from_str(&source).map_err(|e| bad(e.to_string()))?;
-    let root = root
-        .as_object()
-        .ok_or_else(|| bad("top level is not a JSON object"))?;
-    let network = root
-        .get("network")
-        .and_then(Value::as_object)
-        .ok_or_else(|| bad("missing object `network`"))?;
+    let document = Goc3Document::parse(&source)?;
+    let root = document.root();
+    let network = document.network()?;
 
     let base_mva = network
         .get("general")
@@ -119,8 +208,8 @@ pub(crate) fn parse_goc3_source(
             .as_deref()
             .and_then(|key| device_ts.get(key).copied());
 
-        match device.table {
-            DeviceTable::Generators => {
+        match device.kind {
+            Goc3DeviceKind::Generators => {
                 let generator = read_producer(obj, ts, bus, base_mva, device.uid.clone());
                 generator_buses.insert(bus);
                 if reference_candidate
@@ -131,7 +220,7 @@ pub(crate) fn parse_goc3_source(
                 }
                 generators.push(generator);
             }
-            DeviceTable::Loads => {
+            Goc3DeviceKind::Loads => {
                 loads.push(read_consumer(obj, ts, bus, base_mva, device.uid.clone()));
             }
         }
@@ -177,31 +266,21 @@ fn read_buses(network: &Map<String, Value>) -> Result<(Vec<Bus>, Goc3BusMap)> {
     }
     let mut records = Vec::with_capacity(items.len());
     let mut seen_uids = HashSet::new();
-    for item in items {
-        let obj = item_object(item, "bus")?;
-        let uid = item_uid(item, obj).ok_or_else(|| bad("bus record missing `uid`"))?;
+    for item in &items {
+        let obj = item_object(*item, "bus")?;
+        let uid = item_uid(*item, obj).ok_or_else(|| bad("bus record missing `uid`"))?;
         if !seen_uids.insert(uid.clone()) {
             return Err(bad(format!("duplicate bus uid `{uid}`")));
         }
         records.push((uid, obj));
     }
 
-    let suffixes: Option<Vec<usize>> = records
-        .iter()
-        .map(|(uid, _)| official_bus_suffix(uid))
-        .collect();
-    let suffixes_unique = suffixes
-        .as_ref()
-        .is_some_and(|values| values.iter().copied().collect::<HashSet<_>>().len() == values.len());
+    let ids = bus_id_by_uid(&items)?;
 
     let mut by_uid = HashMap::with_capacity(records.len());
     let mut buses = Vec::with_capacity(records.len());
-    for (index, (uid, obj)) in records.into_iter().enumerate() {
-        let id = if suffixes_unique {
-            BusId(official_bus_suffix(&uid).expect("suffix checked above") + 1)
-        } else {
-            BusId(index + 1)
-        };
+    for (uid, obj) in records {
+        let id = ids[&uid];
         by_uid.insert(uid.clone(), id);
         let initial = initial_status(obj);
         buses.push(Bus {
@@ -511,15 +590,15 @@ fn assign_bus_types(
 
 /// Which payload table a simple dispatchable device row lands in.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum DeviceTable {
+pub enum Goc3DeviceKind {
     Generators,
     Loads,
 }
 
 /// One simple dispatchable device with the payload row index the parser
 /// assigns it.
-pub struct DeviceRow<'a> {
-    pub table: DeviceTable,
+pub struct Goc3DeviceRecord<'a> {
+    pub kind: Goc3DeviceKind,
     pub row: usize,
     pub uid: Option<String>,
     pub obj: &'a Map<String, Value>,
@@ -530,7 +609,7 @@ pub struct DeviceRow<'a> {
 /// addresses payload rows by index (the operating point extractor in
 /// `powerio-pkg`) must enumerate devices through this function so its indices
 /// match the parsed network, uid or no uid.
-pub fn device_rows(network: &Map<String, Value>) -> Result<Vec<DeviceRow<'_>>> {
+fn device_rows(network: &Map<String, Value>) -> Result<Vec<Goc3DeviceRecord<'_>>> {
     let mut rows = Vec::new();
     let mut generators = 0usize;
     let mut loads = 0usize;
@@ -540,11 +619,11 @@ pub fn device_rows(network: &Map<String, Value>) -> Result<Vec<DeviceRow<'_>>> {
         let (table, row) = match string(obj, "device_type").unwrap_or("producer") {
             "producer" => {
                 generators += 1;
-                (DeviceTable::Generators, generators - 1)
+                (Goc3DeviceKind::Generators, generators - 1)
             }
             "consumer" => {
                 loads += 1;
-                (DeviceTable::Loads, loads - 1)
+                (Goc3DeviceKind::Loads, loads - 1)
             }
             other => {
                 return Err(bad(format!(
@@ -553,8 +632,8 @@ pub fn device_rows(network: &Map<String, Value>) -> Result<Vec<DeviceRow<'_>>> {
                 )));
             }
         };
-        rows.push(DeviceRow {
-            table,
+        rows.push(Goc3DeviceRecord {
+            kind: table,
             row,
             uid,
             obj,
@@ -567,7 +646,7 @@ pub fn device_rows(network: &Map<String, Value>) -> Result<Vec<DeviceRow<'_>>> {
 /// cumulative MATPOWER piecewise linear curve. Shared with the operating point
 /// extractor so a materialized period matches what this parser builds for the
 /// static payload.
-pub fn cost_at(
+fn cost_at(
     obj: &Map<String, Value>,
     ts: Option<&Value>,
     index: usize,
@@ -652,15 +731,12 @@ fn warn_static_reduction(
 }
 
 #[derive(Clone, Copy)]
-pub struct SectionItem<'a> {
+struct SectionItem<'a> {
     pub key: Option<&'a str>,
     pub value: &'a Value,
 }
 
-pub fn section<'a>(
-    parent: &'a Map<String, Value>,
-    name: &'static str,
-) -> Result<Vec<SectionItem<'a>>> {
+fn section<'a>(parent: &'a Map<String, Value>, name: &'static str) -> Result<Vec<SectionItem<'a>>> {
     let Some(value) = parent.get(name) else {
         return Ok(Vec::new());
     };
@@ -699,7 +775,7 @@ fn item_object<'a>(
     })
 }
 
-pub fn item_uid(item: SectionItem<'_>, obj: &Map<String, Value>) -> Option<String> {
+fn item_uid(item: SectionItem<'_>, obj: &Map<String, Value>) -> Option<String> {
     string(obj, "uid")
         .map(str::to_owned)
         .or_else(|| item.key.map(str::to_owned))
@@ -731,11 +807,49 @@ fn official_bus_suffix(uid: &str) -> Option<usize> {
         .flatten()
 }
 
+/// Map GOC3 bus uids to the same 1-based row positions `read_buses` assigns
+/// as `BusId`: the numeric `bus_<n>` suffix + 1 when every bus in `items` has
+/// one and they are unique, else the 1-based position in document order.
+/// Shared with `powerio-prob`'s GOC3 SCOPF adapter so its bus identities
+/// agree with `BalancedNetwork`'s `BusId` for the same document.
+fn bus_id_by_uid(items: &[SectionItem<'_>]) -> Result<HashMap<String, BusId>> {
+    let mut uids = Vec::with_capacity(items.len());
+    for item in items {
+        let obj = item
+            .value
+            .as_object()
+            .ok_or_else(|| bad("bus section item is not an object"))?;
+        let uid = item_uid(*item, obj).ok_or_else(|| bad("bus section item missing `uid`"))?;
+        uids.push(uid);
+    }
+    let suffixes: Vec<Option<usize>> = uids.iter().map(|uid| official_bus_suffix(uid)).collect();
+    let suffixes_unique = suffixes.iter().all(Option::is_some)
+        && suffixes
+            .iter()
+            .flatten()
+            .copied()
+            .collect::<HashSet<_>>()
+            .len()
+            == suffixes.len();
+    Ok(uids
+        .into_iter()
+        .zip(suffixes)
+        .enumerate()
+        .map(|(index, (uid, suffix))| {
+            let id = match suffix {
+                Some(suffix) if suffixes_unique => suffix + 1,
+                _ => index + 1,
+            };
+            (uid, BusId(id))
+        })
+        .collect())
+}
+
 fn string<'a>(obj: &'a Map<String, Value>, key: &str) -> Option<&'a str> {
     obj.get(key).and_then(Value::as_str)
 }
 
-pub fn number(obj: &Map<String, Value>, key: &str) -> Option<f64> {
+fn number(obj: &Map<String, Value>, key: &str) -> Option<f64> {
     obj.get(key).and_then(Value::as_f64)
 }
 
@@ -790,12 +904,18 @@ fn bad(message: impl Into<String>) -> Error {
     }
 }
 
-/// Document-walking helpers shared with `powerio-pkg`'s operating point
-/// extractor, which must interpret a GOC3 document exactly as this parser
-/// does: same section ordering, same device row assignment, same cost
-/// mapping. Hidden: not part of the public format API.
-pub mod bridge {
-    pub use super::{
-        DeviceRow, DeviceTable, SectionItem, cost_at, device_rows, item_uid, number, section,
-    };
+fn records<'a>(parent: &'a Map<String, Value>, name: &'static str) -> Result<Vec<Goc3Record<'a>>> {
+    section(parent, name).map(|items| {
+        items
+            .into_iter()
+            .map(|item| Goc3Record {
+                uid: item
+                    .value
+                    .as_object()
+                    .and_then(|object| item_uid(item, object))
+                    .or_else(|| item.key.map(str::to_owned)),
+                value: item.value,
+            })
+            .collect()
+    })
 }

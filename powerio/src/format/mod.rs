@@ -51,9 +51,7 @@ pub mod routing;
 mod surge;
 
 pub use egret::{parse_egret_json, write_egret_json};
-#[doc(hidden)]
-pub use goc3::bridge as goc3_bridge;
-pub use goc3::parse_goc3_json;
+pub use goc3::{Goc3DeviceKind, Goc3DeviceRecord, Goc3Document, Goc3Record, parse_goc3_json};
 pub use matpower::{parse_matpower, parse_matpower_file, write_matpower};
 pub use pandapower::{parse_pandapower_json, write_pandapower_json};
 pub use powermodels::{parse_powermodels_json, write_powermodels_json};

@@ -7,8 +7,9 @@ source network, a matrix projection, a solver formulation, and a solution.
 
 The default build has no sparse matrix dependency. It provides an index based
 `DcOpfInstance` whose generator and branch arrays can be consumed directly by
-an operations research model. Enable the `matrix` feature to derive sparse
-operators from that instance.
+an operations research model. It also provides a matrix free `ScopfInstance`
+for GOC3 data. Enable the `matrix` feature to derive sparse DC OPF operators
+from a `DcOpfInstance`.
 
 ```rust
 use powerio::{IndexedNetwork, parse_matpower_file};

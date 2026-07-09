@@ -5,12 +5,7 @@ use std::collections::{BTreeMap, BTreeSet, HashMap};
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value, json};
 
-// The bridge shares the GOC3 parser's document walking, so this extractor's
-// section ordering, device row assignment, and cost mapping match the static
-// payload by construction.
-use powerio::format::goc3_bridge::{
-    DeviceTable, SectionItem, cost_at, device_rows, item_uid, number,
-};
+use powerio::{Goc3DeviceKind, Goc3Document, Goc3Record};
 
 use crate::model::ModelPayload;
 
@@ -273,16 +268,14 @@ impl ElementUpdate {
 pub(crate) fn goc3_operating_points_from_str(
     text: &str,
 ) -> serde_json::Result<Option<OperatingPointSeries>> {
-    let root: Value = serde_json::from_str(text)?;
-    let Some(root) = root.as_object() else {
-        return Ok(None);
-    };
-    let Some(network) = root.get("network").and_then(Value::as_object) else {
-        return Ok(None);
-    };
-    let Some(time_series) = root.get("time_series_input").and_then(Value::as_object) else {
-        return Ok(None);
-    };
+    let document =
+        powerio::Goc3Document::parse(text).map_err(|error| json_error(error.to_string()))?;
+    let network = document
+        .network()
+        .map_err(|error| json_error(error.to_string()))?;
+    let time_series = document
+        .time_series_input()
+        .map_err(|error| json_error(error.to_string()))?;
     let Some(general) = time_series.get("general").and_then(Value::as_object) else {
         return Ok(None);
     };
@@ -298,29 +291,35 @@ pub(crate) fn goc3_operating_points_from_str(
         .and_then(Value::as_array)
         .map(|values| values.iter().filter_map(Value::as_f64).collect::<Vec<_>>())
         .unwrap_or_default();
-    let device_ts = uid_map(section(time_series, "simple_dispatchable_device")?);
-    let output = root.get("time_series_output").and_then(Value::as_object);
+    let device_ts = uid_map(
+        document
+            .time_series_input_records("simple_dispatchable_device")
+            .map_err(|error| json_error(error.to_string()))?,
+    );
 
     let mut points = (0..periods).map(OperatingPoint::new).collect::<Vec<_>>();
 
     let base_mva = network
         .get("general")
         .and_then(Value::as_object)
-        .and_then(|general| number(general, "base_norm_mva"))
+        .and_then(|general| general.get("base_norm_mva"))
+        .and_then(Value::as_f64)
         .unwrap_or(100.0);
 
-    add_goc3_device_updates(network, &device_ts, base_mva, &mut points)?;
-    add_goc3_status_updates(network, output, "ac_line", "branches", 0, &mut points)?;
-    let line_count = section(network, "ac_line")?.len();
+    add_goc3_device_updates(&document, &device_ts, base_mva, &mut points)?;
+    add_goc3_status_updates(&document, "ac_line", "branches", 0, &mut points)?;
+    let line_count = document
+        .network_records("ac_line")
+        .map_err(|error| json_error(error.to_string()))?
+        .len();
     add_goc3_status_updates(
-        network,
-        output,
+        &document,
         "two_winding_transformer",
         "branches",
         line_count,
         &mut points,
     )?;
-    add_goc3_status_updates(network, output, "dc_line", "hvdc", 0, &mut points)?;
+    add_goc3_status_updates(&document, "dc_line", "hvdc", 0, &mut points)?;
 
     Ok(Some(OperatingPointSeries {
         time_axis: TimeAxis {
@@ -334,12 +333,15 @@ pub(crate) fn goc3_operating_points_from_str(
 }
 
 fn add_goc3_device_updates(
-    network: &Map<String, Value>,
+    document: &Goc3Document,
     device_ts: &HashMap<String, &Value>,
     base_mva: f64,
     points: &mut [OperatingPoint],
 ) -> serde_json::Result<()> {
-    for device in device_rows(network).map_err(|err| json_error(err.to_string()))? {
+    for device in document
+        .dispatchable_devices()
+        .map_err(|error| json_error(error.to_string()))?
+    {
         let Some(uid) = device.uid else {
             continue;
         };
@@ -349,15 +351,21 @@ fn add_goc3_device_updates(
         let Some(ts) = ts_value.as_object() else {
             continue;
         };
-        match device.table {
-            DeviceTable::Generators => {
+        match device.kind {
+            Goc3DeviceKind::Generators => {
                 for point in points.iter_mut() {
                     let mut fields = BTreeMap::new();
                     insert_scaled_at(&mut fields, ts, "p_ub", "pmax", point.index, base_mva);
                     insert_scaled_at(&mut fields, ts, "p_lb", "pmin", point.index, base_mva);
                     insert_scaled_at(&mut fields, ts, "q_ub", "qmax", point.index, base_mva);
                     insert_scaled_at(&mut fields, ts, "q_lb", "qmin", point.index, base_mva);
-                    if let Some(cost) = cost_at(device.obj, Some(ts_value), point.index, base_mva)
+                    if let Some(cost) = document
+                        .dispatchable_device_cost_at(
+                            device.obj,
+                            Some(ts_value),
+                            point.index,
+                            base_mva,
+                        )
                         .map(serde_json::to_value)
                         .transpose()?
                     {
@@ -373,7 +381,7 @@ fn add_goc3_device_updates(
                     }
                 }
             }
-            DeviceTable::Loads => {
+            Goc3DeviceKind::Loads => {
                 for point in points.iter_mut() {
                     let mut fields = BTreeMap::new();
                     insert_abs_scaled_at(&mut fields, ts, "p_ub", "p", point.index, base_mva);
@@ -394,23 +402,25 @@ fn add_goc3_device_updates(
 }
 
 fn add_goc3_status_updates(
-    network: &Map<String, Value>,
-    output: Option<&Map<String, Value>>,
+    document: &Goc3Document,
     source_section: &'static str,
     target_table: &'static str,
     row_offset: usize,
     points: &mut [OperatingPoint],
 ) -> serde_json::Result<()> {
-    let source_items = section(network, source_section)?;
-    let Some(output) = output else {
+    let source_items = document
+        .network_records(source_section)
+        .map_err(|error| json_error(error.to_string()))?;
+    if document.time_series_output().is_none() {
         return Ok(());
-    };
-    let status_by_uid = uid_map(section(output, source_section)?);
+    }
+    let status_by_uid = uid_map(
+        document
+            .time_series_output_records(source_section)
+            .map_err(|error| json_error(error.to_string()))?,
+    );
     for (row, item) in source_items.iter().enumerate() {
-        let Some(obj) = item.value.as_object() else {
-            continue;
-        };
-        let Some(uid) = item_uid(*item, obj) else {
+        let Some(uid) = item.uid.as_ref() else {
             continue;
         };
         let Some(status) = status_by_uid
@@ -431,19 +441,10 @@ fn add_goc3_status_updates(
     Ok(())
 }
 
-fn section<'a>(
-    parent: &'a Map<String, Value>,
-    name: &'static str,
-) -> serde_json::Result<Vec<SectionItem<'a>>> {
-    powerio::format::goc3_bridge::section(parent, name).map_err(|err| json_error(err.to_string()))
-}
-
-fn uid_map(items: Vec<SectionItem<'_>>) -> HashMap<String, &Value> {
+fn uid_map(items: Vec<Goc3Record<'_>>) -> HashMap<String, &Value> {
     let mut out = HashMap::new();
     for item in items {
-        if let Some(obj) = item.value.as_object()
-            && let Some(uid) = item_uid(item, obj)
-        {
+        if let Some(uid) = item.uid {
             out.insert(uid, item.value);
         }
     }
