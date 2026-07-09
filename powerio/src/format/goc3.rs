@@ -721,7 +721,7 @@ fn official_bus_suffix(uid: &str) -> Option<usize> {
         .flatten()
 }
 
-/// Map GOC3 bus uids to the same 1-based row positions [`read_buses`] assigns
+/// Map GOC3 bus uids to the same 1-based row positions `read_buses` assigns
 /// as `BusId`: the numeric `bus_<n>` suffix + 1 when every bus in `items` has
 /// one and they are unique, else the 1-based position in document order.
 /// Shared with `powerio-pkg`'s GOC3 SCOPF projections so their bus indices

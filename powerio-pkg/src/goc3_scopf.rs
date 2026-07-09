@@ -2071,4 +2071,76 @@ mod tests {
         let back: Goc3ScopfData = serde_json::from_str(&json).expect("deserialize");
         assert_eq!(back, first);
     }
+
+    /// Pinned upstream copy of `14bus_20220707.json` from GOCompetition's
+    /// C3DataUtilities `test_data/`, the real ARPA-E GO Challenge 3 case
+    /// PowerIO.jl's own `test/test_goc3_static.jl` cross-checks against.
+    const GOC3_14BUS_URL: &str = "https://raw.githubusercontent.com/GOCompetition/C3DataUtilities/bb5df337553b21ab8be89ae5f9106958541730d4/test_data/14bus_20220707.json";
+
+    /// Fetch the real 14-bus case for [`scopf_data_matches_real_14bus_case_scale`].
+    /// The ~340 KB file is not vendored; set `POWERIO_GOC3_14BUS_JSON` to a
+    /// local path to run offline, else it is downloaded from `GOC3_14BUS_URL`
+    /// (overridable via `POWERIO_GOC3_14BUS_URL`) with `curl`.
+    fn fetch_14bus_case() -> String {
+        if let Ok(path) = std::env::var("POWERIO_GOC3_14BUS_JSON") {
+            return std::fs::read_to_string(&path)
+                .unwrap_or_else(|e| panic!("read POWERIO_GOC3_14BUS_JSON ({path}): {e}"));
+        }
+        let url =
+            std::env::var("POWERIO_GOC3_14BUS_URL").unwrap_or_else(|_| GOC3_14BUS_URL.to_string());
+        let output = std::process::Command::new("curl")
+            .args(["--fail", "--silent", "--show-error", "--location", &url])
+            .output()
+            .unwrap_or_else(|e| panic!("run curl for {url}: {e}"));
+        assert!(
+            output.status.success(),
+            "curl failed for {url}: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        String::from_utf8(output.stdout).expect("fixture is valid UTF-8")
+    }
+
+    /// The real 14-bus case exercised at scale. Counts are pinned to this
+    /// scenario, matching the Julia side's own pinned assertions. Ignored by
+    /// default because it fetches the case over the network; run with
+    /// `cargo test -p powerio-pkg -- --ignored` (or point
+    /// `POWERIO_GOC3_14BUS_JSON` at a local copy).
+    #[test]
+    #[ignore = "fetches a ~340 KB GOC3 case over the network; run with --ignored"]
+    fn scopf_data_matches_real_14bus_case_scale() {
+        let text = fetch_14bus_case();
+        let tables = Goc3Tables::parse(&text).expect("parse real GOC3 case");
+        let projection = goc3_static_data(&tables).expect("static data");
+        let lengths = projection.lengths;
+        assert_eq!(lengths.i, 14);
+        assert_eq!((lengths.l_j_ln, lengths.l_j_xf, lengths.l_j_dc), (17, 3, 0));
+        assert_eq!((lengths.l_j_pr, lengths.l_j_cs, lengths.l_t), (6, 11, 24));
+        assert_eq!(projection.static_data.prod.len(), 6);
+        assert_eq!(projection.static_data.cons.len(), 11);
+        assert_eq!(
+            projection
+                .static_data
+                .bus
+                .iter()
+                .map(|b| b.i)
+                .collect::<Vec<_>>(),
+            (1..=14).map(BusId).collect::<Vec<_>>()
+        );
+
+        let blocks = goc3_price_blocks(&projection.cost_vector_pr, &projection.cost_vector_cs);
+        assert_eq!(blocks.producer.len(), 720);
+        assert_eq!(blocks.consumer.len(), 1056);
+
+        let surv = goc3_ac_contingency_survivors(&tables).expect("ac survivors");
+        assert_eq!(surv.ln.len(), 19);
+        assert_eq!(surv.xf.len(), 19);
+
+        let dc = goc3_dc_contingency_flows(&tables).expect("dc flows");
+        assert!(dc.is_empty()); // no DC lines in this case
+
+        // The combined entry point matches the individually built instance.
+        let scd = goc3_scopf_data(&tables).expect("scopf data");
+        assert_eq!(scd.lengths, lengths);
+        assert_eq!(scd.dc_contingency_flows, dc);
+    }
 }
