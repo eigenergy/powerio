@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.7.0 - Unreleased
+## 0.7.0
 
 - Add `powerio-prob` for complete numerical problem instances (#238). Its
   default build is matrix free; the `matrix` feature adds sparse projections,
