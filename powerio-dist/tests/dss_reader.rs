@@ -325,6 +325,51 @@ fn four_wire_line_keeps_the_neutral() {
     assert_eq!(la.terminal_map, vec!["1", "4"]);
 }
 
+/// BMOPFTools#332: a line without `phases=` takes its conductor count from
+/// the referenced linecode (FetchLineCode assigns NPhases), so a 4-wire bus
+/// list keeps the neutral and the map length matches the 4x4 matrices.
+#[test]
+fn line_conductor_count_follows_linecode() {
+    use powerio_dist::parse_dss_str;
+    let base = "Clear\n\
+                New Circuit.c basekv=0.4 pu=1.0 phases=3 bus1=src\n\
+                New Linecode.4w nphases=4 units=m\n\
+                ~ rmatrix=[0.5|0.02 0.5|0.02 0.02 0.5|0.02 0.02 0.02 0.5]\n";
+
+    let net = parse_dss_str(&format!(
+        "{base}New Line.l1 bus1=src.1.2.3.4 bus2=lb.1.2.3.4 linecode=4w length=500 units=m\n"
+    ));
+    let l = &net.lines[0];
+    assert_eq!(l.terminal_map_from, vec!["1", "2", "3", "4"]);
+    assert_eq!(l.terminal_map_to, vec!["1", "2", "3", "4"]);
+    let lb = net.buses.iter().find(|b| b.id == "lb").unwrap();
+    assert_eq!(lb.terminals, vec!["1", "2", "3", "4"]);
+
+    // No bus dot list: all four conductors default to nodes 1..=4.
+    let net = parse_dss_str(&format!(
+        "{base}New Line.l1 bus1=src bus2=lb linecode=4w length=500 units=m\n"
+    ));
+    assert_eq!(net.lines[0].terminal_map_to, vec!["1", "2", "3", "4"]);
+
+    // Properties apply in order; the later of `phases=`/`linecode=` wins.
+    let net = parse_dss_str(&format!(
+        "{base}New Line.l1 bus1=src.1.2.3.4 bus2=lb.1.2.3.4 linecode=4w phases=3 length=500 units=m\n"
+    ));
+    assert_eq!(net.lines[0].terminal_map_to, vec!["1", "2", "3"]);
+    let net = parse_dss_str(&format!(
+        "{base}New Line.l1 bus1=src.1.2.3.4 bus2=lb.1.2.3.4 phases=3 linecode=4w length=500 units=m\n"
+    ));
+    assert_eq!(net.lines[0].terminal_map_to, vec!["1", "2", "3", "4"]);
+
+    // A switch's linecode is ignored for impedance yet still fixes the
+    // conductor count.
+    let net = parse_dss_str(&format!(
+        "{base}New Line.s1 bus1=src.1.2.3.4 bus2=lb.1.2.3.4 linecode=4w switch=yes\n"
+    ));
+    assert_eq!(net.switches[0].terminal_map_to, vec!["1", "2", "3", "4"]);
+    assert_eq!(net.switches[0].i_max.as_ref().unwrap().len(), 4);
+}
+
 #[test]
 fn pvsystem_and_invcontrol_type_to_ibr_profile() {
     use powerio_dist::parse_dss_str;
