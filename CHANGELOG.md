@@ -2,11 +2,20 @@
 
 ## 0.7.0 - Unreleased
 
-- Add `powerio-prob` for complete numerical problem instances. Its default
-  build is matrix free; the `matrix` feature adds sparse projections, DC OPF
-  bundle output.
+- Add `powerio-prob` for complete numerical problem instances (#238). Its
+  default build is matrix free; the `matrix` feature adds sparse projections,
+  DC OPF bundle output.
 - Move DC OPF instance types and bundle output out of `powerio-matrix`.
 - Keep solver formulations and KKT operators outside `powerio-prob`.
+- Demote `powerio-json` from the public case format surface (#229). It leaves
+  the CLI format help and the generated format tables; `pio_parse_str(...,
+  "powerio-json", ...)` and `pio_to_format(..., "powerio-json", ...)` keep
+  working as ABI v4 compatibility aliases, and `pio_to_json` / `pio_from_json`
+  are the documented balanced model JSON API.
+- `NetworkPackage::from_balanced` is format neutral. Source adapters, such as
+  GOC3 operating point extraction, run only for parsed reader input through
+  `from_parsed_balanced`.
+- Building a SCOPF instance from text requires an explicit source format.
 
 ## 0.6.3
 

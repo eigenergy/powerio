@@ -20,7 +20,10 @@ use crate::{Error, Result};
 
 const FMT: &str = "GO Challenge 3 JSON";
 
-/// Parsed GOC3 input shared by network, operating point, and problem builders.
+/// GOC3 source document: the file parsed once and shared by the format's
+/// adapters (the balanced network reader here, the operating point extractor
+/// in `powerio-pkg`, and the SCOPF instance builder in `powerio-prob`), so
+/// section order, uid, bus ID, and device row rules have one owner.
 #[derive(Clone, Debug)]
 pub struct Goc3Document {
     root: Map<String, Value>,
