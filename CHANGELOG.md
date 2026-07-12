@@ -23,6 +23,18 @@
   constant term (`GenCost::quadratic_with_constant`). Relaxations such as SOC
   forms consume the same instance. Matrix free; C ABI and Python exposure is
   #249.
+- `powerio-prob` first publish review fixes: reserve membership sets now
+  assign zone indices from the same document order as the reserve rows
+  (sorted order previously crossed `n_p`/`n_q` between the two tables and
+  diverged from `src/goc3.jl` past nine zones); a GOC3 branch with
+  `r = x = 0` is rejected by name instead of writing NaN into the wire
+  rows; a missing `device_type` defaults to `producer`, the balanced
+  reader's rule; the AC instance folds self-loop branch admittance into
+  the bus shunt vectors, matching `build_ybus`; both instance builders
+  reject a non-positive base MVA before scaling; the DC OPF bundle
+  directory name stays confined to the output directory, and the bundle
+  manifest reports the powerio core version (`powerio::VERSION`, new).
+  SCOPF row structs and `DcOpfOutputs` are `#[non_exhaustive]`.
 - DSS reader: `linecode=` now sets a line's conductor count the way the
   engine's FetchLineCode does, the later of `phases=`/`linecode=` winning.
   A 4-wire line without an explicit `phases=` keeps its neutral instead of

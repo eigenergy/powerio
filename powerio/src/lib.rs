@@ -33,6 +33,10 @@
 //! # Ok::<(), powerio::Error>(())
 //! ```
 
+/// The powerio crate version, for provenance fields written by downstream
+/// crates whose own version can drift from the core's.
+pub const VERSION: &str = env!("CARGO_PKG_VERSION");
+
 pub mod dc;
 pub mod error;
 pub mod format;

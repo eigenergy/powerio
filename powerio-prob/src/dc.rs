@@ -175,6 +175,7 @@ pub fn build_dc_opf_instance(
     options: &DcOpfOptions,
 ) -> Result<DcOpfInstance> {
     case.check_reference_coverage()?;
+    case.network().check_base_mva()?;
 
     let n_buses = case.n();
     let base = case.per_unit_base();
@@ -233,6 +234,8 @@ pub fn build_dc_opf_instance(
             element_index: source_row,
         })?;
         if from == to {
+            // A self-loop carries no angle difference, so it contributes no
+            // DC flow, and its shift injection cancels at its own bus.
             continue;
         }
         if branch.x == 0.0 {

@@ -35,6 +35,7 @@ pub struct DcOpfBundleOptions {
 }
 
 #[derive(Debug, Clone)]
+#[non_exhaustive]
 pub struct DcOpfOutputs {
     pub dir: PathBuf,
     pub files: Vec<PathBuf>,
@@ -64,6 +65,29 @@ struct DcOpfMeta<'a> {
     patched_gen_costs: usize,
     files: Vec<String>,
     powerio_version: &'static str,
+}
+
+/// One path component derived from a case name. Case names come from source
+/// files, so separators and anything else outside `[A-Za-z0-9._-]` map to
+/// `_`, and a name that would resolve to the current or parent directory
+/// falls back to `case`. The bundle always lands under the caller's
+/// output directory.
+fn directory_component(name: &str) -> String {
+    let cleaned: String = name
+        .chars()
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-') {
+                c
+            } else {
+                '_'
+            }
+        })
+        .collect();
+    if cleaned.is_empty() || cleaned.chars().all(|c| c == '.') {
+        "case".to_owned()
+    } else {
+        cleaned
+    }
 }
 
 #[derive(Serialize)]
@@ -132,7 +156,9 @@ pub fn write_dcopf_bundle(
 ) -> Result<DcOpfOutputs> {
     let matrices = build_dc_opf_matrices(instance);
     let nodal = instance.nodal_generator_data()?;
-    let dir = out_dir.as_ref().join(format!("{}_dcopf", instance.name));
+    let dir = out_dir
+        .as_ref()
+        .join(format!("{}_dcopf", directory_component(&instance.name)));
     std::fs::create_dir_all(&dir)?;
 
     let mut files = Vec::new();
@@ -233,7 +259,7 @@ pub fn write_dcopf_bundle(
             .iter()
             .filter_map(|path| path.file_name()?.to_str().map(str::to_owned))
             .collect(),
-        powerio_version: env!("CARGO_PKG_VERSION"),
+        powerio_version: powerio::VERSION,
     };
     let meta_path = dir.join("dcopf_meta.json");
     let json = serde_json::to_string_pretty(&meta)

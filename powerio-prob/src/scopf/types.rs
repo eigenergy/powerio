@@ -3,6 +3,7 @@ use serde::{Deserialize, Serialize};
 
 /// One bus row: `(i, uid, v_min, v_max)`.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct ScopfBusRow {
     pub i: BusId,
     pub uid: String,
@@ -12,6 +13,7 @@ pub struct ScopfBusRow {
 
 /// One shunt row.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct ScopfShuntRow {
     pub uid: String,
     pub bus: BusId,
@@ -21,6 +23,7 @@ pub struct ScopfShuntRow {
 
 /// One AC line row.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct ScopfAcLineRow {
     pub j_ln: usize,
     pub uid: String,
@@ -40,6 +43,7 @@ pub struct ScopfAcLineRow {
 
 /// One two winding transformer row.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct ScopfTransformerRow {
     pub j_xf: usize,
     pub uid: String,
@@ -59,6 +63,7 @@ pub struct ScopfTransformerRow {
 
 /// One DC line row.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct ScopfDcLineRow {
     pub j_dc: usize,
     pub uid: String,
@@ -73,6 +78,7 @@ pub struct ScopfDcLineRow {
 
 /// A transformer with a variable phase-shift control range (`vpd`).
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct ScopfVariablePhaseRow {
     pub j_xf: usize,
     pub phi_min: f64,
@@ -81,6 +87,7 @@ pub struct ScopfVariablePhaseRow {
 
 /// A transformer with a fixed phase shift (`fpd`).
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct ScopfFixedPhaseRow {
     pub j_xf: usize,
     pub phi_o: f64,
@@ -88,6 +95,7 @@ pub struct ScopfFixedPhaseRow {
 
 /// A transformer with a variable winding ratio control range (`vwr`).
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct ScopfVariableRatioRow {
     pub j_xf: usize,
     pub tau_min: f64,
@@ -96,6 +104,7 @@ pub struct ScopfVariableRatioRow {
 
 /// A transformer with a fixed winding ratio (`fwr`).
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct ScopfFixedRatioRow {
     pub j_xf: usize,
     pub tau_o: f64,
@@ -106,6 +115,7 @@ pub struct ScopfFixedRatioRow {
 /// Producers and consumers share this layout. Vector fields use the internal
 /// zero based period order.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct ScopfDeviceRow {
     pub bus: BusId,
     pub uid: String,
@@ -145,6 +155,7 @@ pub struct ScopfDeviceRow {
 
 /// One active power zonal reserve row.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct ScopfActiveReserveRow {
     pub n_p: usize,
     pub uid: String,
@@ -164,6 +175,7 @@ pub struct ScopfActiveReserveRow {
 
 /// One reactive (reactive-power) zonal reserve row.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct ScopfReactiveReserveRow {
     pub n_q: usize,
     pub uid: String,
@@ -175,6 +187,7 @@ pub struct ScopfReactiveReserveRow {
 
 /// One (bus, active reserve zone, device) membership row.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct ScopfActiveReserveSetRow {
     pub i: BusId,
     pub n_p: usize,
@@ -183,6 +196,7 @@ pub struct ScopfActiveReserveSetRow {
 
 /// One (bus, reactive reserve zone, device) membership row.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct ScopfReactiveReserveSetRow {
     pub i: BusId,
     pub n_q: usize,
@@ -328,6 +342,7 @@ pub struct ScopfEnergyWindows {
 
 /// One flattened device, period, and price block row.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct ScopfPriceBlockRow {
     pub flat_k: usize,
     pub uid: String,
@@ -347,6 +362,7 @@ pub struct ScopfPriceBlocks {
 
 /// One AC line surviving a contingency.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct ScopfAcLineSurvivorRow {
     pub ctg: usize,
     pub j_ln: usize,
@@ -359,6 +375,7 @@ pub struct ScopfAcLineSurvivorRow {
 
 /// One transformer surviving a contingency.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct ScopfTransformerSurvivorRow {
     pub ctg: usize,
     pub j_xf: usize,
@@ -380,6 +397,7 @@ pub struct ScopfAcContingencySurvivors {
 
 /// One surviving DC line in one contingency and period.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct ScopfDcContingencyFlowRow {
     pub flat_jtk_dc: usize,
     pub ctg: usize,

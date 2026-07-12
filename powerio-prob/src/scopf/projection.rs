@@ -1,4 +1,4 @@
-use std::collections::HashSet;
+use std::collections::{BTreeMap, HashSet};
 
 use powerio::BusId;
 use powerio::format::goc3::Goc3Document;
@@ -23,6 +23,15 @@ use super::types::{
 
 type Result<T> = ScopfResult<T>;
 
+/// The device class of a `simple_dispatchable_device` row. An absent
+/// `device_type` defaults to `producer`, the same rule the balanced GOC3
+/// reader applies in `device_rows`.
+fn sdd_device_type(obj: &Map<String, Value>) -> &str {
+    obj.get("device_type")
+        .and_then(Value::as_str)
+        .unwrap_or("producer")
+}
+
 fn validate_period_len(
     kind: &str,
     uid: &str,
@@ -43,7 +52,7 @@ impl Goc3Adapter {
         let mut rows = Vec::new();
         for uid in self.sdd_order() {
             let val = self.sdd.get(&uid)?;
-            if require_str(val, "device_type")? != device_type {
+            if sdd_device_type(val) != device_type {
                 continue;
             }
             let ts_val = self.sdd_ts.get(&uid)?;
@@ -68,12 +77,12 @@ impl Goc3Adapter {
 
     fn twt_variable_phase(&self) -> Result<Vec<ScopfVariablePhaseRow>> {
         let mut rows = Vec::new();
-        for uid in self.twt.uids() {
+        for (j_xf, uid) in self.twt.uids().iter().enumerate() {
             let val = self.twt.get(uid)?;
             let (lb, ub) = (require_num(val, "ta_lb")?, require_num(val, "ta_ub")?);
             if lb < ub {
                 rows.push(ScopfVariablePhaseRow {
-                    j_xf: self.twt.index(uid)?,
+                    j_xf,
                     phi_min: lb,
                     phi_max: ub,
                 });
@@ -85,15 +94,12 @@ impl Goc3Adapter {
 
     fn twt_fixed_phase(&self) -> Result<Vec<ScopfFixedPhaseRow>> {
         let mut rows = Vec::new();
-        for uid in self.twt.uids() {
+        for (j_xf, uid) in self.twt.uids().iter().enumerate() {
             let val = self.twt.get(uid)?;
             let (lb, ub) = (require_num(val, "ta_lb")?, require_num(val, "ta_ub")?);
             if lb >= ub {
                 let phi_o = require_num(initial_status(val)?, "ta")?;
-                rows.push(ScopfFixedPhaseRow {
-                    j_xf: self.twt.index(uid)?,
-                    phi_o,
-                });
+                rows.push(ScopfFixedPhaseRow { j_xf, phi_o });
             }
         }
         rows.sort_by_key(|r| r.j_xf);
@@ -102,12 +108,12 @@ impl Goc3Adapter {
 
     fn twt_variable_ratio(&self) -> Result<Vec<ScopfVariableRatioRow>> {
         let mut rows = Vec::new();
-        for uid in self.twt.uids() {
+        for (j_xf, uid) in self.twt.uids().iter().enumerate() {
             let val = self.twt.get(uid)?;
             let (lb, ub) = (require_num(val, "tm_lb")?, require_num(val, "tm_ub")?);
             if lb < ub {
                 rows.push(ScopfVariableRatioRow {
-                    j_xf: self.twt.index(uid)?,
+                    j_xf,
                     tau_min: lb,
                     tau_max: ub,
                 });
@@ -119,15 +125,12 @@ impl Goc3Adapter {
 
     fn twt_fixed_ratio(&self) -> Result<Vec<ScopfFixedRatioRow>> {
         let mut rows = Vec::new();
-        for uid in self.twt.uids() {
+        for (j_xf, uid) in self.twt.uids().iter().enumerate() {
             let val = self.twt.get(uid)?;
             let (lb, ub) = (require_num(val, "tm_lb")?, require_num(val, "tm_ub")?);
             if lb >= ub {
                 let tau_o = require_num(initial_status(val)?, "tm")?;
-                rows.push(ScopfFixedRatioRow {
-                    j_xf: self.twt.index(uid)?,
-                    tau_o,
-                });
+                rows.push(ScopfFixedRatioRow { j_xf, tau_o });
             }
         }
         rows.sort_by_key(|r| r.j_xf);
@@ -201,32 +204,34 @@ impl Goc3Adapter {
     fn sdd_rows(&self, device_type: &str) -> Result<Vec<ScopfDeviceRow>> {
         let mut rows = Vec::new();
         for uid in self.sdd_order() {
-            if require_str(self.sdd.get(&uid)?, "device_type")? == device_type {
+            if sdd_device_type(self.sdd.get(&uid)?) == device_type {
                 rows.push(self.sdd_row(&uid)?);
             }
         }
         Ok(rows)
     }
 
-    /// One (bus, zone, device) membership set: `ids` is the sorted reserve
-    /// zone uid list (`azr_ids`/`rzr_ids`), `uids_key` names the bus field
-    /// listing its zone uids, `device_type` filters the zone's devices. The
-    /// Rust equivalent of `reserve_set` in `src/goc3.jl`, iterating buses in
-    /// [`Goc3Adapter::bus_order`] and devices in
-    /// [`Goc3Adapter::devices_by_bus`] order (see the module-level order
-    /// note; `src/goc3.jl` iterates both as `Dict`s here).
+    /// One (bus, zone, device) membership set: `ids` is the reserve zone
+    /// section's uid list in document order, so the `zone_index` passed to
+    /// `mkrow` matches the `n_p`/`n_q` the reserve rows assign from the same
+    /// order. `uids_key` names the bus field listing its zone uids and
+    /// `device_type` filters the zone's devices. The Rust equivalent of
+    /// `reserve_set` in `src/goc3.jl`, iterating buses in `bus_order` and
+    /// devices in `devices_by_bus` order (`src/goc3.jl` iterates both as
+    /// `Dict`s here). `devices_by_bus`/`bus_order` are precomputed once by
+    /// the caller; four membership sets share them.
     fn reserve_set<R>(
         &self,
         ids: &[String],
         uids_key: &str,
         device_type: &str,
+        devices_by_bus: &BTreeMap<String, Vec<String>>,
+        bus_order: &[String],
         mkrow: impl Fn(BusId, usize, String) -> R,
     ) -> Result<Vec<R>> {
-        let devices_by_bus = self.devices_by_bus()?;
-        let bus_order = self.bus_order();
         let mut rows = Vec::new();
         for (zone_index, id) in ids.iter().enumerate() {
-            for bus_uid in &bus_order {
+            for bus_uid in bus_order {
                 let bus_obj = self.bus.get(bus_uid)?;
                 let member = bus_obj
                     .get(uids_key)
@@ -240,7 +245,7 @@ impl Goc3Adapter {
                 };
                 for dev_uid in devices {
                     let device = self.sdd.get(dev_uid)?;
-                    if require_str(device, "device_type")? == device_type {
+                    if sdd_device_type(device) == device_type {
                         rows.push(mkrow(
                             self.goc3_bus_id(bus_uid)?,
                             zone_index,
@@ -331,7 +336,7 @@ fn build_static_projection(tables: &Goc3Adapter) -> Result<ScopfStaticDataProjec
         .enumerate()
         .map(|(j_ln, uid)| {
             let val = tables.ac_line.get(uid)?;
-            let (g_sr, b_sr, b_ch, g_fr, g_to, b_fr, b_to) = branch_admittance(val)?;
+            let (g_sr, b_sr, b_ch, g_fr, g_to, b_fr, b_to) = branch_admittance(uid, val)?;
             Ok(ScopfAcLineRow {
                 j_ln,
                 uid: uid.clone(),
@@ -359,7 +364,7 @@ fn build_static_projection(tables: &Goc3Adapter) -> Result<ScopfStaticDataProjec
         .enumerate()
         .map(|(j_xf, uid)| {
             let val = tables.twt.get(uid)?;
-            let (g_sr, b_sr, b_ch, g_fr, g_to, b_fr, b_to) = branch_admittance(val)?;
+            let (g_sr, b_sr, b_ch, g_fr, g_to, b_fr, b_to) = branch_admittance(uid, val)?;
             Ok(ScopfTransformerRow {
                 j_xf,
                 uid: uid.clone(),
@@ -501,28 +506,38 @@ fn build_static_projection(tables: &Goc3Adapter) -> Result<ScopfStaticDataProjec
         .collect::<Result<_>>()?;
     reactive_reserve.sort_by_key(|r| r.n_q);
 
+    let devices_by_bus = tables.devices_by_bus()?;
+    let bus_order = tables.bus_order();
     let active_reserve_set_pr = tables.reserve_set(
-        &tables.azr_ids,
+        tables.azr.uids(),
         "active_reserve_uids",
         "producer",
+        &devices_by_bus,
+        &bus_order,
         |i, n_p, uid| ScopfActiveReserveSetRow { i, n_p, uid },
     )?;
     let active_reserve_set_cs = tables.reserve_set(
-        &tables.azr_ids,
+        tables.azr.uids(),
         "active_reserve_uids",
         "consumer",
+        &devices_by_bus,
+        &bus_order,
         |i, n_p, uid| ScopfActiveReserveSetRow { i, n_p, uid },
     )?;
     let reactive_reserve_set_pr = tables.reserve_set(
-        &tables.rzr_ids,
+        tables.rzr.uids(),
         "reactive_reserve_uids",
         "producer",
+        &devices_by_bus,
+        &bus_order,
         |i, n_q, uid| ScopfReactiveReserveSetRow { i, n_q, uid },
     )?;
     let reactive_reserve_set_cs = tables.reserve_set(
-        &tables.rzr_ids,
+        tables.rzr.uids(),
         "reactive_reserve_uids",
         "consumer",
+        &devices_by_bus,
+        &bus_order,
         |i, n_q, uid| ScopfReactiveReserveSetRow { i, n_q, uid },
     )?;
 
@@ -593,7 +608,7 @@ fn sdd_windows(
     let mut ind = 0usize;
     for uid in tables.sdd_order() {
         let val = tables.sdd.get(&uid)?;
-        if require_str(val, "device_type")? != device_type {
+        if sdd_device_type(val) != device_type {
             continue;
         }
         let req = require_field(val, "simple_dispatchable_device", &uid, req_key)?
@@ -790,8 +805,23 @@ fn build_price_blocks(
     }
 }
 
-fn b_sr(r: f64, x: f64) -> f64 {
-    -x / (x * x + r * r)
+/// Series admittance `(g_sr, b_sr) = (r, -x) / (r² + x²)` for one GOC3
+/// branch record. A zero or non-finite `r² + x²` is rejected by name instead
+/// of writing NaN into the instance; `src/goc3.jl` computes the same formula
+/// unguarded, so this is deliberately stricter than the Julia parser.
+fn series_terms(r: f64, x: f64, uid: &str) -> Result<(f64, f64)> {
+    let denom = x * x + r * r;
+    if denom == 0.0 {
+        return Err(json_error(format!(
+            "branch `{uid}` has zero series impedance (r = x = 0)"
+        )));
+    }
+    if !denom.is_finite() {
+        return Err(json_error(format!(
+            "branch `{uid}` has non-finite series impedance"
+        )));
+    }
+    Ok((r / denom, -x / denom))
 }
 
 /// Series admittance and terminal shunt parameters shared by AC lines and
@@ -802,9 +832,12 @@ fn b_sr(r: f64, x: f64) -> f64 {
 /// flag read straight from JSON, not an accumulated float, so the exact
 /// comparison is intentional.
 #[allow(clippy::type_complexity, clippy::float_cmp)]
-fn branch_admittance(val: &Map<String, Value>) -> Result<(f64, f64, f64, f64, f64, f64, f64)> {
+fn branch_admittance(
+    uid: &str,
+    val: &Map<String, Value>,
+) -> Result<(f64, f64, f64, f64, f64, f64, f64)> {
     let (r, x) = (require_num(val, "r")?, require_num(val, "x")?);
-    let g_sr = r / (x * x + r * r);
+    let (g_sr, b_sr) = series_terms(r, x, uid)?;
     let additional_shunt = require_num(val, "additional_shunt")? == 1.0;
     let (g_fr, g_to, b_fr, b_to) = if additional_shunt {
         (
@@ -816,15 +849,7 @@ fn branch_admittance(val: &Map<String, Value>) -> Result<(f64, f64, f64, f64, f6
     } else {
         (0.0, 0.0, 0.0, 0.0)
     };
-    Ok((
-        g_sr,
-        b_sr(r, x),
-        require_num(val, "b")?,
-        g_fr,
-        g_to,
-        b_fr,
-        b_to,
-    ))
+    Ok((g_sr, b_sr, require_num(val, "b")?, g_fr, g_to, b_fr, b_to))
 }
 
 /// One contingency index and its outaged component UIDs.
@@ -865,38 +890,40 @@ fn build_ac_contingency_survivors(tables: &Goc3Adapter) -> Result<ScopfAcConting
         let (ctg_idx, outaged) = contingency_outages(ctg_idx, ctg)?;
 
         let mut ln_rows = Vec::new();
-        for uid in tables.ac_line.uids() {
+        for (j_ln, uid) in tables.ac_line.uids().iter().enumerate() {
             if outaged.contains(uid.as_str()) {
                 continue;
             }
             let val = tables.ac_line.get(uid)?;
             let (r, x) = (require_num(val, "r")?, require_num(val, "x")?);
+            let (_, b_sr) = series_terms(r, x, uid)?;
             ln_rows.push(ScopfAcLineSurvivorRow {
                 ctg: ctg_idx,
-                j_ln: tables.ac_line.index(uid)?,
+                j_ln,
                 uid: uid.clone(),
                 to_bus: tables.goc3_bus_id(require_str(val, "to_bus")?)?,
                 fr_bus: tables.goc3_bus_id(require_str(val, "fr_bus")?)?,
-                b_sr: b_sr(r, x),
+                b_sr,
                 s_max_ctg: require_num(val, "mva_ub_em")?,
             });
         }
         ln.push(ln_rows);
 
         let mut xf_rows = Vec::new();
-        for uid in tables.twt.uids() {
+        for (j_xf, uid) in tables.twt.uids().iter().enumerate() {
             if outaged.contains(uid.as_str()) {
                 continue;
             }
             let val = tables.twt.get(uid)?;
             let (r, x) = (require_num(val, "r")?, require_num(val, "x")?);
+            let (_, b_sr) = series_terms(r, x, uid)?;
             xf_rows.push(ScopfTransformerSurvivorRow {
                 ctg: ctg_idx,
-                j_xf: tables.twt.index(uid)?,
+                j_xf,
                 uid: uid.clone(),
                 to_bus: tables.goc3_bus_id(require_str(val, "to_bus")?)?,
                 fr_bus: tables.goc3_bus_id(require_str(val, "fr_bus")?)?,
-                b_sr: b_sr(r, x),
+                b_sr,
                 s_max_ctg: require_num(val, "mva_ub_em")?,
             });
         }
@@ -914,7 +941,7 @@ fn build_dc_contingency_flows(tables: &Goc3Adapter) -> Result<Vec<ScopfDcConting
         let (ctg_idx, outaged) = contingency_outages(ctg_idx, ctg)?;
 
         for (t0, &dt) in tables.dt.iter().enumerate() {
-            for uid in tables.dc_line.uids() {
+            for (j_dc, uid) in tables.dc_line.uids().iter().enumerate() {
                 if outaged.contains(uid.as_str()) {
                     continue;
                 }
@@ -922,7 +949,7 @@ fn build_dc_contingency_flows(tables: &Goc3Adapter) -> Result<Vec<ScopfDcConting
                 rows.push(ScopfDcContingencyFlowRow {
                     flat_jtk_dc,
                     ctg: ctg_idx,
-                    j_dc: tables.dc_line.index(uid)?,
+                    j_dc,
                     to_bus: tables.goc3_bus_id(require_str(val, "to_bus")?)?,
                     fr_bus: tables.goc3_bus_id(require_str(val, "fr_bus")?)?,
                     t: t0,

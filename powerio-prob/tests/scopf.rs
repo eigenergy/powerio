@@ -218,3 +218,86 @@ fn replace_exact_strings(value: &mut Value, replacements: &[(&str, &str)]) {
         Value::Null | Value::Bool(_) | Value::Number(_) => {}
     }
 }
+
+/// Append a clone of a section's first row under a new uid, in both the
+/// network section and, when present, its time series section.
+fn append_zone(doc: &mut Value, section: &str, uid: &str) {
+    for parent in ["network", "time_series_input"] {
+        if let Some(rows) = doc[parent][section].as_array_mut() {
+            let mut row = rows[0].clone();
+            row["uid"] = Value::from(uid);
+            rows.push(row);
+        }
+    }
+}
+
+/// Two zones whose document order differs from lexicographic order: the
+/// reserve rows and the membership sets must assign one zone index per zone.
+#[test]
+fn reserve_zone_indices_agree_across_tables() {
+    let mut doc: Value = serde_json::from_str(SMALL).expect("fixture json");
+    // "azq_99"/"rzq_99" sort before the existing zones but come second in
+    // document order.
+    append_zone(&mut doc, "active_zonal_reserve", "azq_99");
+    append_zone(&mut doc, "reactive_zonal_reserve", "rzq_99");
+    let bus1 = &mut doc["network"]["bus"][1];
+    bus1["active_reserve_uids"] = serde_json::json!(["azq_99"]);
+    bus1["reactive_reserve_uids"] = serde_json::json!(["rzq_99"]);
+    let text = serde_json::to_string(&doc).expect("serialize");
+
+    let instance = build_scopf_instance_from_str(&text, "goc3-json").expect("build");
+    let data = &instance.static_data;
+
+    let n_p_of = |uid: &str| {
+        data.active_reserve
+            .iter()
+            .find(|row| row.uid == uid)
+            .map(|row| row.n_p)
+            .expect("zone row")
+    };
+    let n_q_of = |uid: &str| {
+        data.reactive_reserve
+            .iter()
+            .find(|row| row.uid == uid)
+            .map(|row| row.n_q)
+            .expect("zone row")
+    };
+    assert_eq!(n_p_of("azr_00"), 0);
+    assert_eq!(n_p_of("azq_99"), 1);
+
+    // sd_00 (producer) sits at bus_00 in zone azr_00; sd_01 (consumer) sits
+    // at bus_01, now in zone azq_99/rzq_99. The membership sets must carry
+    // the same zone indices as the reserve rows.
+    assert_eq!(data.active_reserve_set_pr.len(), 1);
+    assert_eq!(data.active_reserve_set_pr[0].uid, "sd_00");
+    assert_eq!(data.active_reserve_set_pr[0].n_p, n_p_of("azr_00"));
+    assert_eq!(data.active_reserve_set_cs.len(), 1);
+    assert_eq!(data.active_reserve_set_cs[0].uid, "sd_01");
+    assert_eq!(data.active_reserve_set_cs[0].n_p, n_p_of("azq_99"));
+    assert_eq!(data.reactive_reserve_set_cs[0].n_q, n_q_of("rzq_99"));
+}
+
+#[test]
+fn zero_series_impedance_is_rejected() {
+    let mut doc: Value = serde_json::from_str(SMALL).expect("fixture json");
+    doc["network"]["ac_line"][0]["r"] = Value::from(0.0);
+    doc["network"]["ac_line"][0]["x"] = Value::from(0.0);
+    let text = serde_json::to_string(&doc).expect("serialize");
+    let error = build_scopf_instance_from_str(&text, "goc3-json").expect_err("zero impedance");
+    assert!(error.to_string().contains("zero series impedance"));
+}
+
+/// The balanced GOC3 reader defaults an absent `device_type` to `producer`;
+/// the SCOPF projection follows the same rule instead of erroring.
+#[test]
+fn missing_device_type_defaults_to_producer() {
+    let mut doc: Value = serde_json::from_str(SMALL).expect("fixture json");
+    doc["network"]["simple_dispatchable_device"][0]
+        .as_object_mut()
+        .expect("device object")
+        .remove("device_type");
+    let text = serde_json::to_string(&doc).expect("serialize");
+    let instance = build_scopf_instance_from_str(&text, "goc3-json").expect("build");
+    assert_eq!(instance.static_data.prod[0].uid, "sd_00");
+    assert_eq!(instance.lengths.l_j_pr, 1);
+}

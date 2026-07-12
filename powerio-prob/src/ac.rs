@@ -33,9 +33,11 @@ pub struct AcBusData {
     pub p_d: Vec<f64>,
     /// Nodal reactive demand in the selected power unit.
     pub q_d: Vec<f64>,
-    /// Nodal shunt conductance in the selected admittance unit.
+    /// Nodal shunt conductance in the selected admittance unit. Includes the
+    /// folded pi model stamp of any self-loop branch, matching `build_ybus`.
     pub g_s: Vec<f64>,
-    /// Nodal shunt susceptance in the selected admittance unit.
+    /// Nodal shunt susceptance in the selected admittance unit. Includes the
+    /// folded pi model stamp of any self-loop branch, matching `build_ybus`.
     pub b_s: Vec<f64>,
     /// Voltage magnitude lower bound, per unit.
     pub vm_min: Vec<f64>,
@@ -181,6 +183,7 @@ pub fn build_ac_opf_instance(
     options: &AcOpfOptions,
 ) -> Result<AcOpfInstance> {
     case.check_reference_coverage()?;
+    case.network().check_base_mva()?;
 
     let n_buses = case.n();
     let base = case.per_unit_base();
@@ -232,6 +235,9 @@ pub fn build_ac_opf_instance(
         return Err(Error::NoGenerators);
     }
 
+    let mut g_s: Vec<f64> = case.gs().iter().map(|value| value * p_scale).collect();
+    let mut b_s: Vec<f64> = case.bs().iter().map(|value| value * p_scale).collect();
+
     let mut from_bus = Vec::new();
     let mut to_bus = Vec::new();
     let mut g = Vec::new();
@@ -257,9 +263,6 @@ pub fn build_ac_opf_instance(
             bus_id: branch.to,
             element_index: source_row,
         })?;
-        if from == to {
-            continue;
-        }
         let Some((series_g, series_b)) = branch.series_admittance(source_row)? else {
             if options.skip_zero_impedance {
                 skipped_zero_impedance.push(source_row);
@@ -268,6 +271,22 @@ pub fn build_ac_opf_instance(
             return Err(Error::ZeroImpedance { row: source_row });
         };
         let charging = branch.terminal_charging();
+        if from == to {
+            // A self-loop is not a flow element; its whole pi model stamp
+            // lands on the bus diagonal, exactly as `build_ybus` folds it.
+            // With t = tap·e^{jθ}: Yff + Yft + Ytf + Ytt
+            //   = (y + y_fr)/tap² + (y + y_to) − y·2cos(θ)/tap.
+            let tap = branch.effective_tap();
+            let tap_squared = tap * tap;
+            let cross = 2.0 * case.angle_radians(branch.shift).cos() / tap;
+            g_s[from] += ((series_g + charging.g_fr) / tap_squared + (series_g + charging.g_to)
+                - series_g * cross)
+                * y_scale;
+            b_s[from] += ((series_b + charging.b_fr) / tap_squared + (series_b + charging.b_to)
+                - series_b * cross)
+                * y_scale;
+            continue;
+        }
         from_bus.push(from);
         to_bus.push(to);
         g.push(series_g * y_scale);
@@ -309,8 +328,8 @@ pub fn build_ac_opf_instance(
         buses: AcBusData {
             p_d: case.pd().iter().map(|value| value * p_scale).collect(),
             q_d: case.qd().iter().map(|value| value * p_scale).collect(),
-            g_s: case.gs().iter().map(|value| value * p_scale).collect(),
-            b_s: case.bs().iter().map(|value| value * p_scale).collect(),
+            g_s,
+            b_s,
             vm_min,
             vm_max,
             vm,
