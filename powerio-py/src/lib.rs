@@ -1,22 +1,16 @@
 //! PyO3 extension behind the `powerio` Python package.
 //!
-//! One Rust↔Python boundary for both halves of PowerIO: the dependency-light IO
-//! surface (parse, lossless write, cross-format convert) and the matrix surface
-//! (MATPOWER Bp/Bpp/Y_bus, PTDF/LODF, incidence, weighted Laplacian, adjacency, DC OPF).
-//! Parse and convert cross the boundary as plain dicts and strings, so
-//! `import powerio` pulls in nothing but the interpreter.
+//! The extension exposes parsing, writing, conversion, matrices, packages, and
+//! problem instances. Parse and conversion values cross as Python dictionaries
+//! and strings, so the base package does not import NumPy or SciPy.
 //!
 //! The matrix methods hand back COO triplets as plain Python lists
-//! (`data`, `row`, `col`, `shape`); there is no numpy at this layer. The
-//! pure-Python `powerio` package (python/powerio/) assembles those into
-//! `scipy.sparse` matrices and networkx graphs lazily, so scipy/numpy/networkx
-//! stay out of the Rust build and a missing extra surfaces as an
-//! `ImportError` in Python rather than a link error.
+//! (`data`, `row`, `col`, `shape`); there is no NumPy at this layer. The
+//! Python `powerio` package assembles those into `scipy.sparse` matrices and
+//! NetworkX graphs when the corresponding extra is installed.
 //!
-//! Indices narrow to `i32` to
-//! match scipy's default index width; the largest index is bounded by
-//! `max(n_buses, n_branches)` (`2n` for the LACPF block), far under 2³¹, and
-//! `coo_triplets` guards the bound anyway.
+//! Indices narrow to `i32` to match SciPy's default index width.
+//! `coo_triplets` checks the bound before conversion.
 
 use std::collections::BTreeMap;
 use std::path::Path;
@@ -566,7 +560,7 @@ fn build_options(scheme: Scheme, include_taps: bool, include_shifts: bool) -> Bu
     }
 }
 
-/// Low-level handle around a parsed [`Network`]. The user-facing `powerio.Network`
+/// Low level handle around a parsed [`Network`]. The public `powerio.Network`
 /// (pure Python) wraps this: the IO getters and topology methods delegate
 /// straight to it, and the matrix methods turn its COO tuples into scipy.
 ///
@@ -1216,7 +1210,7 @@ fn read_pypsa_csv_folder(path: &str) -> PyResult<PyNetwork> {
         .map_err(to_pyerr)
 }
 
-/// Convert a case file to another format through the neutral hub. Returns
+/// Convert a case file to another format through the network model. Returns
 /// `(text, warnings)`: the converted file text and the list of fidelity warnings
 /// (fields the target couldn't represent). The input format is the file
 /// extension unless `from` overrides it.
@@ -1245,7 +1239,7 @@ fn convert_file(
     Ok((conv.text, conv.warnings))
 }
 
-/// Convert in-memory case `text` to another format through the neutral hub,
+/// Convert in-memory case `text` to another format through the network model,
 /// with no file staging. Returns `(text, warnings)` like `convert_file`.
 /// `format` names the input format (default `matpower`).
 #[pyfunction]
@@ -1679,7 +1673,7 @@ fn pypsa_outputs_to_dict<'py>(
     Ok(d)
 }
 
-/// Write a batch of cases as one gridfm-datakit dataset, row-stacked and keyed by
+/// Write a batch of cases as one gridfm-datakit dataset, row stacked and keyed by
 /// the `scenario` column. The k-th case is stamped `base_scenario + k`; all cases
 /// must share one base element set (same bus/branch/gen counts and bus-id order).
 /// Available when the extension is built with the Rust `gridfm` feature.

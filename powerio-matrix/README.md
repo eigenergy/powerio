@@ -1,7 +1,7 @@
 # powerio-matrix
 
-`powerio-matrix` builds sparse matrices and graph outputs from `powerio::Network`.
-It re-exports the `powerio` data layer so one import covers parsing and matrix
+`powerio-matrix` projects a `powerio::Network` into sparse matrices and graph
+views. It reexports `powerio`, so the same import can cover parsing and matrix
 construction.
 
 ```rust
@@ -14,7 +14,7 @@ let bprime = build_bprime(&view, &BuildOptions::default())?;
 
 Outputs include MATPOWER Bp/Bpp, Y_bus components, LACPF, signed incidence,
 weighted bus Laplacians, PTDF, LODF, adjacency, and a petgraph graph.
-`powerio-prob` builds complete problem instances and its optional matrix
-feature derives problem specific operators. The workspace README has the full
-format and validation overview:
-<https://github.com/eigenergy/powerio>.
+`powerio-prob` builds complete problem instances. Its optional `matrix` feature
+derives problem specific operators from an instance. See the
+[workspace README](https://github.com/eigenergy/powerio) for formats and
+validation commands.

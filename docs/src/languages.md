@@ -25,9 +25,9 @@ Verb taxonomy:
 |---|---|---|---|---|
 | Parse path | `parse_file(path, from)` | `parse_file(path, from_=None)` | `parse_file(path; from=nothing)` | `pio_parse_file` |
 | Parse text | `parse_str(text, format)` | `parse_str(text, format)` | `parse_str(text, format)` | `pio_parse_str` |
-| Parse display path | `parse_display_file(path, from)` | `parse_display_file(path, from_=None)` | planned | n/a |
-| Parse display bytes | `parse_display_bytes(bytes, format)` | `parse_display_bytes(data, format)` | planned | n/a |
-| Parse IO | n/a | file object later | `parse_file(io, format)` | n/a |
+| Parse display path | `parse_display_file(path, from)` | `parse_display_file(path, from_=None)` | — | n/a |
+| Parse display bytes | `parse_display_bytes(bytes, format)` | `parse_display_bytes(data, format)` | — | n/a |
+| Parse IO | n/a | — | `parse_file(io, format)` | n/a |
 | JSON to Network | `Network::from_json` | `from_json` | `from_json` | `pio_parse_str` + `"powerio-json"` |
 | File conversion | `convert_file(path, to, from)` | `convert_file(path, to, from_=None)` | `convert_file(path, to; from=nothing)` | `pio_convert_file` |
 | Text conversion | `convert_str(text, to, format)` | `convert_str(text, to, format)` | `convert_str(text, to; from=format)` | `pio_convert_str` |
@@ -35,16 +35,17 @@ Verb taxonomy:
 | MATPOWER text | `net.to_matpower()` | `net.to_matpower()` | `to_matpower(net)` | `pio_to_format` + `"matpower"` |
 | JSON text | `net.to_json()` | `net.to_json()` | `to_json(net)` | `pio_to_format` + `"powerio-json"` |
 | `.pio.json` document JSON | `NetworkPackage::to_json()` | `Package` class / package transport | `to_package` / `write_package` | `pio_package_*` |
-| `.pio.json` operating points | `pkg.operating_points()` | `pkg.operating_points()` | planned | `pio_package_operating_points_json` |
-| Materialize operating point | `pkg.materialize_operating_point(i)` | `pkg.materialize_operating_point(i)` | planned | `pio_package_materialize_operating_point` |
-| `.pio.json` study block | `pkg.study()` | `pkg.study()` | planned | `pio_package_study_json` |
-| Materialize study commit | `pkg.materialize_study_commit(i)` | `pkg.materialize_study_commit(i)` | planned | `pio_package_materialize_study_commit` |
+| `.pio.json` operating points | `pkg.operating_points()` | `pkg.operating_points()` | — | `pio_package_operating_points_json` |
+| Materialize operating point | `pkg.materialize_operating_point(i)` | `pkg.materialize_operating_point(i)` | — | `pio_package_materialize_operating_point` |
+| `.pio.json` study block | `pkg.study()` | `pkg.study()` | — | `pio_package_study_json` |
+| Materialize study commit | `pkg.materialize_study_commit(i)` | `pkg.materialize_study_commit(i)` | — | `pio_package_materialize_study_commit` |
+| Parse SCOPF instance | `build_scopf_instance` | `parse_scopf(text, from_="goc3-json")` | versioned wire adapter | `pio_scopf_parse_str` |
 | Normalized copy | `net.to_normalized()` | `net.to_normalized()` | `to_normalized(net)` | `pio_normalize` |
 | Dense tables | typed table API | `to_dense` | `to_dense` | `pio_*` extractors |
 | PyPSA CSV folder | `read_pypsa_csv_folder` / `write_pypsa_csv_folder` | `read_pypsa_csv_folder` / `net.write_pypsa_csv_folder` | `parse_file(dir; from="pypsa-csv")` / `write_pypsa_csv_folder` | `pio_parse_file` / `pio_write_dir` + `"pypsa-csv"` |
-| gridfm write | `write_gridfm_dataset` / `write_gridfm_batch` | `net.write_gridfm` / `write_gridfm_batch` | planned | planned |
+| gridfm write | `write_gridfm_dataset` / `write_gridfm_batch` | `net.write_gridfm` / `write_gridfm_batch` | — | — |
 | gridfm read | `read_gridfm_dataset(dir, scenario)` | `read_gridfm(dir, scenario=0)` | `read_gridfm(dir; scenario=0)` | `pio_read_dir` + `"gridfm"` |
-| Arrow handoff | internal/C ABI | later | `to_arrow` | `pio_to_arrow` |
+| Arrow handoff | internal/C ABI | — | `to_arrow` | `pio_to_arrow` |
 
 **Note:** the C ABI carries no per-format symbols: matpower, `powerio-json`,
 PyPSA CSV directories, and gridfm datasets are all format strings into
@@ -58,9 +59,10 @@ signature stays the same. The language APIs keep their per-format conveniences
 The C ABI is the stable boundary for non Rust callers. Handles own parsed
 networks. `PioPackage` handles own `.pio.json` documents. Callers free
 network handles with `pio_network_free`, package handles with
-`pio_package_free`, free returned text with `pio_string_free`, size output
-buffers before filling them, and treat every format name as a string routed
-through the same parser and writer hub.
+`pio_package_free`, and SCOPF handles with `pio_scopf_instance_free`. They free
+returned text with `pio_string_free`, size output buffers before filling them,
+and treat every format name as a string routed through the same parser and
+writer hub.
 
 C ABI review points:
 
@@ -70,8 +72,8 @@ C ABI review points:
 - returned text and warning buffers must be NUL terminated when capacity permits;
 - reported lengths must let callers allocate exact buffers;
 - header declarations and exported Rust symbols must match;
-- feature gated exports such as Arrow, GridFM, distribution, and packages must
-  be additive;
+- feature gated exports such as Arrow, GridFM, distribution, packages, and
+  problem instances must be additive;
 - ownership rules must be documented in the header, README, and binding code.
 
 Julia's `PowerIO.jl` uses the C ABI for handles, dense extractors, Arrow,
@@ -85,11 +87,11 @@ GOC3 document construction is the first `.pio.json` operating point path backed
 by a source format. The static balanced model JSON carries the first interval;
 the replayable series is exposed through the package APIs above.
 
-During development, test the sibling Julia binding against the local C ABI
-instead of an artifact:
+During development, test the Julia binding against the local C ABI instead of
+a release artifact:
 
 ```sh
-cargo build -p powerio-capi --release --features arrow,matrix,gridfm,dist,pkg
+cargo build -p powerio-capi --release --features arrow,matrix,gridfm,dist,pkg,prob
 POWERIO_CAPI=$PWD/target/release/libpowerio_capi.dylib \
   julia --project=../PowerIO.jl -e 'using Pkg; Pkg.test()'
 ```
@@ -124,4 +126,4 @@ the distribution C conversion helpers.
 | Text conversion | `powerio_dist::convert_str(text, to, format)` | `dist.convert_str(text, to, format)` | `convert_str(DistNetwork, text, to, format)` | `pio_dist_convert_str(text, from, to, ...)` |
 | Parsed conversion | `net.to_format(to)` | `case.to_format(to)` | `to_format(net, to)` | `pio_dist_to_format` |
 | Parse warnings | `net.warnings` | `case.warnings` | `warnings(net)` | `pio_dist_warnings` |
-| Graph projection | `net.graph()` | `case.graph()` | planned | `pio_dist_graph_json` |
+| Graph projection | `net.graph()` | `case.graph()` | — | `pio_dist_graph_json` |

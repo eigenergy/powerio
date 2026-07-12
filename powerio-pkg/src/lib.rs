@@ -1,20 +1,17 @@
-//! `powerio-pkg`: the `.pio.json` compiler package.
+//! `.pio.json` package metadata and model payloads.
 //!
-//! PowerIO has no single flattened "universal network" struct. It has two
-//! concrete static-grid IR families that stay distinct:
+//! PowerIO keeps two static network model families as separate types:
 //!
-//! - [`powerio::BalancedNetwork`] (the scalar positive-sequence transmission
-//!   model, historically `powerio::Network`);
-//! - [`powerio_dist::MulticonductorNetwork`] (the wire-coordinate distribution
-//!   model, historically `powerio_dist::DistNetwork`).
+//! - [`powerio::BalancedNetwork`], the scalar positive sequence transmission
+//!   model;
+//! - [`powerio_dist::MulticonductorNetwork`], the wire coordinate distribution
+//!   model.
 //!
-//! A [`NetworkPackage`] is the readable envelope that wraps exactly one of
-//! those payloads at a time, alongside the metadata a compiler artifact needs
-//! to be trustworthy: an explicit [`ModelKind`], producer and origin metadata,
-//! source maps, structured diagnostics, a validation summary, and lowering
-//! history. It can also carry optional operating points that replay state
-//! updates over the static payload. GOC3 packages use that block for the source
-//! time series: the payload holds one static interval, and
+//! A [`NetworkPackage`] stores one payload with an explicit [`ModelKind`],
+//! producer and origin metadata, source maps, diagnostics, validation results,
+//! and lowering history. Optional operating points replay independent states;
+//! optional study commits apply cumulative edits. GOC3 packages use operating
+//! points for the source time series: the payload holds one static interval, and
 //! [`NetworkPackage::materialize_operating_point`] derives another static
 //! package from a selected period. It serializes to `.pio.json`. See
 //! `docs/src/compiler-ir.md` for the architecture and
@@ -37,8 +34,6 @@
 //! assert_eq!(back.model_kind(), ModelKind::Balanced);
 //! ```
 //!
-//! Binary `.pio` is out of scope until the JSON package stabilizes; this crate
-//! is JSON only.
 
 pub mod diagnostics;
 pub mod lowering;

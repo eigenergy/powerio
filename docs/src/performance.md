@@ -1,6 +1,6 @@
 # Performance
 
-PowerIO has four benchmark tiers. Keep them separate when publishing numbers.
+PowerIO has five benchmark tiers. Keep them separate when publishing numbers.
 
 | tier | command | what it answers |
 | --- | --- | --- |
@@ -76,7 +76,7 @@ cargo build -p powerio-capi --release --no-default-features
 cp target/release/libpowerio_capi.dylib /tmp/libpowerio_capi-core.dylib
 cargo build -p powerio-capi --release --no-default-features --features arrow,matrix
 cp target/release/libpowerio_capi.dylib /tmp/libpowerio_capi-arrow-matrix.dylib
-cargo build -p powerio-capi --release --no-default-features --features arrow,matrix,gridfm,dist,pkg
+cargo build -p powerio-capi --release --no-default-features --features arrow,matrix,gridfm,dist,pkg,prob
 cp target/release/libpowerio_capi.dylib /tmp/libpowerio_capi-all.dylib
 stat -f '%z %N' /tmp/libpowerio_capi-core.dylib \
   /tmp/libpowerio_capi-arrow-matrix.dylib \

@@ -1,6 +1,6 @@
 //! [`IndexedNetwork`]: the dense-indexed analysis view over a [`Network`].
 //!
-//! [`Network`] is the canonical data record — format-neutral tables with no
+//! [`Network`] is the canonical data record: format neutral tables with no
 //! analysis behavior. The matrix builders, connectivity diagnostics, and the
 //! DC-OPF instance need things a plain table doesn't carry: a dense `[0, n)` bus
 //! index, demand and shunts aggregated per bus, the in-service subsets, and the

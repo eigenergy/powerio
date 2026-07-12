@@ -1,7 +1,8 @@
 # Matrix outputs and conventions
 
-The `powerio-matrix` crate builds sparse matrices and graph outputs for common power system representations. The outputs are derived from a parsed `Network`. The builders take the densely indexed `IndexedNetwork`, which maps bus ids to a
-contiguous \\([0,n)\\).
+`powerio-matrix` builds sparse matrices and graph views from a parsed `Network`.
+Builders take an `IndexedNetwork`, which maps source bus IDs to dense indices in
+\\([0,n)\\).
 
 `powerio-prob` builds problem instances (matrix free DC OPF and AC OPF input
 data plus the GOC3 SCOPF instance) and its `matrix` feature projects those
@@ -55,11 +56,10 @@ The GridFM export is a Parquet dataset under `<case>/raw/` with `bus_data`,
 scenario. A scenario batch row stacks snapshots that share the same element set
 and uses the `scenario` column as the key.
 
-GridFM read is the ML to classical return path. It recovers bus types, voltages,
-limits, nodal load and shunt totals, generator dispatch and bounds, branch
-parameters, and `base_mva`. It cannot recover original bus ids, per element load
-and shunt granularity, piecewise and cubic costs, HVDC, or storage; those losses
-are returned as warnings.
+GridFM reads recover bus types, voltages, limits, nodal load and shunt totals,
+generator dispatch and bounds, branch parameters, and `base_mva`. They cannot
+recover source bus IDs, per element load and shunt granularity, piecewise and
+cubic costs, HVDC, or storage. These losses are returned as warnings.
 
 ## Conventions
 
@@ -71,10 +71,10 @@ are returned as warnings.
   an SDDM (symmetric diagonally dominant M-matrix) or Cholesky solver expects
   once the grounded matrix is positive definite; a consumer can recover an edge
   weight as \\(-L_{ij} > 0\\).
-- **Bus indexing.** Bus ids are 1-based and preserved on the model as a newtype
-  (the Rust [New Type Idiom](https://doc.rust-lang.org/rust-by-example/generics/new_types.html)).
-  `IndexedNetwork::bus_index(id)` is the only mapping into the dense \\([0,n)\\); an id
-  out of range is an `Error::UnknownBus`.
+- **Bus indexing.** Source bus IDs are preserved on the model as a newtype and
+  need not be contiguous. `IndexedNetwork::bus_index(id)` maps them into dense
+  zero based indices in \\([0,n)\\). An unknown source ID returns
+  `Error::UnknownBus`.
 - **Taps and shifts.** \\(\mathrm{tap} = 0\\) means \\(\mathrm{tap} = 1\\)
   (`Branch::effective_tap`). MATPOWER `Bp` clears bus shunts and line
   charging, sets tap magnitudes to one, and keeps phase shifts. MATPOWER `Bpp`

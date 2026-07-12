@@ -383,7 +383,7 @@
       "type": "object"
     },
     "BusId": {
-      "description": "A bus identifier as it appears in the source file: the external, stable id\n(1-based in MATPOWER, and possibly sparse; pegase has gaps in its ids).\nDistinct from the dense `[0, n)` analysis index, which only\n[`IndexedNetwork`](crate::IndexedNetwork) produces, via\n[`bus_index`](crate::IndexedNetwork::bus_index). The two are both integers\nand trivially confused; making the id its own type stops one being used where\nthe other is meant (using a 1-based id to index a matrix is off-by-one on a\ncontiguous case and pure garbage on a sparse one).\n\n`#[serde(transparent)]` so the JSON transport carries a bare integer, not a\nwrapper object; the wire format is unchanged.",
+      "description": "A source bus ID, preserved from the input format.\n\nMATPOWER IDs are 1-based and can contain gaps. They are distinct from the\nzero based dense indices produced by\n[`IndexedNetwork::bus_index`](crate::IndexedNetwork::bus_index). JSON stores\nthis type as an integer.",
       "format": "uint",
       "minimum": 0,
       "type": "integer"
@@ -1462,7 +1462,7 @@
       ]
     },
     "Transformer3W": {
-      "description": "A three-winding transformer: three terminal buses joined at a common star\npoint, with the series impedance given pairwise (winding 1-2, 2-3, 3-1).\n\nKept as a typed record (not three [`Branch`]es) so the star-point voltage and\nthe per-winding control data survive a same-format round trip. Both the PSS/E\n3-winding record and the PSLF tertiary-winding record map onto it.\n[`star_expansion`](Transformer3W::star_expansion) turns it into the synthetic\nstar bus plus three branches for a consumer that works in the bus-branch model;\n[`IndexedNetwork`](crate::IndexedNetwork) applies it before building any matrix,\nso a 3-winding transformer contributes to `Y_bus` and connectivity.",
+      "description": "A three winding transformer with three terminal buses joined at a star point.\n\nSeries impedance is stored for winding pairs 1-2, 2-3, and 3-1. The record\nalso retains star point voltage and per winding control data. PSS/E three\nwinding records and PSLF tertiary winding records map to this type.\n[`star_expansion`](Transformer3W::star_expansion) turns it into the synthetic\nstar bus plus three branches for a consumer that works in the bus-branch model;\n[`IndexedNetwork`](crate::IndexedNetwork) applies it before building any matrix,\nso a 3-winding transformer contributes to `Y_bus` and connectivity.",
       "properties": {
         "extras": {
           "additionalProperties": true,
@@ -1659,7 +1659,7 @@
   },
   "$id": "https://powerio.dev/schema/pio-payload-balanced/1",
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "description": "A format-neutral power network.",
+  "description": "A balanced network with stable source bus IDs and separate element tables.",
   "properties": {
     "areas": {
       "default": [],

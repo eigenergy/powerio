@@ -1,15 +1,18 @@
 # powerio-prob
 
-`powerio-prob` builds complete numerical problem instances from PowerIO
-networks. An instance contains the indexed coefficients, bounds, mappings,
-units, and conventions needed to formulate a problem. It is distinct from the
-source network, a matrix projection, a solver formulation, and a solution.
+A problem instance is the complete numerical input for one problem family. It
+contains indexed coefficients, bounds, mappings, units, and conventions. It is
+not a source network, matrix projection, solver formulation, or solution.
 
-The default build has no sparse matrix dependency. It provides an index based
-`DcOpfInstance` whose generator and branch arrays can be consumed directly by
-an operations research model. It also provides a matrix free `ScopfInstance`
-for GOC3 data. Enable the `matrix` feature to derive sparse DC OPF operators
-from a `DcOpfInstance`.
+`powerio-prob`, short for problem instance builders, assembles these instances
+from PowerIO models.
+
+The default build has no sparse matrix dependency. It provides index based
+`DcOpfInstance` and `AcOpfInstance` data whose bus, generator, and branch
+arrays can be consumed directly by an operations research model, and a matrix
+free `ScopfInstance` for GOC3 data. Relaxations of AC OPF, the SOC forms
+included, consume the same `AcOpfInstance`. Enable the `matrix` feature to
+derive sparse DC OPF operators from a `DcOpfInstance`.
 
 ```rust
 use powerio::{IndexedNetwork, parse_matpower_file};

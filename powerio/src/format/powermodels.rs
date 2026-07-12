@@ -421,7 +421,7 @@ fn switch_obj(sw: &Switch, idx: usize, p: f64) -> Value {
 const FMT: &str = "PowerModels JSON";
 
 /// Parse PowerModels.jl network data JSON into a [`Network`]. Loads and shunts
-/// are read as first-class elements and the raw text is retained, so writing back
+/// are read as separate elements and the raw text is retained, so writing back
 /// to PowerModels JSON is a byte-exact echo. `per_unit = true` input (powerio's own
 /// output, and PowerModels' own export) is converted to the neutral MW/degree
 /// convention (powers ×baseMVA, angles to degrees, cost coefficients un-scaled),
@@ -559,7 +559,7 @@ fn bustype(code: i64) -> BusType {
 }
 
 /// Element keys the neutral model names directly are dropped here; whatever's left
-/// is preserved as extras for round-trip and cross-format passthrough.
+/// is preserved as extras for round trips and cross format conversion.
 fn extras_excluding(v: &Value, known: &[&str]) -> crate::network::Extras {
     v.as_object().map_or_else(Default::default, |obj| {
         obj.iter()

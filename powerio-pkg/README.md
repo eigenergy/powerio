@@ -1,19 +1,14 @@
 # powerio-pkg
 
-The `.pio.json` document: one PowerIO model JSON object with versioned metadata.
+A `.pio.json` document stores one PowerIO model payload with versioned metadata.
+The payload belongs to one of two model families:
 
-PowerIO has no single flattened "universal network" struct. It keeps two
-concrete static-grid IR families distinct:
+- `powerio::BalancedNetwork` — the scalar positive sequence transmission model;
+- `powerio_dist::MulticonductorNetwork` — the wire coordinate distribution model.
 
-- `powerio::BalancedNetwork` — the scalar positive-sequence transmission model
-  (historically `powerio::Network`);
-- `powerio_dist::MulticonductorNetwork` — the wire-coordinate distribution model
-  (historically `powerio_dist::DistNetwork`).
+A `NetworkPackage` owns one model payload and records:
 
-A `NetworkPackage` owns exactly one of those model JSON objects at a time and
-carries the metadata a compiler artifact needs to be trustworthy:
-
-- an explicit `model_kind` (never inferred from which field is present);
+- an explicit `model_kind`;
 - `producer` and `origin` metadata;
 - `sources` and `source_maps` (which canonical field came from which source
   record, by what `mapping_kind`);
@@ -21,14 +16,14 @@ carries the metadata a compiler artifact needs to be trustworthy:
 - a `validation` summary;
 - `lowering_history`;
 - optional `operating_points` for replayable states over the static model JSON;
+- optional `study` commits for cumulative edits;
 - optional `derived` metadata for matrix stats, normalized solver table
   identities, and cache keys.
 
-It serializes to `.pio.json`. Binary `.pio` is out of scope until the JSON
-document stabilizes.
+It serializes to `.pio.json`.
 
-Operating points are overlays, not separate model JSON objects. Each point
-names table rows and fields to update on the one static model JSON object.
+Operating points are overlays, not separate payloads. Each point names table
+rows and fields to update on the static model payload.
 Model rows carry stable `uid` identities (source uids where the format has
 them, synthesized `{table}:{row}` values otherwise); an update's `source_uid`
 resolves against them and is authoritative, with the wire `row` as a fallback

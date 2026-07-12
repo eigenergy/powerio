@@ -156,7 +156,7 @@ pub fn write_psse(net: &Network) -> Conversion {
 /// with (S, N, B) step triples. The reader keys each layout off the header
 /// revision. Any other `rev` falls back to the 33 layout. Same-format
 /// byte-exact echo still rides the retained source (see [`crate::write_as`]);
-/// this serializer is the cross-format path.
+/// this serializer is the cross format path.
 #[must_use]
 // A flat serializer: one stanza per PSS/E record type; splitting it would add
 // indirection without clarity.

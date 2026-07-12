@@ -9,29 +9,29 @@
   >
 </p>
 
-PowerIO is compiler infrastructure for power systems. Case files from a dozen
-transmission and distribution formats parse into typed intermediate
-representations (IR). Once parsed, you can perform explicit, recorded operations, like normalization, validation, and lowering.
-You can compile/write the case back into any supported target format, sparse matrix families, and ML model formats. 
+PowerIO parses power system data into typed Rust models. Readers cover balanced
+transmission cases, multiconductor distribution cases, display files, and
+directory datasets. Writers, matrix builders, package tools, and problem
+instance builders consume those models.
 
-The `.pio.json` document carries one model JSON object under declared [schema versions](https://powerio.dev/guide/pio-json-schema.html),
-with metadata that records where the data came from and how it maps back to the original source file.
-It also contains structured diagnostics, validation, and replayable operating points.
+A same format write returns the retained source bytes when the reader supports
+source retention. A cross format conversion writes the fields represented by
+the target and reports the remaining fields in `Conversion::warnings`.
 
-Data fidelity and interoperability is the primary goal of the PowerIO project. Writing a parsed file back to its own format returns
-the original text when the reader kept it. Converting to another format writes 
-the modeled electrical data and reports every field the target cannot carry in
-`Conversion::warnings`.
+`.pio.json` stores one model with declared
+[schema versions](https://powerio.dev/guide/pio-json-schema.html), provenance,
+source maps, diagnostics, validation results, lowering history, and optional
+operating points. It is a PowerIO document, not a replacement for exchange
+formats such as MATPOWER, PSS/E, or OpenDSS.
 
-The core of PowerIO is written in [Rust](https://rust-lang.org). The Rust version is used to create the Python package and the command line interface, both of which sit in this repo. The Rust implementation also enables the creation of a [C ABI](https://github.com/eigenergy/powerio/tree/main/powerio-capi), which exposes PowerIO capabilities to C, C++, [Julia](https://github.com/eigenergy/PowerIO.jl), and other foreign function interfaces (FFIs). 
-
-## Overview
-
-PowerIO is a community infrastructure project intended to serve all developers working on electric power systems. Everyone is welcome to use, build upon, and contribute to the PowerIO infrastructure project. 
+The Rust workspace also builds the command line interface, the Python package,
+and the [C ABI](https://github.com/eigenergy/powerio/tree/main/powerio-capi).
+[PowerIO.jl](https://github.com/eigenergy/PowerIO.jl) uses the C ABI.
 
 ### Formats
 
 Supported formats:
+
 - [MATPOWER](https://matpower.org/) `.m`
 - [PSS/E](https://www.siemens.com/global/en/products/energy/grid-software/planning/pss-software/pss-e.html) `.raw` revisions 33, 34, and 35
 - [PowerWorld](https://www.powerworld.com/WebHelp/Content/MainDocumentation_HTML/Case_Formats.htm) `.aux`, plus read only `.pwb` binary cases; `.pwd` display files parse through the separate display API. Behavior and limits are in the [format fidelity guide](https://powerio.dev/guide/format-fidelity.html).
@@ -49,11 +49,12 @@ Distribution networks are supported in wire coordinates via [`powerio-dist`](pow
 - [PowerModelsDistribution.jl](https://github.com/lanl-ansi/PowerModelsDistribution.jl) ENGINEERING data JSON
 - The (draft) BMOPF JSON spec and schema of the [IEEE BMOPF task force](https://github.com/frederikgeth/bmopf-report) `.json`
 
-Other formats are planned; see the GitHub issues. If a format you need is missing, open an issue or a pull request. All are welcome to contribute to this community project.
+If a required format is missing, open an issue with a sample file and its
+specification or submit a reader or writer.
 
 ### Packages
 
-This repository contains multiple packages. 
+Each workspace crate owns one layer:
 
 ```
 powerio          # parser, Network model, source retaining writers, converters
@@ -67,10 +68,10 @@ powerio-capi     # C ABI for C, C++, Julia, and other foreign function interface
 PowerIO.jl       # Julia bindings over the C ABI
 ```
 
-The core [powerio Rust crate](https://crates.io/crates/powerio) keeps parsing
-and conversion separate from matrix, TUI, and data frame dependencies. The
-[Python package](https://pypi.org/project/powerio/) imports with no required
-third party packages; matrix and graph helpers live behind extras.
+The [powerio Rust crate](https://crates.io/crates/powerio) keeps parsing and
+conversion separate from matrix, TUI, and data frame dependencies. The
+[Python package](https://pypi.org/project/powerio/) has no required third party
+packages; matrix and graph helpers use optional extras.
 
 Docs site: <https://powerio.dev>.
 Language API map: [languages guide](https://eigenergy.github.io/powerio/guide/languages.html).
@@ -165,7 +166,7 @@ the original file type from converting to a different file type.
 | PyPSA CSV folder | yes | yes | directory output, not text echo | PyPSA import validator checks the exported static components |
 | GO Challenge 3 JSON | yes | source echo only | byte exact retained source | first interval maps to the static power flow core; `.pio.json` documents retain time series as operating points |
 | Surge JSON | yes | yes | byte exact retained source | versioned JSON network body; unsupported source sections stay in retained source or warnings |
-| GridFM Parquet | yes | yes | directory output, deliberately lossy read | recovers the power flow core for conversion back to classical formats |
+| GridFM Parquet | yes | yes | directory output, lossy read | recovers the power flow core for conversion back to classical formats |
 
 PowerWorld `.pwd` is display data, not a network case, so it is outside this
 conversion table and uses `parse_display_file` / `parse_display_bytes`. The
@@ -181,7 +182,7 @@ Known limits for every format are documented in the
 
 ### Matrices
 
-The `powerio-matrix` Rust crate derives an `IndexedNetwork` with dense bus indices. It enables you to build common power system matrices with minimal dependencies:
+`powerio-matrix` derives an `IndexedNetwork` with dense bus indices and builds:
 
 - MATPOWER Bp/Bpp FDPF matrices
 - DC bus susceptance matrix `L = A diag(b) A^T` and flow map matrices
@@ -191,20 +192,23 @@ The `powerio-matrix` Rust crate derives an `IndexedNetwork` with dense bus indic
 - PTDF and LODF sensitivity matrices, with dense and iterative solver paths
 - Streamed CLI PTDF/LODF writes for iterative sensitivity exports
 - Adjacency matrix and `petgraph` graph output
-- Matrix Market bundles for OPF solvers
+
+`powerio-prob` builds matrix free problem instances: DC OPF and AC OPF input
+data plus the GOC3 SCOPF instance. Its optional `matrix` feature adds sparse
+projections and DC OPF Matrix Market bundles.
 
 Current conventions for signs, taps, phase shifts, per unit scaling, reference buses, and line parameters are documented in the [matrices guide](https://eigenergy.github.io/powerio/guide/matrices.html).
 
 ### Normalized Form
 
-`Network::to_normalized` derives a post processed copy of a case for solvers:
+`Network::to_normalized` returns a derived solver view:
 
-- powers are in per unit,
-- voltage phase angles are in radians, 
-- inactive elements are removed, 
-- `tap == 0` replaced with `1`,
-- surviving buses keep their source bus ids, and
-- bus types are made consistent with generator placement and reference buses. 
+- powers use per unit;
+- voltage phase angles use radians;
+- inactive elements are removed;
+- `tap == 0` becomes `1`;
+- surviving buses keep their source bus IDs;
+- bus types reflect generator placement and reference buses.
 
 The normalized copy carries no retained source text, so writing it emits the derived model rather than the original file.
 
@@ -222,12 +226,14 @@ Build with `--features arrow` to enable `pio_to_arrow` over the
 [Arrow C Data Interface](https://arrow.apache.org/docs/format/CDataInterface.html),
 and add `--features matrix` for sparse matrix COO tables. Matrix Arrow ABI v1
 is COO plus explicit `matrix_bus` and `matrix_branch` axis map tables; language
-bindings assemble native sparse matrix types on their side.
+bindings assemble native sparse matrix types on their side. The optional
+`prob` feature exposes matrix free SCOPF problem instances.
 
 ### PowerAgent
 
 
-PowerIO is part of the [PowerAgent](https://github.com/Power-Agent) community. The Python package includes an optional MCP server with tools for conversion, saving, summaries, parsing, normalization, matrix outputs, and display data.
+The optional MCP server exposes conversion, saving, summaries, parsing,
+normalization, matrix outputs, and display data.
 
 
 ```
@@ -247,42 +253,48 @@ save(out_path="case9.raw", to_format="psse", package_json=pkg)
 diagnostics(pkg)
 ```
 
-The PowerMCP bundle in [PowerMCP](https://github.com/Power-Agent/PowerMCP) uses the same PowerIO tool surface alongside simulator servers and bridge tools.
+[PowerMCP](https://github.com/Power-Agent/PowerMCP) bundles these tools with
+simulator servers and bridge tools.
 
-### `.pio.json` Documents
+### `.pio.json` documents
 
-`.pio.json` documents carry one balanced or multiconductor model JSON object
+`.pio.json` documents carry one balanced or multiconductor model payload
 with metadata: provenance, source maps, diagnostics, validation, summaries,
-lowering history, optional derived metadata, and optional `operating_points`. A
-GO Challenge 3 document stores the static first interval in `model` and the full
-replayable time series in `operating_points`; materializing one point returns a
-static document with the updates applied and the series cleared.
+lowering history, optional derived metadata, optional `operating_points`, and
+optional study commits. A GO Challenge 3 document stores the static first
+interval in `model` and the full replayable time series in `operating_points`;
+materializing one point returns a static document with the updates applied and
+the series cleared.
 
 Rust uses `powerio_pkg::NetworkPackage`, Python uses the `powerio.Package`
 class, the C ABI uses `pio_package_*`, and the CLI writes documents with
 `powerio package`.
 
-### GridFM (experimental)
-PowerIO writes datasets for the [LF Energy](https://lfenergy.org/projects/gridfm/) open [Grid Foundation Model (GridFM)](https://github.com/gridfm) project. In the command line:
+### GridFM
+
+The `gridfm` command writes Parquet datasets used by the
+[LF Energy GridFM project](https://github.com/gridfm):
 
 ```
 powerio gridfm <case> -o <dir>
 ```
 
-This *writes* the Parquet tables [gridfm-datakit](https://gridfm.github.io/gridfm-datakit/) and
-[gridfm-graphkit](https://github.com/gridfm/gridfm-graphkit) consume under `<dir>/<case>/raw/`; several compatible cases
-stack by scenario id. 
+The command writes the tables consumed by
+[gridfm-datakit](https://gridfm.github.io/gridfm-datakit/) and
+[gridfm-graphkit](https://github.com/gridfm/gridfm-graphkit) under
+`<dir>/<case>/raw/`. Compatible cases can be stacked by scenario ID.
 
-The `gridfm` feature also supports *reading* a `.parquet` dataset back into a `Network` (`read_gridfm_dataset` in `powerio-matrix`, `pio.read_gridfm` in
-Python), so a perturbed training scenario or a GNN predicted state can be extracted and converted back
-out in any classical format:
+`read_gridfm_dataset` in `powerio-matrix` and `pio.read_gridfm` in Python
+reconstruct a `Network` from a dataset. The reconstructed network can be
+written to any supported balanced case format:
 
 ```
 powerio convert out/case14/raw --from gridfm --to matpower -o case14.m
 ```
 
-The `--from gridfm` read path is lossy. What it recovers, what it drops, and its warning behavior
-are in the [format fidelity guide](https://eigenergy.github.io/powerio/guide/format-fidelity.html).
+The `--from gridfm` path is lossy. The
+[format fidelity guide](https://eigenergy.github.io/powerio/guide/format-fidelity.html)
+lists the recovered fields and warnings.
 
 
 ## Validation

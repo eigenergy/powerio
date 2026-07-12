@@ -1,23 +1,17 @@
-//! Format-neutral network model: the hub every converter meets at.
+//! Format neutral balanced network model.
 //!
-//! Readers map their format into a [`Network`]; writers map a `Network` back out.
-//! It is the one canonical data model: format-neutral tables with loads and
-//! shunts first-class, so a format that carries several loads per bus (PSS/E,
-//! PowerModels) maps without losing them, while MATPOWER (which folds demand and
-//! shunts onto the bus row) splits them out on read. The dense-indexed analysis
-//! view the matrix builders consume is [`IndexedNetwork`](crate::IndexedNetwork),
-//! derived from a `Network`. Two things make conversion honest:
+//! Readers map source formats into a [`Network`], and writers map a network to
+//! target formats. Loads and shunts have separate tables, so formats can retain
+//! several elements at one bus. MATPOWER demand and shunt fields become those
+//! records during parsing. [`IndexedNetwork`](crate::IndexedNetwork) provides
+//! the dense analysis view used by matrix builders.
 //!
-//! - **Retained source.** A `Network` keeps the raw text it was read from plus
-//!   its [`SourceFormat`], so writing back to the *same* format echoes it
-//!   byte-for-byte (no round-trip drift).
-//! - **Extras passthrough.** Every element carries an [`Extras`] map of
-//!   source-format fields the neutral model doesn't name, so X→`Network`→X keeps
-//!   them and a cross-format writer can pass through what its target understands.
+//! A network can retain its source bytes and [`SourceFormat`] for same format
+//! writing. Each element also has an [`Extras`] map for source fields not named
+//! by the typed model.
 //!
-//! Fully lossless any-to-any isn't possible (formats model different things);
-//! the guarantee is byte-exact same-format and maximal-fidelity cross-format with
-//! the writer reporting whatever it can't represent.
+//! Formats represent different data. Cross format writers report unsupported
+//! fields rather than claiming an exact conversion.
 
 use std::collections::BTreeMap;
 use std::sync::Arc;
@@ -28,8 +22,8 @@ use serde_json::Value;
 use crate::geo::{GeoMeta, Location};
 use crate::{Error, Result};
 
-/// Source-format fields the neutral model doesn't name, kept for round-trip and
-/// cross-format passthrough. Keys are the field names; values are JSON scalars.
+/// Source format fields the neutral model does not name, kept for round trips
+/// and cross format conversion. Keys are field names; values are JSON scalars.
 pub type Extras = BTreeMap<String, Value>;
 
 /// System base frequency in hertz when a format records none. Power networks run
@@ -44,17 +38,12 @@ fn default_base_frequency() -> f64 {
     DEFAULT_BASE_FREQUENCY
 }
 
-/// A bus identifier as it appears in the source file: the external, stable id
-/// (1-based in MATPOWER, and possibly sparse; pegase has gaps in its ids).
-/// Distinct from the dense `[0, n)` analysis index, which only
-/// [`IndexedNetwork`](crate::IndexedNetwork) produces, via
-/// [`bus_index`](crate::IndexedNetwork::bus_index). The two are both integers
-/// and trivially confused; making the id its own type stops one being used where
-/// the other is meant (using a 1-based id to index a matrix is off-by-one on a
-/// contiguous case and pure garbage on a sparse one).
+/// A source bus ID, preserved from the input format.
 ///
-/// `#[serde(transparent)]` so the JSON transport carries a bare integer, not a
-/// wrapper object; the wire format is unchanged.
+/// MATPOWER IDs are 1-based and can contain gaps. They are distinct from the
+/// zero based dense indices produced by
+/// [`IndexedNetwork::bus_index`](crate::IndexedNetwork::bus_index). JSON stores
+/// this type as an integer.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(transparent)]
@@ -270,7 +259,7 @@ impl SourceFormat {
     }
 }
 
-/// A format-neutral power network.
+/// A balanced network with stable source bus IDs and separate element tables.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[non_exhaustive]
@@ -1337,12 +1326,11 @@ impl Winding {
     }
 }
 
-/// A three-winding transformer: three terminal buses joined at a common star
-/// point, with the series impedance given pairwise (winding 1-2, 2-3, 3-1).
+/// A three winding transformer with three terminal buses joined at a star point.
 ///
-/// Kept as a typed record (not three [`Branch`]es) so the star-point voltage and
-/// the per-winding control data survive a same-format round trip. Both the PSS/E
-/// 3-winding record and the PSLF tertiary-winding record map onto it.
+/// Series impedance is stored for winding pairs 1-2, 2-3, and 3-1. The record
+/// also retains star point voltage and per winding control data. PSS/E three
+/// winding records and PSLF tertiary winding records map to this type.
 /// [`star_expansion`](Transformer3W::star_expansion) turns it into the synthetic
 /// star bus plus three branches for a consumer that works in the bus-branch model;
 /// [`IndexedNetwork`](crate::IndexedNetwork) applies it before building any matrix,

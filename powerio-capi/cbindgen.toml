@@ -11,17 +11,17 @@ usize_is_size_t = true
 # File preamble. cbindgen generates the rest from the Rust source, so the only
 # hand-written prose lives here; per-symbol docs come from the Rust doc comments.
 header = """
-/* powerio C ABI, version 4: parse any power system case format, query it,
- * convert it, and extract the numeric tables for matrix assembly. Check
+/* powerio C ABI, version 4. Parse, query, and convert networks through opaque
+ * handles. Extractors return numeric tables for matrix assembly. Check
  * pio_abi_version() against PIO_ABI_VERSION at load; the integer is the
  * compatibility check, the version string is informational.
  *
- * Naming grammar (fixed; the C API evolves additively from here):
+ * Naming grammar:
  * - Verb-led names are operations and the verb fixes the return family:
  *   parse/read/normalize return a new handle, write has a filesystem effect,
  *   convert transcodes without keeping a handle, free destroys.
- * - to_ marks a representation change of the same network (the strtol/htons
- *   lineage). The target is a format string unless the output type differs:
+ * - to_ marks a representation change of the same network. The target is a
+ *   format string unless the output type differs:
  *   pio_to_format returns text for every named format, pio_to_arrow fills
  *   Arrow C Data Interface structs.
  * - Noun phrases are queries (no get_); n_ prefixes counts, is_ predicates.
@@ -40,8 +40,8 @@ header = """
  *
  * Conventions:
  * - Array extractors write up to `cap` values per output array and return the
- *   total available; NULL out (or cap 0) is a pure count query, so a short
- *   read is detectable and a caller buffer can never silently overflow.
+ *   total available. NULL out or cap 0 is a count query. No extractor writes
+ *   more than cap entries to an output array.
  * - Bus ids are int64 in the range 1..2^63-1 (a v4 invariant). pio_bus_ids and
  *   every per-bus column keyed to its ordering are int64; a source whose ids are
  *   strings or exceed 2^63-1 has no representation in this API and is mapped
@@ -50,7 +50,7 @@ header = """
  * - errbuf/errlen caller buffers (the libpcap/curl idiom: allocation-free
  *   across the boundary, no thread-local state). NULL or length 0 discards
  *   the message; a long message truncates on a UTF-8 character boundary and
- *   is always NUL-terminated. PIO_ERRBUF_MIN is a comfortable size. The ABI
+ *   is always NUL-terminated. PIO_ERRBUF_MIN is the recommended size. The ABI
  *   reports errors as messages and defines no error codes.
  * - Warnings attach to the network handle; query them with pio_warnings,
  *   which returns the byte length needed (call with NULL/0 to size). Only
@@ -59,8 +59,10 @@ header = """
  * - Strings returned by pio_to_format / pio_convert_file / pio_convert_str
  *   are owned by the library; free them with pio_string_free. Handles from
  *   pio_parse_file / pio_parse_str / pio_read_dir / pio_normalize are freed
- *   with pio_network_free. Arrow buffers are freed through their own release
- *   callbacks (the C Data Interface release rule).
+ *   with pio_network_free. Package handles use pio_package_free, distribution
+ *   handles use pio_dist_network_free, and SCOPF handles use
+ *   pio_scopf_instance_free. Arrow buffers are freed through their own release
+ *   callbacks.
  * - A handle is immutable after construction unless a function takes it
  *   non-const (pio_package_validate rewrites its diagnostics): concurrent
  *   reads from any number of threads are safe; a non-const entry point, and
@@ -70,13 +72,12 @@ header = """
  *   the ABI (requires the default panic = "unwind"; a panic = "abort" build
  *   aborts the process instead).
  *
- * Evolution policy: existing signatures and documented behavior are frozen.
- * New data means new symbols; rich or multiconductor data rides the Arrow C
- * Data Interface (pio_to_arrow), `.pio.json` packages, or format-specific JSON
- * payloads with their own schema/version rules. The dense extractors are the
- * frozen balanced positive-sequence projection, complete as-is. The Arrow
- * tables are append-only: existing PIO_ARROW_TABLE_* ids and each table's
- * column order are frozen, a new table takes the next id and new columns append
+ * Compatibility policy: changing an existing signature or documented behavior
+ * requires a PIO_ABI_VERSION increment. New data uses new symbols or versioned
+ * Arrow, `.pio.json`, and format-specific JSON schemas. The dense extractors
+ * remain the balanced positive sequence projection. Arrow tables are append
+ * only: existing PIO_ARROW_TABLE_* ids and column order do not change. A new
+ * table takes the next id, and new columns append
  * at the end, and a consumer addresses columns by name, never by position.
  * Removing a supported format token or changing its documented C behavior
  * requires a PIO_ABI_VERSION bump.
@@ -91,13 +92,14 @@ header = """
  * `--features pkg` for the pio_package_* entry points (guarded by
  * PIO_PKG): `.pio.json` compiler packages behind their own PioPackage handle,
  * freed with pio_package_free, and `--features prob` for the pio_scopf_*
- * entry points (guarded by PIO_PROB), behind a PioScopfInstance handle.
+ * entry points (guarded by PIO_PROB), behind a PioScopfInstance handle freed
+ * with pio_scopf_instance_free.
  * The distribution C API is EXPERIMENTAL while the IEEE BMOPF schema is a
  * draft: supported dist C usage starts at PIO_DIST_ABI_VERSION = 1, with
  * pio_dist_convert_*(input, from, to, ...). Dist C signature changes bump
  * PIO_DIST_ABI_VERSION, not PIO_ABI_VERSION. Its JSON payloads (bmopf-json,
  * powerio-dist-json) carry their own meta.version and may evolve; pin a
- * vintage from the payload meta.
+ * version from the payload metadata.
  * Probe optional features at runtime with
  * pio_has_feature("arrow"|"matrix"|"gridfm"|"dist"|"pkg"|"prob").
  *

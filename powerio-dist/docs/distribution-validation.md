@@ -1,9 +1,9 @@
 # Distribution validation and coverage
 
-How `powerio-dist` is validated against real OpenDSS feeders, which cases it
-converts today, and which need more typed support. The per-fixture fidelity
-counts live in `powerio-dist/docs/conversion-matrix.md`; this page records
-the dataset coverage and the validation gates behind it.
+`powerio-dist` checks conversion behavior against OpenDSS and
+PowerModelsDistribution. The generated per fixture fidelity counts are in
+`powerio-dist/docs/conversion-matrix.md`; the dataset coverage and validation
+commands are below.
 
 ## Validation gates
 

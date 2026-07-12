@@ -1,7 +1,7 @@
 //! Read substation coordinates from PowerWorld `.pwd` display files
 //! (read only).
 //!
-//! A `.pwd` is the diagram sibling of a case: drawing records for buses,
+//! A `.pwd` contains drawing records associated with a case: buses,
 //! branches, substations, and field labels. This reader decodes the one
 //! subset with a differential oracle, the substation symbols, and leaves
 //! every other drawing object undecoded. Files without the substation table

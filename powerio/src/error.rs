@@ -176,9 +176,9 @@ pub enum Error {
 /// can't run on this otherwise-valid case" is the split callers actually branch
 /// on, and it's a property of the error, not of the binding that surfaces it.
 ///
-/// Deliberately *not* `#[non_exhaustive]` (unlike [`enum@Error`]): a category-mapping
-/// match should fail to compile when a category is added, so every binding is
-/// forced to decide how to surface it.
+/// Unlike [`enum@Error`], this enum is not `#[non_exhaustive]`. Adding a
+/// category makes exhaustive matches fail to compile, which requires each
+/// binding to map the new category.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ErrorCategory {
     /// Underlying I/O failure reading or writing a file.
@@ -270,8 +270,8 @@ impl std::fmt::Display for ElementCounts {
 /// base element set (the row-stack keeps every table schema-consistent by
 /// requiring the same element counts and bus-id ordering across snapshots).
 ///
-/// `#[non_exhaustive]`: future checks (e.g. branch endpoints, voltage base) may
-/// add variants, so downstream matches must keep a wildcard arm.
+/// This enum is `#[non_exhaustive]`; downstream matches must include a wildcard
+/// arm.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum ScenarioMismatch {

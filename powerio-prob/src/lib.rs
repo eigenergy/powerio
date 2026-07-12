@@ -1,7 +1,9 @@
-//! Numerical problem instances derived from PowerIO networks.
+//! Complete numerical input data for power system problem families.
 //!
-//! The default build provides index based data and depends only on `powerio`.
-//! Enable `matrix` to derive sparse operators from an instance.
+//! A problem instance is distinct from a source network, matrix projection,
+//! solver formulation, and solution. The default build provides index based DC
+//! OPF and SCOPF instances and has no workspace dependency beyond `powerio`.
+//! Enable `matrix` to derive sparse DC OPF operators from an assembled instance.
 
 mod ac;
 mod dc;

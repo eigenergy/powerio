@@ -1,20 +1,16 @@
-//! `powerio`: lossless parsing and a typed data model for power system case
-//! files.
+//! Typed balanced network models, parsers, and writers.
 //!
 //! Readers and writers cover MATPOWER `.m`, PowerModels JSON, PSS/E `.raw`,
 //! PowerWorld `.aux`, pandapower JSON, PyPSA CSV, egret JSON, PSLF `.epc`, GO
 //! Challenge 3 JSON, and Surge JSON. PowerWorld `.pwb` case files are read
 //! only, and GO Challenge 3 JSON has no canonical writer beyond same source
 //! echo; `.pwd` display files parse through [`parse_display_file`].
-//! Case formats meet at the typed [`Network`], and
-//! [`Network::to_format`] reports whatever a target format cannot represent.
-//! See the [`crate::format`] module for the two-tier fidelity behavior.
+//! Each reader produces a [`Network`]. [`Network::to_format`] returns the
+//! serialized target and warnings for fields the target cannot represent. See
+//! [`crate::format`] for format routing and fidelity rules.
 //!
-//! Writing back to the source format reproduces the file byte for byte:
-//! `parse → write → parse` returns the original text, down to comments and
-//! exact numeric tokens. The crate keeps a small dependency set so other
-//! tools can embed it as a parser without a matrix or solver stack; the
-//! matrices live in the `powerio-matrix` crate.
+//! A reader that retains source text can return those bytes when writing the
+//! same format. Matrix and problem instance builders live in separate crates.
 //!
 //! ```
 //! use powerio::{parse_str, TargetFormat};

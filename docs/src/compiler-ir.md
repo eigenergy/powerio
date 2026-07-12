@@ -1,14 +1,13 @@
-# The PowerIO compiler IR
+# Compiler model layers
 
-PowerIO is organized as a compiler for power system data: frontends parse source
-formats into typed IR, passes normalize and lower it, and backends emit target
-artifacts. The IR boundaries and the `.pio.json` document are below. The field
-reference for the document is in
+Readers parse source formats into typed models. Passes normalize or lower those
+models, and writers emit target artifacts. The `.pio.json` field reference is
+in
 [the `.pio.json` format chapter](pio-json-schema.md).
 
-There is no flattened universal `Network` mega-struct. PowerIO keeps concrete
-model families separate. The `.pio.json` document stores one model JSON object
-at a time with source, diagnostic, validation, and lowering metadata.
+PowerIO keeps balanced and multiconductor models as separate types. A
+`.pio.json` document stores one model payload with provenance, diagnostics,
+validation results, and lowering history.
 
 ## Model families
 
@@ -19,19 +18,19 @@ union struct.
 ### `BalancedNetwork`
 
 `powerio::BalancedNetwork` (an alias of `powerio::Network`) is the scalar
-positive-sequence model for transmission power flow, OPF, matrices, and graph
+positive sequence model for transmission power flow, OPF, matrices, and graph
 analysis. Every electrical quantity is a single `f64`, with no phase or conductor
-dimension. External bus ids are not dense matrix indices; the dense solver view
-is derived separately and preserves external ids. Loads and shunts are
-first class records, not folded onto bus rows.
+dimension. Source bus IDs are not dense matrix indices; the dense solver view
+is derived separately and preserves source IDs. Loads and shunts have
+separate records rather than fields folded onto bus rows.
 
 ### `MulticonductorNetwork`
 
 `powerio_dist::MulticonductorNetwork` (an alias of `powerio_dist::DistNetwork`)
-is the wire-coordinate model for conductor-level distribution. Bus ids are
+is the wire coordinate model for conductor level distribution. Bus IDs are
 strings; terminals are ordered string names; every element carries a terminal
-map; grounding is explicit; units are SI and radians. A neutral is not just
-another phase; it carries grounding and reduction semantics. Format defaults and
+map; grounding is explicit; units are SI and radians. A neutral carries
+grounding and reduction semantics beyond a phase label. Format defaults and
 inferred facts are tracked, and unsupported objects are preserved rather than
 dropped.
 
@@ -45,19 +44,18 @@ metadata: model kind, provenance, source maps, diagnostics, validation, and
 lowering history. The `.pio.json` chapter explains why the document is not a
 case format.
 
-## The `.pio.json` Document
+## The `.pio.json` document
 
 `powerio_pkg::NetworkPackage` is the implementation type for a `.pio.json`
 document. It records how a source was interpreted. Language bindings can pass
 the document without guessing whether it holds balanced or multiconductor data.
-Binary `.pio` is out of scope until the JSON document settles.
 
 A `.pio.json` document always carries:
 
 - `schema` (URL) and `schema_version` (semver);
 - `producer` metadata;
 - `model_kind`, explicit and authoritative;
-- `model`, the one typed model JSON object, tagged by `kind`;
+- `model`, the typed model payload, tagged by `kind`;
 - `origin` and `sources`;
 - `source_maps`;
 - `diagnostics`;
@@ -65,10 +63,11 @@ A `.pio.json` document always carries:
 - `summary`;
 - `lowering_history`;
 - optional `operating_points`;
+- optional `study` commits;
 - optional `derived` metadata.
 
 `operating_points` is a format neutral series of replayable field updates over
-the document's single static model JSON object. Materializing one point returns
+the document's single static model payload. Materializing one point returns
 a static document with those updates applied and the series cleared. GO
 Challenge 3 document construction fills this block from `time_series_input`:
 the balanced model JSON holds the first interval, while every interval is
@@ -87,7 +86,7 @@ metadata for a compiler cache or sidecar artifact to verify table identity.
 rather than inferring the model kind from which field is present. The reader
 requirements are in [the `.pio.json` format chapter](pio-json-schema.md).
 
-### Model JSON Stability
+### Model JSON stability
 
 The metadata and the model JSON are versioned independently, declared by the
 document's `payload_schema` / `payload_schema_version` fields. Model rows

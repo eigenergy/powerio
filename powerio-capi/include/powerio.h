@@ -1,14 +1,14 @@
-/* powerio C ABI, version 4: parse any power system case format, query it,
- * convert it, and extract the numeric tables for matrix assembly. Check
+/* powerio C ABI, version 4. Parse, query, and convert networks through opaque
+ * handles. Extractors return numeric tables for matrix assembly. Check
  * pio_abi_version() against PIO_ABI_VERSION at load; the integer is the
  * compatibility check, the version string is informational.
  *
- * Naming grammar (fixed; the C API evolves additively from here):
+ * Naming grammar:
  * - Verb-led names are operations and the verb fixes the return family:
  *   parse/read/normalize return a new handle, write has a filesystem effect,
  *   convert transcodes without keeping a handle, free destroys.
- * - to_ marks a representation change of the same network (the strtol/htons
- *   lineage). The target is a format string unless the output type differs:
+ * - to_ marks a representation change of the same network. The target is a
+ *   format string unless the output type differs:
  *   pio_to_format returns text for every named format, pio_to_arrow fills
  *   Arrow C Data Interface structs.
  * - Noun phrases are queries (no get_); n_ prefixes counts, is_ predicates.
@@ -27,8 +27,8 @@
  *
  * Conventions:
  * - Array extractors write up to `cap` values per output array and return the
- *   total available; NULL out (or cap 0) is a pure count query, so a short
- *   read is detectable and a caller buffer can never silently overflow.
+ *   total available. NULL out or cap 0 is a count query. No extractor writes
+ *   more than cap entries to an output array.
  * - Bus ids are int64 in the range 1..2^63-1 (a v4 invariant). pio_bus_ids and
  *   every per-bus column keyed to its ordering are int64; a source whose ids are
  *   strings or exceed 2^63-1 has no representation in this API and is mapped
@@ -37,7 +37,7 @@
  * - errbuf/errlen caller buffers (the libpcap/curl idiom: allocation-free
  *   across the boundary, no thread-local state). NULL or length 0 discards
  *   the message; a long message truncates on a UTF-8 character boundary and
- *   is always NUL-terminated. PIO_ERRBUF_MIN is a comfortable size. The ABI
+ *   is always NUL-terminated. PIO_ERRBUF_MIN is the recommended size. The ABI
  *   reports errors as messages and defines no error codes.
  * - Warnings attach to the network handle; query them with pio_warnings,
  *   which returns the byte length needed (call with NULL/0 to size). Only
@@ -46,8 +46,10 @@
  * - Strings returned by pio_to_format / pio_convert_file / pio_convert_str
  *   are owned by the library; free them with pio_string_free. Handles from
  *   pio_parse_file / pio_parse_str / pio_read_dir / pio_normalize are freed
- *   with pio_network_free. Arrow buffers are freed through their own release
- *   callbacks (the C Data Interface release rule).
+ *   with pio_network_free. Package handles use pio_package_free, distribution
+ *   handles use pio_dist_network_free, and SCOPF handles use
+ *   pio_scopf_instance_free. Arrow buffers are freed through their own release
+ *   callbacks.
  * - A handle is immutable after construction unless a function takes it
  *   non-const (pio_package_validate rewrites its diagnostics): concurrent
  *   reads from any number of threads are safe; a non-const entry point, and
@@ -57,13 +59,12 @@
  *   the ABI (requires the default panic = "unwind"; a panic = "abort" build
  *   aborts the process instead).
  *
- * Evolution policy: existing signatures and documented behavior are frozen.
- * New data means new symbols; rich or multiconductor data rides the Arrow C
- * Data Interface (pio_to_arrow), `.pio.json` packages, or format-specific JSON
- * payloads with their own schema/version rules. The dense extractors are the
- * frozen balanced positive-sequence projection, complete as-is. The Arrow
- * tables are append-only: existing PIO_ARROW_TABLE_* ids and each table's
- * column order are frozen, a new table takes the next id and new columns append
+ * Compatibility policy: changing an existing signature or documented behavior
+ * requires a PIO_ABI_VERSION increment. New data uses new symbols or versioned
+ * Arrow, `.pio.json`, and format-specific JSON schemas. The dense extractors
+ * remain the balanced positive sequence projection. Arrow tables are append
+ * only: existing PIO_ARROW_TABLE_* ids and column order do not change. A new
+ * table takes the next id, and new columns append
  * at the end, and a consumer addresses columns by name, never by position.
  * Removing a supported format token or changing its documented C behavior
  * requires a PIO_ABI_VERSION bump.
@@ -78,13 +79,14 @@
  * `--features pkg` for the pio_package_* entry points (guarded by
  * PIO_PKG): `.pio.json` compiler packages behind their own PioPackage handle,
  * freed with pio_package_free, and `--features prob` for the pio_scopf_*
- * entry points (guarded by PIO_PROB), behind a PioScopfInstance handle.
+ * entry points (guarded by PIO_PROB), behind a PioScopfInstance handle freed
+ * with pio_scopf_instance_free.
  * The distribution C API is EXPERIMENTAL while the IEEE BMOPF schema is a
  * draft: supported dist C usage starts at PIO_DIST_ABI_VERSION = 1, with
  * pio_dist_convert_*(input, from, to, ...). Dist C signature changes bump
  * PIO_DIST_ABI_VERSION, not PIO_ABI_VERSION. Its JSON payloads (bmopf-json,
  * powerio-dist-json) carry their own meta.version and may evolve; pin a
- * vintage from the payload meta.
+ * version from the payload metadata.
  * Probe optional features at runtime with
  * pio_has_feature("arrow"|"matrix"|"gridfm"|"dist"|"pkg"|"prob").
  *
@@ -111,12 +113,11 @@ struct ArrowSchema;
  * format token from the C API. New additive symbols do not require a bump.
  * A consumer compares [`pio_abi_version`] against the value it was built
  * against (the `PIO_ABI_VERSION` macro in `powerio.h`) and refuses a
- * mismatched library instead of calling in blind.
+ * mismatched library before calling another function.
  *
- * v4 froze the naming grammar and conventions (see the header preamble); the
- * C API evolves additively from here: new data means new symbols, and rich
- * or multiconductor data rides Arrow tables, `.pio.json` packages, or
- * format-specific JSON payloads with their own schema/version rules.
+ * Under the v4 compatibility policy, new data uses new symbols or versioned
+ * Arrow, `.pio.json`, or format specific JSON schemas. Existing signatures do
+ * not change without an ABI version increment.
  */
 #define PIO_ABI_VERSION 4
 
@@ -133,7 +134,7 @@ struct ArrowSchema;
 #endif
 
 /**
- * A comfortable error-buffer size: pass a `char[PIO_ERRBUF_MIN]` to any
+ * Recommended error buffer size: pass a `char[PIO_ERRBUF_MIN]` to any
  * `errbuf`/`warnbuf` parameter and a message always fits without truncation.
  */
 #define PIO_ERRBUF_MIN 256
@@ -228,8 +229,8 @@ struct ArrowSchema;
 
 #if defined(PIO_DIST)
 /**
- * Opaque parsed distribution network handle (the multiconductor wire-coordinate
- * model). Distinct from [`PioNetwork`] (the positive-sequence transmission
+ * Opaque parsed distribution network handle (the multiconductor wire coordinate
+ * model). Distinct from [`PioNetwork`] (the positive sequence transmission
  * model); none of the `pio_n_*`/extractor functions accept it. Only built with
  * the `dist` cargo feature.
  */
@@ -293,7 +294,7 @@ char *pio_dist_capabilities_json(void);
 
 /**
  * Whether the matrix Arrow table API is usable in this build. Returns 1
- * only when both `arrow` and `matrix` are compiled in, since the matrices ride
+ * only when both `arrow` and `matrix` are compiled in. Matrix tables use
  * `pio_to_arrow`. Infallible.
  */
 int32_t pio_matrix_available(void);
@@ -386,10 +387,10 @@ PioNetwork *pio_from_json(const char *text, char *errbuf, size_t errlen);
 #if defined(PIO_GRIDFM)
 /**
  * Read one scenario of a dataset directory in the named `from` format into a
- * network handle: the directory sibling of [`pio_parse_file`]. `gridfm` (the
+ * network handle. `gridfm` (the
  * gridfm-datakit Parquet layout; `dir` resolves leniently: the `raw/` leaf,
  * a `<case>/` directory with a `raw/` child, or a parent holding exactly one
- * such case) is the one dataset format today. `scenario` selects within a
+ * such case) is the currently supported dataset format. `scenario` selects within a
  * multi-scenario dataset ([`pio_scenario_ids`] enumerates them); formats
  * without scenarios take `0`. Read fidelity warnings attach to the handle
  * ([`pio_warnings`]). Returns `NULL` on error and writes the message into
@@ -408,7 +409,7 @@ PioNetwork *pio_read_dir(const char *dir,
  * Write the distinct scenario ids (ascending) of the dataset directory `dir`
  * in the named `from` format into `out`, up to `cap` entries, and return the
  * total count: the cap/count convention of [`pio_bus_ids`]. `gridfm` is the
- * one dataset format today. Returns `-1` on error and writes the message into
+ * currently supported dataset format. Returns `-1` on error and writes the message into
  * `errbuf` (unlike the handle extractors, this reads the filesystem and can
  * fail). Built `--features gridfm`.
  */
@@ -422,7 +423,7 @@ ptrdiff_t pio_scenario_ids(const char *dir,
 
 /**
  * The fidelity warnings attached to the handle at construction (by whichever
- * of [`pio_parse_file`], [`pio_parse_str`], [`pio_read_dir`], or
+ * of [`pio_parse_file`], [`pio_parse_str`], `pio_read_dir`, or
  * [`pio_normalize`] built it), `\n`-joined into `warnbuf` (truncated to fit
  * on a UTF-8 boundary; NULL/0 to skip). Returns the byte length of the full
  * joined text, excluding the NUL; call once with `(NULL, 0)` to size, then
@@ -433,12 +434,12 @@ size_t pio_warnings(const PioNetwork *net, char *warnbuf, size_t warnlen);
 
 /**
  * Free a network handle from [`pio_parse_file`], [`pio_parse_str`],
- * [`pio_read_dir`], [`pio_normalize`], or [`pio_normalize_with_options`].
+ * `pio_read_dir`, [`pio_normalize`], or [`pio_normalize_with_options`].
  */
 void pio_network_free(PioNetwork *net);
 
 /**
- * Normalize `net` into a NEW network handle: per unit, radians, out-of-service
+ * Normalize `net` into a NEW network handle: per unit, radians, out of service
  * filtered, source bus ids preserved, bus types canonicalized (see
  * `Network::to_normalized`). A value transform, not a serialization, hence
  * the verb, while the `to_*` family re-encodes unchanged data. The result is
@@ -491,8 +492,8 @@ size_t pio_network_name(const PioNetwork *net, char *out, size_t cap);
 size_t pio_source_format(const PioNetwork *net, char *out, size_t cap);
 
 /**
- * Serialize a compact balanced network summary as JSON. This is for display
- * and cheap scalar queries without forcing [`pio_to_json`]'s full payload.
+ * Serialize a compact balanced network summary as JSON for display and scalar
+ * queries without serializing [`pio_to_json`]'s full payload.
  */
 char *pio_summary_json(const PioNetwork *net, char *errbuf, size_t errlen);
 
@@ -563,8 +564,8 @@ char *pio_convert_file(const char *path,
 
 /**
  * Convert in-memory case `text` from format `from` (required; there is no
- * path to infer from) to format `to`, without keeping a handle: the in-memory
- * sibling of [`pio_convert_file`]. Returns the converted text as an owned C
+ * path to infer from) to format `to` without keeping a handle. Returns the
+ * converted text as an owned C
  * string (free with [`pio_string_free`]), `NULL` on error. Fidelity warnings,
  * read side first, are written `\n`-joined into `warnbuf`.
  */
@@ -577,9 +578,8 @@ char *pio_convert_str(const char *text,
                       size_t errlen);
 
 /**
- * Write `net` into the directory `out_dir` as the named directory style
- * format `to`: the directory sibling of [`pio_to_format`]. PyPSA CSV
- * (`pypsa-csv`/`pypsa`) is the one such format today; a text format name is
+ * Write `net` into `out_dir` as the named directory format `to`. PyPSA CSV
+ * (`pypsa-csv`/`pypsa`) is the currently supported directory format; a text format name is
  * an error pointing back at [`pio_to_format`]. Returns `0` on success and
  * `-1` on error (message into `errbuf`). Fidelity warnings, if any, are
  * written `\n`-joined into `warnbuf`.
@@ -684,11 +684,11 @@ size_t pio_bus_shunt(const PioNetwork *net, double *gs, double *bs, size_t cap);
 /**
  * Export one network table over the Arrow C Data Interface: the `to_`
  * conversion whose output type is Arrow structs rather than a string, and the
- * bulk plane this ABI evolves on. Tables 0..5 are raw network tables; tables
+ * bulk table surface of this ABI. Tables 0..5 are raw network tables; tables
  * 6..14 are normalized solver tables with per unit/radian values and dense
  * zero based row ids; the matrix tables carry COO triplets in that dense index
- * space with dimensions in schema metadata. New or richer columns arrive in
- * the Arrow schema, leaving the C signatures fixed.
+ * space with dimensions in schema metadata. New columns extend the Arrow
+ * schema without changing an existing C signature.
  *
  * `table` is one of the `PIO_ARROW_TABLE_*` selectors. Raw table columns use
  * EXTERNAL bus ids (the `pio_bus_ids` id space), not the gridfm schema. On
@@ -791,7 +791,7 @@ PioPackage *pio_package_from_multiconductor_network(const PioDistNetwork *net,
  * Materialize the balanced payload of a package handle as an owned network
  * handle: the inverse of [`pio_package_from_balanced_network`]. Errors when
  * the package holds a different model kind. The handle is built from the
- * payload alone: it retains no source text, so a same-format write is a fresh
+ * payload alone: it retains no source text, so a same format write is a fresh
  * serialization rather than a byte-exact echo, and it carries no parse
  * warnings. Free with [`pio_network_free`].
  */
@@ -804,8 +804,8 @@ PioNetwork *pio_package_to_balanced_network(const PioPackage *pkg, char *errbuf,
  * distribution network handle: the inverse of
  * [`pio_package_from_multiconductor_network`]. Errors when the package holds
  * a different model kind. The handle retains no source text, so a
- * same-format write is a fresh serialization; the payload's parse warnings
- * ride along and stay readable via [`pio_dist_warnings`]. Free with
+ * same format write is a fresh serialization. The handle retains the payload's
+ * parse warnings, readable through [`pio_dist_warnings`]. Free with
  * [`pio_dist_network_free`].
  */
 PioDistNetwork *pio_package_to_multiconductor_network(const PioPackage *pkg,
@@ -927,7 +927,7 @@ PioPackage *pio_package_lower_multiconductor_to_balanced(const PioPackage *pkg,
 /**
  * Parse SCOPF source text into an owned problem instance. `from` currently
  * accepts `"goc3-json"`. Returns `NULL` on error and writes the message into
- * `errbuf`. Free the handle with [`pio_scopf_instance_free`].
+ * `errbuf`. Free the handle with `pio_scopf_instance_free`.
  */
 PioScopfInstance *pio_scopf_parse_str(const char *text,
                                       const char *from,
@@ -939,7 +939,7 @@ PioScopfInstance *pio_scopf_parse_str(const char *text,
 /**
  * Serialize a SCOPF instance using the versioned wire schema. The JSON records
  * its schema version and index base. Free the returned string with
- * [`pio_string_free`]. Returns `NULL` for a null handle or serialization error.
+ * `pio_string_free`. Returns `NULL` for a null handle or serialization error.
  */
 char *pio_scopf_to_json(const PioScopfInstance *instance, char *errbuf, size_t errlen);
 #endif
@@ -1033,8 +1033,8 @@ char *pio_dist_graph_json(const PioDistNetwork *net, char *errbuf, size_t errlen
  * Parse model JSON produced by [`pio_dist_to_json`] (or lifted from a
  * `.pio.json` document's `model.multiconductor_network`) back into an owned
  * handle: the inverse of [`pio_dist_to_json`]. The rebuilt handle retains
- * no source text, so a same-format write is a fresh serialization; the model
- * JSON's `warnings` ride along. Returns `NULL` on error. Free with
+ * no source text, so a same format write is a fresh serialization. The handle
+ * retains the model JSON `warnings`. Returns `NULL` on error. Free with
  * [`pio_dist_network_free`].
  */
 PioDistNetwork *pio_dist_from_json(const char *text, char *errbuf, size_t errlen);
@@ -1044,7 +1044,7 @@ PioDistNetwork *pio_dist_from_json(const char *text, char *errbuf, size_t errlen
 /**
  * Serialize `net` to distribution format `to` (`dss`, `pmd`, or `bmopf`).
  * Writing back to the format the handle was parsed from echoes the source text
- * byte for byte; a cross-format write reports every fidelity loss in `warnbuf`
+ * byte for byte; a cross format write reports every fidelity loss in `warnbuf`
  * (`\n`-joined). Returns the text as an owned C string (free with
  * [`pio_string_free`]), `NULL` on error.
  */

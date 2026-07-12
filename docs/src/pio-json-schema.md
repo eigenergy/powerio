@@ -1,14 +1,16 @@
-# The `.pio.json` format
+# `.pio.json` format
 
-A `.pio.json` file is a compiled network case: one typed network model plus the
-record of how it was produced. The `model` field contains model JSON serialized
-exactly as the Rust structs define it, either `powerio::Network` (balanced) or
+A `.pio.json` file stores one typed network model payload and the record of how
+it was produced. The `model` field contains the JSON representation of either
+`powerio::Network` (balanced) or
 `powerio_dist::DistNetwork` (multiconductor). The document metadata records
 provenance, source maps, structured diagnostics, validation results, lowering
-history, and optional operating points. `powerio_pkg::NetworkPackage` is the
-implementation type; [Compiler IR](compiler-ir.md) is the architecture note.
+history, optional operating points, and optional study commits.
+`powerio_pkg::NetworkPackage` is the
+implementation type; [Compiler model layers](compiler-ir.md) describes the
+payload types.
 
-## Why `.pio.json` exists
+## Purpose
 
 Source formats carry data, not interpretation. A MATPOWER or OpenDSS file
 states the case; it cannot state how a parser read it: which fields were
@@ -106,6 +108,7 @@ The generated schema is served at
 | `summary` | object | yes | `{elements{}, topology?, units?}` |
 | `lowering_history` | array | no | `LoweringRecord` per pass |
 | `operating_points` | object | no | replayable updates over the one static model JSON |
+| `study` | object | no | ordered cumulative edits over the base payload |
 | `derived` | object | no | optional matrix stats, normalized solver table metadata, and cache keys |
 
 ## Explicit model kind
@@ -145,7 +148,7 @@ golden file by `powerio/tests/snapshot_schema.rs`.
 
 `https://powerio.dev/schema/pio-payload-balanced/1` names the serde form of
 `powerio::Network` under `model.balanced_network`, stamped when `model_kind`
-is `balanced`: the scalar positive-sequence transmission model. The tables are
+is `balanced`: the scalar positive sequence transmission model. The tables are
 `buses`, `loads`, `shunts`, `branches`, `switches`, `generators`, `storage`,
 `hvdc`, `transformers_3w`, and `areas`, alongside `name`, `base_mva`,
 `base_frequency`, `source_format`, and optional solver metadata. Units follow
@@ -160,7 +163,7 @@ The generated schema is served at
 
 `https://powerio.dev/schema/pio-payload-multiconductor/1` names the serde form
 of `powerio_dist::DistNetwork` under `model.multiconductor_network`, stamped
-when `model_kind` is `multiconductor`: the wire-coordinate distribution model,
+when `model_kind` is `multiconductor`: the wire coordinate distribution model,
 in SI units with radian angles. [Compiler IR](compiler-ir.md) describes the
 model family. The field reference is the
 [`powerio_dist::DistNetwork` rustdoc](../powerio_dist/model/struct.DistNetwork.html).
@@ -235,6 +238,14 @@ document with `origin.kind = "derived"` and
 }
 ```
 
+## Study commits
+
+`study` stores ordered cumulative edits to a balanced model payload.
+Materializing commit `k` applies commits 0 through `k`, clears the study and
+operating point blocks, and returns a static package. Study commits differ from
+operating points, which are independent overlays. See [Study blocks](study-block.md) for edit kinds,
+identity resolution, materialization, and language APIs.
+
 ## Derived metadata
 
 `derived.normalized_solver_tables` records the compact identity metadata for
@@ -300,7 +311,7 @@ bindings, or MCP operations.
 {
   "schema": "https://powerio.dev/schema/pio-package/0.1",
   "schema_version": "0.1.1",
-  "producer": { "tool": "powerio", "version": "0.6.2" },
+  "producer": { "tool": "powerio", "version": "0.7.0" },
   "model_kind": "multiconductor",
   "payload_schema": "https://powerio.dev/schema/pio-payload-multiconductor/1",
   "payload_schema_version": "1.1.0",
