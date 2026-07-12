@@ -109,9 +109,8 @@ pub(super) fn initial_status(obj: &Map<String, Value>) -> Result<&Map<String, Va
 // ---------------------------------------------------------------------------
 
 /// One GOC3 section's rows, keyed by `uid`. `uids()` preserves the source
-/// document order from [`Goc3Document`]; `sorted_uids()`
-/// is the lexicographic order `_goc3_ids` builds in `src/goc3.jl`
-/// (`sort(collect(keys(lookup)))`).
+/// document order from [`Goc3Document`]; every projection index derives from
+/// that one order.
 #[derive(Clone, Debug, Default)]
 pub(super) struct Goc3Section {
     order: Vec<String>,
@@ -146,19 +145,6 @@ impl Goc3Section {
 
     pub(super) fn uids(&self) -> &[String] {
         &self.order
-    }
-
-    pub(super) fn sorted_uids(&self) -> Vec<String> {
-        let mut ids = self.order.clone();
-        ids.sort();
-        ids
-    }
-
-    pub(super) fn index(&self, uid: &str) -> Result<usize> {
-        self.order
-            .iter()
-            .position(|candidate| candidate == uid)
-            .ok_or_else(|| json_error(format!("unknown uid `{uid}`")))
     }
 }
 
@@ -210,10 +196,8 @@ pub(super) struct Goc3Adapter {
     pub(super) sdd_ids_consumer: Vec<String>,
     pub(super) azr: Goc3Section,
     pub(super) azr_ts: Goc3Section,
-    pub(super) azr_ids: Vec<String>,
     pub(super) rzr: Goc3Section,
     pub(super) rzr_ts: Goc3Section,
-    pub(super) rzr_ids: Vec<String>,
 }
 
 impl Goc3Adapter {
@@ -316,9 +300,6 @@ impl Goc3Adapter {
             document.time_series_input_records("reactive_zonal_reserve"),
             "reactive_zonal_reserve time series",
         )?;
-        let azr_ids = azr.sorted_uids();
-        let rzr_ids = rzr.sorted_uids();
-
         Ok(Self {
             contingencies,
             dt,
@@ -334,10 +315,8 @@ impl Goc3Adapter {
             sdd_ids_consumer,
             azr,
             azr_ts,
-            azr_ids,
             rzr,
             rzr_ts,
-            rzr_ids,
         })
     }
 

@@ -408,7 +408,15 @@ mod matrix_tests {
     /// carried fields.
     #[test]
     fn ybus_entrywise_cross_check() {
-        let net = case14();
+        let mut net = case14();
+        // A self-loop with tap, shift, and charging: the instance folds it
+        // into the bus shunt vectors, `build_ybus` stamps it directly; the
+        // two must agree entrywise.
+        let mut self_loop = branch(5, 5, 0.02, 0.08);
+        self_loop.tap = 1.1;
+        self_loop.shift = 15.0;
+        self_loop.b = 0.04;
+        net.branches.push(self_loop);
         let view = IndexedNetwork::new(&net);
         let problem = build_ac_opf_instance(&view, &AcOpfOptions::default()).expect("build");
         let n = problem.n_buses;
@@ -451,4 +459,45 @@ mod matrix_tests {
             }
         }
     }
+}
+
+/// A self-loop's pi model stamp folds onto the bus diagonal, matching the
+/// Y_bus builder, and a zero base MVA is rejected before scaling.
+#[test]
+fn self_loop_folds_into_bus_shunt() {
+    let mut net = small_network();
+    let mut loop_branch = branch(30, 30, 0.05, 0.2);
+    loop_branch.tap = 1.25;
+    loop_branch.shift = 10.0;
+    loop_branch.b = 0.10;
+    net.branches.push(loop_branch);
+    let plain = build_ac_opf_instance(
+        &IndexedNetwork::new(&small_network()),
+        &AcOpfOptions::default(),
+    )
+    .expect("plain");
+    let folded = build_ac_opf_instance(&IndexedNetwork::new(&net), &AcOpfOptions::default())
+        .expect("folded");
+
+    // The self-loop is not a flow element and is not a skip.
+    assert_eq!(folded.n_branches(), plain.n_branches());
+    assert_eq!(folded.branches.skipped_zero_impedance, Vec::<usize>::new());
+
+    let z_squared = 0.05 * 0.05 + 0.2 * 0.2;
+    let (series_g, series_b) = (0.05 / z_squared, -0.2 / z_squared);
+    let (tap, shift) = (1.25_f64, 10.0_f64.to_radians());
+    let cross = 2.0 * shift.cos() / tap;
+    let g_add = (series_g / (tap * tap)) + series_g - series_g * cross;
+    let b_add = (0.05 + series_b) / (tap * tap) + (series_b + 0.05) - series_b * cross;
+    assert_close(folded.buses.g_s[1], plain.buses.g_s[1] + g_add);
+    assert_close(folded.buses.b_s[1], plain.buses.b_s[1] + b_add);
+}
+
+#[test]
+fn zero_base_mva_is_rejected() {
+    let mut net = small_network();
+    net.base_mva = 0.0;
+    let error = build_ac_opf_instance(&IndexedNetwork::new(&net), &AcOpfOptions::default())
+        .expect_err("zero base");
+    assert!(matches!(error, Error::InvalidBaseMva { .. }));
 }

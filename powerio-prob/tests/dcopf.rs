@@ -216,6 +216,15 @@ fn zero_reactance_can_be_skipped_or_rejected() {
 }
 
 #[test]
+fn zero_base_mva_is_rejected() {
+    let mut net = small_network();
+    net.base_mva = 0.0;
+    let error = build_dc_opf_instance(&IndexedNetwork::new(&net), &DcOpfOptions::default())
+        .expect_err("zero base");
+    assert!(matches!(error, Error::InvalidBaseMva { .. }));
+}
+
+#[test]
 fn serde_round_trip() {
     let net = case9();
     let view = IndexedNetwork::new(&net);
@@ -260,6 +269,24 @@ mod matrix_tests {
         assert_eq!(matrices.incidence, incidence.a);
         assert_eq!(problem.branches.b, incidence.b);
         assert_eq!(problem.p_shift, incidence.p_shift);
+    }
+
+    #[test]
+    fn bundle_directory_name_is_confined_to_the_output_directory() {
+        let net = case9();
+        let mut problem =
+            build_dc_opf_instance(&IndexedNetwork::new(&net), &DcOpfOptions::default())
+                .expect("build");
+        problem.name = "../escape/../../attempt".to_owned();
+        let output = tempfile::tempdir().expect("tempdir");
+        let bundle = write_dcopf_bundle(&problem, output.path(), &DcOpfBundleOptions::default())
+            .expect("bundle");
+        let canonical = bundle.dir.canonicalize().expect("canonical bundle dir");
+        let root = output.path().canonicalize().expect("canonical out dir");
+        assert!(
+            canonical.starts_with(&root),
+            "{canonical:?} escaped {root:?}"
+        );
     }
 
     #[test]
