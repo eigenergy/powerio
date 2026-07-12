@@ -22,8 +22,8 @@ A `NetworkPackage` owns one model payload and records:
 
 It serializes to `.pio.json`.
 
-Operating points are overlays, not separate payloads. Each point names table
-rows and fields to update on the static model payload.
+Operating points are overlays: each point names table rows and fields to
+update on the static model payload.
 Model rows carry stable `uid` identities (source uids where the format has
 them, synthesized `{table}:{row}` values otherwise); an update's `source_uid`
 resolves against them and is authoritative, with the wire `row` as a fallback

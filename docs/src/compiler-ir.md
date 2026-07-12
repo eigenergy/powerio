@@ -12,8 +12,8 @@ validation results, and lowering history.
 ## Model families
 
 PowerIO keeps two concrete static-grid IR families distinct. They share
-conventions, not types; code that needs both holds a `.pio.json` document, not a
-union struct.
+conventions while keeping separate types; code that needs both holds a
+`.pio.json` document rather than a union struct.
 
 ### `BalancedNetwork`
 
@@ -111,8 +111,8 @@ model JSON.
 Every finding carries a stable dotted `code`, a `severity` (`debug`, `info`,
 `warning`, `error`, `fatal`; worst-last so a set's dominant severity is its max),
 the `stage` it came from, a human `message`, and where known an `element_path`, a
-`source_ref`, a `details` object, and a `suggested_action`. Human-readable
-warnings are rendered from these, not the other way around. Codes are namespaced
+`source_ref`, a `details` object, and a `suggested_action`. The structured
+record is primary; human-readable warnings are rendered from it. Codes are namespaced
 by leading segment (`PARSE`, `READ`, `IR`, `VALIDATE`, `FIDELITY`, `LOWER`,
 `EMIT`, `BINDING`, `PARTNER`, `PERF`), with the conventional shape
 `NAMESPACE.SOURCE_OR_TARGET.SPECIFIC`.

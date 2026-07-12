@@ -14,15 +14,17 @@ transmission cases, multiconductor distribution cases, display files, and
 directory datasets. Writers, matrix builders, package tools, and problem
 instance builders consume those models.
 
-A same format write returns the retained source bytes when the reader supports
-source retention. A cross format conversion writes the fields represented by
-the target and reports the remaining fields in `Conversion::warnings`.
+Writing a case back to the format it was read from returns the original file
+bytes whenever the reader kept them. Converting to a different format writes
+what the target format can hold and reports every dropped field in
+`Conversion::warnings`.
 
-`.pio.json` stores one model with declared
-[schema versions](https://powerio.dev/guide/pio-json-schema.html), provenance,
-source maps, diagnostics, validation results, lowering history, and optional
-operating points. It is a PowerIO document, not a replacement for exchange
-formats such as MATPOWER, PSS/E, or OpenDSS.
+`.pio.json` saves a parsed model together with the record of how it was
+parsed: [schema versions](https://powerio.dev/guide/pio-json-schema.html), the
+source file and row each element came from, parser warnings, validation
+results, and optional operating points. Files for other tools stay in the
+format the tool reads: MATPOWER, PSS/E, OpenDSS, or any other supported
+format.
 
 The Rust workspace also builds the command line interface, the Python package,
 and the [C ABI](https://github.com/eigenergy/powerio/tree/main/powerio-capi).
@@ -163,13 +165,14 @@ the original file type from converting to a different file type.
 | PSLF `.epc` | yes | yes | byte exact retained source | power flow core; unsupported EPC sections are read warnings |
 | egret JSON | yes | yes | byte exact retained source | ModelData shape checked against egret and PowerModels.jl |
 | pandapower JSON | yes | yes | byte exact retained source | pandapower import validator checks counts and Y_bus |
-| PyPSA CSV folder | yes | yes | directory output, not text echo | PyPSA import validator checks the exported static components |
+| PyPSA CSV folder | yes | yes | directory output without text echo | PyPSA import validator checks the exported static components |
 | GO Challenge 3 JSON | yes | source echo only | byte exact retained source | first interval maps to the static power flow core; `.pio.json` documents retain time series as operating points |
 | Surge JSON | yes | yes | byte exact retained source | versioned JSON network body; unsupported source sections stay in retained source or warnings |
 | GridFM Parquet | yes | yes | directory output, lossy read | recovers the power flow core for conversion back to classical formats |
 
-PowerWorld `.pwd` is display data, not a network case, so it is outside this
-conversion table and uses `parse_display_file` / `parse_display_bytes`. The
+PowerWorld `.pwd` carries display data rather than a network case, so it is
+outside this conversion table and uses `parse_display_file` /
+`parse_display_bytes`. The
 decoded vintages and per field evidence are maintainer notes at
 [`powerio/src/format/powerworld/FORMAT.md`](powerio/src/format/powerworld/FORMAT.md).
 

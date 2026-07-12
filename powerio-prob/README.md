@@ -2,7 +2,8 @@
 
 A problem instance is the complete numerical input for one problem family. It
 contains indexed coefficients, bounds, mappings, units, and conventions. It is
-not a source network, matrix projection, solver formulation, or solution.
+separate from the source network, matrix projections, solver formulations, and
+solutions.
 
 `powerio-prob`, short for problem instance builders, assembles these instances
 from PowerIO models.

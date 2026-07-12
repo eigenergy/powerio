@@ -64,8 +64,8 @@ cargo bench -p powerio-matrix --bench matrix -- 'matrix_bprime|matrix_ybus|dcopf
 ```
 
 Criterion compares against the local `target/criterion` baseline. Treat a
-`Performance has regressed` line as a signal to investigate, not as a publishable
-claim by itself. A release note or benchmark page needs the commit, tree
+`Performance has regressed` line as a signal to investigate rather than a
+publishable claim by itself. A release note or benchmark page needs the commit, tree
 cleanliness, machine, toolchain, command, fixtures, and whether optional large
 cases were present.
 

@@ -10,11 +10,11 @@ Rustdoc covers API detail.
 
 Public conventions:
 
-- same format write back preserves retained source text;
+- writing a case back to the format it was read from returns the original
+  bytes when the reader kept them;
 - cross format conversion keeps the electrical core and reports losses as
   warnings;
-- lowering between model families is an explicit, recorded pass, never an
-  implicit side effect;
+- lowering between model families is always an explicit, recorded pass;
 - matrix builders state sign, tap, shift, shunt, and reference bus conventions;
 - C, Python, and Julia bindings share the same Rust core.
 
@@ -59,8 +59,8 @@ Rendered API docs (rustdoc) for all crates: <https://powerio.dev>.
 | `powerio-py` | PyO3 extension for the Python package |
 | `powerio-capi` | C ABI for C, C++, Julia, and other foreign function interfaces |
 
-Adding a format means adding one reader or writer at the hub, not pairwise
-converters. `IndexedNetwork` is the dense \\([0,n)\\) analysis view derived from
+Adding a format means adding one reader or writer at the hub rather than
+pairwise converters. `IndexedNetwork` is the dense \\([0,n)\\) analysis view derived from
 a balanced `Network`; matrix builders work from that view. Code that maps
 source bus IDs to dense rows must use `IndexedNetwork::bus_index`; it must not
 clamp IDs or assume 1-based contiguous IDs.

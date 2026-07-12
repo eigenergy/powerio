@@ -93,8 +93,9 @@ bash benchmarks/run_validation.sh
 ```
 
 The oracle tools (PowerModels.jl, egret, ExaPowerIO.jl, pandapower, PyPSA) are
-benchmark scoped: they are declared in `benchmarks/Project.toml` and
-`benchmarks/requirements.txt`, never as dependencies of the powerio package.
+benchmark scoped: they are declared only in `benchmarks/Project.toml` and
+`benchmarks/requirements.txt`, and the powerio package itself has no
+dependency on them.
 `benchmarks/run_validation.sh` requires the Python oracles to import in the
 selected Python 3.11+ environment; a missing PyPSA, pandapower, or egret import
 is a setup failure.
@@ -154,8 +155,8 @@ code `READ.TRANSMISSION.PARSE_WARNING`. GridFM package reads use
   ZIP load composition, line shunt conductance, magnetizing branches, tabular
   tap changers, reactive cost coefficients, and every other non-empty table
   warn with row counts.
-- **PyPSA CSV folders** are canonicalized directory outputs, not byte exact
-  text conversions. Covered: static buses, generators, loads, lines (ohms on
+- **PyPSA CSV folders** are canonicalized directory outputs rather than byte
+  exact text conversions. Covered: static buses, generators, loads, lines (ohms on
   the bus0 voltage, as PyPSA computes them), transformers (rebased between
   the system base and the transformer `s_nom`), shunts, storage units, and
   base MVA. The reader maps links to HVDC with a warning, requires `v_nom`

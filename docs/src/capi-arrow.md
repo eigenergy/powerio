@@ -43,9 +43,9 @@ skipped zero reactance rows, are not on this axis.
 ## Arrow catalog JSON
 
 `pio_arrow_catalog_json(errbuf, errlen)` returns compact JSON that lets a
-binding discover the Arrow tables compiled into the C library. It is build
-based, not case based: `available` tells whether this library was built with the
-needed features, not whether a particular network has nonempty rows.
+binding discover the Arrow tables compiled into the C library. It describes
+the build: `available` tells whether this library was built with the needed
+features, and a particular network's row counts play no part.
 
 Shape:
 

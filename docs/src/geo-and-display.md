@@ -5,7 +5,8 @@ are optional; readers do not invent them, and network writers without a
 coordinate representation report the loss.
 
 PowerWorld `.pwd` files are display data rather than network cases. Parse them
-with `parse_display_file` or `parse_display_bytes`, not the network parser.
+with `parse_display_file` or `parse_display_bytes` rather than the network
+parser.
 
 ## Coordinate fields
 

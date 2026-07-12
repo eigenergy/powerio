@@ -1,8 +1,8 @@
 # Language APIs
 
 PowerIO uses the same IO vocabulary across Rust, Python, Julia, and the C ABI,
-with language-specific spelling where needed. A new format or dataset should
-appear as a format string or convenience wrapper, not as a new naming scheme.
+with language-specific spelling where needed. A new format or dataset appears
+as a format string or convenience wrapper rather than a new naming scheme.
 
 Verb taxonomy:
 
@@ -66,7 +66,7 @@ writer hub.
 
 C ABI review points:
 
-- null handles must return documented defaults or errors, not crash;
+- null handles must return documented defaults or errors and must never crash;
 - optional output buffers must be safe to pass as null; required output structs
   such as Arrow exports must report an error when null;
 - returned text and warning buffers must be NUL terminated when capacity permits;

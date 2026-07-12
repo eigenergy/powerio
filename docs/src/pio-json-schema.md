@@ -12,7 +12,7 @@ payload types.
 
 ## Purpose
 
-Source formats carry data, not interpretation. A MATPOWER or OpenDSS file
+A MATPOWER or OpenDSS file
 states the case; it cannot state how a parser read it: which fields were
 defaulted or inferred, what validation found, or how a multiconductor model was
 lowered to a balanced one. The metadata records that work next to the model, so
@@ -40,8 +40,7 @@ source maps. Version 0.7 removes it from advertised CLI file formats. Use
 the same operations as `pio_to_json` and `pio_from_json`.
 
 ABI v4 continues to accept `powerio-json` in `pio_parse_str` and
-`pio_to_format`. Those format tokens are compatibility aliases, not new file
-handoff APIs. Removing them requires a future C ABI version change.
+`pio_to_format`. Those format tokens are compatibility aliases. Removing them requires a future C ABI version change.
 
 ## Two stability tiers
 
@@ -81,7 +80,7 @@ The generated schema is served at
   this way. The minor version bumps when a reader needs to depend on a field
   being present.
 - Metadata field moves or removals bump the major version, or ship a migration.
-- A reader tolerates unknown later top-level fields (they are ignored, not an
+- A reader tolerates unknown later top-level fields (they are ignored without
   error), so a document from a newer producer still loads. A later version can
   preserve them in an extras map instead of dropping them.
 - A reader accepts same major `schema_version` values and rejects a different

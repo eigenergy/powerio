@@ -181,8 +181,8 @@ The grammar is written out in the header preamble; the short version:
   `pio_convert_file`/`pio_convert_str` transcode without keeping a handle.
 - `pio_to_format` serializes named case formats. `pio_to_json` serializes the
   balanced model. `pio_to_arrow` fills Arrow C Data Interface structs.
-- `pio_package_*` functions operate on `.pio.json` document metadata, not on a new
-  network handle family.
+- `pio_package_*` functions operate on `.pio.json` document metadata and add
+  no new network handle family.
 - Case format names never appear in symbols: `matpower`, `psse`, `pypsa-csv`,
   `gridfm`, `goc3-json`, `surge-json`, and future formats are strings.
 - Noun phrases are queries: `pio_n_*` counts, `pio_is_radial`,
