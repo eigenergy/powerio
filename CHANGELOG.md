@@ -16,6 +16,11 @@
   GOC3 operating point extraction, run only for parsed reader input through
   `from_parsed_balanced`.
 - Building a SCOPF instance from text requires an explicit source format.
+- DSS reader: `linecode=` now sets a line's conductor count the way the
+  engine's FetchLineCode does, the later of `phases=`/`linecode=` winning.
+  A 4-wire line without an explicit `phases=` keeps its neutral instead of
+  truncating the terminal map to 3 against a 4x4 linecode
+  (frederikgeth/BMOPFTools.jl#332).
 
 ## 0.6.3
 
