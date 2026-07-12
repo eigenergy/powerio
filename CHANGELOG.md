@@ -16,6 +16,13 @@
   GOC3 operating point extraction, run only for parsed reader input through
   `from_parsed_balanced`.
 - Building a SCOPF instance from text requires an explicit source format.
+- Add AC OPF problem instances (#248): `powerio-prob` gains `AcOpfInstance`
+  and `build_ac_opf_instance`, carrying pi model branch data with separate tap
+  and shift, per terminal charging, bus shunts, active and reactive demand,
+  voltage bands, generator PQ bounds, and quadratic cost including the
+  constant term (`GenCost::quadratic_with_constant`). Relaxations such as SOC
+  forms consume the same instance. Matrix free; C ABI and Python exposure is
+  #249.
 - DSS reader: `linecode=` now sets a line's conductor count the way the
   engine's FetchLineCode does, the later of `phases=`/`linecode=` winning.
   A 4-wire line without an explicit `phases=` keeps its neutral instead of

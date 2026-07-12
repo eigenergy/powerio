@@ -13,6 +13,27 @@ pub enum Units {
     Native,
 }
 
+impl Units {
+    /// `(power, admittance)` multipliers for source data on `base` MVA. MW
+    /// valued quantities (demand, bounds, limits, MW valued shunts) scale by
+    /// the first; per unit admittances and susceptances by the second.
+    pub(crate) fn power_scales(self, base: f64) -> (f64, f64) {
+        match self {
+            Self::PerUnit => (1.0 / base, 1.0),
+            Self::Native => (1.0, base),
+        }
+    }
+
+    /// `(quadratic, linear)` generator cost coefficient multipliers for the
+    /// same unit selection. The constant term never scales.
+    pub(crate) fn cost_scales(self, base: f64) -> (f64, f64) {
+        match self {
+            Self::PerUnit => (base * base, base),
+            Self::Native => (1.0, 1.0),
+        }
+    }
+}
+
 /// Options for DC OPF instance assembly.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub struct DcOpfOptions {
@@ -157,14 +178,8 @@ pub fn build_dc_opf_instance(
 
     let n_buses = case.n();
     let base = case.per_unit_base();
-    let (p_scale, b_scale) = match options.units {
-        Units::PerUnit => (1.0 / base, 1.0),
-        Units::Native => (1.0, base),
-    };
-    let (q_scale, c_scale) = match options.units {
-        Units::PerUnit => (base * base, base),
-        Units::Native => (1.0, 1.0),
-    };
+    let (p_scale, b_scale) = options.units.power_scales(base);
+    let (q_scale, c_scale) = options.units.cost_scales(base);
 
     let mut bus_of_gen = Vec::new();
     let mut generator_rows = Vec::new();

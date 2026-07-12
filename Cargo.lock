@@ -2094,6 +2094,7 @@ dependencies = [
 name = "powerio-prob"
 version = "0.7.0"
 dependencies = [
+ "num-complex",
  "powerio",
  "powerio-matrix",
  "serde",
