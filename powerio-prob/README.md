@@ -7,11 +7,12 @@ not a source network, matrix projection, solver formulation, or solution.
 `powerio-prob`, short for problem instance builders, assembles these instances
 from PowerIO models.
 
-The default build has no sparse matrix dependency. It provides an index based
-`DcOpfInstance` whose generator and branch arrays can be consumed directly by
-an operations research model. It also provides a matrix free `ScopfInstance`
-for GOC3 data. Enable the `matrix` feature to derive sparse DC OPF operators
-from a `DcOpfInstance`.
+The default build has no sparse matrix dependency. It provides index based
+`DcOpfInstance` and `AcOpfInstance` data whose bus, generator, and branch
+arrays can be consumed directly by an operations research model, and a matrix
+free `ScopfInstance` for GOC3 data. Relaxations of AC OPF, the SOC forms
+included, consume the same `AcOpfInstance`. Enable the `matrix` feature to
+derive sparse DC OPF operators from a `DcOpfInstance`.
 
 ```rust
 use powerio::{IndexedNetwork, parse_matpower_file};
