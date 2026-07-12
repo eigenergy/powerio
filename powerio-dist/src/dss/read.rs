@@ -79,6 +79,7 @@ pub fn network_from_raw(raw: &RawDss, source: Arc<String>) -> DistNetwork {
         buses: BTreeMap::new(),
         bus_order: Vec::new(),
         linecode_units: BTreeMap::new(),
+        linecode_nconds: BTreeMap::new(),
         xycurves: BTreeMap::new(),
         vars: &raw.vars,
     };
@@ -298,6 +299,10 @@ struct Reader<'a> {
     /// the linecode has no units. Lines need it: `ConvertLineUnits` couples
     /// the two sides' units.
     linecode_units: BTreeMap<String, Option<f64>>,
+    /// Linecode name (lowercase) → conductor count. Lines need it:
+    /// `linecode=` sets the line's phase count in the engine
+    /// (Line.cpp FetchLineCode), exactly like `phases=`.
+    linecode_nconds: BTreeMap<String, usize>,
     xycurves: BTreeMap<String, XyCurveRaw>,
     vars: &'a VarMap,
 }
@@ -543,6 +548,8 @@ impl Reader<'_> {
         let per_meter = units_m.unwrap_or(1.0);
         self.linecode_units
             .insert(obj.name.to_ascii_lowercase(), units_m);
+        self.linecode_nconds
+            .insert(obj.name.to_ascii_lowercase(), n);
 
         let freq = self
             .f64_prop(props.get("basefreq"))
@@ -756,9 +763,34 @@ impl Reader<'_> {
 
     fn line(&mut self, obj: &RawObject) {
         let props = Props::new(obj);
-        let phases = self
-            .usize_prop(props.get("phases"))
-            .unwrap_or(dd::line::PHASES);
+        // `linecode=` assigns the line's phase count from the code
+        // (Line.cpp FetchLineCode) exactly like `phases=`; properties
+        // apply in order, so the later of the two wins. Bus node lists
+        // materialize after the whole script parses (MakeBusList), so
+        // they always see the final count regardless of where the bus
+        // properties sit.
+        let explicit = self.usize_prop(props.get("phases"));
+        let from_code = props.get("linecode").and_then(|c| {
+            self.linecode_nconds
+                .get(&c.text.to_ascii_lowercase())
+                .copied()
+        });
+        let linecode_last = obj
+            .props
+            .iter()
+            .rev()
+            .find_map(|p| match p.name.as_deref() {
+                Some("phases") => Some(false),
+                Some("linecode") => Some(true),
+                _ => None,
+            })
+            .unwrap_or(false);
+        let phases = match (explicit, from_code) {
+            (Some(_), Some(n)) if linecode_last => n,
+            (Some(p), _) => p,
+            (None, Some(n)) => n,
+            (None, None) => dd::line::PHASES,
+        };
         let spec1 = bus_spec(props.get("bus1"), "");
         let spec2 = bus_spec(props.get("bus2"), "");
         // A line has no neutral conductor of its own: nconds == phases.

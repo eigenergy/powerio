@@ -6,6 +6,11 @@
   build is matrix free; the `matrix` feature adds sparse projections, DC OPF
   bundle output, and experimental KKT operators.
 - Move DC OPF instance types and bundle output out of `powerio-matrix`.
+- DSS reader: `linecode=` now sets a line's conductor count the way the
+  engine's FetchLineCode does, the later of `phases=`/`linecode=` winning.
+  A 4-wire line without an explicit `phases=` keeps its neutral instead of
+  truncating the terminal map to 3 against a 4x4 linecode
+  (frederikgeth/BMOPFTools.jl#332).
 
 ## 0.6.3
 
