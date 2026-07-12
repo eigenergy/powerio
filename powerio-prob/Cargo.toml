@@ -30,6 +30,7 @@ serde.workspace = true
 serde_json.workspace = true
 
 [dev-dependencies]
+num-complex.workspace = true
 serde_json.workspace = true
 tempfile = "3"
 

@@ -25,8 +25,8 @@ use std::sync::Arc;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-use crate::Error;
 use crate::geo::{GeoMeta, Location};
+use crate::{Error, Result};
 
 /// Source-format fields the neutral model doesn't name, kept for round-trip and
 /// cross-format passthrough. Keys are the field names; values are JSON scalars.
@@ -172,6 +172,15 @@ impl GenCost {
     /// `c = c1`. Linear rows (`ncost == 2`) give `q = 0`. Piecewise (model 1)
     /// or cubic and higher return `None`.
     pub fn quadratic(&self) -> Option<(f64, f64)> {
+        self.quadratic_with_constant().map(|(q, c, _)| (q, c))
+    }
+
+    /// `(q, c, c0)` for the quadratic cost `½ q p² + c p + c0` from a
+    /// polynomial (model 2) row, keeping the constant term that
+    /// [`quadratic`](Self::quadratic) drops. Linear rows (`ncost == 2`) give
+    /// `q = 0`; constant rows (`ncost == 1`) give `q = c = 0`. Piecewise
+    /// (model 1) or cubic and higher return `None`.
+    pub fn quadratic_with_constant(&self) -> Option<(f64, f64, f64)> {
         if self.model != 2 {
             return None;
         }
@@ -181,9 +190,9 @@ impl GenCost {
             return None;
         }
         match self.ncost {
-            3 => Some((2.0 * self.coeffs[0], self.coeffs[1])),
-            2 => Some((0.0, self.coeffs[0])),
-            1 => Some((0.0, 0.0)),
+            3 => Some((2.0 * self.coeffs[0], self.coeffs[1], self.coeffs[2])),
+            2 => Some((0.0, self.coeffs[0], self.coeffs[1])),
+            1 => Some((0.0, 0.0, self.coeffs[0])),
             _ => None,
         }
     }
@@ -786,6 +795,27 @@ impl Branch {
     pub fn terminal_charging(&self) -> BranchCharging {
         self.charging
             .unwrap_or_else(|| BranchCharging::from_total_b(self.b))
+    }
+
+    /// Series admittance `(g, b) = (r, −x) / (r² + x²)` of the branch pi
+    /// model, the primitive beside [`effective_tap`](Self::effective_tap) and
+    /// [`terminal_charging`](Self::terminal_charging). `Ok(None)` for a zero
+    /// impedance branch (`r² + x² = 0`); the caller decides whether that is a
+    /// skip or an error.
+    ///
+    /// # Errors
+    /// [`Error::NonFiniteSusceptance`] when `r`/`x` are NaN/Inf, so a bad
+    /// value cannot write NaN or a silent zero downstream. `row` only labels
+    /// the error.
+    pub fn series_admittance(&self, row: usize) -> Result<Option<(f64, f64)>> {
+        let denom = self.r * self.r + self.x * self.x;
+        if denom == 0.0 {
+            return Ok(None);
+        }
+        if !denom.is_finite() {
+            return Err(Error::NonFiniteSusceptance { row });
+        }
+        Ok(Some((self.r / denom, -self.x / denom)))
     }
 
     /// Total susceptance projection for MATPOWER shaped formats that only carry
@@ -2177,6 +2207,28 @@ mod tests {
 
     fn close(actual: f64, expected: f64) {
         assert!((actual - expected).abs() < 1e-12, "{actual} != {expected}");
+    }
+
+    #[test]
+    fn quadratic_with_constant_keeps_c0_across_ncost() {
+        let full = GenCost::new(2, 0.0, 0.0, vec![1.5, 2.0, 5.0]);
+        assert_eq!(full.quadratic_with_constant(), Some((3.0, 2.0, 5.0)));
+        assert_eq!(full.quadratic(), Some((3.0, 2.0)));
+
+        let linear = GenCost::new(2, 0.0, 0.0, vec![2.0, 5.0]);
+        assert_eq!(linear.quadratic_with_constant(), Some((0.0, 2.0, 5.0)));
+
+        let constant = GenCost::new(2, 0.0, 0.0, vec![5.0]);
+        assert_eq!(constant.quadratic_with_constant(), Some((0.0, 0.0, 5.0)));
+
+        let piecewise = GenCost::new(1, 0.0, 0.0, vec![0.0, 0.0, 1.0, 1.0]);
+        assert_eq!(piecewise.quadratic_with_constant(), None);
+
+        let cubic = GenCost::new(2, 0.0, 0.0, vec![1.0, 1.0, 1.0, 1.0]);
+        assert_eq!(cubic.quadratic_with_constant(), None);
+
+        let truncated = GenCost::with_ncost(2, 0.0, 0.0, 3, vec![1.0]);
+        assert_eq!(truncated.quadratic_with_constant(), None);
     }
 
     fn bus(id: usize) -> Bus {
