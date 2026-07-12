@@ -38,6 +38,7 @@ pub enum TransmissionFormat {
     Psse35,
     PowerWorld,
     PandapowerJson,
+    #[doc(hidden)]
     PowerioJson,
     PypsaCsv,
     Pslf,

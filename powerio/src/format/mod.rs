@@ -39,7 +39,8 @@ use crate::{Error, Result};
 use routing::{Detection, JsonClass, SourceFormat as DetectedFormat, TransmissionFormat};
 
 mod egret;
-mod goc3;
+#[doc(hidden)]
+pub mod goc3;
 mod matpower;
 mod pandapower;
 mod powermodels;
@@ -51,7 +52,7 @@ pub mod routing;
 mod surge;
 
 pub use egret::{parse_egret_json, write_egret_json};
-pub use goc3::{Goc3DeviceKind, Goc3DeviceRecord, Goc3Document, Goc3Record, parse_goc3_json};
+pub use goc3::parse_goc3_json;
 pub use matpower::{parse_matpower, parse_matpower_file, write_matpower};
 pub use pandapower::{parse_pandapower_json, write_pandapower_json};
 pub use powermodels::{parse_powermodels_json, write_powermodels_json};
@@ -79,9 +80,9 @@ pub enum TargetFormat {
     PandapowerJson,
     /// MATPOWER `.m` (round-trip; byte-exact when the case kept its source).
     Matpower,
-    /// The canonical PowerIO snapshot: [`Network`] serialized as JSON, validated
-    /// on read. Lossless for every model field; the retained source text is the
-    /// one exclusion (see [`Network::to_json`]).
+    /// Compatibility alias for [`Network::to_json`] and [`Network::from_json`].
+    /// New code should call those methods directly.
+    #[doc(hidden)]
     PowerioJson,
     /// GE PSLF `.epc` (round-trip; byte-exact when the case kept its source).
     Pslf,
@@ -223,9 +224,9 @@ pub fn display_format_from_name(name: &str) -> Option<DisplayFormat> {
 /// Map a format name (with the common aliases) to a [`TargetFormat`], or `None`
 /// if unrecognized. Accepts `matpower`/`m`, `powermodels-json`/`powermodels`/`pm`,
 /// `egret-json`/`egret`, `pandapower-json`/`pandapower`/`pp`, `psse`/`raw`,
-/// `powerworld`/`aux`, `powerio-json`/`powerio`/`json` (the canonical snapshot;
-/// plain `json` means this one, the foreign JSON dialects are namespaced),
-/// `pslf`/`epc`, `goc3-json`/`goc3`, and `surge-json`/`surge`.
+/// `powerworld`/`aux`, `pslf`/`epc`, `goc3-json`/`goc3`, and
+/// `surge-json`/`surge`. The `powerio-json`/`powerio`/`json` names remain
+/// compatibility aliases for the model JSON methods.
 /// Case-insensitive. The one place the bindings (Python, C ABI) share, so a new
 /// text format means one new arm here, not three. PyPSA CSV folders, GridFM
 /// datasets, and PowerWorld `.pwb` are directory or read only inputs with no

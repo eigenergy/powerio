@@ -6,6 +6,7 @@ use std::fmt;
 pub enum ScopfError {
     Json(serde_json::Error),
     Source(powerio::Error),
+    UnsupportedFormat(String),
     InvalidDocument(String),
 }
 
@@ -22,6 +23,9 @@ impl fmt::Display for ScopfError {
         match self {
             Self::Json(error) => write!(formatter, "invalid SCOPF JSON: {error}"),
             Self::Source(error) => write!(formatter, "invalid GOC3 source: {error}"),
+            Self::UnsupportedFormat(format) => {
+                write!(formatter, "unsupported SCOPF source format `{format}`")
+            }
             Self::InvalidDocument(message) => formatter.write_str(message),
         }
     }
@@ -32,7 +36,7 @@ impl std::error::Error for ScopfError {
         match self {
             Self::Json(error) => Some(error),
             Self::Source(error) => Some(error),
-            Self::InvalidDocument(_) => None,
+            Self::UnsupportedFormat(_) | Self::InvalidDocument(_) => None,
         }
     }
 }

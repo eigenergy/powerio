@@ -1520,9 +1520,9 @@ impl Network {
         net
     }
 
-    /// Serialize the structured tables to JSON: the transport the C ABI
-    /// (the `powerio-json` format) and the Julia bridge consume. The retained `source` text
-    /// is excluded (see the field's `#[serde(skip)]`), so the byte-exact echo
+    /// Serialize the structured tables to model JSON. The C ABI and language
+    /// bindings use this representation. The retained `source` text is
+    /// excluded (see the field's `#[serde(skip)]`), so the byte-exact echo
     /// stays on the same-format write path; a [`from_json`](Network::from_json)
     /// round-trip reproduces every field except `source`, which returns `None`.
     ///
@@ -1856,8 +1856,7 @@ impl Network {
     /// on same-format writes and reporting any target-format fidelity warnings.
     ///
     /// # Errors
-    /// As [`write_as`](crate::write_as): only a `PowerioJson` serialization
-    /// failure.
+    /// As [`write_as`](crate::write_as): only a model JSON serialization failure.
     pub fn to_format(&self, format: crate::TargetFormat) -> crate::Result<crate::Conversion> {
         crate::write_as(self, format)
     }

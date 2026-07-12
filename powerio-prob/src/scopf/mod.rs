@@ -5,5 +5,5 @@ mod types;
 pub mod wire;
 
 pub use error::{ScopfError, ScopfResult};
-pub use projection::{build_scopf_instance, build_scopf_instance_from_str};
+pub use projection::build_scopf_instance_from_str;
 pub use types::*;

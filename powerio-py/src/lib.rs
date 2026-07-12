@@ -1624,13 +1624,13 @@ fn classify_json_text(text: &str) -> (String, Option<String>, Option<String>) {
 /// Parse SCOPF source text and return the versioned wire document as JSON.
 #[pyfunction(signature = (text, from_ = "goc3-json"))]
 fn parse_scopf(text: &str, from_: &str) -> PyResult<String> {
-    if from_ != "goc3-json" {
-        return Err(PyValueError::new_err(format!(
-            "unsupported SCOPF source format {from_:?}"
-        )));
-    }
-    let instance = powerio_prob::build_scopf_instance_from_str(text)
-        .map_err(|error| PowerIOParseError::new_err(error.to_string()))?;
+    let instance =
+        powerio_prob::build_scopf_instance_from_str(text, from_).map_err(|error| match error {
+            error @ powerio_prob::ScopfError::UnsupportedFormat(_) => {
+                PyValueError::new_err(error.to_string())
+            }
+            error => PowerIOParseError::new_err(error.to_string()),
+        })?;
     powerio_prob::scopf::wire::to_wire_json(&instance)
         .map_err(|error| PowerIOParseError::new_err(error.to_string()))
 }

@@ -301,15 +301,14 @@ fn balanced_payload_roundtrips() {
 
 #[test]
 fn goc3_package_operating_points_materialize_static_snapshots() {
-    let net = powerio::parse_str(GOC3_PACKAGE_SRC, "goc3-json")
-        .expect("parse goc3")
-        .network;
+    let parsed = powerio::parse_str(GOC3_PACKAGE_SRC, "goc3-json").expect("parse goc3");
+    let net = &parsed.network;
     assert_eq!(net.generators.len(), 1);
     assert_eq!(net.loads.len(), 1);
     assert_close(net.generators[0].pmax, 100.0);
     assert_close(net.loads[0].p, 40.0);
 
-    let pkg = NetworkPackage::from_balanced(net);
+    let pkg = NetworkPackage::from_parsed_balanced(parsed);
     let series = pkg.operating_points().expect("operating points");
     assert_eq!(series.time_axis.periods, 2);
     assert_eq!(series.time_axis.duration_hours, vec![1.0, 2.0]);
@@ -338,6 +337,13 @@ fn goc3_package_operating_points_materialize_static_snapshots() {
 }
 
 #[test]
+fn balanced_package_constructor_does_not_run_source_adapters() {
+    let parsed = powerio::parse_str(GOC3_PACKAGE_SRC, "goc3-json").expect("parse goc3");
+    let pkg = NetworkPackage::from_balanced(parsed.network);
+    assert!(pkg.operating_points().is_none());
+}
+
+#[test]
 fn goc3_operating_points_follow_parser_row_assignment() {
     // A device without a uid still occupies a payload row; the extractor
     // must keep counting so later devices' updates land on their own rows,
@@ -348,12 +354,10 @@ fn goc3_operating_points_follow_parser_row_assignment() {
       {"uid": "prod", "bus": "bus_00""#,
         1,
     );
-    let net = powerio::parse_str(&src, "goc3-json")
-        .expect("parse goc3")
-        .network;
-    assert_eq!(net.generators.len(), 2);
+    let parsed = powerio::parse_str(&src, "goc3-json").expect("parse goc3");
+    assert_eq!(parsed.network.generators.len(), 2);
 
-    let pkg = NetworkPackage::from_balanced(net).with_package_id("parent");
+    let pkg = NetworkPackage::from_parsed_balanced(parsed).with_package_id("parent");
     let series = pkg.operating_points().expect("operating points");
     let update = &series.points[1].updates[0];
     assert_eq!(update.element.table, "generators");

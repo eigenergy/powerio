@@ -1,7 +1,6 @@
 //! Sparse projections and bundle output for problem instances.
 
 mod bundle;
-pub mod kkt;
 
 use powerio_matrix::matrix::incidence::diagonal;
 use powerio_matrix::matrix::triplet::CooBuilder;

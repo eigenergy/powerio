@@ -1,6 +1,7 @@
 use std::collections::{BTreeMap, HashMap};
 
-use powerio::{BusId, Goc3DeviceKind, Goc3Document, Goc3Record};
+use powerio::BusId;
+use powerio::format::goc3::{Goc3DeviceKind, Goc3Document, Goc3Record};
 use serde_json::{Map, Value};
 
 use super::error::{ScopfError, ScopfResult};

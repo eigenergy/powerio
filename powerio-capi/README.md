@@ -60,8 +60,8 @@ int main(void) {
     pio_branches(c, from, to, NULL, x, NULL, NULL, NULL, NULL, m);
     /* ... assemble L = A diag(1/x) A^T from (from, to, x) ... */
 
-    /* Every format is a string: matpower echoes byte-exact, powerio-json is
-     * the lossless snapshot, powermodels-json/psse/... convert with warnings. */
+    /* Every case format is a string. MATPOWER echoes byte exact;
+     * PowerModels JSON and PSS/E conversions can report warnings. */
     char warn[256];
     char *matpower = pio_to_format(c, "matpower", warn, sizeof warn, err, sizeof err);
     if (matpower) { /* ... use MATPOWER text ... */ pio_string_free(matpower); }
@@ -111,16 +111,16 @@ ccall((:pio_branches, LIB), Csize_t,
 ccall((:pio_network_free, LIB), Cvoid, (Ptr{Cvoid},), h)
 ```
 
-## The powerio-json snapshot
+## Balanced model JSON
 
 For consumers that want the whole case rather than the dense table slices, the
-`powerio-json` format name serializes the entire `Network` (buses, loads,
-shunts, branches, generators, storage, HVDC, and extras) through
-`pio_to_format`, and `pio_parse_str` validates it back into a handle. This is
-the transport the Julia package consumes: one call instead of stitching the
-~dozen table extractors together. The retained source text is the one field the
-snapshot omits, so a reloaded handle reformats on write rather than echoing a
-byte-exact original.
+`pio_to_json` and `pio_from_json` pair carries the entire balanced `Network`:
+buses, loads, shunts, branches, generators, storage, HVDC, and extras. The
+retained source text is excluded, so a reloaded handle converts from the model
+instead of echoing the original source.
+
+ABI v4 still accepts `powerio-json` in `pio_to_format` and `pio_parse_str`.
+Those names are compatibility aliases for the explicit model JSON functions.
 
 ## The `.pio.json` Document Surface
 
@@ -176,13 +176,12 @@ The grammar is written out in the header preamble; the short version:
   `pio_parse_file`, `pio_parse_str`, `pio_read_dir`, and `pio_normalize`
   return a new handle; `pio_write_dir` writes the filesystem;
   `pio_convert_file`/`pio_convert_str` transcode without keeping a handle.
-- `pio_to_format` is the one text serializer; `pio_to_arrow` earns its own
-  symbol only because its output type is Arrow C Data Interface structs.
+- `pio_to_format` serializes named case formats. `pio_to_json` serializes the
+  balanced model. `pio_to_arrow` fills Arrow C Data Interface structs.
 - `pio_package_*` functions operate on `.pio.json` document metadata, not on a new
   network handle family.
-- Format names never appear in symbols: `matpower`, `psse`, `powerio-json`,
-  `pypsa-csv`, `gridfm`, `goc3-json`, `surge-json`, and every future format are
-  strings, so a new format never changes this ABI.
+- Case format names never appear in symbols: `matpower`, `psse`, `pypsa-csv`,
+  `gridfm`, `goc3-json`, `surge-json`, and future formats are strings.
 - Noun phrases are queries: `pio_n_*` counts, `pio_is_radial`,
   `pio_bus_ids`/`pio_branches`/`pio_gens`/`pio_bus_demand`/`pio_bus_shunt`
   extractors, `pio_warnings` for the handle's fidelity warnings.
@@ -241,7 +240,7 @@ symbols do not.
 | 1 | First versioned surface: opaque handles, typed extractors, JSON transport (#54). |
 | 2 | `pio_parse` → `pio_parse_file`, `pio_convert` → `pio_convert_file`, `pio_write_matpower` → `pio_to_matpower` with an `errbuf` (#69). |
 | 3 | `pio_case_free` → `pio_network_free`; `PioCase` → `PioNetwork` (opaque typedef) (#77). |
-| 4 | The naming grammar: format symbols folded into format strings (`pio_to_matpower`/`pio_to_json`/`pio_from_json` → `pio_to_format`/`pio_parse_str` with `powerio-json`; `pio_write_pypsa_csv_folder` → `pio_write_dir`; `pio_read_gridfm`/`pio_gridfm_scenario_ids` → `pio_read_dir`/`pio_scenario_ids`), `pio_to_normalized` → `pio_normalize`, `pio_export_arrow` → `pio_to_arrow`, cap/count extractors, byte-length `pio_warnings`, `pio_ref_bus_index`/`pio_ref_bus_indices`, `pio_n_islands`, `pio_bus_demand`/`pio_bus_shunt`, `pio_convert_*(input, from, to, ...)`, new `pio_convert_str`. |
+| 4 | The naming grammar: case formats use `pio_to_format`/`pio_parse_str`; directory formats use `pio_write_dir`/`pio_read_dir`; `pio_normalize`, `pio_to_arrow`, cap/count extractors, byte length `pio_warnings`, reference bus and island queries, demand and shunt extractors, and string/file conversion entry points use fixed signatures. Balanced model JSON uses the additive `pio_to_json`/`pio_from_json` pair; `powerio-json` remains a compatibility format token. |
 
 One v4 break deserves a callout: `pio_convert_file` kept its symbol, arity,
 and parameter types but reordered arguments 2 and 3 from `(path, to, from)`
@@ -252,9 +251,8 @@ not optional.
 
 The grammar v4 fixed is the freeze: existing signatures never change again,
 new data means new symbols, and rich or multiconductor data rides the Arrow,
-`powerio-json`, and `.pio.json` schemas, which evolve without touching a C
-signature. Any future break would bump `PIO_ABI_VERSION` in lockstep with
-PowerIO.jl.
+model JSON, and `.pio.json` schemas. Any future signature break would bump
+`PIO_ABI_VERSION` in lockstep with PowerIO.jl.
 
 The optional `pio_dist_*` surface has its own version check:
 `pio_dist_abi_version()` against `PIO_DIST_ABI_VERSION`, after confirming

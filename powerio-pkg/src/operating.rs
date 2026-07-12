@@ -5,7 +5,7 @@ use std::collections::{BTreeMap, BTreeSet, HashMap};
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value, json};
 
-use powerio::{Goc3DeviceKind, Goc3Document, Goc3Record};
+use powerio::format::goc3::{Goc3DeviceKind, Goc3Document, Goc3Record};
 
 use crate::model::ModelPayload;
 
@@ -268,8 +268,7 @@ impl ElementUpdate {
 pub(crate) fn goc3_operating_points_from_str(
     text: &str,
 ) -> serde_json::Result<Option<OperatingPointSeries>> {
-    let document =
-        powerio::Goc3Document::parse(text).map_err(|error| json_error(error.to_string()))?;
+    let document = Goc3Document::parse(text).map_err(|error| json_error(error.to_string()))?;
     let network = document
         .network()
         .map_err(|error| json_error(error.to_string()))?;

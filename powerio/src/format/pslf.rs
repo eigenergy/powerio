@@ -134,7 +134,8 @@ pub(crate) fn parse_pslf_source(
     Ok(net)
 }
 
-/// Structural parse of an EPC file before mapping to [`Network`].
+/// EPC source document: structural parse of the file before mapping to
+/// [`Network`].
 ///
 /// This intentionally keeps sections as raw records instead of making a PSLF
 /// specific object model. The reader only maps the static power flow sections;
