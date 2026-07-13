@@ -231,6 +231,11 @@ pub enum SourceFormat {
     Goc3Json,
     /// Read from a Surge native JSON document.
     SurgeJson,
+    /// Read from one raw DeepMind OPFData solved-example JSON document. The
+    /// source carries both solver initial values and a solution; the neutral
+    /// model represents the solved snapshot and retains the source for exact
+    /// same-format echo.
+    OpfDataJson,
 }
 
 impl SourceFormat {
@@ -255,6 +260,7 @@ impl SourceFormat {
             SourceFormat::PypsaCsv => "pypsa-csv",
             SourceFormat::Goc3Json => "goc3-json",
             SourceFormat::SurgeJson => "surge-json",
+            SourceFormat::OpfDataJson => "opfdata-json",
         }
     }
 }

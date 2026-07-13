@@ -23,11 +23,15 @@ pandas, or pyarrow.
 
 Transmission text and file format names accepted by `parse_*` and `convert_*` include
 `matpower`, `psse`, `powerworld`, `pslf`, `powermodels-json`, `egret-json`,
-`pandapower-json`, `goc3-json`, `surge-json`, and `powerio-json`, plus their
+`pandapower-json`, `goc3-json`, `surge-json`, `opfdata-json`, and `powerio-json`, plus their
 documented aliases. PyPSA CSV folders and GridFM Parquet datasets are directory
 formats; use `read_pypsa_csv_folder`, `Network.write_pypsa_csv_folder`,
 `read_gridfm`, `Network.write_gridfm`, or the conversion/package helpers that
 take a path.
+
+`opfdata-json` accepts one extracted raw example from any published FullTop or
+N-1 grid family. Element counts and topology are read from that example; the
+Python path does not depend on PyTorch or on a fixed grid size.
 
 ## Canonical use
 

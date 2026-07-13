@@ -602,10 +602,13 @@ def convert_file(
 
     ``to`` / ``from_`` are format names: ``matpower``, ``powermodels-json``,
     ``egret-json``, ``pandapower-json``, ``psse``, ``powerworld``, ``pslf``,
-    ``goc3-json``, and ``surge-json`` (aliases ``m``, ``pm``, ``egret``,
-    ``pp``, ``raw``, ``aux``, ``epc``, ``goc3``, and ``surge``). The input format is
+    ``goc3-json``, ``surge-json``, and ``opfdata-json`` (aliases ``m``, ``pm``,
+    ``egret``, ``pp``, ``raw``, ``aux``, ``epc``, ``goc3``, ``surge``,
+    ``opfdata``, and ``gridopt``). The input format is
     inferred from the file extension unless ``from_`` overrides it. GO Challenge
-    3 JSON is read only. PyPSA CSV folders are read with
+    3 and OPFData JSON are read only. An OPFData input may be an extracted
+    FullTop or N-1 example of any published grid size; its element counts are
+    read from the document. PyPSA CSV folders are read with
     ``from_="pypsa-csv"`` and written with
     :meth:`Network.write_pypsa_csv_folder`. Returns a :class:`Conversion` with
     the text and any fidelity warnings.

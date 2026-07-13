@@ -130,6 +130,20 @@ def test_parse_infers_format_from_extension():
     assert case.source_format == "Matpower"
 
 
+def test_opfdata_uses_shared_python_parse_and_conversion_surface():
+    path = DATA / "opfdataset" / "example_0.json"
+    case = powerio.parse_file(path)
+
+    assert case.source_format == "OpfDataJson"
+    assert case.n_buses == 14
+    assert case.n_branches == 20
+    assert case.n_gens == 5
+    assert any("solver initial values" in warning for warning in case.read_warnings)
+
+    converted = powerio.convert_file(path, "matpower")
+    assert "mpc.bus" in converted.text
+
+
 def test_parse_powerworld_display_file_and_bytes():
     path = DATA / "powerworld" / "ACTIVSg200.pwd"
     parsed = powerio.parse_display_file(path)
@@ -1129,6 +1143,7 @@ def test_source_format_stubs_cover_every_variant():
     variants = [
         "Matpower",
         "PowerModelsJson",
+        "OpfDataJson",
         "EgretJson",
         "Psse",
         "PowerWorld",
