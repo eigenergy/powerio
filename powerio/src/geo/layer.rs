@@ -164,6 +164,17 @@ impl GeoLayer {
         Ok(parsed)
     }
 
+    /// [`to_geojson`](Self::to_geojson) behind the extraction surfaces' shared
+    /// guard: an empty layer is refused because the written document would not
+    /// read back ([`parse_bytes`](Self::parse_bytes) rejects a document with
+    /// no features).
+    pub fn extracted_geojson(&self) -> Result<String> {
+        if self.features.is_empty() {
+            return Err(bad("the network carries no coordinates to extract"));
+        }
+        Ok(self.to_geojson())
+    }
+
     /// Serialize the canonical wire form: a GeoJSON FeatureCollection with the
     /// `powerio_geo` foreign member. Valid RFC 7946 GeoJSON when the space is
     /// geographic, so GIS tools open it directly.

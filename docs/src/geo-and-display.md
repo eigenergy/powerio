@@ -153,5 +153,9 @@ layout of a coordinate free case is renderer math and stays in the consumer,
 which can write the result back with `kind = synthetic` so the provenance
 survives.
 
-C and Python bindings for the geographic document are tracked in
-[#185](https://github.com/eigenergy/powerio/issues/185).
+The C ABI exposes the document as strings: `pio_geo_parse` normalizes a
+tolerant sidecar to the canonical form, `pio_geo_extract` and `pio_geo_apply`
+work on a parsed network handle (apply returns a new handle whose warnings
+carry the match report), and `pio_dist_geo_extract`/`pio_dist_geo_apply` are
+the multiconductor equivalents. Python mirrors the surface with `parse_geo`
+and `geo_layer()`/`apply_geo_layer()` on both network types.

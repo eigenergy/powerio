@@ -13,6 +13,22 @@ pub enum Units {
     Native,
 }
 
+impl std::str::FromStr for Units {
+    type Err = String;
+
+    /// The one alias table for the bindings: `per-unit`/`perunit`/`pu` and
+    /// `native`, case insensitive, `-`/`_` ignored.
+    fn from_str(name: &str) -> std::result::Result<Self, Self::Err> {
+        match name.to_ascii_lowercase().replace(['-', '_'], "").as_str() {
+            "perunit" | "pu" => Ok(Units::PerUnit),
+            "native" => Ok(Units::Native),
+            other => Err(format!(
+                "unknown units `{other}`; expected \"per-unit\" or \"native\""
+            )),
+        }
+    }
+}
+
 impl Units {
     /// `(power, admittance)` multipliers for source data on `base` MVA. MW
     /// valued quantities (demand, bounds, limits, MW valued shunts) scale by

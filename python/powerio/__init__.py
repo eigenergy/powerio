@@ -65,6 +65,7 @@ __all__ = [
     "parse_display_bytes",
     "parse_str",
     "parse_scopf",
+    "parse_geo",
     "from_json",
     "convert_file",
     "convert_str",
@@ -274,6 +275,34 @@ class Network:
     def to_json(self) -> str:
         """Serialize to the JSON transport."""
         return self._inner.to_json()
+
+    def geo_layer(self) -> dict[str, Any]:
+        """This case's coordinates as a canonical GeoJSON FeatureCollection.
+
+        Raises :class:`PowerIOError` when the case carries none.
+        """
+        return _json.loads(self._inner.geo_layer_json())
+
+    def apply_geo_layer(
+        self, text: str, name_hint: Optional[str] = None
+    ) -> tuple["Network", dict[str, Any]]:
+        """Apply a geographic sidecar and return ``(placed, report)``.
+
+        ``text`` is any form :func:`parse_geo` accepts; this case is
+        unchanged. The report carries ``matched_buses``, ``matched_branches``,
+        ``unmatched_features``, and ``notes``. The placed copy drops the
+        retained source text, so a same-format write re-serializes.
+        """
+        inner, report = self._inner.apply_geo_layer(text, name_hint)
+        return Network(inner), report
+
+    def acopf_instance(self, units: Optional[str] = None) -> dict[str, Any]:
+        """The matrix free AC OPF problem instance as Python data.
+
+        Dense 0-based indices; ``units`` is ``"perunit"`` (default) or
+        ``"native"``.
+        """
+        return _json.loads(self._inner.acopf_json(units))
 
     def to_format(
         self,
@@ -540,6 +569,20 @@ def parse_scopf(text: str, from_: str = "goc3-json") -> dict[str, Any]:
     separate fields. Parse and assembly failures raise :class:`PowerIOError`.
     """
     return _json.loads(_powerio.parse_scopf(text, from_))
+
+
+def parse_geo(text: str, name_hint: Optional[str] = None) -> dict[str, Any]:
+    """Tolerantly read a geographic sidecar and return its canonical form.
+
+    Accepts headerless buscoords CSV, aliased CSV/JSON records, and GeoJSON
+    Point/LineString features. Returns ``{"geojson": <FeatureCollection dict>,
+    "warnings": [...]}``; ``name_hint`` (a file name) picks CSV against JSON
+    when the content alone is ambiguous. Input with no usable coordinates
+    raises :class:`PowerIOParseError`.
+    """
+    parsed = _powerio.parse_geo(text, name_hint)
+    parsed["geojson"] = _json.loads(parsed["geojson"])
+    return parsed
 
 
 def from_json(text: str) -> Network:

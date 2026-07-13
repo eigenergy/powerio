@@ -35,7 +35,9 @@ use powerio_pkg::{
 use powerio_prob::matrix::{
     DcOpfBundleMetadata, DcOpfBundleOptions, write_dcopf_bundle as write_bundle,
 };
-use powerio_prob::{DcOpfOptions, Units, build_dc_opf_instance};
+use powerio_prob::{
+    AcOpfOptions, DcOpfOptions, Units, build_ac_opf_instance, build_dc_opf_instance,
+};
 
 #[cfg(feature = "gridfm")]
 use powerio_matrix::io::gridfm::{
@@ -130,13 +132,9 @@ fn parse_convention(s: &str) -> PyResult<DcConvention> {
 
 /// Accepts `perunit`/`pu`/`per-unit` and `native`.
 fn parse_units(s: &str) -> PyResult<Units> {
-    match normalize(s).as_str() {
-        "perunit" | "pu" => Ok(Units::PerUnit),
-        "native" => Ok(Units::Native),
-        other => Err(PyValueError::new_err(format!(
-            "unknown units {other:?}; expected 'perunit' or 'native'"
-        ))),
-    }
+    // The alias table is `Units: FromStr` in powerio-prob, shared with the
+    // C ABI binding.
+    s.parse::<Units>().map_err(PyValueError::new_err)
 }
 
 fn parse_missing_gen_cost(
@@ -1039,6 +1037,62 @@ impl PyNetwork {
         coo_triplets(py, &l)
     }
 
+    /// The matrix free AC OPF instance as its model JSON (dense 0-based
+    /// indices; the `AcOpfInstance` serde shape). `units` is "perunit" (the
+    /// default) or "native".
+    #[pyo3(signature = (units=None))]
+    fn acopf_json(&self, units: Option<&str>) -> PyResult<String> {
+        let view = IndexedNetwork::with_core(&self.inner, &self.core);
+        let instance = build_ac_opf_instance(
+            &view,
+            &AcOpfOptions {
+                units: parse_units(units.unwrap_or("perunit"))?,
+                ..AcOpfOptions::default()
+            },
+        )
+        .map_err(to_pyerr)?;
+        serde_json::to_string(&instance).map_err(|error| PyValueError::new_err(error.to_string()))
+    }
+
+    /// This network's coordinates as the canonical GeoJSON layer. Raises when
+    /// the network carries none.
+    fn geo_layer_json(&self) -> PyResult<String> {
+        self.inner
+            .geo_layer()
+            .extracted_geojson()
+            .map_err(|error| PyValueError::new_err(error.to_string()))
+    }
+
+    /// Apply a geographic sidecar (any form `parse_geo` accepts) and return
+    /// `(placed_network, report)`; this network is unchanged, matching
+    /// `to_normalized` and the distribution equivalent. The placed copy drops
+    /// the retained source text, so a same-format write re-serializes.
+    #[pyo3(signature = (text, name_hint=None))]
+    fn apply_geo_layer<'py>(
+        &self,
+        py: Python<'py>,
+        text: &str,
+        name_hint: Option<&str>,
+    ) -> PyResult<(PyNetwork, Bound<'py, PyDict>)> {
+        let parsed = powerio_matrix::geo::GeoLayer::parse_bytes(text.as_bytes(), name_hint)
+            .map_err(|error| PowerIOParseError::new_err(error.to_string()))?;
+        let mut inner = self.inner.clone();
+        let report = inner.apply_geo_layer(&parsed.layer);
+        inner.source = None;
+        let mut warnings = self.warnings.clone();
+        warnings.extend(parsed.warnings);
+        // Locations never move buses, so the cached index stays valid.
+        let core = self.core.clone();
+        Ok((
+            PyNetwork {
+                inner,
+                core,
+                warnings,
+            },
+            geo_report_dict(py, &report)?,
+        ))
+    }
+
     /// Write the DC OPF bundle into `out_dir/<case>_dcopf/`. Returns
     /// `{"dir": str, "files": [str, ...]}`.
     #[allow(clippy::too_many_arguments)]
@@ -1307,6 +1361,34 @@ impl PyDistNetwork {
     /// assume.
     fn warnings(&self) -> Vec<String> {
         self.net.warnings.clone()
+    }
+
+    /// This network's coordinates as the canonical GeoJSON layer. Raises when
+    /// the network carries none.
+    fn geo_layer_json(&self) -> PyResult<String> {
+        powerio_pkg::dist_geo_layer(&self.net)
+            .extracted_geojson()
+            .map_err(|error| PyValueError::new_err(error.to_string()))
+    }
+
+    /// Apply a geographic sidecar (any form `parse_geo` accepts) and return
+    /// `(placed_network, report)`; this network is unchanged. The placed copy
+    /// drops the retained source text, so a same-format write re-serializes.
+    #[pyo3(signature = (text, name_hint=None))]
+    fn apply_geo_layer<'py>(
+        &self,
+        py: Python<'py>,
+        text: &str,
+        name_hint: Option<&str>,
+    ) -> PyResult<(PyDistNetwork, Bound<'py, PyDict>)> {
+        let parsed = powerio_matrix::geo::GeoLayer::parse_bytes(text.as_bytes(), name_hint)
+            .map_err(|error| PowerIOParseError::new_err(error.to_string()))?;
+        let mut net = self.net.clone();
+        let report = powerio_pkg::apply_dist_geo_layer(&mut net, &parsed.layer);
+        net.source = None;
+        net.source_format = None;
+        net.warnings.extend(parsed.warnings);
+        Ok((PyDistNetwork { net }, geo_report_dict(py, &report)?))
     }
 
     fn n_buses(&self) -> usize {
@@ -1615,6 +1697,38 @@ fn classify_json_text(text: &str) -> (String, Option<String>, Option<String>) {
     }
 }
 
+/// Tolerant read of a geographic sidecar (headerless buscoords CSV, aliased
+/// CSV/JSON records, GeoJSON): returns `{"geojson": <canonical form>,
+/// "warnings": [...]}`. `name_hint` (a file name) picks CSV against JSON;
+/// otherwise the content is sniffed.
+#[pyfunction(signature = (text, name_hint = None))]
+fn parse_geo<'py>(
+    py: Python<'py>,
+    text: &str,
+    name_hint: Option<&str>,
+) -> PyResult<Bound<'py, PyDict>> {
+    let parsed = powerio_matrix::geo::GeoLayer::parse_bytes(text.as_bytes(), name_hint)
+        .map_err(|error| PowerIOParseError::new_err(error.to_string()))?;
+    let out = PyDict::new(py);
+    out.set_item("geojson", parsed.layer.to_geojson())?;
+    out.set_item("warnings", parsed.warnings)?;
+    Ok(out)
+}
+
+/// A `{matched_buses, matched_branches, unmatched_features, notes}` dict from
+/// one geo apply pass.
+fn geo_report_dict<'py>(
+    py: Python<'py>,
+    report: &powerio_matrix::geo::GeoApplyReport,
+) -> PyResult<Bound<'py, PyDict>> {
+    let out = PyDict::new(py);
+    out.set_item("matched_buses", report.matched_buses)?;
+    out.set_item("matched_branches", report.matched_branches)?;
+    out.set_item("unmatched_features", report.unmatched_features)?;
+    out.set_item("notes", report.notes.clone())?;
+    Ok(out)
+}
+
 /// Parse SCOPF source text and return the versioned wire document as JSON.
 #[pyfunction(signature = (text, from_ = "goc3-json"))]
 fn parse_scopf(text: &str, from_: &str) -> PyResult<String> {
@@ -1781,6 +1895,7 @@ fn _powerio(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PyPackage>()?;
     m.add_function(wrap_pyfunction!(classify_json_text, m)?)?;
     m.add_function(wrap_pyfunction!(parse_scopf, m)?)?;
+    m.add_function(wrap_pyfunction!(parse_geo, m)?)?;
     // Whether the gridfm Parquet surface (arrow/parquet) was compiled in, so the
     // pure-Python layer can raise an ImportError instead of an AttributeError.
     m.add("_has_gridfm", cfg!(feature = "gridfm"))?;
