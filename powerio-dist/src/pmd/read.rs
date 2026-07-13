@@ -469,6 +469,7 @@ impl Reader<'_> {
                 terminal_map_to: ints_as_strings(o.get("t_connections")),
                 linecode,
                 length: o.get("length").map_or(f64::NAN, |v| restore("length", v)),
+                route: None,
                 extras,
             });
         }

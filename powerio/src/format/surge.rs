@@ -721,6 +721,7 @@ fn read_branch(value: &Value) -> Result<Branch> {
         control: None,
         solution: read_branch_solution(obj)?,
         uid: None,
+        route: None,
         extras: Extras::new(),
     })
 }

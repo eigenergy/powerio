@@ -727,6 +727,7 @@ mod tests {
             control: None,
             solution: None,
             uid: None,
+            route: None,
             extras: Extras::new(),
         };
         // Bus 3 is isolated, so to_normalized drops it.

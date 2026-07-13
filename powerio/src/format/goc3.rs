@@ -380,6 +380,7 @@ fn read_branches(
                 control: shifter_control(obj, transformer),
                 solution: None,
                 uid: item_uid(item, obj),
+                route: None,
                 extras: extras(
                     obj,
                     &[

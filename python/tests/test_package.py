@@ -196,7 +196,7 @@ def test_package_declares_payload_schema_and_row_identity():
     doc = json.loads(pkg.to_json())
     assert doc["schema_version"] == "0.1.1"
     assert doc["payload_schema"].endswith("/pio-payload-balanced/1")
-    assert doc["payload_schema_version"] == "1.1.0"
+    assert doc["payload_schema_version"] == "1.2.0"
     # Every payload row carries an identity; case9 has no source uids, so they
     # are synthesized from the build position.
     assert doc["model"]["balanced_network"]["generators"][0]["uid"] == "generators:0"

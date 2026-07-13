@@ -1,4 +1,17 @@
-//! Typed coordinate metadata for the balanced model.
+//! Typed coordinate metadata for the balanced model, and the standalone
+//! geographic document ([`GeoLayer`]) that carries coordinates as a file of
+//! their own.
+
+mod layer;
+mod pwd;
+
+pub use layer::{
+    ElementKey, GEO_LAYER_EXTENSION, GEO_LAYER_VERSION, GeoApplyReport, GeoApplyTarget, GeoFeature,
+    GeoGeometry, GeoLayer, GeoParsed, GeoTarget, apply_geo_features,
+};
+pub use pwd::{
+    PWD_MERCATOR_K, apply_substation_points, geo_layer_from_pwd, pwd_mercator_to_lonlat,
+};
 
 use serde::{Deserialize, Serialize};
 
@@ -62,6 +75,20 @@ pub enum CoordinateSpace {
     },
     /// The source did not declare a coordinate space.
     Unknown,
+}
+
+impl CoordinateSpace {
+    /// The wire token naming the space family (`geographic`, `projected`,
+    /// `diagram`, `unknown`), as the `powerio_geo` member spells it.
+    #[must_use]
+    pub fn token(&self) -> &'static str {
+        match self {
+            CoordinateSpace::Geographic { .. } => "geographic",
+            CoordinateSpace::Projected { .. } => "projected",
+            CoordinateSpace::Diagram { .. } => "diagram",
+            _ => "unknown",
+        }
+    }
 }
 
 /// Diagram canvas metadata.

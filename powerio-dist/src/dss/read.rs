@@ -871,6 +871,7 @@ impl Reader<'_> {
             terminal_map_to: map_to,
             linecode,
             length: length * length_factor,
+            route: None,
             extras,
         });
     }

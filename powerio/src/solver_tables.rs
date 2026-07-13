@@ -814,6 +814,7 @@ mod tests {
             control: None,
             solution: None,
             uid: None,
+            route: None,
             extras: Extras::new(),
         }
     }

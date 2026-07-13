@@ -216,6 +216,53 @@ enum Command {
         #[arg(long)]
         gen_cost_csv: Option<PathBuf>,
     },
+    /// Extract, apply, or normalize standalone geographic layers (.geo.json).
+    Geo {
+        #[command(subcommand)]
+        command: GeoCommand,
+    },
+}
+
+#[derive(Subcommand, Debug)]
+enum GeoCommand {
+    /// Extract a case's coordinates as a canonical .geo.json layer.
+    Extract {
+        /// Input case file (transmission or distribution).
+        input: PathBuf,
+        /// Output file; `-` or omitted writes to stdout.
+        #[arg(short, long)]
+        output: Option<PathBuf>,
+        /// Override the inferred input format.
+        #[arg(long, value_enum)]
+        from: Option<FormatArg>,
+    },
+    /// Apply a geographic sidecar onto a case and write the case back.
+    Apply {
+        /// Input case file (transmission or distribution).
+        input: PathBuf,
+        /// Geographic sidecar: GeoJSON, aliased CSV/JSON records, or
+        /// headerless buscoords CSV.
+        layer: PathBuf,
+        /// Output case file; `-` or omitted writes to stdout.
+        #[arg(short, long)]
+        output: Option<PathBuf>,
+        /// Target case format; defaults to the input's own format.
+        #[arg(long, value_enum)]
+        to: Option<FormatArg>,
+        /// Override the inferred input format.
+        #[arg(long, value_enum)]
+        from: Option<FormatArg>,
+    },
+    /// Normalize a tolerant geographic sidecar to the canonical .geo.json
+    /// form.
+    Convert {
+        /// Input sidecar: GeoJSON, aliased CSV/JSON records, or headerless
+        /// buscoords CSV.
+        input: PathBuf,
+        /// Output file; `-` or omitted writes to stdout.
+        #[arg(short, long)]
+        output: Option<PathBuf>,
+    },
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, ValueEnum)]
@@ -536,6 +583,8 @@ impl From<TopologyArg> for Topology {
     }
 }
 
+// A flat dispatch: one arm per subcommand, each delegating immediately.
+#[expect(clippy::too_many_lines)]
 fn main() -> anyhow::Result<()> {
     install_tracing();
     let cli = Cli::parse();
@@ -636,6 +685,25 @@ fn main() -> anyhow::Result<()> {
                 gen_cost_csv.as_deref(),
             ),
         ),
+        Command::Geo { command } => run_geo(command),
+    }
+}
+
+fn run_geo(command: GeoCommand) -> anyhow::Result<()> {
+    match command {
+        GeoCommand::Extract {
+            input,
+            output,
+            from,
+        } => run_geo_extract(&input, output.as_deref(), from),
+        GeoCommand::Apply {
+            input,
+            layer,
+            output,
+            to,
+            from,
+        } => run_geo_apply(&input, &layer, output.as_deref(), to, from),
+        GeoCommand::Convert { input, output } => run_geo_convert(&input, output.as_deref()),
     }
 }
 
@@ -1373,12 +1441,23 @@ fn run_convert(
     for w in &warnings {
         eprintln!("fidelity: {w}");
     }
+    write_conversion_output(&text, &sidecars, output)
+}
+
+/// Write conversion `text` to `output` (stdout on `-` or `None`), placing any
+/// `sidecars` next to it. Sidecars cannot follow text to stdout; they are
+/// reported instead.
+fn write_conversion_output(
+    text: &str,
+    sidecars: &[powerio_dist::ConversionSidecar],
+    output: Option<&std::path::Path>,
+) -> anyhow::Result<()> {
     match output {
         Some(p) if p.as_os_str() != "-" => {
-            std::fs::write(p, &text).with_context(|| format!("writing {}", p.display()))?;
+            std::fs::write(p, text).with_context(|| format!("writing {}", p.display()))?;
             eprintln!("wrote {}", p.display());
             let base = p.parent().unwrap_or_else(|| std::path::Path::new("."));
-            for sidecar in &sidecars {
+            for sidecar in sidecars {
                 let path = base.join(&sidecar.path);
                 if let Some(parent) = path.parent() {
                     std::fs::create_dir_all(parent)
@@ -1390,7 +1469,7 @@ fn run_convert(
             }
         }
         _ => {
-            for sidecar in &sidecars {
+            for sidecar in sidecars {
                 eprintln!(
                     "fidelity: sidecar `{}` was not written because output is stdout",
                     sidecar.path
@@ -1400,6 +1479,157 @@ fn run_convert(
         }
     }
     Ok(())
+}
+
+/// Whether the geo command's case input is a distribution case: `--from`
+/// decides when given, else the extension and JSON markers.
+fn geo_input_is_dist(input: &std::path::Path, from: Option<FormatArg>) -> anyhow::Result<bool> {
+    if let Some(f) = from {
+        return Ok(f.distribution().is_some());
+    }
+    looks_like_distribution_input(input)
+}
+
+fn run_geo_extract(
+    input: &std::path::Path,
+    output: Option<&std::path::Path>,
+    from: Option<FormatArg>,
+) -> anyhow::Result<()> {
+    // A `.pwd` display file promotes to a diagram space layer with
+    // substation targets; apply it onto a case with `geo apply`.
+    if from.is_none()
+        && input
+            .extension()
+            .and_then(|e| e.to_str())
+            .is_some_and(|e| e.eq_ignore_ascii_case("pwd"))
+    {
+        let display = powerio_matrix::parse_display_file(input, None)
+            .with_context(|| format!("reading {}", input.display()))?;
+        let powerio_matrix::DisplayData::PowerWorld(display) = display else {
+            anyhow::bail!("{} did not parse as a .pwd display", input.display());
+        };
+        let layer = powerio_matrix::geo::geo_layer_from_pwd(&display);
+        if layer.features.is_empty() {
+            anyhow::bail!("{} carries no substation symbols", input.display());
+        }
+        return write_conversion_output(&layer.to_geojson(), &[], output);
+    }
+    let layer = if geo_input_is_dist(input, from)? {
+        let net = powerio_dist::parse_file(input, from.map(FormatArg::name))
+            .with_context(|| format!("reading {}", input.display()))?;
+        for w in &net.warnings {
+            eprintln!("parse: {w}");
+        }
+        powerio_pkg::dist_geo_layer(&net)
+    } else {
+        read_network(input, from)?.geo_layer()
+    };
+    if layer.features.is_empty() {
+        anyhow::bail!("{} carries no coordinates to extract", input.display());
+    }
+    write_conversion_output(&layer.to_geojson(), &[], output)
+}
+
+// Both family branches follow the same five steps (parse, apply, drop the
+// retained source so a same-format write re-serializes the placed case,
+// resolve the target, serialize); they stay separate because the two model
+// families have distinct parse and write APIs.
+fn run_geo_apply(
+    input: &std::path::Path,
+    layer_path: &std::path::Path,
+    output: Option<&std::path::Path>,
+    to: Option<FormatArg>,
+    from: Option<FormatArg>,
+) -> anyhow::Result<()> {
+    let bytes = std::fs::read(layer_path)
+        .with_context(|| format!("reading layer {}", layer_path.display()))?;
+    let parsed = powerio_matrix::geo::GeoLayer::parse_bytes(
+        &bytes,
+        layer_path.file_name().and_then(|n| n.to_str()),
+    )
+    .with_context(|| format!("parsing layer {}", layer_path.display()))?;
+    for w in &parsed.warnings {
+        eprintln!("layer: {w}");
+    }
+    let (text, sidecars, warnings) = if geo_input_is_dist(input, from)? {
+        let mut net = powerio_dist::parse_file(input, from.map(FormatArg::name))
+            .with_context(|| format!("reading {}", input.display()))?;
+        for w in &net.warnings {
+            eprintln!("parse: {w}");
+        }
+        report_geo_apply(&powerio_pkg::apply_dist_geo_layer(&mut net, &parsed.layer));
+        net.source = None;
+        let target = match to {
+            Some(f) => f.distribution().ok_or_else(|| {
+                anyhow::anyhow!(
+                    "`{}` is not a distribution text target; a distribution case writes \
+                     back to dss, pmd-json, or bmopf-json",
+                    f.name()
+                )
+            })?,
+            None => net
+                .source_format
+                .map(|f| f.name().parse())
+                .transpose()?
+                .ok_or_else(|| anyhow::anyhow!("the input carries no source format; pass --to"))?,
+        };
+        let conv = net.to_format(target);
+        (conv.text, conv.sidecars, conv.warnings)
+    } else {
+        let mut net = read_network(input, from)?;
+        report_geo_apply(&net.apply_geo_layer(&parsed.layer));
+        net.source = None;
+        let target = match to {
+            Some(f) => f.transmission().ok_or_else(|| {
+                anyhow::anyhow!(
+                    "`{}` is not a transmission text target here; apply writes a single \
+                     case file (use `convert` for pypsa-csv and gridfm outputs)",
+                    f.name()
+                )
+            })?,
+            None => powerio_matrix::target_format_from_name(&format!("{:?}", net.source_format))
+                .ok_or_else(|| {
+                    anyhow::anyhow!(
+                        "`{:?}` has no write target; pass --to to choose one",
+                        net.source_format
+                    )
+                })?,
+        };
+        let conv = net
+            .to_format(target)
+            .with_context(|| format!("serializing to {target}"))?;
+        (conv.text, Vec::new(), conv.warnings)
+    };
+    for w in &warnings {
+        eprintln!("fidelity: {w}");
+    }
+    write_conversion_output(&text, &sidecars, output)
+}
+
+fn report_geo_apply(report: &powerio_matrix::geo::GeoApplyReport) {
+    eprintln!(
+        "applied: {} bus point(s), {} branch route(s), {} unmatched feature(s)",
+        report.matched_buses, report.matched_branches, report.unmatched_features
+    );
+    for note in &report.notes {
+        eprintln!("note: {note}");
+    }
+}
+
+fn run_geo_convert(
+    input: &std::path::Path,
+    output: Option<&std::path::Path>,
+) -> anyhow::Result<()> {
+    let bytes = std::fs::read(input).with_context(|| format!("reading {}", input.display()))?;
+    let parsed = powerio_matrix::geo::GeoLayer::parse_bytes(
+        &bytes,
+        input.file_name().and_then(|n| n.to_str()),
+    )
+    .with_context(|| format!("parsing {}", input.display()))?;
+    for w in &parsed.warnings {
+        eprintln!("layer: {w}");
+    }
+    write_conversion_output(&parsed.layer.to_geojson(), &[], output)
 }
 
 /// Write `input` out as a PyPSA CSV folder (a directory target, so it never

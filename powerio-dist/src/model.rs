@@ -147,6 +147,12 @@ pub struct DistLine {
     pub linecode: String,
     /// Meters.
     pub length: f64,
+    /// Polyline route in the network's coordinate space (`DistNetwork.geo`),
+    /// present only when a source provides intermediate geometry.
+    /// `#[serde(default)]` so JSON written before the field existed still
+    /// deserializes.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub route: Option<Vec<Location>>,
     pub extras: Extras,
 }
 
@@ -169,6 +175,7 @@ impl DistLine {
             terminal_map_to,
             linecode: linecode.into(),
             length,
+            route: None,
             extras: Extras::new(),
         }
     }

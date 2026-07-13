@@ -500,6 +500,7 @@ impl Network {
             control: None,
             solution: None,
             uid: None,
+            route: None,
             extras: Extras::new(),
         });
         self.buses.retain(|b| b.id != m);
@@ -596,6 +597,7 @@ mod tests {
             control: None,
             solution: None,
             uid: None,
+            route: None,
             extras: Extras::new(),
         }
     }

@@ -121,7 +121,7 @@ pub(crate) fn parse_pandapower_source(
             zone: row.usize_or("zone", 1),
             name: row.string("name"),
             uid: None,
-            location: None,
+            location: read_bus_geo(row.get("geo")),
             extras: Extras::default(),
         });
     }
@@ -359,6 +359,7 @@ pub(crate) fn parse_pandapower_source(
                 control: None,
                 solution: None,
                 uid: None,
+                route: None,
                 extras: Extras::default(),
             });
         }
@@ -495,6 +496,7 @@ pub(crate) fn parse_pandapower_source(
                 control: None,
                 solution: None,
                 uid: None,
+                route: None,
                 extras: Extras::default(),
             });
         }
@@ -635,7 +637,7 @@ pub(crate) fn parse_pandapower_source(
         name,
         base_mva,
         base_frequency: f_hz,
-        geo: None,
+        geo: super::geographic_meta(&buses),
         buses,
         loads,
         shunts,
@@ -878,7 +880,7 @@ fn bus_frame(net: &Network, warnings: &mut Vec<String>) -> Value {
             Value::String("b".into()),
             Value::from(b.zone as u64),
             Value::Bool(b.kind != BusType::Isolated),
-            Value::Null,
+            write_bus_geo(b.location),
             jnum(b.vmin),
             jnum(b.vmax),
         ]);
@@ -1599,6 +1601,45 @@ impl Row<'_> {
             .filter(|s| !s.is_empty())
             .map(str::to_string)
     }
+}
+
+/// The written `geo` cell: pandapower 3 stores a GeoJSON Point string per
+/// bus, null when the bus has no location. A non-finite coordinate has no
+/// GeoJSON representation and writes null too. The fixed shape is formatted
+/// directly; a `Value` tree per bus would be needless churn.
+fn write_bus_geo(location: Option<crate::geo::Location>) -> Value {
+    match location {
+        Some(location) if location.x.is_finite() && location.y.is_finite() => {
+            Value::String(format!(
+                r#"{{"type": "Point", "coordinates": [{}, {}]}}"#,
+                location.x, location.y
+            ))
+        }
+        _ => Value::Null,
+    }
+}
+
+/// The bus `geo` cell: a GeoJSON Point, serialized as a string (pandapower 3)
+/// or carried as an object. Anything else (null, LineStrings, malformed
+/// JSON) reads as no location.
+fn read_bus_geo(cell: Option<&Value>) -> Option<crate::geo::Location> {
+    let cell = cell?;
+    let owned;
+    let geometry = match cell {
+        Value::String(text) => {
+            owned = serde_json::from_str::<Value>(text).ok()?;
+            &owned
+        }
+        Value::Object(_) => cell,
+        _ => return None,
+    };
+    if geometry.get("type").and_then(Value::as_str) != Some("Point") {
+        return None;
+    }
+    let coordinates = geometry.get("coordinates")?.as_array()?;
+    let x = coordinates.first().and_then(value_f64)?;
+    let y = coordinates.get(1).and_then(value_f64)?;
+    (x.is_finite() && y.is_finite()).then_some(crate::geo::Location { x, y, kind: None })
 }
 
 fn read_frame(root: &Map<String, Value>, name: &str) -> Result<Option<DataFrame>> {
@@ -2889,6 +2930,7 @@ mod tests {
             control: None,
             solution: None,
             uid: None,
+            route: None,
             extras: Extras::default(),
         }
     }

@@ -522,6 +522,7 @@ fn read_branch(rec: &Record) -> Result<Branch> {
         control: None,
         solution: None,
         uid: None,
+        route: None,
         extras,
     })
 }
@@ -641,6 +642,7 @@ fn read_transformer(rec: &Record) -> Result<TransformerRecord> {
         control: None,
         solution: None,
         uid: None,
+        route: None,
         extras,
     }))
 }
@@ -1858,6 +1860,7 @@ end
             control: None,
             solution: None,
             uid: None,
+            route: None,
             extras: Extras::new(),
         });
 

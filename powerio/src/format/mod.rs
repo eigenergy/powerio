@@ -169,6 +169,10 @@ impl FromStr for TargetFormat {
 pub enum DisplayFormat {
     /// PowerWorld oneline display `.pwd`.
     PowerWorld,
+    /// The standalone geographic document ([`crate::geo::GeoLayer`]):
+    /// canonical `.geo.json`, read tolerantly from GeoJSON, aliased CSV/JSON
+    /// records, and headerless buscoords CSV.
+    GeoJson,
 }
 
 impl DisplayFormat {
@@ -177,6 +181,7 @@ impl DisplayFormat {
     pub fn extension(self) -> &'static str {
         match self {
             DisplayFormat::PowerWorld => "pwd",
+            DisplayFormat::GeoJson => crate::geo::GEO_LAYER_EXTENSION,
         }
     }
 
@@ -185,6 +190,7 @@ impl DisplayFormat {
     pub fn label(self) -> &'static str {
         match self {
             DisplayFormat::PowerWorld => "PowerWorld .pwd",
+            DisplayFormat::GeoJson => "geo layer",
         }
     }
 
@@ -193,6 +199,7 @@ impl DisplayFormat {
     pub fn token(self) -> &'static str {
         match self {
             DisplayFormat::PowerWorld => "powerworld-display",
+            DisplayFormat::GeoJson => "geojson",
         }
     }
 }
@@ -212,11 +219,13 @@ impl FromStr for DisplayFormat {
 }
 
 /// Map a display format name to a [`DisplayFormat`], or `None` if unrecognized.
-/// Accepts `pwd`, `powerworld-pwd`, and `powerworld-display`.
+/// Accepts `pwd`, `powerworld-pwd`, and `powerworld-display`; `geojson`,
+/// `geo-json`, and `geo` name the geographic layer.
 #[must_use]
 pub fn display_format_from_name(name: &str) -> Option<DisplayFormat> {
     Some(match name.to_ascii_lowercase().as_str() {
         "pwd" | "powerworld-pwd" | "powerworld-display" => DisplayFormat::PowerWorld,
+        "geojson" | "geo-json" | "geo" => DisplayFormat::GeoJson,
         _ => return None,
     })
 }
@@ -258,12 +267,15 @@ pub fn target_format_from_name(name: &str) -> Option<TargetFormat> {
 }
 
 /// Output of a display parse. PowerWorld `.pwd` produces
-/// [`DisplayData::PowerWorld`].
+/// [`DisplayData::PowerWorld`]; a geographic sidecar produces
+/// [`DisplayData::Geo`].
 #[derive(Debug, Clone, PartialEq)]
 #[non_exhaustive]
 pub enum DisplayData {
     /// PowerWorld oneline display data.
     PowerWorld(PwdDisplay),
+    /// A standalone geographic layer.
+    Geo(crate::geo::GeoLayer),
 }
 
 impl DisplayData {
@@ -272,6 +284,7 @@ impl DisplayData {
     pub fn format(&self) -> DisplayFormat {
         match self {
             DisplayData::PowerWorld(_) => DisplayFormat::PowerWorld,
+            DisplayData::Geo(_) => DisplayFormat::GeoJson,
         }
     }
 }
@@ -296,6 +309,11 @@ pub fn parse_display_bytes(bytes: &[u8], format: &str) -> Result<DisplayData> {
         DisplayFormat::PowerWorld => Ok(DisplayData::PowerWorld(powerworld::parse_pwd_display(
             bytes,
         )?)),
+        // The tolerant reader's own notes are available through
+        // `GeoLayer::parse_bytes` for callers that want them.
+        DisplayFormat::GeoJson => Ok(DisplayData::Geo(
+            crate::geo::GeoLayer::parse_bytes(bytes, None)?.layer,
+        )),
     }
 }
 
@@ -323,6 +341,20 @@ pub fn parse_display_file(
             .as_deref()
         {
             Some("pwd") => DisplayFormat::PowerWorld,
+            Some("geojson") => DisplayFormat::GeoJson,
+            // `.geo.json` is the canonical layer name; a bare `.json` stays
+            // ambiguous (it is usually a case file).
+            Some("json")
+                if path
+                    .file_name()
+                    .and_then(|name| name.to_str())
+                    .is_some_and(|name| {
+                        name.to_ascii_lowercase()
+                            .ends_with(crate::geo::GEO_LAYER_EXTENSION)
+                    }) =>
+            {
+                DisplayFormat::GeoJson
+            }
             other => {
                 return Err(Error::UnknownFormat(format!(
                     "cannot infer display format from file extension {other:?}; \
@@ -336,6 +368,10 @@ pub fn parse_display_file(
         DisplayFormat::PowerWorld => Ok(DisplayData::PowerWorld(powerworld::parse_pwd_display(
             &bytes,
         )?)),
+        DisplayFormat::GeoJson => Ok(DisplayData::Geo(
+            crate::geo::GeoLayer::parse_bytes(&bytes, path.file_name().and_then(|n| n.to_str()))?
+                .layer,
+        )),
     }
 }
 
@@ -505,6 +541,26 @@ fn read_source(source: Arc<String>, fmt: TargetFormat, name_hint: Option<&str>) 
         network: net,
         warnings,
         document,
+    })
+}
+
+/// Geographic metadata for a reader that harvested longitude/latitude
+/// coordinates: `Some` once any bus carries a location, so a case without
+/// coordinates serializes exactly as before. The space is stamped geographic
+/// only when every point fits longitude/latitude bounds; a source that
+/// violates its format's own convention (projected meters in a pandapower
+/// `geo` column) reads as unknown instead of claiming WGS84.
+pub(crate) fn geographic_meta(buses: &[Bus]) -> Option<crate::geo::GeoMeta> {
+    let mut located = buses.iter().filter_map(|bus| bus.location).peekable();
+    located.peek()?;
+    let in_bounds = located.all(|location| location.x.abs() <= 180.0 && location.y.abs() <= 90.0);
+    Some(crate::geo::GeoMeta {
+        space: if in_bounds {
+            crate::geo::CoordinateSpace::Geographic { crs: None }
+        } else {
+            crate::geo::CoordinateSpace::Unknown
+        },
+        kind: None,
     })
 }
 
@@ -735,6 +791,7 @@ pub fn write_as(net: &Network, format: TargetFormat) -> Result<Conversion> {
     warn_normalized_tap(net, format, &mut conv);
     warn_missing_reference(net, format, &mut conv);
     warn_dropped_frequency(net, format, &mut conv);
+    warn_dropped_locations(net, format, &mut conv);
     warn_psse_downgrade(net, format, &mut conv);
     warn_dropped_transformer_charging(net, format, &mut conv);
     Ok(conv)
@@ -852,6 +909,31 @@ fn warn_dropped_frequency(net: &Network, format: TargetFormat, conv: &mut Conver
             net.base_frequency,
             format.label(),
             crate::network::DEFAULT_BASE_FREQUENCY
+        ));
+    }
+}
+
+/// Warn when the case carries bus locations and the target has no geometry
+/// concept. PowerWorld aux (`Latitude:1`/`Longitude:1`) and pandapower
+/// (`geo`) carry them, and the PyPSA folder writer (`x`/`y`) has its own
+/// path; MATPOWER, PSS/E, PowerModels, egret, PSLF, and Surge have nowhere to
+/// put them, matching the `base_frequency` behavior. `powerio geo extract`
+/// writes the sidecar as the escape hatch.
+fn warn_dropped_locations(net: &Network, format: TargetFormat, conv: &mut Conversion) {
+    let carries_locations = matches!(
+        format,
+        TargetFormat::PowerWorld | TargetFormat::PandapowerJson
+    );
+    if carries_locations {
+        return;
+    }
+    let n = net.buses.iter().filter(|b| b.location.is_some()).count();
+    let routed = net.branches.iter().filter(|b| b.route.is_some()).count();
+    if n > 0 || routed > 0 {
+        conv.warnings.push(format!(
+            "{n} bus location(s) and {routed} branch route(s) dropped: {} has no \
+             coordinate field (write a .geo.json sidecar to keep them)",
+            format.label()
         ));
     }
 }

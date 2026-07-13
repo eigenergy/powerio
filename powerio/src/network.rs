@@ -633,6 +633,12 @@ pub struct Branch {
     /// Stable row identity; see [`Bus::uid`].
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub uid: Option<String>,
+    /// Polyline route in the network's coordinate space (`Network.geo`),
+    /// present only when a source provides intermediate geometry; endpoint
+    /// only rendering derives from the bus locations. `#[serde(default)]` so
+    /// JSON written before the field existed still deserializes.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub route: Option<Vec<Location>>,
     pub extras: Extras,
 }
 
@@ -768,6 +774,7 @@ impl Branch {
             control: None,
             solution: None,
             uid: None,
+            route: None,
             extras: Extras::new(),
         }
     }
@@ -1439,6 +1446,7 @@ impl Transformer3W {
             control: None,
             solution: None,
             uid: None,
+            route: None,
             extras: Extras::new(),
         };
         let branches = [
@@ -1682,7 +1690,7 @@ impl Network {
         }
         for (i, br) in self.branches.iter().enumerate() {
             #[rustfmt::skip]
-            let Branch { from: _, to: _, r, x, b, charging, rate_a, rate_b, rate_c, rating_sets, current_ratings, tap, shift, in_service: _, angmin, angmax, control: _, solution, uid: _, extras: _ } = br;
+            let Branch { from: _, to: _, r, x, b, charging, rate_a, rate_b, rate_c, rating_sets, current_ratings, tap, shift, in_service: _, angmin, angmax, control: _, solution, uid: _, route: _, extras: _ } = br;
             let fields = [
                 ("r", *r),
                 ("x", *x),
@@ -2357,6 +2365,7 @@ mod tests {
             }),
             solution: None,
             uid: None,
+            route: None,
             extras: Extras::new(),
         }
     }
@@ -2464,6 +2473,7 @@ mod tests {
             control: None,
             solution: None,
             uid: None,
+            route: None,
             extras: Extras::new(),
         };
         // A non-finite generator capability reports at its exact key path
