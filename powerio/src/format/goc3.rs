@@ -33,10 +33,9 @@ impl Goc3Document {
     /// Parse one GOC3 JSON document.
     pub fn parse(text: &str) -> Result<Self> {
         let value: Value = serde_json::from_str(text).map_err(|error| bad(error.to_string()))?;
-        let root = value
-            .as_object()
-            .cloned()
-            .ok_or_else(|| bad("top level is not a JSON object"))?;
+        let Value::Object(root) = value else {
+            return Err(bad("top level is not a JSON object"));
+        };
         Ok(Self { root })
     }
 
@@ -134,17 +133,24 @@ impl Goc3BusMap {
 /// Parse a GO Challenge 3 JSON input file.
 pub fn parse_goc3_json(content: &str) -> Result<super::Parsed> {
     let mut warnings = Vec::new();
-    let network = parse_goc3_source(Arc::new(content.to_owned()), None, &mut warnings)?;
-    Ok(super::Parsed { network, warnings })
+    let (network, document) = parse_goc3_source(Arc::new(content.to_owned()), None, &mut warnings)?;
+    Ok(super::Parsed {
+        network,
+        warnings,
+        document: Some(super::SourceDocument::Goc3(document)),
+    })
 }
 
+/// Parse GOC3 source text into the balanced network plus the document the
+/// parse went through, so the caller hands the document forward instead of
+/// letting downstream adapters reparse the retained text.
 #[allow(clippy::too_many_lines)]
 pub(crate) fn parse_goc3_source(
     source: Arc<String>,
     name_hint: Option<&str>,
     warnings: &mut Vec<String>,
-) -> Result<Network> {
-    let document = Goc3Document::parse(&source)?;
+) -> Result<(Network, Arc<Goc3Document>)> {
+    let document = Arc::new(Goc3Document::parse(&source)?);
     let root = document.root();
     let network = document.network()?;
 
@@ -259,7 +265,7 @@ pub(crate) fn parse_goc3_source(
         source: Some(source),
     };
     net.check_references(FMT)?;
-    Ok(net)
+    Ok((net, document))
 }
 
 fn read_buses(network: &Map<String, Value>) -> Result<(Vec<Bus>, Goc3BusMap)> {

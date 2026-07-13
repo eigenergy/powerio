@@ -62,10 +62,14 @@ pub struct DcGeneratorData {
     pub bus_of_gen: Vec<usize>,
     /// Generator column to source generator row.
     pub source_rows: Vec<usize>,
-    /// Quadratic objective diagonal in `0.5 * q * p^2 + c * p`.
+    /// Quadratic objective diagonal in `0.5 * q * p^2 + c * p + c0`.
     pub q: Vec<f64>,
     /// Linear objective coefficient.
     pub c: Vec<f64>,
+    /// Constant objective term. Unscaled in both unit systems: it carries no
+    /// power dimension. It does not move the argmin, but a consumer reporting
+    /// or comparing objective values needs it.
+    pub c0: Vec<f64>,
     pub pmax: Vec<f64>,
     pub pmin: Vec<f64>,
 }
@@ -97,6 +101,7 @@ pub struct DcBranchData {
 pub struct NodalGeneratorData {
     pub q: Vec<f64>,
     pub c: Vec<f64>,
+    pub c0: Vec<f64>,
     pub pmax: Vec<f64>,
     pub pmin: Vec<f64>,
 }
@@ -147,6 +152,7 @@ impl DcOpfInstance {
         let mut occupied = vec![false; self.n_buses];
         let mut q = vec![0.0; self.n_buses];
         let mut c = vec![0.0; self.n_buses];
+        let mut c0 = vec![0.0; self.n_buses];
         let mut pmax = vec![0.0; self.n_buses];
         let mut pmin = vec![0.0; self.n_buses];
 
@@ -160,11 +166,18 @@ impl DcOpfInstance {
             occupied[bus] = true;
             q[bus] = self.generators.q[generator];
             c[bus] = self.generators.c[generator];
+            c0[bus] = self.generators.c0[generator];
             pmax[bus] = self.generators.pmax[generator];
             pmin[bus] = self.generators.pmin[generator];
         }
 
-        Ok(NodalGeneratorData { q, c, pmax, pmin })
+        Ok(NodalGeneratorData {
+            q,
+            c,
+            c0,
+            pmax,
+            pmin,
+        })
     }
 }
 
@@ -186,6 +199,7 @@ pub fn build_dc_opf_instance(
     let mut generator_rows = Vec::new();
     let mut q = Vec::new();
     let mut c = Vec::new();
+    let mut c0 = Vec::new();
     let mut pmax = Vec::new();
     let mut pmin = Vec::new();
 
@@ -197,15 +211,18 @@ pub fn build_dc_opf_instance(
         let cost = generator.cost.as_ref().ok_or(Error::MissingGenCost {
             gen_index: source_row,
         })?;
-        let (q_raw, c_raw) = cost.quadratic().ok_or(Error::UnsupportedCostModel {
-            gen_index: source_row,
-            model: cost.model,
-            ncost: cost.ncost,
-        })?;
+        let (q_raw, c_raw, c0_raw) =
+            cost.quadratic_with_constant()
+                .ok_or(Error::UnsupportedCostModel {
+                    gen_index: source_row,
+                    model: cost.model,
+                    ncost: cost.ncost,
+                })?;
         bus_of_gen.push(bus);
         generator_rows.push(source_row);
         q.push(q_raw * q_scale);
         c.push(c_raw * c_scale);
+        c0.push(c0_raw);
         pmax.push(generator.pmax * p_scale);
         pmin.push(generator.pmin * p_scale);
     }
@@ -289,6 +306,7 @@ pub fn build_dc_opf_instance(
             source_rows: generator_rows,
             q,
             c,
+            c0,
             pmax,
             pmin,
         },

@@ -461,7 +461,7 @@ fn lcc_terminal_obj(bus: BusId, in_service: bool) -> Value {
 pub fn parse_surge_json(content: &str) -> Result<Parsed> {
     let mut warnings = Vec::new();
     let network = parse_surge_source(Arc::new(content.to_owned()), None, &mut warnings)?;
-    Ok(Parsed { network, warnings })
+    Ok(Parsed::without_document(network, warnings))
 }
 
 pub(crate) fn parse_surge_source(

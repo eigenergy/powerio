@@ -111,6 +111,17 @@ fn julia_wire_adapter_is_versioned_and_one_based() {
             .is_some()
     );
     assert!(wire["instance"]["lengths"].get("L_J_ln").is_some());
+    // Renumbering is per declared field: counts and value fields pass
+    // through unchanged even where a name doubles as an index elsewhere
+    // (`p_max` on price blocks vs devices, `L_T` vs `t`).
+    assert_eq!(
+        wire["instance"]["lengths"]["L_T"],
+        u64::try_from(instance.lengths.l_t).expect("period count")
+    );
+    assert_eq!(
+        wire["instance"]["price_blocks"]["producer"][0]["p_max"],
+        instance.price_blocks.producer[0].p_max
+    );
 }
 
 #[test]

@@ -343,6 +343,21 @@ fn balanced_package_constructor_does_not_run_source_adapters() {
     assert!(pkg.operating_points().is_none());
 }
 
+/// The operating point series derives from the document the reader already
+/// parsed (`Parsed::document`), never from a second parse of the retained
+/// source text: stripping the text must not change the outcome.
+#[test]
+fn goc3_operating_points_derive_from_the_reader_parse() {
+    let mut parsed = powerio::parse_str(GOC3_PACKAGE_SRC, "goc3-json").expect("parse goc3");
+    assert!(matches!(
+        parsed.document,
+        Some(powerio::SourceDocument::Goc3(_))
+    ));
+    parsed.network.source = None;
+    let pkg = NetworkPackage::from_parsed_balanced(parsed);
+    assert!(pkg.operating_points().is_some());
+}
+
 #[test]
 fn goc3_operating_points_follow_parser_row_assignment() {
     // A device without a uid still occupies a payload row; the extractor
