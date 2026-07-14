@@ -45,22 +45,26 @@ Market files and `dcopf_meta.json`.
 
 ## Vectors
 
-Bus-indexed (length \\(n\\)): `pd` (load), `q`/`c` (cost diag/linear), `pmax`/`pmin`
+Bus-indexed (length \\(n\\)): `pd` (load), `q`/`c`/`c0` (cost diag/linear/constant),
+`pmax`/`pmin`
 (generation bounds), `e_r` (reference indicator: \\(1\\) at every reference bus, else \\(0\\)),
 `p_shift` (phase shift injection, all zero unless `Matpower` + shifters).
 Branch-indexed (length \\(m\\)): `b` (susceptances), `fmax` (thermal limits; \\(0\\) means
 unlimited per MATPOWER), and the radian limits `angle_min` and `angle_max`.
 Generator space data
-(length \\(n_{\mathrm{gen}}\\)): `q_gen`, `c_gen`, `pmax_gen`, and `pmin_gen`.
+(length \\(n_{\mathrm{gen}}\\)): `q_gen`, `c_gen`, `c0_gen`, `pmax_gen`, and `pmin_gen`.
 
-Generator space is canonical. The nodal `q`, `c`, `pmax`, and `pmin` files are
-written only when each bus has at most one generator. The writer returns an
-error when several generators share a bus because summing their quadratic or
-linear costs would change the objective.
+The constant cost terms `c0`/`c0_gen` do not move the argmin; they exist so a
+consumer reporting objective values reconstructs the full cost.
+
+Generator space is canonical. The nodal `q`, `c`, `c0`, `pmax`, and `pmin`
+files are written only when each bus has at most one generator. The writer
+returns an error when several generators share a bus because summing their
+quadratic or linear costs would change the objective.
 
 ## Manifest (`dcopf_meta.json`)
 
-Schema `powerio.dcopf` version `0.2.0` writes Matrix Market files plus
+Schema `powerio.dcopf` version `0.3.0` writes Matrix Market files plus
 structured metadata:
 
 - `dimensions`: `n_buses`, `n_source_branches`, `n_branch_columns`,

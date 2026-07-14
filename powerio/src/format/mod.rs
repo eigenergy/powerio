@@ -408,10 +408,7 @@ pub fn parse_file(path: impl AsRef<std::path::Path>, from: Option<&str>) -> Resu
         // The binary reader is total (no fidelity warnings); wrap its network
         // in the shared [`Parsed`] shape.
         let network = powerworld::parse_pwb(&bytes, stem)?;
-        return Ok(Parsed {
-            network,
-            warnings: Vec::new(),
-        });
+        return Ok(Parsed::without_document(network, Vec::new()));
     }
     if from.is_some_and(is_pslf_name) || (from.is_none() && ext.as_deref() == Some("epc")) {
         let text = std::fs::read_to_string(path)?;
@@ -419,7 +416,7 @@ pub fn parse_file(path: impl AsRef<std::path::Path>, from: Option<&str>) -> Resu
         let mut warnings = Vec::new();
         let network = pslf::parse_pslf_source(Arc::new(text), stem, &mut warnings)?;
         reject_empty_case(&network, "PSLF .epc")?;
-        return Ok(Parsed { network, warnings });
+        return Ok(Parsed::without_document(network, warnings));
     }
     // Settle the format before touching the file: an unmapped or binary
     // extension must surface as UnknownFormat, not as the UTF-8 read error
@@ -475,6 +472,7 @@ pub fn parse_file(path: impl AsRef<std::path::Path>, from: Option<&str>) -> Resu
 /// readers that report fidelity loss append to it.
 fn read_source(source: Arc<String>, fmt: TargetFormat, name_hint: Option<&str>) -> Result<Parsed> {
     let mut warnings = Vec::new();
+    let mut document = None;
     let net = match fmt {
         TargetFormat::Matpower => matpower::parse_matpower_source(source, name_hint),
         TargetFormat::PowerModelsJson => {
@@ -494,13 +492,19 @@ fn read_source(source: Arc<String>, fmt: TargetFormat, name_hint: Option<&str>) 
         // PSLF read normally enters through the `is_pslf_name`/`.epc` fast path in
         // parse_file / parse_str; this arm keeps the funnel total.
         TargetFormat::Pslf => pslf::parse_pslf_source(source, name_hint, &mut warnings),
-        TargetFormat::Goc3Json => goc3::parse_goc3_source(source, name_hint, &mut warnings),
+        TargetFormat::Goc3Json => {
+            goc3::parse_goc3_source(source, name_hint, &mut warnings).map(|(net, goc3)| {
+                document = Some(SourceDocument::Goc3(goc3));
+                net
+            })
+        }
         TargetFormat::SurgeJson => surge::parse_surge_source(source, name_hint, &mut warnings),
     }?;
     reject_empty_case(&net, fmt.label())?;
     Ok(Parsed {
         network: net,
         warnings,
+        document,
     })
 }
 
@@ -591,7 +595,7 @@ pub fn parse_str(text: &str, format: &str) -> Result<Parsed> {
         let mut warnings = Vec::new();
         let network = pslf::parse_pslf_source(Arc::new(text.to_owned()), None, &mut warnings)?;
         reject_empty_case(&network, "PSLF .epc")?;
-        return Ok(Parsed { network, warnings });
+        return Ok(Parsed::without_document(network, warnings));
     }
     let fmt = target_format_from_name(format).ok_or_else(|| unknown_source_format(format))?;
     read_source(Arc::new(text.to_owned()), fmt, None)
@@ -610,6 +614,30 @@ pub fn parse_str(text: &str, format: &str) -> Result<Parsed> {
 pub struct Parsed {
     pub network: Network,
     pub warnings: Vec<String>,
+    /// The source document for formats whose downstream adapters reuse the
+    /// reader's parse (see [`SourceDocument`]); `None` for every other format.
+    pub document: Option<SourceDocument>,
+}
+
+impl Parsed {
+    /// Wrap a reader result for a format without a shared source document.
+    pub(crate) fn without_document(network: Network, warnings: Vec<String>) -> Self {
+        Self {
+            network,
+            warnings,
+            document: None,
+        }
+    }
+}
+
+/// A format's source document, parsed once by the reader and handed forward so
+/// downstream adapters derive their data from the same parse instead of
+/// reparsing the retained source text. Today that is the GOC3 document, which
+/// the operating point extractor in `powerio-pkg` consumes.
+#[derive(Debug, Clone)]
+#[non_exhaustive]
+pub enum SourceDocument {
+    Goc3(Arc<goc3::Goc3Document>),
 }
 
 /// Output of a conversion: the serialized text plus any fidelity warnings:

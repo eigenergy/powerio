@@ -24,7 +24,7 @@ fn generator(bus: usize, c2: f64, c1: f64) -> Generator {
     let mut generator = Generator::new(BusId(bus));
     generator.pmax = 100.0;
     generator.pmin = 10.0;
-    generator.cost = Some(GenCost::new(2, 0.0, 0.0, vec![c2, c1, 0.0]));
+    generator.cost = Some(GenCost::new(2, 0.0, 0.0, vec![c2, c1, 5.0]));
     generator
 }
 
@@ -121,8 +121,20 @@ fn per_unit_and_native_units_scale_all_power_coefficients() {
         native.generators.q[0] * base * base,
     );
     assert_close(per_unit.generators.c[0], native.generators.c[0] * base);
+    // The constant term carries no power dimension, so it never rescales.
+    assert_close(per_unit.generators.c0[0], native.generators.c0[0]);
     assert_close(native.branches.b[0], per_unit.branches.b[0] * base);
     assert_close(native.branches.f_max[0], per_unit.branches.f_max[0] * base);
+}
+
+#[test]
+fn cost_constant_term_is_kept() {
+    let net = small_network();
+    let problem =
+        build_dc_opf_instance(&IndexedNetwork::new(&net), &DcOpfOptions::default()).expect("build");
+    assert_close(problem.generators.c0[0], 5.0);
+    let nodal = problem.nodal_generator_data().expect("nodal");
+    assert_close(nodal.c0[problem.generators.bus_of_gen[0]], 5.0);
 }
 
 #[test]
@@ -315,7 +327,12 @@ mod matrix_tests {
         )
         .expect("manifest json");
         assert_eq!(manifest["schema"], "powerio.dcopf");
-        assert_eq!(manifest["schema_version"], "0.2.0");
+        assert_eq!(manifest["schema_version"], "0.3.0");
+        let c0_gen =
+            powerio_matrix::io::read_vector_mtx(bundle.dir.join("c0_gen.mtx")).expect("c0_gen");
+        assert_eq!(c0_gen, problem.generators.c0);
+        let c0 = powerio_matrix::io::read_vector_mtx(bundle.dir.join("c0.mtx")).expect("c0");
+        assert_eq!(c0, problem.nodal_generator_data().expect("nodal").c0);
         assert_eq!(manifest["dimensions"]["n_buses"], problem.n_buses);
         assert_eq!(
             manifest["dimensions"]["n_generators"],

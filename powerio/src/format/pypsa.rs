@@ -30,7 +30,7 @@ pub struct PypsaCsvOutputs {
 pub fn read_pypsa_csv_folder(path: impl AsRef<Path>) -> Result<Parsed> {
     let mut warnings = Vec::new();
     let network = read_pypsa_csv_folder_inner(path.as_ref(), &mut warnings)?;
-    Ok(Parsed { network, warnings })
+    Ok(Parsed::without_document(network, warnings))
 }
 
 #[allow(clippy::too_many_lines)] // direct static-component CSV mapper; each block is one PyPSA table

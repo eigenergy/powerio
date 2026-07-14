@@ -28,7 +28,7 @@ const MAX_I_KA: f64 = 99_999.0;
 pub fn parse_pandapower_json(content: &str) -> Result<Parsed> {
     let mut warnings = Vec::new();
     let network = parse_pandapower_source(Arc::new(content.to_owned()), None, &mut warnings)?;
-    Ok(Parsed { network, warnings })
+    Ok(Parsed::without_document(network, warnings))
 }
 
 #[allow(clippy::too_many_lines)] // direct table-to-Network mapper; split helpers obscure column mapping

@@ -6,7 +6,7 @@ use serde::{Deserialize, Serialize};
 
 use powerio::{
     BalancedNetwork, BusId, NORMALIZED_SOLVER_TABLES_PASS, NormalizedSolverTables,
-    SolverTableUnits, SourceFormat,
+    SolverTableUnits, SourceDocument, SourceFormat,
 };
 use powerio_dist::{DistSourceFormat, MulticonductorNetwork};
 
@@ -19,7 +19,7 @@ use crate::lowering::{
 use crate::model::{ModelKind, ModelPayload};
 use crate::operating::{
     OperatingPointSeries, apply_operating_point_to_model, check_series_identities,
-    goc3_operating_points_from_str,
+    operating_points_drop_code, operating_points_from_document,
 };
 use crate::provenance::{
     Confidence, MappingKind, Origin, Producer, SourceDescriptor, SourceMapEntry, SourceRef,
@@ -289,27 +289,27 @@ impl NetworkPackage {
     }
 
     /// Wrap the result of a balanced case reader. Reader adapters can attach
-    /// source data that is not part of the balanced network model.
+    /// source data that is not part of the balanced network model; an
+    /// operating point series derives from the reader's own parse, handed
+    /// forward as [`powerio::Parsed::document`].
     pub fn from_parsed_balanced(parsed: powerio::Parsed) -> Self {
-        let source_format = parsed.network.source_format;
-        let retained_source = parsed.network.source.clone();
         let mut package = Self::from_balanced_with_read_warnings(
             parsed.network,
             READ_TRANSMISSION_PARSE_WARNING,
             parsed.warnings,
         );
-        if source_format == SourceFormat::Goc3Json {
-            package.attach_goc3_operating_points(retained_source.as_deref().map(String::as_str));
+        if let Some(document) = &parsed.document {
+            package.attach_operating_points(document);
         }
         package
     }
 
-    fn attach_goc3_operating_points(&mut self, source: Option<&str>) {
-        match source.map(goc3_operating_points_from_str) {
-            Some(Ok(series)) => self.operating_points = series,
-            Some(Err(error)) => {
+    fn attach_operating_points(&mut self, document: &SourceDocument) {
+        match operating_points_from_document(document) {
+            Ok(series) => self.operating_points = series,
+            Err(error) => {
                 self.diagnostics.push(StructuredDiagnostic::new(
-                    "READ.GOC3.OPERATING_POINTS_DROPPED",
+                    operating_points_drop_code(document),
                     DiagnosticSeverity::Warning,
                     DiagnosticStage::Read,
                     format!(
@@ -319,7 +319,6 @@ impl NetworkPackage {
                 ));
                 self.validation = ValidationSummary::from_diagnostics(&self.diagnostics);
             }
-            None => {}
         }
     }
 

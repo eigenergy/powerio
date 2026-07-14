@@ -265,10 +265,30 @@ impl ElementUpdate {
     }
 }
 
-pub(crate) fn goc3_operating_points_from_str(
-    text: &str,
+/// Derive the operating point series a retained source document carries, if
+/// any. The format dispatch lives here so package assembly stays format
+/// agnostic; GOC3 is the one document kind with a time series today.
+pub(crate) fn operating_points_from_document(
+    document: &powerio::SourceDocument,
 ) -> serde_json::Result<Option<OperatingPointSeries>> {
-    let document = Goc3Document::parse(text).map_err(|error| json_error(error.to_string()))?;
+    match document {
+        powerio::SourceDocument::Goc3(document) => goc3_operating_points(document),
+        _ => Ok(None),
+    }
+}
+
+/// Diagnostic code for a document whose series extraction failed, named per
+/// format alongside the dispatch above.
+pub(crate) fn operating_points_drop_code(document: &powerio::SourceDocument) -> &'static str {
+    match document {
+        powerio::SourceDocument::Goc3(_) => "READ.GOC3.OPERATING_POINTS_DROPPED",
+        _ => "READ.OPERATING_POINTS_DROPPED",
+    }
+}
+
+fn goc3_operating_points(
+    document: &Goc3Document,
+) -> serde_json::Result<Option<OperatingPointSeries>> {
     let network = document
         .network()
         .map_err(|error| json_error(error.to_string()))?;
@@ -305,20 +325,20 @@ pub(crate) fn goc3_operating_points_from_str(
         .and_then(Value::as_f64)
         .unwrap_or(100.0);
 
-    add_goc3_device_updates(&document, &device_ts, base_mva, &mut points)?;
-    add_goc3_status_updates(&document, "ac_line", "branches", 0, &mut points)?;
+    add_goc3_device_updates(document, &device_ts, base_mva, &mut points)?;
+    add_goc3_status_updates(document, "ac_line", "branches", 0, &mut points)?;
     let line_count = document
         .network_records("ac_line")
         .map_err(|error| json_error(error.to_string()))?
         .len();
     add_goc3_status_updates(
-        &document,
+        document,
         "two_winding_transformer",
         "branches",
         line_count,
         &mut points,
     )?;
-    add_goc3_status_updates(&document, "dc_line", "hvdc", 0, &mut points)?;
+    add_goc3_status_updates(document, "dc_line", "hvdc", 0, &mut points)?;
 
     Ok(Some(OperatingPointSeries {
         time_axis: TimeAxis {
