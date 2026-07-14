@@ -31,6 +31,10 @@
   `pio_geo_apply`, and `pio_dist_geo_extract` / `pio_dist_geo_apply`. Python
   gains `parse_geo`, `Network.geo_layer()/apply_geo_layer()/acopf_instance()`,
   and the distribution equivalents.
+- DeepMind OPFData reader (#258): `SourceFormat::DeepMindOpfDataJson` reads
+  one raw OPFData JSON document as a solved snapshot, echoes the same format
+  byte for byte, and converts through the standard surface (CLI, C ABI,
+  Python).
 
 ## 0.7.0
 
