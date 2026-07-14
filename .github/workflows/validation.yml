@@ -16,6 +16,8 @@ on:
       - "powerio-dist/**"
       - "powerio-matrix/**"
       - "powerio-capi/**"
+      - "powerio-pkg/**"
+      - "powerio-prob/**"
       - "powerio-py/**"
       - "benchmarks/**"
       - "tests/data/dist/**"
