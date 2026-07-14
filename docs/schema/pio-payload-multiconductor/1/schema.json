@@ -472,6 +472,16 @@
         "name": {
           "type": "string"
         },
+        "route": {
+          "description": "Polyline route in the network's coordinate space (`DistNetwork.geo`),\npresent only when a source provides intermediate geometry.\n`#[serde(default)]` so JSON written before the field existed still\ndeserializes.",
+          "items": {
+            "$ref": "#/$defs/Location"
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        },
         "terminal_map_from": {
           "items": {
             "type": "string"

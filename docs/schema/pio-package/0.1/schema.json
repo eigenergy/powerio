@@ -144,6 +144,16 @@
           },
           "type": "array"
         },
+        "route": {
+          "description": "Polyline route in the network's coordinate space (`Network.geo`),\npresent only when a source provides intermediate geometry; endpoint\nonly rendering derives from the bus locations. `#[serde(default)]` so\nJSON written before the field existed still deserializes.",
+          "items": {
+            "$ref": "#/$defs/Location"
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        },
         "shift": {
           "description": "Phase shift (degrees).",
           "format": "double",
@@ -986,6 +996,16 @@
         },
         "name": {
           "type": "string"
+        },
+        "route": {
+          "description": "Polyline route in the network's coordinate space (`DistNetwork.geo`),\npresent only when a source provides intermediate geometry.\n`#[serde(default)]` so JSON written before the field existed still\ndeserializes.",
+          "items": {
+            "$ref": "#/$defs/Location2"
+          },
+          "type": [
+            "array",
+            "null"
+          ]
         },
         "terminal_map_from": {
           "items": {
