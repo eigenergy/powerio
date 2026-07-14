@@ -64,6 +64,20 @@ jobs:
     - name: Check formatting
       run: cargo fmt --all --check
 
+  # Own job so a stale schema fails in parallel with clippy and the tests
+  # instead of masking them (the #255 merge failure hid both).
+  schemas:
+    name: Generated schemas match
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v6
+    - uses: dtolnay/rust-toolchain@stable
+    - uses: Swatinem/rust-cache@v2
+    - name: Check generated JSON schemas
+      run: |
+        cargo run -p powerio-pkg --example generate_schemas --features schema -- docs/schema
+        git diff --exit-code -- docs/schema
+
   build:
     runs-on: ubuntu-latest
     steps:
@@ -74,10 +88,6 @@ jobs:
     - uses: Swatinem/rust-cache@v2
     - name: Build
       run: cargo build --verbose
-    - name: Check generated JSON schemas
-      run: |
-        cargo run -p powerio-pkg --example generate_schemas --features schema -- docs/schema
-        git diff --exit-code -- docs/schema
     # Deny the workspace pedantic lints on the non-extension crates. The PyO3
     # ext crates are linted in the Python workflow with their feature enabled.
     - name: Clippy

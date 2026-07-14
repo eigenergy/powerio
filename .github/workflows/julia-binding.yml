@@ -13,13 +13,16 @@ name: Julia binding
 # main. That breaks the lockstep deadlock where a powerio PR can only go green
 # after PowerIO.jl main changes, which can only be validated after the powerio
 # PR merges. Merge either side first; the companion branch keeps both green.
+# The paths cover every crate the full-feature capi build below pulls in
+# (--features arrow,matrix,gridfm,dist,pkg,prob), so a change in any of them
+# reruns the compatibility suite.
 on:
   push:
     branches: [ "main" ]
-    paths: [ "powerio/**", "powerio-capi/**", ".github/workflows/julia-binding.yml" ]
+    paths: [ "powerio/**", "powerio-capi/**", "powerio-matrix/**", "powerio-dist/**", "powerio-pkg/**", "powerio-prob/**", ".github/workflows/julia-binding.yml" ]
   # No branch filter: stacked PRs must run this too (see rust.yml).
   pull_request:
-    paths: [ "powerio/**", "powerio-capi/**", ".github/workflows/julia-binding.yml" ]
+    paths: [ "powerio/**", "powerio-capi/**", "powerio-matrix/**", "powerio-dist/**", "powerio-pkg/**", "powerio-prob/**", ".github/workflows/julia-binding.yml" ]
 
 permissions:
   contents: read
