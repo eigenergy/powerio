@@ -1,5 +1,37 @@
 # Changelog
 
+## 0.7.1
+
+- The SCOPF Julia wire conversion is structural (#252): every struct reaching
+  the wire classifies its fields (index, renamed, value) through an exhaustive
+  destructure, so a new field fails to compile until classified and a value
+  field reusing an index name is never renumbered. Wire output is unchanged.
+- GOC3 parses once per read (#250): the reader hands its parsed document
+  forward as `Parsed::document`, and the package boundary derives the
+  operating point series from it instead of reparsing the retained text.
+- `DcOpfInstance` carries the constant cost term `c0` (generator and nodal
+  data), and the DC OPF bundle writes `c0.mtx`/`c0_gen.mtx` (bundle schema
+  0.3.0).
+- Balanced formats harvest and emit coordinates (#183): PowerWorld aux
+  `Latitude:1`/`Longitude:1`, pandapower bus `geo` Point strings, PyPSA
+  `buses.csv` x/y, each in both directions. Writers with no geometry concept
+  warn that locations were dropped.
+- The standalone geographic document (#184): `GeoLayer`/`ElementKey` with
+  tolerant reads (headerless buscoords CSV, aliased CSV/JSON records, GeoJSON)
+  and canonical GeoJSON writes (`.geo.json`, the `powerio_geo` foreign
+  member); `DisplayFormat::GeoJson`/`DisplayData::Geo`;
+  `Network::geo_layer()`/`apply_geo_layer()` with multiconductor equivalents
+  in `powerio-pkg`; `Branch.route`/`DistLine.route` polyline routing (payload
+  schemas 1.2.0); `.pwd` promotion (`geo_layer_from_pwd`,
+  `apply_substation_points`, `pwd_mercator_to_lonlat`); and
+  `powerio geo extract | apply | convert` in the CLI.
+- C ABI and Python bindings for the new surfaces (#249, #185), all additive
+  (`PIO_ABI_VERSION` stays 4): `pio_acopf_from_network` / `pio_acopf_to_json`
+  / `pio_acopf_instance_free`, `pio_geo_parse` / `pio_geo_extract` /
+  `pio_geo_apply`, and `pio_dist_geo_extract` / `pio_dist_geo_apply`. Python
+  gains `parse_geo`, `Network.geo_layer()/apply_geo_layer()/acopf_instance()`,
+  and the distribution equivalents.
+
 ## 0.7.0
 
 - Add `powerio-prob` for complete numerical problem instances (#238). Its

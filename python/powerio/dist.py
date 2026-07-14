@@ -100,6 +100,25 @@ class DistNetwork:
         """Collapsed bus and terminal graph as Python data."""
         return _json.loads(self._inner.graph_json())
 
+    def geo_layer(self) -> Any:
+        """This case's coordinates as a canonical GeoJSON FeatureCollection.
+
+        Raises when the case carries none.
+        """
+        return _json.loads(self._inner.geo_layer_json())
+
+    def apply_geo_layer(
+        self, text: str, name_hint: Optional[str] = None
+    ) -> tuple["DistNetwork", Any]:
+        """Apply a geographic sidecar and return ``(placed, report)``.
+
+        ``text`` is any form :func:`powerio.parse_geo` accepts. This network
+        is unchanged; the placed copy drops the retained source text, so a
+        same-format write re-serializes.
+        """
+        inner, report = self._inner.apply_geo_layer(text, name_hint)
+        return DistNetwork(inner), report
+
     def __repr__(self) -> str:
         return self._inner.__repr__()
 

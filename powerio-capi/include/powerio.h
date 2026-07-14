@@ -227,6 +227,13 @@ struct ArrowSchema;
 #define PIO_ARROW_TABLE_MATRIX_BRANCH 20
 #endif
 
+#if defined(PIO_PROB)
+/**
+ * Opaque matrix free AC OPF instance.
+ */
+typedef struct PioAcopfInstance PioAcopfInstance;
+#endif
+
 #if defined(PIO_DIST)
 /**
  * Opaque parsed distribution network handle (the multiconductor wire coordinate
@@ -923,6 +930,42 @@ PioPackage *pio_package_lower_multiconductor_to_balanced(const PioPackage *pkg,
                                                          size_t errlen);
 #endif
 
+/**
+ * Normalize a tolerant geographic sidecar (headerless buscoords CSV, aliased
+ * CSV/JSON records, GeoJSON Point/LineString) to the canonical GeoJSON form.
+ * `name_hint` (a file name, nullable) picks CSV against JSON when given;
+ * otherwise the content is sniffed. The tolerant reader's notes are not
+ * returned here; parse through the Rust or Python surface to see them. Free
+ * the returned string with `pio_string_free`. Returns `NULL` on input that
+ * carries no usable coordinates and writes the message into `errbuf`.
+ */
+char *pio_geo_parse(const char *text, const char *name_hint, char *errbuf, size_t errlen);
+
+/**
+ * Extract a network's coordinates as the canonical GeoJSON layer: one point
+ * per located bus, one route per routed branch. Free the returned string
+ * with `pio_string_free`. Returns `NULL` (with a message) when the network
+ * carries no coordinates.
+ */
+char *pio_geo_extract(const PioNetwork *net, char *errbuf, size_t errlen);
+
+/**
+ * Apply a geographic sidecar (any form [`pio_geo_parse`] accepts) onto a NEW
+ * network handle; the input handle is unchanged and both are freed with
+ * `pio_network_free`. `name_hint` (a file name, nullable) picks CSV against
+ * JSON as in [`pio_geo_parse`]. Matched bus points land in `Bus.location`,
+ * matched branch routes in `Branch.route`. The returned handle drops the
+ * retained source text, so a same-format write re-serializes the placed case
+ * instead of echoing the original. The reader's notes and an apply summary
+ * (`geo apply: N bus point(s), ...`) are appended to the handle's warnings
+ * ([`pio_warnings`]). Returns `NULL` on error.
+ */
+PioNetwork *pio_geo_apply(const PioNetwork *net,
+                          const char *layer,
+                          const char *name_hint,
+                          char *errbuf,
+                          size_t errlen);
+
 #if defined(PIO_PROB)
 /**
  * Parse SCOPF source text into an owned problem instance. `from` currently
@@ -949,6 +992,37 @@ char *pio_scopf_to_json(const PioScopfInstance *instance, char *errbuf, size_t e
  * Free a SCOPF instance handle. `NULL` is a no-op; free each handle once.
  */
 void pio_scopf_instance_free(PioScopfInstance *instance);
+#endif
+
+#if defined(PIO_PROB)
+/**
+ * Build the matrix free AC OPF instance from a parsed network handle.
+ * `units` (nullable) selects the power and admittance unit system:
+ * `"per-unit"` (the NULL default) or `"native"` (MW/MVAr). Zero impedance
+ * branches are skipped and recorded in the instance, matching the builder
+ * default. Free the handle with `pio_acopf_instance_free`. Returns `NULL`
+ * on error and writes the message into `errbuf`.
+ */
+PioAcopfInstance *pio_acopf_from_network(const PioNetwork *net,
+                                         const char *units,
+                                         char *errbuf,
+                                         size_t errlen);
+#endif
+
+#if defined(PIO_PROB)
+/**
+ * Serialize an AC OPF instance as its model JSON (dense 0-based indices; the
+ * `AcOpfInstance` serde shape). Free the returned string with
+ * `pio_string_free`. Returns `NULL` for a null handle or serialization error.
+ */
+char *pio_acopf_to_json(const PioAcopfInstance *instance, char *errbuf, size_t errlen);
+#endif
+
+#if defined(PIO_PROB)
+/**
+ * Free an AC OPF instance handle. `NULL` is a no-op; free each handle once.
+ */
+void pio_acopf_instance_free(PioAcopfInstance *instance);
 #endif
 
 #if defined(PIO_DIST)
@@ -1089,6 +1163,33 @@ char *pio_dist_convert_str(const char *text,
                            size_t warnlen,
                            char *errbuf,
                            size_t errlen);
+#endif
+
+#if (defined(PIO_DIST) && defined(PIO_PKG))
+/**
+ * Extract a multiconductor network's coordinates as the canonical GeoJSON
+ * layer, keyed by the string bus and line names. Free the returned string
+ * with `pio_string_free`. Returns `NULL` (with a message) when the network
+ * carries no coordinates.
+ */
+char *pio_dist_geo_extract(const PioDistNetwork *net, char *errbuf, size_t errlen);
+#endif
+
+#if (defined(PIO_DIST) && defined(PIO_PKG))
+/**
+ * Apply a geographic sidecar (any form [`pio_geo_parse`] accepts) onto a NEW
+ * distribution network handle; the input handle is unchanged and both are
+ * freed with `pio_dist_network_free`. `name_hint` (a file name, nullable)
+ * picks CSV against JSON as in [`pio_geo_parse`]. The returned handle drops
+ * the retained source text, so a same-format write re-serializes the placed
+ * case. The reader's notes and an apply summary are appended to the handle's
+ * warnings ([`pio_dist_warnings`]). Returns `NULL` on error.
+ */
+PioDistNetwork *pio_dist_geo_apply(const PioDistNetwork *net,
+                                   const char *layer,
+                                   const char *name_hint,
+                                   char *errbuf,
+                                   size_t errlen);
 #endif
 
 #ifdef __cplusplus

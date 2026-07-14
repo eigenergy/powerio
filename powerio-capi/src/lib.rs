@@ -1938,6 +1938,102 @@ pub unsafe extern "C" fn pio_package_lower_multiconductor_to_balanced(
 }
 
 // ---------------------------------------------------------------------------
+// Geographic layer API. String in and string out, no new object lifetimes:
+// the canonical wire form is a GeoJSON FeatureCollection with the
+// `powerio_geo` foreign member (see the geo chapter of the guide).
+// ---------------------------------------------------------------------------
+
+/// Normalize a tolerant geographic sidecar (headerless buscoords CSV, aliased
+/// CSV/JSON records, GeoJSON Point/LineString) to the canonical GeoJSON form.
+/// `name_hint` (a file name, nullable) picks CSV against JSON when given;
+/// otherwise the content is sniffed. The tolerant reader's notes are not
+/// returned here; parse through the Rust or Python surface to see them. Free
+/// the returned string with `pio_string_free`. Returns `NULL` on input that
+/// carries no usable coordinates and writes the message into `errbuf`.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn pio_geo_parse(
+    text: *const c_char,
+    name_hint: *const c_char,
+    errbuf: *mut c_char,
+    errlen: usize,
+) -> *mut c_char {
+    unsafe {
+        finish_string(errbuf, errlen, "panic while parsing geo layer", || {
+            let text = required_cstr(text, "text")?;
+            let name_hint = optional_cstr(name_hint, "name_hint")?;
+            let parsed = powerio::GeoLayer::parse_bytes(text.as_bytes(), name_hint)
+                .map_err(|e| e.to_string())?;
+            Ok(parsed.layer.to_geojson())
+        })
+    }
+}
+
+/// Extract a network's coordinates as the canonical GeoJSON layer: one point
+/// per located bus, one route per routed branch. Free the returned string
+/// with `pio_string_free`. Returns `NULL` (with a message) when the network
+/// carries no coordinates.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn pio_geo_extract(
+    net: *const PioNetwork,
+    errbuf: *mut c_char,
+    errlen: usize,
+) -> *mut c_char {
+    unsafe {
+        finish_string(errbuf, errlen, "panic while extracting geo layer", || {
+            let c = network_ref(net).ok_or_else(|| "network handle is NULL".to_string())?;
+            c.net
+                .geo_layer()
+                .extracted_geojson()
+                .map_err(|e| e.to_string())
+        })
+    }
+}
+
+/// Apply a geographic sidecar (any form [`pio_geo_parse`] accepts) onto a NEW
+/// network handle; the input handle is unchanged and both are freed with
+/// `pio_network_free`. `name_hint` (a file name, nullable) picks CSV against
+/// JSON as in [`pio_geo_parse`]. Matched bus points land in `Bus.location`,
+/// matched branch routes in `Branch.route`. The returned handle drops the
+/// retained source text, so a same-format write re-serializes the placed case
+/// instead of echoing the original. The reader's notes and an apply summary
+/// (`geo apply: N bus point(s), ...`) are appended to the handle's warnings
+/// ([`pio_warnings`]). Returns `NULL` on error.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn pio_geo_apply(
+    net: *const PioNetwork,
+    layer: *const c_char,
+    name_hint: *const c_char,
+    errbuf: *mut c_char,
+    errlen: usize,
+) -> *mut PioNetwork {
+    unsafe {
+        finish_network(errbuf, errlen, "panic while applying geo layer", || {
+            let c = network_ref(net).ok_or_else(|| "network handle is NULL".to_string())?;
+            let layer = required_cstr(layer, "layer")?;
+            let name_hint = optional_cstr(name_hint, "name_hint")?;
+            let parsed = powerio::GeoLayer::parse_bytes(layer.as_bytes(), name_hint)
+                .map_err(|e| e.to_string())?;
+            let mut out = c.net.clone();
+            let report = out.apply_geo_layer(&parsed.layer);
+            out.source = None;
+            let mut warnings = c.warnings.clone();
+            warnings.extend(parsed.warnings);
+            warnings.push(geo_apply_summary(&report));
+            warnings.extend(report.notes);
+            Ok((out, warnings))
+        })
+    }
+}
+
+/// One-line apply summary lifted into the returned handle's warnings.
+fn geo_apply_summary(report: &powerio::GeoApplyReport) -> String {
+    format!(
+        "geo apply: {} bus point(s), {} branch route(s), {} unmatched feature(s)",
+        report.matched_buses, report.matched_branches, report.unmatched_features
+    )
+}
+
+// ---------------------------------------------------------------------------
 // Problem instance API (`prob` feature).
 // ---------------------------------------------------------------------------
 
@@ -2012,6 +2108,100 @@ pub unsafe extern "C" fn pio_scopf_instance_free(instance: *mut PioScopfInstance
             }
         });
     }
+}
+
+/// Opaque matrix free AC OPF instance.
+#[cfg(feature = "prob")]
+pub struct PioAcopfInstance {
+    instance: powerio_prob::AcOpfInstance,
+}
+
+#[cfg(feature = "prob")]
+const _: fn() = || {
+    fn assert_send_sync<T: Send + Sync>() {}
+    assert_send_sync::<PioAcopfInstance>();
+};
+
+/// Build the matrix free AC OPF instance from a parsed network handle.
+/// `units` (nullable) selects the power and admittance unit system:
+/// `"per-unit"` (the NULL default) or `"native"` (MW/MVAr). Zero impedance
+/// branches are skipped and recorded in the instance, matching the builder
+/// default. Free the handle with `pio_acopf_instance_free`. Returns `NULL`
+/// on error and writes the message into `errbuf`.
+#[cfg(feature = "prob")]
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn pio_acopf_from_network(
+    net: *const PioNetwork,
+    units: *const c_char,
+    errbuf: *mut c_char,
+    errlen: usize,
+) -> *mut PioAcopfInstance {
+    unsafe {
+        finish_handle(
+            errbuf,
+            errlen,
+            "panic while building AC OPF instance",
+            || {
+                let view = view(net).ok_or_else(|| "network handle is NULL".to_string())?;
+                let options = powerio_prob::AcOpfOptions {
+                    units: units_from_c(units)?,
+                    ..powerio_prob::AcOpfOptions::default()
+                };
+                let instance = powerio_prob::build_ac_opf_instance(&view, &options)
+                    .map_err(|error| error.to_string())?;
+                Ok(PioAcopfInstance { instance })
+            },
+        )
+    }
+}
+
+/// Serialize an AC OPF instance as its model JSON (dense 0-based indices; the
+/// `AcOpfInstance` serde shape). Free the returned string with
+/// `pio_string_free`. Returns `NULL` for a null handle or serialization error.
+#[cfg(feature = "prob")]
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn pio_acopf_to_json(
+    instance: *const PioAcopfInstance,
+    errbuf: *mut c_char,
+    errlen: usize,
+) -> *mut c_char {
+    unsafe {
+        finish_string(
+            errbuf,
+            errlen,
+            "panic while serializing AC OPF instance",
+            || {
+                let instance = instance
+                    .as_ref()
+                    .ok_or_else(|| "AC OPF instance handle is NULL".to_string())?;
+                serde_json::to_string(&instance.instance).map_err(|error| error.to_string())
+            },
+        )
+    }
+}
+
+/// Free an AC OPF instance handle. `NULL` is a no-op; free each handle once.
+#[cfg(feature = "prob")]
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn pio_acopf_instance_free(instance: *mut PioAcopfInstance) {
+    unsafe {
+        guard((), || {
+            if !instance.is_null() {
+                drop(Box::from_raw(instance));
+            }
+        });
+    }
+}
+
+/// The unit system for a problem instance build: `"per-unit"` (aliases
+/// `"perunit"`, `"pu"`; the NULL default) or `"native"`. The alias table is
+/// `Units: FromStr` in powerio-prob, shared with the Python binding.
+#[cfg(feature = "prob")]
+fn units_from_c(units: *const c_char) -> Result<powerio_prob::Units, String> {
+    let Some(units) = optional_cstr(units, "units")? else {
+        return Ok(powerio_prob::Units::PerUnit);
+    };
+    units.parse::<powerio_prob::Units>()
 }
 
 // ---------------------------------------------------------------------------
@@ -2357,6 +2547,66 @@ fn dist_target_from_c(to: *const c_char) -> Result<powerio_dist::DistTargetForma
         .map_err(|e| e.to_string())
 }
 
+/// Extract a multiconductor network's coordinates as the canonical GeoJSON
+/// layer, keyed by the string bus and line names. Free the returned string
+/// with `pio_string_free`. Returns `NULL` (with a message) when the network
+/// carries no coordinates.
+#[cfg(all(feature = "dist", feature = "pkg"))]
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn pio_dist_geo_extract(
+    net: *const PioDistNetwork,
+    errbuf: *mut c_char,
+    errlen: usize,
+) -> *mut c_char {
+    unsafe {
+        finish_string(errbuf, errlen, "panic while extracting geo layer", || {
+            let c = net
+                .as_ref()
+                .ok_or_else(|| "distribution network handle is NULL".to_string())?;
+            powerio_pkg::dist_geo_layer(&c.net)
+                .extracted_geojson()
+                .map_err(|e| e.to_string())
+        })
+    }
+}
+
+/// Apply a geographic sidecar (any form [`pio_geo_parse`] accepts) onto a NEW
+/// distribution network handle; the input handle is unchanged and both are
+/// freed with `pio_dist_network_free`. `name_hint` (a file name, nullable)
+/// picks CSV against JSON as in [`pio_geo_parse`]. The returned handle drops
+/// the retained source text, so a same-format write re-serializes the placed
+/// case. The reader's notes and an apply summary are appended to the handle's
+/// warnings ([`pio_dist_warnings`]). Returns `NULL` on error.
+#[cfg(all(feature = "dist", feature = "pkg"))]
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn pio_dist_geo_apply(
+    net: *const PioDistNetwork,
+    layer: *const c_char,
+    name_hint: *const c_char,
+    errbuf: *mut c_char,
+    errlen: usize,
+) -> *mut PioDistNetwork {
+    unsafe {
+        finish_handle(errbuf, errlen, "panic while applying geo layer", || {
+            let c = net
+                .as_ref()
+                .ok_or_else(|| "distribution network handle is NULL".to_string())?;
+            let layer = required_cstr(layer, "layer")?;
+            let name_hint = optional_cstr(name_hint, "name_hint")?;
+            let parsed = powerio::GeoLayer::parse_bytes(layer.as_bytes(), name_hint)
+                .map_err(|e| e.to_string())?;
+            let mut out = c.net.clone();
+            let report = powerio_pkg::apply_dist_geo_layer(&mut out, &parsed.layer);
+            out.source = None;
+            out.source_format = None;
+            out.warnings.extend(parsed.warnings);
+            out.warnings.push(geo_apply_summary(&report));
+            out.warnings.extend(report.notes);
+            Ok(PioDistNetwork { net: out })
+        })
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2694,6 +2944,7 @@ mod tests {
             "#define PIO_ARROW_TABLE_BDOUBLEPRIME 18",
             "#define PIO_ARROW_TABLE_MATRIX_BUS 19",
             "#define PIO_ARROW_TABLE_MATRIX_BRANCH 20",
+            "typedef struct PioAcopfInstance PioAcopfInstance;",
             "typedef struct PioDistNetwork PioDistNetwork;",
             "typedef struct PioNetwork PioNetwork;",
             "typedef struct PioPackage PioPackage;",
@@ -2759,9 +3010,15 @@ mod tests {
             "PioPackage *pio_package_materialize_study_commit(const PioPackage *pkg, int64_t index, char *errbuf, size_t errlen);",
             "char *pio_package_multiconductor_to_balanced_preflight_json(const PioPackage *pkg, double base_mva, char *errbuf, size_t errlen);",
             "PioPackage *pio_package_lower_multiconductor_to_balanced(const PioPackage *pkg, double base_mva, char *errbuf, size_t errlen);",
+            "char *pio_geo_parse(const char *text, const char *name_hint, char *errbuf, size_t errlen);",
+            "char *pio_geo_extract(const PioNetwork *net, char *errbuf, size_t errlen);",
+            "PioNetwork *pio_geo_apply(const PioNetwork *net, const char *layer, const char *name_hint, char *errbuf, size_t errlen);",
             "PioScopfInstance *pio_scopf_parse_str(const char *text, const char *from, char *errbuf, size_t errlen);",
             "char *pio_scopf_to_json(const PioScopfInstance *instance, char *errbuf, size_t errlen);",
             "void pio_scopf_instance_free(PioScopfInstance *instance);",
+            "PioAcopfInstance *pio_acopf_from_network(const PioNetwork *net, const char *units, char *errbuf, size_t errlen);",
+            "char *pio_acopf_to_json(const PioAcopfInstance *instance, char *errbuf, size_t errlen);",
+            "void pio_acopf_instance_free(PioAcopfInstance *instance);",
             "PioDistNetwork *pio_dist_parse_file(const char *path, const char *from, char *errbuf, size_t errlen);",
             "PioDistNetwork *pio_dist_parse_str(const char *text, const char *format, char *errbuf, size_t errlen);",
             "void pio_dist_network_free(PioDistNetwork *net);",
@@ -2773,6 +3030,8 @@ mod tests {
             "char *pio_dist_to_format(const PioDistNetwork *net, const char *to, char *warnbuf, size_t warnlen, char *errbuf, size_t errlen);",
             "char *pio_dist_convert_file(const char *path, const char *from, const char *to, char *warnbuf, size_t warnlen, char *errbuf, size_t errlen);",
             "char *pio_dist_convert_str(const char *text, const char *from, const char *to, char *warnbuf, size_t warnlen, char *errbuf, size_t errlen);",
+            "char *pio_dist_geo_extract(const PioDistNetwork *net, char *errbuf, size_t errlen);",
+            "PioDistNetwork *pio_dist_geo_apply(const PioDistNetwork *net, const char *layer, const char *name_hint, char *errbuf, size_t errlen);",
         ]
         .into_iter()
         .map(str::to_string)
@@ -3977,6 +4236,115 @@ mpc.branch = [
         }
     }
 
+    #[cfg(feature = "prob")]
+    #[test]
+    fn acopf_handle_builds_from_network_and_serializes() {
+        let net = case9();
+        let mut err = [0 as c_char; PIO_ERRBUF_MIN];
+        unsafe {
+            let instance =
+                pio_acopf_from_network(net, std::ptr::null(), err.as_mut_ptr(), err.len());
+            assert!(
+                !instance.is_null(),
+                "pio_acopf_from_network failed: {}",
+                CStr::from_ptr(err.as_ptr()).to_str().unwrap()
+            );
+            let json = pio_acopf_to_json(instance, err.as_mut_ptr(), err.len());
+            assert!(!json.is_null());
+            let v: serde_json::Value =
+                serde_json::from_str(CStr::from_ptr(json).to_str().unwrap()).unwrap();
+            assert_eq!(v["n_buses"], 9);
+            assert_eq!(v["units"], "PerUnit");
+            assert_eq!(v["generators"]["c0"].as_array().unwrap().len(), 3);
+            assert_eq!(v["branches"]["g"].as_array().unwrap().len(), 9);
+            pio_string_free(json);
+            pio_acopf_instance_free(instance);
+
+            let native = CString::new("native").unwrap();
+            let instance =
+                pio_acopf_from_network(net, native.as_ptr(), err.as_mut_ptr(), err.len());
+            assert!(!instance.is_null());
+            pio_acopf_instance_free(instance);
+            pio_acopf_instance_free(std::ptr::null_mut());
+
+            let bogus = CString::new("percent").unwrap();
+            let instance = pio_acopf_from_network(net, bogus.as_ptr(), err.as_mut_ptr(), err.len());
+            assert!(instance.is_null());
+            assert!(
+                CStr::from_ptr(err.as_ptr())
+                    .to_str()
+                    .unwrap()
+                    .contains("unknown units")
+            );
+            pio_network_free(net);
+        }
+    }
+
+    #[test]
+    fn geo_parse_normalizes_and_apply_returns_a_placed_handle() {
+        let net = case9();
+        let coords = CString::new("1, -89.6, 40.6\n2, -89.2, 39.8\n").unwrap();
+        let mut err = [0 as c_char; PIO_ERRBUF_MIN];
+        unsafe {
+            // No coordinates yet: extract refuses.
+            let empty = pio_geo_extract(net, err.as_mut_ptr(), err.len());
+            assert!(empty.is_null());
+
+            let canonical = pio_geo_parse(
+                coords.as_ptr(),
+                std::ptr::null(),
+                err.as_mut_ptr(),
+                err.len(),
+            );
+            assert!(
+                !canonical.is_null(),
+                "pio_geo_parse failed: {}",
+                CStr::from_ptr(err.as_ptr()).to_str().unwrap()
+            );
+            let v: serde_json::Value =
+                serde_json::from_str(CStr::from_ptr(canonical).to_str().unwrap()).unwrap();
+            assert_eq!(v["type"], "FeatureCollection");
+            assert_eq!(v["powerio_geo"]["space"], "geographic");
+
+            let placed = pio_geo_apply(
+                net,
+                coords.as_ptr(),
+                std::ptr::null(),
+                err.as_mut_ptr(),
+                err.len(),
+            );
+            assert!(
+                !placed.is_null(),
+                "pio_geo_apply failed: {}",
+                CStr::from_ptr(err.as_ptr()).to_str().unwrap()
+            );
+            let layer = pio_geo_extract(placed, err.as_mut_ptr(), err.len());
+            assert!(!layer.is_null());
+            let v: serde_json::Value =
+                serde_json::from_str(CStr::from_ptr(layer).to_str().unwrap()).unwrap();
+            assert_eq!(v["features"].as_array().unwrap().len(), 2);
+
+            // The apply summary rides the new handle's warnings.
+            let count = pio_warnings(placed, std::ptr::null_mut(), 0);
+            assert!(count > 0);
+
+            pio_string_free(layer);
+            pio_string_free(canonical);
+            pio_network_free(placed);
+            pio_network_free(net);
+
+            let garbage = CString::new("not a geo file").unwrap();
+            let out = pio_geo_parse(
+                garbage.as_ptr(),
+                std::ptr::null(),
+                err.as_mut_ptr(),
+                err.len(),
+            );
+            assert!(out.is_null());
+            assert!(!CStr::from_ptr(err.as_ptr()).to_bytes().is_empty());
+        }
+    }
+
     #[cfg(all(feature = "pkg", feature = "dist"))]
     mod package_dist {
         use super::*;
@@ -4334,6 +4702,51 @@ mpc.branch = [
     mod dist {
         use super::*;
         use std::ffi::CStr;
+
+        #[cfg(feature = "pkg")]
+        #[test]
+        fn dist_geo_apply_returns_a_placed_handle() {
+            let master = CString::new(
+                "New Circuit.c1 bus1=sourcebus basekv=12.47\n\
+                 New Line.l1 bus1=sourcebus bus2=loadbus length=1 units=km\n",
+            )
+            .unwrap();
+            let format = CString::new("dss").unwrap();
+            let coords = CString::new("sourcebus, -89.6, 40.6\nloadbus, -89.2, 39.8\n").unwrap();
+            let mut err = [0 as c_char; PIO_ERRBUF_MIN];
+            unsafe {
+                let net = pio_dist_parse_str(
+                    master.as_ptr(),
+                    format.as_ptr(),
+                    err.as_mut_ptr(),
+                    err.len(),
+                );
+                assert!(!net.is_null());
+                let empty = pio_dist_geo_extract(net, err.as_mut_ptr(), err.len());
+                assert!(empty.is_null());
+
+                let placed = pio_dist_geo_apply(
+                    net,
+                    coords.as_ptr(),
+                    std::ptr::null(),
+                    err.as_mut_ptr(),
+                    err.len(),
+                );
+                assert!(
+                    !placed.is_null(),
+                    "pio_dist_geo_apply failed: {}",
+                    CStr::from_ptr(err.as_ptr()).to_str().unwrap()
+                );
+                let layer = pio_dist_geo_extract(placed, err.as_mut_ptr(), err.len());
+                assert!(!layer.is_null());
+                let v: serde_json::Value =
+                    serde_json::from_str(CStr::from_ptr(layer).to_str().unwrap()).unwrap();
+                assert_eq!(v["features"].as_array().unwrap().len(), 2);
+                pio_string_free(layer);
+                pio_dist_network_free(placed);
+                pio_dist_network_free(net);
+            }
+        }
 
         #[test]
         fn dist_abi_version_is_separate() {
