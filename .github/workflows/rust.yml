@@ -3,8 +3,10 @@ name: Rust
 on:
   push:
     branches: [ "main" ]
+  # No branch filter on pull_request: stacked PRs target another PR's branch,
+  # and retargeting to main after the parent merges fires only `edited`, which
+  # never re-triggers filtered workflows. Run on every PR instead.
   pull_request:
-    branches: [ "main" ]
 
 permissions:
   contents: read

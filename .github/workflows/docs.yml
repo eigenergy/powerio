@@ -10,8 +10,8 @@ name: Docs
 on:
   push:
     branches: [ "main" ]
+  # No branch filter: stacked PRs must run this too (see rust.yml).
   pull_request:
-    branches: [ "main" ]
   workflow_dispatch:
 
 permissions:

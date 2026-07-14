@@ -17,8 +17,8 @@ on:
   push:
     branches: [ "main" ]
     paths: [ "powerio/**", "powerio-capi/**", ".github/workflows/julia-binding.yml" ]
+  # No branch filter: stacked PRs must run this too (see rust.yml).
   pull_request:
-    branches: [ "main" ]
     paths: [ "powerio/**", "powerio-capi/**", ".github/workflows/julia-binding.yml" ]
 
 permissions:
