@@ -144,7 +144,7 @@ pub(crate) fn parse_powerworld_source(
         name,
         base_mva,
         base_frequency: crate::network::DEFAULT_BASE_FREQUENCY,
-        geo: None,
+        geo: super::super::geographic_meta(&buses),
         buses,
         loads,
         shunts,
@@ -433,15 +433,16 @@ fn read_bus(r: &Row) -> Result<Bus> {
         })? as usize;
     let name = first(r, &["BusName", "Name"]).map(ToString::to_string);
     let mut extras = Extras::new();
-    // Substation identity and coordinates ride on the bus row in complete
-    // case exports (`Latitude:1`/`Longitude:1` are the substation's).
+    // Substation identity rides on the bus row in complete case exports.
+    // The substation coordinates (`Latitude:1`/`Longitude:1`) promote into
+    // the typed location and leave extras; `SubNum` stays, it is identity
+    // rather than geometry, as do the bus's own bare `Latitude`/`Longitude`.
+    let location = bus_location(r);
     keep_extras(
         r,
         &[
             "SubNum",
             "SubNumber",
-            "Latitude:1",
-            "Longitude:1",
             "Latitude",
             "Longitude",
             "OwnerNum",
@@ -450,6 +451,9 @@ fn read_bus(r: &Row) -> Result<Bus> {
         ],
         &mut extras,
     );
+    if location.is_none() {
+        keep_extras(r, &["Latitude:1", "Longitude:1"], &mut extras);
+    }
     Ok(Bus {
         id: BusId(id),
         kind: bus_kind(r),
@@ -467,8 +471,20 @@ fn read_bus(r: &Row) -> Result<Bus> {
         zone: uid_alias(r, &["ZoneNum", "ZoneNumber"])?,
         name,
         uid: None,
-        location: None,
+        location,
         extras,
+    })
+}
+
+/// The promoted geographic location: the substation `Latitude:1`/
+/// `Longitude:1` pair, when both parse finite.
+fn bus_location(r: &Row) -> Option<crate::geo::Location> {
+    let lat = first(r, &["Latitude:1"])?.parse::<f64>().ok()?;
+    let lon = first(r, &["Longitude:1"])?.parse::<f64>().ok()?;
+    (lat.is_finite() && lon.is_finite()).then_some(crate::geo::Location {
+        x: lon,
+        y: lat,
+        kind: None,
     })
 }
 
@@ -608,6 +624,7 @@ fn read_branch(r: &Row, bus_labels: &HashMap<&str, BusId>) -> Result<Branch> {
         control: None,
         solution: None,
         uid: None,
+        route: None,
         extras,
     })
 }
@@ -648,10 +665,19 @@ pub fn write_powerworld(net: &Network) -> Conversion {
     let _ = writeln!(s, "// baseMVA {}", net.base_mva);
     let _ = writeln!(s);
 
+    // The coordinate columns appear only when the case carries locations, so
+    // a case without geometry writes exactly as before. A located case still
+    // writes `""` for the odd bus without a point; the reader leaves those
+    // unpromoted.
+    let write_locations = net.buses.iter().any(|b| b.location.is_some());
     block(
         &mut s,
         "Bus",
-        "[BusNum, BusName, BusNomVolt, BusPUVolt, BusAngle, AreaNum, ZoneNum, BusVMax, BusVMin, BusCat]",
+        if write_locations {
+            "[BusNum, BusName, BusNomVolt, BusPUVolt, BusAngle, AreaNum, ZoneNum, BusVMax, BusVMin, BusCat, Latitude:1, Longitude:1]"
+        } else {
+            "[BusNum, BusName, BusNomVolt, BusPUVolt, BusAngle, AreaNum, ZoneNum, BusVMax, BusVMin, BusCat]"
+        },
         |rows| {
             for b in &net.buses {
                 let raw_name = b.name.as_deref().unwrap_or("");
@@ -659,7 +685,7 @@ pub fn write_powerworld(net: &Network) -> Conversion {
                 if matches!(name, std::borrow::Cow::Owned(_)) {
                     sanitized_names += 1;
                 }
-                rows.push(format!(
+                let mut row = format!(
                     "{} \"{}\" {} {} {} {} {} {} {} \"{}\"",
                     b.id,
                     name,
@@ -671,7 +697,16 @@ pub fn write_powerworld(net: &Network) -> Conversion {
                     n(b.vmax),
                     n(b.vmin),
                     bus_cat(b.kind)
-                ));
+                );
+                if write_locations {
+                    match b.location {
+                        Some(location) => {
+                            let _ = write!(row, " {} {}", n(location.y), n(location.x));
+                        }
+                        None => row.push_str(" \"\" \"\""),
+                    }
+                }
+                rows.push(row);
             }
         },
     );

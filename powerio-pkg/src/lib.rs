@@ -36,6 +36,7 @@
 //!
 
 pub mod diagnostics;
+pub mod geo;
 pub mod lowering;
 pub mod model;
 pub mod operating;
@@ -46,6 +47,7 @@ pub mod summary;
 pub mod validation;
 
 pub use diagnostics::{DiagnosticCode, DiagnosticSeverity, DiagnosticStage, StructuredDiagnostic};
+pub use geo::{apply_dist_geo_layer, dist_geo_layer};
 pub use lowering::{
     LoweringRecord, MulticonductorToBalancedError, MulticonductorToBalancedLowering,
     MulticonductorToBalancedOptions, MulticonductorToBalancedReadiness,

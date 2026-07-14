@@ -1868,6 +1868,7 @@ fn read_branch(f: &[String], raw_rev: u32) -> Result<Branch> {
         control: None,
         solution: None,
         uid: None,
+        route: None,
         // Capture CKT (field 2) so parallel circuits stay distinct on write-back.
         extras: device_extras(f, 2),
     })
@@ -1962,6 +1963,7 @@ fn read_transformer(
         control,
         solution: None,
         uid: None,
+        route: None,
         extras: Extras::new(),
     })
 }
@@ -2350,6 +2352,7 @@ mod tests {
             control: None,
             solution: None,
             uid: None,
+            route: None,
             extras: Extras::default(),
         }
     }
@@ -2375,6 +2378,7 @@ mod tests {
             control: None,
             solution: None,
             uid: None,
+            route: None,
             extras: Extras::default(),
         }
     }

@@ -531,6 +531,7 @@ impl Reader<'_> {
                 terminal_map_to: strings(o.get("terminal_map_to")),
                 linecode: string(o.get("linecode")),
                 length: o.get("length").map_or(f64::NAN, f),
+                route: None,
                 extras: take_extras(
                     o,
                     &known,

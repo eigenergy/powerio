@@ -196,11 +196,25 @@ impl DistTargetFormat {
 impl DistNetwork {
     /// Writes the network in `format`, bypassing byte exact source echo.
     pub fn to_canonical_format(&self, format: DistTargetFormat) -> Conversion {
-        match format {
+        let mut conv = match format {
             DistTargetFormat::Dss => crate::dss::write_dss(self),
             DistTargetFormat::BmopfJson => crate::bmopf::write_bmopf_json(self),
             DistTargetFormat::PmdJson => crate::pmd::write_pmd_json(self),
+        };
+        // No distribution format carries line routes; report the loss the
+        // way bus locations already do (`.pio.json` keeps them).
+        let routed = self
+            .lines
+            .iter()
+            .filter(|line| line.route.is_some())
+            .count();
+        if routed > 0 {
+            conv.warnings.push(format!(
+                "{routed} line route(s) dropped: {} has no polyline field",
+                format.name()
+            ));
         }
+        conv
     }
 
     /// Writes the network in `format`.

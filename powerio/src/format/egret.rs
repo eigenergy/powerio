@@ -591,6 +591,7 @@ fn read_branch(v: &Value) -> Result<Branch> {
         control: None,
         solution: None,
         uid: None,
+        route: None,
         extras: Extras::new(),
     })
 }

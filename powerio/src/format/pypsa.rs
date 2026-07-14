@@ -106,7 +106,15 @@ fn read_pypsa_csv_folder_inner(path: &Path, warnings: &mut Vec<String>) -> Resul
             zone: 1,
             name: bus_name,
             uid: None,
-            location: None,
+            // PyPSA `x`/`y` are longitude/latitude; both must be present, so
+            // a folder without the columns keeps `location = None`.
+            location: match (
+                row.f("x").filter(|v| v.is_finite()),
+                row.f("y").filter(|v| v.is_finite()),
+            ) {
+                (Some(x), Some(y)) => Some(crate::geo::Location { x, y, kind: None }),
+                _ => None,
+            },
             extras: Extras::default(),
         });
     }
@@ -234,6 +242,7 @@ fn read_pypsa_csv_folder_inner(path: &Path, warnings: &mut Vec<String>) -> Resul
                 control: None,
                 solution: None,
                 uid: None,
+                route: None,
                 extras: Extras::default(),
             });
         }
@@ -280,6 +289,7 @@ fn read_pypsa_csv_folder_inner(path: &Path, warnings: &mut Vec<String>) -> Resul
                 control: None,
                 solution: None,
                 uid: None,
+                route: None,
                 extras: Extras::default(),
             });
         }
@@ -400,7 +410,7 @@ fn read_pypsa_csv_folder_inner(path: &Path, warnings: &mut Vec<String>) -> Resul
         name,
         base_mva,
         base_frequency: crate::network::DEFAULT_BASE_FREQUENCY,
-        geo: None,
+        geo: super::geographic_meta(&buses),
         buses,
         loads,
         shunts,
@@ -652,9 +662,18 @@ fn network_csv(net: &Network) -> String {
 }
 
 fn buses_csv(net: &Network, key_of: &HashMap<BusId, String>) -> String {
-    let mut s = String::from("name,v_nom,v_mag_pu_set,v_mag_pu_min,v_mag_pu_max\n");
+    // The coordinate columns appear only when the case carries locations, so
+    // a case without geometry writes exactly as before. PyPSA defaults a
+    // missing cell to 0, so a located case writes empty cells for the odd
+    // bus without a point.
+    let write_locations = net.buses.iter().any(|b| b.location.is_some());
+    let mut s = String::from(if write_locations {
+        "name,v_nom,v_mag_pu_set,v_mag_pu_min,v_mag_pu_max,x,y\n"
+    } else {
+        "name,v_nom,v_mag_pu_set,v_mag_pu_min,v_mag_pu_max\n"
+    });
     for b in &net.buses {
-        let _ = writeln!(
+        let _ = write!(
             s,
             "{},{},{},{},{}",
             key_for(key_of, b.id),
@@ -663,6 +682,15 @@ fn buses_csv(net: &Network, key_of: &HashMap<BusId, String>) -> String {
             b.vmin,
             b.vmax
         );
+        if write_locations {
+            match b.location {
+                Some(location) => {
+                    let _ = write!(s, ",{},{}", location.x, location.y);
+                }
+                None => s.push_str(",,"),
+            }
+        }
+        s.push('\n');
     }
     s
 }
@@ -1204,6 +1232,7 @@ mod tests {
             control: None,
             solution: None,
             uid: None,
+            route: None,
             extras: Extras::default(),
         }
     }
@@ -1229,6 +1258,7 @@ mod tests {
             control: None,
             solution: None,
             uid: None,
+            route: None,
             extras: Extras::default(),
         }
     }

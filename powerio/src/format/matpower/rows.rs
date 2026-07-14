@@ -208,6 +208,7 @@ pub(super) fn branch_row(row: &[f64], i: usize) -> Result<Branch> {
         control: None,
         solution: None,
         uid: None,
+        route: None,
         extras: Extras::new(),
     })
 }

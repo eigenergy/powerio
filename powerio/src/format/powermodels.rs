@@ -689,6 +689,7 @@ fn read_branch(v: &Value, pscale: f64, ascale: f64) -> Branch {
             qt: f(v, "qt") * pscale,
         }),
         uid: None,
+        route: None,
         extras: extras_excluding(
             v,
             &[

@@ -62,7 +62,11 @@ pub use format::{
     write_psse, write_psse_rev, write_pypsa_csv_folder, write_surge_json,
 };
 pub use gen_cost::{GenCostPatch, GenCostPolicyReport, MissingGenCostPolicy, parse_gen_cost_csv};
-pub use geo::{Canvas, CoordinateSpace, CoordsKind, GeoMeta, Location};
+pub use geo::{
+    Canvas, CoordinateSpace, CoordsKind, ElementKey, GeoApplyReport, GeoFeature, GeoGeometry,
+    GeoLayer, GeoMeta, GeoParsed, GeoTarget, Location, apply_substation_points, geo_layer_from_pwd,
+    pwd_mercator_to_lonlat,
+};
 pub use indexed::{ConnectivityReport, IndexCore, IndexedNetwork};
 pub use network::{
     Area, BalancedNetwork, Branch, BranchCharging, BranchCurrentRatings, BranchRatingSet,

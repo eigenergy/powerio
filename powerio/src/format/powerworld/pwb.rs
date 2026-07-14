@@ -1764,6 +1764,7 @@ fn read_standard_branch_head(
         control: None,
         solution: None,
         uid: None,
+        route: None,
         extras,
     };
     Ok((br, c.pos, flags))
@@ -1850,6 +1851,7 @@ fn read_step_up_transformer_head(
         control: None,
         solution: None,
         uid: None,
+        route: None,
         extras,
     };
     Ok((

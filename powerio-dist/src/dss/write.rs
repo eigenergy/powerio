@@ -2264,6 +2264,7 @@ mod tests {
             terminal_map_to: strings(&["1"]),
             linecode: "lc".into(),
             length: 1.0,
+            route: None,
             extras: Extras::new(),
         });
         let out2 = write_dss(&net2);
