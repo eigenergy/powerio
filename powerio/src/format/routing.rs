@@ -45,6 +45,7 @@ pub enum TransmissionFormat {
     Gridfm,
     Goc3Json,
     SurgeJson,
+    DeepMindOpfDataJson,
 }
 
 impl TransmissionFormat {
@@ -65,6 +66,7 @@ impl TransmissionFormat {
             Self::Gridfm => "gridfm",
             Self::Goc3Json => "goc3-json",
             Self::SurgeJson => "surge-json",
+            Self::DeepMindOpfDataJson => "opfdata-json",
         }
     }
 }
@@ -141,6 +143,12 @@ pub fn transmission_format_from_name(name: &str) -> Option<TransmissionFormat> {
         "gridfm" => Some(TransmissionFormat::Gridfm),
         "goc3" | "goc3json" | "go3" | "gochallenge3" | "c3" => Some(TransmissionFormat::Goc3Json),
         "surge" | "surgejson" => Some(TransmissionFormat::SurgeJson),
+        "opfdata"
+        | "opfdatajson"
+        | "deepmindopfdata"
+        | "deepmindopfdatajson"
+        | "gridopt"
+        | "gridoptjson" => Some(TransmissionFormat::DeepMindOpfDataJson),
         _ => None,
     }
 }
@@ -239,6 +247,27 @@ impl JsonShape {
         let is_surge = self.string("format") == Some("surge-json")
             && self.has("schema_version")
             && self.has("network");
+        let is_opfdata = self
+            .object
+            .get("grid")
+            .and_then(serde_json::Value::as_object)
+            .is_some_and(|grid| {
+                grid.contains_key("nodes")
+                    && grid.contains_key("edges")
+                    && grid.contains_key("context")
+            })
+            && self
+                .object
+                .get("solution")
+                .and_then(serde_json::Value::as_object)
+                .is_some_and(|solution| {
+                    solution.contains_key("nodes") && solution.contains_key("edges")
+                })
+            && self
+                .object
+                .get("metadata")
+                .and_then(serde_json::Value::as_object)
+                .is_some_and(|metadata| metadata.contains_key("objective"));
         let is_powerio = self.has("buses")
             && (self.has("branches")
                 || self.has("base_mva")
@@ -246,8 +275,13 @@ impl JsonShape {
                 || self.has("generators"));
         let is_power_models =
             self.has("baseMVA") || self.has("branch") || self.has("gen") || self.has("gencost");
-        let transmission =
-            is_pandapower || is_egret || is_goc3 || is_surge || is_powerio || is_power_models;
+        let transmission = is_pandapower
+            || is_egret
+            || is_goc3
+            || is_surge
+            || is_opfdata
+            || is_powerio
+            || is_power_models;
 
         let is_pmd = self.has("data_model");
         let strong_bmopf = self.has("line")
@@ -271,6 +305,8 @@ impl JsonShape {
                 TransmissionFormat::Goc3Json
             } else if is_surge {
                 TransmissionFormat::SurgeJson
+            } else if is_opfdata {
+                TransmissionFormat::DeepMindOpfDataJson
             } else if is_powerio {
                 TransmissionFormat::PowerioJson
             } else {
@@ -436,6 +472,45 @@ mod tests {
             assert_eq!(
                 super::transmission_format_from_name(alias),
                 Some(TransmissionFormat::SurgeJson),
+                "{alias}"
+            );
+        }
+    }
+
+    #[test]
+    fn classifies_opfdata_json() {
+        assert_eq!(
+            classify_json_text(
+                r#"{
+                    "grid":{"nodes":{},"edges":{},"context":[]},
+                    "solution":{"nodes":{},"edges":{}},
+                    "metadata":{"objective":0.0}
+                }"#
+            ),
+            JsonClass::Case(Detection::Known(SourceFormat::Transmission(
+                TransmissionFormat::DeepMindOpfDataJson
+            )))
+        );
+        assert_eq!(
+            classify_json_text(r#"{"grid":{},"solution":{},"metadata":{}}"#),
+            JsonClass::Case(Detection::Unknown)
+        );
+    }
+
+    #[test]
+    fn resolves_opfdata_aliases() {
+        for alias in [
+            "opfdata-json",
+            "opfdata",
+            "OPFData",
+            "deepmind-opfdata-json",
+            "deepmind-opfdata",
+            "gridopt-json",
+            "gridopt",
+        ] {
+            assert_eq!(
+                super::transmission_format_from_name(alias),
+                Some(TransmissionFormat::DeepMindOpfDataJson),
                 "{alias}"
             );
         }

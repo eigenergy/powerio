@@ -3,8 +3,9 @@
 //! Each format module owns its reader and/or writer: MATPOWER `.m`,
 //! PowerModels JSON, PSS/E `.raw`, PowerWorld `.aux`, egret `ModelData` JSON,
 //! pandapower JSON, PyPSA CSV folders, PSLF `.epc`, GO Challenge 3 JSON, and
-//! Surge JSON. PowerWorld `.pwb` cases, GO Challenge 3 JSON canonical output,
-//! and PowerWorld `.pwd` displays are read only. Case input and
+//! Surge JSON, and DeepMind OPFData JSON. PowerWorld `.pwb` cases, GO Challenge
+//! 3 and OPFData JSON canonical output, and PowerWorld `.pwd` displays are read
+//! only. Case input and
 //! output formats meet here, so adding a writable format is one module plus
 //! one hub registration.
 //! [`parse_file`] reads Network cases, detecting the format from its extension;
@@ -42,6 +43,7 @@ mod egret;
 #[doc(hidden)]
 pub mod goc3;
 mod matpower;
+mod opfdata;
 mod pandapower;
 mod powermodels;
 pub mod powerworld;
@@ -54,6 +56,7 @@ mod surge;
 pub use egret::{parse_egret_json, write_egret_json};
 pub use goc3::parse_goc3_json;
 pub use matpower::{parse_matpower, parse_matpower_file, write_matpower};
+pub use opfdata::parse_deepmind_opfdata_json;
 pub use pandapower::{parse_pandapower_json, write_pandapower_json};
 pub use powermodels::{parse_powermodels_json, write_powermodels_json};
 pub use powerworld::{PwdDisplay, PwdSubstation, parse_powerworld, write_powerworld};
@@ -91,6 +94,9 @@ pub enum TargetFormat {
     Goc3Json,
     /// Surge native JSON network document.
     SurgeJson,
+    /// One JSON document from a DeepMind OPFData release. Read only except for
+    /// an exact write back to the retained source format.
+    DeepMindOpfDataJson,
 }
 
 impl TargetFormat {
@@ -103,7 +109,8 @@ impl TargetFormat {
             | TargetFormat::PandapowerJson
             | TargetFormat::PowerioJson
             | TargetFormat::Goc3Json
-            | TargetFormat::SurgeJson => "json",
+            | TargetFormat::SurgeJson
+            | TargetFormat::DeepMindOpfDataJson => "json",
             TargetFormat::Psse { .. } => "raw",
             TargetFormat::PowerWorld => "aux",
             TargetFormat::Matpower => "m",
@@ -125,6 +132,7 @@ impl TargetFormat {
             TargetFormat::Pslf => "PSLF .epc",
             TargetFormat::Goc3Json => "GO Challenge 3 JSON",
             TargetFormat::SurgeJson => "Surge JSON",
+            TargetFormat::DeepMindOpfDataJson => "DeepMind OPFData JSON",
         }
     }
 
@@ -144,6 +152,7 @@ impl TargetFormat {
             TargetFormat::Pslf => "pslf",
             TargetFormat::Goc3Json => "goc3-json",
             TargetFormat::SurgeJson => "surge-json",
+            TargetFormat::DeepMindOpfDataJson => "opfdata-json",
         }
     }
 }
@@ -234,7 +243,8 @@ pub fn display_format_from_name(name: &str) -> Option<DisplayFormat> {
 /// if unrecognized. Accepts `matpower`/`m`, `powermodels-json`/`powermodels`/`pm`,
 /// `egret-json`/`egret`, `pandapower-json`/`pandapower`/`pp`, `psse`/`raw`,
 /// `powerworld`/`aux`, `pslf`/`epc`, `goc3-json`/`goc3`, and
-/// `surge-json`/`surge`. The `powerio-json`/`powerio`/`json` names remain
+/// `surge-json`/`surge`, and `opfdata-json`/`opfdata`/`gridopt`. The
+/// `powerio-json`/`powerio`/`json` names remain
 /// compatibility aliases for the model JSON methods.
 /// Case-insensitive. The one place the bindings (Python, C ABI) share, so a new
 /// text format means one new arm here, not three. PyPSA CSV folders, GridFM
@@ -260,6 +270,7 @@ pub fn target_format_from_name(name: &str) -> Option<TargetFormat> {
         TransmissionFormat::Pslf => TargetFormat::Pslf,
         TransmissionFormat::Goc3Json => TargetFormat::Goc3Json,
         TransmissionFormat::SurgeJson => TargetFormat::SurgeJson,
+        TransmissionFormat::DeepMindOpfDataJson => TargetFormat::DeepMindOpfDataJson,
         TransmissionFormat::PypsaCsv | TransmissionFormat::Pwb | TransmissionFormat::Gridfm => {
             return None;
         }
@@ -404,8 +415,9 @@ fn is_pslf_name(name: &str) -> bool {
 /// `.json` file is classified by top level shape markers: pandapower
 /// (`"_class": "pandapowerNet"`), egret (`elements` and `system`), GO Challenge
 /// 3 (`network` plus `time_series_input`/`reliability`), Surge JSON
-/// (`format: "surge-json"`), powerio-json (`buses` plus network keys), and
-/// PowerModels JSON (`baseMVA`, `branch`, `gen`, or `gencost`). JSON matching
+/// (`format: "surge-json"`), OPFData (`grid`, `solution`, and `metadata`),
+/// powerio-json (`buses` plus network keys), and PowerModels JSON (`baseMVA`,
+/// `branch`, `gen`, or `gencost`). JSON matching
 /// distribution markers, ambiguous markers, or no known markers returns
 /// [`Error::UnknownFormat`]. Pass `from` to force a
 /// transmission format. PowerWorld `.pwb` is a binary read only format with no
@@ -453,6 +465,16 @@ pub fn parse_file(path: impl AsRef<std::path::Path>, from: Option<&str>) -> Resu
         let network = pslf::parse_pslf_source(Arc::new(text), stem, &mut warnings)?;
         reject_empty_case(&network, "PSLF .epc")?;
         return Ok(Parsed::without_document(network, warnings));
+    }
+    if from
+        .and_then(target_format_from_name)
+        .is_some_and(|format| format == TargetFormat::DeepMindOpfDataJson)
+        && matches!(ext.as_deref(), Some("pt" | "gz"))
+    {
+        return Err(Error::UnknownFormat(
+            "OPFData .pt tensor caches and .tar.gz archives are not case files; extract and parse an example_N.json source file"
+                .into(),
+        ));
     }
     // Settle the format before touching the file: an unmapped or binary
     // extension must surface as UnknownFormat, not as the UTF-8 read error
@@ -535,6 +557,9 @@ fn read_source(source: Arc<String>, fmt: TargetFormat, name_hint: Option<&str>) 
             })
         }
         TargetFormat::SurgeJson => surge::parse_surge_source(source, name_hint, &mut warnings),
+        TargetFormat::DeepMindOpfDataJson => {
+            opfdata::parse_opfdata_source(source, name_hint, &mut warnings)
+        }
     }?;
     reject_empty_case(&net, fmt.label())?;
     Ok(Parsed {
@@ -632,6 +657,7 @@ fn transmission_json_target(format: TransmissionFormat) -> Result<TargetFormat> 
         TransmissionFormat::PowerioJson => Ok(TargetFormat::PowerioJson),
         TransmissionFormat::Goc3Json => Ok(TargetFormat::Goc3Json),
         TransmissionFormat::SurgeJson => Ok(TargetFormat::SurgeJson),
+        TransmissionFormat::DeepMindOpfDataJson => Ok(TargetFormat::DeepMindOpfDataJson),
         other => Err(Error::UnknownFormat(format!(
             "JSON classifier returned non-JSON transmission format `{}`",
             other.name()
@@ -785,6 +811,11 @@ pub fn write_as(net: &Network, format: TargetFormat) -> Result<Conversion> {
         TargetFormat::Goc3Json => {
             return Err(Error::WriteUnsupported {
                 format: "goc3-json",
+            });
+        }
+        TargetFormat::DeepMindOpfDataJson => {
+            return Err(Error::WriteUnsupported {
+                format: "opfdata-json",
             });
         }
     };
@@ -1268,6 +1299,10 @@ fn same_format(target: TargetFormat, source: SourceFormat) -> bool {
             | (TargetFormat::Pslf, SourceFormat::Pslf)
             | (TargetFormat::Goc3Json, SourceFormat::Goc3Json)
             | (TargetFormat::SurgeJson, SourceFormat::SurgeJson)
+            | (
+                TargetFormat::DeepMindOpfDataJson,
+                SourceFormat::DeepMindOpfDataJson,
+            )
     )
 }
 
@@ -1358,6 +1393,10 @@ mod tests {
             (SourceFormat::Pslf, TargetFormat::Pslf),
             (SourceFormat::Goc3Json, TargetFormat::Goc3Json),
             (SourceFormat::SurgeJson, TargetFormat::SurgeJson),
+            (
+                SourceFormat::DeepMindOpfDataJson,
+                TargetFormat::DeepMindOpfDataJson,
+            ),
         ] {
             let token = format!("{sf:?}");
             assert_eq!(

@@ -162,6 +162,7 @@ class Network:
     source_format: Literal[
         "Matpower",
         "PowerModelsJson",
+        "DeepMindOpfDataJson",
         "EgretJson",
         "Psse",
         "PowerWorld",

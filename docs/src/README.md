@@ -20,7 +20,8 @@ Public conventions:
 
 Transmission readers cover MATPOWER, PSS/E revisions 33 through 35,
 PowerWorld AUX and PWB, PSLF EPC, PowerModels JSON, egret JSON, pandapower JSON,
-PyPSA CSV folders, GO Challenge 3 JSON, Surge JSON, and GridFM Parquet
+PyPSA CSV folders, GO Challenge 3 JSON, Surge JSON, DeepMind OPFData FullTop
+and N-1 dataset JSON, and GridFM Parquet
 datasets. PowerWorld PWD is a display artifact and uses the display API.
 Distribution readers and writers live in `powerio-dist` for OpenDSS,
 PowerModelsDistribution ENGINEERING JSON, and BMOPF JSON.

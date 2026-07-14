@@ -31,6 +31,7 @@ class PyNetwork:
     ) -> Literal[
         "Matpower",
         "PowerModelsJson",
+        "DeepMindOpfDataJson",
         "EgretJson",
         "Psse",
         "PowerWorld",

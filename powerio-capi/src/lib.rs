@@ -2723,6 +2723,39 @@ mod tests {
         }
     }
 
+    #[test]
+    /// Confirms that the generic C API can detect a DeepMind OPFData file,
+    /// expose its basic network data and warnings, and convert it to MATPOWER.
+    fn deepmind_opfdata_uses_shared_c_api() {
+        let path = data_path("opfdataset/example_0.json");
+        let mut err = [0 as c_char; 512];
+        let net =
+            unsafe { pio_parse_file(path.as_ptr(), std::ptr::null(), err.as_mut_ptr(), err.len()) };
+        assert!(
+            !net.is_null(),
+            "parse returned null: {}",
+            unsafe { CStr::from_ptr(err.as_ptr()) }.to_str().unwrap()
+        );
+
+        unsafe {
+            assert_eq!(pio_n_buses(net), 14);
+            assert_eq!(pio_n_branches(net), 20);
+            assert_eq!(pio_n_gens(net), 5);
+            close(pio_base_mva(net), 100.0);
+
+            let mut source_format = [0 as c_char; 64];
+            let len = pio_source_format(net, source_format.as_mut_ptr(), source_format.len());
+            assert_eq!(
+                CStr::from_ptr(source_format.as_ptr()).to_str().unwrap(),
+                "DeepMindOpfDataJson"
+            );
+            assert_eq!(len, "DeepMindOpfDataJson".len());
+            assert!(warning_text(net).contains("solver initial values"));
+            assert!(to_format(net, "matpower").contains("mpc.bus"));
+            pio_network_free(net);
+        }
+    }
+
     #[cfg(feature = "pkg")]
     unsafe fn package_json_text(pkg: *const PioPackage) -> String {
         let mut err = [0 as c_char; PIO_ERRBUF_MIN];

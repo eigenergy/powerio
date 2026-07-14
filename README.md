@@ -44,6 +44,8 @@ Supported formats:
 - [PyPSA](https://pypsa.org/) static CSV folders
 - [ARPA-E GO Competition Challenge 3](https://gocompetition.energy.gov/) JSON input data
 - [surge](https://github.com/amptimal/surge) `.surge.json`
+- [DeepMind OPFData](https://arxiv.org/abs/2406.07234) dataset JSON from
+  the published FullTop and N-1 datasets (all grid sizes use the same reader)
 - [GridFM](https://github.com/gridfm) `.parquet`
 
 Distribution networks are supported in wire coordinates via [`powerio-dist`](powerio-dist/):
@@ -139,6 +141,7 @@ powerio convert pypsa_case --from pypsa-csv --to matpower -o case14.m
 powerio convert case.epc --from pslf --to matpower -o case.m
 powerio convert case.surge.json --from surge-json --to matpower -o case.m
 powerio convert goc3_case.json --from goc3-json --to matpower -o case.m
+powerio convert example_0.json --from opfdata-json --to matpower -o solved_case.m
 powerio package tests/data/case14.m -o case14.pio.json
 powerio package goc3_case.json --from goc3-json -o goc3_case.pio.json
 powerio verify tests/data/case30.m --kind bdoubleprime
@@ -168,6 +171,7 @@ the original file type from converting to a different file type.
 | PyPSA CSV folder | yes | yes | directory output without text echo | PyPSA import validator checks the exported static components |
 | GO Challenge 3 JSON | yes | source echo only | byte exact retained source | first interval maps to the static power flow core; `.pio.json` documents retain time series as operating points |
 | Surge JSON | yes | yes | byte exact retained source | versioned JSON network body; unsupported source sections stay in retained source or warnings |
+| DeepMind OPFData JSON | yes | source echo only | byte exact retained source | each extracted FullTop or N-1 document maps to a solved snapshot with element counts read from that document; source-only initial values and omitted identifiers/defaults are warned |
 | GridFM Parquet | yes | yes | directory output, lossy read | recovers the power flow core for conversion back to classical formats |
 
 PowerWorld `.pwd` carries display data rather than a network case, so it is

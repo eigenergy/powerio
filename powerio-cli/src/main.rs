@@ -311,10 +311,10 @@ impl<'a> GenCostCliOptions<'a> {
     }
 }
 
-/// A case format, for `--to` / `--from`. `gridfm`, `goc3-json`, and `pwb` are
-/// read-only here: `convert --from gridfm` reads a Parquet dataset, but writing
-/// a gridfm dataset is the dedicated `gridfm` subcommand, GO Challenge 3 JSON is a
-/// unit commitment input document, and PowerWorld `.pwb` has no writer.
+/// A case format, for `--to` / `--from`. `gridfm`, `goc3-json`, `opfdata-json`,
+/// and `pwb` are read-only here: `convert --from gridfm` reads a Parquet dataset,
+/// but writing a gridfm dataset is the dedicated `gridfm` subcommand, GO Challenge
+/// 3 and OPFData JSON are source documents, and PowerWorld `.pwb` has no writer.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, ValueEnum)]
 enum FormatArg {
     #[value(name = "matpower", alias = "m")]
@@ -349,6 +349,16 @@ enum FormatArg {
     /// Surge native JSON network document.
     #[value(name = "surge-json", alias = "surge")]
     SurgeJson,
+    /// JSON document from a DeepMind OPFData release (read only).
+    #[value(
+        name = "opfdata-json",
+        alias = "opfdata",
+        alias = "deepmind-opfdata-json",
+        alias = "deepmind-opfdata",
+        alias = "gridopt-json",
+        alias = "gridopt"
+    )]
+    DeepMindOpfDataJson,
     /// Read a gridfm-datakit Parquet dataset directory (read only).
     #[value(name = "gridfm")]
     Gridfm,
@@ -385,6 +395,7 @@ impl FormatArg {
             FormatArg::Pslf => TargetFormat::Pslf,
             FormatArg::Goc3Json => TargetFormat::Goc3Json,
             FormatArg::SurgeJson => TargetFormat::SurgeJson,
+            FormatArg::DeepMindOpfDataJson => TargetFormat::DeepMindOpfDataJson,
             // PypsaCsv is a transmission format, but it writes a directory, not a
             // text target; `run_convert` handles it before reaching here. gridfm
             // is read only here, and Pwb is read only. The distribution formats
@@ -421,6 +432,7 @@ impl FormatArg {
             | FormatArg::Pslf
             | FormatArg::Goc3Json
             | FormatArg::SurgeJson
+            | FormatArg::DeepMindOpfDataJson
             | FormatArg::Gridfm
             | FormatArg::Pwb => None,
         }
@@ -442,6 +454,7 @@ impl FormatArg {
             FormatArg::Pslf => "pslf",
             FormatArg::Goc3Json => "goc3-json",
             FormatArg::SurgeJson => "surge-json",
+            FormatArg::DeepMindOpfDataJson => "opfdata-json",
             FormatArg::Gridfm => "gridfm",
             FormatArg::Pwb => "pwb",
             FormatArg::Dss => "dss",
@@ -1748,6 +1761,33 @@ mod tests {
         assert_eq!(value["json_format"], "powerio-json");
         assert_eq!(value["elements"]["buses"], 9);
         assert_eq!(value["topology"]["connected_components"], 1);
+    }
+
+    #[test]
+    fn opfdata_alias_routes_through_the_transmission_hub() {
+        let cli = Cli::try_parse_from([
+            "powerio",
+            "convert",
+            "example_0.json",
+            "--from",
+            "opfdata",
+            "--to",
+            "matpower",
+        ])
+        .unwrap();
+        match cli.command {
+            Some(Command::Convert { from, to, .. }) => {
+                assert_eq!(from, Some(FormatArg::DeepMindOpfDataJson));
+                assert_eq!(to, FormatArg::Matpower);
+            }
+            other => panic!("unexpected command: {other:?}"),
+        }
+
+        let parsed = powerio_matrix::parse_file(data("opfdataset/example_0.json"), None).unwrap();
+        assert_eq!(
+            parsed.network.source_format,
+            powerio_matrix::SourceFormat::DeepMindOpfDataJson
+        );
     }
 
     #[test]

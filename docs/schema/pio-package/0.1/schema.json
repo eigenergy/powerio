@@ -3597,6 +3597,11 @@
           "const": "SurgeJson",
           "description": "Read from a Surge native JSON document.",
           "type": "string"
+        },
+        {
+          "const": "DeepMindOpfDataJson",
+          "description": "Read from one raw JSON document in a DeepMind OPFData release. The\nsource carries both solver initial values and a solution. The balanced\nmodel represents the solved snapshot and retains the source for an\nexact write back to the same format.",
+          "type": "string"
         }
       ]
     },
