@@ -2724,7 +2724,9 @@ mod tests {
     }
 
     #[test]
-    fn opfdata_uses_shared_c_parse_and_conversion_surface() {
+    /// Confirms that the generic C API can detect a DeepMind OPFData file,
+    /// expose its basic network data and warnings, and convert it to MATPOWER.
+    fn deepmind_opfdata_uses_shared_c_api() {
         let path = data_path("opfdataset/example_0.json");
         let mut err = [0 as c_char; 512];
         let net =
@@ -2745,9 +2747,9 @@ mod tests {
             let len = pio_source_format(net, source_format.as_mut_ptr(), source_format.len());
             assert_eq!(
                 CStr::from_ptr(source_format.as_ptr()).to_str().unwrap(),
-                "OpfDataJson"
+                "DeepMindOpfDataJson"
             );
-            assert_eq!(len, "OpfDataJson".len());
+            assert_eq!(len, "DeepMindOpfDataJson".len());
             assert!(warning_text(net).contains("solver initial values"));
             assert!(to_format(net, "matpower").contains("mpc.bus"));
             pio_network_free(net);

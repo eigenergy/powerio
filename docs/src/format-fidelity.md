@@ -25,7 +25,7 @@ implementations and the matching powerio code:
 | PSLF shunts | EPC `pu_mw`/`pu_mvar` are per unit on `sbase`; `Network::Shunt` stores MW/MVAr at \\(V = 1\\) | paired EPC/RAW case checks | `format::pslf` |
 | GO Challenge 3 time series | `Network` stores the first interval as a static case; `.pio.json` documents carry replayable later intervals in `operating_points` | Rust GOC3 package tests | `format::goc3`, `powerio_pkg::operating` |
 | Surge angles | Surge JSON carries voltage angles, phase shifts, and angle limits in radians; `Network` stores degrees | Rust Surge round trip tests | `format::surge` |
-| OPFData solved examples | OPFData carries p.u. powers and radian angles; `Network` stores the solved snapshot in MW/MVAr and degrees, with zero based links mapped to one based bus IDs | Smallest schema-complete official fixture plus size independent row, topology, FullTop, and N-1 contract tests | `format::opfdata` |
+| DeepMind OPFData JSON | DeepMind OPFData carries p.u. powers and radian angles; `BalancedNetwork` stores the solved snapshot in MW/MVAr and degrees, with zero based links mapped to one based bus IDs | Paper Appendix A, the PyG loader, the smallest complete official fixture, and size independent FullTop and N-1 contract tests | `format::opfdata` |
 
 egret's own MATPOWER parser uses the same reductions (bus type as
 `matpower_bustype`, polynomial coefficients reversed to a `{degree: coefficient}`
@@ -184,8 +184,9 @@ code `READ.TRANSMISSION.PARSE_WARNING`. GridFM package reads use
   writer emits a canonical Surge network body for the supported power flow core;
   richer MATPOWER generator capability or ramp columns and unsupported cost
   shapes are reported in `Conversion::warnings`.
-- **OPFData JSON** reads one raw solved-example JSON file into the balanced
-  transmission model. Topology, limits, loads, shunts, and quadratic costs come
+- **DeepMind OPFData JSON** reads one raw JSON document from a FullTop or N-1
+  release into the balanced transmission model. Topology, limits, loads,
+  shunts, and quadratic costs come
   from `grid`; solved bus voltages, generator dispatch, and branch flows come
   from `solution`. Powers and ratings are converted from per unit, angles from
   radians, link indices from zero based to one based, and flow columns from
@@ -197,6 +198,13 @@ code `READ.TRANSMISSION.PARSE_WARNING`. GridFM package reads use
   covers all published grid families (14 through 13,659 buses) and both FullTop
   and N-1 examples; generator and branch outages are represented by absent rows
   and links and are validated against that example's solution topology.
+  The published releases are derived from PGLib-OPF cases, but the reader does
+  not use PGLib case names or a case registry. A document from another source is
+  accepted when it follows the same object layout, feature column order, units,
+  and link rules. The paper's Appendix A is the published format definition and
+  the PyTorch Geometric loader is the executable reference. No separate JSON
+  Schema or format version marker is published, so documents that change this
+  contract are rejected by the reader's shape and topology checks.
   Unrecognized object fields remain in the retained source and produce a
   projection warning instead of being silently discarded or making same format
   echo impossible.

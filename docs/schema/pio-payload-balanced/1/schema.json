@@ -129,6 +129,16 @@
           },
           "type": "array"
         },
+        "route": {
+          "description": "Polyline route in the network's coordinate space (`Network.geo`),\npresent only when a source provides intermediate geometry; endpoint\nonly rendering derives from the bus locations. `#[serde(default)]` so\nJSON written before the field existed still deserializes.",
+          "items": {
+            "$ref": "#/$defs/Location"
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        },
         "shift": {
           "description": "Phase shift (degrees).",
           "format": "double",
@@ -1203,8 +1213,8 @@
           "type": "string"
         },
         {
-          "const": "OpfDataJson",
-          "description": "Read from one raw DeepMind OPFData solved-example JSON document. The\nsource carries both solver initial values and a solution; the neutral\nmodel represents the solved snapshot and retains the source for exact\nsame-format echo.",
+          "const": "DeepMindOpfDataJson",
+          "description": "Read from one raw JSON document in a DeepMind OPFData release. The\nsource carries both solver initial values and a solution. The balanced\nmodel represents the solved snapshot and retains the source for an\nexact write back to the same format.",
           "type": "string"
         }
       ]

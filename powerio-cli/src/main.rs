@@ -349,14 +349,16 @@ enum FormatArg {
     /// Surge native JSON network document.
     #[value(name = "surge-json", alias = "surge")]
     SurgeJson,
-    /// DeepMind OPFData solved-example JSON (read only).
+    /// JSON document from a DeepMind OPFData release (read only).
     #[value(
         name = "opfdata-json",
         alias = "opfdata",
+        alias = "deepmind-opfdata-json",
+        alias = "deepmind-opfdata",
         alias = "gridopt-json",
         alias = "gridopt"
     )]
-    OpfDataJson,
+    DeepMindOpfDataJson,
     /// Read a gridfm-datakit Parquet dataset directory (read only).
     #[value(name = "gridfm")]
     Gridfm,
@@ -393,7 +395,7 @@ impl FormatArg {
             FormatArg::Pslf => TargetFormat::Pslf,
             FormatArg::Goc3Json => TargetFormat::Goc3Json,
             FormatArg::SurgeJson => TargetFormat::SurgeJson,
-            FormatArg::OpfDataJson => TargetFormat::OpfDataJson,
+            FormatArg::DeepMindOpfDataJson => TargetFormat::DeepMindOpfDataJson,
             // PypsaCsv is a transmission format, but it writes a directory, not a
             // text target; `run_convert` handles it before reaching here. gridfm
             // is read only here, and Pwb is read only. The distribution formats
@@ -430,7 +432,7 @@ impl FormatArg {
             | FormatArg::Pslf
             | FormatArg::Goc3Json
             | FormatArg::SurgeJson
-            | FormatArg::OpfDataJson
+            | FormatArg::DeepMindOpfDataJson
             | FormatArg::Gridfm
             | FormatArg::Pwb => None,
         }
@@ -452,7 +454,7 @@ impl FormatArg {
             FormatArg::Pslf => "pslf",
             FormatArg::Goc3Json => "goc3-json",
             FormatArg::SurgeJson => "surge-json",
-            FormatArg::OpfDataJson => "opfdata-json",
+            FormatArg::DeepMindOpfDataJson => "opfdata-json",
             FormatArg::Gridfm => "gridfm",
             FormatArg::Pwb => "pwb",
             FormatArg::Dss => "dss",
@@ -1775,7 +1777,7 @@ mod tests {
         .unwrap();
         match cli.command {
             Some(Command::Convert { from, to, .. }) => {
-                assert_eq!(from, Some(FormatArg::OpfDataJson));
+                assert_eq!(from, Some(FormatArg::DeepMindOpfDataJson));
                 assert_eq!(to, FormatArg::Matpower);
             }
             other => panic!("unexpected command: {other:?}"),
@@ -1784,7 +1786,7 @@ mod tests {
         let parsed = powerio_matrix::parse_file(data("opfdataset/example_0.json"), None).unwrap();
         assert_eq!(
             parsed.network.source_format,
-            powerio_matrix::SourceFormat::OpfDataJson
+            powerio_matrix::SourceFormat::DeepMindOpfDataJson
         );
     }
 

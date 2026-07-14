@@ -134,7 +134,7 @@ def test_opfdata_uses_shared_python_parse_and_conversion_surface():
     path = DATA / "opfdataset" / "example_0.json"
     case = powerio.parse_file(path)
 
-    assert case.source_format == "OpfDataJson"
+    assert case.source_format == "DeepMindOpfDataJson"
     assert case.n_buses == 14
     assert case.n_branches == 20
     assert case.n_gens == 5
@@ -1143,7 +1143,7 @@ def test_source_format_stubs_cover_every_variant():
     variants = [
         "Matpower",
         "PowerModelsJson",
-        "OpfDataJson",
+        "DeepMindOpfDataJson",
         "EgretJson",
         "Psse",
         "PowerWorld",

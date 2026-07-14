@@ -56,7 +56,7 @@ mod surge;
 pub use egret::{parse_egret_json, write_egret_json};
 pub use goc3::parse_goc3_json;
 pub use matpower::{parse_matpower, parse_matpower_file, write_matpower};
-pub use opfdata::parse_opfdata_json;
+pub use opfdata::parse_deepmind_opfdata_json;
 pub use pandapower::{parse_pandapower_json, write_pandapower_json};
 pub use powermodels::{parse_powermodels_json, write_powermodels_json};
 pub use powerworld::{PwdDisplay, PwdSubstation, parse_powerworld, write_powerworld};
@@ -94,9 +94,9 @@ pub enum TargetFormat {
     Goc3Json,
     /// Surge native JSON network document.
     SurgeJson,
-    /// One solved DeepMind OPFData JSON example. Read only except for exact
-    /// same-format source echo.
-    OpfDataJson,
+    /// One JSON document from a DeepMind OPFData release. Read only except for
+    /// an exact write back to the retained source format.
+    DeepMindOpfDataJson,
 }
 
 impl TargetFormat {
@@ -110,7 +110,7 @@ impl TargetFormat {
             | TargetFormat::PowerioJson
             | TargetFormat::Goc3Json
             | TargetFormat::SurgeJson
-            | TargetFormat::OpfDataJson => "json",
+            | TargetFormat::DeepMindOpfDataJson => "json",
             TargetFormat::Psse { .. } => "raw",
             TargetFormat::PowerWorld => "aux",
             TargetFormat::Matpower => "m",
@@ -132,7 +132,7 @@ impl TargetFormat {
             TargetFormat::Pslf => "PSLF .epc",
             TargetFormat::Goc3Json => "GO Challenge 3 JSON",
             TargetFormat::SurgeJson => "Surge JSON",
-            TargetFormat::OpfDataJson => "OPFData JSON",
+            TargetFormat::DeepMindOpfDataJson => "DeepMind OPFData JSON",
         }
     }
 
@@ -152,7 +152,7 @@ impl TargetFormat {
             TargetFormat::Pslf => "pslf",
             TargetFormat::Goc3Json => "goc3-json",
             TargetFormat::SurgeJson => "surge-json",
-            TargetFormat::OpfDataJson => "opfdata-json",
+            TargetFormat::DeepMindOpfDataJson => "opfdata-json",
         }
     }
 }
@@ -270,7 +270,7 @@ pub fn target_format_from_name(name: &str) -> Option<TargetFormat> {
         TransmissionFormat::Pslf => TargetFormat::Pslf,
         TransmissionFormat::Goc3Json => TargetFormat::Goc3Json,
         TransmissionFormat::SurgeJson => TargetFormat::SurgeJson,
-        TransmissionFormat::OpfDataJson => TargetFormat::OpfDataJson,
+        TransmissionFormat::DeepMindOpfDataJson => TargetFormat::DeepMindOpfDataJson,
         TransmissionFormat::PypsaCsv | TransmissionFormat::Pwb | TransmissionFormat::Gridfm => {
             return None;
         }
@@ -468,7 +468,7 @@ pub fn parse_file(path: impl AsRef<std::path::Path>, from: Option<&str>) -> Resu
     }
     if from
         .and_then(target_format_from_name)
-        .is_some_and(|format| format == TargetFormat::OpfDataJson)
+        .is_some_and(|format| format == TargetFormat::DeepMindOpfDataJson)
         && matches!(ext.as_deref(), Some("pt" | "gz"))
     {
         return Err(Error::UnknownFormat(
@@ -557,7 +557,7 @@ fn read_source(source: Arc<String>, fmt: TargetFormat, name_hint: Option<&str>) 
             })
         }
         TargetFormat::SurgeJson => surge::parse_surge_source(source, name_hint, &mut warnings),
-        TargetFormat::OpfDataJson => {
+        TargetFormat::DeepMindOpfDataJson => {
             opfdata::parse_opfdata_source(source, name_hint, &mut warnings)
         }
     }?;
@@ -657,7 +657,7 @@ fn transmission_json_target(format: TransmissionFormat) -> Result<TargetFormat> 
         TransmissionFormat::PowerioJson => Ok(TargetFormat::PowerioJson),
         TransmissionFormat::Goc3Json => Ok(TargetFormat::Goc3Json),
         TransmissionFormat::SurgeJson => Ok(TargetFormat::SurgeJson),
-        TransmissionFormat::OpfDataJson => Ok(TargetFormat::OpfDataJson),
+        TransmissionFormat::DeepMindOpfDataJson => Ok(TargetFormat::DeepMindOpfDataJson),
         other => Err(Error::UnknownFormat(format!(
             "JSON classifier returned non-JSON transmission format `{}`",
             other.name()
@@ -813,7 +813,7 @@ pub fn write_as(net: &Network, format: TargetFormat) -> Result<Conversion> {
                 format: "goc3-json",
             });
         }
-        TargetFormat::OpfDataJson => {
+        TargetFormat::DeepMindOpfDataJson => {
             return Err(Error::WriteUnsupported {
                 format: "opfdata-json",
             });
@@ -1299,7 +1299,10 @@ fn same_format(target: TargetFormat, source: SourceFormat) -> bool {
             | (TargetFormat::Pslf, SourceFormat::Pslf)
             | (TargetFormat::Goc3Json, SourceFormat::Goc3Json)
             | (TargetFormat::SurgeJson, SourceFormat::SurgeJson)
-            | (TargetFormat::OpfDataJson, SourceFormat::OpfDataJson)
+            | (
+                TargetFormat::DeepMindOpfDataJson,
+                SourceFormat::DeepMindOpfDataJson,
+            )
     )
 }
 
@@ -1390,7 +1393,10 @@ mod tests {
             (SourceFormat::Pslf, TargetFormat::Pslf),
             (SourceFormat::Goc3Json, TargetFormat::Goc3Json),
             (SourceFormat::SurgeJson, TargetFormat::SurgeJson),
-            (SourceFormat::OpfDataJson, TargetFormat::OpfDataJson),
+            (
+                SourceFormat::DeepMindOpfDataJson,
+                TargetFormat::DeepMindOpfDataJson,
+            ),
         ] {
             let token = format!("{sf:?}");
             assert_eq!(

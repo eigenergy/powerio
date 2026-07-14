@@ -1,10 +1,10 @@
-//! Read DeepMind OPFData JSON examples into the transmission [`Network`].
+//! Read DeepMind OPFData JSON documents into [`BalancedNetwork`].
 //!
 //! OPFData stores one solved AC-OPF problem per JSON file. The `grid` section
 //! carries the problem inputs, `solution` carries the solved operating point,
 //! and `metadata.objective` carries the solved quadratic objective. This reader
-//! maps the solved snapshot into the neutral MW/degree model and retains the
-//! original JSON for byte-exact same-format echo.
+//! maps the solved snapshot into the balanced MW and degree model and retains
+//! the original JSON for an exact write back to the same format.
 //!
 //! The published FullTop and N-1 datasets use the same schema at every grid
 //! size. Element counts and topology come exclusively from each document; N-1
@@ -16,15 +16,15 @@ use std::sync::Arc;
 use serde::Deserialize;
 
 use crate::network::{
-    Branch, BranchCharging, BranchSolution, Bus, BusId, BusType, GenCost, Generator, Load, Network,
-    Shunt, SourceFormat,
+    BalancedNetwork, Branch, BranchCharging, BranchSolution, Bus, BusId, BusType, GenCost,
+    Generator, Load, Shunt, SourceFormat,
 };
 use crate::normalize::{RAD_TO_DEG, cost_from_pu};
 use crate::{Error, Result};
 
 use super::Parsed;
 
-const FMT: &str = "OPFData JSON";
+const FMT: &str = "DeepMind OPFData JSON";
 type ExtraFields = BTreeMap<String, serde_json::Value>;
 
 #[derive(Debug, Deserialize)]
@@ -661,12 +661,16 @@ fn validate_document(document: &Document, bus_count: usize) -> Result<NodeLinks>
     })
 }
 
-/// Parse one raw FullTop or N-1 OPFData JSON example as a solved network
+/// Parse one raw FullTop or N-1 DeepMind OPFData JSON document as a solved
 /// snapshot. The reader does not assume a case name or fixed element counts.
-pub fn parse_opfdata_json(content: &str) -> Result<Parsed> {
+pub fn parse_deepmind_opfdata_json(content: &str) -> Result<Parsed> {
     let mut warnings = Vec::new();
     let network = parse_opfdata_source(Arc::new(content.to_owned()), None, &mut warnings)?;
-    Ok(Parsed { network, warnings })
+    Ok(Parsed {
+        network,
+        warnings,
+        document: None,
+    })
 }
 
 #[allow(clippy::too_many_lines)]
@@ -674,7 +678,7 @@ pub(crate) fn parse_opfdata_source(
     source: Arc<String>,
     name_hint: Option<&str>,
     warnings: &mut Vec<String>,
-) -> Result<Network> {
+) -> Result<BalancedNetwork> {
     let document: Document = serde_json::from_str(&source)
         .map_err(|error| bad(format!("invalid OPFData schema: {error}")))?;
     let base = base_mva(&document.grid.context)?;
@@ -810,13 +814,13 @@ pub(crate) fn parse_opfdata_source(
         warnings.push(warning);
     }
 
-    let mut network = Network::new(name_hint.unwrap_or("opfdata"), base);
+    let mut network = BalancedNetwork::new(name_hint.unwrap_or("opfdata"), base);
     network.buses = buses;
     network.loads = loads;
     network.shunts = shunts;
     network.branches = branches;
     network.generators = generators;
-    network.source_format = SourceFormat::OpfDataJson;
+    network.source_format = SourceFormat::DeepMindOpfDataJson;
     network.source = Some(source);
     Ok(network)
 }

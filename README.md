@@ -44,7 +44,7 @@ Supported formats:
 - [PyPSA](https://pypsa.org/) static CSV folders
 - [ARPA-E GO Competition Challenge 3](https://gocompetition.energy.gov/) JSON input data
 - [surge](https://github.com/amptimal/surge) `.surge.json`
-- [DeepMind OPFData](https://arxiv.org/abs/2406.07234) solved example JSON from
+- [DeepMind OPFData](https://arxiv.org/abs/2406.07234) dataset JSON from
   the published FullTop and N-1 datasets (all grid sizes use the same reader)
 - [GridFM](https://github.com/gridfm) `.parquet`
 
@@ -171,7 +171,7 @@ the original file type from converting to a different file type.
 | PyPSA CSV folder | yes | yes | directory output without text echo | PyPSA import validator checks the exported static components |
 | GO Challenge 3 JSON | yes | source echo only | byte exact retained source | first interval maps to the static power flow core; `.pio.json` documents retain time series as operating points |
 | Surge JSON | yes | yes | byte exact retained source | versioned JSON network body; unsupported source sections stay in retained source or warnings |
-| OPFData JSON | yes | source echo only | byte exact retained source | each extracted FullTop or N-1 example maps to a solved snapshot with document defined element counts; source-only initial values and omitted identifiers/defaults are warned |
+| DeepMind OPFData JSON | yes | source echo only | byte exact retained source | each extracted FullTop or N-1 document maps to a solved snapshot with element counts read from that document; source-only initial values and omitted identifiers/defaults are warned |
 | GridFM Parquet | yes | yes | directory output, lossy read | recovers the power flow core for conversion back to classical formats |
 
 PowerWorld `.pwd` carries display data rather than a network case, so it is

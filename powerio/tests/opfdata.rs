@@ -8,8 +8,8 @@
 use std::path::{Path, PathBuf};
 
 use powerio::{
-    BranchCharging, BusId, BusType, Error, Network, SourceFormat, TargetFormat, convert_file,
-    parse_file, parse_str, write_as,
+    BalancedNetwork, BranchCharging, BusId, BusType, Error, SourceFormat, TargetFormat,
+    convert_file, parse_file, parse_str, write_as,
 };
 use serde_json::Value;
 
@@ -33,7 +33,7 @@ fn parses_official_schema_complete_solved_snapshot() {
     let parsed = parse_file(fixture(), None).unwrap();
     let net = &parsed.network;
 
-    assert_eq!(net.source_format, SourceFormat::OpfDataJson);
+    assert_eq!(net.source_format, SourceFormat::DeepMindOpfDataJson);
     assert_eq!(net.name, "example_0");
     assert_close(net.base_mva, 100.0);
     assert_eq!(net.buses.len(), 14);
@@ -108,15 +108,20 @@ fn detects_aliases_and_echoes_the_official_source_exactly() {
         "opfdata-json",
         "opfdata",
         "OPFData",
+        "deepmind-opfdata-json",
+        "deepmind-opfdata",
         "gridopt-json",
         "gridopt",
     ] {
         let parsed = parse_str(&source, alias).unwrap();
-        assert_eq!(parsed.network.source_format, SourceFormat::OpfDataJson);
+        assert_eq!(
+            parsed.network.source_format,
+            SourceFormat::DeepMindOpfDataJson
+        );
     }
 
     let parsed = parse_file(fixture(), None).unwrap();
-    let echo = write_as(&parsed.network, TargetFormat::OpfDataJson).unwrap();
+    let echo = write_as(&parsed.network, TargetFormat::DeepMindOpfDataJson).unwrap();
     assert_eq!(echo.text, source);
     assert!(echo.warnings.is_empty());
 }
@@ -151,7 +156,11 @@ fn converts_to_classical_json_and_matpower_with_fidelity_warnings() {
 
 #[test]
 fn opfdata_target_without_retained_source_is_unsupported() {
-    let err = write_as(&Network::new("memory", 100.0), TargetFormat::OpfDataJson).unwrap_err();
+    let err = write_as(
+        &BalancedNetwork::new("memory", 100.0),
+        TargetFormat::DeepMindOpfDataJson,
+    )
+    .unwrap_err();
     assert!(matches!(
         err,
         Error::WriteUnsupported {
@@ -277,7 +286,7 @@ fn retains_published_schema_extensions_and_warns_on_projection() {
             .iter()
             .any(|warning| warning.contains("`metadata.solver`"))
     );
-    let echo = write_as(&parsed.network, TargetFormat::OpfDataJson).unwrap();
+    let echo = write_as(&parsed.network, TargetFormat::DeepMindOpfDataJson).unwrap();
     assert_eq!(echo.text, source);
 }
 

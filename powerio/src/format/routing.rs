@@ -45,7 +45,7 @@ pub enum TransmissionFormat {
     Gridfm,
     Goc3Json,
     SurgeJson,
-    OpfDataJson,
+    DeepMindOpfDataJson,
 }
 
 impl TransmissionFormat {
@@ -66,7 +66,7 @@ impl TransmissionFormat {
             Self::Gridfm => "gridfm",
             Self::Goc3Json => "goc3-json",
             Self::SurgeJson => "surge-json",
-            Self::OpfDataJson => "opfdata-json",
+            Self::DeepMindOpfDataJson => "opfdata-json",
         }
     }
 }
@@ -143,9 +143,12 @@ pub fn transmission_format_from_name(name: &str) -> Option<TransmissionFormat> {
         "gridfm" => Some(TransmissionFormat::Gridfm),
         "goc3" | "goc3json" | "go3" | "gochallenge3" | "c3" => Some(TransmissionFormat::Goc3Json),
         "surge" | "surgejson" => Some(TransmissionFormat::SurgeJson),
-        "opfdata" | "opfdatajson" | "gridopt" | "gridoptjson" => {
-            Some(TransmissionFormat::OpfDataJson)
-        }
+        "opfdata"
+        | "opfdatajson"
+        | "deepmindopfdata"
+        | "deepmindopfdatajson"
+        | "gridopt"
+        | "gridoptjson" => Some(TransmissionFormat::DeepMindOpfDataJson),
         _ => None,
     }
 }
@@ -303,7 +306,7 @@ impl JsonShape {
             } else if is_surge {
                 TransmissionFormat::SurgeJson
             } else if is_opfdata {
-                TransmissionFormat::OpfDataJson
+                TransmissionFormat::DeepMindOpfDataJson
             } else if is_powerio {
                 TransmissionFormat::PowerioJson
             } else {
@@ -485,7 +488,7 @@ mod tests {
                 }"#
             ),
             JsonClass::Case(Detection::Known(SourceFormat::Transmission(
-                TransmissionFormat::OpfDataJson
+                TransmissionFormat::DeepMindOpfDataJson
             )))
         );
         assert_eq!(
@@ -500,12 +503,14 @@ mod tests {
             "opfdata-json",
             "opfdata",
             "OPFData",
+            "deepmind-opfdata-json",
+            "deepmind-opfdata",
             "gridopt-json",
             "gridopt",
         ] {
             assert_eq!(
                 super::transmission_format_from_name(alias),
-                Some(TransmissionFormat::OpfDataJson),
+                Some(TransmissionFormat::DeepMindOpfDataJson),
                 "{alias}"
             );
         }

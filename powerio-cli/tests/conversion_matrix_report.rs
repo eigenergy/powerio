@@ -5,8 +5,8 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 use powerio_dist::{DistNetwork, DistTargetFormat};
 use powerio_matrix::{
-    Network, TargetFormat, parse_matpower_file, parse_str as parse_transmission_str,
-    write_as as write_transmission_as,
+    Network, TargetFormat, parse_file as parse_transmission_file, parse_matpower_file,
+    parse_str as parse_transmission_str, write_as as write_transmission_as,
 };
 
 const REPORT_ENV: &str = "POWERIO_CONVERSION_MATRIX_REPORT";
@@ -147,7 +147,8 @@ fn build_report() -> Report {
 
 #[derive(Clone)]
 struct MatrixReport {
-    formats: Vec<&'static str>,
+    sources: Vec<&'static str>,
+    targets: Vec<&'static str>,
     case_count: usize,
     cells: Vec<Vec<Cell>>,
     failures: Vec<String>,
@@ -196,16 +197,16 @@ fn write_matrix_section(markdown: &mut String, title: &str, report: &MatrixRepor
     writeln!(markdown, "{} cases.", report.case_count).unwrap();
     writeln!(markdown).unwrap();
     write!(markdown, "| Source ↓ / target → |").unwrap();
-    for format in &report.formats {
+    for format in &report.targets {
         write!(markdown, " {format} |").unwrap();
     }
     writeln!(markdown).unwrap();
     write!(markdown, "| --- |").unwrap();
-    for _ in &report.formats {
+    for _ in &report.targets {
         write!(markdown, " --- |").unwrap();
     }
     writeln!(markdown).unwrap();
-    for (source, row) in report.formats.iter().zip(&report.cells) {
+    for (source, row) in report.sources.iter().zip(&report.cells) {
         write!(markdown, "| {source} |").unwrap();
         for cell in row {
             write!(markdown, " {} |", cell_summary(cell)).unwrap();
@@ -238,8 +239,8 @@ fn write_warning_summary(markdown: &mut String, title: &str, report: &MatrixRepo
     .unwrap();
     writeln!(markdown).unwrap();
     let mut wrote_row = false;
-    for (source, row) in report.formats.iter().zip(&report.cells) {
-        for (target, cell) in report.formats.iter().zip(row) {
+    for (source, row) in report.sources.iter().zip(&report.cells) {
+        for (target, cell) in report.targets.iter().zip(row) {
             if cell.observed_warnings == 0 && cell.failures.is_empty() {
                 continue;
             }
@@ -430,6 +431,8 @@ const TRANSMISSION_WARNING_BASELINE: [[usize; 8]; 8] = [
     [17, 5, 5, 5, 5, 7, 5, 8],
 ];
 
+const DEEPMIND_OPFDATA_WARNING_BASELINE: [usize; 8] = [3, 2, 5, 5, 3, 4, 2, 4];
+
 const TRANSMISSION_CASES: [(&str, &str); 6] = [
     ("case9", "case9.m"),
     ("case14", "case14.m"),
@@ -460,7 +463,8 @@ struct TransmissionCore {
 }
 
 fn run_transmission_matrix() -> MatrixReport {
-    let formats = TRANSMISSION_FORMATS.iter().map(|fmt| fmt.name).collect();
+    let mut sources: Vec<_> = TRANSMISSION_FORMATS.iter().map(|fmt| fmt.name).collect();
+    let targets = TRANSMISSION_FORMATS.iter().map(|fmt| fmt.name).collect();
     let mut cells = Vec::new();
     let mut failures = Vec::new();
 
@@ -493,12 +497,51 @@ fn run_transmission_matrix() -> MatrixReport {
         cells.push(row);
     }
 
+    let source = "DeepMind OPFData JSON";
+    let payload = deepmind_opfdata_payload();
+    let mut row = Vec::new();
+    for (target_idx, target) in TRANSMISSION_FORMATS.iter().enumerate() {
+        let mut cell = Cell::new(DEEPMIND_OPFDATA_WARNING_BASELINE[target_idx]);
+        match &payload {
+            Ok(payload) => {
+                cell.record_warnings(SOURCE_PARSE, &payload.parse_warnings);
+                validate_transmission_pair(payload, *target, &mut cell);
+            }
+            Err(err) => cell.failures.push(err.clone()),
+        }
+        if !cell.ok() {
+            failures.push(format!(
+                "transmission {source} -> {}: observed {} warnings, baseline {}; {}",
+                target.name,
+                cell.observed_warnings,
+                cell.baseline_warnings,
+                cell.failures.join("; ")
+            ));
+        }
+        row.push(cell);
+    }
+    sources.push(source);
+    cells.push(row);
+
     MatrixReport {
-        formats,
-        case_count: TRANSMISSION_CASES.len(),
+        sources,
+        targets,
+        case_count: TRANSMISSION_CASES.len() + 1,
         cells,
         failures,
     }
+}
+
+fn deepmind_opfdata_payload() -> Result<TransmissionPayload, String> {
+    let parsed = parse_transmission_file(data("opfdataset/example_0.json"), Some("opfdata-json"))
+        .map_err(|err| format!("parse DeepMind OPFData fixture: {err}"))?;
+    let core = transmission_core(&parsed.network);
+    Ok(TransmissionPayload {
+        label: "official case 14 example",
+        network: parsed.network,
+        parse_warnings: parsed.warnings,
+        core,
+    })
 }
 
 fn transmission_payloads(format: TransmissionFormat) -> Result<Vec<TransmissionPayload>, String> {
@@ -659,7 +702,7 @@ struct DistributionCore {
 }
 
 fn run_distribution_matrix() -> MatrixReport {
-    let formats = DISTRIBUTION_FORMATS.iter().map(|fmt| fmt.name).collect();
+    let formats: Vec<_> = DISTRIBUTION_FORMATS.iter().map(|fmt| fmt.name).collect();
     let mut cells = Vec::new();
     let mut failures = Vec::new();
 
@@ -693,7 +736,8 @@ fn run_distribution_matrix() -> MatrixReport {
     }
 
     MatrixReport {
-        formats,
+        sources: formats.clone(),
+        targets: formats,
         case_count: DISTRIBUTION_CASES.len(),
         cells,
         failures,
