@@ -658,10 +658,16 @@ fn read_cost(p_cost: &Value, startup: f64, shutdown: f64) -> Option<GenCost> {
     let m = p_cost.as_object()?;
     match m.get("cost_curve_type").and_then(Value::as_str)? {
         "polynomial" => {
+            // The exponent keys size the coefficient vector below; an
+            // unbounded key (a few bytes of JSON) would drive an arbitrarily
+            // large allocation. No physical cost curve goes past a handful of
+            // terms; keys beyond the cap are dropped like non-numeric ones.
+            const MAX_COST_EXPONENT: usize = 64;
             let values = m.get("values")?.as_object()?;
             let pairs: Vec<(usize, f64)> = values
                 .iter()
                 .filter_map(|(k, c)| Some((k.parse().ok()?, c.as_f64()?)))
+                .filter(|(e, _)| *e <= MAX_COST_EXPONENT)
                 .collect();
             let max_exp = pairs.iter().map(|(e, _)| *e).max()?;
             let mut coeffs = vec![0.0; max_exp + 1]; // index 0 = highest order
@@ -701,6 +707,26 @@ fn read_cost(p_cost: &Value, startup: f64, shutdown: f64) -> Option<GenCost> {
 mod tests {
     use super::*;
     use crate::network::BusType;
+
+    #[test]
+    fn oversized_cost_exponent_is_dropped_not_allocated() {
+        // The exponent key sizes the coefficient vector; unbounded it would be
+        // an allocation of that many f64s from a few bytes of JSON, and a key
+        // at usize::MAX would wrap `max_exp + 1` to zero and index out of
+        // bounds.
+        let all_oversized: Value = serde_json::json!({
+            "cost_curve_type": "polynomial",
+            "values": {"100000000000": 5.0, "18446744073709551615": 1.0}
+        });
+        assert!(read_cost(&all_oversized, 0.0, 0.0).is_none());
+
+        let mixed: Value = serde_json::json!({
+            "cost_curve_type": "polynomial",
+            "values": {"2": 3.0, "100000000000": 1.0}
+        });
+        let cost = read_cost(&mixed, 0.0, 0.0).unwrap();
+        assert_eq!(cost.coeffs, vec![3.0, 0.0, 0.0]);
+    }
 
     fn fixture(name: &str) -> String {
         let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))

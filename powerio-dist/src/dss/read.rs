@@ -45,6 +45,15 @@ const TYPED_DSS_CLASSES: &[&str] = &[
     "regcontrol",
 ];
 
+/// Drop a leading UTF-8 byte order mark: the tokenizer would read it as part
+/// of the first command word. Redirected files are stripped the same way.
+fn strip_bom_owned(text: String) -> String {
+    match text.strip_prefix('\u{feff}') {
+        Some(stripped) => stripped.to_owned(),
+        None => text,
+    }
+}
+
 /// Parses a `.dss` file, following includes, into the canonical model.
 pub fn parse_dss_file(path: impl AsRef<Path>) -> Result<DistNetwork> {
     let path = path.as_ref();
@@ -52,17 +61,30 @@ pub fn parse_dss_file(path: impl AsRef<Path>) -> Result<DistNetwork> {
         path: path.display().to_string(),
         source,
     })?;
+    let had_bom = text.starts_with('\u{feff}');
+    let text = strip_bom_owned(text);
     let raw = parse_raw_with(&text, &path.display().to_string(), &mut |p: &Path| {
-        std::fs::read_to_string(p)
+        std::fs::read_to_string(p).map(strip_bom_owned)
     });
-    Ok(network_from_raw(&raw, Arc::new(text)))
+    let mut net = network_from_raw(&raw, Arc::new(text));
+    if had_bom {
+        net.warnings.push(crate::convert::BOM_WARNING.to_owned());
+    }
+    Ok(net)
 }
 
 /// Parses `.dss` text; `Redirect`/`Compile` resolve relative to the working
 /// directory.
 pub fn parse_dss_str(text: &str) -> DistNetwork {
-    let raw = parse_raw_with(text, "<string>", &mut |p: &Path| std::fs::read_to_string(p));
-    network_from_raw(&raw, Arc::new(text.to_string()))
+    let stripped = text.trim_start_matches('\u{feff}');
+    let raw = parse_raw_with(stripped, "<string>", &mut |p: &Path| {
+        std::fs::read_to_string(p).map(strip_bom_owned)
+    });
+    let mut net = network_from_raw(&raw, Arc::new(stripped.to_string()));
+    if stripped.len() != text.len() {
+        net.warnings.push(crate::convert::BOM_WARNING.to_owned());
+    }
+    net
 }
 
 /// Lowers an executed raw script into the typed model.

@@ -44,26 +44,36 @@ pub fn infer_input_family(input: &Path) -> anyhow::Result<Option<bool>> {
     }
     let text = std::fs::read_to_string(input)
         .with_context(|| format!("reading JSON format markers from {}", input.display()))?;
-    match powerio_matrix::format::routing::classify_json_text(&text) {
+    match classify_case_json(&text, input)? {
+        DetectedFormat::Distribution(_) => Ok(Some(true)),
+        DetectedFormat::Transmission(_) => Ok(Some(false)),
+        other => anyhow::bail!(
+            "unrecognized JSON format family `{}` in {}; pass --from to choose a format",
+            other.name(),
+            input.display()
+        ),
+    }
+}
+
+/// Classify `.json` case text to its detected format, turning the non-case
+/// outcomes (package envelope, ambiguous markers, no markers) into errors
+/// that name the fix.
+fn classify_case_json(text: &str, path: &Path) -> anyhow::Result<DetectedFormat> {
+    match powerio_matrix::format::routing::classify_json_text(text) {
+        JsonClass::Case(Detection::Known(format)) => Ok(format),
         JsonClass::Package => anyhow::bail!(
             "{} is a .pio.json package envelope, not a case file; the `package` \
              subcommand writes envelopes, and the bindings read them \
              (powerio.Package.from_json in Python, read_package in Julia)",
-            input.display()
+            path.display()
         ),
-        JsonClass::Case(Detection::Known(DetectedFormat::Distribution(_))) => Ok(Some(true)),
-        JsonClass::Case(Detection::Known(DetectedFormat::Transmission(_))) => Ok(Some(false)),
         JsonClass::Case(Detection::Ambiguous) => anyhow::bail!(
             "ambiguous JSON markers in {}; pass --from to choose a format",
-            input.display()
+            path.display()
         ),
         JsonClass::Case(Detection::Unknown) => anyhow::bail!(
             "cannot infer JSON format for {}; pass --from to choose a format",
-            input.display()
-        ),
-        JsonClass::Case(Detection::Known(_)) => anyhow::bail!(
-            "unrecognized JSON format family in {}; pass --from to choose a format",
-            input.display()
+            path.display()
         ),
     }
 }
@@ -132,41 +142,92 @@ pub struct LoadedCase {
 /// dropped fields surface as warnings. A `.dss` redirect fragment (no voltage
 /// source) fails the lowering preflight, so a recursive scan skips it instead
 /// of exporting a partial feeder.
+///
+/// A `.json` case is read and classified once; the classifier's verdict names
+/// the exact format, so the typed parse is the only other pass over the text.
 pub fn load_network(path: &Path) -> anyhow::Result<LoadedCase> {
-    let distribution = infer_input_family(path)?
-        .ok_or_else(|| anyhow::anyhow!("cannot infer a case format for {}", path.display()))?;
-    if distribution {
-        let net = powerio_dist::parse_file(path, None)
-            .with_context(|| format!("parse {}", path.display()))?;
-        let lowered =
-            lower_multiconductor_to_balanced(&net, MulticonductorToBalancedOptions::default())
-                .map_err(|e| {
-                    let diagnostics = e
-                        .diagnostics
-                        .iter()
-                        .map(|d| d.message.as_str())
-                        .collect::<Vec<_>>()
-                        .join("; ");
-                    anyhow::anyhow!("lower {} to balanced: {diagnostics}", path.display())
-                })?;
-        let mut warnings = net.warnings;
-        warnings.extend(
-            (lowered.record.approximations.iter())
-                .chain(&lowered.record.dropped_fields)
-                .map(|s| format!("lowering: {s}")),
-        );
-        Ok(LoadedCase {
-            network: lowered.network,
-            warnings,
-        })
-    } else {
-        let parsed = powerio_matrix::parse_file(path, None)
-            .with_context(|| format!("parse {}", path.display()))?;
-        Ok(LoadedCase {
-            network: parsed.network,
-            warnings: parsed.warnings,
-        })
+    let ext = path
+        .extension()
+        .and_then(|e| e.to_str())
+        .map(str::to_ascii_lowercase);
+    let stem = path.file_stem().and_then(|s| s.to_str());
+    match ext.as_deref() {
+        Some(JSON_EXTENSION) => {
+            let text = std::fs::read_to_string(path)
+                .with_context(|| format!("reading {}", path.display()))?;
+            match classify_case_json(&text, path)? {
+                DetectedFormat::Distribution(format) => {
+                    let net = powerio_dist::parse_str(&text, format.name())
+                        .with_context(|| format!("parse {}", path.display()))?;
+                    lower_to_balanced(net, stem, path)
+                }
+                DetectedFormat::Transmission(format) => {
+                    let parsed =
+                        powerio_matrix::format::parse_str_with_name(&text, format.name(), stem)
+                            .with_context(|| format!("parse {}", path.display()))?;
+                    Ok(LoadedCase {
+                        network: parsed.network,
+                        warnings: parsed.warnings,
+                    })
+                }
+                other => anyhow::bail!(
+                    "unrecognized JSON format family `{}` in {}; pass --from to choose a format",
+                    other.name(),
+                    path.display()
+                ),
+            }
+        }
+        Some(ext) if DISTRIBUTION_EXTENSIONS.contains(&ext) => {
+            let net = powerio_dist::parse_file(path, None)
+                .with_context(|| format!("parse {}", path.display()))?;
+            lower_to_balanced(net, stem, path)
+        }
+        Some(ext) if TRANSMISSION_EXTENSIONS.contains(&ext) => {
+            let parsed = powerio_matrix::parse_file(path, None)
+                .with_context(|| format!("parse {}", path.display()))?;
+            Ok(LoadedCase {
+                network: parsed.network,
+                warnings: parsed.warnings,
+            })
+        }
+        _ => anyhow::bail!("cannot infer a case format for {}", path.display()),
     }
+}
+
+/// Lower a parsed multiconductor network to the balanced model. A nameless
+/// case takes its file stem as the network name first (the role the stem
+/// plays for transmission formats); otherwise every nameless case in a batch
+/// lowers to the same `lowered-multiconductor` fallback and the exports
+/// overwrite each other.
+fn lower_to_balanced(
+    mut net: powerio_dist::DistNetwork,
+    stem: Option<&str>,
+    path: &Path,
+) -> anyhow::Result<LoadedCase> {
+    if net.name.is_none() {
+        net.name = stem.map(str::to_owned);
+    }
+    let lowered =
+        lower_multiconductor_to_balanced(&net, MulticonductorToBalancedOptions::default())
+            .map_err(|e| {
+                let diagnostics = e
+                    .diagnostics
+                    .iter()
+                    .map(|d| d.message.as_str())
+                    .collect::<Vec<_>>()
+                    .join("; ");
+                anyhow::anyhow!("lower {} to balanced: {diagnostics}", path.display())
+            })?;
+    let mut warnings = net.warnings;
+    warnings.extend(
+        (lowered.record.approximations.iter())
+            .chain(&lowered.record.dropped_fields)
+            .map(|s| format!("lowering: {s}")),
+    );
+    Ok(LoadedCase {
+        network: lowered.network,
+        warnings,
+    })
 }
 
 #[cfg(test)]
@@ -236,6 +297,23 @@ mod tests {
     fn missing_root_yields_empty() {
         let tmp = tempfile::tempdir().unwrap();
         assert!(discover_cases(&tmp.path().join("nope"), None).is_empty());
+    }
+
+    #[test]
+    fn nameless_distribution_json_takes_the_file_stem_name() {
+        let dss = concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../tests/data/dist/micro/fourwire_linecode.dss"
+        );
+        let conv = powerio_dist::convert_file(dss, powerio_dist::DistTargetFormat::BmopfJson, None)
+            .unwrap();
+        let mut doc: serde_json::Value = serde_json::from_str(&conv.text).unwrap();
+        doc.as_object_mut().unwrap().remove("name");
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("myfeeder.json");
+        std::fs::write(&path, doc.to_string()).unwrap();
+        let loaded = load_network(&path).unwrap();
+        assert_eq!(loaded.network.name, "myfeeder");
     }
 
     #[test]

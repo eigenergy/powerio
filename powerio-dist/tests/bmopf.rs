@@ -2338,3 +2338,51 @@ fn reader_is_liberal_where_the_writer_is_strict() {
     assert!(out.warnings.iter().any(|w| w.contains("note")));
     assert!(!out.text.contains("hand edited"));
 }
+
+#[test]
+fn oversized_matrix_key_is_bounded_and_warned() {
+    // The largest matrix index seen sizes a dense allocation; an unbounded
+    // key would demand gigabytes from a few bytes of JSON. Out-of-bounds
+    // indices fall out of the matrix grammar and land in extras, warned.
+    let net = powerio_dist::parse_str(
+        r#"{"linecode":{"lc":{"R_series_100000_1":1.0}}}"#,
+        "bmopf-json",
+    )
+    .unwrap();
+    assert!(
+        net.warnings.iter().any(|w| w.contains("R_series_100000_1")),
+        "warnings: {:?}",
+        net.warnings
+    );
+}
+
+#[test]
+fn winding_count_is_bounded() {
+    let windings: Vec<serde_json::Value> = (0..65)
+        .map(|i| {
+            serde_json::json!({
+                "bus": format!("b{i}"), "terminal_map": ["1", "2", "3"], "v_nom": 1000.0
+            })
+        })
+        .collect();
+    let doc = serde_json::json!({
+        "transformer": {"n_winding": {"t1": {"windings": windings, "s_rating": 1000.0}}}
+    });
+    let net = powerio_dist::parse_str(&doc.to_string(), "bmopf-json").unwrap();
+    assert!(
+        net.warnings.iter().any(|w| w.contains("supported maximum")),
+        "warnings: {:?}",
+        net.warnings
+    );
+    assert_eq!(net.transformers.len(), 1);
+}
+
+#[test]
+fn meta_block_is_kept_in_extras() {
+    let net = powerio_dist::parse_str(
+        r#"{"bus":{"b1":{}},"meta":{"license":"CC-BY-4.0"}}"#,
+        "bmopf-json",
+    )
+    .unwrap();
+    assert!(net.extras.contains_key("bmopf_meta"), "{:?}", net.extras);
+}

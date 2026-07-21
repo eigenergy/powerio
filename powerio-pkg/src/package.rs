@@ -702,7 +702,8 @@ impl NetworkPackage {
 
     /// Deserialize from `.pio.json`.
     pub fn from_json(text: &str) -> serde_json::Result<Self> {
-        let pkg: Self = serde_json::from_str(text)?;
+        // Tolerate a leading UTF-8 byte order mark, as the format readers do.
+        let pkg: Self = serde_json::from_str(text.trim_start_matches('\u{feff}'))?;
         if !Self::supports_schema_version(&pkg.schema_version) {
             return Err(<serde_json::Error as serde::de::Error>::custom(format!(
                 "unsupported .pio.json schema_version {}; this reader supports major version {}",
@@ -914,22 +915,21 @@ fn schema_major(version: &str) -> Option<u64> {
     // Accept a semver core `MAJOR.MINOR.PATCH` with an optional prerelease
     // (`-...`) or build (`+...`) tag: same-major additive versions load, so a
     // forward-compatible writer that stamps e.g. `0.2.0-rc.1` is not rejected.
-    let (core, suffix) = match version.split_once('-') {
-        Some((core, rest)) => match rest.split_once('+') {
-            Some((pre, build)) => (core, Some((Some(pre), Some(build)))),
-            None => (core, Some((Some(rest), None))),
-        },
-        None => match version.split_once('+') {
-            Some((core, build)) => (core, Some((None, Some(build)))),
-            None => (version, None),
-        },
+    // Split the build tag off first: `+` cannot appear in a prerelease, but a
+    // hyphen is legal inside build metadata (`1.0.0+build-x`), so splitting on
+    // `-` first would cut inside the build tag and reject a valid version.
+    let (rest, build) = match version.split_once('+') {
+        Some((rest, build)) => (rest, Some(build)),
+        None => (version, None),
     };
-    if let Some((pre, build)) = suffix {
-        if pre.is_some_and(|s| !valid_semver_suffix(s))
-            || build.is_some_and(|s| !valid_semver_suffix(s))
-        {
-            return None;
-        }
+    let (core, pre) = match rest.split_once('-') {
+        Some((core, pre)) => (core, Some(pre)),
+        None => (rest, None),
+    };
+    if pre.is_some_and(|s| !valid_semver_suffix(s))
+        || build.is_some_and(|s| !valid_semver_suffix(s))
+    {
+        return None;
     }
     let mut parts = core.split('.');
     let major = parts.next()?;
@@ -2266,4 +2266,20 @@ fn multiconductor_source_maps(
         }
     }
     entries
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn schema_major_parses_semver_suffixes() {
+        assert_eq!(super::schema_major("1.2.3"), Some(1));
+        assert_eq!(super::schema_major("1.0.0-rc.1"), Some(1));
+        // A hyphen inside build metadata is legal semver; splitting on `-`
+        // first used to cut inside the build tag and reject the version.
+        assert_eq!(super::schema_major("1.0.0+build-x"), Some(1));
+        assert_eq!(super::schema_major("1.0.0-rc-1+b-2"), Some(1));
+        assert_eq!(super::schema_major("1.0"), None);
+        assert_eq!(super::schema_major("1.0.0-"), None);
+        assert_eq!(super::schema_major("01.0.0"), None);
+    }
 }

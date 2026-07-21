@@ -40,6 +40,23 @@ pub fn parse_pmd_str(text: &str) -> Result<DistNetwork> {
             message: "top level is not an object".into(),
         });
     };
+    // This reader types the ENGINEERING model only. The MATHEMATICAL model
+    // shares the `data_model` marker but is index based and structurally
+    // unrelated; interpreting its sections as ENGINEERING would silently
+    // build a wrong network.
+    if let Some(dm) = doc.get("data_model").and_then(Value::as_str) {
+        if !dm.eq_ignore_ascii_case("ENGINEERING") {
+            return Err(Error::Json {
+                format: "PMD",
+                message: format!(
+                    "`data_model` is `{dm}`; this reader supports the ENGINEERING model \
+                     (convert MATHEMATICAL output back with \
+                     PowerModelsDistribution.transform_solution or export the ENGINEERING \
+                     model)"
+                ),
+            });
+        }
+    }
     let mut net = DistNetwork {
         source: Some(Arc::new(text.to_string())),
         source_format: Some(DistSourceFormat::PmdJson),

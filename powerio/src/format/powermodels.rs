@@ -450,13 +450,17 @@ pub(crate) fn parse_powermodels_json_source(
         message: "top level is not a JSON object".into(),
     })?;
 
-    let base_mva =
-        root.get("baseMVA")
-            .and_then(Value::as_f64)
-            .ok_or_else(|| Error::FormatRead {
-                format: FMT,
-                message: "missing numeric `baseMVA`".into(),
-            })?;
+    // `baseMVA` is every per-unit divisor here; zero, negative, or non-finite
+    // would silently poison the scaled quantities with NaN/Inf or flipped
+    // signs, so reject it at the door.
+    let base_mva = root
+        .get("baseMVA")
+        .and_then(Value::as_f64)
+        .filter(|b| b.is_finite() && *b > 0.0)
+        .ok_or_else(|| Error::FormatRead {
+            format: FMT,
+            message: "missing, nonpositive, or non-finite numeric `baseMVA`".into(),
+        })?;
     let per_unit = root
         .get("per_unit")
         .and_then(Value::as_bool)
@@ -544,9 +548,16 @@ fn f_or(v: &Value, key: &str, default: f64) -> f64 {
 fn uid(v: &Value, key: &str) -> usize {
     v.get(key).and_then(Value::as_u64).unwrap_or(0) as usize
 }
-/// A 0/1 status field; absent ⇒ in service.
+/// A 0/1 status field; absent ⇒ in service. Some producers write a JSON
+/// boolean instead of the MATPOWER 0/1 number; `as_f64` returns `None` for a
+/// bool, so without the explicit arm a `false` here would read back as in
+/// service.
 fn flag(v: &Value, key: &str) -> bool {
-    v.get(key).and_then(Value::as_f64) != Some(0.0)
+    match v.get(key) {
+        Some(Value::Bool(b)) => *b,
+        Some(value) => value.as_f64() != Some(0.0),
+        None => true,
+    }
 }
 
 fn bustype(code: i64) -> BusType {
@@ -804,12 +815,30 @@ fn read_gen(v: &Value, pscale: f64, base_mva: f64, per_unit: bool) -> Generator 
 fn read_cost(v: &Value, base_mva: f64, per_unit: bool) -> GenCost {
     // Keep non-numeric entries as NaN rather than dropping them: silently filtering
     // would shift every later coefficient's polynomial degree.
-    let coeffs_raw: Vec<f64> = v
+    let mut coeffs_raw: Vec<f64> = v
         .get("cost")
         .and_then(Value::as_array)
         .map(|a| a.iter().map(|c| c.as_f64().unwrap_or(f64::NAN)).collect())
         .unwrap_or_default();
-    let model = v.get("model").and_then(Value::as_u64).unwrap_or(2) as u8;
+    // An out-of-range model number must not wrap into 1/2 (`as u8` turns 257
+    // into Piecewise and rescales coefficients that were never per-unit);
+    // saturate into the unknown-model passthrough instead.
+    let model = v
+        .get("model")
+        .and_then(Value::as_u64)
+        .map_or(2, |m| u8::try_from(m).unwrap_or(u8::MAX));
+    // MATPOWER pads gencost rows to the matrix width with trailing zeros, and
+    // third-party JSON can retain that padding. Trim to the declared ncost
+    // before the per-unit unscale, as `cost_to_pu` does on the way out, so
+    // padding can't read as a higher-degree polynomial and mis-scale every
+    // coefficient.
+    let declared_ncost = v.get("ncost").and_then(Value::as_u64).map(|n| n as usize);
+    if let Some(n) = declared_ncost {
+        let keep = if model == 1 { n.saturating_mul(2) } else { n };
+        if keep < coeffs_raw.len() {
+            coeffs_raw.truncate(keep);
+        }
+    }
     let k = coeffs_raw.len();
     // Undo PowerModels' per-unit cost scaling for the neutral MW basis (the
     // inverse of the writer's per-unit rescale); a non-per-unit source is read
@@ -826,10 +855,7 @@ fn read_cost(v: &Value, base_mva: f64, per_unit: bool) -> GenCost {
         model,
         startup: f(v, "startup"),
         shutdown: f(v, "shutdown"),
-        ncost: v
-            .get("ncost")
-            .and_then(Value::as_u64)
-            .map_or(default_ncost, |n| n as usize),
+        ncost: declared_ncost.unwrap_or(default_ncost),
         coeffs,
     }
 }
@@ -961,6 +987,68 @@ mod tests {
 
     fn approx(a: f64, b: f64) -> bool {
         (a - b).abs() <= 1e-9 * a.abs().max(b.abs()).max(1.0)
+    }
+
+    #[test]
+    fn boolean_status_fields_read_out_of_service() {
+        let doc = r#"{"baseMVA":100.0,"per_unit":true,
+            "bus":{"1":{"bus_i":1,"bus_type":3,"vm":1.0,"va":0.0,"base_kv":345.0},
+                   "2":{"bus_i":2,"bus_type":1,"vm":1.0,"va":0.0,"base_kv":345.0}},
+            "branch":{"1":{"f_bus":1,"t_bus":2,"br_r":0.01,"br_x":0.1,"br_status":false}},
+            "gen":{"1":{"gen_bus":1,"pg":0.5,"gen_status":false}}}"#;
+        let net = parse_powermodels_json(doc).unwrap();
+        assert!(
+            !net.branches[0].in_service,
+            "br_status: false must read out of service"
+        );
+        assert!(
+            !net.generators[0].in_service,
+            "gen_status: false must read out of service"
+        );
+    }
+
+    #[test]
+    fn nonpositive_base_mva_is_rejected() {
+        for base in ["0.0", "-100.0", "1e999"] {
+            let doc = format!(
+                r#"{{"baseMVA":{base},"bus":{{"1":{{"bus_i":1,"bus_type":3,"vm":1.0,"va":0.0,"base_kv":345.0}}}}}}"#
+            );
+            assert!(
+                parse_powermodels_json(&doc).is_err(),
+                "baseMVA {base} must be rejected"
+            );
+        }
+    }
+
+    #[test]
+    fn padded_cost_rows_trim_to_ncost_before_unscaling() {
+        // MATPOWER pads gencost rows to the matrix width; the trailing zero
+        // here is padding, and ncost declares the real quadratic. Untrimmed,
+        // the per-unit unscale would treat the row as cubic and divide every
+        // coefficient by an extra factor of base.
+        let v: Value = serde_json::json!({
+            "gen_bus": 1, "model": 2, "ncost": 3,
+            "cost": [1.0, 1.0, 1.0, 0.0]
+        });
+        let cost = read_cost(&v, 100.0, true);
+        assert_eq!(cost.ncost, 3);
+        assert_eq!(cost.coeffs.len(), 3);
+        assert!(approx(cost.coeffs[0], 1e-4));
+        assert!(approx(cost.coeffs[1], 1e-2));
+        assert!(approx(cost.coeffs[2], 1.0));
+    }
+
+    #[test]
+    fn out_of_range_cost_model_does_not_wrap_into_rescaling() {
+        // 257 as u8 would wrap to 1 (piecewise) and rescale coefficients that
+        // were never per-unit; it must saturate into the unknown-model
+        // passthrough instead.
+        let v: Value = serde_json::json!({
+            "gen_bus": 1, "model": 257,
+            "cost": [10.0, 5.0]
+        });
+        let cost = read_cost(&v, 100.0, true);
+        assert_eq!(cost.coeffs, vec![10.0, 5.0]);
     }
 
     #[test]

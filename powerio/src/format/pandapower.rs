@@ -370,7 +370,12 @@ pub(crate) fn parse_pandapower_source(
         for row in trafo_frame.rows() {
             let from = bus_ref("trafo", &row, "hv_bus", &bus_of_pp)?;
             let to = bus_ref("trafo", &row, "lv_bus", &bus_of_pp)?;
-            let sn = row.f_or("sn_mva", base_mva);
+            // `sn` divides the impedance below; a zero, negative, or
+            // non-finite rating would put NaN/Inf straight into Branch.r/x.
+            let sn = row
+                .f_finite("sn_mva")
+                .filter(|v| *v > 0.0)
+                .unwrap_or(base_mva);
             let par = parallel_or_one(&row);
             let pfe_mw = row.f_or("pfe_kw", 0.0) * 1e-3 * par;
             let g_mag = pfe_mw / base_mva;
@@ -1903,7 +1908,10 @@ fn written_kv(base_kv: f64) -> f64 {
 fn value_f64(v: &Value) -> Option<f64> {
     match v {
         Value::Number(_) => v.as_f64(),
-        Value::String(s) => s.parse().ok(),
+        // `f64::from_str` accepts "nan"/"inf"/"-infinity"; a string cell must
+        // not smuggle a non-finite value into a numeric column that a JSON
+        // number could never carry.
+        Value::String(s) => s.parse().ok().filter(|f: &f64| f.is_finite()),
         _ => None,
     }
 }
