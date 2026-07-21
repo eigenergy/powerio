@@ -2038,6 +2038,7 @@ dependencies = [
  "ratatui",
  "serde_json",
  "sprs",
+ "tempfile",
  "tracing",
  "tracing-subscriber",
  "walkdir",

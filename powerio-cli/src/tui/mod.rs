@@ -288,21 +288,18 @@ fn spawn_batch(app: &mut App) {
         app.set_status("nothing to export");
         return;
     }
-    let paths: Vec<PathBuf> = targets
-        .iter()
-        .filter_map(|i| app.cases.get(*i).map(|c| c.path.clone()))
-        .collect();
-    app.batch = paths
-        .iter()
-        .map(|p| BatchJob {
-            case_name: p
-                .file_stem()
-                .and_then(|s| s.to_str())
-                .unwrap_or("?")
-                .to_string(),
-            progress: BatchProgress::Pending,
-        })
-        .collect();
+    let mut paths = Vec::with_capacity(targets.len());
+    let mut jobs = Vec::with_capacity(targets.len());
+    for i in &targets {
+        if let Some(c) = app.cases.get(*i) {
+            paths.push(c.path.clone());
+            jobs.push(BatchJob {
+                case_name: c.display_name.clone(),
+                progress: BatchProgress::Pending,
+            });
+        }
+    }
+    app.batch = jobs;
     let pipeline = Pipeline {
         matrices: app.matrices_to_export.clone(),
         options: powerio_matrix::matrix::BuildOptions {
@@ -324,14 +321,17 @@ fn spawn_batch(app: &mut App) {
                 case_idx: i,
                 progress: BatchProgress::Running(0.05),
             });
-            let parsed = match powerio_matrix::parse_matpower_file(path) {
-                Ok(p) => p,
+            let loaded = match crate::cases::load_network(path) {
+                Ok(loaded) => {
+                    log.push_parse_warnings(path, &loaded.warnings);
+                    loaded
+                }
                 Err(e) => {
                     let _ = tx.send(WorkerEvent::Progress {
                         case_idx: i,
-                        progress: BatchProgress::Failed(format!("parse: {e}")),
+                        progress: BatchProgress::Failed(format!("parse: {e:#}")),
                     });
-                    log.push(format!("ERROR parse {}: {e}", path.display()));
+                    log.push(format!("ERROR parse {}: {e:#}", path.display()));
                     continue;
                 }
             };
@@ -341,7 +341,7 @@ fn spawn_batch(app: &mut App) {
             });
             let mut p = pipeline.clone();
             p.source_file = Some(path.clone());
-            match p.run(&parsed, &out_dir) {
+            match p.run(&loaded.network, &out_dir) {
                 Ok(out) => {
                     log.push(format!(
                         "INFO  exported {} ({} files)",
@@ -531,5 +531,34 @@ mod tests {
             let next = app.inspect.as_ref().unwrap().kind;
             assert_ne!(initial, next);
         }
+    }
+
+    #[test]
+    fn refresh_cases_on_missing_dir_is_empty() {
+        let tmp = tempfile::tempdir().unwrap();
+        let mut app = App::new(
+            tmp.path().join("nope"),
+            std::env::temp_dir(),
+            LogBuf::default(),
+        );
+        app.refresh_cases();
+        assert!(app.cases.is_empty());
+    }
+
+    #[test]
+    fn refresh_cases_uses_relative_display_names() {
+        let tmp = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(tmp.path().join("sub")).unwrap();
+        std::fs::write(tmp.path().join("case9.m"), "").unwrap();
+        std::fs::write(tmp.path().join("sub").join("case9.raw"), "").unwrap();
+        let mut app = App::new(
+            tmp.path().to_path_buf(),
+            std::env::temp_dir(),
+            LogBuf::default(),
+        );
+        app.refresh_cases();
+        let names: Vec<_> = app.cases.iter().map(|c| c.display_name.as_str()).collect();
+        let sub = format!("sub{}case9.raw", std::path::MAIN_SEPARATOR);
+        assert_eq!(names, ["case9.m", sub.as_str()]);
     }
 }

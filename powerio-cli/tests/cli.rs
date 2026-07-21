@@ -263,3 +263,162 @@ fn family_mismatch_exits_before_writing_output() {
         out_path.display()
     );
 }
+
+#[test]
+fn batch_scans_directory_recursively_and_skips_unparseable_files() {
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path();
+    let nested = root.join("a").join("b").join("c");
+    std::fs::create_dir_all(&nested).unwrap();
+    std::fs::copy(repo_file("tests/data/case9.m"), nested.join("case9.m")).unwrap();
+    std::fs::copy(
+        repo_file("tests/data/dist/micro/fourwire_linecode.dss"),
+        root.join("feeder.dss"),
+    )
+    .unwrap();
+    std::fs::write(root.join("junk.json"), r#"{"not": "a case"}"#).unwrap();
+    let hidden = root.join(".hidden");
+    std::fs::create_dir_all(&hidden).unwrap();
+    std::fs::copy(repo_file("tests/data/case14.m"), hidden.join("case14.m")).unwrap();
+    let out_dir = root.join("out");
+    std::fs::create_dir_all(&out_dir).unwrap();
+    std::fs::copy(repo_file("tests/data/case30.m"), out_dir.join("case30.m")).unwrap();
+
+    let out = run(&[
+        "batch",
+        "-i",
+        root.to_str().unwrap(),
+        "-o",
+        out_dir.to_str().unwrap(),
+    ]);
+    assert_success(&out);
+    let stderr = String::from_utf8_lossy(&out.stderr);
+
+    assert!(out_dir.join("case9_bprime.mtx").is_file(), "{stderr}");
+    // Output files are named by the circuit name inside the case (the dss
+    // fixture's circuit is "fourwire"), not by the file stem.
+    assert!(
+        out_dir.join("fourwire_bprime.mtx").is_file(),
+        "lowered dss case missing:\n{stderr}"
+    );
+    assert!(stderr.contains("junk.json"), "no skip warning:\n{stderr}");
+    assert!(
+        !out_dir.join("case14_bprime.mtx").exists(),
+        "hidden directory was scanned:\n{stderr}"
+    );
+    assert!(
+        !out_dir.join("case30_bprime.mtx").exists(),
+        "output directory was scanned:\n{stderr}"
+    );
+}
+
+#[test]
+fn batch_scan_discovers_bmopf_json() {
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path();
+    let json_path = root.join("sub").join("feeder.json");
+    std::fs::create_dir_all(json_path.parent().unwrap()).unwrap();
+    let dss = repo_file("tests/data/dist/micro/fourwire_linecode.dss");
+    let out = run(&[
+        "convert",
+        dss.to_str().unwrap(),
+        "--to",
+        "bmopf-json",
+        "-o",
+        json_path.to_str().unwrap(),
+    ]);
+    assert_success(&out);
+
+    let out_dir = root.join("out");
+    let out = run(&[
+        "batch",
+        "-i",
+        root.to_str().unwrap(),
+        "-o",
+        out_dir.to_str().unwrap(),
+    ]);
+    assert_success(&out);
+    assert!(
+        out_dir.join("fourwire_bprime.mtx").is_file(),
+        "bmopf json case missing:\n{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+}
+
+#[test]
+fn batch_scan_skips_unlowerable_dss_but_explicit_input_fails() {
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path();
+    let dss = repo_file("tests/data/dist/micro/xfmr_single_phase.dss");
+    std::fs::copy(&dss, root.join("xfmr.dss")).unwrap();
+    std::fs::copy(repo_file("tests/data/case9.m"), root.join("case9.m")).unwrap();
+    let out_dir = root.join("out");
+
+    let out = run(&[
+        "batch",
+        "-i",
+        root.to_str().unwrap(),
+        "-o",
+        out_dir.to_str().unwrap(),
+    ]);
+    assert_success(&out);
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(out_dir.join("case9_bprime.mtx").is_file(), "{stderr}");
+    assert!(stderr.contains("xfmr.dss"), "no skip warning:\n{stderr}");
+
+    let out = run(&[
+        "batch",
+        "-i",
+        dss.to_str().unwrap(),
+        "-o",
+        out_dir.to_str().unwrap(),
+    ]);
+    assert_failure(&out);
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains("lower") && stderr.contains("balanced"),
+        "expected a lowering diagnostic:\n{stderr}"
+    );
+}
+
+#[test]
+fn batch_scan_with_no_case_files_reports_supported_extensions() {
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path();
+    std::fs::write(root.join("notes.txt"), "nothing here").unwrap();
+
+    let out = run(&[
+        "batch",
+        "-i",
+        root.to_str().unwrap(),
+        "-o",
+        root.to_str().unwrap(),
+    ]);
+    assert_failure(&out);
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains("no case files") && stderr.contains(".epc"),
+        "expected the extension list:\n{stderr}"
+    );
+}
+
+#[test]
+fn batch_scan_where_nothing_loads_fails() {
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path();
+    std::fs::write(root.join("junk.json"), r#"{"not": "a case"}"#).unwrap();
+
+    let out = run(&[
+        "batch",
+        "-i",
+        root.to_str().unwrap(),
+        "-o",
+        root.join("out").to_str().unwrap(),
+    ]);
+    assert_failure(&out);
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains("loaded as case files"),
+        "expected the zero-loaded error:\n{stderr}"
+    );
+}

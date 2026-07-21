@@ -10,7 +10,6 @@ use std::path::{Path, PathBuf};
 
 use anyhow::Context;
 use clap::{Parser, Subcommand, ValueEnum};
-use powerio_matrix::format::routing::{Detection, JsonClass, SourceFormat as DetectedFormat};
 use powerio_matrix::io::gridfm::{GridfmOptions, numbered_snapshots, write_gridfm_batch};
 use powerio_matrix::matrix::{BuildOptions, DcConvention, Scheme, sddm_check};
 use powerio_matrix::pipeline::{MatrixKind, Pipeline, RhsKind};
@@ -20,7 +19,10 @@ use powerio_pkg::{NetworkPackage, Origin, READ_GRIDFM_FIDELITY_WARNING, SourceDe
 use powerio_prob::matrix::{DcOpfBundleMetadata, DcOpfBundleOptions, write_dcopf_bundle};
 use powerio_prob::{DcOpfOptions, Units, build_dc_opf_instance};
 use serde_json::json;
+mod cases;
 mod tui;
+
+use cases::{infer_input_family, looks_like_distribution_input};
 
 const SUMMARY_SCHEMA_VERSION: &str = "0.1";
 
@@ -35,16 +37,18 @@ struct Cli {
 enum Command {
     /// Launch the interactive TUI (default if no subcommand is given).
     Tui {
-        /// Directory holding `.m` MATPOWER cases.
+        /// Directory scanned recursively for case files (.m, .raw, .aux,
+        /// .epc, .pwb, .json, .dss).
         #[arg(short, long)]
         data_dir: Option<PathBuf>,
         /// Default output directory for batch exports.
         #[arg(short, long)]
         out_dir: Option<PathBuf>,
     },
-    /// Batch export matrix datasets for every `.m` case in a directory.
+    /// Batch export matrix datasets for every case file under a directory.
     Batch {
-        /// Input directory (or single `.m` file).
+        /// Input directory (scanned recursively for case files) or a single
+        /// case file.
         #[arg(short, long)]
         input: PathBuf,
         /// Output directory.
@@ -757,25 +761,18 @@ fn run_batch(
     rhs: RhsKind,
     seed: u64,
 ) -> anyhow::Result<()> {
-    let cases: Vec<PathBuf> = if input.is_file() {
-        vec![input.to_path_buf()]
+    let (found, scanned) = if input.is_file() {
+        (vec![input.to_path_buf()], false)
     } else {
-        walkdir::WalkDir::new(input)
-            .max_depth(2)
-            .into_iter()
-            .filter_map(std::result::Result::ok)
-            .filter(|e| e.file_type().is_file())
-            .filter(|e| {
-                e.path()
-                    .extension()
-                    .is_some_and(|x| x.eq_ignore_ascii_case("m"))
-            })
-            .map(|e| e.path().to_path_buf())
-            .collect()
+        (cases::discover_cases(input, Some(output)), true)
     };
 
-    if cases.is_empty() {
-        anyhow::bail!("no `.m` files found under {}", input.display());
+    if found.is_empty() {
+        anyhow::bail!(
+            "no case files ({}) found under {}",
+            cases::CASE_EXTENSIONS_LABEL,
+            input.display()
+        );
     }
 
     let pipeline = Pipeline {
@@ -789,19 +786,40 @@ fn run_batch(
         source_file: None,
     };
 
-    for case_path in &cases {
-        let mpc = powerio_matrix::parse_matpower_file(case_path)
-            .with_context(|| format!("parse {}", case_path.display()))?;
+    let mut exported = 0usize;
+    for case_path in &found {
+        let loaded = match cases::load_network(case_path) {
+            Ok(loaded) => loaded,
+            // A recursive scan sweeps up files that merely share an extension
+            // with a case format (stray .json in particular); skip them
+            // instead of aborting the run.
+            Err(e) if scanned => {
+                tracing::warn!(case = %case_path.display(), error = format!("{e:#}"), "skipping");
+                continue;
+            }
+            Err(e) => return Err(e),
+        };
+        for w in &loaded.warnings {
+            tracing::warn!(case = %case_path.display(), "{w}");
+        }
         let mut p = pipeline.clone();
         p.source_file = Some(case_path.clone());
         let outputs = p
-            .run(&mpc, output)
+            .run(&loaded.network, output)
             .with_context(|| format!("export {}", case_path.display()))?;
+        exported += 1;
         tracing::info!(
             case = %outputs.case_name,
             n = outputs.metadata.n_buses,
             files = outputs.files.len(),
             "exported"
+        );
+    }
+    if exported == 0 {
+        anyhow::bail!(
+            "no files under {} loaded as case files ({})",
+            input.display(),
+            cases::CASE_EXTENSIONS_LABEL
         );
     }
     Ok(())
@@ -1325,50 +1343,6 @@ fn looks_like_gridfm_dir(input: &Path) -> bool {
                 .count()
                 == 1
         })
-}
-
-fn looks_like_distribution_input(input: &Path) -> anyhow::Result<bool> {
-    Ok(infer_input_family(input)?.unwrap_or(false))
-}
-
-/// Infer the case family from clear extensions or, for `.json`, the shared
-/// JSON shape classifier. `Some(true)` is distribution, `Some(false)` is
-/// transmission, and `None` means the extension carries no family signal.
-fn infer_input_family(input: &Path) -> anyhow::Result<Option<bool>> {
-    let ext = input
-        .extension()
-        .and_then(|e| e.to_str())
-        .map(str::to_ascii_lowercase);
-    match ext.as_deref() {
-        Some("m" | "raw" | "aux" | "epc" | "pwb") => return Ok(Some(false)),
-        Some("dss") => return Ok(Some(true)),
-        Some("json") => {}
-        _ => return Ok(None),
-    }
-    let text = std::fs::read_to_string(input)
-        .with_context(|| format!("reading JSON format markers from {}", input.display()))?;
-    match powerio_matrix::format::routing::classify_json_text(&text) {
-        JsonClass::Package => anyhow::bail!(
-            "{} is a .pio.json package envelope, not a case file; the `package` \
-             subcommand writes envelopes, and the bindings read them \
-             (powerio.Package.from_json in Python, read_package in Julia)",
-            input.display()
-        ),
-        JsonClass::Case(Detection::Known(DetectedFormat::Distribution(_))) => Ok(Some(true)),
-        JsonClass::Case(Detection::Known(DetectedFormat::Transmission(_))) => Ok(Some(false)),
-        JsonClass::Case(Detection::Ambiguous) => anyhow::bail!(
-            "ambiguous JSON markers in {}; pass --from to choose a format",
-            input.display()
-        ),
-        JsonClass::Case(Detection::Unknown) => anyhow::bail!(
-            "cannot infer JSON format for {}; pass --from to choose a format",
-            input.display()
-        ),
-        JsonClass::Case(Detection::Known(_)) => anyhow::bail!(
-            "unrecognized JSON format family in {}; pass --from to choose a format",
-            input.display()
-        ),
-    }
 }
 
 fn run_convert(
