@@ -703,7 +703,15 @@ impl NetworkPackage {
     /// Deserialize from `.pio.json`.
     pub fn from_json(text: &str) -> serde_json::Result<Self> {
         // Tolerate a leading UTF-8 byte order mark, as the format readers do.
-        let pkg: Self = serde_json::from_str(text.trim_start_matches('\u{feff}'))?;
+        // Name the format in the error: a document the JSON classifier calls a
+        // package envelope (right `model_kind` and `model` markers) can still
+        // fail here on a missing required field, and the bare serde message
+        // ("missing field `producer`") does not say what it failed to be.
+        let pkg: Self = serde_json::from_str(text.trim_start_matches('\u{feff}')).map_err(|e| {
+            <serde_json::Error as serde::de::Error>::custom(format!(
+                "invalid .pio.json package envelope: {e}"
+            ))
+        })?;
         if !Self::supports_schema_version(&pkg.schema_version) {
             return Err(<serde_json::Error as serde::de::Error>::custom(format!(
                 "unsupported .pio.json schema_version {}; this reader supports major version {}",
@@ -2277,9 +2285,21 @@ mod tests {
         // A hyphen inside build metadata is legal semver; splitting on `-`
         // first used to cut inside the build tag and reject the version.
         assert_eq!(super::schema_major("1.0.0+build-x"), Some(1));
+        assert_eq!(super::schema_major("0.2.0+2026-07-21"), Some(0));
         assert_eq!(super::schema_major("1.0.0-rc-1+b-2"), Some(1));
         assert_eq!(super::schema_major("1.0"), None);
         assert_eq!(super::schema_major("1.0.0-"), None);
         assert_eq!(super::schema_major("01.0.0"), None);
+    }
+
+    #[test]
+    fn envelope_shaped_rejection_names_the_format() {
+        // Classifier-recognized envelope markers with a missing required
+        // field: the failure must say what the document failed to be.
+        let err = super::NetworkPackage::from_json(
+            r#"{"model_kind":"balanced","model":{"kind":"balanced"}}"#,
+        )
+        .unwrap_err();
+        assert!(err.to_string().contains(".pio.json"), "got: {err}");
     }
 }
