@@ -92,6 +92,11 @@ impl Goc3Document {
     }
 
     /// Map bus UIDs to the external bus IDs assigned by the balanced reader.
+    ///
+    /// Uid uniqueness is validated by the parse that produced this document
+    /// (`read_buses` rejects a duplicate bus uid), so the map here cannot
+    /// silently collapse entries; a document constructed another way has no
+    /// such guarantee.
     pub fn bus_ids(&self) -> Result<HashMap<String, BusId>> {
         bus_id_by_uid(&section(self.network()?, "bus")?)
     }
@@ -623,9 +628,21 @@ fn device_rows(network: &Map<String, Value>) -> Result<Vec<Goc3DeviceRecord<'_>>
     let mut rows = Vec::new();
     let mut generators = 0usize;
     let mut loads = 0usize;
+    // Time-series bounds and costs are joined back onto devices by uid
+    // (`device_time_series` is last-write-wins on its map), so a repeated uid
+    // would silently hand one device the other's series; reject it the way
+    // `read_buses` rejects a repeated bus uid.
+    let mut seen_uids = std::collections::HashSet::new();
     for item in section(network, "simple_dispatchable_device")? {
         let obj = item_object(item, "simple_dispatchable_device")?;
         let uid = item_uid(item, obj);
+        if let Some(uid) = &uid {
+            if !seen_uids.insert(uid.clone()) {
+                return Err(bad(format!(
+                    "duplicate simple_dispatchable_device uid `{uid}`"
+                )));
+            }
+        }
         let (table, row) = match string(obj, "device_type").unwrap_or("producer") {
             "producer" => {
                 generators += 1;
@@ -928,4 +945,25 @@ fn records<'a>(parent: &'a Map<String, Value>, name: &'static str) -> Result<Vec
             })
             .collect()
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn duplicate_device_uid_is_rejected() {
+        // Time-series bounds and costs join back onto devices by uid; a
+        // repeated uid would silently hand one device the other's series.
+        let network: Map<String, Value> = serde_json::from_str(
+            r#"{"simple_dispatchable_device":[
+                {"uid":"sd1","device_type":"producer"},
+                {"uid":"sd1","device_type":"consumer"}]}"#,
+        )
+        .unwrap();
+        let Err(err) = device_rows(&network) else {
+            panic!("duplicate uid must be rejected")
+        };
+        assert!(err.to_string().contains("duplicate"), "got: {err}");
+    }
 }

@@ -251,7 +251,10 @@ fn draw_browse_detail(frame: &mut Frame, app: &App, area: Rect) {
         v
     } else {
         vec![Line::from(Span::styled(
-            "No `.m` cases found in data directory.",
+            format!(
+                "No case files ({}) found in data directory.",
+                crate::cases::CASE_EXTENSIONS_LABEL
+            ),
             warn(),
         ))]
     };

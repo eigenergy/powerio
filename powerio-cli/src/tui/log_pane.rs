@@ -30,6 +30,12 @@ impl LogBuf {
         g.push_back(line.into());
     }
 
+    pub fn push_parse_warnings(&self, path: &std::path::Path, warnings: &[String]) {
+        for w in warnings {
+            self.push(format!("WARN  parse {}: {w}", path.display()));
+        }
+    }
+
     pub fn snapshot(&self) -> Vec<String> {
         self.inner
             .lock()

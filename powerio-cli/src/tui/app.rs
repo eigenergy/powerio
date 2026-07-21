@@ -207,32 +207,24 @@ impl App {
     }
 
     pub fn refresh_cases(&mut self) {
-        let mut entries = walkdir::WalkDir::new(&self.data_dir)
-            .max_depth(2)
+        // The discovered order is already sorted by path, which groups
+        // subfolders; display names keep the relative path and extension so
+        // same-stem cases in different formats stay distinguishable.
+        self.cases = crate::cases::discover_cases(&self.data_dir, Some(&self.out_dir))
             .into_iter()
-            .filter_map(std::result::Result::ok)
-            .filter(|e| e.file_type().is_file())
-            .filter(|e| {
-                e.path()
-                    .extension()
-                    .is_some_and(|x| x.eq_ignore_ascii_case("m"))
-            })
-            .map(|e| {
-                let path = e.path().to_path_buf();
+            .map(|path| {
                 let display_name = path
-                    .file_stem()
-                    .and_then(|s| s.to_str())
-                    .unwrap_or("?")
-                    .to_string();
+                    .strip_prefix(&self.data_dir)
+                    .unwrap_or(&path)
+                    .to_string_lossy()
+                    .into_owned();
                 CaseEntry {
                     path,
                     display_name,
                     parsed: ParseStatus::NotLoaded,
                 }
             })
-            .collect::<Vec<_>>();
-        entries.sort_by(|a, b| a.display_name.cmp(&b.display_name));
-        self.cases = entries;
+            .collect();
         if self.selected >= self.cases.len() {
             self.selected = self.cases.len().saturating_sub(1);
         }
@@ -241,24 +233,28 @@ impl App {
     pub fn parse_selected(&mut self) {
         if let Some(entry) = self.cases.get_mut(self.selected) {
             if matches!(entry.parsed, ParseStatus::NotLoaded) {
-                entry.parsed = match powerio_matrix::parse_matpower_file(&entry.path) {
-                    Ok(case) => ParseStatus::Loaded {
-                        n_buses: case.buses.len(),
-                        n_branches: case.branches.len(),
-                        base_mva: case.base_mva,
-                    },
-                    Err(e) => ParseStatus::Failed(e.to_string()),
+                entry.parsed = match crate::cases::load_network(&entry.path) {
+                    Ok(loaded) => {
+                        self.log.push_parse_warnings(&entry.path, &loaded.warnings);
+                        ParseStatus::Loaded {
+                            n_buses: loaded.network.buses.len(),
+                            n_branches: loaded.network.branches.len(),
+                            base_mva: loaded.network.base_mva,
+                        }
+                    }
+                    Err(e) => ParseStatus::Failed(format!("{e:#}")),
                 };
             }
         }
     }
 
-    pub fn open_inspect(&mut self) -> powerio_matrix::Result<()> {
+    pub fn open_inspect(&mut self) -> anyhow::Result<()> {
         let Some(entry) = self.cases.get(self.selected) else {
             return Ok(());
         };
-        let case = powerio_matrix::parse_matpower_file(&entry.path)?;
-        self.inspect = Some(self.build_inspect(case)?);
+        let loaded = crate::cases::load_network(&entry.path)?;
+        self.log.push_parse_warnings(&entry.path, &loaded.warnings);
+        self.inspect = Some(self.build_inspect(loaded.network)?);
         self.previous_screen = self.screen;
         self.screen = Screen::Inspect;
         Ok(())

@@ -462,7 +462,8 @@ pub fn parse_file(path: impl AsRef<std::path::Path>, from: Option<&str>) -> Resu
         let text = std::fs::read_to_string(path)?;
         let stem = path.file_stem().and_then(|s| s.to_str());
         let mut warnings = Vec::new();
-        let network = pslf::parse_pslf_source(Arc::new(text), stem, &mut warnings)?;
+        let source = strip_bom(Arc::new(text), &mut warnings);
+        let network = pslf::parse_pslf_source(source, stem, &mut warnings)?;
         reject_empty_case(&network, "PSLF .epc")?;
         return Ok(Parsed::without_document(network, warnings));
     }
@@ -521,6 +522,22 @@ pub fn parse_file(path: impl AsRef<std::path::Path>, from: Option<&str>) -> Resu
     read_source(Arc::new(text), fmt, stem)
 }
 
+/// Strip a leading UTF-8 byte order mark before the reader sees the text.
+/// Windows tooling saves case files with one, and every text reader here
+/// (serde_json first among them) treats it as garbage in the first token. The
+/// retained source loses the mark, so a same-format echo differs by exactly
+/// those three bytes; the warning itemizes that per the fidelity policy.
+fn strip_bom(source: Arc<String>, warnings: &mut Vec<String>) -> Arc<String> {
+    let Some(stripped) = source.strip_prefix('\u{feff}') else {
+        return source;
+    };
+    warnings.push(
+        "leading UTF-8 byte order mark removed; a same-format write returns the text without it"
+            .to_owned(),
+    );
+    Arc::new(stripped.to_owned())
+}
+
 /// Read an owned `source` buffer as `fmt`, using `name_hint` (e.g. the file
 /// stem) when the format carries no name of its own. The single format→reader
 /// map: [`parse_file`] and [`parse_str`] both funnel through it, so every format
@@ -530,6 +547,7 @@ pub fn parse_file(path: impl AsRef<std::path::Path>, from: Option<&str>) -> Resu
 /// readers that report fidelity loss append to it.
 fn read_source(source: Arc<String>, fmt: TargetFormat, name_hint: Option<&str>) -> Result<Parsed> {
     let mut warnings = Vec::new();
+    let source = strip_bom(source, &mut warnings);
     let mut document = None;
     let net = match fmt {
         TargetFormat::Matpower => matpower::parse_matpower_source(source, name_hint),
@@ -673,14 +691,26 @@ fn transmission_json_target(format: TransmissionFormat) -> Result<TargetFormat> 
 /// [`Error::UnknownFormat`] if `format` is unrecognized; the reader's own
 /// [`Error`] on malformed input.
 pub fn parse_str(text: &str, format: &str) -> Result<Parsed> {
+    parse_str_with_name(text, format, None)
+}
+
+/// [`parse_str`] with a name hint for formats that carry no name of their own
+/// (the role the file stem plays in [`parse_file`]). Lets a caller that already
+/// read a file's text keep the stem-derived case name without going back
+/// through the filesystem.
+///
+/// # Errors
+/// As [`parse_str`].
+pub fn parse_str_with_name(text: &str, format: &str, name_hint: Option<&str>) -> Result<Parsed> {
     if is_pslf_name(format) {
         let mut warnings = Vec::new();
-        let network = pslf::parse_pslf_source(Arc::new(text.to_owned()), None, &mut warnings)?;
+        let source = strip_bom(Arc::new(text.to_owned()), &mut warnings);
+        let network = pslf::parse_pslf_source(source, name_hint, &mut warnings)?;
         reject_empty_case(&network, "PSLF .epc")?;
         return Ok(Parsed::without_document(network, warnings));
     }
     let fmt = target_format_from_name(format).ok_or_else(|| unknown_source_format(format))?;
-    read_source(Arc::new(text.to_owned()), fmt, None)
+    read_source(Arc::new(text.to_owned()), fmt, name_hint)
 }
 
 /// Output of a parse: the network plus the reader's fidelity warnings,
@@ -1368,6 +1398,26 @@ mod tests {
         // A genuinely unknown token still echoes plainly.
         let err = parse_str("anything", "nonesuch").unwrap_err();
         assert!(err.to_string().contains("nonesuch"));
+    }
+
+    #[test]
+    fn byte_order_mark_is_stripped_and_warned() {
+        let case = "\u{feff}function mpc = t\n\
+                    mpc.version = '2';\n\
+                    mpc.baseMVA = 100;\n\
+                    mpc.bus = [1 3 0 0 0 0 1 1.0 0 345 1 1.1 0.9;];\n\
+                    mpc.gen = [];\n\
+                    mpc.branch = [];\n";
+        let parsed = parse_str(case, "matpower").unwrap();
+        assert_eq!(parsed.network.buses.len(), 1);
+        assert!(
+            parsed
+                .warnings
+                .iter()
+                .any(|w| w.contains("byte order mark")),
+            "warnings: {:?}",
+            parsed.warnings
+        );
     }
 
     #[test]

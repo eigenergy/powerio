@@ -153,13 +153,20 @@ fn config(v: Option<&Value>, what: &str, warnings: &mut Vec<String>) -> Configur
     }
 }
 
+/// The largest conductor index a `prefix_i_j` matrix key may carry. The
+/// largest index seen sizes a dense n×n allocation in [`flat_matrix`], so an
+/// unbounded key (a few bytes of JSON) could demand gigabytes; no physical
+/// conductor bundle comes near this bound. An oversized index makes the key
+/// unrecognized, so it lands in extras with the malformed-key warning.
+const MAX_MATRIX_INDEX: usize = 64;
+
 /// Parses the `_i_j` tail of a `prefix_i_j` matrix key (1 based). None
 /// when the key is not a well formed entry for this prefix.
 fn matrix_indices(key: &str, prefix: &str) -> Option<(usize, usize)> {
     let rest = key.strip_prefix(prefix)?.strip_prefix('_')?;
     let (i, j) = rest.split_once('_')?;
     let (i, j) = (i.parse::<usize>().ok()?, j.parse::<usize>().ok()?);
-    (i >= 1 && j >= 1).then_some((i, j))
+    (i >= 1 && j >= 1 && i <= MAX_MATRIX_INDEX && j <= MAX_MATRIX_INDEX).then_some((i, j))
 }
 
 /// Collects `prefix_i_j` keys into a square matrix; `n` is the largest
@@ -253,8 +260,16 @@ impl Reader<'_> {
                 "shunt" => self.shunts(items),
                 "voltage_source" => self.sources(items),
                 "transformer" => self.transformers(items),
-                // `meta` is provenance, not network data; the writer regenerates it.
-                "name" | "meta" => {}
+                "name" => {}
+                // `meta` is provenance (license, authors, generator tool),
+                // with no typed slot in the model. Stash it whole, the way the
+                // PMD reader stashes `pmd_settings`, so a read keeps it; the
+                // BMOPF writer still regenerates its own `meta` block.
+                "meta" => {
+                    self.net
+                        .extras
+                        .insert("bmopf_meta".into(), Value::Object(items.clone()));
+                }
                 other => {
                     self.net.warnings.push(format!(
                         "top level `{other}` is outside the schema; kept untyped"
@@ -523,6 +538,17 @@ impl Reader<'_> {
                 "terminal_map_from",
                 "terminal_map_to",
             ];
+            // The schema requires `length`; a missing one becomes NaN in the
+            // model, which every impedance computation downstream inherits,
+            // so name the gap the way the transformer reader names a missing
+            // s_rating instead of letting the NaN travel silently.
+            let length = o.get("length").map_or(f64::NAN, f);
+            if !length.is_finite() {
+                self.net.warnings.push(format!(
+                    "line {name}: `length` missing or non-finite; impedances derived from \
+                     this line are undefined"
+                ));
+            }
             self.net.lines.push(DistLine {
                 name: name.clone(),
                 bus_from: string(o.get("bus_from")),
@@ -530,7 +556,7 @@ impl Reader<'_> {
                 terminal_map_from: strings(o.get("terminal_map_from")),
                 terminal_map_to: strings(o.get("terminal_map_to")),
                 linecode: string(o.get("linecode")),
-                length: o.get("length").map_or(f64::NAN, f),
+                length,
                 route: None,
                 extras: take_extras(
                     o,
@@ -963,13 +989,29 @@ impl Reader<'_> {
         }
     }
 
+    /// Cap the winding list a document supplies. The short circuit pair
+    /// enumeration is quadratic in the winding count, so an unbounded count
+    /// would be a quadratic blowup from a linear document; no physical
+    /// transformer comes near the cap.
+    fn bounded_windings<'a>(&mut self, name: &str, items: &'a [Value]) -> &'a [Value] {
+        const MAX_WINDINGS: usize = 64;
+        if items.len() > MAX_WINDINGS {
+            self.net.warnings.push(format!(
+                "transformer {name}: {} windings exceed the supported maximum of \
+                 {MAX_WINDINGS}; the rest are ignored",
+                items.len()
+            ));
+        }
+        &items[..items.len().min(MAX_WINDINGS)]
+    }
+
     fn n_winding_transformer(&mut self, name: &str, o: &Map<String, Value>) -> DistTransformer {
         let known = ["windings", "x_sc", "s_rating", "g_no_load", "b_no_load"];
         let s = o.get("s_rating").map_or(f64::NAN, f);
         let mut windings = Vec::new();
         let mut delta_rolls = Map::new();
         if let Some(items) = o.get("windings").and_then(Value::as_array) {
-            for (idx, item) in items.iter().enumerate() {
+            for (idx, item) in self.bounded_windings(name, items).iter().enumerate() {
                 let Some(w) = item.as_object() else {
                     self.net.warnings.push(format!(
                         "transformer {name}: winding {} is not an object; skipped",

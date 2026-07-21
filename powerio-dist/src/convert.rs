@@ -97,6 +97,9 @@ fn has_top_level_key(text: &str, key: &str) -> bool {
 /// Distribution parser policy for `.json`: PMD carries `data_model`; otherwise
 /// it is routed to BMOPF so the BMOPF reader can give the parse error or warning.
 fn infer_distribution_json_format(text: &str) -> DistTargetFormat {
+    // A leading byte order mark would fail the DOM parse here and silently
+    // send a PMD document down the BMOPF fallback; classify without it.
+    let text = text.trim_start_matches('\u{feff}');
     if has_top_level_key(text, "data_model") {
         DistTargetFormat::PmdJson
     } else {
@@ -104,13 +107,31 @@ fn infer_distribution_json_format(text: &str) -> DistTargetFormat {
     }
 }
 
+/// The warning every parse path pushes when it removes a byte order mark.
+pub(crate) const BOM_WARNING: &str =
+    "leading UTF-8 byte order mark removed; a same-format write returns the text without it";
+
+/// Parse `text` as `format`, stripping a leading UTF-8 byte order mark first:
+/// Windows tooling saves case files with one, and both serde_json and the DSS
+/// tokenizer treat it as garbage in the first token. The retained source loses
+/// the mark, so a same-format echo differs by exactly those three bytes; the
+/// warning itemizes that.
+fn parse_text(text: &str, format: DistTargetFormat) -> crate::Result<DistNetwork> {
+    let stripped = text.trim_start_matches('\u{feff}');
+    let mut net = match format {
+        DistTargetFormat::Dss => crate::dss::parse_dss_str(stripped),
+        DistTargetFormat::BmopfJson => crate::bmopf::parse_bmopf_str(stripped)?,
+        DistTargetFormat::PmdJson => crate::pmd::parse_pmd_str(stripped)?,
+    };
+    if stripped.len() != text.len() {
+        net.warnings.push(BOM_WARNING.to_owned());
+    }
+    Ok(net)
+}
+
 /// Parses `text` in the named format (see [`dist_target_from_name`]).
 pub fn parse_str(text: &str, format: &str) -> crate::Result<DistNetwork> {
-    match format.parse::<DistTargetFormat>()? {
-        DistTargetFormat::Dss => Ok(crate::dss::parse_dss_str(text)),
-        DistTargetFormat::BmopfJson => crate::bmopf::parse_bmopf_str(text),
-        DistTargetFormat::PmdJson => crate::pmd::parse_pmd_str(text),
-    }
+    parse_text(text, format.parse::<DistTargetFormat>()?)
 }
 
 /// Parses `path`, taking the format from `from` when given, the `.dss`
@@ -134,19 +155,14 @@ pub fn parse_file(
             "dss" => DistTargetFormat::Dss,
             "json" => {
                 let text = read(path)?;
-                return if infer_distribution_json_format(&text) == DistTargetFormat::PmdJson {
-                    crate::pmd::parse_pmd_str(&text)
-                } else {
-                    crate::bmopf::parse_bmopf_str(&text)
-                };
+                return parse_text(&text, infer_distribution_json_format(&text));
             }
             other => return Err(crate::Error::UnknownFormat(other.to_string())),
         }
     };
     match format {
         DistTargetFormat::Dss => crate::dss::parse_dss_file(path),
-        DistTargetFormat::BmopfJson => crate::bmopf::parse_bmopf_str(&read(path)?),
-        DistTargetFormat::PmdJson => crate::pmd::parse_pmd_str(&read(path)?),
+        DistTargetFormat::BmopfJson | DistTargetFormat::PmdJson => parse_text(&read(path)?, format),
     }
 }
 
@@ -263,6 +279,28 @@ mod tests {
         assert_eq!(
             infer_distribution_json_format("{not json"),
             DistTargetFormat::BmopfJson
+        );
+        // A byte order mark must not push a PMD document down the BMOPF
+        // fallback.
+        assert_eq!(
+            infer_distribution_json_format("\u{feff}{\"data_model\": \"ENGINEERING\"}"),
+            DistTargetFormat::PmdJson
+        );
+    }
+
+    #[test]
+    fn byte_order_mark_is_stripped_and_warned() {
+        let dss = "\u{feff}clear\nnew circuit.c basekv=12.47 bus1=src\n";
+        let net = parse_str(dss, "dss").unwrap();
+        assert!(
+            net.warnings.iter().any(|w| w.contains("byte order mark")),
+            "warnings: {:?}",
+            net.warnings
+        );
+        assert!(
+            net.source
+                .as_ref()
+                .is_some_and(|s| !s.starts_with('\u{feff}'))
         );
     }
 

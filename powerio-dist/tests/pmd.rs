@@ -650,3 +650,13 @@ fn null_suffix_restoration() {
     // ampacity bound means no bound, so i_max is None.
     assert!(net.linecodes[0].i_max.is_none());
 }
+
+#[test]
+fn mathematical_data_model_is_rejected() {
+    // The MATHEMATICAL model shares the `data_model` marker but is index
+    // based; interpreting its sections as ENGINEERING would silently build a
+    // wrong network.
+    let err = powerio_dist::parse_str(r#"{"data_model":"MATHEMATICAL","bus":{}}"#, "pmd-json")
+        .unwrap_err();
+    assert!(err.to_string().contains("ENGINEERING"), "got: {err}");
+}

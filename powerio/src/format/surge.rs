@@ -1351,8 +1351,13 @@ fn value_to_usize(value: &Value, key: &str) -> Result<usize> {
                     Err(format_error(format!("`{key}` must be nonnegative")))
                 }
             } else if let Some(value) = number.as_f64() {
-                if value >= 0.0 && value.fract() == 0.0 {
+                // Mirror the integer branches' "too large" rejection: a float
+                // beyond usize would otherwise saturate to usize::MAX and read
+                // as a confusing unknown-bus reference later.
+                if value >= 0.0 && value.fract() == 0.0 && value < usize::MAX as f64 {
                     Ok(value as usize)
+                } else if value >= usize::MAX as f64 {
+                    Err(format_error(format!("`{key}` integer is too large")))
                 } else {
                     Err(format_error(format!("`{key}` must be an integer")))
                 }
@@ -1407,6 +1412,19 @@ fn string_not_default(obj: &Map<String, Value>, key: &str, default: &str) -> boo
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn float_index_beyond_usize_is_rejected() {
+        // 1e20 backs into the f64 branch (too large for as_u64) and would
+        // saturate to usize::MAX under `as usize`; it must get the same "too
+        // large" rejection the integer branches give.
+        let err = value_to_usize(&serde_json::json!(1e20), "from_bus").unwrap_err();
+        assert!(err.to_string().contains("too large"), "got: {err}");
+        assert_eq!(
+            value_to_usize(&serde_json::json!(3.0), "from_bus").unwrap(),
+            3
+        );
+    }
 
     #[test]
     fn rejects_bad_envelope() {

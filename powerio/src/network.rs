@@ -1921,6 +1921,8 @@ impl Network {
     /// on it) can't hand back a network the file readers would have rejected
     /// (the same no-buses guard `read_source` applies to every parse path).
     pub fn from_json(text: &str) -> crate::Result<Network> {
+        // Tolerate a leading UTF-8 byte order mark, as the format readers do.
+        let text = text.trim_start_matches('\u{feff}');
         let net: Network = serde_json::from_str(text).map_err(|e| Error::FormatRead {
             format: "JSON",
             message: e.to_string(),

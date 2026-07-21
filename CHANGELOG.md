@@ -1,5 +1,55 @@
 # Changelog
 
+## 0.7.2
+
+- CLI case discovery is recursive and covers every supported format (#260):
+  `powerio batch` and the TUI walk the input directory for `.m`, `.raw`,
+  `.aux`, `.epc`, `.pwb`, `.json`, and `.dss` files, matched case
+  insensitively, pruning hidden directories and the output directory. A file
+  that fails to load during a scan is skipped with a warning instead of
+  aborting the run, and the no-cases error names the supported extensions.
+  Distribution cases (`.dss`, BMOPF/PMD JSON) parse to the multiconductor
+  model and go through the explicit `lower_multiconductor_to_balanced` pass,
+  whose approximations and dropped fields surface as warnings.
+- A leading UTF-8 byte order mark no longer defeats the JSON classifier or
+  any text reader. `classify_json_text`, the transmission read funnel, the
+  distribution parsers (including `.dss` and redirected files), the PMD/BMOPF
+  JSON split, `Network::from_json`, and `Package::from_json` all strip it,
+  and the parse warnings itemize the removal (a same-format echo returns the
+  text without the mark).
+- `parse_str_with_name`: `parse_str` plus the name hint role the file stem
+  plays in `parse_file`. The CLI now reads and classifies a `.json` case
+  once and hands the text straight to the typed parser; a batch scan
+  previously read each `.json` twice and DOM-parsed it three times.
+- A nameless distribution case loaded by the CLI takes its file stem as the
+  network name, so batch exports no longer collide on the lowering's
+  `lowered-multiconductor` fallback.
+- JSON reader hardening from a review pass over the family:
+  - PowerModels: a status field written as a JSON boolean (`"br_status":
+    false`) reads out of service instead of in service; `baseMVA` must be
+    finite and positive; gencost rows padded to the MATPOWER matrix width are
+    trimmed to the declared `ncost` before the per-unit unscale; an
+    out-of-range cost model number passes through unscaled instead of
+    wrapping into the piecewise/polynomial rescale.
+  - pandapower: a trafo `sn_mva` of zero or below falls back to the system
+    base instead of dividing the impedance by zero; string cells can no
+    longer smuggle `"inf"`/`"nan"` into numeric columns.
+  - egret: a polynomial cost exponent key is bounded, so a few bytes of JSON
+    can no longer demand an arbitrarily large allocation or index out of
+    bounds.
+  - GOC3: a duplicate `simple_dispatchable_device` uid is rejected instead of
+    silently taking another device's time series bounds and cost.
+  - Surge: a float bus reference too large for an index is rejected like the
+    equivalent integer instead of saturating to `usize::MAX`.
+  - BMOPF: matrix key indices and winding counts are bounded (a crafted
+    document could previously demand gigabytes or quadratic work), a missing
+    line `length` warns instead of propagating NaN silently, and the `meta`
+    block is kept in extras instead of dropped.
+  - PMD: a `data_model` other than ENGINEERING (the index based MATHEMATICAL
+    model) is rejected instead of being misread as ENGINEERING.
+  - `.pio.json`: a semver build tag containing a hyphen (`1.0.0+build-x`) no
+    longer fails the schema version check.
+
 ## 0.7.1
 
 - The SCOPF Julia wire conversion is structural (#252): every struct reaching

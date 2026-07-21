@@ -187,7 +187,9 @@ pub enum JsonClass {
 /// Ambiguous means the document contains strong markers from both domains, so
 /// the caller must ask the user for an explicit format.
 pub fn classify_json_text(text: &str) -> JsonClass {
-    let Ok(shape) = JsonShape::try_from(text) else {
+    // Windows tooling saves JSON with a UTF-8 byte order mark, which
+    // serde_json rejects; strip it so a BOM never hides the format.
+    let Ok(shape) = JsonShape::try_from(text.trim_start_matches('\u{feff}')) else {
         return JsonClass::Case(Detection::Unknown);
     };
     if matches!(
@@ -514,6 +516,16 @@ mod tests {
                 "{alias}"
             );
         }
+    }
+
+    #[test]
+    fn classifies_json_with_leading_byte_order_mark() {
+        assert_eq!(
+            classify_json_text("\u{feff}{\"baseMVA\":100.0,\"bus\":{},\"branch\":{}}"),
+            JsonClass::Case(Detection::Known(SourceFormat::Transmission(
+                TransmissionFormat::PowerModelsJson
+            )))
+        );
     }
 
     #[test]
