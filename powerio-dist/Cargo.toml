@@ -30,6 +30,7 @@ schemars = { workspace = true, optional = true }
 [dev-dependencies]
 # Draft 2020-12 validation against the vendored BMOPF schema in tests.
 jsonschema = { version = "0.46", default-features = false }
+tempfile = "3"
 
 [lints]
 workspace = true

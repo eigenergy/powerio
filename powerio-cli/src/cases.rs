@@ -216,7 +216,13 @@ fn lower_to_balanced(
                     .map(|d| d.message.as_str())
                     .collect::<Vec<_>>()
                     .join("; ");
-                anyhow::anyhow!("lower {} to balanced: {diagnostics}", path.display())
+                if diagnostics.is_empty() {
+                    // Diagnostics should always be present on a refusal, but
+                    // an empty list must not render a bare trailing colon.
+                    anyhow::anyhow!("lower {} to balanced: {e}", path.display())
+                } else {
+                    anyhow::anyhow!("lower {} to balanced: {diagnostics}", path.display())
+                }
             })?;
     let mut warnings = net.warnings;
     warnings.extend(

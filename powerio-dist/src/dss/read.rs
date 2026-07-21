@@ -54,6 +54,32 @@ fn strip_bom_owned(text: String) -> String {
     }
 }
 
+/// A redirect loader that strips a leading byte order mark from every file it
+/// reads and records which files carried one, so each strip can be itemized
+/// as a warning instead of happening silently.
+fn bom_stripping_loader(
+    stripped_paths: &mut Vec<String>,
+) -> impl FnMut(&Path) -> std::io::Result<String> + '_ {
+    |p: &Path| {
+        std::fs::read_to_string(p).map(|text| {
+            if text.starts_with('\u{feff}') {
+                stripped_paths.push(p.display().to_string());
+            }
+            strip_bom_owned(text)
+        })
+    }
+}
+
+fn warn_stripped_boms(net: &mut DistNetwork, root_had_bom: bool, stripped_paths: Vec<String>) {
+    if root_had_bom {
+        net.warnings.push(crate::convert::BOM_WARNING.to_owned());
+    }
+    for path in stripped_paths {
+        net.warnings
+            .push(format!("{path}: {}", crate::convert::BOM_WARNING));
+    }
+}
+
 /// Parses a `.dss` file, following includes, into the canonical model.
 pub fn parse_dss_file(path: impl AsRef<Path>) -> Result<DistNetwork> {
     let path = path.as_ref();
@@ -63,13 +89,14 @@ pub fn parse_dss_file(path: impl AsRef<Path>) -> Result<DistNetwork> {
     })?;
     let had_bom = text.starts_with('\u{feff}');
     let text = strip_bom_owned(text);
-    let raw = parse_raw_with(&text, &path.display().to_string(), &mut |p: &Path| {
-        std::fs::read_to_string(p).map(strip_bom_owned)
-    });
+    let mut stripped_paths = Vec::new();
+    let raw = parse_raw_with(
+        &text,
+        &path.display().to_string(),
+        &mut bom_stripping_loader(&mut stripped_paths),
+    );
     let mut net = network_from_raw(&raw, Arc::new(text));
-    if had_bom {
-        net.warnings.push(crate::convert::BOM_WARNING.to_owned());
-    }
+    warn_stripped_boms(&mut net, had_bom, stripped_paths);
     Ok(net)
 }
 
@@ -77,13 +104,14 @@ pub fn parse_dss_file(path: impl AsRef<Path>) -> Result<DistNetwork> {
 /// directory.
 pub fn parse_dss_str(text: &str) -> DistNetwork {
     let stripped = text.trim_start_matches('\u{feff}');
-    let raw = parse_raw_with(stripped, "<string>", &mut |p: &Path| {
-        std::fs::read_to_string(p).map(strip_bom_owned)
-    });
+    let mut stripped_paths = Vec::new();
+    let raw = parse_raw_with(
+        stripped,
+        "<string>",
+        &mut bom_stripping_loader(&mut stripped_paths),
+    );
     let mut net = network_from_raw(&raw, Arc::new(stripped.to_string()));
-    if stripped.len() != text.len() {
-        net.warnings.push(crate::convert::BOM_WARNING.to_owned());
-    }
+    warn_stripped_boms(&mut net, stripped.len() != text.len(), stripped_paths);
     net
 }
 

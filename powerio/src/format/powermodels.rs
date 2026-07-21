@@ -832,7 +832,12 @@ fn read_cost(v: &Value, base_mva: f64, per_unit: bool) -> GenCost {
     // before the per-unit unscale, as `cost_to_pu` does on the way out, so
     // padding can't read as a higher-degree polynomial and mis-scale every
     // coefficient.
-    let declared_ncost = v.get("ncost").and_then(Value::as_u64).map(|n| n as usize);
+    // Fallible conversion: an ncost beyond usize (32-bit targets) reads as
+    // undeclared instead of truncating into a small in-range value.
+    let declared_ncost = v
+        .get("ncost")
+        .and_then(Value::as_u64)
+        .and_then(|n| usize::try_from(n).ok());
     if let Some(n) = declared_ncost {
         let keep = if model == 1 { n.saturating_mul(2) } else { n };
         if keep < coeffs_raw.len() {
@@ -855,7 +860,9 @@ fn read_cost(v: &Value, base_mva: f64, per_unit: bool) -> GenCost {
         model,
         startup: f(v, "startup"),
         shutdown: f(v, "shutdown"),
-        ncost: declared_ncost.unwrap_or(default_ncost),
+        // Clamp to what the coefficients can back: an ncost declared beyond
+        // the vector length would make the GenCost internally inconsistent.
+        ncost: declared_ncost.map_or(default_ncost, |n| n.min(default_ncost)),
         coeffs,
     }
 }
