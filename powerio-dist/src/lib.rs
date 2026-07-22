@@ -70,7 +70,7 @@ pub use graph::{
 };
 pub use model::{
     ActivePowerReference, ActivePowerUnit, Configuration, ControlVoltageReference, DistBus,
-    DistControlProfile, DistGenerator, DistIbr, DistLine, DistLineCode, DistLoad,
+    DistCapacitor, DistControlProfile, DistGenerator, DistIbr, DistLine, DistLineCode, DistLoad,
     DistLoadVoltageModel, DistNetwork, DistShunt, DistSourceFormat, DistSwitch, DistTransformer,
     Extras, IbrPrimeMover, IbrTopology, IbrVoltageAggregation, Mat, MulticonductorNetwork,
     PowerFactorControl, ReactivePowerReference, ReactivePowerUnit, UntypedObject, VoltVarControl,

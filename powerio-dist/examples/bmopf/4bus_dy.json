@@ -203,6 +203,7 @@
     "load1": {
       "bus": "n4",
       "configuration": "WYE",
+      "model": "CONSTANT_POWER",
       "p_nom": [
         1800000.0,
         1800000.0,
@@ -222,11 +223,12 @@
     }
   },
   "meta": {
-    "$schema": "https://github.com/frederikgeth/bmopf-report/tree/main/draft_schema_and_networks",
-    "generator": {
+    "$schema": "https://raw.githubusercontent.com/frederikgeth/bmopf-report/main/draft_schema_and_networks/draft_bmopf_schema.json",
+    "case_study_generator": {
       "tool": "powerio",
-      "version": "0.2.4"
-    }
+      "version": "0.7.2"
+    },
+    "frequency": 60.0
   },
   "name": "4busDYBal",
   "transformer": {
@@ -247,8 +249,8 @@
           "3",
           "4"
         ],
-        "v_ref_from": 12470.0,
-        "v_ref_to": 4160.0,
+        "v_nom_from": 12470.0,
+        "v_nom_to": 4160.0,
         "x_series": 0.173056
       }
     }

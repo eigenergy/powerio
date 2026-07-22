@@ -487,6 +487,8 @@ impl Reader<'_> {
                 linecode,
                 length: o.get("length").map_or(f64::NAN, |v| restore("length", v)),
                 route: None,
+                i_max: None,
+                s_max: None,
                 extras,
             });
         }

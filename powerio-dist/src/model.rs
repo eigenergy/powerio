@@ -58,16 +58,26 @@ pub struct DistBus {
     /// Terminals tied to ground with zero impedance.
     pub grounded: Vec<String>,
     /// Voltage magnitude bounds, volts: the scalar pair plus the phase to
-    /// neutral, phase to phase, and symmetrical component families (the
-    /// four BMOPF bound families).
+    /// neutral and phase to phase families, and the per-sequence scalars
+    /// (BMOPF schema 0.1.0: positive sequence has both bounds, negative and
+    /// zero sequence and neutral to ground are magnitude caps whose lower
+    /// bound is always 0).
     pub v_min: Option<f64>,
     pub v_max: Option<f64>,
     pub vpn_min: Option<Vec<f64>>,
     pub vpn_max: Option<Vec<f64>>,
     pub vpp_min: Option<Vec<f64>>,
     pub vpp_max: Option<Vec<f64>>,
-    pub vsym_min: Option<Vec<f64>>,
-    pub vsym_max: Option<Vec<f64>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub vpos_min: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub vpos_max: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub vneg_max: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub vzero_max: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub vn_max: Option<f64>,
     /// Optional bus coordinates in the network coordinate space.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub location: Option<Location>,
@@ -87,8 +97,11 @@ impl DistBus {
             vpn_max: None,
             vpp_min: None,
             vpp_max: None,
-            vsym_min: None,
-            vsym_max: None,
+            vpos_min: None,
+            vpos_max: None,
+            vneg_max: None,
+            vzero_max: None,
+            vn_max: None,
             location: None,
             extras: Extras::new(),
         }
@@ -153,6 +166,12 @@ pub struct DistLine {
     /// deserializes.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub route: Option<Vec<Location>>,
+    /// Per-conductor ampacity and apparent power limits, amps and VA
+    /// (BMOPF schema 0.1.0 line fields, alongside the linecode's own).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub i_max: Option<Vec<f64>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub s_max: Option<Vec<f64>>,
     pub extras: Extras,
 }
 
@@ -176,6 +195,51 @@ impl DistLine {
             linecode: linecode.into(),
             length,
             route: None,
+            i_max: None,
+            s_max: None,
+            extras: Extras::new(),
+        }
+    }
+}
+
+/// A rated capacitor bank (BMOPF schema 0.1.0 `capacitor`): `q_rated` vars
+/// delivered at `v_nom` volts across the element terminals, distinct from the
+/// raw admittance [`DistShunt`]. The DSS converter still lowers OpenDSS
+/// capacitors to shunt B matrices; this element carries capacitors that arrive
+/// as BMOPF input.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[non_exhaustive]
+pub struct DistCapacitor {
+    pub name: String,
+    pub bus: String,
+    pub terminal_map: Vec<String>,
+    pub configuration: Configuration,
+    /// Nameplate rated reactive power of the whole bank, vars.
+    pub q_rated: f64,
+    /// Nameplate nominal voltage, volts: line to line for the three phase
+    /// configurations, across the terminals for SINGLE_PHASE.
+    pub v_nom: f64,
+    pub extras: Extras,
+}
+
+impl DistCapacitor {
+    #[must_use]
+    pub fn new(
+        name: impl Into<String>,
+        bus: impl Into<String>,
+        terminal_map: Vec<String>,
+        configuration: Configuration,
+        q_rated: f64,
+        v_nom: f64,
+    ) -> Self {
+        Self {
+            name: name.into(),
+            bus: bus.into(),
+            terminal_map,
+            configuration,
+            q_rated,
+            v_nom,
             extras: Extras::new(),
         }
     }
@@ -758,6 +822,8 @@ pub struct DistNetwork {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub control_profiles: Vec<DistControlProfile>,
     pub shunts: Vec<DistShunt>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub capacitors: Vec<DistCapacitor>,
     /// BMOPF allows exactly one; the model allows any number and the BMOPF
     /// writer warns beyond the first.
     pub sources: Vec<VoltageSource>,
@@ -807,6 +873,7 @@ impl Default for DistNetwork {
             ibrs: Vec::new(),
             control_profiles: Vec::new(),
             shunts: Vec::new(),
+            capacitors: Vec::new(),
             sources: Vec::new(),
             untyped: Vec::new(),
             commands: Vec::new(),

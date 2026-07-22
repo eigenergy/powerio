@@ -1,5 +1,39 @@
 # Changelog
 
+## Unreleased
+
+- BMOPF schema 0.1.0 (bmopf-report#16). The writer targets the published
+  schema `$id` and the reader keeps accepting the pre-0.1.0 spellings:
+  - `meta` carries `case_study_generator` (was `generator`) and the system
+    `frequency`; the reader also still accepts the legacy top-level
+    `frequency`/`base_frequency`.
+  - Load `model` strings are uppercase (`CONSTANT_POWER`, `ZIP`, ...).
+  - Bus symmetrical component bounds are the per-sequence scalars
+    `vpos_min`/`vpos_max`/`vneg_max`/`vzero_max`/`vn_max`; legacy
+    `vsym_min`/`vsym_max` arrays map on read assuming zero/positive/negative
+    order. `DistBus` renames the fields, so the multiconductor payload is
+    `pio-payload-multiconductor/2` (2.0.0).
+  - Three phase transformers emit one lumped `r_series`/`x_series` pair on
+    the wye base, with each winding's percent resistance referred to its own
+    rating before the sum; the split `_from`/`_to` fields lost their slots.
+  - Transformer taps, neutral impedance, and no load admittance relocate to
+    `extras.transformer.<subtype>.<name>` (the schema's escape hatch); the
+    IBR, control profile, DC, and time series tables relocate under `extras`
+    the same way. The reader folds all of them back.
+  - A typed `capacitor` element (`DistCapacitor`: `bus`, `terminal_map`,
+    `configuration`, `q_rated`, `v_nom`). The DSS converter still lowers
+    OpenDSS capacitors to shunt matrices; the dss and PMD writers drop typed
+    capacitors with a warning.
+  - Lines accept the inline impedance alternative to `linecode` + `length`
+    (read into a synthesized linecode) and carry `i_max`/`s_max`.
+  - One-triangle matrix spellings mirror on read (BMOPFTools writes the
+    upper triangle of the symmetric matrices).
+  - A grounded terminal counts as referenced, so the unused-terminal prune
+    no longer silently drops standalone grounding.
+  - The vendored schema and example networks track bmopf-report@f2e3684;
+    `cargo run -p powerio-dist --example regen_bmopf_examples` regenerates
+    the checked-in example outputs.
+
 ## 0.7.2
 
 - CLI case discovery is recursive and covers every supported format (#260):

@@ -227,8 +227,11 @@ impl Writer {
                 ("vpn_max", b.vpn_max.is_some()),
                 ("vpp_min", b.vpp_min.is_some()),
                 ("vpp_max", b.vpp_max.is_some()),
-                ("vsym_min", b.vsym_min.is_some()),
-                ("vsym_max", b.vsym_max.is_some()),
+                ("vpos_min", b.vpos_min.is_some()),
+                ("vpos_max", b.vpos_max.is_some()),
+                ("vneg_max", b.vneg_max.is_some()),
+                ("vzero_max", b.vzero_max.is_some()),
+                ("vn_max", b.vn_max.is_some()),
             ] {
                 if present {
                     self.warn(format!(
@@ -526,6 +529,13 @@ impl Writer {
     fn injections(&mut self, net: &DistNetwork, doc: &mut Map<String, Value>) {
         self.loads(net, doc);
         self.generators(net, doc);
+        // Typed BMOPF capacitor banks have no ENGINEERING conversion yet.
+        for c in &net.capacitors {
+            self.warn(format!(
+                "capacitor {}: rated capacitor banks are not converted to ENGINEERING JSON; dropped",
+                c.name
+            ));
+        }
         if !net.shunts.is_empty() {
             let mut shunts = Map::new();
             for s in &net.shunts {

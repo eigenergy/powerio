@@ -611,6 +611,7 @@ impl DssWriter {
         self.transformers(net);
         self.loads(net);
         self.shunts(net);
+        self.capacitors_dropped(net);
         self.generators(net);
         self.ibrs(net);
 
@@ -706,8 +707,11 @@ impl DssWriter {
             ("vpn_max", b.vpn_max.is_some()),
             ("vpp_min", b.vpp_min.is_some()),
             ("vpp_max", b.vpp_max.is_some()),
-            ("vsym_min", b.vsym_min.is_some()),
-            ("vsym_max", b.vsym_max.is_some()),
+            ("vpos_min", b.vpos_min.is_some()),
+            ("vpos_max", b.vpos_max.is_some()),
+            ("vneg_max", b.vneg_max.is_some()),
+            ("vzero_max", b.vzero_max.is_some()),
+            ("vn_max", b.vn_max.is_some()),
         ] {
             if present {
                 self.warnings.push(format!(
@@ -1386,6 +1390,17 @@ impl DssWriter {
         );
         line.push_str(&self.extras_tail(class, &sh.name, &extras));
         self.line_out(&line);
+    }
+
+    /// Typed BMOPF capacitor banks have no DSS conversion yet: q_rated at
+    /// v_nom does not carry phase geometry the way the shunt B matrix does.
+    fn capacitors_dropped(&mut self, net: &DistNetwork) {
+        for c in &net.capacitors {
+            self.warnings.push(format!(
+                "capacitor {}: rated capacitor banks are not converted to dss; dropped",
+                c.name
+            ));
+        }
     }
 
     fn shunts(&mut self, net: &DistNetwork) {
@@ -2265,6 +2280,8 @@ mod tests {
             linecode: "lc".into(),
             length: 1.0,
             route: None,
+            i_max: None,
+            s_max: None,
             extras: Extras::new(),
         });
         let out2 = write_dss(&net2);

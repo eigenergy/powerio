@@ -503,8 +503,11 @@ impl<'a> LoweringState<'a> {
             || bus.vpn_max.is_some()
             || bus.vpp_min.is_some()
             || bus.vpp_max.is_some()
-            || bus.vsym_min.is_some()
-            || bus.vsym_max.is_some()
+            || bus.vpos_min.is_some()
+            || bus.vpos_max.is_some()
+            || bus.vneg_max.is_some()
+            || bus.vzero_max.is_some()
+            || bus.vn_max.is_some()
         {
             self.record.dropped_fields.push(format!(
                 "bus {} conductor voltage bound families dropped",
