@@ -958,6 +958,8 @@ impl Reader<'_> {
             linecode,
             length: length * length_factor,
             route: None,
+            i_max: None,
+            s_max: None,
             extras,
         });
     }

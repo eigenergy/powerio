@@ -18,7 +18,7 @@ use crate::error::{Error, Result};
 use crate::geo::{CoordinateSpace, CoordsKind, GeoMeta, Location};
 use crate::model::{
     ActivePowerReference, ActivePowerUnit, Configuration, ControlVoltageReference, DistBus,
-    DistControlProfile, DistGenerator, DistIbr, DistLine, DistLineCode, DistLoad,
+    DistCapacitor, DistControlProfile, DistGenerator, DistIbr, DistLine, DistLineCode, DistLoad,
     DistLoadVoltageModel, DistNetwork, DistShunt, DistSourceFormat, DistSwitch, DistTransformer,
     Extras, IbrPrimeMover, IbrTopology, IbrVoltageAggregation, Mat, PowerFactorControl,
     ReactivePowerReference, ReactivePowerUnit, UntypedObject, VoltVarControl, VoltWattControl,
@@ -105,6 +105,35 @@ fn value_alias<'a>(o: &'a Map<String, Value>, primary: &str, legacy: &str) -> Op
     o.get(primary).or_else(|| o.get(legacy))
 }
 
+/// Folds `extras.transformer.<subtype>.<name>` fields back onto the raw
+/// transformer objects (the reverse of the writer's overflow split). The
+/// in-place field wins over the overlay on a key collision.
+fn merge_transformer_overlay(
+    subtypes: &Map<String, Value>,
+    overlay: &Map<String, Value>,
+) -> Map<String, Value> {
+    let mut merged = subtypes.clone();
+    for (subtype, names) in overlay {
+        let Value::Object(names) = names else {
+            continue;
+        };
+        let Some(Value::Object(table)) = merged.get_mut(subtype) else {
+            continue;
+        };
+        for (name, fields) in names {
+            let (Value::Object(fields), Some(Value::Object(target))) =
+                (fields, table.get_mut(name))
+            else {
+                continue;
+            };
+            for (key, value) in fields {
+                target.entry(key.clone()).or_insert_with(|| value.clone());
+            }
+        }
+    }
+    merged
+}
+
 fn strings(v: Option<&Value>) -> Vec<String> {
     v.and_then(Value::as_array)
         .map(|a| {
@@ -170,7 +199,9 @@ fn matrix_indices(key: &str, prefix: &str) -> Option<(usize, usize)> {
 }
 
 /// Collects `prefix_i_j` keys into a square matrix; `n` is the largest
-/// index seen. Returns None when no key carries the prefix.
+/// index seen. Returns None when no key carries the prefix. A cell whose
+/// transpose is not spelled is mirrored: these matrices are symmetric and
+/// BMOPFTools writes one triangle only.
 fn flat_matrix(o: &Map<String, Value>, prefix: &str) -> Option<Mat> {
     let mut entries: Vec<(usize, usize, f64)> = Vec::new();
     let mut n = 0;
@@ -185,10 +216,35 @@ fn flat_matrix(o: &Map<String, Value>, prefix: &str) -> Option<Mat> {
         return None;
     }
     let mut m = vec![vec![0.0; n]; n];
+    let mut spelled = vec![vec![false; n]; n];
     for (i, j, v) in entries {
         m[i][j] = v;
+        spelled[i][j] = true;
+    }
+    for i in 0..n {
+        for j in 0..n {
+            if spelled[i][j] && !spelled[j][i] {
+                m[j][i] = m[i][j];
+            }
+        }
     }
     Some(m)
+}
+
+/// The six linecode-shaped matrices of `o`, padded square to the widest one
+/// present; `ragged` reports a genuine size disagreement between them.
+fn linecode_matrices(o: &Map<String, Value>) -> ([Mat; 6], usize, bool) {
+    let mats = [
+        flat_matrix(o, "R_series"),
+        flat_matrix(o, "X_series"),
+        flat_matrix(o, "G_from"),
+        flat_matrix(o, "B_from"),
+        flat_matrix(o, "G_to"),
+        flat_matrix(o, "B_to"),
+    ];
+    let n = mats.iter().flatten().map(Vec::len).max().unwrap_or(0);
+    let ragged = mats.iter().flatten().any(|m| m.len() < n);
+    (mats.map(|m| pad_to(m.unwrap_or_default(), n)), n, ragged)
 }
 
 /// Grows `m` to `n` by `n`, preserving the existing entries.
@@ -237,8 +293,15 @@ impl Reader<'_> {
         if let Some(name) = doc.get("name").and_then(Value::as_str) {
             self.net.name = Some(name.to_string());
         }
-        if let Some(frequency) =
-            first_float(doc.get("base_frequency")).or_else(|| first_float(doc.get("frequency")))
+        // Schema 0.1.0 carries the frequency in `meta`; the top-level
+        // spellings are the pre-0.1.0 vintage.
+        if let Some(frequency) = first_float(
+            doc.get("meta")
+                .and_then(Value::as_object)
+                .and_then(|m| m.get("frequency")),
+        )
+        .or_else(|| first_float(doc.get("base_frequency")))
+        .or_else(|| first_float(doc.get("frequency")))
             && frequency.is_finite()
             && frequency > 0.0
         {
@@ -255,11 +318,39 @@ impl Reader<'_> {
                 "switch" => self.switches(items),
                 "load" => self.loads(items),
                 "generator" => self.generators(items),
+                "capacitor" => self.capacitors(items),
                 "ibr" => self.ibrs(items),
                 "control_profile" => self.control_profiles(items),
                 "shunt" => self.shunts(items),
                 "voltage_source" => self.sources(items),
-                "transformer" => self.transformers(items),
+                "transformer" => {
+                    // The writer relocates schema-less transformer fields
+                    // (taps, neutral impedance, no load admittance) to
+                    // `extras.transformer.<subtype>.<name>`; fold them back
+                    // onto the raw objects before parsing.
+                    let overlay = doc
+                        .get("extras")
+                        .and_then(Value::as_object)
+                        .and_then(|e| e.get("transformer"))
+                        .and_then(Value::as_object)
+                        .filter(|o| !o.is_empty());
+                    match overlay {
+                        Some(overlay) => {
+                            let merged = merge_transformer_overlay(items, overlay);
+                            self.transformers(&merged);
+                        }
+                        None => self.transformers(items),
+                    }
+                }
+                "extras" => self.extras_block(items),
+                // The phase/neutral label conventions block: no typed slot,
+                // stashed whole so a round trip keeps it (the meta pattern).
+                "terminal_conventions" => {
+                    self.net.extras.insert(
+                        "bmopf_terminal_conventions".into(),
+                        Value::Object(items.clone()),
+                    );
+                }
                 "name" => {}
                 // `meta` is provenance (license, authors, generator tool),
                 // with no typed slot in the model. Stash it whole, the way the
@@ -283,6 +374,62 @@ impl Reader<'_> {
                     }
                 }
             }
+        }
+    }
+
+    /// The top-level `extras` escape hatch (schema 0.1.0). The IBR and
+    /// control profile tables that lost their top-level slots read typed from
+    /// here, the transformer overflow is consumed by the transformer merge,
+    /// and everything else is stashed verbatim for the writer to re-emit.
+    fn extras_block(&mut self, items: &Map<String, Value>) {
+        let mut stash = Map::new();
+        for (key, value) in items {
+            match (key.as_str(), value) {
+                ("ibr", Value::Object(table)) => self.ibrs(table),
+                ("control_profile", Value::Object(table)) => self.control_profiles(table),
+                ("transformer", Value::Object(_)) => {}
+                _ => {
+                    stash.insert(key.clone(), value.clone());
+                }
+            }
+        }
+        if !stash.is_empty() {
+            self.net
+                .extras
+                .insert("bmopf_extras".into(), Value::Object(stash));
+        }
+    }
+
+    fn capacitors(&mut self, items: &Map<String, Value>) {
+        for (name, v) in items {
+            let Value::Object(o) = v else { continue };
+            let known = ["bus", "terminal_map", "configuration", "q_rated", "v_nom"];
+            for (field, value) in [("q_rated", o.get("q_rated")), ("v_nom", o.get("v_nom"))] {
+                if value.is_none() {
+                    self.net
+                        .warnings
+                        .push(format!("capacitor {name}: `{field}` missing; read as NaN"));
+                }
+            }
+            self.net.capacitors.push(DistCapacitor {
+                name: name.clone(),
+                bus: string(o.get("bus")),
+                terminal_map: strings(o.get("terminal_map")),
+                configuration: config(
+                    o.get("configuration"),
+                    &format!("capacitor {name}"),
+                    &mut self.net.warnings,
+                ),
+                q_rated: o.get("q_rated").map_or(f64::NAN, f),
+                v_nom: o.get("v_nom").map_or(f64::NAN, f),
+                extras: take_extras(
+                    o,
+                    &known,
+                    &format!("capacitor {name}"),
+                    &mut self.net.warnings,
+                    &[],
+                ),
+            });
         }
     }
 
@@ -424,6 +571,11 @@ impl Reader<'_> {
                 "vpn_max",
                 "vpp_min",
                 "vpp_max",
+                "vpos_min",
+                "vpos_max",
+                "vneg_max",
+                "vzero_max",
+                "vn_max",
                 "vsym_min",
                 "vsym_max",
             ];
@@ -457,6 +609,32 @@ impl Reader<'_> {
                     extras.insert("latitude".into(), value.clone());
                 }
             }
+            // Legacy (pre-0.1.0) `vsym_min`/`vsym_max` arrays carried the
+            // symmetrical component bounds in zero/positive/negative order.
+            // Schema 0.1.0 replaced them with named per-sequence scalars;
+            // map what has a slot and warn about what does not (the negative
+            // and zero sequence lower bounds are fixed at 0 in 0.1.0).
+            let legacy_min = floats(o.get("vsym_min"));
+            let legacy_max = floats(o.get("vsym_max"));
+            if legacy_min.is_some() || legacy_max.is_some() {
+                self.net.warnings.push(format!(
+                    "bus {id}: legacy vsym_min/vsym_max arrays mapped to the per-sequence \
+                     scalars assuming zero/positive/negative order"
+                ));
+            }
+            let legacy_vpos_min = legacy_min.as_ref().and_then(|v| v.get(1).copied());
+            let legacy_vpos_max = legacy_max.as_ref().and_then(|v| v.get(1).copied());
+            let legacy_vzero_max = legacy_max.as_ref().and_then(|v| v.first().copied());
+            let legacy_vneg_max = legacy_max.as_ref().and_then(|v| v.get(2).copied());
+            if legacy_min
+                .as_ref()
+                .is_some_and(|v| [v.first(), v.get(2)].iter().flatten().any(|&&m| m != 0.0))
+            {
+                self.net.warnings.push(format!(
+                    "bus {id}: legacy vsym_min zero/negative sequence lower bounds have no \
+                     slot in schema 0.1.0 (fixed at 0); dropped"
+                ));
+            }
             self.net.buses.push(DistBus {
                 id: id.clone(),
                 terminals: strings(o.get("terminal_names")),
@@ -475,8 +653,11 @@ impl Reader<'_> {
                 vpn_max: floats(o.get("vpn_max")),
                 vpp_min: floats(o.get("vpp_min")),
                 vpp_max: floats(o.get("vpp_max")),
-                vsym_min: floats(o.get("vsym_min")),
-                vsym_max: floats(o.get("vsym_max")),
+                vpos_min: first_float(o.get("vpos_min")).or(legacy_vpos_min),
+                vpos_max: first_float(o.get("vpos_max")).or(legacy_vpos_max),
+                vneg_max: first_float(o.get("vneg_max")).or(legacy_vneg_max),
+                vzero_max: first_float(o.get("vzero_max")).or(legacy_vzero_max),
+                vn_max: first_float(o.get("vn_max")),
                 location,
                 extras,
             });
@@ -486,24 +667,15 @@ impl Reader<'_> {
     fn linecodes(&mut self, items: &Map<String, Value>) {
         for (name, v) in items {
             let Value::Object(o) = v else { continue };
-            let mats = [
-                flat_matrix(o, "R_series"),
-                flat_matrix(o, "X_series"),
-                flat_matrix(o, "G_from"),
-                flat_matrix(o, "B_from"),
-                flat_matrix(o, "G_to"),
-                flat_matrix(o, "B_to"),
-            ];
             // Conductor count is the widest matrix present; absent matrices
             // read as zero, smaller ones pad without losing entries.
-            let n = mats.iter().flatten().map(Vec::len).max().unwrap_or(0);
-            if mats.iter().flatten().any(|m| m.len() < n) {
+            let ([r, x, gf, bf, gt, bt], n, ragged) = linecode_matrices(o);
+            if ragged {
                 self.net.warnings.push(format!(
                     "linecode {name}: matrix sizes disagree; smaller ones padded \
                      with zeros to {n}x{n}"
                 ));
             }
-            let [r, x, gf, bf, gt, bt] = mats.map(|m| pad_to(m.unwrap_or_default(), n));
             let code = DistLineCode {
                 name: name.clone(),
                 n_conductors: n,
@@ -528,6 +700,8 @@ impl Reader<'_> {
     }
 
     fn lines(&mut self, items: &Map<String, Value>) {
+        let mut taken: std::collections::BTreeSet<String> =
+            self.net.linecodes.iter().map(|c| c.name.clone()).collect();
         for (name, v) in items {
             let Value::Object(o) = v else { continue };
             let known = [
@@ -537,13 +711,29 @@ impl Reader<'_> {
                 "bus_to",
                 "terminal_map_from",
                 "terminal_map_to",
+                "i_max",
+                "s_max",
             ];
-            // The schema requires `length`; a missing one becomes NaN in the
-            // model, which every impedance computation downstream inherits,
-            // so name the gap the way the transformer reader names a missing
-            // s_rating instead of letting the NaN travel silently.
-            let length = o.get("length").map_or(f64::NAN, f);
-            if !length.is_finite() {
+            // Schema 0.1.0 lines carry either a linecode + length or inline
+            // impedance matrices (the linecode oneOf). Inline matrices read
+            // into a synthesized single-use linecode named after the line.
+            let mut linecode = string(o.get("linecode"));
+            let mut length = o.get("length").map_or(f64::NAN, f);
+            // The inline branch of the schema's oneOf requires R_series_1_1.
+            let inline = linecode.is_empty() && o.contains_key("R_series_1_1");
+            if inline {
+                linecode = self.synthesized_linecode(name, o, &mut taken);
+                if !length.is_finite() {
+                    // Inline matrices are the line's whole impedance; the
+                    // synthesized linecode is per meter at unit length.
+                    length = 1.0;
+                }
+            } else if !length.is_finite() {
+                // The schema requires `length` alongside a linecode; a missing
+                // one becomes NaN in the model, which every impedance
+                // computation downstream inherits, so name the gap the way the
+                // transformer reader names a missing s_rating instead of
+                // letting the NaN travel silently.
                 self.net.warnings.push(format!(
                     "line {name}: `length` missing or non-finite; impedances derived from \
                      this line are undefined"
@@ -555,18 +745,57 @@ impl Reader<'_> {
                 bus_to: string(o.get("bus_to")),
                 terminal_map_from: strings(o.get("terminal_map_from")),
                 terminal_map_to: strings(o.get("terminal_map_to")),
-                linecode: string(o.get("linecode")),
+                linecode,
                 length,
                 route: None,
+                i_max: floats(o.get("i_max")),
+                s_max: floats(o.get("s_max")),
                 extras: take_extras(
                     o,
                     &known,
                     &format!("line {name}"),
                     &mut self.net.warnings,
-                    &[],
+                    if inline {
+                        &["R_series", "X_series", "G_from", "G_to", "B_from", "B_to"]
+                    } else {
+                        &[]
+                    },
                 ),
             });
         }
+    }
+
+    /// Reads a line's inline impedance matrices into a linecode named after
+    /// the line (suffixed if taken), returning the linecode name.
+    fn synthesized_linecode(
+        &mut self,
+        line: &str,
+        o: &Map<String, Value>,
+        taken: &mut std::collections::BTreeSet<String>,
+    ) -> String {
+        let mut name = line.to_string();
+        while taken.contains(name.as_str()) {
+            name.push('_');
+        }
+        taken.insert(name.clone());
+        self.net.warnings.push(format!(
+            "line {line}: inline impedance matrices read into synthesized linecode `{name}`"
+        ));
+        let ([r, x, gf, bf, gt, bt], n, _) = linecode_matrices(o);
+        self.net.linecodes.push(DistLineCode {
+            name: name.clone(),
+            n_conductors: n,
+            r_series: r,
+            x_series: x,
+            g_from: gf,
+            b_from: bf,
+            g_to: gt,
+            b_to: bt,
+            i_max: None,
+            s_max: None,
+            extras: Extras::new(),
+        });
+        name
     }
 
     fn switches(&mut self, items: &Map<String, Value>) {
