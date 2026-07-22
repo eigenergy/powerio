@@ -206,6 +206,14 @@ class Network:
         default_gen_cost: Optional[str] = ...,
         gen_cost_csv: Optional[Any] = ...,
     ) -> "Conversion": ...
+    def write_file(
+        self,
+        path: Any,
+        to: str,
+        missing_gen_cost: Optional[str] = ...,
+        default_gen_cost: Optional[str] = ...,
+        gen_cost_csv: Optional[Any] = ...,
+    ) -> List[str]: ...
     def to_dense(self) -> DenseNetwork: ...
     def bprime(self, scheme: Scheme = ...) -> Any: ...
     def bdoubleprime(self, scheme: Scheme = ...) -> Any: ...
@@ -274,6 +282,7 @@ def convert_file(
     missing_gen_cost: Optional[str] = ...,
     default_gen_cost: Optional[str] = ...,
     gen_cost_csv: Optional[Any] = ...,
+    out: Optional[Any] = ...,
 ) -> Conversion: ...
 def convert_str(
     text: str,

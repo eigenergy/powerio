@@ -903,6 +903,27 @@ def test_convert_round_trip_through_psse(tmp_path):
     assert case.n_buses == 30
 
 
+def test_write_file_preserves_the_crlf_echo(tmp_path):
+    # A same-format echo of a CRLF source must reach disk byte exact.
+    # Writing to_format text through open(path, "w") corrupts it on Windows
+    # (text mode turns each \r\n into \r\r\n); write_file bypasses that.
+    src = DATA / "psse" / "case14.raw"
+    assert b"\r\n" in src.read_bytes()
+    case = powerio.parse_file(src)
+    out = tmp_path / "echo.raw"
+    warnings = case.write_file(out, "psse")
+    assert warnings == []
+    assert out.read_bytes() == src.read_bytes()
+
+
+def test_convert_file_out_writes_the_text_byte_exact(tmp_path):
+    src = DATA / "psse" / "case14.raw"
+    out = tmp_path / "echo.raw"
+    conv = powerio.convert_file(src, "psse", out=out)
+    assert out.read_bytes() == conv.text.encode()
+    assert out.read_bytes() == src.read_bytes()
+
+
 def test_convert_psse_start_of_markers_to_powermodels(tmp_path):
     p = tmp_path / "start_markers.raw"
     p.write_text(PSSE_START_OF_MARKERS)
