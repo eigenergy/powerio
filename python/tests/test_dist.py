@@ -76,6 +76,14 @@ def test_convert_str_and_convert_file():
     assert isinstance(via_str, powerio.Conversion)
 
 
+def test_dist_write_file_echoes_bytes(tmp_path):
+    case = dist.parse_file(FOURWIRE)
+    out = tmp_path / "echo.dss"
+    warnings = case.write_file(out, "dss")
+    assert warnings == []
+    assert out.read_bytes() == FOURWIRE.read_bytes()
+
+
 def test_parse_warnings_surface():
     case = dist.parse_str(
         "clear\n"
