@@ -189,14 +189,14 @@ def test_package_invalid_json_raises_value_error():
         pio.Package.from_json("{}")
 
 
-def test_package_declares_payload_schema_and_row_identity():
+def test_package_declares_schema_version_and_row_identity():
     import json
 
     pkg = pio.Package.from_file(DATA / "case9.m")
     doc = json.loads(pkg.to_json())
-    assert doc["schema_version"] == "0.1.1"
-    assert doc["payload_schema"].endswith("/pio-payload-balanced/1")
-    assert doc["payload_schema_version"] == "1.2.0"
+    assert doc["schema_version"] == "0.2.0"
+    assert "payload_schema" not in doc
+    assert "payload_schema_version" not in doc
     # Every payload row carries an identity; case9 has no source uids, so they
     # are synthesized from the build position.
     assert doc["model"]["balanced_network"]["generators"][0]["uid"] == "generators:0"

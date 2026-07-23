@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+- `.pio.json` carries one version number. `schema_version` (now `0.2.0`)
+  covers the whole document, model JSON included: while the major is 0 an
+  incompatible change bumps the minor, and the reader accepts exactly its own
+  major.minor lineage, rejecting anything else with an error that says to
+  regenerate the package from its source case. The `schema`,
+  `payload_schema`, and `payload_schema_version` fields and the
+  `PIO_PACKAGE_SCHEMA_URL` / `PIO_PAYLOAD_*` constants are gone; the payload
+  schema documents under `docs/schema/pio-payload-*` are no longer published
+  (the `pio-package/0.2` document embeds every model type). Files written by
+  0.7.x and earlier are rejected with the regenerate error.
 - BMOPF schema 0.1.0 (bmopf-report#16). The writer targets the published
   schema `$id` and the reader keeps accepting the pre-0.1.0 spellings:
   - `meta` carries `case_study_generator` (was `generator`) and the system
@@ -11,8 +21,8 @@
   - Bus symmetrical component bounds are the per-sequence scalars
     `vpos_min`/`vpos_max`/`vneg_max`/`vzero_max`/`vn_max`; legacy
     `vsym_min`/`vsym_max` arrays map on read assuming zero/positive/negative
-    order. `DistBus` renames the fields, so the multiconductor payload is
-    `pio-payload-multiconductor/2` (2.0.0).
+    order. `DistBus` renames the fields, part of the `.pio.json` 0.2.0 bump
+    above.
   - Three phase transformers emit one lumped `r_series`/`x_series` pair on
     the wye base, with each winding's percent resistance referred to its own
     rating before the sum; the split `_from`/`_to` fields lost their slots.

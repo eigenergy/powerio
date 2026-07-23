@@ -1868,7 +1868,7 @@ mod tests {
     #[test]
     fn package_helper_returns_stdout_text() {
         let text = package_text(&data("case9.m"), None, 0).unwrap();
-        assert!(text.contains("\"schema\""));
+        assert!(text.contains("\"schema_version\""));
         let pkg = NetworkPackage::from_json(&text).unwrap();
         assert_eq!(pkg.summary.elements["buses"], 9);
     }

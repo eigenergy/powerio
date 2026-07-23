@@ -4822,7 +4822,7 @@
       "type": "string"
     }
   },
-  "$id": "https://powerio.dev/schema/pio-package/0.1",
+  "$id": "https://powerio.dev/schema/pio-package/0.2",
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "description": "A versioned package containing one model payload, provenance, diagnostics,\nvalidation results, and lowering history. Serializes to `.pio.json`.\n\n`model_kind` is stored explicitly and is authoritative; the payload is also\nself-describing (tagged by `kind`). [`NetworkPackage::kind_is_consistent`]\nasserts the two agree. The reader ignores unknown top level fields from a\nnewer producer.",
   "properties": {
@@ -4876,31 +4876,12 @@
         "null"
       ]
     },
-    "payload_schema": {
-      "description": "The declared schema URL for the payload family named by `model_kind`.\n`None` on packages written before the payload schema was declared.",
-      "type": [
-        "string",
-        "null"
-      ]
-    },
-    "payload_schema_version": {
-      "description": "The declared payload schema version (semver), independent of the\nenvelope `schema_version`: the envelope versions the package\nbookkeeping, this versions the network tables. A reader rejects a\ndifferent major before computing on payload fields; `None` (legacy\npackages) is accepted.",
-      "type": [
-        "string",
-        "null"
-      ]
-    },
     "producer": {
       "$ref": "#/$defs/Producer"
     },
-    "schema": {
-      "default": "https://powerio.dev/schema/pio-package/0.1",
-      "description": "The schema URL identifying this package format.",
-      "type": "string"
-    },
     "schema_version": {
-      "default": "0.1.1",
-      "description": "The package schema version (semver).",
+      "default": "0.2.0",
+      "description": "The `.pio.json` format version (semver); see\n[`PIO_PACKAGE_SCHEMA_VERSION`]. Absent fields default to the current\nversion, so a hand-built document without it reads under current rules.",
       "type": "string"
     },
     "source_maps": {

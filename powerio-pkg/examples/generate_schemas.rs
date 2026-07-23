@@ -24,20 +24,13 @@ mod generate {
             .nth(1)
             .map_or_else(|| PathBuf::from("docs/schema"), PathBuf::from);
 
+        // One published document per format lineage; it embeds every payload
+        // type. The `$id` names the published location and is not written into
+        // `.pio.json` files.
         write_schema::<powerio_pkg::NetworkPackage>(
             &out,
-            "pio-package/0.1",
-            powerio_pkg::PIO_PACKAGE_SCHEMA_URL,
-        )?;
-        write_schema::<powerio::BalancedNetwork>(
-            &out,
-            "pio-payload-balanced/1",
-            powerio_pkg::PIO_PAYLOAD_BALANCED_SCHEMA_URL,
-        )?;
-        write_schema::<powerio_dist::MulticonductorNetwork>(
-            &out,
-            "pio-payload-multiconductor/2",
-            powerio_pkg::PIO_PAYLOAD_MULTICONDUCTOR_SCHEMA_URL,
+            "pio-package/0.2",
+            "https://powerio.dev/schema/pio-package/0.2",
         )?;
 
         Ok(())

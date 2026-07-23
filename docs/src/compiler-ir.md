@@ -52,7 +52,7 @@ the document without guessing whether it holds balanced or multiconductor data.
 
 A `.pio.json` document always carries:
 
-- `schema` (URL) and `schema_version` (semver);
+- `schema_version` (semver), the one version number for the whole document;
 - `producer` metadata;
 - `model_kind`, explicit and authoritative;
 - `model`, the typed model payload, tagged by `kind`;
@@ -88,10 +88,10 @@ requirements are in [the `.pio.json` format chapter](pio-json-schema.md).
 
 ### Model JSON stability
 
-The metadata and the model JSON are versioned independently, declared by the
-document's `payload_schema` / `payload_schema_version` fields. Model rows
-carry stable `uid` identities that operating point updates resolve against.
-The bump rules are in [the `.pio.json` format chapter](pio-json-schema.md).
+The model JSON changes are document changes, covered by the one
+`schema_version`. Model rows carry stable `uid` identities that operating
+point updates resolve against. The bump rules are in
+[the `.pio.json` format chapter](pio-json-schema.md).
 
 ### Provenance and source maps
 
