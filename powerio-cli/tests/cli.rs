@@ -123,7 +123,10 @@ fn package_overwrites_existing_output_file() {
 
     let text = std::fs::read_to_string(&out_path).unwrap();
     let value: serde_json::Value = serde_json::from_str(&text).unwrap();
-    assert_eq!(value["schema_version"], powerio_pkg::PIO_PACKAGE_SCHEMA_VERSION);
+    assert_eq!(
+        value["schema_version"],
+        powerio_pkg::PIO_PACKAGE_SCHEMA_VERSION
+    );
     assert!(!text.contains("sentinel"), "{text}");
 
     let _ = std::fs::remove_file(out_path);
