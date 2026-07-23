@@ -245,7 +245,7 @@ fn bmopf_dangling_bus_reference_warns() {
         r#"{
         "bus": {"a": {"terminal_names": ["p1", "n"]}},
         "voltage_source": {"src": {"bus": "a", "terminal_map": ["p1", "n"],
-            "v_mag": [240.0], "v_angle": [0.0]}},
+            "v_magnitude": [240.0], "v_angle": [0.0]}},
         "load": {"ld1": {"bus": "typo", "terminal_map": ["p1", "n"],
             "configuration": "SINGLE_PHASE", "p_nom": [1000.0], "q_nom": [0.0],
             "model": "CONSTANT_POWER"}}
