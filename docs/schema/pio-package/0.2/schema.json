@@ -2698,7 +2698,7 @@
       ]
     },
     "ModelPayload": {
-      "description": "The one IR payload a package carries, tagged by `kind` in JSON so the payload\nis self-describing in addition to the top-level `model_kind`.\n\nThe payload is the serde snapshot of the PowerIO Rust IR\n([`powerio::Network`] / [`powerio_dist::DistNetwork`]), declared by the\npackage's `payload_schema` / `payload_schema_version` fields and versioned\nindependently of the envelope: additive IR growth bumps the payload minor\nwith no envelope version change. See `docs/src/pio-json-schema.md`.",
+      "description": "The one IR payload a package carries, tagged by `kind` in JSON so the payload\nis self-describing in addition to the top-level `model_kind`.\n\nThe payload is the serde snapshot of the PowerIO Rust IR\n([`powerio::Network`] / [`powerio_dist::DistNetwork`]); changes to it are\ndocument changes under the package `schema_version`. See\n`docs/src/pio-json-schema.md`.",
       "oneOf": [
         {
           "properties": {
