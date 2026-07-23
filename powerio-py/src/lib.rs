@@ -885,6 +885,28 @@ impl PyNetwork {
         Ok((conv.text, conv.warnings))
     }
 
+    /// Serialize this case to `to` and write it to `path` exactly as
+    /// produced. Returns the fidelity warnings. Prefer this over writing
+    /// `to_format` text through `open(path, "w")`: Python's text mode
+    /// translates newlines on Windows, and a case whose retained source has
+    /// CRLF endings comes out with doubled carriage returns, which PSS/E
+    /// family tools reject.
+    #[pyo3(signature = (path, to, missing_gen_cost=None, default_gen_cost=None, gen_cost_csv=None))]
+    fn write_file(
+        &self,
+        path: &str,
+        to: &str,
+        missing_gen_cost: Option<&str>,
+        default_gen_cost: Option<&str>,
+        gen_cost_csv: Option<&str>,
+    ) -> PyResult<Vec<String>> {
+        let (text, warnings) =
+            self.to_format(to, missing_gen_cost, default_gen_cost, gen_cost_csv)?;
+        std::fs::write(path, text)
+            .map_err(|e| PowerIOError::new_err(format!("writing {path}: {e}")))?;
+        Ok(warnings)
+    }
+
     /// A normalized, computation-ready copy of this case: per unit, radians,
     /// out-of-service filtered, densely reindexed (1-based), bus types
     /// canonicalized. The raw case is unchanged; the result carries no retained
@@ -1267,9 +1289,12 @@ fn read_pypsa_csv_folder(path: &str) -> PyResult<PyNetwork> {
 /// Convert a case file to another format through the network model. Returns
 /// `(text, warnings)`: the converted file text and the list of fidelity warnings
 /// (fields the target couldn't represent). The input format is the file
-/// extension unless `from` overrides it.
+/// extension unless `from` overrides it. `out` writes the text to a file
+/// exactly as produced — prefer it over `open(out, "w").write(text)`, whose
+/// text mode newline translation on Windows doubles the carriage returns of
+/// a CRLF source echo into `\r\r\n`, which PSS/E family tools reject.
 #[pyfunction]
-#[pyo3(signature = (path, to, from_=None, missing_gen_cost=None, default_gen_cost=None, gen_cost_csv=None))]
+#[pyo3(signature = (path, to, from_=None, missing_gen_cost=None, default_gen_cost=None, gen_cost_csv=None, out=None))]
 fn convert_file(
     path: &str,
     to: &str,
@@ -1277,6 +1302,7 @@ fn convert_file(
     missing_gen_cost: Option<&str>,
     default_gen_cost: Option<&str>,
     gen_cost_csv: Option<&str>,
+    out: Option<&str>,
 ) -> PyResult<(String, Vec<String>)> {
     let target = to
         .parse::<powerio_matrix::TargetFormat>()
@@ -1290,6 +1316,10 @@ fn convert_file(
     let conv =
         powerio_matrix::convert_file_with_options(std::path::Path::new(path), target, from_, &opts)
             .map_err(to_pyerr)?;
+    if let Some(out) = out {
+        std::fs::write(out, &conv.text)
+            .map_err(|e| PowerIOError::new_err(format!("writing {out}: {e}")))?;
+    }
     Ok((conv.text, conv.warnings))
 }
 
@@ -1433,6 +1463,16 @@ impl PyDistNetwork {
             .map_err(dist_to_pyerr)?;
         let conv = self.net.to_canonical_format(target);
         Ok((conv.text, conv.warnings))
+    }
+
+    /// Serialize to `to` and write it to `path` exactly as produced (no
+    /// newline translation; see `Network.write_file`). Returns the fidelity
+    /// warnings.
+    fn write_file(&self, path: &str, to: &str) -> PyResult<Vec<String>> {
+        let (text, warnings) = self.to_format(to)?;
+        std::fs::write(path, text)
+            .map_err(|e| PowerIOError::new_err(format!("writing {path}: {e}")))?;
+        Ok(warnings)
     }
 
     /// The collapsed bus and terminal graph projection as JSON.

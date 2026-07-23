@@ -324,6 +324,30 @@ class Network:
         )
         return Conversion(text, warnings)
 
+    def write_file(
+        self,
+        path: Any,
+        to: str,
+        missing_gen_cost: Optional[str] = None,
+        default_gen_cost: Optional[str] = None,
+        gen_cost_csv: Optional[Any] = None,
+    ) -> list[str]:
+        """Serialize this case to ``to`` and write it to ``path`` byte exact.
+
+        Returns the fidelity warnings. Prefer this over writing
+        :meth:`to_format` text through ``open(path, "w")``: Python's text mode
+        translates newlines on Windows, so a case whose retained source has
+        CRLF line endings comes out with doubled carriage returns
+        (``\r\r\n``), which PSS/E family tools reject.
+        """
+        return self._inner.write_file(
+            str(path),
+            to,
+            missing_gen_cost=missing_gen_cost,
+            default_gen_cost=default_gen_cost,
+            gen_cost_csv=None if gen_cost_csv is None else str(gen_cost_csv),
+        )
+
     def to_dense(self) -> DenseNetwork:
         """Dense NumPy arrays for solver and adapter code.
 
@@ -597,6 +621,7 @@ def convert_file(
     missing_gen_cost: Optional[str] = None,
     default_gen_cost: Optional[str] = None,
     gen_cost_csv: Optional[Any] = None,
+    out: Optional[Any] = None,
 ) -> Conversion:
     """Convert a case file to another format through the network model.
 
@@ -611,7 +636,10 @@ def convert_file(
     read from the document. PyPSA CSV folders are read with
     ``from_="pypsa-csv"`` and written with
     :meth:`Network.write_pypsa_csv_folder`. Returns a :class:`Conversion` with
-    the text and any fidelity warnings.
+    the text and any fidelity warnings. ``out`` writes the text to a file
+    exactly as produced; prefer it over ``open(out, "w").write(text)``, whose
+    text mode newline translation on Windows doubles the carriage returns of
+    a CRLF source echo into ``\r\r\n``, which PSS/E family tools reject.
     """
     text, warnings = _powerio.convert_file(
         str(path),
@@ -620,6 +648,7 @@ def convert_file(
         missing_gen_cost=missing_gen_cost,
         default_gen_cost=default_gen_cost,
         gen_cost_csv=None if gen_cost_csv is None else str(gen_cost_csv),
+        out=None if out is None else str(out),
     )
     return Conversion(text, warnings)
 

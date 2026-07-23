@@ -96,6 +96,15 @@ class DistNetwork:
         text, warnings = self._inner.to_canonical_format(to)
         return Conversion(text, warnings)
 
+    def write_file(self, path: Any, to: str) -> list[str]:
+        """Serialize to ``to`` and write it to ``path`` byte exact.
+
+        Returns the fidelity warnings. See :meth:`powerio.Network.write_file`
+        for why this beats writing :meth:`to_format` text through
+        ``open(path, "w")`` on Windows.
+        """
+        return self._inner.write_file(str(path), to)
+
     def graph(self) -> Any:
         """Collapsed bus and terminal graph as Python data."""
         return _json.loads(self._inner.graph_json())

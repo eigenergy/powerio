@@ -1,5 +1,14 @@
 # Changelog
 
+## Unreleased
+
+- Python: `Network.write_file(path, to)` / `DistNetwork.write_file(path, to)`
+  and a `convert_file(..., out=...)` output path write the serialized case to
+  disk exactly as produced. Writing `to_format` text through
+  `open(path, "w")` corrupts a CRLF source echo on Windows (text mode turns
+  each `\r\n` into `\r\r\n`, which PSS/E family tools reject as malformed
+  records); the new paths bypass Python's newline translation.
+
 ## 0.7.2
 
 - CLI case discovery is recursive and covers every supported format (#260):
