@@ -331,7 +331,7 @@ class Network:
         missing_gen_cost: Optional[str] = None,
         default_gen_cost: Optional[str] = None,
         gen_cost_csv: Optional[Any] = None,
-    ) -> list:
+    ) -> list[str]:
         """Serialize this case to ``to`` and write it to ``path`` byte exact.
 
         Returns the fidelity warnings. Prefer this over writing
