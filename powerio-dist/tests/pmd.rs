@@ -750,6 +750,8 @@ fn dangling_references_warn() {
         "bus": {"a": {"terminals": [1, 2], "grounded": [], "rg": [], "xg": [], "status": "ENABLED"}},
         "load": {"ld1": {"bus": "nosuchbus", "connections": [1, 2],
             "pd_nom": [1.0], "qd_nom": [0.0], "status": "ENABLED"}},
+        "generator": {"g1": {"connections": [1, 2],
+            "pg": [1.0], "qg": [0.0], "status": "ENABLED"}},
         "line": {"ln1": {"f_bus": "a", "t_bus": "a",
             "f_connections": [1], "t_connections": [1], "length": 1.0,
             "linecode": "nosuchcode", "status": "ENABLED"}}
@@ -766,6 +768,15 @@ fn dangling_references_warn() {
         net.warnings
             .iter()
             .any(|w| w.contains("line ln1") && w.contains("undefined linecode `nosuchcode`")),
+        "{:?}",
+        net.warnings
+    );
+    // A missing bus field parses as an empty string; the graph projection
+    // would synthesize a phantom bus for it just like a typo.
+    assert!(
+        net.warnings
+            .iter()
+            .any(|w| w.contains("generator g1") && w.contains("`bus` reference is empty")),
         "{:?}",
         net.warnings
     );
