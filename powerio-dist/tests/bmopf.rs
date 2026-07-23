@@ -237,6 +237,44 @@ fn dss_fixtures_emit_valid_bmopf() {
     }
 }
 
+/// PMD spells an unbounded phase as JSON null, which restores as Inf.
+/// BMOPF has no unbounded spelling: the rating field drops with a warning
+/// instead of the zero fallback turning "no limit" into a zero limit, and
+/// the finite sibling field survives.
+#[test]
+fn nonfinite_line_ratings_drop_instead_of_zeroing() {
+    let text = r#"{
+        "data_model": "ENGINEERING",
+        "bus": {
+            "b1": {"terminals": [1], "grounded": [], "rg": [], "xg": [], "status": "ENABLED"},
+            "b2": {"terminals": [1], "grounded": [], "rg": [], "xg": [], "status": "ENABLED"}
+        },
+        "linecode": {"lc": {"rs": [[0.1]], "xs": [[0.1]],
+            "g_fr": [[0.0]], "g_to": [[0.0]], "b_fr": [[0.0]], "b_to": [[0.0]]}},
+        "line": {"ln1": {"f_bus": "b1", "t_bus": "b2",
+            "f_connections": [1], "t_connections": [1], "length": 10.0,
+            "linecode": "lc", "cm_ub": [null], "sm_ub": [600.0],
+            "status": "ENABLED"}}
+    }"#;
+    let net = parse_pmd_str(text).unwrap();
+    let out = write_bmopf_json(&net);
+    let doc: serde_json::Value = serde_json::from_str(&out.text).unwrap();
+    assert!(doc["line"]["ln1"].get("i_max").is_none());
+    assert_eq!(doc["line"]["ln1"]["s_max"], serde_json::json!([600.0]));
+    assert!(
+        out.warnings
+            .iter()
+            .any(|w| w.contains("i_max") && w.contains("dropped")),
+        "{:?}",
+        out.warnings
+    );
+    assert!(
+        !out.warnings.iter().any(|w| w.contains("emitted as 0")),
+        "{:?}",
+        out.warnings
+    );
+}
+
 #[test]
 fn dss_grounding_reactors_emit_bmopf_shunts() {
     let v = schema_validator();

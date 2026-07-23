@@ -205,6 +205,22 @@ impl Writer {
         Value::Array(vs.iter().map(|&v| self.num(v, what)).collect())
     }
 
+    /// A rating/bound array. PMD spells an unbounded phase as JSON null,
+    /// which restores as ±Inf; BMOPF has no unbounded spelling, and the
+    /// `num` zero fallback would turn "no limit" into a zero limit. Drop
+    /// the whole field with a warning instead.
+    fn bounds(&mut self, vs: &[f64], what: &str) -> Option<Value> {
+        if vs.iter().all(|v| v.is_finite()) {
+            Some(json!(vs))
+        } else {
+            self.warn(format!(
+                "{what}: nonfinite entries (an unbounded phase) have no BMOPF spelling; \
+                 field dropped"
+            ));
+            None
+        }
+    }
+
     fn extras_dropped(&mut self, extras: &crate::model::Extras, what: &str) {
         for key in extras.keys() {
             // `bmopf_subtype` is reader bookkeeping; `conn` marks a delta shunt
@@ -571,13 +587,18 @@ impl Writer {
                 o.insert("bus_to".into(), json!(l.bus_to));
                 o.insert("terminal_map_from".into(), json!(l.terminal_map_from));
                 o.insert("terminal_map_to".into(), json!(l.terminal_map_to));
-                if let Some(i_max) = &l.i_max {
-                    o.insert("i_max".into(), self.nums(i_max, "line i_max"));
+                let what = format!("line {}", l.name);
+                if let Some(i_max) = &l.i_max
+                    && let Some(v) = self.bounds(i_max, &format!("{what} i_max"))
+                {
+                    o.insert("i_max".into(), v);
                 }
-                if let Some(s_max) = &l.s_max {
-                    o.insert("s_max".into(), self.nums(s_max, "line s_max"));
+                if let Some(s_max) = &l.s_max
+                    && let Some(v) = self.bounds(s_max, &format!("{what} s_max"))
+                {
+                    o.insert("s_max".into(), v);
                 }
-                self.extras_dropped(&l.extras, &format!("line {}", l.name));
+                self.extras_dropped(&l.extras, &what);
                 lines.insert(l.name.clone(), Value::Object(o));
             }
             doc.insert("line".into(), Value::Object(lines));
@@ -591,8 +612,10 @@ impl Writer {
                 o.insert("terminal_map_from".into(), json!(s.terminal_map_from));
                 o.insert("terminal_map_to".into(), json!(s.terminal_map_to));
                 o.insert("open_switch".into(), json!(s.open));
-                if let Some(i_max) = &s.i_max {
-                    o.insert("i_max".into(), self.nums(i_max, "switch i_max"));
+                if let Some(i_max) = &s.i_max
+                    && let Some(v) = self.bounds(i_max, &format!("switch {} i_max", s.name))
+                {
+                    o.insert("i_max".into(), v);
                 }
                 self.extras_dropped(&s.extras, &format!("switch {}", s.name));
                 switches.insert(s.name.clone(), Value::Object(o));
