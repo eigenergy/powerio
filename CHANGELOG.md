@@ -25,7 +25,11 @@
     OpenDSS capacitors to shunt matrices; the dss and PMD writers drop typed
     capacitors with a warning.
   - Lines accept the inline impedance alternative to `linecode` + `length`
-    (read into a synthesized linecode) and carry `i_max`/`s_max`.
+    (read into a synthesized linecode) and carry `i_max`/`s_max`. The line
+    ratings map to the ENGINEERING line's own `cm_ub`/`sm_ub` (both
+    directions; an inline line's ratings stay on the synthesized linecode),
+    and the dss writer warns when it drops them (the `normamps`/`emergamps`
+    mapping decision is #266).
   - One-triangle matrix spellings mirror on read (BMOPFTools writes the
     upper triangle of the symmetric matrices).
   - A grounded terminal counts as referenced, so the unused-terminal prune
