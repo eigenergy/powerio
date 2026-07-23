@@ -158,16 +158,18 @@ map for source format fields the model does not name. The field reference is the
 The generated schema is served at
 `https://powerio.dev/schema/pio-payload-balanced/1/schema.json`.
 
-### The Multiconductor Model JSON: `pio-payload-multiconductor/1` {#pio-payload-multiconductor}
+### The Multiconductor Model JSON: `pio-payload-multiconductor/2` {#pio-payload-multiconductor}
 
-`https://powerio.dev/schema/pio-payload-multiconductor/1` names the serde form
+`https://powerio.dev/schema/pio-payload-multiconductor/2` names the serde form
 of `powerio_dist::DistNetwork` under `model.multiconductor_network`, stamped
 when `model_kind` is `multiconductor`: the wire coordinate distribution model,
 in SI units with radian angles. [Compiler IR](compiler-ir.md) describes the
 model family. The field reference is the
 [`powerio_dist::DistNetwork` rustdoc](../powerio_dist/model/struct.DistNetwork.html).
 The generated schema is served at
-`https://powerio.dev/schema/pio-payload-multiconductor/1/schema.json`.
+`https://powerio.dev/schema/pio-payload-multiconductor/2/schema.json`; `/1`
+(the vintage before the BMOPF schema 0.1.0 alignment renamed the bus
+symmetrical component bounds) stays served for documents that declare it.
 Do not extract this object as a distribution case file. Use `.pio.json` for
 PowerIO artifacts; when a receiving tool expects BMOPF, PMD JSON, or OpenDSS,
 write that case format through `powerio convert`.
@@ -312,8 +314,8 @@ bindings, or MCP operations.
   "schema_version": "0.1.1",
   "producer": { "tool": "powerio", "version": "0.7.0" },
   "model_kind": "multiconductor",
-  "payload_schema": "https://powerio.dev/schema/pio-payload-multiconductor/1",
-  "payload_schema_version": "1.1.0",
+  "payload_schema": "https://powerio.dev/schema/pio-payload-multiconductor/2",
+  "payload_schema_version": "2.0.0",
   "model": {
     "kind": "multiconductor",
     "multiconductor_network": {

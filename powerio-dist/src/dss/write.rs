@@ -611,6 +611,7 @@ impl DssWriter {
         self.transformers(net);
         self.loads(net);
         self.shunts(net);
+        self.capacitors_dropped(net);
         self.generators(net);
         self.ibrs(net);
 
@@ -706,8 +707,11 @@ impl DssWriter {
             ("vpn_max", b.vpn_max.is_some()),
             ("vpp_min", b.vpp_min.is_some()),
             ("vpp_max", b.vpp_max.is_some()),
-            ("vsym_min", b.vsym_min.is_some()),
-            ("vsym_max", b.vsym_max.is_some()),
+            ("vpos_min", b.vpos_min.is_some()),
+            ("vpos_max", b.vpos_max.is_some()),
+            ("vneg_max", b.vneg_max.is_some()),
+            ("vzero_max", b.vzero_max.is_some()),
+            ("vn_max", b.vn_max.is_some()),
         ] {
             if present {
                 self.warnings.push(format!(
@@ -894,6 +898,16 @@ impl DssWriter {
                 l.linecode,
                 num(l.length),
             );
+            // Line-level ratings await the normamps/emergamps mapping
+            // decision (#266); dropping them stays loud in the meantime.
+            for (key, present) in [("i_max", l.i_max.is_some()), ("s_max", l.s_max.is_some())] {
+                if present {
+                    self.warn(format!(
+                        "line {}: `{key}` has no dss Line field mapping yet; dropped",
+                        l.name
+                    ));
+                }
+            }
             let mut extras = l.extras.clone();
             extras.remove("units"); // canonical output is in meters
             s.push_str(&self.extras_tail("line", &l.name, &extras));
@@ -1386,6 +1400,17 @@ impl DssWriter {
         );
         line.push_str(&self.extras_tail(class, &sh.name, &extras));
         self.line_out(&line);
+    }
+
+    /// Typed BMOPF capacitor banks have no DSS conversion yet: q_rated at
+    /// v_nom does not carry phase geometry the way the shunt B matrix does.
+    fn capacitors_dropped(&mut self, net: &DistNetwork) {
+        for c in &net.capacitors {
+            self.warnings.push(format!(
+                "capacitor {}: rated capacitor banks are not converted to dss; dropped",
+                c.name
+            ));
+        }
     }
 
     fn shunts(&mut self, net: &DistNetwork) {
@@ -2265,6 +2290,8 @@ mod tests {
             linecode: "lc".into(),
             length: 1.0,
             route: None,
+            i_max: None,
+            s_max: None,
             extras: Extras::new(),
         });
         let out2 = write_dss(&net2);
@@ -2275,6 +2302,40 @@ mod tests {
             "{:?}",
             out2.warnings
         );
+    }
+
+    #[test]
+    fn line_level_ratings_drop_with_a_warning() {
+        let (b, vs) = three_phase_source(2400.0);
+        let net = DistNetwork {
+            base_frequency: 60.0,
+            buses: vec![b, bus("b2", &["1"], &[])],
+            sources: vec![vs],
+            lines: vec![DistLine {
+                name: "l1".into(),
+                bus_from: "sb".into(),
+                bus_to: "b2".into(),
+                terminal_map_from: strings(&["1"]),
+                terminal_map_to: strings(&["1"]),
+                linecode: "lc".into(),
+                length: 1.0,
+                route: None,
+                i_max: Some(vec![400.0]),
+                s_max: Some(vec![600.0]),
+                extras: Extras::new(),
+            }],
+            ..DistNetwork::default()
+        };
+        let out = write_dss(&net);
+        for key in ["i_max", "s_max"] {
+            assert!(
+                out.warnings
+                    .iter()
+                    .any(|w| w.contains("line l1") && w.contains(key) && w.contains("dropped")),
+                "{key}: {:?}",
+                out.warnings
+            );
+        }
     }
 
     #[test]

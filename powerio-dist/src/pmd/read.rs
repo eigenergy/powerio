@@ -449,11 +449,14 @@ impl Reader<'_> {
             ];
             let mut linecode = string(o.get("linecode"));
             let mut extras;
+            let mut i_max = None;
+            let mut s_max = None;
             // Inline impedance (the dss2eng output for rmatrix defined
             // lines): materialize a linecode so the matrices survive, and
-            // mark the line so the PMD writer re-inlines them.
+            // mark the line so the PMD writer re-inlines them. The inline
+            // ratings live on the synthesized linecode, not the line.
             if linecode.is_empty() && o.get("rs").is_some() {
-                known.extend(["rs", "xs", "g_fr", "g_to", "b_fr", "b_to", "cm_ub"]);
+                known.extend(["rs", "xs", "g_fr", "g_to", "b_fr", "b_to", "cm_ub", "sm_ub"]);
                 extras = take_extras(o, &known);
                 let mut lc_name = format!("{name}_z");
                 let mut k = 2;
@@ -470,7 +473,10 @@ impl Reader<'_> {
                 extras.insert("pmd_inline".into(), Value::Bool(true));
                 linecode = lc_name;
             } else {
+                known.extend(["cm_ub", "sm_ub"]);
                 extras = take_extras(o, &known);
+                i_max = floats("cm_ub", o.get("cm_ub"));
+                s_max = floats("sm_ub", o.get("sm_ub"));
             }
             stash_status(
                 o,
@@ -487,6 +493,8 @@ impl Reader<'_> {
                 linecode,
                 length: o.get("length").map_or(f64::NAN, |v| restore("length", v)),
                 route: None,
+                i_max,
+                s_max,
                 extras,
             });
         }

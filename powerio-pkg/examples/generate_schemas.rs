@@ -36,7 +36,7 @@ mod generate {
         )?;
         write_schema::<powerio_dist::MulticonductorNetwork>(
             &out,
-            "pio-payload-multiconductor/1",
+            "pio-payload-multiconductor/2",
             powerio_pkg::PIO_PAYLOAD_MULTICONDUCTOR_SCHEMA_URL,
         )?;
 
