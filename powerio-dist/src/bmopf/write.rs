@@ -21,20 +21,28 @@ use crate::model::{
     VoltageSource, Winding, WindingConn, n_winding_impedance_base, pair_keys,
 };
 
-/// The `$schema` stamped into every document's `meta`: the current BMOPF
-/// schema URI used by BMOPFTools.
-const BMOPF_SCHEMA_ID: &str =
-    "https://raw.githubusercontent.com/frederikgeth/bmopf-report/main/schema/bmopf.json";
+/// The `$schema` stamped into every document's `meta`: the bmopf-report
+/// schema `$id` (0.1.0 vintage).
+const BMOPF_SCHEMA_ID: &str = "https://raw.githubusercontent.com/frederikgeth/bmopf-report/main/draft_schema_and_networks/draft_bmopf_schema.json";
 
-const RAW_BMOPF_TOP_LEVEL: &[&str] = &[
-    "capacitor",
+/// Untyped classes that belong to the BMOPF ecosystem. Schema 0.1.0 dropped
+/// their top-level tables (`additionalProperties: false` + the `extras`
+/// escape hatch), so they re-emit under `extras` instead of the top level.
+const RAW_BMOPF_EXTRAS_TABLES: &[&str] = &[
     "ibr",
     "control_profile",
     "dc_bus",
     "dc_line",
     "dc_load",
     "dc_source",
+    "time_series",
 ];
+
+/// The reader's verbatim stash of a source document's own `extras` object.
+const BMOPF_EXTRAS_STASH: &str = "bmopf_extras";
+
+/// The reader's verbatim stash of a source document's `terminal_conventions`.
+const BMOPF_TERMINAL_CONVENTIONS_STASH: &str = "bmopf_terminal_conventions";
 
 const IBR_EXTRA_FIELDS: &[&str] = &[
     "dc_link_coupled",
@@ -124,6 +132,7 @@ pub fn write_bmopf_json_with_options(net: &DistNetwork, options: &BmopfWriteOpti
             .iter()
             .map(|b| (b.id.to_ascii_lowercase(), b.grounded.clone()))
             .collect(),
+        transformer_overflow: Map::new(),
     };
     let doc = w.document(net);
     Conversion {
@@ -139,6 +148,10 @@ struct Writer {
     warnings: Vec<String>,
     diagnostics: Vec<StructuredDiagnostic>,
     grounded: BTreeMap<String, Vec<String>>,
+    /// Transformer fields with no slot in the schema 0.1.0 subtype defs
+    /// (taps, neutral impedance, no load admittance), relocated to
+    /// `extras.transformer.<subtype>.<name>` instead of dropped.
+    transformer_overflow: Map<String, Value>,
 }
 
 impl Writer {
@@ -192,6 +205,22 @@ impl Writer {
         Value::Array(vs.iter().map(|&v| self.num(v, what)).collect())
     }
 
+    /// A rating/bound array. PMD spells an unbounded phase as JSON null,
+    /// which restores as ±Inf; BMOPF has no unbounded spelling, and the
+    /// `num` zero fallback would turn "no limit" into a zero limit. Drop
+    /// the whole field with a warning instead.
+    fn bounds(&mut self, vs: &[f64], what: &str) -> Option<Value> {
+        if vs.iter().all(|v| v.is_finite()) {
+            Some(json!(vs))
+        } else {
+            self.warn(format!(
+                "{what}: nonfinite entries (an unbounded phase) have no BMOPF spelling; \
+                 field dropped"
+            ));
+            None
+        }
+    }
+
     fn extras_dropped(&mut self, extras: &crate::model::Extras, what: &str) {
         for key in extras.keys() {
             // `bmopf_subtype` is reader bookkeeping; `conn` marks a delta shunt
@@ -212,10 +241,11 @@ impl Writer {
     /// immediate source format (which a round trip would change) — so canonical
     /// output is idempotent. The vintage lives in `$schema` (the canonical
     /// bmopf-report `$id`).
-    fn meta() -> Value {
+    fn meta(&mut self, net: &DistNetwork) -> Value {
         json!({
             "$schema": BMOPF_SCHEMA_ID,
-            "generator": {"tool": "powerio", "version": env!("CARGO_PKG_VERSION")},
+            "frequency": self.num(net.base_frequency, "meta frequency"),
+            "case_study_generator": {"tool": "powerio", "version": env!("CARGO_PKG_VERSION")},
         })
     }
 
@@ -224,8 +254,45 @@ impl Writer {
         if let Some(name) = &net.name {
             doc.insert("name".into(), json!(name));
         }
-        doc.insert("meta".into(), Self::meta());
+        let meta = self.meta(net);
+        doc.insert("meta".into(), meta);
+        if let Some(Value::Object(tc)) = net.extras.get(BMOPF_TERMINAL_CONVENTIONS_STASH) {
+            doc.insert("terminal_conventions".into(), Value::Object(tc.clone()));
+        }
+        self.buses(net, &mut doc);
+        self.linecodes(net, &mut doc);
 
+        self.branches(net, &mut doc);
+        self.injections(net, &mut doc);
+        self.capacitors(net, &mut doc);
+
+        let transformers = self.transformers(net);
+        if !transformers.is_empty() {
+            doc.insert("transformer".into(), Value::Object(transformers));
+        }
+
+        // Schema 0.1.0 dropped the IBR, control profile, DC, and time series
+        // tables from the top level; `extras` is their sanctioned home.
+        let mut extras = Map::new();
+        if let Some(Value::Object(stash)) = net.extras.get(BMOPF_EXTRAS_STASH) {
+            extras.extend(stash.clone());
+        }
+        self.control_profiles(net, &mut extras);
+        self.ibrs(net, &mut extras);
+        self.untyped_bmopf_tables(net, &mut doc, &mut extras);
+        if !self.transformer_overflow.is_empty() {
+            let overflow = std::mem::take(&mut self.transformer_overflow);
+            extras.insert("transformer".into(), Value::Object(overflow));
+        }
+        if !extras.is_empty() {
+            doc.insert("extras".into(), Value::Object(extras));
+        }
+        self.warn_unemitted_untyped(net);
+        self.prune_unreferenced_buses(&mut doc);
+        Value::Object(doc)
+    }
+
+    fn buses(&mut self, net: &DistNetwork, doc: &mut Map<String, Value>) {
         let mut buses = Map::new();
         for b in &net.buses {
             let mut o = Map::new();
@@ -244,11 +311,20 @@ impl Writer {
                 ("vpn_max", &b.vpn_max),
                 ("vpp_min", &b.vpp_min),
                 ("vpp_max", &b.vpp_max),
-                ("vsym_min", &b.vsym_min),
-                ("vsym_max", &b.vsym_max),
             ] {
                 if let Some(v) = bound {
                     o.insert(key.into(), self.nums(v, &format!("bus {key}")));
+                }
+            }
+            for (key, bound) in [
+                ("vpos_min", b.vpos_min),
+                ("vpos_max", b.vpos_max),
+                ("vneg_max", b.vneg_max),
+                ("vzero_max", b.vzero_max),
+                ("vn_max", b.vn_max),
+            ] {
+                if let Some(v) = bound {
+                    o.insert(key.into(), self.num(v, &format!("bus {key}")));
                 }
             }
             self.bus_location(&mut o, b, net);
@@ -257,7 +333,9 @@ impl Writer {
             buses.insert(b.id.clone(), Value::Object(o));
         }
         doc.insert("bus".into(), Value::Object(buses));
+    }
 
+    fn linecodes(&mut self, net: &DistNetwork, doc: &mut Map<String, Value>) {
         if !net.linecodes.is_empty() {
             let mut codes = Map::new();
             for c in &net.linecodes {
@@ -284,32 +362,21 @@ impl Writer {
                 self.flat_matrix(&mut o, "G_to", &c.g_to, &c.name);
                 self.flat_matrix(&mut o, "B_from", &c.b_from, &c.name);
                 self.flat_matrix(&mut o, "B_to", &c.b_to, &c.name);
-                if let Some(i_max) = &c.i_max {
-                    o.insert("i_max".into(), self.nums(i_max, "linecode i_max"));
+                if let Some(i_max) = &c.i_max
+                    && let Some(v) = self.bounds(i_max, &format!("linecode {} i_max", c.name))
+                {
+                    o.insert("i_max".into(), v);
                 }
-                if let Some(s_max) = &c.s_max {
-                    o.insert("s_max".into(), self.nums(s_max, "linecode s_max"));
+                if let Some(s_max) = &c.s_max
+                    && let Some(v) = self.bounds(s_max, &format!("linecode {} s_max", c.name))
+                {
+                    o.insert("s_max".into(), v);
                 }
                 self.extras_dropped(&c.extras, &format!("linecode {}", c.name));
                 codes.insert(c.name.clone(), Value::Object(o));
             }
             doc.insert("linecode".into(), Value::Object(codes));
         }
-
-        self.branches(net, &mut doc);
-        self.injections(net, &mut doc);
-        self.control_profiles(net, &mut doc);
-        self.ibrs(net, &mut doc);
-
-        let transformers = self.transformers(net);
-        if !transformers.is_empty() {
-            doc.insert("transformer".into(), Value::Object(transformers));
-        }
-
-        self.untyped_bmopf_tables(net, &mut doc);
-        self.warn_unemitted_untyped(net);
-        self.prune_unreferenced_buses(&mut doc);
-        Value::Object(doc)
     }
 
     fn bus_location(
@@ -411,11 +478,23 @@ impl Writer {
     }
 
     fn is_emitted_untyped(u: &crate::model::UntypedObject) -> bool {
-        RAW_BMOPF_TOP_LEVEL.contains(&u.class.as_str()) || u.class.starts_with("transformer.")
+        RAW_BMOPF_EXTRAS_TABLES.contains(&u.class.as_str()) || u.class.starts_with("transformer.")
     }
 
-    fn untyped_bmopf_tables(&mut self, net: &DistNetwork, doc: &mut Map<String, Value>) {
+    /// Untyped BMOPF ecosystem objects, one pass: the tables that lost
+    /// their top-level slots in schema 0.1.0 re-emit under `extras`, while
+    /// untyped transformer subtypes keep their place under `transformer`.
+    fn untyped_bmopf_tables(
+        &mut self,
+        net: &DistNetwork,
+        doc: &mut Map<String, Value>,
+        extras: &mut Map<String, Value>,
+    ) {
         for u in &net.untyped {
+            let subtype = u.class.strip_prefix("transformer.");
+            if subtype.is_none() && !RAW_BMOPF_EXTRAS_TABLES.contains(&u.class.as_str()) {
+                continue;
+            }
             let Some(value) = raw_bmopf_value(u) else {
                 self.warn(format!(
                     "{} {}: untyped BMOPF object could not be parsed as JSON; dropped from the output",
@@ -423,23 +502,22 @@ impl Writer {
                 ));
                 continue;
             };
-            if RAW_BMOPF_TOP_LEVEL.contains(&u.class.as_str()) {
-                doc.entry(u.class.clone())
-                    .or_insert_with(|| Value::Object(Map::new()))
-                    .as_object_mut()
-                    .expect("BMOPF tables are objects")
-                    .insert(u.name.clone(), value);
-            } else if let Some(subtype) = u.class.strip_prefix("transformer.") {
-                doc.entry("transformer")
+            let table = match subtype {
+                Some(sub) => doc
+                    .entry("transformer")
                     .or_insert_with(|| Value::Object(Map::new()))
                     .as_object_mut()
                     .expect("transformer table is an object")
-                    .entry(subtype.to_string())
-                    .or_insert_with(|| Value::Object(Map::new()))
-                    .as_object_mut()
-                    .expect("transformer subtype table is an object")
-                    .insert(u.name.clone(), value);
-            }
+                    .entry(sub.to_string())
+                    .or_insert_with(|| Value::Object(Map::new())),
+                None => extras
+                    .entry(u.class.clone())
+                    .or_insert_with(|| Value::Object(Map::new())),
+            };
+            table
+                .as_object_mut()
+                .expect("BMOPF tables are objects")
+                .insert(u.name.clone(), value);
         }
     }
 
@@ -465,6 +543,19 @@ impl Writer {
             let Some(bus) = buses.get_mut(&id).and_then(Value::as_object_mut) else {
                 continue;
             };
+            // A perfectly grounded terminal is referenced by ground itself:
+            // pruning it would silently lose the grounding, and a dss round
+            // trip would come back with different bus connectivity.
+            let mut used = used.clone();
+            if let Some(Value::Array(grounded)) = bus.get("perfectly_grounded_terminals") {
+                used.extend(
+                    grounded
+                        .iter()
+                        .filter_map(Value::as_str)
+                        .map(str::to_string),
+                );
+            }
+            let used = &used;
             prune_string_array(
                 bus,
                 "terminal_names",
@@ -500,7 +591,18 @@ impl Writer {
                 o.insert("bus_to".into(), json!(l.bus_to));
                 o.insert("terminal_map_from".into(), json!(l.terminal_map_from));
                 o.insert("terminal_map_to".into(), json!(l.terminal_map_to));
-                self.extras_dropped(&l.extras, &format!("line {}", l.name));
+                let what = format!("line {}", l.name);
+                if let Some(i_max) = &l.i_max
+                    && let Some(v) = self.bounds(i_max, &format!("{what} i_max"))
+                {
+                    o.insert("i_max".into(), v);
+                }
+                if let Some(s_max) = &l.s_max
+                    && let Some(v) = self.bounds(s_max, &format!("{what} s_max"))
+                {
+                    o.insert("s_max".into(), v);
+                }
+                self.extras_dropped(&l.extras, &what);
                 lines.insert(l.name.clone(), Value::Object(o));
             }
             doc.insert("line".into(), Value::Object(lines));
@@ -514,14 +616,36 @@ impl Writer {
                 o.insert("terminal_map_from".into(), json!(s.terminal_map_from));
                 o.insert("terminal_map_to".into(), json!(s.terminal_map_to));
                 o.insert("open_switch".into(), json!(s.open));
-                if let Some(i_max) = &s.i_max {
-                    o.insert("i_max".into(), self.nums(i_max, "switch i_max"));
+                if let Some(i_max) = &s.i_max
+                    && let Some(v) = self.bounds(i_max, &format!("switch {} i_max", s.name))
+                {
+                    o.insert("i_max".into(), v);
                 }
                 self.extras_dropped(&s.extras, &format!("switch {}", s.name));
                 switches.insert(s.name.clone(), Value::Object(o));
             }
             doc.insert("switch".into(), Value::Object(switches));
         }
+    }
+
+    /// Rated capacitor banks (schema 0.1.0 `capacitor`), distinct from the
+    /// raw admittance `shunt` table.
+    fn capacitors(&mut self, net: &DistNetwork, doc: &mut Map<String, Value>) {
+        if net.capacitors.is_empty() {
+            return;
+        }
+        let mut caps = Map::new();
+        for c in &net.capacitors {
+            let mut o = Map::new();
+            o.insert("bus".into(), json!(c.bus));
+            o.insert("terminal_map".into(), json!(c.terminal_map));
+            o.insert("configuration".into(), json!(config_str(c.configuration)));
+            o.insert("q_rated".into(), self.num(c.q_rated, "capacitor q_rated"));
+            o.insert("v_nom".into(), self.num(c.v_nom, "capacitor v_nom"));
+            self.extras_dropped(&c.extras, &format!("capacitor {}", c.name));
+            caps.insert(c.name.clone(), Value::Object(o));
+        }
+        doc.insert("capacitor".into(), Value::Object(caps));
     }
 
     /// Loads, generators, shunts, and the voltage sources.
@@ -771,17 +895,17 @@ impl Writer {
     ) {
         match model {
             DistLoadVoltageModel::ConstantPower { v_nom } => {
-                o.insert("model".into(), json!("constant_power"));
+                o.insert("model".into(), json!("CONSTANT_POWER"));
                 if !v_nom.is_empty() {
                     o.insert("v_nom".into(), self.nums(v_nom, &format!("{what} v_nom")));
                 }
             }
             DistLoadVoltageModel::ConstantCurrent { v_nom } => {
-                o.insert("model".into(), json!("constant_current"));
+                o.insert("model".into(), json!("CONSTANT_CURRENT"));
                 o.insert("v_nom".into(), self.nums(v_nom, &format!("{what} v_nom")));
             }
             DistLoadVoltageModel::ConstantImpedance { v_nom } => {
-                o.insert("model".into(), json!("constant_impedance"));
+                o.insert("model".into(), json!("CONSTANT_IMPEDANCE"));
                 o.insert("v_nom".into(), self.nums(v_nom, &format!("{what} v_nom")));
             }
             DistLoadVoltageModel::Zip {
@@ -793,7 +917,7 @@ impl Writer {
                 beta_i,
                 beta_p,
             } => {
-                o.insert("model".into(), json!("zip"));
+                o.insert("model".into(), json!("ZIP"));
                 o.insert("v_nom".into(), self.nums(v_nom, &format!("{what} v_nom")));
                 o.insert(
                     "alpha_z".into(),
@@ -825,7 +949,7 @@ impl Writer {
                 gamma_p,
                 gamma_q,
             } => {
-                o.insert("model".into(), json!("exponential"));
+                o.insert("model".into(), json!("EXPONENTIAL"));
                 o.insert("v_nom".into(), self.nums(v_nom, &format!("{what} v_nom")));
                 o.insert(
                     "gamma_p".into(),
@@ -859,11 +983,15 @@ impl Writer {
                          which has no BMOPF field"
                     ));
                 }
-                if let Some(v) = lo {
-                    o.insert(key_lo.into(), self.nums(v, key_lo));
+                if let Some(v) = lo
+                    && let Some(v) = self.bounds(v, &format!("{what} {key_lo}"))
+                {
+                    o.insert(key_lo.into(), v);
                 }
-                if let Some(v) = hi {
-                    o.insert(key_hi.into(), self.nums(v, key_hi));
+                if let Some(v) = hi
+                    && let Some(v) = self.bounds(v, &format!("{what} {key_hi}"))
+                {
+                    o.insert(key_hi.into(), v);
                 }
             } else if !nom.is_empty() {
                 // A fixed injection becomes pinned bounds.
@@ -989,7 +1117,66 @@ impl Writer {
                 }
             }
         }
+        self.split_transformer_overflow(&mut by_subtype);
         by_subtype
+    }
+
+    /// Moves transformer fields with no slot in the schema 0.1.0 subtype
+    /// defs (taps, neutral impedance, no load admittance) out of the
+    /// `additionalProperties: false` subtype objects and into
+    /// `extras.transformer.<subtype>.<name>`, warning per transformer.
+    /// Subtypes the schema leaves undefined (`n_winding`, untyped
+    /// passthrough) are untouched.
+    fn split_transformer_overflow(&mut self, by_subtype: &mut Map<String, Value>) {
+        // The transformer fields the emitters still produce that lost their
+        // subtype slots in schema 0.1.0. Listing the moved set (rather than
+        // an allow-list of the schema shape) keeps the failure mode loud: a
+        // future emitted field lands in the subtype object, where the schema
+        // validation tests reject it if it has no slot.
+        const MOVED_FIELDS: &[&str] = &[
+            "tap",
+            "tap_min",
+            "tap_max",
+            "r_neutral_from",
+            "x_neutral_from",
+            "r_neutral_to",
+            "x_neutral_to",
+            "g_no_load",
+            "b_no_load",
+        ];
+        for subtype in ["single_phase", "center_tap", "wye_delta", "delta_wye"] {
+            let Some(Value::Object(table)) = by_subtype.get_mut(subtype) else {
+                continue;
+            };
+            for (name, entry) in table.iter_mut() {
+                let Value::Object(o) = entry else { continue };
+                let moved: Vec<String> = MOVED_FIELDS
+                    .iter()
+                    .filter(|k| o.contains_key(**k))
+                    .map(|k| (*k).to_string())
+                    .collect();
+                if moved.is_empty() {
+                    continue;
+                }
+                let mut overflow = Map::new();
+                for key in &moved {
+                    if let Some(v) = o.remove(key) {
+                        overflow.insert(key.clone(), v);
+                    }
+                }
+                self.warnings.push(format!(
+                    "transformer {name}: {} have no {subtype} slot in BMOPF schema 0.1.0; \
+                     kept under extras.transformer",
+                    moved.join(", ")
+                ));
+                self.transformer_overflow
+                    .entry(subtype.to_string())
+                    .or_insert_with(|| Value::Object(Map::new()))
+                    .as_object_mut()
+                    .expect("overflow subtype tables are objects")
+                    .insert(name.clone(), Value::Object(overflow));
+            }
+        }
     }
 
     /// Shared single_phase / center_tap shape. `to_scale` rescales the to
@@ -1180,12 +1367,12 @@ impl Writer {
         (emitted_from, 0.0)
     }
 
-    /// `wye_delta` stays in the legacy lumped wye side form. `delta_wye`
-    /// uses split fields referred to each winding's own base.
+    /// Both three phase subtypes use the schema 0.1.0 lumped form: one
+    /// `r_series`/`x_series` pair referred to the wye winding's base (the
+    /// split `_from`/`_to` fields lost their slots in 0.1.0).
     fn three_phase(&mut self, t: &DistTransformer, wye_idx: usize) -> Value {
         let from = &t.windings[0];
         let to = &t.windings[1];
-        let is_delta_wye = wye_idx == 1;
         let s = from.s_rating;
         let mut o = Map::new();
         o.insert("bus_from".into(), json!(from.bus));
@@ -1200,56 +1387,33 @@ impl Writer {
             self.num(to.v_ref, "transformer v_nom_to"),
         );
         if t.xsc_pct.is_empty() {
-            let emitted = if is_delta_wye {
-                "x_series_from=0 and x_series_to=0"
-            } else {
-                "x_series=0"
-            };
             self.transformer_diagnostic(
                 t,
                 "EMIT.BMOPF.TRANSFORMER_MISSING_XSC",
                 format!(
-                    "transformer {}: xsc_pct is empty; emitted {emitted}",
+                    "transformer {}: xsc_pct is empty; emitted x_series=0",
                     t.name,
                 ),
                 Map::new(),
             );
         }
         let xhl = t.xsc_pct.first().copied().unwrap_or(0.0);
-        if is_delta_wye {
-            let zb_from = winding_base(from);
-            let zb_to = winding_base(to);
-            o.insert(
-                "r_series_from".into(),
-                self.num(from.r_pct / 100.0 * zb_from, "transformer r_series_from"),
-            );
-            o.insert(
-                "r_series_to".into(),
-                self.num(to.r_pct / 100.0 * zb_to, "transformer r_series_to"),
-            );
-            o.insert(
-                "x_series_from".into(),
-                self.num(xhl / 2.0 / 100.0 * zb_from, "transformer x_series_from"),
-            );
-            o.insert(
-                "x_series_to".into(),
-                self.num(xhl / 2.0 / 100.0 * zb_to, "transformer x_series_to"),
-            );
-        } else {
-            let wye = &t.windings[wye_idx];
-            let zb_wye = wye.v_ref * wye.v_ref / s;
-            o.insert(
-                "r_series".into(),
-                self.num(
-                    (from.r_pct + to.r_pct) / 100.0 * zb_wye,
-                    "transformer r_series",
-                ),
-            );
-            o.insert(
-                "x_series".into(),
-                self.num(xhl / 100.0 * zb_wye, "transformer x_series"),
-            );
-        }
+        let wye = &t.windings[wye_idx];
+        let v_wye2 = wye.v_ref * wye.v_ref;
+        // Each winding's percent resistance is on its own rating base; refer
+        // both to the wye side before lumping (identical to the plain sum
+        // when the ratings match). XHL is on the first winding's base.
+        o.insert(
+            "r_series".into(),
+            self.num(
+                (from.r_pct / from.s_rating + to.r_pct / to.s_rating) / 100.0 * v_wye2,
+                "transformer r_series",
+            ),
+        );
+        o.insert(
+            "x_series".into(),
+            self.num(xhl / 100.0 * v_wye2 / s, "transformer x_series"),
+        );
         o.insert("terminal_map_from".into(), json!(from.terminal_map));
         o.insert("terminal_map_to".into(), json!(to.terminal_map));
         self.transformer_neutral_fields(&mut o, t, from, to);

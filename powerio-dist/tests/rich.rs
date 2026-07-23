@@ -35,29 +35,29 @@ fn rich_bmopf_load_voltage_models_preserve_all_variants() {
             "cp": {
                 "bus": "b1", "terminal_map": ["1", "2", "3", "4"],
                 "configuration": "WYE", "p_nom": [1.0, 1.0, 1.0], "q_nom": [0.1, 0.1, 0.1],
-                "model": "constant_power", "v_nom": [7200.0, 7200.0, 7200.0]
+                "model": "CONSTANT_POWER", "v_nom": [7200.0, 7200.0, 7200.0]
             },
             "ci": {
                 "bus": "b1", "terminal_map": ["1", "2", "3", "4"],
                 "configuration": "WYE", "p_nom": [1.0, 1.0, 1.0], "q_nom": [0.1, 0.1, 0.1],
-                "model": "constant_current", "v_nom": [7200.0, 7200.0, 7200.0]
+                "model": "CONSTANT_CURRENT", "v_nom": [7200.0, 7200.0, 7200.0]
             },
             "cz": {
                 "bus": "b1", "terminal_map": ["1", "2", "3", "4"],
                 "configuration": "WYE", "p_nom": [1.0, 1.0, 1.0], "q_nom": [0.1, 0.1, 0.1],
-                "model": "constant_impedance", "v_nom": [7200.0, 7200.0, 7200.0]
+                "model": "CONSTANT_IMPEDANCE", "v_nom": [7200.0, 7200.0, 7200.0]
             },
             "zip": {
                 "bus": "b1", "terminal_map": ["1", "2", "3", "4"],
                 "configuration": "WYE", "p_nom": [1.0, 2.0, 3.0], "q_nom": [0.1, 0.2, 0.3],
-                "model": "zip", "v_nom": [7200.0, 7200.0, 7200.0],
+                "model": "ZIP", "v_nom": [7200.0, 7200.0, 7200.0],
                 "alpha_z": [0.2, 0.2, 0.2], "alpha_i": [0.3, 0.3, 0.3], "alpha_p": [0.5, 0.5, 0.5],
                 "beta_z": [0.1, 0.1, 0.1], "beta_i": [0.4, 0.4, 0.4], "beta_p": [0.5, 0.5, 0.5]
             },
             "exp": {
                 "bus": "b1", "terminal_map": ["1", "2", "3", "4"],
                 "configuration": "WYE", "p_nom": [1.0, 1.0, 1.0], "q_nom": [0.0, 0.0, 0.0],
-                "model": "exponential", "v_nom": [7200.0, 7200.0, 7200.0],
+                "model": "EXPONENTIAL", "v_nom": [7200.0, 7200.0, 7200.0],
                 "gamma_p": [1.2, 1.3, 1.4], "gamma_q": [2.1, 2.2, 2.3]
             }
         }
@@ -198,9 +198,9 @@ fn rich_opendss_load_models_and_switches_round_trip() {
 
     let bmopf = write_bmopf_json(&net);
     let bmopf_doc: serde_json::Value = serde_json::from_str(&bmopf.text).unwrap();
-    assert_eq!(bmopf_doc["load"]["ci"]["model"], "constant_current");
-    assert_eq!(bmopf_doc["load"]["cz"]["model"], "constant_impedance");
-    assert_eq!(bmopf_doc["load"]["zip"]["model"], "zip");
+    assert_eq!(bmopf_doc["load"]["ci"]["model"], "CONSTANT_CURRENT");
+    assert_eq!(bmopf_doc["load"]["cz"]["model"], "CONSTANT_IMPEDANCE");
+    assert_eq!(bmopf_doc["load"]["zip"]["model"], "ZIP");
     assert_eq!(
         bmopf_doc["load"]["zip"]["alpha_z"],
         serde_json::json!([0.2, 0.2, 0.2])

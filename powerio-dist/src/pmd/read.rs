@@ -65,6 +65,7 @@ pub fn parse_pmd_str(text: &str) -> Result<DistNetwork> {
     };
     let mut rd = Reader { net: &mut net };
     rd.document(&doc);
+    crate::model::warn_unresolved_references(&mut net);
     Ok(net)
 }
 
@@ -92,13 +93,20 @@ fn floats(key: &str, v: Option<&Value>) -> Option<Vec<f64>> {
         .map(|a| a.iter().map(|x| restore(key, x)).collect())
 }
 
-/// Arrays of arrays rebuild with the inner arrays as columns (`hcat`).
-fn matrix(key: &str, v: Option<&Value>) -> Option<Mat> {
+/// Arrays of arrays rebuild with the inner arrays as columns (`hcat`). A
+/// column that is not an array warns and stays zero instead of dropping
+/// the whole matrix silently.
+fn matrix(key: &str, v: Option<&Value>, what: &str, warnings: &mut Vec<String>) -> Option<Mat> {
     let cols = v?.as_array()?;
     let n = cols.len();
     let mut m = vec![vec![0.0; n]; n];
     for (j, col) in cols.iter().enumerate() {
-        let col = col.as_array()?;
+        let Some(col) = col.as_array() else {
+            warnings.push(format!(
+                "{what}: `{key}` column {j} is not an array; kept as zeros"
+            ));
+            continue;
+        };
         for (i, x) in col.iter().enumerate().take(n) {
             m[i][j] = restore(key, x);
         }
@@ -178,13 +186,15 @@ fn linecode_from(
     base_frequency: f64,
     warnings: &mut Vec<String>,
 ) -> DistLineCode {
+    let what = format!("linecode {name}");
+    let mut mat = |key: &str| matrix(key, o.get(key), &what, warnings);
     let mats = [
-        matrix("rs", o.get("rs")),
-        matrix("xs", o.get("xs")),
-        matrix("g_fr", o.get("g_fr")),
-        matrix("g_to", o.get("g_to")),
-        matrix("b_fr", o.get("b_fr")),
-        matrix("b_to", o.get("b_to")),
+        mat("rs"),
+        mat("xs"),
+        mat("g_fr"),
+        mat("g_to"),
+        mat("b_fr"),
+        mat("b_to"),
     ];
     // Conductor count is the widest matrix present; absent matrices read
     // as zero, smaller ones pad without losing entries.
@@ -213,8 +223,11 @@ fn linecode_from(
         b_from: to_b(bf),
         b_to: to_b(bt),
         r_series: r,
-        i_max: floats("cm_ub", o.get("cm_ub")).filter(|v| v.iter().all(|x| x.is_finite())),
-        s_max: floats("sm_ub", o.get("sm_ub")).filter(|v| v.iter().all(|x| x.is_finite())),
+        // A null entry restores as Inf (an unbounded conductor); keeping the
+        // mixed array preserves the finite bounds beside it. `None` means
+        // the field was absent.
+        i_max: floats("cm_ub", o.get("cm_ub")),
+        s_max: floats("sm_ub", o.get("sm_ub")),
         extras: {
             // The raw arrays make writing back bit exact across the
             // capacitance to susceptance basis change.
@@ -449,11 +462,14 @@ impl Reader<'_> {
             ];
             let mut linecode = string(o.get("linecode"));
             let mut extras;
+            let mut i_max = None;
+            let mut s_max = None;
             // Inline impedance (the dss2eng output for rmatrix defined
             // lines): materialize a linecode so the matrices survive, and
-            // mark the line so the PMD writer re-inlines them.
+            // mark the line so the PMD writer re-inlines them. The inline
+            // ratings live on the synthesized linecode, not the line.
             if linecode.is_empty() && o.get("rs").is_some() {
-                known.extend(["rs", "xs", "g_fr", "g_to", "b_fr", "b_to", "cm_ub"]);
+                known.extend(["rs", "xs", "g_fr", "g_to", "b_fr", "b_to", "cm_ub", "sm_ub"]);
                 extras = take_extras(o, &known);
                 let mut lc_name = format!("{name}_z");
                 let mut k = 2;
@@ -470,7 +486,10 @@ impl Reader<'_> {
                 extras.insert("pmd_inline".into(), Value::Bool(true));
                 linecode = lc_name;
             } else {
+                known.extend(["cm_ub", "sm_ub"]);
                 extras = take_extras(o, &known);
+                i_max = floats("cm_ub", o.get("cm_ub"));
+                s_max = floats("sm_ub", o.get("sm_ub"));
             }
             stash_status(
                 o,
@@ -487,6 +506,8 @@ impl Reader<'_> {
                 linecode,
                 length: o.get("length").map_or(f64::NAN, |v| restore("length", v)),
                 route: None,
+                i_max,
+                s_max,
                 extras,
             });
         }
@@ -665,10 +686,13 @@ impl Reader<'_> {
                 },
                 p_nom: scale("pg").unwrap_or_default(),
                 q_nom: scale("qg").unwrap_or_default(),
-                p_min: scale("pg_lb").filter(|v| v.iter().all(|x| x.is_finite())),
-                p_max: scale("pg_ub").filter(|v| v.iter().all(|x| x.is_finite())),
-                q_min: scale("qg_lb").filter(|v| v.iter().all(|x| x.is_finite())),
-                q_max: scale("qg_ub").filter(|v| v.iter().all(|x| x.is_finite())),
+                // A null bound restores as +/-Inf (an unbounded phase);
+                // keeping the mixed array preserves the finite bounds
+                // beside it. `None` means the field was absent.
+                p_min: scale("pg_lb"),
+                p_max: scale("pg_ub"),
+                q_min: scale("qg_lb"),
+                q_max: scale("qg_ub"),
                 cost: None,
                 extras,
             });
@@ -678,8 +702,9 @@ impl Reader<'_> {
     fn shunts(&mut self, items: &Map<String, Value>) {
         for (name, v) in items {
             let Value::Object(o) = v else { continue };
-            let g = matrix("gs", o.get("gs")).unwrap_or_default();
-            let b = matrix("bs", o.get("bs")).unwrap_or_default();
+            let what = format!("shunt {name}");
+            let g = matrix("gs", o.get("gs"), &what, &mut self.net.warnings).unwrap_or_default();
+            let b = matrix("bs", o.get("bs"), &what, &mut self.net.warnings).unwrap_or_default();
             let mut extras = take_extras(
                 o,
                 &["bus", "connections", "gs", "bs", "status", "source_id"],
