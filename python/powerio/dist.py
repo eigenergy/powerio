@@ -96,7 +96,7 @@ class DistNetwork:
         text, warnings = self._inner.to_canonical_format(to)
         return Conversion(text, warnings)
 
-    def write_file(self, path: Any, to: str) -> list:
+    def write_file(self, path: Any, to: str) -> list[str]:
         """Serialize to ``to`` and write it to ``path`` byte exact.
 
         Returns the fidelity warnings. See :meth:`powerio.Network.write_file`
