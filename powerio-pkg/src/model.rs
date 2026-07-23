@@ -27,10 +27,9 @@ pub enum ModelKind {
 /// is self-describing in addition to the top-level `model_kind`.
 ///
 /// The payload is the serde snapshot of the PowerIO Rust IR
-/// ([`powerio::Network`] / [`powerio_dist::DistNetwork`]), declared by the
-/// package's `payload_schema` / `payload_schema_version` fields and versioned
-/// independently of the envelope: additive IR growth bumps the payload minor
-/// with no envelope version change. See `docs/src/pio-json-schema.md`.
+/// ([`powerio::Network`] / [`powerio_dist::DistNetwork`]); changes to it are
+/// document changes under the package `schema_version`. See
+/// `docs/src/pio-json-schema.md`.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(tag = "kind", rename_all = "snake_case")]

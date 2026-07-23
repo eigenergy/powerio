@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+- `.pio.json` carries one version number. `schema_version` (now `0.2.0`)
+  covers the whole document, model JSON included: while the major is 0 an
+  incompatible change bumps the minor, and the reader accepts exactly its own
+  major.minor lineage, rejecting anything else with an error that says to
+  regenerate the package from its source case. The `schema`,
+  `payload_schema`, and `payload_schema_version` fields and the
+  `PIO_PACKAGE_SCHEMA_URL` / `PIO_PAYLOAD_*` constants are gone; the payload
+  schema documents under `docs/schema/pio-payload-*` are no longer published
+  (the `pio-package/0.2` document embeds every model type). Files written by
+  0.7.x and earlier are rejected with the regenerate error.
 - powerio-dist JSON reader validation (#262):
   - PMD bound arrays keep their finite entries when another entry is a
     null-derived infinity (an unbounded phase): generator
@@ -32,8 +42,8 @@
   - Bus symmetrical component bounds are the per-sequence scalars
     `vpos_min`/`vpos_max`/`vneg_max`/`vzero_max`/`vn_max`; legacy
     `vsym_min`/`vsym_max` arrays map on read assuming zero/positive/negative
-    order. `DistBus` renames the fields, so the multiconductor payload is
-    `pio-payload-multiconductor/2` (2.0.0).
+    order. `DistBus` renames the fields, part of the `.pio.json` 0.2.0 bump
+    above.
   - Three phase transformers emit one lumped `r_series`/`x_series` pair on
     the wye base, with each winding's percent resistance referred to its own
     rating before the sum; the split `_from`/`_to` fields lost their slots.
