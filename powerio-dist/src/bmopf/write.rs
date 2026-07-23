@@ -362,11 +362,15 @@ impl Writer {
                 self.flat_matrix(&mut o, "G_to", &c.g_to, &c.name);
                 self.flat_matrix(&mut o, "B_from", &c.b_from, &c.name);
                 self.flat_matrix(&mut o, "B_to", &c.b_to, &c.name);
-                if let Some(i_max) = &c.i_max {
-                    o.insert("i_max".into(), self.nums(i_max, "linecode i_max"));
+                if let Some(i_max) = &c.i_max
+                    && let Some(v) = self.bounds(i_max, &format!("linecode {} i_max", c.name))
+                {
+                    o.insert("i_max".into(), v);
                 }
-                if let Some(s_max) = &c.s_max {
-                    o.insert("s_max".into(), self.nums(s_max, "linecode s_max"));
+                if let Some(s_max) = &c.s_max
+                    && let Some(v) = self.bounds(s_max, &format!("linecode {} s_max", c.name))
+                {
+                    o.insert("s_max".into(), v);
                 }
                 self.extras_dropped(&c.extras, &format!("linecode {}", c.name));
                 codes.insert(c.name.clone(), Value::Object(o));
@@ -979,11 +983,15 @@ impl Writer {
                          which has no BMOPF field"
                     ));
                 }
-                if let Some(v) = lo {
-                    o.insert(key_lo.into(), self.nums(v, key_lo));
+                if let Some(v) = lo
+                    && let Some(v) = self.bounds(v, &format!("{what} {key_lo}"))
+                {
+                    o.insert(key_lo.into(), v);
                 }
-                if let Some(v) = hi {
-                    o.insert(key_hi.into(), self.nums(v, key_hi));
+                if let Some(v) = hi
+                    && let Some(v) = self.bounds(v, &format!("{what} {key_hi}"))
+                {
+                    o.insert(key_hi.into(), v);
                 }
             } else if !nom.is_empty() {
                 // A fixed injection becomes pinned bounds.

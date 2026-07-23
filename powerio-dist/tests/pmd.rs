@@ -673,9 +673,102 @@ fn null_suffix_restoration() {
             "vm": [0.24], "va": [0.0], "status": "ENABLED"}}
     }"#;
     let net = parse_pmd_str(text).unwrap();
-    // cm_ub null restores to +Inf under the `_ub` suffix; an infinite
-    // ampacity bound means no bound, so i_max is None.
-    assert!(net.linecodes[0].i_max.is_none());
+    // cm_ub null restores to +Inf under the `_ub` suffix (an unbounded
+    // conductor). The entry stays in the array so finite bounds beside it
+    // survive the parse, and the PMD writer spells it back as null.
+    assert_eq!(
+        net.linecodes[0].i_max.as_deref(),
+        Some(&[f64::INFINITY][..])
+    );
+    let out = rewrite(text);
+    assert_eq!(out["linecode"]["c"]["cm_ub"], serde_json::json!([null]));
+}
+
+/// A null bound entry (an unbounded phase) no longer drops the whole
+/// array: the finite phase bounds survive the parse and the write spells
+/// the unbounded phase back as null.
+#[test]
+fn mixed_finite_and_null_generator_bounds_survive() {
+    let text = r#"{
+        "data_model": "ENGINEERING",
+        "bus": {"a": {"terminals": [1, 2, 3], "grounded": [], "rg": [], "xg": [], "status": "ENABLED"}},
+        "generator": {"g1": {"bus": "a", "connections": [1, 2, 3],
+            "pg": [10.0, 10.0, 10.0], "qg": [0.0, 0.0, 0.0],
+            "pg_ub": [500.0, 500.0, null], "pg_lb": [0.0, null, 0.0],
+            "status": "ENABLED"}}
+    }"#;
+    let net = parse_pmd_str(text).unwrap();
+    let g = &net.generators[0];
+    let p_max = g.p_max.as_deref().unwrap();
+    assert_eq!(&p_max[..2], &[500.0e3, 500.0e3]);
+    assert!(p_max[2].is_infinite() && p_max[2] > 0.0);
+    let p_min = g.p_min.as_deref().unwrap();
+    assert!(p_min[1].is_infinite() && p_min[1] < 0.0);
+    let out = rewrite(text);
+    assert_eq!(
+        out["generator"]["g1"]["pg_ub"],
+        serde_json::json!([500.0, 500.0, null])
+    );
+    assert_eq!(
+        out["generator"]["g1"]["pg_lb"],
+        serde_json::json!([0.0, null, 0.0])
+    );
+}
+
+/// A matrix column that is not an array warns and stays zero instead of
+/// dropping the whole matrix silently.
+#[test]
+#[allow(clippy::float_cmp)]
+fn malformed_matrix_column_warns_and_keeps_the_rest() {
+    let text = r#"{
+        "data_model": "ENGINEERING",
+        "linecode": {"c": {"rs": [[1.0, 0.0], "bogus"], "xs": [[2.0, 0.0], [0.0, 2.0]],
+            "g_fr": [[0.0, 0.0], [0.0, 0.0]], "g_to": [[0.0, 0.0], [0.0, 0.0]],
+            "b_fr": [[0.0, 0.0], [0.0, 0.0]], "b_to": [[0.0, 0.0], [0.0, 0.0]]}}
+    }"#;
+    let net = parse_pmd_str(text).unwrap();
+    let c = net.linecode("c").unwrap();
+    // Column 0 parsed; the malformed column 1 stayed zero.
+    assert_eq!(c.r_series[0][0], 1.0);
+    assert_eq!(c.r_series[1][1], 0.0);
+    assert_eq!(c.x_series[1][1], 2.0);
+    assert!(
+        net.warnings
+            .iter()
+            .any(|w| w.contains("linecode c") && w.contains("`rs` column 1")),
+        "{:?}",
+        net.warnings
+    );
+}
+
+/// A reference to a bus or linecode that does not exist warns instead of
+/// parsing silently into a topologically wrong network.
+#[test]
+fn dangling_references_warn() {
+    let text = r#"{
+        "data_model": "ENGINEERING",
+        "bus": {"a": {"terminals": [1, 2], "grounded": [], "rg": [], "xg": [], "status": "ENABLED"}},
+        "load": {"ld1": {"bus": "nosuchbus", "connections": [1, 2],
+            "pd_nom": [1.0], "qd_nom": [0.0], "status": "ENABLED"}},
+        "line": {"ln1": {"f_bus": "a", "t_bus": "a",
+            "f_connections": [1], "t_connections": [1], "length": 1.0,
+            "linecode": "nosuchcode", "status": "ENABLED"}}
+    }"#;
+    let net = parse_pmd_str(text).unwrap();
+    assert!(
+        net.warnings
+            .iter()
+            .any(|w| w.contains("load ld1") && w.contains("undefined bus `nosuchbus`")),
+        "{:?}",
+        net.warnings
+    );
+    assert!(
+        net.warnings
+            .iter()
+            .any(|w| w.contains("line ln1") && w.contains("undefined linecode `nosuchcode`")),
+        "{:?}",
+        net.warnings
+    );
 }
 
 #[test]

@@ -914,6 +914,90 @@ impl DistNetwork {
     }
 }
 
+/// Push a warning for every dangling cross-reference. Bus and linecode
+/// references are bare strings, and the graph projection synthesizes a
+/// phantom bus for an unresolved one, so a typo would otherwise parse
+/// cleanly into a topologically wrong network. Comparison is ASCII case
+/// insensitive, matching [`DistNetwork::bus`] and [`DistNetwork::linecode`].
+/// An empty reference is skipped: the missing required field warns at its
+/// own parse site.
+pub(crate) fn warn_unresolved_references(net: &mut DistNetwork) {
+    use std::collections::BTreeSet;
+    let buses: BTreeSet<String> = net
+        .buses
+        .iter()
+        .map(|b| b.id.to_ascii_lowercase())
+        .collect();
+    let linecodes: BTreeSet<String> = net
+        .linecodes
+        .iter()
+        .map(|c| c.name.to_ascii_lowercase())
+        .collect();
+    let mut warnings = Vec::new();
+    {
+        let mut bus = |what: &str, id: &str| {
+            if !id.is_empty() && !buses.contains(&id.to_ascii_lowercase()) {
+                warnings.push(format!("{what}: references undefined bus `{id}`"));
+            }
+        };
+        for l in &net.lines {
+            let what = format!("line {}", l.name);
+            bus(&what, &l.bus_from);
+            bus(&what, &l.bus_to);
+        }
+        for sw in &net.switches {
+            let what = format!("switch {}", sw.name);
+            bus(&what, &sw.bus_from);
+            bus(&what, &sw.bus_to);
+        }
+        for t in &net.transformers {
+            let what = format!("transformer {}", t.name);
+            for w in &t.windings {
+                bus(&what, &w.bus);
+            }
+        }
+        for (what, id) in std::iter::empty()
+            .chain(
+                net.loads
+                    .iter()
+                    .map(|x| (format!("load {}", x.name), &x.bus)),
+            )
+            .chain(
+                net.generators
+                    .iter()
+                    .map(|x| (format!("generator {}", x.name), &x.bus)),
+            )
+            .chain(
+                net.shunts
+                    .iter()
+                    .map(|x| (format!("shunt {}", x.name), &x.bus)),
+            )
+            .chain(
+                net.capacitors
+                    .iter()
+                    .map(|x| (format!("capacitor {}", x.name), &x.bus)),
+            )
+            .chain(net.ibrs.iter().map(|x| (format!("ibr {}", x.name), &x.bus)))
+            .chain(
+                net.sources
+                    .iter()
+                    .map(|x| (format!("voltage_source {}", x.name), &x.bus)),
+            )
+        {
+            bus(&what, id);
+        }
+    }
+    for l in &net.lines {
+        if !l.linecode.is_empty() && !linecodes.contains(&l.linecode.to_ascii_lowercase()) {
+            warnings.push(format!(
+                "line {}: references undefined linecode `{}`",
+                l.name, l.linecode
+            ));
+        }
+    }
+    net.warnings.extend(warnings);
+}
+
 fn zero_mat(n: usize) -> Mat {
     vec![vec![0.0; n]; n]
 }

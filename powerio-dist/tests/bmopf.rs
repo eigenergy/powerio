@@ -237,6 +237,30 @@ fn dss_fixtures_emit_valid_bmopf() {
     }
 }
 
+/// A reference to a bus that does not exist warns instead of parsing
+/// silently: the graph projection would synthesize a phantom bus for it.
+#[test]
+fn bmopf_dangling_bus_reference_warns() {
+    let net = parse_bmopf_str(
+        r#"{
+        "bus": {"a": {"terminal_names": ["p1", "n"]}},
+        "voltage_source": {"src": {"bus": "a", "terminal_map": ["p1", "n"],
+            "v_mag": [240.0], "v_angle": [0.0]}},
+        "load": {"ld1": {"bus": "typo", "terminal_map": ["p1", "n"],
+            "configuration": "SINGLE_PHASE", "p_nom": [1000.0], "q_nom": [0.0],
+            "model": "CONSTANT_POWER"}}
+    }"#,
+    )
+    .unwrap();
+    assert!(
+        net.warnings
+            .iter()
+            .any(|w| w.contains("load ld1") && w.contains("undefined bus `typo`")),
+        "{:?}",
+        net.warnings
+    );
+}
+
 /// PMD spells an unbounded phase as JSON null, which restores as Inf.
 /// BMOPF has no unbounded spelling: the rating field drops with a warning
 /// instead of the zero fallback turning "no limit" into a zero limit, and

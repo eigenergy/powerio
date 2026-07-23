@@ -86,24 +86,35 @@ fn canonical_key(name: &str) -> String {
         .collect()
 }
 
-fn has_top_level_key(text: &str, key: &str) -> bool {
-    serde_json::from_str::<serde_json::Value>(text).is_ok_and(|value| {
-        value
-            .as_object()
-            .is_some_and(|shape| shape.contains_key(key))
-    })
-}
-
-/// Distribution parser policy for `.json`: PMD carries `data_model`; otherwise
-/// it is routed to BMOPF so the BMOPF reader can give the parse error or warning.
-fn infer_distribution_json_format(text: &str) -> DistTargetFormat {
+/// Distribution parser policy for `.json`: PMD carries `data_model`; BMOPF
+/// carries its schema-required `bus` and `voltage_source` tables. Anything
+/// else errors instead of falling through to the BMOPF reader, which would
+/// accept an arbitrary JSON object (a PowerModels document used to parse
+/// into a bogus near-empty network). Malformed JSON still routes to BMOPF
+/// so its reader reports the parse error.
+fn infer_distribution_json_format(text: &str) -> crate::Result<DistTargetFormat> {
     // A leading byte order mark would fail the DOM parse here and silently
     // send a PMD document down the BMOPF fallback; classify without it.
     let text = text.trim_start_matches('\u{feff}');
-    if has_top_level_key(text, "data_model") {
-        DistTargetFormat::PmdJson
+    let Ok(doc) = serde_json::from_str::<serde_json::Value>(text) else {
+        return Ok(DistTargetFormat::BmopfJson);
+    };
+    let Some(shape) = doc.as_object() else {
+        return Ok(DistTargetFormat::BmopfJson);
+    };
+    if shape.contains_key("data_model") {
+        Ok(DistTargetFormat::PmdJson)
+    } else if shape.contains_key("bus") && shape.contains_key("voltage_source") {
+        Ok(DistTargetFormat::BmopfJson)
     } else {
-        DistTargetFormat::BmopfJson
+        Err(crate::Error::Json {
+            format: "distribution",
+            message: "not a recognized distribution document: PMD ENGINEERING JSON \
+                      carries `data_model`, BMOPF JSON carries the schema-required \
+                      `bus` and `voltage_source` tables (pass the format explicitly \
+                      to override)"
+                .to_string(),
+        })
     }
 }
 
@@ -155,7 +166,7 @@ pub fn parse_file(
             "dss" => DistTargetFormat::Dss,
             "json" => {
                 let text = read(path)?;
-                return parse_text(&text, infer_distribution_json_format(&text));
+                return parse_text(&text, infer_distribution_json_format(&text)?);
             }
             other => return Err(crate::Error::UnknownFormat(other.to_string())),
         }
@@ -265,25 +276,35 @@ mod tests {
     #[test]
     fn distribution_json_classifier_preserves_pmd_marker_and_bmopf_fallback() {
         assert_eq!(
-            infer_distribution_json_format(r#"{"data_model": "ENGINEERING"}"#),
+            infer_distribution_json_format(r#"{"data_model": "ENGINEERING"}"#).unwrap(),
             DistTargetFormat::PmdJson
         );
         assert_eq!(
-            infer_distribution_json_format(r#"{"bus": {"data_model": {}}}"#),
+            infer_distribution_json_format(r#"{"bus": {}, "voltage_source": {}}"#).unwrap(),
             DistTargetFormat::BmopfJson
         );
+        // A document with neither the PMD marker nor the schema-required
+        // BMOPF tables is not silently misread as a near-empty BMOPF case.
+        for doc in [
+            r#"{"bus": {"data_model": {}}}"#,
+            r#"{"name": "data_model"}"#,
+            r#"{"bus": {}, "branch": {}, "gen": {}, "baseMVA": 100.0}"#,
+        ] {
+            assert!(
+                infer_distribution_json_format(doc).is_err(),
+                "{doc} should not classify"
+            );
+        }
+        // Malformed JSON still routes to BMOPF so its reader reports the
+        // parse error.
         assert_eq!(
-            infer_distribution_json_format(r#"{"name": "data_model"}"#),
-            DistTargetFormat::BmopfJson
-        );
-        assert_eq!(
-            infer_distribution_json_format("{not json"),
+            infer_distribution_json_format("{not json").unwrap(),
             DistTargetFormat::BmopfJson
         );
         // A byte order mark must not push a PMD document down the BMOPF
         // fallback.
         assert_eq!(
-            infer_distribution_json_format("\u{feff}{\"data_model\": \"ENGINEERING\"}"),
+            infer_distribution_json_format("\u{feff}{\"data_model\": \"ENGINEERING\"}").unwrap(),
             DistTargetFormat::PmdJson
         );
     }
@@ -302,6 +323,27 @@ mod tests {
                 .as_ref()
                 .is_some_and(|s| !s.starts_with('\u{feff}'))
         );
+    }
+
+    #[test]
+    fn parse_file_rejects_unclassifiable_json() {
+        // A PowerModels document used to fall through to the BMOPF reader
+        // and parse into a bogus near-empty network.
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("case.json");
+        std::fs::write(
+            &path,
+            r#"{"bus": {}, "branch": {}, "gen": {}, "baseMVA": 100.0}"#,
+        )
+        .unwrap();
+        let err = parse_file(&path, None).unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("not a recognized distribution document"),
+            "{err}"
+        );
+        // An explicit format still overrides the classifier.
+        assert!(parse_file(&path, Some("bmopf-json")).is_ok());
     }
 
     #[test]

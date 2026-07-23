@@ -2,6 +2,25 @@
 
 ## Unreleased
 
+- powerio-dist JSON reader validation (#262):
+  - PMD bound arrays keep their finite entries when another entry is a
+    null-derived infinity (an unbounded phase): generator
+    `pg_lb`/`pg_ub`/`qg_lb`/`qg_ub` and linecode `cm_ub`/`sm_ub` no longer
+    vanish whole. The PMD writer spells nonfinite entries back as null; the
+    BMOPF writer drops such a field with a warning instead of coercing to 0,
+    and the dss writer skips `emergamps` with a warning when the first
+    `i_max` entry is nonfinite.
+  - A PMD matrix column that is not an array warns and stays zero; the
+    parseable columns survive instead of the whole matrix dropping to
+    nothing silently.
+  - Dangling cross-references warn: a BMOPF or PMD element referencing an
+    undefined bus, or a line referencing an undefined linecode, names the
+    reference instead of parsing silently into a phantom bus.
+  - `parse_file`/`parse_str` no longer route arbitrary JSON to the BMOPF
+    reader: a `.json` without the PMD `data_model` marker or the
+    schema-required BMOPF `bus` + `voltage_source` tables errors (a
+    PowerModels document used to parse into a bogus near-empty network).
+    An explicit format override still forces the reader.
 - BMOPF schema 0.1.0 (bmopf-report#16). The writer targets the published
   schema `$id` and the reader keeps accepting the pre-0.1.0 spellings:
   - `meta` carries `case_study_generator` (was `generator`) and the system

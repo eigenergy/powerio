@@ -863,9 +863,14 @@ impl DssWriter {
             let cm = self.matrix_arg(&c_nf, &what);
             let _ = write!(s, " cmatrix={cm}");
             match c.i_max.as_deref() {
-                Some([amps, ..]) => {
+                Some([amps, ..]) if amps.is_finite() => {
                     let _ = write!(s, " emergamps={}", num(*amps));
                 }
+                Some([_, ..]) => self.warn(format!(
+                    "linecode {}: first i_max entry is nonfinite (an unbounded \
+                     conductor); emergamps not emitted",
+                    c.name
+                )),
                 Some([]) => self.warn(format!(
                     "linecode {}: i_max is empty; emergamps not emitted",
                     c.name
@@ -927,9 +932,14 @@ impl DssWriter {
                 self.bus_ref(&sw.bus_to, &sw.terminal_map_to),
             );
             match sw.i_max.as_deref() {
-                Some([amps, ..]) => {
+                Some([amps, ..]) if amps.is_finite() => {
                     let _ = write!(s, " emergamps={}", num(*amps));
                 }
+                Some([_, ..]) => self.warn(format!(
+                    "line {}: first i_max entry is nonfinite (an unbounded \
+                     conductor); emergamps not emitted",
+                    sw.name
+                )),
                 Some([]) => self.warn(format!(
                     "line {}: i_max is empty; emergamps not emitted",
                     sw.name
