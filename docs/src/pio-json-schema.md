@@ -42,62 +42,37 @@ the same operations as `pio_to_json` and `pio_from_json`.
 ABI v4 continues to accept `powerio-json` in `pio_parse_str` and
 `pio_to_format`. Those format tokens are compatibility aliases. Removing them requires a future C ABI version change.
 
-## Two stability tiers
+## Versioning: `pio-package/0.2` {#pio-package}
 
-A `.pio.json` file has two parts with different stability promises.
+One version number covers the whole document, model JSON included:
+`schema_version`, semver, currently `0.2.0`. A `.pio.json` file is a
+regenerable snapshot, so the reader's only versioning job is telling the caller
+when a file needs regenerating.
 
-1. **Metadata** — every field except `model`. This is the versioned,
-   documented surface; the metadata section below gives the policy and the
-   field table.
+- While the major is 0, an incompatible change to any field bumps the minor
+  (cargo 0.x semantics) and additive changes bump the patch. From 1.0.0 on,
+  incompatible changes bump the major.
+- A reader accepts its own lineage: the exact major.minor pair while the major
+  is 0, the major alone afterwards. Anything else is rejected with an error
+  naming the supported lineage and telling the caller to regenerate the
+  package from its source case.
+- A reader tolerates unknown top-level fields (they are ignored without
+  error), so a same lineage document from a newer producer still loads.
 
-2. **Model JSON** — the `model` field's `balanced_network` /
-   `multiconductor_network` object. The model JSON is a declared schema of its
-   own, named by the top-level `payload_schema` URL and versioned by
-   `payload_schema_version`. A consumer that computes on model fields pins the
-   model JSON version; a tool that routes or audits documents pins the metadata
-   version and can keep treating the model JSON as opaque.
-
-The two versions are independent because they change at different rates and
-break different consumers: the model JSON grows whenever the IR grows (a minor
-`payload_schema_version` bump), while the metadata bookkeeping barely moves.
-
-The schema URLs are JSON Schema `$id` identifiers. The docs site also serves a
-generated schema at each identifier path under `schema.json`, so consumers can
-fetch a machine readable view of the serde model shape. These generated schemas
-validate the model fields inside `.pio.json` documents and let consumers pin a
-payload major; they do not define standalone case formats.
-
-## The metadata: `pio-package/0.1` {#pio-package}
-
-The `schema` field on every `.pio.json` document names the metadata schema:
-`https://powerio.dev/schema/pio-package/0.1`. `schema_version` is semver; the
-current value is `0.1.1`.
-The generated schema is served at
-`https://powerio.dev/schema/pio-package/0.1/schema.json`.
-
-- Optional additive metadata fields (a reader that ignores them loses nothing
-  it relied on before) land without a version change; `operating_points` landed
-  this way. The minor version bumps when a reader needs to depend on a field
-  being present.
-- Metadata field moves or removals bump the major version, or ship a migration.
-- A reader tolerates unknown later top-level fields (they are ignored without
-  error), so a document from a newer producer still loads. A later version can
-  preserve them in an extras map instead of dropping them.
-- A reader accepts same major `schema_version` values and rejects a different
-  major version before using the model JSON.
+The generated JSON Schema for the document is served at
+`https://powerio.dev/schema/pio-package/0.2/schema.json`; the `$id` names that
+location. It embeds the model JSON types, so it validates complete `.pio.json`
+documents. It does not define a standalone case format.
 
 ### Metadata Reference
 
 | field | type | required | notes |
 |---|---|---|---|
-| `schema` | string (URL) | yes | identifies the `.pio.json` document metadata; defaults to the current URL on read |
-| `schema_version` | string (semver) | yes | metadata version; defaults to current on read |
+| `schema_version` | string (semver) | yes | document version; defaults to current on read; other lineages rejected |
 | `producer` | object | yes | `{tool, version, git_commit?, features[]}` |
 | `package_id` | string | no | stable content id, e.g. `"sha256:..."`; unset by the scaffold |
 | `created_at` | string (RFC 3339) | no | unset by default for deterministic output |
 | `model_kind` | enum | yes | `balanced` \| `multiconductor`; authoritative |
-| `payload_schema` | string (URL) | no | declared model JSON schema for `model_kind`; absent on pre-0.1.1 documents |
-| `payload_schema_version` | string (semver) | no | model JSON version; a different major is rejected on read |
 | `model` | object | yes | `{kind, <kind>_network}`; the serialized Rust model JSON |
 | `origin` | object | yes | tagged by `kind`: `in_memory` \| `file` \| `folder` \| `binary_file` \| `derived` \| `composite` |
 | `sources` | array | no | declared source artifacts: `{id, kind, path?, format?, hash?}` |
@@ -129,25 +104,18 @@ later families can be added).
 
 ## The Model JSON
 
-`payload_schema` names the model JSON schema per model kind and
-`payload_schema_version` versions it, currently `1.1.0` for both kinds.
-Additive optional fields bump the minor; field moves or removals bump the
-major. A reader rejects a different major (or a version that does not parse as
-semver) before computing on model fields. Both fields are absent on documents
-written before metadata version 0.1.1; such model JSON predates the declared
-schema and is accepted.
-
-Each payload is what its Rust model serializes. The generated JSON Schema is
-derived from those serde models and checked in CI against the committed
+Each payload is what its Rust model serializes; changes to it are changes to
+the document and follow the `schema_version` rules above. The generated JSON
+Schema is derived from the serde models and checked in CI against the committed
 `docs/schema/**/schema.json` files. The model's rustdoc is the field reference,
 and the balanced payload's wire form is additionally held to a committed
 golden file by `powerio/tests/snapshot_schema.rs`.
 
-### The Balanced Model JSON: `pio-payload-balanced/1` {#pio-payload-balanced}
+### The balanced model JSON {#pio-payload-balanced}
 
-`https://powerio.dev/schema/pio-payload-balanced/1` names the serde form of
-`powerio::Network` under `model.balanced_network`, stamped when `model_kind`
-is `balanced`: the scalar positive sequence transmission model. The tables are
+`model.balanced_network` is the serde form of `powerio::Network`, stamped when
+`model_kind` is `balanced`: the scalar positive sequence transmission model.
+The tables are
 `buses`, `loads`, `shunts`, `branches`, `switches`, `generators`, `storage`,
 `hvdc`, `transformers_3w`, and `areas`, alongside `name`, `base_mva`,
 `base_frequency`, `source_format`, and optional solver metadata. Units follow
@@ -155,19 +123,15 @@ the MATPOWER conventions: MW and MVAr power, per unit voltage magnitudes and
 impedances on the system base, degree angles. Every element carries an `extras`
 map for source format fields the model does not name. The field reference is the
 [`powerio::Network` rustdoc](../powerio/network/struct.Network.html).
-The generated schema is served at
-`https://powerio.dev/schema/pio-payload-balanced/1/schema.json`.
 
-### The Multiconductor Model JSON: `pio-payload-multiconductor/1` {#pio-payload-multiconductor}
+### The multiconductor model JSON {#pio-payload-multiconductor}
 
-`https://powerio.dev/schema/pio-payload-multiconductor/1` names the serde form
-of `powerio_dist::DistNetwork` under `model.multiconductor_network`, stamped
-when `model_kind` is `multiconductor`: the wire coordinate distribution model,
-in SI units with radian angles. [Compiler IR](compiler-ir.md) describes the
-model family. The field reference is the
+`model.multiconductor_network` is the serde form of
+`powerio_dist::DistNetwork`, stamped when `model_kind` is `multiconductor`:
+the wire coordinate distribution model, in SI units with radian angles.
+[Compiler IR](compiler-ir.md) describes the model family. The field reference
+is the
 [`powerio_dist::DistNetwork` rustdoc](../powerio_dist/model/struct.DistNetwork.html).
-The generated schema is served at
-`https://powerio.dev/schema/pio-payload-multiconductor/1/schema.json`.
 Do not extract this object as a distribution case file. Use `.pio.json` for
 PowerIO artifacts; when a receiving tool expects BMOPF, PMD JSON, or OpenDSS,
 write that case format through `powerio convert`.
@@ -308,12 +272,9 @@ bindings, or MCP operations.
 
 ```json
 {
-  "schema": "https://powerio.dev/schema/pio-package/0.1",
-  "schema_version": "0.1.1",
-  "producer": { "tool": "powerio", "version": "0.7.0" },
+  "schema_version": "0.2.0",
+  "producer": { "tool": "powerio", "version": "0.8.0" },
   "model_kind": "multiconductor",
-  "payload_schema": "https://powerio.dev/schema/pio-payload-multiconductor/1",
-  "payload_schema_version": "1.1.0",
   "model": {
     "kind": "multiconductor",
     "multiconductor_network": {

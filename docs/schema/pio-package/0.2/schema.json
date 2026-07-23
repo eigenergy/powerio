@@ -637,7 +637,21 @@
           ]
         },
         "v_min": {
-          "description": "Voltage magnitude bounds, volts: the scalar pair plus the phase to\nneutral, phase to phase, and symmetrical component families (the\nfour BMOPF bound families).",
+          "description": "Voltage magnitude bounds, volts: the scalar pair plus the phase to\nneutral and phase to phase families, and the per-sequence scalars\n(BMOPF schema 0.1.0: positive sequence has both bounds, negative and\nzero sequence and neutral to ground are magnitude caps whose lower\nbound is always 0).",
+          "format": "double",
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "vn_max": {
+          "format": "double",
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "vneg_max": {
           "format": "double",
           "type": [
             "number",
@@ -664,6 +678,20 @@
             "null"
           ]
         },
+        "vpos_max": {
+          "format": "double",
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "vpos_min": {
+          "format": "double",
+          "type": [
+            "number",
+            "null"
+          ]
+        },
         "vpp_max": {
           "items": {
             "format": "double",
@@ -684,23 +712,10 @@
             "null"
           ]
         },
-        "vsym_max": {
-          "items": {
-            "format": "double",
-            "type": "number"
-          },
+        "vzero_max": {
+          "format": "double",
           "type": [
-            "array",
-            "null"
-          ]
-        },
-        "vsym_min": {
-          "items": {
-            "format": "double",
-            "type": "number"
-          },
-          "type": [
-            "array",
+            "number",
             "null"
           ]
         }
@@ -709,6 +724,50 @@
         "id",
         "terminals",
         "grounded",
+        "extras"
+      ],
+      "type": "object"
+    },
+    "DistCapacitor": {
+      "description": "A rated capacitor bank (BMOPF schema 0.1.0 `capacitor`): `q_rated` vars\ndelivered at `v_nom` volts across the element terminals, distinct from the\nraw admittance [`DistShunt`]. The DSS converter still lowers OpenDSS\ncapacitors to shunt B matrices; this element carries capacitors that arrive\nas BMOPF input.",
+      "properties": {
+        "bus": {
+          "type": "string"
+        },
+        "configuration": {
+          "$ref": "#/$defs/Configuration"
+        },
+        "extras": {
+          "additionalProperties": true,
+          "type": "object"
+        },
+        "name": {
+          "type": "string"
+        },
+        "q_rated": {
+          "description": "Nameplate rated reactive power of the whole bank, vars.",
+          "format": "double",
+          "type": "number"
+        },
+        "terminal_map": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "v_nom": {
+          "description": "Nameplate nominal voltage, volts: line to line for the three phase\nconfigurations, across the terminals for SINGLE_PHASE.",
+          "format": "double",
+          "type": "number"
+        }
+      },
+      "required": [
+        "name",
+        "bus",
+        "terminal_map",
+        "configuration",
+        "q_rated",
+        "v_nom",
         "extras"
       ],
       "type": "object"
@@ -986,6 +1045,17 @@
           "additionalProperties": true,
           "type": "object"
         },
+        "i_max": {
+          "description": "Per-conductor ampacity and apparent power limits, amps and VA\n(BMOPF schema 0.1.0 line fields, alongside the linecode's own).",
+          "items": {
+            "format": "double",
+            "type": "number"
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        },
         "length": {
           "description": "Meters.",
           "format": "double",
@@ -1001,6 +1071,16 @@
           "description": "Polyline route in the network's coordinate space (`DistNetwork.geo`),\npresent only when a source provides intermediate geometry.\n`#[serde(default)]` so JSON written before the field existed still\ndeserializes.",
           "items": {
             "$ref": "#/$defs/Location2"
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        },
+        "s_max": {
+          "items": {
+            "format": "double",
+            "type": "number"
           },
           "type": [
             "array",
@@ -1380,6 +1460,12 @@
         "buses": {
           "items": {
             "$ref": "#/$defs/DistBus"
+          },
+          "type": "array"
+        },
+        "capacitors": {
+          "items": {
+            "$ref": "#/$defs/DistCapacitor"
           },
           "type": "array"
         },
@@ -2612,7 +2698,7 @@
       ]
     },
     "ModelPayload": {
-      "description": "The one IR payload a package carries, tagged by `kind` in JSON so the payload\nis self-describing in addition to the top-level `model_kind`.\n\nThe payload is the serde snapshot of the PowerIO Rust IR\n([`powerio::Network`] / [`powerio_dist::DistNetwork`]), declared by the\npackage's `payload_schema` / `payload_schema_version` fields and versioned\nindependently of the envelope: additive IR growth bumps the payload minor\nwith no envelope version change. See `docs/src/pio-json-schema.md`.",
+      "description": "The one IR payload a package carries, tagged by `kind` in JSON so the payload\nis self-describing in addition to the top-level `model_kind`.\n\nThe payload is the serde snapshot of the PowerIO Rust IR\n([`powerio::Network`] / [`powerio_dist::DistNetwork`]); changes to it are\ndocument changes under the package `schema_version`. See\n`docs/src/pio-json-schema.md`.",
       "oneOf": [
         {
           "properties": {
@@ -4736,7 +4822,7 @@
       "type": "string"
     }
   },
-  "$id": "https://powerio.dev/schema/pio-package/0.1",
+  "$id": "https://powerio.dev/schema/pio-package/0.2",
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "description": "A versioned package containing one model payload, provenance, diagnostics,\nvalidation results, and lowering history. Serializes to `.pio.json`.\n\n`model_kind` is stored explicitly and is authoritative; the payload is also\nself-describing (tagged by `kind`). [`NetworkPackage::kind_is_consistent`]\nasserts the two agree. The reader ignores unknown top level fields from a\nnewer producer.",
   "properties": {
@@ -4790,31 +4876,12 @@
         "null"
       ]
     },
-    "payload_schema": {
-      "description": "The declared schema URL for the payload family named by `model_kind`.\n`None` on packages written before the payload schema was declared.",
-      "type": [
-        "string",
-        "null"
-      ]
-    },
-    "payload_schema_version": {
-      "description": "The declared payload schema version (semver), independent of the\nenvelope `schema_version`: the envelope versions the package\nbookkeeping, this versions the network tables. A reader rejects a\ndifferent major before computing on payload fields; `None` (legacy\npackages) is accepted.",
-      "type": [
-        "string",
-        "null"
-      ]
-    },
     "producer": {
       "$ref": "#/$defs/Producer"
     },
-    "schema": {
-      "default": "https://powerio.dev/schema/pio-package/0.1",
-      "description": "The schema URL identifying this package format.",
-      "type": "string"
-    },
     "schema_version": {
-      "default": "0.1.1",
-      "description": "The package schema version (semver).",
+      "default": "0.2.0",
+      "description": "The `.pio.json` format version (semver); see\n[`PIO_PACKAGE_SCHEMA_VERSION`]. Absent fields default to the current\nversion, so a hand-built document without it reads under current rules.",
       "type": "string"
     },
     "source_maps": {

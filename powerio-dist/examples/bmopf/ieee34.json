@@ -2101,6 +2101,7 @@
     "D802_806rb": {
       "bus": "806",
       "configuration": "SINGLE_PHASE",
+      "model": "CONSTANT_POWER",
       "p_nom": [
         15000.0
       ],
@@ -2110,11 +2111,15 @@
       "terminal_map": [
         "2",
         "4"
+      ],
+      "v_nom": [
+        14376.0
       ]
     },
     "D802_806rc": {
       "bus": "806",
       "configuration": "SINGLE_PHASE",
+      "model": "CONSTANT_POWER",
       "p_nom": [
         12500.0
       ],
@@ -2124,11 +2129,15 @@
       "terminal_map": [
         "3",
         "4"
+      ],
+      "v_nom": [
+        14376.0
       ]
     },
     "D802_806sb": {
       "bus": "802",
       "configuration": "SINGLE_PHASE",
+      "model": "CONSTANT_POWER",
       "p_nom": [
         15000.0
       ],
@@ -2138,11 +2147,15 @@
       "terminal_map": [
         "2",
         "4"
+      ],
+      "v_nom": [
+        14376.0
       ]
     },
     "D802_806sc": {
       "bus": "802",
       "configuration": "SINGLE_PHASE",
+      "model": "CONSTANT_POWER",
       "p_nom": [
         12500.0
       ],
@@ -2152,11 +2165,15 @@
       "terminal_map": [
         "3",
         "4"
+      ],
+      "v_nom": [
+        14376.0
       ]
     },
     "D808_810rb": {
       "bus": "810",
       "configuration": "SINGLE_PHASE",
+      "model": "CONSTANT_POWER",
       "p_nom": [
         8000.0
       ],
@@ -2166,11 +2183,15 @@
       "terminal_map": [
         "2",
         "4"
+      ],
+      "v_nom": [
+        14376.0
       ]
     },
     "D808_810sb": {
       "bus": "808",
       "configuration": "SINGLE_PHASE",
+      "model": "CONSTANT_POWER",
       "p_nom": [
         8000.0
       ],
@@ -2180,11 +2201,15 @@
       "terminal_map": [
         "2",
         "4"
+      ],
+      "v_nom": [
+        14376.0
       ]
     },
     "D816_824rb": {
       "bus": "824",
       "configuration": "SINGLE_PHASE",
+      "model": "CONSTANT_CURRENT",
       "p_nom": [
         2500.0
       ],
@@ -2194,11 +2219,15 @@
       "terminal_map": [
         "2",
         "3"
+      ],
+      "v_nom": [
+        24900.0
       ]
     },
     "D816_824sb": {
       "bus": "816",
       "configuration": "SINGLE_PHASE",
+      "model": "CONSTANT_CURRENT",
       "p_nom": [
         2500.0
       ],
@@ -2208,11 +2237,15 @@
       "terminal_map": [
         "2",
         "3"
+      ],
+      "v_nom": [
+        24900.0
       ]
     },
     "D818_820ra": {
       "bus": "820",
       "configuration": "SINGLE_PHASE",
+      "model": "CONSTANT_IMPEDANCE",
       "p_nom": [
         17000.0
       ],
@@ -2222,11 +2255,15 @@
       "terminal_map": [
         "1",
         "4"
+      ],
+      "v_nom": [
+        14376.0
       ]
     },
     "D818_820sa": {
       "bus": "818",
       "configuration": "SINGLE_PHASE",
+      "model": "CONSTANT_IMPEDANCE",
       "p_nom": [
         17000.0
       ],
@@ -2236,11 +2273,15 @@
       "terminal_map": [
         "1",
         "4"
+      ],
+      "v_nom": [
+        14376.0
       ]
     },
     "D820_822ra": {
       "bus": "822",
       "configuration": "SINGLE_PHASE",
+      "model": "CONSTANT_POWER",
       "p_nom": [
         67500.0
       ],
@@ -2250,11 +2291,15 @@
       "terminal_map": [
         "1",
         "4"
+      ],
+      "v_nom": [
+        14376.0
       ]
     },
     "D820_822sa": {
       "bus": "820",
       "configuration": "SINGLE_PHASE",
+      "model": "CONSTANT_POWER",
       "p_nom": [
         67500.0
       ],
@@ -2264,11 +2309,15 @@
       "terminal_map": [
         "1",
         "4"
+      ],
+      "v_nom": [
+        14376.0
       ]
     },
     "D824_826rb": {
       "bus": "826",
       "configuration": "SINGLE_PHASE",
+      "model": "CONSTANT_CURRENT",
       "p_nom": [
         20000.0
       ],
@@ -2278,11 +2327,15 @@
       "terminal_map": [
         "2",
         "4"
+      ],
+      "v_nom": [
+        14376.0
       ]
     },
     "D824_826sb": {
       "bus": "824",
       "configuration": "SINGLE_PHASE",
+      "model": "CONSTANT_CURRENT",
       "p_nom": [
         20000.0
       ],
@@ -2292,11 +2345,15 @@
       "terminal_map": [
         "2",
         "4"
+      ],
+      "v_nom": [
+        14376.0
       ]
     },
     "D824_828rc": {
       "bus": "828",
       "configuration": "SINGLE_PHASE",
+      "model": "CONSTANT_POWER",
       "p_nom": [
         2000.0
       ],
@@ -2306,11 +2363,15 @@
       "terminal_map": [
         "3",
         "4"
+      ],
+      "v_nom": [
+        14376.0
       ]
     },
     "D824_828sc": {
       "bus": "824",
       "configuration": "SINGLE_PHASE",
+      "model": "CONSTANT_POWER",
       "p_nom": [
         2000.0
       ],
@@ -2320,11 +2381,15 @@
       "terminal_map": [
         "3",
         "4"
+      ],
+      "v_nom": [
+        14376.0
       ]
     },
     "D828_830ra": {
       "bus": "830",
       "configuration": "SINGLE_PHASE",
+      "model": "CONSTANT_POWER",
       "p_nom": [
         3500.0
       ],
@@ -2334,11 +2399,15 @@
       "terminal_map": [
         "1",
         "4"
+      ],
+      "v_nom": [
+        14376.0
       ]
     },
     "D828_830sa": {
       "bus": "828",
       "configuration": "SINGLE_PHASE",
+      "model": "CONSTANT_POWER",
       "p_nom": [
         3500.0
       ],
@@ -2348,11 +2417,15 @@
       "terminal_map": [
         "1",
         "4"
+      ],
+      "v_nom": [
+        14376.0
       ]
     },
     "D832_858ra": {
       "bus": "858",
       "configuration": "SINGLE_PHASE",
+      "model": "CONSTANT_IMPEDANCE",
       "p_nom": [
         3500.0
       ],
@@ -2362,11 +2435,15 @@
       "terminal_map": [
         "1",
         "4"
+      ],
+      "v_nom": [
+        24900.0
       ]
     },
     "D832_858rb": {
       "bus": "858",
       "configuration": "SINGLE_PHASE",
+      "model": "CONSTANT_IMPEDANCE",
       "p_nom": [
         1000.0
       ],
@@ -2376,11 +2453,15 @@
       "terminal_map": [
         "2",
         "4"
+      ],
+      "v_nom": [
+        24900.0
       ]
     },
     "D832_858rc": {
       "bus": "858",
       "configuration": "SINGLE_PHASE",
+      "model": "CONSTANT_IMPEDANCE",
       "p_nom": [
         3000.0
       ],
@@ -2390,11 +2471,15 @@
       "terminal_map": [
         "3",
         "4"
+      ],
+      "v_nom": [
+        24900.0
       ]
     },
     "D832_858sa": {
       "bus": "832",
       "configuration": "SINGLE_PHASE",
+      "model": "CONSTANT_IMPEDANCE",
       "p_nom": [
         3500.0
       ],
@@ -2404,11 +2489,15 @@
       "terminal_map": [
         "1",
         "4"
+      ],
+      "v_nom": [
+        24900.0
       ]
     },
     "D832_858sb": {
       "bus": "832",
       "configuration": "SINGLE_PHASE",
+      "model": "CONSTANT_IMPEDANCE",
       "p_nom": [
         1000.0
       ],
@@ -2418,11 +2507,15 @@
       "terminal_map": [
         "2",
         "4"
+      ],
+      "v_nom": [
+        24900.0
       ]
     },
     "D832_858sc": {
       "bus": "832",
       "configuration": "SINGLE_PHASE",
+      "model": "CONSTANT_IMPEDANCE",
       "p_nom": [
         3000.0
       ],
@@ -2432,11 +2525,15 @@
       "terminal_map": [
         "3",
         "4"
+      ],
+      "v_nom": [
+        24900.0
       ]
     },
     "D834_860ra": {
       "bus": "860",
       "configuration": "SINGLE_PHASE",
+      "model": "CONSTANT_IMPEDANCE",
       "p_nom": [
         8000.0
       ],
@@ -2446,11 +2543,15 @@
       "terminal_map": [
         "1",
         "2"
+      ],
+      "v_nom": [
+        24900.0
       ]
     },
     "D834_860rb": {
       "bus": "860",
       "configuration": "SINGLE_PHASE",
+      "model": "CONSTANT_IMPEDANCE",
       "p_nom": [
         10000.0
       ],
@@ -2460,11 +2561,15 @@
       "terminal_map": [
         "2",
         "3"
+      ],
+      "v_nom": [
+        24900.0
       ]
     },
     "D834_860rc": {
       "bus": "860",
       "configuration": "SINGLE_PHASE",
+      "model": "CONSTANT_IMPEDANCE",
       "p_nom": [
         55000.0
       ],
@@ -2474,11 +2579,15 @@
       "terminal_map": [
         "3",
         "1"
+      ],
+      "v_nom": [
+        24900.0
       ]
     },
     "D834_860sa": {
       "bus": "834",
       "configuration": "SINGLE_PHASE",
+      "model": "CONSTANT_IMPEDANCE",
       "p_nom": [
         8000.0
       ],
@@ -2488,11 +2597,15 @@
       "terminal_map": [
         "1",
         "2"
+      ],
+      "v_nom": [
+        24900.0
       ]
     },
     "D834_860sb": {
       "bus": "834",
       "configuration": "SINGLE_PHASE",
+      "model": "CONSTANT_IMPEDANCE",
       "p_nom": [
         10000.0
       ],
@@ -2502,11 +2615,15 @@
       "terminal_map": [
         "2",
         "3"
+      ],
+      "v_nom": [
+        24900.0
       ]
     },
     "D834_860sc": {
       "bus": "834",
       "configuration": "SINGLE_PHASE",
+      "model": "CONSTANT_IMPEDANCE",
       "p_nom": [
         55000.0
       ],
@@ -2516,11 +2633,15 @@
       "terminal_map": [
         "3",
         "1"
+      ],
+      "v_nom": [
+        24900.0
       ]
     },
     "D836_840ra": {
       "bus": "840",
       "configuration": "SINGLE_PHASE",
+      "model": "CONSTANT_CURRENT",
       "p_nom": [
         9000.0
       ],
@@ -2530,11 +2651,15 @@
       "terminal_map": [
         "1",
         "2"
+      ],
+      "v_nom": [
+        24900.0
       ]
     },
     "D836_840rb": {
       "bus": "840",
       "configuration": "SINGLE_PHASE",
+      "model": "CONSTANT_CURRENT",
       "p_nom": [
         11000.0
       ],
@@ -2544,11 +2669,15 @@
       "terminal_map": [
         "2",
         "3"
+      ],
+      "v_nom": [
+        24900.0
       ]
     },
     "D836_840sa": {
       "bus": "836",
       "configuration": "SINGLE_PHASE",
+      "model": "CONSTANT_CURRENT",
       "p_nom": [
         9000.0
       ],
@@ -2558,11 +2687,15 @@
       "terminal_map": [
         "1",
         "2"
+      ],
+      "v_nom": [
+        24900.0
       ]
     },
     "D836_840sb": {
       "bus": "836",
       "configuration": "SINGLE_PHASE",
+      "model": "CONSTANT_CURRENT",
       "p_nom": [
         11000.0
       ],
@@ -2572,11 +2705,15 @@
       "terminal_map": [
         "2",
         "3"
+      ],
+      "v_nom": [
+        24900.0
       ]
     },
     "D842_844ra": {
       "bus": "844",
       "configuration": "SINGLE_PHASE",
+      "model": "CONSTANT_POWER",
       "p_nom": [
         4500.0
       ],
@@ -2586,11 +2723,15 @@
       "terminal_map": [
         "1",
         "4"
+      ],
+      "v_nom": [
+        14376.0
       ]
     },
     "D842_844sa": {
       "bus": "842",
       "configuration": "SINGLE_PHASE",
+      "model": "CONSTANT_POWER",
       "p_nom": [
         4500.0
       ],
@@ -2600,11 +2741,15 @@
       "terminal_map": [
         "1",
         "4"
+      ],
+      "v_nom": [
+        14376.0
       ]
     },
     "D844_846rb": {
       "bus": "846",
       "configuration": "SINGLE_PHASE",
+      "model": "CONSTANT_POWER",
       "p_nom": [
         12500.0
       ],
@@ -2614,11 +2759,15 @@
       "terminal_map": [
         "2",
         "4"
+      ],
+      "v_nom": [
+        14376.0
       ]
     },
     "D844_846rc": {
       "bus": "846",
       "configuration": "SINGLE_PHASE",
+      "model": "CONSTANT_POWER",
       "p_nom": [
         10000.0
       ],
@@ -2628,11 +2777,15 @@
       "terminal_map": [
         "3",
         "4"
+      ],
+      "v_nom": [
+        14376.0
       ]
     },
     "D844_846sb": {
       "bus": "844",
       "configuration": "SINGLE_PHASE",
+      "model": "CONSTANT_POWER",
       "p_nom": [
         12500.0
       ],
@@ -2642,11 +2795,15 @@
       "terminal_map": [
         "2",
         "4"
+      ],
+      "v_nom": [
+        14376.0
       ]
     },
     "D844_846sc": {
       "bus": "844",
       "configuration": "SINGLE_PHASE",
+      "model": "CONSTANT_POWER",
       "p_nom": [
         10000.0
       ],
@@ -2656,11 +2813,15 @@
       "terminal_map": [
         "3",
         "4"
+      ],
+      "v_nom": [
+        14376.0
       ]
     },
     "D846_848rb": {
       "bus": "848",
       "configuration": "SINGLE_PHASE",
+      "model": "CONSTANT_POWER",
       "p_nom": [
         11500.0
       ],
@@ -2670,11 +2831,15 @@
       "terminal_map": [
         "2",
         "4"
+      ],
+      "v_nom": [
+        14376.0
       ]
     },
     "D846_848sb": {
       "bus": "846",
       "configuration": "SINGLE_PHASE",
+      "model": "CONSTANT_POWER",
       "p_nom": [
         11500.0
       ],
@@ -2684,11 +2849,15 @@
       "terminal_map": [
         "2",
         "4"
+      ],
+      "v_nom": [
+        14376.0
       ]
     },
     "D854_856rb": {
       "bus": "856",
       "configuration": "SINGLE_PHASE",
+      "model": "CONSTANT_POWER",
       "p_nom": [
         2000.0
       ],
@@ -2698,11 +2867,15 @@
       "terminal_map": [
         "2",
         "4"
+      ],
+      "v_nom": [
+        14376.0
       ]
     },
     "D854_856sb": {
       "bus": "854",
       "configuration": "SINGLE_PHASE",
+      "model": "CONSTANT_POWER",
       "p_nom": [
         2000.0
       ],
@@ -2712,11 +2885,15 @@
       "terminal_map": [
         "2",
         "4"
+      ],
+      "v_nom": [
+        14376.0
       ]
     },
     "D858_834ra": {
       "bus": "834",
       "configuration": "SINGLE_PHASE",
+      "model": "CONSTANT_POWER",
       "p_nom": [
         2000.0
       ],
@@ -2726,11 +2903,15 @@
       "terminal_map": [
         "1",
         "2"
+      ],
+      "v_nom": [
+        24900.0
       ]
     },
     "D858_834rb": {
       "bus": "834",
       "configuration": "SINGLE_PHASE",
+      "model": "CONSTANT_POWER",
       "p_nom": [
         7500.0
       ],
@@ -2740,11 +2921,15 @@
       "terminal_map": [
         "2",
         "3"
+      ],
+      "v_nom": [
+        24900.0
       ]
     },
     "D858_834rc": {
       "bus": "834",
       "configuration": "SINGLE_PHASE",
+      "model": "CONSTANT_POWER",
       "p_nom": [
         6500.0
       ],
@@ -2754,11 +2939,15 @@
       "terminal_map": [
         "3",
         "1"
+      ],
+      "v_nom": [
+        24900.0
       ]
     },
     "D858_834sa": {
       "bus": "858",
       "configuration": "SINGLE_PHASE",
+      "model": "CONSTANT_POWER",
       "p_nom": [
         2000.0
       ],
@@ -2768,11 +2957,15 @@
       "terminal_map": [
         "1",
         "2"
+      ],
+      "v_nom": [
+        24900.0
       ]
     },
     "D858_834sb": {
       "bus": "858",
       "configuration": "SINGLE_PHASE",
+      "model": "CONSTANT_POWER",
       "p_nom": [
         7500.0
       ],
@@ -2782,11 +2975,15 @@
       "terminal_map": [
         "2",
         "3"
+      ],
+      "v_nom": [
+        24900.0
       ]
     },
     "D858_834sc": {
       "bus": "858",
       "configuration": "SINGLE_PHASE",
+      "model": "CONSTANT_POWER",
       "p_nom": [
         6500.0
       ],
@@ -2796,11 +2993,15 @@
       "terminal_map": [
         "3",
         "1"
+      ],
+      "v_nom": [
+        24900.0
       ]
     },
     "D858_864rb": {
       "bus": "864",
       "configuration": "SINGLE_PHASE",
+      "model": "CONSTANT_POWER",
       "p_nom": [
         1000.0
       ],
@@ -2810,11 +3011,15 @@
       "terminal_map": [
         "1",
         "4"
+      ],
+      "v_nom": [
+        14376.0
       ]
     },
     "D858_864sb": {
       "bus": "858",
       "configuration": "SINGLE_PHASE",
+      "model": "CONSTANT_POWER",
       "p_nom": [
         1000.0
       ],
@@ -2824,11 +3029,15 @@
       "terminal_map": [
         "1",
         "4"
+      ],
+      "v_nom": [
+        14376.0
       ]
     },
     "D860_836ra": {
       "bus": "836",
       "configuration": "SINGLE_PHASE",
+      "model": "CONSTANT_POWER",
       "p_nom": [
         15000.0
       ],
@@ -2838,11 +3047,15 @@
       "terminal_map": [
         "1",
         "2"
+      ],
+      "v_nom": [
+        24900.0
       ]
     },
     "D860_836rb": {
       "bus": "836",
       "configuration": "SINGLE_PHASE",
+      "model": "CONSTANT_POWER",
       "p_nom": [
         5000.0
       ],
@@ -2852,11 +3065,15 @@
       "terminal_map": [
         "2",
         "3"
+      ],
+      "v_nom": [
+        24900.0
       ]
     },
     "D860_836rc": {
       "bus": "836",
       "configuration": "SINGLE_PHASE",
+      "model": "CONSTANT_POWER",
       "p_nom": [
         21000.0
       ],
@@ -2866,11 +3083,15 @@
       "terminal_map": [
         "3",
         "1"
+      ],
+      "v_nom": [
+        24900.0
       ]
     },
     "D860_836sa": {
       "bus": "860",
       "configuration": "SINGLE_PHASE",
+      "model": "CONSTANT_POWER",
       "p_nom": [
         15000.0
       ],
@@ -2880,11 +3101,15 @@
       "terminal_map": [
         "1",
         "2"
+      ],
+      "v_nom": [
+        24900.0
       ]
     },
     "D860_836sb": {
       "bus": "860",
       "configuration": "SINGLE_PHASE",
+      "model": "CONSTANT_POWER",
       "p_nom": [
         5000.0
       ],
@@ -2894,11 +3119,15 @@
       "terminal_map": [
         "2",
         "3"
+      ],
+      "v_nom": [
+        24900.0
       ]
     },
     "D860_836sc": {
       "bus": "860",
       "configuration": "SINGLE_PHASE",
+      "model": "CONSTANT_POWER",
       "p_nom": [
         21000.0
       ],
@@ -2908,11 +3137,15 @@
       "terminal_map": [
         "3",
         "1"
+      ],
+      "v_nom": [
+        24900.0
       ]
     },
     "D862_838rb": {
       "bus": "838",
       "configuration": "SINGLE_PHASE",
+      "model": "CONSTANT_POWER",
       "p_nom": [
         14000.0
       ],
@@ -2922,11 +3155,15 @@
       "terminal_map": [
         "2",
         "4"
+      ],
+      "v_nom": [
+        14376.0
       ]
     },
     "D862_838sb": {
       "bus": "862",
       "configuration": "SINGLE_PHASE",
+      "model": "CONSTANT_POWER",
       "p_nom": [
         14000.0
       ],
@@ -2936,11 +3173,15 @@
       "terminal_map": [
         "2",
         "4"
+      ],
+      "v_nom": [
+        14376.0
       ]
     },
     "S830a": {
       "bus": "830",
       "configuration": "SINGLE_PHASE",
+      "model": "CONSTANT_IMPEDANCE",
       "p_nom": [
         10000.0
       ],
@@ -2950,11 +3191,15 @@
       "terminal_map": [
         "1",
         "2"
+      ],
+      "v_nom": [
+        24900.0
       ]
     },
     "S830b": {
       "bus": "830",
       "configuration": "SINGLE_PHASE",
+      "model": "CONSTANT_IMPEDANCE",
       "p_nom": [
         10000.0
       ],
@@ -2964,11 +3209,15 @@
       "terminal_map": [
         "2",
         "3"
+      ],
+      "v_nom": [
+        24900.0
       ]
     },
     "S830c": {
       "bus": "830",
       "configuration": "SINGLE_PHASE",
+      "model": "CONSTANT_IMPEDANCE",
       "p_nom": [
         25000.0
       ],
@@ -2978,11 +3227,15 @@
       "terminal_map": [
         "3",
         "1"
+      ],
+      "v_nom": [
+        24900.0
       ]
     },
     "S840": {
       "bus": "840",
       "configuration": "WYE",
+      "model": "CONSTANT_CURRENT",
       "p_nom": [
         9000.0,
         9000.0,
@@ -2998,11 +3251,17 @@
         "2",
         "3",
         "4"
+      ],
+      "v_nom": [
+        14376.021702821683,
+        14376.021702821683,
+        14376.021702821683
       ]
     },
     "S844": {
       "bus": "844",
       "configuration": "WYE",
+      "model": "CONSTANT_IMPEDANCE",
       "p_nom": [
         135000.0,
         135000.0,
@@ -3018,11 +3277,17 @@
         "2",
         "3",
         "4"
+      ],
+      "v_nom": [
+        14376.021702821683,
+        14376.021702821683,
+        14376.021702821683
       ]
     },
     "S848": {
       "bus": "848",
       "configuration": "DELTA",
+      "model": "CONSTANT_POWER",
       "p_nom": [
         20000.0,
         20000.0,
@@ -3037,11 +3302,17 @@
         "1",
         "2",
         "3"
+      ],
+      "v_nom": [
+        24900.0,
+        24900.0,
+        24900.0
       ]
     },
     "S860": {
       "bus": "860",
       "configuration": "WYE",
+      "model": "CONSTANT_POWER",
       "p_nom": [
         20000.0,
         20000.0,
@@ -3057,11 +3328,17 @@
         "2",
         "3",
         "4"
+      ],
+      "v_nom": [
+        14376.021702821683,
+        14376.021702821683,
+        14376.021702821683
       ]
     },
     "S890": {
       "bus": "890",
       "configuration": "DELTA",
+      "model": "CONSTANT_CURRENT",
       "p_nom": [
         150000.0,
         150000.0,
@@ -3076,15 +3353,21 @@
         "1",
         "2",
         "3"
+      ],
+      "v_nom": [
+        4160.0,
+        4160.0,
+        4160.0
       ]
     }
   },
   "meta": {
-    "$schema": "https://github.com/frederikgeth/bmopf-report/tree/main/draft_schema_and_networks",
-    "generator": {
+    "$schema": "https://raw.githubusercontent.com/frederikgeth/bmopf-report/main/draft_schema_and_networks/draft_bmopf_schema.json",
+    "case_study_generator": {
       "tool": "powerio",
-      "version": "0.2.4"
-    }
+      "version": "0.7.2"
+    },
+    "frequency": 60.0
   },
   "name": "ieee34-1",
   "shunt": {
@@ -3159,8 +3442,8 @@
           "3",
           "4"
         ],
-        "v_ref_from": 69000.0,
-        "v_ref_to": 24900.0,
+        "v_nom_from": 69000.0,
+        "v_nom_to": 24900.0,
         "x_series": 0.00248004
       }
     },
@@ -3179,8 +3462,8 @@
           "1",
           "4"
         ],
-        "v_ref_from": 14376.021702821683,
-        "v_ref_to": 2401.7771198288433,
+        "v_nom_from": 14376.021702821683,
+        "v_nom_to": 2401.7771198288433,
         "x_series_from": 50.59281600000001,
         "x_series_to": 0.0
       },
@@ -3198,8 +3481,8 @@
           "2",
           "4"
         ],
-        "v_ref_from": 14376.021702821683,
-        "v_ref_to": 2401.7771198288433,
+        "v_nom_from": 14376.021702821683,
+        "v_nom_to": 2401.7771198288433,
         "x_series_from": 50.59281600000001,
         "x_series_to": 0.0
       },
@@ -3217,8 +3500,8 @@
           "3",
           "4"
         ],
-        "v_ref_from": 14376.021702821683,
-        "v_ref_to": 2401.7771198288433,
+        "v_nom_from": 14376.021702821683,
+        "v_nom_to": 2401.7771198288433,
         "x_series_from": 50.59281600000001,
         "x_series_to": 0.0
       },
@@ -3236,8 +3519,8 @@
           "1",
           "4"
         ],
-        "v_ref_from": 14376.0,
-        "v_ref_to": 14376.0,
+        "v_nom_from": 14376.0,
+        "v_nom_to": 14376.0,
         "x_series_from": 0.10333468800000001,
         "x_series_to": 0.0
       },
@@ -3255,8 +3538,8 @@
           "2",
           "4"
         ],
-        "v_ref_from": 14376.0,
-        "v_ref_to": 14376.0,
+        "v_nom_from": 14376.0,
+        "v_nom_to": 14376.0,
         "x_series_from": 0.10333468800000001,
         "x_series_to": 0.0
       },
@@ -3274,8 +3557,8 @@
           "3",
           "4"
         ],
-        "v_ref_from": 14376.0,
-        "v_ref_to": 14376.0,
+        "v_nom_from": 14376.0,
+        "v_nom_to": 14376.0,
         "x_series_from": 0.10333468800000001,
         "x_series_to": 0.0
       },
@@ -3293,8 +3576,8 @@
           "1",
           "4"
         ],
-        "v_ref_from": 14376.0,
-        "v_ref_to": 14376.0,
+        "v_nom_from": 14376.0,
+        "v_nom_to": 14376.0,
         "x_series_from": 0.10333468800000001,
         "x_series_to": 0.0
       },
@@ -3312,8 +3595,8 @@
           "2",
           "4"
         ],
-        "v_ref_from": 14376.0,
-        "v_ref_to": 14376.0,
+        "v_nom_from": 14376.0,
+        "v_nom_to": 14376.0,
         "x_series_from": 0.10333468800000001,
         "x_series_to": 0.0
       },
@@ -3331,8 +3614,8 @@
           "3",
           "4"
         ],
-        "v_ref_from": 14376.0,
-        "v_ref_to": 14376.0,
+        "v_nom_from": 14376.0,
+        "v_nom_to": 14376.0,
         "x_series_from": 0.10333468800000001,
         "x_series_to": 0.0
       }

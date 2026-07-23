@@ -417,26 +417,53 @@ fn inline_line_impedance_round_trips() {
             "rs": [[0.1, 0.02], [0.02, 0.1]], "xs": [[0.2, 0.05], [0.05, 0.2]],
             "g_fr": [[0.0, 0.0], [0.0, 0.0]], "g_to": [[0.0, 0.0], [0.0, 0.0]],
             "b_fr": [[1.7, -0.4], [-0.4, 1.7]], "b_to": [[1.7, -0.4], [-0.4, 1.7]],
-            "cm_ub": [400.0, 400.0], "status": "ENABLED"}}
+            "cm_ub": [400.0, 400.0], "sm_ub": [600.0, 600.0], "status": "ENABLED"}}
     }"#;
     let net = parse_pmd_str(text).unwrap();
     let l = &net.lines[0];
     assert_eq!(l.linecode, "ln1_z");
     assert_eq!(l.extras.get("pmd_inline"), Some(&serde_json::json!(true)));
+    // Inline ratings belong to the materialized linecode, not the line.
+    assert!(l.i_max.is_none() && l.s_max.is_none());
     let c = net.linecode("ln1_z").unwrap();
     assert!((c.r_series[0][1] - 0.02).abs() < 1e-15);
     assert_eq!(c.i_max.as_deref(), Some(&[400.0, 400.0][..]));
+    assert_eq!(c.s_max.as_deref(), Some(&[600.0, 600.0][..]));
     assert!(net.warnings.iter().any(|w| w.contains("materialized")));
 
     let input: serde_json::Value = serde_json::from_str(text).unwrap();
     let out = rewrite(text);
     let line = &out["line"]["ln1"];
-    for key in ["rs", "xs", "g_fr", "g_to", "b_fr", "b_to", "cm_ub"] {
+    for key in ["rs", "xs", "g_fr", "g_to", "b_fr", "b_to", "cm_ub", "sm_ub"] {
         assert_eq!(line[key], input["line"]["ln1"][key], "{key}");
     }
     assert!(line.get("linecode").is_none());
     // The materialized linecode does not leak into the linecode section.
     assert!(out.get("linecode").is_none());
+}
+
+/// A line that references a linecode and carries its own per-conductor
+/// ratings keeps them typed: `cm_ub`/`sm_ub` read into the model's line
+/// `i_max`/`s_max` (the BMOPF line slots) and re-emit on the line.
+#[test]
+fn line_level_ratings_round_trip() {
+    let text = r#"{
+        "data_model": "ENGINEERING",
+        "linecode": {"lc": {"rs": [[0.1]], "xs": [[0.1]],
+            "g_fr": [[0.0]], "g_to": [[0.0]], "b_fr": [[0.0]], "b_to": [[0.0]]}},
+        "line": {"ln1": {"f_bus": "b1", "t_bus": "b2",
+            "f_connections": [1], "t_connections": [1], "length": 10.0,
+            "linecode": "lc", "cm_ub": [400.0], "sm_ub": [600.0],
+            "status": "ENABLED"}}
+    }"#;
+    let net = parse_pmd_str(text).unwrap();
+    let l = &net.lines[0];
+    assert_eq!(l.i_max.as_deref(), Some(&[400.0][..]));
+    assert_eq!(l.s_max.as_deref(), Some(&[600.0][..]));
+    assert!(!l.extras.contains_key("cm_ub") && !l.extras.contains_key("sm_ub"));
+    let out = rewrite(text);
+    assert_eq!(out["line"]["ln1"]["cm_ub"], serde_json::json!([400.0]));
+    assert_eq!(out["line"]["ln1"]["sm_ub"], serde_json::json!([600.0]));
 }
 
 /// Per phase taps and custom bounds survive: the raw tm_* arrays ride in

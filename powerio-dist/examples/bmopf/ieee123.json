@@ -757,13 +757,6 @@
         "3"
       ]
     },
-    "610": {
-      "terminal_names": [
-        "1",
-        "2",
-        "3"
-      ]
-    },
     "61s": {
       "terminal_names": [
         "1",
@@ -4078,6 +4071,7 @@
     "S100c": {
       "bus": "100",
       "configuration": "SINGLE_PHASE",
+      "model": "CONSTANT_IMPEDANCE",
       "p_nom": [
         40000.0
       ],
@@ -4087,11 +4081,15 @@
       "terminal_map": [
         "3",
         "4"
+      ],
+      "v_nom": [
+        2400.0
       ]
     },
     "S102c": {
       "bus": "102",
       "configuration": "SINGLE_PHASE",
+      "model": "CONSTANT_POWER",
       "p_nom": [
         20000.0
       ],
@@ -4101,11 +4099,15 @@
       "terminal_map": [
         "3",
         "4"
+      ],
+      "v_nom": [
+        2400.0
       ]
     },
     "S103c": {
       "bus": "103",
       "configuration": "SINGLE_PHASE",
+      "model": "CONSTANT_POWER",
       "p_nom": [
         40000.0
       ],
@@ -4115,11 +4117,15 @@
       "terminal_map": [
         "3",
         "4"
+      ],
+      "v_nom": [
+        2400.0
       ]
     },
     "S104c": {
       "bus": "104",
       "configuration": "SINGLE_PHASE",
+      "model": "CONSTANT_POWER",
       "p_nom": [
         40000.0
       ],
@@ -4129,11 +4135,15 @@
       "terminal_map": [
         "3",
         "4"
+      ],
+      "v_nom": [
+        2400.0
       ]
     },
     "S106b": {
       "bus": "106",
       "configuration": "SINGLE_PHASE",
+      "model": "CONSTANT_POWER",
       "p_nom": [
         40000.0
       ],
@@ -4143,11 +4153,15 @@
       "terminal_map": [
         "2",
         "4"
+      ],
+      "v_nom": [
+        2400.0
       ]
     },
     "S107b": {
       "bus": "107",
       "configuration": "SINGLE_PHASE",
+      "model": "CONSTANT_POWER",
       "p_nom": [
         40000.0
       ],
@@ -4157,11 +4171,15 @@
       "terminal_map": [
         "2",
         "4"
+      ],
+      "v_nom": [
+        2400.0
       ]
     },
     "S109a": {
       "bus": "109",
       "configuration": "SINGLE_PHASE",
+      "model": "CONSTANT_POWER",
       "p_nom": [
         40000.0
       ],
@@ -4171,11 +4189,15 @@
       "terminal_map": [
         "1",
         "4"
+      ],
+      "v_nom": [
+        2400.0
       ]
     },
     "S10a": {
       "bus": "10",
       "configuration": "SINGLE_PHASE",
+      "model": "CONSTANT_CURRENT",
       "p_nom": [
         20000.0
       ],
@@ -4185,11 +4207,15 @@
       "terminal_map": [
         "1",
         "4"
+      ],
+      "v_nom": [
+        2400.0
       ]
     },
     "S111a": {
       "bus": "111",
       "configuration": "SINGLE_PHASE",
+      "model": "CONSTANT_POWER",
       "p_nom": [
         20000.0
       ],
@@ -4199,11 +4225,15 @@
       "terminal_map": [
         "1",
         "4"
+      ],
+      "v_nom": [
+        2400.0
       ]
     },
     "S112a": {
       "bus": "112",
       "configuration": "SINGLE_PHASE",
+      "model": "CONSTANT_CURRENT",
       "p_nom": [
         20000.0
       ],
@@ -4213,11 +4243,15 @@
       "terminal_map": [
         "1",
         "4"
+      ],
+      "v_nom": [
+        2400.0
       ]
     },
     "S113a": {
       "bus": "113",
       "configuration": "SINGLE_PHASE",
+      "model": "CONSTANT_IMPEDANCE",
       "p_nom": [
         40000.0
       ],
@@ -4227,11 +4261,15 @@
       "terminal_map": [
         "1",
         "4"
+      ],
+      "v_nom": [
+        2400.0
       ]
     },
     "S114a": {
       "bus": "114",
       "configuration": "SINGLE_PHASE",
+      "model": "CONSTANT_POWER",
       "p_nom": [
         20000.0
       ],
@@ -4241,11 +4279,15 @@
       "terminal_map": [
         "1",
         "4"
+      ],
+      "v_nom": [
+        2400.0
       ]
     },
     "S11a": {
       "bus": "11",
       "configuration": "SINGLE_PHASE",
+      "model": "CONSTANT_IMPEDANCE",
       "p_nom": [
         40000.0
       ],
@@ -4255,11 +4297,15 @@
       "terminal_map": [
         "1",
         "4"
+      ],
+      "v_nom": [
+        2400.0
       ]
     },
     "S12b": {
       "bus": "12",
       "configuration": "SINGLE_PHASE",
+      "model": "CONSTANT_POWER",
       "p_nom": [
         20000.0
       ],
@@ -4269,11 +4315,15 @@
       "terminal_map": [
         "2",
         "4"
+      ],
+      "v_nom": [
+        2400.0
       ]
     },
     "S16c": {
       "bus": "16",
       "configuration": "SINGLE_PHASE",
+      "model": "CONSTANT_POWER",
       "p_nom": [
         40000.0
       ],
@@ -4283,11 +4333,15 @@
       "terminal_map": [
         "3",
         "4"
+      ],
+      "v_nom": [
+        2400.0
       ]
     },
     "S17c": {
       "bus": "17",
       "configuration": "SINGLE_PHASE",
+      "model": "CONSTANT_POWER",
       "p_nom": [
         20000.0
       ],
@@ -4297,11 +4351,15 @@
       "terminal_map": [
         "3",
         "4"
+      ],
+      "v_nom": [
+        2400.0
       ]
     },
     "S19a": {
       "bus": "19",
       "configuration": "SINGLE_PHASE",
+      "model": "CONSTANT_POWER",
       "p_nom": [
         40000.0
       ],
@@ -4311,11 +4369,15 @@
       "terminal_map": [
         "1",
         "4"
+      ],
+      "v_nom": [
+        2400.0
       ]
     },
     "S1a": {
       "bus": "1",
       "configuration": "SINGLE_PHASE",
+      "model": "CONSTANT_POWER",
       "p_nom": [
         40000.0
       ],
@@ -4325,11 +4387,15 @@
       "terminal_map": [
         "1",
         "4"
+      ],
+      "v_nom": [
+        2400.0
       ]
     },
     "S20a": {
       "bus": "20",
       "configuration": "SINGLE_PHASE",
+      "model": "CONSTANT_CURRENT",
       "p_nom": [
         40000.0
       ],
@@ -4339,11 +4405,15 @@
       "terminal_map": [
         "1",
         "4"
+      ],
+      "v_nom": [
+        2400.0
       ]
     },
     "S22b": {
       "bus": "22",
       "configuration": "SINGLE_PHASE",
+      "model": "CONSTANT_IMPEDANCE",
       "p_nom": [
         40000.0
       ],
@@ -4353,11 +4423,15 @@
       "terminal_map": [
         "2",
         "4"
+      ],
+      "v_nom": [
+        2400.0
       ]
     },
     "S24c": {
       "bus": "24",
       "configuration": "SINGLE_PHASE",
+      "model": "CONSTANT_POWER",
       "p_nom": [
         40000.0
       ],
@@ -4367,11 +4441,15 @@
       "terminal_map": [
         "3",
         "4"
+      ],
+      "v_nom": [
+        2400.0
       ]
     },
     "S28a": {
       "bus": "28",
       "configuration": "SINGLE_PHASE",
+      "model": "CONSTANT_CURRENT",
       "p_nom": [
         40000.0
       ],
@@ -4381,11 +4459,15 @@
       "terminal_map": [
         "1",
         "4"
+      ],
+      "v_nom": [
+        2400.0
       ]
     },
     "S29a": {
       "bus": "29",
       "configuration": "SINGLE_PHASE",
+      "model": "CONSTANT_IMPEDANCE",
       "p_nom": [
         40000.0
       ],
@@ -4395,11 +4477,15 @@
       "terminal_map": [
         "1",
         "4"
+      ],
+      "v_nom": [
+        2400.0
       ]
     },
     "S2b": {
       "bus": "2",
       "configuration": "SINGLE_PHASE",
+      "model": "CONSTANT_POWER",
       "p_nom": [
         20000.0
       ],
@@ -4409,11 +4495,15 @@
       "terminal_map": [
         "2",
         "4"
+      ],
+      "v_nom": [
+        2400.0
       ]
     },
     "S30c": {
       "bus": "30",
       "configuration": "SINGLE_PHASE",
+      "model": "CONSTANT_POWER",
       "p_nom": [
         40000.0
       ],
@@ -4423,11 +4513,15 @@
       "terminal_map": [
         "3",
         "4"
+      ],
+      "v_nom": [
+        2400.0
       ]
     },
     "S31c": {
       "bus": "31",
       "configuration": "SINGLE_PHASE",
+      "model": "CONSTANT_POWER",
       "p_nom": [
         20000.0
       ],
@@ -4437,11 +4531,15 @@
       "terminal_map": [
         "3",
         "4"
+      ],
+      "v_nom": [
+        2400.0
       ]
     },
     "S32c": {
       "bus": "32",
       "configuration": "SINGLE_PHASE",
+      "model": "CONSTANT_POWER",
       "p_nom": [
         20000.0
       ],
@@ -4451,11 +4549,15 @@
       "terminal_map": [
         "3",
         "4"
+      ],
+      "v_nom": [
+        2400.0
       ]
     },
     "S33a": {
       "bus": "33",
       "configuration": "SINGLE_PHASE",
+      "model": "CONSTANT_CURRENT",
       "p_nom": [
         40000.0
       ],
@@ -4465,11 +4567,15 @@
       "terminal_map": [
         "1",
         "4"
+      ],
+      "v_nom": [
+        2400.0
       ]
     },
     "S34c": {
       "bus": "34",
       "configuration": "SINGLE_PHASE",
+      "model": "CONSTANT_IMPEDANCE",
       "p_nom": [
         40000.0
       ],
@@ -4479,11 +4585,15 @@
       "terminal_map": [
         "3",
         "4"
+      ],
+      "v_nom": [
+        2400.0
       ]
     },
     "S35a": {
       "bus": "35",
       "configuration": "SINGLE_PHASE",
+      "model": "CONSTANT_POWER",
       "p_nom": [
         40000.0
       ],
@@ -4493,11 +4603,15 @@
       "terminal_map": [
         "1",
         "2"
+      ],
+      "v_nom": [
+        4160.0
       ]
     },
     "S37a": {
       "bus": "37",
       "configuration": "SINGLE_PHASE",
+      "model": "CONSTANT_IMPEDANCE",
       "p_nom": [
         40000.0
       ],
@@ -4507,11 +4621,15 @@
       "terminal_map": [
         "1",
         "4"
+      ],
+      "v_nom": [
+        2400.0
       ]
     },
     "S38b": {
       "bus": "38",
       "configuration": "SINGLE_PHASE",
+      "model": "CONSTANT_CURRENT",
       "p_nom": [
         20000.0
       ],
@@ -4521,11 +4639,15 @@
       "terminal_map": [
         "2",
         "4"
+      ],
+      "v_nom": [
+        2400.0
       ]
     },
     "S39b": {
       "bus": "39",
       "configuration": "SINGLE_PHASE",
+      "model": "CONSTANT_POWER",
       "p_nom": [
         20000.0
       ],
@@ -4535,11 +4657,15 @@
       "terminal_map": [
         "2",
         "4"
+      ],
+      "v_nom": [
+        2400.0
       ]
     },
     "S41c": {
       "bus": "41",
       "configuration": "SINGLE_PHASE",
+      "model": "CONSTANT_POWER",
       "p_nom": [
         20000.0
       ],
@@ -4549,11 +4675,15 @@
       "terminal_map": [
         "3",
         "4"
+      ],
+      "v_nom": [
+        2400.0
       ]
     },
     "S42a": {
       "bus": "42",
       "configuration": "SINGLE_PHASE",
+      "model": "CONSTANT_POWER",
       "p_nom": [
         20000.0
       ],
@@ -4563,11 +4693,15 @@
       "terminal_map": [
         "1",
         "4"
+      ],
+      "v_nom": [
+        2400.0
       ]
     },
     "S43b": {
       "bus": "43",
       "configuration": "SINGLE_PHASE",
+      "model": "CONSTANT_IMPEDANCE",
       "p_nom": [
         40000.0
       ],
@@ -4577,11 +4711,15 @@
       "terminal_map": [
         "2",
         "4"
+      ],
+      "v_nom": [
+        2400.0
       ]
     },
     "S45a": {
       "bus": "45",
       "configuration": "SINGLE_PHASE",
+      "model": "CONSTANT_CURRENT",
       "p_nom": [
         20000.0
       ],
@@ -4591,11 +4729,15 @@
       "terminal_map": [
         "1",
         "4"
+      ],
+      "v_nom": [
+        2400.0
       ]
     },
     "S46a": {
       "bus": "46",
       "configuration": "SINGLE_PHASE",
+      "model": "CONSTANT_POWER",
       "p_nom": [
         20000.0
       ],
@@ -4605,11 +4747,15 @@
       "terminal_map": [
         "1",
         "4"
+      ],
+      "v_nom": [
+        2400.0
       ]
     },
     "S47": {
       "bus": "47",
       "configuration": "WYE",
+      "model": "CONSTANT_CURRENT",
       "p_nom": [
         35000.0,
         35000.0,
@@ -4625,11 +4771,17 @@
         "2",
         "3",
         "4"
+      ],
+      "v_nom": [
+        2401.7771198288433,
+        2401.7771198288433,
+        2401.7771198288433
       ]
     },
     "S48": {
       "bus": "48",
       "configuration": "WYE",
+      "model": "CONSTANT_IMPEDANCE",
       "p_nom": [
         70000.0,
         70000.0,
@@ -4645,11 +4797,17 @@
         "2",
         "3",
         "4"
+      ],
+      "v_nom": [
+        2401.7771198288433,
+        2401.7771198288433,
+        2401.7771198288433
       ]
     },
     "S49a": {
       "bus": "49",
       "configuration": "SINGLE_PHASE",
+      "model": "CONSTANT_POWER",
       "p_nom": [
         35000.0
       ],
@@ -4659,11 +4817,15 @@
       "terminal_map": [
         "1",
         "4"
+      ],
+      "v_nom": [
+        2400.0
       ]
     },
     "S49b": {
       "bus": "49",
       "configuration": "SINGLE_PHASE",
+      "model": "CONSTANT_POWER",
       "p_nom": [
         70000.0
       ],
@@ -4673,11 +4835,15 @@
       "terminal_map": [
         "2",
         "4"
+      ],
+      "v_nom": [
+        2400.0
       ]
     },
     "S49c": {
       "bus": "49",
       "configuration": "SINGLE_PHASE",
+      "model": "CONSTANT_POWER",
       "p_nom": [
         35000.0
       ],
@@ -4687,11 +4853,15 @@
       "terminal_map": [
         "3",
         "4"
+      ],
+      "v_nom": [
+        2400.0
       ]
     },
     "S4c": {
       "bus": "4",
       "configuration": "SINGLE_PHASE",
+      "model": "CONSTANT_POWER",
       "p_nom": [
         40000.0
       ],
@@ -4701,11 +4871,15 @@
       "terminal_map": [
         "3",
         "4"
+      ],
+      "v_nom": [
+        2400.0
       ]
     },
     "S50c": {
       "bus": "50",
       "configuration": "SINGLE_PHASE",
+      "model": "CONSTANT_POWER",
       "p_nom": [
         40000.0
       ],
@@ -4715,11 +4889,15 @@
       "terminal_map": [
         "3",
         "4"
+      ],
+      "v_nom": [
+        2400.0
       ]
     },
     "S51a": {
       "bus": "51",
       "configuration": "SINGLE_PHASE",
+      "model": "CONSTANT_POWER",
       "p_nom": [
         20000.0
       ],
@@ -4729,11 +4907,15 @@
       "terminal_map": [
         "1",
         "4"
+      ],
+      "v_nom": [
+        2400.0
       ]
     },
     "S52a": {
       "bus": "52",
       "configuration": "SINGLE_PHASE",
+      "model": "CONSTANT_POWER",
       "p_nom": [
         40000.0
       ],
@@ -4743,11 +4925,15 @@
       "terminal_map": [
         "1",
         "4"
+      ],
+      "v_nom": [
+        2400.0
       ]
     },
     "S53a": {
       "bus": "53",
       "configuration": "SINGLE_PHASE",
+      "model": "CONSTANT_POWER",
       "p_nom": [
         40000.0
       ],
@@ -4757,11 +4943,15 @@
       "terminal_map": [
         "1",
         "4"
+      ],
+      "v_nom": [
+        2400.0
       ]
     },
     "S55a": {
       "bus": "55",
       "configuration": "SINGLE_PHASE",
+      "model": "CONSTANT_IMPEDANCE",
       "p_nom": [
         20000.0
       ],
@@ -4771,11 +4961,15 @@
       "terminal_map": [
         "1",
         "4"
+      ],
+      "v_nom": [
+        2400.0
       ]
     },
     "S56b": {
       "bus": "56",
       "configuration": "SINGLE_PHASE",
+      "model": "CONSTANT_POWER",
       "p_nom": [
         20000.0
       ],
@@ -4785,11 +4979,15 @@
       "terminal_map": [
         "2",
         "4"
+      ],
+      "v_nom": [
+        2400.0
       ]
     },
     "S58b": {
       "bus": "58",
       "configuration": "SINGLE_PHASE",
+      "model": "CONSTANT_CURRENT",
       "p_nom": [
         20000.0
       ],
@@ -4799,11 +4997,15 @@
       "terminal_map": [
         "2",
         "4"
+      ],
+      "v_nom": [
+        2400.0
       ]
     },
     "S59b": {
       "bus": "59",
       "configuration": "SINGLE_PHASE",
+      "model": "CONSTANT_POWER",
       "p_nom": [
         20000.0
       ],
@@ -4813,11 +5015,15 @@
       "terminal_map": [
         "2",
         "4"
+      ],
+      "v_nom": [
+        2400.0
       ]
     },
     "S5c": {
       "bus": "5",
       "configuration": "SINGLE_PHASE",
+      "model": "CONSTANT_CURRENT",
       "p_nom": [
         20000.0
       ],
@@ -4827,11 +5033,15 @@
       "terminal_map": [
         "3",
         "4"
+      ],
+      "v_nom": [
+        2400.0
       ]
     },
     "S60a": {
       "bus": "60",
       "configuration": "SINGLE_PHASE",
+      "model": "CONSTANT_POWER",
       "p_nom": [
         20000.0
       ],
@@ -4841,11 +5051,15 @@
       "terminal_map": [
         "1",
         "4"
+      ],
+      "v_nom": [
+        2400.0
       ]
     },
     "S62c": {
       "bus": "62",
       "configuration": "SINGLE_PHASE",
+      "model": "CONSTANT_IMPEDANCE",
       "p_nom": [
         40000.0
       ],
@@ -4855,11 +5069,15 @@
       "terminal_map": [
         "3",
         "4"
+      ],
+      "v_nom": [
+        2400.0
       ]
     },
     "S63a": {
       "bus": "63",
       "configuration": "SINGLE_PHASE",
+      "model": "CONSTANT_POWER",
       "p_nom": [
         40000.0
       ],
@@ -4869,11 +5087,15 @@
       "terminal_map": [
         "1",
         "4"
+      ],
+      "v_nom": [
+        2400.0
       ]
     },
     "S64b": {
       "bus": "64",
       "configuration": "SINGLE_PHASE",
+      "model": "CONSTANT_CURRENT",
       "p_nom": [
         75000.0
       ],
@@ -4883,11 +5105,15 @@
       "terminal_map": [
         "2",
         "4"
+      ],
+      "v_nom": [
+        2400.0
       ]
     },
     "S65a": {
       "bus": "65",
       "configuration": "SINGLE_PHASE",
+      "model": "CONSTANT_IMPEDANCE",
       "p_nom": [
         35000.0
       ],
@@ -4897,11 +5123,15 @@
       "terminal_map": [
         "1",
         "2"
+      ],
+      "v_nom": [
+        4160.0
       ]
     },
     "S65b": {
       "bus": "65",
       "configuration": "SINGLE_PHASE",
+      "model": "CONSTANT_IMPEDANCE",
       "p_nom": [
         35000.0
       ],
@@ -4911,11 +5141,15 @@
       "terminal_map": [
         "2",
         "3"
+      ],
+      "v_nom": [
+        4160.0
       ]
     },
     "S65c": {
       "bus": "65",
       "configuration": "SINGLE_PHASE",
+      "model": "CONSTANT_IMPEDANCE",
       "p_nom": [
         70000.0
       ],
@@ -4925,11 +5159,15 @@
       "terminal_map": [
         "3",
         "1"
+      ],
+      "v_nom": [
+        4160.0
       ]
     },
     "S66c": {
       "bus": "66",
       "configuration": "SINGLE_PHASE",
+      "model": "CONSTANT_POWER",
       "p_nom": [
         75000.0
       ],
@@ -4939,11 +5177,15 @@
       "terminal_map": [
         "3",
         "4"
+      ],
+      "v_nom": [
+        2400.0
       ]
     },
     "S68a": {
       "bus": "68",
       "configuration": "SINGLE_PHASE",
+      "model": "CONSTANT_POWER",
       "p_nom": [
         20000.0
       ],
@@ -4953,11 +5195,15 @@
       "terminal_map": [
         "1",
         "4"
+      ],
+      "v_nom": [
+        2400.0
       ]
     },
     "S69a": {
       "bus": "69",
       "configuration": "SINGLE_PHASE",
+      "model": "CONSTANT_POWER",
       "p_nom": [
         40000.0
       ],
@@ -4967,11 +5213,15 @@
       "terminal_map": [
         "1",
         "4"
+      ],
+      "v_nom": [
+        2400.0
       ]
     },
     "S6c": {
       "bus": "6",
       "configuration": "SINGLE_PHASE",
+      "model": "CONSTANT_IMPEDANCE",
       "p_nom": [
         40000.0
       ],
@@ -4981,11 +5231,15 @@
       "terminal_map": [
         "3",
         "4"
+      ],
+      "v_nom": [
+        2400.0
       ]
     },
     "S70a": {
       "bus": "70",
       "configuration": "SINGLE_PHASE",
+      "model": "CONSTANT_POWER",
       "p_nom": [
         20000.0
       ],
@@ -4995,11 +5249,15 @@
       "terminal_map": [
         "1",
         "4"
+      ],
+      "v_nom": [
+        2400.0
       ]
     },
     "S71a": {
       "bus": "71",
       "configuration": "SINGLE_PHASE",
+      "model": "CONSTANT_POWER",
       "p_nom": [
         40000.0
       ],
@@ -5009,11 +5267,15 @@
       "terminal_map": [
         "1",
         "4"
+      ],
+      "v_nom": [
+        2400.0
       ]
     },
     "S73c": {
       "bus": "73",
       "configuration": "SINGLE_PHASE",
+      "model": "CONSTANT_POWER",
       "p_nom": [
         40000.0
       ],
@@ -5023,11 +5285,15 @@
       "terminal_map": [
         "3",
         "4"
+      ],
+      "v_nom": [
+        2400.0
       ]
     },
     "S74c": {
       "bus": "74",
       "configuration": "SINGLE_PHASE",
+      "model": "CONSTANT_IMPEDANCE",
       "p_nom": [
         40000.0
       ],
@@ -5037,11 +5303,15 @@
       "terminal_map": [
         "3",
         "4"
+      ],
+      "v_nom": [
+        2400.0
       ]
     },
     "S75c": {
       "bus": "75",
       "configuration": "SINGLE_PHASE",
+      "model": "CONSTANT_POWER",
       "p_nom": [
         40000.0
       ],
@@ -5051,11 +5321,15 @@
       "terminal_map": [
         "3",
         "4"
+      ],
+      "v_nom": [
+        2400.0
       ]
     },
     "S76a": {
       "bus": "76",
       "configuration": "SINGLE_PHASE",
+      "model": "CONSTANT_CURRENT",
       "p_nom": [
         105000.0
       ],
@@ -5065,11 +5339,15 @@
       "terminal_map": [
         "1",
         "2"
+      ],
+      "v_nom": [
+        4160.0
       ]
     },
     "S76b": {
       "bus": "76",
       "configuration": "SINGLE_PHASE",
+      "model": "CONSTANT_CURRENT",
       "p_nom": [
         70000.0
       ],
@@ -5079,11 +5357,15 @@
       "terminal_map": [
         "2",
         "3"
+      ],
+      "v_nom": [
+        4160.0
       ]
     },
     "S76c": {
       "bus": "76",
       "configuration": "SINGLE_PHASE",
+      "model": "CONSTANT_CURRENT",
       "p_nom": [
         70000.0
       ],
@@ -5093,11 +5375,15 @@
       "terminal_map": [
         "3",
         "1"
+      ],
+      "v_nom": [
+        4160.0
       ]
     },
     "S77b": {
       "bus": "77",
       "configuration": "SINGLE_PHASE",
+      "model": "CONSTANT_POWER",
       "p_nom": [
         40000.0
       ],
@@ -5107,11 +5393,15 @@
       "terminal_map": [
         "2",
         "4"
+      ],
+      "v_nom": [
+        2400.0
       ]
     },
     "S79a": {
       "bus": "79",
       "configuration": "SINGLE_PHASE",
+      "model": "CONSTANT_IMPEDANCE",
       "p_nom": [
         40000.0
       ],
@@ -5121,11 +5411,15 @@
       "terminal_map": [
         "1",
         "4"
+      ],
+      "v_nom": [
+        2400.0
       ]
     },
     "S7a": {
       "bus": "7",
       "configuration": "SINGLE_PHASE",
+      "model": "CONSTANT_POWER",
       "p_nom": [
         20000.0
       ],
@@ -5135,11 +5429,15 @@
       "terminal_map": [
         "1",
         "4"
+      ],
+      "v_nom": [
+        2400.0
       ]
     },
     "S80b": {
       "bus": "80",
       "configuration": "SINGLE_PHASE",
+      "model": "CONSTANT_POWER",
       "p_nom": [
         40000.0
       ],
@@ -5149,11 +5447,15 @@
       "terminal_map": [
         "2",
         "4"
+      ],
+      "v_nom": [
+        2400.0
       ]
     },
     "S82a": {
       "bus": "82",
       "configuration": "SINGLE_PHASE",
+      "model": "CONSTANT_POWER",
       "p_nom": [
         40000.0
       ],
@@ -5163,11 +5465,15 @@
       "terminal_map": [
         "1",
         "4"
+      ],
+      "v_nom": [
+        2400.0
       ]
     },
     "S83c": {
       "bus": "83",
       "configuration": "SINGLE_PHASE",
+      "model": "CONSTANT_POWER",
       "p_nom": [
         20000.0
       ],
@@ -5177,11 +5483,15 @@
       "terminal_map": [
         "3",
         "4"
+      ],
+      "v_nom": [
+        2400.0
       ]
     },
     "S84c": {
       "bus": "84",
       "configuration": "SINGLE_PHASE",
+      "model": "CONSTANT_POWER",
       "p_nom": [
         20000.0
       ],
@@ -5191,11 +5501,15 @@
       "terminal_map": [
         "3",
         "4"
+      ],
+      "v_nom": [
+        2400.0
       ]
     },
     "S85c": {
       "bus": "85",
       "configuration": "SINGLE_PHASE",
+      "model": "CONSTANT_POWER",
       "p_nom": [
         40000.0
       ],
@@ -5205,11 +5519,15 @@
       "terminal_map": [
         "3",
         "4"
+      ],
+      "v_nom": [
+        2400.0
       ]
     },
     "S86b": {
       "bus": "86",
       "configuration": "SINGLE_PHASE",
+      "model": "CONSTANT_POWER",
       "p_nom": [
         20000.0
       ],
@@ -5219,11 +5537,15 @@
       "terminal_map": [
         "2",
         "4"
+      ],
+      "v_nom": [
+        2400.0
       ]
     },
     "S87b": {
       "bus": "87",
       "configuration": "SINGLE_PHASE",
+      "model": "CONSTANT_POWER",
       "p_nom": [
         40000.0
       ],
@@ -5233,11 +5555,15 @@
       "terminal_map": [
         "2",
         "4"
+      ],
+      "v_nom": [
+        2400.0
       ]
     },
     "S88a": {
       "bus": "88",
       "configuration": "SINGLE_PHASE",
+      "model": "CONSTANT_POWER",
       "p_nom": [
         40000.0
       ],
@@ -5247,11 +5573,15 @@
       "terminal_map": [
         "1",
         "4"
+      ],
+      "v_nom": [
+        2400.0
       ]
     },
     "S90b": {
       "bus": "90",
       "configuration": "SINGLE_PHASE",
+      "model": "CONSTANT_CURRENT",
       "p_nom": [
         40000.0
       ],
@@ -5261,11 +5591,15 @@
       "terminal_map": [
         "2",
         "4"
+      ],
+      "v_nom": [
+        2400.0
       ]
     },
     "S92c": {
       "bus": "92",
       "configuration": "SINGLE_PHASE",
+      "model": "CONSTANT_POWER",
       "p_nom": [
         40000.0
       ],
@@ -5275,11 +5609,15 @@
       "terminal_map": [
         "3",
         "4"
+      ],
+      "v_nom": [
+        2400.0
       ]
     },
     "S94a": {
       "bus": "94",
       "configuration": "SINGLE_PHASE",
+      "model": "CONSTANT_POWER",
       "p_nom": [
         40000.0
       ],
@@ -5289,11 +5627,15 @@
       "terminal_map": [
         "1",
         "4"
+      ],
+      "v_nom": [
+        2400.0
       ]
     },
     "S95b": {
       "bus": "95",
       "configuration": "SINGLE_PHASE",
+      "model": "CONSTANT_POWER",
       "p_nom": [
         20000.0
       ],
@@ -5303,11 +5645,15 @@
       "terminal_map": [
         "2",
         "4"
+      ],
+      "v_nom": [
+        2400.0
       ]
     },
     "S96b": {
       "bus": "96",
       "configuration": "SINGLE_PHASE",
+      "model": "CONSTANT_POWER",
       "p_nom": [
         20000.0
       ],
@@ -5317,11 +5663,15 @@
       "terminal_map": [
         "2",
         "4"
+      ],
+      "v_nom": [
+        2400.0
       ]
     },
     "S98a": {
       "bus": "98",
       "configuration": "SINGLE_PHASE",
+      "model": "CONSTANT_POWER",
       "p_nom": [
         40000.0
       ],
@@ -5331,11 +5681,15 @@
       "terminal_map": [
         "1",
         "4"
+      ],
+      "v_nom": [
+        2400.0
       ]
     },
     "S99b": {
       "bus": "99",
       "configuration": "SINGLE_PHASE",
+      "model": "CONSTANT_POWER",
       "p_nom": [
         40000.0
       ],
@@ -5345,11 +5699,15 @@
       "terminal_map": [
         "2",
         "4"
+      ],
+      "v_nom": [
+        2400.0
       ]
     },
     "S9a": {
       "bus": "9",
       "configuration": "SINGLE_PHASE",
+      "model": "CONSTANT_POWER",
       "p_nom": [
         40000.0
       ],
@@ -5359,15 +5717,19 @@
       "terminal_map": [
         "1",
         "4"
+      ],
+      "v_nom": [
+        2400.0
       ]
     }
   },
   "meta": {
-    "$schema": "https://github.com/frederikgeth/bmopf-report/tree/main/draft_schema_and_networks",
-    "generator": {
+    "$schema": "https://raw.githubusercontent.com/frederikgeth/bmopf-report/main/draft_schema_and_networks/draft_bmopf_schema.json",
+    "case_study_generator": {
       "tool": "powerio",
-      "version": "0.2.4"
-    }
+      "version": "0.7.2"
+    },
+    "frequency": 60.0
   },
   "name": "ieee123",
   "shunt": {
@@ -5594,8 +5956,8 @@
           "1",
           "4"
         ],
-        "v_ref_from": 2401.7771198288433,
-        "v_ref_to": 2401.7771198288433,
+        "v_nom_from": 2401.7771198288433,
+        "v_nom_to": 2401.7771198288433,
         "x_series_from": 0.000034611200000000005,
         "x_series_to": 0.0
       },
@@ -5613,8 +5975,8 @@
           "2",
           "4"
         ],
-        "v_ref_from": 2401.7771198288433,
-        "v_ref_to": 2401.7771198288433,
+        "v_nom_from": 2401.7771198288433,
+        "v_nom_to": 2401.7771198288433,
         "x_series_from": 0.000034611200000000005,
         "x_series_to": 0.0
       },
@@ -5632,8 +5994,8 @@
           "3",
           "4"
         ],
-        "v_ref_from": 2401.7771198288433,
-        "v_ref_to": 2401.7771198288433,
+        "v_nom_from": 2401.7771198288433,
+        "v_nom_to": 2401.7771198288433,
         "x_series_from": 0.000034611200000000005,
         "x_series_to": 0.0
       },
@@ -5651,8 +6013,8 @@
           "1",
           "4"
         ],
-        "v_ref_from": 2402.0,
-        "v_ref_to": 2402.0,
+        "v_nom_from": 2402.0,
+        "v_nom_to": 2402.0,
         "x_series_from": 0.00028848020000000004,
         "x_series_to": 0.0
       },
@@ -5670,8 +6032,8 @@
           "1",
           "4"
         ],
-        "v_ref_from": 2402.0,
-        "v_ref_to": 2402.0,
+        "v_nom_from": 2402.0,
+        "v_nom_to": 2402.0,
         "x_series_from": 0.00028848020000000004,
         "x_series_to": 0.0
       },
@@ -5689,8 +6051,8 @@
           "3",
           "4"
         ],
-        "v_ref_from": 2402.0,
-        "v_ref_to": 2402.0,
+        "v_nom_from": 2402.0,
+        "v_nom_to": 2402.0,
         "x_series_from": 0.00028848020000000004,
         "x_series_to": 0.0
       },
@@ -5708,8 +6070,8 @@
           "1",
           "4"
         ],
-        "v_ref_from": 2402.0,
-        "v_ref_to": 2402.0,
+        "v_nom_from": 2402.0,
+        "v_nom_to": 2402.0,
         "x_series_from": 0.00028848020000000004,
         "x_series_to": 0.0
       },
@@ -5727,8 +6089,8 @@
           "2",
           "4"
         ],
-        "v_ref_from": 2402.0,
-        "v_ref_to": 2402.0,
+        "v_nom_from": 2402.0,
+        "v_nom_to": 2402.0,
         "x_series_from": 0.00028848020000000004,
         "x_series_to": 0.0
       },
@@ -5746,8 +6108,8 @@
           "3",
           "4"
         ],
-        "v_ref_from": 2402.0,
-        "v_ref_to": 2402.0,
+        "v_nom_from": 2402.0,
+        "v_nom_to": 2402.0,
         "x_series_from": 0.00028848020000000004,
         "x_series_to": 0.0
       }

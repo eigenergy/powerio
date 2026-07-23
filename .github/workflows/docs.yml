@@ -149,9 +149,7 @@ jobs:
             <dt>.pio.json format</dt>
             <dd><a href="guide/pio-json-schema.html">field reference &amp; versioning</a>
                 <a href="guide/compiler-ir.html">compiler IR</a>
-                <a href="guide/pio-json-schema.html#pio-package">pio-package/0.1</a>
-                <a href="guide/pio-json-schema.html#pio-payload-balanced">pio-payload-balanced/1</a>
-                <a href="guide/pio-json-schema.html#pio-payload-multiconductor">pio-payload-multiconductor/1</a></dd>
+                <a href="guide/pio-json-schema.html#pio-package">pio-package/0.2</a></dd>
           </div>
           <div>
             <dt>bindings</dt>
@@ -160,11 +158,10 @@ jobs:
         </dl>
         <footer><a href="https://github.com/eigenergy/powerio">github.com/eigenergy/powerio</a></footer>
         HTML
-    # The schema URLs stamped into .pio.json files (`schema`, `payload_schema`)
-    # are identifiers first, but the site serves them so they also resolve.
-    # Each path exposes the machine-readable schema and redirects browsers to
-    # its section of the format chapter. Relative targets keep the redirects
-    # working under both powerio.dev and eigenergy.github.io/powerio.
+    # The published schema document's `$id` names a path on this site, so the
+    # path serves the machine-readable schema and redirects browsers to the
+    # format chapter. Relative targets keep the redirects working under both
+    # powerio.dev and eigenergy.github.io/powerio.
     - name: Schema identifier pages
       run: |
         redirect_schema_page() {
@@ -184,9 +181,7 @@ jobs:
         <a href="$target">$1</a>
         HTML
         }
-        redirect_schema_page pio-package/0.1
-        redirect_schema_page pio-payload-balanced/1
-        redirect_schema_page pio-payload-multiconductor/1
+        redirect_schema_page pio-package/0.2
     - uses: actions/upload-pages-artifact@v5
       with:
         path: target/doc

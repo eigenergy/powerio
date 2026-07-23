@@ -2212,7 +2212,7 @@ fn units_from_c(units: *const c_char) -> Result<powerio_prob::Units, String> {
 // `pio_dist_abi_version()`. The API is EXPERIMENTAL while the IEEE BMOPF
 // schema is a draft: C signature changes bump `PIO_DIST_ABI_VERSION`. BMOPF
 // JSON carries its own meta.version; the model JSON of `pio_dist_to_json` is
-// versioned by the pio-payload-multiconductor identifier in powerio-pkg.
+// covered by the `.pio.json` `schema_version` in powerio-pkg.
 // ---------------------------------------------------------------------------
 
 /// Finish a handle-returning entry point: run `f` (the handle payload or an
@@ -4117,17 +4117,12 @@ mpc.branch = [
                 CStr::from_ptr(err.as_ptr()).to_str().unwrap()
             );
             let v = package_json(pkg);
-            assert_eq!(v["schema_version"], serde_json::json!("0.1.1"));
+            assert_eq!(
+                v["schema_version"],
+                serde_json::json!(powerio_pkg::PIO_PACKAGE_SCHEMA_VERSION)
+            );
             assert_eq!(v["model_kind"], serde_json::json!("balanced"));
             assert_eq!(v["model"]["kind"], serde_json::json!("balanced"));
-            assert_eq!(
-                v["payload_schema"],
-                serde_json::json!(powerio_pkg::PIO_PAYLOAD_BALANCED_SCHEMA_URL)
-            );
-            assert_eq!(
-                v["payload_schema_version"],
-                serde_json::json!(powerio_pkg::PIO_PAYLOAD_BALANCED_SCHEMA_VERSION)
-            );
             assert_eq!(
                 v["derived"]["normalized_solver_tables"]["row_counts"]["buses"],
                 serde_json::json!(9)

@@ -18,8 +18,8 @@ use serde_json::{Map, Value, json};
 use crate::convert::Conversion;
 use crate::geo::CoordinateSpace;
 use crate::model::{
-    Configuration, DistBus, DistLineCode, DistLoadVoltageModel, DistNetwork, DistTransformer,
-    Extras, Mat, VoltageSource, Winding, WindingConn,
+    Configuration, DistBus, DistLine, DistLineCode, DistLoadVoltageModel, DistNetwork,
+    DistTransformer, Extras, Mat, VoltageSource, Winding, WindingConn,
 };
 
 /// Writes the ENGINEERING document.
@@ -227,8 +227,11 @@ impl Writer {
                 ("vpn_max", b.vpn_max.is_some()),
                 ("vpp_min", b.vpp_min.is_some()),
                 ("vpp_max", b.vpp_max.is_some()),
-                ("vsym_min", b.vsym_min.is_some()),
-                ("vsym_max", b.vsym_max.is_some()),
+                ("vpos_min", b.vpos_min.is_some()),
+                ("vpos_max", b.vpos_max.is_some()),
+                ("vneg_max", b.vneg_max.is_some()),
+                ("vzero_max", b.vzero_max.is_some()),
+                ("vn_max", b.vn_max.is_some()),
             ] {
                 if present {
                     self.warn(format!(
@@ -280,6 +283,17 @@ impl Writer {
         }
     }
 
+    /// Line-level ratings (BMOPF `i_max`/`s_max`) map onto the ENGINEERING
+    /// line's own `cm_ub`/`sm_ub` slots.
+    fn line_ratings(o: &mut Map<String, Value>, l: &DistLine) {
+        if let Some(i_max) = &l.i_max {
+            o.insert("cm_ub".into(), json!(i_max));
+        }
+        if let Some(s_max) = &l.s_max {
+            o.insert("sm_ub".into(), json!(s_max));
+        }
+    }
+
     fn branches(&mut self, net: &DistNetwork, doc: &mut Map<String, Value>) {
         if !net.lines.is_empty() {
             let mut lines = Map::new();
@@ -307,6 +321,9 @@ impl Writer {
                         if let Some(i_max) = &c.i_max {
                             o.insert("cm_ub".into(), json!(i_max));
                         }
+                        if let Some(s_max) = &c.s_max {
+                            o.insert("sm_ub".into(), json!(s_max));
+                        }
                     }
                     _ => {
                         if inline {
@@ -318,6 +335,7 @@ impl Writer {
                         o.insert("linecode".into(), json!(l.linecode.to_lowercase()));
                     }
                 }
+                Self::line_ratings(&mut o, l);
                 o.insert("status".into(), Self::status(&l.extras));
                 o.insert(
                     "source_id".into(),
@@ -526,6 +544,13 @@ impl Writer {
     fn injections(&mut self, net: &DistNetwork, doc: &mut Map<String, Value>) {
         self.loads(net, doc);
         self.generators(net, doc);
+        // Typed BMOPF capacitor banks have no ENGINEERING conversion yet.
+        for c in &net.capacitors {
+            self.warn(format!(
+                "capacitor {}: rated capacitor banks are not converted to ENGINEERING JSON; dropped",
+                c.name
+            ));
+        }
         if !net.shunts.is_empty() {
             let mut shunts = Map::new();
             for s in &net.shunts {

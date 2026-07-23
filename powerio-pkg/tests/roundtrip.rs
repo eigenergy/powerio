@@ -5,13 +5,10 @@ use std::collections::BTreeMap;
 use powerio_pkg::{
     Confidence, DiagnosticCode, DiagnosticSeverity, DiagnosticStage, ElementRef, ElementUpdate,
     MappingKind, ModelKind, MulticonductorToBalancedOptions, MulticonductorToBalancedReadiness,
-    NetworkPackage, OperatingPoint, OperatingPointSeries, Origin, PIO_PACKAGE_SCHEMA_URL,
-    PIO_PACKAGE_SCHEMA_VERSION, PIO_PAYLOAD_BALANCED_SCHEMA_URL,
-    PIO_PAYLOAD_BALANCED_SCHEMA_VERSION, PIO_PAYLOAD_MULTICONDUCTOR_SCHEMA_URL,
-    PIO_PAYLOAD_MULTICONDUCTOR_SCHEMA_VERSION, READ_TRANSMISSION_PARSE_WARNING,
-    SequenceTransformConvention, SourceDescriptor, SourceMapEntry, SourceRef, StructuredDiagnostic,
-    StudyBlock, StudyCommit, StudyEdit, TimeAxis, ValidationStatus,
-    check_multiconductor_to_balanced_lowering, ensure_payload_uids,
+    NetworkPackage, OperatingPoint, OperatingPointSeries, Origin, PIO_PACKAGE_SCHEMA_VERSION,
+    READ_TRANSMISSION_PARSE_WARNING, SequenceTransformConvention, SourceDescriptor, SourceMapEntry,
+    SourceRef, StructuredDiagnostic, StudyBlock, StudyCommit, StudyEdit, TimeAxis,
+    ValidationStatus, check_multiconductor_to_balanced_lowering, ensure_payload_uids,
     lower_multiconductor_to_balanced,
 };
 
@@ -269,18 +266,51 @@ fn assert_json_roundtrips(pkg: &NetworkPackage) {
 #[test]
 fn schema_version_present_and_defaulted() {
     let pkg = balanced_package();
-    assert_eq!(pkg.schema, PIO_PACKAGE_SCHEMA_URL);
     assert_eq!(pkg.schema_version, PIO_PACKAGE_SCHEMA_VERSION);
 
-    // A package JSON missing schema/schema_version still deserializes, with the
-    // current schema as the default.
+    // A package JSON missing schema_version still deserializes, with the
+    // current version as the default.
     let mut v = serde_json::to_value(&pkg).unwrap();
     let obj = v.as_object_mut().unwrap();
-    obj.remove("schema");
     obj.remove("schema_version");
     let back = NetworkPackage::from_json(&serde_json::to_string(&v).unwrap()).unwrap();
-    assert_eq!(back.schema, PIO_PACKAGE_SCHEMA_URL);
     assert_eq!(back.schema_version, PIO_PACKAGE_SCHEMA_VERSION);
+}
+
+#[test]
+fn version_gate_rejects_other_lineages_and_says_regenerate() {
+    let pkg = balanced_package();
+    let mut v = serde_json::to_value(&pkg).unwrap();
+
+    // A file from the 0.1.x lineage (every release through 0.7.2) is rejected
+    // with an error naming the supported lineage and the remedy.
+    v["schema_version"] = serde_json::json!("0.1.1");
+    let err = NetworkPackage::from_json(&serde_json::to_string(&v).unwrap()).unwrap_err();
+    let msg = err.to_string();
+    assert!(
+        msg.contains("unsupported .pio.json schema_version 0.1.1"),
+        "got: {msg}"
+    );
+    assert!(msg.contains("0.2.x"), "got: {msg}");
+    assert!(msg.contains("regenerate"), "got: {msg}");
+
+    // Same lineage, additive patch: loads.
+    v["schema_version"] = serde_json::json!("0.2.3");
+    NetworkPackage::from_json(&serde_json::to_string(&v).unwrap()).unwrap();
+
+    // Later lineages and garbage: rejected.
+    for bad in ["0.3.0", "1.0.0", "not-semver"] {
+        v["schema_version"] = serde_json::json!(bad);
+        NetworkPackage::from_json(&serde_json::to_string(&v).unwrap()).unwrap_err();
+    }
+
+    // Fields this lineage removed are ignored as unknown, as any unknown top
+    // level field from another producer is; the version gate is the only
+    // arbiter.
+    v["schema_version"] = serde_json::json!(PIO_PACKAGE_SCHEMA_VERSION);
+    v["payload_schema"] = serde_json::json!("https://powerio.dev/schema/pio-payload-balanced/1");
+    v["payload_schema_version"] = serde_json::json!("1.1.0");
+    NetworkPackage::from_json(&serde_json::to_string(&v).unwrap()).unwrap();
 }
 
 #[test]
@@ -998,25 +1028,27 @@ fn unknown_future_fields_are_tolerated() {
 }
 
 #[test]
-fn future_same_major_schema_version_is_tolerated() {
+fn future_same_lineage_schema_version_is_tolerated() {
+    // A newer patch in the reader's lineage with a field this reader does not
+    // know: both are additive, so the document loads.
     let pkg = balanced_package();
     let mut v = serde_json::to_value(&pkg).unwrap();
     v.as_object_mut()
         .unwrap()
-        .insert("schema_version".to_owned(), serde_json::json!("0.3.0"));
+        .insert("schema_version".to_owned(), serde_json::json!("0.2.9"));
     v.as_object_mut()
         .unwrap()
         .insert("future_field".to_owned(), serde_json::json!({"x": 1}));
     let json = serde_json::to_string(&v).unwrap();
 
-    let back = NetworkPackage::from_json(&json).expect("same major schema version loads");
-    assert_eq!(back.schema_version, "0.3.0");
+    let back = NetworkPackage::from_json(&json).expect("same lineage schema version loads");
+    assert_eq!(back.schema_version, "0.2.9");
     assert_eq!(back.model_kind(), ModelKind::Balanced);
 }
 
 #[test]
-fn same_major_prerelease_or_build_schema_version_is_tolerated() {
-    for version in ["0.2.0-rc.1", "0.1.0+build.5", "0.3.0-alpha.2+exp"] {
+fn same_lineage_prerelease_or_build_schema_version_is_tolerated() {
+    for version in ["0.2.0-rc.1", "0.2.0+build.5", "0.2.1-alpha.2+exp"] {
         let pkg = balanced_package();
         let mut v = serde_json::to_value(&pkg).unwrap();
         v.as_object_mut()
@@ -1025,7 +1057,7 @@ fn same_major_prerelease_or_build_schema_version_is_tolerated() {
         let json = serde_json::to_string(&v).unwrap();
 
         let back = NetworkPackage::from_json(&json)
-            .unwrap_or_else(|e| panic!("same-major {version} should load: {e}"));
+            .unwrap_or_else(|e| panic!("same-lineage {version} should load: {e}"));
         assert_eq!(back.schema_version, version);
     }
 }
@@ -1714,23 +1746,15 @@ fn load_voltage_model_survives_package_roundtrip() {
     );
 }
 
-// --- declared payload schema and row identity ------------------------------
+// --- row identity ----------------------------------------------------------
 
 fn single_point_series(point: OperatingPoint) -> OperatingPointSeries {
     OperatingPointSeries::new(TimeAxis::new(1).with_duration_hours(vec![1.0]), vec![point])
 }
 
 #[test]
-fn package_declares_payload_schema_and_synthesizes_row_identity() {
+fn package_synthesizes_row_identity() {
     let pkg = balanced_package();
-    assert_eq!(
-        pkg.payload_schema.as_deref(),
-        Some(PIO_PAYLOAD_BALANCED_SCHEMA_URL)
-    );
-    assert_eq!(
-        pkg.payload_schema_version.as_deref(),
-        Some(PIO_PAYLOAD_BALANCED_SCHEMA_VERSION)
-    );
     // MATPOWER has no source uids, so every row gets a synthesized identity.
     let net = pkg.as_balanced().unwrap();
     assert_eq!(net.buses[0].uid.as_deref(), Some("buses:0"));
@@ -1747,16 +1771,6 @@ fn package_declares_payload_schema_and_synthesizes_row_identity() {
         serde_json::json!("buses:0")
     );
     assert_json_roundtrips(&pkg);
-
-    let multi = multiconductor_package();
-    assert_eq!(
-        multi.payload_schema.as_deref(),
-        Some(PIO_PAYLOAD_MULTICONDUCTOR_SCHEMA_URL)
-    );
-    assert_eq!(
-        multi.payload_schema_version.as_deref(),
-        Some(PIO_PAYLOAD_MULTICONDUCTOR_SCHEMA_VERSION)
-    );
 }
 
 #[test]
@@ -1901,10 +1915,9 @@ fn update_must_not_overwrite_uid() {
 }
 
 #[test]
-fn legacy_payload_without_uids_keeps_row_semantics() {
-    // A pre-0.1.1 package: payload rows carry no uids and the envelope has no
-    // payload schema declaration, while updates still carry advisory
-    // source_uid values. The wire row must keep addressing alone.
+fn payload_without_uids_keeps_row_semantics() {
+    // A minimal document: payload rows carry no uids while updates still carry
+    // advisory source_uid values. The wire row must keep addressing alone.
     let pkg = balanced_package_with_gen().with_operating_points(sample_operating_points());
     let mut v = serde_json::to_value(&pkg).unwrap();
     let payload = v["model"]["balanced_network"].as_object_mut().unwrap();
@@ -1925,43 +1938,10 @@ fn legacy_payload_without_uids_keeps_row_semantics() {
             }
         }
     }
-    let root = v.as_object_mut().unwrap();
-    root.remove("payload_schema");
-    root.remove("payload_schema_version");
-    root.insert("schema_version".to_owned(), serde_json::json!("0.1.0"));
 
-    let legacy = NetworkPackage::from_json(&v.to_string()).unwrap();
-    assert!(legacy.payload_schema.is_none());
-    let materialized = legacy.materialize_operating_point(0).unwrap();
+    let bare = NetworkPackage::from_json(&v.to_string()).unwrap();
+    let materialized = bare.materialize_operating_point(0).unwrap();
     assert_close(materialized.as_balanced().unwrap().loads[0].p, 12.0);
-}
-
-#[test]
-fn payload_schema_version_gate() {
-    let pkg = balanced_package();
-    let mut v = serde_json::to_value(&pkg).unwrap();
-
-    v["payload_schema_version"] = serde_json::json!("1.9.3");
-    NetworkPackage::from_json(&v.to_string()).expect("same major accepted");
-
-    v["payload_schema_version"] = serde_json::json!("2.0.0");
-    let err = NetworkPackage::from_json(&v.to_string()).expect_err("major bump rejected");
-    assert!(
-        err.to_string()
-            .contains("unsupported payload_schema_version"),
-        "{err}"
-    );
-
-    v["payload_schema_version"] = serde_json::json!("not-semver");
-    let err = NetworkPackage::from_json(&v.to_string()).expect_err("invalid semver rejected");
-    assert!(
-        err.to_string()
-            .contains("unsupported payload_schema_version"),
-        "{err}"
-    );
-
-    v.as_object_mut().unwrap().remove("payload_schema_version");
-    NetworkPackage::from_json(&v.to_string()).expect("absent version accepted");
 }
 
 #[test]

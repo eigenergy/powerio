@@ -28,60 +28,24 @@ use crate::study::{StudyBlock, apply_study_to_model, check_study_identities};
 use crate::summary::{ObjectSummary, ObjectTopology, ObjectUnits};
 use crate::validation::{ValidationPass, ValidationStatus, ValidationSummary};
 
-/// The canonical schema URL for this package version.
-pub const PIO_PACKAGE_SCHEMA_URL: &str = "https://powerio.dev/schema/pio-package/0.1";
-
-/// The package schema version (semver). Keep additive optional fields within
-/// the current version when older readers can ignore them; field moves bump the
-/// major (or ship a migration pass).
-pub const PIO_PACKAGE_SCHEMA_VERSION: &str = "0.1.1";
-
-/// The declared schema URL for the balanced payload (`model.balanced_network`).
+/// The `.pio.json` format version (semver), the one version number for the
+/// whole document, payload included. While the major is 0, an incompatible
+/// change to any field bumps the minor and additive changes bump the patch
+/// (cargo 0.x semantics); from 1.0.0 on, incompatible changes bump the major.
+/// The reader rejects a file from a different lineage with an error telling
+/// the caller to regenerate it from the source case.
 ///
-/// Payload schema URLs are identifiers, not fetch locations (the same
-/// convention as JSON Schema `$id`). They name the model JSON shape inside a
-/// `.pio.json` document, not a standalone case format.
-pub const PIO_PAYLOAD_BALANCED_SCHEMA_URL: &str =
-    "https://powerio.dev/schema/pio-payload-balanced/1";
-
-/// The balanced payload schema version (semver). Additive optional fields bump
-/// the minor; field moves or removals bump the major. Versioned independently
-/// of the envelope: [`PIO_PACKAGE_SCHEMA_VERSION`] covers the package
-/// bookkeeping, this covers the network tables a consumer computes on.
-pub const PIO_PAYLOAD_BALANCED_SCHEMA_VERSION: &str = "1.2.0";
-
-/// The declared schema URL for the multiconductor payload
-/// (`model.multiconductor_network`).
-pub const PIO_PAYLOAD_MULTICONDUCTOR_SCHEMA_URL: &str =
-    "https://powerio.dev/schema/pio-payload-multiconductor/1";
-
-/// The multiconductor payload schema version (semver); the same policy as
-/// [`PIO_PAYLOAD_BALANCED_SCHEMA_VERSION`].
-pub const PIO_PAYLOAD_MULTICONDUCTOR_SCHEMA_VERSION: &str = "1.2.0";
+/// 0.2.0: the `schema`, `payload_schema`, and `payload_schema_version` fields
+/// were removed, and the multiconductor bus `vsym_min`/`vsym_max` arrays
+/// became the per-sequence scalars `vpos_min`/`vpos_max`/`vneg_max`/
+/// `vzero_max`/`vn_max` (BMOPF schema 0.1.0).
+pub const PIO_PACKAGE_SCHEMA_VERSION: &str = "0.2.0";
 
 pub const READ_TRANSMISSION_PARSE_WARNING: &str = "READ.TRANSMISSION.PARSE_WARNING";
 pub const READ_GRIDFM_FIDELITY_WARNING: &str = "READ.GRIDFM.FIDELITY_WARNING";
 
-fn default_schema_url() -> String {
-    PIO_PACKAGE_SCHEMA_URL.to_owned()
-}
-
 fn default_schema_version() -> String {
     PIO_PACKAGE_SCHEMA_VERSION.to_owned()
-}
-
-/// The declared payload schema URL and version for a model kind.
-fn payload_schema_for(kind: ModelKind) -> (&'static str, &'static str) {
-    match kind {
-        ModelKind::Balanced => (
-            PIO_PAYLOAD_BALANCED_SCHEMA_URL,
-            PIO_PAYLOAD_BALANCED_SCHEMA_VERSION,
-        ),
-        ModelKind::Multiconductor => (
-            PIO_PAYLOAD_MULTICONDUCTOR_SCHEMA_URL,
-            PIO_PAYLOAD_MULTICONDUCTOR_SCHEMA_VERSION,
-        ),
-    }
 }
 
 /// Optional derived metadata: matrix statistics, solver table metadata, and
@@ -199,10 +163,9 @@ impl From<&NormalizedSolverTables> for NormalizedSolverTableMetadata {
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[non_exhaustive]
 pub struct NetworkPackage {
-    /// The schema URL identifying this package format.
-    #[serde(default = "default_schema_url")]
-    pub schema: String,
-    /// The package schema version (semver).
+    /// The `.pio.json` format version (semver); see
+    /// [`PIO_PACKAGE_SCHEMA_VERSION`]. Absent fields default to the current
+    /// version, so a hand-built document without it reads under current rules.
     #[serde(default = "default_schema_version")]
     pub schema_version: String,
     pub producer: Producer,
@@ -215,17 +178,6 @@ pub struct NetworkPackage {
     pub created_at: Option<String>,
     /// Explicit model kind. Authoritative; never inferred from field presence.
     pub model_kind: ModelKind,
-    /// The declared schema URL for the payload family named by `model_kind`.
-    /// `None` on packages written before the payload schema was declared.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub payload_schema: Option<String>,
-    /// The declared payload schema version (semver), independent of the
-    /// envelope `schema_version`: the envelope versions the package
-    /// bookkeeping, this versions the network tables. A reader rejects a
-    /// different major before computing on payload fields; `None` (legacy
-    /// packages) is accepted.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub payload_schema_version: Option<String>,
     pub model: ModelPayload,
     /// Replayable operating states over the static payload. The package
     /// constructors and setters omit empty series for static single state cases.
@@ -264,16 +216,12 @@ impl NetworkPackage {
         let source_maps = balanced_source_maps(&net, source_id.as_deref());
         let diagnostics = Vec::new();
         let validation = ValidationSummary::from_diagnostics(&diagnostics);
-        let (payload_schema, payload_schema_version) = payload_schema_for(ModelKind::Balanced);
         Self {
-            schema: default_schema_url(),
             schema_version: default_schema_version(),
             producer: Producer::powerio(),
             package_id: None,
             created_at: None,
             model_kind: ModelKind::Balanced,
-            payload_schema: Some(payload_schema.to_owned()),
-            payload_schema_version: Some(payload_schema_version.to_owned()),
             model: ModelPayload::balanced(net),
             operating_points: None,
             study: None,
@@ -387,17 +335,12 @@ impl NetworkPackage {
             .collect();
         let validation = ValidationSummary::from_diagnostics(&diagnostics);
 
-        let (payload_schema, payload_schema_version) =
-            payload_schema_for(ModelKind::Multiconductor);
         Self {
-            schema: default_schema_url(),
             schema_version: default_schema_version(),
             producer: Producer::powerio(),
             package_id: None,
             created_at: None,
             model_kind: ModelKind::Multiconductor,
-            payload_schema: Some(payload_schema.to_owned()),
-            payload_schema_version: Some(payload_schema_version.to_owned()),
             model: ModelPayload::multiconductor(net),
             operating_points: None,
             study: None,
@@ -504,7 +447,6 @@ impl NetworkPackage {
         // make an explicit carry-or-clear decision here instead of silently
         // riding along stale.
         let mut package = Self {
-            schema: self.schema.clone(),
             schema_version: self.schema_version.clone(),
             producer: self.producer.clone(),
             // A derived package is new content: it records the parent's id in
@@ -513,10 +455,6 @@ impl NetworkPackage {
             package_id: None,
             created_at: self.created_at.clone(),
             model_kind: self.model_kind,
-            // The payload content derives from the parent, so the derived
-            // package restates the parent's declared payload schema.
-            payload_schema: self.payload_schema.clone(),
-            payload_schema_version: self.payload_schema_version.clone(),
             model: updated_model,
             operating_points: None,
             study: None,
@@ -618,14 +556,11 @@ impl NetworkPackage {
         let options = materialize_study_commit_options(study, commit_index);
 
         let mut package = Self {
-            schema: base.schema.clone(),
             schema_version: base.schema_version.clone(),
             producer: base.producer.clone(),
             package_id: None,
             created_at: base.created_at.clone(),
             model_kind: base.model_kind,
-            payload_schema: base.payload_schema.clone(),
-            payload_schema_version: base.payload_schema_version.clone(),
             model: updated_model,
             operating_points: None,
             study: None,
@@ -714,9 +649,10 @@ impl NetworkPackage {
         })?;
         if !Self::supports_schema_version(&pkg.schema_version) {
             return Err(<serde_json::Error as serde::de::Error>::custom(format!(
-                "unsupported .pio.json schema_version {}; this reader supports major version {}",
+                "unsupported .pio.json schema_version {}; this reader supports {}; \
+                 regenerate the package from its source case",
                 pkg.schema_version,
-                supported_schema_major()
+                supported_lineage_label()
             )));
         }
         if !pkg.kind_is_consistent() {
@@ -724,26 +660,22 @@ impl NetworkPackage {
                 "model_kind does not match model.kind",
             ));
         }
-        if let Some(version) = pkg.payload_schema_version.as_deref() {
-            let supported = supported_payload_schema_major(pkg.model_kind);
-            if schema_major(version) != Some(supported) {
-                return Err(<serde_json::Error as serde::de::Error>::custom(format!(
-                    "unsupported payload_schema_version {version}; this reader supports \
-                     major version {supported} for {:?} payloads",
-                    pkg.model_kind
-                )));
-            }
-        }
         Ok(pkg)
     }
 
-    /// Whether this reader accepts the envelope schema version.
+    /// Whether this reader accepts the document's `schema_version`.
     ///
-    /// The `.pio.json` compatibility rule is envelope scoped: unknown
-    /// future top-level fields are ignored, additive same major versions load,
-    /// and a different major version is rejected before payload use.
+    /// The `.pio.json` compatibility rule: unknown top level fields from a
+    /// newer producer are ignored, versions in the reader's lineage load, and
+    /// anything else is rejected before payload use. The lineage is the major
+    /// version once it reaches 1, and the exact major.minor pair while the
+    /// major is 0 (cargo 0.x semantics: a 0.x minor bump is incompatible).
     pub fn supports_schema_version(version: &str) -> bool {
-        schema_major(version).is_some_and(|major| major == supported_schema_major())
+        let Some((major, minor)) = schema_lineage(version) else {
+            return false;
+        };
+        let (current_major, current_minor) = supported_lineage();
+        major == current_major && (major != 0 || minor == current_minor)
     }
 
     #[must_use]
@@ -919,10 +851,10 @@ fn materialize_study_commit_options(
     options
 }
 
-fn schema_major(version: &str) -> Option<u64> {
+fn schema_lineage(version: &str) -> Option<(u64, u64)> {
     // Accept a semver core `MAJOR.MINOR.PATCH` with an optional prerelease
-    // (`-...`) or build (`+...`) tag: same-major additive versions load, so a
-    // forward-compatible writer that stamps e.g. `0.2.0-rc.1` is not rejected.
+    // (`-...`) or build (`+...`) tag: same-lineage additive versions load, so a
+    // forward-compatible writer that stamps e.g. `0.2.1-rc.1` is not rejected.
     // Split the build tag off first: `+` cannot appear in a prerelease, but a
     // hyphen is legal inside build metadata (`1.0.0+build-x`), so splitting on
     // `-` first would cut inside the build tag and reject a valid version.
@@ -947,9 +879,9 @@ fn schema_major(version: &str) -> Option<u64> {
         return None;
     }
     let major = parse_semver_number(major)?;
-    parse_semver_number(minor)?;
+    let minor = parse_semver_number(minor)?;
     parse_semver_number(patch)?;
-    Some(major)
+    Some((major, minor))
 }
 
 fn parse_semver_number(s: &str) -> Option<u64> {
@@ -967,12 +899,17 @@ fn valid_semver_suffix(s: &str) -> bool {
         })
 }
 
-fn supported_schema_major() -> u64 {
-    schema_major(PIO_PACKAGE_SCHEMA_VERSION).expect("package schema version has a major number")
+fn supported_lineage() -> (u64, u64) {
+    schema_lineage(PIO_PACKAGE_SCHEMA_VERSION).expect("package schema version is valid semver")
 }
 
-fn supported_payload_schema_major(kind: ModelKind) -> u64 {
-    schema_major(payload_schema_for(kind).1).expect("payload schema version has a major number")
+/// The lineage this reader accepts, spelled for error messages: `0.2.x` while
+/// the major is 0, `major version N` afterwards.
+fn supported_lineage_label() -> String {
+    match supported_lineage() {
+        (0, minor) => format!("0.{minor}.x"),
+        (major, _) => format!("major version {major}"),
+    }
 }
 
 /// Add a stable UID to each payload row that does not have one.
@@ -2279,17 +2216,28 @@ fn multiconductor_source_maps(
 #[cfg(test)]
 mod tests {
     #[test]
-    fn schema_major_parses_semver_suffixes() {
-        assert_eq!(super::schema_major("1.2.3"), Some(1));
-        assert_eq!(super::schema_major("1.0.0-rc.1"), Some(1));
+    fn schema_lineage_parses_semver_suffixes() {
+        assert_eq!(super::schema_lineage("1.2.3"), Some((1, 2)));
+        assert_eq!(super::schema_lineage("1.0.0-rc.1"), Some((1, 0)));
         // A hyphen inside build metadata is legal semver; splitting on `-`
         // first used to cut inside the build tag and reject the version.
-        assert_eq!(super::schema_major("1.0.0+build-x"), Some(1));
-        assert_eq!(super::schema_major("0.2.0+2026-07-21"), Some(0));
-        assert_eq!(super::schema_major("1.0.0-rc-1+b-2"), Some(1));
-        assert_eq!(super::schema_major("1.0"), None);
-        assert_eq!(super::schema_major("1.0.0-"), None);
-        assert_eq!(super::schema_major("01.0.0"), None);
+        assert_eq!(super::schema_lineage("1.0.0+build-x"), Some((1, 0)));
+        assert_eq!(super::schema_lineage("0.2.0+2026-07-21"), Some((0, 2)));
+        assert_eq!(super::schema_lineage("1.0.0-rc-1+b-2"), Some((1, 0)));
+        assert_eq!(super::schema_lineage("1.0"), None);
+        assert_eq!(super::schema_lineage("1.0.0-"), None);
+        assert_eq!(super::schema_lineage("01.0.0"), None);
+    }
+
+    #[test]
+    fn version_gate_is_exact_minor_while_major_is_zero() {
+        use super::NetworkPackage;
+        assert!(NetworkPackage::supports_schema_version("0.2.0"));
+        assert!(NetworkPackage::supports_schema_version("0.2.7"));
+        assert!(!NetworkPackage::supports_schema_version("0.1.1"));
+        assert!(!NetworkPackage::supports_schema_version("0.3.0"));
+        assert!(!NetworkPackage::supports_schema_version("1.0.0"));
+        assert!(!NetworkPackage::supports_schema_version("garbage"));
     }
 
     #[test]
