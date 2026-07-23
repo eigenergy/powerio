@@ -229,7 +229,7 @@ def _package_value(text: str) -> Optional[Dict[str, Any]]:
     model = value.get("model")
     if not isinstance(model, dict):
         return None
-    required = ("schema", "schema_version", "model_kind")
+    required = ("schema_version", "model_kind")
     if not all(isinstance(value.get(key), str) for key in required):
         return None
     if not isinstance(model.get("kind"), str):
