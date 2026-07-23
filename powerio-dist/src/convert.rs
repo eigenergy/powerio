@@ -87,34 +87,35 @@ fn canonical_key(name: &str) -> String {
 }
 
 /// Distribution parser policy for `.json`: PMD carries `data_model`; BMOPF
-/// carries its schema-required `bus` and `voltage_source` tables. Anything
-/// else errors instead of falling through to the BMOPF reader, which would
-/// accept an arbitrary JSON object (a PowerModels document used to parse
-/// into a bogus near-empty network). Malformed JSON still routes to BMOPF
-/// so its reader reports the parse error.
+/// carries its schema-required `bus` and `voltage_source` tables. Any other
+/// valid JSON errors here instead of falling through to the BMOPF reader,
+/// which would accept an arbitrary JSON object (a PowerModels document used
+/// to parse into a bogus near-empty network). Malformed JSON still routes
+/// to BMOPF so its reader reports the parse error.
 fn infer_distribution_json_format(text: &str) -> crate::Result<DistTargetFormat> {
     // A leading byte order mark would fail the DOM parse here and silently
     // send a PMD document down the BMOPF fallback; classify without it.
     let text = text.trim_start_matches('\u{feff}');
+    let unrecognized = || crate::Error::Json {
+        format: "distribution",
+        message: "not a recognized distribution document: PMD ENGINEERING JSON \
+                  carries `data_model`, BMOPF JSON carries the schema-required \
+                  `bus` and `voltage_source` tables (pass the format explicitly \
+                  to override)"
+            .to_string(),
+    };
     let Ok(doc) = serde_json::from_str::<serde_json::Value>(text) else {
         return Ok(DistTargetFormat::BmopfJson);
     };
     let Some(shape) = doc.as_object() else {
-        return Ok(DistTargetFormat::BmopfJson);
+        return Err(unrecognized());
     };
     if shape.contains_key("data_model") {
         Ok(DistTargetFormat::PmdJson)
     } else if shape.contains_key("bus") && shape.contains_key("voltage_source") {
         Ok(DistTargetFormat::BmopfJson)
     } else {
-        Err(crate::Error::Json {
-            format: "distribution",
-            message: "not a recognized distribution document: PMD ENGINEERING JSON \
-                      carries `data_model`, BMOPF JSON carries the schema-required \
-                      `bus` and `voltage_source` tables (pass the format explicitly \
-                      to override)"
-                .to_string(),
-        })
+        Err(unrecognized())
     }
 }
 
@@ -289,6 +290,9 @@ mod tests {
             r#"{"bus": {"data_model": {}}}"#,
             r#"{"name": "data_model"}"#,
             r#"{"bus": {}, "branch": {}, "gen": {}, "baseMVA": 100.0}"#,
+            "[]",
+            "null",
+            r#""a string""#,
         ] {
             assert!(
                 infer_distribution_json_format(doc).is_err(),
