@@ -133,7 +133,7 @@ const WINDOWS_RESERVED: &[&str] = &[
 /// included) becomes `_`. Leading dots are stripped so the result is never
 /// `.`, `..`, or a hidden file; trailing dots are trimmed and Windows
 /// reserved device names get a leading `_`, both invalid as Windows
-/// filenames; the length is capped at [`MAX_STEM_LEN`]; and an empty result
+/// filenames; the length is capped at 120 bytes; and an empty result
 /// falls back to `case`.
 ///
 /// A name the sanitizer had to change carries an 8 hex digit hash of the

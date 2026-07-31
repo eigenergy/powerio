@@ -71,6 +71,8 @@ several gaps in that model.
 - The PowerWorld `.aux` reader routes a bus's own `BusNum`/`Number` through the
   same validation as every bus reference, so a fractional or out-of-range value
   is a read error instead of a silently truncated or saturated id.
+- A GOC3 bus uid of `bus_<usize::MAX>` no longer overflows when its suffix is
+  mapped to a bus id; it falls back to the 1-based document position.
 
 ## 0.7.2
 
