@@ -100,7 +100,9 @@ fn warn_stripped_boms(net: &mut DistNetwork, root_had_bom: bool, stripped_paths:
 /// warning — whether it climbs out with `..`, is an absolute path outside the
 /// directory, or escapes through a symbolic link — so a case file cannot read
 /// arbitrary paths. An absolute include that lands inside the case directory
-/// is allowed.
+/// is allowed when the case file is itself given by an absolute path (the
+/// common case); under a relative case path the lexical check admits only
+/// relative includes.
 pub fn parse_dss_file(path: impl AsRef<Path>) -> Result<DistNetwork> {
     let path = path.as_ref();
     let text = std::fs::read_to_string(path).map_err(|source| Error::Io {

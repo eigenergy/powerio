@@ -18,7 +18,9 @@ several gaps in that model.
   follows includes, now confined to the case directory: an include that
   resolves outside that directory is refused with a warning, whether it climbs
   out with `..` or is an absolute path outside the directory. An absolute
-  include that lands inside the case directory is still allowed.
+  include that lands inside the case directory is allowed when the case file
+  is given by an absolute path; a relative case path admits only relative
+  includes.
 - OpenDSS `phases`, `windings`, and `wdg` counts are capped. A single small
   property could otherwise size a dense n by n conductor matrix or a
   per-winding vector into the gigabytes; an oversized value clamps to the
