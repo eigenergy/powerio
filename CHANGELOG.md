@@ -58,6 +58,19 @@ several gaps in that model.
   export.
 - The Python `mcp` extra pins the SDK below 2.0, which removed the
   `mcp.server.fastmcp` module the server imports.
+- OpenDSS `like=` splicing is capped per object. A self-referencing or
+  mutually-referencing chain (`Edit Load.a like=a` repeated) otherwise doubled
+  an object's property count each edit, so a few hundred bytes could exhaust
+  memory; the splice is now refused with a warning past the cap.
+- The PMD writer no longer panics on a transformer with no windings, reachable
+  from a PMD or BMOPF document with the winding array absent. The emergency
+  rating default derives from the first winding only when one exists.
+- A PSS/E transformer `COD` field of an extreme magnitude (which saturates to
+  `i64::MIN`) no longer overflows when the control mode is decoded; it reads as
+  a fixed ratio.
+- The PowerWorld `.aux` reader routes a bus's own `BusNum`/`Number` through the
+  same validation as every bus reference, so a fractional or out-of-range value
+  is a read error instead of a silently truncated or saturated id.
 
 ## 0.7.2
 

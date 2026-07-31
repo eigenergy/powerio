@@ -284,6 +284,25 @@ fn pmd_typed_locations_emit_only_when_geographic() {
     assert_eq!(doc["bus"]["b1"]["lat"], serde_json::json!(35.0));
 }
 
+/// A transformer whose winding array is absent parses to zero windings; the
+/// PMD writer must not index `windings[0]` and panic on it. Reachable both
+/// directly (PMD JSON) and cross-format from BMOPF, from a few dozen bytes.
+#[test]
+fn zero_winding_transformer_does_not_panic_on_write() {
+    let pmd = r#"{"data_model": "ENGINEERING", "transformer": {"t1": {}}}"#;
+    let net = parse_pmd_str(pmd).unwrap();
+    assert!(net.transformers.iter().any(|t| t.windings.is_empty()));
+    let out = write_pmd_json(&net);
+    let v: serde_json::Value = serde_json::from_str(&out.text).unwrap();
+    assert_eq!(v["transformer"]["t1"]["sm_ub"], serde_json::json!(0.0));
+
+    let bmopf = r#"{"transformer": {"n_winding": {"t1": {}}}}"#;
+    let converted =
+        powerio_dist::convert_str(bmopf, powerio_dist::DistTargetFormat::PmdJson, "bmopf").unwrap();
+    let v: serde_json::Value = serde_json::from_str(&converted.text).unwrap();
+    assert!(v["transformer"]["t1"].is_object());
+}
+
 fn rewrite(text: &str) -> serde_json::Value {
     let net = parse_pmd_str(text).unwrap();
     serde_json::from_str(&write_pmd_json(&net).text).unwrap()

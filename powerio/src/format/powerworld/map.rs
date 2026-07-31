@@ -283,17 +283,22 @@ fn f_or(r: &Row, key: &str, default: f64) -> Result<f64> {
 fn uid(r: &Row, key: &str) -> Result<usize> {
     match r.get(key).copied() {
         None | Some("") => Ok(0),
-        // Parse through f64 (some exports print ids with a decimal point)
-        // but reject anything a float to integer cast would silently bend:
-        // NaN and negatives saturate to 0 and rewire the network, huge
-        // values to usize::MAX, fractions truncate.
-        #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
-        Some(s) => match s.trim().parse::<f64>() {
-            Ok(v) if v.is_finite() && v.fract() == 0.0 && (0.0..=4_294_967_295.0).contains(&v) => {
-                Ok(v as usize)
-            }
-            _ => Err(bad_field(key, s)),
-        },
+        Some(s) => bus_id_from_field(key, s.trim()),
+    }
+}
+
+/// A bus id string validated the way [`uid`] validates every bus reference:
+/// parse through f64 (some exports print ids with a decimal point) but reject
+/// anything a float to integer cast would silently bend — NaN and negatives
+/// would saturate to 0 and rewire the network, huge values to usize::MAX, and
+/// fractions would truncate.
+#[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+fn bus_id_from_field(key: &str, s: &str) -> Result<usize> {
+    match s.parse::<f64>() {
+        Ok(v) if v.is_finite() && v.fract() == 0.0 && (0.0..=4_294_967_295.0).contains(&v) => {
+            Ok(v as usize)
+        }
+        _ => Err(bad_field(key, s)),
     }
 }
 fn on(r: &Row, key: &str) -> Result<bool> {
@@ -425,12 +430,14 @@ pub(super) fn derive_bus_kinds(buses: &mut [Bus], generators: &[Generator]) {
 }
 
 fn read_bus(r: &Row) -> Result<Bus> {
-    let id = first(r, &["BusNum", "Number"])
-        .and_then(|v| v.parse::<f64>().ok())
-        .ok_or_else(|| Error::FormatRead {
-            format: FMT,
-            message: "Bus block row missing a numeric BusNum/Number".into(),
-        })? as usize;
+    // The bus's own identity goes through the same validation as every bus
+    // reference (`uid`): a fractional or out-of-range `BusNum` is a read
+    // error, not a silently truncated or saturated id.
+    let id_field = first(r, &["BusNum", "Number"]).ok_or_else(|| Error::FormatRead {
+        format: FMT,
+        message: "Bus block row missing a numeric BusNum/Number".into(),
+    })?;
+    let id = bus_id_from_field("BusNum", id_field)?;
     let name = first(r, &["BusName", "Name"]).map(ToString::to_string);
     let mut extras = Extras::new();
     // Substation identity rides on the bus row in complete case exports.
@@ -940,5 +947,28 @@ fn bus_cat(kind: BusType) -> &'static str {
         BusType::Pv => "PV",
         BusType::Ref => "Slack",
         BusType::Isolated => "Disconnected",
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn read_bus_rejects_non_integral_and_out_of_range_ids() {
+        // The bus's own identity goes through the same guard as every bus
+        // reference: a fractional or oversized BusNum is a read error, not a
+        // silently truncated or saturated id.
+        for bad in ["5.7", "1e20", "-3", "NaN", "inf"] {
+            let mut row: Row = HashMap::new();
+            row.insert("BusNum", bad);
+            assert!(
+                read_bus(&row).is_err(),
+                "BusNum={bad} should be refused, not bent to an id"
+            );
+        }
+        let mut ok: Row = HashMap::new();
+        ok.insert("BusNum", "42");
+        assert_eq!(read_bus(&ok).unwrap().id, BusId(42));
     }
 }

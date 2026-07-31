@@ -278,6 +278,15 @@ where
 /// Redirect nesting limit; OpenDSS recurses unbounded, this bounds cycles.
 const MAX_REDIRECT_DEPTH: usize = 64;
 
+/// Cap on the accumulated property assignments a single object may hold.
+/// `like=` splices the source object's whole prop list, so a self-referencing
+/// or mutually-referencing chain (`Edit Load.a like=a` repeated) doubles the
+/// count each edit — a few hundred bytes could otherwise reach memory
+/// exhaustion. No real object comes near this bound: the largest DSS class has
+/// on the order of 100 properties and legitimate scripts edit an object a
+/// handful of times.
+const MAX_OBJECT_PROPS: usize = 1 << 16;
+
 struct Executor<'l, L: Loader> {
     raw: RawDss,
     loader: &'l mut L,
@@ -768,6 +777,20 @@ impl<L: Loader> Executor<'_, L> {
                 match self.raw.index.get(&key).copied() {
                     Some(src) => {
                         let base = self.raw.objects[idx].props.len();
+                        let src_len = self.raw.objects[src].props.len();
+                        // Refuse a splice that would push the object past the
+                        // cap. A self reference (`Edit X like=X`) or a mutual
+                        // chain otherwise doubles the prop count per edit; the
+                        // guard turns that into a warning instead of unbounded
+                        // growth.
+                        if base.saturating_add(src_len) > MAX_OBJECT_PROPS {
+                            self.raw.warn(ctx(format!(
+                                "like={}: {class} property count would exceed the supported \
+                                 maximum of {MAX_OBJECT_PROPS}; splice refused",
+                                p.value.text
+                            )));
+                            continue;
+                        }
                         let cloned = self.raw.objects[src].props.clone();
                         let bounds: Vec<usize> = self.raw.objects[src]
                             .edit_bounds()
@@ -781,6 +804,14 @@ impl<L: Loader> Executor<'_, L> {
                         p.value.text
                     ))),
                 }
+                continue;
+            }
+            if self.raw.objects[idx].props.len() >= MAX_OBJECT_PROPS {
+                self.raw.warn(ctx(format!(
+                    "{}: property count exceeds the supported maximum of {MAX_OBJECT_PROPS}; \
+                     further assignments dropped",
+                    self.raw.objects[idx].class
+                )));
                 continue;
             }
             self.raw.objects[idx].props.push(p);
@@ -1074,6 +1105,29 @@ mod tests {
         let b = raw.find("load", "b").unwrap();
         assert_eq!(b.get("kw").unwrap().text, "20");
         assert_eq!(b.get("pf").unwrap().text, "0.9");
+    }
+
+    #[test]
+    fn self_referencing_like_cannot_explode_the_prop_count() {
+        // `Edit X like=X` splices the object into itself; unbounded, each
+        // repeat doubles the prop count. A few dozen lines would exhaust
+        // memory. The cap turns the runaway splices into warnings.
+        let mut script = String::from("New Load.a kW=1\n");
+        for _ in 0..40 {
+            script.push_str("Edit Load.a like=a\n");
+        }
+        let raw = parse(&script);
+        let a = raw.find("load", "a").unwrap();
+        assert!(
+            a.props.len() <= MAX_OBJECT_PROPS,
+            "prop count {} exceeded the cap",
+            a.props.len()
+        );
+        assert!(
+            raw.warnings.iter().any(|w| w.contains("splice refused")),
+            "expected a refusal warning, got {:?}",
+            raw.warnings
+        );
     }
 
     #[test]

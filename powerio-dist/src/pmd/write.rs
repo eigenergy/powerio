@@ -726,8 +726,12 @@ impl Writer {
             "vm_nom".into(),
             json!(t.windings.iter().map(|w| w.v_ref / 1e3).collect::<Vec<_>>()),
         );
-        let sm_ub =
-            Self::extras_f64(&t.extras, "emerghkva").unwrap_or(t.windings[0].s_rating / 1e3 * 1.5);
+        // A transformer with no windings is degenerate but reachable from
+        // untrusted input (a PMD or BMOPF document with the winding array
+        // absent), so derive the emergency rating default from the first
+        // winding only when one exists rather than indexing unconditionally.
+        let sm_ub = Self::extras_f64(&t.extras, "emerghkva")
+            .unwrap_or_else(|| t.windings.first().map_or(0.0, |w| w.s_rating / 1e3 * 1.5));
         o.insert("sm_ub".into(), json!(sm_ub));
         insert_tap_fields(&mut o, t, phases);
         if let Some(controls) = t.extras.get("controls") {
