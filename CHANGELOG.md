@@ -73,6 +73,10 @@ several gaps in that model.
   is a read error instead of a silently truncated or saturated id.
 - A GOC3 bus uid of `bus_<usize::MAX>` no longer overflows when its suffix is
   mapped to a bus id; it falls back to the 1-based document position.
+- The MCP server's allowed-roots write check follows a symbolic link in the
+  output filename before deciding containment. A dangling link named as the
+  output file, sitting inside an allowed root but pointing outside it, could
+  otherwise pass the check while the write escaped the sandbox.
 
 ## 0.7.2
 

@@ -174,7 +174,14 @@ def _path_for_policy(path: Path, *, for_write: bool) -> Path:
     try:
         if for_write and not path.exists():
             parent = path.parent if path.parent != Path("") else Path(".")
-            return parent.resolve(strict=True) / path.name
+            candidate = parent.resolve(strict=True) / path.name
+            # `path.exists()` follows symlinks, so a final component that is a
+            # dangling symlink (its target absent) lands here. Joining the name
+            # onto the resolved parent would leave that symlink unresolved, so
+            # the containment check would pass on the link's own location while
+            # the real write followed it outside the roots. `realpath` resolves
+            # the final symlink (and is a no-op for a plain new name).
+            return Path(os.path.realpath(candidate))
         return path.resolve(strict=True)
     except FileNotFoundError:
         if for_write:
