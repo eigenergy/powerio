@@ -2217,21 +2217,30 @@ impl Network {
             }
         }
         // Star expansion allocates synthetic bus ids `max_bus_id + 1 + k`, one
-        // per 3-winding transformer; a bus id near usize::MAX would overflow
-        // that allocation (and in release wrap onto an existing bus). No real
-        // case sits there, so refuse it at the boundary like any other
-        // malformed reference.
+        // per in-service 3-winding transformer; a bus id near usize::MAX would
+        // overflow that allocation (and in release wrap onto an existing bus).
+        // The base id `max + 1` is computed whenever any 3-winding transformer
+        // is present, even if none is in service, so the headroom is
+        // `max(1, in-service count)`. No real case sits there, so refuse it at
+        // the boundary like any other malformed reference.
         if !self.transformers_3w.is_empty()
             && let Some(max_id) = self.buses.iter().map(|b| b.id.0).max()
-            && max_id.checked_add(self.transformers_3w.len()).is_none()
         {
-            return Err(Error::FormatRead {
-                format,
-                message: format!(
-                    "bus id {max_id} leaves no room to allocate synthetic star bus ids \
-                     for 3-winding transformers"
-                ),
-            });
+            let needed = self
+                .transformers_3w
+                .iter()
+                .filter(|t| t.in_service)
+                .count()
+                .max(1);
+            if max_id.checked_add(needed).is_none() {
+                return Err(Error::FormatRead {
+                    format,
+                    message: format!(
+                        "bus id {max_id} leaves no room to allocate synthetic star bus ids \
+                         for 3-winding transformers"
+                    ),
+                });
+            }
         }
         Ok(())
     }
@@ -2380,6 +2389,27 @@ mod tests {
             err.contains("no room to allocate synthetic star bus ids"),
             "got {err}"
         );
+    }
+
+    #[test]
+    fn star_expansion_headroom_counts_only_in_service_transformers() {
+        // The headroom needed is the in-service transformer count (plus the
+        // base id), not the total: an out-of-service unit allocates no star
+        // bus, so a network that only fits the in-service count must not be
+        // rejected. max bus id usize::MAX - 1 fits one in-service star id
+        // (max + 1) but not two.
+        let mut net = Network::in_memory(
+            "t",
+            100.0,
+            vec![bus(1), bus(2), bus(3), bus(usize::MAX - 1)],
+            Vec::new(),
+        );
+        net.transformers_3w.push(transformer_3w());
+        let mut out_of_service = transformer_3w();
+        out_of_service.in_service = false;
+        net.transformers_3w.push(out_of_service);
+        net.validate()
+            .expect("in-service count fits; must not be rejected");
     }
 
     #[test]

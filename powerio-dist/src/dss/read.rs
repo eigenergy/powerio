@@ -96,9 +96,11 @@ fn warn_stripped_boms(net: &mut DistNetwork, root_had_bom: bool, stripped_paths:
 
 /// Parses a `.dss` file, following includes, into the canonical model.
 /// `Redirect`/`Compile`/`Buscoords` includes are confined to the directory of
-/// `path`: an include that is absolute, climbs out of that directory with
-/// `..`, or resolves outside it through a symbolic link is refused with a
-/// warning, so a case file cannot read arbitrary paths.
+/// `path`: an include that resolves outside that directory is refused with a
+/// warning — whether it climbs out with `..`, is an absolute path outside the
+/// directory, or escapes through a symbolic link — so a case file cannot read
+/// arbitrary paths. An absolute include that lands inside the case directory
+/// is allowed.
 pub fn parse_dss_file(path: impl AsRef<Path>) -> Result<DistNetwork> {
     let path = path.as_ref();
     let text = std::fs::read_to_string(path).map_err(|source| Error::Io {

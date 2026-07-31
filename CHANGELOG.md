@@ -16,8 +16,9 @@ several gaps in that model.
   `.dss` text cannot pull in a file such as `/etc/passwd` and echo its
   contents back through bus names. Parsing from a file (`parse_dss_file`) still
   follows includes, now confined to the case directory: an include that
-  resolves outside that directory, whether absolute or by climbing out with
-  `..`, is refused with a warning.
+  resolves outside that directory is refused with a warning, whether it climbs
+  out with `..` or is an absolute path outside the directory. An absolute
+  include that lands inside the case directory is still allowed.
 - OpenDSS `phases`, `windings`, and `wdg` counts are capped. A single small
   property could otherwise size a dense n by n conductor matrix or a
   per-winding vector into the gigabytes; an oversized value clamps to the

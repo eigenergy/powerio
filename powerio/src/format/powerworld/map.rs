@@ -431,13 +431,17 @@ pub(super) fn derive_bus_kinds(buses: &mut [Bus], generators: &[Generator]) {
 
 fn read_bus(r: &Row) -> Result<Bus> {
     // The bus's own identity goes through the same validation as every bus
-    // reference (`uid`): a fractional or out-of-range `BusNum` is a read
-    // error, not a silently truncated or saturated id.
-    let id_field = first(r, &["BusNum", "Number"]).ok_or_else(|| Error::FormatRead {
-        format: FMT,
-        message: "Bus block row missing a numeric BusNum/Number".into(),
-    })?;
-    let id = bus_id_from_field("BusNum", id_field)?;
+    // reference (`uid`): a fractional or out-of-range id is a read error, not
+    // a silently truncated or saturated id. Report whichever key carried the
+    // value so an error names the column the file actually used.
+    let (id_key, id_field) = ["BusNum", "Number"]
+        .into_iter()
+        .find_map(|k| first(r, &[k]).map(|v| (k, v)))
+        .ok_or_else(|| Error::FormatRead {
+            format: FMT,
+            message: "Bus block row missing a numeric BusNum/Number".into(),
+        })?;
+    let id = bus_id_from_field(id_key, id_field)?;
     let name = first(r, &["BusName", "Name"]).map(ToString::to_string);
     let mut extras = Extras::new();
     // Substation identity rides on the bus row in complete case exports.

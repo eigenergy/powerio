@@ -584,10 +584,13 @@ impl<L: Loader> Executor<'_, L> {
     /// Resolves a file argument relative to the current file's directory.
     /// Backslash separators (the format's DOS heritage) become `/`. Returns
     /// `None` when a confinement root is set (file parsing) and the resolved
-    /// path escapes the root case directory — whether through `..` or an
-    /// absolute path outside it — so an untrusted case file cannot pull in
-    /// arbitrary paths. An absolute path that lands inside the root is allowed,
-    /// matching case files that reference includes by absolute path.
+    /// path does not lexically sit under the root — whether it climbs out with
+    /// `..` or is an absolute path outside the root — so an untrusted case file
+    /// cannot pull in arbitrary paths. An absolute include is admitted only
+    /// when it strips the root as a prefix, which requires the root itself to
+    /// be absolute; the file entry points normalize the case file's parent, so
+    /// a case given by an absolute path admits absolute includes inside its
+    /// own directory, while a relative case path admits only relative ones.
     fn resolve(&self, file_arg: &str) -> Option<PathBuf> {
         use std::path::Component;
         let rel = file_arg.replace('\\', "/");
