@@ -864,11 +864,7 @@ pub fn parse_raw_with(text: &str, path: &str, loader: &mut impl Loader) -> RawDs
 /// out of that directory with `..` is refused with a warning and read nothing.
 /// Used by the file entry point so an untrusted case file on disk cannot read
 /// arbitrary paths.
-pub(crate) fn parse_raw_with_confined(
-    text: &str,
-    path: &str,
-    loader: &mut impl Loader,
-) -> RawDss {
+pub(crate) fn parse_raw_with_confined(text: &str, path: &str, loader: &mut impl Loader) -> RawDss {
     let root = lexical_normalize(
         &Path::new(path)
             .parent()
@@ -878,12 +874,7 @@ pub(crate) fn parse_raw_with_confined(
     run_executor(text, path, Some(root), loader)
 }
 
-fn run_executor(
-    text: &str,
-    path: &str,
-    root: Option<PathBuf>,
-    loader: &mut impl Loader,
-) -> RawDss {
+fn run_executor(text: &str, path: &str, root: Option<PathBuf>, loader: &mut impl Loader) -> RawDss {
     let mut exec = Executor {
         raw: RawDss::default(),
         loader,

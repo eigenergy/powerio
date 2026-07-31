@@ -690,9 +690,8 @@ fn oversized_transformer_winding_count_is_capped() {
         .map(|i| format!("\"b{i}\""))
         .collect::<Vec<_>>()
         .join(",");
-    let json = format!(
-        r#"{{"data_model":"ENGINEERING","transformer":{{"t1":{{"bus":[{buses}]}}}}}}"#
-    );
+    let json =
+        format!(r#"{{"data_model":"ENGINEERING","transformer":{{"t1":{{"bus":[{buses}]}}}}}}"#);
     let net = parse_pmd_str(&json).unwrap();
     assert!(
         net.warnings
