@@ -298,7 +298,17 @@ fn bus_id_from_field(key: &str, s: &str) -> Result<usize> {
         Ok(v) if v.is_finite() && v.fract() == 0.0 && (0.0..=4_294_967_295.0).contains(&v) => {
             Ok(v as usize)
         }
-        _ => Err(bad_field(key, s)),
+        // A fractional, non-finite, or out-of-range value is a number, so
+        // `bad_field`'s "is not a number" would misdescribe it: name the bus
+        // id constraint instead.
+        Ok(_) => Err(Error::FormatRead {
+            format: FMT,
+            message: format!(
+                "field {key} {s:?} is not a valid bus id \
+                 (a whole number in 0..=4294967295)"
+            ),
+        }),
+        Err(_) => Err(bad_field(key, s)),
     }
 }
 fn on(r: &Row, key: &str) -> Result<bool> {
