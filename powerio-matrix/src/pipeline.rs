@@ -112,17 +112,39 @@ pub struct PipelineOutputs {
     pub metadata: CaseMetadata,
 }
 
+/// Longest sanitized stem before truncation. Output filenames append fixed
+/// suffixes (`_sensitivity_meta.json` is the longest at 22 bytes) and the
+/// collision hash adds 9 more, so the longest filename stays well under the
+/// common 255 byte component limit.
+const MAX_STEM_LEN: usize = 120;
+
+/// Filenames Windows reserves for devices, matched against the part of a
+/// name before its first dot, case insensitively: `con` and `con.4` both
+/// resolve to the CON device.
+const WINDOWS_RESERVED: &[&str] = &[
+    "con", "prn", "aux", "nul", "com1", "com2", "com3", "com4", "com5", "com6", "com7", "com8",
+    "com9", "lpt1", "lpt2", "lpt3", "lpt4", "lpt5", "lpt6", "lpt7", "lpt8", "lpt9",
+];
+
 /// Reduces a network name to a single safe filename stem. The name comes from
 /// input content, so an unsanitized value like `../../etc/x` or `/abs/x` used
 /// in `out_dir.join(...)` would write outside `out_dir`. Keeps ASCII
 /// alphanumerics, `-`, `_`, and `.`; every other character (path separators
 /// included) becomes `_`. Leading dots are stripped so the result is never
-/// `.`, `..`, or a hidden file, and an empty result falls back to `case`.
+/// `.`, `..`, or a hidden file; trailing dots are trimmed and Windows
+/// reserved device names get a leading `_`, both invalid as Windows
+/// filenames; the length is capped at [`MAX_STEM_LEN`]; and an empty result
+/// falls back to `case`.
+///
+/// A name the sanitizer had to change carries an 8 hex digit hash of the
+/// original, so two distinct names that would sanitize identically (`a/b` and
+/// `a_b`, say) cannot silently overwrite each other's files in a multi case
+/// export. A name that is already safe passes through unchanged.
 pub fn sanitize_stem(name: &str) -> String {
     // Skipping leading dots before mapping is equivalent to trimming them
     // after: the map is the identity on `.` and never produces one, so the set
     // of leading dots is the same either way.
-    let stem: String = name
+    let mut stem: String = name
         .chars()
         .skip_while(|&c| c == '.')
         .map(|c| {
@@ -133,11 +155,28 @@ pub fn sanitize_stem(name: &str) -> String {
             }
         })
         .collect();
-    if stem.is_empty() {
-        "case".to_string()
-    } else {
-        stem
+    // The map above only emits ASCII, so byte truncation cannot split a
+    // character.
+    stem.truncate(MAX_STEM_LEN);
+    while stem.ends_with('.') {
+        stem.pop();
     }
+    let pre_dot = stem.split('.').next().unwrap_or("");
+    if WINDOWS_RESERVED
+        .iter()
+        .any(|r| pre_dot.eq_ignore_ascii_case(r))
+    {
+        stem.insert(0, '_');
+    }
+    if stem.is_empty() {
+        stem.push_str("case");
+    }
+    if stem != name {
+        let digest = sha256_hex(name.as_bytes());
+        stem.push('-');
+        stem.push_str(&digest[..8]);
+    }
+    stem
 }
 
 impl Pipeline {
@@ -427,5 +466,37 @@ mod tests {
     fn sanitize_stem_keeps_ordinary_names() {
         assert_eq!(sanitize_stem("case118"), "case118");
         assert_eq!(sanitize_stem("ieee-13_bus.v2"), "ieee-13_bus.v2");
+    }
+
+    #[test]
+    fn sanitize_stem_separates_names_that_sanitize_alike() {
+        // `a/b` must not overwrite `a_b`'s files in a multi case export.
+        assert_ne!(sanitize_stem("a/b"), sanitize_stem("a_b"));
+        assert_ne!(sanitize_stem("a/b"), sanitize_stem("a\\b"));
+        assert_eq!(sanitize_stem("a_b"), "a_b");
+    }
+
+    #[test]
+    fn sanitize_stem_applies_windows_filename_rules() {
+        // Trailing dots and reserved device names are invalid on Windows.
+        let trailing = sanitize_stem("case.");
+        assert!(!trailing.ends_with('.'), "{trailing:?}");
+        for name in ["con", "CON", "aux.4", "lpt9"] {
+            let stem = sanitize_stem(name);
+            let pre_dot = stem.split('.').next().unwrap();
+            assert!(
+                !super::WINDOWS_RESERVED
+                    .iter()
+                    .any(|r| pre_dot.eq_ignore_ascii_case(r)),
+                "{name:?} -> {stem:?} is still a reserved device name"
+            );
+        }
+    }
+
+    #[test]
+    fn sanitize_stem_caps_the_length() {
+        let long = "x".repeat(4096);
+        // Stem plus hash suffix stays within a filename component budget.
+        assert!(sanitize_stem(&long).len() <= super::MAX_STEM_LEN + 9);
     }
 }

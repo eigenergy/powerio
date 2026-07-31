@@ -12,12 +12,15 @@
 //! public BMOPF examples.
 
 use std::collections::BTreeMap;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use super::defaults as dd;
 use super::lex::{BusSpec, Value, VarMap};
-use super::raw::{RawDss, RawObject, parse_raw_with, parse_raw_with_confined};
+use super::raw::{
+    RawDss, RawObject, canonical_case_root, confined_fs_read, parse_raw_with,
+    parse_raw_with_confined,
+};
 use crate::error::{Error, Result};
 use crate::geo::{CoordinateSpace, CoordsKind, GeoMeta, Location};
 use crate::model::{
@@ -62,14 +65,17 @@ fn strip_bom_owned(text: String) -> String {
     }
 }
 
-/// A redirect loader that strips a leading byte order mark from every file it
-/// reads and records which files carried one, so each strip can be itemized
-/// as a warning instead of happening silently.
-fn bom_stripping_loader(
+/// A redirect loader for confined file parsing: reads through
+/// [`confined_fs_read`], which refuses a path whose canonical (symlink
+/// resolved) form escapes the case directory, then strips a leading byte
+/// order mark and records which files carried one, so each strip can be
+/// itemized as a warning instead of happening silently.
+fn confined_bom_stripping_loader(
+    canonical_root: Option<PathBuf>,
     stripped_paths: &mut Vec<String>,
 ) -> impl FnMut(&Path) -> std::io::Result<String> + '_ {
-    |p: &Path| {
-        std::fs::read_to_string(p).map(|text| {
+    move |p: &Path| {
+        confined_fs_read(canonical_root.as_deref(), p).map(|text| {
             if text.starts_with('\u{feff}') {
                 stripped_paths.push(p.display().to_string());
             }
@@ -90,8 +96,9 @@ fn warn_stripped_boms(net: &mut DistNetwork, root_had_bom: bool, stripped_paths:
 
 /// Parses a `.dss` file, following includes, into the canonical model.
 /// `Redirect`/`Compile`/`Buscoords` includes are confined to the directory of
-/// `path`: an include that is absolute or climbs out of that directory with
-/// `..` is refused with a warning, so a case file cannot read arbitrary paths.
+/// `path`: an include that is absolute, climbs out of that directory with
+/// `..`, or resolves outside it through a symbolic link is refused with a
+/// warning, so a case file cannot read arbitrary paths.
 pub fn parse_dss_file(path: impl AsRef<Path>) -> Result<DistNetwork> {
     let path = path.as_ref();
     let text = std::fs::read_to_string(path).map_err(|source| Error::Io {
@@ -104,7 +111,7 @@ pub fn parse_dss_file(path: impl AsRef<Path>) -> Result<DistNetwork> {
     let raw = parse_raw_with_confined(
         &text,
         &path.display().to_string(),
-        &mut bom_stripping_loader(&mut stripped_paths),
+        &mut confined_bom_stripping_loader(canonical_case_root(path), &mut stripped_paths),
     );
     let mut net = network_from_raw(&raw, Arc::new(text));
     warn_stripped_boms(&mut net, had_bom, stripped_paths);

@@ -30,9 +30,9 @@ fn ieee13() {
     assert_eq!(count(&raw, "transformer"), 5);
     assert_eq!(count(&raw, "capacitor"), 2);
     assert_eq!(count(&raw, "regcontrol"), 3);
-    // 7 mtx codes inline plus 29 from IEEELineCodes.DSS, which is a stub
-    // redirecting to the shared file one directory up; reaching those 29
-    // proves nested redirects resolve relative to the including file.
+    // 7 mtx codes inline plus 29 from the redirected IEEELineCodes.DSS,
+    // which sits inside the case directory as upstream distributes it, so
+    // include confinement holds for the fixture.
     assert_eq!(count(&raw, "linecode"), 36);
     assert_eq!(raw.buscoords.len(), 16);
 

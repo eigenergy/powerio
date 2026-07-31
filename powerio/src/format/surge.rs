@@ -308,7 +308,9 @@ fn cost_obj(cost: &GenCost, warnings: &mut Vec<String>) -> Option<Value> {
             Some(Value::Object(wrapper))
         }
         1 => {
-            let count = (cost.ncost * 2).min(cost.coeffs.len());
+            // saturating_mul: `ncost` comes from input, so an oversized count
+            // must clamp to the coefficient length instead of overflowing.
+            let count = cost.ncost.saturating_mul(2).min(cost.coeffs.len());
             if count % 2 != 0 {
                 warnings.push(
                     "piecewise generator cost has an odd coefficient count; cost dropped".into(),

@@ -297,7 +297,7 @@ struct Executor<'l, L: Loader> {
 /// containment check rather than silently resolving somewhere inside it.
 fn lexical_normalize(p: &Path) -> PathBuf {
     use std::path::Component;
-    let mut out: Vec<Component> = Vec::new();
+    let mut out: Vec<Component<'_>> = Vec::new();
     for comp in p.components() {
         match comp {
             Component::CurDir => {}
@@ -587,10 +587,18 @@ impl<L: Loader> Executor<'_, L> {
         match &self.root {
             None => Some(joined),
             Some(root) => {
+                // Containment: after stripping the root prefix, only plain
+                // name components may remain. A leftover `..`, root, or drive
+                // prefix means the path escapes — this also covers an empty
+                // root (case file in the working directory), where
+                // `starts_with` alone would accept absolute paths, and a root
+                // that itself begins with `..`, where counting leading `..`
+                // components would misjudge the climb.
                 let normalized = lexical_normalize(&joined);
-                let climbs_above =
-                    matches!(normalized.components().next(), Some(Component::ParentDir));
-                (!climbs_above && normalized.starts_with(root)).then_some(normalized)
+                normalized
+                    .strip_prefix(root)
+                    .is_ok_and(|rest| rest.components().all(|c| matches!(c, Component::Normal(_))))
+                    .then_some(normalized)
             }
         }
     }
@@ -853,10 +861,50 @@ fn collect_props_for(
 /// passes a filesystem-backed loader lets `Redirect`/`Compile`/`Buscoords`
 /// read any path the loader accepts. For untrusted input use
 /// [`parse_dss_str`](crate::dss::parse_dss_str) (no filesystem access) or
-/// [`parse_dss_file`](crate::dss::parse_dss_file) (includes confined to the
-/// case directory), or enforce your own containment inside the loader.
+/// [`parse_dss_file`](crate::dss::parse_dss_file) / [`parse_raw_file`]
+/// (includes confined to the case directory), or enforce your own containment
+/// inside the loader.
 pub fn parse_raw_with(text: &str, path: &str, loader: &mut impl Loader) -> RawDss {
     run_executor(text, path, None, loader)
+}
+
+/// The case directory of `path` in canonical (symlink resolved) form, for
+/// checking filesystem reads against the lexical confinement root. `None`
+/// when canonicalization fails (directory missing or unreadable), which the
+/// confined filesystem reader treats as "refuse every include".
+pub(crate) fn canonical_case_root(path: &Path) -> Option<PathBuf> {
+    let dir = path.parent().unwrap_or_else(|| Path::new(""));
+    let dir = if dir.as_os_str().is_empty() {
+        Path::new(".")
+    } else {
+        dir
+    };
+    dir.canonicalize().ok()
+}
+
+/// Reads an include for confined file parsing. The executor's lexical check
+/// already ran; this closes the symlink hole it cannot see: the path is
+/// canonicalized (resolving symlinks) and refused unless the real file still
+/// sits under the case directory's canonical root. The refusal surfaces
+/// through the executor's ordinary load-error warning.
+pub(crate) fn confined_fs_read(
+    canonical_root: Option<&Path>,
+    path: &Path,
+) -> std::io::Result<String> {
+    let Some(root) = canonical_root else {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::PermissionDenied,
+            "case directory cannot be resolved; includes are disabled",
+        ));
+    };
+    let real = path.canonicalize()?;
+    if !real.starts_with(root) {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::PermissionDenied,
+            "resolves outside the case directory through a symbolic link",
+        ));
+    }
+    std::fs::read_to_string(&real)
 }
 
 /// Like [`parse_raw_with`], but confines `Redirect`/`Compile`/`Buscoords`
@@ -891,16 +939,22 @@ fn run_executor(text: &str, path: &str, root: Option<PathBuf>, loader: &mut impl
 }
 
 /// Parses a `.dss` file from disk, following its includes.
+/// `Redirect`/`Compile`/`Buscoords` includes are confined to the case
+/// directory, lexically and after symlink resolution, exactly like
+/// [`parse_dss_file`](crate::dss::parse_dss_file); an include that escapes is
+/// refused with a warning. Use [`parse_raw_with`] with your own loader for
+/// unconfined resolution.
 pub fn parse_raw_file(path: impl AsRef<Path>) -> Result<RawDss> {
     let path = path.as_ref();
     let text = std::fs::read_to_string(path).map_err(|source| Error::Io {
         path: path.display().to_string(),
         source,
     })?;
-    Ok(parse_raw_with(
+    let root = canonical_case_root(path);
+    Ok(parse_raw_with_confined(
         &text,
         &path.display().to_string(),
-        &mut |p: &Path| std::fs::read_to_string(p),
+        &mut |p: &Path| confined_fs_read(root.as_deref(), p),
     ))
 }
 
@@ -1271,6 +1325,115 @@ mod tests {
                 .count(),
             3
         );
+    }
+
+    #[test]
+    fn confined_parsing_with_an_empty_root_refuses_absolute_and_climbing_includes() {
+        use std::cell::RefCell;
+        // A bare filename ("master.dss") has an empty parent, so the
+        // confinement root is empty. `starts_with("")` holds for every path,
+        // so containment must come from the component rule instead: only
+        // plain relative includes stay inside the working directory.
+        let requested: RefCell<Vec<String>> = RefCell::new(Vec::new());
+        let mut loader = |p: &Path| {
+            requested.borrow_mut().push(p.display().to_string());
+            Err::<String, _>(std::io::Error::new(std::io::ErrorKind::NotFound, "x"))
+        };
+        let raw = parse_raw_with_confined(
+            "Redirect /etc/passwd\nRedirect ../secret.dss\nRedirect sub/ok.dss",
+            "master.dss",
+            &mut loader,
+        );
+        assert_eq!(
+            *requested.borrow(),
+            vec!["sub/ok.dss".to_string()],
+            "an absolute or climbing include reached the loader"
+        );
+        assert_eq!(
+            raw.warnings
+                .iter()
+                .filter(|w| w.contains("escapes the case directory"))
+                .count(),
+            2
+        );
+    }
+
+    #[test]
+    fn confined_parsing_allows_includes_under_a_root_that_starts_with_parent_dirs() {
+        use std::cell::RefCell;
+        // The case path itself may climb ("../case/master.dss"); includes
+        // under that same directory are inside the case and must load.
+        let requested: RefCell<Vec<String>> = RefCell::new(Vec::new());
+        let mut loader = |p: &Path| {
+            requested.borrow_mut().push(p.display().to_string());
+            Ok(String::new())
+        };
+        let raw = parse_raw_with_confined(
+            "Redirect codes.dss\nRedirect ../../outside.dss",
+            "../case/master.dss",
+            &mut loader,
+        );
+        assert_eq!(*requested.borrow(), vec!["../case/codes.dss".to_string()]);
+        assert_eq!(
+            raw.warnings
+                .iter()
+                .filter(|w| w.contains("escapes the case directory"))
+                .count(),
+            1
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn file_parsing_refuses_includes_that_escape_through_a_symlink() {
+        // A lexically contained include that is really a symlink out of the
+        // case directory must not be read.
+        let root =
+            std::env::temp_dir().join(format!("powerio-dist-symlink-{}", std::process::id()));
+        let case = root.join("case");
+        std::fs::create_dir_all(&case).unwrap();
+        std::fs::write(root.join("secret.dss"), "New Line.leaked bus1=a").unwrap();
+        std::fs::write(case.join("master.dss"), "Redirect linked.dss").unwrap();
+        std::os::unix::fs::symlink(root.join("secret.dss"), case.join("linked.dss")).unwrap();
+
+        let raw = parse_raw_file(case.join("master.dss")).unwrap();
+        assert!(raw.find("line", "leaked").is_none());
+        assert_eq!(
+            raw.warnings
+                .iter()
+                .filter(|w| w.contains("outside the case directory"))
+                .count(),
+            1,
+            "warnings: {:?}",
+            raw.warnings
+        );
+
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn raw_file_parsing_refuses_includes_outside_the_case_directory() {
+        let root =
+            std::env::temp_dir().join(format!("powerio-dist-rawconf-{}", std::process::id()));
+        std::fs::create_dir_all(root.join("case")).unwrap();
+        std::fs::write(root.join("secret.dss"), "New Line.leaked bus1=a").unwrap();
+        std::fs::write(
+            root.join("case").join("master.dss"),
+            "Redirect ../secret.dss",
+        )
+        .unwrap();
+
+        let raw = parse_raw_file(root.join("case").join("master.dss")).unwrap();
+        assert!(raw.find("line", "leaked").is_none());
+        assert_eq!(
+            raw.warnings
+                .iter()
+                .filter(|w| w.contains("escapes the case directory"))
+                .count(),
+            1
+        );
+
+        std::fs::remove_dir_all(&root).unwrap();
     }
 
     #[test]

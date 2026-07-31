@@ -58,6 +58,15 @@ const IBR_EXTRA_FIELDS: &[&str] = &[
 
 const BMOPF_DELTA_ROLLS_EXTRA: &str = "bmopf_delta_rolls";
 
+/// Upper bound on the model-driven dimensions this writer expands
+/// quadratically: the winding count feeding the `x_sc` pair table and the
+/// conductor count an absent matrix is materialized at as zeros. The BMOPF
+/// and DSS readers cap the same quantities at 64 on their way in, but a
+/// `DistNetwork` can also arrive without those caps (the model JSON C entry
+/// point deserializes one unchecked), and a linear-size model could otherwise
+/// demand O(n²) memory here. No physical element comes near this bound.
+const MAX_DIM: usize = 64;
+
 const TRANSFORMER_NO_LOAD_ALLOWED_EXTRAS: [&str; 5] = [
     "g_no_load",
     "b_no_load",
@@ -1318,8 +1327,38 @@ impl Writer {
             .first()
             .and_then(|w| n_winding_base(w, s))
             .unwrap_or(f64::NAN);
+        let x_sc = self.n_winding_x_sc(t, base_z);
+        o.insert("x_sc".into(), Value::Object(x_sc));
+        if let Some(first) = t.windings.first() {
+            self.transformer_no_load_fields(&mut o, t, first, s);
+        }
+        self.warn_unrepresented_neutral_fields(t, "n_winding BMOPF");
+        self.taps_dropped(t);
+        self.transformer_extras_dropped(t, &TRANSFORMER_NO_LOAD_ALLOWED_EXTRAS);
+        o.into()
+    }
+
+    /// The `x_sc` pair table for an n_winding transformer. The winding count
+    /// is model input, so the quadratic pair expansion is capped at
+    /// [`MAX_DIM`] with a diagnostic.
+    fn n_winding_x_sc(&mut self, t: &DistTransformer, base_z: f64) -> Map<String, Value> {
         let mut x_sc = Map::new();
-        for (idx, (i, j)) in pair_keys(t.windings.len()).into_iter().enumerate() {
+        let n_windings = t.windings.len();
+        if n_windings > MAX_DIM {
+            let mut details = Map::new();
+            details.insert("windings".into(), json!(n_windings));
+            self.transformer_diagnostic(
+                t,
+                "EMIT.BMOPF.TRANSFORMER_WINDINGS_CLAMPED",
+                format!(
+                    "transformer {}: {n_windings} windings exceed the supported \
+                     maximum of {MAX_DIM}; x_sc pairs beyond it are dropped",
+                    t.name
+                ),
+                details,
+            );
+        }
+        for (idx, (i, j)) in pair_keys(n_windings.min(MAX_DIM)).into_iter().enumerate() {
             let x_pct = t.xsc_pct.get(idx).copied().unwrap_or_else(|| {
                 let mut details = Map::new();
                 details.insert("winding_pair".into(), json!(format!("{}_{}", i + 1, j + 1)));
@@ -1341,14 +1380,7 @@ impl Writer {
                 self.num(x_pct / 100.0 * base_z, "transformer x_sc"),
             );
         }
-        o.insert("x_sc".into(), Value::Object(x_sc));
-        if let Some(first) = t.windings.first() {
-            self.transformer_no_load_fields(&mut o, t, first, s);
-        }
-        self.warn_unrepresented_neutral_fields(t, "n_winding BMOPF");
-        self.taps_dropped(t);
-        self.transformer_extras_dropped(t, &TRANSFORMER_NO_LOAD_ALLOWED_EXTRAS);
-        o.into()
+        x_sc
     }
 
     /// A three phase wye-wye unit becomes one single_phase entry per phase
@@ -1692,7 +1724,9 @@ impl Writer {
     }
 
     /// Emits a matrix whose `_1_1` entry the schema requires; an empty one
-    /// becomes `dim` by `dim` zeros so the required key exists.
+    /// becomes `dim` by `dim` zeros so the required key exists. `dim` derives
+    /// from a sibling matrix's row count, which model input controls, so the
+    /// dense zero fill is capped at [`MAX_DIM`].
     fn required_matrix(
         &mut self,
         o: &mut Map<String, Value>,
@@ -1702,6 +1736,15 @@ impl Writer {
         name: &str,
     ) {
         if m.is_empty() {
+            let dim = if dim > MAX_DIM {
+                self.warn(format!(
+                    "{name}: {prefix} dimension {dim} exceeds the supported \
+                     maximum of {MAX_DIM}; zero matrix clamped"
+                ));
+                MAX_DIM
+            } else {
+                dim
+            };
             self.flat_matrix(o, prefix, &vec![vec![0.0; dim]; dim], name);
         } else {
             self.flat_matrix(o, prefix, m, name);
@@ -2304,6 +2347,66 @@ mod tests {
         assert_eq!(
             v["load"]["exp"]["gamma_p"],
             serde_json::json!([1.2, 1.2, 1.2])
+        );
+    }
+
+    /// A model built without the reader caps (the model JSON C entry point
+    /// deserializes one unchecked) must not force quadratic allocation out of
+    /// linear-size input.
+    #[test]
+    fn oversized_model_dimensions_are_clamped_not_expanded() {
+        use crate::model::{DistLineCode, DistShunt, DistTransformer, Winding, WindingConn};
+
+        let mut net = crate::model::DistNetwork::default();
+        // A linecode whose R rows imply a huge dimension while X is empty
+        // would materialize dim x dim zeros for X.
+        let mut lc = DistLineCode::new("big", Vec::new(), Vec::new());
+        lc.r_series = vec![Vec::new(); 100_000];
+        net.linecodes.push(lc);
+        // Same shape for a shunt's G/B pair.
+        net.shunts.push(DistShunt::new(
+            "big",
+            "b",
+            Vec::new(),
+            vec![Vec::new(); 100_000],
+            Vec::new(),
+        ));
+        // A winding count beyond the cap would expand to ~n²/2 x_sc pairs.
+        let winding = Winding::new("b", Vec::new(), WindingConn::Wye, 1.0, 1.0);
+        net.transformers.push(DistTransformer::new(
+            "many",
+            vec![winding; MAX_DIM + 6],
+            Vec::new(),
+            3,
+        ));
+
+        let out = write_bmopf_json(&net);
+        let v: Value = serde_json::from_str(&out.text).unwrap();
+        let count_keys = |m: &Value, prefix: &str| {
+            m.as_object()
+                .unwrap()
+                .keys()
+                .filter(|k| k.starts_with(prefix))
+                .count()
+        };
+        assert_eq!(
+            count_keys(&v["linecode"]["big"], "X_series_"),
+            MAX_DIM * MAX_DIM
+        );
+        assert_eq!(count_keys(&v["shunt"]["big"], "B_"), MAX_DIM * MAX_DIM);
+        assert_eq!(
+            v["transformer"]["n_winding"]["many"]["x_sc"]
+                .as_object()
+                .unwrap()
+                .len(),
+            MAX_DIM * (MAX_DIM - 1) / 2
+        );
+        assert!(
+            out.warnings
+                .iter()
+                .any(|w| w.contains("exceeds the supported maximum")),
+            "{:?}",
+            out.warnings
         );
     }
 }

@@ -498,7 +498,9 @@ pub fn numbered_snapshots<'a>(nets: &[&'a Network], base: i64) -> Result<Vec<Gri
 }
 
 /// Write the gridfm-datakit Parquet dataset for one case under
-/// `out_dir/<network_name>/raw/`, matching datakit's directory layout. Stamps
+/// `out_dir/<sanitized network name>/raw/` (see
+/// [`sanitize_stem`](crate::sanitize_stem)), matching datakit's directory
+/// layout. Stamps
 /// `scenario` into the id columns. Writes `bus_data.parquet`, `gen_data.parquet`,
 /// `branch_data.parquet`, optionally `y_bus_data.parquet`, and a
 /// `gridfm_meta.json` manifest.
@@ -520,7 +522,9 @@ pub fn write_gridfm_dataset(
 }
 
 /// Write a batch of scenarios as one gridfm-datakit dataset under
-/// `out_dir/<network_name>/raw/`, row-stacking every snapshot's tables and keying
+/// `out_dir/<sanitized network name>/raw/` (see
+/// [`sanitize_stem`](crate::sanitize_stem)), row-stacking every snapshot's
+/// tables and keying
 /// them by the `scenario` column. The dataset name and the base element counts
 /// come from the first snapshot (shared across the batch by the shape check); the
 /// dropped/degenerate counts are summed over every snapshot, while `reference_bus`
@@ -564,7 +568,10 @@ fn write_gridfm_batch_inner(
     // The shape check guarantees every snapshot shares the base element set, so
     // the name and structural counts come from the first.
     let net = views[0].view.network();
-    let dir = out_dir.join(&net.name).join("raw");
+    // The network name comes from input content, so it must not steer the
+    // output path: unsanitized, a name like `../../x` would write outside
+    // `out_dir`. The manifest keeps the original name.
+    let dir = out_dir.join(crate::sanitize_stem(&net.name)).join("raw");
     std::fs::create_dir_all(&dir)?;
 
     let mut files = Vec::new();
@@ -2290,6 +2297,23 @@ mod tests {
         let pd_batch = col_f64(&tables.bus, "Pd");
         let pd_single = col_f64(&single.bus, "Pd");
         assert!((pd_batch.value(n) - 1.1 * pd_single.value(0)).abs() < 1e-9);
+    }
+
+    #[test]
+    fn hostile_network_name_stays_inside_out_dir() {
+        // The dataset directory comes from the network name, which is input
+        // content; a separator-bearing name must not write outside out_dir.
+        let mut net = case14();
+        net.name = "../escape".to_string();
+        let dir = tempfile::tempdir().unwrap();
+        let out = write_gridfm_dataset(&net, 0, dir.path(), &GridfmOptions::default()).unwrap();
+        assert!(
+            out.dir.starts_with(dir.path()),
+            "dataset dir {:?} escaped {:?}",
+            out.dir,
+            dir.path()
+        );
+        assert!(out.dir.exists());
     }
 
     #[test]

@@ -31,6 +31,33 @@ several gaps in that model.
 - The PowerWorld `.pwd` reader groups drawing records by tag in logarithmic
   time and bounds its substation identity search with a probe budget, so a
   crafted file cannot force quadratic work.
+- The OpenDSS include confinement holds for a case file parsed by bare
+  filename: an empty case directory no longer passes every path as a prefix
+  match, so `Redirect /etc/passwd` in `parse_dss_file("master.dss")` is
+  refused. A case directory that itself starts with `..` now confines rather
+  than refusing everything under it.
+- OpenDSS includes are also checked after symlink resolution: a lexically
+  contained include that is really a symlink out of the case directory is
+  refused. `parse_raw_file` now confines includes exactly like
+  `parse_dss_file` instead of following them anywhere on disk.
+- `sanitize_stem` follows Windows filename rules (trailing dots trimmed,
+  reserved device names like `con` prefixed, length capped) and appends a
+  short hash of the original name whenever sanitization changed it, so two
+  distinct case names that sanitize alike (`a/b` and `a_b`) cannot silently
+  overwrite each other's files in a multi case export. The gridfm dataset
+  writer routes its output directory through the same sanitizer.
+- A `DistNetwork` arriving without reader caps (the model JSON C entry point
+  deserializes one unchecked) can no longer force quadratic allocation out of
+  linear-size input: the BMOPF writer caps the dense zero fill for an absent
+  linecode/shunt matrix and the transformer `x_sc` pair expansion at 64
+  conductors/windings, with a warning.
+- A `Network` JSON bus id near `usize::MAX` is rejected when 3-winding
+  transformers are present, closing an integer overflow in the synthetic star
+  bus allocation that could alias an existing bus. An oversized piecewise
+  cost `ncost` clamps instead of overflowing during normalization and Surge
+  export.
+- The Python `mcp` extra pins the SDK below 2.0, which removed the
+  `mcp.server.fastmcp` module the server imports.
 
 ## 0.7.2
 
