@@ -77,6 +77,11 @@ several gaps in that model.
   output filename before deciding containment. A dangling link named as the
   output file, sitting inside an allowed root but pointing outside it, could
   otherwise pass the check while the write escaped the sandbox.
+- Lifting a GOC3 time series into a package operating-point series binds the
+  declared `time_periods` to the `interval_duration` array length (the same
+  equality the SCOPF loader enforces). An oversized `time_periods` that does
+  not match the data no longer drives an unbounded per-period allocation; the
+  series is refused with a diagnostic and the package stays static.
 
 ## 0.7.2
 

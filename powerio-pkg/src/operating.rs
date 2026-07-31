@@ -305,9 +305,21 @@ fn goc3_operating_points(
     if periods == 0 {
         return Ok(None);
     }
-    let duration_hours = general
-        .get("interval_duration")
-        .and_then(Value::as_array)
+    // `periods` comes straight from the case file and sizes the per-period
+    // point and label vectors below, so an oversized value would drive an
+    // unbounded up-front allocation (a hard abort, not a catchable panic).
+    // Bind it to the real data: `interval_duration` carries one entry per
+    // period, so its array length is the authoritative count — the SCOPF
+    // loader enforces the same equality. A mismatch is a malformed series.
+    let intervals = general.get("interval_duration").and_then(Value::as_array);
+    let interval_len = intervals.map_or(0, Vec::len);
+    if interval_len != periods {
+        return Err(json_error(format!(
+            "time_series_input.general.time_periods ({periods}) does not match the \
+             interval_duration length ({interval_len})"
+        )));
+    }
+    let duration_hours = intervals
         .map(|values| values.iter().filter_map(Value::as_f64).collect::<Vec<_>>())
         .unwrap_or_default();
     let device_ts = uid_map(

@@ -359,6 +359,24 @@ fn goc3_operating_points_derive_from_the_reader_parse() {
 }
 
 #[test]
+fn goc3_oversized_time_periods_is_refused_not_allocated() {
+    // `time_periods` sizes the per-period point and label vectors; an oversized
+    // value that does not match the interval_duration array would otherwise
+    // drive an unbounded up-front allocation. The mismatch is refused, so the
+    // package is static-only with a diagnostic instead of aborting.
+    let src = GOC3_PACKAGE_SRC.replace(
+        r#""time_periods": 2, "interval_duration": [1.0, 2.0]"#,
+        r#""time_periods": 999999999999999999, "interval_duration": [1.0, 2.0]"#,
+    );
+    let parsed = powerio::parse_str(&src, "goc3-json").expect("parse goc3");
+    let pkg = NetworkPackage::from_parsed_balanced(parsed);
+    assert!(
+        pkg.operating_points().is_none(),
+        "an inconsistent time_periods must not yield a series"
+    );
+}
+
+#[test]
 fn goc3_operating_points_follow_parser_row_assignment() {
     // A device without a uid still occupies a payload row; the extractor
     // must keep counting so later devices' updates land on their own rows,
