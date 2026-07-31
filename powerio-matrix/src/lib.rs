@@ -67,7 +67,7 @@ pub use matrix::{
 };
 pub use pipeline::{
     MatrixKind, Pipeline, PipelineOutputs, RhsKind, build_kind, matrix_stats_for_kind,
-    zero_impedance_rule_for_kind, zero_impedance_skips_for_kind,
+    sanitize_stem, zero_impedance_rule_for_kind, zero_impedance_skips_for_kind,
 };
 
 #[cfg(feature = "gridfm")]

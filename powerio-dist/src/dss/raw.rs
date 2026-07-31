@@ -284,6 +284,30 @@ struct Executor<'l, L: Loader> {
     /// Directory stack for relative include resolution; starts with the
     /// root file's directory, so its depth is the redirect nesting level.
     dirs: Vec<PathBuf>,
+    /// When set (file parsing), `Redirect`/`Compile`/`Buscoords` includes are
+    /// confined to this directory subtree, so an untrusted case file cannot
+    /// read outside its own directory. `None` leaves includes unconfined, for
+    /// the in-memory loaders used by tests and string parsing (which installs
+    /// a loader that reads nothing).
+    root: Option<PathBuf>,
+}
+
+/// Collapses `.` and `..` lexically, without touching the filesystem. A
+/// leading `..` is preserved so a path that climbs above its base fails the
+/// containment check rather than silently resolving somewhere inside it.
+fn lexical_normalize(p: &Path) -> PathBuf {
+    use std::path::Component;
+    let mut out: Vec<Component> = Vec::new();
+    for comp in p.components() {
+        match comp {
+            Component::CurDir => {}
+            Component::ParentDir if matches!(out.last(), Some(Component::Normal(_))) => {
+                out.pop();
+            }
+            other => out.push(other),
+        }
+    }
+    out.into_iter().collect()
 }
 
 /// Splits script text into command lines, dropping block comments. A block
@@ -549,12 +573,43 @@ impl<L: Loader> Executor<'_, L> {
     }
 
     /// Resolves a file argument relative to the current file's directory.
-    /// Backslash separators (the format's DOS heritage) become `/`.
-    fn resolve(&self, file_arg: &str) -> PathBuf {
+    /// Backslash separators (the format's DOS heritage) become `/`. Returns
+    /// `None` when a confinement root is set (file parsing) and the resolved
+    /// path escapes the root case directory — whether through `..` or an
+    /// absolute path outside it — so an untrusted case file cannot pull in
+    /// arbitrary paths. An absolute path that lands inside the root is allowed,
+    /// matching case files that reference includes by absolute path.
+    fn resolve(&self, file_arg: &str) -> Option<PathBuf> {
+        use std::path::Component;
         let rel = file_arg.replace('\\', "/");
-        self.dirs
-            .last()
-            .map_or_else(|| PathBuf::from(&rel), |d| d.join(&rel))
+        let base = self.dirs.last().cloned().unwrap_or_default();
+        let joined = base.join(&rel);
+        match &self.root {
+            None => Some(joined),
+            Some(root) => {
+                let normalized = lexical_normalize(&joined);
+                let climbs_above =
+                    matches!(normalized.components().next(), Some(Component::ParentDir));
+                (!climbs_above && normalized.starts_with(root)).then_some(normalized)
+            }
+        }
+    }
+
+    /// Resolves an include argument, warning when it is refused for escaping
+    /// the case directory. `None` tells the caller to skip the include.
+    fn resolve_or_warn(
+        &mut self,
+        verb: &str,
+        file_arg: &str,
+        ctx: &dyn Fn(String) -> String,
+    ) -> Option<PathBuf> {
+        let resolved = self.resolve(file_arg);
+        if resolved.is_none() {
+            self.raw.warn(ctx(format!(
+                "{verb} {file_arg}: refused; include escapes the case directory"
+            )));
+        }
+        resolved
     }
 
     fn do_redirect(&mut self, scan: &mut Scanner, compile: bool, ctx: &dyn Fn(String) -> String) {
@@ -562,7 +617,10 @@ impl<L: Loader> Executor<'_, L> {
             self.raw.warn(ctx("redirect with no file".into()));
             return;
         };
-        let path = self.resolve(&p.value.text);
+        let verb = if compile { "compile" } else { "redirect" };
+        let Some(path) = self.resolve_or_warn(verb, &p.value.text, ctx) else {
+            return;
+        };
         if self.dirs.len() > MAX_REDIRECT_DEPTH {
             self.raw
                 .warn(ctx(format!("redirect depth limit at {}", path.display())));
@@ -586,7 +644,6 @@ impl<L: Loader> Executor<'_, L> {
                 }
             }
             Err(e) => {
-                let verb = if compile { "compile" } else { "redirect" };
                 self.raw
                     .warn(ctx(format!("{verb} {}: {e}", path.display())));
             }
@@ -598,7 +655,9 @@ impl<L: Loader> Executor<'_, L> {
             self.raw.warn(ctx("buscoords with no file".into()));
             return;
         };
-        let path = self.resolve(&p.value.text);
+        let Some(path) = self.resolve_or_warn("buscoords", &p.value.text, ctx) else {
+            return;
+        };
         match self.loader.load(&path) {
             Ok(text) => {
                 for (line_no, line) in text.lines().enumerate() {
@@ -789,7 +848,42 @@ fn collect_props_for(
 
 /// Parses `.dss` text. `path` anchors relative includes; pass the file's
 /// path when the text came from a file, anything descriptive otherwise.
+///
+/// Includes are resolved through `loader` without confinement: a caller that
+/// passes a filesystem-backed loader lets `Redirect`/`Compile`/`Buscoords`
+/// read any path the loader accepts. For untrusted input use
+/// [`parse_dss_str`](crate::dss::parse_dss_str) (no filesystem access) or
+/// [`parse_dss_file`](crate::dss::parse_dss_file) (includes confined to the
+/// case directory), or enforce your own containment inside the loader.
 pub fn parse_raw_with(text: &str, path: &str, loader: &mut impl Loader) -> RawDss {
+    run_executor(text, path, None, loader)
+}
+
+/// Like [`parse_raw_with`], but confines `Redirect`/`Compile`/`Buscoords`
+/// includes to the directory of `path`: an include that is absolute or climbs
+/// out of that directory with `..` is refused with a warning and read nothing.
+/// Used by the file entry point so an untrusted case file on disk cannot read
+/// arbitrary paths.
+pub(crate) fn parse_raw_with_confined(
+    text: &str,
+    path: &str,
+    loader: &mut impl Loader,
+) -> RawDss {
+    let root = lexical_normalize(
+        &Path::new(path)
+            .parent()
+            .map(Path::to_path_buf)
+            .unwrap_or_default(),
+    );
+    run_executor(text, path, Some(root), loader)
+}
+
+fn run_executor(
+    text: &str,
+    path: &str,
+    root: Option<PathBuf>,
+    loader: &mut impl Loader,
+) -> RawDss {
     let mut exec = Executor {
         raw: RawDss::default(),
         loader,
@@ -799,6 +893,7 @@ pub fn parse_raw_with(text: &str, path: &str, loader: &mut impl Loader) -> RawDs
                 .map(Path::to_path_buf)
                 .unwrap_or_default(),
         ],
+        root,
     };
     exec.run_script(text, path);
     exec.raw
@@ -1156,5 +1251,57 @@ mod tests {
         let raw = parse("New Load.ld kW=(8 1000 /)");
         let v = raw.find("load", "ld").unwrap().get("kw").unwrap().clone();
         assert_eq!(v.to_f64(None), Ok(0.008));
+    }
+
+    #[test]
+    fn confined_parsing_refuses_includes_outside_the_case_directory() {
+        use std::cell::RefCell;
+        // Records every path the loader is actually asked to read, so we can
+        // assert a refused include never reaches the filesystem.
+        let requested: RefCell<Vec<String>> = RefCell::new(Vec::new());
+        let mut loader = |p: &Path| {
+            requested.borrow_mut().push(p.display().to_string());
+            Err::<String, _>(std::io::Error::new(std::io::ErrorKind::NotFound, "x"))
+        };
+        let raw = parse_raw_with_confined(
+            "Redirect ../../secret.dss\nRedirect /etc/passwd\nBuscoords ../up.csv",
+            "/case/dir/master.dss",
+            &mut loader,
+        );
+        assert!(
+            requested.borrow().is_empty(),
+            "escaping include reached the loader: {:?}",
+            requested.borrow()
+        );
+        assert_eq!(
+            raw.warnings
+                .iter()
+                .filter(|w| w.contains("escapes the case directory"))
+                .count(),
+            3
+        );
+    }
+
+    #[test]
+    fn confined_parsing_allows_includes_within_the_case_directory() {
+        use std::cell::RefCell;
+        let requested: RefCell<Vec<String>> = RefCell::new(Vec::new());
+        let mut loader = |p: &Path| {
+            requested.borrow_mut().push(p.display().to_string());
+            Ok(String::new())
+        };
+        // A subdirectory include and an absolute path inside the root both load.
+        parse_raw_with_confined(
+            "Redirect sub/codes.dss\nRedirect /case/dir/abs.dss",
+            "/case/dir/master.dss",
+            &mut loader,
+        );
+        assert_eq!(
+            *requested.borrow(),
+            vec![
+                "/case/dir/sub/codes.dss".to_string(),
+                "/case/dir/abs.dss".to_string(),
+            ]
+        );
     }
 }

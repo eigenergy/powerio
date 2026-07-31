@@ -1,5 +1,37 @@
 # Changelog
 
+## 0.7.3
+
+Security fixes for parsing untrusted case files. The parsers are written to
+reject malformed input with an error, never to crash, exhaust memory, or read
+or write files outside the ones named on the command line; this release closes
+several gaps in that model.
+
+- A PowerWorld `.aux` legacy `DATA` header whose field list closes before it
+  opens (`]` before `[`) no longer panics on an inverted slice. It returns a
+  read error, matching the guard the parenthesized form already carried.
+- OpenDSS `Redirect`/`Compile`/`Buscoords` no longer read arbitrary local
+  files. Parsing from a string (`parse_dss_str`, and the C ABI and Python
+  string entry points) disables filesystem includes entirely, so untrusted
+  `.dss` text cannot pull in a file such as `/etc/passwd` and echo its
+  contents back through bus names. Parsing from a file (`parse_dss_file`) still
+  follows includes, now confined to the case directory: an include that
+  resolves outside that directory, whether absolute or by climbing out with
+  `..`, is refused with a warning.
+- OpenDSS `phases`, `windings`, and `wdg` counts are capped. A single small
+  property could otherwise size a dense n by n conductor matrix or a
+  per-winding vector into the gigabytes; an oversized value clamps to the
+  supported maximum with a warning.
+- A PMD ENGINEERING impedance or admittance matrix dimension is capped the same
+  way, so an array of thousands of empty rows no longer demands an n by n
+  allocation.
+- The matrix pipeline and the CLI `sensitivities` command sanitize the case
+  name before it forms an output filename. A name like `../../x` or an absolute
+  path can no longer steer a write outside the chosen output directory.
+- The PowerWorld `.pwd` reader groups drawing records by tag in logarithmic
+  time and bounds its substation identity search with a probe budget, so a
+  crafted file cannot force quadratic work.
+
 ## 0.7.2
 
 - CLI case discovery is recursive and covers every supported format (#260):

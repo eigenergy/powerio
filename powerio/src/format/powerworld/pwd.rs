@@ -40,7 +40,7 @@
 //! projection is the consumer's choice. Consumers wanting geography should
 //! read the aux.
 
-use std::collections::HashSet;
+use std::collections::{BTreeMap, HashSet};
 use std::path::Path;
 
 use crate::{Error, Result};
@@ -49,6 +49,12 @@ const FMT: &str = "PowerWorld .pwd";
 
 /// The identity table tag behind the `ff ff ff ff` sentinel.
 const IDENTITY_TAG: [u8; 6] = [0xff, 0xff, 0xff, 0xff, 0x3d, 0x0f];
+
+/// Cap on identity record steps across every anchor in one parse. A step is one
+/// record examined; each consumes at least 13 bytes, so the largest real table
+/// is far below this. Bounds the anchors × records blowup a crafted file could
+/// otherwise force. Matches the probe-budget idiom of the `.pwb` reader.
+const IDENTITY_WALK_BUDGET: u64 = 128_000_000;
 
 /// One substation symbol from a display file: the identity row joined with
 /// its drawing record, in identity table (display) order. `x` and `y` are
@@ -154,7 +160,10 @@ fn parse_pwd_inner(bytes: &[u8]) -> Result<PwdDisplay> {
     // Every drawing object record repeats the header stamp at +18 and dual
     // encodes its position (f64 at +22/+30, f32 echo at +2/+6); the scan
     // collects every offset with that shape and groups by the u16 type tag.
-    let mut groups: Vec<(u16, Vec<DrawRecord>)> = Vec::new();
+    // Keyed by type tag so grouping is O(log tags) per record: a crafted file
+    // can spread gate-passing records across up to 65536 distinct tags, and a
+    // linear scan per record would be quadratic in the file size.
+    let mut groups: BTreeMap<u16, Vec<DrawRecord>> = BTreeMap::new();
     for i in 0..bytes.len().saturating_sub(38) {
         if u32_at(bytes, i + 18) != Some(stamp) {
             continue;
@@ -182,10 +191,7 @@ fn parse_pwd_inner(bytes: &[u8]) -> Result<PwdDisplay> {
             continue;
         };
         let rec = DrawRecord { at: i, x, y };
-        match groups.iter_mut().find(|(t, _)| *t == tag) {
-            Some((_, v)) => v.push(rec),
-            None => groups.push((tag, vec![rec])),
-        }
+        groups.entry(tag).or_default().push(rec);
     }
 
     // The substation group is the one whose records, in stream order, link
@@ -193,7 +199,7 @@ fn parse_pwd_inner(bytes: &[u8]) -> Result<PwdDisplay> {
     // era) followed by the row's u32 number, somewhere in the style tail.
     // Field label decoys carry other markers (0x05 observed) or another
     // order and fail; ambiguity is a loud error, never a pick.
-    let matches: Vec<&(u16, Vec<DrawRecord>)> = groups
+    let matches: Vec<(&u16, &Vec<DrawRecord>)> = groups
         .iter()
         .filter(|(_, records)| {
             records.len() == identity.len()
@@ -252,10 +258,23 @@ struct DrawRecord {
 /// `ff ff ff ff 3d 0f` anchor. A missing table means there are no decoded
 /// substation symbols. Several tables are a loud error.
 fn find_identity_table(b: &[u8]) -> Result<Vec<(u32, String)>> {
+    // A crafted file can plant many IDENTITY_TAG anchors, each starting a walk
+    // that runs to a sentinel, so the total work is anchors × records. One
+    // shared budget over every record step across every anchor keeps that
+    // bounded; the largest real identity table is orders of magnitude below it.
+    let mut budget = 0u64;
     let mut tables = Vec::new();
     for at in memmem(b, &IDENTITY_TAG) {
-        if let Some(rows) = identity_walk(b, at + IDENTITY_TAG.len()) {
+        if let Some(rows) = identity_walk(b, at + IDENTITY_TAG.len(), &mut budget) {
             tables.push(rows);
+        }
+        if budget > IDENTITY_WALK_BUDGET {
+            return Err(Error::FormatRead {
+                format: FMT,
+                message: "substation identity search exceeded its probe budget; the file is \
+                          not a decodable DisplaySubstation layout"
+                    .into(),
+            });
         }
     }
     match tables.len() {
@@ -275,10 +294,16 @@ fn find_identity_table(b: &[u8]) -> Result<Vec<(u32, String)>> {
 /// 0x02`) from `at` until the next `ff ff ff ff` sentinel, which must
 /// arrive exactly at a record boundary. At least one record, numbers
 /// unique and plausible, names printable.
-fn identity_walk(b: &[u8], mut at: usize) -> Option<Vec<(u32, String)>> {
+fn identity_walk(b: &[u8], mut at: usize, budget: &mut u64) -> Option<Vec<(u32, String)>> {
     let mut rows = Vec::new();
     let mut seen = HashSet::new();
     loop {
+        // One record step; abandon the walk once the shared budget is spent so
+        // a file packed with anchors cannot force quadratic work.
+        *budget = budget.saturating_add(1);
+        if *budget > IDENTITY_WALK_BUDGET {
+            return None;
+        }
         if b.get(at..).and_then(|s| s.get(..4)) == Some([0xff; 4].as_slice()) {
             return (!rows.is_empty()).then_some(rows);
         }

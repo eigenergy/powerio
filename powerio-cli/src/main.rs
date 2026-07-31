@@ -873,9 +873,12 @@ fn run_sensitivities(
         drop_tolerance,
         ..Default::default()
     };
-    let ptdf_path = output.join(format!("{}_ptdf.mtx", view.name()));
-    let lodf_path = output.join(format!("{}_lodf.mtx", view.name()));
-    let meta_path = output.join(format!("{}_sensitivity_meta.json", view.name()));
+    // The case name is input derived, so sanitize it before it forms a path;
+    // otherwise a name like `../../x` would write outside `output`.
+    let stem = powerio_matrix::sanitize_stem(view.name());
+    let ptdf_path = output.join(format!("{stem}_ptdf.mtx"));
+    let lodf_path = output.join(format!("{stem}_lodf.mtx"));
+    let meta_path = output.join(format!("{stem}_sensitivity_meta.json"));
     let metadata = powerio_matrix::io::write_sensitivity_mtx_with_options(
         &view, &options, &ptdf_path, &lodf_path,
     )

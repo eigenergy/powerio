@@ -112,19 +112,52 @@ pub struct PipelineOutputs {
     pub metadata: CaseMetadata,
 }
 
+/// Reduces a network name to a single safe filename stem. The name comes from
+/// input content, so an unsanitized value like `../../etc/x` or `/abs/x` used
+/// in `out_dir.join(...)` would write outside `out_dir`. Keeps ASCII
+/// alphanumerics, `-`, `_`, and `.`; every other character (path separators
+/// included) becomes `_`. Leading dots are stripped so the result is never
+/// `.`, `..`, or a hidden file, and an empty result falls back to `case`.
+pub fn sanitize_stem(name: &str) -> String {
+    // Skipping leading dots before mapping is equivalent to trimming them
+    // after: the map is the identity on `.` and never produces one, so the set
+    // of leading dots is the same either way.
+    let stem: String = name
+        .chars()
+        .skip_while(|&c| c == '.')
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.') {
+                c
+            } else {
+                '_'
+            }
+        })
+        .collect();
+    if stem.is_empty() {
+        "case".to_string()
+    } else {
+        stem
+    }
+}
+
 impl Pipeline {
     pub fn run(&self, net: &Network, out_dir: impl AsRef<Path>) -> Result<PipelineOutputs> {
         let out_dir = out_dir.as_ref();
         std::fs::create_dir_all(out_dir)?;
 
         let view = IndexedNetwork::new(net);
+        // The network name comes from input content, so it must not steer the
+        // output path: a name like `../../x` or `/abs/x` would otherwise write
+        // outside `out_dir`. Filenames use the sanitized stem; the metadata
+        // keeps the original name.
+        let stem = sanitize_stem(view.name());
 
         let mut files = Vec::new();
         let mut matrices_meta = Vec::new();
         let mut ybus_cache = None;
 
         for &kind in &self.matrices {
-            let matrix_path = out_dir.join(format!("{}_{}.mtx", view.name(), kind.slug()));
+            let matrix_path = out_dir.join(format!("{stem}_{}.mtx", kind.slug()));
             let matrix = self.build_for_run(&view, kind, &mut ybus_cache)?;
             write_mtx(&matrix, &matrix_path)?;
             let stats = matrix_stats_for_kind(&matrix, &view, kind, &self.options);
@@ -143,14 +176,14 @@ impl Pipeline {
 
             // RHS for matrices that take a RHS of length n (skip LACPF which is 2n).
             if let Some(rhs) = self.build_rhs(&view, kind) {
-                let rhs_path = out_dir.join(format!("{}_{}_rhs.mtx", view.name(), kind.slug()));
+                let rhs_path = out_dir.join(format!("{stem}_{}_rhs.mtx", kind.slug()));
                 write_vector_mtx(&rhs, &rhs_path)?;
                 files.push(rhs_path);
             }
         }
 
         // Shunt vector as a sidecar (not always meaningful, but cheap).
-        let shunt_path = out_dir.join(format!("{}_shunt.mtx", view.name()));
+        let shunt_path = out_dir.join(format!("{stem}_shunt.mtx"));
         let base = view.per_unit_base();
         let shunt: Vec<f64> = view.bs().iter().map(|&b| b / base).collect();
         write_vector_mtx(&shunt, &shunt_path)?;
@@ -175,7 +208,7 @@ impl Pipeline {
             matrices: matrices_meta,
             powerio_version: env!("CARGO_PKG_VERSION").to_string(),
         };
-        let meta_path = out_dir.join(format!("{}_meta.json", view.name()));
+        let meta_path = out_dir.join(format!("{stem}_meta.json"));
         write_meta_json(&metadata, &meta_path)?;
         files.push(meta_path);
 
@@ -358,4 +391,41 @@ fn sha256_hex(bytes: &[u8]) -> String {
         let _ = write!(out, "{byte:02x}");
     }
     out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::sanitize_stem;
+    use std::path::Path;
+
+    #[test]
+    fn sanitize_stem_confines_names_to_out_dir() {
+        // Every result must be a single component with no separators, so
+        // `out_dir.join(stem)` cannot escape `out_dir`.
+        for name in [
+            "../../etc/passwd",
+            "/abs/path",
+            "..",
+            ".",
+            "..\\..\\win",
+            "",
+            "a/b/c",
+        ] {
+            let stem = sanitize_stem(name);
+            let joined = Path::new("out").join(&stem);
+            assert_eq!(
+                joined.components().count(),
+                2,
+                "{name:?} -> {stem:?} escaped out_dir as {joined:?}"
+            );
+            assert!(!stem.is_empty());
+            assert!(stem != "." && stem != "..");
+        }
+    }
+
+    #[test]
+    fn sanitize_stem_keeps_ordinary_names() {
+        assert_eq!(sanitize_stem("case118"), "case118");
+        assert_eq!(sanitize_stem("ieee-13_bus.v2"), "ieee-13_bus.v2");
+    }
 }

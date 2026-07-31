@@ -660,3 +660,45 @@ fn mathematical_data_model_is_rejected() {
         .unwrap_err();
     assert!(err.to_string().contains("ENGINEERING"), "got: {err}");
 }
+
+#[test]
+fn oversized_linecode_matrix_is_dropped_not_allocated() {
+    // `rs` as an array of 100k empty arrays would size a dense n×n allocation
+    // (~80 GB) from a few hundred KB of JSON. It must be dropped with a
+    // warning; this test finishing quickly is the assertion that it was.
+    let cols = "[],".repeat(100_000);
+    let json = format!(
+        r#"{{"data_model":"ENGINEERING","linecode":{{"lc1":{{"rs":[{}]}}}}}}"#,
+        cols.trim_end_matches(',')
+    );
+    let net = parse_pmd_str(&json).unwrap();
+    assert!(
+        net.warnings
+            .iter()
+            .any(|w| w.contains("exceeds the supported maximum")),
+        "warnings: {:?}",
+        net.warnings
+    );
+}
+
+#[test]
+fn oversized_transformer_winding_count_is_capped() {
+    // The winding count is the `bus` array length and feeds an O(n^2) pair
+    // enumeration in the graph builder; a huge array must be capped with a
+    // warning, not carried through as thousands of windings.
+    let buses = (0..5000)
+        .map(|i| format!("\"b{i}\""))
+        .collect::<Vec<_>>()
+        .join(",");
+    let json = format!(
+        r#"{{"data_model":"ENGINEERING","transformer":{{"t1":{{"bus":[{buses}]}}}}}}"#
+    );
+    let net = parse_pmd_str(&json).unwrap();
+    assert!(
+        net.warnings
+            .iter()
+            .any(|w| w.contains("winding count") && w.contains("dropped")),
+        "warnings: {:?}",
+        net.warnings
+    );
+}
