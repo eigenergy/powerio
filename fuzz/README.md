@@ -2,11 +2,17 @@
 
 libFuzzer harnesses for the readers that take untrusted input: `matpower`,
 `psse`, `pslf`, `powerworld_aux`, and `powerio_json` feed `parse_str`; `pwb` and
-`pwd` feed the PowerWorld binary decoders raw bytes. The remaining `parse_str`
-formats (PowerModels, egret, pandapower) ride serde_json rather than a
-hand-written tokenizer, so the harnesses cover every hand-rolled reader. The
-invariant under test is the parser trust model: any input returns `Ok` or a
-structured `Err`, never a panic and never undefined behavior.
+`pwd` feed the PowerWorld binary decoders raw bytes; `dss` feeds the
+distribution family's tokenizer. The remaining `parse_str` formats
+(PowerModels, egret, pandapower) ride serde_json rather than a hand-written
+tokenizer, so the harnesses cover every hand-rolled reader. The invariant
+under test is the parser trust model: any input returns `Ok` or a structured
+`Err`, never a panic and never undefined behavior.
+
+`dss` and `pmd_json` also write the parsed network back and project its graph.
+A reader that accepts an unbounded count is only half the hazard; the other
+half is a consumer that sizes an allocation from it, which is where a small
+input turns into gigabytes. Fuzzing the pair catches a cap that does not hold.
 
 Needs nightly and [cargo-fuzz](https://github.com/rust-fuzz/cargo-fuzz):
 

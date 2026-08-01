@@ -10,6 +10,7 @@ cargo-fuzz = true
 [dependencies]
 libfuzzer-sys = "0.4"
 powerio = { path = "../powerio" }
+powerio-dist = { path = "../powerio-dist" }
 
 # Detached from the parent workspace (and excluded there): the fuzz crate
 # needs nightly + cargo-fuzz and must not ride along on workspace builds.
@@ -63,6 +64,20 @@ bench = false
 [[bin]]
 name = "pwd"
 path = "fuzz_targets/pwd.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "dss"
+path = "fuzz_targets/dss.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "pmd_json"
+path = "fuzz_targets/pmd_json.rs"
 test = false
 doc = false
 bench = false

@@ -82,6 +82,29 @@ several gaps in that model.
   equality the SCOPF loader enforces). An oversized `time_periods` that does
   not match the data no longer drives an unbounded per-period allocation; the
   series is refused with a diagnostic and the package stays static.
+- The PMD writer caps the conductor count it expands into square matrices. A
+  switch or voltage source terminal map is a linear model array, and a 35 KB
+  case file naming thousands of terminals drove a 360 MB document and 1.5 GB
+  of resident memory; the matrices now emit at 64 conductors with a warning
+  while the terminal list itself stays faithful. Reachable from any
+  distribution case file, not only the unchecked C entry point.
+- The dist graph builder caps the transformer winding count feeding its pair
+  expansion, so a `DistNetwork` deserialized without reader caps cannot turn a
+  linear winding array into a quadratic edge list.
+- A degenerate model matrix (rows shorter than the row count) reads as zero in
+  the PMD writer instead of panicking on an out of range index, matching the
+  DSS writer.
+- `sanitize_stem` hashes a name that already carries the disambiguating suffix
+  shape, so the suffixed and unsuffixed name spaces stay disjoint: a case
+  cannot be named to impersonate another case's disambiguated stem, which took
+  no search to construct because the suffix derives from a published hash. The
+  suffix widens to 64 bits, and the DC OPF bundle writer routes its output
+  directory through the same sanitizer instead of a weaker local copy.
+- The CLI refuses a conversion sidecar whose path is absolute or climbs out of
+  the output directory, closing the join before a writer can reach it.
+- Fuzz harnesses cover the distribution family (`dss`, `pmd_json`). Both parse
+  and then write the network back, since a reader cap that does not hold shows
+  up in the consumer that sizes an allocation from it.
 
 ## 0.7.2
 

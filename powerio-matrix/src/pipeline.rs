@@ -118,6 +118,11 @@ pub struct PipelineOutputs {
 /// common 255 byte component limit.
 const MAX_STEM_LEN: usize = 120;
 
+/// Hex digits of the SHA-256 disambiguator appended to a sanitized stem.
+/// 64 bits, so a batch export cannot be steered into an overwrite by
+/// searching for a second name that hashes into an existing stem.
+const DIGEST_LEN: usize = 16;
+
 /// Filenames Windows reserves for devices, matched against the part of a
 /// name before its first dot, case insensitively: `con` and `con.4` both
 /// resolve to the CON device.
@@ -136,10 +141,13 @@ const WINDOWS_RESERVED: &[&str] = &[
 /// filenames; the length is capped at 120 bytes; and an empty result
 /// falls back to `case`.
 ///
-/// A name the sanitizer had to change carries an 8 hex digit hash of the
-/// original, so two distinct names that would sanitize identically (`a/b` and
-/// `a_b`, say) cannot silently overwrite each other's files in a multi case
-/// export. A name that is already safe passes through unchanged.
+/// A name the sanitizer had to change carries a hash of the original, so two
+/// distinct names that would sanitize identically (`a/b` and `a_b`, say)
+/// cannot silently overwrite each other's files in a multi case export. A
+/// name that already ends in the suffix shape is hashed too, so a case can
+/// never be named to impersonate another case's disambiguated stem: the
+/// suffixed and unsuffixed name spaces stay disjoint. Any other safe name
+/// passes through unchanged.
 pub fn sanitize_stem(name: &str) -> String {
     // Skipping leading dots before mapping is equivalent to trimming them
     // after: the map is the identity on `.` and never produces one, so the set
@@ -155,9 +163,6 @@ pub fn sanitize_stem(name: &str) -> String {
             }
         })
         .collect();
-    // The map above only emits ASCII, so byte truncation cannot split a
-    // character.
-    stem.truncate(MAX_STEM_LEN);
     while stem.ends_with('.') {
         stem.pop();
     }
@@ -171,12 +176,26 @@ pub fn sanitize_stem(name: &str) -> String {
     if stem.is_empty() {
         stem.push_str("case");
     }
-    if stem != name {
-        let digest = sha256_hex(name.as_bytes());
-        stem.push('-');
-        stem.push_str(&digest[..8]);
+    if stem == name && stem.len() <= MAX_STEM_LEN && !ends_with_digest(&stem) {
+        return stem;
     }
+    // The map above only emits ASCII, so byte truncation cannot split a
+    // character, and the budget leaves room for the suffix.
+    stem.truncate(MAX_STEM_LEN - DIGEST_LEN - 1);
+    stem.push('-');
+    stem.push_str(&sha256_hex(name.as_bytes())[..DIGEST_LEN]);
     stem
+}
+
+/// Whether a stem already carries the disambiguating suffix shape. Such a
+/// name gets a suffix of its own, so no name can be chosen to collide with
+/// another name's disambiguated stem.
+fn ends_with_digest(stem: &str) -> bool {
+    stem.len() > DIGEST_LEN
+        && stem.as_bytes()[stem.len() - DIGEST_LEN - 1] == b'-'
+        && stem[stem.len() - DIGEST_LEN..]
+            .bytes()
+            .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
 }
 
 impl Pipeline {
@@ -477,6 +496,20 @@ mod tests {
     }
 
     #[test]
+    fn a_safe_name_cannot_impersonate_a_disambiguated_stem() {
+        // `.foo` sanitizes to `foo` and so carries a suffix. Naming a second
+        // case exactly that suffixed stem would overwrite it if safe names
+        // passed through unconditionally, and the suffix is derived from a
+        // published hash, so the second name takes no search to construct.
+        let unsafe_stem = sanitize_stem(".foo");
+        assert_ne!(sanitize_stem(&unsafe_stem), unsafe_stem);
+        assert_ne!(sanitize_stem(&unsafe_stem), sanitize_stem(".foo"));
+        // A name that merely contains a hyphen is untouched.
+        assert_eq!(sanitize_stem("ieee-13"), "ieee-13");
+        assert_eq!(sanitize_stem("case-deadbeef"), "case-deadbeef");
+    }
+
+    #[test]
     fn sanitize_stem_applies_windows_filename_rules() {
         // Trailing dots and reserved device names are invalid on Windows.
         let trailing = sanitize_stem("case.");
@@ -497,6 +530,6 @@ mod tests {
     fn sanitize_stem_caps_the_length() {
         let long = "x".repeat(4096);
         // Stem plus hash suffix stays within a filename component budget.
-        assert!(sanitize_stem(&long).len() <= super::MAX_STEM_LEN + 9);
+        assert!(sanitize_stem(&long).len() <= super::MAX_STEM_LEN);
     }
 }

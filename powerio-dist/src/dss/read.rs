@@ -219,8 +219,11 @@ pub fn network_from_raw(raw: &RawDss, source: Arc<String>) -> DistNetwork {
         }
     }
 
-    // A dangling linecode reference would otherwise surface only at write
-    // time; the engine refuses it at parse time.
+    // A dangling linecode reference otherwise surfaces only at write time,
+    // as a `linecode=` naming nothing. Naming it here puts it next to the
+    // reason it usually dangles: a refused or missing redirect, whose own
+    // warning is already in this list. The line keeps the reference verbatim
+    // either way; the reader does not substitute a default impedance.
     let known: std::collections::BTreeSet<String> = rd
         .net
         .linecodes

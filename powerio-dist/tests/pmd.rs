@@ -720,3 +720,113 @@ fn oversized_transformer_winding_count_is_capped() {
         net.warnings
     );
 }
+
+#[test]
+fn wide_terminal_maps_do_not_expand_quadratically() {
+    // Terminal maps are linear model arrays the writer materializes square
+    // matrices from, so an uncapped one turns a small case file into an
+    // O(n^2) document. The reader keeps the terminals verbatim; the writer
+    // clamps what it expands and names the clamp.
+    let n = 512usize;
+    let conns: Vec<u32> = (1..=n as u32).collect();
+    let text = serde_json::json!({
+        "data_model": "ENGINEERING",
+        "bus": {
+            "a": {"terminals": conns, "grounded": [], "rg": [], "xg": [], "status": "ENABLED"},
+            "b": {"terminals": conns, "grounded": [], "rg": [], "xg": [], "status": "ENABLED"},
+        },
+        "switch": {
+            "s": {"f_bus": "a", "t_bus": "b", "f_connections": conns, "t_connections": conns,
+                  "state": "CLOSED", "status": "ENABLED", "dispatchable": "YES"}
+        },
+        "voltage_source": {
+            "src": {"bus": "a", "connections": conns, "configuration": "WYE",
+                    "vm": vec![2.4; n], "va": vec![0.0; n], "status": "ENABLED"}
+        },
+    })
+    .to_string();
+    let net = parse_pmd_str(&text).unwrap();
+    assert_eq!(net.switches[0].terminal_map_from.len(), n);
+
+    let out = write_pmd_json(&net);
+    for what in ["switch s", "voltage source src"] {
+        assert!(
+            out.warnings
+                .iter()
+                .any(|w| w.starts_with(what) && w.contains("exceed the supported maximum")),
+            "no clamp warning for {what}: {:?}",
+            out.warnings
+        );
+    }
+    let doc: serde_json::Value = serde_json::from_str(&out.text).unwrap();
+    let checks: [(&str, &str, &[&str]); 2] = [
+        ("switch", "s", &["rs", "xs", "g_fr", "g_to", "b_fr", "b_to"]),
+        ("voltage_source", "src", &["rs", "xs"]),
+    ];
+    for (elem, name, keys) in checks {
+        for key in keys {
+            let m = doc[elem][name][key].as_array().unwrap();
+            assert_eq!(m.len(), 64, "{elem} {key} not clamped");
+            assert_eq!(m[0].as_array().unwrap().len(), 64, "{elem} {key} rows");
+        }
+    }
+    // The terminals themselves stay faithful; only the square expansion caps.
+    assert_eq!(
+        doc["switch"]["s"]["f_connections"]
+            .as_array()
+            .unwrap()
+            .len(),
+        n
+    );
+}
+
+#[test]
+fn degenerate_matrix_shapes_do_not_panic() {
+    // `rs` claims three columns but the third is short. Reading fills the
+    // gaps, and the writer indexes defensively, so neither panics.
+    let text = serde_json::json!({
+        "data_model": "ENGINEERING",
+        "bus": {"a": {"terminals": [1], "grounded": [], "rg": [], "xg": [], "status": "ENABLED"}},
+        "linecode": {"c": {
+            "rs": [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0]],
+            "xs": [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]],
+        }},
+        "voltage_source": {"src": {"bus": "a", "connections": [1],
+            "vm": [0.24], "va": [0.0], "status": "ENABLED"}},
+    })
+    .to_string();
+    let net = parse_pmd_str(&text).unwrap();
+    let out = write_pmd_json(&net);
+    let doc: serde_json::Value = serde_json::from_str(&out.text).unwrap();
+    let rs = doc["linecode"]["c"]["rs"].as_array().unwrap();
+    assert_eq!(rs.len(), 3);
+    assert!(rs.iter().all(|col| col.as_array().unwrap().len() == 3));
+}
+
+#[test]
+fn a_huge_terminal_name_does_not_enumerate_conductor_ids() {
+    // `conductor_ids` is `1..=max terminal`, so its length is the numeric
+    // value of a terminal name, not a count of anything: sixteen bytes of
+    // input asked for petabytes. Found by the pmd_json fuzz target.
+    let text = serde_json::json!({
+        "data_model": "ENGINEERING",
+        "bus": {"a": {"terminals": [1, 2, 3, 4_444_444_444_444_444_i64],
+                      "grounded": [], "rg": [], "xg": [], "status": "ENABLED"}},
+        "voltage_source": {"src": {"bus": "a", "connections": [1],
+            "vm": [0.24], "va": [0.0], "status": "ENABLED"}},
+    })
+    .to_string();
+    let net = parse_pmd_str(&text).unwrap();
+    let out = write_pmd_json(&net);
+    let doc: serde_json::Value = serde_json::from_str(&out.text).unwrap();
+    assert_eq!(doc["conductor_ids"].as_array().unwrap().len(), 64);
+    assert!(
+        out.warnings
+            .iter()
+            .any(|w| w.contains("supported maximum conductor id")),
+        "{:?}",
+        out.warnings
+    );
+    // The bus keeps its terminals verbatim.
+    assert_eq!(doc["bus"]["a"]["terminals"].as_array().unwrap().len(), 4);
+}

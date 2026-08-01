@@ -8,6 +8,10 @@ use crate::model::{
     DistBus, DistIbr, DistNetwork, DistTransformer, VoltageSource, Winding, pair_keys,
 };
 
+/// Upper bound on the winding count the transformer edge expansion is
+/// materialized at, matching the readers' own winding cap.
+const MAX_WINDING_PAIRS_DIM: usize = 64;
+
 /// A collapsed bus graph with terminal level attachments and conductor maps.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[non_exhaustive]
@@ -227,7 +231,13 @@ impl GraphBuilder {
     }
 
     fn add_transformer_edges(&mut self, transformer: &DistTransformer) {
-        for (from_idx, to_idx) in pair_keys(transformer.windings.len()) {
+        // One edge per winding pair, so the winding count expands
+        // quadratically. Every reader caps it at the same bound, but a
+        // `DistNetwork` can also arrive without those caps (the model JSON
+        // C entry point deserializes one unchecked). No physical
+        // transformer comes near it.
+        let n_windings = transformer.windings.len().min(MAX_WINDING_PAIRS_DIM);
+        for (from_idx, to_idx) in pair_keys(n_windings) {
             let Some(from_winding) = transformer.windings.get(from_idx) else {
                 continue;
             };
@@ -539,6 +549,36 @@ mod tests {
                 .len(),
             3
         );
+    }
+
+    #[test]
+    fn transformer_edge_expansion_is_bounded() {
+        // One edge per winding pair. Every reader caps the winding count,
+        // but the model JSON C entry point deserializes a `DistNetwork`
+        // unchecked, so a linear-size model must not force quadratic work.
+        let n = 4000;
+        let windings: Vec<Winding> = (0..n)
+            .map(|i| {
+                Winding::new(
+                    format!("b{i}"),
+                    strings(&["1", "2", "3", "n"]),
+                    crate::model::WindingConn::Wye,
+                    12470.0,
+                    5e6,
+                )
+            })
+            .collect();
+        let net = DistNetwork {
+            transformers: vec![DistTransformer::new("t1", windings, Vec::new(), 3)],
+            ..DistNetwork::new()
+        };
+
+        let graph = net.graph();
+        let pairs = MAX_WINDING_PAIRS_DIM * (MAX_WINDING_PAIRS_DIM - 1) / 2;
+        assert_eq!(graph.edges.len(), pairs);
+        // Uncapped this would be n(n-1)/2 edges, three orders of magnitude
+        // more than the winding array that produced them.
+        assert!(pairs < n);
     }
 
     #[test]
