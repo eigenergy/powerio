@@ -1972,7 +1972,11 @@ fn read_transformer(
 /// an enable/disable flag PSS/E carries separately; only the magnitude selects
 /// the regulation kind.
 fn cod_to_mode(cod: i64) -> TransformerControlMode {
-    match cod.abs() {
+    // `int_at` parses through f64 and saturates, so an extreme COD field can
+    // reach i64::MIN, whose magnitude exceeds i64::MAX; `cod.abs()` would
+    // overflow (panic under overflow checks). unsigned_abs never overflows,
+    // and only the small magnitudes 1..=3 select a nonfixed mode anyway.
+    match cod.unsigned_abs() {
         1 => TransformerControlMode::Voltage,
         2 => TransformerControlMode::ReactiveFlow,
         3 => TransformerControlMode::ActiveFlow,
@@ -2304,6 +2308,33 @@ mod tests {
 
     fn close(actual: f64, expected: f64) {
         assert!((actual - expected).abs() < 1e-12, "{actual} != {expected}");
+    }
+
+    #[test]
+    fn extreme_transformer_cod_does_not_overflow() {
+        // `int_at` parses COD through f64 and saturates, so `-1e300` becomes
+        // i64::MIN; the old `cod.abs()` would overflow (panic under overflow
+        // checks). The field decodes to Fixed instead.
+        let raw = r"0, 100.00, 33, 0, 0, 60.00 / synthetic
+CASE
+COMMENT
+1,'BUS1        ', 230.0,3,1,1,1,1.0,0.0,1.1,0.9,1.1,0.9
+2,'BUS2        ', 115.0,1,1,1,1,1.0,0.0,1.1,0.9,1.1,0.9
+0 / END OF BUS DATA, BEGIN LOAD DATA
+0 / END OF LOAD DATA, BEGIN FIXED SHUNT DATA
+0 / END OF FIXED SHUNT DATA, BEGIN GENERATOR DATA
+0 / END OF GENERATOR DATA, BEGIN BRANCH DATA
+0 / END OF BRANCH DATA, BEGIN TRANSFORMER DATA
+1,2,0,'1 ',2,2,1,0,0,1,'xf',1
+0.01,0.10,50.0
+241.5,230.0,0.0,100.0,90.0,80.0,-1e300,0,1.1,0.9,1.1,0.9,33
+115.0,115.0
+0 / END OF TRANSFORMER DATA, BEGIN AREA DATA
+Q
+";
+        let parsed = crate::parse_str(raw, "psse").unwrap();
+        let control = parsed.network.branches[0].control.as_ref().unwrap();
+        assert_eq!(control.mode, TransformerControlMode::Fixed);
     }
 
     fn test_bus(id: usize, kind: BusType) -> Bus {

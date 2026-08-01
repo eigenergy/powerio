@@ -41,6 +41,15 @@ pub fn write_pmd_json(net: &DistNetwork) -> Conversion {
     }
 }
 
+/// Upper bound on the conductor counts this writer expands quadratically:
+/// the switch series and shunt matrices and the voltage source Thevenin
+/// matrices are all sized from a terminal map, a linear model array. The
+/// readers cap the same quantity on their way in, but a `DistNetwork` can
+/// also arrive without those caps (the model JSON C entry point
+/// deserializes one unchecked), and a linear-size model could otherwise
+/// demand O(n²) memory here. No physical element comes near this bound.
+const MAX_DIM: usize = 64;
+
 struct Writer {
     warnings: Vec<String>,
 }
@@ -63,10 +72,18 @@ fn conns(map: &[String], warnings: &mut Vec<String>, what: &str) -> Vec<i64> {
 }
 
 /// A matrix as PMD serializes it: array of columns (`hcat` rebuilds it).
+/// Rows shorter than the row count read as 0, so a degenerate model matrix
+/// emits a square block instead of panicking.
 fn matrix(m: &Mat) -> Value {
     let n = m.len();
     let cols: Vec<Value> = (0..n)
-        .map(|j| Value::Array((0..n).map(|i| json!(m[i][j])).collect()))
+        .map(|j| {
+            Value::Array(
+                (0..n)
+                    .map(|i| json!(m[i].get(j).copied().unwrap_or(0.0)))
+                    .collect(),
+            )
+        })
         .collect();
     Value::Array(cols)
 }
@@ -92,6 +109,20 @@ fn scale(m: &Mat, k: f64) -> Mat {
 impl Writer {
     fn warn(&mut self, msg: impl Into<String>) {
         self.warnings.push(msg.into());
+    }
+
+    /// The dimension a matrix is materialized at, clamped to [`MAX_DIM`]
+    /// with a diagnostic naming the element.
+    fn bounded_dim(&mut self, n: usize, what: &str) -> usize {
+        if n > MAX_DIM {
+            self.warn(format!(
+                "{what}: {n} conductors exceed the supported maximum of \
+                 {MAX_DIM}; matrices emitted at {MAX_DIM}"
+            ));
+            MAX_DIM
+        } else {
+            n
+        }
     }
 
     /// Reports extras the ENGINEERING model has no field for. `consumed`
@@ -180,14 +211,25 @@ impl Writer {
             .unwrap_or_else(|| synthesized_settings(net));
         doc.insert("settings".into(), settings);
 
+        // `conductor_ids` enumerates 1..=max, so its length is the numeric
+        // value of a terminal name rather than a count of anything. A single
+        // terminal named `4444444444444444` would ask for petabytes, so the
+        // enumeration is clamped like every other model driven dimension.
         let max_conductor = net
             .buses
             .iter()
             .flat_map(|b| &b.terminals)
             .filter_map(|t| t.parse::<i64>().ok())
             .max()
-            .unwrap_or(4)
-            .max(4);
+            .unwrap_or(4);
+        let max_dim = i64::try_from(MAX_DIM).expect("MAX_DIM is small");
+        if max_conductor > max_dim {
+            self.warn(format!(
+                "terminal {max_conductor} exceeds the supported maximum conductor id \
+                 of {MAX_DIM}; conductor_ids enumerated to {MAX_DIM}"
+            ));
+        }
+        let max_conductor = max_conductor.clamp(4, max_dim);
         doc.insert(
             "conductor_ids".into(),
             Value::Array((1..=max_conductor).map(|i| json!(i)).collect()),
@@ -333,8 +375,8 @@ impl Writer {
             let mut switches = Map::new();
             for s in &net.switches {
                 let mut o = Map::new();
-                let n = s.terminal_map_from.len();
                 let what = format!("switch {}", s.name);
+                let n = self.bounded_dim(s.terminal_map_from.len(), &what);
                 o.insert("f_bus".into(), json!(s.bus_from.to_lowercase()));
                 o.insert("t_bus".into(), json!(s.bus_to.to_lowercase()));
                 o.insert(
@@ -571,7 +613,7 @@ impl Writer {
         let mut o = Map::new();
         let what = format!("voltage source {}", vs.name);
         let connections = conns(&vs.terminal_map, &mut self.warnings, &what);
-        let n = connections.len();
+        let n = self.bounded_dim(connections.len(), &what);
         o.insert("bus".into(), json!(vs.bus.to_lowercase()));
         o.insert("connections".into(), json!(connections));
         o.insert("configuration".into(), json!("WYE"));
@@ -726,8 +768,12 @@ impl Writer {
             "vm_nom".into(),
             json!(t.windings.iter().map(|w| w.v_ref / 1e3).collect::<Vec<_>>()),
         );
-        let sm_ub =
-            Self::extras_f64(&t.extras, "emerghkva").unwrap_or(t.windings[0].s_rating / 1e3 * 1.5);
+        // A transformer with no windings is degenerate but reachable from
+        // untrusted input (a PMD or BMOPF document with the winding array
+        // absent), so derive the emergency rating default from the first
+        // winding only when one exists rather than indexing unconditionally.
+        let sm_ub = Self::extras_f64(&t.extras, "emerghkva")
+            .unwrap_or_else(|| t.windings.first().map_or(0.0, |w| w.s_rating / 1e3 * 1.5));
         o.insert("sm_ub".into(), json!(sm_ub));
         insert_tap_fields(&mut o, t, phases);
         if let Some(controls) = t.extras.get("controls") {

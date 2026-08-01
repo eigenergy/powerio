@@ -300,6 +300,9 @@ impl<'a> Parser<'a> {
             let bracket_close = inner
                 .rfind(']')
                 .ok_or_else(|| self.err("legacy DATA header has no closing `]`"))?;
+            if bracket_close <= bracket_open {
+                return Err(self.err("legacy DATA header `]` precedes `[`"));
+            }
             let object_type = inner[..bracket_open].trim().trim_end_matches(',').trim();
             if object_type.is_empty() {
                 return Err(self.err("legacy DATA header has no object type"));
@@ -641,5 +644,12 @@ mod tests {
         let mut out = Vec::new();
         split_values_into(r#"one "two // three" four"#, false, &mut out);
         assert_eq!(out, vec!["one", "two // three", "four"]);
+    }
+
+    #[test]
+    fn legacy_data_header_reversed_brackets_errs_without_panic() {
+        // `]` before `[` in the field list must be a structured error, not a
+        // slice-index panic on inner[bracket_open + 1..bracket_close].
+        assert!(parse_aux("DATA foo(] x [)").is_err());
     }
 }

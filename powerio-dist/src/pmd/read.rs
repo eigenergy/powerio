@@ -92,10 +92,24 @@ fn floats(key: &str, v: Option<&Value>) -> Option<Vec<f64>> {
         .map(|a| a.iter().map(|x| restore(key, x)).collect())
 }
 
+/// Largest conductor count a PMD impedance/admittance matrix may declare. `n`
+/// is the outer array length and sizes a dense n×n allocation, so an unbounded
+/// value from a small array of empty arrays could demand gigabytes. No physical
+/// conductor bundle comes near this bound; it matches the DSS reader's count
+/// cap. An oversized matrix is dropped with a warning.
+const MAX_MATRIX_DIM: usize = 64;
+
 /// Arrays of arrays rebuild with the inner arrays as columns (`hcat`).
-fn matrix(key: &str, v: Option<&Value>) -> Option<Mat> {
+fn matrix(key: &str, v: Option<&Value>, warnings: &mut Vec<String>) -> Option<Mat> {
     let cols = v?.as_array()?;
     let n = cols.len();
+    if n > MAX_MATRIX_DIM {
+        warnings.push(format!(
+            "{key}: matrix dimension {n} exceeds the supported maximum of \
+             {MAX_MATRIX_DIM}; dropped"
+        ));
+        return None;
+    }
     let mut m = vec![vec![0.0; n]; n];
     for (j, col) in cols.iter().enumerate() {
         let col = col.as_array()?;
@@ -179,12 +193,12 @@ fn linecode_from(
     warnings: &mut Vec<String>,
 ) -> DistLineCode {
     let mats = [
-        matrix("rs", o.get("rs")),
-        matrix("xs", o.get("xs")),
-        matrix("g_fr", o.get("g_fr")),
-        matrix("g_to", o.get("g_to")),
-        matrix("b_fr", o.get("b_fr")),
-        matrix("b_to", o.get("b_to")),
+        matrix("rs", o.get("rs"), warnings),
+        matrix("xs", o.get("xs"), warnings),
+        matrix("g_fr", o.get("g_fr"), warnings),
+        matrix("g_to", o.get("g_to"), warnings),
+        matrix("b_fr", o.get("b_fr"), warnings),
+        matrix("b_to", o.get("b_to"), warnings),
     ];
     // Conductor count is the widest matrix present; absent matrices read
     // as zero, smaller ones pad without losing entries.
@@ -678,8 +692,8 @@ impl Reader<'_> {
     fn shunts(&mut self, items: &Map<String, Value>) {
         for (name, v) in items {
             let Value::Object(o) = v else { continue };
-            let g = matrix("gs", o.get("gs")).unwrap_or_default();
-            let b = matrix("bs", o.get("bs")).unwrap_or_default();
+            let g = matrix("gs", o.get("gs"), &mut self.net.warnings).unwrap_or_default();
+            let b = matrix("bs", o.get("bs"), &mut self.net.warnings).unwrap_or_default();
             let mut extras = take_extras(
                 o,
                 &["bus", "connections", "gs", "bs", "status", "source_id"],
@@ -774,7 +788,18 @@ impl Reader<'_> {
     }
 
     fn transformer(&mut self, name: &str, o: &Map<String, Value>) -> DistTransformer {
-        let buses = ints_as_strings(o.get("bus"));
+        // The winding count is the `bus` array length and drives an O(n^2)
+        // pair enumeration in the graph builder, so it is capped like the
+        // conductor matrix dimension: a huge array cannot force quadratic work.
+        let mut buses = ints_as_strings(o.get("bus"));
+        if buses.len() > MAX_MATRIX_DIM {
+            self.net.warnings.push(format!(
+                "transformer {name}: winding count {} exceeds the supported maximum of \
+                 {MAX_MATRIX_DIM}; extra windings dropped",
+                buses.len()
+            ));
+            buses.truncate(MAX_MATRIX_DIM);
+        }
         let configs: Vec<WindingConn> = o
             .get("configuration")
             .and_then(Value::as_array)

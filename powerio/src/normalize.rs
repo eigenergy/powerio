@@ -108,7 +108,10 @@ pub(crate) fn cost_to_pu(cost: &GenCost, base: f64) -> Vec<f64> {
                 .collect()
         }
         CostModel::Piecewise => {
-            let coeffs = &cost.coeffs[..(cost.ncost * 2).min(cost.coeffs.len())];
+            // saturating_mul: `ncost` comes from input (JSON deserializes it
+            // unchecked), so an oversized count must clamp to the coefficient
+            // length instead of overflowing.
+            let coeffs = &cost.coeffs[..cost.ncost.saturating_mul(2).min(cost.coeffs.len())];
             coeffs
                 .iter()
                 .enumerate()

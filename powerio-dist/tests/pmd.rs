@@ -284,6 +284,25 @@ fn pmd_typed_locations_emit_only_when_geographic() {
     assert_eq!(doc["bus"]["b1"]["lat"], serde_json::json!(35.0));
 }
 
+/// A transformer whose winding array is absent parses to zero windings; the
+/// PMD writer must not index `windings[0]` and panic on it. Reachable both
+/// directly (PMD JSON) and cross-format from BMOPF, from a few dozen bytes.
+#[test]
+fn zero_winding_transformer_does_not_panic_on_write() {
+    let pmd = r#"{"data_model": "ENGINEERING", "transformer": {"t1": {}}}"#;
+    let net = parse_pmd_str(pmd).unwrap();
+    assert!(net.transformers.iter().any(|t| t.windings.is_empty()));
+    let out = write_pmd_json(&net);
+    let v: serde_json::Value = serde_json::from_str(&out.text).unwrap();
+    assert_eq!(v["transformer"]["t1"]["sm_ub"], serde_json::json!(0.0));
+
+    let bmopf = r#"{"transformer": {"n_winding": {"t1": {}}}}"#;
+    let converted =
+        powerio_dist::convert_str(bmopf, powerio_dist::DistTargetFormat::PmdJson, "bmopf").unwrap();
+    let v: serde_json::Value = serde_json::from_str(&converted.text).unwrap();
+    assert!(v["transformer"]["t1"].is_object());
+}
+
 fn rewrite(text: &str) -> serde_json::Value {
     let net = parse_pmd_str(text).unwrap();
     serde_json::from_str(&write_pmd_json(&net).text).unwrap()
@@ -659,4 +678,155 @@ fn mathematical_data_model_is_rejected() {
     let err = powerio_dist::parse_str(r#"{"data_model":"MATHEMATICAL","bus":{}}"#, "pmd-json")
         .unwrap_err();
     assert!(err.to_string().contains("ENGINEERING"), "got: {err}");
+}
+
+#[test]
+fn oversized_linecode_matrix_is_dropped_not_allocated() {
+    // `rs` as an array of 100k empty arrays would size a dense n×n allocation
+    // (~80 GB) from a few hundred KB of JSON. It must be dropped with a
+    // warning; this test finishing quickly is the assertion that it was.
+    let cols = "[],".repeat(100_000);
+    let json = format!(
+        r#"{{"data_model":"ENGINEERING","linecode":{{"lc1":{{"rs":[{}]}}}}}}"#,
+        cols.trim_end_matches(',')
+    );
+    let net = parse_pmd_str(&json).unwrap();
+    assert!(
+        net.warnings
+            .iter()
+            .any(|w| w.contains("exceeds the supported maximum")),
+        "warnings: {:?}",
+        net.warnings
+    );
+}
+
+#[test]
+fn oversized_transformer_winding_count_is_capped() {
+    // The winding count is the `bus` array length and feeds an O(n^2) pair
+    // enumeration in the graph builder; a huge array must be capped with a
+    // warning, not carried through as thousands of windings.
+    let buses = (0..5000)
+        .map(|i| format!("\"b{i}\""))
+        .collect::<Vec<_>>()
+        .join(",");
+    let json =
+        format!(r#"{{"data_model":"ENGINEERING","transformer":{{"t1":{{"bus":[{buses}]}}}}}}"#);
+    let net = parse_pmd_str(&json).unwrap();
+    assert!(
+        net.warnings
+            .iter()
+            .any(|w| w.contains("winding count") && w.contains("dropped")),
+        "warnings: {:?}",
+        net.warnings
+    );
+}
+
+#[test]
+fn wide_terminal_maps_do_not_expand_quadratically() {
+    // Terminal maps are linear model arrays the writer materializes square
+    // matrices from, so an uncapped one turns a small case file into an
+    // O(n^2) document. The reader keeps the terminals verbatim; the writer
+    // clamps what it expands and names the clamp.
+    let n = 512usize;
+    let conns: Vec<u32> = (1..=n as u32).collect();
+    let text = serde_json::json!({
+        "data_model": "ENGINEERING",
+        "bus": {
+            "a": {"terminals": conns, "grounded": [], "rg": [], "xg": [], "status": "ENABLED"},
+            "b": {"terminals": conns, "grounded": [], "rg": [], "xg": [], "status": "ENABLED"},
+        },
+        "switch": {
+            "s": {"f_bus": "a", "t_bus": "b", "f_connections": conns, "t_connections": conns,
+                  "state": "CLOSED", "status": "ENABLED", "dispatchable": "YES"}
+        },
+        "voltage_source": {
+            "src": {"bus": "a", "connections": conns, "configuration": "WYE",
+                    "vm": vec![2.4; n], "va": vec![0.0; n], "status": "ENABLED"}
+        },
+    })
+    .to_string();
+    let net = parse_pmd_str(&text).unwrap();
+    assert_eq!(net.switches[0].terminal_map_from.len(), n);
+
+    let out = write_pmd_json(&net);
+    for what in ["switch s", "voltage source src"] {
+        assert!(
+            out.warnings
+                .iter()
+                .any(|w| w.starts_with(what) && w.contains("exceed the supported maximum")),
+            "no clamp warning for {what}: {:?}",
+            out.warnings
+        );
+    }
+    let doc: serde_json::Value = serde_json::from_str(&out.text).unwrap();
+    let checks: [(&str, &str, &[&str]); 2] = [
+        ("switch", "s", &["rs", "xs", "g_fr", "g_to", "b_fr", "b_to"]),
+        ("voltage_source", "src", &["rs", "xs"]),
+    ];
+    for (elem, name, keys) in checks {
+        for key in keys {
+            let m = doc[elem][name][key].as_array().unwrap();
+            assert_eq!(m.len(), 64, "{elem} {key} not clamped");
+            assert_eq!(m[0].as_array().unwrap().len(), 64, "{elem} {key} rows");
+        }
+    }
+    // The terminals themselves stay faithful; only the square expansion caps.
+    assert_eq!(
+        doc["switch"]["s"]["f_connections"]
+            .as_array()
+            .unwrap()
+            .len(),
+        n
+    );
+}
+
+#[test]
+fn degenerate_matrix_shapes_do_not_panic() {
+    // `rs` claims three columns but the third is short. Reading fills the
+    // gaps, and the writer indexes defensively, so neither panics.
+    let text = serde_json::json!({
+        "data_model": "ENGINEERING",
+        "bus": {"a": {"terminals": [1], "grounded": [], "rg": [], "xg": [], "status": "ENABLED"}},
+        "linecode": {"c": {
+            "rs": [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0]],
+            "xs": [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]],
+        }},
+        "voltage_source": {"src": {"bus": "a", "connections": [1],
+            "vm": [0.24], "va": [0.0], "status": "ENABLED"}},
+    })
+    .to_string();
+    let net = parse_pmd_str(&text).unwrap();
+    let out = write_pmd_json(&net);
+    let doc: serde_json::Value = serde_json::from_str(&out.text).unwrap();
+    let rs = doc["linecode"]["c"]["rs"].as_array().unwrap();
+    assert_eq!(rs.len(), 3);
+    assert!(rs.iter().all(|col| col.as_array().unwrap().len() == 3));
+}
+
+#[test]
+fn a_huge_terminal_name_does_not_enumerate_conductor_ids() {
+    // `conductor_ids` is `1..=max terminal`, so its length is the numeric
+    // value of a terminal name, not a count of anything: sixteen bytes of
+    // input asked for petabytes. Found by the pmd_json fuzz target.
+    let text = serde_json::json!({
+        "data_model": "ENGINEERING",
+        "bus": {"a": {"terminals": [1, 2, 3, 4_444_444_444_444_444_i64],
+                      "grounded": [], "rg": [], "xg": [], "status": "ENABLED"}},
+        "voltage_source": {"src": {"bus": "a", "connections": [1],
+            "vm": [0.24], "va": [0.0], "status": "ENABLED"}},
+    })
+    .to_string();
+    let net = parse_pmd_str(&text).unwrap();
+    let out = write_pmd_json(&net);
+    let doc: serde_json::Value = serde_json::from_str(&out.text).unwrap();
+    assert_eq!(doc["conductor_ids"].as_array().unwrap().len(), 64);
+    assert!(
+        out.warnings
+            .iter()
+            .any(|w| w.contains("supported maximum conductor id")),
+        "{:?}",
+        out.warnings
+    );
+    // The bus keeps its terminals verbatim.
+    assert_eq!(doc["bus"]["a"]["terminals"].as_array().unwrap().len(), 4);
 }

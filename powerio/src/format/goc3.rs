@@ -863,8 +863,11 @@ fn bus_id_by_uid(items: &[SectionItem<'_>]) -> Result<HashMap<String, BusId>> {
         .zip(suffixes)
         .enumerate()
         .map(|(index, (uid, suffix))| {
-            let id = match suffix {
-                Some(suffix) if suffixes_unique => suffix + 1,
+            // `suffix + 1` could overflow when a uid carries `usize::MAX` as
+            // its suffix (a single such bus is trivially "unique"); fall back
+            // to the 1-based position rather than panicking.
+            let id = match suffix.and_then(|s| s.checked_add(1)) {
+                Some(id) if suffixes_unique => id,
                 _ => index + 1,
             };
             (uid, BusId(id))
@@ -965,5 +968,19 @@ mod tests {
             panic!("duplicate uid must be rejected")
         };
         assert!(err.to_string().contains("duplicate"), "got: {err}");
+    }
+
+    #[test]
+    fn extreme_bus_suffix_does_not_overflow() {
+        // A `bus_<usize::MAX>` uid parses to usize::MAX and is trivially the
+        // unique suffix; `suffix + 1` would overflow (panic under overflow
+        // checks). The bus falls back to its 1-based position instead.
+        let content = format!(
+            r#"{{"network":{{"bus":[{{"uid":"bus_{}","base_nom_volt":100}}]}}}}"#,
+            usize::MAX
+        );
+        let parsed = parse_goc3_json(&content).unwrap();
+        assert_eq!(parsed.network.buses.len(), 1);
+        assert_eq!(parsed.network.buses[0].id, BusId(1));
     }
 }

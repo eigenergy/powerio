@@ -1,5 +1,111 @@
 # Changelog
 
+## 0.7.3
+
+Security fixes for parsing untrusted case files. The parsers are written to
+reject malformed input with an error, never to crash, exhaust memory, or read
+or write files outside the ones named on the command line; this release closes
+several gaps in that model.
+
+- A PowerWorld `.aux` legacy `DATA` header whose field list closes before it
+  opens (`]` before `[`) no longer panics on an inverted slice. It returns a
+  read error, matching the guard the parenthesized form already carried.
+- OpenDSS `Redirect`/`Compile`/`Buscoords` no longer read arbitrary local
+  files. Parsing from a string (`parse_dss_str`, and the C ABI and Python
+  string entry points) disables filesystem includes entirely, so untrusted
+  `.dss` text cannot pull in a file such as `/etc/passwd` and echo its
+  contents back through bus names. Parsing from a file (`parse_dss_file`) still
+  follows includes, now confined to the case directory: an include that
+  resolves outside that directory is refused with a warning, whether it climbs
+  out with `..` or is an absolute path outside the directory.
+- OpenDSS `phases`, `windings`, and `wdg` counts are capped. A single small
+  property could otherwise size a dense n by n conductor matrix or a
+  per-winding vector into the gigabytes; an oversized value clamps to the
+  supported maximum with a warning.
+- A PMD ENGINEERING impedance or admittance matrix dimension is capped the same
+  way, so an array of thousands of empty rows no longer demands an n by n
+  allocation.
+- The matrix pipeline and the CLI `sensitivities` command sanitize the case
+  name before it forms an output filename. A name like `../../x` or an absolute
+  path can no longer steer a write outside the chosen output directory.
+- The PowerWorld `.pwd` reader groups drawing records by tag in logarithmic
+  time and bounds its substation identity search with a probe budget, so a
+  crafted file cannot force quadratic work.
+- The OpenDSS include confinement holds for a case file parsed by bare
+  filename: an empty case directory no longer passes every path as a prefix
+  match, so `Redirect /etc/passwd` in `parse_dss_file("master.dss")` is
+  refused. A case directory that itself starts with `..` now confines rather
+  than refusing everything under it.
+- OpenDSS includes are also checked after symlink resolution: a lexically
+  contained include that is really a symlink out of the case directory is
+  refused. `parse_raw_file` now confines includes exactly like
+  `parse_dss_file` instead of following them anywhere on disk.
+- `sanitize_stem` follows Windows filename rules (trailing dots trimmed,
+  reserved device names like `con` prefixed, length capped) and appends a
+  short hash of the original name whenever sanitization changed it, so two
+  distinct case names that sanitize alike (`a/b` and `a_b`) cannot silently
+  overwrite each other's files in a multi case export. The gridfm dataset
+  writer routes its output directory through the same sanitizer.
+- A `DistNetwork` arriving without reader caps (the model JSON C entry point
+  deserializes one unchecked) can no longer force quadratic allocation out of
+  linear-size input: the BMOPF writer caps the dense zero fill for an absent
+  linecode/shunt matrix and the transformer `x_sc` pair expansion at 64
+  conductors/windings, with a warning.
+- A `Network` JSON bus id near `usize::MAX` is rejected when 3-winding
+  transformers are present, closing an integer overflow in the synthetic star
+  bus allocation that could alias an existing bus. An oversized piecewise
+  cost `ncost` clamps instead of overflowing during normalization and Surge
+  export.
+- The Python `mcp` extra pins the SDK below 2.0, which removed the
+  `mcp.server.fastmcp` module the server imports.
+- OpenDSS `like=` splicing is capped per object. A self-referencing or
+  mutually-referencing chain (`Edit Load.a like=a` repeated) otherwise doubled
+  an object's property count each edit, so a few hundred bytes could exhaust
+  memory; the splice is now refused with a warning past the cap.
+- The PMD writer no longer panics on a transformer with no windings, reachable
+  from a PMD or BMOPF document with the winding array absent. The emergency
+  rating default derives from the first winding only when one exists.
+- A PSS/E transformer `COD` field of an extreme magnitude (which saturates to
+  `i64::MIN`) no longer overflows when the control mode is decoded; it reads as
+  a fixed ratio.
+- The PowerWorld `.aux` reader routes a bus's own `BusNum`/`Number` through the
+  same validation as every bus reference, so a fractional or out-of-range value
+  is a read error instead of a silently truncated or saturated id.
+- A GOC3 bus uid of `bus_<usize::MAX>` no longer overflows when its suffix is
+  mapped to a bus id; it falls back to the 1-based document position.
+- The MCP server's allowed-roots write check follows a symbolic link in the
+  output filename before deciding containment. A dangling link named as the
+  output file, sitting inside an allowed root but pointing outside it, could
+  otherwise pass the check while the write escaped the sandbox.
+- Lifting a GOC3 time series into a package operating-point series binds the
+  declared `time_periods` to the `interval_duration` array length (the same
+  equality the SCOPF loader enforces). An oversized `time_periods` that does
+  not match the data no longer drives an unbounded per-period allocation; the
+  series is refused with a diagnostic and the package stays static.
+- The PMD writer caps the conductor count it expands into square matrices. A
+  switch or voltage source terminal map is a linear model array, and a 35 KB
+  case file naming thousands of terminals drove a 360 MB document and 1.5 GB
+  of resident memory; the matrices now emit at 64 conductors with a warning
+  while the terminal list itself stays faithful. Reachable from any
+  distribution case file, not only the unchecked C entry point.
+- The dist graph builder caps the transformer winding count feeding its pair
+  expansion, so a `DistNetwork` deserialized without reader caps cannot turn a
+  linear winding array into a quadratic edge list.
+- A degenerate model matrix (rows shorter than the row count) reads as zero in
+  the PMD writer instead of panicking on an out of range index, matching the
+  DSS writer.
+- `sanitize_stem` hashes a name that already carries the disambiguating suffix
+  shape, so the suffixed and unsuffixed name spaces stay disjoint: a case
+  cannot be named to impersonate another case's disambiguated stem, which took
+  no search to construct because the suffix derives from a published hash. The
+  suffix widens to 64 bits, and the DC OPF bundle writer routes its output
+  directory through the same sanitizer instead of a weaker local copy.
+- The CLI refuses a conversion sidecar whose path is absolute or climbs out of
+  the output directory, closing the join before a writer can reach it.
+- Fuzz harnesses cover the distribution family (`dss`, `pmd_json`). Both parse
+  and then write the network back, since a reader cap that does not hold shows
+  up in the consumer that sizes an allocation from it.
+
 ## 0.7.2
 
 - CLI case discovery is recursive and covers every supported format (#260):

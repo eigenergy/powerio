@@ -2081,14 +2081,29 @@ impl Network {
         } else {
             net.base_mva
         };
-        let base_id = net.buses.iter().map(|b| b.id.0).max().unwrap_or(0) + 1;
+        // check_references refuses bus ids without headroom for these
+        // synthetic ids on every parse path; the checked arithmetic turns a
+        // programmatic caller's overflow into a loud panic instead of a
+        // wrapped id aliasing an existing bus.
+        let base_id = net
+            .buses
+            .iter()
+            .map(|b| b.id.0)
+            .max()
+            .unwrap_or(0)
+            .checked_add(1)
+            .expect("bus id space exhausted for star expansion");
         for (k, t) in self
             .transformers_3w
             .iter()
             .filter(|t| t.in_service)
             .enumerate()
         {
-            let star_id = BusId(base_id + k);
+            let star_id = BusId(
+                base_id
+                    .checked_add(k)
+                    .expect("bus id space exhausted for star expansion"),
+            );
             let (star, branches) = t.star_expansion(star_id);
             net.buses.push(star);
             net.branches.extend(branches);
@@ -2199,6 +2214,32 @@ impl Network {
         for t in &self.transformers_3w {
             for w in &t.windings {
                 check(w.bus, "3-winding transformer")?;
+            }
+        }
+        // Star expansion allocates synthetic bus ids `max_bus_id + 1 + k`, one
+        // per in-service 3-winding transformer; a bus id near usize::MAX would
+        // overflow that allocation (and in release wrap onto an existing bus).
+        // The base id `max + 1` is computed whenever any 3-winding transformer
+        // is present, even if none is in service, so the headroom is
+        // `max(1, in-service count)`. No real case sits there, so refuse it at
+        // the boundary like any other malformed reference.
+        if !self.transformers_3w.is_empty()
+            && let Some(max_id) = self.buses.iter().map(|b| b.id.0).max()
+        {
+            let needed = self
+                .transformers_3w
+                .iter()
+                .filter(|t| t.in_service)
+                .count()
+                .max(1);
+            if max_id.checked_add(needed).is_none() {
+                return Err(Error::FormatRead {
+                    format,
+                    message: format!(
+                        "bus id {max_id} leaves no room to allocate synthetic star bus ids \
+                         for 3-winding transformers"
+                    ),
+                });
             }
         }
         Ok(())
@@ -2329,6 +2370,46 @@ mod tests {
         assert_eq!(back.transformers_3w.len(), 1);
         close(back.transformers_3w[0].z[1].x, 0.20);
         assert_eq!(back.transformers_3w[0].windings[2].bus, BusId(3));
+    }
+
+    #[test]
+    fn check_references_rejects_bus_ids_without_star_expansion_headroom() {
+        // A bus id at usize::MAX would make the synthetic star id
+        // `max_bus_id + 1 + k` overflow during indexed analysis; the parse
+        // boundary refuses it like any other malformed reference.
+        let mut net = Network::in_memory(
+            "t",
+            100.0,
+            vec![bus(1), bus(2), bus(3), bus(usize::MAX)],
+            Vec::new(),
+        );
+        net.transformers_3w.push(transformer_3w());
+        let err = net.validate().unwrap_err().to_string();
+        assert!(
+            err.contains("no room to allocate synthetic star bus ids"),
+            "got {err}"
+        );
+    }
+
+    #[test]
+    fn star_expansion_headroom_counts_only_in_service_transformers() {
+        // The headroom needed is the in-service transformer count (plus the
+        // base id), not the total: an out-of-service unit allocates no star
+        // bus, so a network that only fits the in-service count must not be
+        // rejected. max bus id usize::MAX - 1 fits one in-service star id
+        // (max + 1) but not two.
+        let mut net = Network::in_memory(
+            "t",
+            100.0,
+            vec![bus(1), bus(2), bus(3), bus(usize::MAX - 1)],
+            Vec::new(),
+        );
+        net.transformers_3w.push(transformer_3w());
+        let mut out_of_service = transformer_3w();
+        out_of_service.in_service = false;
+        net.transformers_3w.push(out_of_service);
+        net.validate()
+            .expect("in-service count fits; must not be rejected");
     }
 
     #[test]

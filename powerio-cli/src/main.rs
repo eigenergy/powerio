@@ -873,9 +873,12 @@ fn run_sensitivities(
         drop_tolerance,
         ..Default::default()
     };
-    let ptdf_path = output.join(format!("{}_ptdf.mtx", view.name()));
-    let lodf_path = output.join(format!("{}_lodf.mtx", view.name()));
-    let meta_path = output.join(format!("{}_sensitivity_meta.json", view.name()));
+    // The case name is input derived, so sanitize it before it forms a path;
+    // otherwise a name like `../../x` would write outside `output`.
+    let stem = powerio_matrix::sanitize_stem(view.name());
+    let ptdf_path = output.join(format!("{stem}_ptdf.mtx"));
+    let lodf_path = output.join(format!("{stem}_lodf.mtx"));
+    let meta_path = output.join(format!("{stem}_sensitivity_meta.json"));
     let metadata = powerio_matrix::io::write_sensitivity_mtx_with_options(
         &view, &options, &ptdf_path, &lodf_path,
     )
@@ -1445,6 +1448,17 @@ fn write_conversion_output(
             eprintln!("wrote {}", p.display());
             let base = p.parent().unwrap_or_else(|| std::path::Path::new("."));
             for sidecar in sidecars {
+                // A sidecar path names a file the primary output refers to,
+                // so it must stay under the output directory. Today's writers
+                // emit a fixed name, but the field is a plain `String` on a
+                // public struct, and joining an absolute or `..` path here
+                // would write anywhere the process can reach.
+                if !is_relative_component_path(&sidecar.path) {
+                    anyhow::bail!(
+                        "sidecar `{}` is not a relative path under the output directory",
+                        sidecar.path
+                    );
+                }
                 let path = base.join(&sidecar.path);
                 if let Some(parent) = path.parent() {
                     std::fs::create_dir_all(parent)
@@ -1466,6 +1480,16 @@ fn write_conversion_output(
         }
     }
     Ok(())
+}
+
+/// Whether `path` is relative and built only from ordinary names, so joining
+/// it onto an output directory cannot leave that directory. Rejects absolute
+/// paths, `..`, and Windows drive and root prefixes; allows subdirectories.
+fn is_relative_component_path(path: &str) -> bool {
+    !path.is_empty()
+        && std::path::Path::new(path)
+            .components()
+            .all(|c| matches!(c, std::path::Component::Normal(_)))
 }
 
 /// Whether the geo command's case input is a distribution case: `--from`
@@ -2082,5 +2106,26 @@ mpc.branch = [
             err.to_string().contains("cannot write PowerWorld .pwb"),
             "{err}"
         );
+    }
+    #[test]
+    fn sidecar_paths_must_stay_under_the_output_directory() {
+        for bad in [
+            "../escape.csv",
+            "a/../../escape.csv",
+            "/etc/passwd",
+            "",
+            "..",
+        ] {
+            assert!(
+                !super::is_relative_component_path(bad),
+                "{bad:?} was accepted as a sidecar path"
+            );
+        }
+        for good in ["buscoords.csv", "sub/dir/buscoords.csv", "a.b.c"] {
+            assert!(
+                super::is_relative_component_path(good),
+                "{good:?} was rejected as a sidecar path"
+            );
+        }
     }
 }

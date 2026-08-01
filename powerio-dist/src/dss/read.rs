@@ -12,12 +12,15 @@
 //! public BMOPF examples.
 
 use std::collections::BTreeMap;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use super::defaults as dd;
 use super::lex::{BusSpec, Value, VarMap};
-use super::raw::{RawDss, RawObject, parse_raw_with};
+use super::raw::{
+    RawDss, RawObject, canonical_case_root, confined_fs_read, parse_raw_with,
+    parse_raw_with_confined,
+};
 use crate::error::{Error, Result};
 use crate::geo::{CoordinateSpace, CoordsKind, GeoMeta, Location};
 use crate::model::{
@@ -28,6 +31,14 @@ use crate::model::{
     ReactivePowerUnit, UntypedObject, VoltVarControl, VoltWattControl, VoltageSource, Winding,
     WindingConn, pair_keys, square_from_rows,
 };
+
+/// Upper bound on any count property (`phases`, conductors, `windings`, tap
+/// counts). `phases` sizes a dense n×n matrix and the winding count drives a
+/// per-winding vector, so an unbounded value from a few bytes of input could
+/// demand gigabytes. No physical distribution element comes near this bound;
+/// it matches the winding and matrix-index caps in the BMOPF reader. A larger
+/// value is clamped to it with a warning.
+const MAX_COUNT: usize = 64;
 
 const TYPED_DSS_CLASSES: &[&str] = &[
     "linecode",
@@ -54,14 +65,17 @@ fn strip_bom_owned(text: String) -> String {
     }
 }
 
-/// A redirect loader that strips a leading byte order mark from every file it
-/// reads and records which files carried one, so each strip can be itemized
-/// as a warning instead of happening silently.
-fn bom_stripping_loader(
+/// A redirect loader for confined file parsing: reads through
+/// [`confined_fs_read`], which refuses a path whose canonical (symlink
+/// resolved) form escapes the case directory, then strips a leading byte
+/// order mark and records which files carried one, so each strip can be
+/// itemized as a warning instead of happening silently.
+fn confined_bom_stripping_loader(
+    canonical_root: Option<PathBuf>,
     stripped_paths: &mut Vec<String>,
 ) -> impl FnMut(&Path) -> std::io::Result<String> + '_ {
-    |p: &Path| {
-        std::fs::read_to_string(p).map(|text| {
+    move |p: &Path| {
+        confined_fs_read(canonical_root.as_deref(), p).map(|text| {
             if text.starts_with('\u{feff}') {
                 stripped_paths.push(p.display().to_string());
             }
@@ -81,6 +95,12 @@ fn warn_stripped_boms(net: &mut DistNetwork, root_had_bom: bool, stripped_paths:
 }
 
 /// Parses a `.dss` file, following includes, into the canonical model.
+/// `Redirect`/`Compile`/`Buscoords` includes are confined to the directory of
+/// `path`: an include that resolves outside that directory is refused with a
+/// warning — whether it climbs out with `..`, is an absolute path outside the
+/// directory, or escapes through a symbolic link — so a case file cannot read
+/// arbitrary paths. (`Executor::resolve` documents the exact lexical rule that
+/// decides whether an absolute include counts as inside the directory.)
 pub fn parse_dss_file(path: impl AsRef<Path>) -> Result<DistNetwork> {
     let path = path.as_ref();
     let text = std::fs::read_to_string(path).map_err(|source| Error::Io {
@@ -90,28 +110,32 @@ pub fn parse_dss_file(path: impl AsRef<Path>) -> Result<DistNetwork> {
     let had_bom = text.starts_with('\u{feff}');
     let text = strip_bom_owned(text);
     let mut stripped_paths = Vec::new();
-    let raw = parse_raw_with(
+    let raw = parse_raw_with_confined(
         &text,
         &path.display().to_string(),
-        &mut bom_stripping_loader(&mut stripped_paths),
+        &mut confined_bom_stripping_loader(canonical_case_root(path), &mut stripped_paths),
     );
     let mut net = network_from_raw(&raw, Arc::new(text));
     warn_stripped_boms(&mut net, had_bom, stripped_paths);
     Ok(net)
 }
 
-/// Parses `.dss` text; `Redirect`/`Compile` resolve relative to the working
-/// directory.
+/// Parses `.dss` text. Filesystem includes are disabled: string input has no
+/// base directory, so `Redirect`/`Compile`/`Buscoords` read nothing and each
+/// is recorded as a warning. This keeps untrusted text (an uploaded case, say)
+/// from reading arbitrary local files. Use [`parse_dss_file`] to follow
+/// includes, which then stay confined to the case directory.
 pub fn parse_dss_str(text: &str) -> DistNetwork {
     let stripped = text.trim_start_matches('\u{feff}');
-    let mut stripped_paths = Vec::new();
-    let raw = parse_raw_with(
-        stripped,
-        "<string>",
-        &mut bom_stripping_loader(&mut stripped_paths),
-    );
+    let mut no_includes = |_path: &Path| -> std::io::Result<String> {
+        Err(std::io::Error::new(
+            std::io::ErrorKind::Unsupported,
+            "file includes are disabled when parsing from a string",
+        ))
+    };
+    let raw = parse_raw_with(stripped, "<string>", &mut no_includes);
     let mut net = network_from_raw(&raw, Arc::new(stripped.to_string()));
-    warn_stripped_boms(&mut net, stripped.len() != text.len(), stripped_paths);
+    warn_stripped_boms(&mut net, stripped.len() != text.len(), Vec::new());
     net
 }
 
@@ -195,8 +219,11 @@ pub fn network_from_raw(raw: &RawDss, source: Arc<String>) -> DistNetwork {
         }
     }
 
-    // A dangling linecode reference would otherwise surface only at write
-    // time; the engine refuses it at parse time.
+    // A dangling linecode reference otherwise surfaces only at write time,
+    // as a `linecode=` naming nothing. Naming it here puts it next to the
+    // reason it usually dangles: a refused or missing redirect, whose own
+    // warning is already in this list. The line keeps the reference verbatim
+    // either way; the reader does not substitute a default impedance.
     let known: std::collections::BTreeSet<String> = rd
         .net
         .linecodes
@@ -459,8 +486,17 @@ impl Reader<'_> {
     }
 
     fn usize_prop(&mut self, p: Option<&Value>) -> Option<usize> {
-        p.and_then(|v| v.to_i64(Some(self.vars)).ok())
-            .map(|i| usize::try_from(i).unwrap_or(0))
+        p.and_then(|v| v.to_i64(Some(self.vars)).ok()).map(|i| {
+            let n = usize::try_from(i).unwrap_or(0);
+            if n > MAX_COUNT {
+                self.net.warnings.push(format!(
+                    "count property {n} exceeds the supported maximum of {MAX_COUNT}; clamped"
+                ));
+                MAX_COUNT
+            } else {
+                n
+            }
+        })
     }
 
     /// Meters per source length unit, or `None` when no conversion applies:
@@ -1190,7 +1226,13 @@ impl Reader<'_> {
                 }
                 "wdg" => {
                     let k = self.usize_prop(Some(v)).unwrap_or(1).max(1);
-                    grow(&mut windings, k, &mut n_windings);
+                    grow(
+                        &mut windings,
+                        k,
+                        &mut n_windings,
+                        &obj.name,
+                        &mut self.net.warnings,
+                    );
                     active = k - 1;
                 }
                 "bus" => windings[active].bus = Some(v.to_bus_spec()),
@@ -1216,12 +1258,24 @@ impl Reader<'_> {
                 }
                 "buses" | "conns" => {
                     let items = v.to_string_list(Some(self.vars));
-                    grow(&mut windings, items.len(), &mut n_windings);
+                    grow(
+                        &mut windings,
+                        items.len(),
+                        &mut n_windings,
+                        &obj.name,
+                        &mut self.net.warnings,
+                    );
                     apply_winding_strings(&mut windings, name, &items);
                 }
                 "kvs" | "kvas" | "taps" | "%rs" => match v.to_vector(Some(self.vars)) {
                     Ok(items) => {
-                        grow(&mut windings, items.len(), &mut n_windings);
+                        grow(
+                            &mut windings,
+                            items.len(),
+                            &mut n_windings,
+                            &obj.name,
+                            &mut self.net.warnings,
+                        );
                         apply_winding_numbers(&mut windings, name, &items);
                     }
                     Err(e) => self.warn(format!("transformer {}: {name}: {e}", obj.name)),
@@ -2161,8 +2215,9 @@ fn extras_from_leftovers(props: &Props) -> Extras {
 fn apply_winding_strings(windings: &mut [WindingRaw], name: &str, items: &[String]) {
     let conn_is_delta =
         |t: &str| t.to_ascii_lowercase().starts_with('d') || t.eq_ignore_ascii_case("ll");
-    for (i, item) in items.iter().enumerate() {
-        let w = &mut windings[i];
+    // Zip over windings so a list longer than the (clamped) winding count is
+    // bounded rather than indexing past the vector.
+    for (w, item) in windings.iter_mut().zip(items) {
         if name == "buses" {
             w.bus = Some(Value::new(item.clone()).to_bus_spec());
         } else {
@@ -2174,8 +2229,7 @@ fn apply_winding_strings(windings: &mut [WindingRaw], name: &str, items: &[Strin
 /// A numeric transformer array (`kvs=(...)`, RPN entries included) applied
 /// across windings.
 fn apply_winding_numbers(windings: &mut [WindingRaw], name: &str, items: &[f64]) {
-    for (i, &item) in items.iter().enumerate() {
-        let w = &mut windings[i];
+    for (w, &item) in windings.iter_mut().zip(items) {
         match name {
             "kvs" => {
                 w.kv = item;
@@ -2263,7 +2317,26 @@ impl Default for WindingRaw {
 }
 
 /// Grows the winding list to at least `n`, tracking the winding count.
-fn grow(windings: &mut Vec<WindingRaw>, n: usize, count: &mut usize) {
+fn grow(
+    windings: &mut Vec<WindingRaw>,
+    requested: usize,
+    count: &mut usize,
+    name: &str,
+    warnings: &mut Vec<String>,
+) {
+    // The winding count also arrives as the length of a token list (`buses=`,
+    // `conns=`, `kvs=`, ...), which never passes through the scalar `usize_prop`
+    // cap. Clamp here, the single point every winding-growth path funnels
+    // through, so a long list cannot drive the O(n^2) `pair_keys` fanout.
+    let n = if requested > MAX_COUNT {
+        warnings.push(format!(
+            "transformer {name}: winding count {requested} exceeds the supported maximum \
+             of {MAX_COUNT}; clamped"
+        ));
+        MAX_COUNT
+    } else {
+        requested
+    };
     if n > windings.len() {
         windings.resize(n, WindingRaw::default());
         *count = n;
@@ -2662,6 +2735,60 @@ mod tests {
                 .get("kv")
                 .and_then(serde_json::Value::as_f64),
             Some(2.4)
+        );
+    }
+
+    #[test]
+    fn string_input_disables_filesystem_includes() {
+        // Untrusted string input must not read local files: Redirect/Compile/
+        // Buscoords resolve to nothing and are recorded as warnings.
+        let net = parse_dss_str(
+            "New Circuit.c basekv=12.47\nRedirect /etc/passwd\nBuscoords /etc/hosts\n",
+        );
+        assert_eq!(
+            net.warnings
+                .iter()
+                .filter(|w| w.contains("includes are disabled when parsing from a string"))
+                .count(),
+            2
+        );
+    }
+
+    #[test]
+    fn oversized_count_properties_are_clamped() {
+        // `phases` sizes an n×n matrix and `windings` a per-winding vector; a
+        // huge value must clamp with a warning, never allocate gigabytes. This
+        // test completing quickly is the assertion that no huge alloc happened.
+        let net = parse_dss_str(
+            "New Circuit.c basekv=12.47\nNew Transformer.t phases=1000000 windings=999999\n",
+        );
+        assert!(
+            net.warnings
+                .iter()
+                .any(|w| w.contains("exceeds the supported maximum")),
+            "warnings: {:?}",
+            net.warnings
+        );
+    }
+
+    #[test]
+    fn oversized_winding_list_is_clamped() {
+        // The winding count also arrives as a token list length (`buses=`),
+        // which bypasses the scalar `phases`/`windings` cap and would drive the
+        // O(n^2) pair_keys fanout. That path must clamp too.
+        let buses = (0..5000)
+            .map(|i| format!("b{i}"))
+            .collect::<Vec<_>>()
+            .join(",");
+        let net = parse_dss_str(&format!(
+            "New Circuit.c basekv=12.47\nNew Transformer.t buses=({buses})\n"
+        ));
+        assert!(
+            net.warnings
+                .iter()
+                .any(|w| w.contains("winding count") && w.contains("clamped")),
+            "warnings: {:?}",
+            net.warnings
         );
     }
 }

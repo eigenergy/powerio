@@ -2,6 +2,7 @@
 
 import asyncio
 import json
+import os
 from pathlib import Path
 
 import pytest
@@ -370,6 +371,34 @@ def test_mcp_allowed_roots_restrict_filesystem_paths(monkeypatch, tmp_path):
     assert server.summary(path=str(local_case))["elements"]["buses"] == 9
     with pytest.raises(ValueError, match="outside allowed MCP roots"):
         server.summary(path=str(DATA / "case9.m"))
+
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX symlink semantics")
+def test_mcp_write_refuses_symlink_escape_from_allowed_root(monkeypatch, tmp_path):
+    # A dangling symlink named as the output file, sitting inside an allowed
+    # root but pointing outside it, must not let a save escape the sandbox:
+    # `path.exists()` is False for the dangling link, and joining its name onto
+    # the resolved parent would leave the link unresolved, so the containment
+    # check has to follow the final symlink itself.
+    root = tmp_path / "allowed"
+    root.mkdir()
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    escape = root / "escape.json"
+    os.symlink(outside / "leaked.json", escape)
+    monkeypatch.setenv("POWERIO_MCP_ALLOWED_ROOTS", str(root))
+
+    with pytest.raises(ValueError, match="outside allowed MCP roots"):
+        server.save(
+            to_format="bmopf-json", out_path=str(escape), json=MINIMAL_BMOPF
+        )
+    assert not (outside / "leaked.json").exists()
+
+    # A genuine new file inside the root still writes.
+    server.save(
+        to_format="bmopf-json", out_path=str(root / "ok.json"), json=MINIMAL_BMOPF
+    )
+    assert (root / "ok.json").exists()
 
 
 def test_display_decodes_powerworld_pwd():

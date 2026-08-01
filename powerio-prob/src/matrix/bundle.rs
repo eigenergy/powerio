@@ -67,29 +67,6 @@ struct DcOpfMeta<'a> {
     powerio_version: &'static str,
 }
 
-/// One path component derived from a case name. Case names come from source
-/// files, so separators and anything else outside `[A-Za-z0-9._-]` map to
-/// `_`, and a name that would resolve to the current or parent directory
-/// falls back to `case`. The bundle always lands under the caller's
-/// output directory.
-fn directory_component(name: &str) -> String {
-    let cleaned: String = name
-        .chars()
-        .map(|c| {
-            if c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-') {
-                c
-            } else {
-                '_'
-            }
-        })
-        .collect();
-    if cleaned.is_empty() || cleaned.chars().all(|c| c == '.') {
-        "case".to_owned()
-    } else {
-        cleaned
-    }
-}
-
 #[derive(Serialize)]
 #[allow(clippy::struct_field_names)]
 struct DcOpfDimensions {
@@ -156,9 +133,14 @@ pub fn write_dcopf_bundle(
 ) -> Result<DcOpfOutputs> {
     let matrices = build_dc_opf_matrices(instance);
     let nodal = instance.nodal_generator_data()?;
-    let dir = out_dir
-        .as_ref()
-        .join(format!("{}_dcopf", directory_component(&instance.name)));
+    // The case name comes from source file content, so it must not steer the
+    // output path. `sanitize_stem` reduces it to one safe component and
+    // disambiguates names that would otherwise sanitize alike, so a batch
+    // export cannot be steered into overwriting an earlier bundle.
+    let dir = out_dir.as_ref().join(format!(
+        "{}_dcopf",
+        powerio_matrix::sanitize_stem(&instance.name)
+    ));
     std::fs::create_dir_all(&dir)?;
 
     let mut files = Vec::new();
