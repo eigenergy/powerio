@@ -332,7 +332,7 @@ class Network:
         default_gen_cost: Optional[str] = None,
         gen_cost_csv: Optional[Any] = None,
     ) -> list[str]:
-        """Serialize this case to ``to`` and write it to ``path`` byte exact.
+        r"""Serialize this case to ``to`` and write it to ``path`` byte exact.
 
         Returns the fidelity warnings. Prefer this over writing
         :meth:`to_format` text through ``open(path, "w")``: Python's text mode
@@ -623,7 +623,7 @@ def convert_file(
     gen_cost_csv: Optional[Any] = None,
     out: Optional[Any] = None,
 ) -> Conversion:
-    """Convert a case file to another format through the network model.
+    r"""Convert a case file to another format through the network model.
 
     ``to`` / ``from_`` are format names: ``matpower``, ``powermodels-json``,
     ``egret-json``, ``pandapower-json``, ``psse``, ``powerworld``, ``pslf``,
