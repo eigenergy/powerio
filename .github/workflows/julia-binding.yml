@@ -24,6 +24,15 @@ on:
   pull_request:
     paths: [ "powerio/**", "powerio-capi/**", "powerio-matrix/**", "powerio-dist/**", "powerio-pkg/**", "powerio-prob/**", ".github/workflows/julia-binding.yml" ]
 
+# One run per workflow per branch. A force push to a stacked pull request
+# otherwise leaves the superseded run going: it finishes, it fails or it
+# passes, and it emails every watcher a second time for a commit nobody is
+# reviewing. `main` is exempt, because each commit there is a release
+# candidate whose result must stand on its own.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+
 permissions:
   contents: read
 
