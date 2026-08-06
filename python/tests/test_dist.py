@@ -76,6 +76,28 @@ def test_convert_str_and_convert_file():
     assert isinstance(via_str, powerio.Conversion)
 
 
+def test_dist_write_file_writes_sidecars_beside_the_case(tmp_path):
+    # A dss write that re-serializes (rather than echoing a retained source)
+    # emits `Buscoords <name>` for a case with coordinates, and returns the
+    # CSV as a sidecar. The sidecar must reach disk beside the case, or
+    # OpenDSS cannot compile the result. `apply_geo_layer` drops the retained
+    # source, so the write takes the re-serializing path.
+    source = dist.parse_file(DATA / "opendss" / "ieee13" / "IEEE13Nodeckt.dss")
+    placed, _ = source.apply_geo_layer(json.dumps(source.geo_layer()))
+    out = tmp_path / "ieee13.dss"
+    placed.write_file(out, "dss")
+    text = out.read_text()
+    names = [
+        line.split()[1]
+        for line in text.splitlines()
+        if line.lower().startswith("buscoords")
+    ]
+    assert names, "the write emitted no Buscoords directive"
+    for name in names:
+        assert (tmp_path / name).is_file(), f"{name} was not written beside the case"
+        assert (tmp_path / name).read_text().strip(), f"{name} is empty"
+
+
 def test_dist_write_file_echoes_bytes(tmp_path):
     case = dist.parse_file(FOURWIRE)
     out = tmp_path / "echo.dss"

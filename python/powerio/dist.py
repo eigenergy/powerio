@@ -99,9 +99,11 @@ class DistNetwork:
     def write_file(self, path: Any, to: str) -> list[str]:
         """Serialize to ``to`` and write it to ``path`` byte exact.
 
-        Returns the fidelity warnings. See :meth:`powerio.Network.write_file`
-        for why this beats writing :meth:`to_format` text through
-        ``open(path, "w")`` on Windows.
+        Any sidecar the writer produces goes beside ``path``: a dss write of a
+        network with bus coordinates emits a ``Buscoords`` directive, and the
+        CSV it names is written too. Returns the fidelity warnings. See
+        :meth:`powerio.Network.write_file` for why this beats writing
+        :meth:`to_format` text through ``open(path, "w")`` on Windows.
         """
         return self._inner.write_file(str(path), to)
 

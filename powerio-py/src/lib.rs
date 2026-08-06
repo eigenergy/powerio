@@ -1351,6 +1351,47 @@ fn convert_str(
     Ok((conv.text, conv.warnings))
 }
 
+/// Writes `text` to `path` and every sidecar beside it.
+///
+/// A dss write of a network with bus coordinates emits a `Buscoords <name>`
+/// directive and returns the CSV as a sidecar. Writing the text alone leaves
+/// a case that names a file which does not exist, and OpenDSS then refuses
+/// to compile it. A sidecar path is relative by construction; a path that is
+/// absolute or climbs out of the output directory is refused, matching the
+/// CLI.
+fn write_with_sidecars(
+    path: &str,
+    text: &str,
+    sidecars: &[powerio_dist::ConversionSidecar],
+) -> PyResult<()> {
+    let path = std::path::Path::new(path);
+    std::fs::write(path, text)
+        .map_err(|e| PowerIOError::new_err(format!("writing {}: {e}", path.display())))?;
+    let dir = path.parent().unwrap_or_else(|| std::path::Path::new("."));
+    for sidecar in sidecars {
+        let relative = std::path::Path::new(&sidecar.path);
+        if relative.is_absolute()
+            || relative
+                .components()
+                .any(|c| matches!(c, std::path::Component::ParentDir))
+        {
+            return Err(PowerIOError::new_err(format!(
+                "refusing to write the sidecar `{}`: the path must stay in the output directory",
+                sidecar.path
+            )));
+        }
+        let target = dir.join(relative);
+        if let Some(parent) = target.parent() {
+            std::fs::create_dir_all(parent).map_err(|e| {
+                PowerIOError::new_err(format!("creating {}: {e}", parent.display()))
+            })?;
+        }
+        std::fs::write(&target, &sidecar.text)
+            .map_err(|e| PowerIOError::new_err(format!("writing {}: {e}", target.display())))?;
+    }
+    Ok(())
+}
+
 fn dist_to_pyerr(e: powerio_dist::Error) -> PyErr {
     use powerio_dist::Error as E;
     let msg = e.to_string();
@@ -1469,10 +1510,12 @@ impl PyDistNetwork {
     /// newline translation; see `Network.write_file`). Returns the fidelity
     /// warnings.
     fn write_file(&self, path: &str, to: &str) -> PyResult<Vec<String>> {
-        let (text, warnings) = self.to_format(to)?;
-        std::fs::write(path, text)
-            .map_err(|e| PowerIOError::new_err(format!("writing {path}: {e}")))?;
-        Ok(warnings)
+        let target = to
+            .parse::<powerio_dist::DistTargetFormat>()
+            .map_err(dist_to_pyerr)?;
+        let conv = self.net.to_format(target);
+        write_with_sidecars(path, &conv.text, &conv.sidecars)?;
+        Ok(conv.warnings)
     }
 
     /// The collapsed bus and terminal graph projection as JSON.

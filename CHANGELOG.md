@@ -83,6 +83,9 @@
   `open(path, "w")` corrupts a CRLF source echo on Windows (text mode turns
   each `\r\n` into `\r\r\n`, which PSS/E family tools reject as malformed
   records); the new paths bypass Python's newline translation.
+  `DistNetwork.write_file` also writes any sidecar the writer produced beside
+  the case, so a dss write that emits a `Buscoords` directive no longer names
+  a file that does not exist.
 
 ## 0.7.3
 
