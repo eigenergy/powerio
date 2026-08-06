@@ -601,6 +601,29 @@ mod tests {
         );
     }
 
+    /// The probe skips a value without recursion, so it accepts a document
+    /// nested far deeper than the reader will take. The reader must then
+    /// refuse that document with an error, never with a crash: the
+    /// classifier is what decides which reader sees untrusted input.
+    #[test]
+    fn a_document_the_probe_accepts_is_refused_by_the_reader_not_a_crash() {
+        for depth in [200usize, 20_000, 500_000] {
+            let doc = format!(
+                "{{\"bus\":{{}},\"linecode\":{{}},\"junk\":{}{}}}",
+                "[".repeat(depth),
+                "]".repeat(depth)
+            );
+            let format = classify_distribution_json(&doc).expect("markers are present");
+            assert_eq!(format, DistTargetFormat::BmopfJson);
+            let err = crate::parse_str(&doc, format.name())
+                .expect_err("the reader refuses past its recursion limit");
+            assert!(
+                err.to_string().contains("recursion limit"),
+                "depth {depth}: {err}"
+            );
+        }
+    }
+
     /// JSON keys are case sensitive and both formats are machine written,
     /// so a near miss must not classify. It would pick a reader that then
     /// fails on every table.
