@@ -213,8 +213,12 @@ fn assert_model_eq(a: &DistNetwork, b: &DistNetwork) {
     assert_eq!(a.transformers, b.transformers);
 }
 
+/// Every distribution case fixture, whatever its source format, emits a
+/// document that the vendored schema 0.1.0 accepts. The emitted document
+/// must also read back, re-emit valid, and re-emit byte identical, so a
+/// schema break shows up here whether it is in the writer or the reader.
 #[test]
-fn dss_fixtures_emit_valid_bmopf() {
+fn every_dist_fixture_emits_valid_bmopf() {
     let v = schema_validator();
     for case in [
         "opendss/ieee13/IEEE13Nodeckt.dss",
@@ -230,10 +234,26 @@ fn dss_fixtures_emit_valid_bmopf() {
         "micro/fourwire_linecode.dss",
         "micro/defaults_degenerate.dss",
         "micro/ibr_pv_control.dss",
+        "micro/linecode_10x10.dss",
+        "micro/neutral_grounding_reactor.dss",
+        "micro/onephase_cvr_load.dss",
+        "micro/onephase_zip_load.dss",
+        "pmd/ieee13.json",
+        "pmd/fourwire_linecode.json",
+        "bmopf/example_ieee13.json",
+        "bmopf/example_enwl_n1_f2.json",
     ] {
-        let net = parse_dss_file(fixture(case)).unwrap();
+        let net = powerio_dist::parse_file(fixture(case), None).unwrap();
         let out = write_bmopf_json(&net);
         assert_eq!(errors(&v, &out.text), Vec::<String>::new(), "{case}");
+        let again = parse_bmopf_str(&out.text).unwrap();
+        let twice = write_bmopf_json(&again);
+        assert_eq!(
+            errors(&v, &twice.text),
+            Vec::<String>::new(),
+            "{case} round trip"
+        );
+        assert_eq!(out.text, twice.text, "{case} is not idempotent");
     }
 }
 
