@@ -307,13 +307,24 @@ impl Reader<'_> {
         {
             self.net.base_frequency = frequency;
         }
+        // `serde_json::Map` iterates in key order, so the loop below reaches
+        // `line` before `linecode`. A line with inline impedance synthesizes a
+        // linecode named after the line, and that name must not collide with a
+        // linecode the document declares. Read the declared table first, then
+        // skip it in the loop.
+        if let Some(Value::Object(items)) = doc.get("linecode") {
+            self.linecodes(items);
+        }
         for (key, value) in doc {
             let Value::Object(items) = value else {
                 continue;
             };
             match key.as_str() {
                 "bus" => self.buses(items),
-                "linecode" => self.linecodes(items),
+                // Both are read before the loop: `linecode` ahead of any line
+                // that could synthesize a linecode name, `name` with the rest
+                // of the document header.
+                "linecode" | "name" => {}
                 "line" => self.lines(items),
                 "switch" => self.switches(items),
                 "load" => self.loads(items),
@@ -351,7 +362,6 @@ impl Reader<'_> {
                         Value::Object(items.clone()),
                     );
                 }
-                "name" => {}
                 // `meta` is provenance (license, authors, generator tool),
                 // with no typed slot in the model. Stash it whole, the way the
                 // PMD reader stashes `pmd_settings`, so a read keeps it; the
@@ -700,8 +710,15 @@ impl Reader<'_> {
     }
 
     fn lines(&mut self, items: &Map<String, Value>) {
-        let mut taken: std::collections::BTreeSet<String> =
-            self.net.linecodes.iter().map(|c| c.name.clone()).collect();
+        // `DistNetwork::linecode` resolves a name case-insensitively, so the
+        // taken set holds lowercase keys and a synthesized name avoids a
+        // declared linecode that differs only in case.
+        let mut taken: std::collections::BTreeSet<String> = self
+            .net
+            .linecodes
+            .iter()
+            .map(|c| c.name.to_ascii_lowercase())
+            .collect();
         for (name, v) in items {
             let Value::Object(o) = v else { continue };
             let known = [
@@ -766,7 +783,9 @@ impl Reader<'_> {
     }
 
     /// Reads a line's inline impedance matrices into a linecode named after
-    /// the line (suffixed if taken), returning the linecode name.
+    /// the line (suffixed if taken), returning the linecode name. `taken`
+    /// holds lowercase keys: the declared linecodes plus the names already
+    /// synthesized on this pass.
     fn synthesized_linecode(
         &mut self,
         line: &str,
@@ -774,10 +793,10 @@ impl Reader<'_> {
         taken: &mut std::collections::BTreeSet<String>,
     ) -> String {
         let mut name = line.to_string();
-        while taken.contains(name.as_str()) {
+        while taken.contains(&name.to_ascii_lowercase()) {
             name.push('_');
         }
-        taken.insert(name.clone());
+        taken.insert(name.to_ascii_lowercase());
         self.net.warnings.push(format!(
             "line {line}: inline impedance matrices read into synthesized linecode `{name}`"
         ));

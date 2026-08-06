@@ -2222,6 +2222,42 @@ fn matrixless_linecode_and_shunt_emit_required_zero_matrices_loudly() {
     );
 }
 
+/// `serde_json::Map` iterates in key order, so `line` comes before
+/// `linecode`. A line named like a declared linecode must not take that name
+/// for its synthesized inline code, or every line that names the declared
+/// linecode resolves to the line's own impedance instead. The match is
+/// case-insensitive, like `DistNetwork::linecode`.
+#[test]
+fn synthesized_inline_linecode_never_shadows_a_declared_one() {
+    let text = doc_with(
+        r#", "linecode": {"LC": {"R_series_1_1": 9.0, "X_series_1_1": 9.0}},
+        "line": {
+            "lc": {"bus_from": "a", "bus_to": "a", "terminal_map_from": ["1"],
+                   "terminal_map_to": ["1"], "R_series_1_1": 1.0, "X_series_1_1": 1.0},
+            "user": {"bus_from": "a", "bus_to": "a", "terminal_map_from": ["1"],
+                     "terminal_map_to": ["1"], "linecode": "LC", "length": 5.0}
+        }"#,
+    );
+    let net = parse_bmopf_str(&text).unwrap();
+    assert_eq!(net.linecodes.len(), 2);
+    let series = |name: &str| net.linecode(name).unwrap().r_series[0][0].to_bits();
+    // The declared code keeps its name and its impedance.
+    assert_eq!(series("LC"), 9.0f64.to_bits());
+    let user = net.lines.iter().find(|l| l.name == "user").unwrap();
+    assert_eq!(series(&user.linecode), 9.0f64.to_bits());
+    // The inline line takes a suffixed name and keeps its own impedance.
+    let inline = net.lines.iter().find(|l| l.name == "lc").unwrap();
+    assert_eq!(inline.linecode, "lc_");
+    assert_eq!(series(&inline.linecode), 1.0f64.to_bits());
+    assert!(
+        net.warnings
+            .iter()
+            .any(|w| w.contains("line lc") && w.contains("synthesized linecode `lc_`")),
+        "{:?}",
+        net.warnings
+    );
+}
+
 #[test]
 fn malformed_matrix_keys_land_in_extras_with_warnings() {
     let text = doc_with(
