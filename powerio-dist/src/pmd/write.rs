@@ -61,32 +61,41 @@ struct Writer {
 ///
 /// PMD requires integer connections. A name such as `n` therefore needs an
 /// id, and that id must be the same everywhere the name appears, or two
-/// elements at one bus stop sharing a conductor. The ids count up from the
-/// first free integer above the largest numeric terminal name, so they stay
-/// as small as the model allows: an id far above the conductor count would
-/// otherwise drive the `conductor_ids` enumeration to its cap and produce a
-/// document with 64 conductors for a 4 conductor network.
+/// elements at one bus stop sharing a conductor. Each name takes the
+/// smallest positive integer that no numeric terminal name already uses, so
+/// the ids stay as small as the model allows: an id far above the conductor
+/// count would drive the `conductor_ids` enumeration to its cap and produce
+/// a document with 64 conductors for a 4 conductor network.
+///
+/// Counting up from the largest numeric name would look simpler, but a
+/// document may name a terminal `9223372036854775807`. That saturates every
+/// id to the same value, and two conductors then merge into one. Taking the
+/// smallest free integer cannot collide and cannot overflow: the search
+/// stops after at most one step per terminal already in the document.
 fn renamed_terminals(net: &DistNetwork) -> BTreeMap<String, i64> {
-    let mut numeric_max = 0i64;
+    let mut used = BTreeSet::new();
     let mut names = BTreeSet::new();
     for terminal in all_terminal_names(net) {
         match terminal.parse::<i64>() {
-            Ok(value) => numeric_max = numeric_max.max(value),
+            Ok(value) => {
+                used.insert(value);
+            }
             Err(_) => {
                 names.insert(terminal.to_string());
             }
         }
     }
-    names
-        .into_iter()
-        .enumerate()
-        .map(|(k, name)| {
-            let id = numeric_max
-                .saturating_add(1)
-                .saturating_add(i64::try_from(k).unwrap_or(i64::MAX));
-            (name, id)
-        })
-        .collect()
+    let mut out = BTreeMap::new();
+    let mut next = 1i64;
+    for name in names {
+        while used.contains(&next) {
+            next += 1;
+        }
+        used.insert(next);
+        out.insert(name, next);
+        next += 1;
+    }
+    out
 }
 
 impl Writer {

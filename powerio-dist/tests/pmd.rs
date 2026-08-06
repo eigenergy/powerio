@@ -887,3 +887,32 @@ fn a_renamed_terminal_takes_the_next_free_id_and_the_write_is_a_fixed_point() {
     let second = write_pmd_json(&again);
     assert_eq!(first.text, second.text);
 }
+
+/// Two terminal names that PMD cannot spell must take two different ids.
+/// Counting up from the largest numeric name saturated every id to the same
+/// value when a document named a terminal `i64::MAX`, which merged two
+/// conductors into one and said nothing beyond the ordinary rename warning.
+#[test]
+fn a_saturating_numeric_terminal_name_does_not_merge_renamed_conductors() {
+    let text = r#"{
+      "data_model": "ENGINEERING",
+      "bus": {"b1": {"terminals": [9223372036854775807], "grounded": [], "rg": [], "xg": [],
+        "status": "ENABLED"}},
+      "load": {"la": {"bus": "b1", "connections": ["n"], "pd_nom": [1.0], "qd_nom": [0.0],
+        "status": "ENABLED"}},
+      "generator": {"g1": {"bus": "b1", "connections": ["g"], "pg": [1.0], "qg": [0.0],
+        "status": "ENABLED"}}
+    }"#;
+    let net = parse_pmd_str(text).unwrap();
+    let out = write_pmd_json(&net);
+    let doc: serde_json::Value = serde_json::from_str(&out.text).unwrap();
+    let load = doc["load"]["la"]["connections"][0].as_i64().unwrap();
+    let generator = doc["generator"]["g1"]["connections"][0].as_i64().unwrap();
+    assert_ne!(
+        load, generator,
+        "`n` and `g` are different conductors and must take different ids"
+    );
+    // The ids also stay small, so `conductor_ids` is not driven to its cap by
+    // the rename itself.
+    assert!(load <= 64 && generator <= 64, "{load} and {generator}");
+}
