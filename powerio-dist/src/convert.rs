@@ -86,8 +86,27 @@ fn canonical_key(name: &str) -> String {
         .collect()
 }
 
+/// The BMOPF tables that identify a document beside its `bus` table. A `bus`
+/// table alone does not identify BMOPF: a PowerModels document carries
+/// `bus`, `branch`, `gen`, and `baseMVA`, and used to fall through to the
+/// BMOPF reader and parse into a bogus near-empty network. `voltage_source`
+/// alone is too narrow, because the reader is deliberately liberal and a
+/// pre-0.1.0 feeder fragment that it reads fine would need an explicit
+/// format.
+const BMOPF_TABLES: &[&str] = &[
+    "voltage_source",
+    "line",
+    "linecode",
+    "transformer",
+    "switch",
+    "load",
+    "generator",
+    "capacitor",
+    "shunt",
+];
+
 /// Distribution parser policy for `.json`: PMD carries `data_model`; BMOPF
-/// carries its schema-required `bus` and `voltage_source` tables. Any other
+/// carries a `bus` table beside at least one other BMOPF table. Any other
 /// valid JSON errors here instead of falling through to the BMOPF reader,
 /// which would accept an arbitrary JSON object (a PowerModels document used
 /// to parse into a bogus near-empty network). Malformed JSON still routes
@@ -99,9 +118,8 @@ fn infer_distribution_json_format(text: &str) -> crate::Result<DistTargetFormat>
     let unrecognized = || crate::Error::Json {
         format: "distribution",
         message: "not a recognized distribution document: PMD ENGINEERING JSON \
-                  carries `data_model`, BMOPF JSON carries the schema-required \
-                  `bus` and `voltage_source` tables (pass the format explicitly \
-                  to override)"
+                  carries `data_model`, BMOPF JSON carries a `bus` table beside \
+                  another BMOPF table (pass the format explicitly to override)"
             .to_string(),
     };
     let Ok(doc) = serde_json::from_str::<serde_json::Value>(text) else {
@@ -111,8 +129,9 @@ fn infer_distribution_json_format(text: &str) -> crate::Result<DistTargetFormat>
         return Err(unrecognized());
     };
     if shape.contains_key("data_model") {
-        Ok(DistTargetFormat::PmdJson)
-    } else if shape.contains_key("bus") && shape.contains_key("voltage_source") {
+        return Ok(DistTargetFormat::PmdJson);
+    }
+    if shape.contains_key("bus") && BMOPF_TABLES.iter().any(|t| shape.contains_key(*t)) {
         Ok(DistTargetFormat::BmopfJson)
     } else {
         Err(unrecognized())
@@ -280,10 +299,18 @@ mod tests {
             infer_distribution_json_format(r#"{"data_model": "ENGINEERING"}"#).unwrap(),
             DistTargetFormat::PmdJson
         );
-        assert_eq!(
-            infer_distribution_json_format(r#"{"bus": {}, "voltage_source": {}}"#).unwrap(),
-            DistTargetFormat::BmopfJson
-        );
+        for doc in [
+            r#"{"bus": {}, "voltage_source": {}}"#,
+            // A pre-0.1.0 feeder fragment: no `voltage_source`, but the
+            // reader accepts it, so the classifier must too.
+            r#"{"bus": {}, "line": {}, "linecode": {}}"#,
+        ] {
+            assert_eq!(
+                infer_distribution_json_format(doc).unwrap(),
+                DistTargetFormat::BmopfJson,
+                "{doc}"
+            );
+        }
         // A document with neither the PMD marker nor the schema-required
         // BMOPF tables is not silently misread as a near-empty BMOPF case.
         for doc in [

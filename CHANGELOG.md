@@ -18,10 +18,11 @@
     undefined bus, or a line referencing an undefined linecode, names the
     reference instead of parsing silently into a phantom bus.
   - `parse_file`/`parse_str` no longer route arbitrary JSON to the BMOPF
-    reader: a `.json` without the PMD `data_model` marker or the
-    schema-required BMOPF `bus` + `voltage_source` tables errors (a
-    PowerModels document used to parse into a bogus near-empty network).
-    An explicit format override still forces the reader.
+    reader: a `.json` without the PMD `data_model` marker, and without a
+    BMOPF `bus` table beside another BMOPF table, errors (a PowerModels
+    document used to parse into a bogus near-empty network). A pre-0.1.0
+    feeder fragment with no `voltage_source` still classifies, because the
+    reader accepts it. An explicit format override still forces the reader.
 - BMOPF schema 0.1.0 (bmopf-report#16). The writer targets the published
   schema `$id` and the reader keeps accepting the pre-0.1.0 spellings:
   - `meta` carries `case_study_generator` (was `generator`) and the system
