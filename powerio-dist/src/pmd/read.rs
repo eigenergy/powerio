@@ -102,9 +102,17 @@ const MAX_MATRIX_DIM: usize = 64;
 
 /// Arrays of arrays rebuild with the inner arrays as columns (`hcat`). A
 /// column that is not an array warns and stays zero instead of dropping
-/// the whole matrix silently.
+/// the whole matrix silently; a field that is not an array of columns at
+/// all warns and drops, because there is no shape to keep. An absent field
+/// is not a defect, so it stays quiet.
 fn matrix(key: &str, v: Option<&Value>, what: &str, warnings: &mut Vec<String>) -> Option<Mat> {
-    let cols = v?.as_array()?;
+    let v = v?;
+    let Some(cols) = v.as_array() else {
+        warnings.push(format!(
+            "{what}: `{key}` is not an array of columns; dropped"
+        ));
+        return None;
+    };
     let n = cols.len();
     if n > MAX_MATRIX_DIM {
         warnings.push(format!(

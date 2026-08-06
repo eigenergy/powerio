@@ -12,7 +12,8 @@
     `i_max` entry is nonfinite.
   - A PMD matrix column that is not an array warns and stays zero; the
     parseable columns survive instead of the whole matrix dropping to
-    nothing silently.
+    nothing silently. A matrix field that is not an array of columns has no
+    shape to keep, so it drops, but it now names itself in a warning.
   - Dangling cross-references warn: a BMOPF or PMD element referencing an
     undefined bus, or a line referencing an undefined linecode, names the
     reference instead of parsing silently into a phantom bus.

@@ -760,6 +760,28 @@ fn malformed_matrix_column_warns_and_keeps_the_rest() {
     );
 }
 
+/// A matrix field that is not an array of columns has no shape to keep, so
+/// it drops. It still names itself, because a silent drop reads as a line
+/// with no impedance.
+#[test]
+fn malformed_matrix_field_warns_and_drops() {
+    let text = r#"{
+        "data_model": "ENGINEERING",
+        "linecode": {"c": {"rs": 1.0, "xs": [[2.0]]}}
+    }"#;
+    let net = parse_pmd_str(text).unwrap();
+    let c = net.linecode("c").unwrap();
+    assert_eq!(c.n_conductors, 1);
+    assert_eq!(c.r_series, vec![vec![0.0]]);
+    assert!(
+        net.warnings
+            .iter()
+            .any(|w| w.contains("linecode c") && w.contains("`rs` is not an array of columns")),
+        "{:?}",
+        net.warnings
+    );
+}
+
 /// A reference to a bus or linecode that does not exist warns instead of
 /// parsing silently into a topologically wrong network.
 #[test]
