@@ -647,7 +647,7 @@ const DISTRIBUTION_FORMATS: [DistributionFormat; 3] = [
 // BMOPF schema 0.1.0: the dss→BMOPF drop drops (taps, no load, neutral
 // impedance now ride along under `extras.transformer`), and the BMOPF source
 // rows reflect the re-vendored 0.1.0 example fixtures.
-const DISTRIBUTION_WARNING_BASELINE: [[usize; 3]; 3] = [[0, 132, 80], [18, 0, 27], [15, 59, 0]];
+const DISTRIBUTION_WARNING_BASELINE: [[usize; 3]; 3] = [[0, 132, 80], [18, 0, 27], [15, 57, 0]];
 
 const DISTRIBUTION_CASES: [(&str, &str, DistributionFormat); 7] = [
     (

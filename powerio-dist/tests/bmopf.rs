@@ -2550,3 +2550,164 @@ fn meta_block_is_kept_in_extras() {
     .unwrap();
     assert!(net.extras.contains_key("bmopf_meta"), "{:?}", net.extras);
 }
+
+/// Schema 0.1.0 calls `length` "purely descriptive" on the inline impedance
+/// branch: the matrices are the whole impedance of the line, in ohms. A
+/// reader that scales them by a declared length multiplies the impedance.
+#[test]
+fn inline_impedance_is_not_scaled_by_a_descriptive_length() {
+    let text = doc_with(
+        r#", "line": {"l": {"bus_from": "a", "bus_to": "a", "terminal_map_from": ["1"],
+            "terminal_map_to": ["1"], "length": 100.0,
+            "R_series_1_1": 1.0, "X_series_1_1": 2.0}}"#,
+    );
+    let net = parse_bmopf_str(&text).unwrap();
+    let line = &net.lines[0];
+    let code = net.linecode(&line.linecode).unwrap();
+    assert_eq!(line.length.to_bits(), 1.0f64.to_bits());
+    assert_eq!(
+        (code.r_series[0][0] * line.length).to_bits(),
+        1.0f64.to_bits()
+    );
+    assert!(
+        net.warnings
+            .iter()
+            .any(|w| w.contains("line l") && w.contains("does not scale")),
+        "{:?}",
+        net.warnings
+    );
+}
+
+/// Schema 0.1.0 moved the IBR and control profile tables under `extras`, and
+/// the reader accepts both places. A part-migrated document that declares a
+/// name twice must not produce two elements of that name.
+#[test]
+fn a_name_declared_at_the_top_level_and_under_extras_reads_once() {
+    let ibr = r#"{"pv1": {"bus": "a", "terminal_map": ["1"], "p_max": 1000.0}}"#;
+    let profile = r#"{"cp1": {"power_factor": {"pf": 0.95}}}"#;
+    let text = doc_with(&format!(
+        r#", "ibr": {ibr}, "control_profile": {profile},
+        "extras": {{"ibr": {ibr}, "control_profile": {profile}}}"#
+    ));
+    let net = parse_bmopf_str(&text).unwrap();
+    assert_eq!(net.ibrs.len(), 1);
+    assert_eq!(net.control_profiles.len(), 1);
+    for class in ["ibr pv1", "control_profile cp1"] {
+        assert!(
+            net.warnings
+                .iter()
+                .any(|w| w.contains(class) && w.contains("second copy is dropped")),
+            "{class}: {:?}",
+            net.warnings
+        );
+    }
+}
+
+/// The transformer arm folds `extras.transformer` back onto the raw
+/// transformer objects. An overlay with no transformer table to attach to
+/// has no reader, so it must not disappear without a word.
+#[test]
+fn an_orphan_transformer_overlay_warns() {
+    let text = doc_with(r#", "extras": {"transformer": {"single_phase": {"t": {"tap": 1.05}}}}"#);
+    let net = parse_bmopf_str(&text).unwrap();
+    assert!(net.transformers.is_empty());
+    assert!(
+        net.warnings
+            .iter()
+            .any(|w| w.contains("`extras.transformer`") && w.contains("dropped")),
+        "{:?}",
+        net.warnings
+    );
+}
+
+/// An OpenDSS capacitor the dss reader could not type stays untyped. The
+/// typed `capacitor` table is strict, so the raw properties re-emit under
+/// `extras`, which the schema leaves free-form.
+#[test]
+fn an_untyped_capacitor_re_emits_under_extras() {
+    let net = parse_dss_str(
+        "New Circuit.c basekv=4.16\n\
+         New Capacitor.cap bus1=b.1 phases=0 kv=7.2 kvar=300\n",
+    );
+    assert!(net.untyped.iter().any(|u| u.class == "capacitor"));
+    let out = write_bmopf_json(&net);
+    let doc: serde_json::Value = serde_json::from_str(&out.text).unwrap();
+    assert!(
+        doc["extras"]["capacitor"]["cap"].is_object(),
+        "{}",
+        out.text
+    );
+    assert_eq!(errors(&schema_validator(), &out.text), Vec::<String>::new());
+}
+
+/// Each winding holds its percent resistance on its own rating base. A
+/// rating that is not positive has no base to refer to, so that term drops
+/// with a warning; an infinity would otherwise reach `num` and emit as a
+/// lossless zero.
+#[test]
+fn a_winding_rating_that_is_not_positive_drops_only_its_own_resistance_term() {
+    let names = || vec!["1".to_string(), "2".to_string(), "3".to_string()];
+    let mut from = Winding::new("a", names(), WindingConn::Delta, 416.0, 1000.0);
+    from.r_pct = 1.0;
+    let mut to = Winding::new("a", names(), WindingConn::Wye, 240.0, 0.0);
+    to.r_pct = 1.0;
+    let mut net = DistNetwork::default();
+    net.transformers
+        .push(DistTransformer::new("t", vec![from, to], vec![4.0], 3));
+
+    let out = write_bmopf_json(&net);
+    let doc: serde_json::Value = serde_json::from_str(&out.text).unwrap();
+    let r = doc["transformer"]["delta_wye"]["t"]["r_series"]
+        .as_f64()
+        .expect("r_series is a number");
+    // The `from` term survives. An infinity from the zero rating would have
+    // reached `num` and emitted as a lossless 0.
+    assert!(r > 0.0 && r.is_finite(), "r_series = {r}");
+    assert!(
+        out.warnings
+            .iter()
+            .any(|w| w.contains("`to` winding rating is not positive")),
+        "{:?}",
+        out.warnings
+    );
+}
+
+/// The re-vendored example networks carry no generator `cost` and no bus
+/// `vpn_min`, so the assertions that used to cover both read paths went with
+/// the old fixtures. A synthetic document keeps the coverage: the per-phase
+/// cost array collapses to one value with a warning, and the phase to
+/// neutral bound arrays survive read and write.
+#[test]
+fn generator_cost_and_phase_neutral_bounds_survive_a_round_trip() {
+    let text = r#"{
+      "bus": {"a": {"terminal_names": ["1", "2", "3"],
+        "vpn_min": [220.0, 220.0, 220.0], "vpn_max": [260.0, 260.0, 260.0]}},
+      "voltage_source": {"s": {"v_magnitude": [240.0], "v_angle": [0.0],
+        "bus": "a", "terminal_map": ["1"]}},
+      "generator": {"g": {"bus": "a", "terminal_map": ["1", "2", "3"],
+        "configuration": "WYE", "p_max": [1000.0], "cost": [0.12, 0.12, 0.12]}}
+    }"#;
+    let net = parse_bmopf_str(text).unwrap();
+
+    let bus = net.bus("a").unwrap();
+    assert_eq!(
+        bus.vpn_min.as_deref(),
+        Some([220.0, 220.0, 220.0].as_slice())
+    );
+    assert_eq!(
+        bus.vpn_max.as_deref(),
+        Some([260.0, 260.0, 260.0].as_slice())
+    );
+    let generator = &net.generators[0];
+    assert_eq!(generator.cost.map(f64::to_bits), Some(0.12f64.to_bits()));
+
+    // Both survive the write and read back.
+    let out = write_bmopf_json(&net);
+    assert_eq!(errors(&schema_validator(), &out.text), Vec::<String>::new());
+    let again = parse_bmopf_str(&out.text).unwrap();
+    assert_eq!(again.bus("a").unwrap().vpn_min, bus.vpn_min);
+    assert_eq!(
+        again.generators[0].cost.map(f64::to_bits),
+        generator.cost.map(f64::to_bits)
+    );
+}

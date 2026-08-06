@@ -1960,6 +1960,7 @@ fn multiconductor_summary(net: &MulticonductorNetwork) -> ObjectSummary {
     elements.insert("loads".to_owned(), net.loads.len() as u64);
     elements.insert("generators".to_owned(), net.generators.len() as u64);
     elements.insert("shunts".to_owned(), net.shunts.len() as u64);
+    elements.insert("capacitors".to_owned(), net.capacitors.len() as u64);
     elements.insert("voltage_sources".to_owned(), net.sources.len() as u64);
 
     ObjectSummary {

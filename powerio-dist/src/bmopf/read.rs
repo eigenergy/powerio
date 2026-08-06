@@ -385,6 +385,28 @@ impl Reader<'_> {
                 }
             }
         }
+        self.warn_orphan_transformer_overlay(doc);
+    }
+
+    /// The `extras.transformer` overlay carries the transformer fields that
+    /// schema 0.1.0 has no slot for. The transformer arm folds it back onto
+    /// the raw objects, so an overlay with no transformer table to attach to
+    /// has no reader at all. Name the loss; `extras_block` skips the overlay
+    /// deliberately, so nothing else reports it.
+    fn warn_orphan_transformer_overlay(&mut self, doc: &Map<String, Value>) {
+        let overlay = doc
+            .get("extras")
+            .and_then(Value::as_object)
+            .and_then(|e| e.get("transformer"))
+            .and_then(Value::as_object)
+            .filter(|o| !o.is_empty());
+        if overlay.is_some() && self.net.transformers.is_empty() {
+            self.net.warnings.push(
+                "`extras.transformer` carries fields for transformers the document does \
+                 not declare; the fields are dropped"
+                    .to_string(),
+            );
+        }
     }
 
     /// The top-level `extras` escape hatch (schema 0.1.0). The IBR and
@@ -461,6 +483,11 @@ impl Reader<'_> {
         ];
         for (name, v) in items {
             let Value::Object(o) = v else { continue };
+            if self.reject_duplicate("ibr", name, |net| {
+                net.ibrs.iter().any(|x| x.name.eq_ignore_ascii_case(name))
+            }) {
+                continue;
+            }
             let topology = enum_field::<IbrTopology>(
                 o.get("topology"),
                 &format!("ibr {name} topology"),
@@ -506,9 +533,38 @@ impl Reader<'_> {
         }
     }
 
+    /// True when an element of this class and name is already read. Schema
+    /// 0.1.0 moved the IBR and control profile tables under `extras`, and the
+    /// reader accepts both places, so a part-migrated document can declare
+    /// the same name twice. Two elements of one name double every count and
+    /// let the writer silently keep only the last, so the second reads as a
+    /// duplicate and drops with a warning.
+    fn reject_duplicate(
+        &mut self,
+        class: &str,
+        name: &str,
+        seen: impl Fn(&DistNetwork) -> bool,
+    ) -> bool {
+        if !seen(self.net) {
+            return false;
+        }
+        self.net.warnings.push(format!(
+            "{class} {name}: the document declares this name at the top level and under \
+             `extras`; the second copy is dropped"
+        ));
+        true
+    }
+
     fn control_profiles(&mut self, items: &Map<String, Value>) {
         for (name, v) in items {
             let Value::Object(o) = v else { continue };
+            if self.reject_duplicate("control_profile", name, |net| {
+                net.control_profiles
+                    .iter()
+                    .any(|x| x.name.eq_ignore_ascii_case(name))
+            }) {
+                continue;
+            }
             let mut profile = DistControlProfile::new(name.clone());
             if let Some(Value::Object(pf)) = o.get("power_factor") {
                 profile.power_factor =
@@ -740,11 +796,18 @@ impl Reader<'_> {
             let inline = linecode.is_empty() && o.contains_key("R_series_1_1");
             if inline {
                 linecode = self.synthesized_linecode(name, o, &mut taken);
-                if !length.is_finite() {
-                    // Inline matrices are the line's whole impedance; the
-                    // synthesized linecode is per meter at unit length.
-                    length = 1.0;
+                // Inline matrices are the whole impedance of the line, in
+                // ohms. The schema calls `length` "purely descriptive" on
+                // this branch, so it must not scale them. The synthesized
+                // linecode holds those ohms per meter at unit length.
+                if length.is_finite() && (length - 1.0).abs() > f64::EPSILON {
+                    self.net.warnings.push(format!(
+                        "line {name}: inline impedance matrices are absolute, so the \
+                         descriptive `length` {length} does not scale them; the model \
+                         keeps the line at unit length"
+                    ));
                 }
+                length = 1.0;
             } else if !length.is_finite() {
                 // The schema requires `length` alongside a linecode; a missing
                 // one becomes NaN in the model, which every impedance

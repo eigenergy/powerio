@@ -17,7 +17,9 @@ use powerio::{
     BalancedNetwork, Branch, BranchCharging, Bus, BusId, BusType, Extras as BalancedExtras,
     Generator, Load, Network, Shunt, SourceFormat,
 };
-use powerio_dist::{DistBus, DistLineCode, DistLoadVoltageModel, Mat, MulticonductorNetwork};
+use powerio_dist::{
+    DistBus, DistLine, DistLineCode, DistLoadVoltageModel, Mat, MulticonductorNetwork,
+};
 
 use crate::diagnostics::{DiagnosticSeverity, DiagnosticStage, StructuredDiagnostic};
 use crate::model::ModelKind;
@@ -302,6 +304,7 @@ impl<'a> LoweringState<'a> {
         let loads = self.lower_loads();
         let shunts = self.lower_shunts(base)?;
         let generators = self.lower_generators(&buses);
+        self.record_capacitor_drops();
         self.err_if_errors()?;
 
         let mut network = Network::new(
@@ -498,6 +501,20 @@ impl<'a> LoweringState<'a> {
             .collect()
     }
 
+    /// A rated capacitor bank (BMOPF schema 0.1.0 `capacitor`) has no
+    /// balanced equivalent yet: `q_rated` at `v_nom` is a nameplate rating,
+    /// not the admittance a balanced `Shunt` carries. The bank therefore
+    /// drops, and the record names it, because a silent drop removes
+    /// reactive support the case depends on.
+    fn record_capacitor_drops(&mut self) {
+        for capacitor in &self.net.capacitors {
+            self.record.dropped_fields.push(format!(
+                "capacitor {} dropped: a rated bank has no balanced shunt equivalent",
+                capacitor.name
+            ));
+        }
+    }
+
     fn record_bus_bound_drops(&mut self, bus: &DistBus) {
         if bus.vpn_min.is_some()
             || bus.vpn_max.is_some()
@@ -620,13 +637,14 @@ impl<'a> LoweringState<'a> {
                 y_to.re * y_scale,
                 y_to.im * y_scale,
             );
-            let rate = line_rate_mva(code, &active, base.line_to_line_volts).unwrap_or_else(|| {
-                self.record.dropped_fields.push(format!(
-                    "line {} thermal rating defaulted to 0 MVA",
-                    line.name
-                ));
-                0.0
-            });
+            let rate =
+                line_rate_mva(line, code, &active, base.line_to_line_volts).unwrap_or_else(|| {
+                    self.record.dropped_fields.push(format!(
+                        "line {} thermal rating defaulted to 0 MVA",
+                        line.name
+                    ));
+                    0.0
+                });
             let mut branch = Branch::new(from, to, z_ohm.re / z_base, z_ohm.im / z_base);
             branch.b = charging.total_b();
             branch.charging = Some(charging);
@@ -1219,8 +1237,16 @@ fn sequence_coupling_norm(seq: &[[Complex64; 3]; 3]) -> f64 {
     sum.sqrt()
 }
 
-fn line_rate_mva(code: &DistLineCode, active: &[usize], line_to_line_volts: f64) -> Option<f64> {
-    if let Some(s_max) = &code.s_max {
+/// The branch rating, in MVA. BMOPF schema 0.1.0 gives a line its own
+/// `i_max`/`s_max`, which "overrides the linecode's i_max for this line", so
+/// the line field wins wherever it is present.
+fn line_rate_mva(
+    line: &DistLine,
+    code: &DistLineCode,
+    active: &[usize],
+    line_to_line_volts: f64,
+) -> Option<f64> {
+    if let Some(s_max) = line.s_max.as_ref().or(code.s_max.as_ref()) {
         let values: Vec<_> = active
             .iter()
             .filter_map(|&idx| s_max.get(idx).copied())
@@ -1229,7 +1255,7 @@ fn line_rate_mva(code: &DistLineCode, active: &[usize], line_to_line_volts: f64)
             return Some(values.iter().sum::<f64>() / 1_000_000.0);
         }
     }
-    let i_max = code.i_max.as_ref()?;
+    let i_max = line.i_max.as_ref().or(code.i_max.as_ref())?;
     let amps: Vec<_> = active
         .iter()
         .filter_map(|&idx| i_max.get(idx).copied())

@@ -646,6 +646,20 @@ fn diagonal_byte_identity() {
     }
 }
 
+/// The (case, target) pairs whose first canonical write is not yet a fixed
+/// point. Each entry needs a source construct that explains it, because the
+/// general rule is that one write reaches the canonical form. The second
+/// write must then be a fixed point, which the test still checks.
+const LATE_CONVERGENCE: &[(&str, &str)] = &[
+    // The BMOPF ieee13 example declares a single_phase transformer with
+    // three phase terminal maps; dss narrows it to its real phase count.
+    ("BMOPF IEEE 13 example", "dss"),
+];
+
+fn converges_on_the_second_write(label: &str, target: &str) -> bool {
+    LATE_CONVERGENCE.contains(&(label, target))
+}
+
 #[test]
 fn canonical_writers_are_idempotent() {
     for case in CASES {
@@ -666,6 +680,14 @@ fn canonical_writers_are_idempotent() {
                 Fmt::Pmd => powerio_dist::write_pmd_json(&reparsed),
             };
             if first.text != second.text {
+                assert!(
+                    converges_on_the_second_write(case.label, target.name()),
+                    "{} → {}: the first canonical write is not a fixed point, and this \
+                     pair is not a known one-step canonicalization; add it to \
+                     LATE_CONVERGENCE only with the construct that explains it",
+                    case.label,
+                    target.name()
+                );
                 // A degenerate source construct can canonicalize once through
                 // the target (the BMOPF ieee13 example carries a single_phase
                 // transformer with three phase terminal maps, which dss

@@ -857,3 +857,33 @@ fn a_huge_terminal_name_does_not_enumerate_conductor_ids() {
     // The bus keeps its terminals verbatim.
     assert_eq!(doc["bus"]["a"]["terminals"].as_array().unwrap().len(), 4);
 }
+
+/// PMD needs integer connections, so a terminal name it cannot spell takes
+/// an id. That id must be the same everywhere the name appears, and it must
+/// sit just above the numeric names: an id far above the conductor count
+/// drives the `conductor_ids` enumeration to its cap, and a read back then
+/// produces a longer list than the first write.
+#[test]
+fn a_renamed_terminal_takes_the_next_free_id_and_the_write_is_a_fixed_point() {
+    let text = std::fs::read_to_string(fixture("bmopf/example_ieee13.json")).unwrap();
+    let net = powerio_dist::parse_bmopf_str(&text).unwrap();
+    assert!(
+        net.buses
+            .iter()
+            .any(|b| b.terminals.iter().any(|t| t == "n"))
+    );
+
+    let first = write_pmd_json(&net);
+    let doc: serde_json::Value = serde_json::from_str(&first.text).unwrap();
+    assert_eq!(
+        doc["conductor_ids"],
+        serde_json::json!([1, 2, 3, 4]),
+        "the neutral takes id 4, so the enumeration stays at 4"
+    );
+
+    // Every use of the name maps to the same id, and the write is a fixed
+    // point through a read back.
+    let again = parse_pmd_str(&first.text).unwrap();
+    let second = write_pmd_json(&again);
+    assert_eq!(first.text, second.text);
+}

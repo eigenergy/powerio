@@ -2337,3 +2337,68 @@ fn study_validation_rejects_multiconductor_payload() {
     }));
     assert_eq!(pkg.validation.status, ValidationStatus::Error);
 }
+
+/// BMOPF schema 0.1.0 gives a line its own `i_max`, which "overrides the
+/// linecode's i_max for this line". The lowering must take the line field
+/// where it is present, or the balanced branch rating is the rating of a
+/// shared linecode instead of the rating of the line.
+#[test]
+fn a_line_rating_overrides_the_linecode_rating_in_the_lowering() {
+    let source = "\
+New Circuit.c basekv=4.16 bus1=b1\n\
+New Linecode.lc nphases=3 rmatrix=[1|0 1|0 0 1] xmatrix=[1|0 1|0 0 1] normamps=600 emergamps=600\n\
+New Line.l1 bus1=b1.1.2.3 bus2=b2.1.2.3 linecode=lc length=1 units=m\n";
+    let net = powerio_dist::parse_str(source, "dss").expect("parse dss");
+    let shared = lower_multiconductor_to_balanced(&net, MulticonductorToBalancedOptions::default())
+        .expect("lower")
+        .network;
+    let shared_rate = shared.branches[0].rate_a;
+
+    let mut with_line_rating = net.clone();
+    with_line_rating.lines[0].i_max = Some(vec![200.0, 200.0, 200.0]);
+    let lowered = lower_multiconductor_to_balanced(
+        &with_line_rating,
+        MulticonductorToBalancedOptions::default(),
+    )
+    .expect("lower")
+    .network;
+    let line_rate = lowered.branches[0].rate_a;
+
+    assert!(shared_rate > 0.0, "the linecode rating is the baseline");
+    assert!(
+        line_rate < shared_rate,
+        "the line's 200 A must beat the linecode's 600 A: {line_rate} vs {shared_rate}"
+    );
+}
+
+/// A rated capacitor bank has no balanced equivalent yet, so it drops. The
+/// lowering record must name the drop, and the multiconductor summary must
+/// count the bank, or the package under-reports the case.
+#[test]
+fn a_dropped_capacitor_bank_is_recorded_and_counted() {
+    let mut net = powerio_dist::parse_str("New Circuit.c1", "dss").expect("parse dss");
+    net.capacitors.push(powerio_dist::DistCapacitor::new(
+        "cap1",
+        "sourcebus",
+        vec!["1".to_owned()],
+        powerio_dist::Configuration::Wye,
+        300_000.0,
+        7200.0,
+    ));
+
+    let package = NetworkPackage::from_multiconductor(net.clone());
+    assert_eq!(package.summary.elements["capacitors"], 1);
+
+    let lowering =
+        lower_multiconductor_to_balanced(&net, MulticonductorToBalancedOptions::default())
+            .expect("lower");
+    assert!(
+        lowering
+            .record
+            .dropped_fields
+            .iter()
+            .any(|f| f.contains("capacitor cap1")),
+        "{:?}",
+        lowering.record.dropped_fields
+    );
+}

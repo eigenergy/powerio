@@ -156,6 +156,17 @@ impl DistGraph {
                 &shunt.name,
             );
         }
+        // A rated capacitor bank attaches to a bus exactly like a raw
+        // admittance shunt. It projects as one, so connectivity and the geo
+        // layer see the bank.
+        for capacitor in &net.capacitors {
+            builder.add_attachment(
+                &capacitor.bus,
+                &capacitor.terminal_map,
+                DistGraphAttachmentKind::Shunt,
+                &capacitor.name,
+            );
+        }
         for source in &net.sources {
             builder.add_source(source);
         }

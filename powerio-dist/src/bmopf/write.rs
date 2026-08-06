@@ -36,6 +36,11 @@ const RAW_BMOPF_EXTRAS_TABLES: &[&str] = &[
     "dc_load",
     "dc_source",
     "time_series",
+    // An OpenDSS capacitor the dss reader could not type (a nonpositive
+    // phase count) stays an untyped object. The typed `capacitor` table of
+    // schema 0.1.0 is strict, so the raw properties cannot go there; they
+    // re-emit under `extras`, which the schema leaves free-form.
+    "capacitor",
 ];
 
 /// The reader's verbatim stash of a source document's own `extras` object.
@@ -1376,6 +1381,34 @@ impl Writer {
         o.into()
     }
 
+    /// The lumped series resistance on the wye base, in ohms. Each winding
+    /// holds its percent resistance on its own rating base, so each term is
+    /// `r_pct / 100 * v_wye^2 / s_rating`. A rating that is not positive
+    /// makes its term undefined; that term drops with a warning, so the
+    /// output keeps the resistance of the other winding instead of an
+    /// infinity that `num` would then emit as a lossless zero.
+    fn referred_resistance(
+        &mut self,
+        t: &DistTransformer,
+        from: &Winding,
+        to: &Winding,
+        v_wye2: f64,
+    ) -> f64 {
+        let mut total = 0.0;
+        for (side, w) in [("from", from), ("to", to)] {
+            if w.s_rating > 0.0 && w.s_rating.is_finite() {
+                total += w.r_pct / w.s_rating;
+            } else if w.r_pct != 0.0 {
+                self.warn(format!(
+                    "transformer {}: the `{side}` winding rating is not positive, so its \
+                     resistance has no base to refer to; the term is dropped from r_series",
+                    t.name
+                ));
+            }
+        }
+        total / 100.0 * v_wye2
+    }
+
     fn center_tap_leakage_percentages(&mut self, t: &DistTransformer) -> (f64, f64) {
         let (x_from_pct, x_to_pct) = center_tap_star_percentages(&t.xsc_pct);
         if x_from_pct.is_finite()
@@ -1441,12 +1474,10 @@ impl Writer {
         // Each winding's percent resistance is on its own rating base; refer
         // both to the wye side before lumping (identical to the plain sum
         // when the ratings match). XHL is on the first winding's base.
+        let r_series = self.referred_resistance(t, from, to, v_wye2);
         o.insert(
             "r_series".into(),
-            self.num(
-                (from.r_pct / from.s_rating + to.r_pct / to.s_rating) / 100.0 * v_wye2,
-                "transformer r_series",
-            ),
+            self.num(r_series, "transformer r_series"),
         );
         o.insert(
             "x_series".into(),
@@ -2339,9 +2370,23 @@ fn classify(t: &DistTransformer) -> Kind {
     }
 }
 
+/// The re-emitted form of an untyped object.
+///
+/// A BMOPF sourced object rides as one unkeyed blob, which is the JSON the
+/// document declared. A dss sourced object rides as key/value property
+/// pairs, which rebuild into an object; without that arm every dss sourced
+/// untyped object failed the JSON parse and dropped.
 fn raw_bmopf_value(u: &crate::model::UntypedObject) -> Option<Value> {
-    let (_, text) = u.props.first()?;
-    serde_json::from_str(text).ok()
+    if let [(None, text)] = u.props.as_slice() {
+        return serde_json::from_str(text).ok();
+    }
+    let mut o = Map::new();
+    for (key, text) in &u.props {
+        let key = key.as_ref()?;
+        let value = serde_json::from_str(text).unwrap_or_else(|_| Value::String(text.clone()));
+        o.insert(key.clone(), value);
+    }
+    (!o.is_empty()).then_some(Value::Object(o))
 }
 
 fn extras_number(extras: &crate::model::Extras, key: &str) -> Option<f64> {
