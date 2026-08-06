@@ -2431,6 +2431,58 @@ fn reader_is_liberal_where_the_writer_is_strict() {
     assert!(!out.text.contains("hand edited"));
 }
 
+/// The writer seeds its `extras` block from the source document's own
+/// `extras` object, then files the relocated top-level tables into the same
+/// block. A source value that is not a table has no slot for a named entry,
+/// so it must not reach the write as one: this used to panic on a document
+/// of a few hundred bytes, through parse and write back.
+#[test]
+fn source_extras_value_that_is_not_a_table_does_not_panic() {
+    for class in ["time_series", "dc_bus", "dc_line", "dc_load", "dc_source"] {
+        let text = doc_with(&format!(
+            r#", "extras": {{"{class}": 1}}, "{class}": {{"t1": {{"values": [1.0]}}}}"#
+        ));
+        let net = parse_bmopf_str(&text).unwrap();
+        let out = write_bmopf_json(&net);
+        assert!(
+            out.warnings
+                .iter()
+                .any(|w| w.contains(&format!("extras `{class}`")) && w.contains("not a table")),
+            "{class}: {:?}",
+            out.warnings
+        );
+        // The top-level objects survive into the relocated table.
+        let doc: serde_json::Value = serde_json::from_str(&out.text).unwrap();
+        assert!(
+            doc["extras"][class]["t1"].is_object(),
+            "{class}: {}",
+            out.text
+        );
+    }
+}
+
+/// The same slot takes entries from two places: the source `extras` block and
+/// the source top-level table. A name in both is a replacement, and the two
+/// tier fidelity rule says a replacement is never silent.
+#[test]
+fn source_extras_entry_replaced_by_the_top_level_table_warns() {
+    let text = doc_with(
+        r#", "extras": {"time_series": {"t1": {"values": [9.0]}}},
+        "time_series": {"t1": {"values": [1.0]}}"#,
+    );
+    let net = parse_bmopf_str(&text).unwrap();
+    let out = write_bmopf_json(&net);
+    assert!(
+        out.warnings
+            .iter()
+            .any(|w| w.contains("time_series t1") && w.contains("replaced")),
+        "{:?}",
+        out.warnings
+    );
+    let doc: serde_json::Value = serde_json::from_str(&out.text).unwrap();
+    assert_eq!(doc["extras"]["time_series"]["t1"]["values"][0], 1.0);
+}
+
 #[test]
 fn oversized_matrix_key_is_bounded_and_warned() {
     // The largest matrix index seen sizes a dense allocation; an unbounded

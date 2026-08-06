@@ -495,6 +495,7 @@ impl Writer {
         doc: &mut Map<String, Value>,
         extras: &mut Map<String, Value>,
     ) {
+        self.clear_non_table_extras_slots(net, extras);
         for u in &net.untyped {
             let subtype = u.class.strip_prefix("transformer.");
             if subtype.is_none() && !RAW_BMOPF_EXTRAS_TABLES.contains(&u.class.as_str()) {
@@ -507,22 +508,58 @@ impl Writer {
                 ));
                 continue;
             };
-            let table = match subtype {
+            let slot = match subtype {
                 Some(sub) => doc
                     .entry("transformer")
                     .or_insert_with(|| Value::Object(Map::new()))
                     .as_object_mut()
-                    .expect("transformer table is an object")
+                    .expect("the writer builds the transformer table as an object")
                     .entry(sub.to_string())
                     .or_insert_with(|| Value::Object(Map::new())),
                 None => extras
                     .entry(u.class.clone())
                     .or_insert_with(|| Value::Object(Map::new())),
             };
-            table
-                .as_object_mut()
-                .expect("BMOPF tables are objects")
-                .insert(u.name.clone(), value);
+            // `clear_non_table_extras_slots` makes this hold, and every slot
+            // the writer creates is a table. The path still runs on untrusted
+            // input, so a surprise drops the object instead of the process.
+            let Some(table) = slot.as_object_mut() else {
+                self.warn(format!(
+                    "{} {}: the `{}` slot is not a table; dropped from the output",
+                    u.class, u.name, u.class
+                ));
+                continue;
+            };
+            if table.insert(u.name.clone(), value).is_some() {
+                self.warn(format!(
+                    "{} {}: the source `extras.{}` carried an entry of the same name; \
+                     the top-level object replaced it",
+                    u.class, u.name, u.class
+                ));
+            }
+        }
+    }
+
+    /// `extras` is seeded from the source document's own `extras` object, so
+    /// a value under one of the relocated table names is input, not something
+    /// this writer built. A value that is not a table has no slot for a named
+    /// entry; warn once per name and replace it with an empty table, which
+    /// the untyped objects of that class then fill.
+    fn clear_non_table_extras_slots(&mut self, net: &DistNetwork, extras: &mut Map<String, Value>) {
+        let classes: BTreeSet<&str> = net
+            .untyped
+            .iter()
+            .map(|u| u.class.as_str())
+            .filter(|class| RAW_BMOPF_EXTRAS_TABLES.contains(class))
+            .collect();
+        for class in classes {
+            if extras.get(class).is_some_and(|v| !v.is_object()) {
+                self.warn(format!(
+                    "extras `{class}`: the source value is not a table; replaced by the \
+                     top-level `{class}` objects"
+                ));
+                extras.insert(class.to_string(), Value::Object(Map::new()));
+            }
         }
     }
 
