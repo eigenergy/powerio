@@ -54,8 +54,8 @@ pub use bmopf::{
     write_bmopf_json_with_options,
 };
 pub use convert::{
-    Conversion, ConversionSidecar, DistTargetFormat, convert_file, convert_str,
-    dist_target_from_name, parse_file, parse_str,
+    Conversion, ConversionSidecar, DistTargetFormat, classify_distribution_json, convert_file,
+    convert_str, dist_target_from_name, parse_file, parse_str,
 };
 pub use diagnostics::{DiagnosticCode, DiagnosticSeverity, DiagnosticStage, StructuredDiagnostic};
 pub use dss::{
