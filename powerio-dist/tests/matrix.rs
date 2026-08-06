@@ -376,14 +376,19 @@ fn target_renumbers_terminals(what: &str) -> bool {
     what.contains("→ dss → back") || what.contains("→ PMD → back")
 }
 
-/// Strict name equality, falling back to arity on a renumbering leg.
+/// Strict name equality. A renumbering leg (dss node positions, PMD integer
+/// connections) falls back to arity, but only when a non numeric name is
+/// involved: purely numeric maps survive those legs verbatim, so a silent
+/// permutation cannot hide behind the fallback. The renumbering scheme
+/// itself still needs its dedicated pin (#266).
 #[track_caller]
 fn assert_maps_eq(x: &[String], y: &[String], what: &str, ctx: &str) {
     if x == y {
         return;
     }
+    let numeric = |m: &[String]| m.iter().all(|t| t.parse::<u32>().is_ok());
     assert!(
-        target_renumbers_terminals(what) && x.len() == y.len(),
+        target_renumbers_terminals(what) && x.len() == y.len() && !(numeric(x) && numeric(y)),
         "{what}: {ctx} {x:?} vs {y:?}"
     );
 }
