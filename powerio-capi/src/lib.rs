@@ -253,6 +253,12 @@ macro_rules! bmopf_schema_id {
     };
 }
 #[cfg(feature = "dist")]
+macro_rules! bmopf_schema_id_doc_version {
+    () => {
+        "1.1.0"
+    };
+}
+#[cfg(feature = "dist")]
 macro_rules! bmopf_schema_version {
     () => {
         "0.1.0"
@@ -261,7 +267,9 @@ macro_rules! bmopf_schema_version {
 
 #[cfg(feature = "dist")]
 const DIST_CAPABILITIES_JSON: &str = concat!(
-    r#"{"dist":true,"schema_version":"1.1.0","#,
+    r#"{"dist":true,"schema_version":""#,
+    bmopf_schema_id_doc_version!(),
+    r#"","#,
     r#""bmopf_fixed_taps":true,"#,
     r#""bmopf_center_tap_leakage":true,"#,
     r#""bmopf_delta_wye_leakage":true,"#,
@@ -290,6 +298,61 @@ const DIST_CAPABILITIES_JSON: &str = concat!(
 #[unsafe(no_mangle)]
 pub extern "C" fn pio_dist_capabilities_json() -> *mut c_char {
     into_cstring(DIST_CAPABILITIES_JSON.to_owned()).unwrap_or(std::ptr::null_mut())
+}
+
+/// Report every wire format version this library speaks, as owned JSON. Free
+/// the returned string with [`pio_string_free`]. Infallible.
+///
+/// These are the versions stamped into the documents the library reads and
+/// writes, and they are **not** covered by [`PIO_ABI_VERSION`]: the v4 policy
+/// says data evolves through versioned payloads rather than through signature
+/// changes, so a binding can pass the ABI handshake against a library whose
+/// document formats it can no longer speak. That is exactly what happened when
+/// `.pio.json` went 0.1.1 -> 0.2.0 in v0.8.0 with both ABI integers unchanged:
+/// the binding mirrored the old version as a source constant, nothing compared
+/// the two, and the mismatch surfaced as a test failure after the release was
+/// already public.
+///
+/// A binding that mirrors any of these should read them from here and refuse a
+/// library it disagrees with, at load or at artifact-pin time, rather than
+/// discovering it downstream.
+///
+/// A key is `null` when the owning feature is not compiled in. Keys are only
+/// ever added, and `wire_versions` tracks this document's own shape, so a
+/// consumer keying on a subset keeps working.
+#[unsafe(no_mangle)]
+pub extern "C" fn pio_wire_versions_json() -> *mut c_char {
+    // `Option<&str>` per entry: `None` serializes to `null`, which reads as
+    // "this build cannot speak that format" rather than "unknown version".
+    #[cfg(feature = "pkg")]
+    let package = Some(powerio_pkg::PIO_PACKAGE_SCHEMA_VERSION);
+    #[cfg(not(feature = "pkg"))]
+    let package: Option<&str> = None;
+
+    #[cfg(feature = "arrow")]
+    let arrow = Some(arrow_export::ARROW_SCHEMA_VERSION);
+    #[cfg(not(feature = "arrow"))]
+    let arrow: Option<&str> = None;
+
+    #[cfg(feature = "dist")]
+    let dist_capabilities = Some(bmopf_schema_id_doc_version!());
+    #[cfg(not(feature = "dist"))]
+    let dist_capabilities: Option<&str> = None;
+
+    #[cfg(feature = "dist")]
+    let bmopf_schema = Some(powerio_dist::BMOPF_SCHEMA_VERSION);
+    #[cfg(not(feature = "dist"))]
+    let bmopf_schema: Option<&str> = None;
+
+    let doc = serde_json::json!({
+        "wire_versions": "1.0.0",
+        "abi": PIO_ABI_VERSION,
+        "package": package,
+        "arrow": arrow,
+        "dist_capabilities": dist_capabilities,
+        "bmopf_schema": bmopf_schema,
+    });
+    into_cstring(doc.to_string()).unwrap_or(std::ptr::null_mut())
 }
 
 /// Whether the matrix Arrow table API is usable in this build. Returns 1
@@ -3062,6 +3125,7 @@ mod tests {
             "int32_t pio_matrix_available(void);",
             "int32_t pio_has_feature(const char *feature);",
             "const char *pio_version(void);",
+            "char *pio_wire_versions_json(void);",
             "PioNetwork *pio_parse_file(const char *path, const char *from, char *errbuf, size_t errlen);",
             "PioNetwork *pio_parse_str(const char *text, const char *format, char *errbuf, size_t errlen);",
             "size_t pio_classify_str(const char *text, char *outbuf, size_t outlen);",
@@ -4858,6 +4922,53 @@ mpc.branch = [
             assert_eq!(PIO_DIST_ABI_VERSION, 1);
             let feature = CString::new("dist").unwrap();
             assert_eq!(unsafe { pio_has_feature(feature.as_ptr()) }, 1);
+        }
+
+        #[test]
+        fn wire_versions_json_matches_the_constants_the_library_stamps() {
+            let raw = pio_wire_versions_json();
+            assert!(!raw.is_null());
+            let text = unsafe { CStr::from_ptr(raw) }.to_str().unwrap().to_owned();
+            unsafe { pio_string_free(raw) };
+            let doc: serde_json::Value = serde_json::from_str(&text).unwrap();
+
+            assert_eq!(doc["wire_versions"], serde_json::json!("1.0.0"));
+            assert_eq!(doc["abi"], serde_json::json!(PIO_ABI_VERSION));
+
+            // Each reported version must be the constant actually stamped into
+            // the documents, not a copy that can drift from it. This is the
+            // whole point of the entry point: a binding mirroring one of these
+            // reads it from here instead of hardcoding it, so the .pio.json
+            // 0.1.1 -> 0.2.0 break becomes a load-time refusal rather than a
+            // downstream test failure after the release is public.
+            #[cfg(feature = "pkg")]
+            assert_eq!(
+                doc["package"],
+                serde_json::json!(powerio_pkg::PIO_PACKAGE_SCHEMA_VERSION)
+            );
+            #[cfg(feature = "dist")]
+            assert_eq!(
+                doc["bmopf_schema"],
+                serde_json::json!(powerio_dist::BMOPF_SCHEMA_VERSION)
+            );
+            #[cfg(feature = "arrow")]
+            assert_eq!(
+                doc["arrow"],
+                serde_json::json!(crate::arrow_export::ARROW_SCHEMA_VERSION)
+            );
+            #[cfg(not(feature = "arrow"))]
+            assert_eq!(doc["arrow"], serde_json::Value::Null);
+
+            // The dist capability document version is reported here too, so a
+            // consumer can see it without also parsing the capability blob.
+            let caps_raw = pio_dist_capabilities_json();
+            let caps_text = unsafe { CStr::from_ptr(caps_raw) }
+                .to_str()
+                .unwrap()
+                .to_owned();
+            unsafe { pio_string_free(caps_raw) };
+            let caps: serde_json::Value = serde_json::from_str(&caps_text).unwrap();
+            assert_eq!(doc["dist_capabilities"], caps["schema_version"]);
         }
 
         #[test]

@@ -326,6 +326,23 @@ int32_t pio_has_feature(const char *feature);
 const char *pio_version(void);
 
 /**
+ * Report every wire format version this library speaks, as owned JSON. Free
+ * the returned string with `pio_string_free`. Infallible.
+ *
+ * These are the versions stamped into the documents the library reads and
+ * writes, and they are NOT covered by PIO_ABI_VERSION: the v4 policy says data
+ * evolves through versioned payloads rather than signature changes, so a
+ * binding can pass the ABI handshake against a library whose document formats
+ * it can no longer speak. A binding that mirrors any of these should read them
+ * from here and refuse a library it disagrees with, rather than discovering the
+ * mismatch downstream.
+ *
+ * A key is null when the owning feature is not compiled in. Keys are only ever
+ * added, and `wire_versions` tracks this document's own shape.
+ */
+char *pio_wire_versions_json(void);
+
+/**
  * Parse `path` (format from extension, or `from` if non-NULL) into a network
  * handle. `from` accepts the [`pio_parse_str`] format names plus
  * `pypsa-csv`/`pypsa`, `goc3-json`/`goc3`, `surge-json`/`surge`,
