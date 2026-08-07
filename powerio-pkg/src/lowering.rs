@@ -17,7 +17,9 @@ use powerio::{
     BalancedNetwork, Branch, BranchCharging, Bus, BusId, BusType, Extras as BalancedExtras,
     Generator, Load, Network, Shunt, SourceFormat,
 };
-use powerio_dist::{DistBus, DistLineCode, DistLoadVoltageModel, Mat, MulticonductorNetwork};
+use powerio_dist::{
+    DistBus, DistLine, DistLineCode, DistLoadVoltageModel, Mat, MulticonductorNetwork,
+};
 
 use crate::diagnostics::{DiagnosticSeverity, DiagnosticStage, StructuredDiagnostic};
 use crate::model::ModelKind;
@@ -302,6 +304,7 @@ impl<'a> LoweringState<'a> {
         let loads = self.lower_loads();
         let shunts = self.lower_shunts(base)?;
         let generators = self.lower_generators(&buses);
+        self.record_capacitor_drops();
         self.err_if_errors()?;
 
         let mut network = Network::new(
@@ -498,13 +501,30 @@ impl<'a> LoweringState<'a> {
             .collect()
     }
 
+    /// A rated capacitor bank (BMOPF schema 0.1.0 `capacitor`) has no
+    /// balanced equivalent yet: `q_rated` at `v_nom` is a nameplate rating,
+    /// not the admittance a balanced `Shunt` carries. The bank therefore
+    /// drops, and the record names it, because a silent drop removes
+    /// reactive support the case depends on.
+    fn record_capacitor_drops(&mut self) {
+        for capacitor in &self.net.capacitors {
+            self.record.dropped_fields.push(format!(
+                "capacitor {} dropped: a rated bank has no balanced shunt equivalent",
+                capacitor.name
+            ));
+        }
+    }
+
     fn record_bus_bound_drops(&mut self, bus: &DistBus) {
         if bus.vpn_min.is_some()
             || bus.vpn_max.is_some()
             || bus.vpp_min.is_some()
             || bus.vpp_max.is_some()
-            || bus.vsym_min.is_some()
-            || bus.vsym_max.is_some()
+            || bus.vpos_min.is_some()
+            || bus.vpos_max.is_some()
+            || bus.vneg_max.is_some()
+            || bus.vzero_max.is_some()
+            || bus.vn_max.is_some()
         {
             self.record.dropped_fields.push(format!(
                 "bus {} conductor voltage bound families dropped",
@@ -617,13 +637,14 @@ impl<'a> LoweringState<'a> {
                 y_to.re * y_scale,
                 y_to.im * y_scale,
             );
-            let rate = line_rate_mva(code, &active, base.line_to_line_volts).unwrap_or_else(|| {
-                self.record.dropped_fields.push(format!(
-                    "line {} thermal rating defaulted to 0 MVA",
-                    line.name
-                ));
-                0.0
-            });
+            let rate =
+                line_rate_mva(line, code, &active, base.line_to_line_volts).unwrap_or_else(|| {
+                    self.record.dropped_fields.push(format!(
+                        "line {} thermal rating defaulted to 0 MVA",
+                        line.name
+                    ));
+                    0.0
+                });
             let mut branch = Branch::new(from, to, z_ohm.re / z_base, z_ohm.im / z_base);
             branch.b = charging.total_b();
             branch.charging = Some(charging);
@@ -864,6 +885,12 @@ impl<'a> LoweringState<'a> {
                 if generator.cost.is_some() {
                     self.record.dropped_fields.push(format!(
                         "generator {} scalar distribution cost dropped",
+                        generator.name
+                    ));
+                }
+                if generator.s_max.is_some() || generator.i_max.is_some() {
+                    self.record.dropped_fields.push(format!(
+                        "generator {} per-conductor rating fields dropped",
                         generator.name
                     ));
                 }
@@ -1216,24 +1243,52 @@ fn sequence_coupling_norm(seq: &[[Complex64; 3]; 3]) -> f64 {
     sum.sqrt()
 }
 
-fn line_rate_mva(code: &DistLineCode, active: &[usize], line_to_line_volts: f64) -> Option<f64> {
-    if let Some(s_max) = &code.s_max {
-        let values: Vec<_> = active
-            .iter()
-            .filter_map(|&idx| s_max.get(idx).copied())
-            .collect();
-        if !values.is_empty() && values.iter().all(|value| value.is_finite()) {
-            return Some(values.iter().sum::<f64>() / 1_000_000.0);
+/// The branch rating, in MVA. BMOPF schema 0.1.0 gives a line its own
+/// `i_max`/`s_max`, which "overrides the linecode's i_max for this line", so
+/// both line fields are tried before either linecode field. Within one owner
+/// `s_max` comes first, because an apparent power limit needs no voltage.
+///
+/// A field the active conductors leave unusable falls through to the next
+/// candidate rather than ending the search: a line whose `s_max` is all
+/// infinities must not hide a linecode that carries a real rating.
+fn line_rate_mva(
+    line: &DistLine,
+    code: &DistLineCode,
+    active: &[usize],
+    line_to_line_volts: f64,
+) -> Option<f64> {
+    for (s_max, i_max) in [
+        (line.s_max.as_ref(), line.i_max.as_ref()),
+        (code.s_max.as_ref(), code.i_max.as_ref()),
+    ] {
+        if let Some(mva) = s_max.and_then(|values| apparent_power_mva(values, active)) {
+            return Some(mva);
+        }
+        if let Some(amps) = i_max.and_then(|values| limiting_amps(values, active)) {
+            return Some(SQRT_3 * line_to_line_volts * amps / 1_000_000.0);
         }
     }
-    let i_max = code.i_max.as_ref()?;
-    let amps: Vec<_> = active
+    None
+}
+
+/// The summed apparent power limit of the active conductors, in MVA, or None
+/// when any of them has no finite limit.
+fn apparent_power_mva(s_max: &[f64], active: &[usize]) -> Option<f64> {
+    let values: Vec<_> = active
+        .iter()
+        .filter_map(|&idx| s_max.get(idx).copied())
+        .collect();
+    (!values.is_empty() && values.iter().all(|value| value.is_finite()))
+        .then(|| values.iter().sum::<f64>() / 1_000_000.0)
+}
+
+/// The smallest usable current limit over the active conductors, in amps.
+fn limiting_amps(i_max: &[f64], active: &[usize]) -> Option<f64> {
+    active
         .iter()
         .filter_map(|&idx| i_max.get(idx).copied())
         .filter(|value| value.is_finite() && *value >= 0.0)
-        .collect();
-    let amps = amps.into_iter().reduce(f64::min)?;
-    Some(SQRT_3 * line_to_line_volts * amps / 1_000_000.0)
+        .reduce(f64::min)
 }
 
 fn partial_phase_admittance(g: &Mat, b: &Mat, active: &[usize]) -> Complex64 {

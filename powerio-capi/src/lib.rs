@@ -2378,6 +2378,7 @@ pub unsafe extern "C" fn pio_dist_summary_json(
                         "ibrs": net.net.ibrs.len(),
                         "control_profiles": net.net.control_profiles.len(),
                         "shunts": net.net.shunts.len(),
+                        "capacitors": net.net.capacitors.len(),
                         "sources": net.net.sources.len(),
                         "untyped": net.net.untyped.len(),
                         "warnings": net.net.warnings.len(),

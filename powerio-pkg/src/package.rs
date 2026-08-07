@@ -53,11 +53,14 @@ pub const PIO_PAYLOAD_BALANCED_SCHEMA_VERSION: &str = "1.2.0";
 /// The declared schema URL for the multiconductor payload
 /// (`model.multiconductor_network`).
 pub const PIO_PAYLOAD_MULTICONDUCTOR_SCHEMA_URL: &str =
-    "https://powerio.dev/schema/pio-payload-multiconductor/1";
+    "https://powerio.dev/schema/pio-payload-multiconductor/2";
 
 /// The multiconductor payload schema version (semver); the same policy as
-/// [`PIO_PAYLOAD_BALANCED_SCHEMA_VERSION`].
-pub const PIO_PAYLOAD_MULTICONDUCTOR_SCHEMA_VERSION: &str = "1.2.0";
+/// [`PIO_PAYLOAD_BALANCED_SCHEMA_VERSION`]. 2.0.0: the bus `vsym_min`/
+/// `vsym_max` arrays became the per-sequence scalars `vpos_min`/`vpos_max`/
+/// `vneg_max`/`vzero_max`/`vn_max` (BMOPF schema 0.1.0), and the `capacitors`
+/// table and line `i_max`/`s_max` were added.
+pub const PIO_PAYLOAD_MULTICONDUCTOR_SCHEMA_VERSION: &str = "2.0.0";
 
 pub const READ_TRANSMISSION_PARSE_WARNING: &str = "READ.TRANSMISSION.PARSE_WARNING";
 pub const READ_GRIDFM_FIDELITY_WARNING: &str = "READ.GRIDFM.FIDELITY_WARNING";
@@ -1490,6 +1493,15 @@ fn validate_multiconductor_injections(
             &mut ctx,
         );
     }
+    for (i, capacitor) in net.capacitors.iter().enumerate() {
+        check_one_bus_element(
+            &capacitor.bus,
+            &capacitor.terminal_map,
+            &format!("capacitor {}", capacitor.name),
+            &format!("/model/multiconductor_network/capacitors/{i}"),
+            &mut ctx,
+        );
+    }
     for (i, source) in net.sources.iter().enumerate() {
         check_one_bus_element(
             &source.bus,
@@ -1957,6 +1969,7 @@ fn multiconductor_summary(net: &MulticonductorNetwork) -> ObjectSummary {
     elements.insert("loads".to_owned(), net.loads.len() as u64);
     elements.insert("generators".to_owned(), net.generators.len() as u64);
     elements.insert("shunts".to_owned(), net.shunts.len() as u64);
+    elements.insert("capacitors".to_owned(), net.capacitors.len() as u64);
     elements.insert("voltage_sources".to_owned(), net.sources.len() as u64);
 
     ObjectSummary {

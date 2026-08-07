@@ -152,7 +152,8 @@ jobs:
                 <a href="guide/compiler-ir.html">compiler IR</a>
                 <a href="guide/pio-json-schema.html#pio-package">pio-package/0.1</a>
                 <a href="guide/pio-json-schema.html#pio-payload-balanced">pio-payload-balanced/1</a>
-                <a href="guide/pio-json-schema.html#pio-payload-multiconductor">pio-payload-multiconductor/1</a></dd>
+                <a href="guide/pio-json-schema.html#pio-payload-multiconductor">pio-payload-multiconductor/1</a>
+                <a href="guide/pio-json-schema.html#pio-payload-multiconductor">pio-payload-multiconductor/2</a></dd>
           </div>
           <div>
             <dt>bindings</dt>
@@ -188,6 +189,7 @@ jobs:
         redirect_schema_page pio-package/0.1
         redirect_schema_page pio-payload-balanced/1
         redirect_schema_page pio-payload-multiconductor/1
+        redirect_schema_page pio-payload-multiconductor/2
     - uses: actions/upload-pages-artifact@v5
       with:
         path: target/doc

@@ -82,58 +82,68 @@ fn vendored_examples_validate_after_canonicalization() {
     }
 }
 
-/// The raw vendored fixtures aren't all schema valid as shipped: ieee13's
-/// transformers still use the legacy `v_ref_from`/`v_ref_to` names the
-/// schema renamed to `v_nom_from`/`v_nom_to` (the reader accepts both via
-/// `value_alias` in bmopf/read.rs; the schema's `additionalProperties:
-/// false` rejects the old names outright). Pin the known drift so any
-/// *other* raw validation failure — a real schema mismatch, not the legacy
-/// rename — fails loudly instead of being silently absorbed here.
+/// Both vendored fixtures (bmopf-report schema 0.1.0 vintage) validate as
+/// shipped, so any raw validation failure is a real schema mismatch.
 #[test]
 fn vendored_examples_raw_validation_is_known_and_bounded() {
     let v = schema_validator();
+    for example in ["bmopf/example_ieee13.json", "bmopf/example_enwl_n1_f2.json"] {
+        let text = std::fs::read_to_string(fixture(example)).unwrap();
+        assert_eq!(errors(&v, &text), Vec::<String>::new(), "{example}");
+    }
+}
 
-    let enwl = std::fs::read_to_string(fixture("bmopf/example_enwl_n1_f2.json")).unwrap();
-    assert_eq!(errors(&v, &enwl), Vec::<String>::new(), "enwl example");
-
-    let ieee13 = std::fs::read_to_string(fixture("bmopf/example_ieee13.json")).unwrap();
-    let errs = errors(&v, &ieee13);
-    assert!(
-        !errs.is_empty(),
-        "ieee13 example now validates raw; the legacy v_ref_from/v_ref_to \
-         workaround above is no longer needed and this test can be deleted"
-    );
-    assert!(
-        errs.iter().all(|e| e.contains("v_nom_from")
-            || e.contains("v_nom_to")
-            || e.contains("v_ref_from")
-            || e.contains("v_ref_to")),
-        "unexpected raw validation error beyond the known v_ref_from/v_ref_to rename: {errs:?}"
-    );
+/// BMOPFTools spells symmetric matrices as the upper triangle only; the
+/// reader mirrors the unspelled transpose cells.
+#[test]
+fn one_triangle_matrix_spelling_mirrors_on_read() {
+    let net = parse_bmopf_str(
+        r#"{
+          "bus": {
+            "a": {"terminal_names": ["1", "2"]},
+            "b": {"terminal_names": ["1", "2"]}
+          },
+          "voltage_source": {
+            "s": {"v_magnitude": [240.0, 240.0], "v_angle": [0.0, 0.0], "bus": "a", "terminal_map": ["1", "2"]}
+          },
+          "linecode": {
+            "lc": {
+              "R_series_1_1": 1.0, "R_series_1_2": 0.25, "R_series_2_2": 1.0,
+              "X_series_1_1": 2.0, "X_series_1_2": 0.5, "X_series_2_2": 2.0
+            }
+          },
+          "line": {
+            "l": {"bus_from": "a", "bus_to": "b", "linecode": "lc", "length": 10.0,
+                  "terminal_map_from": ["1", "2"], "terminal_map_to": ["1", "2"]}
+          }
+        }"#,
+    )
+    .unwrap();
+    let lc = &net.linecodes[0];
+    assert_eq!(lc.r_series[0][1].to_bits(), 0.25f64.to_bits());
+    assert_eq!(lc.r_series[1][0].to_bits(), 0.25f64.to_bits());
+    assert_eq!(lc.x_series[1][0].to_bits(), 0.5f64.to_bits());
 }
 
 #[test]
 fn parse_the_public_examples() {
     let net = parse_bmopf_file(fixture("bmopf/example_ieee13.json")).unwrap();
-    assert_eq!(net.buses.len(), 16);
-    assert_eq!(net.switches.len(), 1);
-    assert_eq!(net.shunts.len(), 2);
-    assert_eq!(net.transformers.len(), 7);
+    assert_eq!(net.buses.len(), 7);
+    assert_eq!(net.lines.len(), 4);
+    assert_eq!(net.loads.len(), 5);
+    assert_eq!(net.generators.len(), 1);
+    assert_eq!(net.transformers.len(), 2);
     assert_eq!(net.sources.len(), 1);
     assert!(net.warnings.is_empty(), "{:?}", net.warnings);
 
-    let b611 = net.bus("611").unwrap();
-    assert_eq!(b611.terminals, vec!["3", "4"]);
-    assert_eq!(b611.grounded, vec!["4"]);
-
     let enwl = parse_bmopf_file(fixture("bmopf/example_enwl_n1_f2.json")).unwrap();
     assert_eq!(enwl.buses.len(), 506);
-    assert_eq!(enwl.generators.len(), 7);
-    let g = &enwl.generators[0];
-    assert_eq!(g.cost, Some(0.001));
-    assert!(g.p_max.is_some());
-    // ENWL buses carry phase to neutral bounds.
-    assert!(enwl.buses.iter().any(|b| b.vpn_min.is_some()));
+    assert_eq!(enwl.lines.len(), 505);
+    assert_eq!(enwl.loads.len(), 31);
+    assert_eq!(enwl.shunts.len(), 1);
+    // The ENWL example routes OpenDSS earth terminals to the bus neutral;
+    // buses carry grounded terminals.
+    assert!(enwl.buses.iter().any(|b| !b.grounded.is_empty()));
 }
 
 #[test]
@@ -142,17 +152,27 @@ fn written_output_validates_and_round_trips() {
     let net = parse_bmopf_file(fixture("bmopf/example_ieee13.json")).unwrap();
     let out = write_bmopf_json(&net);
     assert_eq!(errors(&v, &out.text), Vec::<String>::new());
-    // Nothing in the example exceeds the schema, so nothing should drop.
-    assert_eq!(out.warnings, Vec::<String>::new());
+    // The example lists neutral terminals no element references; the writer
+    // prunes them with a warning. Nothing else should drop.
+    assert!(
+        out.warnings
+            .iter()
+            .all(|w| w.contains("not referenced by emitted BMOPF elements")),
+        "{:?}",
+        out.warnings
+    );
 
-    // Canonical idempotence at the model level: parse(write(parse(x)))
-    // equals parse(x) up to the retained source text.
-    let again = parse_bmopf_str(&out.text).unwrap();
-    assert_model_eq(&net, &again);
+    // The fixture is not canonical under our writer (the terminal prune), so
+    // idempotence starts from the canonical form: parse(write(parse(x))).
+    let canonical = parse_bmopf_str(&out.text).unwrap();
+    let out2 = write_bmopf_json(&canonical);
+    assert_eq!(errors(&v, &out2.text), Vec::<String>::new());
+    let again = parse_bmopf_str(&out2.text).unwrap();
+    assert_model_eq(&canonical, &again);
 
     // And byte idempotence of the canonical form.
-    let out2 = write_bmopf_json(&again);
-    assert_eq!(out.text, out2.text);
+    let out3 = write_bmopf_json(&again);
+    assert_eq!(out2.text, out3.text);
 }
 
 #[test]
@@ -161,15 +181,22 @@ fn enwl_round_trips() {
     let net = parse_bmopf_file(fixture("bmopf/example_enwl_n1_f2.json")).unwrap();
     let out = write_bmopf_json(&net);
     assert_eq!(errors(&v, &out.text), Vec::<String>::new());
-    let again = parse_bmopf_str(&out.text).unwrap();
-    assert_model_eq(&net, &again);
+    // Canonical-form model idempotence (the unreferenced-terminal prune makes
+    // the raw fixture non-canonical, as in written_output_validates_and_round_trips).
+    let canonical = parse_bmopf_str(&out.text).unwrap();
+    let out2 = write_bmopf_json(&canonical);
+    let again = parse_bmopf_str(&out2.text).unwrap();
+    assert_model_eq(&canonical, &again);
 }
 
-/// Model equality minus the retained source (which differs by format).
+/// Model equality minus the retained source (which differs by format) and
+/// the stashed `meta` block (the writer regenerates its own provenance, so a
+/// round trip replaces the source document's).
 fn assert_model_eq(a: &DistNetwork, b: &DistNetwork) {
     let strip = |n: &DistNetwork| {
         let mut n = n.clone();
         n.source = Some(Arc::new(String::new()));
+        n.extras.remove("bmopf_meta");
         n
     };
     let (a, b) = (strip(a), strip(b));
@@ -186,8 +213,12 @@ fn assert_model_eq(a: &DistNetwork, b: &DistNetwork) {
     assert_eq!(a.transformers, b.transformers);
 }
 
+/// Every distribution case fixture, whatever its source format, emits a
+/// document that the vendored schema 0.1.0 accepts. The emitted document
+/// must also read back, re-emit valid, and re-emit byte identical, so a
+/// schema break shows up here whether it is in the writer or the reader.
 #[test]
-fn dss_fixtures_emit_valid_bmopf() {
+fn every_dist_fixture_emits_valid_bmopf() {
     let v = schema_validator();
     for case in [
         "opendss/ieee13/IEEE13Nodeckt.dss",
@@ -203,11 +234,65 @@ fn dss_fixtures_emit_valid_bmopf() {
         "micro/fourwire_linecode.dss",
         "micro/defaults_degenerate.dss",
         "micro/ibr_pv_control.dss",
+        "micro/linecode_10x10.dss",
+        "micro/neutral_grounding_reactor.dss",
+        "micro/onephase_cvr_load.dss",
+        "micro/onephase_zip_load.dss",
+        "pmd/ieee13.json",
+        "pmd/fourwire_linecode.json",
+        "bmopf/example_ieee13.json",
+        "bmopf/example_enwl_n1_f2.json",
     ] {
-        let net = parse_dss_file(fixture(case)).unwrap();
+        let net = powerio_dist::parse_file(fixture(case), None).unwrap();
         let out = write_bmopf_json(&net);
         assert_eq!(errors(&v, &out.text), Vec::<String>::new(), "{case}");
+        let again = parse_bmopf_str(&out.text).unwrap();
+        let twice = write_bmopf_json(&again);
+        assert_eq!(
+            errors(&v, &twice.text),
+            Vec::<String>::new(),
+            "{case} round trip"
+        );
+        assert_eq!(out.text, twice.text, "{case} is not idempotent");
     }
+}
+
+/// PMD spells an unbounded phase as JSON null, which restores as Inf.
+/// BMOPF has no unbounded spelling: the rating field drops with a warning
+/// instead of the zero fallback turning "no limit" into a zero limit, and
+/// the finite sibling field survives.
+#[test]
+fn nonfinite_line_ratings_drop_instead_of_zeroing() {
+    let text = r#"{
+        "data_model": "ENGINEERING",
+        "bus": {
+            "b1": {"terminals": [1], "grounded": [], "rg": [], "xg": [], "status": "ENABLED"},
+            "b2": {"terminals": [1], "grounded": [], "rg": [], "xg": [], "status": "ENABLED"}
+        },
+        "linecode": {"lc": {"rs": [[0.1]], "xs": [[0.1]],
+            "g_fr": [[0.0]], "g_to": [[0.0]], "b_fr": [[0.0]], "b_to": [[0.0]]}},
+        "line": {"ln1": {"f_bus": "b1", "t_bus": "b2",
+            "f_connections": [1], "t_connections": [1], "length": 10.0,
+            "linecode": "lc", "cm_ub": [null], "sm_ub": [600.0],
+            "status": "ENABLED"}}
+    }"#;
+    let net = parse_pmd_str(text).unwrap();
+    let out = write_bmopf_json(&net);
+    let doc: serde_json::Value = serde_json::from_str(&out.text).unwrap();
+    assert!(doc["line"]["ln1"].get("i_max").is_none());
+    assert_eq!(doc["line"]["ln1"]["s_max"], serde_json::json!([600.0]));
+    assert!(
+        out.warnings
+            .iter()
+            .any(|w| w.contains("i_max") && w.contains("dropped")),
+        "{:?}",
+        out.warnings
+    );
+    assert!(
+        !out.warnings.iter().any(|w| w.contains("emitted as 0")),
+        "{:?}",
+        out.warnings
+    );
 }
 
 #[test]
@@ -354,28 +439,16 @@ fn delta_wye_leakage_uses_each_winding_base() {
 
     let doc: serde_json::Value = serde_json::from_str(&out.text).unwrap();
     let t = &doc["transformer"]["delta_wye"]["t1"];
-    assert!(t.get("r_series").is_none(), "{t:?}");
-    assert!(t.get("x_series").is_none(), "{t:?}");
+    // Schema 0.1.0 three phase transformers carry one lumped pair on the wye
+    // side; the split `_from`/`_to` fields lost their slots.
+    assert!(t.get("r_series_from").is_none(), "{t:?}");
+    assert!(t.get("x_series_from").is_none(), "{t:?}");
 
-    let z_from = 12_470.0 * 12_470.0 / 300_000.0;
-    let z_to = 208.0 * 208.0 / 300_000.0;
-    let r_from = t["r_series_from"].as_f64().unwrap();
-    let r_to = t["r_series_to"].as_f64().unwrap();
-    let x_from = t["x_series_from"].as_f64().unwrap();
-    let x_to = t["x_series_to"].as_f64().unwrap();
-    assert!(
-        (r_from - 0.005 * z_from).abs() < 1e-12,
-        "r_series_from = {r_from}"
-    );
-    assert!((r_to - 0.005 * z_to).abs() < 1e-12, "r_series_to = {r_to}");
-    assert!(
-        (x_from - 0.0575 / 2.0 * z_from).abs() < 1e-12,
-        "x_series_from = {x_from}"
-    );
-    assert!(
-        (x_to - 0.0575 / 2.0 * z_to).abs() < 1e-12,
-        "x_series_to = {x_to}"
-    );
+    let z_wye = 208.0 * 208.0 / 300_000.0;
+    let r = t["r_series"].as_f64().unwrap();
+    let x = t["x_series"].as_f64().unwrap();
+    assert!((r - 0.01 * z_wye).abs() < 1e-12, "r_series = {r}");
+    assert!((x - 0.0575 * z_wye).abs() < 1e-12, "x_series = {x}");
 
     let round_trip = parse_bmopf_str(&out.text).unwrap();
     let t = round_trip
@@ -405,25 +478,15 @@ fn delta_wye_split_leakage_uses_each_winding_rating() {
 
     let doc: serde_json::Value = serde_json::from_str(&out.text).unwrap();
     let t = &doc["transformer"]["delta_wye"]["t1"];
-    let z_from = 12_470.0 * 12_470.0 / 500_000.0;
-    let z_to = 208.0 * 208.0 / 300_000.0;
-    let r_from = t["r_series_from"].as_f64().unwrap();
-    let r_to = t["r_series_to"].as_f64().unwrap();
-    let x_from = t["x_series_from"].as_f64().unwrap();
-    let x_to = t["x_series_to"].as_f64().unwrap();
-    assert!(
-        (r_from - 0.005 * z_from).abs() < 1e-12,
-        "r_series_from = {r_from}"
-    );
-    assert!((r_to - 0.007 * z_to).abs() < 1e-12, "r_series_to = {r_to}");
-    assert!(
-        (x_from - 0.0575 / 2.0 * z_from).abs() < 1e-12,
-        "x_series_from = {x_from}"
-    );
-    assert!(
-        (x_to - 0.0575 / 2.0 * z_to).abs() < 1e-12,
-        "x_series_to = {x_to}"
-    );
+    // The lumped wye-side pair refers each winding's percent resistance to
+    // its own rating base before summing; XHL is on the first winding's base.
+    let v_wye2 = 208.0 * 208.0;
+    let r = t["r_series"].as_f64().unwrap();
+    let x = t["x_series"].as_f64().unwrap();
+    let expect_r = (0.005 / 500_000.0 + 0.007 / 300_000.0) * v_wye2;
+    let expect_x = 0.0575 * v_wye2 / 500_000.0;
+    assert!((r - expect_r).abs() < 1e-12, "r_series = {r}");
+    assert!((x - expect_x).abs() < 1e-12, "x_series = {x}");
 }
 
 #[test]
@@ -649,13 +712,19 @@ fn raw_ibr_and_control_profile_tables_round_trip() {
 
     assert_eq!(errors(&v, &out.text), Vec::<String>::new());
     let doc: serde_json::Value = serde_json::from_str(&out.text).unwrap();
-    assert_eq!(doc["ibr"]["pv"]["control_profile"], "cp");
-    assert_eq!(doc["control_profile"]["cp"]["power_factor"]["pf"], 0.98);
+    assert_eq!(doc["extras"]["ibr"]["pv"]["control_profile"], "cp");
     assert_eq!(
-        doc["control_profile"]["cp"]["volt_var"]["voltage_reference"],
+        doc["extras"]["control_profile"]["cp"]["power_factor"]["pf"],
+        0.98
+    );
+    assert_eq!(
+        doc["extras"]["control_profile"]["cp"]["volt_var"]["voltage_reference"],
         "PN_PER_PHASE"
     );
-    assert_eq!(doc["control_profile"]["cp"]["volt_var"]["q_ref"], "VAR_MAX");
+    assert_eq!(
+        doc["extras"]["control_profile"]["cp"]["volt_var"]["q_ref"],
+        "VAR_MAX"
+    );
     assert!(
         out.warnings
             .iter()
@@ -1092,7 +1161,7 @@ fn transformer_tap_fields_round_trip_through_bmopf() {
     let out = write_bmopf_json(&net);
     assert_eq!(errors(&v, &out.text), Vec::<String>::new());
     let doc: serde_json::Value = serde_json::from_str(&out.text).unwrap();
-    let t = &doc["transformer"]["single_phase"]["t"];
+    let t = &doc["extras"]["transformer"]["single_phase"]["t"];
     assert_eq!(t["tap"], 1.05);
     assert_eq!(t["tap_min"], 0.9);
     assert_eq!(t["tap_max"], 1.1);
@@ -1127,7 +1196,7 @@ fn dss_fixed_to_side_tap_emits_bmopf_ratio_without_bounds() {
     );
 
     let doc: serde_json::Value = serde_json::from_str(&out.text).unwrap();
-    let t = &doc["transformer"]["single_phase"]["t1"];
+    let t = &doc["extras"]["transformer"]["single_phase"]["t1"];
     assert!((t["tap"].as_f64().unwrap() - (1.0 / 1.05)).abs() < 1e-12);
     assert!(t.get("tap_min").is_none(), "{t:?}");
     assert!(t.get("tap_max").is_none(), "{t:?}");
@@ -1163,7 +1232,7 @@ fn dss_center_tap_uses_first_secondary_tap_and_warns_if_halves_differ() {
     );
 
     let doc: serde_json::Value = serde_json::from_str(&out.text).unwrap();
-    let t = &doc["transformer"]["center_tap"]["t1"];
+    let t = &doc["extras"]["transformer"]["center_tap"]["t1"];
     assert!((t["tap"].as_f64().unwrap() - (1.02 / 1.01)).abs() < 1e-12);
 }
 
@@ -1203,7 +1272,7 @@ fn pmd_uniform_per_phase_taps_emit_ratio_without_warning() {
         out.warnings
     );
     let doc: serde_json::Value = serde_json::from_str(&out.text).unwrap();
-    let t = &doc["transformer"]["single_phase"]["reg_1"];
+    let t = &doc["extras"]["transformer"]["single_phase"]["reg_1"];
     assert!((t["tap"].as_f64().unwrap() - (1.0 / 1.05)).abs() < 1e-12);
     assert!(t.get("tap_min").is_none());
     assert!(t.get("tap_max").is_none());
@@ -1247,7 +1316,7 @@ fn pmd_nonuniform_per_phase_taps_warn_with_stable_code() {
     );
 
     let doc: serde_json::Value = serde_json::from_str(&out.text).unwrap();
-    let t = &doc["transformer"]["single_phase"]["reg_1"];
+    let t = &doc["extras"]["transformer"]["single_phase"]["reg_1"];
     assert!((t["tap"].as_f64().unwrap() - (1.0 / 1.05)).abs() < 1e-12);
 }
 
@@ -1465,8 +1534,9 @@ fn three_phase_transformer_no_load_fields_round_trip_through_bmopf() {
     let t = &doc["transformer"]["wye_delta"]["t"];
     assert_eq!(t["v_nom_from"], serde_json::json!(7200.0));
     assert_eq!(t["v_nom_to"], serde_json::json!(480.0));
-    assert_eq!(t["g_no_load"], serde_json::json!(0.000_002));
-    assert_eq!(t["b_no_load"], serde_json::json!(-0.000_003));
+    let ox = &doc["extras"]["transformer"]["wye_delta"]["t"];
+    assert_eq!(ox["g_no_load"], serde_json::json!(0.000_002));
+    assert_eq!(ox["b_no_load"], serde_json::json!(-0.000_003));
 }
 
 #[test]
@@ -1480,7 +1550,7 @@ fn dss_noloadloss_derives_bmopf_no_load_fields() {
     );
     let out = write_bmopf_json(&net);
     let doc: serde_json::Value = serde_json::from_str(&out.text).unwrap();
-    let t = &doc["transformer"]["single_phase"]["t1"];
+    let t = &doc["extras"]["transformer"]["single_phase"]["t1"];
     let expected_g = 0.2 / 100.0 * 25_000.0 / (7200.0 * 7200.0);
     let g = t["g_no_load"].as_f64().unwrap();
     assert!((g - expected_g).abs() < 1e-18, "g_no_load = {g}");
@@ -1515,7 +1585,7 @@ fn transformer_neutral_impedance_round_trips_dss_and_bmopf() {
     let out = write_bmopf_json(&net);
     assert_eq!(errors(&schema_validator(), &out.text), Vec::<String>::new());
     let doc: serde_json::Value = serde_json::from_str(&out.text).unwrap();
-    let t = &doc["transformer"]["single_phase"]["t1"];
+    let t = &doc["extras"]["transformer"]["single_phase"]["t1"];
     assert_eq!(t["r_neutral_from"], serde_json::json!(5.0));
     assert_eq!(t["x_neutral_from"], serde_json::json!(6.0));
     assert_eq!(t["r_neutral_to"], serde_json::json!(7.0));
@@ -1624,6 +1694,9 @@ fn wye_wye_3_neutral_grounding_decomposes_once_not_per_phase() {
     let doc: serde_json::Value = serde_json::from_str(&out.text).unwrap();
     let sp = doc["transformer"]["single_phase"].as_object().unwrap();
     assert_eq!(sp.len(), 3);
+    let sp = doc["extras"]["transformer"]["single_phase"]
+        .as_object()
+        .unwrap();
     assert_eq!(sp["t_1"]["r_neutral_from"], serde_json::json!(5.0));
     assert_eq!(sp["t_1"]["x_neutral_from"], serde_json::json!(6.0));
     assert_eq!(sp["t_1"]["r_neutral_to"], serde_json::json!(7.0));
@@ -1680,10 +1753,13 @@ fn wye_wye_3_raw_no_load_splits_across_decomposition() {
     let doc: serde_json::Value = serde_json::from_str(&out.text).unwrap();
     let sp = doc["transformer"]["single_phase"].as_object().unwrap();
     assert_eq!(sp.len(), 3);
+    let ox = doc["extras"]["transformer"]["single_phase"]
+        .as_object()
+        .unwrap();
     let mut g_sum = 0.0;
     let mut b_sum = 0.0;
     for name in ["t_1", "t_2", "t_3"] {
-        let t = &sp[name];
+        let t = &ox[name];
         assert_eq!(t["g_no_load"], serde_json::json!(0.000_003));
         assert_eq!(t["b_no_load"], serde_json::json!(-0.000_004));
         g_sum += t["g_no_load"].as_f64().unwrap();
@@ -1788,7 +1864,7 @@ fn negative_validation_cases() {
         (
             "missing terminal_map on a line",
             mutate(&|d| {
-                d["line"]["632633"]
+                d["line"]["l632671"]
                     .as_object_mut()
                     .unwrap()
                     .remove("terminal_map_from");
@@ -1811,7 +1887,7 @@ fn negative_validation_cases() {
         (
             "wrong type for length",
             mutate(&|d| {
-                d["line"]["632633"]["length"] = "152.4".into();
+                d["line"]["l632671"]["length"] = "152.4".into();
             }),
         ),
         (
@@ -1823,9 +1899,9 @@ fn negative_validation_cases() {
             }),
         ),
         (
-            "negative switch i_max",
+            "negative line i_max",
             mutate(&|d| {
-                d["switch"]["671692"]["i_max"] = serde_json::json!([-600.0]);
+                d["line"]["l671611"]["i_max"] = serde_json::json!([-600.0]);
             }),
         ),
         (
@@ -2012,7 +2088,7 @@ fn bmopf_center_tap_neutral_grounding_rebuilds_once() {
     let out = write_bmopf_json(&parse_dss_str(&dss));
     assert_eq!(errors(&schema_validator(), &out.text), Vec::<String>::new());
     let doc: serde_json::Value = serde_json::from_str(&out.text).unwrap();
-    let t = &doc["transformer"]["center_tap"]["ct"];
+    let t = &doc["extras"]["transformer"]["center_tap"]["ct"];
     assert_eq!(t["r_neutral_to"], serde_json::json!(5.0));
     assert_eq!(t["x_neutral_to"], serde_json::json!(6.0));
 }
@@ -2163,6 +2239,42 @@ fn matrixless_linecode_and_shunt_emit_required_zero_matrices_loudly() {
         out.warnings
             .iter()
             .any(|w| w.contains("shunt empty") && w.contains("no admittance matrix"))
+    );
+}
+
+/// `serde_json::Map` iterates in key order, so `line` comes before
+/// `linecode`. A line named like a declared linecode must not take that name
+/// for its synthesized inline code, or every line that names the declared
+/// linecode resolves to the line's own impedance instead. The match is
+/// case-insensitive, like `DistNetwork::linecode`.
+#[test]
+fn synthesized_inline_linecode_never_shadows_a_declared_one() {
+    let text = doc_with(
+        r#", "linecode": {"LC": {"R_series_1_1": 9.0, "X_series_1_1": 9.0}},
+        "line": {
+            "lc": {"bus_from": "a", "bus_to": "a", "terminal_map_from": ["1"],
+                   "terminal_map_to": ["1"], "R_series_1_1": 1.0, "X_series_1_1": 1.0},
+            "user": {"bus_from": "a", "bus_to": "a", "terminal_map_from": ["1"],
+                     "terminal_map_to": ["1"], "linecode": "LC", "length": 5.0}
+        }"#,
+    );
+    let net = parse_bmopf_str(&text).unwrap();
+    assert_eq!(net.linecodes.len(), 2);
+    let series = |name: &str| net.linecode(name).unwrap().r_series[0][0].to_bits();
+    // The declared code keeps its name and its impedance.
+    assert_eq!(series("LC"), 9.0f64.to_bits());
+    let user = net.lines.iter().find(|l| l.name == "user").unwrap();
+    assert_eq!(series(&user.linecode), 9.0f64.to_bits());
+    // The inline line takes a suffixed name and keeps its own impedance.
+    let inline = net.lines.iter().find(|l| l.name == "lc").unwrap();
+    assert_eq!(inline.linecode, "lc_");
+    assert_eq!(series(&inline.linecode), 1.0f64.to_bits());
+    assert!(
+        net.warnings
+            .iter()
+            .any(|w| w.contains("line lc") && w.contains("synthesized linecode `lc_`")),
+        "{:?}",
+        net.warnings
     );
 }
 
@@ -2339,6 +2451,58 @@ fn reader_is_liberal_where_the_writer_is_strict() {
     assert!(!out.text.contains("hand edited"));
 }
 
+/// The writer seeds its `extras` block from the source document's own
+/// `extras` object, then files the relocated top-level tables into the same
+/// block. A source value that is not a table has no slot for a named entry,
+/// so it must not reach the write as one: this used to panic on a document
+/// of a few hundred bytes, through parse and write back.
+#[test]
+fn source_extras_value_that_is_not_a_table_does_not_panic() {
+    for class in ["time_series", "dc_bus", "dc_line", "dc_load", "dc_source"] {
+        let text = doc_with(&format!(
+            r#", "extras": {{"{class}": 1}}, "{class}": {{"t1": {{"values": [1.0]}}}}"#
+        ));
+        let net = parse_bmopf_str(&text).unwrap();
+        let out = write_bmopf_json(&net);
+        assert!(
+            out.warnings
+                .iter()
+                .any(|w| w.contains(&format!("extras `{class}`")) && w.contains("not a table")),
+            "{class}: {:?}",
+            out.warnings
+        );
+        // The top-level objects survive into the relocated table.
+        let doc: serde_json::Value = serde_json::from_str(&out.text).unwrap();
+        assert!(
+            doc["extras"][class]["t1"].is_object(),
+            "{class}: {}",
+            out.text
+        );
+    }
+}
+
+/// The same slot takes entries from two places: the source `extras` block and
+/// the source top-level table. A name in both is a replacement, and the two
+/// tier fidelity rule says a replacement is never silent.
+#[test]
+fn source_extras_entry_replaced_by_the_top_level_table_warns() {
+    let text = doc_with(
+        r#", "extras": {"time_series": {"t1": {"values": [9.0]}}},
+        "time_series": {"t1": {"values": [1.0]}}"#,
+    );
+    let net = parse_bmopf_str(&text).unwrap();
+    let out = write_bmopf_json(&net);
+    assert!(
+        out.warnings
+            .iter()
+            .any(|w| w.contains("time_series t1") && w.contains("replaced")),
+        "{:?}",
+        out.warnings
+    );
+    let doc: serde_json::Value = serde_json::from_str(&out.text).unwrap();
+    assert_eq!(doc["extras"]["time_series"]["t1"]["values"][0], 1.0);
+}
+
 #[test]
 fn oversized_matrix_key_is_bounded_and_warned() {
     // The largest matrix index seen sizes a dense allocation; an unbounded
@@ -2385,4 +2549,271 @@ fn meta_block_is_kept_in_extras() {
     )
     .unwrap();
     assert!(net.extras.contains_key("bmopf_meta"), "{:?}", net.extras);
+}
+
+/// Schema 0.1.0 calls `length` "purely descriptive" on the inline impedance
+/// branch: the matrices are the whole impedance of the line, in ohms. A
+/// reader that scales them by a declared length multiplies the impedance.
+#[test]
+fn inline_impedance_is_not_scaled_by_a_descriptive_length() {
+    let text = doc_with(
+        r#", "line": {"l": {"bus_from": "a", "bus_to": "a", "terminal_map_from": ["1"],
+            "terminal_map_to": ["1"], "length": 100.0,
+            "R_series_1_1": 1.0, "X_series_1_1": 2.0}}"#,
+    );
+    let net = parse_bmopf_str(&text).unwrap();
+    let line = &net.lines[0];
+    let code = net.linecode(&line.linecode).unwrap();
+    assert_eq!(line.length.to_bits(), 1.0f64.to_bits());
+    assert_eq!(
+        (code.r_series[0][0] * line.length).to_bits(),
+        1.0f64.to_bits()
+    );
+    assert!(
+        net.warnings
+            .iter()
+            .any(|w| w.contains("line l") && w.contains("does not scale")),
+        "{:?}",
+        net.warnings
+    );
+}
+
+/// Schema 0.1.0 moved the IBR and control profile tables under `extras`, and
+/// the reader accepts both places. A part-migrated document that declares a
+/// name twice must not produce two elements of that name.
+#[test]
+fn a_name_declared_at_the_top_level_and_under_extras_reads_once() {
+    let ibr = r#"{"pv1": {"bus": "a", "terminal_map": ["1"], "p_max": 1000.0}}"#;
+    let profile = r#"{"cp1": {"power_factor": {"pf": 0.95}}}"#;
+    let text = doc_with(&format!(
+        r#", "ibr": {ibr}, "control_profile": {profile},
+        "extras": {{"ibr": {ibr}, "control_profile": {profile}}}"#
+    ));
+    let net = parse_bmopf_str(&text).unwrap();
+    assert_eq!(net.ibrs.len(), 1);
+    assert_eq!(net.control_profiles.len(), 1);
+    for class in ["ibr pv1", "control_profile cp1"] {
+        assert!(
+            net.warnings
+                .iter()
+                .any(|w| w.contains(class) && w.contains("second copy is dropped")),
+            "{class}: {:?}",
+            net.warnings
+        );
+    }
+}
+
+/// The transformer arm folds `extras.transformer` back onto the raw
+/// transformer objects. An overlay with no transformer table to attach to
+/// has no reader, so it must not disappear without a word.
+#[test]
+fn an_orphan_transformer_overlay_warns() {
+    let text = doc_with(r#", "extras": {"transformer": {"single_phase": {"t": {"tap": 1.05}}}}"#);
+    let net = parse_bmopf_str(&text).unwrap();
+    assert!(net.transformers.is_empty());
+    assert!(
+        net.warnings
+            .iter()
+            .any(|w| w.contains("`extras.transformer`") && w.contains("dropped")),
+        "{:?}",
+        net.warnings
+    );
+}
+
+/// An OpenDSS capacitor the dss reader could not type stays untyped. The
+/// typed `capacitor` table is strict, so the raw properties re-emit under
+/// `extras`, which the schema leaves free-form.
+#[test]
+fn an_untyped_capacitor_re_emits_under_extras() {
+    let net = parse_dss_str(
+        "New Circuit.c basekv=4.16\n\
+         New Capacitor.cap bus1=b.1 phases=0 kv=7.2 kvar=300\n",
+    );
+    assert!(net.untyped.iter().any(|u| u.class == "capacitor"));
+    let out = write_bmopf_json(&net);
+    let doc: serde_json::Value = serde_json::from_str(&out.text).unwrap();
+    assert!(
+        doc["extras"]["capacitor"]["cap"].is_object(),
+        "{}",
+        out.text
+    );
+    assert_eq!(errors(&schema_validator(), &out.text), Vec::<String>::new());
+}
+
+/// Each winding holds its percent resistance on its own rating base. A
+/// rating that is not positive has no base to refer to, so that term drops
+/// with a warning; an infinity would otherwise reach `num` and emit as a
+/// lossless zero.
+#[test]
+fn a_winding_rating_that_is_not_positive_drops_only_its_own_resistance_term() {
+    let names = || vec!["1".to_string(), "2".to_string(), "3".to_string()];
+    let mut from = Winding::new("a", names(), WindingConn::Delta, 416.0, 1000.0);
+    from.r_pct = 1.0;
+    let mut to = Winding::new("a", names(), WindingConn::Wye, 240.0, 0.0);
+    to.r_pct = 1.0;
+    let mut net = DistNetwork::default();
+    net.transformers
+        .push(DistTransformer::new("t", vec![from, to], vec![4.0], 3));
+
+    let out = write_bmopf_json(&net);
+    let doc: serde_json::Value = serde_json::from_str(&out.text).unwrap();
+    let r = doc["transformer"]["delta_wye"]["t"]["r_series"]
+        .as_f64()
+        .expect("r_series is a number");
+    // The `from` term survives. An infinity from the zero rating would have
+    // reached `num` and emitted as a lossless 0.
+    assert!(r > 0.0 && r.is_finite(), "r_series = {r}");
+    assert!(
+        out.warnings
+            .iter()
+            .any(|w| w.contains("`to` winding rating is not positive")),
+        "{:?}",
+        out.warnings
+    );
+}
+
+/// XHL is a percent on the first winding's rating base, the same base the
+/// resistance terms use. A rating that is not positive leaves the reactance
+/// undefined, and emitting it as 0 would model the transformer as a short
+/// circuit, so the field drops with a warning instead. The schema leaves
+/// `x_series` optional, so an absent field reads as unknown.
+#[test]
+fn a_from_rating_that_is_not_positive_drops_the_reactance_instead_of_zeroing_it() {
+    let names = || vec!["1".to_string(), "2".to_string(), "3".to_string()];
+    let from = Winding::new("a", names(), WindingConn::Delta, 416.0, 0.0);
+    let to = Winding::new("a", names(), WindingConn::Wye, 240.0, 1000.0);
+    let mut net = DistNetwork::default();
+    net.transformers
+        .push(DistTransformer::new("t", vec![from, to], vec![4.0], 3));
+
+    let out = write_bmopf_json(&net);
+    let doc: serde_json::Value = serde_json::from_str(&out.text).unwrap();
+    let t = &doc["transformer"]["delta_wye"]["t"];
+    assert!(
+        t.get("x_series").is_none(),
+        "x_series must be absent, not a zero short circuit: {}",
+        out.text
+    );
+    assert!(
+        out.warnings
+            .iter()
+            .any(|w| w.contains("`x_series` is dropped")),
+        "{:?}",
+        out.warnings
+    );
+    assert_eq!(errors(&schema_validator(), &out.text), Vec::<String>::new());
+}
+
+/// The re-vendored example networks carry no generator `cost` and no bus
+/// `vpn_min`, so the assertions that used to cover both read paths went with
+/// the old fixtures. A synthetic document keeps the coverage: the per-phase
+/// cost array collapses to one value with a warning, and the phase to
+/// neutral bound arrays survive read and write.
+#[test]
+fn generator_cost_and_phase_neutral_bounds_survive_a_round_trip() {
+    let text = r#"{
+      "bus": {"a": {"terminal_names": ["1", "2", "3"],
+        "vpn_min": [220.0, 220.0, 220.0], "vpn_max": [260.0, 260.0, 260.0]}},
+      "voltage_source": {"s": {"v_magnitude": [240.0], "v_angle": [0.0],
+        "bus": "a", "terminal_map": ["1"]}},
+      "generator": {"g": {"bus": "a", "terminal_map": ["1", "2", "3"],
+        "configuration": "WYE", "p_max": [1000.0], "cost": [0.12, 0.12, 0.12]}}
+    }"#;
+    let net = parse_bmopf_str(text).unwrap();
+
+    let bus = net.bus("a").unwrap();
+    assert_eq!(
+        bus.vpn_min.as_deref(),
+        Some([220.0, 220.0, 220.0].as_slice())
+    );
+    assert_eq!(
+        bus.vpn_max.as_deref(),
+        Some([260.0, 260.0, 260.0].as_slice())
+    );
+    let generator = &net.generators[0];
+    assert_eq!(generator.cost.map(f64::to_bits), Some(0.12f64.to_bits()));
+
+    // Both survive the write and read back.
+    let out = write_bmopf_json(&net);
+    assert_eq!(errors(&schema_validator(), &out.text), Vec::<String>::new());
+    let again = parse_bmopf_str(&out.text).unwrap();
+    assert_eq!(again.bus("a").unwrap().vpn_min, bus.vpn_min);
+    assert_eq!(
+        again.generators[0].cost.map(f64::to_bits),
+        generator.cost.map(f64::to_bits)
+    );
+}
+
+/// Schema 0.1.0 defines generator `s_max`/`i_max`, linecode `source`, and the
+/// `meta` provenance fields. Each is read into the model without an
+/// outside-the-schema warning, survives the write, and validates; `meta`
+/// keeps the source provenance while the writer owns `$schema`, `frequency`,
+/// and `case_study_generator`.
+#[test]
+fn schema_fields_survive_a_round_trip_without_wrong_warnings() {
+    let text = r#"{
+      "meta": {"title": "synthetic feeder", "license": "CC-BY-4.0",
+        "authors": [{"name": "task force"}],
+        "data_sources": [{"name": "measurement campaign"}],
+        "created": "2026-01-01", "provenance": {"note": "synthetic"},
+        "frequency": 50.0,
+        "case_study_generator": {"tool": "elsewhere", "version": "0.0.0"}},
+      "bus": {"a": {"terminal_names": ["1", "2", "3"]}},
+      "voltage_source": {"s": {"v_magnitude": [240.0], "v_angle": [0.0],
+        "bus": "a", "terminal_map": ["1"]}},
+      "linecode": {"lc": {"R_series_1_1": 0.1, "X_series_1_1": 0.2,
+        "source": "datasheet"}},
+      "line": {"l": {"bus_from": "a", "bus_to": "a",
+        "terminal_map_from": ["1"], "terminal_map_to": ["2"],
+        "linecode": "lc", "length": 10.0}},
+      "generator": {"g": {"bus": "a", "terminal_map": ["1", "2", "3"],
+        "configuration": "WYE", "cost": [0.1, 0.1, 0.1],
+        "s_max": [5000.0, 5000.0, 5000.0], "i_max": [20.0, 20.0, 20.0]}}
+    }"#;
+    let net = parse_bmopf_str(text).unwrap();
+    assert!(
+        net.warnings
+            .iter()
+            .all(|w| !w.contains("outside the schema")),
+        "schema fields must not warn as outside the schema: {:?}",
+        net.warnings
+    );
+    let generator = &net.generators[0];
+    assert_eq!(generator.s_max.as_deref(), Some([5000.0; 3].as_slice()));
+    assert_eq!(generator.i_max.as_deref(), Some([20.0; 3].as_slice()));
+    assert_eq!(net.linecodes[0].source.as_deref(), Some("datasheet"));
+
+    let out = write_bmopf_json(&net);
+    assert_eq!(errors(&schema_validator(), &out.text), Vec::<String>::new());
+    let doc: serde_json::Value = serde_json::from_str(&out.text).unwrap();
+    let meta = &doc["meta"];
+    assert_eq!(meta["title"], serde_json::json!("synthetic feeder"));
+    assert_eq!(meta["license"], serde_json::json!("CC-BY-4.0"));
+    assert_eq!(meta["authors"], serde_json::json!([{"name": "task force"}]));
+    assert_eq!(
+        meta["data_sources"],
+        serde_json::json!([{"name": "measurement campaign"}])
+    );
+    assert_eq!(meta["created"], serde_json::json!("2026-01-01"));
+    assert_eq!(meta["provenance"], serde_json::json!({"note": "synthetic"}));
+    // Writer-owned: powerio's stamp and the model frequency, whatever the
+    // source declared.
+    assert_eq!(meta["case_study_generator"]["tool"], "powerio");
+    assert_eq!(meta["frequency"], serde_json::json!(50.0));
+    assert_eq!(
+        doc["generator"]["g"]["s_max"],
+        serde_json::json!([5000.0, 5000.0, 5000.0])
+    );
+    assert_eq!(
+        doc["generator"]["g"]["i_max"],
+        serde_json::json!([20.0, 20.0, 20.0])
+    );
+    assert_eq!(
+        doc["linecode"]["lc"]["source"],
+        serde_json::json!("datasheet")
+    );
+
+    // The write is a fixed point: a second read and write changes nothing.
+    let again = parse_bmopf_str(&out.text).unwrap();
+    assert_eq!(write_bmopf_json(&again).text, out.text);
 }

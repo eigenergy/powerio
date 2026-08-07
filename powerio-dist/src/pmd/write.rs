@@ -11,15 +11,15 @@
 //! impedance, tap arrays, polarity, inline line impedance) win over the
 //! recomputed defaults, so PMD in, PMD out does not alter fields.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
 use serde_json::{Map, Value, json};
 
 use crate::convert::Conversion;
 use crate::geo::CoordinateSpace;
 use crate::model::{
-    Configuration, DistBus, DistLineCode, DistLoadVoltageModel, DistNetwork, DistTransformer,
-    Extras, Mat, VoltageSource, Winding, WindingConn,
+    Configuration, DistBus, DistLine, DistLineCode, DistLoadVoltageModel, DistNetwork,
+    DistTransformer, Extras, Mat, VoltageSource, Winding, WindingConn,
 };
 
 /// Writes the ENGINEERING document.
@@ -31,6 +31,7 @@ use crate::model::{
 pub fn write_pmd_json(net: &DistNetwork) -> Conversion {
     let mut w = Writer {
         warnings: Vec::new(),
+        renamed_terminals: renamed_terminals(net),
     };
     let doc = w.document(net);
     Conversion {
@@ -52,23 +53,97 @@ const MAX_DIM: usize = 64;
 
 struct Writer {
     warnings: Vec<String>,
+    /// One id per terminal name that is not numeric, for the whole network.
+    renamed_terminals: BTreeMap<String, i64>,
 }
 
-/// Terminal names as PMD integer connections; non numeric names count from
-/// 90 upward (PMD requires ints; the warning names the rename).
-fn conns(map: &[String], warnings: &mut Vec<String>, what: &str) -> Vec<i64> {
-    map.iter()
-        .enumerate()
-        .map(|(k, t)| {
-            t.parse::<i64>().unwrap_or_else(|_| {
-                let fallback = 90 + i64::try_from(k).unwrap_or(0);
-                warnings.push(format!(
-                    "{what}: terminal `{t}` is not numeric; emitted as {fallback}"
+/// One id for each terminal name in the network that PMD cannot spell.
+///
+/// PMD requires integer connections. A name such as `n` therefore needs an
+/// id, and that id must be the same everywhere the name appears, or two
+/// elements at one bus stop sharing a conductor. Each name takes the
+/// smallest positive integer that no numeric terminal name already uses, so
+/// the ids stay as small as the model allows: an id far above the conductor
+/// count would drive the `conductor_ids` enumeration to its cap and produce
+/// a document with 64 conductors for a 4 conductor network.
+///
+/// Counting up from the largest numeric name would look simpler, but a
+/// document may name a terminal `9223372036854775807`. That saturates every
+/// id to the same value, and two conductors then merge into one. Taking the
+/// smallest free integer cannot collide and cannot overflow: the search
+/// stops after at most one step per terminal already in the document.
+fn renamed_terminals(net: &DistNetwork) -> BTreeMap<String, i64> {
+    let mut used = BTreeSet::new();
+    let mut names = BTreeSet::new();
+    for terminal in all_terminal_names(net) {
+        match terminal.parse::<i64>() {
+            Ok(value) => {
+                used.insert(value);
+            }
+            Err(_) => {
+                names.insert(terminal.to_string());
+            }
+        }
+    }
+    let mut out = BTreeMap::new();
+    let mut next = 1i64;
+    for name in names {
+        while used.contains(&next) {
+            next += 1;
+        }
+        used.insert(next);
+        out.insert(name, next);
+        next += 1;
+    }
+    out
+}
+
+impl Writer {
+    /// Terminal names as PMD integer connections. A name that is not numeric
+    /// takes the id [`renamed_terminals`] gave it, so the same name is the
+    /// same conductor everywhere in the document.
+    fn conns(&mut self, map: &[String], what: &str) -> Vec<i64> {
+        map.iter()
+            .map(|t| {
+                if let Ok(value) = t.parse::<i64>() {
+                    return value;
+                }
+                let id = self.renamed_terminals.get(t).copied().unwrap_or(0);
+                self.warnings.push(format!(
+                    "{what}: terminal `{t}` is not numeric; emitted as {id}"
                 ));
-                fallback
+                id
             })
-        })
-        .collect()
+            .collect()
+    }
+}
+
+fn all_terminal_names(net: &DistNetwork) -> impl Iterator<Item = &str> {
+    let maps = net
+        .lines
+        .iter()
+        .flat_map(|l| [&l.terminal_map_from, &l.terminal_map_to])
+        .chain(
+            net.switches
+                .iter()
+                .flat_map(|s| [&s.terminal_map_from, &s.terminal_map_to]),
+        )
+        .chain(net.loads.iter().map(|l| &l.terminal_map))
+        .chain(net.generators.iter().map(|g| &g.terminal_map))
+        .chain(net.capacitors.iter().map(|c| &c.terminal_map))
+        .chain(net.shunts.iter().map(|s| &s.terminal_map))
+        .chain(net.sources.iter().map(|s| &s.terminal_map))
+        .chain(net.ibrs.iter().map(|i| &i.terminal_map))
+        .chain(
+            net.transformers
+                .iter()
+                .flat_map(|t| t.windings.iter().map(|w| &w.terminal_map)),
+        );
+    net.buses
+        .iter()
+        .flat_map(|b| [&b.terminals, &b.grounded])
+        .chain(maps)
+        .flat_map(|m| m.iter().map(String::as_str))
 }
 
 /// A matrix as PMD serializes it: array of columns (`hcat` rebuilds it).
@@ -215,11 +290,18 @@ impl Writer {
         // value of a terminal name rather than a count of anything. A single
         // terminal named `4444444444444444` would ask for petabytes, so the
         // enumeration is clamped like every other model driven dimension.
+        // A terminal name that is not numeric holds an id from
+        // `renamed_terminals`. Those ids are the smallest free positive
+        // integers, so a numeric name does not bound them and the enumeration
+        // must include them explicitly. Without them the document lists fewer
+        // conductors than its own `connections` arrays use, and a read back
+        // and rewrite then produces a longer list.
         let max_conductor = net
             .buses
             .iter()
             .flat_map(|b| &b.terminals)
             .filter_map(|t| t.parse::<i64>().ok())
+            .chain(self.renamed_terminals.values().copied())
             .max()
             .unwrap_or(4);
         let max_dim = i64::try_from(MAX_DIM).expect("MAX_DIM is small");
@@ -240,13 +322,9 @@ impl Writer {
             let mut o = Map::new();
             o.insert(
                 "terminals".into(),
-                json!(conns(
-                    &b.terminals,
-                    &mut self.warnings,
-                    &format!("bus {}", b.id)
-                )),
+                json!(self.conns(&b.terminals, &format!("bus {}", b.id))),
             );
-            let grounded = conns(&b.grounded, &mut self.warnings, &format!("bus {}", b.id));
+            let grounded = self.conns(&b.grounded, &format!("bus {}", b.id));
             // Nonzero grounding impedance rides in extras (the reader's
             // stash); zero vectors are the materialized default.
             for key in ["rg", "xg"] {
@@ -269,8 +347,11 @@ impl Writer {
                 ("vpn_max", b.vpn_max.is_some()),
                 ("vpp_min", b.vpp_min.is_some()),
                 ("vpp_max", b.vpp_max.is_some()),
-                ("vsym_min", b.vsym_min.is_some()),
-                ("vsym_max", b.vsym_max.is_some()),
+                ("vpos_min", b.vpos_min.is_some()),
+                ("vpos_max", b.vpos_max.is_some()),
+                ("vneg_max", b.vneg_max.is_some()),
+                ("vzero_max", b.vzero_max.is_some()),
+                ("vn_max", b.vn_max.is_some()),
             ] {
                 if present {
                     self.warn(format!(
@@ -283,7 +364,7 @@ impl Writer {
         }
         doc.insert("bus".into(), Value::Object(buses));
 
-        Self::linecodes(net, &mut doc);
+        self.linecodes(net, &mut doc);
         self.branches(net, &mut doc);
         self.injections(net, &mut doc);
         self.transformers(net, &mut doc);
@@ -297,7 +378,7 @@ impl Writer {
         Value::Object(doc)
     }
 
-    fn linecodes(net: &DistNetwork, doc: &mut Map<String, Value>) {
+    fn linecodes(&mut self, net: &DistNetwork, doc: &mut Map<String, Value>) {
         // Linecodes the reader materialized from inline line impedance
         // re-inline on the line; they are skipped here unless a line
         // without the marker also references them.
@@ -315,10 +396,27 @@ impl Writer {
             if let Some(s_max) = &c.s_max {
                 o.insert("sm_ub".into(), json!(s_max));
             }
+            if c.source.is_some() {
+                self.warn(format!(
+                    "linecode {}: matrix provenance `source` has no ENGINEERING field; dropped",
+                    c.name
+                ));
+            }
             codes.insert(c.name.to_lowercase(), Value::Object(o));
         }
         if !codes.is_empty() {
             doc.insert("linecode".into(), Value::Object(codes));
+        }
+    }
+
+    /// Line-level ratings (BMOPF `i_max`/`s_max`) map onto the ENGINEERING
+    /// line's own `cm_ub`/`sm_ub` slots.
+    fn line_ratings(o: &mut Map<String, Value>, l: &DistLine) {
+        if let Some(i_max) = &l.i_max {
+            o.insert("cm_ub".into(), json!(i_max));
+        }
+        if let Some(s_max) = &l.s_max {
+            o.insert("sm_ub".into(), json!(s_max));
         }
     }
 
@@ -332,11 +430,11 @@ impl Writer {
                 let what = format!("line {}", l.name);
                 o.insert(
                     "f_connections".into(),
-                    json!(conns(&l.terminal_map_from, &mut self.warnings, &what)),
+                    json!(self.conns(&l.terminal_map_from, &what)),
                 );
                 o.insert(
                     "t_connections".into(),
-                    json!(conns(&l.terminal_map_to, &mut self.warnings, &what)),
+                    json!(self.conns(&l.terminal_map_to, &what)),
                 );
                 o.insert("length".into(), json!(l.length));
                 // A line the reader materialized a linecode for re-inlines
@@ -349,6 +447,9 @@ impl Writer {
                         if let Some(i_max) = &c.i_max {
                             o.insert("cm_ub".into(), json!(i_max));
                         }
+                        if let Some(s_max) = &c.s_max {
+                            o.insert("sm_ub".into(), json!(s_max));
+                        }
                     }
                     _ => {
                         if inline {
@@ -360,6 +461,7 @@ impl Writer {
                         o.insert("linecode".into(), json!(l.linecode.to_lowercase()));
                     }
                 }
+                Self::line_ratings(&mut o, l);
                 o.insert("status".into(), Self::status(&l.extras));
                 o.insert(
                     "source_id".into(),
@@ -381,11 +483,11 @@ impl Writer {
                 o.insert("t_bus".into(), json!(s.bus_to.to_lowercase()));
                 o.insert(
                     "f_connections".into(),
-                    json!(conns(&s.terminal_map_from, &mut self.warnings, &what)),
+                    json!(self.conns(&s.terminal_map_from, &what)),
                 );
                 o.insert(
                     "t_connections".into(),
-                    json!(conns(&s.terminal_map_to, &mut self.warnings, &what)),
+                    json!(self.conns(&s.terminal_map_to, &what)),
                 );
                 // The reader's stash carries the source's series matrices;
                 // otherwise PMD models a dss switch as a tiny series
@@ -435,7 +537,7 @@ impl Writer {
             for l in &net.loads {
                 let mut o = Map::new();
                 let what = format!("load {}", l.name);
-                let connections = conns(&l.terminal_map, &mut self.warnings, &what);
+                let connections = self.conns(&l.terminal_map, &what);
                 // PMD types a two terminal load WYE when the return is the
                 // bus's grounded neutral and DELTA otherwise.
                 let configuration = match l.configuration {
@@ -523,7 +625,7 @@ impl Writer {
                 o.insert("bus".into(), json!(g.bus.to_lowercase()));
                 o.insert(
                     "connections".into(),
-                    json!(conns(&g.terminal_map, &mut self.warnings, &what)),
+                    json!(self.conns(&g.terminal_map, &what)),
                 );
                 o.insert(
                     "configuration".into(),
@@ -552,6 +654,15 @@ impl Writer {
                         "{what}: generation cost has no ENGINEERING field; dropped"
                     ));
                 }
+                // The ENGINEERING generator carries kVA-scale sm_ub/cm_ub;
+                // that mapping is a #266 decision, so the drop stays loud.
+                for (key, present) in [("s_max", g.s_max.is_some()), ("i_max", g.i_max.is_some())] {
+                    if present {
+                        self.warn(format!(
+                            "{what}: `{key}` has no ENGINEERING generator mapping yet; dropped"
+                        ));
+                    }
+                }
                 o.insert("control_mode".into(), json!("FREQUENCYDROOP"));
                 o.insert("status".into(), Self::status(&g.extras));
                 o.insert(
@@ -568,6 +679,13 @@ impl Writer {
     fn injections(&mut self, net: &DistNetwork, doc: &mut Map<String, Value>) {
         self.loads(net, doc);
         self.generators(net, doc);
+        // Typed BMOPF capacitor banks have no ENGINEERING conversion yet.
+        for c in &net.capacitors {
+            self.warn(format!(
+                "capacitor {}: rated capacitor banks are not converted to ENGINEERING JSON; dropped",
+                c.name
+            ));
+        }
         if !net.shunts.is_empty() {
             let mut shunts = Map::new();
             for s in &net.shunts {
@@ -576,7 +694,7 @@ impl Writer {
                 o.insert("bus".into(), json!(s.bus.to_lowercase()));
                 o.insert(
                     "connections".into(),
-                    json!(conns(&s.terminal_map, &mut self.warnings, &what)),
+                    json!(self.conns(&s.terminal_map, &what)),
                 );
                 o.insert("gs".into(), matrix(&s.g));
                 o.insert("bs".into(), matrix(&s.b));
@@ -612,7 +730,7 @@ impl Writer {
     fn voltage_source(&mut self, vs: &VoltageSource) -> Value {
         let mut o = Map::new();
         let what = format!("voltage source {}", vs.name);
-        let connections = conns(&vs.terminal_map, &mut self.warnings, &what);
+        let connections = self.conns(&vs.terminal_map, &what);
         let n = self.bounded_dim(connections.len(), &what);
         o.insert("bus".into(), json!(vs.bus.to_lowercase()));
         o.insert("connections".into(), json!(connections));
@@ -701,7 +819,7 @@ impl Writer {
         let mut connections: Vec<Value> = Vec::new();
         for (w_idx, w) in t.windings.iter().enumerate() {
             buses.push(json!(w.bus.to_lowercase()));
-            let mut c = conns(&w.terminal_map, &mut self.warnings, &what);
+            let mut c = self.conns(&w.terminal_map, &what);
             if !stashed
                 && w_idx > 0
                 && t.windings[0].conn == WindingConn::Delta
