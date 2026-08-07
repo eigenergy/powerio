@@ -885,6 +885,28 @@ impl PyNetwork {
         Ok((conv.text, conv.warnings))
     }
 
+    /// Serialize this case to `to` and write it to `path` exactly as
+    /// produced. Returns the fidelity warnings. Prefer this over writing
+    /// `to_format` text through `open(path, "w")`: Python's text mode
+    /// translates newlines on Windows, and a case whose retained source has
+    /// CRLF endings comes out with doubled carriage returns, which PSS/E
+    /// family tools reject.
+    #[pyo3(signature = (path, to, missing_gen_cost=None, default_gen_cost=None, gen_cost_csv=None))]
+    fn write_file(
+        &self,
+        path: &str,
+        to: &str,
+        missing_gen_cost: Option<&str>,
+        default_gen_cost: Option<&str>,
+        gen_cost_csv: Option<&str>,
+    ) -> PyResult<Vec<String>> {
+        let (text, warnings) =
+            self.to_format(to, missing_gen_cost, default_gen_cost, gen_cost_csv)?;
+        std::fs::write(path, text)
+            .map_err(|e| PowerIOError::new_err(format!("writing {path}: {e}")))?;
+        Ok(warnings)
+    }
+
     /// A normalized, computation-ready copy of this case: per unit, radians,
     /// out-of-service filtered, densely reindexed (1-based), bus types
     /// canonicalized. The raw case is unchanged; the result carries no retained
@@ -1267,9 +1289,12 @@ fn read_pypsa_csv_folder(path: &str) -> PyResult<PyNetwork> {
 /// Convert a case file to another format through the network model. Returns
 /// `(text, warnings)`: the converted file text and the list of fidelity warnings
 /// (fields the target couldn't represent). The input format is the file
-/// extension unless `from` overrides it.
+/// extension unless `from` overrides it. `out` writes the text to a file
+/// exactly as produced — prefer it over `open(out, "w").write(text)`, whose
+/// text mode newline translation on Windows doubles the carriage returns of
+/// a CRLF source echo into `\r\r\n`, which PSS/E family tools reject.
 #[pyfunction]
-#[pyo3(signature = (path, to, from_=None, missing_gen_cost=None, default_gen_cost=None, gen_cost_csv=None))]
+#[pyo3(signature = (path, to, from_=None, missing_gen_cost=None, default_gen_cost=None, gen_cost_csv=None, out=None))]
 fn convert_file(
     path: &str,
     to: &str,
@@ -1277,6 +1302,7 @@ fn convert_file(
     missing_gen_cost: Option<&str>,
     default_gen_cost: Option<&str>,
     gen_cost_csv: Option<&str>,
+    out: Option<&str>,
 ) -> PyResult<(String, Vec<String>)> {
     let target = to
         .parse::<powerio_matrix::TargetFormat>()
@@ -1290,6 +1316,10 @@ fn convert_file(
     let conv =
         powerio_matrix::convert_file_with_options(std::path::Path::new(path), target, from_, &opts)
             .map_err(to_pyerr)?;
+    if let Some(out) = out {
+        std::fs::write(out, &conv.text)
+            .map_err(|e| PowerIOError::new_err(format!("writing {out}: {e}")))?;
+    }
     Ok((conv.text, conv.warnings))
 }
 
@@ -1319,6 +1349,60 @@ fn convert_str(
         powerio_matrix::convert_str_with_options(text, target, format.unwrap_or("matpower"), &opts)
             .map_err(to_pyerr)?;
     Ok((conv.text, conv.warnings))
+}
+
+/// Writes `text` to `path` and every sidecar beside it.
+///
+/// A dss write of a network with bus coordinates emits a `Buscoords <name>`
+/// directive and returns the CSV as a sidecar. Writing the text alone leaves
+/// a case that names a file which does not exist, and OpenDSS then refuses
+/// to compile it. A sidecar path is relative by construction, but
+/// `ConversionSidecar::path` is a public field a caller can set, so the path
+/// is checked the way the CLI checks it: every component must be a plain
+/// name, and a path that reaches out of the output directory is refused.
+/// Whether a sidecar path names a file inside the output directory, which is
+/// the CLI's `is_relative_component_path` rule: every component must be a
+/// plain name.
+///
+/// Rejecting only an absolute path and `..` leaves three ways out. An empty
+/// path makes `join` resolve back to the output directory itself, so the
+/// write targets the directory. A Windows drive-relative path such as
+/// `C:x.csv` is not absolute, and its prefix component makes `join` discard
+/// the directory entirely. A rooted path with no drive letter is not absolute
+/// on Windows either. None of the three holds a `..` component.
+fn sidecar_stays_in_output_dir(path: &str) -> bool {
+    !path.is_empty()
+        && std::path::Path::new(path)
+            .components()
+            .all(|c| matches!(c, std::path::Component::Normal(_)))
+}
+
+fn write_with_sidecars(
+    path: &str,
+    text: &str,
+    sidecars: &[powerio_dist::ConversionSidecar],
+) -> PyResult<()> {
+    let path = std::path::Path::new(path);
+    std::fs::write(path, text)
+        .map_err(|e| PowerIOError::new_err(format!("writing {}: {e}", path.display())))?;
+    let dir = path.parent().unwrap_or_else(|| std::path::Path::new("."));
+    for sidecar in sidecars {
+        if !sidecar_stays_in_output_dir(&sidecar.path) {
+            return Err(PowerIOError::new_err(format!(
+                "refusing to write the sidecar `{}`: the path must stay in the output directory",
+                sidecar.path
+            )));
+        }
+        let target = dir.join(&sidecar.path);
+        if let Some(parent) = target.parent() {
+            std::fs::create_dir_all(parent).map_err(|e| {
+                PowerIOError::new_err(format!("creating {}: {e}", parent.display()))
+            })?;
+        }
+        std::fs::write(&target, &sidecar.text)
+            .map_err(|e| PowerIOError::new_err(format!("writing {}: {e}", target.display())))?;
+    }
+    Ok(())
 }
 
 fn dist_to_pyerr(e: powerio_dist::Error) -> PyErr {
@@ -1433,6 +1517,18 @@ impl PyDistNetwork {
             .map_err(dist_to_pyerr)?;
         let conv = self.net.to_canonical_format(target);
         Ok((conv.text, conv.warnings))
+    }
+
+    /// Serialize to `to` and write it to `path` exactly as produced (no
+    /// newline translation; see `Network.write_file`). Returns the fidelity
+    /// warnings.
+    fn write_file(&self, path: &str, to: &str) -> PyResult<Vec<String>> {
+        let target = to
+            .parse::<powerio_dist::DistTargetFormat>()
+            .map_err(dist_to_pyerr)?;
+        let conv = self.net.to_format(target);
+        write_with_sidecars(path, &conv.text, &conv.sidecars)?;
+        Ok(conv.warnings)
     }
 
     /// The collapsed bus and terminal graph projection as JSON.
@@ -1906,4 +2002,43 @@ fn _powerio(m: &Bound<'_, PyModule>) -> PyResult<()> {
     #[cfg(feature = "gridfm")]
     m.add_function(wrap_pyfunction!(read_gridfm_scenarios, m)?)?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::sidecar_stays_in_output_dir;
+
+    /// `ConversionSidecar::path` is a public field, so a caller can set it to
+    /// anything. Every path here reaches out of the output directory without
+    /// holding a `..` component, which is why the check is a whitelist of
+    /// plain-name components rather than a blacklist.
+    #[test]
+    fn a_sidecar_path_that_leaves_the_output_directory_is_refused() {
+        for path in [
+            "",            // `join` resolves back to the directory itself
+            "/etc/passwd", // rooted, and not absolute on Windows
+            "../up.csv",
+            "sub/../../up.csv",
+        ] {
+            assert!(
+                !sidecar_stays_in_output_dir(path),
+                "{path:?} must be refused"
+            );
+        }
+        // Only Windows reads a drive prefix. On every other platform these
+        // are ordinary file names, and `join` keeps them in the directory.
+        #[cfg(windows)]
+        for path in ["C:evil.csv", "C:\\evil.csv", "\\\\server\\share\\x.csv"] {
+            assert!(
+                !sidecar_stays_in_output_dir(path),
+                "{path:?} must be refused"
+            );
+        }
+        for path in ["coords.csv", "sub/coords.csv", "sub/deeper/coords.csv"] {
+            assert!(
+                sidecar_stays_in_output_dir(path),
+                "{path:?} must be allowed"
+            );
+        }
+    }
 }

@@ -77,6 +77,15 @@
   - The vendored schema and example networks track bmopf-report@f2e3684;
     `cargo run -p powerio-dist --example regen_bmopf_examples` regenerates
     the checked-in example outputs.
+- Python: `Network.write_file(path, to)` / `DistNetwork.write_file(path, to)`
+  and a `convert_file(..., out=...)` output path write the serialized case to
+  disk exactly as produced. Writing `to_format` text through
+  `open(path, "w")` corrupts a CRLF source echo on Windows (text mode turns
+  each `\r\n` into `\r\r\n`, which PSS/E family tools reject as malformed
+  records); the new paths bypass Python's newline translation.
+  `DistNetwork.write_file` also writes any sidecar the writer produced beside
+  the case, so a dss write that emits a `Buscoords` directive no longer names
+  a file that does not exist.
 
 ## 0.7.3
 
