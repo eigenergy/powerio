@@ -2841,3 +2841,159 @@ fn schema_fields_survive_a_round_trip_without_wrong_warnings() {
     let again = parse_bmopf_str(&out.text).unwrap();
     assert_eq!(write_bmopf_json(&again).text, out.text);
 }
+
+#[test]
+fn bmopf_transformer_without_v_nom_never_writes_nan_kv() {
+    let net = parse_bmopf_str(
+        r#"{
+          "bus": {
+            "hv": {"terminal_names": ["1", "2", "3"]},
+            "lv": {"terminal_names": ["1", "2", "3", "4"], "perfectly_grounded_terminals": ["4"]}
+          },
+          "voltage_source": {
+            "source": {"v_magnitude": [6350.9, 6350.9, 6350.9], "v_angle": [0.0, -2.0943951023931953, 2.0943951023931953], "bus": "hv", "terminal_map": ["1", "2", "3"]}
+          },
+          "transformer": {
+            "delta_wye": {
+              "t1": {
+                "bus_from": "hv", "bus_to": "lv",
+                "terminal_map_from": ["1", "2", "3"], "terminal_map_to": ["1", "2", "3", "4"],
+                "s_rating": 500000.0,
+                "r_series": 0.001, "x_series": 0.002
+              }
+            }
+          }
+        }"#,
+    )
+    .unwrap();
+    let out = write_dss(&net);
+    assert!(!out.text.contains("NaN"), "{}", out.text);
+    let t = out
+        .text
+        .lines()
+        .find(|l| l.contains("Transformer.t1 "))
+        .unwrap();
+    assert!(!t.contains("kvs="), "{t}");
+    assert!(t.contains("kvas=(500, 500)"), "{t}");
+    // The hv winding derives from the source bus estimate. The lv bus has no
+    // estimate.
+    let expected_kv = 6350.9 * 3f64.sqrt() / 1e3;
+    let edit = out
+        .text
+        .lines()
+        .find(|l| l.starts_with("~ wdg=1 "))
+        .unwrap();
+    assert_eq!(edit, format!("~ wdg=1 kv={expected_kv}"));
+    assert!(!out.text.contains("wdg=2 kv="), "{}", out.text);
+    assert!(
+        out.warnings.iter().any(|w| w.contains("transformer t1")
+            && w.contains("winding 1")
+            && w.contains("derived")),
+        "{:?}",
+        out.warnings
+    );
+    assert!(
+        out.warnings.iter().any(|w| w.contains("transformer t1")
+            && w.contains("winding 2")
+            && w.contains("kv not emitted")),
+        "{:?}",
+        out.warnings
+    );
+    // The deck must read back, with the derived hv winding voltage.
+    let reparsed = parse_dss_str(&out.text);
+    let rt = &reparsed.transformers[0];
+    assert!((rt.windings[0].v_ref - expected_kv * 1e3).abs() < 1e-9);
+}
+
+#[test]
+fn bmopf_transformer_without_s_rating_never_writes_nan_kva() {
+    let net = parse_bmopf_str(
+        r#"{
+          "bus": {
+            "hv": {"terminal_names": ["1", "2", "3"]},
+            "lv": {"terminal_names": ["1", "2", "3", "4"], "perfectly_grounded_terminals": ["4"]}
+          },
+          "voltage_source": {
+            "source": {"v_magnitude": [6350.9, 6350.9, 6350.9], "v_angle": [0.0, -2.0943951023931953, 2.0943951023931953], "bus": "hv", "terminal_map": ["1", "2", "3"]}
+          },
+          "transformer": {
+            "delta_wye": {
+              "t1": {
+                "bus_from": "hv", "bus_to": "lv",
+                "terminal_map_from": ["1", "2", "3"], "terminal_map_to": ["1", "2", "3", "4"],
+                "v_nom_from": 11000.0, "v_nom_to": 415.0,
+                "r_series": 0.001, "x_series": 0.002
+              }
+            }
+          }
+        }"#,
+    )
+    .unwrap();
+    let out = write_dss(&net);
+    assert!(!out.text.contains("NaN"), "{}", out.text);
+    let t = out
+        .text
+        .lines()
+        .find(|l| l.contains("Transformer.t1 "))
+        .unwrap();
+    assert!(t.contains("kvs=(11, 0.415)"), "{t}");
+    assert!(!t.contains("kvas="), "{t}");
+    assert!(!out.text.contains("kva="), "{}", out.text);
+    assert!(
+        out.warnings
+            .iter()
+            .any(|w| w.contains("transformer t1") && w.contains("kva not emitted")),
+        "{:?}",
+        out.warnings
+    );
+}
+
+#[test]
+fn dss_network_authors_terminal_conventions_from_its_naming() {
+    let net = parse_dss_str(
+        "Clear\n\
+         New Circuit.tc basekv=12.47 pu=1.0 phases=3 bus1=src.1.2.3\n\
+         New Line.l1 bus1=src.1.2.3 bus2=mid.1.2.3 phases=3 r1=0.1 x1=0.2 length=10 units=m\n",
+    );
+    let out = write_bmopf_json(&net);
+    assert_eq!(errors(&schema_validator(), &out.text), Vec::<String>::new());
+    let doc: serde_json::Value = serde_json::from_str(&out.text).unwrap();
+    // The dss reader makes the grounded neutral terminal `4` on the source
+    // bus. Every numeric label is a phase under the schema rule.
+    assert_eq!(
+        doc["terminal_conventions"],
+        serde_json::json!({"phase": ["1", "2", "3", "4"], "neutral": []})
+    );
+    assert!(
+        !out.warnings
+            .iter()
+            .any(|w| w.contains("terminal_conventions")),
+        "{:?}",
+        out.warnings
+    );
+    // The reader keeps the block, and the next write gives it again.
+    let again = parse_bmopf_str(&out.text).unwrap();
+    assert_eq!(write_bmopf_json(&again).text, out.text);
+}
+
+#[test]
+fn source_terminal_conventions_pass_through_verbatim() {
+    let net = parse_bmopf_str(
+        r#"{
+          "terminal_conventions": {"phase": ["a", "b", "c"], "neutral": ["n"]},
+          "bus": {"b": {"terminal_names": ["1"]}},
+          "voltage_source": {
+            "s": {"v_magnitude": [240.0], "v_angle": [0.0], "bus": "b", "terminal_map": ["1"]}
+          }
+        }"#,
+    )
+    .unwrap();
+    let out = write_bmopf_json(&net);
+    assert_eq!(errors(&schema_validator(), &out.text), Vec::<String>::new());
+    let doc: serde_json::Value = serde_json::from_str(&out.text).unwrap();
+    // The source block wins over the bus naming.
+    assert_eq!(
+        doc["terminal_conventions"],
+        serde_json::json!({"phase": ["a", "b", "c"], "neutral": ["n"]})
+    );
+}
