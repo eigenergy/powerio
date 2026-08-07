@@ -11,7 +11,9 @@
   `PIO_PACKAGE_SCHEMA_URL` / `PIO_PAYLOAD_*` constants are gone; the payload
   schema documents under `docs/schema/pio-payload-*` are no longer published
   (the `pio-package/0.2` document embeds every model type). Files written by
-  0.7.x and earlier are rejected with the regenerate error.
+  0.7.x and earlier are rejected with the regenerate error. `schema_version`
+  is required: it used to default to the current version when absent, which
+  let a document skip the lineage check by leaving the field out.
 - powerio-dist JSON reader validation (#262):
   - PMD bound arrays keep their finite entries when another entry is a
     null-derived infinity (an unbounded phase): generator

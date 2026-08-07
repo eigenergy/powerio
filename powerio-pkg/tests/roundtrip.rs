@@ -264,17 +264,21 @@ fn assert_json_roundtrips(pkg: &NetworkPackage) {
 }
 
 #[test]
-fn schema_version_present_and_defaulted() {
+fn schema_version_is_present_and_required() {
     let pkg = balanced_package();
     assert_eq!(pkg.schema_version, PIO_PACKAGE_SCHEMA_VERSION);
 
-    // A package JSON missing schema_version still deserializes, with the
-    // current version as the default.
+    // A document without the field is refused. Defaulting it to the current
+    // version would let a 0.1-era package skip the lineage gate by dropping
+    // the field: every payload difference between the two lineages would then
+    // arrive as a serde default, with no error and no warning.
     let mut v = serde_json::to_value(&pkg).unwrap();
-    let obj = v.as_object_mut().unwrap();
-    obj.remove("schema_version");
-    let back = NetworkPackage::from_json(&serde_json::to_string(&v).unwrap()).unwrap();
-    assert_eq!(back.schema_version, PIO_PACKAGE_SCHEMA_VERSION);
+    v.as_object_mut().unwrap().remove("schema_version");
+    let err = NetworkPackage::from_json(&serde_json::to_string(&v).unwrap()).unwrap_err();
+    assert!(
+        err.to_string().contains("schema_version"),
+        "the error must name the missing field: {err}"
+    );
 }
 
 #[test]

@@ -164,9 +164,14 @@ impl From<&NormalizedSolverTables> for NormalizedSolverTableMetadata {
 #[non_exhaustive]
 pub struct NetworkPackage {
     /// The `.pio.json` format version (semver); see
-    /// [`PIO_PACKAGE_SCHEMA_VERSION`]. Absent fields default to the current
-    /// version, so a hand-built document without it reads under current rules.
-    #[serde(default = "default_schema_version")]
+    /// [`PIO_PACKAGE_SCHEMA_VERSION`].
+    ///
+    /// Required. It used to default to the current version when absent, which
+    /// let a document opt out of the lineage gate by dropping the field: a
+    /// 0.1-era payload then read under 0.2 rules, and a field the two spell
+    /// differently arrived as its `serde` default with no error and no
+    /// warning. That is the misreading the gate exists to stop, so a document
+    /// must now state its lineage.
     pub schema_version: String,
     pub producer: Producer,
     /// Stable content id, e.g. `"sha256:..."`. The scaffold leaves it `None`.

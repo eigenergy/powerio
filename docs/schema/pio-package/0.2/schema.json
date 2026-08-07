@@ -4908,8 +4908,7 @@
       "$ref": "#/$defs/Producer"
     },
     "schema_version": {
-      "default": "0.2.0",
-      "description": "The `.pio.json` format version (semver); see\n[`PIO_PACKAGE_SCHEMA_VERSION`]. Absent fields default to the current\nversion, so a hand-built document without it reads under current rules.",
+      "description": "The `.pio.json` format version (semver); see\n[`PIO_PACKAGE_SCHEMA_VERSION`].\n\nRequired. It used to default to the current version when absent, which\nlet a document opt out of the lineage gate by dropping the field: a\n0.1-era payload then read under 0.2 rules, and a field the two spell\ndifferently arrived as its `serde` default with no error and no\nwarning. That is the misreading the gate exists to stop, so a document\nmust now state its lineage.",
       "type": "string"
     },
     "source_maps": {
@@ -4944,6 +4943,7 @@
     }
   },
   "required": [
+    "schema_version",
     "producer",
     "model_kind",
     "model",
