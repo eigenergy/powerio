@@ -103,6 +103,11 @@ const BMOPF_TABLES: &[&str] = &[
     "generator",
     "capacitor",
     "shunt",
+    // Typed dispatch tables of the reader too, though schema 0.1.0 moved
+    // them under `extras`: a pre-0.1.0 document still declares them at the
+    // top level, and what the reader accepts the classifier must identify.
+    "ibr",
+    "control_profile",
 ];
 
 /// Top level keys no BMOPF document carries, and a PowerModels or MATPOWER
@@ -327,6 +332,10 @@ mod tests {
             // A pre-0.1.0 feeder fragment: no `voltage_source`, but the
             // reader accepts it, so the classifier must too.
             r#"{"bus": {}, "line": {}, "linecode": {}}"#,
+            // The pre-0.1.0 top-level spellings of the tables 0.1.0 moved
+            // under `extras`; the reader dispatches both.
+            r#"{"bus": {}, "ibr": {}}"#,
+            r#"{"bus": {}, "control_profile": {}}"#,
         ] {
             assert_eq!(
                 infer_distribution_json_format(doc).unwrap(),
