@@ -313,8 +313,10 @@ int main(int argc, char **argv) {
         CHECK(dist_caps != NULL, "pio_dist_capabilities_json returned NULL");
         CHECK(strstr(dist_caps, "\"dist\":true") != NULL,
               "dist capabilities did not report dist=true");
-        CHECK(strstr(dist_caps, "\"schema_version\":\"1.0.0\"") != NULL,
+        CHECK(strstr(dist_caps, "\"schema_version\":\"1.1.0\"") != NULL,
               "dist capabilities schema_version mismatch");
+        CHECK(strstr(dist_caps, "\"bmopf_schema_version\":") != NULL,
+              "bmopf schema vintage missing from capabilities");
         CHECK(strstr(dist_caps, "\"bmopf_fixed_taps\":true") != NULL,
               "fixed tap capability missing");
         CHECK(strstr(dist_caps, "\"bmopf_center_tap_leakage\":true") != NULL,

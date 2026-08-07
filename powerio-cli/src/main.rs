@@ -1471,10 +1471,7 @@ fn write_conversion_output(
         }
         _ => {
             for sidecar in sidecars {
-                eprintln!(
-                    "fidelity: sidecar `{}` was not written because output is stdout",
-                    sidecar.path
-                );
+                eprintln!("{}", sidecar.dropped_warning("output is stdout"));
             }
             print!("{text}");
         }

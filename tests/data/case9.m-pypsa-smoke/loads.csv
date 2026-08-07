@@ -1,0 +1,4 @@
+name,bus,p_set,q_set,active
+load_1,5,90,30,true
+load_2,7,100,35,true
+load_3,9,125,50,true

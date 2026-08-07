@@ -12,6 +12,24 @@ pub struct ConversionSidecar {
     pub text: String,
 }
 
+impl ConversionSidecar {
+    /// The fidelity warning for a surface that could not write this sidecar,
+    /// with `reason` saying why in that surface's terms.
+    ///
+    /// One formatter on the owning type so every surface — the CLI's stdout
+    /// carve-out, the text-only C entry points, any future binding — phrases
+    /// the same event the same way. Downstream consumers classify fidelity
+    /// losses by matching warning text, so two phrasings of one event means a
+    /// classifier keyed on either misses the other.
+    #[must_use]
+    pub fn dropped_warning(&self, reason: &str) -> String {
+        format!(
+            "fidelity: sidecar `{}` was not written: {reason}",
+            self.path
+        )
+    }
+}
+
 /// Text in the target format plus every fidelity loss the writer took.
 /// Nothing drops silently: a field the target cannot represent appears
 /// here as a warning naming the element and field.

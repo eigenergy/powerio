@@ -232,61 +232,50 @@ pub extern "C" fn pio_dist_abi_version() -> u32 {
     PIO_DIST_ABI_VERSION
 }
 
-// `schema_version` is the version of THIS capability document, not of any
-// schema it describes -- a consumer reading it as "the BMOPF schema version"
-// gets a wrong answer, so the BMOPF vintage is now reported explicitly below.
-//
-// 1.1.0 adds `bmopf_schema_id`, `bmopf_schema_version`, and the v0.8 feature
-// flags. The six `bmopf_*` fidelity booleans have been true since v0.6.2 and
-// stayed frozen through three releases of real distribution work, which made
-// this document useless for telling v0.6.2 from v0.8.0 -- exactly the question
-// a downstream reader has to answer, because v0.8.0 changed the BMOPF `$id`,
-// upper-cased the load `model` enum, and relocated transformer taps, neutral
-// impedance, and no-load admittance under `extras`. Flags are additive and the
-// version is minor-bumped on each addition, so an older consumer keeps working.
-// `concat!` only takes literals, so mirror the two `powerio_dist` constants
-// here and assert equality in a test rather than letting them drift.
+/// The version of the capability document itself -- the JSON shape
+/// `pio_dist_capabilities_json` returns, NOT any schema it describes (a
+/// consumer reading it as "the BMOPF schema version" gets a wrong answer,
+/// which is why the BMOPF vintage is reported explicitly inside the document).
+/// Flags are additive and this minor-bumps on each addition, so an older
+/// consumer keeps working.
+///
+/// 1.1.0 adds `bmopf_schema_id`, `bmopf_schema_version`, and the v0.8 feature
+/// flags. The six `bmopf_*` fidelity booleans have been true since v0.6.2 and
+/// stayed frozen through three releases of real distribution work, which made
+/// the document useless for telling v0.6.2 from v0.8.0 -- exactly the question
+/// a downstream reader has to answer, because v0.8.0 changed the BMOPF `$id`,
+/// upper-cased the load `model` enum, and relocated transformer taps, neutral
+/// impedance, and no-load admittance under `extras`.
 #[cfg(feature = "dist")]
-macro_rules! bmopf_schema_id {
-    () => {
-        "https://raw.githubusercontent.com/frederikgeth/bmopf-report/main/draft_schema_and_networks/draft_bmopf_schema.json"
-    };
-}
-#[cfg(feature = "dist")]
-macro_rules! bmopf_schema_id_doc_version {
-    () => {
-        "1.1.0"
-    };
-}
-#[cfg(feature = "dist")]
-macro_rules! bmopf_schema_version {
-    () => {
-        "0.1.0"
-    };
-}
+const DIST_CAPABILITIES_DOC_VERSION: &str = "1.1.0";
 
+/// Built at call time so the schema id and vintage are the `powerio_dist`
+/// constants themselves rather than mirrored literals -- the call allocates an
+/// owned string regardless, so a compile-time document bought nothing except a
+/// second copy of each value and a test to police the copies.
 #[cfg(feature = "dist")]
-const DIST_CAPABILITIES_JSON: &str = concat!(
-    r#"{"dist":true,"schema_version":""#,
-    bmopf_schema_id_doc_version!(),
-    r#"","#,
-    r#""bmopf_fixed_taps":true,"#,
-    r#""bmopf_center_tap_leakage":true,"#,
-    r#""bmopf_delta_wye_leakage":true,"#,
-    r#""bmopf_delta_roll":true,"#,
-    r#""bmopf_voltage_source_merge":true,"#,
-    r#""bmopf_transformer_diagnostics":true,"#,
-    r#""bmopf_schema_id":""#,
-    // Not a fetch location: upstream serves this from an unpinned `main`, so
-    // pair it with `bmopf_schema_version` and treat neither as conclusive.
-    bmopf_schema_id!(),
-    r#"","bmopf_schema_version":""#,
-    bmopf_schema_version!(),
-    r#"","typed_capacitors":true,"#,
-    r#""line_and_generator_ratings":true,"#,
-    r#""per_sequence_bus_bounds":true,"#,
-    r#""transformer_extras_relocation":true}"#
-);
+fn dist_capabilities_json() -> String {
+    serde_json::json!({
+        "dist": true,
+        "schema_version": DIST_CAPABILITIES_DOC_VERSION,
+        "bmopf_fixed_taps": true,
+        "bmopf_center_tap_leakage": true,
+        "bmopf_delta_wye_leakage": true,
+        "bmopf_delta_roll": true,
+        "bmopf_voltage_source_merge": true,
+        "bmopf_transformer_diagnostics": true,
+        // Not a fetch location: upstream serves this from an unpinned `main`,
+        // so pair it with `bmopf_schema_version` and treat neither as
+        // conclusive on its own.
+        "bmopf_schema_id": powerio_dist::BMOPF_SCHEMA_ID,
+        "bmopf_schema_version": powerio_dist::BMOPF_SCHEMA_VERSION,
+        "typed_capacitors": true,
+        "line_and_generator_ratings": true,
+        "per_sequence_bus_bounds": true,
+        "transformer_extras_relocation": true,
+    })
+    .to_string()
+}
 
 /// Return distribution capability flags as owned JSON. Free the returned string
 /// with [`pio_string_free`]. Only linked when the `dist` feature is compiled in;
@@ -297,7 +286,7 @@ const DIST_CAPABILITIES_JSON: &str = concat!(
 #[cfg(feature = "dist")]
 #[unsafe(no_mangle)]
 pub extern "C" fn pio_dist_capabilities_json() -> *mut c_char {
-    into_cstring(DIST_CAPABILITIES_JSON.to_owned()).unwrap_or(std::ptr::null_mut())
+    into_cstring(dist_capabilities_json()).unwrap_or(std::ptr::null_mut())
 }
 
 /// Report every wire format version this library speaks, as owned JSON. Free
@@ -335,7 +324,7 @@ pub extern "C" fn pio_wire_versions_json() -> *mut c_char {
     let arrow: Option<&str> = None;
 
     #[cfg(feature = "dist")]
-    let dist_capabilities = Some(bmopf_schema_id_doc_version!());
+    let dist_capabilities = Some(DIST_CAPABILITIES_DOC_VERSION);
     #[cfg(not(feature = "dist"))]
     let dist_capabilities: Option<&str> = None;
 
@@ -2574,10 +2563,9 @@ fn warn_dropped_sidecars(
     sidecars: &[powerio_dist::ConversionSidecar],
 ) -> Vec<String> {
     for sidecar in sidecars {
-        warnings.push(format!(
-            "fidelity: companion file `{}` was not written: this entry point returns the case \
-             text only, and that text refers to the file. Write it beside the case before loading.",
-            sidecar.path
+        warnings.push(sidecar.dropped_warning(
+            "this entry point returns the case text only, and that text refers to the file; \
+             write it beside the case before loading",
         ));
     }
     warnings
@@ -4986,7 +4974,7 @@ mpc.branch = [
                 caps,
                 serde_json::json!({
                     "dist": true,
-                    "schema_version": "1.1.0",
+                    "schema_version": DIST_CAPABILITIES_DOC_VERSION,
                     "bmopf_fixed_taps": true,
                     "bmopf_center_tap_leakage": true,
                     "bmopf_delta_wye_leakage": true,
@@ -5173,23 +5161,12 @@ mpc.branch = [
             unsafe { pio_string_free(raw) };
             let caps: serde_json::Value = serde_json::from_str(&text).unwrap();
 
-            // The mirrored literals must equal the constants the writer uses.
-            // `concat!` cannot read a const, so this test is the only thing
-            // standing between the two copies and a silent drift -- which is
-            // precisely the class of bug that reached a release when the
-            // .pio.json schema version was mirrored by hand downstream.
-            assert_eq!(
-                caps["bmopf_schema_id"],
-                serde_json::json!(powerio_dist::BMOPF_SCHEMA_ID)
-            );
-            assert_eq!(
-                caps["bmopf_schema_version"],
-                serde_json::json!(powerio_dist::BMOPF_SCHEMA_VERSION)
-            );
-
-            // And the advertised version must match the schema actually
-            // vendored in-tree, so regenerating against a new upstream drop
-            // without updating the constant fails here rather than downstream.
+            // The document is built from the `powerio_dist` constants at call
+            // time, so no mirrored-literal drift is possible there. What can
+            // still drift is the vendored schema file itself: its own
+            // `version` field must match the vintage the writer advertises,
+            // so regenerating against a new upstream drop without updating
+            // BMOPF_SCHEMA_VERSION fails here rather than downstream.
             let vendored: serde_json::Value = serde_json::from_str(
                 &std::fs::read_to_string("../tests/data/dist/bmopf/draft_bmopf_schema.json")
                     .unwrap(),
@@ -5198,7 +5175,10 @@ mpc.branch = [
             assert_eq!(vendored["version"], caps["bmopf_schema_version"]);
 
             // The document version moved with the new keys.
-            assert_eq!(caps["schema_version"], serde_json::json!("1.1.0"));
+            assert_eq!(
+                caps["schema_version"],
+                serde_json::json!(DIST_CAPABILITIES_DOC_VERSION)
+            );
         }
 
         #[test]

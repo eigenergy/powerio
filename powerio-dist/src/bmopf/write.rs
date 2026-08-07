@@ -21,8 +21,6 @@ use crate::model::{
     VoltageSource, Winding, WindingConn, n_winding_impedance_base, pair_keys,
 };
 
-/// The `$schema` stamped into every document's `meta`: the bmopf-report
-/// schema `$id` (0.1.0 vintage).
 /// The `$id` of the BMOPF schema this writer targets, and the value it stamps
 /// into `meta.$schema`.
 ///
