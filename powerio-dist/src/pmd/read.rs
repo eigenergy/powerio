@@ -65,6 +65,7 @@ pub fn parse_pmd_str(text: &str) -> Result<DistNetwork> {
     };
     let mut rd = Reader { net: &mut net };
     rd.document(&doc);
+    crate::model::warn_unresolved_references(&mut net);
     Ok(net)
 }
 
@@ -99,9 +100,19 @@ fn floats(key: &str, v: Option<&Value>) -> Option<Vec<f64>> {
 /// cap. An oversized matrix is dropped with a warning.
 const MAX_MATRIX_DIM: usize = 64;
 
-/// Arrays of arrays rebuild with the inner arrays as columns (`hcat`).
-fn matrix(key: &str, v: Option<&Value>, warnings: &mut Vec<String>) -> Option<Mat> {
-    let cols = v?.as_array()?;
+/// Arrays of arrays rebuild with the inner arrays as columns (`hcat`). A
+/// column that is not an array warns and stays zero instead of dropping
+/// the whole matrix silently; a field that is not an array of columns at
+/// all warns and drops, because there is no shape to keep. An absent field
+/// is not a defect, so it stays quiet.
+fn matrix(key: &str, v: Option<&Value>, what: &str, warnings: &mut Vec<String>) -> Option<Mat> {
+    let v = v?;
+    let Some(cols) = v.as_array() else {
+        warnings.push(format!(
+            "{what}: `{key}` is not an array of columns; dropped"
+        ));
+        return None;
+    };
     let n = cols.len();
     if n > MAX_MATRIX_DIM {
         warnings.push(format!(
@@ -112,7 +123,12 @@ fn matrix(key: &str, v: Option<&Value>, warnings: &mut Vec<String>) -> Option<Ma
     }
     let mut m = vec![vec![0.0; n]; n];
     for (j, col) in cols.iter().enumerate() {
-        let col = col.as_array()?;
+        let Some(col) = col.as_array() else {
+            warnings.push(format!(
+                "{what}: `{key}` column {j} is not an array; kept as zeros"
+            ));
+            continue;
+        };
         for (i, x) in col.iter().enumerate().take(n) {
             m[i][j] = restore(key, x);
         }
@@ -192,13 +208,15 @@ fn linecode_from(
     base_frequency: f64,
     warnings: &mut Vec<String>,
 ) -> DistLineCode {
+    let what = format!("linecode {name}");
+    let mut mat = |key: &str| matrix(key, o.get(key), &what, warnings);
     let mats = [
-        matrix("rs", o.get("rs"), warnings),
-        matrix("xs", o.get("xs"), warnings),
-        matrix("g_fr", o.get("g_fr"), warnings),
-        matrix("g_to", o.get("g_to"), warnings),
-        matrix("b_fr", o.get("b_fr"), warnings),
-        matrix("b_to", o.get("b_to"), warnings),
+        mat("rs"),
+        mat("xs"),
+        mat("g_fr"),
+        mat("g_to"),
+        mat("b_fr"),
+        mat("b_to"),
     ];
     // Conductor count is the widest matrix present; absent matrices read
     // as zero, smaller ones pad without losing entries.
@@ -227,8 +245,11 @@ fn linecode_from(
         b_from: to_b(bf),
         b_to: to_b(bt),
         r_series: r,
-        i_max: floats("cm_ub", o.get("cm_ub")).filter(|v| v.iter().all(|x| x.is_finite())),
-        s_max: floats("sm_ub", o.get("sm_ub")).filter(|v| v.iter().all(|x| x.is_finite())),
+        // A null entry restores as Inf (an unbounded conductor); keeping the
+        // mixed array preserves the finite bounds beside it. `None` means
+        // the field was absent.
+        i_max: floats("cm_ub", o.get("cm_ub")),
+        s_max: floats("sm_ub", o.get("sm_ub")),
         source: None,
         extras: {
             // The raw arrays make writing back bit exact across the
@@ -688,10 +709,13 @@ impl Reader<'_> {
                 },
                 p_nom: scale("pg").unwrap_or_default(),
                 q_nom: scale("qg").unwrap_or_default(),
-                p_min: scale("pg_lb").filter(|v| v.iter().all(|x| x.is_finite())),
-                p_max: scale("pg_ub").filter(|v| v.iter().all(|x| x.is_finite())),
-                q_min: scale("qg_lb").filter(|v| v.iter().all(|x| x.is_finite())),
-                q_max: scale("qg_ub").filter(|v| v.iter().all(|x| x.is_finite())),
+                // A null bound restores as +/-Inf (an unbounded phase);
+                // keeping the mixed array preserves the finite bounds
+                // beside it. `None` means the field was absent.
+                p_min: scale("pg_lb"),
+                p_max: scale("pg_ub"),
+                q_min: scale("qg_lb"),
+                q_max: scale("qg_ub"),
                 cost: None,
                 s_max: None,
                 i_max: None,
@@ -703,8 +727,9 @@ impl Reader<'_> {
     fn shunts(&mut self, items: &Map<String, Value>) {
         for (name, v) in items {
             let Value::Object(o) = v else { continue };
-            let g = matrix("gs", o.get("gs"), &mut self.net.warnings).unwrap_or_default();
-            let b = matrix("bs", o.get("bs"), &mut self.net.warnings).unwrap_or_default();
+            let what = format!("shunt {name}");
+            let g = matrix("gs", o.get("gs"), &what, &mut self.net.warnings).unwrap_or_default();
+            let b = matrix("bs", o.get("bs"), &what, &mut self.net.warnings).unwrap_or_default();
             let mut extras = take_extras(
                 o,
                 &["bus", "connections", "gs", "bs", "status", "source_id"],

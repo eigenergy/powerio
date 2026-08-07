@@ -54,6 +54,7 @@ pub fn parse_bmopf_str(text: &str) -> Result<DistNetwork> {
     };
     let mut rd = Reader { net: &mut net };
     rd.document(&doc);
+    crate::model::warn_unresolved_references(&mut net);
     Ok(net)
 }
 
