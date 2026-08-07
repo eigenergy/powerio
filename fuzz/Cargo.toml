@@ -87,3 +87,4 @@ name = "dist_classify"
 path = "fuzz_targets/dist_classify.rs"
 test = false
 doc = false
+bench = false

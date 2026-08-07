@@ -89,10 +89,12 @@ fn canonical_key(name: &str) -> String {
 /// Element tables that identify a distribution document beside its `bus`
 /// table.
 ///
-/// Every name here is absent from a PowerModels document, which is the
-/// format that used to be misread as a near-empty BMOPF network. `bus`,
-/// `load`, `shunt`, `switch`, and `name` are shared with PowerModels, so
-/// none of them can serve as the discriminator.
+/// `load`, `shunt`, and `switch` are shared with PowerModels, so on their own
+/// they cannot tell the two apart. They stay in the list all the same, because
+/// [`NOT_BMOPF_KEYS`] is what refuses a PowerModels document, and it refuses it
+/// whatever else the document holds. Dropping the shared names instead would
+/// refuse a real BMOPF feeder built only from them, which the reader parses
+/// and which this classifier used to accept.
 ///
 /// These names do not separate BMOPF from PMD: the two share most of their
 /// element vocabulary. `data_model` does that, and it is checked first.
@@ -107,6 +109,10 @@ const DISTRIBUTION_ELEMENT_TABLES: &[&str] = &[
     "ibr",
     "line",
     "linecode",
+    "load",
+    "meta",
+    "shunt",
+    "switch",
     "terminal_conventions",
     "transformer",
     "voltage_source",
@@ -234,11 +240,12 @@ impl<'de> serde::Deserialize<'de> for TopLevel {
 /// BMOPF": an unmarked document used to fall through to the BMOPF reader
 /// and parse into a bogus near-empty network.
 ///
-/// - PMD carries `data_model`, which no other family here carries.
-/// - BMOPF carries a `bus` table beside at least one BMOPF only table, and
-///   no key that marks a PowerModels or MATPOWER derived document.
-/// - A document that marks both families contradicts itself and is refused
-///   rather than silently assigned to one of them.
+/// - PMD carries `data_model`, which no other family here carries. The marker
+///   decides on its own: every real PMD ENGINEERING document also carries the
+///   element tables BMOPF uses, so a document holding both is the normal case
+///   and not a contradiction.
+/// - BMOPF carries a `bus` table beside at least one distribution element
+///   table, and no key that marks a PowerModels or MATPOWER derived document.
 /// - Anything else is refused with a message naming both rules.
 ///
 /// Malformed JSON still routes to BMOPF so its reader reports the parse
@@ -513,6 +520,36 @@ mod tests {
                 classify_distribution_json(&doc).is_err(),
                 "`{marker}` must refuse the BMOPF reading: {doc}"
             );
+        }
+    }
+
+    /// The two rules pull in opposite directions and this classifier has
+    /// swung both ways: dropping the shared table names refuses real BMOPF
+    /// feeders, and keeping them without the veto reads PowerModels as BMOPF.
+    /// Pin both ends together so neither correction can undo the other.
+    #[test]
+    fn shared_table_names_classify_as_bmopf_and_the_veto_still_refuses_powermodels() {
+        // A BMOPF feeder built only from names PowerModels also uses. No
+        // veto key is present, so the distribution reading stands.
+        for doc in [
+            r#"{"bus": {}, "load": {}}"#,
+            r#"{"bus": {}, "shunt": {}}"#,
+            r#"{"bus": {}, "switch": {}}"#,
+            r#"{"bus": {}, "meta": {"frequency": 60}}"#,
+        ] {
+            assert_eq!(
+                classify_distribution_json(doc).unwrap(),
+                DistTargetFormat::BmopfJson,
+                "{doc}"
+            );
+        }
+        // The same shared names beside one veto key stay transmission.
+        for doc in [
+            r#"{"bus": {}, "load": {}, "baseMVA": 100.0}"#,
+            r#"{"bus": {}, "shunt": {}, "branch": {}}"#,
+            r#"{"bus": {}, "switch": {}, "per_unit": true}"#,
+        ] {
+            assert!(classify_distribution_json(doc).is_err(), "{doc}");
         }
     }
 
