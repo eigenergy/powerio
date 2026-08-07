@@ -291,8 +291,9 @@ impl Writer {
         // terminal named `4444444444444444` would ask for petabytes, so the
         // enumeration is clamped like every other model driven dimension.
         // A terminal name that is not numeric holds an id from
-        // `renamed_terminals`, above every numeric name, so the enumeration
-        // must cover those ids too. Without them the document lists fewer
+        // `renamed_terminals`. Those ids are the smallest free positive
+        // integers, so a numeric name does not bound them and the enumeration
+        // must include them explicitly. Without them the document lists fewer
         // conductors than its own `connections` arrays use, and a read back
         // and rewrite then produces a longer list.
         let max_conductor = net

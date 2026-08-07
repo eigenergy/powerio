@@ -315,23 +315,37 @@ impl Reader<'_> {
         if let Some(Value::Object(items)) = doc.get("linecode") {
             self.linecodes(items);
         }
+        // `ibr` and `control_profile` can also arrive under `extras`, and the
+        // reader keeps whichever copy it reads first. Key order alone decides
+        // that: `control_profile` sorts before `extras` and `ibr` sorts after,
+        // so the same document would resolve the two classes in opposite
+        // directions. Read both canonical tables here, ahead of `extras`, so
+        // the top-level copy always wins and the rule holds whatever the key
+        // order is.
+        for (key, read) in [
+            ("ibr", Self::ibrs as fn(&mut Self, &Map<String, Value>)),
+            ("control_profile", Self::control_profiles),
+        ] {
+            if let Some(Value::Object(items)) = doc.get(key) {
+                read(self, items);
+            }
+        }
         for (key, value) in doc {
             let Value::Object(items) = value else {
                 continue;
             };
             match key.as_str() {
                 "bus" => self.buses(items),
-                // Both are read before the loop: `linecode` ahead of any line
-                // that could synthesize a linecode name, `name` with the rest
-                // of the document header.
-                "linecode" | "name" => {}
+                // All read before the loop: `linecode` ahead of any line that
+                // could synthesize a linecode name, `ibr` and
+                // `control_profile` ahead of `extras`, `name` with the rest of
+                // the document header.
+                "linecode" | "name" | "ibr" | "control_profile" => {}
                 "line" => self.lines(items),
                 "switch" => self.switches(items),
                 "load" => self.loads(items),
                 "generator" => self.generators(items),
                 "capacitor" => self.capacitors(items),
-                "ibr" => self.ibrs(items),
-                "control_profile" => self.control_profiles(items),
                 "shunt" => self.shunts(items),
                 "voltage_source" => self.sources(items),
                 "transformer" => {
@@ -863,7 +877,17 @@ impl Reader<'_> {
         self.net.warnings.push(format!(
             "line {line}: inline impedance matrices read into synthesized linecode `{name}`"
         ));
-        let ([r, x, gf, bf, gt, bt], n, _) = linecode_matrices(o);
+        let ([r, x, gf, bf, gt, bt], n, ragged) = linecode_matrices(o);
+        if ragged {
+            // The declared-linecode path reports this. An inline matrix set
+            // that disagrees in size is padded the same way, and a conductor
+            // that gains a zero where the document held nothing is a change
+            // of physics, so it needs the same warning.
+            self.net.warnings.push(format!(
+                "line {line}: inline matrix sizes disagree; smaller ones padded \
+                 with zeros to {n}x{n}"
+            ));
+        }
         self.net.linecodes.push(DistLineCode {
             name: name.clone(),
             n_conductors: n,

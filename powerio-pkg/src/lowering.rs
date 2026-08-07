@@ -1239,30 +1239,50 @@ fn sequence_coupling_norm(seq: &[[Complex64; 3]; 3]) -> f64 {
 
 /// The branch rating, in MVA. BMOPF schema 0.1.0 gives a line its own
 /// `i_max`/`s_max`, which "overrides the linecode's i_max for this line", so
-/// the line field wins wherever it is present.
+/// both line fields are tried before either linecode field. Within one owner
+/// `s_max` comes first, because an apparent power limit needs no voltage.
+///
+/// A field the active conductors leave unusable falls through to the next
+/// candidate rather than ending the search: a line whose `s_max` is all
+/// infinities must not hide a linecode that carries a real rating.
 fn line_rate_mva(
     line: &DistLine,
     code: &DistLineCode,
     active: &[usize],
     line_to_line_volts: f64,
 ) -> Option<f64> {
-    if let Some(s_max) = line.s_max.as_ref().or(code.s_max.as_ref()) {
-        let values: Vec<_> = active
-            .iter()
-            .filter_map(|&idx| s_max.get(idx).copied())
-            .collect();
-        if !values.is_empty() && values.iter().all(|value| value.is_finite()) {
-            return Some(values.iter().sum::<f64>() / 1_000_000.0);
+    for (s_max, i_max) in [
+        (line.s_max.as_ref(), line.i_max.as_ref()),
+        (code.s_max.as_ref(), code.i_max.as_ref()),
+    ] {
+        if let Some(mva) = s_max.and_then(|values| apparent_power_mva(values, active)) {
+            return Some(mva);
+        }
+        if let Some(amps) = i_max.and_then(|values| limiting_amps(values, active)) {
+            return Some(SQRT_3 * line_to_line_volts * amps / 1_000_000.0);
         }
     }
-    let i_max = line.i_max.as_ref().or(code.i_max.as_ref())?;
-    let amps: Vec<_> = active
+    None
+}
+
+/// The summed apparent power limit of the active conductors, in MVA, or None
+/// when any of them has no finite limit.
+fn apparent_power_mva(s_max: &[f64], active: &[usize]) -> Option<f64> {
+    let values: Vec<_> = active
+        .iter()
+        .filter_map(|&idx| s_max.get(idx).copied())
+        .collect();
+    (!values.is_empty() && values.iter().all(|value| value.is_finite()))
+        .then(|| values.iter().sum::<f64>() / 1_000_000.0)
+}
+
+/// The smallest usable current limit over the active conductors, in amps.
+fn limiting_amps(i_max: &[f64], active: &[usize]) -> Option<f64> {
+    active
         .iter()
         .filter_map(|&idx| i_max.get(idx).copied())
         .filter(|value| value.is_finite() && *value >= 0.0)
-        .collect();
-    let amps = amps.into_iter().reduce(f64::min)?;
-    Some(SQRT_3 * line_to_line_volts * amps / 1_000_000.0)
+        .reduce(f64::min)
 }
 
 fn partial_phase_admittance(g: &Mat, b: &Mat, active: &[usize]) -> Complex64 {

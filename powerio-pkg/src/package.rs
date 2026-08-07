@@ -1493,6 +1493,15 @@ fn validate_multiconductor_injections(
             &mut ctx,
         );
     }
+    for (i, capacitor) in net.capacitors.iter().enumerate() {
+        check_one_bus_element(
+            &capacitor.bus,
+            &capacitor.terminal_map,
+            &format!("capacitor {}", capacitor.name),
+            &format!("/model/multiconductor_network/capacitors/{i}"),
+            &mut ctx,
+        );
+    }
     for (i, source) in net.sources.iter().enumerate() {
         check_one_bus_element(
             &source.bus,

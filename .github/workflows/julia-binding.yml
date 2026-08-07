@@ -89,6 +89,7 @@ jobs:
       if: steps.powerio-jl.outputs.available == 'true'
       env:
         BRANCH: ${{ github.head_ref || github.ref_name }}
+        HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
       run: |
         JL=https://github.com/eigenergy/PowerIO.jl.git
         if [ -n "$BRANCH" ] && [ "$BRANCH" != "main" ] \
@@ -100,12 +101,25 @@ jobs:
         # A stacked pull request carries the parent branch's surface change but
         # has a name of its own, so no companion branch matches that name. Test
         # against the parent's companion instead. For every branch PowerIO.jl
-        # names, take the newest commit this head shares with the powerio branch
-        # of the same name. A branch that shares nothing beyond main is not a
-        # parent and is dropped; of the rest, the newest shared commit marks the
-        # nearest parent in the stack. Shared history rather than the branch tip
-        # is the test, because a parent that gains a commit after the child
+        # names, measure the history this head shares with the powerio branch
+        # of the same name. Shared history rather than the branch tip is the
+        # measure, because a parent that gains a commit after the child
         # restacks is still the parent.
+        #
+        # Two candidates are not parents and are dropped:
+        #   * one that shares nothing beyond main, which is a sibling;
+        #   * one that already contains this head, which is a descendant.
+        #     Shared history alone cannot tell a parent from a child, and a
+        #     child's companion holds the newer expectations, so testing
+        #     against it would fail this head for carrying the older surface.
+        #
+        # Of the rest, the candidate that shares the most commits past main is
+        # the nearest parent. The count is the measure, not the commit date: a
+        # rebase stamps a whole stack with one committer time, so dates tie
+        # where counts still separate. Counts can tie as well, when two
+        # branches fork at the same commit; the first name in the listing then
+        # wins, and both companions describe that same fork point.
+        #
         # Without this step the stacked pull request tests the new surface
         # against the old expectations on PowerIO.jl main and can never go
         # green, which is the deadlock the companion branch exists to break.
@@ -113,18 +127,26 @@ jobs:
         if git fetch -q --no-tags --prune origin \
              "+refs/heads/*:refs/remotes/companion/*" \
            && main_tip="$(git rev-parse -q --verify refs/remotes/companion/main)"; then
-          newest=0
+          deepest=0
           while read -r _ candidate; do
             name="${candidate#refs/heads/}"
             [ "$name" = "main" ] && continue
             tip="refs/remotes/companion/$name"
             git rev-parse --verify -q "$tip" >/dev/null || continue
+            # A descendant of this head, so its companion is ahead of us.
+            git merge-base --is-ancestor "$HEAD_SHA" "$tip" && continue
             shared="$(git merge-base "$tip" HEAD)" || continue
-            # Shares only main, so it is not a parent of this head.
+            # Shares only main, so it is a sibling rather than a parent.
             git merge-base --is-ancestor "$shared" "$main_tip" && continue
-            when="$(git log -1 --format=%ct "$shared")"
-            if [ "$when" -gt "$newest" ]; then
-              newest="$when"
+            # A descendant that no longer contains this head, because one of
+            # the two was rewritten, passes the test above. It still carries
+            # more of the stack past the fork than this head does, and a
+            # parent never does, so that count separates the two.
+            [ "$(git rev-list --count "$shared".."$tip")" \
+              -gt "$(git rev-list --count "$shared".."$HEAD_SHA")" ] && continue
+            depth="$(git rev-list --count "$main_tip".."$shared")"
+            if [ "$depth" -gt "$deepest" ]; then
+              deepest="$depth"
               ref="$name"
             fi
           done < <(git ls-remote --heads "$JL")

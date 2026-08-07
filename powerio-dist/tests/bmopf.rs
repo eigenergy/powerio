@@ -2672,6 +2672,38 @@ fn a_winding_rating_that_is_not_positive_drops_only_its_own_resistance_term() {
     );
 }
 
+/// XHL is a percent on the first winding's rating base, the same base the
+/// resistance terms use. A rating that is not positive leaves the reactance
+/// undefined, and emitting it as 0 would model the transformer as a short
+/// circuit, so the field drops with a warning instead. The schema leaves
+/// `x_series` optional, so an absent field reads as unknown.
+#[test]
+fn a_from_rating_that_is_not_positive_drops_the_reactance_instead_of_zeroing_it() {
+    let names = || vec!["1".to_string(), "2".to_string(), "3".to_string()];
+    let from = Winding::new("a", names(), WindingConn::Delta, 416.0, 0.0);
+    let to = Winding::new("a", names(), WindingConn::Wye, 240.0, 1000.0);
+    let mut net = DistNetwork::default();
+    net.transformers
+        .push(DistTransformer::new("t", vec![from, to], vec![4.0], 3));
+
+    let out = write_bmopf_json(&net);
+    let doc: serde_json::Value = serde_json::from_str(&out.text).unwrap();
+    let t = &doc["transformer"]["delta_wye"]["t"];
+    assert!(
+        t.get("x_series").is_none(),
+        "x_series must be absent, not a zero short circuit: {}",
+        out.text
+    );
+    assert!(
+        out.warnings
+            .iter()
+            .any(|w| w.contains("`x_series` is dropped")),
+        "{:?}",
+        out.warnings
+    );
+    assert_eq!(errors(&schema_validator(), &out.text), Vec::<String>::new());
+}
+
 /// The re-vendored example networks carry no generator `cost` and no bus
 /// `vpn_min`, so the assertions that used to cover both read paths went with
 /// the old fixtures. A synthetic document keeps the coverage: the per-phase

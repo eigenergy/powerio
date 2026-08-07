@@ -506,12 +506,29 @@ impl Writer {
             if subtype.is_none() && !RAW_BMOPF_EXTRAS_TABLES.contains(&u.class.as_str()) {
                 continue;
             }
-            let Some(value) = raw_bmopf_value(u) else {
+            let mut unplaced = Vec::new();
+            let Some(value) = raw_bmopf_value(u, &mut unplaced) else {
                 self.warn(format!(
-                    "{} {}: untyped BMOPF object could not be parsed as JSON; dropped from the output",
+                    "{} {}: the untyped BMOPF object carries no field this writer can \
+                     place; dropped from the output",
                     u.class, u.name
                 ));
                 continue;
+            };
+            for text in unplaced {
+                self.warn(format!(
+                    "{} {}: the value `{text}` has no field name; dropped from the \
+                     output, the named fields beside it are kept",
+                    u.class, u.name
+                ));
+            }
+            // An untyped transformer subtype lands in the top-level
+            // `transformer` table, not under `extras`. Name the slot the
+            // object really went to, so a warning points at the part of the
+            // document a reader must look at.
+            let slot_path = match subtype {
+                Some(sub) => format!("transformer.{sub}"),
+                None => format!("extras.{}", u.class),
             };
             let slot = match subtype {
                 Some(sub) => doc
@@ -530,16 +547,16 @@ impl Writer {
             // input, so a surprise drops the object instead of the process.
             let Some(table) = slot.as_object_mut() else {
                 self.warn(format!(
-                    "{} {}: the `{}` slot is not a table; dropped from the output",
-                    u.class, u.name, u.class
+                    "{} {}: the `{slot_path}` slot is not a table; dropped from the output",
+                    u.class, u.name
                 ));
                 continue;
             };
             if table.insert(u.name.clone(), value).is_some() {
                 self.warn(format!(
-                    "{} {}: the source `extras.{}` carried an entry of the same name; \
+                    "{} {}: the source `{slot_path}` carried an entry of the same name; \
                      the top-level object replaced it",
-                    u.class, u.name, u.class
+                    u.class, u.name
                 ));
             }
         }
@@ -592,21 +609,22 @@ impl Writer {
             };
             // A perfectly grounded terminal is referenced by ground itself:
             // pruning it would silently lose the grounding, and a dss round
-            // trip would come back with different bus connectivity.
-            let mut used = used.clone();
-            if let Some(Value::Array(grounded)) = bus.get("perfectly_grounded_terminals") {
-                used.extend(
-                    grounded
-                        .iter()
-                        .filter_map(Value::as_str)
-                        .map(str::to_string),
-                );
-            }
-            let used = &used;
+            // trip would come back with different bus connectivity. Collect
+            // those few names beside `used` rather than cloning the whole
+            // referenced set once per bus.
+            let grounded: BTreeSet<String> = match bus.get("perfectly_grounded_terminals") {
+                Some(Value::Array(terms)) => terms
+                    .iter()
+                    .filter_map(Value::as_str)
+                    .map(str::to_string)
+                    .collect(),
+                _ => BTreeSet::new(),
+            };
             prune_string_array(
                 bus,
                 "terminal_names",
                 used,
+                &grounded,
                 &mut self.warnings,
                 &format!("bus {id}"),
             );
@@ -614,6 +632,7 @@ impl Writer {
                 bus,
                 "perfectly_grounded_terminals",
                 used,
+                &grounded,
                 &mut self.warnings,
                 &format!("bus {id}"),
             );
@@ -1234,8 +1253,8 @@ impl Writer {
         warn_extras: bool,
     ) -> Value {
         let s = from.s_rating * s_scale;
-        let zb_from = from.v_ref * from.v_ref / s;
-        let zb_to = to.v_ref * to.v_ref / s;
+        let zb_from = base_impedance(from.v_ref, s);
+        let zb_to = base_impedance(to.v_ref, s);
         let mut o = Map::new();
         o.insert("bus_from".into(), json!(from.bus));
         o.insert("bus_to".into(), json!(to.bus));
@@ -1248,14 +1267,8 @@ impl Writer {
             "v_nom_to".into(),
             self.num(to.v_ref, "transformer v_nom_to"),
         );
-        o.insert(
-            "r_series_from".into(),
-            self.num(from.r_pct / 100.0 * zb_from, "transformer r_series_from"),
-        );
-        o.insert(
-            "r_series_to".into(),
-            self.num(to.r_pct / 100.0 * zb_to, "transformer r_series_to"),
-        );
+        self.referred_ohms(&mut o, "r_series_from", from.r_pct, zb_from, t, "from");
+        self.referred_ohms(&mut o, "r_series_to", to.r_pct, zb_to, t, "to");
         // The whole leakage reactance rides on the from side, the
         // convention the public example uses.
         if t.xsc_pct.is_empty() {
@@ -1270,10 +1283,7 @@ impl Writer {
             );
         }
         let xhl = t.xsc_pct.first().copied().unwrap_or(0.0);
-        o.insert(
-            "x_series_from".into(),
-            self.num(xhl / 100.0 * zb_from, "transformer x_series_from"),
-        );
+        self.referred_ohms(&mut o, "x_series_from", xhl, zb_from, t, "from");
         o.insert("x_series_to".into(), json!(0.0));
         o.insert("terminal_map_from".into(), json!(from.terminal_map));
         o.insert("terminal_map_to".into(), json!(to.terminal_map));
@@ -1356,22 +1366,10 @@ impl Writer {
             "v_nom_to".into(),
             self.num(to.v_ref, "transformer v_nom_to"),
         );
-        o.insert(
-            "r_series_from".into(),
-            self.num(from.r_pct / 100.0 * zb_from, "transformer r_series_from"),
-        );
-        o.insert(
-            "r_series_to".into(),
-            self.num(w2.r_pct / 100.0 * zb_to, "transformer r_series_to"),
-        );
-        o.insert(
-            "x_series_from".into(),
-            self.num(x_from_pct / 100.0 * zb_from, "transformer x_series_from"),
-        );
-        o.insert(
-            "x_series_to".into(),
-            self.num(x_to_pct / 100.0 * zb_to, "transformer x_series_to"),
-        );
+        self.referred_ohms(&mut o, "r_series_from", from.r_pct, zb_from, t, "from");
+        self.referred_ohms(&mut o, "r_series_to", w2.r_pct, zb_to, t, "to");
+        self.referred_ohms(&mut o, "x_series_from", x_from_pct, zb_from, t, "from");
+        self.referred_ohms(&mut o, "x_series_to", x_to_pct, zb_to, t, "to");
         o.insert("terminal_map_from".into(), json!(from.terminal_map));
         o.insert("terminal_map_to".into(), json!(to.terminal_map));
         self.transformer_neutral_fields(&mut o, t, from, &to);
@@ -1407,6 +1405,31 @@ impl Writer {
             }
         }
         total / 100.0 * v_wye2
+    }
+
+    /// Emit one series impedance field from a percent on `base`, or drop the
+    /// field with a warning when the rating leaves that base undefined.
+    fn referred_ohms(
+        &mut self,
+        o: &mut Map<String, Value>,
+        key: &str,
+        pct: f64,
+        base: Option<f64>,
+        t: &DistTransformer,
+        side: &str,
+    ) {
+        match base {
+            Some(zb) => {
+                let value = self.num(pct / 100.0 * zb, key);
+                o.insert(key.into(), value);
+            }
+            None => self.warn(format!(
+                "transformer {}: the `{side}` winding rating is not positive, so its \
+                 percent impedance has no base to refer to; `{key}` is dropped from \
+                 the output",
+                t.name
+            )),
+        }
     }
 
     fn center_tap_leakage_percentages(&mut self, t: &DistTransformer) -> (f64, f64) {
@@ -1479,10 +1502,11 @@ impl Writer {
             "r_series".into(),
             self.num(r_series, "transformer r_series"),
         );
-        o.insert(
-            "x_series".into(),
-            self.num(xhl / 100.0 * v_wye2 / s, "transformer x_series"),
-        );
+        // XHL is a percent on the first winding's rating base. That base is
+        // the same one `referred_resistance` guards, so guard it here too: an
+        // unusable rating must not reach the output as a zero reactance.
+        let x_base = base_impedance(wye.v_ref, s);
+        self.referred_ohms(&mut o, "x_series", xhl, x_base, t, "from");
         o.insert("terminal_map_from".into(), json!(from.terminal_map));
         o.insert("terminal_map_to".into(), json!(to.terminal_map));
         self.transformer_neutral_fields(&mut o, t, from, to);
@@ -2021,10 +2045,14 @@ fn add_bus_usage(
     }
 }
 
+/// Drop the entries of a string array that no emitted element names. A name in
+/// `used` or in `also` is kept; `also` carries the few names this bus keeps for
+/// a reason of its own, so the caller does not have to merge them into `used`.
 fn prune_string_array(
     o: &mut Map<String, Value>,
     key: &str,
     used: &BTreeSet<String>,
+    also: &BTreeSet<String>,
     warnings: &mut Vec<String>,
     what: &str,
 ) {
@@ -2035,7 +2063,10 @@ fn prune_string_array(
     let mut kept = Vec::new();
     let mut dropped = Vec::new();
     for value in old {
-        if value.as_str().is_some_and(|s| used.contains(s)) {
+        if value
+            .as_str()
+            .is_some_and(|s| used.contains(s) || also.contains(s))
+        {
             kept.push(value);
         } else {
             dropped.push(value);
@@ -2376,13 +2407,23 @@ fn classify(t: &DistTransformer) -> Kind {
 /// document declared. A dss sourced object rides as key/value property
 /// pairs, which rebuild into an object; without that arm every dss sourced
 /// untyped object failed the JSON parse and dropped.
-fn raw_bmopf_value(u: &crate::model::UntypedObject) -> Option<Value> {
+/// Rebuild the value of an untyped object. One unnamed property alone is the
+/// whole object as JSON text. Otherwise each named property is one field.
+///
+/// An unnamed property beside named ones has no field name, so this writer
+/// cannot place it. It goes to `unplaced` for the caller to report, and the
+/// named fields still reach the output; dropping the whole object over one
+/// positional token would lose every field beside it.
+fn raw_bmopf_value(u: &crate::model::UntypedObject, unplaced: &mut Vec<String>) -> Option<Value> {
     if let [(None, text)] = u.props.as_slice() {
         return serde_json::from_str(text).ok();
     }
     let mut o = Map::new();
     for (key, text) in &u.props {
-        let key = key.as_ref()?;
+        let Some(key) = key.as_ref() else {
+            unplaced.push(text.clone());
+            continue;
+        };
         let value = serde_json::from_str(text).unwrap_or_else(|_| Value::String(text.clone()));
         o.insert(key.clone(), value);
     }
@@ -2471,8 +2512,18 @@ fn center_tap_star_percentages(xsc_pct: &[f64]) -> (f64, f64) {
     ((xhl + xht - xlt) / 2.0, (xhl + xlt - xht) / 2.0)
 }
 
-fn winding_base(w: &Winding) -> f64 {
-    w.v_ref * w.v_ref / w.s_rating
+fn winding_base(w: &Winding) -> Option<f64> {
+    base_impedance(w.v_ref, w.s_rating)
+}
+
+/// Base impedance `v^2 / s` in ohms, or None when the rating gives the
+/// percent quantities no base. Dividing by a rating that is not positive
+/// yields an infinity, and `num` then emits that infinity as a zero: a
+/// zero-resistance and, worse, a zero-reactance transformer reads as a short
+/// circuit. The schema leaves every series impedance field optional, so the
+/// caller drops the field instead, and an absent field reads as unknown.
+fn base_impedance(v_ref: f64, s: f64) -> Option<f64> {
+    (s > 0.0 && s.is_finite()).then(|| v_ref * v_ref / s)
 }
 
 fn n_winding_phase_count(w: &Winding) -> usize {
