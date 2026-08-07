@@ -229,6 +229,7 @@ fn linecode_from(
         r_series: r,
         i_max: floats("cm_ub", o.get("cm_ub")).filter(|v| v.iter().all(|x| x.is_finite())),
         s_max: floats("sm_ub", o.get("sm_ub")).filter(|v| v.iter().all(|x| x.is_finite())),
+        source: None,
         extras: {
             // The raw arrays make writing back bit exact across the
             // capacitance to susceptance basis change.
@@ -692,6 +693,8 @@ impl Reader<'_> {
                 q_min: scale("qg_lb").filter(|v| v.iter().all(|x| x.is_finite())),
                 q_max: scale("qg_ub").filter(|v| v.iter().all(|x| x.is_finite())),
                 cost: None,
+                s_max: None,
+                i_max: None,
                 extras,
             });
         }

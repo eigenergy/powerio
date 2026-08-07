@@ -200,8 +200,9 @@ fn matrix_indices(key: &str, prefix: &str) -> Option<(usize, usize)> {
 
 /// Collects `prefix_i_j` keys into a square matrix; `n` is the largest
 /// index seen. Returns None when no key carries the prefix. A cell whose
-/// transpose is not spelled is mirrored: these matrices are symmetric and
-/// BMOPFTools writes one triangle only.
+/// transpose is not spelled is mirrored: these matrices are symmetric, and
+/// BMOPFTools' reader accepts the same one-triangle shorthand (a spelled
+/// cell always wins; both writers emit full matrices in practice).
 fn flat_matrix(o: &Map<String, Value>, prefix: &str) -> Option<Mat> {
     let mut entries: Vec<(usize, usize, f64)> = Vec::new();
     let mut n = 0;
@@ -378,8 +379,9 @@ impl Reader<'_> {
                 }
                 // `meta` is provenance (license, authors, generator tool),
                 // with no typed slot in the model. Stash it whole, the way the
-                // PMD reader stashes `pmd_settings`, so a read keeps it; the
-                // BMOPF writer still regenerates its own `meta` block.
+                // PMD reader stashes `pmd_settings`; the BMOPF writer owns
+                // `$schema`/`frequency`/`case_study_generator` and folds the
+                // other schema fields back from this stash.
                 "meta" => {
                     self.net
                         .extras
@@ -767,9 +769,10 @@ impl Reader<'_> {
                 b_to: bt,
                 i_max: floats(o.get("i_max")),
                 s_max: floats(o.get("s_max")),
+                source: o.get("source").and_then(Value::as_str).map(String::from),
                 extras: take_extras(
                     o,
-                    &["i_max", "s_max"],
+                    &["i_max", "s_max", "source"],
                     &format!("linecode {name}"),
                     &mut self.net.warnings,
                     &["R_series", "X_series", "G_from", "G_to", "B_from", "B_to"],
@@ -899,6 +902,7 @@ impl Reader<'_> {
             b_to: bt,
             i_max: None,
             s_max: None,
+            source: None,
             extras: Extras::new(),
         });
         name
@@ -1023,6 +1027,8 @@ impl Reader<'_> {
                 "p_max",
                 "q_min",
                 "q_max",
+                "s_max",
+                "i_max",
                 "cost",
                 "bus",
                 "configuration",
@@ -1073,6 +1079,8 @@ impl Reader<'_> {
                 q_min,
                 q_max,
                 cost,
+                s_max: floats(o.get("s_max")),
+                i_max: floats(o.get("i_max")),
                 extras: take_extras(
                     o,
                     &known,

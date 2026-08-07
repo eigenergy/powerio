@@ -888,6 +888,12 @@ impl<'a> LoweringState<'a> {
                         generator.name
                     ));
                 }
+                if generator.s_max.is_some() || generator.i_max.is_some() {
+                    self.record.dropped_fields.push(format!(
+                        "generator {} per-conductor rating fields dropped",
+                        generator.name
+                    ));
+                }
                 let vg = buses
                     .iter()
                     .find(|balanced_bus| balanced_bus.id == bus)

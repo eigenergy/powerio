@@ -30,8 +30,15 @@
     directions; an inline line's ratings stay on the synthesized linecode),
     and the dss writer warns when it drops them (the `normamps`/`emergamps`
     mapping decision is #266).
-  - One-triangle matrix spellings mirror on read (BMOPFTools writes the
-    upper triangle of the symmetric matrices).
+  - One-triangle matrix spellings mirror on read, the shorthand
+    BMOPFTools' reader also accepts; a spelled cell always wins, and both
+    writers emit full matrices.
+  - Generator `s_max`/`i_max` and linecode `source` are typed fields, read
+    and written; the dss and PMD writers warn when they drop them.
+  - The `meta` provenance fields (title, description, license, authors,
+    data_sources, created, modified, provenance, version) survive a BMOPF
+    round trip; the writer keeps owning `$schema`, `frequency`, and
+    `case_study_generator`.
   - A grounded terminal counts as referenced, so the unused-terminal prune
     no longer silently drops standalone grounding.
   - The vendored schema and example networks track bmopf-report@f2e3684;

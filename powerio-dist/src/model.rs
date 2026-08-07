@@ -125,6 +125,10 @@ pub struct DistLineCode {
     /// Ampacity per conductor.
     pub i_max: Option<Vec<f64>>,
     pub s_max: Option<Vec<f64>>,
+    /// Provenance of the impedance matrices (BMOPF `source`, e.g. "fem",
+    /// "datasheet", "import").
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source: Option<String>,
     pub extras: Extras,
 }
 
@@ -143,6 +147,7 @@ impl DistLineCode {
             b_to: zero_mat(n_conductors),
             i_max: None,
             s_max: None,
+            source: None,
             extras: Extras::new(),
         }
     }
@@ -400,6 +405,12 @@ pub struct DistGenerator {
     pub q_max: Option<Vec<f64>>,
     /// $/kWh; no OpenDSS equivalent, so it is None until a format supplies it.
     pub cost: Option<f64>,
+    /// Per-conductor apparent power and current limits, VA and amps (BMOPF
+    /// generator fields, alongside the p/q bounds).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub s_max: Option<Vec<f64>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub i_max: Option<Vec<f64>>,
     pub extras: Extras,
 }
 
@@ -425,6 +436,8 @@ impl DistGenerator {
             q_min: None,
             q_max: None,
             cost: None,
+            s_max: None,
+            i_max: None,
             extras: Extras::new(),
         }
     }

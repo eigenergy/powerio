@@ -2743,3 +2743,77 @@ fn generator_cost_and_phase_neutral_bounds_survive_a_round_trip() {
         generator.cost.map(f64::to_bits)
     );
 }
+
+/// Schema 0.1.0 defines generator `s_max`/`i_max`, linecode `source`, and the
+/// `meta` provenance fields. Each is read into the model without an
+/// outside-the-schema warning, survives the write, and validates; `meta`
+/// keeps the source provenance while the writer owns `$schema`, `frequency`,
+/// and `case_study_generator`.
+#[test]
+fn schema_fields_survive_a_round_trip_without_wrong_warnings() {
+    let text = r#"{
+      "meta": {"title": "synthetic feeder", "license": "CC-BY-4.0",
+        "authors": [{"name": "task force"}],
+        "data_sources": [{"name": "measurement campaign"}],
+        "created": "2026-01-01", "provenance": {"note": "synthetic"},
+        "frequency": 50.0,
+        "case_study_generator": {"tool": "elsewhere", "version": "0.0.0"}},
+      "bus": {"a": {"terminal_names": ["1", "2", "3"]}},
+      "voltage_source": {"s": {"v_magnitude": [240.0], "v_angle": [0.0],
+        "bus": "a", "terminal_map": ["1"]}},
+      "linecode": {"lc": {"R_series_1_1": 0.1, "X_series_1_1": 0.2,
+        "source": "datasheet"}},
+      "line": {"l": {"bus_from": "a", "bus_to": "a",
+        "terminal_map_from": ["1"], "terminal_map_to": ["2"],
+        "linecode": "lc", "length": 10.0}},
+      "generator": {"g": {"bus": "a", "terminal_map": ["1", "2", "3"],
+        "configuration": "WYE", "cost": [0.1, 0.1, 0.1],
+        "s_max": [5000.0, 5000.0, 5000.0], "i_max": [20.0, 20.0, 20.0]}}
+    }"#;
+    let net = parse_bmopf_str(text).unwrap();
+    assert!(
+        net.warnings
+            .iter()
+            .all(|w| !w.contains("outside the schema")),
+        "schema fields must not warn as outside the schema: {:?}",
+        net.warnings
+    );
+    let generator = &net.generators[0];
+    assert_eq!(generator.s_max.as_deref(), Some([5000.0; 3].as_slice()));
+    assert_eq!(generator.i_max.as_deref(), Some([20.0; 3].as_slice()));
+    assert_eq!(net.linecodes[0].source.as_deref(), Some("datasheet"));
+
+    let out = write_bmopf_json(&net);
+    assert_eq!(errors(&schema_validator(), &out.text), Vec::<String>::new());
+    let doc: serde_json::Value = serde_json::from_str(&out.text).unwrap();
+    let meta = &doc["meta"];
+    assert_eq!(meta["title"], serde_json::json!("synthetic feeder"));
+    assert_eq!(meta["license"], serde_json::json!("CC-BY-4.0"));
+    assert_eq!(meta["authors"], serde_json::json!([{"name": "task force"}]));
+    assert_eq!(
+        meta["data_sources"],
+        serde_json::json!([{"name": "measurement campaign"}])
+    );
+    assert_eq!(meta["created"], serde_json::json!("2026-01-01"));
+    assert_eq!(meta["provenance"], serde_json::json!({"note": "synthetic"}));
+    // Writer-owned: powerio's stamp and the model frequency, whatever the
+    // source declared.
+    assert_eq!(meta["case_study_generator"]["tool"], "powerio");
+    assert_eq!(meta["frequency"], serde_json::json!(50.0));
+    assert_eq!(
+        doc["generator"]["g"]["s_max"],
+        serde_json::json!([5000.0, 5000.0, 5000.0])
+    );
+    assert_eq!(
+        doc["generator"]["g"]["i_max"],
+        serde_json::json!([20.0, 20.0, 20.0])
+    );
+    assert_eq!(
+        doc["linecode"]["lc"]["source"],
+        serde_json::json!("datasheet")
+    );
+
+    // The write is a fixed point: a second read and write changes nothing.
+    let again = parse_bmopf_str(&out.text).unwrap();
+    assert_eq!(write_bmopf_json(&again).text, out.text);
+}

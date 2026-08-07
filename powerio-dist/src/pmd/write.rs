@@ -364,7 +364,7 @@ impl Writer {
         }
         doc.insert("bus".into(), Value::Object(buses));
 
-        Self::linecodes(net, &mut doc);
+        self.linecodes(net, &mut doc);
         self.branches(net, &mut doc);
         self.injections(net, &mut doc);
         self.transformers(net, &mut doc);
@@ -378,7 +378,7 @@ impl Writer {
         Value::Object(doc)
     }
 
-    fn linecodes(net: &DistNetwork, doc: &mut Map<String, Value>) {
+    fn linecodes(&mut self, net: &DistNetwork, doc: &mut Map<String, Value>) {
         // Linecodes the reader materialized from inline line impedance
         // re-inline on the line; they are skipped here unless a line
         // without the marker also references them.
@@ -395,6 +395,12 @@ impl Writer {
             }
             if let Some(s_max) = &c.s_max {
                 o.insert("sm_ub".into(), json!(s_max));
+            }
+            if c.source.is_some() {
+                self.warn(format!(
+                    "linecode {}: matrix provenance `source` has no ENGINEERING field; dropped",
+                    c.name
+                ));
             }
             codes.insert(c.name.to_lowercase(), Value::Object(o));
         }
@@ -647,6 +653,15 @@ impl Writer {
                     self.warn(format!(
                         "{what}: generation cost has no ENGINEERING field; dropped"
                     ));
+                }
+                // The ENGINEERING generator carries kVA-scale sm_ub/cm_ub;
+                // that mapping is a #266 decision, so the drop stays loud.
+                for (key, present) in [("s_max", g.s_max.is_some()), ("i_max", g.i_max.is_some())] {
+                    if present {
+                        self.warn(format!(
+                            "{what}: `{key}` has no ENGINEERING generator mapping yet; dropped"
+                        ));
+                    }
                 }
                 o.insert("control_mode".into(), json!("FREQUENCYDROOP"));
                 o.insert("status".into(), Self::status(&g.extras));

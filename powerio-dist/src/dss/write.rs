@@ -878,6 +878,12 @@ impl DssWriter {
                     c.name
                 ));
             }
+            if c.source.is_some() {
+                self.warn(format!(
+                    "linecode {}: matrix provenance `source` has no dss field; dropped",
+                    c.name
+                ));
+            }
             let mut extras = c.extras.clone();
             extras.remove("units"); // canonical output is in meters
             s.push_str(&self.extras_tail("linecode", &c.name, &extras));
@@ -1479,6 +1485,16 @@ impl DssWriter {
                     "generator {}: generation cost has no dss field; dropped",
                     g.name
                 ));
+            }
+            // Rating fields await the kVA mapping decision (#266); dropping
+            // them stays loud in the meantime.
+            for (key, present) in [("s_max", g.s_max.is_some()), ("i_max", g.i_max.is_some())] {
+                if present {
+                    self.warn(format!(
+                        "generator {}: `{key}` has no dss Generator field mapping yet; dropped",
+                        g.name
+                    ));
+                }
             }
             let mut extras = g.extras.clone();
             extras.remove("kv");
@@ -2491,6 +2507,7 @@ mod tests {
             b_to: vec![vec![0.0; 2]; 2],
             i_max: Some(Vec::new()),
             s_max: None,
+            source: None,
             extras: Extras::new(),
         };
         let t = DistTransformer {
@@ -3126,6 +3143,8 @@ mod tests {
             q_min: None,
             q_max: None,
             cost: None,
+            s_max: None,
+            i_max: None,
             extras: Extras::from([
                 ("kv".to_string(), serde_json::json!("4.16")),
                 ("phases".to_string(), serde_json::json!("2")),

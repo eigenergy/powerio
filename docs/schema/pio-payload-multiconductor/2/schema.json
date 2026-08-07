@@ -313,6 +313,16 @@
           "additionalProperties": true,
           "type": "object"
         },
+        "i_max": {
+          "items": {
+            "format": "double",
+            "type": "number"
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        },
         "name": {
           "type": "string"
         },
@@ -370,6 +380,17 @@
             "type": "number"
           },
           "type": "array"
+        },
+        "s_max": {
+          "description": "Per-conductor apparent power and current limits, VA and amps (BMOPF\ngenerator fields, alongside the p/q bounds).",
+          "items": {
+            "format": "double",
+            "type": "number"
+          },
+          "type": [
+            "array",
+            "null"
+          ]
         },
         "terminal_map": {
           "items": {
@@ -671,6 +692,13 @@
           },
           "type": [
             "array",
+            "null"
+          ]
+        },
+        "source": {
+          "description": "Provenance of the impedance matrices (BMOPF `source`, e.g. \"fem\",\n\"datasheet\", \"import\").",
+          "type": [
+            "string",
             "null"
           ]
         },

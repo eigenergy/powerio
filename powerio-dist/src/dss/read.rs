@@ -694,6 +694,7 @@ impl Reader<'_> {
             b_to: b_half,
             i_max,
             s_max: None,
+            source: None,
             extras,
         }
     }
@@ -1009,6 +1010,7 @@ impl Reader<'_> {
             b_to: b_half,
             i_max,
             s_max: None,
+            source: None,
             extras: Extras::new(),
         });
         (name, z.malformed)
@@ -1737,6 +1739,8 @@ impl Reader<'_> {
             q_min: minkvar.map(per_phase),
             q_max: maxkvar.map(per_phase),
             cost: None,
+            s_max: None,
+            i_max: None,
             extras,
         }
     }
