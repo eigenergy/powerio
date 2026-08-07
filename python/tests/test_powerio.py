@@ -782,11 +782,26 @@ def test_convention_aliases(case9):
         assert sp.issparse(case9.bprime(scheme))
 
 
+def test_sensitivity_solver_kwarg(case9):
+    # The default routes through the auto policy; on a small case that is the
+    # dense path, so the explicit spellings must agree with it. The iterative
+    # path solves to a 1e-10 relative residual, so agreement is loose only by
+    # the solver tolerance.
+    base = case9.ptdf().toarray()
+    assert np.allclose(case9.ptdf(solver="dense").toarray(), base, atol=1e-9)
+    assert np.allclose(case9.ptdf(solver="iterative").toarray(), base, atol=1e-6)
+    lodf = case9.lodf().toarray()
+    assert np.allclose(case9.lodf(solver="dense").toarray(), lodf, atol=1e-9)
+    assert np.allclose(case9.lodf(solver="CG").toarray(), lodf, atol=1e-6)
+
+
 def test_bad_enum_strings_raise(case9, tmp_path):
     with pytest.raises(ValueError):
         case9.bprime(scheme="nonsense")
     with pytest.raises(ValueError):
         case9.ptdf(convention="nope")
+    with pytest.raises(ValueError):
+        case9.ptdf(solver="bogus")
     with pytest.raises(ValueError):
         case9.write_dcopf_bundle(str(tmp_path), units="bogus")
 

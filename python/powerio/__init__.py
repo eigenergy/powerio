@@ -439,13 +439,18 @@ class Network:
         g, b = self.ybus_parts(include_taps, include_shifts)
         return (g + 1j * b).tocsr()
 
-    def ptdf(self, convention: str = "paper"):
-        """DC PTDF (m×n). ``convention`` is ``"paper"`` or ``"matpower"``."""
-        return _to_csr(self._inner.ptdf(convention))
+    def ptdf(self, convention: str = "paper", solver: str = "auto"):
+        """DC PTDF (m×n). ``convention`` is ``"paper"`` or ``"matpower"``.
 
-    def lodf(self, convention: str = "paper"):
-        """DC LODF (m×m)."""
-        return _to_csr(self._inner.lodf(convention))
+        ``solver`` is ``"auto"``, ``"dense"``, or ``"iterative"``. ``"auto"``
+        uses the dense factorization on small cases and the iterative
+        conjugate gradient path on large ones, the same policy as the CLI.
+        """
+        return _to_csr(self._inner.ptdf(convention, solver))
+
+    def lodf(self, convention: str = "paper", solver: str = "auto"):
+        """DC LODF (m×m). ``solver`` as in :meth:`ptdf`."""
+        return _to_csr(self._inner.lodf(convention, solver))
 
     def weighted_laplacian(self, convention: str = "paper"):
         """Weighted Laplacian ``L = A diag(b) Aᵀ``."""
