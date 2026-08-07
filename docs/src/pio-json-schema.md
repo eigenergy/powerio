@@ -68,7 +68,7 @@ documents. It does not define a standalone case format.
 
 | field | type | required | notes |
 |---|---|---|---|
-| `schema_version` | string (semver) | yes | document version; defaults to current on read; other lineages rejected |
+| `schema_version` | string (semver) | yes | document version; required on read; other lineages rejected |
 | `producer` | object | yes | `{tool, version, git_commit?, features[]}` |
 | `package_id` | string | no | stable content id, e.g. `"sha256:..."`; unset by the scaffold |
 | `created_at` | string (RFC 3339) | no | unset by default for deterministic output |
