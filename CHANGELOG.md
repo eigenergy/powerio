@@ -1,6 +1,8 @@
 # Changelog
 
-## Unreleased
+## 0.8.0
+
+BMOPF schema 0.1.0 alignment, one version number for `.pio.json`, and distribution JSON reader validation. Two migration notes: `.pio.json` files written by 0.7.x and earlier are rejected with an error that says to regenerate them from their source case (convert with a 0.7.x install to migrate an orphaned file), and the BMOPF writer targets the published schema 0.1.0 `$id`, so consumers that key on the old `$schema` URI should update their accepted list.
 
 - `.pio.json` carries one version number. `schema_version` (now `0.2.0`)
   covers the whole document, model JSON included: while the major is 0 an
