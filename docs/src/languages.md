@@ -45,6 +45,7 @@ Verb taxonomy:
 | PyPSA CSV folder | `read_pypsa_csv_folder` / `write_pypsa_csv_folder` | `read_pypsa_csv_folder` / `net.write_pypsa_csv_folder` | `parse_file(dir; from="pypsa-csv")` / `write_pypsa_csv_folder` | `pio_parse_file` / `pio_write_dir` + `"pypsa-csv"` |
 | gridfm write | `write_gridfm_dataset` / `write_gridfm_batch` | `net.write_gridfm` / `write_gridfm_batch` | — | — |
 | gridfm read | `read_gridfm_dataset(dir, scenario)` | `read_gridfm(dir, scenario=0)` | `read_gridfm(dir; scenario=0)` | `pio_read_dir` + `"gridfm"` |
+| PYPOWER ppc dict | — | `net.to_ppc()` / `from_ppc(ppc)` | — | — |
 | Arrow handoff | internal/C ABI | — | `to_arrow` | `pio_to_arrow` |
 
 **Note:** the C ABI carries no per-format symbols: matpower, `powerio-json`,
