@@ -105,6 +105,26 @@ const BMOPF_TABLES: &[&str] = &[
     "shunt",
 ];
 
+/// Top level keys no BMOPF document carries, and a PowerModels or MATPOWER
+/// derived document does. One of these refuses the BMOPF reading whatever
+/// else the document holds.
+///
+/// The table list above is not enough on its own: a PowerModels document
+/// carries `load`, `shunt`, and `switch` too, so it matches that list and
+/// would classify as BMOPF, which is the misreading this classifier exists to
+/// stop. Dropping the shared names instead would refuse a BMOPF feeder built
+/// only from them, so the veto is the part that has to do the work.
+const NOT_BMOPF_KEYS: &[&str] = &[
+    "baseMVA",
+    "branch",
+    "dcline",
+    "gen",
+    "per_unit",
+    "source_type",
+    "source_version",
+    "storage",
+];
+
 /// Distribution parser policy for `.json`: PMD carries `data_model`; BMOPF
 /// carries a `bus` table beside at least one other BMOPF table. Any other
 /// valid JSON errors here instead of falling through to the BMOPF reader,
@@ -131,7 +151,10 @@ fn infer_distribution_json_format(text: &str) -> crate::Result<DistTargetFormat>
     if shape.contains_key("data_model") {
         return Ok(DistTargetFormat::PmdJson);
     }
-    if shape.contains_key("bus") && BMOPF_TABLES.iter().any(|t| shape.contains_key(*t)) {
+    if shape.contains_key("bus")
+        && BMOPF_TABLES.iter().any(|t| shape.contains_key(*t))
+        && !NOT_BMOPF_KEYS.iter().any(|k| shape.contains_key(*k))
+    {
         Ok(DistTargetFormat::BmopfJson)
     } else {
         Err(unrecognized())
@@ -359,12 +382,19 @@ mod tests {
     #[test]
     fn parse_file_rejects_unclassifiable_json() {
         // A PowerModels document used to fall through to the BMOPF reader
-        // and parse into a bogus near-empty network.
+        // and parse into a bogus near-empty network. This is the whole key
+        // set a powerio PowerModels write produces, not a trimmed one: it
+        // carries `load`, `shunt`, and `switch`, which are BMOPF table names
+        // too, so the table list alone still matches and only the veto list
+        // refuses it.
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("case.json");
         std::fs::write(
             &path,
-            r#"{"bus": {}, "branch": {}, "gen": {}, "baseMVA": 100.0}"#,
+            r#"{"baseMVA": 100.0, "branch": {}, "bus": {}, "dcline": {}, "gen": {},
+               "load": {}, "name": "case14", "per_unit": true, "shunt": {},
+               "source_type": "matpower", "source_version": "2", "storage": {},
+               "switch": {}}"#,
         )
         .unwrap();
         let err = parse_file(&path, None).unwrap_err();
@@ -375,6 +405,29 @@ mod tests {
         );
         // An explicit format still overrides the classifier.
         assert!(parse_file(&path, Some("bmopf-json")).is_ok());
+
+        // Each veto key refuses the BMOPF reading on its own, even beside a
+        // BMOPF table no PowerModels document carries.
+        for key in NOT_BMOPF_KEYS {
+            let doc = format!("{{\"bus\": {{}}, \"linecode\": {{}}, \"{key}\": 1}}");
+            assert!(
+                infer_distribution_json_format(&doc).is_err(),
+                "`{key}` must refuse the BMOPF reading: {doc}"
+            );
+        }
+        // A BMOPF feeder built only from names PowerModels also uses still
+        // classifies: no veto key is present.
+        for doc in [
+            r#"{"bus": {}, "load": {}}"#,
+            r#"{"bus": {}, "shunt": {}}"#,
+            r#"{"bus": {}, "switch": {}}"#,
+        ] {
+            assert_eq!(
+                infer_distribution_json_format(doc).unwrap(),
+                DistTargetFormat::BmopfJson,
+                "{doc}"
+            );
+        }
     }
 
     #[test]
