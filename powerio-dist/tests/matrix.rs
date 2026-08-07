@@ -840,3 +840,138 @@ fn emit_for_physics_check() {
     }
     let _ = Arc::new(());
 }
+
+/// Every terminal map of one network as `(element key, bus id, map)`, in a
+/// stable order. The bus id matters because the rename is per bus: dss
+/// spells a terminal as its node position within its own bus.
+fn terminal_maps(net: &DistNetwork) -> Vec<(String, String, Vec<String>)> {
+    let key = |s: &str| s.to_lowercase();
+    // Element maps only. A bus's own terminal list is not a rename: dss
+    // spells perfect grounding as node 0, so a grounded terminal legitimately
+    // leaves the list on that leg (the `dss_renames_grounded` carve-out).
+    let mut out = Vec::new();
+    for line in &net.lines {
+        let name = key(&line.name);
+        out.push((
+            format!("line {name} from"),
+            key(&line.bus_from),
+            line.terminal_map_from.clone(),
+        ));
+        out.push((
+            format!("line {name} to"),
+            key(&line.bus_to),
+            line.terminal_map_to.clone(),
+        ));
+    }
+    for switch in &net.switches {
+        let name = key(&switch.name);
+        out.push((
+            format!("switch {name} from"),
+            key(&switch.bus_from),
+            switch.terminal_map_from.clone(),
+        ));
+        out.push((
+            format!("switch {name} to"),
+            key(&switch.bus_to),
+            switch.terminal_map_to.clone(),
+        ));
+    }
+    for load in &net.loads {
+        out.push((
+            format!("load {}", key(&load.name)),
+            key(&load.bus),
+            load.terminal_map.clone(),
+        ));
+    }
+    for generator in &net.generators {
+        out.push((
+            format!("generator {}", key(&generator.name)),
+            key(&generator.bus),
+            generator.terminal_map.clone(),
+        ));
+    }
+    for shunt in &net.shunts {
+        out.push((
+            format!("shunt {}", key(&shunt.name)),
+            key(&shunt.bus),
+            shunt.terminal_map.clone(),
+        ));
+    }
+    out.sort();
+    out
+}
+
+/// The renumbering scheme itself, which the arity fallback in
+/// `assert_maps_eq` cannot check (issue #266 item 3).
+///
+/// dss spells terminals as node positions and PMD requires integer
+/// connections, so a named terminal takes a new name on those legs. The
+/// rename must be a position-stable bijection per bus:
+///
+/// - every element keeps its arity, and position `k` before the leg is
+///   position `k` after it, so no phase order permutation can hide;
+/// - within one bus, a source name always takes the same new name, so two
+///   elements that shared a conductor still share it;
+/// - within one bus, two source names never take one new name, so two
+///   conductors do not merge.
+///
+/// The scope is one bus because dss numbers a terminal by its position in
+/// its own bus, so the same name at two buses can legitimately differ.
+/// A permutation, a merge, or an inconsistent rename each fails here even
+/// though all of them keep the arity.
+#[test]
+fn renumbering_legs_are_position_stable_bijections() {
+    for case in CASES {
+        let net = parse_case(case);
+        let before = terminal_maps(&net);
+        for target in [Fmt::Dss, Fmt::Pmd] {
+            let conv = match target {
+                Fmt::Dss => powerio_dist::write_dss(&net),
+                Fmt::Pmd => powerio_dist::write_pmd_json(&net),
+                Fmt::Bmopf => unreachable!("BMOPF keeps terminal names"),
+            };
+            let round_tripped = target
+                .parse_conversion(&conv)
+                .unwrap_or_else(|e| panic!("{} → {}: {e}", case.label, target.name()));
+            let after = terminal_maps(&round_tripped);
+            let what = format!("{} → {} → back", case.label, target.name());
+
+            // Keyed by `(bus, name)`: the rename is per bus.
+            let mut forward: BTreeMap<(String, String), String> = BTreeMap::new();
+            let mut backward: BTreeMap<(String, String), String> = BTreeMap::new();
+            let after_by_key: BTreeMap<&str, &Vec<String>> =
+                after.iter().map(|(k, _, v)| (k.as_str(), v)).collect();
+
+            for (key, bus, source_map) in &before {
+                let Some(target_map) = after_by_key.get(key.as_str()) else {
+                    // Element identity across the leg is `assert_projection_eq`'s
+                    // job; this test only pins the rename.
+                    continue;
+                };
+                assert_eq!(
+                    source_map.len(),
+                    target_map.len(),
+                    "{what}: {key} changed arity: {source_map:?} vs {target_map:?}"
+                );
+                for (position, (source, renamed)) in
+                    source_map.iter().zip(target_map.iter()).enumerate()
+                {
+                    let previous = forward.insert((bus.clone(), source.clone()), renamed.clone());
+                    assert!(
+                        previous.as_ref().is_none_or(|p| p == renamed),
+                        "{what}: {key} position {position}: at bus `{bus}` terminal \
+                         `{source}` became `{renamed}` here and `{}` elsewhere",
+                        previous.unwrap_or_default()
+                    );
+                    let previous = backward.insert((bus.clone(), renamed.clone()), source.clone());
+                    assert!(
+                        previous.as_ref().is_none_or(|p| p == source),
+                        "{what}: {key} position {position}: at bus `{bus}` `{renamed}` \
+                         stands for both `{source}` and `{}`",
+                        previous.unwrap_or_default()
+                    );
+                }
+            }
+        }
+    }
+}
