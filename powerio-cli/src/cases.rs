@@ -39,20 +39,48 @@ pub fn infer_input_family(input: &Path) -> anyhow::Result<Option<bool>> {
     if DISTRIBUTION_EXTENSIONS.contains(&ext) {
         return Ok(Some(true));
     }
-    if ext != JSON_EXTENSION {
+    Ok(classified_json(input)?.map(|case| case.is_distribution()))
+}
+
+/// A `.json` case read and classified in one pass. The text rides along so the
+/// typed parse reuses it instead of reading the file a second time.
+pub struct ClassifiedCase {
+    pub text: String,
+    pub format: DetectedFormat,
+}
+
+impl ClassifiedCase {
+    pub fn is_distribution(&self) -> bool {
+        matches!(self.format, DetectedFormat::Distribution(_))
+    }
+}
+
+/// Read and classify `input` when it is a `.json` file; `Ok(None)` for every
+/// other extension, whose family (if any) is named without touching the file.
+/// The single-file routes hand the returned text straight to the typed parser
+/// — the read-once rule #260 established for `batch` and the TUI.
+pub fn classified_json(input: &Path) -> anyhow::Result<Option<ClassifiedCase>> {
+    let ext = input
+        .extension()
+        .and_then(|e| e.to_str())
+        .map(str::to_ascii_lowercase);
+    if ext.as_deref() != Some(JSON_EXTENSION) {
         return Ok(None);
     }
     let text = std::fs::read_to_string(input)
         .with_context(|| format!("reading JSON format markers from {}", input.display()))?;
-    match classify_case_json(&text, input)? {
-        DetectedFormat::Distribution(_) => Ok(Some(true)),
-        DetectedFormat::Transmission(_) => Ok(Some(false)),
-        other => anyhow::bail!(
+    let format = classify_case_json(&text, input)?;
+    if !matches!(
+        format,
+        DetectedFormat::Transmission(_) | DetectedFormat::Distribution(_)
+    ) {
+        anyhow::bail!(
             "unrecognized JSON format family `{}` in {}; pass --from to choose a format",
-            other.name(),
+            format.name(),
             input.display()
-        ),
+        );
     }
+    Ok(Some(ClassifiedCase { text, format }))
 }
 
 /// Classify `.json` case text to its detected format, turning the non-case

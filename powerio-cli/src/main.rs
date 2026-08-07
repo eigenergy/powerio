@@ -22,7 +22,8 @@ use serde_json::json;
 mod cases;
 mod tui;
 
-use cases::{infer_input_family, looks_like_distribution_input};
+use cases::infer_input_family;
+use powerio_matrix::format::routing::SourceFormat as DetectedFormat;
 
 const SUMMARY_SCHEMA_VERSION: &str = "0.1";
 
@@ -1106,16 +1107,13 @@ fn run_summary(input: &Path, from: Option<FormatArg>, scenario: i64) -> anyhow::
             let read = powerio_matrix::read_gridfm_dataset(input, scenario)
                 .with_context(|| format!("reading gridfm dataset {}", input.display()))?;
             transmission_summary_json(&read.network, &read.warnings)
-        } else if from.is_some_and(|f| f.distribution().is_some())
-            || (from.is_none() && looks_like_distribution_input(input)?)
-        {
-            let net = powerio_dist::parse_file(input, from.map(FormatArg::name))
-                .with_context(|| format!("reading {}", input.display()))?;
-            distribution_summary_json(&net)
         } else {
-            let parsed = powerio_matrix::parse_file(input, from.map(FormatArg::name))
-                .with_context(|| format!("reading {}", input.display()))?;
-            transmission_summary_json(&parsed.network, &parsed.warnings)
+            match parse_family_case(input, from)? {
+                FamilyCase::Distribution(net) => distribution_summary_json(&net),
+                FamilyCase::Transmission(parsed) => {
+                    transmission_summary_json(&parsed.network, &parsed.warnings)
+                }
+            }
         };
     println!("{}", serde_json::to_string_pretty(&value)?);
     Ok(())
@@ -1152,10 +1150,6 @@ fn build_package(
     from: Option<FormatArg>,
     scenario: i64,
 ) -> anyhow::Result<NetworkPackage> {
-    if from == Some(FormatArg::PowerioJson) {
-        warn_deprecated_powerio_json();
-    }
-
     if from == Some(FormatArg::Gridfm) || (from.is_none() && looks_like_gridfm_dir(input)) {
         let read = powerio_matrix::read_gridfm_dataset(input, scenario)
             .with_context(|| format!("reading gridfm dataset {}", input.display()))?;
@@ -1169,34 +1163,30 @@ fn build_package(
         return Ok(pkg);
     }
 
-    if from.is_some_and(|f| f.distribution().is_some())
-        || (from.is_none() && looks_like_distribution_input(input)?)
-    {
-        let net = powerio_dist::parse_file(input, from.map(FormatArg::name))
-            .with_context(|| format!("reading {}", input.display()))?;
-        let format = net
-            .source_format
-            .map(powerio_dist::DistSourceFormat::name)
-            .or_else(|| from.map(FormatArg::name))
-            .unwrap_or("unknown");
-        let retained_source = net.source.is_some();
-        let mut pkg = NetworkPackage::from_multiconductor(net);
-        set_package_source(
-            &mut pkg,
-            input,
-            package_source_kind(input, format),
-            format,
-            retained_source,
-        );
-        pkg.run_sane_validation();
-        return Ok(pkg);
-    }
-
-    let parsed = powerio_matrix::parse_file(input, from.map(FormatArg::name))
-        .with_context(|| format!("reading {}", input.display()))?;
-    let format = parsed.network.source_format.name();
-    let retained_source = parsed.network.source.is_some();
-    let mut pkg = NetworkPackage::from_parsed_balanced(parsed);
+    let (mut pkg, format, retained_source) = match parse_family_case(input, from)? {
+        FamilyCase::Distribution(net) => {
+            let format = net
+                .source_format
+                .map(powerio_dist::DistSourceFormat::name)
+                .or_else(|| from.map(FormatArg::name))
+                .unwrap_or("unknown");
+            let retained_source = net.source.is_some();
+            (
+                NetworkPackage::from_multiconductor(net),
+                format,
+                retained_source,
+            )
+        }
+        FamilyCase::Transmission(parsed) => {
+            let format = parsed.network.source_format.name();
+            let retained_source = parsed.network.source.is_some();
+            (
+                NetworkPackage::from_parsed_balanced(parsed),
+                format,
+                retained_source,
+            )
+        }
+    };
     set_package_source(
         &mut pkg,
         input,
@@ -1378,12 +1368,21 @@ fn run_convert(
     if to == FormatArg::PypsaCsv {
         return convert_to_pypsa_folder(input, output, from, scenario, gen_cost_options);
     }
+    // A `.json` with no --from is read and DOM-classified once here; the
+    // family check below uses the verdict and the typed parse reuses the text.
+    let classified = if from.is_none() {
+        cases::classified_json(input)?
+    } else {
+        None
+    };
     // The two families share no conversion path; say so directly instead of
     // letting the wrong family's reader produce a confusing format error. The
     // input family comes from --from (gridfm reads into the transmission
     // model), from a clear extension, or from the shared JSON classifier.
     let input_is_dist = if let Some(f) = from {
         Some(f.distribution().is_some())
+    } else if let Some(case) = &classified {
+        Some(case.is_distribution())
     } else {
         infer_input_family(input)?
     };
@@ -1410,6 +1409,18 @@ fn run_convert(
                 eprintln!("fidelity: {w}");
             }
             read.network
+        } else if let Some(case) = &classified {
+            match parse_classified_case(case, input)? {
+                FamilyCase::Transmission(parsed) => {
+                    for w in &parsed.warnings {
+                        eprintln!("fidelity: {w}");
+                    }
+                    parsed.network
+                }
+                FamilyCase::Distribution(_) => {
+                    unreachable!("the family check routed a distribution input here")
+                }
+            }
         } else {
             read_network(input, from)?
         };
@@ -1417,8 +1428,17 @@ fn run_convert(
             .with_context(|| format!("serializing to {target}"))?;
         (conv.text, Vec::new(), conv.warnings)
     } else {
-        let net = powerio_dist::parse_file(input, from.map(FormatArg::name))
-            .with_context(|| format!("reading {}", input.display()))?;
+        let net = if let Some(case) = &classified {
+            match parse_classified_case(case, input)? {
+                FamilyCase::Distribution(net) => net,
+                FamilyCase::Transmission(_) => {
+                    unreachable!("the family check routed a transmission input here")
+                }
+            }
+        } else {
+            powerio_dist::parse_file(input, from.map(FormatArg::name))
+                .with_context(|| format!("reading {}", input.display()))?
+        };
         for w in &net.warnings {
             eprintln!("parse: {w}");
         }
@@ -1492,15 +1512,6 @@ fn is_relative_component_path(path: &str) -> bool {
             .all(|c| matches!(c, std::path::Component::Normal(_)))
 }
 
-/// Whether the geo command's case input is a distribution case: `--from`
-/// decides when given, else the extension and JSON markers.
-fn geo_input_is_dist(input: &std::path::Path, from: Option<FormatArg>) -> anyhow::Result<bool> {
-    if let Some(f) = from {
-        return Ok(f.distribution().is_some());
-    }
-    looks_like_distribution_input(input)
-}
-
 fn run_geo_extract(
     input: &std::path::Path,
     output: Option<&std::path::Path>,
@@ -1525,15 +1536,19 @@ fn run_geo_extract(
         }
         return write_conversion_output(&layer.to_geojson(), &[], output);
     }
-    let layer = if geo_input_is_dist(input, from)? {
-        let net = powerio_dist::parse_file(input, from.map(FormatArg::name))
-            .with_context(|| format!("reading {}", input.display()))?;
-        for w in &net.warnings {
-            eprintln!("parse: {w}");
+    let layer = match parse_family_case(input, from)? {
+        FamilyCase::Distribution(net) => {
+            for w in &net.warnings {
+                eprintln!("parse: {w}");
+            }
+            powerio_pkg::dist_geo_layer(&net)
         }
-        powerio_pkg::dist_geo_layer(&net)
-    } else {
-        read_network(input, from)?.geo_layer()
+        FamilyCase::Transmission(parsed) => {
+            for w in &parsed.warnings {
+                eprintln!("fidelity: {w}");
+            }
+            parsed.network.geo_layer()
+        }
     };
     if layer.features.is_empty() {
         anyhow::bail!("{} carries no coordinates to extract", input.display());
@@ -1562,54 +1577,62 @@ fn run_geo_apply(
     for w in &parsed.warnings {
         eprintln!("layer: {w}");
     }
-    let (text, sidecars, warnings) = if geo_input_is_dist(input, from)? {
-        let mut net = powerio_dist::parse_file(input, from.map(FormatArg::name))
-            .with_context(|| format!("reading {}", input.display()))?;
-        for w in &net.warnings {
-            eprintln!("parse: {w}");
-        }
-        report_geo_apply(&powerio_pkg::apply_dist_geo_layer(&mut net, &parsed.layer));
-        net.source = None;
-        let target = match to {
-            Some(f) => f.distribution().ok_or_else(|| {
-                anyhow::anyhow!(
-                    "`{}` is not a distribution text target; a distribution case writes \
-                     back to dss, pmd-json, or bmopf-json",
-                    f.name()
-                )
-            })?,
-            None => net
-                .source_format
-                .map(|f| f.name().parse())
-                .transpose()?
-                .ok_or_else(|| anyhow::anyhow!("the input carries no source format; pass --to"))?,
-        };
-        let conv = net.to_format(target);
-        (conv.text, conv.sidecars, conv.warnings)
-    } else {
-        let mut net = read_network(input, from)?;
-        report_geo_apply(&net.apply_geo_layer(&parsed.layer));
-        net.source = None;
-        let target = match to {
-            Some(f) => f.transmission().ok_or_else(|| {
-                anyhow::anyhow!(
-                    "`{}` is not a transmission text target here; apply writes a single \
-                     case file (use `convert` for pypsa-csv and gridfm outputs)",
-                    f.name()
-                )
-            })?,
-            None => powerio_matrix::target_format_from_name(&format!("{:?}", net.source_format))
-                .ok_or_else(|| {
+    let (text, sidecars, warnings) = match parse_family_case(input, from)? {
+        FamilyCase::Distribution(mut net) => {
+            for w in &net.warnings {
+                eprintln!("parse: {w}");
+            }
+            report_geo_apply(&powerio_pkg::apply_dist_geo_layer(&mut net, &parsed.layer));
+            net.source = None;
+            let target = match to {
+                Some(f) => f.distribution().ok_or_else(|| {
                     anyhow::anyhow!(
-                        "`{:?}` has no write target; pass --to to choose one",
-                        net.source_format
+                        "`{}` is not a distribution text target; a distribution case writes \
+                         back to dss, pmd-json, or bmopf-json",
+                        f.name()
                     )
                 })?,
-        };
-        let conv = net
-            .to_format(target)
-            .with_context(|| format!("serializing to {target}"))?;
-        (conv.text, Vec::new(), conv.warnings)
+                None => net
+                    .source_format
+                    .map(|f| f.name().parse())
+                    .transpose()?
+                    .ok_or_else(|| {
+                        anyhow::anyhow!("the input carries no source format; pass --to")
+                    })?,
+            };
+            let conv = net.to_format(target);
+            (conv.text, conv.sidecars, conv.warnings)
+        }
+        FamilyCase::Transmission(case) => {
+            for w in &case.warnings {
+                eprintln!("fidelity: {w}");
+            }
+            let mut net = case.network;
+            report_geo_apply(&net.apply_geo_layer(&parsed.layer));
+            net.source = None;
+            let target = match to {
+                Some(f) => f.transmission().ok_or_else(|| {
+                    anyhow::anyhow!(
+                        "`{}` is not a transmission text target here; apply writes a single \
+                         case file (use `convert` for pypsa-csv and gridfm outputs)",
+                        f.name()
+                    )
+                })?,
+                None => {
+                    powerio_matrix::target_format_from_name(&format!("{:?}", net.source_format))
+                        .ok_or_else(|| {
+                            anyhow::anyhow!(
+                                "`{:?}` has no write target; pass --to to choose one",
+                                net.source_format
+                            )
+                        })?
+                }
+            };
+            let conv = net
+                .to_format(target)
+                .with_context(|| format!("serializing to {target}"))?;
+            (conv.text, Vec::new(), conv.warnings)
+        }
     };
     for w in &warnings {
         eprintln!("fidelity: {w}");
@@ -1692,6 +1715,73 @@ fn convert_to_pypsa_folder(
     Ok(())
 }
 
+/// A single-file case input parsed to its own family model.
+enum FamilyCase {
+    Transmission(powerio_matrix::Parsed),
+    Distribution(powerio_dist::DistNetwork),
+}
+
+/// Parse a single-file case to whichever family model it belongs to. With no
+/// `--from`, a `.json` is read and DOM-classified once and the same text feeds
+/// the typed parser — the read-once rule #260 established for `batch` and the
+/// TUI, extended here to the single-file routes. Warnings stay on the returned
+/// value: the callers differ in where they surface them (summary JSON, package
+/// diagnostics, stderr).
+fn parse_family_case(input: &Path, from: Option<FormatArg>) -> anyhow::Result<FamilyCase> {
+    if let Some(f) = from {
+        if f == FormatArg::PowerioJson {
+            warn_deprecated_powerio_json();
+        }
+        if f == FormatArg::Gridfm {
+            anyhow::bail!(
+                "gridfm datasets are read by `convert --from gridfm` or the `gridfm` \
+                 subcommand, not this command"
+            );
+        }
+        return if f.distribution().is_some() {
+            let net = powerio_dist::parse_file(input, Some(f.name()))
+                .with_context(|| format!("reading {}", input.display()))?;
+            Ok(FamilyCase::Distribution(net))
+        } else {
+            let parsed = powerio_matrix::parse_file(input, Some(f.name()))
+                .with_context(|| format!("reading {}", input.display()))?;
+            Ok(FamilyCase::Transmission(parsed))
+        };
+    }
+    if let Some(case) = cases::classified_json(input)? {
+        return parse_classified_case(&case, input);
+    }
+    if cases::looks_like_distribution_input(input)? {
+        let net = powerio_dist::parse_file(input, None)
+            .with_context(|| format!("reading {}", input.display()))?;
+        Ok(FamilyCase::Distribution(net))
+    } else {
+        let parsed = powerio_matrix::parse_file(input, None)
+            .with_context(|| format!("reading {}", input.display()))?;
+        Ok(FamilyCase::Transmission(parsed))
+    }
+}
+
+/// Parse already-classified `.json` text through its family's string parser,
+/// keeping the file stem as the name hint the path-based parsers would use.
+fn parse_classified_case(case: &cases::ClassifiedCase, input: &Path) -> anyhow::Result<FamilyCase> {
+    match case.format {
+        DetectedFormat::Distribution(format) => {
+            let net = powerio_dist::parse_str(&case.text, format.name())
+                .with_context(|| format!("reading {}", input.display()))?;
+            Ok(FamilyCase::Distribution(net))
+        }
+        DetectedFormat::Transmission(format) => {
+            let stem = input.file_stem().and_then(|s| s.to_str());
+            let parsed =
+                powerio_matrix::format::parse_str_with_name(&case.text, format.name(), stem)
+                    .with_context(|| format!("reading {}", input.display()))?;
+            Ok(FamilyCase::Transmission(parsed))
+        }
+        _ => unreachable!("classified_json returns transmission or distribution formats only"),
+    }
+}
+
 /// Read `input` into the neutral [`powerio_matrix::Network`] through the shared
 /// format hub, which picks the reader from `from` or the extension (sniffing a
 /// `.json` with the shared top level shape classifier). The distribution
@@ -1730,10 +1820,11 @@ fn read_network(
 
 #[cfg(test)]
 mod tests {
+    use super::cases::looks_like_distribution_input;
     use super::{
-        Cli, Command, FormatArg, GenCostCliOptions, build_package, distribution_summary_json,
-        infer_input_family, looks_like_distribution_input, package_text, run_convert, run_package,
-        transmission_summary_json,
+        Cli, Command, FamilyCase, FormatArg, GenCostCliOptions, build_package,
+        distribution_summary_json, infer_input_family, package_text, parse_family_case,
+        run_convert, run_package, transmission_summary_json,
     };
     use clap::Parser;
     use powerio_pkg::{MappingKind, NetworkPackage, Origin, ValidationStatus};
@@ -1819,6 +1910,43 @@ mod tests {
         .unwrap();
         assert!(!looks_like_distribution_input(&tmp).unwrap());
         let _ = std::fs::remove_file(tmp);
+    }
+
+    #[test]
+    fn family_case_routes_json_by_classifier_without_from() {
+        // The single-file routes' one-read path: the classifier's verdict on
+        // the text picks the family and format, and the stem still names a
+        // nameless transmission case as the path-based parser would.
+        let dir = std::env::temp_dir().join(format!(
+            "powerio-family-case-{}",
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let egret = dir.join("myegret.json");
+        std::fs::write(
+            &egret,
+            std::fs::read_to_string(data("egret/case9.json")).unwrap(),
+        )
+        .unwrap();
+        match parse_family_case(&egret, None).unwrap() {
+            FamilyCase::Transmission(parsed) => {
+                assert_eq!(parsed.network.buses.len(), 9);
+                assert_eq!(parsed.network.name, "myegret");
+            }
+            FamilyCase::Distribution(_) => panic!("egret JSON classified as distribution"),
+        }
+
+        let dist = dir.join("feeder.json");
+        std::fs::write(&dist, r#"{"bus":{"a":{"terminal_names":["1"]}}}"#).unwrap();
+        match parse_family_case(&dist, None).unwrap() {
+            FamilyCase::Distribution(net) => assert_eq!(net.buses.len(), 1),
+            FamilyCase::Transmission(_) => panic!("BMOPF JSON classified as transmission"),
+        }
+
+        let _ = std::fs::remove_dir_all(dir);
     }
 
     #[test]

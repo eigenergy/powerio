@@ -1796,6 +1796,59 @@ fn package_synthesizes_row_identity() {
 }
 
 #[test]
+fn duplicate_payload_uid_is_diagnosed_without_operating_points() {
+    // A source-supplied uid equal to the `{table}:{row}` value
+    // ensure_payload_uids mints for a uid-less sibling collides at build;
+    // validation must surface the ambiguity even when nothing (no operating
+    // points, no study) references it yet.
+    let mut net = powerio::parse_str(MATPOWER_SRC, "matpower")
+        .unwrap()
+        .network;
+    net.buses[1].uid = Some("buses:0".to_owned());
+    let mut pkg = NetworkPackage::from_balanced(net);
+    pkg.run_sane_validation();
+
+    assert!(pkg.operating_points().is_none());
+    assert!(
+        pkg.diagnostics.iter().any(|d| {
+            d.code == DiagnosticCode::new("VALIDATE.BALANCED.PAYLOAD_IDENTITY")
+                && d.message.contains("`buses:0`")
+                && d.element_path.as_deref() == Some("/model/balanced_network/buses/1/uid")
+        }),
+        "expected duplicate uid diagnostic: {:?}",
+        pkg.diagnostics
+    );
+    assert_eq!(pkg.validation.status, ValidationStatus::Error);
+    assert!(
+        pkg.validation
+            .passes
+            .iter()
+            .any(|p| p.name == "balanced.payload_identity" && p.status == ValidationStatus::Error),
+        "missing payload identity pass: {:?}",
+        pkg.validation.passes
+    );
+    assert_json_roundtrips(&pkg);
+
+    // Unique uids leave the pass green, so the check itself is visible in the
+    // validation summary of every balanced package.
+    let mut clean = NetworkPackage::from_balanced(
+        powerio::parse_str(MATPOWER_SRC, "matpower")
+            .unwrap()
+            .network,
+    );
+    clean.run_sane_validation();
+    assert!(
+        clean
+            .validation
+            .passes
+            .iter()
+            .any(|p| p.name == "balanced.payload_identity" && p.status == ValidationStatus::Ok),
+        "missing payload identity pass: {:?}",
+        clean.validation.passes
+    );
+}
+
+#[test]
 fn geo_types_share_the_same_json_shape() {
     let balanced_location = powerio::Location {
         x: -80.0,

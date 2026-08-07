@@ -943,9 +943,10 @@ pub fn ensure_payload_uids(net: &mut BalancedNetwork) {
     fill!(transformers_3w);
 }
 
-const SANE_VALIDATION_CODES: [&str; 9] = [
+const SANE_VALIDATION_CODES: [&str; 10] = [
     "VALIDATE.BALANCED.STRUCTURE",
     "VALIDATE.BALANCED.VALUE_DOMAIN",
+    "VALIDATE.BALANCED.PAYLOAD_IDENTITY",
     "VALIDATE.MULTI.STRUCTURE",
     "VALIDATE.MULTI.TERMINAL_MAP",
     "VALIDATE.MULTI.UNTYPED_OBJECT",
@@ -1095,12 +1096,69 @@ fn sane_validate_balanced(
         value_domain.push(d);
     }
 
+    // Duplicate payload uids are diagnosed here, at build/validation time:
+    // operating point and study references resolve by uid, and
+    // `ensure_payload_uids` can mint a `{table}:{row}` value that collides
+    // with a source-supplied one — an ambiguity that would otherwise surface
+    // only once a series update fails to resolve against it.
+    let mut identity = Vec::new();
+    macro_rules! check_uids {
+        ($table:ident) => {
+            table_uid_duplicates(
+                stringify!($table),
+                net.$table.iter().map(|e| e.uid.as_deref()),
+                &mut identity,
+            )
+        };
+    }
+    check_uids!(buses);
+    check_uids!(loads);
+    check_uids!(shunts);
+    check_uids!(branches);
+    check_uids!(switches);
+    check_uids!(generators);
+    check_uids!(storage);
+    check_uids!(hvdc);
+    check_uids!(transformers_3w);
+
     let passes = vec![
         ValidationPass::new("balanced.structure", validation_status(&structure)),
         ValidationPass::new("balanced.value_domain", validation_status(&value_domain)),
+        ValidationPass::new("balanced.payload_identity", validation_status(&identity)),
     ];
     structure.extend(value_domain);
+    structure.extend(identity);
     (structure, passes)
+}
+
+/// One Error diagnostic per row that repeats an earlier row's uid in `table`.
+/// A repeated uid makes every identity-based reference to it ambiguous (the
+/// same condition `resolve_update_row` rejects during application).
+fn table_uid_duplicates<'a>(
+    table: &str,
+    uids: impl Iterator<Item = Option<&'a str>>,
+    diagnostics: &mut Vec<StructuredDiagnostic>,
+) {
+    let mut first_row: HashMap<&str, usize> = HashMap::new();
+    for (row, uid) in uids.enumerate() {
+        let Some(uid) = uid else { continue };
+        if let Some(&first) = first_row.get(uid) {
+            diagnostics.push(
+                StructuredDiagnostic::new(
+                    "VALIDATE.BALANCED.PAYLOAD_IDENTITY",
+                    DiagnosticSeverity::Error,
+                    DiagnosticStage::Validate,
+                    format!(
+                        "payload table `{table}` carries uid `{uid}` on rows {first} and {row}; \
+                         identity resolution is ambiguous"
+                    ),
+                )
+                .with_element_path(format!("/model/balanced_network/{table}/{row}/uid")),
+            );
+        } else {
+            first_row.insert(uid, row);
+        }
+    }
 }
 
 fn attach_source_refs(diagnostics: &mut [StructuredDiagnostic], source_maps: &[SourceMapEntry]) {
