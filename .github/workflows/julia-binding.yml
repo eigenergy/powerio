@@ -9,10 +9,13 @@ name: Julia binding
 #
 # Companion branches: a PR that moves the shared surface (JSON shapes, schema
 # versions, pio_* behavior) pushes a PowerIO.jl branch with the SAME name; this
-# job tests against that branch when it exists and falls back to PowerIO.jl
-# main. That breaks the lockstep deadlock where a powerio PR can only go green
-# after PowerIO.jl main changes, which can only be validated after the powerio
-# PR merges. Merge either side first; the companion branch keeps both green.
+# job tests against that branch when it exists, then against the companion of
+# the nearest parent branch in the stack, and only then falls back to
+# PowerIO.jl main. That breaks the lockstep deadlock where a powerio PR can
+# only go green after PowerIO.jl main changes, which can only be validated
+# after the powerio PR merges. Merge either side first; the companion branch
+# keeps both green, and a stacked PR inherits the parent's companion rather
+# than testing the new surface against the old expectations on main.
 # The paths cover every crate the full-feature capi build below pulls in
 # (--features arrow,matrix,gridfm,dist,pkg,prob), so a change in any of them
 # reruns the compatibility suite.
@@ -66,6 +69,10 @@ jobs:
         fi
     - uses: actions/checkout@v6
       if: steps.powerio-jl.outputs.available == 'true'
+      with:
+        # Full history: the companion step below asks whether a branch tip is
+        # already in this head, and a shallow clone cannot answer that.
+        fetch-depth: 0
     - uses: dtolnay/rust-toolchain@stable
       if: steps.powerio-jl.outputs.available == 'true'
     - uses: Swatinem/rust-cache@v2
@@ -83,13 +90,50 @@ jobs:
       env:
         BRANCH: ${{ github.head_ref || github.ref_name }}
       run: |
+        JL=https://github.com/eigenergy/PowerIO.jl.git
         if [ -n "$BRANCH" ] && [ "$BRANCH" != "main" ] \
-          && git ls-remote --exit-code --heads \
-            https://github.com/eigenergy/PowerIO.jl.git "refs/heads/$BRANCH" >/dev/null 2>&1; then
+          && git ls-remote --exit-code --heads "$JL" "refs/heads/$BRANCH" >/dev/null 2>&1; then
           echo "ref=$BRANCH" >> "$GITHUB_OUTPUT"
           echo "PowerIO.jl has a companion branch '$BRANCH'; testing against it instead of main."
+          exit 0
+        fi
+        # A stacked pull request carries the parent branch's surface change but
+        # has a name of its own, so no companion branch matches that name. Test
+        # against the parent's companion instead. For every branch PowerIO.jl
+        # names, take the newest commit this head shares with the powerio branch
+        # of the same name. A branch that shares nothing beyond main is not a
+        # parent and is dropped; of the rest, the newest shared commit marks the
+        # nearest parent in the stack. Shared history rather than the branch tip
+        # is the test, because a parent that gains a commit after the child
+        # restacks is still the parent.
+        # Without this step the stacked pull request tests the new surface
+        # against the old expectations on PowerIO.jl main and can never go
+        # green, which is the deadlock the companion branch exists to break.
+        ref=main
+        if git fetch -q --no-tags --prune origin \
+             "+refs/heads/*:refs/remotes/companion/*" \
+           && main_tip="$(git rev-parse -q --verify refs/remotes/companion/main)"; then
+          newest=0
+          while read -r _ candidate; do
+            name="${candidate#refs/heads/}"
+            [ "$name" = "main" ] && continue
+            tip="refs/remotes/companion/$name"
+            git rev-parse --verify -q "$tip" >/dev/null || continue
+            shared="$(git merge-base "$tip" HEAD)" || continue
+            # Shares only main, so it is not a parent of this head.
+            git merge-base --is-ancestor "$shared" "$main_tip" && continue
+            when="$(git log -1 --format=%ct "$shared")"
+            if [ "$when" -gt "$newest" ]; then
+              newest="$when"
+              ref="$name"
+            fi
+          done < <(git ls-remote --heads "$JL")
+        fi
+        echo "ref=$ref" >> "$GITHUB_OUTPUT"
+        if [ "$ref" = "main" ]; then
+          echo "PowerIO.jl has no companion branch for '$BRANCH' and none for a parent branch; testing against main."
         else
-          echo "ref=main" >> "$GITHUB_OUTPUT"
+          echo "PowerIO.jl has no companion branch for '$BRANCH'; testing against the parent branch companion '$ref'."
         fi
     - name: Check out PowerIO.jl
       if: steps.powerio-jl.outputs.available == 'true'
