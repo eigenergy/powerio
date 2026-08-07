@@ -300,26 +300,14 @@ char *pio_dist_capabilities_json(void);
 #endif
 
 /**
- * Report the schema version of every document format this library speaks, as
+ * Report the schema version of each document format in this library, as
  * owned JSON. Free the returned string with [`pio_string_free`]. Infallible.
  *
- * These are the versions stamped into the documents the library reads and
- * writes, and they are **not** covered by [`PIO_ABI_VERSION`]: the v4 policy
- * says data evolves through versioned payloads rather than through signature
- * changes, so a binding can pass the ABI handshake against a library whose
- * document formats it can no longer speak. That is exactly what happened when
- * `.pio.json` went 0.1.1 -> 0.2.0 in v0.8.0 with both ABI integers unchanged:
- * the binding mirrored the old version as a source constant, nothing compared
- * the two, and the mismatch surfaced as a test failure after the release was
- * already public.
- *
- * A binding that mirrors any of these should read them from here and refuse a
- * library it disagrees with, at load or at artifact-pin time, rather than
- * discovering it downstream.
- *
- * A key is `null` when the owning feature is not compiled in. Keys are only
- * ever added, and `schema_version` tracks this document's own shape, so a
- * consumer keying on a subset keeps working.
+ * [`PIO_ABI_VERSION`] does not cover these versions. A binding that
+ * mirrors one of them must read it from here and refuse a library it does
+ * not agree with. A key is `null` when the owning feature is not compiled
+ * in. Keys are only added over time. `schema_version` is the version of
+ * this document's own shape.
  */
 char *pio_schema_versions_json(void);
 

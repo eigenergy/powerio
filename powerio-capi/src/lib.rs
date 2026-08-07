@@ -232,27 +232,13 @@ pub extern "C" fn pio_dist_abi_version() -> u32 {
     PIO_DIST_ABI_VERSION
 }
 
-/// The version of the capability document itself -- the JSON shape
-/// `pio_dist_capabilities_json` returns, NOT any schema it describes (a
-/// consumer reading it as "the BMOPF schema version" gets a wrong answer,
-/// which is why the BMOPF vintage is reported explicitly inside the document).
-/// Flags are additive and this minor-bumps on each addition, so an older
-/// consumer keeps working.
-///
-/// 1.1.0 adds `bmopf_schema_id`, `bmopf_schema_version`, and the v0.8 feature
-/// flags. The six `bmopf_*` fidelity booleans have been true since v0.6.2 and
-/// stayed frozen through three releases of real distribution work, which made
-/// the document useless for telling v0.6.2 from v0.8.0 -- exactly the question
-/// a downstream reader has to answer, because v0.8.0 changed the BMOPF `$id`,
-/// upper-cased the load `model` enum, and relocated transformer taps, neutral
-/// impedance, and no-load admittance under `extras`.
+/// Version of the capability document: the JSON shape that
+/// `pio_dist_capabilities_json` returns. It is not the BMOPF schema
+/// version; the document reports that in `bmopf_schema_version`. Flags
+/// are additive, and each addition bumps the minor version.
 #[cfg(feature = "dist")]
 const DIST_CAPABILITIES_DOC_VERSION: &str = "1.1.0";
 
-/// Built at call time so the schema id and vintage are the `powerio_dist`
-/// constants themselves rather than mirrored literals -- the call allocates an
-/// owned string regardless, so a compile-time document bought nothing except a
-/// second copy of each value and a test to police the copies.
 #[cfg(feature = "dist")]
 fn dist_capabilities_json() -> String {
     serde_json::json!({
@@ -264,9 +250,7 @@ fn dist_capabilities_json() -> String {
         "bmopf_delta_roll": true,
         "bmopf_voltage_source_merge": true,
         "bmopf_transformer_diagnostics": true,
-        // Not a fetch location: upstream serves this from an unpinned `main`,
-        // so pair it with `bmopf_schema_version` and treat neither as
-        // conclusive on its own.
+        // Not a fetch location. Use it together with `bmopf_schema_version`.
         "bmopf_schema_id": powerio_dist::BMOPF_SCHEMA_ID,
         "bmopf_schema_version": powerio_dist::BMOPF_SCHEMA_VERSION,
         "typed_capacitors": true,
@@ -289,30 +273,17 @@ pub extern "C" fn pio_dist_capabilities_json() -> *mut c_char {
     into_cstring(dist_capabilities_json()).unwrap_or(std::ptr::null_mut())
 }
 
-/// Report the schema version of every document format this library speaks, as
+/// Report the schema version of each document format in this library, as
 /// owned JSON. Free the returned string with [`pio_string_free`]. Infallible.
 ///
-/// These are the versions stamped into the documents the library reads and
-/// writes, and they are **not** covered by [`PIO_ABI_VERSION`]: the v4 policy
-/// says data evolves through versioned payloads rather than through signature
-/// changes, so a binding can pass the ABI handshake against a library whose
-/// document formats it can no longer speak. That is exactly what happened when
-/// `.pio.json` went 0.1.1 -> 0.2.0 in v0.8.0 with both ABI integers unchanged:
-/// the binding mirrored the old version as a source constant, nothing compared
-/// the two, and the mismatch surfaced as a test failure after the release was
-/// already public.
-///
-/// A binding that mirrors any of these should read them from here and refuse a
-/// library it disagrees with, at load or at artifact-pin time, rather than
-/// discovering it downstream.
-///
-/// A key is `null` when the owning feature is not compiled in. Keys are only
-/// ever added, and `schema_version` tracks this document's own shape, so a
-/// consumer keying on a subset keeps working.
+/// [`PIO_ABI_VERSION`] does not cover these versions. A binding that
+/// mirrors one of them must read it from here and refuse a library it does
+/// not agree with. A key is `null` when the owning feature is not compiled
+/// in. Keys are only added over time. `schema_version` is the version of
+/// this document's own shape.
 #[unsafe(no_mangle)]
 pub extern "C" fn pio_schema_versions_json() -> *mut c_char {
-    // `Option<&str>` per entry: `None` serializes to `null`, which reads as
-    // "this build cannot speak that format" rather than "unknown version".
+    // `None` serializes to `null`: the build cannot speak that format.
     #[cfg(feature = "pkg")]
     let package = Some(powerio_pkg::PIO_PACKAGE_SCHEMA_VERSION);
     #[cfg(not(feature = "pkg"))]
@@ -2545,18 +2516,9 @@ pub unsafe extern "C" fn pio_dist_from_json(
     }
 }
 
-/// Append a fidelity warning for every companion file the writer produced that
-/// this text-only surface cannot hand back.
-///
-/// A distribution writer can emit files the primary text refers to — the
-/// OpenDSS `Buscoords` CSV is the one that bites. These entry points return
-/// the case text and nothing else, so those files are dropped, and a caller
-/// that writes the text out gets a case naming a file that does not exist;
-/// OpenDSS refuses to compile it. The CLI writes them and the Python bindings
-/// have `write_file`, which left C and its consumers as the only surface where
-/// the loss was silent. Naming each dropped file is the smallest honest fix
-/// that keeps `PIO_DIST_ABI_VERSION` at 1; returning the content needs a new
-/// entry point.
+/// Append a fidelity warning for each companion file the writer produced.
+/// The text-only C entry points cannot return these files, so the case text
+/// can refer to a file the caller does not have. The warning names it.
 #[cfg(feature = "dist")]
 fn warn_dropped_sidecars(
     mut warnings: Vec<String>,
@@ -4923,12 +4885,8 @@ mpc.branch = [
             assert_eq!(doc["schema_version"], serde_json::json!("1.0.0"));
             assert_eq!(doc["abi"], serde_json::json!(PIO_ABI_VERSION));
 
-            // Each reported version must be the constant actually stamped into
-            // the documents, not a copy that can drift from it. This is the
-            // whole point of the entry point: a binding mirroring one of these
-            // reads it from here instead of hardcoding it, so the .pio.json
-            // 0.1.1 -> 0.2.0 break becomes a load-time refusal rather than a
-            // downstream test failure after the release is public.
+            // Each reported version must equal the constant stamped into the
+            // documents, not a copy of it.
             #[cfg(feature = "pkg")]
             assert_eq!(
                 doc["package"],
@@ -4947,8 +4905,6 @@ mpc.branch = [
             #[cfg(not(feature = "arrow"))]
             assert_eq!(doc["arrow"], serde_json::Value::Null);
 
-            // The dist capability document version is reported here too, so a
-            // consumer can see it without also parsing the capability blob.
             let caps_raw = pio_dist_capabilities_json();
             let caps_text = unsafe { CStr::from_ptr(caps_raw) }
                 .to_str()
@@ -4967,9 +4923,8 @@ mpc.branch = [
             unsafe { pio_string_free(ptr) };
 
             let caps: serde_json::Value = serde_json::from_str(&text).unwrap();
-            // Whole-document equality on purpose: this is the downstream
-            // capability contract, so every addition should be a deliberate
-            // edit here rather than something that slips in unnoticed.
+            // Whole-document equality: each addition must be a deliberate
+            // edit here.
             assert_eq!(
                 caps,
                 serde_json::json!({
@@ -5161,12 +5116,8 @@ mpc.branch = [
             unsafe { pio_string_free(raw) };
             let caps: serde_json::Value = serde_json::from_str(&text).unwrap();
 
-            // The document is built from the `powerio_dist` constants at call
-            // time, so no mirrored-literal drift is possible there. What can
-            // still drift is the vendored schema file itself: its own
-            // `version` field must match the vintage the writer advertises,
-            // so regenerating against a new upstream drop without updating
-            // BMOPF_SCHEMA_VERSION fails here rather than downstream.
+            // The vendored schema file's own `version` field must agree
+            // with BMOPF_SCHEMA_VERSION.
             let vendored: serde_json::Value = serde_json::from_str(
                 &std::fs::read_to_string("../tests/data/dist/bmopf/draft_bmopf_schema.json")
                     .unwrap(),
@@ -5174,7 +5125,6 @@ mpc.branch = [
             .unwrap();
             assert_eq!(vendored["version"], caps["bmopf_schema_version"]);
 
-            // The document version moved with the new keys.
             assert_eq!(
                 caps["schema_version"],
                 serde_json::json!(DIST_CAPABILITIES_DOC_VERSION)
@@ -5183,11 +5133,9 @@ mpc.branch = [
 
         #[test]
         fn convert_str_warns_that_the_buscoords_sidecar_was_dropped() {
-            // A case with bus coordinates makes the dss writer emit a
-            // `Buscoords <file>` directive plus the CSV it names. This surface
-            // returns text only, so the CSV is dropped -- silently, before
-            // this. A caller writing the text out would get a case OpenDSS
-            // refuses to compile, with nothing to explain why.
+            // Bus coordinates make the dss writer emit a `Buscoords`
+            // directive plus the CSV it names. This surface returns text
+            // only, so the CSV is dropped.
             let source = "\
 New Circuit.c basekv=12.47
 New Line.l1 bus1=a bus2=b phases=3
@@ -5197,8 +5145,8 @@ New Line.l1 bus1=a bus2=b phases=3
             let to = CString::new("dss").unwrap();
             let mut warn = [0 as c_char; 8192];
             let mut err = [0 as c_char; PIO_ERRBUF_MIN];
-            // Round trip through bmopf so the writer runs rather than echoing
-            // the source text back byte for byte.
+            // Convert through bmopf so the dss writer runs instead of an
+            // echo of the source text.
             let bmopf_target = CString::new("bmopf").unwrap();
             let as_bmopf = unsafe {
                 pio_dist_convert_str(
@@ -5249,16 +5197,13 @@ New Line.l1 bus1=a bus2=b phases=3
             unsafe { pio_string_free(s) };
             let warnings = unsafe { CStr::from_ptr(warn2.as_ptr()) }.to_str().unwrap();
 
-            // Whenever the text names a companion file, a warning must name it
-            // too. The two travel together or the caller cannot act on either.
-            // Guard the premise: if the writer stopped emitting the directive
-            // this test would pass while proving nothing.
+            // Guard the premise: the writer must emit the directive, or the
+            // warning assertion below proves nothing.
             assert!(
                 dss.to_lowercase().contains("buscoords"),
                 "expected the dss writer to reference a buscoords file; output was: {dss}"
             );
             // The text names a companion file, so a warning must name it too.
-            // The two travel together or the caller can act on neither.
             assert!(
                 warnings.contains("was not written"),
                 "dss output references a buscoords file but no warning reported the drop; \

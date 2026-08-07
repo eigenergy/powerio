@@ -1,19 +1,9 @@
-//! The retired schema documents under `docs/schema/` are frozen, not stale.
-//!
-//! Every `.pio.json` written before v0.8.0 carries their URLs as literal
-//! `schema` / `payload_schema` field values, and the docs promised each
-//! identifier path serves a fetchable document — so an archive validating a
-//! file against the URL that file declares depends on these staying published,
-//! whether or not anyone upgrades the library.
-//!
-//! The `rust.yml` schemas job cannot protect them: it regenerates only the
-//! current `pio-package/0.2` document and diffs, so deleting the frozen
-//! directories produces a clean regenerate-and-diff and green CI. This test is
-//! the mechanical form of `docs/schema/README.md`'s "byte-for-byte as at
-//! v0.7.3": a deletion or an edit fails here, with the README explaining why.
-//!
-//! On a legitimate future retirement policy change, update the pins together
-//! with the README — that is the deliberate two-file edit this exists to force.
+//! The retired schema documents under `docs/schema/` are frozen. Old
+//! `.pio.json` files declare their URLs, and the docs promise each URL
+//! stays served. The `rust.yml` schemas job regenerates only the current
+//! document, so it cannot catch a deletion here. This test pins the frozen
+//! documents byte for byte. To retire one, change the pins and
+//! `docs/schema/README.md` together.
 
 /// FNV-1a 64. Implemented inline so the pin does not depend on a hasher whose
 /// output could change across Rust or dependency versions.

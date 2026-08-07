@@ -21,25 +21,15 @@ use crate::model::{
     VoltageSource, Winding, WindingConn, n_winding_impedance_base, pair_keys,
 };
 
-/// The `$id` of the BMOPF schema this writer targets, and the value it stamps
-/// into `meta.$schema`.
-///
-/// Public because a consumer cannot otherwise learn which BMOPF vintage a given
-/// library writes. The upstream `$id` points at `main` and is not version
-/// pinned, and upstream has already changed the document's content without
-/// moving its `version` field, so the `$id` alone does not identify a vintage
-/// either -- see [`BMOPF_SCHEMA_VERSION`]. A reader keying on the URI needs
-/// both, and needs them before it parses a document rather than after.
+/// The `$id` of the BMOPF schema this writer targets, and the value it
+/// stamps into `meta.$schema`. The upstream `$id` is not version pinned,
+/// so use it together with [`BMOPF_SCHEMA_VERSION`].
 pub const BMOPF_SCHEMA_ID: &str = "https://raw.githubusercontent.com/frederikgeth/bmopf-report/main/draft_schema_and_networks/draft_bmopf_schema.json";
 
-/// The `version` of the vendored BMOPF schema this writer targets.
-///
-/// Tracks `tests/data/dist/bmopf/draft_bmopf_schema.json`'s own `version`
-/// field. Treat it as a lower bound on precision, not an identifier: upstream
-/// serves the schema from an unpinned `main` and has shipped content changes
-/// (the load `model` enum moved to upper case) without bumping this string, so
-/// two documents both claiming 0.1.0 can disagree. Pairing it with
-/// [`BMOPF_SCHEMA_ID`] is the best a consumer can currently do.
+/// The `version` field of the vendored BMOPF schema
+/// (`tests/data/dist/bmopf/draft_bmopf_schema.json`). Upstream can change
+/// the schema without a version bump, so use it together with
+/// [`BMOPF_SCHEMA_ID`].
 pub const BMOPF_SCHEMA_VERSION: &str = "0.1.0";
 
 /// Untyped classes that belong to the BMOPF ecosystem. Schema 0.1.0 dropped

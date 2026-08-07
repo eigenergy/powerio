@@ -18,13 +18,10 @@ values:
 "payload_schema": "https://powerio.dev/schema/pio-payload-multiconductor/1",
 ```
 
-A JSON Schema `$id` is a stable identifier, and an archive that validates each
-file against the URL that file declares keeps resolving those paths for as long
-as the files exist — whether or not anyone upgrades the library. Retiring a
-lineage from the *reader* (v0.8.0 accepts only its own `major.minor`) is a
-separate act from unpublishing the document already-written files point at, and
-only the first was intended.
+A JSON Schema `$id` is a stable identifier. A tool that validates a file
+against the URL the file declares depends on that URL staying served. The
+reader can retire a lineage; the published document stays.
 
-The generator never removes files, so these stay put and the regenerate-and-diff
-job stays clean. They are historical artifacts: leave them byte-for-byte as they
-were at v0.7.3 rather than regenerating or reformatting them.
+The generator never removes files. Keep these documents byte for byte; do
+not regenerate or reformat them. The `frozen_schemas` test in powerio-pkg
+pins them.
