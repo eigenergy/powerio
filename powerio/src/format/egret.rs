@@ -904,10 +904,9 @@ mod tests {
 
     #[test]
     fn unrecognized_element_fields_are_preserved_as_extras() {
-        // The fidelity policy: a field the neutral model has no slot for must
-        // survive the read as extras, not vanish. The consumed fields and the
-        // writer's own `shunt_type` stamp must stay out of extras, or every
-        // egret round trip would double-carry them.
+        // A field with no model slot must survive the read as extras.
+        // Consumed fields and the writer's own `shunt_type` stamp must
+        // stay out of extras.
         let doc = r#"{"elements":{
             "bus":{"1":{"matpower_bustype":"ref","vm":1.0,"vendor_ext":42},
                    "2":{"matpower_bustype":"PQ"}},

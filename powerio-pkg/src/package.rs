@@ -1096,11 +1096,9 @@ fn sane_validate_balanced(
         value_domain.push(d);
     }
 
-    // Duplicate payload uids are diagnosed here, at build/validation time:
-    // operating point and study references resolve by uid, and
-    // `ensure_payload_uids` can mint a `{table}:{row}` value that collides
-    // with a source-supplied one — an ambiguity that would otherwise surface
-    // only once a series update fails to resolve against it.
+    // References resolve by uid, and `ensure_payload_uids` can mint a
+    // `{table}:{row}` value that collides with a source-supplied one.
+    // Diagnose the collision here, at validation time.
     let mut identity = Vec::new();
     macro_rules! check_uids {
         ($table:ident) => {

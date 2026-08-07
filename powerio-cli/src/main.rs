@@ -1914,9 +1914,8 @@ mod tests {
 
     #[test]
     fn family_case_routes_json_by_classifier_without_from() {
-        // The single-file routes' one-read path: the classifier's verdict on
-        // the text picks the family and format, and the stem still names a
-        // nameless transmission case as the path-based parser would.
+        // The classifier's verdict picks the family and format from one
+        // read. The stem still names a nameless transmission case.
         let dir = std::env::temp_dir().join(format!(
             "powerio-family-case-{}",
             SystemTime::now()

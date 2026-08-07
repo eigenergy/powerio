@@ -105,9 +105,8 @@ fn summary_outputs_machine_readable_json() {
 
 #[test]
 fn summary_routes_json_inputs_through_the_classifier() {
-    // The single-file `.json` routes read the file once: the classifier's
-    // verdict on the text names the family and format, and the same text
-    // feeds the typed parser. Both families must come out the right door.
+    // The `.json` routes read the file once; the classifier's verdict
+    // routes each family to its parser.
     let case = repo_file("tests/data/egret/case9.json");
     let out = run(&["summary", case.to_str().unwrap()]);
     assert_success(&out);

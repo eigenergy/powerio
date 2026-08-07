@@ -651,9 +651,8 @@ fn read_shunt(v: &Value, pscale: f64) -> Shunt {
     }
 }
 
-// `raw != 1.0` is exact on purpose: only the literal 1.0 (a line's tap as
-// PowerModels serializes it) carries no information; an epsilon compare would
-// silence the warning for real near-unit taps.
+// Exact compare on purpose: only the literal 1.0 carries no information.
+// An epsilon compare would silence the warning for real near-unit taps.
 #[allow(clippy::float_cmp)]
 fn read_branch(v: &Value, pscale: f64, ascale: f64, warnings: &mut Vec<String>) -> Branch {
     // PowerModels stores the effective tap (1.0 for a line); the `transformer`
@@ -666,10 +665,9 @@ fn read_branch(v: &Value, pscale: f64, ascale: f64, warnings: &mut Vec<String>) 
     let tap = if transformer {
         f_or(v, "tap", 1.0)
     } else {
-        // The flag, not the tap, decides the type, so a non-unit tap on an
-        // untagged branch is real electrical data this rule throws away; say
-        // so instead of zeroing it silently. Taps of 1 and 0 both mean "no
-        // off-nominal ratio" and stay quiet.
+        // The `transformer` flag decides the type, so this rule drops a
+        // non-unit tap on an untagged branch. Warn about the drop. Taps of
+        // 1 and 0 both mean no off-nominal ratio and stay quiet.
         if let Some(raw) = v.get("tap").and_then(Value::as_f64) {
             if raw != 0.0 && raw != 1.0 {
                 warnings.push(format!(
