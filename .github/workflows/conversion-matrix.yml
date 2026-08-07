@@ -3,6 +3,22 @@ name: Conversion Matrix
 on:
   pull_request:
 
+# One run per workflow per branch. A force push to a stacked pull request
+# otherwise leaves the superseded run going: it finishes, it fails or it
+# passes, and it emails every watcher a second time for a commit nobody is
+# reviewing.
+#
+# Only a pull request run is ever superseded, so only a pull request run is
+# cancelled. A push to `main` is a release candidate whose result must stand
+# on its own, and a release run is the release itself: `python.yml` publishes
+# wheels to PyPI from one, behind an environment whose reviewer gate can hold
+# it for a long time. Keying the switch on the ref instead would make every
+# tag run cancellable, and a re-published release or a re-run of the same tag
+# would then cancel a publish in flight.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 permissions:
   actions: read
   contents: read
