@@ -783,10 +783,9 @@ def test_convention_aliases(case9):
 
 
 def test_sensitivity_solver_kwarg(case9):
-    # The default routes through the auto policy; on a small case that is the
-    # dense path, so the explicit spellings must agree with it. The iterative
-    # path solves to a 1e-10 relative residual, so agreement is loose only by
-    # the solver tolerance.
+    # On a small case the auto policy picks the dense path, so the explicit
+    # spellings must agree with the default. The iterative path agrees only
+    # to its 1e-10 relative residual.
     base = case9.ptdf().toarray()
     assert np.allclose(case9.ptdf(solver="dense").toarray(), base, atol=1e-9)
     assert np.allclose(case9.ptdf(solver="iterative").toarray(), base, atol=1e-6)
