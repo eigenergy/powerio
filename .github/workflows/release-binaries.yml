@@ -25,7 +25,79 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
+  # The release gate. PIO_ABI_VERSION does not cover document formats -- the v4
+  # policy is that data evolves through versioned payloads -- so a release can
+  # break the Julia binding with both ABI integers unchanged and every other
+  # check green. v0.8.0 did exactly that: .pio.json moved 0.1.1 -> 0.2.0, the
+  # binding's artifact gate compared only the integers, and the break surfaced
+  # downstream after the release was public.
+  #
+  # julia-binding.yml already proves a powerio pull request works against the
+  # binding, but it tests whichever companion branch exists, and nothing made
+  # the pair land together: the v0.8.0 pull request passed against a PowerIO.jl
+  # branch that was never merged. This job closes that by testing the tag
+  # against PowerIO.jl's DEFAULT branch, which is what users actually get.
+  #
+  # It gates `build`, so a failure produces no tarballs and no draft release.
+  # To release a deliberate binding break, merge the paired PowerIO.jl change
+  # first, then re-run this workflow -- that ordering is the point.
+  binding-gate:
+    name: PowerIO.jl main against this tag
+    runs-on: ubuntu-latest
+    steps:
+    - name: Probe PowerIO.jl access
+      id: powerio-jl
+      env:
+        POWERIO_JL_TOKEN: ${{ secrets.POWERIO_JL_REPO_TOKEN }}
+      run: |
+        if [ -n "${POWERIO_JL_TOKEN}" ]; then
+          echo "available=true" >> "$GITHUB_OUTPUT"
+        elif git ls-remote https://github.com/eigenergy/PowerIO.jl.git HEAD >/dev/null 2>&1; then
+          echo "available=true" >> "$GITHUB_OUTPUT"
+        else
+          # Deliberately NOT a silent pass. On a pull request an unreachable
+          # binding is a skipped nicety; on a release it means the gate did not
+          # run, and shipping as if it had is how this class of break escapes.
+          echo "available=false" >> "$GITHUB_OUTPUT"
+        fi
+    - name: Require the binding to be reachable
+      if: steps.powerio-jl.outputs.available != 'true'
+      run: |
+        echo "::error::Cannot reach eigenergy/PowerIO.jl, so the release gate could not run. \
+        Set the POWERIO_JL_REPO_TOKEN secret, or dispatch this workflow manually if you \
+        intend to release without checking the binding."
+        exit 1
+    - uses: actions/checkout@v6
+    - uses: dtolnay/rust-toolchain@stable
+    - uses: Swatinem/rust-cache@v2
+    - name: Build powerio-capi
+      run: |
+        cargo build -p powerio-capi --release \
+          --features arrow,matrix,gridfm,dist,pkg,prob
+    - name: Check out PowerIO.jl default branch
+      uses: actions/checkout@v6
+      with:
+        repository: eigenergy/PowerIO.jl
+        path: PowerIO.jl
+        token: ${{ secrets.POWERIO_JL_REPO_TOKEN || github.token }}
+    - uses: julia-actions/setup-julia@v3
+      with:
+        version: '1'
+    - uses: julia-actions/cache@v3
+    - name: Test PowerIO.jl against this tag
+      env:
+        POWERIO_CAPI: ${{ github.workspace }}/target/release/libpowerio_capi.so
+      run: |
+        julia --project=PowerIO.jl -e 'using Pkg; Pkg.instantiate(); Pkg.test()' || {
+          echo "::error::PowerIO.jl's default branch fails against this tag. Merge the \
+          paired PowerIO.jl change before releasing, then re-run. If the break is \
+          intentional and the binding update is queued, releasing first will leave the \
+          binding's tracking pipeline failing nightly until it lands."
+          exit 1
+        }
+
   build:
+    needs: binding-gate
     name: ${{ matrix.triplet }}
     runs-on: ${{ matrix.runner }}
     strategy:
