@@ -86,39 +86,42 @@ fn canonical_key(name: &str) -> String {
         .collect()
 }
 
-/// The BMOPF tables that identify a document beside its `bus` table. A `bus`
-/// table alone does not identify BMOPF: a PowerModels document carries
-/// `bus`, `branch`, `gen`, and `baseMVA`, and used to fall through to the
-/// BMOPF reader and parse into a bogus near-empty network. `voltage_source`
-/// alone is too narrow, because the reader is deliberately liberal and a
-/// pre-0.1.0 feeder fragment that it reads fine would need an explicit
-/// format.
-const BMOPF_TABLES: &[&str] = &[
-    "voltage_source",
+/// Element tables that identify a distribution document beside its `bus`
+/// table.
+///
+/// `load`, `shunt`, and `switch` are shared with PowerModels, so on their own
+/// they cannot tell the two apart. They stay in the list all the same, because
+/// [`NOT_BMOPF_KEYS`] is what refuses a PowerModels document, and it refuses it
+/// whatever else the document holds. Dropping the shared names instead would
+/// refuse a real BMOPF feeder built only from them, which the reader parses
+/// and which this classifier used to accept.
+///
+/// These names do not separate BMOPF from PMD: the two share most of their
+/// element vocabulary. `data_model` does that, and it is checked first.
+const DISTRIBUTION_ELEMENT_TABLES: &[&str] = &[
+    "capacitor",
+    // `control_profile` and `ibr` are typed dispatch tables of the reader,
+    // though schema 0.1.0 moved them under `extras`: a pre-0.1.0 document
+    // still declares them at the top level, and what the reader accepts the
+    // classifier must identify.
+    "control_profile",
+    "generator",
+    "ibr",
     "line",
     "linecode",
-    "transformer",
-    "switch",
     "load",
-    "generator",
-    "capacitor",
+    "meta",
     "shunt",
-    // Typed dispatch tables of the reader too, though schema 0.1.0 moved
-    // them under `extras`: a pre-0.1.0 document still declares them at the
-    // top level, and what the reader accepts the classifier must identify.
-    "ibr",
-    "control_profile",
+    "switch",
+    "terminal_conventions",
+    "transformer",
+    "voltage_source",
 ];
 
 /// Top level keys no BMOPF document carries, and a PowerModels or MATPOWER
 /// derived document does. One of these refuses the BMOPF reading whatever
-/// else the document holds.
-///
-/// The table list above is not enough on its own: a PowerModels document
-/// carries `load`, `shunt`, and `switch` too, so it matches that list and
-/// would classify as BMOPF, which is the misreading this classifier exists to
-/// stop. Dropping the shared names instead would refuse a BMOPF feeder built
-/// only from them, so the veto is the part that has to do the work.
+/// else the document holds, so a name that a future BMOPF revision adds
+/// cannot make a PowerModels file classify.
 const NOT_BMOPF_KEYS: &[&str] = &[
     "baseMVA",
     "branch",
@@ -130,40 +133,165 @@ const NOT_BMOPF_KEYS: &[&str] = &[
     "storage",
 ];
 
-/// Distribution parser policy for `.json`: PMD carries `data_model`; BMOPF
-/// carries a `bus` table beside at least one other BMOPF table. Any other
-/// valid JSON errors here instead of falling through to the BMOPF reader,
-/// which would accept an arbitrary JSON object (a PowerModels document used
-/// to parse into a bogus near-empty network). Malformed JSON still routes
-/// to BMOPF so its reader reports the parse error.
-fn infer_distribution_json_format(text: &str) -> crate::Result<DistTargetFormat> {
-    // A leading byte order mark would fail the DOM parse here and silently
-    // send a PMD document down the BMOPF fallback; classify without it.
+/// The PMD marker. Neither BMOPF nor PowerModels carries this key, so it
+/// identifies the ENGINEERING and MATHEMATICAL models on its own; the PMD
+/// reader then rejects MATHEMATICAL with its own message.
+const PMD_MARKER: &str = "data_model";
+
+/// What the top level of a document holds, for classification only.
+///
+/// The probe reads the top level keys and skips every value, so it never
+/// materializes the document. The old classifier built a whole
+/// `serde_json::Value` and dropped it, which doubled the peak memory of a
+/// parse and did the tokenizing work twice: the chosen reader parses the
+/// same text again. A case file is attacker controlled input, so a reader
+/// sized allocation that serves no purpose is worth removing.
+// Five independent presence flags, which is what a marker probe is. An
+// enum or a builder, the shapes this lint steers toward, would model a
+// choice; these are not exclusive.
+#[allow(clippy::struct_excessive_bools)]
+#[derive(Default)]
+struct TopLevel {
+    /// The document is a JSON object.
+    is_object: bool,
+    pmd_marker: bool,
+    bus: bool,
+    /// A key from [`DISTRIBUTION_ELEMENT_TABLES`].
+    dist_table: bool,
+    /// A key from [`NOT_BMOPF_KEYS`].
+    not_bmopf: bool,
+}
+
+impl<'de> serde::Deserialize<'de> for TopLevel {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        struct Probe;
+
+        impl<'de> serde::de::Visitor<'de> for Probe {
+            type Value = TopLevel;
+
+            fn expecting(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                f.write_str("a JSON document")
+            }
+
+            fn visit_map<A: serde::de::MapAccess<'de>>(
+                self,
+                mut map: A,
+            ) -> Result<TopLevel, A::Error> {
+                let mut out = TopLevel {
+                    is_object: true,
+                    ..TopLevel::default()
+                };
+                // Keys arrive as borrowed or owned strings. Nothing is kept:
+                // each key sets a flag and each value is discarded, so the
+                // probe holds a constant amount of memory whatever the size
+                // of the document.
+                while let Some(key) = map.next_key::<std::borrow::Cow<'_, str>>()? {
+                    let key = key.as_ref();
+                    out.pmd_marker |= key == PMD_MARKER;
+                    out.bus |= key == "bus";
+                    out.dist_table |= DISTRIBUTION_ELEMENT_TABLES.contains(&key);
+                    out.not_bmopf |= NOT_BMOPF_KEYS.contains(&key);
+                    map.next_value::<serde::de::IgnoredAny>()?;
+                }
+                Ok(out)
+            }
+
+            // A valid document that is not an object cannot be either
+            // format. Record that and let the caller report it, rather than
+            // failing as a parse error, which would send it to the BMOPF
+            // fallback.
+            fn visit_bool<E>(self, _: bool) -> Result<TopLevel, E> {
+                Ok(TopLevel::default())
+            }
+            fn visit_i64<E>(self, _: i64) -> Result<TopLevel, E> {
+                Ok(TopLevel::default())
+            }
+            fn visit_u64<E>(self, _: u64) -> Result<TopLevel, E> {
+                Ok(TopLevel::default())
+            }
+            fn visit_f64<E>(self, _: f64) -> Result<TopLevel, E> {
+                Ok(TopLevel::default())
+            }
+            fn visit_str<E>(self, _: &str) -> Result<TopLevel, E> {
+                Ok(TopLevel::default())
+            }
+            fn visit_unit<E>(self) -> Result<TopLevel, E> {
+                Ok(TopLevel::default())
+            }
+            fn visit_none<E>(self) -> Result<TopLevel, E> {
+                Ok(TopLevel::default())
+            }
+            fn visit_seq<A: serde::de::SeqAccess<'de>>(
+                self,
+                mut seq: A,
+            ) -> Result<TopLevel, A::Error> {
+                while seq.next_element::<serde::de::IgnoredAny>()?.is_some() {}
+                Ok(TopLevel::default())
+            }
+        }
+
+        deserializer.deserialize_any(Probe)
+    }
+}
+
+/// Distribution parser policy for a `.json` input.
+///
+/// Classification is by positive marker, never by "everything else is
+/// BMOPF": an unmarked document used to fall through to the BMOPF reader
+/// and parse into a bogus near-empty network.
+///
+/// - PMD carries `data_model`, which no other family here carries. The marker
+///   decides on its own: every real PMD ENGINEERING document also carries the
+///   element tables BMOPF uses, so a document holding both is the normal case
+///   and not a contradiction.
+/// - BMOPF carries a `bus` table beside at least one distribution element
+///   table, and no key that marks a PowerModels or MATPOWER derived document.
+/// - Anything else is refused with a message naming both rules.
+///
+/// Malformed JSON still routes to BMOPF so its reader reports the parse
+/// error, which names the byte offset. The probe never materializes the
+/// document, so classification costs one pass and constant memory.
+pub fn classify_distribution_json(text: &str) -> crate::Result<DistTargetFormat> {
+    // A leading byte order mark would fail the parse here and silently send
+    // a PMD document down the BMOPF fallback; classify without it.
     let text = text.trim_start_matches('\u{feff}');
-    let unrecognized = || crate::Error::Json {
+    let unrecognized = |detail: &str| crate::Error::Json {
         format: "distribution",
-        message: "not a recognized distribution document: PMD ENGINEERING JSON \
-                  carries `data_model`, BMOPF JSON carries a `bus` table beside \
-                  another BMOPF table (pass the format explicitly to override)"
-            .to_string(),
+        message: format!(
+            "not a recognized distribution document: {detail}. PMD ENGINEERING JSON \
+             carries `data_model`; BMOPF JSON carries a `bus` table beside one of \
+             {DISTRIBUTION_ELEMENT_TABLES:?}. Pass the format explicitly to override."
+        ),
     };
-    let Ok(doc) = serde_json::from_str::<serde_json::Value>(text) else {
+
+    let Ok(top) = serde_json::from_str::<TopLevel>(text) else {
         return Ok(DistTargetFormat::BmopfJson);
     };
-    let Some(shape) = doc.as_object() else {
-        return Err(unrecognized());
-    };
-    if shape.contains_key("data_model") {
+    if !top.is_object {
+        return Err(unrecognized("the top level is not an object"));
+    }
+
+    // `data_model` is authoritative. PMD ENGINEERING and BMOPF share most
+    // of their element table names (`line`, `linecode`, `transformer`, and
+    // the rest), so the marker separates them, not the table set. The PMD
+    // reader is what judges the marker's value, and it rejects the
+    // MATHEMATICAL model with its own message.
+    if top.pmd_marker {
         return Ok(DistTargetFormat::PmdJson);
     }
-    if shape.contains_key("bus")
-        && BMOPF_TABLES.iter().any(|t| shape.contains_key(*t))
-        && !NOT_BMOPF_KEYS.iter().any(|k| shape.contains_key(*k))
-    {
-        Ok(DistTargetFormat::BmopfJson)
-    } else {
-        Err(unrecognized())
+    if top.bus && top.dist_table && !top.not_bmopf {
+        return Ok(DistTargetFormat::BmopfJson);
     }
+    Err(if top.bus && top.not_bmopf {
+        unrecognized(
+            "it carries a `bus` table with PowerModels keys beside it, so it is a \
+             transmission document; read it through the transmission hub",
+        )
+    } else if top.bus {
+        unrecognized("its `bus` table has no distribution element table beside it")
+    } else {
+        unrecognized("it carries no marker of either format")
+    })
 }
 
 /// The warning every parse path pushes when it removes a byte order mark.
@@ -214,7 +342,7 @@ pub fn parse_file(
             "dss" => DistTargetFormat::Dss,
             "json" => {
                 let text = read(path)?;
-                return parse_text(&text, infer_distribution_json_format(&text)?);
+                return parse_text(&text, classify_distribution_json(&text)?);
             }
             other => return Err(crate::Error::UnknownFormat(other.to_string())),
         }
@@ -323,53 +451,228 @@ mod tests {
 
     #[test]
     fn distribution_json_classifier_preserves_pmd_marker_and_bmopf_fallback() {
-        assert_eq!(
-            infer_distribution_json_format(r#"{"data_model": "ENGINEERING"}"#).unwrap(),
-            DistTargetFormat::PmdJson
-        );
+        for doc in [
+            r#"{"data_model": "ENGINEERING"}"#,
+            r#"{"data_model": "MATHEMATICAL"}"#,
+            // The marker identifies the family whatever its value is; the
+            // PMD reader is what judges the value.
+            r#"{"data_model": 7}"#,
+            r#"{"data_model": null}"#,
+        ] {
+            assert_eq!(
+                classify_distribution_json(doc).unwrap(),
+                DistTargetFormat::PmdJson,
+                "{doc}"
+            );
+        }
         for doc in [
             r#"{"bus": {}, "voltage_source": {}}"#,
             // A pre-0.1.0 feeder fragment: no `voltage_source`, but the
             // reader accepts it, so the classifier must too.
             r#"{"bus": {}, "line": {}, "linecode": {}}"#,
+            r#"{"bus": {}, "transformer": {}}"#,
+            r#"{"bus": {}, "capacitor": {}}"#,
+            r#"{"bus": {}, "generator": {}}"#,
             // The pre-0.1.0 top-level spellings of the tables 0.1.0 moved
             // under `extras`; the reader dispatches both.
             r#"{"bus": {}, "ibr": {}}"#,
             r#"{"bus": {}, "control_profile": {}}"#,
         ] {
             assert_eq!(
-                infer_distribution_json_format(doc).unwrap(),
+                classify_distribution_json(doc).unwrap(),
                 DistTargetFormat::BmopfJson,
                 "{doc}"
             );
         }
-        // A document with neither the PMD marker nor the schema-required
-        // BMOPF tables is not silently misread as a near-empty BMOPF case.
-        for doc in [
-            r#"{"bus": {"data_model": {}}}"#,
-            r#"{"name": "data_model"}"#,
-            r#"{"bus": {}, "branch": {}, "gen": {}, "baseMVA": 100.0}"#,
-            "[]",
-            "null",
-            r#""a string""#,
-        ] {
-            assert!(
-                infer_distribution_json_format(doc).is_err(),
-                "{doc} should not classify"
-            );
-        }
         // Malformed JSON still routes to BMOPF so its reader reports the
-        // parse error.
+        // parse error, which names the byte offset.
         assert_eq!(
-            infer_distribution_json_format("{not json").unwrap(),
+            classify_distribution_json("{not json").unwrap(),
             DistTargetFormat::BmopfJson
         );
         // A byte order mark must not push a PMD document down the BMOPF
         // fallback.
         assert_eq!(
-            infer_distribution_json_format("\u{feff}{\"data_model\": \"ENGINEERING\"}").unwrap(),
+            classify_distribution_json("\u{feff}{\"data_model\": \"ENGINEERING\"}").unwrap(),
             DistTargetFormat::PmdJson
         );
+    }
+
+    /// A PowerModels document shares `bus`, `load`, `shunt`, `switch`, and
+    /// `name` with BMOPF, so none of those can be the discriminator. This
+    /// is the exact document family that used to parse into a bogus
+    /// near-empty `DistNetwork`.
+    #[test]
+    fn a_powermodels_document_never_classifies_as_bmopf() {
+        // The real key set a powerio PowerModels write produces.
+        let powermodels = r#"{"baseMVA": 100.0, "branch": {}, "bus": {}, "dcline": {},
+            "gen": {}, "load": {}, "name": "case14", "per_unit": true, "shunt": {},
+            "source_type": "matpower", "source_version": "2", "storage": {},
+            "switch": {}}"#;
+        assert!(classify_distribution_json(powermodels).is_err());
+
+        // Each PowerModels marker refuses the BMOPF reading on its own, even
+        // beside a real BMOPF table. A future BMOPF revision that adds a
+        // colliding table name therefore cannot make this document classify.
+        for marker in NOT_BMOPF_KEYS {
+            let doc = format!("{{\"bus\": {{}}, \"linecode\": {{}}, \"{marker}\": 1}}");
+            assert!(
+                classify_distribution_json(&doc).is_err(),
+                "`{marker}` must refuse the BMOPF reading: {doc}"
+            );
+        }
+    }
+
+    /// The two rules pull in opposite directions and this classifier has
+    /// swung both ways: dropping the shared table names refuses real BMOPF
+    /// feeders, and keeping them without the veto reads PowerModels as BMOPF.
+    /// Pin both ends together so neither correction can undo the other.
+    #[test]
+    fn shared_table_names_classify_as_bmopf_and_the_veto_still_refuses_powermodels() {
+        // A BMOPF feeder built only from names PowerModels also uses. No
+        // veto key is present, so the distribution reading stands.
+        for doc in [
+            r#"{"bus": {}, "load": {}}"#,
+            r#"{"bus": {}, "shunt": {}}"#,
+            r#"{"bus": {}, "switch": {}}"#,
+            r#"{"bus": {}, "meta": {"frequency": 60}}"#,
+        ] {
+            assert_eq!(
+                classify_distribution_json(doc).unwrap(),
+                DistTargetFormat::BmopfJson,
+                "{doc}"
+            );
+        }
+        // The same shared names beside one veto key stay transmission.
+        for doc in [
+            r#"{"bus": {}, "load": {}, "baseMVA": 100.0}"#,
+            r#"{"bus": {}, "shunt": {}, "branch": {}}"#,
+            r#"{"bus": {}, "switch": {}, "per_unit": true}"#,
+        ] {
+            assert!(classify_distribution_json(doc).is_err(), "{doc}");
+        }
+    }
+
+    /// PMD ENGINEERING and BMOPF share most element table names, so a real
+    /// PMD document carries `data_model` beside `line` and `linecode`. The
+    /// marker must win, or every PMD file would be read as BMOPF.
+    #[test]
+    fn the_pmd_marker_wins_over_shared_element_tables() {
+        let both = r#"{"data_model": "ENGINEERING", "bus": {}, "line": {}, "linecode": {}}"#;
+        assert_eq!(
+            classify_distribution_json(both).unwrap(),
+            DistTargetFormat::PmdJson
+        );
+    }
+
+    #[test]
+    fn unclassifiable_documents_are_refused_with_a_reason() {
+        for (doc, needle) in [
+            (
+                r#"{"bus": {"data_model": {}}}"#,
+                "no distribution element table",
+            ),
+            (r#"{"name": "data_model"}"#, "no marker of either format"),
+            ("{}", "no marker of either format"),
+            ("[]", "not an object"),
+            ("null", "not an object"),
+            ("3", "not an object"),
+            (r#""a string""#, "not an object"),
+            ("true", "not an object"),
+        ] {
+            let err = classify_distribution_json(doc).unwrap_err().to_string();
+            assert!(err.contains(needle), "{doc}: got {err}");
+        }
+    }
+
+    /// The probe reads top level keys and skips values, so neither the size
+    /// of a value nor the number of keys can make it allocate the document.
+    /// A deeply nested value hits serde_json's own recursion limit, which
+    /// surfaces as the malformed-JSON route rather than a stack overflow.
+    #[test]
+    fn the_probe_is_bounded_on_adversarial_shapes() {
+        // A huge value under an ignored key: skipped, not materialized.
+        let big = format!(
+            r#"{{"bus": {{}}, "linecode": {{}}, "junk": [{}]}}"#,
+            "0,".repeat(200_000) + "0"
+        );
+        assert_eq!(
+            classify_distribution_json(&big).unwrap(),
+            DistTargetFormat::BmopfJson
+        );
+
+        // Many distinct top level keys: one flag per key, nothing stored.
+        let mut keys = String::new();
+        for i in 0..50_000 {
+            use std::fmt::Write as _;
+            let _ = write!(keys, "\"k{i}\":0,");
+        }
+        let many = format!(r#"{{{keys}"bus":{{}},"linecode":{{}}}}"#);
+        assert_eq!(
+            classify_distribution_json(&many).unwrap(),
+            DistTargetFormat::BmopfJson
+        );
+
+        // Deep nesting under an ignored key: `IgnoredAny` skips a value
+        // without recursion, so depth costs no stack. The old classifier
+        // built a `serde_json::Value`, whose recursive descent refuses past
+        // 128 levels, so a legitimate document nested deeper than that used
+        // to take the malformed route.
+        let deep = format!(
+            r#"{{"bus":{{}},"linecode":{{}},"junk":{}{}}}"#,
+            "[".repeat(20_000),
+            "]".repeat(20_000)
+        );
+        assert_eq!(
+            classify_distribution_json(&deep).unwrap(),
+            DistTargetFormat::BmopfJson
+        );
+
+        // A duplicate marker key is still one marker.
+        assert_eq!(
+            classify_distribution_json(
+                r#"{"data_model":"ENGINEERING","data_model":"ENGINEERING"}"#
+            )
+            .unwrap(),
+            DistTargetFormat::PmdJson
+        );
+    }
+
+    /// The probe skips a value without recursion, so it accepts a document
+    /// nested far deeper than the reader will take. The reader must then
+    /// refuse that document with an error, never with a crash: the
+    /// classifier is what decides which reader sees untrusted input.
+    #[test]
+    fn a_document_the_probe_accepts_is_refused_by_the_reader_not_a_crash() {
+        for depth in [200usize, 20_000, 500_000] {
+            let doc = format!(
+                "{{\"bus\":{{}},\"linecode\":{{}},\"junk\":{}{}}}",
+                "[".repeat(depth),
+                "]".repeat(depth)
+            );
+            let format = classify_distribution_json(&doc).expect("markers are present");
+            assert_eq!(format, DistTargetFormat::BmopfJson);
+            let err = crate::parse_str(&doc, format.name())
+                .expect_err("the reader refuses past its recursion limit");
+            assert!(
+                err.to_string().contains("recursion limit"),
+                "depth {depth}: {err}"
+            );
+        }
+    }
+
+    /// JSON keys are case sensitive and both formats are machine written,
+    /// so a near miss must not classify. It would pick a reader that then
+    /// fails on every table.
+    #[test]
+    fn marker_matching_is_case_sensitive() {
+        for doc in [
+            r#"{"Data_Model": "ENGINEERING"}"#,
+            r#"{"DATA_MODEL": "ENGINEERING"}"#,
+            r#"{"Bus": {}, "Linecode": {}}"#,
+        ] {
+            assert!(classify_distribution_json(doc).is_err(), "{doc}");
+        }
     }
 
     #[test]
@@ -391,19 +694,12 @@ mod tests {
     #[test]
     fn parse_file_rejects_unclassifiable_json() {
         // A PowerModels document used to fall through to the BMOPF reader
-        // and parse into a bogus near-empty network. This is the whole key
-        // set a powerio PowerModels write produces, not a trimmed one: it
-        // carries `load`, `shunt`, and `switch`, which are BMOPF table names
-        // too, so the table list alone still matches and only the veto list
-        // refuses it.
+        // and parse into a bogus near-empty network.
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("case.json");
         std::fs::write(
             &path,
-            r#"{"baseMVA": 100.0, "branch": {}, "bus": {}, "dcline": {}, "gen": {},
-               "load": {}, "name": "case14", "per_unit": true, "shunt": {},
-               "source_type": "matpower", "source_version": "2", "storage": {},
-               "switch": {}}"#,
+            r#"{"bus": {}, "branch": {}, "gen": {}, "baseMVA": 100.0}"#,
         )
         .unwrap();
         let err = parse_file(&path, None).unwrap_err();
@@ -414,29 +710,6 @@ mod tests {
         );
         // An explicit format still overrides the classifier.
         assert!(parse_file(&path, Some("bmopf-json")).is_ok());
-
-        // Each veto key refuses the BMOPF reading on its own, even beside a
-        // BMOPF table no PowerModels document carries.
-        for key in NOT_BMOPF_KEYS {
-            let doc = format!("{{\"bus\": {{}}, \"linecode\": {{}}, \"{key}\": 1}}");
-            assert!(
-                infer_distribution_json_format(&doc).is_err(),
-                "`{key}` must refuse the BMOPF reading: {doc}"
-            );
-        }
-        // A BMOPF feeder built only from names PowerModels also uses still
-        // classifies: no veto key is present.
-        for doc in [
-            r#"{"bus": {}, "load": {}}"#,
-            r#"{"bus": {}, "shunt": {}}"#,
-            r#"{"bus": {}, "switch": {}}"#,
-        ] {
-            assert_eq!(
-                infer_distribution_json_format(doc).unwrap(),
-                DistTargetFormat::BmopfJson,
-                "{doc}"
-            );
-        }
     }
 
     #[test]
