@@ -67,6 +67,7 @@ __all__ = [
     "parse_scopf",
     "parse_geo",
     "from_json",
+    "from_ppc",
     "convert_file",
     "convert_str",
     "to_format",
@@ -533,6 +534,78 @@ class Network:
             )
         )
 
+    def to_ppc(self):
+        """PYPOWER case dict (``ppc``) with MATPOWER-style numpy tables.
+
+        Values keep the source units (MW, MVAr, degrees). In-service loads
+        and shunts are summed into the bus-table ``PD``/``QD``/``GS``/``BS``
+        columns the way MATPOWER stores them. ``gencost`` is present only
+        when every generator carries cost data, because MATPOWER requires
+        cost rows for all generators or none. :func:`from_ppc` is the
+        inverse.
+        """
+        np = _require("numpy", "matrix")
+        buses = self._inner.buses
+        row_of = {b["id"]: i for i, b in enumerate(buses)}
+        bus = np.zeros((len(buses), 13))
+        for i, b in enumerate(buses):
+            bus[i, :] = (
+                b["id"], _PPC_BUS_TYPE.get(b["kind"], 1.0), 0.0, 0.0, 0.0, 0.0,
+                b["area"], b["vm"], b["va"], b["base_kv"], b["zone"],
+                b["vmax"], b["vmin"],
+            )
+        for load in self._inner.loads:
+            i = row_of.get(load["bus"])
+            if i is not None and load["in_service"]:
+                bus[i, 2] += load["p"]
+                bus[i, 3] += load["q"]
+        for shunt in self._inner.shunts:
+            i = row_of.get(shunt["bus"])
+            if i is not None and shunt["in_service"]:
+                bus[i, 4] += shunt["g"]
+                bus[i, 5] += shunt["b"]
+
+        gens = self._inner.generators
+        gen = np.zeros((len(gens), 21))
+        for i, g in enumerate(gens):
+            gen[i, :10] = (
+                g["bus"], g["pg"], g["qg"], g["qmax"], g["qmin"], g["vg"],
+                g["mbase"], float(g["in_service"]), g["pmax"], g["pmin"],
+            )
+
+        branches = self._inner.branches
+        branch = np.zeros((len(branches), 13))
+        for i, br in enumerate(branches):
+            branch[i, :] = (
+                br["from_id"], br["to_id"], br["r"], br["x"], br["b"],
+                br["rate_a"], br["rate_b"], br["rate_c"], br["tap"],
+                br["shift"], float(br["in_service"]), br["angmin"],
+                br["angmax"],
+            )
+
+        ppc = {
+            "version": "2",
+            "baseMVA": float(self._inner.base_mva),
+            "bus": bus,
+            "gen": gen,
+            "branch": branch,
+        }
+
+        # Coefficients sit left-aligned after ncost, padded to the widest
+        # row, which is the layout PYPOWER's own loadcase produces.
+        costs = [g["cost"] for g in gens]
+        if costs and all(c is not None for c in costs):
+            gencost = np.zeros(
+                (len(costs), 4 + max(len(c["coeffs"]) for c in costs))
+            )
+            for i, c in enumerate(costs):
+                gencost[i, :4] = (
+                    c["model"], c["startup"], c["shutdown"], c["ncost"],
+                )
+                gencost[i, 4:4 + len(c["coeffs"])] = c["coeffs"]
+            ppc["gencost"] = gencost
+        return ppc
+
     def to_networkx(self):
         """Undirected networkx graph keyed by bus id.
 
@@ -612,6 +685,48 @@ def parse_geo(text: str, name_hint: Optional[str] = None) -> dict[str, Any]:
 def from_json(text: str) -> Network:
     """Rebuild a case from JSON produced by :meth:`Network.to_json`."""
     return Network(_powerio.from_json(text))
+
+
+# powerio bus kind -> MATPOWER/PYPOWER BUS_TYPE code.
+_PPC_BUS_TYPE = {"PQ": 1.0, "PV": 2.0, "REF": 3.0, "ISOLATED": 4.0}
+
+# MATPOWER case-input table widths. PYPOWER result tables append columns
+# (LAM_P, MU_*) past these; from_ppc drops them.
+_PPC_INPUT_WIDTH = {"bus": 13, "gen": 21, "branch": 13}
+
+
+def _ppc_to_matpower_text(ppc) -> str:
+    missing = [k for k in ("baseMVA", "bus", "gen", "branch") if k not in ppc]
+    if missing:
+        raise ValueError(f"ppc dict is missing required keys: {missing}")
+    lines = [
+        "function mpc = from_ppc",
+        f"mpc.version = '{ppc.get('version', '2')}';",
+        f"mpc.baseMVA = {float(ppc['baseMVA'])!r};",
+    ]
+    names = ["bus", "gen", "branch"] + (["gencost"] if "gencost" in ppc else [])
+    for name in names:
+        width = _PPC_INPUT_WIDTH.get(name)
+        lines.append(f"mpc.{name} = [")
+        for row in ppc[name]:
+            vals = [float(v) for v in row]
+            if width is not None:
+                vals = vals[:width] + [0.0] * (width - len(vals))
+            lines.append("  " + "  ".join(repr(v) for v in vals) + ";")
+        lines.append("];")
+    return "\n".join(lines) + "\n"
+
+
+def from_ppc(ppc) -> Network:
+    """Case from a PYPOWER dict (``ppc``); the inverse of :meth:`Network.to_ppc`.
+
+    The tables route through the MATPOWER reader, so the semantics match a
+    ``.m`` case exactly: bus ``PD``/``QD`` become loads, ``GS``/``BS`` become
+    shunts, and ``gencost`` is read when present. Result columns past the
+    MATPOWER input widths are dropped, and short rows are zero padded.
+    Raises :class:`ValueError` when a required table is absent.
+    """
+    return parse_str(_ppc_to_matpower_text(ppc), "matpower")
 
 
 def convert_file(
