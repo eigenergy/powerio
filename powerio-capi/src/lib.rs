@@ -289,8 +289,8 @@ pub extern "C" fn pio_dist_capabilities_json() -> *mut c_char {
     into_cstring(dist_capabilities_json()).unwrap_or(std::ptr::null_mut())
 }
 
-/// Report every wire format version this library speaks, as owned JSON. Free
-/// the returned string with [`pio_string_free`]. Infallible.
+/// Report the schema version of every document format this library speaks, as
+/// owned JSON. Free the returned string with [`pio_string_free`]. Infallible.
 ///
 /// These are the versions stamped into the documents the library reads and
 /// writes, and they are **not** covered by [`PIO_ABI_VERSION`]: the v4 policy
@@ -307,10 +307,10 @@ pub extern "C" fn pio_dist_capabilities_json() -> *mut c_char {
 /// discovering it downstream.
 ///
 /// A key is `null` when the owning feature is not compiled in. Keys are only
-/// ever added, and `wire_versions` tracks this document's own shape, so a
+/// ever added, and `schema_version` tracks this document's own shape, so a
 /// consumer keying on a subset keeps working.
 #[unsafe(no_mangle)]
-pub extern "C" fn pio_wire_versions_json() -> *mut c_char {
+pub extern "C" fn pio_schema_versions_json() -> *mut c_char {
     // `Option<&str>` per entry: `None` serializes to `null`, which reads as
     // "this build cannot speak that format" rather than "unknown version".
     #[cfg(feature = "pkg")]
@@ -334,7 +334,7 @@ pub extern "C" fn pio_wire_versions_json() -> *mut c_char {
     let bmopf_schema: Option<&str> = None;
 
     let doc = serde_json::json!({
-        "wire_versions": "1.0.0",
+        "schema_version": "1.0.0",
         "abi": PIO_ABI_VERSION,
         "package": package,
         "arrow": arrow,
@@ -3110,10 +3110,10 @@ mod tests {
             "uint32_t pio_abi_version(void);",
             "uint32_t pio_dist_abi_version(void);",
             "char *pio_dist_capabilities_json(void);",
+            "char *pio_schema_versions_json(void);",
             "int32_t pio_matrix_available(void);",
             "int32_t pio_has_feature(const char *feature);",
             "const char *pio_version(void);",
-            "char *pio_wire_versions_json(void);",
             "PioNetwork *pio_parse_file(const char *path, const char *from, char *errbuf, size_t errlen);",
             "PioNetwork *pio_parse_str(const char *text, const char *format, char *errbuf, size_t errlen);",
             "size_t pio_classify_str(const char *text, char *outbuf, size_t outlen);",
@@ -4913,14 +4913,14 @@ mpc.branch = [
         }
 
         #[test]
-        fn wire_versions_json_matches_the_constants_the_library_stamps() {
-            let raw = pio_wire_versions_json();
+        fn schema_versions_json_matches_the_constants_the_library_stamps() {
+            let raw = pio_schema_versions_json();
             assert!(!raw.is_null());
             let text = unsafe { CStr::from_ptr(raw) }.to_str().unwrap().to_owned();
             unsafe { pio_string_free(raw) };
             let doc: serde_json::Value = serde_json::from_str(&text).unwrap();
 
-            assert_eq!(doc["wire_versions"], serde_json::json!("1.0.0"));
+            assert_eq!(doc["schema_version"], serde_json::json!("1.0.0"));
             assert_eq!(doc["abi"], serde_json::json!(PIO_ABI_VERSION));
 
             // Each reported version must be the constant actually stamped into
