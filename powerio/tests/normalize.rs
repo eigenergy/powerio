@@ -4,8 +4,8 @@
 use std::path::{Path, PathBuf};
 
 use powerio::{
-    BusId, BusType, Error, IndexedNetwork, SourceFormat, Storage, TargetFormat, parse_file,
-    parse_matpower_file, parse_str, write_as,
+    BusId, BusType, Error, IndexedNetwork, NormalizeOptions, SourceFormat, Storage, TargetFormat,
+    parse_file, parse_matpower_file, parse_str, write_as,
 };
 
 const DEG_TO_RAD: f64 = std::f64::consts::PI / 180.0;
@@ -212,6 +212,69 @@ mpc.branch = [
     assert_eq!(n.loads[0].bus.0, 3, "load keeps the source id");
     assert_eq!(n.buses[0].kind, BusType::Ref);
     assert_eq!(n.buses[1].kind, BusType::Pq);
+}
+
+#[test]
+fn source_rows_map_normalized_positions_to_raw_rows() {
+    // Bus 2 is isolated; branch row 1 (2-3) dies with it; branch row 2 is out
+    // of service; gen row 1 is out of service; the load on bus 2 dies with the
+    // bus. Each surviving family position must name its raw row.
+    let src = "\
+function mpc = rows
+mpc.version = '2';
+mpc.baseMVA = 100;
+mpc.bus = [
+\t1\t3\t0\t0\t0\t0\t1\t1\t0\t230\t1\t1.1\t0.9;
+\t2\t4\t0\t0\t0\t0\t1\t1\t0\t230\t1\t1.1\t0.9;
+\t3\t1\t50\t10\t0\t0\t1\t1\t0\t230\t1\t1.1\t0.9;
+\t4\t1\t20\t5\t3\t7\t1\t1\t0\t230\t1\t1.1\t0.9;
+];
+mpc.gen = [
+\t1\t0\t0\t100\t-100\t1\t100\t1\t200\t0\t0\t0\t0\t0\t0\t0\t0\t0\t0\t0\t0;
+\t3\t0\t0\t100\t-100\t1\t100\t0\t200\t0\t0\t0\t0\t0\t0\t0\t0\t0\t0\t0\t0;
+\t4\t0\t0\t100\t-100\t1\t100\t1\t200\t0\t0\t0\t0\t0\t0\t0\t0\t0\t0\t0\t0;
+];
+mpc.branch = [
+\t1\t3\t0.01\t0.1\t0\t0\t0\t0\t0\t0\t1\t-360\t360;
+\t2\t3\t0.01\t0.1\t0\t0\t0\t0\t0\t0\t1\t-360\t360;
+\t3\t4\t0.01\t0.1\t0\t0\t0\t0\t0\t0\t0\t-360\t360;
+\t1\t4\t0.01\t0.1\t0\t0\t0\t0\t0\t0\t1\t-360\t360;
+];
+";
+    let raw = parse_str(src, "matpower").unwrap().network;
+    let (n, rows) = raw
+        .to_normalized_with_source_rows(&NormalizeOptions::default())
+        .unwrap();
+
+    // Buses: raw rows 0, 2, 3 survive (row 1 is isolated).
+    assert_eq!(rows.buses, [0, 2, 3]);
+    // Branches: row 1 references the dropped bus, row 2 is out of service.
+    assert_eq!(rows.branches, [0, 3]);
+    // Generators: row 1 is out of service.
+    assert_eq!(rows.generators, [0, 2]);
+    // The MATPOWER bus PD/QD columns become one load per demand-carrying bus,
+    // in bus order; the load on dropped bus 2 never exists as a raw load here,
+    // so both raw loads (buses 3 and 4) survive.
+    assert_eq!(rows.loads, [0, 1]);
+    assert_eq!(rows.shunts, [0]);
+
+    // The maps agree with the elements the normalized network holds, and the
+    // options wrapper returns the identical network.
+    for (pos, &row) in rows.buses.iter().enumerate() {
+        assert_eq!(n.network.buses[pos].id, raw.buses[row].id);
+    }
+    for (pos, &row) in rows.branches.iter().enumerate() {
+        assert_eq!(n.network.branches[pos].from, raw.branches[row].from);
+        assert_eq!(n.network.branches[pos].to, raw.branches[row].to);
+    }
+    for (pos, &row) in rows.generators.iter().enumerate() {
+        assert_eq!(n.network.generators[pos].bus, raw.generators[row].bus);
+    }
+    let plain = raw
+        .to_normalized_with_options(&NormalizeOptions::default())
+        .unwrap();
+    assert_eq!(plain.network.buses.len(), n.network.buses.len());
+    assert_eq!(plain.network.branches.len(), n.network.branches.len());
 }
 
 #[test]

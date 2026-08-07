@@ -64,6 +64,30 @@ pub struct NormalizedNetwork {
     pub warnings: Vec<String>,
 }
 
+/// Row provenance for one normalize pass: for each element position in the
+/// normalized network, the row of the same element family in the source
+/// network. The pass filters rows and never reorders or merges them, so
+/// `buses[i]` is the source row of normalized bus `i`, and the same holds
+/// for every family.
+///
+/// `IndexedNetwork` dense indices over a normalized network are positional,
+/// so `rows.buses[dense_index]` resolves a matrix row back to its source
+/// element without re-deriving the filter rules — the map is produced by the
+/// same pass that filters, so the two cannot drift.
+#[derive(Clone, Debug, Default)]
+#[non_exhaustive]
+pub struct NormalizeSourceRows {
+    pub buses: Vec<usize>,
+    pub loads: Vec<usize>,
+    pub shunts: Vec<usize>,
+    pub branches: Vec<usize>,
+    pub switches: Vec<usize>,
+    pub generators: Vec<usize>,
+    pub storage: Vec<usize>,
+    pub hvdc: Vec<usize>,
+    pub transformers_3w: Vec<usize>,
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum CostModel {
     Piecewise,
@@ -149,23 +173,27 @@ fn remap(map: &HashMap<BusId, BusId>, id: BusId) -> Option<BusId> {
     map.get(&id).copied()
 }
 
-fn norm_loads(loads: &[Load], base: f64, map: &HashMap<BusId, BusId>) -> Vec<Load> {
+fn norm_loads(loads: &[Load], base: f64, map: &HashMap<BusId, BusId>) -> (Vec<Load>, Vec<usize>) {
     loads
         .iter()
-        .filter(|l| l.in_service)
-        .filter_map(|l| {
-            Some(Load {
-                bus: remap(map, l.bus)?,
-                p: l.p / base,
-                q: l.q / base,
-                voltage_model: l
-                    .voltage_model
-                    .as_ref()
-                    .map(|m| norm_load_voltage_model(m, base)),
-                ..l.clone()
-            })
+        .enumerate()
+        .filter(|(_, l)| l.in_service)
+        .filter_map(|(row, l)| {
+            Some((
+                Load {
+                    bus: remap(map, l.bus)?,
+                    p: l.p / base,
+                    q: l.q / base,
+                    voltage_model: l
+                        .voltage_model
+                        .as_ref()
+                        .map(|m| norm_load_voltage_model(m, base)),
+                    ..l.clone()
+                },
+                row,
+            ))
         })
-        .collect()
+        .unzip()
 }
 
 fn norm_load_voltage_model(model: &LoadVoltageModel, base: f64) -> LoadVoltageModel {
@@ -208,33 +236,46 @@ fn norm_load_voltage_model(model: &LoadVoltageModel, base: f64) -> LoadVoltageMo
     }
 }
 
-fn norm_shunts(shunts: &[Shunt], base: f64, map: &HashMap<BusId, BusId>) -> Vec<Shunt> {
+fn norm_shunts(
+    shunts: &[Shunt],
+    base: f64,
+    map: &HashMap<BusId, BusId>,
+) -> (Vec<Shunt>, Vec<usize>) {
     shunts
         .iter()
-        .filter(|s| s.in_service)
-        .filter_map(|s| {
-            Some(Shunt {
-                bus: remap(map, s.bus)?,
-                g: s.g / base,
-                b: s.b / base,
-                // Remap the switched-shunt control bus and drop it if its target was
-                // filtered out, so the normalized network has no dangling reference.
-                control: s.control.clone().map(|mut c| {
-                    c.control_bus = c.control_bus.and_then(|b| remap(map, b));
-                    c
-                }),
-                ..s.clone()
-            })
+        .enumerate()
+        .filter(|(_, s)| s.in_service)
+        .filter_map(|(row, s)| {
+            Some((
+                Shunt {
+                    bus: remap(map, s.bus)?,
+                    g: s.g / base,
+                    b: s.b / base,
+                    // Remap the switched-shunt control bus and drop it if its target was
+                    // filtered out, so the normalized network has no dangling reference.
+                    control: s.control.clone().map(|mut c| {
+                        c.control_bus = c.control_bus.and_then(|b| remap(map, b));
+                        c
+                    }),
+                    ..s.clone()
+                },
+                row,
+            ))
         })
-        .collect()
+        .unzip()
 }
 
-fn norm_branches(branches: &[Branch], base: f64, map: &HashMap<BusId, BusId>) -> Vec<Branch> {
+fn norm_branches(
+    branches: &[Branch],
+    base: f64,
+    map: &HashMap<BusId, BusId>,
+) -> (Vec<Branch>, Vec<usize>) {
     branches
         .iter()
-        .filter(|br| br.in_service)
-        .filter_map(|br| {
-            Some(Branch {
+        .enumerate()
+        .filter(|(_, br)| br.in_service)
+        .filter_map(|(row, br)| {
+            let branch = Branch {
                 from: remap(map, br.from)?,
                 to: remap(map, br.to)?,
                 rate_a: br.rate_a / base,
@@ -266,9 +307,10 @@ fn norm_branches(branches: &[Branch], base: f64, map: &HashMap<BusId, BusId>) ->
                     c
                 }),
                 ..br.clone()
-            })
+            };
+            Some((branch, row))
         })
-        .collect()
+        .unzip()
 }
 
 fn validate_normalize_options(options: &NormalizeOptions) -> Result<()> {
@@ -324,10 +366,15 @@ fn clamp_angle_bounds(branches: &mut [Branch], pad: f64, warnings: &mut Vec<Stri
     }
 }
 
-fn norm_gens(gens: &[Generator], base: f64, map: &HashMap<BusId, BusId>) -> Vec<Generator> {
+fn norm_gens(
+    gens: &[Generator],
+    base: f64,
+    map: &HashMap<BusId, BusId>,
+) -> (Vec<Generator>, Vec<usize>) {
     gens.iter()
-        .filter(|g| g.in_service)
-        .filter_map(|g| {
+        .enumerate()
+        .filter(|(_, g)| g.in_service)
+        .filter_map(|(row, g)| {
             let bus = remap(map, g.bus)?;
             let mut caps = g.caps;
             for (i, key) in GEN_EXTRA_KEYS.iter().enumerate() {
@@ -337,7 +384,7 @@ fn norm_gens(gens: &[Generator], base: f64, map: &HashMap<BusId, BusId>) -> Vec<
                     }
                 }
             }
-            Some(Generator {
+            let generator = Generator {
                 bus,
                 pg: g.pg / base,
                 qg: g.qg / base,
@@ -354,16 +401,22 @@ fn norm_gens(gens: &[Generator], base: f64, map: &HashMap<BusId, BusId>) -> Vec<
                 // target was filtered out so the normalized form stays consistent.
                 regulated_bus: g.regulated_bus.and_then(|b| remap(map, b)),
                 ..g.clone()
-            })
+            };
+            Some((generator, row))
         })
-        .collect()
+        .unzip()
 }
 
-fn norm_switches(switches: &[Switch], base: f64, map: &HashMap<BusId, BusId>) -> Vec<Switch> {
+fn norm_switches(
+    switches: &[Switch],
+    base: f64,
+    map: &HashMap<BusId, BusId>,
+) -> (Vec<Switch>, Vec<usize>) {
     switches
         .iter()
-        .filter_map(|s| {
-            Some(Switch {
+        .enumerate()
+        .filter_map(|(row, s)| {
+            let switch = Switch {
                 from: remap(map, s.from)?,
                 to: remap(map, s.to)?,
                 thermal_rating: s.thermal_rating.map(|v| v / base),
@@ -372,19 +425,25 @@ fn norm_switches(switches: &[Switch], base: f64, map: &HashMap<BusId, BusId>) ->
                 pt: s.pt.map(|v| v / base),
                 qt: s.qt.map(|v| v / base),
                 ..s.clone()
-            })
+            };
+            Some((switch, row))
         })
-        .collect()
+        .unzip()
 }
 
-fn norm_storage(storage: &[Storage], base: f64, map: &HashMap<BusId, BusId>) -> Vec<Storage> {
+fn norm_storage(
+    storage: &[Storage],
+    base: f64,
+    map: &HashMap<BusId, BusId>,
+) -> (Vec<Storage>, Vec<usize>) {
     storage
         .iter()
-        .filter(|s| s.in_service)
-        .filter_map(|s| {
+        .enumerate()
+        .filter(|(_, s)| s.in_service)
+        .filter_map(|(row, s)| {
             // ps/qs stay raw (PowerModels' make_per_unit! leaves the dispatch
             // setpoint alone); the energy, ratings, limits, and losses scale.
-            Some(Storage {
+            let unit = Storage {
                 bus: remap(map, s.bus)?,
                 energy: s.energy / base,
                 energy_rating: s.energy_rating / base,
@@ -396,19 +455,21 @@ fn norm_storage(storage: &[Storage], base: f64, map: &HashMap<BusId, BusId>) -> 
                 p_loss: s.p_loss / base,
                 q_loss: s.q_loss / base,
                 ..s.clone()
-            })
+            };
+            Some((unit, row))
         })
-        .collect()
+        .unzip()
 }
 
-fn norm_hvdc(hvdc: &[Hvdc], base: f64, map: &HashMap<BusId, BusId>) -> Vec<Hvdc> {
+fn norm_hvdc(hvdc: &[Hvdc], base: f64, map: &HashMap<BusId, BusId>) -> (Vec<Hvdc>, Vec<usize>) {
     hvdc.iter()
-        .filter(|d| d.in_service)
-        .filter_map(|d| {
+        .enumerate()
+        .filter(|(_, d)| d.in_service)
+        .filter_map(|(row, d)| {
             // No sign flip: the writer's Pt/Qf/Qt negation is a PowerModels output
             // convention, not part of per-unit normalization. The aggregate
             // pmin/pmax stay raw, matching make_per_unit!.
-            Some(Hvdc {
+            let link = Hvdc {
                 from: remap(map, d.from)?,
                 to: remap(map, d.to)?,
                 pf: d.pf / base,
@@ -425,20 +486,22 @@ fn norm_hvdc(hvdc: &[Hvdc], base: f64, map: &HashMap<BusId, BusId>) -> Vec<Hvdc>
                     ..c.clone()
                 }),
                 ..d.clone()
-            })
+            };
+            Some((link, row))
         })
-        .collect()
+        .unzip()
 }
 
 fn norm_transformers_3w(
     xfmrs: &[Transformer3W],
     base: f64,
     map: &HashMap<BusId, BusId>,
-) -> Vec<Transformer3W> {
+) -> (Vec<Transformer3W>, Vec<usize>) {
     xfmrs
         .iter()
-        .filter(|t| t.in_service)
-        .filter_map(|t| {
+        .enumerate()
+        .filter(|(_, t)| t.in_service)
+        .filter_map(|(row, t)| {
             // Remap each winding terminal and drop the whole unit if any was filtered
             // out (a 3-winding transformer can't keep a dangling winding). Phase
             // shifts and the star angle go to radians; winding ratings go per unit;
@@ -451,13 +514,16 @@ fn norm_transformers_3w(
                 w.rate_b /= base;
                 w.rate_c /= base;
             }
-            Some(Transformer3W {
-                windings,
-                star_va: t.star_va * DEG_TO_RAD,
-                ..t.clone()
-            })
+            Some((
+                Transformer3W {
+                    windings,
+                    star_va: t.star_va * DEG_TO_RAD,
+                    ..t.clone()
+                },
+                row,
+            ))
         })
-        .collect()
+        .unzip()
 }
 
 impl Network {
@@ -520,6 +586,19 @@ impl Network {
         &self,
         options: &NormalizeOptions,
     ) -> Result<NormalizedNetwork> {
+        Ok(self.to_normalized_with_source_rows(options)?.0)
+    }
+
+    /// Like [`Network::to_normalized_with_options`], also returning the
+    /// [`NormalizeSourceRows`] row provenance for every retained element.
+    ///
+    /// The map comes from the same pass that filters, so a consumer resolving
+    /// normalized positions (or `IndexedNetwork` dense indices) back to source
+    /// rows does not re-derive the filter rules.
+    pub fn to_normalized_with_source_rows(
+        &self,
+        options: &NormalizeOptions,
+    ) -> Result<(NormalizedNetwork, NormalizeSourceRows)> {
         validate_normalize_options(options)?;
         self.check_base_mva()?;
         let base = self.base_mva;
@@ -528,7 +607,8 @@ impl Network {
         // reads it) and their source ids. Isolated buses are dropped.
         let mut id_map: HashMap<BusId, BusId> = HashMap::with_capacity(self.buses.len());
         let mut buses: Vec<Bus> = Vec::with_capacity(self.buses.len());
-        for b in &self.buses {
+        let mut bus_rows: Vec<usize> = Vec::with_capacity(self.buses.len());
+        for (row, b) in self.buses.iter().enumerate() {
             if b.kind == BusType::Isolated {
                 continue;
             }
@@ -537,19 +617,32 @@ impl Network {
                 va: b.va * DEG_TO_RAD,
                 ..b.clone()
             });
+            bus_rows.push(row);
         }
-        let loads = norm_loads(&self.loads, base, &id_map);
-        let shunts = norm_shunts(&self.shunts, base, &id_map);
-        let mut branches = norm_branches(&self.branches, base, &id_map);
+        let (loads, load_rows) = norm_loads(&self.loads, base, &id_map);
+        let (shunts, shunt_rows) = norm_shunts(&self.shunts, base, &id_map);
+        let (mut branches, branch_rows) = norm_branches(&self.branches, base, &id_map);
         let mut warnings = Vec::new();
         if options.clamp_angle_bounds {
             clamp_angle_bounds(&mut branches, options.angle_bound_pad, &mut warnings);
         }
-        let switches = norm_switches(&self.switches, base, &id_map);
-        let generators = norm_gens(&self.generators, base, &id_map);
-        let storage = norm_storage(&self.storage, base, &id_map);
-        let hvdc = norm_hvdc(&self.hvdc, base, &id_map);
-        let transformers_3w = norm_transformers_3w(&self.transformers_3w, base, &id_map);
+        let (switches, switch_rows) = norm_switches(&self.switches, base, &id_map);
+        let (generators, generator_rows) = norm_gens(&self.generators, base, &id_map);
+        let (storage, storage_rows) = norm_storage(&self.storage, base, &id_map);
+        let (hvdc, hvdc_rows) = norm_hvdc(&self.hvdc, base, &id_map);
+        let (transformers_3w, transformer_3w_rows) =
+            norm_transformers_3w(&self.transformers_3w, base, &id_map);
+        let source_rows = NormalizeSourceRows {
+            buses: bus_rows,
+            loads: load_rows,
+            shunts: shunt_rows,
+            branches: branch_rows,
+            switches: switch_rows,
+            generators: generator_rows,
+            storage: storage_rows,
+            hvdc: hvdc_rows,
+            transformers_3w: transformer_3w_rows,
+        };
 
         // Bus types: a bus hosting an in-service generator keeps `Ref` if the
         // file marked it `Ref`, else becomes `Pv`; a gen-less bus is `Pq`.
@@ -610,10 +703,13 @@ impl Network {
             net.validate().is_ok(),
             "to_normalized produced a dangling reference"
         );
-        Ok(NormalizedNetwork {
-            network: net,
-            warnings,
-        })
+        Ok((
+            NormalizedNetwork {
+                network: net,
+                warnings,
+            },
+            source_rows,
+        ))
     }
 }
 
