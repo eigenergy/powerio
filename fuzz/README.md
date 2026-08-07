@@ -29,6 +29,8 @@ mkdir -p corpus/powerworld_aux && cp ../tests/data/powerworld/*.aux corpus/power
 mkdir -p corpus/pwb && cp ../tests/data/powerworld/*.pwb corpus/pwb/ 2>/dev/null || true
 ```
 
-The crate is excluded from the workspace and from CI; run it when touching a
-reader. A crash reproducer lands in `artifacts/<target>/`; turn it into a
-regression test next to the reader before fixing.
+The crate is excluded from the main workspace. CI runs a short smoke pass
+(`.github/workflows/fuzz.yml`): seconds per target on pull requests that touch
+a reader, minutes per target weekly. Long campaigns stay manual; run one when
+touching a reader. A crash reproducer lands in `artifacts/<target>/`; turn it
+into a regression test next to the reader before fixing.

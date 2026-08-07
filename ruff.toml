@@ -1,0 +1,22 @@
+# Lint gate for the pure-Python layer (python/powerio) and its tests.
+#
+# The selection is pinned so CI does not move when ruff's defaults move.
+# Correctness families only: pycodestyle errors, pyflakes, bugbear, import
+# order, and the ruff-native checks that keep `__all__` and `# noqa` honest.
+# Style-modernization families (UP, PYI cosmetics) are deliberately absent:
+# the wheel targets Python 3.9, and annotation spelling is not a defect.
+include = ["python/**/*.py", "python/**/*.pyi"]
+# The MCP server and its test are mid-port to the mcp 2.0 SDK (#272); they
+# join the gate when the port lands, so the two branches do not fight over
+# mechanical fixes.
+exclude = ["python/powerio/mcp/**", "python/tests/test_mcp.py"]
+target-version = "py39"
+
+[lint]
+select = ["E4", "E7", "E9", "F", "B", "I", "PLE", "PLW", "RUF022", "RUF100"]
+
+[lint.per-file-ignores]
+# The stub re-exports `dist` at the tail on purpose: the alias block reads
+# top-down like the runtime module, and moving it above the class defs would
+# forward-reference `Network`.
+"python/powerio/__init__.pyi" = ["E402"]

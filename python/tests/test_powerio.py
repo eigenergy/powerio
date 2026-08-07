@@ -244,7 +244,7 @@ def test_loads_and_shunts_are_first_class():
     case = powerio.parse_file(DATA / "case30.m")
     # MATPOWER folds demand onto the bus row; powerio splits it back out.
     assert case.n_loads > 0
-    assert all({"bus", "p", "q", "in_service"} <= set(l) for l in case.loads)
+    assert all({"bus", "p", "q", "in_service"} <= set(load) for load in case.loads)
     # buses carry no pd/qd (that's what loads are for)
     assert "pd" not in case.buses[0]
 
@@ -490,7 +490,7 @@ def test_delegated_surface_resolves(case9):
     ]:
         assert hasattr(case9, attr), attr
     with pytest.raises(AttributeError):
-        case9.does_not_exist
+        case9.does_not_exist  # noqa: B018 -- the attribute access is the assertion
 
 
 def test_import_and_parse_pull_in_no_optional_deps():
@@ -515,7 +515,9 @@ def test_import_and_parse_pull_in_no_optional_deps():
         f"for name in {optional_modules!r}:\n"
         "    assert name not in sys.modules, f'powerio dragged in {name}'\n"
     )
-    r = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True)
+    r = subprocess.run(
+        [sys.executable, "-c", code], capture_output=True, text=True, check=False
+    )
     assert r.returncode == 0, r.stderr
 
 
