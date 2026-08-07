@@ -19,13 +19,14 @@ permissions:
   pages: write
   id-token: write
 
-# Serialize per ref, queueing rather than cancelling: a cancelled in-flight
+# Serialize per ref. On main, queue rather than cancel: a cancelled in-flight
 # Pages deployment can leave the backend rejecting the next deployment
 # ("Deployment failed, try again later"), so successive main pushes must each
-# deploy in order. A PR's doc build still can't touch main's deploy.
+# deploy in order. A pull request run never deploys (see the `deploy` gate),
+# so a superseded one is cancelled like the other pull request workflows.
 concurrency:
   group: pages-${{ github.ref }}
-  cancel-in-progress: false
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 env:
   CARGO_TERM_COLOR: always
