@@ -237,6 +237,28 @@ fn num(v: f64) -> String {
     format!("{v}")
 }
 
+/// Write one per-winding transformer property. The inline `(...)` form needs
+/// a token in every slot. A missing value thus moves the property to the
+/// per-winding `~ wdg=` edits, which can omit a winding.
+fn winding_array(
+    head: &mut String,
+    edits: &mut [String],
+    array_key: &str,
+    scalar_key: &str,
+    values: &[Option<f64>],
+) {
+    if values.iter().all(Option::is_some) {
+        let toks: Vec<String> = values.iter().map(|v| num(v.unwrap_or(0.0))).collect();
+        let _ = write!(head, " {array_key}=({})", toks.join(", "));
+    } else {
+        for (edit, v) in edits.iter_mut().zip(values) {
+            if let Some(v) = v {
+                let _ = write!(edit, " {scalar_key}={}", num(*v));
+            }
+        }
+    }
+}
+
 /// VSource.cpp's per phase magnitude divisor: the chord of the n-gon
 /// (1 for a single phase source, sqrt(3) at n = 3). Division by the
 /// 1 phase chord is exact, so one expression serves both reader branches.
@@ -924,18 +946,32 @@ impl DssWriter {
                 l.linecode,
                 num(l.length),
             );
-            // Line-level ratings await the normamps/emergamps mapping
-            // decision (#266); dropping them stays loud in the meantime.
-            for (key, present) in [("i_max", l.i_max.is_some()), ("s_max", l.s_max.is_some())] {
-                if present {
-                    self.warn(format!(
-                        "line {}: `{key}` has no dss Line field mapping yet; dropped",
-                        l.name
-                    ));
-                }
-            }
             let mut extras = l.extras.clone();
             extras.remove("units"); // canonical output is in meters
+            // `i_max` maps to `emergamps`, as it does on a linecode. The
+            // typed field wins over a token kept in extras.
+            match l.i_max.as_deref() {
+                Some([amps, ..]) if amps.is_finite() => {
+                    extras.remove("emergamps");
+                    let _ = write!(s, " emergamps={}", num(*amps));
+                }
+                Some([_, ..]) => self.warn(format!(
+                    "line {}: first i_max entry is nonfinite (an unbounded \
+                     conductor); emergamps not emitted",
+                    l.name
+                )),
+                Some([]) => self.warn(format!(
+                    "line {}: i_max is empty; emergamps not emitted",
+                    l.name
+                )),
+                None => {}
+            }
+            if l.s_max.is_some() {
+                self.warn(format!(
+                    "line {}: `s_max` has no dss Line field; dropped",
+                    l.name
+                ));
+            }
             s.push_str(&self.extras_tail("line", &l.name, &extras));
             self.line_out(&s);
         }
@@ -1014,21 +1050,43 @@ impl DssWriter {
                     WindingConn::Delta => "delta",
                 })
                 .collect();
-            let kvs: Vec<String> = t.windings.iter().map(|w| num(w.v_ref / 1e3)).collect();
-            let kvas: Vec<String> = t.windings.iter().map(|w| num(w.s_rating / 1e3)).collect();
+            let kvs: Vec<Option<f64>> = t
+                .windings
+                .iter()
+                .enumerate()
+                .map(|(idx, w)| self.winding_kv(t, idx, w))
+                .collect();
+            let kvas: Vec<Option<f64>> = t
+                .windings
+                .iter()
+                .enumerate()
+                .map(|(idx, w)| {
+                    if w.s_rating.is_finite() {
+                        Some(w.s_rating / 1e3)
+                    } else {
+                        self.warn(format!(
+                            "transformer {}: winding {} has no finite rating; kva not \
+                             emitted (the OpenDSS default applies)",
+                            t.name,
+                            idx + 1
+                        ));
+                        None
+                    }
+                })
+                .collect();
             let rs: Vec<String> = t.windings.iter().map(|w| num(w.r_pct)).collect();
             let taps: Vec<String> = t.windings.iter().map(|w| num(w.tap)).collect();
             let mut s = format!(
-                "New Transformer.{} phases={} windings={nw} buses=({}) conns=({}) kvs=({}) kvas=({}) %Rs=({}) taps=({})",
+                "New Transformer.{} phases={} windings={nw} buses=({}) conns=({})",
                 t.name,
                 t.phases,
                 buses.join(", "),
                 conns.join(", "),
-                kvs.join(", "),
-                kvas.join(", "),
-                rs.join(", "),
-                taps.join(", "),
             );
+            let mut edits: Vec<String> = vec![String::new(); nw];
+            winding_array(&mut s, &mut edits, "kvs", "kv", &kvs);
+            winding_array(&mut s, &mut edits, "kvas", "kva", &kvas);
+            let _ = write!(s, " %Rs=({}) taps=({})", rs.join(", "), taps.join(", "));
             if let Some(xhl) = t.xsc_pct.first() {
                 let _ = write!(s, " xhl={}", num(*xhl));
                 if t.xsc_pct.len() >= 3 {
@@ -1044,20 +1102,63 @@ impl DssWriter {
             s.push_str(&self.extras_tail("transformer", &t.name, &t.extras));
             self.line_out(&s);
             for (idx, w) in t.windings.iter().enumerate() {
-                if w.r_neutral.is_none() && w.x_neutral.is_none() {
-                    continue;
-                }
-                let mut edit = format!("~ wdg={}", idx + 1);
                 if let Some(r) = w.r_neutral {
-                    let _ = write!(edit, " rneut={}", num(r));
+                    let _ = write!(edits[idx], " rneut={}", num(r));
                 }
                 if let Some(x) = w.x_neutral {
-                    let _ = write!(edit, " xneut={}", num(x));
+                    let _ = write!(edits[idx], " xneut={}", num(x));
                 }
-                self.line_out(&edit);
+            }
+            for (idx, edit) in edits.iter().enumerate() {
+                if !edit.is_empty() {
+                    self.line_out(&format!("~ wdg={}{edit}", idx + 1));
+                }
             }
         }
         self.out.push('\n');
+    }
+
+    /// The winding `kv=` value in kV, or `None` if no value is available.
+    /// A BMOPF transformer without `v_nom_from`/`v_nom_to` reads as
+    /// `v_ref = NaN`, and OpenDSS refuses a deck that holds a `NaN` token.
+    /// The fallback is the bus voltage estimate, scaled to the voltage across
+    /// the two winding terminals: line to neutral for a single phase winding
+    /// on a grounded terminal, line to line in all other cases.
+    fn winding_kv(
+        &mut self,
+        t: &crate::model::DistTransformer,
+        idx: usize,
+        w: &Winding,
+    ) -> Option<f64> {
+        if w.v_ref.is_finite() && w.v_ref > 0.0 {
+            return Some(w.v_ref / 1e3);
+        }
+        let line_to_neutral = t.phases < 2
+            && self
+                .grounded
+                .get(&w.bus.to_ascii_lowercase())
+                .is_some_and(|g| w.terminal_map.iter().any(|tm| g.contains(tm)));
+        let scale = if line_to_neutral { 1.0 } else { 3f64.sqrt() };
+        let Some(v_pn) = self.kv_estimate.get(&w.bus.to_ascii_lowercase()).copied() else {
+            self.warn(format!(
+                "transformer {}: winding {} has no rated voltage and bus `{}` has \
+                 no voltage estimate; kv not emitted (the OpenDSS default applies)",
+                t.name,
+                idx + 1,
+                w.bus
+            ));
+            return None;
+        };
+        let kv = v_pn * scale / 1e3;
+        self.warn(format!(
+            "transformer {}: winding {} has no rated voltage; kv={} derived \
+             from the bus `{}` voltage estimate",
+            t.name,
+            idx + 1,
+            num(kv),
+            w.bus
+        ));
+        Some(kv)
     }
 
     fn loads(&mut self, net: &DistNetwork) {
@@ -2346,7 +2447,7 @@ mod tests {
     }
 
     #[test]
-    fn line_level_ratings_drop_with_a_warning() {
+    fn line_level_i_max_emits_emergamps_and_s_max_drops_with_a_warning() {
         let (b, vs) = three_phase_source(2400.0);
         let net = DistNetwork {
             base_frequency: 60.0,
@@ -2368,15 +2469,68 @@ mod tests {
             ..DistNetwork::default()
         };
         let out = write_dss(&net);
-        for key in ["i_max", "s_max"] {
-            assert!(
-                out.warnings
-                    .iter()
-                    .any(|w| w.contains("line l1") && w.contains(key) && w.contains("dropped")),
-                "{key}: {:?}",
-                out.warnings
-            );
-        }
+        let line = out.text.lines().find(|l| l.contains("Line.l1 ")).unwrap();
+        assert!(line.contains("emergamps=400"), "{line}");
+        assert!(
+            !out.warnings
+                .iter()
+                .any(|w| w.contains("line l1") && w.contains("i_max")),
+            "{:?}",
+            out.warnings
+        );
+        assert!(
+            out.warnings
+                .iter()
+                .any(|w| w.contains("line l1") && w.contains("s_max") && w.contains("dropped")),
+            "{:?}",
+            out.warnings
+        );
+    }
+
+    #[test]
+    fn line_level_emergamps_round_trips_as_i_max() {
+        let src = "Clear\n\
+                   New Circuit.c1 basekv=12.47 pu=1 angle=0 phases=3 bus1=sb.1.2.3\n\
+                   New Linecode.lc nphases=3 r1=0.1 x1=0.2 emergamps=600\n\
+                   New Line.l1 bus1=sb.1.2.3 bus2=b2.1.2.3 phases=3 linecode=lc \
+                   length=10 units=m emergamps=250\n\
+                   New Line.l2 bus1=b2.1.2.3 bus2=b3.1.2.3 phases=3 linecode=lc \
+                   length=10 units=m\n";
+        let net = parse_dss_str(src);
+        let l1 = net.lines.iter().find(|l| l.name == "l1").unwrap();
+        assert_eq!(l1.i_max.as_deref(), Some(&[250.0, 250.0, 250.0][..]));
+        assert!(!l1.extras.contains_key("emergamps"), "{:?}", l1.extras);
+        // A line without its own rating defers to the linecode.
+        let l2 = net.lines.iter().find(|l| l.name == "l2").unwrap();
+        assert_eq!(l2.i_max, None);
+
+        let (first, second) = roundtrip(&net);
+        let line = first.lines().find(|l| l.contains("Line.l1 ")).unwrap();
+        assert!(line.contains("emergamps=250"), "{line}");
+        assert_eq!(line.matches("emergamps=").count(), 1, "{line}");
+        let line2 = first.lines().find(|l| l.contains("Line.l2 ")).unwrap();
+        assert!(!line2.contains("emergamps="), "{line2}");
+        assert_eq!(first, second);
+    }
+
+    #[test]
+    fn unparsable_line_emergamps_stays_in_extras_for_the_echo() {
+        let src = "Clear\n\
+                   New Circuit.c1 basekv=12.47 pu=1 angle=0 phases=3 bus1=sb.1.2.3\n\
+                   New Linecode.lc nphases=3 r1=0.1 x1=0.2\n\
+                   New Line.l1 bus1=sb.1.2.3 bus2=b2.1.2.3 phases=3 linecode=lc \
+                   length=10 units=m emergamps=@amps\n";
+        let net = parse_dss_str(src);
+        let l1 = net.lines.iter().find(|l| l.name == "l1").unwrap();
+        assert_eq!(l1.i_max, None);
+        assert_eq!(
+            l1.extras.get("emergamps").and_then(|v| v.as_str()),
+            Some("@amps")
+        );
+        let (first, second) = roundtrip(&net);
+        let line = first.lines().find(|l| l.contains("Line.l1 ")).unwrap();
+        assert!(line.contains("emergamps=@amps"), "{line}");
+        assert_eq!(first, second);
     }
 
     #[test]

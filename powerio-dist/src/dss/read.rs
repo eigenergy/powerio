@@ -944,9 +944,13 @@ impl Reader<'_> {
             (code, factor)
         };
 
+        let (i_max, raw_emergamps) = self.line_emergamps(&props, phases);
         let mut extras = extras_from_leftovers(&props);
         if let Some(u) = length_units {
             extras.insert("units".into(), u.into());
+        }
+        if let Some(text) = raw_emergamps {
+            extras.insert("emergamps".into(), text.into());
         }
         for (key, text) in malformed {
             extras.insert(key.to_string(), text.into());
@@ -960,10 +964,23 @@ impl Reader<'_> {
             linecode,
             length: length * length_factor,
             route: None,
-            i_max: None,
+            i_max,
             s_max: None,
             extras,
         });
+    }
+
+    /// `emergamps` on a Line reads as that line's `i_max`, one entry for each
+    /// phase, the same mapping a linecode uses. An absent property leaves the
+    /// linecode rating in control. An unparsable token returns as text.
+    fn line_emergamps(&self, props: &Props, phases: usize) -> (Option<Vec<f64>>, Option<String>) {
+        let Some(v) = props.get("emergamps") else {
+            return (None, None);
+        };
+        match v.to_f64(Some(self.vars)) {
+            Ok(amps) => (Some(vec![amps; phases]), None),
+            Err(_) => (None, Some(v.text.clone())),
+        }
     }
 
     /// A line without `linecode=` carries inline or default impedance;
