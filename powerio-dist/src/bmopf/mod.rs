@@ -10,4 +10,7 @@ mod read;
 mod write;
 
 pub use read::{parse_bmopf_file, parse_bmopf_str};
-pub use write::{BmopfWriteOptions, write_bmopf_json, write_bmopf_json_with_options};
+pub use write::{
+    BMOPF_SCHEMA_ID, BMOPF_SCHEMA_VERSION, BmopfWriteOptions, write_bmopf_json,
+    write_bmopf_json_with_options,
+};
