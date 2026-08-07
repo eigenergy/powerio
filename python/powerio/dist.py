@@ -23,10 +23,10 @@ from . import Conversion, _powerio
 __all__ = [
     "DistNetwork",
     "MulticonductorNetwork",
-    "parse_file",
-    "parse_str",
     "convert_file",
     "convert_str",
+    "parse_file",
+    "parse_str",
 ]
 
 
