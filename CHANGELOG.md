@@ -1,5 +1,76 @@
 # Changelog
 
+## 0.8.1
+
+Text-writer hardening, JSON reader fidelity, a document-version report
+over the C ABI, and a release gate that tests the Julia binding before any
+binary ships. No breaking changes: every 0.8.0 API, format token, and wire
+version is unchanged.
+
+**Security.** The psse, pslf, powerworld, and OpenDSS writers replace a
+line terminator inside any quoted or free-text field. A name that held a
+`\n` or `\r` ended the record and made the rest of the text parse as new
+records, so a crafted case name, DC line label, circuit id, or bus name
+could forge whole records in the written file. Five such paths are now
+closed, each with a test that reads the written text back and counts the
+records. Upgrade if you write text formats from names you do not control.
+
+- The two C JSON report entry points, `pio_last_error_json` and
+  `pio_schema_versions_json`, now run inside the panic guard the other
+  entry points use. A panic in either one crossed the C boundary, which is
+  undefined behavior.
+- `build_ybus` refuses a case whose base MVA is zero or nonfinite. Such a
+  case wrote a matrix of `NaN` and the CLI exited 0.
+- The auto sensitivity solver reads the real matrix shape (branches by
+  buses) instead of the reduced dimension alone, and holds the dense path
+  to a 2 GiB memory budget. The dense threshold moves from 512 to 8192,
+  because a dense solve is faster than conjugate gradient well past 512
+  buses. Set `SensitivityOptions::auto_dense_threshold` to keep the old
+  value. PTDF and LODF results are unchanged: both paths were verified
+  bit-identical on case30.
+- The psse field splitter, the powerworld auxiliary token splitter, and
+  the pandapower split-frame reader reuse their buffers and move rows
+  instead of copying them. Reader output is unchanged.
+- New `pio_schema_versions_json` C entry point reports the schema version
+  of every document format the library speaks (`.pio.json`, Arrow, the
+  distribution capability document, and the BMOPF vintage). A key is
+  `null` when the owning feature is not compiled in. `PIO_ABI_VERSION`
+  does not cover document formats, so a binding that mirrors one of these
+  versions can now read it from the library and refuse a mismatch at load
+  or pin time instead of finding it downstream (#270, query half).
+- `release-binaries.yml` gates every tag on PowerIO.jl: the workflow
+  builds the tag, runs the binding's suite against it, and produces no
+  tarballs and no draft release on failure. A planned binding break
+  merges the paired PowerIO.jl change first, then re-runs the workflow.
+- The retired schema documents under `docs/schema/` are pinned by a test.
+  A `.pio.json` written before v0.8.0 declares those URLs, so they stay
+  published even though the reader no longer accepts that lineage.
+- The egret and pandapower readers keep unrecognized element fields as
+  `extras` instead of dropping them silently, matching the PowerModels
+  reader. A powerio-written file still reads back extras-free (#263).
+- The PowerModels reader reports the taps it discards: a branch with an
+  off-nominal `tap` but no `transformer: true` flag reads as a line, and
+  one aggregated warning now names the branches and the total. The
+  inference rule itself is unchanged.
+- `.pio.json` validation diagnoses duplicate payload uids directly
+  (`VALIDATE.BALANCED.PAYLOAD_IDENTITY`, a new always-present
+  `balanced.payload_identity` pass) instead of leaving the ambiguity to
+  surface later as a failed operating-point reference.
+- The text-only C conversion entry points warn when a distribution
+  writer produced a companion file they cannot return, naming the file:
+  an OpenDSS deck referencing a `Buscoords` CSV the caller never received
+  no longer fails to compile with nothing to explain why.
+- `summary`, `package`, `convert` without `--from`, and `geo
+  extract|apply` read and classify a `.json` once instead of twice. The
+  distribution reader's own document rule still applies on that path, so
+  a JSON that is not a distribution case is refused as before.
+- Python `Network.ptdf()` / `lodf()` route through the auto sensitivity
+  solver (dense below the reduced-dimension threshold, iterative
+  conjugate gradient above it), matching the CLI `sensitivities`
+  command. Both take `solver="auto"|"dense"|"iterative"`. On a case above
+  the threshold results move from exact-dense to iterative-CG at a 1e-10
+  relative residual (#273).
+
 ## 0.8.0
 
 BMOPF schema 0.1.0 alignment, one version number for `.pio.json`, and distribution JSON reader validation. Two migration notes: `.pio.json` files written by 0.7.x and earlier are rejected with an error that says to regenerate them from their source case (convert with a 0.7.x install to migrate an orphaned file), and the BMOPF writer targets the published schema 0.1.0 `$id`, so consumers that key on the old `$schema` URI should update their accepted list.
