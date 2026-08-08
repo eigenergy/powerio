@@ -25,7 +25,77 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
+  # Release gate. PIO_ABI_VERSION does not cover document formats, so a
+  # release can break the Julia binding while both ABI integers stay the
+  # same. This job tests the tag against the default branch of PowerIO.jl.
+  # It gates `build`: a failure makes no tarballs and no draft release.
+  # For a planned binding break, merge the PowerIO.jl change first, then
+  # run this workflow again on the tag.
+  binding-gate:
+    name: PowerIO.jl main against this tag
+    # Tag pushes only. A workflow_dispatch run builds artifact-only
+    # tarballs and attaches nothing to a release, so it has no gate. That
+    # run is also the bypass for a planned binding break.
+    if: github.event_name == 'push'
+    runs-on: ubuntu-latest
+    steps:
+    - name: Probe PowerIO.jl access
+      id: powerio-jl
+      env:
+        POWERIO_JL_TOKEN: ${{ secrets.POWERIO_JL_REPO_TOKEN }}
+      run: |
+        # Test the token now. An expired token would fail later in checkout
+        # with an unclear error.
+        if [ -n "${POWERIO_JL_TOKEN}" ] \
+          && git ls-remote "https://x-access-token:${POWERIO_JL_TOKEN}@github.com/eigenergy/PowerIO.jl.git" HEAD >/dev/null 2>&1; then
+          echo "available=true" >> "$GITHUB_OUTPUT"
+        elif git ls-remote https://github.com/eigenergy/PowerIO.jl.git HEAD >/dev/null 2>&1; then
+          echo "available=true" >> "$GITHUB_OUTPUT"
+        else
+          # Do not pass silently. On a release, an unreachable binding
+          # means the gate did not run.
+          echo "available=false" >> "$GITHUB_OUTPUT"
+        fi
+    - name: Require the binding to be reachable
+      if: steps.powerio-jl.outputs.available != 'true'
+      run: |
+        echo "::error::Cannot reach eigenergy/PowerIO.jl, so the release gate cannot run. \
+        Set a valid POWERIO_JL_REPO_TOKEN to release. A workflow_dispatch run builds \
+        artifact-only tarballs without the gate."
+        exit 1
+    - uses: actions/checkout@v6
+    - uses: dtolnay/rust-toolchain@stable
+    - uses: Swatinem/rust-cache@v2
+    - name: Build powerio-capi
+      run: |
+        cargo build -p powerio-capi --release \
+          --features arrow,matrix,gridfm,dist,pkg,prob
+    - name: Check out PowerIO.jl default branch
+      uses: actions/checkout@v6
+      with:
+        repository: eigenergy/PowerIO.jl
+        path: PowerIO.jl
+        token: ${{ secrets.POWERIO_JL_REPO_TOKEN || github.token }}
+    - uses: julia-actions/setup-julia@v3
+      with:
+        version: '1'
+    - uses: julia-actions/cache@v3
+    - name: Test PowerIO.jl against this tag
+      env:
+        POWERIO_CAPI: ${{ github.workspace }}/target/release/libpowerio_capi.so
+      run: |
+        julia --project=PowerIO.jl -e 'using Pkg; Pkg.instantiate(); Pkg.test()' || {
+          echo "::error::PowerIO.jl's default branch fails against this tag. Merge the \
+          paired PowerIO.jl change, then re-run this workflow on the tag. A \
+          workflow_dispatch run builds artifact-only tarballs without the gate."
+          exit 1
+        }
+
   build:
+    needs: binding-gate
+    # Run when the gate passed or was skipped, never when it failed. A
+    # plain `needs:` would also skip this job on workflow_dispatch runs.
+    if: always() && (needs.binding-gate.result == 'success' || needs.binding-gate.result == 'skipped')
     name: ${{ matrix.triplet }}
     runs-on: ${{ matrix.runner }}
     strategy:

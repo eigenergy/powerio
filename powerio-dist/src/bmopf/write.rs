@@ -21,9 +21,16 @@ use crate::model::{
     VoltageSource, Winding, WindingConn, n_winding_impedance_base, pair_keys,
 };
 
-/// The `$schema` stamped into every document's `meta`: the bmopf-report
-/// schema `$id` (0.1.0 vintage).
-const BMOPF_SCHEMA_ID: &str = "https://raw.githubusercontent.com/frederikgeth/bmopf-report/main/draft_schema_and_networks/draft_bmopf_schema.json";
+/// The `$id` of the BMOPF schema this writer targets, and the value it
+/// stamps into `meta.$schema`. The upstream `$id` is not version pinned,
+/// so use it together with [`BMOPF_SCHEMA_VERSION`].
+pub const BMOPF_SCHEMA_ID: &str = "https://raw.githubusercontent.com/frederikgeth/bmopf-report/main/draft_schema_and_networks/draft_bmopf_schema.json";
+
+/// The `version` field of the vendored BMOPF schema
+/// (`tests/data/dist/bmopf/draft_bmopf_schema.json`). Upstream can change
+/// the schema without a version bump, so use it together with
+/// [`BMOPF_SCHEMA_ID`].
+pub const BMOPF_SCHEMA_VERSION: &str = "0.1.0";
 
 /// Untyped classes that belong to the BMOPF ecosystem. Schema 0.1.0 dropped
 /// their top-level tables (`additionalProperties: false` + the `extras`

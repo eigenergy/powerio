@@ -1,0 +1,4 @@
+name,bus,control,p_nom,p_set,q_set,p_min_pu,p_max_pu,marginal_cost,marginal_cost_quadratic,active,v_mag_pu_set
+gen_1,1,Slack,250,72.3,27.03,0.04,1,5,0.11,true,1.04
+gen_2,2,PV,300,163,6.54,0.03333333333333333,1,1.2,0.085,true,1.025
+gen_3,3,PV,270,85,-10.95,0.037037037037037035,1,1,0.1225,true,1.025

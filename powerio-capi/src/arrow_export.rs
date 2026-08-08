@@ -51,7 +51,7 @@ pub const PIO_ARROW_TABLE_BDOUBLEPRIME: i32 = 18;
 pub const PIO_ARROW_TABLE_MATRIX_BUS: i32 = 19;
 pub const PIO_ARROW_TABLE_MATRIX_BRANCH: i32 = 20;
 
-const ARROW_SCHEMA_VERSION: &str = "1";
+pub(crate) const ARROW_SCHEMA_VERSION: &str = "1";
 
 // These values are the ABI: the `PIO_ARROW_TABLE_*` macros in include/powerio.h
 // are hand-synced to them. The set is append-only: these ids and each table's

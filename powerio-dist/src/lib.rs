@@ -50,8 +50,8 @@ pub mod model;
 pub mod pmd;
 
 pub use bmopf::{
-    BmopfWriteOptions, parse_bmopf_file, parse_bmopf_str, write_bmopf_json,
-    write_bmopf_json_with_options,
+    BMOPF_SCHEMA_ID, BMOPF_SCHEMA_VERSION, BmopfWriteOptions, parse_bmopf_file, parse_bmopf_str,
+    write_bmopf_json, write_bmopf_json_with_options,
 };
 pub use convert::{
     Conversion, ConversionSidecar, DistTargetFormat, classify_distribution_json, convert_file,

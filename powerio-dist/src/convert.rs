@@ -12,6 +12,19 @@ pub struct ConversionSidecar {
     pub text: String,
 }
 
+impl ConversionSidecar {
+    /// The fidelity warning for a surface that could not write this
+    /// sidecar. `reason` says why in that surface's terms. All surfaces
+    /// must use this one formatter: consumers match on the warning text.
+    #[must_use]
+    pub fn dropped_warning(&self, reason: &str) -> String {
+        format!(
+            "fidelity: sidecar `{}` was not written: {reason}",
+            self.path
+        )
+    }
+}
+
 /// Text in the target format plus every fidelity loss the writer took.
 /// Nothing drops silently: a field the target cannot represent appears
 /// here as a warning naming the element and field.

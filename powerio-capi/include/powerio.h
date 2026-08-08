@@ -300,6 +300,18 @@ char *pio_dist_capabilities_json(void);
 #endif
 
 /**
+ * Report the schema version of each document format in this library, as
+ * owned JSON. Free the returned string with [`pio_string_free`]. Infallible.
+ *
+ * [`PIO_ABI_VERSION`] does not cover these versions. A binding that
+ * mirrors one of them must read it from here and refuse a library it does
+ * not agree with. A key is `null` when the owning feature is not compiled
+ * in. Keys are only added over time. `schema_version` is the version of
+ * this document's own shape.
+ */
+char *pio_schema_versions_json(void);
+
+/**
  * Whether the matrix Arrow table API is usable in this build. Returns 1
  * only when both `arrow` and `matrix` are compiled in. Matrix tables use
  * `pio_to_arrow`. Infallible.
@@ -328,10 +340,8 @@ const char *pio_version(void);
 /**
  * Parse `path` (format from extension, or `from` if non-NULL) into a network
  * handle. `from` accepts the [`pio_parse_str`] format names plus
- * `pypsa-csv`/`pypsa`, `goc3-json`/`goc3`, `surge-json`/`surge`,
- * `opfdata-json`/`opfdata`/`gridopt`, `pwb`, and `pslf`/`epc`; `.epc` is inferred
- * by extension. OPFData accepts one extracted FullTop or N-1 example of any
- * published grid size, with counts taken from the file. A PyPSA CSV folder is a directory, so it can only
+ * `pypsa-csv`/`pypsa`, `goc3-json`/`goc3`, `surge-json`/`surge`, and `pwb`;
+ * that includes `pslf`/`epc`, and `.epc` is inferred by extension. A PyPSA CSV folder is a directory, so it can only
  * enter through this function, with `from = "pypsa-csv"` (or NULL when the
  * directory holds a `network.csv`). Read fidelity warnings attach to the
  * handle ([`pio_warnings`]). Returns `NULL` on error and writes the message
@@ -347,8 +357,7 @@ PioNetwork *pio_parse_file(const char *path,
  * Unlike [`pio_parse_file`] there is no path to infer from, so `format` is
  * required: one of `matpower`/`m`, `powermodels`/`pm`, `egret`,
  * `pandapower-json`/`pandapower`/`pp`, `psse`/`raw`, `powerworld`/`aux`,
- * `pslf`/`epc`, `goc3-json`/`goc3`, `surge-json`/`surge`, or
- * `opfdata-json`/`opfdata`/`gridopt`. PyPSA CSV folders are
+ * `pslf`/`epc`, `goc3-json`/`goc3`, or `surge-json`/`surge`. PyPSA CSV folders are
  * directories, not text; parse them with [`pio_parse_file`] and
  * `from = "pypsa-csv"`. Read fidelity warnings attach to the handle
  * ([`pio_warnings`]). Returns `NULL` on error and writes the message into

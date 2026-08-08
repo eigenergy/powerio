@@ -232,16 +232,34 @@ pub extern "C" fn pio_dist_abi_version() -> u32 {
     PIO_DIST_ABI_VERSION
 }
 
+/// Version of the capability document: the JSON shape that
+/// `pio_dist_capabilities_json` returns. It is not the BMOPF schema
+/// version; the document reports that in `bmopf_schema_version`. Flags
+/// are additive, and each addition bumps the minor version.
 #[cfg(feature = "dist")]
-const DIST_CAPABILITIES_JSON: &str = concat!(
-    r#"{"dist":true,"schema_version":"1.0.0","#,
-    r#""bmopf_fixed_taps":true,"#,
-    r#""bmopf_center_tap_leakage":true,"#,
-    r#""bmopf_delta_wye_leakage":true,"#,
-    r#""bmopf_delta_roll":true,"#,
-    r#""bmopf_voltage_source_merge":true,"#,
-    r#""bmopf_transformer_diagnostics":true}"#
-);
+const DIST_CAPABILITIES_DOC_VERSION: &str = "1.1.0";
+
+#[cfg(feature = "dist")]
+fn dist_capabilities_json() -> String {
+    serde_json::json!({
+        "dist": true,
+        "schema_version": DIST_CAPABILITIES_DOC_VERSION,
+        "bmopf_fixed_taps": true,
+        "bmopf_center_tap_leakage": true,
+        "bmopf_delta_wye_leakage": true,
+        "bmopf_delta_roll": true,
+        "bmopf_voltage_source_merge": true,
+        "bmopf_transformer_diagnostics": true,
+        // Not a fetch location. Use it together with `bmopf_schema_version`.
+        "bmopf_schema_id": powerio_dist::BMOPF_SCHEMA_ID,
+        "bmopf_schema_version": powerio_dist::BMOPF_SCHEMA_VERSION,
+        "typed_capacitors": true,
+        "line_and_generator_ratings": true,
+        "per_sequence_bus_bounds": true,
+        "transformer_extras_relocation": true,
+    })
+    .to_string()
+}
 
 /// Return distribution capability flags as owned JSON. Free the returned string
 /// with [`pio_string_free`]. Only linked when the `dist` feature is compiled in;
@@ -252,7 +270,49 @@ const DIST_CAPABILITIES_JSON: &str = concat!(
 #[cfg(feature = "dist")]
 #[unsafe(no_mangle)]
 pub extern "C" fn pio_dist_capabilities_json() -> *mut c_char {
-    into_cstring(DIST_CAPABILITIES_JSON.to_owned()).unwrap_or(std::ptr::null_mut())
+    into_cstring(dist_capabilities_json()).unwrap_or(std::ptr::null_mut())
+}
+
+/// Report the schema version of each document format in this library, as
+/// owned JSON. Free the returned string with [`pio_string_free`]. Infallible.
+///
+/// [`PIO_ABI_VERSION`] does not cover these versions. A binding that
+/// mirrors one of them must read it from here and refuse a library it does
+/// not agree with. A key is `null` when the owning feature is not compiled
+/// in. Keys are only added over time. `schema_version` is the version of
+/// this document's own shape.
+#[unsafe(no_mangle)]
+pub extern "C" fn pio_schema_versions_json() -> *mut c_char {
+    // `None` serializes to `null`: the build cannot speak that format.
+    #[cfg(feature = "pkg")]
+    let package = Some(powerio_pkg::PIO_PACKAGE_SCHEMA_VERSION);
+    #[cfg(not(feature = "pkg"))]
+    let package: Option<&str> = None;
+
+    #[cfg(feature = "arrow")]
+    let arrow = Some(arrow_export::ARROW_SCHEMA_VERSION);
+    #[cfg(not(feature = "arrow"))]
+    let arrow: Option<&str> = None;
+
+    #[cfg(feature = "dist")]
+    let dist_capabilities = Some(DIST_CAPABILITIES_DOC_VERSION);
+    #[cfg(not(feature = "dist"))]
+    let dist_capabilities: Option<&str> = None;
+
+    #[cfg(feature = "dist")]
+    let bmopf_schema = Some(powerio_dist::BMOPF_SCHEMA_VERSION);
+    #[cfg(not(feature = "dist"))]
+    let bmopf_schema: Option<&str> = None;
+
+    let doc = serde_json::json!({
+        "schema_version": "1.0.0",
+        "abi": PIO_ABI_VERSION,
+        "package": package,
+        "arrow": arrow,
+        "dist_capabilities": dist_capabilities,
+        "bmopf_schema": bmopf_schema,
+    });
+    into_cstring(doc.to_string()).unwrap_or(std::ptr::null_mut())
 }
 
 /// Whether the matrix Arrow table API is usable in this build. Returns 1
@@ -2456,6 +2516,23 @@ pub unsafe extern "C" fn pio_dist_from_json(
     }
 }
 
+/// Append a fidelity warning for each companion file the writer produced.
+/// The text-only C entry points cannot return these files, so the case text
+/// can refer to a file the caller does not have. The warning names it.
+#[cfg(feature = "dist")]
+fn warn_dropped_sidecars(
+    mut warnings: Vec<String>,
+    sidecars: &[powerio_dist::ConversionSidecar],
+) -> Vec<String> {
+    for sidecar in sidecars {
+        warnings.push(sidecar.dropped_warning(
+            "this entry point returns the case text only, and that text refers to the file; \
+             write it beside the case before loading",
+        ));
+    }
+    warnings
+}
+
 /// Serialize `net` to distribution format `to` (`dss`, `pmd`, or `bmopf`).
 /// Writing back to the format the handle was parsed from echoes the source text
 /// byte for byte; a cross format write reports every fidelity loss in `warnbuf`
@@ -2478,7 +2555,10 @@ pub unsafe extern "C" fn pio_dist_to_format(
                 .ok_or_else(|| "network handle is NULL".to_string())?;
             let target = dist_target_from_c(to)?;
             let conv = c.net.to_format(target);
-            Ok((conv.text, conv.warnings))
+            Ok((
+                conv.text,
+                warn_dropped_sidecars(conv.warnings, &conv.sidecars),
+            ))
         })
     }
 }
@@ -2506,7 +2586,10 @@ pub unsafe extern "C" fn pio_dist_convert_file(
             let to = dist_target_from_c(to)?;
             let conv = powerio_dist::convert_file(std::path::Path::new(path), to, from)
                 .map_err(|e| e.to_string())?;
-            Ok((conv.text, conv.warnings))
+            Ok((
+                conv.text,
+                warn_dropped_sidecars(conv.warnings, &conv.sidecars),
+            ))
         })
     }
 }
@@ -2534,7 +2617,10 @@ pub unsafe extern "C" fn pio_dist_convert_str(
             let to = dist_target_from_c(to)?;
             let from = required_cstr(from, "from")?;
             let conv = powerio_dist::convert_str(text, to, from).map_err(|e| e.to_string())?;
-            Ok((conv.text, conv.warnings))
+            Ok((
+                conv.text,
+                warn_dropped_sidecars(conv.warnings, &conv.sidecars),
+            ))
         })
     }
 }
@@ -2986,6 +3072,7 @@ mod tests {
             "uint32_t pio_abi_version(void);",
             "uint32_t pio_dist_abi_version(void);",
             "char *pio_dist_capabilities_json(void);",
+            "char *pio_schema_versions_json(void);",
             "int32_t pio_matrix_available(void);",
             "int32_t pio_has_feature(const char *feature);",
             "const char *pio_version(void);",
@@ -4788,6 +4875,47 @@ mpc.branch = [
         }
 
         #[test]
+        fn schema_versions_json_matches_the_constants_the_library_stamps() {
+            let raw = pio_schema_versions_json();
+            assert!(!raw.is_null());
+            let text = unsafe { CStr::from_ptr(raw) }.to_str().unwrap().to_owned();
+            unsafe { pio_string_free(raw) };
+            let doc: serde_json::Value = serde_json::from_str(&text).unwrap();
+
+            assert_eq!(doc["schema_version"], serde_json::json!("1.0.0"));
+            assert_eq!(doc["abi"], serde_json::json!(PIO_ABI_VERSION));
+
+            // Each reported version must equal the constant stamped into the
+            // documents, not a copy of it.
+            #[cfg(feature = "pkg")]
+            assert_eq!(
+                doc["package"],
+                serde_json::json!(powerio_pkg::PIO_PACKAGE_SCHEMA_VERSION)
+            );
+            #[cfg(feature = "dist")]
+            assert_eq!(
+                doc["bmopf_schema"],
+                serde_json::json!(powerio_dist::BMOPF_SCHEMA_VERSION)
+            );
+            #[cfg(feature = "arrow")]
+            assert_eq!(
+                doc["arrow"],
+                serde_json::json!(crate::arrow_export::ARROW_SCHEMA_VERSION)
+            );
+            #[cfg(not(feature = "arrow"))]
+            assert_eq!(doc["arrow"], serde_json::Value::Null);
+
+            let caps_raw = pio_dist_capabilities_json();
+            let caps_text = unsafe { CStr::from_ptr(caps_raw) }
+                .to_str()
+                .unwrap()
+                .to_owned();
+            unsafe { pio_string_free(caps_raw) };
+            let caps: serde_json::Value = serde_json::from_str(&caps_text).unwrap();
+            assert_eq!(doc["dist_capabilities"], caps["schema_version"]);
+        }
+
+        #[test]
         fn dist_capabilities_json_reports_bmopf_fidelity_flags() {
             let ptr = pio_dist_capabilities_json();
             assert!(!ptr.is_null(), "dist capabilities JSON returned NULL");
@@ -4795,17 +4923,25 @@ mpc.branch = [
             unsafe { pio_string_free(ptr) };
 
             let caps: serde_json::Value = serde_json::from_str(&text).unwrap();
+            // Whole-document equality: each addition must be a deliberate
+            // edit here.
             assert_eq!(
                 caps,
                 serde_json::json!({
                     "dist": true,
-                    "schema_version": "1.0.0",
+                    "schema_version": DIST_CAPABILITIES_DOC_VERSION,
                     "bmopf_fixed_taps": true,
                     "bmopf_center_tap_leakage": true,
                     "bmopf_delta_wye_leakage": true,
                     "bmopf_delta_roll": true,
                     "bmopf_voltage_source_merge": true,
                     "bmopf_transformer_diagnostics": true,
+                    "bmopf_schema_id": powerio_dist::BMOPF_SCHEMA_ID,
+                    "bmopf_schema_version": powerio_dist::BMOPF_SCHEMA_VERSION,
+                    "typed_capacitors": true,
+                    "line_and_generator_ratings": true,
+                    "per_sequence_bus_bounds": true,
+                    "transformer_extras_relocation": true,
                 })
             );
         }
@@ -4970,6 +5106,109 @@ mpc.branch = [
             let pmd = unsafe { CStr::from_ptr(s) }.to_str().unwrap();
             assert!(pmd.contains("\"data_model\": \"ENGINEERING\""));
             unsafe { pio_string_free(s) };
+        }
+
+        #[test]
+        fn capabilities_json_reports_the_bmopf_vintage_the_writer_targets() {
+            let raw = pio_dist_capabilities_json();
+            assert!(!raw.is_null());
+            let text = unsafe { CStr::from_ptr(raw) }.to_str().unwrap().to_owned();
+            unsafe { pio_string_free(raw) };
+            let caps: serde_json::Value = serde_json::from_str(&text).unwrap();
+
+            // The vendored schema file's own `version` field must agree
+            // with BMOPF_SCHEMA_VERSION.
+            let vendored: serde_json::Value = serde_json::from_str(
+                &std::fs::read_to_string("../tests/data/dist/bmopf/draft_bmopf_schema.json")
+                    .unwrap(),
+            )
+            .unwrap();
+            assert_eq!(vendored["version"], caps["bmopf_schema_version"]);
+
+            assert_eq!(
+                caps["schema_version"],
+                serde_json::json!(DIST_CAPABILITIES_DOC_VERSION)
+            );
+        }
+
+        #[test]
+        fn convert_str_warns_that_the_buscoords_sidecar_was_dropped() {
+            // Bus coordinates make the dss writer emit a `Buscoords`
+            // directive plus the CSV it names. This surface returns text
+            // only, so the CSV is dropped.
+            let source = "\
+New Circuit.c basekv=12.47
+New Line.l1 bus1=a bus2=b phases=3
+";
+            let text = CString::new(source).unwrap();
+            let from = CString::new("dss").unwrap();
+            let to = CString::new("dss").unwrap();
+            let mut warn = [0 as c_char; 8192];
+            let mut err = [0 as c_char; PIO_ERRBUF_MIN];
+            // Convert through bmopf so the dss writer runs instead of an
+            // echo of the source text.
+            let bmopf_target = CString::new("bmopf").unwrap();
+            let as_bmopf = unsafe {
+                pio_dist_convert_str(
+                    text.as_ptr(),
+                    from.as_ptr(),
+                    bmopf_target.as_ptr(),
+                    warn.as_mut_ptr(),
+                    warn.len(),
+                    err.as_mut_ptr(),
+                    err.len(),
+                )
+            };
+            assert!(!as_bmopf.is_null());
+            let bmopf_text = unsafe { CStr::from_ptr(as_bmopf) }
+                .to_str()
+                .unwrap()
+                .to_owned();
+            unsafe { pio_string_free(as_bmopf) };
+
+            // Give the document coordinates so the dss writer produces a sidecar.
+            let mut doc: serde_json::Value = serde_json::from_str(&bmopf_text).unwrap();
+            if let Some(buses) = doc["bus"].as_object_mut() {
+                for (i, (_, bus)) in buses.iter_mut().enumerate() {
+                    bus["longitude"] = serde_json::json!(i as f64);
+                    bus["latitude"] = serde_json::json!(i as f64);
+                }
+            }
+            let with_coords = CString::new(doc.to_string()).unwrap();
+            let bmopf_from = CString::new("bmopf").unwrap();
+            let mut warn2 = [0 as c_char; 8192];
+            let s = unsafe {
+                pio_dist_convert_str(
+                    with_coords.as_ptr(),
+                    bmopf_from.as_ptr(),
+                    to.as_ptr(),
+                    warn2.as_mut_ptr(),
+                    warn2.len(),
+                    err.as_mut_ptr(),
+                    err.len(),
+                )
+            };
+            assert!(
+                !s.is_null(),
+                "{}",
+                unsafe { CStr::from_ptr(err.as_ptr()) }.to_str().unwrap()
+            );
+            let dss = unsafe { CStr::from_ptr(s) }.to_str().unwrap().to_owned();
+            unsafe { pio_string_free(s) };
+            let warnings = unsafe { CStr::from_ptr(warn2.as_ptr()) }.to_str().unwrap();
+
+            // Guard the premise: the writer must emit the directive, or the
+            // warning assertion below proves nothing.
+            assert!(
+                dss.to_lowercase().contains("buscoords"),
+                "expected the dss writer to reference a buscoords file; output was: {dss}"
+            );
+            // The text names a companion file, so a warning must name it too.
+            assert!(
+                warnings.contains("was not written"),
+                "dss output references a buscoords file but no warning reported the drop; \
+                 warnings were: {warnings}"
+            );
         }
 
         #[test]
