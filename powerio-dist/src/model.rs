@@ -854,6 +854,12 @@ pub struct DistNetwork {
     #[serde(skip)]
     pub defaulted: BTreeMap<String, Vec<&'static str>>,
     pub warnings: Vec<String>,
+    /// Structured findings from the parse session. An `Error` entry means
+    /// the network is incomplete (for example a refused include). Skipped
+    /// in the `.pio.json` payload: the wire spelling is a v0.9 register
+    /// decision, and package diagnostics live in the envelope.
+    #[serde(skip)]
+    pub parse_diagnostics: Vec<crate::diagnostics::StructuredDiagnostic>,
     /// Retained source text for the byte-exact echo tier. Skipped in the
     /// `.pio.json` payload (mirrors `powerio::Network::source`): keeping it out
     /// avoids serde's `rc` feature, and retained source is an envelope concern
@@ -893,6 +899,7 @@ impl Default for DistNetwork {
             options: Vec::new(),
             defaulted: BTreeMap::new(),
             warnings: Vec::new(),
+            parse_diagnostics: Vec::new(),
             source: None,
             source_format: None,
             extras: Extras::new(),

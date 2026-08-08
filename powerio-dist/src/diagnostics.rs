@@ -71,6 +71,11 @@ pub enum DiagnosticStage {
     Partner,
 }
 
+/// A `Redirect`/`Compile`/`Buscoords` include the reader refused because it
+/// escapes the case directory. Severity `Error`: the parse continued, but
+/// the network is incomplete.
+pub const READ_DSS_INCLUDE_REFUSED: &str = "READ.DSS.INCLUDE_REFUSED";
+
 /// One structured conversion finding.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
