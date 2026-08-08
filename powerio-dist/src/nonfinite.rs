@@ -5,6 +5,10 @@
 //! (#268). A `null` element in an upper bound means unbounded above
 //! (+Inf); in a lower bound, unbounded below (-Inf); in a length, not
 //! known (NaN). This is the PMD convention.
+//!
+//! serde `with` modules receive `&T`, so the serialize signatures take
+//! references the lints would otherwise refuse.
+#![allow(clippy::ref_option, clippy::trivially_copy_pass_by_ref)]
 
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 

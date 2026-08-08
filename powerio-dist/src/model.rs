@@ -180,12 +180,18 @@ pub struct DistLine {
     /// Per-conductor ampacity and apparent power limits, amps and VA
     /// (BMOPF schema 0.1.0 line fields, alongside the linecode's own).
     /// A `null` element reads as +Inf (#268).
-    #[serde(default, skip_serializing_if = "Option::is_none",
-            with = "crate::nonfinite::upper_bounds")]
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        with = "crate::nonfinite::upper_bounds"
+    )]
     #[cfg_attr(feature = "schema", schemars(with = "Option<Vec<Option<f64>>>"))]
     pub i_max: Option<Vec<f64>>,
-    #[serde(default, skip_serializing_if = "Option::is_none",
-            with = "crate::nonfinite::upper_bounds")]
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        with = "crate::nonfinite::upper_bounds"
+    )]
     #[cfg_attr(feature = "schema", schemars(with = "Option<Vec<Option<f64>>>"))]
     pub s_max: Option<Vec<f64>>,
     pub extras: Extras,
@@ -431,12 +437,18 @@ pub struct DistGenerator {
     pub cost: Option<f64>,
     /// Per-conductor apparent power and current limits, VA and amps (BMOPF
     /// generator fields, alongside the p/q bounds).
-    #[serde(default, skip_serializing_if = "Option::is_none",
-            with = "crate::nonfinite::upper_bounds")]
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        with = "crate::nonfinite::upper_bounds"
+    )]
     #[cfg_attr(feature = "schema", schemars(with = "Option<Vec<Option<f64>>>"))]
     pub s_max: Option<Vec<f64>>,
-    #[serde(default, skip_serializing_if = "Option::is_none",
-            with = "crate::nonfinite::upper_bounds")]
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        with = "crate::nonfinite::upper_bounds"
+    )]
     #[cfg_attr(feature = "schema", schemars(with = "Option<Vec<Option<f64>>>"))]
     pub i_max: Option<Vec<f64>>,
     pub extras: Extras,
