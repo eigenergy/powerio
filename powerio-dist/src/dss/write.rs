@@ -291,9 +291,24 @@ fn zipv_cutoff(value: Option<&serde_json::Value>) -> Option<f64> {
 fn name_breaks_dss(name: &str, is_bus_id: bool) -> bool {
     name.contains("//")
         || name.chars().any(|c| {
+            // A line terminator does not shift a token, it ends the command
+            // and makes the rest of the name parse as a new dss object.
             matches!(
                 c,
-                ' ' | '\t' | ',' | '=' | '!' | '"' | '\'' | '(' | ')' | '[' | ']' | '{' | '}'
+                ' ' | '\t'
+                    | '\n'
+                    | '\r'
+                    | ','
+                    | '='
+                    | '!'
+                    | '"'
+                    | '\''
+                    | '('
+                    | ')'
+                    | '['
+                    | ']'
+                    | '{'
+                    | '}'
             ) || (is_bus_id && c == '.')
         })
 }

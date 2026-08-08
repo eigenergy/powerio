@@ -422,12 +422,17 @@ fn ptdf_dense_with_path(
     // into a PTDF row.
     let flow = build_flow_map(&inc.a, &inc.b); // m × n
     let mut ptdf = vec![0.0; m * n];
+    // Reduced → full column map, built once. The inner loop then walks the
+    // Rinv row contiguously and skips grounded columns instead of testing
+    // every one of them; reduced order is ascending full order, so the
+    // accumulation order is unchanged.
+    let full_of = g.full_of_reduced(n);
     for (&w, (l, c)) in flow.iter() {
         let Some(rc) = g.reduced(c) else { continue }; // Minv row at a slack is 0
-        for k in 0..n {
-            if let Some(rk) = g.reduced(k) {
-                ptdf[l * n + k] += w * rinv[rc * nr + rk];
-            }
+        let row = &rinv[rc * nr..rc * nr + nr];
+        let out = &mut ptdf[l * n..l * n + n];
+        for (rk, &k) in full_of.iter().enumerate() {
+            out[k] += w * row[rk];
         }
     }
     Ok((ptdf, m, n, solver_path))
@@ -604,19 +609,36 @@ fn dense_to_csr_with_drop(
     cols: usize,
     drop_tolerance: f64,
 ) -> (CsMat<f64>, usize) {
-    let mut coo = CooBuilder::with_capacity_rect(rows, cols, dense.len() / 2);
+    // The scan is row major and every coordinate is unique, so the CSR
+    // arrays fill directly. Routing it through a hash map bought a dedup
+    // that cannot fire, then copied the entries into a triplet matrix and
+    // sorted them: on a 10k-bus PTDF that was several GB of intermediates
+    // and an O(nnz log nnz) sort to emit an already-ordered matrix. One
+    // counting pass sizes the buffers exactly instead.
     let mut dropped = 0usize;
+    let mut nnz = 0usize;
+    for &v in dense {
+        if v.abs() > drop_tolerance {
+            nnz += 1;
+        } else if v != 0.0 {
+            dropped += 1;
+        }
+    }
+    let mut indptr = Vec::with_capacity(rows + 1);
+    let mut indices = Vec::with_capacity(nnz);
+    let mut data = Vec::with_capacity(nnz);
+    indptr.push(0usize);
     for i in 0..rows {
         for j in 0..cols {
             let v = dense[i * cols + j];
             if v.abs() > drop_tolerance {
-                coo.add(i, j, v);
-            } else if v != 0.0 {
-                dropped += 1;
+                indices.push(j);
+                data.push(v);
             }
         }
+        indptr.push(data.len());
     }
-    (coo.finish_csr(), dropped)
+    (CsMat::new((rows, cols), indptr, indices, data), dropped)
 }
 
 fn dense_inverse(a: &[f64], n: usize) -> Option<Vec<f64>> {

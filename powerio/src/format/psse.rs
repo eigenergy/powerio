@@ -196,15 +196,19 @@ pub fn write_psse_rev(net: &Network, rev: u32) -> Conversion {
         }
     };
 
+    // The case name reaches the header line and the title line. Both are
+    // single records, so an embedded terminator would make the rest of the
+    // name parse as bus data.
+    let case_name = sanitize_quoted(&net.name, NAME_FORBIDDEN, ' ');
     let _ = writeln!(
         s,
         "0, {}, {rev}, 0, {}, {}   / powerio export: {}",
         net.base_mva,
         i32::from(modern),
         num(net.base_frequency),
-        net.name
+        case_name
     );
-    let _ = writeln!(s, "{}", net.name);
+    let _ = writeln!(s, "{case_name}");
     let _ = writeln!(s);
     if modern {
         // v34+ system-wide block: emit the solver keyword lines (the fields that
@@ -2296,6 +2300,11 @@ fn dc_tail(extras: &Extras, key: &str, default: &str) -> String {
         Some(arr) if !arr.is_empty() => arr
             .iter()
             .filter_map(Value::as_str)
+            // These come from a source file's `extras` and are replayed into
+            // a record, so they go through the quoting seam like every other
+            // interpolated string: a terminator here would forge a whole DC
+            // record or a section end.
+            .map(|f| sanitize_quoted(f, NAME_FORBIDDEN, ' ').into_owned())
             .collect::<Vec<_>>()
             .join(", "),
         _ => default.to_string(),
@@ -3967,6 +3976,33 @@ Q
             "MATPOWER write must warn on the dropped emergency band, got {:?}",
             mpc.warnings
         );
+    }
+
+    #[test]
+    fn a_case_name_with_a_terminator_cannot_forge_a_bus_record() {
+        // The case name reaches the header and title lines verbatim. A
+        // terminator inside it used to end the record, so the rest parsed as
+        // bus data and the written file described a network the source never
+        // had.
+        let raw = r"0, 100.00, 33, 0, 0, 60.00 / x
+CASE
+COMMENT
+1,'B1          ', 230.0,3,1,1,1,1.0,0.0,1.1,0.9,1.1,0.9
+0 / END OF BUS DATA, BEGIN LOAD DATA
+0 / END OF LOAD DATA, BEGIN FIXED SHUNT DATA
+0 / END OF FIXED SHUNT DATA, BEGIN GENERATOR DATA
+0 / END OF GENERATOR DATA, BEGIN BRANCH DATA
+0 / END OF BRANCH DATA, BEGIN TRANSFORMER DATA
+0 / END OF TRANSFORMER DATA, BEGIN AREA DATA
+Q
+";
+        let mut net = parse_psse(raw).unwrap();
+        net.name =
+            "A\n42, 'INJECTED   ', 500.0, 2, 9, 9, 1, 1.0, 0.0, 1.1, 0.9, 1.1, 0.9".to_owned();
+        net.source = None; // force a real write, not the byte-exact echo
+        let text = write_psse(&net).text;
+        let back = parse_psse(&text).unwrap();
+        assert_eq!(back.buses.len(), 1, "forged bus record in:\n{text}");
     }
 
     #[test]

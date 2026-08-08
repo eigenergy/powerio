@@ -71,6 +71,11 @@ pub fn build_ybus(case: &IndexedNetwork, opts: &super::BuildOptions) -> Result<Y
 // the standard makeYbus notation and the math reads worse spelled out.
 #[allow(clippy::many_single_char_names)]
 pub(crate) fn build_ybus_with_flags(case: &IndexedNetwork, flags: YbusFlags) -> Result<YbusParts> {
+    // The bus shunt block divides by `per_unit_base()`. A zero or non-finite
+    // base made that `0.0/0.0`, storing NaN on every diagonal — including
+    // shunt-free buses, since `CooBuilder::add` skips only exact zero — and
+    // the matrix shipped with no error.
+    case.network().check_base_mva()?;
     let n = case.n();
     let mut g_coo = CooBuilder::with_capacity(n, 4 * case.branches().len() + n);
     let mut b_coo = CooBuilder::with_capacity(n, 4 * case.branches().len() + n);

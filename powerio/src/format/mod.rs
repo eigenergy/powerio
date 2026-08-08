@@ -1267,21 +1267,21 @@ pub(crate) fn bus_kv(buses: &[Bus], bus_pos: &HashMap<BusId, usize>, bus: BusId)
 /// name both interpolate a `Network` name straight into a quoted field, where an
 /// embedded quote (or, for PSS/E, the `/` inline-comment delimiter) would shift
 /// every later column of the record.
+/// A line terminator is always replaced, whatever `forbidden` holds: no text
+/// record format can carry one inside a field, so an embedded `\n` does not
+/// shift a column, it ends the record and makes everything after it parse as
+/// a new one. A crafted name could otherwise forge whole records in the
+/// written file.
 pub(crate) fn sanitize_quoted<'a>(
     value: &'a str,
     forbidden: &[char],
     replacement: char,
 ) -> std::borrow::Cow<'a, str> {
-    if value.contains(forbidden) {
+    let breaks = |c: char| c == '\n' || c == '\r' || forbidden.contains(&c);
+    if value.contains(breaks) {
         value
             .chars()
-            .map(|c| {
-                if forbidden.contains(&c) {
-                    replacement
-                } else {
-                    c
-                }
-            })
+            .map(|c| if breaks(c) { replacement } else { c })
             .collect::<String>()
             .into()
     } else {
@@ -1379,6 +1379,25 @@ fn collect_null_keys(value: &Value, out: &mut BTreeSet<String>) {
 mod tests {
     use super::*;
     use crate::network::SourceFormat;
+
+    #[test]
+    fn sanitize_quoted_always_replaces_line_terminators() {
+        // A terminator ends the record, so it is replaced whatever the
+        // caller's delimiter set holds: a name carrying one could otherwise
+        // forge whole records in a written .raw/.aux/.epc.
+        for forbidden in [&[][..], &['\''][..], &['"'][..]] {
+            let out = sanitize_quoted("A\n42, 'X'\r\nB", forbidden, ' ');
+            assert!(
+                !out.contains('\n') && !out.contains('\r'),
+                "terminator survived with forbidden={forbidden:?}: {out:?}"
+            );
+        }
+        // A clean value is still borrowed, not copied.
+        assert!(matches!(
+            sanitize_quoted("clean name", &['\''], ' '),
+            std::borrow::Cow::Borrowed(_)
+        ));
+    }
 
     #[test]
     fn dss_extension_error_names_the_distribution_surface() {
