@@ -329,27 +329,30 @@ impl NetworkPackage {
             DS::Warning => DiagnosticSeverity::Warning,
             DS::Error => DiagnosticSeverity::Error,
             DS::Fatal => DiagnosticSeverity::Fatal,
-            // The dist enums are non_exhaustive. Map an unknown severity
-            // to Error: never downgrade a finding this crate cannot name.
-            _ => DiagnosticSeverity::Error,
         };
         let stage = match d.stage {
             DG::Parse => DiagnosticStage::Parse,
-            DG::Read => DiagnosticStage::Read,
             DG::Canonicalize => DiagnosticStage::Canonicalize,
             DG::Validate => DiagnosticStage::Validate,
             DG::Lower => DiagnosticStage::Lower,
             DG::Emit => DiagnosticStage::Emit,
             DG::Bind => DiagnosticStage::Bind,
             DG::Partner => DiagnosticStage::Partner,
-            _ => DiagnosticStage::Read,
+            // The dist stage enum is non_exhaustive; an unknown stage
+            // reads as the read stage.
+            DG::Read | _ => DiagnosticStage::Read,
         };
-        let mut out = StructuredDiagnostic::new(d.code.as_str(), severity, stage, d.message.clone());
-        out.element_path = d.element_path.clone();
-        out.details = d.details.clone();
-        out.suggested_action = d.suggested_action.clone();
-        out.safe_to_ignore = d.safe_to_ignore.clone();
-        out
+        StructuredDiagnostic {
+            code: d.code.as_str().into(),
+            severity,
+            stage,
+            message: d.message.clone(),
+            element_path: d.element_path.clone(),
+            source_ref: None,
+            details: d.details.clone(),
+            suggested_action: d.suggested_action.clone(),
+            safe_to_ignore: d.safe_to_ignore.clone(),
+        }
     }
 
     pub fn from_multiconductor(net: MulticonductorNetwork) -> Self {
