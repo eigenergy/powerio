@@ -21,8 +21,9 @@ use pyo3::types::{PyDict, PyList};
 use sprs::CsMat;
 
 use powerio_matrix::matrix::{
-    BuildOptions, DcConvention, Scheme, build_adjacency, build_bdoubleprime, build_bprime,
-    build_incidence, build_lacpf, build_lodf, build_ptdf, build_weighted_laplacian, build_ybus,
+    BuildOptions, DcConvention, Scheme, SensitivityOptions, SensitivitySolver, build_adjacency,
+    build_bdoubleprime, build_bprime, build_incidence, build_lacpf, build_ptdf_lodf_with_options,
+    build_weighted_laplacian, build_ybus,
 };
 use powerio_matrix::{
     DisplayData, IndexCore, IndexedNetwork, MissingGenCostPolicy, Network, NormalizeOptions,
@@ -128,6 +129,33 @@ fn parse_convention(s: &str) -> PyResult<DcConvention> {
             "unknown convention {other:?}; expected 'paper' or 'matpower'"
         ))),
     }
+}
+
+/// PTDF/LODF options from the Python keywords. The solver defaults to `auto`,
+/// which is dense below the reduced-dimension threshold and the iterative
+/// conjugate gradient path above it — the same policy the CLI `sensitivities`
+/// command applies, so a very large case cannot force the dense n×n
+/// factorization from Python.
+fn sensitivity_options(
+    convention: Option<&str>,
+    solver: Option<&str>,
+) -> PyResult<SensitivityOptions> {
+    let convention = parse_convention(convention.unwrap_or("paper"))?;
+    let solver = match normalize(solver.unwrap_or("auto")).as_str() {
+        "auto" => SensitivitySolver::Auto,
+        "dense" => SensitivitySolver::Dense,
+        "iterative" | "cg" => SensitivitySolver::Iterative,
+        other => {
+            return Err(PyValueError::new_err(format!(
+                "unknown solver {other:?}; expected 'auto', 'dense', or 'iterative'"
+            )));
+        }
+    };
+    Ok(SensitivityOptions {
+        convention,
+        solver,
+        ..SensitivityOptions::default()
+    })
 }
 
 /// Accepts `perunit`/`pu`/`per-unit` and `native`.
@@ -1010,20 +1038,30 @@ impl PyNetwork {
         Ok((g, b).into_pyobject(py)?.into_any())
     }
 
-    #[pyo3(signature = (convention=None))]
-    fn ptdf<'py>(&self, py: Python<'py>, convention: Option<&str>) -> PyResult<Bound<'py, PyAny>> {
-        let conv = parse_convention(convention.unwrap_or("paper"))?;
+    #[pyo3(signature = (convention=None, solver=None))]
+    fn ptdf<'py>(
+        &self,
+        py: Python<'py>,
+        convention: Option<&str>,
+        solver: Option<&str>,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let opts = sensitivity_options(convention, solver)?;
         let view = IndexedNetwork::with_core(&self.inner, &self.core);
-        let m = build_ptdf(&view, conv).map_err(to_pyerr)?;
-        coo_triplets(py, &m)
+        let m = build_ptdf_lodf_with_options(&view, &opts).map_err(to_pyerr)?;
+        coo_triplets(py, &m.ptdf)
     }
 
-    #[pyo3(signature = (convention=None))]
-    fn lodf<'py>(&self, py: Python<'py>, convention: Option<&str>) -> PyResult<Bound<'py, PyAny>> {
-        let conv = parse_convention(convention.unwrap_or("paper"))?;
+    #[pyo3(signature = (convention=None, solver=None))]
+    fn lodf<'py>(
+        &self,
+        py: Python<'py>,
+        convention: Option<&str>,
+        solver: Option<&str>,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let opts = sensitivity_options(convention, solver)?;
         let view = IndexedNetwork::with_core(&self.inner, &self.core);
-        let m = build_lodf(&view, conv).map_err(to_pyerr)?;
-        coo_triplets(py, &m)
+        let m = build_ptdf_lodf_with_options(&view, &opts).map_err(to_pyerr)?;
+        coo_triplets(py, &m.lodf)
     }
 
     /// `(A_coo, b, p_shift, branch_of_col)`: signed incidence as a COO tuple,
