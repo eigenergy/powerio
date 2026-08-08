@@ -841,7 +841,10 @@
         "i_max": {
           "items": {
             "format": "double",
-            "type": "number"
+            "type": [
+              "number",
+              "null"
+            ]
           },
           "type": [
             "array",
@@ -854,7 +857,10 @@
         "p_max": {
           "items": {
             "format": "double",
-            "type": "number"
+            "type": [
+              "number",
+              "null"
+            ]
           },
           "type": [
             "array",
@@ -862,9 +868,13 @@
           ]
         },
         "p_min": {
+          "description": "Bounds per phase. A `null` element reads as -Inf in a lower bound\nand +Inf in an upper bound: the PMD unbounded spelling (#268).",
           "items": {
             "format": "double",
-            "type": "number"
+            "type": [
+              "number",
+              "null"
+            ]
           },
           "type": [
             "array",
@@ -882,7 +892,10 @@
         "q_max": {
           "items": {
             "format": "double",
-            "type": "number"
+            "type": [
+              "number",
+              "null"
+            ]
           },
           "type": [
             "array",
@@ -892,7 +905,10 @@
         "q_min": {
           "items": {
             "format": "double",
-            "type": "number"
+            "type": [
+              "number",
+              "null"
+            ]
           },
           "type": [
             "array",
@@ -910,7 +926,10 @@
           "description": "Per-conductor apparent power and current limits, VA and amps (BMOPF\ngenerator fields, alongside the p/q bounds).",
           "items": {
             "format": "double",
-            "type": "number"
+            "type": [
+              "number",
+              "null"
+            ]
           },
           "type": [
             "array",
@@ -1067,10 +1086,13 @@
           "type": "object"
         },
         "i_max": {
-          "description": "Per-conductor ampacity and apparent power limits, amps and VA\n(BMOPF schema 0.1.0 line fields, alongside the linecode's own).",
+          "description": "Per-conductor ampacity and apparent power limits, amps and VA\n(BMOPF schema 0.1.0 line fields, alongside the linecode's own).\nA `null` element reads as +Inf (#268).",
           "items": {
             "format": "double",
-            "type": "number"
+            "type": [
+              "number",
+              "null"
+            ]
           },
           "type": [
             "array",
@@ -1078,9 +1100,12 @@
           ]
         },
         "length": {
-          "description": "Meters.",
+          "description": "Meters. A `null` reads as NaN: a BMOPF line without a length (#268).",
           "format": "double",
-          "type": "number"
+          "type": [
+            "number",
+            "null"
+          ]
         },
         "linecode": {
           "type": "string"
@@ -1101,7 +1126,10 @@
         "s_max": {
           "items": {
             "format": "double",
-            "type": "number"
+            "type": [
+              "number",
+              "null"
+            ]
           },
           "type": [
             "array",
@@ -1128,7 +1156,6 @@
         "terminal_map_from",
         "terminal_map_to",
         "linecode",
-        "length",
         "extras"
       ],
       "type": "object"
@@ -1181,10 +1208,13 @@
           "type": "array"
         },
         "i_max": {
-          "description": "Ampacity per conductor.",
+          "description": "Ampacity per conductor. A `null` element reads as +Inf (#268).",
           "items": {
             "format": "double",
-            "type": "number"
+            "type": [
+              "number",
+              "null"
+            ]
           },
           "type": [
             "array",
@@ -1213,7 +1243,10 @@
         "s_max": {
           "items": {
             "format": "double",
-            "type": "number"
+            "type": [
+              "number",
+              "null"
+            ]
           },
           "type": [
             "array",
@@ -1725,9 +1758,13 @@
           "type": "object"
         },
         "i_max": {
+          "description": "Ampacity per conductor. A `null` element reads as +Inf (#268).",
           "items": {
             "format": "double",
-            "type": "number"
+            "type": [
+              "number",
+              "null"
+            ]
           },
           "type": [
             "array",

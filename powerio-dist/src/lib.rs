@@ -47,6 +47,7 @@ pub mod error;
 pub mod geo;
 pub mod graph;
 pub mod model;
+pub(crate) mod nonfinite;
 pub mod pmd;
 
 pub use bmopf::{
