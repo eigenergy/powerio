@@ -678,10 +678,12 @@ pub fn write_powerworld(net: &Network) -> Conversion {
         }
     };
     let mut s = String::new();
+    // A `//` comment ends at the line break, so a terminator in the name
+    // would leave the rest of it uncommented as an aux DATA block.
     let _ = writeln!(
         s,
         "// PowerWorld auxiliary file — powerio export: {}",
-        net.name
+        sanitize_quoted(&net.name, NAME_FORBIDDEN, ' ')
     );
     let _ = writeln!(s, "// baseMVA {}", net.base_mva);
     let _ = writeln!(s);

@@ -270,7 +270,14 @@ fn dist_capabilities_json() -> String {
 #[cfg(feature = "dist")]
 #[unsafe(no_mangle)]
 pub extern "C" fn pio_dist_capabilities_json() -> *mut c_char {
-    into_cstring(dist_capabilities_json()).unwrap_or(std::ptr::null_mut())
+    // Guarded like every other allocating entry point: `serde_json::json!`
+    // expands to `to_value(..).unwrap()`, so the panic-free property would
+    // otherwise rest on the current field types alone.
+    unsafe {
+        guard(std::ptr::null_mut(), || {
+            into_cstring(dist_capabilities_json()).unwrap_or(std::ptr::null_mut())
+        })
+    }
 }
 
 /// Report the schema version of each document format in this library, as
@@ -283,6 +290,11 @@ pub extern "C" fn pio_dist_capabilities_json() -> *mut c_char {
 /// this document's own shape.
 #[unsafe(no_mangle)]
 pub extern "C" fn pio_schema_versions_json() -> *mut c_char {
+    unsafe { guard(std::ptr::null_mut(), schema_versions_json_ptr) }
+}
+
+/// The body of [`pio_schema_versions_json`], called inside the panic guard.
+fn schema_versions_json_ptr() -> *mut c_char {
     // `None` serializes to `null`: the build cannot speak that format.
     #[cfg(feature = "pkg")]
     let package = Some(powerio_pkg::PIO_PACKAGE_SCHEMA_VERSION);
@@ -1719,8 +1731,8 @@ pub unsafe extern "C" fn pio_package_to_multiconductor_network(
 /// Unlike the read-only accessors, this rewrites the handle's `diagnostics` and
 /// `validation` (the payload is untouched), so it takes the handle non-`const`
 /// and needs exclusive access: no other call may touch the same handle
-/// concurrently. This is the one exception to the header's blanket
-/// concurrent-read guarantee.
+/// concurrently. [`pio_package_set_operating_points`] is the other such
+/// entry point; every other call takes the handle `const` and shares it.
 #[cfg(feature = "pkg")]
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_package_validate(
@@ -1814,6 +1826,10 @@ pub unsafe extern "C" fn pio_package_operating_points_json(
 /// Replace the package's operating point series from `json`. `null` or an
 /// empty series clears it. Validation is recomputed before this function
 /// returns. Returns `0` on success and `-1` on error.
+///
+/// This rewrites the handle, so it takes it non-`const` and needs exclusive
+/// access: no other call may touch the same handle concurrently. See
+/// [`pio_package_validate`], the other such entry point.
 #[cfg(feature = "pkg")]
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pio_package_set_operating_points(

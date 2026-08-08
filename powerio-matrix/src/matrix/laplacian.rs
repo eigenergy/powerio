@@ -77,11 +77,22 @@ impl Grounding {
     /// Full index → reduced index, or `None` for a grounded index. The shift is
     /// `i − (number of grounds strictly below i)`.
     pub(crate) fn reduced(&self, i: usize) -> Option<usize> {
-        if self.grounds.binary_search(&i).is_ok() {
+        // One search, not two: `below` is the count of grounds under `i`, and
+        // the entry at that position is `i` itself exactly when `i` is
+        // grounded.
+        let below = self.grounds.partition_point(|&g| g < i);
+        if self.grounds.get(below) == Some(&i) {
             None
         } else {
-            Some(i - self.grounds.partition_point(|&g| g < i))
+            Some(i - below)
         }
+    }
+
+    /// Full indices of the surviving rows, reduced index order. Hoists
+    /// [`Self::reduced`] out of a loop that would otherwise call it per
+    /// column.
+    pub(crate) fn full_of_reduced(&self, n: usize) -> Vec<usize> {
+        (0..n).filter(|&i| self.reduced(i).is_some()).collect()
     }
 }
 

@@ -508,7 +508,11 @@ fn split_values_into(line: &str, csv: bool, out: &mut Vec<String>) {
         }
         return;
     }
-    let mut cur = String::new();
+    // Keep `cur`'s capacity across tokens. Taking the buffer handed it away,
+    // so every token regrew from empty through the 8/16/32 realloc chain;
+    // cloning costs one exact-size allocation and leaves the scratch buffer
+    // sized for the next token.
+    let mut cur = String::with_capacity(32);
     let mut in_quote = false;
     let mut started = false; // a token has begun, including an empty quoted one
     for c in line.chars() {
@@ -519,7 +523,8 @@ fn split_values_into(line: &str, csv: bool, out: &mut Vec<String>) {
             }
             c if c.is_whitespace() && !in_quote => {
                 if started {
-                    out.push(std::mem::take(&mut cur));
+                    out.push(cur.clone());
+                    cur.clear();
                     started = false;
                 }
             }

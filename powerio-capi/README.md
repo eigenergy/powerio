@@ -217,8 +217,10 @@ Every entry point is hardened at the boundary:
   elements into each non-NULL buffer and return the total available, so a
   miscounted buffer reads short instead of overflowing, and `(NULL, 0)` sizes
   it. `pio_warnings` returns the byte length needed the same way.
-- A handle is immutable after construction: concurrent reads from any number
-  of threads are safe. `pio_network_free` is not; free exactly once.
+- A handle is immutable after construction unless a function takes it
+  non-`const` (`pio_package_validate`, `pio_package_set_operating_points`):
+  concurrent reads from any number of threads are safe, while those two and
+  `pio_*_free` need exclusive access. Free exactly once.
 
 Input size is not capped. Callers that accept untrusted input must impose their
 own byte and resource limits. The panic guards require the default

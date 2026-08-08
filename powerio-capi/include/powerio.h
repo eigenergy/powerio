@@ -29,6 +29,13 @@
  * - Array extractors write up to `cap` values per output array and return the
  *   total available. NULL out or cap 0 is a count query. No extractor writes
  *   more than cap entries to an output array.
+ * - Size a per-bus buffer from the extractor's own count query, not from
+ *   pio_n_buses. A case with an in-service 3-winding transformer star-lowers
+ *   before the dense extractors run, so pio_bus_demand / pio_bus_shunt and
+ *   pio_n_islands see one added star bus per such transformer, while
+ *   pio_n_buses and pio_bus_ids report the unexpanded table. Sizing off
+ *   pio_n_buses reads short (never past cap); the trailing entries have no
+ *   pio_bus_ids id. Aligning the two is a v5 change.
  * - Bus ids are int64 in the range 1..2^63-1 (a v4 invariant). pio_bus_ids and
  *   every per-bus column keyed to its ordering are int64; a source whose ids are
  *   strings or exceed 2^63-1 has no representation in this API and is mapped
@@ -840,8 +847,8 @@ PioDistNetwork *pio_package_to_multiconductor_network(const PioPackage *pkg,
  * Unlike the read-only accessors, this rewrites the handle's `diagnostics` and
  * `validation` (the payload is untouched), so it takes the handle non-`const`
  * and needs exclusive access: no other call may touch the same handle
- * concurrently. This is the one exception to the header's blanket
- * concurrent-read guarantee.
+ * concurrently. [`pio_package_set_operating_points`] is the other such
+ * entry point; every other call takes the handle `const` and shares it.
  */
 int32_t pio_package_validate(PioPackage *pkg, char *errbuf, size_t errlen);
 #endif
@@ -876,6 +883,10 @@ char *pio_package_operating_points_json(const PioPackage *pkg, char *errbuf, siz
  * Replace the package's operating point series from `json`. `null` or an
  * empty series clears it. Validation is recomputed before this function
  * returns. Returns `0` on success and `-1` on error.
+ *
+ * This rewrites the handle, so it takes it non-`const` and needs exclusive
+ * access: no other call may touch the same handle concurrently. See
+ * [`pio_package_validate`], the other such entry point.
  */
 int32_t pio_package_set_operating_points(PioPackage *pkg,
                                          const char *json,

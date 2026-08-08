@@ -1143,7 +1143,9 @@ pub fn write_pslf(net: &Network) -> Conversion {
 
     // ---- header blocks ----
     let _ = writeln!(s, "title");
-    let _ = writeln!(s, "{}", net.name);
+    // The title is one record; a terminator would end it and put the rest of
+    // the name where the parser expects the next block.
+    let _ = writeln!(s, "{}", sanitize_quoted(&net.name, NAME_FORBIDDEN, ' '));
     let _ = writeln!(s, "!");
     let _ = writeln!(s, "comments");
     let _ = writeln!(s, "powerio export");
@@ -1630,7 +1632,11 @@ fn circuit_tok(extras: &Extras) -> String {
         .get("pslf_circuit")
         .and_then(Value::as_str)
         .unwrap_or("1");
-    format!("\"{ck}\"")
+    // Sanitized like `device_id` and `name_tok`: an unfiltered quote or
+    // separator here shifts every later column of the branch record. `:`
+    // splits the EPC lhs/rhs, so it breaks the record too.
+    let clean = sanitize_quoted(ck, &['"', ':', ' ', '\t', '/'], '_');
+    format!("\"{clean}\"")
 }
 
 /// A numeric `pslf_*` extra, if present and finite. A non-finite value yields

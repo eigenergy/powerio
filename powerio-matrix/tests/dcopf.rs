@@ -448,7 +448,7 @@ fn auto_sensitivity_solver_switches_to_iterative_above_threshold() {
 }
 
 #[test]
-fn default_auto_writes_iterative_outputs_above_dense_threshold() {
+fn auto_writes_iterative_outputs_above_the_dense_threshold() {
     let n = 600;
     let mut buses = Vec::with_capacity(n);
     buses.push(bus(1, BusType::Ref));
@@ -462,16 +462,17 @@ fn default_auto_writes_iterative_outputs_above_dense_threshold() {
     let reduced_dimension = view.n() - view.reference_bus_indices().len();
     assert!(reduced_dimension > 512);
 
+    // Drive the routing through the knob rather than the default ceiling:
+    // 599 unknowns is far below the real dense/iterative crossover, so the
+    // default now (correctly) takes the dense path here.
+    let options = SensitivityOptions {
+        auto_dense_threshold: 512,
+        ..SensitivityOptions::default()
+    };
     let temp = tempfile::tempdir().unwrap();
     let ptdf_path = temp.path().join("ptdf.mtx");
     let lodf_path = temp.path().join("lodf.mtx");
-    let meta = write_sensitivity_mtx_with_options(
-        &view,
-        &SensitivityOptions::default(),
-        &ptdf_path,
-        &lodf_path,
-    )
-    .unwrap();
+    let meta = write_sensitivity_mtx_with_options(&view, &options, &ptdf_path, &lodf_path).unwrap();
     let ptdf = read_mtx(&ptdf_path).unwrap();
     let lodf = read_mtx(&lodf_path).unwrap();
 

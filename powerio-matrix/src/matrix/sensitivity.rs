@@ -29,7 +29,31 @@ use crate::{Error, Result};
 const PRUNE: f64 = 1e-12;
 const DEFAULT_CG_TOLERANCE: f64 = 1e-10;
 const DEFAULT_CG_MAX_ITERATIONS: usize = 20_000;
-const DEFAULT_AUTO_DENSE_THRESHOLD: usize = 512;
+/// Reduced-dimension ceiling for the `Auto` dense path. The old value of 512
+/// was far below the real crossover: at nr = 600 the dense path is a ~7e7
+/// flop factorization while the iterative path runs ~1200 conjugate-gradient
+/// solves, so `Auto` picked the slower solver by one to three orders of
+/// magnitude across the whole range that holds the common published cases
+/// (1354, 2869, 3120, 6470 buses).
+const DEFAULT_AUTO_DENSE_THRESHOLD: usize = 8192;
+
+/// Memory ceiling for the `Auto` dense path. The dimension alone does not
+/// bound the cost: the dense path also materializes an m x n PTDF and an
+/// m x m LODF, so a case with few buses and many parallel branches could ask
+/// for tens of GB while passing any nr test.
+const AUTO_DENSE_MEMORY_BUDGET: usize = 2 << 30;
+
+/// Peak bytes the dense path holds: the reduced Laplacian and its
+/// factorization and inverse (three nr x nr buffers alive together), plus the
+/// dense PTDF and the LODF built from it.
+fn dense_footprint_bytes(reduced_dimension: usize, branches: usize, buses: usize) -> usize {
+    let f = size_of::<f64>();
+    let sq = |a: usize, b: usize| a.saturating_mul(b).saturating_mul(f);
+    sq(reduced_dimension, reduced_dimension)
+        .saturating_mul(3)
+        .saturating_add(sq(branches, buses))
+        .saturating_add(sq(branches, branches))
+}
 const LODF_ISLAND_TOLERANCE: f64 = 1e-9;
 
 /// Solver selection for option based DC sensitivity builds.
@@ -125,16 +149,38 @@ impl SensitivityOptions {
         Ok(())
     }
 
-    /// Return the concrete solver selected for a reduced grounded dimension.
+    /// Return the concrete solver selected for a reduced grounded dimension,
+    /// assuming a square problem. Prefer
+    /// [`Self::selected_solver_for_shape`], which also sees the branch count
+    /// the dense PTDF and LODF are sized by.
     pub fn selected_solver_for_reduced_dimension(
         &self,
         reduced_dimension: usize,
     ) -> SensitivitySolver {
+        self.selected_solver_for_shape(reduced_dimension, reduced_dimension, reduced_dimension)
+    }
+
+    /// Return the concrete solver selected for a problem shape. `Auto` takes
+    /// the dense path while both the reduced dimension and the predicted
+    /// dense footprint stay within their ceilings, so a wide case (few buses,
+    /// many branches) no longer picks a path that would ask for tens of GB.
+    pub fn selected_solver_for_shape(
+        &self,
+        reduced_dimension: usize,
+        branches: usize,
+        buses: usize,
+    ) -> SensitivitySolver {
         match self.solver {
-            SensitivitySolver::Auto if reduced_dimension > self.auto_dense_threshold => {
-                SensitivitySolver::Iterative
+            SensitivitySolver::Auto => {
+                let fits = reduced_dimension <= self.auto_dense_threshold
+                    && dense_footprint_bytes(reduced_dimension, branches, buses)
+                        <= AUTO_DENSE_MEMORY_BUDGET;
+                if fits {
+                    SensitivitySolver::Dense
+                } else {
+                    SensitivitySolver::Iterative
+                }
             }
-            SensitivitySolver::Auto => SensitivitySolver::Dense,
             other => other,
         }
     }
@@ -225,7 +271,7 @@ pub fn build_ptdf_lodf_with_options(
     let reduced_dimension = inc.n().saturating_sub(Grounding::new(&refs).len());
 
     let (ptdf, lodf, solver_path, ptdf_dropped, lodf_dropped) = match options
-        .selected_solver_for_reduced_dimension(reduced_dimension)
+        .selected_solver_for_shape(reduced_dimension, inc.m(), inc.n())
     {
         SensitivitySolver::Dense => {
             let (dense, m, n, solver_path) = ptdf_dense_with_path(&inc, &refs)?;
@@ -276,34 +322,34 @@ pub(crate) fn for_each_ptdf_lodf_entry(
     let inc = build_incidence(case, options.convention, &BuildOptions::default())?;
     let reduced_dimension = inc.n().saturating_sub(Grounding::new(&refs).len());
 
-    let (solver_path, ptdf, lodf) = match options
-        .selected_solver_for_reduced_dimension(reduced_dimension)
-    {
-        SensitivitySolver::Dense => {
-            let (dense, m, n, solver_path) = ptdf_dense_with_path(&inc, &refs)?;
-            let (ptdf, ptdf_dropped) = dense_to_csr_with_drop(&dense, m, n, options.drop_tolerance);
-            let (lodf, lodf_dropped) =
-                lodf_from_dense_with_drop(&dense, &inc.a, m, n, options.drop_tolerance);
-            let ptdf_meta = matrix_metadata(&ptdf, ptdf_dropped);
-            let lodf_meta = matrix_metadata(&lodf, lodf_dropped);
-            for (&v, (row, col)) in &ptdf {
-                ptdf_entry(row, col, v)?;
+    let (solver_path, ptdf, lodf) =
+        match options.selected_solver_for_shape(reduced_dimension, inc.m(), inc.n()) {
+            SensitivitySolver::Dense => {
+                let (dense, m, n, solver_path) = ptdf_dense_with_path(&inc, &refs)?;
+                let (ptdf, ptdf_dropped) =
+                    dense_to_csr_with_drop(&dense, m, n, options.drop_tolerance);
+                let (lodf, lodf_dropped) =
+                    lodf_from_dense_with_drop(&dense, &inc.a, m, n, options.drop_tolerance);
+                let ptdf_meta = matrix_metadata(&ptdf, ptdf_dropped);
+                let lodf_meta = matrix_metadata(&lodf, lodf_dropped);
+                for (&v, (row, col)) in &ptdf {
+                    ptdf_entry(row, col, v)?;
+                }
+                for (&v, (row, col)) in &lodf {
+                    lodf_entry(row, col, v)?;
+                }
+                (solver_path, ptdf_meta, lodf_meta)
             }
-            for (&v, (row, col)) in &lodf {
-                lodf_entry(row, col, v)?;
+            SensitivitySolver::Iterative => {
+                ensure_iterative_solver_eligible(&inc)?;
+                let (ptdf, lodf) =
+                    iterative_ptdf_lodf_entries(&inc, &refs, options, ptdf_entry, lodf_entry)?;
+                (SensitivitySolverPath::IterativeCg, ptdf, lodf)
             }
-            (solver_path, ptdf_meta, lodf_meta)
-        }
-        SensitivitySolver::Iterative => {
-            ensure_iterative_solver_eligible(&inc)?;
-            let (ptdf, lodf) =
-                iterative_ptdf_lodf_entries(&inc, &refs, options, ptdf_entry, lodf_entry)?;
-            (SensitivitySolverPath::IterativeCg, ptdf, lodf)
-        }
-        SensitivitySolver::Auto => {
-            unreachable!("selected_solver_for_reduced_dimension resolves Auto")
-        }
-    };
+            SensitivitySolver::Auto => {
+                unreachable!("selected_solver_for_reduced_dimension resolves Auto")
+            }
+        };
 
     Ok(sensitivity_metadata(
         options,
@@ -422,12 +468,17 @@ fn ptdf_dense_with_path(
     // into a PTDF row.
     let flow = build_flow_map(&inc.a, &inc.b); // m × n
     let mut ptdf = vec![0.0; m * n];
+    // Reduced → full column map, built once. The inner loop then walks the
+    // Rinv row contiguously and skips grounded columns instead of testing
+    // every one of them; reduced order is ascending full order, so the
+    // accumulation order is unchanged.
+    let full_of = g.full_of_reduced(n);
     for (&w, (l, c)) in flow.iter() {
         let Some(rc) = g.reduced(c) else { continue }; // Minv row at a slack is 0
-        for k in 0..n {
-            if let Some(rk) = g.reduced(k) {
-                ptdf[l * n + k] += w * rinv[rc * nr + rk];
-            }
+        let row = &rinv[rc * nr..rc * nr + nr];
+        let out = &mut ptdf[l * n..l * n + n];
+        for (rk, &k) in full_of.iter().enumerate() {
+            out[k] += w * row[rk];
         }
     }
     Ok((ptdf, m, n, solver_path))
@@ -604,19 +655,36 @@ fn dense_to_csr_with_drop(
     cols: usize,
     drop_tolerance: f64,
 ) -> (CsMat<f64>, usize) {
-    let mut coo = CooBuilder::with_capacity_rect(rows, cols, dense.len() / 2);
+    // The scan is row major and every coordinate is unique, so the CSR
+    // arrays fill directly. Routing it through a hash map bought a dedup
+    // that cannot fire, then copied the entries into a triplet matrix and
+    // sorted them: on a 10k-bus PTDF that was several GB of intermediates
+    // and an O(nnz log nnz) sort to emit an already-ordered matrix. One
+    // counting pass sizes the buffers exactly instead.
     let mut dropped = 0usize;
+    let mut nnz = 0usize;
+    for &v in dense {
+        if v.abs() > drop_tolerance {
+            nnz += 1;
+        } else if v != 0.0 {
+            dropped += 1;
+        }
+    }
+    let mut indptr = Vec::with_capacity(rows + 1);
+    let mut indices = Vec::with_capacity(nnz);
+    let mut data = Vec::with_capacity(nnz);
+    indptr.push(0usize);
     for i in 0..rows {
         for j in 0..cols {
             let v = dense[i * cols + j];
             if v.abs() > drop_tolerance {
-                coo.add(i, j, v);
-            } else if v != 0.0 {
-                dropped += 1;
+                indices.push(j);
+                data.push(v);
             }
         }
+        indptr.push(data.len());
     }
-    (coo.finish_csr(), dropped)
+    (CsMat::new((rows, cols), indptr, indices, data), dropped)
 }
 
 fn dense_inverse(a: &[f64], n: usize) -> Option<Vec<f64>> {
@@ -858,5 +926,63 @@ impl DenseCholesky {
             }
         }
         inv
+    }
+}
+
+#[cfg(test)]
+mod auto_policy_tests {
+    use super::{
+        AUTO_DENSE_MEMORY_BUDGET, SensitivityOptions, SensitivitySolver, dense_footprint_bytes,
+    };
+
+    #[test]
+    fn auto_takes_the_dense_path_for_a_mid_size_case() {
+        // 2869 buses is a common published case, far inside the dense path's
+        // real crossover; the old 512 ceiling sent it to the iterative
+        // solver, one to three orders of magnitude slower in this range.
+        let o = SensitivityOptions::default();
+        assert_eq!(
+            o.selected_solver_for_shape(2868, 4582, 2869),
+            SensitivitySolver::Dense
+        );
+    }
+
+    #[test]
+    fn auto_refuses_the_dense_path_for_a_wide_case() {
+        // Few buses, very many parallel branches: the reduced dimension is
+        // small but the dense LODF alone is m x m, so the footprint veto has
+        // to fire even though the dimension test passes.
+        let o = SensitivityOptions::default();
+        let (nr, m, n) = (400usize, 40_000usize, 401usize);
+        assert!(nr <= o.auto_dense_threshold);
+        assert!(dense_footprint_bytes(nr, m, n) > AUTO_DENSE_MEMORY_BUDGET);
+        assert_eq!(
+            o.selected_solver_for_shape(nr, m, n),
+            SensitivitySolver::Iterative
+        );
+    }
+
+    #[test]
+    fn an_explicit_solver_choice_ignores_both_ceilings() {
+        for solver in [SensitivitySolver::Dense, SensitivitySolver::Iterative] {
+            let o = SensitivityOptions {
+                solver,
+                ..SensitivityOptions::default()
+            };
+            assert_eq!(o.selected_solver_for_shape(1, 1, 1), solver);
+            assert_eq!(o.selected_solver_for_shape(99_999, 99_999, 99_999), solver);
+        }
+    }
+
+    #[test]
+    fn the_footprint_saturates_instead_of_overflowing() {
+        assert_eq!(
+            SensitivityOptions::default().selected_solver_for_shape(
+                usize::MAX,
+                usize::MAX,
+                usize::MAX
+            ),
+            SensitivitySolver::Iterative
+        );
     }
 }
