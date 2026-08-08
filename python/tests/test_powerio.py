@@ -774,6 +774,46 @@ def test_matrix_methods_match_rust_arrow_golden(name):
 # --- string-kwarg parsing (aliases + errors) ---------------------------
 
 
+def test_ppc_round_trip(case9):
+    ppc = case9.to_ppc()
+    assert ppc["version"] == "2"
+    assert ppc["baseMVA"] == 100.0
+    assert ppc["bus"].shape == (9, 13)
+    assert ppc["gen"].shape == (3, 21)
+    assert ppc["branch"].shape == (9, 13)
+    assert ppc["gencost"].shape == (3, 7)
+    # case9 loads: 90 MW at bus 5, 100 at 7, 125 at 9, summed into PD.
+    pd_by_bus = {int(row[0]): row[2] for row in ppc["bus"]}
+    assert pd_by_bus[5] == 90.0 and pd_by_bus[7] == 100.0 and pd_by_bus[9] == 125.0
+
+    back = powerio.from_ppc(ppc)
+    assert back.n_buses == case9.n_buses
+    assert back.n_branches == case9.n_branches
+    assert back.n_gens == case9.n_gens
+    # The ppc projection is a fixed point: to_ppc(from_ppc(ppc)) == ppc.
+    again = back.to_ppc()
+    for key in ("bus", "gen", "branch", "gencost"):
+        np.testing.assert_allclose(again[key], ppc[key], atol=0.0)
+    assert again["baseMVA"] == ppc["baseMVA"]
+
+
+def test_from_ppc_rejects_missing_tables(case9):
+    ppc = case9.to_ppc()
+    del ppc["branch"]
+    with pytest.raises(ValueError):
+        powerio.from_ppc(ppc)
+
+
+def test_from_ppc_drops_result_columns(case9):
+    # PYPOWER's runpf appends result columns (LAM_P, MU_*); from_ppc reads
+    # the case back as inputs, so the extra columns must not break parsing.
+    ppc = case9.to_ppc()
+    ppc["bus"] = np.hstack([ppc["bus"], np.ones((9, 4))])
+    ppc["branch"] = np.hstack([ppc["branch"], np.ones((9, 5))])
+    back = powerio.from_ppc(ppc)
+    assert back.n_buses == 9 and back.n_branches == 9
+
+
 def test_convention_aliases(case9):
     # Documented aliases all parse; separator/case-insensitive.
     for conv in ["paper", "paper-pure", "PURE", "matpower", "mp"]:
