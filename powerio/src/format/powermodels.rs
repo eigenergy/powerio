@@ -498,10 +498,7 @@ pub(crate) fn parse_powermodels_json_source(
             .iter()
             .map(|v| read_shunt(v, pscale))
             .collect(),
-        branches: sorted(root, "branch", "index")
-            .iter()
-            .map(|v| read_branch(v, pscale, ascale, warnings))
-            .collect(),
+        branches: read_branches(root, pscale, ascale, warnings),
         switches: sorted(root, "switch", "index")
             .iter()
             .map(|v| read_switch(v, pscale))
@@ -531,11 +528,25 @@ pub(crate) fn parse_powermodels_json_source(
 /// Elements of a top-level section, ordered by their integer `idx_key` so a
 /// re-emitted file assigns the same running keys.
 fn sorted<'a>(root: &'a Map<String, Value>, section: &str, idx_key: &str) -> Vec<&'a Value> {
+    sorted_keyed(root, section, idx_key)
+        .into_iter()
+        .map(|(_, v)| v)
+        .collect()
+}
+
+/// [`sorted`] keeping each entry's map key. Only PowerModels.jl written files
+/// repeat the key in an inner `index`, so the key is the identity a
+/// diagnostic can always name.
+fn sorted_keyed<'a>(
+    root: &'a Map<String, Value>,
+    section: &str,
+    idx_key: &str,
+) -> Vec<(&'a str, &'a Value)> {
     let Some(obj) = root.get(section).and_then(Value::as_object) else {
         return Vec::new();
     };
-    let mut items: Vec<&Value> = obj.values().collect();
-    items.sort_by_key(|v| v.get(idx_key).and_then(Value::as_i64).unwrap_or(0));
+    let mut items: Vec<(&str, &Value)> = obj.iter().map(|(k, v)| (k.as_str(), v)).collect();
+    items.sort_by_key(|(_, v)| v.get(idx_key).and_then(Value::as_i64).unwrap_or(0));
     items
 }
 
@@ -651,10 +662,54 @@ fn read_shunt(v: &Value, pscale: f64) -> Shunt {
     }
 }
 
+/// Read the branch table, reporting the taps the `transformer` flag makes
+/// this reader discard. One aggregated warning names the first few branches
+/// and the total: a producer that never sets the flag would otherwise emit
+/// one line per transformer.
+fn read_branches(
+    root: &Map<String, Value>,
+    pscale: f64,
+    ascale: f64,
+    warnings: &mut Vec<String>,
+) -> Vec<Branch> {
+    const NAMED: usize = 3;
+    let mut discarded: Vec<String> = Vec::new();
+    let branches = sorted_keyed(root, "branch", "index")
+        .iter()
+        .map(|(key, v)| read_branch(v, pscale, ascale, key, &mut discarded))
+        .collect();
+    if !discarded.is_empty() {
+        let head = discarded
+            .iter()
+            .take(NAMED)
+            .cloned()
+            .collect::<Vec<_>>()
+            .join(", ");
+        let rest = discarded.len().saturating_sub(NAMED);
+        let tail = if rest > 0 {
+            format!(" and {rest} more")
+        } else {
+            String::new()
+        };
+        warnings.push(format!(
+            "{} branch(es) carry an off-nominal `tap` without `transformer: true`, \
+             so the tap is discarded and the branch reads as a line: {head}{tail}",
+            discarded.len()
+        ));
+    }
+    branches
+}
+
 // Exact compare on purpose: only the literal 1.0 carries no information.
 // An epsilon compare would silence the warning for real near-unit taps.
 #[allow(clippy::float_cmp)]
-fn read_branch(v: &Value, pscale: f64, ascale: f64, warnings: &mut Vec<String>) -> Branch {
+fn read_branch(
+    v: &Value,
+    pscale: f64,
+    ascale: f64,
+    key: &str,
+    discarded: &mut Vec<String>,
+) -> Branch {
     // PowerModels stores the effective tap (1.0 for a line); the `transformer`
     // flag disambiguates an explicit-tap transformer from a line, which is what
     // the neutral raw-tap convention (0 = line) needs.
@@ -670,10 +725,8 @@ fn read_branch(v: &Value, pscale: f64, ascale: f64, warnings: &mut Vec<String>) 
         // 1 and 0 both mean no off-nominal ratio and stay quiet.
         if let Some(raw) = v.get("tap").and_then(Value::as_f64) {
             if raw != 0.0 && raw != 1.0 {
-                warnings.push(format!(
-                    "branch {} ({} -> {}): tap {raw} discarded: no `transformer: true` flag, \
-                     so the branch reads as a line",
-                    uid(v, "index"),
+                discarded.push(format!(
+                    "`{key}` ({} -> {}) tap {raw}",
                     uid(v, "f_bus"),
                     uid(v, "t_bus"),
                 ));
@@ -1049,9 +1102,11 @@ mod tests {
         assert_eq!(net.branches[0].tap, 0.0);
         assert_eq!(net.branches[1].tap, 0.0);
         assert_eq!(net.branches[2].tap, 1.05);
+        // One aggregated warning naming the offending branch by its map key,
+        // which is the identity a file without an inner `index` still has.
         assert_eq!(warnings.len(), 1, "{warnings:?}");
         assert!(
-            warnings[0].contains("branch 1 (1 -> 2)") && warnings[0].contains("tap 1.05"),
+            warnings[0].contains("1 branch(es)") && warnings[0].contains("`1` (1 -> 2) tap 1.05"),
             "{warnings:?}"
         );
     }

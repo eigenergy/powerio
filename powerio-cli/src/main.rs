@@ -1766,7 +1766,13 @@ fn parse_family_case(input: &Path, from: Option<FormatArg>) -> anyhow::Result<Fa
 /// keeping the file stem as the name hint the path-based parsers would use.
 fn parse_classified_case(case: &cases::ClassifiedCase, input: &Path) -> anyhow::Result<FamilyCase> {
     match case.format {
-        DetectedFormat::Distribution(format) => {
+        DetectedFormat::Distribution(_) => {
+            // The shared classifier routes the family; the dist crate owns
+            // which documents are cases at all, and its rule is stricter
+            // (a BMOPF document needs a `bus` table). Apply it to the text
+            // already read, as `powerio_dist::parse_file` does.
+            let format = powerio_dist::classify_distribution_json(&case.text)
+                .with_context(|| format!("reading {}", input.display()))?;
             let net = powerio_dist::parse_str(&case.text, format.name())
                 .with_context(|| format!("reading {}", input.display()))?;
             Ok(FamilyCase::Distribution(net))
@@ -1916,14 +1922,8 @@ mod tests {
     fn family_case_routes_json_by_classifier_without_from() {
         // The classifier's verdict picks the family and format from one
         // read. The stem still names a nameless transmission case.
-        let dir = std::env::temp_dir().join(format!(
-            "powerio-family-case-{}",
-            SystemTime::now()
-                .duration_since(UNIX_EPOCH)
-                .unwrap()
-                .as_nanos()
-        ));
-        std::fs::create_dir_all(&dir).unwrap();
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path();
         let egret = dir.join("myegret.json");
         std::fs::write(
             &egret,
@@ -1939,13 +1939,34 @@ mod tests {
         }
 
         let dist = dir.join("feeder.json");
-        std::fs::write(&dist, r#"{"bus":{"a":{"terminal_names":["1"]}}}"#).unwrap();
+        std::fs::write(
+            &dist,
+            r#"{"bus":{"a":{"terminal_names":["1"]}},"meta":{"version":"0.1.0"}}"#,
+        )
+        .unwrap();
         match parse_family_case(&dist, None).unwrap() {
             FamilyCase::Distribution(net) => assert_eq!(net.buses.len(), 1),
             FamilyCase::Transmission(_) => panic!("BMOPF JSON classified as transmission"),
         }
+    }
 
-        let _ = std::fs::remove_dir_all(dir);
+    #[test]
+    fn family_case_applies_the_distribution_readers_own_refusal() {
+        // The shared classifier calls any document with a `linecode` table
+        // distribution, but a BMOPF case needs a `bus` table too. The read
+        // once path must apply that rule, not parse a bogus empty network.
+        let tmp = tempfile::tempdir().unwrap();
+        let orphan = tmp.path().join("orphan.json");
+        std::fs::write(&orphan, r#"{"linecode":{"lc1":{"nphases":1}}}"#).unwrap();
+
+        let text = match parse_family_case(&orphan, None) {
+            Err(err) => format!("{err:#}"),
+            Ok(_) => panic!("a linecode-only document parsed as a distribution case"),
+        };
+        assert!(
+            text.contains("not a recognized distribution document"),
+            "{text}"
+        );
     }
 
     #[test]
