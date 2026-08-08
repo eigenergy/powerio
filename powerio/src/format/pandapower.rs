@@ -1783,10 +1783,10 @@ fn read_frame(root: &Map<String, Value>, name: &str) -> Result<Option<DataFrame>
         .get("_object")
         .and_then(Value::as_str)
         .ok_or_else(|| bad(format!("`{name}` table missing string `_object`")))?;
-    let inner: Value =
+    let mut inner: Value =
         serde_json::from_str(raw).map_err(|e| bad(format!("`{name}` table: {e}")))?;
     let inner = inner
-        .as_object()
+        .as_object_mut()
         .ok_or_else(|| bad(format!("`{name}` split payload is not an object")))?;
     let columns = inner
         .get("columns")
@@ -1804,17 +1804,19 @@ fn read_frame(root: &Map<String, Value>, name: &str) -> Result<Option<DataFrame>
         .and_then(Value::as_array)
         .cloned()
         .unwrap_or_default();
-    let raw_data = inner
-        .get("data")
-        .and_then(Value::as_array)
-        .ok_or_else(|| bad(format!("`{name}` split payload missing data")))?;
+    // Move the rows out of the inner document instead of cloning each one.
+    // The inner DOM is a local parsed from the table's escaped JSON string,
+    // so the clone made a third full copy of the largest table (outer DOM
+    // text, inner DOM, rows) live at once.
+    let Some(Value::Array(raw_data)) = inner.remove("data") else {
+        return Err(bad(format!("`{name}` split payload missing data")));
+    };
     let mut data = Vec::with_capacity(raw_data.len());
-    for (i, row) in raw_data.iter().enumerate() {
-        data.push(
-            row.as_array()
-                .cloned()
-                .ok_or_else(|| bad(format!("`{name}` table: row {i} is not an array")))?,
-        );
+    for (i, row) in raw_data.into_iter().enumerate() {
+        match row {
+            Value::Array(cells) => data.push(cells),
+            _ => return Err(bad(format!("`{name}` table: row {i} is not an array"))),
+        }
     }
     if index.len() != data.len() {
         return Err(bad(format!(
