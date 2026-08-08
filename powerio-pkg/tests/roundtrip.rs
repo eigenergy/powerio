@@ -2439,3 +2439,45 @@ fn a_dropped_capacitor_bank_is_recorded_and_counted() {
         lowering.record.dropped_fields
     );
 }
+
+#[test]
+fn multiconductor_nonfinite_floats_roundtrip() {
+    // #268: serde_json writes a nonfinite f64 as `null`. The payload reader
+    // restores the bound's infinity and a length NaN, so a package the
+    // library wrote always reads back.
+    use powerio_dist::{Configuration, DistGenerator, DistSwitch};
+
+    let mut net = powerio_dist::parse_str("New Circuit.c1", "dss").expect("parse dss");
+    let mut generator = DistGenerator::new(
+        "g1",
+        "sourcebus",
+        vec!["1".into(), "2".into()],
+        Configuration::Wye,
+        vec![100e3, 100e3],
+        vec![0.0, 0.0],
+    );
+    generator.p_max = Some(vec![500e3, f64::INFINITY]);
+    generator.p_min = Some(vec![f64::NEG_INFINITY, 0.0]);
+    net.generators.push(generator);
+    let mut switch = DistSwitch::new(
+        "s1",
+        "sourcebus",
+        "sourcebus",
+        vec!["1".into()],
+        vec!["1".into()],
+        false,
+    );
+    switch.i_max = Some(vec![f64::INFINITY]);
+    net.switches.push(switch);
+
+    let pkg = NetworkPackage::from_multiconductor(net);
+    let text = pkg.to_json().expect("serialize");
+    let back = NetworkPackage::from_json(&text).expect("read back the package this wrote");
+
+    let payload = back.as_multiconductor().expect("multiconductor payload");
+    let generator = &payload.generators[payload.generators.len() - 1];
+    assert_eq!(generator.p_max, Some(vec![500e3, f64::INFINITY]));
+    assert_eq!(generator.p_min, Some(vec![f64::NEG_INFINITY, 0.0]));
+    let switch = &payload.switches[payload.switches.len() - 1];
+    assert_eq!(switch.i_max, Some(vec![f64::INFINITY]));
+}
