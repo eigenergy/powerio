@@ -194,7 +194,8 @@ def test_package_declares_schema_version_and_row_identity():
 
     pkg = pio.Package.from_file(DATA / "case9.m")
     doc = json.loads(pkg.to_json())
-    assert doc["schema_version"] == "0.2.0"
+    # The reader accepts the 0.2 lineage; do not pin the patch version.
+    assert doc["schema_version"].startswith("0.2.")
     assert "payload_schema" not in doc
     assert "payload_schema_version" not in doc
     # Every payload row carries an identity; case9 has no source uids, so they
