@@ -148,6 +148,7 @@ pub fn network_from_raw(raw: &RawDss, source: Arc<String>) -> DistNetwork {
             source: Some(source),
             source_format: Some(DistSourceFormat::Dss),
             warnings: raw.warnings.clone(),
+            parse_diagnostics: raw.diagnostics.clone(),
             ..DistNetwork::default()
         },
         buses: BTreeMap::new(),
