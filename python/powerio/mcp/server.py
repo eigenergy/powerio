@@ -1,4 +1,4 @@
-"""FastMCP server for powerio.
+"""MCP server for powerio.
 
 The advertised MCP surface is semantic and format neutral:
 
@@ -23,9 +23,9 @@ from urllib.parse import unquote, urlparse
 
 import powerio
 from powerio import dist
-from mcp.server.fastmcp import FastMCP
+from mcp.server.mcpserver import MCPServer
 
-mcp = FastMCP("powerio")
+mcp = MCPServer("powerio")
 
 _DIST_FORMATS = frozenset(
     {
