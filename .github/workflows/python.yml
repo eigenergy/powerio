@@ -45,6 +45,40 @@ jobs:
       - name: Clippy (powerio-py)
         run: bash scripts/ci-clippy.sh powerio-py
 
+  # The Python-source gates: ruff (pinned rule set in ruff.toml), mypy over
+  # the wrapper (mypy.ini), and stubtest comparing the hand-written stubs
+  # against the built extension. The stubs are the public typing contract
+  # (`py.typed`), so a Rust-side rename fails here instead of shipping a
+  # stale stub. Known by-design deviations live in python/stubtest_allowlist.txt.
+  quality:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.x"
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Install gates
+        run: pip install ruff mypy
+      - name: ruff
+        run: ruff check --no-fix .
+      - name: Install powerio
+        run: pip install .
+      - name: mypy
+        run: python -m mypy python/powerio
+      # stubtest runs from an empty directory: with the repo (or a venv) as
+      # the working directory, mypy finds the package source twice — once via
+      # site-packages and once by walking the cwd — and refuses the build.
+      - name: stubtest
+        run: |
+          mkdir -p /tmp/stubtest-cwd
+          cd /tmp/stubtest-cwd
+          python -m mypy.stubtest powerio \
+            --mypy-config-file "$GITHUB_WORKSPACE/mypy.ini" \
+            --ignore-missing-stub \
+            --allowlist "$GITHUB_WORKSPACE/python/stubtest_allowlist.txt"
+
   test:
     runs-on: ubuntu-latest
     strategy:
