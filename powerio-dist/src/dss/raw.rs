@@ -237,6 +237,9 @@ pub struct RawDss {
     pub buscoords: Vec<BusCoord>,
     pub vars: VarMap,
     pub warnings: Vec<String>,
+    /// Structured findings beside `warnings`; an `Error` entry marks an
+    /// incomplete parse the CLI must not exit 0 on.
+    pub diagnostics: Vec<crate::diagnostics::StructuredDiagnostic>,
     index: BTreeMap<(String, String), usize>,
     active: Option<usize>,
 }
@@ -625,9 +628,21 @@ impl<L: Loader> Executor<'_, L> {
     ) -> Option<PathBuf> {
         let resolved = self.resolve(file_arg);
         if resolved.is_none() {
-            self.raw.warn(ctx(format!(
+            let message = ctx(format!(
                 "{verb} {file_arg}: refused; include escapes the case directory"
-            )));
+            ));
+            self.raw.warn(message.clone());
+            self.raw.diagnostics.push(
+                crate::diagnostics::StructuredDiagnostic::new(
+                    crate::diagnostics::READ_DSS_INCLUDE_REFUSED,
+                    crate::diagnostics::DiagnosticSeverity::Error,
+                    crate::diagnostics::DiagnosticStage::Parse,
+                    message,
+                )
+                .with_suggested_action(
+                    "place included files inside the case directory, or merge them into the case",
+                ),
+            );
         }
         resolved
     }
@@ -1381,6 +1396,19 @@ mod tests {
                 .filter(|w| w.contains("escapes the case directory"))
                 .count(),
             3
+        );
+        // Each refusal is also an Error-severity finding (#275): the parse
+        // continued, but the network is incomplete.
+        let refused: Vec<_> = raw
+            .diagnostics
+            .iter()
+            .filter(|d| d.code.as_str() == crate::diagnostics::READ_DSS_INCLUDE_REFUSED)
+            .collect();
+        assert_eq!(refused.len(), 3);
+        assert!(
+            refused
+                .iter()
+                .all(|d| d.severity == crate::diagnostics::DiagnosticSeverity::Error)
         );
     }
 

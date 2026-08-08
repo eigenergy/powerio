@@ -1398,7 +1398,7 @@ fn run_convert(
             to.name()
         );
     }
-    let (text, sidecars, warnings) = if let Some(target) = to.transmission() {
+    let (text, sidecars, warnings, parse_errors) = if let Some(target) = to.transmission() {
         let options = gen_cost_options.write_options()?;
         // gridfm reads a Parquet dataset directory (the parquet-free
         // `parse_file` can't), so it routes through powerio-matrix's reader,
@@ -1415,7 +1415,7 @@ fn run_convert(
         };
         let conv = powerio_matrix::write_as_with_options(&net, target, &options)
             .with_context(|| format!("serializing to {target}"))?;
-        (conv.text, Vec::new(), conv.warnings)
+        (conv.text, Vec::new(), conv.warnings, Vec::new())
     } else {
         let net = powerio_dist::parse_file(input, from.map(FormatArg::name))
             .with_context(|| format!("reading {}", input.display()))?;
@@ -1426,12 +1426,43 @@ fn run_convert(
             .distribution()
             .expect("the family check routed a transmission target here");
         let conv = net.to_format(target);
-        (conv.text, conv.sidecars, conv.warnings)
+        (
+            conv.text,
+            conv.sidecars,
+            conv.warnings,
+            parse_error_lines(&net.parse_diagnostics),
+        )
     };
     for w in &warnings {
         eprintln!("fidelity: {w}");
     }
-    write_conversion_output(&text, &sidecars, output)
+    write_conversion_output(&text, &sidecars, output)?;
+    fail_on_parse_errors(&parse_errors)
+}
+
+/// The `Error`-or-worse parse findings, formatted for stderr.
+fn parse_error_lines(diagnostics: &[powerio_dist::StructuredDiagnostic]) -> Vec<String> {
+    diagnostics
+        .iter()
+        .filter(|d| d.severity >= powerio_dist::DiagnosticSeverity::Error)
+        .map(|d| format!("{}: {}", d.code, d.message))
+        .collect()
+}
+
+/// Exit nonzero after the output is written: the file exists for
+/// inspection, but the parse was incomplete and scripts must not treat the
+/// run as clean (#275).
+fn fail_on_parse_errors(parse_errors: &[String]) -> anyhow::Result<()> {
+    if parse_errors.is_empty() {
+        return Ok(());
+    }
+    for e in parse_errors {
+        eprintln!("error: {e}");
+    }
+    anyhow::bail!(
+        "{} parse error(s); the output is incomplete (see the error lines above)",
+        parse_errors.len()
+    )
 }
 
 /// Write conversion `text` to `output` (stdout on `-` or `None`), placing any

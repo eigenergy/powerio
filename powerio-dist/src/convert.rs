@@ -366,18 +366,20 @@ pub fn parse_file(
     }
 }
 
-/// Prepend the reader's parse warnings to the writer's fidelity warnings: the
+/// Prepend the reader's parse warnings and diagnostics to the writer's: the
 /// one-shot converters return no handle to query, so this is the only place
 /// the loud half of the parse can surface.
 fn convert(net: &DistNetwork, target: DistTargetFormat) -> Conversion {
     let conv = net.to_format(target);
     let mut warnings = net.warnings.clone();
     warnings.extend(conv.warnings);
+    let mut diagnostics = net.parse_diagnostics.clone();
+    diagnostics.extend(conv.diagnostics);
     Conversion {
         text: conv.text,
         sidecars: conv.sidecars,
         warnings,
-        diagnostics: conv.diagnostics,
+        diagnostics,
     }
 }
 
