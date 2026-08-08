@@ -39,7 +39,10 @@ use crate::validation::{ValidationPass, ValidationStatus, ValidationSummary};
 /// were removed, and the multiconductor bus `vsym_min`/`vsym_max` arrays
 /// became the per-sequence scalars `vpos_min`/`vpos_max`/`vneg_max`/
 /// `vzero_max`/`vn_max` (BMOPF schema 0.1.0).
-pub const PIO_PACKAGE_SCHEMA_VERSION: &str = "0.2.0";
+///
+/// 0.2.1: multiconductor bounds, ratings, and line lengths accept `null`
+/// for a nonfinite value (#268). Same 0.2 lineage; the reader accepts both.
+pub const PIO_PACKAGE_SCHEMA_VERSION: &str = "0.2.1";
 
 pub const READ_TRANSMISSION_PARSE_WARNING: &str = "READ.TRANSMISSION.PARSE_WARNING";
 pub const READ_GRIDFM_FIDELITY_WARNING: &str = "READ.GRIDFM.FIDELITY_WARNING";
