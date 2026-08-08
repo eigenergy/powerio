@@ -104,6 +104,42 @@ fn summary_outputs_machine_readable_json() {
 }
 
 #[test]
+fn summary_routes_json_inputs_through_the_classifier() {
+    // The `.json` routes read the file once; the classifier's verdict
+    // routes each family to its parser.
+    let case = repo_file("tests/data/egret/case9.json");
+    let out = run(&["summary", case.to_str().unwrap()]);
+    assert_success(&out);
+    let value: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert_eq!(value["domain"], "transmission");
+    assert_eq!(value["source_format"], "EgretJson");
+    assert_eq!(value["elements"]["buses"], 9);
+
+    let stamp = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_nanos();
+    let dist_json = std::env::temp_dir().join(format!("powerio-cli-summary-{stamp}.json"));
+    let dss = repo_file("tests/data/dist/micro/xfmr_single_phase.dss");
+    let out = run(&[
+        "convert",
+        dss.to_str().unwrap(),
+        "--to",
+        "bmopf-json",
+        "-o",
+        dist_json.to_str().unwrap(),
+    ]);
+    assert_success(&out);
+    let out = run(&["summary", dist_json.to_str().unwrap()]);
+    assert_success(&out);
+    let value: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert_eq!(value["domain"], "distribution");
+    assert_eq!(value["elements"]["buses"], 2);
+
+    let _ = std::fs::remove_file(dist_json);
+}
+
+#[test]
 fn package_overwrites_existing_output_file() {
     let stamp = SystemTime::now()
         .duration_since(UNIX_EPOCH)

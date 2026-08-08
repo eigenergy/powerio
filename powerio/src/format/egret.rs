@@ -513,6 +513,20 @@ fn bustype_from_str(s: &str) -> BusType {
     }
 }
 
+/// Element keys the neutral model names directly are dropped here; whatever's
+/// left is preserved as extras for round trips and cross format conversion
+/// (the PowerModels reader's stance). `known` also carries the fixed stamps
+/// this module's writer emits with no model slot behind them (`shunt_type`),
+/// so a powerio-written file reads back extras-free.
+fn extras_excluding(v: &Value, known: &[&str]) -> Extras {
+    v.as_object().map_or_else(Default::default, |obj| {
+        obj.iter()
+            .filter(|(k, _)| !known.contains(&k.as_str()))
+            .map(|(k, val)| (k.clone(), val.clone()))
+            .collect()
+    })
+}
+
 fn read_bus(key: &str, v: &Value) -> Result<Bus> {
     let id = key
         .trim()
@@ -537,7 +551,20 @@ fn read_bus(key: &str, v: &Value) -> Result<Bus> {
         name: v.get("name").and_then(Value::as_str).map(str::to_string),
         uid: None,
         location: None,
-        extras: Extras::new(),
+        extras: extras_excluding(
+            v,
+            &[
+                "matpower_bustype",
+                "vm",
+                "va",
+                "base_kv",
+                "v_max",
+                "v_min",
+                "area",
+                "zone",
+                "name",
+            ],
+        ),
     })
 }
 
@@ -549,7 +576,7 @@ fn read_load(v: &Value) -> Result<Load> {
         voltage_model: None,
         in_service: flag(v, "in_service", true)?,
         uid: None,
-        extras: Extras::new(),
+        extras: extras_excluding(v, &["bus", "p_load", "q_load", "in_service"]),
     })
 }
 
@@ -561,7 +588,7 @@ fn read_shunt(v: &Value) -> Result<Shunt> {
         in_service: flag(v, "in_service", true)?,
         control: None,
         uid: None,
-        extras: Extras::new(),
+        extras: extras_excluding(v, &["bus", "gs", "bs", "in_service", "shunt_type"]),
     })
 }
 
@@ -592,7 +619,25 @@ fn read_branch(v: &Value) -> Result<Branch> {
         solution: None,
         uid: None,
         route: None,
-        extras: Extras::new(),
+        extras: extras_excluding(
+            v,
+            &[
+                "from_bus",
+                "to_bus",
+                "resistance",
+                "reactance",
+                "charging_susceptance",
+                "rating_long_term",
+                "rating_short_term",
+                "rating_emergency",
+                "branch_type",
+                "transformer_tap_ratio",
+                "transformer_phase_shift",
+                "in_service",
+                "angle_diff_min",
+                "angle_diff_max",
+            ],
+        ),
     })
 }
 
@@ -647,7 +692,28 @@ fn read_dc_branch(v: &Value) -> Result<Hvdc> {
         loss1: f_or(v, "loss_factor", 0.0)?,
         cost: None,
         uid: None,
-        extras: Extras::new(),
+        extras: extras_excluding(
+            v,
+            &[
+                "from_bus",
+                "to_bus",
+                "in_service",
+                "pf",
+                "pt",
+                "qf",
+                "qt",
+                "vf",
+                "vt",
+                "pmin",
+                "pmax",
+                "qminf",
+                "qmaxf",
+                "qmint",
+                "qmaxt",
+                "loss0",
+                "loss_factor",
+            ],
+        ),
     })
 }
 
@@ -834,6 +900,41 @@ mod tests {
         assert_eq!((h.pmin, h.pmax), (-50.0, 60.0));
         assert_eq!((h.qminf, h.qmaxf, h.qmint, h.qmaxt), (-5.0, 5.0, -4.0, 4.5));
         assert_eq!((h.loss0, h.loss1), (0.2, 0.03));
+    }
+
+    #[test]
+    fn unrecognized_element_fields_are_preserved_as_extras() {
+        // A field with no model slot must survive the read as extras.
+        // Consumed fields and the writer's own `shunt_type` stamp must
+        // stay out of extras.
+        let doc = r#"{"elements":{
+            "bus":{"1":{"matpower_bustype":"ref","vm":1.0,"vendor_ext":42},
+                   "2":{"matpower_bustype":"PQ"}},
+            "load":{"load_1":{"bus":"1","p_load":1.0,"q_load":0.5,"owner":"co-op"}},
+            "shunt":{"shunt_1":{"bus":"1","gs":0.0,"bs":5.0,"shunt_type":"fixed"}},
+            "branch":{"1":{"from_bus":"1","to_bus":"2","reactance":0.1,"pf":12.5}},
+            "dc_branch":{"1":{"from_bus":"1","to_bus":"2","rating_long_term":30.0}}},
+            "system":{"baseMVA":100.0,"reference_bus":"1"}}"#;
+        let net = parse_egret_json(doc).unwrap();
+        assert_eq!(
+            net.buses[0].extras.get("vendor_ext"),
+            Some(&Value::from(42))
+        );
+        assert!(!net.buses[0].extras.contains_key("vm"));
+        assert_eq!(
+            net.loads[0].extras.get("owner"),
+            Some(&Value::String("co-op".into()))
+        );
+        assert!(
+            net.shunts[0].extras.is_empty(),
+            "{:?}",
+            net.shunts[0].extras
+        );
+        assert_eq!(net.branches[0].extras.get("pf"), Some(&Value::from(12.5)));
+        assert_eq!(
+            net.hvdc[0].extras.get("rating_long_term"),
+            Some(&Value::from(30.0))
+        );
     }
 
     #[test]

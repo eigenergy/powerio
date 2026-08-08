@@ -122,7 +122,16 @@ pub(crate) fn parse_pandapower_source(
             name: row.string("name"),
             uid: None,
             location: read_bus_geo(row.get("geo")),
-            extras: Extras::default(),
+            extras: row.extras_excluding(&[
+                "name",
+                "vn_kv",
+                "type",
+                "zone",
+                "in_service",
+                "geo",
+                "min_vm_pu",
+                "max_vm_pu",
+            ]),
         });
     }
     let bus_pos: HashMap<BusId, usize> = buses.iter().enumerate().map(|(i, b)| (b.id, i)).collect();
@@ -190,7 +199,22 @@ pub(crate) fn parse_pandapower_source(
                 voltage_model,
                 in_service: row.bool_or("in_service", true),
                 uid: None,
-                extras: Extras::default(),
+                extras: row.extras_excluding(&[
+                    "name",
+                    "bus",
+                    "p_mw",
+                    "q_mvar",
+                    "const_z_percent",
+                    "const_i_percent",
+                    "const_z_p_percent",
+                    "const_i_p_percent",
+                    "const_z_q_percent",
+                    "const_i_q_percent",
+                    "sn_mva",
+                    "scaling",
+                    "in_service",
+                    "type",
+                ]),
             });
         }
         let _ = zip_rows;
@@ -218,7 +242,16 @@ pub(crate) fn parse_pandapower_source(
                 in_service: row.bool_or("in_service", true),
                 control: None,
                 uid: None,
-                extras: Extras::default(),
+                extras: row.extras_excluding(&[
+                    "bus",
+                    "name",
+                    "q_mvar",
+                    "p_mw",
+                    "vn_kv",
+                    "step",
+                    "max_step",
+                    "in_service",
+                ]),
             });
         }
     }
@@ -360,7 +393,23 @@ pub(crate) fn parse_pandapower_source(
                 solution: None,
                 uid: None,
                 route: None,
-                extras: Extras::default(),
+                extras: row.extras_excluding(&[
+                    "name",
+                    "std_type",
+                    "from_bus",
+                    "to_bus",
+                    "length_km",
+                    "r_ohm_per_km",
+                    "x_ohm_per_km",
+                    "c_nf_per_km",
+                    "g_us_per_km",
+                    "max_i_ka",
+                    "df",
+                    "parallel",
+                    "type",
+                    "in_service",
+                    "geo",
+                ]),
             });
         }
     }
@@ -502,7 +551,31 @@ pub(crate) fn parse_pandapower_source(
                 solution: None,
                 uid: None,
                 route: None,
-                extras: Extras::default(),
+                extras: row.extras_excluding(&[
+                    "name",
+                    "std_type",
+                    "hv_bus",
+                    "lv_bus",
+                    "sn_mva",
+                    "vn_hv_kv",
+                    "vn_lv_kv",
+                    "vk_percent",
+                    "vkr_percent",
+                    "pfe_kw",
+                    "i0_percent",
+                    "shift_degree",
+                    "tap_side",
+                    "tap_neutral",
+                    "tap_step_percent",
+                    "tap_step_degree",
+                    "tap_pos",
+                    "tap_changer_type",
+                    "tap_phase_shifter",
+                    "tap_dependency_table",
+                    "parallel",
+                    "df",
+                    "in_service",
+                ]),
             });
         }
         if tabular_rows > 0 {
@@ -546,7 +619,21 @@ pub(crate) fn parse_pandapower_source(
                 q_loss: 0.0,
                 in_service: row.bool_or("in_service", true),
                 uid: None,
-                extras: Extras::default(),
+                extras: row.extras_excluding(&[
+                    "bus",
+                    "p_mw",
+                    "q_mvar",
+                    "scaling",
+                    "min_e_mwh",
+                    "max_e_mwh",
+                    "soc_percent",
+                    "max_p_mw",
+                    "min_p_mw",
+                    "sn_mva",
+                    "min_q_mvar",
+                    "max_q_mvar",
+                    "in_service",
+                ]),
             });
         }
     }
@@ -580,7 +667,21 @@ pub(crate) fn parse_pandapower_source(
                 loss1: loss_percent / 100.0,
                 cost: None,
                 uid: None,
-                extras: Extras::default(),
+                extras: row.extras_excluding(&[
+                    "from_bus",
+                    "to_bus",
+                    "p_mw",
+                    "loss_mw",
+                    "loss_percent",
+                    "vm_from_pu",
+                    "vm_to_pu",
+                    "max_p_mw",
+                    "min_q_from_mvar",
+                    "max_q_from_mvar",
+                    "min_q_to_mvar",
+                    "max_q_to_mvar",
+                    "in_service",
+                ]),
             });
         }
     }
@@ -1606,6 +1707,25 @@ impl Row<'_> {
             .filter(|s| !s.is_empty())
             .map(str::to_string)
     }
+    /// Cells in columns outside `known`, preserved as element extras for round
+    /// trips and cross format conversion (the PowerModels reader's stance, per
+    /// column instead of per key). `known` carries the columns the reader
+    /// consumes plus the ones powerio's own writer emits with no model slot
+    /// behind them (`type`, `std_type`, `df`, ...), so a powerio-written file
+    /// reads back extras-free. A null cell is pandas' "unset" marker, not
+    /// source data, and is skipped.
+    fn extras_excluding(&self, known: &[&str]) -> Extras {
+        self.frame
+            .columns
+            .iter()
+            .enumerate()
+            .filter(|(_, column)| !known.contains(&column.as_str()))
+            .filter_map(|(ci, column)| {
+                let cell = self.frame.data.get(self.i).and_then(|r| r.get(ci))?;
+                (!cell.is_null()).then(|| (column.clone(), cell.clone()))
+            })
+            .collect()
+    }
 }
 
 /// The written `geo` cell: pandapower 3 stores a GeoJSON Point string per
@@ -2005,6 +2125,47 @@ mod tests {
         let parsed = parse_pandapower_json(&pp_net(vec![bus_table(json!([0, 1, 2]))])).unwrap();
         let ids: Vec<usize> = parsed.network.buses.iter().map(|b| b.id.0).collect();
         assert_eq!(ids, vec![1, 2, 3]);
+    }
+
+    #[test]
+    fn unrecognized_columns_are_preserved_as_extras() {
+        // The fidelity policy for handled tables: a column the reader has no
+        // model slot for must survive as element extras. Consumed columns and
+        // the writer's own slot-less columns (`type`) stay out, and a null
+        // cell (pandas' "unset") is not captured.
+        let net = pp_net(vec![
+            (
+                "bus",
+                pp_frame(
+                    &["name", "vn_kv", "in_service", "type", "vendor_ext", "empty"],
+                    json!([0, 1]),
+                    json!([
+                        [null, 110.0, true, "b", 42.0, null],
+                        [null, 110.0, true, "b", null, null]
+                    ]),
+                ),
+            ),
+            (
+                "trafo",
+                pp_frame(
+                    &["hv_bus", "lv_bus", "sn_mva", "vk_percent", "vector_group"],
+                    json!([0]),
+                    json!([[0, 1, 25.0, 12.0, "Dyn"]]),
+                ),
+            ),
+        ]);
+        let parsed = parse_pandapower_json(&net).unwrap();
+        assert_eq!(
+            parsed.network.buses[0].extras.get("vendor_ext"),
+            Some(&json!(42.0))
+        );
+        assert!(!parsed.network.buses[0].extras.contains_key("type"));
+        assert!(!parsed.network.buses[0].extras.contains_key("empty"));
+        assert!(parsed.network.buses[1].extras.is_empty());
+        assert_eq!(
+            parsed.network.branches[0].extras.get("vector_group"),
+            Some(&json!("Dyn"))
+        );
     }
 
     #[test]
