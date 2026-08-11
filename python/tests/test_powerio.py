@@ -864,6 +864,21 @@ def test_ppc_gen_width_follows_the_capability_columns(case9):
     assert all(c is None for c in powerio.from_ppc(ppc).generators[0]["caps"])
 
 
+def test_ppc_omits_gencost_unless_every_generator_is_costed(case9):
+    # MATPOWER takes cost rows for all generators or none, so one costless
+    # generator drops the whole table. Mixed coverage is ordinary input (the
+    # pandapower reader sets cost per generator), and the network keeps the
+    # costs it has — the omission is the ppc's alone.
+    assert "gencost" in case9.to_ppc()
+
+    doc = json.loads(case9.to_json())
+    doc["generators"][1]["cost"] = None
+    mixed = powerio.from_json(json.dumps(doc))
+    assert [g["cost"] is None for g in mixed.generators] == [False, True, False]
+
+    assert "gencost" not in mixed.to_ppc()
+
+
 def test_from_ppc_refuses_a_truncated_table(case9):
     # Zero padding a short bus row would invent a bus at 0 p.u. and 0 kV; the
     # MATPOWER reader refuses such a row in a .m file, and so does this.
