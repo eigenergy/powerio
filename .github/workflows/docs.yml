@@ -56,6 +56,10 @@ jobs:
         python -m pdoc powerio -o target/doc/python
     - name: Build book
       run: mdbook build docs --dest-dir target/doc/guide
+    # CONTRIBUTING.md requires `mdbook test docs`; without this step a broken
+    # code block in the book merges silently.
+    - name: Test book
+      run: mdbook test docs
     # The landing page separates the doc deployments so neither shadows the
     # other: docs.rs renders crates.io releases, while this site renders main
     # rustdoc, the Python API reference, and the mdBook guide.

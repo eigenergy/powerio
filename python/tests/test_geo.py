@@ -3,9 +3,9 @@
 from pathlib import Path
 
 import pytest
+from powerio.dist import parse_str as dist_parse_str
 
 import powerio as pio
-from powerio.dist import parse_str as dist_parse_str
 
 DATA = Path(__file__).resolve().parents[2] / "tests" / "data"
 

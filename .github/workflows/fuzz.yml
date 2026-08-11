@@ -1,0 +1,51 @@
+name: Fuzz smoke
+
+# A short libFuzzer pass over every target: seconds per target on pull
+# requests that touch a reader, minutes per target on the weekly schedule.
+# This is a smoke gate for shallow panics, not a campaign; long runs stay
+# manual (fuzz/README.md).
+
+on:
+  pull_request:
+    paths:
+      - "powerio/src/format/**"
+      - "powerio/src/geo/**"
+      - "powerio-dist/src/**"
+      - "powerio-pkg/src/**"
+      - "fuzz/**"
+      - ".github/workflows/fuzz.yml"
+  schedule:
+    - cron: "41 4 * * 1"
+  workflow_dispatch:
+
+# Same policy as the other workflows: only a superseded pull request run is
+# cancelled; scheduled and manual runs stand on their own.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+permissions:
+  contents: read
+
+jobs:
+  smoke:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      # The fuzz harnesses need nightly + cargo-fuzz; they build in their own
+      # detached workspace (fuzz/), never as part of the main one.
+      - uses: dtolnay/rust-toolchain@nightly
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: fuzz
+      - name: Install cargo-fuzz
+        run: cargo install cargo-fuzz --locked
+      - name: Run every target
+        working-directory: fuzz
+        run: |
+          if [ "${{ github.event_name }}" = "schedule" ]; then budget=300; else budget=20; fi
+          for target in $(cargo +nightly fuzz list); do
+            echo "::group::$target"
+            cargo +nightly fuzz run "$target" -- -max_total_time="$budget" -rss_limit_mb=4096
+            echo "::endgroup::"
+          done

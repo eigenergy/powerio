@@ -1,0 +1,28 @@
+# stubtest allowlist: known, by-design deviations between the hand-written
+# stubs and the runtime module. Typing-only names (TypedDicts, aliases) have
+# no runtime object; Network delegates several methods to the compiled handle
+# through __getattr__, so stubtest cannot see them; the extension classes
+# carry PyO3 constructor signatures stubtest cannot introspect.
+# Anything NOT listed here that drifts fails CI (python.yml).
+powerio.Branch
+powerio.BranchRatingSet
+powerio.Bus
+powerio.Convention
+powerio.Format
+powerio.Gen
+powerio.GenCost
+powerio.GridfmOutputs
+powerio.Load
+powerio.Network.__init__
+powerio.Network.connectivity_report
+powerio.Network.reference_bus_index
+powerio.Network.reference_bus_indices
+powerio.Network.write_dcopf_bundle
+powerio.Package.__init__
+powerio.Scheme
+powerio.SensitivitySolver
+powerio.Shunt
+powerio.Units
+powerio._powerio.PyNetwork
+powerio._powerio._DistNetwork
+powerio._powerio._Package
