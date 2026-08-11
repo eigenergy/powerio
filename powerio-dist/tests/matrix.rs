@@ -314,34 +314,20 @@ fn close_power(x: f64, y: f64) -> bool {
 }
 
 fn assert_loads_eq(a: &DistNetwork, b: &DistNetwork, what: &str, allow_derived_v_nom: bool) {
+    if target_is_dss_leg(what) {
+        assert_dss_loads_eq(a, b, what);
+        return;
+    }
     assert_eq!(a.loads.len(), b.loads.len(), "{what}: loads");
     for ((_, x), (_, y)) in by_name(&a.loads, |l| &l.name)
         .iter()
         .zip(&by_name(&b.loads, |l| &l.name))
     {
-        if target_is_dss_leg(what) {
-            // The dss writer emits one Load object per BMOPF load, so an
-            // unbalanced per-phase profile comes back balanced; the total
-            // power survives.
-            let (px, py) = (x.p_nom.iter().sum::<f64>(), y.p_nom.iter().sum::<f64>());
-            assert!(
-                close_power(px, py),
-                "{what}: load {} p sum {px} vs {py}",
-                x.name
-            );
-            let (qx, qy) = (x.q_nom.iter().sum::<f64>(), y.q_nom.iter().sum::<f64>());
-            assert!(
-                close_power(qx, qy),
-                "{what}: load {} q sum {qx} vs {qy}",
-                x.name
-            );
-        } else {
-            for (p, q) in x.p_nom.iter().zip(&y.p_nom) {
-                assert!(close_power(*p, *q), "{what}: load {} p {p} vs {q}", x.name);
-            }
-            for (p, q) in x.q_nom.iter().zip(&y.q_nom) {
-                assert!(close_power(*p, *q), "{what}: load {} q {p} vs {q}", x.name);
-            }
+        for (p, q) in x.p_nom.iter().zip(&y.p_nom) {
+            assert!(close_power(*p, *q), "{what}: load {} p {p} vs {q}", x.name);
+        }
+        for (p, q) in x.q_nom.iter().zip(&y.q_nom) {
+            assert!(close_power(*p, *q), "{what}: load {} q {p} vs {q}", x.name);
         }
         assert_maps_eq(
             &x.terminal_map,
@@ -357,6 +343,86 @@ fn assert_loads_eq(a: &DistNetwork, b: &DistNetwork, what: &str, allow_derived_v
             y.voltage_model
         );
     }
+}
+
+/// Loads over a dss leg (#266 item 2).
+///
+/// A load whose phases carry different power has no single `Load` expression,
+/// so the writer splits it into one single phase `Load` per terminal, named
+/// `<load>_<terminal>`. The count therefore grows, and what has to survive is
+/// the per phase profile: each source load is matched by its own name when it
+/// came back whole, or by its parts, and the two must state the same power.
+fn assert_dss_loads_eq(a: &DistNetwork, b: &DistNetwork, what: &str) {
+    let mut matched = 0usize;
+    for x in &a.loads {
+        let parts: Vec<&powerio_dist::DistLoad> = b
+            .loads
+            .iter()
+            .filter(|y| {
+                y.name == x.name
+                    || y.name
+                        .strip_prefix(&format!("{}_", x.name))
+                        .is_some_and(|rest| x.terminal_map.iter().any(|t| t == rest))
+            })
+            .collect();
+        assert!(
+            !parts.is_empty(),
+            "{what}: load {} has no counterpart",
+            x.name
+        );
+        matched += parts.len();
+
+        let mut want: Vec<(f64, f64)> = x
+            .p_nom
+            .iter()
+            .copied()
+            .zip(x.q_nom.iter().copied())
+            .collect();
+        let mut got: Vec<(f64, f64)> = parts
+            .iter()
+            .flat_map(|y| y.p_nom.iter().copied().zip(y.q_nom.iter().copied()))
+            .collect();
+        if parts.len() == 1 && got.len() != want.len() {
+            // Came back whole: one balanced object states the total, which is
+            // all a balanced source load ever said.
+            let sum = |v: &[(f64, f64)]| {
+                v.iter()
+                    .fold((0.0, 0.0), |(p, q), (dp, dq)| (p + dp, q + dq))
+            };
+            let (wp, wq) = sum(&want);
+            let (gp, gq) = sum(&got);
+            assert!(
+                close_power(wp, gp) && close_power(wq, gq),
+                "{what}: load {} totals ({wp}, {wq}) vs ({gp}, {gq})",
+                x.name
+            );
+            continue;
+        }
+        let by_power = |v: &mut Vec<(f64, f64)>| {
+            v.sort_by(|l, r| l.partial_cmp(r).expect("no NaN power in a fixture"));
+        };
+        by_power(&mut want);
+        by_power(&mut got);
+        assert_eq!(
+            want.len(),
+            got.len(),
+            "{what}: load {} phase count {want:?} vs {got:?}",
+            x.name
+        );
+        for ((wp, wq), (gp, gq)) in want.iter().zip(&got) {
+            assert!(
+                close_power(*wp, *gp) && close_power(*wq, *gq),
+                "{what}: load {} phase ({wp}, {wq}) vs ({gp}, {gq})",
+                x.name
+            );
+        }
+    }
+    assert_eq!(
+        matched,
+        b.loads.len(),
+        "{what}: {} loads came back unmatched",
+        b.loads.len() - matched
+    );
 }
 
 /// The dss round trip leg of the harness.

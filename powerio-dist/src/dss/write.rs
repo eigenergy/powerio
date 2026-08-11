@@ -12,13 +12,14 @@
 //! Floats print through Rust's shortest round trip formatting; OpenDSS
 //! reads the full precision back.
 
+use std::borrow::Cow;
 use std::collections::BTreeMap;
 use std::fmt::Write as _;
 
 use crate::convert::{Conversion, ConversionSidecar};
 use crate::model::{
     ActivePowerReference, Configuration, ControlVoltageReference, DistBus, DistControlProfile,
-    DistIbr, DistLoadVoltageModel, DistNetwork, Extras, IbrPrimeMover, IbrTopology,
+    DistIbr, DistLoad, DistLoadVoltageModel, DistNetwork, Extras, IbrPrimeMover, IbrTopology,
     IbrVoltageAggregation, Mat, ReactivePowerReference, VoltVarControl, VoltWattControl, Winding,
     WindingConn,
 };
@@ -200,11 +201,13 @@ fn estimate_bus_kv(net: &DistNetwork) -> BTreeMap<String, f64> {
             // shifts, where the old raw ratio was a sqrt(3) off.
             let pn = |w: &Winding| {
                 let v = (w.v_ref / 1e3) * 1e3;
-                let line_to_neutral = t.phases < 2
-                    && grounded
-                        .get(&w.bus.to_ascii_lowercase())
-                        .is_some_and(|g| w.terminal_map.iter().any(|tm| g.contains(tm)));
-                if line_to_neutral { v } else { v / 3f64.sqrt() }
+                if winding_is_line_to_neutral(t.phases, w, |b| {
+                    grounded.get(b).map(|g| g.as_slice())
+                }) {
+                    v
+                } else {
+                    v / 3f64.sqrt()
+                }
             };
             let known: Option<(usize, f64)> = t
                 .windings
@@ -232,6 +235,21 @@ fn estimate_bus_kv(net: &DistNetwork) -> BTreeMap<String, f64> {
 
 /// A float in the shortest form Rust round trips. Negative zero canonicalizes
 /// to `0` so a `-x/denom` that lands on `-0.0` does not emit the literal `-0`.
+/// Whether a winding's voltage sits line to neutral rather than line to line:
+/// a single phase transformer whose winding lands on a grounded terminal of
+/// its bus. Both the bus voltage estimate and the `kv=` token derived from it
+/// read this rule, and they have to read the same one — a sqrt(3) disagreement
+/// between them emits a wrong `kv` with nothing to flag it.
+fn winding_is_line_to_neutral<'g>(
+    phases: usize,
+    w: &Winding,
+    grounded: impl Fn(&str) -> Option<&'g [String]>,
+) -> bool {
+    phases < 2
+        && grounded(&w.bus.to_ascii_lowercase())
+            .is_some_and(|g| w.terminal_map.iter().any(|tm| g.contains(tm)))
+}
+
 fn num(v: f64) -> String {
     let v = if v == 0.0 { 0.0 } else { v };
     format!("{v}")
@@ -648,7 +666,7 @@ impl DssWriter {
         self.transformers(net);
         self.loads(net);
         self.shunts(net);
-        self.capacitors_dropped(net);
+        self.capacitors(net);
         self.generators(net);
         self.ibrs(net);
 
@@ -944,7 +962,7 @@ impl DssWriter {
                 self.bus_ref(&l.bus_from, &l.terminal_map_from),
                 self.bus_ref(&l.bus_to, &l.terminal_map_to),
                 l.linecode,
-                num(l.length),
+                self.checked_num(l.length, 1.0, &format!("line {}: length", l.name)),
             );
             let mut extras = l.extras.clone();
             extras.remove("units"); // canonical output is in meters
@@ -1085,7 +1103,15 @@ impl DssWriter {
                     }
                 })
                 .collect();
-            let rs: Vec<String> = t.windings.iter().map(|w| num(w.r_pct)).collect();
+            let rs: Vec<String> = t
+                .windings
+                .iter()
+                .enumerate()
+                .map(|(idx, w)| {
+                    let what = format!("transformer {}: winding {} %r", t.name, idx + 1);
+                    self.checked_num(w.r_pct, 0.0, &what)
+                })
+                .collect();
             let taps: Vec<String> = t.windings.iter().map(|w| num(w.tap)).collect();
             let mut s = format!(
                 "New Transformer.{} phases={} windings={nw} buses=({}) conns=({})",
@@ -1145,12 +1171,13 @@ impl DssWriter {
             return Some(w.v_ref / 1e3);
         }
         let bus = w.bus.to_ascii_lowercase();
-        let line_to_neutral = t.phases < 2
-            && self
-                .grounded
-                .get(&bus)
-                .is_some_and(|g| w.terminal_map.iter().any(|tm| g.contains(tm)));
-        let scale = if line_to_neutral { 1.0 } else { 3f64.sqrt() };
+        let scale =
+            if winding_is_line_to_neutral(t.phases, w, |b| self.grounded.get(b).map(Vec::as_slice))
+            {
+                1.0
+            } else {
+                3f64.sqrt()
+            };
         let Some(v_pn) = self.kv_estimate.get(&bus).copied() else {
             self.warn(format!(
                 "transformer {}: winding {} has no rated voltage and bus `{}` has \
@@ -1173,109 +1200,181 @@ impl DssWriter {
         Some(kv)
     }
 
-    fn loads(&mut self, net: &DistNetwork) {
-        for l in &net.loads {
-            self.check_name("load", &l.name);
-            let phases =
-                self.element_phases(&l.extras, &l.terminal_map, l.configuration, "load", &l.name);
-            let conn = self.element_conn(&l.extras, l.configuration, &l.bus, &l.terminal_map);
-            // The reader's nconds: a 3 phase delta has no neutral conductor,
-            // every other connection carries phases + 1.
-            let nconds = if conn == "delta" && phases == 3 {
-                phases
-            } else {
-                phases + 1
-            };
-            self.warn_short_map("load", &l.name, l.terminal_map.len(), nconds);
-            let kw: f64 = l.p_nom.iter().sum::<f64>() / 1e3;
-            let kvar: f64 = l.q_nom.iter().sum::<f64>() / 1e3;
-            let typed_kv = self.load_nominal_kv(&l.voltage_model, phases, l.configuration, &l.name);
-            let kv = self.element_kv(
-                &l.extras,
-                ElementKv {
-                    bus: &l.bus,
-                    phases,
-                    configuration: l.configuration,
-                    name: &l.name,
-                    class: "load",
-                    typed_kv,
-                },
-            );
-            let mut extras = l.extras.clone();
-            extras.remove("kv");
-            extras.remove("phases");
-            extras.remove("conn");
-            let retained_model = extras.remove("model");
-            let retained_zipv = extras.remove("zipv");
-            // q that came from a power factor goes back as pf=, so the
-            // engine recomputes its own kvar bit for bit.
-            let reactive = match extras.remove("pf").and_then(|v| v.as_f64()) {
-                Some(pf) => format!("pf={}", num(pf)),
-                None => format!("kvar={}", num(kvar)),
-            };
-            let mut s = format!(
-                "New Load.{} bus1={} phases={phases} conn={conn} kv={} kw={} {reactive}",
+    /// The `Load` objects one [`DistLoad`] emits as: itself, or one per phase
+    /// when its phases carry different power (#266).
+    ///
+    /// An OpenDSS `Load` divides its `kw`/`kvar` evenly across its phases, so a
+    /// load whose `p_nom`/`q_nom` differ per phase has no single object
+    /// expression. Emitting one balanced `Load` keeps the total and loses the
+    /// profile; one single phase `Load` per terminal keeps both. A delta load's
+    /// phases sit across terminal pairs rather than on one terminal each, so
+    /// the same split needs branch geometry: it keeps the balanced form and
+    /// says what was lost.
+    fn load_parts<'l>(&mut self, l: &'l DistLoad) -> Vec<Cow<'l, DistLoad>> {
+        let n = l.p_nom.len();
+        // Exact comparison: any difference at all makes one balanced object the
+        // wrong statement, and a tolerance here would decide how much
+        // imbalance is allowed to vanish.
+        #[allow(clippy::float_cmp)]
+        let uniform = |xs: &[f64]| xs.iter().all(|x| *x == xs[0]);
+        if n < 2 || l.q_nom.len() != n || (uniform(&l.p_nom) && uniform(&l.q_nom)) {
+            return vec![Cow::Borrowed(l)];
+        }
+        if l.configuration == Configuration::Delta {
+            self.warn(format!(
+                "load {}: per phase power on a delta load has no dss expression; \
+                 emitted one balanced Load carrying the total",
+                l.name
+            ));
+            return vec![Cow::Borrowed(l)];
+        }
+        if l.terminal_map.len() < n {
+            self.warn(format!(
+                "load {}: per phase power over {n} phases but only {} terminals; \
+                 emitted one balanced Load carrying the total",
                 l.name,
-                self.bus_ref(&l.bus, &l.terminal_map),
-                num(kv),
-                num(kw),
-            );
-            match &l.voltage_model {
-                DistLoadVoltageModel::ConstantPower { .. } => {
-                    if let Some(model) = retained_model {
-                        extras.insert("model".into(), model);
-                    }
+                l.terminal_map.len()
+            ));
+            return vec![Cow::Borrowed(l)];
+        }
+        // A wye map carries the return as its last conductor; each part keeps
+        // its own phase and that return, so `bus_ref` spells the same node pair
+        // the whole load sat on.
+        let return_terminal = (l.terminal_map.len() > n).then(|| l.terminal_map[n].clone());
+        (0..n)
+            .map(|i| {
+                let mut part = l.clone();
+                part.name = format!("{}_{}", l.name, l.terminal_map[i]);
+                part.terminal_map = match &return_terminal {
+                    Some(r) => vec![l.terminal_map[i].clone(), r.clone()],
+                    None => vec![l.terminal_map[i].clone()],
+                };
+                part.configuration = Configuration::Wye;
+                part.p_nom = vec![l.p_nom[i]];
+                part.q_nom = vec![l.q_nom[i]];
+                // The whole-load spellings do not survive the split: `phases`
+                // and `conn` describe the bank, `kv` its line to line voltage,
+                // and `pf` would re-derive a shared reactive ratio over power
+                // this part states outright.
+                for key in ["phases", "conn", "kv", "pf"] {
+                    part.extras.remove(key);
                 }
-                DistLoadVoltageModel::ConstantImpedance { .. } => {
-                    s.push_str(" model=2");
-                }
-                DistLoadVoltageModel::ConstantCurrent { .. } => {
-                    s.push_str(" model=5");
-                }
-                DistLoadVoltageModel::Zip {
-                    alpha_z,
-                    alpha_i,
-                    alpha_p,
-                    beta_z,
-                    beta_i,
-                    beta_p,
-                    ..
-                } => {
-                    s.push_str(" model=8");
-                    if let (Some(az), Some(ai), Some(ap), Some(bz), Some(bi), Some(bp)) = (
-                        alpha_z.first(),
-                        alpha_i.first(),
-                        alpha_p.first(),
-                        beta_z.first(),
-                        beta_i.first(),
-                        beta_p.first(),
-                    ) {
-                        let cutoff = zipv_cutoff(retained_zipv.as_ref()).unwrap_or(0.0);
-                        let _ = write!(
-                            s,
-                            " zipv=({}, {}, {}, {}, {}, {}, {})",
-                            num(*az),
-                            num(*ai),
-                            num(*ap),
-                            num(*bz),
-                            num(*bi),
-                            num(*bp),
-                            num(cutoff)
-                        );
-                    }
-                }
-                DistLoadVoltageModel::Exponential { .. } => {
-                    self.warn(format!(
-                        "load {}: exponential voltage model has no OpenDSS load model code; emitted constant power",
-                        l.name
-                    ));
-                }
+                Cow::Owned(part)
+            })
+            .collect()
+    }
+
+    fn loads(&mut self, net: &DistNetwork) {
+        for load in &net.loads {
+            for part in self.load_parts(load) {
+                self.write_load(&part);
             }
-            self.add_default_load_voltage_bounds(&mut extras);
-            s.push_str(&self.extras_tail("load", &l.name, &extras));
-            self.line_out(&s);
         }
         self.out.push('\n');
+    }
+
+    /// One `New Load.<name>` record. A [`DistLoad`] emits one of these, or one
+    /// per phase when [`Self::load_parts`] split it.
+    fn write_load(&mut self, l: &DistLoad) {
+        self.check_name("load", &l.name);
+        let phases =
+            self.element_phases(&l.extras, &l.terminal_map, l.configuration, "load", &l.name);
+        let conn = self.element_conn(&l.extras, l.configuration, &l.bus, &l.terminal_map);
+        // The reader's nconds: a 3 phase delta has no neutral conductor,
+        // every other connection carries phases + 1.
+        let nconds = if conn == "delta" && phases == 3 {
+            phases
+        } else {
+            phases + 1
+        };
+        self.warn_short_map("load", &l.name, l.terminal_map.len(), nconds);
+        let kw: f64 = l.p_nom.iter().sum::<f64>() / 1e3;
+        let kvar: f64 = l.q_nom.iter().sum::<f64>() / 1e3;
+        let typed_kv = self.load_nominal_kv(&l.voltage_model, phases, l.configuration, &l.name);
+        let kv = self.element_kv(
+            &l.extras,
+            ElementKv {
+                bus: &l.bus,
+                phases,
+                configuration: l.configuration,
+                name: &l.name,
+                class: "load",
+                typed_kv,
+            },
+        );
+        let mut extras = l.extras.clone();
+        extras.remove("kv");
+        extras.remove("phases");
+        extras.remove("conn");
+        let retained_model = extras.remove("model");
+        let retained_zipv = extras.remove("zipv");
+        // q that came from a power factor goes back as pf=, so the
+        // engine recomputes its own kvar bit for bit.
+        let reactive = match extras.remove("pf").and_then(|v| v.as_f64()) {
+            Some(pf) => format!("pf={}", num(pf)),
+            None => format!("kvar={}", num(kvar)),
+        };
+        let mut s = format!(
+            "New Load.{} bus1={} phases={phases} conn={conn} kv={} kw={} {reactive}",
+            l.name,
+            self.bus_ref(&l.bus, &l.terminal_map),
+            num(kv),
+            num(kw),
+        );
+        match &l.voltage_model {
+            DistLoadVoltageModel::ConstantPower { .. } => {
+                if let Some(model) = retained_model {
+                    extras.insert("model".into(), model);
+                }
+            }
+            DistLoadVoltageModel::ConstantImpedance { .. } => {
+                s.push_str(" model=2");
+            }
+            DistLoadVoltageModel::ConstantCurrent { .. } => {
+                s.push_str(" model=5");
+            }
+            DistLoadVoltageModel::Zip {
+                alpha_z,
+                alpha_i,
+                alpha_p,
+                beta_z,
+                beta_i,
+                beta_p,
+                ..
+            } => {
+                s.push_str(" model=8");
+                if let (Some(az), Some(ai), Some(ap), Some(bz), Some(bi), Some(bp)) = (
+                    alpha_z.first(),
+                    alpha_i.first(),
+                    alpha_p.first(),
+                    beta_z.first(),
+                    beta_i.first(),
+                    beta_p.first(),
+                ) {
+                    let cutoff = zipv_cutoff(retained_zipv.as_ref()).unwrap_or(0.0);
+                    let _ = write!(
+                        s,
+                        " zipv=({}, {}, {}, {}, {}, {}, {})",
+                        num(*az),
+                        num(*ai),
+                        num(*ap),
+                        num(*bz),
+                        num(*bi),
+                        num(*bp),
+                        num(cutoff)
+                    );
+                }
+            }
+            DistLoadVoltageModel::Exponential { .. } => {
+                self.warn(format!(
+                    "load {}: exponential voltage model has no OpenDSS load model code; emitted constant power",
+                    l.name
+                ));
+            }
+        }
+        self.add_default_load_voltage_bounds(&mut extras);
+        s.push_str(&self.extras_tail("load", &l.name, &extras));
+        self.line_out(&s);
     }
 
     fn add_default_load_voltage_bounds(&self, extras: &mut Extras) {
@@ -1291,6 +1390,21 @@ impl DssWriter {
 
     /// `kv` for a load or capacitor: the recorded value when the source
     /// carried one, otherwise the propagated bus estimate.
+    /// [`num`] for a value a payload can spell as `null`. OpenDSS has no token
+    /// for a nonfinite number — `NaN` and `inf` in a deck are a parse failure
+    /// downstream, not a value — so an unusable one is reported and replaced
+    /// with the neutral value, as the BMOPF writer does (#288).
+    fn checked_num(&mut self, v: f64, fallback: f64, what: &str) -> String {
+        if v.is_finite() {
+            return num(v);
+        }
+        self.warn(format!(
+            "{what}: {v} has no dss spelling; emitted {}",
+            num(fallback)
+        ));
+        num(fallback)
+    }
+
     fn element_kv(&mut self, extras: &Extras, ctx: ElementKv<'_>) -> f64 {
         if let Some(v) = extras.get("kv") {
             match v
@@ -1546,14 +1660,73 @@ impl DssWriter {
         self.line_out(&line);
     }
 
-    /// Typed BMOPF capacitor banks have no DSS conversion yet: q_rated at
-    /// v_nom does not carry phase geometry the way the shunt B matrix does.
-    fn capacitors_dropped(&mut self, net: &DistNetwork) {
+    /// Typed BMOPF capacitor banks (#266). A bank states its rating and its
+    /// nameplate voltage, which is what an OpenDSS `Capacitor` takes, so the
+    /// conversion is a unit change and the terminal spelling: `v_nom` is line
+    /// to line for the three phase configurations and across the terminals for
+    /// `SINGLE_PHASE`, which is the `kv` convention the reader applies coming
+    /// back the other way.
+    ///
+    /// The untyped [`DistShunt`](crate::model::DistShunt) B matrix keeps its
+    /// own path ([`Self::write_kvar_shunt`]): it carries phase geometry a
+    /// scalar rating cannot state.
+    fn capacitors(&mut self, net: &DistNetwork) {
         for c in &net.capacitors {
-            self.warnings.push(format!(
-                "capacitor {}: rated capacitor banks are not converted to dss; dropped",
-                c.name
-            ));
+            if !(c.q_rated.is_finite() && c.q_rated > 0.0) {
+                self.warn(format!(
+                    "capacitor {}: rating {} is not a positive number; dropped from the output",
+                    c.name, c.q_rated
+                ));
+                continue;
+            }
+            self.check_name("capacitor", &c.name);
+            let phases = self.element_phases(
+                &c.extras,
+                &c.terminal_map,
+                c.configuration,
+                "capacitor",
+                &c.name,
+            );
+            let conn = self.element_conn(&c.extras, c.configuration, &c.bus, &c.terminal_map);
+            let nconds = if conn == "delta" && phases == 3 {
+                phases
+            } else {
+                phases + 1
+            };
+            self.warn_short_map("capacitor", &c.name, c.terminal_map.len(), nconds);
+            let typed_kv = (c.v_nom.is_finite() && c.v_nom > 0.0).then(|| c.v_nom / 1e3);
+            if typed_kv.is_none() {
+                self.warn(format!(
+                    "capacitor {}: nominal voltage {} is not a positive number; \
+                     using the bus voltage estimate",
+                    c.name, c.v_nom
+                ));
+            }
+            let kv = self.element_kv(
+                &c.extras,
+                ElementKv {
+                    bus: &c.bus,
+                    phases,
+                    configuration: c.configuration,
+                    name: &c.name,
+                    class: "capacitor",
+                    typed_kv,
+                },
+            );
+            let mut extras = c.extras.clone();
+            extras.remove("kv");
+            extras.remove("phases");
+            extras.remove("conn");
+            extras.remove("kvar");
+            let mut line = format!(
+                "New Capacitor.{} bus1={} phases={phases} conn={conn} kv={} kvar={}",
+                c.name,
+                self.bus_ref(&c.bus, &c.terminal_map),
+                num(kv),
+                num(c.q_rated / 1e3),
+            );
+            line.push_str(&self.extras_tail("capacitor", &c.name, &extras));
+            self.line_out(&line);
         }
     }
 
@@ -2780,6 +2953,144 @@ mod tests {
         assert!(has("shorter than the lower triangle"), "{:?}", out.warnings);
         assert!(has("xsc_pct is empty"), "{:?}", out.warnings);
         assert!(has("i_max is empty"), "{:?}", out.warnings);
+    }
+
+    #[test]
+    fn a_rated_capacitor_bank_writes_as_a_dss_capacitor() {
+        // #266 item 1: `q_rated` at `v_nom` is what an OpenDSS Capacitor takes,
+        // so the conversion is a unit change and the terminal spelling. The
+        // bank used to be dropped with a warning.
+        let (b, vs) = three_phase_source(2400.0);
+        let cap = crate::model::DistCapacitor::new(
+            "c1",
+            "sb",
+            strings(&["1", "2", "3", "n"]),
+            Configuration::Wye,
+            600e3,
+            4160.0,
+        );
+        let net = DistNetwork {
+            base_frequency: 60.0,
+            buses: vec![b],
+            sources: vec![vs],
+            capacitors: vec![cap],
+            ..DistNetwork::default()
+        };
+        let out = write_dss(&net);
+        let line = out
+            .text
+            .lines()
+            .find(|l| l.contains("Capacitor.c1"))
+            .unwrap_or_else(|| panic!("no capacitor emitted: {}", out.text));
+        assert!(line.contains("kvar=600"), "{line}");
+        assert!(line.contains("kv=4.16"), "{line}");
+        assert!(line.contains("phases=3"), "{line}");
+        assert!(
+            !out.warnings.iter().any(|w| w.contains("dropped")),
+            "{:?}",
+            out.warnings
+        );
+
+        // And it comes back: the reader lowers a dss Capacitor to a shunt B
+        // matrix, so the bank survives as susceptance carrying the same vars.
+        let back = parse_dss_str(&out.text);
+        assert_eq!(back.shunts.len(), 1, "{}", out.text);
+    }
+
+    #[test]
+    fn an_unbalanced_load_splits_into_one_load_per_phase() {
+        // #266 item 2: a dss Load divides kw evenly across its phases, so one
+        // balanced object keeps the total and loses the profile. Splitting
+        // keeps both, and a balanced load still emits as one object.
+        let (b, vs) = three_phase_source(2400.0);
+        let mut unbalanced = DistLoad::new(
+            "l1",
+            "sb",
+            strings(&["1", "2", "3", "n"]),
+            Configuration::Wye,
+            vec![1e3, 2e3, 3e3],
+            vec![100.0, 200.0, 300.0],
+        );
+        unbalanced.extras.insert("kv".into(), 4.16.into());
+        let balanced = DistLoad::new(
+            "l2",
+            "sb",
+            strings(&["1", "2", "3", "n"]),
+            Configuration::Wye,
+            vec![1e3, 1e3, 1e3],
+            vec![100.0, 100.0, 100.0],
+        );
+        let net = DistNetwork {
+            base_frequency: 60.0,
+            buses: vec![b],
+            sources: vec![vs],
+            loads: vec![unbalanced, balanced],
+            ..DistNetwork::default()
+        };
+        let out = write_dss(&net);
+        let loads: Vec<&str> = out
+            .text
+            .lines()
+            .filter(|l| l.contains("New Load."))
+            .collect();
+        assert_eq!(loads.len(), 4, "{}", out.text);
+        for (name, kw, kvar) in [
+            ("l1_1", "1", "0.1"),
+            ("l1_2", "2", "0.2"),
+            ("l1_3", "3", "0.3"),
+        ] {
+            let line = loads
+                .iter()
+                .find(|l| l.contains(&format!("New Load.{name} ")))
+                .unwrap_or_else(|| panic!("no {name}: {}", out.text));
+            assert!(line.contains(&format!("kw={kw} ")), "{line}");
+            assert!(line.contains(&format!("kvar={kvar}")), "{line}");
+            assert!(line.contains("phases=1"), "{line}");
+            // The whole-bank kv extra does not carry to a single phase part.
+            assert!(!line.contains("kv=4.16"), "{line}");
+        }
+        assert_eq!(
+            loads.iter().filter(|l| l.contains("New Load.l2 ")).count(),
+            1,
+            "a balanced load stays one object: {}",
+            out.text
+        );
+    }
+
+    #[test]
+    fn a_delta_load_with_per_phase_power_stays_balanced_and_says_so() {
+        // A delta load's phases sit across terminal pairs, so the split would
+        // need branch geometry it does not have.
+        let (b, vs) = three_phase_source(2400.0);
+        let l = DistLoad::new(
+            "d1",
+            "sb",
+            strings(&["1", "2", "3"]),
+            Configuration::Delta,
+            vec![1e3, 2e3, 3e3],
+            vec![0.0, 0.0, 0.0],
+        );
+        let net = DistNetwork {
+            base_frequency: 60.0,
+            buses: vec![b],
+            sources: vec![vs],
+            loads: vec![l],
+            ..DistNetwork::default()
+        };
+        let out = write_dss(&net);
+        assert_eq!(
+            out.text.lines().filter(|l| l.contains("New Load.")).count(),
+            1,
+            "{}",
+            out.text
+        );
+        assert!(
+            out.warnings
+                .iter()
+                .any(|w| w.contains("per phase power on a delta load")),
+            "{:?}",
+            out.warnings
+        );
     }
 
     #[test]
