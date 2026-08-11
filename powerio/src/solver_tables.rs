@@ -5,14 +5,13 @@
 //! provenance to map lowered data back to the source case. This module provides
 //! that table layout without changing the lossless `Network` representation.
 
-use std::collections::{HashMap, HashSet};
-
 use serde::{Deserialize, Serialize};
 
 use crate::network::{
     BranchCurrentRatings, BranchRatingSet, BusId, BusType, GenCaps, GenCost, Hvdc,
     LoadVoltageModel, Network,
 };
+use crate::normalize::{NormalizeOptions, NormalizeSourceRows};
 use crate::{Error, IndexedNetwork, Result};
 
 /// Stable pass name for the balanced normalized solver table lowering.
@@ -313,10 +312,9 @@ impl Network {
 
 impl NormalizedSolverTables {
     pub fn from_network(source: &Network) -> Result<Self> {
-        let normalized = normalized_for_solver(source)?;
+        let (normalized, provenance) = normalized_for_solver(source)?;
         let view = IndexedNetwork::new(&normalized);
         let net = view.network();
-        let provenance = SourceRows::new(source, net);
 
         let branch_arcs = branch_and_arc_rows(&view, &provenance)?;
         let buses = bus_rows(&view, &provenance);
@@ -339,12 +337,12 @@ impl NormalizedSolverTables {
                 component_labels: view.connected_component_labels(),
                 branch_from_arc_indices: branch_arcs.branch_from_arc_indices,
                 branch_to_arc_indices: branch_arcs.branch_to_arc_indices,
-                bus_source_rows: provenance.bus,
-                load_source_rows: provenance.load,
-                shunt_source_rows: provenance.shunt,
-                branch_source_rows: provenance.branch,
-                switch_source_rows: provenance.switch,
-                generator_source_rows: provenance.generator,
+                bus_source_rows: provenance.buses,
+                load_source_rows: provenance.loads,
+                shunt_source_rows: provenance.shunts,
+                branch_source_rows: provenance.branches,
+                switch_source_rows: provenance.switches,
+                generator_source_rows: provenance.generators,
                 storage_source_rows: provenance.storage,
                 hvdc_source_rows: provenance.hvdc,
             },
@@ -361,15 +359,34 @@ impl NormalizedSolverTables {
     }
 }
 
-fn normalized_for_solver(source: &Network) -> Result<Network> {
+/// The normalized network and the row provenance for its star-lowered view.
+/// A network that is already normalized is its own source, so every element
+/// maps to its own row.
+fn normalized_for_solver(source: &Network) -> Result<(Network, NormalizeSourceRows)> {
     if source.is_normalized() {
-        Ok(source.clone())
+        let net = source.clone();
+        let ident = |n: usize| (0..n).map(Some).collect();
+        let mut rows = NormalizeSourceRows {
+            buses: ident(net.buses.len()),
+            loads: ident(net.loads.len()),
+            shunts: ident(net.shunts.len()),
+            branches: ident(net.branches.len()),
+            switches: ident(net.switches.len()),
+            generators: ident(net.generators.len()),
+            storage: ident(net.storage.len()),
+            hvdc: ident(net.hvdc.len()),
+            transformers_3w: ident(net.transformers_3w.len()),
+        };
+        rows.pad_to_lowered(&net);
+        Ok((net, rows))
     } else {
-        source.to_normalized()
+        let (normalized, rows) =
+            source.to_normalized_with_source_rows(&NormalizeOptions::default())?;
+        Ok((normalized.network, rows))
     }
 }
 
-fn bus_rows(view: &IndexedNetwork<'_>, provenance: &SourceRows) -> Vec<SolverBusRow> {
+fn bus_rows(view: &IndexedNetwork<'_>, provenance: &NormalizeSourceRows) -> Vec<SolverBusRow> {
     view.network()
         .buses
         .iter()
@@ -377,7 +394,7 @@ fn bus_rows(view: &IndexedNetwork<'_>, provenance: &SourceRows) -> Vec<SolverBus
         .map(|(i, bus)| SolverBusRow {
             index: i,
             bus_id: bus.id,
-            source_row: provenance.bus[i],
+            source_row: provenance.buses[i],
             kind: bus.kind,
             vm: bus.vm,
             va: bus.va,
@@ -396,7 +413,10 @@ fn bus_rows(view: &IndexedNetwork<'_>, provenance: &SourceRows) -> Vec<SolverBus
         .collect()
 }
 
-fn load_rows(view: &IndexedNetwork<'_>, provenance: &SourceRows) -> Result<Vec<SolverLoadRow>> {
+fn load_rows(
+    view: &IndexedNetwork<'_>,
+    provenance: &NormalizeSourceRows,
+) -> Result<Vec<SolverLoadRow>> {
     view.network()
         .loads
         .iter()
@@ -404,7 +424,7 @@ fn load_rows(view: &IndexedNetwork<'_>, provenance: &SourceRows) -> Result<Vec<S
         .map(|(i, load)| {
             Ok(SolverLoadRow {
                 index: i,
-                source_row: provenance.load[i],
+                source_row: provenance.loads[i],
                 bus_index: dense_bus(view, load.bus, i)?,
                 p: load.p,
                 q: load.q,
@@ -414,7 +434,10 @@ fn load_rows(view: &IndexedNetwork<'_>, provenance: &SourceRows) -> Result<Vec<S
         .collect()
 }
 
-fn shunt_rows(view: &IndexedNetwork<'_>, provenance: &SourceRows) -> Result<Vec<SolverShuntRow>> {
+fn shunt_rows(
+    view: &IndexedNetwork<'_>,
+    provenance: &NormalizeSourceRows,
+) -> Result<Vec<SolverShuntRow>> {
     view.network()
         .shunts
         .iter()
@@ -422,7 +445,7 @@ fn shunt_rows(view: &IndexedNetwork<'_>, provenance: &SourceRows) -> Result<Vec<
         .map(|(i, shunt)| {
             Ok(SolverShuntRow {
                 index: i,
-                source_row: provenance.shunt[i],
+                source_row: provenance.shunts[i],
                 bus_index: dense_bus(view, shunt.bus, i)?,
                 g: shunt.g,
                 b: shunt.b,
@@ -440,7 +463,7 @@ struct BranchArcRows {
 
 fn branch_and_arc_rows(
     view: &IndexedNetwork<'_>,
-    provenance: &SourceRows,
+    provenance: &NormalizeSourceRows,
 ) -> Result<BranchArcRows> {
     let net = view.network();
     let mut branch_from_arc_indices = Vec::with_capacity(net.branches.len());
@@ -485,7 +508,7 @@ fn branch_and_arc_rows(
 
             Ok(SolverBranchRow {
                 index: i,
-                source_row: provenance.branch[i],
+                source_row: provenance.branches[i],
                 from_bus_index,
                 to_bus_index,
                 r: branch.r,
@@ -516,7 +539,10 @@ fn branch_and_arc_rows(
     })
 }
 
-fn switch_rows(view: &IndexedNetwork<'_>, provenance: &SourceRows) -> Result<Vec<SolverSwitchRow>> {
+fn switch_rows(
+    view: &IndexedNetwork<'_>,
+    provenance: &NormalizeSourceRows,
+) -> Result<Vec<SolverSwitchRow>> {
     view.network()
         .switches
         .iter()
@@ -524,7 +550,7 @@ fn switch_rows(view: &IndexedNetwork<'_>, provenance: &SourceRows) -> Result<Vec
         .map(|(i, switch)| {
             Ok(SolverSwitchRow {
                 index: i,
-                source_row: provenance.switch[i],
+                source_row: provenance.switches[i],
                 from_bus_index: dense_bus(view, switch.from, i)?,
                 to_bus_index: dense_bus(view, switch.to, i)?,
                 closed: switch.closed,
@@ -541,7 +567,7 @@ fn switch_rows(view: &IndexedNetwork<'_>, provenance: &SourceRows) -> Result<Vec
 
 fn generator_rows(
     view: &IndexedNetwork<'_>,
-    provenance: &SourceRows,
+    provenance: &NormalizeSourceRows,
 ) -> Result<Vec<SolverGeneratorRow>> {
     view.network()
         .generators
@@ -550,7 +576,7 @@ fn generator_rows(
         .map(|(i, generator)| {
             Ok(SolverGeneratorRow {
                 index: i,
-                source_row: provenance.generator[i],
+                source_row: provenance.generators[i],
                 bus_index: dense_bus(view, generator.bus, i)?,
                 pg: generator.pg,
                 qg: generator.qg,
@@ -573,7 +599,7 @@ fn generator_rows(
 
 fn storage_rows(
     view: &IndexedNetwork<'_>,
-    provenance: &SourceRows,
+    provenance: &NormalizeSourceRows,
 ) -> Result<Vec<SolverStorageRow>> {
     let base_mva = view.network().base_mva;
     view.network()
@@ -606,7 +632,10 @@ fn storage_rows(
         .collect()
 }
 
-fn hvdc_rows(view: &IndexedNetwork<'_>, provenance: &SourceRows) -> Result<Vec<SolverHvdcRow>> {
+fn hvdc_rows(
+    view: &IndexedNetwork<'_>,
+    provenance: &NormalizeSourceRows,
+) -> Result<Vec<SolverHvdcRow>> {
     view.network()
         .hvdc
         .iter()
@@ -617,7 +646,7 @@ fn hvdc_rows(view: &IndexedNetwork<'_>, provenance: &SourceRows) -> Result<Vec<S
 
 fn hvdc_row(
     view: &IndexedNetwork<'_>,
-    provenance: &SourceRows,
+    provenance: &NormalizeSourceRows,
     i: usize,
     hvdc: &Hvdc,
 ) -> Result<SolverHvdcRow> {
@@ -650,117 +679,6 @@ fn dense_bus(view: &IndexedNetwork<'_>, bus_id: BusId, element_index: usize) -> 
         bus_id,
         element_index,
     })
-}
-
-#[derive(Debug)]
-struct SourceRows {
-    bus: Vec<Option<usize>>,
-    load: Vec<Option<usize>>,
-    shunt: Vec<Option<usize>>,
-    branch: Vec<Option<usize>>,
-    switch: Vec<Option<usize>>,
-    generator: Vec<Option<usize>>,
-    storage: Vec<Option<usize>>,
-    hvdc: Vec<Option<usize>>,
-}
-
-impl SourceRows {
-    fn new(source: &Network, lowered: &Network) -> Self {
-        let kept_buses: HashSet<BusId> = source
-            .buses
-            .iter()
-            .filter(|b| b.kind != BusType::Isolated)
-            .map(|b| b.id)
-            .collect();
-        let bus_source: HashMap<BusId, usize> = source
-            .buses
-            .iter()
-            .enumerate()
-            .filter(|(_, b)| b.kind != BusType::Isolated)
-            .map(|(i, b)| (b.id, i))
-            .collect();
-        let bus = lowered
-            .buses
-            .iter()
-            .map(|b| bus_source.get(&b.id).copied())
-            .collect();
-
-        Self {
-            bus,
-            load: resize_sources(
-                lowered.loads.len(),
-                source.loads.iter().enumerate().filter_map(|(i, load)| {
-                    (load.in_service && kept_buses.contains(&load.bus)).then_some(i)
-                }),
-            ),
-            shunt: resize_sources(
-                lowered.shunts.len(),
-                source.shunts.iter().enumerate().filter_map(|(i, shunt)| {
-                    (shunt.in_service && kept_buses.contains(&shunt.bus)).then_some(i)
-                }),
-            ),
-            branch: resize_sources(
-                lowered.branches.len(),
-                source
-                    .branches
-                    .iter()
-                    .enumerate()
-                    .filter_map(|(i, branch)| {
-                        (branch.in_service
-                            && kept_buses.contains(&branch.from)
-                            && kept_buses.contains(&branch.to))
-                        .then_some(i)
-                    }),
-            ),
-            switch: resize_sources(
-                lowered.switches.len(),
-                source
-                    .switches
-                    .iter()
-                    .enumerate()
-                    .filter_map(|(i, switch)| {
-                        (kept_buses.contains(&switch.from) && kept_buses.contains(&switch.to))
-                            .then_some(i)
-                    }),
-            ),
-            generator: resize_sources(
-                lowered.generators.len(),
-                source
-                    .generators
-                    .iter()
-                    .enumerate()
-                    .filter_map(|(i, generator)| {
-                        (generator.in_service && kept_buses.contains(&generator.bus)).then_some(i)
-                    }),
-            ),
-            storage: resize_sources(
-                lowered.storage.len(),
-                source
-                    .storage
-                    .iter()
-                    .enumerate()
-                    .filter_map(|(i, storage)| {
-                        (storage.in_service && kept_buses.contains(&storage.bus)).then_some(i)
-                    }),
-            ),
-            hvdc: resize_sources(
-                lowered.hvdc.len(),
-                source.hvdc.iter().enumerate().filter_map(|(i, hvdc)| {
-                    (hvdc.in_service
-                        && kept_buses.contains(&hvdc.from)
-                        && kept_buses.contains(&hvdc.to))
-                    .then_some(i)
-                }),
-            ),
-        }
-    }
-}
-
-fn resize_sources(len: usize, rows: impl Iterator<Item = usize>) -> Vec<Option<usize>> {
-    let mut out: Vec<Option<usize>> = rows.map(Some).collect();
-    out.resize(len, None);
-    out.truncate(len);
-    out
 }
 
 #[cfg(test)]

@@ -4,8 +4,8 @@
 use std::path::{Path, PathBuf};
 
 use powerio::{
-    BusId, BusType, Error, IndexedNetwork, NormalizeOptions, SourceFormat, Storage, TargetFormat,
-    parse_file, parse_matpower_file, parse_str, write_as,
+    BusId, BusType, Error, Generator, IndexedNetwork, NormalizeOptions, SourceFormat, Storage,
+    TargetFormat, parse_file, parse_matpower_file, parse_str, write_as,
 };
 
 const DEG_TO_RAD: f64 = std::f64::consts::PI / 180.0;
@@ -246,28 +246,26 @@ mpc.branch = [
         .to_normalized_with_source_rows(&NormalizeOptions::default())
         .unwrap();
 
-    // Buses: raw rows 0, 2, 3 survive (row 1 is isolated).
-    assert_eq!(rows.buses, [0, 2, 3]);
-    // Branches: row 1 references the dropped bus, row 2 is out of service.
-    assert_eq!(rows.branches, [0, 3]);
-    // Generators: row 1 is out of service.
-    assert_eq!(rows.generators, [0, 2]);
+    assert_eq!(rows.buses, [Some(0), Some(2), Some(3)]);
+    assert_eq!(rows.branches, [Some(0), Some(3)]);
+    assert_eq!(rows.generators, [Some(0), Some(2)]);
     // The MATPOWER bus PD/QD columns become one load per demand-carrying bus,
-    // in bus order; the load on dropped bus 2 never exists as a raw load here,
-    // so both raw loads (buses 3 and 4) survive.
-    assert_eq!(rows.loads, [0, 1]);
-    assert_eq!(rows.shunts, [0]);
+    // in bus order. The load on dropped bus 2 is not a raw load here, so both
+    // raw loads (buses 3 and 4) survive.
+    assert_eq!(rows.loads, [Some(0), Some(1)]);
+    assert_eq!(rows.shunts, [Some(0)]);
 
-    // The maps agree with the elements the normalized network holds, and the
-    // options wrapper returns the identical network.
-    for (pos, &row) in rows.buses.iter().enumerate() {
+    for (pos, row) in rows.buses.iter().enumerate() {
+        let row = row.expect("no star lowering in this case");
         assert_eq!(n.network.buses[pos].id, raw.buses[row].id);
     }
-    for (pos, &row) in rows.branches.iter().enumerate() {
+    for (pos, row) in rows.branches.iter().enumerate() {
+        let row = row.expect("no star lowering in this case");
         assert_eq!(n.network.branches[pos].from, raw.branches[row].from);
         assert_eq!(n.network.branches[pos].to, raw.branches[row].to);
     }
-    for (pos, &row) in rows.generators.iter().enumerate() {
+    for (pos, row) in rows.generators.iter().enumerate() {
+        let row = row.expect("no star lowering in this case");
         assert_eq!(n.network.generators[pos].bus, raw.generators[row].bus);
     }
     let plain = raw
@@ -654,3 +652,45 @@ mpc.branch = [
     assert!(approx(s.ps, 5.0), "ps stays raw: {}", s.ps);
     assert!(approx(s.qs, 3.0), "qs stays raw: {}", s.qs);
 }
+
+#[test]
+fn source_rows_cover_the_star_lowered_view() {
+    // `IndexedNetwork` star-lowers an in-service 3-winding transformer, which
+    // appends a bus, its star branches, and a magnetizing shunt. Those have no
+    // source row, so the map must still be positional over the lowered view.
+    let mut raw = parse_str(EPC_3W, "pslf").unwrap().network;
+    raw.buses[0].kind = BusType::Ref;
+    let mut g = Generator::new(BusId(1));
+    g.pmax = 100.0;
+    raw.generators.push(g);
+
+    let (n, rows) = raw
+        .to_normalized_with_source_rows(&NormalizeOptions::default())
+        .unwrap();
+    let view = IndexedNetwork::new(&n.network);
+
+    assert_eq!(rows.buses.len(), view.n());
+    assert_eq!(rows.branches.len(), view.branches().len());
+    assert_eq!(rows.shunts.len(), view.network().shunts.len());
+
+    // The star bus and its branches are the appended tail.
+    assert_eq!(rows.buses[..3], [Some(0), Some(1), Some(2)]);
+    assert_eq!(*rows.buses.last().unwrap(), None);
+    assert!(rows.branches.iter().all(Option::is_none));
+}
+
+const EPC_3W: &str = r#"title
+t3w
+!
+solution parameters
+sbase 100.0000
+!
+bus data  [3] ty vsched volt angle ar zone vmax vmin
+1 "B1          " 230.0000 : 0 1.0 1.0 0.0 1 1 1.1 0.9
+2 "B2          " 138.0000 : 1 1.0 1.0 0.0 1 1 1.1 0.9
+3 "B3          " 13.8000 : 1 1.0 1.0 0.0 1 1 1.1 0.9
+transformer data  [1]
+1 "B1          " 230.00 2 "B2          " 138.00 "1 " 1 "xf3" : 1 0 0 0 0 0 0 0 0 3 0 0 0 0 100 0.01 0.06 0.02 0.07 0.03 0.08 /
+0 0 0 0 0 0 100 90 80 0 0.0 0 0 0 0 0 1.05
+end
+"#;

@@ -64,28 +64,54 @@ pub struct NormalizedNetwork {
     pub warnings: Vec<String>,
 }
 
-/// Row provenance for one normalize pass: for each element position in the
-/// normalized network, the row of the same element family in the source
-/// network. The pass filters rows and never reorders or merges them, so
-/// `buses[i]` is the source row of normalized bus `i`, and the same holds
-/// for every family.
+/// Row provenance for one normalize pass: for each dense position in the
+/// [`IndexedNetwork`](crate::IndexedNetwork) view of the normalized network,
+/// the row of the same element family in the source network. `None` marks an
+/// element the pipeline synthesized, which has no source row.
 ///
-/// `IndexedNetwork` dense indices over a normalized network are positional,
-/// so `rows.buses[dense_index]` resolves a matrix row back to its source
-/// element without re-deriving the filter rules — the map is produced by the
-/// same pass that filters, so the two cannot drift.
+/// Every field is positional over that view, so `buses[dense_index]` resolves
+/// a matrix row back to its source element. Each length equals the matching
+/// element table of the view: `buses` equals `view.n()`, `branches` equals
+/// `view.branches().len()`.
+///
+/// The star lowering that the view applies to a 3-winding transformer appends
+/// one bus, its star branches, and a magnetizing shunt. Those entries are
+/// `None`. The lowering also consumes the transformer itself, so the view
+/// holds none; `transformers_3w` therefore stays positional over the
+/// normalized network's own list.
+///
+/// The map is valid only for the [`NormalizedNetwork`] returned beside it. A
+/// later mutation of that network ([`Network::merge_bus`],
+/// [`Network::reduce_zero_impedance`], [`Network::reduce_passthrough_buses`],
+/// [`Network::subset`], or a hand edit) invalidates every entry; run the pass
+/// again instead of patching the map.
 #[derive(Clone, Debug, Default)]
 #[non_exhaustive]
 pub struct NormalizeSourceRows {
-    pub buses: Vec<usize>,
-    pub loads: Vec<usize>,
-    pub shunts: Vec<usize>,
-    pub branches: Vec<usize>,
-    pub switches: Vec<usize>,
-    pub generators: Vec<usize>,
-    pub storage: Vec<usize>,
-    pub hvdc: Vec<usize>,
-    pub transformers_3w: Vec<usize>,
+    pub buses: Vec<Option<usize>>,
+    pub loads: Vec<Option<usize>>,
+    pub shunts: Vec<Option<usize>>,
+    pub branches: Vec<Option<usize>>,
+    pub switches: Vec<Option<usize>>,
+    pub generators: Vec<Option<usize>>,
+    pub storage: Vec<Option<usize>>,
+    pub hvdc: Vec<Option<usize>>,
+    pub transformers_3w: Vec<Option<usize>>,
+}
+
+impl NormalizeSourceRows {
+    /// Grow the families the star lowering appends to so each length matches
+    /// `lowered`. The appended entries have no source row.
+    fn pad_to(&mut self, lowered: &Network) {
+        self.buses.resize(lowered.buses.len(), None);
+        self.branches.resize(lowered.branches.len(), None);
+        self.shunts.resize(lowered.shunts.len(), None);
+    }
+
+    /// Pad against the star-lowered form of `net`.
+    pub(crate) fn pad_to_lowered(&mut self, net: &Network) {
+        self.pad_to(&net.expand_transformers_3w());
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -586,16 +612,24 @@ impl Network {
         &self,
         options: &NormalizeOptions,
     ) -> Result<NormalizedNetwork> {
-        Ok(self.to_normalized_with_source_rows(options)?.0)
+        Ok(self.normalize_inner(options)?.0)
     }
 
     /// Like [`Network::to_normalized_with_options`], also returning the
-    /// [`NormalizeSourceRows`] row provenance for every retained element.
-    ///
-    /// The map comes from the same pass that filters, so a consumer resolving
-    /// normalized positions (or `IndexedNetwork` dense indices) back to source
-    /// rows does not re-derive the filter rules.
+    /// [`NormalizeSourceRows`] row provenance.
     pub fn to_normalized_with_source_rows(
+        &self,
+        options: &NormalizeOptions,
+    ) -> Result<(NormalizedNetwork, NormalizeSourceRows)> {
+        let (normalized, mut rows) = self.normalize_inner(options)?;
+        rows.pad_to(&normalized.network.expand_transformers_3w());
+        Ok((normalized, rows))
+    }
+
+    /// The pass itself. The rows it gives cover the normalized network before
+    /// the star lowering, so only [`Self::to_normalized_with_source_rows`] pays
+    /// for the lowered lengths.
+    fn normalize_inner(
         &self,
         options: &NormalizeOptions,
     ) -> Result<(NormalizedNetwork, NormalizeSourceRows)> {
@@ -632,16 +666,17 @@ impl Network {
         let (hvdc, hvdc_rows) = norm_hvdc(&self.hvdc, base, &id_map);
         let (transformers_3w, transformer_3w_rows) =
             norm_transformers_3w(&self.transformers_3w, base, &id_map);
+        let some = |rows: Vec<usize>| rows.into_iter().map(Some).collect();
         let source_rows = NormalizeSourceRows {
-            buses: bus_rows,
-            loads: load_rows,
-            shunts: shunt_rows,
-            branches: branch_rows,
-            switches: switch_rows,
-            generators: generator_rows,
-            storage: storage_rows,
-            hvdc: hvdc_rows,
-            transformers_3w: transformer_3w_rows,
+            buses: some(bus_rows),
+            loads: some(load_rows),
+            shunts: some(shunt_rows),
+            branches: some(branch_rows),
+            switches: some(switch_rows),
+            generators: some(generator_rows),
+            storage: some(storage_rows),
+            hvdc: some(hvdc_rows),
+            transformers_3w: some(transformer_3w_rows),
         };
 
         // Bus types: a bus hosting an in-service generator keeps `Ref` if the
