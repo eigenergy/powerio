@@ -250,6 +250,33 @@ fn winding_is_line_to_neutral<'g>(
             .is_some_and(|g| w.terminal_map.iter().any(|tm| g.contains(tm)))
 }
 
+/// Whether a value states a usable magnitude: a rating, a voltage, or an
+/// ampacity a deck can carry. OpenDSS has no token for a nonfinite number, and
+/// a zero or negative one is not a nameplate. Every recovery differs — omit the
+/// property, derive from the bus estimate, drop the object — so this is the
+/// shared question, not the shared answer.
+fn is_positive_finite(v: f64) -> bool {
+    v.is_finite() && v > 0.0
+}
+
+/// The conductor count a dss element declares for `phases` on `conn`. A three
+/// phase delta has no neutral conductor; every other connection carries one.
+fn nconds_for(conn: &str, phases: usize) -> usize {
+    if conn == "delta" && phases == 3 {
+        phases
+    } else {
+        phases + 1
+    }
+}
+
+/// Drop the extras the emitted record already states in its own tokens, so
+/// `extras_tail` cannot write a second, stale copy of one.
+fn strip_emitted_extras(extras: &mut Extras, keys: &[&str]) {
+    for key in keys {
+        extras.remove(*key);
+    }
+}
+
 fn num(v: f64) -> String {
     let v = if v == 0.0 { 0.0 } else { v };
     format!("{v}")
@@ -969,7 +996,7 @@ impl DssWriter {
             // `i_max` maps to `emergamps`, as it does on a linecode. The
             // typed field wins over a token kept in extras.
             match l.i_max.as_deref() {
-                Some([amps, rest @ ..]) if amps.is_finite() && *amps > 0.0 => {
+                Some([amps, rest @ ..]) if is_positive_finite(*amps) => {
                     extras.remove("emergamps");
                     let _ = write!(s, " emergamps={}", num(*amps));
                     // The dss Line has one emergamps for all phases. Compare
@@ -1090,7 +1117,7 @@ impl DssWriter {
                 .iter()
                 .enumerate()
                 .map(|(idx, w)| {
-                    if w.s_rating.is_finite() && w.s_rating > 0.0 {
+                    if is_positive_finite(w.s_rating) {
                         Some(w.s_rating / 1e3)
                     } else {
                         self.warn(format!(
@@ -1167,7 +1194,7 @@ impl DssWriter {
         idx: usize,
         w: &Winding,
     ) -> Option<f64> {
-        if w.v_ref.is_finite() && w.v_ref > 0.0 {
+        if is_positive_finite(w.v_ref) {
             return Some(w.v_ref / 1e3);
         }
         let bus = w.bus.to_ascii_lowercase();
@@ -1282,11 +1309,7 @@ impl DssWriter {
         let conn = self.element_conn(&l.extras, l.configuration, &l.bus, &l.terminal_map);
         // The reader's nconds: a 3 phase delta has no neutral conductor,
         // every other connection carries phases + 1.
-        let nconds = if conn == "delta" && phases == 3 {
-            phases
-        } else {
-            phases + 1
-        };
+        let nconds = nconds_for(conn, phases);
         self.warn_short_map("load", &l.name, l.terminal_map.len(), nconds);
         let kw: f64 = l.p_nom.iter().sum::<f64>() / 1e3;
         let kvar: f64 = l.q_nom.iter().sum::<f64>() / 1e3;
@@ -1303,9 +1326,7 @@ impl DssWriter {
             },
         );
         let mut extras = l.extras.clone();
-        extras.remove("kv");
-        extras.remove("phases");
-        extras.remove("conn");
+        strip_emitted_extras(&mut extras, &["kv", "phases", "conn"]);
         let retained_model = extras.remove("model");
         let retained_zipv = extras.remove("zipv");
         // q that came from a power factor goes back as pf=, so the
@@ -1449,10 +1470,7 @@ impl DssWriter {
         name: &str,
     ) -> Option<f64> {
         let v_nom = model.v_nom();
-        let v_phase = v_nom
-            .first()
-            .copied()
-            .filter(|v| v.is_finite() && *v > 0.0)?;
+        let v_phase = v_nom.first().copied().filter(|v| is_positive_finite(*v))?;
         if v_nom
             .iter()
             .any(|v| (*v - v_phase).abs() > 1e-9 * v.abs().max(v_phase.abs()).max(1.0))
@@ -1672,7 +1690,7 @@ impl DssWriter {
     /// scalar rating cannot state.
     fn capacitors(&mut self, net: &DistNetwork) {
         for c in &net.capacitors {
-            if !(c.q_rated.is_finite() && c.q_rated > 0.0) {
+            if !is_positive_finite(c.q_rated) {
                 self.warn(format!(
                     "capacitor {}: rating {} is not a positive number; dropped from the output",
                     c.name, c.q_rated
@@ -1688,13 +1706,9 @@ impl DssWriter {
                 &c.name,
             );
             let conn = self.element_conn(&c.extras, c.configuration, &c.bus, &c.terminal_map);
-            let nconds = if conn == "delta" && phases == 3 {
-                phases
-            } else {
-                phases + 1
-            };
+            let nconds = nconds_for(conn, phases);
             self.warn_short_map("capacitor", &c.name, c.terminal_map.len(), nconds);
-            let typed_kv = (c.v_nom.is_finite() && c.v_nom > 0.0).then(|| c.v_nom / 1e3);
+            let typed_kv = is_positive_finite(c.v_nom).then(|| c.v_nom / 1e3);
             if typed_kv.is_none() {
                 self.warn(format!(
                     "capacitor {}: nominal voltage {} is not a positive number; \
@@ -1714,10 +1728,7 @@ impl DssWriter {
                 },
             );
             let mut extras = c.extras.clone();
-            extras.remove("kv");
-            extras.remove("phases");
-            extras.remove("conn");
-            extras.remove("kvar");
+            strip_emitted_extras(&mut extras, &["kv", "phases", "conn", "kvar"]);
             let mut line = format!(
                 "New Capacitor.{} bus1={} phases={phases} conn={conn} kv={} kvar={}",
                 c.name,
@@ -1758,11 +1769,7 @@ impl DssWriter {
                 &g.name,
             );
             let conn = self.element_conn(&g.extras, g.configuration, &g.bus, &g.terminal_map);
-            let nconds = if conn == "delta" && phases == 3 {
-                phases
-            } else {
-                phases + 1
-            };
+            let nconds = nconds_for(conn, phases);
             self.warn_short_map("generator", &g.name, g.terminal_map.len(), nconds);
             let kw: f64 = g.p_nom.iter().sum::<f64>() / 1e3;
             let kvar: f64 = g.q_nom.iter().sum::<f64>() / 1e3;
@@ -1808,9 +1815,7 @@ impl DssWriter {
                 }
             }
             let mut extras = g.extras.clone();
-            extras.remove("kv");
-            extras.remove("phases");
-            extras.remove("conn");
+            strip_emitted_extras(&mut extras, &["kv", "phases", "conn"]);
             s.push_str(&self.extras_tail("generator", &g.name, &extras));
             self.line_out(&s);
         }

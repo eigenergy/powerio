@@ -983,16 +983,13 @@ impl Reader<'_> {
         phases: usize,
         synthesized_linecode: bool,
     ) -> (Option<Vec<f64>>, Option<String>) {
+        // `emergamps` on a Line reads as that line's `i_max`, one entry for
+        // each phase, the same mapping a linecode uses. An absent property
+        // leaves the linecode rating in control; an unparsable token returns
+        // as text.
         if synthesized_linecode {
             return (None, None);
         }
-        self.line_emergamps(props, phases)
-    }
-
-    /// `emergamps` on a Line reads as that line's `i_max`, one entry for each
-    /// phase, the same mapping a linecode uses. An absent property leaves the
-    /// linecode rating in control. An unparsable token returns as text.
-    fn line_emergamps(&self, props: &Props, phases: usize) -> (Option<Vec<f64>>, Option<String>) {
         let Some(v) = props.get("emergamps") else {
             return (None, None);
         };

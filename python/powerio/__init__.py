@@ -360,23 +360,7 @@ class Network:
         branches = self._inner.branches
         generators = self._inner.generators
         bus_ids = np.asarray([b["id"] for b in buses], dtype=np.int64)
-        id_to_idx = {int(bus_id): idx for idx, bus_id in enumerate(bus_ids)}
-
-        pd = np.zeros(len(buses), dtype=float)
-        qd = np.zeros(len(buses), dtype=float)
-        for load in self._inner.loads:
-            idx = id_to_idx.get(load["bus"])
-            if idx is not None:
-                pd[idx] += load["p"]
-                qd[idx] += load["q"]
-
-        gs = np.zeros(len(buses), dtype=float)
-        bs = np.zeros(len(buses), dtype=float)
-        for shunt in self._inner.shunts:
-            idx = id_to_idx.get(shunt["bus"])
-            if idx is not None:
-                gs[idx] += shunt["g"]
-                bs[idx] += shunt["b"]
+        pd, qd, gs, bs = _bus_sums(np, buses, self._inner.loads, self._inner.shunts)
 
         branch = DenseBranch(
             from_id=np.asarray([br["from_id"] for br in branches], dtype=np.int64),
@@ -559,24 +543,20 @@ class Network:
         """
         np = _require("numpy", "matrix")
         buses = self._inner.buses
-        row_of = {b["id"]: i for i, b in enumerate(buses)}
-        bus = np.zeros((len(buses), 13))
-        for i, b in enumerate(buses):
-            bus[i, :] = (
-                b["id"], _PPC_BUS_TYPE.get(b["kind"], 1.0), 0.0, 0.0, 0.0, 0.0,
-                b["area"], b["vm"], b["va"], b["base_kv"], b["zone"],
-                b["vmax"], b["vmin"],
-            )
-        for load in self._inner.loads:
-            i = row_of.get(load["bus"])
-            if i is not None:
-                bus[i, 2] += load["p"]
-                bus[i, 3] += load["q"]
-        for shunt in self._inner.shunts:
-            i = row_of.get(shunt["bus"])
-            if i is not None:
-                bus[i, 4] += shunt["g"]
-                bus[i, 5] += shunt["b"]
+        bus = np.array(
+            [
+                (
+                    b["id"], _PPC_BUS_TYPE.get(b["kind"], 1.0), 0.0, 0.0, 0.0, 0.0,
+                    b["area"], b["vm"], b["va"], b["base_kv"], b["zone"],
+                    b["vmax"], b["vmin"],
+                )
+                for b in buses
+            ],
+            dtype=float,
+        ).reshape(len(buses), 13)
+        bus[:, 2], bus[:, 3], bus[:, 4], bus[:, 5] = _bus_sums(
+            np, buses, self._inner.loads, self._inner.shunts
+        )
 
         # The capability and ramp columns past PMIN are an OPF extension that a
         # source need not carry. Widen to the full 21 only when a generator
@@ -586,24 +566,31 @@ class Network:
         gens = self._inner.generators
         caps = [g["caps"] for g in gens]
         width = 21 if any(c is not None for row in caps for c in row) else 10
-        gen = np.zeros((len(gens), width))
-        for i, g in enumerate(gens):
-            gen[i, :10] = (
-                g["bus"], g["pg"], g["qg"], g["qmax"], g["qmin"], g["vg"],
-                g["mbase"], float(g["in_service"]), g["pmax"], g["pmin"],
-            )
-            if width == 21:
-                gen[i, 10:] = [0.0 if c is None else c for c in caps[i]]
+        gen = np.array(
+            [
+                [
+                    g["bus"], g["pg"], g["qg"], g["qmax"], g["qmin"], g["vg"],
+                    g["mbase"], float(g["in_service"]), g["pmax"], g["pmin"],
+                ]
+                + ([0.0 if c is None else c for c in row] if width == 21 else [])
+                for g, row in zip(gens, caps)
+            ],
+            dtype=float,
+        ).reshape(len(gens), width)
 
         branches = self._inner.branches
-        branch = np.zeros((len(branches), 13))
-        for i, br in enumerate(branches):
-            branch[i, :] = (
-                br["from_id"], br["to_id"], br["r"], br["x"], br["b"],
-                br["rate_a"], br["rate_b"], br["rate_c"], br["tap"],
-                br["shift"], float(br["in_service"]), br["angmin"],
-                br["angmax"],
-            )
+        branch = np.array(
+            [
+                (
+                    br["from_id"], br["to_id"], br["r"], br["x"], br["b"],
+                    br["rate_a"], br["rate_b"], br["rate_c"], br["tap"],
+                    br["shift"], float(br["in_service"]), br["angmin"],
+                    br["angmax"],
+                )
+                for br in branches
+            ],
+            dtype=float,
+        ).reshape(len(branches), 13)
 
         ppc = {
             "version": "2",
@@ -710,6 +697,28 @@ def from_json(text: str) -> Network:
 
 
 # powerio bus kind -> MATPOWER/PYPOWER BUS_TYPE code.
+def _bus_sums(np, buses, loads, shunts):
+    """Per bus `(pd, qd, gs, bs)` in bus order.
+
+    :meth:`Network.to_dense` and :meth:`Network.to_ppc` both fold the element
+    tables onto their bus the way the Rust indexed analysis view does. This is
+    that fold, once.
+    """
+    row_of = {b["id"]: i for i, b in enumerate(buses)}
+    pd, qd, gs, bs = (np.zeros(len(buses), dtype=float) for _ in range(4))
+    for load in loads:
+        i = row_of.get(load["bus"])
+        if i is not None:
+            pd[i] += load["p"]
+            qd[i] += load["q"]
+    for shunt in shunts:
+        i = row_of.get(shunt["bus"])
+        if i is not None:
+            gs[i] += shunt["g"]
+            bs[i] += shunt["b"]
+    return pd, qd, gs, bs
+
+
 _PPC_BUS_TYPE = {"PQ": 1.0, "PV": 2.0, "REF": 3.0, "ISOLATED": 4.0}
 
 # MATPOWER case-input table widths. PYPOWER result tables append columns
