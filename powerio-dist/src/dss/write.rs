@@ -951,7 +951,7 @@ impl DssWriter {
             // `i_max` maps to `emergamps`, as it does on a linecode. The
             // typed field wins over a token kept in extras.
             match l.i_max.as_deref() {
-                Some([amps, rest @ ..]) if amps.is_finite() => {
+                Some([amps, rest @ ..]) if amps.is_finite() && *amps > 0.0 => {
                     extras.remove("emergamps");
                     let _ = write!(s, " emergamps={}", num(*amps));
                     // The dss Line has one emergamps for all phases. Compare
@@ -1072,11 +1072,11 @@ impl DssWriter {
                 .iter()
                 .enumerate()
                 .map(|(idx, w)| {
-                    if w.s_rating.is_finite() {
+                    if w.s_rating.is_finite() && w.s_rating > 0.0 {
                         Some(w.s_rating / 1e3)
                     } else {
                         self.warn(format!(
-                            "transformer {}: winding {} has no finite rating; kva not \
+                            "transformer {}: winding {} has no usable rating; kva not \
                              emitted (the OpenDSS default applies)",
                             t.name,
                             idx + 1
@@ -1144,13 +1144,14 @@ impl DssWriter {
         if w.v_ref.is_finite() && w.v_ref > 0.0 {
             return Some(w.v_ref / 1e3);
         }
+        let bus = w.bus.to_ascii_lowercase();
         let line_to_neutral = t.phases < 2
             && self
                 .grounded
-                .get(&w.bus.to_ascii_lowercase())
+                .get(&bus)
                 .is_some_and(|g| w.terminal_map.iter().any(|tm| g.contains(tm)));
         let scale = if line_to_neutral { 1.0 } else { 3f64.sqrt() };
-        let Some(v_pn) = self.kv_estimate.get(&w.bus.to_ascii_lowercase()).copied() else {
+        let Some(v_pn) = self.kv_estimate.get(&bus).copied() else {
             self.warn(format!(
                 "transformer {}: winding {} has no rated voltage and bus `{}` has \
                  no voltage estimate; kv not emitted (the OpenDSS default applies)",

@@ -2997,3 +2997,32 @@ fn source_terminal_conventions_pass_through_verbatim() {
         serde_json::json!({"phase": ["a", "b", "c"], "neutral": ["n"]})
     );
 }
+
+/// A line with no `linecode=` carries its rating on the linecode synthesized
+/// for it, not on both. Emitting it twice reads as a per line override of a
+/// shared default, and `_line_*` is a stand-in that belongs to this line alone.
+#[test]
+fn an_inline_line_rating_is_not_repeated_on_its_synthetic_linecode() {
+    let src = "New Circuit.c1\n\
+               New Line.l1 bus1=a bus2=b phases=3 r1=0.1 x1=0.2 length=10 units=m emergamps=250\n";
+    let net = powerio_dist::parse_dss_str(src);
+    let line = &net.lines[0];
+    let code = net
+        .linecodes
+        .iter()
+        .find(|c| c.name == line.linecode)
+        .expect("synthetic linecode");
+
+    assert_eq!(
+        code.i_max.as_deref(),
+        Some([250.0, 250.0, 250.0].as_slice())
+    );
+    assert!(
+        line.i_max.is_none(),
+        "the rating belongs to the linecode alone: {:?}",
+        line.i_max
+    );
+
+    let text = powerio_dist::write_dss(&net).text;
+    assert_eq!(text.matches("emergamps=250").count(), 1, "{text}");
+}

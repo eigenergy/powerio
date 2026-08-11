@@ -2627,7 +2627,10 @@ fn authored_terminal_conventions(net: &DistNetwork) -> Option<Value> {
             } else {
                 &mut phase
             };
-            if !labels.contains(&term) {
+            // Bucketing is case insensitive, so the dedup has to be too:
+            // `N` and `n` are one label, and emitting both would tell a
+            // consumer the network has two neutrals.
+            if !labels.iter().any(|l| l.eq_ignore_ascii_case(term)) {
                 labels.push(term);
             }
         }
