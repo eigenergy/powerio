@@ -307,6 +307,8 @@ impl Writer {
         doc.insert("meta".into(), meta);
         if let Some(Value::Object(tc)) = net.extras.get(BMOPF_TERMINAL_CONVENTIONS_STASH) {
             doc.insert("terminal_conventions".into(), Value::Object(tc.clone()));
+        } else if let Some(tc) = authored_terminal_conventions(net) {
+            doc.insert("terminal_conventions".into(), tc);
         }
         self.buses(net, &mut doc);
         self.linecodes(net, &mut doc);
@@ -2609,6 +2611,31 @@ fn bmopf_delta_roll(t: &DistTransformer, idx: usize, w: &Winding) -> Option<i64>
         .and_then(Value::as_i64)
         .filter(|roll| *roll == 1 || *roll == -1)
         .or(Some(-1))
+}
+
+/// The phase and neutral label lists, from the bus terminal names. The rule
+/// is the one the schema prescribes for an absent `terminal_conventions`
+/// block: an `n` or `N` label is neutral, every other label is a phase.
+/// Labels keep first-seen order. A network with no bus terminal gives `None`.
+fn authored_terminal_conventions(net: &DistNetwork) -> Option<Value> {
+    let mut phase: Vec<&String> = Vec::new();
+    let mut neutral: Vec<&String> = Vec::new();
+    for b in &net.buses {
+        for term in &b.terminals {
+            let labels = if term.eq_ignore_ascii_case("n") {
+                &mut neutral
+            } else {
+                &mut phase
+            };
+            // Bucketing is case insensitive, so the dedup has to be too:
+            // `N` and `n` are one label, and emitting both would tell a
+            // consumer the network has two neutrals.
+            if !labels.iter().any(|l| l.eq_ignore_ascii_case(term)) {
+                labels.push(term);
+            }
+        }
+    }
+    (!phase.is_empty() || !neutral.is_empty()).then(|| json!({"phase": phase, "neutral": neutral}))
 }
 
 fn no_load_voltage_base(from: &Winding) -> f64 {

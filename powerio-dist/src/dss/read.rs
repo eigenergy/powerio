@@ -925,7 +925,7 @@ impl Reader<'_> {
         // per line length unit, so the raw length preserves the Z·length
         // product.
         let mut malformed: Vec<(&'static str, String)> = Vec::new();
-        let (linecode, length_factor) = if let Some(code) = props.get("linecode") {
+        let (linecode, length_factor, synthesized) = if let Some(code) = props.get("linecode") {
             let lc_units_m = self
                 .linecode_units
                 .get(&code.text.to_ascii_lowercase())
@@ -936,17 +936,21 @@ impl Reader<'_> {
                 (Some(lcf), None) => lcf,
                 (None, _) => 1.0,
             };
-            (code.text.clone(), factor)
+            (code.text.clone(), factor, false)
         } else {
             let factor = line_units_m.unwrap_or(1.0);
             let (code, bad) = self.synthesize_linecode(&props, phases, factor, &obj.name);
             malformed = bad;
-            (code, factor)
+            (code, factor, true)
         };
 
+        let (i_max, raw_emergamps) = self.line_rating(&props, phases, synthesized);
         let mut extras = extras_from_leftovers(&props);
         if let Some(u) = length_units {
             extras.insert("units".into(), u.into());
+        }
+        if let Some(text) = raw_emergamps {
+            extras.insert("emergamps".into(), text.into());
         }
         for (key, text) in malformed {
             extras.insert(key.to_string(), text.into());
@@ -960,10 +964,42 @@ impl Reader<'_> {
             linecode,
             length: length * length_factor,
             route: None,
-            i_max: None,
+            i_max,
             s_max: None,
             extras,
         });
+    }
+
+    /// The line's own `i_max`, and the raw `emergamps` token to keep in extras.
+    ///
+    /// A line with no `linecode=` gets a synthetic one holding its own
+    /// impedance, and `synthesize_linecode` already read `emergamps` into that
+    /// linecode's `i_max`. Repeating it on the line would state a per line
+    /// override of a shared default that does not exist: the synthetic
+    /// linecode belongs to this line alone.
+    fn line_rating(
+        &self,
+        props: &Props,
+        phases: usize,
+        synthesized_linecode: bool,
+    ) -> (Option<Vec<f64>>, Option<String>) {
+        if synthesized_linecode {
+            return (None, None);
+        }
+        self.line_emergamps(props, phases)
+    }
+
+    /// `emergamps` on a Line reads as that line's `i_max`, one entry for each
+    /// phase, the same mapping a linecode uses. An absent property leaves the
+    /// linecode rating in control. An unparsable token returns as text.
+    fn line_emergamps(&self, props: &Props, phases: usize) -> (Option<Vec<f64>>, Option<String>) {
+        let Some(v) = props.get("emergamps") else {
+            return (None, None);
+        };
+        match v.to_f64(Some(self.vars)) {
+            Ok(amps) => (Some(vec![amps; phases]), None),
+            Err(_) => (None, Some(v.text.clone())),
+        }
     }
 
     /// A line without `linecode=` carries inline or default impedance;
