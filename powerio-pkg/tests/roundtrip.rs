@@ -2524,3 +2524,31 @@ fn multiconductor_nonfinite_ratings_and_scalars_roundtrip() {
     assert!(capacitor.q_rated.is_nan());
     assert!(capacitor.v_nom.is_nan());
 }
+
+#[test]
+fn refused_include_lifts_as_an_error_diagnostic() {
+    // #275: a typed parse finding keeps its severity in the envelope, and
+    // its warning twin does not appear a second time.
+    use powerio_pkg::{DiagnosticSeverity, ValidationStatus};
+
+    let mut net = powerio_dist::parse_str("New Circuit.c1", "dss").expect("parse dss");
+    let message = "redirect ../shared.dss: refused; include escapes the case directory";
+    net.warnings.push(message.to_owned());
+    net.parse_diagnostics
+        .push(powerio_dist::StructuredDiagnostic::new(
+            powerio_dist::diagnostics::READ_DSS_INCLUDE_REFUSED,
+            powerio_dist::DiagnosticSeverity::Error,
+            powerio_dist::DiagnosticStage::Parse,
+            message,
+        ));
+
+    let pkg = NetworkPackage::from_multiconductor(net);
+    let carrying: Vec<_> = pkg
+        .diagnostics
+        .iter()
+        .filter(|d| d.message == message)
+        .collect();
+    assert_eq!(carrying.len(), 1, "the finding must appear exactly once");
+    assert_eq!(carrying[0].severity, DiagnosticSeverity::Error);
+    assert_eq!(pkg.validation.status, ValidationStatus::Error);
+}

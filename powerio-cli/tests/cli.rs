@@ -458,3 +458,186 @@ fn batch_scan_where_nothing_loads_fails() {
         "expected the zero-loaded error:\n{stderr}"
     );
 }
+
+#[test]
+fn convert_exits_nonzero_on_a_refused_include() {
+    // #275: the parse continues past a refused include and the output is
+    // still written, but the run must not exit 0.
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = tmp.path();
+    let case_dir = dir.join("case");
+    std::fs::create_dir_all(&case_dir).unwrap();
+    std::fs::write(
+        dir.join("shared.dss"),
+        "New Linecode.lc1 nphases=3 r1=0.1 x1=0.2\n",
+    )
+    .unwrap();
+    let master = case_dir.join("master.dss");
+    std::fs::write(
+        &master,
+        "New Circuit.c1\nRedirect ../shared.dss\nNew Line.l1 bus1=a bus2=b linecode=lc1\n",
+    )
+    .unwrap();
+    let out_path = dir.join("out.json");
+
+    let out = run(&[
+        "convert",
+        master.to_str().unwrap(),
+        "--to",
+        "bmopf",
+        "-o",
+        out_path.to_str().unwrap(),
+    ]);
+    assert_failure(&out);
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains("READ.DSS.INCLUDE_REFUSED"),
+        "stderr:\n{stderr}"
+    );
+    assert!(
+        stderr.contains("the output is incomplete"),
+        "stderr:\n{stderr}"
+    );
+    assert!(
+        out_path.is_file(),
+        "the output must still be written for inspection"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn convert_exits_nonzero_on_an_include_refused_through_a_symbolic_link() {
+    // The lexical check passes this include: the link sits in the case
+    // directory. Only the loader sees that it resolves out of it.
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = tmp.path();
+    let case_dir = dir.join("case");
+    std::fs::create_dir_all(&case_dir).unwrap();
+    std::fs::write(
+        dir.join("shared.dss"),
+        "New Linecode.lc1 nphases=3 r1=0.1 x1=0.2\n",
+    )
+    .unwrap();
+    std::os::unix::fs::symlink("../shared.dss", case_dir.join("link.dss")).unwrap();
+    let master = case_dir.join("master.dss");
+    std::fs::write(
+        &master,
+        "New Circuit.c1\nRedirect link.dss\nNew Line.l1 bus1=a bus2=b linecode=lc1\n",
+    )
+    .unwrap();
+    let out_path = dir.join("out.json");
+
+    let out = run(&[
+        "convert",
+        master.to_str().unwrap(),
+        "--to",
+        "bmopf",
+        "-o",
+        out_path.to_str().unwrap(),
+    ]);
+    assert_failure(&out);
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains("READ.DSS.INCLUDE_REFUSED"),
+        "stderr:\n{stderr}"
+    );
+    assert!(
+        stderr.contains("symbolic link"),
+        "the refusal must name the route:\n{stderr}"
+    );
+    assert!(
+        stderr.contains("references unknown linecode"),
+        "the linked file must stay unread:\n{stderr}"
+    );
+}
+
+#[test]
+fn package_exits_nonzero_on_a_refused_include() {
+    // The package envelope carries the same `Error` finding convert fails on,
+    // so the package subcommand has to fail with it too — otherwise a script
+    // gating on the exit code accepts a package built from a truncated network.
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = tmp.path();
+    let case_dir = dir.join("case");
+    std::fs::create_dir_all(&case_dir).unwrap();
+    std::fs::write(
+        dir.join("shared.dss"),
+        "New Linecode.lc1 nphases=3 r1=0.1 x1=0.2\n",
+    )
+    .unwrap();
+    let master = case_dir.join("master.dss");
+    std::fs::write(
+        &master,
+        "New Circuit.c1\nRedirect ../shared.dss\nNew Line.l1 bus1=a bus2=b linecode=lc1\n",
+    )
+    .unwrap();
+    let out_path = dir.join("out.pio.json");
+
+    let out = run(&[
+        "package",
+        master.to_str().unwrap(),
+        "-o",
+        out_path.to_str().unwrap(),
+    ]);
+    assert_failure(&out);
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains("READ.DSS.INCLUDE_REFUSED"),
+        "stderr:\n{stderr}"
+    );
+    assert!(
+        out_path.is_file(),
+        "the package must still be written for inspection"
+    );
+}
+
+#[test]
+fn an_unreadable_include_is_a_warning_not_a_containment_refusal() {
+    // A file the OS refuses to open raises the same `PermissionDenied` kind the
+    // loader uses for its own symlink-escape refusal. Only the loader's own
+    // refusal is a containment failure; an ordinary unreadable include inside
+    // the case directory stays a warning and the run still exits 0.
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = tmp.path();
+    let unreadable = dir.join("shared.dss");
+    std::fs::write(&unreadable, "New Linecode.lc1 nphases=3 r1=0.1 x1=0.2\n").unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&unreadable, std::fs::Permissions::from_mode(0o000)).unwrap();
+    }
+    let master = dir.join("master.dss");
+    std::fs::write(
+        &master,
+        "New Circuit.c1\nRedirect shared.dss\nNew Line.l1 bus1=a bus2=b r1=0.1 x1=0.2\n",
+    )
+    .unwrap();
+    let out_path = dir.join("out.json");
+
+    let out = run(&[
+        "convert",
+        master.to_str().unwrap(),
+        "--to",
+        "bmopf",
+        "-o",
+        out_path.to_str().unwrap(),
+    ]);
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    #[cfg(unix)]
+    if !nix_running_as_root() {
+        assert!(
+            out.status.success(),
+            "an unreadable include is not an escape attempt:\n{stderr}"
+        );
+        assert!(
+            !stderr.contains("READ.DSS.INCLUDE_REFUSED"),
+            "stderr:\n{stderr}"
+        );
+    }
+}
+
+/// Root reads a mode 000 file, so the permission case cannot be staged there.
+#[cfg(unix)]
+fn nix_running_as_root() -> bool {
+    std::fs::File::open("/proc/1/mem").is_ok() || std::env::var("USER").is_ok_and(|u| u == "root")
+}

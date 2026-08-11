@@ -1125,7 +1125,7 @@ fn run_package(
     from: Option<FormatArg>,
     scenario: i64,
 ) -> anyhow::Result<()> {
-    let text = package_text(input, from, scenario)?;
+    let (text, parse_errors) = package_text(input, from, scenario)?;
     match output {
         Some(p) if p.as_os_str() != "-" => {
             std::fs::write(p, &text).with_context(|| format!("writing {}", p.display()))?;
@@ -1133,16 +1133,35 @@ fn run_package(
         }
         _ => print!("{text}"),
     }
-    Ok(())
+    // The package is written either way — it is the record of what the reader
+    // saw — but a refused include is an `Error` finding in its own envelope,
+    // so the exit code has to say so, as `convert` does.
+    fail_on_parse_errors(&parse_errors)
 }
 
-fn package_text(input: &Path, from: Option<FormatArg>, scenario: i64) -> anyhow::Result<String> {
+/// The package JSON and the `Error`-or-worse findings its envelope carries.
+fn package_text(
+    input: &Path,
+    from: Option<FormatArg>,
+    scenario: i64,
+) -> anyhow::Result<(String, Vec<String>)> {
     let pkg = build_package(input, from, scenario)?;
+    let errors = package_error_lines(&pkg.diagnostics);
     let text = pkg
         .to_json_pretty()
         .context("serializing .pio.json package")?;
     NetworkPackage::from_json(&text).context("validating .pio.json package readback")?;
-    Ok(text)
+    Ok((text, errors))
+}
+
+/// [`parse_error_lines`] for the package's own diagnostic type: the dist and
+/// package crates carry twin diagnostic shapes without depending on each other.
+fn package_error_lines(diagnostics: &[powerio_pkg::StructuredDiagnostic]) -> Vec<String> {
+    diagnostics
+        .iter()
+        .filter(|d| d.severity >= powerio_pkg::DiagnosticSeverity::Error)
+        .map(|d| format!("{}: {}", d.code, d.message))
+        .collect()
 }
 
 fn build_package(
@@ -1397,7 +1416,7 @@ fn run_convert(
             to.name()
         );
     }
-    let (text, sidecars, warnings) = if let Some(target) = to.transmission() {
+    let (text, sidecars, warnings, parse_errors) = if let Some(target) = to.transmission() {
         let options = gen_cost_options.write_options()?;
         // gridfm reads a Parquet dataset directory (the parquet-free
         // `parse_file` can't), so it routes through powerio-matrix's reader,
@@ -1426,7 +1445,7 @@ fn run_convert(
         };
         let conv = powerio_matrix::write_as_with_options(&net, target, &options)
             .with_context(|| format!("serializing to {target}"))?;
-        (conv.text, Vec::new(), conv.warnings)
+        (conv.text, Vec::new(), conv.warnings, Vec::new())
     } else {
         let net = if let Some(case) = &classified {
             match parse_classified_case(case, input)? {
@@ -1446,12 +1465,48 @@ fn run_convert(
             .distribution()
             .expect("the family check routed a transmission target here");
         let conv = net.to_format(target);
-        (conv.text, conv.sidecars, conv.warnings)
+        // Both halves, as `convert.rs`'s own glue does: a writer emits its own
+        // structured findings, and an `Error` from either side has to reach
+        // the exit code.
+        let mut diagnostics = net.parse_diagnostics.clone();
+        diagnostics.extend(conv.diagnostics);
+        (
+            conv.text,
+            conv.sidecars,
+            conv.warnings,
+            parse_error_lines(&diagnostics),
+        )
     };
     for w in &warnings {
         eprintln!("fidelity: {w}");
     }
-    write_conversion_output(&text, &sidecars, output)
+    write_conversion_output(&text, &sidecars, output)?;
+    fail_on_parse_errors(&parse_errors)
+}
+
+/// The `Error`-or-worse parse findings, formatted for stderr.
+fn parse_error_lines(diagnostics: &[powerio_dist::StructuredDiagnostic]) -> Vec<String> {
+    diagnostics
+        .iter()
+        .filter(|d| d.severity >= powerio_dist::DiagnosticSeverity::Error)
+        .map(|d| format!("{}: {}", d.code, d.message))
+        .collect()
+}
+
+/// Exit nonzero after the output is written: the file exists for
+/// inspection, but the parse was incomplete and scripts must not treat the
+/// run as clean (#275).
+fn fail_on_parse_errors(parse_errors: &[String]) -> anyhow::Result<()> {
+    if parse_errors.is_empty() {
+        return Ok(());
+    }
+    for e in parse_errors {
+        eprintln!("error: {e}");
+    }
+    anyhow::bail!(
+        "{} parse error(s); the output is incomplete (see the error lines above)",
+        parse_errors.len()
+    )
 }
 
 /// Write conversion `text` to `output` (stdout on `-` or `None`), placing any
@@ -1978,7 +2033,7 @@ mod tests {
     #[test]
     fn package_text_matches_balanced_shape_and_provenance() {
         let input = data("case9.m");
-        let text = package_text(&input, None, 0).unwrap();
+        let (text, _) = package_text(&input, None, 0).unwrap();
         let pkg = NetworkPackage::from_json(&text).unwrap();
         assert_eq!(pkg.model_kind, powerio_pkg::ModelKind::Balanced);
         assert!(pkg.kind_is_consistent());
@@ -2036,7 +2091,7 @@ mod tests {
 
     #[test]
     fn package_helper_returns_stdout_text() {
-        let text = package_text(&data("case9.m"), None, 0).unwrap();
+        let (text, _) = package_text(&data("case9.m"), None, 0).unwrap();
         assert!(text.contains("\"schema_version\""));
         let pkg = NetworkPackage::from_json(&text).unwrap();
         assert_eq!(pkg.summary.elements["buses"], 9);
@@ -2044,7 +2099,7 @@ mod tests {
 
     #[test]
     fn package_text_includes_validation_passes() {
-        let text = package_text(&data("case9.m"), None, 0).unwrap();
+        let (text, _) = package_text(&data("case9.m"), None, 0).unwrap();
         let pkg = NetworkPackage::from_json(&text).unwrap();
         assert!(
             pkg.validation

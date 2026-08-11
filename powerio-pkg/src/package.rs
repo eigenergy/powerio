@@ -318,6 +318,42 @@ impl NetworkPackage {
         self.validation = ValidationSummary::from_diagnostics(&self.diagnostics);
     }
 
+    /// The dist crate mirrors the package diagnostic shape without a
+    /// dependency on this crate; this maps between the twin types.
+    fn lift_dist_diagnostic(d: &powerio_dist::StructuredDiagnostic) -> StructuredDiagnostic {
+        use powerio_dist::{DiagnosticSeverity as DS, DiagnosticStage as DG};
+        let severity = match d.severity {
+            DS::Debug => DiagnosticSeverity::Debug,
+            DS::Info => DiagnosticSeverity::Info,
+            DS::Warning => DiagnosticSeverity::Warning,
+            DS::Error => DiagnosticSeverity::Error,
+            DS::Fatal => DiagnosticSeverity::Fatal,
+        };
+        let stage = match d.stage {
+            DG::Parse => DiagnosticStage::Parse,
+            DG::Canonicalize => DiagnosticStage::Canonicalize,
+            DG::Validate => DiagnosticStage::Validate,
+            DG::Lower => DiagnosticStage::Lower,
+            DG::Emit => DiagnosticStage::Emit,
+            DG::Bind => DiagnosticStage::Bind,
+            DG::Partner => DiagnosticStage::Partner,
+            // The dist stage enum is non_exhaustive; `Read` and any stage a
+            // newer dist crate adds read as the read stage.
+            _ => DiagnosticStage::Read,
+        };
+        StructuredDiagnostic {
+            code: d.code.as_str().into(),
+            severity,
+            stage,
+            message: d.message.clone(),
+            element_path: d.element_path.clone(),
+            source_ref: None,
+            details: d.details.clone(),
+            suggested_action: d.suggested_action.clone(),
+            safe_to_ignore: d.safe_to_ignore.clone(),
+        }
+    }
+
     /// Wrap a multiconductor network. Parse `warnings` are lifted into structured
     /// diagnostics, and `defaulted` fields are lifted into source maps with
     /// `mapping_kind = defaulted`, so the package surfaces that provenance even
@@ -329,18 +365,30 @@ impl NetworkPackage {
         let source_maps = multiconductor_source_maps(&net, source_id.as_deref());
         let origin = multiconductor_origin(&net);
 
-        let diagnostics: Vec<StructuredDiagnostic> = net
-            .warnings
+        // Typed parse findings keep their severity (a refused include is an
+        // `Error`); each remaining warning string lifts at `Warning`. A
+        // typed finding and its warning twin share one message, so the
+        // filter keeps the pair from appearing twice.
+        let mut diagnostics: Vec<StructuredDiagnostic> = net
+            .parse_diagnostics
             .iter()
-            .map(|w| {
-                StructuredDiagnostic::new(
-                    "READ.DIST.PARSE_WARNING",
-                    DiagnosticSeverity::Warning,
-                    DiagnosticStage::Read,
-                    w.clone(),
-                )
-            })
+            .map(Self::lift_dist_diagnostic)
             .collect();
+        let typed: std::collections::BTreeSet<String> =
+            diagnostics.iter().map(|d| d.message.clone()).collect();
+        diagnostics.extend(
+            net.warnings
+                .iter()
+                .filter(|w| !typed.contains(w.as_str()))
+                .map(|w| {
+                    StructuredDiagnostic::new(
+                        "READ.DIST.PARSE_WARNING",
+                        DiagnosticSeverity::Warning,
+                        DiagnosticStage::Read,
+                        w.clone(),
+                    )
+                }),
+        );
         let validation = ValidationSummary::from_diagnostics(&diagnostics);
 
         Self {

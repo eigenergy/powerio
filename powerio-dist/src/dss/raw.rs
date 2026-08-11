@@ -237,6 +237,9 @@ pub struct RawDss {
     pub buscoords: Vec<BusCoord>,
     pub vars: VarMap,
     pub warnings: Vec<String>,
+    /// Structured findings beside `warnings`; an `Error` entry marks an
+    /// incomplete parse the CLI must not exit 0 on.
+    pub diagnostics: Vec<crate::diagnostics::StructuredDiagnostic>,
     index: BTreeMap<(String, String), usize>,
     active: Option<usize>,
 }
@@ -625,11 +628,50 @@ impl<L: Loader> Executor<'_, L> {
     ) -> Option<PathBuf> {
         let resolved = self.resolve(file_arg);
         if resolved.is_none() {
-            self.raw.warn(ctx(format!(
+            let message = ctx(format!(
                 "{verb} {file_arg}: refused; include escapes the case directory"
-            )));
+            ));
+            self.refuse(message);
         }
         resolved
+    }
+
+    /// Records a refused include: the warning line and the `Error` finding
+    /// that keeps the run from exiting 0.
+    fn refuse(&mut self, message: String) {
+        self.raw.warn(message.clone());
+        self.raw.diagnostics.push(
+            crate::diagnostics::StructuredDiagnostic::new(
+                crate::diagnostics::READ_DSS_INCLUDE_REFUSED,
+                crate::diagnostics::DiagnosticSeverity::Error,
+                crate::diagnostics::DiagnosticStage::Parse,
+                message,
+            )
+            .with_suggested_action(
+                "place included files inside the case directory, or merge them into the case",
+            ),
+        );
+    }
+
+    /// Records a failed include load. A containment refusal is the loader's
+    /// own, covering what the lexical check cannot see: the path is inside the
+    /// case directory but resolves out of it through a symbolic link. It
+    /// carries the same code and severity as a lexical refusal. Every other
+    /// load failure — including a `PermissionDenied` the filesystem raised on
+    /// an include that is where it claims to be — stays a warning.
+    fn warn_load_error(
+        &mut self,
+        verb: &str,
+        path: &Path,
+        e: &std::io::Error,
+        ctx: &dyn Fn(String) -> String,
+    ) {
+        let message = ctx(format!("{verb} {}: {e}", path.display()));
+        if Containment::refused_by_us(e) {
+            self.refuse(message);
+        } else {
+            self.raw.warn(message);
+        }
     }
 
     fn do_redirect(&mut self, scan: &mut Scanner, compile: bool, ctx: &dyn Fn(String) -> String) {
@@ -663,10 +705,7 @@ impl<L: Loader> Executor<'_, L> {
                     *top = dir;
                 }
             }
-            Err(e) => {
-                self.raw
-                    .warn(ctx(format!("{verb} {}: {e}", path.display())));
-            }
+            Err(e) => self.warn_load_error(verb, &path, &e, ctx),
         }
     }
 
@@ -702,9 +741,7 @@ impl<L: Loader> Executor<'_, L> {
                     }
                 }
             }
-            Err(e) => self
-                .raw
-                .warn(ctx(format!("buscoords {}: {e}", path.display()))),
+            Err(e) => self.warn_load_error("buscoords", &path, &e, ctx),
         }
     }
 
@@ -926,20 +963,45 @@ pub(crate) fn confined_fs_read(
     path: &Path,
 ) -> std::io::Result<String> {
     let Some(root) = canonical_root else {
-        return Err(std::io::Error::new(
-            std::io::ErrorKind::PermissionDenied,
+        return Err(Containment::refused(
             "case directory cannot be resolved; includes are disabled",
         ));
     };
     let real = path.canonicalize()?;
     if !real.starts_with(root) {
-        return Err(std::io::Error::new(
-            std::io::ErrorKind::PermissionDenied,
+        return Err(Containment::refused(
             "resolves outside the case directory through a symbolic link",
         ));
     }
     std::fs::read_to_string(&real)
 }
+
+/// The loader's own containment refusal, carried inside the `io::Error` so it
+/// stays distinguishable from a `PermissionDenied` the filesystem raised. A
+/// mode 000 file inside the case directory is an ordinary unreadable include,
+/// not an escape attempt, and must not be reported as one.
+#[derive(Debug)]
+pub(crate) struct Containment(&'static str);
+
+impl Containment {
+    fn refused(reason: &'static str) -> std::io::Error {
+        std::io::Error::new(std::io::ErrorKind::PermissionDenied, Containment(reason))
+    }
+
+    /// Whether `e` is a refusal this module raised.
+    pub(crate) fn refused_by_us(e: &std::io::Error) -> bool {
+        e.get_ref()
+            .is_some_and(<dyn std::error::Error + Send + Sync>::is::<Self>)
+    }
+}
+
+impl std::fmt::Display for Containment {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.0)
+    }
+}
+
+impl std::error::Error for Containment {}
 
 /// Like [`parse_raw_with`], but confines `Redirect`/`Compile`/`Buscoords`
 /// includes to the directory of `path`: an include that is absolute or climbs
@@ -1381,6 +1443,19 @@ mod tests {
                 .filter(|w| w.contains("escapes the case directory"))
                 .count(),
             3
+        );
+        // Each refusal is also an Error-severity finding (#275): the parse
+        // continued, but the network is incomplete.
+        let refused: Vec<_> = raw
+            .diagnostics
+            .iter()
+            .filter(|d| d.code.as_str() == crate::diagnostics::READ_DSS_INCLUDE_REFUSED)
+            .collect();
+        assert_eq!(refused.len(), 3);
+        assert!(
+            refused
+                .iter()
+                .all(|d| d.severity == crate::diagnostics::DiagnosticSeverity::Error)
         );
     }
 
