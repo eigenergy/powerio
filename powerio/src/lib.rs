@@ -77,7 +77,9 @@ pub use network::{
     SolverParams, SourceFormat, Storage, Switch, SwitchedShuntControl, SwitchedShuntMode,
     Transformer3W, TransformerControl, TransformerControlMode, Winding,
 };
-pub use normalize::{NormalizeOptions, NormalizedNetwork, POWER_MODELS_ANGLE_BOUND_PAD};
+pub use normalize::{
+    NormalizeOptions, NormalizeSourceRows, NormalizedNetwork, POWER_MODELS_ANGLE_BOUND_PAD,
+};
 pub use operations::Selector;
 pub use solver_tables::{
     NORMALIZED_SOLVER_TABLES_PASS, NormalizedSolverTables, SolverArcRow, SolverArcTerminal,

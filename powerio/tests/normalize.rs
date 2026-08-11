@@ -4,8 +4,8 @@
 use std::path::{Path, PathBuf};
 
 use powerio::{
-    BusId, BusType, Error, IndexedNetwork, SourceFormat, Storage, TargetFormat, parse_file,
-    parse_matpower_file, parse_str, write_as,
+    BusId, BusType, Error, Generator, IndexedNetwork, NormalizeOptions, Shunt, SourceFormat,
+    Storage, TargetFormat, parse_file, parse_matpower_file, parse_str, write_as,
 };
 
 const DEG_TO_RAD: f64 = std::f64::consts::PI / 180.0;
@@ -212,6 +212,67 @@ mpc.branch = [
     assert_eq!(n.loads[0].bus.0, 3, "load keeps the source id");
     assert_eq!(n.buses[0].kind, BusType::Ref);
     assert_eq!(n.buses[1].kind, BusType::Pq);
+}
+
+#[test]
+fn source_rows_map_normalized_positions_to_raw_rows() {
+    // Bus 2 is isolated; branch row 1 (2-3) dies with it; branch row 2 is out
+    // of service; gen row 1 is out of service; the load on bus 2 dies with the
+    // bus. Each surviving family position must name its raw row.
+    let src = "\
+function mpc = rows
+mpc.version = '2';
+mpc.baseMVA = 100;
+mpc.bus = [
+\t1\t3\t0\t0\t0\t0\t1\t1\t0\t230\t1\t1.1\t0.9;
+\t2\t4\t0\t0\t0\t0\t1\t1\t0\t230\t1\t1.1\t0.9;
+\t3\t1\t50\t10\t0\t0\t1\t1\t0\t230\t1\t1.1\t0.9;
+\t4\t1\t20\t5\t3\t7\t1\t1\t0\t230\t1\t1.1\t0.9;
+];
+mpc.gen = [
+\t1\t0\t0\t100\t-100\t1\t100\t1\t200\t0\t0\t0\t0\t0\t0\t0\t0\t0\t0\t0\t0;
+\t3\t0\t0\t100\t-100\t1\t100\t0\t200\t0\t0\t0\t0\t0\t0\t0\t0\t0\t0\t0\t0;
+\t4\t0\t0\t100\t-100\t1\t100\t1\t200\t0\t0\t0\t0\t0\t0\t0\t0\t0\t0\t0\t0;
+];
+mpc.branch = [
+\t1\t3\t0.01\t0.1\t0\t0\t0\t0\t0\t0\t1\t-360\t360;
+\t2\t3\t0.01\t0.1\t0\t0\t0\t0\t0\t0\t1\t-360\t360;
+\t3\t4\t0.01\t0.1\t0\t0\t0\t0\t0\t0\t0\t-360\t360;
+\t1\t4\t0.01\t0.1\t0\t0\t0\t0\t0\t0\t1\t-360\t360;
+];
+";
+    let raw = parse_str(src, "matpower").unwrap().network;
+    let (n, rows) = raw
+        .to_normalized_with_source_rows(&NormalizeOptions::default())
+        .unwrap();
+
+    assert_eq!(rows.buses, [Some(0), Some(2), Some(3)]);
+    assert_eq!(rows.branches, [Some(0), Some(3)]);
+    assert_eq!(rows.generators, [Some(0), Some(2)]);
+    // The MATPOWER bus PD/QD columns become one load per demand-carrying bus,
+    // in bus order. The load on dropped bus 2 is not a raw load here, so both
+    // raw loads (buses 3 and 4) survive.
+    assert_eq!(rows.loads, [Some(0), Some(1)]);
+    assert_eq!(rows.shunts, [Some(0)]);
+
+    for (pos, row) in rows.buses.iter().enumerate() {
+        let row = row.expect("no star lowering in this case");
+        assert_eq!(n.network.buses[pos].id, raw.buses[row].id);
+    }
+    for (pos, row) in rows.branches.iter().enumerate() {
+        let row = row.expect("no star lowering in this case");
+        assert_eq!(n.network.branches[pos].from, raw.branches[row].from);
+        assert_eq!(n.network.branches[pos].to, raw.branches[row].to);
+    }
+    for (pos, row) in rows.generators.iter().enumerate() {
+        let row = row.expect("no star lowering in this case");
+        assert_eq!(n.network.generators[pos].bus, raw.generators[row].bus);
+    }
+    let plain = raw
+        .to_normalized_with_options(&NormalizeOptions::default())
+        .unwrap();
+    assert_eq!(plain.network.buses.len(), n.network.buses.len());
+    assert_eq!(plain.network.branches.len(), n.network.branches.len());
 }
 
 #[test]
@@ -591,3 +652,82 @@ mpc.branch = [
     assert!(approx(s.ps, 5.0), "ps stays raw: {}", s.ps);
     assert!(approx(s.qs, 3.0), "qs stays raw: {}", s.qs);
 }
+
+#[test]
+fn source_rows_cover_the_star_lowered_view() {
+    // `IndexedNetwork` star-lowers an in-service 3-winding transformer, which
+    // appends a bus, its star branches, and a magnetizing shunt. Those have no
+    // source row, so the map must still be positional over the lowered view.
+    let mut raw = parse_str(EPC_3W, "pslf").unwrap().network;
+    raw.buses[0].kind = BusType::Ref;
+    let mut g = Generator::new(BusId(1));
+    g.pmax = 100.0;
+    raw.generators.push(g);
+
+    let (n, rows) = raw
+        .to_normalized_with_source_rows(&NormalizeOptions::default())
+        .unwrap();
+    let view = IndexedNetwork::new(&n.network);
+
+    assert_eq!(rows.buses.len(), view.n());
+    assert_eq!(rows.branches.len(), view.branches().len());
+    assert_eq!(rows.shunts.len(), view.network().shunts.len());
+
+    // The star bus and its branches are the appended tail.
+    assert_eq!(rows.buses[..3], [Some(0), Some(1), Some(2)]);
+    assert_eq!(*rows.buses.last().unwrap(), None);
+    assert!(rows.branches.iter().all(Option::is_none));
+}
+
+#[test]
+fn source_rows_cover_the_magnetizing_shunt_the_lowering_appends() {
+    // `source_rows_cover_the_star_lowered_view` runs on a transformer with no
+    // magnetizing admittance, so its shunt assertion compares an empty map to an
+    // empty table. Give the transformer a magnetizing branch and the lowering
+    // appends a shunt after the real one: the map has to grow with it, or
+    // reading provenance for that tail position is out of bounds.
+    let mut raw = parse_str(EPC_3W, "pslf").unwrap().network;
+    raw.buses[0].kind = BusType::Ref;
+    let mut g = Generator::new(BusId(1));
+    g.pmax = 100.0;
+    raw.generators.push(g);
+    raw.shunts.push(Shunt::new(BusId(2), 0.0, 5.0));
+    raw.transformers_3w[0].mag_b = 0.01;
+
+    let (n, rows) = raw
+        .to_normalized_with_source_rows(&NormalizeOptions::default())
+        .unwrap();
+    let view = IndexedNetwork::new(&n.network);
+
+    assert_eq!(
+        view.network().shunts.len(),
+        2,
+        "real shunt, then magnetizing"
+    );
+    assert_eq!(rows.shunts.len(), view.network().shunts.len());
+    // The real shunt keeps its raw row; the appended magnetizing shunt has none.
+    assert_eq!(rows.shunts, [Some(0), None]);
+    assert_eq!(rows.buses.len(), view.n());
+    assert_eq!(rows.branches.len(), view.branches().len());
+
+    // The tables read provenance by position across the lowered view, so the
+    // padding has to hold for them too.
+    let tables = raw.to_normalized_solver_tables().unwrap();
+    assert_eq!(tables.index.shunt_source_rows, [Some(0), None]);
+}
+
+const EPC_3W: &str = r#"title
+t3w
+!
+solution parameters
+sbase 100.0000
+!
+bus data  [3] ty vsched volt angle ar zone vmax vmin
+1 "B1          " 230.0000 : 0 1.0 1.0 0.0 1 1 1.1 0.9
+2 "B2          " 138.0000 : 1 1.0 1.0 0.0 1 1 1.1 0.9
+3 "B3          " 13.8000 : 1 1.0 1.0 0.0 1 1 1.1 0.9
+transformer data  [1]
+1 "B1          " 230.00 2 "B2          " 138.00 "1 " 1 "xf3" : 1 0 0 0 0 0 0 0 0 3 0 0 0 0 100 0.01 0.06 0.02 0.07 0.03 0.08 /
+0 0 0 0 0 0 100 90 80 0 0.0 0 0 0 0 0 1.05
+end
+"#;
