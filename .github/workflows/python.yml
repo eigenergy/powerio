@@ -47,7 +47,7 @@ jobs:
 
   # The Python-source gates: ruff (pinned rule set in ruff.toml), mypy over
   # the wrapper (mypy.ini), and stubtest comparing the hand-written stubs
-  # against the built extension. The stubs are the public typing contract
+  # against the built extension. The stubs declare the public typing surface
   # (`py.typed`), so a Rust-side rename fails here instead of shipping a
   # stale stub. Known by-design deviations live in python/stubtest_allowlist.txt.
   quality:
