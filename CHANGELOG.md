@@ -1,5 +1,28 @@
 # Changelog
 
+## 0.8.2
+
+Row provenance from the normalize pass, a PYPOWER bridge, `null` for a nonfinite float in the multiconductor payload, and distribution writer coverage for rated capacitor banks and unbalanced loads. No breaking API changes; two behaviors change in ways a consumer can observe, both below.
+
+**`.pio.json` moves to schema 0.2.1.** `serde_json` writes a nonfinite `f64` as `null`, so a package holding an unbounded rating or an unstated line length wrote a file the payload reader refused — the library could not read its own output. The reader now restores `null` per field: an upper bound reads as +Inf, a lower bound as -Inf, and a length as NaN, the PMD convention. The writer is unchanged, so 0.2.0 and 0.2.1 documents load in each other's readers, which is what the patch bump says. The published schema documents the `null` spelling and keeps every required key required; the multiconductor to balanced pass refuses a line whose length is not a finite number rather than scaling an impedance by NaN.
+
+**Solver table `*_source_rows` values change on an already-normalized input.** `NormalizedSolverTables` used to rebuild provenance in `solver_tables` by re-simulating the normalize filter against the source network. The normalize pass now reports the rows itself through `Network::to_normalized_with_source_rows`, so there is one map instead of two that could drift, and it covers the star-lowered view the matrix builders read. For a raw case the values are unchanged. For a network already flagged `SourceFormat::Normalized` the old map was wrong — an out-of-service element and an isolated bus resolved to the wrong row or to none — and the new values are the identity. A consumer that stored provenance from 0.8.1 output for such a case resolves a dense row to a different source element after upgrading; regenerate it.
+
+**Distribution.**
+
+- Rated capacitor banks convert to OpenDSS. A `DistCapacitor` states `q_rated` at `v_nom`, which is what a dss `Capacitor` takes; banks were dropped with a warning before.
+- A load whose phases carry different power emits as one single phase `Load` per terminal. A dss `Load` divides its `kw` evenly across its phases, so one balanced object kept the total and lost the profile. A delta load keeps the balanced form and says what was lost, since its phases sit across terminal pairs.
+- A missing winding `kv` is derived from the bus voltage estimate instead of writing a `NaN` token, line level `i_max` maps to `emergamps`, and the BMOPF writer authors `terminal_conventions` from the network's own terminal naming when the block is absent.
+- A refused OpenDSS include is an `Error` finding, so `powerio convert` and `powerio package` exit nonzero on a case whose `Redirect` escapes the case directory. The output is still written, for inspection. An include the OS refuses to open for an unrelated reason stays a warning.
+
+**Python.**
+
+- `Network.to_ppc()` and `powerio.from_ppc(ppc)` bridge a PYPOWER case dict, so a downstream server no longer hand builds the tables and hand serializes them back to MATPOWER text.
+- The generator view carries `caps`, the MATPOWER gen columns past `PMIN` in column order, `None` where the source stated nothing.
+- The MCP server runs on the mcp 2.0 SDK.
+
+**Repository.** ruff, mypy, and stubtest gate the pure Python layer; a fuzz smoke run and the book tests gate every PR.
+
 ## 0.8.1
 
 Text-writer hardening, JSON reader fidelity, a document-version report
