@@ -653,10 +653,12 @@ impl<L: Loader> Executor<'_, L> {
         );
     }
 
-    /// Records a failed include load. `PermissionDenied` is the loader's
-    /// containment refusal, which the lexical check cannot see: the path is
-    /// inside the case directory but resolves out of it through a symbolic
-    /// link. It carries the same code and severity as a lexical refusal.
+    /// Records a failed include load. A containment refusal is the loader's
+    /// own, covering what the lexical check cannot see: the path is inside the
+    /// case directory but resolves out of it through a symbolic link. It
+    /// carries the same code and severity as a lexical refusal. Every other
+    /// load failure — including a `PermissionDenied` the filesystem raised on
+    /// an include that is where it claims to be — stays a warning.
     fn warn_load_error(
         &mut self,
         verb: &str,
@@ -665,7 +667,7 @@ impl<L: Loader> Executor<'_, L> {
         ctx: &dyn Fn(String) -> String,
     ) {
         let message = ctx(format!("{verb} {}: {e}", path.display()));
-        if e.kind() == std::io::ErrorKind::PermissionDenied {
+        if Containment::refused_by_us(e) {
             self.refuse(message);
         } else {
             self.raw.warn(message);
@@ -961,20 +963,45 @@ pub(crate) fn confined_fs_read(
     path: &Path,
 ) -> std::io::Result<String> {
     let Some(root) = canonical_root else {
-        return Err(std::io::Error::new(
-            std::io::ErrorKind::PermissionDenied,
+        return Err(Containment::refused(
             "case directory cannot be resolved; includes are disabled",
         ));
     };
     let real = path.canonicalize()?;
     if !real.starts_with(root) {
-        return Err(std::io::Error::new(
-            std::io::ErrorKind::PermissionDenied,
+        return Err(Containment::refused(
             "resolves outside the case directory through a symbolic link",
         ));
     }
     std::fs::read_to_string(&real)
 }
+
+/// The loader's own containment refusal, carried inside the `io::Error` so it
+/// stays distinguishable from a `PermissionDenied` the filesystem raised. A
+/// mode 000 file inside the case directory is an ordinary unreadable include,
+/// not an escape attempt, and must not be reported as one.
+#[derive(Debug)]
+pub(crate) struct Containment(&'static str);
+
+impl Containment {
+    fn refused(reason: &'static str) -> std::io::Error {
+        std::io::Error::new(std::io::ErrorKind::PermissionDenied, Containment(reason))
+    }
+
+    /// Whether `e` is a refusal this module raised.
+    pub(crate) fn refused_by_us(e: &std::io::Error) -> bool {
+        e.get_ref()
+            .is_some_and(<dyn std::error::Error + Send + Sync>::is::<Self>)
+    }
+}
+
+impl std::fmt::Display for Containment {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.0)
+    }
+}
+
+impl std::error::Error for Containment {}
 
 /// Like [`parse_raw_with`], but confines `Redirect`/`Compile`/`Buscoords`
 /// includes to the directory of `path`: an include that is absolute or climbs

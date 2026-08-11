@@ -318,10 +318,6 @@ impl NetworkPackage {
         self.validation = ValidationSummary::from_diagnostics(&self.diagnostics);
     }
 
-    /// Wrap a multiconductor network. Parse `warnings` are lifted into structured
-    /// diagnostics, and `defaulted` fields are lifted into source maps with
-    /// `mapping_kind = defaulted`, so the package surfaces that provenance even
-    /// though those parser-side fields are not part of the IR payload.
     /// The dist crate mirrors the package diagnostic shape without a
     /// dependency on this crate; this maps between the twin types.
     fn lift_dist_diagnostic(d: &powerio_dist::StructuredDiagnostic) -> StructuredDiagnostic {
@@ -341,9 +337,9 @@ impl NetworkPackage {
             DG::Emit => DiagnosticStage::Emit,
             DG::Bind => DiagnosticStage::Bind,
             DG::Partner => DiagnosticStage::Partner,
-            // The dist stage enum is non_exhaustive; an unknown stage
-            // reads as the read stage.
-            DG::Read | _ => DiagnosticStage::Read,
+            // The dist stage enum is non_exhaustive; `Read` and any stage a
+            // newer dist crate adds read as the read stage.
+            _ => DiagnosticStage::Read,
         };
         StructuredDiagnostic {
             code: d.code.as_str().into(),
@@ -358,6 +354,10 @@ impl NetworkPackage {
         }
     }
 
+    /// Wrap a multiconductor network. Parse `warnings` are lifted into structured
+    /// diagnostics, and `defaulted` fields are lifted into source maps with
+    /// `mapping_kind = defaulted`, so the package surfaces that provenance even
+    /// though those parser-side fields are not part of the IR payload.
     pub fn from_multiconductor(net: MulticonductorNetwork) -> Self {
         let summary = multiconductor_summary(&net);
         let sources = multiconductor_sources(&net);
