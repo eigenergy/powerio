@@ -747,7 +747,10 @@
         "q_rated": {
           "description": "Nameplate rated reactive power of the whole bank, vars.",
           "format": "double",
-          "type": "number"
+          "type": [
+            "number",
+            "null"
+          ]
         },
         "terminal_map": {
           "items": {
@@ -758,7 +761,10 @@
         "v_nom": {
           "description": "Nameplate nominal voltage, volts: line to line for the three phase\nconfigurations, across the terminals for SINGLE_PHASE.",
           "format": "double",
-          "type": "number"
+          "type": [
+            "number",
+            "null"
+          ]
         }
       },
       "required": [
@@ -841,7 +847,10 @@
         "i_max": {
           "items": {
             "format": "double",
-            "type": "number"
+            "type": [
+              "number",
+              "null"
+            ]
           },
           "type": [
             "array",
@@ -852,9 +861,13 @@
           "type": "string"
         },
         "p_max": {
+          "default": null,
           "items": {
             "format": "double",
-            "type": "number"
+            "type": [
+              "number",
+              "null"
+            ]
           },
           "type": [
             "array",
@@ -862,9 +875,14 @@
           ]
         },
         "p_min": {
+          "default": null,
+          "description": "Bounds per phase. A `null` element reads as -Inf in a lower bound\nand +Inf in an upper bound: the PMD unbounded spelling (#268).",
           "items": {
             "format": "double",
-            "type": "number"
+            "type": [
+              "number",
+              "null"
+            ]
           },
           "type": [
             "array",
@@ -880,9 +898,13 @@
           "type": "array"
         },
         "q_max": {
+          "default": null,
           "items": {
             "format": "double",
-            "type": "number"
+            "type": [
+              "number",
+              "null"
+            ]
           },
           "type": [
             "array",
@@ -890,9 +912,13 @@
           ]
         },
         "q_min": {
+          "default": null,
           "items": {
             "format": "double",
-            "type": "number"
+            "type": [
+              "number",
+              "null"
+            ]
           },
           "type": [
             "array",
@@ -910,7 +936,10 @@
           "description": "Per-conductor apparent power and current limits, VA and amps (BMOPF\ngenerator fields, alongside the p/q bounds).",
           "items": {
             "format": "double",
-            "type": "number"
+            "type": [
+              "number",
+              "null"
+            ]
           },
           "type": [
             "array",
@@ -951,10 +980,14 @@
           "type": "object"
         },
         "i_max": {
+          "default": null,
           "description": "Per conductor current limits, amperes.",
           "items": {
             "format": "double",
-            "type": "number"
+            "type": [
+              "number",
+              "null"
+            ]
           },
           "type": [
             "array",
@@ -973,9 +1006,13 @@
           ]
         },
         "p_max": {
+          "default": null,
           "items": {
             "format": "double",
-            "type": "number"
+            "type": [
+              "number",
+              "null"
+            ]
           },
           "type": [
             "array",
@@ -983,9 +1020,13 @@
           ]
         },
         "p_min": {
+          "default": null,
           "items": {
             "format": "double",
-            "type": "number"
+            "type": [
+              "number",
+              "null"
+            ]
           },
           "type": [
             "array",
@@ -996,9 +1037,13 @@
           "$ref": "#/$defs/IbrPrimeMover"
         },
         "q_max": {
+          "default": null,
           "items": {
             "format": "double",
-            "type": "number"
+            "type": [
+              "number",
+              "null"
+            ]
           },
           "type": [
             "array",
@@ -1006,9 +1051,13 @@
           ]
         },
         "q_min": {
+          "default": null,
           "items": {
             "format": "double",
-            "type": "number"
+            "type": [
+              "number",
+              "null"
+            ]
           },
           "type": [
             "array",
@@ -1019,7 +1068,10 @@
           "description": "Per phase apparent power nameplate ratings, volt amperes.",
           "items": {
             "format": "double",
-            "type": "number"
+            "type": [
+              "number",
+              "null"
+            ]
           },
           "type": "array"
         },
@@ -1067,10 +1119,13 @@
           "type": "object"
         },
         "i_max": {
-          "description": "Per-conductor ampacity and apparent power limits, amps and VA\n(BMOPF schema 0.1.0 line fields, alongside the linecode's own).",
+          "description": "Per-conductor ampacity and apparent power limits, amps and VA\n(BMOPF schema 0.1.0 line fields, alongside the linecode's own).\nA `null` element reads as +Inf (#268).",
           "items": {
             "format": "double",
-            "type": "number"
+            "type": [
+              "number",
+              "null"
+            ]
           },
           "type": [
             "array",
@@ -1078,9 +1133,12 @@
           ]
         },
         "length": {
-          "description": "Meters.",
+          "description": "Meters. A `null` reads as NaN: a BMOPF line without a length (#268).",
           "format": "double",
-          "type": "number"
+          "type": [
+            "number",
+            "null"
+          ]
         },
         "linecode": {
           "type": "string"
@@ -1101,7 +1159,10 @@
         "s_max": {
           "items": {
             "format": "double",
-            "type": "number"
+            "type": [
+              "number",
+              "null"
+            ]
           },
           "type": [
             "array",
@@ -1181,10 +1242,14 @@
           "type": "array"
         },
         "i_max": {
-          "description": "Ampacity per conductor.",
+          "default": null,
+          "description": "Ampacity per conductor. A `null` element reads as +Inf (#268).",
           "items": {
             "format": "double",
-            "type": "number"
+            "type": [
+              "number",
+              "null"
+            ]
           },
           "type": [
             "array",
@@ -1211,9 +1276,13 @@
           "type": "array"
         },
         "s_max": {
+          "default": null,
           "items": {
             "format": "double",
-            "type": "number"
+            "type": [
+              "number",
+              "null"
+            ]
           },
           "type": [
             "array",
@@ -1725,9 +1794,14 @@
           "type": "object"
         },
         "i_max": {
+          "default": null,
+          "description": "Ampacity per conductor. A `null` element reads as +Inf (#268).",
           "items": {
             "format": "double",
-            "type": "number"
+            "type": [
+              "number",
+              "null"
+            ]
           },
           "type": [
             "array",
@@ -4801,12 +4875,18 @@
         "r_pct": {
           "description": "Winding resistance, percent of the winding base.",
           "format": "double",
-          "type": "number"
+          "type": [
+            "number",
+            "null"
+          ]
         },
         "s_rating": {
           "description": "Volt amperes.",
           "format": "double",
-          "type": "number"
+          "type": [
+            "number",
+            "null"
+          ]
         },
         "tap": {
           "format": "double",
@@ -4821,7 +4901,10 @@
         "v_ref": {
           "description": "Rated winding voltage, volts (line to line for 2 and 3 phase).",
           "format": "double",
-          "type": "number"
+          "type": [
+            "number",
+            "null"
+          ]
         },
         "x_neutral": {
           "format": "double",

@@ -45,7 +45,7 @@ ABI v4 continues to accept `powerio-json` in `pio_parse_str` and
 ## Versioning: `pio-package/0.2` {#pio-package}
 
 One version number covers the whole document, model JSON included:
-`schema_version`, semver, currently `0.2.0`. A `.pio.json` file is a
+`schema_version`, semver, currently `0.2.1`. A `.pio.json` file is a
 regenerable snapshot, so the reader's only versioning job is telling the caller
 when a file needs regenerating.
 
@@ -272,7 +272,7 @@ bindings, or MCP operations.
 
 ```json
 {
-  "schema_version": "0.2.0",
+  "schema_version": "0.2.1",
   "producer": { "tool": "powerio", "version": "0.8.0" },
   "model_kind": "multiconductor",
   "model": {
