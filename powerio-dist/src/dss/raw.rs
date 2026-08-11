@@ -631,20 +631,45 @@ impl<L: Loader> Executor<'_, L> {
             let message = ctx(format!(
                 "{verb} {file_arg}: refused; include escapes the case directory"
             ));
-            self.raw.warn(message.clone());
-            self.raw.diagnostics.push(
-                crate::diagnostics::StructuredDiagnostic::new(
-                    crate::diagnostics::READ_DSS_INCLUDE_REFUSED,
-                    crate::diagnostics::DiagnosticSeverity::Error,
-                    crate::diagnostics::DiagnosticStage::Parse,
-                    message,
-                )
-                .with_suggested_action(
-                    "place included files inside the case directory, or merge them into the case",
-                ),
-            );
+            self.refuse(message);
         }
         resolved
+    }
+
+    /// Records a refused include: the warning line and the `Error` finding
+    /// that keeps the run from exiting 0.
+    fn refuse(&mut self, message: String) {
+        self.raw.warn(message.clone());
+        self.raw.diagnostics.push(
+            crate::diagnostics::StructuredDiagnostic::new(
+                crate::diagnostics::READ_DSS_INCLUDE_REFUSED,
+                crate::diagnostics::DiagnosticSeverity::Error,
+                crate::diagnostics::DiagnosticStage::Parse,
+                message,
+            )
+            .with_suggested_action(
+                "place included files inside the case directory, or merge them into the case",
+            ),
+        );
+    }
+
+    /// Records a failed include load. `PermissionDenied` is the loader's
+    /// containment refusal, which the lexical check cannot see: the path is
+    /// inside the case directory but resolves out of it through a symbolic
+    /// link. It carries the same code and severity as a lexical refusal.
+    fn warn_load_error(
+        &mut self,
+        verb: &str,
+        path: &Path,
+        e: &std::io::Error,
+        ctx: &dyn Fn(String) -> String,
+    ) {
+        let message = ctx(format!("{verb} {}: {e}", path.display()));
+        if e.kind() == std::io::ErrorKind::PermissionDenied {
+            self.refuse(message);
+        } else {
+            self.raw.warn(message);
+        }
     }
 
     fn do_redirect(&mut self, scan: &mut Scanner, compile: bool, ctx: &dyn Fn(String) -> String) {
@@ -678,10 +703,7 @@ impl<L: Loader> Executor<'_, L> {
                     *top = dir;
                 }
             }
-            Err(e) => {
-                self.raw
-                    .warn(ctx(format!("{verb} {}: {e}", path.display())));
-            }
+            Err(e) => self.warn_load_error(verb, &path, &e, ctx),
         }
     }
 
@@ -717,9 +739,7 @@ impl<L: Loader> Executor<'_, L> {
                     }
                 }
             }
-            Err(e) => self
-                .raw
-                .warn(ctx(format!("buscoords {}: {e}", path.display()))),
+            Err(e) => self.warn_load_error("buscoords", &path, &e, ctx),
         }
     }
 

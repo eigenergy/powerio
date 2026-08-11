@@ -508,3 +508,55 @@ fn convert_exits_nonzero_on_a_refused_include() {
 
     let _ = std::fs::remove_dir_all(dir);
 }
+
+#[cfg(unix)]
+#[test]
+fn convert_exits_nonzero_on_an_include_refused_through_a_symbolic_link() {
+    // The lexical check passes this include: the link sits in the case
+    // directory. Only the loader sees that it resolves out of it.
+    let stamp = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_nanos();
+    let dir = std::env::temp_dir().join(format!("powerio-cli-symlink-{stamp}"));
+    let case_dir = dir.join("case");
+    std::fs::create_dir_all(&case_dir).unwrap();
+    std::fs::write(
+        dir.join("shared.dss"),
+        "New Linecode.lc1 nphases=3 r1=0.1 x1=0.2\n",
+    )
+    .unwrap();
+    std::os::unix::fs::symlink("../shared.dss", case_dir.join("link.dss")).unwrap();
+    let master = case_dir.join("master.dss");
+    std::fs::write(
+        &master,
+        "New Circuit.c1\nRedirect link.dss\nNew Line.l1 bus1=a bus2=b linecode=lc1\n",
+    )
+    .unwrap();
+    let out_path = dir.join("out.json");
+
+    let out = run(&[
+        "convert",
+        master.to_str().unwrap(),
+        "--to",
+        "bmopf",
+        "-o",
+        out_path.to_str().unwrap(),
+    ]);
+    assert_failure(&out);
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains("READ.DSS.INCLUDE_REFUSED"),
+        "stderr:\n{stderr}"
+    );
+    assert!(
+        stderr.contains("symbolic link"),
+        "the refusal must name the route:\n{stderr}"
+    );
+    assert!(
+        stderr.contains("references unknown linecode"),
+        "the linked file must stay unread:\n{stderr}"
+    );
+
+    let _ = std::fs::remove_dir_all(dir);
+}
