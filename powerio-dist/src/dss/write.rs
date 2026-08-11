@@ -951,9 +951,20 @@ impl DssWriter {
             // `i_max` maps to `emergamps`, as it does on a linecode. The
             // typed field wins over a token kept in extras.
             match l.i_max.as_deref() {
-                Some([amps, ..]) if amps.is_finite() => {
+                Some([amps, rest @ ..]) if amps.is_finite() => {
                     extras.remove("emergamps");
                     let _ = write!(s, " emergamps={}", num(*amps));
+                    // The dss Line has one emergamps for all phases. Compare
+                    // exactly: any difference makes the token wrong for a phase.
+                    #[allow(clippy::float_cmp)]
+                    let uneven = rest.iter().any(|a| *a != *amps);
+                    if uneven {
+                        self.warn(format!(
+                            "line {}: i_max is not equal on all phases; emergamps \
+                             holds the first phase only",
+                            l.name
+                        ));
+                    }
                 }
                 Some([_, ..]) => self.warn(format!(
                     "line {}: first i_max entry is nonfinite (an unbounded \
@@ -2443,6 +2454,40 @@ mod tests {
                 .any(|w| w.contains("a=b") && w.contains("cannot represent")),
             "{:?}",
             out2.warnings
+        );
+    }
+
+    #[test]
+    fn unequal_per_phase_i_max_warns_that_emergamps_holds_one_phase() {
+        let (b, vs) = three_phase_source(2400.0);
+        let net = DistNetwork {
+            base_frequency: 60.0,
+            buses: vec![b, bus("b2", &["1", "2", "3"], &[])],
+            sources: vec![vs],
+            lines: vec![DistLine {
+                name: "l1".into(),
+                bus_from: "sb".into(),
+                bus_to: "b2".into(),
+                terminal_map_from: strings(&["1", "2", "3"]),
+                terminal_map_to: strings(&["1", "2", "3"]),
+                linecode: "lc".into(),
+                length: 1.0,
+                route: None,
+                i_max: Some(vec![400.0, 300.0, 200.0]),
+                s_max: None,
+                extras: Extras::new(),
+            }],
+            ..DistNetwork::default()
+        };
+        let out = write_dss(&net);
+        let line = out.text.lines().find(|l| l.contains("Line.l1 ")).unwrap();
+        assert!(line.contains("emergamps=400"), "{line}");
+        assert!(
+            out.warnings
+                .iter()
+                .any(|w| w.contains("line l1") && w.contains("not equal on all phases")),
+            "{:?}",
+            out.warnings
         );
     }
 
