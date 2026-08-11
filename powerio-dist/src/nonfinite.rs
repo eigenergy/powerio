@@ -82,6 +82,22 @@ pub(crate) mod nan_scalar {
     }
 }
 
+/// The schema for a required field whose value may be `null`: the key must be
+/// present, and `null` is how a nonfinite value spells itself.
+///
+/// `schemars(with = "Option<f64>")` cannot say this. Naming an `Option` type
+/// there widens the type union *and* drops the field from the object's
+/// `required` list, which would publish a schema that accepts a document
+/// omitting the key — while [`nan_scalar`] still demands it, so the reader
+/// would reject a document the schema called valid.
+#[cfg(feature = "schema")]
+pub(crate) fn nullable_number(_: &mut schemars::SchemaGenerator) -> schemars::Schema {
+    schemars::json_schema!({
+        "type": ["number", "null"],
+        "format": "double",
+    })
+}
+
 #[cfg(test)]
 mod tests {
     #[derive(serde::Serialize, serde::Deserialize, Debug, PartialEq)]
@@ -123,5 +139,48 @@ mod tests {
         assert_eq!(back.lb, p.lb);
         assert!(back.len.is_nan());
         assert_eq!(text, serde_json::to_string(&back).unwrap());
+    }
+    /// `serde(with = ...)` drops the implicit "missing means `None`" handling
+    /// for an `Option` field, so every widened bound needs `default` beside it
+    /// or a document that omits the key stops parsing.
+    #[test]
+    fn an_omitted_bound_still_reads_as_absent() {
+        use crate::model::{DistLineCode, DistSwitch};
+
+        let code = DistLineCode::new("lc", vec![vec![0.1]], vec![vec![0.2]]);
+        let mut v = serde_json::to_value(&code).unwrap();
+        let obj = v.as_object_mut().unwrap();
+        obj.remove("i_max");
+        obj.remove("s_max");
+        let back: DistLineCode = serde_json::from_value(v).expect("omitted bounds must parse");
+        assert!(back.i_max.is_none() && back.s_max.is_none());
+
+        let sw = DistSwitch::new("sw", "a", "b", vec!["1".into()], vec!["1".into()], false);
+        let mut v = serde_json::to_value(&sw).unwrap();
+        v.as_object_mut().unwrap().remove("i_max");
+        let back: DistSwitch = serde_json::from_value(v).expect("omitted bound must parse");
+        assert!(back.i_max.is_none());
+    }
+
+    /// A required field spelled `null` for a nonfinite value is still required:
+    /// the schema must keep it in `required`, or it would accept a document the
+    /// reader rejects for a missing key.
+    #[cfg(feature = "schema")]
+    #[test]
+    fn a_nullable_scalar_stays_required_in_the_schema() {
+        let schema = schemars::schema_for!(crate::model::DistCapacitor);
+        let v = serde_json::to_value(&schema).unwrap();
+        let required: Vec<&str> = v["required"]
+            .as_array()
+            .expect("required list")
+            .iter()
+            .map(|x| x.as_str().unwrap())
+            .collect();
+        assert!(required.contains(&"q_rated"), "required: {required:?}");
+        assert!(required.contains(&"v_nom"), "required: {required:?}");
+        assert_eq!(
+            v["properties"]["q_rated"]["type"],
+            serde_json::json!(["number", "null"])
+        );
     }
 }

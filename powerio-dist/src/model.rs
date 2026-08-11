@@ -123,10 +123,10 @@ pub struct DistLineCode {
     pub g_to: Mat,
     pub b_to: Mat,
     /// Ampacity per conductor. A `null` element reads as +Inf (#268).
-    #[serde(with = "crate::nonfinite::upper_bounds")]
+    #[serde(default, with = "crate::nonfinite::upper_bounds")]
     #[cfg_attr(feature = "schema", schemars(with = "Option<Vec<Option<f64>>>"))]
     pub i_max: Option<Vec<f64>>,
-    #[serde(with = "crate::nonfinite::upper_bounds")]
+    #[serde(default, with = "crate::nonfinite::upper_bounds")]
     #[cfg_attr(feature = "schema", schemars(with = "Option<Vec<Option<f64>>>"))]
     pub s_max: Option<Vec<f64>>,
     /// Provenance of the impedance matrices (BMOPF `source`, e.g. "fem",
@@ -169,7 +169,10 @@ pub struct DistLine {
     pub linecode: String,
     /// Meters. A `null` reads as NaN: a BMOPF line without a length (#268).
     #[serde(with = "crate::nonfinite::nan_scalar")]
-    #[cfg_attr(feature = "schema", schemars(with = "Option<f64>"))]
+    #[cfg_attr(
+        feature = "schema",
+        schemars(schema_with = "crate::nonfinite::nullable_number")
+    )]
     pub length: f64,
     /// Polyline route in the network's coordinate space (`DistNetwork.geo`),
     /// present only when a source provides intermediate geometry.
@@ -239,12 +242,18 @@ pub struct DistCapacitor {
     pub configuration: Configuration,
     /// Nameplate rated reactive power of the whole bank, vars.
     #[serde(with = "crate::nonfinite::nan_scalar")]
-    #[cfg_attr(feature = "schema", schemars(with = "Option<f64>"))]
+    #[cfg_attr(
+        feature = "schema",
+        schemars(schema_with = "crate::nonfinite::nullable_number")
+    )]
     pub q_rated: f64,
     /// Nameplate nominal voltage, volts: line to line for the three phase
     /// configurations, across the terminals for SINGLE_PHASE.
     #[serde(with = "crate::nonfinite::nan_scalar")]
-    #[cfg_attr(feature = "schema", schemars(with = "Option<f64>"))]
+    #[cfg_attr(
+        feature = "schema",
+        schemars(schema_with = "crate::nonfinite::nullable_number")
+    )]
     pub v_nom: f64,
     pub extras: Extras,
 }
@@ -282,7 +291,7 @@ pub struct DistSwitch {
     pub terminal_map_to: Vec<String>,
     pub open: bool,
     /// Ampacity per conductor. A `null` element reads as +Inf (#268).
-    #[serde(with = "crate::nonfinite::upper_bounds")]
+    #[serde(default, with = "crate::nonfinite::upper_bounds")]
     #[cfg_attr(feature = "schema", schemars(with = "Option<Vec<Option<f64>>>"))]
     pub i_max: Option<Vec<f64>>,
     pub extras: Extras,
@@ -425,16 +434,16 @@ pub struct DistGenerator {
     pub q_nom: Vec<f64>,
     /// Bounds per phase. A `null` element reads as -Inf in a lower bound
     /// and +Inf in an upper bound: the PMD unbounded spelling (#268).
-    #[serde(with = "crate::nonfinite::lower_bounds")]
+    #[serde(default, with = "crate::nonfinite::lower_bounds")]
     #[cfg_attr(feature = "schema", schemars(with = "Option<Vec<Option<f64>>>"))]
     pub p_min: Option<Vec<f64>>,
-    #[serde(with = "crate::nonfinite::upper_bounds")]
+    #[serde(default, with = "crate::nonfinite::upper_bounds")]
     #[cfg_attr(feature = "schema", schemars(with = "Option<Vec<Option<f64>>>"))]
     pub p_max: Option<Vec<f64>>,
-    #[serde(with = "crate::nonfinite::lower_bounds")]
+    #[serde(default, with = "crate::nonfinite::lower_bounds")]
     #[cfg_attr(feature = "schema", schemars(with = "Option<Vec<Option<f64>>>"))]
     pub q_min: Option<Vec<f64>>,
-    #[serde(with = "crate::nonfinite::upper_bounds")]
+    #[serde(default, with = "crate::nonfinite::upper_bounds")]
     #[cfg_attr(feature = "schema", schemars(with = "Option<Vec<Option<f64>>>"))]
     pub q_max: Option<Vec<f64>>,
     /// $/kWh; no OpenDSS equivalent, so it is None until a format supplies it.
@@ -532,21 +541,21 @@ pub struct DistIbr {
     #[cfg_attr(feature = "schema", schemars(with = "Vec<Option<f64>>"))]
     pub s_max: Vec<f64>,
     /// Per conductor current limits, amperes.
-    #[serde(with = "crate::nonfinite::upper_bounds")]
+    #[serde(default, with = "crate::nonfinite::upper_bounds")]
     #[cfg_attr(feature = "schema", schemars(with = "Option<Vec<Option<f64>>>"))]
     pub i_max: Option<Vec<f64>>,
     /// Available active power, watts.
     pub p_avail: Option<f64>,
-    #[serde(with = "crate::nonfinite::lower_bounds")]
+    #[serde(default, with = "crate::nonfinite::lower_bounds")]
     #[cfg_attr(feature = "schema", schemars(with = "Option<Vec<Option<f64>>>"))]
     pub p_min: Option<Vec<f64>>,
-    #[serde(with = "crate::nonfinite::upper_bounds")]
+    #[serde(default, with = "crate::nonfinite::upper_bounds")]
     #[cfg_attr(feature = "schema", schemars(with = "Option<Vec<Option<f64>>>"))]
     pub p_max: Option<Vec<f64>>,
-    #[serde(with = "crate::nonfinite::lower_bounds")]
+    #[serde(default, with = "crate::nonfinite::lower_bounds")]
     #[cfg_attr(feature = "schema", schemars(with = "Option<Vec<Option<f64>>>"))]
     pub q_min: Option<Vec<f64>>,
-    #[serde(with = "crate::nonfinite::upper_bounds")]
+    #[serde(default, with = "crate::nonfinite::upper_bounds")]
     #[cfg_attr(feature = "schema", schemars(with = "Option<Vec<Option<f64>>>"))]
     pub q_max: Option<Vec<f64>>,
     pub control_profile: Option<String>,
@@ -740,15 +749,24 @@ pub struct Winding {
     pub conn: WindingConn,
     /// Rated winding voltage, volts (line to line for 2 and 3 phase).
     #[serde(with = "crate::nonfinite::nan_scalar")]
-    #[cfg_attr(feature = "schema", schemars(with = "Option<f64>"))]
+    #[cfg_attr(
+        feature = "schema",
+        schemars(schema_with = "crate::nonfinite::nullable_number")
+    )]
     pub v_ref: f64,
     /// Volt amperes.
     #[serde(with = "crate::nonfinite::nan_scalar")]
-    #[cfg_attr(feature = "schema", schemars(with = "Option<f64>"))]
+    #[cfg_attr(
+        feature = "schema",
+        schemars(schema_with = "crate::nonfinite::nullable_number")
+    )]
     pub s_rating: f64,
     /// Winding resistance, percent of the winding base.
     #[serde(with = "crate::nonfinite::nan_scalar")]
-    #[cfg_attr(feature = "schema", schemars(with = "Option<f64>"))]
+    #[cfg_attr(
+        feature = "schema",
+        schemars(schema_with = "crate::nonfinite::nullable_number")
+    )]
     pub r_pct: f64,
     pub tap: f64,
     #[serde(default, skip_serializing_if = "Option::is_none")]

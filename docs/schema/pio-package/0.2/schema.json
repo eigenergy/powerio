@@ -772,6 +772,8 @@
         "bus",
         "terminal_map",
         "configuration",
+        "q_rated",
+        "v_nom",
         "extras"
       ],
       "type": "object"
@@ -859,6 +861,7 @@
           "type": "string"
         },
         "p_max": {
+          "default": null,
           "items": {
             "format": "double",
             "type": [
@@ -872,6 +875,7 @@
           ]
         },
         "p_min": {
+          "default": null,
           "description": "Bounds per phase. A `null` element reads as -Inf in a lower bound\nand +Inf in an upper bound: the PMD unbounded spelling (#268).",
           "items": {
             "format": "double",
@@ -894,6 +898,7 @@
           "type": "array"
         },
         "q_max": {
+          "default": null,
           "items": {
             "format": "double",
             "type": [
@@ -907,6 +912,7 @@
           ]
         },
         "q_min": {
+          "default": null,
           "items": {
             "format": "double",
             "type": [
@@ -974,6 +980,7 @@
           "type": "object"
         },
         "i_max": {
+          "default": null,
           "description": "Per conductor current limits, amperes.",
           "items": {
             "format": "double",
@@ -999,6 +1006,7 @@
           ]
         },
         "p_max": {
+          "default": null,
           "items": {
             "format": "double",
             "type": [
@@ -1012,6 +1020,7 @@
           ]
         },
         "p_min": {
+          "default": null,
           "items": {
             "format": "double",
             "type": [
@@ -1028,6 +1037,7 @@
           "$ref": "#/$defs/IbrPrimeMover"
         },
         "q_max": {
+          "default": null,
           "items": {
             "format": "double",
             "type": [
@@ -1041,6 +1051,7 @@
           ]
         },
         "q_min": {
+          "default": null,
           "items": {
             "format": "double",
             "type": [
@@ -1178,6 +1189,7 @@
         "terminal_map_from",
         "terminal_map_to",
         "linecode",
+        "length",
         "extras"
       ],
       "type": "object"
@@ -1230,6 +1242,7 @@
           "type": "array"
         },
         "i_max": {
+          "default": null,
           "description": "Ampacity per conductor. A `null` element reads as +Inf (#268).",
           "items": {
             "format": "double",
@@ -1263,6 +1276,7 @@
           "type": "array"
         },
         "s_max": {
+          "default": null,
           "items": {
             "format": "double",
             "type": [
@@ -1780,6 +1794,7 @@
           "type": "object"
         },
         "i_max": {
+          "default": null,
           "description": "Ampacity per conductor. A `null` element reads as +Inf (#268).",
           "items": {
             "format": "double",
@@ -4903,6 +4918,9 @@
         "bus",
         "terminal_map",
         "conn",
+        "v_ref",
+        "s_rating",
+        "r_pct",
         "tap"
       ],
       "type": "object"

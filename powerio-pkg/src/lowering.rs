@@ -666,6 +666,7 @@ impl<'a> LoweringState<'a> {
         neutral: &[usize],
         length: f64,
     ) -> Result<Complex64, MulticonductorToBalancedError> {
+        self.check_finite_length(line_idx, length)?;
         let matrix = complex_matrix(&code.r_series, &code.x_series, length);
         let reduced = kron_or_select(&matrix, active, neutral).map_err(|message| {
             self.matrix_error(line_idx, &code.name, "series impedance", &message)
@@ -721,6 +722,35 @@ impl<'a> LoweringState<'a> {
             self.record.diagnostics.push(diagnostic);
         }
         seq[1][1]
+    }
+
+    /// Refuse a line whose length is not a finite number. A BMOPF line without
+    /// a length reads back as `NaN` (the `null` spelling), and every impedance
+    /// and admittance below scales by it, so an unchecked value would reach the
+    /// solver as a `NaN` branch with nothing said about it.
+    fn check_finite_length(
+        &self,
+        line_idx: usize,
+        length: f64,
+    ) -> Result<(), MulticonductorToBalancedError> {
+        if length.is_finite() {
+            return Ok(());
+        }
+        let mut diagnostics = self.record.diagnostics.clone();
+        diagnostics.push(
+            StructuredDiagnostic::new(
+                "LOWER.MULTI_TO_BALANCED.NONFINITE_LINE_LENGTH",
+                DiagnosticSeverity::Error,
+                DiagnosticStage::Lower,
+                format!("line {line_idx} has no finite length ({length}), so its impedance cannot be scaled"),
+            )
+            .with_element_path(format!("/model/multiconductor_network/lines/{line_idx}/length"))
+            .with_suggested_action("give the line a length in meters, or drop it from the network"),
+        );
+        Err(MulticonductorToBalancedError::new(
+            self.options,
+            diagnostics,
+        ))
     }
 
     fn matrix_error(
