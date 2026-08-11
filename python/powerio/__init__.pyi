@@ -82,6 +82,9 @@ class Gen(TypedDict):
     vg: float
     mbase: float
     in_service: bool
+    # MATPOWER gen columns past PMIN, in column order: pc1, pc2, qc1min,
+    # qc1max, qc2min, qc2max, ramp_agc, ramp_10, ramp_30, ramp_q, apf.
+    caps: List[Optional[float]]
     cost: Optional[GenCost]
     uid: Optional[str]
 

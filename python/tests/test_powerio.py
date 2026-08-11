@@ -816,6 +816,77 @@ def test_from_ppc_drops_result_columns(case9):
     assert back.n_buses == 9 and back.n_branches == 9
 
 
+def test_ppc_keeps_demand_on_a_de_energized_bus():
+    # The MATPOWER reader marks a load on an isolated bus out of service while
+    # keeping its PD/QD, and the writer still sums it onto the bus row. to_ppc
+    # has to agree: filtering on in_service silently dropped 50 MW that the
+    # same network writes out as MATPOWER text.
+    src = (
+        "function mpc = iso\n"
+        "mpc.version = '2';\n"
+        "mpc.baseMVA = 100;\n"
+        "mpc.bus = [\n"
+        "\t1\t3\t0\t0\t0\t0\t1\t1\t0\t230\t1\t1.1\t0.9;\n"
+        "\t2\t4\t50\t10\t3\t7\t1\t1\t0\t230\t1\t1.1\t0.9;\n"
+        "];\n"
+        "mpc.gen = [\n"
+        "\t1\t0\t0\t100\t-100\t1\t100\t1\t200\t0;\n"
+        "];\n"
+        "mpc.branch = [\n"
+        "\t1\t2\t0.01\t0.1\t0\t0\t0\t0\t0\t0\t1\t-360\t360;\n"
+        "];\n"
+    )
+    net = powerio.parse_str(src, "matpower")
+    assert not net.loads[0]["in_service"] and not net.shunts[0]["in_service"]
+
+    row = net.to_ppc()["bus"][1]
+    assert list(row[2:6]) == [50.0, 10.0, 3.0, 7.0]
+    back = powerio.from_ppc(net.to_ppc())
+    assert back.loads[0]["p"] == 50.0 and back.shunts[0]["b"] == 7.0
+
+
+def test_ppc_gen_width_follows_the_capability_columns(case9):
+    # case9 states the OPF capability columns (as zeros), so the table stays 21
+    # wide and the round trip keeps them. A 10 column source states none, and
+    # widening it to 21 would invent eleven zero limits — a ramp aware solver
+    # reads ramp_10 = 0 as a generator that cannot move.
+    assert case9.to_ppc()["gen"].shape == (3, 21)
+    assert all(c is not None for c in case9.generators[0]["caps"])
+
+    src = case9.to_matpower().split("mpc.gen = [")
+    rows = src[1].split("];")[0].strip().split("\n")
+    narrow = "\n".join("\t" + "\t".join(r.strip().rstrip(";").split()[:10]) + ";" for r in rows)
+    net = powerio.parse_str(f"{src[0]}mpc.gen = [\n{narrow}\n];{src[1].split('];', 1)[1]}", "matpower")
+    assert all(c is None for c in net.generators[0]["caps"])
+
+    ppc = net.to_ppc()
+    assert ppc["gen"].shape == (3, 10)
+    assert all(c is None for c in powerio.from_ppc(ppc).generators[0]["caps"])
+
+
+def test_from_ppc_refuses_a_truncated_table(case9):
+    # Zero padding a short bus row would invent a bus at 0 p.u. and 0 kV; the
+    # MATPOWER reader refuses such a row in a .m file, and so does this.
+    ppc = case9.to_ppc()
+    ppc["bus"] = ppc["bus"][:, :7]
+    with pytest.raises(ValueError, match=r"'bus' row 0 has 7 columns"):
+        powerio.from_ppc(ppc)
+
+
+def test_from_ppc_names_the_table_and_row_for_malformed_input(case9):
+    one_d = case9.to_ppc()
+    one_d["bus"] = one_d["bus"][0]
+    with pytest.raises(ValueError, match=r"'bus' row 0 is not a sequence"):
+        powerio.from_ppc(one_d)
+
+    lettered = case9.to_ppc()
+    table = lettered["bus"].astype(object)
+    table[2, 0] = "abc"
+    lettered["bus"] = table
+    with pytest.raises(ValueError, match=r"'bus' row 2 has a non-numeric value"):
+        powerio.from_ppc(lettered)
+
+
 def test_convention_aliases(case9):
     # Documented aliases all parse; separator/case-insensitive.
     for conv in ["paper", "paper-pure", "PURE", "matpower", "mp"]:

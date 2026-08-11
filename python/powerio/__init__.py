@@ -542,12 +542,20 @@ class Network:
     def to_ppc(self):
         """PYPOWER case dict (``ppc``) with MATPOWER-style numpy tables.
 
-        Values keep the source units (MW, MVAr, degrees). In-service loads
-        and shunts are summed into the bus-table ``PD``/``QD``/``GS``/``BS``
-        columns the way MATPOWER stores them. ``gencost`` is present only
-        when every generator carries cost data, because MATPOWER requires
-        cost rows for all generators or none. :func:`from_ppc` is the
-        inverse.
+        Values are emitted as the model holds them, so a case read from a
+        file carries MW, MVAr, and degrees. A network from
+        :meth:`to_normalized` holds per unit and radians, and those are what
+        its tables carry — PYPOWER reads a ppc dict as MW and degrees, so
+        build this from the raw network unless the consumer expects per unit.
+
+        Loads and shunts are summed onto their bus in the
+        ``PD``/``QD``/``GS``/``BS`` columns, the same aggregation
+        :meth:`to_matpower` writes. The bus table has no per element status
+        column, so an element the model marks out of service still
+        contributes its value, and a de-energized bus is carried as type 4.
+        ``gencost`` is present only when every generator carries cost data,
+        because MATPOWER requires cost rows for all generators or none.
+        :func:`from_ppc` reads the tables back.
         """
         np = _require("numpy", "matrix")
         buses = self._inner.buses
@@ -561,22 +569,31 @@ class Network:
             )
         for load in self._inner.loads:
             i = row_of.get(load["bus"])
-            if i is not None and load["in_service"]:
+            if i is not None:
                 bus[i, 2] += load["p"]
                 bus[i, 3] += load["q"]
         for shunt in self._inner.shunts:
             i = row_of.get(shunt["bus"])
-            if i is not None and shunt["in_service"]:
+            if i is not None:
                 bus[i, 4] += shunt["g"]
                 bus[i, 5] += shunt["b"]
 
+        # The capability and ramp columns past PMIN are an OPF extension that a
+        # source need not carry. Widen to the full 21 only when a generator
+        # actually states one: a table of zeros there reads back as eleven
+        # explicit zero limits, which a ramp aware solver takes as a generator
+        # that cannot move.
         gens = self._inner.generators
-        gen = np.zeros((len(gens), 21))
+        caps = [g["caps"] for g in gens]
+        width = 21 if any(c is not None for row in caps for c in row) else 10
+        gen = np.zeros((len(gens), width))
         for i, g in enumerate(gens):
             gen[i, :10] = (
                 g["bus"], g["pg"], g["qg"], g["qmax"], g["qmin"], g["vg"],
                 g["mbase"], float(g["in_service"]), g["pmax"], g["pmin"],
             )
+            if width == 21:
+                gen[i, 10:] = [0.0 if c is None else c for c in caps[i]]
 
         branches = self._inner.branches
         branch = np.zeros((len(branches), 13))
@@ -699,6 +716,41 @@ _PPC_BUS_TYPE = {"PQ": 1.0, "PV": 2.0, "REF": 3.0, "ISOLATED": 4.0}
 # (LAM_P, MU_*) past these; from_ppc drops them.
 _PPC_INPUT_WIDTH = {"bus": 13, "gen": 21, "branch": 13}
 
+# Columns a table must carry, which is what the MATPOWER reader requires. The
+# gen table's capability and ramp columns are an OPF extension, so a 10 column
+# gen table is a complete case and passes through at its own width; padding it
+# would hand the reader eleven explicit zero limits the source never stated. A
+# bus or branch row below 13 is truncated data, and zero padding it would
+# invent a bus at 0 p.u. and 0 kV, so it is refused here as the reader refuses
+# it in a `.m` file.
+_PPC_MIN_WIDTH = {"bus": 13, "gen": 10, "branch": 13}
+
+
+def _ppc_rows(name, table):
+    """The table's rows as float lists, trimmed to the MATPOWER input width."""
+    width = _PPC_INPUT_WIDTH.get(name)
+    minimum = _PPC_MIN_WIDTH.get(name)
+    out = []
+    for i, row in enumerate(table):
+        try:
+            vals = [float(v) for v in row]
+        except TypeError as e:
+            raise ValueError(
+                f"ppc table {name!r} row {i} is not a sequence of numbers: "
+                f"pass a 2-D array, one row per element"
+            ) from e
+        except ValueError as e:
+            raise ValueError(
+                f"ppc table {name!r} row {i} has a non-numeric value: {e}"
+            ) from e
+        if minimum is not None and len(vals) < minimum:
+            raise ValueError(
+                f"ppc table {name!r} row {i} has {len(vals)} columns; "
+                f"MATPOWER requires at least {minimum}"
+            )
+        out.append(vals[:width] if width is not None else vals)
+    return out
+
 
 def _ppc_to_matpower_text(ppc) -> str:
     missing = [k for k in ("baseMVA", "bus", "gen", "branch") if k not in ppc]
@@ -711,12 +763,9 @@ def _ppc_to_matpower_text(ppc) -> str:
     ]
     names = ["bus", "gen", "branch"] + (["gencost"] if "gencost" in ppc else [])
     for name in names:
-        width = _PPC_INPUT_WIDTH.get(name)
+        rows = _ppc_rows(name, ppc[name])
         lines.append(f"mpc.{name} = [")
-        for row in ppc[name]:
-            vals = [float(v) for v in row]
-            if width is not None:
-                vals = vals[:width] + [0.0] * (width - len(vals))
+        for vals in rows:
             lines.append("  " + "  ".join(repr(v) for v in vals) + ";")
         lines.append("];")
     return "\n".join(lines) + "\n"
@@ -728,8 +777,13 @@ def from_ppc(ppc) -> Network:
     The tables route through the MATPOWER reader, so the semantics match a
     ``.m`` case exactly: bus ``PD``/``QD`` become loads, ``GS``/``BS`` become
     shunts, and ``gencost`` is read when present. Result columns past the
-    MATPOWER input widths are dropped, and short rows are zero padded.
-    Raises :class:`ValueError` when a required table is absent.
+    MATPOWER input widths are dropped. A 10 column ``gen`` table (the layout
+    without the OPF capability columns) passes through at its own width, so
+    the generators come back with no capability limits rather than eleven
+    zero ones. Raises :class:`ValueError` when a required table is absent,
+    when a ``bus`` or ``branch`` row is below its 13 column width, when a row
+    is not a sequence of numbers, or when a cell is not numeric; the message
+    names the table and the row.
     """
     return parse_str(_ppc_to_matpower_text(ppc), "matpower")
 
