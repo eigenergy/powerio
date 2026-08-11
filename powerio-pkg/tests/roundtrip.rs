@@ -2481,3 +2481,46 @@ fn multiconductor_nonfinite_floats_roundtrip() {
     let switch = &payload.switches[payload.switches.len() - 1];
     assert_eq!(switch.i_max, Some(vec![f64::INFINITY]));
 }
+
+#[test]
+fn multiconductor_nonfinite_ratings_and_scalars_roundtrip() {
+    // #268: an inverter bound, a capacitor rating, and a transformer
+    // winding rating take the same `null` spelling as the generator bounds.
+    use powerio_dist::{Configuration, DistCapacitor, DistIbr, IbrPrimeMover, IbrTopology};
+
+    let mut net = powerio_dist::parse_str("New Circuit.c1", "dss").expect("parse dss");
+    let mut ibr = DistIbr::new(
+        "i1",
+        "sourcebus",
+        vec!["1".into()],
+        IbrTopology::ThreeLeg,
+        IbrPrimeMover::Pv,
+        vec![f64::INFINITY],
+    );
+    ibr.p_max = Some(vec![f64::INFINITY]);
+    ibr.p_min = Some(vec![f64::NEG_INFINITY]);
+    ibr.i_max = Some(vec![f64::INFINITY]);
+    net.ibrs.push(ibr);
+    net.capacitors.push(DistCapacitor::new(
+        "c1",
+        "sourcebus",
+        vec!["1".into()],
+        Configuration::Wye,
+        f64::NAN,
+        f64::NAN,
+    ));
+
+    let pkg = NetworkPackage::from_multiconductor(net);
+    let text = pkg.to_json().expect("serialize");
+    let back = NetworkPackage::from_json(&text).expect("read back the package this wrote");
+
+    let payload = back.as_multiconductor().expect("multiconductor payload");
+    let ibr = &payload.ibrs[payload.ibrs.len() - 1];
+    assert_eq!(ibr.s_max, vec![f64::INFINITY]);
+    assert_eq!(ibr.p_max, Some(vec![f64::INFINITY]));
+    assert_eq!(ibr.p_min, Some(vec![f64::NEG_INFINITY]));
+    assert_eq!(ibr.i_max, Some(vec![f64::INFINITY]));
+    let capacitor = &payload.capacitors[payload.capacitors.len() - 1];
+    assert!(capacitor.q_rated.is_nan());
+    assert!(capacitor.v_nom.is_nan());
+}

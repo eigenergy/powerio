@@ -8,12 +8,23 @@
 //!
 //! serde `with` modules receive `&T`, so the serialize signatures take
 //! references the lints would otherwise refuse.
-#![allow(clippy::ref_option, clippy::trivially_copy_pass_by_ref)]
+//!
+//! An `Option<f64>` field needs no module: a nonfinite writes as `null` and
+//! reads back as `None`, which is the same statement the bound made.
+#![allow(
+    clippy::ref_option,
+    clippy::trivially_copy_pass_by_ref,
+    clippy::ptr_arg
+)]
 
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
 fn restore(v: Option<Vec<Option<f64>>>, missing: f64) -> Option<Vec<f64>> {
     v.map(|xs| xs.into_iter().map(|x| x.unwrap_or(missing)).collect())
+}
+
+fn restore_all(v: Vec<Option<f64>>, missing: f64) -> Vec<f64> {
+    v.into_iter().map(|x| x.unwrap_or(missing)).collect()
 }
 
 /// `Option<Vec<f64>>` upper bounds: a `null` element reads as +Inf.
@@ -41,6 +52,20 @@ pub(crate) mod lower_bounds {
     pub fn deserialize<'de, D: Deserializer<'de>>(d: D) -> Result<Option<Vec<f64>>, D::Error> {
         let v = Option::<Vec<Option<f64>>>::deserialize(d)?;
         Ok(super::restore(v, f64::NEG_INFINITY))
+    }
+}
+
+/// Required `Vec<f64>` ratings: a `null` element reads as +Inf.
+pub(crate) mod upper_limits {
+    use super::{Deserialize, Deserializer, Serialize, Serializer};
+
+    pub fn serialize<S: Serializer>(v: &Vec<f64>, s: S) -> Result<S::Ok, S::Error> {
+        v.serialize(s)
+    }
+
+    pub fn deserialize<'de, D: Deserializer<'de>>(d: D) -> Result<Vec<f64>, D::Error> {
+        let v = Vec::<Option<f64>>::deserialize(d)?;
+        Ok(super::restore_all(v, f64::INFINITY))
     }
 }
 

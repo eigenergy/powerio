@@ -238,9 +238,13 @@ pub struct DistCapacitor {
     pub terminal_map: Vec<String>,
     pub configuration: Configuration,
     /// Nameplate rated reactive power of the whole bank, vars.
+    #[serde(with = "crate::nonfinite::nan_scalar")]
+    #[cfg_attr(feature = "schema", schemars(with = "Option<f64>"))]
     pub q_rated: f64,
     /// Nameplate nominal voltage, volts: line to line for the three phase
     /// configurations, across the terminals for SINGLE_PHASE.
+    #[serde(with = "crate::nonfinite::nan_scalar")]
+    #[cfg_attr(feature = "schema", schemars(with = "Option<f64>"))]
     pub v_nom: f64,
     pub extras: Extras,
 }
@@ -524,14 +528,26 @@ pub struct DistIbr {
     pub topology: IbrTopology,
     pub prime_mover: IbrPrimeMover,
     /// Per phase apparent power nameplate ratings, volt amperes.
+    #[serde(with = "crate::nonfinite::upper_limits")]
+    #[cfg_attr(feature = "schema", schemars(with = "Vec<Option<f64>>"))]
     pub s_max: Vec<f64>,
     /// Per conductor current limits, amperes.
+    #[serde(with = "crate::nonfinite::upper_bounds")]
+    #[cfg_attr(feature = "schema", schemars(with = "Option<Vec<Option<f64>>>"))]
     pub i_max: Option<Vec<f64>>,
     /// Available active power, watts.
     pub p_avail: Option<f64>,
+    #[serde(with = "crate::nonfinite::lower_bounds")]
+    #[cfg_attr(feature = "schema", schemars(with = "Option<Vec<Option<f64>>>"))]
     pub p_min: Option<Vec<f64>>,
+    #[serde(with = "crate::nonfinite::upper_bounds")]
+    #[cfg_attr(feature = "schema", schemars(with = "Option<Vec<Option<f64>>>"))]
     pub p_max: Option<Vec<f64>>,
+    #[serde(with = "crate::nonfinite::lower_bounds")]
+    #[cfg_attr(feature = "schema", schemars(with = "Option<Vec<Option<f64>>>"))]
     pub q_min: Option<Vec<f64>>,
+    #[serde(with = "crate::nonfinite::upper_bounds")]
+    #[cfg_attr(feature = "schema", schemars(with = "Option<Vec<Option<f64>>>"))]
     pub q_max: Option<Vec<f64>>,
     pub control_profile: Option<String>,
     pub voltage_aggregation: Option<IbrVoltageAggregation>,
@@ -723,10 +739,16 @@ pub struct Winding {
     pub terminal_map: Vec<String>,
     pub conn: WindingConn,
     /// Rated winding voltage, volts (line to line for 2 and 3 phase).
+    #[serde(with = "crate::nonfinite::nan_scalar")]
+    #[cfg_attr(feature = "schema", schemars(with = "Option<f64>"))]
     pub v_ref: f64,
     /// Volt amperes.
+    #[serde(with = "crate::nonfinite::nan_scalar")]
+    #[cfg_attr(feature = "schema", schemars(with = "Option<f64>"))]
     pub s_rating: f64,
     /// Winding resistance, percent of the winding base.
+    #[serde(with = "crate::nonfinite::nan_scalar")]
+    #[cfg_attr(feature = "schema", schemars(with = "Option<f64>"))]
     pub r_pct: f64,
     pub tap: f64,
     #[serde(default, skip_serializing_if = "Option::is_none")]

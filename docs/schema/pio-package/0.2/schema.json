@@ -747,7 +747,10 @@
         "q_rated": {
           "description": "Nameplate rated reactive power of the whole bank, vars.",
           "format": "double",
-          "type": "number"
+          "type": [
+            "number",
+            "null"
+          ]
         },
         "terminal_map": {
           "items": {
@@ -758,7 +761,10 @@
         "v_nom": {
           "description": "Nameplate nominal voltage, volts: line to line for the three phase\nconfigurations, across the terminals for SINGLE_PHASE.",
           "format": "double",
-          "type": "number"
+          "type": [
+            "number",
+            "null"
+          ]
         }
       },
       "required": [
@@ -766,8 +772,6 @@
         "bus",
         "terminal_map",
         "configuration",
-        "q_rated",
-        "v_nom",
         "extras"
       ],
       "type": "object"
@@ -973,7 +977,10 @@
           "description": "Per conductor current limits, amperes.",
           "items": {
             "format": "double",
-            "type": "number"
+            "type": [
+              "number",
+              "null"
+            ]
           },
           "type": [
             "array",
@@ -994,7 +1001,10 @@
         "p_max": {
           "items": {
             "format": "double",
-            "type": "number"
+            "type": [
+              "number",
+              "null"
+            ]
           },
           "type": [
             "array",
@@ -1004,7 +1014,10 @@
         "p_min": {
           "items": {
             "format": "double",
-            "type": "number"
+            "type": [
+              "number",
+              "null"
+            ]
           },
           "type": [
             "array",
@@ -1017,7 +1030,10 @@
         "q_max": {
           "items": {
             "format": "double",
-            "type": "number"
+            "type": [
+              "number",
+              "null"
+            ]
           },
           "type": [
             "array",
@@ -1027,7 +1043,10 @@
         "q_min": {
           "items": {
             "format": "double",
-            "type": "number"
+            "type": [
+              "number",
+              "null"
+            ]
           },
           "type": [
             "array",
@@ -1038,7 +1057,10 @@
           "description": "Per phase apparent power nameplate ratings, volt amperes.",
           "items": {
             "format": "double",
-            "type": "number"
+            "type": [
+              "number",
+              "null"
+            ]
           },
           "type": "array"
         },
@@ -4838,12 +4860,18 @@
         "r_pct": {
           "description": "Winding resistance, percent of the winding base.",
           "format": "double",
-          "type": "number"
+          "type": [
+            "number",
+            "null"
+          ]
         },
         "s_rating": {
           "description": "Volt amperes.",
           "format": "double",
-          "type": "number"
+          "type": [
+            "number",
+            "null"
+          ]
         },
         "tap": {
           "format": "double",
@@ -4858,7 +4886,10 @@
         "v_ref": {
           "description": "Rated winding voltage, volts (line to line for 2 and 3 phase).",
           "format": "double",
-          "type": "number"
+          "type": [
+            "number",
+            "null"
+          ]
         },
         "x_neutral": {
           "format": "double",
@@ -4872,9 +4903,6 @@
         "bus",
         "terminal_map",
         "conn",
-        "v_ref",
-        "s_rating",
-        "r_pct",
         "tap"
       ],
       "type": "object"
