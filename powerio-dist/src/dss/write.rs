@@ -250,6 +250,15 @@ fn winding_is_line_to_neutral<'g>(
             .is_some_and(|g| w.terminal_map.iter().any(|tm| g.contains(tm)))
 }
 
+/// Whether a value states a usable magnitude: a rating, a voltage, or an
+/// ampacity a deck can carry. OpenDSS has no token for a nonfinite number, and
+/// a zero or negative one is not a nameplate. Every recovery differs — omit the
+/// property, derive from the bus estimate, drop the object — so this is the
+/// shared question, not the shared answer.
+fn is_positive_finite(v: f64) -> bool {
+    v.is_finite() && v > 0.0
+}
+
 /// The conductor count a dss element declares for `phases` on `conn`. A three
 /// phase delta has no neutral conductor; every other connection carries one.
 fn nconds_for(conn: &str, phases: usize) -> usize {
@@ -987,7 +996,7 @@ impl DssWriter {
             // `i_max` maps to `emergamps`, as it does on a linecode. The
             // typed field wins over a token kept in extras.
             match l.i_max.as_deref() {
-                Some([amps, rest @ ..]) if amps.is_finite() && *amps > 0.0 => {
+                Some([amps, rest @ ..]) if is_positive_finite(*amps) => {
                     extras.remove("emergamps");
                     let _ = write!(s, " emergamps={}", num(*amps));
                     // The dss Line has one emergamps for all phases. Compare
@@ -1108,7 +1117,7 @@ impl DssWriter {
                 .iter()
                 .enumerate()
                 .map(|(idx, w)| {
-                    if w.s_rating.is_finite() && w.s_rating > 0.0 {
+                    if is_positive_finite(w.s_rating) {
                         Some(w.s_rating / 1e3)
                     } else {
                         self.warn(format!(
@@ -1185,7 +1194,7 @@ impl DssWriter {
         idx: usize,
         w: &Winding,
     ) -> Option<f64> {
-        if w.v_ref.is_finite() && w.v_ref > 0.0 {
+        if is_positive_finite(w.v_ref) {
             return Some(w.v_ref / 1e3);
         }
         let bus = w.bus.to_ascii_lowercase();
@@ -1461,10 +1470,7 @@ impl DssWriter {
         name: &str,
     ) -> Option<f64> {
         let v_nom = model.v_nom();
-        let v_phase = v_nom
-            .first()
-            .copied()
-            .filter(|v| v.is_finite() && *v > 0.0)?;
+        let v_phase = v_nom.first().copied().filter(|v| is_positive_finite(*v))?;
         if v_nom
             .iter()
             .any(|v| (*v - v_phase).abs() > 1e-9 * v.abs().max(v_phase.abs()).max(1.0))
@@ -1684,7 +1690,7 @@ impl DssWriter {
     /// scalar rating cannot state.
     fn capacitors(&mut self, net: &DistNetwork) {
         for c in &net.capacitors {
-            if !(c.q_rated.is_finite() && c.q_rated > 0.0) {
+            if !is_positive_finite(c.q_rated) {
                 self.warn(format!(
                     "capacitor {}: rating {} is not a positive number; dropped from the output",
                     c.name, c.q_rated
@@ -1702,7 +1708,7 @@ impl DssWriter {
             let conn = self.element_conn(&c.extras, c.configuration, &c.bus, &c.terminal_map);
             let nconds = nconds_for(conn, phases);
             self.warn_short_map("capacitor", &c.name, c.terminal_map.len(), nconds);
-            let typed_kv = (c.v_nom.is_finite() && c.v_nom > 0.0).then(|| c.v_nom / 1e3);
+            let typed_kv = is_positive_finite(c.v_nom).then(|| c.v_nom / 1e3);
             if typed_kv.is_none() {
                 self.warn(format!(
                     "capacitor {}: nominal voltage {} is not a positive number; \
