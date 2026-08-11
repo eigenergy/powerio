@@ -365,18 +365,7 @@ impl NormalizedSolverTables {
 fn normalized_for_solver(source: &Network) -> Result<(Network, NormalizeSourceRows)> {
     if source.is_normalized() {
         let net = source.clone();
-        let ident = |n: usize| (0..n).map(Some).collect();
-        let mut rows = NormalizeSourceRows {
-            buses: ident(net.buses.len()),
-            loads: ident(net.loads.len()),
-            shunts: ident(net.shunts.len()),
-            branches: ident(net.branches.len()),
-            switches: ident(net.switches.len()),
-            generators: ident(net.generators.len()),
-            storage: ident(net.storage.len()),
-            hvdc: ident(net.hvdc.len()),
-            transformers_3w: ident(net.transformers_3w.len()),
-        };
+        let mut rows = NormalizeSourceRows::identity(&net);
         rows.pad_to_lowered(&net);
         Ok((net, rows))
     } else {
@@ -830,6 +819,57 @@ mod tests {
         assert!(approx(tables.branches[0].rate_a, 1.0));
         assert!(approx(tables.branches[0].tap, 1.0));
         assert!(approx(tables.branches[0].shift, 30.0_f64.to_radians()));
+    }
+
+    #[test]
+    fn solver_tables_map_an_already_normalized_network_to_its_own_rows() {
+        // An already-normalized network skips the pass, so nothing is filtered
+        // and every table row names the row it sits at. The out-of-service load
+        // and generator and the isolated bus are the cases that separate this
+        // from the filtered path: they survive here, so the map stays the
+        // identity across every family instead of shifting positions.
+        let mut net = Network::in_memory(
+            "identity",
+            100.0,
+            vec![
+                bus(1, BusType::Ref),
+                bus(2, BusType::Pq),
+                bus(3, BusType::Pq),
+                bus(4, BusType::Isolated),
+            ],
+            vec![branch(1, 2, true), branch(1, 3, false)],
+        );
+        net.loads.push(Load {
+            bus: BusId(2),
+            p: 0.1,
+            q: 0.05,
+            voltage_model: None,
+            in_service: false,
+            uid: None,
+            extras: Extras::new(),
+        });
+        net.loads.push(Load {
+            bus: BusId(3),
+            p: 0.2,
+            q: 0.1,
+            voltage_model: None,
+            in_service: true,
+            uid: None,
+            extras: Extras::new(),
+        });
+        net.generators.push(generator(1, false));
+        net.generators.push(generator(2, true));
+        net.source_format = SourceFormat::Normalized;
+
+        let tables = net.to_normalized_solver_tables().unwrap();
+
+        assert_eq!(
+            tables.index.bus_source_rows,
+            vec![Some(0), Some(1), Some(2), Some(3)]
+        );
+        assert_eq!(tables.index.branch_source_rows, vec![Some(0), Some(1)]);
+        assert_eq!(tables.index.load_source_rows, vec![Some(0), Some(1)]);
+        assert_eq!(tables.index.generator_source_rows, vec![Some(0), Some(1)]);
     }
 
     #[test]

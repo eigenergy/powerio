@@ -1510,6 +1510,17 @@ fn repair_vg(vg: f64) -> Option<f64> {
     (!vg.is_finite() || vg <= 0.0).then_some(1.0)
 }
 
+/// The three element counts the star lowering changes, from
+/// [`Network::lowered_lengths`]. Every other family keeps its length, since the
+/// lowering only appends a star bus, its winding branches, and a magnetizing
+/// shunt.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct LoweredLengths {
+    pub(crate) buses: usize,
+    pub(crate) branches: usize,
+    pub(crate) shunts: usize,
+}
+
 impl Network {
     #[must_use]
     pub fn new(name: impl Into<String>, base_mva: f64) -> Network {
@@ -2057,6 +2068,27 @@ impl Network {
         findings
     }
 
+    /// The element counts [`Self::expand_transformers_3w`] would produce, read off
+    /// the transformer records instead of building the lowering. A caller that
+    /// only needs the lowered lengths — sizing a per-row map, say — would
+    /// otherwise pay a whole `Network` clone for three `len()` calls.
+    /// `lowered_lengths_match_the_expansion` pins the two against each other.
+    pub(crate) fn lowered_lengths(&self) -> LoweredLengths {
+        let mut lengths = LoweredLengths {
+            buses: self.buses.len(),
+            branches: self.branches.len(),
+            shunts: self.shunts.len(),
+        };
+        for t in self.transformers_3w.iter().filter(|t| t.in_service) {
+            lengths.buses += 1;
+            lengths.branches += 3;
+            if t.mag_g != 0.0 || t.mag_b != 0.0 {
+                lengths.shunts += 1;
+            }
+        }
+        lengths
+    }
+
     /// A bus-branch lowering of the network for analysis: each in-service
     /// 3-winding transformer becomes a synthetic star bus, its three winding
     /// branches, and (when present) its magnetizing shunt, so the matrix builders
@@ -2370,6 +2402,37 @@ mod tests {
         assert_eq!(back.transformers_3w.len(), 1);
         close(back.transformers_3w[0].z[1].x, 0.20);
         assert_eq!(back.transformers_3w[0].windings[2].bus, BusId(3));
+    }
+
+    #[test]
+    fn lowered_lengths_match_the_expansion() {
+        // `lowered_lengths` counts what `expand_transformers_3w` would append
+        // instead of building it. The two must agree on every mix: an
+        // out-of-service unit appends nothing, and only a unit with magnetizing
+        // admittance appends a shunt.
+        let mut magnetizing = transformer_3w();
+        magnetizing.mag_b = 0.02;
+        let mut out_of_service = transformer_3w();
+        out_of_service.in_service = false;
+        out_of_service.mag_g = 0.01;
+
+        for units in [
+            vec![],
+            vec![transformer_3w()],
+            vec![magnetizing.clone()],
+            vec![out_of_service.clone()],
+            vec![transformer_3w(), magnetizing, out_of_service],
+        ] {
+            let mut net = Network::in_memory("t", 100.0, vec![bus(1), bus(2), bus(3)], Vec::new());
+            net.shunts.push(Shunt::new(BusId(1), 0.0, 0.5));
+            net.transformers_3w = units;
+
+            let counted = net.lowered_lengths();
+            let built = net.expand_transformers_3w();
+            assert_eq!(counted.buses, built.buses.len());
+            assert_eq!(counted.branches, built.branches.len());
+            assert_eq!(counted.shunts, built.shunts.len());
+        }
     }
 
     #[test]

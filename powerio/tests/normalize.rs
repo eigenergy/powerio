@@ -4,8 +4,8 @@
 use std::path::{Path, PathBuf};
 
 use powerio::{
-    BusId, BusType, Error, Generator, IndexedNetwork, NormalizeOptions, SourceFormat, Storage,
-    TargetFormat, parse_file, parse_matpower_file, parse_str, write_as,
+    BusId, BusType, Error, Generator, IndexedNetwork, NormalizeOptions, Shunt, SourceFormat,
+    Storage, TargetFormat, parse_file, parse_matpower_file, parse_str, write_as,
 };
 
 const DEG_TO_RAD: f64 = std::f64::consts::PI / 180.0;
@@ -677,6 +677,43 @@ fn source_rows_cover_the_star_lowered_view() {
     assert_eq!(rows.buses[..3], [Some(0), Some(1), Some(2)]);
     assert_eq!(*rows.buses.last().unwrap(), None);
     assert!(rows.branches.iter().all(Option::is_none));
+}
+
+#[test]
+fn source_rows_cover_the_magnetizing_shunt_the_lowering_appends() {
+    // `source_rows_cover_the_star_lowered_view` runs on a transformer with no
+    // magnetizing admittance, so its shunt assertion compares an empty map to an
+    // empty table. Give the transformer a magnetizing branch and the lowering
+    // appends a shunt after the real one: the map has to grow with it, or
+    // reading provenance for that tail position is out of bounds.
+    let mut raw = parse_str(EPC_3W, "pslf").unwrap().network;
+    raw.buses[0].kind = BusType::Ref;
+    let mut g = Generator::new(BusId(1));
+    g.pmax = 100.0;
+    raw.generators.push(g);
+    raw.shunts.push(Shunt::new(BusId(2), 0.0, 5.0));
+    raw.transformers_3w[0].mag_b = 0.01;
+
+    let (n, rows) = raw
+        .to_normalized_with_source_rows(&NormalizeOptions::default())
+        .unwrap();
+    let view = IndexedNetwork::new(&n.network);
+
+    assert_eq!(
+        view.network().shunts.len(),
+        2,
+        "real shunt, then magnetizing"
+    );
+    assert_eq!(rows.shunts.len(), view.network().shunts.len());
+    // The real shunt keeps its raw row; the appended magnetizing shunt has none.
+    assert_eq!(rows.shunts, [Some(0), None]);
+    assert_eq!(rows.buses.len(), view.n());
+    assert_eq!(rows.branches.len(), view.branches().len());
+
+    // The tables read provenance by position across the lowered view, so the
+    // padding has to hold for them too.
+    let tables = raw.to_normalized_solver_tables().unwrap();
+    assert_eq!(tables.index.shunt_source_rows, [Some(0), None]);
 }
 
 const EPC_3W: &str = r#"title

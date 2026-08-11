@@ -85,7 +85,7 @@ pub struct NormalizedNetwork {
 /// [`Network::reduce_zero_impedance`], [`Network::reduce_passthrough_buses`],
 /// [`Network::subset`], or a hand edit) invalidates every entry; run the pass
 /// again instead of patching the map.
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug)]
 #[non_exhaustive]
 pub struct NormalizeSourceRows {
     pub buses: Vec<Option<usize>>,
@@ -100,17 +100,33 @@ pub struct NormalizeSourceRows {
 }
 
 impl NormalizeSourceRows {
-    /// Grow the families the star lowering appends to so each length matches
-    /// `lowered`. The appended entries have no source row.
-    fn pad_to(&mut self, lowered: &Network) {
-        self.buses.resize(lowered.buses.len(), None);
-        self.branches.resize(lowered.branches.len(), None);
-        self.shunts.resize(lowered.shunts.len(), None);
+    /// The map for a network that is already normalized: it is its own source,
+    /// so every element maps to its own row. Positional over `net` itself —
+    /// [`Self::pad_to_lowered`] extends it to the star-lowered view.
+    pub(crate) fn identity(net: &Network) -> Self {
+        let ident = |n: usize| (0..n).map(Some).collect();
+        Self {
+            buses: ident(net.buses.len()),
+            loads: ident(net.loads.len()),
+            shunts: ident(net.shunts.len()),
+            branches: ident(net.branches.len()),
+            switches: ident(net.switches.len()),
+            generators: ident(net.generators.len()),
+            storage: ident(net.storage.len()),
+            hvdc: ident(net.hvdc.len()),
+            transformers_3w: ident(net.transformers_3w.len()),
+        }
     }
 
-    /// Pad against the star-lowered form of `net`.
+    /// Grow the families the star lowering appends to so each length matches the
+    /// lowered form of `net`. The appended entries have no source row. The
+    /// lengths come from [`Network::lowered_lengths`], which counts them off the
+    /// transformer records, so padding never builds the lowering itself.
     pub(crate) fn pad_to_lowered(&mut self, net: &Network) {
-        self.pad_to(&net.expand_transformers_3w());
+        let lengths = net.lowered_lengths();
+        self.buses.resize(lengths.buses, None);
+        self.branches.resize(lengths.branches, None);
+        self.shunts.resize(lengths.shunts, None);
     }
 }
 
@@ -199,7 +215,11 @@ fn remap(map: &HashMap<BusId, BusId>, id: BusId) -> Option<BusId> {
     map.get(&id).copied()
 }
 
-fn norm_loads(loads: &[Load], base: f64, map: &HashMap<BusId, BusId>) -> (Vec<Load>, Vec<usize>) {
+fn norm_loads(
+    loads: &[Load],
+    base: f64,
+    map: &HashMap<BusId, BusId>,
+) -> (Vec<Load>, Vec<Option<usize>>) {
     loads
         .iter()
         .enumerate()
@@ -216,7 +236,7 @@ fn norm_loads(loads: &[Load], base: f64, map: &HashMap<BusId, BusId>) -> (Vec<Lo
                         .map(|m| norm_load_voltage_model(m, base)),
                     ..l.clone()
                 },
-                row,
+                Some(row),
             ))
         })
         .unzip()
@@ -266,7 +286,7 @@ fn norm_shunts(
     shunts: &[Shunt],
     base: f64,
     map: &HashMap<BusId, BusId>,
-) -> (Vec<Shunt>, Vec<usize>) {
+) -> (Vec<Shunt>, Vec<Option<usize>>) {
     shunts
         .iter()
         .enumerate()
@@ -285,7 +305,7 @@ fn norm_shunts(
                     }),
                     ..s.clone()
                 },
-                row,
+                Some(row),
             ))
         })
         .unzip()
@@ -295,7 +315,7 @@ fn norm_branches(
     branches: &[Branch],
     base: f64,
     map: &HashMap<BusId, BusId>,
-) -> (Vec<Branch>, Vec<usize>) {
+) -> (Vec<Branch>, Vec<Option<usize>>) {
     branches
         .iter()
         .enumerate()
@@ -334,7 +354,7 @@ fn norm_branches(
                 }),
                 ..br.clone()
             };
-            Some((branch, row))
+            Some((branch, Some(row)))
         })
         .unzip()
 }
@@ -396,7 +416,7 @@ fn norm_gens(
     gens: &[Generator],
     base: f64,
     map: &HashMap<BusId, BusId>,
-) -> (Vec<Generator>, Vec<usize>) {
+) -> (Vec<Generator>, Vec<Option<usize>>) {
     gens.iter()
         .enumerate()
         .filter(|(_, g)| g.in_service)
@@ -428,7 +448,7 @@ fn norm_gens(
                 regulated_bus: g.regulated_bus.and_then(|b| remap(map, b)),
                 ..g.clone()
             };
-            Some((generator, row))
+            Some((generator, Some(row)))
         })
         .unzip()
 }
@@ -437,7 +457,7 @@ fn norm_switches(
     switches: &[Switch],
     base: f64,
     map: &HashMap<BusId, BusId>,
-) -> (Vec<Switch>, Vec<usize>) {
+) -> (Vec<Switch>, Vec<Option<usize>>) {
     switches
         .iter()
         .enumerate()
@@ -452,7 +472,7 @@ fn norm_switches(
                 qt: s.qt.map(|v| v / base),
                 ..s.clone()
             };
-            Some((switch, row))
+            Some((switch, Some(row)))
         })
         .unzip()
 }
@@ -461,7 +481,7 @@ fn norm_storage(
     storage: &[Storage],
     base: f64,
     map: &HashMap<BusId, BusId>,
-) -> (Vec<Storage>, Vec<usize>) {
+) -> (Vec<Storage>, Vec<Option<usize>>) {
     storage
         .iter()
         .enumerate()
@@ -482,12 +502,16 @@ fn norm_storage(
                 q_loss: s.q_loss / base,
                 ..s.clone()
             };
-            Some((unit, row))
+            Some((unit, Some(row)))
         })
         .unzip()
 }
 
-fn norm_hvdc(hvdc: &[Hvdc], base: f64, map: &HashMap<BusId, BusId>) -> (Vec<Hvdc>, Vec<usize>) {
+fn norm_hvdc(
+    hvdc: &[Hvdc],
+    base: f64,
+    map: &HashMap<BusId, BusId>,
+) -> (Vec<Hvdc>, Vec<Option<usize>>) {
     hvdc.iter()
         .enumerate()
         .filter(|(_, d)| d.in_service)
@@ -513,7 +537,7 @@ fn norm_hvdc(hvdc: &[Hvdc], base: f64, map: &HashMap<BusId, BusId>) -> (Vec<Hvdc
                 }),
                 ..d.clone()
             };
-            Some((link, row))
+            Some((link, Some(row)))
         })
         .unzip()
 }
@@ -522,7 +546,7 @@ fn norm_transformers_3w(
     xfmrs: &[Transformer3W],
     base: f64,
     map: &HashMap<BusId, BusId>,
-) -> (Vec<Transformer3W>, Vec<usize>) {
+) -> (Vec<Transformer3W>, Vec<Option<usize>>) {
     xfmrs
         .iter()
         .enumerate()
@@ -546,7 +570,7 @@ fn norm_transformers_3w(
                     star_va: t.star_va * DEG_TO_RAD,
                     ..t.clone()
                 },
-                row,
+                Some(row),
             ))
         })
         .unzip()
@@ -617,12 +641,34 @@ impl Network {
 
     /// Like [`Network::to_normalized_with_options`], also returning the
     /// [`NormalizeSourceRows`] row provenance.
+    ///
+    /// The rows are positional over the
+    /// [`IndexedNetwork`](crate::IndexedNetwork) view of the returned network,
+    /// which is the index space a matrix row or a solver table row lives in.
+    /// That view star-lowers a 3-winding transformer, so it holds more buses,
+    /// branches, and shunts than the returned [`NormalizedNetwork`] does;
+    /// indexing the returned network by a row position is out of bounds on any
+    /// case that carries one. Resolve a row through the view:
+    ///
+    /// ```
+    /// # use powerio::{IndexedNetwork, Network, NormalizeOptions};
+    /// # fn f(raw: &Network) -> powerio::Result<()> {
+    /// let (normalized, rows) = raw.to_normalized_with_source_rows(&NormalizeOptions::default())?;
+    /// let view = IndexedNetwork::new(&normalized.network);
+    /// for (dense, source) in rows.buses.iter().enumerate() {
+    ///     let bus = &view.network().buses[dense];
+    ///     // `source` is `None` for the synthetic star bus the view appended.
+    ///     let _ = (bus, source);
+    /// }
+    /// # Ok(())
+    /// # }
+    /// ```
     pub fn to_normalized_with_source_rows(
         &self,
         options: &NormalizeOptions,
     ) -> Result<(NormalizedNetwork, NormalizeSourceRows)> {
         let (normalized, mut rows) = self.normalize_inner(options)?;
-        rows.pad_to(&normalized.network.expand_transformers_3w());
+        rows.pad_to_lowered(&normalized.network);
         Ok((normalized, rows))
     }
 
@@ -641,7 +687,10 @@ impl Network {
         // reads it) and their source ids. Isolated buses are dropped.
         let mut id_map: HashMap<BusId, BusId> = HashMap::with_capacity(self.buses.len());
         let mut buses: Vec<Bus> = Vec::with_capacity(self.buses.len());
-        let mut bus_rows: Vec<usize> = Vec::with_capacity(self.buses.len());
+        // The pass keeps only elements that came from a source row, so each row
+        // here is `Some`; the `None` entries appear later, when
+        // `pad_to_lowered` extends the map over what the star lowering appends.
+        let mut bus_rows: Vec<Option<usize>> = Vec::with_capacity(self.buses.len());
         for (row, b) in self.buses.iter().enumerate() {
             if b.kind == BusType::Isolated {
                 continue;
@@ -651,7 +700,7 @@ impl Network {
                 va: b.va * DEG_TO_RAD,
                 ..b.clone()
             });
-            bus_rows.push(row);
+            bus_rows.push(Some(row));
         }
         let (loads, load_rows) = norm_loads(&self.loads, base, &id_map);
         let (shunts, shunt_rows) = norm_shunts(&self.shunts, base, &id_map);
@@ -666,17 +715,16 @@ impl Network {
         let (hvdc, hvdc_rows) = norm_hvdc(&self.hvdc, base, &id_map);
         let (transformers_3w, transformer_3w_rows) =
             norm_transformers_3w(&self.transformers_3w, base, &id_map);
-        let some = |rows: Vec<usize>| rows.into_iter().map(Some).collect();
         let source_rows = NormalizeSourceRows {
-            buses: some(bus_rows),
-            loads: some(load_rows),
-            shunts: some(shunt_rows),
-            branches: some(branch_rows),
-            switches: some(switch_rows),
-            generators: some(generator_rows),
-            storage: some(storage_rows),
-            hvdc: some(hvdc_rows),
-            transformers_3w: some(transformer_3w_rows),
+            buses: bus_rows,
+            loads: load_rows,
+            shunts: shunt_rows,
+            branches: branch_rows,
+            switches: switch_rows,
+            generators: generator_rows,
+            storage: storage_rows,
+            hvdc: hvdc_rows,
+            transformers_3w: transformer_3w_rows,
         };
 
         // Bus types: a bus hosting an in-service generator keeps `Ref` if the
