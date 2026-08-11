@@ -39,19 +39,22 @@ def test_tool_surface_is_semantic():
         "display",
     }
     for name in ("parse", "summary", "normalize", "matrix", "display"):
-        props = tools[name].inputSchema["properties"]
+        props = tools[name].input_schema["properties"]
         assert "from_format" in props
         assert "format" not in props
-    convert_props = tools["convert"].inputSchema["properties"]
+    convert_props = tools["convert"].input_schema["properties"]
     assert "to_format" in convert_props and "from_format" in convert_props
     assert "to" not in convert_props and "format" not in convert_props
-    save_schema = tools["save"].inputSchema
+    save_schema = tools["save"].input_schema
     assert save_schema["required"] == ["out_path"]
     save_props = save_schema["properties"]
     assert "to_format" in save_props and "from_format" in save_props
     assert "to" not in save_props and "format" not in save_props
     assert "package_json" in save_props
-    assert "transport" in tools["parse"].inputSchema["properties"]
+    assert "transport" in tools["parse"].input_schema["properties"]
+    # The SDK 2.0 model field is snake_case `input_schema`; the wire format is
+    # still the protocol's camelCase `inputSchema`.
+    assert "inputSchema" in tools["save"].model_dump(by_alias=True)
 
 
 def test_summary_transmission_schema():
