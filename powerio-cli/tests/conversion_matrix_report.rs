@@ -647,7 +647,12 @@ const DISTRIBUTION_FORMATS: [DistributionFormat; 3] = [
 // BMOPF schema 0.1.0: the dss→BMOPF drop drops (taps, no load, neutral
 // impedance now ride along under `extras.transformer`), and the BMOPF source
 // rows reflect the re-vendored 0.1.0 example fixtures.
-const DISTRIBUTION_WARNING_BASELINE: [[usize; 3]; 3] = [[0, 132, 80], [18, 0, 27], [15, 57, 0]];
+// The dss leg splits an unbalanced load into one single phase `Load` per phase
+// (#266 item 2), so a case carrying one arrives at the next hop as several. Each
+// part restates the `kv`/`phases`/`conn` extras the dss reader attaches, and
+// each of those is dropped again on the way into BMOPF or PMD: +8 on the two
+// rows whose source is a dss deck, +2 on the BMOPF→dss row.
+const DISTRIBUTION_WARNING_BASELINE: [[usize; 3]; 3] = [[0, 140, 88], [20, 0, 27], [15, 57, 0]];
 
 const DISTRIBUTION_CASES: [(&str, &str, DistributionFormat); 7] = [
     (
@@ -782,7 +787,7 @@ fn validate_distribution_pair(
             cell.record_warnings(TARGET_READBACK, &parsed.warnings);
             parsed.warnings.clear();
             let actual = distribution_core(&parsed);
-            if actual != payload.core {
+            if !core_survives(&payload.core, &actual, target.target) {
                 cell.failures.push(format!(
                     "{} core changed for {}: before {:?}, after {:?}",
                     payload.label, target.name, payload.core, actual
@@ -814,6 +819,30 @@ fn parse_distribution_text(
     let parsed = powerio_dist::parse_file(&path, Some(format.token));
     let _ = std::fs::remove_file(path);
     parsed
+}
+
+/// Whether the core survived the round trip.
+///
+/// Everything must match, with one allowance: a dss target splits a load whose
+/// phases carry different power into one single phase `Load` per phase (#266),
+/// because a dss `Load` divides its `kw` evenly and cannot state the profile
+/// otherwise. That grows the object count and nothing else — the power the
+/// loads carry is compared exactly, on this leg as on every other.
+fn core_survives(
+    before: &DistributionCore,
+    after: &DistributionCore,
+    target: DistTargetFormat,
+) -> bool {
+    if before == after {
+        return true;
+    }
+    target == DistTargetFormat::Dss
+        && after.loads >= before.loads
+        && after.buses == before.buses
+        && after.generators == before.generators
+        && after.shunts == before.shunts
+        && after.load_p == before.load_p
+        && after.load_q == before.load_q
 }
 
 fn distribution_core(net: &DistNetwork) -> DistributionCore {
