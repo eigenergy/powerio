@@ -776,6 +776,132 @@ def test_matrix_methods_match_rust_arrow_golden(name):
 # --- string-kwarg parsing (aliases + errors) ---------------------------
 
 
+def test_ppc_round_trip(case9):
+    ppc = case9.to_ppc()
+    assert ppc["version"] == "2"
+    assert ppc["baseMVA"] == 100.0
+    assert ppc["bus"].shape == (9, 13)
+    assert ppc["gen"].shape == (3, 21)
+    assert ppc["branch"].shape == (9, 13)
+    assert ppc["gencost"].shape == (3, 7)
+    # case9 loads: 90 MW at bus 5, 100 at 7, 125 at 9, summed into PD.
+    pd_by_bus = {int(row[0]): row[2] for row in ppc["bus"]}
+    assert pd_by_bus[5] == 90.0 and pd_by_bus[7] == 100.0 and pd_by_bus[9] == 125.0
+
+    back = powerio.from_ppc(ppc)
+    assert back.n_buses == case9.n_buses
+    assert back.n_branches == case9.n_branches
+    assert back.n_gens == case9.n_gens
+    # The ppc projection is a fixed point: to_ppc(from_ppc(ppc)) == ppc.
+    again = back.to_ppc()
+    for key in ("bus", "gen", "branch", "gencost"):
+        np.testing.assert_allclose(again[key], ppc[key], atol=0.0)
+    assert again["baseMVA"] == ppc["baseMVA"]
+
+
+def test_from_ppc_rejects_missing_tables(case9):
+    ppc = case9.to_ppc()
+    del ppc["branch"]
+    with pytest.raises(ValueError):
+        powerio.from_ppc(ppc)
+
+
+def test_from_ppc_drops_result_columns(case9):
+    # PYPOWER's runpf appends result columns (LAM_P, MU_*); from_ppc reads
+    # the case back as inputs, so the extra columns must not break parsing.
+    ppc = case9.to_ppc()
+    ppc["bus"] = np.hstack([ppc["bus"], np.ones((9, 4))])
+    ppc["branch"] = np.hstack([ppc["branch"], np.ones((9, 5))])
+    back = powerio.from_ppc(ppc)
+    assert back.n_buses == 9 and back.n_branches == 9
+
+
+def test_ppc_keeps_demand_on_a_de_energized_bus():
+    # The MATPOWER reader marks a load on an isolated bus out of service while
+    # keeping its PD/QD, and the writer still sums it onto the bus row. to_ppc
+    # has to agree: filtering on in_service silently dropped 50 MW that the
+    # same network writes out as MATPOWER text.
+    src = (
+        "function mpc = iso\n"
+        "mpc.version = '2';\n"
+        "mpc.baseMVA = 100;\n"
+        "mpc.bus = [\n"
+        "\t1\t3\t0\t0\t0\t0\t1\t1\t0\t230\t1\t1.1\t0.9;\n"
+        "\t2\t4\t50\t10\t3\t7\t1\t1\t0\t230\t1\t1.1\t0.9;\n"
+        "];\n"
+        "mpc.gen = [\n"
+        "\t1\t0\t0\t100\t-100\t1\t100\t1\t200\t0;\n"
+        "];\n"
+        "mpc.branch = [\n"
+        "\t1\t2\t0.01\t0.1\t0\t0\t0\t0\t0\t0\t1\t-360\t360;\n"
+        "];\n"
+    )
+    net = powerio.parse_str(src, "matpower")
+    assert not net.loads[0]["in_service"] and not net.shunts[0]["in_service"]
+
+    row = net.to_ppc()["bus"][1]
+    assert list(row[2:6]) == [50.0, 10.0, 3.0, 7.0]
+    back = powerio.from_ppc(net.to_ppc())
+    assert back.loads[0]["p"] == 50.0 and back.shunts[0]["b"] == 7.0
+
+
+def test_ppc_gen_width_follows_the_capability_columns(case9):
+    # case9 states the OPF capability columns (as zeros), so the table stays 21
+    # wide and the round trip keeps them. A 10 column source states none, and
+    # widening it to 21 would invent eleven zero limits — a ramp aware solver
+    # reads ramp_10 = 0 as a generator that cannot move.
+    assert case9.to_ppc()["gen"].shape == (3, 21)
+    assert all(c is not None for c in case9.generators[0]["caps"])
+
+    src = case9.to_matpower().split("mpc.gen = [")
+    rows = src[1].split("];")[0].strip().split("\n")
+    narrow = "\n".join("\t" + "\t".join(r.strip().rstrip(";").split()[:10]) + ";" for r in rows)
+    net = powerio.parse_str(f"{src[0]}mpc.gen = [\n{narrow}\n];{src[1].split('];', 1)[1]}", "matpower")
+    assert all(c is None for c in net.generators[0]["caps"])
+
+    ppc = net.to_ppc()
+    assert ppc["gen"].shape == (3, 10)
+    assert all(c is None for c in powerio.from_ppc(ppc).generators[0]["caps"])
+
+
+def test_ppc_omits_gencost_unless_every_generator_is_costed(case9):
+    # MATPOWER takes cost rows for all generators or none, so one costless
+    # generator drops the whole table. Mixed coverage is ordinary input (the
+    # pandapower reader sets cost per generator), and the network keeps the
+    # costs it has — the omission is the ppc's alone.
+    assert "gencost" in case9.to_ppc()
+
+    doc = json.loads(case9.to_json())
+    doc["generators"][1]["cost"] = None
+    mixed = powerio.from_json(json.dumps(doc))
+    assert [g["cost"] is None for g in mixed.generators] == [False, True, False]
+
+    assert "gencost" not in mixed.to_ppc()
+
+
+def test_from_ppc_refuses_a_truncated_table(case9):
+    # Zero padding a short bus row would invent a bus at 0 p.u. and 0 kV; the
+    # MATPOWER reader refuses such a row in a .m file, and so does this.
+    ppc = case9.to_ppc()
+    ppc["bus"] = ppc["bus"][:, :7]
+    with pytest.raises(ValueError, match=r"'bus' row 0 has 7 columns"):
+        powerio.from_ppc(ppc)
+
+
+def test_from_ppc_names_the_table_and_row_for_malformed_input(case9):
+    one_d = case9.to_ppc()
+    one_d["bus"] = one_d["bus"][0]
+    with pytest.raises(ValueError, match=r"'bus' row 0 is not a sequence"):
+        powerio.from_ppc(one_d)
+
+    lettered = case9.to_ppc()
+    table = lettered["bus"].astype(object)
+    table[2, 0] = "abc"
+    lettered["bus"] = table
+    with pytest.raises(ValueError, match=r"'bus' row 2 has a non-numeric value"):
+        powerio.from_ppc(lettered)
+
+
 def test_convention_aliases(case9):
     # Documented aliases all parse; separator/case-insensitive.
     for conv in ["paper", "paper-pure", "PURE", "matpower", "mp"]:

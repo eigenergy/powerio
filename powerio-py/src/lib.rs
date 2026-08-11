@@ -849,6 +849,12 @@ impl PyNetwork {
             d.set_item("vg", g.vg)?;
             d.set_item("mbase", g.mbase)?;
             d.set_item("in_service", g.in_service)?;
+            // The MATPOWER gen columns past PMIN, in column order, `None` where
+            // the source carried no value. A list, not a name-keyed dict: the
+            // consumer that wants them (the ppc bridge) wants the column order,
+            // and an absent value is what separates "no ramp limit" from "a
+            // ramp limit of zero".
+            d.set_item("caps", g.caps.to_vec())?;
             match &g.cost {
                 Some(c) => {
                     let cd = PyDict::new(py);
