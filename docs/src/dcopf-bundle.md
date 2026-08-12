@@ -33,7 +33,7 @@ Market files and `dcopf_meta.json`.
   the coefficient in \\(f = b_e(\theta_f - \theta_t)\\). `SeriesImpedance` by
   default: \\(b_e = x/(r^2 + x^2)\\) plus the phase shift injection `p_shift`,
   with no tap scaling. `Matpower` uses \\(b_e = 1/(x \tau)\\) plus `p_shift`.
-  `PaperPure` (\\(b_e = 1/x\\), taps and shifts ignored) is deprecated in 0.9.0
+  `ReactanceOnly` (\\(b_e = 1/x\\), taps and shifts ignored) is deprecated in 0.9.0
   and is removed in 1.0.0. Recorded in the manifest.
 
 ## Matrices
@@ -48,7 +48,9 @@ Market files and `dcopf_meta.json`.
 
 ## Vectors
 
-Bus-indexed (length \\(n\\)): `pd` (load), `q`/`c`/`c0` (cost diag/linear/constant),
+Bus-indexed (length \\(n\\)): `pd` (load), `gs` (shunt conductance, the constant
+real power a shunt draws at one per unit voltage; a nodal balance subtracts it
+beside `pd`), `q`/`c`/`c0` (cost diag/linear/constant),
 `pmax`/`pmin`
 (generation bounds), `e_r` (reference indicator: \\(1\\) at every reference bus, else \\(0\\)),
 `p_shift` (phase shift injection, all zero unless `Matpower` + shifters).
@@ -69,7 +71,7 @@ each generator. A bus with one generator keeps that generator's curve.
 
 ## Manifest (`dcopf_meta.json`)
 
-Schema `powerio.dcopf` version `0.3.0` writes Matrix Market files plus
+Schema `powerio.dcopf` version `0.4.0` writes Matrix Market files plus
 structured metadata:
 
 - `dimensions`: `n_buses`, `n_source_branches`, `n_branch_columns`,

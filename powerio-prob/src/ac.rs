@@ -2,7 +2,7 @@ use serde::{Deserialize, Serialize};
 
 use powerio::{BusId, Error, IndexedNetwork, Result};
 
-use crate::{ReferenceBuses, Units, nodal};
+use crate::{ReferenceBuses, Units, limits, nodal};
 
 /// Options for AC OPF instance assembly.
 ///
@@ -358,7 +358,7 @@ pub fn build_ac_opf_instance(
         // A synthesized bound is per unit power already, so the admittance
         // multiplier is the one that puts it in the selected unit system.
         if options.synthesize_unrated_limits && branch.rate_a <= 0.0 {
-            let window = amin.abs().max(amax.abs());
+            let window = limits::angle_window(amin, amax);
             s_max.push(
                 branch.synthesize_rate_a(window, network.buses[from].vmax, network.buses[to].vmax)
                     * y_scale,

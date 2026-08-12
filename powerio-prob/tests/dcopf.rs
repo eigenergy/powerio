@@ -183,6 +183,15 @@ fn an_unrated_branch_takes_a_synthesized_limit_on_request() {
     let wide = build_dc_opf_instance(&IndexedNetwork::new(&wide), &options).expect("wide bounds");
     assert_close(wide.branches.f_max[0], 1.1 * 2.2 / 0.2);
 
+    // `0/0` is the MATPOWER spelling of the same unconstrained branch, so it
+    // reaches the same bound. Reading it as a zero wide window would give a
+    // zero limit, which the instance reads back as unlimited.
+    let mut zero = net.clone();
+    zero.branches[0].angmin = 0.0;
+    zero.branches[0].angmax = 0.0;
+    let zero = build_dc_opf_instance(&IndexedNetwork::new(&zero), &options).expect("zero bounds");
+    assert_close(zero.branches.f_max[0], 1.1 * 2.2 / 0.2);
+
     let mut rated = net.clone();
     rated.branches[0].rate_a = 50.0;
     let kept = build_dc_opf_instance(&IndexedNetwork::new(&rated), &options).expect("rated branch");
@@ -490,10 +499,13 @@ mod matrix_tests {
         )
         .expect("manifest json");
         assert_eq!(manifest["schema"], "powerio.dcopf");
-        assert_eq!(manifest["schema_version"], "0.3.0");
+        assert_eq!(manifest["schema_version"], "0.4.0");
         let c0_gen =
             powerio_matrix::io::read_vector_mtx(bundle.dir.join("c0_gen.mtx")).expect("c0_gen");
         assert_eq!(c0_gen, problem.generators.c0);
+        // The shunt conductance a nodal balance subtracts beside `pd`.
+        let g_s = powerio_matrix::io::read_vector_mtx(bundle.dir.join("gs.mtx")).expect("gs");
+        assert_eq!(g_s, problem.g_s);
         let c0 = powerio_matrix::io::read_vector_mtx(bundle.dir.join("c0.mtx")).expect("c0");
         assert_eq!(c0, problem.nodal_generator_data().c0);
         assert_eq!(manifest["dimensions"]["n_buses"], problem.n_buses);

@@ -12,18 +12,22 @@ use serde::{Deserialize, Serialize};
 #[non_exhaustive]
 pub enum DcConvention {
     /// `b = 1/x`, ignoring transformer taps and phase shifts.
+    ///
+    /// The serde alias keeps the 0.8 spelling readable, so a manifest or an
+    /// instance written before the rename still deserializes.
     #[deprecated(
         since = "0.9.0",
         note = "use `SeriesImpedance`, which is the same rule with resistance included, or `Matpower`; removed in 1.0.0"
     )]
+    #[serde(alias = "PaperPure")]
     ReactanceOnly,
     /// `b = 1/(x tau)` with phase shift injections, matching MATPOWER
     /// `makeBdc`.
     Matpower,
     /// `b = x/(r² + x²)` with phase shift injections.
     ///
-    /// Reads the whole series impedance and not the reactance alone, so it
-    /// describes a branch with a real r/x ratio. A transformer tap does not
+    /// Reads the whole series impedance, so it describes a branch with a real
+    /// r/x ratio. A transformer tap does not
     /// scale it, and it reduces to `1/x` when the resistance is zero.
     /// PowerModels' DC formulation uses the same quantity.
     #[default]

@@ -301,7 +301,7 @@ fuzz/                        # libFuzzer targets (detached workspace; see fuzz/R
   the DC model convention MATPOWER `makeBdc` uses; the AC series susceptance
   `Im(1/(r+jx))` is its negation. Default `SeriesImpedance`: `b = x/(r² + x²)`,
   which reads the whole series impedance, plus a phase shift injection, with no
-  tap scaling. `Matpower` uses `1/(x·τ)` plus the injection. `PaperPure`
+  tap scaling. `Matpower` uses `1/(x·τ)` plus the injection. `ReactanceOnly`
   (`b = 1/x`, taps and shifts ignored) is deprecated in 0.9.0 and removed in
   1.0.0; with zero phase shifts it equals MATPOWER `Bp` in the XB scheme.
 - **DC OPF lives in `powerio-prob`.** `DcOpfInstance` keeps generator-space

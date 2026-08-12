@@ -2,7 +2,7 @@ use serde::{Deserialize, Serialize};
 
 use powerio::{BusId, DcConvention, Error, IndexedNetwork, Result};
 
-use crate::{ReferenceBuses, nodal};
+use crate::{ReferenceBuses, limits, nodal};
 
 /// Unit system for power and generator cost data.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
@@ -161,8 +161,8 @@ pub struct DcOpfInstance {
     ///
     /// The DC approximation holds the voltage magnitude at one per unit, so a
     /// shunt draws the constant real power `g_s` and does not depend on the
-    /// angle. It belongs in the injection and not in the bus susceptance
-    /// matrix, whose row sums must stay zero. A nodal balance subtracts it
+    /// angle. It belongs in the injection: the bus susceptance matrix keeps
+    /// zero row sums and carries no shunt. A nodal balance subtracts it
     /// beside [`Self::p_d`], as MATPOWER `runpf` does.
     pub g_s: Vec<f64>,
     /// Nodal phase shift injection in dense bus order.
@@ -318,7 +318,7 @@ pub fn build_dc_opf_instance(
         // A synthesized bound is per unit power already, so the admittance
         // multiplier is the one that puts it in the selected unit system.
         if options.synthesize_unrated_limits && branch.rate_a <= 0.0 {
-            let window = amin.abs().max(amax.abs());
+            let window = limits::angle_window(amin, amax);
             f_max
                 .push(branch.synthesize_rate_a(window, buses[from].vmax, buses[to].vmax) * b_scale);
         } else {

@@ -34,19 +34,32 @@ fn sdd_device_type(obj: &Map<String, Value>) -> &str {
 }
 
 /// One required 0/1 mode flag on a `simple_dispatchable_device` row. GOC3
-/// writes these as JSON numbers, so a boolean is rejected by name.
+/// writes these as JSON numbers, so a boolean is rejected by name. A writer
+/// that emits every number as a float states the same flag as `0.0`/`1.0`, so
+/// the value is read as a number and then required to be one of the two.
 fn require_flag(obj: &Map<String, Value>, uid: &str, key: &str) -> Result<i64> {
     let raw = obj.get(key).ok_or_else(|| {
         json_error(format!(
             "simple_dispatchable_device `{uid}` missing `{key}`"
         ))
     })?;
-    match raw.as_i64() {
-        Some(v @ (0 | 1)) => Ok(v),
-        _ => Err(json_error(format!(
+    // 0 and 1 are exact in binary floating point, so equality is the right
+    // test here: it takes the two flags and nothing near them.
+    #[allow(clippy::float_cmp)]
+    let flag = raw.as_f64().and_then(|value| {
+        if value == 0.0 {
+            Some(0)
+        } else if value == 1.0 {
+            Some(1)
+        } else {
+            None
+        }
+    });
+    flag.ok_or_else(|| {
+        json_error(format!(
             "simple_dispatchable_device `{uid}` `{key}` is not 0 or 1"
-        ))),
-    }
+        ))
+    })
 }
 
 fn validate_period_len(

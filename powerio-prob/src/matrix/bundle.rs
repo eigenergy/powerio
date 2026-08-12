@@ -10,7 +10,7 @@ use crate::{DcOpfInstance, Units};
 use super::build_dc_opf_matrices;
 
 const DCOPF_SCHEMA: &str = "powerio.dcopf";
-const DCOPF_SCHEMA_VERSION: &str = "0.3.0";
+const DCOPF_SCHEMA_VERSION: &str = "0.4.0";
 
 /// Cost policy information recorded in a bundle manifest.
 #[derive(Debug, Clone)]
@@ -165,6 +165,7 @@ pub fn write_dcopf_bundle(
     put_vec(&dir, "pmin.mtx", &nodal.pmin, &mut files)?;
     put_vec(&dir, "fmax.mtx", &instance.branches.f_max, &mut files)?;
     put_vec(&dir, "pd.mtx", &instance.p_d, &mut files)?;
+    put_vec(&dir, "gs.mtx", &instance.g_s, &mut files)?;
     put_vec(
         &dir,
         "angle_min.mtx",

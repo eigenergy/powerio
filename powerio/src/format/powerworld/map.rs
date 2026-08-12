@@ -456,18 +456,21 @@ fn read_bus(r: &Row) -> Result<Bus> {
     let mut extras = Extras::new();
     // `SubNum` stays in extras: it is identity rather than geometry, and the
     // substation join reads it back.
-    let location = bus_location(r);
+    let promoted = bus_location(r);
+    let location = promoted.map(|(location, _)| location);
     keep_extras(
         r,
         &["SubNum", "SubNumber", "OwnerNum", "OwnerNumber", "BANumber"],
         &mut extras,
     );
-    if location.is_none() {
-        keep_extras(
-            r,
-            &["Latitude:1", "Longitude:1", "Latitude", "Longitude"],
-            &mut extras,
-        );
+    // Only the pair that promoted leaves extras. A complete case export
+    // carries both pairs, and the one the location did not come from is
+    // unmodeled data like any other column.
+    let used = promoted.map_or([""; 2], |(_, pair)| pair);
+    for key in ["Latitude:1", "Longitude:1", "Latitude", "Longitude"] {
+        if !used.contains(&key) {
+            keep_extras(r, &[key], &mut extras);
+        }
     }
     Ok(Bus {
         id: BusId(id),
@@ -491,19 +494,31 @@ fn read_bus(r: &Row) -> Result<Bus> {
     })
 }
 
-/// The promoted geographic location: the substation `Latitude:1`/
-/// `Longitude:1` pair, else the bus's own bare `Latitude`/`Longitude` pair
-/// (older complete case exports), when both parse finite.
-fn bus_location(r: &Row) -> Option<crate::geo::Location> {
-    let lat = first(r, &["Latitude:1", "Latitude"])?.parse::<f64>().ok()?;
-    let lon = first(r, &["Longitude:1", "Longitude"])?
-        .parse::<f64>()
-        .ok()?;
-    (lat.is_finite() && lon.is_finite()).then_some(crate::geo::Location {
-        x: lon,
-        y: lat,
-        kind: None,
-    })
+/// The promoted geographic location and the column pair it came from: the
+/// substation `Latitude:1`/`Longitude:1` pair, else the bus's own bare
+/// `Latitude`/`Longitude` pair (older complete case exports). A pair promotes
+/// only when both of its own columns parse finite, so a half filled pair never
+/// pairs a latitude with the other pair's longitude.
+fn bus_location(r: &Row) -> Option<(crate::geo::Location, [&'static str; 2])> {
+    for pair in [["Latitude:1", "Longitude:1"], ["Latitude", "Longitude"]] {
+        let (Some(lat), Some(lon)) = (
+            first(r, &pair[..1]).and_then(|v| v.parse::<f64>().ok()),
+            first(r, &pair[1..]).and_then(|v| v.parse::<f64>().ok()),
+        ) else {
+            continue;
+        };
+        if lat.is_finite() && lon.is_finite() {
+            return Some((
+                crate::geo::Location {
+                    x: lon,
+                    y: lat,
+                    kind: None,
+                },
+                pair,
+            ));
+        }
+    }
+    None
 }
 
 fn read_load(r: &Row, bus_labels: &HashMap<&str, BusId>) -> Result<Load> {

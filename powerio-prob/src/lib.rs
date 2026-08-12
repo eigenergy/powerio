@@ -7,6 +7,7 @@
 
 mod ac;
 mod dc;
+mod limits;
 mod nodal;
 mod reference;
 pub mod scopf;
