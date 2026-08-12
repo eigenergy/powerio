@@ -291,13 +291,10 @@ pub fn build_dc_opf_instance(
             }
             return Err(Error::ZeroImpedance { row: source_row });
         }
-        // Negated: the convention states `b`, and this field is the flow
-        // coefficient in `f = b (theta_from - theta_to)`, positive for an
-        // inductive branch.
         let branch_b =
-            -options
+            options
                 .convention
-                .series_susceptance(branch.r, branch.x, branch.effective_tap())
+                .branch_susceptance(branch.r, branch.x, branch.effective_tap())
                 * b_scale;
         if !branch_b.is_finite() {
             return Err(Error::NonFiniteSusceptance { row: source_row });

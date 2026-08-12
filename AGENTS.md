@@ -297,15 +297,12 @@ fuzz/                        # libFuzzer targets (detached workspace; see fuzz/R
   must leave `angmin <= angmax`. Wide symmetric bounds and `0/0` already have
   coverage.
 - **DC OPF Laplacian.** `L = A diag(b) Aᵀ` is built from the same `A`, `b`
-  factors `build_incidence` returns. `DcConvention::series_susceptance` states
-  the series susceptance `b`, negative for an inductive branch, the sign
-  PowerModels `calc_branch_y` gives; `build_incidence` negates it once, because
-  `L` takes the M-matrix form with negative off diagonals and positive
-  diagonals. Never negate twice: the matrix comes out sign flipped and every
-  builder downstream inherits it. Default `SeriesImpedance`: `b = -x/(r² + x²)`,
+  factors `build_incidence` returns. `b` is positive for an inductive branch,
+  the DC model convention MATPOWER `makeBdc` uses; the AC series susceptance
+  `Im(1/(r+jx))` is its negation. Default `SeriesImpedance`: `b = x/(r² + x²)`,
   which reads the whole series impedance, plus a phase shift injection, with no
-  tap scaling. `Matpower` uses `-1/(x·τ)` plus the injection. `PaperPure`
-  (`b = -1/x`, taps and shifts ignored) is deprecated in 0.9.0 and removed in
+  tap scaling. `Matpower` uses `1/(x·τ)` plus the injection. `PaperPure`
+  (`b = 1/x`, taps and shifts ignored) is deprecated in 0.9.0 and removed in
   1.0.0; with zero phase shifts it equals MATPOWER `Bp` in the XB scheme.
 - **DC OPF lives in `powerio-prob`.** `DcOpfInstance` keeps generator-space
   data (`generators: DcGeneratorData`); `nodal_generator_data()` scatters it to

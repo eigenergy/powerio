@@ -53,18 +53,12 @@ pub fn geo_layer_from_pwd(display: &PwdDisplay) -> GeoLayer {
         features: display
             .substations
             .iter()
-            .map(|substation| GeoFeature {
-                target: GeoTarget::Substation,
-                key: ElementKey {
-                    uid: None,
-                    id: Some(substation.number.to_string()),
-                    name: (!substation.name.is_empty()).then(|| substation.name.clone()),
-                    index: None,
-                },
-                geometry: GeoGeometry::Point([substation.x, substation.y]),
-                from: None,
-                to: None,
-                kind: None,
+            .map(|substation| {
+                substation_feature(
+                    substation_key(&substation.number.to_string()),
+                    (!substation.name.is_empty()).then(|| substation.name.clone()),
+                    [substation.x, substation.y],
+                )
             })
             .collect(),
     }
@@ -101,19 +95,7 @@ pub fn geo_layer_from_aux_substations(aux: &AuxFile) -> GeoLayer {
             else {
                 continue;
             };
-            features.push(GeoFeature {
-                target: GeoTarget::Substation,
-                key: ElementKey {
-                    uid: None,
-                    id: Some(substation_key(number)),
-                    name: None,
-                    index: None,
-                },
-                geometry: GeoGeometry::Point([lon, lat]),
-                from: None,
-                to: None,
-                kind: None,
-            });
+            features.push(substation_feature(substation_key(number), None, [lon, lat]));
         }
     }
     GeoLayer {
@@ -196,6 +178,24 @@ fn bus_substation(bus: &crate::network::Bus) -> Option<String> {
             (!trimmed.is_empty()).then(|| substation_key(trimmed))
         }
         _ => None,
+    }
+}
+
+/// One substation point, keyed for [`apply_substation_points`]. Every
+/// substation source builds its features through this.
+fn substation_feature(id: String, name: Option<String>, point: [f64; 2]) -> GeoFeature {
+    GeoFeature {
+        target: GeoTarget::Substation,
+        key: ElementKey {
+            uid: None,
+            id: Some(id),
+            name,
+            index: None,
+        },
+        geometry: GeoGeometry::Point(point),
+        from: None,
+        to: None,
+        kind: None,
     }
 }
 

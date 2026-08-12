@@ -29,14 +29,12 @@ Market files and `dcopf_meta.json`.
   as a 0-based dense index. Each in-service island needs at least one reference.
   If several references lie in one island, the bundle fixes all of those voltage
   angles to zero; it is not a participation factor slack model.
-- **DC convention.** Every convention states the series susceptance
-  \\(b_e\\), negative for an inductive branch; the builder negates it once, so
-  `b.mtx` holds the flow coefficient in \\(f = b_e(\theta_f - \theta_t)\\),
-  positive for an inductive branch. `SeriesImpedance` by default:
-  \\(b_e = -x/(r^2 + x^2)\\) plus the phase shift injection `p_shift`, with no
-  tap scaling. `Matpower` uses \\(b_e = -1/(x \tau)\\) plus `p_shift`.
-  `PaperPure` (\\(b_e = -1/x\\), taps and shifts ignored) is deprecated in
-  0.9.0 and is removed in 1.0.0. Recorded in the manifest.
+- **DC convention.** `b.mtx` holds \\(b_e\\), positive for an inductive branch,
+  the coefficient in \\(f = b_e(\theta_f - \theta_t)\\). `SeriesImpedance` by
+  default: \\(b_e = x/(r^2 + x^2)\\) plus the phase shift injection `p_shift`,
+  with no tap scaling. `Matpower` uses \\(b_e = 1/(x \tau)\\) plus `p_shift`.
+  `PaperPure` (\\(b_e = 1/x\\), taps and shifts ignored) is deprecated in 0.9.0
+  and is removed in 1.0.0. Recorded in the manifest.
 
 ## Matrices
 
