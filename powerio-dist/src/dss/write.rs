@@ -2485,6 +2485,14 @@ mod tests {
         }
     }
 
+    /// A source bus and a secondary spelled the way a center tapped service
+    /// is: two hot terminals with the grounded return between them.
+    fn center_tap_service(vln: f64) -> (DistBus, VoltageSource, DistBus) {
+        let (mut source, vs) = three_phase_source(vln);
+        source.id = "sb".into();
+        (source, vs, bus("lv", &["p1", "n", "p2"], &["n"]))
+    }
+
     fn three_phase_source(vln: f64) -> (DistBus, VoltageSource) {
         let third = 2.0 * std::f64::consts::FRAC_PI_3;
         (
@@ -3146,9 +3154,7 @@ mod tests {
         // dss reads a node list positionally, so one record over that map
         // states the wrong node pair and drops the conductors it cannot
         // address. The powers are equal, so the imbalance split never fires.
-        let (mut b, vs) = three_phase_source(11000.0);
-        let lv = bus("lv", &["p1", "n", "p2"], &["n"]);
-        b.id = "sb".into();
+        let (b, vs, lv) = center_tap_service(11000.0);
         let l = DistLoad {
             name: "ld".into(),
             bus: "lv".into(),
@@ -3192,9 +3198,7 @@ mod tests {
         // The balanced case cannot catch a swap. With the return conductor mid
         // map, taking the last terminal as the return pairs leg 1 with the
         // neutral and puts the second leg across both hots.
-        let (mut b, vs) = three_phase_source(11000.0);
-        let lv = bus("lv", &["p1", "n", "p2"], &["n"]);
-        b.id = "sb".into();
+        let (b, vs, lv) = center_tap_service(11000.0);
         let l = DistLoad::new(
             "ld",
             "lv",
@@ -3237,9 +3241,7 @@ mod tests {
     fn a_map_longer_than_the_record_says_what_dss_drops() {
         // The mirror of the short map warning. One power value over three
         // conductors cannot split, so the arity is all the writer can report.
-        let (mut b, vs) = three_phase_source(11000.0);
-        let lv = bus("lv", &["p1", "n", "p2"], &["n"]);
-        b.id = "sb".into();
+        let (b, vs, lv) = center_tap_service(11000.0);
         let mut l = DistLoad::new(
             "ld",
             "lv",
@@ -3277,9 +3279,7 @@ mod tests {
         // PowerIO.jl#79 bug 3. BMOPF puts the whole leakage on the primary
         // arm, so the star back solves to xlt=0, which dss converges on with
         // the secondary legs collapsed to about half voltage.
-        let (mut b, vs) = three_phase_source(11000.0);
-        let lv = bus("lv", &["p1", "n", "p2"], &["n"]);
-        b.id = "sb".into();
+        let (b, vs, lv) = center_tap_service(11000.0);
         let winding = |bus: &str, map: &[&str], v: f64| Winding {
             bus: bus.into(),
             terminal_map: strings(map),
