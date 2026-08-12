@@ -19,6 +19,7 @@ use super::types::{
     ScopfInstance, ScopfLengths, ScopfPriceBlockRow, ScopfPriceBlocks, ScopfReactiveReserveRow,
     ScopfReactiveReserveSetRow, ScopfShuntRow, ScopfStaticData, ScopfStaticDataProjection,
     ScopfTransformerRow, ScopfTransformerSurvivorRow, ScopfVariablePhaseRow, ScopfVariableRatioRow,
+    ScopfViolationCost,
 };
 
 type Result<T> = ScopfResult<T>;
@@ -30,6 +31,22 @@ fn sdd_device_type(obj: &Map<String, Value>) -> &str {
     obj.get("device_type")
         .and_then(Value::as_str)
         .unwrap_or("producer")
+}
+
+/// One required 0/1 mode flag on a `simple_dispatchable_device` row. GOC3
+/// writes these as JSON numbers, so a boolean is rejected by name.
+fn require_flag(obj: &Map<String, Value>, uid: &str, key: &str) -> Result<i64> {
+    let raw = obj.get(key).ok_or_else(|| {
+        json_error(format!(
+            "simple_dispatchable_device `{uid}` missing `{key}`"
+        ))
+    })?;
+    match raw.as_i64() {
+        Some(v @ (0 | 1)) => Ok(v),
+        _ => Err(json_error(format!(
+            "simple_dispatchable_device `{uid}` `{key}` is not 0 or 1"
+        ))),
+    }
 }
 
 fn validate_period_len(
@@ -144,6 +161,23 @@ impl Goc3Adapter {
         let ts_val = self.sdd_ts.get(uid)?;
         let initial = initial_status(val)?;
         let ts = |key| require_field(ts_val, SDD_TS, uid, key);
+        // Both flags are required, so a document that omits one fails here
+        // instead of reading as "no capability". A parameter is read only when
+        // its own mode is selected.
+        let q_bound_cap = require_flag(val, uid, "q_bound_cap")?;
+        let q_linear_cap = require_flag(val, uid, "q_linear_cap")?;
+        if q_bound_cap == 1 && q_linear_cap == 1 {
+            return Err(json_error(format!(
+                "{SDD} `{uid}` sets both `q_bound_cap` and `q_linear_cap`; the two modes are mutually exclusive"
+            )));
+        }
+        let cap = |flag: i64, key: &str| -> Result<Option<f64>> {
+            if flag == 1 {
+                Ok(Some(require_num(val, key)?))
+            } else {
+                Ok(None)
+            }
+        };
         let row = ScopfDeviceRow {
             bus: self.goc3_bus_id(require_str(val, "bus")?)?,
             uid: uid.to_owned(),
@@ -179,6 +213,14 @@ impl Goc3Adapter {
             q_max: float_vec(ts("q_ub")?)?,
             q_min: float_vec(ts("q_lb")?)?,
             sus: float_matrix(require_field(val, SDD, uid, "startup_states")?)?,
+            q_bound_cap,
+            q_linear_cap,
+            beta_ub: cap(q_bound_cap, "beta_ub")?,
+            beta_lb: cap(q_bound_cap, "beta_lb")?,
+            q_0_ub: cap(q_bound_cap, "q_0_ub")?,
+            q_0_lb: cap(q_bound_cap, "q_0_lb")?,
+            beta: cap(q_linear_cap, "beta")?,
+            q_p0: cap(q_linear_cap, "q_0")?,
         };
         for (field, actual) in [
             ("p_reg_res_up_cost", row.c_rgu.len()),
@@ -282,6 +324,10 @@ fn build_static_projection(tables: &Goc3Adapter) -> Result<ScopfStaticDataProjec
     let l_t = tables.dt.len();
     let l_n_p = tables.azr.uids().len();
     let l_n_q = tables.rzr.uids().len();
+    // The survivor builders read the same section. A client that sizes a per
+    // contingency array must not have to reach back into the source document
+    // for the one number that fixes its extent.
+    let k = tables.contingencies()?.len();
 
     let lengths = ScopfLengths {
         l_j_xf,
@@ -297,6 +343,7 @@ fn build_static_projection(tables: &Goc3Adapter) -> Result<ScopfStaticDataProjec
         l_t,
         l_n_p,
         l_n_q,
+        k,
     };
 
     let mut bus: Vec<ScopfBusRow> = tables
@@ -319,9 +366,11 @@ fn build_static_projection(tables: &Goc3Adapter) -> Result<ScopfStaticDataProjec
         .shunt
         .uids()
         .iter()
-        .map(|uid| {
+        .enumerate()
+        .map(|(j_sh, uid)| {
             let val = tables.shunt.get(uid)?;
             Ok(ScopfShuntRow {
+                j_sh,
                 uid: uid.clone(),
                 bus: tables.goc3_bus_id(require_str(val, "bus")?)?,
                 g_sh: require_num(val, "gs")?,
@@ -962,6 +1011,41 @@ fn build_dc_contingency_flows(tables: &Goc3Adapter) -> Result<Vec<ScopfDcConting
     Ok(rows)
 }
 
+/// The case's four violation prices. Each one is separately optional: the 14
+/// bus validation case has no `e_vio_cost`, so a required field would refuse a
+/// document GOCompetition ships.
+fn build_violation_cost(tables: &Goc3Adapter) -> ScopfViolationCost {
+    let price = |key: &str| tables.violation_cost.get(key).and_then(Value::as_f64);
+    ScopfViolationCost {
+        p_bus: price("p_bus_vio_cost"),
+        q_bus: price("q_bus_vio_cost"),
+        s: price("s_vio_cost"),
+        e: price("e_vio_cost"),
+    }
+}
+
+/// `(producers_first, contiguous)` over the `simple_dispatchable_device`
+/// section in document order: whether the producer run starts before the
+/// consumer run, and whether each class is one unbroken run. Document order is
+/// the index rule for every per-class index here, so the two facts are read
+/// off the same order and need no UID shape.
+fn device_class_blocks(tables: &Goc3Adapter) -> Result<(bool, bool)> {
+    let mut runs: Vec<&str> = Vec::new();
+    for uid in tables.sdd_order() {
+        let kind = sdd_device_type(tables.sdd.get(&uid)?);
+        let kind = if kind == "consumer" {
+            "consumer"
+        } else {
+            "producer"
+        };
+        if runs.last() != Some(&kind) {
+            runs.push(kind);
+        }
+    }
+    let producers_first = runs.first() != Some(&"consumer");
+    Ok((producers_first, runs.len() <= 2))
+}
+
 fn project_scopf_instance(tables: &Goc3Adapter) -> Result<ScopfInstance> {
     let ScopfStaticDataProjection {
         static_data,
@@ -969,6 +1053,7 @@ fn project_scopf_instance(tables: &Goc3Adapter) -> Result<ScopfInstance> {
         cost_vector_pr,
         cost_vector_cs,
     } = build_static_projection(tables)?;
+    let (producers_first, device_classes_contiguous) = device_class_blocks(tables)?;
     Ok(ScopfInstance {
         static_data,
         lengths,
@@ -976,6 +1061,9 @@ fn project_scopf_instance(tables: &Goc3Adapter) -> Result<ScopfInstance> {
         price_blocks: build_price_blocks(&cost_vector_pr, &cost_vector_cs),
         ac_contingency_survivors: build_ac_contingency_survivors(tables)?,
         dc_contingency_flows: build_dc_contingency_flows(tables)?,
+        violation_cost: build_violation_cost(tables),
+        producers_first,
+        device_classes_contiguous,
     })
 }
 

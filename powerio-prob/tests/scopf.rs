@@ -312,3 +312,232 @@ fn missing_device_type_defaults_to_producer() {
     assert_eq!(instance.static_data.prod[0].uid, "sd_00");
     assert_eq!(instance.lengths.l_j_pr, 1);
 }
+
+const VALIDATION_14BUS: &str = include_str!("data/goc3_14bus_20220707.json");
+
+fn validation_instance() -> ScopfInstance {
+    build_scopf_instance_from_str(VALIDATION_14BUS, "goc3-json")
+        .expect("build the GOCompetition 14 bus validation instance")
+}
+
+/// The contingency count a client needs to size a per contingency array. It
+/// must agree with the survivor groups the same instance carries.
+#[test]
+fn lengths_carry_the_contingency_count() {
+    let instance = small_instance();
+    assert_eq!(
+        instance.lengths.k,
+        instance.ac_contingency_survivors.ln.len()
+    );
+    assert_eq!(
+        instance.lengths.k,
+        instance.ac_contingency_survivors.xf.len()
+    );
+}
+
+/// Shunts carry a per class index in document order, like every other class.
+#[test]
+fn shunt_rows_carry_a_document_order_index() {
+    let instance = small_instance();
+    assert_eq!(
+        instance
+            .static_data
+            .shunt
+            .iter()
+            .map(|row| row.j_sh)
+            .collect::<Vec<_>>(),
+        (0..instance.lengths.l_j_sh).collect::<Vec<_>>()
+    );
+}
+
+/// A device declares at most one reactive capability mode. The parameters of a
+/// mode it did not declare are absent, so a model cannot read a silent zero.
+#[test]
+fn reactive_capability_reads_only_the_declared_mode() {
+    let bounded = {
+        let mut doc: Value = serde_json::from_str(SMALL).expect("fixture json");
+        let device = doc["network"]["simple_dispatchable_device"][0]
+            .as_object_mut()
+            .expect("device object");
+        device.insert("q_bound_cap".to_owned(), Value::from(1));
+        device.insert("beta_ub".to_owned(), Value::from(0.5));
+        device.insert("beta_lb".to_owned(), Value::from(-0.5));
+        device.insert("q_0_ub".to_owned(), Value::from(2.0));
+        device.insert("q_0_lb".to_owned(), Value::from(-2.0));
+        let text = serde_json::to_string(&doc).expect("serialize");
+        build_scopf_instance_from_str(&text, "goc3-json").expect("build bound cap")
+    };
+    let row = &bounded.static_data.prod[0];
+    assert_eq!(row.q_bound_cap, 1);
+    assert_eq!(row.q_linear_cap, 0);
+    assert_eq!(row.beta_ub, Some(0.5));
+    assert_eq!(row.q_0_lb, Some(-2.0));
+    assert_eq!(row.beta, None, "the mode it did not declare stays absent");
+    assert_eq!(row.q_p0, None);
+
+    // The linear cap intercept and `initial_status.q` are different
+    // quantities. The document spells both `q_0`; the row keeps both.
+    let linear = {
+        let mut doc: Value = serde_json::from_str(SMALL).expect("fixture json");
+        let device = doc["network"]["simple_dispatchable_device"][0]
+            .as_object_mut()
+            .expect("device object");
+        device.insert("q_linear_cap".to_owned(), Value::from(1));
+        device.insert("beta".to_owned(), Value::from(0.25));
+        device.insert("q_0".to_owned(), Value::from(1.5));
+        let text = serde_json::to_string(&doc).expect("serialize");
+        build_scopf_instance_from_str(&text, "goc3-json").expect("build linear cap")
+    };
+    let row = &linear.static_data.prod[0];
+    assert_eq!(row.beta, Some(0.25));
+    assert_eq!(row.q_p0, Some(1.5));
+    assert!(
+        row.q_0.abs() < 1e-12,
+        "initial_status.q, not the capability intercept"
+    );
+    assert_eq!(row.beta_ub, None);
+
+    // Neither mode: the fixture's own state.
+    let neither = small_instance();
+    let row = &neither.static_data.prod[0];
+    assert_eq!((row.q_bound_cap, row.q_linear_cap), (0, 0));
+    assert_eq!(row.beta_ub, None);
+    assert_eq!(row.beta, None);
+}
+
+#[test]
+fn both_reactive_capability_modes_are_rejected() {
+    let mut doc: Value = serde_json::from_str(SMALL).expect("fixture json");
+    let device = doc["network"]["simple_dispatchable_device"][0]
+        .as_object_mut()
+        .expect("device object");
+    device.insert("q_bound_cap".to_owned(), Value::from(1));
+    device.insert("q_linear_cap".to_owned(), Value::from(1));
+    let text = serde_json::to_string(&doc).expect("serialize");
+    let error = build_scopf_instance_from_str(&text, "goc3-json").expect_err("both modes");
+    assert!(error.to_string().contains("mutually exclusive"));
+}
+
+#[test]
+fn a_missing_capability_flag_is_rejected() {
+    let mut doc: Value = serde_json::from_str(SMALL).expect("fixture json");
+    doc["network"]["simple_dispatchable_device"][0]
+        .as_object_mut()
+        .expect("device object")
+        .remove("q_bound_cap");
+    let text = serde_json::to_string(&doc).expect("serialize");
+    let error = build_scopf_instance_from_str(&text, "goc3-json").expect_err("missing flag");
+    assert!(error.to_string().contains("q_bound_cap"));
+}
+
+/// Each violation price is separately optional. A price the document omits is
+/// absent, so a model that prices that violation cannot read a free one.
+#[test]
+fn violation_prices_are_each_optional() {
+    let instance = small_instance();
+    assert_eq!(instance.violation_cost.p_bus, Some(1.0));
+    assert_eq!(instance.violation_cost.e, Some(1.0));
+
+    let mut doc: Value = serde_json::from_str(SMALL).expect("fixture json");
+    doc["network"]["violation_cost"]
+        .as_object_mut()
+        .expect("violation cost object")
+        .remove("e_vio_cost");
+    let text = serde_json::to_string(&doc).expect("serialize");
+    let instance = build_scopf_instance_from_str(&text, "goc3-json").expect("build");
+    assert_eq!(instance.violation_cost.e, None);
+    assert_eq!(instance.violation_cost.s, Some(1.0));
+}
+
+/// Both facts a model needs before it addresses a device by a per class offset
+/// into one stacked variable vector.
+#[test]
+fn device_class_blocks_are_read_in_document_order() {
+    let instance = small_instance();
+    assert!(instance.producers_first);
+    assert!(instance.device_classes_contiguous);
+
+    let mut doc: Value = serde_json::from_str(SMALL).expect("fixture json");
+    let devices = doc["network"]["simple_dispatchable_device"]
+        .as_array_mut()
+        .expect("device array");
+    devices.swap(0, 1);
+    let text = serde_json::to_string(&doc).expect("serialize");
+    let instance = build_scopf_instance_from_str(&text, "goc3-json").expect("build");
+    assert!(!instance.producers_first);
+    assert!(instance.device_classes_contiguous);
+}
+
+#[test]
+fn interleaved_device_classes_are_reported() {
+    let mut doc: Value = serde_json::from_str(SMALL).expect("fixture json");
+    let devices = doc["network"]["simple_dispatchable_device"]
+        .as_array_mut()
+        .expect("device array");
+    let mut third = devices[0].clone();
+    third["uid"] = Value::from("sd_02");
+    devices.push(third);
+    let ts = doc["time_series_input"]["simple_dispatchable_device"]
+        .as_array_mut()
+        .expect("device time series");
+    let mut third_ts = ts[0].clone();
+    third_ts["uid"] = Value::from("sd_02");
+    ts.push(third_ts);
+    let text = serde_json::to_string(&doc).expect("serialize");
+    let instance = build_scopf_instance_from_str(&text, "goc3-json").expect("build");
+    assert!(
+        !instance.device_classes_contiguous,
+        "producer, consumer, producer is three runs"
+    );
+}
+
+/// GOCompetition's own validation case. Its uids are names, so the digits in
+/// them are bus numbers and two devices at one bus collide on the same number.
+/// Document order is the only rule that addresses every row.
+#[test]
+fn the_validation_case_indexes_every_row_in_document_order() {
+    let instance = validation_instance();
+    let data = &instance.static_data;
+
+    assert_eq!(instance.lengths.l_j_cspr, 17);
+    assert_eq!(data.prod.len() + data.cons.len(), 17);
+    assert_eq!(instance.lengths.l_j_ln, 17);
+    assert_eq!(instance.lengths.l_j_xf, 3);
+    assert_eq!(instance.lengths.l_j_sh, 1);
+    assert_eq!(instance.lengths.i, 14);
+
+    // The single shunt is "Shunt Bus 6". Its per class index is 0, its
+    // position, not the 6 in its name.
+    assert_eq!(data.shunt[0].uid, "Shunt Bus 6");
+    assert_eq!(data.shunt[0].j_sh, 0);
+
+    for (position, row) in data.acl_branch.iter().enumerate() {
+        assert_eq!(row.j_ln, position);
+    }
+    for (position, row) in data.acx_branch.iter().enumerate() {
+        assert_eq!(row.j_xf, position);
+    }
+
+    // This case omits one violation price, and declares a capability mode its
+    // official counterparts do not.
+    assert_eq!(instance.violation_cost.e, None);
+    assert!(instance.violation_cost.p_bus.is_some());
+    assert!(
+        data.prod
+            .iter()
+            .chain(&data.cons)
+            .any(|row| row.q_bound_cap == 1),
+        "the validation case declares the bound cap mode"
+    );
+    for row in data.prod.iter().chain(&data.cons) {
+        assert!(row.q_bound_cap == 0 || row.q_linear_cap == 0);
+        if row.q_bound_cap == 1 {
+            assert!(row.beta_ub.is_some() && row.q_0_lb.is_some());
+        } else {
+            assert_eq!(row.beta_ub, None);
+        }
+    }
+
+    assert!(instance.producers_first);
+    assert!(instance.device_classes_contiguous);
+}
