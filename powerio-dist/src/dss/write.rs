@@ -19,9 +19,9 @@ use std::fmt::Write as _;
 use crate::convert::{Conversion, ConversionSidecar};
 use crate::model::{
     ActivePowerReference, Configuration, ControlVoltageReference, DistBus, DistControlProfile,
-    DistIbr, DistLoad, DistLoadVoltageModel, DistNetwork, Extras, IbrPrimeMover, IbrTopology,
-    IbrVoltageAggregation, Mat, ReactivePowerReference, VoltVarControl, VoltWattControl, Winding,
-    WindingConn,
+    DistIbr, DistLoad, DistLoadVoltageModel, DistNetwork, DistTransformer, Extras, IbrPrimeMover,
+    IbrTopology, IbrVoltageAggregation, Mat, ReactivePowerReference, VoltVarControl,
+    VoltWattControl, Winding, WindingConn,
 };
 
 use super::read::delta_edges;
@@ -461,14 +461,35 @@ impl DssWriter {
     /// ground for the rest — so a map shorter than the class's conductor
     /// count comes back from a reparse one grounded neutral longer. The
     /// first write of such a model is not a fixed point; the second is.
-    fn warn_short_map(&mut self, class: &str, name: &str, map_len: usize, nconds: usize) {
+    /// A map longer than the count is the more serious direction: dss reads
+    /// the node list positionally and drops what the record cannot address.
+    fn warn_map_arity(&mut self, class: &str, name: &str, map_len: usize, nconds: usize) {
         if map_len < nconds {
             self.warn(format!(
                 "{class} {name}: terminal map lists {map_len} of {nconds} conductors; \
                  dss materializes a grounded neutral terminal and the reparsed model \
                  gains one"
             ));
+        } else if map_len > nconds {
+            self.warn(format!(
+                "{class} {name}: terminal map lists {map_len} conductors but the record \
+                 addresses {nconds}; dss discards the last {} and the model loses them",
+                map_len - nconds
+            ));
         }
+    }
+
+    /// The position of the bus's grounded terminal in `map`, when the bus
+    /// grounds exactly one terminal the map lists. dss reads a node list
+    /// positionally, so this conductor belongs last.
+    fn return_terminal_index(&self, bus: &str, map: &[String]) -> Option<usize> {
+        let grounded = self.grounded.get(&bus.to_ascii_lowercase())?;
+        let mut found = map
+            .iter()
+            .enumerate()
+            .filter(|(_, t)| grounded.contains(*t));
+        let (idx, _) = found.next()?;
+        found.next().is_none().then_some(idx)
     }
 
     /// A numeric source extra. A present token that does not parse warns;
@@ -874,7 +895,7 @@ impl DssWriter {
                     vs.name
                 ));
             }
-            self.warn_short_map("vsource", &vs.name, vs.terminal_map.len(), phases + 1);
+            self.warn_map_arity("vsource", &vs.name, vs.terminal_map.len(), phases + 1);
             let basekv = self
                 .source_extra_f64(vs, "basekv")
                 .unwrap_or_else(|| source_basekv(vs, phases));
@@ -1154,7 +1175,8 @@ impl DssWriter {
             if let Some(xhl) = t.xsc_pct.first() {
                 let _ = write!(s, " xhl={}", num(*xhl));
                 if t.xsc_pct.len() >= 3 {
-                    let _ = write!(s, " xht={} xlt={}", num(t.xsc_pct[1]), num(t.xsc_pct[2]));
+                    let xlt = self.star_xlt(t);
+                    let _ = write!(s, " xht={} xlt={}", num(t.xsc_pct[1]), num(xlt));
                 }
             } else {
                 self.warn(format!(
@@ -1180,6 +1202,41 @@ impl DssWriter {
             }
         }
         self.out.push('\n');
+    }
+
+    /// The `xlt=` value for a three winding record. dss cannot solve a star
+    /// whose third arm is zero: the two secondary legs collapse to about half
+    /// voltage and read unequal under balanced load, and the solution
+    /// converges without an error. A source that lumps the whole leakage on
+    /// the primary arm states exactly that, so the split from the OpenDSS
+    /// center tap example, `xlt = 2/3 xhl` at `xhl = xht`, substitutes.
+    fn star_xlt(&mut self, t: &DistTransformer) -> f64 {
+        let (xhl, xht, xlt) = (t.xsc_pct[0], t.xsc_pct[1], t.xsc_pct[2]);
+        if xlt > 0.0 && xlt.is_finite() {
+            return xlt;
+        }
+        #[allow(clippy::float_cmp)]
+        let lumped_on_primary = xhl == xht && xhl > 0.0 && xhl.is_finite();
+        if !lumped_on_primary {
+            self.warn(format!(
+                "transformer {}: xlt={} is not a reactance dss can solve, and the \
+                 other two arms do not determine a replacement; emitted as stated",
+                t.name,
+                num(xlt)
+            ));
+            return xlt;
+        }
+        let repaired = 2.0 / 3.0 * xhl;
+        self.warn(format!(
+            "transformer {}: the source puts the whole leakage on the primary arm, \
+             leaving xlt={}; dss solves that star as a collapsed secondary, so \
+             xlt={} went out instead, holding xhl={}",
+            t.name,
+            num(xlt),
+            num(repaired),
+            num(xhl)
+        ));
+        repaired
     }
 
     /// The winding `kv=` value in kV, or `None` if no value is available.
@@ -1244,7 +1301,15 @@ impl DssWriter {
         // imbalance is allowed to vanish.
         #[allow(clippy::float_cmp)]
         let uniform = |xs: &[f64]| xs.iter().all(|x| *x == xs[0]);
-        if n < 2 || l.q_nom.len() != n || (uniform(&l.p_nom) && uniform(&l.q_nom)) {
+        let stated_per_phase = n >= 2 && l.q_nom.len() == n;
+        let unbalanced = stated_per_phase && !(uniform(&l.p_nom) && uniform(&l.q_nom));
+        // dss reads the node list positionally: phase conductors first, the
+        // return last. A center tapped service maps as `[p1, n, p2]`, so one
+        // record over that map names a different node pair than the load sits
+        // on however its power divides.
+        let return_index = self.return_terminal_index(&l.bus, &l.terminal_map);
+        let misordered = return_index.is_some_and(|i| i + 1 != l.terminal_map.len());
+        if !unbalanced && !misordered {
             return vec![Cow::Borrowed(l)];
         }
         if l.configuration == Configuration::Delta {
@@ -1255,26 +1320,39 @@ impl DssWriter {
             ));
             return vec![Cow::Borrowed(l)];
         }
-        if l.terminal_map.len() < n {
+        // Without a grounded terminal the map states the return last, the
+        // shape the reader writes for a wye element.
+        let (hot_indices, return_terminal) = match return_index {
+            Some(i) => (
+                (0..l.terminal_map.len()).filter(|j| *j != i).collect(),
+                Some(l.terminal_map[i].clone()),
+            ),
+            None if l.terminal_map.len() > n => ((0..n).collect(), Some(l.terminal_map[n].clone())),
+            None => ((0..l.terminal_map.len()).collect::<Vec<_>>(), None),
+        };
+        if !stated_per_phase || hot_indices.len() != n {
             self.warn(format!(
-                "load {}: per phase power over {n} phases but only {} terminals; \
-                 emitted one balanced Load carrying the total",
+                "load {}: {} over a terminal map with {} phase conductors; \
+                 emitted one Load carrying the total",
                 l.name,
-                l.terminal_map.len()
+                if stated_per_phase {
+                    format!("per phase power over {n} phases")
+                } else {
+                    "one power value".to_string()
+                },
+                hot_indices.len()
             ));
             return vec![Cow::Borrowed(l)];
         }
-        // A wye map carries the return as its last conductor; each part keeps
-        // its own phase and that return, so `bus_ref` spells the same node pair
-        // the whole load sat on.
-        let return_terminal = (l.terminal_map.len() > n).then(|| l.terminal_map[n].clone());
-        (0..n)
-            .map(|i| {
+        hot_indices
+            .into_iter()
+            .enumerate()
+            .map(|(i, hot)| {
                 let mut part = l.clone();
-                part.name = format!("{}_{}", l.name, l.terminal_map[i]);
+                part.name = format!("{}_{}", l.name, l.terminal_map[hot]);
                 part.terminal_map = match &return_terminal {
-                    Some(r) => vec![l.terminal_map[i].clone(), r.clone()],
-                    None => vec![l.terminal_map[i].clone()],
+                    Some(r) => vec![l.terminal_map[hot].clone(), r.clone()],
+                    None => vec![l.terminal_map[hot].clone()],
                 };
                 part.configuration = Configuration::Wye;
                 part.p_nom = vec![l.p_nom[i]];
@@ -1310,7 +1388,7 @@ impl DssWriter {
         // The reader's nconds: a 3 phase delta has no neutral conductor,
         // every other connection carries phases + 1.
         let nconds = nconds_for(conn, phases);
-        self.warn_short_map("load", &l.name, l.terminal_map.len(), nconds);
+        self.warn_map_arity("load", &l.name, l.terminal_map.len(), nconds);
         let kw: f64 = l.p_nom.iter().sum::<f64>() / 1e3;
         let kvar: f64 = l.q_nom.iter().sum::<f64>() / 1e3;
         let typed_kv = self.load_nominal_kv(&l.voltage_model, phases, l.configuration, &l.name);
@@ -1707,7 +1785,7 @@ impl DssWriter {
             );
             let conn = self.element_conn(&c.extras, c.configuration, &c.bus, &c.terminal_map);
             let nconds = nconds_for(conn, phases);
-            self.warn_short_map("capacitor", &c.name, c.terminal_map.len(), nconds);
+            self.warn_map_arity("capacitor", &c.name, c.terminal_map.len(), nconds);
             let typed_kv = is_positive_finite(c.v_nom).then(|| c.v_nom / 1e3);
             if typed_kv.is_none() {
                 self.warn(format!(
@@ -1770,7 +1848,7 @@ impl DssWriter {
             );
             let conn = self.element_conn(&g.extras, g.configuration, &g.bus, &g.terminal_map);
             let nconds = nconds_for(conn, phases);
-            self.warn_short_map("generator", &g.name, g.terminal_map.len(), nconds);
+            self.warn_map_arity("generator", &g.name, g.terminal_map.len(), nconds);
             let kw: f64 = g.p_nom.iter().sum::<f64>() / 1e3;
             let kvar: f64 = g.q_nom.iter().sum::<f64>() / 1e3;
             let kv = self.element_kv(
@@ -2405,6 +2483,14 @@ mod tests {
             grounded: strings(grounded),
             ..DistBus::default()
         }
+    }
+
+    /// A source bus and a secondary spelled the way a center tapped service
+    /// is: two hot terminals with the grounded return between them.
+    fn center_tap_service(vln: f64) -> (DistBus, VoltageSource, DistBus) {
+        let (mut source, vs) = three_phase_source(vln);
+        source.id = "sb".into();
+        (source, vs, bus("lv", &["p1", "n", "p2"], &["n"]))
     }
 
     fn three_phase_source(vln: f64) -> (DistBus, VoltageSource) {
@@ -3059,6 +3145,186 @@ mod tests {
             1,
             "a balanced load stays one object: {}",
             out.text
+        );
+    }
+
+    #[test]
+    fn a_center_tap_load_splits_onto_its_two_legs() {
+        // PowerIO.jl#79. A center tapped service maps as `[p1, n, p2]`, and
+        // dss reads a node list positionally, so one record over that map
+        // states the wrong node pair and drops the conductors it cannot
+        // address. The powers are equal, so the imbalance split never fires.
+        let (b, vs, lv) = center_tap_service(11000.0);
+        let l = DistLoad {
+            name: "ld".into(),
+            bus: "lv".into(),
+            terminal_map: strings(&["p1", "n", "p2"]),
+            configuration: Configuration::Wye,
+            p_nom: vec![1304.0, 1304.0],
+            q_nom: vec![978.0, 978.0],
+            voltage_model: DistLoadVoltageModel::ConstantImpedance { v_nom: Vec::new() },
+            extras: Extras::new(),
+        };
+        let net = DistNetwork {
+            base_frequency: 60.0,
+            buses: vec![b, lv],
+            sources: vec![vs],
+            loads: vec![l],
+            ..DistNetwork::default()
+        };
+        let out = write_dss(&net);
+        let loads: Vec<&str> = out
+            .text
+            .lines()
+            .filter(|l| l.contains("New Load."))
+            .collect();
+        assert_eq!(loads.len(), 2, "{}", out.text);
+        // Each leg carries half the power over its own hot node and the
+        // grounded return, which dss spells as node 0.
+        for (name, node) in [("ld_p1", "lv.1.0"), ("ld_p2", "lv.3.0")] {
+            let line = loads
+                .iter()
+                .find(|l| l.contains(&format!("New Load.{name} ")))
+                .unwrap_or_else(|| panic!("no {name}: {}", out.text));
+            assert!(line.contains(&format!("bus1={node} ")), "{line}");
+            assert!(line.contains("phases=1"), "{line}");
+            assert!(line.contains("kw=1.304"), "{line}");
+            assert!(line.contains("kvar=0.978"), "{line}");
+        }
+    }
+
+    #[test]
+    fn an_unbalanced_center_tap_load_keeps_each_leg_with_its_own_power() {
+        // The balanced case cannot catch a swap. With the return conductor mid
+        // map, taking the last terminal as the return pairs leg 1 with the
+        // neutral and puts the second leg across both hots.
+        let (b, vs, lv) = center_tap_service(11000.0);
+        let l = DistLoad::new(
+            "ld",
+            "lv",
+            strings(&["p1", "n", "p2"]),
+            Configuration::Wye,
+            vec![1000.0, 2000.0],
+            vec![100.0, 200.0],
+        );
+        let net = DistNetwork {
+            base_frequency: 60.0,
+            buses: vec![b, lv],
+            sources: vec![vs],
+            loads: vec![l],
+            ..DistNetwork::default()
+        };
+        let out = write_dss(&net);
+        let loads: Vec<&str> = out
+            .text
+            .lines()
+            .filter(|l| l.contains("New Load."))
+            .collect();
+        assert_eq!(loads.len(), 2, "{}", out.text);
+        for (name, node, kw, kvar) in [
+            ("ld_p1", "lv.1.0", "1", "0.1"),
+            ("ld_p2", "lv.3.0", "2", "0.2"),
+        ] {
+            let line = loads
+                .iter()
+                .find(|l| l.contains(&format!("New Load.{name} ")))
+                .unwrap_or_else(|| panic!("no {name}: {}", out.text));
+            assert!(line.contains(&format!("bus1={node} ")), "{line}");
+            assert!(line.contains(&format!("kw={kw} ")), "{line}");
+            assert!(line.contains(&format!("kvar={kvar}")), "{line}");
+        }
+        // No part lands on the neutral terminal or spans the two hot legs.
+        assert!(!out.text.contains("New Load.ld_n "), "{}", out.text);
+    }
+
+    #[test]
+    fn a_map_longer_than_the_record_says_what_dss_drops() {
+        // The mirror of the short map warning. One power value over three
+        // conductors cannot split, so the arity is all the writer can report.
+        let (b, vs, lv) = center_tap_service(11000.0);
+        let mut l = DistLoad::new(
+            "ld",
+            "lv",
+            strings(&["p1", "n", "p2"]),
+            Configuration::Wye,
+            vec![2608.0],
+            vec![1956.0],
+        );
+        l.extras.insert("phases".into(), 1.into());
+        let net = DistNetwork {
+            base_frequency: 60.0,
+            buses: vec![b, lv],
+            sources: vec![vs],
+            loads: vec![l],
+            ..DistNetwork::default()
+        };
+        let out = write_dss(&net);
+        assert_eq!(
+            out.text.lines().filter(|l| l.contains("New Load.")).count(),
+            1,
+            "{}",
+            out.text
+        );
+        assert!(
+            out.warnings
+                .iter()
+                .any(|w| w.contains("addresses 2") && w.contains("loses them")),
+            "{:?}",
+            out.warnings
+        );
+    }
+
+    #[test]
+    fn a_star_with_no_secondary_leakage_goes_out_solvable() {
+        // PowerIO.jl#79 bug 3. BMOPF puts the whole leakage on the primary
+        // arm, so the star back solves to xlt=0, which dss converges on with
+        // the secondary legs collapsed to about half voltage.
+        let (b, vs, lv) = center_tap_service(11000.0);
+        let winding = |bus: &str, map: &[&str], v: f64| Winding {
+            bus: bus.into(),
+            terminal_map: strings(map),
+            conn: WindingConn::Wye,
+            v_ref: v,
+            s_rating: 25e3,
+            r_pct: 0.5,
+            tap: 1.0,
+            r_neutral: None,
+            x_neutral: None,
+        };
+        let t = DistTransformer {
+            name: "tx".into(),
+            phases: 1,
+            windings: vec![
+                winding("sb", &["1", "4"], 11000.0),
+                winding("lv", &["p1", "n"], 240.0),
+                winding("lv", &["n", "p2"], 240.0),
+            ],
+            xsc_pct: vec![2.5, 2.5, 0.0],
+            extras: Extras::new(),
+        };
+        let net = DistNetwork {
+            base_frequency: 60.0,
+            buses: vec![b, lv],
+            sources: vec![vs],
+            transformers: vec![t],
+            ..DistNetwork::default()
+        };
+        let out = write_dss(&net);
+        let line = out
+            .text
+            .lines()
+            .find(|l| l.contains("New Transformer.tx"))
+            .unwrap_or_else(|| panic!("no transformer: {}", out.text));
+        assert!(line.contains("xhl=2.5 xht=2.5 xlt=1.666"), "{line}");
+        // The reversed third winding is the dss center tap spelling, not a
+        // node order fault: the two halves are series additive.
+        assert!(line.contains("buses=(sb.1.0, lv.1.0, lv.0.3)"), "{line}");
+        assert!(
+            out.warnings
+                .iter()
+                .any(|w| w.contains("collapsed secondary")),
+            "{:?}",
+            out.warnings
         );
     }
 

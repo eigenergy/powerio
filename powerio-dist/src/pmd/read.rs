@@ -372,10 +372,15 @@ impl Reader<'_> {
         if let Some(name) = doc.get("name").and_then(Value::as_str) {
             self.net.name = Some(name.to_string());
         }
+        let stated = doc
+            .get("settings")
+            .and_then(Value::as_object)
+            .and_then(|s| s.get("base_frequency"))
+            .and_then(Value::as_f64);
+        if let Some(f) = stated {
+            self.net.base_frequency = f;
+        }
         if let Some(settings) = doc.get("settings").and_then(Value::as_object) {
-            if let Some(f) = settings.get("base_frequency").and_then(Value::as_f64) {
-                self.net.base_frequency = f;
-            }
             self.net
                 .extras
                 .insert("pmd_settings".into(), Value::Object(settings.clone()));
@@ -420,6 +425,9 @@ impl Reader<'_> {
                     props: vec![(None, v.to_string())],
                 });
             }
+        }
+        if stated.is_none() {
+            crate::model::warn_defaulted_frequency(self.net, "settings.base_frequency");
         }
     }
 

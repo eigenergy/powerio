@@ -76,6 +76,11 @@ pub enum DiagnosticStage {
 /// the network is incomplete.
 pub const READ_DSS_INCLUDE_REFUSED: &str = "READ.DSS.INCLUDE_REFUSED";
 
+/// A BMOPF field the schema types as a number holds something else. Severity
+/// `Error`: the field reads as `NaN`, which serializes on as an unbounded
+/// limit, so the parse states a fact the source never gave.
+pub const READ_BMOPF_FIELD_NOT_A_NUMBER: &str = "READ.BMOPF.FIELD_NOT_A_NUMBER";
+
 /// One structured conversion finding.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]

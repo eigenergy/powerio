@@ -2064,6 +2064,115 @@ fn bmopf_center_tap_canonical_order_rebuilds_dss_grounded_center() {
 }
 
 #[test]
+fn bmopf_center_tap_service_exports_solvable_dss() {
+    // PowerIO.jl#79, reduced to one consumer. The load is balanced across the
+    // two legs, so the imbalance split never fires; the star has no secondary
+    // leakage, so it back solves to xlt=0; and `v_nom_to` states the full
+    // span, which the bus's own phase to neutral band contradicts.
+    let text = r#"{
+        "meta": {"frequency": 50.0},
+        "bus": {
+            "hv": {"terminal_names": ["1", "2"], "perfectly_grounded_terminals": ["2"]},
+            "lv": {
+                "terminal_names": ["1", "2", "3"],
+                "perfectly_grounded_terminals": ["2"],
+                "vpn_min": [225.6, 225.6],
+                "vpn_max": [254.4, 254.4]
+            }
+        },
+        "voltage_source": {
+            "source": {
+                "v_magnitude": [19000.0, 0.0],
+                "v_angle": [0.0, 0.0],
+                "bus": "hv",
+                "terminal_map": ["1", "2"]
+            }
+        },
+        "transformer": {
+            "center_tap": {
+                "tx": {
+                    "bus_from": "hv",
+                    "bus_to": "lv",
+                    "terminal_map_from": ["1", "2"],
+                    "terminal_map_to": ["1", "2", "3"],
+                    "s_rating": 25000.0,
+                    "v_nom_from": 19000.0,
+                    "v_nom_to": 480.0,
+                    "r_series_from": 0.5,
+                    "x_series_from": 2.5
+                }
+            }
+        },
+        "load": {
+            "ld": {
+                "bus": "lv",
+                "terminal_map": ["1", "2", "3"],
+                "p_nom": [1304.0, 1304.0],
+                "q_nom": [978.0, 978.0],
+                "model": "constant_impedance"
+            }
+        }
+    }"#;
+    let net = parse_bmopf_str(text).unwrap();
+    assert!(
+        net.warnings
+            .iter()
+            .any(|w| w.contains("v_nom_to 480") && w.contains("per leg")),
+        "{:?}",
+        net.warnings
+    );
+
+    let out = write_dss(&net);
+    // One Load per leg, each on its own hot node and the grounded return.
+    let loads: Vec<&str> = out
+        .text
+        .lines()
+        .filter(|l| l.contains("New Load."))
+        .collect();
+    assert_eq!(loads.len(), 2, "{}", out.text);
+    assert!(loads.iter().all(|l| l.contains("phases=1")), "{loads:?}");
+    assert!(loads.iter().all(|l| l.contains("kw=1.304")), "{loads:?}");
+    assert!(
+        loads.iter().any(|l| l.contains("bus1=lv.1.0 ")),
+        "{loads:?}"
+    );
+    assert!(
+        loads.iter().any(|l| l.contains("bus1=lv.3.0 ")),
+        "{loads:?}"
+    );
+
+    // A star dss can solve, and the warning names the substitution.
+    let tx = out
+        .text
+        .lines()
+        .find(|l| l.contains("New Transformer.tx"))
+        .unwrap_or_else(|| panic!("no transformer: {}", out.text));
+    let arm = |key: &str| -> f64 {
+        tx.split_whitespace()
+            .find_map(|t| t.strip_prefix(key))
+            .unwrap_or_else(|| panic!("no {key} in {tx}"))
+            .parse()
+            .unwrap()
+    };
+    let (xhl, xlt) = (arm("xhl="), arm("xlt="));
+    assert!(xhl > 0.0, "{tx}");
+    assert!((xlt - 2.0 / 3.0 * xhl).abs() < 1e-12 * xhl, "{tx}");
+    assert!(
+        out.warnings
+            .iter()
+            .any(|w| w.contains("collapsed secondary")),
+        "{:?}",
+        out.warnings
+    );
+    // The stated frequency reaches the deck, so the charging conversion holds.
+    assert!(
+        out.text.contains("Set DefaultBaseFrequency=50"),
+        "{}",
+        out.text
+    );
+}
+
+#[test]
 fn bmopf_center_tap_neutral_grounding_rebuilds_once() {
     let text = r#"{
         "bus": {
@@ -3025,4 +3134,113 @@ fn an_inline_line_rating_is_not_repeated_on_its_synthetic_linecode() {
 
     let text = powerio_dist::write_dss(&net).text;
     assert_eq!(text.matches("emergamps=250").count(), 1, "{text}");
+}
+
+#[test]
+fn a_non_numeric_bmopf_field_is_refused_rather_than_read_as_nan() {
+    // #299: every one of these is schema invalid, and each used to read as
+    // NaN, which serializes on as `null` and restores as an unbounded limit.
+    for (spelling, what) in [
+        (r#""not a number""#, "a string"),
+        ("null", "null"),
+        ("{}", "an object"),
+        (
+            r#"[400.0, "x"]"#,
+            "an array holding a value that is not a number",
+        ),
+    ] {
+        let text = format!(
+            r#"{{
+                "bus": {{"b": {{"terminal_names": ["1"], "perfectly_grounded_terminals": []}}}},
+                "linecode": {{"lc": {{"i_max": {spelling}}}}}
+            }}"#
+        );
+        let net = parse_bmopf_str(&text).unwrap();
+        let found: Vec<_> = net
+            .parse_diagnostics
+            .iter()
+            .filter(|d| d.code.as_str() == "READ.BMOPF.FIELD_NOT_A_NUMBER")
+            .collect();
+        assert_eq!(found.len(), 1, "{spelling}: {:?}", net.parse_diagnostics);
+        assert_eq!(found[0].severity, DiagnosticSeverity::Error, "{spelling}");
+        assert_eq!(found[0].stage, DiagnosticStage::Read, "{spelling}");
+        assert_eq!(
+            found[0].element_path.as_deref(),
+            Some("/linecode/lc/i_max"),
+            "{spelling}"
+        );
+        assert!(
+            found[0].message.contains(what),
+            "{spelling}: {}",
+            found[0].message
+        );
+    }
+}
+
+#[test]
+fn reporting_a_malformed_field_does_not_disturb_the_read() {
+    // The report used to remove the field. `R_series_1_1` is the presence
+    // check that picks the inline branch of the line `oneOt`, so removing it
+    // sent the whole line down the linecode branch and every other matrix
+    // entry landed in extras as "outside the schema".
+    let text = r#"{
+        "bus": {
+            "a": {"terminal_names": ["1", "2", "3"], "perfectly_grounded_terminals": []},
+            "b": {"terminal_names": ["1", "2", "3"], "perfectly_grounded_terminals": []}
+        },
+        "line": {
+            "ln1": {
+                "bus_from": "a", "bus_to": "b",
+                "terminal_map_from": ["1", "2", "3"], "terminal_map_to": ["1", "2", "3"],
+                "R_series_1_1": null,
+                "R_series_2_2": 0.3, "R_series_3_3": 0.3,
+                "X_series_1_1": 0.6, "X_series_2_2": 0.6, "X_series_3_3": 0.6
+            }
+        }
+    }"#;
+    let net = parse_bmopf_str(text).unwrap();
+    assert_eq!(
+        net.parse_diagnostics
+            .iter()
+            .filter(|d| d.code.as_str() == "READ.BMOPF.FIELD_NOT_A_NUMBER")
+            .count(),
+        1,
+        "{:?}",
+        net.parse_diagnostics
+    );
+    // The line keeps its inline matrices: one synthesized linecode, with the
+    // sound entries intact and only the malformed cell undefined.
+    assert_eq!(net.linecodes.len(), 1, "{:?}", net.warnings);
+    let lc = &net.linecodes[0];
+    assert!(lc.r_series[0][0].is_nan(), "{:?}", lc.r_series);
+    for (got, want) in [
+        (lc.r_series[1][1], 0.3),
+        (lc.r_series[2][2], 0.3),
+        (lc.x_series[0][0], 0.6),
+    ] {
+        assert!((got - want).abs() < 1e-12, "{got} != {want}");
+    }
+    assert!(
+        !net.warnings
+            .iter()
+            .any(|w| w.contains("outside the schema")),
+        "{:?}",
+        net.warnings
+    );
+}
+
+#[test]
+fn consumer_extras_are_not_read_as_schema_fields() {
+    // `extras` round trips arbitrary consumer JSON, where a name like `cost`
+    // carries no schema meaning.
+    let text = r#"{
+        "bus": {"b": {"terminal_names": ["1"], "perfectly_grounded_terminals": []}},
+        "extras": {"anything": {"cost": "free", "v_nom": null}}
+    }"#;
+    let net = parse_bmopf_str(text).unwrap();
+    assert!(
+        net.parse_diagnostics.is_empty(),
+        "{:?}",
+        net.parse_diagnostics
+    );
 }
