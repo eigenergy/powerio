@@ -152,6 +152,11 @@ pub enum Error {
         reason: ScenarioMismatch,
     },
 
+    #[error(
+        "geo apply left {buses} bus(es) with no location and {branches} branch(es) with no route"
+    )]
+    UnlocatedElements { buses: usize, branches: usize },
+
     #[error("{format} read error: {message}")]
     FormatRead {
         format: &'static str,
@@ -237,7 +242,8 @@ impl Error {
             | Error::ScenarioIdOverflow { .. }
             | Error::NormalizedGridfmSnapshot { .. }
             | Error::NonFiniteGridfmValue { .. }
-            | Error::ScenarioShapeMismatch { .. } => C::Data,
+            | Error::ScenarioShapeMismatch { .. }
+            | Error::UnlocatedElements { .. } => C::Data,
             // Output-side serialization write failures.
             Error::Mtx(_) | Error::Parquet(_) => C::Output,
         }

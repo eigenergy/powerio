@@ -1,10 +1,11 @@
 //! GeoLayer: tolerant reads, canonical writes, extract/apply, and the
-//! PowerWorld `.pwd` promotion.
+//! PowerWorld substation promotion from `.pwd` and from `.aux`.
 
+use powerio::format::powerworld::parse_aux;
 use powerio::{
     Bus, BusId, BusType, CoordinateSpace, CoordsKind, GeoGeometry, GeoLayer, GeoTarget, Location,
-    Network, apply_substation_points, geo_layer_from_pwd, parse_display_file,
-    pwd_mercator_to_lonlat,
+    Network, apply_substation_points, geo_layer_from_aux_substations, geo_layer_from_pwd,
+    parse_display_file, pwd_mercator_to_lonlat,
 };
 
 fn parse(bytes: &[u8], hint: Option<&str>) -> powerio::GeoParsed {
@@ -106,6 +107,56 @@ fn geojson_features_read_points_and_linestrings() {
     assert_eq!(parsed.layer.features.len(), 2);
     assert_eq!(parsed.layer.features[0].target, GeoTarget::Bus);
     assert_eq!(parsed.layer.features[1].target, GeoTarget::Branch);
+}
+
+#[test]
+fn a_bare_feature_id_does_not_place_a_branch() {
+    // GIS exports and RFC 7946 tooling write a feature row counter under
+    // `properties.id`; a positional match would route an unrelated branch.
+    let text = r#"{
+      "type": "FeatureCollection",
+      "features": [
+        {"type": "Feature",
+         "geometry": {"type": "Point", "coordinates": [-80.05, 34.2]},
+         "properties": {"bus": "1"}},
+        {"type": "Feature",
+         "geometry": {"type": "LineString", "coordinates": [[-80.05, 34.2], [-80.1, 34.3]]},
+         "properties": {"id": 1}}
+      ]
+    }"#;
+    let parsed = parse(text.as_bytes(), None);
+    assert!(
+        parsed
+            .layer
+            .features
+            .iter()
+            .all(|f| f.target != GeoTarget::Branch),
+        "{:?}",
+        parsed.layer.features
+    );
+    let mut net = small_network();
+    let report = net.apply_geo_layer(&parsed.layer);
+    assert_eq!(report.matched_branches, 0);
+    assert!(net.branches[0].route.is_none());
+}
+
+#[test]
+fn a_capitalized_target_reads_as_a_substation() {
+    let text = r#"{
+      "type": "FeatureCollection",
+      "features": [
+        {"type": "Feature",
+         "geometry": {"type": "Point", "coordinates": [-89.6, 40.6]},
+         "properties": {"target": "Substation", "id": "1"}}
+      ]
+    }"#;
+    let parsed = parse(text.as_bytes(), None);
+    assert_eq!(parsed.layer.features[0].target, GeoTarget::Substation);
+
+    let mut net = small_network();
+    let report = net.apply_geo_layer(&parsed.layer);
+    assert_eq!(report.matched_buses, 0);
+    assert_eq!(report.unmatched_features, 1);
 }
 
 #[test]
@@ -264,6 +315,27 @@ fn apply_matches_source_uids() {
     assert!(net.buses[0].location.is_some());
 }
 
+#[test]
+fn a_layer_that_matches_nothing_still_counts_the_unlocated_model() {
+    let mut net = small_network();
+    let report =
+        net.apply_geo_layer(&parse(br#"[{"bus": "77", "lat": 34.4, "lon": -80.2}]"#, None).layer);
+    assert_eq!(report.matched_buses, 0);
+    assert_eq!(report.unlocated_buses, 2);
+    assert_eq!(report.unlocated_branches, 1);
+    assert!(report.require_located().is_err());
+
+    let text = r#"[
+      {"bus": "1", "lat": 34.2, "lon": -80.05},
+      {"bus": "2", "lat": 34.3, "lon": -80.1},
+      {"from_bus": 1, "to_bus": 2, "lat1": 34.2, "lon1": -80.05, "lat2": 34.3, "lon2": -80.1}
+    ]"#;
+    let report = net.apply_geo_layer(&parse(text.as_bytes(), None).layer);
+    assert_eq!(report.unlocated_buses, 0);
+    assert_eq!(report.unlocated_branches, 0);
+    report.require_located().expect("everything placed");
+}
+
 // ---------------------------------------------------------------------------
 // PowerWorld .pwd promotion
 // ---------------------------------------------------------------------------
@@ -310,6 +382,77 @@ fn pwd_promotes_to_a_diagram_layer_and_joins_on_subnum() {
         "{:?}",
         report.notes
     );
+}
+
+// ---------------------------------------------------------------------------
+// PowerWorld aux Substation promotion
+// ---------------------------------------------------------------------------
+
+#[test]
+fn aux_substations_lift_into_a_geographic_layer_that_joins_on_subnum() {
+    let text =
+        std::fs::read_to_string("../tests/data/powerworld/ACTIVSg200.aux").expect("read aux");
+    let layer = geo_layer_from_aux_substations(&parse_aux(&text).expect("parse aux"));
+    assert!(matches!(
+        layer.space,
+        CoordinateSpace::Geographic { crs: None }
+    ));
+    assert!(!layer.features.is_empty());
+    assert!(
+        layer
+            .features
+            .iter()
+            .all(|f| f.target == GeoTarget::Substation)
+    );
+
+    // Every bus of the same export carries a SubNum, so the join places all
+    // of them at the coordinates the aux reader promoted itself.
+    let mut net = powerio::parse_file("../tests/data/powerworld/ACTIVSg200.aux", None)
+        .expect("parse aux")
+        .network;
+    let placed: Vec<Option<Location>> = net.buses.iter().map(|bus| bus.location).collect();
+    let report = apply_substation_points(&mut net, &layer);
+    assert_eq!(report.matched_buses, net.buses.len());
+    assert_eq!(report.unmatched_features, 0);
+    let joined: Vec<Option<Location>> = net.buses.iter().map(|bus| bus.location).collect();
+    assert_eq!(joined, placed);
+}
+
+#[test]
+fn aux_substation_rows_skip_unusable_fields_and_keep_file_order() {
+    let aux = parse_aux(
+        "DATA (Substation, [SubNum, Latitude, Longitude])\n{\n\
+         12.0 34.2 -80.05\n\
+         13 nan -80.10\n\
+         14 34.4 \"\"\n\
+         12 35.0 -81.00\n}\n",
+    )
+    .expect("parse aux");
+    let layer = geo_layer_from_aux_substations(&aux);
+    // "12.0" and "12" name one substation; the non-finite and the empty row
+    // are dropped.
+    let keys: Vec<Option<&str>> = layer.features.iter().map(|f| f.key.id.as_deref()).collect();
+    assert_eq!(keys, [Some("12"), Some("12")]);
+    assert_eq!(
+        layer.features[0].geometry,
+        GeoGeometry::Point([-80.05, 34.2])
+    );
+    assert_eq!(
+        layer.features[1].geometry,
+        GeoGeometry::Point([-81.0, 35.0])
+    );
+
+    // A bus carrying the number as a JSON number joins the same way, and the
+    // later duplicate wins.
+    let mut net = small_network();
+    net.buses[0]
+        .extras
+        .insert("SubNum".to_owned(), serde_json::json!(12.0));
+    let report = apply_substation_points(&mut net, &layer);
+    assert_eq!(report.matched_buses, 2);
+    let location = net.buses[0].location.expect("bus 1 location");
+    assert_eq!((location.x, location.y), (-81.0, 35.0));
+    assert!(net.buses[1].location.is_none());
 }
 
 #[test]

@@ -105,7 +105,30 @@ pub struct GeoApplyReport {
     pub matched_buses: usize,
     pub matched_branches: usize,
     pub unmatched_features: usize,
+    /// Buses that carry no location when the pass ends, counted over the
+    /// whole model. Read with `matched_buses`, it tells a layer that matched
+    /// nothing from a model that needed nothing.
+    pub unlocated_buses: usize,
+    /// Branches that carry no route when the pass ends.
+    pub unlocated_branches: usize,
     pub notes: Vec<String>,
+}
+
+impl GeoApplyReport {
+    /// Refuse a partial placement: every bus needs a location and every
+    /// branch a route.
+    ///
+    /// # Errors
+    /// [`Error::UnlocatedElements`] when either count is nonzero.
+    pub fn require_located(&self) -> Result<()> {
+        if self.unlocated_buses > 0 || self.unlocated_branches > 0 {
+            return Err(Error::UnlocatedElements {
+                buses: self.unlocated_buses,
+                branches: self.unlocated_branches,
+            });
+        }
+        Ok(())
+    }
 }
 
 impl GeoLayer {
@@ -263,7 +286,10 @@ const LAT_ALIASES: &[&str] = &["lat", "latitude", "y"];
 const LON_ALIASES: &[&str] = &["lon", "lng", "longitude", "x"];
 const FROM_ALIASES: &[&str] = &["fbus", "from", "frombus"];
 const TO_ALIASES: &[&str] = &["tbus", "to", "tobus"];
-const BRANCH_ID_ALIASES: &[&str] = &["branch", "branchid", "branchnumber", "catsid", "id"];
+/// No bare `id`: GIS exports and RFC 7946 tooling write a feature row counter
+/// there, and a bare integer id is read as a positional row alias, so a
+/// counter would place the route on an unrelated branch.
+const BRANCH_ID_ALIASES: &[&str] = &["branch", "branchid", "branchnumber", "catsid"];
 const PATH_ALIASES: &[&str] = &["path", "geometry", "coordinates"];
 const FROM_LAT_ALIASES: &[&str] = &["lat1", "fromlat"];
 const FROM_LON_ALIASES: &[&str] = &["lon1", "lng1", "fromlon", "fromlng"];
@@ -384,8 +410,9 @@ fn read_geojson_feature(feature: &Value, parsed: &mut GeoParsed) {
                     .push("skipped a Point feature with unusable coordinates".to_owned());
                 return;
             };
+            // Property values keep their case; only keys are normalized.
             let target = match target.as_deref() {
-                Some("substation") => GeoTarget::Substation,
+                Some(token) if token.eq_ignore_ascii_case("substation") => GeoTarget::Substation,
                 _ => GeoTarget::Bus,
             };
             parsed.layer.features.push(GeoFeature {
@@ -866,6 +893,9 @@ pub trait GeoApplyTarget {
     fn place_branch(&mut self, row: usize, path: &[[f64; 2]], kind: Option<CoordsKind>);
     /// Report note for substation features this target cannot place.
     fn substation_note(&self, count: usize) -> String;
+    /// Elements the model still has no geometry for, as (buses with no
+    /// location, branches with no route).
+    fn unlocated_counts(&self) -> (usize, usize);
 }
 
 /// One apply pass over a layer's features. The model-specific lookups and
@@ -901,6 +931,7 @@ pub fn apply_geo_features(layer: &GeoLayer, target: &mut impl GeoApplyTarget) ->
         report.unmatched_features += substations;
         report.notes.push(target.substation_note(substations));
     }
+    (report.unlocated_buses, report.unlocated_branches) = target.unlocated_counts();
     report
 }
 
@@ -938,6 +969,21 @@ impl GeoApplyTarget for BalancedApply<'_> {
 
     fn substation_note(&self, count: usize) -> String {
         format!("{count} substation feature(s) not applied; join them with apply_substation_points")
+    }
+
+    fn unlocated_counts(&self) -> (usize, usize) {
+        (
+            self.net
+                .buses
+                .iter()
+                .filter(|bus| bus.location.is_none())
+                .count(),
+            self.net
+                .branches
+                .iter()
+                .filter(|branch| branch.route.is_none())
+                .count(),
+        )
     }
 }
 

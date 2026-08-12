@@ -454,26 +454,20 @@ fn read_bus(r: &Row) -> Result<Bus> {
     let id = bus_id_from_field(id_key, id_field)?;
     let name = first(r, &["BusName", "Name"]).map(ToString::to_string);
     let mut extras = Extras::new();
-    // Substation identity rides on the bus row in complete case exports.
-    // The substation coordinates (`Latitude:1`/`Longitude:1`) promote into
-    // the typed location and leave extras; `SubNum` stays, it is identity
-    // rather than geometry, as do the bus's own bare `Latitude`/`Longitude`.
+    // `SubNum` stays in extras: it is identity rather than geometry, and the
+    // substation join reads it back.
     let location = bus_location(r);
     keep_extras(
         r,
-        &[
-            "SubNum",
-            "SubNumber",
-            "Latitude",
-            "Longitude",
-            "OwnerNum",
-            "OwnerNumber",
-            "BANumber",
-        ],
+        &["SubNum", "SubNumber", "OwnerNum", "OwnerNumber", "BANumber"],
         &mut extras,
     );
     if location.is_none() {
-        keep_extras(r, &["Latitude:1", "Longitude:1"], &mut extras);
+        keep_extras(
+            r,
+            &["Latitude:1", "Longitude:1", "Latitude", "Longitude"],
+            &mut extras,
+        );
     }
     Ok(Bus {
         id: BusId(id),
@@ -498,10 +492,13 @@ fn read_bus(r: &Row) -> Result<Bus> {
 }
 
 /// The promoted geographic location: the substation `Latitude:1`/
-/// `Longitude:1` pair, when both parse finite.
+/// `Longitude:1` pair, else the bus's own bare `Latitude`/`Longitude` pair
+/// (older complete case exports), when both parse finite.
 fn bus_location(r: &Row) -> Option<crate::geo::Location> {
-    let lat = first(r, &["Latitude:1"])?.parse::<f64>().ok()?;
-    let lon = first(r, &["Longitude:1"])?.parse::<f64>().ok()?;
+    let lat = first(r, &["Latitude:1", "Latitude"])?.parse::<f64>().ok()?;
+    let lon = first(r, &["Longitude:1", "Longitude"])?
+        .parse::<f64>()
+        .ok()?;
     (lat.is_finite() && lon.is_finite()).then_some(crate::geo::Location {
         x: lon,
         y: lat,
