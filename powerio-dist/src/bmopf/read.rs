@@ -113,29 +113,20 @@ const NUMERIC_FIELDS: &[&str] = &[
     "x_series_to",
 ];
 
-/// Prefixes of the schema's matrix element patterns, e.g. `R_series_0_1`.
+/// Prefixes of the schema's matrix element patterns, e.g. `R_series_1_2`.
+/// The same spelling the readers pass to [`matrix_indices`] and
+/// [`flat_matrix`].
 const NUMERIC_MATRIX_PREFIXES: &[&str] = &[
-    "B_from_",
-    "B_to_",
-    "B_",
-    "G_from_",
-    "G_to_",
-    "G_",
-    "R_series_",
-    "X_series_",
+    "B_from", "B_to", "B", "G_from", "G_to", "G", "R_series", "X_series",
 ];
 
-/// A `<prefix>_<row>_<col>` matrix element name.
+/// A `<prefix>_<row>_<col>` matrix element name, by the rule that decides
+/// whether the reader assembles the cell. An index the reader rejects is
+/// outside the schema, so this must not claim it either.
 fn is_numeric_matrix_field(key: &str) -> bool {
-    NUMERIC_MATRIX_PREFIXES.iter().any(|p| {
-        key.strip_prefix(p).is_some_and(|rest| {
-            matches!(rest.split_once('_'), Some((row, col))
-                if !row.is_empty()
-                    && !col.is_empty()
-                    && row.bytes().all(|b| b.is_ascii_digit())
-                    && col.bytes().all(|b| b.is_ascii_digit()))
-        })
-    })
+    NUMERIC_MATRIX_PREFIXES
+        .iter()
+        .any(|p| matrix_indices(key, p).is_some())
 }
 
 fn is_numeric_field(key: &str) -> bool {
@@ -1741,8 +1732,43 @@ fn n_winding_base_from_internal(w: &Winding, s: f64) -> Option<f64> {
 
 #[cfg(test)]
 mod tests {
-    use super::is_numeric_field;
+    use super::{MAX_MATRIX_INDEX, is_numeric_field, matrix_indices};
     use serde_json::Value;
+
+    /// A matrix key the reader will not assemble is outside the schema, and
+    /// the numeric check must not claim it. The two ran on separate rules
+    /// once, so an index past the bound was reported as a schema field while
+    /// the reader put it in extras.
+    #[test]
+    fn the_numeric_check_claims_exactly_the_matrix_keys_the_reader_assembles() {
+        let over = MAX_MATRIX_INDEX + 1;
+        for key in [
+            "R_series_1_1",
+            "X_series_2_3",
+            &format!("B_from_{MAX_MATRIX_INDEX}_{MAX_MATRIX_INDEX}"),
+            "G_to_1_2",
+            "B_1_1",
+        ] {
+            assert!(is_numeric_field(key), "{key} should be numeric");
+        }
+        for key in [
+            "R_series_0_1",
+            "R_series_1_0",
+            &format!("R_series_{over}_1"),
+            &format!("R_series_1_{over}"),
+            "R_series_1",
+            "R_series_a_b",
+            "R_series",
+        ] {
+            assert!(!is_numeric_field(key), "{key} should not be numeric");
+            assert!(
+                super::NUMERIC_MATRIX_PREFIXES
+                    .iter()
+                    .all(|p| matrix_indices(key, p).is_none()),
+                "{key} disagrees with the reader"
+            );
+        }
+    }
 
     /// [`super::NUMERIC_FIELDS`] and [`super::NUMERIC_MATRIX_PREFIXES`] copy
     /// what the schema types as a number. Derive the set again from the
