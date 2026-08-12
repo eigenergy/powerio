@@ -63,8 +63,8 @@ jobs:
         run: pip install ruff mypy
       - name: ruff
         run: ruff check --no-fix .
-      # The `mcp` extra: the server module is inside the type gate, so the SDK
-      # has to be importable or every symbol it names reads as `Any`.
+      # The `mcp` extra: the server module is inside the type gate, and mypy
+      # fails on an import it cannot resolve.
       - name: Install powerio
         run: pip install '.[mcp]'
       - name: mypy
