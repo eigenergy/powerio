@@ -3174,10 +3174,59 @@ fn a_non_numeric_bmopf_field_is_refused_rather_than_read_as_nan() {
             "{spelling}: {}",
             found[0].message
         );
-        // And the bound is absent rather than NaN. A NaN would serialize on
-        // as `null` and restore as +Inf, stating a limit the source did not.
-        assert_eq!(net.linecodes[0].i_max, None, "{spelling}");
     }
+}
+
+#[test]
+fn reporting_a_malformed_field_does_not_disturb_the_read() {
+    // The report used to remove the field. `R_series_1_1` is the presence
+    // check that picks the inline branch of the line `oneOt`, so removing it
+    // sent the whole line down the linecode branch and every other matrix
+    // entry landed in extras as "outside the schema".
+    let text = r#"{
+        "bus": {
+            "a": {"terminal_names": ["1", "2", "3"], "perfectly_grounded_terminals": []},
+            "b": {"terminal_names": ["1", "2", "3"], "perfectly_grounded_terminals": []}
+        },
+        "line": {
+            "ln1": {
+                "bus_from": "a", "bus_to": "b",
+                "terminal_map_from": ["1", "2", "3"], "terminal_map_to": ["1", "2", "3"],
+                "R_series_1_1": null,
+                "R_series_2_2": 0.3, "R_series_3_3": 0.3,
+                "X_series_1_1": 0.6, "X_series_2_2": 0.6, "X_series_3_3": 0.6
+            }
+        }
+    }"#;
+    let net = parse_bmopf_str(text).unwrap();
+    assert_eq!(
+        net.parse_diagnostics
+            .iter()
+            .filter(|d| d.code.as_str() == "READ.BMOPF.FIELD_NOT_A_NUMBER")
+            .count(),
+        1,
+        "{:?}",
+        net.parse_diagnostics
+    );
+    // The line keeps its inline matrices: one synthesized linecode, with the
+    // sound entries intact and only the malformed cell undefined.
+    assert_eq!(net.linecodes.len(), 1, "{:?}", net.warnings);
+    let lc = &net.linecodes[0];
+    assert!(lc.r_series[0][0].is_nan(), "{:?}", lc.r_series);
+    for (got, want) in [
+        (lc.r_series[1][1], 0.3),
+        (lc.r_series[2][2], 0.3),
+        (lc.x_series[0][0], 0.6),
+    ] {
+        assert!((got - want).abs() < 1e-12, "{got} != {want}");
+    }
+    assert!(
+        !net.warnings
+            .iter()
+            .any(|w| w.contains("outside the schema")),
+        "{:?}",
+        net.warnings
+    );
 }
 
 #[test]

@@ -40,7 +40,7 @@ pub fn parse_bmopf_str(text: &str) -> Result<DistNetwork> {
         format: "BMOPF",
         message: e.to_string(),
     })?;
-    let Value::Object(mut doc) = doc else {
+    let Value::Object(doc) = doc else {
         return Err(Error::Json {
             format: "BMOPF",
             message: "top level is not an object".into(),
@@ -52,7 +52,7 @@ pub fn parse_bmopf_str(text: &str) -> Result<DistNetwork> {
         base_frequency: 60.0,
         ..DistNetwork::default()
     };
-    drop_non_numeric_fields(&mut doc, &mut net);
+    report_non_numeric_fields(&doc, &mut net);
     let mut rd = Reader {
         net: &mut net,
         frequency_stated: false,
@@ -142,22 +142,24 @@ fn is_numeric_field(key: &str) -> bool {
     NUMERIC_FIELDS.contains(&key) || is_numeric_matrix_field(key)
 }
 
-/// Report every schema-numeric field holding something that is not a number,
-/// and remove it so the reader takes the field's own absent path.
+/// Report every schema-numeric field holding something that is not a number.
 ///
 /// Schema 0.1.0 spells no `null` anywhere and types the bounds and ratings as
-/// `nonnegative_number`, so every value this reaches is already invalid. Left
-/// in place each reads as `NaN`, which serializes on as `null` and restores
-/// as an unbounded limit — an explicit "no limit" the source never stated. A
-/// removed field states nothing, which is what the document did.
+/// `nonnegative_number`, so every value this reaches is already invalid. Each
+/// reads as `NaN`, which serializes on as `null` and restores as an unbounded
+/// limit — an explicit "no limit" the source never stated. The `Error`
+/// severity carries that to the CLI exit code.
 ///
-/// One unusable element condemns the whole array: the remaining entries are
-/// positional, and their phase correspondence is what the bad element
-/// destroyed.
+/// The field stays in the document. Removing it would read as absent, and
+/// absent is a third meaning the reader spells per field: `0.0` for an
+/// optional impedance, `NaN` for a rating, and for `R_series_1_1` the
+/// presence check that picks the inline branch of the line `oneOf` — so a
+/// removal there loses every other matrix entry on that line. Distinguishing
+/// absent from invalid per field needs the typed readers of #293.
 ///
 /// `extras` is skipped, since it round trips arbitrary consumer JSON where
 /// these names carry no schema meaning.
-fn drop_non_numeric_fields(doc: &mut Map<String, Value>, net: &mut DistNetwork) {
+fn report_non_numeric_fields(doc: &Map<String, Value>, net: &mut DistNetwork) {
     fn numeric(v: &Value) -> bool {
         match v {
             Value::Number(_) => true,
@@ -175,23 +177,22 @@ fn drop_non_numeric_fields(doc: &mut Map<String, Value>, net: &mut DistNetwork) 
             Value::Number(_) => unreachable!("a number is not reported"),
         }
     }
-    fn walk(obj: &mut Map<String, Value>, path: &str, out: &mut Vec<(String, &'static str)>) {
-        obj.retain(|key, value| {
+    fn walk(obj: &Map<String, Value>, path: &str, out: &mut Vec<(String, &'static str)>) {
+        for (key, value) in obj {
             if key == "extras" {
-                return true;
+                continue;
             }
             let child = format!("{path}/{key}");
             if is_numeric_field(key) {
-                if numeric(value) {
-                    return true;
+                if !numeric(value) {
+                    out.push((child, kind(value)));
                 }
-                out.push((child, kind(value)));
-                return false;
+                continue;
             }
             match value {
                 Value::Object(o) => walk(o, &child, out),
                 Value::Array(a) => {
-                    for (i, e) in a.iter_mut().enumerate() {
+                    for (i, e) in a.iter().enumerate() {
                         if let Value::Object(o) = e {
                             walk(o, &format!("{child}/{i}"), out);
                         }
@@ -199,15 +200,14 @@ fn drop_non_numeric_fields(doc: &mut Map<String, Value>, net: &mut DistNetwork) 
                 }
                 _ => {}
             }
-            true
-        });
+        }
     }
     let mut found = Vec::new();
     walk(doc, "", &mut found);
     for (pointer, what) in found {
         let message = format!(
             "{pointer}: the schema types this field as a number and it holds {what}; \
-             read as absent"
+             it reads as NaN and anything derived from it is undefined"
         );
         net.warnings.push(message.clone());
         net.parse_diagnostics.push(
