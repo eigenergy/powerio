@@ -15,8 +15,8 @@
 use std::collections::{HashMap, HashSet};
 
 use crate::network::{
-    Branch, BranchRatingSet, Bus, BusId, BusType, GEN_EXTRA_KEYS, GenCost, Generator, Hvdc, Load,
-    LoadVoltageModel, Network, Shunt, SourceFormat, Storage, Switch, Transformer3W,
+    Branch, Bus, BusId, BusType, GEN_EXTRA_KEYS, GenCost, Generator, Hvdc, Load, LoadVoltageModel,
+    Network, Shunt, SourceFormat, Storage, Switch, Transformer3W,
 };
 use crate::{Error, Result};
 
@@ -159,32 +159,34 @@ impl From<u8> for CostModel {
 /// unknown coefficient semantics, so it passes through untouched — the exact
 /// inverse of [`cost_from_pu`]'s own passthrough.
 pub(crate) fn cost_to_pu(cost: &GenCost, base: f64) -> Vec<f64> {
-    match CostModel::from(cost.model) {
+    let mut coeffs = cost.coeffs.clone();
+    scale_coeffs_to_pu(&mut coeffs, cost.ncost, cost.model, base);
+    coeffs
+}
+
+/// [`cost_to_pu`] over a vector the caller already owns, so a rescale in place
+/// keeps its allocation.
+pub(crate) fn scale_coeffs_to_pu(coeffs: &mut Vec<f64>, ncost: usize, model: u8, base: f64) {
+    match CostModel::from(model) {
         CostModel::Polynomial => {
-            let coeffs = &cost.coeffs[..cost.ncost.min(cost.coeffs.len())];
+            coeffs.truncate(ncost.min(coeffs.len()));
             let k = coeffs.len();
             // The exponent k-1-i is in [0, k-1]; a polynomial never has i32::MAX-many
             // terms, so the conversion can't fail (loud, not silent, if it ever did).
-            coeffs
-                .iter()
-                .enumerate()
-                .map(|(i, &c)| {
-                    c * base.powi(i32::try_from(k - 1 - i).expect("cost degree fits i32"))
-                })
-                .collect()
+            for (i, c) in coeffs.iter_mut().enumerate() {
+                *c *= base.powi(i32::try_from(k - 1 - i).expect("cost degree fits i32"));
+            }
         }
         CostModel::Piecewise => {
             // saturating_mul: `ncost` comes from input (JSON deserializes it
             // unchecked), so an oversized count must clamp to the coefficient
             // length instead of overflowing.
-            let coeffs = &cost.coeffs[..cost.ncost.saturating_mul(2).min(cost.coeffs.len())];
-            coeffs
-                .iter()
-                .enumerate()
-                .map(|(i, &c)| if i % 2 == 0 { c / base } else { c })
-                .collect()
+            coeffs.truncate(ncost.saturating_mul(2).min(coeffs.len()));
+            for c in coeffs.iter_mut().step_by(2) {
+                *c /= base;
+            }
         }
-        CostModel::Unknown => cost.coeffs.clone(),
+        CostModel::Unknown => {}
     }
 }
 
@@ -292,21 +294,16 @@ fn norm_shunts(
         .enumerate()
         .filter(|(_, s)| s.in_service)
         .filter_map(|(row, s)| {
-            Some((
-                Shunt {
-                    bus: remap(map, s.bus)?,
-                    g: s.g / base,
-                    b: s.b / base,
-                    // Remap the switched-shunt control bus and drop it if its target was
-                    // filtered out, so the normalized network has no dangling reference.
-                    control: s.control.clone().map(|mut c| {
-                        c.control_bus = c.control_bus.and_then(|b| remap(map, b));
-                        c
-                    }),
-                    ..s.clone()
-                },
-                Some(row),
-            ))
+            let mut shunt = s.clone();
+            shunt.bus = remap(map, s.bus)?;
+            shunt.g = s.g / base;
+            shunt.b = s.b / base;
+            // Remap the switched-shunt control bus and drop it if its target was
+            // filtered out, so the normalized network has no dangling reference.
+            if let Some(c) = &mut shunt.control {
+                c.control_bus = c.control_bus.and_then(|b| remap(map, b));
+            }
+            Some((shunt, Some(row)))
         })
         .unzip()
 }
@@ -321,39 +318,31 @@ fn norm_branches(
         .enumerate()
         .filter(|(_, br)| br.in_service)
         .filter_map(|(row, br)| {
-            let branch = Branch {
-                from: remap(map, br.from)?,
-                to: remap(map, br.to)?,
-                rate_a: br.rate_a / base,
-                rate_b: br.rate_b / base,
-                rate_c: br.rate_c / base,
-                rating_sets: br
-                    .rating_sets
-                    .iter()
-                    .map(|r| BranchRatingSet {
-                        name: r.name.clone(),
-                        rate_mva: r.rate_mva / base,
-                    })
-                    .collect(),
-                tap: br.effective_tap(),
-                shift: br.shift * DEG_TO_RAD,
-                angmin: br.angmin * DEG_TO_RAD,
-                angmax: br.angmax * DEG_TO_RAD,
-                solution: br.solution.map(|s| crate::network::BranchSolution {
-                    pf: s.pf / base,
-                    qf: s.qf / base,
-                    pt: s.pt / base,
-                    qt: s.qt / base,
-                }),
-                // Remap the regulated-bus reference through the id map and drop it
-                // if its target was filtered out (out of service / isolated), so the
-                // normalized network has no dangling control reference.
-                control: br.control.clone().map(|mut c| {
-                    c.controlled_bus = c.controlled_bus.and_then(|b| remap(map, b));
-                    c
-                }),
-                ..br.clone()
-            };
+            let mut branch = br.clone();
+            branch.from = remap(map, br.from)?;
+            branch.to = remap(map, br.to)?;
+            branch.rate_a = br.rate_a / base;
+            branch.rate_b = br.rate_b / base;
+            branch.rate_c = br.rate_c / base;
+            for set in &mut branch.rating_sets {
+                set.rate_mva /= base;
+            }
+            branch.tap = br.effective_tap();
+            branch.shift = br.shift * DEG_TO_RAD;
+            branch.angmin = br.angmin * DEG_TO_RAD;
+            branch.angmax = br.angmax * DEG_TO_RAD;
+            if let Some(s) = &mut branch.solution {
+                s.pf /= base;
+                s.qf /= base;
+                s.pt /= base;
+                s.qt /= base;
+            }
+            // Remap the regulated-bus reference through the id map and drop it
+            // if its target was filtered out (out of service / isolated), so the
+            // normalized network has no dangling control reference.
+            if let Some(c) = &mut branch.control {
+                c.controlled_bus = c.controlled_bus.and_then(|b| remap(map, b));
+            }
             Some((branch, Some(row)))
         })
         .unzip()
@@ -430,24 +419,21 @@ fn norm_gens(
                     }
                 }
             }
-            let generator = Generator {
-                bus,
-                pg: g.pg / base,
-                qg: g.qg / base,
-                pmax: g.pmax / base,
-                pmin: g.pmin / base,
-                qmax: g.qmax / base,
-                qmin: g.qmin / base,
-                cost: g.cost.as_ref().map(|c| GenCost {
-                    coeffs: cost_to_pu(c, base),
-                    ..c.clone()
-                }),
-                caps,
-                // Remap the regulated bus through the same id map; drop it if its
-                // target was filtered out so the normalized form stays consistent.
-                regulated_bus: g.regulated_bus.and_then(|b| remap(map, b)),
-                ..g.clone()
-            };
+            let mut generator = g.clone();
+            generator.bus = bus;
+            generator.pg = g.pg / base;
+            generator.qg = g.qg / base;
+            generator.pmax = g.pmax / base;
+            generator.pmin = g.pmin / base;
+            generator.qmax = g.qmax / base;
+            generator.qmin = g.qmin / base;
+            if let Some(c) = &mut generator.cost {
+                scale_coeffs_to_pu(&mut c.coeffs, c.ncost, c.model, base);
+            }
+            generator.caps = caps;
+            // Remap the regulated bus through the same id map; drop it if its
+            // target was filtered out so the normalized form stays consistent.
+            generator.regulated_bus = g.regulated_bus.and_then(|b| remap(map, b));
             Some((generator, Some(row)))
         })
         .unzip()
@@ -519,24 +505,21 @@ fn norm_hvdc(
             // No sign flip: the writer's Pt/Qf/Qt negation is a PowerModels output
             // convention, not part of per-unit normalization. The aggregate
             // pmin/pmax stay raw, matching make_per_unit!.
-            let link = Hvdc {
-                from: remap(map, d.from)?,
-                to: remap(map, d.to)?,
-                pf: d.pf / base,
-                pt: d.pt / base,
-                qf: d.qf / base,
-                qt: d.qt / base,
-                qminf: d.qminf / base,
-                qmaxf: d.qmaxf / base,
-                qmint: d.qmint / base,
-                qmaxt: d.qmaxt / base,
-                loss0: d.loss0 / base,
-                cost: d.cost.as_ref().map(|c| GenCost {
-                    coeffs: cost_to_pu(c, base),
-                    ..c.clone()
-                }),
-                ..d.clone()
-            };
+            let mut link = d.clone();
+            link.from = remap(map, d.from)?;
+            link.to = remap(map, d.to)?;
+            link.pf = d.pf / base;
+            link.pt = d.pt / base;
+            link.qf = d.qf / base;
+            link.qt = d.qt / base;
+            link.qminf = d.qminf / base;
+            link.qmaxf = d.qmaxf / base;
+            link.qmint = d.qmint / base;
+            link.qmaxt = d.qmaxt / base;
+            link.loss0 = d.loss0 / base;
+            if let Some(c) = &mut link.cost {
+                scale_coeffs_to_pu(&mut c.coeffs, c.ncost, c.model, base);
+            }
             Some((link, Some(row)))
         })
         .unzip()
