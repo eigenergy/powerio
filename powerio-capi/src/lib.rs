@@ -2104,8 +2104,13 @@ pub unsafe extern "C" fn pio_geo_apply(
 /// One-line apply summary lifted into the returned handle's warnings.
 fn geo_apply_summary(report: &powerio::GeoApplyReport) -> String {
     format!(
-        "geo apply: {} bus point(s), {} branch route(s), {} unmatched feature(s)",
-        report.matched_buses, report.matched_branches, report.unmatched_features
+        "geo apply: {} bus point(s), {} branch route(s), {} unmatched feature(s), \
+         {} bus(es) with no location, {} branch(es) with no route",
+        report.matched_buses,
+        report.matched_branches,
+        report.unmatched_features,
+        report.unlocated_buses,
+        report.unlocated_branches
     )
 }
 

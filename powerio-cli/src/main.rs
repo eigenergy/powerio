@@ -1704,6 +1704,10 @@ fn report_geo_apply(report: &powerio_matrix::geo::GeoApplyReport) {
         "applied: {} bus point(s), {} branch route(s), {} unmatched feature(s)",
         report.matched_buses, report.matched_branches, report.unmatched_features
     );
+    eprintln!(
+        "unplaced: {} bus(es) with no location, {} branch(es) with no route",
+        report.unlocated_buses, report.unlocated_branches
+    );
     for note in &report.notes {
         eprintln!("note: {note}");
     }

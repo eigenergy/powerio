@@ -414,6 +414,7 @@ fn aux_substations_lift_into_a_geographic_layer_that_joins_on_subnum() {
     let report = apply_substation_points(&mut net, &layer);
     assert_eq!(report.matched_buses, net.buses.len());
     assert_eq!(report.unmatched_features, 0);
+    assert_eq!(report.unlocated_buses, 0);
     let joined: Vec<Option<Location>> = net.buses.iter().map(|bus| bus.location).collect();
     assert_eq!(joined, placed);
 }
@@ -453,6 +454,22 @@ fn aux_substation_rows_skip_unusable_fields_and_keep_file_order() {
     let location = net.buses[0].location.expect("bus 1 location");
     assert_eq!((location.x, location.y), (-81.0, 35.0));
     assert!(net.buses[1].location.is_none());
+}
+
+#[test]
+fn a_substation_join_counts_the_buses_it_leaves_unplaced() {
+    let aux = parse_aux("DATA (Substation, [SubNum, Latitude, Longitude])\n{\n7 34.2 -80.05\n}\n")
+        .expect("parse aux");
+    let mut net = small_network();
+    net.buses[0]
+        .extras
+        .insert("SubNum".to_owned(), serde_json::json!("7"));
+    let report = apply_substation_points(&mut net, &geo_layer_from_aux_substations(&aux));
+    assert_eq!(report.matched_buses, 1);
+    // Bus 2 is in no substation, and the join places no route.
+    assert_eq!(report.unlocated_buses, 1);
+    assert_eq!(report.unlocated_branches, 1);
+    assert!(report.require_located().is_err());
 }
 
 #[test]

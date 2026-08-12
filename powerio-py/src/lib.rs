@@ -1858,8 +1858,8 @@ fn parse_geo<'py>(
     Ok(out)
 }
 
-/// A `{matched_buses, matched_branches, unmatched_features, notes}` dict from
-/// one geo apply pass.
+/// A `{matched_buses, matched_branches, unmatched_features, unlocated_buses,
+/// unlocated_branches, notes}` dict from one geo apply pass.
 fn geo_report_dict<'py>(
     py: Python<'py>,
     report: &powerio_matrix::geo::GeoApplyReport,
@@ -1868,6 +1868,8 @@ fn geo_report_dict<'py>(
     out.set_item("matched_buses", report.matched_buses)?;
     out.set_item("matched_branches", report.matched_branches)?;
     out.set_item("unmatched_features", report.unmatched_features)?;
+    out.set_item("unlocated_buses", report.unlocated_buses)?;
+    out.set_item("unlocated_branches", report.unlocated_branches)?;
     out.set_item("notes", report.notes.clone())?;
     Ok(out)
 }

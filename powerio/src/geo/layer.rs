@@ -972,19 +972,24 @@ impl GeoApplyTarget for BalancedApply<'_> {
     }
 
     fn unlocated_counts(&self) -> (usize, usize) {
-        (
-            self.net
-                .buses
-                .iter()
-                .filter(|bus| bus.location.is_none())
-                .count(),
-            self.net
-                .branches
-                .iter()
-                .filter(|branch| branch.route.is_none())
-                .count(),
-        )
+        unlocated_counts(self.net)
     }
+}
+
+/// Buses with no location and branches with no route. Every apply pass over a
+/// balanced network reports through this one count, so the substation join
+/// and the feature join cannot disagree.
+pub(super) fn unlocated_counts(net: &Network) -> (usize, usize) {
+    (
+        net.buses
+            .iter()
+            .filter(|bus| bus.location.is_none())
+            .count(),
+        net.branches
+            .iter()
+            .filter(|branch| branch.route.is_none())
+            .count(),
+    )
 }
 
 /// Bus row lookups for one apply pass: by uid (element uid and payload row

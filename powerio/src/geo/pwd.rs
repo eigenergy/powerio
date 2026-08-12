@@ -178,6 +178,7 @@ pub fn apply_substation_points(net: &mut Network, layer: &GeoLayer) -> GeoApplyR
             kind: layer.kind,
         });
     }
+    (report.unlocated_buses, report.unlocated_branches) = super::layer::unlocated_counts(net);
     report
 }
 
