@@ -3188,6 +3188,52 @@ mod tests {
     }
 
     #[test]
+    fn an_unbalanced_center_tap_load_keeps_each_leg_with_its_own_power() {
+        // The balanced case cannot catch a swap. With the return conductor mid
+        // map, taking the last terminal as the return pairs leg 1 with the
+        // neutral and puts the second leg across both hots.
+        let (mut b, vs) = three_phase_source(11000.0);
+        let lv = bus("lv", &["p1", "n", "p2"], &["n"]);
+        b.id = "sb".into();
+        let l = DistLoad::new(
+            "ld",
+            "lv",
+            strings(&["p1", "n", "p2"]),
+            Configuration::Wye,
+            vec![1000.0, 2000.0],
+            vec![100.0, 200.0],
+        );
+        let net = DistNetwork {
+            base_frequency: 60.0,
+            buses: vec![b, lv],
+            sources: vec![vs],
+            loads: vec![l],
+            ..DistNetwork::default()
+        };
+        let out = write_dss(&net);
+        let loads: Vec<&str> = out
+            .text
+            .lines()
+            .filter(|l| l.contains("New Load."))
+            .collect();
+        assert_eq!(loads.len(), 2, "{}", out.text);
+        for (name, node, kw, kvar) in [
+            ("ld_p1", "lv.1.0", "1", "0.1"),
+            ("ld_p2", "lv.3.0", "2", "0.2"),
+        ] {
+            let line = loads
+                .iter()
+                .find(|l| l.contains(&format!("New Load.{name} ")))
+                .unwrap_or_else(|| panic!("no {name}: {}", out.text));
+            assert!(line.contains(&format!("bus1={node} ")), "{line}");
+            assert!(line.contains(&format!("kw={kw} ")), "{line}");
+            assert!(line.contains(&format!("kvar={kvar}")), "{line}");
+        }
+        // No part lands on the neutral terminal or spans the two hot legs.
+        assert!(!out.text.contains("New Load.ld_n "), "{}", out.text);
+    }
+
+    #[test]
     fn a_map_longer_than_the_record_says_what_dss_drops() {
         // The mirror of the short map warning. One power value over three
         // conductors cannot split, so the arity is all the writer can report.
