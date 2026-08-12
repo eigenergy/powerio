@@ -185,6 +185,40 @@ impl GenCost {
             _ => None,
         }
     }
+
+    /// Largest leading polynomial coefficient that
+    /// [`quadratic_with_constant_tol`](Self::quadratic_with_constant_tol)
+    /// reads as a rounding artifact of the source, not as a term of the curve.
+    pub const LEADING_COEFF_TOL: f64 = 1e-12;
+
+    /// `(q, c, c0)` as [`quadratic_with_constant`](Self::quadratic_with_constant)
+    /// gives it, after the leading coefficients at or below `tol` come off the
+    /// row.
+    ///
+    /// A model 2 row often carries a leading coefficient near `1e-17`, which
+    /// the source produced by rounding. Such a row states a linear curve and
+    /// reads as a quadratic one. Pass
+    /// [`LEADING_COEFF_TOL`](Self::LEADING_COEFF_TOL) to strip the artifact,
+    /// or `0.0` to strip an exact zero alone.
+    pub fn quadratic_with_constant_tol(&self, tol: f64) -> Option<(f64, f64, f64)> {
+        if self.model != 2 {
+            return None;
+        }
+        if self.coeffs.len() < self.ncost {
+            return None;
+        }
+        let row = &self.coeffs[..self.ncost];
+        let mut first = 0;
+        while first + 1 < row.len() && row[first].abs() <= tol {
+            first += 1;
+        }
+        match row.len() - first {
+            3 => Some((2.0 * row[first], row[first + 1], row[first + 2])),
+            2 => Some((0.0, row[first], row[first + 1])),
+            1 => Some((0.0, 0.0, row[first])),
+            _ => None,
+        }
+    }
 }
 
 /// Which format a [`Network`] was read from. Drives the same format byte exact
@@ -2334,6 +2368,59 @@ mod tests {
 
         let truncated = GenCost::with_ncost(2, 0.0, 0.0, 3, vec![1.0]);
         assert_eq!(truncated.quadratic_with_constant(), None);
+    }
+
+    #[test]
+    fn a_leading_coefficient_below_the_tolerance_comes_off_the_row() {
+        let artifact = GenCost::new(2, 0.0, 0.0, vec![1e-17, 2.0, 5.0]);
+        assert_eq!(
+            artifact.quadratic_with_constant(),
+            Some((2e-17, 2.0, 5.0)),
+            "the untouched reader keeps the artifact"
+        );
+        assert_eq!(
+            artifact.quadratic_with_constant_tol(GenCost::LEADING_COEFF_TOL),
+            Some((0.0, 2.0, 5.0))
+        );
+        assert_eq!(
+            artifact.quadratic_with_constant_tol(0.0),
+            Some((2e-17, 2.0, 5.0)),
+            "a zero tolerance strips an exact zero alone"
+        );
+
+        // A row states a curve of a lower order once the leading zeros are off,
+        // so a cubic row the untouched reader refuses reads as a quadratic one.
+        let padded = GenCost::new(2, 0.0, 0.0, vec![0.0, 1.5, 2.0, 5.0]);
+        assert_eq!(padded.quadratic_with_constant(), None);
+        assert_eq!(
+            padded.quadratic_with_constant_tol(0.0),
+            Some((3.0, 2.0, 5.0))
+        );
+
+        let flat = GenCost::new(2, 0.0, 0.0, vec![1e-17, 1e-17, 1e-17]);
+        assert_eq!(
+            flat.quadratic_with_constant_tol(GenCost::LEADING_COEFF_TOL),
+            Some((0.0, 0.0, 1e-17)),
+            "the last coefficient stays, whatever its magnitude"
+        );
+
+        let piecewise = GenCost::new(1, 0.0, 0.0, vec![0.0, 0.0, 1.0, 1.0]);
+        assert_eq!(
+            piecewise.quadratic_with_constant_tol(GenCost::LEADING_COEFF_TOL),
+            None
+        );
+
+        let truncated = GenCost::with_ncost(2, 0.0, 0.0, 3, vec![1.0]);
+        assert_eq!(
+            truncated.quadratic_with_constant_tol(GenCost::LEADING_COEFF_TOL),
+            None
+        );
+
+        let quartic = GenCost::new(2, 0.0, 0.0, vec![1.0, 1.0, 1.0, 1.0, 1.0]);
+        assert_eq!(
+            quartic.quadratic_with_constant_tol(GenCost::LEADING_COEFF_TOL),
+            None
+        );
     }
 
     #[test]
