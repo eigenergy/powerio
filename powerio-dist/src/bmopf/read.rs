@@ -40,7 +40,7 @@ pub fn parse_bmopf_str(text: &str) -> Result<DistNetwork> {
         format: "BMOPF",
         message: e.to_string(),
     })?;
-    let Value::Object(doc) = doc else {
+    let Value::Object(mut doc) = doc else {
         return Err(Error::Json {
             format: "BMOPF",
             message: "top level is not an object".into(),
@@ -52,6 +52,7 @@ pub fn parse_bmopf_str(text: &str) -> Result<DistNetwork> {
         base_frequency: 60.0,
         ..DistNetwork::default()
     };
+    drop_non_numeric_fields(&mut doc, &mut net);
     let mut rd = Reader {
         net: &mut net,
         frequency_stated: false,
@@ -59,6 +60,167 @@ pub fn parse_bmopf_str(text: &str) -> Result<DistNetwork> {
     rd.document(&doc);
     crate::model::warn_unresolved_references(&mut net);
     Ok(net)
+}
+
+/// Schema 0.1.0 field names typed `number` or an array of them. Derived from
+/// the vendored schema; `schema_numeric_fields_match_the_vendored_schema`
+/// holds the two together.
+const NUMERIC_FIELDS: &[&str] = &[
+    "alpha_i",
+    "alpha_p",
+    "alpha_z",
+    "beta_i",
+    "beta_p",
+    "beta_z",
+    "cost",
+    "frequency",
+    "gamma_p",
+    "gamma_q",
+    "i_max",
+    "i_max_from",
+    "i_max_to",
+    "length",
+    "p_max",
+    "p_min",
+    "p_nom",
+    "q_max",
+    "q_min",
+    "q_nom",
+    "q_rated",
+    "r_series",
+    "r_series_from",
+    "r_series_to",
+    "s_max",
+    "s_rating",
+    "v_angle",
+    "v_magnitude",
+    "v_max",
+    "v_min",
+    "v_nom",
+    "v_nom_from",
+    "v_nom_to",
+    "vn_max",
+    "vneg_max",
+    "vpn_max",
+    "vpn_min",
+    "vpos_max",
+    "vpos_min",
+    "vpp_max",
+    "vpp_min",
+    "vzero_max",
+    "x_series",
+    "x_series_from",
+    "x_series_to",
+];
+
+/// Prefixes of the schema's matrix element patterns, e.g. `R_series_0_1`.
+const NUMERIC_MATRIX_PREFIXES: &[&str] = &[
+    "B_from_",
+    "B_to_",
+    "B_",
+    "G_from_",
+    "G_to_",
+    "G_",
+    "R_series_",
+    "X_series_",
+];
+
+/// A `<prefix>_<row>_<col>` matrix element name.
+fn is_numeric_matrix_field(key: &str) -> bool {
+    NUMERIC_MATRIX_PREFIXES.iter().any(|p| {
+        key.strip_prefix(p).is_some_and(|rest| {
+            matches!(rest.split_once('_'), Some((row, col))
+                if !row.is_empty()
+                    && !col.is_empty()
+                    && row.bytes().all(|b| b.is_ascii_digit())
+                    && col.bytes().all(|b| b.is_ascii_digit()))
+        })
+    })
+}
+
+fn is_numeric_field(key: &str) -> bool {
+    NUMERIC_FIELDS.contains(&key) || is_numeric_matrix_field(key)
+}
+
+/// Report every schema-numeric field holding something that is not a number,
+/// and remove it so the reader takes the field's own absent path.
+///
+/// Schema 0.1.0 spells no `null` anywhere and types the bounds and ratings as
+/// `nonnegative_number`, so every value this reaches is already invalid. Left
+/// in place each reads as `NaN`, which serializes on as `null` and restores
+/// as an unbounded limit — an explicit "no limit" the source never stated. A
+/// removed field states nothing, which is what the document did.
+///
+/// One unusable element condemns the whole array: the remaining entries are
+/// positional, and their phase correspondence is what the bad element
+/// destroyed.
+///
+/// `extras` is skipped, since it round trips arbitrary consumer JSON where
+/// these names carry no schema meaning.
+fn drop_non_numeric_fields(doc: &mut Map<String, Value>, net: &mut DistNetwork) {
+    fn numeric(v: &Value) -> bool {
+        match v {
+            Value::Number(_) => true,
+            Value::Array(a) => a.iter().all(Value::is_number),
+            _ => false,
+        }
+    }
+    fn kind(v: &Value) -> &'static str {
+        match v {
+            Value::Null => "null",
+            Value::Bool(_) => "a boolean",
+            Value::String(_) => "a string",
+            Value::Array(_) => "an array holding a value that is not a number",
+            Value::Object(_) => "an object",
+            Value::Number(_) => unreachable!("a number is not reported"),
+        }
+    }
+    fn walk(obj: &mut Map<String, Value>, path: &str, out: &mut Vec<(String, &'static str)>) {
+        obj.retain(|key, value| {
+            if key == "extras" {
+                return true;
+            }
+            let child = format!("{path}/{key}");
+            if is_numeric_field(key) {
+                if numeric(value) {
+                    return true;
+                }
+                out.push((child, kind(value)));
+                return false;
+            }
+            match value {
+                Value::Object(o) => walk(o, &child, out),
+                Value::Array(a) => {
+                    for (i, e) in a.iter_mut().enumerate() {
+                        if let Value::Object(o) = e {
+                            walk(o, &format!("{child}/{i}"), out);
+                        }
+                    }
+                }
+                _ => {}
+            }
+            true
+        });
+    }
+    let mut found = Vec::new();
+    walk(doc, "", &mut found);
+    for (pointer, what) in found {
+        let message = format!(
+            "{pointer}: the schema types this field as a number and it holds {what}; \
+             read as absent"
+        );
+        net.warnings.push(message.clone());
+        net.parse_diagnostics.push(
+            crate::diagnostics::StructuredDiagnostic::new(
+                crate::diagnostics::READ_BMOPF_FIELD_NOT_A_NUMBER,
+                crate::diagnostics::DiagnosticSeverity::Error,
+                crate::diagnostics::DiagnosticStage::Read,
+                message,
+            )
+            .with_element_path(pointer)
+            .with_suggested_action("state a number, or omit the field"),
+        );
+    }
 }
 
 struct Reader<'a> {
@@ -1580,4 +1742,82 @@ fn n_winding_base_from_internal(w: &Winding, s: f64) -> Option<f64> {
         n_winding_bmopf_v_nom_from_internal(w),
         s,
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::is_numeric_field;
+    use serde_json::Value;
+
+    /// [`super::NUMERIC_FIELDS`] and [`super::NUMERIC_MATRIX_PREFIXES`] copy
+    /// what the schema types as a number. Derive the set again from the
+    /// vendored schema so the copy cannot drift when upstream moves.
+    #[test]
+    fn numeric_field_names_match_the_vendored_schema() {
+        fn number(v: &Value) -> bool {
+            v.get("type").and_then(Value::as_str) == Some("number")
+                || v.get("$ref")
+                    .and_then(Value::as_str)
+                    .is_some_and(|r| r.ends_with("nonnegative_number"))
+        }
+        fn is_numeric(v: &Value) -> bool {
+            number(v)
+                || (v.get("type").and_then(Value::as_str) == Some("array")
+                    && v.get("items").is_some_and(number))
+        }
+        fn walk(node: &Value, names: &mut Vec<String>, patterns: &mut Vec<String>) {
+            match node {
+                Value::Object(o) => {
+                    for (key, target) in
+                        [("properties", &mut *names), ("patternProperties", patterns)]
+                    {
+                        if let Some(Value::Object(props)) = o.get(key) {
+                            target.extend(
+                                props
+                                    .iter()
+                                    .filter(|(_, v)| is_numeric(v))
+                                    .map(|(k, _)| k.clone()),
+                            );
+                        }
+                    }
+                    o.values().for_each(|v| walk(v, names, patterns));
+                }
+                Value::Array(a) => a.iter().for_each(|v| walk(v, names, patterns)),
+                _ => {}
+            }
+        }
+
+        let path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../tests/data/dist/bmopf/draft_bmopf_schema.json");
+        let schema: Value = serde_json::from_str(&std::fs::read_to_string(path).unwrap()).unwrap();
+        let (mut names, mut patterns) = (Vec::new(), Vec::new());
+        walk(&schema, &mut names, &mut patterns);
+        names.sort_unstable();
+        names.dedup();
+        patterns.sort_unstable();
+        patterns.dedup();
+        assert!(!names.is_empty() && !patterns.is_empty());
+
+        for name in &names {
+            assert!(is_numeric_field(name), "the reader does not know `{name}`");
+        }
+        // Each matrix pattern resolves through a `<prefix>_<row>_<col>` sample.
+        for pattern in &patterns {
+            let sample = pattern
+                .trim_start_matches('^')
+                .trim_end_matches('$')
+                .replace("\\d+", "7");
+            assert!(
+                is_numeric_field(&sample),
+                "the reader does not know `{sample}` (from `{pattern}`)"
+            );
+        }
+        // And nothing the reader claims is numeric is absent from the schema.
+        for name in super::NUMERIC_FIELDS {
+            assert!(
+                names.iter().any(|n| n == name),
+                "`{name}` is not a schema number"
+            );
+        }
+    }
 }

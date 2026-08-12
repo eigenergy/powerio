@@ -3135,3 +3135,63 @@ fn an_inline_line_rating_is_not_repeated_on_its_synthetic_linecode() {
     let text = powerio_dist::write_dss(&net).text;
     assert_eq!(text.matches("emergamps=250").count(), 1, "{text}");
 }
+
+#[test]
+fn a_non_numeric_bmopf_field_is_refused_rather_than_read_as_nan() {
+    // #299: every one of these is schema invalid, and each used to read as
+    // NaN, which serializes on as `null` and restores as an unbounded limit.
+    for (spelling, what) in [
+        (r#""not a number""#, "a string"),
+        ("null", "null"),
+        ("{}", "an object"),
+        (
+            r#"[400.0, "x"]"#,
+            "an array holding a value that is not a number",
+        ),
+    ] {
+        let text = format!(
+            r#"{{
+                "bus": {{"b": {{"terminal_names": ["1"], "perfectly_grounded_terminals": []}}}},
+                "linecode": {{"lc": {{"i_max": {spelling}}}}}
+            }}"#
+        );
+        let net = parse_bmopf_str(&text).unwrap();
+        let found: Vec<_> = net
+            .parse_diagnostics
+            .iter()
+            .filter(|d| d.code.as_str() == "READ.BMOPF.FIELD_NOT_A_NUMBER")
+            .collect();
+        assert_eq!(found.len(), 1, "{spelling}: {:?}", net.parse_diagnostics);
+        assert_eq!(found[0].severity, DiagnosticSeverity::Error, "{spelling}");
+        assert_eq!(found[0].stage, DiagnosticStage::Read, "{spelling}");
+        assert_eq!(
+            found[0].element_path.as_deref(),
+            Some("/linecode/lc/i_max"),
+            "{spelling}"
+        );
+        assert!(
+            found[0].message.contains(what),
+            "{spelling}: {}",
+            found[0].message
+        );
+        // And the bound is absent rather than NaN. A NaN would serialize on
+        // as `null` and restore as +Inf, stating a limit the source did not.
+        assert_eq!(net.linecodes[0].i_max, None, "{spelling}");
+    }
+}
+
+#[test]
+fn consumer_extras_are_not_read_as_schema_fields() {
+    // `extras` round trips arbitrary consumer JSON, where a name like `cost`
+    // carries no schema meaning.
+    let text = r#"{
+        "bus": {"b": {"terminal_names": ["1"], "perfectly_grounded_terminals": []}},
+        "extras": {"anything": {"cost": "free", "v_nom": null}}
+    }"#;
+    let net = parse_bmopf_str(text).unwrap();
+    assert!(
+        net.parse_diagnostics.is_empty(),
+        "{:?}",
+        net.parse_diagnostics
+    );
+}
