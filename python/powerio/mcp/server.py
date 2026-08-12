@@ -18,7 +18,7 @@ import json as jsonlib
 import os
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Dict, Literal, Optional, overload
+from typing import Any, Dict, Optional
 from urllib.parse import unquote, urlparse
 
 from mcp.server.mcpserver import MCPServer
@@ -754,34 +754,21 @@ def _choose_from_format(
     return chosen
 
 
-@overload
-def _choose_to_format(
-    to_format: Optional[str] = ...,
-    *,
-    to: Optional[str] = ...,
-    required: Literal[True] = ...,
-) -> str: ...
-
-
-@overload
-def _choose_to_format(
-    to_format: Optional[str] = ...,
-    *,
-    to: Optional[str] = ...,
-    required: Literal[False],
-) -> Optional[str]: ...
-
-
 def _choose_to_format(
     to_format: Optional[str] = None,
     *,
     to: Optional[str] = None,
-    required: bool = True,
 ) -> Optional[str]:
+    """The target format from either spelling, or None when neither is set."""
     if to_format is not None and to is not None and _fmt(to_format) != _fmt(to):
         raise ValueError("`to_format` and `to` disagree")
-    target = to_format or to
-    if required and target is None:
+    return to_format or to
+
+
+def _require_to_format(to_format: Optional[str] = None, *, to: Optional[str] = None) -> str:
+    """[`_choose_to_format`] where the caller has no target to fall back on."""
+    target = _choose_to_format(to_format, to=to)
+    if target is None:
         raise ValueError("`to_format` is required")
     return target
 
@@ -1256,7 +1243,7 @@ def convert(
     from_: Optional[str] = None,
     package_json: Optional[str] = None,
 ) -> dict:
-    target = _choose_to_format(to_format, to=to)
+    target = _require_to_format(to_format, to=to)
     source = _choose_from_format(from_format, format=format, from_=from_)
     return _convert_impl(
         target,
@@ -1286,7 +1273,7 @@ def save(
     from_: Optional[str] = None,
     package_json: Optional[str] = None,
 ) -> dict:
-    target = _choose_to_format(to_format, to=to, required=False)
+    target = _choose_to_format(to_format, to=to)
     source = _choose_from_format(from_format, format=format, from_=from_)
     return _save_impl(
         out_path,
