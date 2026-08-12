@@ -297,10 +297,16 @@ fuzz/                        # libFuzzer targets (detached workspace; see fuzz/R
   must leave `angmin <= angmax`. Wide symmetric bounds and `0/0` already have
   coverage.
 - **DC OPF Laplacian.** `L = A diag(b) Aᵀ` is built from the same `A`, `b`
-  factors `build_incidence` returns, so `L` and the reweighted `L₁` share a
-  factorization. With zero phase shifts, it equals MATPOWER `Bp` in the XB
-  scheme. Default `b = 1/x` (paper-pure); `DcConvention::Matpower` uses
-  `1/(x·τ)` plus a phase shift injection.
+  factors `build_incidence` returns. `DcConvention::series_susceptance` states
+  the series susceptance `b`, negative for an inductive branch, the sign
+  PowerModels `calc_branch_y` gives; `build_incidence` negates it once, because
+  `L` takes the M-matrix form with negative off diagonals and positive
+  diagonals. Never negate twice: the matrix comes out sign flipped and every
+  builder downstream inherits it. Default `SeriesImpedance`: `b = -x/(r² + x²)`,
+  which reads the whole series impedance, plus a phase shift injection, with no
+  tap scaling. `Matpower` uses `-1/(x·τ)` plus the injection. `PaperPure`
+  (`b = -1/x`, taps and shifts ignored) is deprecated in 0.9.0 and removed in
+  1.0.0; with zero phase shifts it equals MATPOWER `Bp` in the XB scheme.
 - **DC OPF lives in `powerio-prob`.** `DcOpfInstance` keeps generator-space
   data (`generators: DcGeneratorData`); `nodal_generator_data()` scatters it to
   bus space through `C_g` for length-n `Q`, `c`, and bounds. Cost map: MATPOWER `c2 p² + c1 p` → `q = 2c2`, `c = c1`, constant `c0` retained. Per-unit by default (`Units::PerUnit` scales `q` by `base²`, `c` by `base`).

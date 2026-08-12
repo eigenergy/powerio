@@ -1007,7 +1007,7 @@ def _matrix_impl(
     json_format: Optional[str] = None,
     options: Optional[Dict[str, Any]] = None,
     scheme: str = "bx",
-    convention: str = "paper",
+    convention: str = "series",
 ) -> dict:
     canonical = _MATRIX_KIND_ALIASES.get(kind.lower())
     if canonical is None:
@@ -1199,7 +1199,7 @@ def _matrix_tool(
     json_format: Optional[str] = None,
     options: Optional[Dict[str, Any]] = None,
     scheme: str = "bx",
-    convention: str = "paper",
+    convention: str = "series",
 ) -> dict:
     """Build a transmission matrix output in COO form."""
     return _matrix_impl(
@@ -1344,7 +1344,7 @@ def matrix(
     json_format: Optional[str] = None,
     options: Optional[Dict[str, Any]] = None,
     scheme: str = "bx",
-    convention: str = "paper",
+    convention: str = "series",
     *,
     format: Optional[str] = None,
     from_: Optional[str] = None,

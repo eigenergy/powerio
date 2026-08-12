@@ -143,7 +143,7 @@ fn matpower_convention_applies_tap_and_phase_shift() {
     net.branches[0].tap = 1.25;
     net.branches[0].shift = 10.0;
     let view = IndexedNetwork::new(&net);
-    let paper = build_dc_opf_instance(&view, &DcOpfOptions::default()).expect("paper");
+    let series = build_dc_opf_instance(&view, &DcOpfOptions::default()).expect("series");
     let matpower = build_dc_opf_instance(
         &view,
         &DcOpfOptions {
@@ -153,8 +153,11 @@ fn matpower_convention_applies_tap_and_phase_shift() {
     )
     .expect("matpower");
 
-    assert_close(paper.branches.b[0], 1.0 / 0.2);
-    assert_close(paper.branches.shift[0], 0.0);
+    // Only Matpower scales the susceptance by the tap. This branch has no
+    // resistance, so the default reads the same `1/x` there.
+    assert_close(series.branches.b[0], 1.0 / 0.2);
+    // Both live conventions carry the phase shift.
+    assert_close(series.branches.shift[0], 10.0_f64.to_radians());
     let expected_b = 1.0 / (0.2 * 1.25);
     let expected_shift = 10.0_f64.to_radians();
     assert!((matpower.branches.b[0] - expected_b).abs() < 1e-12);

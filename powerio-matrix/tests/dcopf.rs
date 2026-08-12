@@ -1,5 +1,10 @@
 //! DC OPF matrix forge: incidence, Laplacian, OPF instance, and the export
 //! bundle. Run against vendored MATPOWER cases.
+//!
+//! These cases pin `b = 1/x`, so they name `DcConvention::PaperPure` until it
+//! is removed in 1.0.0. `SeriesImpedance` gives a different weight for any
+//! branch that carries resistance.
+#![allow(deprecated)]
 
 use powerio_matrix::IndexedNetwork;
 use powerio_matrix::io::{read_mtx, write_sensitivity_mtx_with_options};
@@ -345,7 +350,9 @@ fn iterative_sensitivities_match_dense_oracle() {
     ] {
         let case = load(path);
         let view = IndexedNetwork::new(&case);
-        let (dense_ptdf, dense_lodf) = build_ptdf_lodf(&view, DcConvention::PaperPure).unwrap();
+        // Both paths take the same convention: this compares the two solvers,
+        // not two weightings.
+        let (dense_ptdf, dense_lodf) = build_ptdf_lodf(&view, DcConvention::default()).unwrap();
         let iterative = build_ptdf_lodf_with_options(
             &view,
             &SensitivityOptions {

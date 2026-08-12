@@ -119,14 +119,17 @@ fn parse_scheme(s: &str) -> PyResult<Scheme> {
     }
 }
 
-/// Accepts `paper`/`paper-pure`/`pure` and `matpower`/`mp` (case- and
-/// separator-insensitive).
+/// Accepts `series`/`series-impedance`, `matpower`/`mp`, and
+/// `paper`/`paper-pure`/`pure` (case- and separator-insensitive). The `paper`
+/// spellings are accepted until 1.0.0.
+#[allow(deprecated)]
 fn parse_convention(s: &str) -> PyResult<DcConvention> {
     match normalize(s).as_str() {
-        "paper" | "paperpure" | "pure" => Ok(DcConvention::PaperPure),
+        "series" | "seriesimpedance" => Ok(DcConvention::SeriesImpedance),
         "matpower" | "mp" => Ok(DcConvention::Matpower),
+        "paper" | "paperpure" | "pure" => Ok(DcConvention::PaperPure),
         other => Err(PyValueError::new_err(format!(
-            "unknown convention {other:?}; expected 'paper' or 'matpower'"
+            "unknown convention {other:?}; expected 'series' or 'matpower'"
         ))),
     }
 }
@@ -140,7 +143,7 @@ fn sensitivity_options(
     convention: Option<&str>,
     solver: Option<&str>,
 ) -> PyResult<SensitivityOptions> {
-    let convention = parse_convention(convention.unwrap_or("paper"))?;
+    let convention = parse_convention(convention.unwrap_or("series"))?;
     let solver = match normalize(solver.unwrap_or("auto")).as_str() {
         "auto" => SensitivitySolver::Auto,
         "dense" => SensitivitySolver::Dense,
@@ -1079,7 +1082,7 @@ impl PyNetwork {
         py: Python<'py>,
         convention: Option<&str>,
     ) -> PyResult<Bound<'py, PyAny>> {
-        let conv = parse_convention(convention.unwrap_or("paper"))?;
+        let conv = parse_convention(convention.unwrap_or("series"))?;
         let view = IndexedNetwork::with_core(&self.inner, &self.core);
         let parts = build_incidence(&view, conv, &BuildOptions::default()).map_err(to_pyerr)?;
         let a = coo_triplets(py, &parts.a)?;
@@ -1096,7 +1099,7 @@ impl PyNetwork {
         py: Python<'py>,
         convention: Option<&str>,
     ) -> PyResult<Bound<'py, PyAny>> {
-        let conv = parse_convention(convention.unwrap_or("paper"))?;
+        let conv = parse_convention(convention.unwrap_or("series"))?;
         let view = IndexedNetwork::with_core(&self.inner, &self.core);
         let parts = build_incidence(&view, conv, &BuildOptions::default()).map_err(to_pyerr)?;
         let l = build_weighted_laplacian(&parts.a, &parts.b);
@@ -1187,7 +1190,7 @@ impl PyNetwork {
         let instance = build_dc_opf_instance(
             &view,
             &DcOpfOptions {
-                convention: parse_convention(convention.unwrap_or("paper"))?,
+                convention: parse_convention(convention.unwrap_or("series"))?,
                 units: parse_units(units.unwrap_or("perunit"))?,
                 ..DcOpfOptions::default()
             },

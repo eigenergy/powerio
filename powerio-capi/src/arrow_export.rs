@@ -935,7 +935,7 @@ fn matrix_branch_batch(net: &Network, core: &IndexCore) -> Result<RecordBatch, S
     let view = IndexedNetwork::with_core(net, core);
     let parts = powerio_matrix::build_incidence(
         &view,
-        powerio_matrix::DcConvention::PaperPure,
+        powerio_matrix::DcConvention::default(),
         &powerio_matrix::BuildOptions::default(),
     )
     .map_err(|e| e.to_string())?;
@@ -1082,7 +1082,7 @@ fn matrix_incidence_batch(net: &Network, core: &IndexCore) -> Result<RecordBatch
     let view = IndexedNetwork::with_core(net, core);
     let parts = powerio_matrix::build_incidence(
         &view,
-        powerio_matrix::DcConvention::PaperPure,
+        powerio_matrix::DcConvention::default(),
         &powerio_matrix::BuildOptions::default(),
     )
     .map_err(|e| e.to_string())?;
@@ -1935,7 +1935,7 @@ Q\n";
         let view = IndexedNetwork::with_core(&n, &core);
         let incidence = powerio_matrix::build_incidence(
             &view,
-            powerio_matrix::DcConvention::PaperPure,
+            powerio_matrix::DcConvention::default(),
             &powerio_matrix::BuildOptions::default(),
         )
         .unwrap();
