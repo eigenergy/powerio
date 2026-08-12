@@ -8,6 +8,7 @@
 mod ac;
 mod dc;
 mod nodal;
+mod reference;
 pub mod scopf;
 
 #[cfg(feature = "matrix")]
@@ -22,4 +23,5 @@ pub use dc::{
     build_dc_opf_instance,
 };
 pub use powerio::{DcConvention, Error, Result};
+pub use reference::ReferenceBuses;
 pub use scopf::{ScopfError, ScopfInstance, ScopfResult, build_scopf_instance_from_str};

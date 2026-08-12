@@ -39,6 +39,23 @@ fn small_network() -> Network {
     network
 }
 
+fn two_island_network() -> Network {
+    let mut network = Network::in_memory(
+        "islands",
+        100.0,
+        vec![
+            bus(10, BusType::Ref),
+            bus(30, BusType::Pq),
+            bus(50, BusType::Ref),
+            bus(70, BusType::Pq),
+        ],
+        vec![branch(10, 30, 0.2), branch(50, 70, 0.3)],
+    );
+    network.generators.push(generator(10, 1.0, 2.0));
+    network.generators.push(generator(50, 4.0, 6.0));
+    network
+}
+
 #[test]
 fn instance_is_complete_and_indexed() {
     let net = case9();
@@ -170,6 +187,35 @@ fn an_unrated_branch_takes_a_synthesized_limit_on_request() {
     rated.branches[0].rate_a = 50.0;
     let kept = build_dc_opf_instance(&IndexedNetwork::new(&rated), &options).expect("rated branch");
     assert_close(kept.branches.f_max[0], 0.5);
+}
+
+#[test]
+fn a_network_of_two_islands_grounds_a_bus_in_each() {
+    let net = two_island_network();
+    let problem =
+        build_dc_opf_instance(&IndexedNetwork::new(&net), &DcOpfOptions::default()).expect("build");
+
+    assert_eq!(problem.reference_buses.len(), 2);
+    assert!(!problem.reference_buses.is_empty());
+    assert_eq!(
+        problem.reference_buses.iter().copied().collect::<Vec<_>>(),
+        vec![0, 2]
+    );
+    assert!(matches!(
+        problem.reference_buses.single(),
+        Err(Error::ReferenceBusCount { found: 2 })
+    ));
+
+    // The set keeps its wire form as a plain array of dense bus indices.
+    let json = serde_json::to_value(&problem).expect("serialize");
+    assert_eq!(json["reference_buses"], serde_json::json!([0, 2]));
+
+    let one_island = build_dc_opf_instance(
+        &IndexedNetwork::new(&small_network()),
+        &DcOpfOptions::default(),
+    )
+    .expect("build");
+    assert_eq!(one_island.reference_buses.single().expect("one bus"), 0);
 }
 
 #[test]

@@ -2,7 +2,7 @@ use serde::{Deserialize, Serialize};
 
 use powerio::{BusId, Error, IndexedNetwork, Result};
 
-use crate::{Units, nodal};
+use crate::{ReferenceBuses, Units, nodal};
 
 /// Options for AC OPF instance assembly.
 ///
@@ -160,7 +160,7 @@ pub struct AcOpfInstance {
     pub skip_zero_impedance: bool,
     /// Dense bus index to external bus ID.
     pub bus_ids: Vec<BusId>,
-    pub reference_buses: Vec<usize>,
+    pub reference_buses: ReferenceBuses,
     pub buses: AcBusData,
     pub generators: AcGeneratorData,
     pub branches: AcBranchData,
@@ -389,7 +389,7 @@ pub fn build_ac_opf_instance(
         units: options.units,
         skip_zero_impedance: options.skip_zero_impedance,
         bus_ids: (0..n_buses).map(|index| case.bus_id(index)).collect(),
-        reference_buses: case.reference_bus_indices(),
+        reference_buses: ReferenceBuses::new(case.reference_bus_indices()),
         buses: AcBusData {
             p_d: case.pd().iter().map(|value| value * p_scale).collect(),
             q_d: case.qd().iter().map(|value| value * p_scale).collect(),

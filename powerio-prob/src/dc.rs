@@ -2,7 +2,7 @@ use serde::{Deserialize, Serialize};
 
 use powerio::{BusId, DcConvention, Error, IndexedNetwork, Result};
 
-use crate::nodal;
+use crate::{ReferenceBuses, nodal};
 
 /// Unit system for power and generator cost data.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
@@ -153,7 +153,7 @@ pub struct DcOpfInstance {
     pub skip_zero_impedance: bool,
     /// Dense bus index to external bus ID.
     pub bus_ids: Vec<BusId>,
-    pub reference_buses: Vec<usize>,
+    pub reference_buses: ReferenceBuses,
     /// Nodal active demand in dense bus order.
     pub p_d: Vec<f64>,
     /// Nodal shunt conductance in dense bus order.
@@ -341,7 +341,7 @@ pub fn build_dc_opf_instance(
         convention: options.convention,
         skip_zero_impedance: options.skip_zero_impedance,
         bus_ids: (0..n_buses).map(|index| case.bus_id(index)).collect(),
-        reference_buses: case.reference_bus_indices(),
+        reference_buses: ReferenceBuses::new(case.reference_bus_indices()),
         p_d: case.pd().iter().map(|value| value * p_scale).collect(),
         g_s: case.gs().iter().map(|value| value * p_scale).collect(),
         p_shift,

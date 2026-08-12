@@ -57,6 +57,7 @@ fn instance_is_complete_and_indexed() {
     assert_eq!(problem.n_source_branches, net.branches.len());
     assert_eq!(problem.n_generators(), 3);
     assert_eq!(problem.bus_ids.len(), problem.n_buses);
+    assert_eq!(problem.reference_buses.single().expect("one bus"), 0);
     for vector in [
         &problem.buses.p_d,
         &problem.buses.q_d,
