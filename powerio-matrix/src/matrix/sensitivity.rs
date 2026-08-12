@@ -411,11 +411,19 @@ fn lodf_from_dense_with_drop(
     // along branch k.
     let delta = |l: usize, k: usize| ptdf[l * n + from[k]] - ptdf[l * n + to[k]];
 
+    // Outaging a bridge redistributes nothing, so its column is structurally
+    // zero. The magnitude test this replaces could not tell a true bridge from
+    // a branch carrying almost everything: a near bridge at
+    // `delta(k,k) = 1 - 1.1e-9` passed it, and its column came out amplified
+    // to ~1e9 with about seven digits gone — entries too large for
+    // `drop_tolerance` to catch.
+    let is_bridge = bridges(&from, &to, n);
+
     let mut lodf = CooBuilder::new(m); // m × m
     let mut dropped = 0usize;
     for k in 0..m {
         let denom = 1.0 - delta(k, k);
-        let islands = denom.abs() < LODF_ISLAND_TOLERANCE;
+        let islands = is_bridge[k] || denom.abs() < LODF_ISLAND_TOLERANCE;
         for l in 0..m {
             let v = if l == k {
                 -1.0
@@ -624,6 +632,83 @@ fn branch_flow(
 }
 
 /// Branch endpoints from the signed incidence: `+1` row is from, `−1` is to.
+/// Which branches are bridges of the graph the columns describe: an edge whose
+/// removal disconnects its endpoints.
+///
+/// Outaging a bridge moves no flow anywhere, which is the condition the LODF
+/// denominator `1 - delta(k,k)` approaches. Deciding it topologically is exact,
+/// where a magnitude test on the denominator cannot separate a true bridge from
+/// a branch that merely carries almost everything.
+///
+/// Iterative Tarjan, O(n + m). The recursion a textbook writes overflows the
+/// stack on a real feeder. Entry is tracked by arc rather than by parent node,
+/// so a pair of parallel branches correctly leaves neither of them a bridge.
+fn bridges(from: &[usize], to: &[usize], n: usize) -> Vec<bool> {
+    let m = from.len();
+    // Forward star: arc `2k` runs from[k] -> to[k], arc `2k+1` its reverse, so
+    // `arc ^ 1` is the other direction of the same branch and `arc / 2` is the
+    // branch itself.
+    let mut head = vec![usize::MAX; n];
+    let mut next = vec![usize::MAX; 2 * m];
+    let mut dest = vec![0usize; 2 * m];
+    for k in 0..m {
+        for (arc, tail, other) in [(2 * k, from[k], to[k]), (2 * k + 1, to[k], from[k])] {
+            dest[arc] = other;
+            next[arc] = head[tail];
+            head[tail] = arc;
+        }
+    }
+
+    let mut disc = vec![usize::MAX; n];
+    let mut low = vec![0usize; n];
+    let mut is_bridge = vec![false; m];
+    let mut timer = 0usize;
+    // (node, the arc it was entered by, the next arc to examine)
+    let mut stack: Vec<(usize, usize, usize)> = Vec::new();
+
+    for root in 0..n {
+        if disc[root] != usize::MAX {
+            continue;
+        }
+        disc[root] = timer;
+        low[root] = timer;
+        timer += 1;
+        stack.push((root, usize::MAX, head[root]));
+        while let Some(top) = stack.last_mut() {
+            let (v, in_arc) = (top.0, top.1);
+            if top.2 == usize::MAX {
+                stack.pop();
+                if let Some(parent) = stack.last_mut() {
+                    let p = parent.0;
+                    low[p] = low[p].min(low[v]);
+                    // The subtree under v reaches nothing at or above p, so
+                    // the edge into v is the only way back.
+                    if low[v] > disc[p] {
+                        is_bridge[in_arc / 2] = true;
+                    }
+                }
+                continue;
+            }
+            let arc = top.2;
+            top.2 = next[arc];
+            // Skip the branch we arrived on, but not a parallel one beside it.
+            if arc == in_arc ^ 1 {
+                continue;
+            }
+            let w = dest[arc];
+            if disc[w] == usize::MAX {
+                disc[w] = timer;
+                low[w] = timer;
+                timer += 1;
+                stack.push((w, arc, head[w]));
+            } else {
+                low[v] = low[v].min(disc[w]);
+            }
+        }
+    }
+    is_bridge
+}
+
 fn endpoints(a: &CsMat<f64>, m: usize) -> (Vec<usize>, Vec<usize>) {
     let mut from = vec![0usize; m];
     let mut to = vec![0usize; m];
@@ -940,6 +1025,68 @@ impl DenseCholesky {
             }
         }
         inv
+    }
+}
+
+#[cfg(test)]
+mod bridge_tests {
+    use super::bridges;
+
+    #[test]
+    fn every_edge_of_a_path_is_a_bridge() {
+        // 0 - 1 - 2 - 3
+        let b = bridges(&[0, 1, 2], &[1, 2, 3], 4);
+        assert_eq!(b, vec![true, true, true]);
+    }
+
+    #[test]
+    fn no_edge_of_a_cycle_is_a_bridge() {
+        // 0 - 1 - 2 - 0
+        let b = bridges(&[0, 1, 2], &[1, 2, 0], 3);
+        assert_eq!(b, vec![false, false, false]);
+    }
+
+    #[test]
+    fn parallel_branches_leave_neither_a_bridge() {
+        // Two circuits on the same corridor: outaging one still leaves a path,
+        // so neither is a bridge. Tracking entry by node rather than by arc
+        // would call both of them bridges.
+        let b = bridges(&[0, 0], &[1, 1], 2);
+        assert_eq!(b, vec![false, false]);
+    }
+
+    #[test]
+    fn only_the_tie_between_two_loops_is_a_bridge() {
+        // Two triangles joined by one tie line: 0-1-2-0, tie 2-3, 3-4-5-3.
+        let from = [0, 1, 2, 2, 3, 4, 5];
+        let to = [1, 2, 0, 3, 4, 5, 3];
+        let b = bridges(&from, &to, 6);
+        assert_eq!(b, vec![false, false, false, true, false, false, false]);
+    }
+
+    #[test]
+    fn a_self_loop_is_not_a_bridge() {
+        let b = bridges(&[0, 1], &[1, 1], 2);
+        assert_eq!(b, vec![true, false]);
+    }
+
+    #[test]
+    fn separate_components_are_each_walked() {
+        // 0-1 and 2-3, no tie. Both edges are bridges of their own component,
+        // and the root loop must reach the second one.
+        let b = bridges(&[0, 2], &[1, 3], 4);
+        assert_eq!(b, vec![true, true]);
+    }
+
+    #[test]
+    fn a_long_path_does_not_overflow_the_stack() {
+        // The recursion a textbook writes dies here.
+        let n = 200_000;
+        let from: Vec<usize> = (0..n - 1).collect();
+        let to: Vec<usize> = (1..n).collect();
+        let b = bridges(&from, &to, n);
+        assert_eq!(b.len(), n - 1);
+        assert!(b.iter().all(|&x| x));
     }
 }
 
