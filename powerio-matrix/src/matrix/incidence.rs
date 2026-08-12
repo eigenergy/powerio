@@ -69,8 +69,13 @@ pub fn build_incidence(
             bus_id: br.to,
             element_index: idx,
         })?;
-        if i == j || br.x == 0.0 {
-            if i != j && br.x == 0.0 {
+        // A reactance below the bound is zero impedance in every sense the
+        // builder can act on: `x = 1e-300` gives `b = 1e300`, which is finite,
+        // passes the check below, and annihilates every real branch sharing a
+        // diagonal with it. Exact zero used to be the whole test.
+        let degenerate_x = br.x.abs() < crate::matrix::MIN_DIVISIBLE_MAGNITUDE;
+        if i == j || degenerate_x {
+            if i != j && degenerate_x {
                 if !opts.skip_zero_impedance {
                     return Err(Error::ZeroImpedance { row: idx });
                 }
@@ -79,8 +84,8 @@ pub fn build_incidence(
             continue;
         }
         let b_e = conv.branch_susceptance(br.x, br.effective_tap());
-        // A NaN reactance slips past the `x == 0.0` guard above, and a
-        // denormal `x` yields Inf; either poisons the whole Laplacian.
+        // A NaN reactance slips past the guard above, and a tap near zero
+        // sends `b_e` to Inf; either poisons the whole Laplacian.
         if !b_e.is_finite() {
             return Err(Error::NonFiniteSusceptance { row: idx });
         }

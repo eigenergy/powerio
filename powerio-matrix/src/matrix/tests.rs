@@ -561,6 +561,80 @@ fn zero_impedance_policy_can_error_instead_of_skipping() {
 }
 
 #[test]
+fn a_reactance_below_the_divisible_bound_is_zero_impedance() {
+    // #292. `x = 1e-300` gives `b = 1e300`, which is finite, so every
+    // finiteness check passed it. One such branch on a diagonal annihilates
+    // every real branch sharing it: the Laplacian comes out rank deficient in
+    // floating point and `sddm_check` reports nothing.
+    let net = Network::in_memory(
+        "denormal-x",
+        100.0,
+        vec![bus(1, BusType::Ref), bus(2, BusType::Pq)],
+        vec![br(1, 2, 0.0, 1e-300, 0.0)],
+    );
+    let view = IndexedNetwork::new(&net);
+
+    let inc = build_incidence(&view, DcConvention::PaperPure, &BuildOptions::default()).unwrap();
+    assert_eq!(inc.skipped_zero_impedance.count, 1);
+    assert_eq!(inc.skipped_zero_impedance.branch_indices, vec![0]);
+
+    let strict = BuildOptions {
+        skip_zero_impedance: false,
+        ..Default::default()
+    };
+    let err = build_incidence(&view, DcConvention::PaperPure, &strict).unwrap_err();
+    assert!(
+        matches!(err, crate::Error::ZeroImpedance { row: 0 }),
+        "{err}"
+    );
+    let err = build_ybus(&view, &strict).unwrap_err();
+    assert!(
+        matches!(err, crate::Error::ZeroImpedance { row: 0 }),
+        "{err}"
+    );
+}
+
+#[test]
+fn a_tap_ratio_ybus_cannot_divide_by_is_refused() {
+    // #292. `effective_tap` only remaps an exact 0.0, so a tap of 1e-200
+    // underflowed `a_norm_sqr` to zero and scattered +/-Inf into Y_bus.
+    for tap in [1e-200, f64::NAN, f64::INFINITY] {
+        let mut branch = br(1, 2, 0.01, 0.1, 0.0);
+        branch.tap = tap;
+        let net = Network::in_memory(
+            "degenerate-tap",
+            100.0,
+            vec![bus(1, BusType::Ref), bus(2, BusType::Pq)],
+            vec![branch],
+        );
+        let view = IndexedNetwork::new(&net);
+        let err = build_ybus(&view, &BuildOptions::default()).unwrap_err();
+        assert!(
+            matches!(err, crate::Error::DegenerateTap { row: 0, .. }),
+            "tap {tap}: {err}"
+        );
+    }
+}
+
+#[test]
+fn an_ordinary_tap_still_builds() {
+    // The bound rejects poison and nothing else: a real off nominal tap and
+    // the 0.0 that `effective_tap` remaps to unity both stay.
+    for tap in [0.0, 0.95, 1.0, 1.1] {
+        let mut branch = br(1, 2, 0.01, 0.1, 0.0);
+        branch.tap = tap;
+        let net = Network::in_memory(
+            "ordinary-tap",
+            100.0,
+            vec![bus(1, BusType::Ref), bus(2, BusType::Pq)],
+            vec![branch],
+        );
+        let view = IndexedNetwork::new(&net);
+        build_ybus(&view, &BuildOptions::default()).unwrap_or_else(|e| panic!("tap {tap}: {e}"));
+    }
+}
+
+#[test]
 fn self_loop_with_zero_reactance_drops_unconditionally() {
     // A self-loop (from == to) is documented as always dropped, independent
     // of skip_zero_impedance; it must not be misrouted through the

@@ -39,6 +39,9 @@ pub enum Error {
     #[error("branch row {row} has non-finite DC susceptance b = 1/x (x is NaN, Inf, or denormal)")]
     NonFiniteSusceptance { row: usize },
 
+    #[error("branch row {row} has a tap ratio of {tap} that Y_bus cannot divide by")]
+    DegenerateTap { row: usize, tap: f64 },
+
     #[error("output dimension mismatch: matrix is {n}x{n} but RHS has length {b_len}")]
     DimensionMismatch { n: usize, b_len: usize },
 
@@ -219,6 +222,7 @@ impl Error {
             Error::UnknownBus { .. }
             | Error::ZeroImpedance { .. }
             | Error::NonFiniteSusceptance { .. }
+            | Error::DegenerateTap { .. }
             | Error::DimensionMismatch { .. }
             | Error::NoGenerators
             | Error::MissingGenCost { .. }
