@@ -15,7 +15,7 @@ use crate::{Error, Result};
 
 pub fn write_mtx(matrix: &CsMat<f64>, path: impl AsRef<Path>) -> Result<()> {
     let path = path.as_ref();
-    if is_numerically_symmetric(matrix) {
+    if is_exactly_symmetric(matrix) {
         write_symmetric_mtx(matrix, path)
     } else {
         sprs::io::write_matrix_market(path, matrix.view()).map_err(|e| Error::Mtx(e.to_string()))
@@ -95,16 +95,26 @@ pub fn write_vector_mtx(values: &[f64], path: impl AsRef<Path>) -> Result<()> {
     Ok(())
 }
 
-fn is_numerically_symmetric(a: &CsMat<f64>) -> bool {
+/// Whether the `symmetric` header would round trip: every stored entry has a
+/// stored mirror holding the identical bits.
+///
+/// The writer emits only the lower triangle under that header, so a reader
+/// reconstructs `a[j][i]` from `a[i][j]`. Deciding this on a tolerance meant a
+/// matrix that was merely close went out as symmetric and came back changed by
+/// up to the tolerance — a `Bp` built in BX mode with a small phase shifter is
+/// asymmetric by exactly `2 g sin(theta) / t`, which sat under the old 1e-12.
+/// Anything short of exact goes out as `general`, which stores both triangles.
+fn is_exactly_symmetric(a: &CsMat<f64>) -> bool {
     if a.rows() != a.cols() {
         return false;
     }
     for (i, row) in a.outer_iterator().enumerate() {
         for (j, &v) in row.iter() {
-            let mirror = a.get(j, i).copied().unwrap_or(0.0);
-            let scale = v.abs().max(mirror.abs()).max(1.0);
-            if (v - mirror).abs() > 1e-12 * scale {
-                return false;
+            // Bit equality, so a mirrored pair differing only in the sign of
+            // zero is `general` too: the symmetric form would not carry it.
+            match a.get(j, i) {
+                Some(&mirror) if mirror.to_bits() == v.to_bits() => {}
+                _ => return false,
             }
         }
     }
@@ -134,6 +144,72 @@ mod tests {
         assert!(
             text.lines().next().unwrap().ends_with("general"),
             "value-asymmetric matrices must not be written with a symmetric header"
+        );
+    }
+
+    #[test]
+    fn a_matrix_asymmetric_below_the_old_tolerance_writes_general() {
+        // #292. The pair differs by 1e-15 relative, which the old 1e-12
+        // tolerance called symmetric — so only the lower triangle went out and
+        // a reader mirrored 3.0 back over the 3.000000000000001 that was
+        // assembled. A `Bp` in BX mode with a small phase shifter is asymmetric
+        // by exactly this little.
+        let mut tri = TriMat::new((2, 2));
+        tri.add_triplet(0, 0, 5.0);
+        tri.add_triplet(0, 1, 3.000_000_000_000_001);
+        tri.add_triplet(1, 0, 3.0);
+        tri.add_triplet(1, 1, 5.0);
+        let matrix = tri.to_csr();
+
+        let path = temp_path("near-symmetric");
+        write_mtx(&matrix, &path).unwrap();
+        let text = std::fs::read_to_string(&path).unwrap();
+        let _ = std::fs::remove_file(&path);
+
+        assert!(
+            text.lines().next().unwrap().ends_with("general"),
+            "a matrix that is only nearly symmetric must carry both triangles:\n{text}"
+        );
+    }
+
+    #[test]
+    fn a_structurally_asymmetric_matrix_writes_general() {
+        // The mirror is absent rather than unequal: the old check read it as a
+        // stored 0.0 and compared equal whenever the entry was itself 0.0.
+        let mut tri = TriMat::new((2, 2));
+        tri.add_triplet(0, 0, 5.0);
+        tri.add_triplet(0, 1, 0.0);
+        tri.add_triplet(1, 1, 5.0);
+        let matrix = tri.to_csr();
+
+        let path = temp_path("structurally-asymmetric");
+        write_mtx(&matrix, &path).unwrap();
+        let text = std::fs::read_to_string(&path).unwrap();
+        let _ = std::fs::remove_file(&path);
+
+        assert!(
+            text.lines().next().unwrap().ends_with("general"),
+            "an unmirrored stored entry must not claim a symmetric header:\n{text}"
+        );
+    }
+
+    #[test]
+    fn an_exactly_symmetric_matrix_still_writes_symmetric() {
+        let mut tri = TriMat::new((2, 2));
+        tri.add_triplet(0, 0, 5.0);
+        tri.add_triplet(0, 1, -3.0);
+        tri.add_triplet(1, 0, -3.0);
+        tri.add_triplet(1, 1, 5.0);
+        let matrix = tri.to_csr();
+
+        let path = temp_path("exactly-symmetric");
+        write_mtx(&matrix, &path).unwrap();
+        let text = std::fs::read_to_string(&path).unwrap();
+        let _ = std::fs::remove_file(&path);
+
+        assert!(
+            text.lines().next().unwrap().ends_with("symmetric"),
+            "an exactly symmetric matrix keeps the compact form:\n{text}"
         );
     }
 
