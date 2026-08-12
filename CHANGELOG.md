@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.8.3
+
+Correctness fixes for the OpenDSS writer and the BMOPF reader. No API, C ABI, or schema version changes: `PIO_ABI_VERSION` stays 4, `PIO_DIST_ABI_VERSION` stays 1, and `.pio.json` stays at schema 0.2.1. Two behaviors change in ways a consumer can observe, both below.
+
+**A center tapped service exports OpenDSS that solves to the right answer.** Reported in [eigenergy/PowerIO.jl#79](https://github.com/eigenergy/PowerIO.jl/issues/79) against three 19 kV SWER feeders. A dss node list is positional, the phase conductors first and the return last, and a center tapped service maps as `[p1, n, p2]`. The writer emitted one `Load` record over that map, so the engine discarded the conductor it could not address: on the reported network the load drew 0.652 kW of its stated 2.608 and the second leg floated to 1.35 pu, converged, with nothing in the warnings. Such a load now emits one single phase `Load` per leg. The split keys on the conductor count rather than on unequal per phase power, which a center tapped consumer does not have, and the return conductor is located from the bus grounding rather than assumed last. A terminal map longer than the record's conductor count now warns, the mirror of the short map warning that already existed.
+
+Three more silent paths from the same report: a three winding star whose third arm is zero cannot be solved by OpenDSS, which collapses the secondary legs to about half voltage instead, so the writer substitutes the split from the OpenDSS center tap example and says so; the BMOPF and PMD readers warn when a document states no frequency and carries line susceptance, since the 60 Hz default costs a 50 Hz feeder about a fifth of its line charging; and a `center_tap` `v_nom_to` at about twice the secondary bus's own phase to neutral band warns, that being the full span rather than the per leg voltage the convention asks for.
+
+**A malformed BMOPF numeric field is refused rather than read as `NaN`.** `bmopf::read` mapped every numeric field through `as_f64().unwrap_or(f64::NAN)`, so a string, a null, an object, or an array holding one of those became `NaN` and the parse continued silently. Schema 0.1.0 spells no `null` anywhere and types the bounds and ratings as `nonnegative_number`, so every value that reached it was already invalid — and a `NaN` bound serializes into `.pio.json` as `null`, which the payload reader restores as ±Inf, an explicit "no limit" the source never stated. Each such field is now an `Error` finding carrying its JSON pointer, so `powerio convert` and `powerio package` exit nonzero on a document that used to parse quietly. The value itself still reads as `NaN`: telling absent from invalid per field is a real feature and it waits for the typed readers of #293.
+
+**Python.** The MCP server is inside the ruff and mypy gates (#297); the exclusions #285 added are gone.
+
+**Repository.** The normalize pass no longer clones the element fields it immediately overwrites, on a pass that runs before every solve.
+
 ## 0.8.2
 
 Row provenance from the normalize pass, a PYPOWER bridge, `null` for a nonfinite float in the multiconductor payload, and distribution writer coverage for rated capacitor banks and unbalanced loads. No breaking API changes; two behaviors change in ways a consumer can observe, both below.
