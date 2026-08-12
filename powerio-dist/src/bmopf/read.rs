@@ -52,7 +52,10 @@ pub fn parse_bmopf_str(text: &str) -> Result<DistNetwork> {
         base_frequency: 60.0,
         ..DistNetwork::default()
     };
-    let mut rd = Reader { net: &mut net };
+    let mut rd = Reader {
+        net: &mut net,
+        frequency_stated: false,
+    };
     rd.document(&doc);
     crate::model::warn_unresolved_references(&mut net);
     Ok(net)
@@ -60,6 +63,7 @@ pub fn parse_bmopf_str(text: &str) -> Result<DistNetwork> {
 
 struct Reader<'a> {
     net: &'a mut DistNetwork,
+    frequency_stated: bool,
 }
 
 const BMOPF_DELTA_ROLLS_EXTRA: &str = "bmopf_delta_rolls";
@@ -308,6 +312,7 @@ impl Reader<'_> {
             && frequency > 0.0
         {
             self.net.base_frequency = frequency;
+            self.frequency_stated = true;
         }
         // `serde_json::Map` iterates in key order, so the loop below reaches
         // `line` before `linecode`. A line with inline impedance synthesizes a
@@ -403,6 +408,9 @@ impl Reader<'_> {
             }
         }
         self.warn_orphan_transformer_overlay(doc);
+        if !self.frequency_stated {
+            crate::model::warn_defaulted_frequency(self.net, "frequency");
+        }
     }
 
     /// The `extras.transformer` overlay carries the transformer fields that
@@ -1304,6 +1312,18 @@ impl Reader<'_> {
             },
         ];
         expand_center_tap_windings(subtype, &mut windings, &self.net.buses);
+        if subtype == "center_tap"
+            && let Some(w) = windings.get(1)
+            && let Some(band) = phase_to_neutral_midpoint(w, &self.net.buses)
+            && (w.v_ref - band).abs() > (w.v_ref / 2.0 - band).abs() * 4.0
+        {
+            self.net.warnings.push(format!(
+                "transformer {name}: v_nom_to {} is about twice the {band} V the \
+                 secondary bus states phase to neutral, the value a full span \
+                 reading gives; the convention is the per leg voltage",
+                w.v_ref
+            ));
+        }
         let mut extras = take_extras(
             o,
             &known,
@@ -1450,6 +1470,18 @@ impl Reader<'_> {
             extras,
         }
     }
+}
+
+/// The middle of the secondary bus's phase to neutral band, when it states
+/// one. A center tapped winding's `v_nom_to` is the per leg voltage, so the
+/// two agree; a source that states the full span across both legs lands at
+/// twice this.
+fn phase_to_neutral_midpoint(w: &Winding, buses: &[DistBus]) -> Option<f64> {
+    let bus = buses.iter().find(|b| b.id == w.bus)?;
+    let lo = bus.vpn_min.as_ref()?.first()?;
+    let hi = bus.vpn_max.as_ref()?.first()?;
+    let mid = (lo + hi) / 2.0;
+    (mid.is_finite() && mid > 0.0 && w.v_ref.is_finite()).then_some(mid)
 }
 
 fn expand_center_tap_windings(subtype: &str, windings: &mut Vec<Winding>, buses: &[DistBus]) {

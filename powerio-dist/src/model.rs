@@ -1014,6 +1014,27 @@ impl DistNetwork {
     }
 }
 
+/// Susceptance converts to a dss `cmatrix` at the network frequency, so a
+/// 50 Hz feeder read at the 60 Hz default loses a fifth of its line charging,
+/// and a stated 60 Hz is indistinguishable from a defaulted one downstream.
+/// Only a network carrying susceptance can lose anything, so a document that
+/// states no frequency and no charging stays quiet.
+pub(crate) fn warn_defaulted_frequency(net: &mut DistNetwork, field: &str) {
+    let charging = net.linecodes.iter().any(|c| {
+        [&c.b_from, &c.b_to]
+            .iter()
+            .flat_map(|m| m.iter())
+            .flatten()
+            .any(|v| v.is_finite() && v.abs() > 0.0)
+    });
+    if charging {
+        net.warnings.push(format!(
+            "document states no {field} and carries line susceptance; read at {} Hz",
+            net.base_frequency
+        ));
+    }
+}
+
 /// Push a warning for every dangling or empty cross-reference. Bus and
 /// linecode references are bare strings, a reader leaves an empty string
 /// where the field is missing, and the graph projection synthesizes a

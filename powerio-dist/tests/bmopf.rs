@@ -2064,6 +2064,115 @@ fn bmopf_center_tap_canonical_order_rebuilds_dss_grounded_center() {
 }
 
 #[test]
+fn bmopf_center_tap_service_exports_solvable_dss() {
+    // PowerIO.jl#79, reduced to one consumer. The load is balanced across the
+    // two legs, so the imbalance split never fires; the star has no secondary
+    // leakage, so it back solves to xlt=0; and `v_nom_to` states the full
+    // span, which the bus's own phase to neutral band contradicts.
+    let text = r#"{
+        "meta": {"frequency": 50.0},
+        "bus": {
+            "hv": {"terminal_names": ["1", "2"], "perfectly_grounded_terminals": ["2"]},
+            "lv": {
+                "terminal_names": ["1", "2", "3"],
+                "perfectly_grounded_terminals": ["2"],
+                "vpn_min": [225.6, 225.6],
+                "vpn_max": [254.4, 254.4]
+            }
+        },
+        "voltage_source": {
+            "source": {
+                "v_magnitude": [19000.0, 0.0],
+                "v_angle": [0.0, 0.0],
+                "bus": "hv",
+                "terminal_map": ["1", "2"]
+            }
+        },
+        "transformer": {
+            "center_tap": {
+                "tx": {
+                    "bus_from": "hv",
+                    "bus_to": "lv",
+                    "terminal_map_from": ["1", "2"],
+                    "terminal_map_to": ["1", "2", "3"],
+                    "s_rating": 25000.0,
+                    "v_nom_from": 19000.0,
+                    "v_nom_to": 480.0,
+                    "r_series_from": 0.5,
+                    "x_series_from": 2.5
+                }
+            }
+        },
+        "load": {
+            "ld": {
+                "bus": "lv",
+                "terminal_map": ["1", "2", "3"],
+                "p_nom": [1304.0, 1304.0],
+                "q_nom": [978.0, 978.0],
+                "model": "constant_impedance"
+            }
+        }
+    }"#;
+    let net = parse_bmopf_str(text).unwrap();
+    assert!(
+        net.warnings
+            .iter()
+            .any(|w| w.contains("v_nom_to 480") && w.contains("per leg")),
+        "{:?}",
+        net.warnings
+    );
+
+    let out = write_dss(&net);
+    // One Load per leg, each on its own hot node and the grounded return.
+    let loads: Vec<&str> = out
+        .text
+        .lines()
+        .filter(|l| l.contains("New Load."))
+        .collect();
+    assert_eq!(loads.len(), 2, "{}", out.text);
+    assert!(loads.iter().all(|l| l.contains("phases=1")), "{loads:?}");
+    assert!(loads.iter().all(|l| l.contains("kw=1.304")), "{loads:?}");
+    assert!(
+        loads.iter().any(|l| l.contains("bus1=lv.1.0 ")),
+        "{loads:?}"
+    );
+    assert!(
+        loads.iter().any(|l| l.contains("bus1=lv.3.0 ")),
+        "{loads:?}"
+    );
+
+    // A star dss can solve, and the warning names the substitution.
+    let tx = out
+        .text
+        .lines()
+        .find(|l| l.contains("New Transformer.tx"))
+        .unwrap_or_else(|| panic!("no transformer: {}", out.text));
+    let arm = |key: &str| -> f64 {
+        tx.split_whitespace()
+            .find_map(|t| t.strip_prefix(key))
+            .unwrap_or_else(|| panic!("no {key} in {tx}"))
+            .parse()
+            .unwrap()
+    };
+    let (xhl, xlt) = (arm("xhl="), arm("xlt="));
+    assert!(xhl > 0.0, "{tx}");
+    assert!((xlt - 2.0 / 3.0 * xhl).abs() < 1e-12 * xhl, "{tx}");
+    assert!(
+        out.warnings
+            .iter()
+            .any(|w| w.contains("collapsed secondary")),
+        "{:?}",
+        out.warnings
+    );
+    // The stated frequency reaches the deck, so the charging conversion holds.
+    assert!(
+        out.text.contains("Set DefaultBaseFrequency=50"),
+        "{}",
+        out.text
+    );
+}
+
+#[test]
 fn bmopf_center_tap_neutral_grounding_rebuilds_once() {
     let text = r#"{
         "bus": {
