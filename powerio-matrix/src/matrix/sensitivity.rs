@@ -557,6 +557,10 @@ fn iterative_ptdf_lodf_entries(
         }
     }
 
+    // Same rule as the dense path: a bridge redistributes nothing, decided on
+    // the topology rather than on how close the denominator came to zero.
+    let is_bridge = bridges(&from, &to, n);
+
     let mut lodf_nnz = 0usize;
     let mut lodf_dropped = 0usize;
     for outage in 0..m {
@@ -570,7 +574,7 @@ fn iterative_ptdf_lodf_entries(
         let theta = solver.solve(&rhs)?;
         let outage_delta = branch_flow(outage, &from, &to, &inc.b, &g, &theta);
         let denom = 1.0 - outage_delta;
-        let islands = denom.abs() < LODF_ISLAND_TOLERANCE;
+        let islands = is_bridge[outage] || denom.abs() < LODF_ISLAND_TOLERANCE;
         for branch in 0..m {
             let v = if branch == outage {
                 -1.0
