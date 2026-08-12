@@ -160,51 +160,19 @@ fn is_numeric_field(key: &str) -> bool {
 /// `extras` is skipped, since it round trips arbitrary consumer JSON where
 /// these names carry no schema meaning.
 fn report_non_numeric_fields(doc: &Map<String, Value>, net: &mut DistNetwork) {
-    fn numeric(v: &Value) -> bool {
+    /// What the value holds, or `None` when the schema allows it.
+    fn not_numeric(v: &Value) -> Option<&'static str> {
         match v {
-            Value::Number(_) => true,
-            Value::Array(a) => a.iter().all(Value::is_number),
-            _ => false,
+            Value::Number(_) => None,
+            Value::Array(a) if a.iter().all(Value::is_number) => None,
+            Value::Null => Some("null"),
+            Value::Bool(_) => Some("a boolean"),
+            Value::String(_) => Some("a string"),
+            Value::Array(_) => Some("an array holding a value that is not a number"),
+            Value::Object(_) => Some("an object"),
         }
     }
-    fn kind(v: &Value) -> &'static str {
-        match v {
-            Value::Null => "null",
-            Value::Bool(_) => "a boolean",
-            Value::String(_) => "a string",
-            Value::Array(_) => "an array holding a value that is not a number",
-            Value::Object(_) => "an object",
-            Value::Number(_) => unreachable!("a number is not reported"),
-        }
-    }
-    fn walk(obj: &Map<String, Value>, path: &str, out: &mut Vec<(String, &'static str)>) {
-        for (key, value) in obj {
-            if key == "extras" {
-                continue;
-            }
-            let child = format!("{path}/{key}");
-            if is_numeric_field(key) {
-                if !numeric(value) {
-                    out.push((child, kind(value)));
-                }
-                continue;
-            }
-            match value {
-                Value::Object(o) => walk(o, &child, out),
-                Value::Array(a) => {
-                    for (i, e) in a.iter().enumerate() {
-                        if let Value::Object(o) = e {
-                            walk(o, &format!("{child}/{i}"), out);
-                        }
-                    }
-                }
-                _ => {}
-            }
-        }
-    }
-    let mut found = Vec::new();
-    walk(doc, "", &mut found);
-    for (pointer, what) in found {
+    fn report(net: &mut DistNetwork, pointer: String, what: &str) {
         let message = format!(
             "{pointer}: the schema types this field as a number and it holds {what}; \
              it reads as NaN and anything derived from it is undefined"
@@ -221,6 +189,33 @@ fn report_non_numeric_fields(doc: &Map<String, Value>, net: &mut DistNetwork) {
             .with_suggested_action("state a number, or omit the field"),
         );
     }
+    // A pointer costs an allocation, so it is built for a container the walk
+    // descends into and for a field it reports, never for a sound leaf.
+    fn walk(obj: &Map<String, Value>, path: &str, net: &mut DistNetwork) {
+        for (key, value) in obj {
+            if key == "extras" {
+                continue;
+            }
+            if is_numeric_field(key) {
+                if let Some(what) = not_numeric(value) {
+                    report(net, format!("{path}/{key}"), what);
+                }
+                continue;
+            }
+            match value {
+                Value::Object(o) => walk(o, &format!("{path}/{key}"), net),
+                Value::Array(a) => {
+                    for (i, e) in a.iter().enumerate() {
+                        if let Value::Object(o) = e {
+                            walk(o, &format!("{path}/{key}/{i}"), net);
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+    walk(doc, "", net);
 }
 
 struct Reader<'a> {
