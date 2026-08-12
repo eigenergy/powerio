@@ -63,8 +63,10 @@ jobs:
         run: pip install ruff mypy
       - name: ruff
         run: ruff check --no-fix .
+      # The `mcp` extra: the server module is inside the type gate, so the SDK
+      # has to be importable or every symbol it names reads as `Any`.
       - name: Install powerio
-        run: pip install .
+        run: pip install '.[mcp]'
       - name: mypy
         run: python -m mypy python/powerio
       # stubtest runs from an empty directory: with the repo (or a venv) as

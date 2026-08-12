@@ -14,16 +14,17 @@ transport serializes either family through the ``.pio.json`` compiler package.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
 import json as jsonlib
 import os
+from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Literal, Optional, overload
 from urllib.parse import unquote, urlparse
+
+from mcp.server.mcpserver import MCPServer
 
 import powerio
 from powerio import dist
-from mcp.server.mcpserver import MCPServer
 
 mcp = MCPServer("powerio")
 
@@ -101,6 +102,18 @@ def _one_input(path: Optional[str], content: Optional[str]) -> None:
         raise ValueError("provide exactly one of `path` or `content`")
 
 
+def _required(value: Optional[str], name: str) -> str:
+    """Narrow an argument an earlier check already settled.
+
+    The input guards run at the top of each entry point, so a call site
+    reaches this with the value set. The raise states the invariant for a
+    type checker, which cannot see across the guard.
+    """
+    if value is None:
+        raise ValueError(f"`{name}` is not set")
+    return value
+
+
 def _one_network_input(
     path: Optional[str],
     content: Optional[str],
@@ -139,8 +152,8 @@ def _allowed_roots() -> tuple[Path, ...]:
     if not raw:
         return ()
     roots = []
-    for item in raw.split(os.pathsep):
-        item = item.strip()
+    for entry in raw.split(os.pathsep):
+        item = entry.strip()
         if item:
             roots.append(Path(item).expanduser().resolve(strict=False))
     return tuple(roots)
@@ -360,9 +373,14 @@ def _diagnostics_payload(package_json: str, verbose: bool = False) -> Dict[str, 
     if not verbose:
         keep = {"code", "severity", "stage", "message", "element_path"}
         diagnostics = [{k: v for k, v in item.items() if k in keep} for item in diagnostics]
-    validation = value.get("validation") if isinstance(value.get("validation"), dict) else {}
-    counts = validation.get("counts") if isinstance(validation.get("counts"), dict) else None
-    counts = dict(counts) if counts is not None else _severity_counts(diagnostics)
+    raw_validation = value.get("validation")
+    validation = raw_validation if isinstance(raw_validation, dict) else {}
+    raw_counts = validation.get("counts")
+    counts = (
+        dict(raw_counts)
+        if isinstance(raw_counts, dict)
+        else _severity_counts(diagnostics)
+    )
     status = validation.get("status") or (
         "fatal"
         if counts.get("fatal", 0)
@@ -453,12 +471,13 @@ def _package_json_from_input(
             return powerio.Package.from_file(
                 path, from_format, int(opts.get("scenario", 0))
             ).to_json()
-        if _looks_like_package_json(content):
-            powerio.Package.from_json(content)
-            return content
+        text = _required(content, "content")
+        if _looks_like_package_json(text):
+            powerio.Package.from_json(text)
+            return text
         if from_l in _PACKAGE_JSON_FORMATS:
             raise ValueError("content is not a .pio.json package envelope")
-        return powerio.Package.from_str(content, from_format).to_json()
+        return powerio.Package.from_str(text, from_format).to_json()
     except powerio.PowerIOError as exc:
         raise ValueError(f"parse failed: {exc}") from exc
     except FileNotFoundError as exc:
@@ -491,7 +510,9 @@ def _parse_transmission(
         if path is not None:
             net = powerio.parse_file(path, format)
         else:
-            net = powerio.parse_str(content, format or "matpower")
+            net = powerio.parse_str(
+                _required(content, "content"), format or "matpower"
+            )
     except powerio.PowerIOError as exc:
         raise ValueError(f"parse failed: {exc}") from exc
     except FileNotFoundError as exc:
@@ -518,7 +539,10 @@ def _parse_distribution(
         if path is not None:
             net = dist.parse_file(path, format)
         else:
-            net = dist.parse_str(content, format)
+            # The block above settles `format` whenever `content` is set.
+            net = dist.parse_str(
+                _required(content, "content"), _required(format, "from_format")
+            )
     except powerio.PowerIOError as exc:
         raise ValueError(f"parse failed: {exc}") from exc
     except FileNotFoundError as exc:
@@ -544,7 +568,7 @@ def _parse_any(
             except OSError as exc:
                 raise ValueError(f"cannot read input: {exc}") from exc
             return _load_package(text)
-        return _load_package(content)
+        return _load_package(_required(content, "content"))
     if _is_gridfm_format(format):
         return _parse_transmission(path, content, format, options)
     if _is_dist_format(format):
@@ -567,13 +591,15 @@ def _parse_any(
             if domain == "distribution":
                 return _parse_distribution(path, content, inferred)
             return _parse_transmission(path, content, inferred, options)
-    elif format is None and _jsonish(content):
-        if _looks_like_package_json(content):
-            return _load_package(content)
-        domain, inferred = _format_from_json_class(*_json_class(content))
-        if domain == "distribution":
-            return _parse_distribution(path, content, inferred)
-        return _parse_transmission(path, content, inferred, options)
+    else:
+        text = _required(content, "content")
+        if format is None and _jsonish(text):
+            if _looks_like_package_json(text):
+                return _load_package(text)
+            domain, inferred = _format_from_json_class(*_json_class(text))
+            if domain == "distribution":
+                return _parse_distribution(path, text, inferred)
+            return _parse_transmission(path, text, inferred, options)
     return _parse_transmission(path, content, format, options)
 
 
@@ -726,6 +752,24 @@ def _choose_from_format(
         if _fmt(value) != _fmt(chosen):
             raise ValueError(f"`{chosen_name}` and `{name}` disagree")
     return chosen
+
+
+@overload
+def _choose_to_format(
+    to_format: Optional[str] = ...,
+    *,
+    to: Optional[str] = ...,
+    required: Literal[True] = ...,
+) -> str: ...
+
+
+@overload
+def _choose_to_format(
+    to_format: Optional[str] = ...,
+    *,
+    to: Optional[str] = ...,
+    required: Literal[False],
+) -> Optional[str]: ...
 
 
 def _choose_to_format(

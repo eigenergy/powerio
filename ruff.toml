@@ -6,10 +6,6 @@
 # Style-modernization families (UP, PYI cosmetics) are deliberately absent:
 # the wheel targets Python 3.9, and annotation spelling is not a defect.
 include = ["python/**/*.py", "python/**/*.pyi"]
-# The MCP server and its test stay outside the gate. The mcp 2.0 port (#272)
-# does not make them pass: 5 findings here and 15 mypy errors remain after it.
-# #297 does that work and then deletes this line.
-exclude = ["python/powerio/mcp/**", "python/tests/test_mcp.py"]
 target-version = "py39"
 
 [lint]
