@@ -410,17 +410,8 @@ fn norm_gens(
         .enumerate()
         .filter(|(_, g)| g.in_service)
         .filter_map(|(row, g)| {
-            let bus = remap(map, g.bus)?;
-            let mut caps = g.caps;
-            for (i, key) in GEN_EXTRA_KEYS.iter().enumerate() {
-                if GEN_PU_KEYS.contains(key) {
-                    if let Some(v) = caps[i] {
-                        caps[i] = Some(v / base);
-                    }
-                }
-            }
             let mut generator = g.clone();
-            generator.bus = bus;
+            generator.bus = remap(map, g.bus)?;
             generator.pg = g.pg / base;
             generator.qg = g.qg / base;
             generator.pmax = g.pmax / base;
@@ -430,7 +421,14 @@ fn norm_gens(
             if let Some(c) = &mut generator.cost {
                 scale_coeffs_to_pu(&mut c.coeffs, c.ncost, c.model, base);
             }
-            generator.caps = caps;
+            // `GenCaps` is indexed by `GEN_EXTRA_KEYS`, so the two zip exactly.
+            for (cap, key) in generator.caps.iter_mut().zip(GEN_EXTRA_KEYS) {
+                if GEN_PU_KEYS.contains(&key)
+                    && let Some(v) = cap
+                {
+                    *v /= base;
+                }
+            }
             // Remap the regulated bus through the same id map; drop it if its
             // target was filtered out so the normalized form stays consistent.
             generator.regulated_bus = g.regulated_bus.and_then(|b| remap(map, b));
