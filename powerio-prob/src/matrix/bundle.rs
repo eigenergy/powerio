@@ -132,7 +132,7 @@ pub fn write_dcopf_bundle(
     options: &DcOpfBundleOptions,
 ) -> Result<DcOpfOutputs> {
     let matrices = build_dc_opf_matrices(instance);
-    let nodal = instance.nodal_generator_data()?;
+    let nodal = instance.nodal_generator_data();
     // The case name comes from source file content, so it must not steer the
     // output path. `sanitize_stem` reduces it to one safe component and
     // disambiguates names that would otherwise sanitize alike, so a batch

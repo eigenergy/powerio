@@ -2,6 +2,8 @@ use serde::{Deserialize, Serialize};
 
 use powerio::{BusId, DcConvention, Error, IndexedNetwork, Result};
 
+use crate::nodal;
+
 /// Unit system for power and generator cost data.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[non_exhaustive]
@@ -118,7 +120,8 @@ pub struct DcBranchData {
     pub skipped_zero_impedance: Vec<usize>,
 }
 
-/// Exact nodal generator data for cases with at most one generator per bus.
+/// Generator data in dense bus order, aggregated over the generators at each
+/// bus. See [`DcOpfInstance::nodal_generator_data`].
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[non_exhaustive]
 pub struct NodalGeneratorData {
@@ -127,6 +130,9 @@ pub struct NodalGeneratorData {
     pub c0: Vec<f64>,
     pub pmax: Vec<f64>,
     pub pmin: Vec<f64>,
+    /// Which buses host a generator. A bus without one has a zero range and a
+    /// zero cost, which a formulation must not read as a free generator.
+    pub has_gen: Vec<bool>,
 }
 
 /// Matrix free DC OPF input data.
@@ -175,40 +181,30 @@ impl DcOpfInstance {
         self.branches.b.len()
     }
 
-    /// Project generator cost and bounds to buses when the reduction is exact.
+    /// Project generator cost and bounds to bus space.
     ///
-    /// A bus with several generators is rejected because summing their
-    /// quadratic coefficients does not preserve the original objective.
-    pub fn nodal_generator_data(&self) -> Result<NodalGeneratorData> {
-        let mut occupied = vec![false; self.n_buses];
-        let mut q = vec![0.0; self.n_buses];
-        let mut c = vec![0.0; self.n_buses];
-        let mut c0 = vec![0.0; self.n_buses];
-        let mut pmax = vec![0.0; self.n_buses];
-        let mut pmin = vec![0.0; self.n_buses];
-
-        for generator in 0..self.n_generators() {
-            let bus = self.generators.bus_of_gen[generator];
-            if occupied[bus] {
-                return Err(Error::MultipleGeneratorsAtBus {
-                    bus_id: self.bus_ids[bus],
-                });
-            }
-            occupied[bus] = true;
-            q[bus] = self.generators.q[generator];
-            c[bus] = self.generators.c[generator];
-            c0[bus] = self.generators.c0[generator];
-            pmax[bus] = self.generators.pmax[generator];
-            pmin[bus] = self.generators.pmin[generator];
+    /// The bounds at a bus are the sum of the generator bounds, which is the
+    /// range the bus total can reach. The cost curves at a bus combine by the
+    /// parallel rule `q = 1 / Σ(1/qᵢ)`, the curve that the least cost split of
+    /// the bus total follows. That combination is an approximation: it agrees
+    /// with generator space only while the split stays inside the bound of
+    /// each generator. A bus with one generator keeps that generator's own
+    /// coefficients.
+    #[must_use]
+    pub fn nodal_generator_data(&self) -> NodalGeneratorData {
+        let n = self.n_buses;
+        let generators = &self.generators;
+        let bus_of_gen = &generators.bus_of_gen;
+        let costs =
+            nodal::combine_costs(n, bus_of_gen, &generators.q, &generators.c, &generators.c0);
+        NodalGeneratorData {
+            q: costs.q,
+            c: costs.c,
+            c0: costs.c0,
+            pmax: nodal::sum_by_bus(n, bus_of_gen, &generators.pmax),
+            pmin: nodal::sum_by_bus(n, bus_of_gen, &generators.pmin),
+            has_gen: nodal::buses_with_generators(n, bus_of_gen),
         }
-
-        Ok(NodalGeneratorData {
-            q,
-            c,
-            c0,
-            pmax,
-            pmin,
-        })
     }
 }
 

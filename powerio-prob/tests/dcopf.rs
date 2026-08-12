@@ -73,7 +73,7 @@ fn instance_is_complete_and_indexed() {
 }
 
 #[test]
-fn several_generators_at_one_bus_keep_separate_costs() {
+fn several_generators_at_one_bus_keep_separate_costs_and_aggregate() {
     let mut net = case9();
     let mut extra = net.generators[0].clone();
     extra.uid = Some("extra-generator".to_owned());
@@ -83,16 +83,35 @@ fn several_generators_at_one_bus_keep_separate_costs() {
     let view = IndexedNetwork::new(&net);
     let problem = build_dc_opf_instance(&view, &DcOpfOptions::default()).expect("build");
     assert_eq!(problem.n_generators(), 4);
-    assert_eq!(
-        problem.generators.bus_of_gen[0],
-        problem.generators.bus_of_gen[3]
-    );
+    let shared = problem.generators.bus_of_gen[0];
+    assert_eq!(shared, problem.generators.bus_of_gen[3]);
     assert!((problem.generators.q[0] - problem.generators.q[3]).abs() > 1e-12);
     assert!((problem.generators.c[0] - problem.generators.c[3]).abs() > 1e-12);
-    assert!(matches!(
-        problem.nodal_generator_data(),
-        Err(Error::MultipleGeneratorsAtBus { .. })
-    ));
+
+    let gens = &problem.generators;
+    let nodal = problem.nodal_generator_data();
+    assert!(nodal.has_gen[shared]);
+    let parallel_q = 1.0 / (1.0 / gens.q[0] + 1.0 / gens.q[3]);
+    assert_close(nodal.q[shared], parallel_q);
+    assert_close(
+        nodal.c[shared],
+        parallel_q * (gens.c[0] / gens.q[0] + gens.c[3] / gens.q[3]),
+    );
+    assert_close(nodal.pmax[shared], gens.pmax[0] + gens.pmax[3]);
+    assert_close(nodal.pmin[shared], gens.pmin[0] + gens.pmin[3]);
+
+    // A bus with one generator keeps that generator's own curve, bit for bit.
+    let alone = gens.bus_of_gen[1];
+    assert_eq!(nodal.q[alone].to_bits(), gens.q[1].to_bits());
+    assert_eq!(nodal.c[alone].to_bits(), gens.c[1].to_bits());
+    assert_eq!(nodal.c0[alone].to_bits(), gens.c0[1].to_bits());
+
+    let idle = (0..problem.n_buses)
+        .find(|&bus| !nodal.has_gen[bus])
+        .expect("a bus without a generator");
+    assert_close(nodal.q[idle], 0.0);
+    assert_close(nodal.pmax[idle], 0.0);
+    assert_close(nodal.pmin[idle], 0.0);
 }
 
 #[test]
@@ -191,7 +210,7 @@ fn cost_constant_term_is_kept() {
     let problem =
         build_dc_opf_instance(&IndexedNetwork::new(&net), &DcOpfOptions::default()).expect("build");
     assert_close(problem.generators.c0[0], 5.0);
-    let nodal = problem.nodal_generator_data().expect("nodal");
+    let nodal = problem.nodal_generator_data();
     assert_close(nodal.c0[problem.generators.bus_of_gen[0]], 5.0);
 }
 
@@ -430,7 +449,7 @@ mod matrix_tests {
             powerio_matrix::io::read_vector_mtx(bundle.dir.join("c0_gen.mtx")).expect("c0_gen");
         assert_eq!(c0_gen, problem.generators.c0);
         let c0 = powerio_matrix::io::read_vector_mtx(bundle.dir.join("c0.mtx")).expect("c0");
-        assert_eq!(c0, problem.nodal_generator_data().expect("nodal").c0);
+        assert_eq!(c0, problem.nodal_generator_data().c0);
         assert_eq!(manifest["dimensions"]["n_buses"], problem.n_buses);
         assert_eq!(
             manifest["dimensions"]["n_generators"],

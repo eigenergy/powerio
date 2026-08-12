@@ -319,6 +319,28 @@ fn out_of_service_exclusion() {
 }
 
 #[test]
+fn nodal_data_sums_the_reactive_range_and_flags_the_generator_buses() {
+    let mut net = small_network();
+    let mut extra = generator(10, 3.0, 4.0, 2.0);
+    extra.qmax = 10.0;
+    extra.qmin = -5.0;
+    net.generators.push(extra);
+    let problem =
+        build_ac_opf_instance(&IndexedNetwork::new(&net), &AcOpfOptions::default()).expect("build");
+
+    let gens = &problem.generators;
+    let nodal = problem.nodal_generator_data();
+    assert_eq!(nodal.has_gen, vec![true, false]);
+    assert_close(nodal.qmax[0], gens.qmax[0] + gens.qmax[1]);
+    assert_close(nodal.qmin[0], gens.qmin[0] + gens.qmin[1]);
+    assert_close(nodal.pmax[0], gens.pmax[0] + gens.pmax[1]);
+    assert_close(nodal.q[0], 1.0 / (1.0 / gens.q[0] + 1.0 / gens.q[1]));
+    // The bus without a generator holds a zero range.
+    assert_close(nodal.qmax[1], 0.0);
+    assert_close(nodal.qmin[1], 0.0);
+}
+
+#[test]
 fn vm_setpoints_follow_generator_voltage() {
     let mut net = small_network();
     net.buses[0].vm = 0.0;

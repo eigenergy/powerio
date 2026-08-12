@@ -2,7 +2,7 @@ use serde::{Deserialize, Serialize};
 
 use powerio::{BusId, Error, IndexedNetwork, Result};
 
-use crate::Units;
+use crate::{Units, nodal};
 
 /// Options for AC OPF instance assembly.
 ///
@@ -115,6 +115,25 @@ pub struct AcGeneratorData {
     pub vg: Vec<f64>,
 }
 
+/// Generator data in dense bus order, aggregated over the generators at each
+/// bus. See [`AcOpfInstance::nodal_generator_data`].
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[non_exhaustive]
+pub struct NodalAcGeneratorData {
+    pub q: Vec<f64>,
+    pub c: Vec<f64>,
+    pub c0: Vec<f64>,
+    pub pmax: Vec<f64>,
+    pub pmin: Vec<f64>,
+    pub qmax: Vec<f64>,
+    pub qmin: Vec<f64>,
+    /// Which buses host a generator. A bus without one has a zero range and a
+    /// zero cost, which a formulation must not read as a free generator. A
+    /// reactive limit loop reads it to tell a bus that holds its voltage from
+    /// one that cannot.
+    pub has_gen: Vec<bool>,
+}
+
 /// Matrix free AC OPF input data on the branch pi model.
 ///
 /// A problem instance is complete numerical input for one problem family. It
@@ -156,6 +175,34 @@ impl AcOpfInstance {
     #[must_use]
     pub fn n_branches(&self) -> usize {
         self.branches.g.len()
+    }
+
+    /// Project generator cost and bounds to bus space.
+    ///
+    /// The bounds at a bus are the sum of the generator bounds, which is the
+    /// range the bus total can reach. The cost curves at a bus combine by the
+    /// parallel rule `q = 1 / Σ(1/qᵢ)`, the curve that the least cost split of
+    /// the bus total follows. That combination is an approximation: it agrees
+    /// with generator space only while the split stays inside the bound of
+    /// each generator. A bus with one generator keeps that generator's own
+    /// coefficients.
+    #[must_use]
+    pub fn nodal_generator_data(&self) -> NodalAcGeneratorData {
+        let n = self.n_buses;
+        let generators = &self.generators;
+        let bus_of_gen = &generators.bus_of_gen;
+        let costs =
+            nodal::combine_costs(n, bus_of_gen, &generators.q, &generators.c, &generators.c0);
+        NodalAcGeneratorData {
+            q: costs.q,
+            c: costs.c,
+            c0: costs.c0,
+            pmax: nodal::sum_by_bus(n, bus_of_gen, &generators.pmax),
+            pmin: nodal::sum_by_bus(n, bus_of_gen, &generators.pmin),
+            qmax: nodal::sum_by_bus(n, bus_of_gen, &generators.qmax),
+            qmin: nodal::sum_by_bus(n, bus_of_gen, &generators.qmin),
+            has_gen: nodal::buses_with_generators(n, bus_of_gen),
+        }
     }
 
     /// Conventional voltage magnitude start: the case voltage, overwritten by

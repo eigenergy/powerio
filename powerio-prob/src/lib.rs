@@ -7,13 +7,15 @@
 
 mod ac;
 mod dc;
+mod nodal;
 pub mod scopf;
 
 #[cfg(feature = "matrix")]
 pub mod matrix;
 
 pub use ac::{
-    AcBranchData, AcBusData, AcGeneratorData, AcOpfInstance, AcOpfOptions, build_ac_opf_instance,
+    AcBranchData, AcBusData, AcGeneratorData, AcOpfInstance, AcOpfOptions, NodalAcGeneratorData,
+    build_ac_opf_instance,
 };
 pub use dc::{
     DcBranchData, DcGeneratorData, DcOpfInstance, DcOpfOptions, NodalGeneratorData, Units,
