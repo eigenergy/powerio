@@ -178,6 +178,9 @@ impl GenCost {
         if self.coeffs.len() < self.ncost {
             return None;
         }
+        // Matches on the stated arity, so a cubic row is refused even when its
+        // leading coefficient is zero. `quadratic_with_constant_tol` is the
+        // reader that lowers the order first.
         match self.ncost {
             3 => Some((2.0 * self.coeffs[0], self.coeffs[1], self.coeffs[2])),
             2 => Some((0.0, self.coeffs[0], self.coeffs[1])),

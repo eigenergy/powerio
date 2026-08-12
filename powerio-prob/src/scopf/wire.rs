@@ -264,8 +264,7 @@ pub fn to_wire_value(instance: &ScopfInstance) -> ScopfResult<Value> {
         ac_contingency_survivors,
         dc_contingency_flows,
         violation_cost,
-        producers_first,
-        device_classes_contiguous,
+        device_class_layout,
     } = instance;
     let mut wire = Map::new();
     wire.insert("static".to_owned(), wire_static(static_data)?);
@@ -284,10 +283,9 @@ pub fn to_wire_value(instance: &ScopfInstance) -> ScopfResult<Value> {
         wire_rows(dc_contingency_flows)?,
     );
     wire.insert("violation_cost".to_owned(), wire_object(violation_cost)?);
-    wire.insert("producers_first".to_owned(), Value::from(*producers_first));
     wire.insert(
-        "device_classes_contiguous".to_owned(),
-        Value::from(*device_classes_contiguous),
+        "device_class_layout".to_owned(),
+        serde_json::to_value(device_class_layout)?,
     );
     Ok(serde_json::to_value(WireEnvelope {
         schema: SCOPF_WIRE_SCHEMA,

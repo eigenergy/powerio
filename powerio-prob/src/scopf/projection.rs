@@ -12,7 +12,7 @@ use super::goc3::{
 use super::types::{
     ScopfAcContingencySurvivors, ScopfAcLineRow, ScopfAcLineSurvivorRow, ScopfActiveReserveRow,
     ScopfActiveReserveSetRow, ScopfBusRow, ScopfCostRow, ScopfDcContingencyFlowRow, ScopfDcLineRow,
-    ScopfDeviceRow, ScopfEnergyWindowMaxCsRow, ScopfEnergyWindowMaxPrRow,
+    ScopfDeviceClassLayout, ScopfDeviceRow, ScopfEnergyWindowMaxCsRow, ScopfEnergyWindowMaxPrRow,
     ScopfEnergyWindowMinCsRow, ScopfEnergyWindowMinPrRow, ScopfEnergyWindowPeriodMaxCsRow,
     ScopfEnergyWindowPeriodMaxPrRow, ScopfEnergyWindowPeriodMinCsRow,
     ScopfEnergyWindowPeriodMinPrRow, ScopfEnergyWindows, ScopfFixedPhaseRow, ScopfFixedRatioRow,
@@ -1024,15 +1024,13 @@ fn build_violation_cost(tables: &Goc3Adapter) -> ScopfViolationCost {
     }
 }
 
-/// `(producers_first, contiguous)` over the `simple_dispatchable_device`
-/// section in document order: whether the producer run starts before the
-/// consumer run, and whether each class is one unbroken run. Document order is
-/// the index rule for every per-class index here, so the two facts are read
-/// off the same order and need no UID shape.
-fn device_class_blocks(tables: &Goc3Adapter) -> Result<(bool, bool)> {
+/// How the two device classes sit in the `simple_dispatchable_device`
+/// section, read in document order. Document order is the index rule for
+/// every per-class index here, so this needs no UID shape.
+fn device_class_blocks(tables: &Goc3Adapter) -> Result<ScopfDeviceClassLayout> {
     let mut runs: Vec<&str> = Vec::new();
-    for uid in tables.sdd_order() {
-        let kind = sdd_device_type(tables.sdd.get(&uid)?);
+    for uid in tables.sdd.uids() {
+        let kind = sdd_device_type(tables.sdd.get(uid)?);
         let kind = if kind == "consumer" {
             "consumer"
         } else {
@@ -1042,8 +1040,12 @@ fn device_class_blocks(tables: &Goc3Adapter) -> Result<(bool, bool)> {
             runs.push(kind);
         }
     }
-    let producers_first = runs.first() != Some(&"consumer");
-    Ok((producers_first, runs.len() <= 2))
+    if runs.len() > 2 {
+        return Ok(ScopfDeviceClassLayout::Interleaved);
+    }
+    Ok(ScopfDeviceClassLayout::Contiguous {
+        producers_first: runs.first() != Some(&"consumer"),
+    })
 }
 
 fn project_scopf_instance(tables: &Goc3Adapter) -> Result<ScopfInstance> {
@@ -1053,7 +1055,7 @@ fn project_scopf_instance(tables: &Goc3Adapter) -> Result<ScopfInstance> {
         cost_vector_pr,
         cost_vector_cs,
     } = build_static_projection(tables)?;
-    let (producers_first, device_classes_contiguous) = device_class_blocks(tables)?;
+    let device_class_layout = device_class_blocks(tables)?;
     Ok(ScopfInstance {
         static_data,
         lengths,
@@ -1062,8 +1064,7 @@ fn project_scopf_instance(tables: &Goc3Adapter) -> Result<ScopfInstance> {
         ac_contingency_survivors: build_ac_contingency_survivors(tables)?,
         dc_contingency_flows: build_dc_contingency_flows(tables)?,
         violation_cost: build_violation_cost(tables),
-        producers_first,
-        device_classes_contiguous,
+        device_class_layout,
     })
 }
 

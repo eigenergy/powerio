@@ -16,7 +16,7 @@ pub enum DcConvention {
         since = "0.9.0",
         note = "use `SeriesImpedance`, which is the same rule with resistance included, or `Matpower`; removed in 1.0.0"
     )]
-    PaperPure,
+    ReactanceOnly,
     /// `b = 1/(x tau)` with phase shift injections, matching MATPOWER
     /// `makeBdc`.
     Matpower,
@@ -31,6 +31,12 @@ pub enum DcConvention {
 }
 
 impl DcConvention {
+    /// The 0.8 spelling of [`Self::ReactanceOnly`], which named neither the
+    /// tool nor the formula.
+    #[deprecated(since = "0.9.0", note = "renamed to `ReactanceOnly`; removed in 1.0.0")]
+    #[allow(deprecated, non_upper_case_globals)]
+    pub const PaperPure: Self = Self::ReactanceOnly;
+
     /// The branch susceptance from resistance, reactance, and effective tap.
     /// Only [`Self::Matpower`] reads the tap, and only
     /// [`Self::SeriesImpedance`] reads the resistance.
@@ -38,7 +44,7 @@ impl DcConvention {
     #[allow(deprecated)]
     pub fn branch_susceptance(self, resistance: f64, reactance: f64, effective_tap: f64) -> f64 {
         match self {
-            Self::PaperPure => 1.0 / reactance,
+            Self::ReactanceOnly => 1.0 / reactance,
             Self::Matpower => 1.0 / (reactance * effective_tap),
             Self::SeriesImpedance => reactance / (resistance * resistance + reactance * reactance),
         }
@@ -49,7 +55,7 @@ impl DcConvention {
     #[allow(deprecated)]
     pub fn includes_phase_shifts(self) -> bool {
         match self {
-            Self::PaperPure => false,
+            Self::ReactanceOnly => false,
             Self::Matpower | Self::SeriesImpedance => true,
         }
     }

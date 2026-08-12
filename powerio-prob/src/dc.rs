@@ -104,7 +104,8 @@ pub struct DcGeneratorData {
 pub struct DcBranchData {
     pub from_bus: Vec<usize>,
     pub to_bus: Vec<usize>,
-    /// Branch coefficient in the selected power unit per radian.
+    /// Branch susceptance in the selected power unit per radian, positive for
+    /// an inductive branch.
     pub b: Vec<f64>,
     /// Phase shift in radians. Zero unless the convention carries phase shift
     /// injections.

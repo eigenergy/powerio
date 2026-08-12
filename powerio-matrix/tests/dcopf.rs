@@ -1,7 +1,7 @@
 //! DC OPF matrix forge: incidence, Laplacian, OPF instance, and the export
 //! bundle. Run against vendored MATPOWER cases.
 //!
-//! These cases pin `b = 1/x`, so they name `DcConvention::PaperPure` until it
+//! These cases pin `b = 1/x`, so they name `DcConvention::ReactanceOnly` until it
 //! is removed in 1.0.0. `SeriesImpedance` gives a different weight for any
 //! branch that carries resistance.
 #![allow(deprecated)]
@@ -123,7 +123,7 @@ fn laplacian_equals_bprime_xb() {
         let case = load(path);
         let view = IndexedNetwork::new(&case);
         let inc =
-            build_incidence(&view, DcConvention::PaperPure, &BuildOptions::default()).unwrap();
+            build_incidence(&view, DcConvention::ReactanceOnly, &BuildOptions::default()).unwrap();
         let l = build_weighted_laplacian(&inc.a, &inc.b);
         let bp = build_bprime(
             &view,
@@ -154,7 +154,7 @@ fn incidence_structure() {
         let case = load(path);
         let view = IndexedNetwork::new(&case);
         let inc =
-            build_incidence(&view, DcConvention::PaperPure, &BuildOptions::default()).unwrap();
+            build_incidence(&view, DcConvention::ReactanceOnly, &BuildOptions::default()).unwrap();
         let (n, m) = (inc.n(), inc.m());
         assert_eq!(inc.a.rows(), n);
         assert_eq!(inc.a.cols(), m);
@@ -185,7 +185,7 @@ fn laplacian_is_psd_with_constant_kernel() {
         let case = load(path);
         let view = IndexedNetwork::new(&case);
         let inc =
-            build_incidence(&view, DcConvention::PaperPure, &BuildOptions::default()).unwrap();
+            build_incidence(&view, DcConvention::ReactanceOnly, &BuildOptions::default()).unwrap();
         let l = build_weighted_laplacian(&inc.a, &inc.b);
         let d = dense(&l);
         let n = d.len();
@@ -207,7 +207,7 @@ fn grounded_laplacian_is_spd() {
         let view = IndexedNetwork::new(&case);
         let r = view.reference_bus_index().unwrap();
         let inc =
-            build_incidence(&view, DcConvention::PaperPure, &BuildOptions::default()).unwrap();
+            build_incidence(&view, DcConvention::ReactanceOnly, &BuildOptions::default()).unwrap();
         let l = build_weighted_laplacian(&inc.a, &inc.b);
         let lg = ground_at(&l, r);
         assert_eq!(lg.rows(), view.n() - 1);
@@ -222,7 +222,7 @@ fn flow_map_reconstructs_laplacian() {
         let case = load(path);
         let view = IndexedNetwork::new(&case);
         let inc =
-            build_incidence(&view, DcConvention::PaperPure, &BuildOptions::default()).unwrap();
+            build_incidence(&view, DcConvention::ReactanceOnly, &BuildOptions::default()).unwrap();
         let flow = build_flow_map(&inc.a, &inc.b); // B Aᵀ, m×n
         assert_eq!(flow.rows(), inc.m());
         assert_eq!(flow.cols(), inc.n());
@@ -295,8 +295,8 @@ fn ptdf_satisfies_kcl() {
         let view = IndexedNetwork::new(&case);
         let r = view.reference_bus_index().unwrap();
         let inc =
-            build_incidence(&view, DcConvention::PaperPure, &BuildOptions::default()).unwrap();
-        let ptdf = build_ptdf(&view, DcConvention::PaperPure).unwrap();
+            build_incidence(&view, DcConvention::ReactanceOnly, &BuildOptions::default()).unwrap();
+        let ptdf = build_ptdf(&view, DcConvention::ReactanceOnly).unwrap();
         assert_eq!(ptdf.rows(), inc.m());
         assert_eq!(ptdf.cols(), view.n());
         let m = dense(&(&inc.a * &ptdf)); // n × n
@@ -326,9 +326,9 @@ fn lodf_diagonal_is_minus_one() {
     for path in CASES {
         let case = load(path);
         let view = IndexedNetwork::new(&case);
-        let lodf = build_lodf(&view, DcConvention::PaperPure).unwrap();
+        let lodf = build_lodf(&view, DcConvention::ReactanceOnly).unwrap();
         let inc =
-            build_incidence(&view, DcConvention::PaperPure, &BuildOptions::default()).unwrap();
+            build_incidence(&view, DcConvention::ReactanceOnly, &BuildOptions::default()).unwrap();
         assert_eq!(lodf.rows(), inc.m());
         assert_eq!(lodf.cols(), inc.m());
         let d = dense(&lodf);
@@ -597,7 +597,7 @@ fn ptdf_matches_analytic_triangle() {
     // Inject at bus j, withdraw at slack; read the flow on each branch.
     let case = triangle();
     let view = IndexedNetwork::new(&case);
-    let ptdf = dense(&build_ptdf(&view, DcConvention::PaperPure).unwrap());
+    let ptdf = dense(&build_ptdf(&view, DcConvention::ReactanceOnly).unwrap());
     let expected = [
         [0.0, -2.0 / 3.0, -1.0 / 3.0], // e0: 1→2
         [0.0, -1.0 / 3.0, -2.0 / 3.0], // e1: 1→3
@@ -621,7 +621,7 @@ fn lodf_matches_analytic_triangle() {
     // two, giving ±1 entries.
     let case = triangle();
     let view = IndexedNetwork::new(&case);
-    let lodf = dense(&build_lodf(&view, DcConvention::PaperPure).unwrap());
+    let lodf = dense(&build_lodf(&view, DcConvention::ReactanceOnly).unwrap());
     let expected = [[-1.0, 1.0, -1.0], [1.0, -1.0, 1.0], [-1.0, 1.0, -1.0]];
     for (l, row) in expected.iter().enumerate() {
         for (k, &want) in row.iter().enumerate() {
@@ -646,7 +646,7 @@ fn matpower_convention_tap_and_shift() {
     let view = IndexedNetwork::new(&case);
 
     // PaperPure ignores tap and shift: b = 1/x, no phase injection.
-    let pp = build_incidence(&view, DcConvention::PaperPure, &BuildOptions::default()).unwrap();
+    let pp = build_incidence(&view, DcConvention::ReactanceOnly, &BuildOptions::default()).unwrap();
     assert!((pp.b[0] - 1.0 / x).abs() < 1e-12);
     assert!(pp.p_shift.iter().all(|&v| v == 0.0));
 
@@ -675,7 +675,7 @@ fn radial_lodf_is_negative_identity() {
         vec![branch(1, 2, 0.1), branch(2, 3, 0.1)],
     );
     let view = IndexedNetwork::new(&case);
-    let lodf = dense(&build_lodf(&view, DcConvention::PaperPure).unwrap());
+    let lodf = dense(&build_lodf(&view, DcConvention::ReactanceOnly).unwrap());
     for l in 0..2 {
         for k in 0..2 {
             let want = if l == k { -1.0 } else { 0.0 };
@@ -697,8 +697,8 @@ fn ptdf_handles_indefinite_but_invertible_laplacian() {
     );
     let view = IndexedNetwork::new(&case);
 
-    let ptdf = dense(&build_ptdf(&view, DcConvention::PaperPure).unwrap());
-    let lodf = dense(&build_lodf(&view, DcConvention::PaperPure).unwrap());
+    let ptdf = dense(&build_ptdf(&view, DcConvention::ReactanceOnly).unwrap());
+    let lodf = dense(&build_lodf(&view, DcConvention::ReactanceOnly).unwrap());
 
     assert_eq!(ptdf.len(), 1);
     assert!(ptdf[0][0].abs() < 1e-12);
@@ -722,12 +722,12 @@ fn ungrounded_island_errors() {
     );
     let view = IndexedNetwork::new(&case);
     assert_eq!(view.n_connected_components(), 2);
-    let p = build_ptdf(&view, DcConvention::PaperPure).unwrap_err();
+    let p = build_ptdf(&view, DcConvention::ReactanceOnly).unwrap_err();
     assert!(
         matches!(p, Error::UngroundedComponent { components: 1 }),
         "ptdf: {p:?}"
     );
-    let l = build_lodf(&view, DcConvention::PaperPure).unwrap_err();
+    let l = build_lodf(&view, DcConvention::ReactanceOnly).unwrap_err();
     assert!(
         matches!(l, Error::UngroundedComponent { components: 1 }),
         "lodf: {l:?}"
@@ -751,7 +751,7 @@ fn two_grounded_islands_solve_block_diagonal() {
     );
     let view = IndexedNetwork::new(&case);
     assert_eq!(view.reference_bus_indices(), vec![0, 2]);
-    let ptdf = dense(&build_ptdf(&view, DcConvention::PaperPure).unwrap());
+    let ptdf = dense(&build_ptdf(&view, DcConvention::ReactanceOnly).unwrap());
     // Branch 0 is in island {0,1}; its only nonzero sensitivity is to that
     // island's non-slack bus (col 1). Branch 1 is in island {2,3} → col 3.
     // Both reference columns (0 and 2) are zero. The sign is −1: a unit
@@ -793,7 +793,7 @@ fn multi_reference_two_refs_one_island() {
     );
     let view = IndexedNetwork::new(&case);
     assert_eq!(view.reference_bus_indices(), vec![0, 2]);
-    let ptdf = dense(&build_ptdf(&view, DcConvention::PaperPure).unwrap());
+    let ptdf = dense(&build_ptdf(&view, DcConvention::ReactanceOnly).unwrap());
     // Both reference columns (0 and 2) are zero; the middle bus (col 1) splits.
     for (l, row) in ptdf.iter().enumerate() {
         assert!(row[0].abs() < 1e-12, "ref col 0 nonzero on branch {l}");
@@ -834,7 +834,7 @@ fn lodf_two_refs_multi_reference_triangle() {
     );
     let view = IndexedNetwork::new(&case);
     assert_eq!(view.reference_bus_indices(), vec![0, 2]);
-    let lodf = dense(&build_lodf(&view, DcConvention::PaperPure).unwrap());
+    let lodf = dense(&build_lodf(&view, DcConvention::ReactanceOnly).unwrap());
     let expected = [[-1.0, 0.0, -1.0], [0.0, -1.0, 0.0], [-1.0, 0.0, -1.0]];
     for (l, row) in expected.iter().enumerate() {
         for (k, &want) in row.iter().enumerate() {

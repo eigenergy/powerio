@@ -528,7 +528,7 @@ enum DcConvArg {
     /// `b = 1/(x tau)`, with phase shift injections.
     Matpower,
     /// `b = 1/x`. Accepted until 1.0.0; use `series`.
-    PaperPure,
+    ReactanceOnly,
 }
 
 impl From<DcConvArg> for DcConvention {
@@ -537,7 +537,7 @@ impl From<DcConvArg> for DcConvention {
         match value {
             DcConvArg::SeriesImpedance => Self::SeriesImpedance,
             DcConvArg::Matpower => Self::Matpower,
-            DcConvArg::PaperPure => Self::PaperPure,
+            DcConvArg::ReactanceOnly => Self::PaperPure,
         }
     }
 }

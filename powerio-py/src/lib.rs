@@ -127,7 +127,7 @@ fn parse_convention(s: &str) -> PyResult<DcConvention> {
     match normalize(s).as_str() {
         "series" | "seriesimpedance" => Ok(DcConvention::SeriesImpedance),
         "matpower" | "mp" => Ok(DcConvention::Matpower),
-        "paper" | "paperpure" | "pure" => Ok(DcConvention::PaperPure),
+        "paper" | "paperpure" | "pure" => Ok(DcConvention::ReactanceOnly),
         other => Err(PyValueError::new_err(format!(
             "unknown convention {other:?}; expected 'series' or 'matpower'"
         ))),

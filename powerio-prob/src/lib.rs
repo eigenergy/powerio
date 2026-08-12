@@ -24,4 +24,6 @@ pub use dc::{
 };
 pub use powerio::{DcConvention, Error, Result};
 pub use reference::ReferenceBuses;
-pub use scopf::{ScopfError, ScopfInstance, ScopfResult, build_scopf_instance_from_str};
+pub use scopf::{
+    ScopfDeviceClassLayout, ScopfError, ScopfInstance, ScopfResult, build_scopf_instance_from_str,
+};
