@@ -9,8 +9,9 @@ import pytest
 
 pytest.importorskip("mcp", reason="powerio[mcp] not installed (needs Python 3.10+)")
 
-import powerio  # noqa: E402
-from powerio.mcp import server  # noqa: E402
+from powerio.mcp import server
+
+import powerio
 
 DATA = Path(__file__).resolve().parents[2] / "tests" / "data"
 DSS = DATA / "dist" / "micro" / "xfmr_single_phase.dss"
