@@ -137,6 +137,43 @@ fn cost_constant_term_is_kept() {
     assert_close(nodal.c0[problem.generators.bus_of_gen[0]], 5.0);
 }
 
+/// A bus shunt draws constant real power under the DC approximation. The
+/// instance must carry it: the bus susceptance matrix cannot, because its row
+/// sums are zero.
+#[test]
+fn bus_shunt_conductance_reaches_the_instance() {
+    let mut net = small_network();
+    net.shunts
+        .push(powerio::network::Shunt::new(BusId(30), 5.0, 0.0));
+    let view = IndexedNetwork::new(&net);
+    let base = view.base_mva();
+
+    let per_unit = build_dc_opf_instance(&view, &DcOpfOptions::default()).expect("per unit");
+    assert_eq!(per_unit.g_s.len(), per_unit.n_buses);
+    assert_close(per_unit.g_s[1], 5.0 / base);
+    assert_close(per_unit.g_s[0], 0.0);
+
+    let native = build_dc_opf_instance(
+        &view,
+        &DcOpfOptions {
+            units: Units::Native,
+            ..DcOpfOptions::default()
+        },
+    )
+    .expect("native");
+    assert_close(native.g_s[1], 5.0);
+}
+
+/// A case with no shunt reads zero, not a shorter vector.
+#[test]
+fn a_shuntless_case_carries_zero_conductance() {
+    let net = case9();
+    let problem =
+        build_dc_opf_instance(&IndexedNetwork::new(&net), &DcOpfOptions::default()).expect("build");
+    assert_eq!(problem.g_s.len(), problem.n_buses);
+    assert!(problem.g_s.iter().all(|value| value.abs() < 1e-12));
+}
+
 #[test]
 fn matpower_convention_applies_tap_and_phase_shift() {
     let mut net = small_network();

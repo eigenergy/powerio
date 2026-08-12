@@ -144,6 +144,14 @@ pub struct DcOpfInstance {
     pub reference_buses: Vec<usize>,
     /// Nodal active demand in dense bus order.
     pub p_d: Vec<f64>,
+    /// Nodal shunt conductance in dense bus order.
+    ///
+    /// The DC approximation holds the voltage magnitude at one per unit, so a
+    /// shunt draws the constant real power `g_s` and does not depend on the
+    /// angle. It belongs in the injection and not in the bus susceptance
+    /// matrix, whose row sums must stay zero. A nodal balance subtracts it
+    /// beside [`Self::p_d`], as MATPOWER `runpf` does.
+    pub g_s: Vec<f64>,
     /// Nodal phase shift injection in dense bus order.
     pub p_shift: Vec<f64>,
     pub generators: DcGeneratorData,
@@ -321,6 +329,7 @@ pub fn build_dc_opf_instance(
         bus_ids: (0..n_buses).map(|index| case.bus_id(index)).collect(),
         reference_buses: case.reference_bus_indices(),
         p_d: case.pd().iter().map(|value| value * p_scale).collect(),
+        g_s: case.gs().iter().map(|value| value * p_scale).collect(),
         p_shift,
         generators: DcGeneratorData {
             bus_of_gen,
