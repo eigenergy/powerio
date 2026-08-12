@@ -688,6 +688,12 @@ fn dense_to_csr_with_drop(
 }
 
 fn dense_inverse(a: &[f64], n: usize) -> Option<Vec<f64>> {
+    // The pivot floor tracks the matrix's own scale. A fixed 1e-12 is at once
+    // too strict for a legitimately small scaled matrix and far too loose for
+    // one whose entries run to 1e12.
+    let scale = a.iter().fold(0.0_f64, |m, v| m.max(v.abs()));
+    #[allow(clippy::cast_precision_loss)]
+    let floor = n as f64 * f64::EPSILON * scale;
     let mut a = a.to_vec();
     let mut inv = vec![0.0; n * n];
     for i in 0..n {
@@ -704,7 +710,7 @@ fn dense_inverse(a: &[f64], n: usize) -> Option<Vec<f64>> {
                 pivot_row = r;
             }
         }
-        if !pivot_abs.is_finite() || pivot_abs <= 1e-12 {
+        if !pivot_abs.is_finite() || pivot_abs <= floor {
             return None;
         }
         if pivot_row != col {
@@ -867,6 +873,14 @@ struct DenseCholesky {
 
 impl DenseCholesky {
     fn factor(a: &[f64], n: usize) -> Option<Self> {
+        // A pivot is accepted against the matrix's own scale. `s > 0.0` alone
+        // accepts 1e-300, whose square root divides the column by 1e-150 twice
+        // and returns entries near 1e300 with no error — the shape a near
+        // disconnected island joined by one very high impedance branch takes,
+        // which `check_reference_coverage` passes.
+        let scale = a.iter().fold(0.0_f64, |m, v| m.max(v.abs()));
+        #[allow(clippy::cast_precision_loss)]
+        let floor = n as f64 * f64::EPSILON * scale;
         let mut l = vec![0.0; n * n];
         for i in 0..n {
             for j in 0..=i {
@@ -875,13 +889,13 @@ impl DenseCholesky {
                     s -= l[i * n + k] * l[j * n + k];
                 }
                 if i == j {
-                    // `!(s > 0.0)` rejects negative, zero, AND NaN pivots:
-                    // `NaN <= 0.0` is false, so `s <= 0.0` would let a
+                    // `!(s > floor)` rejects negative, too small, AND NaN
+                    // pivots: `NaN <= x` is false, so `s <= floor` would let a
                     // NaN-poisoned matrix factor "successfully" into all-NaN.
                     // The negated comparison is the point (NaN incomparability),
                     // so the partial_cmp rewrite clippy suggests would obscure it.
                     #[allow(clippy::neg_cmp_op_on_partial_ord)]
-                    if !(s > 0.0) {
+                    if !(s > floor) {
                         return None;
                     }
                     l[i * n + i] = s.sqrt();
@@ -926,6 +940,42 @@ impl DenseCholesky {
             }
         }
         inv
+    }
+}
+
+#[cfg(test)]
+mod pivot_tests {
+    use super::{DenseCholesky, dense_inverse};
+
+    /// #292. The pivot floor tracks the matrix's own scale, so it rejects the
+    /// same relative degeneracy at any magnitude and accepts a matrix that is
+    /// merely small.
+    #[test]
+    fn a_pivot_is_judged_against_the_matrix_scale() {
+        // Scaled up: against entries of 1e12 a pivot of 1e-6 carries no
+        // significant digits, and the old absolute 1e-12 accepted it.
+        let big = [1e12, 0.0, 0.0, 1e-6];
+        assert!(dense_inverse(&big, 2).is_none(), "1e-18 relative accepted");
+        assert!(DenseCholesky::factor(&big, 2).is_none());
+
+        // Scaled down: every entry is tiny but the matrix is perfectly
+        // conditioned, and the old absolute floor refused it outright.
+        let small = [1e-14, 0.0, 0.0, 1e-14];
+        let inv = dense_inverse(&small, 2).expect("a well conditioned small matrix inverts");
+        assert!((inv[0] - 1e14).abs() < 1.0, "{inv:?}");
+        assert!(DenseCholesky::factor(&small, 2).is_some());
+
+        // A genuinely singular matrix is still refused at any scale.
+        assert!(dense_inverse(&[1.0, 1.0, 1.0, 1.0], 2).is_none());
+        assert!(DenseCholesky::factor(&[1.0, 1.0, 1.0, 1.0], 2).is_none());
+    }
+
+    /// The `!(s > floor)` idiom must still reject a NaN pivot; `NaN > x` is
+    /// false, which is the whole reason the comparison is negated.
+    #[test]
+    fn a_nan_pivot_does_not_factor() {
+        assert!(DenseCholesky::factor(&[f64::NAN, 0.0, 0.0, 1.0], 2).is_none());
+        assert!(dense_inverse(&[f64::NAN, 0.0, 0.0, 1.0], 2).is_none());
     }
 }
 
