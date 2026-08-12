@@ -129,8 +129,10 @@ fn is_numeric_matrix_field(key: &str) -> bool {
         .any(|p| matrix_indices(key, p).is_some())
 }
 
+/// Runs for every key in the document, so the exact set is a binary search
+/// rather than a scan. `NUMERIC_FIELDS` is sorted, which a test holds.
 fn is_numeric_field(key: &str) -> bool {
-    NUMERIC_FIELDS.contains(&key) || is_numeric_matrix_field(key)
+    NUMERIC_FIELDS.binary_search(&key).is_ok() || is_numeric_matrix_field(key)
 }
 
 /// Report every schema-numeric field holding something that is not a number.
@@ -1840,5 +1842,10 @@ mod tests {
                 "`{name}` is not a schema number"
             );
         }
+        // `is_numeric_field` binary searches this list.
+        assert!(
+            super::NUMERIC_FIELDS.is_sorted(),
+            "NUMERIC_FIELDS must stay sorted"
+        );
     }
 }
