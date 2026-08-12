@@ -96,6 +96,64 @@ fn several_generators_at_one_bus_keep_separate_costs() {
 }
 
 #[test]
+fn an_unrated_branch_takes_a_synthesized_limit_on_request() {
+    let mut net = small_network();
+    net.branches[0].angmin = -30.0;
+    net.branches[0].angmax = 30.0;
+    let view = IndexedNetwork::new(&net);
+    let options = DcOpfOptions {
+        synthesize_unrated_limits: true,
+        ..DcOpfOptions::default()
+    };
+
+    let unlimited = build_dc_opf_instance(&view, &DcOpfOptions::default()).expect("default");
+    assert_close(unlimited.branches.f_max[0], 0.0);
+
+    // The bus voltage ceilings are 1.1, the reactance is 0.2, and the window
+    // is ±30°.
+    let window = 30.0_f64.to_radians();
+    let synthesized = build_dc_opf_instance(&view, &options).expect("synthesized");
+    assert_close(
+        synthesized.branches.f_max[0],
+        1.1 * (2.42 - 2.42 * window.cos()).sqrt() / 0.2,
+    );
+
+    let native = build_dc_opf_instance(
+        &view,
+        &DcOpfOptions {
+            units: Units::Native,
+            ..options
+        },
+    )
+    .expect("native");
+    assert_close(
+        native.branches.f_max[0],
+        synthesized.branches.f_max[0] * view.base_mva(),
+    );
+
+    // The normalized network states the same window in radians. Each builder
+    // converts by the convention of the network it holds, so the bound is the
+    // same one.
+    let normalized = net.to_normalized().expect("normalize");
+    let derived =
+        build_dc_opf_instance(&IndexedNetwork::new(&normalized), &options).expect("normalized");
+    assert_close(derived.branches.f_max[0], synthesized.branches.f_max[0]);
+
+    // Bounds that run past the half turn state no window, so the bound falls
+    // back to the voltage ceilings alone.
+    let mut wide = net.clone();
+    wide.branches[0].angmin = -360.0;
+    wide.branches[0].angmax = 360.0;
+    let wide = build_dc_opf_instance(&IndexedNetwork::new(&wide), &options).expect("wide bounds");
+    assert_close(wide.branches.f_max[0], 1.1 * 2.2 / 0.2);
+
+    let mut rated = net.clone();
+    rated.branches[0].rate_a = 50.0;
+    let kept = build_dc_opf_instance(&IndexedNetwork::new(&rated), &options).expect("rated branch");
+    assert_close(kept.branches.f_max[0], 0.5);
+}
+
+#[test]
 fn per_unit_and_native_units_scale_all_power_coefficients() {
     let net = small_network();
     let view = IndexedNetwork::new(&net);

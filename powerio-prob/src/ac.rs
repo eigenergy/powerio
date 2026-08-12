@@ -14,6 +14,11 @@ pub struct AcOpfOptions {
     /// Skip non-self-loop branches with `r² + x² = 0`. If false, assembly
     /// returns [`Error::ZeroImpedance`].
     pub skip_zero_impedance: bool,
+    /// Give a branch with no thermal rating the bound
+    /// [`Branch::synthesize_rate_a`](powerio::Branch::synthesize_rate_a)
+    /// states. If false, `rate_a <= 0` reaches `s_max` as zero, which reads as
+    /// unlimited.
+    pub synthesize_unrated_limits: bool,
 }
 
 impl Default for AcOpfOptions {
@@ -21,6 +26,7 @@ impl Default for AcOpfOptions {
         Self {
             units: Units::default(),
             skip_zero_impedance: true,
+            synthesize_unrated_limits: false,
         }
     }
 }
@@ -253,6 +259,9 @@ pub fn build_ac_opf_instance(
     let mut angle_max = Vec::new();
     let mut branch_rows = Vec::new();
     let mut skipped_zero_impedance = Vec::new();
+    // Dense bus order is the position order of `network().buses`; the view
+    // already holds the star-lowered network when 3-winding expansion ran.
+    let network = case.network();
 
     for (source_row, branch) in case.in_service_branches() {
         let from = case.bus_index(branch.from).ok_or(Error::UnknownBus {
@@ -295,17 +304,26 @@ pub fn build_ac_opf_instance(
         b_fr.push(charging.b_fr * y_scale);
         g_to.push(charging.g_to * y_scale);
         b_to.push(charging.b_to * y_scale);
+        let amin = case.angle_radians(branch.angmin);
+        let amax = case.angle_radians(branch.angmax);
         tap.push(branch.effective_tap());
         shift.push(case.angle_radians(branch.shift));
-        s_max.push(branch.rate_a * p_scale);
-        angle_min.push(case.angle_radians(branch.angmin));
-        angle_max.push(case.angle_radians(branch.angmax));
+        // A synthesized bound is per unit power already, so the admittance
+        // multiplier is the one that puts it in the selected unit system.
+        if options.synthesize_unrated_limits && branch.rate_a <= 0.0 {
+            let window = amin.abs().max(amax.abs());
+            s_max.push(
+                branch.synthesize_rate_a(window, network.buses[from].vmax, network.buses[to].vmax)
+                    * y_scale,
+            );
+        } else {
+            s_max.push(branch.rate_a * p_scale);
+        }
+        angle_min.push(amin);
+        angle_max.push(amax);
         branch_rows.push(source_row);
     }
 
-    // Dense bus order is the position order of `network().buses`; the view
-    // already holds the star-lowered network when 3-winding expansion ran.
-    let network = case.network();
     let mut vm_min = Vec::with_capacity(n_buses);
     let mut vm_max = Vec::with_capacity(n_buses);
     let mut vm = Vec::with_capacity(n_buses);

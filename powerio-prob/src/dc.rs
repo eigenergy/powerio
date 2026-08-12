@@ -58,6 +58,11 @@ pub struct DcOpfOptions {
     /// Skip non-self-loop branches with zero reactance. If false, assembly
     /// returns [`Error::ZeroImpedance`].
     pub skip_zero_impedance: bool,
+    /// Give a branch with no thermal rating the bound
+    /// [`Branch::synthesize_rate_a`](powerio::Branch::synthesize_rate_a)
+    /// states. If false, `rate_a <= 0` reaches `f_max` as zero, which reads as
+    /// unlimited.
+    pub synthesize_unrated_limits: bool,
 }
 
 impl Default for DcOpfOptions {
@@ -66,6 +71,7 @@ impl Default for DcOpfOptions {
             convention: DcConvention::default(),
             units: Units::default(),
             skip_zero_impedance: true,
+            synthesize_unrated_limits: false,
         }
     }
 }
@@ -265,6 +271,8 @@ pub fn build_dc_opf_instance(
     let mut branch_rows = Vec::new();
     let mut skipped_zero_impedance = Vec::new();
     let mut p_shift = vec![0.0; n_buses];
+    // Dense bus order is the position order of `network().buses`.
+    let buses = &case.network().buses;
 
     for (source_row, branch) in case.in_service_branches() {
         let from = case.bus_index(branch.from).ok_or(Error::UnknownBus {
@@ -307,13 +315,23 @@ pub fn build_dc_opf_instance(
             p_shift[from] -= branch_b * shift_rad;
             p_shift[to] += branch_b * shift_rad;
         }
+        let amin = case.angle_radians(branch.angmin);
+        let amax = case.angle_radians(branch.angmax);
         from_bus.push(from);
         to_bus.push(to);
         b.push(branch_b);
         shift.push(shift_rad);
-        f_max.push(branch.rate_a * p_scale);
-        angle_min.push(case.angle_radians(branch.angmin));
-        angle_max.push(case.angle_radians(branch.angmax));
+        // A synthesized bound is per unit power already, so the admittance
+        // multiplier is the one that puts it in the selected unit system.
+        if options.synthesize_unrated_limits && branch.rate_a <= 0.0 {
+            let window = amin.abs().max(amax.abs());
+            f_max
+                .push(branch.synthesize_rate_a(window, buses[from].vmax, buses[to].vmax) * b_scale);
+        } else {
+            f_max.push(branch.rate_a * p_scale);
+        }
+        angle_min.push(amin);
+        angle_max.push(amax);
         branch_rows.push(source_row);
     }
 
