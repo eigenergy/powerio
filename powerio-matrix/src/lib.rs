@@ -51,6 +51,9 @@ pub use powerio::{
 pub mod error;
 pub use error::{ElementCounts, Error, Result, ScenarioMismatch};
 
+/// The hub's error, so a binding can map both through one taxonomy.
+pub use powerio::Error as CoreError;
+
 /// Compressed sparse row matrix used by the projection builders.
 pub type SparseMatrix = sprs::CsMat<f64>;
 

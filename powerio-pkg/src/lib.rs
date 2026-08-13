@@ -54,6 +54,9 @@ pub use lowering::{
     SequenceTransformConvention, check_multiconductor_to_balanced_lowering,
     lower_multiconductor_to_balanced,
 };
+pub mod error;
+pub use error::{Error, Result};
+
 pub use model::{ModelKind, ModelPayload};
 pub use operating::{ElementRef, ElementUpdate, OperatingPoint, OperatingPointSeries, TimeAxis};
 pub use package::{

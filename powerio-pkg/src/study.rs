@@ -7,8 +7,8 @@ use serde_json::{Map, Value, json};
 
 use crate::model::ModelPayload;
 use crate::operating::{
-    ElementRef, ElementUpdate, IdentityIndex, apply_update_fields, json_error, payload_key,
-    resolve_update, resolve_update_row, validate_update_fields_survived,
+    ElementRef, ElementUpdate, IdentityIndex, apply_update_fields, payload_key, resolve_update,
+    resolve_update_row, validate_update_fields_survived,
 };
 
 /// Additive study block stored on a package envelope.
@@ -266,14 +266,14 @@ pub(crate) fn apply_study_to_model(
     model: &ModelPayload,
     study: &StudyBlock,
     commit_index: usize,
-) -> serde_json::Result<(ModelPayload, BTreeSet<String>)> {
+) -> crate::Result<(ModelPayload, BTreeSet<String>)> {
     if !matches!(model, ModelPayload::Balanced { .. }) {
-        return Err(json_error(
-            "STUDY.WRONG_MODEL_KIND: study materialization requires a balanced package",
+        return Err(crate::Error::Payload(
+            "STUDY.WRONG_MODEL_KIND: study materialization requires a balanced package".to_owned(),
         ));
     }
     if study.commits.get(commit_index).is_none() {
-        return Err(json_error(format!(
+        return Err(crate::Error::Payload(format!(
             "package has no study commit {commit_index}"
         )));
     }
@@ -284,7 +284,9 @@ pub(crate) fn apply_study_to_model(
         .as_object_mut()
         .and_then(|root| root.get_mut(payload_key))
         .and_then(Value::as_object_mut)
-        .ok_or_else(|| json_error(format!("model payload missing `{payload_key}` object")))?;
+        .ok_or_else(|| {
+            crate::Error::Payload(format!("model payload missing `{payload_key}` object"))
+        })?;
 
     let mut indexes = HashMap::new();
     let mut updated_paths = BTreeSet::new();
@@ -368,11 +370,11 @@ impl StudyApplyContext<'_> {
         edit: &StudyEdit,
         commit_pos: usize,
         edit_pos: usize,
-    ) -> serde_json::Result<()> {
+    ) -> crate::Result<()> {
         match edit {
             StudyEdit::DemandDelta { bus, p_mw, q_mvar } => {
-                let bus_row =
-                    resolve_update_row(self.payload, self.indexes, bus).map_err(json_error)?;
+                let bus_row = resolve_update_row(self.payload, self.indexes, bus)
+                    .map_err(crate::Error::Payload)?;
                 let touched = apply_demand_delta(self.payload, bus_row, *p_mw, *q_mvar)?;
                 for path in touched {
                     self.updated_paths
@@ -381,8 +383,8 @@ impl StudyApplyContext<'_> {
                 self.indexes.remove("loads");
             }
             StudyEdit::RatingDelta { branch, delta_mw } => {
-                let branch_row =
-                    resolve_update_row(self.payload, self.indexes, branch).map_err(json_error)?;
+                let branch_row = resolve_update_row(self.payload, self.indexes, branch)
+                    .map_err(crate::Error::Payload)?;
                 let branch = row_object_mut(self.payload, "branches", branch_row)?;
                 let old = number_field(branch, "rate_a", "branch", branch_row)?;
                 branch.insert("rate_a".to_owned(), json!(old + delta_mw));
@@ -392,7 +394,8 @@ impl StudyApplyContext<'_> {
                 ));
             }
             StudyEdit::SetFields { update } => {
-                let row = resolve_update(self.payload, self.indexes, update).map_err(json_error)?;
+                let row = resolve_update(self.payload, self.indexes, update)
+                    .map_err(crate::Error::Payload)?;
                 apply_update_fields(self.payload, &update.element.table, row, &update.fields)?;
                 for field in update.fields.keys() {
                     self.updated_paths.insert(format!(
@@ -404,7 +407,7 @@ impl StudyApplyContext<'_> {
                 self.set_field_rows.push(row);
             }
             StudyEdit::Unknown { kind, .. } => {
-                return Err(json_error(format!(
+                return Err(crate::Error::Payload(format!(
                     "STUDY.UNKNOWN_EDIT_KIND: study commit {commit_pos} edit {edit_pos} has unsupported kind `{kind}`"
                 )));
             }
@@ -418,13 +421,12 @@ fn apply_demand_delta(
     bus_row: usize,
     p_delta: f64,
     q_delta: Option<f64>,
-) -> serde_json::Result<Vec<String>> {
+) -> crate::Result<Vec<String>> {
     let (bus_id, bus_uid) = {
         let bus = row_object(payload, "buses", bus_row)?;
-        let bus_id = bus
-            .get("id")
-            .and_then(Value::as_u64)
-            .ok_or_else(|| json_error(format!("bus row {bus_row} has no numeric `id`")))?;
+        let bus_id = bus.get("id").and_then(Value::as_u64).ok_or_else(|| {
+            crate::Error::Payload(format!("bus row {bus_row} has no numeric `id`"))
+        })?;
         let bus_uid = bus
             .get("uid")
             .and_then(Value::as_str)
@@ -435,7 +437,7 @@ fn apply_demand_delta(
     let loads = payload
         .get_mut("loads")
         .and_then(Value::as_array_mut)
-        .ok_or_else(|| json_error("balanced payload has no `loads` array"))?;
+        .ok_or_else(|| crate::Error::Payload("balanced payload has no `loads` array".to_owned()))?;
     let mut rows = Vec::new();
     let mut total_p = 0.0;
     let mut total_q = 0.0;
@@ -493,7 +495,7 @@ fn apply_demand_delta(
         let load = loads
             .get_mut(row)
             .and_then(Value::as_object_mut)
-            .ok_or_else(|| json_error(format!("load row {row} disappeared")))?;
+            .ok_or_else(|| crate::Error::Payload(format!("load row {row} disappeared")))?;
         load.insert("p".to_owned(), json!(p + p_delta * p_share));
         load.insert("q".to_owned(), json!(q + q_delta * q_share));
         touched.push(format!("loads/{row}/p"));
@@ -506,26 +508,30 @@ fn row_object<'a>(
     payload: &'a Map<String, Value>,
     table_name: &str,
     row: usize,
-) -> serde_json::Result<&'a Map<String, Value>> {
+) -> crate::Result<&'a Map<String, Value>> {
     payload
         .get(table_name)
         .and_then(Value::as_array)
         .and_then(|table| table.get(row))
         .and_then(Value::as_object)
-        .ok_or_else(|| json_error(format!("table `{table_name}` has no object row {row}")))
+        .ok_or_else(|| {
+            crate::Error::Payload(format!("table `{table_name}` has no object row {row}"))
+        })
 }
 
 fn row_object_mut<'a>(
     payload: &'a mut Map<String, Value>,
     table_name: &str,
     row: usize,
-) -> serde_json::Result<&'a mut Map<String, Value>> {
+) -> crate::Result<&'a mut Map<String, Value>> {
     payload
         .get_mut(table_name)
         .and_then(Value::as_array_mut)
         .and_then(|table| table.get_mut(row))
         .and_then(Value::as_object_mut)
-        .ok_or_else(|| json_error(format!("table `{table_name}` has no object row {row}")))
+        .ok_or_else(|| {
+            crate::Error::Payload(format!("table `{table_name}` has no object row {row}"))
+        })
 }
 
 fn number_field(
@@ -533,9 +539,8 @@ fn number_field(
     field: &str,
     label: &str,
     row: usize,
-) -> serde_json::Result<f64> {
-    object
-        .get(field)
-        .and_then(Value::as_f64)
-        .ok_or_else(|| json_error(format!("{label} row {row} has no numeric `{field}` field")))
+) -> crate::Result<f64> {
+    object.get(field).and_then(Value::as_f64).ok_or_else(|| {
+        crate::Error::Payload(format!("{label} row {row} has no numeric `{field}` field"))
+    })
 }
