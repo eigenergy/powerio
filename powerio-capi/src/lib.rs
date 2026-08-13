@@ -232,18 +232,14 @@ pub extern "C" fn pio_dist_abi_version() -> u32 {
     PIO_DIST_ABI_VERSION
 }
 
-/// Version of the capability document: the JSON shape that
-/// `pio_dist_capabilities_json` returns. It is not the BMOPF schema
-/// version; the document reports that in `bmopf_schema_version`. Flags
-/// are additive, and each addition bumps the minor version.
-#[cfg(feature = "dist")]
-const DIST_CAPABILITIES_DOC_VERSION: &str = "1.1.0";
-
 #[cfg(feature = "dist")]
 fn dist_capabilities_json() -> String {
     serde_json::json!({
         "dist": true,
-        "schema_version": DIST_CAPABILITIES_DOC_VERSION,
+        // This document is powerio's own, so it states the release that wrote
+        // it. The BMOPF schema it reports below belongs to the task force, and
+        // its version is theirs to set.
+        powerio::version::VERSION_KEY: powerio::VERSION,
         "bmopf_fixed_taps": true,
         "bmopf_center_tap_leakage": true,
         "bmopf_delta_wye_leakage": true,
@@ -295,33 +291,19 @@ pub extern "C" fn pio_schema_versions_json() -> *mut c_char {
 
 /// The body of [`pio_schema_versions_json`], called inside the panic guard.
 fn schema_versions_json_ptr() -> *mut c_char {
-    // `None` serializes to `null`: the build cannot speak that format.
-    #[cfg(feature = "pkg")]
-    let package = Some(powerio_pkg::PIO_PACKAGE_SCHEMA_VERSION);
-    #[cfg(not(feature = "pkg"))]
-    let package: Option<&str> = None;
-
-    #[cfg(feature = "arrow")]
-    let arrow = Some(arrow_export::ARROW_SCHEMA_VERSION);
-    #[cfg(not(feature = "arrow"))]
-    let arrow: Option<&str> = None;
-
-    #[cfg(feature = "dist")]
-    let dist_capabilities = Some(DIST_CAPABILITIES_DOC_VERSION);
-    #[cfg(not(feature = "dist"))]
-    let dist_capabilities: Option<&str> = None;
-
+    // Every document powerio authors states one version, the release that
+    // wrote it, so this report needs one key for all of them. What stays
+    // separate is the C handshake integer and any foreign schema this build
+    // speaks, whose version belongs to whoever owns that schema.
     #[cfg(feature = "dist")]
     let bmopf_schema = Some(powerio_dist::BMOPF_SCHEMA_VERSION);
+    // `None` serializes to `null`: the build cannot speak that format.
     #[cfg(not(feature = "dist"))]
     let bmopf_schema: Option<&str> = None;
 
     let doc = serde_json::json!({
-        "schema_version": "1.0.0",
+        powerio::version::VERSION_KEY: powerio::VERSION,
         "abi": PIO_ABI_VERSION,
-        "package": package,
-        "arrow": arrow,
-        "dist_capabilities": dist_capabilities,
         "bmopf_schema": bmopf_schema,
     });
     into_cstring(doc.to_string()).unwrap_or(std::ptr::null_mut())
@@ -4227,8 +4209,8 @@ mpc.branch = [
             );
             let v = package_json(pkg);
             assert_eq!(
-                v["schema_version"],
-                serde_json::json!(powerio_pkg::PIO_PACKAGE_SCHEMA_VERSION)
+                v[powerio::version::VERSION_KEY],
+                serde_json::json!(powerio::VERSION)
             );
             assert_eq!(v["model_kind"], serde_json::json!("balanced"));
             assert_eq!(v["model"]["kind"], serde_json::json!("balanced"));
@@ -4896,44 +4878,36 @@ mpc.branch = [
         }
 
         #[test]
-        fn schema_versions_json_matches_the_constants_the_library_stamps() {
+        fn version_report_states_one_powerio_version_and_the_foreign_ones() {
             let raw = pio_schema_versions_json();
             assert!(!raw.is_null());
             let text = unsafe { CStr::from_ptr(raw) }.to_str().unwrap().to_owned();
             unsafe { pio_string_free(raw) };
             let doc: serde_json::Value = serde_json::from_str(&text).unwrap();
 
-            assert_eq!(doc["schema_version"], serde_json::json!("1.0.0"));
+            // One key for every document powerio authors, and the C handshake
+            // integer, which is a different mechanism.
+            assert_eq!(
+                doc[powerio::version::VERSION_KEY],
+                serde_json::json!(powerio::VERSION)
+            );
             assert_eq!(doc["abi"], serde_json::json!(PIO_ABI_VERSION));
 
-            // Each reported version must equal the constant stamped into the
-            // documents, not a copy of it.
-            #[cfg(feature = "pkg")]
-            assert_eq!(
-                doc["package"],
-                serde_json::json!(powerio_pkg::PIO_PACKAGE_SCHEMA_VERSION)
-            );
+            // The per document numbers this report used to carry are gone,
+            // not renamed: a binding that still reads one must fail loudly.
+            for retired in ["schema_version", "package", "arrow", "dist_capabilities"] {
+                assert_eq!(doc[retired], serde_json::Value::Null, "{retired}");
+            }
+
+            // A foreign schema keeps its owner's version, which is the whole
+            // reason this report exists.
             #[cfg(feature = "dist")]
             assert_eq!(
                 doc["bmopf_schema"],
                 serde_json::json!(powerio_dist::BMOPF_SCHEMA_VERSION)
             );
-            #[cfg(feature = "arrow")]
-            assert_eq!(
-                doc["arrow"],
-                serde_json::json!(crate::arrow_export::ARROW_SCHEMA_VERSION)
-            );
-            #[cfg(not(feature = "arrow"))]
-            assert_eq!(doc["arrow"], serde_json::Value::Null);
-
-            let caps_raw = pio_dist_capabilities_json();
-            let caps_text = unsafe { CStr::from_ptr(caps_raw) }
-                .to_str()
-                .unwrap()
-                .to_owned();
-            unsafe { pio_string_free(caps_raw) };
-            let caps: serde_json::Value = serde_json::from_str(&caps_text).unwrap();
-            assert_eq!(doc["dist_capabilities"], caps["schema_version"]);
+            #[cfg(not(feature = "dist"))]
+            assert_eq!(doc["bmopf_schema"], serde_json::Value::Null);
         }
 
         #[test]
@@ -4950,7 +4924,7 @@ mpc.branch = [
                 caps,
                 serde_json::json!({
                     "dist": true,
-                    "schema_version": DIST_CAPABILITIES_DOC_VERSION,
+                    powerio::version::VERSION_KEY: powerio::VERSION,
                     "bmopf_fixed_taps": true,
                     "bmopf_center_tap_leakage": true,
                     "bmopf_delta_wye_leakage": true,
@@ -5147,8 +5121,8 @@ mpc.branch = [
             assert_eq!(vendored["version"], caps["bmopf_schema_version"]);
 
             assert_eq!(
-                caps["schema_version"],
-                serde_json::json!(DIST_CAPABILITIES_DOC_VERSION)
+                caps[powerio::version::VERSION_KEY],
+                serde_json::json!(powerio::VERSION)
             );
         }
 

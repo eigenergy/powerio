@@ -2105,7 +2105,7 @@ mod tests {
     #[test]
     fn package_helper_returns_stdout_text() {
         let (text, _) = package_text(&data("case9.m"), None, 0).unwrap();
-        assert!(text.contains("\"schema_version\""));
+        assert!(text.contains(&format!("\"{}\"", powerio::version::VERSION_KEY)));
         let pkg = NetworkPackage::from_json(&text).unwrap();
         assert_eq!(pkg.summary.elements["buses"], 9);
     }

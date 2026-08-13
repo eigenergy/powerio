@@ -2031,6 +2031,7 @@ dependencies = [
  "anyhow",
  "clap",
  "crossterm",
+ "powerio",
  "powerio-dist",
  "powerio-matrix",
  "powerio-pkg",

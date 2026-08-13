@@ -48,6 +48,7 @@ pub mod network;
 mod normalize;
 mod operations;
 pub mod solver_tables;
+pub mod version;
 
 pub use dc::DcConvention;
 pub use error::{ElementCounts, Error, ErrorCategory, Result, ScenarioMismatch};
