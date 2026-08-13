@@ -4305,7 +4305,7 @@ mpc.branch = [
             let v: serde_json::Value = serde_json::from_str(&text).unwrap();
 
             assert_eq!(v["schema"], "powerio.scopf.julia");
-            assert_eq!(v["schema_version"], "1.0.0");
+            assert_eq!(v[powerio::version::VERSION_KEY], powerio::VERSION);
             assert_eq!(v["index_base"], 1);
             assert_eq!(v["instance"]["lengths"]["I"], 2);
             assert_eq!(v["instance"]["static"]["acl_branch"][0]["j_ln"], 1);
@@ -4674,7 +4674,7 @@ mpc.branch = [
         let text = unsafe { CStr::from_ptr(ptr) }.to_str().unwrap().to_owned();
         unsafe { pio_string_free(ptr) };
         let catalog: serde_json::Value = serde_json::from_str(&text).unwrap();
-        assert_eq!(catalog["schema_version"], "1");
+        assert_eq!(catalog[powerio::version::VERSION_KEY], powerio::VERSION);
         assert!(catalog["tables"].as_array().unwrap().iter().any(|table| {
             table["id"] == serde_json::json!(PIO_ARROW_TABLE_MATRIX_BUS)
                 && table["name"] == serde_json::json!("matrix_bus")
