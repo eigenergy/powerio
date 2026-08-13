@@ -936,7 +936,7 @@ pub struct DistNetwork {
     pub warnings: Vec<String>,
     /// Structured findings from the parse session. An `Error` entry means
     /// the network is incomplete (for example a refused include). Skipped
-    /// in the `.pio.json` payload: the wire spelling is a v0.9 register
+    /// in the `.pio.json` payload: the serialized spelling is a v0.9
     /// decision, and package diagnostics live in the envelope.
     #[serde(skip)]
     pub parse_diagnostics: Vec<crate::diagnostics::StructuredDiagnostic>,

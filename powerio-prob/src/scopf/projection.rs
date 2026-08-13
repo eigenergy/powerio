@@ -704,7 +704,7 @@ fn sdd_windows(
 /// Pure function of `tables`.
 // Four max/min x producer/consumer variants, each packed into its own
 // distinctly-named row struct to keep Julia's exact field spelling on the
-// wire (see the module doc comment); the packing is what pushes this over
+// document (see the module doc comment); the packing is what pushes this over
 // the line budget.
 #[allow(clippy::too_many_lines)]
 fn build_energy_windows(tables: &Goc3Adapter) -> Result<ScopfEnergyWindows> {

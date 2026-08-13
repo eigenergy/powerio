@@ -477,9 +477,9 @@ impl NetworkPackage {
                 "package has no operating point {index}"
             ))
         })?;
-        // Applying resolves each update's row (identity first, wire row as
+        // Applying resolves each update's row (identity first, stated row as
         // fallback), so the stale provenance paths come from the same
-        // resolution rather than the wire row values.
+        // resolution rather than the stated row values.
         let (updated_model, updated_paths) = apply_operating_point_to_model(&self.model, point)?;
         let had_normalized_solver_tables = self.derived.normalized_solver_tables.is_some();
         let options = materialize_operating_point_options(index);
@@ -927,7 +927,7 @@ const SANE_VALIDATION_CODES: [&str; 10] = [
 ];
 
 /// Check every operating point update against the payload's identity index:
-/// unknown `source_uid`, a wire `row` that contradicts the resolved row,
+/// unknown `source_uid`, a stated `row` that contradicts the resolved row,
 /// ambiguous (duplicate) payload uids, and rows out of range all become Error
 /// diagnostics, so `pio_package_validate` rejects a package whose updates
 /// reference unknown identities without materializing it.

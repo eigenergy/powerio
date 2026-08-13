@@ -88,8 +88,8 @@
         39,
         40
       ],
+      "powerio_version": "0.8.3",
       "row_axis": "matrix_branch",
-      "schema_version": "1",
       "source_row": [
         0,
         1,
@@ -308,8 +308,8 @@
         0,
         0
       ],
+      "powerio_version": "0.8.3",
       "row_axis": "matrix_bus",
-      "schema_version": "1",
       "source_row": [
         0,
         1,
@@ -465,6 +465,7 @@
         29
       ],
       "format": "coo",
+      "powerio_version": "0.8.3",
       "row_axis": "matrix_bus",
       "row_count": 30,
       "row_index": [
@@ -581,7 +582,6 @@
         29,
         29
       ],
-      "schema_version": "1",
       "table": "bdoubleprime",
       "value_bits": [
         "0x4035e7a2951bd87a",
@@ -816,6 +816,7 @@
         29
       ],
       "format": "coo",
+      "powerio_version": "0.8.3",
       "row_axis": "matrix_bus",
       "row_count": 30,
       "row_index": [
@@ -932,7 +933,6 @@
         29,
         29
       ],
-      "schema_version": "1",
       "table": "bprime",
       "value_bits": [
         "0x4033ec1a874b9b31",
@@ -1137,6 +1137,7 @@
         38
       ],
       "format": "coo",
+      "powerio_version": "0.8.3",
       "row_axis": "matrix_bus",
       "row_count": 30,
       "row_index": [
@@ -1223,7 +1224,6 @@
         29,
         29
       ],
-      "schema_version": "1",
       "table": "incidence",
       "value_bits": [
         "0x3ff0000000000000",
@@ -1656,6 +1656,7 @@
         "0xbfed86f059c32c96",
         "0x3ff9d6124e8ac704"
       ],
+      "powerio_version": "0.8.3",
       "row_axis": "matrix_bus",
       "row_count": 30,
       "row_index": [
@@ -1772,7 +1773,6 @@
         29,
         29
       ],
-      "schema_version": "1",
       "table": "ybus"
     }
   }

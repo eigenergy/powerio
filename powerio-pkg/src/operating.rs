@@ -143,7 +143,7 @@ impl OperatingPoint {
 /// carries `uid` values, a present `source_uid` resolves the target row and a
 /// present `row` must agree with it. In a table without uids (packages written
 /// before payload identity existed), `source_uid` is advisory and `row`
-/// addresses the update alone. On the wire, `row` may be omitted when
+/// addresses the update alone. In the document, `row` may be omitted when
 /// `source_uid` is given.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
@@ -218,23 +218,23 @@ impl<'de> Deserialize<'de> for ElementRef {
     fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
         #[derive(Deserialize)]
         #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
-        struct Wire {
+        struct Stated {
             table: String,
             #[serde(default)]
             row: Option<usize>,
             #[serde(default)]
             source_uid: Option<String>,
         }
-        let wire = Wire::deserialize(deserializer)?;
-        if wire.row.is_none() && wire.source_uid.is_none() {
+        let stated = Stated::deserialize(deserializer)?;
+        if stated.row.is_none() && stated.source_uid.is_none() {
             return Err(serde::de::Error::custom(
                 "element ref needs `row` or `source_uid`",
             ));
         }
         Ok(Self {
-            table: wire.table,
-            row: wire.row,
-            source_uid: wire.source_uid,
+            table: stated.table,
+            row: stated.row,
+            source_uid: stated.source_uid,
         })
     }
 }
@@ -534,7 +534,7 @@ pub(crate) fn json_error(message: impl Into<String>) -> serde_json::Error {
 /// Apply one operating point to the payload and return the updated model plus
 /// the JSON Pointer paths of every field written, computed from the resolved
 /// rows so stale provenance cleanup follows identity resolution, never a stale
-/// wire row.
+/// stated row.
 pub(crate) fn apply_operating_point_to_model(
     model: &ModelPayload,
     point: &OperatingPoint,
@@ -670,9 +670,9 @@ pub(crate) fn resolve_update(
 }
 
 /// Resolve one element ref to a payload row. A `source_uid` that resolves in a
-/// uid bearing table is authoritative and a present wire `row` must agree with
+/// uid bearing table is authoritative and a present `row` must agree with
 /// it; an unknown or duplicated uid in such a table is an error; a table without
-/// uids falls back to the wire row.
+/// uids falls back to the stated row.
 pub(crate) fn resolve_update_row(
     payload: &Map<String, Value>,
     indexes: &mut HashMap<String, IdentityIndex>,
@@ -696,12 +696,12 @@ pub(crate) fn resolve_update_row(
         }
         Some(uid) => match index.by_uid.get(uid) {
             Some(&row) => {
-                if let Some(wire_row) = element.row
-                    && wire_row != row
+                if let Some(stated_row) = element.row
+                    && stated_row != row
                 {
                     return Err(format!(
                         "update for table `{table_name}` names uid `{uid}` (row {row}) \
-                         but carries row {wire_row}"
+                         but carries row {stated_row}"
                     ));
                 }
                 row

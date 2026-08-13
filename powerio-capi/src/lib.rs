@@ -802,7 +802,7 @@ pub unsafe extern "C" fn pio_summary_json(
                     .map(|&idx| v.bus_id(idx).0)
                     .collect();
                 let summary = serde_json::json!({
-                    "schema_version": 1,
+                    powerio::version::VERSION_KEY: powerio::VERSION,
                     "name": c.net.name,
                     "source_format": format!("{:?}", c.net.source_format),
                     "base_mva": c.net.base_mva,
@@ -1997,7 +1997,7 @@ pub unsafe extern "C" fn pio_package_lower_multiconductor_to_balanced(
 
 // ---------------------------------------------------------------------------
 // Geographic layer API. String in and string out, no new object lifetimes:
-// the canonical wire form is a GeoJSON FeatureCollection with the
+// the canonical form is a GeoJSON FeatureCollection with the
 // `powerio_geo` foreign member (see the geo chapter of the guide).
 // ---------------------------------------------------------------------------
 
@@ -2134,7 +2134,7 @@ pub unsafe extern "C" fn pio_scopf_parse_str(
     }
 }
 
-/// Serialize a SCOPF instance using the versioned wire schema. The JSON records
+/// Serialize a SCOPF instance as its Julia compatibility document. The JSON records
 /// its schema version and index base. Free the returned string with
 /// `pio_string_free`. Returns `NULL` for a null handle or serialization error.
 #[cfg(feature = "prob")]
@@ -2153,7 +2153,7 @@ pub unsafe extern "C" fn pio_scopf_to_json(
                 let instance = instance
                     .as_ref()
                     .ok_or_else(|| "SCOPF instance handle is NULL".to_string())?;
-                powerio_prob::scopf::wire::to_wire_json(&instance.instance)
+                powerio_prob::scopf::json::to_json(&instance.instance)
                     .map_err(|error| error.to_string())
             },
         )
@@ -2426,7 +2426,7 @@ pub unsafe extern "C" fn pio_dist_summary_json(
                     .as_ref()
                     .ok_or_else(|| "distribution network handle is NULL".to_string())?;
                 let summary = serde_json::json!({
-                    "schema_version": 1,
+                    powerio::version::VERSION_KEY: powerio::VERSION,
                     "name": net.net.name.as_deref(),
                     "source_format": net.net.source_format.map(|f| f.name()),
                     "base_frequency": net.net.base_frequency,
@@ -4285,7 +4285,7 @@ mpc.branch = [
 
     #[cfg(feature = "prob")]
     #[test]
-    fn scopf_handle_serializes_versioned_wire_json() {
+    fn scopf_handle_serializes_its_julia_document() {
         let text = CString::new(GOC3_SMALL_FIXTURE).unwrap();
         let from = CString::new("goc3-json").unwrap();
         let feature = CString::new("prob").unwrap();
@@ -5061,7 +5061,10 @@ mpc.branch = [
             );
             let value: serde_json::Value =
                 serde_json::from_str(unsafe { CStr::from_ptr(summary) }.to_str().unwrap()).unwrap();
-            assert_eq!(value["schema_version"], serde_json::json!(1));
+            assert_eq!(
+                value[powerio::version::VERSION_KEY],
+                serde_json::json!(powerio::VERSION)
+            );
             assert_eq!(value["source_format"], serde_json::json!("dss"));
             assert_eq!(value["base_frequency"], serde_json::json!(60.0));
             assert_eq!(value["counts"]["buses"], serde_json::json!(2));

@@ -556,7 +556,7 @@ mod matrix_tests {
         )
         .expect("manifest json");
         assert_eq!(manifest["schema"], "powerio.dcopf");
-        assert_eq!(manifest["schema_version"], "0.4.0");
+        assert_eq!(manifest["powerio_version"], powerio::VERSION);
         let c0_gen =
             powerio_matrix::io::read_vector_mtx(bundle.dir.join("c0_gen.mtx")).expect("c0_gen");
         assert_eq!(c0_gen, problem.generators.c0);

@@ -189,14 +189,15 @@ def test_package_invalid_json_raises_value_error():
         pio.Package.from_json("{}")
 
 
-def test_package_declares_schema_version_and_row_identity():
+def test_package_declares_the_powerio_version_and_row_identity():
     import json
 
     pkg = pio.Package.from_file(DATA / "case9.m")
     doc = json.loads(pkg.to_json())
     # The reader accepts the 0.2 lineage; do not pin the patch version.
-    assert doc["schema_version"].startswith("0.2.")
+    assert doc["powerio_version"] == pio.__version__
     assert "payload_schema" not in doc
+    assert "schema_version" not in doc
     assert "payload_schema_version" not in doc
     # Every payload row carries an identity; case9 has no source uids, so they
     # are synthesized from the build position.

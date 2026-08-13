@@ -1134,7 +1134,7 @@ fn default_caps() -> GenCaps {
 /// The named map makes a new key purely additive: an old document simply lacks it
 /// (deserializes to `None`), and an unknown key from a newer document is ignored.
 /// In memory `caps` stays a fixed array, so the per-generator allocation cost the
-/// array avoids is unchanged; only the wire form is named.
+/// array avoids is unchanged; only the serialized form is named.
 mod caps_serde {
     use super::{GEN_EXTRA_KEYS, GenCaps};
     use serde::de::{Deserialize, Deserializer};

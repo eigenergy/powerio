@@ -6,8 +6,8 @@ mod layer;
 mod pwd;
 
 pub use layer::{
-    ElementKey, GEO_LAYER_EXTENSION, GEO_LAYER_VERSION, GeoApplyReport, GeoApplyTarget, GeoFeature,
-    GeoGeometry, GeoLayer, GeoParsed, GeoTarget, apply_geo_features,
+    ElementKey, GEO_LAYER_EXTENSION, GeoApplyReport, GeoApplyTarget, GeoFeature, GeoGeometry,
+    GeoLayer, GeoParsed, GeoTarget, apply_geo_features,
 };
 pub use pwd::{
     PWD_MERCATOR_K, apply_substation_points, geo_layer_from_aux_substations, geo_layer_from_pwd,
@@ -79,7 +79,7 @@ pub enum CoordinateSpace {
 }
 
 impl CoordinateSpace {
-    /// The wire token naming the space family (`geographic`, `projected`,
+    /// The serialized token naming the space family (`geographic`, `projected`,
     /// `diagram`, `unknown`), as the `powerio_geo` member spells it.
     #[must_use]
     pub fn token(&self) -> &'static str {

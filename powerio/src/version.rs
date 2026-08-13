@@ -55,6 +55,18 @@ pub fn lineage_label() -> String {
     }
 }
 
+/// The lineage as a path segment: `0.9` while the major is 0, `1` afterwards.
+///
+/// Names the directory a served JSON Schema lives under, so the published
+/// location moves when and only when a document stops loading.
+#[must_use]
+pub fn lineage_path() -> String {
+    match current_lineage() {
+        (0, minor) => format!("0.{minor}"),
+        (major, _) => major.to_string(),
+    }
+}
+
 fn current_lineage() -> (u64, u64) {
     lineage(VERSION).expect("the crate version is valid semver")
 }

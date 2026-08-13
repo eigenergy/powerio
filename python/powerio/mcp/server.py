@@ -50,7 +50,7 @@ _PACKAGE_JSON_FORMATS = frozenset(
 )
 _ALLOWED_ROOTS_ENV = "POWERIO_MCP_ALLOWED_ROOTS"
 _LEGACY_ALLOWED_ROOT_ENV = "POWERIO_MCP_ROOT"
-_SCHEMA_VERSION = "0.1"
+_VERSION_KEY = "powerio_version"
 
 _MATRIX_KIND_ALIASES = {
     "b": "bprime",
@@ -404,7 +404,7 @@ def _diagnostics_payload(package_json: str, verbose: bool = False) -> Dict[str, 
         text = f"{status}: " + ", ".join(parts)
     return {
         "schema": "powerio.diagnostics",
-        "schema_version": _SCHEMA_VERSION,
+        _VERSION_KEY: powerio.__version__,
         "model_kind": kind,
         "summary": {
             "status": status,
@@ -639,7 +639,7 @@ def _transmission_summary(net: "powerio.Network") -> Dict[str, Any]:
     refs = net.reference_bus_indices()
     return {
         "schema": "powerio.summary",
-        "schema_version": _SCHEMA_VERSION,
+        _VERSION_KEY: powerio.__version__,
         "domain": "transmission",
         "model": "balanced",
         "name": net.name,
@@ -669,7 +669,7 @@ def _transmission_summary(net: "powerio.Network") -> Dict[str, Any]:
 def _distribution_summary(net: "dist.DistNetwork") -> Dict[str, Any]:
     return {
         "schema": "powerio.summary",
-        "schema_version": _SCHEMA_VERSION,
+        _VERSION_KEY: powerio.__version__,
         "domain": "distribution",
         "model": "multiconductor",
         "name": net.name,
@@ -931,7 +931,7 @@ def _parse_impl(
         diag = _diagnostics_payload(package_json, verbose=True)
         return {
             "schema": "powerio.parse",
-            "schema_version": _SCHEMA_VERSION,
+            _VERSION_KEY: powerio.__version__,
             "transport": "package",
             "domain": loaded.domain,
             "model": summary["model"],
@@ -953,7 +953,7 @@ def _parse_impl(
     summary = _summary(loaded)
     return {
         "schema": "powerio.parse",
-        "schema_version": _SCHEMA_VERSION,
+        _VERSION_KEY: powerio.__version__,
         "domain": loaded.domain,
         "model": summary["model"],
         "source_format": summary["source_format"],
@@ -986,7 +986,7 @@ def _normalize_impl(
     summary = _summary(normalized)
     return {
         "schema": "powerio.normalize",
-        "schema_version": _SCHEMA_VERSION,
+        _VERSION_KEY: powerio.__version__,
         "domain": "transmission",
         "model": "balanced",
         "source_format": summary["source_format"],
@@ -1045,7 +1045,7 @@ def _matrix_impl(
     coo = mat.tocoo()
     return {
         "schema": "powerio.matrix",
-        "schema_version": _SCHEMA_VERSION,
+        _VERSION_KEY: powerio.__version__,
         "domain": "transmission",
         "model": "balanced",
         "source_format": net.source_format,
@@ -1076,7 +1076,7 @@ def _display_impl(path: str, from_format: Optional[str] = None) -> dict:
     pwd = data.data
     return {
         "schema": "powerio.display",
-        "schema_version": _SCHEMA_VERSION,
+        _VERSION_KEY: powerio.__version__,
         "domain": "display",
         "model": "display",
         "source_format": "powerworld-pwd",

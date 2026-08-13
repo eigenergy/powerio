@@ -1,6 +1,6 @@
-//! Versioned Julia compatibility wire format.
+//! The Julia compatibility document.
 //!
-//! The conversion is structural: every struct that reaches the wire classifies
+//! The conversion is structural: every struct that reaches the document classifies
 //! each of its fields as a 0-based internal index (renumbered to 1-based), a
 //! renamed field (Julia spells some names in Greek or uppercase), or a value
 //! passed through unchanged. The classification destructures the struct
@@ -26,37 +26,38 @@ use super::types::{
 };
 use super::{ScopfInstance, ScopfResult};
 
-pub const SCOPF_WIRE_SCHEMA: &str = "powerio.scopf.julia";
-pub const SCOPF_WIRE_VERSION: &str = "1.0.0";
+pub const SCOPF_SCHEMA: &str = "powerio.scopf.julia";
 
 #[derive(Serialize)]
-struct WireEnvelope {
+struct Envelope {
     schema: &'static str,
-    schema_version: &'static str,
+    /// The powerio release that wrote this document; see [`powerio::version`].
+    #[serde(rename = "powerio_version")]
+    powerio_version: &'static str,
     index_base: usize,
     instance: Value,
 }
 
-/// Wire conversion of one serialized object: the fields holding 0-based
-/// internal indices and the fields renamed on the wire.
-trait WireFields: Serialize {
+/// One serialized object: the fields holding 0-based internal indices
+/// and the fields renamed in the document.
+trait SerializedFields: Serialize {
     /// Serialized names of the fields holding 0-based internal indices.
     /// External identity (`BusId`, `uid`) is never listed.
     const INDEX_FIELDS: &'static [&'static str] = &[];
-    /// `(internal, wire)` name pairs.
+    /// `(internal, document)` name pairs.
     const RENAMED_FIELDS: &'static [(&'static str, &'static str)] = &[];
 }
 
-/// Classify every field of one struct that reaches the wire. The generated function
+/// Classify every field of one struct that reaches the document. The generated function
 /// destructures the struct exhaustively, so this fails to compile whenever a
 /// field is added, removed, or renamed in `types.rs` without reclassifying it.
-macro_rules! wire_fields {
+macro_rules! serialized_fields {
     ($row:ident {
         index: [$($index:ident),* $(,)?],
         values: [$($value:ident),* $(,)?]
         $(, renamed: [$($from:ident => $to:literal),+ $(,)?])? $(,)?
     }) => {
-        impl WireFields for $row {
+        impl SerializedFields for $row {
             const INDEX_FIELDS: &'static [&'static str] = &[$(stringify!($index)),*];
             $(const RENAMED_FIELDS: &'static [(&'static str, &'static str)] =
                 &[$((stringify!($from), $to)),+];)?
@@ -70,49 +71,49 @@ macro_rules! wire_fields {
     };
 }
 
-wire_fields!(ScopfBusRow {
+serialized_fields!(ScopfBusRow {
     index: [],
     values: [i, uid, v_min, v_max],
 });
-wire_fields!(ScopfShuntRow {
+serialized_fields!(ScopfShuntRow {
     index: [j_sh],
     values: [uid, bus, g_sh, b_sh],
 });
-wire_fields!(ScopfAcLineRow {
+serialized_fields!(ScopfAcLineRow {
     index: [j_ln],
     values: [
         uid, to_bus, fr_bus, c_su, c_sd, s_max, g_sr, b_sr, b_ch, g_fr, g_to, b_fr, b_to
     ],
 });
-wire_fields!(ScopfTransformerRow {
+serialized_fields!(ScopfTransformerRow {
     index: [j_xf],
     values: [
         uid, to_bus, fr_bus, c_su, c_sd, s_max, g_sr, b_sr, b_ch, g_fr, g_to, b_fr, b_to
     ],
 });
-wire_fields!(ScopfDcLineRow {
+serialized_fields!(ScopfDcLineRow {
     index: [j_dc],
     values: [
         uid, pdc_max, qdc_fr_min, qdc_to_min, qdc_fr_max, qdc_to_max, to_bus, fr_bus
     ],
 });
-wire_fields!(ScopfVariablePhaseRow {
+serialized_fields!(ScopfVariablePhaseRow {
     index: [j_xf],
     values: [phi_min, phi_max],
 });
-wire_fields!(ScopfFixedPhaseRow {
+serialized_fields!(ScopfFixedPhaseRow {
     index: [j_xf],
     values: [phi_o],
 });
-wire_fields!(ScopfVariableRatioRow {
+serialized_fields!(ScopfVariableRatioRow {
     index: [j_xf],
     values: [tau_min, tau_max],
 });
-wire_fields!(ScopfFixedRatioRow {
+serialized_fields!(ScopfFixedRatioRow {
     index: [j_xf],
     values: [tau_o],
 });
-wire_fields!(ScopfDeviceRow {
+serialized_fields!(ScopfDeviceRow {
     index: [],
     values: [
         bus,
@@ -159,7 +160,7 @@ wire_fields!(ScopfDeviceRow {
         q_p0
     ],
 });
-wire_fields!(ScopfActiveReserveRow {
+serialized_fields!(ScopfActiveReserveRow {
     index: [n_p],
     values: [uid, c_rgu, c_rgd, c_scr, c_nsc, c_rru, c_rrd, p_rru_min, p_rrd_min],
     renamed: [
@@ -169,19 +170,19 @@ wire_fields!(ScopfActiveReserveRow {
         sigma_nsc => "σ_nsc",
     ],
 });
-wire_fields!(ScopfReactiveReserveRow {
+serialized_fields!(ScopfReactiveReserveRow {
     index: [n_q],
     values: [uid, c_qru, c_qrd, q_qru_min, q_qrd_min],
 });
-wire_fields!(ScopfActiveReserveSetRow {
+serialized_fields!(ScopfActiveReserveSetRow {
     index: [n_p],
     values: [i, uid],
 });
-wire_fields!(ScopfReactiveReserveSetRow {
+serialized_fields!(ScopfReactiveReserveSetRow {
     index: [n_q],
     values: [i, uid],
 });
-wire_fields!(ScopfLengths {
+serialized_fields!(ScopfLengths {
     index: [],
     values: [],
     renamed: [
@@ -201,61 +202,61 @@ wire_fields!(ScopfLengths {
         k => "K",
     ],
 });
-wire_fields!(ScopfViolationCost {
+serialized_fields!(ScopfViolationCost {
     index: [],
     values: [p_bus, q_bus, s, e],
 });
-wire_fields!(ScopfEnergyWindowMaxPrRow {
+serialized_fields!(ScopfEnergyWindowMaxPrRow {
     index: [w_en_max_pr_ind],
     values: [uid, a_en_max_start, a_en_max_end, e_max],
 });
-wire_fields!(ScopfEnergyWindowMaxCsRow {
+serialized_fields!(ScopfEnergyWindowMaxCsRow {
     index: [w_en_max_cs_ind],
     values: [uid, a_en_max_start, a_en_max_end, e_max],
 });
-wire_fields!(ScopfEnergyWindowMinPrRow {
+serialized_fields!(ScopfEnergyWindowMinPrRow {
     index: [w_en_min_pr_ind],
     values: [uid, a_en_min_start, a_en_min_end, e_min],
 });
-wire_fields!(ScopfEnergyWindowMinCsRow {
+serialized_fields!(ScopfEnergyWindowMinCsRow {
     index: [w_en_min_cs_ind],
     values: [uid, a_en_min_start, a_en_min_end, e_min],
 });
-wire_fields!(ScopfEnergyWindowPeriodMaxPrRow {
+serialized_fields!(ScopfEnergyWindowPeriodMaxPrRow {
     index: [w_en_max_pr_ind, t],
     values: [uid, dt],
 });
-wire_fields!(ScopfEnergyWindowPeriodMaxCsRow {
+serialized_fields!(ScopfEnergyWindowPeriodMaxCsRow {
     index: [w_en_max_cs_ind, t],
     values: [uid, dt],
 });
-wire_fields!(ScopfEnergyWindowPeriodMinPrRow {
+serialized_fields!(ScopfEnergyWindowPeriodMinPrRow {
     index: [w_en_min_pr_ind, t],
     values: [uid, dt],
 });
-wire_fields!(ScopfEnergyWindowPeriodMinCsRow {
+serialized_fields!(ScopfEnergyWindowPeriodMinCsRow {
     index: [w_en_min_cs_ind, t],
     values: [uid, dt],
 });
-wire_fields!(ScopfPriceBlockRow {
+serialized_fields!(ScopfPriceBlockRow {
     index: [flat_k, t, m],
     values: [uid, c_en, p_max],
 });
-wire_fields!(ScopfAcLineSurvivorRow {
+serialized_fields!(ScopfAcLineSurvivorRow {
     index: [ctg, j_ln],
     values: [uid, to_bus, fr_bus, b_sr, s_max_ctg],
 });
-wire_fields!(ScopfTransformerSurvivorRow {
+serialized_fields!(ScopfTransformerSurvivorRow {
     index: [ctg, j_xf],
     values: [uid, to_bus, fr_bus, b_sr, s_max_ctg],
 });
-wire_fields!(ScopfDcContingencyFlowRow {
+serialized_fields!(ScopfDcContingencyFlowRow {
     index: [flat_jtk_dc, ctg, j_dc, t],
     values: [to_bus, fr_bus, dt],
 });
 
-/// Convert an internal instance to the versioned 1-based Julia wire format.
-pub fn to_wire_value(instance: &ScopfInstance) -> ScopfResult<Value> {
+/// Convert an internal instance to the 1-based Julia document.
+pub fn to_json_value(instance: &ScopfInstance) -> ScopfResult<Value> {
     let ScopfInstance {
         static_data,
         lengths,
@@ -266,41 +267,47 @@ pub fn to_wire_value(instance: &ScopfInstance) -> ScopfResult<Value> {
         violation_cost,
         device_class_layout,
     } = instance;
-    let mut wire = Map::new();
-    wire.insert("static".to_owned(), wire_static(static_data)?);
-    wire.insert("lengths".to_owned(), wire_object(lengths)?);
-    wire.insert(
+    let mut fields = Map::new();
+    fields.insert("static".to_owned(), serialize_static(static_data)?);
+    fields.insert("lengths".to_owned(), serialize_object(lengths)?);
+    fields.insert(
         "energy_windows".to_owned(),
-        wire_energy_windows(energy_windows)?,
+        serialize_energy_windows(energy_windows)?,
     );
-    wire.insert("price_blocks".to_owned(), wire_price_blocks(price_blocks)?);
-    wire.insert(
+    fields.insert(
+        "price_blocks".to_owned(),
+        serialize_price_blocks(price_blocks)?,
+    );
+    fields.insert(
         "ac_contingency_survivors".to_owned(),
-        wire_survivors(ac_contingency_survivors)?,
+        serialize_survivors(ac_contingency_survivors)?,
     );
-    wire.insert(
+    fields.insert(
         "dc_contingency_flows".to_owned(),
-        wire_rows(dc_contingency_flows)?,
+        serialize_rows(dc_contingency_flows)?,
     );
-    wire.insert("violation_cost".to_owned(), wire_object(violation_cost)?);
-    wire.insert(
+    fields.insert(
+        "violation_cost".to_owned(),
+        serialize_object(violation_cost)?,
+    );
+    fields.insert(
         "device_class_layout".to_owned(),
         serde_json::to_value(device_class_layout)?,
     );
-    Ok(serde_json::to_value(WireEnvelope {
-        schema: SCOPF_WIRE_SCHEMA,
-        schema_version: SCOPF_WIRE_VERSION,
+    Ok(serde_json::to_value(Envelope {
+        schema: SCOPF_SCHEMA,
+        powerio_version: powerio::VERSION,
         index_base: 1,
-        instance: Value::Object(wire),
+        instance: Value::Object(fields),
     })?)
 }
 
-/// Serialize an internal instance as the versioned 1-based Julia wire format.
-pub fn to_wire_json(instance: &ScopfInstance) -> ScopfResult<String> {
-    Ok(serde_json::to_string(&to_wire_value(instance)?)?)
+/// Serialize an internal instance as the 1-based Julia document.
+pub fn to_json(instance: &ScopfInstance) -> ScopfResult<String> {
+    Ok(serde_json::to_string(&to_json_value(instance)?)?)
 }
 
-fn wire_static(data: &ScopfStaticData) -> ScopfResult<Value> {
+fn serialize_static(data: &ScopfStaticData) -> ScopfResult<Value> {
     let ScopfStaticData {
         bus,
         shunt,
@@ -321,39 +328,42 @@ fn wire_static(data: &ScopfStaticData) -> ScopfResult<Value> {
         reactive_reserve_set_cs,
     } = data;
     let mut object = Map::new();
-    object.insert("bus".to_owned(), wire_rows(bus)?);
-    object.insert("shunt".to_owned(), wire_rows(shunt)?);
-    object.insert("acl_branch".to_owned(), wire_rows(acl_branch)?);
-    object.insert("acx_branch".to_owned(), wire_rows(acx_branch)?);
-    object.insert("vpd".to_owned(), wire_rows(vpd)?);
-    object.insert("fpd".to_owned(), wire_rows(fpd)?);
-    object.insert("vwr".to_owned(), wire_rows(vwr)?);
-    object.insert("fwr".to_owned(), wire_rows(fwr)?);
-    object.insert("dc_branch".to_owned(), wire_rows(dc_branch)?);
-    object.insert("prod".to_owned(), wire_rows(prod)?);
-    object.insert("cons".to_owned(), wire_rows(cons)?);
-    object.insert("active_reserve".to_owned(), wire_rows(active_reserve)?);
-    object.insert("reactive_reserve".to_owned(), wire_rows(reactive_reserve)?);
+    object.insert("bus".to_owned(), serialize_rows(bus)?);
+    object.insert("shunt".to_owned(), serialize_rows(shunt)?);
+    object.insert("acl_branch".to_owned(), serialize_rows(acl_branch)?);
+    object.insert("acx_branch".to_owned(), serialize_rows(acx_branch)?);
+    object.insert("vpd".to_owned(), serialize_rows(vpd)?);
+    object.insert("fpd".to_owned(), serialize_rows(fpd)?);
+    object.insert("vwr".to_owned(), serialize_rows(vwr)?);
+    object.insert("fwr".to_owned(), serialize_rows(fwr)?);
+    object.insert("dc_branch".to_owned(), serialize_rows(dc_branch)?);
+    object.insert("prod".to_owned(), serialize_rows(prod)?);
+    object.insert("cons".to_owned(), serialize_rows(cons)?);
+    object.insert("active_reserve".to_owned(), serialize_rows(active_reserve)?);
+    object.insert(
+        "reactive_reserve".to_owned(),
+        serialize_rows(reactive_reserve)?,
+    );
     object.insert(
         "active_reserve_set_pr".to_owned(),
-        wire_rows(active_reserve_set_pr)?,
+        serialize_rows(active_reserve_set_pr)?,
     );
     object.insert(
         "active_reserve_set_cs".to_owned(),
-        wire_rows(active_reserve_set_cs)?,
+        serialize_rows(active_reserve_set_cs)?,
     );
     object.insert(
         "reactive_reserve_set_pr".to_owned(),
-        wire_rows(reactive_reserve_set_pr)?,
+        serialize_rows(reactive_reserve_set_pr)?,
     );
     object.insert(
         "reactive_reserve_set_cs".to_owned(),
-        wire_rows(reactive_reserve_set_cs)?,
+        serialize_rows(reactive_reserve_set_cs)?,
     );
     Ok(Value::Object(object))
 }
 
-fn wire_energy_windows(windows: &ScopfEnergyWindows) -> ScopfResult<Value> {
+fn serialize_energy_windows(windows: &ScopfEnergyWindows) -> ScopfResult<Value> {
     let ScopfEnergyWindows {
         w_en_max_pr,
         w_en_max_cs,
@@ -365,57 +375,57 @@ fn wire_energy_windows(windows: &ScopfEnergyWindows) -> ScopfResult<Value> {
         t_w_en_min_cs,
     } = windows;
     let mut object = Map::new();
-    object.insert("W_en_max_pr".to_owned(), wire_rows(w_en_max_pr)?);
-    object.insert("W_en_max_cs".to_owned(), wire_rows(w_en_max_cs)?);
-    object.insert("W_en_min_pr".to_owned(), wire_rows(w_en_min_pr)?);
-    object.insert("W_en_min_cs".to_owned(), wire_rows(w_en_min_cs)?);
-    object.insert("T_w_en_max_pr".to_owned(), wire_rows(t_w_en_max_pr)?);
-    object.insert("T_w_en_max_cs".to_owned(), wire_rows(t_w_en_max_cs)?);
-    object.insert("T_w_en_min_pr".to_owned(), wire_rows(t_w_en_min_pr)?);
-    object.insert("T_w_en_min_cs".to_owned(), wire_rows(t_w_en_min_cs)?);
+    object.insert("W_en_max_pr".to_owned(), serialize_rows(w_en_max_pr)?);
+    object.insert("W_en_max_cs".to_owned(), serialize_rows(w_en_max_cs)?);
+    object.insert("W_en_min_pr".to_owned(), serialize_rows(w_en_min_pr)?);
+    object.insert("W_en_min_cs".to_owned(), serialize_rows(w_en_min_cs)?);
+    object.insert("T_w_en_max_pr".to_owned(), serialize_rows(t_w_en_max_pr)?);
+    object.insert("T_w_en_max_cs".to_owned(), serialize_rows(t_w_en_max_cs)?);
+    object.insert("T_w_en_min_pr".to_owned(), serialize_rows(t_w_en_min_pr)?);
+    object.insert("T_w_en_min_cs".to_owned(), serialize_rows(t_w_en_min_cs)?);
     Ok(Value::Object(object))
 }
 
-fn wire_price_blocks(blocks: &ScopfPriceBlocks) -> ScopfResult<Value> {
+fn serialize_price_blocks(blocks: &ScopfPriceBlocks) -> ScopfResult<Value> {
     let ScopfPriceBlocks { producer, consumer } = blocks;
     let mut object = Map::new();
-    object.insert("producer".to_owned(), wire_rows(producer)?);
-    object.insert("consumer".to_owned(), wire_rows(consumer)?);
+    object.insert("producer".to_owned(), serialize_rows(producer)?);
+    object.insert("consumer".to_owned(), serialize_rows(consumer)?);
     Ok(Value::Object(object))
 }
 
-fn wire_survivors(survivors: &ScopfAcContingencySurvivors) -> ScopfResult<Value> {
+fn serialize_survivors(survivors: &ScopfAcContingencySurvivors) -> ScopfResult<Value> {
     let ScopfAcContingencySurvivors { ln, xf } = survivors;
     let mut object = Map::new();
-    object.insert("ln".to_owned(), wire_nested_rows(ln)?);
-    object.insert("xf".to_owned(), wire_nested_rows(xf)?);
+    object.insert("ln".to_owned(), serialize_nested_rows(ln)?);
+    object.insert("xf".to_owned(), serialize_nested_rows(xf)?);
     Ok(Value::Object(object))
 }
 
-fn wire_rows<R: WireFields>(rows: &[R]) -> ScopfResult<Value> {
+fn serialize_rows<R: SerializedFields>(rows: &[R]) -> ScopfResult<Value> {
     rows.iter()
-        .map(wire_object)
+        .map(serialize_object)
         .collect::<ScopfResult<Vec<_>>>()
         .map(Value::from)
 }
 
-fn wire_nested_rows<R: WireFields>(groups: &[Vec<R>]) -> ScopfResult<Value> {
+fn serialize_nested_rows<R: SerializedFields>(groups: &[Vec<R>]) -> ScopfResult<Value> {
     groups
         .iter()
-        .map(|group| wire_rows(group))
+        .map(|group| serialize_rows(group))
         .collect::<ScopfResult<Vec<_>>>()
         .map(Value::from)
 }
 
-/// Serialize one struct, renumber its declared index fields, apply its wire
+/// Serialize one struct, renumber its declared index fields, apply its
 /// renames. The declared fields always exist in the serialized object (the
 /// classification is compile-checked against the struct), so a miss here means
 /// a `serde` attribute changed the serialized name; fail loudly.
-fn wire_object<R: WireFields>(row: &R) -> ScopfResult<Value> {
+fn serialize_object<R: SerializedFields>(row: &R) -> ScopfResult<Value> {
     let mut value = serde_json::to_value(row)?;
     let Some(object) = value.as_object_mut() else {
         return Err(ScopfError::invalid(
-            "wire struct did not serialize to a JSON object",
+            "struct did not serialize to a JSON object",
         ));
     };
     for &field in R::INDEX_FIELDS {

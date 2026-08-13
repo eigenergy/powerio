@@ -25,8 +25,6 @@ mod tui;
 use cases::infer_input_family;
 use powerio_matrix::format::routing::SourceFormat as DetectedFormat;
 
-const SUMMARY_SCHEMA_VERSION: &str = "0.1";
-
 #[derive(Parser, Debug)]
 #[command(name = "powerio", version, about)]
 struct Cli {
@@ -1296,7 +1294,7 @@ fn transmission_summary_json(
     let view = powerio_matrix::IndexedNetwork::new(net);
     json!({
         "schema": "powerio.summary",
-        "schema_version": SUMMARY_SCHEMA_VERSION,
+        powerio::version::VERSION_KEY: powerio::VERSION,
         "domain": "transmission",
         "model": "balanced",
         "name": net.name,
@@ -1326,7 +1324,7 @@ fn transmission_summary_json(
 fn distribution_summary_json(net: &powerio_dist::DistNetwork) -> serde_json::Value {
     json!({
         "schema": "powerio.summary",
-        "schema_version": SUMMARY_SCHEMA_VERSION,
+        powerio::version::VERSION_KEY: powerio::VERSION,
         "domain": "distribution",
         "model": "multiconductor",
         "name": net.name,
@@ -1915,7 +1913,7 @@ mod tests {
         let parsed = powerio_matrix::parse_file(data("case9.m"), None).unwrap();
         let value = transmission_summary_json(&parsed.network, &parsed.warnings);
         assert_eq!(value["schema"], "powerio.summary");
-        assert_eq!(value["schema_version"], "0.1");
+        assert_eq!(value[powerio::version::VERSION_KEY], powerio::VERSION);
         assert_eq!(value["domain"], "transmission");
         assert_eq!(value["model"], "balanced");
         assert_eq!(value["json_format"], "powerio-json");
@@ -1955,7 +1953,7 @@ mod tests {
         let net = powerio_dist::parse_file(data("dist/micro/xfmr_single_phase.dss"), None).unwrap();
         let value = distribution_summary_json(&net);
         assert_eq!(value["schema"], "powerio.summary");
-        assert_eq!(value["schema_version"], "0.1");
+        assert_eq!(value[powerio::version::VERSION_KEY], powerio::VERSION);
         assert_eq!(value["domain"], "distribution");
         assert_eq!(value["model"], "multiconductor");
         assert_eq!(value["json_format"], "bmopf-json");

@@ -51,8 +51,6 @@ pub const PIO_ARROW_TABLE_BDOUBLEPRIME: i32 = 18;
 pub const PIO_ARROW_TABLE_MATRIX_BUS: i32 = 19;
 pub const PIO_ARROW_TABLE_MATRIX_BRANCH: i32 = 20;
 
-pub(crate) const ARROW_SCHEMA_VERSION: &str = "1";
-
 // These values are the ABI: the `PIO_ARROW_TABLE_*` macros in include/powerio.h
 // are hand-synced to them. The set is append-only: these ids and each table's
 // column order are frozen, a new table takes the next id and extends
@@ -162,7 +160,6 @@ fn catalog_value() -> serde_json::Value {
         serde_json::json!({
             "id": id,
             "name": name,
-            "schema_version": ARROW_SCHEMA_VERSION,
             "format": format,
             "feature_requirements": feature_requirements,
             "available": available,
@@ -175,7 +172,7 @@ fn catalog_value() -> serde_json::Value {
         })
     };
     serde_json::json!({
-        "schema_version": ARROW_SCHEMA_VERSION,
+        powerio::version::VERSION_KEY: powerio::VERSION,
         "producer": "powerio-capi",
         "tables": [
             table_spec(PIO_ARROW_TABLE_BUS, "bus", "record_batch", &["arrow"], true, None, None, units_source(), &[
@@ -1208,10 +1205,7 @@ fn matrix_metadata(
 ) -> HashMap<String, String> {
     HashMap::from([
         ("powerio.table".to_owned(), table.to_owned()),
-        (
-            "powerio.schema_version".to_owned(),
-            ARROW_SCHEMA_VERSION.to_owned(),
-        ),
+        ("powerio.version".to_owned(), powerio::VERSION.to_owned()),
         ("powerio.format".to_owned(), "coo".to_owned()),
         ("powerio.index_space".to_owned(), "solver_bus".to_owned()),
         ("powerio.row_axis".to_owned(), row_axis.to_owned()),
@@ -1225,10 +1219,7 @@ fn matrix_metadata(
 fn axis_metadata(table: &str) -> HashMap<String, String> {
     HashMap::from([
         ("powerio.table".to_owned(), table.to_owned()),
-        (
-            "powerio.schema_version".to_owned(),
-            ARROW_SCHEMA_VERSION.to_owned(),
-        ),
+        ("powerio.version".to_owned(), powerio::VERSION.to_owned()),
         ("powerio.format".to_owned(), "axis_map".to_owned()),
         ("powerio.row_axis".to_owned(), table.to_owned()),
     ])
@@ -1389,8 +1380,8 @@ mod tests {
         let mut obj = serde_json::Map::new();
         obj.insert("table".to_owned(), serde_json::json!(table_name));
         obj.insert(
-            "schema_version".to_owned(),
-            serde_json::json!(metadata.get("powerio.schema_version").unwrap()),
+            powerio::version::VERSION_KEY.to_owned(),
+            serde_json::json!(metadata.get("powerio.version").unwrap()),
         );
         obj.insert(
             "format".to_owned(),
@@ -1457,8 +1448,8 @@ mod tests {
         let mut obj = serde_json::Map::new();
         obj.insert("table".to_owned(), serde_json::json!(table_name));
         obj.insert(
-            "schema_version".to_owned(),
-            serde_json::json!(metadata.get("powerio.schema_version").unwrap()),
+            powerio::version::VERSION_KEY.to_owned(),
+            serde_json::json!(metadata.get("powerio.version").unwrap()),
         );
         obj.insert(
             "format".to_owned(),
@@ -1697,7 +1688,7 @@ mod tests {
     #[test]
     fn arrow_catalog_lists_ids_columns_axes_and_features() {
         let catalog: serde_json::Value = serde_json::from_str(&catalog_json()).unwrap();
-        assert_eq!(catalog["schema_version"], ARROW_SCHEMA_VERSION);
+        assert_eq!(catalog[powerio::version::VERSION_KEY], powerio::VERSION);
         let tables = catalog["tables"].as_array().unwrap();
         let find = |name: &str| {
             tables
@@ -1760,7 +1751,7 @@ mod tests {
         let metadata = rb.schema();
         let metadata = metadata.metadata();
         assert_eq!(metadata.get("powerio.table").unwrap(), "bprime");
-        assert_eq!(metadata.get("powerio.schema_version").unwrap(), "1");
+        assert_eq!(metadata.get("powerio.version").unwrap(), powerio::VERSION);
         assert_eq!(metadata.get("powerio.format").unwrap(), "coo");
         assert_eq!(metadata.get("powerio.index_space").unwrap(), "solver_bus");
         assert_eq!(metadata.get("powerio.row_axis").unwrap(), "matrix_bus");
@@ -1773,7 +1764,7 @@ mod tests {
         let imported_schema = Schema::try_from(&schema).unwrap();
         let metadata = imported_schema.metadata();
         assert_eq!(metadata.get("powerio.table").unwrap(), "bprime");
-        assert_eq!(metadata.get("powerio.schema_version").unwrap(), "1");
+        assert_eq!(metadata.get("powerio.version").unwrap(), powerio::VERSION);
         assert_eq!(metadata.get("powerio.format").unwrap(), "coo");
         assert_eq!(metadata.get("powerio.index_space").unwrap(), "solver_bus");
         assert_eq!(metadata.get("powerio.row_axis").unwrap(), "matrix_bus");
