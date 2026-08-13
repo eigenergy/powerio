@@ -32,7 +32,7 @@ pub fn read_dataset_dir(
     dir: impl AsRef<std::path::Path>,
     from: &str,
     scenario: i64,
-) -> powerio::Result<GridfmRead> {
+) -> crate::Result<GridfmRead> {
     require_dataset_format(from)?;
     read_gridfm_dataset(dir, scenario)
 }
@@ -47,7 +47,7 @@ pub fn read_dataset_dir(
 pub fn dataset_scenario_ids(
     dir: impl AsRef<std::path::Path>,
     from: &str,
-) -> powerio::Result<Vec<i64>> {
+) -> crate::Result<Vec<i64>> {
     require_dataset_format(from)?;
     gridfm::gridfm_scenario_ids(dir)
 }

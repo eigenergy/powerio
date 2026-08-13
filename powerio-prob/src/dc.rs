@@ -1,6 +1,8 @@
 use serde::{Deserialize, Serialize};
 
-use powerio::{BusId, DcConvention, Error, IndexedNetwork, Result};
+use powerio::{BusId, DcConvention, IndexedNetwork};
+
+use crate::{Error, Result};
 
 use crate::{ReferenceBuses, limits, nodal};
 
@@ -58,7 +60,7 @@ pub struct DcOpfOptions {
     pub convention: DcConvention,
     pub units: Units,
     /// Skip non-self-loop branches with zero reactance. If false, assembly
-    /// returns [`Error::ZeroImpedance`].
+    /// returns [`powerio::Error::ZeroImpedance`].
     pub skip_zero_impedance: bool,
     /// Give a branch with no thermal rating the bound
     /// [`Branch::synthesize_rate_a`](powerio::Branch::synthesize_rate_a)
@@ -232,13 +234,18 @@ pub fn build_dc_opf_instance(
     let mut pmin = Vec::new();
 
     for (source_row, generator) in case.in_service_gens() {
-        let bus = case.bus_index(generator.bus).ok_or(Error::UnknownBus {
-            bus_id: generator.bus,
-            element_index: source_row,
-        })?;
-        let cost = generator.cost.as_ref().ok_or(Error::MissingGenCost {
-            gen_index: source_row,
-        })?;
+        let bus = case
+            .bus_index(generator.bus)
+            .ok_or(powerio::Error::UnknownBus {
+                bus_id: generator.bus,
+                element_index: source_row,
+            })?;
+        let cost = generator
+            .cost
+            .as_ref()
+            .ok_or(powerio::Error::MissingGenCost {
+                gen_index: source_row,
+            })?;
         let (q_raw, c_raw, c0_raw) = nodal::quadratic_terms(cost, source_row)?;
         bus_of_gen.push(bus);
         generator_rows.push(source_row);
@@ -266,14 +273,18 @@ pub fn build_dc_opf_instance(
     let buses = &case.network().buses;
 
     for (source_row, branch) in case.in_service_branches() {
-        let from = case.bus_index(branch.from).ok_or(Error::UnknownBus {
-            bus_id: branch.from,
-            element_index: source_row,
-        })?;
-        let to = case.bus_index(branch.to).ok_or(Error::UnknownBus {
-            bus_id: branch.to,
-            element_index: source_row,
-        })?;
+        let from = case
+            .bus_index(branch.from)
+            .ok_or(powerio::Error::UnknownBus {
+                bus_id: branch.from,
+                element_index: source_row,
+            })?;
+        let to = case
+            .bus_index(branch.to)
+            .ok_or(powerio::Error::UnknownBus {
+                bus_id: branch.to,
+                element_index: source_row,
+            })?;
         if from == to {
             // A self-loop carries no angle difference, so it contributes no
             // DC flow, and its shift injection cancels at its own bus.
@@ -287,7 +298,7 @@ pub fn build_dc_opf_instance(
                 skipped_zero_impedance.push(source_row);
                 continue;
             }
-            return Err(Error::ZeroImpedance { row: source_row });
+            return Err(powerio::Error::ZeroImpedance { row: source_row }.into());
         }
         let branch_b = options.convention.branch_susceptance(
             branch.r,
@@ -295,7 +306,7 @@ pub fn build_dc_opf_instance(
             branch.divisible_tap(source_row)?,
         ) * b_scale;
         if !branch_b.is_finite() {
-            return Err(Error::NonFiniteSusceptance { row: source_row });
+            return Err(powerio::Error::NonFiniteSusceptance { row: source_row }.into());
         }
         let shift_rad = if options.convention.includes_phase_shifts() {
             case.angle_radians(branch.shift)

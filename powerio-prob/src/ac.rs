@@ -1,6 +1,8 @@
 use serde::{Deserialize, Serialize};
 
-use powerio::{BusId, Error, IndexedNetwork, Result};
+use powerio::{BusId, IndexedNetwork};
+
+use crate::{Error, Result};
 
 use crate::{ReferenceBuses, Units, limits, nodal};
 
@@ -12,7 +14,7 @@ use crate::{ReferenceBuses, Units, limits, nodal};
 pub struct AcOpfOptions {
     pub units: Units,
     /// Skip non-self-loop branches with `r² + x² = 0`. If false, assembly
-    /// returns [`Error::ZeroImpedance`].
+    /// returns [`powerio::Error::ZeroImpedance`].
     pub skip_zero_impedance: bool,
     /// Give a branch with no thermal rating the bound
     /// [`Branch::synthesize_rate_a`](powerio::Branch::synthesize_rate_a)
@@ -257,13 +259,18 @@ pub fn build_ac_opf_instance(
     let mut vg = Vec::new();
 
     for (source_row, generator) in case.in_service_gens() {
-        let bus = case.bus_index(generator.bus).ok_or(Error::UnknownBus {
-            bus_id: generator.bus,
-            element_index: source_row,
-        })?;
-        let cost = generator.cost.as_ref().ok_or(Error::MissingGenCost {
-            gen_index: source_row,
-        })?;
+        let bus = case
+            .bus_index(generator.bus)
+            .ok_or(powerio::Error::UnknownBus {
+                bus_id: generator.bus,
+                element_index: source_row,
+            })?;
+        let cost = generator
+            .cost
+            .as_ref()
+            .ok_or(powerio::Error::MissingGenCost {
+                gen_index: source_row,
+            })?;
         let (q_raw, c_raw, c0_raw) = nodal::quadratic_terms(cost, source_row)?;
         bus_of_gen.push(bus);
         generator_rows.push(source_row);
@@ -305,20 +312,24 @@ pub fn build_ac_opf_instance(
     let network = case.network();
 
     for (source_row, branch) in case.in_service_branches() {
-        let from = case.bus_index(branch.from).ok_or(Error::UnknownBus {
-            bus_id: branch.from,
-            element_index: source_row,
-        })?;
-        let to = case.bus_index(branch.to).ok_or(Error::UnknownBus {
-            bus_id: branch.to,
-            element_index: source_row,
-        })?;
+        let from = case
+            .bus_index(branch.from)
+            .ok_or(powerio::Error::UnknownBus {
+                bus_id: branch.from,
+                element_index: source_row,
+            })?;
+        let to = case
+            .bus_index(branch.to)
+            .ok_or(powerio::Error::UnknownBus {
+                bus_id: branch.to,
+                element_index: source_row,
+            })?;
         let Some((series_g, series_b)) = branch.series_admittance(source_row)? else {
             if options.skip_zero_impedance {
                 skipped_zero_impedance.push(source_row);
                 continue;
             }
-            return Err(Error::ZeroImpedance { row: source_row });
+            return Err(powerio::Error::ZeroImpedance { row: source_row }.into());
         };
         let charging = branch.terminal_charging();
         if from == to {

@@ -1,8 +1,8 @@
 use powerio::{
-    Branch, Bus, BusId, BusType, DcConvention, Error, GenCost, Generator, IndexedNetwork, Network,
+    Branch, Bus, BusId, BusType, DcConvention, GenCost, Generator, IndexedNetwork, Network,
     parse_matpower_file,
 };
-use powerio_prob::{DcOpfOptions, Units, build_dc_opf_instance};
+use powerio_prob::{DcOpfOptions, Error, Units, build_dc_opf_instance};
 
 fn case9() -> Network {
     parse_matpower_file("../tests/data/case9.m").expect("parse case9")
@@ -212,7 +212,7 @@ fn a_network_of_two_islands_grounds_a_bus_in_each() {
     );
     assert!(matches!(
         problem.reference_buses.single(),
-        Err(Error::ReferenceBusCount { found: 2 })
+        Err(powerio::Error::ReferenceBusCount { found: 2 })
     ));
 
     // The set keeps its wire form as a plain array of dense bus indices.
@@ -357,7 +357,10 @@ fn missing_and_unsupported_costs_are_distinct() {
     missing.generators[0].cost = None;
     let error = build_dc_opf_instance(&IndexedNetwork::new(&missing), &DcOpfOptions::default())
         .expect_err("missing cost");
-    assert!(matches!(error, Error::MissingGenCost { gen_index: 0 }));
+    assert!(matches!(
+        error,
+        Error::Core(powerio::Error::MissingGenCost { gen_index: 0 })
+    ));
 
     let mut piecewise = small_network();
     piecewise.generators[0].cost = Some(GenCost::with_ncost(
@@ -396,7 +399,10 @@ fn zero_reactance_can_be_skipped_or_rejected() {
         },
     )
     .expect_err("reject");
-    assert!(matches!(error, Error::ZeroImpedance { row: 0 }));
+    assert!(matches!(
+        error,
+        Error::Core(powerio::Error::ZeroImpedance { row: 0 })
+    ));
 }
 
 #[test]
@@ -417,7 +423,10 @@ fn a_reactance_the_instance_cannot_divide_by_reads_as_zero_impedance() {
         },
     )
     .expect_err("reject");
-    assert!(matches!(error, Error::ZeroImpedance { row: 0 }));
+    assert!(matches!(
+        error,
+        Error::Core(powerio::Error::ZeroImpedance { row: 0 })
+    ));
 }
 
 #[test]
@@ -434,7 +443,10 @@ fn a_tap_the_instance_cannot_divide_by_is_refused() {
         )
         .expect_err("a tap the susceptance divides by must be refused");
         assert!(
-            matches!(error, Error::DegenerateTap { row: 0, .. }),
+            matches!(
+                error,
+                Error::Core(powerio::Error::DegenerateTap { row: 0, .. })
+            ),
             "tap {tap}: {error}"
         );
     }
@@ -462,7 +474,10 @@ fn zero_base_mva_is_rejected() {
     net.base_mva = 0.0;
     let error = build_dc_opf_instance(&IndexedNetwork::new(&net), &DcOpfOptions::default())
         .expect_err("zero base");
-    assert!(matches!(error, Error::InvalidBaseMva { .. }));
+    assert!(matches!(
+        error,
+        Error::Core(powerio::Error::InvalidBaseMva { .. })
+    ));
 }
 
 #[test]

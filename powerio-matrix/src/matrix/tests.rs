@@ -515,7 +515,10 @@ fn bprime_rejects_nan_reactance() {
     net.branches[0].x = f64::NAN;
     let view = IndexedNetwork::new(&net);
     let err = build_bprime(&view, &BuildOptions::default()).unwrap_err();
-    assert!(matches!(err, crate::Error::NonFiniteSusceptance { .. }));
+    assert!(matches!(
+        err,
+        crate::Error::Core(powerio::Error::NonFiniteSusceptance { .. })
+    ));
 }
 
 #[test]
@@ -524,7 +527,10 @@ fn ybus_rejects_nan_reactance() {
     net.branches[0].x = f64::NAN;
     let view = IndexedNetwork::new(&net);
     let err = build_ybus(&view, &BuildOptions::default()).unwrap_err();
-    assert!(matches!(err, crate::Error::NonFiniteSusceptance { .. }));
+    assert!(matches!(
+        err,
+        crate::Error::Core(powerio::Error::NonFiniteSusceptance { .. })
+    ));
 }
 
 #[test]
@@ -558,11 +564,20 @@ fn zero_impedance_policy_can_error_instead_of_skipping() {
     };
 
     let bprime = build_bprime(&view, &opts).unwrap_err();
-    assert!(matches!(bprime, crate::Error::ZeroImpedance { row: 0 }));
+    assert!(matches!(
+        bprime,
+        crate::Error::Core(powerio::Error::ZeroImpedance { row: 0 })
+    ));
     let ybus = build_ybus(&view, &opts).unwrap_err();
-    assert!(matches!(ybus, crate::Error::ZeroImpedance { row: 0 }));
+    assert!(matches!(
+        ybus,
+        crate::Error::Core(powerio::Error::ZeroImpedance { row: 0 })
+    ));
     let inc = build_incidence(&view, DcConvention::ReactanceOnly, &opts).unwrap_err();
-    assert!(matches!(inc, crate::Error::ZeroImpedance { row: 0 }));
+    assert!(matches!(
+        inc,
+        crate::Error::Core(powerio::Error::ZeroImpedance { row: 0 })
+    ));
 }
 
 #[test]
@@ -653,12 +668,18 @@ fn a_reactance_below_the_divisible_bound_is_zero_impedance() {
     };
     let err = build_incidence(&view, DcConvention::ReactanceOnly, &strict).unwrap_err();
     assert!(
-        matches!(err, crate::Error::ZeroImpedance { row: 0 }),
+        matches!(
+            err,
+            crate::Error::Core(powerio::Error::ZeroImpedance { row: 0 })
+        ),
         "{err}"
     );
     let err = build_ybus(&view, &strict).unwrap_err();
     assert!(
-        matches!(err, crate::Error::ZeroImpedance { row: 0 }),
+        matches!(
+            err,
+            crate::Error::Core(powerio::Error::ZeroImpedance { row: 0 })
+        ),
         "{err}"
     );
 }
@@ -702,13 +723,19 @@ fn a_tap_ratio_the_builders_cannot_divide_by_is_refused() {
         let view = IndexedNetwork::new(&net);
         let err = build_ybus(&view, &BuildOptions::default()).unwrap_err();
         assert!(
-            matches!(err, crate::Error::DegenerateTap { row: 0, .. }),
+            matches!(
+                err,
+                crate::Error::Core(powerio::Error::DegenerateTap { row: 0, .. })
+            ),
             "Ybus, tap {tap}: {err}"
         );
         let err =
             build_incidence(&view, DcConvention::Matpower, &BuildOptions::default()).unwrap_err();
         assert!(
-            matches!(err, crate::Error::DegenerateTap { row: 0, .. }),
+            matches!(
+                err,
+                crate::Error::Core(powerio::Error::DegenerateTap { row: 0, .. })
+            ),
             "incidence, tap {tap}: {err}"
         );
     }

@@ -83,9 +83,11 @@ fn to_pyerr(e: powerio_matrix::Error) -> PyErr {
     use powerio_matrix::{Error as E, ErrorCategory as C};
     // `Io` carries the underlying `std::io::Error`; hand it to PyO3 by value so
     // it picks the precise `OSError` subclass. (Returning here also keeps the
-    // `to_string()` below off the I/O path.)
-    if let E::Io(io) = e {
-        return io.into();
+    // `to_string()` below off the I/O path.) It arrives either raised here or
+    // raised by the hub and wrapped.
+    match e {
+        E::Io(io) | E::Core(powerio::Error::Io(io)) => return io.into(),
+        _ => {}
     }
     let msg = e.to_string();
     match e.category() {
@@ -266,7 +268,10 @@ fn write_options(
 }
 
 fn package_pyerr(e: serde_json::Error) -> PyErr {
-    PyValueError::new_err(format!("invalid .pio.json package: {e}"))
+    // A package failure is a PowerIOError like every other parse failure. It
+    // used to raise a bare `ValueError`, so `except powerio.PowerIOError` did
+    // not catch it.
+    PowerIOParseError::new_err(format!("invalid .pio.json package: {e}"))
 }
 
 fn package_to_json(pkg: &NetworkPackage) -> PyResult<String> {

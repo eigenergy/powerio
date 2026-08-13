@@ -1,8 +1,8 @@
 use powerio::{
-    Branch, BranchCharging, Bus, BusId, BusType, Error, GenCost, Generator, IndexedNetwork,
-    Network, parse_matpower_file,
+    Branch, BranchCharging, Bus, BusId, BusType, GenCost, Generator, IndexedNetwork, Network,
+    parse_matpower_file,
 };
-use powerio_prob::{AcOpfOptions, Units, build_ac_opf_instance};
+use powerio_prob::{AcOpfOptions, Error, Units, build_ac_opf_instance};
 
 fn case9() -> Network {
     parse_matpower_file("../tests/data/case9.m").expect("parse case9")
@@ -254,7 +254,10 @@ fn missing_and_unsupported_costs_are_distinct() {
     missing.generators[0].cost = None;
     let error = build_ac_opf_instance(&IndexedNetwork::new(&missing), &AcOpfOptions::default())
         .expect_err("missing cost");
-    assert!(matches!(error, Error::MissingGenCost { gen_index: 0 }));
+    assert!(matches!(
+        error,
+        Error::Core(powerio::Error::MissingGenCost { gen_index: 0 })
+    ));
 
     let mut piecewise = small_network();
     piecewise.generators[0].cost = Some(GenCost::with_ncost(
@@ -293,7 +296,10 @@ fn zero_impedance_skip_or_reject() {
         },
     )
     .expect_err("reject");
-    assert!(matches!(error, Error::ZeroImpedance { row: 0 }));
+    assert!(matches!(
+        error,
+        Error::Core(powerio::Error::ZeroImpedance { row: 0 })
+    ));
 
     // Zero resistance with nonzero reactance is a valid series element.
     let mut inductive = small_network();
@@ -324,7 +330,10 @@ fn an_impedance_the_instance_cannot_divide_by_reads_as_zero_impedance() {
         },
     )
     .expect_err("reject");
-    assert!(matches!(error, Error::ZeroImpedance { row: 0 }));
+    assert!(matches!(
+        error,
+        Error::Core(powerio::Error::ZeroImpedance { row: 0 })
+    ));
 
     let mut small_x = small_network();
     small_x.branches[0].r = 0.0;
@@ -343,7 +352,10 @@ fn a_tap_the_instance_cannot_divide_by_is_refused() {
         let error = build_ac_opf_instance(&IndexedNetwork::new(&net), &AcOpfOptions::default())
             .expect_err("a tap the pi model divides by must be refused");
         assert!(
-            matches!(error, Error::DegenerateTap { row: 0, .. }),
+            matches!(
+                error,
+                Error::Core(powerio::Error::DegenerateTap { row: 0, .. })
+            ),
             "tap {tap}: {error}"
         );
     }
@@ -596,5 +608,8 @@ fn zero_base_mva_is_rejected() {
     net.base_mva = 0.0;
     let error = build_ac_opf_instance(&IndexedNetwork::new(&net), &AcOpfOptions::default())
         .expect_err("zero base");
-    assert!(matches!(error, Error::InvalidBaseMva { .. }));
+    assert!(matches!(
+        error,
+        Error::Core(powerio::Error::InvalidBaseMva { .. })
+    ));
 }

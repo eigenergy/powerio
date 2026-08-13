@@ -51,7 +51,7 @@ pub mod solver_tables;
 pub mod version;
 
 pub use dc::DcConvention;
-pub use error::{ElementCounts, Error, ErrorCategory, Result, ScenarioMismatch};
+pub use error::{Error, ErrorCategory, Result};
 pub use format::{
     Conversion, DisplayData, DisplayFormat, Parsed, PwdDisplay, PwdSubstation, PypsaCsvOutputs,
     SourceDocument, TargetFormat, WriteOptions, convert_file, convert_file_with_options,
