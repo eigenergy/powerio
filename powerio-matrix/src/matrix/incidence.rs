@@ -47,12 +47,11 @@ impl IncidenceParts {
 
 /// Build `A`, `b`, the phase shift injection, and the column→branch map.
 ///
-/// Self-loops (from == to) are dropped. Branches whose reactance is under
-/// [`MIN_DIVISIBLE_MAGNITUDE`](crate::matrix::MIN_DIVISIBLE_MAGNITUDE) have no DC
-/// susceptance the Laplacian can carry; they are skipped when
-/// `opts.skip_zero_impedance` is true and rejected with [`Error::ZeroImpedance`]
-/// when it is false. A tap ratio under the same bound is [`Error::DegenerateTap`]
-/// either way, as it is in Y_bus.
+/// Self-loops (from == to) are dropped. A branch whose reactance is too small
+/// to divide by has no DC susceptance the Laplacian can carry; it is skipped
+/// when `opts.skip_zero_impedance` is true and rejected with
+/// [`Error::ZeroImpedance`] when it is false. A tap ratio under the same bound
+/// is [`Error::DegenerateTap`] either way, as it is in Y_bus.
 pub fn build_incidence(
     case: &IndexedNetwork,
     conv: DcConvention,
