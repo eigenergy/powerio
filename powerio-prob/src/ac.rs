@@ -264,13 +264,7 @@ pub fn build_ac_opf_instance(
         let cost = generator.cost.as_ref().ok_or(Error::MissingGenCost {
             gen_index: source_row,
         })?;
-        let (q_raw, c_raw, c0_raw) =
-            cost.quadratic_with_constant()
-                .ok_or(Error::UnsupportedCostModel {
-                    gen_index: source_row,
-                    model: cost.model,
-                    ncost: cost.ncost,
-                })?;
+        let (q_raw, c_raw, c0_raw) = nodal::quadratic_terms(cost, source_row)?;
         bus_of_gen.push(bus);
         generator_rows.push(source_row);
         cost_q.push(q_raw * q_scale);

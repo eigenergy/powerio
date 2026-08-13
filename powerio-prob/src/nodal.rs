@@ -8,6 +8,34 @@
 //! the bus total can reach. Cost aggregation is an approximation, stated in
 //! [`combine_costs`].
 
+use powerio::network::GenCost;
+
+use crate::{Error, Result};
+
+/// `(q, c, c0)` of one generator's cost row, as both instance builders read it.
+///
+/// A MATPOWER model 2 row often carries a leading coefficient near 1e-17 that
+/// the source produced by rounding. It states a linear curve, and reading it as
+/// quadratic gives `1/q` near 1e17 wherever the curvature is inverted.
+///
+/// # Errors
+/// [`Error::UnsupportedCostModel`] for a row that states no quadratic curve.
+pub(crate) fn quadratic_terms(cost: &GenCost, gen_index: usize) -> Result<(f64, f64, f64)> {
+    let (q, c, c0) = cost
+        .quadratic_with_constant()
+        .ok_or(Error::UnsupportedCostModel {
+            gen_index,
+            model: cost.model,
+            ncost: cost.ncost,
+        })?;
+    let q = if q.abs() <= GenCost::LEADING_COEFF_TOL {
+        0.0
+    } else {
+        q
+    };
+    Ok((q, c, c0))
+}
+
 /// Sum of a generator column vector over the bus of each generator.
 pub(crate) fn sum_by_bus(n_buses: usize, bus_of_gen: &[usize], values: &[f64]) -> Vec<f64> {
     let mut totals = vec![0.0; n_buses];
@@ -109,11 +137,9 @@ impl BusCost {
             self.only = (q, c, c0);
         }
         self.c0 += c0;
-        // A quadratic term at or below the artifact tolerance states a linear
-        // curve the source rounded. Reading it as quadratic gives `1/q` above
-        // 1e12, which swamps the parallel sum and prices the whole bus as
-        // nearly free.
-        if q > powerio::network::GenCost::LEADING_COEFF_TOL {
+        // `quadratic_terms` has already zeroed a rounding artifact, which would
+        // otherwise give `1/q` near 1e17 and price the whole bus as free.
+        if q > 0.0 {
             self.reciprocal_q += 1.0 / q;
             self.weighted_c += c / q;
             self.weighted_c_squared += c * c / q;
@@ -157,7 +183,11 @@ mod tests {
     /// nearly free.
     #[test]
     fn a_rounding_artifact_reads_as_a_linear_curve() {
-        let costs = combine_costs(1, &[0, 0], &[2e-17, 0.2], &[3.0, 5.0], &[0.0, 0.0]);
+        let artifact = GenCost::new(2, 0.0, 0.0, vec![1e-17, 3.0, 0.0]);
+        let (q, c, c0) = quadratic_terms(&artifact, 0).expect("a model 2 row");
+        assert_eq!((q, c, c0), (0.0, 3.0, 0.0));
+
+        let costs = combine_costs(1, &[0, 0], &[q, 0.2], &[c, 5.0], &[c0, 0.0]);
         assert_eq!(costs.q, vec![0.0]);
         assert_eq!(costs.c, vec![3.0], "the cheaper linear term sets the bus");
     }

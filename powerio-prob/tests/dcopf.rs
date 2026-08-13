@@ -441,6 +441,22 @@ fn a_tap_the_instance_cannot_divide_by_is_refused() {
 }
 
 #[test]
+fn a_cost_rounding_artifact_reaches_neither_space() {
+    // A model 2 row carrying a leading 1e-17 from the source's rounding states
+    // a linear curve. Generator space used to keep it, so the same case read
+    // two ways gave two curves.
+    let mut net = small_network();
+    net.generators[0].cost = Some(GenCost::new(2, 0.0, 0.0, vec![1e-17, 2.0, 5.0]));
+    let problem =
+        build_dc_opf_instance(&IndexedNetwork::new(&net), &DcOpfOptions::default()).expect("build");
+    assert_eq!(problem.generators.q[0].to_bits(), 0.0_f64.to_bits());
+    assert_eq!(
+        problem.nodal_generator_data().q[0].to_bits(),
+        0.0_f64.to_bits()
+    );
+}
+
+#[test]
 fn zero_base_mva_is_rejected() {
     let mut net = small_network();
     net.base_mva = 0.0;
